@@ -617,3 +617,27 @@
 .cws-capc-cell label { font-size: 10px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
 .cws-capc-cell .cws-cap-input { width: 100%; }
 .cws-capc-save { width: 100%; padding: 11px 0; }
+
+/* ===================== Time off tab ===================== */
+.cws-holiday-add {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+.cws-holiday-pick { width: 160px; flex-shrink: 0; }
+.cws-holiday-name { flex: 1; }
+.cws-holiday-list { display: flex; flex-direction: column; }
+.cws-holiday-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 4px;
+  border-top: 1px solid var(--line);
+}
+.cws-holiday-date {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+}

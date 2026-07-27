@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import BookingModal from "./BookingModal";
 import CalendarSettingsModal, { type WorkTypeDef, type Targets } from "./CalendarSettingsModal";
+import { useAuth } from "../../api/AuthProvider";
 import type { Cutoffs } from "./billingPeriods";
 import { cutoffOf, periodOf, inBillingMonth } from "./billingPeriods";
 import { effectiveRate, effectiveSupervisionRate } from "../clients/ClientsPage";
@@ -139,6 +140,10 @@ const [workTypes, setWorkTypes] = useState<WorkTypeDef[]>([]);
 const [clientNames, setClientNames] = useState<Record<string, string>>({});
 const [targets, setTargets] = useState<Targets>({ perDay: 1, minPerDay: 0.5, minPerWeek: 3, minPerMonth: 12, minRevenueMonth: 0 });
   const [cutoffs, setCutoffs] = useState<Cutoffs>({});
+  const { role } = useAuth();
+  const [holidays, setHolidays] = useState<{ date: string; name: string }[]>([]);
+  const [vacations, setVacations] = useState<{ id: string; date: string }[]>([]);
+  const [vacationAllowance, setVacationAllowance] = useState(22);
   const [defaultCutoffDay, setDefaultCutoffDay] = useState(0);
   const [rates, setRates] = useState<Record<string, { consultor: number; supervision: number; connector: number }>>({});
 useEffect(() => {
@@ -221,7 +226,14 @@ const { data: ea } = await supabase.from("entry_actuals").select("*");
 
       const { data: bp } = await supabase.from("billing_periods").select("period, cutoff_date");
       if (bp) setCutoffs(Object.fromEntries((bp as { period: string; cutoff_date: string }[]).map((r) => [r.period, r.cutoff_date])));
-      const { data: bs } = await supabase.from("billing_settings").select("default_cutoff_day").eq("id", "default").maybeSingle();
+      const { data: bs } = await supabase.from("billing_settings").select("default_cutoff_day, vacation_days_per_year").eq("id", "default").maybeSingle();
+      if (bs) setVacationAllowance(Number(bs.vacation_days_per_year ?? 22));
+
+      const { data: hol } = await supabase.from("holidays").select("holiday_date, name");
+      setHolidays(((hol ?? []) as any[]).map((h) => ({ date: h.holiday_date, name: h.name ?? "" })));
+
+      const { data: vac } = await supabase.from("vacations").select("id, vacation_date").eq("user_id", u0?.user?.id ?? "");
+      setVacations(((vac ?? []) as any[]).map((v) => ({ id: v.id, date: v.vacation_date })));
       if (bs) setDefaultCutoffDay(Number(bs.default_cutoff_day) || 0);
     })();
   }, []);
@@ -263,6 +275,15 @@ const { data: ea } = await supabase.from("entry_actuals").select("*");
     return () => clearTimeout(handle);
   }, [workTypes]);
 
+  const addHoliday = async (iso: string, name: string) => {
+    setHolidays((h) => (h.some((x) => x.date === iso) ? h : [...h, { date: iso, name }]));
+    await supabase.from("holidays").upsert({ holiday_date: iso, name }, { onConflict: "holiday_date" });
+  };
+  const removeHoliday = async (iso: string) => {
+    setHolidays((h) => h.filter((x) => x.date !== iso));
+    await supabase.from("holidays").delete().eq("holiday_date", iso);
+  };
+
   const closeSettings = async () => {
     // Final sweep in case a type was left mid-edit.
     if (workTypes.length)
@@ -271,7 +292,7 @@ const { data: ea } = await supabase.from("entry_actuals").select("*");
         .map((t) => ({ id: t.id, name: t.name, client_related: t.clientRelated, color: t.color })));
     // Targets are managed in Management now, not here.
     // Billing cutoffs: replace the whole set + default day.
-    await supabase.from("billing_settings").upsert({ id: "default", default_cutoff_day: defaultCutoffDay });
+    await supabase.from("billing_settings").upsert({ id: "default", default_cutoff_day: defaultCutoffDay, vacation_days_per_year: vacationAllowance });
     const rows = Object.entries(cutoffs).map(([period, cutoff_date]) => ({ period, cutoff_date }));
     if (rows.length) await supabase.from("billing_periods").upsert(rows);
     setShowSettings(false);
@@ -518,6 +539,24 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
   const weekPct = scopeGoal > 0 ? Math.min(100, (weekPlanned / scopeGoal) * 100) : 0;
   const weekDonePct = scopeGoal > 0 ? Math.min(100, (weekDone / scopeGoal) * 100) : 0;
 
+  const holidaySet = new Map(holidays.map((h) => [h.date, h.name]));
+  const vacationSet = new Set(vacations.map((v) => v.date));
+
+  /** Toggle a vacation day for the current user. */
+  const toggleVacation = async (iso: string) => {
+    const { data: u } = await supabase.auth.getUser();
+    const uid = u?.user?.id;
+    if (!uid) return;
+    if (vacationSet.has(iso)) {
+      setVacations((list) => list.filter((v) => v.date !== iso));
+      await supabase.from("vacations").delete().eq("user_id", uid).eq("vacation_date", iso);
+    } else {
+      setVacations((list) => [...list, { id: crypto.randomUUID(), date: iso }]);
+      await supabase.from("vacations").upsert({ user_id: uid, vacation_date: iso }, { onConflict: "user_id,vacation_date" });
+    }
+  };
+  const vacationsUsed = vacations.length;
+
   const dirClass = dir === 1 ? "slide-next" : "slide-prev";
   const animKey = weekStart.getTime();
 
@@ -653,8 +692,18 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
         <div key={`h-${animKey}`} className={`cal-head-days ${dirClass}`}>
           {days.map((d, i) => {
             const isCutoff = isoOf(d) === cutoffOf(periodOf(d), cutoffs, defaultCutoffDay);
+            const dIso = isoOf(d);
+            const dayIsVac = vacationSet.has(dIso);
+            const dayIsHol = holidaySet.has(dIso);
             return (
             <div className={`cal-head-day ${sameDay(d, today) ? "is-today" : ""} ${isCutoff ? "is-cutoff" : ""}`} key={d.toISOString()}>
+              {!dayIsHol && (
+                <button
+                  className={`cal-vac-btn ${dayIsVac ? "is-on" : ""}`}
+                  onClick={() => toggleVacation(dIso)}
+                  title={dayIsVac ? "Remove vacation" : "Mark as vacation"}
+                >🏖️</button>
+              )}
               {isCutoff && (
                 <span className="cal-cutoff-flag" title={`Billing closes this day for ${periodOf(d)}`}>
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
@@ -701,10 +750,13 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
           {days.map((d) => {
             const isToday = sameDay(d, today);
             const key = dateKey(d);
+            const iso = isoOf(d);
+            const holidayName = holidaySet.get(iso);
+            const isVacation = vacationSet.has(iso);
             const dayEntries = entries.filter((e) => e.dateKey === key);
             return (
              <div
-                className={`cal-col ${isToday ? "is-today" : ""} ${dragging ? "is-drop" : ""}`}
+                className={`cal-col ${isToday ? "is-today" : ""} ${dragging ? "is-drop" : ""} ${holidayName != null ? "is-holiday" : ""} ${isVacation ? "is-vacation" : ""}`}
                 key={d.toISOString()}
                 onDragOver={(ev) => { if (dragging) { ev.preventDefault(); ev.dataTransfer.dropEffect = "move"; } }}
                 onDrop={(ev) => {
@@ -718,6 +770,11 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
                   setDragging(null);
                 }}
               >
+                {(holidayName != null || isVacation) && (
+                  <span className={`cal-daytag ${isVacation ? "is-vac" : "is-hol"}`}>
+                    {isVacation ? "Vacation" : (holidayName || "Holiday")}
+                  </span>
+                )}
                 {HOURS.map((h) => (
                   <button
                     className="cal-slot"
@@ -794,7 +851,7 @@ onClick={(ev) => { ev.stopPropagation(); openEdit(d, e); }}
       )}
 
       {showSettings && (
-        <CalendarSettingsModal types={workTypes} setTypes={setWorkTypes} targets={targets} setTargets={setTargets} hideTargets cutoffs={cutoffs} setCutoffs={setCutoffs} defaultCutoffDay={defaultCutoffDay} setDefaultCutoffDay={setDefaultCutoffDay} onClose={closeSettings} />
+        <CalendarSettingsModal types={workTypes} setTypes={setWorkTypes} targets={targets} setTargets={setTargets} hideTargets cutoffs={cutoffs} setCutoffs={setCutoffs} defaultCutoffDay={defaultCutoffDay} setDefaultCutoffDay={setDefaultCutoffDay} holidays={holidays.map((h) => h.date)} onAddHoliday={addHoliday} onRemoveHoliday={removeHoliday} vacationAllowance={vacationAllowance} setVacationAllowance={setVacationAllowance} canEditTimeOff={role === "boss"} onClose={closeSettings} />
       )}
 
       {modal && (

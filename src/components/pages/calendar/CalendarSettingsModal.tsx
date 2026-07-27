@@ -63,6 +63,13 @@ targets: Targets;
   capSavedId?: string | null;
   /** When set, open on the capacity tab with this consultant expanded. */
   initialCapOpen?: string | null;
+  /** Time off: holidays + yearly vacation allowance (calendar mode). */
+  holidays?: string[];                                    // ISO dates
+  onAddHoliday?: (iso: string, name: string) => void;
+  onRemoveHoliday?: (iso: string) => void;
+  vacationAllowance?: number;
+  setVacationAllowance?: (n: number) => void;
+  canEditTimeOff?: boolean;                               // only boss edits allowance/holidays
   onClose: () => void;
 }
 
@@ -72,13 +79,17 @@ export default function CalendarSettingsModal({
   targetsOnly = false, managementMode = false, hideTargets = false,
   consultants = [], capacity = {}, onCapacityChange = () => {}, onCapacitySave = () => {}, capSavedId = null,
   initialCapOpen = null,
+  holidays = [], onAddHoliday = () => {}, onRemoveHoliday = () => {},
+  vacationAllowance = 22, setVacationAllowance = () => {}, canEditTimeOff = false,
   onClose,
 }: Props) {
   const [openId, setOpenId] = useState<string | null>(null);
-  const [tab, setTab] = useState<"types" | "targets" | "billing" | "capacity">(
+  const [tab, setTab] = useState<"types" | "targets" | "billing" | "capacity" | "timeoff">(
     initialCapOpen ? "capacity" : (managementMode || targetsOnly ? "capacity" : "types")
   );
   const [capOpen, setCapOpen] = useState<string | null>(initialCapOpen);
+  const [newHolidayDate, setNewHolidayDate] = useState("");
+  const [newHolidayName, setNewHolidayName] = useState("");
   const [revText, setRevText] = useState(String(targets.minRevenueMonth));
   const [cutoffYear, setCutoffYear] = useState(new Date().getFullYear());
 
@@ -116,7 +127,7 @@ export default function CalendarSettingsModal({
         <div className="cws-head">
           <div>
             <span className="cws-eyebrow">{managementMode ? "Management settings" : "Calendar settings"}</span>
-            <h2 className="cws-title">{tab === "types" ? "Types of work" : tab === "targets" ? "Billable targets" : tab === "capacity" ? "Targets & bonus" : "Billing cutoffs"}</h2>
+            <h2 className="cws-title">{tab === "types" ? "Types of work" : tab === "targets" ? "Billable targets" : tab === "capacity" ? "Targets & bonus" : tab === "timeoff" ? "Time off" : "Billing cutoffs"}</h2>
           </div>
           <button className="cws-x" onClick={onClose} aria-label="Close">×</button>
         </div>
@@ -125,6 +136,7 @@ export default function CalendarSettingsModal({
           {!managementMode && <button className={`cws-tab ${tab === "types" ? "is-on" : ""}`} onClick={() => setTab("types")}>Types of work</button>}
           {!managementMode && !hideTargets && <button className={`cws-tab ${tab === "targets" ? "is-on" : ""}`} onClick={() => setTab("targets")}>Targets</button>}
           {managementMode && <button className={`cws-tab ${tab === "capacity" ? "is-on" : ""}`} onClick={() => setTab("capacity")}>Targets & bonus</button>}
+          {!managementMode && <button className={`cws-tab ${tab === "timeoff" ? "is-on" : ""}`} onClick={() => setTab("timeoff")}>Time off</button>}
           <button className={`cws-tab ${tab === "billing" ? "is-on" : ""}`} onClick={() => setTab("billing")}>Cutoffs</button>
         </div>
 
@@ -190,6 +202,59 @@ export default function CalendarSettingsModal({
                 />
 </span>
             </div>
+          </div>
+        ) : tab === "timeoff" ? (
+          <div className="cws-body">
+            <p className="cws-hint cws-intro">
+              Holidays are company-wide non-working days. The yearly allowance is how many
+              vacation days each person may take — everyone books their own from the calendar.
+            </p>
+
+            <div className="cws-target" style={{ marginBottom: "1.3rem" }}>
+              <span className="cws-target-icon">🏖️</span>
+              <span className="cws-target-text">
+                <span className="cws-target-label">Vacation days / year</span>
+                <span className="cws-target-note">Allowance per consultant</span>
+              </span>
+              <div className="cws-stepper">
+                <button onClick={() => canEditTimeOff && setVacationAllowance(Math.max(0, vacationAllowance - 1))} disabled={!canEditTimeOff}>−</button>
+                <span className="cws-stepper-val"><b>{vacationAllowance}</b><i>days</i></span>
+                <button onClick={() => canEditTimeOff && setVacationAllowance(vacationAllowance + 1)} disabled={!canEditTimeOff}>+</button>
+              </div>
+            </div>
+
+            <p className="cws-hint" style={{ margin: "0 0 10px", fontWeight: 600 }}>Public holidays</p>
+            {canEditTimeOff && (
+              <div className="cws-holiday-add">
+                <div className="cws-holiday-pick">
+                  <DatePicker value={newHolidayDate} onChange={setNewHolidayDate} placeholder="Pick a date" />
+                </div>
+                <input
+                  className="cws-input cws-holiday-name"
+                  placeholder="Name (e.g. Christmas)"
+                  value={newHolidayName}
+                  onChange={(e) => setNewHolidayName(e.target.value)}
+                />
+                <button
+                  className="cws-add"
+                  style={{ margin: 0 }}
+                  disabled={!newHolidayDate}
+                  onClick={() => { onAddHoliday(newHolidayDate, newHolidayName.trim()); setNewHolidayDate(""); setNewHolidayName(""); }}
+                >Add</button>
+              </div>
+            )}
+            {holidays.length === 0 ? (
+              <p className="cws-hint">No holidays yet.</p>
+            ) : (
+              <div className="cws-holiday-list">
+                {[...holidays].sort().map((iso) => (
+                  <div className="cws-holiday-row" key={iso}>
+                    <span className="cws-holiday-date">{new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" })}</span>
+                    {canEditTimeOff && <button className="cws-del" onClick={() => onRemoveHoliday(iso)} aria-label="Remove">×</button>}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         ) : tab === "billing" ? (
           <div className="cws-body">

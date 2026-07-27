@@ -631,6 +631,11 @@
 
 .bm-shell.has-fourth { transform: translateX(-634px); }
 
+/* Non-client: only the main card + notes exist, so keep notes glued to the card
+   and shift the shell just enough to keep the pair centred (no empty gaps). */
+.bm-shell.is-nonclient.has-fourth { transform: translateX(-200px); }
+.bm-shell.is-nonclient .bm-fourth { left: calc(100% + 16px); }
+
 .bm-fourth {
   --emerald: #12b57f;
   --forest: #0a6f4d;
@@ -765,26 +770,3 @@
 }
 .bm-close .bm-field > label { margin-bottom: 6px; }
 .bm-close-btn { width: 100%; margin-top: 4px; }
-/* Billable = 0 hint and non-client lock */
-.bm-step-hint {
-  display: block;
-  margin-top: 8px;
-  font-size: 11.5px;
-  color: #b0782a;
-}
-.bm-nonbill {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 12px 14px;
-  border-radius: 12px;
-  background: rgba(138, 160, 181, 0.12);
-  border: 1px dashed rgba(90, 125, 109, 0.35);
-}
-.bm-nonbill-num {
-  font-family: "Space Grotesk", sans-serif;
-  font-size: 16px;
-  font-weight: 600;
-  color: #5a7d6d;
-}
-.bm-nonbill-note { font-size: 11.5px; color: #5a7d6d; }

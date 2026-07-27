@@ -156,6 +156,8 @@ const clientProjects = projects.filter((p) => p.clientId === clientId && p.statu
     return p.kickoffDate ? `${t} · ${p.kickoffDate}` : t;
   };
   const showThird = showPanel && taskIds.length > 0;
+  // Notes should be available for any work, including non-client (still logged, just not billed).
+  const showNotes = !!selectedType && (showThird || !isClientWork);
 
   // Selected tasks resolved back to their phase, for the summary panel
   const picked = phases.flatMap((p) =>
@@ -172,10 +174,7 @@ const clientProjects = projects.filter((p) => p.clientId === clientId && p.statu
   const pickType = (id: string) => {
     setType(id);
     const t = types.find((x) => x.id === id);
-    if (!t?.clientRelated) {
-      setClientId(""); setProjectId(""); setOpenPhaseId(""); setTaskIds([]); setAttendeeIds([]);
-      setBillable(0); // non-client work is never billable
-    }
+if (!t?.clientRelated) { setClientId(""); setProjectId(""); setOpenPhaseId(""); setTaskIds([]); setAttendeeIds([]); }
   };
   const pickClient = (id: string) => {
     setClientId(id); setProjectId(""); setOpenPhaseId(""); setTaskIds([]); setAttendeeIds([]);
@@ -238,9 +237,7 @@ else if (isClientWork && !clientId) error = "Pick a client.";
   const save = () => {
     if (error) return;
     onSave({
-      startMin, endMin, type,
-      billable: isClientWork ? billable : 0,
-      clientId, projectId,
+startMin, endMin, type, billable, clientId, projectId,
       phaseId: openPhaseId,
       taskId: taskIds.join(","),
      attendees: attendeeIds.join(","),
@@ -252,30 +249,18 @@ else if (isClientWork && !clientId) error = "Pick a client.";
   const stepper = (
     <div className="bm-field bm-block">
       <label>Billable time to client</label>
-      {isClientWork ? (
-        <>
-          <div className="bm-stepper">
-            <button type="button" className="bm-step" onClick={decBill} disabled={billable <= 0} aria-label="Decrease billable time">−</button>
-            <div className="bm-step-value">
-              <span className="bm-step-num">{billable.toFixed(2)}</span>
-              <span className="bm-step-unit">days</span>
-            </div>
-            <button type="button" className="bm-step" onClick={incBill} aria-label="Increase billable time">+</button>
-          </div>
-          {billable === 0 && (
-            <span className="bm-step-hint">Logged as client work, but not billed.</span>
-          )}
-        </>
-      ) : (
-        <div className="bm-nonbill">
-          <span className="bm-nonbill-num">0.00 days</span>
-          <span className="bm-nonbill-note">Non-client work — never billable.</span>
+      <div className="bm-stepper">
+        <button type="button" className="bm-step" onClick={decBill} disabled={billable <= 0} aria-label="Decrease billable time">−</button>
+        <div className="bm-step-value">
+          <span className="bm-step-num">{billable.toFixed(2)}</span>
+          <span className="bm-step-unit">days</span>
         </div>
-      )}
+        <button type="button" className="bm-step" onClick={incBill} aria-label="Increase billable time">+</button>
+      </div>
     </div>
   );
 
- const shellClass = `bm-shell ${showThird ? "has-fourth" : showPanel ? "has-side" : ""}`;
+ const shellClass = `bm-shell ${showNotes && (showThird || !isClientWork) ? "has-fourth" : showPanel ? "has-side" : ""} ${!isClientWork && showNotes ? "is-nonclient" : ""}`;
 
 if (!pickedLine) {
     return (
@@ -447,8 +432,6 @@ placeholder="Select client"
             </div>
           )}
 
-          {!isClientWork && stepper}
-
           {error && <p className="bm-error">{error}</p>}
 
           <div className="bm-actions">
@@ -603,19 +586,21 @@ const ln = line || "consultor";
           </aside>
         )}
 
-        {/* Panel 4 — notes */}
-        {showThird && (
+        {/* Panel 4 — notes (any work type, client or not) */}
+        {showNotes && (
           <aside className="bm-fourth">
             <div className="bm-side-head">
               <span className="bm-eyebrow">Notes</span>
-              <h3 className="bm-side-title">Session notes</h3>
+              <h3 className="bm-side-title">{isClientWork ? "Session notes" : "Notes"}</h3>
             </div>
             <div className="bm-side-body">
               <textarea
                 className="bm-notes"
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                placeholder="What was covered, decisions taken, blockers, follow-ups…"
+                placeholder={isClientWork
+                  ? "What was covered, decisions taken, blockers, follow-ups…"
+                  : "What this time was spent on — keep it logged even if it isn't billed."}
               />
             </div>
           </aside>

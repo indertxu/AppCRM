@@ -1072,3 +1072,46 @@
 .cal-rev-track.is-high .cal-rev-fill {
   background: linear-gradient(90deg, rgba(176,111,208,0.55), #b06fd0);
 }
+
+/* ===================== Holidays & vacations ===================== */
+.cal-col.is-holiday, .cal-col.is-vacation {
+  background: repeating-linear-gradient(45deg, rgba(10,111,77,0.05) 0 10px, rgba(10,111,77,0.02) 10px 20px);
+}
+.cal-col.is-vacation {
+  background: repeating-linear-gradient(45deg, rgba(18,181,127,0.1) 0 10px, rgba(18,181,127,0.03) 10px 20px);
+}
+.cal-daytag {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.cal-daytag.is-hol { background: rgba(10,111,77,0.14); color: var(--forest, #0a6f4d); }
+.cal-daytag.is-vac { background: linear-gradient(120deg, #86efc0, #12b57f); color: #04120d; }
+
+.cal-vac-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 7px;
+  background: rgba(10,111,77,0.06);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.35;
+  transition: opacity 0.15s, background 0.15s;
+}
+.cal-head-day:hover .cal-vac-btn { opacity: 0.7; }
+.cal-vac-btn:hover { opacity: 1; background: rgba(18,181,127,0.16); }
+.cal-vac-btn.is-on { opacity: 1; background: linear-gradient(120deg, #86efc0, #12b57f); }
