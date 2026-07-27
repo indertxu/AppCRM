@@ -1,185 +1,229 @@
-import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { supabase } from "../../api/supabase";
-import "./CalendarWidget.css";
+.cw {
+  --mint: #86efc0;
+  --emerald: #12b57f;
+  --forest: #0a6f4d;
+  --ink: #0b241a;
+  --muted: #5a7d6d;
+  --line: rgba(10, 111, 77, 0.14);
 
-interface Entry {
-  dateKey: string;
-  startMin: number;
-  endMin: number;
-  type: string;
-  billable: number;
-  clientId: string;
-  status: string;
+position: fixed;
+  top: 20px;
+  bottom: 20px;
+  left: 20px;
+  z-index: 2;
+  width: 340px;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  padding: 1.5rem 1.5rem 1.4rem;
+  text-align: left;
+  border-radius: 24px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.74);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 30px 70px -36px rgba(10, 111, 77, 0.6);
+  font-family: "Inter", system-ui, sans-serif;
+  color: var(--ink);
+  animation: home-rise 0.85s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: 0.7s;
 }
 
-const DOW = ["M", "T", "W", "T", "F"];
-
-function startOfWeek(input: Date): Date {
-  const d = new Date(input);
-  const day = d.getDay();
-  d.setDate(d.getDate() + ((day === 0 ? -6 : 1) - day));
-  d.setHours(0, 0, 0, 0);
-  return d;
+.cw-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.2rem;
 }
-function addDays(d: Date, n: number): Date {
-  const x = new Date(d);
-  x.setDate(x.getDate() + n);
-  return x;
+.cw-eyebrow {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
-function dateKey(d: Date): string {
-  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+.cw-open {
+  border: none;
+  background: none;
+  padding: 4px 0;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--emerald);
+  cursor: pointer;
+  transition: transform 0.15s;
 }
-function sameDay(a: Date, b: Date): boolean {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+.cw-open:hover { transform: translateX(2px); }
+
+/* ---- Week bar chart ---- */
+.cw-week {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+  margin-bottom: 1.3rem;
 }
-function fmtTime(min: number): string {
-  const h = Math.floor(min / 60);
-  const m = min % 60;
-  const period = h < 12 ? "AM" : "PM";
-  const hr = h % 12 === 0 ? 12 : h % 12;
-  return `${hr}:${String(m).padStart(2, "0")} ${period}`;
+.cw-day { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+.cw-day-col {
+  position: relative;
+  width: 100%;
+  height: 78px;
+  display: flex;
+  align-items: flex-end;
+  border-radius: 9px;
+  background: rgba(10, 111, 77, 0.06);
+  overflow: hidden;
+}
+.cw-day-bar {
+  position: relative;
+  width: 100%;
+  min-height: 3px;
+  border-radius: 9px;
+  background: rgba(18, 181, 127, 0.3);
+  display: flex;
+  align-items: flex-end;
+  transition: height 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.cw-day-done {
+  width: 100%;
+  border-radius: 9px;
+  background: linear-gradient(180deg, #12b57f, #86efc0);
+  transition: height 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.cw-day-goal {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: repeating-linear-gradient(90deg, rgba(10,111,77,0.35) 0 3px, transparent 3px 6px);
+}
+.cw-day-val {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--forest);
+  line-height: 1;
+}
+.cw-day-dow {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.cw-day.is-today .cw-day-dow {
+  display: grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: linear-gradient(120deg, var(--mint), var(--emerald));
+  color: #04120d;
 }
 
-export default function CalendarWidget() {
-  const navigate = useNavigate();
-  const [entries, setEntries] = useState<Entry[]>([]);
-  const [clientNames, setClientNames] = useState<Record<string, string>>({});
-  const [colors, setColors] = useState<Record<string, string>>({});
-  const [clientTypes, setClientTypes] = useState<Set<string>>(new Set());
-  const [targets, setTargets] = useState({ minPerDay: 0.5, minPerWeek: 3 });
-  const [loading, setLoading] = useState(true);
+/* ---- Weekly total ---- */
+.cw-figure { display: flex; align-items: baseline; gap: 7px; margin-bottom: 11px; }
+.cw-figure strong {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--forest);
+}
+.cw-figure strong.is-under { color: #d98324; }
+.cw-figure em {
+  font-style: normal;
+  font-size: 12.5px;
+  color: var(--muted);
+  font-weight: 500;
+}
 
-  useEffect(() => {
-    (async () => {
-     const { data: u0 } = await supabase.auth.getUser();
-      const { data: ce } = await supabase
-        .from("calendar_entries")
-        .select("*")
-        .eq("user_id", u0?.user?.id ?? "");
-      setEntries(((ce ?? []) as Record<string, unknown>[]).map((r) => ({
-        dateKey: r.date_key as string,
-        startMin: Number(r.start_min) || 0,
-        endMin: Number(r.end_min) || 0,
-        type: (r.work_type_id as string) ?? "",
-        billable: Number(r.billable) || 0,
-        clientId: (r.client_id as string) ?? "",
-status: (r.status as string) || "planned",
-        line: (r.billing_line as string) || "consultor",
-      })));
+.cw-track {
+  position: relative;
+  height: 9px;
+  border-radius: 999px;
+  background: rgba(10, 111, 77, 0.09);
+  overflow: hidden;
+  margin-bottom: 9px;
+}
+.cw-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 999px;
+  background: rgba(18, 181, 127, 0.3);
+  transition: width 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.cw-fill.is-done {
+  background: linear-gradient(90deg, #86efc0, #12b57f);
+  box-shadow: 0 0 12px -2px rgba(18, 181, 127, 0.8);
+}
+.cw-legend { display: flex; gap: 14px; font-size: 11px; color: var(--muted); }
+.cw-legend span { display: flex; align-items: center; gap: 6px; }
+.cw-legend i { width: 8px; height: 8px; border-radius: 50%; }
+.cw-dot-done { background: linear-gradient(120deg, #86efc0, #12b57f); }
+.cw-dot-plan { background: rgba(18, 181, 127, 0.3); }
 
-      const { data: cl } = await supabase.from("clients").select("id, name");
-      setClientNames(Object.fromEntries(((cl ?? []) as { id: string; name: string }[]).map((c) => [c.id, c.name])));
+.cw-sep { height: 1px; background: var(--line); margin: 1.2rem 0 1rem; }
 
-      const { data: wt } = await supabase.from("work_types").select("id, client_related, color");
-      const list = (wt ?? []) as { id: string; client_related: boolean; color: string | null }[];
-      setClientTypes(new Set(list.filter((t) => t.client_related).map((t) => t.id)));
-      setColors(Object.fromEntries(list.map((t) => [t.id, t.color ?? "#12b57f"])));
+/* ---- Today ---- */
+.cw-today-label {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+.cw-empty { font-size: 13px; color: var(--muted); }
 
-      const { data: tg } = await supabase.from("calendar_targets").select("*").eq("id", "default").maybeSingle();
-      if (tg) setTargets({
-        minPerDay: Number(tg.min_per_day) || 0,
-        minPerWeek: Number(tg.min_per_week) || 0,
-      });
+.cw-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-right: 3px;
+}
+.cw-list::-webkit-scrollbar { width: 6px; }
+.cw-list::-webkit-scrollbar-thumb { background: rgba(18, 181, 127, 0.28); border-radius: 999px; }
+.cw-list::-webkit-scrollbar-track { background: transparent; }
 
-      setLoading(false);
-    })();
-  }, []);
+.cw-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  padding: 9px 11px;
+  border-radius: 12px;
+  background: rgba(18, 181, 127, 0.07);
+}
+.cw-item.is-confirmed { opacity: 0.6; }
+.cw-item-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.cw-item-text { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.cw-item-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cw-item-time { font-size: 11px; color: var(--muted); }
+.cw-item-bill {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--forest);
+  flex-shrink: 0;
+}
 
-  const today = new Date();
-  const weekStart = startOfWeek(today);
-  const weekDays = Array.from({ length: 5 }, (_, i) => addDays(weekStart, i));
-  const weekKeys = new Set(weekDays.map(dateKey));
+@media (max-width: 900px) {
+  .cw { width: min(340px, 90vw); }
+}
 
-const billable = (list: Entry[]) =>
-    list.filter((e) => clientTypes.has(e.type) && e.status !== "cancelled" && e.line !== "connector")
-        .reduce((s, e) => s + e.billable, 0);
-  const confirmed = (list: Entry[]) =>
-    list.filter((e) => clientTypes.has(e.type) && e.status === "confirmed" && e.line !== "connector")
-        .reduce((s, e) => s + e.billable, 0);
 
-  const weekEntries = entries.filter((e) => weekKeys.has(e.dateKey));
-  const planned = billable(weekEntries);
-  const done = confirmed(weekEntries);
-  const pct = targets.minPerWeek > 0 ? Math.min(100, (planned / targets.minPerWeek) * 100) : 0;
-  const donePct = targets.minPerWeek > 0 ? Math.min(100, (done / targets.minPerWeek) * 100) : 0;
-
-  const todayEntries = entries
-    .filter((e) => e.dateKey === dateKey(today) && e.status !== "cancelled")
-    .sort((a, b) => a.startMin - b.startMin);
-
-  const dayGoal = targets.minPerDay || 1;
-  const peak = Math.max(dayGoal, ...weekDays.map((d) => billable(entries.filter((e) => e.dateKey === dateKey(d)))));
-
-  return (
-    <aside className="cw">
-      <div className="cw-head">
-        <span className="cw-eyebrow">Calendar</span>
-        <button className="cw-open" onClick={() => navigate("/calendar")}>Open →</button>
-      </div>
-
-      {/* Week bars */}
-      <div className="cw-week">
-        {weekDays.map((d) => {
-          const list = entries.filter((e) => e.dateKey === dateKey(d));
-          const p = billable(list);
-          const c = confirmed(list);
-          const isToday = sameDay(d, today);
-          return (
-            <div className={`cw-day ${isToday ? "is-today" : ""}`} key={d.toISOString()}>
-              <div className="cw-day-col">
-                <div className="cw-day-bar" style={{ height: `${(p / peak) * 100}%` }}>
-                  <div className="cw-day-done" style={{ height: `${p > 0 ? (c / p) * 100 : 0}%` }} />
-                </div>
-                <div className="cw-day-goal" style={{ bottom: `${(dayGoal / peak) * 100}%` }} />
-              </div>
-              <span className="cw-day-val">{p > 0 ? p.toFixed(2).replace(/\.00$/, "") : "–"}</span>
-              <span className="cw-day-dow">{DOW[d.getDay() - 1] ?? ""}</span>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Weekly total */}
-      <div className="cw-figure">
-        <strong className={planned < targets.minPerWeek ? "is-under" : ""}>{planned.toFixed(2)}</strong>
-        <em>/ {targets.minPerWeek} days this week</em>
-      </div>
-      <div className="cw-track">
-        <div className="cw-fill" style={{ width: `${pct}%` }} />
-        <div className="cw-fill is-done" style={{ width: `${donePct}%` }} />
-      </div>
-      <div className="cw-legend">
-        <span><i className="cw-dot-done" />{done.toFixed(2)} completed</span>
-        <span><i className="cw-dot-plan" />{(planned - done).toFixed(2)} planned</span>
-      </div>
-
-      <div className="cw-sep" />
-
-      {/* Today */}
-      <span className="cw-today-label">
-        Today · {todayEntries.length} booking{todayEntries.length === 1 ? "" : "s"}
-      </span>
-      <div className="cw-list">
-        {loading ? (
-          <span className="cw-empty">Loading…</span>
-        ) : todayEntries.length === 0 ? (
-          <span className="cw-empty">Nothing scheduled.</span>
-        ) : (
-          todayEntries.map((e, i) => (
-            <div className={`cw-item is-${e.status}`} key={i}>
-              <span className="cw-item-dot" style={{ background: colors[e.type] ?? "#12b57f" }} />
-              <span className="cw-item-text">
-                <span className="cw-item-name">
-                  {e.clientId ? clientNames[e.clientId] ?? "—" : "Internal"}
-                </span>
-                <span className="cw-item-time">{fmtTime(e.startMin)} – {fmtTime(e.endMin)}</span>
-              </span>
-              <span className="cw-item-bill">{e.billable}d</span>
-            </div>
-          ))
-        )}
-      </div>
-    </aside>
-  );
+/* When the dock is pinned, shift the widget right so it doesn't sit under the dock. */
+.dock-pinned .cw { left: 108px; }
+@media (max-width: 700px) {
+  .dock-pinned .cw { left: 100px; }
 }

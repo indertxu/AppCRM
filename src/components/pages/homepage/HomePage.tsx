@@ -1,13 +1,18 @@
 import CalendarWidget from "./CalendarWidget";
+import ManagementWidget from "./ManagementWidget";
+import { useAuth } from "../../api/AuthProvider";
 import "./HomePage.css";
 
 export default function HomePage() {
+  const { role } = useAuth();
+  const isManager = role === "boss" || role === "consultancy_manager" || role === "sales_manager";
   return (
-    <div className="home">
+    <div className={`home ${isManager ? "has-mw" : ""}`}>
       {/* Mint flood that matches the login exit, then irises away to reveal the page */}
       <div className="home-flood" aria-hidden="true" />
 
-<CalendarWidget />
+      <CalendarWidget />
+      {isManager && <ManagementWidget />}
 
       <div className="home-content">
         <span className="home-logo" aria-hidden="true">

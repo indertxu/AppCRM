@@ -221,3 +221,9 @@ position: fixed;
   .cw { width: min(340px, 90vw); }
 }
 
+
+/* When the dock is pinned, shift the widget right so it doesn't sit under the dock. */
+.dock-pinned .cw { left: 108px; }
+@media (max-width: 700px) {
+  .dock-pinned .cw { left: 100px; }
+}

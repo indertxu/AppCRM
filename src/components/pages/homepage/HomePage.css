@@ -174,3 +174,13 @@
   justify-content: center;
   padding-left: 400px;
 }
+/* Make room for the pinned dock so the centred content stays balanced. */
+.dock-pinned .home-content { padding-left: 480px; }
+@media (max-width: 900px) {
+  .dock-pinned .home-content { padding-left: 0; }
+}
+
+/* Leave room on the right for the Management widget (managers only; harmless otherwise). */
+@media (min-width: 1101px) {
+  .home.has-mw .home-content { padding-right: 380px; }
+}

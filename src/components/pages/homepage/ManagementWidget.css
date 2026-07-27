@@ -1,0 +1,130 @@
+.mw {
+  --mint: #86efc0;
+  --emerald: #12b57f;
+  --forest: #0a6f4d;
+  --ink: #0b241a;
+  --muted: #5a7d6d;
+  --line: rgba(10, 111, 77, 0.14);
+
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 2;
+  width: 340px;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  padding: 1.5rem 1.5rem 1.4rem;
+  text-align: left;
+  border-radius: 24px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.74);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 30px 70px -36px rgba(10, 111, 77, 0.6);
+  font-family: "Inter", system-ui, sans-serif;
+  color: var(--ink);
+  animation: home-rise 0.85s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: 0.8s;
+}
+
+.mw-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.3rem;
+}
+.mw-eyebrow {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.mw-open {
+  border: none;
+  background: none;
+  padding: 4px 0;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--emerald);
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+.mw-open:hover { transform: translateX(2px); }
+
+.mw-loading { padding: 2rem 0; text-align: center; font-size: 13px; color: var(--muted); }
+
+/* Hero: outstanding */
+.mw-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 1rem 1.1rem;
+  margin-bottom: 12px;
+  border-radius: 16px;
+  background: linear-gradient(160deg, rgba(134, 239, 192, 0.28), rgba(18, 181, 127, 0.05));
+}
+.mw-hero-k {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--forest);
+  opacity: 0.75;
+}
+.mw-hero-v { display: flex; align-items: baseline; gap: 5px; }
+.mw-hero-v b {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 32px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+.mw-hero-v i { font-style: normal; font-size: 16px; font-weight: 500; color: var(--emerald); }
+.mw-hero-s { font-size: 12px; color: var(--muted); }
+.mw-overdue { font-style: normal; color: #c0392b; font-weight: 600; }
+
+/* Grid of KPI cells */
+.mw-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.mw-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 12px 13px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: transform 0.16s, border-color 0.16s, box-shadow 0.16s;
+}
+.mw-cell:hover {
+  transform: translateY(-2px);
+  border-color: rgba(18, 181, 127, 0.3);
+  box-shadow: 0 14px 30px -20px rgba(10, 111, 77, 0.5);
+}
+.mw-cell-wide { grid-column: 1 / -1; }
+.mw-cell-k {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.mw-cell-v {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+.mw-cell-wide .mw-cell-v { color: var(--forest); }
+
+/* When the dock is pinned it only affects the left widget; this one stays put. */
+@media (max-width: 1100px) {
+  .mw { display: none; }
+}
