@@ -1,0 +1,268 @@
+.am-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 210;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: rgba(6, 26, 19, 0.42);
+  backdrop-filter: blur(6px);
+  animation: am-fade 0.25s ease;
+}
+@keyframes am-fade { from { opacity: 0; } }
+
+.am-card {
+  --mint: #86efc0;
+  --emerald: #12b57f;
+  --forest: #0a6f4d;
+  --ink: #0b241a;
+  --muted: #5a7d6d;
+  --line: rgba(10, 111, 77, 0.16);
+
+  width: min(480px, 100%);
+  box-sizing: border-box;
+  padding: 1.8rem 1.9rem;
+  border-radius: 22px;
+  background: #fff;
+  border: 1px solid var(--line);
+  box-shadow: 0 40px 90px -30px rgba(10, 111, 77, 0.55);
+  font-family: "Inter", system-ui, sans-serif;
+  color: var(--ink);
+  animation: am-pop 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes am-pop {
+  from { opacity: 0; transform: translateY(14px) scale(0.96); }
+}
+
+.am-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 0.7rem;
+}
+.am-eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--emerald);
+  font-weight: 600;
+}
+.am-title {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 21px;
+  font-weight: 600;
+  color: var(--forest);
+  margin: 5px 0 0;
+}
+.am-x {
+  border: none;
+  background: none;
+  font-size: 24px;
+  line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 4px;
+}
+.am-x:hover { color: var(--ink); }
+
+.am-note {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.45;
+  margin: 0 0 1.3rem;
+}
+
+.am-times {
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+  margin-bottom: 1rem;
+}
+.am-field { flex: 1; }
+.am-field > label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 7px;
+}
+.am-field > label i { font-style: normal; font-weight: 400; opacity: 0.75; }
+.am-time { display: flex; align-items: center; gap: 6px; }
+.am-time select {
+  flex: 1;
+  min-width: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 11px 8px;
+  border-radius: 11px;
+  border: 1px solid var(--line);
+  background: #f4faf6;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+}
+.am-time select:focus {
+  outline: none;
+  border-color: var(--emerald);
+  box-shadow: 0 0 0 3px rgba(18, 181, 127, 0.16);
+}
+.am-colon { font-weight: 700; color: var(--muted); }
+.am-arrow { padding-bottom: 11px; color: var(--emerald); font-size: 18px; }
+
+.am-compare {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 1.4rem;
+}
+.am-cmp {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: rgba(18, 181, 127, 0.07);
+}
+.am-cmp span {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.am-cmp strong {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--forest);
+}
+.am-delta.is-over { background: rgba(217, 131, 36, 0.1); }
+.am-delta.is-over strong { color: #d98324; }
+.am-delta.is-under { background: rgba(18, 181, 127, 0.12); }
+
+.am-block { margin-bottom: 1.3rem; }
+
+.am-stepper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px;
+  border-radius: 13px;
+  background: #f4faf6;
+  border: 1px solid var(--line);
+  width: fit-content;
+}
+.am-stepper button {
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 9px;
+  background: rgba(18, 181, 127, 0.12);
+  color: var(--forest);
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.am-stepper button:hover { background: rgba(18, 181, 127, 0.22); }
+.am-stepper-val {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 62px;
+}
+.am-stepper-val b {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--forest);
+  line-height: 1.1;
+}
+.am-stepper-val i {
+  font-style: normal;
+  font-size: 9.5px;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.am-bill-note {
+  display: block;
+  margin-top: 7px;
+  font-size: 11.5px;
+  color: var(--muted);
+  font-weight: 500;
+}
+.am-bill-note.is-over { color: #d98324; font-weight: 600; }
+.am-bill-note.is-under { color: var(--emerald); font-weight: 600; }
+
+.am-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 11px 13px;
+  border-radius: 11px;
+  border: 1px solid var(--line);
+  background: #f4faf6;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 14px;
+  outline: none;
+}
+.am-input:focus {
+  border-color: var(--emerald);
+  box-shadow: 0 0 0 3px rgba(18, 181, 127, 0.16);
+}
+
+.am-error { color: #d64545; font-size: 13px; margin: 0 0 1rem; }
+
+.am-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 0.3rem;
+}
+.am-actions-right { display: flex; gap: 10px; }
+.am-clear {
+  border: none;
+  background: none;
+  color: #d64545;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 9px 2px;
+}
+.am-clear:hover { text-decoration: underline; }
+.am-cancel {
+  padding: 11px 18px;
+  border-radius: 11px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.am-cancel:hover { background: #f4faf6; }
+.am-save {
+  padding: 11px 20px;
+  border-radius: 11px;
+  border: none;
+  background: linear-gradient(120deg, var(--mint), var(--emerald));
+  color: #04120d;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 12px 26px -12px rgba(18, 181, 127, 0.8);
+  transition: transform 0.15s;
+}
+.am-save:hover:not(:disabled) { transform: translateY(-2px); }
+.am-save:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .am-backdrop, .am-card { animation: none; }
+}

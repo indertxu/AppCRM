@@ -1,0 +1,402 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap");
+
+.np-scene {
+  --mx: 50vw;
+  --my: 50vh;
+  --px: 0;
+  --py: 0;
+
+  /* Brand palette pulled from the logo */
+  --mint: #86efc0;
+  --emerald: #12b57f;
+  --forest: #0a6f4d;
+  --void: #04120d;
+  --void-2: #061a13;
+  --ink: #e8fff5;
+  --muted: #6f9686;
+
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(120% 120% at 50% -20%, #0a2419 0%, var(--void) 55%, #020806 100%);
+  font-family: "Inter", system-ui, sans-serif;
+  color: var(--ink);
+  isolation: isolate;
+}
+
+/* Isometric grid floor — parallaxes opposite the cursor for depth */
+.np-grid {
+  position: absolute;
+  inset: -20%;
+  background-image:
+    repeating-linear-gradient(60deg, rgba(18, 181, 127, 0.09) 0 1px, transparent 1px 46px),
+    repeating-linear-gradient(-60deg, rgba(18, 181, 127, 0.09) 0 1px, transparent 1px 46px),
+    repeating-linear-gradient(0deg, rgba(10, 111, 77, 0.07) 0 1px, transparent 1px 46px);
+  transform:
+    perspective(900px) rotateX(58deg) scale(1.7)
+    translate3d(calc(var(--px) * -22px), calc(var(--py) * -22px), 0);
+  transform-origin: center 40%;
+  mask-image: radial-gradient(80% 70% at 50% 60%, #000 20%, transparent 78%);
+  opacity: 0.9;
+  transition: transform 0.25s ease-out;
+  will-change: transform;
+}
+
+/* Aurora glow that tracks the cursor */
+.np-aurora {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(
+      380px 380px at var(--mx) var(--my),
+      rgba(134, 239, 192, 0.22),
+      rgba(18, 181, 127, 0.12) 40%,
+      transparent 70%
+    );
+  mix-blend-mode: screen;
+  pointer-events: none;
+  transition: background 0.12s linear;
+}
+
+.np-vignette {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(120% 100% at 50% 50%, transparent 55%, rgba(0, 0, 0, 0.55));
+  pointer-events: none;
+}
+
+/* Backdrop click ripple */
+.np-ripple {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  border-radius: 50%;
+  border: 1.5px solid var(--mint);
+  pointer-events: none;
+  transform: scale(0);
+  animation: np-ripple 1.1s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes np-ripple {
+  0% { transform: scale(0); opacity: 0.7; }
+  100% { transform: scale(26); opacity: 0; }
+}
+
+/* Glass card, tilts toward the cursor */
+.np-card {
+  position: relative;
+  width: min(400px, calc(100vw - 3rem));
+  padding: 2.6rem 2.4rem 2.2rem;
+  border-radius: 22px;
+  background: linear-gradient(160deg, rgba(12, 40, 30, 0.72), rgba(5, 20, 14, 0.82));
+  border: 1px solid rgba(134, 239, 192, 0.16);
+  box-shadow:
+    0 40px 80px -30px rgba(0, 0, 0, 0.8),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(18px) saturate(1.2);
+  transform:
+    perspective(1200px)
+    rotateY(calc(var(--px) * 3.2deg))
+    rotateX(calc(var(--py) * -3.2deg));
+  transform-style: preserve-3d;
+  transition: transform 0.2s ease-out;
+  animation: np-rise 0.9s cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform;
+}
+
+.np-card-glow {
+  position: absolute;
+  inset: -1px;
+  border-radius: 22px;
+  padding: 1px;
+  background: linear-gradient(140deg, rgba(134, 239, 192, 0.5), transparent 40%, rgba(18, 181, 127, 0.35));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+@keyframes np-rise {
+  from { opacity: 0; transform: perspective(1200px) translateY(26px) scale(0.97); }
+  to { opacity: 1; }
+}
+
+/* Brand lockup */
+.np-brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 1.6rem;
+  transform: translateZ(40px);
+}
+
+.np-logo {
+  width: 54px;
+  height: 54px;
+  display: grid;
+  place-items: center;
+  filter: drop-shadow(0 6px 16px rgba(18, 181, 127, 0.45));
+  animation: np-float 5s ease-in-out infinite;
+}
+
+.np-logo svg { width: 100%; height: 100%; overflow: visible; }
+
+/* Animate the wrapper groups in viewBox units — the inner geometry stays intact */
+.np-face {
+  transform-box: view-box;
+  transition: transform 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.np-logo:hover .np-face-top { transform: translate(0, -8px); }
+.np-logo:hover .np-face-left { transform: translate(-7px, 5px); }
+.np-logo:hover .np-face-right { transform: translate(7px, 5px); }
+
+@keyframes np-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
+
+.np-wordmark { display: flex; flex-direction: column; line-height: 1; }
+
+.np-eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: var(--mint);
+  margin-bottom: 5px;
+  opacity: 0.85;
+}
+
+.np-title {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 34px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin: 0;
+  color: #fff;
+}
+
+.np-lede {
+  font-size: 14px;
+  color: var(--muted);
+  margin: 0 0 1.8rem;
+  transform: translateZ(30px);
+}
+
+/* Fields with floating labels */
+.np-form { display: flex; flex-direction: column; gap: 1.4rem; transform: translateZ(20px); }
+
+.np-field { position: relative; }
+
+.np-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(134, 239, 192, 0.14);
+  border-radius: 12px;
+  padding: 16px 14px 14px;
+  color: var(--ink);
+  font-size: 15px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+}
+
+.np-input:hover { border-color: rgba(134, 239, 192, 0.3); }
+
+.np-input:focus {
+  border-color: var(--emerald);
+  background: rgba(18, 181, 127, 0.06);
+  box-shadow: 0 0 0 3px rgba(18, 181, 127, 0.16), 0 0 24px -6px rgba(18, 181, 127, 0.5);
+}
+
+.np-label {
+  position: absolute;
+  left: 14px;
+  top: 15px;
+  font-size: 15px;
+  color: var(--muted);
+  pointer-events: none;
+  transition: transform 0.18s ease, color 0.18s ease, font-size 0.18s ease;
+  transform-origin: left center;
+}
+
+.np-input:focus + .np-label,
+.np-input:not(:placeholder-shown) + .np-label {
+  transform: translateY(-13px);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--mint);
+}
+
+/* Animated underline sweep on focus */
+.np-field-line {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 6px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--mint), transparent);
+  transform: scaleX(0);
+  opacity: 0;
+  transition: transform 0.3s ease, opacity 0.3s ease;
+}
+.np-input:focus ~ .np-field-line { transform: scaleX(1); opacity: 0.8; }
+
+.np-reveal {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  padding: 4px;
+  transition: color 0.2s;
+}
+.np-reveal:hover { color: var(--mint); }
+
+.np-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  margin-top: -0.4rem;
+}
+
+.np-check { display: flex; align-items: center; gap: 8px; color: var(--muted); cursor: pointer; }
+.np-check input { accent-color: var(--emerald); }
+
+.np-link {
+  color: var(--mint);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+.np-link:hover { color: #fff; }
+
+/* Submit button */
+.np-submit {
+  position: relative;
+  overflow: hidden;
+  margin-top: 0.4rem;
+  padding: 15px;
+  border: none;
+  border-radius: 12px;
+  background: linear-gradient(120deg, var(--mint), var(--emerald));
+  color: #04120d;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.25s ease;
+  box-shadow: 0 12px 30px -10px rgba(18, 181, 127, 0.7);
+}
+.np-submit:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 18px 40px -10px rgba(18, 181, 127, 0.85);
+}
+.np-submit:active { transform: translateY(0); }
+
+.np-submit-sheen {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(110deg, transparent 30%, rgba(255, 255, 255, 0.55) 50%, transparent 70%);
+  transform: translateX(-120%);
+}
+.np-submit:hover .np-submit-sheen { animation: np-sheen 0.8s ease; }
+
+@keyframes np-sheen {
+  to { transform: translateX(120%); }
+}
+
+.np-foot {
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+  margin: 1.6rem 0 0;
+  transform: translateZ(10px);
+}
+
+/* Staggered entrance for inner elements */
+.np-brand { animation: np-in 0.7s ease both 0.15s; }
+.np-lede { animation: np-in 0.7s ease both 0.25s; }
+.np-form { animation: np-in 0.7s ease both 0.35s; }
+.np-foot { animation: np-in 0.7s ease both 0.5s; }
+
+@keyframes np-in {
+  from { opacity: 0; transform: translateZ(0) translateY(12px); }
+}
+
+@media (max-width: 480px) {
+  .np-card { padding: 2rem 1.5rem; }
+  .np-title { font-size: 30px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .np-scene *,
+  .np-scene {
+    animation: none !important;
+    transition: none !important;
+  }
+  .np-grid, .np-card { transform: none !important; }
+}
+
+/* Error message */
+.np-error {
+  color: #ff8a8a;
+  font-size: 13px;
+  text-align: center;
+  margin: 0.2rem 0 0;
+}
+
+/* Disabled submit while signing in */
+.np-submit:disabled {
+  opacity: 0.7;
+  cursor: default;
+  transform: none;
+}
+
+/* Epic launch transition — floods the screen mint-white, matching the homepage entrance */
+.np-launch {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  background: radial-gradient(circle at 50% 52%, #ffffff, #d6f7e7 42%, #86efc0 72%);
+  clip-path: circle(0% at 50% 52%);
+  animation: np-launch-iris 0.8s cubic-bezier(0.7, 0, 0.84, 0) forwards;
+  pointer-events: none;
+}
+
+@keyframes np-launch-iris {
+  to { clip-path: circle(150% at 50% 52%); }
+}
+
+/* The card zooms toward the viewer and dissolves as the flood takes over */
+.np-card.launching {
+  animation: np-card-launch 0.8s cubic-bezier(0.7, 0, 0.84, 0) forwards;
+}
+
+@keyframes np-card-launch {
+  to {
+    transform: perspective(1200px) scale(1.35) translateZ(160px);
+    opacity: 0;
+    filter: blur(6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .np-launch { animation: np-launch-fade 0.3s ease forwards; clip-path: none; }
+  .np-card.launching { animation: none; opacity: 0; }
+}
+@keyframes np-launch-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}

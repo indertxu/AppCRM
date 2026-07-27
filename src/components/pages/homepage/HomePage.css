@@ -1,0 +1,176 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap");
+
+.home {
+  --mint: #86efc0;
+  --emerald: #12b57f;
+  --forest: #0a6f4d;
+  --ink: #0b241a;
+  --muted: #5a7d6d;
+
+  position: relative;
+  min-height: 100vh;
+  width: 100%;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  font-family: "Inter", system-ui, sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(120% 100% at 50% -10%, #ffffff 0%, #eef8f1 45%, #e2f2e9 100%);
+}
+
+/* Soft ambient mint blobs for depth */
+.home::before,
+.home::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.5;
+  pointer-events: none;
+}
+.home::before {
+  width: 520px;
+  height: 520px;
+  background: rgba(134, 239, 192, 0.6);
+  top: -160px;
+  left: -120px;
+}
+.home::after {
+  width: 460px;
+  height: 460px;
+  background: rgba(18, 181, 127, 0.28);
+  bottom: -160px;
+  right: -120px;
+}
+
+/* The flood overlay that completes the login transition */
+.home-flood {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: radial-gradient(circle at 50% 52%, #ffffff, #d6f7e7 42%, #86efc0 72%);
+  animation: home-flood-out 0.85s 0.05s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  pointer-events: none;
+}
+
+@keyframes home-flood-out {
+  from { clip-path: circle(150% at 50% 52%); opacity: 1; }
+  to { clip-path: circle(0% at 50% 52%); opacity: 0; }
+}
+
+.home-content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 2rem;
+}
+
+.home-content > * {
+  animation: home-rise 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.home-eyebrow { animation-delay: 0.45s; }
+.home-title { animation-delay: 0.55s; }
+.home-sub { animation-delay: 0.65s; }
+.home-hint { animation-delay: 0.9s; }
+
+@keyframes home-rise {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.home-logo {
+  width: 76px;
+  height: 76px;
+  display: block;
+  margin-bottom: 1.6rem;
+  filter: drop-shadow(0 12px 26px rgba(18, 181, 127, 0.35));
+  animation-delay: 0.35s;
+}
+.home-logo svg { width: 100%; height: 100%; overflow: visible; }
+
+.home-eyebrow {
+  font-size: 12px;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  color: var(--emerald);
+  font-weight: 600;
+  margin-bottom: 0.9rem;
+}
+
+.home-title {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: clamp(40px, 7vw, 68px);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  margin: 0;
+  color: var(--forest);
+}
+
+.home-sub {
+  font-size: 17px;
+  color: var(--muted);
+  margin: 0.6rem 0 0;
+}
+
+.home-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 3rem;
+  font-size: 13px;
+  color: var(--muted);
+  opacity: 0.8;
+}
+
+.home-hint-arrow {
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid var(--emerald);
+  animation: home-bob 1.8s ease-in-out infinite;
+}
+
+@keyframes home-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(4px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-content > *,
+  .home-flood,
+  .home-hint-arrow { animation: none !important; }
+  .home-flood { display: none; }
+}
+
+.home {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3rem;
+  padding: 2rem;
+  box-sizing: border-box;
+}
+.home-content { flex: 0 1 auto; }
+
+@media (max-width: 900px) {
+  .home { flex-direction: column; gap: 2rem; overflow-y: auto; }
+}
+
+.home {
+  display: block;
+  padding: 0;
+}
+.home-content {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding-left: 400px;
+}

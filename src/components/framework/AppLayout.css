@@ -1,0 +1,160 @@
+.app-shell {
+  --mint: #86efc0;
+  --emerald: #12b57f;
+  --forest: #0a6f4d;
+  --ink: #0b241a;
+
+  position: relative;
+  min-height: 100vh;
+  width: 100%;
+  background: radial-gradient(120% 70% at 50% -10%, #ffffff 0%, #eef8f1 55%, #e2f2e9 100%);
+}
+
+.app-page {
+  min-height: 100vh;
+  width: 100%;
+}
+
+/* Invisible hot-zone along the LEFT edge */
+.dock-trigger {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 30px;
+  z-index: 40;
+}
+
+/* The floating dock — vertical, slides in from the left */
+.dock {
+  position: fixed;
+  left: 12px;
+  top: 50%;
+  transform: translate(-180%, -50%);
+  z-index: 50;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform 0.55s cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 0.4s ease;
+}
+
+.dock-open {
+  transform: translate(0, -50%);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.dock-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  width: 76px;
+  padding: 20px 0;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.65);
+  border: 1px solid rgba(18, 181, 127, 0.22);
+  backdrop-filter: blur(22px) saturate(1.6);
+  -webkit-backdrop-filter: blur(22px) saturate(1.6);
+  box-shadow:
+    24px 0 60px -22px rgba(10, 111, 77, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+/* App icons */
+.dock-app {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border: 1px solid rgba(18, 181, 127, 0.25);
+  border-radius: 15px;
+  cursor: pointer;
+  color: #0a6f4d;
+  background: linear-gradient(160deg, rgba(134, 239, 192, 0.55), rgba(18, 181, 127, 0.28));
+  transition:
+    transform 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 0.25s ease;
+}
+
+.dock-app:hover {
+  transform: translateX(12px) scale(1.14);
+  box-shadow: 18px 12px 34px -14px rgba(10, 111, 77, 0.6);
+}
+
+.dock-app-active {
+  box-shadow: inset 0 0 0 2px #12b57f;
+}
+
+.dock-icon {
+  display: grid;
+  place-items: center;
+}
+.dock-icon svg {
+  width: 26px;
+  height: 26px;
+  display: block;
+}
+
+/* Hover tooltip label — to the RIGHT of each icon */
+.dock-label {
+  position: absolute;
+  left: calc(100% + 12px);
+  top: 50%;
+  transform: translateY(-50%) translateX(-6px);
+  padding: 4px 9px;
+  border-radius: 8px;
+  background: rgba(11, 36, 26, 0.92);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.dock-app:hover .dock-label {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dock { transition: opacity 0.2s ease; }
+  .dock-app { transition: box-shadow 0.2s ease; }
+}
+
+/* Dock anclado: siempre visible, el contenido se desplaza */
+.dock-pinned .dock {
+  transform: none;
+  opacity: 1;
+  pointer-events: auto;
+  left: 12px;
+  top: 12px;
+  bottom: 12px;
+  height: auto;
+}
+.dock-pinned .dock-trigger { display: none; }
+
+/* Full-height bar: pages at the top, Settings pinned to the bottom */
+.dock-pinned .dock-bar {
+  height: 100%;
+  justify-content: flex-start;
+  box-sizing: border-box;
+  padding: 22px 0;
+}
+.dock-pinned .dock-app-settings { margin-top: auto; }
+/* Softer, closer shadow when pinned so it doesn't darken the page's left edge */
+.dock-pinned .dock-bar {
+  box-shadow:
+    6px 0 22px -16px rgba(10, 111, 77, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+/* Reserve room on the left so content doesn't sit under the pinned dock.
+   Dock bar is 76px wide at left:12px → clears at ~88px; keep it tight. */
+.dock-pinned .app-page { padding-left: 96px; }
+@media (max-width: 700px) {
+  .dock-pinned .app-page { padding-left: 88px; }
+}
