@@ -74,10 +74,10 @@ export default function BonusPanel({
   const payMonth = periodOf(anchor);
   const forMonth = shiftPeriod(payMonth, -bonusLag);
 
-  const lineOf = (p: Proj, line: string, userId: string) => {
+  const lineOf = (_p: Proj, line: string, _userId: string) => {
+    // Billing line follows the user's pick, not their project role.
     if (line === "connector") return "connector";
-    const member = (p.team ?? []).find((m) => m.userId === userId);
-    if (line === "supervision" || supRoles.has(member?.role ?? "")) return "supervision";
+    if (line === "supervision") return "supervision";
     return "consultor";
   };
   const rateOf = (p: Proj, line: string, userId: string) =>

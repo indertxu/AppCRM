@@ -392,10 +392,10 @@ min_revenue_week: v.minRevenueWeek,
   /** Weeks-worth of target covered by the custom range, so goals stay comparable. */
   const rangeWeeks = scope === "custom" ? businessDays(rangeFrom, rangeTo) / 5 : 0;
 
-const rateFor = (p: Proj, line: string, userId: string): { rate: number; kind: string } => {
+const rateFor = (p: Proj, line: string, _userId: string): { rate: number; kind: string } => {
+    // Rate follows the line the user picked when logging, not their project role.
     if (line === "connector") return { rate: p.rate, kind: "Connector" };
-    const member = (p.team ?? []).find((m) => m.userId === userId);
-    const isSup = line === "supervision" || supRoles.has(member?.role ?? "");
+    const isSup = line === "supervision";
     return isSup
       ? { rate: p.supervision, kind: "Project management" }
       : { rate: p.rate, kind: "Consultancy" };

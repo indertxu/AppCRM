@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useState, useEffect } from "react";
 import { supabase } from "../../api/supabase";
+import { useAuth } from "../../api/AuthProvider";
 import NewClientForm from "./NewClientForm";
 import ClientSettingsModal from "./ClientSettingsModal";
 import ClientDetailModal from "./ClientDetailModal";
@@ -156,6 +157,7 @@ function ClientList({
 }
 
 export default function ClientsPage() {
+  const { session, role } = useAuth();
   const [showForm, setShowForm] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
@@ -211,11 +213,22 @@ status: r.status ?? "open",
       id: r.id, name: r.name ?? "", userIds: r.user_ids ?? [], isSupervision: !!r.is_supervision,
     })));
 
-    const { data: cls } = await supabase.from("clients").select("*").order("name");
-setClients((cls ?? []).map((r: any) => ({ id: r.id, name: r.name ?? "" })));
+    const seesAll = role === "boss" || role === "consultancy_manager" || role === "customer_success";
+    const myId = session?.user?.id ?? "";
 
-const { data: pjs } = await supabase.from("projects").select("*").order("created_at");
-    setProjects((pjs ?? []).map(mapProject));
+    const { data: pjs } = await supabase.from("projects").select("*").order("created_at");
+    const allProjects = (pjs ?? []).map(mapProject);
+    // A consultant only sees projects they're assigned to (on the team).
+    const visibleProjects = seesAll
+      ? allProjects
+      : allProjects.filter((p: any) => (p.team ?? []).some((m: any) => m.userId === myId));
+    setProjects(visibleProjects);
+    const allowedClients = new Set(visibleProjects.map((p: any) => p.clientId));
+
+    const { data: cls } = await supabase.from("clients").select("*").order("name");
+    setClients((cls ?? [])
+      .map((r: any) => ({ id: r.id, name: r.name ?? "" }))
+      .filter((c: any) => seesAll || allowedClients.has(c.id)));
 
     const { data: ce } = await supabase
       .from("calendar_entries")

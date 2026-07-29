@@ -154,10 +154,12 @@ export default function BillingPanel({
     return m;
   }, [invoices]);
 
-  const lineOf = (p: BiProj, line: string, userId: string): Line => {
+  const lineOf = (p: BiProj, line: string, _userId: string): Line => {
+    // The billing line follows what the user picked when logging (consultor /
+    // connector / project management), NOT their role on the project. Someone who
+    // is the PM can still log consultancy work at the consultancy rate if they choose to.
     if (line === "connector") return "connector";
-    const member = (p.team ?? []).find((m) => m.userId === userId);
-    if (line === "supervision" || supRoles.has(member?.role ?? "")) return "supervision";
+    if (line === "supervision") return "supervision";
     return "consultor";
   };
   const counts = (e: BiEntry) =>
