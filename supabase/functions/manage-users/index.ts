@@ -4,16 +4,6 @@ const URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const ANON = Deno.env.get("SUPABASE_ANON_KEY")!;
 
-const DEPT: Record<string, string> = {
-  consultant: "consultancy", consultancy_manager: "consultancy",
-  customer_success: "customer_success", sales: "sales",
-  sales_manager: "sales", boss: "exec",
-};
-const MANAGER_ALLOWS: Record<string, string[]> = {
-  consultancy_manager: ["consultant"],
-  sales_manager: ["sales"],
-};
-
 const cors = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, content-type, apikey, x-client-info",
@@ -31,11 +21,12 @@ Deno.serve(async (req) => {
 
     const { data: u } = await asUser.auth.getUser();
     if (!u?.user) return json({ error: "Unauthorized" }, 401);
-    const { data: caller } = await admin.from("profiles").select("role, department").eq("id", u.user.id).single();
+    const { data: caller } = await admin.from("profiles").select("role, department, tenant_id").eq("id", u.user.id).single();
     if (!caller) return json({ error: "No profile" }, 403);
 
     const isBoss = caller.role === "boss";
-    const isManager = caller.role === "consultancy_manager" || caller.role === "sales_manager";
+    const MANAGER_ROLES = ["consultancy_manager", "sales_manager", "customer_success", "customer_success_manager", "it_manager", "marketing_manager", "hr_manager"];
+    const isManager = MANAGER_ROLES.includes(caller.role);
 
     const canTouch = async (targetId: string) => {
       if (isBoss) return true;
@@ -60,23 +51,28 @@ Deno.serve(async (req) => {
 
     if (body.action === "create") {
       const p = body.user;
-      if (!isBoss) {
-        const allowed = MANAGER_ALLOWS[caller.role] ?? [];
-        if (!allowed.includes(p.role)) return json({ error: "You can only create staff in your department." }, 403);
-      }
-      const department = DEPT[p.role] ?? null;
+      // Managers can only create people for their own department; the boss anyone.
+      // (Role/department assignment now happens in the Organization map, so we don't
+      //  derive them here anymore.)
+      if (!isBoss && !isManager) return json({ error: "You can't create users." }, 403);
+
       const { data: created, error: cErr } = await admin.auth.admin.createUser({
         email: p.email, password: p.password, email_confirm: true,
         user_metadata: { username: p.username },
       });
-      if (cErr || !created?.user) return json({ error: cErr?.message ?? "Create failed" }, 400);
+      if (cErr || !created?.user) return json({ error: "createUser: " + (cErr?.message ?? "unknown") }, 400);
+
+      // Managers: new hires land in the manager's department by default.
+      const department = isManager ? caller.department : null;
+
       const { error: uErr } = await admin.from("profiles").update({
         first_name: p.first_name, last_name: p.last_name, phone: p.phone, email: p.email,
         yearly_wage: p.yearly_wage, start_date: p.start_date || null, birthday: p.birthday || null,
-        role: p.role, job_title: p.job_title, department, username: p.username,
+        job_title: p.job_title, department, username: p.username,
         social_security: p.social_security, bank_account: p.bank_account,
+        tenant_id: caller.tenant_id,
       }).eq("id", created.user.id);
-      if (uErr) return json({ error: uErr.message }, 400);
+      if (uErr) return json({ error: "profileUpdate: " + uErr.message }, 400);
       return json({ ok: true, id: created.user.id });
     }
 
@@ -89,7 +85,7 @@ Deno.serve(async (req) => {
    job_title: f.job_title,
         social_security: f.social_security, bank_account: f.bank_account,
       };
-      if (isBoss && f.role) { patch.role = f.role; patch.department = DEPT[f.role] ?? null; }
+      if (isBoss && f.role) { patch.role = f.role; }
       const { error } = await admin.from("profiles").update(patch).eq("id", body.id);
       if (error) return json({ error: error.message }, 400);
       return json({ ok: true });
@@ -99,6 +95,15 @@ Deno.serve(async (req) => {
       if (!(await canTouch(body.id))) return json({ error: "Not allowed." }, 403);
       if (!body.password || body.password.length < 6) return json({ error: "Password too short." }, 400);
       const { error } = await admin.auth.admin.updateUserById(body.id, { password: body.password });
+      if (error) return json({ error: error.message }, 400);
+      return json({ ok: true });
+    }
+
+    if (body.action === "delete") {
+      if (!(await canTouch(body.id))) return json({ error: "Not allowed." }, 403);
+      // remove auth user, then profile row
+      await admin.auth.admin.deleteUser(body.id).catch(() => {});
+      const { error } = await admin.from("profiles").delete().eq("id", body.id);
       if (error) return json({ error: error.message }, 400);
       return json({ ok: true });
     }

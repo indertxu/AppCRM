@@ -1,34 +1,27 @@
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useState,
-  type ReactNode,
-} from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
+import { AuthContext, type Role } from "./authContext";
 
-export type Role = "consultant" | "admin" | "boss";
+// Re-export so existing files that still import from "./AuthProvider" keep working.
+// Migrate them to "./authContext" over time; once none import from here, remove these.
+export { useAuth } from "./authContext";
+export type { Role } from "./authContext";
 
-interface AuthContextValue {
-  session: Session | null;
+interface ProfileState {
   role: Role | null;
-  loading: boolean; // session resolved
-  roleLoading: boolean; // profile role resolved
+  isSuperadmin: boolean;
+  roleLoading: boolean;
 }
-
-const AuthContext = createContext<AuthContextValue>({
-  session: null,
-  role: null,
-  loading: true,
-  roleLoading: true,
-});
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
-  const [role, setRole] = useState<Role | null>(null);
   const [loading, setLoading] = useState(true);
-  const [roleLoading, setRoleLoading] = useState(true);
+  const [profile, setProfile] = useState<ProfileState>({
+    role: null,
+    isSuperadmin: false,
+    roleLoading: true,
+  });
 
   // Track the session
   useEffect(() => {
@@ -42,42 +35,48 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => sub.subscription.unsubscribe();
   }, []);
 
-  // Load the profile role whenever the user changes
-  // (kept out of the auth callback to avoid Supabase's auth-lock deadlock)
+  // Load the profile (role + superadmin flag) whenever the user changes.
+  // All setState calls happen inside async callbacks, never synchronously in the
+  // effect body — that keeps react-hooks/set-state-in-effect happy.
   useEffect(() => {
     let active = true;
     const uid = session?.user?.id;
 
     if (!uid) {
-      setRole(null);
-      setRoleLoading(false);
-      return;
+      queueMicrotask(() => {
+        if (active) setProfile({ role: null, isSuperadmin: false, roleLoading: false });
+      });
+      return () => { active = false; };
     }
 
-    setRoleLoading(true);
     supabase
       .from("profiles")
-      .select("role")
+      .select("role, is_superadmin")
       .eq("id", uid)
       .single()
       .then(({ data }) => {
         if (!active) return;
-        setRole((data?.role as Role) ?? null);
-        setRoleLoading(false);
+        setProfile({
+          role: (data?.role as Role) ?? null,
+          isSuperadmin: !!data?.is_superadmin,
+          roleLoading: false,
+        });
       });
 
-    return () => {
-      active = false;
-    };
+    return () => { active = false; };
   }, [session?.user?.id]);
 
   return (
-    <AuthContext.Provider value={{ session, role, loading, roleLoading }}>
+    <AuthContext.Provider
+      value={{
+        session,
+        role: profile.role,
+        isSuperadmin: profile.isSuperadmin,
+        loading,
+        roleLoading: profile.roleLoading,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );
-}
-
-export function useAuth() {
-  return useContext(AuthContext);
 }

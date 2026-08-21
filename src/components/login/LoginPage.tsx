@@ -85,9 +85,17 @@ export default function LoginPage() {
       return;
     }
 
+    // Where to go: superadmins land on the platform panel, everyone else on home.
+    let dest = "/home";
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      const { data: prof } = await supabase.from("profiles").select("is_superadmin").eq("id", user.id).maybeSingle();
+      if (prof?.is_superadmin) dest = "/superadmin";
+    }
+
     // Success -> play the launch flood, then navigate once it covers the screen
     setLaunching(true);
-    window.setTimeout(() => navigate("/home"), 780);
+    window.setTimeout(() => navigate(dest), 780);
   };
 
   return (

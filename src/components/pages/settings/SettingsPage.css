@@ -183,9 +183,9 @@
 /* Landing cards */
 .set-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
   gap: 16px;
-  max-width: 780px;
+  max-width: 1040px;
 }
 .set-card {
   display: flex;
@@ -368,3 +368,103 @@
 .st-outlook-btn:disabled { opacity: 0.6; cursor: default; }
 .st-outlook-btn.is-connected { background: #fff; color: #5a7d6d; }
 .st-outlook-btn.is-connected:hover { background: rgba(214, 69, 69, 0.08); color: #d64545; }
+/* Organization view header */
+.st-bar-row { display: flex; align-items: center; gap: 14px; }
+.st-back {
+  width: 42px; height: 42px;
+  border: 1px solid rgba(10,111,77,0.14);
+  border-radius: 12px;
+  background: #fff;
+  font-size: 20px;
+  color: #0a6f4d;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.st-back:hover { background: rgba(18,181,127,0.08); }
+
+/* Organization view fills the screen without page scroll */
+.st-org {
+  min-height: 0;
+  height: 100vh;
+  padding-bottom: 1.5rem;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.st-org .st-bar { flex-shrink: 0; }
+/* Pipeline view fills the screen without page scroll (same as org) */
+.st-pipeline {
+  min-height: 0;
+  height: 100vh;
+  padding-bottom: 1.5rem;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+/* ===== Landing: tall vertical nav cards ===== */
+.st-landing { height: 100vh; overflow: hidden; display: flex; flex-direction: column; padding-bottom: 2rem; }
+.st-landing .st-bar { flex-shrink: 0; }
+.nav-cards { flex: 1; min-height: 0; display: flex; gap: 18px; align-items: stretch; }
+.nav-card {
+  --accent: #12b57f;
+  position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column;
+  padding: 1.8rem 1.6rem; border-radius: 22px; text-align: left; cursor: pointer;
+  background: #fff; border: 1px solid var(--line); overflow: hidden;
+  box-shadow: 0 18px 44px -34px rgba(10,111,77,0.5);
+  transition: transform 0.28s cubic-bezier(0.16,1,0.3,1), box-shadow 0.28s, border-color 0.28s;
+}
+.nav-card::before {
+  content: ""; position: absolute; inset: 0; opacity: 0; transition: opacity 0.3s;
+  background: radial-gradient(120% 60% at 50% 100%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 70%);
+  pointer-events: none;
+}
+.nav-card:hover { transform: translateY(-6px); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); box-shadow: 0 40px 70px -30px color-mix(in srgb, var(--accent) 45%, transparent); }
+.nav-card:hover::before { opacity: 1; }
+
+.nav-card-icon {
+  display: grid; place-items: center; width: 54px; height: 54px; border-radius: 16px; margin-bottom: 18px;
+  background: linear-gradient(155deg, color-mix(in srgb, var(--accent) 55%, #fff), var(--accent));
+  color: #fff; flex-shrink: 0;
+  box-shadow: 0 14px 28px -14px color-mix(in srgb, var(--accent) 80%, transparent);
+  transition: transform 0.28s cubic-bezier(0.16,1,0.3,1);
+}
+.nav-card:hover .nav-card-icon { transform: scale(1.06) rotate(-3deg); }
+.nav-card-icon svg { width: 27px; height: 27px; }
+.nav-card-title { font-family: "Space Grotesk", sans-serif; font-size: 20px; font-weight: 600; color: var(--forest); line-height: 1.2; margin-bottom: 6px; }
+.nav-card-sub { font-size: 13px; color: var(--muted); line-height: 1.45; }
+.nav-card-spacer { flex: 1; }
+
+/* Insights — hidden, slide up on hover */
+.nav-insights {
+  display: flex; flex-direction: column; gap: 10px;
+  max-height: 0; opacity: 0; transform: translateY(10px);
+  transition: max-height 0.34s cubic-bezier(0.16,1,0.3,1), opacity 0.28s, transform 0.34s cubic-bezier(0.16,1,0.3,1), margin 0.34s;
+  overflow: hidden;
+}
+.nav-card:hover .nav-insights { max-height: 260px; opacity: 1; transform: translateY(0); margin-top: 18px; }
+.nav-stat {
+  display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; border-radius: 13px;
+  background: color-mix(in srgb, var(--accent) 9%, #fff);
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+}
+.nav-stat b { font-family: "Space Grotesk", sans-serif; font-size: 26px; font-weight: 700; color: var(--accent); line-height: 1; }
+.nav-stat span { font-size: 11.5px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.nav-stat-wide b { font-size: 18px; }
+
+/* Arrow bottom-right, appears on hover */
+.nav-card-go {
+  position: absolute; right: 18px; bottom: 18px;
+  display: grid; place-items: center; width: 36px; height: 36px; border-radius: 11px;
+  background: var(--accent); color: #fff;
+  opacity: 0; transform: translateX(-6px); transition: opacity 0.28s, transform 0.28s;
+  box-shadow: 0 10px 22px -10px color-mix(in srgb, var(--accent) 80%, transparent);
+}
+.nav-card:hover .nav-card-go { opacity: 1; transform: translateX(0); }
+.nav-card-go svg { width: 18px; height: 18px; }
+
+@media (max-width: 900px) {
+  .st-landing { height: auto; overflow: visible; }
+  .nav-cards { flex-wrap: wrap; }
+  .nav-card { flex: 1 1 240px; min-height: 260px; }
+  .nav-card .nav-insights { max-height: 260px; opacity: 1; transform: none; margin-top: 18px; }
+}

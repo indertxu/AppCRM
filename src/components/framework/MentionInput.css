@@ -1,0 +1,50 @@
+/* @-mention editor (contentEditable) */
+.mi-wrap { position: relative; width: 100%; max-width: 100%; display: flex; flex: 1 1 auto; min-width: 0; }
+
+.mi-editor {
+  width: 100%; max-width: 100%; box-sizing: border-box; padding: 10px 12px;
+  border: 1px solid var(--line, rgba(10,111,77,0.14)); border-radius: 10px; background: #f6faf8;
+  font-family: inherit; font-size: 13.5px; line-height: 20px; color: #0b241a; outline: none;
+  transition: border-color 0.14s, box-shadow 0.14s, background 0.14s;
+  white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; cursor: text;
+  overflow-x: hidden;
+}
+.mi-editor:focus { border-color: #12b57f; box-shadow: 0 0 0 3px rgba(18,181,127,0.15); background: #fff; }
+.mi-single { min-height: 42px; max-height: 42px; overflow-y: hidden; overflow-x: auto; white-space: nowrap; }
+.mi-single::-webkit-scrollbar { height: 0; }
+.mi-multi { min-height: 46px; max-height: 124px; overflow-y: auto; }  /* grows ~ up to 5 lines */
+.mi-single::-webkit-scrollbar, .mi-multi::-webkit-scrollbar { width: 7px; }
+.mi-single::-webkit-scrollbar-thumb, .mi-multi::-webkit-scrollbar-thumb { background: rgba(10,111,77,0.16); border-radius: 999px; }
+.mi-single::-webkit-scrollbar-track, .mi-multi::-webkit-scrollbar-track { background: transparent; }
+
+/* Simulated placeholder */
+.mi-editor.mi-empty::before {
+  content: attr(data-placeholder); color: #5a7d6d; pointer-events: none;
+}
+
+/* Mention pills inside the text */
+.mi-pill {
+  display: inline-block; padding: 1px 9px; margin: 0 1px; border-radius: 999px;
+  font-size: 12.5px; font-weight: 600; line-height: 18px; vertical-align: baseline;
+  cursor: default; user-select: none; white-space: nowrap;
+}
+.mi-pill-int { background: rgba(18,181,127,0.14); color: #0a6f4d; }
+.mi-pill-ext { background: #eef2f0; color: #46695a; }
+
+/* Autocomplete popover */
+.mi-pop {
+  z-index: 3000; min-width: 240px; max-width: 320px;
+  background: #fff; border: 1px solid var(--line, rgba(10,111,77,0.14)); border-radius: 12px; padding: 5px;
+  box-shadow: 0 26px 50px -24px rgba(11,36,26,0.4); animation: mi-in 0.12s ease;
+}
+@keyframes mi-in { from { opacity: 0; transform: translateY(-5px); } }
+.mi-opt {
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: none; background: none;
+  border-radius: 9px; cursor: pointer; text-align: left; font-family: inherit; transition: background 0.1s;
+}
+.mi-opt:hover, .mi-opt.is-active { background: rgba(10,111,77,0.07); }
+.mi-av { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; color: #fff; font-family: "Space Grotesk", sans-serif; font-size: 12px; font-weight: 700; flex-shrink: 0; }
+.mi-av-int { background: linear-gradient(150deg, #86efc0, #12b57f); color: #04120d; }
+.mi-av-ext { background: linear-gradient(150deg, #8ba79b, #5a7d6d); }
+.mi-name { flex: 1; font-size: 13.5px; font-weight: 600; color: #0b241a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mi-kind { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #5a7d6d; padding: 2px 7px; border-radius: 6px; background: #f0f3f1; flex-shrink: 0; }

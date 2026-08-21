@@ -87,3 +87,10 @@
   color: #04120d;
   font-weight: 700;
 }
+/* Week-selection mode */
+.dp-cell.in-week { background: rgba(18, 181, 127, 0.16); border-radius: 0; }
+.dp-cell.hover-week { background: rgba(18, 181, 127, 0.1); border-radius: 0; }
+.dp-cell.in-week:first-child, .dp-cell.hover-week:first-child { border-radius: 9px 0 0 9px; }
+.dp-cell.in-week:last-child, .dp-cell.hover-week:last-child { border-radius: 0 9px 9px 0; }
+.dp-cell.is-disabled { opacity: 0.28; cursor: default; }
+.dp-cell.is-disabled:hover { background: transparent; }

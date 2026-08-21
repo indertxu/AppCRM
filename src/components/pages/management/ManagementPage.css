@@ -890,6 +890,7 @@
 .mg-tabseg[data-tab="backlog"] .mg-tabseg-slider { transform: translateX(84px); }
 .mg-tabseg[data-tab="billing"] .mg-tabseg-slider { transform: translateX(168px); }
 .mg-tabseg[data-tab="bonus"]   .mg-tabseg-slider { transform: translateX(252px); }
+.mg-tabseg[data-tab="incoming"] .mg-tabseg-slider { transform: translateX(336px); }
 
 /* ===== Billing tab: lock page height so only the panel's list scrolls ===== */
 .mg.mg-tab-billing,

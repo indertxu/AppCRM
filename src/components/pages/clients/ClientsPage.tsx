@@ -60,6 +60,8 @@ export interface Project {
   paymentDays: number;
   discountMode: "none" | "rate" | "total" | "percent";
   discountValue: number;
+  supervisionDiscountMode: "none" | "rate" | "percent";
+  supervisionDiscountValue: number;
 phases: Phase[];
   team: TeamMember[];
   status: string;
@@ -89,10 +91,13 @@ export function effectiveRate(pricePerDay: number, mode: string, value: number):
 }
 
 /**
- * Supervision day rate after discount. Only the percentage discount carries
- * over to supervision; the fixed-€ "rate" discount stays on consultancy only.
+ * Supervision day rate after ITS OWN discount (independent from consultancy).
+ * - rate:    a fixed € amount off the supervision day price
+ * - percent: a % off the supervision day price
+ * - none:    full supervision price
  */
 export function effectiveSupervisionRate(supervisionPrice: number, mode: string, value: number): number {
+  if (mode === "rate") return Math.max(0, supervisionPrice - value);
   if (mode === "percent") return Math.max(0, supervisionPrice * (1 - value / 100));
   return supervisionPrice;
 }
@@ -100,7 +105,7 @@ export function effectiveSupervisionRate(supervisionPrice: number, mode: string,
 export function projectValue(p: Project): number {
   const totalConsult = p.consultorDays + p.connectorDays;
   const rate = effectiveRate(p.pricePerDay, p.discountMode, p.discountValue);
-  const supRate = effectiveSupervisionRate(p.supervisionPrice, p.discountMode, p.discountValue);
+  const supRate = effectiveSupervisionRate(p.supervisionPrice, p.supervisionDiscountMode, p.supervisionDiscountValue);
   const gross = totalConsult * rate + p.supervisionDays * supRate;
   return p.discountMode === "total" ? Math.max(0, gross - p.discountValue) : gross;
 }
@@ -193,6 +198,8 @@ id: r.id,
     paymentDays: Number(r.payment_days) || 0,
     discountMode: (r.discount_mode ?? "none") as "none" | "rate" | "total",
     discountValue: Number(r.discount_value) || 0,
+    supervisionDiscountMode: (r.supervision_discount_mode ?? "none") as "none" | "rate" | "percent",
+    supervisionDiscountValue: Number(r.supervision_discount_value) || 0,
     phases: r.phases ?? [],
     team: r.team ?? [],
 status: r.status ?? "open",
@@ -318,6 +325,8 @@ id: p.id,
       payment_days: p.paymentDays,
       discount_mode: p.discountMode,
       discount_value: p.discountValue,
+      supervision_discount_mode: p.supervisionDiscountMode,
+      supervision_discount_value: p.supervisionDiscountValue,
       phases: p.phases,
       team: p.team,
 status: p.status || "open",
@@ -369,6 +378,8 @@ consultorDays: 0,
       paymentDays: 0,
       discountMode: "none",
       discountValue: 0,
+      supervisionDiscountMode: "none",
+      supervisionDiscountValue: 0,
       phases: [],
       team: [],
 status: "open",

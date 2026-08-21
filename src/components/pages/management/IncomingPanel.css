@@ -1,0 +1,51 @@
+.inc {
+  --mint: #86efc0;
+  --emerald: #12b57f;
+  --forest: #0a6f4d;
+  --ink: #0b241a;
+  --muted: #5a7d6d;
+  --line: rgba(10, 111, 77, 0.14);
+  font-family: "Inter", system-ui, sans-serif;
+  color: var(--ink);
+}
+
+.inc-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 1.2rem; }
+.inc-eyebrow { font-size: 10px; font-weight: 700; letter-spacing: 0.13em; text-transform: uppercase; color: var(--emerald); }
+.inc-title { font-family: "Space Grotesk", sans-serif; font-size: 22px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); margin: 4px 0 0; }
+.inc-count { font-size: 13px; font-weight: 600; color: var(--muted); padding: 6px 14px; border-radius: 999px; background: rgba(18,181,127,0.1); }
+
+.inc-empty, .inc-empty-state { padding: 3rem 0; text-align: center; color: var(--muted); }
+.inc-empty-state .inc-empty-art { font-size: 34px; color: rgba(18,181,127,0.4); margin-bottom: 12px; }
+.inc-empty-state p { font-size: 15px; font-weight: 600; color: var(--ink); margin: 0 0 4px; }
+.inc-empty-state span { font-size: 13px; color: var(--muted); }
+
+.inc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; align-items: start; }
+.inc-card {
+  display: flex; flex-direction: column; padding: 1.1rem 1.2rem;
+  border-radius: 16px; background: #fff; border: 1px solid var(--line);
+  box-shadow: 0 14px 34px -30px rgba(11,36,26,0.5);
+  transition: transform 0.2s cubic-bezier(0.16,1,0.3,1), box-shadow 0.2s, border-color 0.2s;
+}
+.inc-card:hover { transform: translateY(-2px); border-color: rgba(18,181,127,0.25); box-shadow: 0 22px 42px -30px rgba(11,36,26,0.4); }
+
+.inc-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.inc-card-id { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.inc-card-client { font-family: "Space Grotesk", sans-serif; font-size: 15.5px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.inc-card-dest { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; color: var(--forest); }
+.inc-card-dest svg { width: 13px; height: 13px; color: var(--emerald); }
+.inc-card-val { flex-shrink: 0; font-family: "Space Grotesk", sans-serif; font-size: 14px; font-weight: 700; color: var(--forest); }
+
+.inc-svcs { margin: 14px 0 0; padding: 11px 12px; border-radius: 11px; background: rgba(10,111,77,0.04); }
+.inc-svcs-label { display: block; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 8px; }
+.inc-svc { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 4px 0; font-size: 13px; color: var(--ink); }
+.inc-svc + .inc-svc { border-top: 1px solid var(--line); }
+.inc-svc b { font-family: "Space Grotesk", sans-serif; font-weight: 600; color: var(--forest); }
+
+.inc-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; padding-top: 13px; border-top: 1px solid var(--line); }
+.inc-date { font-size: 11.5px; color: var(--muted); }
+.inc-actions { display: flex; align-items: center; gap: 8px; }
+.inc-dismiss { border: 1px solid var(--line); background: #fff; color: var(--muted); border-radius: 9px; padding: 7px 13px; font-family: "Space Grotesk", sans-serif; font-size: 12.5px; font-weight: 600; cursor: pointer; transition: all 0.14s; }
+.inc-dismiss:hover:not(:disabled) { background: #f4f7f5; color: var(--ink); }
+.inc-convert { border: none; background: linear-gradient(120deg, var(--mint), var(--emerald)); color: #04120d; border-radius: 9px; padding: 7px 15px; font-family: "Space Grotesk", sans-serif; font-size: 12.5px; font-weight: 700; cursor: pointer; transition: transform 0.14s, box-shadow 0.14s; }
+.inc-convert:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 12px 22px -12px rgba(18,181,127,0.7); }
+.inc-convert:disabled, .inc-dismiss:disabled { opacity: 0.55; cursor: default; }

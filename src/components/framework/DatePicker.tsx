@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import "./DatePicker.css";
 
@@ -26,17 +26,33 @@ interface Props {
   value: string;
   onChange: (iso: string) => void;
   placeholder?: string;
+  weekMode?: boolean;              // highlight whole week, return Monday
+  maxDate?: string;                // disable days after this (e.g. today)
+  hideTrigger?: boolean;           // don't render the built-in button
+  open?: boolean;                  // controlled open (with hideTrigger)
+  onOpenChange?: (open: boolean) => void;
+  anchorRef?: React.RefObject<HTMLElement | null>; // where to position when controlled
 }
 
-export default function DatePicker({ value, onChange, placeholder = "Select date" }: Props) {
+function mondayOf(d: Date): Date {
+  const x = new Date(d);
+  const day = (x.getDay() + 6) % 7;
+  x.setDate(x.getDate() - day);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+export default function DatePicker({ value, onChange, placeholder = "Select date", weekMode = false, maxDate, hideTrigger = false, open: openProp, onOpenChange, anchorRef }: Props) {
   const selected = parseISO(value);
-  const [open, setOpen] = useState(false);
+  const [openState, setOpenState] = useState(false);
+  const open = openProp !== undefined ? openProp : openState;
+  const setOpen = (v: boolean) => { onOpenChange ? onOpenChange(v) : setOpenState(v); };
   const [view, setView] = useState<Date>(selected ?? new Date());
   const [pos, setPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const btnRef = useRef<HTMLButtonElement>(null);
 
-  const openPicker = () => {
-    const r = btnRef.current?.getBoundingClientRect();
+  const positionFrom = (el: HTMLElement | null) => {
+    const r = el?.getBoundingClientRect();
     if (r) {
       const below = r.bottom + 6;
       const wouldOverflow = below + 320 > window.innerHeight;
@@ -46,8 +62,14 @@ export default function DatePicker({ value, onChange, placeholder = "Select date
       });
     }
     setView(selected ?? new Date());
-    setOpen(true);
   };
+  const openPicker = () => { positionFrom(btnRef.current); setOpen(true); };
+
+  // When controlled-open becomes true, position from the external anchor.
+  useEffect(() => {
+    if (openProp && anchorRef?.current) positionFrom(anchorRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openProp]);
 
   const y = view.getFullYear();
   const m = view.getMonth();
@@ -64,12 +86,35 @@ export default function DatePicker({ value, onChange, placeholder = "Select date
   const isToday = (d: number) =>
     today.getFullYear() === y && today.getMonth() === m && today.getDate() === d;
 
+  // Week-mode: is this day in the same week as the selected date?
+  const selMonday = selected ? mondayOf(selected) : null;
+  const inSelWeek = (d: number) => {
+    if (!weekMode || !selMonday) return false;
+    const cur = mondayOf(new Date(y, m, d));
+    return cur.getTime() === selMonday.getTime();
+  };
+  const [hoverWeek, setHoverWeek] = useState<number | null>(null);
+  const inHoverWeek = (d: number) => {
+    if (!weekMode || hoverWeek === null) return false;
+    return mondayOf(new Date(y, m, d)).getTime() === mondayOf(new Date(y, m, hoverWeek)).getTime();
+  };
+  const maxD = maxDate ? parseISO(maxDate) : null;
+  const isDisabled = (d: number) => !!(maxD && new Date(y, m, d) > maxD);
+
+  const pick = (d: number) => {
+    if (isDisabled(d)) return;
+    const chosen = weekMode ? mondayOf(new Date(y, m, d)) : new Date(y, m, d);
+    onChange(toISO(chosen));
+    setOpen(false);
+  };
+
   const label = selected
     ? `${selected.getDate()} ${MONTHS_SHORT[selected.getMonth()]} ${selected.getFullYear()}`
     : placeholder;
 
   return (
     <>
+      {!hideTrigger && (
       <button
         ref={btnRef}
         type="button"
@@ -82,6 +127,7 @@ export default function DatePicker({ value, onChange, placeholder = "Select date
         </svg>
         <span>{label}</span>
       </button>
+      )}
 
       {open &&
         createPortal(
@@ -104,8 +150,11 @@ export default function DatePicker({ value, onChange, placeholder = "Select date
                     <button
                       key={i}
                       type="button"
-                      className={`dp-cell ${isSel(d) ? "is-sel" : ""} ${isToday(d) ? "is-today" : ""}`}
-                      onClick={() => { onChange(toISO(new Date(y, m, d))); setOpen(false); }}
+                      className={`dp-cell ${isSel(d) ? "is-sel" : ""} ${isToday(d) ? "is-today" : ""} ${inSelWeek(d) ? "in-week" : ""} ${inHoverWeek(d) ? "hover-week" : ""} ${isDisabled(d) ? "is-disabled" : ""}`}
+                      disabled={isDisabled(d)}
+                      onMouseEnter={() => weekMode && setHoverWeek(d)}
+                      onMouseLeave={() => weekMode && setHoverWeek(null)}
+                      onClick={() => pick(d)}
                     >
                       {d}
                     </button>

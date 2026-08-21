@@ -39,10 +39,33 @@ const managementIcon = (
     <rect x="3" y="13" width="8" height="8" rx="1.6" />
   </svg>
 );
-const settingsIcon = (
+const companiesIcon = (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="3.2" />
-    <path d="M19.4 13a7.8 7.8 0 0 0 0-2l2-1.5-2-3.4-2.4 1a7.6 7.6 0 0 0-1.7-1L15 2.6h-4l-.3 2.6a7.6 7.6 0 0 0-1.7 1l-2.4-1-2 3.4L4.6 11a7.8 7.8 0 0 0 0 2l-2 1.5 2 3.4 2.4-1a7.6 7.6 0 0 0 1.7 1l.3 2.6h4l.3-2.6a7.6 7.6 0 0 0 1.7-1l2.4 1 2-3.4z" />
+    <rect x="4" y="3" width="10" height="18" rx="1.5" />
+    <path d="M14 8h6v13H4" />
+    <path d="M7.5 7h3M7.5 11h3M7.5 15h3M17 12h0M17 16h0" />
+  </svg>
+);
+const contactsIcon = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="4" y="3" width="16" height="18" rx="2" />
+    <circle cx="12" cy="10" r="2.6" />
+    <path d="M8 17a4 4 0 0 1 8 0" />
+    <path d="M4 7h2M4 12h1.5M4 17h2" />
+  </svg>
+);
+const salesIcon = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 3v18h18" />
+    <path d="M7 14l3-3 3 2 5-6" />
+    <circle cx="7" cy="14" r="1" fill="currentColor" stroke="none" />
+    <circle cx="18" cy="7" r="1" fill="currentColor" stroke="none" />
+  </svg>
+);
+const settingsIcon = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    <circle cx="12" cy="12" r="3" />
   </svg>
 );
 
@@ -50,7 +73,10 @@ const items: DockItem[] = [
   { label: "Home", path: "/home", icon: homeIcon },
   { label: "Calendar", path: "/calendar", icon: calendarIcon },
  { label: "Clients", path: "/clients", icon: clientsIcon, roles: ["boss"] },
-{ label: "Management", path: "/management", icon: managementIcon, roles: ["boss", "consultancy_manager", "sales_manager", "customer_success"] },
+  { label: "Companies", path: "/companies", icon: companiesIcon, roles: ["boss"] },
+  { label: "Contacts", path: "/contacts", icon: contactsIcon, roles: ["boss"] },
+  { label: "Sales", path: "/sales", icon: salesIcon, roles: ["boss"] },
+{ label: "Management", path: "/management", icon: managementIcon, roles: ["boss", "consultancy_manager", "sales_manager", "customer_success", "it_manager", "marketing_manager", "hr_manager"] },
   { label: "Settings", path: "/settings", icon: settingsIcon },
 ];
 

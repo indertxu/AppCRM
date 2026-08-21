@@ -10,6 +10,7 @@ import DatePicker from "../../framework/DatePicker";
 import BacklogPanel from "./BacklogPanel";
 import BonusPanel from "./BonusPanel";
 import BillingPanel from "./BillingPanel";
+import IncomingPanel from "./IncomingPanel";
 import "./ManagementPage.css";
 
 const MONTHS_FULL = [
@@ -106,7 +107,7 @@ export default function ManagementPage() {
   const [rangeTo, setRangeTo] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [projOpen, setProjOpen] = useState<string | null>(null); // "userId|projectKey"
-  const [tab, setTab] = useState<"team" | "backlog" | "billing" | "bonus">("team");
+  const [tab, setTab] = useState<"team" | "backlog" | "billing" | "bonus" | "incoming">("team");
 
   const [entries, setEntries] = useState<Entry[]>([]);
   const [clientTypeIds, setClientTypeIds] = useState<Set<string>>(new Set());
@@ -163,17 +164,18 @@ perDay: 1, minPerDay: 0.5, minPerWeek: 3, minPerMonth: 12, minRevenueWeek: 0, mi
 
       const { data: pj } = await supabase
         .from("projects")
-     .select("id, client_id, project_type_id, kickoff_date, price_per_day, supervision_price, discount_mode, discount_value, team, consultor_days, connector_days, supervision_days, status, legal_name, vat_number, address, contacts, taxed, tax_rate");
+     .select("id, client_id, project_type_id, kickoff_date, price_per_day, supervision_price, discount_mode, discount_value, supervision_discount_mode, supervision_discount_value, team, consultor_days, connector_days, supervision_days, status, legal_name, vat_number, address, contacts, taxed, tax_rate");
       setProjects(Object.fromEntries(((pj ?? []) as any[]).map((r) => {
         const base = Number(r.price_per_day) || 0;
         const d = Number(r.discount_value) || 0;
+        const sd = Number(r.supervision_discount_value) || 0;
 return [r.id, {
           id: r.id,
           clientId: r.client_id,
           typeId: r.project_type_id ?? "",
           kickoff: r.kickoff_date ?? "",
           rate: effectiveRate(base, r.discount_mode, d),
-supervision: effectiveSupervisionRate(Number(r.supervision_price) || 0, r.discount_mode, d),
+supervision: effectiveSupervisionRate(Number(r.supervision_price) || 0, r.supervision_discount_mode ?? "none", sd),
           consultorDays: Number(r.consultor_days) || 0,
           connectorDays: Number(r.connector_days) || 0,
           supervisionDays: Number(r.supervision_days) || 0,
@@ -750,6 +752,7 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
             <button className={tab === "backlog" ? "is-on" : ""} onClick={() => setTab("backlog")}>Backlog</button>
             <button className={tab === "billing" ? "is-on" : ""} onClick={() => setTab("billing")}>Billing</button>
             <button className={tab === "bonus" ? "is-on" : ""} onClick={() => setTab("bonus")}>Bonus</button>
+            <button className={tab === "incoming" ? "is-on" : ""} onClick={() => setTab("incoming")}>Incoming</button>
           </div>
         </div>
 
@@ -1324,7 +1327,7 @@ minPerMonth: targets.minPerMonth,
           cutoffs={cutoffs}
           defaultCutoffDay={defaultCutoffDay}
         />
-      ) : (
+      ) : tab === "bonus" ? (
         <BonusPanel
           entries={entries.map((e) => ({
             id: e.id, userId: e.userId, projectId: e.projectId, date: e.date,
@@ -1342,6 +1345,8 @@ minPerMonth: targets.minPerMonth,
           bonusLag={bonusLag}
           anchor={anchor}
         />
+      ) : (
+        <IncomingPanel />
       )}
     </div>
   );

@@ -1,15 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { supabase } from "../../api/supabase";
-import { useAuth } from "../../api/AuthProvider";
+import { useAuth } from "../../api/authContext";
 import NewUserModal, { LEVELS, type NewUserPayload } from "./NewUserModal";
 import UsersView, { type UserRow } from "./UsersView";
 import UserDetailModal from "./UserDetailModal";
+import Organization from "./Organization";
+import CatalogPage from "./CatalogPage";
+import PipelinePage from "./PipelinePage";
 import { connectOutlook, completeOutlookConnect, outlookStatus, disconnectOutlook } from "../../api/outlookSync";
 import "./SettingsPage.css";
 
 const levelLabel = (id: string | null) => LEVELS.find((l) => l.id === id)?.label ?? id ?? "—";
 
-type View = "home" | "users" | "account" | "interface";
+type View = "home" | "users" | "organization" | "account" | "interface" | "catalog" | "pipeline";
 
 export const DOCK_PINNED_KEY = "next.dockPinned";
 export const DOCK_PINNED_EVENT = "next:dock-pinned";
@@ -18,8 +21,13 @@ export default function SettingsPage() {
   const { session, role } = useAuth();
   console.log("my role →", role);
   const isBoss = role === "boss";
-  const isManager = role === "consultancy_manager" || role === "sales_manager";
+  const isManager = role === "consultancy_manager" || role === "sales_manager"
+    || role === "customer_success" || role === "it_manager"
+    || role === "marketing_manager" || role === "hr_manager";
   const canManage = isBoss || isManager;
+  const orgBackRef = useRef<(() => boolean) | null>(null);
+  const orgToolbarRef = useRef<HTMLDivElement | null>(null);
+  const canSeeSensitive = isBoss || isManager;
 
   const allowedLevels = isBoss
     ? LEVELS.map((l) => l.id)
@@ -30,6 +38,41 @@ export default function SettingsPage() {
     : [];
 
   const [view, setView] = useState<View>("home");
+
+  // Quick insights shown on the landing cards (loaded lazily).
+  const [stats, setStats] = useState<{
+    employees: number; departments: number;
+    products: number; services: number; pipelines: number;
+  } | null>(null);
+  useEffect(() => {
+    if (!canManage) return;
+    (async () => {
+      const [emp, dep, prod, svc, pipe] = await Promise.all([
+        supabase.from("profiles").select("id", { count: "exact", head: true }),
+        supabase.from("org_departments").select("id", { count: "exact", head: true }),
+        supabase.from("products").select("id", { count: "exact", head: true }),
+        supabase.from("services").select("id", { count: "exact", head: true }),
+        supabase.from("pipelines").select("id", { count: "exact", head: true }),
+      ]);
+      setStats({
+        employees: emp.count ?? 0,
+        departments: dep.count ?? 0,
+        products: prod.count ?? 0,
+        services: svc.count ?? 0,
+        pipelines: pipe.count ?? 0,
+      });
+    })().catch(() => {});
+  }, [canManage]);
+
+  // When the Settings icon is tapped while already on /settings, reset to home.
+  useEffect(() => {
+    const onReset = (e: Event) => {
+      const path = (e as CustomEvent).detail;
+      if (path === "/settings") setView("home");
+    };
+    window.addEventListener("next:nav-reset", onReset);
+    return () => window.removeEventListener("next:nav-reset", onReset);
+  }, []);
   const [users, setUsers] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
@@ -138,46 +181,144 @@ export default function SettingsPage() {
 
   // ---- Landing ----
   if (view === "home") {
+    const fmt = (n: number | undefined) => (n === undefined ? "—" : String(n));
     return (
-      <div className="st">
+      <div className="st st-landing">
         <header className="st-bar">
           <h1 className="st-title">Settings</h1>
           <p className="st-sub">Manage your workspace</p>
         </header>
-        <div className="set-cards">
+
+        <div className="nav-cards">
           {canManage && (
-            <button className="set-card" onClick={() => setView("users")}>
-              <span className="set-card-icon">
+            <button className="nav-card" style={{ ["--accent" as any]: "#12b57f" }} onClick={() => setView("organization")}>
+              <span className="nav-card-icon">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="9" cy="8" r="3.2" /><path d="M3.5 20a5.5 5.5 0 0 1 11 0" />
-                  <circle cx="17.5" cy="9" r="2.4" /><path d="M16 14.2a4.8 4.8 0 0 1 4.5 4.8" />
+                  <rect x="9" y="3" width="6" height="5" rx="1.2" /><rect x="3" y="16" width="6" height="5" rx="1.2" />
+                  <rect x="15" y="16" width="6" height="5" rx="1.2" /><path d="M12 8v4M6 16v-2h12v2" />
                 </svg>
               </span>
-              <span className="set-card-title">Users</span>
-              <span className="set-card-sub">{isBoss ? "Everyone in the company" : "Your department"}</span>
+              <span className="nav-card-title">Organization</span>
+              <span className="nav-card-sub">People, departments &amp; structure</span>
+              <span className="nav-card-spacer" />
+              <div className="nav-insights">
+                <div className="nav-stat"><b>{fmt(stats?.employees)}</b><span>people</span></div>
+                <div className="nav-stat"><b>{fmt(stats?.departments)}</b><span>departments</span></div>
+              </div>
+              <span className="nav-card-go">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+              </span>
             </button>
           )}
-<button className="set-card" onClick={() => setView("interface")}>
-            <span className="set-card-icon">
+
+          {canManage && (
+            <button className="nav-card" style={{ ["--accent" as any]: "#3c9ae0" }} onClick={() => setView("catalog")}>
+              <span className="nav-card-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 7l9-4 9 4-9 4-9-4z" /><path d="M3 7v10l9 4 9-4V7" /><path d="M12 11v10" />
+                </svg>
+              </span>
+              <span className="nav-card-title">Products &amp; Services</span>
+              <span className="nav-card-sub">Catalog, pricing &amp; blueprints</span>
+              <span className="nav-card-spacer" />
+              <div className="nav-insights">
+                <div className="nav-stat"><b>{fmt(stats?.products)}</b><span>products</span></div>
+                <div className="nav-stat"><b>{fmt(stats?.services)}</b><span>services</span></div>
+              </div>
+              <span className="nav-card-go">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+              </span>
+            </button>
+          )}
+
+          {canManage && (
+            <button className="nav-card" style={{ ["--accent" as any]: "#9b6fd0" }} onClick={() => setView("pipeline")}>
+              <span className="nav-card-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="5" cy="6" r="2.4" /><circle cx="5" cy="18" r="2.4" /><circle cx="19" cy="12" r="2.4" />
+                  <path d="M7.4 6H12a3 3 0 0 1 3 3v.5M7.4 18H12a3 3 0 0 0 3-3v-.5" />
+                </svg>
+              </span>
+              <span className="nav-card-title">Client Pipelines</span>
+              <span className="nav-card-sub">Design the phases a client goes through</span>
+              <span className="nav-card-spacer" />
+              <div className="nav-insights">
+                <div className="nav-stat"><b>{fmt(stats?.pipelines)}</b><span>pipelines</span></div>
+              </div>
+              <span className="nav-card-go">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+              </span>
+            </button>
+          )}
+
+          <button className="nav-card" style={{ ["--accent" as any]: "#e0a13c" }} onClick={() => setView("interface")}>
+            <span className="nav-card-icon">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="4" width="18" height="16" rx="2.5" />
-                <path d="M8 4v16" />
+                <rect x="3" y="4" width="18" height="16" rx="2.5" /><path d="M8 4v16" />
               </svg>
             </span>
-            <span className="set-card-title">Interface</span>
-            <span className="set-card-sub">Toolbar & layout</span>
+            <span className="nav-card-title">Interface</span>
+            <span className="nav-card-sub">Toolbar &amp; layout</span>
+            <span className="nav-card-spacer" />
+            <div className="nav-insights">
+              <div className="nav-stat"><b>{dockPinned ? "On" : "Off"}</b><span>toolbar pinned</span></div>
+              <div className="nav-stat"><b>{outlookConnected ? "Yes" : "No"}</b><span>outlook synced</span></div>
+            </div>
+            <span className="nav-card-go">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+            </span>
           </button>
 
-          <button className="set-card" onClick={() => setView("account")}>
-            <span className="set-card-icon">
+          <button className="nav-card" style={{ ["--accent" as any]: "#5a7d6d" }} onClick={() => setView("account")}>
+            <span className="nav-card-icon">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" />
               </svg>
             </span>
-            <span className="set-card-title">Your account</span>
-            <span className="set-card-sub">Password & details</span>
+            <span className="nav-card-title">Your account</span>
+            <span className="nav-card-sub">Password &amp; details</span>
+            <span className="nav-card-spacer" />
+            <div className="nav-insights">
+              <div className="nav-stat nav-stat-wide"><b>{levelLabel(role)}</b><span>your role</span></div>
+            </div>
+            <span className="nav-card-go">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+            </span>
           </button>
         </div>
+      </div>
+    );
+  }
+
+  // ---- Organization ----
+  if (view === "organization") {
+    return (
+      <div className="st st-org">
+        <header className="st-bar st-bar-row">
+          <button className="st-back" onClick={() => { if (!(orgBackRef.current && orgBackRef.current())) setView("home"); }} aria-label="Back">‹</button>
+          <div>
+            <h1 className="st-title">Organization</h1>
+          </div>
+          <div className="st-org-toolbar" ref={orgToolbarRef} />
+        </header>
+        <Organization canManage={canManage} canSeeSensitive={canSeeSensitive} backRef={orgBackRef} toolbarRef={orgToolbarRef} />
+      </div>
+    );
+  }
+
+  // ---- Catalog (products & services) ----
+  if (view === "catalog") {
+    return (
+      <div className="st">
+        <CatalogPage onBack={() => setView("home")} />
+      </div>
+    );
+  }
+
+  if (view === "pipeline") {
+    return (
+      <div className="st st-pipeline">
+        <PipelinePage onBack={() => setView("home")} />
       </div>
     );
   }

@@ -73,6 +73,8 @@ const [consultorDays, setConsultorDays] = useState(project?.consultorDays ?? 0);
   const [discountValue, setDiscountValue] = useState(project?.discountValue ?? 0);
   const [supervisionDays, setSupervisionDays] = useState(project?.supervisionDays ?? 0);
   const [supervisionPrice, setSupervisionPrice] = useState(project?.supervisionPrice ?? 0);
+  const [supDiscountMode, setSupDiscountMode] = useState<"none" | "rate" | "percent">(project?.supervisionDiscountMode ?? "none");
+  const [supDiscountValue, setSupDiscountValue] = useState(project?.supervisionDiscountValue ?? 0);
   const [taxed, setTaxed] = useState(project?.taxed ?? false);
   const [taxRate, setTaxRate] = useState(project?.taxRate ?? 0);
   const [paymentDays, setPaymentDays] = useState(project?.paymentDays ?? 0);
@@ -247,7 +249,7 @@ setContacts((c) => [...c, { id, name: "", position: "", email: "", phone: "", bi
   const phaseTotal = phases.reduce((s, p) => s + (Number(p.days) || 0), 0);
   const remaining = maxDays - phaseTotal;
 const effRate = effectiveRate(pricePerDay, discountMode, discountValue);
-  const effSupRate = effectiveSupervisionRate(supervisionPrice, discountMode, discountValue);
+  const effSupRate = effectiveSupervisionRate(supervisionPrice, supDiscountMode, supDiscountValue);
   const grossValue = totalConsultancy * effRate + supervisionDays * effSupRate;
   const value = discountMode === "total" ? Math.max(0, grossValue - discountValue) : grossValue;
   const savings = totalConsultancy * pricePerDay + supervisionDays * supervisionPrice - value;
@@ -273,6 +275,7 @@ const submit = () => {
         supervisionDays, supervisionPrice,
         taxed, taxRate: taxed ? taxRate : 0, paymentDays,
         discountMode, discountValue: discountMode === "none" ? 0 : discountValue,
+        supervisionDiscountMode: supDiscountMode, supervisionDiscountValue: supDiscountMode === "none" ? 0 : supDiscountValue,
         phases, team,
         status: project?.status ?? "open",
       }
@@ -466,6 +469,20 @@ const submit = () => {
                 <div className="ncm-two">
                   <div className="cl-field"><label>Days</label><NumField min="0" value={supervisionDays} onChange={setSupervisionDays} /></div>
                   <div className="cl-field"><label>Price/day</label><NumField min="0" value={supervisionPrice} onChange={setSupervisionPrice} /></div>
+                </div>
+                <div className="ncm-two" style={{ marginTop: 12 }}>
+                  <div className="cl-field"><label>Discount</label>
+                    <Select value={supDiscountMode} onChange={(v) => setSupDiscountMode(v as "none" | "rate" | "percent")}
+                      options={[
+                        { value: "none", label: "No discount" },
+                        { value: "rate", label: "Off daily rate (€)" },
+                        { value: "percent", label: "Off daily rate (%)" },
+                      ]} />
+                  </div>
+                  {supDiscountMode !== "none" && (
+                    <div className="cl-field"><label>{supDiscountMode === "rate" ? "Amount / day" : "Percent / day"}</label>
+                      <NumField min="0" value={supDiscountValue} onChange={setSupDiscountValue} /></div>
+                  )}
                 </div>
                 <div className="ncm-tax-row">
                   <span className="ncm-tax-label">Taxed</span>

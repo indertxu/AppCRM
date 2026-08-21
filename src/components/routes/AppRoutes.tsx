@@ -1,5 +1,5 @@
 import { Routes, Route, Navigate, Outlet } from "react-router-dom";
-import { useAuth } from "../api/AuthProvider";
+import { useAuth } from "../api/authContext";
 import ProtectedRoute from "./ProtectedRoute";
 import LoginPage from "../login/LoginPage";
 import AppLayout from "../framework/AppLayout";
@@ -7,22 +7,55 @@ import ManagementPage from "../pages/management/ManagementPage";
 import HomePage from "../pages/homepage/HomePage";
 import CalendarPage from "../pages/calendar/CalendarPage";
 import ClientsPage from "../pages/clients/ClientsPage";
+import CompaniesPage from "../pages/companies/CompaniesPage";
+import ContactsPage from "../pages/contacts/ContactsPage";
+import SalesPage from "../pages/sales/SalesPage";
 import SettingsPage from "../pages/settings/SettingsPage";
+import SuperAdminHome from "../pages/superadmin/SuperAdminHome";
+import SuperAdminClient from "../pages/superadmin/SuperAdminClient";
 
-// If already logged in, /login redirects straight to /home
+// If already logged in, /login redirects to the right landing page.
 function LoginRoute() {
-  const { session, loading } = useAuth();
-  if (loading) return null;
-  if (session) return <Navigate to="/home" replace />;
+  const { session, loading, isSuperadmin, roleLoading } = useAuth();
+  if (loading || (session && roleLoading)) return null;
+  if (session) return <Navigate to={isSuperadmin ? "/superadmin" : "/home"} replace />;
   return <LoginPage />;
 }
 
 // Only admin/boss may pass; consultants get sent home
 function AdminRoute() {
   const { role, roleLoading } = useAuth();
-  console.log("AdminRoute → role:", role, "roleLoading:", roleLoading);
   if (roleLoading) return null;
 if (role !== "boss") return <Navigate to="/home" replace />;
+  return <Outlet />;
+}
+
+// Managers of any department (and the boss) may see Management.
+const MANAGER_ROLES = [
+  "boss", "consultancy_manager", "sales_manager", "customer_success",
+  "it_manager", "marketing_manager", "hr_manager",
+];
+function ManagerRoute() {
+  const { role, roleLoading } = useAuth();
+  if (roleLoading) return null;
+  if (!role || !MANAGER_ROLES.includes(role)) return <Navigate to="/home" replace />;
+  return <Outlet />;
+}
+
+// Superadmin-only. Uses the flag already loaded by AuthProvider (no flash).
+function SuperAdminRoute() {
+  const { isSuperadmin, roleLoading } = useAuth();
+  if (roleLoading) return null;
+  if (!isSuperadmin) return <Navigate to="/home" replace />;
+  return <Outlet />;
+}
+
+// The normal app: a superadmin has no company, so bounce them to their panel
+// before any app page paints (prevents the home flash).
+function AppGate() {
+  const { isSuperadmin, roleLoading } = useAuth();
+  if (roleLoading) return null;
+  if (isSuperadmin) return <Navigate to="/superadmin" replace />;
   return <Outlet />;
 }
 
@@ -31,21 +64,42 @@ export default function AppRoutes() {
     <Routes>
       <Route path="/login" element={<LoginRoute />} />
 
+      {/* Superadmin platform panel — protected by login, but outside the app layout */}
       <Route element={<ProtectedRoute />}>
-        <Route element={<AppLayout />}>
-          <Route path="/home" element={<HomePage />} />
-          <Route path="/calendar" element={<CalendarPage />} />
-          <Route path="/management" element={<ManagementPage />} />
-         <Route path="/settings" element={<SettingsPage />} />
+        <Route element={<SuperAdminRoute />}>
+          <Route path="/superadmin" element={<SuperAdminHome />} />
+          <Route path="/superadmin/company/:id" element={<SuperAdminClient />} />
+        </Route>
+      </Route>
 
-          {/* Admin / boss only */}
-          <Route element={<AdminRoute />}>
-            <Route path="/clients" element={<ClientsPage />} />
+      <Route element={<ProtectedRoute />}>
+        <Route element={<AppGate />}>
+          <Route element={<AppLayout />}>
+            <Route path="/home" element={<HomePage />} />
+            <Route path="/calendar" element={<CalendarPage />} />
+            <Route element={<ManagerRoute />}>
+              <Route path="/management" element={<ManagementPage />} />
+            </Route>
+            <Route path="/settings" element={<SettingsPage />} />
+
+            {/* Admin / boss only */}
+            <Route element={<AdminRoute />}>
+              <Route path="/clients" element={<ClientsPage />} />
+              <Route path="/companies" element={<CompaniesPage />} />
+              <Route path="/contacts" element={<ContactsPage />} />
+              <Route path="/sales" element={<SalesPage />} />
+            </Route>
           </Route>
         </Route>
       </Route>
 
-      <Route path="*" element={<Navigate to="/home" replace />} />
+      <Route path="*" element={<CatchAll />} />
     </Routes>
   );
+}
+
+function CatchAll() {
+  const { isSuperadmin, roleLoading } = useAuth();
+  if (roleLoading) return null;
+  return <Navigate to={isSuperadmin ? "/superadmin" : "/home"} replace />;
 }

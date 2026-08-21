@@ -8,6 +8,12 @@ export const LEVELS = [
   { id: "customer_success", label: "Customer success" },
   { id: "sales", label: "Sales" },
   { id: "sales_manager", label: "Sales manager" },
+  { id: "it", label: "IT" },
+  { id: "it_manager", label: "IT manager" },
+  { id: "marketing", label: "Marketing" },
+  { id: "marketing_manager", label: "Marketing manager" },
+  { id: "hr", label: "Human resources" },
+  { id: "hr_manager", label: "HR manager" },
   { id: "boss", label: "Boss" },
 ] as const;
 
@@ -53,7 +59,6 @@ export default function NewUserModal({ allowedLevels, onCreate, onClose }: Props
 const [birthday, setBirthday] = useState("");
   const [ss, setSs] = useState("");
   const [bank, setBank] = useState("");
-  const [role, setRole] = useState(allowedLevels[0] ?? "consultant");
   const [title, setTitle] = useState("consultant");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,8 +68,6 @@ const [birthday, setBirthday] = useState("");
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
-
-  const levels = LEVELS.filter((l) => allowedLevels.includes(l.id));
 
   const canSave =
     first.trim() && email.trim() && username.trim() && password.length >= 6;
@@ -83,7 +86,7 @@ const [birthday, setBirthday] = useState("");
       yearly_wage: wage,
       start_date: startDate,
       birthday,
-role,
+role: "",
       job_title: title,
       social_security: ss,
       bank_account: bank,
@@ -117,12 +120,7 @@ role,
         <div className="cl-field"><label>Birthday</label><DatePicker value={birthday} onChange={setBirthday} /></div>
             <div className="cl-field"><label>Nº seguridad social</label><input className="cl-input" value={ss} onChange={(e) => setSs(e.target.value)} /></div>
             <div className="cl-field"><label>Nº cuenta bancaria</label><input className="cl-input" value={bank} onChange={(e) => setBank(e.target.value)} /></div>
-            <div className="cl-field"><label>Security level</label>
-              <select className="cl-input" value={role} onChange={(e) => setRole(e.target.value)}>
-                {levels.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
-              </select>
-            </div>
-            <div className="cl-field"><label>Role</label>
+            <div className="cl-field"><label>Job title</label>
 <Select
                 value={title}
                 onChange={setTitle}
