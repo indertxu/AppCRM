@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { supabase } from "../../api/supabase";
 import {
   listTenants, listUsers, createUser, deleteUser, toggleTenant, updateTenant,
   type Tenant, type TenantUser,
@@ -27,6 +28,36 @@ export default function SuperAdminClient() {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+
+  // password reset
+  const [pwFor, setPwFor] = useState<TenantUser | null>(null);
+  const [pw, setPw] = useState("");
+  const [pwBusy, setPwBusy] = useState(false);
+  const [pwErr, setPwErr] = useState("");
+  const [pwDone, setPwDone] = useState(false);
+
+  /**
+   * Passwords live in auth.users, which only the service role can write, so
+   * this goes through the edge function rather than the browser client.
+   */
+  const savePassword = async () => {
+    if (!pwFor) return;
+    if (pw.trim().length < 6) { setPwErr("Password must be at least 6 characters."); return; }
+    setPwBusy(true); setPwErr("");
+    const { data, error } = await supabase.functions.invoke("manage-tenants", {
+      body: { action: "set_password", userId: pwFor.id, password: pw.trim() },
+    });
+    setPwBusy(false);
+    if (error || (data && data.error)) { setPwErr(error?.message ?? data.error); return; }
+    setPwDone(true);
+  };
+
+  const openPw = (u: TenantUser) => { setPwFor(u); setPw(""); setPwErr(""); setPwDone(false); };
+  const randomPw = () => {
+    // Readable but not guessable: no lookalike characters.
+    const abc = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    setPw(Array.from({ length: 12 }, () => abc[Math.floor(Math.random() * abc.length)]).join(""));
+  };
 
   const load = async () => {
     setLoading(true);
@@ -139,12 +170,61 @@ export default function SuperAdminClient() {
                   <span className="sa-user-email">{u.email}</span>
                   <span className="sa-user-role">{u.role ? (ROLES.find((r) => r.value === u.role)?.label ?? u.role) : "Role not set"}{u.job_title ? ` · ${u.job_title}` : ""}</span>
                 </span>
+                <button className="sa-user-key" onClick={() => openPw(u)} aria-label="Change password" title="Change password">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M21 2l-2 2M15.5 8.5a4.5 4.5 0 1 1-6.4 6.3 4.5 4.5 0 0 1 6.4-6.3zM19 4l-6.5 6.5M17 6l2 2"/></svg>
+                </button>
                 <button className="sa-user-del" onClick={() => removeUser(u.id)} aria-label="Delete user">×</button>
               </div>
             ))}
           </div>
         )}
       </div>
+
+      {pwFor && (
+        <div className="sa-backdrop" onMouseDown={() => setPwFor(null)}>
+          <div className="sa-modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+            <div className="sa-modal-head">
+              <div>
+                <span className="sa-badge">Reset password</span>
+                <h2 className="sa-modal-title">{pwFor.email}</h2>
+              </div>
+              <button className="sa-x" onClick={() => setPwFor(null)} aria-label="Close">×</button>
+            </div>
+
+            {pwDone ? (
+              <>
+                <p className="sa-hint">
+                  Password changed. Give it to the user through a channel you trust - it cannot be read back later.
+                </p>
+                <div className="sa-pw-done">{pw}</div>
+                <div className="sa-modal-actions">
+                  <button className="sa-confirm" onClick={() => setPwFor(null)}>Done</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="sa-field">
+                  <label>New password</label>
+                  <div className="sa-pw-row">
+                    <input value={pw} onChange={(e) => setPw(e.target.value)} placeholder="Min 6 characters" autoFocus />
+                    <button className="sa-pw-gen" onClick={randomPw} type="button">Generate</button>
+                  </div>
+                </div>
+                {pwErr && <p className="sa-error">{pwErr}</p>}
+                <div className="sa-modal-actions">
+                  <button className="sa-cancel" onClick={() => setPwFor(null)}>Cancel</button>
+                  <button className="sa-confirm" onClick={savePassword} disabled={pwBusy || pw.trim().length < 6}>
+                    {pwBusy ? "Saving…" : "Set password"}
+                  </button>
+                </div>
+                <p className="sa-hint">
+                  The user is not signed out, and no email is sent. Their existing sessions stay valid until they expire.
+                </p>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

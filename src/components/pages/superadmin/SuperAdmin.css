@@ -316,3 +316,25 @@
 /* Add-user form is now just email + password + button */
 .sa-userform { grid-template-columns: 1.6fr 1.6fr auto; }
 @media (max-width: 640px) { .sa-userform { grid-template-columns: 1fr; } }
+/* ---- Per-user password reset ---- */
+.sa-user-key {
+  display: grid; place-items: center; width: 34px; height: 34px; flex-shrink: 0;
+  border: none; border-radius: 9px; background: rgba(255,255,255,0.04);
+  color: var(--muted); cursor: pointer; transition: background 0.15s, color 0.15s;
+}
+.sa-user-key svg { width: 16px; height: 16px; }
+.sa-user-key:hover { background: rgba(134,239,192,0.14); color: var(--mint); }
+.sa-pw-row { display: flex; gap: 10px; }
+.sa-pw-row input { flex: 1; min-width: 0; }
+.sa-pw-gen {
+  flex-shrink: 0; padding: 0 16px; border: 1px solid var(--line); border-radius: 11px;
+  background: rgba(255,255,255,0.03); color: var(--mint); font-family: inherit;
+  font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.15s;
+}
+.sa-pw-gen:hover { background: rgba(134,239,192,0.1); }
+.sa-pw-done {
+  margin: 1rem 0 0; padding: 14px 16px; border-radius: 12px;
+  background: rgba(18,181,127,0.12); border: 1px solid rgba(134,239,192,0.28);
+  font-family: "Space Grotesk", sans-serif; font-size: 18px; font-weight: 600;
+  color: var(--mint); text-align: center; letter-spacing: 0.06em; user-select: all;
+}

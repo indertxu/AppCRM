@@ -1,9 +1,9 @@
 // Superadmin-only Edge Function: manage tenants (companies) and their users.
-// Actions: list_tenants, create_tenant, create_user, list_users, delete_user, toggle_tenant
+// Actions: list_tenants, create_tenant, update_tenant, toggle_tenant,
+//          list_users, create_user, delete_user, set_password
 //
 // Uses the service role key to create auth users. Verifies the caller is a superadmin
 // before doing anything.
-
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const cors = {
@@ -21,7 +21,10 @@ const admin = createClient(
 
 // Roles allowed by the profiles_role_check constraint. Anything outside this
 // set (including an empty string) must fall back to the default.
-const VALID_ROLES = ["consultant", "consultancy_manager", "customer_success", "sales", "sales_manager", "boss"];
+const VALID_ROLES = [
+  "consultant", "consultancy_manager", "customer_success",
+  "customer_success_manager", "sales", "sales_manager", "boss",
+];
 const safeRole = (r: unknown) =>
   typeof r === "string" && VALID_ROLES.includes(r.trim()) ? r.trim() : "consultant";
 
@@ -101,19 +104,16 @@ Deno.serve(async (req) => {
     if (action === "create_user") {
       const { tenantId, email, password, role, jobTitle } = p;
       if (!tenantId || !email || !password) return json({ error: "tenantId, email and password required" }, 400);
-
       // enforce max_users
       const { data: tenant } = await admin.from("tenants").select("max_users").eq("id", tenantId).maybeSingle();
       const { count } = await admin.from("profiles").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId);
       if (tenant && count != null && count >= tenant.max_users)
         return json({ error: `User limit reached (${tenant.max_users}).` }, 400);
-
       // create the auth user (the on_auth_user_created trigger seeds a profile row)
       const { data: created, error: cErr } = await admin.auth.admin.createUser({
         email, password, email_confirm: true,
       });
       if (cErr || !created.user) return json({ error: cErr?.message ?? "Could not create user" }, 400);
-
       // create/update their profile with tenant + role.
       // safeRole() guards against empty string / invalid values that would violate
       // the profiles_role_check constraint.
@@ -132,6 +132,25 @@ Deno.serve(async (req) => {
       const { userId } = p;
       await admin.auth.admin.deleteUser(userId);
       await admin.from("profiles").delete().eq("id", userId);
+      return json({ ok: true });
+    }
+
+    // Hard-reset one user's password. The caller is already known to be a
+    // superadmin (checked above), so the only extra guard needed is refusing to
+    // touch another superadmin's login.
+    if (action === "set_password") {
+      const { userId, password } = p;
+      if (!userId || !password) return json({ error: "userId and password are required" }, 400);
+      if (String(password).length < 6) return json({ error: "Password must be at least 6 characters" }, 400);
+
+      const { data: target } = await admin
+        .from("profiles").select("is_superadmin").eq("id", userId).maybeSingle();
+      if (target?.is_superadmin) {
+        return json({ error: "Cannot change a superadmin password from here" }, 403);
+      }
+
+      const { error } = await admin.auth.admin.updateUserById(userId, { password });
+      if (error) return json({ error: error.message }, 400);
       return json({ ok: true });
     }
 
