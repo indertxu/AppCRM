@@ -164,7 +164,7 @@ perDay: 1, minPerDay: 0.5, minPerWeek: 3, minPerMonth: 12, minRevenueWeek: 0, mi
 
       const { data: pj } = await supabase
         .from("projects")
-     .select("id, client_id, project_type_id, kickoff_date, price_per_day, supervision_price, discount_mode, discount_value, supervision_discount_mode, supervision_discount_value, team, consultor_days, connector_days, supervision_days, status, legal_name, vat_number, address, contacts, taxed, tax_rate");
+     .select("id, client_id, service_id, project_type_id, kickoff_date, price_per_day, supervision_price, discount_mode, discount_value, supervision_discount_mode, supervision_discount_value, team, consultor_days, connector_days, supervision_days, status, legal_name, vat_number, address, contacts, taxed, tax_rate");
       setProjects(Object.fromEntries(((pj ?? []) as any[]).map((r) => {
         const base = Number(r.price_per_day) || 0;
         const d = Number(r.discount_value) || 0;
@@ -172,7 +172,7 @@ perDay: 1, minPerDay: 0.5, minPerWeek: 3, minPerMonth: 12, minRevenueWeek: 0, mi
 return [r.id, {
           id: r.id,
           clientId: r.client_id,
-          typeId: r.project_type_id ?? "",
+          typeId: r.service_id ?? r.project_type_id ?? "",
           kickoff: r.kickoff_date ?? "",
           rate: effectiveRate(base, r.discount_mode, d),
 supervision: effectiveSupervisionRate(Number(r.supervision_price) || 0, r.supervision_discount_mode ?? "none", sd),
@@ -207,7 +207,7 @@ minRevenueWeek: r.min_revenue_week === null ? null : Number(r.min_revenue_week),
         bonusPct2: r.bonus_pct_2 ?? null,
       }])));
 
-      const { data: pt } = await supabase.from("project_types").select("id, name");
+      const { data: pt } = await supabase.from("services").select("id, name");
       setTypeNames(Object.fromEntries(((pt ?? []) as any[]).map((t) => [t.id, t.name ?? ""])));
 
       const { data: rl } = await supabase.from("client_roles").select("id, is_supervision");
@@ -1257,7 +1257,7 @@ minPerMonth: targets.minPerMonth,
                                 <span className="mg-dclient">
                                   <span className={`mg-dchev ${isProjOpen ? "is-open" : ""}`}>›</span>
                                   <b>{clientNames[projects[projId]?.clientId ?? ""] ?? "—"}</b>
-                                  <em>{typeNames[projects[projId]?.typeId ?? ""] || "No project type"}</em>
+                                  <em>{typeNames[projects[projId]?.typeId ?? ""] || "No service"}</em>
                                   <span className="mg-dkind">{v.rateKind}</span>
                                 </span>
                                 <span className="mg-r mg-drate">{Math.round(v.rate).toLocaleString()}</span>

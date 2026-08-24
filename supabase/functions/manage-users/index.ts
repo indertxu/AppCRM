@@ -41,7 +41,10 @@ Deno.serve(async (req) => {
       let q = admin.from("profiles").select(
 "id, first_name, last_name, email, phone, role, job_title, department, username, start_date, birthday, yearly_wage, social_security, bank_account"
       );
-      if (isBoss) { /* all */ }
+      // ALWAYS scope to the caller's tenant, otherwise a boss would see every
+      // company's people across the whole platform (cross-tenant leak).
+      if (caller.tenant_id) q = q.eq("tenant_id", caller.tenant_id);
+      if (isBoss) { /* all within the tenant */ }
       else if (isManager) q = q.eq("department", caller.department);
       else q = q.eq("id", u.user.id);
       const { data, error } = await q.order("first_name");

@@ -23,7 +23,7 @@ client, projects, projectTypes, usage, onOpenProject, onNewProject, onDeleteProj
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-const typeName = (id: string) => projectTypes.find((t) => t.id === id)?.name ?? "No project type";
+const typeName = (id: string) => projectTypes.find((t) => t.id === id)?.name ?? "No service";
 
   const totals = projects.reduce(
     (acc, p) => {

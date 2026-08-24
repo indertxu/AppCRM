@@ -1,12 +1,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import Select from "../../framework/Select";
 import { supabase } from "../../api/supabase";
 import { listCompanies, listContacts, type Company, type Contact } from "../companies/companiesApi";
 import { listPipelines, loadPipeline, type Pipeline, type Phase } from "../settings/pipelineApi";
 import { loadProducts, type Product } from "../settings/catalogApi";
-import { listTrackings, createTracking, setTrackingPhase, setTrackingStatus, stampPhaseEntry, clearPhaseEventsAfter, type Tracking } from "./salesApi";
+import { listTrackings, createTracking, setTrackingPhase, setTrackingStatus, stampPhaseEntry, clearPhaseEventsAfter, trackingPct, type Tracking } from "./salesApi";
 import TrackingDetail from "./TrackingDetail";
 import "../companies/CompaniesPage.css";
 import "./SalesPage.css";
@@ -77,7 +78,8 @@ export default function SalesPage() {
   const shown = useMemo(() => {
     const n = norm(q.trim());
     let list = trackings.filter((t) => {
-      if (fStatus && t.status !== fStatus) return false;
+      if (fStatus === "closed") { if (t.status !== "won" && t.status !== "lost") return false; }
+      else if (fStatus && t.status !== fStatus) return false;
       if (fPipeline && t.pipeline_id !== fPipeline) return false;
       if (fProduct && t.product_id !== fProduct) return false;
       if (fCompany && t.company_id !== fCompany) return false;
@@ -102,6 +104,9 @@ export default function SalesPage() {
     const rate = won + lost > 0 ? Math.round((won / (won + lost)) * 100) : 0;
     return { total: trackings.length, active, won, lost, rate };
   }, [trackings]);
+
+  // Clicking the KPI card that is already active clears the filter again.
+  const toggleStatus = (s: string) => setFStatus((cur) => (cur === s ? "" : s));
 
   const anyFilter = q || fStatus || fPipeline || fProduct || fCompany || fPhase || sort !== "recent";
   const clearAll = () => { setQ(""); setFStatus(""); setFPipeline(""); setFProduct(""); setFCompany(""); setFPhase(""); setSort("recent"); };
@@ -161,26 +166,32 @@ export default function SalesPage() {
       </header>
 
       <div className="sl-metrics">
-        <div className="sl-metric sl-m-total">
+        <button type="button" className={`sl-metric sl-m-total ${fStatus === "" ? "is-on" : ""}`}
+          onClick={() => setFStatus("")} aria-pressed={fStatus === ""}>
           <span className="sl-metric-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M8 4v16"/></svg></span>
           <span className="sl-metric-txt"><b>{metrics.total}</b><span>total</span></span>
-        </div>
-        <div className="sl-metric sl-m-active">
+        </button>
+        <button type="button" className={`sl-metric sl-m-active ${fStatus === "active" ? "is-on" : ""}`}
+          onClick={() => toggleStatus("active")} aria-pressed={fStatus === "active"}>
           <span className="sl-metric-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h7l-1 8 10-12h-7z"/></svg></span>
           <span className="sl-metric-txt"><b>{metrics.active}</b><span>active</span></span>
-        </div>
-        <div className="sl-metric sl-m-won">
+        </button>
+        <button type="button" className={`sl-metric sl-m-won ${fStatus === "won" ? "is-on" : ""}`}
+          onClick={() => toggleStatus("won")} aria-pressed={fStatus === "won"}>
           <span className="sl-metric-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0zM17 5h3v2a3 3 0 0 1-3 3M7 5H4v2a3 3 0 0 0 3 3"/></svg></span>
           <span className="sl-metric-txt"><b>{metrics.won}</b><span>won</span></span>
-        </div>
-        <div className="sl-metric sl-m-lost">
+        </button>
+        <button type="button" className={`sl-metric sl-m-lost ${fStatus === "lost" ? "is-on" : ""}`}
+          onClick={() => toggleStatus("lost")} aria-pressed={fStatus === "lost"}>
           <span className="sl-metric-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M15 9l-6 6M9 9l6 6"/></svg></span>
           <span className="sl-metric-txt"><b>{metrics.lost}</b><span>lost</span></span>
-        </div>
-        <div className="sl-metric sl-m-rate">
+        </button>
+        <button type="button" className={`sl-metric sl-m-rate ${fStatus === "closed" ? "is-on" : ""}`}
+          onClick={() => toggleStatus("closed")} aria-pressed={fStatus === "closed"}
+          title="Show closed deals (won and lost)">
           <span className="sl-metric-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 17l6-6 4 4 8-8M17 7h4v4"/></svg></span>
           <span className="sl-metric-txt"><b>{metrics.rate}%</b><span>win rate</span></span>
-        </div>
+        </button>
       </div>
 
       <div className="sl-filters">
@@ -190,7 +201,7 @@ export default function SalesPage() {
           {q && <button onClick={() => setQ("")}>×</button>}
         </div>
         <Select value={fStatus} onChange={setFStatus} placeholder="Any status"
-          options={[{ value: "", label: "Any status" }, { value: "active", label: "Active" }, { value: "won", label: "Won" }, { value: "lost", label: "Lost" }, { value: "paused", label: "Paused" }]} />
+          options={[{ value: "", label: "Any status" }, { value: "active", label: "Active" }, { value: "won", label: "Won" }, { value: "lost", label: "Lost" }, { value: "paused", label: "Paused" }, { value: "closed", label: "Closed (won + lost)" }]} />
         <Select value={fPipeline} onChange={setFPipeline} placeholder="All pipelines"
           options={[{ value: "", label: "All pipelines" }, ...pipelines.map((p) => ({ value: p.id, label: p.name }))]} />
         <Select value={fProduct} onChange={setFProduct} placeholder="All products"
@@ -259,7 +270,8 @@ function TrackingRow({ tracking, title, company, contactCount, pipeline, phases,
   pipeline: string; phases: Phase[]; product: string | null; onOpen: () => void;
 }) {
   const curIdx = phases.findIndex((p) => p.id === tracking.current_phase_id);
-  const pct = phases.length ? Math.round(((curIdx + 1) / phases.length) * 100) : 0;
+  // Same adaptive formula as the detail view: first phase 0%, win phase 100%.
+  const pct = trackingPct(phases, tracking.current_phase_id);
   const stage = curIdx >= 0 ? phases[curIdx]?.name ?? "-" : "Not started";
   const started = tracking.created_at ? new Date(tracking.created_at).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "2-digit" }) : "-";
 
@@ -285,6 +297,121 @@ function TrackingRow({ tracking, title, company, contactCount, pipeline, phases,
   );
 }
 
+/**
+ * Type-to-filter dropdown. Same job as framework/Select but the trigger is a
+ * real text input that narrows the options as you type.
+ *
+ * The list is rendered through a portal with position:fixed because the drawer
+ * body (.dw-body) scrolls with overflow-y:auto and would clip it otherwise.
+ */
+function Combo({ value, onChange, options, placeholder, clearOnSelect = false, emptyText = "No matches" }: {
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+  placeholder?: string;
+  clearOnSelect?: boolean;
+  emptyText?: string;
+}) {
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [hi, setHi] = useState(0);
+  const [box, setBox] = useState<{ left: number; top: number; width: number; maxH: number; up: boolean } | null>(null);
+
+  const selected = options.find((o) => o.value === value);
+
+  const filtered = useMemo(() => {
+    const n = norm(query.trim());
+    if (!n) return options;
+    return options.filter((o) => norm(o.label).includes(n));
+  }, [options, query]);
+
+  const place = () => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const below = window.innerHeight - r.bottom - 14;
+    const above = r.top - 14;
+    const up = below < 190 && above > below;
+    setBox({
+      left: r.left, width: r.width, up,
+      top: up ? r.top - 6 : r.bottom + 6,
+      maxH: Math.max(150, Math.min(300, up ? above : below)),
+    });
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    place();
+    const onMove = () => place();
+    window.addEventListener("scroll", onMove, true);
+    window.addEventListener("resize", onMove);
+    return () => { window.removeEventListener("scroll", onMove, true); window.removeEventListener("resize", onMove); };
+  }, [open]);
+
+  useEffect(() => { setHi(0); }, [query, open]);
+
+  const close = () => { setOpen(false); setQuery(""); };
+  const commit = (v: string) => { onChange(v); close(); };
+
+  const onKey = (e: any) => {
+    if (e.key === "Escape") {
+      // Don't let Escape bubble to the drawer, which would close the whole modal.
+      if (open) { e.stopPropagation(); close(); }
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (!open) { setQuery(""); setOpen(true); return; }
+      setHi((i) => Math.min(i + 1, filtered.length - 1));
+      return;
+    }
+    if (e.key === "ArrowUp") { e.preventDefault(); setHi((i) => Math.max(i - 1, 0)); return; }
+    if (e.key === "Enter") { e.preventDefault(); const o = filtered[hi]; if (o) commit(o.value); }
+  };
+
+  return (
+    <div className="cbo" ref={wrapRef}>
+      <input
+        className={`cbo-input ${open ? "is-open" : ""}`}
+        value={open ? query : selected?.label ?? ""}
+        placeholder={open ? selected?.label || placeholder || "Type to search…" : placeholder}
+        onChange={(e) => { setQuery(e.target.value); if (!open) setOpen(true); }}
+        onFocus={() => { if (!open) { setQuery(""); setOpen(true); } }}
+        onKeyDown={onKey}
+      />
+      <svg className="cbo-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 9l6 6 6-6" /></svg>
+      {open && box && createPortal(
+        <>
+          <div className="cbo-layer" onMouseDown={close} />
+          <div
+            className="cbo-pop"
+            style={{
+              left: box.left, width: box.width, maxHeight: box.maxH,
+              ...(box.up ? { bottom: window.innerHeight - box.top } : { top: box.top }),
+            }}
+          >
+            {filtered.length === 0 ? (
+              <div className="cbo-empty">{emptyText}</div>
+            ) : filtered.map((o, i) => (
+              <button
+                key={o.value || "__blank"}
+                type="button"
+                className={`cbo-option ${i === hi ? "is-hi" : ""} ${!clearOnSelect && o.value === value ? "is-sel" : ""}`}
+                onMouseEnter={() => setHi(i)}
+                onMouseDown={(e) => { e.preventDefault(); commit(o.value); }}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+        </>,
+        document.body,
+      )}
+    </div>
+  );
+}
+
 function NewTracking({ companies, contacts, pipelines, products, onClose, onCreated }: {
   companies: Company[]; contacts: Contact[]; pipelines: Pipeline[]; products: Product[];
   onClose: () => void; onCreated: (id: string) => void;
@@ -292,7 +419,7 @@ function NewTracking({ companies, contacts, pipelines, products, onClose, onCrea
   const [companyId, setCompanyId] = useState("");
   const [contactIds, setContactIds] = useState<string[]>([]);
   const [pipelineId, setPipelineId] = useState("");
-  const [productId, setProductId] = useState("");
+  const [productIds, setProductIds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -307,6 +434,8 @@ function NewTracking({ companies, contacts, pipelines, products, onClose, onCrea
     return c ? [c.first_name, c.last_name].filter(Boolean).join(" ") : "-";
   };
   const availableContacts = contacts.filter((c) => !contactIds.includes(c.id!));
+  const productName = (id: string) => products.find((p) => p.id === id)?.name ?? "-";
+  const availableProducts = products.filter((p) => !productIds.includes(p.id!));
 
   const create = async () => {
     if (!pipelineId) { setErr("Pick a pipeline."); return; }
@@ -316,7 +445,13 @@ function NewTracking({ companies, contacts, pipelines, products, onClose, onCrea
     const firstPhase = phases.filter((p) => p.sales_visible !== false)[0]?.id ?? phases[0]?.id ?? null;
     const id = await createTracking({
       company_id: companyId || null, pipeline_id: pipelineId,
-      product_id: productId || null, current_phase_id: firstPhase, contactIds,
+      // Seed each product with its first tier price so Potential revenue
+      // is not empty the moment the tracking opens.
+      products: productIds.map((pid) => ({
+        id: pid,
+        price: products.find((p) => p.id === pid)?.tiers?.[0]?.price ?? 0,
+      })),
+      current_phase_id: firstPhase, contactIds,
     });
     setBusy(false);
     if (!id) { setErr("Could not create the tracking."); return; }
@@ -338,7 +473,8 @@ function NewTracking({ companies, contacts, pipelines, products, onClose, onCrea
             <p className="dw-sec-title">Who</p>
             <div className="dw-f dw-col2" style={{ marginBottom: 12 }}>
               <label>Company</label>
-              <Select value={companyId} onChange={setCompanyId} placeholder="- No company -"
+              <Combo value={companyId} onChange={setCompanyId} placeholder="Type to search companies…"
+                emptyText="No company matches"
                 options={[{ value: "", label: "- No company -" }, ...companies.map((c) => ({ value: c.id!, label: c.name }))]} />
             </div>
             <label className="dw-f-label">Contacts</label>
@@ -348,19 +484,32 @@ function NewTracking({ companies, contacts, pipelines, products, onClose, onCrea
               ))}
             </div>
             {availableContacts.length > 0 && (
-              <Select value="" onChange={(v) => v && setContactIds((xs) => [...xs, v])} placeholder="+ Add a contact"
+              <Combo value="" clearOnSelect onChange={(v) => v && setContactIds((xs) => [...xs, v])}
+                placeholder="Type to search contacts…" emptyText="No contact matches"
                 options={availableContacts.map((c) => ({ value: c.id!, label: [c.first_name, c.last_name].filter(Boolean).join(" ") }))} />
             )}
           </div>
           <div className="dw-sec">
             <p className="dw-sec-title">Pipeline</p>
-            <Select value={pipelineId} onChange={setPipelineId} placeholder="Pick a pipeline"
+            <Combo value={pipelineId} onChange={setPipelineId} placeholder="Type to search pipelines…"
+              emptyText="No pipeline matches"
               options={pipelines.map((p) => ({ value: p.id, label: p.name }))} />
           </div>
           <div className="dw-sec">
-            <p className="dw-sec-title">Product</p>
-            <Select value={productId} onChange={setProductId} placeholder="- No product -"
-              options={[{ value: "", label: "- No product -" }, ...products.map((p) => ({ value: p.id!, label: p.name }))]} />
+            <p className="dw-sec-title">Products</p>
+            <div className="dw-chips">
+              {productIds.map((id) => (
+                <span key={id} className="dw-chip">{productName(id)}
+                  <button onClick={() => setProductIds((xs) => xs.filter((x) => x !== id))} aria-label="Remove">×</button>
+                </span>
+              ))}
+            </div>
+            {productIds.length === 0 && <p className="dw-empty-hint">No products yet (optional). Add as many as the deal covers.</p>}
+            {availableProducts.length > 0 && (
+              <Combo value="" clearOnSelect onChange={(v) => v && setProductIds((xs) => [...xs, v])}
+                placeholder="Type to search products…" emptyText="No product matches"
+                options={availableProducts.map((p) => ({ value: p.id!, label: p.name }))} />
+            )}
           </div>
           {err && <p className="dw-err">{err}</p>}
         </div>

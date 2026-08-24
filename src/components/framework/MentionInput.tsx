@@ -12,7 +12,7 @@ interface Props {
   value: string;                            // plain text (mentions serialized as "@[name](id)")
   onChange: (v: string) => void;
   people: MentionPerson[];
-  onMention: (p: MentionPerson) => void;
+  onMention?: (p: MentionPerson) => void;
   placeholder?: string;
   multiline?: boolean;
   onEnter?: () => void;
@@ -49,6 +49,33 @@ function serialize(root: HTMLElement): string {
     }
   });
   return out;
+}
+
+// Turn "@[name](id)" text back into pills so an existing value can be edited.
+function hydrate(root: HTMLElement, text: string) {
+  root.innerHTML = "";
+  const re = /@\[([^\]]+)\]\(([^)]+)\)/g;
+  let last = 0;
+  const pushText = (chunk: string) => {
+    const parts = chunk.split("\n");
+    parts.forEach((part, i) => {
+      if (i > 0) root.appendChild(document.createElement("br"));
+      if (part) root.appendChild(document.createTextNode(part));
+    });
+  };
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) pushText(text.slice(last, m.index));
+    const id = m[2];
+    const kind: "employee" | "contact" = id.startsWith("contact:") ? "contact" : "employee";
+    root.appendChild(makePill({ id, name: m[1], kind }));
+    last = re.lastIndex;
+    // Only pad when the text does not already separate the pill, otherwise the
+    // spacing would grow by one character every time the value is re-hydrated.
+    const next = text[last];
+    if (next === undefined || !/\s/.test(next)) root.appendChild(document.createTextNode("\u00a0"));
+  }
+  if (last < text.length) pushText(text.slice(last));
 }
 
 export default function MentionInput({ value, onChange, people, onMention, placeholder, multiline, onEnter, className }: Props) {
@@ -134,7 +161,7 @@ export default function MentionInput({ value, onChange, people, onMention, place
     range.collapse(true);
     sel?.removeAllRanges(); sel?.addRange(range);
     setMenu(false); setQuery("");
-    onMention(p);
+    onMention?.(p);
     emit();
   };
 
@@ -161,13 +188,22 @@ export default function MentionInput({ value, onChange, people, onMention, place
     return () => window.removeEventListener("mousedown", close);
   }, [menu]);
 
-  // When parent clears value (after submit), wipe the editor.
+  /**
+   * Keep the editor DOM in step with `value`.
+   *
+   * This runs on mount, so an existing note or task shows its text instead of
+   * an empty box, and again whenever the parent changes the value from the
+   * outside (clearing it after submit, for instance).
+   *
+   * While the user types, `value` is whatever we just emitted, so the
+   * serialisation already matches and we leave the DOM - and the caret - alone.
+   */
   useEffect(() => {
-    if (!ref.current) return;
-    if (value === "" && (ref.current.textContent || ref.current.querySelector(".mi-pill"))) {
-      ref.current.innerHTML = "";
-      setEmpty(true);
-    }
+    const el = ref.current;
+    if (!el) return;
+    if (serialize(el) === value) return;
+    hydrate(el, value ?? "");
+    setEmpty(!(value ?? "").trim());
   }, [value]);
 
   return (

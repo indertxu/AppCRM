@@ -135,7 +135,9 @@
 .sl-task { position: relative; display: flex; align-items: center; gap: 11px; padding: 10px 32px 10px 12px; border-radius: 11px; background: #f6faf8; border: 1px solid var(--line); animation: sl-card-in 0.3s ease backwards; }
 .sl-check { width: 22px; height: 22px; border-radius: 7px; border: 2px solid rgba(10,111,77,0.25); background: #fff; cursor: pointer; display: grid; place-items: center; font-size: 13px; color: #fff; flex-shrink: 0; transition: all 0.16s; }
 .sl-task.is-done .sl-check { background: var(--emerald); border-color: var(--emerald); }
-.sl-task-title { font-size: 13.5px; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: color 0.16s; }
+.sl-task-title { font-size: 13.5px; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: color 0.16s; cursor: pointer; }
+.sl-task.is-expanded { align-items: flex-start; }
+.sl-task.is-expanded .sl-task-title { white-space: normal; overflow: visible; text-overflow: clip; word-break: break-word; line-height: 1.45; }
 .sl-task.is-done .sl-task-title { text-decoration: line-through; color: var(--muted); }
 
 /* Meetings */
@@ -165,7 +167,11 @@
 .sl-step.is-cur.sl-step-loss .sl-step-num { box-shadow: 0 8px 18px -8px rgba(214,69,69,0.6); transform: scale(1.12); }
 /* ===== Metrics (sober: white/grey, subtle green accent) ===== */
 .sl-metrics { display: flex; gap: 13px; margin-bottom: 1.2rem; flex-shrink: 0; }
-.sl-metric { position: relative; flex: 1; display: flex; align-items: center; gap: 13px; padding: 17px 20px; border-radius: 16px; background: #fff; border: 1px solid var(--line); box-shadow: 0 12px 30px -28px rgba(11,36,26,0.4); overflow: hidden; cursor: default; transition: transform 0.2s cubic-bezier(0.16,1,0.3,1), box-shadow 0.2s, border-color 0.2s; }
+.sl-metric { position: relative; flex: 1; display: flex; align-items: center; gap: 13px; padding: 17px 20px; border-radius: 16px; background: #fff; border: 1px solid var(--line); box-shadow: 0 12px 30px -28px rgba(11,36,26,0.4); overflow: hidden; cursor: pointer; font-family: inherit; text-align: left; transition: transform 0.2s cubic-bezier(0.16,1,0.3,1), box-shadow 0.2s, border-color 0.2s, background 0.2s; }
+.sl-metric:active { transform: translateY(-1px) scale(0.995); transition-duration: 0.08s; }
+.sl-metric.is-on { border-color: var(--emerald); background: rgba(18,181,127,0.05); box-shadow: 0 0 0 3px rgba(18,181,127,0.13), 0 14px 30px -26px rgba(11,36,26,0.4); }
+.sl-metric.is-on::after { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--emerald); }
+.sl-metric:focus-visible { outline: 2px solid var(--emerald); outline-offset: 2px; }
 .sl-metric:hover { transform: translateY(-3px); box-shadow: 0 22px 40px -28px rgba(11,36,26,0.35); border-color: rgba(10,111,77,0.22); }
 .sl-metric-ico { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 12px; flex-shrink: 0; background: #f2f5f3; color: #5a7d6d; }
 .sl-metric-ico svg { width: 22px; height: 22px; }
@@ -513,18 +519,231 @@ textarea.sl-inline-edit { min-height: 90px; resize: vertical; line-height: 1.5; 
 
 /* ===== Handoff button + panel ===== */
 .sl-handoff-wrap { position: relative; }
-.sl-handoff-btn { display: inline-flex; align-items: center; gap: 7px; height: 100%; padding: 9px 16px; border: none; border-radius: 12px; background: linear-gradient(120deg, var(--mint), var(--emerald)); color: #04120d; font-family: "Space Grotesk", sans-serif; font-size: 13.5px; font-weight: 700; cursor: pointer; box-shadow: 0 10px 22px -10px rgba(18,181,127,0.7); transition: transform 0.16s, box-shadow 0.16s; animation: sl-handoff-pulse 2.4s ease-in-out infinite; }
+.sl-handoff-btn { position: relative; display: inline-flex; align-items: center; gap: 7px; height: 100%; padding: 9px 16px; border: none; border-radius: 12px; background: linear-gradient(120deg, var(--mint), var(--emerald)); color: #04120d; font-family: "Space Grotesk", sans-serif; font-size: 13.5px; font-weight: 700; cursor: pointer; box-shadow: 0 10px 22px -10px rgba(18,181,127,0.7); transition: transform 0.16s, box-shadow 0.16s; animation: sl-handoff-pulse 2.4s ease-in-out infinite; }
 .sl-handoff-btn svg { width: 16px; height: 16px; }
 .sl-handoff-btn:hover { transform: translateY(-2px); box-shadow: 0 16px 30px -12px rgba(18,181,127,0.8); }
 @keyframes sl-handoff-pulse { 0%, 100% { box-shadow: 0 10px 22px -10px rgba(18,181,127,0.7); } 50% { box-shadow: 0 10px 28px -8px rgba(18,181,127,0.95); } }
 .sl-handoff-layer { position: fixed; inset: 0; z-index: 40; }
-.sl-handoff-pop { position: absolute; z-index: 41; top: calc(100% + 8px); left: 0; min-width: 280px; background: #fff; border: 1px solid var(--line); border-radius: 15px; padding: 12px; box-shadow: 0 30px 60px -26px rgba(11,36,26,0.5); animation: sl-view-in 0.16s ease; }
-.sl-handoff-head { font-family: "Space Grotesk", sans-serif; font-size: 14px; font-weight: 700; color: var(--ink); margin-bottom: 10px; }
-.sl-handoff-sec-label { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 10px 0 6px; }
-.sl-handoff-dest { display: flex; align-items: center; gap: 9px; width: 100%; padding: 11px 12px; border: 1px solid var(--line); border-radius: 11px; background: #fff; cursor: pointer; font-family: "Space Grotesk", sans-serif; font-size: 13.5px; font-weight: 600; color: var(--forest); margin-bottom: 6px; transition: all 0.14s; }
+.sl-handoff-pop { position: absolute; z-index: 41; top: calc(100% + 8px); left: 0; width: 340px; background: #fff; border: 1px solid var(--line); border-radius: 15px; padding: 12px; box-shadow: 0 30px 60px -26px rgba(11,36,26,0.5); animation: sl-view-in 0.16s ease; }
+.sl-handoff-head { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); margin-bottom: 9px; }
+.sl-handoff-list { display: flex; flex-direction: column; gap: 6px; }
+.sl-handoff-dest { display: flex; align-items: center; gap: 10px; width: 100%; padding: 11px 12px; border: 1px solid var(--line); border-radius: 12px; background: #fff; cursor: pointer; text-align: left; font-family: inherit; transition: border-color 0.14s, background 0.14s, box-shadow 0.14s; }
+.sl-handoff-dest-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.sl-handoff-dest-name { font-family: "Space Grotesk", sans-serif; font-size: 13.5px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sl-handoff-dest-why { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sl-handoff-badge { flex-shrink: 0; font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--forest); background: rgba(18,181,127,0.14); padding: 3px 8px; border-radius: 999px; }
+.sl-handoff-dest.is-rec { border-color: rgba(18,181,127,0.42); background: rgba(18,181,127,0.05); }
+.sl-handoff-dest.is-picked { border-color: var(--emerald); background: rgba(18,181,127,0.09); box-shadow: 0 0 0 2px rgba(18,181,127,0.14); }
 .sl-handoff-dest svg { width: 16px; height: 16px; color: var(--emerald); }
-.sl-handoff-dest:hover { border-color: var(--emerald); background: rgba(18,181,127,0.06); transform: translateX(2px); }
-.sl-handoff-svc { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; border-radius: 9px; background: #f6faf8; margin-bottom: 5px; }
-.sl-handoff-svc-name { font-size: 13px; font-weight: 600; color: var(--ink); }
-.sl-handoff-svc-price { font-family: "Space Grotesk", sans-serif; font-size: 13px; font-weight: 700; color: var(--forest); }
-.sl-handoff-foot { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); font-size: 11.5px; color: var(--muted); font-style: italic; text-align: center; }
+.sl-handoff-dest:hover { border-color: var(--emerald); }
+.sl-handoff-foot { margin-top: 9px; font-size: 11.5px; color: var(--muted); text-align: center; }
+/* ===== Searchable combo (New tracking modal) =====
+   The pop is portalled to document.body, so it must not rely on .sl scoped
+   vars and must out-rank the drawer backdrop (z-index 200). */
+.cbo { position: relative; width: 100%; }
+.cbo-input {
+  width: 100%; box-sizing: border-box; padding: 10px 34px 10px 12px;
+  border: 1px solid rgba(10,111,77,0.14); border-radius: 10px; background: #f6faf8;
+  font-family: inherit; font-size: 14px; color: #0b241a; outline: none;
+  transition: border-color 0.14s, box-shadow 0.14s, background 0.14s;
+}
+.cbo-input::placeholder { color: #5a7d6d; }
+.cbo-input:focus, .cbo-input.is-open {
+  border-color: #12b57f; box-shadow: 0 0 0 3px rgba(18,181,127,0.15); background: #fff;
+}
+.cbo-caret {
+  position: absolute; right: 11px; top: 50%; transform: translateY(-50%);
+  width: 15px; height: 15px; color: #5a7d6d; pointer-events: none;
+}
+.cbo-layer { position: fixed; inset: 0; z-index: 3200; }
+.cbo-pop {
+  position: fixed; z-index: 3201; overflow-y: auto; background: #fff;
+  border: 1px solid rgba(10,111,77,0.14); border-radius: 12px; padding: 5px;
+  box-shadow: 0 26px 54px -22px rgba(11,36,26,0.45); animation: cbo-in 0.13s ease;
+}
+@keyframes cbo-in { from { opacity: 0; transform: translateY(-4px); } }
+.cbo-option {
+  display: block; width: 100%; text-align: left; border: none; background: none;
+  padding: 9px 11px; border-radius: 9px; font-family: inherit; font-size: 13.5px;
+  color: #0b241a; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.cbo-option.is-hi { background: rgba(18,181,127,0.1); }
+.cbo-option.is-sel { color: #0a6f4d; font-weight: 600; }
+.cbo-empty { padding: 13px 11px; font-size: 13px; color: #5a7d6d; text-align: center; }
+
+/* ===== Revenue line: price + term (products) or quantity (services) ===== */
+.sl-rev-lined { flex-direction: column; align-items: stretch; gap: 9px; }
+.sl-rev-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.sl-rev-term { display: flex; align-items: center; gap: 8px; padding-top: 7px; margin-top: 1px; border-top: 1px solid rgba(10,111,77,0.07); }
+.sl-rev-period { font-size: 11.5px; font-weight: 600; color: var(--muted); text-transform: lowercase; }
+.sl-rev-years { display: inline-flex; align-items: center; gap: 5px; }
+.sl-rev-years > span { font-size: 11.5px; color: var(--muted); }
+.sl-rev-years input {
+  width: 52px; padding: 4px 7px; border: 1px solid var(--line); border-radius: 7px; background: #f6faf8;
+  font-family: "Space Grotesk", sans-serif; font-size: 12.5px; font-weight: 600; text-align: right; outline: none;
+}
+.sl-rev-years input:focus { border-color: var(--emerald); box-shadow: 0 0 0 3px rgba(18,181,127,0.15); background: #fff; }
+.sl-rev-years input::-webkit-outer-spin-button,
+.sl-rev-years input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.sl-rev-linetotal {
+  margin-left: auto; font-family: "Space Grotesk", sans-serif; font-size: 13.5px;
+  font-weight: 700; color: var(--forest);
+}
+
+/* ===== Revenue line: actions, summary, receipt ===== */
+.sl-rev-amount {
+  font-family: "Space Grotesk", sans-serif; font-size: 18px; font-weight: 700;
+  letter-spacing: -0.02em; color: var(--ink); font-variant-numeric: tabular-nums;
+  white-space: nowrap; flex-shrink: 0;
+}
+.sl-rev-actions { display: flex; align-items: center; gap: 5px; margin-left: auto; opacity: 0.45; transition: opacity 0.16s; }
+.sl-rev-item:hover .sl-rev-actions, .sl-rev-item:focus-within .sl-rev-actions { opacity: 1; }
+.sl-rev-icon {
+  display: grid; place-items: center; width: 26px; height: 26px; border: none;
+  border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; flex-shrink: 0;
+  transition: background 0.14s, color 0.14s;
+}
+.sl-rev-icon svg { width: 14px; height: 14px; }
+.sl-rev-icon-del:hover { background: rgba(184,92,92,0.12); color: #b85c5c; }
+.sl-rev-icon:hover { background: rgba(18,181,127,0.12); color: var(--forest); }
+.sl-rev-icon.is-on { background: rgba(18,181,127,0.14); color: var(--forest); }
+.sl-rev-disc { font-size: 11.5px; font-weight: 700; color: #b85c5c; background: rgba(184,92,92,0.1); padding: 2px 8px; border-radius: 7px; }
+
+.sl-rev-receipt { margin-top: 9px; padding: 10px 12px; border-radius: 11px; background: #f7faf8; border: 1px solid var(--line); }
+.sl-rc-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 3px 0; font-size: 12px; color: var(--muted); }
+.sl-rc-row em { font-style: normal; font-family: "Space Grotesk", sans-serif; font-weight: 600; color: var(--ink); white-space: nowrap; }
+.sl-rc-row.sl-rc-sub { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 7px; }
+.sl-rc-row.sl-rc-disc em { color: #b85c5c; }
+.sl-rc-row.sl-rc-total { border-top: 1px solid var(--line); margin-top: 5px; padding-top: 7px; }
+.sl-rc-row.sl-rc-total span { font-weight: 700; color: var(--ink); }
+.sl-rc-row.sl-rc-total em { color: var(--forest); font-size: 14px; }
+
+/* ===== Line calculator popup ===== */
+.sl-calc-backdrop { position: fixed; inset: 0; z-index: 3400; display: grid; place-items: center; padding: 1.5rem; background: rgba(6,26,19,0.42); backdrop-filter: blur(6px); animation: sl-calc-fade 0.18s ease; }
+@keyframes sl-calc-fade { from { opacity: 0; } }
+.sl-calc { width: min(880px, 96vw); max-height: 90vh; display: flex; flex-direction: column; border-radius: 20px; background: #fff; border: 1px solid var(--line); box-shadow: 0 50px 100px -35px rgba(6,40,28,0.6); overflow: hidden; animation: sl-calc-pop 0.24s cubic-bezier(0.16,1,0.3,1); }
+@keyframes sl-calc-pop { from { opacity: 0; transform: translateY(14px) scale(0.97); } }
+.sl-calc-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 1.2rem 1.4rem 1rem; border-bottom: 1px solid var(--line); }
+.sl-calc-eyebrow { font-size: 10.5px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--emerald); font-weight: 700; }
+.sl-calc-title { font-family: "Space Grotesk", sans-serif; font-size: 19px; font-weight: 600; color: #064a34; margin: 4px 0 0; }
+.sl-calc-x { width: 34px; height: 34px; border: none; border-radius: 10px; background: rgba(10,111,77,0.06); font-size: 20px; color: var(--muted); cursor: pointer; flex-shrink: 0; }
+.sl-calc-x:hover { background: rgba(184,92,92,0.12); color: #b85c5c; }
+.sl-calc-body { padding: 1.2rem 1.4rem; overflow-y: auto; }
+.sl-calc-sec { margin-bottom: 1.1rem; }
+.sl-calc-sec-t { font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
+.sl-calc-tiers { display: flex; flex-wrap: wrap; gap: 8px; }
+.sl-calc-tiers button { display: flex; flex-direction: column; gap: 2px; align-items: flex-start; padding: 9px 14px; border: 1px solid var(--line); border-radius: 11px; background: #fff; cursor: pointer; font-family: inherit; transition: border-color 0.14s, background 0.14s; }
+.sl-calc-tiers button b { font-family: "Space Grotesk", sans-serif; font-size: 13px; font-weight: 600; color: var(--ink); }
+.sl-calc-tiers button span { font-size: 11.5px; color: var(--muted); }
+.sl-calc-tiers button:hover { border-color: rgba(18,181,127,0.4); }
+.sl-calc-tiers button.is-on { border-color: var(--emerald); background: rgba(18,181,127,0.07); box-shadow: 0 0 0 2px rgba(18,181,127,0.14); }
+.sl-calc-tiers button.is-on b { color: var(--forest); }
+.sl-calc-vars { display: flex; flex-direction: column; gap: 8px; }
+.sl-calc-var { display: flex; flex-wrap: nowrap; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 11px; background: #fbfefc; }
+.sl-calc-var > span:first-child { flex: 1 1 auto; min-width: 0; font-size: 13px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sl-calc-out { flex-shrink: 0; font-family: "Space Grotesk", sans-serif; font-size: 12px; font-weight: 600; color: var(--forest); background: rgba(18,181,127,0.1); padding: 4px 9px; border-radius: 7px; white-space: nowrap; }
+.sl-calc-var input { width: 78px; flex-shrink: 0; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font-family: "Space Grotesk", sans-serif; font-size: 13px; font-weight: 600; text-align: right; outline: none; }
+.sl-calc-var input:focus { border-color: var(--emerald); box-shadow: 0 0 0 3px rgba(18,181,127,0.14); }
+.sl-calc-var-fixed em { font-style: normal; font-size: 12px; color: var(--muted); }
+.sl-calc-inline { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.sl-calc-inline input { width: 110px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 9px; background: #fff; font-family: "Space Grotesk", sans-serif; font-size: 13.5px; font-weight: 600; text-align: right; outline: none; }
+.sl-calc-inline input:focus { border-color: var(--emerald); box-shadow: 0 0 0 3px rgba(18,181,127,0.14); }
+.sl-calc-inline input:disabled { background: #f2f5f3; color: var(--muted); }
+.sl-calc-inline em { font-style: normal; font-size: 12.5px; color: var(--muted); }
+.sl-calc-note { font-size: 11.5px; color: var(--muted); font-style: italic; }
+.sl-calc-switch { display: inline-flex; gap: 3px; padding: 3px; border-radius: 9px; background: rgba(10,111,77,0.06); }
+.sl-calc-switch button { border: none; background: transparent; border-radius: 6px; padding: 6px 12px; font-family: inherit; font-size: 12px; font-weight: 600; color: var(--muted); cursor: pointer; }
+.sl-calc-switch button.is-on { background: #fff; color: var(--forest); box-shadow: 0 3px 8px -4px rgba(10,111,77,0.4); }
+.sl-calc-receipt { padding: 12px 14px; border-radius: 13px; background: rgba(18,181,127,0.05); border: 1px solid rgba(18,181,127,0.25); }
+.sl-calc-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 1rem 1.4rem; border-top: 1px solid var(--line); }
+.sl-calc-cancel { border: 1px solid var(--line); background: #fff; color: var(--muted); border-radius: 11px; padding: 10px 18px; font-family: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; }
+.sl-calc-apply { border: none; border-radius: 11px; padding: 10px 22px; background: linear-gradient(120deg, var(--mint), var(--emerald)); color: #04120d; font-family: "Space Grotesk", sans-serif; font-size: 13.5px; font-weight: 600; cursor: pointer; }
+.sl-calc-apply:hover { filter: brightness(1.05); }
+
+/* No spinner arrows anywhere in the revenue UI */
+.sl-calc input[type="number"]::-webkit-outer-spin-button,
+.sl-calc input[type="number"]::-webkit-inner-spin-button,
+.sl-rev-item input[type="number"]::-webkit-outer-spin-button,
+.sl-rev-item input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.sl-calc input[type="number"],
+.sl-rev-item input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+
+/* Per-row discount control */
+.sl-calc-disc { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; margin-left: auto; }
+.sl-calc-disc input { width: 58px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font-family: "Space Grotesk", sans-serif; font-size: 12.5px; font-weight: 600; text-align: right; outline: none; }
+.sl-calc-disc input:focus { border-color: var(--emerald); box-shadow: 0 0 0 3px rgba(18,181,127,0.14); }
+.sl-calc-switch-xs button { padding: 5px 9px; font-size: 11.5px; min-width: 26px; }
+.sl-calc-off { font-size: 11px; min-width: 44px; text-align: right; font-weight: 700; color: #b85c5c; white-space: nowrap; }
+.sl-rc-off { font-style: normal; color: #b85c5c; font-weight: 600; }
+
+/* Per-row rate override (service duration calculators) */
+.sl-calc-rate { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.sl-calc-rate input { width: 70px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font-family: "Space Grotesk", sans-serif; font-size: 12.5px; font-weight: 600; text-align: right; outline: none; }
+.sl-calc-rate input:focus { border-color: var(--emerald); box-shadow: 0 0 0 3px rgba(18,181,127,0.14); }
+.sl-calc-rate span { font-size: 11.5px; color: var(--muted); }
+
+.sl-rev-err { margin: 10px 0 0; padding: 9px 12px; border-radius: 10px; background: rgba(184,92,92,0.09); border: 1px solid rgba(184,92,92,0.28); color: #b85c5c; font-size: 12.5px; font-weight: 600; }
+
+
+/* Meeting kind + past meetings */
+.sl-meet-kinds { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: rgba(10,111,77,0.06); }
+.sl-meet-kinds button { display: grid; place-items: center; width: 24px; height: 22px; border: none; background: transparent; border-radius: 6px; color: var(--muted); cursor: pointer; transition: background 0.14s, color 0.14s; }
+.sl-meet-kinds button svg { width: 14px; height: 14px; }
+.sl-meet-kinds button:hover { color: var(--forest); }
+.sl-meet-kinds button.is-on { background: #fff; color: var(--forest); box-shadow: 0 2px 6px -3px rgba(10,111,77,0.5); }
+.sl-meet-kinds-new { flex-shrink: 0; }
+.sl-meet-past { display: block; margin-top: 4px; font-size: 9.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.75; }
+.sl-meeting.is-past { opacity: 0.72; }
+.sl-meeting.is-past:hover { opacity: 1; }
+.sl-meeting.is-past .sl-meet-when-block { background: #eef2f0; color: var(--muted); box-shadow: none; }
+.sl-meeting.is-past .sl-meet-title-body { color: var(--muted); }
+
+.sl-handoff-send { width: 100%; margin-top: 11px; border: none; border-radius: 11px; padding: 11px; background: linear-gradient(120deg, var(--mint), var(--emerald)); color: #04120d; font-family: "Space Grotesk", sans-serif; font-size: 13.5px; font-weight: 600; cursor: pointer; }
+.sl-handoff-send:hover:not(:disabled) { filter: brightness(1.05); }
+.sl-handoff-send:disabled { opacity: 0.45; cursor: default; }
+
+/* Handoff confirmation */
+.sl-handoff-done { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 6px 4px 2px; animation: sl-done-in 0.26s cubic-bezier(0.16,1,0.3,1); }
+@keyframes sl-done-in { from { opacity: 0; transform: translateY(6px); } }
+.sl-handoff-done-ico {
+  display: grid; place-items: center; width: 46px; height: 46px; border-radius: 50%;
+  background: linear-gradient(150deg, var(--mint), var(--emerald)); color: #04120d;
+  box-shadow: 0 12px 26px -12px rgba(18,181,127,0.7); margin-bottom: 12px;
+  animation: sl-done-pop 0.34s cubic-bezier(0.16,1,0.3,1) 0.05s backwards;
+}
+@keyframes sl-done-pop { from { transform: scale(0.5); opacity: 0; } }
+.sl-handoff-done-ico svg { width: 24px; height: 24px; }
+.sl-handoff-done-txt { font-family: "Space Grotesk", sans-serif; font-size: 17px; font-weight: 600; color: var(--ink); margin: 0 0 10px; }
+.sl-handoff-done-list { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 5px; width: 100%; }
+.sl-handoff-done-list li {
+  font-family: "Space Grotesk", sans-serif; font-size: 13px; font-weight: 600; color: var(--forest);
+  background: rgba(18,181,127,0.09); border-radius: 9px; padding: 8px 12px;
+}
+.sl-handoff-done-sub { font-size: 12px; color: var(--muted); margin: 0 0 14px; }
+.sl-handoff-done-btn {
+  width: 100%; border: 1px solid var(--line); background: #fff; color: var(--forest);
+  border-radius: 11px; padding: 10px; font-family: "Space Grotesk", sans-serif;
+  font-size: 13.5px; font-weight: 600; cursor: pointer; transition: background 0.14s;
+}
+.sl-handoff-done-btn:hover { background: rgba(18,181,127,0.08); }
+
+/* Handoff: already-sent state */
+.sl-handoff-btn.is-sent { animation: none; }
+.sl-handoff-btn.is-sent::after {
+  content: ""; position: absolute; top: 6px; right: 6px; width: 8px; height: 8px;
+  border-radius: 50%; background: #fff; box-shadow: 0 0 0 2px var(--emerald);
+}
+.sl-handoff-dest.is-locked { cursor: default; opacity: 0.78; background: #f6f9f7; border-color: var(--line); }
+.sl-handoff-dest.is-locked:hover { border-color: var(--line); }
+.sl-handoff-dest.is-dismissed { border-color: rgba(184,92,92,0.4); background: rgba(184,92,92,0.05); }
+.sl-handoff-check.is-locked { background: rgba(10,111,77,0.14); color: var(--forest); border-color: transparent; }
+.sl-handoff-dest-why.is-warn { color: #b85c5c; font-weight: 600; }
+.sl-handoff-badge.is-wait { color: #6b7f76; background: rgba(10,111,77,0.09); }
+.sl-handoff-badge.is-done { color: #fff; background: var(--emerald); }
+.sl-handoff-badge.is-warn { color: #b85c5c; background: rgba(184,92,92,0.14); }
+.sl-handoff-warn {
+  display: flex; align-items: flex-start; gap: 8px; margin-bottom: 11px; padding: 9px 11px;
+  border-radius: 10px; background: rgba(184,92,92,0.08); border: 1px solid rgba(184,92,92,0.25);
+  color: #b85c5c; font-size: 11.5px; line-height: 1.4; font-weight: 600;
+}
+.sl-handoff-warn svg { width: 15px; height: 15px; flex-shrink: 0; margin-top: 1px; }

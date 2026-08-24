@@ -43,9 +43,17 @@ roles: ClientRole[];
   projectTypes: ProjectType[];
   blueprints: Blueprint[];
   client?: Client | null;
+  /** What sales actually sold, shown alongside the form as a reference. */
+  soldFrom?: {
+    company?: string; pipeline?: string; total: number;
+    services: {
+      label: string; price: number; days?: number; kind?: string; gross?: number; discount?: number;
+      rows?: { label: string; detail: string; amount: number; discount: number; days?: number; rate?: number }[];
+    }[];
+  } | null;
 }
 
-export default function NewClientForm({ onSave, onClose, roles = [], projectTypes = [], blueprints = [], client = null, project = null }: Props) {
+export default function NewClientForm({ onSave, onClose, roles = [], projectTypes = [], blueprints = [], client = null, project = null, soldFrom = null }: Props) {
   const [tab, setTab] = useState<"client" | "engagement">("client");
 
 const [name, setName] = useState(client?.name ?? "");
@@ -284,6 +292,70 @@ const submit = () => {
 
   return (
     <div className="ncm-backdrop" onMouseDown={onClose}>
+      {soldFrom && (
+        <aside className="ncm-sold" onMouseDown={(e) => e.stopPropagation()}>
+          <span className="ncm-sold-eyebrow">Sold in sales</span>
+          <h4 className="ncm-sold-title">{soldFrom.company}</h4>
+          {soldFrom.pipeline && <p className="ncm-sold-dest">{soldFrom.pipeline}</p>}
+
+          {(() => {
+            const svc = soldFrom.services.filter((s) => s.kind !== "product");
+            const prods = soldFrom.services.filter((s) => s.kind === "product");
+            const gross = svc.reduce((a, s) => a + (s.gross ?? s.price ?? 0), 0);
+            const disc = svc.reduce((a, s) => a + (s.discount ?? 0), 0);
+            const net = svc.reduce((a, s) => a + (s.price ?? 0), 0);
+            const days = svc.reduce((a, s) => a + (s.days ?? 0), 0);
+            return (
+              <>
+                {svc.map((s, i) => (
+                  <div className="ncm-sold-svc" key={i}>
+                    <div className="ncm-sold-svc-hd">
+                      <span>{s.label}</span>
+                      <b>{s.days ? `${s.days}d` : ""}</b>
+                    </div>
+                    {s.rows && s.rows.length > 0 && (
+                      <table className="ncm-sold-tbl">
+                        <thead>
+                          <tr><th>Variable</th><th className="ncm-num">Days</th><th className="ncm-num">Rate</th><th className="ncm-num">Amount</th></tr>
+                        </thead>
+                        <tbody>
+                          {s.rows.map((r, k) => (
+                            <tr key={k}>
+                              <td title={r.detail}>{r.label}</td>
+                              <td className="ncm-num">{r.days != null ? r.days : ""}</td>
+                              <td className="ncm-num">{r.rate != null ? r.rate.toLocaleString("es-ES") : ""}</td>
+                              <td className="ncm-num ncm-strong">{Math.round(r.amount).toLocaleString("es-ES")}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                ))}
+
+                <dl className="ncm-sold-sum">
+                  <div><dt>Gross</dt><dd>{Math.round(gross).toLocaleString("es-ES")} €</dd></div>
+                  {disc > 0 && (
+                    <div className="is-disc">
+                      <dt>Discount</dt>
+                      <dd>-{Math.round(disc).toLocaleString("es-ES")} €</dd>
+                    </div>
+                  )}
+                  <div className="is-total"><dt>Total</dt><dd>{Math.round(net).toLocaleString("es-ES")} €</dd></div>
+                  {days > 0 && <div className="is-meta"><dt>Days</dt><dd>{days}</dd></div>}
+                  {days > 0 && <div className="is-meta"><dt>Per day</dt><dd>{Math.round(net / days).toLocaleString("es-ES")} €</dd></div>}
+                </dl>
+
+                {prods.length > 0 && (
+                  <p className="ncm-sold-ctx">
+                    Sold with {prods.map((s) => s.label).join(", ")} — licence, not delivered here.
+                  </p>
+                )}
+              </>
+            );
+          })()}
+        </aside>
+      )}
       <div className="ncm-card ncm-card-wide" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
         <div className="ncm-head">
 <div className="ncm-head-left">
@@ -325,7 +397,7 @@ const submit = () => {
                   <input className="cl-input" value={vatNumber} onChange={(e) => setVatNumber(e.target.value)} placeholder="e.g. ESB12345678" /></div>
                 <div className="cl-field" style={{ marginTop: 12 }}><label>Project type</label>
                   <Select value={projectTypeId} onChange={setProjectTypeId}
-                    options={projectTypes.map((t) => ({ value: t.id, label: t.name }))} placeholder="Select project type" /></div>
+                    options={projectTypes.map((t) => ({ value: t.id, label: t.name }))} placeholder="Select service" /></div>
                 <div className="ncm-two">
                   <div className="cl-field"><label>Kick-off</label><DatePicker value={kickoffDate} onChange={setKickoff} /></div>
                   <div className="cl-field"><label>Signing</label><DatePicker value={signingDate} onChange={setSigning} /></div>
@@ -567,7 +639,12 @@ const submit = () => {
                 </div>
                 <div className="ncm-blueprint">
                   <Select value="" onChange={applyBlueprint}
-                    options={blueprints.filter((b) => !projectTypeId || b.projectTypeId === projectTypeId)
+                    options={blueprints.filter((b) => {
+                      // A service points at its blueprint from the catalogue.
+                      const svc = projectTypes.find((s) => s.id === projectTypeId);
+                      if (svc?.blueprintId) return b.id === svc.blueprintId;
+                      return !projectTypeId || b.projectTypeId === projectTypeId;
+                    })
                       .map((b) => ({ value: b.id, label: b.name || "Untitled blueprint" }))}
                     placeholder="Apply a blueprint" />
                 </div>

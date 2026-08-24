@@ -4,6 +4,8 @@ import { supabase } from "../../api/supabase";
 import {
   loadProducts, loadServices, saveProduct, deleteProduct, saveService, deleteService,
   type Product, type Service, type ProductTier, type ServiceRole, type TierDuration,
+  calcTotal, emptyCalculator, emptyCalcVariable,
+  type Calculator, type CalcVariable, type CalcVarType,
 } from "./catalogApi";
 import {
   loadBlueprintData, saveBlueprintData,
@@ -248,7 +250,7 @@ function ProductEditor({ product, onClose, onSaved, onDeleted }: {
                 <input className="cat-tier-name" value={t.name} onChange={(e) => setTier(ti, { name: e.target.value })} placeholder="Tier name (e.g. Pro)" />
                 <div className="cat-price-input">
                   <span>€</span>
-                  <input type="number" min="0" value={t.price} onChange={(e) => setTier(ti, { price: Number(e.target.value) || 0 })} />
+                  <input type="number" min="0" className="cat-nospin" value={t.price} onFocus={(e) => e.target.select()} onChange={(e) => setTier(ti, { price: Number(e.target.value) || 0 })} />
                   {p.billing === "recurring" && <em>{perSuffix}</em>}
                 </div>
                 {p.tiers.length > 1 && <button className="cat-tier-del" onClick={() => removeTier(ti)} aria-label="Remove tier">×</button>}
@@ -266,7 +268,7 @@ function ProductEditor({ product, onClose, onSaved, onDeleted }: {
                     t.durations.map((d, di) => (
                       <div key={di} className="cat-dur-row">
                         <div className="cat-dur-field">
-                          <input type="number" min="1" value={d.months} onChange={(e) => setDuration(ti, di, { months: Number(e.target.value) || 1 })} />
+                          <input type="number" min="1" className="cat-nospin" value={d.months} onFocus={(e) => e.target.select()} onChange={(e) => setDuration(ti, di, { months: Number(e.target.value) || 1 })} />
                           <span>months</span>
                         </div>
                         <div className="cat-dur-field">
@@ -285,6 +287,14 @@ function ProductEditor({ product, onClose, onSaved, onDeleted }: {
             </div>
           ))}
 
+          <CalculatorEditor
+            calc={p.calculator}
+            onChange={(c) => set({ calculator: c ? { ...c, owner_type: "product" } : null })}
+            ownerType="product"
+            basePrice={p.tiers[0]?.price ?? 0}
+            currencySuffix={perSuffix}
+          />
+
           {err && <p className="cat-error">{err}</p>}
         </div>
 
@@ -297,6 +307,223 @@ function ProductEditor({ product, onClose, onSaved, onDeleted }: {
         </div>
       </div>
     </div>
+  );
+}
+
+// ============================ Calculator editor (shared) ============================
+const VAR_TYPES: { value: CalcVarType; label: string; hint: string }[] = [
+  { value: "per_unit",  label: "Per unit",  hint: "counted for every unit above the included amount" },
+  { value: "per_block", label: "Per block", hint: "counted for every block of units above the included amount" },
+  { value: "fixed",     label: "Fixed",     hint: "added once when switched on" },
+  { value: "percent",   label: "% of base", hint: "a percentage of the base amount" },
+];
+
+function CalculatorEditor({ calc, onChange, ownerType, basePrice, unit, currencySuffix }: {
+  calc: Calculator | null | undefined;
+  onChange: (c: Calculator | null) => void;
+  ownerType: "product" | "service";
+  /** Base price of the item (products only). */
+  basePrice: number;
+  /** Rate unit for services: "hour" or "day". Ignored for products. */
+  unit?: "hour" | "day";
+  currencySuffix?: string;
+}) {
+  const [preview, setPreview] = useState<Record<string, number>>({});
+  const isService = ownerType === "service";
+  const unitWord = unit === "hour" ? "hours" : "days";
+
+  if (!calc) {
+    return (
+      <>
+        <div className="cat-tiers-head">
+          <span className="cat-eyebrow">{isService ? "Duration calculator" : "Price calculator"}</span>
+          <button className="cat-mini-add" onClick={() => onChange(emptyCalculator(ownerType))}>+ Add calculator</button>
+        </div>
+        <p className="cat-hint">
+          {isService
+            ? `Optional. Estimate how many ${unitWord} an engagement will take, from variables such as number of companies or km travelled.`
+            : "Optional. Build a price from variables such as number of users or entities, instead of a single fixed price."}
+        </p>
+      </>
+    );
+  }
+
+  const isQty = calc.output_kind === "quantity";
+  const base = isQty ? Number(calc.base_amount) || 0 : basePrice;
+  // Amounts are money for products and units of time for services.
+  const fmt = (n: number) => (isQty ? `${(Number(n) || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${unitWord}` : `${money(n)}${currencySuffix ?? ""}`);
+  const amountUnit = isQty ? unitWord : null;
+
+  const setVar = (i: number, patch: Partial<CalcVariable>) =>
+    onChange({ ...calc, variables: calc.variables.map((v, j) => (j === i ? { ...v, ...patch } : v)) });
+  const addVar = () => onChange({ ...calc, variables: [...calc.variables, emptyCalcVariable(calc.variables.length)] });
+  const removeVar = (i: number) => onChange({ ...calc, variables: calc.variables.filter((_, j) => j !== i) });
+
+  const key = (v: CalcVariable, i: number) => v.id ?? String(i);
+  const previewValues: Record<string, number> = {};
+  calc.variables.forEach((v, i) => {
+    const k = key(v, i);
+    previewValues[k] = preview[k] ?? (Number(v.default_value) || 0);
+  });
+  const previewCalc: Calculator = { ...calc, variables: calc.variables.map((v, i) => ({ ...v, id: key(v, i) })) };
+  const total = calcTotal(previewCalc, previewValues, base);
+
+  return (
+    <>
+      <div className="cat-tiers-head">
+        <span className="cat-eyebrow">{isService ? "Duration calculator" : "Price calculator"}</span>
+        <div className="cat-calc-headbtns">
+          <button className="cat-mini-add" onClick={addVar}>+ Add variable</button>
+          <button className="cat-calc-remove" onClick={() => onChange(null)}>Remove</button>
+        </div>
+      </div>
+
+      {isQty ? (
+        <div className="cat-calc-baseqty">
+          <label className="cat-calc-base">
+            <input type="checkbox" checked={calc.include_base} onChange={(e) => onChange({ ...calc, include_base: e.target.checked })} />
+            <span>Start from a base of</span>
+          </label>
+          <div className="cat-price-input">
+            <input type="number" min="0" step="0.5" className="cat-nospin" value={calc.base_amount}
+              disabled={!calc.include_base} onFocus={(e) => e.target.select()}
+              onChange={(e) => onChange({ ...calc, base_amount: Number(e.target.value) || 0 })} />
+            <em>{unitWord}</em>
+          </div>
+          <span className="cat-hint">before any variable is applied.</span>
+        </div>
+      ) : (
+        <label className="cat-calc-base">
+          <input type="checkbox" checked={calc.include_base} onChange={(e) => onChange({ ...calc, include_base: e.target.checked })} />
+          <span>Start from the base price ({money(basePrice)}{currencySuffix}). Uncheck to build the price only from the variables below.</span>
+        </label>
+      )}
+
+      {calc.variables.length === 0 && (
+        <p className="cat-hint">No variables yet. Add one to start building the {isQty ? "estimate" : "price"}.</p>
+      )}
+
+      {calc.variables.map((v, i) => {
+        const k = key(v, i);
+        const isBlock = v.var_type === "per_block";
+        const isUnits = v.var_type === "per_unit" || isBlock;
+        return (
+          <div key={k} className="cat-calc-var">
+            <div className="cat-calc-var-top">
+              <input className="cat-calc-name" value={v.name}
+                placeholder={isQty ? "Variable name (e.g. Number of companies)" : "Variable name (e.g. Number of users)"}
+                onChange={(e) => setVar(i, { name: e.target.value })} />
+              {isUnits && (
+                <input className="cat-calc-unit" value={v.unit_label ?? ""}
+                  placeholder={isQty ? "unit (e.g. companies, km)" : "unit (e.g. users)"}
+                  onChange={(e) => setVar(i, { unit_label: e.target.value })} />
+              )}
+              <button className="cat-tier-del" onClick={() => removeVar(i)} aria-label="Remove variable">×</button>
+            </div>
+
+            <div className="cat-calc-types">
+              {VAR_TYPES.map((vt) => (
+                <button key={vt.value} className={v.var_type === vt.value ? "on" : ""}
+                  title={vt.hint} onClick={() => setVar(i, { var_type: vt.value })}>{vt.label}</button>
+              ))}
+            </div>
+
+            <div className="cat-calc-fields">
+              <label className="cat-calc-f">
+                <span>{v.var_type === "percent" ? "Percent" : isQty ? `Adds (${unitWord})` : "Amount"}</span>
+                <div className="cat-price-input">
+                  {!isQty && v.var_type !== "percent" && <span>€</span>}
+                  <input type="number" min="0" step={isQty ? "0.25" : "1"} className="cat-nospin" value={v.amount} onFocus={(e) => e.target.select()}
+                    onChange={(e) => setVar(i, { amount: Number(e.target.value) || 0 })} />
+                  {v.var_type === "percent" ? <em>%</em> : amountUnit ? <em>{amountUnit}</em> : null}
+                </div>
+              </label>
+
+              {isBlock && (
+                <label className="cat-calc-f">
+                  <span>Per every</span>
+                  <div className="cat-price-input">
+                    <input type="number" min="1" className="cat-nospin" value={v.block_size} onFocus={(e) => e.target.select()}
+                      onChange={(e) => setVar(i, { block_size: Number(e.target.value) || 1 })} />
+                    <em>{v.unit_label || "units"}</em>
+                  </div>
+                </label>
+              )}
+
+              {isUnits && (
+                <label className="cat-calc-f">
+                  <span>Included</span>
+                  <div className="cat-price-input">
+                    <input type="number" min="0" className="cat-nospin" value={v.included} onFocus={(e) => e.target.select()}
+                      onChange={(e) => setVar(i, { included: Number(e.target.value) || 0 })} />
+                    <em>free</em>
+                  </div>
+                </label>
+              )}
+
+              <label className="cat-calc-f">
+                <span>{v.var_type === "fixed" ? "On by default" : "Default"}</span>
+                {v.var_type === "fixed" ? (
+                  <div className="cat-calc-switch">
+                    <button className={v.default_value ? "on" : ""} onClick={() => setVar(i, { default_value: 1 })}>Yes</button>
+                    <button className={!v.default_value ? "on" : ""} onClick={() => setVar(i, { default_value: 0 })}>No</button>
+                  </div>
+                ) : (
+                  <div className="cat-price-input">
+                    <input type="number" min="0" className="cat-nospin" value={v.default_value} onFocus={(e) => e.target.select()}
+                      onChange={(e) => setVar(i, { default_value: Number(e.target.value) || 0 })} />
+                    <em>{v.var_type === "percent" ? "n/a" : v.unit_label || "units"}</em>
+                  </div>
+                )}
+              </label>
+
+              {isBlock && (
+                <label className="cat-calc-f">
+                  <span>Count</span>
+                  <div className="cat-calc-switch">
+                    <button className={v.round_mode !== "down" ? "on" : ""} onClick={() => setVar(i, { round_mode: "up" })}>Started blocks</button>
+                    <button className={v.round_mode === "down" ? "on" : ""} onClick={() => setVar(i, { round_mode: "down" })}>Full blocks</button>
+                  </div>
+                </label>
+              )}
+            </div>
+          </div>
+        );
+      })}
+
+      {calc.variables.length > 0 && (
+        <div className="cat-calc-preview">
+          <div className="cat-calc-preview-head">
+            <span>Try it</span>
+            <button className="cat-mini-add" onClick={() => setPreview({})}>Reset</button>
+          </div>
+          <div className="cat-calc-preview-rows">
+            {calc.variables.map((v, i) => {
+              const k = key(v, i);
+              if (v.var_type === "percent") return null;
+              return (
+                <label key={k} className="cat-calc-try">
+                  <span>{v.name || "Untitled"}{v.unit_label ? ` (${v.unit_label})` : ""}</span>
+                  {v.var_type === "fixed" ? (
+                    <div className="cat-calc-switch">
+                      <button className={previewValues[k] ? "on" : ""} onClick={() => setPreview((x) => ({ ...x, [k]: 1 }))}>On</button>
+                      <button className={!previewValues[k] ? "on" : ""} onClick={() => setPreview((x) => ({ ...x, [k]: 0 }))}>Off</button>
+                    </div>
+                  ) : (
+                    <input type="number" min="0" className="cat-nospin" value={previewValues[k]} onFocus={(e) => e.target.select()}
+                      onChange={(e) => setPreview((x) => ({ ...x, [k]: Number(e.target.value) || 0 }))} />
+                  )}
+                </label>
+              );
+            })}
+          </div>
+          <div className="cat-calc-total">
+            <span>{isQty ? "Estimated length" : "Total"}</span>
+            <b>{fmt(total)}</b>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -385,7 +612,7 @@ function ServiceEditor({ service, blueprints, roles, onClose, onSaved, onDeleted
                     <span className="cat-role-name">{roleName(r.role_id)}</span>
                     <div className="cat-price-input">
                       <span>€</span>
-                      <input type="number" min="0" value={r.price} onChange={(e) => setRolePrice(ri, Number(e.target.value) || 0)} />
+                      <input type="number" min="0" className="cat-nospin" value={r.price} onFocus={(e) => e.target.select()} onChange={(e) => setRolePrice(ri, Number(e.target.value) || 0)} />
                       <em>/{s.rate_unit[0]}</em>
                     </div>
                     <button className="cat-tier-del" onClick={() => removeRole(ri)} aria-label="Remove role">×</button>
@@ -404,6 +631,14 @@ function ServiceEditor({ service, blueprints, roles, onClose, onSaved, onDeleted
               )}
             </>
           )}
+
+          <CalculatorEditor
+            calc={s.calculator}
+            onChange={(c) => set({ calculator: c ? { ...c, owner_type: "service" } : null })}
+            ownerType="service"
+            basePrice={0}
+            unit={s.rate_unit}
+          />
 
           {err && <p className="cat-error">{err}</p>}
         </div>
