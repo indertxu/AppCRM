@@ -16,6 +16,7 @@ const MEETING_KINDS: { value: MeetingKind; label: string; icon: JSX.Element }[] 
 
 const cleanMentionsFn = (t: string) => t.replace(/@\[([^\]]+)\]\([^)]+\)/g, "@$1");
 import { supabase } from "../../api/supabase";
+import TrackingFiles from "./TrackingFiles";
 import { loadPipeline, listPipelines, type Phase, type Pipeline } from "../settings/pipelineApi";
 import { myProfile, isSalesLead } from "../companies/companiesApi";
 import { loadServices, calcBreakdown, discountOf, BASE_KEY, type Service, type Calculator, type CalcDiscount } from "../settings/catalogApi";
@@ -1074,6 +1075,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
 
         {/* Four columns */}
         <div className="sl-work">
+          <div className="sl-col-left">
           <section className="sl-panel">
             <h3 className="sl-panel-title">Notes<span>{phaseNotes.length}</span></h3>
             <div className="sl-note-add">
@@ -1089,6 +1091,12 @@ export default function TrackingDetail({ tracking, companies, contacts, products
               ))}
             </div>
           </section>
+
+          <section className="sl-panel sl-panel-docs">
+            <h3 className="sl-panel-title">Documents</h3>
+            <TrackingFiles trackingId={tracking.id} phaseId={curPhase} />
+          </section>
+          </div>
 
           <section className="sl-panel">
             <h3 className="sl-panel-title">Tasks<span>{phaseTasks.filter((t) => !t.done).length}</span></h3>

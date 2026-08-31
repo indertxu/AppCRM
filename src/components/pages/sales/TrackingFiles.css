@@ -1,0 +1,175 @@
+.tf {
+  --emerald: #12b57f;
+  --forest: #0a6f4d;
+  --ink: #0b241a;
+  --muted: #5a7d6d;
+  --line: rgba(10, 111, 77, 0.14);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ---- dropzone ---- */
+.tf-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 22px 16px;
+  border-radius: 14px;
+  border: 1.5px dashed rgba(18, 181, 127, 0.35);
+  background: rgba(18, 181, 127, 0.04);
+  color: var(--muted);
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 0.18s, background 0.18s, transform 0.18s;
+}
+.tf-drop:hover { border-color: rgba(18, 181, 127, 0.55); background: rgba(18, 181, 127, 0.07); }
+.tf-drop.is-over {
+  border-color: var(--emerald);
+  background: rgba(18, 181, 127, 0.12);
+  transform: scale(1.01);
+}
+.tf-drop.is-busy { opacity: 0.7; pointer-events: none; }
+.tf-drop svg { width: 26px; height: 26px; color: var(--emerald); margin-bottom: 2px; }
+.tf-drop-main {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 13.5px; font-weight: 600; color: var(--forest);
+}
+.tf-drop-sub { font-size: 11px; color: var(--muted); }
+
+.tf-err {
+  margin: 0; padding: 8px 11px; border-radius: 9px;
+  background: rgba(184, 92, 92, 0.09); border: 1px solid rgba(184, 92, 92, 0.24);
+  font-size: 12px; color: #b85c5c;
+}
+
+/* ---- file list ---- */
+.tf-list { display: flex; flex-direction: column; gap: 8px; }
+.tf-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 40px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #fff;
+  border: 1px solid var(--line);
+  transition: border-color 0.16s, box-shadow 0.16s;
+}
+.tf-item:hover { border-color: rgba(18, 181, 127, 0.3); box-shadow: 0 10px 22px -18px rgba(11, 36, 26, 0.5); }
+.tf-item.has-note { z-index: 1; }
+.tf-item.has-note:hover { z-index: 30; }
+
+.tf-kind {
+  display: grid; place-items: center;
+  width: 40px; height: 40px;
+  border-radius: 10px;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.02em;
+  color: #fff;
+  background: var(--muted);
+}
+.tf-kind-pdf { background: #d64545; }
+.tf-kind-doc { background: #2b6cb0; }
+.tf-kind-xls { background: #0a8f4d; }
+.tf-kind-ppt { background: #d98324; }
+.tf-kind-img { background: #8b4bb0; }
+.tf-kind-zip { background: #6b7280; }
+
+.tf-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.tf-name {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: none; background: none; padding: 0;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 13.5px; font-weight: 600; color: var(--ink);
+  cursor: pointer; text-align: left;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+  transition: color 0.14s;
+}
+.tf-name:hover { color: var(--forest); }
+.tf-meta { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.tf-rename {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--emerald);
+  border-radius: 8px;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 13.5px; font-weight: 600; color: var(--ink);
+  outline: none;
+}
+
+/* note indicator + hover tooltip on the file name */
+.tf-note-dot {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--emerald);
+}
+.tf-note-dot svg { width: 13px; height: 13px; }
+/* Tooltip lives on the whole file row now, so hovering anywhere over the
+   file (not just the tiny flag) reveals the note. */
+.tf-note-tip {
+  position: absolute;
+  bottom: calc(100% - 4px);
+  left: 18px;
+  z-index: 30;
+  min-width: 180px; max-width: 320px;
+  padding: 10px 13px;
+  border-radius: 10px;
+  background: #06120c;
+  color: #eafff4;
+  font-family: "Inter", sans-serif;
+  font-size: 12px; font-weight: 400; line-height: 1.5;
+  white-space: normal;
+  box-shadow: 0 18px 38px -18px rgba(4, 18, 13, 0.85);
+  opacity: 0; pointer-events: none;
+  transform: translateY(6px);
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+.tf-note-tip::after {
+  content: "";
+  position: absolute; top: 100%; left: 22px;
+  border: 6px solid transparent;
+  border-top-color: #06120c;
+}
+.tf-item.has-note:hover .tf-note-tip { opacity: 1; transform: translateY(0); }
+
+/* actions */
+.tf-actions { display: flex; gap: 4px; }
+.tf-act {
+  display: grid; place-items: center;
+  width: 30px; height: 30px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.14s, color 0.14s, border-color 0.14s;
+}
+.tf-act svg { width: 15px; height: 15px; }
+.tf-act:hover { background: rgba(18, 181, 127, 0.09); color: var(--forest); }
+.tf-act.has-note { color: var(--emerald); }
+.tf-del:hover { background: rgba(184, 92, 92, 0.1); color: #b85c5c; }
+
+/* inline note editor */
+.tf-noteedit {
+  grid-column: 1 / -1;
+  display: flex; flex-direction: column; gap: 4px;
+  margin-top: 4px;
+}
+.tf-noteedit textarea {
+  width: 100%; min-height: 54px; resize: vertical;
+  padding: 8px 10px;
+  border: 1px solid var(--emerald);
+  border-radius: 9px;
+  font-family: "Inter", sans-serif; font-size: 12.5px; color: var(--ink);
+  outline: none;
+}
+.tf-noteedit-hint { font-size: 10px; color: var(--muted); }
+
+@media (prefers-reduced-motion: reduce) {
+  .tf-drop, .tf-note-tip { transition: none; }
+}

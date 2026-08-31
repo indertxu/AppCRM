@@ -280,13 +280,17 @@
 /* ===== Realized + Paid columns and the lag stepper ===== */
 .bo-listhead.bo-listhead-pay,
 .bo-row-pay .bo-row-main {
-  grid-template-columns: minmax(180px, 1.3fr) 110px 110px 70px 130px 130px 20px;
+  grid-template-columns: minmax(180px, 1.3fr) 110px 128px 70px 130px 130px 20px;
 }
 .bo-realized {
-  font-family: "Space Grotesk", sans-serif;
-  font-weight: 600;
-  color: var(--muted);
+  display: flex; flex-direction: column; align-items: flex-end; gap: 1px;
   font-variant-numeric: tabular-nums;
+}
+.bo-realized b {
+  font-family: "Space Grotesk", sans-serif; font-size: 14px; font-weight: 600; color: var(--ink);
+}
+.bo-realized i {
+  font-style: normal; font-size: 10.5px; font-weight: 600; color: var(--forest);
 }
 .bo-paycell { display: flex; justify-content: flex-start; }
 .bo-nopay { color: var(--muted); opacity: 0.6; }
@@ -334,3 +338,87 @@
   .bo-listhead.bo-listhead-pay span:nth-child(3),
   .bo-row-pay .bo-row-main .bo-realized { display: none; }
 }
+
+/* =====================================================================
+   Bonus rows — separated cards, tier accent, clearer hierarchy
+   ===================================================================== */
+.bo-list {
+  background: none;
+  backdrop-filter: none;
+  box-shadow: none;
+  overflow: visible;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.bo-listhead.bo-listhead-pay {
+  border-bottom: none;
+  padding: 2px 1.5rem 4px;
+  opacity: 0.7;
+}
+
+/* each consultant is a card */
+.bo-row.bo-row-pay {
+  position: relative;
+  border-radius: 15px;
+  background: #fff;
+  border: 1px solid rgba(10, 111, 77, 0.09);
+  box-shadow: 0 10px 26px -24px rgba(11, 36, 26, 0.5);
+  overflow: hidden;
+  transition: transform 0.22s cubic-bezier(0.16,1,0.3,1), border-color 0.22s, box-shadow 0.22s;
+}
+.bo-row.bo-row-pay:hover {
+  transform: translateY(-2px);
+  border-color: rgba(18, 181, 127, 0.32);
+  box-shadow: 0 18px 34px -26px rgba(11, 36, 26, 0.45);
+}
+.bo-row.bo-row-pay.is-open { border-color: rgba(18, 181, 127, 0.4); }
+/* kill the old divider line */
+.bo-row.bo-row-pay + .bo-row.bo-row-pay .bo-row-main::before { display: none; }
+
+/* left accent bar coloured by tier */
+.bo-row-pay::before {
+  content: "";
+  position: absolute; left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: rgba(10, 111, 77, 0.12);
+}
+.bo-row-pay.tier-row-1::before { background: linear-gradient(180deg, #2ecb92, #0a6f4d); }
+.bo-row-pay.tier-row-2::before { background: linear-gradient(180deg, #b06fd0, #8b4bb0); }
+.bo-row-pay.is-paid { background: rgba(18, 181, 127, 0.04); }
+
+.bo-row-pay .bo-row-main { padding: 15px 1.5rem 15px 1.6rem; }
+
+/* bigger, warmer avatar */
+.bo-av {
+  width: 38px; height: 38px;
+  box-shadow: 0 6px 14px -6px rgba(18, 181, 127, 0.6);
+}
+
+/* invoiced base reads as secondary */
+.bo-inv { font-size: 13px; color: var(--muted); }
+
+/* the payable bonus is the hero number of the row */
+.bo-bonus b {
+  font-size: 19px;
+  letter-spacing: -0.02em;
+}
+.bo-row-pay.is-paid .bo-bonus b { color: #0a6f4d; }
+
+/* tier pills: filled, with a subtle ring */
+.bo-tier {
+  padding: 4px 11px;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.bo-tier.tier-0 { background: rgba(184, 92, 92, 0.1); color: #b06a6a; }
+.bo-tier.tier-1 { background: rgba(18, 181, 127, 0.16); color: var(--forest); }
+.bo-tier.tier-2 { background: rgba(139, 75, 176, 0.16); color: #8b4bb0; }
+
+.bo-chev { color: var(--muted); }
+.bo-row-pay:hover .bo-chev { transform: translateX(2px); }
+.bo-row-pay.is-open .bo-chev { transform: rotate(90deg); }
+
+/* detail spacing tweak for the card look */
+.bo-row-pay .bo-detail { padding-left: 1.6rem; }

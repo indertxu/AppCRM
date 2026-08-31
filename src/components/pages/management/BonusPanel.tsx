@@ -198,6 +198,7 @@ export default function BonusPanel({
         byClient: pay?.byClient ?? {},
         bonus: pay ? { amount: pay.bonusAmount, tier: pay.tier, minMet: pay.minMet, highMet: pay.highMet }
                    : { amount: 0, tier: 0 as 0 | 1 | 2, minMet: false, highMet: false },
+        realizedInvoiced: realized[uid]?.amount ?? 0,
         realizedBonus: realized[uid]?.bonusAmount ?? 0,
       };
     }).sort((a, b) => b.bonus.amount - a.bonus.amount);
@@ -247,7 +248,7 @@ export default function BonusPanel({
             <div className="bo-listhead bo-listhead-pay">
               <span>Consultant</span>
               <span className="bo-r">Invoiced</span>
-              <span className="bo-r">Realized now</span>
+              <span className="bo-r">Invoiced this month</span>
               <span>Tier</span>
               <span className="bo-r">Payable this month</span>
               <span>Status</span>
@@ -259,15 +260,20 @@ export default function BonusPanel({
               const isPaid = r.userId in paidMap;
               const hasPayable = r.bonus.amount > 0;
               return (
-                <div className={`bo-row bo-row-pay ${isOpen ? "is-open" : ""} ${isPaid ? "is-paid" : ""}`} key={r.userId}>
+                <div className={`bo-row bo-row-pay tier-row-${r.bonus.tier} ${isOpen ? "is-open" : ""} ${isPaid ? "is-paid" : ""}`} key={r.userId}>
                   <button className="bo-row-main" onClick={() => setOpen(isOpen ? null : r.userId)}>
                     <span className="bo-who">
                       <span className="bo-av">{(people[r.userId] ?? "?").split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase()}</span>
                       <span className="bo-name">{people[r.userId] ?? "Unknown"}</span>
                     </span>
                     <span className="bo-r bo-inv">{eur(r.amount)} €</span>
-                    <span className="bo-r bo-realized" title={`Bonus being earned in ${periodLabel(payMonth)}, payable in ${periodLabel(shiftPeriod(payMonth, lag))}`}>
-                      {r.realizedBonus > 0 ? `${eur(r.realizedBonus)} €` : "—"}
+                    <span className="bo-r bo-realized" title={`Invoiced in ${periodLabel(payMonth)}; the bonus it earns is paid in ${periodLabel(shiftPeriod(payMonth, lag))}`}>
+                      {r.realizedInvoiced > 0 ? (
+                        <>
+                          <b>{eur(r.realizedInvoiced)} €</b>
+                          <i>{r.realizedBonus > 0 ? `+${eur(r.realizedBonus)} bonus` : "no bonus yet"}</i>
+                        </>
+                      ) : "—"}
                     </span>
                     <span className={`bo-tier tier-${r.bonus.tier}`}>
                       {r.bonus.tier === 2 ? "High" : r.bonus.tier === 1 ? "Min" : "—"}

@@ -4,7 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../../api/supabase";
 import { useAuth } from "../../api/AuthProvider";
 import NewClientForm from "./NewClientForm";
-import ClientDetailModal from "./ClientDetailModal";
+import ClientWorkspace from "./ClientWorkspace";
 import ProjectsView from "./ProjectsView";
 import { markHandoffConverted } from "../sales/salesApi";
 import { roleSeesAll } from "../companies/companiesApi";
@@ -636,7 +636,7 @@ status: "open",
       )}
 
       {detailClient && (
-        <ClientDetailModal
+        <ClientWorkspace
           client={detailClient}
           projects={projects.filter((p) => p.clientId === detailClient.id)}
 projectTypes={projectTypes}

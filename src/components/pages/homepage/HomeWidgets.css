@@ -1,0 +1,109 @@
+/* =====================================================================
+   Home widgets — LIGHT theme, neon-green accents
+   ===================================================================== */
+.hw {
+  --emerald: #12b57f;
+  --forest: #0a6f4d;
+  --ink: #0b241a;
+  --muted: #5a7d6d;
+  --line: rgba(10, 111, 77, 0.12);
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  width: 100%;
+  padding: 18px 20px;
+  border-radius: 20px;
+  background: #fff;
+  border: 1px solid var(--line);
+  box-shadow: 0 20px 44px -34px rgba(10, 111, 77, 0.45);
+  color: var(--ink);
+  cursor: pointer;
+  animation: hw-in 0.5s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  transition: transform 0.26s cubic-bezier(0.16,1,0.3,1), border-color 0.26s, box-shadow 0.26s;
+}
+@keyframes hw-in { from { opacity: 0; transform: translateY(18px) scale(0.98); } }
+.hw:hover {
+  transform: translateY(-3px);
+  border-color: rgba(18, 181, 127, 0.35);
+  box-shadow: 0 30px 56px -34px rgba(10, 111, 77, 0.4);
+}
+.hw:hover .hw-glow { opacity: 1; transform: scale(1.12) translate(-6px, 4px); }
+
+.hw-glow {
+  position: absolute; z-index: -1; top: -45%; right: -18%;
+  width: 220px; height: 220px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(18,181,127,0.12), transparent 66%);
+  opacity: 0.5;
+  transition: opacity 0.4s ease, transform 0.4s cubic-bezier(0.16,1,0.3,1);
+  pointer-events: none;
+}
+.hw-glow-warm { background: radial-gradient(circle, rgba(224,138,60,0.14), transparent 66%); }
+
+.hw-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 14px; }
+.hw-eyebrow { font-size: 10px; font-weight: 700; letter-spacing: 0.15em; text-transform: uppercase; color: var(--muted); }
+.hw-headfig {
+  display: flex; align-items: baseline; gap: 4px;
+  font-family: "Space Grotesk", sans-serif; font-size: 26px; font-weight: 700; letter-spacing: -0.03em;
+  color: var(--ink); font-variant-numeric: tabular-nums;
+}
+.hw-headfig i { font-style: normal; font-size: 11px; font-weight: 600; color: var(--muted); }
+.hw-headfig-neon { color: var(--emerald); }
+
+.hw-empty { margin: 8px 0; font-size: 12.5px; color: var(--muted); }
+.hw-empty-good { color: var(--forest); }
+.hw-skel { height: 90px; border-radius: 10px; background: linear-gradient(90deg, rgba(18,181,127,0.06), rgba(18,181,127,0.14), rgba(18,181,127,0.06)); background-size: 200% 100%; animation: hw-shimmer 1.3s infinite; }
+@keyframes hw-shimmer { to { background-position: -200% 0; } }
+
+.hw-foot {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line);
+  font-size: 12px; color: var(--muted);
+}
+.hw-foot b { font-family: "Space Grotesk", sans-serif; font-weight: 700; color: var(--ink); }
+.hw-foot-won { color: var(--forest); font-weight: 700; }
+
+/* ---- pipeline funnel ---- */
+.hw-funnel { display: flex; flex-direction: column; gap: 9px; }
+.hw-funnel-row { display: flex; align-items: center; gap: 10px; animation: hw-slide 0.5s cubic-bezier(0.16,1,0.3,1) backwards; }
+@keyframes hw-slide { from { opacity: 0; transform: translateX(-12px); } }
+.hw-funnel-name { flex: 0 0 84px; font-size: 11.5px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hw-funnel-bar { position: relative; flex: 1; height: 24px; border-radius: 8px; background: rgba(18,181,127,0.08); display: flex; align-items: center; }
+.hw-funnel-fill {
+  position: absolute; left: 0; top: 0; bottom: 0; border-radius: 8px;
+  background: linear-gradient(90deg, #2ecb92, #0a6f4d);
+  animation: hw-grow 0.7s cubic-bezier(0.16,1,0.3,1) backwards;
+}
+@keyframes hw-grow { from { width: 0 !important; } }
+.hw-funnel-bar b {
+  position: relative; z-index: 1; margin-left: auto; padding-right: 10px;
+  font-family: "Space Grotesk", sans-serif; font-size: 12px; font-weight: 700; color: #fff;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.2);
+}
+
+/* ---- neglected clients ---- */
+.hw-neglect-list { display: flex; flex-direction: column; gap: 6px; }
+.hw-neglect-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 11px; background: #f6faf8; border: 1px solid var(--line); animation: hw-slide 0.5s cubic-bezier(0.16,1,0.3,1) backwards; }
+.hw-neglect-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.hw-neglect-row.is-warn { border-color: rgba(224,160,62,0.3); }
+.hw-neglect-row.is-warn .hw-neglect-dot { background: #e0a03e; }
+.hw-neglect-row.is-bad { border-color: rgba(224,120,60,0.3); }
+.hw-neglect-row.is-bad .hw-neglect-dot { background: #e0783c; }
+.hw-neglect-row.is-critical { border-color: rgba(214,69,69,0.32); background: rgba(214,69,69,0.04); }
+.hw-neglect-row.is-critical .hw-neglect-dot { background: #d64545; box-shadow: 0 0 8px rgba(214,69,69,0.5); animation: hw-pulse 1.6s infinite; }
+@keyframes hw-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+.hw-neglect-name { flex: 1; font-size: 13px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hw-neglect-days { font-family: "Space Grotesk", sans-serif; font-size: 12px; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
+.hw-neglect-row.is-critical .hw-neglect-days { color: #c0392b; }
+
+/* ---- team bonus ---- */
+.hw-bonus-list { display: flex; flex-direction: column; gap: 11px; }
+.hw-bonus-row { display: grid; grid-template-columns: 82px 1fr auto; gap: 10px; align-items: center; animation: hw-slide 0.5s cubic-bezier(0.16,1,0.3,1) backwards; }
+.hw-bonus-name { font-size: 12px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hw-bonus-bar { height: 9px; border-radius: 999px; background: rgba(18,181,127,0.1); overflow: hidden; }
+.hw-bonus-fill { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #2ecb92, #0a6f4d); animation: hw-grow 0.7s cubic-bezier(0.16,1,0.3,1) backwards; }
+.hw-bonus-amt { font-family: "Space Grotesk", sans-serif; font-size: 12.5px; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
+
+@media (prefers-reduced-motion: reduce) {
+  .hw, .hw-funnel-row, .hw-neglect-row, .hw-bonus-row, .hw-funnel-fill, .hw-bonus-fill { animation: none; }
+  .hw:hover { transform: none; }
+}
