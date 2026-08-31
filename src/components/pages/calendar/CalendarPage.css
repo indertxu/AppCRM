@@ -1097,6 +1097,7 @@
 .cal-daytag.is-hol { background: rgba(10,111,77,0.14); color: var(--forest, #0a6f4d); }
 .cal-daytag.is-vac { background: linear-gradient(120deg, #86efc0, #12b57f); color: #04120d; }
 
+/* ===== Whose calendar you are looking at =====
    A person picker, not a form control: avatar, name, role, and a list that
    opens with its options staggering in. ===== */
 .cal-who { position: relative; margin-left: 16px; }
@@ -1321,6 +1322,7 @@
 }
 
 
+/* ===== Whose calendar you are looking at =====
 /* ===== Whose calendar you are looking at =====
    A person picker, not a form control: avatar, name, role, and a list that
    opens with its options staggering in. ===== */
