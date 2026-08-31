@@ -6,6 +6,7 @@ import AppLayout from "../framework/AppLayout";
 import ManagementPage from "../pages/management/ManagementPage";
 import HomePage from "../pages/homepage/HomePage";
 import CalendarPage from "../pages/calendar/CalendarPage";
+import SalesCalendar from "../pages/calendar/SalesCalendar";
 import ClientsPage from "../pages/clients/ClientsPage";
 import CompaniesPage from "../pages/companies/CompaniesPage";
 import ContactsPage from "../pages/contacts/ContactsPage";
@@ -30,6 +31,19 @@ if (role !== "boss") return <Navigate to="/home" replace />;
   return <Outlet />;
 }
 
+/**
+ * Sales, companies and contacts belong to the sales team, not just the boss.
+ * Reps only see the records they are assigned to, which the pages handle
+ * themselves.
+ */
+const SALES_TEAM = ["boss", "sales", "sales_manager"];
+function SalesRoute() {
+  const { role, roleLoading } = useAuth();
+  if (roleLoading) return null;
+  if (!role || !SALES_TEAM.includes(role)) return <Navigate to="/home" replace />;
+  return <Outlet />;
+}
+
 // Managers of any department (and the boss) may see Management.
 const MANAGER_ROLES = [
   "boss", "consultancy_manager", "sales_manager", "customer_success",
@@ -40,6 +54,20 @@ function ManagerRoute() {
   if (roleLoading) return null;
   if (!role || !MANAGER_ROLES.includes(role)) return <Navigate to="/home" replace />;
   return <Outlet />;
+}
+
+/**
+ * One "Calendar" entry, two calendars behind it.
+ *
+ * A rep does not log billable work against projects, so they get the meetings
+ * booked on their deals instead. Bosses keep the consultancy one, which is the
+ * one they were already using.
+ */
+const SALES_ROLES = ["sales", "sales_manager"];
+function CalendarRoute() {
+  const { role, roleLoading } = useAuth();
+  if (roleLoading) return null;
+  return role && SALES_ROLES.includes(role) ? <SalesCalendar /> : <CalendarPage />;
 }
 
 // Superadmin-only. Uses the flag already loaded by AuthProvider (no flash).
@@ -76,15 +104,19 @@ export default function AppRoutes() {
         <Route element={<AppGate />}>
           <Route element={<AppLayout />}>
             <Route path="/home" element={<HomePage />} />
-            <Route path="/calendar" element={<CalendarPage />} />
+            <Route path="/calendar" element={<CalendarRoute />} />
             <Route element={<ManagerRoute />}>
               <Route path="/management" element={<ManagementPage />} />
             </Route>
             <Route path="/settings" element={<SettingsPage />} />
 
-            {/* Admin / boss only */}
+            {/* Delivery side: boss only */}
             <Route element={<AdminRoute />}>
               <Route path="/clients" element={<ClientsPage />} />
+            </Route>
+
+            {/* Sales side: the sales team and the boss */}
+            <Route element={<SalesRoute />}>
               <Route path="/companies" element={<CompaniesPage />} />
               <Route path="/contacts" element={<ContactsPage />} />
               <Route path="/sales" element={<SalesPage />} />

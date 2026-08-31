@@ -7,6 +7,7 @@ import NewClientForm from "./NewClientForm";
 import ClientDetailModal from "./ClientDetailModal";
 import ProjectsView from "./ProjectsView";
 import { markHandoffConverted } from "../sales/salesApi";
+import { roleSeesAll } from "../companies/companiesApi";
 import "./ClientsPage.css";
 
 export interface Contact {
@@ -117,7 +118,7 @@ export function projectValue(p: Project): number {
 }
 
 function ClientList({
-  clients, projects, projectTypes, onNew, onOpen, onDelete,
+  clients, projects, projectTypes, onNew, onOpen, onDelete, usage, units,
 }: {
   clients: Client[];
   projects: Project[];
@@ -125,6 +126,8 @@ function ClientList({
   onNew: () => void;
   onOpen: (c: Client) => void;
   onDelete?: (c: Client, projectCount: number) => void;
+  usage: Record<string, { planned: number; done: number }>;
+  units: Record<string, "hour" | "day">;
 }) {
   if (clients.length === 0) {
     return (
@@ -137,40 +140,117 @@ function ClientList({
     );
   }
 
+  // Days and hours are different units, so they are counted apart rather than
+  // added into one meaningless figure.
+  const totals = clients.reduce((acc, c) => {
+    const mine = projects.filter((p) => p.clientId === c.id);
+    acc.projects += mine.length;
+    acc.value += mine.reduce((s, p) => s + projectValue(p), 0);
+    mine.forEach((p) => {
+      const signed = p.consultorDays + p.connectorDays + p.supervisionDays;
+      if (units[p.projectTypeId] === "hour") acc.hours += signed; else acc.days += signed;
+    });
+    return acc;
+  }, { projects: 0, value: 0, days: 0, hours: 0 });
+
+  const signedAll = totals.days + totals.hours;
+  const doneAll = Object.values(usage).reduce((s, u) => s + u.done, 0);
+  const deliveredPct = signedAll > 0 ? Math.round((doneAll / signedAll) * 100) : 0;
+
   return (
-    <div className="cl-grid">
-      {clients.map((c) => {
-        const mine = projects.filter((p) => p.clientId === c.id);
-        const total = mine.reduce((s, p) => s + projectValue(p), 0);
-        const typeNames = [...new Set(
-          mine.map((p) => projectTypes.find((t) => t.id === p.projectTypeId)?.name).filter(Boolean)
-        )] as string[];
-        return (
-          <div className="cl-card cl-card-click" key={c.id} onClick={() => onOpen(c)}>
-            <div className="cl-card-top">
-              <h3>{c.name}</h3>
-              <span className="cl-chip cl-status">Open</span>
-              {onDelete && (
-                <button className="cl-card-del" aria-label={`Delete ${c.name}`} title="Delete client"
-                  onClick={(e) => { e.stopPropagation(); onDelete(c, mine.length); }}>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
-                </button>
-              )}
-            </div>
-            <dl className="cl-meta">
-              <div><dt>Projects</dt><dd>{mine.length}</dd></div>
-<div><dt>City</dt><dd>{mine[mine.length - 1]?.address?.city || "—"}</dd></div>
-              <div><dt>Contacts</dt><dd>{mine[mine.length - 1]?.contacts?.length ?? 0}</dd></div>
-              <div><dt>VAT</dt><dd>{mine[mine.length - 1]?.vatNumber || "—"}</dd></div>
-            </dl>
-            <div className="cl-card-foot">
-              <span>{typeNames.length > 0 ? typeNames.join(" · ") : "No project type"}</span>
-              {total > 0 && <span className="cl-value">{total.toLocaleString()} total</span>}
-            </div>
-          </div>
-        );
-      })}
-    </div>
+    <>
+      <div className="cl-kpis">
+        <div className="cl-kpi">
+          <span className="cl-kpi-k">Clients</span>
+          <b className="cl-kpi-v">{clients.length}</b>
+          <span className="cl-kpi-sub">{totals.projects} projects running</span>
+        </div>
+
+        <div className="cl-kpi">
+          <span className="cl-kpi-k">Signed</span>
+          <b className="cl-kpi-v">
+            {totals.days.toLocaleString()}<em>d</em>
+            {totals.hours > 0 && <><span className="cl-kpi-plus">/</span>{totals.hours.toLocaleString()}<em>h</em></>}
+          </b>
+          <span className="cl-kpi-sub">committed to deliver</span>
+        </div>
+
+        <div className="cl-kpi">
+          <span className="cl-kpi-k">Delivered</span>
+          <b className="cl-kpi-v">{deliveredPct}<em>%</em></b>
+          <span className="cl-kpi-meter"><i style={{ width: `${deliveredPct}%` }} /></span>
+        </div>
+
+        <div className="cl-kpi cl-kpi-money">
+          <span className="cl-kpi-k">Contract value</span>
+          <b className="cl-kpi-v">{Math.round(totals.value).toLocaleString()}<em>€</em></b>
+          <span className="cl-kpi-sub">
+            {totals.days + totals.hours > 0
+              ? `${Math.round(totals.value / (totals.days + totals.hours / 8))} € per day`
+              : "—"}
+          </span>
+        </div>
+      </div>
+
+      <div className="cl-scroll">
+        <div className="cl-list">
+          {clients.map((c) => {
+            const mine = projects.filter((p) => p.clientId === c.id);
+            const total = mine.reduce((s, p) => s + projectValue(p), 0);
+            const typeNames = [...new Set(
+              mine.map((p) => projectTypes.find((t) => t.id === p.projectTypeId)?.name).filter(Boolean)
+            )] as string[];
+            const last = mine[mine.length - 1];
+            const signed = mine.reduce((s, p) => s + p.consultorDays + p.connectorDays + p.supervisionDays, 0);
+            const used = mine.reduce((s, p) => s + (usage[p.id]?.done ?? 0), 0);
+            const pct = signed > 0 ? Math.min(100, Math.round((used / signed) * 100)) : 0;
+            return (
+              <div className="cl-row" key={c.id} role="button" tabIndex={0}
+                onClick={() => onOpen(c)}
+                onKeyDown={(e) => { if (e.key === "Enter") onOpen(c); }}>
+                <span className="cl-row-glow" aria-hidden="true" />
+
+                <span className="cl-c cl-c-name">
+                  <span className="cl-av">{(c.name || "?").slice(0, 1).toUpperCase()}</span>
+                  <span className="cl-name-txt">
+                    <b>{c.name}</b>
+                    <em>{typeNames.length > 0 ? typeNames.join(" · ") : "No service"}</em>
+                  </span>
+                </span>
+
+                <span className="cl-c cl-c-meta">
+                  <i className="cl-tag">{mine.length} {mine.length === 1 ? "project" : "projects"}</i>
+                  {last?.address?.city && <i className="cl-tag cl-tag-soft">{last.address.city}</i>}
+                  {(last?.contacts?.length ?? 0) > 0 && (
+                    <i className="cl-tag cl-tag-soft">{last?.contacts?.length} contacts</i>
+                  )}
+                </span>
+
+                <span className="cl-c cl-c-prog">
+                  <span className="cl-pbar"><span className="cl-pbar-fill" style={{ width: `${pct}%` }} /></span>
+                  <em>{pct}% delivered</em>
+                </span>
+
+                <span className="cl-c cl-r cl-total">
+                  <b>{total > 0 ? `${Math.round(total).toLocaleString()} €` : "—"}</b>
+                  <em>{signed > 0 ? `${signed.toFixed(2)} days signed` : "no days yet"}</em>
+                </span>
+
+                <span className="cl-c cl-c-go">
+                  {onDelete && (
+                    <button className="cl-row-del" aria-label={`Delete ${c.name}`} title="Delete client"
+                      onClick={(e) => { e.stopPropagation(); onDelete(c, mine.length); }}>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
+                    </button>
+                  )}
+                  <svg className="cl-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -186,6 +266,15 @@ export default function ClientsPage() {
 
 const [detailClient, setDetailClient] = useState<Client | null>(null);
 const [usage, setUsage] = useState<Record<string, { planned: number; done: number }>>({});
+  /** Rate unit per service, so signed figures never mix hours with days. */
+  const [units, setUnits] = useState<Record<string, "hour" | "day">>({});
+  useEffect(() => {
+    supabase.from("services").select("id, rate_unit").then(({ data }) => {
+      const out: Record<string, "hour" | "day"> = {};
+      (data ?? []).forEach((r: any) => { out[r.id] = r.rate_unit === "hour" ? "hour" : "day"; });
+      setUnits(out);
+    });
+  }, []);
   const [lineUsage, setLineUsage] = useState<Record<string, { done: number; booked: number }>>({});
   const [tab, setTab] = useState<"clients" | "projects">("clients");
   const [editing, setEditing] = useState<{ client: Client | null; project: Project | null } | null>(null);
@@ -326,7 +415,7 @@ status: r.status ?? "open",
       id: r.id, name: r.name ?? "", userIds: r.user_ids ?? [], isSupervision: !!r.is_supervision,
     })));
 
-    const seesAll = role === "boss" || role === "consultancy_manager" || role === "customer_success";
+const seesAll = roleSeesAll(role);
     const myId = session?.user?.id ?? "";
 
     const { data: pjs } = await supabase.from("projects").select("*").order("created_at");
@@ -343,30 +432,31 @@ status: r.status ?? "open",
       .map((r: any) => ({ id: r.id, name: r.name ?? "" }))
       .filter((c: any) => seesAll || allowedClients.has(c.id)));
 
-    const { data: ce } = await supabase
-      .from("calendar_entries")
-.select("id, project_id, billable, status, billing_line");
-    const { data: ea } = await supabase.from("entry_actuals").select("entry_id, actual_billable");
-    const actualMap: Record<string, number> = Object.fromEntries(
-      ((ea ?? []) as any[]).map((r) => [r.entry_id as string, Number(r.actual_billable) || 0])
-    );
+    // Usage comes pre-aggregated from the project_usage view. Fetching raw
+    // calendar_entries here used to silently truncate at PostgREST's 1000-row
+    // cap, which made most clients read 0% delivered.
+    const { data: pu, error: puErr } = await supabase
+      .from("project_usage")
+      .select("project_id, billing_line, done, booked");
+    if (puErr) console.error("project_usage load failed", puErr);
+
     const agg: Record<string, { planned: number; done: number }> = {};
     const byLine: Record<string, { done: number; booked: number }> = {};
-    ((ce ?? []) as any[]).forEach((r) => {
+    ((pu ?? []) as any[]).forEach((r) => {
       const pid = r.project_id as string | null;
-      if (!pid || r.status === "cancelled") return;
-      const v = actualMap[r.id as string] ?? (Number(r.billable) || 0);
+      if (!pid) return;
+      const done = Number(r.done) || 0;
+      const booked = Number(r.booked) || 0;
       const ln = (r.billing_line as string) || "consultor";
-      if (ln === "closure") return;
 
       if (!agg[pid]) agg[pid] = { planned: 0, done: 0 };
-      if (r.status === "confirmed") agg[pid].done += v;
-      else agg[pid].planned += v;
+      agg[pid].done += done;
+      agg[pid].planned += booked;
 
       const k = `${pid}|${ln}`;
       if (!byLine[k]) byLine[k] = { done: 0, booked: 0 };
-      if (r.status === "confirmed") byLine[k].done += v;
-      else byLine[k].booked += v;
+      byLine[k].done += done;
+      byLine[k].booked += booked;
     });
     setUsage(agg);
     setLineUsage(byLine);
@@ -506,22 +596,19 @@ status: "open",
   return (
     <div className="cl">
       <header className="cl-bar">
-        <div>
+        <div className="cl-bar-left">
           <h1 className="cl-title">Clients</h1>
-          <p className="cl-sub">Manage engagements and their teams</p>
+          <div className="cl-tabbar" data-tab={tab}>
+            <span className="cl-tab-slider" />
+            <button className={tab === "clients" ? "is-on" : ""} onClick={() => setTab("clients")}>Clients</button>
+            <button className={tab === "projects" ? "is-on" : ""} onClick={() => setTab("projects")}>Projects</button>
+          </div>
         </div>
         <div className="cl-actions">
           <button className="cl-primary" onClick={() => setShowForm(true)}>+ New client</button>
         </div>
       </header>
 
-{tab === "clients" && (
-        <div className="cl-tabbar" data-tab={tab}>
-          <span className="cl-tab-slider" />
-          <button className={tab === "clients" ? "is-on" : ""} onClick={() => setTab("clients")}>Clients</button>
-          <button className={tab === "projects" ? "is-on" : ""} onClick={() => setTab("projects")}>Projects</button>
-        </div>
-      )}
       {tab === "clients" ? (
         <ClientList
           clients={clients}
@@ -530,16 +617,11 @@ status: "open",
           onNew={() => setShowForm(true)}
           onOpen={(c) => setDetailClient(c)}
           onDelete={askDeleteClient}
+          usage={usage}
+          units={units}
         />
       ) : (
 <ProjectsView
-          tabs={
-            <div className="cl-tabbar" data-tab={tab}>
-              <span className="cl-tab-slider" />
-              <button className={tab === "clients" ? "is-on" : ""} onClick={() => setTab("clients")}>Clients</button>
-              <button className={tab === "projects" ? "is-on" : ""} onClick={() => setTab("projects")}>Projects</button>
-            </div>
-          }
           clients={clients}
           projects={projects}
           projectTypes={projectTypes}

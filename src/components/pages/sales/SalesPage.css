@@ -747,3 +747,22 @@ textarea.sl-inline-edit { min-height: 90px; resize: vertical; line-height: 1.5; 
   color: #b85c5c; font-size: 11.5px; line-height: 1.4; font-weight: 600;
 }
 .sl-handoff-warn svg { width: 15px; height: 15px; flex-shrink: 0; margin-top: 1px; }
+/* ===== Who is on this deal ===== */
+.sl-team-title { display: flex; align-items: center; gap: 9px; }
+.sl-team-count { display: grid; place-items: center; min-width: 22px; height: 22px; padding: 0 7px; border-radius: 999px; background: rgba(18,181,127,0.14); color: var(--forest); font-family: "Space Grotesk", sans-serif; font-size: 12px; font-weight: 700; }
+.sl-team { margin-bottom: 1.4rem; }
+.sl-team-chips { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 10px; }
+.sl-team-chips:empty { display: none; }
+.sl-team-chip { display: inline-flex; align-items: center; gap: 7px; padding: 5px 9px 5px 5px; border-radius: 999px; background: rgba(18,181,127,0.09); border: 1px solid rgba(18,181,127,0.2); font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.sl-team-chip i { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: linear-gradient(150deg, var(--mint), var(--emerald)); color: #04120d; font-style: normal; font-family: "Space Grotesk", sans-serif; font-size: 11px; font-weight: 700; }
+.sl-team-chip button { border: none; background: rgba(0,0,0,0.07); width: 17px; height: 17px; border-radius: 5px; cursor: pointer; font-size: 12px; line-height: 1; color: var(--muted); }
+.sl-team-chip button:hover { background: rgba(184,92,92,0.16); color: #b85c5c; }
+
+/* Raw calculator result vs the amount actually billed */
+.sl-rev-round {
+  font-size: 11px; font-weight: 600; color: var(--muted);
+  background: rgba(10,111,77,0.07); padding: 2px 9px; border-radius: 999px; white-space: nowrap;
+}
+.sl-rev-round b { font-family: "Space Grotesk", sans-serif; color: var(--forest); }
+.sl-rc-row.sl-rc-round span { font-style: italic; }
+.sl-rc-row.sl-rc-round em { color: var(--forest); }

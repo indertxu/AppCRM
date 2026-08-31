@@ -941,12 +941,18 @@
 .mg.mg-tab-backlog .bk-kpis,
 .mg.mg-tab-backlog .bk-chart-card,
 .mg.mg-tab-backlog .bk-toolbar { flex-shrink: 0; }
-.mg.mg-tab-backlog .bk-grid {
+.mg.mg-tab-backlog .bk-list {
   flex: 0 1 auto;
   min-height: 0;
   max-height: 100%;
   overflow-y: auto;
-  padding-right: 2px;
+}
+/* keep the list header pinned while the rows scroll under it */
+.mg.mg-tab-backlog .bk-list-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #eef4f0;
 }
 
 /* ===================== Consultant insights panel ===================== */
@@ -1348,3 +1354,200 @@
 .mg-metric-nums u.is-high { color: #8b4bb0; }
 .mg-metric-nums u.is-high s { background: #b06fd0; }
 .mg-metric-nums u.is-high.is-hit { color: #8b4bb0; font-weight: 700; }
+
+/* ===== Incoming tab: lock the page to the viewport so only the card list
+   scrolls. The chain is: .mg (fixed height, hidden overflow) -> .inc (flex
+   column) -> .inc-grid (the one scrolling box). ===== */
+.mg.mg-tab-incoming {
+  height: 100vh;
+  min-height: 0;
+  padding-bottom: 1.6rem;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.mg.mg-tab-incoming .mg-bar { flex-shrink: 0; }
+
+.mg.mg-tab-incoming .inc {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.mg.mg-tab-incoming .inc-head,
+.mg.mg-tab-incoming .inc-kpis { flex-shrink: 0; }
+
+.mg.mg-tab-incoming .inc-grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  /* Padding keeps the card shadows off the edges; the negative margin puts the
+     cards back where they were. */
+  padding: 4px 10px 20px 4px;
+  margin: -4px -10px 0 -4px;
+}
+/* Without this the cards, being flex items in a bounded column, shrink to fit
+   and their own overflow:hidden cuts off the footer. */
+.mg.mg-tab-incoming .inc-grid > * { flex-shrink: 0; }
+
+/* Hours billed, beside days on the same bar */
+.mg-seg-hours {
+  height: 100%;
+  background: linear-gradient(90deg, #5b8def, #3a63c0);
+  transition: width 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.mg-u {
+  font-style: normal; font-size: 0.55em; font-weight: 600;
+  color: var(--muted); margin-left: 1px;
+}
+.mg-u-sep { font-size: 0.5em; font-weight: 400; color: rgba(10, 111, 77, 0.3); margin: 0 5px; }
+
+/* A card you can switch between two readings */
+.mg-ins-card.is-toggle {
+  border: 1px solid var(--line); cursor: pointer; text-align: left;
+  font-family: inherit; transition: border-color 0.18s, transform 0.18s, background 0.18s;
+}
+.mg-ins-card.is-toggle:hover {
+  border-color: rgba(18, 181, 127, 0.4); transform: translateY(-1px);
+}
+.mg-ins-card.is-toggle .mg-ins-k { display: flex; align-items: center; gap: 7px; }
+.mg-ins-swap {
+  display: inline-grid; place-items: center; width: 14px; height: 14px;
+  color: var(--muted); opacity: 0.55; transition: opacity 0.18s, transform 0.3s;
+}
+.mg-ins-swap svg { width: 11px; height: 11px; }
+.mg-ins-card.is-toggle:hover .mg-ins-swap { opacity: 1; }
+.mg-ins-card.is-alt {
+  background: linear-gradient(150deg, rgba(91, 141, 239, 0.09), rgba(91, 141, 239, 0.02));
+  border-color: rgba(91, 141, 239, 0.28);
+}
+.mg-ins-card.is-alt .mg-ins-v { color: #3a63c0; }
+.mg-ins-card.is-alt .mg-ins-swap { transform: rotate(180deg); }
+/* =====================================================================
+   Team KPI gauges
+   Two dark instruments on a light page. Each cradles its live figure in a
+   semicircular arc that sweeps to the share of goal. Neon is spent only on
+   the arc and the number; everything else stays quiet so it reads.
+   ===================================================================== */
+.mg-kpis.mg-gauges {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 1.2rem;
+}
+
+.gg {
+  --neon: #3bffa3;
+  --dim: #6f9585;
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 13px 20px 12px;
+  border-radius: 18px;
+  background:
+    radial-gradient(120% 90% at 50% -10%, rgba(59, 255, 163, 0.09), transparent 60%),
+    linear-gradient(165deg, #0c1f17, #06120d);
+  border: 1px solid rgba(134, 239, 192, 0.14);
+  box-shadow: 0 20px 46px -30px rgba(4, 18, 13, 0.9), inset 0 1px 0 rgba(134, 239, 192, 0.06);
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.3s, border-color 0.3s;
+}
+.gg:hover {
+  transform: translateY(-3px);
+  border-color: rgba(59, 255, 163, 0.4);
+  box-shadow: 0 30px 60px -30px rgba(4, 18, 13, 0.95), inset 0 1px 0 rgba(134, 239, 192, 0.1);
+}
+
+.gg-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; z-index: 1; }
+.gg-label {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--dim);
+}
+.gg-pct {
+  font-family: "Space Grotesk", sans-serif; font-size: 13px; font-weight: 700;
+  color: var(--dim); font-variant-numeric: tabular-nums;
+}
+.gg-pct i { font-style: normal; font-size: 10px; opacity: 0.7; }
+.gg.is-over .gg-pct { color: var(--neon); text-shadow: 0 0 14px rgba(59, 255, 163, 0.6); }
+
+/* ---- the instrument ---- */
+.gg-gauge { position: relative; display: grid; place-items: center; padding-top: 2px; }
+.gg-svg { width: 184px; height: 92px; overflow: visible; }
+.gg-svg path {
+  fill: none;
+  stroke-width: 9;
+  stroke-linecap: round;
+}
+.gg-arc-bg { stroke: rgba(134, 239, 192, 0.1); }
+.gg-arc-proj {
+  stroke: rgba(59, 255, 163, 0.28);
+  transition: stroke-dasharray 0.95s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.gg-arc-fill {
+  stroke: var(--neon);
+  filter: drop-shadow(0 0 6px rgba(59, 255, 163, 0.55));
+  transition: stroke-dasharray 1.05s cubic-bezier(0.16, 1, 0.3, 1);
+}
+/* Overflow rides on top, brighter, so past-goal is unmistakable. */
+.gg-arc-over {
+  stroke: #eafff4;
+  stroke-width: 4.5;
+  filter: drop-shadow(0 0 8px rgba(59, 255, 163, 0.9));
+  transition: stroke-dasharray 1.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* number cradled in the arc */
+.gg-core {
+  position: absolute;
+  top: 48%;
+  left: 0; right: 0;
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+  pointer-events: none;
+}
+.gg-fig { display: flex; align-items: baseline; gap: 4px; }
+.gg-fig b {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 30px; font-weight: 600; line-height: 1; letter-spacing: -0.04em;
+  color: #f2fff9; font-variant-numeric: tabular-nums;
+  transition: font-size 0.2s;
+}
+.gg-fig.is-long b { font-size: 23px; letter-spacing: -0.05em; }
+.gg-fig.is-long em { font-size: 11px; }
+.gg-fig em { font-style: normal; font-size: 13px; font-weight: 600; color: var(--neon); }
+.gg-goal {
+  font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em;
+  color: var(--dim); font-variant-numeric: tabular-nums;
+}
+
+/* ---- chips ---- */
+.gg-foot { display: flex; flex-wrap: wrap; gap: 6px; z-index: 1; }
+.gg-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 999px;
+  font-size: 10.5px; font-weight: 600;
+  background: rgba(134, 239, 192, 0.07);
+  color: #b6d8c8; font-variant-numeric: tabular-nums;
+}
+.gg-chip i { width: 7px; height: 7px; border-radius: 50%; }
+.gg-chip-done i { background: var(--neon); box-shadow: 0 0 6px rgba(59, 255, 163, 0.7); }
+.gg-chip-plan i {
+  background: repeating-linear-gradient(45deg, rgba(59,255,163,0.6) 0 2px, transparent 2px 4px), rgba(59,255,163,0.25);
+}
+.gg-chip-over {
+  background: rgba(59, 255, 163, 0.16);
+  color: #d7ffec;
+}
+
+@media (max-width: 780px) { .mg-kpis.mg-gauges { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) {
+  .gg, .gg-svg path { transition: none; }
+  .gg:hover { transform: none; }
+}
+/* Billing tab shows only "Month" — pin the slider under that single button
+   and size it to the button, since the row is now one item wide. */
+.mg.mg-tab-billing .mg-seg[data-scope="month"] .mg-seg-slider {
+  transform: translateX(0);
+  width: 100%;
+}

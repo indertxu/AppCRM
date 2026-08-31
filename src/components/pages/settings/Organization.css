@@ -471,3 +471,14 @@
   font-size: 12px; font-weight: 600; white-space: nowrap;
 }
 .org-past-dot { width: 7px; height: 7px; border-radius: 50%; background: #e0a13c; box-shadow: 0 0 0 4px rgba(224,161,60,0.2); }
+/* A save the database refused, put where it cannot be missed */
+.org-save-err {
+  position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+  z-index: 90; padding: 11px 18px; border-radius: 12px;
+  background: #fff; border: 1px solid rgba(184, 92, 92, 0.3);
+  box-shadow: 0 18px 40px -18px rgba(11, 36, 26, 0.45);
+  font-size: 12.5px; font-weight: 500; color: #b85c5c;
+  animation: org-err-in 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes org-err-in { from { opacity: 0; transform: translateX(-50%) translateY(-8px); } }
+@media (prefers-reduced-motion: reduce) { .org-save-err { animation: none; } }

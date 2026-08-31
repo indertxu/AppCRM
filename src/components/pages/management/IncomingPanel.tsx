@@ -23,6 +23,50 @@ export default function IncomingPanel() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
 
+  /**
+   * Which delivery pipeline must finish before another can start.
+   *
+   * A non-sales pipeline carrying a handover phase is a step before the
+   * pipeline it points at, so a handoff landing on that destination stays
+   * locked until the earlier project is closed. Read straight from the
+   * builder, so changing the chain there changes the gate here.
+   */
+  const [gate, setGate] = useState<Record<string, string>>({});
+  const [gateService, setGateService] = useState<Record<string, string>>({});
+  const [prevProjects, setPrevProjects] = useState<Record<string, { done: number; signed: number; closed: boolean; client: string }>>({});
+
+  const loadChain = async () => {
+    const { data: pipes } = await supabase.from("pipelines").select("id, name, is_sales");
+    const delivery = new Set((pipes ?? []).filter((p: any) => !p.is_sales).map((p: any) => p.id));
+    const { data: phases } = await supabase.from("pipeline_phases").select("pipeline_id, handover_to").not("handover_to", "is", null);
+    const g: Record<string, string> = {};
+    const prior: string[] = [];
+    (phases ?? []).forEach((ph: any) => {
+      if (delivery.has(ph.pipeline_id) && ph.handover_to) {
+        g[ph.handover_to] = ph.pipeline_id;
+        prior.push(ph.pipeline_id);
+      }
+    });
+    setGate(g);
+
+    // Which service the earlier pipeline delivers: the sales phase that hands
+    // over to it lists exactly that.
+    if (prior.length) {
+      const { data: srcPhases } = await supabase.from("pipeline_phases")
+        .select("id, handover_to").in("handover_to", prior);
+      const { data: items } = await supabase.from("pipeline_phase_items")
+        .select("phase_id, item_id, item_type")
+        .in("phase_id", (srcPhases ?? []).map((x: any) => x.id))
+        .eq("item_type", "service");
+      const svcByPipe: Record<string, string> = {};
+      (items ?? []).forEach((it: any) => {
+        const ph = (srcPhases ?? []).find((x: any) => x.id === it.phase_id);
+        if (ph?.handover_to) svcByPipe[ph.handover_to] = it.item_id;
+      });
+      setGateService(svcByPipe);
+    }
+  };
+
   const load = () => {
     setLoading(true);
     listHandoffs("pending").then(setRows).catch(() => {}).finally(() => setLoading(false));
@@ -30,6 +74,41 @@ export default function IncomingPanel() {
       .then(({ data }) => setClients((data ?? []) as ClientRow[]));
   };
   useEffect(load, []);
+  useEffect(() => { loadChain(); }, []);
+
+  /** Progress of the project that unlocks each blocked destination. */
+  useEffect(() => {
+    if (!rows.length || Object.keys(gate).length === 0) return;
+    (async () => {
+      const companyIds = Array.from(new Set(rows.map((h) => h.company_id).filter(Boolean)));
+      if (!companyIds.length) return;
+      const { data: cls } = await supabase.from("clients").select("id, name, company_id").in("company_id", companyIds as string[]);
+      const clientIds = (cls ?? []).map((c: any) => c.id);
+      if (!clientIds.length) return;
+      const { data: pjs } = await supabase.from("projects")
+        .select("id, client_id, service_id, status, consultor_days, connector_days, supervision_days")
+        .in("client_id", clientIds);
+      const { data: ents } = await supabase.from("calendar_entries")
+        .select("project_id, billable, status")
+        .in("project_id", (pjs ?? []).map((p: any) => p.id));
+
+      const doneBy: Record<string, number> = {};
+      (ents ?? []).forEach((e: any) => {
+        if (e.status === "confirmed") doneBy[e.project_id] = (doneBy[e.project_id] ?? 0) + Number(e.billable || 0);
+      });
+      const out: Record<string, any> = {};
+      (pjs ?? []).forEach((p: any) => {
+        const c = (cls ?? []).find((x: any) => x.id === p.client_id);
+        out[`${c?.company_id}|${p.service_id}`] = {
+          done: doneBy[p.id] ?? 0,
+          signed: Number(p.consultor_days || 0) + Number(p.connector_days || 0) + Number(p.supervision_days || 0),
+          closed: p.status === "closed",
+          client: c?.name ?? "",
+        };
+      });
+      setPrevProjects(out);
+    })();
+  }, [rows, gate]);
 
   /**
    * Is this company already a client? Matched on company_id, falling back to
@@ -104,6 +183,19 @@ export default function IncomingPanel() {
     return { value, days, byType: Object.entries(byType).sort((a, b) => b[1].value - a[1].value) };
   }, [rows]);
 
+  /** Is this handoff waiting on an earlier project, and how far along is it? */
+  const blockerOf = (h: Handoff) => {
+    const priorPipe = h.dest_pipeline_id ? gate[h.dest_pipeline_id] : null;
+    if (!priorPipe || !h.company_id) return null;
+    const svc = gateService[priorPipe];
+    if (!svc) return null;
+    const p = prevProjects[`${h.company_id}|${svc}`];
+    if (!p) return { pct: 0, done: 0, signed: 0, ready: false, missing: true };
+    if (p.closed) return null;
+    const pct = p.signed > 0 ? Math.min(100, Math.round((p.done / p.signed) * 100)) : 0;
+    return { pct, done: p.done, signed: p.signed, ready: false, missing: false };
+  };
+
   if (loading) return <div className="inc"><p className="inc-empty">Loading…</p></div>;
 
   return (
@@ -161,8 +253,9 @@ export default function IncomingPanel() {
             const prods = all.filter((x: any) => x.kind === "product");
             const total = svcs.reduce((s, x) => s + (Number(x.price) || 0), 0);
             const days = svcs.reduce((s, x) => s + (Number(x.days) || 0), 0);
+            const blocked = blockerOf(h);
             return (
-              <article className="inc-card" key={h.id}>
+              <article className={`inc-card ${blocked ? "is-locked" : ""}`} key={h.id}>
                 <span className="inc-accent" aria-hidden="true" />
 
                 <header className="inc-hd">
@@ -181,6 +274,25 @@ export default function IncomingPanel() {
                 </header>
 
                 <div className="inc-body">
+                  {blocked && (
+                    <div className="inc-lock">
+                      <div className="inc-lock-top">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+                        <span>
+                          {blocked.missing
+                            ? "Waiting on the machine installation, which has not started yet"
+                            : "Unlocks when the machine installation is finalised"}
+                        </span>
+                        <b>{blocked.pct}%</b>
+                      </div>
+                      <span className="inc-lock-bar"><i style={{ width: `${blocked.pct}%` }} /></span>
+                      {!blocked.missing && (
+                        <span className="inc-lock-sub">
+                          {num(blocked.done)} of {num(blocked.signed)} delivered · {num(blocked.signed - blocked.done)} left
+                        </span>
+                      )}
+                    </div>
+                  )}
                   {prods.length > 0 && (
                     <p className="inc-ctx">
                       <span>Sold with</span>
@@ -224,8 +336,10 @@ export default function IncomingPanel() {
                   <span className="inc-when">Arrived {ago(h.created_at)}</span>
                   <div className="inc-actions">
                     <button className="inc-dismiss" onClick={() => dismiss(h)} disabled={busy === h.id}>Dismiss</button>
-                    <button className="inc-convert" onClick={() => openInClients(h)} disabled={busy === h.id}>
-                      {busy === h.id ? "Opening…" : client ? "Add project" : "Create client"}
+                    <button className="inc-convert" onClick={() => openInClients(h)}
+                      disabled={busy === h.id || !!blocked}
+                      title={blocked ? "The previous project has to be finalised first" : undefined}>
+                      {busy === h.id ? "Opening…" : blocked ? "Locked" : client ? "Add project" : "Create client"}
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h13M12 5l7 7-7 7" /></svg>
                     </button>
                   </div>

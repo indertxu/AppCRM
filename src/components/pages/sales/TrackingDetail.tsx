@@ -17,6 +17,7 @@ const MEETING_KINDS: { value: MeetingKind; label: string; icon: JSX.Element }[] 
 const cleanMentionsFn = (t: string) => t.replace(/@\[([^\]]+)\]\([^)]+\)/g, "@$1");
 import { supabase } from "../../api/supabase";
 import { loadPipeline, listPipelines, type Phase, type Pipeline } from "../settings/pipelineApi";
+import { myProfile, isSalesLead } from "../companies/companiesApi";
 import { loadServices, calcBreakdown, discountOf, BASE_KEY, type Service, type Calculator, type CalcDiscount } from "../settings/catalogApi";
 import type { Company, Contact } from "../companies/companiesApi";
 import type { Product } from "../settings/catalogApi";
@@ -28,6 +29,7 @@ import {
   loadMeetings, addMeeting, updateMeeting, deleteMeeting,
   loadPhaseEvents, stampPhaseEntry, clearPhaseEventsAfter,
   loadPotentialServices, addPotentialService, updatePotentialServiceTerm, deletePotentialService,
+  loadTrackingEmployees, setTrackingEmployees,
   loadTrackingProducts, addTrackingProduct, updateTrackingProduct, removeTrackingProduct,
   lineTotal, lineBreakdown, unitBreakdown,
   createHandoffs, loadTrackingHandoffs, type Handoff,
@@ -319,12 +321,13 @@ function LineCalcModal({ title, line, tiers, roles, roleName, calculator, unit, 
  * One revenue line: the numbers, a receipt you can expand, and a calculator
  * button that opens everything that decides those numbers.
  */
-function RevLine({ name, tag, tagClass, line, unit, calculator, catalogBase, onRemove, onOpenCalc, money }: {
+function RevLine({ name, tag, tagClass, line, unit, minUnit, calculator, catalogBase, onRemove, onOpenCalc, money }: {
   name: string;
   tag: string;
   tagClass?: string;
   line: RevenueLineFields;
   unit?: "hour" | "day" | null;
+  minUnit?: number | null;
   calculator?: Calculator | null;
   catalogBase?: number;
   onRemove: () => void;
@@ -332,7 +335,7 @@ function RevLine({ name, tag, tagClass, line, unit, calculator, catalogBase, onR
   money: (n: number) => string;
 }) {
   const [open, setOpen] = useState(false);
-  const bd = lineBreakdown(line, calculator, catalogBase);
+  const bd = lineBreakdown(line, calculator, catalogBase, minUnit);
   const unitWord = unit === "hour" ? "hours" : "days";
   const qty = line.quantity == null ? 1 : Number(line.quantity);
   const years = line.term_years == null ? 1 : Number(line.term_years);
@@ -360,6 +363,11 @@ function RevLine({ name, tag, tagClass, line, unit, calculator, catalogBase, onR
 
       <div className="sl-rev-term">
         <span className="sl-rev-period">{summary}</span>
+        {bd.qty !== bd.rawQty && (
+          <span className="sl-rev-round" title={`Calculated ${bd.rawQty}, billed in steps of ${minUnit}`}>
+            {bd.rawQty} → <b>{bd.qty}</b>
+          </span>
+        )}
         {bd.discount > 0 && <span className="sl-rev-disc">-{money(bd.discount)}</span>}
         <div className="sl-rev-actions">
           <button className="sl-rev-icon" onClick={onOpenCalc} title="Open calculator" aria-label="Open calculator">
@@ -400,7 +408,15 @@ function RevLine({ name, tag, tagClass, line, unit, calculator, catalogBase, onR
               <div className="sl-rc-row"><span>x {years} {years === 1 ? "year" : "years"}</span><em>{money(bd.total)}</em></div>
             </>
           ) : bd.multiplierLabel ? (
-            <div className="sl-rc-row"><span>x {qty} {unit ? unitWord : "units"}</span><em>{money(bd.total)}</em></div>
+            <>
+              {bd.qty !== bd.rawQty && (
+                <div className="sl-rc-row sl-rc-round">
+                  <span>Calculated {bd.rawQty} {unit ? unitWord : "units"}, billed in steps of {minUnit}</span>
+                  <em>{bd.qty}</em>
+                </div>
+              )}
+              <div className="sl-rc-row"><span>x {bd.qty} {unit ? unitWord : "units"}</span><em>{money(bd.total)}</em></div>
+            </>
           ) : null}
           <div className="sl-rc-row sl-rc-total"><span>Total</span><em>{money(bd.total)}</em></div>
         </div>
@@ -426,6 +442,8 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   const [calcFor, setCalcFor] = useState<{ kind: "product" | "service"; id: string } | null>(null);
   const [revErr, setRevErr] = useState<string | null>(null);
   const [allPipelines, setAllPipelines] = useState<Pipeline[]>([]);
+  const [team, setTeam] = useState<string[]>([]);
+  const [me, setMe] = useState<{ id: string; role: string; is_superadmin: boolean } | null>(null);
   const [handoffMenu, setHandoffMenu] = useState(false);
   const [handoffPicked, setHandoffPicked] = useState<Set<string>>(new Set());
   const [handoffSent, setHandoffSent] = useState(false);
@@ -450,6 +468,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     listPipelines().then(setAllPipelines).catch(() => {});
     loadPotentialServices(tracking.id).then(setPotentials).catch(() => {});
     loadTrackingProducts(tracking.id).then(setTProds).catch(() => {});
+    loadTrackingEmployees(tracking.id).then(setTeam).catch(() => {});
     loadTrackingHandoffs(tracking.id).then(setHandoffs).catch(() => {});
     // contacts already linked to this tracking's company
     if (tracking.company_id) {
@@ -472,6 +491,14 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     return c ? [c.first_name, c.last_name].filter(Boolean).join(" ") : "Contact";
   };
   const empName = (id: string) => employees.find((e) => e.id === id)?.name ?? "Employee";
+
+  useEffect(() => { myProfile().then(setMe).catch(() => {}); }, []);
+  const canAssign = isSalesLead(me);
+  const toggleMember = async (id: string) => {
+    const next = team.includes(id) ? team.filter((x) => x !== id) : [...team, id];
+    setTeam(next);
+    await setTrackingEmployees(tracking.id, next).catch(() => {});
+  };
   const title = company?.name || (tracking.contactIds[0] ? contactName(tracking.contactIds[0]) : "Untitled");
 
   // win/loss phases in this pipeline
@@ -664,6 +691,10 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   // ---- revenue ----
   const serviceName = (id: string | null) => services.find((s) => s.id === id)?.name ?? "Service";
   const serviceUnit = (id: string | null) => services.find((s) => s.id === id)?.rate_unit ?? "day";
+  const serviceMin = (id: string | null) => {
+    const s = services.find((x) => x.id === id);
+    return s?.min_unit ?? (s?.rate_unit === "hour" ? 0.5 : 0.25);
+  };
   const productName = (id: string | null) => products.find((p) => p.id === id)?.name ?? "Product";
   const availableProducts = products.filter((p) => !tprods.some((tp) => tp.product_id === p.id));
 
@@ -712,7 +743,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     return s + lineTotal(p, prod?.calculator as Calculator | null, base);
   }, 0);
   const totalPotential = productsTotal + potentials.reduce(
-    (s, p) => s + lineTotal(p, serviceOf(p.service_id)?.calculator as Calculator | null), 0);
+    (s, p) => s + lineTotal(p, serviceOf(p.service_id)?.calculator as Calculator | null, undefined, serviceMin(p.service_id)), 0);
   const money = (n: number) =>
     `\u20ac${(Number(n) || 0).toLocaleString("es-ES", { maximumFractionDigits: 0 })}`;
 
@@ -777,12 +808,15 @@ export default function TrackingDetail({ tracking, companies, contacts, products
 
       potentials.filter((p) => p.service_id && ids.has(p.service_id)).forEach((p) => {
         const svcCalc = serviceOf(p.service_id)?.calculator as Calculator | null;
-        const bd = lineBreakdown(p, svcCalc);
+        const minU = serviceMin(p.service_id);
+        const bd = lineBreakdown(p, svcCalc, undefined, minU);
         // Days behind each row, so management can see how the total was built.
         const timeRows = svcCalc && svcCalc.output_kind === "quantity"
           ? calcBreakdown(svcCalc, p.calc_values ?? {}, Number(svcCalc.base_amount) || 0).rows
           : [];
-        const days = p.quantity == null ? 1 : Number(p.quantity) || 0;
+        // Management receives the billable quantity, never the raw one, so the
+        // project it creates lines up with what was sold.
+        const days = bd.qty;
         lines.push({
           label: p.label || serviceName(p.service_id), kind: "service",
           price: Math.round(bd.total), days,
@@ -1095,6 +1129,30 @@ export default function TrackingDetail({ tracking, companies, contacts, products
           </section>
 
           <section className="sl-panel sl-panel-rev">
+            <h3 className="sl-panel-title sl-team-title">Who is on this deal
+              <span className="sl-team-count">{team.length}</span>
+            </h3>
+            <div className="sl-team">
+              {team.length === 0 && (
+                <p className="sl-hint">
+                  {canAssign ? "Nobody assigned. Only boss and sales managers can see it." : "Nobody assigned yet."}
+                </p>
+              )}
+              <div className="sl-team-chips">
+                {team.map((id) => (
+                  <span key={id} className="sl-team-chip">
+                    <i>{empName(id).slice(0, 1).toUpperCase()}</i>
+                    {empName(id)}
+                    {canAssign && <button onClick={() => toggleMember(id)} aria-label="Remove">×</button>}
+                  </span>
+                ))}
+              </div>
+              {canAssign && employees.filter((e) => !team.includes(e.id)).length > 0 && (
+                <Select value="" onChange={(v) => v && toggleMember(v)} placeholder="+ Add someone"
+                  options={employees.filter((e) => !team.includes(e.id)).map((e) => ({ value: e.id, label: e.name }))} />
+              )}
+            </div>
+
             <h3 className="sl-panel-title">Potential revenue<span className="sl-rev-total">{money(totalPotential)}</span></h3>
             {tprods.length === 0 && <p className="sl-hint">No products assigned.</p>}
             {tprods.map((tp) => (
@@ -1111,7 +1169,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
             )}
             {potentials.map((p) => (
               <RevLine key={p.id} name={p.label || serviceName(p.service_id)} tag="Service" tagClass="sl-rev-tag-svc"
-                line={p} money={money} unit={serviceUnit(p.service_id)}
+                line={p} money={money} unit={serviceUnit(p.service_id)} minUnit={serviceMin(p.service_id)}
                 onRemove={() => removePotential(p.id)}
                 calculator={serviceOf(p.service_id)?.calculator as Calculator | null}
                 onOpenCalc={() => setCalcFor({ kind: "service", id: p.id })} />

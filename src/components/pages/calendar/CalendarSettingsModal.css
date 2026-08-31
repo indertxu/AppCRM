@@ -18,8 +18,11 @@
   --muted: #5a7d6d;
   --line: rgba(10, 111, 77, 0.16);
 
-  width: min(560px, 100%);
-  max-height: 88vh;
+  /* Grows to fit rather than scrolling: a settings panel you have to scroll
+     hides half of what you came to change. */
+  width: min(720px, calc(100vw - 3rem));
+  max-height: calc(100vh - 3rem);
+  transition: width 0.28s cubic-bezier(0.16, 1, 0.3, 1);
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
@@ -640,4 +643,138 @@
   font-size: 13.5px;
   font-weight: 600;
   color: var(--ink);
+}
+
+/* ===== Hours tab: the card opens out to near full screen =====
+   Seven draggable day columns need room; 560px would squash them to 60px each. */
+.cws-card:has(.cws-cut-grid) {
+  width: min(1180px, calc(100vw - 3rem));
+  max-height: calc(100vh - 3rem);
+}
+.cws-card:has(.cws-body-wide) {
+  width: min(1400px, calc(100vw - 3rem));
+  max-height: calc(100vh - 3rem);
+}
+.cws-body-wide {
+  display: flex; flex-direction: column;
+  flex: 1 1 auto; min-height: 0;
+  overflow: hidden;
+  padding-bottom: 1.2rem;
+}
+.cws-card:has(.cws-cut-grid) {
+  width: min(1180px, calc(100vw - 3rem));
+  max-height: calc(100vh - 3rem);
+}
+.cws-card:has(.cws-body-wide) { height: calc(100vh - 3rem); }
+
+
+/* ===== Time off and cutoffs ===== */
+.cws-range-arrow { color: var(--emerald); font-size: 15px; flex-shrink: 0; }
+
+.cws-holiday-add {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 1rem; padding: 12px;
+  border-radius: 14px; background: rgba(18, 181, 127, 0.05);
+  border: 1px solid rgba(18, 181, 127, 0.16);
+}
+.cws-holiday-pick { flex: 1 1 140px; min-width: 0; }
+.cws-holiday-name { flex: 2 1 180px; min-width: 0; }
+
+/* Holidays as chips, not a stacked list one per line */
+.cws-holiday-list {
+  display: flex; flex-wrap: wrap; gap: 7px;
+  max-height: 210px; overflow-y: auto;
+  padding-right: 4px;
+}
+.cws-holiday-row {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 6px 8px 6px 12px; border-radius: 999px;
+  background: #fff; border: 1px solid var(--line);
+  transition: border-color 0.14s, transform 0.14s;
+}
+.cws-holiday-row:hover { border-color: rgba(18, 181, 127, 0.4); transform: translateY(-1px); }
+.cws-holiday-date {
+  font-family: "Space Grotesk", sans-serif; font-size: 12px; font-weight: 600;
+  color: var(--ink); white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.cws-holiday-row .cws-del {
+  width: 18px; height: 18px; flex-shrink: 0; border: none; border-radius: 5px;
+  background: rgba(0, 0, 0, 0.06); color: var(--muted);
+  font-size: 12px; line-height: 1; cursor: pointer; transition: background 0.14s, color 0.14s;
+}
+.cws-holiday-row .cws-del:hover { background: rgba(184, 92, 92, 0.16); color: #b85c5c; }
+
+.cws-holiday-list::-webkit-scrollbar { width: 7px; }
+.cws-holiday-list::-webkit-scrollbar-thumb { background: rgba(10, 111, 77, 0.2); border-radius: 999px; }
+.cws-holiday-list::-webkit-scrollbar-track { background: transparent; }
+
+/* ===== Cutoffs =====
+   Cards in a grid. The old row layout put the month, the window and the picker
+   side by side, which overlapped as soon as the column got narrow. */
+.cws-cut-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(238px, 1fr)); gap: 10px;
+}
+.cws-cut-grid .cws-cutoff {
+  display: flex; flex-direction: column; align-items: stretch; gap: 10px;
+  margin: 0; padding: 13px 14px; border: 1px solid var(--line); border-top: 1px solid var(--line);
+  border-radius: 15px; background: #fff;
+  transition: border-color 0.16s, box-shadow 0.16s, transform 0.16s;
+}
+.cws-cut-grid .cws-cutoff:hover {
+  border-color: rgba(18, 181, 127, 0.34);
+  box-shadow: 0 12px 26px -22px rgba(10, 111, 77, 0.6);
+  transform: translateY(-1px);
+}
+.cws-cut-grid .cws-cutoff-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.cws-cut-grid .cws-cutoff-month {
+  font-family: "Space Grotesk", sans-serif; font-size: 14px; font-weight: 600;
+  color: var(--ink); letter-spacing: -0.01em;
+}
+.cws-cut-grid .cws-cutoff-window {
+  font-size: 10.5px; color: var(--muted); line-height: 1.4;
+  font-variant-numeric: tabular-nums; white-space: normal;
+}
+.cws-cut-grid .cws-cutoff-pick { width: 100%; min-width: 0; }
+
+/* The bonus everyone is on, above the per-person exceptions */
+.cws-gen {
+  padding: 15px 17px; margin-bottom: 1.2rem;
+  border-radius: 16px;
+  background: linear-gradient(150deg, rgba(134, 239, 192, 0.14), rgba(18, 181, 127, 0.03));
+  border: 1px solid rgba(18, 181, 127, 0.22);
+}
+.cws-gen-head { margin-bottom: 13px; }
+.cws-gen-eyebrow {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.15em;
+  text-transform: uppercase; color: var(--forest);
+}
+.cws-gen-note { margin: 5px 0 0; font-size: 11.5px; color: var(--muted); }
+.cws-gen-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(126px, 1fr)); gap: 9px;
+}
+.cws-gen-f { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.cws-gen-f > span {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.09em;
+  text-transform: uppercase; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.cws-gen-f input {
+  width: 100%; box-sizing: border-box;
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px;
+  background: #fff; font-family: "Space Grotesk", sans-serif;
+  font-size: 13px; font-weight: 600; color: var(--ink); outline: none;
+  transition: border-color 0.16s, box-shadow 0.16s;
+}
+.cws-gen-f input:focus {
+  border-color: var(--emerald); box-shadow: 0 0 0 3px rgba(18, 181, 127, 0.13);
+}
+/* Hours per billed day: its own row, since it changes how everything is read */
+.cws-gen-hpd {
+  padding-bottom: 13px; margin-bottom: 13px;
+  border-bottom: 1px solid rgba(18, 181, 127, 0.18);
+}
+.cws-gen-hpd input { max-width: 118px; }
+.cws-gen-hpd em {
+  font-style: normal; margin-top: 2px;
+  font-size: 11px; line-height: 1.45; color: var(--muted);
 }

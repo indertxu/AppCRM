@@ -1,12 +1,12 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Client, Project, ProjectType } from "./ClientsPage";
 import { projectValue } from "./ClientsPage";
 import Select from "../../framework/Select";
+import { supabase } from "../../api/supabase";
 
 export type Usage = Record<string, { done: number; booked: number }>;
 
 interface Props {
-  tabs?: React.ReactNode;
   clients: Client[];
   projects: Project[];
   projectTypes: ProjectType[];
@@ -24,24 +24,55 @@ const LINES: { key: string; label: string }[] = [
 type Sort = "recent" | "value" | "days" | "progress" | "left";
 
 export default function ProjectsView({
-  tabs, clients, projects, projectTypes, usage, onOpenProject, onReopen, onClose_,
+  clients, projects, projectTypes, usage, onOpenProject, onReopen, onClose_,
 }: Props) {
   const [q, setQ] = useState("");
   const [fClient, setFClient] = useState("");
   const [fType, setFType] = useState("");
   const [fStatus, setFStatus] = useState("");
   const [sort, setSort] = useState<Sort>("recent");
+  /** Rate unit per service: a project reads in hours or days as its service says. */
+  const [units, setUnits] = useState<Record<string, "hour" | "day">>({});
+  useEffect(() => {
+    supabase.from("services").select("id, rate_unit").then(({ data }) => {
+      const out: Record<string, "hour" | "day"> = {};
+      (data ?? []).forEach((r: any) => { out[r.id] = r.rate_unit === "hour" ? "hour" : "day"; });
+      setUnits(out);
+    });
+  }, []);
+  const unitOf = (p: Project) => (units[p.projectTypeId] === "hour" ? "h" : "d");
 
   const clientName = (id: string) => clients.find((c) => c.id === id)?.name ?? "—";
-  const typeName = (id: string) => projectTypes.find((t) => t.id === id)?.name ?? "No project type";
+  const typeName = (id: string) => projectTypes.find((t) => t.id === id)?.name ?? "No service";
 
   const signedOf = (p: Project, line: string) =>
     line === "connector" ? p.connectorDays : p.consultorDays + p.supervisionDays;
   const totalSigned = (p: Project) => p.consultorDays + p.connectorDays + p.supervisionDays;
+
+  /**
+   * The consultancy column is signed as consultorDays + supervisionDays, so its
+   * usage has to include the supervision line too. Reading only `|consultor`
+   * left every supervision day counted in the denominator and never in the
+   * numerator, so supervision always looked 0% delivered.
+   */
+  const usageOf = (p: Project, line: string) => {
+    const keys = line === "connector"
+      ? [`${p.id}|connector`]
+      : [`${p.id}|consultor`, `${p.id}|supervision`];
+    return keys.reduce(
+      (acc, k) => {
+        const u = usage[k];
+        if (u) { acc.done += u.done; acc.booked += u.booked; }
+        return acc;
+      },
+      { done: 0, booked: 0 }
+    );
+  };
+
   const totalUsed = (p: Project) =>
-    LINES.reduce((s, ln) => s + (usage[`${p.id}|${ln.key}`]?.done ?? 0), 0);
+    LINES.reduce((s, ln) => s + usageOf(p, ln.key).done, 0);
   const totalBooked = (p: Project) =>
-    LINES.reduce((s, ln) => s + (usage[`${p.id}|${ln.key}`]?.booked ?? 0), 0);
+    LINES.reduce((s, ln) => s + usageOf(p, ln.key).booked, 0);
   const progressOf = (p: Project) => {
     const t = totalSigned(p);
     return t > 0 ? (totalUsed(p) / t) * 100 : 0;
@@ -79,8 +110,17 @@ export default function ProjectsView({
   }, [projects, usage, q, fClient, fType, fStatus, sort, clients, projectTypes]);
 
   const sumValue = shown.reduce((s, p) => s + projectValue(p), 0);
+  // Days and hours are different units, so they are counted apart.
+  const signedSplit = shown.reduce((acc, p) => {
+    const k = units[p.projectTypeId] === "hour" ? "hours" : "days";
+    acc[k] += totalSigned(p);
+    return acc;
+  }, { days: 0, hours: 0 });
   const sumDays = shown.reduce((s, p) => s + totalSigned(p), 0);
   const sumBilled = shown.reduce((s, p) => s + totalUsed(p), 0);
+
+  // Uses sumBilled, so it has to come after it.
+  const pctDone = sumDays > 0 ? Math.round((sumBilled / sumDays) * 100) : 0;
 
   const clearAll = () => { setQ(""); setFClient(""); setFType(""); setFStatus(""); setSort("recent"); };
   const anyFilter = !!(q || fClient || fType || fStatus || sort !== "recent");
@@ -88,14 +128,13 @@ export default function ProjectsView({
   return (
     <>
 <div className="pv-bar">
-        {tabs}
         <div className="pv-search">
           <span className="pv-search-ico" aria-hidden="true">⌕</span>
           <input
             className="pv-search-input"
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search client, project type, VAT…"
+            placeholder="Search client, service, VAT…"
           />
           {q && <button className="pv-search-x" onClick={() => setQ("")} aria-label="Clear">×</button>}
         </div>
@@ -112,8 +151,8 @@ export default function ProjectsView({
           <Select
             value={fType}
             onChange={setFType}
-            options={[{ value: "", label: "All types" }, ...projectTypes.map((t) => ({ value: t.id, label: t.name }))]}
-            placeholder="All types"
+            options={[{ value: "", label: "All services" }, ...projectTypes.map((t) => ({ value: t.id, label: t.name }))]}
+            placeholder="All services"
           />
         </div>
         <div className="pv-filter">
@@ -147,20 +186,37 @@ export default function ProjectsView({
         {anyFilter && <button className="pv-clear" onClick={clearAll}>Clear</button>}
       </div>
 
-      <div className="pv-summary">
-        <span><b>{shown.length}</b> project{shown.length === 1 ? "" : "s"}</span>
-        <span className="pv-sep" />
-        <span><b>{sumDays}</b> days signed</span>
-        <span className="pv-sep" />
-        <span><b>{sumBilled.toFixed(2)}</b> billed</span>
-        <span className="pv-sep" />
-        <span><b>{sumValue.toLocaleString()}</b> total value</span>
+      <div className="cl-kpis">
+        <div className="cl-kpi">
+          <span className="cl-kpi-k">Projects</span>
+          <b className="cl-kpi-v">{shown.length}</b>
+          <span className="cl-kpi-sub">{shown.filter((p) => p.status !== "closed").length} still open</span>
+        </div>
+        <div className="cl-kpi">
+          <span className="cl-kpi-k">Signed</span>
+          <b className="cl-kpi-v">
+            {signedSplit.days.toLocaleString()}<em>d</em>
+            {signedSplit.hours > 0 && <><span className="cl-kpi-plus">/</span>{signedSplit.hours.toLocaleString()}<em>h</em></>}
+          </b>
+          <span className="cl-kpi-sub">committed to deliver</span>
+        </div>
+        <div className="cl-kpi">
+          <span className="cl-kpi-k">Delivered</span>
+          <b className="cl-kpi-v">{pctDone}<em>%</em></b>
+          <span className="cl-kpi-meter"><i style={{ width: `${pctDone}%` }} /></span>
+        </div>
+        <div className="cl-kpi cl-kpi-money">
+          <span className="cl-kpi-k">Contract value</span>
+          <b className="cl-kpi-v">{Math.round(sumValue).toLocaleString()}<em>€</em></b>
+          <span className="cl-kpi-sub">across {shown.length} project{shown.length === 1 ? "" : "s"}</span>
+        </div>
       </div>
 
       {shown.length === 0 ? (
         <p className="cl-hint">No projects match those filters.</p>
       ) : (
-<div className="pv-list">
+        <div className="pv-scroll">
+        <div className="pv-list">
           <div className="pv-hrow">
             <span>Project</span>
             <span>Dates</span>
@@ -190,7 +246,7 @@ export default function ProjectsView({
 
                 {LINES.map((ln) => {
                   const signed = signedOf(p, ln.key);
-                  const u = usage[`${p.id}|${ln.key}`] ?? { done: 0, booked: 0 };
+                  const u = usageOf(p, ln.key);
                   const left = +(signed - u.done - u.booked).toFixed(2);
                   const pct = (n: number) => (signed > 0 ? Math.min(100, (n / signed) * 100) : 0);
                   return (
@@ -204,9 +260,9 @@ export default function ProjectsView({
                             <div className="pv-fill is-done" style={{ width: `${pct(u.done)}%` }} />
                           </div>
                           <span className="pv-figs">
-                            <b>{u.done.toFixed(2)}</b>/{signed}d
+                            <b>{u.done.toFixed(2)}</b>/{signed}{unitOf(p)}
                             <i className={left < 0 ? "is-over" : ""}>
-                              {left < 0 ? `${Math.abs(left).toFixed(2)} over` : `${left.toFixed(2)} left`}
+                              {left < 0 ? `${Math.abs(left).toFixed(2)}${unitOf(p)} over` : `${left.toFixed(2)}${unitOf(p)} left`}
                             </i>
                           </span>
                         </>
@@ -216,7 +272,7 @@ export default function ProjectsView({
                 })}
 
                 <div className="pv-cell pv-right pv-cell-value">
-                  {projectValue(p).toLocaleString()}
+                  {Math.round(projectValue(p)).toLocaleString()} €
                 </div>
 
                 <div className="pv-cell pv-cell-act">
@@ -237,6 +293,7 @@ export default function ProjectsView({
               </div>
             );
           })}
+        </div>
         </div>
       )}
     </>

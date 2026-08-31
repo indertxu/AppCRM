@@ -185,6 +185,8 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
     await recordChanges("dept", id, patch as any, todayISO(), deptLabel(row?.dept_key ?? null), resolveNote);
     refreshChangeWeeks();
   };
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   const saveUser = async (id: string, patch: Partial<OrgUser>) => {
     const row = users.find((u) => u.id === id);
     if (isPast) {
@@ -193,9 +195,23 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
       refreshChangeWeeks();
       return;
     }
+    // Keep what it was, so a rejected write can be put back rather than left
+    // looking saved until the page is reloaded.
+    const before = row ? Object.fromEntries(
+      Object.keys(patch).map((k) => [k, (row as any)[k]]),
+    ) as Partial<OrgUser> : null;
+
     setUsers((us) => us.map((u) => (u.id === id ? { ...u, ...patch } : u)));
     const { error } = await supabase.from("profiles").update(patch).eq("id", id);
-    if (error) { console.error("[org] saveUser failed:", error.message, patch); return; }
+    if (error) {
+      console.error("[org] saveUser failed:", error.message, patch);
+      if (before) setUsers((us) => us.map((u) => (u.id === id ? { ...u, ...before } : u)));
+      setSaveError(error.message.includes("profiles_role_check")
+        ? "That security role is not one the system accepts yet."
+        : `Could not save: ${error.message}`);
+      window.setTimeout(() => setSaveError(null), 5000);
+      return;
+    }
     await recordChanges("user", id, patch as any, todayISO(), row ? nameOf(row) : "User", resolveNote);
     refreshChangeWeeks();
   };
@@ -519,6 +535,7 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
 
   return (
     <div className={`org ${railWide ? "is-wide" : ""}`}>
+      {saveError && <div className="org-save-err" role="alert">{saveError}</div>}
       {/* time bar lives in the page header (in line with the title) via portal */}
       {toolbarReady && toolbarRef?.current ? createPortal(timebar, toolbarRef.current) : null}
       <div className="org-canvas-wrap">

@@ -38,11 +38,30 @@ interface Props {
   typeNames: Record<string, string>;
   people: Record<string, string>;
   supRoles: Set<string>;
+  hourProjects?: Set<string>;
+  anchor?: Date;
   cutoffs?: Cutoffs;
   defaultCutoffDay?: number;
 }
 
 type Line = "consultor" | "supervision" | "connector";
+/* Loads SheetJS from a CDN the first time an export is requested, so the app
+   needs no `xlsx` dependency. Cached on window after the first load. */
+let _xlsxPromise: Promise<any> | null = null;
+function loadXLSX(): Promise<any> {
+  const w = window as any;
+  if (w.XLSX) return Promise.resolve(w.XLSX);
+  if (_xlsxPromise) return _xlsxPromise;
+  _xlsxPromise = new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js";
+    s.onload = () => resolve((window as any).XLSX);
+    s.onerror = () => reject(new Error("Could not load the Excel library."));
+    document.head.appendChild(s);
+  });
+  return _xlsxPromise;
+}
+
 const lineLabel: Record<Line, string> = {
   consultor: "Consultancy",
   supervision: "Supervision",
@@ -92,9 +111,16 @@ interface Bill {
 
 export default function BillingPanel({
   entries, projects, clientNames, typeNames, people, supRoles,
-  cutoffs = {}, defaultCutoffDay = 0,
+  hourProjects = new Set(), anchor = new Date(), cutoffs = {}, defaultCutoffDay = 0,
 }: Props) {
+  /** "h" if the bill's project is billed by the hour, otherwise "d". */
+  const unitOf = (projectId: string) => (hourProjects.has(projectId) ? "h" : "d");
   const [open, setOpen] = useState<string | null>(null);
+  /** Bills ticked for Excel export (To-bill tab only). Keyed by bill.key. */
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [exporting, setExporting] = useState(false);
+  /** Off by default: the checkbox column only appears once the user opts in. */
+  const [selectMode, setSelectMode] = useState(false);
   // Drag & drop: local period overrides + the entry currently being dragged
   const [localMoves, setLocalMoves] = useState<Record<string, string>>({});
   const [dragEntry, setDragEntry] = useState<{ id: string; projectId: string; fromPeriod: string } | null>(null);
@@ -117,7 +143,20 @@ export default function BillingPanel({
   const [localCutoffs, setLocalCutoffs] = useState<Cutoffs>(cutoffs);
   useEffect(() => { setLocalCutoffs(cutoffs); }, [cutoffs]);
 
-  const period = new Date().toISOString().slice(0, 7);
+  // The billing period follows the month picked in the page header, so you can
+  // step back and see what was sent, paid, or still to bill in an earlier month.
+  const period = `${anchor.getFullYear()}-${String(anchor.getMonth() + 1).padStart(2, "0")}`;
+  // End of the selected billing month — the "as of" date for the point-in-time
+  // view. Everything below judges each invoice's status as it stood then.
+  const asOfDate = (() => {
+    const [y, m] = period.split("-").map(Number);
+    return `${y}-${String(m).padStart(2, "0")}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`;
+  })();
+  /** Was this invoice already sent by the as-of date? */
+  const wasSentBy = (i: Invoice) => !!i.sentDate && i.sentDate <= asOfDate;
+  /** Was it actually paid by the as-of date? */
+  const wasPaidBy = (i: Invoice) => i.status === "paid" && !!i.paidDate && i.paidDate <= asOfDate;
+
   const periodLabel = (p: string) => {
     const [y, m] = p.split("-").map(Number);
     return new Date(y, m - 1, 1).toLocaleString("en", { month: "short", year: "numeric" });
@@ -153,6 +192,11 @@ export default function BillingPanel({
     invoices.forEach((i) => { m[`${i.projectId}|${i.period}`] = i; });
     return m;
   }, [invoices]);
+  /** Has this bill been invoiced-and-sent by the as-of date? If not, it's still to bill. */
+  const billedBy = (key: string) => {
+    const inv = invByKey[key];
+    return !!inv && !!inv.sentDate && inv.sentDate <= asOfDate;
+  };
 
   const lineOf = (p: BiProj, line: string, _userId: string): Line => {
     // The billing line follows what the user picked when logging (consultor /
@@ -207,7 +251,11 @@ export default function BillingPanel({
     });
 
     return Object.values(acc)
-      .filter((b) => b.rows.length > 0)
+      // A bill needs at least one row AND some billable value. Periods that
+      // hold only non-billable work (internal, demos, client prep) would
+      // otherwise appear as phantom 0.00 invoices in the To-bill tab.
+      .filter((b) => b.rows.length > 0
+        && (b.lines.consultor + b.lines.supervision + b.lines.connector) > 0)
       .map((b) => ({ ...b, rows: b.rows.sort((x, y) => x.date.localeCompare(y.date)) }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entries, projects, clientNames, typeNames, supRoles, status, localCutoffs, defaultCutoffDay, localMoves]);
@@ -319,13 +367,24 @@ export default function BillingPanel({
 
   // ---- Phase lists ----
   const today = isoDate(new Date());
-  const daysLateOf = (inv: Invoice) =>
-    inv.dueDate && inv.dueDate < today
-      ? Math.round((new Date(`${today}T00:00:00`).getTime() - new Date(`${inv.dueDate}T00:00:00`).getTime()) / 86400000)
-      : 0;
+  // Lateness as of the selected month: compare the due date to whichever is
+  // earlier — the as-of date, or the day it was actually paid. So an invoice
+  // shows the arrears it had accrued *by that month*, growing as you step
+  // forward until it's paid.
+  const daysLateOf = (inv: Invoice) => {
+    if (!inv.dueDate) return 0;
+    const ref = wasPaidBy(inv) ? inv.paidDate! : (asOfDate < today ? asOfDate : today);
+    if (inv.dueDate >= ref) return 0;
+    return Math.round((new Date(`${ref}T00:00:00`).getTime() - new Date(`${inv.dueDate}T00:00:00`).getTime()) / 86400000);
+  };
 
   const outstanding = useMemo(() => {
-    let list = bills.filter((b) => !invByKey[b.key] && matchesFilters(b.clientId, b.typeId, b.legalName, b.vat));
+    // To bill: anything not yet invoiced whose period is the selected month or
+    // earlier (older arrears still need billing). Future periods are hidden.
+    let list = bills.filter((b) =>
+      !billedBy(b.key)
+      && b.period <= period
+      && matchesFilters(b.clientId, b.typeId, b.legalName, b.vat));
     list = list.sort((a, b) => {
       if (sortKey === "amount_asc") return gross(a) - gross(b);
       if (sortKey === "date_asc") return a.period.localeCompare(b.period);
@@ -334,10 +393,19 @@ export default function BillingPanel({
     });
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bills, invByKey, sortKey, fCompany, fType, query]);
+  }, [bills, invByKey, sortKey, fCompany, fType, query, period]);
 
+  // End of the selected billing month — the "as of" date for the point-in-time
+  // view. An invoice's status is judged as it stood then.
   const invoiceList = (want: "sent" | "paid") => {
-    let list = invoices.filter((i) => (want === "paid" ? i.status === "paid" : i.status !== "paid"));
+    // Point-in-time: PAID = paid on/before the as-of date. SENT = issued by then
+    // but not yet paid at that point (whether or not it was paid later). So an
+    // invoice paid late shows as Sent (and overdue) in the months it sat unpaid,
+    // then moves to Paid once its payment date is reached.
+    let list = invoices.filter((i) => {
+      if (!wasSentBy(i)) return false;              // not issued yet as of then
+      return want === "paid" ? wasPaidBy(i) : !wasPaidBy(i);
+    });
     list = list.filter((i) => {
       const p = projects[i.projectId];
       return p ? matchesFilters(p.clientId, p.typeId, p.legalName, p.vat) : true;
@@ -354,11 +422,82 @@ export default function BillingPanel({
   const sentList = invoiceList("sent");
   const paidList = invoiceList("paid");
 
+  // ---- Excel export of the ticked To-bill rows ----------------------------
+  const toggleSel = (key: string) =>
+    setSelected((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; });
+  const allVisibleSelected = outstanding.length > 0 && outstanding.every((b) => selected.has(b.key));
+  const toggleSelAll = () =>
+    setSelected(() => allVisibleSelected ? new Set() : new Set(outstanding.map((b) => b.key)));
+
+  const exportSelected = async () => {
+    const chosen = outstanding.filter((b) => selected.has(b.key));
+    if (chosen.length === 0) return;
+    setExporting(true);
+    try {
+      const XLSX = await loadXLSX();
+
+      // Sheet 1 — one row per selected bill, the columns you see on screen.
+      const summary = chosen.map((b) => {
+        const totalDays = b.lines.consultor + b.lines.supervision + b.lines.connector;
+        const row: Record<string, string | number> = {
+          "Bill to": b.legalName,
+          Client: clientNames[b.clientId] ?? "",
+          Type: b.type,
+          Period: periodLabel(b.period),
+          VAT: b.vat || "",
+          "Billing contact": b.contact?.name ?? "",
+          "Contact email": b.contact?.email ?? "",
+          [`${unitOf(b.projectId) === "h" ? "Hours" : "Days"}`]: +totalDays.toFixed(2),
+          "Net €": +net(b).toFixed(2),
+        };
+        if (b.taxed) { row["Tax %"] = b.taxRate; row["Tax €"] = +(net(b) * b.taxRate / 100).toFixed(2); }
+        row["Total €"] = +gross(b).toFixed(2);
+        return row;
+      });
+
+      // Sheet 2 — the collapsible breakdown: one row per billing line.
+      const breakdown: Record<string, string | number>[] = [];
+      chosen.forEach((b) => {
+        const u = unitOf(b.projectId);
+        (["consultor", "supervision", "connector"] as Line[]).forEach((ln) => {
+          if (b.lines[ln] <= 0) return;
+          const rate = ln === "supervision" ? b.supervisionRate : b.rate;
+          breakdown.push({
+            "Bill to": b.legalName,
+            Period: periodLabel(b.period),
+            Line: lineLabel[ln],
+            [u === "h" ? "Hours" : "Days"]: +b.lines[ln].toFixed(2),
+            "Rate €": rate,
+            "Amount €": +(b.lines[ln] * rate).toFixed(2),
+          });
+        });
+        if (b.taxed) breakdown.push({ "Bill to": b.legalName, Period: periodLabel(b.period), Line: `Tax ${b.taxRate}%`, "Amount €": +(net(b) * b.taxRate / 100).toFixed(2) });
+        breakdown.push({ "Bill to": b.legalName, Period: periodLabel(b.period), Line: "TOTAL", "Amount €": +gross(b).toFixed(2) });
+      });
+
+      const wb = XLSX.utils.book_new();
+      const ws1 = XLSX.utils.json_to_sheet(summary);
+      const ws2 = XLSX.utils.json_to_sheet(breakdown);
+      XLSX.utils.book_append_sheet(wb, ws1, "Invoices");
+      XLSX.utils.book_append_sheet(wb, ws2, "Breakdown");
+      const stamp = new Date().toISOString().slice(0, 10);
+      XLSX.writeFile(wb, `to-bill_${periodLabel(period).replace(/\s/g, "-")}_${stamp}.xlsx`);
+    } finally {
+      setExporting(false);
+    }
+  };
+
   // ---- Totals ----
-  const outstandingTotal = outstanding.reduce((s, b) => s + gross(b), 0);
-  const sentTotal = invoices.filter((i) => i.status !== "paid").reduce((s, i) => s + i.amount, 0);
-  const paidTotal = invoices.filter((i) => i.status === "paid").reduce((s, i) => s + i.amount, 0);
-  const overdueCount = invoices.filter((i) => i.status !== "paid" && daysLateOf(i) > 0).length;
+  // Header is a GLOBAL snapshot (all periods) — your standing financial
+  // position — while the lists below scope to the month picked in the header.
+  const outstandingTotal = bills
+    .filter((b) => !billedBy(b.key) && b.period <= period)
+    .reduce((s, b) => s + gross(b), 0);
+  const outstandingCount = bills.filter((b) => !billedBy(b.key) && b.period <= period).length;
+  // Header snapshot AS OF the selected month.
+  const sentTotal = invoices.filter((i) => wasSentBy(i) && !wasPaidBy(i)).reduce((s, i) => s + i.amount, 0);
+  const paidTotal = invoices.filter((i) => wasPaidBy(i)).reduce((s, i) => s + i.amount, 0);
+  const overdueCount = invoices.filter((i) => wasSentBy(i) && !wasPaidBy(i) && daysLateOf(i) > 0).length;
 
   const nextRun = (() => {
     const t = new Date(); t.setHours(0, 0, 0, 0);
@@ -389,7 +528,7 @@ export default function BillingPanel({
                 <div className="bi-bd-line" key={ln}>
                   <span className="bi-bd-name">{lineLabel[ln]}</span>
                   <span className="bi-bd-calc">
-                    {b.lines[ln].toFixed(2)} × {(ln === "supervision" ? b.supervisionRate : b.rate).toLocaleString()} €
+                    {b.lines[ln].toFixed(2)}{unitOf(b.projectId)} × {(ln === "supervision" ? b.supervisionRate : b.rate).toLocaleString()} €
                   </span>
                   <span className="bi-bd-val">
                     {eur(b.lines[ln] * (ln === "supervision" ? b.supervisionRate : b.rate))} €
@@ -418,7 +557,7 @@ export default function BillingPanel({
               <div className="bi-owner" key={uid}>
                 <span className="bi-oav">{(people[uid] ?? "?").charAt(0).toUpperCase()}</span>
                 <span className="bi-oname">{people[uid] ?? "Unknown"}</span>
-                <span className="bi-odays">{v.days.toFixed(2)}d</span>
+                <span className="bi-odays">{v.days.toFixed(2)}{unitOf(b.projectId)}</span>
                 <span className="bi-oval">{eur(v.value)} €</span>
               </div>
             ))}
@@ -449,7 +588,7 @@ export default function BillingPanel({
               <span>{people[r.userId] ?? "Unknown"}</span>
               <span className="bi-lline">{lineLabel[r.line]}</span>
               <span className={`bi-lstatus is-${r.status}`}>{r.status}</span>
-              <span className="bi-r">{r.days.toFixed(2)}</span>
+              <span className="bi-r">{r.days.toFixed(2)}{unitOf(b.projectId)}</span>
               <span className="bi-r">
                 {eur(r.days * (r.line === "supervision" ? b.supervisionRate : b.rate))} €
               </span>
@@ -473,22 +612,41 @@ export default function BillingPanel({
   return (
     <div className="bi">
       {/* ---------- Fixed hero ---------- */}
-      <div className="bi-hero">
+      <div className="bi-hero bi-hero-neon">
+        <span className="bi-hero-glow" aria-hidden="true" />
+        <span className="bi-hero-scan" aria-hidden="true" />
+
         <div className="bi-hero-main">
-          <span className="bi-hero-label">Outstanding · all periods</span>
+          <span className="bi-hero-label">Outstanding · to {periodLabel(period)}</span>
           <span className="bi-hero-amount"><b>{eur(outstandingTotal)}</b><i>€</i></span>
-          <span className="bi-hero-sub">{outstanding.length} {outstanding.length === 1 ? "invoice" : "invoices"} ready to send</span>
+          <span className="bi-hero-sub">{outstandingCount} {outstandingCount === 1 ? "invoice" : "invoices"} ready to send</span>
         </div>
+
+        {(() => {
+          const total = paidTotal + sentTotal;
+          const pct = total > 0 ? (paidTotal / total) * 100 : 0;
+          const ARC = 169.65;
+          return (
+            <div className="bi-hero-ring">
+              <svg viewBox="0 0 140 82" aria-hidden="true">
+                <path className="bi-arc-bg" d="M16 70 A54 54 0 0 1 124 70" pathLength={ARC} />
+                <path className="bi-arc-fill" d="M16 70 A54 54 0 0 1 124 70" pathLength={ARC}
+                  style={{ strokeDasharray: `${(ARC * Math.min(1, pct / 100)).toFixed(2)} ${ARC}` }} />
+              </svg>
+              <span className="bi-ring-mid"><b>{Math.round(pct)}</b><i>% collected</i></span>
+            </div>
+          );
+        })()}
 
         <div className="bi-hero-stats">
           <div className="bi-stat">
             <span className="bi-stat-k">Sent</span>
-            <span className="bi-stat-v">{eur(sentTotal)} €</span>
+            <span className="bi-stat-v">{eur(sentTotal)}<em>€</em></span>
             <span className="bi-stat-s">{invoices.filter((i) => i.status !== "paid").length} awaiting</span>
           </div>
           <div className="bi-stat">
             <span className="bi-stat-k">Collected</span>
-            <span className="bi-stat-v">{eur(paidTotal)} €</span>
+            <span className="bi-stat-v is-neon">{eur(paidTotal)}<em>€</em></span>
             <span className="bi-stat-s">{invoices.filter((i) => i.status === "paid").length} paid</span>
           </div>
           <div className="bi-stat">
@@ -517,10 +675,10 @@ export default function BillingPanel({
           <button className={phase === "tobill" ? "is-on" : ""} onClick={() => setPhase("tobill")}>
             To bill <i>{outstanding.length}</i>
           </button>
-          <button className={phase === "sent" ? "is-on" : ""} onClick={() => setPhase("sent")}>
+          <button className={phase === "sent" ? "is-on" : ""} onClick={() => { setPhase("sent"); setSelectMode(false); setSelected(new Set()); }}>
             Sent <i>{sentList.length}</i>
           </button>
-          <button className={phase === "paid" ? "is-on" : ""} onClick={() => setPhase("paid")}>
+          <button className={phase === "paid" ? "is-on" : ""} onClick={() => { setPhase("paid"); setSelectMode(false); setSelected(new Set()); }}>
             Paid <i>{paidList.length}</i>
           </button>
         </div>
@@ -558,6 +716,38 @@ export default function BillingPanel({
             <Select value={fType} onChange={setFType}
               options={[{ value: "", label: "All types" }, ...typeOptions]} placeholder="Type" />
           </div>
+          {phase === "tobill" && (
+            selectMode ? (
+              <div className="bi-xlsx-group">
+                <button
+                  className="bi-xlsx"
+                  disabled={selected.size === 0 || exporting}
+                  onClick={exportSelected}
+                  title={selected.size === 0 ? "Tick rows to export" : `Download ${selected.size} selected`}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <path d="M14 2v6h6" />
+                    <path d="M9 13l3 4M12 13l-3 4" />
+                  </svg>
+                  {exporting ? "…" : `Download${selected.size ? ` (${selected.size})` : ""}`}
+                </button>
+                <button className="bi-xlsx-cancel"
+                  onClick={() => { setSelectMode(false); setSelected(new Set()); }}>
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button className="bi-xlsx bi-xlsx-start" onClick={() => setSelectMode(true)} title="Select rows to export to Excel">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <path d="M14 2v6h6" />
+                  <path d="M9 13l3 4M12 13l-3 4" />
+                </svg>
+                Excel
+              </button>
+            )
+          )}
           {(anyFilter || query) && <button className="bi-clear" onClick={() => { setFCompany(""); setFType(""); setQuery(""); }}>Clear</button>}
         </div>
       </div>
@@ -571,7 +761,13 @@ export default function BillingPanel({
             <p className="bi-empty">Nothing to bill for these filters.</p>
           ) : (
             <div className="bi-list">
-              <div className="bi-listhead">
+              <div className={`bi-listhead ${selectMode ? "bi-listhead-sel" : ""}`}>
+                {selectMode && (
+                  <span className="bi-selcell">
+                    <input type="checkbox" className="bi-check" checked={allVisibleSelected}
+                      onChange={toggleSelAll} title="Select all" />
+                  </span>
+                )}
                 <span>Bill to</span><span>VAT</span><span>Billing contact</span>
                 <span className="bi-r">Days</span><span className="bi-r">Amount</span><span />
               </div>
@@ -582,7 +778,7 @@ export default function BillingPanel({
                 const isDropHover = canDrop && dropTarget === b.key;
                 return (
                   <div
-                    className={`bi-row ${isOpen ? "is-open" : ""} ${canDrop ? "is-droppable" : ""} ${isDropHover ? "is-drophover" : ""}`}
+                    className={`bi-row ${selectMode ? "bi-row-selectable" : ""} ${selected.has(b.key) ? "is-selected" : ""} ${isOpen ? "is-open" : ""} ${canDrop ? "is-droppable" : ""} ${isDropHover ? "is-drophover" : ""}`}
                     key={b.key}
                     onDragOver={(e) => { if (canDrop) { e.preventDefault(); setDropTarget(b.key); } }}
                     onDragLeave={() => setDropTarget((t) => (t === b.key ? null : t))}
@@ -594,6 +790,12 @@ export default function BillingPanel({
                       setDropTarget(null);
                     }}
                   >
+                    {selectMode && (
+                      <label className="bi-selcell" onClick={(e) => e.stopPropagation()}>
+                        <input type="checkbox" className="bi-check"
+                          checked={selected.has(b.key)} onChange={() => toggleSel(b.key)} />
+                      </label>
+                    )}
                     <button className="bi-row-main" onClick={() => setOpen(isOpen ? null : b.key)}>
                       <span className="bi-to">
                         <span className="bi-legal">{b.legalName}<span className="bi-period-tag">{periodLabel(b.period)}</span>{canDrop && <span className="bi-drop-hint">drop to bill here</span>}</span>
@@ -606,10 +808,9 @@ export default function BillingPanel({
                       <span className="bi-contact">
                         {b.contact?.email ? (<><span>{b.contact.email}</span><em>{b.contact.name}</em></>) : "—"}
                       </span>
-                      <span className="bi-r bi-days">{totalDays.toFixed(2)}</span>
+                      <span className="bi-r bi-days">{totalDays.toFixed(2)}<u>{unitOf(b.projectId)}</u></span>
                       <span className="bi-r bi-amount">
                         <b>{eur(gross(b))} €</b>
-                        {b.taxed && <em>{eur(net(b))} net</em>}
                       </span>
                       <span className={`bi-chev ${isOpen ? "is-open" : ""}`}>›</span>
                     </button>
@@ -642,25 +843,41 @@ export default function BillingPanel({
                   <span className="bi-r">Amount</span><span>Status</span><span />
                 </div>
                 {list.map((inv) => {
+                  // Status AS OF the selected month: an invoice paid later still
+                  // reads as Sent/Overdue in the months before its payment.
+                  const paidAsOf = wasPaidBy(inv);
                   const late = daysLateOf(inv);
-                  const isOverdue = inv.status !== "paid" && late > 0;
+                  const isOverdue = !paidAsOf && late > 0;
                   const invKey = `${inv.projectId}|${inv.period}`;
                   const comp = billByKey[invKey];
                   const isOpen = open === invKey;
+                  const u = unitOf(inv.projectId);
                   return (
-                    <div className={`bi-row ${isOpen ? "is-open" : ""}`} key={inv.id}>
+                    <div className={`bi-scard ${isOpen ? "is-open" : ""} ${isOverdue ? "is-overdue" : ""} ${paidAsOf ? "is-paid" : ""}`} key={inv.id}>
                       <div className="bi-sent-row" onClick={() => comp && setOpen(isOpen ? null : invKey)} style={{ cursor: comp ? "pointer" : "default" }}>
-                        <span className="bi-legal">
-                          {projName(inv.projectId)}<span className="bi-period-tag">{periodLabel(inv.period)}</span>
+                        <span className="bi-scard-client">
+                          <span className="bi-scard-name">{projName(inv.projectId)}</span>
+                          <span className="bi-scard-meta">
+                            <span className="bi-period-tag">{periodLabel(inv.period)}</span>
+                            <span className="bi-scard-days">{inv.days.toFixed(2)}{u}</span>
+                          </span>
                         </span>
-                        <span className="bi-ldate">{inv.sentDate || "—"}</span>
-                        <span className={`bi-ldate ${isOverdue ? "is-overdue" : ""}`}>
-                          {inv.dueDate || "—"}{isOverdue ? <em className="bi-late"> · {late}d late</em> : null}
+
+                        <span className="bi-scard-when">
+                          <em>Sent</em>{inv.sentDate || "—"}
                         </span>
+                        <span className={`bi-scard-when ${isOverdue ? "is-overdue" : ""}`}>
+                          <em>Due</em>{inv.dueDate || "—"}
+                          {isOverdue && <span className="bi-late">{late}d late</span>}
+                        </span>
+
                         <span className="bi-r bi-sent-amt">{eur(inv.amount)} €</span>
-                        <span className={`bi-badge is-${inv.status}${isOverdue ? " is-overdue" : ""}`}>
-                          {inv.status === "paid" ? `Paid ${inv.paidDate}` : isOverdue ? "Overdue" : "Awaiting"}
+
+                        <span className={`bi-badge is-${paidAsOf ? "paid" : "sent"}${isOverdue ? " is-overdue" : ""}`}>
+                          {paidAsOf ? "Paid" : isOverdue ? "Overdue" : "Awaiting"}
+                          {paidAsOf && inv.paidDate && <em>{inv.paidDate}</em>}
                         </span>
+
                         <span className="bi-sent-actions">
                           {phase === "sent" && (
                             <button className="bi-unsend" disabled={busy === invKey}

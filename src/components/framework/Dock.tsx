@@ -69,13 +69,16 @@ const settingsIcon = (
   </svg>
 );
 
+/** Sales, companies and contacts belong to the sales team, not just the boss. */
+const SALES_TEAM: Role[] = ["boss", "sales", "sales_manager"];
+
 const items: DockItem[] = [
   { label: "Home", path: "/home", icon: homeIcon },
   { label: "Calendar", path: "/calendar", icon: calendarIcon },
- { label: "Clients", path: "/clients", icon: clientsIcon, roles: ["boss"] },
-  { label: "Companies", path: "/companies", icon: companiesIcon, roles: ["boss"] },
-  { label: "Contacts", path: "/contacts", icon: contactsIcon, roles: ["boss"] },
-  { label: "Sales", path: "/sales", icon: salesIcon, roles: ["boss"] },
+  { label: "Clients", path: "/clients", icon: clientsIcon, roles: ["boss"] },
+  { label: "Companies", path: "/companies", icon: companiesIcon, roles: SALES_TEAM },
+  { label: "Contacts", path: "/contacts", icon: contactsIcon, roles: SALES_TEAM },
+  { label: "Sales", path: "/sales", icon: salesIcon, roles: SALES_TEAM },
 { label: "Management", path: "/management", icon: managementIcon, roles: ["boss", "consultancy_manager", "sales_manager", "customer_success", "it_manager", "marketing_manager", "hr_manager"] },
   { label: "Settings", path: "/settings", icon: settingsIcon },
 ];

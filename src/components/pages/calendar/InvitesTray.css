@@ -1,0 +1,200 @@
+/* ===== Meeting invitations tray ===== */
+.iv-pop {
+  --mint: #86efc0; --emerald: #12b57f; --forest: #0a6f4d;
+  --ink: #0b241a; --muted: #5a7d6d; --line: rgba(10, 111, 77, 0.14);
+
+  position: absolute; top: calc(100% + 10px); right: 0; z-index: 90;
+  width: 360px; max-height: 70vh; display: flex; flex-direction: column;
+  padding: 1.1rem 1.1rem 0.9rem;
+  border-radius: 18px; background: #fff; border: 1px solid var(--line);
+  box-shadow: 0 32px 70px -26px rgba(11, 36, 26, 0.5);
+  font-family: "Inter", system-ui, sans-serif; color: var(--ink);
+  animation: iv-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes iv-in { from { opacity: 0; transform: translateY(-8px) scale(0.98); } }
+
+.iv-head { flex-shrink: 0; margin-bottom: 0.9rem; }
+.iv-eyebrow {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.16em;
+  text-transform: uppercase; color: var(--emerald);
+}
+.iv-title {
+  font-family: "Space Grotesk", sans-serif; font-size: 17px; font-weight: 600;
+  color: var(--ink); margin: 4px 0 0; letter-spacing: -0.01em;
+}
+.iv-err { margin: 0 0 0.7rem; font-size: 12.5px; color: #b85c5c; }
+
+.iv-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.iv-list::-webkit-scrollbar { width: 7px; }
+.iv-list::-webkit-scrollbar-thumb { background: rgba(10,111,77,0.2); border-radius: 999px; }
+
+.iv-card {
+  padding: 12px 13px; border-radius: 14px;
+  background: #f7fbf9; border: 1px solid rgba(10, 111, 77, 0.1);
+}
+.iv-when { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 9px; }
+.iv-when b { font-family: "Space Grotesk", sans-serif; font-size: 13.5px; font-weight: 600; color: var(--forest); }
+.iv-when span { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.iv-from { display: flex; align-items: center; gap: 9px; margin: 0 0 8px; font-size: 12.5px; }
+.iv-from i {
+  display: grid; place-items: center; width: 26px; height: 26px; flex-shrink: 0;
+  border-radius: 50%; background: linear-gradient(150deg, var(--mint), var(--emerald));
+  color: #04120d; font-style: normal; font-family: "Space Grotesk", sans-serif;
+  font-size: 11px; font-weight: 700;
+}
+.iv-from b { font-weight: 600; }
+
+.iv-msg {
+  margin: 0 0 8px; padding: 8px 10px; border-radius: 9px;
+  background: #fff; border: 1px solid rgba(10,111,77,0.08);
+  font-size: 12px; line-height: 1.45; color: var(--muted);
+}
+
+.iv-bill { margin: 0 0 11px; font-size: 11.5px; color: var(--muted); line-height: 1.45; }
+.iv-bill b { font-family: "Space Grotesk", sans-serif; color: var(--forest); font-weight: 700; }
+
+.iv-actions { display: flex; gap: 8px; }
+.iv-no, .iv-yes {
+  flex: 1; padding: 8px 12px; border-radius: 10px;
+  font-family: "Space Grotesk", sans-serif; font-size: 12.5px; font-weight: 600;
+  cursor: pointer; transition: filter 0.14s, background 0.14s;
+}
+.iv-no { border: 1px solid var(--line); background: #fff; color: var(--muted); }
+.iv-no:hover:not(:disabled) { background: #f2f7f4; color: var(--ink); }
+.iv-yes {
+  border: none; color: #04120d;
+  background: linear-gradient(120deg, var(--mint), var(--emerald));
+  box-shadow: 0 10px 20px -12px rgba(18, 181, 127, 0.8);
+}
+.iv-yes:hover:not(:disabled) { filter: brightness(1.05); }
+.iv-no:disabled, .iv-yes:disabled { opacity: 0.55; cursor: default; }
+
+.iv-dismiss {
+  flex-shrink: 0; margin-top: 0.8rem; padding: 8px;
+  border: none; background: none; color: var(--muted);
+  font-family: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+}
+.iv-dismiss:hover { color: var(--ink); }
+
+/* ===== The bell in the calendar bar ===== */
+.cal-bell {
+  position: relative; display: grid; place-items: center;
+  width: 38px; height: 38px; margin-left: 10px;
+  border: 1px solid var(--line); border-radius: 12px; background: #fff;
+  color: var(--forest); cursor: pointer;
+  transition: border-color 0.14s, transform 0.14s;
+}
+.cal-bell:hover { border-color: rgba(18,181,127,0.42); transform: translateY(-1px); }
+.cal-bell svg { width: 17px; height: 17px; }
+.cal-bell-dot {
+  position: absolute; top: -5px; right: -5px; min-width: 18px; height: 18px;
+  padding: 0 5px; border-radius: 999px; display: grid; place-items: center;
+  background: #d98324; color: #fff; border: 2px solid #fff;
+  font-family: "Space Grotesk", sans-serif; font-size: 10px; font-weight: 700;
+  animation: iv-pulse 2s ease-in-out infinite;
+}
+@keyframes iv-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(217, 131, 36, 0.5); }
+  50% { box-shadow: 0 0 0 6px rgba(217, 131, 36, 0); }
+}
+.cal-bell-wrap { position: relative; }
+
+/* ===== An invitation drawn on the week, before it is answered ===== */
+.cal-ev.is-invite {
+  background: repeating-linear-gradient(
+    135deg, rgba(217,131,36,0.16) 0 7px, rgba(217,131,36,0.06) 7px 14px) !important;
+  border: 1.5px dashed rgba(217, 131, 36, 0.65);
+  color: #8a5410;
+}
+.cal-ev.is-invite::after {
+  content: "?";
+  position: absolute; top: 3px; right: 5px;
+  font-family: "Space Grotesk", sans-serif; font-size: 11px; font-weight: 700;
+  color: #b06a10;
+}
+@media (prefers-reduced-motion: reduce) {
+  .iv-pop { animation: none; }
+  .cal-bell-dot { animation: none; }
+}
+
+/* Choosing what the accepted time counts as */
+.iv-types { margin-bottom: 10px; }
+.iv-types > span {
+  display: block; margin-bottom: 6px;
+  font-size: 9px; font-weight: 700; letter-spacing: 0.13em;
+  text-transform: uppercase; color: var(--muted);
+}
+.iv-type-row { display: flex; flex-wrap: wrap; gap: 4px; }
+.iv-type {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px; border: 1px solid var(--line); border-radius: 999px;
+  background: #fff; font-family: inherit; font-size: 11px; font-weight: 600;
+  color: var(--muted); cursor: pointer;
+  transition: border-color 0.14s, color 0.14s, background 0.14s;
+}
+.iv-type i { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.iv-type:hover { border-color: rgba(18, 181, 127, 0.4); color: var(--forest); }
+.iv-type.is-on { background: rgba(18, 181, 127, 0.1); border-color: var(--emerald); color: var(--forest); }
+
+/* Whether the invitee is free at that time */
+.iv-clash {
+  display: flex; gap: 8px; margin-bottom: 10px;
+  padding: 9px 11px; border-radius: 11px;
+  background: rgba(217, 131, 36, 0.09); border: 1px solid rgba(217, 131, 36, 0.24);
+}
+.iv-clash svg { width: 14px; height: 14px; flex-shrink: 0; margin-top: 1px; color: #b06a10; }
+.iv-clash span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.iv-clash b { font-size: 11.5px; font-weight: 700; color: #8a5410; }
+.iv-clash em {
+  font-style: normal; font-size: 10.5px; color: #a07340;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.iv-free {
+  display: flex; align-items: center; gap: 7px; margin: 0 0 10px;
+  font-size: 11px; color: var(--forest); opacity: 0.75;
+}
+.iv-free svg { width: 13px; height: 13px; flex-shrink: 0; }
+
+/* Replies to what you organised */
+.iv-replies {
+  flex-shrink: 0; margin-top: 0.9rem; padding-top: 0.85rem;
+  border-top: 1px solid rgba(10, 111, 77, 0.1);
+  display: flex; flex-direction: column; gap: 5px;
+  max-height: 168px; overflow-y: auto;
+}
+.iv-replies-head {
+  margin: 0 0 3px; font-size: 9px; font-weight: 700; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--muted);
+}
+.iv-reply {
+  position: relative;
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 10px; border-radius: 10px;
+  background: #f7fbf9; border: 1px solid rgba(10, 111, 77, 0.08);
+}
+.iv-reply i {
+  display: grid; place-items: center; width: 24px; height: 24px; flex-shrink: 0;
+  border-radius: 50%; font-style: normal;
+  font-family: "Space Grotesk", sans-serif; font-size: 10px; font-weight: 700;
+}
+.iv-reply.is-accepted i { background: rgba(18, 181, 127, 0.14); color: var(--forest); }
+.iv-reply.is-declined i { background: rgba(184, 92, 92, 0.14); color: #b85c5c; }
+.iv-reply span {
+  flex: 1; min-width: 0; font-size: 11.5px; color: var(--muted); line-height: 1.35;
+}
+.iv-reply b { font-weight: 600; color: var(--ink); }
+.iv-reply em { font-style: normal; font-weight: 500; color: var(--forest); }
+.iv-reply u {
+  text-decoration: none; flex-shrink: 0;
+  font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums;
+}
+/* Not yet seen when the tray opened */
+.iv-reply.is-new { background: rgba(18, 181, 127, 0.07); border-color: rgba(18, 181, 127, 0.22); }
+.iv-reply.is-new::before {
+  content: ""; position: absolute; left: -3px; top: 50%; transform: translateY(-50%);
+  width: 5px; height: 5px; border-radius: 50%; background: var(--emerald);
+}
+.iv-reply.is-declined.is-new { background: rgba(184, 92, 92, 0.07); border-color: rgba(184, 92, 92, 0.22); }
+.iv-reply.is-declined.is-new::before { background: #b85c5c; }

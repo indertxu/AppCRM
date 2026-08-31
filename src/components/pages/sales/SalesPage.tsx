@@ -7,9 +7,10 @@ import { supabase } from "../../api/supabase";
 import { listCompanies, listContacts, type Company, type Contact } from "../companies/companiesApi";
 import { listPipelines, loadPipeline, type Pipeline, type Phase } from "../settings/pipelineApi";
 import { loadProducts, type Product } from "../settings/catalogApi";
-import { listTrackings, createTracking, setTrackingPhase, setTrackingStatus, stampPhaseEntry, clearPhaseEventsAfter, trackingPct, type Tracking } from "./salesApi";
+import { listTrackings, loadAllTrackingEmployees, setTrackingEmployees, createTracking, setTrackingPhase, setTrackingStatus, stampPhaseEntry, clearPhaseEventsAfter, trackingPct, type Tracking } from "./salesApi";
 import TrackingDetail from "./TrackingDetail";
 import "../companies/CompaniesPage.css";
+import { myProfile, isSalesLead, canOpenSales } from "../companies/companiesApi";
 import "./SalesPage.css";
 
 export interface Employee { id: string; name: string }
@@ -24,8 +25,16 @@ export default function SalesPage() {
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [trackAssignees, setTrackAssignees] = useState<Record<string, string[]>>({});
+  const [me, setMe] = useState<{ id: string; role: string; is_superadmin: boolean } | null>(null);
   const [phaseByPipe, setPhaseByPipe] = useState<Record<string, Phase[]>>({});
   const [openId, setOpenId] = useState<string | null>(null);
+
+  /** Arriving from the sales calendar with ?tracking=… opens that deal. */
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get("tracking");
+    if (id) setOpenId(id);
+  }, []);
   const [creating, setCreating] = useState(false);
   const [view, setView] = useState<"list" | "kanban">("list");
   const [viewMenu, setViewMenu] = useState(false);
@@ -38,7 +47,12 @@ export default function SalesPage() {
   const [fPhase, setFPhase] = useState("");
   const [sort, setSort] = useState("recent");
 
-  const reload = async () => setTrackings(await listTrackings().catch(() => []));
+  const reload = async () => {
+    setTrackings(await listTrackings().catch(() => []));
+    setTrackAssignees(await loadAllTrackingEmployees().catch(() => ({})));
+  };
+  useEffect(() => { myProfile().then(setMe).catch(() => {}); }, []);
+
   useEffect(() => {
     reload();
     listCompanies().then(setCompanies).catch(() => {});
@@ -75,9 +89,34 @@ export default function SalesPage() {
     return Array.from(s);
   }, [phaseByPipe]);
 
+  /**
+   * Everything this person is allowed to see, before any filter is applied.
+   * The KPIs, the company dropdown and the board all read from here, so they
+   * can never report on deals the list is hiding.
+   */
+  const mine = useMemo(() => {
+    const lead = isSalesLead(me);
+    if (lead || !me) return trackings;
+    return trackings.filter((t) => (trackAssignees[t.id] ?? []).includes(me.id));
+  }, [trackings, trackAssignees, me]);
+
+  const metrics = useMemo(() => {
+    const active = mine.filter((t) => t.status === "active").length;
+    const won = mine.filter((t) => t.status === "won").length;
+    const lost = mine.filter((t) => t.status === "lost").length;
+    const rate = won + lost > 0 ? Math.round((won / (won + lost)) * 100) : 0;
+    return { total: mine.length, active, won, lost, rate };
+  }, [mine]);
+
+  /** Only the companies behind the deals this person can see. */
+  const myCompanies = useMemo(() => {
+    const ids = new Set(mine.map((t) => t.company_id).filter(Boolean));
+    return companies.filter((c) => ids.has(c.id!));
+  }, [mine, companies]);
+
   const shown = useMemo(() => {
     const n = norm(q.trim());
-    let list = trackings.filter((t) => {
+    let list = mine.filter((t) => {
       if (fStatus === "closed") { if (t.status !== "won" && t.status !== "lost") return false; }
       else if (fStatus && t.status !== fStatus) return false;
       if (fPipeline && t.pipeline_id !== fPipeline) return false;
@@ -96,14 +135,6 @@ export default function SalesPage() {
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trackings, q, fStatus, fPipeline, fProduct, fCompany, fPhase, sort, companies, contacts, pipelines, products, phaseByPipe]);
-
-  const metrics = useMemo(() => {
-    const active = trackings.filter((t) => t.status === "active").length;
-    const won = trackings.filter((t) => t.status === "won").length;
-    const lost = trackings.filter((t) => t.status === "lost").length;
-    const rate = won + lost > 0 ? Math.round((won / (won + lost)) * 100) : 0;
-    return { total: trackings.length, active, won, lost, rate };
-  }, [trackings]);
 
   // Clicking the KPI card that is already active clears the filter again.
   const toggleStatus = (s: string) => setFStatus((cur) => (cur === s ? "" : s));
@@ -129,6 +160,19 @@ export default function SalesPage() {
   if (openId) {
     const t = trackings.find((x) => x.id === openId);
     if (t) return <TrackingDetail tracking={t} companies={companies} contacts={contacts} products={products} employees={employees} onBack={() => { setOpenId(null); reload(); }} />;
+  }
+
+
+  if (me && !canOpenSales(me)) {
+    return (
+      <div className="sl">
+        <header className="sl-head">
+          <button className="sl-back" onClick={() => navigate("/home")} aria-label="Back">‹</button>
+          <h1 className="sl-title">Sales</h1>
+        </header>
+        <p className="sl-hint">This page is only available to the sales team.</p>
+      </div>
+    );
   }
 
   return (
@@ -207,7 +251,7 @@ export default function SalesPage() {
         <Select value={fProduct} onChange={setFProduct} placeholder="All products"
           options={[{ value: "", label: "All products" }, ...products.map((p) => ({ value: p.id!, label: p.name }))]} />
         <Select value={fCompany} onChange={setFCompany} placeholder="All companies"
-          options={[{ value: "", label: "All companies" }, ...companies.map((c) => ({ value: c.id!, label: c.name }))]} />
+          options={[{ value: "", label: "All companies" }, ...myCompanies.map((c) => ({ value: c.id!, label: c.name }))]} />
         <Select value={fPhase} onChange={setFPhase} placeholder="Any stage"
           options={[{ value: "", label: "Any stage" }, ...allPhaseNames.map((p) => ({ value: p, label: p }))]} />
         <Select value={sort} onChange={setSort} placeholder="Sort"
@@ -455,6 +499,10 @@ function NewTracking({ companies, contacts, pipelines, products, onClose, onCrea
     });
     setBusy(false);
     if (!id) { setErr("Could not create the tracking."); return; }
+    // Whoever opens a deal is on it, or a sales rep would lose sight of their
+    // own tracking the moment it is created.
+    const mine = await myProfile().catch(() => null);
+    if (mine) await setTrackingEmployees(id, [mine.id]).catch(() => {});
     onCreated(id);
   };
 
@@ -537,7 +585,13 @@ function KanbanView({ kanbanPipe, phaseByPipe, trackings, trackTitle, companyNam
   const [overPhase, setOverPhase] = useState<string | null>(null);
   const phases = phaseByPipe[kanbanPipe] ?? [];
 
-  const boardTrackings = useMemo(() => trackings.filter((t) => t.pipeline_id === kanbanPipe), [trackings, kanbanPipe]);
+  // `trackings` is the parent's already-filtered list (its `mine`, narrowed by
+  // the search and filter bar), so the board must read from the prop rather
+  // than a variable that only exists in the parent scope.
+  const boardTrackings = useMemo(
+    () => trackings.filter((t) => t.pipeline_id === kanbanPipe),
+    [trackings, kanbanPipe],
+  );
   const byPhase = useMemo(() => {
     const map: Record<string, Tracking[]> = {};
     phases.forEach((p) => { map[p.id] = []; });

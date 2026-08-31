@@ -205,7 +205,7 @@
 }
 .bi-listhead {
   display: grid;
-  grid-template-columns: minmax(0, 2.4fr) 128px minmax(0, 1.7fr) 84px 150px 20px;
+  grid-template-columns: minmax(0, 2.3fr) 120px minmax(0, 1.5fr) 76px 130px 20px;
   gap: 18px;
   padding: 13px 1.5rem;
   border-bottom: 1px solid var(--line);
@@ -233,7 +233,7 @@
 .bi-row-main {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 2.4fr) 128px minmax(0, 1.7fr) 84px 150px 20px;
+  grid-template-columns: minmax(0, 2.3fr) 120px minmax(0, 1.5fr) 76px 130px 20px;
   gap: 18px;
   align-items: center;
   width: 100%;
@@ -316,12 +316,14 @@
   font-weight: 600;
   color: var(--muted);
 }
-.bi-amount { display: flex; flex-direction: row; align-items: baseline; justify-content: flex-end; gap: 8px; }
+.bi-amount { display: flex; flex-direction: row; align-items: baseline; justify-content: flex-end; gap: 8px; white-space: nowrap; }
 .bi-amount b {
   font-family: "Space Grotesk", sans-serif;
   font-size: 16px;
   font-weight: 600;
   color: var(--forest);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 .bi-amount em { font-style: normal; font-size: 10px; color: var(--muted); }
 .bi-chev { justify-self: center; font-size: 19px; color: var(--muted); transition: transform 0.25s; }
@@ -875,3 +877,284 @@
   animation: bi-drop-pulse 1.2s ease-in-out infinite;
 }
 @keyframes bi-drop-pulse { 50% { opacity: 0.55; } }
+/* =====================================================================
+   Separated-card lists (all three tabs), and a cleaner sent/paid card.
+   ===================================================================== */
+/* the list is now a spaced stack, not a bordered table */
+.bi-list {
+  background: none;
+  backdrop-filter: none;
+  box-shadow: none;
+  overflow: visible;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+/* the column header floats above the cards */
+.bi-listhead {
+  border-bottom: none;
+  padding: 2px 1.4rem 4px;
+  opacity: 0.7;
+}
+
+/* every row becomes its own card */
+.bi-row, .bi-scard {
+  position: relative;
+  border-radius: 15px;
+  background: #fff;
+  border: 1px solid rgba(10, 111, 77, 0.09);
+  box-shadow: 0 10px 26px -24px rgba(11, 36, 26, 0.5);
+  transition: transform 0.22s cubic-bezier(0.16,1,0.3,1), border-color 0.22s, box-shadow 0.22s;
+  overflow: hidden;
+}
+.bi-row:hover, .bi-scard:hover {
+  transform: translateY(-2px);
+  border-color: rgba(18, 181, 127, 0.32);
+  box-shadow: 0 18px 34px -26px rgba(11, 36, 26, 0.45);
+  background: #fff;
+}
+.bi-row.is-open, .bi-scard.is-open { border-color: rgba(18, 181, 127, 0.4); }
+/* kill the old divider line between rows */
+.bi-row + .bi-row .bi-row-main::before { display: none; }
+
+/* a hairline accent down the left edge, coloured by state */
+.bi-scard::before {
+  content: "";
+  position: absolute; left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: rgba(18, 181, 127, 0.5);
+}
+.bi-scard.is-overdue::before { background: linear-gradient(180deg, #e6883c, #c0561f); }
+.bi-scard.is-paid::before { background: linear-gradient(180deg, #2ecb92, #0a6f4d); }
+
+/* ---- sent / paid card interior ---- */
+.bi-sent-row {
+  grid-template-columns: minmax(200px, 1.3fr) 120px 130px 110px 130px auto;
+  gap: 16px;
+  padding: 15px 1.4rem 15px 1.6rem;
+}
+.bi-scard-client { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.bi-scard-name {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 15px; font-weight: 600; color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.bi-scard-meta { display: flex; align-items: center; gap: 8px; }
+.bi-scard-days {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 11px; font-weight: 600; color: var(--forest);
+  padding: 2px 8px; border-radius: 999px;
+  background: rgba(18, 181, 127, 0.1);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Sent / Due as labelled stacks instead of bare dates */
+.bi-scard-when {
+  display: flex; flex-direction: column; gap: 2px;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 13px; font-weight: 500; color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.bi-scard-when em {
+  font-style: normal; font-size: 9px; font-weight: 700; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--muted);
+}
+.bi-scard-when.is-overdue { color: #c0561f; }
+.bi-scard-when .bi-late {
+  font-size: 10.5px; font-weight: 600; color: #c0561f;
+}
+
+.bi-sent-amt {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 17px; font-weight: 600; color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* badges as pills with the paid date underneath */
+.bi-badge {
+  justify-self: start;
+  display: inline-flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  padding: 5px 11px; border-radius: 10px;
+  font-size: 11px; font-weight: 700; white-space: nowrap;
+}
+.bi-badge em {
+  font-style: normal; font-size: 9.5px; font-weight: 500; opacity: 0.8;
+  font-variant-numeric: tabular-nums;
+}
+.bi-badge.is-sent { background: rgba(10, 111, 77, 0.08); color: var(--muted); }
+.bi-badge.is-sent.is-overdue { background: rgba(230, 136, 60, 0.16); color: #b8541d; }
+.bi-badge.is-paid { background: rgba(18, 181, 127, 0.16); color: var(--forest); }
+
+/* to-bill days unit suffix + list days */
+.bi-days u { text-decoration: none; font-size: 10px; font-weight: 500; color: var(--muted); margin-left: 1px; }
+
+@media (max-width: 940px) {
+  .bi-listhead { display: none; }
+  .bi-sent-row {
+    grid-template-columns: 1fr auto;
+    grid-template-areas: "client amt" "when badge" "actions actions";
+    row-gap: 10px;
+  }
+  .bi-scard-client { grid-area: client; }
+  .bi-sent-amt { grid-area: amt; justify-self: end; align-self: start; }
+  .bi-scard-when { grid-area: when; }
+  .bi-scard-when + .bi-scard-when { grid-area: badge; }
+  .bi-badge { grid-area: badge; justify-self: end; }
+  .bi-sent-actions { grid-area: actions; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bi-row, .bi-scard { transition: none; }
+  .bi-row:hover, .bi-scard:hover { transform: none; }
+}
+
+/* =====================================================================
+   Billing hero — dark neon (matches Team / Backlog KPI cards)
+   ===================================================================== */
+.bi-hero.bi-hero-neon {
+  --neon: #35ffa0;
+  --neon-soft: rgba(53, 255, 160, 0.5);
+  --hdim: #6f9585;
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  grid-template-columns: minmax(0, 1.1fr) auto minmax(0, 1.5fr) auto;
+  gap: 26px;
+  background: linear-gradient(158deg, #0e241a 0%, #06110c 64%);
+  border: 1px solid rgba(53, 255, 160, 0.16);
+  box-shadow: 0 24px 55px -34px rgba(2, 12, 8, 0.9), inset 0 1px 0 rgba(134, 239, 192, 0.07);
+}
+.bi-hero-glow {
+  position: absolute; z-index: -1; top: -55%; left: -8%;
+  width: 320px; height: 320px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(53, 255, 160, 0.2), transparent 66%);
+  opacity: 0.6; pointer-events: none;
+}
+.bi-hero-scan {
+  position: absolute; inset: 0; z-index: -1;
+  background: repeating-linear-gradient(0deg, rgba(53,255,160,0.035) 0 1px, transparent 1px 5px);
+  opacity: 0.5; pointer-events: none;
+}
+.bi-hero-neon .bi-hero-label { color: var(--hdim); opacity: 1; }
+.bi-hero-neon .bi-hero-amount b {
+  color: #f4fff9;
+  text-shadow: 0 0 20px rgba(53, 255, 160, 0.32), 0 0 46px rgba(53, 255, 160, 0.12);
+}
+.bi-hero-neon .bi-hero-amount i { color: var(--neon); text-shadow: 0 0 14px var(--neon-soft); }
+.bi-hero-neon .bi-hero-sub { color: var(--hdim); }
+
+.bi-hero-ring { position: relative; width: 132px; height: 74px; flex-shrink: 0; justify-self: center; }
+.bi-hero-ring svg { width: 132px; height: 74px; overflow: visible; }
+.bi-hero-ring path { fill: none; stroke-width: 9; stroke-linecap: round; }
+.bi-arc-bg { stroke: rgba(53, 255, 160, 0.1); }
+.bi-arc-fill {
+  stroke: var(--neon);
+  filter: drop-shadow(0 0 7px rgba(53, 255, 160, 0.6));
+  transition: stroke-dasharray 1s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.bi-ring-mid {
+  position: absolute; inset: 0; top: 48%;
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+  font-family: "Space Grotesk", sans-serif; pointer-events: none;
+}
+.bi-ring-mid b {
+  font-size: 24px; font-weight: 700; letter-spacing: -0.03em; color: #f4fff9; line-height: 1;
+  text-shadow: 0 0 14px rgba(53, 255, 160, 0.4);
+}
+.bi-ring-mid i {
+  font-style: normal; font-size: 8px; font-weight: 700; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--hdim);
+}
+
+.bi-hero-neon .bi-hero-stats {
+  border-left: 1px solid rgba(53, 255, 160, 0.14);
+  border-right: 1px solid rgba(53, 255, 160, 0.14);
+}
+.bi-hero-neon .bi-stat-k { color: var(--hdim); }
+.bi-hero-neon .bi-stat-v { color: #dcf5e8; display: flex; align-items: baseline; gap: 3px; }
+.bi-hero-neon .bi-stat-v em { font-style: normal; font-size: 12px; font-weight: 500; color: var(--hdim); }
+.bi-hero-neon .bi-stat-v.is-neon { color: var(--neon); text-shadow: 0 0 12px var(--neon-soft); }
+.bi-hero-neon .bi-stat-v.is-bad { color: #ff9a6b; text-shadow: 0 0 12px rgba(255, 120, 60, 0.4); }
+.bi-hero-neon .bi-stat-s { color: var(--hdim); }
+
+.bi-hero-neon .bi-hero-cutoff { border-left: 1px solid rgba(53, 255, 160, 0.14); }
+.bi-hero-neon .bi-cutoff-k { color: var(--hdim); }
+.bi-hero-neon .bi-cutoff-date { color: #f4fff9; }
+.bi-hero-neon .bi-cutoff-date:hover { border-bottom-color: var(--neon); }
+
+@media (max-width: 1000px) {
+  .bi-hero.bi-hero-neon { grid-template-columns: 1fr; }
+  .bi-hero-neon .bi-hero-ring { display: none; }
+  .bi-hero-neon .bi-hero-stats { border: none; padding: 14px 0 0; border-top: 1px solid rgba(53,255,160,0.14); }
+  .bi-hero-neon .bi-hero-cutoff { border-left: none; padding-left: 0; align-items: flex-start; }
+}
+
+/* =====================================================================
+   To-bill multi-select + Excel export
+   ===================================================================== */
+/* the Excel button in the filter bar */
+.bi-xlsx {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 8px 14px; border-radius: 11px;
+  border: 1px solid rgba(18, 181, 127, 0.4);
+  background: linear-gradient(120deg, var(--mint), var(--emerald));
+  color: #04120d;
+  font-family: "Space Grotesk", sans-serif; font-size: 13px; font-weight: 600;
+  cursor: pointer; white-space: nowrap;
+  box-shadow: 0 10px 22px -12px rgba(18, 181, 127, 0.8);
+  transition: filter 0.15s, transform 0.15s, opacity 0.15s;
+}
+.bi-xlsx svg { width: 15px; height: 15px; }
+.bi-xlsx:hover:not(:disabled) { filter: brightness(1.05); transform: translateY(-1px); }
+.bi-xlsx:disabled {
+  background: #fff; color: var(--muted);
+  border-color: var(--line); box-shadow: none; cursor: default;
+}
+
+/* selection column */
+.bi-selcell {
+  display: grid; place-items: center;
+  width: 100%; height: 100%;
+}
+.bi-check {
+  width: 17px; height: 17px;
+  accent-color: var(--emerald);
+  cursor: pointer;
+}
+
+/* To-bill row: the checkbox is overlaid at the left; the row button keeps its
+   own grid and gains left room so nothing shifts. Simple and robust. */
+.bi-row-selectable { position: relative; }
+.bi-row-selectable > .bi-selcell {
+  position: absolute; left: 0; top: 0; bottom: 0;
+  width: 40px; height: auto; z-index: 2;
+}
+.bi-row-selectable > .bi-row-main { padding-left: 44px; }
+.bi-row-selectable.is-selected {
+  border-color: rgba(18, 181, 127, 0.45);
+  background: rgba(18, 181, 127, 0.05);
+}
+
+/* header gains matching left room for the select-all box */
+.bi-listhead-sel { position: relative; padding-left: 3.2rem; }
+.bi-listhead-sel > .bi-selcell {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 40px;
+  justify-items: start; padding-left: 12px;
+}
+
+/* select-mode: start button is outlined, active group has download + cancel */
+.bi-xlsx.bi-xlsx-start {
+  background: #fff;
+  color: var(--forest);
+  border: 1px solid rgba(18, 181, 127, 0.4);
+  box-shadow: none;
+}
+.bi-xlsx.bi-xlsx-start:hover { background: rgba(18, 181, 127, 0.07); transform: none; }
+.bi-xlsx-group { display: inline-flex; gap: 6px; }
+.bi-xlsx-cancel {
+  padding: 8px 13px; border-radius: 11px;
+  border: 1px solid var(--line); background: #fff;
+  font-family: "Space Grotesk", sans-serif; font-size: 13px; font-weight: 600;
+  color: var(--muted); cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.bi-xlsx-cancel:hover { border-color: rgba(184, 92, 92, 0.4); color: #b85c5c; }

@@ -14,6 +14,7 @@ export interface Product {
   tiers: ProductTier[];
   calculator?: Calculator | null;
 }
+
 // ---- Calculator (optional, one per product or service) ----
 export type CalcVarType = "per_unit" | "per_block" | "fixed" | "percent";
 export interface CalcVariable {
@@ -34,17 +35,10 @@ export interface Calculator {
   owner_id?: string;
   name: string;
   include_base: boolean;
-  /**
-   * What the calculator produces. Products price themselves, so they compute
-   * money. Services already price themselves through their role rates, so what
-   * they need computed is the length of the engagement in their own rate unit.
-   */
   output_kind: "price" | "quantity";
-  /** Starting point for quantity calculators (days or hours before variables). */
   base_amount: number;
   variables: CalcVariable[];
 }
-
 export const emptyCalculator = (owner_type: "product" | "service"): Calculator => ({
   owner_type,
   name: owner_type === "service" ? "Duration calculator" : "Price calculator",
@@ -53,41 +47,19 @@ export const emptyCalculator = (owner_type: "product" | "service"): Calculator =
   base_amount: 0,
   variables: [],
 });
-
 export const emptyCalcVariable = (sort: number): CalcVariable => ({
   name: "", unit_label: "", var_type: "per_unit",
   amount: 0, block_size: 25, included: 0, default_value: 0, round_mode: "up", sort,
 });
-
-/**
- * Run a calculator.
- *
- * per_unit  -> amount for every unit above `included`
- * per_block -> amount for every `block_size` units above `included`,
- *              counting started blocks by default (round_mode 'up')
- * fixed     -> amount once, if the variable is switched on (value not 0)
- * percent   -> amount % of the base price
- *
- * Percentages always apply to the base price, never to the running subtotal,
- * so the order of the variables can never change the result.
- */
 export interface CalcDiscount { mode: "none" | "percent" | "amount"; value: number; }
 export interface CalcRow { key: string; label: string; detail: string; amount: number; discount: number; net: number; }
-
-/** Key used for the base price row, so it can carry a discount like any variable. */
 export const BASE_KEY = "__base";
-
 export function discountOf(amount: number, d?: CalcDiscount | null): number {
   if (!d || d.mode === "none") return 0;
   const v = Number(d.value) || 0;
   const raw = d.mode === "percent" ? amount * (v / 100) : v;
   return Math.min(Math.max(raw, 0), Math.max(amount, 0));
 }
-
-/**
- * Same maths as calcTotal, but returns every step so it can be shown as a
- * receipt, and lets each step carry its own discount.
- */
 export function calcBreakdown(
   calc: Calculator,
   values: Record<string, number>,
@@ -99,7 +71,6 @@ export function calcBreakdown(
     const discount = discountOf(amount, discounts[key]);
     rows.push({ key, label, detail, amount, discount, net: amount - discount });
   };
-  let total = calc.include_base ? basePrice : 0;
   if (calc.include_base) push(BASE_KEY, "Base", "", basePrice);
   for (const v of calc.variables) {
     const key = v.id ?? String(v.sort);
@@ -131,14 +102,12 @@ export function calcBreakdown(
         detail = `${billable} ${unit} = ${blocks} x ${size} block${blocks === 1 ? "" : "s"} x ${amt}`;
       }
     }
-    total += add;
     push(key, v.name || "Variable", detail, add);
   }
   const gross = rows.reduce((s, r) => s + r.amount, 0);
   const discount = rows.reduce((s, r) => s + r.discount, 0);
   return { rows, gross, discount, total: gross - discount };
 }
-
 export function calcTotal(calc: Calculator, values: Record<string, number>, basePrice: number): number {
   let total = calc.include_base ? basePrice : 0;
   for (const v of calc.variables) {
@@ -168,6 +137,8 @@ export interface Service {
   id?: string;
   name: string;
   rate_unit: "hour" | "day";
+  /** Smallest amount that can be booked against this service, in rate_unit. */
+  min_unit?: number;
   blueprint_id?: string | null;
   description?: string | null;
   active?: boolean;
@@ -189,7 +160,6 @@ async function loadCalculatorsFor(ownerType: "product" | "service"): Promise<Rec
   return out;
 }
 
-// Upsert the calculator and replace its variables. A null calculator deletes it.
 async function saveCalculatorFor(ownerType: "product" | "service", ownerId: string, calc: Calculator | null | undefined): Promise<string | null> {
   if (!calc) {
     await supabase.from("calculators").delete().eq("owner_type", ownerType).eq("owner_id", ownerId);
@@ -290,7 +260,16 @@ export async function deleteProduct(id: string): Promise<string | null> {
 
 // ---- Save a service (upsert service, then replace its tiers) ----
 export async function saveService(s: Service): Promise<string | null> {
-  const base = { name: s.name, rate_unit: s.rate_unit, blueprint_id: s.blueprint_id ?? null, description: s.description ?? null, active: s.active ?? true };
+  const base = {
+    name: s.name,
+    rate_unit: s.rate_unit,
+    // Falls back to the usual step for the unit, so a service saved before this
+    // field existed still gets a sensible value.
+    min_unit: s.min_unit ?? (s.rate_unit === "hour" ? 0.5 : 0.25),
+    blueprint_id: s.blueprint_id ?? null,
+    description: s.description ?? null,
+    active: s.active ?? true,
+  };
   let serviceId = s.id;
   if (serviceId) {
     const { error } = await supabase.from("services").update(base).eq("id", serviceId);

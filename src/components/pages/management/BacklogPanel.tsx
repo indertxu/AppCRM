@@ -32,6 +32,8 @@ interface Props {
   typeNames: Record<string, string>;
   people: Record<string, string>;
   supRoles: Set<string>;
+  hourProjects: Set<string>;
+  hoursPerDay: number;
   scope: "week" | "month" | "year" | "all" | "custom";
   anchor: Date;
   rangeFrom: string;
@@ -81,9 +83,16 @@ interface ProjRow {
 
 export default function BacklogPanel({
   entries, projects, clientNames, typeNames, people, supRoles,
+  hourProjects, hoursPerDay,
   scope, anchor, rangeFrom, rangeTo,
 }: Props) {
   const [chartMode, setChartMode] = useState<"days" | "value">("days");
+  /** Cards read in days by default; three of them flip to the h + d split. */
+  const [unitMode, setUnitMode] = useState<"days" | "split">("days");
+  const hpd = hoursPerDay > 0 ? hoursPerDay : 8;
+  const isHourly = (id: string) => hourProjects.has(id);
+  const inDays = (id: string, x: number) => (isHourly(id) ? x / hpd : x);
+  const [chartOpen, setChartOpen] = useState(false);
   const [hover, setHover] = useState<number | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [onlyLeft, setOnlyLeft] = useState(true);
@@ -176,11 +185,15 @@ export default function BacklogPanel({
 
   const clientCount = new Set(visible.map((r) => r.clientId)).size;
 
-  const totalSold = visible.reduce((s, r) => s + sum(r.sold), 0);
-  const totalBilled = visible.reduce((s, r) => s + sum(r.billed), 0);
-  const totalPlanned = visible.reduce((s, r) => s + sum(r.planned), 0);
-  const totalAvailable = visible.reduce((s, r) => s + sum(availableOf(r)), 0);
+  const totalSold = visible.reduce((s, r) => s + inDays(r.id, sum(r.sold)), 0);
+  const totalBilled = visible.reduce((s, r) => s + inDays(r.id, sum(r.billed)), 0);
+  const totalPlanned = visible.reduce((s, r) => s + inDays(r.id, sum(r.planned)), 0);
+  const totalAvailable = visible.reduce((s, r) => s + inDays(r.id, sum(availableOf(r))), 0);
   const totalValue = visible.reduce((s, r) => s + valueOf(r, availableOf(r)), 0);
+
+  // Split of what is still to deliver: genuine day-rate days vs hourly hours.
+  const availDayDays = visible.filter((r) => !isHourly(r.id)).reduce((s, r) => s + sum(availableOf(r)), 0);
+  const availHourHours = visible.filter((r) => isHourly(r.id)).reduce((s, r) => s + sum(availableOf(r)), 0);
 
   // Connector days bill on their own pool, so they get their own counter.
   const coreOf = (r: ProjRow) => {
@@ -191,8 +204,8 @@ export default function BacklogPanel({
     const a = availableOf(r);
     return { consultor: 0, supervision: 0, connector: a.connector } as Tally;
   };
-  const availCore = visible.reduce((s, r) => s + r.sold.consultor + r.sold.supervision - r.billed.consultor - r.billed.supervision, 0);
-  const availConnector = visible.reduce((s, r) => s + availableOf(r).connector, 0);
+  const availCore = visible.reduce((s, r) => s + inDays(r.id, r.sold.consultor + r.sold.supervision - r.billed.consultor - r.billed.supervision), 0);
+  const availConnector = visible.reduce((s, r) => s + inDays(r.id, availableOf(r).connector), 0);
   const valueCore = visible.reduce((s, r) => s + valueOf(r, coreOf(r)), 0);
   const valueConnector = visible.reduce((s, r) => s + valueOf(r, connOf(r)), 0);
 
@@ -201,12 +214,14 @@ export default function BacklogPanel({
     let daySum = 0, weighted = 0, count = 0, rateSum = 0;
     visible.forEach((r) => {
       if (r.rate > 0) { rateSum += r.rate; count += 1; }
-      const days = r.sold.consultor;
-      if (days > 0 && r.rate > 0) { weighted += r.rate * days; daySum += days; }
+      // Hourly: rate is €/hour and volume is hours — put both on a day basis.
+      const days = inDays(r.id, r.sold.consultor);
+      const dayRate = isHourly(r.id) ? r.rate * hpd : r.rate;
+      if (days > 0 && dayRate > 0) { weighted += dayRate * days; daySum += days; }
     });
-    const byDays = daySum > 0 ? weighted / daySum : 0;      // weighted by volume
-    const simple = count > 0 ? rateSum / count : 0;         // plain average across projects
-    return { byDays, simple, count };
+    const byDays = daySum > 0 ? weighted / daySum : 0;
+    const simple = count > 0 ? rateSum / count : 0;
+    return { byDays, simple, count, byHour: byDays / hpd };
   })();
 
   /** Last day anyone logged against each project — the closest thing to an end date we have. */
@@ -355,118 +370,95 @@ export default function BacklogPanel({
 
   return (
     <div className="bk">
-      <div className="bk-kpis">
-        <div className="bk-kpi">
-          <div className="bk-ring">
-            <svg viewBox="0 0 80 80" width="80" height="80">
-              <defs>
-                <linearGradient id="bkGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stopColor="#86efc0" />
-                  <stop offset="100%" stopColor="#0a6f4d" />
-                </linearGradient>
-              </defs>
-              <g transform="rotate(-90 40 40)">
-                <circle cx="40" cy="40" r={R} className="bk-ring-bg" />
-                <circle cx="40" cy="40" r={R} className="bk-ring-sch" style={arc(scheduledPct)} />
-                <circle cx="40" cy="40" r={R} className="bk-ring-fg" stroke="url(#bkGrad)" style={arc(deliveredPct)} />
-              </g>
-              <text x="40" y="38" className="bk-ring-num" textAnchor="middle">
-                {Math.round(deliveredPct)}<tspan className="bk-ring-pct">%</tspan>
-              </text>
-              <text x="40" y="53" className="bk-ring-cap" textAnchor="middle">billed</text>
-            </svg>
+      <div className="bk-kpis bkc-row">
+        <article className={`bkc bkc-gauge ${availHourHours > 0 ? "bkc-clickable" : ""}`}
+          onClick={() => availHourHours > 0 && setUnitMode((m) => (m === "days" ? "split" : "days"))}
+          title={availHourHours > 0 ? "Click to split hours from days" : undefined}>
+          <div className="bkc-head">
+            <span className="bkc-label">Days to deliver{availHourHours > 0 && <span className="bkc-flip">⇄</span>}</span>
+            <span className="bkc-pct">{Math.round(deliveredPct)}<i>% billed</i></span>
           </div>
-          <div className="bk-kpi-body">
-            <span className="bk-kpi-label">Days still to deliver</span>
-            <span className="bk-kpi-fig">
-              <b>{totalAvailable.toFixed(2)}</b>
-              <em>of {totalSold.toFixed(2)} sold</em>
-              {series.length > 1 && (
-                <span className={`bk-delta ${delta > 0 ? "is-up" : delta < 0 ? "is-down" : ""}`}>
-                  {delta > 0 ? "↑" : delta < 0 ? "↓" : "—"} {Math.abs(delta).toFixed(2)}
-                </span>
+          <div className="bkc-gauge-body">
+            <div className="bkc-ring">
+              <svg viewBox="0 0 140 82" className="bkc-svg" aria-hidden="true">
+                <path className="bkc-arc-bg" d="M16 70 A54 54 0 0 1 124 70" pathLength={169.65} />
+                <path className="bkc-arc-proj" d="M16 70 A54 54 0 0 1 124 70" pathLength={169.65}
+                  style={{ strokeDasharray: `${(169.65 * Math.min(1, scheduledPct / 100)).toFixed(2)} 169.65` }} />
+                <path className="bkc-arc-fill" d="M16 70 A54 54 0 0 1 124 70" pathLength={169.65}
+                  style={{ strokeDasharray: `${(169.65 * Math.min(1, deliveredPct / 100)).toFixed(2)} 169.65` }} />
+              </svg>
+              <span className="bkc-ring-mid"><b>{totalAvailable.toFixed(0)}</b><i>left</i></span>
+            </div>
+            <div className="bkc-figs">
+              <span className="bkc-sub">of {totalSold.toFixed(0)} days sold</span>
+              {unitMode === "split" && availHourHours > 0 ? (
+                <div className="bkc-split">
+                  <span><b>{availDayDays.toFixed(1)}</b>Days</span>
+                  <span className="is-conn"><b>{availHourHours.toFixed(0)}</b>Hours</span>
+                </div>
+              ) : (
+                <div className="bkc-split">
+                  <span><b>{availCore.toFixed(1)}</b>Consultancy</span>
+                  <span className="is-conn"><b>{availConnector.toFixed(1)}</b>Connector</span>
+                </div>
               )}
-            </span>
-            <span className="bk-breakdown">
-              <span className="bk-bd-item" title="Consultancy plus supervision days">
-                <b>{availCore.toFixed(2)}</b>
-                <i>Consultancy</i>
-              </span>
-              <span className="bk-bd-item is-conn">
-                <b>{availConnector.toFixed(2)}</b>
-                <i>Connector</i>
-              </span>
-            </span>
+            </div>
           </div>
-        </div>
+        </article>
 
-        <div className="bk-kpi">
-          <div className="bk-kpi-body">
-            <span className="bk-kpi-label">Unbilled value</span>
-            <span className="bk-kpi-fig">
-              <b>{Math.round(totalValue).toLocaleString()}</b>
-              <em>€</em>
-            </span>
-            <span className="bk-breakdown">
-              <span className="bk-bd-item" title="Consultancy plus supervision, at their own rates">
-                <b>{Math.round(valueCore).toLocaleString()}</b>
-                <i>Consultancy</i>
-              </span>
-              <span className="bk-bd-item is-conn">
-                <b>{Math.round(valueConnector).toLocaleString()}</b>
-                <i>Connector</i>
-              </span>
-            </span>
+        <article className="bkc">
+          <div className="bkc-head"><span className="bkc-label">Unbilled value</span></div>
+          <span className="bkc-fig"><b>{Math.round(totalValue).toLocaleString()}</b><em>€</em></span>
+          <div className="bkc-split">
+            <span><b>{Math.round(valueCore).toLocaleString()}</b>Consultancy</span>
+            <span className="is-conn"><b>{Math.round(valueConnector).toLocaleString()}</b>Connector</span>
           </div>
-        </div>
+        </article>
 
-        <div className="bk-kpi">
-          <div className="bk-kpi-body">
-            <span className="bk-kpi-label">Average project length</span>
-            <span className="bk-kpi-fig">
-              <b>{Math.round(avgSpan)}</b>
-              <em>days</em>
-            </span>
-            <span className="bk-breakdown">
-              <span className="bk-bd-item">
-                <b>{minSpan}</b>
-                <i>Shortest</i>
-              </span>
-              <span className="bk-bd-item">
-                <b>{maxSpan}</b>
-                <i>Longest</i>
-              </span>
-              <span className="bk-bd-item is-conn">
-                <b>{spans.length}</b>
-                <i>Projects</i>
-              </span>
-            </span>
+        <article className="bkc">
+          <div className="bkc-head"><span className="bkc-label">Avg project length</span></div>
+          <span className="bkc-fig"><b>{Math.round(avgSpan)}</b><em>days</em></span>
+          <div className="bkc-split bkc-split-3">
+            <span><b>{minSpan}</b>Shortest</span>
+            <span><b>{maxSpan}</b>Longest</span>
+            <span className="is-conn"><b>{spans.length}</b>Projects</span>
           </div>
-        </div>
+        </article>
 
-        <div className="bk-kpi">
-          <div className="bk-kpi-body">
-            <span className="bk-kpi-label">Avg consultancy day rate</span>
-            <span className="bk-kpi-fig">
-              <b>{Math.round(avgDayRate.byDays).toLocaleString()}</b>
-              <em>€ / day</em>
-            </span>
-            <span className="bk-breakdown">
-              <span className="bk-bd-item" title="Weighted by consultancy days sold">
-                <b>{Math.round(avgDayRate.byDays).toLocaleString()}</b>
-                <i>Weighted</i>
-              </span>
-              <span className="bk-bd-item is-conn" title="Plain average across live projects">
-                <b>{Math.round(avgDayRate.simple).toLocaleString()}</b>
-                <i>Per project</i>
-              </span>
-            </span>
+        <article className={`bkc ${availHourHours > 0 ? "bkc-clickable" : ""}`}
+          onClick={() => availHourHours > 0 && setUnitMode((m) => (m === "days" ? "split" : "days"))}
+          title={availHourHours > 0 ? "Click to show the per-hour rate" : undefined}>
+          <div className="bkc-head"><span className="bkc-label">Avg {unitMode === "split" && availHourHours > 0 ? "hour" : "day"} rate{availHourHours > 0 && <span className="bkc-flip">⇄</span>}</span></div>
+          <span className="bkc-fig">
+            <b>{Math.round(unitMode === "split" && availHourHours > 0 ? avgDayRate.byHour : avgDayRate.byDays).toLocaleString()}</b>
+            <em>€/{unitMode === "split" && availHourHours > 0 ? "hour" : "day"}</em>
+          </span>
+          <div className="bkc-split">
+            {unitMode === "split" && availHourHours > 0 ? (
+              <>
+                <span><b>{Math.round(avgDayRate.byHour).toLocaleString()}</b>Per hour</span>
+                <span className="is-conn"><b>{Math.round(avgDayRate.byDays).toLocaleString()}</b>Per day</span>
+              </>
+            ) : (
+              <>
+                <span><b>{Math.round(avgDayRate.byDays).toLocaleString()}</b>Weighted</span>
+                <span className="is-conn"><b>{Math.round(avgDayRate.simple).toLocaleString()}</b>Per project</span>
+              </>
+            )}
           </div>
-        </div>
+        </article>
       </div>
 
       {series.length > 1 && (
-        <div className="bk-chart-card">
+        <div className={`bk-chart-card ${chartOpen ? "is-open" : "is-collapsed"}`}>
+          <button className="bk-chart-toggle-row" onClick={() => setChartOpen((v) => !v)}>
+            <span className="bk-kpi-label">Backlog over the period</span>
+            <span className="bk-chart-toggle-right">
+              <span className="bk-chart-peek"><b>{fmt(last)}</b> {chartMode === "days" ? "days left" : "€ left"} at close</span>
+              <span className={`bk-chart-caret ${chartOpen ? "is-open" : ""}`}>›</span>
+            </span>
+          </button>
+          {chartOpen && (<>
           <div className="bk-chart-head">
             <div>
               <span className="bk-kpi-label">Backlog over the period</span>
@@ -538,6 +530,7 @@ export default function BacklogPanel({
           <div className="bk-chart-axis">
             {series.map((p) => <span key={p.end}>{p.label}</span>)}
           </div>
+          </>)}
         </div>
       )}
 
@@ -561,74 +554,87 @@ export default function BacklogPanel({
       {visible.length === 0 ? (
         <p className="bk-empty">Nothing left to deliver. Every sold day is billed.</p>
       ) : (
-        <div className="bk-grid">
+        <div className="bk-list">
+          <div className="bk-list-head">
+            <span>Client &amp; project</span>
+            <span className="bk-lh-prog">Progress</span>
+            <span className="bk-r">Days left</span>
+            <span className="bk-r">Value left</span>
+            <span className="bk-lh-team">Team</span>
+            <span />
+          </div>
           {visible.map((r) => {
             const avail = availableOf(r);
             const sold = sum(r.sold);
             const isOpen = open === r.id;
+            const u = isHourly(r.id) ? "h" : "d";
             const team = Object.entries(r.byUser)
               .sort((a, b) => (b[1].billed + b[1].planned) - (a[1].billed + a[1].planned));
             return (
-              <article className={`bk-card ${isOpen ? "is-open" : ""}`} key={r.id}>
-                <div className="bk-card-top">
-                  <span className="bk-card-id">
-                    <span className="bk-card-client">{clientNames[r.clientId] ?? "—"}</span>
-                    <span className="bk-card-type">{r.type}</span>
+              <div className={`bk-lrow-wrap ${isOpen ? "is-open" : ""}`} key={r.id}>
+                <button className="bk-lrow" onClick={() => setOpen(isOpen ? null : r.id)}>
+                  <span className="bk-lcell bk-lclient">
+                    <span className="bk-lclient-name">{clientNames[r.clientId] ?? "—"}</span>
+                    <span className="bk-lclient-type">{r.type}</span>
                   </span>
-                  <span className="bk-card-val">{Math.round(valueOf(r, avail)).toLocaleString()} €</span>
-                </div>
 
-                <div className="bk-card-hero">
-                  <b>{sum(avail).toFixed(2)}</b>
-                  <em>days left</em>
-                </div>
-
-                <div className="bk-card-bar">
-                  <span className="bk-s-billed" style={{ width: `${w(sum(r.billed), sold)}%` }}
-                    title={`${sum(r.billed).toFixed(2)} billed`} />
-                  <span className="bk-s-planned" style={{ width: `${w(sum(r.planned), sold)}%` }}
-                    title={`${sum(r.planned).toFixed(2)} scheduled`} />
-                </div>
-                <div className="bk-card-scale">
-                  <span>{sum(r.billed).toFixed(2)} billed · {sum(r.planned).toFixed(2)} scheduled</span>
-                  <span>{sold.toFixed(2)} sold</span>
-                </div>
-
-                <div className="bk-card-chips">
-                  {r.sold.consultor > 0 && <i>{r.sold.consultor} consultancy</i>}
-                  {r.sold.supervision > 0 && <i>{r.sold.supervision} supervision</i>}
-                  {r.sold.connector > 0 && <i className="is-conn">{r.sold.connector} connector</i>}
-                </div>
-
-                <button className="bk-card-foot" onClick={() => setOpen(isOpen ? null : r.id)}>
-                  <span className="bk-avs">
-                    {team.slice(0, 4).map(([uid]) => (
-                      <span className="bk-av" key={uid}>{(people[uid] ?? "?").charAt(0).toUpperCase()}</span>
-                    ))}
+                  <span className="bk-lcell bk-lprog">
+                    <span className="bk-lbar">
+                      <span className="bk-lbar-billed" style={{ width: `${w(sum(r.billed), sold)}%` }}
+                        title={`${sum(r.billed).toFixed(2)} billed`} />
+                      <span className="bk-lbar-planned" style={{ width: `${w(sum(r.planned), sold)}%` }}
+                        title={`${sum(r.planned).toFixed(2)} scheduled`} />
+                    </span>
+                    <span className="bk-lprog-txt">
+                      {sum(r.billed).toFixed(1)} billed · {sum(r.planned).toFixed(1)} sched · {sold.toFixed(1)} sold {u}
+                    </span>
                   </span>
-                  <span className="bk-foot-txt">
-                    {team.length === 0 ? "No time logged" : `${team.length} ${team.length === 1 ? "consultant" : "consultants"}`}
+
+                  <span className="bk-lcell bk-r bk-ldays"><b>{sum(avail).toFixed(2)}</b><u>{u}</u></span>
+                  <span className="bk-lcell bk-r bk-lval">{Math.round(valueOf(r, avail)).toLocaleString()} €</span>
+
+                  <span className="bk-lcell bk-lteam">
+                    {team.length === 0 ? (
+                      <em className="bk-lteam-none">—</em>
+                    ) : (
+                      <span className="bk-avs">
+                        {team.slice(0, 4).map(([uid]) => (
+                          <span className="bk-av" key={uid}>{(people[uid] ?? "?").charAt(0).toUpperCase()}</span>
+                        ))}
+                        {team.length > 4 && <span className="bk-av bk-av-more">+{team.length - 4}</span>}
+                      </span>
+                    )}
                   </span>
-                  <span className={`bk-chev ${isOpen ? "is-open" : ""}`}>›</span>
+
+                  <span className={`bk-lchev ${isOpen ? "is-open" : ""}`}>›</span>
                 </button>
 
-                {isOpen && team.length > 0 && (
-                  <div className="bk-detail">
-                    <div className="bk-dhead">
-                      <span>Consultant</span>
-                      <span className="bk-r">Billed</span>
-                      <span className="bk-r">Scheduled</span>
+                {isOpen && (
+                  <div className="bk-ldetail">
+                    <div className="bk-lchips">
+                      {r.sold.consultor > 0 && <i>{r.sold.consultor} consultancy</i>}
+                      {r.sold.supervision > 0 && <i>{r.sold.supervision} supervision</i>}
+                      {r.sold.connector > 0 && <i className="is-conn">{r.sold.connector} connector</i>}
                     </div>
-                    {team.map(([uid, v]) => (
-                      <div className="bk-dline" key={uid}>
-                        <span className="bk-dwho">{people[uid] ?? "Unknown user"}</span>
-                        <span className="bk-r bk-dbilled">{v.billed.toFixed(2)}</span>
-                        <span className="bk-r bk-dplanned">{v.planned.toFixed(2)}</span>
-                      </div>
-                    ))}
+                    {team.length > 0 && (
+                      <>
+                        <div className="bk-dhead">
+                          <span>Consultant</span>
+                          <span className="bk-r">Billed</span>
+                          <span className="bk-r">Scheduled</span>
+                        </div>
+                        {team.map(([uid, v]) => (
+                          <div className="bk-dline" key={uid}>
+                            <span className="bk-dwho">{people[uid] ?? "Unknown user"}</span>
+                            <span className="bk-r bk-dbilled">{v.billed.toFixed(2)}</span>
+                            <span className="bk-r bk-dplanned">{v.planned.toFixed(2)}</span>
+                          </div>
+                        ))}
+                      </>
+                    )}
                   </div>
                 )}
-              </article>
+              </div>
             );
           })}
         </div>

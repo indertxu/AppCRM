@@ -1,7 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { listCompanies, saveCompany, deleteCompany, companyContactCounts, type Company } from "./companiesApi";
+import Select from "../../framework/Select";
+import {
+  listCompanies, saveCompany, deleteCompany, companyContactCounts, listContacts,
+  myProfile, isSalesLead, listEmployees, loadCompanyAssignees, setCompanyAssignees,
+  type Company, type Contact, type Employee,
+} from "./companiesApi";
 import "../clients/ClientsPage.css";
 import "./CompaniesPage.css";
 
@@ -19,22 +24,51 @@ export default function CompaniesPage() {
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [editing, setEditing] = useState<Company | null>(null);
   const [q, setQ] = useState("");
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [assignees, setAssignees] = useState<Record<string, string[]>>({});
+  const [me, setMe] = useState<{ id: string; role: string; is_superadmin: boolean } | null>(null);
+  const [open, setOpen] = useState<string | null>(null);
 
   const reload = async () => {
     setCompanies(await listCompanies().catch(() => []));
     setCounts(await companyContactCounts().catch(() => ({})));
+    setContacts(await listContacts().catch(() => []));
+    setAssignees(await loadCompanyAssignees().catch(() => ({})));
   };
-  useEffect(() => { reload(); }, []);
+  useEffect(() => {
+    myProfile().then(setMe).catch(() => {});
+    listEmployees().then(setEmployees).catch(() => {});
+    reload();
+  }, []);
+
+  const lead = isSalesLead(me);
 
   const shown = companies.filter((c) => {
+    // Sales people only see the companies they have been assigned to.
+    if (!lead && me && !(assignees[c.id!] ?? []).includes(me.id)) return false;
     const n = norm(q.trim());
     if (!n) return true;
     return [c.name, c.legal_name, c.vat_number, c.street, c.city, c.province, c.country, c.postal_code]
       .some((v) => norm(v ?? "").includes(n));
   });
 
+  const contactsOf = (companyId: string) => contacts.filter((ct) => ct.companyIds.includes(companyId));
+
   const addrLine = (c: Company) =>
     [c.street, c.addr_number, c.city, c.country].filter(Boolean).join(", ") || "—";
+
+  if (me && !isSalesLead(me) && me.role !== "sales") {
+    return (
+      <div className="co">
+        <header className="co-head">
+          <button className="co-back" onClick={() => navigate("/home")} aria-label="Back">‹</button>
+          <h1 className="co-title">Companies</h1>
+        </header>
+        <p className="cl-hint">This page is only available to the sales team.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="co">
@@ -61,20 +95,63 @@ export default function CompaniesPage() {
             <span className="co-lright">Contacts</span>
           </div>
           <div className="co-list">
-            {shown.map((c) => (
-              <button key={c.id} className="co-lrow" onClick={() => setEditing(structuredClone(c))}>
-                <span className="co-lcell co-lid">
-                  <span className="co-avatar">{(c.name || "?").slice(0, 1).toUpperCase()}</span>
-                  <span className="co-lid-text">
-                    <span className="co-lname">{c.name}</span>
-                    {c.legal_name && <span className="co-lsub">{c.legal_name}</span>}
-                  </span>
-                </span>
-                <span className="co-lcell co-lmono">{c.vat_number || "—"}</span>
-                <span className="co-lcell co-laddr">{addrLine(c)}</span>
-                <span className="co-lcell co-lright"><b className="co-lbadge">{counts[c.id!] ?? 0}</b></span>
-              </button>
-            ))}
+            {shown.map((c) => {
+              const people = contactsOf(c.id!);
+              const isOpen = open === c.id;
+              return (
+                <div className="co-item" key={c.id}>
+                  <div className="co-lrow" role="button" tabIndex={0}
+                    onClick={() => setEditing(structuredClone(c))}
+                    onKeyDown={(e) => { if (e.key === "Enter") setEditing(structuredClone(c)); }}>
+                    <span className="co-lcell co-lid">
+                      <span className="co-avatar">{(c.name || "?").slice(0, 1).toUpperCase()}</span>
+                      <span className="co-lid-text">
+                        <span className="co-lname">{c.name}</span>
+                        {c.legal_name && <span className="co-lsub">{c.legal_name}</span>}
+                      </span>
+                    </span>
+                    <span className="co-lcell co-lmono">{c.vat_number || "—"}</span>
+                    <span className="co-lcell co-laddr">{addrLine(c)}</span>
+                    <span className="co-lcell co-lright">
+                      <button className={`co-expand ${isOpen ? "is-on" : ""}`}
+                        aria-expanded={isOpen} aria-label="Show contacts"
+                        onClick={(e) => { e.stopPropagation(); setOpen(isOpen ? null : c.id!); }}>
+                        <b className="co-lbadge">{counts[c.id!] ?? 0}</b>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={isOpen ? "M18 15l-6-6-6 6" : "M6 9l6 6 6-6"} /></svg>
+                      </button>
+                    </span>
+                  </div>
+
+                  {isOpen && (
+                    <div className="co-people">
+                      {people.length === 0 ? (
+                        <p className="co-people-empty">No contacts linked to this company yet.</p>
+                      ) : people.map((ct) => (
+                        <div className="co-person" key={ct.id}>
+                          <span className="co-person-av">{(ct.first_name || "?").slice(0, 1).toUpperCase()}</span>
+                          <span className="co-person-main">
+                            <span className="co-person-name">
+                              {[ct.first_name, ct.last_name].filter(Boolean).join(" ")}
+                              {ct.is_billing && <i className="co-person-bill" title="Billing contact">€</i>}
+                            </span>
+                            <span className="co-person-pos">{ct.position || "No position"}</span>
+                          </span>
+                          <span className="co-person-contact">
+                            {ct.email && <a href={`mailto:${ct.email}`} onClick={(e) => e.stopPropagation()}>{ct.email}</a>}
+                            {ct.phone && <em>{ct.phone}</em>}
+                          </span>
+                          <button className="co-person-go"
+                            onClick={() => navigate("/contacts", { state: { focusContactId: ct.id } })}>
+                            Edit contact
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h13M12 5l7 7-7 7" /></svg>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -82,6 +159,9 @@ export default function CompaniesPage() {
       {editing && (
         <CompanyEditor
           company={editing}
+          employees={employees}
+          canAssign={lead}
+          assigned={assignees[editing.id!] ?? []}
           onClose={() => setEditing(null)}
           onSaved={async () => { setEditing(null); await reload(); }}
           onDeleted={async () => { setEditing(null); await reload(); }}
@@ -91,10 +171,12 @@ export default function CompaniesPage() {
   );
 }
 
-function CompanyEditor({ company, onClose, onSaved, onDeleted }: {
-  company: Company; onClose: () => void; onSaved: () => void; onDeleted: () => void;
+function CompanyEditor({ company, employees, canAssign, assigned, onClose, onSaved, onDeleted }: {
+  company: Company; employees: Employee[]; canAssign: boolean; assigned: string[];
+  onClose: () => void; onSaved: () => void; onDeleted: () => void;
 }) {
   const [c, setC] = useState<Company>(company);
+  const [who, setWho] = useState<string[]>(assigned);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const set = (patch: Partial<Company>) => setC((x) => ({ ...x, ...patch }));
@@ -109,6 +191,7 @@ function CompanyEditor({ company, onClose, onSaved, onDeleted }: {
     if (!c.name.trim()) { setErr("Give the company a name."); return; }
     setBusy(true); setErr(null);
     const e = await saveCompany(c);
+    if (!e && c.id) await setCompanyAssignees(c.id, who).catch(() => {});
     setBusy(false);
     if (e) setErr(e); else onSaved();
   };
@@ -184,6 +267,27 @@ function CompanyEditor({ company, onClose, onSaved, onDeleted }: {
               </div>
             </div>
           </div>
+
+          {canAssign && (
+            <div className="dw-sec">
+              <p className="dw-sec-title">Who can see this company</p>
+              <div className="dw-chips">
+                {who.map((id) => (
+                  <span key={id} className="dw-chip">
+                    {employees.find((e) => e.id === id)?.name ?? "Unknown"}
+                    <button onClick={() => setWho((xs) => xs.filter((x) => x !== id))} aria-label="Remove">×</button>
+                  </span>
+                ))}
+              </div>
+              {who.length === 0 && (
+                <p className="dw-empty-hint">Only boss and sales managers can see it. Add people to widen access.</p>
+              )}
+              {employees.filter((e) => !who.includes(e.id)).length > 0 && (
+                <Select value="" onChange={(v) => v && setWho((xs) => [...xs, v])} placeholder="+ Give access to"
+                  options={employees.filter((e) => !who.includes(e.id)).map((e) => ({ value: e.id, label: e.name }))} />
+              )}
+            </div>
+          )}
 
           <div className="dw-sec">
             <p className="dw-sec-title">Notes</p>

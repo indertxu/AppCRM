@@ -45,7 +45,7 @@ export default function CatalogPage({ onBack }: Props) {
     tiers: [{ name: "Standard", price: 0, sort: 0, durations: [] }],
   });
   const newService = (): Service => ({
-    name: "", rate_unit: "hour", description: "", active: true,
+    name: "", rate_unit: "hour", min_unit: 0.5, description: "", active: true,
     roles: [],
   });
 
@@ -123,6 +123,7 @@ export default function CatalogPage({ onBack }: Props) {
                     <span className="cat-svc-name">{s.name || "Untitled service"}</span>
                     <span className="cat-svc-meta">
                       <span className="cat-pill svc">per {s.rate_unit}</span>
+                      <span className="cat-svc-min">min {s.min_unit ?? (s.rate_unit === "hour" ? 0.5 : 0.25)}{s.rate_unit === "hour" ? "h" : "d"}</span>
                       <span className="cat-svc-count">{s.roles.length} role{s.roles.length !== 1 ? "s" : ""}</span>
                     </span>
                   </span>
@@ -328,7 +329,6 @@ function CalculatorEditor({ calc, onChange, ownerType, basePrice, unit, currency
   unit?: "hour" | "day";
   currencySuffix?: string;
 }) {
-  const [preview, setPreview] = useState<Record<string, number>>({});
   const isService = ownerType === "service";
   const unitWord = unit === "hour" ? "hours" : "days";
 
@@ -360,10 +360,11 @@ function CalculatorEditor({ calc, onChange, ownerType, basePrice, unit, currency
   const removeVar = (i: number) => onChange({ ...calc, variables: calc.variables.filter((_, j) => j !== i) });
 
   const key = (v: CalcVariable, i: number) => v.id ?? String(i);
+  // The result shown below uses each variable's default value.
   const previewValues: Record<string, number> = {};
   calc.variables.forEach((v, i) => {
     const k = key(v, i);
-    previewValues[k] = preview[k] ?? (Number(v.default_value) || 0);
+    previewValues[k] = Number(v.default_value) || 0;
   });
   const previewCalc: Calculator = { ...calc, variables: calc.variables.map((v, i) => ({ ...v, id: key(v, i) })) };
   const total = calcTotal(previewCalc, previewValues, base);
@@ -492,35 +493,10 @@ function CalculatorEditor({ calc, onChange, ownerType, basePrice, unit, currency
       })}
 
       {calc.variables.length > 0 && (
-        <div className="cat-calc-preview">
-          <div className="cat-calc-preview-head">
-            <span>Try it</span>
-            <button className="cat-mini-add" onClick={() => setPreview({})}>Reset</button>
-          </div>
-          <div className="cat-calc-preview-rows">
-            {calc.variables.map((v, i) => {
-              const k = key(v, i);
-              if (v.var_type === "percent") return null;
-              return (
-                <label key={k} className="cat-calc-try">
-                  <span>{v.name || "Untitled"}{v.unit_label ? ` (${v.unit_label})` : ""}</span>
-                  {v.var_type === "fixed" ? (
-                    <div className="cat-calc-switch">
-                      <button className={previewValues[k] ? "on" : ""} onClick={() => setPreview((x) => ({ ...x, [k]: 1 }))}>On</button>
-                      <button className={!previewValues[k] ? "on" : ""} onClick={() => setPreview((x) => ({ ...x, [k]: 0 }))}>Off</button>
-                    </div>
-                  ) : (
-                    <input type="number" min="0" className="cat-nospin" value={previewValues[k]} onFocus={(e) => e.target.select()}
-                      onChange={(e) => setPreview((x) => ({ ...x, [k]: Number(e.target.value) || 0 }))} />
-                  )}
-                </label>
-              );
-            })}
-          </div>
-          <div className="cat-calc-total">
-            <span>{isQty ? "Estimated length" : "Total"}</span>
-            <b>{fmt(total)}</b>
-          </div>
+        <div className="cat-calc-result">
+          <span className="cat-calc-result-k">{isQty ? "Estimated length" : "Total"}</span>
+          <b className="cat-calc-result-v">{fmt(total)}</b>
+          <span className="cat-calc-result-n">with the default values above</span>
         </div>
       )}
     </>
@@ -573,65 +549,94 @@ function ServiceEditor({ service, blueprints, roles, onClose, onSaved, onDeleted
         </div>
 
         <div className="cat-modal-body">
-          <div className="cat-field">
-            <label>Service name</label>
-            <input value={s.name} onChange={(e) => set({ name: e.target.value })} placeholder="e.g. Consulting" />
-          </div>
-
-          <div className="cat-field">
-            <label>Billed per</label>
-            <div className="cat-seg">
-              <button className={s.rate_unit === "hour" ? "on" : ""} onClick={() => set({ rate_unit: "hour" })}>Hour</button>
-              <button className={s.rate_unit === "day" ? "on" : ""} onClick={() => set({ rate_unit: "day" })}>Day</button>
+          <section className="cat-sec">
+            <p className="cat-sec-title">Service</p>
+            <div className="cat-field">
+              <label>Service name</label>
+              <input value={s.name} onChange={(e) => set({ name: e.target.value })} placeholder="e.g. Consolidation Implementation" />
             </div>
-          </div>
 
-          <div className="cat-field">
-            <label>Blueprint (optional)</label>
-            <Select
-              value={s.blueprint_id ?? ""}
-              onChange={(v) => set({ blueprint_id: v || null })}
-              placeholder="— No blueprint —"
-              options={[{ value: "", label: "— No blueprint —" }, ...blueprints.map((b) => ({ value: b.id, label: b.name || "Untitled blueprint" }))]}
-            />
-            <span className="cat-hint">Assign a phase blueprint to structure engagements for this service.</span>
-          </div>
-
-          <div className="cat-tiers-head">
-            <span className="cat-eyebrow">Roles &amp; rates</span>
-          </div>
-
-          {roles.length === 0 ? (
-            <p className="cat-hint">No roles yet. Create roles in the Blueprints tab first, then assign their rates here.</p>
-          ) : (
-            <>
-              {s.roles.length === 0 && <p className="cat-hint" style={{ marginBottom: 10 }}>No roles assigned yet. Add one below.</p>}
-              {s.roles.map((r, ri) => (
-                <div key={ri} className="cat-tier">
-                  <div className="cat-tier-row">
-                    <span className="cat-role-name">{roleName(r.role_id)}</span>
-                    <div className="cat-price-input">
-                      <span>€</span>
-                      <input type="number" min="0" className="cat-nospin" value={r.price} onFocus={(e) => e.target.select()} onChange={(e) => setRolePrice(ri, Number(e.target.value) || 0)} />
-                      <em>/{s.rate_unit[0]}</em>
-                    </div>
-                    <button className="cat-tier-del" onClick={() => removeRole(ri)} aria-label="Remove role">×</button>
-                  </div>
+            <div className="cat-unit-row">
+              <div className="cat-field">
+                <label>Billed per</label>
+                <div className="cat-seg cat-seg-unit">
+                  <button className={s.rate_unit === "hour" ? "on" : ""}
+                    onClick={() => set({ rate_unit: "hour", min_unit: s.min_unit ?? 0.5 })}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+                    Hour
+                  </button>
+                  <button className={s.rate_unit === "day" ? "on" : ""}
+                    onClick={() => set({ rate_unit: "day", min_unit: s.min_unit ?? 0.25 })}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>
+                    Day
+                  </button>
                 </div>
-              ))}
-              {available.length > 0 && (
-                <div className="cat-add-role">
-                  <Select
-                    value=""
-                    onChange={(v) => v && addRole(v)}
-                    placeholder="+ Add role"
-                    options={available.map((r) => ({ value: r.id, label: r.name || "Untitled role" }))}
-                  />
-                </div>
+              </div>
+
+              <div className="cat-field">
+                <label>Smallest bookable amount</label>
+                <input type="number" min="0" step="any" className="cat-nospin"
+                  value={s.min_unit ?? (s.rate_unit === "hour" ? 0.5 : 0.25)}
+                  onFocus={(e) => e.target.select()}
+                  onChange={(e) => set({ min_unit: Number(e.target.value) || 0 })} />
+              </div>
+            </div>
+          </section>
+
+          <section className="cat-sec">
+            <p className="cat-sec-title">Delivery</p>
+            <div className="cat-field">
+              <label>Phase blueprint</label>
+              <Select
+                value={s.blueprint_id ?? ""}
+                onChange={(v) => set({ blueprint_id: v || null })}
+                placeholder="- No blueprint -"
+                options={[{ value: "", label: "- No blueprint -" }, ...blueprints.map((b) => ({ value: b.id, label: b.name || "Untitled blueprint" }))]}
+              />
+              <span className="cat-hint">Structures the phases of every project delivered under this service.</span>
+            </div>
+          </section>
+
+          <section className="cat-sec">
+            <div className="cat-sec-head">
+              <p className="cat-sec-title">Roles and rates</p>
+              {s.roles.length > 0 && (
+                <span className="cat-sec-count">{s.roles.length} of {roles.length}</span>
               )}
-            </>
-          )}
+            </div>
 
+            {roles.length === 0 ? (
+              <p className="cat-hint">No roles yet. Create them in the Blueprints tab first, then set their rates here.</p>
+            ) : (
+              <>
+                {s.roles.length === 0 && <p className="cat-hint">No rates set. Add a role to price this service.</p>}
+                <div className="cat-roles">
+                  {s.roles.map((r, ri) => (
+                    <div key={ri} className="cat-role">
+                      <span className="cat-role-av">{(roleName(r.role_id) || "?").slice(0, 1).toUpperCase()}</span>
+                      <span className="cat-role-nm">{roleName(r.role_id)}</span>
+                      <div className="cat-price-input cat-role-price">
+                        <span>€</span>
+                        <input type="number" min="0" className="cat-nospin" value={r.price}
+                          onFocus={(e) => e.target.select()}
+                          onChange={(e) => setRolePrice(ri, Number(e.target.value) || 0)} />
+                        <em>/{s.rate_unit === "hour" ? "h" : "d"}</em>
+                      </div>
+                      <button className="cat-role-x" onClick={() => removeRole(ri)} aria-label="Remove role">×</button>
+                    </div>
+                  ))}
+                </div>
+                {available.length > 0 && (
+                  <div className="cat-add-role">
+                    <Select value="" onChange={(v) => v && addRole(v)} placeholder="+ Add a role"
+                      options={available.map((r) => ({ value: r.id, label: r.name || "Untitled role" }))} />
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+
+          <section className="cat-sec">
           <CalculatorEditor
             calc={s.calculator}
             onChange={(c) => set({ calculator: c ? { ...c, owner_type: "service" } : null })}
@@ -639,6 +644,7 @@ function ServiceEditor({ service, blueprints, roles, onClose, onSaved, onDeleted
             basePrice={0}
             unit={s.rate_unit}
           />
+          </section>
 
           {err && <p className="cat-error">{err}</p>}
         </div>
@@ -668,7 +674,52 @@ function BlueprintsTab({ onChanged }: { onChanged: () => void }) {
   const [blueprints, setBlueprints] = useState<Blueprint[]>([]);
   const [roles, setRoles] = useState<ClientRole[]>([]);
   const [users, setUsers] = useState<{ id: string; name: string }[]>([]);
-  const [sub, setSub] = useState<"blueprints" | "roles">("blueprints");
+  const [sub, setSub] = useState<"blueprints" | "roles" | "worktypes">("blueprints");
+
+  /**
+   * Types of work used to be edited from the calendar's gear. They live in
+   * their own table and are what tells an entry whether it needs a client and
+   * a project, so they belong with the rest of the catalogue.
+   */
+  const [workTypes, setWorkTypes] = useState<{ id: string; name: string; clientRelated: boolean; color: string }[]>([]);
+  const [wtDirty, setWtDirty] = useState(false);
+
+  useEffect(() => {
+    supabase.from("work_types").select("*").order("created_at").then(({ data }) => {
+      setWorkTypes((data ?? []).map((r: any) => ({
+        id: r.id, name: r.name ?? "", clientRelated: !!r.client_related, color: r.color ?? "#12b57f",
+      })));
+    });
+  }, []);
+
+  const addWorkType = () => {
+    setWorkTypes((xs) => [...xs, { id: crypto.randomUUID(), name: "", clientRelated: true, color: "#12b57f" }]);
+    setWtDirty(true);
+    setSavedAt(null);
+  };
+  const patchWorkType = (id: string, patch: Partial<{ name: string; clientRelated: boolean; color: string }>) => {
+    setWorkTypes((xs) => xs.map((w) => (w.id === id ? { ...w, ...patch } : w)));
+    setWtDirty(true);
+    setSavedAt(null);
+  };
+  const removeWorkType = (id: string) => {
+    setWorkTypes((xs) => xs.filter((w) => w.id !== id));
+    setWtDirty(true);
+    setSavedAt(null);
+  };
+  const saveWorkTypes = async () => {
+    const { data: existing } = await supabase.from("work_types").select("id");
+    const keep = new Set(workTypes.map((w) => w.id));
+    const gone = (existing ?? []).map((r: any) => r.id).filter((id: string) => !keep.has(id));
+    // Entries keep pointing at a deleted type, so only remove what is unused.
+    if (gone.length) await supabase.from("work_types").delete().in("id", gone);
+    if (workTypes.length) {
+      await supabase.from("work_types").upsert(workTypes.map((w) => ({
+        id: w.id, name: w.name, client_related: w.clientRelated, color: w.color,
+      })));
+    }
+    setWtDirty(false);
+  };
   const [openId, setOpenId] = useState<string | null>(null);
   const [openRoleId, setOpenRoleId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -695,6 +746,7 @@ function BlueprintsTab({ onChanged }: { onChanged: () => void }) {
   const save = async () => {
     setSaving(true);
     await saveBlueprintData(projectTypes, blueprints, roles).catch(() => {});
+    await saveWorkTypes().catch(() => {});
     setSaving(false);
     skipDirty.current = true;   // the reload below shouldn't count as a new edit
     setSavedAt(Date.now());
@@ -724,6 +776,7 @@ function BlueprintsTab({ onChanged }: { onChanged: () => void }) {
         <div className="cat-subtabs">
           <button className={sub === "blueprints" ? "on" : ""} onClick={() => setSub("blueprints")}>Phase blueprints</button>
           <button className={sub === "roles" ? "on" : ""} onClick={() => setSub("roles")}>Roles</button>
+          <button className={sub === "worktypes" ? "on" : ""} onClick={() => setSub("worktypes")}>Types of work</button>
         </div>
         <button className="cat-save" onClick={save} disabled={saving}>{saving ? "Saving…" : savedAt ? "Saved ✓" : "Save changes"}</button>
       </div>
@@ -772,6 +825,35 @@ function BlueprintsTab({ onChanged }: { onChanged: () => void }) {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {sub === "worktypes" && (
+        <div className="cs-roles">
+          <button className="cl-add cs-add-bp" onClick={addWorkType}>+ New type of work</button>
+          <p className="cl-hint" style={{ margin: "0 0 12px" }}>
+            These are the options people pick when logging work in the calendar. A
+            client-related type asks for a client, a project and a phase.
+          </p>
+          {workTypes.length === 0 && <p className="cl-hint">No types of work yet.</p>}
+          {workTypes.map((w) => (
+            <div className="cat-wt" key={w.id}>
+              <label className="cat-wt-swatch" style={{ background: w.color }}>
+                <input type="color" value={w.color} onChange={(e) => patchWorkType(w.id, { color: e.target.value })} />
+              </label>
+              <input className="cl-input cat-wt-name" placeholder="Type name (e.g. Client work, Internal, Training)"
+                value={w.name} onChange={(e) => patchWorkType(w.id, { name: e.target.value })} />
+              <div className="cat-wt-toggle">
+                <span>Client related</span>
+                <button type="button" role="switch" aria-checked={w.clientRelated}
+                  className={`ncm-switch ${w.clientRelated ? "on" : ""}`}
+                  onClick={() => patchWorkType(w.id, { clientRelated: !w.clientRelated })}>
+                  <span className="ncm-switch-knob" />
+                </button>
+              </div>
+              <button className="cl-remove" onClick={() => removeWorkType(w.id)} aria-label="Remove type">×</button>
+            </div>
+          ))}
         </div>
       )}
 

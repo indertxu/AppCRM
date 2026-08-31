@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { Client, Project, ProjectType } from "./ClientsPage";
 import { projectValue } from "./ClientsPage";
+import { supabase } from "../../api/supabase";
 
 interface Props {
   client: Client;
@@ -16,6 +17,17 @@ interface Props {
 export default function ClientDetailModal({
 client, projects, projectTypes, usage, onOpenProject, onNewProject, onDeleteProject, onClose,
 }: Props) {
+  /** Rate unit per service: a project shows hours or days as its service says. */
+  const [units, setUnits] = useState<Record<string, "hour" | "day">>({});
+  useEffect(() => {
+    supabase.from("services").select("id, rate_unit").then(({ data }) => {
+      const out: Record<string, "hour" | "day"> = {};
+      (data ?? []).forEach((r: any) => { out[r.id] = r.rate_unit === "hour" ? "hour" : "day"; });
+      setUnits(out);
+    });
+  }, []);
+  const unitOf = (p: Project) => (units[p.projectTypeId] === "hour" ? "h" : "d");
+
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -85,7 +97,7 @@ const typeName = (id: string) => projectTypes.find((t) => t.id === id)?.name ?? 
                       <div className="cd-project-meta">
                         <span><em>Kick-off</em>{p.kickoffDate || "—"}</span>
                         <span><em>Signed</em>{p.signingDate || "—"}</span>
-                        <span><em>Signed days</em>{days}d</span>
+                        <span><em>Signed {unitOf(p) === "h" ? "hours" : "days"}</em>{days}{unitOf(p)}</span>
                         <span><em>Phases</em>{p.phases?.length ?? 0}</span>
                       </div>
 
@@ -101,8 +113,8 @@ const typeName = (id: string) => projectTypes.find((t) => t.id === id)?.name ?? 
                               <div className="cd-usage-fill is-done" style={{ width: `${pct(u.done)}%` }} />
                             </div>
 <div className="cd-usage-legend">
-                              <span><i className="u-done" />{u.done.toFixed(2)} used</span>
-                              <span><i className="u-plan" />{u.planned.toFixed(2)} booked</span>
+                              <span><i className="u-done" />{u.done.toFixed(2)}{unitOf(p)} used</span>
+                              <span><i className="u-plan" />{u.planned.toFixed(2)}{unitOf(p)} booked</span>
                               <span className={left < 0 ? "is-over" : ""}>
                                 {left < 0 ? `${Math.abs(left).toFixed(2)} over` : `${left.toFixed(2)} left`}
                               </span>

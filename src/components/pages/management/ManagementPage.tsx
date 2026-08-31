@@ -9,6 +9,7 @@ import UserTargetModal, { type UserTarget } from "./UserTargetModal";
 import DatePicker from "../../framework/DatePicker";
 import BacklogPanel from "./BacklogPanel";
 import BonusPanel from "./BonusPanel";
+import ConsultantModal from "./ConsultantModal";
 import BillingPanel from "./BillingPanel";
 import IncomingPanel from "./IncomingPanel";
 import "./ManagementPage.css";
@@ -31,6 +32,8 @@ interface Entry {
   line: string;
   typeId: string;
   durationDays: number;
+  /** Clock minutes the entry occupies, for capacity against the working day. */
+  durationMin: number;
   billingPeriod: string | null;
 }
 interface Proj {
@@ -56,6 +59,9 @@ interface Row {
   userId: string;
   name: string;
   daysDone: number;
+  /** Split by how the service bills, since a day and an hour are not the same. */
+  hoursDone: number;
+  hoursPlanned: number;
   daysPlanned: number;
 amountDone: number;
   amountPlanned: number;
@@ -64,6 +70,7 @@ amountDone: number;
   byProject: Record<string, {
     rateKind: string; rate: number;
     daysDone: number; daysPlanned: number;
+    hoursDone: number; hoursPlanned: number;
     amountDone: number; amountPlanned: number;
   }>;
 }
@@ -97,6 +104,33 @@ function businessDays(fromIso: string, toIso: string): number {
   return n;
 }
 
+/** Dates the Team tab needs: the period on screen plus two months each side. */
+function windowFor(anchor: Date, scope: string): [string, string] | null {
+  if (scope === "all") return null;
+  const iso = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const span = scope === "year" ? 12 : scope === "custom" ? 6 : 2;
+  const from = new Date(anchor.getFullYear(), anchor.getMonth() - span, 1);
+  const to = new Date(anchor.getFullYear(), anchor.getMonth() + span + 1, 0);
+  return [iso(from), iso(to)];
+}
+
+/** Pages through the rows: a plain select stops at a thousand. */
+async function fetchEntries(range: [string, string] | null): Promise<any[]> {
+  const cols = "id, user_id, project_id, entry_date, billable, status, billing_line, work_type_id, start_min, end_min, billing_period";
+  const out: any[] = [];
+  for (let from = 0; ; from += 1000) {
+    let q = supabase.from("calendar_entries").select(cols)
+      .order("entry_date", { ascending: true }).range(from, from + 999);
+    if (range) q = q.gte("entry_date", range[0]).lte("entry_date", range[1]);
+    const { data: page, error } = await q;
+    if (error) { console.error("[mg] loading entries failed:", error.message); break; }
+    out.push(...(page ?? []));
+    if (!page || page.length < 1000) break;
+  }
+  return out;
+}
+
 export default function ManagementPage() {
   const navigate = useNavigate();
   const [anchor, setAnchor] = useState(() => new Date());
@@ -108,6 +142,8 @@ export default function ManagementPage() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [projOpen, setProjOpen] = useState<string | null>(null); // "userId|projectKey"
   const [tab, setTab] = useState<"team" | "backlog" | "billing" | "bonus" | "incoming">("team");
+  /** Backlog, Billing and Bonus work off the whole history; Team does not. */
+  const needsAll = tab === "backlog" || tab === "billing" || tab === "bonus";
 
   const [entries, setEntries] = useState<Entry[]>([]);
   const [clientTypeIds, setClientTypeIds] = useState<Set<string>>(new Set());
@@ -119,6 +155,57 @@ const [typeNames, setTypeNames] = useState<Record<string, string>>({});
 const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [userTargets, setUserTargets] = useState<Record<string, UserTarget>>({});
   const [capacity, setCapacity] = useState<Record<string, CapValue>>({});
+  /**
+   * The bonus everyone is on unless their own card says otherwise. Before this
+   * every consultant had to be set up field by field.
+   */
+  const [genBonus, setGenBonus] = useState<CapValue>({
+    minDays: 12, minBilling: 12000, bonusPct1: 5,
+    highDays: 18, highBilling: 20000, bonusPct2: 8,
+  });
+  /** Projects billed by the hour, so days and hours never end up in one total. */
+  const [hourProjects, setHourProjects] = useState<Set<string>>(new Set());
+  /** What a billed day is worth in hours, from Targets and bonus. */
+  const [hoursPerDay, setHoursPerDay] = useState(8);
+  const [capMode, setCapMode] = useState<"worked" | "billable">("worked");
+  /** Working hours per weekday, from the calendar settings, lunch taken out. */
+  const [dayCapacity, setDayCapacity] = useState<Record<number, number>>({});
+  useEffect(() => {
+    supabase.from("calendar_hours").select("weekday, work_from, work_to, lunch_from, lunch_to, closed, scope, scope_ref")
+      .then(({ data }) => {
+        const rows = ((data ?? []) as any[]).filter((r) => r.scope === "company");
+        const out: Record<number, number> = {};
+        rows.forEach((r) => {
+          if (r.closed) { out[r.weekday] = 0; return; }
+          const lunch = r.lunch_from != null && r.lunch_to != null ? r.lunch_to - r.lunch_from : 0;
+          out[r.weekday] = Math.max(0, (r.work_to - r.work_from - lunch)) / 60;
+        });
+        setDayCapacity(out);
+      });
+  }, []);
+  /**
+   * Full working days per week, derived from the weekly hours rather than
+   * typed in per person. Each open weekday contributes its own hours (lunch
+   * already taken out) divided by the length of a billed day, so a company
+   * open Monday to Thursday counts as four days and a short Friday counts as
+   * the fraction it really is. Falls back to five until the hours load.
+   */
+  const weekDaysFromHours = useMemo(() => {
+    const hrs = Object.values(dayCapacity);
+    if (!hrs.length || hoursPerDay <= 0) return 5;
+    const total = hrs.reduce((s, h) => s + h, 0) / hoursPerDay;
+    return total > 0 ? total : 5;
+  }, [dayCapacity, hoursPerDay]);
+  useEffect(() => {
+    (async () => {
+      const { data: svc } = await supabase.from("services").select("id, rate_unit").eq("rate_unit", "hour");
+      const ids = (svc ?? []).map((s: any) => s.id);
+      if (ids.length) {
+        const { data: pj } = await supabase.from("projects").select("id").in("service_id", ids);
+        setHourProjects(new Set((pj ?? []).map((p: any) => p.id)));
+      }
+    })();
+  }, []);
   const [capSavedId, setCapSavedId] = useState<string | null>(null);
   const [bonusLag, setBonusLag] = useState(2);
   const [targetFor, setTargetFor] = useState<string | null>(null);
@@ -132,9 +219,10 @@ perDay: 1, minPerDay: 0.5, minPerWeek: 3, minPerMonth: 12, minRevenueWeek: 0, mi
 
   useEffect(() => {
     (async () => {
-      const { data: ce } = await supabase
-        .from("calendar_entries")
-        .select("id, user_id, project_id, entry_date, billable, status, billing_line, work_type_id, start_min, end_min, billing_period");
+      // Team only needs the period on screen and a couple of months either
+      // side. Backlog, Billing and Bonus need the lot, so they ask for it when
+      // you open them rather than making every visit wait for six thousand rows.
+      const ce = await fetchEntries(needsAll ? null : windowFor(anchor, scope));
       const { data: ea } = await supabase.from("entry_actuals").select("entry_id, actual_billable");
       const actual: Record<string, number> = Object.fromEntries(
         ((ea ?? []) as any[]).map((r) => [r.entry_id, Number(r.actual_billable) || 0])
@@ -155,6 +243,7 @@ perDay: 1, minPerDay: 0.5, minPerWeek: 3, minPerMonth: 12, minRevenueWeek: 0, mi
           line: r.billing_line ?? "consultor",
           typeId: r.work_type_id ?? "",
           durationDays: dur > 0 ? +(dur / fullDay).toFixed(3) : 0,
+          durationMin: dur > 0 ? dur : 0,
           billingPeriod: r.billing_period ?? null,
         };
       }));
@@ -198,7 +287,6 @@ minRevenueWeek: r.min_revenue_week === null ? null : Number(r.min_revenue_week),
         minRevenueMonth: r.min_revenue_month === null ? null : Number(r.min_revenue_month),
       }])));
       setCapacity(Object.fromEntries(((ut ?? []) as any[]).map((r) => [r.user_id, {
-        fullDays: r.full_days_per_week ?? null,
         minDays: r.min_days_month ?? null,
         minBilling: r.min_billing_month ?? null,
         bonusPct1: r.bonus_pct_1 ?? null,
@@ -251,35 +339,88 @@ setExcluded(excluded);
 
       const { data: bp } = await supabase.from("billing_periods").select("period, cutoff_date");
       if (bp) setCutoffs(Object.fromEntries((bp as any[]).map((r) => [r.period, r.cutoff_date])));
-      const { data: bs } = await supabase.from("billing_settings").select("default_cutoff_day, bonus_lag_months").eq("id", "default").maybeSingle();
-      if (bs) { setDefaultCutoffDay(Number(bs.default_cutoff_day) || 0); setBonusLag(Number(bs.bonus_lag_months ?? 2)); }
+      const { data: bs } = await supabase.from("billing_settings").select("default_cutoff_day, bonus_lag_months, hours_per_day, min_days_month, min_billing_month, bonus_pct_1, high_days_month, high_billing_month, bonus_pct_2").eq("id", "default").maybeSingle();
+      if (bs) {
+        const b = bs as any;
+        setDefaultCutoffDay(Number(b.default_cutoff_day) || 0);
+        setBonusLag(Number(b.bonus_lag_months ?? 2));
+        setHoursPerDay(Number(b.hours_per_day) || 8);
+        setGenBonus({
+          minDays: b.min_days_month ?? 12,
+          minBilling: b.min_billing_month ?? 12000,
+          bonusPct1: b.bonus_pct_1 ?? 5,
+          highDays: b.high_days_month ?? 18,
+          highBilling: b.high_billing_month ?? 20000,
+          bonusPct2: b.bonus_pct_2 ?? 8,
+        });
+      }
 
       setLoading(false);
     })();
-  }, []);
+    // Reloads when the window it needs changes: a different period, or a tab
+    // that wants the full history.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [needsAll, scope, anchor.getFullYear(), anchor.getMonth(), rangeFrom, rangeTo]);
 
 const closeSettings = async () => {
+    // Every write is checked. These used to be fire-and-forget, so a failing
+    // upsert closed the dialog as if it had saved and the values silently
+    // reverted on the next load.
+    const fail = (what: string, error: { message: string } | null) => {
+      if (!error) return false;
+      alert(`Could not save ${what}: ${error.message}`);
+      return true;
+    };
+
     const { data: existing } = await supabase.from("work_types").select("id");
     const keep = new Set(workTypes.map((t) => t.id));
     const gone = ((existing ?? []) as any[]).filter((r) => !keep.has(r.id)).map((r) => r.id);
-    if (gone.length) await supabase.from("work_types").delete().in("id", gone);
-    if (workTypes.length)
-      await supabase.from("work_types").upsert(workTypes.map((t) => ({
+    if (gone.length) {
+      const { error } = await supabase.from("work_types").delete().in("id", gone);
+      if (fail("work types", error)) return;
+    }
+    if (workTypes.length) {
+      const { error } = await supabase.from("work_types").upsert(workTypes.map((t) => ({
         id: t.id, name: t.name, client_related: t.clientRelated, color: t.color,
       })));
-    await supabase.from("calendar_targets").upsert({
-      id: "default",
-      per_day: targets.perDay,
-      min_per_day: targets.minPerDay,
-      min_per_week: targets.minPerWeek,
-      min_per_month: targets.minPerMonth,
-      min_revenue_week: targets.minRevenueWeek,
-      min_revenue_month: targets.minRevenueMonth,
-    });
-    // Billing cutoffs (shared with the calendar)
-    await supabase.from("billing_settings").upsert({ id: "default", default_cutoff_day: defaultCutoffDay });
+      if (fail("work types", error)) return;
+    }
+    {
+      const { error } = await supabase.from("calendar_targets").upsert({
+        id: "default",
+        per_day: targets.perDay,
+        min_per_day: targets.minPerDay,
+        min_per_week: targets.minPerWeek,
+        min_per_month: targets.minPerMonth,
+        min_revenue_week: targets.minRevenueWeek,
+        min_revenue_month: targets.minRevenueMonth,
+      });
+      if (fail("the general targets", error)) return;
+    }
+    // Billing cutoffs (shared with the calendar) and the company-wide bonus.
+    // tenant_id is left off deliberately: the column defaults to
+    // current_tenant(), the same way calendar_hours works. The conflict
+    // target has to name both key columns or a tenant would collide with
+    // another tenant's 'default' row and be refused by RLS.
+    {
+      const { error } = await supabase.from("billing_settings").upsert({
+        id: "default",
+        default_cutoff_day: defaultCutoffDay,
+        hours_per_day: hoursPerDay,
+        min_days_month: genBonus.minDays,
+        min_billing_month: genBonus.minBilling,
+        bonus_pct_1: genBonus.bonusPct1,
+        high_days_month: genBonus.highDays,
+        high_billing_month: genBonus.highBilling,
+        bonus_pct_2: genBonus.bonusPct2,
+      }, { onConflict: "id,tenant_id" });
+      if (fail("the targets for everyone", error)) return;
+    }
     const cutoffRows = Object.entries(cutoffs).map(([period, cutoff_date]) => ({ period, cutoff_date }));
-    if (cutoffRows.length) await supabase.from("billing_periods").upsert(cutoffRows);
+    if (cutoffRows.length) {
+      const { error } = await supabase.from("billing_periods").upsert(cutoffRows);
+      if (fail("the billing cutoffs", error)) return;
+    }
     setShowSettings(false);
   };
 
@@ -300,7 +441,7 @@ min_revenue_week: v.minRevenueWeek,
     setCapacity((c) => ({
       ...c,
       [uid]: {
-        fullDays: null, minDays: null, minBilling: null, bonusPct1: null,
+        minDays: null, minBilling: null, bonusPct1: null,
         highDays: null, highBilling: null, bonusPct2: null,
         ...c[uid], ...patch,
       },
@@ -311,7 +452,6 @@ min_revenue_week: v.minRevenueWeek,
     if (!c) return;
     const { error } = await supabase.from("user_targets").upsert({
       user_id: uid,
-      full_days_per_week: c.fullDays,
       min_days_month: c.minDays,
       min_billing_month: c.minBilling,
       bonus_pct_1: c.bonusPct1,
@@ -326,8 +466,10 @@ min_revenue_week: v.minRevenueWeek,
 
   /** Goals for one person, falling back to the company defaults. */
   const goalsFor = (uid: string) => {
-    const c = capacity[uid];
-    // Monthly minimums/highs come from the two-tier targets (Management settings).
+    // Monthly minimums/highs come from the two-tier targets (Management settings),
+    // falling back to the company bonus so only the exceptions need setting up.
+    const c = { ...genBonus, ...Object.fromEntries(
+      Object.entries(capacity[uid] ?? {}).filter(([, v]) => v != null)) } as CapValue;
     const minM = c?.minDays ?? null;
     const highM = c?.highDays ?? null;
     const minRevM = c?.minBilling ?? null;
@@ -407,7 +549,7 @@ const rateFor = (p: Proj, line: string, _userId: string): { rate: number; kind: 
     const acc: Record<string, Row> = {};
     const blank = (uid: string): Row => ({
       userId: uid, name: people[uid] ?? "—",
-daysDone: 0, daysPlanned: 0, amountDone: 0, amountPlanned: 0,
+daysDone: 0, daysPlanned: 0, hoursDone: 0, hoursPlanned: 0, amountDone: 0, amountPlanned: 0,
       connDays: 0, connAmount: 0, byProject: {},
     });
 
@@ -423,10 +565,13 @@ const { rate, kind } = rateFor(p, e.line, e.userId);
       if (!acc[e.userId]) acc[e.userId] = blank(e.userId);
       const row = acc[e.userId];
 if (e.line === "connector") return;
+      const inHours = hourProjects.has(e.projectId);
       if (e.status === "confirmed") {
-        row.daysDone += e.billable; row.amountDone += amount;
+        if (inHours) row.hoursDone += e.billable; else row.daysDone += e.billable;
+        row.amountDone += amount;
       } else {
-        row.daysPlanned += e.billable; row.amountPlanned += amount;
+        if (inHours) row.hoursPlanned += e.billable; else row.daysPlanned += e.billable;
+        row.amountPlanned += amount;
       }
 
       const key = `${e.projectId}|${kind}`;
@@ -470,77 +615,6 @@ const moneyGoal =
 const totalDaysPlanned = rows.reduce((s, r) => s + r.daysPlanned, 0);
   const teamDayGoal = rows.reduce((s, r) => s + goalsFor(r.userId).days, 0);
 const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
-
-  // Buckets across the current scope, for the mini chart
-  const buckets = (() => {
-    const out: { label: string; done: number; planned: number }[] = [];
-    const add = (label: string, test: (d: Date) => boolean) => {
-      let done = 0, planned = 0;
-      entries.forEach((e) => {
-        if (e.status === "cancelled" || e.line === "closure" || e.line === "connector") return;
-        if (!e.projectId || !e.userId || !e.date) return;
-        if (!inBillingScope(e)) return; // billing chart: follow invoiced period
-        const d = new Date(`${e.date}T00:00:00`);
-        if (!test(d)) return;
-        const p = projects[e.projectId];
-        if (!p) return;
-        const { rate } = rateFor(p, e.line, e.userId);
-        const amt = e.billable * rate;
-        if (e.status === "confirmed") done += amt; else planned += amt;
-      });
-      out.push({ label, done, planned });
-    };
-
-    if (scope === "custom") {
-      if (!rangeFrom || !rangeTo) return out;
-      const a = new Date(`${rangeFrom}T00:00:00`);
-      const b = new Date(`${rangeTo}T00:00:00`);
-      const span = Math.round((b.getTime() - a.getTime()) / 86400000) + 1;
-      if (span <= 0) return out;
-      if (span <= 14) {
-        for (let i = 0; i < span; i++) {
-          const day = addDays(a, i);
-          if (day.getDay() === 0 || day.getDay() === 6) continue;
-          add(`${day.getDate()}`, (d) => d.toDateString() === day.toDateString());
-        }
-      } else if (span <= 120) {
-        for (let s = startOfWeek(a), i = 1; s <= b; s = addDays(s, 7), i++) {
-          const from = new Date(s);
-          const to = addDays(s, 7);
-          add(`W${i}`, (d) => d >= from && d < to);
-        }
-      } else {
-        for (let s = new Date(a.getFullYear(), a.getMonth(), 1); s <= b; s = new Date(s.getFullYear(), s.getMonth() + 1, 1)) {
-          const from = new Date(s);
-          const to = new Date(s.getFullYear(), s.getMonth() + 1, 1);
-          add(MONTHS_SHORT[from.getMonth()], (d) => d >= from && d < to);
-        }
-      }
-      return out;
-    }
-
-    if (scope === "week") {
-      ["M", "T", "W", "T", "F"].forEach((n, i) => {
-        const day = addDays(weekStart, i);
-        add(n, (d) => d.toDateString() === day.toDateString());
-      });
-    } else if (scope === "month") {
-      for (let w = 0; w < 5; w++) {
-        const from = new Date(anchor.getFullYear(), anchor.getMonth(), 1 + w * 7);
-        const to = new Date(anchor.getFullYear(), anchor.getMonth(), 8 + w * 7);
-        add(`W${w + 1}`, (d) => d >= from && d < to);
-      }
-    } else {
-      MONTHS_SHORT.forEach((n, i) => add(n, (d) => d.getMonth() === i));
-    }
-    return out;
-  })();
-
-  const peak = Math.max(1, ...buckets.map((b) => b.done + b.planned));
-  const onTarget = rows.filter((r) => {
-    const g = goalsFor(r.userId);
-    return g.money > 0 && r.amountDone >= g.money;
-  }).length;
 
   const dayPct = teamDayGoal > 0 ? (totalDays / teamDayGoal) * 100 : 0;
   const moneyPct = teamMoneyGoal > 0 ? (totalDone / teamMoneyGoal) * 100 : 0;
@@ -595,27 +669,24 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
   const computeBonus = (amount: number, days: number, cap: CapValue | undefined) => {
     if (!cap) return { amount: 0, tier: 0 as 0 | 1 | 2, minMet: false, highMet: false };
     const { minDays, minBilling, bonusPct1, highDays, highBilling, bonusPct2 } = cap;
+    // Minimum tier: BOTH the days and the billing minimums must be met.
     const hasMin = minDays != null || minBilling != null;
     const minMet = hasMin
       && (minDays == null || days >= minDays)
       && (minBilling == null || amount >= minBilling);
     if (!minMet) return { amount: 0, tier: 0 as 0 | 1 | 2, minMet: false, highMet: false };
+    // High tier: again BOTH thresholds. When reached, the WHOLE invoiced
+    // amount pays pct2 — the tiers are flat rates, not marginal brackets.
     const hasHigh = highBilling != null && bonusPct2 != null;
     const highMet = hasHigh
       && (highDays == null || days >= highDays)
       && (highBilling == null || amount >= highBilling);
     const p1 = (bonusPct1 ?? 0) / 100;
     const p2 = (bonusPct2 ?? 0) / 100;
-    let bonus: number;
-    let tier: 0 | 1 | 2;
-    if (highMet && highBilling != null) {
-      bonus = highBilling * p1 + (amount - highBilling) * p2;
-      tier = 2;
-    } else {
-      bonus = amount * p1;
-      tier = 1;
+    if (highMet) {
+      return { amount: amount * p2, tier: 2 as const, minMet: true, highMet: true };
     }
-    return { amount: bonus, tier, minMet, highMet };
+    return { amount: amount * p1, tier: 1 as const, minMet: true, highMet: false };
   };
 
   const insightsFor = (uid: string) => {
@@ -689,8 +760,13 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
     const months = bizDays > 0 ? bizDays / 22 : 0;
 
     // Available capacity over the scope, from the consultant's configured full days/week.
-    const cap = capacity[uid];
-    const fullDaysWeek = cap?.fullDays ?? 5;          // default 5 if unset
+    const cap = { ...genBonus, ...Object.fromEntries(
+      Object.entries(capacity[uid] ?? {}).filter(([, v]) => v != null)) } as CapValue;
+    // Full working days per week now comes from the weekly hours set in the
+    // calendar settings: each open weekday contributes its hours (lunch already
+    // removed) divided by the length of a billed day. A company open Mon-Thu
+    // 9-18 with an hour for lunch therefore reads as 4 days, not a flat 5.
+    const fullDaysWeek = weekDaysFromHours;
     const billTargetWeek = cap?.billableDays ?? null; // billable-days target
     const availableDays = weeks > 0 ? fullDaysWeek * weeks : 0;
     // Utilisation vs available time: how much of their capacity was billable.
@@ -750,20 +826,26 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
             <span className="mg-tabseg-slider" />
             <button className={tab === "team" ? "is-on" : ""} onClick={() => setTab("team")}>Team</button>
             <button className={tab === "backlog" ? "is-on" : ""} onClick={() => setTab("backlog")}>Backlog</button>
-            <button className={tab === "billing" ? "is-on" : ""} onClick={() => setTab("billing")}>Billing</button>
+            <button className={tab === "billing" ? "is-on" : ""} onClick={() => { setTab("billing"); setScope("month"); }}>Billing</button>
             <button className={tab === "bonus" ? "is-on" : ""} onClick={() => setTab("bonus")}>Bonus</button>
             <button className={tab === "incoming" ? "is-on" : ""} onClick={() => setTab("incoming")}>Incoming</button>
           </div>
         </div>
 
         <div className="mg-nav">
-          <div className="mg-seg" data-scope={scope}>
+          <div className="mg-seg" data-scope={tab === "billing" ? "month" : scope}>
             <span className="mg-seg-slider" />
-            <button className={scope === "week" ? "is-on" : ""} onClick={() => setScope("week")}>Week</button>
-            <button className={scope === "month" ? "is-on" : ""} onClick={() => setScope("month")}>Month</button>
-            <button className={scope === "year" ? "is-on" : ""} onClick={() => setScope("year")}>Year</button>
-            <button className={scope === "all" ? "is-on" : ""} onClick={() => setScope("all")}>All</button>
-            <button className={scope === "custom" ? "is-on" : ""} onClick={openCustom}>Custom</button>
+            {tab === "billing" ? (
+              <button className="is-on" onClick={() => setScope("month")}>Month</button>
+            ) : (
+              <>
+                <button className={scope === "week" ? "is-on" : ""} onClick={() => setScope("week")}>Week</button>
+                <button className={scope === "month" ? "is-on" : ""} onClick={() => setScope("month")}>Month</button>
+                <button className={scope === "year" ? "is-on" : ""} onClick={() => setScope("year")}>Year</button>
+                <button className={scope === "all" ? "is-on" : ""} onClick={() => setScope("all")}>All</button>
+                <button className={scope === "custom" ? "is-on" : ""} onClick={openCustom}>Custom</button>
+              </>
+            )}
           </div>
 
           {scope === "custom" ? (
@@ -818,6 +900,10 @@ minPerMonth: targets.minPerMonth,
           setCutoffs={setCutoffs}
           defaultCutoffDay={defaultCutoffDay}
           setDefaultCutoffDay={setDefaultCutoffDay}
+          genBonus={genBonus}
+          setGenBonus={setGenBonus}
+          hoursPerDay={hoursPerDay}
+          setHoursPerDay={setHoursPerDay}
           managementMode
           consultants={rows.map((r) => ({ userId: r.userId, name: r.name }))}
           capacity={capacity}
@@ -830,116 +916,68 @@ minPerMonth: targets.minPerMonth,
       )}
 
 {tab === "team" ? (<>
-      <div className="mg-kpis">
-        <div className="mg-kpi mg-kpi-ring-card">
-          <div className="mg-kpi-ring">
-            <svg viewBox="0 0 80 80" width="80" height="80">
-              <defs>
-                <linearGradient id="mgGradDays" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stopColor="#86efc0" />
-                  <stop offset="100%" stopColor="#0a6f4d" />
-                </linearGradient>
-              </defs>
-              <g transform="rotate(-90 40 40)">
-                <circle cx="40" cy="40" r={RING_R} className="mg-ring-bg" />
-                <circle cx="40" cy="40" r={RING_R} className="mg-ring-proj" style={ring(dayProjPct)} />
-                <circle cx="40" cy="40" r={RING_R} className="mg-ring-fg" stroke="url(#mgGradDays)" style={ring(dayPct)} />
-              </g>
-              <text x="40" y="38" className="mg-ring-num" textAnchor="middle">
-                {Math.round(dayPct)}<tspan className="mg-ring-pct">%</tspan>
-              </text>
-              <text x="40" y="53" className="mg-ring-cap" textAnchor="middle">of goal</text>
-            </svg>
-          </div>
-          <div className="mg-kpi-body">
-            <span className="mg-kpi-label">Days delivered</span>
-            <span className="mg-kpi-fig">
-              <b>{totalDays.toFixed(2)}</b>
-              <em>days</em>
-            </span>
-            <span className="mg-kpi-meta">
-              <span className="mg-kpi-planned"><i /> +{totalDaysPlanned.toFixed(2)} planned</span>
-              <span className="mg-kpi-goal">Goal {teamDayGoal > 0 ? (+teamDayGoal.toFixed(2)).toLocaleString() : "—"}</span>
-            </span>
-          </div>
-        </div>
+      {/* Two gauges. The number is cradled in a semicircular arc that sweeps
+          to the share of goal reached; a solid over-fill plus an outer glow
+          mark anything past 100%, and the planned work shows as a fainter arc
+          reaching a little further. */}
+      <div className="mg-kpis mg-gauges">
+        {([
+          {
+            key: "days", label: "Days delivered", unit: "d",
+            done: totalDays, planned: totalDaysPlanned, goal: teamDayGoal,
+            fmt: (n: number) => (+n.toFixed(n < 100 ? 2 : 0)).toLocaleString(),
+          },
+          {
+            key: "money", label: "Billed", unit: "\u20ac",
+            done: totalDone, planned: totalPlanned, goal: teamMoneyGoal,
+            fmt: (n: number) => Math.round(n).toLocaleString(),
+          },
+        ]).map((c) => {
+          const ARC = 169.65;                 // length of the semicircle, r=54
+          const pctRaw = c.goal > 0 ? (c.done / c.goal) * 100 : 0;
+          const over = pctRaw > 100;
+          const fill = Math.min(1, pctRaw / 100);
+          const overFill = over ? Math.min(1, (pctRaw - 100) / 100) : 0;
+          const projFill = c.goal > 0 ? Math.min(1, (c.done + c.planned) / c.goal) : 0;
+          const dash = (f: number) => `${(ARC * f).toFixed(2)} ${ARC}`;
+          return (
+            <article className={`gg ${over ? "is-over" : ""}`} key={c.key}>
+              <div className="gg-head">
+                <span className="gg-label">{c.label}</span>
+                <span className="gg-pct">{Math.round(pctRaw)}<i>%</i></span>
+              </div>
 
-        <div className="mg-kpi mg-kpi-ring-card">
-          <div className="mg-kpi-ring">
-            <svg viewBox="0 0 80 80" width="80" height="80">
-              <defs>
-                <linearGradient id="mgGradMoney" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stopColor="#4ad991" />
-                  <stop offset="100%" stopColor="#0a6f4d" />
-                </linearGradient>
-              </defs>
-              <g transform="rotate(-90 40 40)">
-                <circle cx="40" cy="40" r={RING_R} className="mg-ring-bg" />
-                <circle cx="40" cy="40" r={RING_R} className="mg-ring-proj" style={ring(moneyProjPct)} />
-                <circle cx="40" cy="40" r={RING_R} className="mg-ring-fg" stroke="url(#mgGradMoney)" style={ring(moneyPct)} />
-              </g>
-              <text x="40" y="38" className="mg-ring-num" textAnchor="middle">
-                {Math.round(moneyPct)}<tspan className="mg-ring-pct">%</tspan>
-              </text>
-              <text x="40" y="53" className="mg-ring-cap" textAnchor="middle">of goal</text>
-            </svg>
-          </div>
-          <div className="mg-kpi-body">
-            <span className="mg-kpi-label">Billed</span>
-            <span className="mg-kpi-fig">
-              <b>{Math.round(totalDone).toLocaleString()}</b>
-              <em>€</em>
-            </span>
-            <span className="mg-kpi-meta">
-              <span className="mg-kpi-planned"><i /> +{Math.round(totalPlanned).toLocaleString()} planned</span>
-              <span className="mg-kpi-goal">Goal {teamMoneyGoal > 0 ? teamMoneyGoal.toLocaleString() : "—"}</span>
-            </span>
-          </div>
-        </div>
+              <div className="gg-gauge">
+                <svg viewBox="0 0 140 82" className="gg-svg" aria-hidden="true">
+                  <path className="gg-arc-bg" d="M16 70 A54 54 0 0 1 124 70" pathLength={ARC} />
+                  <path className="gg-arc-proj" d="M16 70 A54 54 0 0 1 124 70" pathLength={ARC}
+                    style={{ strokeDasharray: dash(projFill) }} />
+                  <path className="gg-arc-fill" d="M16 70 A54 54 0 0 1 124 70" pathLength={ARC}
+                    style={{ strokeDasharray: dash(fill) }} />
+                  {over && (
+                    <path className="gg-arc-over" d="M16 70 A54 54 0 0 1 124 70" pathLength={ARC}
+                      style={{ strokeDasharray: dash(overFill) }} />
+                  )}
+                </svg>
 
-        <div className="mg-kpi mg-kpi-chart">
-          <div className="mg-kpi-body">
-            <span className="mg-kpi-label">Billing over the period</span>
-            <span className="mg-kpi-fig">
-              <b>{Math.round(totalDone + totalPlanned).toLocaleString()}</b>
-              <em>booked in total</em>
-            </span>
-          </div>
-          <div className="mg-spark">
-            {buckets.map((b, i) => (
-              <span className="mg-spark-col" key={i} title={`${b.label}: ${Math.round(b.done).toLocaleString()} billed`}>
-                <span className="mg-spark-stack">
-                  <span className="mg-spark-plan" style={{ height: `${(b.planned / peak) * 100}%` }} />
-                  <span className="mg-spark-done" style={{ height: `${(b.done / peak) * 100}%` }} />
-                </span>
-                <span className="mg-spark-label">{b.label}</span>
-              </span>
-            ))}
-          </div>
-        </div>
+                <div className="gg-core">
+                  <span className={`gg-fig ${c.fmt(c.done).replace(/[^0-9]/g, "").length > 4 ? "is-long" : ""}`}>
+                    <b>{c.fmt(c.done)}</b><em>{c.unit}</em>
+                  </span>
+                  <span className="gg-goal">{c.goal > 0 ? <>of {c.fmt(c.goal)}</> : <>no goal</>}</span>
+                </div>
+              </div>
 
-        <div className="mg-kpi mg-kpi-team">
-          <div className="mg-kpi-body">
-            <span className="mg-kpi-label">On target</span>
-            <span className="mg-kpi-fig">
-              <b>{onTarget}</b>
-              <em>of {rows.length} consultants</em>
-            </span>
-          </div>
-          <div className="mg-dots">
-            {rows.map((r) => {
-              const g = goalsFor(r.userId);
-              const hit = g.money > 0 && r.amountDone >= g.money;
-              const p = g.money > 0 ? Math.min(100, (r.amountDone / g.money) * 100) : 0;
-              return (
-                <span className={`mg-dot ${hit ? "is-hit" : ""}`} key={r.userId} title={`${r.name} — ${Math.round(p)}%`}>
-                  <span className="mg-dot-fill" style={{ height: `${p}%` }} />
-                  <span className="mg-dot-initial">{r.name.charAt(0).toUpperCase()}</span>
-                </span>
-              );
-            })}
-          </div>
-        </div>
+              <div className="gg-foot">
+                <span className="gg-chip gg-chip-done"><i />{c.fmt(c.done)} done</span>
+                {c.planned > 0 && (
+                  <span className="gg-chip gg-chip-plan"><i />+{c.fmt(c.planned)} planned</span>
+                )}
+                {over && <span className="gg-chip gg-chip-over">over goal</span>}
+              </div>
+            </article>
+          );
+        })}
       </div>
 
 
@@ -952,7 +990,10 @@ minPerMonth: targets.minPerMonth,
         <div className="mg-list">
           {rows.map((r) => {
             const open = expanded === r.userId;
-            const daysTotal = r.daysDone + r.daysPlanned;
+            // Hours count towards the same scale, converted at the configured
+            // rate so one bar can hold both without mixing the figures.
+            const daysTotal = r.daysDone + r.daysPlanned
+              + (r.hoursDone + r.hoursPlanned) / hoursPerDay;
             const moneyTotal = r.amountDone + r.amountPlanned;
             const g = goalsFor(r.userId);
             const dayGoalU = g.days;
@@ -991,8 +1032,22 @@ minPerMonth: targets.minPerMonth,
                       </span>
                     </span>
                     <span className="mg-metric-nums">
-                      <b>{r.daysDone.toFixed(2)}</b>
-                      {r.daysPlanned > 0 && <em>+{r.daysPlanned.toFixed(2)}</em>}
+                      <b>
+                        {r.daysDone.toFixed(2)}<i className="mg-u">d</i>
+                        {r.hoursDone > 0 && (
+                          <>
+                            <span className="mg-u-sep">+</span>
+                            {r.hoursDone.toFixed(2)}<i className="mg-u">h</i>
+                          </>
+                        )}
+                      </b>
+                      {(r.daysPlanned + r.hoursPlanned) > 0 && (
+                        <em>
+                          +{r.daysPlanned > 0 ? `${r.daysPlanned.toFixed(2)}d` : ""}
+                          {r.daysPlanned > 0 && r.hoursPlanned > 0 ? " " : ""}
+                          {r.hoursPlanned > 0 ? `${r.hoursPlanned.toFixed(2)}h` : ""}
+                        </em>
+                      )}
                       {dayGoalU > 0 && (
                         <u className={r.daysDone >= dayGoalU ? "is-hit" : ""}><s /> {dayGoalU}</u>
                       )}
@@ -1001,9 +1056,13 @@ minPerMonth: targets.minPerMonth,
                       )}
                     </span>
                     <span className="mg-mbar">
+                      {/* Hours are shown as their own segment, converted to days
+                          only so the two can share a scale. */}
                       <span className="mg-track">
                         <span className="mg-seg-done" style={{ width: `${pct(r.daysDone, dayScale)}%` }} />
-                        <span className="mg-seg-plan" style={{ width: `${pct(r.daysPlanned, dayScale)}%` }} />
+                        <span className="mg-seg-hours" style={{ width: `${pct(r.hoursDone / hoursPerDay, dayScale)}%` }}
+                          title={`${r.hoursDone.toFixed(2)} hours`} />
+                        <span className="mg-seg-plan" style={{ width: `${pct(r.daysPlanned + r.hoursPlanned / hoursPerDay, dayScale)}%` }} />
                       </span>
                       {dayGoalU > 0 && (
                         <span
@@ -1064,11 +1123,8 @@ minPerMonth: targets.minPerMonth,
                   <span className={`mg-chev ${open ? "is-open" : ""}`}>›</span>
                 </button>
 
-                {open && (
-                  <div className="mg-detail">
-                    {(() => {
+                {open && (() => {
                       const ins = insightsFor(r.userId);
-                      const maxTrend = Math.max(1, ...ins.trend.map((t) => t.amount));
                       const utilSlices = [
                         { key: "bill", label: "Billable", days: ins.billableDays, color: "var(--forest)" },
                         { key: "unbilled", label: "Client · unbilled", days: ins.clientUnbilledDays, color: "#e0a03e" },
@@ -1077,227 +1133,123 @@ minPerMonth: targets.minPerMonth,
                       ].filter((s) => s.days > 0.01);
                       // Bar is measured against available capacity when we know it, else against worked time.
                       const barBase = ins.availableDays > 0 ? ins.availableDays : (ins.totalWorked || 1);
-                      // Two "realised" bonuses: one on work done this month (real date),
-                      // one on what was invoiced to the client this month (follows moved billing).
-                      const cap = capacity[r.userId];
-                      const bonusWork = computeBonus(ins.billableAmount, ins.billableDays, cap);
+                      // Their own bonus where they have one, the company's otherwise.
+                      const cap = { ...genBonus, ...Object.fromEntries(
+                        Object.entries(capacity[r.userId] ?? {}).filter(([, v]) => v != null)) } as CapValue;
+
+                      /**
+                       * Capacity against the hours the company actually works.
+                       * "worked" is every hour with something on it, billable or
+                       * not; "billable" is the share of those that reach a
+                       * client, with days converted at the configured rate.
+                       */
+                      const cw = (() => {
+                        const mine = entries.filter(
+                          (e) => e.userId === r.userId && e.status !== "cancelled" && inScope(e.date));
+                        const worked = mine.reduce((s, e) => s + e.durationMin / 60, 0);
+
+                        // Available hours: every distinct day with something on
+                        // it, at whatever that weekday is worth.
+                        const seen = new Set(mine.map((e) => e.date).filter(Boolean));
+                        const available = Array.from(seen).reduce((s, iso) => {
+                          const wd = new Date(`${iso}T00:00:00`).getDay();
+                          return s + (dayCapacity[wd] ?? 0);
+                        }, 0);
+
+                        const billable = r.daysDone * hoursPerDay + r.hoursDone;
+                        return {
+                          available, worked, billable,
+                          workedPct: available > 0 ? (worked / available) * 100 : 0,
+                          billablePct: available > 0 ? (billable / available) * 100 : 0,
+                        };
+                      })();
+
                       const bonusInvoiced = computeBonus(ins.invoicedAmount, ins.invoicedDays, cap);
                       const showBonus = !!cap && (cap.minDays != null || cap.minBilling != null || cap.bonusPct1 != null);
-                      return (
-                        <div className="mg-insights">
-                          {/* Row of headline metric cards */}
-                          <div className="mg-ins-cards">
-                            <div className="mg-ins-card">
-                              <span className="mg-ins-k">Billed this period</span>
-                              <b className="mg-ins-v">{Math.round(ins.billableAmount).toLocaleString()} €</b>
-                              <span className="mg-ins-s">{ins.billableDays.toFixed(2)} billable days</span>
-                            </div>
-                            <div className="mg-ins-card">
-                              <span className="mg-ins-k">Blended rate</span>
-                              <b className="mg-ins-v">{Math.round(ins.blendedRate).toLocaleString()} €</b>
-                              <span className="mg-ins-s">avg per billed day</span>
-                            </div>
-                            <div className="mg-ins-card">
-                              <span className="mg-ins-k">Avg / week</span>
-                              <b className="mg-ins-v">{Math.round(ins.avgAmountWeek).toLocaleString()} €</b>
-                              <span className="mg-ins-s">{ins.avgDaysWeek.toFixed(2)} d/wk</span>
-                            </div>
-                            <div className="mg-ins-card">
-                              <span className="mg-ins-k">Avg / month</span>
-                              <b className="mg-ins-v">{Math.round(ins.avgAmountMonth).toLocaleString()} €</b>
-                              <span className="mg-ins-s">{ins.avgDaysMonth.toFixed(2)} d/mo</span>
-                            </div>
-                            {ins.availableDays > 0 && (
-                              <div className="mg-ins-card">
-                                <span className="mg-ins-k">Capacity used</span>
-                                <b className="mg-ins-v">{Math.round(ins.capUtilisation)}%</b>
-                                <span className="mg-ins-s">{ins.billableDays.toFixed(1)} / {ins.availableDays.toFixed(1)} days</span>
-                              </div>
-                            )}
-                          </div>
+                      const scopeLabel =
+                        scope === "week" ? "This week"
+                        : scope === "month" ? "This month"
+                        : scope === "year" ? "This year"
+                        : scope === "custom" ? "Selected range" : "All time";
 
-                          {showBonus && (
-                            <div className="bwrap">
-                              <div className="bwrap-head">
-                                <span className="bwrap-title">Bonus</span>
-                                <span className="bwrap-lag">Paid on invoiced · {bonusLag}-month lag</span>
-                              </div>
-                              <div className="bwrap-cards">
-                                <div className={`bcard ${bonusWork.tier === 2 ? "t2" : bonusWork.tier === 1 ? "t1" : "t0"}`}>
-                                  <span className="bcard-k">On work done</span>
-                                  <b className="bcard-amt">{Math.round(bonusWork.amount).toLocaleString()} €</b>
-                                  <span className="bcard-base">{ins.billableDays.toFixed(1)}d · {Math.round(ins.billableAmount).toLocaleString()} € worked</span>
-                                  <span className="bcard-badge">{bonusWork.tier === 2 ? "High tier" : bonusWork.tier === 1 ? "Minimum tier" : "Below minimum"}</span>
-                                </div>
-                                <div className={`bcard ${bonusInvoiced.tier === 2 ? "t2" : bonusInvoiced.tier === 1 ? "t1" : "t0"}`}>
-                                  <span className="bcard-k">On invoiced</span>
-                                  <b className="bcard-amt">{Math.round(bonusInvoiced.amount).toLocaleString()} €</b>
-                                  <span className="bcard-base">{ins.invoicedDays.toFixed(1)}d · {Math.round(ins.invoicedAmount).toLocaleString()} € invoiced</span>
-                                  <span className="bcard-badge">{bonusInvoiced.tier === 2 ? "High tier" : bonusInvoiced.tier === 1 ? "Minimum tier" : "Below minimum"}</span>
-                                </div>
-                              </div>
-                              {(cap?.minBilling != null || cap?.highBilling != null) && (() => {
-                                const minB = cap?.minBilling ?? 0;
-                                const highB = cap?.highBilling ?? 0;
-                                const scaleB = Math.max(highB, minB, ins.invoicedAmount, 1);
-                                return (
-                                  <div className="bprog">
-                                    <div className="bprog-head">
-                                      <span>Invoiced toward targets</span>
-                                      <b>{Math.round(ins.invoicedAmount).toLocaleString()} €</b>
-                                    </div>
-                                    <div className="bprog-track">
-                                      <div className="bprog-fill" style={{ width: `${Math.min(100, (ins.invoicedAmount / scaleB) * 100)}%` }} />
-                                      {minB > 0 && <span className="bprog-mark min" style={{ left: `${(minB / scaleB) * 100}%` }} title={`Min ${Math.round(minB).toLocaleString()} €`} />}
-                                      {highB > 0 && <span className="bprog-mark high" style={{ left: `${(highB / scaleB) * 100}%` }} title={`High ${Math.round(highB).toLocaleString()} €`} />}
-                                    </div>
-                                    <div className="bprog-legend">
-                                      {minB > 0 && <span className={ins.invoicedAmount >= minB ? "ok" : ""}><i className="min" />Min {Math.round(minB).toLocaleString()} €{cap?.minDays != null ? ` · ${cap.minDays}d` : ""}</span>}
-                                      {highB > 0 && <span className={ins.invoicedAmount >= highB ? "ok" : ""}><i className="high" />High {Math.round(highB).toLocaleString()} €{cap?.highDays != null ? ` · ${cap.highDays}d` : ""}</span>}
-                                    </div>
-                                  </div>
-                                );
-                              })()}
-                            </div>
-                          )}
+                      const projectRows = Object.entries(r.byProject).map(([key, v]) => {
+                        const pid = key.split("|")[0];
+                        const hourly = hourProjects.has(pid);
+                        return {
+                          key,
+                          client: clientNames[projects[pid]?.clientId ?? ""] ?? "\u2014",
+                          service: typeNames[projects[pid]?.typeId ?? ""] || "No service",
+                          rateKind: v.rateKind,
+                          rate: v.rate,
+                          hourly,
+                          amountPlanned: v.amountPlanned,
+                          daysPlanned: v.daysPlanned,
+                          amountDone: v.amountDone,
+                          daysDone: v.daysDone,
+                        };
+                      });
 
-                          <div className="mg-ins-mid">
-                            {/* Utilisation bar */}
-                            <div className="mg-ins-block">
-                              <div className="mg-ins-blockhead">
-                                <span className="mg-ins-blocktitle">Utilisation</span>
-                                <span className="mg-ins-util-pct">
-                                  {ins.availableDays > 0
-                                    ? `${Math.round(ins.capUtilisation)}% of capacity billable`
-                                    : `${Math.round(ins.utilisation)}% billable`}
+                      const renderLedger = (key: string) => {
+                        const projId = key.split("|")[0];
+                        const kind = key.split("|")[1];
+                        const v = r.byProject[key];
+                        const u = hourProjects.has(projId) ? "h" : "d";
+                        const feed = entries
+                          .filter((e) =>
+                            e.userId === r.userId && e.projectId === projId &&
+                            e.status !== "cancelled" && e.line !== "closure" &&
+                            inScope(e.date) &&
+                            (kind === "Supervision" ? e.line === "supervision"
+                              : kind === "Connector" ? e.line === "connector"
+                              : (e.line !== "supervision" && e.line !== "connector")))
+                          .sort((a, b) => a.date.localeCompare(b.date));
+                        return (
+                          <>
+                            <div className="cm-dl-head">
+                              <span>Date</span><span>Status</span>
+                              <span className="cm-r">{u === "h" ? "Hours" : "Days"}</span><span className="cm-r">Value</span>
+                            </div>
+                            {feed.length === 0 ? (
+                              <p className="cm-empty" style={{ padding: "6px 4px" }}>No entries.</p>
+                            ) : feed.map((e) => (
+                              <div className="cm-dl-row" key={e.id}>
+                                <span className="cm-dl-date">
+                                  {e.date}
+                                  {e.billingPeriod && <span className="cm-dl-moved">→ {e.billingPeriod}</span>}
                                 </span>
+                                <span className={`cm-dl-status is-${e.status}`}>{e.status}</span>
+                                <span className="cm-r">{e.billable.toFixed(2)}</span>
+                                <span className="cm-r">{Math.round(e.billable * v.rate).toLocaleString()} €</span>
                               </div>
-                              <div className="mg-util-bar">
-                                {utilSlices.map((s) => (
-                                  <span
-                                    key={s.key}
-                                    className="mg-util-seg"
-                                    style={{ width: `${(s.days / barBase) * 100}%`, background: s.color }}
-                                    title={`${s.label}: ${s.days.toFixed(2)}d`}
-                                  />
-                                ))}
-                              </div>
-                              <div className="mg-util-legend">
-                                {utilSlices.map((s) => (
-                                  <span className="mg-util-li" key={s.key}>
-                                    <i style={{ background: s.color }} />
-                                    {s.label} <b>{s.days.toFixed(2)}d</b>
-                                  </span>
-                                ))}
-                              </div>
-                              <p className="mg-ins-note">
-                                {ins.availableDays > 0
-                                  ? `${ins.billableDays.toFixed(2)} of ${ins.availableDays.toFixed(1)} available days billed · ${Math.round(ins.occupancy)}% occupied${ins.clientUnbilledDays > 0 ? ` · ${ins.clientUnbilledDays.toFixed(2)}d client work unbilled` : ""}`
-                                  : ins.clientUnbilledDays > 0
-                                    ? `${ins.clientUnbilledDays.toFixed(2)}d of client work went unbilled.`
-                                    : "All client work is billed."}
-                              </p>
-                            </div>
+                            ))}
+                          </>
+                        );
+                      };
 
-                            {/* Trend mini-chart */}
-                            <div className="mg-ins-block">
-                              <div className="mg-ins-blockhead">
-                                <span className="mg-ins-blocktitle">Billing trend</span>
-                                <span className="mg-ins-blocksub">{ins.trend.length} periods</span>
-                              </div>
-                              {ins.trend.length === 0 ? (
-                                <p className="mg-ins-note">No billed work in range.</p>
-                              ) : (
-                                <div className="mg-trend">
-                                  {ins.trend.map((t, i) => (
-                                    <div className="mg-trend-col" key={i} title={`${t.label}: ${Math.round(t.amount).toLocaleString()} € · ${t.days.toFixed(2)}d`}>
-                                      <div className="mg-trend-barwrap">
-                                        <div className="mg-trend-bar" style={{ height: `${(t.amount / maxTrend) * 100}%` }} />
-                                      </div>
-                                      <span className="mg-trend-x">{t.label}</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </div>
+                      return (
+                        <ConsultantModal
+                          name={r.name}
+                          scopeLabel={scopeLabel}
+                          scope={scope}
+                          hoursPerDay={hoursPerDay}
+                          ins={ins}
+                          cap={showBonus ? cap : null}
+                          showBonus={showBonus}
+                          bonusInvoiced={bonusInvoiced}
+                          cw={cw.available > 0 ? cw : null}
+                          capMode={capMode}
+                          onToggleCap={() => setCapMode((m) => (m === "worked" ? "billable" : "worked"))}
+                          projectRows={projectRows}
+                          projOpenKey={projOpen && projOpen.startsWith(r.userId + "|") ? projOpen.slice(r.userId.length + 1) : null}
+                          onToggleProject={(key) => {
+                            const full = `${r.userId}|${key}`;
+                            setProjOpen(projOpen === full ? null : full);
+                          }}
+                          renderLedger={renderLedger}
+                          onClose={() => setExpanded(null)}
+                        />
                       );
                     })()}
-
-                    {Object.keys(r.byProject).length === 0 ? (
-                      <p className="mg-hint-sm">Nothing logged in this period.</p>
-                    ) : (
-                      <>
-                        <div className="mg-dhead">
-                          <span>Client &amp; project</span>
-                          <span className="mg-r">Rate / day</span>
-                          <span className="mg-r">Booked</span>
-                          <span className="mg-r">Billed</span>
-                        </div>
-                        {Object.entries(r.byProject).map(([key, v]) => {
-                          const projId = key.split("|")[0];
-                          const kind = key.split("|")[1];
-                          const rowKey = `${r.userId}|${key}`;
-                          const isProjOpen = projOpen === rowKey;
-                          // Entries feeding this project×line for this consultant, in scope.
-                          const feed = entries
-                            .filter((e) =>
-                              e.userId === r.userId && e.projectId === projId &&
-                              e.status !== "cancelled" && e.line !== "closure" &&
-                              inScope(e.date) &&
-                              (kind === "Supervision" ? e.line === "supervision"
-                                : kind === "Connector" ? e.line === "connector"
-                                : (e.line !== "supervision" && e.line !== "connector"))
-                            )
-                            .sort((a, b) => a.date.localeCompare(b.date));
-                          return (
-                            <div key={key}>
-                              <button className={`mg-dline mg-dline-btn ${isProjOpen ? "is-open" : ""}`} onClick={() => setProjOpen(isProjOpen ? null : rowKey)}>
-                                <span className="mg-dclient">
-                                  <span className={`mg-dchev ${isProjOpen ? "is-open" : ""}`}>›</span>
-                                  <b>{clientNames[projects[projId]?.clientId ?? ""] ?? "—"}</b>
-                                  <em>{typeNames[projects[projId]?.typeId ?? ""] || "No service"}</em>
-                                  <span className="mg-dkind">{v.rateKind}</span>
-                                </span>
-                                <span className="mg-r mg-drate">{Math.round(v.rate).toLocaleString()}</span>
-                                <span className="mg-r mg-dbooked">
-                                  <b>{Math.round(v.amountPlanned).toLocaleString()}</b>
-                                  <i>{v.daysPlanned.toFixed(2)}d</i>
-                                </span>
-                                <span className="mg-r mg-dbilled">
-                                  <b>{Math.round(v.amountDone).toLocaleString()}</b>
-                                  <i>{v.daysDone.toFixed(2)}d</i>
-                                </span>
-                              </button>
-                              {isProjOpen && (
-                                <div className="mg-dledger">
-                                  <div className="mg-dl-head">
-                                    <span>Date</span><span>Status</span>
-                                    <span className="mg-r">Days</span><span className="mg-r">Value</span>
-                                  </div>
-                                  {feed.length === 0 ? (
-                                    <p className="mg-hint-sm" style={{ padding: "6px 12px" }}>No entries.</p>
-                                  ) : feed.map((e) => (
-                                    <div className="mg-dl-row" key={e.id}>
-                                      <span className="mg-dl-date">
-                                        {e.date}
-                                        {e.billingPeriod && <span className="mg-dl-moved">→ {e.billingPeriod}</span>}
-                                      </span>
-                                      <span className={`mg-dl-status is-${e.status}`}>{e.status}</span>
-                                      <span className="mg-r">{e.billable.toFixed(2)}</span>
-                                      <span className="mg-r">{Math.round(e.billable * v.rate).toLocaleString()} €</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </>
-                    )}
-                  </div>
-                )}
               </div>
             );
           })}
@@ -1311,6 +1263,8 @@ minPerMonth: targets.minPerMonth,
           typeNames={typeNames}
           people={people}
           supRoles={supRoles}
+          hourProjects={hourProjects}
+          hoursPerDay={hoursPerDay}
           scope={scope}
           anchor={anchor}
           rangeFrom={rangeFrom}
@@ -1324,6 +1278,8 @@ minPerMonth: targets.minPerMonth,
           typeNames={typeNames}
           people={people}
           supRoles={supRoles}
+          hourProjects={hourProjects}
+          anchor={anchor}
           cutoffs={cutoffs}
           defaultCutoffDay={defaultCutoffDay}
         />
@@ -1344,6 +1300,8 @@ minPerMonth: targets.minPerMonth,
           defaultCutoffDay={defaultCutoffDay}
           bonusLag={bonusLag}
           anchor={anchor}
+          hourProjects={hourProjects}
+          hoursPerDay={hoursPerDay}
         />
       ) : (
         <IncomingPanel />

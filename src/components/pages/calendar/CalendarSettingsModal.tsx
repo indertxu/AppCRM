@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import DatePicker from "../../framework/DatePicker";
 import { billingWindow, cutoffOf, periodOf, type Cutoffs } from "./billingPeriods";
+import HoursEditor from "./HoursEditor";
+import TimeOffRequestPanel from "./TimeOffRequest";
+import { roleSeesAll } from "../companies/companiesApi";
+import { useAuth } from "../../api/AuthProvider";
 import "./CalendarSettingsModal.css";
 
 export interface Targets {
@@ -27,7 +31,9 @@ const SWATCHES = ["#12b57f", "#0a6f4d", "#3aa6a0", "#5b8def", "#b06fd0", "#e08b3
 
 export interface CapConsultant { userId: string; name: string; }
 export interface CapValue {
-  fullDays: number | null;        // full working days / week (capacity)
+  // Capacity is no longer set here: full working days per week now comes from
+  // the weekly hours in the calendar settings, so it cannot drift out of step
+  // with the days the company is actually open.
   // Tier 1 (minimum)
   minDays: number | null;         // days / month
   minBilling: number | null;      // € invoiced / month
@@ -38,7 +44,7 @@ export interface CapValue {
   bonusPct2: number | null;
 }
 const emptyCap = (): CapValue => ({
-  fullDays: null, minDays: null, minBilling: null, bonusPct1: null,
+  minDays: null, minBilling: null, bonusPct1: null,
   highDays: null, highBilling: null, bonusPct2: null,
 });
 
@@ -57,6 +63,12 @@ targets: Targets;
   /** Calendar mode: hide the Targets tab (targets live in Management now). */
   hideTargets?: boolean;
   consultants?: CapConsultant[];
+  /** The bonus everyone is on unless their own card overrides it. */
+  genBonus?: CapValue;
+  setGenBonus?: React.Dispatch<React.SetStateAction<CapValue>>;
+  /** What a billed day is worth in hours, for services priced by the hour. */
+  hoursPerDay?: number;
+  setHoursPerDay?: React.Dispatch<React.SetStateAction<number>>;
   capacity?: Record<string, CapValue>;
   onCapacityChange?: (userId: string, patch: Partial<CapValue>) => void;
   onCapacitySave?: (userId: string) => void;
@@ -73,23 +85,43 @@ targets: Targets;
   onClose: () => void;
 }
 
+/** Every ISO date from `a` to `b`, inclusive. */
+function spanDays(a: string, b: string): string[] {
+  if (!a) return [];
+  const start = new Date(`${a}T00:00:00`);
+  const end = new Date(`${b || a}T00:00:00`);
+  if (end < start) return [a];
+  const out: string[] = [];
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    out.push(d.toISOString().slice(0, 10));
+  }
+  return out;
+}
+
 export default function CalendarSettingsModal({
   types, setTypes, targets, setTargets,
   cutoffs = {}, setCutoffs = () => {}, defaultCutoffDay = 0, setDefaultCutoffDay = () => {},
   targetsOnly = false, managementMode = false, hideTargets = false,
   consultants = [], capacity = {}, onCapacityChange = () => {}, onCapacitySave = () => {}, capSavedId = null,
+  genBonus, setGenBonus, hoursPerDay = 8, setHoursPerDay,
   initialCapOpen = null,
   holidays = [], onAddHoliday = () => {}, onRemoveHoliday = () => {},
   vacationAllowance = 22, setVacationAllowance = () => {}, canEditTimeOff = false,
   onClose,
 }: Props) {
   const [openId, setOpenId] = useState<string | null>(null);
-  const [tab, setTab] = useState<"types" | "targets" | "billing" | "capacity" | "timeoff">(
-    initialCapOpen ? "capacity" : (managementMode || targetsOnly ? "capacity" : "types")
+  // Types of work are edited in Catalog now, under Blueprints.
+  const { role } = useAuth();
+  /** Time off, hours and cutoffs are company settings: managers and above. */
+  const canSetup = roleSeesAll(role);
+
+  const [tab, setTab] = useState<"targets" | "billing" | "capacity" | "timeoff" | "hours" | "request">(
+    initialCapOpen ? "capacity" : (managementMode || targetsOnly ? "capacity" : "request")
   );
   const [capOpen, setCapOpen] = useState<string | null>(initialCapOpen);
   const [newHolidayDate, setNewHolidayDate] = useState("");
   const [newHolidayName, setNewHolidayName] = useState("");
+  const [holidayUntil, setHolidayUntil] = useState("");
   const [revText, setRevText] = useState(String(targets.minRevenueMonth));
   const [cutoffYear, setCutoffYear] = useState(new Date().getFullYear());
 
@@ -127,20 +159,25 @@ export default function CalendarSettingsModal({
         <div className="cws-head">
           <div>
             <span className="cws-eyebrow">{managementMode ? "Management settings" : "Calendar settings"}</span>
-            <h2 className="cws-title">{tab === "types" ? "Types of work" : tab === "targets" ? "Billable targets" : tab === "capacity" ? "Targets & bonus" : tab === "timeoff" ? "Time off" : "Billing cutoffs"}</h2>
+            <h2 className="cws-title">{tab === "targets" ? "Billable targets" : tab === "capacity" ? "Targets & bonus" : tab === "timeoff" ? "Time off" : tab === "request" ? "My time off" : tab === "hours" ? "Working hours" : "Billing cutoffs"}</h2>
           </div>
           <button className="cws-x" onClick={onClose} aria-label="Close">×</button>
         </div>
 
        <div className="cws-tabs" style={targetsOnly && !managementMode ? { display: "none" } : undefined}>
-          {!managementMode && <button className={`cws-tab ${tab === "types" ? "is-on" : ""}`} onClick={() => setTab("types")}>Types of work</button>}
           {!managementMode && !hideTargets && <button className={`cws-tab ${tab === "targets" ? "is-on" : ""}`} onClick={() => setTab("targets")}>Targets</button>}
           {managementMode && <button className={`cws-tab ${tab === "capacity" ? "is-on" : ""}`} onClick={() => setTab("capacity")}>Targets & bonus</button>}
-          {!managementMode && <button className={`cws-tab ${tab === "timeoff" ? "is-on" : ""}`} onClick={() => setTab("timeoff")}>Time off</button>}
-          <button className={`cws-tab ${tab === "billing" ? "is-on" : ""}`} onClick={() => setTab("billing")}>Cutoffs</button>
+          {!managementMode && <button className={`cws-tab ${tab === "request" ? "is-on" : ""}`} onClick={() => setTab("request")}>My time off</button>}
+          {!managementMode && canSetup && <button className={`cws-tab ${tab === "timeoff" ? "is-on" : ""}`} onClick={() => setTab("timeoff")}>Time off</button>}
+          {!managementMode && canSetup && <button className={`cws-tab ${tab === "hours" ? "is-on" : ""}`} onClick={() => setTab("hours")}>Hours</button>}
+          {canSetup && <button className={`cws-tab ${tab === "billing" ? "is-on" : ""}`} onClick={() => setTab("billing")}>Cutoffs</button>}
         </div>
 
-        {tab === "targets" ? (
+        {tab === "request" ? (
+          <div className="cws-body"><TimeOffRequestPanel allowance={vacationAllowance} /></div>
+        ) : tab === "hours" ? (
+          <div className="cws-body cws-body-wide"><HoursEditor /></div>
+        ) : tab === "targets" ? (
 <div className="cws-body">
             <p className="cws-hint cws-intro">Billable consultancy days expected from each consultant.</p>
 
@@ -227,7 +264,11 @@ export default function CalendarSettingsModal({
             {canEditTimeOff && (
               <div className="cws-holiday-add">
                 <div className="cws-holiday-pick">
-                  <DatePicker value={newHolidayDate} onChange={setNewHolidayDate} placeholder="Pick a date" />
+                  <DatePicker value={newHolidayDate} onChange={setNewHolidayDate} placeholder="From" />
+                </div>
+                <span className="cws-range-arrow" aria-hidden="true">→</span>
+                <div className="cws-holiday-pick">
+                  <DatePicker value={holidayUntil} onChange={setHolidayUntil} placeholder="To (optional)" />
                 </div>
                 <input
                   className="cws-input cws-holiday-name"
@@ -239,8 +280,16 @@ export default function CalendarSettingsModal({
                   className="cws-add"
                   style={{ margin: 0 }}
                   disabled={!newHolidayDate}
-                  onClick={() => { onAddHoliday(newHolidayDate, newHolidayName.trim()); setNewHolidayDate(""); setNewHolidayName(""); }}
-                >Add</button>
+                  onClick={() => {
+                    // A range adds every day in it, so a fortnight of shutdown is
+                    // one action rather than fourteen.
+                    const days = spanDays(newHolidayDate, holidayUntil || newHolidayDate);
+                    days.forEach((iso) => onAddHoliday(iso, newHolidayName.trim()));
+                    setNewHolidayDate(""); setHolidayUntil(""); setNewHolidayName("");
+                  }}
+                >{holidayUntil && holidayUntil !== newHolidayDate
+                    ? `Add ${spanDays(newHolidayDate, holidayUntil).length} days`
+                    : "Add"}</button>
               </div>
             )}
             {holidays.length === 0 ? (
@@ -285,6 +334,7 @@ export default function CalendarSettingsModal({
               <span>{cutoffYear}</span>
               <button type="button" onClick={() => setCutoffYear((y) => y + 1)} aria-label="Next year">›</button>
             </div>
+            <div className="cws-cut-grid">
             {cutoffMonths.map((period) => {
               const win = billingWindow(period, cutoffs, defaultCutoffDay);
               const isCustom = !!cutoffs[period];
@@ -306,6 +356,7 @@ export default function CalendarSettingsModal({
                 </div>
               );
             })}
+            </div>
           </div>
         ) : tab === "capacity" ? (
           <div className="cws-body">
@@ -314,6 +365,49 @@ export default function CalendarSettingsModal({
               Two tiers — reach the minimum to earn bonus %1; billing above the higher target earns %2.
               Bonus is paid on invoiced revenue (moved billing counts where it was invoiced).
             </p>
+            {genBonus && setGenBonus && (
+              <div className="cws-gen">
+                <div className="cws-gen-head">
+                  <span className="cws-gen-eyebrow">Everyone</span>
+                  <p className="cws-gen-note">
+                    What each consultant is on unless their own card below says otherwise.
+                  </p>
+                </div>
+
+                {setHoursPerDay && (
+                  <label className="cws-gen-f cws-gen-hpd">
+                    <span>Hours in a billed day</span>
+                    <input type="number" min="1" max="24" step="0.5"
+                      value={hoursPerDay}
+                      onChange={(e) => setHoursPerDay(Number(e.target.value) || 8)} />
+                    <em>
+                      Work sold by the hour is compared against days at this rate,
+                      so the two never end up added together.
+                    </em>
+                  </label>
+                )}
+                <div className="cws-gen-grid">
+                  {([
+                    ["minDays", "Min days / month", "12"],
+                    ["minBilling", "Min billing / month", "12000"],
+                    ["bonusPct1", "Bonus %1", "5"],
+                    ["highDays", "High days / month", "18"],
+                    ["highBilling", "High billing / month", "20000"],
+                    ["bonusPct2", "Bonus %2", "8"],
+                  ] as [keyof CapValue, string, string][]).map(([field, label, ph]) => (
+                    <label className="cws-gen-f" key={field}>
+                      <span>{label}</span>
+                      <input type="number" min="0" placeholder={ph}
+                        value={genBonus[field] ?? ""}
+                        onChange={(e) => setGenBonus((g) => ({
+                          ...g, [field]: e.target.value === "" ? null : Number(e.target.value),
+                        }))} />
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {consultants.length === 0 ? (
               <p className="cws-hint">No consultants found.</p>
             ) : (
@@ -336,7 +430,7 @@ export default function CalendarSettingsModal({
                         <span className="cws-cap-av">{inits}</span>
                         <span className="cws-cap-name">{c.name}</span>
                         <span className="cws-capc-summary">
-                          {v.fullDays != null ? `${v.fullDays}d/wk cap` : "no cap"}
+                          {v.minDays != null ? `${v.minDays}d/mo min` : "no target"}
                           {v.bonusPct1 != null ? ` · ${v.bonusPct1}%` : ""}
                           {v.bonusPct2 != null ? ` / ${v.bonusPct2}%` : ""}
                         </span>
@@ -344,11 +438,6 @@ export default function CalendarSettingsModal({
                       </button>
                       {isOpen && (
                         <div className="cws-capc-body">
-                          <div className="cws-capc-row">
-                            <label>Full working days / week</label>
-                            {num("fullDays", "5", 7)}
-                          </div>
-
                           <div className="cws-capc-tier">
                             <span className="cws-capc-tierhead cws-tier1">Minimum target → bonus %1</span>
                             <div className="cws-capc-grid">
@@ -381,68 +470,7 @@ export default function CalendarSettingsModal({
               </div>
             )}
           </div>
-        ) : (
-        <div className="cws-body">
-          <button className="cws-add" onClick={addType}>+ New type of work</button>
-          {types.length === 0 && <p className="cws-hint">No types of work yet.</p>}
-
-          {types.map((t) => {
-            if (openId !== t.id) {
-              return (
-                <div className="cws-row" key={t.id}>
-                  <button className="cws-row-main" onClick={() => setOpenId(t.id)}>
-                    <span className="cws-dot" style={{ background: t.color }} />
-                    <span className="cws-row-text">
-                      <span className="cws-row-name">{t.name || "Untitled type"}</span>
-                      <span className="cws-row-sub">{t.clientRelated ? "Client related" : "Not client related"}</span>
-                    </span>
-                  </button>
-                  <button className="cws-del" onClick={() => remove(t.id)} aria-label="Remove">×</button>
-                </div>
-              );
-            }
-            return (
-              <div className="cws-edit" key={t.id}>
-                <button className="cws-bar" onClick={() => setOpenId(null)}>
-                  <span>{t.name || "Untitled type"}</span>
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 15l6-6 6 6" /></svg>
-                </button>
-
-                <div className="cws-field">
-                  <label>Name</label>
-                  <input className="cws-input" placeholder="e.g. Live session" value={t.name}
-                    onChange={(e) => patch(t.id, { name: e.target.value })} />
-                </div>
-
-                <div className="cws-toggle-row">
-                  <span className="cws-toggle-label">Client related</span>
-                  <button type="button" role="switch" aria-checked={t.clientRelated}
-                    className={`cws-switch ${t.clientRelated ? "on" : ""}`}
-                    onClick={() => patch(t.id, { clientRelated: !t.clientRelated })}>
-                    <span className="cws-knob" />
-                  </button>
-                </div>
-
-                <div className="cws-field">
-                  <label>Colour</label>
-                  <div className="cws-swatches">
-                    {SWATCHES.map((c) => (
-                      <button key={c} type="button" aria-label={c}
-                        className={`cws-swatch ${t.color === c ? "is-sel" : ""}`}
-                        style={{ background: c }} onClick={() => patch(t.id, { color: c })} />
-                    ))}
-                  </div>
-                </div>
-
-                <div className="cws-edit-foot">
-                  <button className="cws-remove-text" onClick={() => remove(t.id)}>Delete type</button>
-                  <button className="cws-done" onClick={() => setOpenId(null)}>Done</button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-        )}
+        ) : null}
 
         <div className="cws-foot">
           <button className="cws-done" onClick={onClose}>Close</button>

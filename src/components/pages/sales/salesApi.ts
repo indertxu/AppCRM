@@ -109,6 +109,32 @@ export async function removeTrackingEmployee(trackingId: string, profileId: stri
   await supabase.from("tracking_employees").delete().eq("tracking_id", trackingId).eq("profile_id", profileId);
 }
 
+// ============================================================================
+// Paste into src/components/pages/sales/salesApi.ts, next to the existing
+// loadTrackingEmployees / addTrackingEmployee / removeTrackingEmployee block.
+//
+// These went missing when the meetings work replaced the file. They are what
+// TrackingDetail ("Who is on this deal") and SalesPage (filtering deals for
+// reps) import.
+// ============================================================================
+
+/** Who is on each tracking, for the whole list at once. */
+export async function loadAllTrackingEmployees(): Promise<Record<string, string[]>> {
+  const { data } = await supabase.from("tracking_employees").select("tracking_id, profile_id");
+  const out: Record<string, string[]> = {};
+  (data ?? []).forEach((r: any) => { (out[r.tracking_id] ??= []).push(r.profile_id); });
+  return out;
+}
+
+/** Replace the whole team of a tracking in one go. */
+export async function setTrackingEmployees(trackingId: string, profileIds: string[]) {
+  await supabase.from("tracking_employees").delete().eq("tracking_id", trackingId);
+  if (profileIds.length) {
+    await supabase.from("tracking_employees")
+      .insert(profileIds.map((p) => ({ tracking_id: trackingId, profile_id: p })));
+  }
+}
+
 // ---- Products on a tracking (many per tracking) ----
 export interface TrackingProduct extends RevenueLineFields {
   id: string; tracking_id: string; product_id: string | null;
@@ -124,8 +150,25 @@ export type TermPatch = {
   discount_mode?: "none" | "percent" | "amount"; discount_value?: number;
 };
 
+/**
+ * Round a quantity up to the next multiple of the service's smallest billable
+ * unit. The calculator can land anywhere - 20.1 days, 39.9 hours - but only
+ * multiples of the minimum can actually be sold, and that rounded figure is
+ * what management receives and what the project is built from.
+ */
+export function billableQty(raw: number, minUnit?: number | null): number {
+  const q = Number(raw) || 0;
+  const m = Number(minUnit) || 0;
+  if (m <= 0) return q;
+  return +(Math.ceil(q / m) * m).toFixed(4);
+}
+
 export interface LineBreakdown {
   rows: CalcRow[];
+  /** What the calculator produced, before rounding to the billable unit. */
+  rawQty: number;
+  /** The quantity actually charged: rawQty rounded up to the minimum unit. */
+  qty: number;
   unitGross: number;
   unitDiscount: number;
   unitPrice: number;
@@ -191,9 +234,11 @@ export function unitBreakdown(l: RevenueLineFields, calculator?: Calculator | nu
  * (days, hours, licences) for everything else, so a monthly line and a yearly
  * one can be compared without lying about either.
  */
-export function lineBreakdown(l: RevenueLineFields, calculator?: Calculator | null, catalogBase?: number): LineBreakdown {
+export function lineBreakdown(l: RevenueLineFields, calculator?: Calculator | null, catalogBase?: number, minUnit?: number | null): LineBreakdown {
   const u = unitBreakdown(l, calculator, catalogBase);
   const unitPrice = u.net;
+  const rawQty = l.quantity == null ? 1 : Number(l.quantity) || 0;
+  const qty = billableQty(rawQty, minUnit);
   let mult: number;
   let multiplierLabel: string;
   if (l.recurring) {
@@ -209,19 +254,20 @@ export function lineBreakdown(l: RevenueLineFields, calculator?: Calculator | nu
     mult = 1;
     multiplierLabel = "";
   } else {
-    const qty = l.quantity == null ? 1 : Number(l.quantity) || 0;
+    // Charged on the rounded quantity, so the money always matches the days
+    // that reach the project.
     mult = qty;
     multiplierLabel = qty === 1 ? "" : `x ${qty}`;
   }
   const total = unitPrice * mult;
   return {
-    rows: u.rows, unitGross: u.gross, unitDiscount: u.discount, unitPrice,
+    rows: u.rows, rawQty, qty, unitGross: u.gross, unitDiscount: u.discount, unitPrice,
     multiplierLabel, gross: u.gross * mult, discount: u.discount * mult, total,
   };
 }
 
-export function lineTotal(l: RevenueLineFields, calculator?: Calculator | null, catalogBase?: number): number {
-  return lineBreakdown(l, calculator, catalogBase).total;
+export function lineTotal(l: RevenueLineFields, calculator?: Calculator | null, catalogBase?: number, minUnit?: number | null): number {
+  return lineBreakdown(l, calculator, catalogBase, minUnit).total;
 }
 /**
  * Columns each revenue table actually has. The line calculator is shared by
@@ -380,19 +426,64 @@ export async function deleteTask(id: string) {
 }
 
 // ---- Meetings ----
+/**
+ * Meetings live in calendar_entries with everyone else's time, so a meeting
+ * booked from the sales calendar shows up on the deal and the other way round.
+ */
 export async function loadMeetings(trackingId: string): Promise<TrackMeeting[]> {
-  const { data } = await supabase.from("tracking_meetings").select("*").eq("tracking_id", trackingId).order("meet_at");
-  return (data ?? []) as TrackMeeting[];
+  const { data } = await supabase.from("calendar_entries")
+    .select("id, phase_id_ref, title, entry_date, start_min, meeting_kind")
+    .eq("tracking_id", trackingId).eq("kind", "meeting")
+    .order("entry_date").order("start_min");
+  return ((data ?? []) as any[]).map((r) => ({
+    id: r.id,
+    phase_id: r.phase_id_ref,
+    title: r.title,
+    meet_at: `${r.entry_date}T${String(Math.floor(r.start_min / 60)).padStart(2, "0")}:${String(r.start_min % 60).padStart(2, "0")}:00`,
+    kind: (r.meeting_kind ?? "in_person") as MeetingKind,
+  }));
 }
 export async function addMeeting(trackingId: string, phaseId: string | null, title: string, meetAt: string | null, kind: MeetingKind = "in_person"): Promise<TrackMeeting | null> {
-  const { data } = await supabase.from("tracking_meetings").insert({ tracking_id: trackingId, phase_id: phaseId, title, meet_at: meetAt, kind }).select().single();
-  return (data as any) ?? null;
+  const at = meetAt ? new Date(meetAt) : new Date();
+  const startMin = at.getHours() * 60 + at.getMinutes();
+  const { data: u } = await supabase.auth.getUser();
+  const { data: trk } = await supabase.from("trackings")
+    .select("company_id").eq("id", trackingId).maybeSingle();
+  const { data } = await supabase.from("calendar_entries").insert({
+    user_id: u?.user?.id,
+    kind: "meeting",
+    tracking_id: trackingId,
+    phase_id_ref: phaseId,
+    company_id: (trk as any)?.company_id ?? null,
+    title,
+    date_key: `${at.getFullYear()}-${at.getMonth()}-${at.getDate()}`,
+    entry_date: `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`,
+    start_min: startMin,
+    end_min: startMin + 60,
+    meeting_kind: kind,
+    billable: 0,
+    billing_line: "sales",
+    status: "confirmed",
+  }).select("id").single();
+  if (!data) return null;
+  return { id: data.id, phase_id: phaseId, title, meet_at: meetAt, kind };
 }
 export async function deleteMeeting(id: string) {
-  await supabase.from("tracking_meetings").delete().eq("id", id);
+  await supabase.from("calendar_entries").delete().eq("id", id);
 }
 export async function updateMeeting(id: string, patch: { title?: string; meet_at?: string | null; kind?: MeetingKind }) {
-  await supabase.from("tracking_meetings").update(patch).eq("id", id);
+  const row: Record<string, unknown> = {};
+  if (patch.title != null) row.title = patch.title;
+  if (patch.kind != null) row.meeting_kind = patch.kind;
+  if (patch.meet_at) {
+    const at = new Date(patch.meet_at);
+    const startMin = at.getHours() * 60 + at.getMinutes();
+    row.date_key = `${at.getFullYear()}-${at.getMonth()}-${at.getDate()}`;
+    row.entry_date = `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`;
+    row.start_min = startMin;
+    row.end_min = startMin + 60;
+  }
+  await supabase.from("calendar_entries").update(row).eq("id", id);
 }
 // ---- Revenue potential ----
 export async function setProductPrice(trackingId: string, price: number | null) {

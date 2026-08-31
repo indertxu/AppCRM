@@ -1,8 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import Select from "../../framework/Select";
-import { listContacts, saveContact, deleteContact, listCompanies, type Contact, type Company } from "../companies/companiesApi";
+import {
+  listContacts, saveContact, deleteContact, listCompanies,
+  myProfile, isSalesLead, listEmployees, loadContactAssignees, setContactAssignees,
+  type Contact, type Company, type Employee,
+} from "../companies/companiesApi";
 import "../clients/ClientsPage.css";
 import "../companies/CompaniesPage.css";
 import "./ContactsPage.css";
@@ -22,20 +26,55 @@ export default function ContactsPage() {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [editing, setEditing] = useState<Contact | null>(null);
   const [q, setQ] = useState("");
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [assignees, setAssignees] = useState<Record<string, string[]>>({});
+  const [me, setMe] = useState<{ id: string; role: string; is_superadmin: boolean } | null>(null);
+  const location = useLocation();
 
   const reload = async () => {
     setContacts(await listContacts().catch(() => []));
     setCompanies(await listCompanies().catch(() => []));
+    setAssignees(await loadContactAssignees().catch(() => ({})));
   };
-  useEffect(() => { reload(); }, []);
+  useEffect(() => {
+    myProfile().then(setMe).catch(() => {});
+    listEmployees().then(setEmployees).catch(() => {});
+    reload();
+  }, []);
+
+  // Opened from a company row: jump straight into that contact.
+  useEffect(() => {
+    const id = (location.state as any)?.focusContactId;
+    if (!id || contacts.length === 0) return;
+    const c = contacts.find((x) => x.id === id);
+    if (c) setEditing(structuredClone(c));
+    navigate(location.pathname, { replace: true, state: null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state, contacts]);
+
+  const lead = isSalesLead(me);
 
   const companyName = (id: string) => companies.find((c) => c.id === id)?.name ?? "—";
   const shown = contacts.filter((c) => {
+    // Sales people only see the contacts they have been given access to.
+    if (!lead && me && !(assignees[c.id!] ?? []).includes(me.id)) return false;
     const n = norm(q.trim());
     if (!n) return true;
     const companyNames = c.companyIds.map(companyName).join(" ");
     return [fullName(c), c.position, c.email, companyNames].some((v) => norm(v ?? "").includes(n));
   });
+
+  if (me && !isSalesLead(me) && me.role !== "sales") {
+    return (
+      <div className="ct">
+        <header className="ct-head">
+          <button className="ct-back" onClick={() => navigate("/home")} aria-label="Back">‹</button>
+          <h1 className="ct-title">Contacts</h1>
+        </header>
+        <p className="cl-hint">This page is only available to the sales team.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="ct">
@@ -88,6 +127,9 @@ export default function ContactsPage() {
         <ContactEditor
           contact={editing}
           companies={companies}
+          employees={employees}
+          canAssign={lead}
+          assigned={assignees[editing.id!] ?? []}
           onClose={() => setEditing(null)}
           onSaved={async () => { setEditing(null); await reload(); }}
           onDeleted={async () => { setEditing(null); await reload(); }}
@@ -97,10 +139,12 @@ export default function ContactsPage() {
   );
 }
 
-function ContactEditor({ contact, companies, onClose, onSaved, onDeleted }: {
-  contact: Contact; companies: Company[]; onClose: () => void; onSaved: () => void; onDeleted: () => void;
+function ContactEditor({ contact, companies, employees, canAssign, assigned, onClose, onSaved, onDeleted }: {
+  contact: Contact; companies: Company[]; employees: Employee[]; canAssign: boolean; assigned: string[];
+  onClose: () => void; onSaved: () => void; onDeleted: () => void;
 }) {
   const [c, setC] = useState<Contact>(contact);
+  const [who, setWho] = useState<string[]>(assigned);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const set = (patch: Partial<Contact>) => setC((x) => ({ ...x, ...patch }));
@@ -120,6 +164,7 @@ function ContactEditor({ contact, companies, onClose, onSaved, onDeleted }: {
     if (!c.first_name.trim()) { setErr("A first name is required."); return; }
     setBusy(true); setErr(null);
     const e = await saveContact(c);
+    if (!e && c.id) await setContactAssignees(c.id, who).catch(() => {});
     setBusy(false);
     if (e) setErr(e); else onSaved();
   };
@@ -190,6 +235,27 @@ function ContactEditor({ contact, companies, onClose, onSaved, onDeleted }: {
                 options={available.map((co) => ({ value: co.id!, label: co.name }))} />
             )}
           </div>
+
+          {canAssign && (
+            <div className="dw-sec">
+              <p className="dw-sec-title">Who can see this contact</p>
+              <div className="dw-chips">
+                {who.map((id) => (
+                  <span key={id} className="dw-chip">
+                    {employees.find((e) => e.id === id)?.name ?? "Unknown"}
+                    <button onClick={() => setWho((xs) => xs.filter((x) => x !== id))} aria-label="Remove">×</button>
+                  </span>
+                ))}
+              </div>
+              {who.length === 0 && (
+                <p className="dw-empty-hint">Only boss and sales managers can see it. Add people to widen access.</p>
+              )}
+              {employees.filter((e) => !who.includes(e.id)).length > 0 && (
+                <Select value="" onChange={(v) => v && setWho((xs) => [...xs, v])} placeholder="+ Give access to"
+                  options={employees.filter((e) => !who.includes(e.id)).map((e) => ({ value: e.id, label: e.name }))} />
+              )}
+            </div>
+          )}
 
           <div className="dw-sec">
             <p className="dw-sec-title">Notes</p>
