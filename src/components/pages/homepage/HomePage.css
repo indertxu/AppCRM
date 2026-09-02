@@ -7,14 +7,16 @@
   --muted: #5a7d6d;
   --line: rgba(10, 111, 77, 0.12);
   position: relative;
-  min-height: 100vh;
+  height: 100vh;
   box-sizing: border-box;
-  padding: 26px 28px 70px;
+  display: flex;
+  flex-direction: column;
+  padding: 22px 26px 22px;
   background:
     radial-gradient(90% 60% at 100% 0%, rgba(18,181,127,0.08), transparent 60%),
     radial-gradient(80% 60% at 0% 100%, rgba(134,239,192,0.14), transparent 55%),
     #f2f7f4;
-  overflow-x: hidden;
+  overflow: hidden;
 }
 
 /* login flood iris-out */
@@ -28,6 +30,7 @@
 
 /* ---- greeting bar ---- */
 .home-bar {
+  flex-shrink: 0;
   display: flex; align-items: center; gap: 14px;
   margin-bottom: 22px;
   animation: home-drop 0.5s cubic-bezier(0.16,1,0.3,1) both;
@@ -50,6 +53,8 @@
 
 /* ---- bento grid ---- */
 .home-bento {
+  flex: 1;
+  min-height: 0;
   display: grid;
   gap: 18px;
   align-items: start;
