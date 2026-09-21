@@ -1575,21 +1575,21 @@
   left: 13px;
   top: 50%;
   transform: translateY(-50%);
-  font-size: 16px;
+  font-size: 14px;
   color: var(--muted);
   pointer-events: none;
 }
 .pv-search-input {
   width: 100%;
   box-sizing: border-box;
-  height: 42px;
+  height: 36px;
   padding: 0 34px 0 34px;
-  border-radius: 12px;
+  border-radius: 11px;
   border: 1px solid var(--line);
   background: #fff;
   color: var(--ink);
   font-family: inherit;
-  font-size: 14px;
+  font-size: 12.5px;
   outline: none;
   transition: border-color 0.2s, box-shadow 0.2s;
 }
@@ -1615,16 +1615,17 @@
 }
 .pv-search-x:hover { background: rgba(214, 69, 69, 0.12); color: #d64545; }
 
-.pv-filter { width: 168px; flex-shrink: 0; }
+.pv-filter { width: 156px; flex-shrink: 0; }
+.pv-filter .sel-trigger { padding-top: 8px !important; padding-bottom: 8px !important; min-height: 36px; box-sizing: border-box; font-size: 12.5px !important; border-radius: 11px !important; }
 .pv-clear {
-  height: 42px;
+  height: 36px;
   padding: 0 14px;
   border: none;
-  border-radius: 12px;
+  border-radius: 11px;
   background: rgba(10, 111, 77, 0.07);
   color: var(--forest);
   font-family: inherit;
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 600;
   cursor: pointer;
   flex-shrink: 0;

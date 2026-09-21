@@ -7,8 +7,9 @@ import { supabase } from "../../api/supabase";
 import { listCompanies, listContacts, type Company, type Contact } from "../companies/companiesApi";
 import { listPipelines, loadPipeline, type Pipeline, type Phase } from "../settings/pipelineApi";
 import { loadProducts, type Product } from "../settings/catalogApi";
-import { listTrackings, loadAllTrackingEmployees, setTrackingEmployees, createTracking, setTrackingPhase, setTrackingStatus, stampPhaseEntry, clearPhaseEventsAfter, trackingPct, type Tracking } from "./salesApi";
+import { listTrackings, loadAllTrackingEmployees, setTrackingEmployees, createTracking, setTrackingPhase, setTrackingStatus, stampPhaseEntry, clearPhaseEventsAfter, trackingPct, loadPotentialTotals, type Tracking } from "./salesApi";
 import TrackingDetail from "./TrackingDetail";
+import ExportModal from "./ExportModal";
 import "../companies/CompaniesPage.css";
 import { myProfile, isSalesLead, canOpenSales } from "../companies/companiesApi";
 import "./SalesPage.css";
@@ -20,6 +21,7 @@ const norm = (s: string) => (s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/
 export default function SalesPage() {
   const navigate = useNavigate();
   const [trackings, setTrackings] = useState<Tracking[]>([]);
+  const [potentialTotals, setPotentialTotals] = useState<Record<string, number>>({});
   const [companies, setCompanies] = useState<Company[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
@@ -36,7 +38,17 @@ export default function SalesPage() {
     if (id) setOpenId(id);
   }, []);
   const [creating, setCreating] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [view, setView] = useState<"list" | "kanban">("list");
+  // Board view needs a pipeline; if none is picked when switching to it, pick
+  // the first sales pipeline (or the first available) so the board isn't empty.
+  useEffect(() => {
+    if (view === "kanban" && !fPipeline && pipelines.length > 0) {
+      const firstSales = pipelines.find((p) => (p as any).is_sales) ?? pipelines[0];
+      setFPipeline(firstSales.id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, pipelines]);
   const [viewMenu, setViewMenu] = useState(false);
 
   const [q, setQ] = useState("");
@@ -46,9 +58,11 @@ export default function SalesPage() {
   const [fCompany, setFCompany] = useState("");
   const [fPhase, setFPhase] = useState("");
   const [sort, setSort] = useState("recent");
+  const [probView, setProbView] = useState<"phase" | "rep" | "mgr" | "avg">("phase");
 
   const reload = async () => {
     setTrackings(await listTrackings().catch(() => []));
+    loadPotentialTotals().then(setPotentialTotals).catch(() => {});
     setTrackAssignees(await loadAllTrackingEmployees().catch(() => ({})));
   };
   useEffect(() => { myProfile().then(setMe).catch(() => {}); }, []);
@@ -81,6 +95,35 @@ export default function SalesPage() {
   const pipelineName = (id: string | null) => pipelines.find((p) => p.id === id)?.name ?? "—";
   const productName = (id: string | null) => products.find((p) => p.id === id)?.name ?? null;
   const phaseName = (t: Tracking) => (phaseByPipe[t.pipeline_id ?? ""] ?? []).find((p) => p.id === t.current_phase_id)?.name ?? "—";
+
+  // The three close estimates for a deal, then the one chosen by probView.
+  const phaseProbOf = (t: Tracking): number | null => {
+    if (t.status === "won") return 100;
+    if (t.status === "lost") return 0;
+    const ph = (phaseByPipe[t.pipeline_id ?? ""] ?? []).find((p) => p.id === t.current_phase_id);
+    if (!ph) return null;
+    if (ph.sales_outcome === "win") return 100;
+    if (ph.sales_outcome === "loss") return 0;
+    return ph.close_probability ?? null;
+  };
+  const avgProbOf = (t: Tracking): number | null => {
+    const vals = [phaseProbOf(t), t.rep_close_prob ?? null, t.mgr_close_prob ?? null].filter((v): v is number => v != null);
+    return vals.length ? Math.round(vals.reduce((s, v) => s + v, 0) / vals.length) : null;
+  };
+  const shownProbOf = (t: Tracking): number | null => {
+    if (probView === "rep") return t.rep_close_prob ?? null;
+    if (probView === "mgr") return t.mgr_close_prob ?? null;
+    if (probView === "avg") return avgProbOf(t);
+    return phaseProbOf(t);
+  };
+  // Expected close date to show in the list: if I'm on this deal's sales team I see
+  // the rep's estimate (fallback to the manager's); otherwise the manager's
+  // (fallback to the rep's).
+  const closeDateOf = (t: Tracking): string | null => {
+    const onTeam = !!me && (trackAssignees[t.id] ?? []).includes(me.id);
+    const rep = t.rep_close_date || null, mgr = t.mgr_close_date || null;
+    return onTeam ? (rep ?? mgr) : (mgr ?? rep);
+  };
   const trackTitle = (t: Tracking) => companyName(t.company_id) || (t.contactIds[0] ? contactName(t.contactIds[0]) : "Untitled");
 
   const allPhaseNames = useMemo(() => {
@@ -95,8 +138,9 @@ export default function SalesPage() {
    * can never report on deals the list is hiding.
    */
   const mine = useMemo(() => {
-    const lead = isSalesLead(me);
-    if (lead || !me) return trackings;
+    // Until we know who's looking, show nothing (not everything).
+    if (!me) return [];
+    if (isSalesLead(me)) return trackings;
     return trackings.filter((t) => (trackAssignees[t.id] ?? []).includes(me.id));
   }, [trackings, trackAssignees, me]);
 
@@ -130,11 +174,34 @@ export default function SalesPage() {
     list = [...list].sort((a, b) => {
       if (sort === "az") return trackTitle(a).localeCompare(trackTitle(b));
       if (sort === "oldest") return (a.created_at ?? "").localeCompare(b.created_at ?? "");
+      if (sort === "prob_hi" || sort === "prob_lo") {
+        const pa = shownProbOf(a), pb = shownProbOf(b);
+        if (pa == null && pb == null) return 0;
+        if (pa == null) return 1;
+        if (pb == null) return -1;
+        return sort === "prob_hi" ? pb - pa : pa - pb;
+      }
+      // Deals with no close date / no revenue always go to the bottom,
+      // whichever direction is chosen.
+      if (sort === "close_soon" || sort === "close_late") {
+        const da = closeDateOf(a), db = closeDateOf(b);
+        if (!da && !db) return 0;
+        if (!da) return 1;
+        if (!db) return -1;
+        return sort === "close_soon" ? da.localeCompare(db) : db.localeCompare(da);
+      }
+      if (sort === "rev_hi" || sort === "rev_lo") {
+        const ra = potentialTotals[a.id!] || 0, rb = potentialTotals[b.id!] || 0;
+        if (!ra && !rb) return 0;
+        if (!ra) return 1;
+        if (!rb) return -1;
+        return sort === "rev_hi" ? rb - ra : ra - rb;
+      }
       return (b.created_at ?? "").localeCompare(a.created_at ?? "");
     });
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trackings, q, fStatus, fPipeline, fProduct, fCompany, fPhase, sort, companies, contacts, pipelines, products, phaseByPipe]);
+  }, [mine, q, fStatus, fPipeline, fProduct, fCompany, fPhase, sort, probView, companies, contacts, pipelines, products, phaseByPipe, potentialTotals, trackAssignees, me]);
 
   // Clicking the KPI card that is already active clears the filter again.
   const toggleStatus = (s: string) => setFStatus((cur) => (cur === s ? "" : s));
@@ -206,6 +273,10 @@ export default function SalesPage() {
             </>
           )}
         </div>
+        <button className="sl-export-btn" disabled={!me} onClick={() => setExporting(true)}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4v11M7 10l5 5 5-5M5 20h14" /></svg>
+          Export
+        </button>
         <button className="sl-new" onClick={() => setCreating(true)}>+ New tracking</button>
       </header>
 
@@ -250,12 +321,17 @@ export default function SalesPage() {
           options={[{ value: "", label: "All pipelines" }, ...pipelines.map((p) => ({ value: p.id, label: p.name }))]} />
         <Select value={fProduct} onChange={setFProduct} placeholder="All products"
           options={[{ value: "", label: "All products" }, ...products.map((p) => ({ value: p.id!, label: p.name }))]} />
-        <Select value={fCompany} onChange={setFCompany} placeholder="All companies"
-          options={[{ value: "", label: "All companies" }, ...myCompanies.map((c) => ({ value: c.id!, label: c.name }))]} />
+        <Select value={probView} onChange={(v) => setProbView(v as typeof probView)} placeholder="Probability"
+          options={[
+            { value: "phase", label: "Phase probability" },
+            { value: "rep", label: "Sales estimate" },
+            { value: "mgr", label: "Management estimate" },
+            { value: "avg", label: "Average of all" },
+          ]} />
         <Select value={fPhase} onChange={setFPhase} placeholder="Any stage"
           options={[{ value: "", label: "Any stage" }, ...allPhaseNames.map((p) => ({ value: p, label: p }))]} />
         <Select value={sort} onChange={setSort} placeholder="Sort"
-          options={[{ value: "recent", label: "Most recent" }, { value: "oldest", label: "Oldest" }, { value: "az", label: "A-Z" }]} />
+          options={[{ value: "recent", label: "Most recent" }, { value: "oldest", label: "Oldest" }, { value: "az", label: "A-Z" }, { value: "prob_hi", label: "Probability: high → low" }, { value: "prob_lo", label: "Probability: low → high" }, { value: "close_soon", label: "Close date: soonest first" }, { value: "close_late", label: "Close date: latest first" }, { value: "rev_hi", label: "Revenue: high → low" }, { value: "rev_lo", label: "Revenue: low → high" }]} />
         {anyFilter && <button className="sl-clear" onClick={clearAll}>Clear</button>}
       </div>
 
@@ -277,10 +353,7 @@ export default function SalesPage() {
         </div>
       ) : (
         <div className="sl-scroll">
-          <div className="sl-lrow sl-lhead">
-            <span>Client</span><span>Pipeline</span><span>Stage</span><span>Product</span><span>Started</span><span>Progress</span><span>Status</span>
-          </div>
-          <div className="sl-list">
+          <div className="dc-list">
             {shown.map((t) => (
               <TrackingRow
                 key={t.id}
@@ -291,6 +364,10 @@ export default function SalesPage() {
                 pipeline={pipelineName(t.pipeline_id)}
                 phases={phaseByPipe[t.pipeline_id ?? ""] ?? []}
                 product={productName(t.product_id)}
+                revenue={potentialTotals[t.id!] ?? 0}
+                closeDate={closeDateOf(t)}
+                closeProbOverride={shownProbOf(t)}
+                probLabel={probView === "phase" ? "close" : probView === "rep" ? "sales" : probView === "mgr" ? "mgmt" : "avg"}
                 onOpen={() => setOpenId(t.id)}
               />
             ))}
@@ -298,6 +375,21 @@ export default function SalesPage() {
         </div>
       )}
 
+      {exporting && (
+        <ExportModal
+          deals={mine}
+          contacts={contacts}
+          companies={companies}
+          employees={employees}
+          trackAssignees={trackAssignees}
+          potentialTotals={potentialTotals}
+          pipelineNames={pipelines.map((p) => p.name)}
+          productNames={products.map((p) => p.name)}
+          phaseNames={allPhaseNames}
+          helpers={{ pipelineName, productName, phaseName, phaseProbOf, closeDateOf }}
+          onClose={() => setExporting(false)}
+        />
+      )}
       {creating && (
         <NewTracking
           companies={companies} contacts={contacts} pipelines={pipelines} products={products}
@@ -309,34 +401,95 @@ export default function SalesPage() {
   );
 }
 
-function TrackingRow({ tracking, title, company, contactCount, pipeline, phases, product, onOpen }: {
+function TrackingRow({ tracking, title, company, contactCount, pipeline, phases, product, revenue, closeDate, closeProbOverride, probLabel, onOpen }: {
   tracking: Tracking; title: string; company: string | null; contactCount: number;
-  pipeline: string; phases: Phase[]; product: string | null; onOpen: () => void;
+  pipeline: string; phases: Phase[]; product: string | null; revenue?: number; closeDate?: string | null;
+  closeProbOverride?: number | null; probLabel?: string; onOpen: () => void;
 }) {
   const curIdx = phases.findIndex((p) => p.id === tracking.current_phase_id);
   // Same adaptive formula as the detail view: first phase 0%, win phase 100%.
   const pct = trackingPct(phases, tracking.current_phase_id);
   const stage = curIdx >= 0 ? phases[curIdx]?.name ?? "-" : "Not started";
+  // The overview chooses which probability to show (phase / sales / mgmt / avg);
+  // it's passed in. Fall back to the phase value if not provided.
+  const curPhase = curIdx >= 0 ? phases[curIdx] : undefined;
+  const phaseProb: number | null =
+    tracking.status === "won" ? 100 :
+    tracking.status === "lost" ? 0 :
+    curPhase?.sales_outcome === "win" ? 100 :
+    curPhase?.sales_outcome === "loss" ? 0 :
+    curPhase?.close_probability != null ? curPhase.close_probability : null;
+  const closeProb: number | null = closeProbOverride !== undefined ? closeProbOverride : phaseProb;
+  const probTone = closeProb == null ? "none" : closeProb >= 70 ? "hi" : closeProb >= 40 ? "mid" : "lo";
   const started = tracking.created_at ? new Date(tracking.created_at).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "2-digit" }) : "-";
 
   return (
-    <button className="sl-lrow" onClick={onOpen}>
-      <span className="sl-lcell sl-lclient">
-        <span className="sl-lavatar">{title.slice(0, 1).toUpperCase()}</span>
-        <span className="sl-lclient-text">
-          <span className="sl-lname">{title}</span>
-          <span className="sl-lsub">{company ? "Company" : "Contact"}{contactCount > 0 && ` \u00b7 ${contactCount} contact${contactCount !== 1 ? "s" : ""}`}</span>
-        </span>
-      </span>
-      <span className="sl-lcell"><span className="sl-tag sl-tag-pipe">{pipeline}</span></span>
-      <span className="sl-lcell sl-lstage">{stage}</span>
-      <span className="sl-lcell">{product ? <span className="sl-tag sl-tag-prod">{product}</span> : <span className="sl-lmuted">-</span>}</span>
-      <span className="sl-lcell sl-lmuted">{started}</span>
-      <span className="sl-lcell sl-lprog">
-        <span className="sl-lprog-track"><span className={`sl-lprog-fill sl-lprog-${tracking.status}`} style={{ width: `${pct}%` }} /></span>
-        <span className="sl-lprog-pct">{pct}%</span>
-      </span>
-      <span className="sl-lcell"><span className={`sl-status sl-status-${tracking.status}`}>{tracking.status}</span></span>
+    <button className={`dc dc-${tracking.status} dc-${probTone}`} onClick={onOpen}>
+      {/* left rail: big progress number */}
+      <div className="dc-rail">
+        <span className="dc-rail-pct">{pct}<i>%</i></span>
+        <span className="dc-rail-lbl">progress</span>
+        <span className="dc-rail-bar"><span className="dc-rail-fill" style={{ height: `${pct}%` }} /></span>
+      </div>
+
+      {/* body */}
+      <div className="dc-body">
+        <div className="dc-head">
+          <span className="dc-avatar">{title.slice(0, 1).toUpperCase()}</span>
+          <div className="dc-headtxt">
+            <span className="dc-name">{title}</span>
+            <span className="dc-meta">{company ? "Company" : "Contact"}{contactCount > 0 && ` \u00b7 ${contactCount} contact${contactCount !== 1 ? "s" : ""}`} · {pipeline}</span>
+          </div>
+          <span className={`dc-status dc-status-${tracking.status}`}>{tracking.status}</span>
+        </div>
+
+        <div className="dc-footer">
+          <span className="dc-stage">
+            <span className="dc-stage-dot" />
+            {stage}
+          </span>
+          {product && <span className="dc-prod">{product}</span>}
+          <span className="dc-date">{started}</span>
+        </div>
+      </div>
+
+      {/* potential revenue */}
+      <div className="dc-rev">
+        <span className="dc-rev-val">{revenue && revenue > 0 ? `${revenue.toLocaleString("es-ES")} €` : "—"}</span>
+        <span className="dc-rev-lbl">potential</span>
+      </div>
+
+      {/* expected close date */}
+      <div className="dc-close-col">
+        {closeDate ? (
+          <>
+            <span className="dc-close-lbl">Est. close</span>
+            <span className="dc-close-val">{new Date(closeDate).toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "2-digit" })}</span>
+          </>
+        ) : (
+          <>
+            <span className="dc-close-lbl">Est. close</span>
+            <span className="dc-close-none">—</span>
+          </>
+        )}
+      </div>
+
+      {/* right: close probability ring */}
+      <div className="dc-ring-wrap">
+        {closeProb == null ? (
+          <span className="dc-ring-empty">—</span>
+        ) : (
+          <span className="dc-ring-inner">
+            <svg className="dc-ring" viewBox="0 0 40 40" aria-hidden="true">
+              <circle className="dc-ring-bg" cx="20" cy="20" r="16" />
+              <circle className="dc-ring-fg" cx="20" cy="20" r="16"
+                style={{ strokeDasharray: `${(closeProb / 100) * 100.5} 100.5` }} />
+            </svg>
+            <span className="dc-ring-val"><b>{closeProb}<i>%</i></b></span>
+          </span>
+        )}
+        <span className="dc-ring-lbl">{probLabel ?? "close"}</span>
+      </div>
     </button>
   );
 }
@@ -636,12 +789,13 @@ function KanbanView({ kanbanPipe, phaseByPipe, trackings, trackTitle, companyNam
                 return (
                   <div
                     key={t.id}
-                    className={`sl-kcard ${dragId === t.id ? "is-dragging" : ""}`}
+                    className={`sl-kcard sl-kcard-${t.status} ${dragId === t.id ? "is-dragging" : ""}`}
                     draggable
                     onDragStart={() => setDragId(t.id)}
                     onDragEnd={() => { setDragId(null); setOverPhase(null); }}
                     onClick={() => onOpen(t.id)}
                   >
+                    <span className="sl-kcard-accent" aria-hidden="true" />
                     <span className="sl-kcard-avatar">{title.slice(0, 1).toUpperCase()}</span>
                     <span className="sl-kcard-id">
                       <span className="sl-kcard-name">{title}</span>

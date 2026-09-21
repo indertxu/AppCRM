@@ -173,3 +173,135 @@
 @media (prefers-reduced-motion: reduce) {
   .tf-drop, .tf-note-tip { transition: none; }
 }
+/* ===== Redesign: compact drop + 2x2 grid + modal ===== */
+.tf-drop-compact { padding: 14px 12px; }
+.tf-drop-compact svg { width: 22px; height: 22px; }
+.tf-drop-compact .tf-drop-main { font-size: 12.5px; }
+
+.tf-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; border-radius: 12px; transition: box-shadow 0.14s; }
+.tf-grid.is-over { box-shadow: 0 0 0 2px var(--emerald, #12b57f); }
+
+/* Header with manage icon */
+.tf-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.tf-header .sl-panel-title { margin: 0; }
+.tf-manage-icon { display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid var(--line, rgba(10,111,77,0.14)); border-radius: 9px; background: #fff; color: var(--muted, #5a7d6d); cursor: pointer; flex-shrink: 0; transition: all 0.14s; }
+.tf-manage-icon svg { width: 16px; height: 16px; }
+.tf-manage-icon:hover { color: var(--forest, #0a6f4d); background: rgba(18,181,127,0.08); border-color: rgba(18,181,127,0.4); }
+
+
+
+.tf-seeall { flex: 1; margin-top: 0; padding: 9px; border: 1px solid var(--line, rgba(10,111,77,0.14)); border-radius: 10px; background: #f6faf8; color: var(--forest, #0a6f4d); font-family: "Space Grotesk", sans-serif; font-size: 12.5px; font-weight: 600; cursor: pointer; transition: background 0.14s, border-color 0.14s; }
+.tf-seeall:hover { background: rgba(18,181,127,0.09); border-color: rgba(18,181,127,0.4); }
+
+/* Modal */
+.tf-modal-backdrop { position: fixed; inset: 0; z-index: 3300; display: grid; place-items: center; padding: 1.5rem; background: rgba(6,26,19,0.42); backdrop-filter: blur(6px); }
+.tf-modal { width: min(560px, 96vw); max-height: 84vh; display: flex; flex-direction: column; border-radius: 20px; background: #fff; border: 1px solid var(--line, rgba(10,111,77,0.14)); box-shadow: 0 50px 100px -35px rgba(6,40,28,0.6); overflow: hidden; }
+.tf-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 1.1rem 1.3rem; border-bottom: 1px solid var(--line, rgba(10,111,77,0.14)); flex-shrink: 0; }
+.tf-modal-title { font-family: "Space Grotesk", sans-serif; font-size: 18px; font-weight: 600; color: #0b241a; margin: 0; display: flex; align-items: center; gap: 9px; }
+.tf-modal-title span { display: grid; place-items: center; min-width: 24px; height: 24px; padding: 0 8px; border-radius: 999px; background: rgba(18,181,127,0.12); color: var(--forest, #0a6f4d); font-size: 12px; font-weight: 700; }
+.tf-modal-x { width: 34px; height: 34px; border: none; border-radius: 10px; background: rgba(10,111,77,0.06); font-size: 20px; color: var(--muted, #5a7d6d); cursor: pointer; flex-shrink: 0; }
+.tf-modal-x:hover { background: rgba(184,92,92,0.12); color: #b85c5c; }
+.tf-modal-body { padding: 1rem 1.3rem 1.3rem; overflow-y: auto; }
+
+
+/* ===== File cells (redesigned) ===== */
+.tf-fi {
+  position: relative; flex-shrink: 0; display: grid; place-items: center;
+  width: 42px; height: 42px; border-radius: 12px;
+  background: color-mix(in srgb, var(--fi) 13%, #fff);
+  color: var(--fi);
+}
+.tf-fi i { font-size: 20px; line-height: 1; }
+.tf-fi svg { width: 22px; height: 22px; }
+
+.tf-cell {
+  position: relative;
+  border: 1px solid var(--line, rgba(10,111,77,0.14)); border-radius: 14px;
+  background: #fff; box-shadow: 0 10px 24px -20px rgba(10,111,77,0.5);
+  transition: transform 0.18s cubic-bezier(0.16,1,0.3,1), box-shadow 0.18s, border-color 0.18s;
+}
+.tf-cell:hover { transform: translateY(-2px); border-color: rgba(18,181,127,0.4); box-shadow: 0 20px 34px -22px rgba(18,181,127,0.45); z-index: 5; }
+.tf-cell-tip {
+  position: absolute; top: calc(100% + 6px); left: 10px; right: 10px; z-index: 20;
+  padding: 8px 11px; border-radius: 10px; background: #0b241a; color: #eafaf3;
+  font-size: 11.5px; line-height: 1.4; box-shadow: 0 16px 30px -14px rgba(6,26,19,0.6);
+  opacity: 0; transform: translateY(-4px); pointer-events: none; transition: opacity 0.16s, transform 0.16s;
+}
+.tf-cell-tip::before { content: ""; position: absolute; top: -5px; left: 18px; width: 10px; height: 10px; background: #0b241a; transform: rotate(45deg); }
+.tf-cell:hover .tf-cell-tip { opacity: 1; transform: translateY(0); }
+.tf-cell-open {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  padding: 12px 12px 14px; border: none; background: none; cursor: pointer; text-align: left; min-width: 0;
+  border-radius: 14px;
+}
+.tf-cell-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.tf-cell-name { font-family: "Space Grotesk", sans-serif; font-size: 13px; font-weight: 600; color: #0b241a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.tf-cell-meta { display: flex; align-items: center; gap: 7px; font-size: 10.5px; color: var(--muted, #5a7d6d); }
+.tf-cell-date { position: relative; padding-left: 8px; }
+.tf-cell-date::before { content: ""; position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: 3px; height: 3px; border-radius: 50%; background: currentColor; opacity: 0.5; }
+.tf-cell-note { position: absolute; top: 9px; right: 10px; color: var(--emerald, #12b57f); }
+.tf-cell-note svg { width: 13px; height: 13px; }
+
+/* Hover actions slide up from the bottom edge */
+.tf-cell-hover {
+  position: absolute; right: 0; bottom: 0; left: 0; display: flex; justify-content: flex-end; gap: 6px;
+  padding: 6px 10px; background: linear-gradient(180deg, transparent, #fff 55%); border-radius: 0 0 14px 14px;
+  transform: translateY(100%); opacity: 0; transition: transform 0.2s cubic-bezier(0.16,1,0.3,1), opacity 0.16s;
+}
+.tf-cell:hover .tf-cell-hover { transform: translateY(0); opacity: 1; }
+.tf-cell-act { display: grid; place-items: center; width: 28px; height: 28px; border: 1px solid var(--line, rgba(10,111,77,0.14)); border-radius: 8px; background: #fff; color: var(--muted, #5a7d6d); cursor: pointer; transition: all 0.14s; }
+.tf-cell-act svg { width: 14px; height: 14px; }
+.tf-cell-act:hover { color: var(--forest, #0a6f4d); background: rgba(18,181,127,0.1); border-color: rgba(18,181,127,0.4); }
+.tf-cell-del:hover { color: #b85c5c; background: rgba(184,92,92,0.12); border-color: rgba(184,92,92,0.4); }
+
+/* ===== Modal polish ===== */
+.tf-modal-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.tf-modal-upload {
+  display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 15px;
+  border: none; border-radius: 10px; box-sizing: border-box; white-space: nowrap;
+  background: linear-gradient(120deg, var(--mint, #86efc0), var(--emerald, #12b57f)); color: #04120d;
+  font-family: "Space Grotesk", sans-serif; font-size: 12.5px; font-weight: 700; cursor: pointer;
+  box-shadow: 0 8px 18px -10px rgba(18,181,127,0.7); transition: filter 0.14s, transform 0.14s;
+}
+.tf-modal-upload svg { width: 15px; height: 15px; }
+.tf-modal-upload:hover:not(:disabled) { filter: brightness(1.04); transform: translateY(-1px); }
+.tf-modal-upload:disabled { opacity: 0.6; cursor: default; box-shadow: none; }
+.tf-modal-x { width: 36px; height: 36px; box-sizing: border-box; }
+
+/* Modal rows — cleaner, roomier */
+.tf-modal-body .tf-list { gap: 6px; }
+.tf-modal-body .tf-item {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 11px 12px;
+  border: 1px solid var(--line, rgba(10,111,77,0.14)); border-radius: 12px; background: #fff;
+  transition: border-color 0.14s, background 0.14s;
+}
+.tf-modal-body .tf-item:hover { border-color: rgba(18,181,127,0.35); background: #f8fcfa; box-shadow: none; }
+.tf-modal-body .tf-kind {
+  flex-shrink: 0; display: grid; place-items: center; width: 38px; height: 38px; border-radius: 10px;
+  color: #fff; font-family: "Space Grotesk", sans-serif; font-size: 10px; font-weight: 800; letter-spacing: 0.03em;
+}
+.tf-modal-body .tf-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.tf-modal-body .tf-name { border: none; background: none; padding: 0; text-align: left; font-family: "Space Grotesk", sans-serif; font-size: 13.5px; font-weight: 600; color: #0b241a; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 6px; }
+.tf-modal-body .tf-name:hover { color: var(--forest, #0a6f4d); }
+.tf-modal-body .tf-meta { font-size: 11px; color: var(--muted, #5a7d6d); }
+.tf-modal-body .tf-actions { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
+.tf-modal-body .tf-act { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid var(--line, rgba(10,111,77,0.14)); border-radius: 8px; background: #fff; color: var(--muted, #5a7d6d); cursor: pointer; transition: all 0.14s; }
+.tf-modal-body .tf-act svg { width: 15px; height: 15px; }
+.tf-modal-body .tf-act:hover { color: var(--forest, #0a6f4d); background: rgba(18,181,127,0.1); border-color: rgba(18,181,127,0.4); }
+.tf-modal-body .tf-del:hover { color: #b85c5c; background: rgba(184,92,92,0.12); border-color: rgba(184,92,92,0.4); }
+.tf-modal-body .tf-rename { width: 100%; box-sizing: border-box; padding: 6px 9px; border: 1px solid var(--emerald, #12b57f); border-radius: 8px; font-family: "Space Grotesk", sans-serif; font-size: 13px; outline: none; }
+.tf-modal-body .tf-noteedit { flex-basis: 100%; margin-top: 8px; }
+.tf-modal-body .tf-noteedit textarea { width: 100%; box-sizing: border-box; min-height: 60px; resize: vertical; padding: 9px 11px; border: 1px solid var(--emerald, #12b57f); border-radius: 9px; font-family: inherit; font-size: 13px; outline: none; }
+.tf-modal-body .tf-noteedit-hint { font-size: 10.5px; color: var(--muted, #5a7d6d); }
+
+/* ===== Docs modal toolbar (search + sort) ===== */
+.tf-modal-toolbar { display: flex; align-items: center; gap: 10px; padding: 12px 1.3rem 0; flex-shrink: 0; }
+.tf-search { position: relative; flex: 1; display: flex; align-items: center; }
+.tf-search svg { position: absolute; left: 12px; width: 16px; height: 16px; color: var(--muted, #5a7d6d); pointer-events: none; }
+.tf-search input { width: 100%; box-sizing: border-box; height: 40px; padding: 0 34px; border: 1px solid var(--line, rgba(10,111,77,0.14)); border-radius: 11px; background: #f6faf8; font-family: inherit; font-size: 13px; color: #0b241a; outline: none; transition: border-color 0.14s, box-shadow 0.14s, background 0.14s; }
+.tf-search input:focus { border-color: var(--emerald, #12b57f); box-shadow: 0 0 0 3px rgba(18,181,127,0.15); background: #fff; }
+.tf-search-x { position: absolute; right: 9px; border: none; background: none; color: var(--muted, #5a7d6d); font-size: 17px; cursor: pointer; line-height: 1; padding: 2px; }
+.tf-search-x:hover { color: #b85c5c; }
+.tf-sort { width: 150px; flex-shrink: 0; }
+.tf-sort .sel-trigger { min-height: 40px; box-sizing: border-box; padding-top: 9px !important; padding-bottom: 9px !important; font-size: 12.5px !important; }
+.tf-empty { padding: 2rem 0; text-align: center; color: var(--muted, #5a7d6d); font-size: 13px; }

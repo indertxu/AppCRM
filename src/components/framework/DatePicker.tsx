@@ -48,18 +48,21 @@ export default function DatePicker({ value, onChange, placeholder = "Select date
   const open = openProp !== undefined ? openProp : openState;
   const setOpen = (v: boolean) => { onOpenChange ? onOpenChange(v) : setOpenState(v); };
   const [view, setView] = useState<Date>(selected ?? new Date());
-  const [pos, setPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+  const [pos, setPos] = useState<{ top?: number; bottom?: number; left: number }>({ top: 0, left: 0 });
   const btnRef = useRef<HTMLButtonElement>(null);
 
   const positionFrom = (el: HTMLElement | null) => {
     const r = el?.getBoundingClientRect();
     if (r) {
-      const below = r.bottom + 6;
-      const wouldOverflow = below + 320 > window.innerHeight;
-      setPos({
-        top: wouldOverflow ? r.top - 326 : below,
-        left: Math.min(r.left, window.innerWidth - 276),
-      });
+      const spaceBelow = window.innerHeight - r.bottom;
+      const openUp = spaceBelow < 340 && r.top > spaceBelow; // not enough room below → open upward
+      const left = Math.max(8, Math.min(r.left, window.innerWidth - 276));
+      if (openUp) {
+        // anchor the popup's BOTTOM just above the field, so it hugs the field
+        setPos({ bottom: window.innerHeight - r.top + 6, left });
+      } else {
+        setPos({ top: r.bottom + 6, left });
+      }
     }
     setView(selected ?? new Date());
   };
@@ -133,7 +136,7 @@ export default function DatePicker({ value, onChange, placeholder = "Select date
         createPortal(
           <>
             <div className="dp-layer" onMouseDown={() => setOpen(false)} />
-            <div className="dp-pop" style={{ top: pos.top, left: pos.left }} onMouseDown={(e) => e.stopPropagation()}>
+            <div className="dp-pop" style={{ top: pos.top, bottom: pos.bottom, left: pos.left }} onMouseDown={(e) => e.stopPropagation()}>
               <div className="dp-head">
                 <button type="button" className="dp-nav" onClick={() => setView(new Date(y, m - 1, 1))}>‹</button>
                 <span className="dp-month">{MONTHS[m]} {y}</span>

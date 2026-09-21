@@ -4,6 +4,7 @@ import { supabase } from "../../api/supabase";
 import { periodForDate, cutoffOf, type Cutoffs } from "../calendar/billingPeriods";
 import DatePicker from "../../framework/DatePicker";
 import Select from "../../framework/Select";
+import { downloadBlob, sheetToXlsx, type XCell, type XStyle } from "../../framework/exportFile";
 import "./BillingPanel.css";
 
 export interface BiEntry {
@@ -45,23 +46,6 @@ interface Props {
 }
 
 type Line = "consultor" | "supervision" | "connector";
-/* Loads SheetJS from a CDN the first time an export is requested, so the app
-   needs no `xlsx` dependency. Cached on window after the first load. */
-let _xlsxPromise: Promise<any> | null = null;
-function loadXLSX(): Promise<any> {
-  const w = window as any;
-  if (w.XLSX) return Promise.resolve(w.XLSX);
-  if (_xlsxPromise) return _xlsxPromise;
-  _xlsxPromise = new Promise((resolve, reject) => {
-    const s = document.createElement("script");
-    s.src = "https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js";
-    s.onload = () => resolve((window as any).XLSX);
-    s.onerror = () => reject(new Error("Could not load the Excel library."));
-    document.head.appendChild(s);
-  });
-  return _xlsxPromise;
-}
-
 const lineLabel: Record<Line, string> = {
   consultor: "Consultancy",
   supervision: "Supervision",
@@ -70,10 +54,26 @@ const lineLabel: Record<Line, string> = {
 type Phase = "tobill" | "sent" | "paid";
 type SortKey = "amount_desc" | "amount_asc" | "date_desc" | "date_asc" | "expired";
 
+/**
+ * Postal code from an address object, whatever the key is called
+ * (zip, postcode, postal_code, postalCode, zipCode, cp, codigo_postal…).
+ * Falls back to a 5-digit Spanish code written inside the street text.
+ */
+function postalOf(a: any): string {
+  if (!a || typeof a !== "object") return "";
+  if (a.postalCode) return String(a.postalCode).trim(); // how NewClientForm stores it
+  for (const [k, v] of Object.entries(a)) {
+    if (v == null || v === "" || typeof v === "object") continue;
+    if (/zip|post|^cp$|c[oó]digo|^code$/i.test(k)) return String(v).trim();
+  }
+  const m = String(a.street ?? a.line1 ?? a.address ?? "").match(/\b\d{5}\b/);
+  return m ? m[0] : "";
+}
+
 function fmtAddress(a: any): string {
   if (!a) return "";
   if (typeof a === "string") return a;
-  const parts = [a.street, a.number, a.city, a.zip ?? a.postcode, a.country].filter(Boolean);
+  const parts = [a.street, a.number, a.details, a.city, postalOf(a), a.country].filter(Boolean);
   return parts.join(", ");
 }
 function billingContact(contacts: any[]): { name: string; email: string } | null {
@@ -429,59 +429,103 @@ export default function BillingPanel({
   const toggleSelAll = () =>
     setSelected(() => allVisibleSelected ? new Set() : new Set(outstanding.map((b) => b.key)));
 
+  /**
+   * Invoicing sheet, laid out exactly like the finance team's template:
+   * row 1 empty, headers from column B, one row per billing line. A bill with
+   * both consultancy and supervision work is split into two rows. Every row is
+   * labelled in column A ("Senior Consultant" / "Project Manager"). Connector days bill at the consultancy rate, so they join
+   * the consultancy row. Amounts are live formulas (price × days) with totals.
+   */
   const exportSelected = async () => {
     const chosen = outstanding.filter((b) => selected.has(b.key));
     if (chosen.length === 0) return;
     setExporting(true);
     try {
-      const XLSX = await loadXLSX();
+      const addrParts = (a: any) => {
+        if (!a) return { street: "", zip: "", city: "" };
+        if (typeof a === "string") return { street: a, zip: "", city: "" };
+        const street = [[a.street ?? a.line1 ?? a.address, a.number].filter(Boolean).join(" "), a.details ?? a.line2].filter(Boolean).join(", ");
+        return { street, zip: postalOf(a), city: a.city ?? "" };
+      };
+      const invoiceEmails = (contacts: any[]) => {
+        const list = Array.isArray(contacts) ? contacts : [];
+        const billing = list.filter((c) => c?.billing && c?.email);
+        const pick = billing.length ? billing : list.filter((c) => c?.email).slice(0, 1);
+        return pick.map((c) => String(c.email).trim());
+      };
 
-      // Sheet 1 — one row per selected bill, the columns you see on screen.
-      const summary = chosen.map((b) => {
-        const totalDays = b.lines.consultor + b.lines.supervision + b.lines.connector;
-        const row: Record<string, string | number> = {
-          "Bill to": b.legalName,
-          Client: clientNames[b.clientId] ?? "",
-          Type: b.type,
-          Period: periodLabel(b.period),
-          VAT: b.vat || "",
-          "Billing contact": b.contact?.name ?? "",
-          "Contact email": b.contact?.email ?? "",
-          [`${unitOf(b.projectId) === "h" ? "Hours" : "Days"}`]: +totalDays.toFixed(2),
-          "Net €": +net(b).toFixed(2),
-        };
-        if (b.taxed) { row["Tax %"] = b.taxRate; row["Tax €"] = +(net(b) * b.taxRate / 100).toFixed(2); }
-        row["Total €"] = +gross(b).toFixed(2);
-        return row;
-      });
+      const HEAD = ["Client", "VAT Number", "Adress", "Postal Code", "City", "Invoice email (CC: Basilio always)",
+        "Project name", "PRICE", "Invoice Month", "Invoicing days", "Invoice amount"];
+      const FIRST = 1, LAST = HEAD.length; // table spans columns B..L
+      const PRICE = `"€ "#,##0.00`, MONEY = `#,##0.00 "€"`;
 
-      // Sheet 2 — the collapsible breakdown: one row per billing line.
-      const breakdown: Record<string, string | number>[] = [];
+      type Part = { role: string; days: number; rate: number };
+      const lines: { b: Bill; part: Part }[] = [];
       chosen.forEach((b) => {
-        const u = unitOf(b.projectId);
-        (["consultor", "supervision", "connector"] as Line[]).forEach((ln) => {
-          if (b.lines[ln] <= 0) return;
-          const rate = ln === "supervision" ? b.supervisionRate : b.rate;
-          breakdown.push({
-            "Bill to": b.legalName,
-            Period: periodLabel(b.period),
-            Line: lineLabel[ln],
-            [u === "h" ? "Hours" : "Days"]: +b.lines[ln].toFixed(2),
-            "Rate €": rate,
-            "Amount €": +(b.lines[ln] * rate).toFixed(2),
-          });
-        });
-        if (b.taxed) breakdown.push({ "Bill to": b.legalName, Period: periodLabel(b.period), Line: `Tax ${b.taxRate}%`, "Amount €": +(net(b) * b.taxRate / 100).toFixed(2) });
-        breakdown.push({ "Bill to": b.legalName, Period: periodLabel(b.period), Line: "TOTAL", "Amount €": +gross(b).toFixed(2) });
+        const parts: Part[] = [];
+        const cons = b.lines.consultor + b.lines.connector;
+        if (cons > 0) parts.push({ role: "Senior Consultant", days: cons, rate: b.rate });
+        if (b.lines.supervision > 0) parts.push({ role: "Project Manager", days: b.lines.supervision, rate: b.supervisionRate });
+        parts.forEach((part) => lines.push({ b, part }));
       });
 
-      const wb = XLSX.utils.book_new();
-      const ws1 = XLSX.utils.json_to_sheet(summary);
-      const ws2 = XLSX.utils.json_to_sheet(breakdown);
-      XLSX.utils.book_append_sheet(wb, ws1, "Invoices");
-      XLSX.utils.book_append_sheet(wb, ws2, "Breakdown");
+      const firstData = 3, lastData = firstData + lines.length - 1;
+      // Outer medium frame around header + data, thin rule under the header.
+      const frame = (rowNo: number, col: number, extra: XStyle = {}): XStyle => {
+        const border: XStyle["border"] = {};
+        if (col === FIRST) border.l = "medium";
+        if (col === LAST) border.r = "medium";
+        if (rowNo === 2) { border.t = "medium"; border.b = "thin"; }
+        if (rowNo === lastData) border.b = "medium";
+        return Object.keys(border).length ? { ...extra, border } : extra;
+      };
+
+      const rows: (XCell | null)[][] = [[]];
+      rows.push([null, ...HEAD.map((h, i) => ({ v: h, s: frame(2, i + 1, { bold: true }) }))]);
+
+      lines.forEach(({ b, part }, i) => {
+        const r = firstData + i;
+        const p = projects[b.projectId];
+        const ad = addrParts(p?.address);
+        const emails = invoiceEmails(p?.contacts ?? []);
+        const days = +part.days.toFixed(2);
+        rows.push([
+          { v: part.role },
+          { v: b.legalName, s: frame(r, 1, { bold: true }) },
+          { v: b.vat || "", s: frame(r, 2) },
+          { v: ad.street, s: frame(r, 3) },
+          { v: ad.zip, s: frame(r, 4, { align: "right" }) },  // text: keeps leading zeros (08028)
+          { v: ad.city, s: frame(r, 5) },
+          { v: emails.join(" ; "), link: emails.length ? `mailto:${emails.join(";")}` : undefined,
+            s: frame(r, 6, emails.length ? { color: "0563C1", underline: true } : {}) },
+          { v: clientNames[b.clientId] || b.legalName, s: frame(r, 7) },
+          { v: part.rate, s: frame(r, 8, { fmt: PRICE }) },
+          { v: cutoffOf(b.period, localCutoffs, defaultCutoffDay), date: true, s: frame(r, 9, { fmt: "dd-mmm", align: "right" }) },
+          { v: days, s: frame(r, 10) },
+          { v: +(days * part.rate).toFixed(2), formula: `I${r}*K${r}`, s: frame(r, 11, { fmt: MONEY }) },
+        ]);
+      });
+
+      // Totals, boxed under the last three columns.
+      const tr = lastData + 1;
+      const box = (col: number, extra: XStyle = {}): XStyle => ({
+        ...extra, border: { t: "medium", b: "medium", ...(col === 9 ? { l: "medium" } : {}), ...(col === LAST ? { r: "medium" } : {}) },
+      });
+      const totDays = lines.reduce((s, l) => s + +l.part.days.toFixed(2), 0);
+      const totAmt = lines.reduce((s, l) => s + +(+l.part.days.toFixed(2) * l.part.rate).toFixed(2), 0);
+      const total: (XCell | null)[] = Array(LAST + 1).fill(null);
+      total[9] = { v: "Total", s: box(9) };
+      total[10] = { v: +totDays.toFixed(2), formula: `SUM(K${firstData}:K${lastData})`, s: box(10, { bold: true }) };
+      total[11] = { v: +totAmt.toFixed(2), formula: `SUM(L${firstData}:L${lastData})`, s: box(11, { bold: true, fmt: MONEY }) };
+      rows.push(total);
+
+      const blob = sheetToXlsx({
+        name: periodLabel(period),
+        cols: [18, 54, 14, 50, 12, 13, 52, 14, 12, 15, 15, 16],
+        rows,
+      });
       const stamp = new Date().toISOString().slice(0, 10);
-      XLSX.writeFile(wb, `to-bill_${periodLabel(period).replace(/\s/g, "-")}_${stamp}.xlsx`);
+      downloadBlob(blob, `to-bill_${periodLabel(period).replace(/\s/g, "-")}_${stamp}.xlsx`);
     } finally {
       setExporting(false);
     }

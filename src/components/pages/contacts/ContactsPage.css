@@ -15,9 +15,12 @@
 .ct-sub { font-size: 13.5px; color: var(--muted); margin: 3px 0 0; }
 .ct-search { position: relative; margin-left: auto; display: flex; align-items: center; }
 .ct-search-ico { position: absolute; left: 13px; color: var(--muted); font-size: 15px; pointer-events: none; }
-.ct-search input { width: 280px; padding: 11px 34px 11px 34px; border: 1px solid var(--line); border-radius: 12px; background: #fff; font-family: inherit; font-size: 13.5px; outline: none; transition: border-color 0.14s, box-shadow 0.14s; }
+.ct-search input { width: 300px; height: 38px; box-sizing: border-box; padding: 0 34px 0 34px; border: 1px solid var(--line); border-radius: 11px; background: #fff; font-family: inherit; font-size: 13px; outline: none; transition: border-color 0.14s, box-shadow 0.14s; }
 .ct-search input:focus { border-color: var(--emerald); box-shadow: 0 0 0 3px rgba(18,181,127,0.14); }
 .ct-search button { position: absolute; right: 9px; border: none; background: none; font-size: 17px; color: var(--muted); cursor: pointer; }
+/* Match the "+ New contact" (and settings) buttons to the search-bar height */
+.ct-head .cl-primary, .ct-head .ct-settings { height: 38px; box-sizing: border-box; display: inline-flex; align-items: center; }
+.ct-head .cl-primary { padding-top: 0 !important; padding-bottom: 0 !important; padding-left: 20px; padding-right: 20px; font-size: 13px; border-radius: 11px; }
 
 .ct-count { font-size: 12.5px; font-weight: 600; color: var(--muted); margin-bottom: 12px; flex-shrink: 0; }
 
@@ -65,3 +68,53 @@
   .ct-search { margin-left: 0; width: 100%; }
   .ct-search input { width: 100%; }
 }
+/* ===== Fields settings button ===== */
+.ct-settings {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 0 15px; border: 1px solid var(--line); border-radius: 11px; background: #fff;
+  font-family: "Space Grotesk", sans-serif; font-size: 13px; font-weight: 600; color: var(--forest);
+  cursor: pointer; transition: border-color 0.14s, background 0.14s;
+}
+.ct-settings svg { width: 16px; height: 16px; }
+.ct-settings:hover { border-color: rgba(18,181,127,0.42); background: rgba(18,181,127,0.05); }
+
+/* ===== Field settings modal ===== */
+.dw.dw-narrow { width: min(560px, 96vw); }
+.dw-req { color: var(--emerald); font-weight: 700; }
+.cf-list { display: flex; flex-direction: column; gap: 8px; }
+.cf-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 11px; background: #fbfefc; }
+.cf-row-main { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.cf-row-name { font-family: "Space Grotesk", sans-serif; font-size: 14px; font-weight: 600; color: var(--ink); }
+.cf-row-type { font-size: 11.5px; color: var(--muted); }
+.cf-req { flex-shrink: 0; border: 1px solid var(--line); background: #fff; color: var(--muted); border-radius: 999px; padding: 5px 12px; font-family: "Space Grotesk", sans-serif; font-size: 11px; font-weight: 700; cursor: pointer; transition: all 0.14s; }
+.cf-req.on { background: rgba(18,181,127,0.14); color: var(--forest); border-color: transparent; }
+.cf-del { flex-shrink: 0; display: grid; place-items: center; width: 28px; height: 28px; border: 1px solid var(--line); background: #fff; border-radius: 8px; color: var(--muted); font-size: 18px; cursor: pointer; transition: all 0.14s; }
+.cf-del:hover { background: rgba(184,92,92,0.12); color: #b85c5c; border-color: rgba(184,92,92,0.35); }
+.cf-add { margin-top: 10px; }
+
+/* ===== Overview columns config ===== */
+.cf-cols { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.cf-col { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; font-family: "Space Grotesk", sans-serif; font-size: 13.5px; font-weight: 600; color: var(--ink); cursor: grab; transition: border-color 0.12s, box-shadow 0.12s, opacity 0.12s, transform 0.12s; }
+.cf-col.is-dragging { opacity: 0.4; transform: scale(0.98); }
+.cf-col.is-over { border-color: var(--emerald); box-shadow: 0 -2px 0 var(--emerald) inset, 0 8px 18px -12px rgba(18,181,127,0.6); }
+.cf-col:active { cursor: grabbing; }
+.cf-col-fixed { background: rgba(18,181,127,0.06); cursor: default; color: var(--forest); }
+.cf-col-grip { color: var(--muted); font-size: 12px; letter-spacing: -2px; cursor: grab; }
+.cf-col-fixed .cf-col-grip { opacity: 0.4; cursor: default; }
+.cf-col-tag { margin-left: auto; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); background: rgba(10,111,77,0.07); padding: 2px 8px; border-radius: 999px; }
+.cf-col-x { margin-left: auto; display: grid; place-items: center; width: 24px; height: 24px; border: none; border-radius: 6px; background: rgba(10,111,77,0.06); color: var(--muted); font-size: 16px; cursor: pointer; transition: all 0.14s; }
+.cf-col-x:hover { background: rgba(184,92,92,0.12); color: #b85c5c; }
+.cf-col-add { margin-top: 8px; }
+
+/* ===== Compound filter/sort controls ===== */
+.ct-cfilters { display: flex; align-items: center; gap: 8px; }
+.ct-cfilter { display: flex; align-items: center; gap: 6px; }
+.ct-cfilter > .sel-trigger { width: 175px; flex-shrink: 0; box-sizing: border-box; min-height: 38px; height: 38px; padding-top: 0 !important; padding-bottom: 0 !important; font-size: 12.5px !important; }
+
+/* ===== Range inputs (number filter) ===== */
+.ct-range { display: inline-flex; align-items: center; gap: 5px; }
+.ct-range input { width: 62px; height: 38px; box-sizing: border-box; padding: 0 8px; border: 1px solid var(--line); border-radius: 10px; background: #fff; font-family: "Space Grotesk", sans-serif; font-size: 12.5px; font-weight: 600; text-align: center; outline: none; transition: border-color 0.14s, box-shadow 0.14s; }
+.ct-range input:focus { border-color: var(--emerald); box-shadow: 0 0 0 3px rgba(18,181,127,0.14); }
+.ct-range input::-webkit-outer-spin-button, .ct-range input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.ct-range input { -moz-appearance: textfield; appearance: textfield; }
+.ct-range-sep { color: var(--muted); font-size: 13px; }

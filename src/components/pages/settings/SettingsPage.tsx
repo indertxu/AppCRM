@@ -7,12 +7,13 @@ import UserDetailModal from "./UserDetailModal";
 import Organization from "./Organization";
 import CatalogPage from "./CatalogPage";
 import PipelinePage from "./PipelinePage";
+import ProposalTemplateEditor from "./ProposalTemplateEditor";
 import { connectOutlook, completeOutlookConnect, outlookStatus, disconnectOutlook } from "../../api/outlookSync";
 import "./SettingsPage.css";
 
 const levelLabel = (id: string | null) => LEVELS.find((l) => l.id === id)?.label ?? id ?? "—";
 
-type View = "home" | "users" | "organization" | "account" | "interface" | "catalog" | "pipeline";
+type View = "home" | "users" | "organization" | "account" | "interface" | "catalog" | "pipeline" | "proposal";
 
 export const DOCK_PINNED_KEY = "next.dockPinned";
 export const DOCK_PINNED_EVENT = "next:dock-pinned";
@@ -251,6 +252,20 @@ export default function SettingsPage() {
             </button>
           )}
 
+          {canManage && (
+            <button className="nav-card" style={{ ["--accent" as any]: "#d1685f" }} onClick={() => setView("proposal")}>
+              <span className="nav-card-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h11l5 5v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" /><path d="M14 4v5h5M8 13h8M8 17h8M8 9h2" /></svg>
+              </span>
+              <span className="nav-card-title">Proposal template</span>
+              <span className="nav-card-sub">Brand, copy &amp; terms for proposals</span>
+              <span className="nav-card-spacer" />
+              <span className="nav-card-go">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+              </span>
+            </button>
+          )}
+
           <button className="nav-card" style={{ ["--accent" as any]: "#e0a13c" }} onClick={() => setView("interface")}>
             <span className="nav-card-icon">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -319,6 +334,21 @@ export default function SettingsPage() {
     return (
       <div className="st st-pipeline">
         <PipelinePage onBack={() => setView("home")} />
+      </div>
+    );
+  }
+
+  // ---- Proposal template ----
+  if (view === "proposal") {
+    return (
+      <div className="st">
+        <header className="st-bar st-bar-row">
+          <button className="st-back" onClick={() => setView("home")} aria-label="Back">‹</button>
+          <div>
+            <h1 className="st-title">Proposal template</h1>
+          </div>
+        </header>
+        <ProposalTemplateEditor canManage={canManage} />
       </div>
     );
   }

@@ -31,9 +31,9 @@
 .mi-pill-int { background: rgba(18,181,127,0.14); color: #0a6f4d; }
 .mi-pill-ext { background: #eef2f0; color: #46695a; }
 
-/* Autocomplete popover */
+/* Autocomplete popover — above modals (which sit at z-index 3200–3300) */
 .mi-pop {
-  z-index: 3000; min-width: 240px; max-width: 320px;
+  z-index: 4100; min-width: 240px; max-width: 320px;
   background: #fff; border: 1px solid var(--line, rgba(10,111,77,0.14)); border-radius: 12px; padding: 5px;
   box-shadow: 0 26px 50px -24px rgba(11,36,26,0.4); animation: mi-in 0.12s ease;
 }

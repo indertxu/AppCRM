@@ -1,0 +1,158 @@
+/* Line calculator modal — extracted from SalesPage for reuse */
+
+.sl-rc-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 3px 0; font-size: 12px; color: var(--muted); }
+.sl-rc-row em { font-style: normal; font-family: "Space Grotesk", sans-serif; font-weight: 600; color: var(--ink); white-space: nowrap; }
+.sl-rc-row.sl-rc-sub { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 7px; }
+.sl-rc-row.sl-rc-disc em { color: #b85c5c; }
+.sl-rc-row.sl-rc-total { border-top: 1px solid var(--line); margin-top: 5px; padding-top: 7px; }
+.sl-rc-row.sl-rc-total span { font-weight: 700; color: var(--ink); }
+.sl-rc-row.sl-rc-total em { color: var(--forest); font-size: 14px; }
+/* ===== Line calculator popup ===== */
+.sl-calc-backdrop { position: fixed; inset: 0; z-index: 3400; display: grid; place-items: center; padding: 1.5rem; background: rgba(6,26,19,0.42); animation: sl-calc-fade 0.18s ease; }
+.sl-calc-backdrop::before { content: ""; position: absolute; inset: 0; z-index: 0; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.sl-calc-backdrop > * { position: relative; z-index: 1; }
+.sl-calc { width: min(880px, 96vw); max-height: 90vh; display: flex; flex-direction: column; border-radius: 20px; background: #fff; border: 1px solid var(--line); box-shadow: 0 50px 100px -35px rgba(6,40,28,0.6); overflow: hidden; animation: sl-calc-pop 0.24s cubic-bezier(0.16,1,0.3,1); }
+.sl-calc-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 1.2rem 1.4rem 1rem; border-bottom: 1px solid var(--line); }
+.sl-calc-eyebrow { font-size: 10.5px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--emerald); font-weight: 700; }
+.sl-calc-title { font-family: "Space Grotesk", sans-serif; font-size: 19px; font-weight: 600; color: #064a34; margin: 4px 0 0; }
+.sl-calc-x { width: 34px; height: 34px; border: none; border-radius: 10px; background: rgba(10,111,77,0.06); font-size: 20px; color: var(--muted); cursor: pointer; flex-shrink: 0; }
+.sl-calc-x:hover { background: rgba(184,92,92,0.12); color: #b85c5c; }
+.sl-calc-body { padding: 1.2rem 1.4rem; overflow-y: auto; }
+.sl-calc-sec { margin-bottom: 1.1rem; }
+.sl-calc-sec-t { font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
+.sl-calc-tiers { display: flex; flex-wrap: wrap; gap: 8px; }
+.sl-calc-tiers button { display: flex; flex-direction: column; gap: 2px; align-items: flex-start; padding: 9px 14px; border: 1px solid var(--line); border-radius: 11px; background: #fff; cursor: pointer; font-family: inherit; transition: border-color 0.14s, background 0.14s; }
+.sl-calc-tiers button b { font-family: "Space Grotesk", sans-serif; font-size: 13px; font-weight: 600; color: var(--ink); }
+.sl-calc-tiers button span { font-size: 11.5px; color: var(--muted); }
+.sl-calc-tiers button:hover { border-color: rgba(18,181,127,0.4); }
+.sl-calc-tiers button.is-on { border-color: var(--emerald); background: rgba(18,181,127,0.07); box-shadow: 0 0 0 2px rgba(18,181,127,0.14); }
+.sl-calc-tiers button.is-on b { color: var(--forest); }
+.sl-calc-vars { display: flex; flex-direction: column; gap: 8px; }
+.sl-calc-var { display: flex; flex-wrap: nowrap; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 11px; background: #fbfefc; }
+.sl-calc-var > span:first-child { flex: 1 1 auto; min-width: 0; font-size: 13px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sl-calc-out { flex-shrink: 0; font-family: "Space Grotesk", sans-serif; font-size: 12px; font-weight: 600; color: var(--forest); background: rgba(18,181,127,0.1); padding: 4px 9px; border-radius: 7px; white-space: nowrap; }
+.sl-calc-var input { width: 78px; flex-shrink: 0; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font-family: "Space Grotesk", sans-serif; font-size: 13px; font-weight: 600; text-align: right; outline: none; }
+.sl-calc-var input:focus { border-color: var(--emerald); box-shadow: 0 0 0 3px rgba(18,181,127,0.14); }
+.sl-calc-var-fixed em { font-style: normal; font-size: 12px; color: var(--muted); }
+.sl-calc-inline { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.sl-calc-inline input { width: 110px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 9px; background: #fff; font-family: "Space Grotesk", sans-serif; font-size: 13.5px; font-weight: 600; text-align: right; outline: none; }
+.sl-calc-inline input:focus { border-color: var(--emerald); box-shadow: 0 0 0 3px rgba(18,181,127,0.14); }
+.sl-calc-inline input:disabled { background: #f2f5f3; color: var(--muted); }
+.sl-calc-inline em { font-style: normal; font-size: 12.5px; color: var(--muted); }
+.sl-calc-note { font-size: 11.5px; color: var(--muted); font-style: italic; }
+.sl-calc-switch { display: inline-flex; gap: 3px; padding: 3px; border-radius: 9px; background: rgba(10,111,77,0.06); }
+.sl-calc-switch button { border: none; background: transparent; border-radius: 6px; padding: 6px 12px; font-family: inherit; font-size: 12px; font-weight: 600; color: var(--muted); cursor: pointer; }
+.sl-calc-switch button.is-on { background: #fff; color: var(--forest); box-shadow: 0 3px 8px -4px rgba(10,111,77,0.4); }
+.sl-calc-receipt { padding: 12px 14px; border-radius: 13px; background: rgba(18,181,127,0.05); border: 1px solid rgba(18,181,127,0.25); }
+.sl-calc-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 1rem 1.4rem; border-top: 1px solid var(--line); }
+.sl-calc-cancel { border: 1px solid var(--line); background: #fff; color: var(--muted); border-radius: 11px; padding: 10px 18px; font-family: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; }
+.sl-calc-apply { border: none; border-radius: 11px; padding: 10px 22px; background: linear-gradient(120deg, var(--mint), var(--emerald)); color: #04120d; font-family: "Space Grotesk", sans-serif; font-size: 13.5px; font-weight: 600; cursor: pointer; }
+.sl-calc-apply:hover { filter: brightness(1.05); }
+/* No spinner arrows anywhere in the revenue UI */
+.sl-calc input[type="number"]::-webkit-outer-spin-button,
+.sl-calc input[type="number"]::-webkit-inner-spin-button,
+.sl-rev-item input[type="number"]::-webkit-outer-spin-button,
+.sl-rev-item input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.sl-calc input[type="number"],
+.sl-rev-item input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+/* Per-row discount control */
+.sl-calc-disc { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; margin-left: auto; }
+.sl-calc-disc input { width: 58px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font-family: "Space Grotesk", sans-serif; font-size: 12.5px; font-weight: 600; text-align: right; outline: none; }
+.sl-calc-disc input:focus { border-color: var(--emerald); box-shadow: 0 0 0 3px rgba(18,181,127,0.14); }
+.sl-calc-switch-xs button { padding: 5px 9px; font-size: 11.5px; min-width: 26px; }
+.sl-calc-off { font-size: 11px; min-width: 44px; text-align: right; font-weight: 700; color: #b85c5c; white-space: nowrap; }
+.sl-rc-off { font-style: normal; color: #b85c5c; font-weight: 600; }
+/* Per-row rate override (service duration calculators) */
+.sl-calc-rate { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.sl-calc-rate input { width: 70px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font-family: "Space Grotesk", sans-serif; font-size: 12.5px; font-weight: 600; text-align: right; outline: none; }
+.sl-calc-rate input:focus { border-color: var(--emerald); box-shadow: 0 0 0 3px rgba(18,181,127,0.14); }
+.sl-calc-rate span { font-size: 11.5px; color: var(--muted); }
+.sl-rc-row.sl-rc-round span { font-style: italic; }
+.sl-rc-row.sl-rc-round em { color: var(--forest); }
+/* Calculated (pre-rounding) total shown struck-through beside the billable one */
+.sl-rc-calc { font-style: normal; font-weight: 500; color: var(--muted); text-decoration: line-through; margin-right: 8px; font-size: 12px; }
+/* "→ bill 3.5 days" pill next to the day count */
+.sl-calc-billqty { font-family: "Space Grotesk", sans-serif; font-size: 12px; font-weight: 700; color: var(--forest); background: rgba(18,181,127,0.12); padding: 4px 10px; border-radius: 8px; white-space: nowrap; }
+
+/* =====================================================================
+   Modern variant (handoff) — scoped, doesn't affect the tracker
+   ===================================================================== */
+.sl-calc-modern {
+  --emerald: #12b57f; --forest: #0a6f4d; --mint: #86efc0; --neon: #35ffa0;
+  --ink: #0b241a; --muted: #6a8a7c; --line: rgba(10,111,77,0.1); --field: #f3f9f6;
+  border-radius: 24px; overflow: hidden; padding: 0;
+  box-shadow: 0 60px 120px -40px rgba(4,18,13,0.65), 0 0 0 1px rgba(10,111,77,0.06);
+  animation: sl-calc-pop 0.35s cubic-bezier(0.16,1,0.3,1);
+}
+@keyframes sl-calc-pop { from { opacity: 0; transform: translateY(18px) scale(0.97); } }
+
+/* header: living gradient */
+.sl-calc-modern .sl-calc-head {
+  position: relative; isolation: isolate; overflow: hidden; margin: 0; padding: 22px 26px;
+  background: radial-gradient(120% 200% at 0% 0%, #16412e 0%, transparent 55%), radial-gradient(140% 200% at 100% 100%, #0b8f5e 0%, transparent 50%), linear-gradient(115deg, #0e2a1d, #06110c);
+  -webkit-mask-image: linear-gradient(180deg, #000 84%, transparent 100%); mask-image: linear-gradient(180deg, #000 84%, transparent 100%);
+}
+.sl-calc-modern .sl-calc-eyebrow { color: #7fe9b8; letter-spacing: 0.18em; }
+.sl-calc-modern .sl-calc-title { color: #f4fff9; font-family: "Space Grotesk", sans-serif; letter-spacing: -0.02em; }
+.sl-calc-modern .sl-calc-x { background: rgba(255,255,255,0.12); color: #eafff4; border-radius: 12px; transition: background 0.16s, transform 0.16s; }
+.sl-calc-modern .sl-calc-x:hover { background: rgba(255,255,255,0.22); transform: rotate(90deg); }
+
+.sl-calc-modern .sl-calc-body { padding: 22px 26px; }
+.sl-calc-modern .sl-calc-sec-t { color: var(--emerald); font-weight: 700; letter-spacing: 0.1em; }
+
+/* rows a bit airier with hairlines */
+.sl-calc-modern .sl-calc-var { border-bottom: 1px solid rgba(10,111,77,0.07); padding: 11px 16px; }
+.sl-calc-modern .sl-calc-var:last-child { border-bottom: none; }
+
+/* the +/- discount & unit switches → pill segmented */
+.sl-calc-modern .sl-calc-switch { background: var(--field); border-radius: 9px; padding: 2px; gap: 2px; }
+.sl-calc-modern .sl-calc-switch button { border-radius: 7px; font-weight: 600; color: var(--muted); transition: background 0.14s, color 0.14s; }
+.sl-calc-modern .sl-calc-switch button.is-on { background: #fff; color: var(--forest); box-shadow: 0 2px 6px -2px rgba(10,111,77,0.4); }
+
+/* Yes/No toggles */
+.sl-calc-modern .sl-calc-inline button { border-radius: 8px; border: 1.5px solid var(--line); background: #fff; color: var(--muted); font-weight: 600; transition: all 0.14s; }
+.sl-calc-modern .sl-calc-inline button.is-on { background: linear-gradient(145deg, var(--mint), var(--emerald)); border-color: transparent; color: #04120d; }
+
+/* day/qty pills */
+.sl-calc-modern .sl-calc-var .sl-calc-note, .sl-calc-modern .sl-calc-out { color: var(--forest); font-weight: 600; }
+
+/* receipt: cleaner card */
+.sl-calc-modern .sl-calc-receipt {
+  margin-top: 18px; padding: 16px 18px; border-radius: 16px;
+  background: linear-gradient(160deg, rgba(18,181,127,0.06), rgba(18,181,127,0.02));
+  border: 1px solid rgba(18,181,127,0.16);
+}
+.sl-calc-modern .sl-rc-row { font-size: 12.5px; padding: 4px 0; }
+.sl-calc-modern .sl-rc-row em { color: var(--ink); font-family: "Space Grotesk", sans-serif; }
+.sl-calc-modern .sl-rc-off { color: #c0561f; }
+.sl-calc-modern .sl-rc-total { border-top: 1.5px solid rgba(18,181,127,0.2); margin-top: 8px; padding-top: 12px; }
+.sl-calc-modern .sl-rc-total em { font-size: 20px; font-weight: 700; color: var(--forest); }
+
+/* footer buttons */
+.sl-calc-modern .sl-calc-foot { padding: 16px 26px; border-top: 1px solid var(--line); background: #f8fcfa; }
+.sl-calc-modern .sl-calc-cancel { border: 1.5px solid var(--line); background: #fff; color: var(--muted); border-radius: 12px; padding: 11px 20px; font-family: "Space Grotesk", sans-serif; font-weight: 600; transition: all 0.14s; }
+.sl-calc-modern .sl-calc-cancel:hover { border-color: rgba(10,111,77,0.3); color: var(--ink); }
+.sl-calc-modern .sl-calc-apply {
+  border: none; border-radius: 12px; padding: 11px 24px;
+  background: linear-gradient(120deg, #86efc0, #12b57f); color: #04120d;
+  font-family: "Space Grotesk", sans-serif; font-weight: 700; cursor: pointer;
+  box-shadow: 0 12px 26px -12px rgba(18,181,127,0.8); transition: transform 0.15s, filter 0.15s, box-shadow 0.15s;
+}
+.sl-calc-modern .sl-calc-apply:hover { transform: translateY(-2px); filter: brightness(1.05); box-shadow: 0 18px 32px -12px rgba(18,181,127,0.9); }
+
+/* kill number spinners */
+.sl-calc-modern input[type="number"]::-webkit-inner-spin-button, .sl-calc-modern input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.sl-calc-modern input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+
+/* modern: nicer line names + tighter grouping */
+.sl-calc-modern .sl-calc-var { gap: 14px; }
+.sl-calc-modern .sl-calc-var > span:first-child {
+  flex: 0 1 auto; max-width: 46%;
+  font-family: "Space Grotesk", sans-serif; font-size: 14px; font-weight: 600;
+  color: var(--ink); letter-spacing: -0.01em;
+}
+/* push the controls into a tidy group on the right */
+.sl-calc-modern .sl-calc-var { justify-content: flex-end; }
+.sl-calc-modern .sl-calc-var > span:first-child { margin-right: auto; }
+/* day / qty pill a bit softer */
+.sl-calc-modern .sl-calc-out { background: rgba(18,181,127,0.12); color: var(--forest); font-weight: 700; border-radius: 8px; }

@@ -1,11 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../../api/supabase";
 import { useAuth } from "../../api/AuthProvider";
 import NewClientForm from "./NewClientForm";
 import ClientWorkspace from "./ClientWorkspace";
 import ProjectsView from "./ProjectsView";
+import Select from "../../framework/Select";
 import { markHandoffConverted } from "../sales/salesApi";
 import { roleSeesAll } from "../companies/companiesApi";
 import "./ClientsPage.css";
@@ -129,6 +130,69 @@ function ClientList({
   usage: Record<string, { planned: number; done: number }>;
   units: Record<string, "hour" | "day">;
 }) {
+  const [q, setQ] = useState("");
+  const [fType, setFType] = useState("");
+  const [fConsultant, setFConsultant] = useState("");
+  const [sort, setSort] = useState("recent");
+
+  // Resolve team member ids → names for the consultant filter.
+  const [people, setPeople] = useState<Record<string, string>>({});
+  useEffect(() => {
+    supabase.functions.invoke("manage-users", { body: { action: "list" } }).then(({ data }: any) => {
+      const out: Record<string, string> = {};
+      ((data?.users ?? []) as any[]).forEach((u) => {
+        out[u.id] = [u.first_name, u.last_name].filter(Boolean).join(" ") || u.username || u.email || "—";
+      });
+      setPeople(out);
+    }).catch(() => {});
+  }, []);
+  const personName = (id: string, fb?: string) => people[id] || (fb && fb !== "—" ? fb : "") || "Unknown";
+
+  const typeName = (id: string) => projectTypes.find((t) => t.id === id)?.name ?? "No service";
+  const projOf = (c: Client) => projects.filter((p) => p.clientId === c.id);
+  const clientValue = (c: Client) => projOf(c).reduce((s, p) => s + projectValue(p), 0);
+
+  // Filter options derived from the data.
+  const typeOptions = useMemo(() => {
+    const ids = new Set<string>();
+    projects.forEach((p) => { if (p.projectTypeId) ids.add(p.projectTypeId); });
+    return Array.from(ids).map((id) => ({ value: id, label: typeName(id) })).sort((a, b) => a.label.localeCompare(b.label));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projects, projectTypes]);
+  const consultantOptions = useMemo(() => {
+    const byId = new Map<string, string>();
+    projects.forEach((p) => (p.team ?? []).forEach((m) => {
+      if (m.userId && !byId.has(m.userId)) byId.set(m.userId, personName(m.userId, m.name));
+    }));
+    return Array.from(byId, ([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projects, people]);
+
+  const norm = (s: string) => (s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const shownClients = useMemo(() => {
+    const needle = norm(q.trim());
+    const list = clients.filter((c) => {
+      const mine = projOf(c);
+      if (fType && !mine.some((p) => p.projectTypeId === fType)) return false;
+      if (fConsultant && !mine.some((p) => (p.team ?? []).some((m) => m.userId === fConsultant))) return false;
+      if (needle) {
+        const hay = norm([c.name, ...mine.map((p) => typeName(p.projectTypeId))].join(" "));
+        if (!hay.includes(needle)) return false;
+      }
+      return true;
+    });
+    return list.sort((a, b) => {
+      if (sort === "value") return clientValue(b) - clientValue(a);
+      if (sort === "projects") return projOf(b).length - projOf(a).length;
+      if (sort === "name") return a.name.localeCompare(b.name);
+      return 0; // recent = keep incoming order
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clients, projects, q, fType, fConsultant, sort, people, projectTypes]);
+
+  const anyFilter = !!(q || fType || fConsultant || sort !== "recent");
+  const clearAll = () => { setQ(""); setFType(""); setFConsultant(""); setSort("recent"); };
+
   if (clients.length === 0) {
     return (
       <div className="cl-empty">
@@ -141,9 +205,10 @@ function ClientList({
   }
 
   // Days and hours are different units, so they are counted apart rather than
-  // added into one meaningless figure.
-  const totals = clients.reduce((acc, c) => {
-    const mine = projects.filter((p) => p.clientId === c.id);
+  // added into one meaningless figure. Reflects the active filters.
+  const shownProjectIds = new Set(shownClients.flatMap((c) => projOf(c).map((p) => p.id)));
+  const totals = shownClients.reduce((acc, c) => {
+    const mine = projOf(c);
     acc.projects += mine.length;
     acc.value += mine.reduce((s, p) => s + projectValue(p), 0);
     mine.forEach((p) => {
@@ -154,15 +219,45 @@ function ClientList({
   }, { projects: 0, value: 0, days: 0, hours: 0 });
 
   const signedAll = totals.days + totals.hours;
-  const doneAll = Object.values(usage).reduce((s, u) => s + u.done, 0);
+  // Usage keys look like "<projectId>|<line>", so only count usage of shown projects.
+  const doneAll = Object.entries(usage).reduce((s, [k, u]) => {
+    const pid = k.split("|")[0];
+    return shownProjectIds.has(pid) ? s + u.done : s;
+  }, 0);
   const deliveredPct = signedAll > 0 ? Math.round((doneAll / signedAll) * 100) : 0;
 
   return (
     <>
+      <div className="pv-bar">
+        <div className="pv-search">
+          <span className="pv-search-ico" aria-hidden="true">⌕</span>
+          <input className="pv-search-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search client, service…" />
+          {q && <button className="pv-search-x" onClick={() => setQ("")} aria-label="Clear">×</button>}
+        </div>
+        <div className="pv-filter">
+          <Select value={fType} onChange={setFType} placeholder="All services"
+            options={[{ value: "", label: "All services" }, ...typeOptions]} />
+        </div>
+        <div className="pv-filter">
+          <Select value={fConsultant} onChange={setFConsultant} placeholder="All consultants"
+            options={[{ value: "", label: "All consultants" }, ...consultantOptions]} />
+        </div>
+        <div className="pv-filter">
+          <Select value={sort} onChange={setSort}
+            options={[
+              { value: "recent", label: "Most recent" },
+              { value: "value", label: "Highest value" },
+              { value: "projects", label: "Most projects" },
+              { value: "name", label: "Name A–Z" },
+            ]} />
+        </div>
+        {anyFilter && <button className="pv-clear" onClick={clearAll}>Clear</button>}
+      </div>
+
       <div className="cl-kpis">
         <div className="cl-kpi">
           <span className="cl-kpi-k">Clients</span>
-          <b className="cl-kpi-v">{clients.length}</b>
+          <b className="cl-kpi-v">{shownClients.length}</b>
           <span className="cl-kpi-sub">{totals.projects} projects running</span>
         </div>
 
@@ -193,8 +288,11 @@ function ClientList({
       </div>
 
       <div className="cl-scroll">
+        {shownClients.length === 0 ? (
+          <p className="cl-hint">No clients match those filters.</p>
+        ) : (
         <div className="cl-list">
-          {clients.map((c) => {
+          {shownClients.map((c) => {
             const mine = projects.filter((p) => p.clientId === c.id);
             const total = mine.reduce((s, p) => s + projectValue(p), 0);
             const typeNames = [...new Set(
@@ -249,6 +347,7 @@ function ClientList({
             );
           })}
         </div>
+        )}
       </div>
     </>
   );

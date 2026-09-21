@@ -12,11 +12,17 @@ export interface Tracking {
   status: string;
   created_at?: string;
   product_price?: number | null;
+  rep_close_prob?: number | null;
+  mgr_close_prob?: number | null;
+  rep_close_date?: string | null;
+  mgr_close_date?: string | null;
+  loss_reason?: string | null;
+  loss_details?: string | null;
   contactIds: string[];
 }
 
 export interface TrackNote { id: string; phase_id: string | null; body: string; created_at: string; }
-export interface TrackTask { id: string; phase_id: string | null; title: string; done: boolean; }
+export interface TrackTask { id: string; phase_id: string | null; title: string; done: boolean; due_at?: string | null; created_at?: string; }
 export type MeetingKind = "teams" | "phone" | "in_person";
 export interface TrackMeeting { id: string; phase_id: string | null; title: string; meet_at: string | null; kind?: MeetingKind; }
 export interface PhaseEvent { id: string; phase_id: string | null; entered_at: string; }
@@ -37,6 +43,7 @@ export interface RevenueLineFields {
 
 export interface PotentialService extends RevenueLineFields {
   id: string; service_id: string | null; label: string | null;
+  version_group?: string | null; version_active?: boolean;
 }
 
 /**
@@ -138,6 +145,7 @@ export async function setTrackingEmployees(trackingId: string, profileIds: strin
 // ---- Products on a tracking (many per tracking) ----
 export interface TrackingProduct extends RevenueLineFields {
   id: string; tracking_id: string; product_id: string | null;
+  version_group?: string | null; version_active?: boolean;
 }
 
 export type TermPatch = {
@@ -148,6 +156,8 @@ export type TermPatch = {
   calc_discounts?: Record<string, CalcDiscount>;
   calc_rates?: Record<string, number>;
   discount_mode?: "none" | "percent" | "amount"; discount_value?: number;
+  billing_contact_name?: string | null; billing_contact_email?: string | null;
+  contact_ids?: string[];
 };
 
 /**
@@ -280,7 +290,7 @@ const SHARED_COLS = [
   "calc_values", "calc_discounts", "calc_rates", "discount_mode", "discount_value",
 ] as const;
 const PRODUCT_COLS = [...SHARED_COLS, "tier_id"] as const;
-const SERVICE_COLS = [...SHARED_COLS, "role_id"] as const;
+const SERVICE_COLS = [...SHARED_COLS, "role_id", "billing_contact_name", "billing_contact_email", "contact_ids"] as const;
 
 function pick(patch: TermPatch, cols: readonly string[]): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -324,10 +334,12 @@ async function syncLegacyProduct(trackingId: string) {
 export async function addTrackingProduct(
   trackingId: string, productId: string, price: number,
   term?: { recurring: boolean; period: "monthly" | "yearly"; term_years: number },
+  versionGroup?: string | null,
 ): Promise<TrackingProduct | null> {
   const { data } = await supabase.from("tracking_products")
     .insert({
       tracking_id: trackingId, product_id: productId, price,
+      version_group: versionGroup ?? crypto.randomUUID(), version_active: true,
       recurring: term?.recurring ?? false,
       period: term?.period ?? "yearly",
       term_years: term?.term_years ?? 1,
@@ -411,15 +423,15 @@ export async function loadTasks(trackingId: string): Promise<TrackTask[]> {
   const { data } = await supabase.from("tracking_tasks").select("*").eq("tracking_id", trackingId).order("created_at");
   return (data ?? []) as TrackTask[];
 }
-export async function addTask(trackingId: string, phaseId: string | null, title: string): Promise<TrackTask | null> {
-  const { data } = await supabase.from("tracking_tasks").insert({ tracking_id: trackingId, phase_id: phaseId, title }).select().single();
+export async function addTask(trackingId: string, phaseId: string | null, title: string, dueAt?: string | null): Promise<TrackTask | null> {
+  const { data } = await supabase.from("tracking_tasks").insert({ tracking_id: trackingId, phase_id: phaseId, title, due_at: dueAt ?? null }).select().single();
   return (data as any) ?? null;
 }
 export async function toggleTask(id: string, done: boolean) {
   await supabase.from("tracking_tasks").update({ done }).eq("id", id);
 }
-export async function updateTask(id: string, title: string) {
-  await supabase.from("tracking_tasks").update({ title }).eq("id", id);
+export async function updateTask(id: string, patch: { title?: string; due_at?: string | null }) {
+  await supabase.from("tracking_tasks").update(patch).eq("id", id);
 }
 export async function deleteTask(id: string) {
   await supabase.from("tracking_tasks").delete().eq("id", id);
@@ -486,6 +498,33 @@ export async function updateMeeting(id: string, patch: { title?: string; meet_at
   await supabase.from("calendar_entries").update(row).eq("id", id);
 }
 // ---- Revenue potential ----
+export async function setDealCloseProb(trackingId: string, which: "rep" | "mgr", value: number | null) {
+  const col = which === "rep" ? "rep_close_prob" : "mgr_close_prob";
+  await supabase.from("trackings").update({ [col]: value }).eq("id", trackingId);
+}
+export async function setDealCloseDate(trackingId: string, which: "rep" | "mgr", value: string | null) {
+  const col = which === "rep" ? "rep_close_date" : "mgr_close_date";
+  await supabase.from("trackings").update({ [col]: value || null }).eq("id", trackingId);
+}
+export async function setLossReason(trackingId: string, reason: string | null, details?: string | null) {
+  await supabase.from("trackings").update({ loss_reason: reason || null, loss_details: details ?? null }).eq("id", trackingId);
+}
+export interface LossReason { id: string; label: string; sort: number; }
+export async function listLossReasons(): Promise<LossReason[]> {
+  const { data } = await supabase.from("loss_reasons").select("*").order("sort").order("created_at");
+  return (data ?? []).map((r: any) => ({ id: r.id, label: r.label, sort: r.sort ?? 0 }));
+}
+export async function addLossReason(label: string, sort: number): Promise<LossReason | null> {
+  const { data } = await supabase.from("loss_reasons").insert({ label, sort }).select().single();
+  return data ? { id: data.id, label: data.label, sort: data.sort ?? 0 } : null;
+}
+export async function updateLossReason(id: string, label: string) {
+  await supabase.from("loss_reasons").update({ label }).eq("id", id);
+}
+export async function deleteLossReason(id: string) {
+  await supabase.from("loss_reasons").delete().eq("id", id);
+}
+
 export async function setProductPrice(trackingId: string, price: number | null) {
   await supabase.from("trackings").update({ product_price: price }).eq("id", trackingId);
 }
@@ -493,9 +532,9 @@ export async function loadPotentialServices(trackingId: string): Promise<Potenti
   const { data } = await supabase.from("tracking_potential_services").select("*").eq("tracking_id", trackingId).order("created_at");
   return (data ?? []) as PotentialService[];
 }
-export async function addPotentialService(trackingId: string, serviceId: string | null, label: string | null, price: number): Promise<PotentialService | null> {
+export async function addPotentialService(trackingId: string, serviceId: string | null, label: string | null, price: number, versionGroup?: string | null): Promise<PotentialService | null> {
   const { data } = await supabase.from("tracking_potential_services")
-    .insert({ tracking_id: trackingId, service_id: serviceId, label, price }).select().single();
+    .insert({ tracking_id: trackingId, service_id: serviceId, label, price, version_group: versionGroup ?? crypto.randomUUID(), version_active: true }).select().single();
   return (data as any) ?? null;
 }
 export async function updatePotentialService(id: string, price: number) {
@@ -562,6 +601,256 @@ export interface Handoff {
   converted_at: string | null;
 }
 
+// Does management already have a client for this sales company?
+// Management stores clients keyed by company_id; if none exists, sales must
+// create it (with legal info) before the handoff can build a project.
+export async function clientExistsForCompany(companyId: string | null): Promise<boolean> {
+  if (!companyId) return false;
+  const { data } = await supabase.from("clients").select("id").eq("company_id", companyId).limit(1);
+  return (data?.length ?? 0) > 0;
+}
+
+// Build the prefill for the client-creation form from everything we already
+// know about the company and its contacts, so sales only fills the gaps.
+// New contacts added on a project (no sourceId) are also created on the
+// company, so the company grows too. Existing ones (with sourceId) are left
+// alone; removing a contact from the project never removes it from the company.
+export async function syncNewContactsToCompany(companyId: string, contacts: { id?: string; sourceId?: string | null; name: string; position: string; email: string; phone: string; billing: boolean }[]): Promise<{ localId: string; id: string }[]> {
+  const created: { localId: string; id: string }[] = [];
+  const fresh = contacts.filter((c) => !c.sourceId && c.name.trim());
+  for (const c of fresh) {
+    const parts = c.name.trim().split(/\s+/);
+    const first_name = parts.shift() ?? c.name;
+    const last_name = parts.join(" ") || null;
+    const { data, error } = await supabase.from("contacts")
+      .insert({ first_name, last_name, position: c.position || null, email: c.email || null, phone: c.phone || null, is_billing: c.billing ?? false })
+      .select("id").single();
+    if (error || !data) continue;
+    await supabase.from("company_contacts").insert({ company_id: companyId, contact_id: data.id });
+    created.push({ localId: c.id ?? "", id: data.id });
+  }
+  return created;
+}
+
+// Per-DEAL contacts (scoped to one tracking, not shared across the client's
+// other deals). Read the linked ids, and replace the whole set on save.
+export async function loadTrackingContactIds(trackingId: string): Promise<string[]> {
+  const { data } = await supabase.from("tracking_contacts").select("contact_id").eq("tracking_id", trackingId).range(0, 99999);
+  return (data ?? []).map((r: any) => r.contact_id);
+}
+export async function setTrackingContacts(trackingId: string, contactIds: string[]): Promise<string | null> {
+  const del = await supabase.from("tracking_contacts").delete().eq("tracking_id", trackingId);
+  if (del.error) return del.error.message;
+  const clean = Array.from(new Set(contactIds.filter(Boolean)));
+  if (clean.length) {
+    const { error } = await supabase.from("tracking_contacts").insert(clean.map((cid) => ({ tracking_id: trackingId, contact_id: cid })));
+    if (error) return error.message;
+  }
+  return null;
+}
+
+export async function buildClientPrefill(companyId: string, trackingId?: string): Promise<{
+  name: string;
+  legalName: string;
+  vatNumber: string;
+  address: { street: string; number: string; details: string; postalCode: string; city: string; country: string };
+  contacts: { id: string; sourceId: string | null; name: string; position: string; email: string; phone: string; billing: boolean }[];
+  products: { key: string; productId: string; name: string; price: number; quantity: number; recurring: boolean; period: string | null; termYears: number | null; discountMode: string | null; discountValue: number | null; tierId: string | null; calcValues: Record<string, number>; calcDiscounts: Record<string, any>; calcRates: Record<string, number>; signingDate: string; fromTracking: boolean }[];
+} | null> {
+  const { data: co } = await supabase.from("companies").select("*").eq("id", companyId).maybeSingle();
+  if (!co) return null;
+  const c: any = co;
+  // contacts linked to this company
+  const { data: links } = await supabase.from("company_contacts").select("contact_id").eq("company_id", companyId);
+  const ids = (links ?? []).map((l: any) => l.contact_id);
+  let contacts: any[] = [];
+  if (ids.length) {
+    const { data: rows } = await supabase.from("contacts").select("*").in("id", ids);
+    contacts = rows ?? [];
+  }
+  const uid = () => (globalThis.crypto?.randomUUID?.() ?? String(Math.random()));
+  const today = new Date().toISOString().slice(0, 10);
+
+  // products already on the deal, priced with their discounts
+  let products: any[] = [];
+  if (trackingId) {
+    const { data: tp } = await supabase.from("tracking_products").select("*").eq("tracking_id", trackingId).order("created_at");
+    const pids = Array.from(new Set((tp ?? []).map((r: any) => r.product_id).filter(Boolean)));
+    const nameById: Record<string, string> = {};
+    if (pids.length) {
+      const { data: prods } = await supabase.from("products").select("id, name").in("id", pids);
+      (prods ?? []).forEach((p: any) => { nameById[p.id] = p.name; });
+    }
+    products = (tp ?? []).map((r: any) => ({
+      key: uid(), productId: r.product_id, name: nameById[r.product_id] ?? "Product",
+      price: Number(r.price) || 0, quantity: Number(r.quantity) || 1,
+      recurring: !!r.recurring, period: r.period ?? null, termYears: r.term_years ?? null,
+      discountMode: r.discount_mode ?? null, discountValue: r.discount_value ?? null,
+      // raw calculator fields, so the editable calculator opens with the deal's numbers
+      tierId: r.tier_id ?? null,
+      calcValues: r.calc_values ?? {},
+      calcDiscounts: r.calc_discounts ?? {},
+      calcRates: r.calc_rates ?? {},
+      signingDate: today, fromTracking: true,
+    }));
+  }
+
+  return {
+    name: c.name ?? "",
+    legalName: c.legal_name ?? "",
+    vatNumber: c.vat_number ?? "",
+    address: {
+      street: c.street ?? "",
+      number: c.addr_number ?? "",
+      details: c.addr_details ?? "",
+      postalCode: c.postal_code ?? "",
+      city: c.city ?? "",
+      country: c.country ?? "",
+    },
+    contacts: contacts.map((ct: any) => ({
+      id: uid(),
+      sourceId: ct.id ?? null,
+      name: [ct.first_name, ct.last_name].filter(Boolean).join(" "),
+      position: ct.position ?? "",
+      email: ct.email ?? "",
+      phone: ct.phone ?? "",
+      billing: ct.is_billing ?? false,
+    })),
+    products,
+  };
+}
+
+// Full catalogue of active products (with calculator + tiers) for the picker
+// and the in-form calculator. Uses the same loader the settings editor uses.
+// --- Scenario C: existing client buys NEW products ---------------------
+// The client already exists. Return its stored record (id + legal/address/
+// contacts as we hold them) so the attach form can revise it and we can
+// append new product contracts to the SAME client.
+export async function loadClientByCompany(companyId: string | null): Promise<{
+  id: string;
+  name: string; legalName: string; vatNumber: string;
+  address: { street: string; number: string; details: string; postalCode: string; city: string; country: string };
+  contacts: { id: string; name: string; position: string; email: string; phone: string; billing: boolean; sourceId?: string | null }[];
+  paymentDays: number | null;
+} | null> {
+  if (!companyId) return null;
+  const { data } = await supabase.from("clients").select("*").eq("company_id", companyId).order("created_at").limit(1);
+  const row: any = data?.[0];
+  if (!row) return null;
+  const uid = () => (globalThis.crypto?.randomUUID?.() ?? String(Math.random()));
+  const a = row.address ?? {};
+  const cs = Array.isArray(row.contacts) ? row.contacts : [];
+  return {
+    id: row.id,
+    name: row.name ?? "",
+    legalName: row.legal_name ?? "",
+    vatNumber: row.vat_number ?? "",
+    address: {
+      street: a.street ?? "", number: a.number ?? "", details: a.details ?? "",
+      postalCode: a.postalCode ?? a.postal_code ?? "", city: a.city ?? "", country: a.country ?? "",
+    },
+    contacts: cs.map((ct: any) => ({
+      id: ct.id ?? uid(),
+      name: ct.name ?? [ct.first_name, ct.last_name].filter(Boolean).join(" "),
+      position: ct.position ?? "", email: ct.email ?? "", phone: ct.phone ?? "",
+      billing: ct.billing ?? ct.is_billing ?? false,
+      sourceId: ct.sourceId ?? null,
+    })),
+    paymentDays: row.payment_days ?? null,
+  };
+}
+
+// Build the attach-form prefill for scenario C: client details come from the
+// stored CLIENT record (so sales revises what's on file), while the products
+// are the NEW ones on this deal — carried with their full calculator state so
+// the modern calculator opens on the deal's numbers.
+export async function buildAttachPrefill(companyId: string, trackingId: string): Promise<{
+  clientId: string;
+  prefill: {
+    name: string; legalName: string; vatNumber: string;
+    address: { street: string; number: string; details: string; postalCode: string; city: string; country: string };
+    contacts: { id: string; name: string; position: string; email: string; phone: string; billing: boolean; sourceId?: string | null }[];
+    products: any[];
+  };
+} | null> {
+  const client = await loadClientByCompany(companyId);
+  if (!client) return null;
+  const uid = () => (globalThis.crypto?.randomUUID?.() ?? String(Math.random()));
+  const today = new Date().toISOString().slice(0, 10);
+
+  const { data: tp } = await supabase.from("tracking_products").select("*").eq("tracking_id", trackingId).order("created_at");
+  const pids = Array.from(new Set((tp ?? []).map((r: any) => r.product_id).filter(Boolean)));
+  const nameById: Record<string, string> = {};
+  if (pids.length) {
+    const { data: prods } = await supabase.from("products").select("id, name").in("id", pids);
+    (prods ?? []).forEach((p: any) => { nameById[p.id] = p.name; });
+  }
+  const products = (tp ?? []).map((r: any) => ({
+    key: uid(), productId: r.product_id, name: nameById[r.product_id] ?? "Product",
+    price: Number(r.price) || 0, quantity: Number(r.quantity) || 1,
+    recurring: !!r.recurring, period: r.period ?? null, termYears: r.term_years ?? null,
+    discountMode: r.discount_mode ?? null, discountValue: r.discount_value ?? null,
+    tierId: r.tier_id ?? null, calcValues: r.calc_values ?? {},
+    calcDiscounts: r.calc_discounts ?? {}, calcRates: r.calc_rates ?? {},
+    signingDate: today, fromTracking: true,
+  }));
+
+  return {
+    clientId: client.id,
+    prefill: {
+      name: client.name, legalName: client.legalName, vatNumber: client.vatNumber,
+      address: client.address, contacts: client.contacts, products,
+    },
+  };
+}
+
+export async function listCatalogProducts(): Promise<import("../settings/catalogApi").Product[]> {
+  const { loadProducts } = await import("../settings/catalogApi");
+  const all = await loadProducts();
+  return all.filter((p) => p.active !== false);
+}
+
+// True once this deal's products have already been written to client_products
+// (i.e. the client + products were created for THIS tracking). Used to avoid
+// re-opening the create/attach flow when only the services still need sending.
+export async function hasClientProductsForTracking(trackingId: string): Promise<boolean> {
+  const { data } = await supabase.from("client_products").select("id").eq("tracking_id", trackingId).limit(1);
+  return !!(data && data.length);
+}
+
+// Save the product contracts a client signed (one row per product).
+export async function saveClientProducts(clientId: string, trackingId: string | null, products: {
+  productId: string; price: number; quantity: number; recurring: boolean; period: string | null;
+  termYears: number | null; discountMode: string | null; discountValue: number | null; signingDate: string;
+  startDate?: string; oneTimeFee?: number; nonTerminableYears?: number | null; autoRenew?: boolean;
+  renewYears?: number | null; annualIncreasePct?: number | null; paymentTermsDays?: number | null;
+  contractRef?: string; externalRef?: string;
+  billingContactName?: string | null; billingContactEmail?: string | null;
+}[]): Promise<string | null> {
+  if (!products.length) return null;
+  const rows = products.map((p) => ({
+    client_id: clientId, product_id: p.productId, tracking_id: trackingId,
+    signing_date: p.signingDate || null,
+    start_date: p.startDate || p.signingDate || null,
+    price: p.price, quantity: p.quantity, recurring: p.recurring,
+    period: p.period, term_years: p.termYears,
+    discount_mode: p.discountMode, discount_value: p.discountValue,
+    one_time_fee: p.oneTimeFee ?? 0,
+    non_terminable_years: p.nonTerminableYears ?? null,
+    auto_renew: p.autoRenew ?? false,
+    renew_years: p.renewYears ?? null,
+    annual_increase_pct: p.annualIncreasePct ?? null,
+    payment_terms_days: p.paymentTermsDays ?? null,
+    contract_ref: p.contractRef || null,
+    external_ref: p.externalRef || null,
+    billing_contact_name: p.billingContactName ?? null,
+    billing_contact_email: p.billingContactEmail ?? null,
+    status: "active",
+  }));
+  const { error } = await supabase.from("client_products").insert(rows);
+  return error?.message ?? null;
+}
+
 // Create one handoff row per destination pipeline.
 export async function createHandoffs(input: {
   tracking_id: string;
@@ -608,4 +897,81 @@ export async function markHandoffConverted(id: string, clientId: string, project
 }
 export async function dismissHandoff(id: string) {
   await supabase.from("handoffs").update({ status: "dismissed" }).eq("id", id);
+}
+// ---- Potential revenue per tracking, for the overview cards ----
+// product_price (on the tracking) + sum of its potential services' price.
+// One pass over all potential services, so it's a single query for every card.
+export async function loadPotentialTotals(): Promise<Record<string, number>> {
+  const totals: Record<string, number> = {};
+  const { data: tr } = await supabase.from("trackings").select("id, product_price");
+  (tr ?? []).forEach((t: any) => { totals[t.id] = Number(t.product_price) || 0; });
+  const { data: svc } = await supabase.from("tracking_potential_services").select("tracking_id, price");
+  (svc ?? []).forEach((s: any) => {
+    if (s.tracking_id) totals[s.tracking_id] = (totals[s.tracking_id] ?? 0) + (Number(s.price) || 0);
+  });
+  return totals;
+}
+
+// ============================ Per-line versioning ============================
+// A version group holds all versions of one conceptual line. Exactly one is
+// active; the active one shows and counts toward the total.
+
+/** Make a different version of a group active (products or services). */
+export async function setLineVersionActive(table: "tracking_products" | "tracking_potential_services", versionGroup: string, activeId: string) {
+  await supabase.from(table).update({ version_active: false }).eq("version_group", versionGroup);
+  await supabase.from(table).update({ version_active: true }).eq("id", activeId);
+}
+
+/** Add a new version to a product line's group — a copy of `sourceId`, or empty. */
+export async function addProductVersion(sourceId: string, copy: boolean): Promise<TrackingProduct | null> {
+  const { data: src } = await supabase.from("tracking_products").select("*").eq("id", sourceId).single();
+  if (!src) return null;
+  await supabase.from("tracking_products").update({ version_active: false }).eq("version_group", src.version_group);
+  const base: any = { tracking_id: src.tracking_id, product_id: src.product_id, version_group: src.version_group, version_active: true };
+  if (copy) {
+    const { id, created_at, version_active, ...rest } = src as any;
+    Object.assign(base, rest);
+  } else {
+    base.price = 0; base.recurring = src.recurring; base.period = src.period; base.term_years = 1;
+  }
+  const { data } = await supabase.from("tracking_products").insert(base).select().single();
+  return (data as any) ?? null;
+}
+
+/** Add a new version to a service line's group — a copy of `sourceId`, or empty. */
+export async function addServiceVersion(sourceId: string, copy: boolean): Promise<PotentialService | null> {
+  const { data: src } = await supabase.from("tracking_potential_services").select("*").eq("id", sourceId).single();
+  if (!src) return null;
+  await supabase.from("tracking_potential_services").update({ version_active: false }).eq("version_group", src.version_group);
+  const base: any = { tracking_id: src.tracking_id, service_id: src.service_id, label: src.label, version_group: src.version_group, version_active: true };
+  if (copy) {
+    const { id, created_at, version_active, ...rest } = src as any;
+    Object.assign(base, rest);
+  } else {
+    base.price = 0;
+  }
+  const { data } = await supabase.from("tracking_potential_services").insert(base).select().single();
+  return (data as any) ?? null;
+}
+
+// ============================ Phase blueprints (for proposals) ============================
+export interface BlueprintPhase { id: string; name: string; percent: number; tasks: { id?: string; name: string; percent?: number }[] }
+export interface PhaseBlueprint { id: string; name: string; service_id: string | null; phases: BlueprintPhase[] }
+
+/** Blueprints for a set of services, keyed by service_id. Prefers the blueprint
+ *  whose service_id matches; the service's own blueprint_id is the fallback. */
+export async function loadBlueprintsForServices(serviceIds: string[]): Promise<Record<string, PhaseBlueprint>> {
+  const out: Record<string, PhaseBlueprint> = {};
+  if (serviceIds.length === 0) return out;
+  const { data: bps } = await supabase.from("phase_blueprints").select("id,name,service_id,phases");
+  const list = (bps ?? []) as PhaseBlueprint[];
+  // by service_id
+  serviceIds.forEach((sid) => { const b = list.find((x) => x.service_id === sid); if (b) out[sid] = b; });
+  // fallback via services.blueprint_id
+  const missing = serviceIds.filter((sid) => !out[sid]);
+  if (missing.length) {
+    const { data: svc } = await supabase.from("services").select("id,blueprint_id").in("id", missing);
+    (svc ?? []).forEach((s: any) => { if (s.blueprint_id) { const b = list.find((x) => x.id === s.blueprint_id); if (b) out[s.id] = b; } });
+  }
+  return out;
 }

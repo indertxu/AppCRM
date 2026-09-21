@@ -30,6 +30,7 @@ export default function ProjectsView({
   const [fClient, setFClient] = useState("");
   const [fType, setFType] = useState("");
   const [fStatus, setFStatus] = useState("");
+  const [fConsultant, setFConsultant] = useState("");
   const [sort, setSort] = useState<Sort>("recent");
   /** Rate unit per service: a project reads in hours or days as its service says. */
   const [units, setUnits] = useState<Record<string, "hour" | "day">>({});
@@ -41,6 +42,20 @@ export default function ProjectsView({
     });
   }, []);
   const unitOf = (p: Project) => (units[p.projectTypeId] === "hour" ? "h" : "d");
+
+  // Names for the consultant filter — TeamMember.name is often empty, so resolve
+  // ids to names from the people list.
+  const [people, setPeople] = useState<Record<string, string>>({});
+  useEffect(() => {
+    supabase.functions.invoke("manage-users", { body: { action: "list" } }).then(({ data }: any) => {
+      const out: Record<string, string> = {};
+      ((data?.users ?? []) as any[]).forEach((u) => {
+        out[u.id] = [u.first_name, u.last_name].filter(Boolean).join(" ") || u.username || u.email || "—";
+      });
+      setPeople(out);
+    }).catch(() => {});
+  }, []);
+  const personName = (id: string, fallback?: string) => people[id] || (fallback && fallback !== "—" ? fallback : "") || "Unknown";
 
   const clientName = (id: string) => clients.find((c) => c.id === id)?.name ?? "—";
   const typeName = (id: string) => projectTypes.find((t) => t.id === id)?.name ?? "No service";
@@ -79,6 +94,17 @@ export default function ProjectsView({
   };
   const leftOf = (p: Project) => totalSigned(p) - totalUsed(p) - totalBooked(p);
 
+  // People who appear on at least one project's team, for the consultant filter.
+  const consultantOptions = useMemo(() => {
+    const byId = new Map<string, string>();
+    projects.forEach((p) => (p.team ?? []).forEach((m) => {
+      if (m.userId && !byId.has(m.userId)) byId.set(m.userId, personName(m.userId, m.name));
+    }));
+    return Array.from(byId, ([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projects, people]);
+
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase();
     const list = projects.filter((p) => {
@@ -88,6 +114,7 @@ export default function ProjectsView({
       if (fStatus === "closed" && p.status !== "closed") return false;
       if (fStatus === "over" && leftOf(p) >= 0) return false;
       if (fStatus === "complete" && progressOf(p) < 100) return false;
+      if (fConsultant && !(p.team ?? []).some((m) => m.userId === fConsultant)) return false;
       if (!needle) return true;
       return (
         clientName(p.clientId).toLowerCase().includes(needle) ||
@@ -107,7 +134,7 @@ export default function ProjectsView({
       return (b.kickoffDate || "").localeCompare(a.kickoffDate || "");
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projects, usage, q, fClient, fType, fStatus, sort, clients, projectTypes]);
+  }, [projects, usage, q, fClient, fType, fStatus, fConsultant, sort, clients, projectTypes]);
 
   const sumValue = shown.reduce((s, p) => s + projectValue(p), 0);
   // Days and hours are different units, so they are counted apart.
@@ -122,8 +149,8 @@ export default function ProjectsView({
   // Uses sumBilled, so it has to come after it.
   const pctDone = sumDays > 0 ? Math.round((sumBilled / sumDays) * 100) : 0;
 
-  const clearAll = () => { setQ(""); setFClient(""); setFType(""); setFStatus(""); setSort("recent"); };
-  const anyFilter = !!(q || fClient || fType || fStatus || sort !== "recent");
+  const clearAll = () => { setQ(""); setFClient(""); setFType(""); setFStatus(""); setFConsultant(""); setSort("recent"); };
+  const anyFilter = !!(q || fClient || fType || fStatus || fConsultant || sort !== "recent");
 
   return (
     <>
@@ -167,6 +194,14 @@ export default function ProjectsView({
               { value: "over", label: "Over budget" },
             ]}
             placeholder="Any status"
+          />
+        </div>
+        <div className="pv-filter">
+          <Select
+            value={fConsultant}
+            onChange={setFConsultant}
+            options={[{ value: "", label: "All consultants" }, ...consultantOptions]}
+            placeholder="All consultants"
           />
         </div>
         <div className="pv-filter">

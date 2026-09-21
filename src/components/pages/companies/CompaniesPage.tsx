@@ -2,10 +2,13 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Select from "../../framework/Select";
+import DatePicker from "../../framework/DatePicker";
 import {
   listCompanies, saveCompany, deleteCompany, companyContactCounts, listContacts,
   myProfile, isSalesLead, listEmployees, loadCompanyAssignees, setCompanyAssignees,
-  type Company, type Contact, type Employee,
+  listCompanyFields, addCompanyField, updateCompanyField, deleteCompanyField,
+  loadPrefs, savePref,
+  type Company, type Contact, type Employee, type CompanyField,
 } from "./companiesApi";
 import "../clients/ClientsPage.css";
 import "./CompaniesPage.css";
@@ -29,34 +32,145 @@ export default function CompaniesPage() {
   const [assignees, setAssignees] = useState<Record<string, string[]>>({});
   const [me, setMe] = useState<{ id: string; role: string; is_superadmin: boolean } | null>(null);
   const [open, setOpen] = useState<string | null>(null);
+  const [fields, setFields] = useState<CompanyField[]>([]);
+  const [showFieldSettings, setShowFieldSettings] = useState(false);
+  const [ctrl1, setCtrl1] = useState<{ field: string; action: string; min?: string; max?: string }>({ field: "", action: "" });
+  const [ctrl2, setCtrl2] = useState<{ field: string; action: string; min?: string; max?: string }>({ field: "", action: "" });
+  const [columns, setColumns] = useState<string[]>(["vat_number", "address", "contacts"]);
 
   const reload = async () => {
     setCompanies(await listCompanies().catch(() => []));
     setCounts(await companyContactCounts().catch(() => ({})));
     setContacts(await listContacts().catch(() => []));
     setAssignees(await loadCompanyAssignees().catch(() => ({})));
+    setFields(await listCompanyFields().catch(() => []));
   };
   useEffect(() => {
     myProfile().then(setMe).catch(() => {});
     listEmployees().then(setEmployees).catch(() => {});
+    loadPrefs().then((p) => { if (Array.isArray(p.companyColumns)) setColumns(p.companyColumns); }).catch(() => {});
     reload();
   }, []);
 
   const lead = isSalesLead(me);
 
+  // ---- Compound filter + sort controls ----
+  const fixedFields = [
+    { key: "name", label: "Name" },
+    { key: "vat_number", label: "VAT / Tax ID" },
+    { key: "city", label: "City" },
+    { key: "country", label: "Country" },
+    { key: "email", label: "Email" },
+    { key: "phone", label: "Phone" },
+  ];
+  const filterFieldOptions = [
+    { value: "", label: "No filter" },
+    ...fixedFields.map((f) => ({ value: f.key, label: f.label })),
+    ...fields.map((f) => ({ value: f.id, label: f.label })),
+  ];
+  const fieldById = (id: string) => fields.find((f) => f.id === id);
+  const fieldType = (key: string): "text" | "number" | "date" | "boolean" | "select" => {
+    if (fixedFields.some((f) => f.key === key)) return "text";
+    return fieldById(key)?.type ?? "text";
+  };
+  const valueOf = (c: Company, key: string): any => {
+    if (fixedFields.some((f) => f.key === key)) return (c as any)[key] ?? "";
+    return (c.custom ?? {})[key];
+  };
+  const actionsFor = (key: string): { value: string; label: string }[] => {
+    if (!key) return [];
+    const t = fieldType(key);
+    if (t === "number") return [{ value: "desc", label: "High → low" }, { value: "asc", label: "Low → high" }, { value: "range", label: "Range…" }];
+    if (t === "date") return [{ value: "desc", label: "Newest first" }, { value: "asc", label: "Oldest first" }];
+    if (t === "boolean") return [{ value: "only_yes", label: "Only Yes" }, { value: "only_no", label: "Only No" }];
+    if (t === "select") return (fieldById(key)?.options ?? []).map((o) => ({ value: `eq:${o}`, label: `Is “${o}”` }));
+    return [{ value: "asc", label: "A → Z" }, { value: "desc", label: "Z → A" }];
+  };
+  const passesFilter = (c: Company, ctrl: { field: string; action: string; min?: string; max?: string }) => {
+    if (!ctrl.field || !ctrl.action) return true;
+    const v = valueOf(c, ctrl.field);
+    if (ctrl.action === "only_yes") return !!v;
+    if (ctrl.action === "only_no") return !v;
+    if (ctrl.action.startsWith("eq:")) return String(v ?? "") === ctrl.action.slice(3);
+    if (ctrl.action === "range") {
+      const n = Number(v);
+      if (v == null || v === "" || Number.isNaN(n)) return false;
+      if (ctrl.min !== undefined && ctrl.min !== "" && n < Number(ctrl.min)) return false;
+      if (ctrl.max !== undefined && ctrl.max !== "" && n > Number(ctrl.max)) return false;
+      return true;
+    }
+    return true;
+  };
+  const cmp = (a: Company, b: Company, ctrl: { field: string; action: string; min?: string; max?: string }) => {
+    if (!ctrl.field || (ctrl.action !== "asc" && ctrl.action !== "desc")) return 0;
+    const t = fieldType(ctrl.field);
+    const av = valueOf(a, ctrl.field), bv = valueOf(b, ctrl.field);
+    let r = 0;
+    if (t === "number") r = (Number(av) || 0) - (Number(bv) || 0);
+    else if (t === "date") r = String(av ?? "").localeCompare(String(bv ?? ""));
+    else r = String(av ?? "").localeCompare(String(bv ?? ""), undefined, { sensitivity: "base" });
+    return ctrl.action === "desc" ? -r : r;
+  };
+
   const shown = companies.filter((c) => {
     // Sales people only see the companies they have been assigned to.
     if (!lead && me && !(assignees[c.id!] ?? []).includes(me.id)) return false;
+    if (!passesFilter(c, ctrl1)) return false;
+    if (!passesFilter(c, ctrl2)) return false;
     const n = norm(q.trim());
     if (!n) return true;
     return [c.name, c.legal_name, c.vat_number, c.street, c.city, c.province, c.country, c.postal_code]
       .some((v) => norm(v ?? "").includes(n));
+  }).sort((a, b) => {
+    const r1 = cmp(a, b, ctrl1);
+    if (r1 !== 0) return r1;
+    return cmp(a, b, ctrl2);
   });
 
   const contactsOf = (companyId: string) => contacts.filter((ct) => ct.companyIds.includes(companyId));
 
   const addrLine = (c: Company) =>
     [c.street, c.addr_number, c.city, c.country].filter(Boolean).join(", ") || "—";
+
+  // Configurable overview columns (Name is always first).
+  const availableColumns = [
+    { key: "vat_number", label: "VAT / Tax ID" },
+    { key: "address", label: "Address" },
+    { key: "city", label: "City" },
+    { key: "country", label: "Country" },
+    { key: "email", label: "Email" },
+    { key: "phone", label: "Phone" },
+    { key: "contacts", label: "Contacts" },
+    ...fields.map((f) => ({ key: f.id, label: f.label })),
+  ];
+  const columnLabel = (key: string) => availableColumns.find((c) => c.key === key)?.label ?? key;
+  const activeColumns = columns.filter((k) => availableColumns.some((c) => c.key === k)).slice(0, 4);
+  const setColumnsPersist = (next: string[]) => { setColumns(next); savePref("companyColumns", next).catch(() => {}); };
+
+  const renderCell = (c: Company, key: string) => {
+    if (key === "vat_number") return <span className="co-lmono">{c.vat_number || "—"}</span>;
+    if (key === "address") return <span className="co-laddr">{addrLine(c)}</span>;
+    if (key === "city") return <span className="co-laddr">{c.city || "—"}</span>;
+    if (key === "country") return <span className="co-laddr">{c.country || "—"}</span>;
+    if (key === "email") return <span className="co-laddr">{c.email || "—"}</span>;
+    if (key === "phone") return <span className="co-lmono">{c.phone || "—"}</span>;
+    if (key === "contacts") return (
+      <span className="co-lright">
+        <button className={`co-expand ${open === c.id ? "is-on" : ""}`}
+          aria-expanded={open === c.id} aria-label="Show contacts"
+          onClick={(e) => { e.stopPropagation(); setOpen(open === c.id ? null : c.id!); }}>
+          <b className="co-lbadge">{counts[c.id!] ?? 0}</b>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={open === c.id ? "M18 15l-6-6-6 6" : "M6 9l6 6 6-6"} /></svg>
+        </button>
+      </span>
+    );
+    // custom field
+    const f = fieldById(key);
+    const v = (c.custom ?? {})[key];
+    if (!f || v == null || v === "") return <span className="co-laddr">—</span>;
+    if (f.type === "boolean") return <span className="co-laddr">{v ? "Yes" : "No"}</span>;
+    return <span className="co-laddr">{String(v)}</span>;
+  };
 
   if (me && !isSalesLead(me) && me.role !== "sales") {
     return (
@@ -81,6 +195,32 @@ export default function CompaniesPage() {
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name or address…" />
           {q && <button onClick={() => setQ("")}>×</button>}
         </div>
+        <div className="co-cfilters">
+          {[{ c: ctrl1, set: setCtrl1 }, { c: ctrl2, set: setCtrl2 }].map((ctl, i) => (
+            <div className="co-cfilter" key={i}>
+              <Select value={ctl.c.field}
+                onChange={(field) => { const acts = actionsFor(field); ctl.set({ field, action: acts[0]?.value ?? "" }); }}
+                options={filterFieldOptions} placeholder={`Filter ${i + 1}`} />
+              {ctl.c.field && (
+                <Select value={ctl.c.action} onChange={(action) => ctl.set({ ...ctl.c, action })}
+                  options={actionsFor(ctl.c.field)} placeholder="How" />
+              )}
+              {ctl.c.action === "range" && (
+                <div className="co-range">
+                  <input type="number" placeholder="Min" value={ctl.c.min ?? ""} onFocus={(e) => e.target.select()}
+                    onChange={(e) => ctl.set({ ...ctl.c, min: e.target.value })} />
+                  <span className="co-range-sep">–</span>
+                  <input type="number" placeholder="Max" value={ctl.c.max ?? ""} onFocus={(e) => e.target.select()}
+                    onChange={(e) => ctl.set({ ...ctl.c, max: e.target.value })} />
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+        <button className="co-settings" onClick={() => setShowFieldSettings(true)} title="Configure company fields" aria-label="Configure fields">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></svg>
+          Fields
+        </button>
         <button className="cl-primary" onClick={() => setEditing(empty())}>+ New company</button>
       </header>
 
@@ -88,11 +228,9 @@ export default function CompaniesPage() {
         <p className="cl-hint">{companies.length === 0 ? "No companies yet. Create your first one." : "No companies match your search."}</p>
       ) : (
         <div className="co-scroll">
-          <div className="co-lrow co-lhead">
+          <div className="co-lrow co-lhead" style={{ gridTemplateColumns: `2.4fr ${activeColumns.map(() => "1.4fr").join(" ")}` }}>
             <span>Company</span>
-            <span>VAT / Tax ID</span>
-            <span>Address</span>
-            <span className="co-lright">Contacts</span>
+            {activeColumns.map((k) => <span key={k} className={k === "contacts" ? "co-lright" : ""}>{columnLabel(k)}</span>)}
           </div>
           <div className="co-list">
             {shown.map((c) => {
@@ -101,6 +239,7 @@ export default function CompaniesPage() {
               return (
                 <div className="co-item" key={c.id}>
                   <div className="co-lrow" role="button" tabIndex={0}
+                    style={{ gridTemplateColumns: `2.4fr ${activeColumns.map(() => "1.4fr").join(" ")}` }}
                     onClick={() => setEditing(structuredClone(c))}
                     onKeyDown={(e) => { if (e.key === "Enter") setEditing(structuredClone(c)); }}>
                     <span className="co-lcell co-lid">
@@ -110,16 +249,7 @@ export default function CompaniesPage() {
                         {c.legal_name && <span className="co-lsub">{c.legal_name}</span>}
                       </span>
                     </span>
-                    <span className="co-lcell co-lmono">{c.vat_number || "—"}</span>
-                    <span className="co-lcell co-laddr">{addrLine(c)}</span>
-                    <span className="co-lcell co-lright">
-                      <button className={`co-expand ${isOpen ? "is-on" : ""}`}
-                        aria-expanded={isOpen} aria-label="Show contacts"
-                        onClick={(e) => { e.stopPropagation(); setOpen(isOpen ? null : c.id!); }}>
-                        <b className="co-lbadge">{counts[c.id!] ?? 0}</b>
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={isOpen ? "M18 15l-6-6-6 6" : "M6 9l6 6 6-6"} /></svg>
-                      </button>
-                    </span>
+                    {activeColumns.map((k) => <span key={k} className="co-lcell">{renderCell(c, k)}</span>)}
                   </div>
 
                   {isOpen && (
@@ -160,6 +290,7 @@ export default function CompaniesPage() {
         <CompanyEditor
           company={editing}
           employees={employees}
+          fields={fields}
           canAssign={lead}
           assigned={assignees[editing.id!] ?? []}
           onClose={() => setEditing(null)}
@@ -167,12 +298,23 @@ export default function CompaniesPage() {
           onDeleted={async () => { setEditing(null); await reload(); }}
         />
       )}
+
+      {showFieldSettings && (
+        <FieldSettings
+          fields={fields}
+          availableColumns={availableColumns}
+          columns={activeColumns}
+          onColumns={setColumnsPersist}
+          onClose={() => setShowFieldSettings(false)}
+          onChanged={async () => { setFields(await listCompanyFields().catch(() => [])); }}
+        />
+      )}
     </div>
   );
 }
 
-function CompanyEditor({ company, employees, canAssign, assigned, onClose, onSaved, onDeleted }: {
-  company: Company; employees: Employee[]; canAssign: boolean; assigned: string[];
+function CompanyEditor({ company, employees, fields, canAssign, assigned, onClose, onSaved, onDeleted }: {
+  company: Company; employees: Employee[]; fields: CompanyField[]; canAssign: boolean; assigned: string[];
   onClose: () => void; onSaved: () => void; onDeleted: () => void;
 }) {
   const [c, setC] = useState<Company>(company);
@@ -187,8 +329,18 @@ function CompanyEditor({ company, employees, canAssign, assigned, onClose, onSav
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  const setCustom = (fieldId: string, value: any) =>
+    setC((x) => ({ ...x, custom: { ...(x.custom ?? {}), [fieldId]: value } }));
+  const customVal = (fieldId: string) => (c.custom ?? {})[fieldId];
+
   const save = async () => {
     if (!c.name.trim()) { setErr("Give the company a name."); return; }
+    for (const f of fields) {
+      if (!f.required) continue;
+      const v = customVal(f.id);
+      const empty = v == null || v === "" || (f.type === "boolean" && v === false);
+      if (empty) { setErr(`"${f.label}" is required.`); return; }
+    }
     setBusy(true); setErr(null);
     const e = await saveCompany(c);
     if (!e && c.id) await setCompanyAssignees(c.id, who).catch(() => {});
@@ -289,6 +441,41 @@ function CompanyEditor({ company, employees, canAssign, assigned, onClose, onSav
             </div>
           )}
 
+          {fields.length > 0 && (
+            <div className="dw-sec">
+              <p className="dw-sec-title">Additional details</p>
+              <div className="dw-grid">
+                {fields.map((f) => (
+                  <div className="dw-f dw-col2" key={f.id}>
+                    <label>{f.label}{f.required && <span className="dw-req"> *</span>}</label>
+                    {f.type === "text" && (
+                      <input value={customVal(f.id) ?? ""} onChange={(e) => setCustom(f.id, e.target.value)} />
+                    )}
+                    {f.type === "number" && (
+                      <input type="number" value={customVal(f.id) ?? ""} onFocus={(e) => e.target.select()}
+                        onChange={(e) => setCustom(f.id, e.target.value === "" ? "" : Number(e.target.value))} />
+                    )}
+                    {f.type === "date" && (
+                      <DatePicker value={customVal(f.id) ?? ""} onChange={(v) => setCustom(f.id, v)} />
+                    )}
+                    {f.type === "boolean" && (
+                      <button type="button" role="switch" aria-checked={!!customVal(f.id)}
+                        className={`dw-switch ${customVal(f.id) ? "on" : ""}`}
+                        onClick={() => setCustom(f.id, !customVal(f.id))}>
+                        <span className="dw-switch-knob" />
+                      </button>
+                    )}
+                    {f.type === "select" && (
+                      <Select value={customVal(f.id) ?? ""} onChange={(v) => setCustom(f.id, v)}
+                        placeholder="Select…"
+                        options={[{ value: "", label: "—" }, ...f.options.map((o) => ({ value: o, label: o }))]} />
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="dw-sec">
             <p className="dw-sec-title">Notes</p>
             <textarea className="dw-area" value={c.notes ?? ""} onChange={(e) => set({ notes: e.target.value })} placeholder="Anything worth remembering about this company…" />
@@ -302,6 +489,160 @@ function CompanyEditor({ company, employees, canAssign, assigned, onClose, onSav
           <div className="dw-foot-right">
             <button className="dw-cancel" onClick={onClose}>Cancel</button>
             <button className="dw-save" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save company"}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+// ============================ Field settings modal ============================
+function FieldSettings({ fields, availableColumns, columns, onColumns, onClose, onChanged }: {
+  fields: CompanyField[];
+  availableColumns: { key: string; label: string }[];
+  columns: string[];
+  onColumns: (next: string[]) => void;
+  onClose: () => void;
+  onChanged: () => void | Promise<void>;
+}) {
+  const [items, setItems] = useState<CompanyField[]>(fields);
+  const [dragKey, setDragKey] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [label, setLabel] = useState("");
+  const [type, setType] = useState<CompanyField["type"]>("text");
+  const [required, setRequired] = useState(false);
+  const [optionsText, setOptionsText] = useState("");
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const refresh = async () => { await onChanged(); setItems(await listCompanyFields().catch(() => [])); };
+  const add = async () => {
+    if (!label.trim()) return;
+    setBusy(true);
+    const options = type === "select" ? optionsText.split(",").map((s) => s.trim()).filter(Boolean) : [];
+    await addCompanyField({ label: label.trim(), type, required, options, sort: items.length });
+    setLabel(""); setType("text"); setRequired(false); setOptionsText("");
+    await refresh();
+    setBusy(false);
+  };
+  const remove = async (id: string) => {
+    if (!confirm("Delete this field? Existing companies keep their stored value but it won't show anymore.")) return;
+    await deleteCompanyField(id);
+    await refresh();
+  };
+  const toggleRequired = async (f: CompanyField) => { await updateCompanyField(f.id, { required: !f.required }); await refresh(); };
+
+  const TYPE_LABEL: Record<CompanyField["type"], string> = {
+    text: "Text", number: "Number", date: "Date", boolean: "Yes / No", select: "Dropdown",
+  };
+
+  return (
+    <div className="dw-backdrop" onMouseDown={onClose}>
+      <div className="dw dw-narrow" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+        <div className="dw-head">
+          <div>
+            <span className="dw-eyebrow">Configure</span>
+            <h2 className="dw-title">Company fields</h2>
+          </div>
+          <button className="dw-x" onClick={onClose}>×</button>
+        </div>
+
+        <div className="dw-body">
+          <div className="dw-sec">
+            <p className="dw-sec-title">Overview columns</p>
+            <p className="dw-empty-hint" style={{ marginTop: 0 }}>Name is always first. Pick up to 4 more and drag to reorder.</p>
+            <div className="cf-cols">
+              <div className="cf-col cf-col-fixed"><span className="cf-col-grip">⋮⋮</span>Name<span className="cf-col-tag">fixed</span></div>
+              {columns.map((k) => (
+                <div key={k}
+                  className={`cf-col ${dragKey === k ? "is-dragging" : ""} ${dragOver === k ? "is-over" : ""}`}
+                  draggable
+                  onDragStart={(e) => { setDragKey(k); e.dataTransfer.effectAllowed = "move"; }}
+                  onDragEnd={() => { setDragKey(null); setDragOver(null); }}
+                  onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (k !== dragOver) setDragOver(k); }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (!dragKey || dragKey === k) { setDragKey(null); setDragOver(null); return; }
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const after = e.clientY > rect.top + rect.height / 2;
+                    const next = columns.filter((x) => x !== dragKey);
+                    let idx = next.indexOf(k);
+                    if (after) idx += 1;
+                    next.splice(idx, 0, dragKey);
+                    onColumns(next); setDragKey(null); setDragOver(null);
+                  }}>
+                  <span className="cf-col-grip">⋮⋮</span>
+                  {availableColumns.find((c) => c.key === k)?.label ?? k}
+                  <button className="cf-col-x" onClick={() => onColumns(columns.filter((x) => x !== k))} aria-label="Remove column">×</button>
+                </div>
+              ))}
+            </div>
+            {columns.length < 4 && availableColumns.some((c) => !columns.includes(c.key)) && (
+              <div className="cf-col-add">
+                <Select value="" onChange={(v) => v && onColumns([...columns, v])} placeholder="+ Add column"
+                  options={[{ value: "", label: "+ Add column" }, ...availableColumns.filter((c) => !columns.includes(c.key)).map((c) => ({ value: c.key, label: c.label }))]} />
+              </div>
+            )}
+          </div>
+
+          <div className="dw-sec">
+            <p className="dw-sec-title">Current fields</p>
+            {items.length === 0 ? (
+              <p className="dw-empty-hint">No custom fields yet. Add one below.</p>
+            ) : (
+              <div className="cf-list">
+                {items.map((f) => (
+                  <div className="cf-row" key={f.id}>
+                    <div className="cf-row-main">
+                      <span className="cf-row-name">{f.label}</span>
+                      <span className="cf-row-type">{TYPE_LABEL[f.type]}{f.type === "select" && f.options.length ? ` · ${f.options.length} options` : ""}</span>
+                    </div>
+                    <button type="button" role="switch" aria-checked={f.required}
+                      className={`cf-req ${f.required ? "on" : ""}`} onClick={() => toggleRequired(f)}>Required</button>
+                    <button className="cf-del" onClick={() => remove(f.id)} aria-label="Delete field">×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="dw-sec">
+            <p className="dw-sec-title">Add a field</p>
+            <div className="dw-grid">
+              <div className="dw-f dw-col2"><label>Field name</label>
+                <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Sector, Founded, Key account" />
+              </div>
+              <div className="dw-f"><label>Type</label>
+                <Select value={type} onChange={(v) => setType(v as CompanyField["type"])}
+                  options={[
+                    { value: "text", label: "Text" }, { value: "number", label: "Number" },
+                    { value: "date", label: "Date" }, { value: "boolean", label: "Yes / No" },
+                    { value: "select", label: "Dropdown" },
+                  ]} />
+              </div>
+              <div className="dw-f"><label>Required</label>
+                <button type="button" role="switch" aria-checked={required}
+                  className={`dw-switch ${required ? "on" : ""}`} onClick={() => setRequired((v) => !v)}>
+                  <span className="dw-switch-knob" />
+                </button>
+              </div>
+              {type === "select" && (
+                <div className="dw-f dw-col2"><label>Options (comma-separated)</label>
+                  <input value={optionsText} onChange={(e) => setOptionsText(e.target.value)} placeholder="e.g. SME, Mid-market, Enterprise" />
+                </div>
+              )}
+            </div>
+            <button className="dw-save cf-add" onClick={add} disabled={busy || !label.trim()}>{busy ? "Adding…" : "+ Add field"}</button>
+          </div>
+        </div>
+
+        <div className="dw-foot">
+          <div className="dw-foot-right">
+            <button className="dw-save" onClick={onClose}>Done</button>
           </div>
         </div>
       </div>

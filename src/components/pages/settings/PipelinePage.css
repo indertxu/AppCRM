@@ -237,3 +237,24 @@
 .pl-node-oc { margin-top: 7px; display: inline-block; padding: 3px 9px; border-radius: 7px; font-size: 11px; font-weight: 700; }
 .pl-node-oc-win { background: rgba(18,181,127,0.16); color: #0a6f4d; }
 .pl-node-oc-loss { background: rgba(214,69,69,0.14); color: #d64545; }
+/* Close probability field (sales phases) */
+.pl-prob { display: flex; align-items: center; gap: 10px; }
+.pl-prob-input {
+  width: 68px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 10px;
+  background: #f4faf6; font-family: "Space Grotesk", sans-serif; font-size: 15px; font-weight: 600;
+  color: var(--ink); outline: none; text-align: center;
+  -moz-appearance: textfield;
+}
+.pl-prob-input::-webkit-outer-spin-button, .pl-prob-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.pl-prob-input:focus { border-color: var(--emerald); box-shadow: 0 0 0 3px rgba(18,181,127,0.16); background: #fff; }
+.pl-prob-pct { font-family: "Space Grotesk", sans-serif; font-size: 14px; font-weight: 600; color: var(--muted); margin-left: -4px; }
+.pl-prob-track { flex: 1; height: 8px; border-radius: 999px; background: rgba(18,181,127,0.12); overflow: hidden; }
+.pl-prob-fill { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #2ecb92, #0a6f4d); transition: width 0.2s; }
+
+/* probability badge on the canvas node */
+.pl-node-prob {
+  position: absolute; top: 8px; right: 8px;
+  padding: 2px 7px; border-radius: 999px;
+  background: rgba(18,181,127,0.14); color: var(--forest);
+  font-family: "Space Grotesk", sans-serif; font-size: 10.5px; font-weight: 700;
+}

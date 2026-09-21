@@ -9,6 +9,7 @@ export interface Phase {
   source_phase_key?: string | null;
   sales_visible?: boolean;
   sales_outcome?: "win" | "loss" | null;
+  close_probability?: number | null;
   deptKeys: string[];
   items: { type: "product" | "service"; id: string }[];
 }
@@ -52,6 +53,7 @@ export async function loadPipeline(pipelineId: string): Promise<{ phases: Phase[
     source_phase_key: p.source_phase_key ?? null,
     sales_visible: p.sales_visible ?? true,
     sales_outcome: p.sales_outcome ?? null,
+    close_probability: p.close_probability ?? null,
     deptKeys: deptByPhase[p.id] ?? [],
     items: itemsByPhase[p.id] ?? [],
   }));
@@ -67,7 +69,7 @@ export async function addPhase(pipelineId: string, x: number, y: number, sourceP
   if (error) return null;
   return { ...(data as any), deptKeys: [], items: [] };
 }
-export async function updatePhase(id: string, patch: Partial<{ name: string; pos_x: number; pos_y: number; color: string | null; handover_to: string | null; sales_visible: boolean; sales_outcome: string | null }>) {
+export async function updatePhase(id: string, patch: Partial<{ name: string; pos_x: number; pos_y: number; color: string | null; handover_to: string | null; sales_visible: boolean; sales_outcome: string | null; close_probability: number | null }>) {
   const clean: any = { ...patch };
   if (clean.pos_x != null) clean.pos_x = Math.round(clean.pos_x);
   if (clean.pos_y != null) clean.pos_y = Math.round(clean.pos_y);

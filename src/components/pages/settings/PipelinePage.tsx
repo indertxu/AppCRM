@@ -550,6 +550,9 @@ function PipelineEditor({ pipeline, onBack, onRenamed }: { pipeline: Pipeline; o
                     {p.sales_outcome === "win" ? "★ Win" : "✕ Loss"}
                   </div>
                 )}
+                {isSales && !p.sales_outcome && p.close_probability != null && (
+                  <div className="pl-node-prob">{p.close_probability}%</div>
+                )}
                 <button className="pl-node-handle" onPointerDown={(e) => startLink(e, p.id)} title="Drag to link">→</button>
               </div>
             ))}
@@ -606,6 +609,8 @@ function PhasePanel({ phase, depts, products, services, pipelines, isSales, allP
   onChange: (patch: Partial<Phase>) => void;
 }) {
   const [name, setName] = useState(phase.name);
+  const probTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (probTimer.current) clearTimeout(probTimer.current); }, []);
   const toggleDept = async (key: string) => {
     const next = phase.deptKeys.includes(key) ? phase.deptKeys.filter((k) => k !== key) : [...phase.deptKeys, key];
     onChange({ deptKeys: next });
@@ -697,6 +702,47 @@ function PhasePanel({ phase, depts, products, services, pipelines, isSales, allP
             <button className={`pl-oc pl-oc-loss ${phase.sales_outcome === "loss" ? "on" : ""}`} onClick={() => onSetOutcome("loss")}>Loss</button>
           </div>
           {phase.sales_outcome && <span className="pl-outcome-hint">Reaching this phase marks the tracking as <b>{phase.sales_outcome === "win" ? "won" : "lost"}</b>.</span>}
+
+          {/* Close probability — the % chance a deal in this phase will close.
+              Win phases are 100% and Loss 0% by definition, so the field only
+              applies to normal phases. */}
+          {!phase.sales_outcome ? (
+            <>
+              <span className="pl-outcome-label">Close probability</span>
+              <div className="pl-prob">
+                <input
+                  className="pl-prob-input"
+                  type="number" min={0} max={100} step={5}
+                  value={phase.close_probability ?? ""}
+                  placeholder="—"
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    const v = raw === "" ? null : Math.max(0, Math.min(100, Number(raw)));
+                    onChange({ close_probability: v });
+                    // Persist on every change so switching phases can't lose it.
+                    if (probTimer.current) clearTimeout(probTimer.current);
+                    probTimer.current = setTimeout(() => { updatePhase(phase.id, { close_probability: v }); }, 350);
+                  }}
+                  onBlur={(e) => {
+                    // Flush immediately on blur too, in case the debounce is pending.
+                    if (probTimer.current) clearTimeout(probTimer.current);
+                    const raw = e.target.value;
+                    const v = raw === "" ? null : Math.max(0, Math.min(100, Number(raw)));
+                    updatePhase(phase.id, { close_probability: v });
+                  }}
+                />
+                <span className="pl-prob-pct">%</span>
+                <div className="pl-prob-track">
+                  <span className="pl-prob-fill" style={{ width: `${phase.close_probability ?? 0}%` }} />
+                </div>
+              </div>
+              <span className="pl-hint" style={{ marginTop: 4 }}>Chance a deal in this phase will close. Used to weight the sales forecast.</span>
+            </>
+          ) : (
+            <span className="pl-hint" style={{ marginTop: 6 }}>
+              {phase.sales_outcome === "win" ? "Won phases count as 100% closed." : "Lost phases count as 0%."}
+            </span>
+          )}
         </>
       )}
 

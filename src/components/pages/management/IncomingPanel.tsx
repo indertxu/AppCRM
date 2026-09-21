@@ -1,8 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { supabase } from "../../api/supabase";
 import { listHandoffs, dismissHandoff, type Handoff } from "../sales/salesApi";
+import Select from "../../framework/Select";
+import IncomingConvertModal from "./IncomingConvertModal";
 import "./IncomingPanel.css";
 
 const eur = (n: number) => Math.round(n).toLocaleString("en-US");
@@ -17,11 +18,15 @@ const num = (n: number) => Number(n).toLocaleString("es-ES", { maximumFractionDi
 interface ClientRow { id: string; name: string; company_id: string | null }
 
 export default function IncomingPanel() {
-  const navigate = useNavigate();
   const [rows, setRows] = useState<Handoff[]>([]);
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
+  const [convert, setConvert] = useState<Handoff | null>(null);
+  const [q, setQ] = useState("");
+  const [fClient, setFClient] = useState("");
+  const [fService, setFService] = useState("");
+  const [sort, setSort] = useState("recent");
 
   /**
    * Which delivery pipeline must finish before another can start.
@@ -119,45 +124,6 @@ export default function IncomingPanel() {
     ?? clients.find((c) => h.company_name && c.name.toLowerCase() === h.company_name.toLowerCase())
     ?? null;
 
-  /**
-   * Hand the deal to the Clients page with everything we already know filled
-   * in, instead of silently creating an empty shell here. The user reviews and
-   * completes it in the form they already know.
-   */
-  const openInClients = async (h: Handoff) => {
-    setBusy(h.id);
-    try {
-      let company: any = null;
-      let contacts: any[] = [];
-      if (h.company_id) {
-        const { data: co } = await supabase.from("companies").select("*").eq("id", h.company_id).maybeSingle();
-        company = co;
-        const { data: links } = await supabase.from("company_contacts").select("contact_id").eq("company_id", h.company_id);
-        const ids = (links ?? []).map((l: any) => l.contact_id);
-        if (ids.length) {
-          const { data: cts } = await supabase.from("contacts").select("*").in("id", ids);
-          contacts = cts ?? [];
-        }
-      }
-      const client = existingClient(h);
-      navigate("/clients", {
-        state: {
-          handoff: {
-            handoffId: h.id,
-            clientId: client?.id ?? null,
-            clientName: client?.name ?? h.company_name ?? "New client",
-            companyId: h.company_id,
-            destPipelineName: h.dest_pipeline_name,
-            potentialValue: h.potential_value,
-            services: h.services ?? [],
-            company,
-            contacts,
-          },
-        },
-      });
-    } finally { setBusy(null); }
-  };
-
   const dismiss = async (h: Handoff) => {
     setBusy(h.id);
     try {
@@ -183,6 +149,49 @@ export default function IncomingPanel() {
     return { value, days, byType: Object.entries(byType).sort((a, b) => b[1].value - a[1].value) };
   }, [rows]);
 
+  // Per-handoff figures used by the filters/sort.
+  const hoValue = (h: Handoff) => (h.services ?? []).filter((s: any) => s.kind !== "product").reduce((s, x: any) => s + (Number(x.price) || 0), 0);
+  const hoDays = (h: Handoff) => (h.services ?? []).filter((s: any) => s.kind !== "product").reduce((s, x: any) => s + (Number(x.days) || 0), 0);
+  const hoClient = (h: Handoff) => h.company_name || "—";
+  const hoServices = (h: Handoff) => (h.services ?? []).filter((s: any) => s.kind !== "product").map((s: any) => s.label || "Service");
+
+  const clientOptions = useMemo(() => {
+    const set = new Set<string>();
+    rows.forEach((h) => { if (h.company_name) set.add(h.company_name); });
+    return Array.from(set).sort().map((n) => ({ value: n, label: n }));
+  }, [rows]);
+  const serviceOptions = useMemo(() => {
+    const set = new Set<string>();
+    rows.forEach((h) => hoServices(h).forEach((s) => set.add(s)));
+    return Array.from(set).sort().map((n) => ({ value: n, label: n }));
+  }, [rows]);
+
+  const norm = (s: string) => (s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const shown = useMemo(() => {
+    const needle = norm(q.trim());
+    const list = rows.filter((h) => {
+      if (fClient && h.company_name !== fClient) return false;
+      if (fService && !hoServices(h).includes(fService)) return false;
+      if (needle) {
+        const hay = norm([hoClient(h), h.dest_pipeline_name ?? "", ...hoServices(h)].join(" "));
+        if (!hay.includes(needle)) return false;
+      }
+      return true;
+    });
+    return list.sort((a, b) => {
+      if (sort === "value") return hoValue(b) - hoValue(a);
+      if (sort === "value_asc") return hoValue(a) - hoValue(b);
+      if (sort === "days") return hoDays(b) - hoDays(a);
+      if (sort === "days_asc") return hoDays(a) - hoDays(b);
+      if (sort === "client") return hoClient(a).localeCompare(hoClient(b));
+      return (b.created_at ?? "").localeCompare(a.created_at ?? "");
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, q, fClient, fService, sort]);
+
+  const anyFilter = !!(q || fClient || fService || sort !== "recent");
+  const clearFilters = () => { setQ(""); setFClient(""); setFService(""); setSort("recent"); };
+
   /** Is this handoff waiting on an earlier project, and how far along is it? */
   const blockerOf = (h: Handoff) => {
     const priorPipe = h.dest_pipeline_id ? gate[h.dest_pipeline_id] : null;
@@ -202,10 +211,37 @@ export default function IncomingPanel() {
     <div className="inc">
       <div className="inc-head">
         <div>
-          <span className="inc-eyebrow">From sales</span>
           <h2 className="inc-title">Incoming handoffs</h2>
         </div>
-        <span className="inc-count">{rows.length} pending</span>
+        {rows.length > 0 && (
+          <div className="inc-filters">
+            <div className="inc-search">
+              <span className="inc-search-ico" aria-hidden="true">⌕</span>
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search client, service…" />
+              {q && <button className="inc-search-x" onClick={() => setQ("")} aria-label="Clear">×</button>}
+            </div>
+            <div className="inc-filter">
+              <Select value={fClient} onChange={setFClient} placeholder="All clients"
+                options={[{ value: "", label: "All clients" }, ...clientOptions]} />
+            </div>
+            <div className="inc-filter">
+              <Select value={fService} onChange={setFService} placeholder="All services"
+                options={[{ value: "", label: "All services" }, ...serviceOptions]} />
+            </div>
+            <div className="inc-filter">
+              <Select value={sort} onChange={setSort}
+                options={[
+                  { value: "recent", label: "Most recent" },
+                  { value: "value", label: "Highest value" },
+                  { value: "value_asc", label: "Lowest value" },
+                  { value: "days", label: "Most days" },
+                  { value: "days_asc", label: "Fewest days" },
+                  { value: "client", label: "Client A–Z" },
+                ]} />
+            </div>
+            {anyFilter && <button className="inc-clear" onClick={clearFilters}>Clear</button>}
+          </div>
+        )}
       </div>
 
       {rows.length > 0 && (
@@ -244,15 +280,25 @@ export default function IncomingPanel() {
           <p>No incoming handoffs.</p>
           <span>Won deals sent from sales will appear here.</span>
         </div>
+      ) : shown.length === 0 ? (
+        <div className="inc-empty-state">
+          <div className="inc-empty-art">⌕</div>
+          <p>No handoffs match those filters.</p>
+          <span><button className="inc-clear" onClick={clearFilters}>Clear filters</button></span>
+        </div>
       ) : (
         <div className="inc-grid">
-          {rows.map((h) => {
+          {shown.map((h) => {
             const client = existingClient(h);
             const all = h.services ?? [];
             const svcs = all.filter((x: any) => x.kind !== "product");
-            const prods = all.filter((x: any) => x.kind === "product");
             const total = svcs.reduce((s, x) => s + (Number(x.price) || 0), 0);
             const days = svcs.reduce((s, x) => s + (Number(x.days) || 0), 0);
+            // Use the real per-line rate stored at handoff time. With one service
+            // that's its rate; with several, fall back to a blended average.
+            const lineRate = svcs.length === 1 && svcs[0].rate != null
+              ? Number(svcs[0].rate)
+              : (days > 0 ? total / days : 0);
             const blocked = blockerOf(h);
             return (
               <article className={`inc-card ${blocked ? "is-locked" : ""}`} key={h.id}>
@@ -261,16 +307,18 @@ export default function IncomingPanel() {
                 <header className="inc-hd">
                   <span className="inc-mono">{monogram(h.company_name || "?")}</span>
                   <div className="inc-hd-txt">
-                    <h3 className="inc-name">{h.company_name || "Unknown company"}</h3>
+                    <div className="inc-name-row">
+                      <h3 className="inc-name">{h.company_name || "Unknown company"}</h3>
+                      <span className={`inc-tag ${client ? "is-existing" : "is-new"}`}>
+                        {client ? "Existing" : "New"}
+                      </span>
+                    </div>
                     <p className="inc-route">
                       <span className="inc-route-from">Sales</span>
                       <svg className="inc-route-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h13M12 5l7 7-7 7" /></svg>
                       <span className="inc-route-to">{h.dest_pipeline_name || "Pipeline"}</span>
                     </p>
                   </div>
-                  <span className={`inc-tag ${client ? "is-existing" : "is-new"}`}>
-                    {client ? `Existing · ${client.name}` : "New client"}
-                  </span>
                 </header>
 
                 <div className="inc-body">
@@ -292,14 +340,6 @@ export default function IncomingPanel() {
                         </span>
                       )}
                     </div>
-                  )}
-                  {prods.length > 0 && (
-                    <p className="inc-ctx">
-                      <span>Sold with</span>
-                      {prods.map((p: any, i: number) => (
-                        <em key={i}>{p.label}{p.price > 0 ? ` · ${eur(p.price)} €` : ""}</em>
-                      ))}
-                    </p>
                   )}
                   {/* With a single service the value block already states the
                       amount and the days, so the ledger would just repeat it. */}
@@ -327,7 +367,7 @@ export default function IncomingPanel() {
                   {days > 0 && (
                     <div className="inc-daybox">
                       <span className="inc-days"><b>{num(days)}</b><em>days</em></span>
-                      <span className="inc-rate">{eur(total / days)} €/day</span>
+                      <span className="inc-rate">{eur(lineRate)} €/day</span>
                     </div>
                   )}
                 </aside>
@@ -336,10 +376,10 @@ export default function IncomingPanel() {
                   <span className="inc-when">Arrived {ago(h.created_at)}</span>
                   <div className="inc-actions">
                     <button className="inc-dismiss" onClick={() => dismiss(h)} disabled={busy === h.id}>Dismiss</button>
-                    <button className="inc-convert" onClick={() => openInClients(h)}
+                    <button className="inc-convert" onClick={() => setConvert(h)}
                       disabled={busy === h.id || !!blocked}
                       title={blocked ? "The previous project has to be finalised first" : undefined}>
-                      {busy === h.id ? "Opening…" : blocked ? "Locked" : client ? "Add project" : "Create client"}
+                      {blocked ? "Locked" : "Build project"}
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h13M12 5l7 7-7 7" /></svg>
                     </button>
                   </div>
@@ -348,6 +388,17 @@ export default function IncomingPanel() {
             );
           })}
         </div>
+      )}
+
+      {convert && (
+        <IncomingConvertModal
+          handoff={convert}
+          onClose={() => setConvert(null)}
+          onConverted={() => {
+            setRows((xs) => xs.filter((x) => x.id !== convert.id));
+            setConvert(null);
+          }}
+        />
       )}
     </div>
   );
