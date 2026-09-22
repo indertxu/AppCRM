@@ -109,6 +109,33 @@ export async function loadTrackingEmployees(trackingId: string): Promise<string[
   const { data } = await supabase.from("tracking_employees").select("profile_id").eq("tracking_id", trackingId);
   return (data ?? []).map((r: any) => r.profile_id);
 }
+
+/** The owner profile id for one tracking, or null. */
+export async function loadTrackingOwner(trackingId: string): Promise<string | null> {
+  const { data } = await supabase.from("tracking_employees")
+    .select("profile_id").eq("tracking_id", trackingId).eq("is_owner", true).maybeSingle();
+  return (data as any)?.profile_id ?? null;
+}
+
+/**
+ * Set (or clear) the owner of a deal. The owner must be one of the people on the
+ * deal; if they aren't yet, they're added. Passing null clears the owner.
+ * Done in two steps because the partial unique index forbids two owners at once:
+ * clear the old owner first, then set the new one.
+ */
+export async function setTrackingOwner(trackingId: string, profileId: string | null) {
+  await supabase.from("tracking_employees").update({ is_owner: false })
+    .eq("tracking_id", trackingId).eq("is_owner", true);
+  if (!profileId) return;
+  const { data } = await supabase.from("tracking_employees")
+    .select("profile_id").eq("tracking_id", trackingId).eq("profile_id", profileId).maybeSingle();
+  if (data) {
+    await supabase.from("tracking_employees").update({ is_owner: true })
+      .eq("tracking_id", trackingId).eq("profile_id", profileId);
+  } else {
+    await supabase.from("tracking_employees").insert({ tracking_id: trackingId, profile_id: profileId, is_owner: true });
+  }
+}
 export async function addTrackingEmployee(trackingId: string, profileId: string) {
   await supabase.from("tracking_employees").insert({ tracking_id: trackingId, profile_id: profileId });
 }
@@ -133,12 +160,24 @@ export async function loadAllTrackingEmployees(): Promise<Record<string, string[
   return out;
 }
 
-/** Replace the whole team of a tracking in one go. */
+/** The owner (responsable comercial) of each tracking, if one is set. */
+export async function loadAllTrackingOwners(): Promise<Record<string, string>> {
+  const { data } = await supabase.from("tracking_employees").select("tracking_id, profile_id").eq("is_owner", true);
+  const out: Record<string, string> = {};
+  (data ?? []).forEach((r: any) => { out[r.tracking_id] = r.profile_id; });
+  return out;
+}
+
+/** Replace the whole team of a tracking in one go, keeping the owner flag for
+ *  anyone who stays on the team. */
 export async function setTrackingEmployees(trackingId: string, profileIds: string[]) {
+  const { data: prev } = await supabase.from("tracking_employees")
+    .select("profile_id").eq("tracking_id", trackingId).eq("is_owner", true).maybeSingle();
+  const owner = (prev as any)?.profile_id as string | undefined;
   await supabase.from("tracking_employees").delete().eq("tracking_id", trackingId);
   if (profileIds.length) {
     await supabase.from("tracking_employees")
-      .insert(profileIds.map((p) => ({ tracking_id: trackingId, profile_id: p })));
+      .insert(profileIds.map((p) => ({ tracking_id: trackingId, profile_id: p, is_owner: owner === p })));
   }
 }
 

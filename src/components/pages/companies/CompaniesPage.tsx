@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Select from "../../framework/Select";
 import DatePicker from "../../framework/DatePicker";
@@ -7,8 +7,10 @@ import {
   listCompanies, saveCompany, deleteCompany, companyContactCounts, listContacts,
   myProfile, isSalesLead, listEmployees, loadCompanyAssignees, setCompanyAssignees,
   listCompanyFields, addCompanyField, updateCompanyField, deleteCompanyField,
+  listContactFields, saveContact,
+  loadRelationshipSets, type RelationshipSets,
   loadPrefs, savePref,
-  type Company, type Contact, type Employee, type CompanyField,
+  type Company, type Contact, type Employee, type CompanyField, type ContactField,
 } from "./companiesApi";
 import "../clients/ClientsPage.css";
 import "./CompaniesPage.css";
@@ -33,9 +35,12 @@ export default function CompaniesPage() {
   const [me, setMe] = useState<{ id: string; role: string; is_superadmin: boolean } | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [fields, setFields] = useState<CompanyField[]>([]);
+  const [contactFields, setContactFields] = useState<ContactField[]>([]);
   const [showFieldSettings, setShowFieldSettings] = useState(false);
   const [ctrl1, setCtrl1] = useState<{ field: string; action: string; min?: string; max?: string }>({ field: "", action: "" });
   const [ctrl2, setCtrl2] = useState<{ field: string; action: string; min?: string; max?: string }>({ field: "", action: "" });
+  const [rel, setRel] = useState<RelationshipSets | null>(null);
+  const [fRel, setFRel] = useState("");
   const [columns, setColumns] = useState<string[]>(["vat_number", "address", "contacts"]);
 
   const reload = async () => {
@@ -44,6 +49,8 @@ export default function CompaniesPage() {
     setContacts(await listContacts().catch(() => []));
     setAssignees(await loadCompanyAssignees().catch(() => ({})));
     setFields(await listCompanyFields().catch(() => []));
+    setContactFields(await listContactFields().catch(() => []));
+    setRel(await loadRelationshipSets().catch(() => null));
   };
   useEffect(() => {
     myProfile().then(setMe).catch(() => {});
@@ -112,11 +119,18 @@ export default function CompaniesPage() {
     return ctrl.action === "desc" ? -r : r;
   };
 
+  const relOf = (c: Company): "client" | "tracking" | "none" => {
+    if (rel && c.id && rel.clientCompanyIds.has(c.id)) return "client";
+    if (rel && c.id && rel.trackingCompanyIds.has(c.id)) return "tracking";
+    return "none";
+  };
+
   const shown = companies.filter((c) => {
     // Sales people only see the companies they have been assigned to.
     if (!lead && me && !(assignees[c.id!] ?? []).includes(me.id)) return false;
     if (!passesFilter(c, ctrl1)) return false;
     if (!passesFilter(c, ctrl2)) return false;
+    if (fRel && relOf(c) !== fRel) return false;
     const n = norm(q.trim());
     if (!n) return true;
     return [c.name, c.legal_name, c.vat_number, c.street, c.city, c.province, c.country, c.postal_code]
@@ -195,6 +209,15 @@ export default function CompaniesPage() {
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name or address…" />
           {q && <button onClick={() => setQ("")}>×</button>}
         </div>
+        <div className="co-cfilter">
+          <Select value={fRel} onChange={setFRel} placeholder="Any relationship"
+            options={[
+              { value: "", label: "Any relationship" },
+              { value: "client", label: "Clients" },
+              { value: "tracking", label: "In a tracking" },
+              { value: "none", label: "Not yet in play" },
+            ]} />
+        </div>
         <div className="co-cfilters">
           {[{ c: ctrl1, set: setCtrl1 }, { c: ctrl2, set: setCtrl2 }].map((ctl, i) => (
             <div className="co-cfilter" key={i}>
@@ -245,7 +268,12 @@ export default function CompaniesPage() {
                     <span className="co-lcell co-lid">
                       <span className="co-avatar">{(c.name || "?").slice(0, 1).toUpperCase()}</span>
                       <span className="co-lid-text">
-                        <span className="co-lname">{c.name}</span>
+                        <span className="co-lname-row">
+                          <span className="co-lname">{c.name}</span>
+                          {(() => { const r = relOf(c); return r === "none" ? null : (
+                            <span className={`co-rel co-rel-${r}`}>{r === "client" ? "Client" : "In tracking"}</span>
+                          ); })()}
+                        </span>
                         {c.legal_name && <span className="co-lsub">{c.legal_name}</span>}
                       </span>
                     </span>
@@ -291,6 +319,8 @@ export default function CompaniesPage() {
           company={editing}
           employees={employees}
           fields={fields}
+          contacts={contacts}
+          contactFields={contactFields}
           canAssign={lead}
           assigned={assignees[editing.id!] ?? []}
           onClose={() => setEditing(null)}
@@ -313,11 +343,160 @@ export default function CompaniesPage() {
   );
 }
 
-function CompanyEditor({ company, employees, fields, canAssign, assigned, onClose, onSaved, onDeleted }: {
-  company: Company; employees: Employee[]; fields: CompanyField[]; canAssign: boolean; assigned: string[];
+// Searchable dropdown to link an existing contact to the company.
+function ContactPicker({ contacts, onPick }: { contacts: Contact[]; onPick: (id: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [active, setActive] = useState(0);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const name = (ct: Contact) => [ct.first_name, ct.last_name].filter(Boolean).join(" ") || "Unnamed";
+  const norm = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const nq = norm(q.trim());
+  const results = !nq ? contacts
+    : contacts.filter((ct) => norm(`${name(ct)} ${ct.email ?? ""} ${ct.position ?? ""}`).includes(nq));
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => { if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+  useEffect(() => { if (open) { setQ(""); setActive(0); setTimeout(() => inputRef.current?.focus(), 0); } }, [open]);
+  useEffect(() => { setActive(0); }, [q]);
+
+  const pick = (ct: Contact) => { if (ct?.id) { onPick(ct.id); setOpen(false); } };
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); setActive((i) => Math.min(i + 1, results.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActive((i) => Math.max(i - 1, 0)); }
+    else if (e.key === "Enter") { e.preventDefault(); if (results[active]) pick(results[active]); }
+    else if (e.key === "Escape") { e.preventDefault(); setOpen(false); }
+  };
+
+  return (
+    <div className="co-cc-pick co-pick" ref={wrapRef}>
+      <button type="button" className={`co-pick-trigger ${open ? "is-open" : ""}`} onClick={() => setOpen((v) => !v)}>
+        <span>+ Link existing contact</span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+      </button>
+      {open && (
+        <div className="co-pick-menu">
+          <div className="co-pick-search">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>
+            <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onKey} placeholder="Search contacts…" />
+          </div>
+          <div className="co-pick-list">
+            {results.length === 0 && <p className="co-pick-empty">No contacts match.</p>}
+            {results.map((ct, i) => (
+              <button type="button" key={ct.id}
+                className={`co-pick-opt ${i === active ? "is-active" : ""}`}
+                onMouseEnter={() => setActive(i)} onClick={() => pick(ct)}>
+                <span className="co-pick-avatar">{(ct.first_name?.[0] ?? "?").toUpperCase()}</span>
+                <span className="co-pick-txt">
+                  <span className="co-pick-name">{name(ct)}{ct.is_billing && <i className="co-cc-billing" title="Billing contact">€</i>}</span>
+                  <span className="co-pick-meta">{[ct.position, ct.email].filter(Boolean).join(" · ") || "—"}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Inline "create a new contact" form used inside CompanyEditor.
+function NewContactInline({ fields, onAdd, onCancel }: {
+  fields: ContactField[];
+  onAdd: (c: Contact) => void;
+  onCancel: () => void;
+}) {
+  const [c, setC] = useState<Contact>({
+    first_name: "", last_name: "", position: "", email: "", phone: "", is_billing: false, notes: "", companyIds: [], custom: {},
+  });
+  const [err, setErr] = useState<string | null>(null);
+  const set = (patch: Partial<Contact>) => setC((x) => ({ ...x, ...patch }));
+  const setCustom = (id: string, v: any) => setC((x) => ({ ...x, custom: { ...(x.custom ?? {}), [id]: v } }));
+  const customVal = (id: string) => (c.custom ?? {})[id];
+
+  const add = () => {
+    if (!c.first_name.trim()) { setErr("A first name is required."); return; }
+    for (const f of fields) {
+      if (!f.required) continue;
+      const v = customVal(f.id);
+      const empty = v == null || v === "" || (f.type === "boolean" && v === false);
+      if (empty) { setErr(`"${f.label}" is required.`); return; }
+    }
+    onAdd(c);
+  };
+
+  return (
+    <div className="co-cc-form">
+      <div className="dw-grid">
+        <div className="dw-f"><label>First name *</label>
+          <input autoFocus value={c.first_name} onChange={(e) => set({ first_name: e.target.value })} />
+        </div>
+        <div className="dw-f"><label>Last name</label>
+          <input value={c.last_name ?? ""} onChange={(e) => set({ last_name: e.target.value })} />
+        </div>
+        <div className="dw-f"><label>Position</label>
+          <input value={c.position ?? ""} onChange={(e) => set({ position: e.target.value })} />
+        </div>
+        <div className="dw-f"><label>Email</label>
+          <input value={c.email ?? ""} onChange={(e) => set({ email: e.target.value })} />
+        </div>
+        <div className="dw-f"><label>Phone</label>
+          <input value={c.phone ?? ""} onChange={(e) => set({ phone: e.target.value })} />
+        </div>
+        <div className="dw-f">
+          <label>Billing contact</label>
+          <button type="button" role="switch" aria-checked={c.is_billing}
+            className={`dw-switch ${c.is_billing ? "on" : ""}`} onClick={() => set({ is_billing: !c.is_billing })}>
+            <span className="dw-switch-knob" />
+          </button>
+        </div>
+        {fields.map((f) => (
+          <div className="dw-f dw-col2" key={f.id}>
+            <label>{f.label}{f.required && <span className="dw-req"> *</span>}</label>
+            {f.type === "text" && <input value={customVal(f.id) ?? ""} onChange={(e) => setCustom(f.id, e.target.value)} />}
+            {f.type === "number" && <input type="number" value={customVal(f.id) ?? ""} onFocus={(e) => e.target.select()}
+              onChange={(e) => setCustom(f.id, e.target.value === "" ? "" : Number(e.target.value))} />}
+            {f.type === "date" && <DatePicker value={customVal(f.id) ?? ""} onChange={(v) => setCustom(f.id, v)} />}
+            {f.type === "boolean" && (
+              <button type="button" role="switch" aria-checked={!!customVal(f.id)}
+                className={`dw-switch ${customVal(f.id) ? "on" : ""}`} onClick={() => setCustom(f.id, !customVal(f.id))}>
+                <span className="dw-switch-knob" />
+              </button>
+            )}
+            {f.type === "select" && (
+              <Select value={customVal(f.id) ?? ""} onChange={(v) => setCustom(f.id, v)} placeholder="Select…"
+                options={[{ value: "", label: "—" }, ...f.options.map((o) => ({ value: o, label: o }))]} />
+            )}
+          </div>
+        ))}
+      </div>
+      {err && <p className="dw-err" style={{ marginTop: 10 }}>{err}</p>}
+      <div className="co-cc-form-foot">
+        <button type="button" className="dw-cancel" onClick={onCancel}>Cancel</button>
+        <button type="button" className="dw-save" onClick={add}>Add contact</button>
+      </div>
+    </div>
+  );
+}
+
+function CompanyEditor({ company, employees, fields, contacts, contactFields, canAssign, assigned, onClose, onSaved, onDeleted }: {
+  company: Company; employees: Employee[]; fields: CompanyField[]; contacts: Contact[]; contactFields: ContactField[]; canAssign: boolean; assigned: string[];
   onClose: () => void; onSaved: () => void; onDeleted: () => void;
 }) {
   const [c, setC] = useState<Company>(company);
+  // Contacts linked to this company, edited live in the drawer.
+  const linkedInitial = company.id ? contacts.filter((ct) => ct.companyIds.includes(company.id!)) : [];
+  const [linked, setLinked] = useState<Contact[]>(linkedInitial);
+  // New contacts created inline (not yet in the DB); saved when the company saves.
+  const [newContacts, setNewContacts] = useState<Contact[]>([]);
+  const [addingContact, setAddingContact] = useState(false);
+  const [pendingRemoveIds, setPendingRemoveIds] = useState<string[]>([]);
   const [who, setWho] = useState<string[]>(assigned);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -333,6 +512,21 @@ function CompanyEditor({ company, employees, fields, canAssign, assigned, onClos
     setC((x) => ({ ...x, custom: { ...(x.custom ?? {}), [fieldId]: value } }));
   const customVal = (fieldId: string) => (c.custom ?? {})[fieldId];
 
+  const contactName = (ct: Contact) => [ct.first_name, ct.last_name].filter(Boolean).join(" ") || "Unnamed";
+  // Existing contacts not yet linked here, for the "add existing" picker.
+  const linkedIds = new Set(linked.map((x) => x.id));
+  const attachable = contacts.filter((ct) => ct.id && !linkedIds.has(ct.id) && !pendingRemoveIds.includes(ct.id!));
+  const attachExisting = (id: string) => {
+    const ct = contacts.find((x) => x.id === id); if (!ct) return;
+    setLinked((xs) => [...xs, ct]);
+    setPendingRemoveIds((xs) => xs.filter((x) => x !== id));
+  };
+  const detachExisting = (id: string) => {
+    setLinked((xs) => xs.filter((x) => x.id !== id));
+    if (contacts.some((x) => x.id === id)) setPendingRemoveIds((xs) => [...xs, id]);
+  };
+  const removeNewContact = (i: number) => setNewContacts((xs) => xs.filter((_, j) => j !== i));
+
   const save = async () => {
     if (!c.name.trim()) { setErr("Give the company a name."); return; }
     for (const f of fields) {
@@ -343,9 +537,35 @@ function CompanyEditor({ company, employees, fields, canAssign, assigned, onClos
     }
     setBusy(true); setErr(null);
     const e = await saveCompany(c);
-    if (!e && c.id) await setCompanyAssignees(c.id, who).catch(() => {});
+    if (e) { setBusy(false); setErr(e); return; }
+    // saveCompany sets c.id on insert; use it to link contacts.
+    const companyId = c.id;
+    if (companyId) {
+      await setCompanyAssignees(companyId, who).catch(() => {});
+      // Newly created contacts: save each, linked to this company.
+      for (const nc of newContacts) {
+        const err = await saveContact({ ...nc, companyIds: [companyId] });
+        if (err) { setBusy(false); setErr(`Contact "${contactName(nc)}": ${err}`); return; }
+      }
+      // Existing contacts newly attached here: add this company to their links.
+      for (const ct of linked) {
+        if (!ct.id) continue;
+        if (!ct.companyIds.includes(companyId)) {
+          const err = await saveContact({ ...ct, companyIds: [...ct.companyIds, companyId] });
+          if (err) { setBusy(false); setErr(`Contact "${contactName(ct)}": ${err}`); return; }
+        }
+      }
+      // Contacts detached here: drop this company from their links.
+      for (const id of pendingRemoveIds) {
+        const ct = contacts.find((x) => x.id === id);
+        if (ct && ct.companyIds.includes(companyId)) {
+          const err = await saveContact({ ...ct, companyIds: ct.companyIds.filter((x) => x !== companyId) });
+          if (err) { setBusy(false); setErr(`Contact "${contactName(ct)}": ${err}`); return; }
+        }
+      }
+    }
     setBusy(false);
-    if (e) setErr(e); else onSaved();
+    onSaved();
   };
   const remove = async () => {
     if (!c.id) return onClose();
@@ -418,6 +638,55 @@ function CompanyEditor({ company, employees, fields, canAssign, assigned, onClos
                 <input value={c.country ?? ""} onChange={(e) => set({ country: e.target.value })} />
               </div>
             </div>
+          </div>
+
+          <div className="dw-sec">
+            <div className="dw-sec-head-row">
+              <p className="dw-sec-title" style={{ margin: 0 }}>Contacts</p>
+              <span className="co-cc-count">{linked.length + newContacts.length}</span>
+            </div>
+
+            {(linked.length + newContacts.length) === 0 && !addingContact && (
+              <p className="dw-empty-hint" style={{ marginTop: 0 }}>No contacts yet. Link an existing one or create a new contact.</p>
+            )}
+
+            <div className="co-cc-list">
+              {linked.map((ct) => (
+                <div className="co-cc-row" key={ct.id}>
+                  <span className="co-cc-avatar">{(ct.first_name?.[0] ?? "?").toUpperCase()}</span>
+                  <div className="co-cc-main">
+                    <span className="co-cc-name">{contactName(ct)}{ct.is_billing && <i className="co-cc-billing" title="Billing contact">€</i>}</span>
+                    <span className="co-cc-meta">{[ct.position, ct.email].filter(Boolean).join(" · ") || "—"}</span>
+                  </div>
+                  <button type="button" className="co-cc-x" aria-label="Unlink contact" onClick={() => detachExisting(ct.id!)}>×</button>
+                </div>
+              ))}
+              {newContacts.map((ct, i) => (
+                <div className="co-cc-row" key={`new-${i}`}>
+                  <span className="co-cc-avatar co-cc-avatar-new">{(ct.first_name?.[0] ?? "+").toUpperCase()}</span>
+                  <div className="co-cc-main">
+                    <span className="co-cc-name">{contactName(ct)}<i className="co-cc-newtag">New</i></span>
+                    <span className="co-cc-meta">{[ct.position, ct.email].filter(Boolean).join(" · ") || "—"}</span>
+                  </div>
+                  <button type="button" className="co-cc-x" aria-label="Remove contact" onClick={() => removeNewContact(i)}>×</button>
+                </div>
+              ))}
+            </div>
+
+            {addingContact ? (
+              <NewContactInline
+                fields={contactFields}
+                onCancel={() => setAddingContact(false)}
+                onAdd={(ct) => { setNewContacts((xs) => [...xs, ct]); setAddingContact(false); }}
+              />
+            ) : (
+              <div className="co-cc-actions">
+                {attachable.length > 0 && (
+                  <ContactPicker contacts={attachable} onPick={attachExisting} />
+                )}
+                <button type="button" className="co-cc-new-btn" onClick={() => setAddingContact(true)}>+ New contact</button>
+              </div>
+            )}
           </div>
 
           {canAssign && (

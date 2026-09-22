@@ -37,7 +37,7 @@ import {
   loadPhaseEvents, stampPhaseEntry, clearPhaseEventsAfter,
   loadPotentialServices, addPotentialService, updatePotentialServiceTerm, deletePotentialService,
   loadBlueprintsForServices, billableQty, type PhaseBlueprint,
-  loadTrackingEmployees, setTrackingEmployees,
+  loadTrackingEmployees, setTrackingEmployees, loadTrackingOwner, setTrackingOwner,
   loadTrackingProducts, addTrackingProduct, updateTrackingProduct, removeTrackingProduct,
   setLineVersionActive, addProductVersion, addServiceVersion,
   lineTotal, lineBreakdown, unitBreakdown,
@@ -226,6 +226,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   const [revErr, setRevErr] = useState<string | null>(null);
   const [allPipelines, setAllPipelines] = useState<Pipeline[]>([]);
   const [team, setTeam] = useState<string[]>([]);
+  const [owner, setOwner] = useState<string | null>(null);
   const [me, setMe] = useState<{ id: string; role: string; is_superadmin: boolean } | null>(null);
   const [handoffMenu, setHandoffMenu] = useState(false);
   const [teamMenu, setTeamMenu] = useState(false);
@@ -389,6 +390,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     loadPotentialServices(tracking.id).then(setPotentials).catch(() => {});
     loadTrackingProducts(tracking.id).then(setTProds).catch(() => {});
     loadTrackingEmployees(tracking.id).then(setTeam).catch(() => {});
+    loadTrackingOwner(tracking.id).then(setOwner).catch(() => {});
     loadTrackingHandoffs(tracking.id).then(setHandoffs).catch(() => {});
     // contacts already linked to this tracking's company
     if (tracking.company_id) {
@@ -427,9 +429,26 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     timer.current = setTimeout(() => { setDealCloseProb(tracking.id, which, v); }, 350);
   };
   const toggleMember = async (id: string) => {
-    const next = team.includes(id) ? team.filter((x) => x !== id) : [...team, id];
+    const removing = team.includes(id);
+    const next = removing ? team.filter((x) => x !== id) : [...team, id];
     setTeam(next);
+    if (removing && owner === id) setOwner(null); // owner left the team
     await setTrackingEmployees(tracking.id, next).catch(() => {});
+  };
+  // Clicking the star sets/clears the owner. Adds them to the team first if needed.
+  const toggleOwner = async (id: string) => {
+    if (owner === id) {
+      setOwner(null);
+      await setTrackingOwner(tracking.id, null).catch(() => {});
+      return;
+    }
+    if (!team.includes(id)) {
+      const next = [...team, id];
+      setTeam(next);
+      await setTrackingEmployees(tracking.id, next).catch(() => {});
+    }
+    setOwner(id);
+    await setTrackingOwner(tracking.id, id).catch(() => {});
   };
   const title = company?.name || (tracking.contactIds[0] ? contactName(tracking.contactIds[0]) : "Untitled");
 
@@ -1285,16 +1304,26 @@ export default function TrackingDetail({ tracking, companies, contacts, products
                     <div className="sl-team-pop-list">
                       {employees.map((e) => {
                         const on = team.includes(e.id);
+                        const isOwner = owner === e.id;
                         return (
-                          <button key={e.id} className={`sl-team-pop-row ${on ? "is-on" : ""}`} onClick={() => canAssign && toggleMember(e.id)} disabled={!canAssign}>
-                            <span className="sl-team-pop-check">{on && <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 13l4 4L19 7" /></svg>}</span>
-                            <span className="sl-team-pop-av">{(e.name || "?").slice(0, 1).toUpperCase()}</span>
-                            <span className="sl-team-pop-name">{e.name}</span>
-                          </button>
+                          <div key={e.id} className={`sl-team-pop-row ${on ? "is-on" : ""} ${isOwner ? "is-owner" : ""}`}>
+                            <button type="button" className="sl-team-pop-main" onClick={() => canAssign && toggleMember(e.id)} disabled={!canAssign}>
+                              <span className="sl-team-pop-check">{on && <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 13l4 4L19 7" /></svg>}</span>
+                              <span className="sl-team-pop-av">{(e.name || "?").slice(0, 1).toUpperCase()}</span>
+                              <span className="sl-team-pop-name">{e.name}</span>
+                              {isOwner && <span className="sl-team-pop-owner-tag">Owner</span>}
+                            </button>
+                            <button type="button" className={`sl-team-pop-star ${isOwner ? "is-owner" : ""}`}
+                              onClick={() => canAssign && toggleOwner(e.id)} disabled={!canAssign}
+                              title={isOwner ? "Remove as owner" : "Make owner"} aria-label={isOwner ? "Remove as owner" : "Make owner"}>
+                              <svg viewBox="0 0 24 24" fill={isOwner ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l3 6.5 7 .6-5.3 4.6 1.6 6.9L12 17.8 5.7 20.6l1.6-6.9L2 9.1l7-.6z" /></svg>
+                            </button>
+                          </div>
                         );
                       })}
                     </div>
                   )}
+                  <p className="sl-team-pop-hint">Tap the star to set who owns the deal.</p>
                   {!canAssign && <p className="sl-team-pop-note">Only boss and sales managers can change this.</p>}
                 </div>
               </>

@@ -118,3 +118,8 @@
 .ct-range input::-webkit-outer-spin-button, .ct-range input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .ct-range input { -moz-appearance: textfield; appearance: textfield; }
 .ct-range-sep { color: var(--muted); font-size: 13px; }
+/* ===== Relationship badge on rows ===== */
+.ct-rel { flex-shrink: 0; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+  padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.ct-rel-client { background: rgba(18,181,127,0.14); color: var(--forest); }
+.ct-rel-tracking { background: rgba(60,154,224,0.14); color: #2b6ea3; }

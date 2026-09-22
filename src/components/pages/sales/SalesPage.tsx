@@ -7,7 +7,7 @@ import { supabase } from "../../api/supabase";
 import { listCompanies, listContacts, type Company, type Contact } from "../companies/companiesApi";
 import { listPipelines, loadPipeline, type Pipeline, type Phase } from "../settings/pipelineApi";
 import { loadProducts, type Product } from "../settings/catalogApi";
-import { listTrackings, loadAllTrackingEmployees, setTrackingEmployees, createTracking, setTrackingPhase, setTrackingStatus, stampPhaseEntry, clearPhaseEventsAfter, trackingPct, loadPotentialTotals, type Tracking } from "./salesApi";
+import { listTrackings, loadAllTrackingEmployees, loadAllTrackingOwners, setTrackingEmployees, createTracking, setTrackingPhase, setTrackingStatus, stampPhaseEntry, clearPhaseEventsAfter, trackingPct, loadPotentialTotals, type Tracking } from "./salesApi";
 import TrackingDetail from "./TrackingDetail";
 import ExportModal from "./ExportModal";
 import "../companies/CompaniesPage.css";
@@ -28,6 +28,7 @@ export default function SalesPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [trackAssignees, setTrackAssignees] = useState<Record<string, string[]>>({});
+  const [trackOwners, setTrackOwners] = useState<Record<string, string>>({});
   const [me, setMe] = useState<{ id: string; role: string; is_superadmin: boolean } | null>(null);
   const [phaseByPipe, setPhaseByPipe] = useState<Record<string, Phase[]>>({});
   const [openId, setOpenId] = useState<string | null>(null);
@@ -57,6 +58,8 @@ export default function SalesPage() {
   const [fProduct, setFProduct] = useState("");
   const [fCompany, setFCompany] = useState("");
   const [fPhase, setFPhase] = useState("");
+  const [fOwner, setFOwner] = useState("");
+  const [fMember, setFMember] = useState("");
   const [sort, setSort] = useState("recent");
   const [probView, setProbView] = useState<"phase" | "rep" | "mgr" | "avg">("phase");
 
@@ -64,6 +67,7 @@ export default function SalesPage() {
     setTrackings(await listTrackings().catch(() => []));
     loadPotentialTotals().then(setPotentialTotals).catch(() => {});
     setTrackAssignees(await loadAllTrackingEmployees().catch(() => ({})));
+    setTrackOwners(await loadAllTrackingOwners().catch(() => ({})));
   };
   useEffect(() => { myProfile().then(setMe).catch(() => {}); }, []);
 
@@ -126,6 +130,18 @@ export default function SalesPage() {
   };
   const trackTitle = (t: Tracking) => companyName(t.company_id) || (t.contactIds[0] ? contactName(t.contactIds[0]) : "Untitled");
 
+  // People offered in the owner / "on deal" filters: sales-team roles, plus
+  // anyone already set as an owner or member (so nobody disappears from the
+  // filter just because their role changed).
+  const salesPeople = useMemo(() => {
+    const SALES = new Set(["sales", "sales_manager", "boss"]);
+    const involved = new Set<string>(Object.values(trackOwners));
+    Object.values(trackAssignees).forEach((ids) => ids.forEach((id) => involved.add(id)));
+    return employees
+      .filter((e) => SALES.has(e.role) || involved.has(e.id))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [employees, trackOwners, trackAssignees]);
+
   const allPhaseNames = useMemo(() => {
     const s = new Set<string>();
     Object.values(phaseByPipe).forEach((ph) => ph.forEach((p) => s.add(p.name)));
@@ -167,6 +183,8 @@ export default function SalesPage() {
       if (fProduct && t.product_id !== fProduct) return false;
       if (fCompany && t.company_id !== fCompany) return false;
       if (fPhase && phaseName(t) !== fPhase) return false;
+      if (fOwner && trackOwners[t.id] !== fOwner) return false;
+      if (fMember && !(trackAssignees[t.id] ?? []).includes(fMember)) return false;
       if (!n) return true;
       return [trackTitle(t), pipelineName(t.pipeline_id), productName(t.product_id) ?? "", ...t.contactIds.map(contactName)]
         .some((v) => norm(v).includes(n));
@@ -201,13 +219,13 @@ export default function SalesPage() {
     });
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mine, q, fStatus, fPipeline, fProduct, fCompany, fPhase, sort, probView, companies, contacts, pipelines, products, phaseByPipe, potentialTotals, trackAssignees, me]);
+  }, [mine, q, fStatus, fPipeline, fProduct, fCompany, fPhase, fOwner, fMember, sort, probView, companies, contacts, pipelines, products, phaseByPipe, potentialTotals, trackAssignees, trackOwners, me]);
 
   // Clicking the KPI card that is already active clears the filter again.
   const toggleStatus = (s: string) => setFStatus((cur) => (cur === s ? "" : s));
 
-  const anyFilter = q || fStatus || fPipeline || fProduct || fCompany || fPhase || sort !== "recent";
-  const clearAll = () => { setQ(""); setFStatus(""); setFPipeline(""); setFProduct(""); setFCompany(""); setFPhase(""); setSort("recent"); };
+  const anyFilter = q || fStatus || fPipeline || fProduct || fCompany || fPhase || fOwner || fMember || sort !== "recent";
+  const clearAll = () => { setQ(""); setFStatus(""); setFPipeline(""); setFProduct(""); setFCompany(""); setFPhase(""); setFOwner(""); setFMember(""); setSort("recent"); };
 
   // Move a tracking to a phase (drag in kanban). Mirrors the detail logic.
   const moveTrackingToPhase = async (trackingId: string, phaseId: string, pipelinePhases: Phase[]) => {
@@ -330,6 +348,10 @@ export default function SalesPage() {
           ]} />
         <Select value={fPhase} onChange={setFPhase} placeholder="Any stage"
           options={[{ value: "", label: "Any stage" }, ...allPhaseNames.map((p) => ({ value: p, label: p }))]} />
+        <Select value={fOwner} onChange={setFOwner} placeholder="Any owner"
+          options={[{ value: "", label: "Any owner" }, ...salesPeople.map((e) => ({ value: e.id, label: e.name }))]} />
+        <Select value={fMember} onChange={setFMember} placeholder="Anyone on deal"
+          options={[{ value: "", label: "Anyone on deal" }, ...salesPeople.map((e) => ({ value: e.id, label: e.name }))]} />
         <Select value={sort} onChange={setSort} placeholder="Sort"
           options={[{ value: "recent", label: "Most recent" }, { value: "oldest", label: "Oldest" }, { value: "az", label: "A-Z" }, { value: "prob_hi", label: "Probability: high → low" }, { value: "prob_lo", label: "Probability: low → high" }, { value: "close_soon", label: "Close date: soonest first" }, { value: "close_late", label: "Close date: latest first" }, { value: "rev_hi", label: "Revenue: high → low" }, { value: "rev_lo", label: "Revenue: low → high" }]} />
         {anyFilter && <button className="sl-clear" onClick={clearAll}>Clear</button>}
@@ -340,6 +362,7 @@ export default function SalesPage() {
           kanbanPipe={fPipeline}
           phaseByPipe={phaseByPipe}
           trackings={shown}
+          potentialTotals={potentialTotals}
           trackTitle={trackTitle}
           companyName={companyName}
           onOpen={(id) => setOpenId(id)}
@@ -365,6 +388,7 @@ export default function SalesPage() {
                 phases={phaseByPipe[t.pipeline_id ?? ""] ?? []}
                 product={productName(t.product_id)}
                 revenue={potentialTotals[t.id!] ?? 0}
+                ownerName={trackOwners[t.id] ? (employees.find((e) => e.id === trackOwners[t.id])?.name ?? null) : null}
                 closeDate={closeDateOf(t)}
                 closeProbOverride={shownProbOf(t)}
                 probLabel={probView === "phase" ? "close" : probView === "rep" ? "sales" : probView === "mgr" ? "mgmt" : "avg"}
@@ -401,10 +425,10 @@ export default function SalesPage() {
   );
 }
 
-function TrackingRow({ tracking, title, company, contactCount, pipeline, phases, product, revenue, closeDate, closeProbOverride, probLabel, onOpen }: {
+function TrackingRow({ tracking, title, company, contactCount, pipeline, phases, product, revenue, ownerName, closeDate, closeProbOverride, probLabel, onOpen }: {
   tracking: Tracking; title: string; company: string | null; contactCount: number;
   pipeline: string; phases: Phase[]; product: string | null; revenue?: number; closeDate?: string | null;
-  closeProbOverride?: number | null; probLabel?: string; onOpen: () => void;
+  ownerName?: string | null; closeProbOverride?: number | null; probLabel?: string; onOpen: () => void;
 }) {
   const curIdx = phases.findIndex((p) => p.id === tracking.current_phase_id);
   // Same adaptive formula as the detail view: first phase 0%, win phase 100%.
@@ -449,6 +473,12 @@ function TrackingRow({ tracking, title, company, contactCount, pipeline, phases,
             {stage}
           </span>
           {product && <span className="dc-prod">{product}</span>}
+          {ownerName && (
+            <span className="dc-owner" title={`Owner: ${ownerName}`}>
+              <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2l3 6.5 7 .6-5.3 4.6 1.6 6.9L12 17.8 5.7 20.6l1.6-6.9L2 9.1l7-.6z" /></svg>
+              {ownerName}
+            </span>
+          )}
           <span className="dc-date">{started}</span>
         </div>
       </div>
@@ -725,10 +755,11 @@ function NewTracking({ companies, contacts, pipelines, products, onClose, onCrea
   );
 }
 // ============================ Kanban view ============================
-function KanbanView({ kanbanPipe, phaseByPipe, trackings, trackTitle, companyName, onOpen, onMove }: {
+function KanbanView({ kanbanPipe, phaseByPipe, trackings, potentialTotals, trackTitle, companyName, onOpen, onMove }: {
   kanbanPipe: string;
   phaseByPipe: Record<string, Phase[]>;
   trackings: Tracking[];
+  potentialTotals: Record<string, number>;
   trackTitle: (t: Tracking) => string;
   companyName: (id: string | null) => string | null;
   onOpen: (id: string) => void;
@@ -751,6 +782,13 @@ function KanbanView({ kanbanPipe, phaseByPipe, trackings, trackTitle, companyNam
     boardTrackings.forEach((t) => { if (t.current_phase_id && map[t.current_phase_id]) map[t.current_phase_id].push(t); });
     return map;
   }, [phases, boardTrackings]);
+  // Total potential revenue of the deals in each phase.
+  const revByPhase = useMemo(() => {
+    const map: Record<string, number> = {};
+    phases.forEach((p) => { map[p.id] = (byPhase[p.id] ?? []).reduce((sum, t) => sum + (potentialTotals[t.id!] ?? 0), 0); });
+    return map;
+  }, [phases, byPhase, potentialTotals]);
+  const fmtRev = (n: number) => n >= 1000 ? `${(n / 1000).toLocaleString("es-ES", { maximumFractionDigits: n >= 10000 ? 0 : 1 })}k €` : `${Math.round(n)} €`;
 
   const drop = (phaseId: string) => {
     if (dragId) onMove(dragId, phaseId, phases);
@@ -779,7 +817,10 @@ function KanbanView({ kanbanPipe, phaseByPipe, trackings, trackTitle, companyNam
               <span className="sl-kcol-name">
                 {p.sales_outcome === "win" ? "★ " : p.sales_outcome === "loss" ? "✕ " : ""}{p.name}
               </span>
-              <span className="sl-kcol-count">{byPhase[p.id]?.length ?? 0}</span>
+              <span className="sl-kcol-meta">
+                <span className="sl-kcol-count">{byPhase[p.id]?.length ?? 0}</span>
+                {(revByPhase[p.id] ?? 0) > 0 && <span className="sl-kcol-rev">{fmtRev(revByPhase[p.id])}</span>}
+              </span>
             </div>
             <div className="sl-kcol-body">
               {(byPhase[p.id] ?? []).length === 0 ? (

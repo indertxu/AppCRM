@@ -7,6 +7,7 @@ import {
   listContacts, saveContact, deleteContact, listCompanies,
   myProfile, isSalesLead, listEmployees, loadContactAssignees, setContactAssignees,
   listContactFields, addContactField, updateContactField, deleteContactField,
+  loadRelationshipSets, type RelationshipSets,
   loadPrefs, savePref,
   type Contact, type Company, type Employee, type ContactField,
 } from "../companies/companiesApi";
@@ -37,6 +38,8 @@ export default function ContactsPage() {
   const [columns, setColumns] = useState<string[]>(["position", "email", "companies"]);
   const [ctrl1, setCtrl1] = useState<{ field: string; action: string; min?: string; max?: string }>({ field: "", action: "" });
   const [ctrl2, setCtrl2] = useState<{ field: string; action: string; min?: string; max?: string }>({ field: "", action: "" });
+  const [rel, setRel] = useState<RelationshipSets | null>(null);
+  const [fRel, setFRel] = useState("");  // "", "client", "tracking", "none"
   const location = useLocation();
 
   const reload = async () => {
@@ -44,6 +47,7 @@ export default function ContactsPage() {
     setCompanies(await listCompanies().catch(() => []));
     setAssignees(await loadContactAssignees().catch(() => ({})));
     setFields(await listContactFields().catch(() => []));
+    setRel(await loadRelationshipSets().catch(() => null));
   };
   useEffect(() => {
     myProfile().then(setMe).catch(() => {});
@@ -164,12 +168,20 @@ export default function ContactsPage() {
     return ctrl.action === "desc" ? -r : r;
   };
 
+  // "client" (in the Clients page), "tracking" (in any deal), or "none".
+  const relOf = (c: Contact): "client" | "tracking" | "none" => {
+    if (rel && c.id && rel.clientContactIds.has(c.id)) return "client";
+    if (rel && c.id && rel.trackingContactIds.has(c.id)) return "tracking";
+    return "none";
+  };
+
   const shown = contacts.filter((c) => {
     // Sales people only see the contacts they have been given access to.
     if (!lead && me && !(assignees[c.id!] ?? []).includes(me.id)) return false;
     // Compound custom filters.
     if (!passesFilter(c, ctrl1)) return false;
     if (!passesFilter(c, ctrl2)) return false;
+    if (fRel && relOf(c) !== fRel) return false;
     const n = norm(q.trim());
     if (!n) return true;
     const companyNames = c.companyIds.map(companyName).join(" ");
@@ -203,6 +215,15 @@ export default function ContactsPage() {
           <span className="ct-search-ico">⌕</span>
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, position or company…" />
           {q && <button onClick={() => setQ("")}>×</button>}
+        </div>
+        <div className="ct-cfilter">
+          <Select value={fRel} onChange={setFRel} placeholder="Any relationship"
+            options={[
+              { value: "", label: "Any relationship" },
+              { value: "client", label: "Clients" },
+              { value: "tracking", label: "In a tracking" },
+              { value: "none", label: "Not yet in play" },
+            ]} />
         </div>
         <div className="ct-cfilters">
           {[{ c: ctrl1, set: setCtrl1 }, { c: ctrl2, set: setCtrl2 }].map((ctl, i) => (
@@ -249,6 +270,9 @@ export default function ContactsPage() {
                 <span className="ct-lcell ct-lid">
                   <span className="ct-avatar">{fullName(c).slice(0, 1).toUpperCase()}</span>
                   <span className="ct-lname">{fullName(c)}{c.is_billing && <i className="ct-billing" title="Billing contact">€</i>}</span>
+                  {(() => { const r = relOf(c); return r === "none" ? null : (
+                    <span className={`ct-rel ct-rel-${r}`}>{r === "client" ? "Client" : "In tracking"}</span>
+                  ); })()}
                 </span>
                 {activeColumns.map((k) => <span key={k} className="ct-lcell">{renderCell(c, k)}</span>)}
               </button>

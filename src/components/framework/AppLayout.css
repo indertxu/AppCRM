@@ -101,9 +101,9 @@
 /* Hover tooltip label — to the RIGHT of each icon */
 .dock-label {
   position: absolute;
-  left: calc(100% + 12px);
+  left: calc(100% + 28px);
   top: 50%;
-  transform: translateY(-50%) translateX(-6px);
+  transform: translateY(-50%);
   padding: 4px 9px;
   border-radius: 8px;
   background: rgba(11, 36, 26, 0.92);
@@ -112,12 +112,13 @@
   font-weight: 500;
   white-space: nowrap;
   opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.2s ease, transform 0.2s ease;
+  pointer-events: none; /* never a hover target itself */
+  transition: opacity 0.16s ease;
+  will-change: opacity;
 }
-.dock-app:hover .dock-label {
+.dock-app:hover .dock-label,
+.dock-app:focus-visible .dock-label {
   opacity: 1;
-  transform: translateY(-50%) translateX(0);
 }
 
 @media (prefers-reduced-motion: reduce) {

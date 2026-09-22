@@ -31,6 +31,12 @@ const clientsIcon = (
     <path d="M16 14.2a4.8 4.8 0 0 1 4.5 4.8" />
   </svg>
 );
+const projectsIcon = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+    <path d="M8 13h8M8 16h5" />
+  </svg>
+);
 const managementIcon = (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
     <rect x="3" y="3" width="8" height="7" rx="1.6" />
@@ -75,9 +81,10 @@ const SALES_TEAM: Role[] = ["boss", "sales", "sales_manager"];
 const items: DockItem[] = [
   { label: "Home", path: "/home", icon: homeIcon },
   { label: "Calendar", path: "/calendar", icon: calendarIcon },
-  { label: "Clients", path: "/clients", icon: clientsIcon, roles: ["boss"] },
-  { label: "Companies", path: "/companies", icon: companiesIcon, roles: SALES_TEAM },
   { label: "Contacts", path: "/contacts", icon: contactsIcon, roles: SALES_TEAM },
+  { label: "Companies", path: "/companies", icon: companiesIcon, roles: SALES_TEAM },
+  { label: "Clients", path: "/clients", icon: clientsIcon, roles: ["boss"] },
+  { label: "Projects", path: "/projects", icon: projectsIcon },
   { label: "Sales", path: "/sales", icon: salesIcon, roles: SALES_TEAM },
 { label: "Management", path: "/management", icon: managementIcon, roles: ["boss", "consultancy_manager", "sales_manager", "customer_success", "it_manager", "marketing_manager", "hr_manager"] },
   { label: "Settings", path: "/settings", icon: settingsIcon },

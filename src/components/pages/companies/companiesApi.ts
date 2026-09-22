@@ -285,3 +285,47 @@ export async function loadContactActivity(contactId: string, companyIds: string[
     created_at: t.created_at,
   })) as ContactDeal[];
 }
+
+
+// ---- Relationship status (client / in a tracking) for companies & contacts ----
+//
+// A company/contact is a CLIENT if it appears in the `clients` table
+// (clients.company_id for companies; clients.contacts — a jsonb array of contact
+// ids — for contacts). It is IN A TRACKING if it appears in any deal:
+// trackings.company_id for companies, tracking_contacts for contacts.
+// These are computed once per page load and cached in a Set for O(1) lookups.
+
+export interface RelationshipSets {
+  clientCompanyIds: Set<string>;
+  clientContactIds: Set<string>;
+  trackingCompanyIds: Set<string>;
+  trackingContactIds: Set<string>;
+}
+
+/** Load, in a few queries, everything needed to tag companies & contacts. */
+export async function loadRelationshipSets(): Promise<RelationshipSets> {
+  const clientCompanyIds = new Set<string>();
+  const clientContactIds = new Set<string>();
+  const trackingCompanyIds = new Set<string>();
+  const trackingContactIds = new Set<string>();
+
+  const [clientsRes, trackRes, tcRes] = await Promise.all([
+    supabase.from("clients").select("company_id, contacts"),
+    supabase.from("trackings").select("company_id"),
+    supabase.from("tracking_contacts").select("contact_id"),
+  ]);
+
+  (clientsRes.data ?? []).forEach((r: any) => {
+    if (r.company_id) clientCompanyIds.add(r.company_id);
+    // `contacts` may be a jsonb array of ids, or of objects with an id.
+    const list = Array.isArray(r.contacts) ? r.contacts : [];
+    list.forEach((x: any) => {
+      const id = typeof x === "string" ? x : x?.id ?? x?.contact_id;
+      if (id) clientContactIds.add(String(id));
+    });
+  });
+  (trackRes.data ?? []).forEach((r: any) => { if (r.company_id) trackingCompanyIds.add(r.company_id); });
+  (tcRes.data ?? []).forEach((r: any) => { if (r.contact_id) trackingContactIds.add(r.contact_id); });
+
+  return { clientCompanyIds, clientContactIds, trackingCompanyIds, trackingContactIds };
+}

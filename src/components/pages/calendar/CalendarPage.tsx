@@ -957,8 +957,12 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
   const dirClass = dir === 1 ? "slide-next" : "slide-prev";
   const animKey = weekStart.getTime();
 
-  const nowVisible = today.getHours() >= 5 && today.getHours() < 21;
-  const nowPct = (((today.getHours() - 5) * 60 + today.getMinutes()) / SPAN) * 100;
+  // Minutes since midnight for "now", placed on the same DAY_START..DAY_END grid
+  // the hour rows and events use. Using a different base (e.g. a hardcoded 5 AM)
+  // shifts the line by however far DAY_START is from that base.
+  const nowMin = today.getHours() * 60 + today.getMinutes();
+  const nowVisible = nowMin >= DAY_START && nowMin <= DAY_END;
+  const nowPct = ((nowMin - DAY_START) / SPAN) * 100;
 
   return (
     <div className="cal">

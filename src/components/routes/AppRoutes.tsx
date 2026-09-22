@@ -8,6 +8,7 @@ import HomePage from "../pages/homepage/HomePage";
 import CalendarPage from "../pages/calendar/CalendarPage";
 import SalesCalendar from "../pages/calendar/SalesCalendar";
 import ClientsPage from "../pages/clients/ClientsPage";
+import ProjectsPage from "../pages/projects/ProjectsPage";
 import CompaniesPage from "../pages/companies/CompaniesPage";
 import ContactsPage from "../pages/contacts/ContactsPage";
 import SalesPage from "../pages/sales/SalesPage";
@@ -110,10 +111,11 @@ export default function AppRoutes() {
             </Route>
             <Route path="/settings" element={<SettingsPage />} />
 
-            {/* Delivery side: boss only */}
+            {/* Delivery side: clients are boss only; projects are open to everyone. */}
             <Route element={<AdminRoute />}>
               <Route path="/clients" element={<ClientsPage />} />
             </Route>
+            <Route path="/projects" element={<ProjectsPage />} />
 
             {/* Sales side: the sales team and the boss */}
             <Route element={<SalesRoute />}>

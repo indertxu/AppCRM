@@ -17,8 +17,8 @@ interface Props {
 
 export default function Select({ value, onChange, options, placeholder = "Select…", disabled }: Props) {
   const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState<{ top: number; left: number; width: number; drop: boolean }>({
-    top: 0, left: 0, width: 0, drop: true,
+  const [pos, setPos] = useState<{ top: number; left: number; minWidth: number; maxWidth: number; drop: boolean }>({
+    top: 0, left: 0, minWidth: 0, maxWidth: 0, drop: true,
   });
   const btnRef = useRef<HTMLButtonElement>(null);
 
@@ -32,10 +32,13 @@ export default function Select({ value, onChange, options, placeholder = "Select
       const spaceBelow = window.innerHeight - r.bottom;
       const listH = Math.min(options.length * 40 + 8, 260);
       const drop = spaceBelow > listH + 8 || spaceBelow > r.top;
+      // The menu is at least as wide as the trigger, but may grow to fit a long
+      // option. It never runs past the right edge of the window (min 12px gap).
       setPos({
         top: drop ? r.bottom + 6 : r.top - listH - 6,
         left: r.left,
-        width: r.width,
+        minWidth: r.width,
+        maxWidth: Math.max(r.width, window.innerWidth - r.left - 12),
         drop,
       });
     }
@@ -63,7 +66,7 @@ export default function Select({ value, onChange, options, placeholder = "Select
             <div className="sel-layer" onMouseDown={() => setOpen(false)} />
             <div
               className="sel-pop"
-              style={{ top: pos.top, left: pos.left, width: pos.width }}
+              style={{ top: pos.top, left: pos.left, minWidth: pos.minWidth, maxWidth: pos.maxWidth }}
               onMouseDown={(e) => e.stopPropagation()}
             >
               {options.map((o) => (
@@ -73,7 +76,7 @@ export default function Select({ value, onChange, options, placeholder = "Select
                   className={`sel-option ${o.value === value ? "is-sel" : ""}`}
                   onClick={() => { onChange(o.value); setOpen(false); }}
                 >
-                  {o.label}
+                  <span>{o.label}</span>
                   {o.value === value && (
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M5 12l5 5L20 7" />
