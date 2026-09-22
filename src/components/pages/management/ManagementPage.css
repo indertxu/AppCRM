@@ -1551,3 +1551,91 @@
   transform: translateX(0);
   width: 100%;
 }
+/* ===== Loading overlay: equalizer + aurora, no spinners ===== */
+.mg-loading {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: inherit;
+  background: #eef8f1;
+  animation: mg-load-fade 0.25s ease;
+}
+@keyframes mg-load-fade { from { opacity: 0; } }
+
+.mg-loading-aurora {
+  position: absolute;
+  inset: -20%;
+  background:
+    radial-gradient(38% 42% at 20% 25%, rgba(134, 239, 192, 0.55), transparent 70%),
+    radial-gradient(34% 38% at 80% 30%, rgba(18, 181, 127, 0.4), transparent 70%),
+    radial-gradient(46% 50% at 50% 85%, rgba(10, 111, 77, 0.28), transparent 70%),
+    radial-gradient(30% 30% at 85% 80%, rgba(134, 239, 192, 0.35), transparent 70%);
+  filter: blur(40px) saturate(1.3);
+  animation: mg-aurora-drift 9s ease-in-out infinite alternate;
+}
+@keyframes mg-aurora-drift {
+  0%   { transform: translate3d(-2%, -1%, 0) rotate(0deg) scale(1); }
+  50%  { transform: translate3d(2%, 2%, 0) rotate(6deg) scale(1.08); }
+  100% { transform: translate3d(-1%, 3%, 0) rotate(-4deg) scale(1.02); }
+}
+
+.mg-loading-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+  padding: 40px 52px;
+  border-radius: 26px;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  box-shadow:
+    0 30px 70px -30px rgba(10, 111, 77, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(22px) saturate(1.4);
+  -webkit-backdrop-filter: blur(22px) saturate(1.4);
+}
+
+.mg-loading-eq {
+  display: flex;
+  align-items: flex-end;
+  gap: 7px;
+  height: 56px;
+}
+.mg-loading-bar {
+  width: 8px;
+  height: 14px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--mint), var(--emerald) 60%, var(--forest));
+  box-shadow: 0 6px 16px -6px rgba(18, 181, 127, 0.7);
+  animation: mg-eq-wave 1.1s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  transform-origin: bottom center;
+}
+@keyframes mg-eq-wave {
+  0%, 100% { height: 14px; opacity: 0.75; }
+  50%      { height: 56px; opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mg-loading-bar { animation-duration: 2.2s; }
+  .mg-loading-aurora { animation: none; }
+}
+
+.mg-loading-text {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 14.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  background: linear-gradient(90deg, var(--forest) 0%, var(--emerald) 25%, var(--mint) 50%, var(--emerald) 75%, var(--forest) 100%);
+  background-size: 220% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: mg-shimmer 2.4s linear infinite;
+}
+@keyframes mg-shimmer {
+  0%   { background-position: 0% 50%; }
+  100% { background-position: 220% 50%; }
+}

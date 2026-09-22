@@ -8,7 +8,7 @@ import SharedBookingView from "./SharedBookingView";
 import { loadMyInvites, syncInvites, loadAttendees, loadMyReplies,
   type InviteCard, type Attendee } from "./invitesApi";
 import type { Cutoffs } from "./billingPeriods";
-import { cutoffOf, periodOf, inBillingMonth } from "./billingPeriods";
+import { cutoffOf, periodOf, inBillingMonth, periodForDate } from "./billingPeriods";
 import { effectiveRate, effectiveSupervisionRate } from "../clients/ClientsPage";
 import ActualModal, { type ActualValue } from "./ActualModal";
 import { supabase } from "../../api/supabase";
@@ -229,6 +229,12 @@ const [workTypes, setWorkTypes] = useState<WorkTypeDef[]>([]);
 const [clientNames, setClientNames] = useState<Record<string, string>>({});
 const [targets, setTargets] = useState<Targets>({ perDay: 1, minPerDay: 0.5, minPerWeek: 3, minPerMonth: 12, minRevenueMonth: 0 });
   const [cutoffs, setCutoffs] = useState<Cutoffs>({});
+  // "projectId|period" for invoices already sent/paid — those periods are locked
+  // for billable entries, so new work rolls into the next bill instead of
+  // silently making an already-issued invoice wrong.
+  const [lockedBills, setLockedBills] = useState<Set<string>>(new Set());
+  // Details for the "period closed" dialog shown instead of a system alert.
+  const [closedNotice, setClosedNotice] = useState<{ monthName: string; period: string; iso: string; reason: "invoiced" | "cutoff" } | null>(null);
   const { session, role } = useAuth();
   const myId = session?.user?.id ?? "";
   /**
@@ -542,6 +548,10 @@ const { data: ea } = await supabase.from("entry_actuals").select("*");
 
       const { data: bp } = await supabase.from("billing_periods").select("period, cutoff_date");
       if (bp) setCutoffs(Object.fromEntries((bp as { period: string; cutoff_date: string }[]).map((r) => [r.period, r.cutoff_date])));
+      const { data: inv } = await supabase.from("invoices").select("project_id, period, status");
+      if (inv) setLockedBills(new Set((inv as any[])
+        .filter((r) => r.status === "sent" || r.status === "paid")
+        .map((r) => `${r.project_id}|${r.period}`)));
       const { data: bs } = await supabase.from("billing_settings").select("default_cutoff_day, vacation_days_per_year, hours_per_day").eq("id", "default").maybeSingle();
       if (bs) {
         setVacationAllowance(Number(bs.vacation_days_per_year ?? 22));
@@ -720,6 +730,41 @@ if (!modal) return;
     (async () => {
       const { data: u } = await supabase.auth.getUser();
       if (!u?.user) { alert("Not signed in."); return; }
+
+      // Safeguard: don't let billable work land in a period whose invoice for
+      // that client is already sent/paid — it would make an issued invoice wrong.
+      // The work should go to the next open period instead.
+      if (v.projectId && v.billable > 0) {
+        const period = periodForDate(iso, cutoffs, defaultCutoffDay);
+        // A period is CLOSED for new billable work when either:
+        //  - its cutoff day is already in the past (the period is over), or
+        //  - this client's invoice for it is already sent/paid.
+        // In both cases the work belongs to the current open period instead.
+        const todayIso = (() => { const t = new Date(); return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`; })();
+        const cutoffPassed = cutoffOf(period, cutoffs, defaultCutoffDay) < todayIso;
+        const alreadyInvoiced = lockedBills.has(`${v.projectId}|${period}`);
+        if (cutoffPassed || alreadyInvoiced) {
+          const [yy, mm] = period.split("-");
+          const monthName = new Date(Number(yy), Number(mm) - 1, 1)
+            .toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+          // Record the attempt for billing to see in the Management panel.
+          try {
+            await supabase.from("billing_alerts").insert({
+              project_id: v.projectId,
+              period,
+              entry_date: iso,
+              billable: v.billable,
+              billing_line: v.line || "consultor",
+              attempted_by: u.user.id,
+            });
+          } catch (e) {
+            console.error("Could not record billing alert:", e);
+          }
+          setClosedNotice({ monthName, period, iso, reason: alreadyInvoiced ? "invoiced" : "cutoff" });
+          return;
+        }
+      }
+
       // The type must be one the DB actually knows about, or the FK rejects it.
       if (v.type && !workTypes.some((t) => t.id === v.type)) {
         console.warn("Booking used an unknown work_type_id:", v.type, "known:", workTypes.map((t) => t.id));
@@ -957,9 +1002,6 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
   const dirClass = dir === 1 ? "slide-next" : "slide-prev";
   const animKey = weekStart.getTime();
 
-  // Minutes since midnight for "now", placed on the same DAY_START..DAY_END grid
-  // the hour rows and events use. Using a different base (e.g. a hardcoded 5 AM)
-  // shifts the line by however far DAY_START is from that base.
   const nowMin = today.getHours() * 60 + today.getMinutes();
   const nowVisible = nowMin >= DAY_START && nowMin <= DAY_END;
   const nowPct = ((nowMin - DAY_START) / SPAN) * 100;
@@ -1445,6 +1487,38 @@ attendees: modal.attendees,
           onDelete={modal.editingId ? deleteModal : undefined}
           onClose={() => setModal(null)}
         />
+      )}
+
+      {closedNotice && (
+        <div className="cal-closed-backdrop" onMouseDown={() => setClosedNotice(null)}>
+          <div className="cal-closed" onMouseDown={(e) => e.stopPropagation()} role="alertdialog" aria-modal="true">
+            <div className="cal-closed-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="11" width="18" height="10" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" />
+              </svg>
+            </div>
+            <h3 className="cal-closed-title">
+              {closedNotice.reason === "invoiced" ? "That month is already billed" : "That month is already closed"}
+            </h3>
+            <p className="cal-closed-text">
+              {closedNotice.reason === "invoiced" ? (
+                <>This client's invoice for <b>{closedNotice.monthName}</b> has already been sent, so billable
+                work dated <b>{closedNotice.iso}</b> can't be added to it — it would change an invoice that's
+                already gone out.</>
+              ) : (
+                <>The billing period for <b>{closedNotice.monthName}</b> has already closed (its cut-off has
+                passed), so billable work dated <b>{closedNotice.iso}</b> can't be added to it.</>
+              )}
+            </p>
+            <p className="cal-closed-text cal-closed-muted">
+              Log it in the current open period instead. Billing has been notified of this attempt and can
+              re-open {closedNotice.monthName} if it really belongs there.
+            </p>
+            <div className="cal-closed-actions">
+              <button className="cal-closed-ok" onClick={() => setClosedNotice(null)}>Got it</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

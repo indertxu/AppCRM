@@ -51,7 +51,7 @@ const lineLabel: Record<Line, string> = {
   supervision: "Supervision",
   connector: "Connector",
 };
-type Phase = "tobill" | "sent" | "paid";
+type Phase = "tobill" | "sent" | "paid" | "history";
 type SortKey = "amount_desc" | "amount_asc" | "date_desc" | "date_asc" | "expired";
 
 /**
@@ -126,6 +126,18 @@ export default function BillingPanel({
   const [dragEntry, setDragEntry] = useState<{ id: string; projectId: string; fromPeriod: string } | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [status, setStatus] = useState<"billed" | "scheduled" | "all">("billed");
+  interface BillingAlert { id: string; project_id: string | null; period: string; entry_date: string; billable: number; billing_line: string | null; attempted_by: string | null; created_at: string }
+  const [alerts, setAlerts] = useState<BillingAlert[]>([]);
+  const [showAlerts, setShowAlerts] = useState(false);
+  interface StatusLog { id: string; invoice_id: string | null; project_id: string | null; period: string; from_status: string | null; to_status: string; amount: number | null; changed_by: string | null; created_at: string }
+  const [statusLog, setStatusLog] = useState<StatusLog[]>([]);
+  const loadStatusLog = () => {
+    supabase.from("invoice_status_log").select("*").order("created_at", { ascending: false }).limit(200)
+      .then(({ data }) => setStatusLog((data ?? []) as StatusLog[]));
+  };
+  // Fix dialog: an invoice, its live bill, and an editable per-line, per-person day split.
+  type FixCell = { line: Line; userId: string; days: string };
+  const [fixing, setFixing] = useState<{ inv: Invoice; bill: Bill; cells: FixCell[] } | null>(null);
   const [phase, setPhase] = useState<Phase>("tobill");
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -156,6 +168,29 @@ export default function BillingPanel({
   const wasSentBy = (i: Invoice) => !!i.sentDate && i.sentDate <= asOfDate;
   /** Was it actually paid by the as-of date? */
   const wasPaidBy = (i: Invoice) => i.status === "paid" && !!i.paidDate && i.paidDate <= asOfDate;
+
+  useEffect(() => {
+    (async () => {
+      // Alerts live at most two months — clear out anything older on load.
+      const cutoff = new Date(); cutoff.setMonth(cutoff.getMonth() - 2);
+      try { await supabase.from("billing_alerts").delete().lt("created_at", cutoff.toISOString()); } catch (e) { console.error(e); }
+      const { data } = await supabase.from("billing_alerts").select("*").order("created_at", { ascending: false });
+      setAlerts((data ?? []) as BillingAlert[]);
+    })();
+    loadStatusLog();
+  }, []);
+
+  // Dismissing an alert deletes it for good, rather than just hiding it.
+  const dismissAlert = async (id: string) => {
+    await supabase.from("billing_alerts").delete().eq("id", id);
+    setAlerts((a) => a.filter((x) => x.id !== id));
+  };
+  const dismissAllAlerts = async () => {
+    const ids = alerts.map((a) => a.id);
+    if (!ids.length) return;
+    await supabase.from("billing_alerts").delete().in("id", ids);
+    setAlerts([]);
+  };
 
   const periodLabel = (p: string) => {
     const [y, m] = p.split("-").map(Number);
@@ -284,6 +319,18 @@ export default function BillingPanel({
   const isoDate = (d: Date) => d.toISOString().slice(0, 10);
   const sendDateFor = (per: string) => new Date(`${cutoffOf(per, localCutoffs, defaultCutoffDay)}T00:00:00`);
 
+  /** Append a row to the invoice status history (best-effort; never blocks the action). */
+  const logStatus = async (o: { invoiceId?: string; projectId: string; period: string; from: string | null; to: string; amount?: number }) => {
+    try {
+      const { data: au } = await supabase.auth.getUser();
+      await supabase.from("invoice_status_log").insert({
+        invoice_id: o.invoiceId ?? null, project_id: o.projectId, period: o.period,
+        from_status: o.from, to_status: o.to, amount: o.amount ?? null, changed_by: au?.user?.id ?? null,
+      });
+      loadStatusLog();
+    } catch (e) { console.error("Could not log status change:", e); }
+  };
+
   const markSent = async (b: Bill) => {
     setBusy(b.key);
     const sent = sendDateFor(b.period);
@@ -302,15 +349,71 @@ export default function BillingPanel({
         sentDate: data.sent_date ?? "", dueDate: data.due_date ?? "", paidDate: "", status: data.status,
       };
       setInvoices((prev) => [...prev.filter((i) => !(i.projectId === inv.projectId && i.period === inv.period)), inv]);
+      await logStatus({ invoiceId: inv.id, projectId: inv.projectId, period: inv.period, from: "tobill", to: "sent", amount: inv.amount });
     }
     setBusy(null);
   };
+  /**
+   * Recompute a already-sent/paid invoice to what its entries actually sum to
+   * TODAY (respecting manual period moves, which the live bill already reflects).
+   * Only net/amount/days change; status, dates and paid state are untouched.
+   */
+  const recomputeInvoice = async (inv: Invoice, b: Bill, override?: { consultor: number; supervision: number; connector: number }) => {
+    const key = `${inv.projectId}|${inv.period}`;
+    setBusy(key);
+    const ln = override ?? b.lines;
+    const days = +(ln.consultor + ln.supervision + ln.connector).toFixed(2);
+    const newNet = +(ln.consultor * b.rate + ln.connector * b.rate + ln.supervision * b.supervisionRate).toFixed(2);
+    const newAmount = +(newNet * (b.taxed ? 1 + b.taxRate / 100 : 1)).toFixed(2);
+    const { error } = await supabase.from("invoices")
+      .update({ net: newNet, amount: newAmount, days }).eq("id", inv.id);
+    if (error) { alert(`Could not update invoice: ${error.message}`); setBusy(null); return; }
+    setInvoices((prev) => prev.map((i) => i.id === inv.id ? { ...i, net: newNet, amount: newAmount, days } : i));
+    setBusy(null);
+  };
+
+  // Build the editable per-line, per-person cells from a bill's entries.
+  const cellsFromBill = (b: Bill): { line: Line; userId: string; days: string }[] => {
+    const agg = new Map<string, number>(); // `${line}|${userId}` → days
+    b.rows.forEach((r) => {
+      const k = `${r.line}|${r.userId}`;
+      agg.set(k, (agg.get(k) ?? 0) + r.days);
+    });
+    const order: Line[] = ["consultor", "supervision", "connector"];
+    return [...agg.entries()]
+      .map(([k, days]) => { const [line, userId] = k.split("|"); return { line: line as Line, userId, days: String(+days.toFixed(2)) }; })
+      .sort((a, b2) => order.indexOf(a.line) - order.indexOf(b2.line) || (people[a.userId] ?? "").localeCompare(people[b2.userId] ?? ""));
+  };
+  // Open the Fix dialog pre-filled with the live (recomputed) split.
+  const openFix = (inv: Invoice, b: Bill) => setFixing({ inv, bill: b, cells: cellsFromBill(b) });
+
+  /** Recompute every mismatched invoice currently listed, one by one. */
+  const recomputeMany = async (list: Invoice[]) => {
+    const targets = list.map((inv) => {
+      const comp = billByKey[`${inv.projectId}|${inv.period}`];
+      if (!comp) return null;
+      const liveAmount = +gross(comp).toFixed(2);
+      return Math.abs(liveAmount - inv.amount) > 0.01 ? { inv, comp } : null;
+    }).filter(Boolean) as { inv: Invoice; comp: Bill }[];
+    if (targets.length === 0) return;
+    if (!window.confirm(`Recompute ${targets.length} invoice${targets.length === 1 ? "" : "s"} to match their entries?\n\nSome may be marked paid. This updates each amount to what its entries now sum to.`)) return;
+    for (const t of targets) {
+      const days = +(t.comp.lines.consultor + t.comp.lines.supervision + t.comp.lines.connector).toFixed(2);
+      const newNet = +net(t.comp).toFixed(2);
+      const newAmount = +gross(t.comp).toFixed(2);
+      const { error } = await supabase.from("invoices").update({ net: newNet, amount: newAmount, days }).eq("id", t.inv.id);
+      if (error) { alert(`Stopped: could not update ${projName(t.inv.projectId)} ${t.inv.period}: ${error.message}`); break; }
+      setInvoices((prev) => prev.map((i) => i.id === t.inv.id ? { ...i, net: newNet, amount: newAmount, days } : i));
+    }
+  };
+
   const togglePaid = async (inv: Invoice) => {
     setBusy(`${inv.projectId}|${inv.period}`);
     const nowPaid = inv.status !== "paid";
     const paid = nowPaid ? isoDate(new Date()) : null;
     await supabase.from("invoices").update({ status: nowPaid ? "paid" : "sent", paid_date: paid }).eq("id", inv.id);
     setInvoices((prev) => prev.map((i) => i.id === inv.id ? { ...i, status: nowPaid ? "paid" : "sent", paidDate: paid ?? "" } : i));
+    await logStatus({ invoiceId: inv.id, projectId: inv.projectId, period: inv.period, from: inv.status, to: nowPaid ? "paid" : "sent", amount: inv.amount });
     setBusy(null);
   };
   /** Unsend: delete the invoice so the work returns to "To bill". */
@@ -318,6 +421,7 @@ export default function BillingPanel({
     setBusy(`${inv.projectId}|${inv.period}`);
     await supabase.from("invoices").delete().eq("id", inv.id);
     setInvoices((prev) => prev.filter((i) => i.id !== inv.id));
+    await logStatus({ invoiceId: inv.id, projectId: inv.projectId, period: inv.period, from: inv.status, to: "tobill", amount: inv.amount });
     setBusy(null);
   };
 
@@ -687,7 +791,16 @@ export default function BillingPanel({
         <span className="bi-hero-scan" aria-hidden="true" />
 
         <div className="bi-hero-main">
-          <span className="bi-hero-label">Outstanding · to {periodLabel(period)}</span>
+          <span className="bi-hero-label">
+            Outstanding · to {periodLabel(period)}
+            {alerts.length > 0 && (
+              <button className="bi-alert-chip" onClick={() => setShowAlerts(true)}
+                title={`${alerts.length} attempt${alerts.length === 1 ? "" : "s"} to log work in a closed period`}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /></svg>
+                {alerts.length}
+              </button>
+            )}
+          </span>
           <span className="bi-hero-amount"><b>{eur(outstandingTotal)}</b><i>€</i></span>
           <span className="bi-hero-sub">{outstandingCount} {outstandingCount === 1 ? "invoice" : "invoices"} ready to send</span>
         </div>
@@ -750,6 +863,9 @@ export default function BillingPanel({
           </button>
           <button className={phase === "paid" ? "is-on" : ""} onClick={() => { setPhase("paid"); setSelectMode(false); setSelected(new Set()); }}>
             Paid <i>{paidList.length}</i>
+          </button>
+          <button className={phase === "history" ? "is-on" : ""} onClick={() => { setPhase("history"); setSelectMode(false); setSelected(new Set()); }}>
+            History
           </button>
         </div>
 
@@ -902,12 +1018,51 @@ export default function BillingPanel({
               })}
             </div>
           )
+        ) : phase === "history" ? (
+          statusLog.length === 0 ? (
+            <p className="bi-empty">No status changes recorded yet. Sending, paying or un-sending an invoice will show up here.</p>
+          ) : (
+            <div className="bi-hist">
+              {statusLog.map((r) => {
+                const label: Record<string, string> = { tobill: "To bill", sent: "Sent", paid: "Paid" };
+                const tone = r.to_status === "paid" ? "paid" : r.to_status === "sent" ? "sent" : "tobill";
+                return (
+                  <div className="bi-hist-row" key={r.id}>
+                    <span className={`bi-hist-dot bi-hist-${tone}`} />
+                    <div className="bi-hist-main">
+                      <span className="bi-hist-title">
+                        {r.project_id ? projName(r.project_id) : "Unknown client"} · {periodLabel(r.period)}
+                      </span>
+                      <span className="bi-hist-change">
+                        {r.from_status ? (label[r.from_status] ?? r.from_status) : "—"} → <b>{label[r.to_status] ?? r.to_status}</b>
+                        {r.amount != null && <> · {eur(r.amount)} €</>}
+                      </span>
+                    </div>
+                    <span className="bi-hist-meta">
+                      {r.changed_by ? (people[r.changed_by] ?? "someone") : "someone"}<br />
+                      {new Date(r.created_at).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )
         ) : (
           (() => {
             const list = phase === "sent" ? sentList : paidList;
             if (list.length === 0) return <p className="bi-empty">No {phase === "sent" ? "sent" : "paid"} invoices for these filters.</p>;
+            const mismatchCount = list.filter((inv) => {
+              const comp = billByKey[`${inv.projectId}|${inv.period}`];
+              return comp && Math.abs(+gross(comp).toFixed(2) - inv.amount) > 0.01;
+            }).length;
             return (
               <div className="bi-list">
+                {mismatchCount > 0 && (
+                  <div className="bi-fixbar">
+                    <span>{mismatchCount} invoice{mismatchCount === 1 ? "" : "s"} no longer match their entries.</span>
+                    <button className="bi-fixall" onClick={() => recomputeMany(list)}>Fix all {mismatchCount}</button>
+                  </div>
+                )}
                 <div className="bi-listhead bi-sent-head">
                   <span>Client</span><span>Sent</span><span>Due</span>
                   <span className="bi-r">Amount</span><span>Status</span><span />
@@ -921,6 +1076,10 @@ export default function BillingPanel({
                   const invKey = `${inv.projectId}|${inv.period}`;
                   const comp = billByKey[invKey];
                   const isOpen = open === invKey;
+                  // Does the frozen invoice still match what the entries sum to?
+                  const liveDays = comp ? +(comp.lines.consultor + comp.lines.supervision + comp.lines.connector).toFixed(2) : inv.days;
+                  const liveAmount = comp ? +gross(comp).toFixed(2) : inv.amount;
+                  const mismatch = comp ? Math.abs(liveAmount - inv.amount) > 0.01 : false;
                   const u = unitOf(inv.projectId);
                   return (
                     <div className={`bi-scard ${isOpen ? "is-open" : ""} ${isOverdue ? "is-overdue" : ""} ${paidAsOf ? "is-paid" : ""}`} key={inv.id}>
@@ -941,7 +1100,14 @@ export default function BillingPanel({
                           {isOverdue && <span className="bi-late">{late}d late</span>}
                         </span>
 
-                        <span className="bi-r bi-sent-amt">{eur(inv.amount)} €</span>
+                        <span className="bi-r bi-sent-amt">
+                          {eur(inv.amount)} €
+                          {mismatch && (
+                            <span className="bi-mismatch" title={`Entries now sum to ${liveDays.toFixed(2)}${u} / ${eur(liveAmount)} €`}>
+                              ≠ {eur(liveAmount)} €
+                            </span>
+                          )}
+                        </span>
 
                         <span className={`bi-badge is-${paidAsOf ? "paid" : "sent"}${isOverdue ? " is-overdue" : ""}`}>
                           {paidAsOf ? "Paid" : isOverdue ? "Overdue" : "Awaiting"}
@@ -953,6 +1119,13 @@ export default function BillingPanel({
                             <button className="bi-unsend" disabled={busy === invKey}
                               onClick={(e) => { e.stopPropagation(); unsend(inv); }} title="Move back to To bill">
                               Unsend
+                            </button>
+                          )}
+                          {mismatch && comp && (
+                            <button className="bi-fix" disabled={busy === invKey}
+                              onClick={(e) => { e.stopPropagation(); openFix(inv, comp); }}
+                              title="Adjust this invoice's days and amount">
+                              Fix
                             </button>
                           )}
                           <button className={`bi-paybtn ${inv.status === "paid" ? "is-paid" : ""}`}
@@ -970,6 +1143,123 @@ export default function BillingPanel({
           })()
         )}
       </div>
+
+      {showAlerts && (
+        <div className="bi-apop-backdrop" onMouseDown={() => setShowAlerts(false)}>
+          <div className="bi-apop" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+            <div className="bi-apop-head">
+              <h3>Late-log attempts</h3>
+              <button className="bi-apop-x" onClick={() => setShowAlerts(false)} aria-label="Close">×</button>
+            </div>
+            {alerts.length === 0 ? (
+              <p className="bi-apop-empty">Nothing pending. Attempts to log work in a closed period show up here.</p>
+            ) : (
+              <>
+                <div className="bi-apop-list">
+                  {alerts.map((a) => (
+                    <div className="bi-alert" key={a.id}>
+                      <div className="bi-alert-main">
+                        <span className="bi-alert-client">{a.project_id ? projName(a.project_id) : "Unknown client"}</span>
+                        <span className="bi-alert-detail">
+                          {a.billable.toFixed(2)}{a.project_id ? unitOf(a.project_id) : "d"} {a.billing_line ?? "consultor"} · dated {a.entry_date} · would fall in {periodLabel(a.period)}
+                        </span>
+                        <span className="bi-alert-meta">
+                          by {a.attempted_by ? (people[a.attempted_by] ?? "someone") : "someone"} · {new Date(a.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+                        </span>
+                      </div>
+                      <button className="bi-alert-x" onClick={() => dismissAlert(a.id)} title="Dismiss">×</button>
+                    </div>
+                  ))}
+                </div>
+                <button className="bi-apop-clear" onClick={dismissAllAlerts}>Dismiss all</button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {fixing && (() => {
+        const b = fixing.bill;
+        const u = unitOf(b.projectId);
+        const rateOf = (line: Line) => line === "supervision" ? b.supervisionRate : b.rate;
+        const lineLabels: Record<Line, string> = { consultor: "Consultancy", supervision: "Supervision", connector: "Connector", closure: "Closure" };
+
+        const num = (v: string) => (v === "" || isNaN(Number(v)) ? 0 : Number(v));
+        const invalid = fixing.cells.some((c) => c.days !== "" && isNaN(Number(c.days)));
+
+        // Totals per line and grand totals.
+        const lineTotal = (line: Line) => fixing.cells.filter((c) => c.line === line).reduce((s2, c) => s2 + num(c.days), 0);
+        const consultor = lineTotal("consultor");
+        const supervision = lineTotal("supervision");
+        const connector = lineTotal("connector");
+        const newNet = consultor * b.rate + connector * b.rate + supervision * b.supervisionRate;
+        const newAmount = newNet * (b.taxed ? 1 + b.taxRate / 100 : 1);
+        const newDays = +(consultor + supervision + connector).toFixed(2);
+
+        // Group cells by line, preserving order, for rendering.
+        const lines: Line[] = ["consultor", "supervision", "connector"];
+        const setCell = (i: number, v: string) =>
+          setFixing((f) => f && { ...f, cells: f.cells.map((c, j) => j === i ? { ...c, days: v } : c) });
+
+        return (
+          <div className="bi-fix-backdrop" onMouseDown={() => setFixing(null)}>
+            <div className="bi-fix-modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+              <h3 className="bi-fix-title">Adjust invoice — {projName(fixing.inv.projectId)}</h3>
+              <p className="bi-fix-sub">
+                {periodLabel(fixing.inv.period)} · currently <b>{fixing.inv.days.toFixed(2)}{u}</b> / {eur(fixing.inv.amount)} €
+                {fixing.inv.status === "paid" && <span className="bi-fix-paid"> · marked paid</span>}
+              </p>
+
+              <div className="bi-fix-groups">
+                {lines.map((line) => {
+                  const idxs = fixing.cells.map((c, i) => ({ c, i })).filter((x) => x.c.line === line);
+                  if (idxs.length === 0) return null;
+                  return (
+                    <div className="bi-fix-group" key={line}>
+                      <div className="bi-fix-ghead">
+                        <span>{lineLabels[line]}</span>
+                        <span className="bi-fix-grate">{rateOf(line).toLocaleString()} €/{u}</span>
+                        <span className="bi-fix-gtot">{(+lineTotal(line).toFixed(2))}{u}</span>
+                      </div>
+                      {idxs.map(({ c, i }) => (
+                        <label className="bi-fix-prow" key={i}>
+                          <span className="bi-fix-pav">{(people[c.userId] ?? "?").charAt(0).toUpperCase()}</span>
+                          <span className="bi-fix-pname">{people[c.userId] ?? "Unknown"}</span>
+                          <input type="number" step="0.25" min="0" value={c.days}
+                            onChange={(e) => setCell(i, e.target.value)} />
+                        </label>
+                      ))}
+                    </div>
+                  );
+                })}
+              </div>
+
+              <button type="button" className="bi-fix-reset"
+                onClick={() => setFixing((f) => f && { ...f, cells: cellsFromBill(f.bill) })}>
+                Reset to entries ({(+(b.lines.consultor + b.lines.supervision + b.lines.connector).toFixed(2))}{u})
+              </button>
+
+              <div className="bi-fix-preview">
+                <div><span>Days</span><b>{newDays}{u}</b></div>
+                <div><span>Net</span><b>{eur(newNet)} €</b></div>
+                {b.taxed && <div><span>Tax {b.taxRate}%</span><b>{eur(newNet * b.taxRate / 100)} €</b></div>}
+                <div className="bi-fix-total"><span>Total</span><b>{eur(newAmount)} €</b></div>
+              </div>
+
+              <div className="bi-fix-actions">
+                <button className="bi-fix-cancel" onClick={() => setFixing(null)}>Cancel</button>
+                <button className="bi-fix-save" disabled={invalid || busy === `${fixing.inv.projectId}|${fixing.inv.period}`}
+                  onClick={async () => {
+                    await recomputeInvoice(fixing.inv, b, { consultor, supervision, connector });
+                    setFixing(null);
+                  }}>
+                  Save invoice
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

@@ -131,6 +131,28 @@ async function fetchEntries(range: [string, string] | null): Promise<any[]> {
   return out;
 }
 
+/**
+ * Full loading overlay shown while Management's first load is in flight.
+ * An "equalizer" of bars pulsing in a wave, over a slowly drifting aurora
+ * background, with a shimmering label — deliberately not a spinner or dots.
+ */
+function LoadingOverlay() {
+  const bars = [0, 1, 2, 3, 4, 5, 6];
+  return (
+    <div className="mg-loading" role="status" aria-live="polite">
+      <div className="mg-loading-aurora" />
+      <div className="mg-loading-card">
+        <div className="mg-loading-eq">
+          {bars.map((i) => (
+            <span key={i} className="mg-loading-bar" style={{ animationDelay: `${i * 0.09}s` }} />
+          ))}
+        </div>
+        <span className="mg-loading-text">Crunching the numbers</span>
+      </div>
+    </div>
+  );
+}
+
 export default function ManagementPage() {
   const navigate = useNavigate();
   const [anchor, setAnchor] = useState(() => new Date());
@@ -223,10 +245,17 @@ perDay: 1, minPerDay: 0.5, minPerWeek: 3, minPerMonth: 12, minRevenueWeek: 0, mi
       // side. Backlog, Billing and Bonus need the lot, so they ask for it when
       // you open them rather than making every visit wait for six thousand rows.
       const ce = await fetchEntries(needsAll ? null : windowFor(anchor, scope));
-      const { data: ea } = await supabase.from("entry_actuals").select("entry_id, actual_billable");
-      const actual: Record<string, number> = Object.fromEntries(
-        ((ea ?? []) as any[]).map((r) => [r.entry_id, Number(r.actual_billable) || 0])
-      );
+      // Only fetch the actuals for the entries we actually loaded, instead of
+      // pulling the whole table on every visit. Chunked to keep the "in" list
+      // within Postgres/PostgREST limits.
+      const entryIds = ((ce ?? []) as any[]).map((r) => r.id);
+      const actual: Record<string, number> = {};
+      for (let i = 0; i < entryIds.length; i += 500) {
+        const slice = entryIds.slice(i, i + 500);
+        if (!slice.length) break;
+        const { data: ea } = await supabase.from("entry_actuals").select("entry_id, actual_billable").in("entry_id", slice);
+        ((ea ?? []) as any[]).forEach((r) => { actual[r.entry_id] = Number(r.actual_billable) || 0; });
+      }
       setEntries(((ce ?? []) as any[]).map((r) => {
         const dur = (Number(r.end_min) || 0) - (Number(r.start_min) || 0);
         const iso = r.entry_date ?? "";
@@ -248,12 +277,34 @@ perDay: 1, minPerDay: 0.5, minPerWeek: 3, minPerMonth: 12, minRevenueWeek: 0, mi
         };
       }));
 
-      const { data: wtypes } = await supabase.from("work_types").select("id, client_related");
+      // These are all independent lookups on tiny tables, so fire them together
+      // instead of awaiting one after another (that stacking was the slow part).
+      const [
+        { data: wtypes },
+        { data: pj },
+        { data: ut },
+        { data: pt },
+        { data: rl },
+        { data: cl },
+        { data: tg },
+        { data: wt },
+        { data: us },
+        { data: prof },
+      ] = await Promise.all([
+        supabase.from("work_types").select("id, client_related"),
+        supabase.from("projects").select("id, client_id, service_id, project_type_id, kickoff_date, price_per_day, supervision_price, discount_mode, discount_value, supervision_discount_mode, supervision_discount_value, team, consultor_days, connector_days, supervision_days, status, legal_name, vat_number, address, contacts, taxed, tax_rate"),
+        supabase.from("user_targets").select("*"),
+        supabase.from("services").select("id, name"),
+        supabase.from("client_roles").select("id, is_supervision"),
+        supabase.from("clients").select("id, name"),
+        supabase.from("calendar_targets").select("*").eq("id", "default").maybeSingle(),
+        supabase.from("work_types").select("*").order("created_at"),
+        supabase.functions.invoke("manage-users", { body: { action: "list" } }),
+        supabase.from("profiles").select("id, role, job_title"),
+      ]);
+
       setClientTypeIds(new Set(((wtypes ?? []) as any[]).filter((t) => t.client_related).map((t) => t.id)));
 
-      const { data: pj } = await supabase
-        .from("projects")
-     .select("id, client_id, service_id, project_type_id, kickoff_date, price_per_day, supervision_price, discount_mode, discount_value, supervision_discount_mode, supervision_discount_value, team, consultor_days, connector_days, supervision_days, status, legal_name, vat_number, address, contacts, taxed, tax_rate");
       setProjects(Object.fromEntries(((pj ?? []) as any[]).map((r) => {
         const base = Number(r.price_per_day) || 0;
         const d = Number(r.discount_value) || 0;
@@ -279,7 +330,6 @@ supervision: effectiveSupervisionRate(Number(r.supervision_price) || 0, r.superv
         } as Proj];
       })));
 
-const { data: ut } = await supabase.from("user_targets").select("*");
       setUserTargets(Object.fromEntries(((ut ?? []) as any[]).map((r) => [r.user_id, {
         minPerWeek: r.min_per_week === null ? null : Number(r.min_per_week),
         minPerMonth: r.min_per_month === null ? null : Number(r.min_per_month),
@@ -295,16 +345,12 @@ minRevenueWeek: r.min_revenue_week === null ? null : Number(r.min_revenue_week),
         bonusPct2: r.bonus_pct_2 ?? null,
       }])));
 
-      const { data: pt } = await supabase.from("services").select("id, name");
       setTypeNames(Object.fromEntries(((pt ?? []) as any[]).map((t) => [t.id, t.name ?? ""])));
 
-      const { data: rl } = await supabase.from("client_roles").select("id, is_supervision");
       setSupRoles(new Set(((rl ?? []) as any[]).filter((r) => r.is_supervision).map((r) => r.id)));
 
-      const { data: cl } = await supabase.from("clients").select("id, name");
       setClientNames(Object.fromEntries(((cl ?? []) as any[]).map((c) => [c.id, c.name])));
 
-      const { data: tg } = await supabase.from("calendar_targets").select("*").eq("id", "default").maybeSingle();
 if (tg) setTargets({
         perDay: Number(tg.per_day) || 0,
         minPerDay: Number(tg.min_per_day) || 0,
@@ -314,13 +360,10 @@ minRevenueWeek: Number(tg.min_revenue_week) || 0,
         minRevenueMonth: Number(tg.min_revenue_month) || 0,
       });
 
-      const { data: wt } = await supabase.from("work_types").select("*").order("created_at");
       setWorkTypes(((wt ?? []) as any[]).map((r) => ({
         id: r.id, name: r.name ?? "", clientRelated: !!r.client_related, color: r.color ?? "#12b57f",
       })));
 
-const { data: us } = await supabase.functions.invoke("manage-users", { body: { action: "list" } });
-const { data: prof } = await supabase.from("profiles").select("id, role, job_title");
       const excluded = new Set(
         ((prof ?? []) as any[])
           .filter((p) => {
@@ -818,6 +861,7 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
 
   return (
     <div className={`mg mg-tab-${tab}`}>
+      {loading && <LoadingOverlay />}
       <header className="mg-bar">
         <div className="mg-bar-left">
           <button className="mg-home" onClick={() => navigate("/home")} aria-label="Back to home">‹</button>
@@ -833,11 +877,10 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
         </div>
 
         <div className="mg-nav">
-          <div className="mg-seg" data-scope={tab === "billing" ? "month" : scope}>
+          {tab !== "billing" && (
+          <div className="mg-seg" data-scope={scope}>
             <span className="mg-seg-slider" />
-            {tab === "billing" ? (
-              <button className="is-on" onClick={() => setScope("month")}>Month</button>
-            ) : (
+            {(
               <>
                 <button className={scope === "week" ? "is-on" : ""} onClick={() => setScope("week")}>Week</button>
                 <button className={scope === "month" ? "is-on" : ""} onClick={() => setScope("month")}>Month</button>
@@ -847,6 +890,7 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
               </>
             )}
           </div>
+          )}
 
           {scope === "custom" ? (
             <div className="mg-range">
