@@ -560,40 +560,66 @@ export default function BillingPanel({
     return p ? (p.legalName || clientNames[p.clientId] || "—") : "—";
   };
 
-  const billComposition = (b: Bill) => {
+  const billComposition = (b: Bill, frozen?: Invoice) => {
     const owners = responsibleFor(b);
+    // A sent/paid invoice is frozen: show exactly what was invoiced (net, tax,
+    // total, days), not a live recompute from today's entries. Later changes to
+    // the entries roll into the next bill, so we only flag that they differ.
+    const liveNet = net(b);
+    const liveGross = gross(b);
+    const fNet = frozen ? frozen.net : liveNet;
+    const fGross = frozen ? frozen.amount : liveGross;
+    const fTax = +(fGross - fNet).toFixed(2);
+    // Reconstruct the effective tax rate from the frozen figures when possible.
+    const fTaxRate = frozen ? (fNet > 0 ? Math.round((fGross / fNet - 1) * 100) : b.taxRate) : b.taxRate;
+    const drift = frozen ? Math.abs(liveGross - fGross) > 0.01 : false;
     return (
       <>
         <div className="bi-detail-cols">
           <div className="bi-breakdown">
-            <span className="bi-detail-h">How this bill is made up</span>
-            {(["consultor", "supervision", "connector"] as Line[]).map((ln) =>
-              b.lines[ln] > 0 ? (
-                <div className="bi-bd-line" key={ln}>
-                  <span className="bi-bd-name">{lineLabel[ln]}</span>
-                  <span className="bi-bd-calc">
-                    {b.lines[ln].toFixed(2)}{unitOf(b.projectId)} × {(ln === "supervision" ? b.supervisionRate : b.rate).toLocaleString()} €
-                  </span>
-                  <span className="bi-bd-val">
-                    {eur(b.lines[ln] * (ln === "supervision" ? b.supervisionRate : b.rate))} €
-                  </span>
-                </div>
-              ) : null
+            <span className="bi-detail-h">{frozen ? "How this bill was invoiced" : "How this bill is made up"}</span>
+            {frozen && drift ? (
+              <div className="bi-bd-line">
+                <span className="bi-bd-name">Invoiced amount</span>
+                <span className="bi-bd-calc">{frozen.days.toFixed(2)}{unitOf(b.projectId)} invoiced</span>
+                <span className="bi-bd-val">{eur(fNet)} €</span>
+              </div>
+            ) : (
+              (["consultor", "supervision", "connector"] as Line[]).map((ln) =>
+                b.lines[ln] > 0 ? (
+                  <div className="bi-bd-line" key={ln}>
+                    <span className="bi-bd-name">{lineLabel[ln]}</span>
+                    <span className="bi-bd-calc">
+                      {b.lines[ln].toFixed(2)}{unitOf(b.projectId)} × {(ln === "supervision" ? b.supervisionRate : b.rate).toLocaleString()} €
+                    </span>
+                    <span className="bi-bd-val">
+                      {eur(b.lines[ln] * (ln === "supervision" ? b.supervisionRate : b.rate))} €
+                    </span>
+                  </div>
+                ) : null
+              )
             )}
             <div className="bi-bd-line bi-bd-sub">
               <span className="bi-bd-name">Net</span><span className="bi-bd-calc" />
-              <span className="bi-bd-val">{eur(net(b))} €</span>
+              <span className="bi-bd-val">{eur(fNet)} €</span>
             </div>
-            {b.taxed && (
+            {(frozen ? fTax > 0.01 : b.taxed) && (
               <div className="bi-bd-line">
-                <span className="bi-bd-name">Tax</span><span className="bi-bd-calc">{b.taxRate}%</span>
-                <span className="bi-bd-val">{eur(net(b) * b.taxRate / 100)} €</span>
+                <span className="bi-bd-name">Tax</span><span className="bi-bd-calc">{fTaxRate}%</span>
+                <span className="bi-bd-val">{eur(fTax)} €</span>
               </div>
             )}
             <div className="bi-bd-line bi-bd-total">
               <span className="bi-bd-name">Total</span><span className="bi-bd-calc" />
-              <span className="bi-bd-val">{eur(gross(b))} €</span>
+              <span className="bi-bd-val">{eur(fGross)} €</span>
             </div>
+            {frozen && (
+              <p className="bi-frozen-note">
+                {drift
+                  ? `Invoiced ${eur(fGross)} € for ${frozen.days.toFixed(2)}${unitOf(b.projectId)} on ${frozen.sentDate}. Entries have changed since — the difference rolls into the next bill.`
+                  : `Invoiced as sent on ${frozen.sentDate}.`}
+              </p>
+            )}
           </div>
           <div className="bi-owners">
             <span className="bi-detail-h">Who's responsible</span>
@@ -607,7 +633,7 @@ export default function BillingPanel({
             ))}
           </div>
         </div>
-        <span className="bi-detail-h bi-ledger-h">Entries feeding this bill</span>
+        <span className="bi-detail-h bi-ledger-h">{frozen ? "Entries recorded for this period" : "Entries feeding this bill"}</span>
         <div className="bi-ledger">
           <div className="bi-lhead">
             <span>Date</span><span>Consultant</span><span>Line</span><span>Status</span>
@@ -935,7 +961,7 @@ export default function BillingPanel({
                           </button>
                         </span>
                       </div>
-                      {isOpen && comp && <div className="bi-detail">{billComposition(comp)}</div>}
+                      {isOpen && comp && <div className="bi-detail">{billComposition(comp, inv)}</div>}
                     </div>
                   );
                 })}
