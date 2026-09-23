@@ -117,7 +117,7 @@ function windowFor(anchor: Date, scope: string): [string, string] | null {
 }
 
 /** Pages through the rows: a plain select stops at a thousand. */
-async function fetchEntries(range: [string, string] | null): Promise<any[]> {
+async function fetchEntriesUncached(range: [string, string] | null): Promise<any[]> {
   const cols = "id, user_id, project_id, entry_date, billable, status, billing_line, work_type_id, start_min, end_min, billing_period";
   const out: any[] = [];
   for (let from = 0; ; from += 1000) {
@@ -132,16 +132,39 @@ async function fetchEntries(range: [string, string] | null): Promise<any[]> {
   return out;
 }
 
+/** The full-history fetch (range === null), used by Backlog/Billing/Bonus, is
+ *  the slow one — thousands of rows over several round-trips. It doesn't change
+ *  while you flip between tabs, so cache it for a short window: the first jump
+ *  to Backlog pays for it, later jumps are instant. Team always passes a range,
+ *  so it never touches this cache and its load is unchanged. */
+let _allEntriesCache: { at: number; rows: any[] } | null = null;
+let _allEntriesInFlight: Promise<any[]> | null = null;
+const ALL_ENTRIES_TTL = 60_000; // 1 minute
+export function invalidateEntriesCache() { _allEntriesCache = null; _allEntriesInFlight = null; }
+
+async function fetchEntries(range: [string, string] | null): Promise<any[]> {
+  if (range) return fetchEntriesUncached(range);
+  const now = Date.now();
+  if (_allEntriesCache && now - _allEntriesCache.at < ALL_ENTRIES_TTL) return _allEntriesCache.rows;
+  if (_allEntriesInFlight) return _allEntriesInFlight;
+  _allEntriesInFlight = fetchEntriesUncached(null).then((rows) => {
+    _allEntriesCache = { at: Date.now(), rows };
+    _allEntriesInFlight = null;
+    return rows;
+  }).catch((e) => { _allEntriesInFlight = null; throw e; });
+  return _allEntriesInFlight;
+}
+
 /**
  * Full loading overlay shown while Management's first load is in flight.
  * An "equalizer" of bars pulsing in a wave, over a slowly drifting aurora
  * background, with a shimmering label — deliberately not a spinner or dots.
  */
-function LoadingOverlay() {
+function LoadingOverlay({ subtle = false }: { subtle?: boolean }) {
   const bars = [0, 1, 2, 3, 4, 5, 6];
   return (
-    <div className="mg-loading" role="status" aria-live="polite">
-      <div className="mg-loading-aurora" />
+    <div className={`mg-loading ${subtle ? "is-subtle" : ""}`} role="status" aria-live="polite">
+      {!subtle && <div className="mg-loading-aurora" />}
       <div className="mg-loading-card">
         <div className="mg-loading-eq">
           {bars.map((i) => (
@@ -547,9 +570,15 @@ perDay: 1, minPerDay: 0.5, minPerWeek: 3, minPerMonth: 12, minRevenueWeek: 0, mi
   const [workTypes, setWorkTypes] = useState<WorkTypeDef[]>([]);
   const [showSettings, setShowSettings] = useState(false);
   const [loading, setLoading] = useState(true);
+  // True only while a full-history load (Backlog/Billing/Bonus) is in flight, so
+  // those panels can hold for real data instead of flashing Team's partial data.
+  const [loadingAll, setLoadingAll] = useState(false);
 
   useEffect(() => {
     (async () => {
+      // Backlog/Billing/Bonus pull the full history — flag it so those panels
+      // hold for real data. (If it's cached, this resolves almost instantly.)
+      if (needsAll) setLoadingAll(true);
       // Team only needs the period on screen and a couple of months either
       // side. Backlog, Billing and Bonus need the lot, so they ask for it when
       // you open them rather than making every visit wait for six thousand rows.
@@ -565,7 +594,10 @@ perDay: 1, minPerDay: 0.5, minPerWeek: 3, minPerMonth: 12, minRevenueWeek: 0, mi
         const { data: ea } = await supabase.from("entry_actuals").select("entry_id, actual_billable").in("entry_id", slice);
         ((ea ?? []) as any[]).forEach((r) => { actual[r.entry_id] = Number(r.actual_billable) || 0; });
       }
-      setEntries(((ce ?? []) as any[]).map((r) => {
+      // Build entries now, but DON'T setState yet — applying it here (before
+      // projects are ready) is what let a cached, fast load paint new entries
+      // against stale projects for a frame. Everything is set together below.
+      const processedEntries: Entry[] = ((ce ?? []) as any[]).map((r) => {
         const dur = (Number(r.end_min) || 0) - (Number(r.start_min) || 0);
         const iso = r.entry_date ?? "";
         // Full workday length depends on the weekday: Fri 09:00–14:30 = 5.5h, else 8h.
@@ -584,7 +616,7 @@ perDay: 1, minPerDay: 0.5, minPerWeek: 3, minPerMonth: 12, minRevenueWeek: 0, mi
           durationMin: dur > 0 ? dur : 0,
           billingPeriod: r.billing_period ?? null,
         };
-      }));
+      });
 
       // These are all independent lookups on tiny tables, so fire them together
       // instead of awaiting one after another (that stacking was the slow part).
@@ -615,6 +647,10 @@ perDay: 1, minPerDay: 0.5, minPerWeek: 3, minPerMonth: 12, minRevenueWeek: 0, mi
       ]);
 
       setClientTypeIds(new Set(((wtypes ?? []) as any[]).filter((t) => t.client_related).map((t) => t.id)));
+
+      // Entries + projects (and everything below) applied together in one batch,
+      // so the panel never renders new entries against old projects.
+      setEntries(processedEntries);
 
       setProjects(Object.fromEntries(((pj ?? []) as any[]).map((r) => {
         const base = Number(r.price_per_day) || 0;
@@ -711,6 +747,7 @@ setExcluded(excluded);
       }
 
       setLoading(false);
+      setLoadingAll(false);
     })();
     // Reloads when the window it needs changes: a different period, or a tab
     // that wants the full history.
@@ -1489,22 +1526,25 @@ minPerMonth: targets.minPerMonth,
         </section>
       </div>
       ) : tab === "backlog" ? (
-        <BacklogPanel
-          entries={entries}
-          projects={projects}
-          clientNames={clientNames}
-          typeNames={typeNames}
-          people={people}
-          supRoles={supRoles}
-          hourProjects={hourProjects}
-          hoursPerDay={hoursPerDay}
-          scope={scope}
-          anchor={anchor}
-          rangeFrom={rangeFrom}
-          rangeTo={rangeTo}
-          mainRoleByService={mainRoleByService}
-          asOf={backlogAsOf}
-        />
+        <div className="mg-backlog-wrap">
+          <BacklogPanel
+            entries={entries}
+            projects={projects}
+            clientNames={clientNames}
+            typeNames={typeNames}
+            people={people}
+            supRoles={supRoles}
+            hourProjects={hourProjects}
+            hoursPerDay={hoursPerDay}
+            scope={scope}
+            anchor={anchor}
+            rangeFrom={rangeFrom}
+            rangeTo={rangeTo}
+            mainRoleByService={mainRoleByService}
+            asOf={backlogAsOf}
+          />
+          {loadingAll && <LoadingOverlay subtle />}
+        </div>
       ) : tab === "billing" ? (
         <BillingPanel
           entries={entries}
