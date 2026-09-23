@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import Select from "../../framework/Select";
@@ -17,6 +18,138 @@ import "./SalesPage.css";
 export interface Employee { id: string; name: string }
 
 const norm = (s: string) => (s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+/* ===================================================================
+   Overview building blocks (presentation only). Same visual language as
+   Management's Team tab and the consultant modal.
+   =================================================================== */
+const soVars = (o: Record<string, string | number>) => o as CSSProperties;
+const soReduced = () =>
+  typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+const soHue = (s: string) => {
+  let h = 7;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
+  return h;
+};
+
+/** Eased count-up: from zero on mount, then glides when the value changes. */
+function useSoCount(target: number, ms = 1100) {
+  const [value, setValue] = useState(() => (soReduced() ? target : 0));
+  const from = useRef(value);
+  useEffect(() => {
+    if (soReduced()) { from.current = target; setValue(target); return; }
+    let raf = 0;
+    const start = from.current;
+    const t0 = performance.now();
+    const tick = (now: number) => {
+      const p = Math.min(1, (now - t0) / ms);
+      const e = p === 1 ? 1 : 1 - Math.pow(2, -10 * p);
+      const cur = start + (target - start) * e;
+      from.current = cur;
+      setValue(cur);
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target, ms]);
+  return value;
+}
+function SoCount({ value }: { value: number }) {
+  return <>{Math.round(useSoCount(value)).toLocaleString()}</>;
+}
+function useSoArmed(ms: number) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    const t = window.setTimeout(() => setArmed(true), soReduced() ? 0 : ms);
+    return () => window.clearTimeout(t);
+  }, [ms]);
+  return armed;
+}
+
+/** One pointer handler drives every spotlight and tilt on the overview. */
+function soSpotlight(e: ReactPointerEvent<HTMLElement>) {
+  if (e.pointerType !== "mouse") return;
+  const el = (e.target as HTMLElement).closest<HTMLElement>("[data-spot]");
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  const x = e.clientX - r.left;
+  const y = e.clientY - r.top;
+  el.style.setProperty("--mx", `${x}px`);
+  el.style.setProperty("--my", `${y}px`);
+  if (el.dataset.spot === "tilt") {
+    el.style.setProperty("--ry", `${(x / r.width - 0.5) * 7}deg`);
+    el.style.setProperty("--rx", `${(0.5 - y / r.height) * 7}deg`);
+  }
+}
+
+const SO_ICON = {
+  total: "M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM3 10h18M8 5v14",
+  active: "M13 2L3 14h7l-1 8 10-12h-7z",
+  won: "M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0zM17 5h3v2a3 3 0 0 1-3 3M7 5H4v2a3 3 0 0 0 3 3",
+  lost: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM15 9l-6 6M9 9l6 6",
+  rate: "M3 17l6-6 4 4 8-8M17 7h4v4",
+  list: "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01",
+  board: "M4 4h4v16H4zM10 4h4v10h-4zM16 4h4v13h-4z",
+  export: "M12 4v11M7 10l5 5 5-5M5 20h14",
+  arrow: "M5 12h14M13 6l6 6-6 6",
+  star: "M12 2l3 6.5 7 .6-5.3 4.6 1.6 6.9L12 17.8 5.7 20.6l1.6-6.9L2 9.1l7-.6z",
+  search: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-4-4",
+  empty: "M4 7l8-4 8 4-8 4zM4 12l8 4 8-4M4 17l8 4 8-4",
+};
+function SoIcon({ d, w = 2, fill = false }: { d: string; w?: number; fill?: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" fill={fill ? "currentColor" : "none"} stroke={fill ? "none" : "currentColor"} strokeWidth={w} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d={d} />
+    </svg>
+  );
+}
+
+const SO_ARC = "M16 70 A54 54 0 0 1 124 70";
+
+/** A status card in the dark band. Clicking it filters the list, as before. */
+function SoKpi({
+  index, tone, icon, label, value, sub, share, dial, on, onClick, title,
+}: {
+  index: number; tone: string; icon: string; label: string; value: number; sub: string;
+  share?: number | null; dial?: number | null; on: boolean; onClick: () => void; title?: string;
+}) {
+  const armed = useSoArmed(420 + index * 90);
+  const s = Math.max(0, Math.min(1, share ?? 0));
+  const d = Math.max(0, Math.min(100, dial ?? 0));
+  return (
+    <button
+      type="button"
+      className={`so-kpi tone-${tone} ${on ? "is-on" : ""}`}
+      data-spot="tilt"
+      style={soVars({ "--i": index, "--w": `${armed ? s * 100 : 0}%` })}
+      onClick={onClick}
+      aria-pressed={on}
+      title={title}
+    >
+      <span className="so-kpi-top">
+        <span className="so-kpi-ico"><SoIcon d={icon} /></span>
+        <span className="so-kpi-label">{label}</span>
+        <span className="so-kpi-check" aria-hidden="true" />
+      </span>
+      <span className="so-kpi-body">
+        <span className="so-kpi-txt">
+          <b className="so-kpi-val"><SoCount value={value} />{dial != null && <em>%</em>}</b>
+          <small>{sub}</small>
+        </span>
+        {dial != null && (
+          <span className="so-kpi-dial" aria-hidden="true">
+            <svg viewBox="0 0 140 80">
+              <path className="so-dial-bg" d={SO_ARC} pathLength={100} />
+              <path className={`so-dial-fg ${armed && d > 0 ? "" : "is-zero"}`} d={SO_ARC} pathLength={100}
+                style={{ strokeDasharray: `${armed ? d : 0} 101` }} />
+            </svg>
+          </span>
+        )}
+      </span>
+      {share != null && <span className="so-kpi-bar" aria-hidden="true"><i /></span>}
+    </button>
+  );
+}
 
 export default function SalesPage() {
   const navigate = useNavigate();
@@ -50,7 +183,6 @@ export default function SalesPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, pipelines]);
-  const [viewMenu, setViewMenu] = useState(false);
 
   const [q, setQ] = useState("");
   const [fStatus, setFStatus] = useState("");
@@ -250,154 +382,149 @@ export default function SalesPage() {
 
   if (me && !canOpenSales(me)) {
     return (
-      <div className="sl">
+      <div className="sl sl-ov">
         <header className="sl-head">
           <button className="sl-back" onClick={() => navigate("/home")} aria-label="Back">‹</button>
           <h1 className="sl-title">Sales</h1>
         </header>
-        <p className="sl-hint">This page is only available to the sales team.</p>
+        <section className="so-sheet">
+          <div className="so-empty">
+            <span className="so-empty-art"><SoIcon d={SO_ICON.empty} w={1.6} /></span>
+            <p>This page is only available to the sales team.</p>
+          </div>
+        </section>
       </div>
     );
   }
 
   return (
-    <div className="sl">
+    <div className="sl sl-ov" onPointerMove={soSpotlight}>
       <header className="sl-head">
         <button className="sl-back" onClick={() => navigate("/home")} aria-label="Back">‹</button>
         <h1 className="sl-title">Sales Tracking</h1>
-        <div className="sl-viewwrap" style={{ marginLeft: "auto" }}>
-          <button className="sl-viewbtn" onClick={() => setViewMenu((v) => !v)}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-              {view === "list"
-                ? <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
-                : <><rect x="3" y="4" width="5" height="16" rx="1" /><rect x="10" y="4" width="5" height="10" rx="1" /><rect x="17" y="4" width="5" height="13" rx="1" /></>}
-            </svg>
-            {view === "list" ? "List view" : "Board view"}
-            <svg className="sl-view-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 9l6 6 6-6" /></svg>
+        <div className="so-views" data-view={view} role="tablist" aria-label="View">
+          <span className="so-views-pill" aria-hidden="true" />
+          <button type="button" role="tab" aria-selected={view === "list"} className={view === "list" ? "is-on" : ""} onClick={() => setView("list")}>
+            <SoIcon d={SO_ICON.list} w={1.9} />List
           </button>
-          {viewMenu && (
-            <>
-              <div className="sl-view-layer" onMouseDown={() => setViewMenu(false)} />
-              <div className="sl-view-pop">
-                <button className={view === "list" ? "is-on" : ""} onMouseDown={() => { setView("list"); setViewMenu(false); }}>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></svg>
-                  General list
-                </button>
-                <button className={view === "kanban" ? "is-on" : ""} onMouseDown={() => { setView("kanban"); setViewMenu(false); }}>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="5" height="16" rx="1" /><rect x="10" y="4" width="5" height="10" rx="1" /><rect x="17" y="4" width="5" height="13" rx="1" /></svg>
-                  Board by phase
-                </button>
-              </div>
-            </>
-          )}
+          <button type="button" role="tab" aria-selected={view === "kanban"} className={view === "kanban" ? "is-on" : ""} onClick={() => setView("kanban")}>
+            <SoIcon d={SO_ICON.board} w={1.9} />Board
+          </button>
         </div>
         <button className="sl-export-btn" disabled={!me} onClick={() => setExporting(true)}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4v11M7 10l5 5 5-5M5 20h14" /></svg>
+          <SoIcon d={SO_ICON.export} w={1.9} />
           Export
         </button>
         <button className="sl-new" onClick={() => setCreating(true)}>+ New tracking</button>
       </header>
 
-      <div className="sl-metrics">
-        <button type="button" className={`sl-metric sl-m-total ${fStatus === "" ? "is-on" : ""}`}
-          onClick={() => setFStatus("")} aria-pressed={fStatus === ""}>
-          <span className="sl-metric-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M8 4v16"/></svg></span>
-          <span className="sl-metric-txt"><b>{metrics.total}</b><span>total</span></span>
-        </button>
-        <button type="button" className={`sl-metric sl-m-active ${fStatus === "active" ? "is-on" : ""}`}
-          onClick={() => toggleStatus("active")} aria-pressed={fStatus === "active"}>
-          <span className="sl-metric-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h7l-1 8 10-12h-7z"/></svg></span>
-          <span className="sl-metric-txt"><b>{metrics.active}</b><span>active</span></span>
-        </button>
-        <button type="button" className={`sl-metric sl-m-won ${fStatus === "won" ? "is-on" : ""}`}
-          onClick={() => toggleStatus("won")} aria-pressed={fStatus === "won"}>
-          <span className="sl-metric-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0zM17 5h3v2a3 3 0 0 1-3 3M7 5H4v2a3 3 0 0 0 3 3"/></svg></span>
-          <span className="sl-metric-txt"><b>{metrics.won}</b><span>won</span></span>
-        </button>
-        <button type="button" className={`sl-metric sl-m-lost ${fStatus === "lost" ? "is-on" : ""}`}
-          onClick={() => toggleStatus("lost")} aria-pressed={fStatus === "lost"}>
-          <span className="sl-metric-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M15 9l-6 6M9 9l6 6"/></svg></span>
-          <span className="sl-metric-txt"><b>{metrics.lost}</b><span>lost</span></span>
-        </button>
-        <button type="button" className={`sl-metric sl-m-rate ${fStatus === "closed" ? "is-on" : ""}`}
-          onClick={() => toggleStatus("closed")} aria-pressed={fStatus === "closed"}
-          title="Show closed deals (won and lost)">
-          <span className="sl-metric-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 17l6-6 4 4 8-8M17 7h4v4"/></svg></span>
-          <span className="sl-metric-txt"><b>{metrics.rate}%</b><span>win rate</span></span>
-        </button>
+      {/* Status cards: each one filters the list, clicking it again clears it. */}
+      <div className="so-kpis">
+        <SoKpi index={0} tone="total" icon={SO_ICON.total} label="Total deals" value={metrics.total}
+          sub={`${metrics.active} still open`} on={fStatus === ""} onClick={() => setFStatus("")} title="Show every deal" />
+        <SoKpi index={1} tone="active" icon={SO_ICON.active} label="Active" value={metrics.active}
+          sub={metrics.total ? `${Math.round((metrics.active / metrics.total) * 100)}% of all deals` : "No deals yet"}
+          share={metrics.total ? metrics.active / metrics.total : 0}
+          on={fStatus === "active"} onClick={() => toggleStatus("active")} />
+        <SoKpi index={2} tone="won" icon={SO_ICON.won} label="Won" value={metrics.won}
+          sub={metrics.total ? `${Math.round((metrics.won / metrics.total) * 100)}% of all deals` : "No deals yet"}
+          share={metrics.total ? metrics.won / metrics.total : 0}
+          on={fStatus === "won"} onClick={() => toggleStatus("won")} />
+        <SoKpi index={3} tone="lost" icon={SO_ICON.lost} label="Lost" value={metrics.lost}
+          sub={metrics.total ? `${Math.round((metrics.lost / metrics.total) * 100)}% of all deals` : "No deals yet"}
+          share={metrics.total ? metrics.lost / metrics.total : 0}
+          on={fStatus === "lost"} onClick={() => toggleStatus("lost")} />
+        <SoKpi index={4} tone="rate" icon={SO_ICON.rate} label="Win rate" value={metrics.rate} dial={metrics.rate}
+          sub={metrics.won + metrics.lost > 0 ? `${metrics.won} won of ${metrics.won + metrics.lost} closed` : "Nothing closed yet"}
+          on={fStatus === "closed"} onClick={() => toggleStatus("closed")} title="Show closed deals (won and lost)" />
       </div>
 
-      <div className="sl-filters">
-        <div className="sl-search">
-          <span className="sl-search-ico">⌕</span>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" />
-          {q && <button onClick={() => setQ("")}>×</button>}
-        </div>
-        <Select value={fStatus} onChange={setFStatus} placeholder="Any status"
-          options={[{ value: "", label: "Any status" }, { value: "active", label: "Active" }, { value: "won", label: "Won" }, { value: "lost", label: "Lost" }, { value: "paused", label: "Paused" }, { value: "closed", label: "Closed (won + lost)" }]} />
-        <Select value={fPipeline} onChange={setFPipeline} placeholder="All pipelines"
-          options={[{ value: "", label: "All pipelines" }, ...pipelines.map((p) => ({ value: p.id, label: p.name }))]} />
-        <Select value={fProduct} onChange={setFProduct} placeholder="All products"
-          options={[{ value: "", label: "All products" }, ...products.map((p) => ({ value: p.id!, label: p.name }))]} />
-        <Select value={probView} onChange={(v) => setProbView(v as typeof probView)} placeholder="Probability"
-          options={[
-            { value: "phase", label: "Phase probability" },
-            { value: "rep", label: "Sales estimate" },
-            { value: "mgr", label: "Management estimate" },
-            { value: "avg", label: "Average of all" },
-          ]} />
-        <Select value={fPhase} onChange={setFPhase} placeholder="Any stage"
-          options={[{ value: "", label: "Any stage" }, ...allPhaseNames.map((p) => ({ value: p, label: p }))]} />
-        <Select value={fOwner} onChange={setFOwner} placeholder="Any owner"
-          options={[{ value: "", label: "Any owner" }, ...salesPeople.map((e) => ({ value: e.id, label: e.name }))]} />
-        <Select value={fMember} onChange={setFMember} placeholder="Anyone on deal"
-          options={[{ value: "", label: "Anyone on deal" }, ...salesPeople.map((e) => ({ value: e.id, label: e.name }))]} />
-        <Select value={sort} onChange={setSort} placeholder="Sort"
-          options={[{ value: "recent", label: "Most recent" }, { value: "oldest", label: "Oldest" }, { value: "az", label: "A-Z" }, { value: "prob_hi", label: "Probability: high → low" }, { value: "prob_lo", label: "Probability: low → high" }, { value: "close_soon", label: "Close date: soonest first" }, { value: "close_late", label: "Close date: latest first" }, { value: "rev_hi", label: "Revenue: high → low" }, { value: "rev_lo", label: "Revenue: low → high" }]} />
-        {anyFilter && <button className="sl-clear" onClick={clearAll}>Clear</button>}
-      </div>
-
-      {view === "kanban" ? (
-        <KanbanView
-          kanbanPipe={fPipeline}
-          phaseByPipe={phaseByPipe}
-          trackings={shown}
-          potentialTotals={potentialTotals}
-          trackTitle={trackTitle}
-          companyName={companyName}
-          onOpen={(id) => setOpenId(id)}
-          onMove={moveTrackingToPhase}
-        />
-      ) : shown.length === 0 ? (
-        <div className="sl-empty">
-          <div className="sl-empty-art">◇</div>
-          <p>{trackings.length === 0 ? "No trackings yet." : "No trackings match those filters."}</p>
-          {trackings.length === 0 && <button className="sl-new" onClick={() => setCreating(true)}>Start your first tracking</button>}
-        </div>
-      ) : (
-        <div className="sl-scroll">
-          <div className="dc-list">
-            {shown.map((t) => (
-              <TrackingRow
-                key={t.id}
-                tracking={t}
-                title={trackTitle(t)}
-                company={companyName(t.company_id)}
-                contactCount={t.contactIds.length}
-                pipeline={pipelineName(t.pipeline_id)}
-                phases={phaseByPipe[t.pipeline_id ?? ""] ?? []}
-                product={productName(t.product_id)}
-                revenue={potentialTotals[t.id!] ?? 0}
-                ownerName={trackOwners[t.id] ? (employees.find((e) => e.id === trackOwners[t.id])?.name ?? null) : null}
-                closeDate={closeDateOf(t)}
-                closeProbOverride={shownProbOf(t)}
-                probLabel={probView === "phase" ? "close" : probView === "rep" ? "sales" : probView === "mgr" ? "mgmt" : "avg"}
-                onOpen={() => setOpenId(t.id)}
-              />
-            ))}
+      <section className="so-sheet">
+        <div className="sl-filters">
+          <div className="sl-search">
+            <span className="sl-search-ico"><SoIcon d={SO_ICON.search} w={2.1} /></span>
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" />
+            {q && <button onClick={() => setQ("")} aria-label="Clear search">×</button>}
           </div>
+          <Select value={fStatus} onChange={setFStatus} placeholder="Any status"
+            options={[{ value: "", label: "Any status" }, { value: "active", label: "Active" }, { value: "won", label: "Won" }, { value: "lost", label: "Lost" }, { value: "paused", label: "Paused" }, { value: "closed", label: "Closed (won + lost)" }]} />
+          <Select value={fPipeline} onChange={setFPipeline} placeholder="All pipelines"
+            options={[{ value: "", label: "All pipelines" }, ...pipelines.map((p) => ({ value: p.id, label: p.name }))]} />
+          <Select value={fProduct} onChange={setFProduct} placeholder="All products"
+            options={[{ value: "", label: "All products" }, ...products.map((p) => ({ value: p.id!, label: p.name }))]} />
+          <Select value={probView} onChange={(v) => setProbView(v as typeof probView)} placeholder="Probability"
+            options={[
+              { value: "phase", label: "Phase probability" },
+              { value: "rep", label: "Sales estimate" },
+              { value: "mgr", label: "Management estimate" },
+              { value: "avg", label: "Average of all" },
+            ]} />
+          <Select value={fPhase} onChange={setFPhase} placeholder="Any stage"
+            options={[{ value: "", label: "Any stage" }, ...allPhaseNames.map((p) => ({ value: p, label: p }))]} />
+          <Select value={fOwner} onChange={setFOwner} placeholder="Any owner"
+            options={[{ value: "", label: "Any owner" }, ...salesPeople.map((e) => ({ value: e.id, label: e.name }))]} />
+          <Select value={fMember} onChange={setFMember} placeholder="Anyone on deal"
+            options={[{ value: "", label: "Anyone on deal" }, ...salesPeople.map((e) => ({ value: e.id, label: e.name }))]} />
+          <Select value={sort} onChange={setSort} placeholder="Sort"
+            options={[{ value: "recent", label: "Most recent" }, { value: "oldest", label: "Oldest" }, { value: "az", label: "A-Z" }, { value: "prob_hi", label: "Probability: high → low" }, { value: "prob_lo", label: "Probability: low → high" }, { value: "close_soon", label: "Close date: soonest first" }, { value: "close_late", label: "Close date: latest first" }, { value: "rev_hi", label: "Revenue: high → low" }, { value: "rev_lo", label: "Revenue: low → high" }]} />
+          {anyFilter && <button className="sl-clear" onClick={clearAll}>Clear</button>}
+          <span className="so-count"><b>{shown.length}</b> {shown.length === 1 ? "deal" : "deals"}</span>
         </div>
-      )}
+
+        {view === "kanban" ? (
+          <KanbanView
+            kanbanPipe={fPipeline}
+            phaseByPipe={phaseByPipe}
+            trackings={shown}
+            potentialTotals={potentialTotals}
+            trackTitle={trackTitle}
+            companyName={companyName}
+            onOpen={(id) => setOpenId(id)}
+            onMove={moveTrackingToPhase}
+          />
+        ) : shown.length === 0 ? (
+          <div className="so-empty">
+            <span className="so-empty-art"><SoIcon d={SO_ICON.empty} w={1.6} /></span>
+            <p>{trackings.length === 0 ? "No trackings yet. Start one to follow a client through your pipeline." : "No trackings match those filters."}</p>
+            {trackings.length === 0
+              ? <button className="sl-new" onClick={() => setCreating(true)}>Start your first tracking</button>
+              : anyFilter && <button className="sl-clear" onClick={clearAll}>Clear filters</button>}
+          </div>
+        ) : (
+          <div className="sl-scroll">
+            {/* One header for the whole list, so rows don't repeat a label under every figure. */}
+            <div className="so-thead" aria-hidden="true">
+              <span>Deal</span>
+              <span>Stage</span>
+              <span>Product and owner</span>
+              <span className="is-r">Potential and close</span>
+              <span className="is-r">{probView === "phase" ? "Close chance" : probView === "rep" ? "Sales estimate" : probView === "mgr" ? "Mgmt estimate" : "Avg. estimate"}</span>
+              <span />
+            </div>
+            <div className="so-list">
+              {shown.map((t, i) => (
+                <TrackingRow
+                  key={t.id}
+                  index={i}
+                  tracking={t}
+                  title={trackTitle(t)}
+                  company={companyName(t.company_id)}
+                  contactCount={t.contactIds.length}
+                  pipeline={pipelineName(t.pipeline_id)}
+                  phases={phaseByPipe[t.pipeline_id ?? ""] ?? []}
+                  product={productName(t.product_id)}
+                  revenue={potentialTotals[t.id!] ?? 0}
+                  ownerName={trackOwners[t.id] ? (employees.find((e) => e.id === trackOwners[t.id])?.name ?? null) : null}
+                  closeDate={closeDateOf(t)}
+                  closeProbOverride={shownProbOf(t)}
+                  probLabel={probView === "phase" ? "close" : probView === "rep" ? "sales" : probView === "mgr" ? "mgmt" : "avg"}
+                  onOpen={() => setOpenId(t.id)}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+      </section>
 
       {exporting && (
         <ExportModal
@@ -425,10 +552,10 @@ export default function SalesPage() {
   );
 }
 
-function TrackingRow({ tracking, title, company, contactCount, pipeline, phases, product, revenue, ownerName, closeDate, closeProbOverride, probLabel, onOpen }: {
+function TrackingRow({ tracking, title, company, contactCount, pipeline, phases, product, revenue, ownerName, closeDate, closeProbOverride, probLabel, onOpen, index = 0 }: {
   tracking: Tracking; title: string; company: string | null; contactCount: number;
   pipeline: string; phases: Phase[]; product: string | null; revenue?: number; closeDate?: string | null;
-  ownerName?: string | null; closeProbOverride?: number | null; probLabel?: string; onOpen: () => void;
+  ownerName?: string | null; closeProbOverride?: number | null; probLabel?: string; onOpen: () => void; index?: number;
 }) {
   const curIdx = phases.findIndex((p) => p.id === tracking.current_phase_id);
   // Same adaptive formula as the detail view: first phase 0%, win phase 100%.
@@ -446,80 +573,79 @@ function TrackingRow({ tracking, title, company, contactCount, pipeline, phases,
   const closeProb: number | null = closeProbOverride !== undefined ? closeProbOverride : phaseProb;
   const probTone = closeProb == null ? "none" : closeProb >= 70 ? "hi" : closeProb >= 40 ? "mid" : "lo";
   const started = tracking.created_at ? new Date(tracking.created_at).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "2-digit" }) : "-";
+  const cp = Math.max(0, Math.min(100, closeProb ?? 0));
 
   return (
-    <button className={`dc dc-${tracking.status} dc-${probTone}`} onClick={onOpen}>
-      {/* left rail: big progress number */}
-      <div className="dc-rail">
-        <span className="dc-rail-pct">{pct}<i>%</i></span>
-        <span className="dc-rail-lbl">progress</span>
-        <span className="dc-rail-bar"><span className="dc-rail-fill" style={{ height: `${pct}%` }} /></span>
-      </div>
-
-      {/* body */}
-      <div className="dc-body">
-        <div className="dc-head">
-          <span className="dc-avatar">{title.slice(0, 1).toUpperCase()}</span>
-          <div className="dc-headtxt">
-            <span className="dc-name">{title}</span>
-            <span className="dc-meta">{company ? "Company" : "Contact"}{contactCount > 0 && ` \u00b7 ${contactCount} contact${contactCount !== 1 ? "s" : ""}`} · {pipeline}</span>
-          </div>
-          <span className={`dc-status dc-status-${tracking.status}`}>{tracking.status}</span>
-        </div>
-
-        <div className="dc-footer">
-          <span className="dc-stage">
-            <span className="dc-stage-dot" />
-            {stage}
+    <button
+      className={`so-row is-${tracking.status} prob-${probTone}`}
+      data-spot=""
+      style={soVars({ "--i": Math.min(index, 14), "--h": soHue(title), "--cp": `${cp}%` })}
+      onClick={onOpen}
+    >
+      {/* deal */}
+      <span className="so-who">
+        <span className="so-av">{title.slice(0, 1).toUpperCase()}</span>
+        <span className="so-who-t">
+          <span className="so-name">
+            <b>{title}</b>
+            {/* Active is the default, so only the exceptions get a pill. */}
+            {tracking.status !== "active" && <span className={`so-status is-${tracking.status}`}>{tracking.status}</span>}
           </span>
-          {product && <span className="dc-prod">{product}</span>}
+          <span className="so-meta">
+            <span>{company ? "Company" : "Contact"}</span>
+            {contactCount > 0 && <span>{contactCount} contact{contactCount !== 1 ? "s" : ""}</span>}
+            <span>{pipeline}</span>
+          </span>
+        </span>
+      </span>
+
+      {/* stage: one track, one segment per phase */}
+      <span className="so-stage" title={`${pct}% through the pipeline`}>
+        <span className="so-stage-top">
+          <b>{stage}</b>
+          <small>{curIdx >= 0 && phases.length > 0 ? `Step ${curIdx + 1} of ${phases.length}` : "Not started"}</small>
+          <em>{pct}%</em>
+        </span>
+        <span className="so-track" aria-hidden="true">
+          {(phases.length > 0 ? phases : [{ id: "none" } as Phase]).map((ph, i) => (
+            <i key={ph.id} className={i < curIdx ? "is-done" : i === curIdx ? "is-cur" : ""} />
+          ))}
+        </span>
+      </span>
+
+      {/* product and owner */}
+      <span className="so-tags">
+        {product ? <span className="so-tag">{product}</span> : <span className="so-tag is-empty">No product</span>}
+        <span className="so-sub">
           {ownerName && (
-            <span className="dc-owner" title={`Owner: ${ownerName}`}>
-              <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2l3 6.5 7 .6-5.3 4.6 1.6 6.9L12 17.8 5.7 20.6l1.6-6.9L2 9.1l7-.6z" /></svg>
+            <span className="so-owner" title={`Owner: ${ownerName}`}>
+              <SoIcon d={SO_ICON.star} fill />
               {ownerName}
             </span>
           )}
-          <span className="dc-date">{started}</span>
-        </div>
-      </div>
+          <span>Started {started}</span>
+        </span>
+      </span>
 
-      {/* potential revenue */}
-      <div className="dc-rev">
-        <span className="dc-rev-val">{revenue && revenue > 0 ? `${revenue.toLocaleString("es-ES")} €` : "—"}</span>
-        <span className="dc-rev-lbl">potential</span>
-      </div>
+      {/* potential revenue + expected close */}
+      <span className="so-value">
+        <b className={revenue && revenue > 0 ? "" : "is-none"}>{revenue && revenue > 0 ? `${revenue.toLocaleString("es-ES")} €` : "No value yet"}</b>
+        <small className={closeDate ? "" : "is-none"}>
+          {closeDate ? `Closes ${new Date(closeDate).toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "2-digit" })}` : "No close date"}
+        </small>
+      </span>
 
-      {/* expected close date */}
-      <div className="dc-close-col">
-        {closeDate ? (
-          <>
-            <span className="dc-close-lbl">Est. close</span>
-            <span className="dc-close-val">{new Date(closeDate).toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "2-digit" })}</span>
-          </>
-        ) : (
-          <>
-            <span className="dc-close-lbl">Est. close</span>
-            <span className="dc-close-none">—</span>
-          </>
-        )}
-      </div>
-
-      {/* right: close probability ring */}
-      <div className="dc-ring-wrap">
+      {/* close probability */}
+      <span className="so-chance" title={probLabel ? `Close probability (${probLabel})` : undefined}>
         {closeProb == null ? (
-          <span className="dc-ring-empty">—</span>
+          <b className="is-none">—</b>
         ) : (
-          <span className="dc-ring-inner">
-            <svg className="dc-ring" viewBox="0 0 40 40" aria-hidden="true">
-              <circle className="dc-ring-bg" cx="20" cy="20" r="16" />
-              <circle className="dc-ring-fg" cx="20" cy="20" r="16"
-                style={{ strokeDasharray: `${(closeProb / 100) * 100.5} 100.5` }} />
-            </svg>
-            <span className="dc-ring-val"><b>{closeProb}<i>%</i></b></span>
-          </span>
+          <b>{closeProb}<i>%</i></b>
         )}
-        <span className="dc-ring-lbl">{probLabel ?? "close"}</span>
-      </div>
+        <span className="so-chance-bar" aria-hidden="true"><i /></span>
+      </span>
+
+      <span className="so-go" aria-hidden="true"><SoIcon d={SO_ICON.arrow} w={2.2} /></span>
     </button>
   );
 }
@@ -796,59 +922,80 @@ function KanbanView({ kanbanPipe, phaseByPipe, trackings, potentialTotals, track
   };
 
   if (!kanbanPipe) {
-    return <div className="sl-empty"><div className="sl-empty-art">▦</div><p>Pick a pipeline in the filter above to see its board.</p></div>;
+    return (
+      <div className="so-empty">
+        <span className="so-empty-art"><SoIcon d={SO_ICON.board} w={1.6} /></span>
+        <p>Pick a pipeline in the filter above to see its board.</p>
+      </div>
+    );
   }
   if (phases.length === 0) {
-    return <div className="sl-empty"><div className="sl-empty-art">▦</div><p>This pipeline has no visible phases.</p></div>;
+    return (
+      <div className="so-empty">
+        <span className="so-empty-art"><SoIcon d={SO_ICON.board} w={1.6} /></span>
+        <p>This pipeline has no visible phases.</p>
+      </div>
+    );
   }
 
   return (
     <div className="sl-kanban">
       <div className="sl-kcols">
-        {phases.map((p) => (
-          <div
-            key={p.id}
-            className={`sl-kcol ${overPhase === p.id ? "is-over" : ""} ${p.sales_outcome ? `sl-kcol-${p.sales_outcome}` : ""}`}
-            onDragOver={(e) => { e.preventDefault(); setOverPhase(p.id); }}
-            onDragLeave={(e) => { if (e.currentTarget === e.target) setOverPhase(null); }}
-            onDrop={() => drop(p.id)}
-          >
-            <div className="sl-kcol-head">
-              <span className="sl-kcol-name">
-                {p.sales_outcome === "win" ? "★ " : p.sales_outcome === "loss" ? "✕ " : ""}{p.name}
-              </span>
-              <span className="sl-kcol-meta">
-                <span className="sl-kcol-count">{byPhase[p.id]?.length ?? 0}</span>
-                {(revByPhase[p.id] ?? 0) > 0 && <span className="sl-kcol-rev">{fmtRev(revByPhase[p.id])}</span>}
-              </span>
+        {phases.map((p, pi) => {
+          const cards = byPhase[p.id] ?? [];
+          return (
+            <div
+              key={p.id}
+              className={`so-kcol ${overPhase === p.id ? "is-over" : ""} ${p.sales_outcome ? `is-${p.sales_outcome}` : ""}`}
+              style={soVars({ "--i": Math.min(pi, 10) })}
+              onDragOver={(e) => { e.preventDefault(); setOverPhase(p.id); }}
+              onDragLeave={(e) => { if (e.currentTarget === e.target) setOverPhase(null); }}
+              onDrop={() => drop(p.id)}
+            >
+              <div className="so-kcol-h">
+                <span className="so-kcol-name">
+                  {p.sales_outcome === "win" && <span className="so-kcol-mark" aria-hidden="true"><SoIcon d={SO_ICON.star} fill /></span>}
+                  {p.sales_outcome === "loss" && <span className="so-kcol-mark" aria-hidden="true"><SoIcon d="M6 6l12 12M18 6L6 18" w={2.6} /></span>}
+                  <b>{p.name}</b>
+                  <span className="so-kcol-count">{cards.length}</span>
+                </span>
+                <span className="so-kcol-rev">
+                  {(revByPhase[p.id] ?? 0) > 0 ? <>{fmtRev(revByPhase[p.id])} <small>potential</small></> : <small>No potential revenue</small>}
+                </span>
+              </div>
+              <div className="so-kcol-body">
+                {cards.length === 0 ? (
+                  <div className="so-kcol-empty">Drop a deal here</div>
+                ) : cards.map((t, ci) => {
+                  const title = trackTitle(t);
+                  const rev = potentialTotals[t.id!] ?? 0;
+                  return (
+                    <div
+                      key={t.id}
+                      className={`so-kcard is-${t.status} ${dragId === t.id ? "is-dragging" : ""}`}
+                      data-spot=""
+                      style={soVars({ "--h": soHue(title), "--i": Math.min(ci, 8) + pi })}
+                      draggable
+                      onDragStart={() => setDragId(t.id)}
+                      onDragEnd={() => { setDragId(null); setOverPhase(null); }}
+                      onClick={() => onOpen(t.id)}
+                    >
+                      <span className="so-av">{title.slice(0, 1).toUpperCase()}</span>
+                      <span className="so-kcard-t">
+                        <b>{title}</b>
+                        <small>{companyName(t.company_id) ? "Company" : "Contact"}</small>
+                      </span>
+                      <span className="so-kcard-side">
+                        <span className={`so-status is-${t.status}`}>{t.status}</span>
+                        {rev > 0 && <span className="so-kcard-rev">{fmtRev(rev)}</span>}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
-            <div className="sl-kcol-body">
-              {(byPhase[p.id] ?? []).length === 0 ? (
-                <div className="sl-kcol-empty">Drop here</div>
-              ) : (byPhase[p.id] ?? []).map((t) => {
-                const title = trackTitle(t);
-                return (
-                  <div
-                    key={t.id}
-                    className={`sl-kcard sl-kcard-${t.status} ${dragId === t.id ? "is-dragging" : ""}`}
-                    draggable
-                    onDragStart={() => setDragId(t.id)}
-                    onDragEnd={() => { setDragId(null); setOverPhase(null); }}
-                    onClick={() => onOpen(t.id)}
-                  >
-                    <span className="sl-kcard-accent" aria-hidden="true" />
-                    <span className="sl-kcard-avatar">{title.slice(0, 1).toUpperCase()}</span>
-                    <span className="sl-kcard-id">
-                      <span className="sl-kcard-name">{title}</span>
-                      <span className="sl-kcard-sub">{companyName(t.company_id) ? "Company" : "Contact"}</span>
-                    </span>
-                    <span className={`sl-status sl-status-${t.status}`}>{t.status}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

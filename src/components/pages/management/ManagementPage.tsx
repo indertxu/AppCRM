@@ -239,7 +239,7 @@ function TmIcon({ d, w = 2 }: { d: string; w?: number }) {
 
 const TM_ARC = "M16 70 A54 54 0 0 1 124 70";
 
-/** Team headline card: the figure sits in a sweeping arc; a click swaps to the planned vs realized bar. */
+/** Team headline strip: a small arc with the % of goal, the figure beside it; a click swaps to the planned vs realized bar. */
 function TeamKpi({
   index, label, unit, icon, done, planned, goal, projPct, fmt, breakdown, onToggle,
 }: {
@@ -276,15 +276,11 @@ function TeamKpi({
       aria-pressed={breakdown}
       title={breakdown ? "Show the total" : "Show planned and realized"}
     >
-      <span className="tm-kpi-head">
-        <span className="tm-kpi-ico"><TmIcon d={icon} /></span>
-        <span className="tm-kpi-label">{label}</span>
-        <span className="tm-kpi-swap"><TmIcon d={TM_ICON.swap} w={2.2} />{breakdown ? "Show total" : "Show planned"}</span>
-      </span>
+      <span className="tm-kpi-swap"><TmIcon d={TM_ICON.swap} w={2.2} /><span>{breakdown ? "Show total" : "Show planned"}</span></span>
 
-      <span className="tm-kpi-body">
-        <span className="tm-gauge">
-          <span className="tm-arc" aria-hidden={breakdown}>
+      <span className="tm-gauge">
+        <span className="tm-arc" aria-hidden={breakdown}>
+          <span className="tm-dial">
             <svg viewBox="0 0 140 80" aria-hidden="true">
               <defs>
                 <linearGradient id={`f${gid}`} x1="0" y1="0" x2="1" y2="0">
@@ -302,44 +298,45 @@ function TeamKpi({
               {over && <path className="tm-arc-over" d={TM_ARC} pathLength={100} stroke={`url(#o${gid})`} style={{ strokeDasharray: dash(overFill) }} />}
               {goal > 0 && (
                 <g className="tm-arc-tip" style={{ transform: `rotate(${on(over ? overFill : fill) * 180}deg)` }}>
-                  <circle cx="16" cy="70" r="4.4" />
+                  <circle cx="16" cy="70" r="5" />
                 </g>
               )}
             </svg>
-            <span className="tm-arc-core">
-              <b><TmCount value={done} format={fmt} /><em>{unit}</em></b>
-              <small>{goal > 0 ? `of ${fmt(goal)}${u} goal` : "No goal set"}</small>
-            </span>
+            <span className="tm-dial-pct"><TmCount value={pctRaw} format={(n) => Math.round(n).toLocaleString()} /><em>%</em></span>
           </span>
-
-          <span className="tm-bar" aria-hidden={!breakdown}>
-            <span className="tm-bar-track">
-              <span className="tm-bar-done" style={{ width: `${breakdown ? doneW : 0}%` }} />
-              <span className="tm-bar-plan" style={{ left: `${doneW}%`, width: `${breakdown ? planW : 0}%` }} />
-              {goal > 0 && (
-                <span className={`tm-bar-goal ${goalAt > 72 ? "is-end" : ""}`} style={{ left: `${goalAt}%` }}>
-                  <span>Goal {fmt(goal)}{u}</span>
-                </span>
-              )}
-            </span>
-            <span className="tm-bar-legend">
-              <span><i className="is-done" />{fmt(done)}{u} realized</span>
-              <span><i className="is-plan" />+{fmt(planned)}{u} planned</span>
-              <b>{fmt(done + planned)}{u} in total</b>
-            </span>
+          <span className="tm-kpi-main">
+            <span className="tm-kpi-label"><span className="tm-kpi-ico"><TmIcon d={icon} /></span>{label}</span>
+            <b className="tm-kpi-val"><TmCount value={done} format={fmt} /><em>{unit}</em></b>
+            <small className="tm-kpi-goal">
+              {goal > 0 ? `of ${fmt(goal)}${u} goal` : "No goal set"}
+              {over && <span className="tm-over"><i />Over goal</span>}
+            </small>
           </span>
         </span>
 
-        <span className="tm-kpi-side">
-          <span className="tm-kpi-pct"><TmCount value={pctRaw} format={(n) => Math.round(n).toLocaleString()} /><em>%</em></span>
-          <span className="tm-kpi-pct-l">{goal > 0 ? "of the team goal" : "No goal to measure against"}</span>
-          <span className="tm-kpi-facts">
-            <span><i className="is-done" />Realized<b>{fmt(done)}{u}</b></span>
-            <span><i className="is-plan" />Planned<b>+{fmt(planned)}{u}</b></span>
-            {goal > 0 && <span><i className="is-proj" />With planned<b>{Math.round(projPct)}%</b></span>}
+        <span className="tm-bar" aria-hidden={!breakdown}>
+          <span className="tm-kpi-label"><span className="tm-kpi-ico"><TmIcon d={icon} /></span>{label}, planned and realized</span>
+          <span className="tm-bar-track">
+            <span className="tm-bar-done" style={{ width: `${breakdown ? doneW : 0}%` }} />
+            <span className="tm-bar-plan" style={{ left: `${doneW}%`, width: `${breakdown ? planW : 0}%` }} />
+            {goal > 0 && (
+              <span className={`tm-bar-goal ${goalAt > 72 ? "is-end" : ""}`} style={{ left: `${goalAt}%` }}>
+                <span>Goal {fmt(goal)}{u}</span>
+              </span>
+            )}
           </span>
-          {over && <span className="tm-over"><i />Over goal</span>}
+          <span className="tm-bar-legend">
+            <span><i className="is-done" />{fmt(done)}{u} realized</span>
+            <span><i className="is-plan" />+{fmt(planned)}{u} planned</span>
+            <b>{fmt(done + planned)}{u} in total</b>
+          </span>
         </span>
+      </span>
+
+      <span className="tm-kpi-facts">
+        <span><i className="is-done" />Realized<b>{fmt(done)}{u}</b></span>
+        <span><i className="is-plan" />Planned<b>+{fmt(planned)}{u}</b></span>
+        <span><i className="is-proj" />With planned<b>{goal > 0 ? `${Math.round(projPct)}%` : "–"}</b></span>
       </span>
     </button>
   );
@@ -388,7 +385,7 @@ function TeamMetric({
   );
 }
 
-/** A consultant on the Team tab. The whole card opens the detail modal; the gear opens their targets. */
+/** A consultant row on the Team tab. The whole row opens the detail modal; the sliders button opens their targets. */
 function TeamCard({
   index, name, projectCount, daysDone, amountDone, goals, onOpen, onTargets,
 }: {
@@ -412,33 +409,33 @@ function TeamCard({
       style={tmVars({ "--i": Math.min(index, 16), "--h": tmHue(name) })}
     >
       <button type="button" className="tm-card-hit" onClick={onOpen} aria-label={`Open details for ${name}`} />
-      <header className="tm-card-h">
+      <span className="tm-card-who">
         <span className="tm-av">{tmInitials(name)}</span>
         <span className="tm-who">
           <b>{name}</b>
-          <small>{projectCount} project{projectCount === 1 ? "" : "s"}</small>
+          <small>
+            {projectCount} project{projectCount === 1 ? "" : "s"}
+            <span className="tm-status is-inline"><i />{TM_STATUS[overall]}</span>
+          </small>
         </span>
-        <span className="tm-status"><i />{TM_STATUS[overall]}</span>
-        <button
-          type="button"
-          className={`tm-target ${goals.custom ? "is-custom" : ""}`}
-          onClick={onTargets}
-          title={goals.custom ? "Custom targets" : "Set personal targets"}
-          aria-label={goals.custom ? `Edit custom targets for ${name}` : `Set personal targets for ${name}`}
-        >
-          <TmIcon d={TM_ICON.sliders} w={2.1} />
-        </button>
-      </header>
+      </span>
 
       <TeamMetric label="Days delivered" unit="d" done={daysDone} min={goals.days} high={goals.daysHigh}
         tone={dTone} pct={dayPct} format={(n) => n.toFixed(2)} />
       <TeamMetric label="Billed" unit="€" done={amountDone} min={goals.money} high={goals.moneyHigh}
         tone={mTone} pct={moneyPct} format={(n) => Math.round(n).toLocaleString()} />
 
-      <footer className="tm-card-f">
-        <span>Open details</span>
-        <span className="tm-go"><TmIcon d={TM_ICON.arrow} w={2.2} /></span>
-      </footer>
+      <span className="tm-status is-col"><i />{TM_STATUS[overall]}</span>
+      <button
+        type="button"
+        className={`tm-target ${goals.custom ? "is-custom" : ""}`}
+        onClick={onTargets}
+        title={goals.custom ? "Custom targets" : "Set personal targets"}
+        aria-label={goals.custom ? `Edit custom targets for ${name}` : `Set personal targets for ${name}`}
+      >
+        <TmIcon d={TM_ICON.sliders} w={2.1} />
+      </button>
+      <span className="tm-go" aria-hidden="true"><TmIcon d={TM_ICON.arrow} w={2.2} /></span>
     </article>
   );
 }
@@ -451,6 +448,11 @@ export default function ManagementPage() {
   const [defaultCutoffDay, setDefaultCutoffDay] = useState(0);
   const [rangeFrom, setRangeFrom] = useState("");
   const [rangeTo, setRangeTo] = useState("");
+  /** Backlog is a snapshot, not a period — just the one date it's measured as of. */
+  const [backlogAsOf, setBacklogAsOf] = useState(() => {
+    const t = new Date();
+    return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+  });
   const [expanded, setExpanded] = useState<string | null>(null);
   const [projOpen, setProjOpen] = useState<string | null>(null); // "userId|projectKey"
   // Which of the top KPI gauges (by key: "days" / "money") is showing the
@@ -467,6 +469,8 @@ export default function ManagementPage() {
 const [people, setPeople] = useState<Record<string, string>>({});
 const [supRoles, setSupRoles] = useState<Set<string>>(new Set());
 const [typeNames, setTypeNames] = useState<Record<string, string>>({});
+  /** service_id -> the role_id marked as that service's "main" role (Catalog > service > Roles and rates). */
+  const [mainRoleByService, setMainRoleByService] = useState<Record<string, string>>({});
 const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [userTargets, setUserTargets] = useState<Record<string, UserTarget>>({});
   const [capacity, setCapacity] = useState<Record<string, CapValue>>({});
@@ -583,6 +587,7 @@ perDay: 1, minPerDay: 0.5, minPerWeek: 3, minPerMonth: 12, minRevenueWeek: 0, mi
         { data: wt },
         { data: us },
         { data: prof },
+        { data: svcMain },
       ] = await Promise.all([
         supabase.from("work_types").select("id, client_related"),
         supabase.from("projects").select("id, client_id, service_id, project_type_id, kickoff_date, price_per_day, supervision_price, discount_mode, discount_value, supervision_discount_mode, supervision_discount_value, team, consultor_days, connector_days, supervision_days, status, legal_name, vat_number, address, contacts, taxed, tax_rate"),
@@ -594,6 +599,7 @@ perDay: 1, minPerDay: 0.5, minPerWeek: 3, minPerMonth: 12, minRevenueWeek: 0, mi
         supabase.from("work_types").select("*").order("created_at"),
         supabase.functions.invoke("manage-users", { body: { action: "list" } }),
         supabase.from("profiles").select("id, role, job_title"),
+        supabase.from("service_roles").select("service_id, role_id").eq("is_main", true),
       ]);
 
       setClientTypeIds(new Set(((wtypes ?? []) as any[]).filter((t) => t.client_related).map((t) => t.id)));
@@ -639,6 +645,7 @@ minRevenueWeek: r.min_revenue_week === null ? null : Number(r.min_revenue_week),
       }])));
 
       setTypeNames(Object.fromEntries(((pt ?? []) as any[]).map((t) => [t.id, t.name ?? ""])));
+      setMainRoleByService(Object.fromEntries(((svcMain ?? []) as any[]).map((r) => [r.service_id, r.role_id])));
 
       setSupRoles(new Set(((rl ?? []) as any[]).filter((r) => r.is_supervision).map((r) => r.id)));
 
@@ -1168,7 +1175,7 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
         </div>
 
         <div className="mg-nav">
-          {tab !== "billing" && (
+          {tab !== "billing" && tab !== "backlog" && (
           <div className="mg-seg" data-scope={scope}>
             <span className="mg-seg-slider" />
             {(
@@ -1183,7 +1190,14 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
           </div>
           )}
 
-          {scope === "custom" ? (
+          {tab === "backlog" && (
+            <div className="mg-asof">
+              <span className="mg-asof-label">Backlog as of</span>
+              <DatePicker value={backlogAsOf} onChange={setBacklogAsOf} placeholder="Today" />
+            </div>
+          )}
+
+          {tab !== "backlog" && (scope === "custom" ? (
             <div className="mg-range">
               <span className="mg-range-field">
                 <DatePicker value={rangeFrom} onChange={setRangeFrom} placeholder="From" />
@@ -1204,7 +1218,7 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
               <span className="mg-period">{label}</span>
               {scope !== "all" && <button className="mg-btn" onClick={() => step(1)} aria-label="Next">›</button>}
             </>
-          )}
+          ))}
 
           <button className="mg-btn mg-gear" onClick={() => { setCapFocusUser(null); setShowSettings(true); }} aria-label="Targets" title="Targets">⚙</button>
         </div>
@@ -1301,7 +1315,7 @@ minPerMonth: targets.minPerMonth,
           ) : rows.length === 0 ? (
             <p className="tm-empty">No consultants found for this period. Anyone on a project team, or with time logged, shows up here.</p>
           ) : (
-            <div className="tm-grid">
+            <div className="tm-list">
               {rows.map((r, ri) => {
                 const open = expanded === r.userId;
                 const g = goalsFor(r.userId);
@@ -1470,6 +1484,8 @@ minPerMonth: targets.minPerMonth,
           anchor={anchor}
           rangeFrom={rangeFrom}
           rangeTo={rangeTo}
+          mainRoleByService={mainRoleByService}
+          asOf={backlogAsOf}
         />
       ) : tab === "billing" ? (
         <BillingPanel

@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useMemo, useState } from "react";
+import Select from "../../framework/Select";
 import "./BacklogPanel.css";
 
 export interface BkEntry {
@@ -38,6 +39,14 @@ interface Props {
   anchor: Date;
   rangeFrom: string;
   rangeTo: string;
+  /** service_id (BkProj.typeId) -> the role_id marked "main" for that service in
+      Products & Services. Whoever holds that role on a project's team is the
+      project's owner for backlog-by-consultant purposes. */
+  mainRoleByService: Record<string, string>;
+  /** Backlog is a point-in-time snapshot, not a period — everything (available
+      days, the consultant breakdown, the project list) is measured as of this
+      one date, picked directly rather than derived from scope/anchor. */
+  asOf: string;
 }
 
 const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -84,7 +93,7 @@ interface ProjRow {
 export default function BacklogPanel({
   entries, projects, clientNames, typeNames, people, supRoles,
   hourProjects, hoursPerDay,
-  scope, anchor, rangeFrom, rangeTo,
+  scope, anchor, rangeFrom, rangeTo, mainRoleByService, asOf: asOfProp,
 }: Props) {
   const [chartMode, setChartMode] = useState<"days" | "value">("days");
   /** Cards read in days by default; three of them flip to the h + d split. */
@@ -105,15 +114,20 @@ export default function BacklogPanel({
     return "consultor";
   };
 
+  /** The team member holding the service's "main" role — the project's owner. */
+  const ownerOf = (p: BkProj): string | null => {
+    const mainRole = mainRoleByService[p.typeId];
+    if (!mainRole) return null;
+    return (p.team ?? []).find((m) => m.role === mainRole)?.userId ?? null;
+  };
+  /** True if this consultant holds a supervision-tagged role on the project's team. */
+  const isSupervisorOn = (p: BkProj, userId: string): boolean =>
+    (p.team ?? []).some((m) => m.userId === userId && supRoles.has(m.role ?? ""));
+
+  const [consultantFilter, setConsultantFilter] = useState<string>("");
+
   /** Everything is measured as of the close of the selected period, not "now". */
-  const asOf = useMemo(() => {
-    const today = iso(new Date());
-    if (scope === "week") return iso(addDays(startOfWeek(anchor), 4));
-    if (scope === "month") return iso(endOfMonth(anchor.getFullYear(), anchor.getMonth()));
-    if (scope === "year") return `${anchor.getFullYear()}-12-31`;
-    if (scope === "custom") return rangeTo || today;
-    return today;
-  }, [scope, anchor, rangeTo]);
+  const asOf = asOfProp || iso(new Date());
 
   const rows = useMemo<ProjRow[]>(() => {
     const acc: Record<string, ProjRow> = {};
@@ -175,6 +189,13 @@ export default function BacklogPanel({
     .filter((r) => {
       if (sum(r.sold) === 0) return false;
       if (onlyLeft && sum(availableOf(r)) <= 0.001) return false;
+      if (consultantFilter) {
+        const p = projects[r.id];
+        if (!p) return false;
+        const owns = ownerOf(p) === consultantFilter;
+        const supervises = isSupervisorOn(p, consultantFilter);
+        if (!owns && !supervises) return false;
+      }
       return true;
     })
     .sort((a, b) => {
@@ -184,6 +205,72 @@ export default function BacklogPanel({
     });
 
   const clientCount = new Set(visible.map((r) => r.clientId)).size;
+
+  /** Every consultant worth offering in the filter: owns at least one project
+      with something still to deliver, or supervises one. */
+  const consultantOptions = useMemo(() => {
+    const ids = new Set<string>();
+    rows.forEach((r) => {
+      const p = projects[r.id];
+      if (!p || sum(r.sold) === 0) return;
+      const owner = ownerOf(p);
+      if (owner) ids.add(owner);
+      (p.team ?? []).forEach((m) => { if (m.userId && supRoles.has(m.role ?? "")) ids.add(m.userId); });
+    });
+    return Array.from(ids)
+      .map((id) => ({ id, name: people[id] || "Unknown" }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, projects, people, supRoles, mainRoleByService]);
+
+  /** For the selected consultant: consultancy backlog comes only from projects
+      they OWN (their main-role assignment), and never counts connector or
+      supervision lines. Supervision backlog is separate — it comes from any
+      project (owned or not) where they hold a supervision-tagged role. */
+  const myBreakdown = useMemo(() => {
+    if (!consultantFilter) return null;
+    let consultDays = 0, consultValue = 0, superDays = 0, superValue = 0;
+    rows.forEach((r) => {
+      if (sum(r.sold) === 0) return;
+      if (onlyLeft && sum(availableOf(r)) <= 0.001) return;
+      const p = projects[r.id];
+      if (!p) return;
+      const avail = availableOf(r);
+      if (ownerOf(p) === consultantFilter) {
+        consultDays += inDays(r.id, avail.consultor);
+        consultValue += avail.consultor * r.rate;
+      }
+      if (isSupervisorOn(p, consultantFilter)) {
+        superDays += inDays(r.id, avail.supervision);
+        superValue += avail.supervision * r.supervisionRate;
+      }
+    });
+    return { consultDays, consultValue, superDays, superValue };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [consultantFilter, rows, projects, onlyLeft, mainRoleByService, supRoles]);
+
+  /** Consultancy backlog that can't be attributed to anyone yet — the project's
+      service has no "main" role set in Products & Services, or nobody on the
+      team holds that role. This is why summing every consultant's personal
+      backlog can land below the panel's overall total: this slice sits in the
+      total but is invisible in every individual view until it's assigned. */
+  const unownedBacklog = useMemo(() => {
+    let days = 0, value = 0, projectCount = 0;
+    rows.forEach((r) => {
+      if (sum(r.sold) === 0) return;
+      if (onlyLeft && sum(availableOf(r)) <= 0.001) return;
+      const p = projects[r.id];
+      if (!p) return;
+      if (ownerOf(p) !== null) return;
+      const avail = availableOf(r);
+      if (avail.consultor <= 0.001) return;
+      days += inDays(r.id, avail.consultor);
+      value += avail.consultor * r.rate;
+      projectCount += 1;
+    });
+    return { days, value, projectCount };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, projects, onlyLeft, mainRoleByService]);
 
   const totalSold = visible.reduce((s, r) => s + inDays(r.id, sum(r.sold)), 0);
   const totalBilled = visible.reduce((s, r) => s + inDays(r.id, sum(r.billed)), 0);
@@ -544,12 +631,59 @@ export default function BacklogPanel({
             <span><i className="bk-k-planned" /> Scheduled</span>
             <span><i className="bk-k-free" /> Not booked</span>
           </div>
+          <div className="bk-consultant-pick">
+            <Select
+              value={consultantFilter}
+              onChange={setConsultantFilter}
+              placeholder="All consultants"
+              options={[{ value: "", label: "All consultants" }, ...consultantOptions.map((c) => ({ value: c.id, label: c.name }))]}
+            />
+          </div>
           <label className="bk-filter">
             <input type="checkbox" checked={onlyLeft} onChange={(e) => setOnlyLeft(e.target.checked)} />
             <span>Only projects with days left</span>
           </label>
         </div>
       </div>
+
+      {myBreakdown && (
+        <div className="bk-mine">
+          <span className="bk-mine-who">
+            <span className="bk-mine-av">{(people[consultantFilter] || "?").charAt(0).toUpperCase()}</span>
+            {people[consultantFilter] || "This consultant"}'s backlog
+          </span>
+          <div className="bk-mine-figs">
+            <div className="bk-mine-fig">
+              <span className="bk-mine-k">Consultancy <i>· owned projects</i></span>
+              <b>{myBreakdown.consultDays.toFixed(1)}<em>d</em></b>
+              <span className="bk-mine-v">{Math.round(myBreakdown.consultValue).toLocaleString()} €</span>
+            </div>
+            <div className="bk-mine-fig is-super">
+              <span className="bk-mine-k">Supervision <i>· assigned as supervisor</i></span>
+              <b>{myBreakdown.superDays.toFixed(1)}<em>d</em></b>
+              <span className="bk-mine-v">{Math.round(myBreakdown.superValue).toLocaleString()} €</span>
+            </div>
+            <div className="bk-mine-fig is-total">
+              <span className="bk-mine-k">Total</span>
+              <b>{(myBreakdown.consultDays + myBreakdown.superDays).toFixed(1)}<em>d</em></b>
+              <span className="bk-mine-v">{Math.round(myBreakdown.consultValue + myBreakdown.superValue).toLocaleString()} €</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {unownedBacklog.days > 0.05 && (
+        <div className="bk-unowned">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
+          </svg>
+          <span>
+            <b>{unownedBacklog.days.toFixed(1)}d</b> ({Math.round(unownedBacklog.value).toLocaleString()} €) of consultancy backlog across{" "}
+            <b>{unownedBacklog.projectCount}</b> project{unownedBacklog.projectCount === 1 ? "" : "s"} isn't owned by anyone yet — set a main role for
+            {" "}the service in Products &amp; Services, or add that person to the project's team, and it'll show up under them here.
+          </span>
+        </div>
+      )}
 
       {visible.length === 0 ? (
         <p className="bk-empty">Nothing left to deliver. Every sold day is billed.</p>
