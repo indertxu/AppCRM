@@ -517,7 +517,10 @@ function ServiceEditor({ service, blueprints, roles, onClose, onSaved, onDeleted
   const available = roles.filter((r) => !usedRoleIds.has(r.id));
 
   const addRole = (roleId: string) =>
-    setS((x) => ({ ...x, roles: [...x.roles, { role_id: roleId, price: 0, sort: x.roles.length }] }));
+    setS((x) => ({ ...x, roles: [...x.roles, { role_id: roleId, price: 0, sort: x.roles.length, is_main: x.roles.length === 0 }] }));
+  /** Only one role per service can be main — picking a new one clears the old. */
+  const setMainRole = (i: number) =>
+    setS((x) => ({ ...x, roles: x.roles.map((r, j) => ({ ...r, is_main: j === i })) }));
   const setRolePrice = (i: number, price: number) =>
     setS((x) => ({ ...x, roles: x.roles.map((r, j) => (j === i ? { ...r, price } : r)) }));
   const removeRole = (i: number) =>
@@ -612,9 +615,23 @@ function ServiceEditor({ service, blueprints, roles, onClose, onSaved, onDeleted
                 {s.roles.length === 0 && <p className="cat-hint">No rates set. Add a role to price this service.</p>}
                 <div className="cat-roles">
                   {s.roles.map((r, ri) => (
-                    <div key={ri} className="cat-role">
+                    <div key={ri} className={`cat-role ${r.is_main ? "is-main" : ""}`}>
+                      <button
+                        type="button"
+                        className={`cat-role-main ${r.is_main ? "is-on" : ""}`}
+                        onClick={() => setMainRole(ri)}
+                        title={r.is_main ? "Main role for this service" : "Set as the main role for this service"}
+                        aria-pressed={!!r.is_main}
+                      >
+                        <svg viewBox="0 0 24 24" fill={r.is_main ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M12 2.5l2.9 6.3 6.9.7-5.2 4.7 1.5 6.8L12 17.6l-6.1 3.4 1.5-6.8-5.2-4.7 6.9-.7z" />
+                        </svg>
+                      </button>
                       <span className="cat-role-av">{(roleName(r.role_id) || "?").slice(0, 1).toUpperCase()}</span>
-                      <span className="cat-role-nm">{roleName(r.role_id)}</span>
+                      <span className="cat-role-nm">
+                        {roleName(r.role_id)}
+                        {r.is_main && <em className="cat-role-tag">Main</em>}
+                      </span>
                       <div className="cat-price-input cat-role-price">
                         <span>€</span>
                         <input type="number" min="0" className="cat-nospin" value={r.price}

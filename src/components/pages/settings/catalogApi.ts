@@ -132,7 +132,7 @@ export function calcTotal(calc: Calculator, values: Record<string, number>, base
   return total;
 }
 
-export interface ServiceRole { id?: string; role_id: string; price: number; sort: number; }
+export interface ServiceRole { id?: string; role_id: string; price: number; sort: number; is_main?: boolean; }
 export interface Service {
   id?: string;
   name: string;
@@ -216,7 +216,7 @@ export async function loadServices(): Promise<Service[]> {
   const { data: svcs } = await supabase.from("services").select("*").order("created_at");
   const { data: roles } = await supabase.from("service_roles").select("*").order("sort");
   const rolesBySvc: Record<string, ServiceRole[]> = {};
-  (roles ?? []).forEach((r: any) => { (rolesBySvc[r.service_id] ??= []).push({ id: r.id, role_id: r.role_id, price: r.price, sort: r.sort }); });
+  (roles ?? []).forEach((r: any) => { (rolesBySvc[r.service_id] ??= []).push({ id: r.id, role_id: r.role_id, price: r.price, sort: r.sort, is_main: !!r.is_main }); });
   const calcs = await loadCalculatorsFor("service");
   return (svcs ?? []).map((s: any) => ({ ...s, roles: rolesBySvc[s.id] ?? [], calculator: calcs[s.id] ?? null }));
 }
@@ -284,7 +284,7 @@ export async function saveService(s: Service): Promise<string | null> {
     const r = s.roles[i];
     if (!r.role_id) continue;
     const { error } = await supabase.from("service_roles")
-      .insert({ service_id: serviceId, role_id: r.role_id, price: r.price, sort: i });
+      .insert({ service_id: serviceId, role_id: r.role_id, price: r.price, sort: i, is_main: !!r.is_main });
     if (error) return error.message;
   }
   return await saveCalculatorFor("service", serviceId!, s.calculator);

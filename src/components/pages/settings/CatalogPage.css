@@ -320,14 +320,31 @@
   transition: border-color 0.14s, background 0.14s;
 }
 .cat-role:focus-within { background: #fff; border-color: var(--emerald); }
+.cat-role.is-main { background: #fff; border-color: rgba(18, 181, 127, 0.3); }
+.cat-role-main {
+  display: grid; place-items: center; width: 26px; height: 26px; flex-shrink: 0;
+  border: none; border-radius: 8px; background: transparent; color: #c9d4cf; cursor: pointer;
+  transition: color 0.16s, background 0.16s, transform 0.16s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.cat-role-main svg { width: 16px; height: 16px; }
+.cat-role-main:hover { background: rgba(224, 165, 38, 0.14); color: #e0a526; }
+.cat-role-main.is-on { color: #e0a526; }
+.cat-role-main.is-on:hover { background: rgba(224, 165, 38, 0.18); }
+.cat-role-main:active { transform: scale(0.85); }
 .cat-role-av {
   display: grid; place-items: center; width: 32px; height: 32px; flex-shrink: 0;
   border-radius: 10px; background: linear-gradient(150deg, var(--mint), var(--emerald));
   color: #04120d; font-family: "Space Grotesk", sans-serif; font-size: 13px; font-weight: 700;
 }
 .cat-role-nm {
-  flex: 1; min-width: 0; font-family: "Space Grotesk", sans-serif; font-size: 14px;
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
+  font-family: "Space Grotesk", sans-serif; font-size: 14px;
   font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.cat-role-tag {
+  flex-shrink: 0; font-style: normal; padding: 2px 8px; border-radius: 999px;
+  background: rgba(224, 165, 38, 0.14); color: #9a6b12; font-size: 10px; font-weight: 700;
+  letter-spacing: 0.02em; text-transform: uppercase;
 }
 .cat-role-price { flex-shrink: 0; background: #fff; }
 .cat-role-price input { width: 76px; }

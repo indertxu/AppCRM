@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useId, useMemo, useRef, useState } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../api/supabase";
 import { inBillingMonth, periodOf, type Cutoffs } from "../calendar/billingPeriods";
@@ -153,6 +154,295 @@ function LoadingOverlay() {
   );
 }
 
+/* ===================================================================
+   Team tab building blocks. Presentation only: every figure they show
+   is computed inside ManagementPage exactly as before.
+   =================================================================== */
+
+const tmVars = (o: Record<string, string | number>) => o as CSSProperties;
+const tmReduced = () =>
+  typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+const tmHue = (s: string) => {
+  let h = 7;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
+  return h;
+};
+const tmInitials = (name: string) =>
+  name.split(" ").filter(Boolean).map((w) => w[0]).slice(0, 2).join("").toUpperCase() || "?";
+
+/** Eased count-up: from zero on mount, then glides between values when the period changes. */
+function useTmCount(target: number, ms = 1100) {
+  const [value, setValue] = useState(() => (tmReduced() ? target : 0));
+  const from = useRef(value);
+  useEffect(() => {
+    if (tmReduced()) { from.current = target; setValue(target); return; }
+    let raf = 0;
+    const start = from.current;
+    const t0 = performance.now();
+    const tick = (now: number) => {
+      const p = Math.min(1, (now - t0) / ms);
+      const e = p === 1 ? 1 : 1 - Math.pow(2, -10 * p);
+      const cur = start + (target - start) * e;
+      from.current = cur;
+      setValue(cur);
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target, ms]);
+  return value;
+}
+function TmCount({ value, format }: { value: number; format: (n: number) => string }) {
+  return <>{format(useTmCount(value))}</>;
+}
+
+/** Flips true just after mount so arcs have a zero state to sweep from. */
+function useTmArmed(ms: number) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    const t = window.setTimeout(() => setArmed(true), tmReduced() ? 0 : ms);
+    return () => window.clearTimeout(t);
+  }, [ms]);
+  return armed;
+}
+
+/** One pointer handler drives every spotlight and tilt on the Team tab. */
+function tmSpotlight(e: ReactPointerEvent<HTMLElement>) {
+  if (e.pointerType !== "mouse") return;
+  const el = (e.target as HTMLElement).closest<HTMLElement>("[data-spot]");
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  const x = e.clientX - r.left;
+  const y = e.clientY - r.top;
+  el.style.setProperty("--mx", `${x}px`);
+  el.style.setProperty("--my", `${y}px`);
+  if (el.dataset.spot === "tilt") {
+    el.style.setProperty("--ry", `${(x / r.width - 0.5) * 6}deg`);
+    el.style.setProperty("--rx", `${(0.5 - y / r.height) * 6}deg`);
+  }
+}
+
+const TM_ICON = {
+  days: "M8 3v3M16 3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM9 14l2 2 4-4",
+  money: "M12 3v18M16.5 6.5H10a3 3 0 0 0 0 6h4a3 3 0 0 1 0 6H7",
+  swap: "M16 3l4 4-4 4M4 7h16M8 21l-4-4 4-4M20 17H4",
+  arrow: "M5 12h14M13 6l6 6-6 6",
+  sliders: "M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0M14 4v4M8 10v4M16 16v4",
+};
+function TmIcon({ d, w = 2 }: { d: string; w?: number }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={w} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d={d} />
+    </svg>
+  );
+}
+
+const TM_ARC = "M16 70 A54 54 0 0 1 124 70";
+
+/** Team headline card: the figure sits in a sweeping arc; a click swaps to the planned vs realized bar. */
+function TeamKpi({
+  index, label, unit, icon, done, planned, goal, projPct, fmt, breakdown, onToggle,
+}: {
+  index: number; label: string; unit: string; icon: string;
+  done: number; planned: number; goal: number; projPct: number;
+  fmt: (n: number) => string; breakdown: boolean; onToggle: () => void;
+}) {
+  const gid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
+  const armed = useTmArmed(380 + index * 120);
+  const pctRaw = goal > 0 ? (done / goal) * 100 : 0;
+  const over = pctRaw > 100;
+  const fill = Math.min(1, pctRaw / 100);
+  const overFill = over ? Math.min(1, (pctRaw - 100) / 100) : 0;
+  const projFill = goal > 0 ? Math.min(1, (done + planned) / goal) : 0;
+  const on = (f: number) => (armed ? f : 0);
+  // Gap longer than the path so an empty arc never paints a round cap at either end.
+  const dash = (f: number) => `${(on(f) * 100).toFixed(2)} 101`;
+  const zero = (f: number) => (on(f) <= 0.0005 ? " is-zero" : "");
+  const sp = unit === "€" ? " " : "";
+  const u = `${sp}${unit}`;
+
+  const barScale = Math.max(done + planned, goal, 1);
+  const doneW = Math.min(100, (done / barScale) * 100);
+  const planW = Math.min(100 - doneW, (planned / barScale) * 100);
+  const goalAt = goal > 0 ? Math.min(97, Math.max(3, (goal / barScale) * 100)) : 0;
+
+  return (
+    <button
+      type="button"
+      className={`tm-kpi ${over ? "is-over" : ""} ${breakdown ? "is-breakdown" : ""}`}
+      data-spot="tilt"
+      style={tmVars({ "--i": index })}
+      onClick={onToggle}
+      aria-pressed={breakdown}
+      title={breakdown ? "Show the total" : "Show planned and realized"}
+    >
+      <span className="tm-kpi-head">
+        <span className="tm-kpi-ico"><TmIcon d={icon} /></span>
+        <span className="tm-kpi-label">{label}</span>
+        <span className="tm-kpi-swap"><TmIcon d={TM_ICON.swap} w={2.2} />{breakdown ? "Show total" : "Show planned"}</span>
+      </span>
+
+      <span className="tm-kpi-body">
+        <span className="tm-gauge">
+          <span className="tm-arc" aria-hidden={breakdown}>
+            <svg viewBox="0 0 140 80" aria-hidden="true">
+              <defs>
+                <linearGradient id={`f${gid}`} x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0%" stopColor="#1fb98a" />
+                  <stop offset="100%" stopColor="#c9f2dd" />
+                </linearGradient>
+                <linearGradient id={`o${gid}`} x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0%" stopColor="#e0a43c" />
+                  <stop offset="100%" stopColor="#fbe2b0" />
+                </linearGradient>
+              </defs>
+              <path className="tm-arc-bg" d={TM_ARC} pathLength={100} />
+              <path className={`tm-arc-proj${zero(projFill)}`} d={TM_ARC} pathLength={100} style={{ strokeDasharray: dash(projFill) }} />
+              <path className={`tm-arc-fill${zero(fill)}`} d={TM_ARC} pathLength={100} stroke={`url(#f${gid})`} style={{ strokeDasharray: dash(fill) }} />
+              {over && <path className="tm-arc-over" d={TM_ARC} pathLength={100} stroke={`url(#o${gid})`} style={{ strokeDasharray: dash(overFill) }} />}
+              {goal > 0 && (
+                <g className="tm-arc-tip" style={{ transform: `rotate(${on(over ? overFill : fill) * 180}deg)` }}>
+                  <circle cx="16" cy="70" r="4.4" />
+                </g>
+              )}
+            </svg>
+            <span className="tm-arc-core">
+              <b><TmCount value={done} format={fmt} /><em>{unit}</em></b>
+              <small>{goal > 0 ? `of ${fmt(goal)}${u} goal` : "No goal set"}</small>
+            </span>
+          </span>
+
+          <span className="tm-bar" aria-hidden={!breakdown}>
+            <span className="tm-bar-track">
+              <span className="tm-bar-done" style={{ width: `${breakdown ? doneW : 0}%` }} />
+              <span className="tm-bar-plan" style={{ left: `${doneW}%`, width: `${breakdown ? planW : 0}%` }} />
+              {goal > 0 && (
+                <span className={`tm-bar-goal ${goalAt > 72 ? "is-end" : ""}`} style={{ left: `${goalAt}%` }}>
+                  <span>Goal {fmt(goal)}{u}</span>
+                </span>
+              )}
+            </span>
+            <span className="tm-bar-legend">
+              <span><i className="is-done" />{fmt(done)}{u} realized</span>
+              <span><i className="is-plan" />+{fmt(planned)}{u} planned</span>
+              <b>{fmt(done + planned)}{u} in total</b>
+            </span>
+          </span>
+        </span>
+
+        <span className="tm-kpi-side">
+          <span className="tm-kpi-pct"><TmCount value={pctRaw} format={(n) => Math.round(n).toLocaleString()} /><em>%</em></span>
+          <span className="tm-kpi-pct-l">{goal > 0 ? "of the team goal" : "No goal to measure against"}</span>
+          <span className="tm-kpi-facts">
+            <span><i className="is-done" />Realized<b>{fmt(done)}{u}</b></span>
+            <span><i className="is-plan" />Planned<b>+{fmt(planned)}{u}</b></span>
+            {goal > 0 && <span><i className="is-proj" />With planned<b>{Math.round(projPct)}%</b></span>}
+          </span>
+          {over && <span className="tm-over"><i />Over goal</span>}
+        </span>
+      </span>
+    </button>
+  );
+}
+
+type TmTone = "none" | "red" | "green" | "purple";
+const tmTone = (goalMin: number, goalHigh: number, done: number): TmTone =>
+  goalMin <= 0 ? "none" : done < goalMin ? "red" : goalHigh > 0 && done >= goalHigh ? "purple" : "green";
+const TM_STATUS: Record<TmTone, string> = {
+  none: "No targets", red: "Below minimum", green: "Minimum met", purple: "High tier",
+};
+
+/** One target bar on a consultant card: fill, min and high ticks, and the share of the minimum. */
+function TeamMetric({
+  label, unit, done, min, high, tone, pct, format,
+}: {
+  label: string; unit: string; done: number; min: number; high: number;
+  tone: TmTone; pct: number | null; format: (n: number) => string;
+}) {
+  const scale = Math.max(high, min, done, 1) * 1.04;
+  const at = (n: number) => Math.min(97, Math.max(3, (n / scale) * 100));
+  const fillPct = Math.min(100, (done / scale) * 100);
+  const mark = (n: number) => (unit === "d" ? (Number.isInteger(n) ? String(n) : n.toFixed(1)) : n.toLocaleString());
+  const u = unit === "d" ? "d" : " €";
+  return (
+    <div className={`tm-metric tone-${tone}`}>
+      <div className="tm-metric-h">
+        <span>{label}</span>
+        <b><TmCount value={done} format={format} /><em>{u}</em></b>
+      </div>
+      <div className="tm-track">
+        <span className="tm-fill" style={{ width: `${fillPct}%` }} />
+        {min > 0 && <span className={`tm-tick ${done >= min ? "is-hit" : ""}`} style={{ left: `${at(min)}%` }} />}
+        {high > 0 && <span className={`tm-tick is-high ${done >= high ? "is-hit" : ""}`} style={{ left: `${at(high)}%` }} />}
+      </div>
+      <div className="tm-metric-f">
+        <span className="tm-pct">{pct === null ? "No target" : `${Math.round(pct)}% of minimum`}</span>
+        {(min > 0 || high > 0) && (
+          <span className="tm-marks">
+            {min > 0 && <span>Min <b>{mark(min)}{u}</b></span>}
+            {high > 0 && <span className="is-high">High <b>{mark(high)}{u}</b></span>}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** A consultant on the Team tab. The whole card opens the detail modal; the gear opens their targets. */
+function TeamCard({
+  index, name, projectCount, daysDone, amountDone, goals, onOpen, onTargets,
+}: {
+  index: number; name: string; projectCount: number; daysDone: number; amountDone: number;
+  goals: { days: number; daysHigh: number; money: number; moneyHigh: number; custom: boolean };
+  onOpen: () => void; onTargets: () => void;
+}) {
+  const dTone = tmTone(goals.days, goals.daysHigh, daysDone);
+  const mTone = tmTone(goals.money, goals.moneyHigh, amountDone);
+  const set = [dTone, mTone].filter((t) => t !== "none");
+  const overall: TmTone = set.length === 0 ? "none"
+    : set.includes("red") ? "red"
+    : set.every((t) => t === "purple") ? "purple" : "green";
+  const dayPct = goals.days > 0 ? (daysDone / goals.days) * 100 : null;
+  const moneyPct = goals.money > 0 ? (amountDone / goals.money) * 100 : null;
+
+  return (
+    <article
+      className={`tm-card tone-${overall}`}
+      data-spot=""
+      style={tmVars({ "--i": Math.min(index, 16), "--h": tmHue(name) })}
+    >
+      <button type="button" className="tm-card-hit" onClick={onOpen} aria-label={`Open details for ${name}`} />
+      <header className="tm-card-h">
+        <span className="tm-av">{tmInitials(name)}</span>
+        <span className="tm-who">
+          <b>{name}</b>
+          <small>{projectCount} project{projectCount === 1 ? "" : "s"}</small>
+        </span>
+        <span className="tm-status"><i />{TM_STATUS[overall]}</span>
+        <button
+          type="button"
+          className={`tm-target ${goals.custom ? "is-custom" : ""}`}
+          onClick={onTargets}
+          title={goals.custom ? "Custom targets" : "Set personal targets"}
+          aria-label={goals.custom ? `Edit custom targets for ${name}` : `Set personal targets for ${name}`}
+        >
+          <TmIcon d={TM_ICON.sliders} w={2.1} />
+        </button>
+      </header>
+
+      <TeamMetric label="Days delivered" unit="d" done={daysDone} min={goals.days} high={goals.daysHigh}
+        tone={dTone} pct={dayPct} format={(n) => n.toFixed(2)} />
+      <TeamMetric label="Billed" unit="€" done={amountDone} min={goals.money} high={goals.moneyHigh}
+        tone={mTone} pct={moneyPct} format={(n) => Math.round(n).toLocaleString()} />
+
+      <footer className="tm-card-f">
+        <span>Open details</span>
+        <span className="tm-go"><TmIcon d={TM_ICON.arrow} w={2.2} /></span>
+      </footer>
+    </article>
+  );
+}
+
 export default function ManagementPage() {
   const navigate = useNavigate();
   const [anchor, setAnchor] = useState(() => new Date());
@@ -163,6 +453,9 @@ export default function ManagementPage() {
   const [rangeTo, setRangeTo] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [projOpen, setProjOpen] = useState<string | null>(null); // "userId|projectKey"
+  // Which of the top KPI gauges (by key: "days" / "money") is showing the
+  // planned+realized breakdown instead of its single headline figure.
+  const [kpiBreakdown, setKpiBreakdown] = useState<Record<string, boolean>>({});
   const [tab, setTab] = useState<"team" | "backlog" | "billing" | "bonus" | "incoming">("team");
   /** Backlog, Billing and Bonus work off the whole history; Team does not. */
   const needsAll = tab === "backlog" || tab === "billing" || tab === "bonus";
@@ -696,8 +989,6 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
     return `${MONTHS_SHORT[weekStart.getMonth()]} ${weekStart.getDate()} – ${MONTHS_SHORT[e.getMonth()]} ${e.getDate()}`;
   })();
 
-  const pct = (n: number, goal: number) => (goal > 0 ? Math.min(100, (n / goal) * 100) : 0);
-
   /**
    * Deep per-consultant analytics for the expanded row, computed over the
    * current scope. Splits work into billable (client + has a rate) vs
@@ -959,214 +1250,78 @@ minPerMonth: targets.minPerMonth,
         />
       )}
 
-{tab === "team" ? (<>
-      {/* Two gauges. The number is cradled in a semicircular arc that sweeps
-          to the share of goal reached; a solid over-fill plus an outer glow
-          mark anything past 100%, and the planned work shows as a fainter arc
-          reaching a little further. */}
-      <div className="mg-kpis mg-gauges">
-        {([
-          {
-            key: "days", label: "Days delivered", unit: "d",
-            done: totalDays, planned: totalDaysPlanned, goal: teamDayGoal,
-            fmt: (n: number) => (+n.toFixed(n < 100 ? 2 : 0)).toLocaleString(),
-          },
-          {
-            key: "money", label: "Billed", unit: "\u20ac",
-            done: totalDone, planned: totalPlanned, goal: teamMoneyGoal,
-            fmt: (n: number) => Math.round(n).toLocaleString(),
-          },
-        ]).map((c) => {
-          const ARC = 169.65;                 // length of the semicircle, r=54
-          const pctRaw = c.goal > 0 ? (c.done / c.goal) * 100 : 0;
-          const over = pctRaw > 100;
-          const fill = Math.min(1, pctRaw / 100);
-          const overFill = over ? Math.min(1, (pctRaw - 100) / 100) : 0;
-          const projFill = c.goal > 0 ? Math.min(1, (c.done + c.planned) / c.goal) : 0;
-          const dash = (f: number) => `${(ARC * f).toFixed(2)} ${ARC}`;
-          return (
-            <article className={`gg ${over ? "is-over" : ""}`} key={c.key}>
-              <div className="gg-head">
-                <span className="gg-label">{c.label}</span>
-                <span className="gg-pct">{Math.round(pctRaw)}<i>%</i></span>
-              </div>
+{tab === "team" ? (
+      <div className="tm" onPointerMove={tmSpotlight}>
+        {/* Two headline cards on the dark band, same as before: realized
+            against goal in an arc, planned vs realized on click. */}
+        <section className="tm-hero">
+          <div className="tm-kpis">
+            {([
+              {
+                key: "days", label: "Days delivered", unit: "d", icon: TM_ICON.days,
+                done: totalDays, planned: totalDaysPlanned, goal: teamDayGoal, projPct: dayProjPct,
+                fmt: (n: number) => (+n.toFixed(n < 100 ? 2 : 0)).toLocaleString(),
+              },
+              {
+                key: "money", label: "Billed", unit: "\u20ac", icon: TM_ICON.money,
+                done: totalDone, planned: totalPlanned, goal: teamMoneyGoal, projPct: moneyProjPct,
+                fmt: (n: number) => Math.round(n).toLocaleString(),
+              },
+            ]).map((c, ci) => (
+              <TeamKpi
+                key={c.key}
+                index={ci}
+                label={c.label}
+                unit={c.unit}
+                icon={c.icon}
+                done={c.done}
+                planned={c.planned}
+                goal={c.goal}
+                projPct={c.projPct}
+                fmt={c.fmt}
+                breakdown={!!kpiBreakdown[c.key]}
+                onToggle={() => setKpiBreakdown((prev) => ({ ...prev, [c.key]: !prev[c.key] }))}
+              />
+            ))}
+          </div>
+        </section>
 
-              <div className="gg-gauge">
-                <svg viewBox="0 0 140 82" className="gg-svg" aria-hidden="true">
-                  <path className="gg-arc-bg" d="M16 70 A54 54 0 0 1 124 70" pathLength={ARC} />
-                  <path className="gg-arc-proj" d="M16 70 A54 54 0 0 1 124 70" pathLength={ARC}
-                    style={{ strokeDasharray: dash(projFill) }} />
-                  <path className="gg-arc-fill" d="M16 70 A54 54 0 0 1 124 70" pathLength={ARC}
-                    style={{ strokeDasharray: dash(fill) }} />
-                  {over && (
-                    <path className="gg-arc-over" d="M16 70 A54 54 0 0 1 124 70" pathLength={ARC}
-                      style={{ strokeDasharray: dash(overFill) }} />
-                  )}
-                </svg>
+        <section className="tm-sheet">
+          <header className="tm-sheet-h">
+            <h2>Consultants <span className="tm-count">{rows.length}</span></h2>
+            <span className="tm-legend" aria-label="Status colours">
+              <span className="tone-red"><i />Below minimum</span>
+              <span className="tone-green"><i />Minimum met</span>
+              <span className="tone-purple"><i />High tier</span>
+            </span>
+          </header>
 
-                <div className="gg-core">
-                  <span className={`gg-fig ${c.fmt(c.done).replace(/[^0-9]/g, "").length > 4 ? "is-long" : ""}`}>
-                    <b>{c.fmt(c.done)}</b><em>{c.unit}</em>
-                  </span>
-                  <span className="gg-goal">{c.goal > 0 ? <>of {c.fmt(c.goal)}</> : <>no goal</>}</span>
-                </div>
-              </div>
-
-              <div className="gg-foot">
-                <span className="gg-chip gg-chip-done"><i />{c.fmt(c.done)} done</span>
-                {c.planned > 0 && (
-                  <span className="gg-chip gg-chip-plan"><i />+{c.fmt(c.planned)} planned</span>
-                )}
-                {over && <span className="gg-chip gg-chip-over">over goal</span>}
-              </div>
-            </article>
-          );
-        })}
-      </div>
-
-
-
-      {loading ? (
-        <p className="mg-hint">Loading…</p>
-      ) : rows.length === 0 ? (
-        <p className="mg-hint">No consultants found.</p>
-      ) : (
-        <div className="mg-list">
-          {rows.map((r) => {
-            const open = expanded === r.userId;
-            // Hours count towards the same scale, converted at the configured
-            // rate so one bar can hold both without mixing the figures.
-            const daysTotal = r.daysDone + r.daysPlanned
-              + (r.hoursDone + r.hoursPlanned) / hoursPerDay;
-            const moneyTotal = r.amountDone + r.amountPlanned;
-            const g = goalsFor(r.userId);
-            const dayGoalU = g.days;
-            const moneyGoalU = g.money;
-            const dayGoalHigh = g.daysHigh;
-            const moneyGoalHigh = g.moneyHigh;
-            // Scale to the high goal when it exists, so both markers fit on the bar.
-            const dayScale = Math.max(dayGoalHigh, dayGoalU, daysTotal, 1);
-            const moneyScale = Math.max(moneyGoalHigh, moneyGoalU, moneyTotal, 1);
-            const dayPctU = dayGoalU > 0 ? (r.daysDone / dayGoalU) * 100 : null;
-            const moneyPctU = moneyGoalU > 0 ? (r.amountDone / moneyGoalU) * 100 : null;
-            return (
-              <div className={`mg-row ${open ? "is-open" : ""}`} key={r.userId}>
-                <button className="mg-row-main" onClick={() => setExpanded(open ? null : r.userId)}>
-                  <span className="mg-who">
-                    <span className="mg-av">{r.name.charAt(0).toUpperCase()}</span>
-                    <span className="mg-who-txt">
-                      <span className="mg-name">{r.name}</span>
-                      <span className="mg-sub">
-                        {new Set(Object.keys(r.byProject).map((k) => k.split("|")[0])).size} projects
-                      </span>
-                    </span>
-                    <span
-                      className={`mg-target-btn ${g.custom ? "is-custom" : ""}`}
-                      role="button"
-                      title={g.custom ? "Custom targets" : "Set personal targets"}
-                      onClick={(ev) => { ev.stopPropagation(); setCapFocusUser(r.userId); setShowSettings(true); }}
-                    >◎</span>
-                  </span>
-
-                  <span className="mg-metric">
-                    <span className="mg-metric-head">
-                      <span className="mg-metric-label">Days</span>
-                      <span className={`mg-metric-pct ${dayPctU === null ? "is-none" : dayPctU >= 100 ? "is-hit" : ""}`}>
-                        {dayPctU === null ? "—" : `${Math.round(dayPctU)}%`}
-                      </span>
-                    </span>
-                    <span className="mg-metric-nums">
-                      <b>
-                        {r.daysDone.toFixed(2)}<i className="mg-u">d</i>
-                        {r.hoursDone > 0 && (
-                          <>
-                            <span className="mg-u-sep">+</span>
-                            {r.hoursDone.toFixed(2)}<i className="mg-u">h</i>
-                          </>
-                        )}
-                      </b>
-                      {(r.daysPlanned + r.hoursPlanned) > 0 && (
-                        <em>
-                          +{r.daysPlanned > 0 ? `${r.daysPlanned.toFixed(2)}d` : ""}
-                          {r.daysPlanned > 0 && r.hoursPlanned > 0 ? " " : ""}
-                          {r.hoursPlanned > 0 ? `${r.hoursPlanned.toFixed(2)}h` : ""}
-                        </em>
-                      )}
-                      {dayGoalU > 0 && (
-                        <u className={r.daysDone >= dayGoalU ? "is-hit" : ""}><s /> {dayGoalU}</u>
-                      )}
-                      {dayGoalHigh > 0 && (
-                        <u className={`is-high ${r.daysDone >= dayGoalHigh ? "is-hit" : ""}`}><s /> {dayGoalHigh}</u>
-                      )}
-                    </span>
-                    <span className="mg-mbar">
-                      {/* Hours are shown as their own segment, converted to days
-                          only so the two can share a scale. */}
-                      <span className="mg-track">
-                        <span className="mg-seg-done" style={{ width: `${pct(r.daysDone, dayScale)}%` }} />
-                        <span className="mg-seg-hours" style={{ width: `${pct(r.hoursDone / hoursPerDay, dayScale)}%` }}
-                          title={`${r.hoursDone.toFixed(2)} hours`} />
-                        <span className="mg-seg-plan" style={{ width: `${pct(r.daysPlanned + r.hoursPlanned / hoursPerDay, dayScale)}%` }} />
-                      </span>
-                      {dayGoalU > 0 && (
-                        <span
-                          className={`mg-goal ${r.daysDone >= dayGoalU ? "is-hit" : ""}`}
-                          style={{ left: `${pct(dayGoalU, dayScale)}%` }}
-                          title={`Min ${dayGoalU} days`}
-                        />
-                      )}
-                      {dayGoalHigh > 0 && (
-                        <span
-                          className={`mg-goal is-high ${r.daysDone >= dayGoalHigh ? "is-hit" : ""}`}
-                          style={{ left: `${pct(dayGoalHigh, dayScale)}%` }}
-                          title={`High ${dayGoalHigh} days`}
-                        />
-                      )}
-                    </span>
-                  </span>
-
-                  <span className="mg-metric">
-                    <span className="mg-metric-head">
-                      <span className="mg-metric-label">Billing</span>
-                      <span className={`mg-metric-pct ${moneyPctU === null ? "is-none" : moneyPctU >= 100 ? "is-hit" : ""}`}>
-                        {moneyPctU === null ? "—" : `${Math.round(moneyPctU)}%`}
-                      </span>
-                    </span>
-                    <span className="mg-metric-nums">
-                      <b>{Math.round(r.amountDone).toLocaleString()}</b>
-                      {r.amountPlanned > 0 && <em>+{Math.round(r.amountPlanned).toLocaleString()}</em>}
-                      {moneyGoalU > 0 && (
-                        <u className={r.amountDone >= moneyGoalU ? "is-hit" : ""}><s /> {moneyGoalU.toLocaleString()}</u>
-                      )}
-                      {moneyGoalHigh > 0 && (
-                        <u className={`is-high ${r.amountDone >= moneyGoalHigh ? "is-hit" : ""}`}><s /> {moneyGoalHigh.toLocaleString()}</u>
-                      )}
-                    </span>
-                    <span className="mg-mbar">
-                      <span className="mg-track">
-                        <span className="mg-seg-done" style={{ width: `${pct(r.amountDone, moneyScale)}%` }} />
-                        <span className="mg-seg-plan" style={{ width: `${pct(r.amountPlanned, moneyScale)}%` }} />
-                      </span>
-                      {moneyGoalU > 0 && (
-                        <span
-                          className={`mg-goal ${r.amountDone >= moneyGoalU ? "is-hit" : ""}`}
-                          style={{ left: `${pct(moneyGoalU, moneyScale)}%` }}
-                          title={`Min ${moneyGoalU.toLocaleString()}`}
-                        />
-                      )}
-                      {moneyGoalHigh > 0 && (
-                        <span
-                          className={`mg-goal is-high ${r.amountDone >= moneyGoalHigh ? "is-hit" : ""}`}
-                          style={{ left: `${pct(moneyGoalHigh, moneyScale)}%` }}
-                          title={`High ${moneyGoalHigh.toLocaleString()}`}
-                        />
-                      )}
-                    </span>
-                  </span>
-
-                  <span className={`mg-chev ${open ? "is-open" : ""}`}>›</span>
-                </button>
-
+          {loading ? (
+            <p className="tm-empty">Loading…</p>
+          ) : rows.length === 0 ? (
+            <p className="tm-empty">No consultants found for this period. Anyone on a project team, or with time logged, shows up here.</p>
+          ) : (
+            <div className="tm-grid">
+              {rows.map((r, ri) => {
+                const open = expanded === r.userId;
+                const g = goalsFor(r.userId);
+                const projectCount = new Set(Object.keys(r.byProject).map((k) => k.split("|")[0])).size;
+                return (
+                  <Fragment key={r.userId}>
+                    <TeamCard
+                      index={ri}
+                      name={r.name}
+                      projectCount={projectCount}
+                      daysDone={r.daysDone}
+                      amountDone={r.amountDone}
+                      goals={{
+                        ...g,
+                        // Only their own saved values count as custom; goalsFor merges in the company defaults first.
+                        custom: Object.values(capacity[r.userId] ?? {}).some((v) => v != null),
+                      }}
+                      onOpen={() => setExpanded(open ? null : r.userId)}
+                      onTargets={() => { setCapFocusUser(r.userId); setShowSettings(true); }}
+                    />
                 {open && (() => {
                       const ins = insightsFor(r.userId);
                       const utilSlices = [
@@ -1294,12 +1449,14 @@ minPerMonth: targets.minPerMonth,
                         />
                       );
                     })()}
-              </div>
-            );
-          })}
-        </div>
-      )}
-      </>) : tab === "backlog" ? (
+                  </Fragment>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      </div>
+      ) : tab === "backlog" ? (
         <BacklogPanel
           entries={entries}
           projects={projects}
