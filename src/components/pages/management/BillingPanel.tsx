@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { supabase } from "../../api/supabase";
 import { periodForDate, cutoffOf, type Cutoffs } from "../calendar/billingPeriods";
 import DatePicker from "../../framework/DatePicker";
@@ -83,6 +84,89 @@ function billingContact(contacts: any[]): { name: string; email: string } | null
 }
 /** Money formatter: thousands separator + two decimals. */
 const eur = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/* ===================================================================
+   Presentation helpers. Same language as the Team and Backlog tabs and
+   the consultant modal: count-ups, a sweeping arc, cursor spotlight.
+   =================================================================== */
+const bnVars = (o: Record<string, string | number>) => o as CSSProperties;
+const bnReduced = () =>
+  typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+/** "2026-09-14" → "14 Sep 2026" (display only). */
+const bnDate = (iso: string) => {
+  if (!iso) return "—";
+  const d = new Date(`${iso}T00:00:00`);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+};
+function useBnCount(target: number, ms = 1100) {
+  const [value, setValue] = useState(() => (bnReduced() ? target : 0));
+  const from = useRef(value);
+  useEffect(() => {
+    if (bnReduced()) { from.current = target; setValue(target); return; }
+    let raf = 0;
+    const start = from.current;
+    const t0 = performance.now();
+    const tick = (now: number) => {
+      const p = Math.min(1, (now - t0) / ms);
+      const e = p === 1 ? 1 : 1 - Math.pow(2, -10 * p);
+      const cur = start + (target - start) * e;
+      from.current = cur;
+      setValue(cur);
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target, ms]);
+  return value;
+}
+function BnCount({ value, fmt = (n: number) => Math.round(n).toLocaleString() }: { value: number; fmt?: (n: number) => string }) {
+  return <>{fmt(useBnCount(value))}</>;
+}
+function useBnArmed(ms: number) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    const t = window.setTimeout(() => setArmed(true), bnReduced() ? 0 : ms);
+    return () => window.clearTimeout(t);
+  }, [ms]);
+  return armed;
+}
+function bnSpot(e: ReactPointerEvent<HTMLElement>) {
+  if (e.pointerType !== "mouse") return;
+  const el = (e.target as HTMLElement).closest<HTMLElement>("[data-spot]");
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  const x = e.clientX - r.left;
+  const y = e.clientY - r.top;
+  el.style.setProperty("--mx", `${x}px`);
+  el.style.setProperty("--my", `${y}px`);
+  if (el.dataset.spot === "tilt") {
+    el.style.setProperty("--ry", `${(x / r.width - 0.5) * 6}deg`);
+    el.style.setProperty("--rx", `${(0.5 - y / r.height) * 6}deg`);
+  }
+}
+const BN_ICON = {
+  out: "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h4",
+  paid: "M20 6L9 17l-5-5",
+  sent: "M22 2L11 13M22 2l-7 20-4-9-9-4z",
+  late: "M12 7.5V12l3 2M20.5 12a8.5 8.5 0 1 1-17 0 8.5 8.5 0 0 1 17 0z",
+  cal: "M8 3v3M16 3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z",
+  warn: "M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z",
+  chev: "M9 6l6 6-6 6",
+  search: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-4-4",
+  xls: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M9 13l3 4M12 13l-3 4",
+  x: "M18 6L6 18M6 6l12 12",
+  grip: "M9 6h.01M9 12h.01M9 18h.01M15 6h.01M15 12h.01M15 18h.01",
+  empty: "M4 7l8-4 8 4-8 4zM4 12l8 4 8-4M4 17l8 4 8-4",
+  edit: "M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4",
+};
+function BnIcon({ d, w = 2 }: { d: string; w?: number }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={w} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d={d} />
+    </svg>
+  );
+}
+const BN_ARC = "M16 70 A54 54 0 0 1 124 70";
 
 interface Invoice {
   id: string; projectId: string; period: string;
@@ -677,76 +761,83 @@ export default function BillingPanel({
     // Reconstruct the effective tax rate from the frozen figures when possible.
     const fTaxRate = frozen ? (fNet > 0 ? Math.round((fGross / fNet - 1) * 100) : b.taxRate) : b.taxRate;
     const drift = frozen ? Math.abs(liveGross - fGross) > 0.01 : false;
+    const ownerMax = Math.max(0.0001, ...owners.map(([, v]) => v.value));
+    const u = unitOf(b.projectId);
     return (
       <>
-        <div className="bi-detail-cols">
-          <div className="bi-breakdown">
-            <span className="bi-detail-h">{frozen ? "How this bill was invoiced" : "How this bill is made up"}</span>
+        <div className="bn-dcols">
+          <div className="bn-dbox">
+            <span className="bn-dh">{frozen ? "How this bill was invoiced" : "How this bill is made up"}</span>
             {frozen && drift ? (
-              <div className="bi-bd-line">
-                <span className="bi-bd-name">Invoiced amount</span>
-                <span className="bi-bd-calc">{frozen.days.toFixed(2)}{unitOf(b.projectId)} invoiced</span>
-                <span className="bi-bd-val">{eur(fNet)} €</span>
+              <div className="bn-bd">
+                <span className="bn-bd-name">Invoiced amount</span>
+                <span className="bn-bd-calc">{frozen.days.toFixed(2)}{u} invoiced</span>
+                <span className="bn-bd-val">{eur(fNet)} €</span>
               </div>
             ) : (
               (["consultor", "supervision", "connector"] as Line[]).map((ln) =>
                 b.lines[ln] > 0 ? (
-                  <div className="bi-bd-line" key={ln}>
-                    <span className="bi-bd-name">{lineLabel[ln]}</span>
-                    <span className="bi-bd-calc">
-                      {b.lines[ln].toFixed(2)}{unitOf(b.projectId)} × {(ln === "supervision" ? b.supervisionRate : b.rate).toLocaleString()} €
+                  <div className={`bn-bd is-${ln}`} key={ln}>
+                    <span className="bn-bd-name"><i />{lineLabel[ln]}</span>
+                    <span className="bn-bd-calc">
+                      {b.lines[ln].toFixed(2)}{u} × {(ln === "supervision" ? b.supervisionRate : b.rate).toLocaleString()} €
                     </span>
-                    <span className="bi-bd-val">
+                    <span className="bn-bd-val">
                       {eur(b.lines[ln] * (ln === "supervision" ? b.supervisionRate : b.rate))} €
                     </span>
                   </div>
                 ) : null
               )
             )}
-            <div className="bi-bd-line bi-bd-sub">
-              <span className="bi-bd-name">Net</span><span className="bi-bd-calc" />
-              <span className="bi-bd-val">{eur(fNet)} €</span>
+            <div className="bn-bd is-sub">
+              <span className="bn-bd-name">Net</span><span className="bn-bd-calc" />
+              <span className="bn-bd-val">{eur(fNet)} €</span>
             </div>
             {(frozen ? fTax > 0.01 : b.taxed) && (
-              <div className="bi-bd-line">
-                <span className="bi-bd-name">Tax</span><span className="bi-bd-calc">{fTaxRate}%</span>
-                <span className="bi-bd-val">{eur(fTax)} €</span>
+              <div className="bn-bd">
+                <span className="bn-bd-name">Tax</span><span className="bn-bd-calc">{fTaxRate}%</span>
+                <span className="bn-bd-val">{eur(fTax)} €</span>
               </div>
             )}
-            <div className="bi-bd-line bi-bd-total">
-              <span className="bi-bd-name">Total</span><span className="bi-bd-calc" />
-              <span className="bi-bd-val">{eur(fGross)} €</span>
+            <div className="bn-bd is-total">
+              <span className="bn-bd-name">Total</span><span className="bn-bd-calc" />
+              <span className="bn-bd-val">{eur(fGross)} €</span>
             </div>
             {frozen && (
-              <p className="bi-frozen-note">
+              <p className={`bn-frozen ${drift ? "is-drift" : ""}`}>
                 {drift
-                  ? `Invoiced ${eur(fGross)} € for ${frozen.days.toFixed(2)}${unitOf(b.projectId)} on ${frozen.sentDate}. Entries have changed since — the difference rolls into the next bill.`
-                  : `Invoiced as sent on ${frozen.sentDate}.`}
+                  ? `Invoiced ${eur(fGross)} € for ${frozen.days.toFixed(2)}${u} on ${bnDate(frozen.sentDate)}. Entries have changed since; the difference rolls into the next bill.`
+                  : `Invoiced as sent on ${bnDate(frozen.sentDate)}.`}
               </p>
             )}
           </div>
-          <div className="bi-owners">
-            <span className="bi-detail-h">Who's responsible</span>
-            {owners.map(([uid, v]) => (
-              <div className="bi-owner" key={uid}>
-                <span className="bi-oav">{(people[uid] ?? "?").charAt(0).toUpperCase()}</span>
-                <span className="bi-oname">{people[uid] ?? "Unknown"}</span>
-                <span className="bi-odays">{v.days.toFixed(2)}{unitOf(b.projectId)}</span>
-                <span className="bi-oval">{eur(v.value)} €</span>
+          <div className="bn-dbox">
+            <span className="bn-dh">Who's responsible</span>
+            {owners.map(([uid, v], oi) => (
+              <div className="bn-owner" key={uid} style={bnVars({ "--d": oi })}>
+                <span className="bn-av is-sm">{(people[uid] ?? "?").charAt(0).toUpperCase()}</span>
+                <span className="bn-oname">{people[uid] ?? "Unknown"}</span>
+                <span className="bn-odays">{v.days.toFixed(2)}{u}</span>
+                <span className="bn-oval">{eur(v.value)} €</span>
+                <span className="bn-obar" aria-hidden="true"><i style={{ width: `${(v.value / ownerMax) * 100}%` }} /></span>
               </div>
             ))}
           </div>
         </div>
-        <span className="bi-detail-h bi-ledger-h">{frozen ? "Entries recorded for this period" : "Entries feeding this bill"}</span>
-        <div className="bi-ledger">
-          <div className="bi-lhead">
+        <span className="bn-dh bn-ledger-h">
+          {frozen ? "Entries recorded for this period" : "Entries feeding this bill"}
+          {phase === "tobill" && <em>Drag an entry onto another month of this client to move its billing</em>}
+        </span>
+        <div className="bn-ledger">
+          <div className="bn-lhead">
             <span>Date</span><span>Consultant</span><span>Line</span><span>Status</span>
-            <span className="bi-r">Days</span><span className="bi-r">Value</span>
+            <span className="bn-r">{u === "h" ? "Hours" : "Days"}</span><span className="bn-r">Value</span>
           </div>
-          {b.rows.map((r) => (
+          {b.rows.map((r, li) => (
             <div
-              className={`bi-lrow ${r.moved ? "is-moved" : ""} ${dragEntry?.id === r.id ? "is-dragging" : ""}`}
+              className={`bn-lrow ${r.moved ? "is-moved" : ""} ${dragEntry?.id === r.id ? "is-dragging" : ""} ${phase === "tobill" ? "is-draggable" : ""}`}
               key={r.id}
+              style={bnVars({ "--d": Math.min(li, 12) })}
               draggable={phase === "tobill"}
               onDragStart={(e) => {
                 setDragEntry({ id: r.id, projectId: b.projectId, fromPeriod: b.period });
@@ -755,15 +846,15 @@ export default function BillingPanel({
               onDragEnd={() => { setDragEntry(null); setDropTarget(null); }}
               title={phase === "tobill" ? "Drag to another period of this client to move billing" : undefined}
             >
-              <span className="bi-ldate">
-                {phase === "tobill" && <span className="bi-drag-handle">⠿</span>}
-                {r.date || "—"}{r.moved && <span className="bi-moved-tag">moved</span>}
+              <span className="bn-ldate">
+                {phase === "tobill" && <span className="bn-grip"><BnIcon d={BN_ICON.grip} w={3} /></span>}
+                {bnDate(r.date)}{r.moved && <span className="bn-moved">moved</span>}
               </span>
-              <span>{people[r.userId] ?? "Unknown"}</span>
-              <span className="bi-lline">{lineLabel[r.line]}</span>
-              <span className={`bi-lstatus is-${r.status}`}>{r.status}</span>
-              <span className="bi-r">{r.days.toFixed(2)}{unitOf(b.projectId)}</span>
-              <span className="bi-r">
+              <span className="bn-lwho">{people[r.userId] ?? "Unknown"}</span>
+              <span className={`bn-lline is-${r.line}`}>{lineLabel[r.line]}</span>
+              <span className={`bn-lstatus is-${r.status}`}>{r.status}</span>
+              <span className="bn-r bn-lnum">{r.days.toFixed(2)}{u}</span>
+              <span className="bn-r bn-lnum">
                 {eur(r.days * (r.line === "supervision" ? b.supervisionRate : b.rate))} €
               </span>
             </div>
@@ -783,189 +874,195 @@ export default function BillingPanel({
 
   const anyFilter = !!(fCompany || fType);
 
+  /* ---------- presentation ---------- */
+  const armed = useBnArmed(320);
+  const collectedBase = paidTotal + sentTotal;
+  const collectedPct = collectedBase > 0 ? (paidTotal / collectedBase) * 100 : 0;
+  const awaitingCount = invoices.filter((i) => i.status !== "paid").length;
+  const paidCount = invoices.filter((i) => i.status === "paid").length;
+  const switchPhase = (p: Phase) => {
+    setPhase(p);
+    if (p !== "tobill") { setSelectMode(false); setSelected(new Set()); }
+  };
+  const cutoffInDays = nextRun.days;
+
   return (
-    <div className="bi">
-      {/* ---------- Fixed hero ---------- */}
-      <div className="bi-hero bi-hero-neon">
-        <span className="bi-hero-glow" aria-hidden="true" />
-        <span className="bi-hero-scan" aria-hidden="true" />
-
-        <div className="bi-hero-main">
-          <span className="bi-hero-label">
-            Outstanding · to {periodLabel(period)}
-            {alerts.length > 0 && (
-              <button className="bi-alert-chip" onClick={() => setShowAlerts(true)}
-                title={`${alerts.length} attempt${alerts.length === 1 ? "" : "s"} to log work in a closed period`}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /></svg>
-                {alerts.length}
-              </button>
-            )}
-          </span>
-          <span className="bi-hero-amount"><b>{eur(outstandingTotal)}</b><i>€</i></span>
-          <span className="bi-hero-sub">{outstandingCount} {outstandingCount === 1 ? "invoice" : "invoices"} ready to send</span>
-        </div>
-
-        {(() => {
-          const total = paidTotal + sentTotal;
-          const pct = total > 0 ? (paidTotal / total) * 100 : 0;
-          const ARC = 169.65;
-          return (
-            <div className="bi-hero-ring">
-              <svg viewBox="0 0 140 82" aria-hidden="true">
-                <path className="bi-arc-bg" d="M16 70 A54 54 0 0 1 124 70" pathLength={ARC} />
-                <path className="bi-arc-fill" d="M16 70 A54 54 0 0 1 124 70" pathLength={ARC}
-                  style={{ strokeDasharray: `${(ARC * Math.min(1, pct / 100)).toFixed(2)} ${ARC}` }} />
-              </svg>
-              <span className="bi-ring-mid"><b>{Math.round(pct)}</b><i>% collected</i></span>
-            </div>
-          );
-        })()}
-
-        <div className="bi-hero-stats">
-          <div className="bi-stat">
-            <span className="bi-stat-k">Sent</span>
-            <span className="bi-stat-v">{eur(sentTotal)}<em>€</em></span>
-            <span className="bi-stat-s">{invoices.filter((i) => i.status !== "paid").length} awaiting</span>
-          </div>
-          <div className="bi-stat">
-            <span className="bi-stat-k">Collected</span>
-            <span className="bi-stat-v is-neon">{eur(paidTotal)}<em>€</em></span>
-            <span className="bi-stat-s">{invoices.filter((i) => i.status === "paid").length} paid</span>
-          </div>
-          <div className="bi-stat">
-            <span className="bi-stat-k">Overdue</span>
-            <span className={`bi-stat-v ${overdueCount ? "is-bad" : ""}`}>{overdueCount}</span>
-            <span className="bi-stat-s">past due</span>
-          </div>
-        </div>
-
-        <div className="bi-hero-cutoff">
-          <span className="bi-cutoff-k">Next billing cutoff</span>
-          <button className="bi-cutoff-date" onClick={() => setCutoffOpen((v) => !v)}>
-            {nextRun.date.toLocaleDateString("en", { day: "numeric", month: "short", year: "numeric" })}
-          </button>
-          {cutoffOpen && (
-            <div className="bi-cutoff-pop">
-              <DatePicker value={cutoffOf(period, localCutoffs, defaultCutoffDay)} onChange={saveCutoff} />
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* ---------- Fixed controls: 3 phase tabs + sort + filters ---------- */}
-      <div className="bi-controls">
-        <div className="bi-phaseseg" data-phase={phase}>
-          <button className={phase === "tobill" ? "is-on" : ""} onClick={() => setPhase("tobill")}>
-            To bill <i>{outstanding.length}</i>
-          </button>
-          <button className={phase === "sent" ? "is-on" : ""} onClick={() => { setPhase("sent"); setSelectMode(false); setSelected(new Set()); }}>
-            Sent <i>{sentList.length}</i>
-          </button>
-          <button className={phase === "paid" ? "is-on" : ""} onClick={() => { setPhase("paid"); setSelectMode(false); setSelected(new Set()); }}>
-            Paid <i>{paidList.length}</i>
-          </button>
-          <button className={phase === "history" ? "is-on" : ""} onClick={() => { setPhase("history"); setSelectMode(false); setSelected(new Set()); }}>
-            History
-          </button>
-        </div>
-
-        <div className="bi-filters">
-          {phase === "tobill" && (
-            <button
-              className="bi-status-toggle"
-              onClick={() => setStatus((s) => s === "billed" ? "scheduled" : s === "scheduled" ? "all" : "billed")}
-              title="Click to cycle"
-            >
-              <span className="bi-status-dot" data-status={status} />
-              {status === "billed" ? "Delivered" : status === "scheduled" ? "Scheduled" : "Both"}
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M17 1l4 4-4 4M3 11V9a4 4 0 014-4h14M7 23l-4-4 4-4M21 13v2a4 4 0 01-4 4H3" /></svg>
-            </button>
-          )}
-          <div className="bi-search">
-            <span className="bi-search-ico" aria-hidden="true">⌕</span>
-            <input
-              className="bi-search-input"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search client, VAT…"
-            />
-            {query && <button className="bi-search-x" onClick={() => setQuery("")} aria-label="Clear">×</button>}
-          </div>
-          <div className="bi-filter bi-filter-sort">
-            <Select value={sortKey} onChange={(v) => setSortKey(v as SortKey)} options={sortOptions} />
-          </div>
-          <div className="bi-filter">
-            <Select value={fCompany} onChange={setFCompany}
-              options={[{ value: "", label: "All companies" }, ...companyOptions]} placeholder="Company" />
-          </div>
-          <div className="bi-filter">
-            <Select value={fType} onChange={setFType}
-              options={[{ value: "", label: "All types" }, ...typeOptions]} placeholder="Type" />
-          </div>
-          {phase === "tobill" && (
-            selectMode ? (
-              <div className="bi-xlsx-group">
-                <button
-                  className="bi-xlsx"
-                  disabled={selected.size === 0 || exporting}
-                  onClick={exportSelected}
-                  title={selected.size === 0 ? "Tick rows to export" : `Download ${selected.size} selected`}
-                >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                    <path d="M14 2v6h6" />
-                    <path d="M9 13l3 4M12 13l-3 4" />
-                  </svg>
-                  {exporting ? "…" : `Download${selected.size ? ` (${selected.size})` : ""}`}
+    <div className="bn" onPointerMove={bnSpot}>
+      {/* ---------- headline cards on the dark band ---------- */}
+      <section className="bn-hero">
+        <div className="bn-kpis">
+          <div className="bn-kpi is-main" data-spot="tilt" style={bnVars({ "--i": 0 })}>
+            <span className="bn-kpi-head">
+              <span className="bn-kpi-ico"><BnIcon d={BN_ICON.out} /></span>
+              <span className="bn-kpi-label">Outstanding to {periodLabel(period)}</span>
+              {alerts.length > 0 && (
+                <button type="button" className="bn-alert-chip" onClick={() => setShowAlerts(true)}
+                  title={`${alerts.length} attempt${alerts.length === 1 ? "" : "s"} to log work in a closed period`}>
+                  <BnIcon d={BN_ICON.warn} w={2.2} />
+                  {alerts.length}
                 </button>
-                <button className="bi-xlsx-cancel"
-                  onClick={() => { setSelectMode(false); setSelected(new Set()); }}>
-                  Cancel
-                </button>
-              </div>
-            ) : (
-              <button className="bi-xlsx bi-xlsx-start" onClick={() => setSelectMode(true)} title="Select rows to export to Excel">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                  <path d="M14 2v6h6" />
-                  <path d="M9 13l3 4M12 13l-3 4" />
+              )}
+            </span>
+            <b className="bn-val is-xl"><BnCount value={outstandingTotal} fmt={eur} /><em>€</em></b>
+            <small className="bn-kpi-sub">{outstandingCount} {outstandingCount === 1 ? "invoice" : "invoices"} ready to send</small>
+          </div>
+
+          <div className="bn-kpi is-collected" data-spot="tilt" style={bnVars({ "--i": 1 })}>
+            <span className="bn-kpi-head">
+              <span className="bn-kpi-ico"><BnIcon d={BN_ICON.paid} w={2.4} /></span>
+              <span className="bn-kpi-label">Collected</span>
+            </span>
+            <span className="bn-coll">
+              <span className="bn-dial" aria-hidden="true">
+                <svg viewBox="0 0 140 80">
+                  <path className="bn-arc-bg" d={BN_ARC} pathLength={100} />
+                  <path className={`bn-arc-fill ${armed && collectedPct > 0 ? "" : "is-zero"}`} d={BN_ARC} pathLength={100}
+                    style={{ strokeDasharray: `${armed ? Math.min(100, collectedPct).toFixed(2) : 0} 101` }} />
                 </svg>
-                Excel
-              </button>
-            )
-          )}
-          {(anyFilter || query) && <button className="bi-clear" onClick={() => { setFCompany(""); setFType(""); setQuery(""); }}>Clear</button>}
-        </div>
-      </div>
+                <span className="bn-dial-pct"><BnCount value={collectedPct} /><em>%</em></span>
+              </span>
+              <span className="bn-coll-txt">
+                <b className="bn-val"><BnCount value={paidTotal} fmt={eur} /><em>€</em></b>
+                <small className="bn-kpi-sub">{paidCount} paid</small>
+              </span>
+            </span>
+          </div>
 
-      {/* ---------- Scrollable list ---------- */}
-      <div className="bi-scroll">
+          <div className="bn-kpi" data-spot="tilt" style={bnVars({ "--i": 2 })}>
+            <span className="bn-kpi-head">
+              <span className="bn-kpi-ico"><BnIcon d={BN_ICON.sent} /></span>
+              <span className="bn-kpi-label">Awaiting payment</span>
+            </span>
+            <b className="bn-val"><BnCount value={sentTotal} fmt={eur} /><em>€</em></b>
+            <small className="bn-kpi-sub">{awaitingCount} awaiting</small>
+          </div>
+
+          <div className={`bn-kpi ${overdueCount ? "is-bad" : ""}`} data-spot="tilt" style={bnVars({ "--i": 3 })}>
+            <span className="bn-kpi-head">
+              <span className="bn-kpi-ico"><BnIcon d={BN_ICON.late} /></span>
+              <span className="bn-kpi-label">Overdue</span>
+            </span>
+            <b className="bn-val"><BnCount value={overdueCount} /></b>
+            <small className="bn-kpi-sub">{overdueCount === 1 ? "invoice" : "invoices"} past due</small>
+          </div>
+
+          <div className={`bn-kpi is-cutoff ${cutoffOpen ? "is-editing" : ""}`} data-spot="tilt" style={bnVars({ "--i": 4 })}>
+            <span className="bn-kpi-head">
+              <span className="bn-kpi-ico"><BnIcon d={BN_ICON.cal} /></span>
+              <span className="bn-kpi-label">Next billing cutoff</span>
+            </span>
+            <button type="button" className="bn-cutoff" onClick={() => setCutoffOpen((v) => !v)} title="Change this month's cutoff">
+              {nextRun.date.toLocaleDateString("en", { day: "numeric", month: "short", year: "numeric" })}
+              <BnIcon d={BN_ICON.edit} w={2} />
+            </button>
+            <small className="bn-kpi-sub">
+              {cutoffInDays === 0 ? "Today" : cutoffInDays === 1 ? "Tomorrow" : cutoffInDays > 1 ? `In ${cutoffInDays} days` : `${Math.abs(cutoffInDays)} days ago`}
+            </small>
+            {cutoffOpen && (
+              <div className="bn-cutoff-pop">
+                <span>Cutoff for {periodLabel(period)}</span>
+                <DatePicker value={cutoffOf(period, localCutoffs, defaultCutoffDay)} onChange={saveCutoff} />
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* ---------- light sheet ---------- */}
+      <section className="bn-sheet">
+        <div className="bn-controls">
+          <div className="bn-phases" data-phase={phase} role="tablist" aria-label="Invoices">
+            <span className="bn-phases-pill" aria-hidden="true" />
+            <button type="button" role="tab" aria-selected={phase === "tobill"} className={phase === "tobill" ? "is-on" : ""} onClick={() => switchPhase("tobill")}>
+              To bill <i>{outstanding.length}</i>
+            </button>
+            <button type="button" role="tab" aria-selected={phase === "sent"} className={phase === "sent" ? "is-on" : ""} onClick={() => switchPhase("sent")}>
+              Sent <i>{sentList.length}</i>
+            </button>
+            <button type="button" role="tab" aria-selected={phase === "paid"} className={phase === "paid" ? "is-on" : ""} onClick={() => switchPhase("paid")}>
+              Paid <i>{paidList.length}</i>
+            </button>
+            <button type="button" role="tab" aria-selected={phase === "history"} className={phase === "history" ? "is-on" : ""} onClick={() => switchPhase("history")}>
+              History
+            </button>
+          </div>
+
+          <div className="bn-filters">
+            {phase === "tobill" && (
+              <div className="bn-status" data-status={status} role="radiogroup" aria-label="Which work to bill">
+                <span className="bn-status-pill" aria-hidden="true" />
+                <button type="button" role="radio" aria-checked={status === "billed"} className={status === "billed" ? "is-on" : ""} onClick={() => setStatus("billed")}>Delivered</button>
+                <button type="button" role="radio" aria-checked={status === "scheduled"} className={status === "scheduled" ? "is-on" : ""} onClick={() => setStatus("scheduled")}>Scheduled</button>
+                <button type="button" role="radio" aria-checked={status === "all"} className={status === "all" ? "is-on" : ""} onClick={() => setStatus("all")}>Both</button>
+              </div>
+            )}
+            <div className="bn-search">
+              <span className="bn-search-ico"><BnIcon d={BN_ICON.search} w={2.1} /></span>
+              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search client, VAT…" />
+              {query && <button type="button" onClick={() => setQuery("")} aria-label="Clear">×</button>}
+            </div>
+            <div className="bn-sel is-sort">
+              <Select value={sortKey} onChange={(v) => setSortKey(v as SortKey)} options={sortOptions} />
+            </div>
+            <div className="bn-sel">
+              <Select value={fCompany} onChange={setFCompany}
+                options={[{ value: "", label: "All companies" }, ...companyOptions]} placeholder="Company" />
+            </div>
+            <div className="bn-sel">
+              <Select value={fType} onChange={setFType}
+                options={[{ value: "", label: "All types" }, ...typeOptions]} placeholder="Type" />
+            </div>
+            {phase === "tobill" && (
+              selectMode ? (
+                <div className="bn-xlsx-group">
+                  <button type="button" className="bn-xlsx is-go" disabled={selected.size === 0 || exporting} onClick={exportSelected}
+                    title={selected.size === 0 ? "Tick rows to export" : `Download ${selected.size} selected`}>
+                    <BnIcon d={BN_ICON.xls} w={1.9} />
+                    {exporting ? "…" : `Download${selected.size ? ` (${selected.size})` : ""}`}
+                  </button>
+                  <button type="button" className="bn-xlsx-cancel" onClick={() => { setSelectMode(false); setSelected(new Set()); }}>Cancel</button>
+                </div>
+              ) : (
+                <button type="button" className="bn-xlsx" onClick={() => setSelectMode(true)} title="Select rows to export to Excel">
+                  <BnIcon d={BN_ICON.xls} w={1.9} />
+                  Excel
+                </button>
+              )
+            )}
+            {(anyFilter || query) && (
+              <button type="button" className="bn-clear" onClick={() => { setFCompany(""); setFType(""); setQuery(""); }}>Clear</button>
+            )}
+          </div>
+        </div>
+
+        {/* ---------- lists ---------- */}
         {!loaded ? (
-          <p className="bi-empty">Loading invoices…</p>
+          <div className="bn-empty"><span className="bn-empty-art is-busy"><BnIcon d={BN_ICON.out} w={1.6} /></span><p>Loading invoices…</p></div>
         ) : phase === "tobill" ? (
           outstanding.length === 0 ? (
-            <p className="bi-empty">Nothing to bill for these filters.</p>
+            <div className="bn-empty"><span className="bn-empty-art"><BnIcon d={BN_ICON.paid} w={1.6} /></span><p>Nothing to bill for these filters.</p></div>
           ) : (
-            <div className="bi-list">
-              <div className={`bi-listhead ${selectMode ? "bi-listhead-sel" : ""}`}>
+            <div className={`bn-list ${selectMode ? "is-selecting" : ""}`}>
+              <div className="bn-head bn-grid-bill">
                 {selectMode && (
-                  <span className="bi-selcell">
-                    <input type="checkbox" className="bi-check" checked={allVisibleSelected}
-                      onChange={toggleSelAll} title="Select all" />
-                  </span>
+                  <label className="bn-check is-head" title="Select all">
+                    <input type="checkbox" checked={allVisibleSelected} onChange={toggleSelAll} />
+                    <span aria-hidden="true" />
+                  </label>
                 )}
                 <span>Bill to</span><span>VAT</span><span>Billing contact</span>
-                <span className="bi-r">Days</span><span className="bi-r">Amount</span><span />
+                <span className="bn-r">{"Days"}</span><span className="bn-r">Amount</span><span />
               </div>
-              {outstanding.map((b) => {
+              {outstanding.map((b, bi) => {
                 const isOpen = open === b.key;
                 const totalDays = b.lines.consultor + b.lines.supervision + b.lines.connector;
                 const canDrop = !!dragEntry && dragEntry.projectId === b.projectId && dragEntry.fromPeriod !== b.period;
                 const isDropHover = canDrop && dropTarget === b.key;
                 return (
                   <div
-                    className={`bi-row ${selectMode ? "bi-row-selectable" : ""} ${selected.has(b.key) ? "is-selected" : ""} ${isOpen ? "is-open" : ""} ${canDrop ? "is-droppable" : ""} ${isDropHover ? "is-drophover" : ""}`}
+                    className={`bn-row ${selected.has(b.key) ? "is-selected" : ""} ${isOpen ? "is-open" : ""} ${canDrop ? "is-droppable" : ""} ${isDropHover ? "is-drophover" : ""}`}
                     key={b.key}
+                    style={bnVars({ "--i": Math.min(bi, 14) })}
                     onDragOver={(e) => { if (canDrop) { e.preventDefault(); setDropTarget(b.key); } }}
                     onDragLeave={() => setDropTarget((t) => (t === b.key ? null : t))}
                     onDrop={(e) => {
@@ -977,38 +1074,42 @@ export default function BillingPanel({
                     }}
                   >
                     {selectMode && (
-                      <label className="bi-selcell" onClick={(e) => e.stopPropagation()}>
-                        <input type="checkbox" className="bi-check"
-                          checked={selected.has(b.key)} onChange={() => toggleSel(b.key)} />
+                      <label className="bn-check" onClick={(e) => e.stopPropagation()}>
+                        <input type="checkbox" checked={selected.has(b.key)} onChange={() => toggleSel(b.key)} />
+                        <span aria-hidden="true" />
                       </label>
                     )}
-                    <button className="bi-row-main" onClick={() => setOpen(isOpen ? null : b.key)}>
-                      <span className="bi-to">
-                        <span className="bi-legal">{b.legalName}<span className="bi-period-tag">{periodLabel(b.period)}</span>{canDrop && <span className="bi-drop-hint">drop to bill here</span>}</span>
-                        <span className="bi-type">
-                          {clientNames[b.clientId] ?? ""}{clientNames[b.clientId] ? " · " : ""}{b.type}
-                          {b.address ? <span className="bi-addr"> — {b.address}</span> : null}
+                    <button type="button" className="bn-row-main bn-grid-bill" data-spot="" onClick={() => setOpen(isOpen ? null : b.key)} aria-expanded={isOpen}>
+                      <span className="bn-who">
+                        <span className="bn-av">{(b.legalName || "?").charAt(0).toUpperCase()}</span>
+                        <span className="bn-who-t">
+                          <span className="bn-name">
+                            <b>{b.legalName}</b>
+                            <span className="bn-ptag">{periodLabel(b.period)}</span>
+                            {canDrop && <span className="bn-drop-hint">Drop to bill here</span>}
+                          </span>
+                          <span className="bn-meta">
+                            {clientNames[b.clientId] && <span>{clientNames[b.clientId]}</span>}
+                            <span>{b.type}</span>
+                            {b.address && <span className="bn-addr">{b.address}</span>}
+                          </span>
                         </span>
                       </span>
-                      <span className="bi-vat">{b.vat || "—"}</span>
-                      <span className="bi-contact">
-                        {b.contact?.email ? (<><span>{b.contact.email}</span><em>{b.contact.name}</em></>) : "—"}
+                      <span className="bn-vat">{b.vat || "—"}</span>
+                      <span className="bn-contact">
+                        {b.contact?.email ? (<><b>{b.contact.email}</b><small>{b.contact.name}</small></>) : <small>No billing contact</small>}
                       </span>
-                      <span className="bi-r bi-days">{totalDays.toFixed(2)}<u>{unitOf(b.projectId)}</u></span>
-                      <span className="bi-r bi-amount">
-                        <b>{eur(gross(b))} €</b>
-                      </span>
-                      <span className={`bi-chev ${isOpen ? "is-open" : ""}`}>›</span>
+                      <span className="bn-num"><b>{totalDays.toFixed(2)}<em>{unitOf(b.projectId)}</em></b></span>
+                      <span className="bn-num is-amt"><b>{eur(gross(b))} €</b></span>
+                      <span className="bn-chev"><BnIcon d={BN_ICON.chev} w={2.4} /></span>
                     </button>
                     {isOpen && (
-                      <div className="bi-detail">
+                      <div className="bn-detail">
                         {billComposition(b)}
-                        <div className="bi-detail-actions">
-                          <span className="bi-detail-note">
-                            Marking as sent records this invoice for {periodLabel(b.period)} and moves it to Sent.
-                          </span>
-                          <button className="bi-sendbtn" disabled={busy === b.key} onClick={() => markSent(b)}>
-                            {busy === b.key ? "Saving…" : "Mark as sent →"}
+                        <div className="bn-dactions">
+                          <span>Marking as sent records this invoice for {periodLabel(b.period)} and moves it to Sent.</span>
+                          <button type="button" className="bn-send" disabled={busy === b.key} onClick={() => markSent(b)}>
+                            {busy === b.key ? "Saving…" : <>Mark as sent <BnIcon d={BN_ICON.sent} w={2.2} /></>}
                           </button>
                         </div>
                       </div>
@@ -1020,26 +1121,29 @@ export default function BillingPanel({
           )
         ) : phase === "history" ? (
           statusLog.length === 0 ? (
-            <p className="bi-empty">No status changes recorded yet. Sending, paying or un-sending an invoice will show up here.</p>
+            <div className="bn-empty"><span className="bn-empty-art"><BnIcon d={BN_ICON.late} w={1.6} /></span><p>No status changes recorded yet. Sending, paying or un-sending an invoice will show up here.</p></div>
           ) : (
-            <div className="bi-hist">
-              {statusLog.map((r) => {
+            <div className="bn-hist">
+              {statusLog.map((r, hi) => {
                 const label: Record<string, string> = { tobill: "To bill", sent: "Sent", paid: "Paid" };
                 const tone = r.to_status === "paid" ? "paid" : r.to_status === "sent" ? "sent" : "tobill";
                 return (
-                  <div className="bi-hist-row" key={r.id}>
-                    <span className={`bi-hist-dot bi-hist-${tone}`} />
-                    <div className="bi-hist-main">
-                      <span className="bi-hist-title">
-                        {r.project_id ? projName(r.project_id) : "Unknown client"} · {periodLabel(r.period)}
+                  <div className={`bn-hist-row tone-${tone}`} key={r.id} style={bnVars({ "--i": Math.min(hi, 14) })}>
+                    <span className="bn-hist-dot" aria-hidden="true"><BnIcon d={tone === "paid" ? BN_ICON.paid : tone === "sent" ? BN_ICON.sent : BN_ICON.out} w={2.4} /></span>
+                    <div className="bn-hist-main">
+                      <span className="bn-hist-title">
+                        <b>{r.project_id ? projName(r.project_id) : "Unknown client"}</b>
+                        <span className="bn-ptag">{periodLabel(r.period)}</span>
                       </span>
-                      <span className="bi-hist-change">
-                        {r.from_status ? (label[r.from_status] ?? r.from_status) : "—"} → <b>{label[r.to_status] ?? r.to_status}</b>
-                        {r.amount != null && <> · {eur(r.amount)} €</>}
+                      <span className="bn-hist-change">
+                        {r.from_status ? (label[r.from_status] ?? r.from_status) : "—"}
+                        <BnIcon d={BN_ICON.chev} w={2.4} />
+                        <b>{label[r.to_status] ?? r.to_status}</b>
+                        {r.amount != null && <span className="bn-hist-amt">{eur(r.amount)} €</span>}
                       </span>
                     </div>
-                    <span className="bi-hist-meta">
-                      {r.changed_by ? (people[r.changed_by] ?? "someone") : "someone"}<br />
+                    <span className="bn-hist-meta">
+                      <b>{r.changed_by ? (people[r.changed_by] ?? "someone") : "someone"}</b>
                       {new Date(r.created_at).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
                     </span>
                   </div>
@@ -1050,24 +1154,32 @@ export default function BillingPanel({
         ) : (
           (() => {
             const list = phase === "sent" ? sentList : paidList;
-            if (list.length === 0) return <p className="bi-empty">No {phase === "sent" ? "sent" : "paid"} invoices for these filters.</p>;
+            if (list.length === 0) {
+              return (
+                <div className="bn-empty">
+                  <span className="bn-empty-art"><BnIcon d={phase === "sent" ? BN_ICON.sent : BN_ICON.paid} w={1.6} /></span>
+                  <p>No {phase === "sent" ? "sent" : "paid"} invoices for these filters.</p>
+                </div>
+              );
+            }
             const mismatchCount = list.filter((inv) => {
               const comp = billByKey[`${inv.projectId}|${inv.period}`];
               return comp && Math.abs(+gross(comp).toFixed(2) - inv.amount) > 0.01;
             }).length;
             return (
-              <div className="bi-list">
+              <div className="bn-list">
                 {mismatchCount > 0 && (
-                  <div className="bi-fixbar">
+                  <div className="bn-fixbar">
+                    <span className="bn-fixbar-ico"><BnIcon d={BN_ICON.warn} w={1.9} /></span>
                     <span>{mismatchCount} invoice{mismatchCount === 1 ? "" : "s"} no longer match their entries.</span>
-                    <button className="bi-fixall" onClick={() => recomputeMany(list)}>Fix all {mismatchCount}</button>
+                    <button type="button" className="bn-fixall" onClick={() => recomputeMany(list)}>Fix all {mismatchCount}</button>
                   </div>
                 )}
-                <div className="bi-listhead bi-sent-head">
+                <div className="bn-head bn-grid-inv">
                   <span>Client</span><span>Sent</span><span>Due</span>
-                  <span className="bi-r">Amount</span><span>Status</span><span />
+                  <span className="bn-r">Amount</span><span>Status</span><span />
                 </div>
-                {list.map((inv) => {
+                {list.map((inv, ii) => {
                   // Status AS OF the selected month: an invoice paid later still
                   // reads as Sent/Overdue in the months before its payment.
                   const paidAsOf = wasPaidBy(inv);
@@ -1081,60 +1193,76 @@ export default function BillingPanel({
                   const liveAmount = comp ? +gross(comp).toFixed(2) : inv.amount;
                   const mismatch = comp ? Math.abs(liveAmount - inv.amount) > 0.01 : false;
                   const u = unitOf(inv.projectId);
+                  const tone = paidAsOf ? "paid" : isOverdue ? "overdue" : "sent";
+                  const toggle = () => comp && setOpen(isOpen ? null : invKey);
                   return (
-                    <div className={`bi-scard ${isOpen ? "is-open" : ""} ${isOverdue ? "is-overdue" : ""} ${paidAsOf ? "is-paid" : ""}`} key={inv.id}>
-                      <div className="bi-sent-row" onClick={() => comp && setOpen(isOpen ? null : invKey)} style={{ cursor: comp ? "pointer" : "default" }}>
-                        <span className="bi-scard-client">
-                          <span className="bi-scard-name">{projName(inv.projectId)}</span>
-                          <span className="bi-scard-meta">
-                            <span className="bi-period-tag">{periodLabel(inv.period)}</span>
-                            <span className="bi-scard-days">{inv.days.toFixed(2)}{u}</span>
+                    <div className={`bn-row bn-inv tone-${tone} ${isOpen ? "is-open" : ""}`} key={inv.id} style={bnVars({ "--i": Math.min(ii, 14) })}>
+                      <div
+                        className={`bn-row-main bn-grid-inv ${comp ? "is-clickable" : ""}`}
+                        data-spot=""
+                        role={comp ? "button" : undefined}
+                        tabIndex={comp ? 0 : -1}
+                        aria-expanded={comp ? isOpen : undefined}
+                        onClick={toggle}
+                        onKeyDown={(e) => { if (comp && (e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) { e.preventDefault(); toggle(); } }}
+                      >
+                        <span className="bn-who">
+                          <span className="bn-av">{projName(inv.projectId).charAt(0).toUpperCase()}</span>
+                          <span className="bn-who-t">
+                            <span className="bn-name"><b>{projName(inv.projectId)}</b></span>
+                            <span className="bn-meta">
+                              <span className="bn-ptag">{periodLabel(inv.period)}</span>
+                              <span>{inv.days.toFixed(2)}{u}</span>
+                            </span>
                           </span>
                         </span>
 
-                        <span className="bi-scard-when">
-                          <em>Sent</em>{inv.sentDate || "—"}
-                        </span>
-                        <span className={`bi-scard-when ${isOverdue ? "is-overdue" : ""}`}>
-                          <em>Due</em>{inv.dueDate || "—"}
-                          {isOverdue && <span className="bi-late">{late}d late</span>}
+                        <span className="bn-when"><small>Sent</small><b>{bnDate(inv.sentDate)}</b></span>
+                        <span className={`bn-when ${isOverdue ? "is-overdue" : ""}`}>
+                          <small>Due</small>
+                          <b>{bnDate(inv.dueDate)}</b>
+                          {isOverdue && <span className="bn-late">{late}d late</span>}
                         </span>
 
-                        <span className="bi-r bi-sent-amt">
-                          {eur(inv.amount)} €
+                        <span className="bn-num is-amt">
+                          <b>{eur(inv.amount)} €</b>
                           {mismatch && (
-                            <span className="bi-mismatch" title={`Entries now sum to ${liveDays.toFixed(2)}${u} / ${eur(liveAmount)} €`}>
-                              ≠ {eur(liveAmount)} €
+                            <span className="bn-mismatch" title={`Entries now sum to ${liveDays.toFixed(2)}${u} / ${eur(liveAmount)} €`}>
+                              Entries: {eur(liveAmount)} €
                             </span>
                           )}
                         </span>
 
-                        <span className={`bi-badge is-${paidAsOf ? "paid" : "sent"}${isOverdue ? " is-overdue" : ""}`}>
-                          {paidAsOf ? "Paid" : isOverdue ? "Overdue" : "Awaiting"}
-                          {paidAsOf && inv.paidDate && <em>{inv.paidDate}</em>}
+                        <span className={`bn-badge tone-${tone}`}>
+                          <i />
+                          <span>
+                            {paidAsOf ? "Paid" : isOverdue ? "Overdue" : "Awaiting"}
+                            {paidAsOf && inv.paidDate && <small>{bnDate(inv.paidDate)}</small>}
+                          </span>
                         </span>
 
-                        <span className="bi-sent-actions">
+                        <span className="bn-actions">
                           {phase === "sent" && (
-                            <button className="bi-unsend" disabled={busy === invKey}
+                            <button type="button" className="bn-act is-ghost" disabled={busy === invKey}
                               onClick={(e) => { e.stopPropagation(); unsend(inv); }} title="Move back to To bill">
                               Unsend
                             </button>
                           )}
                           {mismatch && comp && (
-                            <button className="bi-fix" disabled={busy === invKey}
+                            <button type="button" className="bn-act is-warn" disabled={busy === invKey}
                               onClick={(e) => { e.stopPropagation(); openFix(inv, comp); }}
                               title="Adjust this invoice's days and amount">
                               Fix
                             </button>
                           )}
-                          <button className={`bi-paybtn ${inv.status === "paid" ? "is-paid" : ""}`}
+                          <button type="button" className={`bn-act ${inv.status === "paid" ? "is-ghost" : "is-pay"}`}
                             disabled={busy === invKey} onClick={(e) => { e.stopPropagation(); togglePaid(inv); }}>
                             {inv.status === "paid" ? "Undo" : "Mark paid"}
                           </button>
+                          {comp && <span className="bn-chev"><BnIcon d={BN_ICON.chev} w={2.4} /></span>}
                         </span>
                       </div>
-                      {isOpen && comp && <div className="bi-detail">{billComposition(comp, inv)}</div>}
+                      {isOpen && comp && <div className="bn-detail">{billComposition(comp, inv)}</div>}
                     </div>
                   );
                 })}
@@ -1142,47 +1270,55 @@ export default function BillingPanel({
             );
           })()
         )}
-      </div>
+      </section>
 
+      {/* ---------- late-log alerts ---------- */}
       {showAlerts && (
-        <div className="bi-apop-backdrop" onMouseDown={() => setShowAlerts(false)}>
-          <div className="bi-apop" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-            <div className="bi-apop-head">
-              <h3>Late-log attempts</h3>
-              <button className="bi-apop-x" onClick={() => setShowAlerts(false)} aria-label="Close">×</button>
-            </div>
+        <div className="bn-pop-backdrop" onMouseDown={() => setShowAlerts(false)}>
+          <div className="bn-pop" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Late-log attempts">
+            <header className="bn-pop-head">
+              <span className="bn-pop-ico is-warn"><BnIcon d={BN_ICON.warn} w={2} /></span>
+              <div>
+                <h3>Late-log attempts</h3>
+                <small>Work someone tried to log in a period that was already closed</small>
+              </div>
+              <button type="button" className="bn-pop-x" onClick={() => setShowAlerts(false)} aria-label="Close"><BnIcon d={BN_ICON.x} w={2.2} /></button>
+            </header>
             {alerts.length === 0 ? (
-              <p className="bi-apop-empty">Nothing pending. Attempts to log work in a closed period show up here.</p>
+              <p className="bn-pop-empty">Nothing pending. Attempts to log work in a closed period show up here.</p>
             ) : (
               <>
-                <div className="bi-apop-list">
-                  {alerts.map((a) => (
-                    <div className="bi-alert" key={a.id}>
-                      <div className="bi-alert-main">
-                        <span className="bi-alert-client">{a.project_id ? projName(a.project_id) : "Unknown client"}</span>
-                        <span className="bi-alert-detail">
-                          {a.billable.toFixed(2)}{a.project_id ? unitOf(a.project_id) : "d"} {a.billing_line ?? "consultor"} · dated {a.entry_date} · would fall in {periodLabel(a.period)}
+                <div className="bn-pop-list">
+                  {alerts.map((a, ai) => (
+                    <div className="bn-alert" key={a.id} style={bnVars({ "--d": Math.min(ai, 10) })}>
+                      <div className="bn-alert-main">
+                        <b>{a.project_id ? projName(a.project_id) : "Unknown client"}</b>
+                        <span>
+                          {a.billable.toFixed(2)}{a.project_id ? unitOf(a.project_id) : "d"} {a.billing_line ?? "consultor"}, dated {bnDate(a.entry_date)}, would fall in {periodLabel(a.period)}
                         </span>
-                        <span className="bi-alert-meta">
-                          by {a.attempted_by ? (people[a.attempted_by] ?? "someone") : "someone"} · {new Date(a.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
-                        </span>
+                        <small>
+                          by {a.attempted_by ? (people[a.attempted_by] ?? "someone") : "someone"} on {new Date(a.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+                        </small>
                       </div>
-                      <button className="bi-alert-x" onClick={() => dismissAlert(a.id)} title="Dismiss">×</button>
+                      <button type="button" className="bn-alert-x" onClick={() => dismissAlert(a.id)} title="Dismiss"><BnIcon d={BN_ICON.x} w={2.2} /></button>
                     </div>
                   ))}
                 </div>
-                <button className="bi-apop-clear" onClick={dismissAllAlerts}>Dismiss all</button>
+                <footer className="bn-pop-foot">
+                  <button type="button" className="bn-act is-ghost" onClick={dismissAllAlerts}>Dismiss all</button>
+                </footer>
               </>
             )}
           </div>
         </div>
       )}
 
+      {/* ---------- fix an invoice ---------- */}
       {fixing && (() => {
         const b = fixing.bill;
         const u = unitOf(b.projectId);
         const rateOf = (line: Line) => line === "supervision" ? b.supervisionRate : b.rate;
-        const lineLabels: Record<Line, string> = { consultor: "Consultancy", supervision: "Supervision", connector: "Connector", closure: "Closure" };
+        const lineLabels: Record<Line, string> = { consultor: "Consultancy", supervision: "Supervision", connector: "Connector", closure: "Closure" } as Record<Line, string>;
 
         const num = (v: string) => (v === "" || isNaN(Number(v)) ? 0 : Number(v));
         const invalid = fixing.cells.some((c) => c.days !== "" && isNaN(Number(c.days)));
@@ -1202,31 +1338,38 @@ export default function BillingPanel({
           setFixing((f) => f && { ...f, cells: f.cells.map((c, j) => j === i ? { ...c, days: v } : c) });
 
         return (
-          <div className="bi-fix-backdrop" onMouseDown={() => setFixing(null)}>
-            <div className="bi-fix-modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-              <h3 className="bi-fix-title">Adjust invoice — {projName(fixing.inv.projectId)}</h3>
-              <p className="bi-fix-sub">
-                {periodLabel(fixing.inv.period)} · currently <b>{fixing.inv.days.toFixed(2)}{u}</b> / {eur(fixing.inv.amount)} €
-                {fixing.inv.status === "paid" && <span className="bi-fix-paid"> · marked paid</span>}
-              </p>
+          <div className="bn-pop-backdrop" onMouseDown={() => setFixing(null)}>
+            <div className="bn-pop is-fix" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Adjust invoice">
+              <header className="bn-pop-head">
+                <span className="bn-pop-ico"><BnIcon d={BN_ICON.edit} w={2} /></span>
+                <div>
+                  <h3>Adjust invoice, {projName(fixing.inv.projectId)}</h3>
+                  <small>
+                    {periodLabel(fixing.inv.period)}, currently <b>{fixing.inv.days.toFixed(2)}{u}</b> for {eur(fixing.inv.amount)} €
+                    {fixing.inv.status === "paid" && <span className="bn-fix-paid">Marked paid</span>}
+                  </small>
+                </div>
+                <button type="button" className="bn-pop-x" onClick={() => setFixing(null)} aria-label="Close"><BnIcon d={BN_ICON.x} w={2.2} /></button>
+              </header>
 
-              <div className="bi-fix-groups">
+              <div className="bn-fix-groups">
                 {lines.map((line) => {
                   const idxs = fixing.cells.map((c, i) => ({ c, i })).filter((x) => x.c.line === line);
                   if (idxs.length === 0) return null;
                   return (
-                    <div className="bi-fix-group" key={line}>
-                      <div className="bi-fix-ghead">
-                        <span>{lineLabels[line]}</span>
-                        <span className="bi-fix-grate">{rateOf(line).toLocaleString()} €/{u}</span>
-                        <span className="bi-fix-gtot">{(+lineTotal(line).toFixed(2))}{u}</span>
+                    <div className={`bn-fix-group is-${line}`} key={line}>
+                      <div className="bn-fix-ghead">
+                        <span><i />{lineLabels[line]}</span>
+                        <span className="bn-fix-grate">{rateOf(line).toLocaleString()} €/{u}</span>
+                        <b>{(+lineTotal(line).toFixed(2))}{u}</b>
                       </div>
                       {idxs.map(({ c, i }) => (
-                        <label className="bi-fix-prow" key={i}>
-                          <span className="bi-fix-pav">{(people[c.userId] ?? "?").charAt(0).toUpperCase()}</span>
-                          <span className="bi-fix-pname">{people[c.userId] ?? "Unknown"}</span>
+                        <label className="bn-fix-prow" key={i}>
+                          <span className="bn-av is-sm">{(people[c.userId] ?? "?").charAt(0).toUpperCase()}</span>
+                          <span className="bn-fix-pname">{people[c.userId] ?? "Unknown"}</span>
                           <input type="number" step="0.25" min="0" value={c.days}
                             onChange={(e) => setCell(i, e.target.value)} />
+                          <span className="bn-fix-u">{u}</span>
                         </label>
                       ))}
                     </div>
@@ -1234,28 +1377,28 @@ export default function BillingPanel({
                 })}
               </div>
 
-              <button type="button" className="bi-fix-reset"
+              <button type="button" className="bn-fix-reset"
                 onClick={() => setFixing((f) => f && { ...f, cells: cellsFromBill(f.bill) })}>
                 Reset to entries ({(+(b.lines.consultor + b.lines.supervision + b.lines.connector).toFixed(2))}{u})
               </button>
 
-              <div className="bi-fix-preview">
+              <div className="bn-fix-preview">
                 <div><span>Days</span><b>{newDays}{u}</b></div>
                 <div><span>Net</span><b>{eur(newNet)} €</b></div>
                 {b.taxed && <div><span>Tax {b.taxRate}%</span><b>{eur(newNet * b.taxRate / 100)} €</b></div>}
-                <div className="bi-fix-total"><span>Total</span><b>{eur(newAmount)} €</b></div>
+                <div className="is-total"><span>Total</span><b>{eur(newAmount)} €</b></div>
               </div>
 
-              <div className="bi-fix-actions">
-                <button className="bi-fix-cancel" onClick={() => setFixing(null)}>Cancel</button>
-                <button className="bi-fix-save" disabled={invalid || busy === `${fixing.inv.projectId}|${fixing.inv.period}`}
+              <footer className="bn-pop-foot">
+                <button type="button" className="bn-act is-ghost" onClick={() => setFixing(null)}>Cancel</button>
+                <button type="button" className="bn-act is-pay" disabled={invalid || busy === `${fixing.inv.projectId}|${fixing.inv.period}`}
                   onClick={async () => {
                     await recomputeInvoice(fixing.inv, b, { consultor, supervision, connector });
                     setFixing(null);
                   }}>
                   Save invoice
                 </button>
-              </div>
+              </footer>
             </div>
           </div>
         );

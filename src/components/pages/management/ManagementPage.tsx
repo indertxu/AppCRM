@@ -351,24 +351,35 @@ const TM_STATUS: Record<TmTone, string> = {
 
 /** One target bar on a consultant card: fill, min and high ticks, and the share of the minimum. */
 function TeamMetric({
-  label, unit, done, min, high, tone, pct, format,
+  label, unit, done, planned, min, high, tone, pct, format,
 }: {
-  label: string; unit: string; done: number; min: number; high: number;
+  label: string; unit: string; done: number; planned: number; min: number; high: number;
   tone: TmTone; pct: number | null; format: (n: number) => string;
 }) {
-  const scale = Math.max(high, min, done, 1) * 1.04;
+  // Scale covers realized + planned, so the planned stretch always fits on the bar.
+  const scale = Math.max(high, min, done + planned, 1) * 1.04;
   const at = (n: number) => Math.min(97, Math.max(3, (n / scale) * 100));
   const fillPct = Math.min(100, (done / scale) * 100);
+  const planPct = Math.min(100 - fillPct, (planned / scale) * 100);
+  const withPlan = min > 0 ? ((done + planned) / min) * 100 : null;
   const mark = (n: number) => (unit === "d" ? (Number.isInteger(n) ? String(n) : n.toFixed(1)) : n.toLocaleString());
   const u = unit === "d" ? "d" : " €";
   return (
     <div className={`tm-metric tone-${tone}`}>
       <div className="tm-metric-h">
         <span>{label}</span>
-        <b><TmCount value={done} format={format} /><em>{u}</em></b>
+        <span className="tm-metric-v">
+          {planned > 0.005 && (
+            <span className="tm-plan-v" title={withPlan !== null ? `${Math.round(withPlan)}% of minimum once the planned days are realized` : "Planned, not yet realized"}>
+              +{format(planned)}{u} planned
+            </span>
+          )}
+          <b><TmCount value={done} format={format} /><em>{u}</em></b>
+        </span>
       </div>
       <div className="tm-track">
         <span className="tm-fill" style={{ width: `${fillPct}%` }} />
+        {planned > 0.005 && <span className="tm-plan" style={{ left: `${fillPct}%`, width: `${planPct}%` }} />}
         {min > 0 && <span className={`tm-tick ${done >= min ? "is-hit" : ""}`} style={{ left: `${at(min)}%` }} />}
         {high > 0 && <span className={`tm-tick is-high ${done >= high ? "is-hit" : ""}`} style={{ left: `${at(high)}%` }} />}
       </div>
@@ -387,9 +398,10 @@ function TeamMetric({
 
 /** A consultant row on the Team tab. The whole row opens the detail modal; the sliders button opens their targets. */
 function TeamCard({
-  index, name, projectCount, daysDone, amountDone, goals, onOpen, onTargets,
+  index, name, projectCount, daysDone, amountDone, daysPlanned, amountPlanned, goals, onOpen, onTargets,
 }: {
   index: number; name: string; projectCount: number; daysDone: number; amountDone: number;
+  daysPlanned: number; amountPlanned: number;
   goals: { days: number; daysHigh: number; money: number; moneyHigh: number; custom: boolean };
   onOpen: () => void; onTargets: () => void;
 }) {
@@ -420,9 +432,9 @@ function TeamCard({
         </span>
       </span>
 
-      <TeamMetric label="Days delivered" unit="d" done={daysDone} min={goals.days} high={goals.daysHigh}
+      <TeamMetric label="Days delivered" unit="d" done={daysDone} planned={daysPlanned} min={goals.days} high={goals.daysHigh}
         tone={dTone} pct={dayPct} format={(n) => n.toFixed(2)} />
-      <TeamMetric label="Billed" unit="€" done={amountDone} min={goals.money} high={goals.moneyHigh}
+      <TeamMetric label="Billed" unit="€" done={amountDone} planned={amountPlanned} min={goals.money} high={goals.moneyHigh}
         tone={mTone} pct={moneyPct} format={(n) => Math.round(n).toLocaleString()} />
 
       <span className="tm-status is-col"><i />{TM_STATUS[overall]}</span>
@@ -1158,7 +1170,7 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
   };
 
   return (
-    <div className={`mg mg-tab-${tab}`}>
+    <div className={`mg mg-tab-${tab} ${tab === "team" || tab === "backlog" || tab === "billing" ? "mg-dark" : ""}`}>
       {loading && <LoadingOverlay />}
       <header className="mg-bar">
         <div className="mg-bar-left">
@@ -1328,6 +1340,8 @@ minPerMonth: targets.minPerMonth,
                       projectCount={projectCount}
                       daysDone={r.daysDone}
                       amountDone={r.amountDone}
+                      daysPlanned={r.daysPlanned}
+                      amountPlanned={r.amountPlanned}
                       goals={{
                         ...g,
                         // Only their own saved values count as custom; goalsFor merges in the company defaults first.
@@ -1379,11 +1393,15 @@ minPerMonth: targets.minPerMonth,
 
                       const bonusInvoiced = computeBonus(ins.invoicedAmount, ins.invoicedDays, cap);
                       const showBonus = !!cap && (cap.minDays != null || cap.minBilling != null || cap.bonusPct1 != null);
-                      const scopeLabel =
-                        scope === "week" ? "This week"
-                        : scope === "month" ? "This month"
-                        : scope === "year" ? "This year"
-                        : scope === "custom" ? "Selected range" : "All time";
+                      // Same period the header shows, so the pop-up never reads "This month"
+                      // while you're looking at another one.
+                      const fmtIso = (iso: string) => {
+                        const d = new Date(`${iso}T00:00:00`);
+                        return `${d.getDate()} ${MONTHS_SHORT[d.getMonth()]} ${d.getFullYear()}`;
+                      };
+                      const scopeLabel = scope === "custom"
+                        ? (rangeFrom && rangeTo ? `${fmtIso(rangeFrom)} – ${fmtIso(rangeTo)}` : "Custom range")
+                        : label;
 
                       const projectRows = Object.entries(r.byProject).map(([key, v]) => {
                         const pid = key.split("|")[0];

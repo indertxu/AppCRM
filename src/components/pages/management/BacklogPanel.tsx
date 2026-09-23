@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import Select from "../../framework/Select";
 import "./BacklogPanel.css";
 
@@ -50,6 +51,121 @@ interface Props {
 }
 
 const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+/* ===================================================================
+   Presentation helpers. Same language as the Team tab and the
+   consultant modal: count-ups, sweeping arcs, cursor spotlight.
+   =================================================================== */
+const blVars = (o: Record<string, string | number>) => o as CSSProperties;
+const blReduced = () =>
+  typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+const blEur = (n: number) => Math.round(n).toLocaleString();
+const blR0 = (n: number) => Math.round(n).toLocaleString();
+
+function useBlCount(target: number, ms = 1100) {
+  const [value, setValue] = useState(() => (blReduced() ? target : 0));
+  const from = useRef(value);
+  useEffect(() => {
+    if (blReduced()) { from.current = target; setValue(target); return; }
+    let raf = 0;
+    const start = from.current;
+    const t0 = performance.now();
+    const tick = (now: number) => {
+      const p = Math.min(1, (now - t0) / ms);
+      const e = p === 1 ? 1 : 1 - Math.pow(2, -10 * p);
+      const cur = start + (target - start) * e;
+      from.current = cur;
+      setValue(cur);
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target, ms]);
+  return value;
+}
+function BlCount({ value, fmt = blR0 }: { value: number; fmt?: (n: number) => string }) {
+  return <>{fmt(useBlCount(value))}</>;
+}
+function useBlArmed(ms: number) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    const t = window.setTimeout(() => setArmed(true), blReduced() ? 0 : ms);
+    return () => window.clearTimeout(t);
+  }, [ms]);
+  return armed;
+}
+function blSpot(e: ReactPointerEvent<HTMLElement>) {
+  if (e.pointerType !== "mouse") return;
+  const el = (e.target as HTMLElement).closest<HTMLElement>("[data-spot]");
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  const x = e.clientX - r.left;
+  const y = e.clientY - r.top;
+  el.style.setProperty("--mx", `${x}px`);
+  el.style.setProperty("--my", `${y}px`);
+  if (el.dataset.spot === "tilt") {
+    el.style.setProperty("--ry", `${(x / r.width - 0.5) * 6}deg`);
+    el.style.setProperty("--rx", `${(0.5 - y / r.height) * 6}deg`);
+  }
+}
+/** Catmull-Rom → cubic Bézier, clamped so the curve never dips below the axis. */
+function blSmooth(p: [number, number][], h: number) {
+  if (p.length === 0) return "";
+  const c = (v: number) => Math.min(h, Math.max(0, v));
+  const f = (n: number) => n.toFixed(1);
+  let d = `M${f(p[0][0])},${f(p[0][1])}`;
+  for (let i = 0; i < p.length - 1; i++) {
+    const p0 = p[i - 1] ?? p[i], p1 = p[i], p2 = p[i + 1], p3 = p[i + 2] ?? p2;
+    d += ` C${f(p1[0] + (p2[0] - p0[0]) / 6)},${f(c(p1[1] + (p2[1] - p0[1]) / 6))} ${f(p2[0] - (p3[0] - p1[0]) / 6)},${f(c(p2[1] - (p3[1] - p1[1]) / 6))} ${f(p2[0])},${f(p2[1])}`;
+  }
+  return d;
+}
+
+const BL_ICON = {
+  days: "M8 3v3M16 3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM12 12v3l2 1.5",
+  value: "M12 3v18M16.5 6.5H10a3 3 0 0 0 0 6h4a3 3 0 0 1 0 6H7",
+  length: "M3 12h18M3 8v8M21 8v8M8 10l-2 2 2 2M16 10l2 2-2 2",
+  rate: "M4 19V9M10 19V5M16 19v-7M22 19H2",
+  swap: "M16 3l4 4-4 4M4 7h16M8 21l-4-4 4-4M20 17H4",
+  trend: "M3 17l6-6 4 4 8-8M17 7h4v4",
+  chev: "M9 6l6 6-6 6",
+  cal: "M8 3v3M16 3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z",
+  warn: "M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z",
+  empty: "M4 7l8-4 8 4-8 4zM4 12l8 4 8-4M4 17l8 4 8-4",
+};
+function BlIcon({ d, w = 2 }: { d: string; w?: number }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={w} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d={d} />
+    </svg>
+  );
+}
+const BL_ARC = "M16 70 A54 54 0 0 1 124 70";
+
+/** A glass headline card. Becomes a button when it has something to flip. */
+function BlCard({
+  i, icon, label, swap, onClick, title, className = "", children,
+}: {
+  i: number; icon: string; label: string; swap?: string; onClick?: () => void; title?: string;
+  className?: string; children: ReactNode;
+}) {
+  const body = (
+    <>
+      <span className="bl-kpi-head">
+        <span className="bl-kpi-ico"><BlIcon d={icon} /></span>
+        <span className="bl-kpi-label">{label}</span>
+        {swap && <span className="bl-kpi-swap"><BlIcon d={BL_ICON.swap} w={2.2} /><span>{swap}</span></span>}
+      </span>
+      {children}
+    </>
+  );
+  const cls = `bl-kpi ${onClick ? "is-action" : ""} ${className}`;
+  return onClick ? (
+    <button type="button" className={cls} data-spot="tilt" style={blVars({ "--i": i })} onClick={onClick} title={title}>{body}</button>
+  ) : (
+    <div className={cls} data-spot="tilt" style={blVars({ "--i": i })}>{body}</div>
+  );
+}
 
 function startOfWeek(input: Date): Date {
   const d = new Date(input);
@@ -105,6 +221,7 @@ export default function BacklogPanel({
   const [hover, setHover] = useState<number | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [onlyLeft, setOnlyLeft] = useState(true);
+  const [onlyUnowned, setOnlyUnowned] = useState(false);
 
   /** Which contracted bucket an entry eats into. Mirrors the team panel's rate logic. */
   const lineOf = (p: BkProj, line: string, userId: string): Line => {
@@ -185,10 +302,35 @@ export default function BacklogPanel({
   const valueOf = (r: ProjRow, t: Tally) =>
     t.consultor * r.rate + t.connector * r.rate + t.supervision * r.supervisionRate;
 
+  /** Consultancy backlog that can't be attributed to anyone yet — the project's
+      service has no "main" role set in Products & Services, or nobody on the
+      team holds that role. This is why summing every consultant's personal
+      backlog can land below the panel's overall total: this slice sits in the
+      total but is invisible in every individual view until it's assigned. */
+  const unownedBacklog = useMemo(() => {
+    let days = 0, value = 0;
+    const ids = new Set<string>();
+    rows.forEach((r) => {
+      if (sum(r.sold) === 0) return;
+      if (onlyLeft && sum(availableOf(r)) <= 0.001) return;
+      const p = projects[r.id];
+      if (!p) return;
+      if (ownerOf(p) !== null) return;
+      const avail = availableOf(r);
+      if (avail.consultor <= 0.001) return;
+      days += inDays(r.id, avail.consultor);
+      value += avail.consultor * r.rate;
+      ids.add(r.id);
+    });
+    return { days, value, projectCount: ids.size, ids };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, projects, onlyLeft, mainRoleByService]);
+
   const visible = rows
     .filter((r) => {
       if (sum(r.sold) === 0) return false;
       if (onlyLeft && sum(availableOf(r)) <= 0.001) return false;
+      if (onlyUnowned && !unownedBacklog.ids.has(r.id)) return false;
       if (consultantFilter) {
         const p = projects[r.id];
         if (!p) return false;
@@ -248,29 +390,6 @@ export default function BacklogPanel({
     return { consultDays, consultValue, superDays, superValue };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [consultantFilter, rows, projects, onlyLeft, mainRoleByService, supRoles]);
-
-  /** Consultancy backlog that can't be attributed to anyone yet — the project's
-      service has no "main" role set in Products & Services, or nobody on the
-      team holds that role. This is why summing every consultant's personal
-      backlog can land below the panel's overall total: this slice sits in the
-      total but is invisible in every individual view until it's assigned. */
-  const unownedBacklog = useMemo(() => {
-    let days = 0, value = 0, projectCount = 0;
-    rows.forEach((r) => {
-      if (sum(r.sold) === 0) return;
-      if (onlyLeft && sum(availableOf(r)) <= 0.001) return;
-      const p = projects[r.id];
-      if (!p) return;
-      if (ownerOf(p) !== null) return;
-      const avail = availableOf(r);
-      if (avail.consultor <= 0.001) return;
-      days += inDays(r.id, avail.consultor);
-      value += avail.consultor * r.rate;
-      projectCount += 1;
-    });
-    return { days, value, projectCount };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, projects, onlyLeft, mainRoleByService]);
 
   const totalSold = visible.reduce((s, r) => s + inDays(r.id, sum(r.sold)), 0);
   const totalBilled = visible.reduce((s, r) => s + inDays(r.id, sum(r.billed)), 0);
@@ -442,196 +561,140 @@ export default function BacklogPanel({
   const CH = 150;
   const px = (i: number) => (series.length <= 1 ? CW / 2 : (i / (series.length - 1)) * CW);
   const py = (v: number) => CH - (v / (peak * 1.12)) * CH;
-  const linePath = series.map((p, i) => `${i === 0 ? "M" : "L"} ${px(i).toFixed(1)} ${py(p[chartKey]).toFixed(1)}`).join(" ");
-  const areaPath = series.length
-    ? `${linePath} L ${px(series.length - 1).toFixed(1)} ${CH} L ${px(0).toFixed(1)} ${CH} Z`
-    : "";
   const fmt = (v: number) => (chartMode === "days" ? v.toFixed(2) : Math.round(v).toLocaleString());
 
   const w = (n: number, total: number) => (total > 0 ? (n / total) * 100 : 0);
   const deliveredPct = totalSold > 0 ? (totalBilled / totalSold) * 100 : 0;
   const scheduledPct = totalSold > 0 ? ((totalBilled + totalPlanned) / totalSold) * 100 : 0;
-  const R = 34;
-  const C = 2 * Math.PI * R;
-  const arc = (p: number) => ({ strokeDasharray: `${(Math.min(100, p) / 100) * C} ${C}` });
+
+  /* ---------- presentation ---------- */
+  const armed = useBlArmed(320);
+  const canFlip = availHourHours > 0;
+  const split = unitMode === "split" && canFlip;
+  const flip = () => setUnitMode((m) => (m === "days" ? "split" : "days"));
+  const asOfLabel = (() => {
+    const d = new Date(`${asOf}T00:00:00`);
+    return Number.isNaN(d.getTime()) ? asOf : d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+  })();
+  const valueTotal = valueCore + valueConnector;
+  const spanMax = Math.max(1, maxSpan);
+  const dash = (pct: number) => `${armed ? Math.min(100, Math.max(0, pct)).toFixed(2) : "0"} 101`;
+  const chartPts = series.map((p, i) => [px(i), py(p[chartKey])] as [number, number]);
+  const smoothLine = blSmooth(chartPts.length === 1 ? [[0, chartPts[0][1]], [CW, chartPts[0][1]]] : chartPts, CH);
+  const smoothArea = smoothLine ? `${smoothLine} L${CW},${CH} L0,${CH} Z` : "";
+  const axisStep = series.length <= 12 ? 1 : Math.ceil(series.length / 12);
 
   return (
-    <div className="bk">
-      <div className="bk-kpis bkc-row">
-        <article className={`bkc bkc-gauge ${availHourHours > 0 ? "bkc-clickable" : ""}`}
-          onClick={() => availHourHours > 0 && setUnitMode((m) => (m === "days" ? "split" : "days"))}
-          title={availHourHours > 0 ? "Click to split hours from days" : undefined}>
-          <div className="bkc-head">
-            <span className="bkc-label">Days to deliver{availHourHours > 0 && <span className="bkc-flip">⇄</span>}</span>
-            <span className="bkc-pct">{Math.round(deliveredPct)}<i>% billed</i></span>
-          </div>
-          <div className="bkc-gauge-body">
-            <div className="bkc-ring">
-              <svg viewBox="0 0 140 82" className="bkc-svg" aria-hidden="true">
-                <path className="bkc-arc-bg" d="M16 70 A54 54 0 0 1 124 70" pathLength={169.65} />
-                <path className="bkc-arc-proj" d="M16 70 A54 54 0 0 1 124 70" pathLength={169.65}
-                  style={{ strokeDasharray: `${(169.65 * Math.min(1, scheduledPct / 100)).toFixed(2)} 169.65` }} />
-                <path className="bkc-arc-fill" d="M16 70 A54 54 0 0 1 124 70" pathLength={169.65}
-                  style={{ strokeDasharray: `${(169.65 * Math.min(1, deliveredPct / 100)).toFixed(2)} 169.65` }} />
-              </svg>
-              <span className="bkc-ring-mid"><b>{totalAvailable.toFixed(0)}</b><i>left</i></span>
-            </div>
-            <div className="bkc-figs">
-              <span className="bkc-sub">of {totalSold.toFixed(0)} days sold</span>
-              {unitMode === "split" && availHourHours > 0 ? (
-                <div className="bkc-split">
+    <div className="bl" onPointerMove={blSpot}>
+      {/* ---------- headline cards on the dark band ---------- */}
+      <section className="bl-hero">
+        <div className="bl-kpis">
+          <BlCard
+            i={0}
+            className="is-gauge"
+            icon={BL_ICON.days}
+            label="Days to deliver"
+            swap={canFlip ? (split ? "By line" : "Days and hours") : undefined}
+            onClick={canFlip ? flip : undefined}
+            title={canFlip ? "Click to split hours from days" : undefined}
+          >
+            <span className="bl-gauge">
+              <span className="bl-dial">
+                <svg viewBox="0 0 140 80" aria-hidden="true">
+                  <path className="bl-arc-bg" d={BL_ARC} pathLength={100} />
+                  <path className={`bl-arc-proj ${armed && scheduledPct > 0 ? "" : "is-zero"}`} d={BL_ARC} pathLength={100} style={{ strokeDasharray: dash(scheduledPct) }} />
+                  <path className={`bl-arc-fill ${armed && deliveredPct > 0 ? "" : "is-zero"}`} d={BL_ARC} pathLength={100} style={{ strokeDasharray: dash(deliveredPct) }} />
+                </svg>
+                <span className="bl-dial-pct"><BlCount value={deliveredPct} /><em>%</em></span>
+                <small className="bl-dial-cap">billed</small>
+              </span>
+              <span className="bl-gauge-txt">
+                <b className="bl-val"><BlCount value={totalAvailable} /><em>days left</em></b>
+                <small>of {totalSold.toFixed(0)} days sold</small>
+              </span>
+            </span>
+            <span className="bl-facts">
+              {split ? (
+                <>
                   <span><b>{availDayDays.toFixed(1)}</b>Days</span>
                   <span className="is-conn"><b>{availHourHours.toFixed(0)}</b>Hours</span>
-                </div>
+                </>
               ) : (
-                <div className="bkc-split">
+                <>
                   <span><b>{availCore.toFixed(1)}</b>Consultancy</span>
                   <span className="is-conn"><b>{availConnector.toFixed(1)}</b>Connector</span>
-                </div>
+                </>
               )}
-            </div>
-          </div>
-        </article>
-
-        <article className="bkc">
-          <div className="bkc-head"><span className="bkc-label">Unbilled value</span></div>
-          <span className="bkc-fig"><b>{Math.round(totalValue).toLocaleString()}</b><em>€</em></span>
-          <div className="bkc-split">
-            <span><b>{Math.round(valueCore).toLocaleString()}</b>Consultancy</span>
-            <span className="is-conn"><b>{Math.round(valueConnector).toLocaleString()}</b>Connector</span>
-          </div>
-        </article>
-
-        <article className="bkc">
-          <div className="bkc-head"><span className="bkc-label">Avg project length</span></div>
-          <span className="bkc-fig"><b>{Math.round(avgSpan)}</b><em>days</em></span>
-          <div className="bkc-split bkc-split-3">
-            <span><b>{minSpan}</b>Shortest</span>
-            <span><b>{maxSpan}</b>Longest</span>
-            <span className="is-conn"><b>{spans.length}</b>Projects</span>
-          </div>
-        </article>
-
-        <article className={`bkc ${availHourHours > 0 ? "bkc-clickable" : ""}`}
-          onClick={() => availHourHours > 0 && setUnitMode((m) => (m === "days" ? "split" : "days"))}
-          title={availHourHours > 0 ? "Click to show the per-hour rate" : undefined}>
-          <div className="bkc-head"><span className="bkc-label">Avg {unitMode === "split" && availHourHours > 0 ? "hour" : "day"} rate{availHourHours > 0 && <span className="bkc-flip">⇄</span>}</span></div>
-          <span className="bkc-fig">
-            <b>{Math.round(unitMode === "split" && availHourHours > 0 ? avgDayRate.byHour : avgDayRate.byDays).toLocaleString()}</b>
-            <em>€/{unitMode === "split" && availHourHours > 0 ? "hour" : "day"}</em>
-          </span>
-          <div className="bkc-split">
-            {unitMode === "split" && availHourHours > 0 ? (
-              <>
-                <span><b>{Math.round(avgDayRate.byHour).toLocaleString()}</b>Per hour</span>
-                <span className="is-conn"><b>{Math.round(avgDayRate.byDays).toLocaleString()}</b>Per day</span>
-              </>
-            ) : (
-              <>
-                <span><b>{Math.round(avgDayRate.byDays).toLocaleString()}</b>Weighted</span>
-                <span className="is-conn"><b>{Math.round(avgDayRate.simple).toLocaleString()}</b>Per project</span>
-              </>
-            )}
-          </div>
-        </article>
-      </div>
-
-      {series.length > 1 && (
-        <div className={`bk-chart-card ${chartOpen ? "is-open" : "is-collapsed"}`}>
-          <button className="bk-chart-toggle-row" onClick={() => setChartOpen((v) => !v)}>
-            <span className="bk-kpi-label">Backlog over the period</span>
-            <span className="bk-chart-toggle-right">
-              <span className="bk-chart-peek"><b>{fmt(last)}</b> {chartMode === "days" ? "days left" : "€ left"} at close</span>
-              <span className={`bk-chart-caret ${chartOpen ? "is-open" : ""}`}>›</span>
             </span>
-          </button>
-          {chartOpen && (<>
-          <div className="bk-chart-head">
-            <div>
-              <span className="bk-kpi-label">Backlog over the period</span>
-              <span className="bk-chart-now">
-                <b>{fmt(last)}</b>
-                <em>{chartMode === "days" ? "days left at close" : "€ left at close"}</em>
-                <span className={`bk-delta ${delta > 0 ? "is-up" : delta < 0 ? "is-down" : ""}`}>
-                  {delta > 0 ? "↑" : delta < 0 ? "↓" : "—"} {fmt(Math.abs(delta))} over the period
-                </span>
-              </span>
-            </div>
-            <div className="bk-chart-toggle" data-mode={chartMode}>
-              <span className="bk-chart-slider" />
-              <button className={chartMode === "days" ? "is-on" : ""} onClick={() => setChartMode("days")}>Days</button>
-              <button className={chartMode === "value" ? "is-on" : ""} onClick={() => setChartMode("value")}>Value</button>
-            </div>
-          </div>
+          </BlCard>
 
-          <div
-            className="bk-chart"
-            onMouseMove={(e) => {
-              const rect = e.currentTarget.getBoundingClientRect();
-              const frac = (e.clientX - rect.left) / rect.width;
-              const idx = Math.max(0, Math.min(series.length - 1, Math.round(frac * (series.length - 1))));
-              setHover(idx);
-            }}
-            onMouseLeave={() => setHover(null)}
+          <BlCard i={1} icon={BL_ICON.value} label="Unbilled value">
+            <b className="bl-val"><BlCount value={totalValue} fmt={blEur} /><em>€</em></b>
+            <span className="bl-mix" aria-hidden="true">
+              <i style={{ width: `${armed && valueTotal > 0 ? (valueCore / valueTotal) * 100 : 0}%` }} />
+              <i className="is-conn" style={{ width: `${armed && valueTotal > 0 ? (valueConnector / valueTotal) * 100 : 0}%` }} />
+            </span>
+            <span className="bl-facts">
+              <span><b>{blEur(valueCore)}</b>Consultancy</span>
+              <span className="is-conn"><b>{blEur(valueConnector)}</b>Connector</span>
+            </span>
+          </BlCard>
+
+          <BlCard i={2} icon={BL_ICON.length} label="Avg project length">
+            <b className="bl-val"><BlCount value={avgSpan} /><em>days</em></b>
+            <span className="bl-range" aria-hidden="true" title={`${minSpan} to ${maxSpan} days`}>
+              <i className="bl-range-band" style={{ left: `${(minSpan / spanMax) * 100}%`, width: `${armed ? ((maxSpan - minSpan) / spanMax) * 100 : 0}%` }} />
+              {spans.length > 0 && <i className="bl-range-avg" style={{ left: `${(avgSpan / spanMax) * 100}%` }} />}
+            </span>
+            <span className="bl-facts is-3">
+              <span><b>{minSpan}</b>Shortest</span>
+              <span><b>{maxSpan}</b>Longest</span>
+              <span className="is-conn"><b>{spans.length}</b>Projects</span>
+            </span>
+          </BlCard>
+
+          <BlCard
+            i={3}
+            icon={BL_ICON.rate}
+            label={`Avg ${split ? "hour" : "day"} rate`}
+            swap={canFlip ? (split ? "Per day" : "Per hour") : undefined}
+            onClick={canFlip ? flip : undefined}
+            title={canFlip ? "Click to show the per-hour rate" : undefined}
           >
-            <svg viewBox={`0 0 ${CW} ${CH}`} preserveAspectRatio="none" className="bk-chart-svg">
-              <defs>
-                <linearGradient id="bkArea" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#12b57f" stopOpacity="0.28" />
-                  <stop offset="100%" stopColor="#12b57f" stopOpacity="0.02" />
-                </linearGradient>
-              </defs>
-              <path d={areaPath} fill="url(#bkArea)" />
-              <path d={linePath} fill="none" stroke="#0a6f4d" strokeWidth="2"
-                strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
-            </svg>
-            {hover !== null && series[hover] && (
-              <span className="bk-chart-guide" style={{ left: `${(px(hover) / CW) * 100}%` }} />
-            )}
-            <div className="bk-chart-dots">
-              {series.map((p, i) => (
-                <span
-                  className={`bk-chart-dot ${hover === i ? "is-hover" : ""}`}
-                  key={p.end}
-                  style={{ left: `${(px(i) / CW) * 100}%`, top: `${(py(p[chartKey]) / CH) * 100}%` }}
-                />
-              ))}
-              {hover !== null && series[hover] && (
-                <div
-                  className="bk-chart-tip"
-                  style={{
-                    left: `${(px(hover) / CW) * 100}%`,
-                    top: `${(py(series[hover][chartKey]) / CH) * 100}%`,
-                  }}
-                >
-                  <span className="bk-tip-label">{series[hover].label}</span>
-                  <div className="bk-tip-rows">
-                    <span className="bk-tip-row"><i>Days</i><b>{series[hover].days.toFixed(2)}</b></span>
-                    <span className="bk-tip-row"><i>Value</i><b>{Math.round(series[hover].value).toLocaleString()} €</b></span>
-                  </div>
-                </div>
+            <b className="bl-val"><BlCount value={split ? avgDayRate.byHour : avgDayRate.byDays} fmt={blEur} /><em>€/{split ? "hour" : "day"}</em></b>
+            <span className="bl-facts">
+              {split ? (
+                <>
+                  <span><b>{blEur(avgDayRate.byHour)}</b>Per hour</span>
+                  <span className="is-conn"><b>{blEur(avgDayRate.byDays)}</b>Per day</span>
+                </>
+              ) : (
+                <>
+                  <span><b>{blEur(avgDayRate.byDays)}</b>Weighted</span>
+                  <span className="is-conn"><b>{blEur(avgDayRate.simple)}</b>Per project</span>
+                </>
               )}
-            </div>
-          </div>
-
-          <div className="bk-chart-axis">
-            {series.map((p) => <span key={p.end}>{p.label}</span>)}
-          </div>
-          </>)}
+            </span>
+          </BlCard>
         </div>
-      )}
+      </section>
 
-      <div className="bk-toolbar">
-        <p className="bk-note">
-          As of <b>{asOf}</b> · {visible.length} {visible.length === 1 ? "project" : "projects"} across {clientCount} {clientCount === 1 ? "client" : "clients"} kicked off by then
-        </p>
-        <div className="bk-toolbar-right">
-          <div className="bk-key">
-            <span><i className="bk-k-billed" /> Billed</span>
-            <span><i className="bk-k-planned" /> Scheduled</span>
-            <span><i className="bk-k-free" /> Not booked</span>
+      {/* ---------- light sheet ---------- */}
+      <section className="bl-sheet">
+        {/* ---------- toolbar ---------- */}
+        <div className="bl-card bl-toolbar">
+          <p className="bl-note">
+            <span className="bl-asof"><BlIcon d={BL_ICON.cal} w={1.9} />As of <b>{asOfLabel}</b></span>
+            <span>
+              {visible.length} {visible.length === 1 ? "project" : "projects"} across {clientCount} {clientCount === 1 ? "client" : "clients"} kicked off by then
+            </span>
+          </p>
+          <div className="bl-legend" aria-hidden="true">
+            <span><i className="is-billed" />Billed</span>
+            <span><i className="is-planned" />Scheduled</span>
+            <span><i className="is-free" />Not booked</span>
           </div>
-          <div className="bk-consultant-pick">
+          <div className="bl-pick">
             <Select
               value={consultantFilter}
               onChange={setConsultantFilter}
@@ -639,140 +702,165 @@ export default function BacklogPanel({
               options={[{ value: "", label: "All consultants" }, ...consultantOptions.map((c) => ({ value: c.id, label: c.name }))]}
             />
           </div>
-          <label className="bk-filter">
+          <label className="bl-switch">
             <input type="checkbox" checked={onlyLeft} onChange={(e) => setOnlyLeft(e.target.checked)} />
+            <span className="bl-switch-ui" aria-hidden="true" />
             <span>Only projects with days left</span>
           </label>
         </div>
-      </div>
 
-      {myBreakdown && (
-        <div className="bk-mine">
-          <span className="bk-mine-who">
-            <span className="bk-mine-av">{(people[consultantFilter] || "?").charAt(0).toUpperCase()}</span>
-            {people[consultantFilter] || "This consultant"}'s backlog
-          </span>
-          <div className="bk-mine-figs">
-            <div className="bk-mine-fig">
-              <span className="bk-mine-k">Consultancy <i>· owned projects</i></span>
-              <b>{myBreakdown.consultDays.toFixed(1)}<em>d</em></b>
-              <span className="bk-mine-v">{Math.round(myBreakdown.consultValue).toLocaleString()} €</span>
-            </div>
-            <div className="bk-mine-fig is-super">
-              <span className="bk-mine-k">Supervision <i>· assigned as supervisor</i></span>
-              <b>{myBreakdown.superDays.toFixed(1)}<em>d</em></b>
-              <span className="bk-mine-v">{Math.round(myBreakdown.superValue).toLocaleString()} €</span>
-            </div>
-            <div className="bk-mine-fig is-total">
-              <span className="bk-mine-k">Total</span>
-              <b>{(myBreakdown.consultDays + myBreakdown.superDays).toFixed(1)}<em>d</em></b>
-              <span className="bk-mine-v">{Math.round(myBreakdown.consultValue + myBreakdown.superValue).toLocaleString()} €</span>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {unownedBacklog.days > 0.05 && (
-        <div className="bk-unowned">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
-          </svg>
-          <span>
-            <b>{unownedBacklog.days.toFixed(1)}d</b> ({Math.round(unownedBacklog.value).toLocaleString()} €) of consultancy backlog across{" "}
-            <b>{unownedBacklog.projectCount}</b> project{unownedBacklog.projectCount === 1 ? "" : "s"} isn't owned by anyone yet — set a main role for
-            {" "}the service in Products &amp; Services, or add that person to the project's team, and it'll show up under them here.
-          </span>
-        </div>
-      )}
-
-      {visible.length === 0 ? (
-        <p className="bk-empty">Nothing left to deliver. Every sold day is billed.</p>
-      ) : (
-        <div className="bk-list">
-          <div className="bk-list-head">
-            <span>Client &amp; project</span>
-            <span className="bk-lh-prog">Progress</span>
-            <span className="bk-r">Days left</span>
-            <span className="bk-r">Value left</span>
-            <span className="bk-lh-team">Team</span>
-            <span />
-          </div>
-          {visible.map((r) => {
-            const avail = availableOf(r);
-            const sold = sum(r.sold);
-            const isOpen = open === r.id;
-            const u = isHourly(r.id) ? "h" : "d";
-            const team = Object.entries(r.byUser)
-              .sort((a, b) => (b[1].billed + b[1].planned) - (a[1].billed + a[1].planned));
-            return (
-              <div className={`bk-lrow-wrap ${isOpen ? "is-open" : ""}`} key={r.id}>
-                <button className="bk-lrow" onClick={() => setOpen(isOpen ? null : r.id)}>
-                  <span className="bk-lcell bk-lclient">
-                    <span className="bk-lclient-name">{clientNames[r.clientId] ?? "—"}</span>
-                    <span className="bk-lclient-type">{r.type}</span>
-                  </span>
-
-                  <span className="bk-lcell bk-lprog">
-                    <span className="bk-lbar">
-                      <span className="bk-lbar-billed" style={{ width: `${w(sum(r.billed), sold)}%` }}
-                        title={`${sum(r.billed).toFixed(2)} billed`} />
-                      <span className="bk-lbar-planned" style={{ width: `${w(sum(r.planned), sold)}%` }}
-                        title={`${sum(r.planned).toFixed(2)} scheduled`} />
-                    </span>
-                    <span className="bk-lprog-txt">
-                      {sum(r.billed).toFixed(1)} billed · {sum(r.planned).toFixed(1)} sched · {sold.toFixed(1)} sold {u}
-                    </span>
-                  </span>
-
-                  <span className="bk-lcell bk-r bk-ldays"><b>{sum(avail).toFixed(2)}</b><u>{u}</u></span>
-                  <span className="bk-lcell bk-r bk-lval">{Math.round(valueOf(r, avail)).toLocaleString()} €</span>
-
-                  <span className="bk-lcell bk-lteam">
-                    {team.length === 0 ? (
-                      <em className="bk-lteam-none">—</em>
-                    ) : (
-                      <span className="bk-avs">
-                        {team.slice(0, 4).map(([uid]) => (
-                          <span className="bk-av" key={uid}>{(people[uid] ?? "?").charAt(0).toUpperCase()}</span>
-                        ))}
-                        {team.length > 4 && <span className="bk-av bk-av-more">+{team.length - 4}</span>}
-                      </span>
-                    )}
-                  </span>
-
-                  <span className={`bk-lchev ${isOpen ? "is-open" : ""}`}>›</span>
-                </button>
-
-                {isOpen && (
-                  <div className="bk-ldetail">
-                    <div className="bk-lchips">
-                      {r.sold.consultor > 0 && <i>{r.sold.consultor} consultancy</i>}
-                      {r.sold.supervision > 0 && <i>{r.sold.supervision} supervision</i>}
-                      {r.sold.connector > 0 && <i className="is-conn">{r.sold.connector} connector</i>}
-                    </div>
-                    {team.length > 0 && (
-                      <>
-                        <div className="bk-dhead">
-                          <span>Consultant</span>
-                          <span className="bk-r">Billed</span>
-                          <span className="bk-r">Scheduled</span>
-                        </div>
-                        {team.map(([uid, v]) => (
-                          <div className="bk-dline" key={uid}>
-                            <span className="bk-dwho">{people[uid] ?? "Unknown user"}</span>
-                            <span className="bk-r bk-dbilled">{v.billed.toFixed(2)}</span>
-                            <span className="bk-r bk-dplanned">{v.planned.toFixed(2)}</span>
-                          </div>
-                        ))}
-                      </>
-                    )}
-                  </div>
-                )}
+        {/* ---------- one consultant's backlog ---------- */}
+        {myBreakdown && (
+          <div className="bl-card bl-mine">
+            <span className="bl-mine-who">
+              <span className="bl-av is-lg">{(people[consultantFilter] || "?").charAt(0).toUpperCase()}</span>
+              <span className="bl-mine-name">
+                <b>{people[consultantFilter] || "This consultant"}</b>
+                <small>Personal backlog</small>
+              </span>
+            </span>
+            <div className="bl-mine-figs">
+              <div className="bl-mine-fig">
+                <span>Consultancy <i>owned projects</i></span>
+                <b><BlCount value={myBreakdown.consultDays} fmt={(n) => n.toFixed(1)} /><em>d</em></b>
+                <small>{blEur(myBreakdown.consultValue)} €</small>
               </div>
-            );
-          })}
+              <div className="bl-mine-fig is-super">
+                <span>Supervision <i>assigned as supervisor</i></span>
+                <b><BlCount value={myBreakdown.superDays} fmt={(n) => n.toFixed(1)} /><em>d</em></b>
+                <small>{blEur(myBreakdown.superValue)} €</small>
+              </div>
+              <div className="bl-mine-fig is-total">
+                <span>Total</span>
+                <b><BlCount value={myBreakdown.consultDays + myBreakdown.superDays} fmt={(n) => n.toFixed(1)} /><em>d</em></b>
+                <small>{blEur(myBreakdown.consultValue + myBreakdown.superValue)} €</small>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ---------- backlog nobody owns yet ---------- */}
+        {unownedBacklog.days > 0.05 && (
+          <div className={`bl-unowned ${onlyUnowned ? "is-active" : ""}`}>
+            <span className="bl-unowned-ico"><BlIcon d={BL_ICON.warn} w={1.9} /></span>
+            <span>
+              <b>{unownedBacklog.days.toFixed(1)}d</b> ({blEur(unownedBacklog.value)} €) of consultancy backlog across{" "}
+              <b>{unownedBacklog.projectCount}</b> project{unownedBacklog.projectCount === 1 ? "" : "s"} isn't owned by anyone yet. Set a main role for
+              {" "}the service in Products &amp; Services, or add that person to the project's team, and it'll show up under them here.
+            </span>
+            <button type="button" className="bl-unowned-btn" onClick={() => setOnlyUnowned((v) => !v)}>
+              {onlyUnowned ? "Show all" : `Show the ${unownedBacklog.projectCount}`}
+            </button>
+          </div>
+        )}
+
+        {/* ---------- projects (this is the only part that scrolls) ---------- */}
+        <div className="bl-scroll">
+        {visible.length === 0 ? (
+          <div className="bl-empty">
+            <span className="bl-empty-art"><BlIcon d={BL_ICON.empty} w={1.6} /></span>
+            <p>Nothing left to deliver. Every sold day is billed.</p>
+          </div>
+        ) : (
+          <div className="bl-list">
+            <div className="bl-head" aria-hidden="true">
+              <span>Client and project</span>
+              <span>Progress</span>
+              <span className="is-r">Days left</span>
+              <span className="is-r">Value left</span>
+              <span>Team</span>
+              <span />
+            </div>
+            {visible.map((r, ri) => {
+              const avail = availableOf(r);
+              const sold = sum(r.sold);
+              const isOpen = open === r.id;
+              const u = isHourly(r.id) ? "h" : "d";
+              const team = Object.entries(r.byUser)
+                .sort((a, b) => (b[1].billed + b[1].planned) - (a[1].billed + a[1].planned));
+              const billedW = Math.min(100, w(sum(r.billed), sold));
+              const planW = Math.min(100 - billedW, w(sum(r.planned), sold));
+              const teamMax = Math.max(0.0001, ...team.map(([, v]) => v.billed + v.planned));
+              return (
+                <div className={`bl-row ${isOpen ? "is-open" : ""} ${unownedBacklog.ids.has(r.id) ? "is-unowned" : ""}`} key={r.id} style={blVars({ "--i": Math.min(ri, 14) })}>
+                  <button type="button" className="bl-row-main" data-spot="" onClick={() => setOpen(isOpen ? null : r.id)} aria-expanded={isOpen}>
+                    <span className="bl-who">
+                      <span className="bl-av">{(clientNames[r.clientId] ?? "?").charAt(0).toUpperCase()}</span>
+                      <span className="bl-who-t">
+                        <b>{clientNames[r.clientId] ?? "—"}</b>
+                        <small>{r.type}</small>
+                      </span>
+                    </span>
+
+                    <span className="bl-prog">
+                      <span className="bl-bar">
+                        <i className="is-billed" style={{ width: `${billedW}%` }} title={`${sum(r.billed).toFixed(2)} billed`} />
+                        <i className="is-planned" style={{ width: `${planW}%` }} title={`${sum(r.planned).toFixed(2)} scheduled`} />
+                      </span>
+                      <span className="bl-prog-txt">
+                        <span><b>{sum(r.billed).toFixed(1)}</b> billed</span>
+                        <span><b>{sum(r.planned).toFixed(1)}</b> scheduled</span>
+                        <span>of <b>{sold.toFixed(1)}</b>{u} sold</span>
+                      </span>
+                    </span>
+
+                    <span className="bl-num"><b>{sum(avail).toFixed(2)}<em>{u}</em></b></span>
+                    <span className="bl-num is-val"><b>{blEur(valueOf(r, avail))} €</b></span>
+
+                    <span className="bl-team">
+                      {team.length === 0 ? (
+                        <em className="bl-team-none">No one yet</em>
+                      ) : (
+                        <span className="bl-avs">
+                          {team.slice(0, 4).map(([uid]) => (
+                            <span className="bl-av is-sm" key={uid} title={people[uid] ?? "Unknown user"}>{(people[uid] ?? "?").charAt(0).toUpperCase()}</span>
+                          ))}
+                          {team.length > 4 && <span className="bl-av is-sm is-more">+{team.length - 4}</span>}
+                        </span>
+                      )}
+                    </span>
+
+                    <span className="bl-chev"><BlIcon d={BL_ICON.chev} w={2.4} /></span>
+                  </button>
+
+                  {isOpen && (
+                    <div className="bl-detail">
+                      <div className="bl-chips">
+                        <span className="bl-chips-k">Sold</span>
+                        {r.sold.consultor > 0 && <i>{r.sold.consultor} consultancy</i>}
+                        {r.sold.supervision > 0 && <i>{r.sold.supervision} supervision</i>}
+                        {r.sold.connector > 0 && <i className="is-conn">{r.sold.connector} connector</i>}
+                      </div>
+                      {team.length > 0 && (
+                        <div className="bl-dtable">
+                          <div className="bl-dhead">
+                            <span>Consultant</span>
+                            <span className="is-r">Billed</span>
+                            <span className="is-r">Scheduled</span>
+                            <span />
+                          </div>
+                          {team.map(([uid, v], di) => (
+                            <div className="bl-dline" key={uid} style={blVars({ "--d": di })}>
+                              <span className="bl-dwho"><span className="bl-av is-sm">{(people[uid] ?? "?").charAt(0).toUpperCase()}</span>{people[uid] ?? "Unknown user"}</span>
+                              <span className="is-r bl-dbilled">{v.billed.toFixed(2)}</span>
+                              <span className="is-r bl-dplanned">{v.planned.toFixed(2)}</span>
+                              <span className="bl-dbar" aria-hidden="true">
+                                <i className="is-billed" style={{ width: `${(v.billed / teamMax) * 100}%` }} />
+                                <i className="is-planned" style={{ width: `${(v.planned / teamMax) * 100}%` }} />
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
         </div>
-      )}
+      </section>
     </div>
   );
 }
