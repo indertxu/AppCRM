@@ -6,6 +6,7 @@ import { periodForDate, cutoffOf, type Cutoffs } from "../calendar/billingPeriod
 import DatePicker from "../../framework/DatePicker";
 import Select from "../../framework/Select";
 import { downloadBlob, sheetToXlsx, type XCell, type XStyle } from "../../framework/exportFile";
+import BillingAdjustModal from "./BillingAdjustModal";
 import "./BillingPanel.css";
 
 export interface BiEntry {
@@ -152,6 +153,7 @@ const BN_ICON = {
   cal: "M8 3v3M16 3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z",
   warn: "M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z",
   chev: "M9 6l6 6-6 6",
+  tune: "M4 6h10M18 6h2M4 12h2M10 12h10M4 18h14M20 18h0M14 4v4M6 10v4M18 16v4",
   search: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-4-4",
   xls: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M9 13l3 4M12 13l-3 4",
   x: "M18 6L6 18M6 6l12 12",
@@ -200,6 +202,9 @@ export default function BillingPanel({
   /** "h" if the bill's project is billed by the hour, otherwise "d". */
   const unitOf = (projectId: string) => (hourProjects.has(projectId) ? "h" : "d");
   const [open, setOpen] = useState<string | null>(null);
+  // The bill currently open in the adjustment modal (by bill.key), plus its
+  // frozen invoice if it has one.
+  const [adjusting, setAdjusting] = useState<{ bill: Bill; invoice: Invoice | null } | null>(null);
   /** Bills ticked for Excel export (To-bill tab only). Keyed by bill.key. */
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [exporting, setExporting] = useState(false);
@@ -1108,6 +1113,9 @@ export default function BillingPanel({
                         {billComposition(b)}
                         <div className="bn-dactions">
                           <span>Marking as sent records this invoice for {periodLabel(b.period)} and moves it to Sent.</span>
+                          <button type="button" className="bn-adjust" onClick={() => setAdjusting({ bill: b, invoice: null })}>
+                            <BnIcon d={BN_ICON.tune} w={2.2} /> Adjust calculation
+                          </button>
                           <button type="button" className="bn-send" disabled={busy === b.key} onClick={() => markSent(b)}>
                             {busy === b.key ? "Saving…" : <>Mark as sent <BnIcon d={BN_ICON.sent} w={2.2} /></>}
                           </button>
@@ -1262,7 +1270,16 @@ export default function BillingPanel({
                           {comp && <span className="bn-chev"><BnIcon d={BN_ICON.chev} w={2.4} /></span>}
                         </span>
                       </div>
-                      {isOpen && comp && <div className="bn-detail">{billComposition(comp, inv)}</div>}
+                      {isOpen && comp && (
+                        <div className="bn-detail">
+                          {billComposition(comp, inv)}
+                          <div className="bn-dactions">
+                            <button type="button" className="bn-adjust" onClick={() => setAdjusting({ bill: comp, invoice: inv })}>
+                              <BnIcon d={BN_ICON.tune} w={2.2} /> Adjust calculation
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -1403,6 +1420,18 @@ export default function BillingPanel({
           </div>
         );
       })()}
+
+      {adjusting && (
+        <BillingAdjustModal
+          bill={adjusting.bill}
+          invoice={adjusting.invoice}
+          unit={unitOf(adjusting.bill.projectId)}
+          clientName={clientNames[adjusting.bill.clientId] ?? adjusting.bill.legalName ?? "Client"}
+          people={people}
+          periodLabel={periodLabel(adjusting.bill.period)}
+          onClose={() => setAdjusting(null)}
+        />
+      )}
     </div>
   );
 }

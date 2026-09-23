@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { supabase } from "../../api/supabase";
 import { markHandoffConverted, type Handoff } from "../sales/salesApi";
 import DatePicker from "../../framework/DatePicker";
@@ -11,11 +12,33 @@ const uid = () => (globalThis.crypto?.randomUUID?.() ?? String(Math.random()));
 const eur = (n: number) => Math.round(n).toLocaleString("en-US");
 const num = (n: number) => Number(n).toLocaleString("es-ES", { maximumFractionDigits: 2 });
 
+/** Eased count-up for the header value (presentation only). */
+function useCountUp(target: number, ms = 700) {
+  const [v, setV] = useState(target);
+  const from = useRef(target);
+  useEffect(() => {
+    const reduced = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (reduced) { from.current = target; setV(target); return; }
+    let raf = 0;
+    const start = from.current, t0 = performance.now();
+    const tick = (now: number) => {
+      const p = Math.min(1, (now - t0) / ms);
+      const e = p === 1 ? 1 : 1 - Math.pow(2, -10 * p);
+      const cur = start + (target - start) * e;
+      from.current = cur; setV(cur);
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target, ms]);
+  return v;
+}
+
 function NumField({ value, onChange, min = 0, step = 1, suffix }: {
   value: number; onChange: (n: number) => void; min?: number; step?: number; suffix?: string;
 }) {
   return (
-    <div className="icv-num">
+    <div className="icm-num">
       <input type="number" min={min} step={step} value={value === 0 ? "" : value}
         placeholder="0" onChange={(e) => onChange(e.target.value === "" ? 0 : Number(e.target.value))} />
       {suffix && <em>{suffix}</em>}
@@ -167,54 +190,103 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
     } finally { setSaving(false); }
   };
 
-  return (
-    <div className="icv-backdrop" onMouseDown={onClose}>
-      <div className="icv" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+  /* ---------- presentation ---------- */
+  const [closing, setClosing] = useState(false);
+  const closingRef = useRef(false);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const requestClose = useCallback(() => {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    setClosing(true);
+    const reduced = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    window.setTimeout(() => onCloseRef.current(), reduced ? 0 : 280);
+  }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") requestClose(); };
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { window.removeEventListener("keydown", onKey); document.body.style.overflow = prev; };
+  }, [requestClose]);
+  const shownValue = useCountUp(value);
+  // Why the button is off, from the same conditions canSave checks.
+  const missing = !ready ? null
+    : !clientId ? "No client found for this company yet"
+    : !kickoffDate ? "Pick a kick-off date to create the project"
+    : (consultorDays + connectorDays + supervisionDays) <= 0 ? "Add at least one day"
+    : null;
+  const phasePct = maxDays > 0 ? Math.min(100, (phaseTotal / maxDays) * 100) : 0;
+  const over = phaseTotal > maxDays;
+
+  // Rendered at the top of the page so no parent stacking layer can sit above it.
+  return createPortal(
+    <div className={`icm-root ${closing ? "is-closing" : ""}`}>
+      <div className="icm-backdrop" onMouseDown={requestClose} />
+      <div className="icm" role="dialog" aria-modal="true" aria-label={`Build project for ${handoff.company_name || "this handoff"}`}>
+        <div className="icm-aurora" aria-hidden="true"><i /><i /><span /></div>
+
         {/* Header */}
-        <header className="icv-head">
-          <div className="icv-head-txt">
-            <span className="icv-eyebrow">Incoming · build project</span>
-            <h2 className="icv-title">{handoff.company_name || "New project"}</h2>
-            <p className="icv-route">
-              <span>Sales</span>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h13M12 5l7 7-7 7" /></svg>
-              <b>{handoff.dest_pipeline_name || "Delivery"}</b>
-            </p>
+        <header className="icm-head">
+          <div className="icm-head-id">
+            <span className="icm-av">{(handoff.company_name || "?").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase()}</span>
+            <div className="icm-head-txt">
+              <span className="icm-eyebrow">Build project from a handoff</span>
+              <h2 className="icm-title">{handoff.company_name || "New project"}</h2>
+              <p className="icm-route">
+                <span>Sales</span>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12h13M12 5l7 7-7 7" /></svg>
+                <b>{handoff.dest_pipeline_name || "Delivery"}</b>
+              </p>
+            </div>
           </div>
-          <div className="icv-head-right">
-            <div className="icv-head-total"><span>Engagement value</span><b>{eur(value)} €</b></div>
-            <button className="icv-primary" disabled={!canSave} onClick={save}>
-              {saving ? "Creating…" : "Create project"}
+          <div className="icm-head-right">
+            <div className="icm-total">
+              <span>Engagement value</span>
+              <b>{eur(shownValue)}<em>€</em></b>
+            </div>
+            <div className="icm-go">
+              <button type="button" className="icm-primary" disabled={!canSave} onClick={save}>
+                {saving ? "Creating…" : "Create project"}
+                {!saving && <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12h13M12 5l7 7-7 7" /></svg>}
+              </button>
+              {missing && <small className="icm-missing">{missing}</small>}
+            </div>
+            <button type="button" className="icm-x" onClick={requestClose} aria-label="Close">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12" /></svg>
+              <kbd>Esc</kbd>
             </button>
-            <button className="icv-x" onClick={onClose} aria-label="Close">×</button>
           </div>
         </header>
 
-        <div className="icv-body">
+        <div className="icm-body">
           {/* LEFT — what sales sent, read only */}
-          <aside className="icv-left">
-            <div className="icv-left-head">
-              <span className="icv-sec-eyebrow">Sent by sales</span>
-              <span className="icv-locked">Read-only</span>
+          <aside className="icm-left">
+            <div className="icm-left-head">
+              <span className="icm-sec-eyebrow">Sent by sales</span>
+              <span className="icm-locked">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 11h12a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1zM8 11V7a4 4 0 0 1 8 0v4" /></svg>
+                Read-only
+              </span>
             </div>
-            <ul className="icv-sold">
+            <ul className="icm-sold">
               {svcs.map((s, i) => (
-                <li className="icv-sold-item" key={i}>
-                  <div className="icv-sold-top">
-                    <span className="icv-sold-name">{s.label}</span>
-                    <span className="icv-sold-amt">{eur(s.price || 0)} €</span>
+                <li className="icm-sold-item" key={i} style={{ animationDelay: `${i * 60 + 250}ms` }}>
+                  <div className="icm-sold-top">
+                    <span className="icm-sold-name">{s.label}</span>
+                    <span className="icm-sold-amt">{eur(s.price || 0)} €</span>
                   </div>
-                  <div className="icv-sold-meta">
+                  <div className="icm-sold-meta">
                     {s.days ? <span>{num(s.days)} days</span> : null}
-                    {s.rate ? <span>· {eur(s.rate)} €/day</span> : null}
+                    {s.rate ? <span>{eur(s.rate)} €/day</span> : null}
                   </div>
                   {(s.rows ?? []).length > 0 && (
-                    <ul className="icv-sold-rows">
+                    <ul className="icm-sold-rows">
                       {(s.rows ?? []).map((r, j) => (
                         <li key={j}>
-                          <span className="icv-r-l">{r.label}</span>
-                          <span className="icv-r-d">{r.detail}</span>
-                          <span className="icv-r-a">{eur(r.amount)} €</span>
+                          <span className="icm-r-l">{r.label}</span>
+                          <span className="icm-r-a">{eur(r.amount)} €</span>
+                          <span className="icm-r-d">{r.detail}</span>
                         </li>
                       ))}
                     </ul>
@@ -223,12 +295,12 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
               ))}
             </ul>
             {prods.length > 0 && (
-              <div className="icv-sold-prods">
-                <span className="icv-sec-eyebrow">Sold with</span>
-                {prods.map((p, i) => <em key={i}>{p.label}{p.price > 0 ? ` · ${eur(p.price)} €` : ""}</em>)}
+              <div className="icm-sold-prods">
+                <span className="icm-sec-eyebrow">Sold with</span>
+                <div>{prods.map((p, i) => <em key={i}>{p.label}{p.price > 0 ? ` · ${eur(p.price)} €` : ""}</em>)}</div>
               </div>
             )}
-            <div className="icv-sold-foot">
+            <div className="icm-sold-foot">
               <div><span>Days sold</span><b>{num(soldDays)}</b></div>
               <div><span>Value</span><b>{eur(soldValue)} €</b></div>
               <div><span>Rate</span><b>{eur(soldRate)} €/d</b></div>
@@ -236,22 +308,24 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
           </aside>
 
           {/* RIGHT — engagement */}
-          <section className="icv-right">
-            {!ready ? <p className="icv-loading">Loading…</p> : (
+          <section className="icm-right">
+            {!ready ? (
+              <div className="icm-loading"><span /><span /><span /></div>
+            ) : (
               <>
                 {/* Auto-filled context */}
-                <div className="icv-auto">
-                  <div className="icv-auto-cell">
+                <div className="icm-auto">
+                  <div className="icm-auto-cell">
                     <span>Project type</span>
                     <b>{ptName}</b>
                     <i>from sales</i>
                   </div>
-                  <div className="icv-auto-cell">
+                  <div className="icm-auto-cell">
                     <span>Signing date</span>
                     <b>{signingDate ? new Date(signingDate).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" }) : "—"}</b>
                     <i>from sales</i>
                   </div>
-                  <div className="icv-auto-cell">
+                  <div className="icm-auto-cell">
                     <span>Payment terms</span>
                     <b>{paymentDays} net days</b>
                     <i>from sales</i>
@@ -259,41 +333,51 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
                 </div>
 
                 {/* Kick-off */}
-                <div className="icv-block">
-                  <label className="icv-lbl">Kick-off date</label>
-                  <DatePicker value={kickoffDate} onChange={setKickoff} placeholder="Select kick-off" />
+                <div className={`icm-block ${kickoffDate ? "is-done" : "is-needed"}`} style={{ animationDelay: "280ms" }}>
+                  <div className="icm-block-head">
+                    <span className="icm-step">1</span>
+                    <span className="icm-sec-title">Kick-off date</span>
+                    {!kickoffDate && <span className="icm-req">Required</span>}
+                  </div>
+                  <div className="icm-date"><DatePicker value={kickoffDate} onChange={setKickoff} placeholder="Select kick-off" /></div>
                 </div>
 
                 {/* Consultancy */}
-                <div className="icv-block">
-                  <div className="icv-block-head">
-                    <span className="icv-sec-title">Consultancy</span>
-                    <span className="icv-rate-pill">{eur(pricePerDay)} €/day <em>· from rate</em></span>
+                <div className="icm-block" style={{ animationDelay: "330ms" }}>
+                  <div className="icm-block-head">
+                    <span className="icm-step">2</span>
+                    <span className="icm-sec-title">Consultancy</span>
+                    <span className="icm-rate-pill">{eur(pricePerDay)} €/day <em>from the sold rate</em></span>
                   </div>
-                  <div className="icv-grid2">
-                    <div className="icv-field"><label>Consultor days</label><NumField value={consultorDays} onChange={setConsultorDays} /></div>
-                    <div className="icv-field"><label>Connector days</label><NumField value={connectorDays} onChange={setConnectorDays} /></div>
+                  <div className="icm-grid2">
+                    <div className="icm-field"><label>Consultor days</label><NumField value={consultorDays} onChange={setConsultorDays} suffix="d" /></div>
+                    <div className="icm-field"><label>Connector days</label><NumField value={connectorDays} onChange={setConnectorDays} suffix="d" /></div>
                   </div>
-                  <div className="icv-line"><span>{num(totalConsultancy)} days × {eur(pricePerDay)} €</span><b>{eur(totalConsultancy * pricePerDay)} €</b></div>
+                  <div className="icm-line"><span>{num(totalConsultancy)} days × {eur(pricePerDay)} €</span><b>{eur(totalConsultancy * pricePerDay)} €</b></div>
                 </div>
 
                 {/* Supervision */}
-                <div className="icv-block">
-                  <span className="icv-sec-title">Supervision</span>
-                  <div className="icv-grid2">
-                    <div className="icv-field"><label>Days</label><NumField value={supervisionDays} onChange={setSupervisionDays} /></div>
-                    <div className="icv-field"><label>Price / day</label><NumField value={supervisionPrice} onChange={setSupervisionPrice} suffix="€" /></div>
+                <div className="icm-block" style={{ animationDelay: "380ms" }}>
+                  <div className="icm-block-head">
+                    <span className="icm-step">3</span>
+                    <span className="icm-sec-title">Supervision</span>
                   </div>
-                  {supervisionDays > 0 && <div className="icv-line"><span>{num(supervisionDays)} days × {eur(supervisionPrice)} €</span><b>{eur(supervisionDays * supervisionPrice)} €</b></div>}
+                  <div className="icm-grid2">
+                    <div className="icm-field"><label>Days</label><NumField value={supervisionDays} onChange={setSupervisionDays} suffix="d" /></div>
+                    <div className="icm-field"><label>Price / day</label><NumField value={supervisionPrice} onChange={setSupervisionPrice} suffix="€" /></div>
+                  </div>
+                  {supervisionDays > 0 && <div className="icm-line"><span>{num(supervisionDays)} days × {eur(supervisionPrice)} €</span><b>{eur(supervisionDays * supervisionPrice)} €</b></div>}
                 </div>
 
                 {/* Blueprint + phases */}
-                <div className="icv-block">
-                  <div className="icv-block-head">
-                    <span className="icv-sec-title">Phases</span>
-                    <span className="icv-phase-sum" data-over={phaseTotal > maxDays ? "1" : undefined}>{num(phaseTotal)} / {num(maxDays)} days</span>
+                <div className="icm-block" style={{ animationDelay: "430ms" }}>
+                  <div className="icm-block-head">
+                    <span className="icm-step">4</span>
+                    <span className="icm-sec-title">Phases</span>
+                    <span className="icm-phase-sum" data-over={over ? "1" : undefined}>{num(phaseTotal)} / {num(maxDays)} days</span>
                   </div>
-                  <div className="icv-bp">
+                  <span className={`icm-alloc ${over ? "is-over" : ""}`} aria-hidden="true"><i style={{ width: `${phasePct}%` }} /></span>
+                  <div className="icm-bp">
                     <Select value="" onChange={applyBlueprint}
                       options={blueprints.filter((b) => {
                         const svc = projectTypes.find((s) => s.id === projectTypeId);
@@ -302,53 +386,59 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
                       }).map((b) => ({ value: b.id, label: b.name || "Untitled blueprint" }))}
                       placeholder="Apply a blueprint" />
                   </div>
-                  {phases.length === 0 && <p className="icv-hint">No phases yet — apply a blueprint or add one.</p>}
-                  <ul className="icv-phases">
-                    {phases.map((p) => (
-                      <li className="icv-phase" key={p.id}>
-                        <input className="icv-phase-name" value={p.name} placeholder="Phase name" onChange={(e) => setPhaseField(p.id, { name: e.target.value })} />
-                        <div className="icv-num icv-phase-days"><input type="number" min={0} value={p.days === 0 ? "" : p.days} placeholder="0" onChange={(e) => setPhaseField(p.id, { days: e.target.value === "" ? 0 : Number(e.target.value) })} /><em>d</em></div>
-                        <button className="icv-phase-x" onClick={() => removePhase(p.id)} aria-label="Remove">×</button>
+                  {phases.length === 0 && <p className="icm-hint">No phases yet. Apply a blueprint or add one.</p>}
+                  <ul className="icm-phases">
+                    {phases.map((p, pi) => (
+                      <li className="icm-phase" key={p.id}>
+                        <span className="icm-phase-n">{pi + 1}</span>
+                        <input className="icm-phase-name" value={p.name} placeholder="Phase name" onChange={(e) => setPhaseField(p.id, { name: e.target.value })} />
+                        <div className="icm-num icm-phase-days"><input type="number" min={0} value={p.days === 0 ? "" : p.days} placeholder="0" onChange={(e) => setPhaseField(p.id, { days: e.target.value === "" ? 0 : Number(e.target.value) })} /><em>d</em></div>
+                        <button type="button" className="icm-rm" onClick={() => removePhase(p.id)} aria-label="Remove phase">×</button>
                       </li>
                     ))}
                   </ul>
-                  <button className="icv-add" onClick={addPhase}>+ Add phase</button>
+                  <button type="button" className="icm-add" onClick={addPhase}>+ Add phase</button>
                 </div>
 
                 {/* Team */}
-                <div className="icv-block">
-                  <span className="icv-sec-title">Team</span>
-                  {team.length === 0 && <p className="icv-hint">No one assigned yet.</p>}
-                  <ul className="icv-team">
+                <div className="icm-block" style={{ animationDelay: "480ms" }}>
+                  <div className="icm-block-head">
+                    <span className="icm-step">5</span>
+                    <span className="icm-sec-title">Team</span>
+                    {team.length > 0 && <span className="icm-phase-sum">{team.filter((m) => m.userId).length} assigned</span>}
+                  </div>
+                  {team.length === 0 && <p className="icm-hint">No one assigned yet.</p>}
+                  <ul className="icm-team">
                     {team.map((m) => {
                       const role = roles.find((r) => r.id === m.role);
                       const opts = (role?.userIds ?? []).map((uidv) => ({ value: uidv, label: people.find((p) => p.id === uidv)?.name ?? "—" }));
                       const isEditing = editMember === m.id || !m.userId;
                       return (
-                        <li className="icv-member" key={m.id}>
+                        <li className="icm-member" key={m.id}>
                           {isEditing ? (
                             <>
                               <Select value={m.role} onChange={(v) => setMemberRole(m.id, v)} options={roles.map((r) => ({ value: r.id, label: r.name }))} placeholder="Select role" />
                               <Select value={m.userId} onChange={(v) => setMemberUser(m.id, v)} options={opts} placeholder={m.role ? "Select person" : "Pick a role first"} disabled={!m.role} />
                             </>
                           ) : (
-                            <div className="icv-member-set" onClick={() => setEditMember(m.id)}>
-                              <span className="icv-member-av">{(m.name || "?").charAt(0).toUpperCase()}</span>
-                              <div><span className="icv-member-name">{m.name}</span><span className="icv-member-role">{roleName(m.role)}</span></div>
-                            </div>
+                            <button type="button" className="icm-member-set" onClick={() => setEditMember(m.id)} title="Change">
+                              <span className="icm-member-av">{(m.name || "?").charAt(0).toUpperCase()}</span>
+                              <span><b>{m.name}</b><small>{roleName(m.role)}</small></span>
+                            </button>
                           )}
-                          <button className="icv-phase-x" onClick={() => removeMember(m.id)} aria-label="Remove">×</button>
+                          <button type="button" className="icm-rm" onClick={() => removeMember(m.id)} aria-label="Remove member">×</button>
                         </li>
                       );
                     })}
                   </ul>
-                  <button className="icv-add" onClick={addMember}>+ Add member</button>
+                  <button type="button" className="icm-add" onClick={addMember}>+ Add member</button>
                 </div>
               </>
             )}
           </section>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

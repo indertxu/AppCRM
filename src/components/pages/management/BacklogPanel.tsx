@@ -186,6 +186,38 @@ function endOfMonth(y: number, m: number): Date {
   return new Date(y, m + 1, 0);
 }
 
+/** A clickable list-header cell: shows the label (with an active dot + sort
+ *  arrow), and on click drops a menu of sort/filter options for that column. */
+function ColHeader({
+  label, align = "left", menuAlign, isOpen, onToggle, active, sortArrow, children,
+}: {
+  label: string; align?: "left" | "right"; menuAlign?: "left" | "right"; isOpen: boolean; onToggle: () => void;
+  active?: boolean; sortArrow?: "asc" | "desc" | null; children: ReactNode;
+}) {
+  const mAlign = menuAlign ?? align;
+  const ref = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!isOpen) return;
+    const onDoc = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) onToggle(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onToggle(); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
+  }, [isOpen, onToggle]);
+  return (
+    <span className={`bl-hcell ${align === "right" ? "is-r" : ""} ${isOpen ? "is-open" : ""} ${active ? "is-active" : ""}`} ref={ref}>
+      <button type="button" className="bl-hbtn" onClick={onToggle} aria-expanded={isOpen}>
+        <span>{label}</span>
+        {sortArrow && <b className="bl-hsort">{sortArrow === "asc" ? "↑" : "↓"}</b>}
+        {active && <i className="bl-hdot" aria-hidden="true" />}
+        <svg className="bl-hcaret" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+      </button>
+      {isOpen && <div className={`bl-hmenu ${mAlign === "right" ? "is-r" : ""}`}>{children}</div>}
+    </span>
+  );
+}
+
+
 type Line = "consultor" | "supervision" | "connector";
 type Tally = Record<Line, number>;
 
@@ -242,6 +274,38 @@ export default function BacklogPanel({
     (p.team ?? []).some((m) => m.userId === userId && supRoles.has(m.role ?? ""));
 
   const [consultantFilter, setConsultantFilter] = useState<string>("");
+
+  // ── Column sort + filters (opened from the list headers) ───────────────────
+  type SortKey = "client" | "progress" | "days" | "value" | "team" | "kickoff";
+  type SortDir = "asc" | "desc";
+  const [sortKey, setSortKey] = useState<SortKey>("client");
+  const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [openMenu, setOpenMenu] = useState<SortKey | null>(null);
+  // Per-column filters. Empty/neutral = off.
+  const [fClient, setFClient] = useState("");                              // substring match
+  const [fDays, setFDays] = useState<"any" | "left" | "none">("any");      // days-left state
+  const [fDaysMin, setFDaysMin] = useState("");                            // min days left
+  const [fValueMin, setFValueMin] = useState("");                          // min € left
+  const [fTeamUser, setFTeamUser] = useState("");                          // a user on the team, or "__none"
+  const [fProgress, setFProgress] = useState<"any" | "unstarted" | "partial" | "done">("any");
+  const [fKickoff, setFKickoff] = useState<"any" | "30" | "90" | "180" | "365" | "older">("any"); // age buckets
+
+  const clearColumnFilters = () => {
+    setFClient(""); setFDays("any"); setFDaysMin(""); setFValueMin("");
+    setFTeamUser(""); setFProgress("any"); setFKickoff("any");
+  };
+  const activeFilterCount =
+    (fClient ? 1 : 0) + (fDays !== "any" ? 1 : 0) + (fDaysMin ? 1 : 0) + (fValueMin ? 1 : 0) +
+    (fTeamUser ? 1 : 0) + (fProgress !== "any" ? 1 : 0) + (fKickoff !== "any" ? 1 : 0);
+
+  const setSort = (k: SortKey, d: SortDir) => { setSortKey(k); setSortDir(d); };
+  // Days since a project's kickoff (null when no kickoff on record).
+  const ageDays = (r: ProjRow): number | null => {
+    if (!r.kickoff) return null;
+    const k = new Date(`${r.kickoff}T00:00:00`).getTime();
+    if (Number.isNaN(k)) return null;
+    return Math.floor((Date.now() - k) / 86400000);
+  };
 
   /** Everything is measured as of the close of the selected period, not "now". */
   const asOf = asOfProp || iso(new Date());
@@ -338,12 +402,70 @@ export default function BacklogPanel({
         const supervises = isSupervisorOn(p, consultantFilter);
         if (!owns && !supervises) return false;
       }
+      // ── Column filters ──
+      if (fClient) {
+        const name = (clientNames[r.clientId] ?? "").toLowerCase();
+        const type = (r.type ?? "").toLowerCase();
+        if (!name.includes(fClient.toLowerCase()) && !type.includes(fClient.toLowerCase())) return false;
+      }
+      if (fDays === "left" && sum(availableOf(r)) <= 0.001) return false;
+      if (fDays === "none" && sum(availableOf(r)) > 0.001) return false;
+      if (fDaysMin) {
+        const min = Number(fDaysMin) || 0;
+        if (inDays(r.id, sum(availableOf(r))) < min) return false;
+      }
+      if (fValueMin) {
+        const min = Number(fValueMin) || 0;
+        if (valueOf(r, availableOf(r)) < min) return false;
+      }
+      if (fTeamUser) {
+        const uids = Object.keys(r.byUser);
+        if (fTeamUser === "__none") { if (uids.length > 0) return false; }
+        else if (!uids.includes(fTeamUser)) return false;
+      }
+      if (fProgress !== "any") {
+        const sold = sum(r.sold);
+        const billedPct = sold > 0 ? (sum(r.billed) / sold) * 100 : 0;
+        if (fProgress === "unstarted" && billedPct > 0.01) return false;
+        if (fProgress === "partial" && (billedPct <= 0.01 || billedPct >= 99.99)) return false;
+        if (fProgress === "done" && billedPct < 99.99) return false;
+      }
+      if (fKickoff !== "any") {
+        const age = ageDays(r);
+        if (age == null) return false;
+        if (fKickoff === "30" && age > 30) return false;
+        if (fKickoff === "90" && age > 90) return false;
+        if (fKickoff === "180" && age > 180) return false;
+        if (fKickoff === "365" && age > 365) return false;
+        if (fKickoff === "older" && age <= 365) return false;
+      }
       return true;
     })
     .sort((a, b) => {
-      const ca = (clientNames[a.clientId] ?? "").localeCompare(clientNames[b.clientId] ?? "");
-      if (ca !== 0) return ca;
-      return valueOf(b, availableOf(b)) - valueOf(a, availableOf(a));
+      const dir = sortDir === "asc" ? 1 : -1;
+      switch (sortKey) {
+        case "client":
+          return dir * (clientNames[a.clientId] ?? "").localeCompare(clientNames[b.clientId] ?? "");
+        case "progress": {
+          const pa = sum(a.sold) > 0 ? sum(a.billed) / sum(a.sold) : 0;
+          const pb = sum(b.sold) > 0 ? sum(b.billed) / sum(b.sold) : 0;
+          return dir * (pa - pb);
+        }
+        case "days":
+          return dir * (inDays(a.id, sum(availableOf(a))) - inDays(b.id, sum(availableOf(b))));
+        case "value":
+          return dir * (valueOf(a, availableOf(a)) - valueOf(b, availableOf(b)));
+        case "team":
+          return dir * (Object.keys(a.byUser).length - Object.keys(b.byUser).length);
+        case "kickoff": {
+          // Oldest kickoff first when ascending; missing kickoffs sort last.
+          const ka = a.kickoff || "9999-99-99";
+          const kb = b.kickoff || "9999-99-99";
+          return dir * ka.localeCompare(kb);
+        }
+        default:
+          return 0;
+      }
     });
 
   const clientCount = new Set(visible.map((r) => r.clientId)).size;
@@ -391,11 +513,73 @@ export default function BacklogPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [consultantFilter, rows, projects, onlyLeft, mainRoleByService, supRoles]);
 
+  /** When a consultant is picked, the headline KPIs reflect only THEIR share:
+   *  consultancy on projects they own + supervision where they supervise, in
+   *  days and value, plus the sold/billed for the % dial — never the whole
+   *  project. Connector is tracked apart (their owned projects), split into
+   *  implemented (billed) vs pending, and never folded into the totals. */
+  const personalKpis = useMemo(() => {
+    if (!consultantFilter) return null;
+    let soldDays = 0, billedDays = 0, plannedDays = 0, availDays = 0, availValue = 0;
+    let connImplDays = 0, connPendDays = 0, connImplValue = 0, connPendValue = 0;
+    rows.forEach((r) => {
+      if (sum(r.sold) === 0) return;
+      const p = projects[r.id];
+      if (!p) return;
+      const owns = ownerOf(p) === consultantFilter;
+      const supervises = isSupervisorOn(p, consultantFilter);
+      if (!owns && !supervises) return;
+
+      // Consultancy line counts only for projects this person owns.
+      if (owns) {
+        const soldC = r.sold.consultor, billedC = r.billed.consultor, plannedC = r.planned.consultor;
+        const availC = Math.max(0, soldC - billedC);
+        soldDays += inDays(r.id, soldC);
+        billedDays += inDays(r.id, billedC);
+        plannedDays += inDays(r.id, plannedC);
+        availDays += inDays(r.id, availC);
+        availValue += availC * r.rate;
+
+        // Connector of their owned projects — kept out of the totals above.
+        const connImpl = r.billed.connector;
+        const connPend = Math.max(0, r.sold.connector - r.billed.connector);
+        connImplDays += inDays(r.id, connImpl);
+        connPendDays += inDays(r.id, connPend);
+        connImplValue += connImpl * r.rate;
+        connPendValue += connPend * r.rate;
+      }
+      // Supervision line counts wherever they hold a supervision role.
+      if (supervises) {
+        const soldS = r.sold.supervision, billedS = r.billed.supervision, plannedS = r.planned.supervision;
+        const availS = Math.max(0, soldS - billedS);
+        soldDays += inDays(r.id, soldS);
+        billedDays += inDays(r.id, billedS);
+        plannedDays += inDays(r.id, plannedS);
+        availDays += inDays(r.id, availS);
+        availValue += availS * r.supervisionRate;
+      }
+    });
+    return {
+      soldDays, billedDays, plannedDays, availDays, availValue,
+      connImplDays, connPendDays, connImplValue, connPendValue,
+      connTotalDays: connImplDays + connPendDays,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [consultantFilter, rows, projects, mainRoleByService, supRoles]);
+
   const totalSold = visible.reduce((s, r) => s + inDays(r.id, sum(r.sold)), 0);
   const totalBilled = visible.reduce((s, r) => s + inDays(r.id, sum(r.billed)), 0);
   const totalPlanned = visible.reduce((s, r) => s + inDays(r.id, sum(r.planned)), 0);
   const totalAvailable = visible.reduce((s, r) => s + inDays(r.id, sum(availableOf(r))), 0);
   const totalValue = visible.reduce((s, r) => s + valueOf(r, availableOf(r)), 0);
+
+  // When a consultant is selected, the headline KPIs switch to their share
+  // (computed in personalKpis); otherwise they show the panel-wide totals.
+  const kSold = personalKpis ? personalKpis.soldDays : totalSold;
+  const kBilled = personalKpis ? personalKpis.billedDays : totalBilled;
+  const kAvailable = personalKpis ? personalKpis.availDays : totalAvailable;
+  const kValue = personalKpis ? personalKpis.availValue : totalValue;
+  const deliveredPct = kSold > 0 ? (kBilled / kSold) * 100 : 0;
 
   // Split of what is still to deliver: genuine day-rate days vs hourly hours.
   const availDayDays = visible.filter((r) => !isHourly(r.id)).reduce((s, r) => s + sum(availableOf(r)), 0);
@@ -564,7 +748,6 @@ export default function BacklogPanel({
   const fmt = (v: number) => (chartMode === "days" ? v.toFixed(2) : Math.round(v).toLocaleString());
 
   const w = (n: number, total: number) => (total > 0 ? (n / total) * 100 : 0);
-  const deliveredPct = totalSold > 0 ? (totalBilled / totalSold) * 100 : 0;
   const scheduledPct = totalSold > 0 ? ((totalBilled + totalPlanned) / totalSold) * 100 : 0;
 
   /* ---------- presentation ---------- */
@@ -609,12 +792,17 @@ export default function BacklogPanel({
                 <small className="bl-dial-cap">billed</small>
               </span>
               <span className="bl-gauge-txt">
-                <b className="bl-val"><BlCount value={totalAvailable} /><em>days left</em></b>
-                <small>of {totalSold.toFixed(0)} days sold</small>
+                <b className="bl-val"><BlCount value={kAvailable} /><em>days left</em></b>
+                <small>of {kSold.toFixed(0)} days sold</small>
               </span>
             </span>
             <span className="bl-facts">
-              {split ? (
+              {personalKpis ? (
+                <>
+                  <span><b>{kAvailable.toFixed(1)}</b>Their work</span>
+                  <span className="is-conn"><b>{personalKpis.connTotalDays.toFixed(1)}</b>Connector</span>
+                </>
+              ) : split ? (
                 <>
                   <span><b>{availDayDays.toFixed(1)}</b>Days</span>
                   <span className="is-conn"><b>{availHourHours.toFixed(0)}</b>Hours</span>
@@ -629,15 +817,30 @@ export default function BacklogPanel({
           </BlCard>
 
           <BlCard i={1} icon={BL_ICON.value} label="Unbilled value">
-            <b className="bl-val"><BlCount value={totalValue} fmt={blEur} /><em>€</em></b>
-            <span className="bl-mix" aria-hidden="true">
-              <i style={{ width: `${armed && valueTotal > 0 ? (valueCore / valueTotal) * 100 : 0}%` }} />
-              <i className="is-conn" style={{ width: `${armed && valueTotal > 0 ? (valueConnector / valueTotal) * 100 : 0}%` }} />
-            </span>
-            <span className="bl-facts">
-              <span><b>{blEur(valueCore)}</b>Consultancy</span>
-              <span className="is-conn"><b>{blEur(valueConnector)}</b>Connector</span>
-            </span>
+            <b className="bl-val"><BlCount value={kValue} fmt={blEur} /><em>€</em></b>
+            {personalKpis ? (
+              <>
+                <span className="bl-facts">
+                  <span><b>{blEur(kValue)}</b>Their work</span>
+                  <span className="is-conn"><b>{blEur(personalKpis.connPendValue)}</b>Connector left</span>
+                </span>
+                <span className="bl-facts" style={{ marginTop: 6 }}>
+                  <span><b>{personalKpis.connImplDays.toFixed(1)}d</b>Connector done</span>
+                  <span className="is-conn"><b>{personalKpis.connPendDays.toFixed(1)}d</b>Connector pending</span>
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="bl-mix" aria-hidden="true">
+                  <i style={{ width: `${armed && valueTotal > 0 ? (valueCore / valueTotal) * 100 : 0}%` }} />
+                  <i className="is-conn" style={{ width: `${armed && valueTotal > 0 ? (valueConnector / valueTotal) * 100 : 0}%` }} />
+                </span>
+                <span className="bl-facts">
+                  <span><b>{blEur(valueCore)}</b>Consultancy</span>
+                  <span className="is-conn"><b>{blEur(valueConnector)}</b>Connector</span>
+                </span>
+              </>
+            )}
           </BlCard>
 
           <BlCard i={2} icon={BL_ICON.length} label="Avg project length">
@@ -763,13 +966,87 @@ export default function BacklogPanel({
           </div>
         ) : (
           <div className="bl-list">
-            <div className="bl-head" aria-hidden="true">
-              <span>Client and project</span>
-              <span>Progress</span>
-              <span className="is-r">Days left</span>
-              <span className="is-r">Value left</span>
-              <span>Team</span>
-              <span />
+            <div className="bl-head">
+              <ColHeader label="Client and project" isOpen={openMenu === "client"} onToggle={() => setOpenMenu(openMenu === "client" ? null : "client")}
+                active={!!fClient} sortArrow={sortKey === "client" ? sortDir : null}>
+                <button className="bl-mi" onClick={() => setSort("client", "asc")}>Sort A → Z</button>
+                <button className="bl-mi" onClick={() => setSort("client", "desc")}>Sort Z → A</button>
+                <div className="bl-msep" />
+                <label className="bl-mlabel">Search client or type</label>
+                <input className="bl-minput" value={fClient} onChange={(e) => setFClient(e.target.value)} placeholder="Type to filter…" autoFocus />
+              </ColHeader>
+
+              <ColHeader label="Progress" isOpen={openMenu === "progress"} onToggle={() => setOpenMenu(openMenu === "progress" ? null : "progress")}
+                active={fProgress !== "any"} sortArrow={sortKey === "progress" ? sortDir : null}>
+                <button className="bl-mi" onClick={() => setSort("progress", "asc")}>Least billed first</button>
+                <button className="bl-mi" onClick={() => setSort("progress", "desc")}>Most billed first</button>
+                <div className="bl-msep" />
+                <label className="bl-mlabel">Show</label>
+                {(["any", "unstarted", "partial", "done"] as const).map((v) => (
+                  <button key={v} className={`bl-mi ${fProgress === v ? "is-on" : ""}`} onClick={() => setFProgress(v)}>
+                    {v === "any" ? "All" : v === "unstarted" ? "Not started" : v === "partial" ? "In progress" : "Fully billed"}
+                  </button>
+                ))}
+              </ColHeader>
+
+              <ColHeader label="Days left" align="right" isOpen={openMenu === "days"} onToggle={() => setOpenMenu(openMenu === "days" ? null : "days")}
+                active={fDays !== "any" || !!fDaysMin} sortArrow={sortKey === "days" ? sortDir : null}>
+                <button className="bl-mi" onClick={() => setSort("days", "desc")}>Most days first</button>
+                <button className="bl-mi" onClick={() => setSort("days", "asc")}>Fewest days first</button>
+                <div className="bl-msep" />
+                <label className="bl-mlabel">Show</label>
+                {(["any", "left", "none"] as const).map((v) => (
+                  <button key={v} className={`bl-mi ${fDays === v ? "is-on" : ""}`} onClick={() => setFDays(v)}>
+                    {v === "any" ? "All" : v === "left" ? "With days left" : "Fully delivered"}
+                  </button>
+                ))}
+                <div className="bl-msep" />
+                <label className="bl-mlabel">At least (days)</label>
+                <input className="bl-minput" type="number" min="0" value={fDaysMin} onChange={(e) => setFDaysMin(e.target.value)} placeholder="e.g. 5" />
+              </ColHeader>
+
+              <ColHeader label="Value left" align="right" isOpen={openMenu === "value"} onToggle={() => setOpenMenu(openMenu === "value" ? null : "value")}
+                active={!!fValueMin} sortArrow={sortKey === "value" ? sortDir : null}>
+                <button className="bl-mi" onClick={() => setSort("value", "desc")}>Highest value first</button>
+                <button className="bl-mi" onClick={() => setSort("value", "asc")}>Lowest value first</button>
+                <div className="bl-msep" />
+                <label className="bl-mlabel">At least (€)</label>
+                <input className="bl-minput" type="number" min="0" value={fValueMin} onChange={(e) => setFValueMin(e.target.value)} placeholder="e.g. 5000" />
+              </ColHeader>
+
+              <ColHeader label="Team" isOpen={openMenu === "team"} onToggle={() => setOpenMenu(openMenu === "team" ? null : "team")}
+                active={!!fTeamUser} sortArrow={sortKey === "team" ? sortDir : null} menuAlign="right">
+                <button className="bl-mi" onClick={() => setSort("team", "desc")}>Biggest team first</button>
+                <button className="bl-mi" onClick={() => setSort("team", "asc")}>Smallest team first</button>
+                <div className="bl-msep" />
+                <label className="bl-mlabel">Has member</label>
+                <div className="bl-mscroll">
+                  <button className={`bl-mi ${fTeamUser === "" ? "is-on" : ""}`} onClick={() => setFTeamUser("")}>Anyone</button>
+                  <button className={`bl-mi ${fTeamUser === "__none" ? "is-on" : ""}`} onClick={() => setFTeamUser("__none")}>No one yet</button>
+                  {consultantOptions.map((c) => (
+                    <button key={c.id} className={`bl-mi ${fTeamUser === c.id ? "is-on" : ""}`} onClick={() => setFTeamUser(c.id)}>{c.name}</button>
+                  ))}
+                </div>
+              </ColHeader>
+
+              <ColHeader label="Kickoff" isOpen={openMenu === "kickoff"} onToggle={() => setOpenMenu(openMenu === "kickoff" ? null : "kickoff")}
+                active={fKickoff !== "any"} sortArrow={sortKey === "kickoff" ? sortDir : null} menuAlign="right">
+                <button className="bl-mi" onClick={() => setSort("kickoff", "desc")}>Newest first</button>
+                <button className="bl-mi" onClick={() => setSort("kickoff", "asc")}>Oldest first</button>
+                <div className="bl-msep" />
+                <label className="bl-mlabel">Age since kickoff</label>
+                {([["any", "Any age"], ["30", "Last 30 days"], ["90", "Last 3 months"], ["180", "Last 6 months"], ["365", "Last year"], ["older", "Over a year"]] as const).map(([v, lbl]) => (
+                  <button key={v} className={`bl-mi ${fKickoff === v ? "is-on" : ""}`} onClick={() => setFKickoff(v)}>{lbl}</button>
+                ))}
+              </ColHeader>
+
+              <span className="bl-hcell-end">
+                {activeFilterCount > 0 && (
+                  <button type="button" className="bl-hclear" onClick={clearColumnFilters} title="Clear all column filters">
+                    Clear {activeFilterCount}
+                  </button>
+                )}
+              </span>
             </div>
             {visible.map((r, ri) => {
               const avail = availableOf(r);
@@ -818,6 +1095,15 @@ export default function BacklogPanel({
                           {team.length > 4 && <span className="bl-av is-sm is-more">+{team.length - 4}</span>}
                         </span>
                       )}
+                    </span>
+
+                    <span className="bl-kick">
+                      {(() => {
+                        const age = ageDays(r);
+                        if (age == null) return <em className="bl-kick-none">—</em>;
+                        const label = age < 31 ? `${age}d` : age < 365 ? `${Math.round(age / 30)}mo` : `${(age / 365).toFixed(1)}y`;
+                        return <><b>{label}</b><small>{r.kickoff}</small></>;
+                      })()}
                     </span>
 
                     <span className="bl-chev"><BlIcon d={BL_ICON.chev} w={2.4} /></span>

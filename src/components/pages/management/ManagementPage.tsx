@@ -133,13 +133,12 @@ async function fetchEntriesUncached(range: [string, string] | null): Promise<any
 }
 
 /** The full-history fetch (range === null), used by Backlog/Billing/Bonus, is
- *  the slow one — thousands of rows over several round-trips. It doesn't change
- *  while you flip between tabs, so cache it for a short window: the first jump
- *  to Backlog pays for it, later jumps are instant. Team always passes a range,
- *  so it never touches this cache and its load is unchanged. */
+ *  the slow one. It doesn't change while you flip between tabs, so cache it for
+ *  a short window: the first jump pays for it, later jumps are instant. Team
+ *  always passes a range, so it never touches this cache. */
 let _allEntriesCache: { at: number; rows: any[] } | null = null;
 let _allEntriesInFlight: Promise<any[]> | null = null;
-const ALL_ENTRIES_TTL = 60_000; // 1 minute
+const ALL_ENTRIES_TTL = 60_000;
 export function invalidateEntriesCache() { _allEntriesCache = null; _allEntriesInFlight = null; }
 
 async function fetchEntries(range: [string, string] | null): Promise<any[]> {
@@ -372,6 +371,68 @@ const TM_STATUS: Record<TmTone, string> = {
   none: "No targets", red: "Below minimum", green: "Minimum met", purple: "High tier",
 };
 
+/** A metric filter chip in the Team header: opens a menu with a real/planned/both
+ *  basis selector and a min–max range. */
+function MetricChip({
+  label, unit, active, isOpen, onToggle, basis, setBasis, min, setMin, max, setMax, onClear,
+  sortDir, onSort,
+}: {
+  label: string; unit: string; active: boolean; isOpen: boolean; onToggle: () => void;
+  basis: "done" | "planned" | "both"; setBasis: (b: "done" | "planned" | "both") => void;
+  min: string; setMin: (v: string) => void; max: string; setMax: (v: string) => void; onClear: () => void;
+  sortDir: "desc" | "asc" | null; onSort: (dir: "desc" | "asc" | null) => void;
+}) {
+  const ref = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!isOpen) return;
+    const onDoc = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) onToggle(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onToggle(); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
+  }, [isOpen, onToggle]);
+  const basisLabel = basis === "done" ? "real" : basis === "planned" ? "planned" : "real + planned";
+  const rangeSummary = active ? `${min || "0"}–${max || "∞"}${unit ? unit : ""} ` : "";
+  const sortArrow = sortDir === "desc" ? "↓" : sortDir === "asc" ? "↑" : "";
+  const summary = `${rangeSummary}${basisLabel}`;
+  const chipActive = active || !!sortDir;
+  return (
+    <span className={`tm-chip ${isOpen ? "is-open" : ""} ${chipActive ? "is-active" : ""}`} ref={ref}>
+      <button type="button" className="tm-chip-btn" onClick={onToggle} aria-expanded={isOpen}>
+        <b>{label}</b>
+        {sortArrow && <span className="tm-chip-arrow">{sortArrow}</span>}
+        <span className="tm-chip-sum">{summary}</span>
+        {chipActive && <i className="tm-chip-dot" aria-hidden="true" />}
+        <svg className="tm-chip-caret" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+      </button>
+      {isOpen && (
+        <div className="tm-chip-menu">
+          <label className="tm-chip-lbl">Sort</label>
+          <div className="tm-chip-sort">
+            <button className={sortDir === "desc" ? "is-on" : ""} onClick={() => onSort(sortDir === "desc" ? null : "desc")}>Highest first ↓</button>
+            <button className={sortDir === "asc" ? "is-on" : ""} onClick={() => onSort(sortDir === "asc" ? null : "asc")}>Lowest first ↑</button>
+          </div>
+          <label className="tm-chip-lbl">Based on</label>
+          <div className="tm-chip-seg">
+            {(["done", "planned", "both"] as const).map((b) => (
+              <button key={b} className={basis === b ? "is-on" : ""} onClick={() => setBasis(b)}>
+                {b === "done" ? "Real" : b === "planned" ? "Planned" : "Both"}
+              </button>
+            ))}
+          </div>
+          <label className="tm-chip-lbl">Range ({unit || "€"})</label>
+          <div className="tm-chip-range">
+            <input type="number" min="0" value={min} onChange={(e) => setMin(e.target.value)} placeholder="Min" />
+            <span>–</span>
+            <input type="number" min="0" value={max} onChange={(e) => setMax(e.target.value)} placeholder="Max" />
+          </div>
+          {chipActive && <button className="tm-chip-clear" onClick={onClear}>Clear</button>}
+        </div>
+      )}
+    </span>
+  );
+}
+
 /** One target bar on a consultant card: fill, min and high ticks, and the share of the minimum. */
 function TeamMetric({
   label, unit, done, planned, min, high, tone, pct, format,
@@ -489,6 +550,22 @@ export default function ManagementPage() {
     return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
   });
   const [expanded, setExpanded] = useState<string | null>(null);
+  // Team consultant search: the header turns into a search field on click.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchHi, setSearchHi] = useState(0); // highlighted suggestion index
+  // Team metric filters (chips next to the search): range + real/planned/both.
+  type MetricBasis = "done" | "planned" | "both";
+  const [fDaysBasis, setFDaysBasis] = useState<MetricBasis>("done");
+  const [fDaysMin, setFDaysMin] = useState("");
+  const [fDaysMax, setFDaysMax] = useState("");
+  const [fAmtBasis, setFAmtBasis] = useState<MetricBasis>("done");
+  const [fAmtMin, setFAmtMin] = useState("");
+  const [fAmtMax, setFAmtMax] = useState("");
+  const [teamChip, setTeamChip] = useState<"days" | "amount" | null>(null);
+  // Sort the list by a metric, high→low or low→high. null = default order.
+  type TeamSort = { key: "days" | "amount"; dir: "desc" | "asc" } | null;
+  const [teamSort, setTeamSort] = useState<TeamSort>(null);
   const [projOpen, setProjOpen] = useState<string | null>(null); // "userId|projectKey"
   // Which of the top KPI gauges (by key: "days" / "money") is showing the
   // planned+realized breakdown instead of its single headline figure.
@@ -570,19 +647,22 @@ perDay: 1, minPerDay: 0.5, minPerWeek: 3, minPerMonth: 12, minRevenueWeek: 0, mi
   const [workTypes, setWorkTypes] = useState<WorkTypeDef[]>([]);
   const [showSettings, setShowSettings] = useState(false);
   const [loading, setLoading] = useState(true);
-  // True only while a full-history load (Backlog/Billing/Bonus) is in flight, so
-  // those panels can hold for real data instead of flashing Team's partial data.
+  // True only while a full-history load (Backlog/Billing/Bonus) is in flight.
   const [loadingAll, setLoadingAll] = useState(false);
 
   useEffect(() => {
+    // Guard against overlapping runs: flipping tabs fast can start a new load
+    // before the previous finishes. Only the latest run may apply its results
+    // or clear the overlay; stale runs bail out. This is what stopped the old
+    // "shows wrong data, sometimes no overlay" flicker.
+    let cancelled = false;
+    if (needsAll) setLoadingAll(true);
     (async () => {
-      // Backlog/Billing/Bonus pull the full history — flag it so those panels
-      // hold for real data. (If it's cached, this resolves almost instantly.)
-      if (needsAll) setLoadingAll(true);
       // Team only needs the period on screen and a couple of months either
       // side. Backlog, Billing and Bonus need the lot, so they ask for it when
       // you open them rather than making every visit wait for six thousand rows.
       const ce = await fetchEntries(needsAll ? null : windowFor(anchor, scope));
+      if (cancelled) return;
       // Only fetch the actuals for the entries we actually loaded, instead of
       // pulling the whole table on every visit. Chunked to keep the "in" list
       // within Postgres/PostgREST limits.
@@ -592,11 +672,12 @@ perDay: 1, minPerDay: 0.5, minPerWeek: 3, minPerMonth: 12, minRevenueWeek: 0, mi
         const slice = entryIds.slice(i, i + 500);
         if (!slice.length) break;
         const { data: ea } = await supabase.from("entry_actuals").select("entry_id, actual_billable").in("entry_id", slice);
+        if (cancelled) return;
         ((ea ?? []) as any[]).forEach((r) => { actual[r.entry_id] = Number(r.actual_billable) || 0; });
       }
-      // Build entries now, but DON'T setState yet — applying it here (before
-      // projects are ready) is what let a cached, fast load paint new entries
-      // against stale projects for a frame. Everything is set together below.
+      // Build entries now, but DON'T setState yet — applying it before projects
+      // are ready is what let a fast (cached) load paint new entries against
+      // stale projects for a frame. Everything is set together below.
       const processedEntries: Entry[] = ((ce ?? []) as any[]).map((r) => {
         const dur = (Number(r.end_min) || 0) - (Number(r.start_min) || 0);
         const iso = r.entry_date ?? "";
@@ -645,6 +726,7 @@ perDay: 1, minPerDay: 0.5, minPerWeek: 3, minPerMonth: 12, minRevenueWeek: 0, mi
         supabase.from("profiles").select("id, role, job_title"),
         supabase.from("service_roles").select("service_id, role_id").eq("is_main", true),
       ]);
+      if (cancelled) return;
 
       setClientTypeIds(new Set(((wtypes ?? []) as any[]).filter((t) => t.client_related).map((t) => t.id)));
 
@@ -749,6 +831,9 @@ setExcluded(excluded);
       setLoading(false);
       setLoadingAll(false);
     })();
+    // Any newer run supersedes this one: mark it cancelled so its late results
+    // and its overlay-off never land after a newer load has started.
+    return () => { cancelled = true; };
     // Reloads when the window it needs changes: a different period, or a tab
     // that wants the full history.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -987,6 +1072,55 @@ if (e.line === "connector") return;
     // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [entries, projects, people, supRoles, excluded, anchor, scope, rangeFrom, rangeTo, cutoffs, defaultCutoffDay]);
 
+  // Team consultant search: live-filter the list, and a suggestions dropdown.
+  const searchNorm = (s: string) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const filteredRows = useMemo(() => {
+    const q = searchNorm(searchQuery.trim());
+    const basisVal = (done: number, planned: number, basis: MetricBasis) =>
+      basis === "done" ? done : basis === "planned" ? planned : done + planned;
+    const out = rows.filter((r) => {
+      if (q && !searchNorm(r.name).includes(q)) return false;
+      // Days filter
+      if (fDaysMin || fDaysMax) {
+        const v = basisVal(r.daysDone, r.daysPlanned, fDaysBasis);
+        if (fDaysMin && v < (Number(fDaysMin) || 0)) return false;
+        if (fDaysMax && v > (Number(fDaysMax) || 0)) return false;
+      }
+      // Amount filter
+      if (fAmtMin || fAmtMax) {
+        const v = basisVal(r.amountDone, r.amountPlanned, fAmtBasis);
+        if (fAmtMin && v < (Number(fAmtMin) || 0)) return false;
+        if (fAmtMax && v > (Number(fAmtMax) || 0)) return false;
+      }
+      return true;
+    });
+    if (teamSort) {
+      const val = (r: Row) => teamSort.key === "days"
+        ? basisVal(r.daysDone, r.daysPlanned, fDaysBasis)
+        : basisVal(r.amountDone, r.amountPlanned, fAmtBasis);
+      out.sort((a, b) => (teamSort.dir === "desc" ? val(b) - val(a) : val(a) - val(b)));
+    }
+    return out;
+  }, [rows, searchQuery, fDaysBasis, fDaysMin, fDaysMax, fAmtBasis, fAmtMin, fAmtMax, teamSort]);
+  const daysFilterActive = !!(fDaysMin || fDaysMax);
+  const amtFilterActive = !!(fAmtMin || fAmtMax);
+  const searchSuggestions = useMemo(() => {
+    const q = searchNorm(searchQuery.trim());
+    if (!q) return [];
+    // Once the query exactly matches a name (e.g. after picking one), the list
+    // is already filtered to it — no need to keep the dropdown open.
+    if (rows.some((r) => searchNorm(r.name) === q)) return [];
+    // Names that start with the query rank above those that merely contain it.
+    return rows
+      .filter((r) => searchNorm(r.name).includes(q))
+      .sort((a, b) => {
+        const as = searchNorm(a.name).startsWith(q) ? 0 : 1;
+        const bs = searchNorm(b.name).startsWith(q) ? 0 : 1;
+        return as - bs || a.name.localeCompare(b.name);
+      })
+      .slice(0, 6);
+  }, [rows, searchQuery]);
+
   // Goals scaled to the current scope
   const dayGoal =
     scope === "week" ? targets.minPerWeek
@@ -1207,7 +1341,7 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
   };
 
   return (
-    <div className={`mg mg-tab-${tab} ${tab === "team" || tab === "backlog" || tab === "billing" ? "mg-dark" : ""}`}>
+    <div className={`mg mg-tab-${tab} ${tab === "team" || tab === "backlog" || tab === "billing" || tab === "bonus" || tab === "incoming" ? "mg-dark" : ""}`}>
       {loading && <LoadingOverlay />}
       <header className="mg-bar">
         <div className="mg-bar-left">
@@ -1351,7 +1485,77 @@ minPerMonth: targets.minPerMonth,
 
         <section className="tm-sheet">
           <header className="tm-sheet-h">
-            <h2>Consultants <span className="tm-count">{rows.length}</span></h2>
+            {searchOpen ? (
+              <div className="tm-search is-open">
+                <svg className="tm-search-ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
+                <input
+                  className="tm-search-input"
+                  value={searchQuery}
+                  onChange={(e) => { setSearchQuery(e.target.value); setSearchHi(0); }}
+                  placeholder="Search consultants…"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") { setSearchOpen(false); setSearchQuery(""); }
+                    else if (e.key === "ArrowDown") { e.preventDefault(); setSearchHi((h) => Math.min(h + 1, searchSuggestions.length - 1)); }
+                    else if (e.key === "ArrowUp") { e.preventDefault(); setSearchHi((h) => Math.max(h - 1, 0)); }
+                    else if (e.key === "Enter" && searchSuggestions[searchHi]) {
+                      e.preventDefault();
+                      const s = searchSuggestions[searchHi];
+                      setSearchQuery(s.name); setSearchHi(0);
+                    }
+                  }}
+                />
+                {searchQuery && (
+                  <button className="tm-search-clear" onClick={() => { setSearchQuery(""); setSearchHi(0); }} aria-label="Clear search">×</button>
+                )}
+                <button className="tm-search-close" onClick={() => { setSearchOpen(false); setSearchQuery(""); }} aria-label="Close search">Done</button>
+                {searchSuggestions.length > 0 && (
+                  <div className="tm-search-drop">
+                    {searchSuggestions.map((s, i) => (
+                      <button
+                        key={s.userId}
+                        className={`tm-search-opt ${i === searchHi ? "is-hi" : ""}`}
+                        onMouseEnter={() => setSearchHi(i)}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setSearchQuery(s.name);
+                          setSearchHi(0);
+                        }}
+                      >
+                        <span className="tm-search-av">{s.name.charAt(0).toUpperCase()}</span>
+                        <span>{s.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <button className="tm-sheet-title" onClick={() => setSearchOpen(true)} title="Search consultants">
+                <h2>Consultants <span className="tm-count">{filteredRows.length}</span></h2>
+                <svg className="tm-title-search" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
+              </button>
+            )}
+            <span className="tm-chips">
+              <MetricChip
+                label="Days" unit="d"
+                active={daysFilterActive} isOpen={teamChip === "days"} onToggle={() => setTeamChip(teamChip === "days" ? null : "days")}
+                basis={fDaysBasis} setBasis={setFDaysBasis}
+                min={fDaysMin} setMin={setFDaysMin} max={fDaysMax} setMax={setFDaysMax}
+                onClear={() => { setFDaysMin(""); setFDaysMax(""); if (teamSort?.key === "days") setTeamSort(null); }}
+                sortDir={teamSort?.key === "days" ? teamSort.dir : null}
+                onSort={(dir) => setTeamSort(dir ? { key: "days", dir } : null)}
+              />
+              <MetricChip
+                label="Amount" unit=""
+                active={amtFilterActive} isOpen={teamChip === "amount"} onToggle={() => setTeamChip(teamChip === "amount" ? null : "amount")}
+                basis={fAmtBasis} setBasis={setFAmtBasis}
+                min={fAmtMin} setMin={setFAmtMin} max={fAmtMax} setMax={setFAmtMax}
+                onClear={() => { setFAmtMin(""); setFAmtMax(""); if (teamSort?.key === "amount") setTeamSort(null); }}
+                sortDir={teamSort?.key === "amount" ? teamSort.dir : null}
+                onSort={(dir) => setTeamSort(dir ? { key: "amount", dir } : null)}
+              />
+            </span>
             <span className="tm-legend" aria-label="Status colours">
               <span className="tone-red"><i />Below minimum</span>
               <span className="tone-green"><i />Minimum met</span>
@@ -1363,9 +1567,11 @@ minPerMonth: targets.minPerMonth,
             <p className="tm-empty">Loading…</p>
           ) : rows.length === 0 ? (
             <p className="tm-empty">No consultants found for this period. Anyone on a project team, or with time logged, shows up here.</p>
+          ) : filteredRows.length === 0 ? (
+            <p className="tm-empty">No consultant matches “{searchQuery}”.</p>
           ) : (
             <div className="tm-list">
-              {rows.map((r, ri) => {
+              {filteredRows.map((r, ri) => {
                 const open = expanded === r.userId;
                 const g = goalsFor(r.userId);
                 const projectCount = new Set(Object.keys(r.byProject).map((k) => k.split("|")[0])).size;

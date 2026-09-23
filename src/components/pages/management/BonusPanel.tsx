@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { supabase } from "../../api/supabase";
 import { periodForDate, periodOf, type Cutoffs } from "../calendar/billingPeriods";
 import "./BonusPanel.css";
@@ -49,6 +50,83 @@ const shiftPeriod = (p: string, by: number) => {
   const d = new Date(y, m - 1 + by, 1);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 };
+
+/* ===================================================================
+   Presentation helpers. Same language as the Team, Backlog and Billing
+   tabs: count-ups, a sweeping arc, cursor spotlight.
+   =================================================================== */
+const bpVars = (o: Record<string, string | number>) => o as CSSProperties;
+const bpReduced = () =>
+  typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+const bpDate = (iso: string) => {
+  if (!iso) return "";
+  const d = new Date(`${iso}T00:00:00`);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+};
+function useBpCount(target: number, ms = 1100) {
+  const [value, setValue] = useState(() => (bpReduced() ? target : 0));
+  const from = useRef(value);
+  useEffect(() => {
+    if (bpReduced()) { from.current = target; setValue(target); return; }
+    let raf = 0;
+    const start = from.current;
+    const t0 = performance.now();
+    const tick = (now: number) => {
+      const p = Math.min(1, (now - t0) / ms);
+      const e = p === 1 ? 1 : 1 - Math.pow(2, -10 * p);
+      const cur = start + (target - start) * e;
+      from.current = cur;
+      setValue(cur);
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target, ms]);
+  return value;
+}
+function BpCount({ value, fmt = eur }: { value: number; fmt?: (n: number) => string }) {
+  return <>{fmt(useBpCount(value))}</>;
+}
+function useBpArmed(ms: number) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    const t = window.setTimeout(() => setArmed(true), bpReduced() ? 0 : ms);
+    return () => window.clearTimeout(t);
+  }, [ms]);
+  return armed;
+}
+function bpSpot(e: ReactPointerEvent<HTMLElement>) {
+  if (e.pointerType !== "mouse") return;
+  const el = (e.target as HTMLElement).closest<HTMLElement>("[data-spot]");
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  const x = e.clientX - r.left;
+  const y = e.clientY - r.top;
+  el.style.setProperty("--mx", `${x}px`);
+  el.style.setProperty("--my", `${y}px`);
+  if (el.dataset.spot === "tilt") {
+    el.style.setProperty("--ry", `${(x / r.width - 0.5) * 6}deg`);
+    el.style.setProperty("--rx", `${(0.5 - y / r.height) * 6}deg`);
+  }
+}
+const BP_ICON = {
+  gift: "M20 12v9H4v-9M2 7h20v5H2zM12 21V7M12 7H7.5a2.5 2.5 0 1 1 0-5C11 2 12 7 12 7zM12 7h4.5a2.5 2.5 0 1 0 0-5C13 2 12 7 12 7z",
+  base: "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h4",
+  target: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM12 12h.01",
+  spark: "M13 2L3 14h7l-1 8 10-12h-7z",
+  check: "M20 6L9 17l-5-5",
+  chev: "M9 6l6 6-6 6",
+  empty: "M4 7l8-4 8 4-8 4zM4 12l8 4 8-4M4 17l8 4 8-4",
+};
+function BpIcon({ d, w = 2 }: { d: string; w?: number }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={w} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d={d} />
+    </svg>
+  );
+}
+const BP_ARC = "M16 70 A54 54 0 0 1 124 70";
+const TIER_LABEL = ["Below minimum", "Minimum", "High tier"] as const;
 
 function computeBonus(amount: number, days: number, cap: BonusCap | undefined) {
   if (!cap) return { amount: 0, tier: 0 as 0 | 1 | 2, minMet: false, highMet: false };
@@ -208,123 +286,229 @@ export default function BonusPanel({
   const totalInvoiced = rows.reduce((s, r) => s + r.amount, 0);
   const qualifying = rows.filter((r) => r.bonus.minMet).length;
 
-  return (
-    <div className="bo">
-      <div className="bo-hero bo-hero-neon">
-        <span className="bo-hero-glow" aria-hidden="true" />
-        <span className="bo-hero-scan" aria-hidden="true" />
-        <div className="bo-hero-main">
-          <span className="bo-hero-label">Bonus to pay in {periodLabel(payMonth)}</span>
-          <span className="bo-hero-amount"><b>{eur(totalBonus)}</b><i>€</i></span>
-          <span className="bo-hero-sub">
-            On invoices from {periodLabel(forMonth)} ·{" "}
-            <span className="bo-lag">
-              <button className="bo-lag-btn" onClick={() => persistLag(Math.max(0, lag - 1))} disabled={lag <= 0} aria-label="Less delay">−</button>
-              <b>{lag}-month lag</b>
-              <button className="bo-lag-btn" onClick={() => persistLag(lag + 1)} aria-label="More delay">+</button>
-            </span>{" "}
-            · {qualifying} of {rows.length} qualify
-          </span>
-        </div>
-        <div className="bo-hero-stats">
-          <div className="bo-stat">
-            <span className="bo-stat-k">Invoiced base</span>
-            <span className="bo-stat-v is-neon">{eur(totalInvoiced)}<em>€</em></span>
-            <span className="bo-stat-s">{periodLabel(forMonth)}</span>
-          </div>
-          <div className="bo-stat">
-            <span className="bo-stat-k">Qualifying</span>
-            <span className="bo-stat-v">{qualifying}<em>of {rows.length}</em></span>
-            <span className="bo-stat-s">reaching minimum</span>
-          </div>
-        </div>
-      </div>
+  /* ---------- presentation ---------- */
+  const armed = useBpArmed(320);
+  const payableRows = rows.filter((r) => r.bonus.amount > 0);
+  const paidRows = payableRows.filter((r) => r.userId in paidMap);
+  const paidAmount = paidRows.reduce((s, r) => s + r.bonus.amount, 0);
+  const paidShare = totalBonus > 0 ? (paidAmount / totalBonus) * 100 : 0;
+  const qualPct = rows.length > 0 ? (qualifying / rows.length) * 100 : 0;
+  const realizedTotal = rows.reduce((s, r) => s + r.realizedBonus, 0);
+  const realizedBase = rows.reduce((s, r) => s + r.realizedInvoiced, 0);
+  const paidIn = periodLabel(shiftPeriod(payMonth, lag));
+  const initials = (uid: string) =>
+    (people[uid] ?? "?").split(" ").filter(Boolean).map((w) => w[0]).slice(0, 2).join("").toUpperCase() || "?";
 
-      <div className="bo-scroll">
+  return (
+    <div className="bp" onPointerMove={bpSpot}>
+      {/* ---------- headline cards on the dark band ---------- */}
+      <section className="bp-hero">
+        <div className="bp-kpis">
+          <div className="bp-kpi is-main" data-spot="tilt" style={bpVars({ "--i": 0 })}>
+            <span className="bp-kpi-head">
+              <span className="bp-kpi-ico"><BpIcon d={BP_ICON.gift} w={1.9} /></span>
+              <span className="bp-kpi-label">Bonus to pay in {periodLabel(payMonth)}</span>
+            </span>
+            <b className="bp-val is-xl"><BpCount value={totalBonus} /><em>€</em></b>
+            <span className="bp-lagline">
+              <span>On invoices from <b>{periodLabel(forMonth)}</b></span>
+              <span className="bp-lag" title="Months between the work being invoiced and its bonus being paid">
+                <button type="button" onClick={() => persistLag(Math.max(0, lag - 1))} disabled={lag <= 0} aria-label="Less delay">−</button>
+                <b>{lag}-month lag</b>
+                <button type="button" onClick={() => persistLag(lag + 1)} aria-label="More delay">+</button>
+              </span>
+            </span>
+            <span className="bp-paid">
+              <span className="bp-paid-bar" aria-hidden="true"><i style={{ width: `${armed ? paidShare : 0}%` }} /></span>
+              <small>
+                {payableRows.length === 0 ? "Nothing to pay this month"
+                  : paidRows.length === payableRows.length ? `All ${payableRows.length} paid`
+                  : `${paidRows.length} of ${payableRows.length} paid, ${eur(totalBonus - paidAmount)} € still to pay`}
+              </small>
+            </span>
+          </div>
+
+          <div className="bp-kpi" data-spot="tilt" style={bpVars({ "--i": 1 })}>
+            <span className="bp-kpi-head">
+              <span className="bp-kpi-ico"><BpIcon d={BP_ICON.base} w={1.9} /></span>
+              <span className="bp-kpi-label">Invoiced base</span>
+            </span>
+            <b className="bp-val"><BpCount value={totalInvoiced} /><em>€</em></b>
+            <small className="bp-kpi-sub">Invoiced in {periodLabel(forMonth)}</small>
+          </div>
+
+          <div className="bp-kpi" data-spot="tilt" style={bpVars({ "--i": 2 })}>
+            <span className="bp-kpi-head">
+              <span className="bp-kpi-ico"><BpIcon d={BP_ICON.target} w={1.9} /></span>
+              <span className="bp-kpi-label">Qualifying</span>
+            </span>
+            <span className="bp-qual">
+              <span className="bp-dial" aria-hidden="true">
+                <svg viewBox="0 0 140 80">
+                  <path className="bp-arc-bg" d={BP_ARC} pathLength={100} />
+                  <path className={`bp-arc-fill ${armed && qualPct > 0 ? "" : "is-zero"}`} d={BP_ARC} pathLength={100}
+                    style={{ strokeDasharray: `${armed ? qualPct.toFixed(2) : 0} 101` }} />
+                </svg>
+                <span className="bp-dial-pct"><BpCount value={qualPct} fmt={(n) => Math.round(n).toString()} /><em>%</em></span>
+              </span>
+              <span className="bp-qual-txt">
+                <b className="bp-val"><BpCount value={qualifying} fmt={(n) => Math.round(n).toString()} /><em>of {rows.length}</em></b>
+                <small className="bp-kpi-sub">reach the minimum</small>
+              </span>
+            </span>
+          </div>
+
+          <div className="bp-kpi is-next" data-spot="tilt" style={bpVars({ "--i": 3 })}>
+            <span className="bp-kpi-head">
+              <span className="bp-kpi-ico"><BpIcon d={BP_ICON.spark} w={1.9} /></span>
+              <span className="bp-kpi-label">Earning this month</span>
+            </span>
+            <b className="bp-val"><BpCount value={realizedTotal} /><em>€</em></b>
+            <small className="bp-kpi-sub">on {eur(realizedBase)} € invoiced, paid in {paidIn}</small>
+          </div>
+        </div>
+      </section>
+
+      {/* ---------- light sheet ---------- */}
+      <section className="bp-sheet">
+        <header className="bp-sheet-h">
+          <h2>Consultants <span className="bp-count">{rows.length}</span></h2>
+          <span className="bp-legend" aria-hidden="true">
+            <span className="tier-0"><i />Below minimum</span>
+            <span className="tier-1"><i />Minimum</span>
+            <span className="tier-2"><i />High tier</span>
+          </span>
+        </header>
+
         {rows.length === 0 ? (
-          <p className="bo-empty">No invoiced work in {periodLabel(forMonth)}.</p>
+          <div className="bp-empty">
+            <span className="bp-empty-art"><BpIcon d={BP_ICON.empty} w={1.6} /></span>
+            <p>No invoiced work in {periodLabel(forMonth)}.</p>
+          </div>
         ) : (
-          <div className="bo-list">
-            <div className="bo-listhead bo-listhead-pay">
+          <div className="bp-list">
+            <div className="bp-head bp-grid" aria-hidden="true">
               <span>Consultant</span>
-              <span className="bo-r">Invoiced</span>
-              <span className="bo-r">Invoiced this month</span>
-              <span>Tier</span>
-              <span className="bo-r">Payable this month</span>
+              <span>Invoiced in {periodLabel(forMonth)}</span>
+              <span className="bp-r" title={`Invoiced in ${periodLabel(payMonth)}, paid in ${paidIn}`}>This month</span>
+              <span className="bp-r">Payable now</span>
               <span>Status</span>
               <span />
             </div>
-            {rows.map((r) => {
+            {rows.map((r, ri) => {
               const cap = capacity[r.userId];
               const isOpen = open === r.userId;
               const isPaid = r.userId in paidMap;
               const hasPayable = r.bonus.amount > 0;
+              const minB = cap?.minBilling ?? 0;
+              const highB = cap?.highBilling ?? 0;
+              const scale = Math.max(highB, minB, r.amount, 1) * 1.06;
+              const at = (n: number) => Math.min(97, Math.max(3, (n / scale) * 100));
+              const pct = (r.bonus.tier === 2 ? cap?.bonusPct2 : cap?.bonusPct1) ?? 0;
+              const toggle = () => setOpen(isOpen ? null : r.userId);
+              const clients = Object.values(r.byClient as Record<string, { name: string; amount: number; days: number }>).sort((a, b) => b.amount - a.amount);
+              const clientMax = Math.max(0.0001, ...clients.map((c) => c.amount));
               return (
-                <div className={`bo-row bo-row-pay tier-row-${r.bonus.tier} ${isOpen ? "is-open" : ""} ${isPaid ? "is-paid" : ""}`} key={r.userId}>
-                  <button className="bo-row-main" onClick={() => setOpen(isOpen ? null : r.userId)}>
-                    <span className="bo-who">
-                      <span className="bo-av">{(people[r.userId] ?? "?").split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase()}</span>
-                      <span className="bo-name">{people[r.userId] ?? "Unknown"}</span>
+                <div className={`bp-row tier-${r.bonus.tier} ${isOpen ? "is-open" : ""} ${isPaid ? "is-paid" : ""}`} key={r.userId} style={bpVars({ "--i": Math.min(ri, 14) })}>
+                  <div
+                    className="bp-row-main bp-grid"
+                    data-spot=""
+                    role="button"
+                    tabIndex={0}
+                    aria-expanded={isOpen}
+                    onClick={toggle}
+                    onKeyDown={(e) => { if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) { e.preventDefault(); toggle(); } }}
+                  >
+                    <span className="bp-who">
+                      <span className="bp-av">{initials(r.userId)}</span>
+                      <span className="bp-who-t">
+                        <b>{people[r.userId] ?? "Unknown"}</b>
+                        <span className={`bp-tier tier-${r.bonus.tier}`}>
+                          {r.bonus.tier === 0 ? TIER_LABEL[0] : `${TIER_LABEL[r.bonus.tier]}${pct ? `, ${pct}%` : ""}`}
+                        </span>
+                      </span>
                     </span>
-                    <span className="bo-r bo-inv">{eur(r.amount)} €</span>
-                    <span className="bo-r bo-realized" title={`Invoiced in ${periodLabel(payMonth)}; the bonus it earns is paid in ${periodLabel(shiftPeriod(payMonth, lag))}`}>
+
+                    {/* invoiced base against the person's thresholds */}
+                    <span className="bp-base">
+                      <span className="bp-base-v"><b>{eur(r.amount)} €</b><small>{r.days.toFixed(1)}d</small></span>
+                      <span className="bp-track" aria-hidden="true">
+                        <i className="bp-fill" style={{ width: `${Math.min(100, (r.amount / scale) * 100)}%` }} />
+                        {minB > 0 && <i className={`bp-tick ${r.amount >= minB ? "is-hit" : ""}`} style={{ left: `${at(minB)}%` }} title={`Minimum ${eur(minB)} €`} />}
+                        {highB > 0 && <i className={`bp-tick is-high ${r.amount >= highB ? "is-hit" : ""}`} style={{ left: `${at(highB)}%` }} title={`High tier ${eur(highB)} €`} />}
+                      </span>
+                      <span className="bp-marks">
+                        {!cap ? <em>No targets set</em> : (
+                          <>
+                            {minB > 0 && <span>Min <b>{eur(minB)}</b></span>}
+                            {highB > 0 && <span className="is-high">High <b>{eur(highB)}</b></span>}
+                          </>
+                        )}
+                      </span>
+                    </span>
+
+                    <span className="bp-now" title={`Invoiced in ${periodLabel(payMonth)}; the bonus it earns is paid in ${paidIn}`}>
                       {r.realizedInvoiced > 0 ? (
                         <>
                           <b>{eur(r.realizedInvoiced)} €</b>
-                          <i>{r.realizedBonus > 0 ? `+${eur(r.realizedBonus)} bonus` : "no bonus yet"}</i>
+                          <small className={r.realizedBonus > 0 ? "is-on" : ""}>{r.realizedBonus > 0 ? `+${eur(r.realizedBonus)} bonus` : "no bonus yet"}</small>
                         </>
-                      ) : "—"}
+                      ) : <small>—</small>}
                     </span>
-                    <span className={`bo-tier tier-${r.bonus.tier}`}>
-                      {r.bonus.tier === 2 ? "High" : r.bonus.tier === 1 ? "Min" : "—"}
-                    </span>
-                    <span className="bo-r bo-bonus"><b>{eur(r.bonus.amount)} €</b></span>
-                    <span className="bo-paycell">
+
+                    <span className={`bp-pay ${hasPayable ? "" : "is-none"}`}><b>{eur(r.bonus.amount)} €</b></span>
+
+                    <span className="bp-status">
                       {hasPayable ? (
-                        <span
-                          role="button"
-                          tabIndex={0}
-                          className={`bo-paybtn ${isPaid ? "is-paid" : ""}`}
+                        <button
+                          type="button"
+                          className={`bp-paybtn ${isPaid ? "is-paid" : ""}`}
+                          disabled={busy === r.userId}
                           onClick={(e) => { e.stopPropagation(); if (busy !== r.userId) togglePaid(r.userId); }}
-                          onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); togglePaid(r.userId); } }}
+                          title={isPaid ? "Click to mark as not paid" : undefined}
                         >
-                          {busy === r.userId ? "…" : isPaid ? `Paid ${paidMap[r.userId] || ""}` : "Mark paid"}
-                        </span>
-                      ) : <span className="bo-nopay">—</span>}
+                          {busy === r.userId ? "…" : isPaid ? (
+                            <><BpIcon d={BP_ICON.check} w={2.6} />Paid{paidMap[r.userId] ? ` ${bpDate(paidMap[r.userId] as string)}` : ""}</>
+                          ) : "Mark paid"}
+                        </button>
+                      ) : <span className="bp-nopay">Nothing to pay</span>}
                     </span>
-                    <span className={`bo-chev ${isOpen ? "is-open" : ""}`}>›</span>
-                  </button>
+
+                    <span className="bp-chev"><BpIcon d={BP_ICON.chev} w={2.4} /></span>
+                  </div>
+
                   {isOpen && (
-                    <div className="bo-detail">
-                      <div className="bo-formula">
-                        <span className="bo-detail-h">How this bonus is built</span>
+                    <div className="bp-detail">
+                      <div className="bp-dbox">
+                        <span className="bp-dh">How this bonus is built</span>
                         {!cap ? (
-                          <p className="bo-note">No targets set for this consultant.</p>
+                          <p className="bp-note">No targets set for this consultant.</p>
                         ) : !r.bonus.minMet ? (
-                          <p className="bo-note">
+                          <p className="bp-note is-below">
                             Below the minimum ({cap.minBilling != null ? `${eur(cap.minBilling)} €` : ""}
-                            {cap.minBilling != null && cap.minDays != null ? " · " : ""}
-                            {cap.minDays != null ? `${cap.minDays}d` : ""}) — no bonus.
+                            {cap.minBilling != null && cap.minDays != null ? ", " : ""}
+                            {cap.minDays != null ? `${cap.minDays}d` : ""}), so no bonus.
                           </p>
                         ) : (
-                          <div className="bo-steps">
-                            <div className="bo-step">
+                          <div className="bp-steps">
+                            <div className="bp-step">
                               <span>{eur(r.amount)} € × {(r.bonus.tier === 2 ? cap.bonusPct2 : cap.bonusPct1) ?? 0}%</span>
                               <b>{eur(r.amount * ((r.bonus.tier === 2 ? cap.bonusPct2 : cap.bonusPct1) ?? 0) / 100)} €</b>
                             </div>
-                            <div className="bo-step bo-step-total">
+                            <div className="bp-step is-total">
                               <span>Total bonus</span><b>{eur(r.bonus.amount)} €</b>
                             </div>
                           </div>
                         )}
                       </div>
-                      <div className="bo-clients">
-                        <span className="bo-detail-h">Invoiced by client ({periodLabel(forMonth)})</span>
-                        {Object.values(r.byClient).sort((a, b) => b.amount - a.amount).map((c, i) => (
-                          <div className="bo-client" key={i}>
-                            <span className="bo-client-name">{c.name}</span>
-                            <span className="bo-client-days">{c.days.toFixed(2)}d</span>
-                            <span className="bo-client-amt">{eur(c.amount)} €</span>
+                      <div className="bp-dbox">
+                        <span className="bp-dh">Invoiced by client, {periodLabel(forMonth)}</span>
+                        {clients.map((c, i) => (
+                          <div className="bp-client" key={i} style={bpVars({ "--d": Math.min(i, 10) })}>
+                            <span className="bp-client-name">{c.name}</span>
+                            <span className="bp-client-days">{c.days.toFixed(2)}d</span>
+                            <span className="bp-client-amt">{eur(c.amount)} €</span>
+                            <span className="bp-client-bar" aria-hidden="true"><i style={{ width: `${(c.amount / clientMax) * 100}%` }} /></span>
                           </div>
                         ))}
                       </div>
@@ -335,7 +519,7 @@ export default function BonusPanel({
             })}
           </div>
         )}
-      </div>
+      </section>
     </div>
   );
 }

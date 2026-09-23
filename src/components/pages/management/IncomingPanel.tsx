@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { supabase } from "../../api/supabase";
 import { listHandoffs, dismissHandoff, type Handoff } from "../sales/salesApi";
 import Select from "../../framework/Select";
@@ -14,6 +15,69 @@ const ago = (iso: string) => {
 };
 const monogram = (s: string) => s.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
 const num = (n: number) => Number(n).toLocaleString("es-ES", { maximumFractionDigits: 2 });
+
+/* ===================================================================
+   Presentation helpers. Same language as the other Management tabs:
+   count-ups, cursor spotlight and tilt.
+   =================================================================== */
+const icVars = (o: Record<string, string | number>) => o as CSSProperties;
+const icReduced = () =>
+  typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+function useIcCount(target: number, ms = 1100) {
+  const [value, setValue] = useState(() => (icReduced() ? target : 0));
+  const from = useRef(value);
+  useEffect(() => {
+    if (icReduced()) { from.current = target; setValue(target); return; }
+    let raf = 0;
+    const start = from.current;
+    const t0 = performance.now();
+    const tick = (now: number) => {
+      const p = Math.min(1, (now - t0) / ms);
+      const e = p === 1 ? 1 : 1 - Math.pow(2, -10 * p);
+      const cur = start + (target - start) * e;
+      from.current = cur;
+      setValue(cur);
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target, ms]);
+  return value;
+}
+function IcCount({ value, fmt = eur }: { value: number; fmt?: (n: number) => string }) {
+  return <>{fmt(useIcCount(value))}</>;
+}
+function icSpot(e: ReactPointerEvent<HTMLElement>) {
+  if (e.pointerType !== "mouse") return;
+  const el = (e.target as HTMLElement).closest<HTMLElement>("[data-spot]");
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  const x = e.clientX - r.left;
+  const y = e.clientY - r.top;
+  el.style.setProperty("--mx", `${x}px`);
+  el.style.setProperty("--my", `${y}px`);
+  if (el.dataset.spot === "tilt") {
+    el.style.setProperty("--ry", `${(x / r.width - 0.5) * 6}deg`);
+    el.style.setProperty("--rx", `${(0.5 - y / r.height) * 6}deg`);
+  }
+}
+const IC_ICON = {
+  inbox: "M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z",
+  days: "M8 3v3M16 3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z",
+  mix: "M4 19V9M10 19V5M16 19v-7M22 19H2",
+  arrow: "M5 12h13M12 5l7 7-7 7",
+  lock: "M6 11h12a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1zM8 11V7a4 4 0 0 1 8 0v4",
+  search: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-4-4",
+  empty: "M4 7l8-4 8 4-8 4zM4 12l8 4 8-4M4 17l8 4 8-4",
+  build: "M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94z",
+};
+function IcIcon({ d, w = 2 }: { d: string; w?: number }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={w} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d={d} />
+    </svg>
+  );
+}
 
 interface ClientRow { id: string; name: string; company_id: string | null }
 
@@ -205,190 +269,216 @@ export default function IncomingPanel() {
     return { pct, done: p.done, signed: p.signed, ready: false, missing: false };
   };
 
-  if (loading) return <div className="inc"><p className="inc-empty">Loading…</p></div>;
+  /* ---------- presentation ---------- */
+  const newCount = rows.filter((h) => !existingClient(h)).length;
+  const mixMax = Math.max(1, ...stats.byType.map(([, s]) => s.value));
+
+  if (loading) {
+    return (
+      <div className="ic">
+        <section className="ic-sheet is-only">
+          <div className="ic-empty"><span className="ic-empty-art is-busy"><IcIcon d={IC_ICON.inbox} w={1.6} /></span><p>Loading handoffs…</p></div>
+        </section>
+      </div>
+    );
+  }
 
   return (
-    <div className="inc">
-      <div className="inc-head">
-        <div>
-          <h2 className="inc-title">Incoming handoffs</h2>
-        </div>
-        {rows.length > 0 && (
-          <div className="inc-filters">
-            <div className="inc-search">
-              <span className="inc-search-ico" aria-hidden="true">⌕</span>
-              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search client, service…" />
-              {q && <button className="inc-search-x" onClick={() => setQ("")} aria-label="Clear">×</button>}
-            </div>
-            <div className="inc-filter">
-              <Select value={fClient} onChange={setFClient} placeholder="All clients"
-                options={[{ value: "", label: "All clients" }, ...clientOptions]} />
-            </div>
-            <div className="inc-filter">
-              <Select value={fService} onChange={setFService} placeholder="All services"
-                options={[{ value: "", label: "All services" }, ...serviceOptions]} />
-            </div>
-            <div className="inc-filter">
-              <Select value={sort} onChange={setSort}
-                options={[
-                  { value: "recent", label: "Most recent" },
-                  { value: "value", label: "Highest value" },
-                  { value: "value_asc", label: "Lowest value" },
-                  { value: "days", label: "Most days" },
-                  { value: "days_asc", label: "Fewest days" },
-                  { value: "client", label: "Client A–Z" },
-                ]} />
-            </div>
-            {anyFilter && <button className="inc-clear" onClick={clearFilters}>Clear</button>}
-          </div>
-        )}
-      </div>
-
+    <div className="ic" onPointerMove={icSpot}>
+      {/* ---------- headline cards on the dark band ---------- */}
       {rows.length > 0 && (
-        <div className="inc-kpis">
-          <div className="inc-kpi">
-            <span className="inc-kpi-label">Incoming value</span>
-            <b className="inc-kpi-fig">{eur(stats.value)} €</b>
-            <span className="inc-kpi-sub">across {rows.length} handoff{rows.length === 1 ? "" : "s"}</span>
+        <section className="ic-hero">
+          <div className="ic-kpis">
+            <div className="ic-kpi is-main" data-spot="tilt" style={icVars({ "--i": 0 })}>
+              <span className="ic-kpi-head">
+                <span className="ic-kpi-ico"><IcIcon d={IC_ICON.inbox} w={1.9} /></span>
+                <span className="ic-kpi-label">Incoming value</span>
+              </span>
+              <b className="ic-val is-xl"><IcCount value={stats.value} /><em>€</em></b>
+              <small className="ic-kpi-sub">across {rows.length} handoff{rows.length === 1 ? "" : "s"}</small>
+              <span className="ic-split">
+                <span><i className="is-new" /><b>{newCount}</b> new client{newCount === 1 ? "" : "s"}</span>
+                <span><i className="is-existing" /><b>{rows.length - newCount}</b> existing</span>
+              </span>
+            </div>
+
+            <div className="ic-kpi" data-spot="tilt" style={icVars({ "--i": 1 })}>
+              <span className="ic-kpi-head">
+                <span className="ic-kpi-ico"><IcIcon d={IC_ICON.days} w={1.9} /></span>
+                <span className="ic-kpi-label">Work to schedule</span>
+              </span>
+              <b className="ic-val"><IcCount value={stats.days} fmt={num} /><em>days</em></b>
+              <small className="ic-kpi-sub">
+                {stats.days > 0 ? `${eur(stats.value / stats.days)} € per day on average` : "No days estimated"}
+              </small>
+            </div>
+
+            <div className="ic-kpi is-mix" data-spot="tilt" style={icVars({ "--i": 2 })}>
+              <span className="ic-kpi-head">
+                <span className="ic-kpi-ico"><IcIcon d={IC_ICON.mix} w={1.9} /></span>
+                <span className="ic-kpi-label">By service</span>
+              </span>
+              <ul className="ic-mix">
+                {stats.byType.slice(0, 4).map(([label, s], i) => (
+                  <li key={label} style={icVars({ "--d": i })}>
+                    <span className="ic-mix-name"><em>{s.count}×</em>{label}</span>
+                    <span className="ic-mix-days">{num(s.days)}d</span>
+                    <b className="ic-mix-val">{eur(s.value)} €</b>
+                    <span className="ic-mix-bar" aria-hidden="true"><i style={{ width: `${(s.value / mixMax) * 100}%` }} /></span>
+                  </li>
+                ))}
+                {stats.byType.length > 4 && <li className="ic-mix-more">+{stats.byType.length - 4} more</li>}
+              </ul>
+            </div>
           </div>
-          <div className="inc-kpi">
-            <span className="inc-kpi-label">Work to schedule</span>
-            <b className="inc-kpi-fig">{num(stats.days)}<em>days</em></b>
-            <span className="inc-kpi-sub">
-              {stats.days > 0 ? `${eur(stats.value / stats.days)} € per day average` : "no days estimated"}
-            </span>
-          </div>
-          <div className="inc-kpi inc-kpi-mix">
-            <span className="inc-kpi-label">By service</span>
-            <ul className="inc-mix">
-              {stats.byType.map(([label, s]) => (
-                <li key={label}>
-                  <span className="inc-mix-n">{s.count}×</span>
-                  <span className="inc-mix-name">{label}</span>
-                  <span className="inc-mix-days">{num(s.days)}d</span>
-                  <span className="inc-mix-val">{eur(s.value)} €</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </div>
+        </section>
       )}
 
-      {rows.length === 0 ? (
-        <div className="inc-empty-state">
-          <div className="inc-empty-art">✦</div>
-          <p>No incoming handoffs.</p>
-          <span>Won deals sent from sales will appear here.</span>
-        </div>
-      ) : shown.length === 0 ? (
-        <div className="inc-empty-state">
-          <div className="inc-empty-art">⌕</div>
-          <p>No handoffs match those filters.</p>
-          <span><button className="inc-clear" onClick={clearFilters}>Clear filters</button></span>
-        </div>
-      ) : (
-        <div className="inc-grid">
-          {shown.map((h) => {
-            const client = existingClient(h);
-            const all = h.services ?? [];
-            const svcs = all.filter((x: any) => x.kind !== "product");
-            const total = svcs.reduce((s, x) => s + (Number(x.price) || 0), 0);
-            const days = svcs.reduce((s, x) => s + (Number(x.days) || 0), 0);
-            // Use the real per-line rate stored at handoff time. With one service
-            // that's its rate; with several, fall back to a blended average.
-            const lineRate = svcs.length === 1 && svcs[0].rate != null
-              ? Number(svcs[0].rate)
-              : (days > 0 ? total / days : 0);
-            const blocked = blockerOf(h);
-            return (
-              <article className={`inc-card ${blocked ? "is-locked" : ""}`} key={h.id}>
-                <span className="inc-accent" aria-hidden="true" />
+      {/* ---------- light sheet ---------- */}
+      <section className={`ic-sheet ${rows.length === 0 ? "is-only" : ""}`}>
+        <header className="ic-sheet-h">
+          <h2>Incoming handoffs <span className="ic-count">{rows.length}</span></h2>
+          {rows.length > 0 && (
+            <div className="ic-filters">
+              <div className="ic-search">
+                <span className="ic-search-ico"><IcIcon d={IC_ICON.search} w={2.1} /></span>
+                <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search client, service…" />
+                {q && <button type="button" onClick={() => setQ("")} aria-label="Clear">×</button>}
+              </div>
+              <div className="ic-sel">
+                <Select value={fClient} onChange={setFClient} placeholder="All clients"
+                  options={[{ value: "", label: "All clients" }, ...clientOptions]} />
+              </div>
+              <div className="ic-sel">
+                <Select value={fService} onChange={setFService} placeholder="All services"
+                  options={[{ value: "", label: "All services" }, ...serviceOptions]} />
+              </div>
+              <div className="ic-sel">
+                <Select value={sort} onChange={setSort}
+                  options={[
+                    { value: "recent", label: "Most recent" },
+                    { value: "value", label: "Highest value" },
+                    { value: "value_asc", label: "Lowest value" },
+                    { value: "days", label: "Most days" },
+                    { value: "days_asc", label: "Fewest days" },
+                    { value: "client", label: "Client A–Z" },
+                  ]} />
+              </div>
+              {anyFilter && <button type="button" className="ic-clear" onClick={clearFilters}>Clear</button>}
+            </div>
+          )}
+        </header>
 
-                <header className="inc-hd">
-                  <span className="inc-mono">{monogram(h.company_name || "?")}</span>
-                  <div className="inc-hd-txt">
-                    <div className="inc-name-row">
-                      <h3 className="inc-name">{h.company_name || "Unknown company"}</h3>
-                      <span className={`inc-tag ${client ? "is-existing" : "is-new"}`}>
-                        {client ? "Existing" : "New"}
+        {rows.length === 0 ? (
+          <div className="ic-empty">
+            <span className="ic-empty-art"><IcIcon d={IC_ICON.inbox} w={1.6} /></span>
+            <p>No incoming handoffs.</p>
+            <small>Won deals sent from sales will appear here.</small>
+          </div>
+        ) : shown.length === 0 ? (
+          <div className="ic-empty">
+            <span className="ic-empty-art"><IcIcon d={IC_ICON.search} w={1.6} /></span>
+            <p>No handoffs match those filters.</p>
+            <button type="button" className="ic-clear" onClick={clearFilters}>Clear filters</button>
+          </div>
+        ) : (
+          <div className="ic-list">
+            <div className="ic-head ic-grid" aria-hidden="true">
+              <span>Company</span>
+              <span>Services</span>
+              <span className="ic-r">Days</span>
+              <span className="ic-r">Value</span>
+              <span />
+            </div>
+            {shown.map((h, hi) => {
+              const client = existingClient(h);
+              const all = h.services ?? [];
+              const svcs = all.filter((x: any) => x.kind !== "product");
+              const total = svcs.reduce((s, x) => s + (Number(x.price) || 0), 0);
+              const days = svcs.reduce((s, x) => s + (Number(x.days) || 0), 0);
+              // Use the real per-line rate stored at handoff time. With one service
+              // that's its rate; with several, fall back to a blended average.
+              const lineRate = svcs.length === 1 && svcs[0].rate != null
+                ? Number(svcs[0].rate)
+                : (days > 0 ? total / days : 0);
+              const blocked = blockerOf(h);
+              return (
+                <article
+                  className={`ic-row ${blocked ? "is-locked" : client ? "is-existing" : "is-new"}`}
+                  key={h.id}
+                  style={icVars({ "--i": Math.min(hi, 14) })}
+                >
+                  <div className="ic-row-main ic-grid" data-spot="">
+                    <span className="ic-who">
+                      <span className="ic-av">{blocked ? <IcIcon d={IC_ICON.lock} w={2} /> : monogram(h.company_name || "?")}</span>
+                      <span className="ic-who-t">
+                        <span className="ic-name">
+                          <b>{h.company_name || "Unknown company"}</b>
+                          <span className={`ic-tag ${client ? "is-existing" : "is-new"}`}>{client ? "Existing" : "New client"}</span>
+                        </span>
+                        <span className="ic-route">
+                          <span>Sales</span>
+                          <IcIcon d={IC_ICON.arrow} w={2.2} />
+                          <b>{h.dest_pipeline_name || "Pipeline"}</b>
+                          <em>Arrived {ago(h.created_at)}</em>
+                        </span>
                       </span>
-                    </div>
-                    <p className="inc-route">
-                      <span className="inc-route-from">Sales</span>
-                      <svg className="inc-route-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h13M12 5l7 7-7 7" /></svg>
-                      <span className="inc-route-to">{h.dest_pipeline_name || "Pipeline"}</span>
-                    </p>
-                  </div>
-                </header>
+                    </span>
 
-                <div className="inc-body">
+                    <span className="ic-svcs">
+                      {svcs.length === 0 ? <em className="ic-none">No services</em> : svcs.map((s, i) => (
+                        <span className="ic-svc" key={i}>
+                          <b>{s.label}</b>
+                          {s.days ? <small>{num(s.days)}d</small> : null}
+                          {svcs.length > 1 && <em>{eur(s.price || 0)} €</em>}
+                        </span>
+                      ))}
+                    </span>
+
+                    <span className="ic-num">
+                      <b>{days > 0 ? <>{num(days)}<em>d</em></> : "—"}</b>
+                      {days > 0 && <small>{eur(lineRate)} €/day</small>}
+                    </span>
+
+                    <span className="ic-num is-val"><b>{eur(total)} €</b></span>
+
+                    <span className="ic-actions">
+                      <button type="button" className="ic-act is-ghost" onClick={() => dismiss(h)} disabled={busy === h.id}>Dismiss</button>
+                      <button
+                        type="button"
+                        className={`ic-act ${blocked ? "is-locked" : "is-go"}`}
+                        onClick={() => setConvert(h)}
+                        disabled={busy === h.id || !!blocked}
+                        title={blocked ? "The previous project has to be finalised first" : undefined}
+                      >
+                        {blocked ? <><IcIcon d={IC_ICON.lock} w={2.2} />Locked</> : <>Build project<IcIcon d={IC_ICON.arrow} w={2.4} /></>}
+                      </button>
+                    </span>
+                  </div>
+
                   {blocked && (
-                    <div className="inc-lock">
-                      <div className="inc-lock-top">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
-                        <span>
+                    <div className="ic-lock">
+                      <span className="ic-lock-ico"><IcIcon d={IC_ICON.lock} w={2} /></span>
+                      <span className="ic-lock-txt">
+                        <b>
                           {blocked.missing
                             ? "Waiting on the machine installation, which has not started yet"
                             : "Unlocks when the machine installation is finalised"}
-                        </span>
-                        <b>{blocked.pct}%</b>
-                      </div>
-                      <span className="inc-lock-bar"><i style={{ width: `${blocked.pct}%` }} /></span>
-                      {!blocked.missing && (
-                        <span className="inc-lock-sub">
-                          {num(blocked.done)} of {num(blocked.signed)} delivered · {num(blocked.signed - blocked.done)} left
-                        </span>
-                      )}
+                        </b>
+                        {!blocked.missing && (
+                          <small>{num(blocked.done)} of {num(blocked.signed)} delivered, {num(blocked.signed - blocked.done)} left</small>
+                        )}
+                      </span>
+                      <span className="ic-lock-bar" aria-hidden="true"><i style={{ width: `${blocked.pct}%` }} /></span>
+                      <b className="ic-lock-pct">{blocked.pct}%</b>
                     </div>
                   )}
-                  {/* With a single service the value block already states the
-                      amount and the days, so the ledger would just repeat it. */}
-                  {svcs.length > 1 && (
-                    <ul className="inc-ledger">
-                      {svcs.map((s, i) => (
-                        <li key={i}>
-                          <span className="inc-l-name">{s.label}</span>
-                          {s.days ? <span className="inc-l-days">{num(s.days)}d</span> : <span className="inc-l-days" />}
-                          <span className="inc-l-amt">{eur(s.price || 0)} €</span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-
-                <aside className="inc-side">
-                  <span className="inc-val-label">Service value</span>
-                  {/* Always derived from the service lines shown below: rows stored before
-                      products were split out still carry a product-inclusive total. */}
-                  <span className="inc-val">{eur(total)} €</span>
-                  <span className="inc-val-sub">
-                    {svcs.length === 1 ? svcs[0].label : `${svcs.length} services`}
-                  </span>
-                  {days > 0 && (
-                    <div className="inc-daybox">
-                      <span className="inc-days"><b>{num(days)}</b><em>days</em></span>
-                      <span className="inc-rate">{eur(lineRate)} €/day</span>
-                    </div>
-                  )}
-                </aside>
-
-                <footer className="inc-foot">
-                  <span className="inc-when">Arrived {ago(h.created_at)}</span>
-                  <div className="inc-actions">
-                    <button className="inc-dismiss" onClick={() => dismiss(h)} disabled={busy === h.id}>Dismiss</button>
-                    <button className="inc-convert" onClick={() => setConvert(h)}
-                      disabled={busy === h.id || !!blocked}
-                      title={blocked ? "The previous project has to be finalised first" : undefined}>
-                      {blocked ? "Locked" : "Build project"}
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h13M12 5l7 7-7 7" /></svg>
-                    </button>
-                  </div>
-                </footer>
-              </article>
-            );
-          })}
-        </div>
-      )}
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </section>
 
       {convert && (
         <IncomingConvertModal
