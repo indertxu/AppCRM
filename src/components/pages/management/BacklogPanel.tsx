@@ -366,6 +366,23 @@ export default function BacklogPanel({
   const valueOf = (r: ProjRow, t: Tally) =>
     t.consultor * r.rate + t.connector * r.rate + t.supervision * r.supervisionRate;
 
+  /** When a consultant is selected, a project only counts the backlog for the
+      line THAT person is responsible for — the consultor bucket if they own it,
+      the supervision bucket if they supervise it — never the whole project.
+      (Connector is tracked separately and stays out of person views.) Mirrors
+      myBreakdown so the rows and the KPIs agree. Without a person selected it is
+      just the full project availability. */
+  const availForRow = (r: ProjRow): Tally => {
+    if (!consultantFilter) return availableOf(r);
+    const p = projects[r.id];
+    if (!p) return blank();
+    const avail = availableOf(r);
+    const t = blank();
+    if (ownerOf(p) === consultantFilter) t.consultor = avail.consultor;
+    if (isSupervisorOn(p, consultantFilter)) t.supervision = avail.supervision;
+    return t;
+  };
+
   /** Consultancy backlog that can't be attributed to anyone yet — the project's
       service has no "main" role set in Products & Services, or nobody on the
       team holds that role. This is why summing every consultant's personal
@@ -401,6 +418,10 @@ export default function BacklogPanel({
         const owns = ownerOf(p) === consultantFilter;
         const supervises = isSupervisorOn(p, consultantFilter);
         if (!owns && !supervises) return false;
+        // Don't keep a project whose only remaining backlog is in a line this
+        // person isn't responsible for (e.g. supervision left, but they only
+        // consult on it).
+        if (onlyLeft && sum(availForRow(r)) <= 0.001) return false;
       }
       // ── Column filters ──
       if (fClient) {
@@ -1049,7 +1070,7 @@ export default function BacklogPanel({
               </span>
             </div>
             {visible.map((r, ri) => {
-              const avail = availableOf(r);
+              const avail = availForRow(r);
               const sold = sum(r.sold);
               const isOpen = open === r.id;
               const u = isHourly(r.id) ? "h" : "d";

@@ -6,7 +6,7 @@ import { periodForDate, cutoffOf, type Cutoffs } from "../calendar/billingPeriod
 import DatePicker from "../../framework/DatePicker";
 import Select from "../../framework/Select";
 import { downloadBlob, sheetToXlsx, type XCell, type XStyle } from "../../framework/exportFile";
-import BillingAdjustModal from "./BillingAdjustModal";
+import BillingAdjustModal, { type SavePayload } from "./BillingAdjustModal";
 import "./BillingPanel.css";
 
 export interface BiEntry {
@@ -205,6 +205,84 @@ export default function BillingPanel({
   // The bill currently open in the adjustment modal (by bill.key), plus its
   // frozen invoice if it has one.
   const [adjusting, setAdjusting] = useState<{ bill: Bill; invoice: Invoice | null } | null>(null);
+  // Bills that already carry a saved adjustment (key = "projectId|period"),
+  // with their latest version — drives the "modified" dot in the list.
+  const [adjustedBills, setAdjustedBills] = useState<Record<string, number>>({});
+  // Per bill, the latest adjustment applied to the entries it shows:
+  //   key -> { entryId -> { daysAfter, removed } }  (only changed entries)
+  const [adjustMap, setAdjustMap] = useState<Record<string, Record<string, { daysAfter: number; removed: boolean }>>>({});
+
+  const loadAdjustments = async () => {
+    // Latest adjustment per (project, period), plus the entry-level changes.
+    const { data: adjs } = await supabase
+      .from("invoice_adjustments")
+      .select("id, project_id, period, version")
+      .order("version", { ascending: true });
+    const latest: Record<string, { id: string; version: number }> = {};
+    ((adjs ?? []) as any[]).forEach((a) => {
+      const k = `${a.project_id}|${a.period}`;
+      // ascending order → the last one seen per key is the highest version
+      latest[k] = { id: a.id, version: a.version };
+    });
+    const verMap: Record<string, number> = {};
+    Object.entries(latest).forEach(([k, v]) => { verMap[k] = v.version; });
+    setAdjustedBills(verMap);
+
+    const latestIds = Object.values(latest).map((v) => v.id);
+    if (latestIds.length === 0) { setAdjustMap({}); return; }
+    const { data: lines } = await supabase
+      .from("invoice_adjustment_lines")
+      .select("adjustment_id, entry_id, days_after, removed")
+      .in("adjustment_id", latestIds);
+    // adjustment_id -> its key
+    const idToKey: Record<string, string> = {};
+    Object.entries(latest).forEach(([k, v]) => { idToKey[v.id] = k; });
+    const map: Record<string, Record<string, { daysAfter: number; removed: boolean }>> = {};
+    ((lines ?? []) as any[]).forEach((l) => {
+      const k = idToKey[l.adjustment_id];
+      if (!k || !l.entry_id) return;
+      (map[k] ??= {})[l.entry_id] = { daysAfter: Number(l.days_after) || 0, removed: !!l.removed };
+    });
+    setAdjustMap(map);
+  };
+
+  // Load adjustments once on mount.
+  useEffect(() => { loadAdjustments(); }, []);
+
+  /** Persist a previewed adjustment via the atomic RPC. Returns an error
+      message to show in the modal, or null on success. */
+  const saveAdjustment = async (p: SavePayload): Promise<string | null> => {
+    const { error } = await supabase.rpc("save_billing_adjustment", {
+      p_project_id: p.projectId,
+      p_client_id: p.clientId,
+      p_period: p.period,
+      p_invoice_id: p.invoiceId,
+      p_orig_net: p.orig.net,
+      p_orig_amount: p.orig.amount,
+      p_orig_days: p.orig.days,
+      p_taxed: p.orig.taxed,
+      p_tax_rate: p.orig.taxRate,
+      p_rate: p.orig.rate,
+      p_supervision_rate: p.orig.supervisionRate,
+      p_orig_lines: p.origLines,
+      p_net_after: p.after.net,
+      p_amount_after: p.after.amount,
+      p_days_after: p.after.days,
+      p_note: p.note,
+      p_changes: p.changes,
+    });
+    if (error) {
+      // The locker's "can't go negative" guard surfaces here.
+      if (/withdraw|negative|only/i.test(error.message)) {
+        return "Not enough saved days in this client's locker for that increase.";
+      }
+      return error.message;
+    }
+    // Reload adjustments so the list shows the post-edit values (dropped/edited
+    // entries, new totals) and the modified marker.
+    await loadAdjustments();
+    return null;
+  };
   /** Bills ticked for Excel export (To-bill tab only). Keyed by bill.key. */
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [exporting, setExporting] = useState(false);
@@ -380,9 +458,24 @@ export default function BillingPanel({
       // otherwise appear as phantom 0.00 invoices in the To-bill tab.
       .filter((b) => b.rows.length > 0
         && (b.lines.consultor + b.lines.supervision + b.lines.connector) > 0)
-      .map((b) => ({ ...b, rows: b.rows.sort((x, y) => x.date.localeCompare(y.date)) }));
+      .map((b) => {
+        const sorted = b.rows.sort((x, y) => x.date.localeCompare(y.date));
+        const adj = adjustMap[b.key];
+        if (!adj) return { ...b, rows: sorted };
+        // Apply the latest saved adjustment: drop removed entries, take the
+        // adjusted day counts, and recompute the line totals from what's left.
+        const rows = sorted
+          .filter((r) => !adj[r.id]?.removed)
+          .map((r) => (adj[r.id] ? { ...r, days: adj[r.id].daysAfter } : r));
+        const lines = { consultor: 0, supervision: 0, connector: 0 };
+        rows.forEach((r) => { lines[r.line] += r.days; });
+        return { ...b, rows, lines };
+      })
+      // A bill whose adjustment emptied it out drops off the list.
+      .filter((b) => b.rows.length > 0
+        && (b.lines.consultor + b.lines.supervision + b.lines.connector) > 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entries, projects, clientNames, typeNames, supRoles, status, localCutoffs, defaultCutoffDay, localMoves]);
+  }, [entries, projects, clientNames, typeNames, supRoles, status, localCutoffs, defaultCutoffDay, localMoves, adjustMap]);
 
   const net = (b: Bill) =>
     b.lines.consultor * b.rate + b.lines.connector * b.rate + b.lines.supervision * b.supervisionRate;
@@ -1091,6 +1184,11 @@ export default function BillingPanel({
                           <span className="bn-name">
                             <b>{b.legalName}</b>
                             <span className="bn-ptag">{periodLabel(b.period)}</span>
+                            {adjustedBills[`${b.projectId}|${b.period}`] && (
+                              <span className="bn-modtag" title={`Modified · v${adjustedBills[`${b.projectId}|${b.period}`]}`}>
+                                <i /> modified
+                              </span>
+                            )}
                             {canDrop && <span className="bn-drop-hint">Drop to bill here</span>}
                           </span>
                           <span className="bn-meta">
@@ -1221,6 +1319,11 @@ export default function BillingPanel({
                             <span className="bn-meta">
                               <span className="bn-ptag">{periodLabel(inv.period)}</span>
                               <span>{inv.days.toFixed(2)}{u}</span>
+                              {adjustedBills[`${inv.projectId}|${inv.period}`] && (
+                                <span className="bn-modtag" title={`Modified · v${adjustedBills[`${inv.projectId}|${inv.period}`]}`}>
+                                  <i /> modified
+                                </span>
+                              )}
                             </span>
                           </span>
                         </span>
@@ -1430,6 +1533,7 @@ export default function BillingPanel({
           people={people}
           periodLabel={periodLabel(adjusting.bill.period)}
           onClose={() => setAdjusting(null)}
+          onSave={saveAdjustment}
         />
       )}
     </div>

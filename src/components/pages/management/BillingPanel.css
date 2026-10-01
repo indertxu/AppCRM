@@ -1524,6 +1524,10 @@
 .bn-sel .sel-trigger.is-empty { color: var(--mute) !important; }
 .bn-sel .sel-trigger:hover { background: #e8f1ec !important; }
 .bn-sel .sel-trigger.is-open { background: #fff !important; border-color: var(--jade) !important; box-shadow: 0 0 0 3px rgba(31, 185, 138, 0.16) !important; }
+/* Keep the Select's label on one line — its <span> could wrap in the narrow
+   trigger, making "All companies" spill onto two rows. Ellipsize instead. */
+.bn-sel .sel-trigger { min-width: 0; }
+.bn-sel .sel-trigger > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bn-xlsx, .bn-xlsx-cancel, .bn-clear {
   flex-shrink: 0; display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 13px; border-radius: 11px;
   font-size: 13px; font-weight: 650; cursor: pointer; transition: background 0.2s, color 0.2s, border-color 0.2s, opacity 0.2s;
@@ -1593,6 +1597,8 @@
 .bn-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .bn-name b { min-width: 0; font-size: 14.5px; font-weight: 700; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: color 0.2s; }
 .bn-ptag { flex-shrink: 0; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; color: var(--ink2); background: #eef3f0; white-space: nowrap; }
+.bn-modtag { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; padding: 2px 9px; border-radius: 999px; font-size: 10.5px; font-weight: 700; color: #8a5a12; background: rgba(224, 164, 60, 0.16); white-space: nowrap; }
+.bn-modtag i { width: 6px; height: 6px; border-radius: 50%; background: #e0a43c; flex-shrink: 0; }
 .bn-drop-hint { flex-shrink: 0; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; color: #fff; background: var(--jade); white-space: nowrap; animation: bn-open 0.3s var(--ease); }
 .bn-meta { display: flex; align-items: center; min-width: 0; font-size: 12.5px; color: var(--mute); white-space: nowrap; overflow: hidden; }
 .bn-meta > span { overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
@@ -1667,9 +1673,10 @@
 .bn-obar { grid-column: 2 / -1; height: 4px; border-radius: 4px; background: #e6ece9; overflow: hidden; }
 .bn-obar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #0a6f4d, var(--jade)); transform-origin: left; animation: bn-grow 0.8s var(--ease) 0.2s backwards; }
 .bn-ledger-h { margin: 16px 0 6px; }
-.bn-ledger { display: flex; flex-direction: column; }
+.bn-ledger { display: flex; flex-direction: column; max-height: 340px; overflow-y: auto; }
+.bn-lhead { position: sticky; top: 0; z-index: 2; background: #fff; }
 .bn-lhead, .bn-lrow { display: grid; grid-template-columns: 150px minmax(120px, 1fr) 120px 100px 80px 110px; align-items: center; column-gap: 14px; padding: 0 10px; }
-.bn-lhead { padding-bottom: 6px; font-size: 11.5px; font-weight: 600; color: var(--mute2); }
+.bn-lhead { padding-bottom: 6px; padding-top: 4px; font-size: 11.5px; font-weight: 600; color: var(--mute2); }
 .bn-lrow { min-height: 36px; border-radius: 10px; font-size: 13px; transition: background 0.2s, opacity 0.2s, transform 0.3s var(--ease); animation: bn-open 0.35s var(--ease) backwards; animation-delay: calc(var(--d, 0) * 25ms + 0.1s); }
 .bn-lrow:nth-child(even) { background: #fafcfb; }
 .bn-lrow.is-draggable { cursor: grab; }

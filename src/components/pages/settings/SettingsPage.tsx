@@ -17,6 +17,8 @@ type View = "home" | "users" | "organization" | "account" | "interface" | "catal
 
 export const DOCK_PINNED_KEY = "next.dockPinned";
 export const DOCK_PINNED_EVENT = "next:dock-pinned";
+export const DOCK_LABELS_KEY = "next.dockLabels";
+export const DOCK_LABELS_EVENT = "next:dock-labels";
 
 export default function SettingsPage() {
   const { session, role } = useAuth();
@@ -83,6 +85,9 @@ export default function SettingsPage() {
   const [dockPinned, setDockPinned] = useState<boolean>(
     () => localStorage.getItem(DOCK_PINNED_KEY) === "true"
   );
+  const [dockLabels, setDockLabels] = useState<boolean>(
+    () => localStorage.getItem(DOCK_LABELS_KEY) === "true"
+  );
 
   const uid = session?.user?.id ?? null;
 
@@ -90,11 +95,16 @@ export default function SettingsPage() {
   useEffect(() => {
     if (!uid) return;
     (async () => {
-      const { data } = await supabase.from("profiles").select("dock_pinned").eq("id", uid).maybeSingle();
+      const { data } = await supabase.from("profiles").select("dock_pinned, dock_labels").eq("id", uid).maybeSingle();
       if (data && typeof data.dock_pinned === "boolean") {
         setDockPinned(data.dock_pinned);
         localStorage.setItem(DOCK_PINNED_KEY, String(data.dock_pinned));
         window.dispatchEvent(new CustomEvent(DOCK_PINNED_EVENT, { detail: data.dock_pinned }));
+      }
+      if (data && typeof data.dock_labels === "boolean") {
+        setDockLabels(data.dock_labels);
+        localStorage.setItem(DOCK_LABELS_KEY, String(data.dock_labels));
+        window.dispatchEvent(new CustomEvent(DOCK_LABELS_EVENT, { detail: data.dock_labels }));
       }
     })();
   }, [uid]);
@@ -105,6 +115,14 @@ export default function SettingsPage() {
     localStorage.setItem(DOCK_PINNED_KEY, String(next));
     window.dispatchEvent(new CustomEvent(DOCK_PINNED_EVENT, { detail: next }));
     if (uid) await supabase.from("profiles").update({ dock_pinned: next }).eq("id", uid);
+  };
+
+  const toggleLabels = async () => {
+    const next = !dockLabels;
+    setDockLabels(next);
+    localStorage.setItem(DOCK_LABELS_KEY, String(next));
+    window.dispatchEvent(new CustomEvent(DOCK_LABELS_EVENT, { detail: next }));
+    if (uid) await supabase.from("profiles").update({ dock_labels: next }).eq("id", uid);
   };
 
   // Outlook connection state
@@ -406,6 +424,24 @@ export default function SettingsPage() {
               aria-checked={dockPinned}
               className={`st-switch ${dockPinned ? "on" : ""}`}
               onClick={toggleDock}
+            >
+              <span className="st-switch-knob" />
+            </button>
+          </div>
+
+          <div className="st-toggle-row" style={{ marginTop: "1.1rem" }}>
+            <div className="st-toggle-text">
+              <span className="st-toggle-label">Always show menu labels</span>
+              <span className="st-toggle-note">
+                Show each item's name next to its icon instead of only on hover.
+              </span>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={dockLabels}
+              className={`st-switch ${dockLabels ? "on" : ""}`}
+              onClick={toggleLabels}
             >
               <span className="st-switch-knob" />
             </button>

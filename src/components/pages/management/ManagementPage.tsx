@@ -9,6 +9,7 @@ import CalendarSettingsModal, { type WorkTypeDef, type Targets, type CapValue } 
 import UserTargetModal, { type UserTarget } from "./UserTargetModal";
 import DatePicker from "../../framework/DatePicker";
 import BacklogPanel from "./BacklogPanel";
+import SavedDaysModal from "./SavedDaysModal";
 import BonusPanel from "./BonusPanel";
 import ConsultantModal from "./ConsultantModal";
 import BillingPanel from "./BillingPanel";
@@ -451,14 +452,14 @@ function TeamMetric({
   return (
     <div className={`tm-metric tone-${tone}`}>
       <div className="tm-metric-h">
-        <span>{label}</span>
-        <span className="tm-metric-v">
+        <span className="tm-metric-l">{label}<b className="tm-metric-n"><TmCount value={done} format={format} /><em>{u}</em></b></span>
+        <span className="tm-metric-agg">
           {planned > 0.005 && (
             <span className="tm-plan-v" title={withPlan !== null ? `${Math.round(withPlan)}% of minimum once the planned days are realized` : "Planned, not yet realized"}>
               +{format(planned)}{u} planned
             </span>
           )}
-          <b><TmCount value={done} format={format} /><em>{u}</em></b>
+          <span className="tm-metric-tot" title="Delivered + planned">Total <b><TmCount value={done + planned} format={format} />{u}</b></span>
         </span>
       </div>
       <div className="tm-track">
@@ -518,7 +519,7 @@ function TeamCard({
 
       <TeamMetric label="Days delivered" unit="d" done={daysDone} planned={daysPlanned} min={goals.days} high={goals.daysHigh}
         tone={dTone} pct={dayPct} format={(n) => n.toFixed(2)} />
-      <TeamMetric label="Billed" unit="€" done={amountDone} planned={amountPlanned} min={goals.money} high={goals.moneyHigh}
+      <TeamMetric label="Value" unit="€" done={amountDone} planned={amountPlanned} min={goals.money} high={goals.moneyHigh}
         tone={mTone} pct={moneyPct} format={(n) => Math.round(n).toLocaleString()} />
 
       <span className="tm-status is-col"><i />{TM_STATUS[overall]}</span>
@@ -550,6 +551,7 @@ export default function ManagementPage() {
     return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
   });
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [connOpen, setConnOpen] = useState(false);
   // Team consultant search: the header turns into a search field on click.
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -579,6 +581,23 @@ export default function ManagementPage() {
   const [projects, setProjects] = useState<Record<string, Proj>>({});
   const [clientNames, setClientNames] = useState<Record<string, string>>({});
 const [people, setPeople] = useState<Record<string, string>>({});
+  // Current user + whether they can see everyone's saved days (boss / consultancy_manager).
+  const [myUserId, setMyUserId] = useState<string | null>(null);
+  const [seesAllSaved, setSeesAllSaved] = useState(false);
+  const [showBank, setShowBank] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      const { data: auth } = await supabase.auth.getUser();
+      const uid = auth?.user?.id ?? null;
+      setMyUserId(uid);
+      if (!uid) return;
+      const { data: prof } = await supabase.from("profiles").select("role, is_superadmin").eq("id", uid).maybeSingle();
+      const r = ((prof as any)?.role ?? "").toLowerCase();
+      const boss = (prof as any)?.is_superadmin === true || r === "boss";
+      setSeesAllSaved(boss || r === "consultancy_manager");
+    })();
+  }, []);
 const [supRoles, setSupRoles] = useState<Set<string>>(new Set());
 const [typeNames, setTypeNames] = useState<Record<string, string>>({});
   /** service_id -> the role_id marked as that service's "main" role (Catalog > service > Roles and rates). */
@@ -1138,6 +1157,51 @@ const moneyGoal =
   const totalDone = rows.reduce((s, r) => s + r.amountDone, 0);
   const totalPlanned = rows.reduce((s, r) => s + r.amountPlanned, 0);
   const totalDays = rows.reduce((s, r) => s + r.daysDone, 0);
+  // Connector work is billed at the project day rate but deliberately excluded
+  // from consultants' figures, so it isn't visible anywhere else — surface it on
+  // its own, grouped by calendar month.
+  const monthLabel = (ym: string) => {
+    const [y, mo] = ym.split("-").map(Number);
+    return new Date(y, (mo || 1) - 1, 1).toLocaleDateString(undefined, { month: "short", year: "numeric" });
+  };
+  const connectorByMonth = (() => {
+    const m = new Map<string, { days: number; value: number; count: number }>();
+    for (const e of entries) {
+      if (e.line !== "connector" || e.status === "cancelled" || !inScope(e.date)) continue;
+      const p = projects[e.projectId];
+      const rate = p ? rateFor(p, "connector", e.userId).rate : 0;
+      const key = e.date.slice(0, 7);
+      const cur = m.get(key) ?? { days: 0, value: 0, count: 0 };
+      cur.days += e.billable || 0;
+      cur.value += (e.billable || 0) * rate;
+      cur.count += 1;
+      m.set(key, cur);
+    }
+    return [...m.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1)).map(([month, v]) => ({ month, ...v }));
+  })();
+  const connectorDaysTotal = connectorByMonth.reduce((s, r) => s + r.days, 0);
+  const connectorValueTotal = connectorByMonth.reduce((s, r) => s + r.value, 0);
+  const nameByUser: Record<string, string> = Object.fromEntries(rows.map((r) => [r.userId, r.name]));
+  const connectorEntries = entries
+    .filter((e) => e.line === "connector" && e.status !== "cancelled" && inScope(e.date))
+    .map((e) => {
+      const p = projects[e.projectId];
+      const rate = p ? rateFor(p, "connector", e.userId).rate : 0;
+      return {
+        date: e.date,
+        user: nameByUser[e.userId] ?? "—",
+        client: p ? (clientNames[p.clientId] ?? "Client") : "—",
+        project: p ? (typeNames[p.typeId] ?? "Project") : "—",
+        days: e.billable || 0,
+        value: (e.billable || 0) * rate,
+      };
+    })
+    .sort((a, b) => (a.date < b.date ? 1 : -1));
+  const connectorPeople = new Set(connectorEntries.map((e) => e.user)).size;
+  const fmtDay = (iso: string) => {
+    const d = new Date(iso + "T00:00:00");
+    return isNaN(+d) ? iso : d.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" });
+  };
 const totalDaysPlanned = rows.reduce((s, r) => s + r.daysPlanned, 0);
   const teamDayGoal = rows.reduce((s, r) => s + goalsFor(r.userId).days, 0);
 const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
@@ -1403,6 +1467,13 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
             </>
           ))}
 
+          {tab === "billing" && (
+            <button className="mg-btn mg-bank" onClick={() => setShowBank(true)} title="Saved days bank">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18M8 4v5" /></svg>
+              Saved days
+            </button>
+          )}
+
           <button className="mg-btn mg-gear" onClick={() => { setCapFocusUser(null); setShowSettings(true); }} aria-label="Targets" title="Targets">⚙</button>
         </div>
       </header>
@@ -1419,6 +1490,20 @@ minPerMonth: targets.minPerMonth,
          value={userTargets[targetFor] ?? { minPerWeek: null, minPerMonth: null, minRevenueWeek: null, minRevenueMonth: null }}
           onSave={(v) => saveUserTarget(targetFor, v)}
           onClose={() => setTargetFor(null)}
+        />
+      )}
+
+      {showBank && (
+        <SavedDaysModal
+          seesAll={seesAllSaved}
+          myUserId={myUserId}
+          people={people}
+          clientNames={clientNames}
+          projectNames={Object.fromEntries(Object.values(projects).map((p) => [
+            p.id,
+            `${clientNames[p.clientId] ?? "Client"} · ${typeNames[p.typeId] ?? "Service"}`,
+          ]))}
+          onClose={() => setShowBank(false)}
         />
       )}
 
@@ -1460,7 +1545,7 @@ minPerMonth: targets.minPerMonth,
                 fmt: (n: number) => (+n.toFixed(n < 100 ? 2 : 0)).toLocaleString(),
               },
               {
-                key: "money", label: "Billed", unit: "\u20ac", icon: TM_ICON.money,
+                key: "money", label: "Value", unit: "\u20ac", icon: TM_ICON.money,
                 done: totalDone, planned: totalPlanned, goal: teamMoneyGoal, projPct: moneyProjPct,
                 fmt: (n: number) => Math.round(n).toLocaleString(),
               },
@@ -1571,6 +1656,22 @@ minPerMonth: targets.minPerMonth,
             <p className="tm-empty">No consultant matches “{searchQuery}”.</p>
           ) : (
             <div className="tm-list">
+              {connectorEntries.length > 0 && (
+                <button className="cn-card" onClick={() => setConnOpen(true)}>
+                  <span className="cn-card-ic" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M8 12h8" /><circle cx="5" cy="12" r="2.4" /><circle cx="19" cy="12" r="2.4" /><path d="M12 8V5M12 19v-3" /></svg>
+                  </span>
+                  <div className="cn-card-txt">
+                    <span className="cn-card-name">Connectors</span>
+                    <span className="cn-card-sub">{connectorPeople} {connectorPeople === 1 ? "person" : "people"} · {connectorEntries.length} {connectorEntries.length === 1 ? "entry" : "entries"} · tap for detail</span>
+                  </div>
+                  <div className="cn-card-fig">
+                    <b>{(+connectorDaysTotal.toFixed(2)).toLocaleString()} d</b>
+                    <span>{Math.round(connectorValueTotal).toLocaleString()} €</span>
+                  </div>
+                  <svg className="cn-card-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6l6 6-6 6" /></svg>
+                </button>
+              )}
               {filteredRows.map((r, ri) => {
                 const open = expanded === r.userId;
                 const g = goalsFor(r.userId);
@@ -1730,6 +1831,40 @@ minPerMonth: targets.minPerMonth,
             </div>
           )}
         </section>
+
+        {connOpen && (
+          <div className="cn-backdrop" onMouseDown={() => setConnOpen(false)}>
+            <div className="cn-modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+              <header className="cn-head">
+                <div>
+                  <span className="cn-eyebrow">Connectors</span>
+                  <h3 className="cn-title">Who did what · which project · when</h3>
+                </div>
+                <div className="cn-tot">
+                  <b>{(+connectorDaysTotal.toFixed(2)).toLocaleString()} d</b>
+                  <span>{Math.round(connectorValueTotal).toLocaleString()} €</span>
+                </div>
+                <button className="cn-x" onClick={() => setConnOpen(false)} aria-label="Close">×</button>
+              </header>
+              <div className="cn-tbl">
+                <div className="cn-tr cn-tr-h">
+                  <span>Date</span><span>Consultant</span><span>Client · Project</span><span className="cn-r">Days</span><span className="cn-r">Value</span>
+                </div>
+                <div className="cn-scroll">
+                  {connectorEntries.map((e, i) => (
+                    <div className="cn-tr" key={i}>
+                      <span className="cn-date">{fmtDay(e.date)}</span>
+                      <span className="cn-user">{e.user}</span>
+                      <span className="cn-proj"><b>{e.client}</b> · {e.project}</span>
+                      <span className="cn-r cn-d">{(+e.days.toFixed(2)).toLocaleString()}</span>
+                      <b className="cn-r cn-v">{Math.round(e.value).toLocaleString()} €</b>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
       ) : tab === "backlog" ? (
         <div className="mg-backlog-wrap">

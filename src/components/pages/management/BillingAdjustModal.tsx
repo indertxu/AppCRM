@@ -39,11 +39,28 @@ interface Props {
   people: Record<string, string>;
   periodLabel: string;
   onClose: () => void;
-  onSave?: (rows: EditRow[]) => void;
+  /** Persist the adjustment. Returns an error message to show, or null on success. */
+  onSave?: (payload: SavePayload) => Promise<string | null>;
 }
 
 export interface EditRow {
   id: string; date: string; userId: string; days: number; origDays: number; line: Line; status: string; moved?: boolean; removed: boolean;
+}
+
+/** Everything the save RPC needs, assembled by the modal. */
+export interface SavePayload {
+  projectId: string;
+  clientId: string;
+  period: string;
+  invoiceId: string | null;
+  orig: { net: number; amount: number; days: number; taxed: boolean; taxRate: number; rate: number; supervisionRate: number };
+  origLines: { entry_id: string; entry_date: string; user_id: string; line: Line; days: number; status: string }[];
+  after: { net: number; amount: number; days: number };
+  note: string;
+  changes: {
+    entry_id: string; entry_date: string; user_id: string; line: Line;
+    days_before: number; days_after: number; removed: boolean; locker_delta: number;
+  }[];
 }
 
 const eur = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -105,6 +122,48 @@ export default function BillingAdjustModal({
   const ownerMax = Math.max(0.0001, ...live.owners.map(([, v]) => v.value));
   const tax = +(live.gross - live.net).toFixed(2);
   const dirty = rows.some((r) => r.removed || r.days !== r.origDays);
+
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const doSave = async () => {
+    if (!onSave || !dirty) return;
+    setError(null);
+    setSaving(true);
+    // A change's locker delta: subtracting days deposits into the bag (+),
+    // adding takes out (−). Removing an entry deposits all its days. Only
+    // consultor/supervision feed the locker (connector doesn't).
+    const changes = rows
+      .filter((r) => r.removed || r.days !== r.origDays)
+      .map((r) => {
+        const daysAfter = r.removed ? 0 : r.days;
+        const feedsLocker = r.line === "consultor" || r.line === "supervision";
+        const lockerDelta = feedsLocker ? round2(r.origDays - daysAfter) : 0;
+        return {
+          entry_id: r.id, entry_date: r.date, user_id: r.userId, line: r.line,
+          days_before: r.origDays, days_after: daysAfter, removed: r.removed, locker_delta: lockerDelta,
+        };
+      });
+    const payload: SavePayload = {
+      projectId: bill.projectId, clientId: bill.clientId, period: bill.period,
+      invoiceId: invoice?.id ?? null,
+      orig: {
+        net: invoice?.net ?? bill.lines.consultor * bill.rate + bill.lines.supervision * bill.supervisionRate + bill.lines.connector * bill.rate,
+        amount: invoice?.amount ?? 0, days: invoice?.days ?? (bill.lines.consultor + bill.lines.supervision + bill.lines.connector),
+        taxed: bill.taxed, taxRate: bill.taxRate, rate: bill.rate, supervisionRate: bill.supervisionRate,
+      },
+      origLines: bill.rows.map((r) => ({
+        entry_id: r.id, entry_date: r.date, user_id: r.userId, line: r.line, days: r.days, status: r.status,
+      })),
+      after: { net: round2(live.net), amount: round2(live.gross), days: round2(live.totalDays) },
+      note: "",
+      changes,
+    };
+    const err = await onSave(payload);
+    setSaving(false);
+    if (err) setError(err);
+    else onClose();
+  };
 
   const statusChip = invoice
     ? (invoice.status === "paid" ? { cls: "is-paid", label: "Paid" } : { cls: "is-sent", label: "Sent" })
@@ -221,13 +280,13 @@ export default function BillingAdjustModal({
         </div>
 
         <footer className="ba-foot">
-          <span className="ba-foot-note">
-            {dirty ? "Preview only — nothing is saved yet." : "No changes."}
+          <span className={`ba-foot-note ${error ? "is-error" : ""}`}>
+            {error ? error : dirty ? "Preview — press Save to record this adjustment." : "No changes."}
           </span>
           <div className="ba-foot-actions">
-            <button type="button" className="ba-btn is-ghost" onClick={onClose}>Close</button>
-            <button type="button" className="ba-btn is-primary" disabled={!dirty} onClick={() => onSave?.(rows)}>
-              Save changes
+            <button type="button" className="ba-btn is-ghost" onClick={onClose} disabled={saving}>Close</button>
+            <button type="button" className="ba-btn is-primary" disabled={!dirty || saving} onClick={doSave}>
+              {saving ? "Saving…" : "Save changes"}
             </button>
           </div>
         </footer>

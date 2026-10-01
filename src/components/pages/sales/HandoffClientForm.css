@@ -447,3 +447,94 @@
 .hc-crow-billto > label { flex: 0 0 auto; }
 .hc-billto-sel { flex: 1 1 auto; min-width: 0; }
 .hc-billto-sel > * { width: 100%; }
+
+/* =====================================================================
+   HANDOFF · CREATE CLIENT — redesign
+   Same look as the consultant modal and the Management pop-ups: a deep pine
+   header with a slow aurora, a light body, and each section as a white card.
+   Only restyles the existing classes; the form and its logic are unchanged.
+   ===================================================================== */
+.hc-backdrop {
+  --jade: #1fb98a; --pine: #0b3a2b; --pine-deep: #072419; --hc-mint: #c9f2dd;
+  background: radial-gradient(120% 90% at 50% 0%, rgba(7, 36, 25, 0.55), rgba(4, 12, 9, 0.72));
+  backdrop-filter: blur(10px) saturate(130%); -webkit-backdrop-filter: blur(10px) saturate(130%);
+}
+.hc {
+  --jade: #1fb98a; --pine: #0b3a2b; --pine-deep: #072419; --hc-mint: #c9f2dd;
+  --ink: #0e1a15; --muted: #66756f; --line: rgba(14, 26, 21, 0.08); --field: #f2f6f4;
+  border-radius: 26px; background: #f2f5f3;
+  box-shadow: 0 60px 140px -40px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  animation: hc-open 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes hc-open {
+  0% { opacity: 0; transform: translateY(40px) scale(0.94); clip-path: inset(10% 14% 10% 14% round 44px); }
+  45% { opacity: 1; }
+  100% { opacity: 1; transform: none; clip-path: inset(0 round 26px); }
+}
+.hc-head {
+  padding: 22px 22px 24px 26px; -webkit-mask-image: none; mask-image: none;
+  background: radial-gradient(70% 180% at 0% 0%, rgba(18, 148, 102, 0.7), transparent 60%), radial-gradient(60% 160% at 100% 0%, rgba(26, 143, 134, 0.45), transparent 60%), var(--pine-deep);
+}
+.hc-head::after {
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1.2px); background-size: 22px 22px;
+  -webkit-mask-image: linear-gradient(180deg, #000, transparent 90%); mask-image: linear-gradient(180deg, #000, transparent 90%);
+}
+.hc-head-glow { background: radial-gradient(circle, rgba(31, 185, 138, 0.35), transparent 60%); }
+.hc-eyebrow { font-size: 12px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--hc-mint); }
+.hc-eyebrow::before { background: var(--jade); box-shadow: 0 0 10px rgba(31, 185, 138, 0.9); }
+.hc-title {
+  margin-top: 4px; font-family: inherit; font-size: clamp(22px, 2.4vw, 30px); font-weight: 800; letter-spacing: -0.035em;
+  background: linear-gradient(180deg, #fff 30%, #a8e6c8); -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.hc-head-total { padding: 8px 16px; border-radius: 16px; background: rgba(255, 255, 255, 0.07); border: 1px solid rgba(255, 255, 255, 0.11); }
+.hc-head-total span { font-size: 11.5px; font-weight: 600; letter-spacing: 0; text-transform: none; color: rgba(238, 248, 242, 0.64); }
+.hc-head-total b { font-family: inherit; font-size: 24px; font-weight: 800; letter-spacing: -0.04em; color: #fff; font-variant-numeric: tabular-nums; }
+.hc-btn-primary, .hc-gate-primary {
+  border-radius: 13px; font-family: inherit; font-weight: 750; color: var(--pine-deep);
+  background: linear-gradient(120deg, var(--hc-mint), var(--jade));
+  box-shadow: 0 14px 30px -12px rgba(31, 185, 138, 0.9), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+.hc-head .hc-x { border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.11); background: rgba(255, 255, 255, 0.07); color: #eef8f2; }
+.hc-head .hc-x:hover { background: rgba(224, 96, 79, 0.25); }
+.hc-body { background: #f2f5f3; }
+.hc-sec {
+  padding: 18px 20px; border-radius: 20px; background: #fff; border: 1px solid var(--line);
+  box-shadow: 0 1px 2px rgba(14, 26, 21, 0.03), 0 18px 40px -32px rgba(10, 60, 40, 0.4);
+  transition: border-color 0.3s, box-shadow 0.35s;
+}
+.hc-sec:focus-within { border-color: rgba(31, 185, 138, 0.35); }
+.hc-col { gap: 14px; }
+.hc-sec-title { font-family: inherit; font-size: 15.5px; font-weight: 750; letter-spacing: -0.015em; }
+.hc-icon { border-radius: 10px; color: #0a6f4d; background: #e6f2ec; box-shadow: none; }
+.hc-count { font-family: inherit; font-weight: 750; color: #0a6f4d; background: #e3efe9; }
+.hc-field span { font-size: 11.5px; font-weight: 600; letter-spacing: 0; text-transform: none; }
+.hc-field input { border-radius: 13px; border-width: 1px; font-size: 14px; }
+.hc-field input:focus { border-color: var(--jade); box-shadow: 0 0 0 3px rgba(31, 185, 138, 0.16); }
+.hc-field:focus-within span { color: #0a6f4d; }
+.hc-contact { border-radius: 16px; }
+.hc-contact-av { border-radius: 11px; font-family: inherit; font-weight: 800; color: #0a6f4d; background: #eaf3ee; }
+.hc-billing.is-on { color: #fff; background: var(--pine); border-color: var(--pine); }
+.hc-add-contact, .hc-addprod-btn { border-radius: 12px; font-family: inherit; font-weight: 700; color: #0a6f4d; }
+.hc-product { border-radius: 18px; }
+.hc-product-name { font-family: inherit; font-weight: 700; }
+.hc-product-price { font-family: inherit; font-weight: 800; letter-spacing: -0.02em; }
+.hc-product-tag { border-radius: 6px; font-size: 11px; letter-spacing: 0; text-transform: none; }
+.hc-cgroup-t { font-size: 12px; font-weight: 700; letter-spacing: 0; text-transform: none; color: #3a4843; }
+.hc-toggle.is-on { background: var(--jade); }
+.hc-gate { background: rgba(7, 36, 25, 0.45); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.hc-gate-card { border-radius: 24px; box-shadow: 0 50px 120px -40px rgba(0, 0, 0, 0.7); }
+.hc-gate-title { font-family: inherit; font-weight: 800; letter-spacing: -0.02em; }
+.hc-gate-ghost { border-radius: 13px; font-family: inherit; font-weight: 700; }
+@media (prefers-reduced-motion: reduce) { .hc, .hc-sec { animation: none !important; } }
+
+/* Small uppercase labels become readable sentence case, like the rest of the app. */
+.hc-eyebrow,
+.hc-field span,
+.hc-cgroup-t,
+.hc-foot-total span,
+.hc-head-total span,
+.hc-product-sign-lbl,
+.hc-cf-date > span {
+  text-transform: none; letter-spacing: 0; font-size: 11.5px;
+}

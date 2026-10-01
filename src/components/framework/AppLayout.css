@@ -159,3 +159,48 @@
 @media (max-width: 700px) {
   .dock-pinned .app-page { padding-left: 88px; }
 }
+/* ===== Always-show labels (Settings → Interface toggle) ===================
+   Labelled layout = icon tile + name in a row. When the dock is PINNED it
+   stays a slim icon-only rail and expands over the page on hover; when it is
+   not pinned it only appears on hover anyway, so it shows expanded. */
+.dock-labels .dock-bar { align-items: stretch; gap: 8px; padding: 18px 12px; overflow: hidden; }
+.dock-labels .dock-app {
+  width: 100%; height: auto; padding: 8px 12px;
+  display: flex; align-items: center; justify-content: flex-start; gap: 13px;
+  background: none; border: 1px solid transparent; border-radius: 14px;
+}
+.dock-labels .dock-app:hover { transform: none; background: rgba(18, 181, 127, 0.1); box-shadow: none; }
+.dock-labels .dock-app-active { background: rgba(18, 181, 127, 0.14); box-shadow: inset 0 0 0 1.5px #12b57f; }
+.dock-labels .dock-icon {
+  width: 40px; height: 40px; flex-shrink: 0; border-radius: 12px;
+  border: 1px solid rgba(18, 181, 127, 0.25);
+  background: linear-gradient(160deg, rgba(134, 239, 192, 0.55), rgba(18, 181, 127, 0.28));
+}
+.dock-labels .dock-icon svg { width: 22px; height: 22px; }
+.dock-labels .dock-label {
+  position: static; transform: none; opacity: 1; max-width: 150px; padding: 0;
+  background: none; color: #0a6f4d; white-space: nowrap; overflow: hidden;
+  font-family: "Space Grotesk", "Inter", sans-serif; font-size: 13.5px; font-weight: 600; letter-spacing: -0.01em;
+}
+.dock-labels .dock-app-settings .dock-label { color: #5a7d6d; }
+
+/* Not pinned: the dock only shows on hover, so keep it expanded then. */
+.dock-labels:not(.dock-pinned) .dock-bar { width: 214px; }
+
+/* Pinned: slim icon rail by default, expands over the page on hover. */
+.dock-pinned.dock-labels .dock-bar {
+  width: 88px;
+  transition: width 0.42s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.dock-pinned.dock-labels .dock:hover .dock-bar { width: 214px; }
+.dock-pinned.dock-labels .dock-label {
+  opacity: 0; max-width: 0;
+  transition: opacity 0.2s ease, max-width 0.42s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.dock-pinned.dock-labels .dock:hover .dock-label { opacity: 1; max-width: 150px; }
+
+/* Reserve only the collapsed width; the expanded bar overlays the page. */
+.dock-pinned.dock-labels .app-page { padding-left: 108px; }
+@media (max-width: 700px) {
+  .dock-pinned.dock-labels .app-page { padding-left: 100px; }
+}

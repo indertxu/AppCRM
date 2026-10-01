@@ -326,3 +326,87 @@
   padding: 8px 12px; border-radius: 10px; cursor: pointer; white-space: nowrap;
 }
 .hx-svc-c-newbtn:hover { background: rgba(18, 181, 127, 0.08); }
+
+/* =====================================================================
+   HANDOFF · CONFIRM SERVICES — redesign
+   Same look as the consultant modal and the Management pop-ups. The component
+   sets a fallback background inline, so the few properties that must win over
+   it use !important. Only restyles existing classes.
+   ===================================================================== */
+.hx-backdrop {
+  --jade: #1fb98a; --pine: #0b3a2b; --pine-deep: #072419; --hx-mint: #c9f2dd;
+  background: radial-gradient(120% 90% at 50% 0%, rgba(7, 36, 25, 0.55), rgba(4, 12, 9, 0.72)) !important;
+}
+.hx-backdrop::before { backdrop-filter: blur(10px) saturate(130%); -webkit-backdrop-filter: blur(10px) saturate(130%); }
+.hx {
+  --jade: #1fb98a; --pine: #0b3a2b; --pine-deep: #072419; --hx-mint: #c9f2dd;
+  --ink: #0e1a15; --muted: #66756f; --line: rgba(14, 26, 21, 0.08); --field: #f2f6f4;
+}
+.hx:not(.hx-prompt) {
+  background: #f2f5f3 !important; border-radius: 26px !important;
+  box-shadow: 0 60px 140px -40px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;
+  animation: hx-open 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes hx-open {
+  0% { opacity: 0; transform: translateY(40px) scale(0.94); clip-path: inset(10% 14% 10% 14% round 44px); }
+  45% { opacity: 1; }
+  100% { opacity: 1; transform: none; clip-path: inset(0 round 26px); }
+}
+.hx-head {
+  padding: 22px 22px 24px 26px;
+  background: radial-gradient(70% 180% at 0% 0%, rgba(18, 148, 102, 0.7), transparent 60%), radial-gradient(60% 160% at 100% 0%, rgba(26, 143, 134, 0.45), transparent 60%), var(--pine-deep);
+}
+.hx-head::after { display: none; }
+.hx-head-glow { background: radial-gradient(circle, rgba(31, 185, 138, 0.35), transparent 60%); }
+.hx-eyebrow { font-size: 12px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--hx-mint); }
+.hx-eyebrow::before { background: var(--jade); box-shadow: 0 0 10px rgba(31, 185, 138, 0.9); }
+.hx-title {
+  font-family: inherit; font-size: clamp(22px, 2.4vw, 30px); font-weight: 800; letter-spacing: -0.035em;
+  background: linear-gradient(180deg, #fff 30%, #a8e6c8); -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.hx-head-total { padding: 8px 16px; border-radius: 16px; background: rgba(255, 255, 255, 0.07); border: 1px solid rgba(255, 255, 255, 0.11); }
+.hx-head-total span { font-size: 11.5px; font-weight: 600; letter-spacing: 0; text-transform: none; color: rgba(238, 248, 242, 0.64); }
+.hx-head-total b { font-family: inherit; font-size: 24px; font-weight: 800; letter-spacing: -0.04em; color: #fff; font-variant-numeric: tabular-nums; }
+.hx-btn-primary {
+  border-radius: 13px; font-family: inherit; font-weight: 750; color: var(--pine-deep);
+  background: linear-gradient(120deg, var(--hx-mint), var(--jade));
+  box-shadow: 0 14px 30px -12px rgba(31, 185, 138, 0.9), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+.hx-x { border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.11); background: rgba(255, 255, 255, 0.07); color: #eef8f2; }
+.hx-x:hover { background: rgba(224, 96, 79, 0.25); }
+.hx-strip { background: #fff; border-bottom: 1px solid var(--line); }
+.hx-body { background: #f2f5f3; }
+.hx-card {
+  border-radius: 20px; border: 1px solid var(--line); background: #fff;
+  box-shadow: 0 1px 2px rgba(14, 26, 21, 0.03), 0 18px 40px -32px rgba(10, 60, 40, 0.4);
+  transition: border-color 0.3s, box-shadow 0.35s, transform 0.45s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.hx-card:hover { border-color: rgba(31, 185, 138, 0.3); }
+.hx-card-accent { width: 4px; background: var(--jade); }
+.hx-card-name { font-family: inherit; font-weight: 750; letter-spacing: -0.01em; }
+.hx-card-total { font-family: inherit; font-weight: 800; letter-spacing: -0.03em; }
+.hx-svc-c-label, .hx-card-bill, .hx-card-sign { letter-spacing: 0; text-transform: none; }
+.hx-svc-chip.is-bill { color: #fff; background: var(--pine); border-color: var(--pine); }
+.hx-edit-client { border-radius: 11px; font-family: inherit; font-weight: 700; }
+
+/* the "client already exists" prompt */
+.hx-prompt { border-radius: 24px !important; box-shadow: 0 50px 120px -40px rgba(0, 0, 0, 0.7) !important; }
+.hx-prompt-title { font-family: inherit; font-weight: 800; letter-spacing: -0.02em; }
+.hx-prompt-icon { border-radius: 18px; }
+.hx-btn-ghost { border-radius: 13px; font-family: inherit; font-weight: 700; }
+.hx-edit { border-radius: 24px; overflow: hidden; }
+.hx-edit-head { color: #eef8f2; background: radial-gradient(90% 160% at 10% 0%, rgba(18, 148, 102, 0.6), transparent 70%), var(--pine-deep); }
+@media (prefers-reduced-motion: reduce) { .hx { animation: none !important; } }
+
+/* Small uppercase labels become readable sentence case, like the rest of the app. */
+.hx-eyebrow,
+.hx-head-total span,
+.hx-pay > span,
+.hx-card-sign > span,
+.hx-egroup-t,
+.hx-ef > span,
+.hx-card-bill > span,
+.hx-svc-c-label,
+.hx-svc-c-new-head span {
+  text-transform: none; letter-spacing: 0; font-size: 11.5px;
+}

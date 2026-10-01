@@ -305,3 +305,54 @@
 .tf-sort { width: 150px; flex-shrink: 0; }
 .tf-sort .sel-trigger { min-height: 40px; box-sizing: border-box; padding-top: 9px !important; padding-bottom: 9px !important; font-size: 12.5px !important; }
 .tf-empty { padding: 2rem 0; text-align: center; color: var(--muted, #5a7d6d); font-size: 13px; }
+
+/* =====================================================================
+   FILES — redesign (matches the tracking detail and Management)
+   ===================================================================== */
+.tf { --tf-ink: #0e1a15; --tf-mute: #66756f; --tf-line: rgba(14, 26, 21, 0.08); --tf-jade: #1fb98a; --tf-pine: #072419; }
+.tf .sl-panel-title { font-family: inherit; }
+.tf-manage-icon { width: 32px; height: 32px; border-radius: 10px; border: 1px solid var(--tf-line); background: #fff; color: #3a4843; transition: background 0.2s, color 0.2s, border-color 0.2s, transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.tf-manage-icon:hover { color: #fff; background: #0b3a2b; border-color: #0b3a2b; transform: scale(1.06); }
+.tf-grid { gap: 10px; margin-top: 14px; border-radius: 16px; }
+.tf-grid.is-over { box-shadow: 0 0 0 2px var(--tf-jade), 0 0 0 6px rgba(31, 185, 138, 0.14); }
+.tf-cell {
+  border-radius: 16px; border: 1px solid var(--tf-line); background: #fff;
+  box-shadow: 0 1px 2px rgba(14, 26, 21, 0.03);
+  transition: transform 0.45s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.3s, box-shadow 0.35s;
+}
+.tf-cell:hover { transform: translateY(-2px); border-color: rgba(31, 185, 138, 0.35); box-shadow: 0 20px 36px -24px rgba(10, 60, 40, 0.45); }
+.tf-fi { border-radius: 12px; }
+.tf-cell-name { font-family: inherit; font-weight: 700; color: var(--tf-ink); }
+.tf-cell-meta, .tf-cell-date, .tf-cell-size { color: var(--tf-mute); }
+.tf-cell-tip, .tf-note-tip { border-radius: 10px; background: #0b3a2b; font-family: inherit; }
+.tf-cell-tip::before, .tf-note-tip::after { background: #0b3a2b; }
+.tf-drop { border-radius: 16px; border: 1.5px dashed rgba(10, 111, 77, 0.28); background: #f7faf8; transition: border-color 0.2s, background 0.2s; }
+.tf-drop:hover, .tf-drop.is-over { border-color: var(--tf-jade); background: #eaf5ef; }
+.tf-drop svg { color: #0a6f4d; }
+.tf-drop-main { font-family: inherit; font-weight: 700; color: var(--tf-ink); }
+.tf-err { border-radius: 12px; }
+
+/* files manager pop-up: dark header like the rest */
+.tf-modal-backdrop {
+  background: radial-gradient(120% 90% at 50% 0%, rgba(7, 36, 25, 0.55), rgba(4, 12, 9, 0.72));
+  backdrop-filter: blur(10px) saturate(130%); -webkit-backdrop-filter: blur(10px) saturate(130%);
+}
+.tf-modal {
+  border: none; border-radius: 24px; overflow: hidden; background: #f2f5f3;
+  box-shadow: 0 50px 120px -40px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  animation: tf-modal-in 0.55s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes tf-modal-in { from { opacity: 0; transform: translateY(24px) scale(0.96); } }
+.tf-modal-head {
+  padding: 18px 18px 18px 22px; border-bottom: none; color: #eef8f2;
+  background: radial-gradient(90% 160% at 10% 0%, rgba(18, 148, 102, 0.6), transparent 70%), var(--tf-pine);
+}
+.tf-modal-title { font-family: inherit; font-size: 18px; font-weight: 800; letter-spacing: -0.02em; color: #fff; }
+.tf-modal-title span { color: var(--tf-pine); background: #c9f2dd; }
+.tf-modal-x { width: 36px; height: 36px; border-radius: 11px; border: 1px solid rgba(255, 255, 255, 0.11); background: rgba(255, 255, 255, 0.07); color: #eef8f2; }
+.tf-modal-x:hover { background: rgba(224, 96, 79, 0.25); color: #fff; }
+.tf-modal-upload { border-radius: 11px; font-family: inherit; font-weight: 700; }
+.tf-modal-toolbar .tf-search input { border-radius: 12px; }
+.tf-modal-body { background: #f2f5f3; }
+@media (max-width: 760px) { .tf-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (prefers-reduced-motion: reduce) { .tf-modal, .tf-cell { animation: none !important; transition: none !important; } }

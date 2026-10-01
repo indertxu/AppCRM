@@ -156,3 +156,76 @@
 .sl-export-btn svg { display: block; width: 17px; height: 17px; color: var(--forest); }
 .sl-export-btn:hover:not(:disabled) { border-color: rgba(10,111,77,0.3); }
 .sl-export-btn:disabled { opacity: 0.5; cursor: default; }
+
+/* =====================================================================
+   EXPORT — redesign
+   Same look as the other pop-ups: a deep pine header, a light body with
+   white section cards, and the primary action in mint. Only restyles the
+   existing .xp- classes; z-index stays at 3300 so Select menus stay above.
+   ===================================================================== */
+.xp-backdrop {
+  --jade: #1fb98a; --pine: #0b3a2b; --pine-deep: #072419; --xp-mint: #c9f2dd;
+  --ink: #0e1a15; --muted: #66756f; --line: rgba(14, 26, 21, 0.08);
+  background: radial-gradient(120% 90% at 50% 0%, rgba(7, 36, 25, 0.55), rgba(4, 12, 9, 0.72));
+  backdrop-filter: blur(10px) saturate(130%); -webkit-backdrop-filter: blur(10px) saturate(130%);
+}
+.xp {
+  border: none; border-radius: 26px; background: #f2f5f3;
+  box-shadow: 0 60px 140px -40px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  animation: xp-open 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes xp-open {
+  0% { opacity: 0; transform: translateY(40px) scale(0.94); clip-path: inset(10% 14% 10% 14% round 44px); }
+  45% { opacity: 1; }
+  100% { opacity: 1; transform: none; clip-path: inset(0 round 26px); }
+}
+.xp-head {
+  position: relative; isolation: isolate; padding: 22px 22px 22px 26px; border-bottom: none; color: #eef8f2;
+  background: radial-gradient(70% 180% at 0% 0%, rgba(18, 148, 102, 0.7), transparent 60%), radial-gradient(60% 160% at 100% 0%, rgba(26, 143, 134, 0.45), transparent 60%), var(--pine-deep);
+}
+.xp-head::after {
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1.2px); background-size: 22px 22px;
+  -webkit-mask-image: linear-gradient(180deg, #000, transparent 90%); mask-image: linear-gradient(180deg, #000, transparent 90%);
+}
+.xp-title {
+  font-family: inherit; font-size: clamp(22px, 2.2vw, 28px); font-weight: 800; letter-spacing: -0.035em;
+  background: linear-gradient(180deg, #fff 30%, #a8e6c8); -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.xp-sub { color: rgba(238, 248, 242, 0.64); }
+.xp-x { width: 38px; height: 38px; border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.11); background: rgba(255, 255, 255, 0.07); color: #eef8f2; }
+.xp-x:hover { color: #fff; background: rgba(224, 96, 79, 0.25); border-color: rgba(224, 96, 79, 0.35); }
+.xp-body { background: #f2f5f3; }
+.xp-sec {
+  border-radius: 20px; border: 1px solid var(--line); background: #fff;
+  box-shadow: 0 1px 2px rgba(14, 26, 21, 0.03), 0 18px 40px -32px rgba(10, 60, 40, 0.4);
+  animation: xp-rise 0.6s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+.xp-col:nth-child(2) .xp-sec { animation-delay: 0.08s; }
+.xp-prev-sec { animation-delay: 0.14s; }
+.xp-h { font-family: inherit; font-size: 15.5px; font-weight: 750; letter-spacing: -0.015em; }
+.xp-count { color: #0a6f4d; background: #e3efe9; font-weight: 750; }
+.xp-seg { border: none; background: #eef3f0; }
+.xp-seg button { font-family: inherit; font-weight: 650; }
+.xp-seg button.is-on { color: #fff; background: var(--pine); box-shadow: 0 6px 16px -8px rgba(7, 36, 25, 0.8); }
+.xp-check input:checked + .xp-box { background: var(--jade); border-color: var(--jade); }
+.xp-chip { font-family: inherit; }
+.xp-chip.is-on { color: #fff; background: var(--pine); border-color: var(--pine); font-weight: 650; }
+.xp-picked { border: 1px dashed rgba(10, 111, 77, 0.25); background: #f5f8f6; border-radius: 14px; }
+.xp-pill { border-radius: 10px; }
+.xp-pill.is-over { border-color: var(--jade); box-shadow: -3px 0 0 0 var(--jade); }
+.xp-add { border-radius: 11px; font-family: inherit; font-weight: 700; color: #0a6f4d; }
+.xp-cond { border-radius: 14px; background: #f7faf8; }
+.xp-table-wrap { border-radius: 14px; }
+.xp-table th { background: #f5f8f6; }
+.xp-table td.is-num { font-family: inherit; }
+.xp-foot { background: #fff; border-top: 1px solid var(--line); }
+.xp-cancel { border-radius: 12px; font-family: inherit; font-weight: 700; }
+.xp-go {
+  border-radius: 12px; font-family: inherit; font-weight: 750; color: var(--pine-deep);
+  background: linear-gradient(120deg, var(--xp-mint), var(--jade));
+  box-shadow: 0 14px 30px -12px rgba(31, 185, 138, 0.9), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+.xp-go:hover:not(:disabled) { filter: none; transform: translateY(-1px); }
+.xp-meta b { font-family: inherit; }
+@media (prefers-reduced-motion: reduce) { .xp, .xp-sec { animation: none !important; } }
