@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { supabase } from "../../api/supabase";
+import { applyRolePreview } from "../../framework/SuperAdmin";
 
 export interface Company {
   id?: string;
@@ -54,13 +55,24 @@ export interface ContactField {
 
 export interface Employee { id: string; name: string; email: string; role: string }
 
+/**
+ * The signed-in user's id, read from the local session. (auth.getUser() asks
+ * the auth server and holds supabase-js's auth lock for that whole trip, so
+ * every query started meanwhile waits behind it. Row security still checks
+ * the token on the server, so the local id is enough here.)
+ */
+export async function sessionUserId(): Promise<string | null> {
+  const { data } = await supabase.auth.getSession();
+  return data?.session?.user?.id ?? null;
+}
+
 /** The signed-in user's role, used to gate pages and record visibility. */
 export async function myProfile(): Promise<{ id: string; role: string; is_superadmin: boolean } | null> {
-  const { data: auth } = await supabase.auth.getUser();
-  const uid = auth?.user?.id;
+  const uid = await sessionUserId();
   if (!uid) return null;
   const { data } = await supabase.from("profiles").select("id, role, is_superadmin").eq("id", uid).maybeSingle();
-  return (data as any) ?? null;
+  // A superadmin previewing a security level gets that level here (Superadmin bubble).
+  return data ? applyRolePreview(data as any) : null;
 }
 
 /** Boss and sales managers see everything; sales only what they are assigned. */
@@ -129,7 +141,9 @@ export async function saveCompany(c: Company): Promise<string | null> {
     const { error } = await supabase.from("companies").update(row).eq("id", c.id);
     return error?.message ?? null;
   }
-  const { data, error } = await supabase.from("companies").insert(row).select("id").single();
+  // Created by an import? Send the batch; the database stamps who and when.
+  const batch = (c as any).import_batch_id;
+  const { data, error } = await supabase.from("companies").insert(batch ? { ...row, import_batch_id: batch } : row).select("id").single();
   if (error) return error.message;
   (c as any).id = data?.id;
   return null;
@@ -168,9 +182,12 @@ export async function saveContact(c: Contact): Promise<string | null> {
     const { error } = await supabase.from("contacts").update(row).eq("id", contactId);
     if (error) return error.message;
   } else {
-    const { data, error } = await supabase.from("contacts").insert(row).select("id").single();
+    // Created by an import? Send the batch; the database stamps who and when.
+    const batch = (c as any).import_batch_id;
+    const { data, error } = await supabase.from("contacts").insert(batch ? { ...row, import_batch_id: batch } : row).select("id").single();
     if (error) return error.message;
     contactId = data.id;
+    (c as any).id = contactId;
   }
   // replace the company links
   await supabase.from("company_contacts").delete().eq("contact_id", contactId);
@@ -210,15 +227,13 @@ export async function deleteContactField(id: string) {
 
 // ---- Per-user UI preferences (jsonb bag on profiles) ----
 export async function loadPrefs(): Promise<Record<string, any>> {
-  const { data: auth } = await supabase.auth.getUser();
-  const uid = auth?.user?.id;
+  const uid = await sessionUserId();
   if (!uid) return {};
   const { data } = await supabase.from("profiles").select("prefs").eq("id", uid).maybeSingle();
   return (data?.prefs as Record<string, any>) ?? {};
 }
 export async function savePref(key: string, value: any) {
-  const { data: auth } = await supabase.auth.getUser();
-  const uid = auth?.user?.id;
+  const uid = await sessionUserId();
   if (!uid) return;
   const { data } = await supabase.from("profiles").select("prefs").eq("id", uid).maybeSingle();
   const prefs = { ...((data?.prefs as Record<string, any>) ?? {}), [key]: value };
@@ -309,13 +324,25 @@ export async function loadRelationshipSets(): Promise<RelationshipSets> {
   const trackingCompanyIds = new Set<string>();
   const trackingContactIds = new Set<string>();
 
-  const [clientsRes, trackRes, tcRes] = await Promise.all([
-    supabase.from("clients").select("company_id, contacts"),
-    supabase.from("trackings").select("company_id"),
-    supabase.from("tracking_contacts").select("contact_id"),
+  // Read every row in pages: the API returns at most 1000 rows per call, and
+  // a missing row would wrongly show a company/contact as "No sales tracking".
+  const all = async (table: string, cols: string): Promise<any[]> => {
+    const out: any[] = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabase.from(table).select(cols).range(from, from + 999);
+      if (error || !data) break;
+      out.push(...data);
+      if (data.length < 1000) break;
+    }
+    return out;
+  };
+  const [clientsRows, trackRows, tcRows] = await Promise.all([
+    all("clients", "company_id, contacts"),
+    all("trackings", "company_id"),
+    all("tracking_contacts", "contact_id"),
   ]);
 
-  (clientsRes.data ?? []).forEach((r: any) => {
+  clientsRows.forEach((r: any) => {
     if (r.company_id) clientCompanyIds.add(r.company_id);
     // `contacts` may be a jsonb array of ids, or of objects with an id.
     const list = Array.isArray(r.contacts) ? r.contacts : [];
@@ -324,8 +351,8 @@ export async function loadRelationshipSets(): Promise<RelationshipSets> {
       if (id) clientContactIds.add(String(id));
     });
   });
-  (trackRes.data ?? []).forEach((r: any) => { if (r.company_id) trackingCompanyIds.add(r.company_id); });
-  (tcRes.data ?? []).forEach((r: any) => { if (r.contact_id) trackingContactIds.add(r.contact_id); });
+  trackRows.forEach((r: any) => { if (r.company_id) trackingCompanyIds.add(r.company_id); });
+  tcRows.forEach((r: any) => { if (r.contact_id) trackingContactIds.add(r.contact_id); });
 
   return { clientCompanyIds, clientContactIds, trackingCompanyIds, trackingContactIds };
 }

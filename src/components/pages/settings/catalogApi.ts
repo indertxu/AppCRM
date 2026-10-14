@@ -132,7 +132,7 @@ export function calcTotal(calc: Calculator, values: Record<string, number>, base
   return total;
 }
 
-export interface ServiceRole { id?: string; role_id: string; price: number; sort: number; is_main?: boolean; }
+export interface ServiceRole { id?: string; role_id: string; price: number; sort: number; }
 export interface Service {
   id?: string;
   name: string;
@@ -148,11 +148,11 @@ export interface Service {
 
 // ---- Calculators: load + save (shared by products and services) ----
 async function loadCalculatorsFor(ownerType: "product" | "service"): Promise<Record<string, Calculator>> {
-  const { data: calcs } = await supabase.from("calculators").select("*").eq("owner_type", ownerType);
-  const ids = (calcs ?? []).map((c: any) => c.id);
-  const { data: vars } = ids.length
-    ? await supabase.from("calculator_variables").select("*").in("calculator_id", ids).order("sort")
-    : { data: [] as any[] };
+  // Both at once: the variables don't need the calculator ids first (the table is small).
+  const [{ data: calcs }, { data: vars }] = await Promise.all([
+    supabase.from("calculators").select("*").eq("owner_type", ownerType),
+    supabase.from("calculator_variables").select("*").order("sort").range(0, 99999),
+  ]);
   const varsByCalc: Record<string, CalcVariable[]> = {};
   (vars ?? []).forEach((v: any) => { (varsByCalc[v.calculator_id] ??= []).push(v); });
   const out: Record<string, Calculator> = {};
@@ -199,25 +199,30 @@ async function saveCalculatorFor(ownerType: "product" | "service", ownerId: stri
 
 // ---- Load everything (products with nested tiers+durations, services with tiers) ----
 export async function loadProducts(): Promise<Product[]> {
-  const { data: prods } = await supabase.from("products").select("*").order("created_at");
-  const { data: tiers } = await supabase.from("product_tiers").select("*").order("sort");
-  const { data: durs } = await supabase.from("product_tier_durations").select("*").order("sort");
+  // One round trip: products, tiers, durations and calculators together.
+  const [{ data: prods }, { data: tiers }, { data: durs }, calcs] = await Promise.all([
+    supabase.from("products").select("*").order("created_at"),
+    supabase.from("product_tiers").select("*").order("sort").range(0, 99999),
+    supabase.from("product_tier_durations").select("*").order("sort").range(0, 99999),
+    loadCalculatorsFor("product"),
+  ]);
   const durByTier: Record<string, TierDuration[]> = {};
   (durs ?? []).forEach((d: any) => { (durByTier[d.tier_id] ??= []).push(d); });
   const tiersByProduct: Record<string, ProductTier[]> = {};
   (tiers ?? []).forEach((t: any) => {
     (tiersByProduct[t.product_id] ??= []).push({ ...t, durations: durByTier[t.id] ?? [] });
   });
-  const calcs = await loadCalculatorsFor("product");
   return (prods ?? []).map((p: any) => ({ ...p, tiers: tiersByProduct[p.id] ?? [], calculator: calcs[p.id] ?? null }));
 }
 
 export async function loadServices(): Promise<Service[]> {
-  const { data: svcs } = await supabase.from("services").select("*").order("created_at");
-  const { data: roles } = await supabase.from("service_roles").select("*").order("sort");
+  const [{ data: svcs }, { data: roles }, calcs] = await Promise.all([
+    supabase.from("services").select("*").order("created_at"),
+    supabase.from("service_roles").select("*").order("sort").range(0, 99999),
+    loadCalculatorsFor("service"),
+  ]);
   const rolesBySvc: Record<string, ServiceRole[]> = {};
-  (roles ?? []).forEach((r: any) => { (rolesBySvc[r.service_id] ??= []).push({ id: r.id, role_id: r.role_id, price: r.price, sort: r.sort, is_main: !!r.is_main }); });
-  const calcs = await loadCalculatorsFor("service");
+  (roles ?? []).forEach((r: any) => { (rolesBySvc[r.service_id] ??= []).push({ id: r.id, role_id: r.role_id, price: r.price, sort: r.sort }); });
   return (svcs ?? []).map((s: any) => ({ ...s, roles: rolesBySvc[s.id] ?? [], calculator: calcs[s.id] ?? null }));
 }
 
@@ -284,7 +289,7 @@ export async function saveService(s: Service): Promise<string | null> {
     const r = s.roles[i];
     if (!r.role_id) continue;
     const { error } = await supabase.from("service_roles")
-      .insert({ service_id: serviceId, role_id: r.role_id, price: r.price, sort: i, is_main: !!r.is_main });
+      .insert({ service_id: serviceId, role_id: r.role_id, price: r.price, sort: i });
     if (error) return error.message;
   }
   return await saveCalculatorFor("service", serviceId!, s.calculator);

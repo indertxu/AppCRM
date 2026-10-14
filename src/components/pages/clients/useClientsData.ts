@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../../api/supabase";
 import { useAuth } from "../../api/AuthProvider";
-import { markHandoffConverted } from "../sales/salesApi";
+import { markHandoffConverted } from "../sales/sales/salesApi";
 import { roleSeesAll } from "../companies/companiesApi";
 import {
   emptyAddress,

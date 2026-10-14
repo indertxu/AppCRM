@@ -1,0 +1,62 @@
+/* ===== Sales · multi-select filter (self-contained, no shared classes) ===== */
+.smf { position: relative; min-width: 0; flex: 1 1 0; }
+.smf-trigger {
+  width: 100%; min-width: 0; box-sizing: border-box; display: flex; align-items: center; gap: 8px;
+  padding: 10px 13px; border-radius: 12px; border: 1px solid transparent; background: #f2f6f4;
+  font: inherit; font-size: 13px; font-weight: 600; line-height: 1.25; color: var(--so-ink, #0e1f17);
+  text-align: left; cursor: pointer; transition: background 0.2s, border-color 0.2s, box-shadow 0.2s, color 0.2s;
+}
+.smf-trigger:hover { background: #e8f1ec; }
+.smf-trigger.is-open { background: #fff; border-color: #1fb98a; box-shadow: 0 0 0 3px rgba(31, 185, 138, 0.16); }
+.smf-trigger.is-set { background: rgba(18, 181, 127, 0.11); color: #0a6f4d; }
+.smf-trigger.is-set:hover { background: rgba(18, 181, 127, 0.17); }
+.smf-label { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.smf-count {
+  flex-shrink: 0; min-width: 20px; height: 20px; padding: 0 6px; box-sizing: border-box; border-radius: 999px;
+  display: inline-grid; place-items: center; font-size: 11px; font-weight: 700; background: #12b57f; color: #fff;
+}
+.smf-caret { width: 15px; height: 15px; flex-shrink: 0; color: #1fb98a; }
+.smf-clear {
+  flex-shrink: 0; width: 20px; height: 20px; border-radius: 6px; display: inline-grid; place-items: center;
+  font-size: 15px; line-height: 1; color: #5a7d6d; transition: background 0.14s, color 0.14s;
+}
+.smf-clear:hover { background: rgba(214, 69, 69, 0.12); color: #d64545; }
+
+.smf-menu {
+  position: fixed; z-index: 7000; display: flex; flex-direction: column; box-sizing: border-box;
+  padding: 6px; border-radius: 14px; background: #fff;
+  border: 1px solid rgba(10, 111, 77, 0.13); box-shadow: 0 24px 54px -20px rgba(4, 18, 13, 0.45);
+  font-family: "Inter", system-ui, sans-serif; color: #0b241a;
+  animation: smf-in 0.14s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes smf-in { from { opacity: 0; transform: translateY(-4px); } }
+.smf-search {
+  flex-shrink: 0; margin: 2px 2px 6px; padding: 8px 11px; border-radius: 9px;
+  border: 1px solid rgba(10, 111, 77, 0.16); font: inherit; font-size: 13px; outline: none;
+}
+.smf-search:focus { border-color: #12b57f; box-shadow: 0 0 0 3px rgba(18, 181, 127, 0.14); }
+.smf-actions { flex-shrink: 0; display: flex; justify-content: space-between; padding: 2px 6px 6px; margin-bottom: 4px; border-bottom: 1px solid rgba(10, 111, 77, 0.08); }
+.smf-actions button { border: 0; background: none; padding: 3px 4px; border-radius: 6px; font: inherit; font-size: 12px; font-weight: 700; color: #0a6f4d; cursor: pointer; }
+.smf-actions button:hover:not(:disabled) { background: rgba(18, 181, 127, 0.1); }
+.smf-actions button:disabled { color: #a9b8b1; cursor: default; }
+.smf-list { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
+.smf-empty { padding: 10px; font-size: 12.5px; color: #5a7d6d; text-align: center; }
+.smf-opt {
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 9px; border: 0; border-radius: 9px;
+  background: none; text-align: left; font: inherit; font-size: 13px; font-weight: 500; color: #0b241a; cursor: pointer;
+}
+.smf-opt:hover { background: rgba(18, 181, 127, 0.07); }
+.smf-opt.is-on { font-weight: 650; }
+.smf-box {
+  flex-shrink: 0; width: 18px; height: 18px; box-sizing: border-box; border-radius: 6px; display: grid; place-items: center;
+  border: 1.6px solid rgba(10, 111, 77, 0.3); background: #fff; color: #fff; transition: background 0.12s, border-color 0.12s;
+}
+.smf-opt.is-on .smf-box { background: #12b57f; border-color: #12b57f; }
+.smf-box svg { width: 12px; height: 12px; }
+.smf-opt-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Single-choice mode (view settings like Probability / Sort) */
+.smf-trigger.is-single { color: var(--so-ink, #0e1f17); }
+.smf-opt.is-radio .smf-box { border-radius: 50%; }
+.smf-opt.is-radio.is-on .smf-box { background: #fff; border-color: #12b57f; box-shadow: inset 0 0 0 4px #12b57f; }
+.smf-opt.is-radio .smf-box svg { display: none; }

@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useState } from "react";
 import { calcBreakdown, discountOf, BASE_KEY, type Calculator, type CalcDiscount } from "../pages/settings/catalogApi";
-import { lineBreakdown, type RevenueLineFields, type TermPatch } from "../pages/sales/salesApi";
+import { lineBreakdown, type RevenueLineFields, type TermPatch } from "../pages/sales/sales/salesApi";
 import "./LineCalcModal.css";
 
 function DiscountControl({ dkey, amount, discounts, setDisc, money }: {

@@ -1,8 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useMemo, useRef, useState } from "react";
 import Select from "../../framework/Select";
-import { loadProposalTemplateRow, saveProposalTemplate, uploadBrandAsset, generateProposal } from "../sales/proposalApi";
-import { defaultSlideTitle, type ProposalData, type ProposalTemplate, type TemplateSection } from "../sales/proposalGen";
+import { loadProposalTemplateRow, saveProposalTemplate, uploadBrandAsset, generateProposal } from "../sales/trackings/proposalApi";
+import { defaultSlideTitle, type ProposalData, type ProposalTemplate, type TemplateSection } from "../sales/trackings/proposalGen";
 import "./ProposalTemplateEditor.css";
 
 /**

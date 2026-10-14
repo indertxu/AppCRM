@@ -482,3 +482,61 @@
 }
 @keyframes org-err-in { from { opacity: 0; transform: translateX(-50%) translateY(-8px); } }
 @media (prefers-reduced-motion: reduce) { .org-save-err { animation: none; } }
+/* ===== Employment: lay off / former employees ===== */
+.org-former {
+  display: flex; flex-direction: column; gap: 3px; margin: 4px 0 14px; padding: 12px 14px; border-radius: 13px;
+  background: rgba(214, 69, 69, 0.07); border: 1px solid rgba(214, 69, 69, 0.22);
+}
+.org-former b { font-size: 12px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: #b23c3c; }
+.org-former span { font-size: 13px; font-weight: 600; color: var(--ink, #0b241a); }
+.org-former em { font-style: normal; font-size: 12px; color: var(--muted, #5a7d6d); line-height: 1.4; }
+.org-emp { display: flex; flex-direction: column; gap: 8px; margin-top: 18px; }
+.org-layoff-btn, .org-reactivate-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 40px; border-radius: 11px;
+  cursor: pointer; font-family: "Space Grotesk", sans-serif; font-size: 13.5px; font-weight: 700; transition: all 0.16s;
+}
+.org-layoff-btn { border: 1px solid rgba(214, 69, 69, 0.35); background: #fff; color: #b23c3c; }
+.org-layoff-btn svg { width: 17px; height: 17px; }
+.org-layoff-btn:hover { background: rgba(214, 69, 69, 0.07); border-color: rgba(214, 69, 69, 0.55); }
+.org-reactivate-btn { border: 0; background: linear-gradient(120deg, #0a6f4d, #12b57f); color: #fff; box-shadow: 0 10px 22px -12px rgba(10, 111, 77, 0.7); }
+.org-reactivate-btn:disabled, .org-layoff-go:disabled, .org-layoff-cancel:disabled { opacity: 0.55; cursor: default; }
+.org-emp-hint { margin: 0; font-size: 12px; color: var(--muted, #5a7d6d); }
+.org-emp-err { margin: 0; padding: 9px 11px; border-radius: 10px; background: rgba(214, 69, 69, 0.08); color: #a33a3a; font-size: 12.5px; }
+.org-layoff {
+  display: flex; flex-direction: column; gap: 7px; padding: 14px; border-radius: 15px;
+  border: 1px solid rgba(214, 69, 69, 0.3); background: linear-gradient(180deg, rgba(214, 69, 69, 0.05), #fff 60%);
+  animation: org-layoff-in 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes org-layoff-in { from { opacity: 0; transform: translateY(-6px); } }
+.org-layoff h4 { margin: 0 0 4px; font-family: "Space Grotesk", sans-serif; font-size: 15px; color: #8f2f2f; }
+.org-layoff > label { margin-top: 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted, #5a7d6d); }
+.org-layoff > input { height: 38px; padding: 0 11px; border-radius: 10px; border: 1px solid rgba(10, 111, 77, 0.16); background: #fff; font: inherit; font-size: 13px; outline: none; }
+.org-layoff > input:focus { border-color: #d64545; box-shadow: 0 0 0 3px rgba(214, 69, 69, 0.12); }
+.org-layoff-reasons { display: flex; flex-wrap: wrap; gap: 5px; }
+.org-layoff-reasons button { height: 28px; padding: 0 10px; border-radius: 999px; border: 1px solid rgba(10, 111, 77, 0.16); background: #fff; cursor: pointer; font: inherit; font-size: 12px; font-weight: 600; color: var(--ink, #0b241a); transition: all 0.14s; }
+.org-layoff-reasons button.is-on { background: #b23c3c; border-color: transparent; color: #fff; }
+.org-layoff-what { margin: 6px 0 2px; padding: 0 0 0 16px; display: flex; flex-direction: column; gap: 5px; font-size: 12px; line-height: 1.45; color: var(--ink, #0b241a); }
+.org-layoff-what li::marker { color: #d64545; }
+.org-layoff-actions { display: flex; gap: 8px; margin-top: 4px; }
+.org-layoff-cancel, .org-layoff-go { flex: 1; height: 38px; border-radius: 10px; cursor: pointer; font-family: "Space Grotesk", sans-serif; font-size: 13px; font-weight: 700; }
+.org-layoff-cancel { border: 1px solid rgba(10, 111, 77, 0.2); background: #fff; color: var(--ink, #0b241a); }
+.org-layoff-go { border: 0; background: linear-gradient(120deg, #b23c3c, #d64545); color: #fff; box-shadow: 0 10px 22px -12px rgba(178, 60, 60, 0.8); }
+.org-layoff-go:hover:not(:disabled) { filter: brightness(1.06); }
+.org-former-list { margin-top: 14px; border-top: 1px dashed rgba(10, 111, 77, 0.18); padding-top: 10px; }
+.org-former-list summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted, #5a7d6d); padding: 4px 2px; }
+.org-former-list summary::-webkit-details-marker { display: none; }
+.org-former-list summary::before { content: "›"; font-size: 15px; transition: transform 0.2s; }
+.org-former-list[open] summary::before { transform: rotate(90deg); }
+.org-former-list summary i { font-style: normal; padding: 1px 7px; border-radius: 999px; background: rgba(10, 111, 77, 0.08); }
+.org-former-list .org-palette-list { margin-top: 8px; }
+.org-chip.is-former { opacity: 0.7; cursor: pointer; }
+.org-chip.is-former:hover, .org-chip.is-former.is-sel { opacity: 1; }
+.org-chip.is-former .org-chip-av { filter: grayscale(1); }
+
+/* Lay-off form: our date picker, styled like the other fields */
+.org-layoff-date .dp-trigger {
+  width: 100%; height: 38px; box-sizing: border-box; padding: 0 11px; border-radius: 10px;
+  border: 1px solid rgba(10, 111, 77, 0.16); background: #fff; font-size: 13px; font-weight: 600; color: var(--ink, #0b241a);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.org-layoff-date .dp-trigger:hover { border-color: rgba(214, 69, 69, 0.4); }

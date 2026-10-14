@@ -1,12 +1,13 @@
 import { useState, useRef, type ReactNode } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
-import { useAuth, type Role } from "../api/AuthProvider";
+import { usePageAccess, type PageKey } from "./pageAccess";
 
 interface DockItem {
   label: string;
   path: string;
   icon: ReactNode;
-  roles?: Role[]; // if set, only these roles see it
+  /** Which page this opens — visibility comes from Settings → Organization → Page access. */
+  page: PageKey;
 }
 
 const homeIcon = (
@@ -75,19 +76,16 @@ const settingsIcon = (
   </svg>
 );
 
-/** Sales, companies and contacts belong to the sales team, not just the boss. */
-const SALES_TEAM: Role[] = ["boss", "sales", "sales_manager"];
-
 const items: DockItem[] = [
-  { label: "Home", path: "/home", icon: homeIcon },
-  { label: "Calendar", path: "/calendar", icon: calendarIcon },
-  { label: "Contacts", path: "/contacts", icon: contactsIcon, roles: SALES_TEAM },
-  { label: "Companies", path: "/companies", icon: companiesIcon, roles: SALES_TEAM },
-  { label: "Clients", path: "/clients", icon: clientsIcon, roles: ["boss"] },
-  { label: "Projects", path: "/projects", icon: projectsIcon },
-  { label: "Sales", path: "/sales", icon: salesIcon, roles: SALES_TEAM },
-{ label: "Management", path: "/management", icon: managementIcon, roles: ["boss", "consultancy_manager", "sales_manager", "customer_success", "it_manager", "marketing_manager", "hr_manager"] },
-  { label: "Settings", path: "/settings", icon: settingsIcon },
+  { label: "Home", path: "/home", icon: homeIcon, page: "home" },
+  { label: "Calendar", path: "/calendar", icon: calendarIcon, page: "calendar" },
+  { label: "Contacts", path: "/contacts", icon: contactsIcon, page: "contacts" },
+  { label: "Companies", path: "/companies", icon: companiesIcon, page: "companies" },
+  { label: "Clients", path: "/clients", icon: clientsIcon, page: "clients" },
+  { label: "Projects", path: "/projects", icon: projectsIcon, page: "projects" },
+  { label: "Sales", path: "/sales", icon: salesIcon, page: "sales" },
+  { label: "Management", path: "/management", icon: managementIcon, page: "management" },
+  { label: "Settings", path: "/settings", icon: settingsIcon, page: "settings" },
 ];
 
 export default function Dock() {
@@ -95,9 +93,9 @@ export default function Dock() {
   const hideTimer = useRef<number | null>(null);
   const navigate = useNavigate();
   const location = useLocation();
-  const { role } = useAuth();
+  const { canSee } = usePageAccess();
 
-  const visible = items.filter((it) => !it.roles || (role !== null && it.roles.includes(role)));
+  const visible = items.filter((it) => canSee(it.page));
 
   const show = () => {
     if (hideTimer.current) {

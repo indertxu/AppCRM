@@ -1,12 +1,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { supabase } from "../../api/supabase";
 import Select from "../../framework/Select";
 import {
-  listPipelines, createPipeline, renamePipeline, deletePipeline,
+  listPipelines, createPipeline, renamePipeline, pipelineUsage, deletePipelineSafely,
   loadPipeline, addPhase, updatePhase, deletePhase, addLink, removeLink,
   setPhaseDepartments, setPhaseItems, setPipelineSource, syncPipelineToBlueprint, setPipelineSales,
-  type Pipeline, type Phase, type PipelineLink,
+  type Pipeline, type Phase, type PipelineLink, type PipelineUsage,
 } from "./pipelineApi";
 import { loadBlueprintData, type Blueprint } from "./blueprintsApi";
 import "./PipelinePage.css";
@@ -47,11 +48,12 @@ export default function PipelinePage({ onBack }: Props) {
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   const [openId, setOpenId] = useState<string | null>(null);
   const [previewId, setPreviewId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<Pipeline | null>(null);
 
   const refresh = async () => {
     const ps = await listPipelines().catch(() => []);
     setPipelines(ps);
-    setPreviewId((cur) => cur ?? ps[0]?.id ?? null);
+    setPreviewId((cur) => (cur && ps.some((p) => p.id === cur) ? cur : ps[0]?.id ?? null));
   };
   useEffect(() => { refresh(); }, []);
 
@@ -94,6 +96,9 @@ export default function PipelinePage({ onBack }: Props) {
                   </svg>
                 </span>
                 <span className="pl-row-name">{p.name}</span>
+                <button className="pl-row-del" onClick={(e) => { e.stopPropagation(); setDeleting(p); }} title="Delete pipeline" aria-label={`Delete ${p.name}`}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" /></svg>
+                </button>
                 <button className="pl-row-open" onClick={(e) => { e.stopPropagation(); setOpenId(p.id); }} title="Open editor" aria-label="Open editor">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
                 </button>
@@ -110,7 +115,132 @@ export default function PipelinePage({ onBack }: Props) {
           </div>
         </div>
       )}
+      {deleting && (
+        <DeletePipelineModal
+          pipeline={deleting}
+          others={pipelines.filter((p) => p.id !== deleting.id)}
+          onClose={() => setDeleting(null)}
+          onDeleted={async () => { setDeleting(null); await refresh(); }}
+        />
+      )}
     </div>
+  );
+}
+
+// ============================ Delete, with a double confirmation ============================
+function DeletePipelineModal({ pipeline, others, onClose, onDeleted }: {
+  pipeline: Pipeline; others: Pipeline[]; onClose: () => void; onDeleted: () => void;
+}) {
+  const [step, setStep] = useState<1 | 2>(1);
+  const [usage, setUsage] = useState<PipelineUsage | null>(null);
+  const [mode, setMode] = useState<"move" | "keep">("move");
+  const [moveTo, setMoveTo] = useState<string>(() => (others.find((p) => p.is_sales) ?? others[0])?.id ?? "");
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { pipelineUsage(pipeline.id).then(setUsage).catch(() => setUsage({ phases: 0, deals: [], handoversIn: [], pendingHandoffs: 0 })); }, [pipeline.id]);
+  useEffect(() => { if (!others.length) setMode("keep"); }, [others.length]);
+  useEffect(() => { if (step === 2) setTimeout(() => inputRef.current?.focus(), 60); }, [step]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, onClose]);
+
+  const name = pipeline.name || "Untitled pipeline";
+  const deals = usage?.deals ?? [];
+  const open = deals.filter((d) => d.status !== "won" && d.status !== "lost").length;
+  const target = others.find((p) => p.id === moveTo);
+  const matches = typed.trim().toLowerCase() === name.trim().toLowerCase();
+  const go = async () => {
+    if (!matches || busy) return;
+    setBusy(true); setErr(null);
+    const e = await deletePipelineSafely(pipeline.id, { moveDealsTo: deals.length && mode === "move" ? moveTo || null : null });
+    setBusy(false);
+    if (e) { setErr(e); return; }
+    onDeleted();
+  };
+
+  return createPortal(
+    <div className="pl-del-backdrop" onMouseDown={() => !busy && onClose()}>
+      <div className={`pl-del ${step === 2 ? "is-step2" : ""}`} onMouseDown={(e) => e.stopPropagation()} role="alertdialog" aria-modal="true" aria-labelledby="pl-del-title">
+        <div className="pl-del-steps" aria-hidden="true"><i className="is-on" /><i className={step === 2 ? "is-on" : ""} /></div>
+        <span className="pl-del-ico">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" /></svg>
+        </span>
+        <span className="pl-del-eyebrow">{step === 1 ? "Delete pipeline · step 1 of 2" : "Last check · step 2 of 2"}</span>
+        <h2 id="pl-del-title" className="pl-del-title">{step === 1 ? <>Delete <b>{name}</b>?</> : "Type the name to delete it"}</h2>
+
+        {step === 1 ? (
+          <>
+            <p className="pl-del-sub">It goes for good, with its phases, connections, departments and products. This can't be undone.</p>
+            {!usage ? <p className="pl-del-loading">Checking what uses it…</p> : (
+              <>
+                <div className="pl-del-impact">
+                  <div><b>{usage.phases}</b><span>{usage.phases === 1 ? "phase" : "phases"}</span></div>
+                  <div className={deals.length ? "is-warn" : ""}><b>{deals.length}</b><span>{deals.length === 1 ? "deal" : "deals"}{deals.length ? ` · ${open} open` : ""}</span></div>
+                  <div className={usage.handoversIn.length ? "is-warn" : ""}><b>{usage.handoversIn.length}</b><span>handovers into it</span></div>
+                  <div className={usage.pendingHandoffs ? "is-warn" : ""}><b>{usage.pendingHandoffs}</b><span>pending handoffs</span></div>
+                </div>
+
+                {deals.length > 0 && (
+                  <div className="pl-del-sec">
+                    <span className="pl-del-lbl">Its {deals.length} {deals.length === 1 ? "deal" : "deals"}</span>
+                    {others.length > 0 && (
+                      <button type="button" className={`pl-del-opt ${mode === "move" ? "is-on" : ""}`} onClick={() => setMode("move")} aria-pressed={mode === "move"}>
+                        <span className="pl-del-radio" />
+                        <span className="pl-del-opt-txt"><b>Move them to another pipeline</b><small>They keep their phase when it has the same name there; otherwise they start at the first one.</small></span>
+                      </button>
+                    )}
+                    {mode === "move" && others.length > 0 && (
+                      <div className="pl-del-select">
+                        <Select value={moveTo} onChange={(v) => v && setMoveTo(v)} placeholder="Choose a pipeline"
+                          options={others.map((p) => ({ value: p.id, label: `${p.name}${p.is_sales ? " · sales" : ""}` }))} />
+                      </div>
+                    )}
+                    <button type="button" className={`pl-del-opt ${mode === "keep" ? "is-on" : ""}`} onClick={() => setMode("keep")} aria-pressed={mode === "keep"}>
+                      <span className="pl-del-radio" />
+                      <span className="pl-del-opt-txt"><b>Keep them without a pipeline</b><small>The deals, notes and documents stay, but they lose their phase.</small></span>
+                    </button>
+                  </div>
+                )}
+
+                {usage.handoversIn.length > 0 && (
+                  <div className="pl-del-sec">
+                    <span className="pl-del-lbl">These phases hand clients over to it — they'll stop</span>
+                    <ul className="pl-del-list">{usage.handoversIn.map((h) => <li key={h.phaseId}>{h.pipelineName} › <b>{h.phaseName}</b></li>)}</ul>
+                  </div>
+                )}
+                {usage.pendingHandoffs > 0 && (
+                  <p className="pl-del-note">{usage.pendingHandoffs} sales {usage.pendingHandoffs === 1 ? "handoff is" : "handoffs are"} still waiting to come into this pipeline. {usage.pendingHandoffs === 1 ? "It stays" : "They stay"} in the inbox without a destination, so you can route {usage.pendingHandoffs === 1 ? "it" : "them"} elsewhere.</p>
+                )}
+              </>
+            )}
+            <div className="pl-del-actions">
+              <button className="pl-del-cancel" onClick={onClose}>Cancel</button>
+              <button className="pl-del-next" disabled={!usage || (deals.length > 0 && mode === "move" && !moveTo)} onClick={() => setStep(2)}>Continue</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="pl-del-sub">
+              To confirm, type <code>{name}</code> below.
+              {deals.length > 0 && (mode === "move" && target ? ` Its ${deals.length} ${deals.length === 1 ? "deal moves" : "deals move"} to ${target.name}.` : ` Its ${deals.length} ${deals.length === 1 ? "deal stays" : "deals stay"} without a pipeline.`)}
+            </p>
+            <input ref={inputRef} className={`pl-del-input ${matches ? "is-ok" : ""}`} value={typed} onChange={(e) => setTyped(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") go(); }} placeholder={name} aria-label="Pipeline name" autoComplete="off" spellCheck={false} />
+            {err && <p className="pl-del-err">{err}</p>}
+            <div className="pl-del-actions">
+              <button className="pl-del-cancel" onClick={() => { setStep(1); setTyped(""); setErr(null); }} disabled={busy}>Back</button>
+              <button className="pl-del-go" disabled={!matches || busy} onClick={go}>{busy ? "Deleting…" : "Delete pipeline"}</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -199,6 +329,7 @@ function PipelineEditor({ pipeline, onBack, onRenamed }: { pipeline: Pipeline; o
   const [name, setName] = useState(pipeline.name);
   const [isSales, setIsSales] = useState<boolean>(pipeline.is_sales ?? false);
   const [selId, setSelId] = useState<string | null>(null);
+  const [selLink, setSelLink] = useState<string | null>(null);
   const [products, setProducts] = useState<{ id: string; name: string }[]>([]);
   const [services, setServices] = useState<{ id: string; name: string }[]>([]);
   const [depts, setDepts] = useState<{ key: string; label: string; color: string }[]>([]);
@@ -255,7 +386,9 @@ function PipelineEditor({ pipeline, onBack, onRenamed }: { pipeline: Pipeline; o
 
   // ---- pan ----
   const onCanvasPointerDown = (e: React.PointerEvent) => {
-    if ((e.target as HTMLElement).closest(".pl-node")) return;
+    if ((e.target as Element).closest?.(".pl-node")) return;
+    if ((e.target as Element).closest?.("[data-link], .pl-link-del")) return; // a link handles itself
+    setSelLink(null);
     if (linking.current) { linking.current = null; setLinkGhost(null); return; }
     pan.current = { sx: e.clientX, sy: e.clientY, vx: viewX, vy: viewY };
     canvasRef.current?.setPointerCapture(e.pointerId);
@@ -390,6 +523,18 @@ function PipelineEditor({ pipeline, onBack, onRenamed }: { pipeline: Pipeline; o
     setLinks((ls) => [...ls, ...newLinks]);
   };
   const dropLink = async (id: string) => { await removeLink(id); setLinks((ls) => ls.filter((l) => l.id !== id)); };
+  // Selected link: Delete/Backspace removes it, Esc deselects. Ignored while typing.
+  useEffect(() => {
+    if (!selLink) return;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); const id = selLink; setSelLink(null); dropLink(id); }
+      else if (e.key === "Escape") setSelLink(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selLink]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Apply a department / item to every phase at once.
   const applyDeptToAll = async (key: string) => {
@@ -513,14 +658,35 @@ function PipelineEditor({ pipeline, onBack, onRenamed }: { pipeline: Pipeline; o
                 const ln = lineFor(l);
                 if (!ln) return null;
                 return (
-                  <g key={l.id} className="pl-link">
+                  <g key={l.id} className={`pl-link ${selLink === l.id ? "is-sel" : ""}`}>
                     <line data-link={l.id} x1={ln.x1} y1={ln.y1} x2={ln.x2} y2={ln.y2} className="pl-link-line" markerEnd="url(#pl-arrow)" />
-                    <line data-link={l.id} x1={ln.x1} y1={ln.y1} x2={ln.x2} y2={ln.y2} className="pl-link-hit" onClick={() => dropLink(l.id)} />
+                    <line data-link={l.id} x1={ln.x1} y1={ln.y1} x2={ln.x2} y2={ln.y2} className="pl-link-hit"
+                      onPointerDown={(e) => { e.stopPropagation(); setSelId(null); setSelLink(l.id); }}>
+                      <title>Click to select · Delete to remove</title>
+                    </line>
                   </g>
                 );
               })}
               {linkGhost && <line x1={linkGhost.x1} y1={linkGhost.y1} x2={linkGhost.x2} y2={linkGhost.y2} className="pl-link-ghost" />}
             </svg>
+
+            {(() => {
+              const l = selLink ? links.find((x) => x.id === selLink) : null;
+              const ln = l ? lineFor(l) : null;
+              if (!l || !ln) return null;
+              return (
+                <button
+                  className="pl-link-del"
+                  style={{ left: (ln.x1 + ln.x2) / 2, top: (ln.y1 + ln.y2) / 2, transform: `translate(-50%, -50%) scale(${1 / zoom})` }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => { setSelLink(null); dropLink(l.id); }}
+                  title="Remove this connection (Delete)"
+                  aria-label="Remove connection"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                </button>
+              );
+            })()}
 
             {phases.map((p) => (
               <div
@@ -528,7 +694,7 @@ function PipelineEditor({ pipeline, onBack, onRenamed }: { pipeline: Pipeline; o
                 ref={(el) => { nodeRefs.current[p.id] = el; }}
                 className={`pl-node ${selId === p.id ? "is-sel" : ""} ${linking.current ? "is-target" : ""}`}
                 style={{ left: p.pos_x, top: p.pos_y, width: NODE_W, minHeight: NODE_H, ...(p.deptKeys[0] ? { borderColor: `${deptColor(p.deptKeys[0])}66` } : {}) }}
-                onPointerDown={(e) => onNodePointerDown(e, p.id)}
+                onPointerDown={(e) => { setSelLink(null); onNodePointerDown(e, p.id); }}
                 onPointerUp={(e) => finishLink(e, p.id)}
               >
                 <div className="pl-node-name">{p.name || "Untitled phase"}</div>

@@ -40,6 +40,11 @@ export interface ProjectRow {
   daysPlanned: number;
   amountDone: number;
   daysDone: number;
+  /** contract context (shown in the project detail) */
+  kickoff?: string | null;
+  signedDays?: number;
+  split?: { consultor: number; connector: number; supervision: number };
+  consumed?: { consultor: number; connector: number; supervision: number };
 }
 
 interface Props {
@@ -59,6 +64,11 @@ interface Props {
   onToggleProject: (key: string) => void;
   renderLedger: (key: string) => ReactNode;
   onClose: () => void;
+  /** Step the outer period (month/week) without leaving the popup. Negative =
+      back, positive = forward. When omitted, the stepper is hidden. */
+  onShiftPeriod?: (delta: number) => void;
+  canPrevPeriod?: boolean;
+  canNextPeriod?: boolean;
 }
 
 /* ------------------------------------------------------------------ helpers */
@@ -453,7 +463,7 @@ function ProjectView({
               <div className="cm-chips">
                 <span className="cm-chip">{row.service}</span>
                 <span className="cm-chip">{row.rateKind}</span>
-                <span className="cm-chip is-ghost">Billed per {unitWord}</span>
+                <span className="cm-chip is-ghost">Value per {unitWord}</span>
               </div>
             </div>
           </div>
@@ -471,7 +481,7 @@ function ProjectView({
             </svg>
             <div className="cm-ring-c">
               <b><Count value={done} format={pct0} delay={300} /><em>%</em></b>
-              <span>of booked billed</span>
+              <span>of booked</span>
             </div>
           </div>
         </div>
@@ -479,9 +489,53 @@ function ProjectView({
         <div className="cm-kpis">
           <StatCard i={3} icon={ICON.rate} label="Rate" value={<Count value={row.rate} />} unit={`€/${unitWord}`} sub={row.rateKind} />
           <StatCard i={4} icon={ICON.clock} label="Booked" value={<Count value={row.amountPlanned} />} unit="€" sub={`${d2(row.daysPlanned)}${u} planned`} />
-          <StatCard i={5} icon={ICON.invoice} label="Billed" value={<Count value={row.amountDone} />} unit="€" sub={`${d2(row.daysDone)}${u} delivered`} meter={done} tone="is-good" />
+          <StatCard i={5} icon={ICON.invoice} label="Value" value={<Count value={row.amountDone} />} unit="€" sub={`${d2(row.daysDone)}${u} delivered`} meter={done} tone="is-good" />
           <StatCard i={6} icon={ICON.left} label="Left to bill" value={<Count value={remAmt} />} unit="€" sub={`${d2(remDays)}${u} still open`} />
         </div>
+
+        {(row.kickoff || (row.signedDays ?? 0) > 0 || row.split) && (() => {
+          const sp = row.split ?? { consultor: 0, connector: 0, supervision: 0 };
+          const cs = row.consumed ?? { consultor: 0, connector: 0, supervision: 0 };
+          const types = [
+            { k: "Consultor", signed: sp.consultor, used: cs.consultor, c: "#3fcf9a" },
+            { k: "Connector", signed: sp.connector, used: cs.connector, c: "#f0b450" },
+            { k: "Supervision", signed: sp.supervision, used: cs.supervision, c: "#86b3e6" },
+          ].filter((t) => t.signed > 0.001 || t.used > 0.001);
+          const signed = row.signedDays ?? 0;
+          const used = cs.consultor + cs.connector + cs.supervision;
+          const usedPct = signed > 0 ? (used / signed) * 100 : 0;
+          const kDate = (() => {
+            if (!row.kickoff) return "—";
+            const d = new Date(row.kickoff + "T00:00:00");
+            return isNaN(+d) ? row.kickoff : d.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" });
+          })();
+          return (
+            <section className="cm-pm cm-rise" style={vars({ "--i": 4 })}>
+              <div className="cm-pm-top">
+                <div className="cm-pm-stat"><span>Kick-off</span><b>{kDate}</b></div>
+                <div className="cm-pm-stat"><span>Signed</span><b>{d2(signed)}<em>{u}</em></b></div>
+                <div className="cm-pm-stat"><span>Consumed</span><b>{d2(used)}<em>{u}</em></b><small>{pct0(usedPct)}% of signed</small></div>
+                <div className="cm-pm-stat"><span>Remaining</span><b>{d2(Math.max(0, signed - used))}<em>{u}</em></b></div>
+              </div>
+              {types.length > 0 && (
+                <div className="cm-pm-types">
+                  {types.map((t) => {
+                    const pct = t.signed > 0 ? (t.used / t.signed) * 100 : 0;
+                    const over = t.used > t.signed + 0.001;
+                    return (
+                      <div className={`cm-pm-row ${over ? "is-over" : ""}`} key={t.k} style={vars({ "--c": t.c })}>
+                        <span className="cm-pm-name"><i />{t.k}</span>
+                        <span className="cm-pm-track"><span style={{ width: `${Math.min(100, pct)}%` }} /></span>
+                        <span className="cm-pm-fig"><b>{d2(t.used)}</b> / {d2(t.signed)}{u}</span>
+                        <span className="cm-pm-pct">{pct0(pct)}%</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          );
+        })()}
       </div>
 
       <div className="cm-sheet">
@@ -502,6 +556,7 @@ function ProjectView({
 export default function ConsultantModal({
   name, scopeLabel, scope, hoursPerDay, ins, cap, showBonus, bonusInvoiced, cw,
   capMode, onToggleCap, projectRows, projOpenKey, onToggleProject, renderLedger, onClose,
+  onShiftPeriod, canPrevPeriod = true, canNextPeriod = true,
 }: Props) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const projPaneRef = useRef<HTMLElement>(null);
@@ -513,9 +568,13 @@ export default function ConsultantModal({
   const closingRef = useRef(false);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
-  const requestClose = useCallback(() => {
+  const guardRef = useRef(false);
+  const requestClose = useCallback((fromPop = false) => {
     if (closingRef.current) return;
     closingRef.current = true;
+    // Remove our history guard so Back doesn't leave a dead entry (unless this
+    // close was itself triggered by a Back press, which already consumed it).
+    if (!fromPop && guardRef.current) { guardRef.current = false; window.history.back(); }
     setClosing(true);
     window.setTimeout(() => onCloseRef.current(), reducedMotion() ? 0 : EXIT_MS);
   }, []);
@@ -530,6 +589,32 @@ export default function ConsultantModal({
   const shownIdx = shownRow ? projectRows.findIndex((r) => r.key === shownRow.key) : -1;
 
   const back = useCallback(() => { if (projOpenKey) onToggleProject(projOpenKey); }, [projOpenKey, onToggleProject]);
+
+  // Browser Back steps through the modal instead of leaving the Management page:
+  // project detail -> overview -> closed. A single guard history entry is kept
+  // while the modal is open (re-armed each time Back closes a project detail).
+  const projOpenKeyRef = useRef(projOpenKey); projOpenKeyRef.current = projOpenKey;
+  const onToggleProjectRef = useRef(onToggleProject); onToggleProjectRef.current = onToggleProject;
+  const requestCloseRef = useRef(requestClose); requestCloseRef.current = requestClose;
+  const pushedRef = useRef(false);
+  // Keep React Router's own history state (usr/key/idx) on the entry we push, or
+  // the router gets confused on Back and navigates away instead of staying put.
+  const pushGuard = () => window.history.pushState({ ...(window.history.state || {}), cmModal: true }, "");
+  useEffect(() => {
+    if (!pushedRef.current) { pushGuard(); pushedRef.current = true; guardRef.current = true; } // once (StrictMode-safe)
+    const onPop = () => {
+      if (projOpenKeyRef.current) {
+        onToggleProjectRef.current(projOpenKeyRef.current); // project -> overview
+        pushGuard();                                        // re-arm the guard
+        guardRef.current = true;
+      } else {
+        guardRef.current = false;
+        requestCloseRef.current(true);                      // overview -> closed
+      }
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const goTo = useCallback((idx: number) => {
     const r = projectRows[idx];
     if (r && r.key !== projOpenKey) onToggleProject(r.key);
@@ -599,7 +684,7 @@ export default function ConsultantModal({
 
   return createPortal(
     <div className={`cm-root ${closing ? "is-closing" : ""}`}>
-      <div className="cm-backdrop" onMouseDown={requestClose} />
+      <div className="cm-backdrop" onMouseDown={() => requestClose()} />
 
       <div
         ref={dialogRef}
@@ -626,8 +711,21 @@ export default function ConsultantModal({
               </span>
             )}
           </nav>
-          <span className="cm-scope"><i />{scopeLabel}</span>
-          <button type="button" className="cm-x" onClick={requestClose} aria-label="Close">
+          {(() => {
+            const steppable = !!onShiftPeriod && (scope === "month" || scope === "week" || scope === "year");
+            return (
+              <div className={`cm-period ${steppable ? "is-step" : ""}`}>
+                {steppable && (
+                  <button type="button" className="cm-per-nav" disabled={!canPrevPeriod} onClick={() => onShiftPeriod!(-1)} aria-label="Previous period"><Icon d={ICON.chevL} w={2.4} /></button>
+                )}
+                <span className="cm-scope"><i />{scopeLabel}</span>
+                {steppable && (
+                  <button type="button" className="cm-per-nav" disabled={!canNextPeriod} onClick={() => onShiftPeriod!(1)} aria-label="Next period"><Icon d={ICON.chevR} w={2.4} /></button>
+                )}
+              </div>
+            );
+          })()}
+          <button type="button" className="cm-x" onClick={() => requestClose()} aria-label="Close">
             <Icon d={ICON.x} w={2.2} />
             <kbd>Esc</kbd>
           </button>
@@ -678,10 +776,10 @@ export default function ConsultantModal({
                 <StatCard
                   i={3}
                   icon={ICON.invoice}
-                  label="Invoiced"
+                  label="Value"
                   value={<Count value={ins.invoicedAmount} />}
                   unit="€"
-                  sub={`${d2(ins.invoicedDays)} days, of ${eur(ins.billableAmount)} € billable`}
+                  sub={`${d2(ins.invoicedDays)} days`}
                   meter={ins.billableAmount > 0 ? (ins.invoicedAmount / ins.billableAmount) * 100 : 0}
                 />
 
@@ -725,7 +823,7 @@ export default function ConsultantModal({
                 <header className="cm-card-h">
                   <h3>Projects <span className="cm-count">{projectRows.length}</span></h3>
                   {projectRows.length > 0 && (
-                    <span className="cm-card-sub">{eur(totals.billed)} € billed of {eur(totals.booked)} € booked</span>
+                    <span className="cm-card-sub">{eur(totals.billed)} € value of {eur(totals.booked)} € booked</span>
                   )}
                 </header>
 
@@ -737,7 +835,7 @@ export default function ConsultantModal({
                       <span>Client and project</span>
                       <span className="is-rate">Rate</span>
                       <span className="is-booked">Booked</span>
-                      <span>Billed</span>
+                      <span>Value</span>
                       <span />
                     </div>
                     <div className="cm-plist">

@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import Select from "../../framework/Select";
+import { useInactiveIds } from "../../framework/peopleStatus";
 import "./BacklogPanel.css";
 
 export interface BkEntry {
@@ -48,6 +49,8 @@ interface Props {
       days, the consultant breakdown, the project list) is measured as of this
       one date, picked directly rather than derived from scope/anchor. */
   asOf: string;
+  /** Access "only own": pin the consultant view to this user and hide the picker. */
+  lockUser?: string;
 }
 
 const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -241,7 +244,7 @@ interface ProjRow {
 export default function BacklogPanel({
   entries, projects, clientNames, typeNames, people, supRoles,
   hourProjects, hoursPerDay,
-  scope, anchor, rangeFrom, rangeTo, mainRoleByService, asOf: asOfProp,
+  scope, anchor, rangeFrom, rangeTo, mainRoleByService, asOf: asOfProp, lockUser,
 }: Props) {
   const [chartMode, setChartMode] = useState<"days" | "value">("days");
   /** Cards read in days by default; three of them flip to the h + d split. */
@@ -273,7 +276,8 @@ export default function BacklogPanel({
   const isSupervisorOn = (p: BkProj, userId: string): boolean =>
     (p.team ?? []).some((m) => m.userId === userId && supRoles.has(m.role ?? ""));
 
-  const [consultantFilter, setConsultantFilter] = useState<string>("");
+  const [consultantPick, setConsultantFilter] = useState<string>("");
+  const consultantFilter = lockUser ?? consultantPick;
 
   // ── Column sort + filters (opened from the list headers) ───────────────────
   type SortKey = "client" | "progress" | "days" | "value" | "team" | "kickoff";
@@ -493,6 +497,7 @@ export default function BacklogPanel({
 
   /** Every consultant worth offering in the filter: owns at least one project
       with something still to deliver, or supervises one. */
+  const inactive = useInactiveIds(); // laid-off people aren't offered as a consultant to filter by
   const consultantOptions = useMemo(() => {
     const ids = new Set<string>();
     rows.forEach((r) => {
@@ -503,10 +508,11 @@ export default function BacklogPanel({
       (p.team ?? []).forEach((m) => { if (m.userId && supRoles.has(m.role ?? "")) ids.add(m.userId); });
     });
     return Array.from(ids)
+      .filter((id) => !inactive.has(id))
       .map((id) => ({ id, name: people[id] || "Unknown" }))
       .sort((a, b) => a.name.localeCompare(b.name));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, projects, people, supRoles, mainRoleByService]);
+  }, [rows, projects, people, supRoles, mainRoleByService, inactive]);
 
   /** For the selected consultant: consultancy backlog comes only from projects
       they OWN (their main-role assignment), and never counts connector or
@@ -919,12 +925,16 @@ export default function BacklogPanel({
             <span><i className="is-free" />Not booked</span>
           </div>
           <div className="bl-pick">
-            <Select
-              value={consultantFilter}
-              onChange={setConsultantFilter}
-              placeholder="All consultants"
-              options={[{ value: "", label: "All consultants" }, ...consultantOptions.map((c) => ({ value: c.id, label: c.name }))]}
-            />
+            {lockUser ? (
+              <span className="bl-pick-locked">Your backlog</span>
+            ) : (
+              <Select
+                value={consultantFilter}
+                onChange={setConsultantFilter}
+                placeholder="All consultants"
+                options={[{ value: "", label: "All consultants" }, ...consultantOptions.map((c) => ({ value: c.id, label: c.name }))]}
+              />
+            )}
           </div>
           <label className="bl-switch">
             <input type="checkbox" checked={onlyLeft} onChange={(e) => setOnlyLeft(e.target.checked)} />

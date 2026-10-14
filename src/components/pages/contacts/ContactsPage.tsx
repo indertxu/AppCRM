@@ -13,6 +13,10 @@ import {
 } from "../companies/companiesApi";
 import "../clients/ClientsPage.css";
 import "../companies/CompaniesPage.css";
+import ContactImport from "./ContactImport";
+import ContactExport from "./ContactExport";
+import SalesMultiFilter from "../sales/sales/SalesMultiFilter";
+import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
 import "./ContactsPage.css";
 
 const empty = (): Contact => ({
@@ -35,11 +39,13 @@ export default function ContactsPage() {
   const [me, setMe] = useState<{ id: string; role: string; is_superadmin: boolean } | null>(null);
   const [fields, setFields] = useState<ContactField[]>([]);
   const [showFieldSettings, setShowFieldSettings] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [columns, setColumns] = useState<string[]>(["position", "email", "companies"]);
-  const [ctrl1, setCtrl1] = useState<{ field: string; action: string; min?: string; max?: string }>({ field: "", action: "" });
-  const [ctrl2, setCtrl2] = useState<{ field: string; action: string; min?: string; max?: string }>({ field: "", action: "" });
+  const [ctrl1, setCtrl1] = useState<{ field: string; action: string; min?: string; max?: string; values?: string[]; text?: string }>({ field: "", action: "" });
+  const [ctrl2, setCtrl2] = useState<{ field: string; action: string; min?: string; max?: string; values?: string[]; text?: string }>({ field: "", action: "" });
+  const [exporting, setExporting] = useState(false);
   const [rel, setRel] = useState<RelationshipSets | null>(null);
-  const [fRel, setFRel] = useState("");  // "", "client", "tracking", "none"
+  const [fRel, setFRel] = useState("");  // "", "client", "tracking", "notracking", "none"
   const location = useLocation();
 
   const reload = async () => {
@@ -108,6 +114,8 @@ export default function ContactsPage() {
   // The "type" of any filterable field, fixed or custom.
   const fieldType = (key: string): "text" | "number" | "date" | "boolean" | "select" => {
     if (key === "email" || key === "position" || key === "phone" || key === "companies" || key === "name") return "text";
+    if (key === "imported_at") return "date";
+    if (key === "imported_by") return "select";
     return fieldById(key)?.type ?? "text";
   };
   // The comparable value of a contact for a field key.
@@ -117,35 +125,74 @@ export default function ContactsPage() {
     if (key === "email") return c.email ?? "";
     if (key === "phone") return c.phone ?? "";
     if (key === "companies") return c.companyIds.map(companyName).join(", ");
+    // import provenance (stamped by the database; filterable, never shown on the contact)
+    if (key === "imported_by") return (c as any).imported_by ?? "";
+    if (key === "imported_at") return (c as any).imported_at ?? "";
     return (c.custom ?? {})[key];
   };
-  // Actions offered for a field, based on its type. value "" = no action.
+  // What a filter can do with a field, based on its type (the first one is the default).
   const actionsFor = (key: string): { value: string; label: string }[] => {
     if (!key) return [];
     const t = fieldType(key);
-    if (t === "number") return [{ value: "desc", label: "High → low" }, { value: "asc", label: "Low → high" }, { value: "range", label: "Range…" }];
-    if (t === "date") return [{ value: "desc", label: "Newest first" }, { value: "asc", label: "Oldest first" }];
-    if (t === "boolean") return [{ value: "only_yes", label: "Only Yes" }, { value: "only_no", label: "Only No" }];
-    if (t === "select") {
-      const opts = fieldById(key)?.options ?? [];
-      return opts.map((o) => ({ value: `eq:${o}`, label: `Is “${o}”` }));
-    }
-    // text
-    return [{ value: "asc", label: "A → Z" }, { value: "desc", label: "Z → A" }];
+    const blanks = [{ value: "has", label: "Has a value" }, { value: "empty", label: "Is empty" }];
+    if (key === "companies") return [{ value: "in", label: "Is one of…" }, { value: "has", label: "Has a company" }, { value: "empty", label: "No company" }, { value: "asc", label: "A → Z" }];
+    if (key === "imported_by") return [{ value: "in", label: "Is one of…" }, { value: "has", label: "Was imported" }, { value: "empty", label: "Added by hand" }];
+    if (t === "select") return [{ value: "in", label: "Is one of…" }, ...blanks];
+    if (t === "boolean") return [{ value: "only_yes", label: "Yes" }, { value: "only_no", label: "No" }];
+    if (t === "number") return [{ value: "range", label: "Between…" }, { value: "desc", label: "High → low" }, { value: "asc", label: "Low → high" }, ...blanks];
+    if (t === "date") return [
+      { value: "last30", label: "Last 30 days" }, { value: "this_month", label: "This month" }, { value: "this_year", label: "This year" },
+      { value: "next30", label: "Next 30 days" }, { value: "past", label: "Before today" }, { value: "custom", label: "Between dates…" },
+      { value: "desc", label: "Newest first" }, { value: "asc", label: "Oldest first" }, ...blanks,
+    ];
+    return [{ value: "contains", label: "Contains…" }, { value: "asc", label: "A → Z" }, { value: "desc", label: "Z → A" }, ...blanks];
+  };
+  /** Choices for "Is one of…": a choice field's options, or the companies. */
+  const choicesFor = (key: string) => key === "companies"
+    ? companies.map((co) => ({ value: co.id as string, label: co.name })).sort((a, b) => a.label.localeCompare(b.label))
+    : key === "imported_by"
+    ? employees.filter((e) => contacts.some((c) => (c as any).imported_by === e.id)).map((e) => ({ value: e.id, label: e.name }))
+    : (fieldById(key)?.options ?? []).map((o) => ({ value: o, label: o }));
+  const dayIso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const dateWindow = (action: string, ctrl: { min?: string; max?: string }): [string, string] | null => {
+    const now = new Date(), y = now.getFullYear(), m = now.getMonth(), d = now.getDate();
+    if (action === "last30") return [dayIso(new Date(y, m, d - 30)), dayIso(now)];
+    if (action === "next30") return [dayIso(now), dayIso(new Date(y, m, d + 30))];
+    if (action === "this_month") return [dayIso(new Date(y, m, 1)), dayIso(new Date(y, m + 1, 0))];
+    if (action === "this_year") return [`${y}-01-01`, `${y}-12-31`];
+    if (action === "past") return ["0000-01-01", dayIso(new Date(y, m, d - 1))];
+    if (action === "custom") return [ctrl.min || "0000-01-01", ctrl.max || "9999-12-31"];
+    return null;
   };
   // Field options for the control (name + fixed + custom).
   const filterFieldOptions = [
     { value: "", label: "No filter" },
     { value: "name", label: "Name" },
     ...availableColumns.map((c) => ({ value: c.key, label: c.label })),
+    { value: "imported_by", label: "Imported by" },
+    { value: "imported_at", label: "Imported on" },
   ];
 
   // Apply one control as a filter (returns true = keep).
-  const passesFilter = (c: Contact, ctrl: { field: string; action: string; min?: string; max?: string }) => {
+  const passesFilter = (c: Contact, ctrl: { field: string; action: string; min?: string; max?: string; values?: string[]; text?: string }) => {
     if (!ctrl.field || !ctrl.action) return true;
     const v = valueOf(c, ctrl.field);
+    const blank = v == null || v === "" || (ctrl.field === "companies" && !c.companyIds.length);
+    if (ctrl.action === "has") return !blank;
+    if (ctrl.action === "empty") return blank;
     if (ctrl.action === "only_yes") return !!v;
     if (ctrl.action === "only_no") return !v;
+    if (ctrl.action === "in") {
+      const picked = ctrl.values ?? [];
+      if (!picked.length) return true; // nothing chosen yet → no filter
+      return ctrl.field === "companies" ? c.companyIds.some((id) => picked.includes(id)) : picked.includes(String(v ?? ""));
+    }
+    if (ctrl.action === "contains") {
+      const t = (ctrl.text ?? "").trim();
+      return !t || norm(String(v ?? "")).includes(norm(t));
+    }
+    const win = fieldType(ctrl.field) === "date" ? dateWindow(ctrl.action, ctrl) : null;
+    if (win) { const d = String(v ?? "").slice(0, 10); return !!d && d >= win[0] && d <= win[1]; }
     if (ctrl.action.startsWith("eq:")) return String(v ?? "") === ctrl.action.slice(3);
     if (ctrl.action === "range") {
       const n = Number(v);
@@ -157,7 +204,7 @@ export default function ContactsPage() {
     return true; // asc/desc are sorts, not filters
   };
   // Compare two contacts for one sort control. 0 if the control isn't a sort.
-  const cmp = (a: Contact, b: Contact, ctrl: { field: string; action: string; min?: string; max?: string }) => {
+  const cmp = (a: Contact, b: Contact, ctrl: { field: string; action: string; min?: string; max?: string; values?: string[]; text?: string }) => {
     if (!ctrl.field || (ctrl.action !== "asc" && ctrl.action !== "desc")) return 0;
     const t = fieldType(ctrl.field);
     let av = valueOf(a, ctrl.field), bv = valueOf(b, ctrl.field);
@@ -175,13 +222,22 @@ export default function ContactsPage() {
     return "none";
   };
 
+  // Relationship filter. "tracking" / "notracking" look only at sales
+  // trackings (a client can also be in one); "none" means neither.
+  const inTracking = (c: Contact) => !!(rel && c.id && rel.trackingContactIds.has(c.id));
+  const relMatches = (c: Contact, f: string) => {
+    if (f === "tracking") return inTracking(c);
+    if (f === "notracking") return !inTracking(c);
+    return relOf(c) === f;
+  };
+
   const shown = contacts.filter((c) => {
     // Sales people only see the contacts they have been given access to.
     if (!lead && me && !(assignees[c.id!] ?? []).includes(me.id)) return false;
     // Compound custom filters.
     if (!passesFilter(c, ctrl1)) return false;
     if (!passesFilter(c, ctrl2)) return false;
-    if (fRel && relOf(c) !== fRel) return false;
+    if (fRel && !relMatches(c, fRel)) return false;
     const n = norm(q.trim());
     if (!n) return true;
     const companyNames = c.companyIds.map(companyName).join(" ");
@@ -221,7 +277,8 @@ export default function ContactsPage() {
             options={[
               { value: "", label: "Any relationship" },
               { value: "client", label: "Clients" },
-              { value: "tracking", label: "In a tracking" },
+              { value: "tracking", label: "In sales tracking" },
+              { value: "notracking", label: "No sales tracking" },
               { value: "none", label: "Not yet in play" },
             ]} />
         </div>
@@ -236,6 +293,22 @@ export default function ContactsPage() {
                   onChange={(action) => ctl.set({ ...ctl.c, action })}
                   options={actionsFor(ctl.c.field)} placeholder="How" />
               )}
+              {ctl.c.action === "in" && (
+                <div className="ct-fvals">
+                  <SalesMultiFilter values={ctl.c.values ?? []} onChange={(v) => ctl.set({ ...ctl.c, values: v })}
+                    options={choicesFor(ctl.c.field)} placeholder="Choose…" searchFrom={7} noun={ctl.c.field === "companies" ? "companies" : ctl.c.field === "imported_by" ? "people" : "options"} />
+                </div>
+              )}
+              {ctl.c.action === "contains" && (
+                <input className="ct-ftext" value={ctl.c.text ?? ""} onChange={(e) => ctl.set({ ...ctl.c, text: e.target.value })} placeholder="Text…" />
+              )}
+              {ctl.c.action === "custom" && (
+                <div className="ct-fdates">
+                  <DatePicker value={ctl.c.min ?? ""} onChange={(d) => ctl.set({ ...ctl.c, min: d })} placeholder="From" />
+                  <span className="ct-range-sep">–</span>
+                  <DatePicker value={ctl.c.max ?? ""} onChange={(d) => ctl.set({ ...ctl.c, max: d })} placeholder="To" />
+                </div>
+              )}
               {ctl.c.action === "range" && (
                 <div className="ct-range">
                   <input type="number" placeholder="Min" value={ctl.c.min ?? ""} onFocus={(e) => e.target.select()}
@@ -248,11 +321,12 @@ export default function ContactsPage() {
             </div>
           ))}
         </div>
-        <button className="ct-settings" onClick={() => setShowFieldSettings(true)} title="Configure contact fields" aria-label="Configure fields">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></svg>
-          Fields
-        </button>
-        <button className="cl-primary" onClick={() => setEditing(empty())}>+ New contact</button>
+        <ActionsMenu items={[
+          { key: "new", group: "Create", label: "New contact", hint: "Add one person by hand", icon: AM_ICON.plus, primary: true, tone: "green", shortcut: "N", onSelect: () => setEditing(empty()) },
+          { key: "import", group: "Data", label: "Import", hint: "From Excel or CSV, with their companies", icon: AM_ICON.import, tone: "blue", shortcut: "I", onSelect: () => setImporting(true) },
+          { key: "export", group: "Data", label: "Export", hint: "Pick contacts by company, deal or phase", icon: AM_ICON.export, tone: "violet", shortcut: "E", onSelect: () => setExporting(true) },
+          { key: "fields", group: "Setup", label: "Fields & columns", hint: "Custom fields and what the list shows", icon: AM_ICON.fields, tone: "amber", shortcut: "F", onSelect: () => setShowFieldSettings(true) },
+        ]} />
       </header>
 
       {shown.length === 0 ? (
@@ -292,6 +366,24 @@ export default function ContactsPage() {
           onClose={() => setEditing(null)}
           onSaved={async () => { setEditing(null); await reload(); }}
           onDeleted={async () => { setEditing(null); await reload(); }}
+        />
+      )}
+
+      {exporting && (
+        <ContactExport
+          contacts={contacts.filter((c) => lead || !me || (assignees[c.id!] ?? []).includes(me.id))}
+          companies={companies}
+          contactFields={fields}
+          shownIds={shown.map((c) => c.id as string)}
+          onClose={() => setExporting(false)}
+        />
+      )}
+
+      {importing && (
+        <ContactImport
+          fields={fields}
+          onClose={() => setImporting(false)}
+          onDone={async () => { await reload(); }}
         />
       )}
 

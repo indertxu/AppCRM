@@ -1,103 +1,116 @@
+/* =====================================================================
+   Home page — greeting, then the shared column (calendar + to-do) on the
+   left and the department's own home on the right.
+   ===================================================================== */
 .home {
   --mint: #86efc0;
   --emerald: #12b57f;
   --forest: #0a6f4d;
-  --neon: #12b57f;
+  --pine: #0b3a2b;
   --ink: #0b241a;
   --muted: #5a7d6d;
   --line: rgba(10, 111, 77, 0.12);
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
   position: relative;
-  height: 100vh;
+  min-height: 100vh;
   box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  padding: 22px 26px 22px;
+  padding: 24px 28px 40px;
   background:
-    radial-gradient(90% 60% at 100% 0%, rgba(18,181,127,0.08), transparent 60%),
-    radial-gradient(80% 60% at 0% 100%, rgba(134,239,192,0.14), transparent 55%),
+    radial-gradient(70% 50% at 100% 0%, rgba(18, 181, 127, 0.09), transparent 60%),
+    radial-gradient(60% 50% at 0% 100%, rgba(134, 239, 192, 0.16), transparent 55%),
     #f2f7f4;
-  overflow: hidden;
+  color: var(--ink);
+  font-family: "Inter", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
+.home *, .home *::before, .home *::after { box-sizing: border-box; }
+.home button { font-family: inherit; }
 
 /* login flood iris-out */
 .home-flood {
   position: fixed; inset: 0; z-index: 60; pointer-events: none;
   background: var(--mint);
   clip-path: circle(150% at 50% 50%);
-  animation: home-iris 0.7s cubic-bezier(0.7,0,0.3,1) forwards;
+  animation: home-iris 0.7s cubic-bezier(0.7, 0, 0.3, 1) forwards;
 }
 @keyframes home-iris { to { clip-path: circle(0% at 50% 50%); } }
 
-/* ---- greeting bar ---- */
+/* ---- greeting ---- */
 .home-bar {
-  flex-shrink: 0;
   display: flex; align-items: center; gap: 14px;
-  margin-bottom: 22px;
-  animation: home-drop 0.5s cubic-bezier(0.16,1,0.3,1) both;
+  margin: 0 0 20px;
+  animation: home-drop 0.5s var(--ease) both;
 }
 @keyframes home-drop { from { opacity: 0; transform: translateY(-12px); } }
 .home-logo-mini {
-  display: grid; place-items: center;
-  width: 48px; height: 48px; flex-shrink: 0;
-  border-radius: 14px;
-  background: #fff;
-  border: 1px solid var(--line);
-  box-shadow: 0 10px 24px -16px rgba(10,111,77,0.5);
-  overflow: hidden;
+  display: grid; place-items: center; width: 48px; height: 48px; flex-shrink: 0;
+  border-radius: 14px; background: #fff; border: 1px solid var(--line);
+  box-shadow: 0 10px 24px -16px rgba(10, 111, 77, 0.5); overflow: hidden;
 }
 .home-logo-mini svg { width: 34px; height: 34px; }
 .home-hello { flex: 1; min-width: 0; }
 .home-eyebrow { font-size: 10px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; color: var(--emerald); }
-.home-title { margin: 2px 0 0; font-family: "Space Grotesk", sans-serif; font-size: 27px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); }
-.home-date { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: capitalize; white-space: nowrap; }
+.home-title { margin: 2px 0 0; font-family: "Space Grotesk", sans-serif; font-size: 28px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); }
+.home-title em {
+  font-style: normal;
+  background: linear-gradient(100deg, var(--forest), var(--emerald) 70%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.home-date {
+  padding: 8px 14px; border-radius: 999px; background: rgba(255, 255, 255, 0.7); border: 1px solid var(--line);
+  font-size: 12.5px; font-weight: 600; color: var(--muted); text-transform: capitalize; white-space: nowrap;
+}
 
-/* ---- bento grid ---- */
-.home-bento {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  gap: 18px;
-  align-items: start;
+/* ---- layout ---- */
+.home-grid {
+  display: grid; gap: 20px; align-items: start;
+  grid-template-columns: minmax(340px, 410px) minmax(0, 1fr);
 }
-.home-bento.is-manager {
-  grid-template-columns: 340px 1fr 1fr;
-  grid-template-rows: auto auto;
-  grid-template-areas:
-    "cal mw      pipe"
-    "cal neglect bonus";
-}
-.home-bento.is-basic { grid-template-columns: 400px; justify-content: center; }
-.home-cell-cal     { grid-area: cal; }
-.home-cell-mw      { grid-area: mw; }
-.home-cell-pipe    { grid-area: pipe; }
-.home-cell-neglect { grid-area: neglect; }
-.home-cell-bonus   { grid-area: bonus; }
-.home-cell { min-width: 0; display: flex; }
+.home-side { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.home-grid { align-items: stretch; flex: 1 1 auto; }
+.home { display: flex; flex-direction: column; }
+.home-main { min-width: 0; display: flex; flex-direction: column; }
+.home-main > * { flex: 1 1 auto; }
 
-/* widgets were fixed/absolute; here they flow and fill the cell width */
-.home-cell > .cw,
-.home-cell > .mw,
-.home-cell > .hw {
-  position: static !important;
-  inset: auto !important;
-  width: 100% !important;
-  box-sizing: border-box;
-}
-.home-cell-cal > .cw { height: 100%; }
+/* Nobody-specific home: the shared column spreads across the page. */
+.home-grid.is-solo { grid-template-columns: minmax(0, 1fr); }
+.home-grid.is-solo .home-side { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
 
-@media (max-width: 1240px) {
-  .home-bento.is-manager {
-    grid-template-columns: 1fr 1fr;
-    grid-template-areas:
-      "cal cal"
-      "mw pipe"
-      "neglect bonus";
-  }
+/* while we work out who you are */
+.home-ghost {
+  height: 340px; border-radius: 22px; border: 1px solid var(--line);
+  background: linear-gradient(100deg, rgba(255, 255, 255, 0.55) 30%, rgba(255, 255, 255, 0.95) 50%, rgba(255, 255, 255, 0.55) 70%) 0 0 / 220% 100%, rgba(255, 255, 255, 0.5);
+  animation: home-shine 1.4s linear infinite;
 }
-@media (max-width: 720px) {
-  .home-bento.is-manager { grid-template-columns: 1fr; grid-template-areas: "cal" "mw" "pipe" "neglect" "bonus"; }
+.home-ghost.is-short { height: 220px; }
+@keyframes home-shine { to { background-position: -220% 0, 0 0; } }
+
+@media (max-width: 1080px) {
+  .home-grid { grid-template-columns: minmax(0, 1fr); }
+  .home-grid.is-solo .home-side { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .home { padding: 16px 14px 28px; }
+  .home-bar { flex-wrap: wrap; }
+  .home-title { font-size: 23px; }
+  .home-date { order: 3; }
 }
 @media (prefers-reduced-motion: reduce) {
   .home-flood { display: none; }
-  .home-bar { animation: none; }
+  .home-bar, .home-ghost { animation: none; }
+}
+
+/* =====================================================================
+   Desktop: a dashboard that fills the whole screen — width and height.
+   The page itself doesn't scroll; long lists scroll inside their card.
+   (Short or narrow screens fall back to a normal scrolling page.)
+   ===================================================================== */
+@media (min-width: 1081px) and (min-height: 700px) {
+  .home { height: 100vh; overflow: hidden; padding-bottom: 22px; }
+  .home-grid { min-height: 0; grid-template-columns: minmax(360px, 27vw) minmax(0, 1fr); }
+  .home-side, .home-main { min-height: 0; }
+  .home-main > * { min-height: 0; }
+  .home-grid.is-solo .home-side { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); align-items: stretch; }
+  .home-ghost { height: 100%; }
+  .home-side .home-ghost.is-short { height: 40%; }
 }

@@ -3,6 +3,7 @@ import { useAuth } from "../api/authContext";
 import ProtectedRoute from "./ProtectedRoute";
 import LoginPage from "../login/LoginPage";
 import AppLayout from "../framework/AppLayout";
+import { PageRoute } from "../framework/pageAccess";
 import ManagementPage from "../pages/management/ManagementPage";
 import HomePage from "../pages/homepage/HomePage";
 import CalendarPage from "../pages/calendar/CalendarPage";
@@ -11,7 +12,7 @@ import ClientsPage from "../pages/clients/ClientsPage";
 import ProjectsPage from "../pages/projects/ProjectsPage";
 import CompaniesPage from "../pages/companies/CompaniesPage";
 import ContactsPage from "../pages/contacts/ContactsPage";
-import SalesPage from "../pages/sales/SalesPage";
+import SalesPage from "../pages/sales/sales/SalesPage";
 import SettingsPage from "../pages/settings/SettingsPage";
 import SuperAdminHome from "../pages/superadmin/SuperAdminHome";
 import SuperAdminClient from "../pages/superadmin/SuperAdminClient";
@@ -24,38 +25,9 @@ function LoginRoute() {
   return <LoginPage />;
 }
 
-// Only admin/boss may pass; consultants get sent home
-function AdminRoute() {
-  const { role, roleLoading } = useAuth();
-  if (roleLoading) return null;
-if (role !== "boss") return <Navigate to="/home" replace />;
-  return <Outlet />;
-}
-
-/**
- * Sales, companies and contacts belong to the sales team, not just the boss.
- * Reps only see the records they are assigned to, which the pages handle
- * themselves.
- */
-const SALES_TEAM = ["boss", "sales", "sales_manager"];
-function SalesRoute() {
-  const { role, roleLoading } = useAuth();
-  if (roleLoading) return null;
-  if (!role || !SALES_TEAM.includes(role)) return <Navigate to="/home" replace />;
-  return <Outlet />;
-}
-
-// Managers of any department (and the boss) may see Management.
-const MANAGER_ROLES = [
-  "boss", "consultancy_manager", "sales_manager", "customer_success",
-  "it_manager", "marketing_manager", "hr_manager",
-];
-function ManagerRoute() {
-  const { role, roleLoading } = useAuth();
-  if (roleLoading) return null;
-  if (!role || !MANAGER_ROLES.includes(role)) return <Navigate to="/home" replace />;
-  return <Outlet />;
-}
+// Which pages each security level may open is configured in
+// Settings → Organization → Page access (table page_access). The built-in
+// defaults (what used to be hard-coded here) live in framework/pageAccess.tsx.
 
 /**
  * One "Calendar" entry, two calendars behind it.
@@ -104,25 +76,16 @@ export default function AppRoutes() {
       <Route element={<ProtectedRoute />}>
         <Route element={<AppGate />}>
           <Route element={<AppLayout />}>
+            {/* Home and Settings are always open; everything else follows Page access. */}
             <Route path="/home" element={<HomePage />} />
-            <Route path="/calendar" element={<CalendarRoute />} />
-            <Route element={<ManagerRoute />}>
-              <Route path="/management" element={<ManagementPage />} />
-            </Route>
             <Route path="/settings" element={<SettingsPage />} />
-
-            {/* Delivery side: clients are boss only; projects are open to everyone. */}
-            <Route element={<AdminRoute />}>
-              <Route path="/clients" element={<ClientsPage />} />
-            </Route>
-            <Route path="/projects" element={<ProjectsPage />} />
-
-            {/* Sales side: the sales team and the boss */}
-            <Route element={<SalesRoute />}>
-              <Route path="/companies" element={<CompaniesPage />} />
-              <Route path="/contacts" element={<ContactsPage />} />
-              <Route path="/sales" element={<SalesPage />} />
-            </Route>
+            <Route element={<PageRoute page="calendar" />}><Route path="/calendar" element={<CalendarRoute />} /></Route>
+            <Route element={<PageRoute page="management" />}><Route path="/management" element={<ManagementPage />} /></Route>
+            <Route element={<PageRoute page="clients" />}><Route path="/clients" element={<ClientsPage />} /></Route>
+            <Route element={<PageRoute page="projects" />}><Route path="/projects" element={<ProjectsPage />} /></Route>
+            <Route element={<PageRoute page="companies" />}><Route path="/companies" element={<CompaniesPage />} /></Route>
+            <Route element={<PageRoute page="contacts" />}><Route path="/contacts" element={<ContactsPage />} /></Route>
+            <Route element={<PageRoute page="sales" />}><Route path="/sales" element={<SalesPage />} /></Route>
           </Route>
         </Route>
       </Route>

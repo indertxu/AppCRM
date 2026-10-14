@@ -1328,3 +1328,9 @@ svg.bl-hcaret { width: 13px !important; height: 13px !important; }
     transition-duration: 0.001ms !important; transition-delay: 0s !important;
   }
 }
+/* Access "only own": the consultant picker becomes a fixed label */
+.bl-pick-locked {
+  display: inline-flex; align-items: center; height: 38px; padding: 0 14px; border-radius: 11px;
+  font-size: 13px; font-weight: 700; color: var(--mint, #86efc0);
+  background: rgba(134, 239, 192, 0.1); border: 1px solid rgba(134, 239, 192, 0.25);
+}

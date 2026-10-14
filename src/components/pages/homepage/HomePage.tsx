@@ -1,10 +1,29 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/**
+ * Home page.
+ *
+ *   homepage/
+ *     HomePage.tsx          ← this: greeting + layout, picks the right home
+ *     shared/               ← what everyone gets, in the left column
+ *       HomeCalendar.tsx      next 5 working days · month · coming up
+ *       HomeTodo.tsx          my to-do (tasks from Sales for now)
+ *     sales/SalesHome.tsx         ← right side for the sales team
+ *     consultancy/ConsultancyHome ← right side for consultancy
+ *     management/ManagementHome   ← right side for the boss / managers
+ *
+ * Which right side you get goes by DEPARTMENT first (a boss inside
+ * consultancy sees consultancy), then by role. Anyone else gets the shared
+ * column on its own, spread across the page.
+ */
 import { useEffect, useState } from "react";
 import { supabase } from "../../api/supabase";
 import { useAuth } from "../../api/AuthProvider";
-import CalendarWidget from "./CalendarWidget";
-import ManagementWidget from "./ManagementWidget";
-import { SalesPipelineWidget, NeglectedClientsWidget, TeamBonusWidget } from "./HomeWidgets";
-import ConsultancyHome from "./ConsultancyHome";
+import HomeCalendar from "./shared/HomeCalendar";
+import HomeTodo from "./shared/HomeTodo";
+import SalesHome from "./sales/SalesHome";
+import ConsultancyHome from "./consultancy/ConsultancyHome";
+import ManagementHome from "./management/ManagementHome";
+import { applyRolePreview } from "../../framework/SuperAdmin";
 import "./HomePage.css";
 
 const greeting = () => {
@@ -27,33 +46,51 @@ const NextLogo = () => (
   </svg>
 );
 
+type Me = { id: string; department: string | null; role: string | null; firstName: string | null; isSuper: boolean };
+type Area = "sales" | "consultancy" | "management" | null;
+
+const SALES_ROLES = ["sales", "sales_manager"];
+const MANAGER_ROLES = ["boss", "consultancy_manager", "sales_manager"];
+
+function areaFor(me: Me | null, authRole: string | null): Area {
+  if (!me) return null;
+  const role = (me.role ?? authRole ?? "").toLowerCase();
+  if (me.department === "consultancy") return "consultancy";
+  if (me.department === "sales" || SALES_ROLES.includes(role)) return "sales";
+  if (MANAGER_ROLES.includes(role) || me.isSuper) return "management";
+  return null;
+}
+
 export default function HomePage() {
   const { role } = useAuth();
-  const [me, setMe] = useState<{ id: string; department: string | null; role: string | null } | null>(null);
+  const [uid, setUid] = useState<string | null>(null);
+  const [me, setMe] = useState<Me | null>(null);
   const [hoursPerDay, setHoursPerDay] = useState(8);
 
   useEffect(() => {
     let alive = true;
     (async () => {
-      const { data: auth } = await supabase.auth.getUser();
-      const uid = auth?.user?.id;
+      // Local session (no trip to the auth server, which would hold up every other query).
+      const { data: s } = await supabase.auth.getSession();
+      const uid = s?.session?.user?.id;
       if (!uid) return;
+      setUid(uid); // the shared column only needs this — it starts loading straight away
       const [{ data: prof }, { data: bs }] = await Promise.all([
-        supabase.from("profiles").select("id, department, role").eq("id", uid).maybeSingle(),
+        supabase.from("profiles").select("id, department, role, first_name, is_superadmin").eq("id", uid).maybeSingle(),
         supabase.from("billing_settings").select("hours_per_day").eq("id", "default").maybeSingle(),
       ]);
       if (!alive) return;
-      setMe(prof ? { id: (prof as any).id, department: (prof as any).department, role: (prof as any).role } : { id: uid, department: null, role: role ?? null });
+      const p = prof ? applyRolePreview(prof as any) : null; // superadmin previewing a role
+      setMe({ id: uid, department: p?.department ?? null, role: p?.role ?? role ?? null, firstName: p?.first_name ?? null, isSuper: p?.is_superadmin === true });
       setHoursPerDay(Number((bs as any)?.hours_per_day) || 8);
     })();
     return () => { alive = false; };
   }, [role]);
 
-  // Home is decided by DEPARTMENT (a boss inside consultancy still sees the
-  // consultancy home). Role only governs how much of the team they see.
-  const dept = me?.department ?? null;
-  const isLead = me?.role === "boss" || me?.role === "consultancy_manager";
-  const isManager = role === "boss" || role === "consultancy_manager" || role === "sales_manager";
+  const area = areaFor(me, role ?? null);
+  const r = (me?.role ?? role ?? "").toLowerCase();
+  const isLead = r === "boss" || r === "consultancy_manager";
+  const seesSalesTeam = r === "boss" || r === "sales_manager" || !!me?.isSuper;
 
   return (
     <div className="home">
@@ -63,25 +100,32 @@ export default function HomePage() {
         <span className="home-logo-mini" aria-hidden="true"><NextLogo /></span>
         <div className="home-hello">
           <span className="home-eyebrow">Next Management</span>
-          <h1 className="home-title">{greeting()}</h1>
+          <h1 className="home-title">{greeting()}{me?.firstName ? <>, <em>{me.firstName}</em></> : ""}</h1>
         </div>
-        <span className="home-date">{new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}</span>
+        <span className="home-date">{new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}</span>
       </header>
 
-      {dept === "consultancy" && me ? (
-        <ConsultancyHome userId={me.id} isLead={isLead} hoursPerDay={hoursPerDay} />
+      {!uid ? (
+        <div className="home-grid">
+          <div className="home-side"><div className="home-ghost" /><div className="home-ghost is-short" /></div>
+          <div className="home-main"><div className="home-ghost" /></div>
+        </div>
       ) : (
-        <main className={`home-bento ${isManager ? "is-manager" : "is-basic"}`}>
-          <div className="home-cell home-cell-cal"><CalendarWidget /></div>
-          {isManager && (
-            <>
-              <div className="home-cell home-cell-mw"><ManagementWidget /></div>
-              <div className="home-cell home-cell-pipe"><SalesPipelineWidget /></div>
-              <div className="home-cell home-cell-neglect"><NeglectedClientsWidget /></div>
-              <div className="home-cell home-cell-bonus"><TeamBonusWidget /></div>
-            </>
+        <div className={`home-grid ${me && !area ? "is-solo" : ""}`}>
+          <aside className="home-side">
+            <HomeCalendar userId={uid} hoursPerDay={hoursPerDay} />
+            <HomeTodo />
+          </aside>
+          {!me ? (
+            <main className="home-main"><div className="home-ghost" /></main>
+          ) : area && (
+            <main className="home-main">
+              {area === "sales" && <SalesHome userId={me.id} seesTeam={seesSalesTeam} />}
+              {area === "consultancy" && <ConsultancyHome userId={me.id} isLead={isLead} hoursPerDay={hoursPerDay} />}
+              {area === "management" && <ManagementHome />}
+            </main>
           )}
-        </main>
+        </div>
       )}
     </div>
   );

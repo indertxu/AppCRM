@@ -8,12 +8,22 @@ import Organization from "./Organization";
 import CatalogPage from "./CatalogPage";
 import PipelinePage from "./PipelinePage";
 import ProposalTemplateEditor from "./ProposalTemplateEditor";
-import { connectOutlook, completeOutlookConnect, outlookStatus, disconnectOutlook } from "../../api/outlookSync";
+import PageAccessModal from "./PageAccessModal";
+import { usePageAccess } from "../../framework/pageAccess";
+import { SuperAdminSwitch } from "../../framework/SuperAdmin";
+import { connectOutlook, completeOutlookConnect, outlookStatus, disconnectOutlook, outlookConnectError, OUTLOOK_CONNECTION_EVENT } from "../../api/outlookSync";
 import "./SettingsPage.css";
 
 const levelLabel = (id: string | null) => LEVELS.find((l) => l.id === id)?.label ?? id ?? "—";
 
 type View = "home" | "users" | "organization" | "account" | "interface" | "catalog" | "pipeline" | "proposal";
+/** Which Page-access panel opens each view (Settings → Organization → Page access → Settings). */
+const VIEW_PANEL: Partial<Record<View, string>> = {
+  organization: "settings.organization",
+  catalog: "settings.catalog",
+  pipeline: "settings.pipelines",
+  proposal: "settings.proposal",
+};
 
 export const DOCK_PINNED_KEY = "next.dockPinned";
 export const DOCK_PINNED_EVENT = "next:dock-pinned";
@@ -21,9 +31,13 @@ export const DOCK_LABELS_KEY = "next.dockLabels";
 export const DOCK_LABELS_EVENT = "next:dock-labels";
 
 export default function SettingsPage() {
-  const { session, role } = useAuth();
+  const { session, role, isSuperadmin } = useAuth() as any;
   console.log("my role →", role);
-  const isBoss = role === "boss";
+  const isBoss = (role ?? "").toString().toLowerCase() === "boss";
+  /** Who may edit Page access: by SECURITY LEVEL (read live, as Organization shows it). */
+  const { level: secLevel, isSuper: secSuper, canPanel, ready: accessReady } = usePageAccess();
+  const canEditAccess = secLevel === "boss" || secSuper || isSuperadmin === true;
+  console.log("[page-access] security level (live) →", secLevel, "| can edit:", canEditAccess);
   const isManager = role === "consultancy_manager" || role === "sales_manager"
     || role === "customer_success" || role === "it_manager"
     || role === "marketing_manager" || role === "hr_manager";
@@ -40,7 +54,11 @@ export default function SettingsPage() {
     ? ["sales"]
     : [];
 
-  const [view, setView] = useState<View>("home");
+  const [viewRaw, setView] = useState<View>("home");
+  // A panel switched off in Page access can't be opened (also not while it's open).
+  const view: View = VIEW_PANEL[viewRaw] && !(accessReady && canPanel(VIEW_PANEL[viewRaw]!)) ? "home" : viewRaw;
+  const seesCompanyCards = ["settings.organization", "settings.catalog", "settings.pipelines", "settings.proposal"].some((k) => canPanel(k));
+  const [showPageAccess, setShowPageAccess] = useState(false);
 
   // Quick insights shown on the landing cards (loaded lazily).
   const [stats, setStats] = useState<{
@@ -48,7 +66,7 @@ export default function SettingsPage() {
     products: number; services: number; pipelines: number;
   } | null>(null);
   useEffect(() => {
-    if (!canManage) return;
+    if (!seesCompanyCards) return;
     (async () => {
       const [emp, dep, prod, svc, pipe] = await Promise.all([
         supabase.from("profiles").select("id", { count: "exact", head: true }),
@@ -65,7 +83,7 @@ export default function SettingsPage() {
         pipelines: pipe.count ?? 0,
       });
     })().catch(() => {});
-  }, [canManage]);
+  }, [seesCompanyCards]);
 
   // When the Settings icon is tapped while already on /settings, reset to home.
   useEffect(() => {
@@ -128,12 +146,26 @@ export default function SettingsPage() {
   // Outlook connection state
   const [outlookConnected, setOutlookConnected] = useState<boolean | null>(null);
   const [outlookBusy, setOutlookBusy] = useState(false);
+  const [outlookError, setOutlookError] = useState<string | null>(() => outlookConnectError());
   useEffect(() => {
     (async () => {
+      const returning = !!outlookConnectError() || !!sessionStorage.getItem("ms_oauth_pending");
       const finished = await completeOutlookConnect().catch(() => false);
       const status = await outlookStatus().catch(() => false);
       setOutlookConnected(finished || status);
+      setOutlookError(finished || status ? null : outlookConnectError());
+      // Just back from Microsoft: show the result where the button is.
+      if (finished || returning) setView("interface");
     })();
+  }, []);
+  useEffect(() => {
+    const on = (e: Event) => {
+      const d = (e as CustomEvent).detail ?? {};
+      if (d.connected) { setOutlookConnected(true); setOutlookError(null); }
+      else setOutlookError(d.error ?? null);
+    };
+    window.addEventListener(OUTLOOK_CONNECTION_EVENT, on);
+    return () => window.removeEventListener(OUTLOOK_CONNECTION_EVENT, on);
   }, []);
   const handleOutlook = async () => {
     if (outlookConnected) {
@@ -142,7 +174,12 @@ export default function SettingsPage() {
       setOutlookConnected(false);
       setOutlookBusy(false);
     } else {
-      await connectOutlook();
+      // Microsoft opens in a popup; this page stays put and finishes the connection.
+      setOutlookBusy(true); setOutlookError(null);
+      const ok = await connectOutlook().catch(() => false);
+      setOutlookBusy(false);
+      if (ok) setOutlookConnected(true);
+      else setOutlookError(outlookConnectError());
     }
   };
 
@@ -209,7 +246,7 @@ export default function SettingsPage() {
         </header>
 
         <div className="nav-cards">
-          {canManage && (
+          {canPanel("settings.organization") && (
             <button className="nav-card" style={{ ["--accent" as any]: "#12b57f" }} onClick={() => setView("organization")}>
               <span className="nav-card-icon">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -230,7 +267,7 @@ export default function SettingsPage() {
             </button>
           )}
 
-          {canManage && (
+          {canPanel("settings.catalog") && (
             <button className="nav-card" style={{ ["--accent" as any]: "#3c9ae0" }} onClick={() => setView("catalog")}>
               <span className="nav-card-icon">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -250,7 +287,7 @@ export default function SettingsPage() {
             </button>
           )}
 
-          {canManage && (
+          {canPanel("settings.pipelines") && (
             <button className="nav-card" style={{ ["--accent" as any]: "#9b6fd0" }} onClick={() => setView("pipeline")}>
               <span className="nav-card-icon">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -270,7 +307,7 @@ export default function SettingsPage() {
             </button>
           )}
 
-          {canManage && (
+          {canPanel("settings.proposal") && (
             <button className="nav-card" style={{ ["--accent" as any]: "#d1685f" }} onClick={() => setView("proposal")}>
               <span className="nav-card-icon">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h11l5 5v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" /><path d="M14 4v5h5M8 13h8M8 17h8M8 9h2" /></svg>
@@ -333,8 +370,19 @@ export default function SettingsPage() {
             <h1 className="st-title">Organization</h1>
           </div>
           <div className="st-org-toolbar" ref={orgToolbarRef} />
+          <button
+            className="st-pa-btn"
+            onClick={() => canEditAccess && setShowPageAccess(true)}
+            disabled={!canEditAccess}
+            title={canEditAccess ? "Which pages and panels each person can open" : `Only the Boss security level can change page access (your security level: ${secLevel ?? "none"})`}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z" /><path d="M9 12l2 2 4-4" /></svg>
+            Page access
+          </button>
+          <SuperAdminSwitch />
         </header>
         <Organization canManage={canManage} canSeeSensitive={canSeeSensitive} backRef={orgBackRef} toolbarRef={orgToolbarRef} />
+        {showPageAccess && <PageAccessModal onClose={() => setShowPageAccess(false)} />}
       </div>
     );
   }
@@ -454,6 +502,9 @@ export default function SettingsPage() {
                 {outlookConnected
                   ? "Connected. New and edited activities appear in your Outlook calendar."
                   : "Connect your Outlook so activities you book here also land in your Outlook calendar."}
+                {!outlookConnected && outlookError && (
+                  <span style={{ display: "block", marginTop: 6, color: "#a83434", fontWeight: 600 }}>Couldn't connect: {outlookError}</span>
+                )}
               </span>
             </div>
             <button
@@ -462,7 +513,7 @@ export default function SettingsPage() {
               onClick={handleOutlook}
               disabled={outlookBusy || outlookConnected === null}
             >
-              {outlookConnected === null ? "…" : outlookConnected ? "Disconnect" : "Connect Outlook"}
+              {outlookConnected === null ? "…" : outlookBusy && !outlookConnected ? "Waiting for Microsoft…" : outlookConnected ? "Disconnect" : "Connect Outlook"}
             </button>
           </div>
         </section>

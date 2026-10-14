@@ -4,6 +4,7 @@ import Dock from "./Dock";
 import { supabase } from "../api/supabase";
 import { useAuth } from "../api/AuthProvider";
 import { DOCK_PINNED_KEY, DOCK_PINNED_EVENT, DOCK_LABELS_KEY, DOCK_LABELS_EVENT } from "../pages/settings/SettingsPage";
+import { PageAccessProvider } from "./pageAccess";
 import "./AppLayout.css";
 
 export default function AppLayout() {
@@ -47,11 +48,13 @@ export default function AppLayout() {
   }, [uid]);
 
   return (
+    <PageAccessProvider>
     <div className={`app-shell ${pinned ? "dock-pinned" : ""} ${labels ? "dock-labels" : ""}`}>
       <div className="app-page">
         <Outlet />
       </div>
       <Dock />
     </div>
+    </PageAccessProvider>
   );
 }

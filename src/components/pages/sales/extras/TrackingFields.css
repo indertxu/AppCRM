@@ -1,0 +1,150 @@
+/* =====================================================================
+   Sales · deal (tracking) custom fields
+   tfi-  one field's control (shared by New tracking and the Details card)
+   tfp-  the Details card on a deal
+   tfm-  the "Deal fields" drawer
+   ===================================================================== */
+
+/* ---------- controls ---------- */
+.tfi-in {
+  width: 100%; min-width: 0; box-sizing: border-box; height: 40px; padding: 0 12px;
+  border: 1px solid transparent; border-radius: 11px; background: #f2f6f4;
+  font: inherit; font-size: 13.5px; font-weight: 550; color: #0e1a15; outline: none;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.tfi-in:hover { background: #ebf2ee; }
+.tfi-in:focus { background: #fff; border-color: #1fb98a; box-shadow: 0 0 0 3px rgba(31, 185, 138, 0.15); }
+.tfi-in[type="number"] { -moz-appearance: textfield; appearance: textfield; font-variant-numeric: tabular-nums; }
+.tfi-in[type="number"]::-webkit-outer-spin-button, .tfi-in[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.tfi-yn { display: inline-flex; padding: 3px; gap: 3px; border-radius: 11px; background: #f2f6f4; }
+.tfi-yn button {
+  min-width: 58px; height: 32px; padding: 0 14px; border: 0; border-radius: 9px; background: none; cursor: pointer;
+  font: inherit; font-size: 13px; font-weight: 650; color: #66756f; transition: background 0.18s, color 0.18s, box-shadow 0.18s;
+}
+.tfi-yn button:hover:not(:disabled) { color: #0e1a15; }
+.tfi-yn button.is-on { background: #0b3a2b; color: #fff; box-shadow: 0 6px 14px -8px rgba(7, 36, 25, 0.8); }
+.tfi-yn.is-disabled { opacity: 0.6; }
+/* inside the drawer form, the controls match the drawer's own inputs */
+.dw-f .tfi-in { height: auto; padding: 11px 13px; }
+.dw-f .tfi-yn { align-self: flex-start; }
+.dw-f .dp-trigger, .tfp-v .dp-trigger { width: 100%; box-sizing: border-box; }
+
+/* ---------- Details card on a deal ---------- */
+.tfp-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.tfp-head .sl-panel-title { margin: 0 !important; }
+.tfp-state { margin-left: auto; font-size: 11.5px; font-weight: 650; color: #97a39e; white-space: nowrap; transition: color 0.2s; }
+.tfp-state.is-saving { color: #66756f; }
+.tfp-state.is-saved { color: #0a6f4d; }
+.tfp-state.is-error { color: #d64545; }
+.tfp-state.is-idle:not(:empty) { color: #b07d1e; }
+.tfp-err { margin: -6px 0 10px; padding: 8px 11px; border-radius: 10px; background: rgba(214, 69, 69, 0.08); color: #b84040; font-size: 12px; }
+.tfp-list { display: flex; flex-direction: column; gap: 2px; }
+.tfp-row {
+  display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.25fr); align-items: center; gap: 12px;
+  padding: 7px 8px; margin: 0 -8px; border-radius: 12px; transition: background 0.18s;
+}
+.tfp-row:hover, .tfp-row:focus-within { background: #f6f9f7; }
+.tfp-k { min-width: 0; font-size: 12.5px; font-weight: 600; color: #3a4843; line-height: 1.3; overflow-wrap: anywhere; }
+.tfp-k i { font-style: normal; margin-left: 3px; color: #1fb98a; font-weight: 800; }
+.tfp-v { min-width: 0; display: flex; justify-content: flex-start; }
+.tfp-v > * { flex: 1 1 auto; min-width: 0; }
+.tfp-v > .tfi-yn { flex: 0 0 auto; }
+.tfp-row.is-missing .tfp-k { color: #9a5f12; }
+.tfp-row.is-missing .tfi-in, .tfp-row.is-missing .tfi-yn { box-shadow: inset 0 0 0 1px rgba(224, 164, 60, 0.55); }
+@media (max-width: 1400px) { .tfp-row { grid-template-columns: minmax(0, 1fr); gap: 6px; } }
+
+/* ---------- Deal fields drawer ---------- */
+.tfm-backdrop {
+  --mint: #86efc0; --emerald: #12b57f; --forest: #0a6f4d; --ink: #0b241a; --muted: #5a7d6d; --line: rgba(10, 111, 77, 0.14);
+}
+.tfm-where { margin: 0; font-size: 13px; line-height: 1.5; color: var(--muted); }
+.tfm-where b { color: var(--ink); font-weight: 650; }
+.tfm-note { margin: 0; padding: 10px 13px; border-radius: 12px; background: rgba(224, 164, 60, 0.12); color: #7a4d0c; font-size: 12.5px; line-height: 1.45; }
+.tfm-note code { font-size: 11.5px; background: rgba(255, 255, 255, 0.7); padding: 1px 5px; border-radius: 5px; }
+.tfm-note.is-soft { background: rgba(18, 181, 127, 0.08); color: var(--forest); }
+.tfm-count {
+  display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 6px; margin-left: 8px; border-radius: 999px;
+  background: rgba(18, 181, 127, 0.14); color: var(--forest); font-size: 11px; letter-spacing: 0; vertical-align: 1px;
+}
+.tfm-list .tfm-row { align-items: flex-start; transition: border-color 0.15s, box-shadow 0.15s, opacity 0.15s, transform 0.15s; }
+.tfm-row.is-dragging { opacity: 0.4; transform: scale(0.98); }
+.tfm-row.is-over { border-color: var(--emerald); box-shadow: 0 -2px 0 var(--emerald) inset, 0 8px 18px -12px rgba(18, 181, 127, 0.6); }
+.tfm-row > .cf-req, .tfm-row > .cf-del { margin-top: 2px; }
+.tfm-grip { flex-shrink: 0; align-self: center; color: var(--muted); font-size: 12px; letter-spacing: -2px; cursor: grab; user-select: none; }
+.tfm-name { align-self: flex-start; max-width: 100%; padding: 0; border: 0; background: none; text-align: left; cursor: text; border-radius: 6px; overflow-wrap: anywhere; }
+.tfm-name:hover:not(:disabled) { color: var(--forest); text-decoration: underline dotted; text-underline-offset: 3px; }
+.tfm-name:disabled { cursor: default; }
+.tfm-rename {
+  width: 100%; box-sizing: border-box; padding: 5px 9px; border: 1px solid var(--emerald); border-radius: 8px; outline: none;
+  font-family: "Space Grotesk", sans-serif; font-size: 14px; font-weight: 600; color: var(--ink); box-shadow: 0 0 0 3px rgba(18, 181, 127, 0.14);
+}
+.tfm-optlink { padding: 0; border: 0; background: none; font: inherit; color: var(--forest); font-weight: 650; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.tfm-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.tfm-chips i { font-style: normal; padding: 2px 8px; border-radius: 999px; background: rgba(18, 181, 127, 0.1); color: var(--forest); font-size: 11.5px; font-weight: 600; }
+.tfm-opts { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; }
+.tfm-opts textarea {
+  width: 100%; box-sizing: border-box; resize: vertical; padding: 8px 10px; border: 1px solid var(--emerald); border-radius: 9px; outline: none;
+  font: inherit; font-size: 13px; color: var(--ink); box-shadow: 0 0 0 3px rgba(18, 181, 127, 0.14);
+}
+.tfm-opts span { font-size: 11.5px; color: var(--muted); }
+.tfm-hint { margin: 10px 2px 0; font-size: 11.5px; color: var(--muted); }
+.tfm-types { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+.tfm-types button {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 9px 11px; text-align: left; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 11px; background: #fff; font: inherit; transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.tfm-types button b { font-size: 13px; font-weight: 700; color: var(--ink); }
+.tfm-types button span { font-size: 11px; line-height: 1.35; color: var(--muted); }
+.tfm-types button:hover { border-color: rgba(18, 181, 127, 0.45); }
+.tfm-types button.is-on { border-color: var(--emerald); background: rgba(18, 181, 127, 0.07); box-shadow: 0 0 0 3px rgba(18, 181, 127, 0.12); }
+.tfm-reqline { flex-direction: row !important; align-items: center; gap: 10px !important; }
+.tfm-reqline > span { font-size: 12.5px; color: var(--muted); }
+.tfm-reqline > span b { color: var(--ink); font-weight: 650; }
+
+/* ---------- New tracking drawer: the details section ---------- */
+.nt-fields .dw-f > label i { font-style: normal; color: var(--emerald); font-weight: 800; margin-left: 2px; }
+.nt-fields .dw-f.is-missing > label { color: #9a5f12; }
+.nt-fields .dw-f.is-missing .tfi-in, .nt-fields .dw-f.is-missing .tfi-yn { box-shadow: inset 0 0 0 1px rgba(224, 164, 60, 0.6); }
+
+@media (prefers-reduced-motion: reduce) { .tfm-row, .tfi-yn button, .tfp-row { transition: none; } }
+.sl.sl-detail .sl-col-right > .tfp:nth-child(3) { animation-delay: 0.54s; }
+
+/* ---------- New tracking drawer: people on the deal ---------- */
+.nt-people-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.nt-person {
+  display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 10px; border-radius: 12px;
+  border: 1px solid var(--line, rgba(10, 111, 77, 0.14)); background: #fff; animation: nt-in 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: border-color 0.2s, background 0.2s;
+}
+@keyframes nt-in { from { opacity: 0; transform: translateY(4px); } }
+.nt-person.is-owner { border-color: rgba(224, 164, 60, 0.45); background: #fffaf0; }
+.nt-person-av { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0; background: linear-gradient(150deg, #c9f2dd, #7fd9b4); color: #0b3a2b; font-size: 12.5px; font-weight: 800; }
+.nt-person-name { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 600; color: var(--ink, #0b241a); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nt-person-name em { font-style: normal; margin-left: 6px; font-size: 11px; font-weight: 700; color: var(--muted, #5a7d6d); }
+.nt-person-tag { font-size: 10.5px; font-weight: 800; padding: 2px 8px; border-radius: 999px; background: rgba(224, 164, 60, 0.18); color: #9a5f12; }
+.nt-star, .nt-person-x { width: 30px; height: 30px; flex-shrink: 0; display: grid; place-items: center; border: 0; border-radius: 9px; background: none; cursor: pointer; color: #97a39e; transition: background 0.15s, color 0.15s, transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.nt-star svg { width: 17px; height: 17px; }
+.nt-star:hover { background: rgba(224, 164, 60, 0.12); color: #c48a1d; }
+.nt-star.is-on { color: #e0a43c; transform: scale(1.08); }
+.nt-person-x { font-size: 17px; }
+.nt-person-x:hover { background: rgba(214, 69, 69, 0.1); color: #d64545; }
+.nt-people-hint { margin: 8px 0 0; font-size: 11.5px; color: var(--muted, #5a7d6d); }
+
+/* New tracking · contacts of the chosen company first */
+.cbo-group { padding: 9px 11px 5px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #8aa298; }
+.cbo-group.is-pref { color: #0a6f4d; }
+.cbo-group:not(:first-child) { margin-top: 4px; border-top: 1px solid rgba(10, 111, 77, 0.08); padding-top: 11px; }
+.cbo-option { display: flex !important; align-items: baseline; gap: 8px; }
+.cbo-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.cbo-hint { margin-left: auto; flex-shrink: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; font-size: 11.5px; color: #5a7d6d; }
+.cbo-option.is-pref { position: relative; padding-left: 20px; background: rgba(18, 181, 127, 0.06); font-weight: 600; color: #0a6f4d; margin-bottom: 2px; }
+.cbo-option.is-pref::before { content: ""; position: absolute; left: 9px; top: 50%; width: 5px; height: 5px; margin-top: -2.5px; border-radius: 50%; background: #12b57f; }
+.cbo-option.is-pref.is-hi { background: rgba(18, 181, 127, 0.16); }
+
+/* New tracking · the role each person plays on the deal */
+.nt-person-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.nt-person-main .nt-person-name { flex: none; }
+.nt-person-main.is-missing .drp-label { animation: nt-nudge 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97); }
+@keyframes nt-nudge { 20%, 60% { transform: translateX(-2px); } 40%, 80% { transform: translateX(2px); } }
+.nt-person-warn { font-size: 11.5px; line-height: 1.35; color: #9a5f12; }
+.cbo-option .cbo-hint { font-weight: 500; }

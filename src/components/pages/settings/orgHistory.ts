@@ -22,15 +22,16 @@ const FIELD_LABEL: Record<string, string> = {
   placed: "on the map",
   parent_id: "led by",
   security_role: "default security role",
+  active: "employment",
 };
 
 // Only these fields are versioned over time. Everything else is "latest value
 // only" — it's saved to the live row but never generates a history event, to
 // keep the log lean and meaningful.
-//   user: department, manager (reports-to), salary (wage), security role
+//   user: department, manager (reports-to), salary (wage), security role, employment (active / laid off)
 //   dept: placed (exists on the map), parent (led-by), default security role
 const TRACK_HISTORY: Record<"user" | "dept", Set<string>> = {
-  user: new Set(["department", "manager_id", "salary", "role"]),
+  user: new Set(["department", "manager_id", "salary", "role", "active"]),
   dept: new Set(["placed", "parent_id", "security_role"]),
 };
 

@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { supabase } from "../../api/supabase";
-import { listHandoffs, dismissHandoff, type Handoff } from "../sales/salesApi";
+import { listHandoffs, dismissHandoff, type Handoff } from "../sales/sales/salesApi";
 import Select from "../../framework/Select";
 import IncomingConvertModal from "./IncomingConvertModal";
 import "./IncomingPanel.css";

@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { supabase } from "../../api/supabase";
-import { markHandoffConverted, type Handoff } from "../sales/salesApi";
+import { markHandoffConverted, type Handoff } from "../sales/sales/salesApi";
 import DatePicker from "../../framework/DatePicker";
 import Select from "../../framework/Select";
 import type { Phase, TeamMember, ClientRole, ProjectType, Blueprint } from "./ClientsPage";

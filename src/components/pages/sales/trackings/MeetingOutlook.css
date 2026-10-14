@@ -1,0 +1,31 @@
+/* ===== Deal meetings → Outlook: status after booking + chip on each meeting ===== */
+.sl-ol-status {
+  display: flex; align-items: center; gap: 9px; margin-top: 8px; padding: 8px 10px 8px 9px; border-radius: 11px;
+  font-size: 12.5px; line-height: 1.4; border: 1px solid transparent; animation: sl-ol-in 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes sl-ol-in { from { opacity: 0; transform: translateY(-4px); } }
+.sl-ol-status.is-syncing { background: #f3f7f5; color: #5a7d6d; border-color: rgba(10, 111, 77, 0.1); }
+.sl-ol-status.is-ok { background: rgba(18, 181, 127, 0.1); color: #0a6f4d; border-color: rgba(18, 181, 127, 0.25); }
+.sl-ol-status.is-err { background: rgba(224, 164, 60, 0.12); color: #7a4e0e; border-color: rgba(224, 164, 60, 0.35); }
+.sl-ol-ico { display: grid; place-items: center; width: 26px; height: 26px; flex-shrink: 0; border-radius: 8px; background: #fff; }
+.sl-ol-ico svg { width: 15px; height: 15px; }
+.sl-ol-status.is-syncing .sl-ol-ico svg { animation: sl-ol-pulse 1s ease-in-out infinite; }
+@keyframes sl-ol-pulse { 50% { opacity: 0.35; } }
+.sl-ol-txt { flex: 1; min-width: 0; }
+.sl-ol-txt b { font-weight: 700; }
+.sl-ol-retry { flex-shrink: 0; height: 28px; padding: 0 11px; border: 0; border-radius: 8px; background: #fff; color: #7a4e0e; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; box-shadow: 0 2px 6px -3px rgba(122, 78, 14, 0.5); }
+.sl-ol-retry:hover { background: #fffaf0; }
+.sl-ol-x { flex-shrink: 0; width: 24px; height: 24px; border: 0; border-radius: 7px; background: none; color: inherit; opacity: 0.6; font-size: 16px; line-height: 1; cursor: pointer; }
+.sl-ol-x:hover { opacity: 1; background: rgba(255, 255, 255, 0.6); }
+
+.sl-ol-chip {
+  display: inline-flex; align-items: center; gap: 3px; margin-top: 5px; padding: 2px 6px 2px 4px; border-radius: 999px; border: 0;
+  font: inherit; font-size: 10px; font-weight: 700; line-height: 1.3; white-space: nowrap; background: none;
+}
+.sl-ol-chip svg { width: 11px; height: 11px; flex-shrink: 0; }
+.sl-ol-chip i { font-style: normal; }
+.sl-ol-chip.is-ok { background: rgba(18, 181, 127, 0.12); color: #0a6f4d; }
+.sl-ol-chip.is-syncing { background: #eef3f0; color: #8aa298; }
+.sl-ol-chip.is-off { background: #eef3f0; color: #5a7d6d; cursor: pointer; }
+.sl-ol-chip.is-err { background: rgba(224, 164, 60, 0.16); color: #8a5a10; cursor: pointer; }
+button.sl-ol-chip:hover { filter: brightness(0.96); box-shadow: 0 2px 6px -3px rgba(10, 60, 40, 0.5); }

@@ -13,6 +13,9 @@ import {
   type Company, type Contact, type Employee, type CompanyField, type ContactField,
 } from "./companiesApi";
 import "../clients/ClientsPage.css";
+import CompanyImport from "./CompanyImport";
+import SalesMultiFilter from "../sales/sales/SalesMultiFilter";
+import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
 import "./CompaniesPage.css";
 
 const empty = (): Company => ({
@@ -37,8 +40,9 @@ export default function CompaniesPage() {
   const [fields, setFields] = useState<CompanyField[]>([]);
   const [contactFields, setContactFields] = useState<ContactField[]>([]);
   const [showFieldSettings, setShowFieldSettings] = useState(false);
-  const [ctrl1, setCtrl1] = useState<{ field: string; action: string; min?: string; max?: string }>({ field: "", action: "" });
-  const [ctrl2, setCtrl2] = useState<{ field: string; action: string; min?: string; max?: string }>({ field: "", action: "" });
+  const [importing, setImporting] = useState(false);
+  const [ctrl1, setCtrl1] = useState<{ field: string; action: string; min?: string; max?: string; values?: string[]; text?: string }>({ field: "", action: "" });
+  const [ctrl2, setCtrl2] = useState<{ field: string; action: string; min?: string; max?: string; values?: string[]; text?: string }>({ field: "", action: "" });
   const [rel, setRel] = useState<RelationshipSets | null>(null);
   const [fRel, setFRel] = useState("");
   const [columns, setColumns] = useState<string[]>(["vat_number", "address", "contacts"]);
@@ -62,13 +66,22 @@ export default function CompaniesPage() {
   const lead = isSalesLead(me);
 
   // ---- Compound filter + sort controls ----
-  const fixedFields = [
-    { key: "name", label: "Name" },
-    { key: "vat_number", label: "VAT / Tax ID" },
-    { key: "city", label: "City" },
-    { key: "country", label: "Country" },
-    { key: "email", label: "Email" },
-    { key: "phone", label: "Phone" },
+  // Fixed fields: text ones, short lists (picked from the values you have), and
+  // the import provenance (stamped by the database, filterable, never shown).
+  const fixedFields: { key: string; label: string; type: "text" | "number" | "date" | "select" }[] = [
+    { key: "name", label: "Name", type: "text" },
+    { key: "legal_name", label: "Legal name", type: "text" },
+    { key: "vat_number", label: "VAT / Tax ID", type: "text" },
+    { key: "website", label: "Website", type: "text" },
+    { key: "email", label: "Email", type: "text" },
+    { key: "phone", label: "Phone", type: "text" },
+    { key: "postal_code", label: "Postal code", type: "text" },
+    { key: "city", label: "City", type: "select" },
+    { key: "province", label: "Province / state", type: "select" },
+    { key: "country", label: "Country", type: "select" },
+    { key: "contacts_count", label: "Number of contacts", type: "number" },
+    { key: "imported_by", label: "Imported by", type: "select" },
+    { key: "imported_at", label: "Imported on", type: "date" },
   ];
   const filterFieldOptions = [
     { value: "", label: "No filter" },
@@ -76,28 +89,59 @@ export default function CompaniesPage() {
     ...fields.map((f) => ({ value: f.id, label: f.label })),
   ];
   const fieldById = (id: string) => fields.find((f) => f.id === id);
-  const fieldType = (key: string): "text" | "number" | "date" | "boolean" | "select" => {
-    if (fixedFields.some((f) => f.key === key)) return "text";
-    return fieldById(key)?.type ?? "text";
-  };
+  const fieldType = (key: string): "text" | "number" | "date" | "boolean" | "select" =>
+    fixedFields.find((f) => f.key === key)?.type ?? fieldById(key)?.type ?? "text";
   const valueOf = (c: Company, key: string): any => {
+    if (key === "contacts_count") return counts[c.id as string] ?? 0;
     if (fixedFields.some((f) => f.key === key)) return (c as any)[key] ?? "";
     return (c.custom ?? {})[key];
   };
+  // What a filter can do with a field, based on its type (the first one is the default).
   const actionsFor = (key: string): { value: string; label: string }[] => {
     if (!key) return [];
     const t = fieldType(key);
-    if (t === "number") return [{ value: "desc", label: "High → low" }, { value: "asc", label: "Low → high" }, { value: "range", label: "Range…" }];
-    if (t === "date") return [{ value: "desc", label: "Newest first" }, { value: "asc", label: "Oldest first" }];
-    if (t === "boolean") return [{ value: "only_yes", label: "Only Yes" }, { value: "only_no", label: "Only No" }];
-    if (t === "select") return (fieldById(key)?.options ?? []).map((o) => ({ value: `eq:${o}`, label: `Is “${o}”` }));
-    return [{ value: "asc", label: "A → Z" }, { value: "desc", label: "Z → A" }];
+    const blanks = [{ value: "has", label: "Has a value" }, { value: "empty", label: "Is empty" }];
+    if (key === "imported_by") return [{ value: "in", label: "Is one of…" }, { value: "has", label: "Was imported" }, { value: "empty", label: "Added by hand" }];
+    if (t === "select") return [{ value: "in", label: "Is one of…" }, ...blanks];
+    if (t === "boolean") return [{ value: "only_yes", label: "Yes" }, { value: "only_no", label: "No" }];
+    if (t === "number") return [{ value: "range", label: "Between…" }, { value: "desc", label: "High → low" }, { value: "asc", label: "Low → high" }, ...(key === "contacts_count" ? [] : blanks)];
+    if (t === "date") return [
+      { value: "last30", label: "Last 30 days" }, { value: "this_month", label: "This month" }, { value: "this_year", label: "This year" },
+      { value: "next30", label: "Next 30 days" }, { value: "past", label: "Before today" }, { value: "custom", label: "Between dates…" },
+      { value: "desc", label: "Newest first" }, { value: "asc", label: "Oldest first" }, ...blanks,
+    ];
+    return [{ value: "contains", label: "Contains…" }, { value: "asc", label: "A → Z" }, { value: "desc", label: "Z → A" }, ...blanks];
   };
-  const passesFilter = (c: Company, ctrl: { field: string; action: string; min?: string; max?: string }) => {
+  /** Choices for "Is one of…": people who imported, the values you have for city/province/country, or a field's options. */
+  const choicesFor = (key: string): { value: string; label: string }[] => {
+    if (key === "imported_by") return employees.filter((e) => companies.some((c) => (c as any).imported_by === e.id)).map((e) => ({ value: e.id, label: e.name }));
+    if (key === "city" || key === "province" || key === "country")
+      return [...new Set(companies.map((c) => String((c as any)[key] ?? "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)).map((v) => ({ value: v, label: v }));
+    return (fieldById(key)?.options ?? []).map((o) => ({ value: o, label: o }));
+  };
+  const dayIso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const dateWindow = (action: string, ctrl: { min?: string; max?: string }): [string, string] | null => {
+    const now = new Date(), y = now.getFullYear(), m = now.getMonth(), d = now.getDate();
+    if (action === "last30") return [dayIso(new Date(y, m, d - 30)), dayIso(now)];
+    if (action === "next30") return [dayIso(now), dayIso(new Date(y, m, d + 30))];
+    if (action === "this_month") return [dayIso(new Date(y, m, 1)), dayIso(new Date(y, m + 1, 0))];
+    if (action === "this_year") return [`${y}-01-01`, `${y}-12-31`];
+    if (action === "past") return ["0000-01-01", dayIso(new Date(y, m, d - 1))];
+    if (action === "custom") return [ctrl.min || "0000-01-01", ctrl.max || "9999-12-31"];
+    return null;
+  };
+  const passesFilter = (c: Company, ctrl: { field: string; action: string; min?: string; max?: string; values?: string[]; text?: string }) => {
     if (!ctrl.field || !ctrl.action) return true;
     const v = valueOf(c, ctrl.field);
+    const blank = v == null || v === "";
+    if (ctrl.action === "has") return !blank;
+    if (ctrl.action === "empty") return blank;
     if (ctrl.action === "only_yes") return !!v;
     if (ctrl.action === "only_no") return !v;
+    if (ctrl.action === "in") { const picked = ctrl.values ?? []; return !picked.length || picked.includes(String(v ?? "").trim()); }
+    if (ctrl.action === "contains") { const t = (ctrl.text ?? "").trim(); return !t || norm(String(v ?? "")).includes(norm(t)); }
+    const win = fieldType(ctrl.field) === "date" ? dateWindow(ctrl.action, ctrl) : null;
+    if (win) { const d = String(v ?? "").slice(0, 10); return !!d && d >= win[0] && d <= win[1]; }
     if (ctrl.action.startsWith("eq:")) return String(v ?? "") === ctrl.action.slice(3);
     if (ctrl.action === "range") {
       const n = Number(v);
@@ -108,7 +152,7 @@ export default function CompaniesPage() {
     }
     return true;
   };
-  const cmp = (a: Company, b: Company, ctrl: { field: string; action: string; min?: string; max?: string }) => {
+  const cmp = (a: Company, b: Company, ctrl: { field: string; action: string; min?: string; max?: string; values?: string[]; text?: string }) => {
     if (!ctrl.field || (ctrl.action !== "asc" && ctrl.action !== "desc")) return 0;
     const t = fieldType(ctrl.field);
     const av = valueOf(a, ctrl.field), bv = valueOf(b, ctrl.field);
@@ -125,12 +169,21 @@ export default function CompaniesPage() {
     return "none";
   };
 
+  // Relationship filter. "tracking" / "notracking" look only at sales
+  // trackings (a client can also be in one); "none" means neither.
+  const inTracking = (c: Company) => !!(rel && c.id && rel.trackingCompanyIds.has(c.id));
+  const relMatches = (c: Company, f: string) => {
+    if (f === "tracking") return inTracking(c);
+    if (f === "notracking") return !inTracking(c);
+    return relOf(c) === f;
+  };
+
   const shown = companies.filter((c) => {
     // Sales people only see the companies they have been assigned to.
     if (!lead && me && !(assignees[c.id!] ?? []).includes(me.id)) return false;
     if (!passesFilter(c, ctrl1)) return false;
     if (!passesFilter(c, ctrl2)) return false;
-    if (fRel && relOf(c) !== fRel) return false;
+    if (fRel && !relMatches(c, fRel)) return false;
     const n = norm(q.trim());
     if (!n) return true;
     return [c.name, c.legal_name, c.vat_number, c.street, c.city, c.province, c.country, c.postal_code]
@@ -159,6 +212,11 @@ export default function CompaniesPage() {
   ];
   const columnLabel = (key: string) => availableColumns.find((c) => c.key === key)?.label ?? key;
   const activeColumns = columns.filter((k) => availableColumns.some((c) => c.key === k)).slice(0, 4);
+  // The contacts counter + dropdown always sits at the far right of the card,
+  // in its own narrow column, whatever position it has in the column settings.
+  const dataColumns = activeColumns.filter((k) => k !== "contacts");
+  const showContacts = activeColumns.includes("contacts");
+  const rowGrid = ["minmax(0, 2.4fr)", ...dataColumns.map(() => "minmax(0, 1.4fr)"), ...(showContacts ? ["auto"] : [])].join(" ");
   const setColumnsPersist = (next: string[]) => { setColumns(next); savePref("companyColumns", next).catch(() => {}); };
 
   const renderCell = (c: Company, key: string) => {
@@ -214,7 +272,8 @@ export default function CompaniesPage() {
             options={[
               { value: "", label: "Any relationship" },
               { value: "client", label: "Clients" },
-              { value: "tracking", label: "In a tracking" },
+              { value: "tracking", label: "In sales tracking" },
+              { value: "notracking", label: "No sales tracking" },
               { value: "none", label: "Not yet in play" },
             ]} />
         </div>
@@ -228,6 +287,23 @@ export default function CompaniesPage() {
                 <Select value={ctl.c.action} onChange={(action) => ctl.set({ ...ctl.c, action })}
                   options={actionsFor(ctl.c.field)} placeholder="How" />
               )}
+              {ctl.c.action === "in" && (
+                <div className="co-fvals">
+                  <SalesMultiFilter values={ctl.c.values ?? []} onChange={(v) => ctl.set({ ...ctl.c, values: v })}
+                    options={choicesFor(ctl.c.field)} placeholder="Choose…" searchFrom={7}
+                    noun={ctl.c.field === "imported_by" ? "people" : ctl.c.field === "city" ? "cities" : ctl.c.field === "country" ? "countries" : "options"} />
+                </div>
+              )}
+              {ctl.c.action === "contains" && (
+                <input className="co-ftext" value={ctl.c.text ?? ""} onChange={(e) => ctl.set({ ...ctl.c, text: e.target.value })} placeholder="Text…" />
+              )}
+              {ctl.c.action === "custom" && (
+                <div className="co-fdates">
+                  <DatePicker value={ctl.c.min ?? ""} onChange={(d) => ctl.set({ ...ctl.c, min: d })} placeholder="From" />
+                  <span className="co-range-sep">–</span>
+                  <DatePicker value={ctl.c.max ?? ""} onChange={(d) => ctl.set({ ...ctl.c, max: d })} placeholder="To" />
+                </div>
+              )}
               {ctl.c.action === "range" && (
                 <div className="co-range">
                   <input type="number" placeholder="Min" value={ctl.c.min ?? ""} onFocus={(e) => e.target.select()}
@@ -240,20 +316,21 @@ export default function CompaniesPage() {
             </div>
           ))}
         </div>
-        <button className="co-settings" onClick={() => setShowFieldSettings(true)} title="Configure company fields" aria-label="Configure fields">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></svg>
-          Fields
-        </button>
-        <button className="cl-primary" onClick={() => setEditing(empty())}>+ New company</button>
+        <ActionsMenu items={[
+          { key: "new", group: "Create", label: "New company", hint: "Add one company by hand", icon: AM_ICON.plus, primary: true, tone: "green", shortcut: "N", onSelect: () => setEditing(empty()) },
+          { key: "import", group: "Data", label: "Import", hint: "Companies from Excel or CSV, with their contacts", icon: AM_ICON.import, tone: "blue", shortcut: "I", onSelect: () => setImporting(true) },
+          { key: "fields", group: "Setup", label: "Fields & columns", hint: "Custom fields and what the list shows", icon: AM_ICON.fields, tone: "amber", shortcut: "F", onSelect: () => setShowFieldSettings(true) },
+        ]} />
       </header>
 
       {shown.length === 0 ? (
         <p className="cl-hint">{companies.length === 0 ? "No companies yet. Create your first one." : "No companies match your search."}</p>
       ) : (
         <div className="co-scroll">
-          <div className="co-lrow co-lhead" style={{ gridTemplateColumns: `2.4fr ${activeColumns.map(() => "1.4fr").join(" ")}` }}>
+          <div className="co-lrow co-lhead" style={{ gridTemplateColumns: rowGrid }}>
             <span>Company</span>
-            {activeColumns.map((k) => <span key={k} className={k === "contacts" ? "co-lright" : ""}>{columnLabel(k)}</span>)}
+            {dataColumns.map((k) => <span key={k} className="co-lhcell">{columnLabel(k)}</span>)}
+            {showContacts && <span className="co-lright co-lcontacts">{columnLabel("contacts")}</span>}
           </div>
           <div className="co-list">
             {shown.map((c) => {
@@ -262,7 +339,7 @@ export default function CompaniesPage() {
               return (
                 <div className="co-item" key={c.id}>
                   <div className="co-lrow" role="button" tabIndex={0}
-                    style={{ gridTemplateColumns: `2.4fr ${activeColumns.map(() => "1.4fr").join(" ")}` }}
+                    style={{ gridTemplateColumns: rowGrid }}
                     onClick={() => setEditing(structuredClone(c))}
                     onKeyDown={(e) => { if (e.key === "Enter") setEditing(structuredClone(c)); }}>
                     <span className="co-lcell co-lid">
@@ -277,7 +354,8 @@ export default function CompaniesPage() {
                         {c.legal_name && <span className="co-lsub">{c.legal_name}</span>}
                       </span>
                     </span>
-                    {activeColumns.map((k) => <span key={k} className="co-lcell">{renderCell(c, k)}</span>)}
+                    {dataColumns.map((k) => <span key={k} className="co-lcell">{renderCell(c, k)}</span>)}
+                    {showContacts && <span className="co-lcell co-lcontacts">{renderCell(c, "contacts")}</span>}
                   </div>
 
                   {isOpen && (
@@ -326,6 +404,14 @@ export default function CompaniesPage() {
           onClose={() => setEditing(null)}
           onSaved={async () => { setEditing(null); await reload(); }}
           onDeleted={async () => { setEditing(null); await reload(); }}
+        />
+      )}
+
+      {importing && (
+        <CompanyImport
+          fields={fields}
+          onClose={() => setImporting(false)}
+          onDone={async () => { await reload(); }}
         />
       )}
 

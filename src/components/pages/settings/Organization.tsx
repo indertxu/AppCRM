@@ -53,6 +53,10 @@ interface OrgUser {
   start_date: string | null;
   bank_iban: string | null;
   salary: number | null;
+  // employment: false once laid off; hidden from the map/lists from their last day on
+  active: boolean;
+  deactivated_at: string | null;
+  deactivation_reason: string | null;
 }
 
 const NODE_W = 180;
@@ -98,6 +102,10 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
   const [selUserId, setSelUserId] = useState<string | null>(null);
 
   const canvasRef = useRef<HTMLDivElement>(null);
+  // Did the press start on empty canvas? Only then may the following click clear
+  // the selection. (Pressing a card captures the pointer on the canvas, so its
+  // click lands on the canvas too — which used to close the panel it had just opened.)
+  const downOnEmpty = useRef(false);
   const weekBtnRef = useRef<HTMLButtonElement>(null);
   const trashRef = useRef<HTMLDivElement>(null);
   const drag = useRef<Drag>(null);
@@ -123,9 +131,9 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
     }
     setDepts(deptRows);
 
-    const { data: profs } = await supabase
-      .from("profiles")
-      .select("id, first_name, last_name, email, role, department, manager_id, org_x, org_y, org_placed, phone, national_id, social_security, address, start_date, bank_iban, salary");
+    const COLS = "id, first_name, last_name, email, role, department, manager_id, org_x, org_y, org_placed, phone, national_id, social_security, address, start_date, bank_iban, salary";
+    let { data: profs, error: profErr } = await supabase.from("profiles").select(`${COLS}, active, deactivated_at, deactivation_reason`);
+    if (profErr) ({ data: profs } = await supabase.from("profiles").select(COLS)); // employment columns not created yet
     setUsers(((profs ?? []) as any[]).map((p) => ({
       id: p.id,
       first_name: p.first_name, last_name: p.last_name, email: p.email,
@@ -133,6 +141,7 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
       org_x: p.org_x ?? 0, org_y: p.org_y ?? 0, org_placed: !!p.org_placed,
       phone: p.phone, national_id: p.national_id, social_security: p.social_security, address: p.address,
       start_date: p.start_date, bank_iban: p.bank_iban, salary: p.salary,
+      active: p.active !== false, deactivated_at: p.deactivated_at ?? null, deactivation_reason: p.deactivation_reason ?? null,
     })));
     setLoading(false);
   }, []);
@@ -166,6 +175,7 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
       case "security_role": return roleLabel(String(value));
       case "salary": return `€${Number(value).toLocaleString("es-ES")}`;
       case "placed": return value ? "added" : "removed";
+      case "active": return value ? "back at work" : "laid off";
       default: return String(value);
     }
   };
@@ -232,6 +242,40 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
     setViewDate(iso > todayISO() ? todayISO() : iso);
   };
   const refreshChangeWeeks = async () => { setChangeWeeks(await loadChangeWeeks().catch(() => [])); };
+
+  // ---- Employment: lay off / reactivate ----
+  /** Lays someone off as of `lastDay`: blocks sign-in, moves their direct reports to their
+      own manager, records it in the history (so past weeks still show them), and hides them
+      from the map, people lists and every picker in the app. Returns an error message or null. */
+  const layOff = async (id: string, lastDay: string, reason: string): Promise<string | null> => {
+    const row = users.find((u) => u.id === id);
+    if (!row) return "Employee not found.";
+    const { error } = await supabase.rpc("set_employee_active", { p_user: id, p_active: false, p_date: lastDay, p_reason: reason || null });
+    if (error) return /set_employee_active|does not exist|schema cache/i.test(error.message)
+      ? "Run empower_employee_active.sql in Supabase first, then try again." : error.message;
+    const newManager = row.manager_id ?? null;
+    const reports = users.filter((u) => u.manager_id === id && u.active);
+    for (const r of reports) {
+      await supabase.from("profiles").update({ manager_id: newManager }).eq("id", r.id);
+      await recordChanges("user", r.id, { manager_id: newManager }, lastDay, nameOf(r), resolveNote);
+    }
+    await recordChanges("user", id, { active: false }, lastDay, nameOf(row), resolveNote);
+    setUsers((us) => us.map((u) =>
+      u.id === id ? { ...u, active: false, deactivated_at: lastDay, deactivation_reason: reason || null }
+      : reports.some((r) => r.id === u.id) ? { ...u, manager_id: newManager } : u));
+    refreshChangeWeeks();
+    return null;
+  };
+  const reactivate = async (id: string): Promise<string | null> => {
+    const row = users.find((u) => u.id === id);
+    if (!row) return "Employee not found.";
+    const { error } = await supabase.rpc("set_employee_active", { p_user: id, p_active: true, p_date: todayISO(), p_reason: null });
+    if (error) return error.message;
+    await recordChanges("user", id, { active: true }, todayISO(), nameOf(row), resolveNote);
+    setUsers((us) => us.map((u) => (u.id === id ? { ...u, active: true, deactivated_at: null, deactivation_reason: null } : u)));
+    refreshChangeWeeks();
+    return null;
+  };
   useEffect(() => { refreshChangeWeeks(); }, []);
   // load the notes for the week of the currently viewed date
   useEffect(() => {
@@ -270,6 +314,7 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
   const startDrag = (kind: "dept" | "user", id: string, e: React.PointerEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    downOnEmpty.current = false;
     const p = toCanvas(e.clientX, e.clientY);
     let nx = 0, ny = 0;
     if (kind === "dept") { const d = depts.find((x) => x.id === id)!; nx = d.pos_x; ny = d.pos_y; }
@@ -346,6 +391,7 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
 
   // ---- Pan (drag background) ----
   const startPan = (e: React.PointerEvent) => {
+    downOnEmpty.current = !(e.target as HTMLElement).closest(".org-node");
     // Pan when pressing empty space — not when pressing a node (which starts a drag).
     if ((e.target as HTMLElement).closest(".org-node")) return;
     pan.current = { sx: e.clientX, sy: e.clientY, vx: viewX, vy: viewY };
@@ -430,9 +476,13 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
   const viewDepts = pastOverlay
     ? depts.map((d) => { const o = { ...(pastOverlay.depts[d.id] ?? {}) }; delete o.pos_x; delete o.pos_y; return { ...d, ...o }; })
     : depts;
-  const viewUsers = pastOverlay
-    ? users.map((u) => { const o = { ...(pastOverlay.users[u.id] ?? {}) }; delete o.org_x; delete o.org_y; return { ...u, ...o }; })
+  const viewUsersAll = pastOverlay
+    ? users.map((u) => { const o = { ...(pastOverlay.users[u.id] ?? {}) }; delete o.org_x; delete o.org_y; delete o.active; return { ...u, ...o }; })
     : users;
+  /** Working here on the viewed date? Former employees still appear on weeks before their last day. */
+  const workedOn = (u: OrgUser) => u.active || (!!u.deactivated_at && viewDate < u.deactivated_at);
+  const viewUsers = viewUsersAll.filter(workedOn);
+  const formerUsers = users.filter((u) => !u.active).sort((a, b) => (b.deactivated_at ?? "").localeCompare(a.deactivated_at ?? ""));
 
   const placedDepts = viewDepts.filter((d) => d.placed);
   const paletteDepts = viewDepts.filter((d) => !d.placed);
@@ -446,7 +496,7 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
   const deptUsers = openDept ? viewUsers.filter((u) => u.department === openDept && u.org_placed) : [];
 
   const selDept = selDeptId ? viewDepts.find((d) => d.id === selDeptId) ?? null : null;
-  const selUser = selUserId ? viewUsers.find((u) => u.id === selUserId) ?? null : null;
+  const selUser = selUserId ? viewUsersAll.find((u) => u.id === selUserId) ?? null : null;
 
   // ---- Lines ----
   const centerDept = (d: Dept) => ({ x: d.pos_x + NODE_W / 2, y: d.pos_y + DEPT_H / 2 });
@@ -562,7 +612,7 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
           onPointerDown={startPan}
           onPointerMove={movePan}
           onPointerUp={endPan}
-          onClick={(e) => { if (e.target === e.currentTarget) { setSelDeptId(null); setSelUserId(null); } }}
+          onClick={(e) => { if (e.target === e.currentTarget && downOnEmpty.current) { setSelDeptId(null); setSelUserId(null); } }}
         >
           {loading && <div className="org-loading">Loading…</div>}
 
@@ -662,6 +712,9 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
             onSave={saveUser}
             onClose={() => setSelUserId(null)}
             onDelete={deleteUser}
+            onLayOff={layOff}
+            onReactivate={reactivate}
+            reportsCount={users.filter((u) => u.manager_id === selUser.id && u.active).length}
           />
         ) : selDept ? (
           <div className="org-info">
@@ -821,6 +874,23 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
                         </div>
                       ))}
                     </div>
+                    {formerUsers.length > 0 && (
+                      <details className="org-former-list">
+                        <summary>Former employees <i>{formerUsers.length}</i></summary>
+                        <div className="org-palette-list">
+                          {formerUsers.filter((u) => !search.trim() || nameOf(u).toLowerCase().includes(search.trim().toLowerCase())).map((u) => (
+                            <div key={u.id} className={`org-chip org-chip-user is-former ${selUserId === u.id ? "is-sel" : ""}`}
+                              onClick={() => { setSelUserId(u.id); setSelDeptId(null); }}>
+                              <span className="org-chip-av">{initials(u)}</span>
+                              <span className="org-chip-user-main">
+                                <span>{nameOf(u)}</span>
+                                <span className="org-chip-sub">Left {u.deactivated_at ? new Date(`${u.deactivated_at}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : ""}</span>
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    )}
                   </>
                 )}
           </div>
@@ -855,6 +925,7 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
 // ---- User info / edit panel ----
 function UserPanel({
   user, depts, users, canManage, canSeeSensitive, nameOf, initials, effectiveRole, onSave, onClose, onDelete,
+  onLayOff, onReactivate, reportsCount,
 }: {
   user: OrgUser; depts: Dept[]; users: OrgUser[];
   canManage: boolean; canSeeSensitive: boolean;
@@ -863,6 +934,9 @@ function UserPanel({
   onSave: (id: string, patch: Partial<OrgUser>) => void;
   onClose: () => void;
   onDelete: (id: string, name: string) => void;
+  onLayOff: (id: string, lastDay: string, reason: string) => Promise<string | null>;
+  onReactivate: (id: string) => Promise<string | null>;
+  reportsCount: number;
 }) {
   // local editable copy for text fields (saved on blur)
   const [form, setForm] = useState(user);
@@ -870,6 +944,27 @@ function UserPanel({
   const set = (patch: Partial<OrgUser>) => setForm((f) => ({ ...f, ...patch }));
   const commit = (patch: Partial<OrgUser>) => onSave(user.id, patch);
   const deptRoleDefault = depts.find((d) => d.dept_key === user.department)?.security_role ?? null;
+  // lay off flow
+  const [layoff, setLayoff] = useState(false);
+  const [lastDay, setLastDay] = useState(todayISO());
+  const [reason, setReason] = useState("Dismissal");
+  const [reasonNote, setReasonNote] = useState("");
+  const [empBusy, setEmpBusy] = useState(false);
+  const [empErr, setEmpErr] = useState<string | null>(null);
+  const manager = users.find((u) => u.id === user.manager_id) ?? null;
+  const prettyDay = (iso: string) => new Date(`${iso}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+  const confirmLayOff = async () => {
+    setEmpBusy(true); setEmpErr(null);
+    const e = await onLayOff(user.id, lastDay, [reason, reasonNote.trim()].filter(Boolean).join(" — "));
+    setEmpBusy(false);
+    if (e) setEmpErr(e); else setLayoff(false);
+  };
+  const doReactivate = async () => {
+    setEmpBusy(true); setEmpErr(null);
+    const e = await onReactivate(user.id);
+    setEmpBusy(false);
+    if (e) setEmpErr(e);
+  };
 
   return (
     <div className="org-info">
@@ -882,6 +977,13 @@ function UserPanel({
         <h3 className="org-info-title">{nameOf(user)}</h3>
         <span className="org-info-email">{roleLabel(effectiveRole(user))}</span>
       </div>
+      {!user.active && (
+        <div className="org-former">
+          <b>Former employee</b>
+          <span>Last day {user.deactivated_at ? prettyDay(user.deactivated_at) : "—"}{user.deactivation_reason ? ` · ${user.deactivation_reason}` : ""}</span>
+          <em>Hidden from the map and the people lists. Their past work keeps their name.</em>
+        </div>
+      )}
 
       <span className="org-section-label">Identity</span>
       <div className="org-field-row">
@@ -954,7 +1056,7 @@ function UserPanel({
           onChange={(v) => commit({ manager_id: v || null })}
           placeholder="— No one —"
           options={[{ value: "", label: "— No one —" },
-            ...users.filter((u) => u.id !== user.id).map((u) => ({ value: u.id, label: nameOf(u) }))]} />
+            ...users.filter((u) => u.id !== user.id && (u.active || u.id === user.manager_id)).map((u) => ({ value: u.id, label: nameOf(u) + (u.active ? "" : " (former)") }))]} />
       </div>
       <div className="org-field">
         <label>Security role</label>
@@ -988,6 +1090,52 @@ function UserPanel({
               onBlur={() => commit({ bank_iban: form.bank_iban })} />
           </div>
         </>
+      )}
+
+      {canManage && (
+        <div className="org-emp">
+          <span className="org-section-label">Employment</span>
+          {user.active ? (
+            !layoff ? (
+              <button className="org-layoff-btn" onClick={() => { setLayoff(true); setEmpErr(null); }}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM17 8l5 5M22 8l-5 5" /></svg>
+                Lay off {user.first_name || nameOf(user)}…
+              </button>
+            ) : (
+              <div className="org-layoff">
+                <h4>Lay off {nameOf(user)}</h4>
+                <label>Last working day</label>
+                <div className="org-layoff-date">
+                  <DatePicker value={lastDay} onChange={(d) => setLastDay(d || todayISO())} maxDate={todayISO()} placeholder="Last working day" />
+                </div>
+                <label>Reason</label>
+                <div className="org-layoff-reasons">
+                  {["Dismissal", "Resignation", "End of contract", "Retirement", "Other"].map((r) => (
+                    <button key={r} className={reason === r ? "is-on" : ""} onClick={() => setReason(r)}>{r}</button>
+                  ))}
+                </div>
+                <input value={reasonNote} onChange={(e) => setReasonNote(e.target.value)} placeholder="Note (optional)" />
+                <ul className="org-layoff-what">
+                  <li>Can't sign in any more — logged out of every device right away.</li>
+                  <li>Disappears from the map and the people lists from {prettyDay(lastDay)}; earlier weeks still show them.</li>
+                  <li>Their deals, hours, notes and history are kept, with their name.</li>
+                  {reportsCount > 0 && <li><b>{reportsCount} {reportsCount === 1 ? "person reports" : "people report"} to them</b> — they'll report to {manager ? nameOf(manager) : "no one"} instead.</li>}
+                </ul>
+                {empErr && <p className="org-emp-err">{empErr}</p>}
+                <div className="org-layoff-actions">
+                  <button className="org-layoff-cancel" onClick={() => setLayoff(false)} disabled={empBusy}>Cancel</button>
+                  <button className="org-layoff-go" onClick={confirmLayOff} disabled={empBusy}>{empBusy ? "Laying off…" : `Lay off ${user.first_name || "them"}`}</button>
+                </div>
+              </div>
+            )
+          ) : (
+            <>
+              <button className="org-reactivate-btn" onClick={doReactivate} disabled={empBusy}>{empBusy ? "Reactivating…" : `Reactivate ${user.first_name || nameOf(user)}`}</button>
+              <p className="org-emp-hint">Lets them sign in again and puts them back in lists and pickers.</p>
+              {empErr && <p className="org-emp-err">{empErr}</p>}
+            </>
+          )}
+        </div>
       )}
 
       {canManage && (

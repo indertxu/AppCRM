@@ -3,7 +3,7 @@ import { Fragment, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../api/supabase";
-import { inBillingMonth, periodOf, type Cutoffs } from "../calendar/billingPeriods";
+import { inBillingMonth, periodOf, billingWindow, type Cutoffs } from "../calendar/billingPeriods";
 import { effectiveRate, effectiveSupervisionRate } from "../clients/ClientsPage";
 import CalendarSettingsModal, { type WorkTypeDef, type Targets, type CapValue } from "../calendar/CalendarSettingsModal";
 import UserTargetModal, { type UserTarget } from "./UserTargetModal";
@@ -14,6 +14,9 @@ import BonusPanel from "./BonusPanel";
 import ConsultantModal from "./ConsultantModal";
 import BillingPanel from "./BillingPanel";
 import IncomingPanel from "./IncomingPanel";
+import MgmtSecurityModal from "./MgmtSecurityModal";
+import { useMgmtAccess, type Level } from "./mgmtAccess";
+import { useInactiveIds } from "../../framework/peopleStatus";
 import "./ManagementPage.css";
 
 const MONTHS_FULL = [
@@ -483,12 +486,12 @@ function TeamMetric({
 
 /** A consultant row on the Team tab. The whole row opens the detail modal; the sliders button opens their targets. */
 function TeamCard({
-  index, name, projectCount, daysDone, amountDone, daysPlanned, amountPlanned, goals, onOpen, onTargets,
+  index, name, projectCount, daysDone, amountDone, daysPlanned, amountPlanned, goals, onOpen,
 }: {
   index: number; name: string; projectCount: number; daysDone: number; amountDone: number;
   daysPlanned: number; amountPlanned: number;
   goals: { days: number; daysHigh: number; money: number; moneyHigh: number; custom: boolean };
-  onOpen: () => void; onTargets: () => void;
+  onOpen: () => void;
 }) {
   const dTone = tmTone(goals.days, goals.daysHigh, daysDone);
   const mTone = tmTone(goals.money, goals.moneyHigh, amountDone);
@@ -523,15 +526,6 @@ function TeamCard({
         tone={mTone} pct={moneyPct} format={(n) => Math.round(n).toLocaleString()} />
 
       <span className="tm-status is-col"><i />{TM_STATUS[overall]}</span>
-      <button
-        type="button"
-        className={`tm-target ${goals.custom ? "is-custom" : ""}`}
-        onClick={onTargets}
-        title={goals.custom ? "Custom targets" : "Set personal targets"}
-        aria-label={goals.custom ? `Edit custom targets for ${name}` : `Set personal targets for ${name}`}
-      >
-        <TmIcon d={TM_ICON.sliders} w={2.1} />
-      </button>
       <span className="tm-go" aria-hidden="true"><TmIcon d={TM_ICON.arrow} w={2.2} /></span>
     </article>
   );
@@ -542,10 +536,14 @@ export default function ManagementPage() {
   const [anchor, setAnchor] = useState(() => new Date());
   const [scope, setScope] = useState<Scope>("month");
   const [cutoffs, setCutoffs] = useState<Cutoffs>({});
+  /** True once the saved cutoffs were read — never delete cutoffs based on a list that failed to load. */
+  const cutoffsLoaded = useRef(false);
   const [defaultCutoffDay, setDefaultCutoffDay] = useState(0);
   const [rangeFrom, setRangeFrom] = useState("");
   const [rangeTo, setRangeTo] = useState("");
   /** Backlog is a snapshot, not a period — just the one date it's measured as of. */
+  /** Bonus is read as of a date too (no week/month/year selector). */
+  const [bonusAsOf, setBonusAsOf] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; });
   const [backlogAsOf, setBacklogAsOf] = useState(() => {
     const t = new Date();
     return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
@@ -573,6 +571,23 @@ export default function ManagementPage() {
   // planned+realized breakdown instead of its single headline figure.
   const [kpiBreakdown, setKpiBreakdown] = useState<Record<string, boolean>>({});
   const [tab, setTab] = useState<"team" | "backlog" | "billing" | "bonus" | "incoming">("team");
+
+  /* ---- access control (Security settings, stored in mgmt_access) ---- */
+  const access = useMgmtAccess();
+  const lv = (a: Parameters<typeof access.level>[0]): Level => access.level(a);
+  const lvTeam = lv("team"), lvBacklog = lv("backlog"), lvBilling = lv("billing"), lvBonus = lv("bonus");
+  const TAB_DEFS = [
+    { key: "team", label: "Team" }, { key: "backlog", label: "Backlog" }, { key: "billing", label: "Billing" },
+    { key: "bonus", label: "Bonus" }, { key: "incoming", label: "Incoming" },
+  ] as const;
+  const visibleTabs = TAB_DEFS.filter((t) => lv(t.key) !== "none");
+  // Whether the page itself opens is decided in Settings → Organization → Page access;
+  // here we only block it when no tab inside is visible to this user.
+  const pageAllowed = visibleTabs.length > 0;
+  useEffect(() => {
+    if (!access.ready || !visibleTabs.length) return;
+    if (!visibleTabs.some((t) => t.key === tab)) setTab(visibleTabs[0].key);
+  }, [access.ready, visibleTabs.map((t) => t.key).join(","), tab]); // eslint-disable-line react-hooks/exhaustive-deps
   /** Backlog, Billing and Bonus work off the whole history; Team does not. */
   const needsAll = tab === "backlog" || tab === "billing" || tab === "bonus";
 
@@ -581,6 +596,7 @@ export default function ManagementPage() {
   const [projects, setProjects] = useState<Record<string, Proj>>({});
   const [clientNames, setClientNames] = useState<Record<string, string>>({});
 const [people, setPeople] = useState<Record<string, string>>({});
+  const inactive = useInactiveIds(); // laid off in Settings → Organization
   // Current user + whether they can see everyone's saved days (boss / consultancy_manager).
   const [myUserId, setMyUserId] = useState<string | null>(null);
   const [seesAllSaved, setSeesAllSaved] = useState(false);
@@ -620,17 +636,35 @@ const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [capMode, setCapMode] = useState<"worked" | "billable">("worked");
   /** Working hours per weekday, from the calendar settings, lunch taken out. */
   const [dayCapacity, setDayCapacity] = useState<Record<number, number>>({});
+  /** A person's own weekly hours, when the Hours panel has one for them (scope "user"). */
+  const [userDayCapacity, setUserDayCapacity] = useState<Record<string, Record<number, number>>>({});
+  /** Company holidays and each person's vacation days: not available time. */
+  const [holidaySet, setHolidaySet] = useState<Set<string>>(new Set());
+  const [vacationsBy, setVacationsBy] = useState<Record<string, Set<string>>>({});
   useEffect(() => {
+    const hoursOf = (r: any) => {
+      if (r.closed) return 0;
+      const lunch = r.lunch_from != null && r.lunch_to != null ? r.lunch_to - r.lunch_from : 0;
+      return Math.max(0, (r.work_to - r.work_from - lunch)) / 60;
+    };
     supabase.from("calendar_hours").select("weekday, work_from, work_to, lunch_from, lunch_to, closed, scope, scope_ref")
       .then(({ data }) => {
-        const rows = ((data ?? []) as any[]).filter((r) => r.scope === "company");
+        const rows = (data ?? []) as any[];
         const out: Record<number, number> = {};
-        rows.forEach((r) => {
-          if (r.closed) { out[r.weekday] = 0; return; }
-          const lunch = r.lunch_from != null && r.lunch_to != null ? r.lunch_to - r.lunch_from : 0;
-          out[r.weekday] = Math.max(0, (r.work_to - r.work_from - lunch)) / 60;
-        });
+        rows.filter((r) => r.scope === "company").forEach((r) => { out[r.weekday] = hoursOf(r); });
+        const perUser: Record<string, Record<number, number>> = {};
+        rows.filter((r) => r.scope === "user" && r.scope_ref).forEach((r) => { (perUser[r.scope_ref] ??= {})[r.weekday] = hoursOf(r); });
         setDayCapacity(out);
+        setUserDayCapacity(perUser);
+      });
+    supabase.from("holidays").select("holiday_date").range(0, 99999)
+      .then(({ data, error }) => { if (!error) setHolidaySet(new Set(((data ?? []) as any[]).map((r) => String(r.holiday_date).slice(0, 10)))); });
+    supabase.from("vacations").select("user_id, vacation_date").range(0, 99999)
+      .then(({ data, error }) => {
+        if (error) return;
+        const by: Record<string, Set<string>> = {};
+        ((data ?? []) as any[]).forEach((r) => { if (r.user_id && r.vacation_date) (by[r.user_id] ??= new Set()).add(String(r.vacation_date).slice(0, 10)); });
+        setVacationsBy(by);
       });
   }, []);
   /**
@@ -830,7 +864,7 @@ setExcluded(excluded);
         ])));
 
       const { data: bp } = await supabase.from("billing_periods").select("period, cutoff_date");
-      if (bp) setCutoffs(Object.fromEntries((bp as any[]).map((r) => [r.period, r.cutoff_date])));
+      if (bp) { setCutoffs(Object.fromEntries((bp as any[]).map((r) => [r.period, r.cutoff_date]))); cutoffsLoaded.current = true; }
       const { data: bs } = await supabase.from("billing_settings").select("default_cutoff_day, bonus_lag_months, hours_per_day, min_days_month, min_billing_month, bonus_pct_1, high_days_month, high_billing_month, bonus_pct_2").eq("id", "default").maybeSingle();
       if (bs) {
         const b = bs as any;
@@ -913,6 +947,13 @@ const closeSettings = async () => {
       if (fail("the targets for everyone", error)) return;
     }
     const cutoffRows = Object.entries(cutoffs).map(([period, cutoff_date]) => ({ period, cutoff_date }));
+    // Months put back on the default day ("Use default") must be removed, not just left out of the upsert.
+    const { data: savedCuts } = cutoffsLoaded.current ? await supabase.from("billing_periods").select("period") : { data: [] };
+    const backToDefault = ((savedCuts ?? []) as { period: string }[]).map((r) => r.period).filter((p) => !(p in cutoffs));
+    if (backToDefault.length) {
+      const { error } = await supabase.from("billing_periods").delete().in("period", backToDefault);
+      if (fail("the billing cutoffs", error)) return;
+    }
     if (cutoffRows.length) {
       const { error } = await supabase.from("billing_periods").upsert(cutoffRows);
       if (fail("the billing cutoffs", error)) return;
@@ -996,6 +1037,61 @@ min_revenue_week: v.minRevenueWeek,
   };
 
   const weekStart = startOfWeek(anchor);
+  // Step the period from inside the consultant popup; the outer page reads the
+  // same `anchor`, so it stays in sync when the popup closes.
+  const shiftPeriod = (delta: number) => setAnchor((a) => {
+    const d = new Date(a);
+    if (scope === "month") d.setMonth(d.getMonth() + delta);
+    else if (scope === "week") d.setDate(d.getDate() + delta * 7);
+    else if (scope === "year") d.setFullYear(d.getFullYear() + delta);
+    return d;
+  });
+  const _nowP = new Date();
+  const canNextPeriod =
+    scope === "month" ? (anchor.getFullYear() < _nowP.getFullYear() || (anchor.getFullYear() === _nowP.getFullYear() && anchor.getMonth() < _nowP.getMonth()))
+    : scope === "week" ? startOfWeek(anchor).getTime() < startOfWeek(_nowP).getTime()
+    : scope === "year" ? anchor.getFullYear() < _nowP.getFullYear()
+    : false;
+  /** First and last calendar day of the period being viewed (null = open, for "all"). */
+  const scopeWindow = (): [string | null, string | null] => {
+    const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    if (scope === "week") return [iso(weekStart), iso(addDays(weekStart, 6))];
+    if (scope === "month") {
+      const w = billingWindow(periodOf(anchor), cutoffs, defaultCutoffDay);
+      const [y, m, d] = w.from.split("-").map(Number);
+      return [iso(new Date(y, m - 1, d + 1)), w.to]; // a billing month starts the day after the previous cutoff
+    }
+    if (scope === "year") return [`${anchor.getFullYear()}-01-01`, `${anchor.getFullYear()}-12-31`];
+    if (scope === "custom") return [rangeFrom || null, rangeTo || null];
+    return [null, null];
+  };
+  /**
+   * Hours a person had available to work between two dates, from the Hours panel:
+   * every real day counts its weekday's hours (lunch already out), skipping company
+   * holidays and that person's vacation days. Uses their own schedule if they have one.
+   * Counts up to today only, so a running period measures what they've had so far.
+   */
+  const availableHoursFor = (uid: string, from: string | null, to: string | null): number => {
+    if (!from || !to) return 0;
+    const now = new Date();
+    const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const end = to > todayIso ? todayIso : to;
+    if (end < from) return 0;
+    const sched = userDayCapacity[uid] ?? dayCapacity;
+    const known = Object.keys(sched).length > 0;
+    const vac = vacationsBy[uid];
+    const [fy, fm, fd] = from.split("-").map(Number);
+    let hours = 0;
+    for (const d = new Date(fy, fm - 1, fd); ; d.setDate(d.getDate() + 1)) {
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      if (key > end) break;
+      if (holidaySet.has(key) || vac?.has(key)) continue;
+      const wd = d.getDay();
+      // Until the Hours panel loads (or if it's empty), assume Mon–Fri at a billed day's length.
+      hours += known ? (sched[wd] ?? 0) : (wd >= 1 && wd <= 5 ? hoursPerDay : 0);
+    }
+    return hours;
+  };
   const inScope = (iso: string) => {
     if (scope === "all") return true;
     if (!iso) return false;
@@ -1041,7 +1137,7 @@ const rateFor = (p: Proj, line: string, _userId: string): { rate: number; kind: 
       : { rate: p.rate, kind: "Consultancy" };
   };
 
-  const rows = useMemo<Row[]>(() => {
+  const allRows = useMemo<Row[]>(() => {
     const acc: Record<string, Row> = {};
     const blank = (uid: string): Row => ({
       userId: uid, name: people[uid] ?? "—",
@@ -1081,15 +1177,32 @@ if (e.line === "connector") return;
    const inTeam = new Set(
       Object.values(projects).flatMap((p) => (p.team ?? []).map((m) => m.userId).filter(Boolean) as string[])
     );
+    // Everyone on a project team gets a card even with no hours yet — except people
+    // who've been laid off. (If they logged hours in the period, that's history: they show.)
     Object.keys(people).forEach((uid) => {
-      if (!acc[uid] && !excluded.has(uid) && inTeam.has(uid)) acc[uid] = blank(uid);
+      if (!acc[uid] && !excluded.has(uid) && inTeam.has(uid) && !inactive.has(uid)) acc[uid] = blank(uid);
     });
 
     return Object.values(acc).sort((a, b) =>
       (b.amountDone + b.amountPlanned) - (a.amountDone + a.amountPlanned)
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [entries, projects, people, supRoles, excluded, anchor, scope, rangeFrom, rangeTo, cutoffs, defaultCutoffDay]);
+}, [entries, projects, people, supRoles, excluded, anchor, scope, rangeFrom, rangeTo, cutoffs, defaultCutoffDay, inactive]);
+  // Team access "own": only the signed-in consultant's card, KPIs and figures.
+  const rows = lvTeam === "own" ? allRows.filter((r) => r.userId === access.userId) : allRows;
+
+  // Billing access "own": only bills for projects the user works on.
+  const billingScope = useMemo(() => {
+    if (lvBilling !== "own" || !access.userId) return { projects, entries };
+    const me = access.userId;
+    const mine = new Set<string>();
+    Object.values(projects).forEach((p: any) => { if ((p.team ?? []).some((t: any) => t.userId === me)) mine.add(p.id); });
+    entries.forEach((e) => { if (e.userId === me) mine.add(e.projectId); });
+    return {
+      projects: Object.fromEntries(Object.entries(projects).filter(([id]) => mine.has(id))) as typeof projects,
+      entries: entries.filter((e) => mine.has(e.projectId)),
+    };
+  }, [lvBilling, access.userId, projects, entries]);
 
   // Team consultant search: live-filter the list, and a suggestions dropdown.
   const searchNorm = (s: string) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
@@ -1168,6 +1281,7 @@ const moneyGoal =
     const m = new Map<string, { days: number; value: number; count: number }>();
     for (const e of entries) {
       if (e.line !== "connector" || e.status === "cancelled" || !inScope(e.date)) continue;
+      if (lvTeam === "own" && e.userId !== access.userId) continue;
       const p = projects[e.projectId];
       const rate = p ? rateFor(p, "connector", e.userId).rate : 0;
       const key = e.date.slice(0, 7);
@@ -1181,9 +1295,22 @@ const moneyGoal =
   })();
   const connectorDaysTotal = connectorByMonth.reduce((s, r) => s + r.days, 0);
   const connectorValueTotal = connectorByMonth.reduce((s, r) => s + r.value, 0);
+  // Billable days consumed per project, split by line, from the loaded entries
+  // (full in All-time view). Lets the project detail show consumed vs signed.
+  const consumedByProject = (() => {
+    const m = new Map<string, { consultor: number; connector: number; supervision: number }>();
+    for (const e of entries) {
+      if (e.status === "cancelled" || e.line === "closure") continue;
+      const b = e.line === "connector" ? "connector" : e.line === "supervision" ? "supervision" : "consultor";
+      const cur = m.get(e.projectId) ?? { consultor: 0, connector: 0, supervision: 0 };
+      cur[b] += e.billable || 0;
+      m.set(e.projectId, cur);
+    }
+    return m;
+  })();
   const nameByUser: Record<string, string> = Object.fromEntries(rows.map((r) => [r.userId, r.name]));
   const connectorEntries = entries
-    .filter((e) => e.line === "connector" && e.status !== "cancelled" && inScope(e.date))
+    .filter((e) => e.line === "connector" && e.status !== "cancelled" && inScope(e.date) && (lvTeam !== "own" || e.userId === access.userId))
     .map((e) => {
       const p = projects[e.projectId];
       const rate = p ? rateFor(p, "connector", e.userId).rate : 0;
@@ -1356,7 +1483,13 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
     // 9-18 with an hour for lunch therefore reads as 4 days, not a flat 5.
     const fullDaysWeek = weekDaysFromHours;
     const billTargetWeek = cap?.billableDays ?? null; // billable-days target
-    const availableDays = weeks > 0 ? fullDaysWeek * weeks : 0;
+    // Available time from the Hours panel over the period actually viewed (real days,
+    // minus holidays and vacations, up to today). For "all", the span they logged in.
+    const [winFrom, winTo] = scope === "all"
+      ? (() => { const ds = mine.map((e) => e.date).filter(Boolean).sort(); return [ds[0] ?? null, ds[ds.length - 1] ?? null] as [string | null, string | null]; })()
+      : scopeWindow();
+    const availableHours = availableHoursFor(uid, winFrom, winTo);
+    const availableDays = hoursPerDay > 0 ? availableHours / hoursPerDay : 0;
     // Utilisation vs available time: how much of their capacity was billable.
     const capUtilisation = availableDays > 0 ? (billableDays / availableDays) * 100 : 0;
     // How much of capacity was worked at all (billable + unbilled + internal).
@@ -1398,11 +1531,31 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
       billableDays, billableAmount, clientUnbilledDays, internalDays, totalWorked,
       blendedRate, utilisation,
       invoicedAmount, invoicedDays,
-      availableDays, capUtilisation, occupancy, idleDays, fullDaysWeek, billTargetWeek,
+      availableDays, availableHours, capUtilisation, occupancy, idleDays, fullDaysWeek, billTargetWeek,
       avgDaysWeek, avgAmountWeek, avgDaysMonth, avgAmountMonth, avgAmountDay,
       trend, activeDays: Object.keys(perDay).length,
     };
   };
+
+  // Access gate: wait for the rules (never flash restricted data), then block
+  // the whole page if nothing in Management is visible to this user.
+  if (!access.ready) {
+    return <div className="mg mg-dark"><LoadingOverlay /></div>;
+  }
+  if (!pageAllowed) {
+    return (
+      <div className="mg mg-dark">
+        <div className="mg-noaccess">
+          <span className="mg-noaccess-ico" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z" /><path d="M9.5 9.5l5 5M14.5 9.5l-5 5" /></svg>
+          </span>
+          <h2>No access to Management</h2>
+          <p>Your access hasn&apos;t been enabled. Ask an administrator to grant it in Management → Security.</p>
+          <button className="mg-btn" onClick={() => navigate("/home")}>Back to home</button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`mg mg-tab-${tab} ${tab === "team" || tab === "backlog" || tab === "billing" || tab === "bonus" || tab === "incoming" ? "mg-dark" : ""}`}>
@@ -1412,17 +1565,19 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
           <button className="mg-home" onClick={() => navigate("/home")} aria-label="Back to home">‹</button>
           <h1 className="mg-title">Management</h1>
           <div className="mg-tabseg" data-tab={tab}>
-            <span className="mg-tabseg-slider" />
-            <button className={tab === "team" ? "is-on" : ""} onClick={() => setTab("team")}>Team</button>
-            <button className={tab === "backlog" ? "is-on" : ""} onClick={() => setTab("backlog")}>Backlog</button>
-            <button className={tab === "billing" ? "is-on" : ""} onClick={() => { setTab("billing"); setScope("month"); }}>Billing</button>
-            <button className={tab === "bonus" ? "is-on" : ""} onClick={() => setTab("bonus")}>Bonus</button>
-            <button className={tab === "incoming" ? "is-on" : ""} onClick={() => setTab("incoming")}>Incoming</button>
+            <span className="mg-tabseg-slider" style={{ transform: `translateX(${Math.max(0, visibleTabs.findIndex((t) => t.key === tab)) * 84}px)` }} />
+            {visibleTabs.map((t) => (
+              <button key={t.key} className={tab === t.key ? "is-on" : ""}
+                onClick={() => { setTab(t.key); if (t.key === "billing") setScope("month"); }}>
+                {t.label}
+              </button>
+            ))}
           </div>
+          {lv(tab) === "own" && <span className="mg-own-chip" title="Your access to this tab is limited to your own data">Only your data</span>}
         </div>
 
         <div className="mg-nav">
-          {tab !== "billing" && tab !== "backlog" && (
+          {tab !== "billing" && tab !== "backlog" && tab !== "bonus" && (
           <div className="mg-seg" data-scope={scope}>
             <span className="mg-seg-slider" />
             {(
@@ -1444,7 +1599,14 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
             </div>
           )}
 
-          {tab !== "backlog" && (scope === "custom" ? (
+          {tab === "bonus" && (
+            <div className="mg-asof">
+              <span className="mg-asof-label">Bonus as of</span>
+              <DatePicker value={bonusAsOf} onChange={(d) => d && setBonusAsOf(d)} placeholder="Today" />
+            </div>
+          )}
+
+          {tab !== "backlog" && tab !== "bonus" && (scope === "custom" ? (
             <div className="mg-range">
               <span className="mg-range-field">
                 <DatePicker value={rangeFrom} onChange={setRangeFrom} placeholder="From" />
@@ -1467,14 +1629,16 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
             </>
           ))}
 
-          {tab === "billing" && (
+          {tab === "billing" && lv("saved_days") !== "none" && (
             <button className="mg-btn mg-bank" onClick={() => setShowBank(true)} title="Saved days bank">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18M8 4v5" /></svg>
               Saved days
             </button>
           )}
 
-          <button className="mg-btn mg-gear" onClick={() => { setCapFocusUser(null); setShowSettings(true); }} aria-label="Targets" title="Targets">⚙</button>
+          {(lv("settings") === "all" || lv("security") === "all") && (
+            <button className="mg-btn mg-gear" onClick={() => { setCapFocusUser(null); setShowSettings(true); }} aria-label="Settings" title="Settings">⚙</button>
+          )}
         </div>
       </header>
 
@@ -1495,7 +1659,7 @@ minPerMonth: targets.minPerMonth,
 
       {showBank && (
         <SavedDaysModal
-          seesAll={seesAllSaved}
+          seesAll={lv("saved_days") === "all"}
           myUserId={myUserId}
           people={people}
           clientNames={clientNames}
@@ -1522,7 +1686,11 @@ minPerMonth: targets.minPerMonth,
           hoursPerDay={hoursPerDay}
           setHoursPerDay={setHoursPerDay}
           managementMode
-          consultants={rows.map((r) => ({ userId: r.userId, name: r.name }))}
+          securityPanel={lv("security") === "all"
+            ? <MgmtSecurityModal embedded people={people} onClose={() => {}} onSaved={() => access.reload()} />
+            : undefined}
+          securityOnly={lv("settings") !== "all"}
+          consultants={allRows.filter((r) => !inactive.has(r.userId)).map((r) => ({ userId: r.userId, name: r.name }))}
           capacity={capacity}
           onCapacityChange={changeCapacity}
           onCapacitySave={saveCapacity}
@@ -1692,7 +1860,6 @@ minPerMonth: targets.minPerMonth,
                         custom: Object.values(capacity[r.userId] ?? {}).some((v) => v != null),
                       }}
                       onOpen={() => setExpanded(open ? null : r.userId)}
-                      onTargets={() => { setCapFocusUser(r.userId); setShowSettings(true); }}
                     />
                 {open && (() => {
                       const ins = insightsFor(r.userId);
@@ -1719,13 +1886,9 @@ minPerMonth: targets.minPerMonth,
                           (e) => e.userId === r.userId && e.status !== "cancelled" && inScope(e.date));
                         const worked = mine.reduce((s, e) => s + e.durationMin / 60, 0);
 
-                        // Available hours: every distinct day with something on
-                        // it, at whatever that weekday is worth.
-                        const seen = new Set(mine.map((e) => e.date).filter(Boolean));
-                        const available = Array.from(seen).reduce((s, iso) => {
-                          const wd = new Date(`${iso}T00:00:00`).getDay();
-                          return s + (dayCapacity[wd] ?? 0);
-                        }, 0);
+                        // Available hours: the whole period on the Hours panel (holidays and
+                        // vacations out, up to today) — not only the days they logged.
+                        const available = ins.availableHours;
 
                         const billable = r.daysDone * hoursPerDay + r.hoursDone;
                         return {
@@ -1761,6 +1924,14 @@ minPerMonth: targets.minPerMonth,
                           daysPlanned: v.daysPlanned,
                           amountDone: v.amountDone,
                           daysDone: v.daysDone,
+                          kickoff: projects[pid]?.kickoff ?? null,
+                          signedDays: (projects[pid]?.consultorDays || 0) + (projects[pid]?.connectorDays || 0) + (projects[pid]?.supervisionDays || 0),
+                          split: {
+                            consultor: projects[pid]?.consultorDays || 0,
+                            connector: projects[pid]?.connectorDays || 0,
+                            supervision: projects[pid]?.supervisionDays || 0,
+                          },
+                          consumed: consumedByProject.get(pid) ?? { consultor: 0, connector: 0, supervision: 0 },
                         };
                       });
 
@@ -1821,6 +1992,9 @@ minPerMonth: targets.minPerMonth,
                             setProjOpen(projOpen === full ? null : full);
                           }}
                           renderLedger={renderLedger}
+                          onShiftPeriod={shiftPeriod}
+                          canPrevPeriod={true}
+                          canNextPeriod={canNextPeriod}
                           onClose={() => setExpanded(null)}
                         />
                       );
@@ -1883,13 +2057,14 @@ minPerMonth: targets.minPerMonth,
             rangeTo={rangeTo}
             mainRoleByService={mainRoleByService}
             asOf={backlogAsOf}
+            lockUser={lvBacklog === "own" ? access.userId ?? "__nobody" : undefined}
           />
           {loadingAll && <LoadingOverlay subtle />}
         </div>
       ) : tab === "billing" ? (
         <BillingPanel
-          entries={entries}
-          projects={projects}
+          entries={billingScope.entries}
+          projects={billingScope.projects}
           clientNames={clientNames}
           typeNames={typeNames}
           people={people}
@@ -1904,20 +2079,22 @@ minPerMonth: targets.minPerMonth,
           entries={entries.map((e) => ({
             id: e.id, userId: e.userId, projectId: e.projectId, date: e.date,
             billable: e.billable, status: e.status, line: e.line, typeId: e.typeId,
-            billingPeriod: e.billingPeriod,
+            billingPeriod: e.billingPeriod, durationMin: e.durationMin,
           }))}
           projects={projects}
           people={people}
           clientNames={clientNames}
-          capacity={capacity}
           clientTypeIds={clientTypeIds}
           supRoles={supRoles}
           cutoffs={cutoffs}
           defaultCutoffDay={defaultCutoffDay}
-          bonusLag={bonusLag}
-          anchor={anchor}
+          asOf={bonusAsOf}
           hourProjects={hourProjects}
           hoursPerDay={hoursPerDay}
+          onlyUser={lvBonus === "own" ? access.userId ?? "__nobody" : undefined}
+          canEdit={lv("settings") === "all" && lvBonus === "all"}
+          canPay={lvBonus === "all"}
+          legacy={{ general: genBonus, perPerson: capacity, lag: bonusLag }}
         />
       ) : (
         <IncomingPanel />

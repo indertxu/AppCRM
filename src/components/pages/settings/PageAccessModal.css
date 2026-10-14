@@ -1,0 +1,416 @@
+/* =====================================================================
+   Settings · Organization · Page access (which side-menu pages people see)
+   ===================================================================== */
+.pas-backdrop {
+  --forest: #0a6f4d; --emerald: #12b57f; --mint: #86efc0; --ink: #0b241a; --muted: #5a7d6d; --faint: #8aa298;
+  --line: rgba(10, 111, 77, 0.12); --paper: #f4f8f6; --amber: #e0a43c;
+  --c-user: #5d43b0; --c-role: #2a6aa3; --c-dept: #b0632a; --c-every: #0a6f4d;
+  position: fixed; inset: 0; z-index: 3100; display: grid; place-items: center; padding: 14px;
+  background: radial-gradient(120% 90% at 50% 0%, rgba(7, 36, 25, 0.55), rgba(4, 12, 9, 0.72));
+  backdrop-filter: blur(8px) saturate(130%); -webkit-backdrop-filter: blur(8px) saturate(130%);
+  font-family: "Inter", system-ui, sans-serif; color: var(--ink); animation: pas-fade 0.2s ease;
+}
+@keyframes pas-fade { from { opacity: 0; } }
+.pas {
+  display: flex; flex-direction: column; width: 100%; height: 100%; max-width: 1560px; border-radius: 26px; background: var(--paper); overflow: hidden;
+  box-shadow: 0 60px 140px -50px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.06); animation: pas-pop 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes pas-pop { from { opacity: 0; transform: translateY(16px) scale(0.985); } }
+.pas button, .pas select, .pas input { font-family: inherit; }
+.pas svg { display: block; }
+
+/* ─────────── "Page access" button in the Organization header (Settings) ───────────
+   Same size and look as the week stepper next to it. */
+.st-bar .st-pa-btn, .st-pa-btn {
+  display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0;
+  height: 40px; margin: 0 0 0 10px; padding: 0 14px 0 6px;
+  border: 1px solid rgba(10, 111, 77, 0.13); border-radius: 12px; background: #fff;
+  box-shadow: 0 8px 20px -16px rgba(10, 111, 77, 0.4);
+  color: #0b241a; font-family: "Space Grotesk", sans-serif; font-size: 12.5px; font-weight: 600; line-height: 1;
+  white-space: nowrap; cursor: pointer; -webkit-appearance: none; appearance: none;
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+}
+.st-pa-btn svg {
+  box-sizing: content-box; width: 15px; height: 15px; flex-shrink: 0; padding: 7px; border-radius: 9px;
+  background: linear-gradient(140deg, #19c48a, #0a6f4d); color: #fff;
+}
+.st-pa-btn:hover:not(:disabled) { background: #f3faf6; border-color: rgba(18, 181, 127, 0.4); box-shadow: 0 12px 24px -16px rgba(10, 111, 77, 0.55); transform: translateY(-1px); }
+.st-pa-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(18, 181, 127, 0.25); }
+.st-pa-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.st-pa-btn:disabled svg { background: #b9c4bf; }
+@media (max-width: 640px) {
+  .st-pa-btn { padding: 0 4px; gap: 0; font-size: 0; }
+}
+
+/* ─────────── header ─────────── */
+.pas-head { display: flex; align-items: center; gap: 14px; padding: 14px 20px; background: #fff; border-bottom: 1px solid var(--line); }
+.pas-head-ico { display: grid; place-items: center; width: 42px; height: 42px; flex-shrink: 0; border-radius: 13px; color: #fff; background: linear-gradient(140deg, #19c48a, var(--forest)); box-shadow: 0 10px 22px -12px rgba(10, 111, 77, 0.9); }
+.pas-head-ico svg { width: 21px; height: 21px; }
+.pas-head-txt { min-width: 0; }
+.pas-body > * { min-width: 0; }
+.pas-eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--emerald); }
+.pas-head h2 { margin: 1px 0 0; font-family: "Space Grotesk", sans-serif; font-size: 22px; letter-spacing: -0.02em; }
+.pas-mode { position: relative; display: inline-flex; gap: 3px; margin: 0 auto; padding: 4px; border-radius: 14px; background: #eef4f1; }
+.pas-mode button { height: 34px; padding: 0 16px; border: 0; border-radius: 10px; background: none; font-size: 13px; font-weight: 650; color: var(--muted); cursor: pointer; transition: background 0.18s, color 0.18s, box-shadow 0.18s; }
+.pas-mode button:hover:not(.is-on) { color: var(--ink); }
+.pas-mode button.is-on { background: #fff; color: var(--ink); box-shadow: 0 6px 16px -10px rgba(10, 60, 40, 0.6), inset 0 0 0 1px rgba(10, 111, 77, 0.12); }
+.pas-head-actions { display: flex; align-items: center; gap: 10px; }
+.pas-dirty { font-size: 12.5px; font-weight: 650; color: #8a5a10; padding: 5px 10px; border-radius: 999px; background: rgba(224, 164, 60, 0.14); white-space: nowrap; }
+.pas-saved { font-size: 12.5px; font-weight: 650; color: var(--forest); white-space: nowrap; }
+.pas-btn { height: 40px; padding: 0 18px; border-radius: 12px; font-size: 13.5px; font-weight: 700; cursor: pointer; white-space: nowrap; transition: transform 0.15s, filter 0.15s, background 0.15s; }
+.pas-btn.is-primary { border: 0; color: #fff; background: linear-gradient(120deg, #13a874, var(--forest)); box-shadow: 0 12px 26px -14px rgba(10, 111, 77, 0.9); }
+.pas-btn.is-primary:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.06); }
+.pas-btn.is-ghost { border: 1px solid var(--line); background: #fff; color: var(--ink); }
+.pas-btn:disabled { opacity: 0.45; cursor: default; box-shadow: none; transform: none; }
+.pas-x { width: 40px; height: 40px; flex-shrink: 0; border: 0; border-radius: 12px; background: #eef4f1; color: var(--ink); font-size: 22px; line-height: 1; cursor: pointer; }
+.pas-x:hover { background: #e2ece7; }
+
+.pas-banners { display: flex; flex-direction: column; gap: 6px; padding: 10px 20px 0; }
+.pas-banner { margin: 0; padding: 10px 14px; border-radius: 12px; background: rgba(224, 164, 60, 0.13); color: #6b4510; font-size: 13px; }
+.pas-banner code { font-size: 12px; background: rgba(255, 255, 255, 0.7); padding: 1px 5px; border-radius: 5px; }
+.pas-banner.is-err { background: rgba(214, 69, 69, 0.08); color: #a83434; }
+.pas-loading { flex: 1; display: grid; place-items: center; color: var(--faint); font-size: 14px; }
+
+/* ─────────── "How it works" + quick tutorial ─────────── */
+.pas-help { display: inline-flex; align-items: center; gap: 7px; height: 40px; padding: 0 13px 0 10px; border: 1px solid var(--line); border-radius: 12px; background: #fff; color: var(--forest); font-size: 13px; font-weight: 650; cursor: pointer; white-space: nowrap; transition: background 0.15s, border-color 0.15s; }
+.pas-help svg { width: 18px; height: 18px; }
+.pas-help:hover { background: #f1f8f4; border-color: rgba(18, 181, 127, 0.4); }
+.pas-btn.is-sm { height: 38px; padding: 0 16px; font-size: 13px; }
+
+.pas-tour-backdrop { position: absolute; inset: 0; z-index: 20; display: grid; place-items: center; padding: 16px; background: rgba(7, 30, 21, 0.42); backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px); animation: pas-fade 0.2s ease; }
+.pas-tour { width: min(600px, 100%); max-height: 100%; overflow: auto; border-radius: 24px; background: #fff; box-shadow: 0 50px 110px -40px rgba(0, 0, 0, 0.7); animation: pas-pop 0.45s cubic-bezier(0.16, 1, 0.3, 1); }
+.pas-tour-art { position: relative; display: grid; place-items: center; min-height: 210px; padding: 26px; overflow: hidden; background: radial-gradient(120% 140% at 0% 0%, rgba(134, 239, 192, 0.55), transparent 60%), linear-gradient(150deg, #eaf7f0, #d7efe3); animation: pas-in 0.35s cubic-bezier(0.16, 1, 0.3, 1); }
+.pas-tour-body { padding: 22px 28px 4px; animation: pas-in 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
+.pas-tour-body h3 { margin: 4px 0 8px; font-family: "Space Grotesk", sans-serif; font-size: 22px; letter-spacing: -0.02em; }
+.pas-tour-body p { margin: 0; font-size: 14px; line-height: 1.6; color: var(--muted); }
+.pas-tour-body b { color: var(--ink); }
+.pas-tour-foot { display: flex; align-items: center; gap: 8px; padding: 18px 28px 22px; }
+.pas-tour-dots { display: flex; gap: 6px; margin-right: auto; }
+.pas-tour-dots button { width: 8px; height: 8px; padding: 0; border: 0; border-radius: 999px; background: #d3ddd8; cursor: pointer; transition: width 0.25s, background 0.25s; }
+.pas-tour-dots button.is-on { width: 22px; background: var(--emerald); }
+/* illustrations */
+.pas-tour-list { display: flex; flex-direction: column; gap: 4px; width: min(300px, 100%); padding: 8px; border-radius: 16px; background: #fbfdfc; box-shadow: 0 20px 40px -26px rgba(10, 60, 40, 0.6); }
+.pas-tour-row { display: flex; align-items: center; gap: 10px; padding: 7px 9px; border-radius: 11px; }
+.pas-tour-row.is-on { background: #fff; box-shadow: 0 8px 22px -14px rgba(10, 60, 40, 0.5), inset 0 0 0 1px rgba(18, 181, 127, 0.35); }
+.pas-tour-row > span { display: flex; flex-direction: column; }
+.pas-tour-row b { font-size: 13px; }
+.pas-tour-row small { font-size: 11px; color: var(--faint); }
+.pas-tour-row .pas-subj-ico { font-style: normal; }
+.pas-tour-card { display: flex; flex-direction: column; gap: 12px; width: min(340px, 100%); padding: 16px; border-radius: 18px; background: #fff; box-shadow: 0 20px 40px -26px rgba(10, 60, 40, 0.6); }
+.pas-tour-pg { display: flex; align-items: center; gap: 12px; }
+.pas-tour-pg > span:last-child { display: flex; flex-direction: column; }
+.pas-tour-pg b { font-size: 14px; }
+.pas-tour-pg small { font-size: 12px; color: var(--muted); }
+.pas-tour-choice { pointer-events: none; }
+.pas-tour-ladder { display: flex; flex-direction: column; align-items: center; gap: 6px; width: min(380px, 100%); }
+.pas-tour-step { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 8px 14px; border-radius: 12px; background: #fff; font-size: 13px; box-shadow: 0 10px 24px -18px rgba(10, 60, 40, 0.6); animation: pas-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) backwards; animation-delay: calc(var(--i) * 90ms + 80ms); }
+.pas-tour-step small { font-size: 12px; font-weight: 650; color: var(--muted); }
+.pas-tour-step.is-everyone { box-shadow: inset 3px 0 0 var(--emerald), 0 10px 24px -18px rgba(10, 60, 40, 0.6); }
+.pas-tour-step.is-role { box-shadow: inset 3px 0 0 #3c8fd6, 0 10px 24px -18px rgba(10, 60, 40, 0.6); }
+.pas-tour-step.is-user { box-shadow: inset 3px 0 0 #8b6fd6, 0 10px 24px -18px rgba(10, 60, 40, 0.6); }
+.pas-tour-ladder p { margin: 6px 0 0; font-size: 12.5px; text-align: center; color: var(--forest); }
+.pas-tour-dock { display: flex; flex-direction: column; gap: 3px; width: 220px; padding: 8px; border-radius: 18px; background: linear-gradient(160deg, #0f4a35, #072419); box-shadow: 0 22px 40px -24px rgba(4, 30, 20, 0.9); }
+.pas-tour-dock span { display: flex; align-items: center; gap: 10px; padding: 5px 7px; border-radius: 10px; font-size: 12.5px; font-weight: 650; color: #eaf7f0; }
+.pas-tour-dock i { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 9px; background: rgba(134, 239, 192, 0.14); color: var(--mint); }
+.pas-tour-dock i svg { width: 15px; height: 15px; }
+.pas-tour-dock span.is-off { opacity: 0.35; text-decoration: line-through; }
+.pas-tour-final { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+.pas-tour-save { padding: 12px 22px; border-radius: 13px; color: #fff; font-weight: 700; font-size: 14px; background: linear-gradient(120deg, #13a874, var(--forest)); box-shadow: 0 16px 30px -14px rgba(10, 111, 77, 0.9); }
+.pas-tour-lock { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 999px; background: #faf6ee; color: #8a5a10; font-size: 12.5px; font-weight: 650; text-align: center; }
+.pas-tour-lock svg { width: 15px; height: 15px; flex-shrink: 0; }
+
+/* ─────────── body: who · pages · their side menu ─────────── */
+.pas-body { position: relative; flex: 1; min-height: 0; display: grid; grid-template-columns: 270px minmax(0, 1fr) 290px; }
+.pas-nav { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); background: #fbfdfc; }
+.pas-search { height: 38px; padding: 0 12px; border: 1px solid var(--line); border-radius: 11px; background: #fff; font-size: 13px; color: var(--ink); outline: none; }
+.pas-search:focus { border-color: var(--emerald); box-shadow: 0 0 0 3px rgba(18, 181, 127, 0.15); }
+.pas-nav > .pas-search { margin: 14px 14px 4px; }
+.pas-nav-tools { display: flex; align-items: center; justify-content: flex-end; gap: 4px; padding: 0 14px 6px; font-size: 11.5px; color: var(--faint); }
+.pas-nav-tools button { padding: 2px 4px; border: 0; background: none; font-size: 11.5px; font-weight: 650; color: var(--muted); cursor: pointer; border-radius: 6px; }
+.pas-nav-tools button:hover { color: var(--forest); background: rgba(18, 181, 127, 0.08); }
+.pas-nav-empty { margin: 18px 10px; font-size: 12.5px; color: var(--faint); }
+
+/* foldable lists: Security roles · Departments · People */
+.pas-grp { margin-top: 6px; }
+.pas-grp-h {
+  display: flex; align-items: center; gap: 7px; width: 100%; padding: 8px 10px 6px; border: 0; border-radius: 10px; background: none; cursor: pointer; text-align: left;
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; color: var(--faint); transition: background 0.15s, color 0.15s;
+}
+.pas-grp-h:hover:not(:disabled) { background: #eef4f1; color: var(--muted); }
+.pas-grp-h:disabled { cursor: default; }
+.pas-grp-chev { display: grid; place-items: center; width: 16px; height: 16px; flex-shrink: 0; border-radius: 5px; transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1); }
+.pas-grp-chev svg { width: 12px; height: 12px; }
+.pas-grp.is-open .pas-grp-chev, .pas-order.is-open .pas-grp-chev { transform: rotate(90deg); }
+.pas-grp-lbl { flex: 1; }
+.pas-grp-n { font-style: normal; min-width: 20px; padding: 0 6px; border-radius: 999px; background: #e9f0ec; color: var(--muted); font-size: 10.5px; letter-spacing: 0; line-height: 18px; text-align: center; }
+.pas-grp-h small { font-size: 10.5px; font-weight: 700; letter-spacing: 0; text-transform: none; color: var(--forest); }
+.pas-grp-h .pas-dot { margin-left: 2px; }
+.pas-grp-items { animation: pas-in 0.25s cubic-bezier(0.16, 1, 0.3, 1); }
+.pas-grp-items.is-peek { padding-left: 6px; border-left: 2px solid rgba(18, 181, 127, 0.25); margin-left: 10px; }
+.pas-nav-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 12px; }
+.pas-subj {
+  position: relative; display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: 0; border-radius: 12px; background: none; text-align: left; cursor: pointer; color: var(--ink);
+  transition: background 0.15s; animation: pas-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) backwards; animation-delay: calc(var(--i) * 15ms);
+}
+@keyframes pas-in { from { opacity: 0; transform: translateY(5px); } }
+.pas-subj:hover { background: #eef4f1; }
+.pas-subj.is-on { background: #fff; box-shadow: 0 8px 22px -14px rgba(10, 60, 40, 0.5), inset 0 0 0 1px rgba(18, 181, 127, 0.35); }
+.pas-subj-ico { display: grid; place-items: center; width: 32px; height: 32px; flex-shrink: 0; border-radius: 10px; font-size: 11.5px; font-weight: 800; background: #eef3f0; color: var(--muted); }
+.pas-subj-ico.is-user { border-radius: 50%; background: linear-gradient(150deg, #e7dcfa, #c8b6f0); color: #4b3596; }
+.pas-subj-ico.is-role { background: rgba(60, 143, 214, 0.14); color: var(--c-role); }
+.pas-subj-ico.is-dept { background: color-mix(in srgb, var(--c) 18%, #fff); }
+.pas-subj-ico.is-dept::after { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 25%, transparent); }
+.pas-subj-ico.is-everyone { background: linear-gradient(150deg, var(--mint), var(--emerald)); color: #fff; font-size: 18px; }
+.pas-subj-txt { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.pas-subj-txt b { font-size: 13px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pas-subj-txt small { font-size: 11.5px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pas-count { font-style: normal; min-width: 20px; padding: 0 6px; border-radius: 999px; background: rgba(18, 181, 127, 0.12); color: var(--forest); font-size: 11px; font-weight: 800; line-height: 20px; text-align: center; }
+.pas-dot { width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: var(--amber); box-shadow: 0 0 0 3px rgba(224, 164, 60, 0.22); }
+.pas-order { padding: 6px 10px 12px; border-top: 1px solid var(--line); }
+.pas-order:not(.is-open) { padding-bottom: 6px; }
+.pas-order-h { display: flex; align-items: center; gap: 7px; width: 100%; padding: 6px 4px; border: 0; background: none; cursor: pointer; text-align: left; font-size: 10.5px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; color: var(--faint); }
+.pas-order-h:hover { color: var(--muted); }
+.pas-order-q { margin-left: auto; font-size: 11px; font-weight: 650; letter-spacing: 0; text-transform: none; color: var(--emerald); cursor: pointer; }
+.pas-order-q:hover { text-decoration: underline; text-underline-offset: 3px; }
+.pas-order ol { margin: 4px 4px 0 !important; }
+.pas-order ol { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin: 0; padding: 0; list-style: none; counter-reset: pas-o; }
+.pas-order li { counter-increment: pas-o; display: flex; align-items: center; gap: 6px; padding: 4px 8px 4px 4px; border-radius: 999px; font-size: 11px; font-weight: 650; white-space: nowrap; }
+.pas-order li::before { content: counter(pas-o); display: grid; place-items: center; width: 17px; height: 17px; flex-shrink: 0; border-radius: 50%; background: #fff; font-size: 10px; font-weight: 800; }
+.pas-order li:nth-child(1) { background: rgba(139, 111, 214, 0.14); color: var(--c-user); }
+.pas-order li:nth-child(2) { background: rgba(60, 143, 214, 0.13); color: var(--c-role); }
+.pas-order li:nth-child(3) { background: rgba(224, 140, 70, 0.14); color: var(--c-dept); }
+.pas-order li:nth-child(4) { background: rgba(18, 181, 127, 0.12); color: var(--c-every); }
+
+/* ─────────── pages ─────────── */
+.pas-main { min-height: 0; overflow-y: auto; padding: 22px 26px 40px; display: flex; flex-direction: column; gap: 16px; animation: pas-in 0.35s cubic-bezier(0.16, 1, 0.3, 1); }
+.pas-main > * { flex-shrink: 0; }
+.pas-hero { position: relative; display: flex; gap: 16px; padding: 20px 20px 18px; border-radius: 20px; background: #fff; border: 1px solid var(--line); overflow: hidden; }
+.pas-hero::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 4px; background: linear-gradient(90deg, var(--c), color-mix(in srgb, var(--c) 30%, #fff)); }
+.pas-hero > div { min-width: 0; padding-right: 130px; }
+.pas-hero-ico { display: grid; place-items: center; width: 52px; height: 52px; flex-shrink: 0; border-radius: 16px; font-weight: 800; font-size: 16px; background: color-mix(in srgb, var(--c) 16%, #fff); color: color-mix(in srgb, var(--c) 70%, #0b241a); }
+.pas-hero-ico.is-user { border-radius: 50%; background: linear-gradient(150deg, #e7dcfa, #c8b6f0); color: #4b3596; }
+.pas-hero-ico.is-role { background: rgba(60, 143, 214, 0.14); color: var(--c-role); }
+.pas-hero-ico.is-everyone { background: linear-gradient(150deg, var(--mint), var(--emerald)); color: #fff; font-size: 26px; }
+.pas-hero-type { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); }
+.pas-hero h3 { margin: 2px 0 6px; font-family: "Space Grotesk", sans-serif; font-size: 24px; letter-spacing: -0.02em; }
+.pas-hero p { margin: 0; max-width: 640px; font-size: 13.5px; line-height: 1.55; color: var(--muted); }
+.pas-hero-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.pas-hero-meta i { font-style: normal; padding: 3px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 700; background: rgba(60, 143, 214, 0.12); color: var(--c-role); }
+.pas-hero-meta i.is-dept { background: color-mix(in srgb, var(--c) 15%, #fff); color: color-mix(in srgb, var(--c) 75%, #0b241a); }
+.pas-reset { position: absolute; top: 16px; right: 16px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; font-size: 12px; font-weight: 650; color: var(--muted); cursor: pointer; }
+.pas-reset:hover { color: #a83434; border-color: rgba(214, 69, 69, 0.3); }
+.pas-locked { display: flex; align-items: center; gap: 14px; padding: 22px; border-radius: 18px; background: #fffaf0; border: 1px dashed rgba(224, 164, 60, 0.45); font-size: 14px; color: #6b4510; }
+.pas-locked > svg { width: 22px; height: 22px; flex-shrink: 0; }
+.pas-locked p { margin: 0; }
+
+.pas-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+.pas-card {
+  position: relative; display: flex; flex-direction: column; gap: 12px; padding: 16px; border-radius: 18px; background: #fff; border: 1px solid var(--line);
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s; animation: pas-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) backwards; animation-delay: calc(var(--i) * 25ms);
+}
+.pas-card::after { content: ""; position: absolute; top: 16px; right: 16px; width: 8px; height: 8px; border-radius: 50%; background: #d3ddd8; transition: background 0.2s, box-shadow 0.2s; }
+.pas-card.is-open::after { background: var(--emerald); box-shadow: 0 0 0 4px rgba(18, 181, 127, 0.16); }
+.pas-card.is-hidden { background: #fafbfb; }
+.pas-card.is-hidden::after { background: #b9c4bf; }
+.pas-card.is-set { border-color: rgba(18, 181, 127, 0.38); box-shadow: 0 10px 26px -20px rgba(10, 80, 50, 0.7); }
+.pas-card.is-set.is-hidden { border-color: rgba(90, 109, 102, 0.35); }
+.pas-card > header { display: flex; align-items: center; gap: 12px; padding-right: 16px; }
+.pas-card-ico { display: grid; place-items: center; width: 40px; height: 40px; flex-shrink: 0; border-radius: 12px; background: rgba(18, 181, 127, 0.1); color: var(--forest); transition: background 0.2s, color 0.2s; }
+.pas-card-ico svg { width: 20px; height: 20px; }
+.pas-card.is-hidden .pas-card-ico { background: #eef1ef; color: #9aa7a1; }
+.pas-card.is-locked .pas-card-ico { background: rgba(224, 164, 60, 0.13); color: #8a5a10; }
+.pas-card-txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.pas-card-txt b { font-size: 14.5px; font-weight: 700; }
+.pas-card-txt small { font-size: 12px; color: var(--muted); }
+.pas-card.is-hidden .pas-card-txt b { color: #6f817a; }
+.pas-always { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 42px; border-radius: 13px; background: #faf6ee; color: #8a5a10; font-size: 12.5px; font-weight: 700; }
+.pas-always svg { width: 15px; height: 15px; }
+.pas-inside { font-size: 11.5px; line-height: 1.45; color: var(--faint); }
+
+/* three-way choice: inherit · open · hidden */
+.pas-choice { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 3px; padding: 3px; border-radius: 13px; background: #eef4f1; }
+.pas-choice button {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; min-height: 38px; padding: 3px 8px; border: 0; border-radius: 10px; background: none; cursor: pointer;
+  font-size: 12.5px; font-weight: 650; color: var(--muted); white-space: nowrap; transition: background 0.18s, color 0.18s, box-shadow 0.18s;
+}
+.pas-choice button small { font-size: 10.5px; font-weight: 650; color: var(--faint); }
+.pas-choice button:hover:not(.is-on) { background: rgba(255, 255, 255, 0.8); color: var(--ink); }
+.pas-choice button.is-on { background: var(--emerald); color: #fff; box-shadow: 0 6px 14px -8px rgba(10, 111, 77, 0.8); }
+.pas-choice button.is-on.is-neg { background: #5a6d66; box-shadow: 0 6px 14px -8px rgba(40, 50, 46, 0.8); }
+.pas-choice button.is-inherit span { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; }
+.pas-choice button.is-inherit.is-on { background: #fff; color: var(--ink); box-shadow: 0 4px 12px -6px rgba(10, 60, 40, 0.45), inset 0 0 0 1px rgba(10, 111, 77, 0.15); }
+.pas-choice button.is-inherit.is-on small { color: var(--forest); }
+.pas-card.is-hidden .pas-choice button.is-inherit.is-on small { color: #6f817a; }
+
+/* ─────────── their side menu ─────────── */
+.pas-preview { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; padding: 18px; border-left: 1px solid var(--line); background: #fbfdfc; }
+.pas-preview h4 { margin: 0; font-size: 11px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; color: var(--faint); }
+.pas-select { height: 38px; padding: 0 10px; border: 1px solid var(--line); border-radius: 11px; background: #fff; font-size: 13px; font-weight: 600; color: var(--ink); }
+.pas-dock { display: flex; flex-direction: column; gap: 3px; padding: 8px; border-radius: 20px; background: linear-gradient(160deg, #0f4a35, #072419); box-shadow: 0 22px 40px -26px rgba(4, 30, 20, 0.9); }
+.pas-dock-item { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 12px; color: #eaf7f0; transition: opacity 0.25s, background 0.25s; }
+.pas-dock-item.is-on:hover { background: rgba(255, 255, 255, 0.06); }
+.pas-dock-ico { display: grid; place-items: center; width: 32px; height: 32px; flex-shrink: 0; border-radius: 10px; background: rgba(134, 239, 192, 0.14); color: var(--mint); }
+.pas-dock-ico svg { width: 17px; height: 17px; }
+.pas-dock-lbl { flex: 1; min-width: 0; font-size: 13px; font-weight: 650; }
+.pas-dock-item.is-off { opacity: 0.38; }
+.pas-dock-item.is-off .pas-dock-ico { background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.6); }
+.pas-dock-item.is-off .pas-dock-lbl { text-decoration: line-through; text-decoration-color: rgba(255, 255, 255, 0.5); }
+.pas-src { font-style: normal; padding: 1px 7px; border-radius: 999px; font-size: 10px; font-weight: 700; white-space: nowrap; background: rgba(255, 255, 255, 0.1); color: rgba(234, 247, 240, 0.75); }
+.pas-src.is-user { background: rgba(176, 152, 240, 0.25); color: #ddd2fb; }
+.pas-src.is-role { background: rgba(110, 175, 235, 0.24); color: #cfe5fa; }
+.pas-src.is-dept { background: rgba(240, 165, 100, 0.24); color: #fbdcc1; }
+.pas-src.is-everyone { background: rgba(134, 239, 192, 0.2); color: var(--mint); }
+.pas-src.is-boss, .pas-src.is-locked { background: rgba(224, 164, 60, 0.25); color: #f7dca6; }
+.pas-note { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+.pas-note b { color: var(--ink); }
+
+/* ─────────── overview: people × pages ─────────── */
+.pas-ov { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 18px 22px; animation: pas-in 0.35s cubic-bezier(0.16, 1, 0.3, 1); }
+.pas-ov-top { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+.pas-ov-top p { margin: 0; font-size: 13.5px; color: var(--muted); }
+.pas-ov-top .pas-search { width: 300px; max-width: 100%; }
+.pas-ov-scroll { flex: 1; min-height: 0; overflow: auto; border-radius: 18px; background: #fff; border: 1px solid var(--line); }
+.pas-ov-table { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 13px; }
+.pas-ov-table thead th { position: sticky; top: 0; z-index: 2; padding: 12px 6px 10px; background: #fbfdfc; border-bottom: 1px solid var(--line); font-size: 11px; font-weight: 700; color: var(--muted); text-align: center; white-space: nowrap; }
+.pas-ov-table thead th > span { display: block; }
+.pas-ov-ico { display: grid !important; place-items: center; width: 30px; height: 30px; margin: 0 auto 4px; border-radius: 9px; background: rgba(18, 181, 127, 0.1); color: var(--forest); }
+.pas-ov-ico svg { width: 16px; height: 16px; }
+.pas-ov-table th.pas-ov-who { position: sticky; left: 0; z-index: 1; min-width: 230px; padding: 0; background: #fff; text-align: left; }
+.pas-ov-table thead th.pas-ov-who { z-index: 3; padding: 12px 16px; background: #fbfdfc; vertical-align: bottom; }
+.pas-ov-table tbody tr:hover > * { background: #f6faf8; }
+.pas-ov-table tbody th, .pas-ov-table tbody td { border-bottom: 1px solid rgba(10, 111, 77, 0.06); }
+.pas-ov-table td { padding: 6px; text-align: center; }
+.pas-ov-who button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 16px; border: 0; background: none; text-align: left; cursor: pointer; color: var(--ink); }
+.pas-ov-who button span:last-child { display: flex; flex-direction: column; min-width: 0; }
+.pas-ov-who b { font-size: 13px; font-weight: 650; }
+.pas-ov-who small { font-size: 11.5px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pas-ov-who button:hover b { color: var(--forest); text-decoration: underline; text-underline-offset: 3px; }
+.pas-av { display: grid; place-items: center; width: 30px; height: 30px; flex-shrink: 0; border-radius: 50%; font-size: 11px; font-weight: 800; background: linear-gradient(150deg, #c9f2dd, #7fd9b4); color: #0b3a2b; }
+.pas-ov-cell { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; background: #f1f3f2; color: #b6c1bc; }
+.pas-ov-cell svg { width: 15px; height: 15px; }
+.pas-ov-cell.is-on { background: rgba(18, 181, 127, 0.13); color: var(--forest); }
+/* where the answer came from: a coloured ring */
+.pas-ov-cell.is-user { box-shadow: inset 0 0 0 2px rgba(139, 111, 214, 0.55); }
+.pas-ov-cell.is-role { box-shadow: inset 0 0 0 2px rgba(60, 143, 214, 0.5); }
+.pas-ov-cell.is-dept { box-shadow: inset 0 0 0 2px rgba(224, 140, 70, 0.55); }
+.pas-ov-cell.is-everyone { box-shadow: inset 0 0 0 2px rgba(18, 181, 127, 0.45); }
+.pas-ov-cell.is-boss, .pas-ov-cell.is-locked { background: rgba(224, 164, 60, 0.12); color: #a06a14; }
+.pas-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+.pas-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.pas-legend i { width: 14px; height: 14px; border-radius: 5px; background: #f1f3f2; }
+.pas-legend i.is-user { box-shadow: inset 0 0 0 2px rgba(139, 111, 214, 0.55); }
+.pas-legend i.is-role { box-shadow: inset 0 0 0 2px rgba(60, 143, 214, 0.5); }
+.pas-legend i.is-dept { box-shadow: inset 0 0 0 2px rgba(224, 140, 70, 0.55); }
+.pas-legend i.is-everyone { box-shadow: inset 0 0 0 2px rgba(18, 181, 127, 0.45); }
+.pas-legend i.is-default { box-shadow: inset 0 0 0 1px rgba(10, 111, 77, 0.15); }
+.pas-legend i.is-boss { background: rgba(224, 164, 60, 0.25); }
+
+/* ─────────── sections & wide cards with panels (Settings, Management) ─────────── */
+.pas-sec-h { margin: 6px 2px -4px; font-size: 11px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; color: var(--faint); }
+.pas-banner.is-soft { background: rgba(18, 181, 127, 0.08); color: var(--forest); }
+.pas-card.is-wide { grid-column: 1 / -1; gap: 14px; padding: 18px 18px 14px; }
+.pas-card.is-wide::after { display: none; }
+.pas-card.is-wide > header { padding-right: 0; flex-wrap: wrap; }
+.pas-card-ctl { margin-left: auto; width: min(320px, 100%); }
+.pas-card.is-wide .pas-card-txt { flex: 1; min-width: 160px; }
+.pas-panels { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 6px 18px; padding-top: 12px; border-top: 1px solid rgba(10, 111, 77, 0.08); }
+.pas-panels-h { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin: 0 0 2px; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); }
+.pas-panels-h em { font-style: normal; font-weight: 600; letter-spacing: 0; text-transform: none; font-size: 11.5px; color: var(--muted); }
+.pas-panels-h em.is-warn { padding: 2px 9px; border-radius: 999px; background: rgba(224, 164, 60, 0.14); color: #8a5a10; }
+.pas-card.is-wide.is-hidden .pas-panel { opacity: 0.6; }
+.pas-panel {
+  position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 8px 10px 8px 14px; border-radius: 13px;
+  background: #fbfdfc; border: 1px solid transparent; transition: background 0.2s, border-color 0.2s;
+  animation: pas-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) backwards; animation-delay: calc(var(--i) * 18ms);
+}
+.pas-panel::before { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 3px; background: #d3ddd8; transition: background 0.2s; }
+.pas-panel.is-open::before { background: var(--emerald); }
+.pas-panel.is-locked::before { background: var(--amber); }
+.pas-panel.is-set { background: #fff; border-color: rgba(18, 181, 127, 0.3); }
+.pas-panel.is-set.is-hidden { border-color: rgba(90, 109, 102, 0.3); }
+.pas-panel-txt { display: flex; flex-direction: column; min-width: 0; }
+.pas-panel-txt b { font-size: 13.5px; font-weight: 650; }
+.pas-panel-txt small { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pas-panel.is-hidden .pas-panel-txt b { color: #6f817a; }
+.pas-panel .pas-choice { width: 292px; }
+.pas-panel .pas-choice.is-4 { width: 292px; }
+.pas-panel .pas-choice button { min-height: 34px; padding: 2px 6px; }
+.pas-choice.is-4 { grid-template-columns: 1.25fr 1fr 0.8fr 0.8fr; }
+.pas-choice button.is-on.is-own { background: #3c8fd6; box-shadow: 0 6px 14px -8px rgba(30, 90, 150, 0.8); }
+.pas-always.is-sm { min-height: 34px; width: 292px; font-size: 12px; }
+.pas-always.is-ro { background: #eef4f1; color: var(--forest); font-size: 12px; }
+.pas-always.is-ro.is-off { background: #f3ece0; color: #8a5a10; }
+
+/* preview: panels under Settings / Management */
+.pas-dock-row { display: flex; flex-direction: column; }
+.pas-dock-sub { display: flex; flex-wrap: wrap; gap: 3px; margin: -2px 6px 6px 50px; }
+.pas-dock-sub span { padding: 1px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 650; background: rgba(134, 239, 192, 0.16); color: var(--mint); }
+.pas-dock-sub span.lv-own { background: rgba(110, 175, 235, 0.22); color: #cfe5fa; }
+.pas-dock-sub span.lv-none { background: rgba(255, 255, 255, 0.05); color: rgba(234, 247, 240, 0.35); text-decoration: line-through; }
+
+/* overview: column switch + panel columns */
+.pas-seg { display: inline-flex; gap: 3px; padding: 3px; border-radius: 12px; background: #e6efeb; }
+.pas-seg button { height: 32px; padding: 0 13px; border: 0; border-radius: 9px; background: none; font-size: 12.5px; font-weight: 650; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.pas-seg button.is-on { background: #fff; color: var(--ink); box-shadow: 0 4px 12px -8px rgba(10, 60, 40, 0.6); }
+.pas-ov-top p { flex: 1; min-width: 220px; }
+.pas-ov-lbl { display: block; max-width: 96px; margin: 0 auto; white-space: normal; line-height: 1.25; }
+.pas-ov-table thead th:has(.pas-ov-lbl) { vertical-align: bottom; }
+.pas-ov-cell b { font-size: 10px; font-weight: 800; letter-spacing: 0.02em; }
+.pas-ov-cell.lv-own { background: rgba(60, 143, 214, 0.13); color: #2a6aa3; }
+.pas-ov-table tr.is-pageoff td { opacity: 0.35; }
+.pas-legend i.is-own { background: rgba(60, 143, 214, 0.25); }
+
+/* ─────────── smaller screens ─────────── */
+@media (max-width: 1240px) {
+  .pas-body { grid-template-columns: 240px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
+  .pas-nav { grid-row: 1 / 3; }
+  .pas-preview { flex-direction: row; flex-wrap: wrap; align-items: center; overflow: visible; border-left: 0; border-top: 1px solid var(--line); padding: 10px 18px; gap: 8px 12px; }
+  .pas-preview .pas-select { width: 200px; }
+  .pas-dock { flex-direction: row; flex-basis: 100%; min-width: 0; max-width: 100%; overflow-x: auto; gap: 2px; padding: 6px; border-radius: 16px; }
+  .pas-dock-item { flex-direction: column; gap: 3px; padding: 5px 6px; min-width: 64px; }
+  .pas-dock-lbl { font-size: 11px; text-align: center; }
+  .pas-src { display: none; }
+  .pas-preview .pas-note { flex: 1; }
+  .pas-dock-row { flex-direction: row; }
+  .pas-dock-sub { display: none; }
+}
+@media (max-width: 820px) {
+  .pas-backdrop { padding: 0; }
+  .pas { border-radius: 0; }
+  .pas-head { flex-wrap: wrap; padding: 12px 14px; gap: 10px; }
+  .pas-mode { order: 3; margin: 0; width: 100%; }
+  .pas-mode button { flex: 1; }
+  .pas-head-actions { margin-left: auto; gap: 6px; }
+  .pas-head-ico { width: 36px; height: 36px; }
+  .pas-head h2 { font-size: 19px; }
+  .pas-btn { padding: 0 13px; }
+  .pas-head-actions .pas-dirty, .pas-head-actions .pas-saved, .pas-head-actions .pas-btn.is-ghost { display: none; }
+  .pas-head-txt { flex: 1; }
+  .pas-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
+  .pas-nav { grid-row: auto; border-right: 0; border-bottom: 1px solid var(--line); max-height: 180px; }
+  .pas-nav > .pas-search { margin: 10px 12px 4px; }
+  .pas-nav { max-height: 240px; }
+  .pas-help { width: 40px; padding: 0; justify-content: center; }
+  .pas-help span { display: none; }
+  .pas-tour-art { min-height: 170px; padding: 18px; }
+  .pas-tour-body { padding: 18px 20px 4px; }
+  .pas-tour-foot { padding: 14px 20px 18px; }
+  .pas-order { display: none; }
+  .pas-main { padding: 14px; }
+  .pas-hero { padding: 16px; }
+  .pas-hero > div { padding-right: 0; }
+  .pas-hero-ico { width: 42px; height: 42px; }
+  .pas-reset { position: static; align-self: flex-start; }
+  .pas-hero { flex-wrap: wrap; }
+  .pas-grid { grid-template-columns: 1fr; }
+  .pas-panels { grid-template-columns: 1fr; }
+  .pas-panel { grid-template-columns: 1fr; gap: 8px; }
+  .pas-panel .pas-choice, .pas-panel .pas-choice.is-4, .pas-always.is-sm, .pas-card-ctl { width: 100%; }
+  .pas-preview { padding: 8px 12px; }
+  .pas-preview h4, .pas-preview .pas-note { display: none; }
+  .pas-preview .pas-select { width: 100%; }
+  .pas-ov { padding: 12px; }
+  .pas-ov-top .pas-search { width: 100%; }
+  .pas-ov-table th.pas-ov-who { min-width: 160px; }
+}
+@media (prefers-reduced-motion: reduce) { .pas, .pas-subj, .pas-main, .pas-card, .pas-backdrop, .pas-ov { animation: none; } }

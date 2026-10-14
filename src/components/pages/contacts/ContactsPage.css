@@ -123,3 +123,12 @@
   padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
 .ct-rel-client { background: rgba(18,181,127,0.14); color: var(--forest); }
 .ct-rel-tracking { background: rgba(60,154,224,0.14); color: #2b6ea3; }
+/* ===== Type-aware filter editors ===== */
+.ct-fvals { width: 190px; flex-shrink: 0; }
+.ct-fvals .smf { flex: none; width: 100%; }
+.ct-fvals .smf-trigger { height: 38px; padding-top: 0; padding-bottom: 0; background: #fff; border: 1px solid var(--line); border-radius: 11px; font-size: 12.5px; }
+.ct-fvals .smf-trigger.is-set { background: rgba(18, 181, 127, 0.08); border-color: rgba(18, 181, 127, 0.35); }
+.ct-ftext { width: 150px; height: 38px; box-sizing: border-box; padding: 0 12px; border: 1px solid var(--line); border-radius: 11px; background: #fff; font: inherit; font-size: 12.5px; outline: none; transition: border-color 0.14s, box-shadow 0.14s; }
+.ct-ftext:focus { border-color: var(--emerald); box-shadow: 0 0 0 3px rgba(18, 181, 127, 0.14); }
+.ct-fdates { display: inline-flex; align-items: center; gap: 5px; }
+.ct-fdates .dp-trigger { height: 38px; box-sizing: border-box; padding: 0 10px; border-radius: 11px; font-size: 12.5px; }
