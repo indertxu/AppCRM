@@ -23,10 +23,37 @@ interface Props {
  * so it can never collide with the shared Select or another MultiSelect.
  * The menu is portalled to <body> so no overflow/transform ancestor clips it.
  */
+export interface PopPos { top: number; left: number; width: number; maxH: number; up: boolean }
+
+/**
+ * Where a popover fits on screen: under its trigger when there is room, above it
+ * when there is room there instead, otherwise on the roomier side with the
+ * popover scrolling inside. Always kept inside the window, horizontally too.
+ */
+export function fitPopover(
+  r: DOMRect, natural: number, width: number,
+  opts: { gap?: number; margin?: number; cap?: number; align?: "left" | "right" | "center" } = {},
+): PopPos {
+  const gap = opts.gap ?? 6, m = opts.margin ?? 12;
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const h = Math.min(natural, opts.cap ?? Infinity);
+  const below = vh - r.bottom - gap - m;
+  const above = r.top - gap - m;
+  let up = false, maxH = h;
+  if (h <= below) up = false;
+  else if (h <= above) up = true;
+  else { up = above > below + 40; maxH = Math.max(140, up ? above : below); }
+  const shown = Math.min(h, maxH);
+  const top = up ? Math.max(m, r.top - gap - shown) : Math.min(r.bottom + gap, vh - m - shown);
+  const w = Math.min(width, vw - m * 2);
+  const want = opts.align === "right" ? r.right - w : opts.align === "center" ? r.left + r.width / 2 - w / 2 : r.left;
+  return { top, left: Math.max(m, Math.min(want, vw - w - m)), width: w, maxH: shown, up };
+}
+
 export default function SalesMultiFilter({ values, onChange, options, placeholder, noun, searchFrom = 7, single = false }: Props) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
-  const [pos, setPos] = useState<{ top: number; left: number; width: number; maxH: number } | null>(null);
+  const [pos, setPos] = useState<PopPos | null>(null);
   const trigRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -40,15 +67,16 @@ export default function SalesMultiFilter({ values, onChange, options, placeholde
   const place = () => {
     const r = trigRef.current?.getBoundingClientRect();
     if (!r) return;
-    const width = Math.max(r.width, 230);
-    const left = Math.min(r.left, window.innerWidth - width - 8);
-    const below = window.innerHeight - r.bottom - 12;
-    const above = r.top - 12;
-    const up = below < 220 && above > below;
-    const maxH = Math.max(160, Math.min(360, up ? above : below));
-    setPos({ top: up ? r.top - 6 - maxH : r.bottom + 6, left, width, maxH });
+    // Measure the menu at its full height, then put it where it fits.
+    const el = menuRef.current;
+    let natural = 360;
+    if (el) { const prev = el.style.maxHeight; el.style.maxHeight = "none"; natural = el.offsetHeight; el.style.maxHeight = prev; }
+    const next = fitPopover(r, natural, Math.max(r.width, 230), { cap: 420 });
+    setPos((cur) => (cur && cur.top === next.top && cur.left === next.left && cur.width === next.width && cur.maxH === next.maxH && cur.up === next.up ? cur : next));
   };
   useLayoutEffect(() => { if (open) place(); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Once the menu is on screen (and whenever its content changes size), place it again from its real height.
+  useLayoutEffect(() => { if (open && pos) place(); }, [open, !!pos, shown.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!open) return;
@@ -114,7 +142,7 @@ export default function SalesMultiFilter({ values, onChange, options, placeholde
       {open && pos && createPortal(
         <div
           ref={menuRef}
-          className="smf-menu"
+          className={`smf-menu ${pos.up ? "is-up" : ""}`}
           style={{ top: pos.top, left: pos.left, width: pos.width, maxHeight: pos.maxH }}
           onMouseDown={(e) => e.stopPropagation()}
           role="listbox"

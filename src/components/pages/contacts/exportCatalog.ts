@@ -13,8 +13,9 @@
  * Contact fields look at the contact; company fields at each of its companies;
  * deal fields at each of its deals.
  */
+import { languageName, countryLabel } from "./contactProfile";
 
-export type Kind = "text" | "number" | "date" | "bool" | "enum";
+export type Kind ="text" | "number" | "date" | "bool" | "enum";
 export type Src = "contact" | "company" | "deal";
 export interface Ctx { c: any; cos: any[]; deals: any[] }
 export interface XF {
@@ -59,15 +60,16 @@ const LABEL: Record<string, string> = {
   addr_details: "Address details", postal_code: "Postal code", city: "City", province: "Province / state", country: "Country",
   company_id: "Deal company", pipeline_id: "Pipeline", product_id: "Main product", current_phase_id: "Current phase", status: "Status",
   product_price: "Main product price", rep_close_prob: "Close probability · sales (%)", mgr_close_prob: "Close probability · management (%)",
-  rep_close_date: "Close date · sales", mgr_close_date: "Close date · management", loss_reason: "Loss reason", loss_details: "Loss details",
+  rep_close_date: "Expected close · sales", mgr_close_date: "Expected close · management", close_date: "Close date", loss_reason: "Loss reason", loss_details: "Loss details",
   imported_by: "Imported by", imported_at: "Imported on", import_batch_id: "Import",
+  language: "Language", linkedin: "LinkedIn",
 };
 const STATUS: Record<string, string> = { active: "Active", won: "Won", lost: "Lost", paused: "On hold" };
 const TEXTISH = /phone|vat|postal|zip|iban|reg_number|tax|cif|nif|code|number$/i;
 /** Columns we know are free text / known to be a short list, whatever the data looks like. */
 const FORCE_TEXT = new Set(["first_name", "last_name", "email", "phone", "position", "notes", "name", "legal_name", "vat_number", "reg_number",
-  "website", "street", "addr_number", "addr_details", "postal_code", "loss_details"]);
-const FORCE_ENUM = new Set(["city", "province", "country", "status", "loss_reason"]);
+  "website", "street", "addr_number", "addr_details", "postal_code", "loss_details", "linkedin"]);
+const FORCE_ENUM = new Set(["city", "province", "country", "status", "loss_reason", "language"]);
 const EMAIL_OR_URL = /^[^\s@]+@[^\s@]+\.[^\s@]+$|^(https?:\/\/|www\.)|^[a-z0-9-]+(\.[a-z0-9-]+)+(\/\S*)?$|^in\//i;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}/;
 export const isEmpty = (v: any) => v == null || v === "" || (Array.isArray(v) && !v.length);
@@ -169,6 +171,9 @@ export function buildCatalog(inp: CatalogInput): XF[] {
         continue;
       }
       const g = infer(k, values, idMaps);
+      // contacts store country / language as codes → show the names
+      if (src === "contact" && (k === "country" || k === "language") && g.options)
+        g.options = sortOpts(g.options.map((o) => ({ ...o, label: k === "country" ? countryLabel(o.value) : languageName(o.value) })));
       let label = LABEL[k] ?? prettify(k);
       if (src === "company" && k === "name") label = "Name";
       if (src === "deal" && k === "company_id") label = "Company";

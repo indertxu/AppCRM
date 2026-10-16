@@ -17,18 +17,31 @@ async function myUser(): Promise<{ id: string; email: string | null } | null> {
 const myId = async () => (await myUser())?.id ?? null;
 
 /**
- * Every row of a list, past Supabase's 1,000-row page: the first page is one
- * request as always; only bigger tables ask for the next pages.
+ * Every row of a list, past Supabase's 1,000-row page. The first page is one
+ * request as always; when it comes back full, the next pages are asked for in
+ * parallel batches that double each time (2, 4, 8…), so 50,000 rows take about
+ * six rounds instead of fifty requests one after the other.
  */
-async function allRows(query: () => any, page = 1000): Promise<any[]> {
-  const out: any[] = [];
-  for (let from = 0; ; from += page) {
-    const { data, error } = await query().range(from, from + page - 1);
-    if (error || !data) break;
-    out.push(...data);
-    if (data.length < page) break;
+export async function allRows(query: () => any, page = 1000): Promise<any[]> {
+  const get = async (n: number): Promise<any[] | null> => {
+    const { data, error } = await query().range(n * page, n * page + page - 1);
+    return error || !data ? null : data;
+  };
+  const first = await get(0);
+  if (!first) return [];
+  const out: any[] = [...first];
+  if (first.length < page) return out;
+  for (let next = 1, batch = 2; ; batch = Math.min(batch * 2, 16)) {
+    const pages = await Promise.all(Array.from({ length: batch }, (_, i) => get(next + i)));
+    next += batch;
+    let done = false;
+    for (const rows of pages) {
+      if (!rows) { done = true; break; }
+      out.push(...rows);
+      if (rows.length < page) { done = true; break; }
+    }
+    if (done) return out;
   }
-  return out;
 }
 
 export interface Tracking {
@@ -42,8 +55,11 @@ export interface Tracking {
   product_price?: number | null;
   rep_close_prob?: number | null;
   mgr_close_prob?: number | null;
+  /** Expected close dates (the rep's and management's estimates). */
   rep_close_date?: string | null;
   mgr_close_date?: string | null;
+  /** The day it was actually closed (won or lost) — empower_close_date.sql. */
+  close_date?: string | null;
   loss_reason?: string | null;
   loss_details?: string | null;
   /** Custom deal fields, keyed by tracking_fields.id. */
@@ -71,7 +87,15 @@ export interface TrackTask {
   created_by?: string | null;
   // To-do v2 (empower_tasks_v2.sql). Filled with defaults when the columns aren't there yet.
   priority?: TaskPriority; kind?: TaskKind; status?: TaskStatus; progress?: number;
+  /** A process's steps; ticking them moves its %. */
+  checklist?: TaskStep[];
+  /** The predefined task / process it was made from. */
+  template_id?: string | null;
+  /** When the "quick → process" rule turned it into a process. */
+  promoted_at?: string | null;
 }
+export interface TaskStep { id: string; text: string; done: boolean }
+export const newStepId = () => Math.random().toString(36).slice(2, 10);
 export type MeetingKind = "teams" | "phone" | "in_person";
 export interface TrackMeeting {
   id: string; phase_id: string | null; title: string; meet_at: string | null; kind?: MeetingKind;
@@ -209,6 +233,9 @@ export async function removeTrackingEmployee(trackingId: string, profileId: stri
  */
 export async function loadTrackingTeams(): Promise<{ members: Record<string, string[]>; owners: Record<string, string> }> {
   const rows = await allRows(() => supabase.from("tracking_employees").select("tracking_id, profile_id, is_owner").order("tracking_id").order("profile_id"));
+  return teamsFromRows(rows);
+}
+export function teamsFromRows(rows: any[]): { members: Record<string, string[]>; owners: Record<string, string> } {
   const members: Record<string, string[]> = {};
   const owners: Record<string, string> = {};
   rows.forEach((r: any) => {
@@ -465,6 +492,10 @@ export async function listTrackings(): Promise<Tracking[]> {
     allRows(() => supabase.from("trackings").select("*").order("created_at", { ascending: false }).order("id")),
     allRows(() => supabase.from("tracking_contacts").select("tracking_id,contact_id").order("tracking_id").order("contact_id")),
   ]);
+  return trackingsFromRows(rows, links);
+}
+/** Deals with their contact ids, from rows already read. */
+export function trackingsFromRows(rows: any[], links: any[]): Tracking[] {
   const byTracking: Record<string, string[]> = {};
   links.forEach((l: any) => { (byTracking[l.tracking_id] ??= []).push(l.contact_id); });
   return rows.map((r: any) => ({ ...r, contactIds: byTracking[r.id] ?? [] }));
@@ -536,13 +567,15 @@ export async function loadTasks(trackingId: string): Promise<TrackTask[]> {
   const { data } = await supabase.from("tracking_tasks").select("*").eq("tracking_id", trackingId).order("created_at");
   return ((data ?? []) as any[]).map(normTask) as TrackTask[];
 }
-export interface TaskExtras { description?: string | null; priority?: TaskPriority; kind?: TaskKind }
+export interface TaskExtras { description?: string | null; priority?: TaskPriority; kind?: TaskKind; checklist?: TaskStep[]; template_id?: string | null }
 export async function addTask(trackingId: string, phaseId: string | null, title: string, dueAt?: string | null, extras?: TaskExtras): Promise<TrackTask | null> {
   const base = { tracking_id: trackingId, phase_id: phaseId, title, due_at: dueAt ?? null };
   const more: Record<string, unknown> = {};
   if (extras?.description?.trim()) more.description = extras.description.trim();
   if (extras?.priority && extras.priority !== "normal") more.priority = extras.priority;
   if (extras?.kind && extras.kind !== "quick") more.kind = extras.kind;
+  if (extras?.checklist?.length) more.checklist = extras.checklist;
+  if (extras?.template_id) more.template_id = extras.template_id;
   let { data, error } = await supabase.from("tracking_tasks").insert({ ...base, ...more }).select().single();
   // Before empower_tasks_v2.sql the new columns don't exist: still save the task itself.
   if (error && Object.keys(more).length && /column/i.test(error.message ?? "")) {
@@ -602,7 +635,95 @@ const normTask = (t: any) => ({
   kind: (t.kind === "process" ? "process" : "quick") as TaskKind,
   status: (TASK_STATUSES.includes(t.status) ? t.status : t.done ? "done" : "todo") as TaskStatus,
   progress: Math.max(0, Math.min(100, Number(t.progress) || (t.done ? 100 : 0))),
+  checklist: (Array.isArray(t.checklist) ? t.checklist : [])
+    .filter((x: any) => x && typeof x.text === "string")
+    .map((x: any) => ({ id: String(x.id ?? newStepId()), text: x.text, done: !!x.done })) as TaskStep[],
 });
+
+/* ============================ Task settings & predefined tasks ============================ */
+export interface TaskSettings { auto_process_on: boolean; auto_process_days: number }
+export const DEFAULT_TASK_SETTINGS: TaskSettings = { auto_process_on: false, auto_process_days: 7 };
+let settingsCache: { at: number; value: TaskSettings } | null = null;
+export async function loadTaskSettings(fresh = false): Promise<TaskSettings> {
+  if (!fresh && settingsCache && Date.now() - settingsCache.at < 60_000) return settingsCache.value;
+  const { data, error } = await supabase.from("task_settings").select("auto_process_on, auto_process_days").maybeSingle();
+  const value = error || !data ? DEFAULT_TASK_SETTINGS : {
+    auto_process_on: !!(data as any).auto_process_on,
+    auto_process_days: Math.max(1, Number((data as any).auto_process_days) || 7),
+  };
+  settingsCache = { at: Date.now(), value };
+  return value;
+}
+export async function saveTaskSettings(v: TaskSettings): Promise<string | null> {
+  const { error } = await supabase.from("task_settings").upsert({ ...v, updated_at: new Date().toISOString() }, { onConflict: "tenant_id" });
+  if (!error) settingsCache = { at: Date.now(), value: v };
+  return error ? (/relation|does not exist/i.test(error.message) ? "Run empower_tasks_v2.sql in Supabase first." : error.message) : null;
+}
+
+/**
+ * The "quick → process" rule: a quick task still open after N days becomes a
+ * process (it gets a status, a % and progress notes). Applied when tasks are
+ * loaded; returns the rows as they are now.
+ */
+async function autoPromote(rows: any[]): Promise<any[]> {
+  const st = await loadTaskSettings().catch(() => DEFAULT_TASK_SETTINGS);
+  if (!st.auto_process_on) return rows;
+  const cutoff = Date.now() - st.auto_process_days * 86400000;
+  const stale = rows.filter((t) => t.kind === "quick" && !t.done && t.status !== "done" && !t.promoted_at
+    && t.created_at && new Date(t.created_at).getTime() < cutoff);
+  if (!stale.length) return rows;
+  const at = new Date().toISOString();
+  const { error } = await supabase.from("tracking_tasks").update({ kind: "process", promoted_at: at }).in("id", stale.map((t) => t.id));
+  if (error) return rows;
+  const ids = new Set(stale.map((t) => t.id));
+  return rows.map((t) => (ids.has(t.id) ? { ...t, kind: "process", promoted_at: at } : t));
+}
+
+export interface TaskTemplate {
+  id: string; kind: TaskKind; title: string; description: string | null; priority: TaskPriority;
+  /** Deadline: this many days after it's created (null = none), at due_time. */
+  due_in_days: number | null; due_time: string;
+  /** Steps of a predefined process. */
+  checklist: string[];
+  sort: number;
+}
+export async function loadTaskTemplates(): Promise<TaskTemplate[]> {
+  const { data, error } = await supabase.from("task_templates").select("*").order("sort").order("created_at");
+  if (error) return [];
+  return ((data ?? []) as any[]).map((t) => ({
+    id: t.id, kind: t.kind === "process" ? "process" : "quick", title: t.title ?? "", description: t.description ?? null,
+    priority: (["low", "normal", "high", "urgent"].includes(t.priority) ? t.priority : "normal") as TaskPriority,
+    due_in_days: t.due_in_days == null ? null : Number(t.due_in_days), due_time: t.due_time || "18:00",
+    checklist: Array.isArray(t.checklist) ? t.checklist.map((x: any) => String(typeof x === "string" ? x : x?.text ?? "")).filter(Boolean) : [],
+    sort: Number(t.sort) || 0,
+  }));
+}
+export async function saveTaskTemplate(t: Omit<TaskTemplate, "id"> & { id?: string }): Promise<{ template: TaskTemplate | null; error: string | null }> {
+  const row = {
+    kind: t.kind, title: t.title.trim(), description: t.description?.trim() || null, priority: t.priority,
+    due_in_days: t.due_in_days, due_time: t.due_time || "18:00", checklist: t.checklist.map((x) => x.trim()).filter(Boolean), sort: t.sort,
+  };
+  const q = t.id ? supabase.from("task_templates").update(row).eq("id", t.id) : supabase.from("task_templates").insert(row);
+  const { data, error } = await q.select().single();
+  if (error || !data) return { template: null, error: error ? (/relation|does not exist/i.test(error.message) ? "Run empower_tasks_v2.sql in Supabase first." : /row-level|policy/i.test(error.message) ? "Only the boss and managers can change predefined tasks." : error.message) : "not saved" };
+  return { template: { ...row, id: (data as any).id ?? t.id ?? "" } as TaskTemplate, error: null };
+}
+export async function deleteTaskTemplate(id: string): Promise<string | null> {
+  const { error } = await supabase.from("task_templates").delete().eq("id", id);
+  return error ? error.message : null;
+}
+/** What a new task gets from a predefined one: name, description, priority, kind, deadline and steps. */
+export function fromTemplate(t: TaskTemplate, now = new Date()) {
+  let due_at: string | null = null;
+  if (t.due_in_days != null) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + t.due_in_days);
+    due_at = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}T${t.due_time || "18:00"}:00`;
+  }
+  return {
+    title: t.title, description: t.description ?? "", priority: t.priority, kind: t.kind, due_at, template_id: t.id,
+    checklist: t.checklist.map((text) => ({ id: newStepId(), text, done: false })) as TaskStep[],
+  };
+}
 
 /**
  * My to-do: tasks I'm tagged on, untagged tasks on deals I own (the owner's
@@ -627,8 +748,11 @@ export async function loadMyTasks(): Promise<MyTask[]> {
   const taggedSet = new Set(taggedIds);
   const others = onMyDeals.filter((t: any) => !taggedSet.has(t.id));
   const mineOnly = (personal as any[]).filter((t) => !t.tracking_id && !taggedSet.has(t.id));
-  const all = [...tagged, ...others, ...mineOnly];
+  let all = [...tagged, ...others, ...mineOnly];
   if (!all.length) return [];
+  all = await autoPromote(all);
+  const byId = new Map(all.map((t: any) => [t.id, t]));
+  const fresh = (xs: any[]) => xs.map((t) => byId.get(t.id) ?? t);
   // Of the tasks on my deals, the ones already given to someone else aren't mine.
   const dealIds = [...new Set(all.map((t: any) => t.tracking_id).filter(Boolean))];
   const [{ data: given }, { data: deals }, notes] = await Promise.all([
@@ -659,9 +783,9 @@ export async function loadMyTasks(): Promise<MyTask[]> {
     };
   };
   return [
-    ...tagged.map((t: any) => shape(t, true)),
-    ...others.filter((t: any) => !givenSet.has(t.id)).map((t: any) => shape(t, false)),
-    ...mineOnly.map((t: any) => shape(t, false)),
+    ...fresh(tagged).map((t: any) => shape(t, true)),
+    ...fresh(others).filter((t: any) => !givenSet.has(t.id)).map((t: any) => shape(t, false)),
+    ...fresh(mineOnly).map((t: any) => shape(t, false)),
   ];
 }
 
@@ -677,7 +801,7 @@ export interface DelegatedTask extends MyTask {
 export async function loadDelegatedTasks(): Promise<DelegatedTask[]> {
   const uid = await myId();
   if (!uid) return [];
-  const mine = await allRows(() => supabase.from("tracking_tasks").select("*").eq("created_by", uid).order("id")).catch(() => [] as any[]);
+  const mine = await allRows(() => supabase.from("tracking_tasks").select("*").eq("created_by", uid).order("id")).then(autoPromote).catch(() => [] as any[]);
   if (!mine.length) return [];
   const { data: tags } = await supabase.from("tracking_assignees").select("item_id, employee_id")
     .eq("item_type", "task").eq("kind", "employee").in("item_id", mine.map((t: any) => t.id));
@@ -717,10 +841,12 @@ export async function loadDelegatedTasks(): Promise<DelegatedTask[]> {
 }
 
 /** A personal task from Home (no deal). Returns the error text, or the new task. */
-export async function addPersonalTask(input: { title: string; description?: string | null; kind: TaskKind; priority: TaskPriority; due_at?: string | null }): Promise<{ task: MyTask | null; error: string | null }> {
+export async function addPersonalTask(input: { title: string; description?: string | null; kind: TaskKind; priority: TaskPriority; due_at?: string | null; checklist?: TaskStep[]; template_id?: string | null }): Promise<{ task: MyTask | null; error: string | null }> {
   const { data, error } = await supabase.from("tracking_tasks").insert({
     tracking_id: null, phase_id: null, title: input.title, due_at: input.due_at ?? null,
     ...(input.description?.trim() ? { description: input.description.trim() } : {}),
+    ...(input.checklist?.length ? { checklist: input.checklist } : {}),
+    ...(input.template_id ? { template_id: input.template_id } : {}),
     kind: input.kind, priority: input.priority, status: "todo", progress: 0,
   }).select().single();
   if (error || !data) {
@@ -731,9 +857,10 @@ export async function addPersonalTask(input: { title: string; description?: stri
 }
 
 /** Change a task's priority, kind, status, % or due date. */
-export async function updateTaskMeta(id: string, patch: Partial<Pick<MyTask, "priority" | "kind" | "status" | "progress" | "due_at" | "title" | "description">>): Promise<string | null> {
+export async function updateTaskMeta(id: string, patch: Partial<Pick<MyTask, "priority" | "kind" | "status" | "progress" | "due_at" | "title" | "description" | "checklist">>): Promise<string | null> {
   const { error } = await supabase.from("tracking_tasks").update(patch).eq("id", id);
   if (!error) return null;
+  if (/created this task/i.test(error.message)) return "Only the person who created this task can change its deadline.";
   return /column/i.test(error.message) ? "Run empower_tasks_v2.sql in Supabase first." : error.message;
 }
 
@@ -976,6 +1103,11 @@ export async function setDealCloseProb(trackingId: string, which: "rep" | "mgr",
 export async function setDealCloseDate(trackingId: string, which: "rep" | "mgr", value: string | null) {
   const col = which === "rep" ? "rep_close_date" : "mgr_close_date";
   await supabase.from("trackings").update({ [col]: value || null }).eq("id", trackingId);
+}
+/** The day the deal was actually closed (won or lost). Expected dates are setDealCloseDate. */
+export async function setDealClosedOn(trackingId: string, value: string | null): Promise<string | null> {
+  const { error } = await supabase.from("trackings").update({ close_date: value || null }).eq("id", trackingId);
+  return error?.message ?? null;
 }
 export async function setLossReason(trackingId: string, reason: string | null, details?: string | null) {
   await supabase.from("trackings").update({ loss_reason: reason || null, loss_details: details ?? null }).eq("id", trackingId);
@@ -1397,6 +1529,11 @@ export async function loadPotentialTotals(pre?: {
     Promise.resolve(pre?.products ?? loadProducts()).catch(() => [] as any[]),
     Promise.resolve(pre?.services ?? loadServices()).catch(() => [] as any[]),
   ]);
+  return potentialTotalsFromRows(trRows as any[], tpRows, svcRows, products as any[], services as any[]);
+}
+
+/** Potential revenue per deal from rows already read (deals, product and service lines, catalog). */
+export function potentialTotalsFromRows(trRows: any[], tpRows: any[], svcRows: any[], products: any[], services: any[]): Record<string, number> {
   const tr = { data: trRows }, tp = { data: tpRows }, svc = { data: svcRows };
   const prodById = new Map<string, any>((products as any[]).map((p) => [p.id, p]));
   const svcById = new Map<string, any>((services as any[]).map((x) => [x.id, x]));
@@ -1487,4 +1624,66 @@ export async function loadBlueprintsForServices(serviceIds: string[]): Promise<R
     (svc ?? []).forEach((s: any) => { if (s.blueprint_id) { const b = list.find((x) => x.id === s.blueprint_id); if (b) out[s.id] = b; } });
   }
   return out;
+}
+
+/* ============================ Sales: everything in one call ============================
+   The Sales page needs ~25 reads to open (deals, their lines, teams, roles, access rules,
+   pipelines and phases, people, catalog…). The database function sales_boot()
+   (empower_sales_boot.sql) returns them all in ONE request, under the same row security
+   as the separate reads. Without that function this returns null and the page reads them
+   one by one as before. */
+export interface SalesBootRows {
+  trackings: Tracking[];
+  totals: Record<string, number>;
+  teams: { members: Record<string, string[]>; owners: Record<string, string> };
+  roles: { roles: import("../extras/salesRolesApi").SalesRole[]; missing: boolean };
+  handovers: import("../extras/salesRolesApi").TrackingHandover[];
+  phaseEvents: Record<string, string[]>;
+  access: { rules: import("../extras/salesAccess").RuleMap; missing: boolean };
+  me: { id: string; role: string; is_superadmin: boolean } | null;
+  /** Only the companies behind the deals. */
+  companies: any[];
+  pipelines: any[];
+  phasesByPipeline: Record<string, any[]>;
+  profiles: any[];
+  products: any[];
+  services: any[];
+}
+/** null = not known yet, false = the database has no sales_boot() (don't ask again this visit). */
+let salesBootAvailable: boolean | null = null;
+export async function loadSalesBoot(): Promise<SalesBootRows | null> {
+  if (salesBootAvailable === false) return null;
+  const { data, error } = await supabase.rpc("sales_boot");
+  if (error || !data || typeof data !== "object") {
+    // Missing function (or not reachable): fall back for the rest of this visit.
+    salesBootAvailable = false;
+    if (error) console.info("[sales] sales_boot() not available, reading table by table:", error.message ?? error);
+    return null;
+  }
+  salesBootAvailable = true;
+  const d: any = data;
+  const arr = (k: string): any[] => (Array.isArray(d[k]) ? d[k] : []);
+  const [{ productsFromRows, servicesFromRows, calculatorsFromRows }, { phasesByPipelineFromRows }, rolesApi, { accessRulesFromRows }, { applyRolePreview }] = await Promise.all([
+    import("../../settings/catalogApi"), import("../../settings/pipelineApi"), import("../extras/salesRolesApi"),
+    import("../extras/salesAccess"), import("../../../framework/SuperAdmin"),
+  ]);
+  const calcRows = arr("calculators"), varRows = arr("calculator_variables");
+  const products = productsFromRows(arr("products"), arr("product_tiers"), arr("product_tier_durations"), calculatorsFromRows(calcRows, varRows, "product"));
+  const services = servicesFromRows(arr("services"), arr("service_roles"), calculatorsFromRows(calcRows, varRows, "service"));
+  const trackings = trackingsFromRows(arr("trackings"), arr("tracking_contacts"));
+  return {
+    trackings,
+    totals: potentialTotalsFromRows(trackings, arr("tracking_products"), arr("tracking_potential_services"), products, services),
+    teams: teamsFromRows(arr("tracking_employees")),
+    roles: { roles: arr("sales_roles").map(rolesApi.roleFrom), missing: !Array.isArray(d.sales_roles) },
+    handovers: rolesApi.handoversFromRows(arr("tracking_handovers")),
+    phaseEvents: rolesApi.phaseEventsFromRows(arr("tracking_phase_events")),
+    access: { rules: accessRulesFromRows(arr("sales_access_rules"), arr("sales_visibility")), missing: !Array.isArray(d.sales_access_rules) },
+    me: d.me ? applyRolePreview(d.me) : null,
+    companies: arr("companies"),
+    pipelines: arr("pipelines"),
+    phasesByPipeline: phasesByPipelineFromRows(arr("pipeline_phases"), arr("pipeline_links"), arr("pipeline_phase_departments"), arr("pipeline_phase_items")),
+    profiles: arr("profiles"),
+    products, services,
+  };
 }

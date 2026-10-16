@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import DatePicker from "../../../framework/DatePicker";
 import TimePicker from "../../../framework/TimePicker";
@@ -35,9 +35,9 @@ import type { Company, Contact } from "../../companies/companiesApi";
 import type { Product } from "../../settings/catalogApi";
 import type { Employee } from "../sales/SalesPage";
 import { useInactiveIds } from "../../../framework/peopleStatus";
-import { TaskPanel, FlagIcon, DueChip, PRIORITY_LABEL, STATUS_LABEL } from "../../homepage/shared/HomeTodo";
+import { TaskPanel, TaskWorkspace, TemplatePicker, FlagIcon, DueChip, PRIORITY_LABEL, STATUS_LABEL } from "../../homepage/shared/HomeTodo";
 import {
-  setTrackingPhase, setTrackingStatus, deleteTracking, setDealCloseProb, setDealCloseDate,
+  setTrackingPhase, setTrackingStatus, deleteTracking, setDealCloseProb, setDealCloseDate, setDealClosedOn,
   setLossReason, listLossReasons, addLossReason, updateLossReason, deleteLossReason, type LossReason,
   loadNotes, addNote, updateNote, deleteNote,
   loadTasks, addTask, toggleTask, updateTask, deleteTask, canDeleteTask,
@@ -53,7 +53,7 @@ import {
   createHandoffs, loadTrackingHandoffs, clientExistsForCompany, buildClientPrefill, buildAttachPrefill, hasClientProductsForTracking, listCatalogProducts, saveClientProducts, syncNewContactsToCompany, loadTrackingContactIds, setTrackingContacts, type Handoff,
   loadAssignees, addAssignee, removeAssignee,
   trackingPct,
-  TASK_PRIORITIES, type TaskPriority, type TaskKind, type MyTask,
+  TASK_PRIORITIES, loadTaskTemplates, fromTemplate, type TaskPriority, type TaskKind, type MyTask, type TaskTemplate, type TaskStep,
   type Tracking, type TrackNote, type TrackTask, type TrackMeeting, type MeetingKind, type PhaseEvent, type PotentialService, type Assignee,
   type TrackingProduct, type TermPatch, type RevenueLineFields,
 } from "../sales/salesApi";
@@ -217,6 +217,59 @@ function RevLine({ name, tag, tagClass, line, unit, minUnit, calculator, catalog
 
 /** Status shown to people: "paused" is called "hold" (the stored value stays "paused"). */
 const statusText = (s: string | null | undefined) => (s === "paused" ? "hold" : s ?? "");
+
+/**
+ * The deal's people: its contacts first, then the rest of the company's
+ * contacts (one click adds them to the deal).
+ */
+function DealPeople({ company, contacts, companyContactIds, dealIds, onChange }: {
+  company: Company | undefined; contacts: Contact[]; companyContactIds: string[]; dealIds: string[];
+  onChange: (ids: string[]) => void;
+}) {
+  const [showAll, setShowAll] = useState(false);
+  const byId = new Map(contacts.map((c) => [c.id!, c]));
+  const onDeal = dealIds.map((id) => byId.get(id)).filter((c): c is Contact => !!c);
+  const others = companyContactIds.filter((id) => !dealIds.includes(id)).map((id) => byId.get(id)).filter((c): c is Contact => !!c)
+    .sort((a, b) => `${a.first_name} ${a.last_name ?? ""}`.localeCompare(`${b.first_name} ${b.last_name ?? ""}`));
+  const othersShown = showAll ? others : others.slice(0, 3);
+  const name = (c: Contact) => [c.first_name, c.last_name].filter(Boolean).join(" ") || c.email || "Contact";
+  const ini = (c: Contact) => name(c).split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
+  const row = (c: Contact, inDeal: boolean, i: number) => (
+    <div key={c.id} className={`sl-ppl ${inDeal ? "is-deal" : ""}`} style={{ ["--i" as string]: Math.min(i, 10) } as CSSProperties}>
+      <span className="sl-ppl-av">{ini(c)}</span>
+      <span className="sl-ppl-main">
+        <b>{name(c)}{c.is_billing && <em>Billing</em>}</b>
+        {c.position && <small>{c.position}</small>}
+        {(c.email || c.phone) && (
+          <span className="sl-ppl-links">
+            {c.email && <a href={`mailto:${c.email}`} title={c.email}>{c.email}</a>}
+            {c.phone && <a href={`tel:${c.phone.replace(/\s+/g, "")}`}>{c.phone}</a>}
+          </span>
+        )}
+      </span>
+      {inDeal
+        ? <button className="sl-ppl-x" onClick={() => onChange(dealIds.filter((x) => x !== c.id))} title="Take off this deal" aria-label={`Take ${name(c)} off this deal`}>×</button>
+        : <button className="sl-ppl-add" onClick={() => onChange([...dealIds, c.id!])}>+ Add</button>}
+    </div>
+  );
+  return (
+    <section className="sl-panel sl-panel-people">
+      <div className="sl-calc-head-row">
+        <h3 className="sl-panel-title">Contacts{onDeal.length > 0 && <span>{onDeal.length}</span>}</h3>
+        {company && <span className="sl-ppl-co">{company.name}</span>}
+      </div>
+      {onDeal.length === 0 && <p className="sl-hint">No contacts on this deal yet{others.length ? " — add one from the company below." : "."}</p>}
+      <div className="sl-ppl-list">{onDeal.map((c, i) => row(c, true, i))}</div>
+      {others.length > 0 && (
+        <>
+          <span className="sl-ppl-sep">Also at {company?.name ?? "the company"}</span>
+          <div className="sl-ppl-list">{othersShown.map((c, i) => row(c, false, i))}</div>
+          {others.length > 3 && <button className="sl-ppl-more" onClick={() => setShowAll((v) => !v)}>{showAll ? "Show fewer" : `Show all ${others.length}`}</button>}
+        </>
+      )}
+    </section>
+  );
+}
 
 export default function TrackingDetail({ tracking, companies, contacts, products, employees, trackingFields = [], salesRoles = [], onBack }: {
   tracking: Tracking; companies: Company[]; contacts: Contact[]; products: Product[]; employees: Employee[];
@@ -447,6 +500,16 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   const [mgrProb, setMgrProb] = useState<number | null>(tracking.mgr_close_prob ?? null);
   const [repDate, setRepDate] = useState<string>(tracking.rep_close_date ?? "");
   const [mgrDate, setMgrDate] = useState<string>(tracking.mgr_close_date ?? "");
+  /** The day it was actually closed (won / lost). The database stamps it when the status changes; we mirror that here. */
+  const [closedOn, setClosedOn] = useState<string>(tracking.close_date ?? "");
+  const prevStatus = useRef(tracking.status);
+  useEffect(() => {
+    const was = prevStatus.current; prevStatus.current = status;
+    if (was === status) return;
+    const closed = (x: string) => x === "won" || x === "lost";
+    if (closed(status) && !closed(was) && !closedOn) { const d = new Date().toISOString().slice(0, 10); setClosedOn(d); tracking.close_date = d; }
+    if (!closed(status) && closed(was)) { setClosedOn(""); tracking.close_date = null; }
+  }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
   const repTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mgrTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveProb = (which: "rep" | "mgr", v: number | null) => {
@@ -756,11 +819,24 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   const [taskKind, setTaskKind] = useState<TaskKind>("quick");
   const [taskDue, setTaskDue] = useState("");        // date "YYYY-MM-DD"
   const [taskDueTime, setTaskDueTime] = useState("18:00");
-  const resetTaskDraft = () => { setNewTask(""); setNewTaskDesc(""); setTaskPrio("normal"); setTaskKind("quick"); setTaskDue(""); setTaskDueTime("18:00"); };
+  /** Steps and template of a task started from a predefined one (Settings → Tasks). */
+  const [taskFrom, setTaskFrom] = useState<{ template_id: string; checklist: TaskStep[] } | null>(null);
+  const [taskTemplates, setTaskTemplates] = useState<TaskTemplate[]>([]);
+  useEffect(() => { void loadTaskTemplates().then(setTaskTemplates); }, []);
+  const resetTaskDraft = () => { setNewTask(""); setNewTaskDesc(""); setTaskPrio("normal"); setTaskKind("quick"); setTaskDue(""); setTaskDueTime("18:00"); setTaskFrom(null); };
+  const pickTaskTemplate = (t: TaskTemplate) => {
+    const f = fromTemplate(t);
+    setNewTask(f.title); setNewTaskDesc(f.description); setTaskPrio(f.priority); setTaskKind(f.kind);
+    if (f.due_at) { setTaskDue(f.due_at.slice(0, 10)); setTaskDueTime(f.due_at.slice(11, 16)); }
+    setTaskFrom({ template_id: t.id, checklist: f.checklist });
+  };
   const submitTask = async () => {
     if (!cleanMentions(newTask).trim() || !taskDue) return;
     const dueIso = `${taskDue}T${taskDueTime || "00:00"}:00`;
-    const t = await addTask(tracking.id, curPhase, newTask.trim(), dueIso, { description: newTaskDesc, priority: taskPrio, kind: taskKind });
+    const t = await addTask(tracking.id, curPhase, newTask.trim(), dueIso, {
+      description: newTaskDesc, priority: taskPrio, kind: taskKind,
+      checklist: taskFrom?.checklist ?? [], template_id: taskFrom?.template_id ?? null,
+    });
     // @mentions in the name or the description tag those people.
     if (t) { setTasks((xs) => [...xs, t]); await persistFromText("task", t.id, `${newTask}\n${newTaskDesc}`); }
     resetTaskDraft();
@@ -790,6 +866,8 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   };
   // The task panel (same one as on Home): status, %, priority, progress notes.
   const [openTaskId, setOpenTaskId] = useState<string | null>(null);
+  /** The full-window task view, opened from the panel's ⤢ on this task. */
+  const [taskWindow, setTaskWindow] = useState<MyTask | null>(null);
   const openTask = tasks.find((t) => t.id === openTaskId) ?? null;
   const asMyTask = (t: TrackTask): MyTask => ({
     ...t, tracking_id: tracking.id, deal: title, company: null, assigned: false,
@@ -1134,7 +1212,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   const totalPotential = productsTotal + activePotentials.reduce(
     (s, p) => s + lineTotal(p, serviceOf(p.service_id)?.calculator as Calculator | null, undefined, serviceMin(p.service_id)), 0);
   const money = (n: number) =>
-    `\u20ac${(Number(n) || 0).toLocaleString("es-ES", { maximumFractionDigits: 0 })}`;
+    `\u20ac${(Number(n) || 0).toLocaleString("de-DE", { maximumFractionDigits: 0 })}`;
 
   /**
    * Latest state per destination pipeline. A dismissed handoff is not the same
@@ -1651,11 +1729,20 @@ export default function TrackingDetail({ tracking, companies, contacts, products
               )}
             </div>
             <div className="sl-task-add">
-              <MentionInput value={newTask} onChange={setNewTask} people={mentionPeople}
-                onMention={() => {}} placeholder="Task name... use @ to mention" />
+              <div className="sl-task-name-row">
+                <MentionInput value={newTask} onChange={setNewTask} people={mentionPeople}
+                  onMention={() => {}} placeholder="Task name... use @ to mention" />
+                {!cleanMentions(newTask).trim() && <TemplatePicker templates={taskTemplates} kind="quick" onPick={pickTaskTemplate} compact />}
+              </div>
               <div className={`sl-meet-reveal ${cleanMentions(newTask).trim() ? "is-writing" : ""}`}>
                 <MentionInput multiline value={newTaskDesc} onChange={setNewTaskDesc} people={mentionPeople} className="sl-task-desc-input"
                   onMention={() => {}} placeholder="Description (optional) — the details, what done looks like…" />
+                {taskFrom && (
+                  <div className="hs-add-from">
+                    <span>✦ From a template{taskFrom.checklist.length ? ` · ${taskFrom.checklist.length} steps` : ""}</span>
+                    <button type="button" onClick={() => setTaskFrom(null)} aria-label="Don't use the template">×</button>
+                  </div>
+                )}
                 <div className="sl-task-opts">
                   <div className="sl-task-prios" role="radiogroup" aria-label="Priority">
                     {TASK_PRIORITIES.map((p) => (
@@ -1747,7 +1834,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
                 />
                 <span className="sl-probfield-v">{repProb == null ? "—" : `${repProb}%`}</span>
                 <span className="sl-probfield-datewrap">
-                  <DatePicker value={repDate} placeholder="+ date"
+                  <DatePicker value={repDate} placeholder="+ expected"
                     onChange={(v) => { setRepDate(v); setDealCloseDate(tracking.id, "rep", v || null).catch(() => {}); }} />
                 </span>
               </div>
@@ -1776,11 +1863,30 @@ export default function TrackingDetail({ tracking, companies, contacts, products
                 <span className="sl-probfield-v">{mgrProb == null ? "—" : `${mgrProb}%`}</span>
                 <span className="sl-probfield-datewrap">
                   {canAssign ? (
-                    <DatePicker value={mgrDate} placeholder="+ date"
+                    <DatePicker value={mgrDate} placeholder="+ expected"
                       onChange={(v) => { setMgrDate(v); setDealCloseDate(tracking.id, "mgr", v || null).catch(() => {}); }} />
                   ) : (
                     <span className="sl-probfield-date-ro">{mgrDate ? new Date(mgrDate).toLocaleDateString() : "—"}</span>
                   )}
+                </span>
+              </div>
+            </div>
+            <p className="sl-probfield-note">The dates above are the <b>expected</b> close dates.</p>
+
+            <div className={`sl-probfield sl-closedon ${status === "won" ? "is-won" : status === "lost" ? "is-lost" : ""}`}>
+              <span className="sl-probfield-k">
+                Close date
+                <em>{status === "won" ? "Won" : status === "lost" ? "Lost" : "Not closed yet"}</em>
+              </span>
+              <div className="sl-probfield-row">
+                <span className="sl-closedon-txt">
+                  {closedOn
+                    ? `${status === "lost" ? "Lost" : status === "won" ? "Won" : "Closed"} on ${new Date(`${closedOn}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}`
+                    : status === "won" || status === "lost" ? "No date recorded" : "Filled in when the deal is won or lost"}
+                </span>
+                <span className="sl-probfield-datewrap">
+                  <DatePicker value={closedOn} placeholder="+ date"
+                    onChange={(v) => { setClosedOn(v); tracking.close_date = v || null; setDealClosedOn(tracking.id, v || null).catch(() => {}); }} />
                 </span>
               </div>
             </div>
@@ -1874,6 +1980,13 @@ export default function TrackingDetail({ tracking, companies, contacts, products
             </div>
             {propErr && <p className="sl-rev-err">{propErr}</p>}
           </section>
+
+          <DealPeople company={company} contacts={contacts} companyContactIds={companyContactIds}
+            dealIds={Array.from(new Set([...trackingContactIds, ...tracking.contactIds]))}
+            onChange={async (ids) => {
+              setTrackingContactIds(ids); tracking.contactIds = ids;
+              await setTrackingContacts(tracking.id, ids).catch(() => {});
+            }} />
           </div>
         </div>
       </div>
@@ -2064,8 +2177,13 @@ export default function TrackingDetail({ tracking, companies, contacts, products
             const e = await deleteTask(id);
             if (e) { window.alert(e); return; }
             setOpenTaskId(null); setTasks((xs) => xs.filter((t) => t.id !== id));
-          } : undefined} />,
+          } : undefined}
+          onExpand={() => { setTaskWindow(asMyTask(openTask)); setOpenTaskId(null); }} />,
         document.body,
+      )}
+      {taskWindow && (
+        <TaskWorkspace initialId={taskWindow.id} extra={taskWindow}
+          onClose={() => { setTaskWindow(null); void loadTasks(tracking.id).then(setTasks); }} />
       )}
     </div>
   );
@@ -2256,6 +2374,7 @@ function TaskItem({ task, people, overdue, onToggle, onEdit, onDelete, onOpen, t
             <span className={`hs-st is-${status}`}><i />{STATUS_LABEL[status]}{isProcess || progress > 0 ? ` · ${progress}%` : ""}</span>
           )}
           <DueChip dueAt={task.due_at} todayIso={todayIso} done={task.done} />
+          {(task.checklist?.length ?? 0) > 0 && <span className="htw-item-steps">{task.checklist!.filter((x) => x.done).length}/{task.checklist!.length} steps</span>}
           <span onClick={(e) => e.stopPropagation()}>{tagged}</span>
         </div>
         {isProcess && !task.done && <span className="sl-task-bar" aria-label={`${progress}% done`}><i /></span>}

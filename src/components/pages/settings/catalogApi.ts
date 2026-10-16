@@ -153,10 +153,15 @@ async function loadCalculatorsFor(ownerType: "product" | "service"): Promise<Rec
     supabase.from("calculators").select("*").eq("owner_type", ownerType),
     supabase.from("calculator_variables").select("*").order("sort").range(0, 99999),
   ]);
+  return calculatorsFromRows(calcs ?? [], vars ?? []);
+}
+
+/** Calculators by owner id, from rows already read (variables in their sort order). */
+export function calculatorsFromRows(calcRows: any[], varRows: any[], ownerType?: "product" | "service"): Record<string, Calculator> {
   const varsByCalc: Record<string, CalcVariable[]> = {};
-  (vars ?? []).forEach((v: any) => { (varsByCalc[v.calculator_id] ??= []).push(v); });
+  varRows.forEach((v: any) => { (varsByCalc[v.calculator_id] ??= []).push(v); });
   const out: Record<string, Calculator> = {};
-  (calcs ?? []).forEach((c: any) => { out[c.owner_id] = { ...c, variables: varsByCalc[c.id] ?? [] }; });
+  calcRows.forEach((c: any) => { if (!ownerType || c.owner_type === ownerType) out[c.owner_id] = { ...c, variables: varsByCalc[c.id] ?? [] }; });
   return out;
 }
 
@@ -206,13 +211,18 @@ export async function loadProducts(): Promise<Product[]> {
     supabase.from("product_tier_durations").select("*").order("sort").range(0, 99999),
     loadCalculatorsFor("product"),
   ]);
+  return productsFromRows(prods ?? [], tiers ?? [], durs ?? [], calcs);
+}
+
+/** Products with their tiers, durations and calculators, from rows already read. */
+export function productsFromRows(prods: any[], tiers: any[], durs: any[], calcs: Record<string, Calculator>): Product[] {
   const durByTier: Record<string, TierDuration[]> = {};
-  (durs ?? []).forEach((d: any) => { (durByTier[d.tier_id] ??= []).push(d); });
+  durs.forEach((d: any) => { (durByTier[d.tier_id] ??= []).push(d); });
   const tiersByProduct: Record<string, ProductTier[]> = {};
-  (tiers ?? []).forEach((t: any) => {
+  tiers.forEach((t: any) => {
     (tiersByProduct[t.product_id] ??= []).push({ ...t, durations: durByTier[t.id] ?? [] });
   });
-  return (prods ?? []).map((p: any) => ({ ...p, tiers: tiersByProduct[p.id] ?? [], calculator: calcs[p.id] ?? null }));
+  return prods.map((p: any) => ({ ...p, tiers: tiersByProduct[p.id] ?? [], calculator: calcs[p.id] ?? null }));
 }
 
 export async function loadServices(): Promise<Service[]> {
@@ -221,9 +231,14 @@ export async function loadServices(): Promise<Service[]> {
     supabase.from("service_roles").select("*").order("sort").range(0, 99999),
     loadCalculatorsFor("service"),
   ]);
+  return servicesFromRows(svcs ?? [], roles ?? [], calcs);
+}
+
+/** Services with their roles and calculators, from rows already read. */
+export function servicesFromRows(svcs: any[], roles: any[], calcs: Record<string, Calculator>): Service[] {
   const rolesBySvc: Record<string, ServiceRole[]> = {};
-  (roles ?? []).forEach((r: any) => { (rolesBySvc[r.service_id] ??= []).push({ id: r.id, role_id: r.role_id, price: r.price, sort: r.sort }); });
-  return (svcs ?? []).map((s: any) => ({ ...s, roles: rolesBySvc[s.id] ?? [], calculator: calcs[s.id] ?? null }));
+  roles.forEach((r: any) => { (rolesBySvc[r.service_id] ??= []).push({ id: r.id, role_id: r.role_id, price: r.price, sort: r.sort }); });
+  return svcs.map((s: any) => ({ ...s, roles: rolesBySvc[s.id] ?? [], calculator: calcs[s.id] ?? null }));
 }
 
 // ---- Save a product (upsert product, then replace its tiers + durations) ----

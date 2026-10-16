@@ -42,6 +42,14 @@ export interface Contact {
   notes?: string | null;
   custom?: Record<string, any>;   // values for custom contact fields, keyed by field id
   companyIds: string[]; // companies this contact belongs to
+  // built-in address, language and LinkedIn (country = ISO code "ES", language = ISO code "es")
+  street?: string | null;
+  addr_number?: string | null;
+  postal_code?: string | null;
+  city?: string | null;
+  country?: string | null;
+  language?: string | null;
+  linkedin?: string | null;
 }
 
 export interface ContactField {
@@ -175,6 +183,8 @@ export async function saveContact(c: Contact): Promise<string | null> {
   const row = {
     first_name: c.first_name, last_name: c.last_name ?? null, position: c.position ?? null,
     email: c.email ?? null, phone: c.phone ?? null, is_billing: c.is_billing ?? false, notes: c.notes ?? null,
+    street: c.street ?? null, addr_number: c.addr_number ?? null, postal_code: c.postal_code ?? null,
+    city: c.city ?? null, country: c.country ?? null, language: c.language ?? null, linkedin: c.linkedin ?? null,
     custom: c.custom ?? {},
   };
   let contactId = c.id;

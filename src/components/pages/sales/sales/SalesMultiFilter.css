@@ -29,7 +29,10 @@
   font-family: "Inter", system-ui, sans-serif; color: #0b241a;
   animation: smf-in 0.14s cubic-bezier(0.16, 1, 0.3, 1);
 }
-@keyframes smf-in { from { opacity: 0; transform: translateY(-4px); } }
+@keyframes smf-in { from { opacity: 0; transform: translateY(-6px) scale(0.98); } }
+@keyframes smf-in-up { from { opacity: 0; transform: translateY(6px) scale(0.98); } }
+.smf-menu { transform-origin: top center; }
+.smf-menu.is-up { transform-origin: bottom center; animation-name: smf-in-up; }
 .smf-search {
   flex-shrink: 0; margin: 2px 2px 6px; padding: 8px 11px; border-radius: 9px;
   border: 1px solid rgba(10, 111, 77, 0.16); font: inherit; font-size: 13px; outline: none;

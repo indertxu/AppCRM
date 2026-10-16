@@ -477,6 +477,8 @@ export default function BillingPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entries, projects, clientNames, typeNames, supRoles, status, localCutoffs, defaultCutoffDay, localMoves, adjustMap]);
 
+  /** An invoice without VAT (older rows saved without a net figure fall back to the total). */
+  const netOf = (i: Invoice) => (i.net > 0 || i.amount === 0 ? i.net : i.amount);
   const net = (b: Bill) =>
     b.lines.consultor * b.rate + b.lines.connector * b.rate + b.lines.supervision * b.supervisionRate;
   const gross = (b: Bill) => net(b) * (b.taxed ? 1 + b.taxRate / 100 : 1);
@@ -672,10 +674,10 @@ export default function BillingPanel({
       && b.period <= period
       && matchesFilters(b.clientId, b.typeId, b.legalName, b.vat));
     list = list.sort((a, b) => {
-      if (sortKey === "amount_asc") return gross(a) - gross(b);
+      if (sortKey === "amount_asc") return net(a) - net(b);
       if (sortKey === "date_asc") return a.period.localeCompare(b.period);
       if (sortKey === "date_desc") return b.period.localeCompare(a.period);
-      return gross(b) - gross(a);
+      return net(b) - net(a);
     });
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -697,12 +699,12 @@ export default function BillingPanel({
       return p ? matchesFilters(p.clientId, p.typeId, p.legalName, p.vat) : true;
     });
     return list.sort((a, b) => {
-      if (sortKey === "amount_asc") return a.amount - b.amount;
-      if (sortKey === "amount_desc") return b.amount - a.amount;
+      if (sortKey === "amount_asc") return netOf(a) - netOf(b);
+      if (sortKey === "amount_desc") return netOf(b) - netOf(a);
       if (sortKey === "date_asc") return (a.sentDate || "").localeCompare(b.sentDate || "");
       if (sortKey === "date_desc") return (b.sentDate || "").localeCompare(a.sentDate || "");
       if (sortKey === "expired") return daysLateOf(b) - daysLateOf(a);
-      return b.amount - a.amount;
+      return netOf(b) - netOf(a);
     });
   };
   const sentList = invoiceList("sent");
@@ -820,13 +822,15 @@ export default function BillingPanel({
   // ---- Totals ----
   // Header is a GLOBAL snapshot (all periods) — your standing financial
   // position — while the lists below scope to the month picked in the header.
-  const outstandingTotal = bills
-    .filter((b) => !billedBy(b.key) && b.period <= period)
-    .reduce((s, b) => s + gross(b), 0);
+  // Amounts are shown WITHOUT VAT, like Management → Team, so the two agree;
+  // the VAT appears as a small note. Invoices still store and charge the total.
+  const outstandingBills = bills.filter((b) => !billedBy(b.key) && b.period <= period);
+  const outstandingTotal = outstandingBills.reduce((s, b) => s + net(b), 0);
+  const outstandingVat = outstandingBills.reduce((s, b) => s + gross(b) - net(b), 0);
   const outstandingCount = bills.filter((b) => !billedBy(b.key) && b.period <= period).length;
   // Header snapshot AS OF the selected month.
-  const sentTotal = invoices.filter((i) => wasSentBy(i) && !wasPaidBy(i)).reduce((s, i) => s + i.amount, 0);
-  const paidTotal = invoices.filter((i) => wasPaidBy(i)).reduce((s, i) => s + i.amount, 0);
+  const sentTotal = invoices.filter((i) => wasSentBy(i) && !wasPaidBy(i)).reduce((s, i) => s + netOf(i), 0);
+  const paidTotal = invoices.filter((i) => wasPaidBy(i)).reduce((s, i) => s + netOf(i), 0);
   const overdueCount = invoices.filter((i) => wasSentBy(i) && !wasPaidBy(i) && daysLateOf(i) > 0).length;
 
   const nextRun = (() => {
@@ -1002,7 +1006,10 @@ export default function BillingPanel({
               )}
             </span>
             <b className="bn-val is-xl"><BnCount value={outstandingTotal} fmt={eur} /><em>€</em></b>
-            <small className="bn-kpi-sub">{outstandingCount} {outstandingCount === 1 ? "invoice" : "invoices"} ready to send</small>
+            <small className="bn-kpi-sub">
+              {outstandingCount} {outstandingCount === 1 ? "invoice" : "invoices"} ready to send · excl. VAT
+              {outstandingVat > 0.005 && <span className="bn-vat-note"> (+{eur(outstandingVat)} € VAT)</span>}
+            </small>
           </div>
 
           <div className="bn-kpi is-collected" data-spot="tilt" style={bnVars({ "--i": 1 })}>
@@ -1203,7 +1210,10 @@ export default function BillingPanel({
                         {b.contact?.email ? (<><b>{b.contact.email}</b><small>{b.contact.name}</small></>) : <small>No billing contact</small>}
                       </span>
                       <span className="bn-num"><b>{totalDays.toFixed(2)}<em>{unitOf(b.projectId)}</em></b></span>
-                      <span className="bn-num is-amt"><b>{eur(gross(b))} €</b></span>
+                      <span className="bn-num is-amt">
+                        <b>{eur(net(b))} €</b>
+                        {b.taxed && b.taxRate > 0 && <small className="bn-amt-vat">{eur(gross(b))} € incl. VAT</small>}
+                      </span>
                       <span className="bn-chev"><BnIcon d={BN_ICON.chev} w={2.4} /></span>
                     </button>
                     {isOpen && (
@@ -1336,7 +1346,8 @@ export default function BillingPanel({
                         </span>
 
                         <span className="bn-num is-amt">
-                          <b>{eur(inv.amount)} €</b>
+                          <b>{eur(netOf(inv))} €</b>
+                          {inv.amount - netOf(inv) > 0.005 && <small className="bn-amt-vat">{eur(inv.amount)} € incl. VAT</small>}
                           {mismatch && (
                             <span className="bn-mismatch" title={`Entries now sum to ${liveDays.toFixed(2)}${u} / ${eur(liveAmount)} €`}>
                               Entries: {eur(liveAmount)} €

@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 import Select from "../../framework/Select";
 import DatePicker from "../../framework/DatePicker";
@@ -17,10 +18,16 @@ import ContactImport from "./ContactImport";
 import ContactExport from "./ContactExport";
 import SalesMultiFilter from "../sales/sales/SalesMultiFilter";
 import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
+import {
+  PROFILE_FIELDS, isRequired, isProfileKey, missingProfile, tidyProfile, formatAddress,
+  languageOptions, languageName, countryOptions, countryLabel, withProfileCodes, normalizeLinkedIn, isLinkedIn, linkedInHandle, isReservedLabel,
+  type ProfileKey,
+} from "./contactProfile";
 import "./ContactsPage.css";
 
 const empty = (): Contact => ({
   first_name: "", last_name: "", position: "", email: "", phone: "", is_billing: false, notes: "", companyIds: [],
+  street: "", addr_number: "", postal_code: "", city: "", country: "", language: "", linkedin: "",
 });
 
 const fullName = (c: Contact) => [c.first_name, c.last_name].filter(Boolean).join(" ") || "Unnamed";
@@ -75,6 +82,8 @@ export default function ContactsPage() {
   const lead = isSalesLead(me);
 
   const companyName = (id: string) => companies.find((c) => c.id === id)?.name ?? "—";
+  // Company pill in the list → that company on the Companies page, with its panel open.
+  const openCompany = (id: string) => navigate("/companies", { state: { focusCompanyId: id } });
 
   // All columns the user can pick from: fixed ones + custom fields.
   const availableColumns = [
@@ -82,6 +91,12 @@ export default function ContactsPage() {
     { key: "email", label: "Email" },
     { key: "phone", label: "Phone" },
     { key: "companies", label: "Companies" },
+    { key: "address", label: "Address" },
+    { key: "city", label: "City" },
+    { key: "postal_code", label: "Postal code" },
+    { key: "country", label: "Country" },
+    { key: "language", label: "Language" },
+    { key: "linkedin", label: "LinkedIn" },
     ...fields.map((f) => ({ key: f.id, label: f.label })),
   ];
   const columnLabel = (key: string) => availableColumns.find((c) => c.key === key)?.label ?? key;
@@ -98,9 +113,21 @@ export default function ContactsPage() {
     if (key === "companies") return c.companyIds.length === 0
       ? <span className="ct-lmuted">—</span>
       : <span className="ct-lcompanies">
-          {c.companyIds.slice(0, 2).map((id) => <span key={id} className="ct-chip">{companyName(id)}</span>)}
+          {c.companyIds.slice(0, 2).map((id) => (
+            <span key={id} className="ct-chip is-link" role="link" tabIndex={0} title={`Open ${companyName(id)}`}
+              onClick={(e) => { e.stopPropagation(); openCompany(id); }}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); openCompany(id); } }}>
+              {companyName(id)}
+            </span>
+          ))}
           {c.companyIds.length > 2 && <span className="ct-chip ct-chip-more">+{c.companyIds.length - 2}</span>}
         </span>;
+    // built-in profile fields
+    if (key === "address") return <span className="ct-lmuted">{formatAddress(c) || "—"}</span>;
+    if (key === "language") return <span className="ct-lmuted">{c.language ? languageName(c.language) : "—"}</span>;
+    if (key === "country") return <span className="ct-lmuted">{c.country ? countryLabel(c.country) : "—"}</span>;
+    if (key === "linkedin") return <span className="ct-lemail" title={c.linkedin ?? ""}>{c.linkedin ? linkedInHandle(c.linkedin) : "—"}</span>;
+    if (isProfileKey(key)) return <span className="ct-lmuted">{(c as any)[key] || "—"}</span>;
     // custom field
     const f = fieldById(key);
     const v = (c.custom ?? {})[key];
@@ -114,6 +141,8 @@ export default function ContactsPage() {
   // The "type" of any filterable field, fixed or custom.
   const fieldType = (key: string): "text" | "number" | "date" | "boolean" | "select" => {
     if (key === "email" || key === "position" || key === "phone" || key === "companies" || key === "name") return "text";
+    if (key === "country" || key === "language") return "select";
+    if (key === "address" || isProfileKey(key)) return "text";
     if (key === "imported_at") return "date";
     if (key === "imported_by") return "select";
     return fieldById(key)?.type ?? "text";
@@ -125,6 +154,8 @@ export default function ContactsPage() {
     if (key === "email") return c.email ?? "";
     if (key === "phone") return c.phone ?? "";
     if (key === "companies") return c.companyIds.map(companyName).join(", ");
+    if (key === "address") return formatAddress(c);
+    if (isProfileKey(key)) return (c as any)[key] ?? "";
     // import provenance (stamped by the database; filterable, never shown on the contact)
     if (key === "imported_by") return (c as any).imported_by ?? "";
     if (key === "imported_at") return (c as any).imported_at ?? "";
@@ -152,6 +183,10 @@ export default function ContactsPage() {
     ? companies.map((co) => ({ value: co.id as string, label: co.name })).sort((a, b) => a.label.localeCompare(b.label))
     : key === "imported_by"
     ? employees.filter((e) => contacts.some((c) => (c as any).imported_by === e.id)).map((e) => ({ value: e.id, label: e.name }))
+    : key === "country"
+    ? [...new Set(contacts.map((c) => c.country).filter(Boolean) as string[])].map((v) => ({ value: v, label: countryLabel(v) })).sort((a, b) => a.label.localeCompare(b.label))
+    : key === "language"
+    ? [...new Set(contacts.map((c) => c.language).filter(Boolean) as string[])].map((v) => ({ value: v, label: languageName(v) })).sort((a, b) => a.label.localeCompare(b.label))
     : (fieldById(key)?.options ?? []).map((o) => ({ value: o, label: o }));
   const dayIso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   const dateWindow = (action: string, ctrl: { min?: string; max?: string }): [string, string] | null => {
@@ -241,7 +276,7 @@ export default function ContactsPage() {
     const n = norm(q.trim());
     if (!n) return true;
     const companyNames = c.companyIds.map(companyName).join(" ");
-    return [fullName(c), c.position, c.email, companyNames].some((v) => norm(v ?? "").includes(n));
+    return [fullName(c), c.position, c.email, c.city, companyNames].some((v) => norm(v ?? "").includes(n));
   }).sort((a, b) => {
     // Compound sort: control 1 is primary, control 2 breaks ties.
     const r1 = cmp(a, b, ctrl1);
@@ -269,7 +304,7 @@ export default function ContactsPage() {
         <span className="ct-kpi"><b>{shown.length}</b>{shown.length === 1 ? "contact" : "contacts"}</span>
         <div className="ct-search">
           <span className="ct-search-ico">⌕</span>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, position or company…" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, position, company or city…" />
           {q && <button onClick={() => setQ("")}>×</button>}
         </div>
         <div className="ct-cfilter">
@@ -296,7 +331,7 @@ export default function ContactsPage() {
               {ctl.c.action === "in" && (
                 <div className="ct-fvals">
                   <SalesMultiFilter values={ctl.c.values ?? []} onChange={(v) => ctl.set({ ...ctl.c, values: v })}
-                    options={choicesFor(ctl.c.field)} placeholder="Choose…" searchFrom={7} noun={ctl.c.field === "companies" ? "companies" : ctl.c.field === "imported_by" ? "people" : "options"} />
+                    options={choicesFor(ctl.c.field)} placeholder="Choose…" searchFrom={7} noun={ctl.c.field === "companies" ? "companies" : ctl.c.field === "imported_by" ? "people" : ctl.c.field === "country" ? "countries" : ctl.c.field === "language" ? "languages" : "options"} />
                 </div>
               )}
               {ctl.c.action === "contains" && (
@@ -366,6 +401,7 @@ export default function ContactsPage() {
           onClose={() => setEditing(null)}
           onSaved={async () => { setEditing(null); await reload(); }}
           onDeleted={async () => { setEditing(null); await reload(); }}
+          onOpenCompany={openCompany}
         />
       )}
 
@@ -401,21 +437,26 @@ export default function ContactsPage() {
   );
 }
 
-function ContactEditor({ contact, companies, employees, fields, canAssign, assigned, onClose, onSaved, onDeleted }: {
+function ContactEditor({ contact, companies, employees, fields, canAssign, assigned, onClose, onSaved, onDeleted, onOpenCompany }: {
   contact: Contact; companies: Company[]; employees: Employee[]; fields: ContactField[]; canAssign: boolean; assigned: string[];
   onClose: () => void; onSaved: () => void; onDeleted: () => void;
+  /** Open a company on the Companies page. */
+  onOpenCompany: (id: string) => void;
 }) {
-  const [c, setC] = useState<Contact>(contact);
+  // old free-text values ("España", "Español") become codes as soon as the contact is opened
+  const [c, setC] = useState<Contact>(() => withProfileCodes(contact));
+  const [initial] = useState(() => JSON.stringify(withProfileCodes(contact)));
   const [who, setWho] = useState<string[]>(assigned);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const set = (patch: Partial<Contact>) => setC((x) => ({ ...x, ...patch }));
 
+  const { closing, close } = useDrawerClose(onClose);
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [close]);
 
   const companyName = (id: string) => companies.find((x) => x.id === id)?.name ?? "—";
   const available = companies.filter((co) => !c.companyIds.includes(co.id!));
@@ -426,8 +467,23 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
     setC((x) => ({ ...x, custom: { ...(x.custom ?? {}), [fieldId]: value } }));
   const customVal = (fieldId: string) => (c.custom ?? {})[fieldId];
 
+  // Built-in fields: a "*" when required, and the pick lists (built once).
+  const req = (k: ProfileKey) => (isRequired(k) ? <span className="dw-req"> *</span> : null);
+  const [langOpts] = useState(() => [{ value: "__none", label: "— Not set" }, ...languageOptions()]);
+  const [countryOpts] = useState(() => countryOptions());
+  // A country typed in by an import that isn't in the list still shows (and can be replaced).
+  const countryChoices = c.country && !countryOpts.some((o) => o.value === c.country)
+    ? [{ value: c.country, label: `${c.country} (as imported)` }, ...countryOpts] : countryOpts;
+  const langChoices = c.language && !langOpts.some((o) => o.value === c.language)
+    ? [langOpts[0], { value: c.language, label: `${c.language} (as imported)` }, ...langOpts.slice(1)] : langOpts;
+
   const save = async () => {
     if (!c.first_name.trim()) { setErr("A first name is required."); return; }
+    // Built-in required fields (address…).
+    const missing = missingProfile(c);
+    if (missing.length) { setErr(`Please fill in: ${missing.join(", ")}.`); return; }
+    const linkedin = normalizeLinkedIn(c.linkedin);
+    if (linkedin && !isLinkedIn(linkedin)) { setErr("LinkedIn: paste the profile link (linkedin.com/in/…)."); return; }
     // Enforce required custom fields.
     for (const f of fields) {
       if (!f.required) continue;
@@ -436,150 +492,227 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
       if (empty) { setErr(`"${f.label}" is required.`); return; }
     }
     setBusy(true); setErr(null);
-    const e = await saveContact(c);
-    if (!e && c.id) await setContactAssignees(c.id, who).catch(() => {});
+    const toSave: Contact = { ...c, ...tidyProfile(c) };
+    const e = await saveContact(toSave);
+    // saveContact fills in the id of a new contact on the object it was given
+    if (!e && toSave.id) await setContactAssignees(toSave.id, who).catch(() => {});
     setBusy(false);
-    if (e) setErr(e); else onSaved();
+    if (e) setErr(e); else close(onSaved);
   };
   const remove = async () => {
-    if (!c.id) return onClose();
+    if (!c.id) return close();
     if (!confirm(`Delete "${[c.first_name, c.last_name].filter(Boolean).join(" ")}" permanently?`)) return;
     await deleteContact(c.id);
-    onDeleted();
+    close(onDeleted);
   };
 
+  // ---- the panel: a hero on top, a section index on the left that follows the scroll ----
+  const { bodyRef, active, goTo } = useDrawerSections("person");
+  const displayName = [c.first_name, c.last_name].filter(Boolean).join(" ");
+  const initials = [c.first_name, c.last_name].map((x) => (x ?? "").trim()[0] ?? "").join("").toUpperCase();
+  const missing = missingProfile(c);
+  const li = normalizeLinkedIn(c.linkedin);
+  const sections: DwNavItem[] = [
+    { k: "person", label: "Person", icon: "person" },
+    { k: "reach", label: "Contact details", icon: "mail" },
+    { k: "address", label: "Address", icon: "pin", warn: missing.length > 0 },
+    { k: "companies", label: "Companies", icon: "building", count: c.companyIds.length },
+    ...(canAssign ? [{ k: "access", label: "Visibility", icon: "lock", count: who.length }] : []),
+    ...(fields.length ? [{ k: "custom", label: "Additional details", icon: "sliders" }] : []),
+    { k: "notes", label: "Notes", icon: "note" },
+  ];
+
   return (
-    <div className="dw-backdrop" onMouseDown={onClose}>
-      <div className="dw" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-        <div className="dw-head">
-          <div>
-            <span className="dw-eyebrow">{c.id ? "Edit contact" : "New contact"}</span>
-            <h2 className="dw-title">{[c.first_name, c.last_name].filter(Boolean).join(" ") || "New contact"}</h2>
-          </div>
-          <button className="dw-x" onClick={onClose}>×</button>
-        </div>
-
-        <div className="dw-body">
-          <div className="dw-sec">
-            <p className="dw-sec-title">Person</p>
-            <div className="dw-grid">
-              <div className="dw-f"><label>First name *</label>
-                <input value={c.first_name} onChange={(e) => set({ first_name: e.target.value })} />
-              </div>
-              <div className="dw-f"><label>Last name</label>
-                <input value={c.last_name ?? ""} onChange={(e) => set({ last_name: e.target.value })} />
-              </div>
-              <div className="dw-f dw-col2"><label>Position / title</label>
-                <input value={c.position ?? ""} onChange={(e) => set({ position: e.target.value })} placeholder="e.g. CFO" />
-              </div>
-              <div className="dw-f"><label>Email</label>
-                <input value={c.email ?? ""} onChange={(e) => set({ email: e.target.value })} />
-              </div>
-              <div className="dw-f"><label>Phone</label>
-                <input value={c.phone ?? ""} onChange={(e) => set({ phone: e.target.value })} />
-              </div>
+    <div className={`dw-backdrop ${closing ? "is-closing" : ""}`} onMouseDown={() => close()}>
+      <div className="dw is-wide" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={displayName || "New contact"}>
+        <header className="dw-hero">
+          <span className="dw-hero-av is-round">{initials || "+"}</span>
+          <div className="dw-hero-txt">
+            <span className="dw-eyebrow">{c.id ? "Contact" : "New contact"}</span>
+            <h2 className="dw-title">{displayName || "New contact"}</h2>
+            <p className="dw-hero-sub">{[c.position, c.companyIds.map(companyName).join(", ")].filter(Boolean).join(" · ") || "Fill in the details below"}</p>
+            <div className="dw-hero-tags">
+              {c.email && <a className="dw-tag" href={`mailto:${c.email}`}><DwIcon name="mail" />{c.email}</a>}
+              {c.phone && <a className="dw-tag" href={`tel:${c.phone.replace(/\s+/g, "")}`}><DwIcon name="phone" />{c.phone}</a>}
+              {isLinkedIn(li) && <a className="dw-tag" href={li} target="_blank" rel="noreferrer"><DwIcon name="link" />LinkedIn</a>}
+              {(c.city || c.country) && <span className="dw-tag"><DwIcon name="pin" />{[c.city, c.country ? countryLabel(c.country) : ""].filter(Boolean).join(", ")}</span>}
+              {c.language && <span className="dw-tag"><DwIcon name="globe" />{languageName(c.language)}</span>}
+              {c.is_billing && <span className="dw-tag is-ok"><DwIcon name="euro" />Billing contact</span>}
+              {missing.length > 0 && <button type="button" className="dw-tag is-warn" onClick={() => goTo("address")}>Address incomplete</button>}
             </div>
           </div>
+          <button className="dw-x" onClick={() => close()} aria-label="Close">×</button>
+        </header>
 
-          <div className="dw-sec">
-            <div className="dw-toggle">
-              <div className="dw-toggle-txt">
-                <b>Billing contact</b>
-                <span>Mark if invoices should go to this person.</span>
+        <div className="dw-layout">
+          <DwNav items={sections} active={active} onGo={goTo} />
+
+          <div className="dw-body" ref={bodyRef}>
+            <section className="dw-sec" data-sec="person" data-tone="green">
+              <DwSecHead icon="person" title="Person" hint="Who they are and what they do" />
+              <div className="dw-grid">
+                <div className="dw-f"><label>First name<span className="dw-req"> *</span></label>
+                  <input value={c.first_name} onChange={(e) => set({ first_name: e.target.value })} placeholder="e.g. Ana" />
+                </div>
+                <div className="dw-f"><label>Last name</label>
+                  <input value={c.last_name ?? ""} onChange={(e) => set({ last_name: e.target.value })} placeholder="e.g. López García" />
+                </div>
+                <div className="dw-f dw-col2"><label>Position / title</label>
+                  <input value={c.position ?? ""} onChange={(e) => set({ position: e.target.value })} placeholder="e.g. CFO" />
+                </div>
               </div>
-              <button type="button" role="switch" aria-checked={c.is_billing}
-                className={`dw-switch ${c.is_billing ? "on" : ""}`}
-                onClick={() => set({ is_billing: !c.is_billing })}>
-                <span className="dw-switch-knob" />
-              </button>
-            </div>
-          </div>
+              <div className="dw-toggle">
+                <span className="dw-toggle-ico"><DwIcon name="euro" /></span>
+                <div className="dw-toggle-txt">
+                  <b>Billing contact</b>
+                  <span>Invoices go to this person.</span>
+                </div>
+                <button type="button" role="switch" aria-checked={!!c.is_billing}
+                  className={`dw-switch ${c.is_billing ? "on" : ""}`}
+                  onClick={() => set({ is_billing: !c.is_billing })}>
+                  <span className="dw-switch-knob" />
+                </button>
+              </div>
+            </section>
 
-          <div className="dw-sec">
-            <p className="dw-sec-title">Companies</p>
-            <div className="dw-chips">
-              {c.companyIds.map((id) => (
-                <span key={id} className="dw-chip">{companyName(id)}<button onClick={() => removeCompany(id)} aria-label="Remove">×</button></span>
-              ))}
-            </div>
-            {c.companyIds.length === 0 && <p className="dw-empty-hint">Not linked to any company (optional).</p>}
-            {available.length > 0 && (
-              <Select value="" onChange={(v) => v && addCompany(v)} placeholder="+ Link a company"
-                options={available.map((co) => ({ value: co.id!, label: co.name }))} />
-            )}
-          </div>
+            <section className="dw-sec" data-sec="reach" data-tone="blue">
+              <DwSecHead icon="mail" title="Contact details" hint="How to reach them, and in which language" />
+              <div className="dw-grid">
+                <div className="dw-f"><label>Email</label>
+                  <input type="email" value={c.email ?? ""} onChange={(e) => set({ email: e.target.value })} placeholder="name@company.com" />
+                </div>
+                <div className="dw-f"><label>Phone</label>
+                  <input value={c.phone ?? ""} onChange={(e) => set({ phone: e.target.value })} placeholder="+34 600 000 000" />
+                </div>
+                <div className="dw-f"><label>LinkedIn{req("linkedin")}</label>
+                  <input value={c.linkedin ?? ""} placeholder="linkedin.com/in/…"
+                    onChange={(e) => set({ linkedin: e.target.value })}
+                    onBlur={(e) => set({ linkedin: normalizeLinkedIn(e.target.value) })} />
+                </div>
+                <div className="dw-f"><label>Language{req("language")}</label>
+                  <ProfilePicker value={c.language || "__none"} options={langChoices} placeholder="Choose a language…"
+                    onChange={(v) => set({ language: v === "__none" ? "" : v })} />
+                </div>
+              </div>
+            </section>
 
-          {canAssign && (
-            <div className="dw-sec">
-              <p className="dw-sec-title">Who can see this contact</p>
+            <section className="dw-sec" data-sec="address" data-tone="amber">
+              <DwSecHead icon="pin" title="Address" hint="Where they are — needed to save the contact"
+                aside={missing.length ? <span className="dw-pill is-warn">{missing.length} missing</span> : <span className="dw-pill is-ok">Complete</span>} />
+              <div className="dw-grid is-3">
+                <div className="dw-f dw-col2"><label>Street{req("street")}</label>
+                  <input value={c.street ?? ""} onChange={(e) => set({ street: e.target.value })} placeholder="e.g. Calle de Alcalá" />
+                </div>
+                <div className="dw-f"><label>Number{req("addr_number")}</label>
+                  <input value={c.addr_number ?? ""} onChange={(e) => set({ addr_number: e.target.value })} placeholder="e.g. 42, 3º B" />
+                </div>
+                <div className="dw-f"><label>Postal code{req("postal_code")}</label>
+                  <input value={c.postal_code ?? ""} onChange={(e) => set({ postal_code: e.target.value })} placeholder="e.g. 28014" />
+                </div>
+                <div className="dw-f"><label>City{req("city")}</label>
+                  <input value={c.city ?? ""} onChange={(e) => set({ city: e.target.value })} placeholder="e.g. Madrid" />
+                </div>
+                <div className="dw-f"><label>Country{req("country")}</label>
+                  <ProfilePicker value={c.country ?? ""} options={countryChoices} placeholder="Choose a country…"
+                    onChange={(v) => set({ country: v })} />
+                </div>
+              </div>
+            </section>
+
+            <section className="dw-sec" data-sec="companies" data-tone="indigo">
+              <DwSecHead icon="building" title="Companies" hint="Where they work — a contact can belong to several"
+                aside={c.companyIds.length ? <span className="dw-pill">{c.companyIds.length}</span> : undefined} />
               <div className="dw-chips">
-                {who.map((id) => (
-                  <span key={id} className="dw-chip">
-                    {employees.find((e) => e.id === id)?.name ?? "Unknown"}
-                    <button onClick={() => setWho((xs) => xs.filter((x) => x !== id))} aria-label="Remove">×</button>
+                {c.companyIds.map((id) => (
+                  <span key={id} className="dw-chip is-link">
+                    <button type="button" className="dw-chip-go" title={`Open ${companyName(id)} in Companies`}
+                      onClick={() => { if (JSON.stringify(c) !== initial && !confirm("Leave this contact without saving your changes?")) return; close(() => onOpenCompany(id)); }}>
+                      <DwIcon name="building" />{companyName(id)}<span className="dw-chip-arrow"><DwIcon name="arrow" /></span>
+                    </button>
+                    <button onClick={() => removeCompany(id)} aria-label="Remove">×</button>
                   </span>
                 ))}
               </div>
-              {who.length === 0 && (
-                <p className="dw-empty-hint">Only boss and sales managers can see it. Add people to widen access.</p>
+              {c.companyIds.length === 0 && <p className="dw-empty-hint">Not linked to any company yet (optional).</p>}
+              {available.length > 0 && (
+                <Select value="" onChange={(v) => v && addCompany(v)} placeholder="+ Link a company"
+                  options={available.map((co) => ({ value: co.id!, label: co.name }))} />
               )}
-              {employees.filter((e) => !who.includes(e.id)).length > 0 && (
-                <Select value="" onChange={(v) => v && setWho((xs) => [...xs, v])} placeholder="+ Give access to"
-                  options={employees.filter((e) => !who.includes(e.id)).map((e) => ({ value: e.id, label: e.name }))} />
-              )}
-            </div>
-          )}
+            </section>
 
-          {fields.length > 0 && (
-            <div className="dw-sec">
-              <p className="dw-sec-title">Additional details</p>
-              <div className="dw-grid">
-                {fields.map((f) => (
-                  <div className="dw-f dw-col2" key={f.id}>
-                    <label>{f.label}{f.required && <span className="dw-req"> *</span>}</label>
-                    {f.type === "text" && (
-                      <input value={customVal(f.id) ?? ""} onChange={(e) => setCustom(f.id, e.target.value)} />
-                    )}
-                    {f.type === "number" && (
-                      <input type="number" value={customVal(f.id) ?? ""} onFocus={(e) => e.target.select()}
-                        onChange={(e) => setCustom(f.id, e.target.value === "" ? "" : Number(e.target.value))} />
-                    )}
-                    {f.type === "date" && (
-                      <DatePicker value={customVal(f.id) ?? ""} onChange={(v) => setCustom(f.id, v)} />
-                    )}
-                    {f.type === "boolean" && (
-                      <button type="button" role="switch" aria-checked={!!customVal(f.id)}
-                        className={`dw-switch ${customVal(f.id) ? "on" : ""}`}
-                        onClick={() => setCustom(f.id, !customVal(f.id))}>
-                        <span className="dw-switch-knob" />
-                      </button>
-                    )}
-                    {f.type === "select" && (
-                      <Select value={customVal(f.id) ?? ""} onChange={(v) => setCustom(f.id, v)}
-                        placeholder="Select…"
-                        options={[{ value: "", label: "—" }, ...f.options.map((o) => ({ value: o, label: o }))]} />
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+            {canAssign && (
+              <section className="dw-sec" data-sec="access" data-tone="violet">
+                <DwSecHead icon="lock" title="Visibility" hint="Who in the team can see this contact" />
+                <div className="dw-chips">
+                  {who.map((id) => (
+                    <span key={id} className="dw-chip">
+                      <DwIcon name="person" />{employees.find((e) => e.id === id)?.name ?? "Unknown"}
+                      <button onClick={() => setWho((xs) => xs.filter((x) => x !== id))} aria-label="Remove">×</button>
+                    </span>
+                  ))}
+                </div>
+                {who.length === 0 && (
+                  <p className="dw-empty-hint">Only boss and sales managers can see it. Add people to widen access.</p>
+                )}
+                {employees.filter((e) => !who.includes(e.id)).length > 0 && (
+                  <Select value="" onChange={(v) => v && setWho((xs) => [...xs, v])} placeholder="+ Give access to"
+                    options={employees.filter((e) => !who.includes(e.id)).map((e) => ({ value: e.id, label: e.name }))} />
+                )}
+              </section>
+            )}
 
-          <div className="dw-sec">
-            <p className="dw-sec-title">Notes</p>
-            <textarea className="dw-area" value={c.notes ?? ""} onChange={(e) => set({ notes: e.target.value })} placeholder="Anything worth remembering…" />
+            {fields.length > 0 && (
+              <section className="dw-sec" data-sec="custom" data-tone="slate">
+                <DwSecHead icon="sliders" title="Additional details" hint="Your own fields — set them up in Fields & columns" />
+                <div className="dw-grid">
+                  {fields.map((f) => (
+                    <div className={`dw-f ${f.type === "text" || f.type === "select" ? "dw-col2" : ""}`} key={f.id}>
+                      <label>{f.label}{f.required && <span className="dw-req"> *</span>}</label>
+                      {f.type === "text" && (
+                        <input value={customVal(f.id) ?? ""} onChange={(e) => setCustom(f.id, e.target.value)} />
+                      )}
+                      {f.type === "number" && (
+                        <input type="number" value={customVal(f.id) ?? ""} onFocus={(e) => e.target.select()}
+                          onChange={(e) => setCustom(f.id, e.target.value === "" ? "" : Number(e.target.value))} />
+                      )}
+                      {f.type === "date" && (
+                        <DatePicker value={customVal(f.id) ?? ""} onChange={(v) => setCustom(f.id, v)} />
+                      )}
+                      {f.type === "boolean" && (
+                        <button type="button" role="switch" aria-checked={!!customVal(f.id)}
+                          className={`dw-switch ${customVal(f.id) ? "on" : ""}`}
+                          onClick={() => setCustom(f.id, !customVal(f.id))}>
+                          <span className="dw-switch-knob" />
+                        </button>
+                      )}
+                      {f.type === "select" && (
+                        <Select value={customVal(f.id) ?? ""} onChange={(v) => setCustom(f.id, v)}
+                          placeholder="Select…"
+                          options={[{ value: "", label: "—" }, ...f.options.map((o) => ({ value: o, label: o }))]} />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            <section className="dw-sec" data-sec="notes" data-tone="rose">
+              <DwSecHead icon="note" title="Notes" hint="Anything worth remembering about this person" />
+              <textarea className="dw-area" value={c.notes ?? ""} onChange={(e) => set({ notes: e.target.value })} placeholder="How you met, what they care about, next steps…" />
+            </section>
           </div>
-
-          {err && <p className="dw-err">{err}</p>}
         </div>
 
-        <div className="dw-foot">
+        <footer className="dw-foot">
           {c.id && <button className="dw-del" onClick={remove}>Delete</button>}
+          <span className={`dw-foot-note ${err ? "is-err" : missing.length ? "is-warn" : ""}`}>
+            {err ?? (missing.length ? `Still missing: ${missing.join(", ")}` : c.id ? "Everything required is filled in." : "Nothing is saved until you click Save.")}
+          </span>
           <div className="dw-foot-right">
-            <button className="dw-cancel" onClick={onClose}>Cancel</button>
-            <button className="dw-save" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save contact"}</button>
+            <button className="dw-cancel" onClick={() => close()}>Cancel</button>
+            <button className="dw-save" onClick={save} disabled={busy}>{busy ? "Saving…" : c.id ? "Save changes" : "Create contact"}</button>
           </div>
-        </div>
+        </footer>
       </div>
     </div>
   );
@@ -602,6 +735,7 @@ function FieldSettings({ fields, availableColumns, columns, onColumns, onClose, 
   const [type, setType] = useState<ContactField["type"]>("text");
   const [required, setRequired] = useState(false);
   const [optionsText, setOptionsText] = useState("");
+  const [addErr, setAddErr] = useState<string | null>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -613,6 +747,8 @@ function FieldSettings({ fields, availableColumns, columns, onColumns, onClose, 
 
   const add = async () => {
     if (!label.trim()) return;
+    if (isReservedLabel(label)) { setAddErr(`“${label.trim()}” is already a built-in field on every contact.`); return; }
+    setAddErr(null);
     setBusy(true);
     const options = type === "select" ? optionsText.split(",").map((s) => s.trim()).filter(Boolean) : [];
     await addContactField({ label: label.trim(), type, required, options, sort: items.length });
@@ -685,7 +821,22 @@ function FieldSettings({ fields, availableColumns, columns, onColumns, onClose, 
           </div>
 
           <div className="dw-sec">
-            <p className="dw-sec-title">Current fields</p>
+            <p className="dw-sec-title">Built-in fields</p>
+            <div className="cf-list">
+              {PROFILE_FIELDS.map((f) => (
+                <div className="cf-row is-builtin" key={f.key}>
+                  <div className="cf-row-main">
+                    <span className="cf-row-name">{f.label}</span>
+                    <span className="cf-row-type">{f.key === "language" ? "Language list" : f.key === "country" ? "Country list" : f.key === "linkedin" ? "LinkedIn link" : "Text"} · on every contact</span>
+                  </div>
+                  {f.required && <span className="cf-col-tag">required</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="dw-sec">
+            <p className="dw-sec-title">Your custom fields</p>
             {items.length === 0 ? (
               <p className="dw-empty-hint">No custom fields yet. Add one below.</p>
             ) : (
@@ -710,7 +861,7 @@ function FieldSettings({ fields, availableColumns, columns, onColumns, onClose, 
             <p className="dw-sec-title">Add a field</p>
             <div className="dw-grid">
               <div className="dw-f dw-col2"><label>Field name</label>
-                <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. LinkedIn, Birthday, VIP" />
+                <input value={label} onChange={(e) => { setLabel(e.target.value); setAddErr(null); }} placeholder="e.g. Birthday, VIP, Source" />
               </div>
               <div className="dw-f"><label>Type</label>
                 <Select value={type} onChange={(v) => setType(v as ContactField["type"])}
@@ -734,6 +885,7 @@ function FieldSettings({ fields, availableColumns, columns, onColumns, onClose, 
                 </div>
               )}
             </div>
+            {addErr && <p className="dw-err">{addErr}</p>}
             <button className="dw-save cf-add" onClick={add} disabled={busy || !label.trim()}>{busy ? "Adding…" : "+ Add field"}</button>
           </div>
         </div>
@@ -746,4 +898,225 @@ function FieldSettings({ fields, availableColumns, columns, onColumns, onClose, 
       </div>
     </div>
   );
+}
+
+// ============================ Searchable picker (country, language) ============================
+/**
+ * Searchable single-choice picker for long lists (countries, languages) inside
+ * the contact editor. The list opens attached to the field (below, or above when
+ * there's no room), follows it when the editor scrolls, and scrolls on its own
+ * with the mouse wheel. Keyboard: ↑ ↓ Enter, Esc closes only the list.
+ */
+interface PickOption { value: string; label: string }
+
+interface Pos { left: number; width: number; top?: number; bottom?: number; maxH: number }
+
+function ProfilePicker({ value, options, onChange, placeholder = "Choose…" }: {
+  value: string;
+  options: PickOption[];
+  onChange: (value: string) => void;
+  placeholder?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [hi, setHi] = useState(0);
+  const [pos, setPos] = useState<Pos | null>(null);
+  const trigRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  const current = options.find((o) => o.value === value);
+  const shown = useMemo(() => {
+    const n = norm(q.trim());
+    return n ? options.filter((o) => norm(o.label).includes(n) || norm(o.value) === n) : options;
+  }, [q, options]);
+
+  const place = () => {
+    const r = trigRef.current?.getBoundingClientRect();
+    if (!r) return;
+    const below = window.innerHeight - r.bottom - 12, above = r.top - 12;
+    const width = Math.max(r.width, 260);
+    const left = Math.max(8, Math.min(r.left, window.innerWidth - width - 8));
+    if (below >= 240 || below >= above) setPos({ left, width, top: r.bottom + 4, maxH: Math.max(160, Math.min(340, below)) });
+    else setPos({ left, width, bottom: window.innerHeight - r.top + 4, maxH: Math.max(160, Math.min(340, above)) });
+  };
+  const openMenu = () => {
+    place(); setQ("");
+    setHi(Math.max(0, options.findIndex((o) => o.value === value)));
+    setOpen(true);
+  };
+  const pick = (v: string) => { onChange(v); setOpen(false); trigRef.current?.focus(); };
+
+  // close on a click outside; follow the field when anything around it scrolls or resizes
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (!menuRef.current?.contains(t) && !trigRef.current?.contains(t)) setOpen(false);
+    };
+    const onMove = (e: Event) => { if (!menuRef.current?.contains(e.target as Node)) place(); };
+    // capture phase: the editor stops mousedown from bubbling, so a normal listener would never hear it
+    document.addEventListener("mousedown", onDown, true);
+    window.addEventListener("scroll", onMove, true);
+    window.addEventListener("resize", onMove);
+    return () => {
+      document.removeEventListener("mousedown", onDown, true);
+      window.removeEventListener("scroll", onMove, true);
+      window.removeEventListener("resize", onMove);
+    };
+  }, [open]);
+
+  // keep the highlighted row visible (also shows the current choice when the list opens)
+  useEffect(() => {
+    if (open) listRef.current?.querySelector<HTMLElement>(`[data-i="${hi}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [hi, open]);
+
+  const onKey = (e: ReactKeyboardEvent) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); setHi((i) => Math.min(shown.length - 1, i + 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setHi((i) => Math.max(0, i - 1)); }
+    else if (e.key === "Enter") { e.preventDefault(); if (shown[hi]) pick(shown[hi].value); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setOpen(false); trigRef.current?.focus(); }
+    else if (e.key === "Tab") setOpen(false);
+  };
+
+  return (
+    <>
+      <button ref={trigRef} type="button" className={`pp-trigger ${open ? "is-open" : ""} ${current ? "" : "is-empty"}`}
+        aria-haspopup="listbox" aria-expanded={open}
+        onClick={() => (open ? setOpen(false) : openMenu())}
+        onKeyDown={(e) => { if (!open && (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ")) { e.preventDefault(); openMenu(); } }}>
+        <span>{current?.label ?? placeholder}</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+      </button>
+      {open && pos && createPortal(
+        <div ref={menuRef} className="pp-menu" role="listbox" onMouseDown={(e) => e.stopPropagation()}
+          style={{ left: pos.left, width: pos.width, top: pos.top, bottom: pos.bottom, maxHeight: pos.maxH }}>
+          <input className="pp-search" autoFocus value={q} placeholder="Search…" aria-label="Search"
+            onChange={(e) => { setQ(e.target.value); setHi(0); }} onKeyDown={onKey} />
+          <div ref={listRef} className="pp-list">
+            {shown.map((o, i) => (
+              <button type="button" key={o.value} data-i={i} role="option" aria-selected={o.value === value}
+                className={`pp-opt ${i === hi ? "is-hi" : ""} ${o.value === value ? "is-on" : ""}`}
+                onMouseEnter={() => setHi(i)} onClick={() => pick(o.value)}>
+                <span>{o.label}</span>{o.value === value && <b>✓</b>}
+              </button>
+            ))}
+            {!shown.length && <p className="pp-empty">No matches</p>}
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
+// ============================ Side panel building blocks ============================
+// (Same look on Contacts and Companies — the styles are in CompaniesPage.css, "Drawer editor".)
+const DW_ICON: Record<string, string> = {
+  person: "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
+  users: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8",
+  mail: "M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM3 7l9 6 9-6",
+  phone: "M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2z",
+  link: "M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7",
+  pin: "M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21zM12 12.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z",
+  globe: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18",
+  building: "M3 21h18M5 21V7l7-4 7 4v14M9 21v-4h6v4M9 9h.01M15 9h.01M9 13h.01M15 13h.01",
+  lock: "M6 11h12a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1zM8 11V7a4 4 0 0 1 8 0v4",
+  sliders: "M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1M15 4v4M9 10v4M17 16v4",
+  note: "M6 3h9l4 4v14H6zM14 3v5h5M9 13h7M9 17h5",
+  euro: "M17.5 7.5a6 6 0 1 0 0 9M5 10.5h9M5 13.5h9",
+  id: "M3 5h18v14H3zM7 10h4M7 14h6M15 10h2.5M15 14h2.5",
+  arrow: "M5 12h13M13 6l6 6-6 6",
+};
+function DwIcon({ name }: { name: string }) {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={DW_ICON[name] ?? ""} /></svg>;
+}
+/** Section title: coloured icon tile, name, one line saying what goes there, optional badge on the right. */
+function DwSecHead({ icon, title, hint, aside }: { icon: string; title: string; hint: string; aside?: ReactNode }) {
+  return (
+    <div className="dw-sec-h">
+      <span className="dw-sec-ico"><DwIcon name={icon} /></span>
+      <div className="dw-sec-h-txt"><h3>{title}</h3><p>{hint}</p></div>
+      {aside && <div className="dw-sec-aside">{aside}</div>}
+    </div>
+  );
+}
+interface DwNavItem { k: string; label: string; icon: string; count?: number; warn?: boolean }
+/** The section index on the left of the panel. */
+function DwNav({ items, active, onGo }: { items: DwNavItem[]; active: string; onGo: (k: string) => void }) {
+  // a white pill that slides to the active section
+  const ref = useRef<HTMLElement>(null);
+  const [ink, setInk] = useState<{ top: number; height: number } | null>(null);
+  useLayoutEffect(() => {
+    const el = ref.current?.querySelector<HTMLElement>(".dw-nav-item.is-on");
+    if (el) setInk({ top: el.offsetTop, height: el.offsetHeight });
+  }, [active, items.length]);
+  return (
+    <nav className="dw-nav" aria-label="Sections" ref={ref}>
+      {ink && <span className="dw-nav-ink" style={{ top: ink.top, height: ink.height }} aria-hidden="true" />}
+      <span className="dw-nav-k">Sections</span>
+      {items.map((s, i) => (
+        <button key={s.k} type="button" className={`dw-nav-item ${active === s.k ? "is-on" : ""}`} style={{ ["--n" as string]: i } as CSSProperties} onClick={() => onGo(s.k)}>
+          <i><DwIcon name={s.icon} /></i>
+          <span>{s.label}</span>
+          {s.warn ? <b className="dw-dot" title="Required fields missing" /> : s.count ? <em>{s.count}</em> : null}
+        </button>
+      ))}
+    </nav>
+  );
+}
+/** Which section is on screen (for the index), and smooth-scroll to one. Sections are marked with data-sec. */
+function useDrawerSections(first: string) {
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [active, setActive] = useState(first);
+  const lock = useRef<string | null>(null);
+  const unlock = useRef(0);
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body) return;
+    const onScroll = () => {
+      // while it scrolls to a section picked in the index, the index stays on that one
+      if (lock.current) { window.clearTimeout(unlock.current); unlock.current = window.setTimeout(() => { lock.current = null; }, 140); return; }
+      const secs = Array.from(body.querySelectorAll<HTMLElement>("[data-sec]"));
+      if (!secs.length) return;
+      const line = body.getBoundingClientRect().top + 90;
+      let cur = secs[0].dataset.sec!;
+      for (const s of secs) if (s.getBoundingClientRect().top <= line) cur = s.dataset.sec!;
+      if (body.scrollTop + body.clientHeight >= body.scrollHeight - 4) cur = secs[secs.length - 1].dataset.sec!;
+      setActive(cur);
+    };
+    onScroll();
+    body.addEventListener("scroll", onScroll, { passive: true });
+    return () => body.removeEventListener("scroll", onScroll);
+  }, []);
+  const goTo = (k: string) => {
+    setActive(k);
+    const body = bodyRef.current;
+    const el = body?.querySelector<HTMLElement>(`[data-sec="${k}"]`);
+    if (!body || !el) return;
+    lock.current = k;
+    window.clearTimeout(unlock.current);
+    unlock.current = window.setTimeout(() => { lock.current = null; }, 700); // in case nothing needs to scroll
+    // scroll only the panel's body (scrollIntoView would also nudge the panel itself)
+    const top = el.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop - 18;
+    body.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+    // a short glow so the eye lands on it
+    el.classList.remove("is-flash"); void el.offsetWidth; el.classList.add("is-flash");
+    window.setTimeout(() => el.classList.remove("is-flash"), 1200);
+  };
+  return { bodyRef, active, goTo };
+}
+/** Plays the panel's closing animation, then runs `after` (or onClose). */
+function useDrawerClose(onClose: () => void) {
+  const [closing, setClosing] = useState(false);
+  const cb = useRef(onClose);
+  cb.current = onClose;
+  const busy = useRef(false);
+  const close = useRef((after?: () => void) => {
+    if (busy.current) return;
+    busy.current = true; setClosing(true);
+    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    window.setTimeout(() => (after ?? cb.current)(), reduce ? 0 : 280);
+  }).current;
+  return { closing, close };
 }

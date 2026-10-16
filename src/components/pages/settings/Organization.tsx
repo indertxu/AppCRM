@@ -951,13 +951,54 @@ function UserPanel({
   const [reasonNote, setReasonNote] = useState("");
   const [empBusy, setEmpBusy] = useState(false);
   const [empErr, setEmpErr] = useState<string | null>(null);
+  /**
+   * Work in their calendar that was never confirmed (planned, not cancelled,
+   * not a meeting). After the last day it's removed when they're laid off;
+   * up to the last day we ask: confirm it as worked, or remove it.
+   */
+  const [unconfirmed, setUnconfirmed] = useState<{ date: string }[] | null>(null);
+  const [beforeAction, setBeforeAction] = useState<"remove" | "confirm" | "keep">("remove");
+  const [settleBusy, setSettleBusy] = useState(false);
+  const [settleDone, setSettleDone] = useState<string | null>(null);
+  const [settleAsk, setSettleAsk] = useState<"remove" | "confirm" | null>(null);
+  const loadUnconfirmed = useCallback(async () => {
+    const { data, error } = await supabase.from("calendar_entries").select("id, entry_date, status, kind").eq("user_id", user.id);
+    if (error) { setUnconfirmed([]); return; }
+    setUnconfirmed(((data ?? []) as any[])
+      .filter((r) => r.status !== "confirmed" && r.status !== "cancelled" && r.kind !== "meeting")
+      .map((r) => ({ date: String(r.entry_date ?? "").slice(0, 10) })));
+  }, [user.id]);
+  useEffect(() => { setUnconfirmed(null); setSettleDone(null); setSettleAsk(null); if (layoff || !user.active) void loadUnconfirmed(); }, [layoff, user.active, user.id, loadUnconfirmed]);
+  const daysOf = (rows: { date: string }[]) => new Set(rows.map((r) => r.date)).size;
+  const plannedAfterRows = (unconfirmed ?? []).filter((r) => r.date > lastDay);
+  const plannedBeforeRows = (unconfirmed ?? []).filter((r) => r.date <= lastDay);
+  const plannedAfter = unconfirmed ? { entries: plannedAfterRows.length, days: daysOf(plannedAfterRows) } : null;
+  const settle = async (action: "remove" | "confirm"): Promise<string | null> => {
+    const { data, error } = await supabase.rpc("settle_unconfirmed_work", { p_user: user.id, p_action: action });
+    if (error) return /settle_unconfirmed_work|does not exist|schema cache/i.test(error.message) ? "Run empower_layoff_planned.sql in Supabase first, then try again." : error.message;
+    const n = Number(data) || 0;
+    setSettleDone(action === "remove" ? `${n} planned ${n === 1 ? "entry" : "entries"} removed.` : `${n} ${n === 1 ? "entry" : "entries"} confirmed as worked.`);
+    return null;
+  };
+  const settleNow = async (action: "remove" | "confirm") => {
+    setSettleBusy(true); setEmpErr(null);
+    const e = await settle(action);
+    setSettleBusy(false); setSettleAsk(null);
+    if (e) setEmpErr(e); else await loadUnconfirmed();
+  };
   const manager = users.find((u) => u.id === user.manager_id) ?? null;
   const prettyDay = (iso: string) => new Date(`${iso}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
   const confirmLayOff = async () => {
     setEmpBusy(true); setEmpErr(null);
     const e = await onLayOff(user.id, lastDay, [reason, reasonNote.trim()].filter(Boolean).join(" — "));
+    if (e) { setEmpBusy(false); setEmpErr(e); return; }
+    // Days up to the last day that were never confirmed: what was picked above.
+    if (plannedBeforeRows.length && beforeAction !== "keep") {
+      const e2 = await settle(beforeAction);
+      if (e2) setEmpErr(e2);
+    }
     setEmpBusy(false);
-    if (e) setEmpErr(e); else setLayoff(false);
+    setLayoff(false);
   };
   const doReactivate = async () => {
     setEmpBusy(true); setEmpErr(null);
@@ -984,6 +1025,33 @@ function UserPanel({
           <em>Hidden from the map and the people lists. Their past work keeps their name.</em>
         </div>
       )}
+      {!user.active && (unconfirmed?.length || settleDone) ? (
+        <div className={`org-unconf is-former ${settleDone && !unconfirmed?.length ? "is-done" : ""}`}>
+          {unconfirmed && unconfirmed.length > 0 ? (
+            <>
+              <b>{unconfirmed.length} planned {unconfirmed.length === 1 ? "entry" : "entries"} never confirmed</b>
+              <span>
+                {daysOf(unconfirmed)} {daysOf(unconfirmed) === 1 ? "day" : "days"}, {prettyDay(unconfirmed.map((r) => r.date).sort()[0])} – {prettyDay(unconfirmed.map((r) => r.date).sort().at(-1)!)}.
+                {" "}They still count as planned in Management.
+              </span>
+              {settleAsk ? (
+                <div className="org-unconf-ask">
+                  <span>{settleAsk === "remove" ? "Remove them for good?" : "Count them as worked days?"}</span>
+                  <button className="org-layoff-cancel" onClick={() => setSettleAsk(null)} disabled={settleBusy}>Cancel</button>
+                  <button className={settleAsk === "remove" ? "org-layoff-go" : "org-unconf-confirm"} onClick={() => settleNow(settleAsk)} disabled={settleBusy}>
+                    {settleBusy ? "…" : settleAsk === "remove" ? "Remove" : "Confirm"}
+                  </button>
+                </div>
+              ) : (
+                <div className="org-unconf-btns">
+                  <button className="org-unconf-remove" onClick={() => setSettleAsk("remove")}>Remove them</button>
+                  <button className="org-unconf-confirm" onClick={() => setSettleAsk("confirm")}>Confirm as worked</button>
+                </div>
+              )}
+            </>
+          ) : <span className="org-unconf-ok">✓ {settleDone}</span>}
+        </div>
+      ) : null}
 
       <span className="org-section-label">Identity</span>
       <div className="org-field-row">
@@ -1119,8 +1187,26 @@ function UserPanel({
                   <li>Can't sign in any more — logged out of every device right away.</li>
                   <li>Disappears from the map and the people lists from {prettyDay(lastDay)}; earlier weeks still show them.</li>
                   <li>Their deals, hours, notes and history are kept, with their name.</li>
+                  <li className={plannedAfter?.entries ? "is-warn" : ""}>
+                    {plannedAfter?.entries
+                      ? <><b>{plannedAfter.entries} planned {plannedAfter.entries === 1 ? "entry" : "entries"} on {plannedAfter.days} {plannedAfter.days === 1 ? "day" : "days"}</b> after {prettyDay(lastDay)} {plannedAfter.entries === 1 ? "is" : "are"} removed — {plannedAfter.entries === 1 ? "it stops" : "they stop"} counting in Management, the backlog and forecasts. Confirmed hours stay.</>
+                      : <>Anything still planned for them after {prettyDay(lastDay)} is removed; confirmed hours stay.</>}
+                  </li>
                   {reportsCount > 0 && <li><b>{reportsCount} {reportsCount === 1 ? "person reports" : "people report"} to them</b> — they'll report to {manager ? nameOf(manager) : "no one"} instead.</li>}
                 </ul>
+                {plannedBeforeRows.length > 0 && (
+                  <div className="org-unconf">
+                    <b>{plannedBeforeRows.length} planned {plannedBeforeRows.length === 1 ? "entry" : "entries"} up to {prettyDay(lastDay)} {plannedBeforeRows.length === 1 ? "was" : "were"} never confirmed</b>
+                    <span>{daysOf(plannedBeforeRows)} {daysOf(plannedBeforeRows) === 1 ? "day" : "days"}, {prettyDay(plannedBeforeRows.map((r) => r.date).sort()[0])} – {prettyDay(plannedBeforeRows.map((r) => r.date).sort().at(-1)!)}. What should happen to them?</span>
+                    <div className="org-unconf-opts" role="radiogroup">
+                      {([["remove", "Remove them", "They didn't happen"], ["confirm", "Confirm as worked", "Count them as real"], ["keep", "Leave as planned", "Decide later"]] as const).map(([v, l, h]) => (
+                        <button key={v} role="radio" aria-checked={beforeAction === v} className={beforeAction === v ? "is-on" : ""} onClick={() => setBeforeAction(v)}>
+                          <i /><span><b>{l}</b><small>{h}</small></span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {empErr && <p className="org-emp-err">{empErr}</p>}
                 <div className="org-layoff-actions">
                   <button className="org-layoff-cancel" onClick={() => setLayoff(false)} disabled={empBusy}>Cancel</button>

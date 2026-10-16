@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Outlet } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { Outlet, useLocation } from "react-router-dom";
 import Dock from "./Dock";
 import { supabase } from "../api/supabase";
 import { useAuth } from "../api/AuthProvider";
@@ -47,10 +47,41 @@ export default function AppLayout() {
     })();
   }, [uid]);
 
+  // Is the page behind the pinned dock dark (Sales, Management…) or light?
+  // The dock takes the same glass as that page's own cards.
+  const pageRef = useRef<HTMLDivElement>(null);
+  const location = useLocation();
+  const [onDark, setOnDark] = useState(false);
+  useEffect(() => {
+    const host = pageRef.current;
+    if (!host) return;
+    const check = () => {
+      const el = host.firstElementChild as HTMLElement | null;
+      const bg = el ? getComputedStyle(el).backgroundColor : "";
+      const m = bg.match(/rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?/);
+      if (!m || (m[4] !== undefined && Number(m[4]) < 0.5)) { setOnDark(false); return; }
+      const lum = (0.2126 * Number(m[1]) + 0.7152 * Number(m[2]) + 0.0722 * Number(m[3])) / 255;
+      setOnDark(lum < 0.35);
+    };
+    check();
+    const mo = new MutationObserver(check);
+    mo.observe(host, { childList: true });
+    let watched: Element | null = null;
+    const watchFirst = () => {
+      const el = host.firstElementChild;
+      if (el && el !== watched) { watched = el; mo.observe(el, { attributes: true, attributeFilter: ["class", "style"] }); }
+    };
+    watchFirst();
+    const mo2 = new MutationObserver(() => { watchFirst(); check(); });
+    mo2.observe(host, { childList: true });
+    const t = window.setTimeout(check, 400);
+    return () => { mo.disconnect(); mo2.disconnect(); window.clearTimeout(t); };
+  }, [location.pathname]);
+
   return (
     <PageAccessProvider>
-    <div className={`app-shell ${pinned ? "dock-pinned" : ""} ${labels ? "dock-labels" : ""}`}>
-      <div className="app-page">
+    <div className={`app-shell ${pinned ? "dock-pinned" : ""} ${labels ? "dock-labels" : ""} ${pinned && onDark ? "dock-on-dark" : ""}`}>
+      <div className="app-page" ref={pageRef}>
         <Outlet />
       </div>
       <Dock />

@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { supabase } from "../../../api/supabase";
 import type { Phase } from "../../settings/pipelineApi";
-import { setTrackingOwner, type Tracking } from "../sales/salesApi";
+import { setTrackingOwner, allRows, type Tracking } from "../sales/salesApi";
 
 /**
  * Sales roles decide who sees which deals.
@@ -43,7 +43,7 @@ export type DealScope = "all" | "own";
 
 export const ROLE_COLORS = ["#1fb98a", "#3c9ae0", "#e0a43c", "#8b6fd6", "#e0574b", "#2bb3c0", "#c46a9a", "#5b8f3e"];
 
-const roleFrom = (r: any): SalesRole => ({
+export const roleFrom = (r: any): SalesRole => ({
   id: r.id, name: r.name ?? "", color: r.color ?? null, sort: r.sort ?? 0,
   members: Array.isArray(r.members) ? r.members : [],
   scopes: (Array.isArray(r.scopes) ? r.scopes : []).map((s: any) => ({
@@ -74,25 +74,22 @@ export async function deleteSalesRole(id: string): Promise<string | null> {
 }
 
 export async function loadHandovers(): Promise<TrackingHandover[]> {
-  const out: any[] = [];
-  for (let from = 0; ; from += 1000) {
-    const { data, error } = await supabase.from("tracking_handovers").select("*").order("created_at").range(from, from + 999);
-    if (error || !data) break;
-    out.push(...data);
-    if (data.length < 1000) break;
-  }
-  return out.map((h) => ({ ...h, from_ids: h.from_ids ?? [], snapshot: h.snapshot ?? {} })) as TrackingHandover[];
+  // Every page, the later ones in parallel (see allRows).
+  const rows = await allRows(() => supabase.from("tracking_handovers").select("*").order("created_at").order("id"));
+  return handoversFromRows(rows);
 }
+export const handoversFromRows = (rows: any[]): TrackingHandover[] =>
+  rows.map((h) => ({ ...h, from_ids: h.from_ids ?? [], snapshot: h.snapshot ?? {} })) as TrackingHandover[];
 
 /** Every phase each deal has entered (used to place won / lost deals). */
 export async function loadAllPhaseEvents(): Promise<Record<string, string[]>> {
+  // A fixed order, so parallel pages never skip or repeat a row (rows that tie are identical anyway).
+  const rows = await allRows(() => supabase.from("tracking_phase_events").select("tracking_id, phase_id").order("tracking_id").order("phase_id"));
+  return phaseEventsFromRows(rows);
+}
+export function phaseEventsFromRows(rows: any[]): Record<string, string[]> {
   const out: Record<string, string[]> = {};
-  for (let from = 0; ; from += 1000) {
-    const { data, error } = await supabase.from("tracking_phase_events").select("tracking_id, phase_id").range(from, from + 999);
-    if (error || !data) break;
-    data.forEach((r: any) => { if (r.tracking_id && r.phase_id) (out[r.tracking_id] ??= []).push(r.phase_id); });
-    if (data.length < 1000) break;
-  }
+  rows.forEach((r: any) => { if (r.tracking_id && r.phase_id) (out[r.tracking_id] ??= []).push(r.phase_id); });
   return out;
 }
 

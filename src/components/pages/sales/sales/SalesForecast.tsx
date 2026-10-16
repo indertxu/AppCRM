@@ -40,7 +40,7 @@ interface Item {
 
 const pad = (n: number) => String(n).padStart(2, "0");
 const isoOf = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-const eur = (n: number) => `${Math.round(n).toLocaleString("es-ES")} €`;
+const eur = (n: number) => `${Math.round(n).toLocaleString("de-DE")} €`;
 const monthTitle = (key: string) => {
   const [y, m] = key.split("-").map(Number);
   return new Date(y, m - 1, 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
@@ -116,7 +116,7 @@ function TopCard({ i, tone, icon, label, value, unit, sub, share, title }: {
       </span>
       <span className="so-kpi-body">
         <span className="so-kpi-txt">
-          <b className="so-kpi-val">{Math.round(v).toLocaleString("es-ES")}{unit && <em className="so-kpi-unit">{unit}</em>}</b>
+          <b className="so-kpi-val">{Math.round(v).toLocaleString("de-DE")}{unit && <em className="so-kpi-unit">{unit}</em>}</b>
           <small>{sub}</small>
         </span>
       </span>
@@ -330,7 +330,7 @@ export default function SalesForecast({
       <TopCard i={2} tone="active" icon={ICON.next} label="Next 90 days" value={next90} unit="€"
         sub={`weighted, closing by ${next90By}`} share={weighted ? next90 / weighted : 0} title="Weighted value expected to close in the next 90 days" />
       <TopCard i={3} tone="lost" icon={ICON.clock} label="Overdue" value={overdue.length}
-        sub={overdue.length ? `${eur(overdueValue)} past its close date` : "nothing late"}
+        sub={overdue.length ? `${eur(overdueValue)} past its expected close date` : "nothing late"}
         share={open.length ? overdue.length / open.length : 0} title="Open deals whose expected close date has passed" />
     </>,
     slot,
@@ -364,7 +364,7 @@ export default function SalesForecast({
       {months.length === 0 ? (
         <div className="fc-empty">
           <p>No deals with an expected close date match these filters.</p>
-          <span>Widen the Close date in “Any range”, or set a close date on a deal.</span>
+          <span>Widen the Expected close date in “Any range”, or set one on a deal.</span>
         </div>
       ) : (
         <div className={`fc-line is-${group}`} key={group}>
@@ -377,7 +377,7 @@ export default function SalesForecast({
       {undated.length > 0 && (
         <section className="fc-undated">
           <header>
-            <b>No close date</b>
+            <b>No expected close date</b>
             <span>{undated.length} open {undated.length === 1 ? "deal isn't" : "deals aren't"} on the timeline · {eur(undated.reduce((s, i) => s + i.value, 0))}</span>
           </header>
           <div className="fc-chips">

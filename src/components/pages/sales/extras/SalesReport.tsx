@@ -385,15 +385,15 @@ export default function SalesReport(p: Props) {
     const next = [...cfg.charts]; [next[i], next[j]] = [next[j], next[i]]; set("charts", next);
   };
   const dimOptions = useMemo(() => [
-    { value: "time:week", label: "Close date · by week" }, { value: "time:month", label: "Close date · by month" }, { value: "time:quarter", label: "Close date · by quarter" },
+    { value: "time:week", label: "Expected close · by week" }, { value: "time:month", label: "Expected close · by month" }, { value: "time:quarter", label: "Expected close · by quarter" },
     { value: "created:month", label: "Created · by month" }, { value: "created:quarter", label: "Created · by quarter" },
     ...fields.filter((f) => f.group !== "contact" && (f.kind === "enum" || f.key === "deal.company")).map((f) => ({ value: f.key, label: `${GROUP_LABEL[f.group]} · ${f.label}` })),
   ], [fields]);
 
   /** Dates a report can be placed / filtered by: the built-in ones plus any custom date field. */
   const dateFieldOptions = useMemo(() => [
-    { value: "deal.close", label: "Est. close date" }, { value: "deal.rep_close_date", label: "Sales close date" },
-    { value: "deal.mgr_close_date", label: "Management close date" }, { value: "deal.created", label: "Deal created" },
+    { value: "deal.close", label: "Expected close date" }, { value: "deal.rep_close_date", label: "Expected close · sales" },
+    { value: "deal.mgr_close_date", label: "Expected close · management" }, { value: "deal.close_date", label: "Close date" }, { value: "deal.created", label: "Deal created" },
     ...fields.filter((f) => f.key.startsWith("deal.custom.") && f.kind === "date").map((f) => ({ value: f.key, label: f.label })),
   ], [fields]);
 

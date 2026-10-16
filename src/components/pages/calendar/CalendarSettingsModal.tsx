@@ -522,10 +522,6 @@ export default function CalendarSettingsModal({
             )}
           </div>
         ) : null}
-
-        <div className="cws-foot">
-          <button className="cws-done" onClick={onClose}>Close</button>
-        </div>
       </div>
     </div>
   );

@@ -9,6 +9,7 @@ import CatalogPage from "./CatalogPage";
 import PipelinePage from "./PipelinePage";
 import ProposalTemplateEditor from "./ProposalTemplateEditor";
 import PageAccessModal from "./PageAccessModal";
+import TaskSettings from "./TaskSettings";
 import { usePageAccess } from "../../framework/pageAccess";
 import { SuperAdminSwitch } from "../../framework/SuperAdmin";
 import { connectOutlook, completeOutlookConnect, outlookStatus, disconnectOutlook, outlookConnectError, OUTLOOK_CONNECTION_EVENT } from "../../api/outlookSync";
@@ -16,7 +17,7 @@ import "./SettingsPage.css";
 
 const levelLabel = (id: string | null) => LEVELS.find((l) => l.id === id)?.label ?? id ?? "—";
 
-type View = "home" | "users" | "organization" | "account" | "interface" | "catalog" | "pipeline" | "proposal";
+type View = "home" | "users" | "organization" | "account" | "interface" | "catalog" | "pipeline" | "proposal" | "tasks";
 /** Which Page-access panel opens each view (Settings → Organization → Page access → Settings). */
 const VIEW_PANEL: Partial<Record<View, string>> = {
   organization: "settings.organization",
@@ -321,6 +322,20 @@ export default function SettingsPage() {
             </button>
           )}
 
+          <button className="nav-card" style={{ ["--accent" as any]: "#5b6ee1" }} onClick={() => setView("tasks")}>
+            <span className="nav-card-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M9 6h11M9 12h11M9 18h11" /><path d="M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2" />
+              </svg>
+            </span>
+            <span className="nav-card-title">Tasks</span>
+            <span className="nav-card-sub">Predefined tasks &amp; processes, and when a task becomes a process</span>
+            <span className="nav-card-spacer" />
+            <span className="nav-card-go">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+            </span>
+          </button>
+
           <button className="nav-card" style={{ ["--accent" as any]: "#e0a13c" }} onClick={() => setView("interface")}>
             <span className="nav-card-icon">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -402,6 +417,11 @@ export default function SettingsPage() {
         <PipelinePage onBack={() => setView("home")} />
       </div>
     );
+  }
+
+  // ---- Tasks: quick → process rule, predefined tasks & processes ----
+  if (view === "tasks") {
+    return <TaskSettings onBack={() => setView("home")} canManage={canManage || isSuperadmin === true} />;
   }
 
   // ---- Proposal template ----

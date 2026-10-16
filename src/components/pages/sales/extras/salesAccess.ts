@@ -58,19 +58,24 @@ export const jobLabel = (r?: string | null) => (r ? r.split("_").map((w, i) => (
  * folded in where a person has no scope of their own yet.
  */
 export async function loadAccessRules(): Promise<{ rules: RuleMap; missing: boolean }> {
-  const out: RuleMap = {};
   // Both tables at once (one round trip instead of two).
   const [{ data, error }, legacy] = await Promise.all([
     supabase.from("sales_access_rules").select("subject_type, subject_id, settings"),
     supabase.from("sales_visibility").select("profile_id, scope"),
   ]);
-  (data ?? []).forEach((r: any) => { out[ruleKey(r.subject_type, String(r.subject_id))] = (r.settings ?? {}) as AccessSettings; });
-  ((legacy as any).data ?? []).forEach((r: any) => {
+  return { rules: accessRulesFromRows(data ?? [], (legacy as any).data ?? []), missing: !!error };
+}
+
+/** The rules from rows already read (Sales reads them in one call with everything else). */
+export function accessRulesFromRows(ruleRows: any[], legacyRows: any[]): RuleMap {
+  const out: RuleMap = {};
+  ruleRows.forEach((r: any) => { out[ruleKey(r.subject_type, String(r.subject_id))] = (r.settings ?? {}) as AccessSettings; });
+  legacyRows.forEach((r: any) => {
     if (r.scope !== "all" && r.scope !== "own") return;
     const k = ruleKey("user", r.profile_id);
     if (!out[k]?.scope) out[k] = { ...(out[k] ?? {}), scope: r.scope };
   });
-  return { rules: out, missing: !!error };
+  return out;
 }
 
 const clean = (s: AccessSettings): AccessSettings => {

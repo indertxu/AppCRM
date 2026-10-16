@@ -185,12 +185,32 @@ async function loadPhaseRows(pipelineId?: string) {
     supabase.from("pipeline_phase_departments").select("*").range(0, 9999),
     supabase.from("pipeline_phase_items").select("*").range(0, 9999),
   ]);
+  return shapePhaseRows(phaseRows ?? [], linkRows ?? [], deptRows ?? [], itemRows ?? []);
+}
+
+/** Phase rows (with their departments and items) and arrows, shaped — from whatever read them. */
+function shapePhaseRows(phaseRows: any[], linkRows: any[], deptRows: any[], itemRows: any[]) {
   const deptByPhase: Record<string, string[]> = {};
-  (deptRows ?? []).forEach((d: any) => { (deptByPhase[d.phase_id] ??= []).push(d.dept_key); });
+  deptRows.forEach((d: any) => { (deptByPhase[d.phase_id] ??= []).push(d.dept_key); });
   const itemsByPhase: Record<string, { type: "product" | "service"; id: string }[]> = {};
-  (itemRows ?? []).forEach((i: any) => { (itemsByPhase[i.phase_id] ??= []).push({ type: i.item_type, id: i.item_id }); });
-  const phases: Phase[] = (phaseRows ?? []).map((p: any) => phaseFrom(p, deptByPhase, itemsByPhase));
-  return { phases, links: (linkRows ?? []) as PipelineLink[] };
+  itemRows.forEach((i: any) => { (itemsByPhase[i.phase_id] ??= []).push({ type: i.item_type, id: i.item_id }); });
+  const phases: Phase[] = phaseRows.map((p: any) => phaseFrom(p, deptByPhase, itemsByPhase));
+  return { phases, links: linkRows as PipelineLink[] };
+}
+
+/** Every pipeline's phases in flow order, from rows already read (Sales reads them in one call). */
+export function phasesByPipelineFromRows(phaseRows: any[], linkRows: any[], deptRows: any[], itemRows: any[]): Record<string, Phase[]> {
+  return groupPhases(shapePhaseRows(phaseRows, linkRows, deptRows, itemRows));
+}
+
+function groupPhases({ phases, links }: { phases: Phase[]; links: PipelineLink[] }): Record<string, Phase[]> {
+  const phasesBy: Record<string, Phase[]> = {};
+  const linksBy: Record<string, PipelineLink[]> = {};
+  phases.forEach((p) => { (phasesBy[p.pipeline_id] ??= []).push(p); });
+  links.forEach((l: any) => { (linksBy[l.pipeline_id] ??= []).push(l); });
+  const out: Record<string, Phase[]> = {};
+  Object.keys(phasesBy).forEach((id) => { out[id] = orderPhases(phasesBy[id], linksBy[id] ?? []); });
+  return out;
 }
 
 export async function loadPipeline(pipelineId: string): Promise<{ phases: Phase[]; links: PipelineLink[] }> {
@@ -200,14 +220,7 @@ export async function loadPipeline(pipelineId: string): Promise<{ phases: Phase[
 
 /** Every pipeline's phases, in order, keyed by pipeline id — one round trip for all of them. */
 export async function loadPhasesByPipeline(): Promise<Record<string, Phase[]>> {
-  const { phases, links } = await loadPhaseRows();
-  const phasesBy: Record<string, Phase[]> = {};
-  const linksBy: Record<string, PipelineLink[]> = {};
-  phases.forEach((p) => { (phasesBy[p.pipeline_id] ??= []).push(p); });
-  links.forEach((l: any) => { (linksBy[l.pipeline_id] ??= []).push(l); });
-  const out: Record<string, Phase[]> = {};
-  Object.keys(phasesBy).forEach((id) => { out[id] = orderPhases(phasesBy[id], linksBy[id] ?? []); });
-  return out;
+  return groupPhases(await loadPhaseRows());
 }
 
 // ---- Phase CRUD ----

@@ -126,81 +126,173 @@
   .dock-app { transition: box-shadow 0.2s ease; }
 }
 
-/* Dock anclado: siempre visible, el contenido se desplaza */
+/* =====================================================================
+   PINNED: exactly the same floating glass dock you get on hover — it just
+   stays. Each page's own background (dark hero, light canvas…) runs under
+   it to the window's edge, so there's no seam and no strip of a different
+   colour; the content simply starts a little further right.
+   ===================================================================== */
+.app-shell { --dock-w: 62px; --dock-gap: 8px; }
+.app-shell.dock-labels { --dock-w: 68px; }
+
 .dock-pinned .dock {
   transform: none;
   opacity: 1;
   pointer-events: auto;
-  left: 12px;
-  top: 12px;
-  bottom: 12px;
+  left: var(--dock-gap);
+  top: var(--dock-gap);
+  bottom: var(--dock-gap);
   height: auto;
 }
 .dock-pinned .dock-trigger { display: none; }
 
-/* Full-height bar: pages at the top, Settings pinned to the bottom */
 .dock-pinned .dock-bar {
+  width: var(--dock-w);
   height: 100%;
-  justify-content: flex-start;
   box-sizing: border-box;
-  padding: 22px 0;
-}
-.dock-pinned .dock-app-settings { margin-top: auto; }
-/* Softer, closer shadow when pinned so it doesn't darken the page's left edge */
-.dock-pinned .dock-bar {
+  justify-content: flex-start;
+  padding: 20px 0 16px;
+  background: rgba(255, 255, 255, 0.66);
   box-shadow:
-    6px 0 22px -16px rgba(10, 111, 77, 0.35),
-    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+    0 18px 44px -26px rgba(4, 40, 26, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.75);
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.dock-pinned .dock-bar::-webkit-scrollbar { display: none; }
+.dock-pinned .dock-app-settings { margin-top: auto; }
+.dock-pinned:not(.dock-labels) .dock-bar { gap: 10px; padding: 16px 0 14px; border-radius: 18px; }
+.dock-pinned:not(.dock-labels) .dock-app { width: 48px; height: 48px; border-radius: 13px; }
+.dock-pinned:not(.dock-labels) .dock-icon svg { width: 22px; height: 22px; }
+.dock-pinned:not(.dock-labels) .dock-app:hover { transform: translateX(6px) scale(1.1); }
+
+/* The page keeps the whole window: its background paints under the dock
+   (a transparent left border it owns), its content starts past the dock. */
+.dock-pinned .app-page { padding-left: 0; }
+.dock-pinned .app-page > :first-child {
+  border-left: calc(var(--dock-w) + var(--dock-gap) + 4px) solid transparent;
+  background-origin: border-box;
 }
 
-/* Reserve room on the left so content doesn't sit under the pinned dock.
-   Dock bar is 76px wide at left:12px → clears at ~88px; keep it tight. */
-.dock-pinned .app-page { padding-left: 96px; }
-@media (max-width: 700px) {
-  .dock-pinned .app-page { padding-left: 88px; }
+/* =====================================================================
+   ALWAYS SHOW LABELS: small icon with its name underneath, always.
+   Nothing expands on hover — the item just lifts a little.
+   (Same look when the dock slides in unpinned.)
+   ===================================================================== */
+.dock-labels .dock-bar {
+  width: var(--dock-w);
+  align-items: center;
+  gap: 3px;
+  padding: 12px 0;
+  border-radius: 18px;
 }
-/* ===== Always-show labels (Settings → Interface toggle) ===================
-   Labelled layout = icon tile + name in a row. When the dock is PINNED it
-   stays a slim icon-only rail and expands over the page on hover; when it is
-   not pinned it only appears on hover anyway, so it shows expanded. */
-.dock-labels .dock-bar { align-items: stretch; gap: 8px; padding: 18px 12px; overflow: hidden; }
 .dock-labels .dock-app {
-  width: 100%; height: auto; padding: 8px 12px;
-  display: flex; align-items: center; justify-content: flex-start; gap: 13px;
-  background: none; border: 1px solid transparent; border-radius: 14px;
+  width: calc(var(--dock-w) - 6px);
+  height: auto;
+  padding: 6px 0 5px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 5px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  transition: background 0.2s ease, transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
-.dock-labels .dock-app:hover { transform: none; background: rgba(18, 181, 127, 0.1); box-shadow: none; }
-.dock-labels .dock-app-active { background: rgba(18, 181, 127, 0.14); box-shadow: inset 0 0 0 1.5px #12b57f; }
 .dock-labels .dock-icon {
-  width: 40px; height: 40px; flex-shrink: 0; border-radius: 12px;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: 11px;
   border: 1px solid rgba(18, 181, 127, 0.25);
   background: linear-gradient(160deg, rgba(134, 239, 192, 0.55), rgba(18, 181, 127, 0.28));
+  transition: transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.25s ease, background 0.2s ease;
 }
-.dock-labels .dock-icon svg { width: 22px; height: 22px; }
+.dock-labels .dock-icon svg { width: 18px; height: 18px; }
 .dock-labels .dock-label {
-  position: static; transform: none; opacity: 1; max-width: 150px; padding: 0;
-  background: none; color: #0a6f4d; white-space: nowrap; overflow: hidden;
-  font-family: "Space Grotesk", "Inter", sans-serif; font-size: 13.5px; font-weight: 600; letter-spacing: -0.01em;
+  position: static;
+  transform: none;
+  opacity: 1;
+  max-width: 100%;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  color: #3f6b59;
+  font-family: "Inter", system-ui, sans-serif;
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.015em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color 0.2s ease;
 }
+
+/* hover: just a lift, so you see where you're going */
+.dock-labels .dock-app:hover { transform: none; box-shadow: none; background: rgba(18, 181, 127, 0.07); }
+.dock-labels .dock-app:hover .dock-icon {
+  transform: translateY(-2px) scale(1.06);
+  box-shadow: 0 9px 18px -11px rgba(10, 111, 77, 0.75);
+  background: linear-gradient(160deg, rgba(134, 239, 192, 0.75), rgba(18, 181, 127, 0.38));
+}
+.dock-labels .dock-app:hover .dock-label { color: #0a6f4d; }
+.dock-labels .dock-app:active .dock-icon { transform: translateY(0) scale(0.97); }
+.dock-labels .dock-app:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(18, 181, 127, 0.45); }
+
+/* the page you're on */
+.dock-labels .dock-app-active { background: rgba(18, 181, 127, 0.1); box-shadow: none; }
+.dock-labels .dock-app-active .dock-icon { box-shadow: inset 0 0 0 2px #12b57f; background: linear-gradient(160deg, rgba(134, 239, 192, 0.8), rgba(18, 181, 127, 0.4)); }
+.dock-labels .dock-app-active .dock-label { color: #0a6f4d; font-weight: 700; }
 .dock-labels .dock-app-settings .dock-label { color: #5a7d6d; }
 
-/* Not pinned: the dock only shows on hover, so keep it expanded then. */
-.dock-labels:not(.dock-pinned) .dock-bar { width: 214px; }
+/* Not pinned: the floating card keeps its rounded look, just narrower. */
+.dock-labels:not(.dock-pinned) .dock-bar { padding: 12px 0; background: rgba(255, 255, 255, 0.92); }
+.dock-pinned.dock-labels .dock-bar { padding: 12px 0; }
 
-/* Pinned: slim icon rail by default, expands over the page on hover. */
-.dock-pinned.dock-labels .dock-bar {
-  width: 88px;
-  transition: width 0.42s cubic-bezier(0.16, 1, 0.3, 1);
+@media (max-height: 760px) {
+  .dock-labels .dock-bar { gap: 2px; padding: 10px 0; }
+  .dock-labels .dock-app { padding: 5px 2px 4px; gap: 4px; }
+  .dock-labels .dock-icon { width: 30px; height: 30px; border-radius: 10px; }
+  .dock-labels .dock-icon svg { width: 16px; height: 16px; }
 }
-.dock-pinned.dock-labels .dock:hover .dock-bar { width: 214px; }
-.dock-pinned.dock-labels .dock-label {
-  opacity: 0; max-width: 0;
-  transition: opacity 0.2s ease, max-width 0.42s cubic-bezier(0.16, 1, 0.3, 1);
+@media (prefers-reduced-motion: reduce) {
+  .dock-labels .dock-app, .dock-labels .dock-icon { transition: none; }
 }
-.dock-pinned.dock-labels .dock:hover .dock-label { opacity: 1; max-width: 150px; }
 
-/* Reserve only the collapsed width; the expanded bar overlays the page. */
-.dock-pinned.dock-labels .app-page { padding-left: 108px; }
-@media (max-width: 700px) {
-  .dock-pinned.dock-labels .app-page { padding-left: 100px; }
+/* =====================================================================
+   PINNED over a dark page (Sales, Management…): the dock wears the same
+   dark glass as that page's own cards, so it reads as part of the page.
+   ===================================================================== */
+.dock-on-dark .dock-bar {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.11);
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 20px 50px -30px rgba(0, 0, 0, 0.7);
 }
+.dock-on-dark .dock-app,
+.dock-on-dark.dock-labels .dock-icon {
+  color: #c9f2dd;
+  border-color: rgba(134, 239, 192, 0.18);
+  background: linear-gradient(160deg, rgba(134, 239, 192, 0.16), rgba(18, 181, 127, 0.1));
+}
+.dock-on-dark .dock-app-active { box-shadow: inset 0 0 0 2px #35d69c; }
+.dock-on-dark:not(.dock-labels) .dock-app:hover { background: linear-gradient(160deg, rgba(134, 239, 192, 0.28), rgba(18, 181, 127, 0.18)); }
+
+.dock-on-dark.dock-labels .dock-app { background: none; border-color: transparent; }
+.dock-on-dark.dock-labels .dock-label { color: rgba(238, 248, 242, 0.62); }
+.dock-on-dark.dock-labels .dock-app-settings .dock-label { color: rgba(238, 248, 242, 0.5); }
+.dock-on-dark.dock-labels .dock-app:hover { background: rgba(255, 255, 255, 0.05); }
+.dock-on-dark.dock-labels .dock-app:hover .dock-icon { background: linear-gradient(160deg, rgba(134, 239, 192, 0.3), rgba(18, 181, 127, 0.2)); box-shadow: 0 10px 20px -12px rgba(0, 0, 0, 0.8); }
+.dock-on-dark.dock-labels .dock-app:hover .dock-label { color: #eef8f2; }
+.dock-on-dark.dock-labels .dock-app-active { background: rgba(255, 255, 255, 0.07); }
+.dock-on-dark.dock-labels .dock-app-active .dock-icon { box-shadow: inset 0 0 0 2px #35d69c; background: linear-gradient(160deg, rgba(134, 239, 192, 0.32), rgba(18, 181, 127, 0.22)); color: #eef8f2; }
+.dock-on-dark.dock-labels .dock-app-active .dock-label { color: #eef8f2; }
+
+/* the switch between light and dark is smooth */
+.dock-pinned .dock-bar,
+.dock-pinned .dock-app,
+.dock-pinned .dock-icon,
+.dock-pinned .dock-label { transition: background 0.35s ease, color 0.35s ease, border-color 0.35s ease, box-shadow 0.3s ease, transform 0.25s cubic-bezier(0.16, 1, 0.3, 1); }

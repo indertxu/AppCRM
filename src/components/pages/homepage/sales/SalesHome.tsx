@@ -93,9 +93,9 @@ export default function SalesHome({ userId, seesTeam }: Props) {
   // What needs you: overdue close dates, closing soon, or no close date at all.
   const attention = useMemo<Attention[]>(() => active.map((t) => {
     const d = closeDate(t);
-    if (!d) return { t, reason: "No close date", tone: "idle" as const, rank: 3 };
+    if (!d) return { t, reason: "No expected close date", tone: "idle" as const, rank: 3 };
     const diff = daysBetween(today, d);
-    if (diff < 0) return { t, reason: `Close date passed ${-diff}d ago`, tone: "late" as const, rank: 0 - diff / 1000 };
+    if (diff < 0) return { t, reason: `Expected close passed ${-diff}d ago`, tone: "late" as const, rank: 0 - diff / 1000 };
     if (diff <= 14) return { t, reason: diff === 0 ? "Closes today" : `Closes in ${diff}d`, tone: "soon" as const, rank: 1 + diff / 100 };
     return null;
   }).filter(Boolean).sort((a, b) => a!.rank - b!.rank || (totals[b!.t.id] ?? 0) - (totals[a!.t.id] ?? 0)).slice(0, 20) as Attention[],
@@ -177,7 +177,7 @@ export default function SalesHome({ userId, seesTeam }: Props) {
           {loading ? <div className="sh-skel" /> : attention.length === 0 ? (
             <div className="sh-ok">
               <span aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 12.5l4 4 8-9" /></svg></span>
-              <b>Every open deal has a close date ahead.</b>
+              <b>Every open deal has an expected close date ahead.</b>
             </div>
           ) : (
             <ul className="sh-attn-list">

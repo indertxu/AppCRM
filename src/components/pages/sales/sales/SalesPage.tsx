@@ -1,15 +1,15 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, PointerEvent as ReactPointerEvent, MouseEvent as ReactMouseEvent } from "react";
+import type { CSSProperties, ReactNode, PointerEvent as ReactPointerEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import SalesMultiFilter from "./SalesMultiFilter";
 import SalesRangeFilter, { EMPTY_RANGES, activeRangeCount, HeaderRangePopover, rangeActive, clearRange, type SalesRanges, type RangeKind } from "./SalesRangeFilter";
 import SalesForecast, { type ForecastKpis } from "./SalesForecast";
 import { supabase } from "../../../api/supabase";
-import { listCompanies, listContacts, myProfile, type Company, type Contact } from "../../companies/companiesApi";
+import { listCompanies, listContacts, myProfile, sessionUserId, type Company, type Contact } from "../../companies/companiesApi";
 import { listPipelines, loadPipeline, loadPhasesByPipeline, type Pipeline, type Phase } from "../../settings/pipelineApi";
 import { loadProducts, loadServices, type Product } from "../../settings/catalogApi";
-import { listTrackings, loadTrackingTeams, setTrackingPhase, setTrackingStatus, stampPhaseEntry, clearPhaseEventsAfter, trackingPct, loadPotentialTotals, type Tracking } from "./salesApi";
+import { listTrackings, loadTrackingTeams, loadSalesBoot, type SalesBootRows, setTrackingPhase, setTrackingStatus, stampPhaseEntry, clearPhaseEventsAfter, trackingPct, loadPotentialTotals, type Tracking } from "./salesApi";
 import TrackingDetail from "../trackings/TrackingDetail";
 import ExportModal from "../extras/ExportModal";
 import SalesReport from "../extras/SalesReport";
@@ -75,7 +75,7 @@ function useSoCount(target: number, ms = 1100) {
   return value;
 }
 function SoCount({ value }: { value: number }) {
-  return <>{Math.round(useSoCount(value)).toLocaleString()}</>;
+  return <>{Math.round(useSoCount(value)).toLocaleString("de-DE")}</>;
 }
 function useSoArmed(ms: number) {
   const [armed, setArmed] = useState(false);
@@ -130,14 +130,113 @@ function SoIcon({ d, w = 2, fill = false }: { d: string; w?: number; fill?: bool
 
 const SO_ARC = "M16 70 A54 54 0 0 1 124 70";
 
+/* ---------------- Overview KPIs: two stat cards ----------------
+   Total: count · value, and a bar split open / won / lost with its legend.
+   Won:   a ring (share of deals won) around the trophy, count · value, and two
+          meters (% of the deals, % of the value). Clicking a card filters the list. */
+const fmtEur0 = (n: number) => `${Math.round(n).toLocaleString("de-DE")} €`;
+
+function SoStatShell({ index, tone, on, onClick, title, loading, children }: {
+  index: number; tone: string; on: boolean; onClick: () => void; title?: string; loading: boolean; children: ReactNode;
+}) {
+  return (
+    <button type="button" className={`so-kpi so-stat tone-${tone} ${on ? "is-on" : ""} ${loading ? "is-loading" : ""}`}
+      data-spot="tilt" style={soVars({ "--i": index })} onClick={onClick} aria-pressed={on} title={title}>
+      <span className="so-stat-glow" aria-hidden="true" />
+      {children}
+      <span className="so-kpi-check so-stat-check" aria-hidden="true" />
+    </button>
+  );
+}
+
+function SoStatTotal({ label, total, value, open, openValue, won, lost, on, onClick, loading }: {
+  label: string; total: number; value: number; open: number; openValue: number; won: number; lost: number;
+  on: boolean; onClick: () => void; loading: boolean;
+}) {
+  const armed = useSoArmed(520);
+  const pct = (n: number) => (total ? (n / total) * 100 : 0);
+  const seg = [
+    { k: "open", n: open, label: "open" },
+    { k: "won", n: won, label: "won" },
+    { k: "lost", n: lost, label: "lost" },
+  ];
+  return (
+    <SoStatShell index={0} tone="total" on={on} onClick={onClick} title="Show every deal" loading={loading}>
+      <span className="so-stat-ico" aria-hidden="true"><SoIcon d={SO_ICON.total} w={1.9} /></span>
+      <span className="so-stat-main">
+        <span className="so-stat-eyebrow">{label}</span>
+        <span className="so-stat-figs">
+          <b className="so-stat-n"><SoCount value={total} /></b>
+          <i className="so-stat-unit">{total === 1 ? "deal" : "deals"}</i>
+          <span className="so-stat-dot" aria-hidden="true" />
+          <b className="so-stat-money"><SoCount value={value} /><em>€</em></b>
+        </span>
+      </span>
+      <span className="so-stat-aside">
+        <span className="so-stat-split" aria-hidden="true">
+          {seg.map((s) => (
+            <i key={s.k} className={`is-${s.k}`} style={{ flexGrow: armed ? Math.max(pct(s.n), s.n ? 2 : 0) : 0 }} />
+          ))}
+          {total === 0 && <i className="is-none" style={{ flexGrow: 1 }} />}
+        </span>
+        <span className="so-stat-legend">
+          {seg.map((s) => (
+            <span key={s.k} className={`is-${s.k}`}><i aria-hidden="true" /><b>{s.n.toLocaleString("de-DE")}</b> {s.label}</span>
+          ))}
+        </span>
+        <small className="so-stat-note">{open ? `${fmtEur0(openValue)} still in play` : total ? "Nothing open in this selection" : "No deals match"}</small>
+      </span>
+    </SoStatShell>
+  );
+}
+
+function SoStatWon({ won, value, total, totalValue, on, onClick, loading }: {
+  won: number; value: number; total: number; totalValue: number; on: boolean; onClick: () => void; loading: boolean;
+}) {
+  const armed = useSoArmed(620);
+  const dealPct = total ? Math.round((won / total) * 100) : 0;
+  const valPct = totalValue ? Math.round((value / totalValue) * 100) : 0;
+  const C = 2 * Math.PI * 22;
+  return (
+    <SoStatShell index={1} tone="won" on={on} onClick={onClick} title="Show the won deals" loading={loading}>
+      <span className="so-stat-ring" aria-hidden="true">
+        <svg viewBox="0 0 52 52">
+          <circle className="so-ring-bg" cx="26" cy="26" r="22" />
+          <circle className={`so-ring-fg ${armed && dealPct > 0 ? "" : "is-zero"}`} cx="26" cy="26" r="22" strokeDasharray={`${armed ? (dealPct / 100) * C : 0} ${C}`} />
+        </svg>
+        <SoIcon d={SO_ICON.won} w={1.9} />
+      </span>
+      <span className="so-stat-main">
+        <span className="so-stat-eyebrow">Won</span>
+        <span className="so-stat-figs">
+          <b className="so-stat-n"><SoCount value={won} /></b>
+          <i className="so-stat-unit">{won === 1 ? "deal" : "deals"}</i>
+          <span className="so-stat-dot" aria-hidden="true" />
+          <b className="so-stat-money"><SoCount value={value} /><em>€</em></b>
+        </span>
+      </span>
+      <span className="so-stat-aside">
+        {[{ k: "deals", p: dealPct, label: "of the deals" }, { k: "value", p: valPct, label: "of the value" }].map((m) => (
+          <span key={m.k} className="so-stat-meter">
+            <span><b><SoCount value={m.p} />%</b> {m.label}</span>
+            <span className="so-stat-track" aria-hidden="true"><i style={{ width: `${armed ? m.p : 0}%` }} /></span>
+          </span>
+        ))}
+      </span>
+    </SoStatShell>
+  );
+}
+
 /** A status card in the dark band. Clicking it filters the list, as before. */
 function SoKpi({
-  index, tone, icon, label, value, sub, share, dial, on, onClick, title, unit,
+  index, tone, icon, label, value, sub, share, dial, on, onClick, title, unit, money, moneyLabel,
 }: {
   index: number; tone: string; icon: string; label: string; value: number; sub: string;
   share?: number | null; dial?: number | null; on: boolean; onClick: () => void; title?: string;
   /** e.g. "€" for money figures */
   unit?: string;
+  /** A money figure shown next to the count (e.g. the deals' total value). */
+  money?: number; moneyLabel?: string;
 }) {
   const armed = useSoArmed(420 + index * 90);
   const s = Math.max(0, Math.min(1, share ?? 0));
@@ -159,7 +258,12 @@ function SoKpi({
       </span>
       <span className="so-kpi-body">
         <span className="so-kpi-txt">
-          <b className="so-kpi-val"><SoCount value={value} />{dial != null && <em>%</em>}{unit && <em className="so-kpi-unit">{unit}</em>}</b>
+          <span className="so-kpi-figs">
+            <b className="so-kpi-val"><SoCount value={value} />{dial != null && <em>%</em>}{unit && <em className="so-kpi-unit">{unit}</em>}</b>
+            {money != null && (
+              <span className="so-kpi-money"><b><SoCount value={money} /><em>€</em></b>{moneyLabel && <i>{moneyLabel}</i>}</span>
+            )}
+          </span>
           <small>{sub}</small>
         </span>
         {dial != null && (
@@ -177,25 +281,80 @@ function SoKpi({
   );
 }
 
+/* ---------------- Opening fast ----------------
+   What Sales showed last time is kept (in memory, and for this browser tab in
+   sessionStorage), so coming back paints the list at once and then refreshes it
+   quietly. Signing out forgets it; another user never sees it (checked by id). */
+type DealsBundle = [
+  Tracking[], Record<string, number>, { members: Record<string, string[]>; owners: Record<string, string> },
+  { roles: SalesRole[]; missing: boolean }, TrackingHandover[], Record<string, string[]>, { rules: RuleMap; missing: boolean },
+];
+interface SalesSnap {
+  uid: string; at: number; deals: DealsBundle;
+  me: { id: string; role: string; is_superadmin: boolean } | null;
+  companies: Company[]; pipelines: Pipeline[]; phaseByPipe: Record<string, Phase[]>;
+  employees: Employee[]; products: Product[]; trackingFields: TrackingField[]; contacts?: Contact[];
+}
+const SNAP_KEY = "empower.sales.snap.v1";
+let salesSnap: SalesSnap | null = null;
+function readSalesSnap(): SalesSnap | null {
+  if (salesSnap) return salesSnap;
+  try { const raw = sessionStorage.getItem(SNAP_KEY); if (raw) salesSnap = JSON.parse(raw) as SalesSnap; } catch { /* storage off or unreadable */ }
+  return salesSnap;
+}
+function writeSalesSnap(s: SalesSnap) {
+  salesSnap = s;
+  try {
+    const { contacts: _c, ...light } = s; // contacts are the heavy part: memory only
+    const raw = JSON.stringify(light);
+    if (raw.length < 3_000_000) sessionStorage.setItem(SNAP_KEY, raw); else sessionStorage.removeItem(SNAP_KEY);
+  } catch { /* quota or private mode: memory copy still works */ }
+}
+function forgetSalesSnap() {
+  salesSnap = null;
+  try { sessionStorage.removeItem(SNAP_KEY); } catch { /* nothing to forget */ }
+}
+try {
+  (supabase.auth as any).onAuthStateChange?.((ev: string) => { if (ev === "SIGNED_OUT") forgetSalesSnap(); });
+} catch { /* no auth events here */ }
+
+/** Companies by id, a few hundred per request, all requests at once. */
+async function companiesByIds(ids: (string | null | undefined)[]): Promise<Company[]> {
+  const uniq = Array.from(new Set(ids.filter(Boolean) as string[]));
+  if (!uniq.length) return [];
+  const chunks: string[][] = [];
+  for (let i = 0; i < uniq.length; i += 150) chunks.push(uniq.slice(i, i + 150));
+  const parts = await Promise.all(chunks.map((c) =>
+    Promise.resolve(supabase.from("companies").select("*").in("id", c)).then(({ data }: any) => (data ?? []) as Company[]).catch(() => [] as Company[])));
+  return parts.flat().sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""));
+}
+
+/** How many rows the list draws at first; more follow as you scroll. */
+const LIST_STEP = 60;
+
 export default function SalesPage() {
   const navigate = useNavigate();
-  const [trackings, setTrackings] = useState<Tracking[]>([]);
-  // First load: the page stays behind the loading screen until everything the list needs is in
-  // (deals, who I am and what I may see, companies, people, pipelines and their phases) — all
-  // fetched in a single round of parallel requests and applied in one render.
-  const [booted, setBooted] = useState(false);
-  /** The frosted loading layer stays until its fade-out has finished. */
-  const [bootGone, setBootGone] = useState(false);
-  const [rawTotals, setPotentialTotals] = useState<Record<string, number>>({});
-  const [companies, setCompanies] = useState<Company[]>([]);
-  const [contacts, setContacts] = useState<Contact[]>([]);
-  const [pipelines, setPipelines] = useState<Pipeline[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
-  const [employees, setEmployees] = useState<Employee[]>([]);
-  const [trackAssignees, setTrackAssignees] = useState<Record<string, string[]>>({});
-  const [trackOwners, setTrackOwners] = useState<Record<string, string>>({});
-  const [me, setMe] = useState<{ id: string; role: string; is_superadmin: boolean } | null>(null);
-  const [phaseByPipe, setPhaseByPipe] = useState<Record<string, Phase[]>>({});
+  // Last time's data (if any): the page paints with it straight away and refreshes underneath.
+  const [snap0] = useState(readSalesSnap);
+  const [trackings, setTrackings] = useState<Tracking[]>(() => snap0?.deals[0] ?? []);
+  // First load (nothing kept from before): skeleton rows until everything the list needs is in
+  // (deals, who I am and what I may see, the deals' companies, people, pipelines and phases) —
+  // all fetched in one round of parallel requests and applied in one render.
+  const [booted, setBooted] = useState(!!snap0);
+  /** Loading progress: requests answered / asked (drives the bar over the list). */
+  const [bootStep, setBootStep] = useState<{ done: number; total: number }>({ done: 0, total: 1 });
+  /** True while the kept copy is on screen and the fresh data is still coming. */
+  const [refreshing, setRefreshing] = useState(!!snap0);
+  const [rawTotals, setPotentialTotals] = useState<Record<string, number>>(() => snap0?.deals[1] ?? {});
+  const [companies, setCompanies] = useState<Company[]>(() => snap0?.companies ?? []);
+  const [contacts, setContacts] = useState<Contact[]>(() => snap0?.contacts ?? []);
+  const [pipelines, setPipelines] = useState<Pipeline[]>(() => snap0?.pipelines ?? []);
+  const [products, setProducts] = useState<Product[]>(() => snap0?.products ?? []);
+  const [employees, setEmployees] = useState<Employee[]>(() => snap0?.employees ?? []);
+  const [trackAssignees, setTrackAssignees] = useState<Record<string, string[]>>(() => snap0?.deals[2].members ?? {});
+  const [trackOwners, setTrackOwners] = useState<Record<string, string>>(() => snap0?.deals[2].owners ?? {});
+  const [me, setMe] = useState<{ id: string; role: string; is_superadmin: boolean } | null>(() => snap0?.me ?? null);
+  const [phaseByPipe, setPhaseByPipe] = useState<Record<string, Phase[]>>(() => snap0?.phaseByPipe ?? {});
   const [openId, setOpenId] = useState<string | null>(null);
 
   /** Arriving from the sales calendar with ?tracking=… opens that deal. */
@@ -210,16 +369,16 @@ export default function SalesPage() {
   const [rolesOpen, setRolesOpen] = useState(false);
   const [importing, setImporting] = useState(false);
   /** Sales roles (who sees which pipelines, up to which phase) and the handovers they caused. */
-  const [salesRoles, setSalesRoles] = useState<SalesRole[]>([]);
-  const [rolesReady, setRolesReady] = useState(false);
+  const [salesRoles, setSalesRoles] = useState<SalesRole[]>(() => snap0?.deals[3].roles ?? []);
+  const [rolesReady, setRolesReady] = useState(!!snap0);
   /** Access settings (Sales roles → Who sees what → Adjust settings). */
-  const [accessRules, setAccessRules] = useState<RuleMap>({});
-  const [accessMissing, setAccessMissing] = useState(false);
-  const [handovers, setHandovers] = useState<TrackingHandover[]>([]);
-  const [phaseEvents, setPhaseEvents] = useState<Record<string, string[]>>({});
+  const [accessRules, setAccessRules] = useState<RuleMap>(() => snap0?.deals[6].rules ?? {});
+  const [accessMissing, setAccessMissing] = useState(() => !!snap0?.deals[6].missing);
+  const [handovers, setHandovers] = useState<TrackingHandover[]>(() => snap0?.deals[4] ?? []);
+  const [phaseEvents, setPhaseEvents] = useState<Record<string, string[]>>(() => snap0?.deals[5] ?? {});
   const [pendingHandover, setPendingHandover] = useState<{ plan: HandoverPlan; t: Tracking; phaseId: string; phases: Phase[] } | null>(null);
   /** Custom deal fields (Actions → Deal fields). */
-  const [trackingFields, setTrackingFields] = useState<TrackingField[]>([]);
+  const [trackingFields, setTrackingFields] = useState<TrackingField[]>(() => snap0?.trackingFields ?? []);
   const [view, setView] = useState<"list" | "kanban" | "forecast">("list");
   const [fcKpi, setFcKpi] = useState<ForecastKpis | null>(null);
   // Board view needs a pipeline; if none is picked when switching to it, pick
@@ -270,82 +429,173 @@ export default function SalesPage() {
     services: loadServices().catch(() => [] as any[]),
   });
 
-  /** Deals and everything hanging off them — every request at once. */
-  const fetchDeals = () => {
+  /** Deals and everything hanging off them — every request at once. `tm` times each one (first load). */
+  const fetchDeals = (tm: <T>(what: string, p: Promise<T>) => Promise<T> = (_w, p) => p): Promise<DealsBundle> => {
     const cat = catalog();
-    const deals = listTrackings().catch(() => [] as Tracking[]);
+    const deals = tm("deals + their contacts", listTrackings().catch(() => [] as Tracking[]));
     return Promise.all([
       deals,
       // Totals reuse the deals and the catalog above instead of reading them again.
-      loadPotentialTotals({ trackings: deals, products: cat.products, services: cat.services }).catch(() => ({} as Record<string, number>)),
-      loadTrackingTeams().catch(() => ({ members: {} as Record<string, string[]>, owners: {} as Record<string, string> })),
-      loadSalesRoles().catch(() => ({ roles: [] as SalesRole[], missing: true })),
-      loadHandovers().catch(() => [] as TrackingHandover[]),
-      loadAllPhaseEvents().catch(() => ({} as Record<string, string[]>)),
-      loadAccessRules().catch(() => ({ rules: {} as RuleMap, missing: true })),
+      tm("potential revenue (products, services, catalog)", loadPotentialTotals({ trackings: deals, products: cat.products, services: cat.services }).catch(() => ({} as Record<string, number>))),
+      tm("deal teams", loadTrackingTeams().catch(() => ({ members: {} as Record<string, string[]>, owners: {} as Record<string, string> }))),
+      tm("sales roles", loadSalesRoles().catch(() => ({ roles: [] as SalesRole[], missing: true }))),
+      tm("handovers", loadHandovers().catch(() => [] as TrackingHandover[])),
+      tm("phase history", loadAllPhaseEvents().catch(() => ({} as Record<string, string[]>))),
+      tm("access rules", loadAccessRules().catch(() => ({ rules: {} as RuleMap, missing: true }))),
     ]);
   };
-  const applyDeals = ([ts, pt, team, r, h, ev, acc]: Awaited<ReturnType<typeof fetchDeals>>) => {
+  const applyDeals = ([ts, pt, team, r, h, ev, acc]: DealsBundle) => {
     setTrackings(ts); setPotentialTotals(pt); setTrackAssignees(team.members); setTrackOwners(team.owners);
     setSalesRoles(r.roles); setHandovers(h); setPhaseEvents(ev); setAccessRules(acc.rules); setAccessMissing(acc.missing);
     setRolesReady(true);
   };
-  const reload = async () => { applyDeals(await fetchDeals()); };
+  /** Deals bundle from the one-call read. */
+  const bundleOf = (b: SalesBootRows): DealsBundle => [b.trackings, b.totals, b.teams, b.roles, b.handovers, b.phaseEvents, b.access];
+  // After closing a deal or a change: one call when the database has sales_boot(), table by table otherwise.
+  const reload = async () => {
+    const b = await loadSalesBoot().catch(() => null);
+    applyDeals(b ? bundleOf(b) : await fetchDeals());
+  };
 
   useEffect(() => {
     let alive = true;
-    const cat = catalog();
-    cat.products.then((ps) => { if (alive) setProducts(ps); });
 
-    // People: names straight from profiles (one quick query, part of the first round), then the
-    // full user list from manage-users when it answers — it's an Edge Function and can be slow
-    // to wake up, so the page never waits for it.
-    const profiles = Promise.resolve(
-      supabase.from("profiles").select("id, first_name, last_name, email, role, is_superadmin"),
-    ).then(({ data }: any) => (data ?? []) as any[]).catch(() => [] as any[]);
+    // Every request of the first round is timed; the console gets one line with the total and
+    // the slowest request, and a table with all of them (also in window.__salesLoad).
+    const t0 = performance.now();
+    const marks: { request: string; ms: number; rows: number | string }[] = [];
+    let asked = 0, answered = 0;
+    const tm = <T,>(what: string, p: Promise<T>): Promise<T> => {
+      asked += 1;
+      if (alive) setBootStep({ done: answered, total: asked });
+      return p.then((v) => {
+        answered += 1;
+        marks.push({ request: what, ms: Math.round(performance.now() - t0), rows: Array.isArray(v) ? v.length : v && typeof v === "object" ? Object.keys(v as object).length : "" });
+        if (alive) setBootStep({ done: answered, total: asked });
+        return v;
+      });
+    };
+
+    // Kept copy from another user (same tab, different account)? Drop it before anything else.
+    tm("auth session (local)", sessionUserId().catch(() => null)).then((uid) => {
+      if (!alive || !snap0 || snap0.uid === uid) return;
+      forgetSalesSnap();
+      setBooted(false); setRefreshing(false); setRolesReady(false);
+      setTrackings([]); setCompanies([]); setContacts([]); setMe(null);
+    });
+
     const fromProfiles = (rows: any[]): Employee[] => rows.map((p) => ({
       id: p.id,
       name: [p.first_name, p.last_name].filter(Boolean).join(" ").trim() || p.email || "—",
       role: p.role ?? "", email: p.email ?? "", is_superadmin: !!p.is_superadmin,
     }));
+    const mergeCos = (a: Company[], b: Company[]) => {
+      const byId = new Map(a.map((c) => [c.id, c]));
+      b.forEach((c) => byId.set(c.id, c));
+      return Array.from(byId.values());
+    };
+    let fullList: Company[] | null = null;
+    let dealList: Company[] = [];
+    const loadFullCompanies = () => listCompanies().catch(() => [] as Company[]);
+    const takeFull = (cos: Company[]) => { if (!alive || !cos.length) return; fullList = cos; setCompanies(mergeCos(cos, dealList)); };
 
-    Promise.all([
-      fetchDeals(),
-      myProfile().catch(() => null),
-      listCompanies().catch(() => [] as Company[]),
-      listPipelines().catch(() => [] as Pipeline[]),
-      loadPhasesByPipeline().catch(() => ({} as Record<string, Phase[]>)),
-      profiles,
-    ]).then(([deals, meRow, cos, ps, phases, profs]) => {
+    /** Everything the list needs is in: one render, then the console report. */
+    const finish = (dealsB: DealsBundle, meRow: SalesSnap["me"], cos: Company[], ps: Pipeline[], phases: Record<string, Phase[]>, profs: any[]) => {
       if (!alive) return;
       const sales = ps.filter((p) => p.is_sales);
-      applyDeals(deals);
+      applyDeals(dealsB);
       setMe(meRow);
-      setCompanies(cos);
+      dealList = cos;
+      setCompanies((cur) => mergeCos(fullList ?? cur, cos));
       setPipelines(sales);
       setPhaseByPipe(Object.fromEntries(sales.map((p) => [p.id, (phases[p.id] ?? []).filter((ph) => ph.sales_visible !== false)])));
       setEmployees((cur) => (cur.length ? cur : fromProfiles(profs)));
       setBooted(true);
-    });
+      setRefreshing(false);
+      const total = Math.round(performance.now() - t0);
+      const sorted = [...marks].sort((a, b) => b.ms - a.ms);
+      (window as any).__salesLoad = { total, requests: sorted };
+      console.groupCollapsed(`[sales] ${snap0 ? "refreshed" : "ready"} in ${total} ms · ${dealsB[0].length} deals · slowest: ${sorted[0]?.request ?? "—"} (${sorted[0]?.ms ?? 0} ms)`);
+      console.table(sorted);
+      console.groupEnd();
+      // Not needed for the first paint: they fill in while you look at the list
+      // (asked after it, so they don't queue in front of the first read).
+      if (!fullList) loadFullCompanies().then(takeFull);
+      listContacts().then((cs) => { if (alive) setContacts(cs); }).catch(() => {});
+      listTrackingFields().then((fs) => { if (alive) setTrackingFields(fs); }).catch(() => {});
+      supabase.functions.invoke("manage-users", { body: { action: "list" } }).then(({ data }: any) => {
+        const users = (data?.users ?? []) as any[];
+        if (!alive || !users.length) return;
+        const byId = new Map<string, any>(profs.map((x) => [x.id, x]));
+        setEmployees(users.map((u: any) => {
+          const p = byId.get(u.id);
+          const profName = p ? [p.first_name, p.last_name].filter(Boolean).join(" ").trim() : "";
+          return {
+            id: u.id, name: u.full_name || profName || u.email || "—",
+            role: p?.role || u.role || "", email: u.email ?? p?.email ?? "", is_superadmin: !!p?.is_superadmin,
+          };
+        }));
+      }).catch(() => {});
+    };
 
-    // Not needed for the first paint: they fill in while you look at the list.
-    listContacts().then((cs) => { if (alive) setContacts(cs); }).catch(() => {});
-    listTrackingFields().then((fs) => { if (alive) setTrackingFields(fs); }).catch(() => {});
-    supabase.functions.invoke("manage-users", { body: { action: "list" } }).then(async ({ data }: any) => {
-      const users = (data?.users ?? []) as any[];
-      if (!alive || !users.length) return;
-      const byId = new Map<string, any>((await profiles).map((x) => [x.id, x]));
-      setEmployees(users.map((u: any) => {
-        const p = byId.get(u.id);
-        const profName = p ? [p.first_name, p.last_name].filter(Boolean).join(" ").trim() : "";
-        return {
-          id: u.id, name: u.full_name || profName || u.email || "—",
-          role: p?.role || u.role || "", email: u.email ?? p?.email ?? "", is_superadmin: !!p?.is_superadmin,
-        };
-      }));
-    }).catch(() => {});
+    /** Without sales_boot() in the database: every table at once, as before. */
+    const tableByTable = () => {
+      const cat = catalog();
+      cat.products.then((ps) => { if (alive) setProducts(ps); });
+      const profiles = tm("people (profiles)", Promise.resolve(
+        supabase.from("profiles").select("id, first_name, last_name, email, role, is_superadmin"),
+      ).then(({ data }: any) => (data ?? []) as any[]).catch(() => [] as any[]));
+      const deals = fetchDeals(tm);
+      // The list only needs the companies behind the deals. The full directory is asked for at
+      // once; if it's slow (thousands of companies), the deals' own companies are read by id
+      // instead — whichever has them first opens the page.
+      const fullP = loadFullCompanies();
+      fullP.then(takeFull);
+      const dealCompanies = tm("companies of the deals", deals.then(([ts]) => new Promise<Company[]>((resolve) => {
+        const ids = new Set(ts.map((t) => t.company_id).filter(Boolean) as string[]);
+        let settled = false;
+        const done = (cos: Company[]) => { if (!settled) { settled = true; resolve(cos); } };
+        fullP.then((full) => {
+          const have = new Set(full.map((c) => c.id));
+          if (Array.from(ids).every((id) => have.has(id))) done(full.filter((c) => ids.has(c.id!)));
+        });
+        companiesByIds(Array.from(ids)).then(done);
+      })));
+      Promise.all([
+        deals,
+        tm("my profile", myProfile().catch(() => null)),
+        dealCompanies,
+        tm("pipelines", listPipelines().catch(() => [] as Pipeline[])),
+        tm("pipeline phases", loadPhasesByPipeline().catch(() => ({} as Record<string, Phase[]>))),
+        profiles,
+      ]).then(([dealsB, meRow, cos, ps, phases, profs]) => finish(dealsB, meRow, cos, ps, phases, profs));
+    };
+
+    // One request for everything (sales_boot in the database); table by table if it isn't there.
+    tm("sales_boot — everything in one request", loadSalesBoot().catch(() => null)).then((b) => {
+      if (!alive) return;
+      if (!b) { tableByTable(); return; }
+      catalogRef.current = { products: Promise.resolve(b.products as Product[]), services: Promise.resolve(b.services) };
+      setProducts(b.products as Product[]);
+      finish(bundleOf(b), b.me, b.companies as Company[], b.pipelines as Pipeline[], b.phasesByPipeline as Record<string, Phase[]>, b.profiles);
+    });
     return () => { alive = false; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Keep what's on screen for next time (written a moment after it settles).
+  useEffect(() => {
+    if (!booted || refreshing || !me) return;
+    const t = window.setTimeout(() => {
+      sessionUserId().then((uid) => {
+        if (!uid || uid !== me.id) return;
+        writeSalesSnap({
+          uid, at: Date.now(), me, companies, pipelines, phaseByPipe, employees, products, trackingFields, contacts,
+          deals: [trackings, rawTotals, { members: trackAssignees, owners: trackOwners }, { roles: salesRoles, missing: false }, handovers, phaseEvents, { rules: accessRules, missing: accessMissing }],
+        });
+      }).catch(() => {});
+    }, 700);
+    return () => window.clearTimeout(t);
+  }, [booted, refreshing, me, trackings, rawTotals, trackAssignees, trackOwners, salesRoles, handovers, phaseEvents, accessRules, accessMissing, companies, pipelines, phaseByPipe, employees, products, trackingFields, contacts]);
 
   // A pipeline that shows up later (none at the moment) still gets its phases.
   useEffect(() => {
@@ -359,7 +609,10 @@ export default function SalesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pipelines, booted]);
 
-  const companyName = (id: string | null) => companies.find((c) => c.id === id)?.name ?? null;
+  // Lookups by id (a list of thousands of deals × thousands of companies must not search arrays per row).
+  const companyById = useMemo(() => new Map(companies.map((c) => [c.id, c])), [companies]);
+  const employeeById = useMemo(() => new Map(employees.map((e) => [e.id, e])), [employees]);
+  const companyName = (id: string | null) => (id ? companyById.get(id)?.name ?? null : null);
   const contactName = (id: string) => {
     const c = contacts.find((x) => x.id === id);
     return c ? [c.first_name, c.last_name].filter(Boolean).join(" ") : "—";
@@ -484,13 +737,6 @@ export default function SalesPage() {
   }, [rawTotals, frozenById]);
   const visiblePipelines = useMemo(() => (access.pipelines ? pipelines.filter((p) => access.pipelines!.has(p.id)) : pipelines), [pipelines, access]);
 
-  const metrics = useMemo(() => {
-    const active = mine.filter((t) => t.status === "active").length;
-    const won = mine.filter((t) => t.status === "won").length;
-    const lost = mine.filter((t) => t.status === "lost").length;
-    const rate = won + lost > 0 ? Math.round((won / (won + lost)) * 100) : 0;
-    return { total: mine.length, active, won, lost, rate };
-  }, [mine]);
 
   /** Only the companies behind the deals this person can see. */
   const myCompanies = useMemo(() => {
@@ -498,10 +744,10 @@ export default function SalesPage() {
     return companies.filter((c) => ids.has(c.id!));
   }, [mine, companies]);
 
-  const shown = useMemo(() => {
+  /** Every filter except status: what the KPI cards count (the cards themselves pick the status). */
+  const filteredBase = useMemo(() => {
     const n = norm(q.trim());
-    let list = mine.filter((t) => {
-      if (fStatus.length && !fStatus.includes(t.status)) return false;
+    return mine.filter((t) => {
       if (fPipeline.length && !fPipeline.includes(t.pipeline_id ?? "")) return false;
       if (fProduct.length && !fProduct.includes(t.product_id ?? "")) return false;
       if (fCompany.length && !fCompany.includes(t.company_id ?? "")) return false;
@@ -526,10 +772,40 @@ export default function SalesPage() {
         if (fRanges.revMin !== null && rv < fRanges.revMin) return false;
         if (fRanges.revMax !== null && rv > fRanges.revMax) return false;
       }
+      if (fRanges.createdFrom || fRanges.createdTo) {
+        const cr = (t.created_at ?? "").slice(0, 10);
+        if (!cr) return false;
+        if (fRanges.createdFrom && cr < fRanges.createdFrom) return false;
+        if (fRanges.createdTo && cr > fRanges.createdTo) return false;
+      }
+      // Close date: when it was actually won or lost (open deals have none, so they drop out).
+      if (fRanges.closedFrom || fRanges.closedTo) {
+        const cl = (t.close_date ?? "").slice(0, 10);
+        if (!cl) return false;
+        if (fRanges.closedFrom && cl < fRanges.closedFrom) return false;
+        if (fRanges.closedTo && cl > fRanges.closedTo) return false;
+      }
       if (!n) return true;
       return [trackTitle(t), companyName(t.company_id) ?? "", pipelineName(t.pipeline_id), productName(t.product_id) ?? "", ...t.contactIds.map(contactName)]
         .some((v) => norm(v).includes(n));
     });
+  }, [mine, q, fPipeline, fProduct, fCompany, fPhase, fOwner, fMember, fRanges, probView, companies, contacts, pipelines, products, phaseByPipe, potentialTotals, trackAssignees, trackOwners, me]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** The KPI cards follow every filter (owner, pipeline, ranges, search…). */
+  const metrics = useMemo(() => {
+    const val = (list: Tracking[]) => list.reduce((s, t) => s + (potentialTotals[t.id!] || 0), 0);
+    const open = filteredBase.filter((t) => t.status === "active" || t.status === "paused");
+    const won = filteredBase.filter((t) => t.status === "won");
+    const lost = filteredBase.filter((t) => t.status === "lost");
+    return {
+      total: filteredBase.length, totalValue: val(filteredBase),
+      open: open.length, openValue: val(open),
+      won: won.length, wonValue: val(won), lost: lost.length,
+    };
+  }, [filteredBase, potentialTotals]);
+
+  const shown = useMemo(() => {
+    let list = filteredBase.filter((t) => !fStatus.length || fStatus.includes(t.status));
     list = [...list].sort((a, b) => {
       if (sort === "az") return trackTitle(a).localeCompare(trackTitle(b));
       if (sort === "za") return trackTitle(b).localeCompare(trackTitle(a));
@@ -573,13 +849,13 @@ export default function SalesPage() {
     });
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mine, q, fStatus, fPipeline, fProduct, fCompany, fPhase, fOwner, fMember, fRanges, sort, probView, companies, contacts, pipelines, products, phaseByPipe, potentialTotals, trackAssignees, trackOwners, me]);
+  }, [filteredBase, fStatus, sort, probView, phaseByPipe, potentialTotals, me]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Clicking the KPI card that is already active clears the filter again.
   // Status cards combine: Active + Won shows both; clicking an active card removes it.
   const toggleStatus = (s: string) => setFStatus((cur) => (cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s]));
-  const closedOn = fStatus.length === 2 && fStatus.includes("won") && fStatus.includes("lost");
 
+  const anyFilterButStatus = !!(q || fPipeline.length || fProduct.length || fCompany.length || fPhase.length || fOwner.length || fMember.length || activeRangeCount(fRanges));
   const anyFilter = q || fStatus.length || fPipeline.length || fProduct.length || fCompany.length || fPhase.length || fOwner.length || fMember.length || activeRangeCount(fRanges) || sort !== "recent";
   const clearAll = () => { setQ(""); setFStatus([]); setFPipeline([]); setFProduct([]); setFCompany([]); setFPhase([]); setFOwner([]); setFMember([]); setFRanges(EMPTY_RANGES); setSort("recent"); setRangeCol(null); setHeadPop(null); };
   const kanbanPipe = fPipeline.length ? (fPipeline.includes(boardPipe) ? boardPipe : fPipeline[0]) : "";
@@ -713,6 +989,23 @@ export default function SalesPage() {
       onConfirm={confirmHandover} onCancel={() => setPendingHandover(null)} />
   );
 
+  /** The list arrived after the skeleton (first load): rows rise in right away, no entrance delay. */
+  const [loadedLate] = useState(() => !snap0);
+
+  // Big lists draw in steps: the first rows now, the next ones as you scroll near the end.
+  const [listCap, setListCap] = useState(LIST_STEP);
+  useEffect(() => { setListCap(LIST_STEP); }, [shown]);
+  const moreRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = moreRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver((es) => {
+      if (es.some((e) => e.isIntersecting)) setListCap((c) => c + LIST_STEP * 2);
+    }, { rootMargin: "800px 0px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [listCap, shown.length > listCap, view]); // eslint-disable-line react-hooks/exhaustive-deps
+
   if (openId) {
     const t = mine.find((x) => x.id === openId);
     const frozen = t ? frozenById.get(t.id) : undefined;
@@ -724,7 +1017,7 @@ export default function SalesPage() {
   const ready = booted;
 
   // Who can open Sales at all: anyone with at least one view (Who sees what → Adjust settings).
-  // (While loading, the page itself renders under a frosted layer — see SalesBoot.)
+  // (While loading, the page shows its own layout with skeleton rows — see SalesSkeleton.)
   if (me && rolesReady && perms && !perms.canOpen) {
     return (
       <div className="sl sl-ov">
@@ -798,30 +1091,25 @@ export default function SalesPage() {
             on={false} onClick={() => {}} title="Weighted value expected to close in the next 90 days" />
           <SoKpi index={3} tone="lost" icon={SO_ICON.clock}
             label="Overdue" value={fcKpi?.overdueCount ?? 0}
-            sub={fcKpi?.overdueCount ? `${Math.round(fcKpi.overdueValue).toLocaleString("es-ES")} € past its close date` : "nothing late"}
+            sub={fcKpi?.overdueCount ? `${Math.round(fcKpi.overdueValue).toLocaleString("de-DE")} € past its expected close date` : "nothing late"}
             share={fcKpi && fcKpi.openCount ? fcKpi.overdueCount / fcKpi.openCount : 0}
             on={false} onClick={() => {}} title="Open deals whose expected close date has passed" />
         </div>
       ) : (
       /* Status cards: each one filters the list, clicking it again clears it. */
-      <div className="so-kpis" key="status-kpis">
-        <SoKpi index={0} tone="total" icon={SO_ICON.total} label="Total deals" value={metrics.total}
-          sub={`${metrics.active} still open`} on={fStatus.length === 0} onClick={() => setFStatus([])} title="Show every deal" />
-        <SoKpi index={1} tone="active" icon={SO_ICON.active} label="Active" value={metrics.active}
-          sub={metrics.total ? `${Math.round((metrics.active / metrics.total) * 100)}% of all deals` : "No deals yet"}
-          share={metrics.total ? metrics.active / metrics.total : 0}
-          on={fStatus.includes("active")} onClick={() => toggleStatus("active")} />
-        <SoKpi index={2} tone="won" icon={SO_ICON.won} label="Won" value={metrics.won}
-          sub={metrics.total ? `${Math.round((metrics.won / metrics.total) * 100)}% of all deals` : "No deals yet"}
-          share={metrics.total ? metrics.won / metrics.total : 0}
+      <div className={`so-kpis is-stats ${ready ? "" : "is-loading"}`} key="status-kpis" aria-busy={!ready}>
+        <SoStatTotal label={anyFilterButStatus ? "Deals in this selection" : "Total deals"} loading={!ready}
+          total={metrics.total} value={metrics.totalValue} open={metrics.open} openValue={metrics.openValue} won={metrics.won} lost={metrics.lost}
+          on={fStatus.length === 0} onClick={() => setFStatus([])} />
+        <SoStatWon won={metrics.won} value={metrics.wonValue} total={metrics.total} totalValue={metrics.totalValue} loading={!ready}
           on={fStatus.includes("won")} onClick={() => toggleStatus("won")} />
-        <SoKpi index={3} tone="rate" icon={SO_ICON.rate} label="Win rate" value={metrics.rate} dial={metrics.rate}
-          sub={metrics.won + metrics.lost > 0 ? `${metrics.won} won of ${metrics.won + metrics.lost} closed` : "Nothing closed yet"}
-          on={closedOn} onClick={() => setFStatus(closedOn ? [] : ["won", "lost"])} title="Show closed deals (won and lost)" />
       </div>
       )}
 
       <section className="so-sheet">
+        {/* Real progress of the first load (requests answered / asked); a quiet sweep while a kept copy refreshes. */}
+        <div className={`so-loadbar ${ready && !refreshing ? "is-done" : ""} ${refreshing ? "is-quiet" : ""}`} aria-hidden="true"
+          style={{ ["--p" as string]: ready && !refreshing ? 1 : Math.max(0.08, bootStep.done / Math.max(1, bootStep.total)) } as CSSProperties}><i /></div>
         <div className="sl-filters so-fbar">
           <div className="sl-search">
             <span className="sl-search-ico"><SoIcon d={SO_ICON.search} w={2.1} /></span>
@@ -855,14 +1143,16 @@ export default function SalesPage() {
           <SalesRangeFilter value={fRanges} onChange={setFRanges}
             probLabel={probView === "rep" ? "Sales estimate" : probView === "mgr" ? "Management estimate" : probView === "avg" ? "Average of all" : "Phase probability"} />
           <SalesMultiFilter single values={[sort]} onChange={(v) => v[0] && setSort(v[0])} placeholder="Sort" searchFrom={99}
-            options={[{ value: "recent", label: "Most recent" }, { value: "oldest", label: "Oldest" }, { value: "az", label: "A-Z" }, { value: "za", label: "Z-A" }, { value: "stage_lo", label: "Stage: early → late" }, { value: "stage_hi", label: "Stage: late → early" }, { value: "prod_az", label: "Product: A-Z" }, { value: "prod_za", label: "Product: Z-A" }, { value: "prob_hi", label: "Probability: high → low" }, { value: "prob_lo", label: "Probability: low → high" }, { value: "close_soon", label: "Close date: soonest first" }, { value: "close_late", label: "Close date: latest first" }, { value: "rev_hi", label: "Revenue: high → low" }, { value: "rev_lo", label: "Revenue: low → high" }]} />
+            options={[{ value: "recent", label: "Most recent" }, { value: "oldest", label: "Oldest" }, { value: "az", label: "A-Z" }, { value: "za", label: "Z-A" }, { value: "stage_lo", label: "Stage: early → late" }, { value: "stage_hi", label: "Stage: late → early" }, { value: "prod_az", label: "Product: A-Z" }, { value: "prod_za", label: "Product: Z-A" }, { value: "prob_hi", label: "Probability: high → low" }, { value: "prob_lo", label: "Probability: low → high" }, { value: "close_soon", label: "Expected close: soonest first" }, { value: "close_late", label: "Expected close: latest first" }, { value: "rev_hi", label: "Revenue: high → low" }, { value: "rev_lo", label: "Revenue: low → high" }]} />
           </div>
           <button type="button" className="so-farrow is-r" onClick={() => nudgeTrack(1)} aria-label="Scroll filters right" disabled={!fEdge.r}>
             <svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6" /></svg>
           </button>
           </div>
           {anyFilter && <button className="sl-clear" onClick={clearAll}>Clear</button>}
-          <span className="so-count"><b>{shown.length}</b> {shown.length === 1 ? "deal" : "deals"}</span>
+          <span className={`so-count ${ready ? "" : "is-loading"}`}>{ready
+            ? <><b>{shown.length.toLocaleString("de-DE")}</b> {shown.length === 1 ? "deal" : "deals"}</>
+            : <><i className="so-count-dots" aria-hidden="true"><i /><i /><i /></i> deals</>}</span>
         </div>
 
         {view === "kanban" && fPipeline.length > 1 && (
@@ -886,7 +1176,7 @@ export default function SalesPage() {
               probLabel={probView === "rep" ? "Sales estimate" : probView === "mgr" ? "Management estimate" : probView === "avg" ? "Average estimate" : "Phase probability"}
               trackTitle={trackTitle}
               phaseName={phaseName}
-              ownerName={(t) => (trackOwners[t.id] ? employees.find((e) => e.id === trackOwners[t.id])?.name ?? null : null)}
+              ownerName={(t) => (trackOwners[t.id] ? employeeById.get(trackOwners[t.id])?.name ?? null : null)}
               productName={(t) => productName(t.product_id)}
               onOpen={(id) => setOpenId(id)}
             />
@@ -917,7 +1207,7 @@ export default function SalesPage() {
               <span>{headBtn("deal", "Deal")}</span>
               <span>{headBtn("stage", "Stage")}</span>
               <span>{headBtn("product", "Product and owner")}</span>
-              <span className="is-r so-th-pair">{headBtn("rev", "Potential")}<i>and</i>{headBtn("close", "close")}</span>
+              <span className="is-r so-th-stack">{headBtn("rev", "Potential value")}{headBtn("close", "Expected close")}</span>
               <span className="is-r">{headBtn("prob", probView === "phase" ? "Close chance" : probView === "rep" ? "Sales estimate" : probView === "mgr" ? "Mgmt estimate" : "Avg. estimate")}</span>
               <span />
             </div>
@@ -927,8 +1217,9 @@ export default function SalesPage() {
                 onClose={() => setHeadPop(null)}
                 probLabel={probView === "rep" ? "Sales estimate" : probView === "mgr" ? "Management estimate" : probView === "avg" ? "Average estimate" : "Phase probability"} />
             )}
-            <div className="so-list">
-              {shown.map((t, i) => (
+            {!ready && <SalesSkeleton />}
+            <div className={`so-list ${loadedLate ? "is-after-load" : ""}`}>
+              {shown.slice(0, listCap).map((t, i) => (
                 <TrackingRow
                   key={t.id}
                   index={i}
@@ -940,7 +1231,7 @@ export default function SalesPage() {
                   phases={phaseByPipe[t.pipeline_id ?? ""] ?? []}
                   product={productName(t.product_id)}
                   revenue={potentialTotals[t.id!] ?? 0}
-                  ownerName={trackOwners[t.id] ? (employees.find((e) => e.id === trackOwners[t.id])?.name ?? null) : null}
+                  ownerName={trackOwners[t.id] ? (employeeById.get(trackOwners[t.id])?.name ?? null) : null}
                   closeDate={closeDateOf(t)}
                   closeProbOverride={shownProbOf(t)}
                   probLabel={probView === "phase" ? "close" : probView === "rep" ? "sales" : probView === "mgr" ? "mgmt" : "avg"}
@@ -948,6 +1239,11 @@ export default function SalesPage() {
                   onOpen={() => setOpenId(t.id)}
                 />
               ))}
+              {shown.length > listCap && (
+                <div ref={moreRef} className="so-more" aria-hidden="true">
+                  <i /><i /><i />
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -1042,7 +1338,6 @@ export default function SalesPage() {
           onClose={() => setFieldsOpen(false)}
         />
       )}
-      {!bootGone && <SalesBoot leaving={ready} onGone={() => setBootGone(true)} />}
     </div>
   );
 }
@@ -1124,10 +1419,16 @@ function TrackingRow({ tracking, title, company, contactCount, pipeline, phases,
 
       {/* potential revenue + expected close */}
       <span className="so-value">
-        <b className={revenue && revenue > 0 ? "" : "is-none"}>{revenue && revenue > 0 ? `${revenue.toLocaleString("es-ES")} €` : "No value yet"}</b>
-        <small className={closeDate ? "" : "is-none"}>
-          {closeDate ? `Closes ${new Date(closeDate).toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "2-digit" })}` : "No close date"}
-        </small>
+        <b className={revenue && revenue > 0 ? "" : "is-none"}>{revenue && revenue > 0 ? `${revenue.toLocaleString("de-DE")} €` : "No value yet"}</b>
+        {(tracking.status === "won" || tracking.status === "lost") && tracking.close_date ? (
+          <small className={`is-closed is-${tracking.status}`} title="Close date">
+            {`${tracking.status === "won" ? "Won" : "Lost"} ${new Date(tracking.close_date).toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "2-digit" })}`}
+          </small>
+        ) : (
+          <small className={closeDate ? "" : "is-none"} title="Expected close date">
+            {closeDate ? `Expected ${new Date(closeDate).toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "2-digit" })}` : "No expected close date"}
+          </small>
+        )}
       </span>
 
       {/* close probability */}
@@ -1159,6 +1460,10 @@ function KanbanView({ kanbanPipe, phaseByPipe, trackings, potentialTotals, track
   const [dragId, setDragId] = useState<string | null>(null);
   const [overPhase, setOverPhase] = useState<string | null>(null);
   const phases = phaseByPipe[kanbanPipe] ?? [];
+  // Long columns draw their first cards; the rest come in on demand (a board of thousands stays quick).
+  const COL_STEP = 40;
+  const [caps, setCaps] = useState<Record<string, number>>({});
+  useEffect(() => { setCaps({}); }, [trackings, kanbanPipe]);
 
   // `trackings` is the parent's already-filtered list (its `mine`, narrowed by
   // the search and filter bar), so the board must read from the prop rather
@@ -1179,7 +1484,7 @@ function KanbanView({ kanbanPipe, phaseByPipe, trackings, potentialTotals, track
     phases.forEach((p) => { map[p.id] = (byPhase[p.id] ?? []).reduce((sum, t) => sum + (potentialTotals[t.id!] ?? 0), 0); });
     return map;
   }, [phases, byPhase, potentialTotals]);
-  const fmtRev = (n: number) => n >= 1000 ? `${(n / 1000).toLocaleString("es-ES", { maximumFractionDigits: n >= 10000 ? 0 : 1 })}k €` : `${Math.round(n)} €`;
+  const fmtRev = (n: number) => n >= 1000 ? `${(n / 1000).toLocaleString("de-DE", { maximumFractionDigits: n >= 10000 ? 0 : 1 })}k €` : `${Math.round(n)} €`;
 
   const drop = (phaseId: string) => {
     if (dragId) onMove(dragId, phaseId, phases);
@@ -1222,7 +1527,7 @@ function KanbanView({ kanbanPipe, phaseByPipe, trackings, potentialTotals, track
                   {p.sales_outcome === "win" && <span className="so-kcol-mark" aria-hidden="true"><SoIcon d={SO_ICON.star} fill /></span>}
                   {p.sales_outcome === "loss" && <span className="so-kcol-mark" aria-hidden="true"><SoIcon d="M6 6l12 12M18 6L6 18" w={2.6} /></span>}
                   <b>{p.name}</b>
-                  <span className="so-kcol-count">{cards.length}</span>
+                  <span className="so-kcol-count">{cards.length.toLocaleString("de-DE")}</span>
                 </span>
                 <span className="so-kcol-rev">
                   {(revByPhase[p.id] ?? 0) > 0 ? <>{fmtRev(revByPhase[p.id])} <small>potential</small></> : <small>No potential revenue</small>}
@@ -1231,7 +1536,7 @@ function KanbanView({ kanbanPipe, phaseByPipe, trackings, potentialTotals, track
               <div className="so-kcol-body">
                 {cards.length === 0 ? (
                   <div className="so-kcol-empty">Drop a deal here</div>
-                ) : cards.map((t, ci) => {
+                ) : cards.slice(0, caps[p.id] ?? COL_STEP).map((t, ci) => {
                   const title = trackTitle(t);
                   const rev = potentialTotals[t.id!] ?? 0;
                   return (
@@ -1257,6 +1562,12 @@ function KanbanView({ kanbanPipe, phaseByPipe, trackings, potentialTotals, track
                     </div>
                   );
                 })}
+                {cards.length > (caps[p.id] ?? COL_STEP) && (
+                  <button type="button" className="so-kmore"
+                    onClick={() => setCaps((c) => ({ ...c, [p.id]: (c[p.id] ?? COL_STEP) + COL_STEP * 2 }))}>
+                    Show more <small>{(cards.length - (caps[p.id] ?? COL_STEP)).toLocaleString("de-DE")} left</small>
+                  </button>
+                )}
               </div>
             </div>
           );
@@ -1267,31 +1578,22 @@ function KanbanView({ kanbanPipe, phaseByPipe, trackings, potentialTotals, track
 }
 
 /**
- * First load of Sales. The page renders straight away underneath a frosted,
- * see-through layer; a small glass card shows a deal travelling through the
- * phases. When everything is in, the blur melts away and the page comes into
- * focus with its data. On a quick load the card never appears — only the blur.
+ * First load of Sales: skeleton rows in the list's own shape, under one light
+ * sweep that runs across all of them, so the page looks like itself from the
+ * first frame. When the data lands they give way and the real rows rise in.
  */
-function SalesBoot({ leaving, onGone }: { leaving: boolean; onGone: () => void }) {
-  useEffect(() => {
-    if (!leaving) return;
-    const t = window.setTimeout(onGone, 620);
-    return () => window.clearTimeout(t);
-  }, [leaving]); // eslint-disable-line react-hooks/exhaustive-deps
+function SalesSkeleton({ rows = 7 }: { rows?: number }) {
   return (
-    <div className={`sb${leaving ? " is-leaving" : ""}`} role="status" aria-live="polite" aria-busy={!leaving}
-      aria-label={leaving ? "Pipeline loaded" : "Loading your pipeline"}>
-      <div className="sb-card">
-        <div className="sb-pipe" aria-hidden="true">
-          <span className="sb-track"><i className="sb-fill" /></span>
-          {[0, 1, 2, 3, 4].map((i) => (
-            <span key={i} className="sb-node" style={{ ["--i" as string]: i } as CSSProperties}><i /></span>
-          ))}
-          <span className="sb-deal"><i /></span>
+    <div className="so-skel" role="status" aria-live="polite" aria-label="Loading your pipeline">
+      {Array.from({ length: rows }, (_, i) => (
+        <div key={i} className="so-skel-row" style={{ ["--i" as string]: i } as CSSProperties} aria-hidden="true">
+          <span className="so-skel-who"><i className="sk-av" /><span><i className="sk-l1" style={{ width: `${46 + ((i * 17) % 30)}%` }} /><i className="sk-l2" /></span></span>
+          <span className="so-skel-stage"><span><i className="sk-l1" style={{ width: `${30 + ((i * 11) % 22)}%` }} /><i className="sk-pc" /></span><span className="sk-segs">{[0, 1, 2, 3, 4].map((k) => <i key={k} />)}</span></span>
+          <span className="so-skel-prod"><i className="sk-l1" style={{ width: "48%" }} /><i className="sk-l2" style={{ width: "72%" }} /></span>
+          <span className="so-skel-val"><i className="sk-l1" /><i className="sk-l2" /></span>
+          <span className="so-skel-chance"><i className="sk-l2" /></span>
         </div>
-        <span className="sb-title">Loading your pipeline</span>
-        <span className="sb-sub">Deals · phases · forecast</span>
-      </div>
+      ))}
     </div>
   );
 }

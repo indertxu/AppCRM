@@ -540,3 +540,38 @@
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 .org-layoff-date .dp-trigger:hover { border-color: rgba(214, 69, 69, 0.4); }
+/* lay off: what's planned after the last day goes away */
+.org-layoff-what li.is-warn { color: #9a4a12; }
+.org-layoff-what li.is-warn b { color: #b8452f; }
+
+/* never-confirmed work of someone laid off: remove it or confirm it */
+.org-unconf {
+  display: flex; flex-direction: column; gap: 6px; margin: 10px 0 4px; padding: 12px 13px; border-radius: 14px;
+  background: #fff7ed; border: 1px solid rgba(217, 130, 43, 0.35); font-size: 12px; line-height: 1.45; color: #6b3d0c;
+  animation: org-unconf-in 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes org-unconf-in { from { opacity: 0; transform: translateY(4px); } }
+.org-unconf > b { font-size: 12.5px; color: #9a4a12; }
+.org-unconf.is-former { margin: 10px 0 4px; }
+.org-unconf.is-done { background: #ecfbf3; border-color: rgba(18, 181, 127, 0.35); color: #0a6f4d; }
+.org-unconf-ok { font-weight: 650; }
+.org-unconf-opts { display: flex; flex-direction: column; gap: 5px; margin-top: 4px; }
+.org-unconf-opts button {
+  display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-radius: 10px; border: 1px solid rgba(217, 130, 43, 0.25);
+  background: #fff; cursor: pointer; text-align: left; font-family: inherit; color: #3d2a12; transition: border-color 0.15s, box-shadow 0.15s;
+}
+.org-unconf-opts button i { width: 14px; height: 14px; flex-shrink: 0; border-radius: 50%; border: 2px solid #d9b48a; transition: border 0.15s; }
+.org-unconf-opts button span { display: flex; flex-direction: column; }
+.org-unconf-opts button b { font-size: 12.5px; }
+.org-unconf-opts button small { font-size: 11px; color: #8a6a45; }
+.org-unconf-opts button.is-on { border-color: #d9822b; box-shadow: 0 0 0 3px rgba(217, 130, 43, 0.14); }
+.org-unconf-opts button.is-on i { border: 4.5px solid #d9822b; }
+.org-unconf-btns, .org-unconf-ask { display: flex; align-items: center; gap: 6px; margin-top: 4px; flex-wrap: wrap; }
+.org-unconf-ask span { flex: 1; font-weight: 650; }
+.org-unconf-remove, .org-unconf-confirm {
+  height: 30px; padding: 0 12px; border-radius: 9px; cursor: pointer; font-family: inherit; font-size: 12px; font-weight: 700;
+}
+.org-unconf-remove { border: 1px solid rgba(214, 69, 69, 0.4); background: #fff; color: #b83a3a; }
+.org-unconf-remove:hover { background: #fdecec; }
+.org-unconf-confirm { border: 0; background: #0a6f4d; color: #fff; }
+.org-unconf-confirm:hover { background: #085a3f; }
