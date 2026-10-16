@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import DatePicker from "../../framework/DatePicker";
 import { LEVELS, TITLES } from "./NewUserModal";
 import { initials, type UserRow } from "./UsersView";
+import Select from "../../framework/Select";
 
 interface Props {
   user: UserRow;
@@ -85,14 +86,10 @@ export default function UserDetailModal({ user, canEditRole, allowedLevels, onSa
             <div className="cl-field"><label>Start date</label><DatePicker value={startDate} onChange={setStartDate} /></div>
             <div className="cl-field"><label>Birthday</label><DatePicker value={birthday} onChange={setBirthday} /></div>
             <div className="cl-field"><label>Role</label>
-              <select className="cl-input" value={title} onChange={(e) => setTitle(e.target.value)}>
-                {TITLES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
-              </select>
+              <Select value={title} onChange={setTitle} options={TITLES.map((t) => ({ value: t.id, label: t.label }))} />
             </div>
             <div className="cl-field"><label>Security level</label>
-              <select className="cl-input" value={role} disabled={!canEditRole} onChange={(e) => setRole(e.target.value)}>
-                {(canEditRole ? levels : LEVELS).map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
-              </select>
+              <Select value={role} disabled={!canEditRole} onChange={setRole} options={(canEditRole ? levels : LEVELS).map((l) => ({ value: l.id, label: l.label }))} />
             </div>
           </div>
 

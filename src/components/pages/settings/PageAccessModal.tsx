@@ -10,6 +10,7 @@ import {
   type PageKey, type PageMap, type PageRules, type PageSubject, type PageSourceKind, type AccessPerson, type Level, type PanelDef,
 } from "../../framework/pageAccess";
 import "./PageAccessModal.css";
+import Select from "../../framework/Select";
 
 /* ─────────────── page icons (same as the side menu) ─────────────── */
 const svg = (children: ReactNode, w = 1.9) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={w} strokeLinecap="round" strokeLinejoin="round">{children}</svg>;
@@ -560,9 +561,7 @@ export default function PageAccessModal({ onClose, scope = "all", focus }: { onC
               <h4>Their side menu</h4>
               {!previewPerson || !previewPages ? <p className="pas-note">Nobody here yet.</p> : (
                 <>
-                  <select className="pas-select" value={previewPerson.id} onChange={(e) => setPreviewId(e.target.value)} aria-label="Preview as">
-                    {previewPool.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                  </select>
+                  <div className="pas-select"><Select size="sm" aria-label="Preview as" value={previewPerson.id} onChange={setPreviewId} options={previewPool.map((p) => ({ value: p.id, label: p.name }))} /></div>
                   <div className="pas-dock">
                     {PAGES.map((p) => {
                       const r = previewPages[p.key];

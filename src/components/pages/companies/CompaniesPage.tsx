@@ -20,7 +20,6 @@ import { searchPlaces, lookupPostal, postalLooksComplete, provinceFromPostal, co
 import "../clients/ClientsPage.css";
 import CompanyImport from "./CompanyImport";
 import ContactExport from "../contacts/ContactExport";
-import SalesMultiFilter from "../sales/sales/SalesMultiFilter";
 import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
 import "./CompaniesPage.css";
 
@@ -48,10 +47,10 @@ export default function CompaniesPage() {
   const [showFieldSettings, setShowFieldSettings] = useState(false);
   const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [ctrl1, setCtrl1] = useState<{ field: string; action: string; min?: string; max?: string; values?: string[]; text?: string }>({ field: "", action: "" });
-  const [ctrl2, setCtrl2] = useState<{ field: string; action: string; min?: string; max?: string; values?: string[]; text?: string }>({ field: "", action: "" });
   const [rel, setRel] = useState<RelationshipSets | null>(null);
-  const [fRel, setFRel] = useState("");
+  // filters + sort (remembered on this browser), and the views you saved
+  const [view, setView] = useStoredView("np-companies-view", emptyView([{ key: "name", dir: "asc" }]));
+  const [savedViews, setSavedViews] = useSavedViews("companyViews");
   const [columns, setColumns] = useState<string[]>(["vat_number", "address", "contacts"]);
   const [options, setOptions] = useState<CrmOption[]>([]);
   const reloadOptions = async () => setOptions(await listCrmOptions().catch(() => []));
@@ -86,137 +85,74 @@ export default function CompaniesPage() {
 
   const lead = isSalesLead(me);
 
-  // ---- Compound filter + sort controls ----
-  // Fixed fields: text ones, short lists (picked from the values you have), and
-  // the import provenance (stamped by the database, filterable, never shown).
-  const fixedFields: { key: string; label: string; type: "text" | "number" | "date" | "select" }[] = [
-    { key: "name", label: "Name", type: "text" },
-    { key: "legal_name", label: "Legal name", type: "text" },
-    { key: "vat_number", label: "VAT / Tax ID", type: "text" },
-    { key: "website", label: "Website", type: "text" },
-    { key: "email", label: "Email", type: "text" },
-    { key: "phone", label: "Mobile", type: "text" },
-    { key: "landline", label: "Landline", type: "text" },
-    { key: "sector", label: "Sector", type: "select" },
-    { key: "postal_code", label: "Postal code", type: "text" },
-    { key: "city", label: "City", type: "select" },
-    { key: "province", label: "Province / state", type: "select" },
-    { key: "country", label: "Country", type: "select" },
-    { key: "contacts_count", label: "Number of contacts", type: "number" },
-    { key: "created_by", label: "Created by", type: "select" },
-    { key: "created_at", label: "Created on", type: "date" },
-    { key: "imported_by", label: "Imported by", type: "select" },
-    { key: "imported_at", label: "Imported on", type: "date" },
+  // ---- Every field the list can be filtered and sorted by ----
+  const emp = (id?: string | null) => employees.find((e) => e.id === id)?.name ?? "";
+  const people = () => employees.map((e) => ({ value: e.id, label: e.name }));
+  const valuesOf = (get: (c: Company) => unknown) => () =>
+    [...new Set(companies.map((c) => String(get(c) ?? "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)).map((v) => ({ value: v, label: v }));
+  const kids = new Map<string, number>();
+  companies.forEach((c) => { if (c.parent_id) kids.set(c.parent_id, (kids.get(c.parent_id) ?? 0) + 1); });
+  const ctOf = new Map<string, string[]>();
+  contacts.forEach((ct) => ct.companyIds.forEach((id) => { if (ct.id) (ctOf.get(id) ?? ctOf.set(id, []).get(id)!).push(ct.id); }));
+  const addrOf = (c: Company) => [c.street, c.addr_number, c.postal_code, c.city, c.province, c.country].filter(Boolean).join(", ");
+  const statusTags = (c: Company) => { const s = companyStatus(c, rel); return [...(s.client ? ["client"] : []), ...(s.sales ? ["sales"] : []), ...(!s.client && !s.sales ? ["none"] : [])]; };
+  const typeTags = (c: Company) => { const s = companyStatus(c, rel); return [...new Set(["crm", ...(c.relationship ?? []), ...(s.client ? ["client"] : []), ...(s.sales ? ["sales"] : [])])]; };
+  const allPipes = () => [...new Set(Object.values(rel?.pipesByCompany ?? {}).flat())].sort().map((p) => ({ value: p, label: p }));
+  const billing = (c: Company) => c.billing ?? {};
+  const filterFields: FField<Company>[] = [
+    { key: "name", label: "Name", group: "Company", type: "text", get: (c) => c.name },
+    { key: "legal_name", label: "Legal name", group: "Company", type: "text", get: (c) => c.legal_name },
+    { key: "vat_number", label: "VAT / Tax ID", group: "Company", type: "text", get: (c) => c.vat_number },
+    { key: "reg_number", label: "Registration nº", group: "Company", type: "text", get: (c) => c.reg_number },
+    { key: "sector", label: "Sector", group: "Company", type: "select", get: (c) => c.sector, options: () => [...new Set([...sectorOptions(options), ...companies.map((c) => c.sector ?? "").filter(Boolean)])].map((v) => ({ value: v, label: v })) },
+    { key: "relationship", label: "Type (client, partner…)", group: "Company", type: "multi", get: typeTags, options: () => relationshipOptions(options).map((o) => ({ value: o.key, label: o.label })) },
+    { key: "website", label: "Website", group: "Contact details", type: "text", get: (c) => c.website },
+    { key: "email", label: "Email", group: "Contact details", type: "text", get: (c) => c.email },
+    { key: "phone", label: "Mobile", group: "Contact details", type: "text", get: (c) => phoneText(c.phone, c.phone_ext) },
+    { key: "landline", label: "Landline", group: "Contact details", type: "text", get: (c) => phoneText(c.landline, c.landline_ext) },
+    { key: "status", label: "Sales status", group: "Sales", type: "multi", get: statusTags, options: () => [{ value: "client", label: "Client" }, { value: "sales", label: "In sales" }, { value: "none", label: "Not yet in play" }] },
+    { key: "pipelines", label: "Pipeline", group: "Sales", type: "multi", get: (c) => (c.id ? rel?.pipesByCompany[c.id] ?? [] : []), options: allPipes },
+    { key: "address", label: "Full address", group: "Address", type: "text", get: addrOf },
+    { key: "street", label: "Street", group: "Address", type: "text", get: (c) => [c.street, c.addr_number].filter(Boolean).join(" ") },
+    { key: "postal_code", label: "Postal code", group: "Address", type: "text", get: (c) => c.postal_code },
+    { key: "city", label: "City", group: "Address", type: "select", get: (c) => (c.city ?? "").trim(), options: valuesOf((c) => c.city) },
+    { key: "province", label: "Province / state", group: "Address", type: "select", get: (c) => (c.province ?? "").trim(), options: valuesOf((c) => c.province) },
+    { key: "country", label: "Country", group: "Address", type: "select", get: (c) => (c.country ?? "").trim(), options: valuesOf((c) => c.country) },
+    { key: "addr_complete", label: "Address complete", group: "Address", type: "boolean", get: (c) => !!(c.street && c.postal_code && c.city && c.country) },
+    { key: "parent", label: "Parent company", group: "Group", type: "select", get: (c) => c.parent_id ?? "", options: () => companies.filter((c) => c.id && kids.has(c.id)).map((c) => ({ value: c.id!, label: c.name })).sort((a, b) => a.label.localeCompare(b.label)) },
+    { key: "in_group", label: "Part of a group", group: "Group", type: "boolean", get: (c) => !!c.parent_id || kids.has(c.id ?? "") },
+    { key: "subsidiaries", label: "Number of subsidiaries", group: "Group", type: "number", get: (c) => kids.get(c.id ?? "") ?? 0 },
+    { key: "contacts_count", label: "Number of contacts", group: "People", type: "number", get: (c) => counts[c.id as string] ?? 0 },
+    { key: "contacts", label: "Contacts", group: "People", type: "multi", get: (c) => ctOf.get(c.id ?? "") ?? [], options: () => contacts.filter((ct) => ct.id).map((ct) => ({ value: ct.id!, label: [ct.first_name, ct.last_name].filter(Boolean).join(" ") || ct.email || "Unnamed" })) },
+    { key: "billing_set", label: "Has billing details", group: "Billing", type: "boolean", get: (c) => !!(billing(c).name || billing(c).email || billing(c).phone) },
+    { key: "billing_name", label: "Billing name", group: "Billing", type: "text", get: (c) => billing(c).name },
+    { key: "billing_email", label: "Billing email", group: "Billing", type: "text", get: (c) => billing(c).email },
+    { key: "visible_to", label: "Visible to", group: "Record", type: "multi", get: (c) => assignees[c.id ?? ""] ?? [], options: people },
+    { key: "created_by", label: "Created by", group: "Record", type: "select", get: (c) => c.created_by ?? "", options: people, sort: (c) => emp(c.created_by) || null },
+    { key: "created_at", label: "Created on", group: "Record", type: "date", get: (c) => c.created_at },
+    { key: "imported_by", label: "Imported by", group: "Record", type: "select", get: (c) => (c as any).imported_by ?? "", options: people },
+    { key: "imported_at", label: "Imported on", group: "Record", type: "date", get: (c) => (c as any).imported_at },
+    { key: "notes", label: "Notes", group: "Record", type: "text", get: (c) => c.notes },
+    ...fields.map((f): FField<Company> => ({
+      key: f.id, label: f.label, group: "Your fields", type: f.type === "select" ? "select" : f.type,
+      get: (c) => (c.custom ?? {})[f.id], ...(f.type === "select" ? { options: () => f.options.map((o) => ({ value: o, label: o })) } : {}),
+    })),
   ];
-  const filterFieldOptions = [
-    { value: "", label: "No filter" },
-    ...fixedFields.map((f) => ({ value: f.key, label: f.label })),
-    ...fields.map((f) => ({ value: f.id, label: f.label })),
-  ];
-  const fieldById = (id: string) => fields.find((f) => f.id === id);
-  const fieldType = (key: string): "text" | "number" | "date" | "boolean" | "select" =>
-    fixedFields.find((f) => f.key === key)?.type ?? fieldById(key)?.type ?? "text";
-  const valueOf = (c: Company, key: string): any => {
-    if (key === "contacts_count") return counts[c.id as string] ?? 0;
-    if (fixedFields.some((f) => f.key === key)) return (c as any)[key] ?? "";
-    return (c.custom ?? {})[key];
-  };
-  // What a filter can do with a field, based on its type (the first one is the default).
-  const actionsFor = (key: string): { value: string; label: string }[] => {
-    if (!key) return [];
-    const t = fieldType(key);
-    const blanks = [{ value: "has", label: "Has a value" }, { value: "empty", label: "Is empty" }];
-    if (key === "imported_by") return [{ value: "in", label: "Is one of…" }, { value: "has", label: "Was imported" }, { value: "empty", label: "Added by hand" }];
-    if (key === "created_by") return [{ value: "in", label: "Is one of…" }, { value: "has", label: "Is known" }, { value: "empty", label: "Unknown" }];
-    if (t === "select") return [{ value: "in", label: "Is one of…" }, ...blanks];
-    if (t === "boolean") return [{ value: "only_yes", label: "Yes" }, { value: "only_no", label: "No" }];
-    if (t === "number") return [{ value: "range", label: "Between…" }, { value: "desc", label: "High → low" }, { value: "asc", label: "Low → high" }, ...(key === "contacts_count" ? [] : blanks)];
-    if (t === "date") return [
-      { value: "last30", label: "Last 30 days" }, { value: "this_month", label: "This month" }, { value: "this_year", label: "This year" },
-      { value: "next30", label: "Next 30 days" }, { value: "past", label: "Before today" }, { value: "custom", label: "Between dates…" },
-      { value: "desc", label: "Newest first" }, { value: "asc", label: "Oldest first" }, ...blanks,
-    ];
-    return [{ value: "contains", label: "Contains…" }, { value: "asc", label: "A → Z" }, { value: "desc", label: "Z → A" }, ...blanks];
-  };
-  /** Choices for "Is one of…": people who imported, the values you have for city/province/country, or a field's options. */
-  const choicesFor = (key: string): { value: string; label: string }[] => {
-    if (key === "imported_by" || key === "created_by") return employees.filter((e) => companies.some((c) => (c as any)[key] === e.id)).map((e) => ({ value: e.id, label: e.name }));
-    if (key === "sector") return [...new Set([...sectorOptions(options), ...companies.map((c) => String(c.sector ?? "").trim()).filter(Boolean)])].map((v) => ({ value: v, label: v }));
-    if (key === "city" || key === "province" || key === "country")
-      return [...new Set(companies.map((c) => String((c as any)[key] ?? "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)).map((v) => ({ value: v, label: v }));
-    return (fieldById(key)?.options ?? []).map((o) => ({ value: o, label: o }));
-  };
-  const dayIso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  const dateWindow = (action: string, ctrl: { min?: string; max?: string }): [string, string] | null => {
-    const now = new Date(), y = now.getFullYear(), m = now.getMonth(), d = now.getDate();
-    if (action === "last30") return [dayIso(new Date(y, m, d - 30)), dayIso(now)];
-    if (action === "next30") return [dayIso(now), dayIso(new Date(y, m, d + 30))];
-    if (action === "this_month") return [dayIso(new Date(y, m, 1)), dayIso(new Date(y, m + 1, 0))];
-    if (action === "this_year") return [`${y}-01-01`, `${y}-12-31`];
-    if (action === "past") return ["0000-01-01", dayIso(new Date(y, m, d - 1))];
-    if (action === "custom") return [ctrl.min || "0000-01-01", ctrl.max || "9999-12-31"];
-    return null;
-  };
-  const passesFilter = (c: Company, ctrl: { field: string; action: string; min?: string; max?: string; values?: string[]; text?: string }) => {
-    if (!ctrl.field || !ctrl.action) return true;
-    const v = valueOf(c, ctrl.field);
-    const blank = v == null || v === "";
-    if (ctrl.action === "has") return !blank;
-    if (ctrl.action === "empty") return blank;
-    if (ctrl.action === "only_yes") return !!v;
-    if (ctrl.action === "only_no") return !v;
-    if (ctrl.action === "in") { const picked = ctrl.values ?? []; return !picked.length || picked.includes(String(v ?? "").trim()); }
-    if (ctrl.action === "contains") { const t = (ctrl.text ?? "").trim(); return !t || norm(String(v ?? "")).includes(norm(t)); }
-    const win = fieldType(ctrl.field) === "date" ? dateWindow(ctrl.action, ctrl) : null;
-    if (win) { const d = String(v ?? "").slice(0, 10); return !!d && d >= win[0] && d <= win[1]; }
-    if (ctrl.action.startsWith("eq:")) return String(v ?? "") === ctrl.action.slice(3);
-    if (ctrl.action === "range") {
-      const n = Number(v);
-      if (v == null || v === "" || Number.isNaN(n)) return false;
-      if (ctrl.min !== undefined && ctrl.min !== "" && n < Number(ctrl.min)) return false;
-      if (ctrl.max !== undefined && ctrl.max !== "" && n > Number(ctrl.max)) return false;
-      return true;
-    }
-    return true;
-  };
-  const cmp = (a: Company, b: Company, ctrl: { field: string; action: string; min?: string; max?: string; values?: string[]; text?: string }) => {
-    if (!ctrl.field || (ctrl.action !== "asc" && ctrl.action !== "desc")) return 0;
-    const t = fieldType(ctrl.field);
-    const av = valueOf(a, ctrl.field), bv = valueOf(b, ctrl.field);
-    let r = 0;
-    if (t === "number") r = (Number(av) || 0) - (Number(bv) || 0);
-    else if (t === "date") r = String(av ?? "").localeCompare(String(bv ?? ""));
-    else r = String(av ?? "").localeCompare(String(bv ?? ""), undefined, { sensitivity: "base" });
-    return ctrl.action === "desc" ? -r : r;
-  };
+  // the header of each column sorts by this field
+  const sortKeyOf = (col: string) => (col === "contacts" ? "contacts_count" : col === "group" ? "parent" : col);
 
-  // Relationship filter. "tracking" / "notracking" look only at sales
-  // (a client can also be in a deal); "none" means neither; "tag:…" is one of your types.
-  const relMatches = (c: Company, f: string) => {
-    const s = companyStatus(c, rel);
-    if (f.startsWith("tag:")) return (c.relationship ?? []).includes(f.slice(4));
-    if (f === "client") return s.client;
-    if (f === "tracking") return s.sales;
-    if (f === "notracking") return !s.sales;
-    return !s.client && !s.sales;
-  };
-  const customTypes = relationshipOptions(options).filter((o) => !o.system);
-
-  const shown = companies.filter((c) => {
-    // Sales people only see the companies they have been assigned to.
-    if (!lead && me && !(assignees[c.id!] ?? []).includes(me.id)) return false;
-    if (!passesFilter(c, ctrl1)) return false;
-    if (!passesFilter(c, ctrl2)) return false;
-    if (fRel && !relMatches(c, fRel)) return false;
+  // Sales people only see the companies they have been assigned to.
+  const visible = companies.filter((c) => lead || !me || (assignees[c.id!] ?? []).includes(me.id));
+  const searched = (() => {
     const n = norm(q.trim());
-    if (!n) return true;
-    return [c.name, c.legal_name, c.vat_number, c.street, c.city, c.province, c.country, c.postal_code, c.sector]
-      .some((v) => norm(v ?? "").includes(n));
-  }).sort((a, b) => {
-    const r1 = cmp(a, b, ctrl1);
-    if (r1 !== 0) return r1;
-    return cmp(a, b, ctrl2);
-  });
+    if (!n) return visible;
+    return visible.filter((c) => [c.name, c.legal_name, c.vat_number, c.street, c.city, c.province, c.country, c.postal_code, c.sector, c.email, c.website]
+      .some((v) => norm(v ?? "").includes(n)));
+  })();
+  const shown = applyView(searched, filterFields, view, (a, b) => a.name.localeCompare(b.name));
+  const onSort = (key: string, add: boolean) => setView({ ...view, sort: nextSort(view.sort, key, add) });
+  const [filtersOpenTick, setFiltersOpenTick] = useState(0);
+  const fieldById = (id: string) => fields.find((f) => f.id === id);
 
   const contactsOf = (companyId: string) => contacts.filter((ct) => ct.companyIds.includes(companyId));
 
@@ -293,62 +229,14 @@ export default function CompaniesPage() {
       <header className="co-head">
         <button className="co-back" onClick={() => navigate("/home")} aria-label="Back">‹</button>
         <h1 className="co-title">Companies</h1>
-        <span className="co-kpi"><b>{shown.length}</b>{shown.length === 1 ? "company" : "companies"}</span>
+        <span className="co-kpi"><b>{shown.length.toLocaleString("en-GB")}</b>{shown.length !== visible.length ? `of ${visible.length.toLocaleString("en-GB")} ` : ""}{visible.length === 1 ? "company" : "companies"}</span>
         <div className="co-search">
           <span className="co-search-ico">⌕</span>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name or address…" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, VAT, address…" />
           {q && <button onClick={() => setQ("")}>×</button>}
         </div>
-        <div className="co-cfilter">
-          <Select value={fRel} onChange={setFRel} placeholder="Any relationship"
-            options={[
-              { value: "", label: "Any relationship" },
-              { value: "client", label: "Clients" },
-              { value: "tracking", label: "In sales tracking" },
-              { value: "notracking", label: "No sales tracking" },
-              { value: "none", label: "Not yet in play" },
-              ...customTypes.map((o) => ({ value: `tag:${o.key}`, label: o.label })),
-            ]} />
-        </div>
-        <div className="co-cfilters">
-          {[{ c: ctrl1, set: setCtrl1 }, { c: ctrl2, set: setCtrl2 }].map((ctl, i) => (
-            <div className="co-cfilter" key={i}>
-              <Select value={ctl.c.field}
-                onChange={(field) => { const acts = actionsFor(field); ctl.set({ field, action: acts[0]?.value ?? "" }); }}
-                options={filterFieldOptions} placeholder={`Filter ${i + 1}`} />
-              {ctl.c.field && (
-                <Select value={ctl.c.action} onChange={(action) => ctl.set({ ...ctl.c, action })}
-                  options={actionsFor(ctl.c.field)} placeholder="How" />
-              )}
-              {ctl.c.action === "in" && (
-                <div className="co-fvals">
-                  <SalesMultiFilter values={ctl.c.values ?? []} onChange={(v) => ctl.set({ ...ctl.c, values: v })}
-                    options={choicesFor(ctl.c.field)} placeholder="Choose…" searchFrom={7}
-                    noun={ctl.c.field === "imported_by" ? "people" : ctl.c.field === "city" ? "cities" : ctl.c.field === "country" ? "countries" : "options"} />
-                </div>
-              )}
-              {ctl.c.action === "contains" && (
-                <input className="co-ftext" value={ctl.c.text ?? ""} onChange={(e) => ctl.set({ ...ctl.c, text: e.target.value })} placeholder="Text…" />
-              )}
-              {ctl.c.action === "custom" && (
-                <div className="co-fdates">
-                  <DatePicker value={ctl.c.min ?? ""} onChange={(d) => ctl.set({ ...ctl.c, min: d })} placeholder="From" />
-                  <span className="co-range-sep">–</span>
-                  <DatePicker value={ctl.c.max ?? ""} onChange={(d) => ctl.set({ ...ctl.c, max: d })} placeholder="To" />
-                </div>
-              )}
-              {ctl.c.action === "range" && (
-                <div className="co-range">
-                  <input type="number" placeholder="Min" value={ctl.c.min ?? ""} onFocus={(e) => e.target.select()}
-                    onChange={(e) => ctl.set({ ...ctl.c, min: e.target.value })} />
-                  <span className="co-range-sep">–</span>
-                  <input type="number" placeholder="Max" value={ctl.c.max ?? ""} onFocus={(e) => e.target.select()}
-                    onChange={(e) => ctl.set({ ...ctl.c, max: e.target.value })} />
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
+        <FilterBar fields={filterFields} view={view} onView={setView} total={visible.length} shown={shown.length} noun={["company", "companies"]}
+          saved={savedViews} onSaved={setSavedViews} openSignal={filtersOpenTick} />
         <ActionsMenu items={[
           { key: "new", group: "Create", label: "New company", hint: "Add one company by hand", icon: AM_ICON.plus, primary: true, tone: "green", shortcut: "N", onSelect: () => setEditing(empty()) },
           { key: "import", group: "Data", label: "Import", hint: "Companies from Excel or CSV, with their contacts", icon: AM_ICON.import, tone: "blue", shortcut: "I", onSelect: () => setImporting(true) },
@@ -357,14 +245,16 @@ export default function CompaniesPage() {
         ]} />
       </header>
 
+      <FilterChips fields={filterFields} view={view} onView={setView} onEdit={() => setFiltersOpenTick((x) => x + 1)} shown={shown.length} total={visible.length} noun={["company", "companies"]} />
+
       {shown.length === 0 ? (
-        <p className="cl-hint">{companies.length === 0 ? "No companies yet. Create your first one." : "No companies match your search."}</p>
+        <p className="cl-hint">{companies.length === 0 ? "No companies yet. Create your first one." : "No companies match your search and filters."}</p>
       ) : (
         <div className="co-scroll">
           <div className="co-lrow co-lhead" style={{ gridTemplateColumns: rowGrid }}>
-            <span>Company</span>
-            {dataColumns.map((k) => <span key={k} className="co-lhcell">{columnLabel(k)}</span>)}
-            {showContacts && <span className="co-lright co-lcontacts">{columnLabel("contacts")}</span>}
+            <span><SortHead label="Company" k="name" sort={view.sort} onSort={onSort} /></span>
+            {dataColumns.map((k) => <span key={k} className="co-lhcell"><SortHead label={columnLabel(k)} k={sortKeyOf(k)} sort={view.sort} onSort={onSort} /></span>)}
+            {showContacts && <span className="co-lright co-lcontacts"><SortHead label={columnLabel("contacts")} k="contacts_count" sort={view.sort} onSort={onSort} /></span>}
           </div>
           <div className="co-list">
             {shown.map((c) => {
@@ -1874,4 +1764,479 @@ export function HistorySection({ entity, id, employees, fieldLabel, formatValue 
       )}
     </section>
   );
+}
+
+// ============================ Filtering & sorting (Companies and Contacts) ============================
+//
+// Every field of a list is described once (FField): its name, its group, its kind
+// and how to read it from a row. Filters (FCond) and sorting work on any of them;
+// a view (FView) is the filters + how they combine + the sort, and can be saved.
+
+export type FType = "text" | "number" | "date" | "select" | "multi" | "boolean";
+export interface FOpt { value: string; label: string }
+export interface FField<T> {
+  key: string; label: string; group: string; type: FType;
+  /** The value of a row: a string / number / ISO date / boolean, or a list for "multi". */
+  get: (r: T) => any;
+  /** Choices of a "select" / "multi" field (value → label). */
+  options?: () => FOpt[];
+  /** What to sort by, when it isn't the value itself. */
+  sort?: (r: T) => string | number | null;
+}
+export interface FCond { id: string; field: string; op: string; text?: string; values?: string[]; min?: string; max?: string }
+export interface FSort { key: string; dir: "asc" | "desc" }
+export interface FView { match: "all" | "any"; conds: FCond[]; sort: FSort[] }
+export const emptyView = (sort: FSort[] = []): FView => ({ match: "all", conds: [], sort });
+
+const FX_OPS: Record<FType, FOpt[]> = {
+  text: [{ value: "contains", label: "contains" }, { value: "ncontains", label: "doesn't contain" }, { value: "is", label: "is exactly" }, { value: "starts", label: "starts with" }, { value: "has", label: "has a value" }, { value: "empty", label: "is empty" }],
+  number: [{ value: "between", label: "is between" }, { value: "gt", label: "is more than" }, { value: "lt", label: "is less than" }, { value: "eq", label: "equals" }, { value: "has", label: "has a value" }, { value: "empty", label: "is empty" }],
+  date: [{ value: "last7", label: "in the last 7 days" }, { value: "last30", label: "in the last 30 days" }, { value: "last90", label: "in the last 90 days" }, { value: "this_month", label: "this month" }, { value: "this_year", label: "this year" },
+    { value: "next30", label: "in the next 30 days" }, { value: "before", label: "is before" }, { value: "after", label: "is after" }, { value: "between", label: "is between" }, { value: "has", label: "has a date" }, { value: "empty", label: "has no date" }],
+  select: [{ value: "in", label: "is any of" }, { value: "nin", label: "is none of" }, { value: "has", label: "has a value" }, { value: "empty", label: "is empty" }],
+  multi: [{ value: "any", label: "includes any of" }, { value: "all", label: "includes all of" }, { value: "none", label: "includes none of" }, { value: "has", label: "has any" }, { value: "empty", label: "has none" }],
+  boolean: [{ value: "yes", label: "is yes" }, { value: "no", label: "is no" }],
+};
+const fxNorm = (s: unknown) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+const fxBlank = (v: any) => v == null || v === "" || (Array.isArray(v) && v.length === 0);
+const fxIso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+/** Does this condition need a value before it filters anything? */
+const fxNeedsValue = (op: string) => !["has", "empty", "yes", "no", "last7", "last30", "last90", "this_month", "this_year", "next30"].includes(op);
+const fxReady = (c: FCond) => {
+  if (!fxNeedsValue(c.op)) return true;
+  if (["in", "nin", "any", "all", "none"].includes(c.op)) return !!c.values?.length;
+  if (c.op === "between") return !!(c.min || c.max);
+  if (["gt", "lt", "eq", "before", "after"].includes(c.op)) return !!c.min;
+  return !!(c.text ?? "").trim();
+};
+
+function fxMatch<T>(f: FField<T>, c: FCond, row: T): boolean {
+  const v = f.get(row);
+  if (c.op === "has") return !fxBlank(v) && v !== false;
+  if (c.op === "empty") return fxBlank(v) || v === false;
+  switch (f.type) {
+    case "text": {
+      const s = fxNorm(v), q = fxNorm(c.text);
+      if (c.op === "contains") return s.includes(q);
+      if (c.op === "ncontains") return !s.includes(q);
+      if (c.op === "is") return s === q;
+      if (c.op === "starts") return s.startsWith(q);
+      return true;
+    }
+    case "number": {
+      if (fxBlank(v) || Number.isNaN(Number(v))) return false;
+      const n = Number(v), a = c.min === "" || c.min == null ? null : Number(c.min), b = c.max === "" || c.max == null ? null : Number(c.max);
+      if (c.op === "gt") return a == null || n > a;
+      if (c.op === "lt") return a == null || n < a;
+      if (c.op === "eq") return a == null || n === a;
+      return (a == null || n >= a) && (b == null || n <= b);
+    }
+    case "date": {
+      if (fxBlank(v)) return false;
+      const d = String(v).slice(0, 10), now = new Date(), y = now.getFullYear(), m = now.getMonth(), day = now.getDate();
+      const win: Record<string, [string, string]> = {
+        last7: [fxIso(new Date(y, m, day - 7)), fxIso(now)], last30: [fxIso(new Date(y, m, day - 30)), fxIso(now)], last90: [fxIso(new Date(y, m, day - 90)), fxIso(now)],
+        this_month: [fxIso(new Date(y, m, 1)), fxIso(new Date(y, m + 1, 0))], this_year: [`${y}-01-01`, `${y}-12-31`], next30: [fxIso(now), fxIso(new Date(y, m, day + 30))],
+      };
+      if (win[c.op]) return d >= win[c.op][0] && d <= win[c.op][1];
+      if (c.op === "before") return !c.min || d < c.min;
+      if (c.op === "after") return !c.min || d > c.min;
+      return (!c.min || d >= c.min) && (!c.max || d <= c.max);
+    }
+    case "select": {
+      const s = String(v ?? "");
+      if (c.op === "in") return (c.values ?? []).includes(s);
+      if (c.op === "nin") return !(c.values ?? []).includes(s);
+      return true;
+    }
+    case "multi": {
+      const list = (Array.isArray(v) ? v : fxBlank(v) ? [] : [v]).map(String);
+      const want = c.values ?? [];
+      if (c.op === "any") return want.some((x) => list.includes(x));
+      if (c.op === "all") return want.every((x) => list.includes(x));
+      if (c.op === "none") return !want.some((x) => list.includes(x));
+      return true;
+    }
+    case "boolean": return c.op === "yes" ? !!v : !v;
+  }
+  return true;
+}
+
+/** Rows that pass the view's filters, sorted by its sort (unfinished filters are ignored). */
+export function applyView<T>(rows: T[], fields: FField<T>[], view: FView, tieBreak?: (a: T, b: T) => number): T[] {
+  const byKey = new Map(fields.map((f) => [f.key, f]));
+  const conds = view.conds.filter((c) => byKey.has(c.field) && fxReady(c));
+  const kept = !conds.length ? rows.slice() : rows.filter((r) => {
+    const hits = conds.map((c) => fxMatch(byKey.get(c.field)!, c, r));
+    return view.match === "any" ? hits.some(Boolean) : hits.every(Boolean);
+  });
+  const sorts = view.sort.filter((s) => byKey.has(s.key));
+  if (!sorts.length) return tieBreak ? kept.sort(tieBreak) : kept;
+  // sort values once per row
+  const labelMaps = new Map<string, Map<string, string>>();
+  const labelOf = (f: FField<T>, x: any) => {
+    if (!f.options) return String(x);
+    if (!labelMaps.has(f.key)) labelMaps.set(f.key, new Map(f.options().map((o) => [o.value, o.label])));
+    return labelMaps.get(f.key)!.get(String(x)) ?? String(x);
+  };
+  const val = (f: FField<T>, r: T): string | number | null => {
+    if (f.sort) return f.sort(r);
+    const v = f.get(r);
+    if (fxBlank(v)) return null;
+    if (f.type === "number") return Number.isNaN(Number(v)) ? null : Number(v);
+    if (f.type === "boolean") return v ? 1 : 0;
+    if (f.type === "multi") return (Array.isArray(v) ? v : [v]).map((x) => labelOf(f, x)).sort().join(", ");
+    if (f.type === "select") return labelOf(f, v);
+    return String(v);
+  };
+  const cache = new Map<T, (string | number | null)[]>();
+  kept.forEach((r) => cache.set(r, sorts.map((s) => val(byKey.get(s.key)!, r))));
+  return kept.sort((a, b) => {
+    const va = cache.get(a)!, vb = cache.get(b)!;
+    for (let i = 0; i < sorts.length; i++) {
+      const x = va[i], y = vb[i];
+      if (x === y) continue;
+      if (x == null) return 1;           // empty values always last
+      if (y == null) return -1;
+      const r = typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y), undefined, { numeric: true, sensitivity: "base" });
+      if (r) return sorts[i].dir === "desc" ? -r : r;
+    }
+    return tieBreak ? tieBreak(a, b) : 0;
+  });
+}
+
+/** Click a column header: sort by it (asc → desc → off). Shift-click adds it as a further sort. */
+export function nextSort(sort: FSort[], key: string, add: boolean): FSort[] {
+  const cur = sort.find((s) => s.key === key);
+  const flip: FSort | null = !cur ? { key, dir: "asc" } : cur.dir === "asc" ? { key, dir: "desc" } : null;
+  if (add) return flip ? (cur ? sort.map((s) => (s.key === key ? flip : s)) : [...sort, flip]) : sort.filter((s) => s.key !== key);
+  return flip ? [flip] : [];
+}
+
+/** A column header that sorts the list. */
+export function SortHead({ label, k, sort, onSort, className, title }: { label: ReactNode; k: string; sort: FSort[]; onSort: (key: string, add: boolean) => void; className?: string; title?: string }) {
+  const i = sort.findIndex((s) => s.key === k);
+  const s = sort[i];
+  return (
+    <button type="button" className={`fx-sort ${s ? `is-${s.dir}` : ""} ${className ?? ""}`} title={title ?? "Click to sort · Shift-click to sort by several columns"}
+      onClick={(e) => onSort(k, e.shiftKey)} aria-sort={s ? (s.dir === "asc" ? "ascending" : "descending") : "none"}>
+      <span>{label}</span>
+      <i aria-hidden="true">
+        <svg viewBox="0 0 12 16"><path className="fx-up" d="M6 1l4 5H2z" /><path className="fx-down" d="M6 15l4-5H2z" /></svg>
+        {s && sort.length > 1 && <b>{i + 1}</b>}
+      </i>
+    </button>
+  );
+}
+
+const fxUid = () => Math.random().toString(36).slice(2, 9);
+function fxSummary<T>(f: FField<T>, c: FCond): string {
+  const op = FX_OPS[f.type].find((o) => o.value === c.op)?.label ?? c.op;
+  if (!fxNeedsValue(c.op)) return op;
+  if (c.values) {
+    const opts = f.options?.() ?? [];
+    const names = c.values.map((v) => opts.find((o) => o.value === v)?.label ?? v);
+    return `${op} ${names.length > 2 ? `${names.slice(0, 2).join(", ")} +${names.length - 2}` : names.join(", ") || "…"}`;
+  }
+  const d = (x?: string) => (x && f.type === "date" ? new Date(x).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : x);
+  if (c.op === "between") return `${op} ${d(c.min) || "…"} and ${d(c.max) || "…"}`;
+  if (c.min != null) return `${op} ${d(c.min) || "…"}`;
+  return `${op} “${c.text ?? ""}”`;
+}
+
+/** Checkbox list with a search box, for "is any of" values. */
+function FxValues({ options, values, onChange }: { options: FOpt[]; values: string[]; onChange: (v: string[]) => void }) {
+  const [q, setQ] = useState("");
+  const n = fxNorm(q);
+  const list = n ? options.filter((o) => fxNorm(o.label).includes(n)) : options;
+  const toggle = (v: string) => onChange(values.includes(v) ? values.filter((x) => x !== v) : [...values, v]);
+  return (
+    <div className="fx-vals">
+      {options.length > 7 && <input className="fx-vals-q" value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Search ${options.length}…`} />}
+      <div className="fx-vals-list">
+        {list.slice(0, 200).map((o) => (
+          <label key={o.value} className={values.includes(o.value) ? "is-on" : ""}>
+            <input type="checkbox" checked={values.includes(o.value)} onChange={() => toggle(o.value)} />
+            <i aria-hidden="true">✓</i><span>{o.label}</span>
+          </label>
+        ))}
+        {!list.length && <p className="fx-vals-none">{options.length ? "No matches" : "No values yet"}</p>}
+      </div>
+      {values.length > 0 && <button type="button" className="fx-vals-clear" onClick={() => onChange([])}>Clear {values.length} selected</button>}
+    </div>
+  );
+}
+
+/** One filter row: field · how · value. */
+function FxRow<T>({ c, f, onChange, onRemove, onPickField, i }: { c: FCond; f: FField<T>; onChange: (c: FCond) => void; onRemove: () => void; onPickField: () => void; i: number }) {
+  const set = (p: Partial<FCond>) => onChange({ ...c, ...p });
+  const setOp = (op: string) => {
+    const multi = ["in", "nin", "any", "all", "none"].includes(op);
+    onChange({ id: c.id, field: c.field, op, ...(multi ? { values: c.values ?? [] } : {}), ...(op === "between" || ["gt", "lt", "eq", "before", "after"].includes(op) ? { min: c.min ?? "", max: op === "between" ? c.max ?? "" : undefined } : {}), ...(f.type === "text" ? { text: c.text ?? "" } : {}) });
+  };
+  const multi = ["in", "nin", "any", "all", "none"].includes(c.op);
+  return (
+    <div className={`fx-row ${fxReady(c) ? "" : "is-unready"}`} style={{ ["--i" as string]: i } as CSSProperties}>
+      <div className="fx-row-top">
+        <button type="button" className="fx-field" onClick={onPickField} title="Change the field"><em>{f.group}</em>{f.label}</button>
+        <Select size="sm" className="fx-op" value={c.op} onChange={setOp} options={FX_OPS[f.type]} />
+        {f.type === "text" && fxNeedsValue(c.op) && <input className="fx-in" autoFocus value={c.text ?? ""} onChange={(e) => set({ text: e.target.value })} placeholder="Type…" />}
+        {f.type === "number" && fxNeedsValue(c.op) && (
+          <span className="fx-pair">
+            <input className="fx-in is-num" type="number" value={c.min ?? ""} onChange={(e) => set({ min: e.target.value })} placeholder={c.op === "between" ? "From" : "Value"} />
+            {c.op === "between" && <><span>and</span><input className="fx-in is-num" type="number" value={c.max ?? ""} onChange={(e) => set({ max: e.target.value })} placeholder="To" /></>}
+          </span>
+        )}
+        {f.type === "date" && ["before", "after", "between"].includes(c.op) && (
+          <span className="fx-pair is-date">
+            <DatePicker value={c.min ?? ""} onChange={(d) => set({ min: d })} placeholder={c.op === "between" ? "From" : "Date"} />
+            {c.op === "between" && <><span>and</span><DatePicker value={c.max ?? ""} onChange={(d) => set({ max: d })} placeholder="To" /></>}
+          </span>
+        )}
+        <button type="button" className="fx-x" onClick={onRemove} aria-label="Remove this filter">×</button>
+      </div>
+      {multi && <FxValues options={f.options?.() ?? []} values={c.values ?? []} onChange={(values) => set({ values })} />}
+    </div>
+  );
+}
+
+/** Searchable, grouped list of fields. */
+function FxFieldPicker<T>({ fields, onPick, onCancel }: { fields: FField<T>[]; onPick: (f: FField<T>) => void; onCancel?: () => void }) {
+  const [q, setQ] = useState("");
+  const n = fxNorm(q);
+  const list = n ? fields.filter((f) => fxNorm(`${f.label} ${f.group}`).includes(n)) : fields;
+  const groups = [...new Set(list.map((f) => f.group))];
+  return (
+    <div className="fx-pick">
+      <div className="fx-pick-q">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>
+        <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Filter by… (${fields.length} fields)`}
+          onKeyDown={(e) => { if (e.key === "Enter" && list[0]) onPick(list[0]); if (e.key === "Escape") { e.stopPropagation(); onCancel?.(); } }} />
+        {onCancel && <button type="button" onClick={onCancel}>Cancel</button>}
+      </div>
+      <div className="fx-pick-list">
+        {groups.map((g) => (
+          <div key={g} className="fx-pick-g">
+            <span>{g}</span>
+            <div>
+              {list.filter((f) => f.group === g).map((f) => (
+                <button type="button" key={f.key} onClick={() => onPick(f)}><i data-t={f.type} />{f.label}</button>
+              ))}
+            </div>
+          </div>
+        ))}
+        {!list.length && <p className="fx-vals-none">No field matches “{q}”</p>}
+      </div>
+    </div>
+  );
+}
+
+export interface SavedView { name: string; view: FView }
+
+/**
+ * The filter bar: a "Filters" button opening the builder, the active filters as
+ * chips under the header, a live counter, and saved views.
+ */
+export function FilterBar<T>({ fields, view, onView, total, shown, noun, saved, onSaved, openSignal }: {
+  fields: FField<T>[]; view: FView; onView: (v: FView) => void;
+  total: number; shown: number; noun: [string, string];
+  saved: SavedView[]; onSaved: (list: SavedView[]) => void;
+  /** Changes when something outside (a chip) asks to open the builder. */
+  openSignal?: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const [picking, setPicking] = useState<string | null>(null); // "new" or the id of the filter whose field changes
+  const [viewsOpen, setViewsOpen] = useState(false);
+  const [naming, setNaming] = useState<string | null>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const vbtn = useRef<HTMLButtonElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  const vpanel = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
+  const [vpos, setVpos] = useState<{ top: number; left: number } | null>(null);
+  const byKey = new Map(fields.map((f) => [f.key, f]));
+  const conds = view.conds.filter((c) => byKey.has(c.field));
+  const active = conds.filter(fxReady);
+
+  useLayoutEffect(() => {
+    if (!open && !viewsOpen) return;
+    const place = () => {
+      const r = btn.current?.getBoundingClientRect();
+      if (r && open) { const width = Math.min(620, window.innerWidth - 24); setPos({ top: r.bottom + 8, left: Math.max(12, Math.min(r.left, window.innerWidth - width - 12)), width }); }
+      const v = vbtn.current?.getBoundingClientRect();
+      if (v && viewsOpen) setVpos({ top: v.bottom + 8, left: Math.max(12, Math.min(v.left, window.innerWidth - 300)) });
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [open, viewsOpen]);
+  useEffect(() => {
+    if (!open && !viewsOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if ((t as Element).closest?.(".dp-pop, .dp-layer, .sel-pop, .sel-layer")) return; // a date picker opened from a filter
+      if (open && !panel.current?.contains(t) && !btn.current?.contains(t)) { setOpen(false); setPicking(null); }
+      if (viewsOpen && !vpanel.current?.contains(t) && !vbtn.current?.contains(t)) { setViewsOpen(false); setNaming(null); }
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { setOpen(false); setViewsOpen(false); setPicking(null); } };
+    document.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDown); window.removeEventListener("keydown", onKey); };
+  }, [open, viewsOpen]);
+
+  const setConds = (cs: FCond[]) => onView({ ...view, conds: cs });
+  const firstOp = (f: FField<T>) => FX_OPS[f.type][0].value;
+  const newCond = (f: FField<T>): FCond => {
+    const op = firstOp(f);
+    return { id: fxUid(), field: f.key, op, ...(["in", "any"].includes(op) ? { values: [] } : {}), ...(f.type === "number" ? { min: "", max: "" } : {}), ...(f.type === "text" ? { text: "" } : {}) };
+  };
+  const pick = (f: FField<T>) => {
+    if (picking === "new") setConds([...view.conds, newCond(f)]);
+    else if (picking) setConds(view.conds.map((c) => (c.id === picking ? { ...newCond(f), id: c.id } : c)));
+    setPicking(null);
+  };
+  const openBuilder = (addFirst = false) => { setOpen(true); setViewsOpen(false); setPicking(addFirst || !conds.length ? "new" : null); };
+  const clear = () => onView({ ...view, conds: [] });
+  useEffect(() => { if (openSignal) { setOpen(true); setViewsOpen(false); setPicking(null); } }, [openSignal]);
+  const sameView = (a: FView, b: FView) => JSON.stringify([a.match, a.conds, a.sort]) === JSON.stringify([b.match, b.conds, b.sort]);
+  const current = saved.find((s) => sameView(s.view, view));
+
+  return (
+    <>
+      <div className="fx-tools">
+        <button ref={btn} type="button" className={`fx-btn ${open ? "is-open" : ""} ${active.length ? "is-active" : ""}`} onClick={() => (open ? setOpen(false) : openBuilder())}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 5h18l-7 8v6l-4 2v-8z" /></svg>
+          Filters{active.length > 0 && <b>{active.length}</b>}
+        </button>
+        <button ref={vbtn} type="button" className={`fx-btn is-views ${viewsOpen ? "is-open" : ""}`} onClick={() => { setViewsOpen((x) => !x); setOpen(false); }}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" /></svg>
+          {current ? current.name : "Views"}{saved.length > 0 && !current && <em>{saved.length}</em>}
+        </button>
+      </div>
+
+      {open && pos && createPortal(
+        <div ref={panel} className="fx-panel" style={{ top: pos.top, left: pos.left, width: pos.width }} role="dialog" aria-label="Filters">
+          <header className="fx-panel-h">
+            <b>Filters</b>
+            {conds.length > 1 && (
+              <span className="fx-match">
+                Show {noun[1]} that match
+                <span className="fx-seg">
+                  <button type="button" className={view.match === "all" ? "is-on" : ""} onClick={() => onView({ ...view, match: "all" })}>all</button>
+                  <button type="button" className={view.match === "any" ? "is-on" : ""} onClick={() => onView({ ...view, match: "any" })}>any</button>
+                </span>
+                of these
+              </span>
+            )}
+            <span className="fx-count"><b>{shown.toLocaleString("en-GB")}</b> of {total.toLocaleString("en-GB")}</span>
+          </header>
+          <div className="fx-panel-b">
+            {conds.map((c, i) => {
+              const f = byKey.get(c.field)!;
+              return picking === c.id ? <FxFieldPicker key={c.id} fields={fields} onPick={pick} onCancel={() => setPicking(null)} /> : (
+                <div key={c.id} className="fx-row-wrap">
+                  {i > 0 && <span className="fx-join">{view.match === "all" ? "and" : "or"}</span>}
+                  <FxRow c={c} f={f} i={i} onChange={(nc) => setConds(view.conds.map((x) => (x.id === c.id ? nc : x)))}
+                    onRemove={() => setConds(view.conds.filter((x) => x.id !== c.id))} onPickField={() => setPicking(c.id)} />
+                </div>
+              );
+            })}
+            {picking === "new" ? (
+              <FxFieldPicker fields={fields} onPick={pick} onCancel={conds.length ? () => setPicking(null) : undefined} />
+            ) : (
+              <button type="button" className="fx-add" onClick={() => setPicking("new")}>+ Add a filter</button>
+            )}
+          </div>
+          <footer className="fx-panel-f">
+            {conds.length > 0 && <button type="button" className="fx-link" onClick={clear}>Clear all</button>}
+            <span />
+            {active.length > 0 && <button type="button" className="fx-link" onClick={() => { setViewsOpen(true); setOpen(false); setNaming(""); }}>Save as a view…</button>}
+            <button type="button" className="fx-done" onClick={() => setOpen(false)}>Show {shown.toLocaleString("en-GB")} {shown === 1 ? noun[0] : noun[1]}</button>
+          </footer>
+        </div>,
+        document.body,
+      )}
+
+      {viewsOpen && vpos && createPortal(
+        <div ref={vpanel} className="fx-views" style={{ top: vpos.top, left: vpos.left }}>
+          <span className="fx-views-k">Saved views</span>
+          <button type="button" className={`fx-view ${!conds.length && !view.sort.length ? "is-on" : ""}`} onClick={() => { onView(emptyView()); setViewsOpen(false); }}>
+            <b>Everything</b><small>No filters</small>
+          </button>
+          {saved.map((s, i) => (
+            <div key={s.name + i} className={`fx-view ${current === s ? "is-on" : ""}`}>
+              <button type="button" onClick={() => { onView(s.view); setViewsOpen(false); }}>
+                <b>{s.name}</b><small>{s.view.conds.length} {s.view.conds.length === 1 ? "filter" : "filters"}{s.view.sort.length ? " · sorted" : ""}</small>
+              </button>
+              <button type="button" className="fx-view-x" aria-label={`Delete ${s.name}`} onClick={() => onSaved(saved.filter((x) => x !== s))}>×</button>
+            </div>
+          ))}
+          {naming !== null ? (
+            <form className="fx-name" onSubmit={(e) => { e.preventDefault(); const n = naming.trim(); if (!n) return; onSaved([...saved.filter((x) => x.name !== n), { name: n, view }]); setNaming(null); }}>
+              <input autoFocus value={naming} onChange={(e) => setNaming(e.target.value)} placeholder="e.g. Clients in Madrid" />
+              <button type="submit" disabled={!naming.trim()}>Save</button>
+            </form>
+          ) : (
+            <button type="button" className="fx-add" disabled={!active.length && !view.sort.length} onClick={() => setNaming("")}>
+              {active.length || view.sort.length ? "+ Save what's on screen" : "Add filters to save a view"}
+            </button>
+          )}
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
+/** The active filters as chips (click one to edit, × to drop it). */
+export function FilterChips<T>({ fields, view, onView, onEdit, shown, total, noun }: {
+  fields: FField<T>[]; view: FView; onView: (v: FView) => void; onEdit: () => void; shown: number; total: number; noun: [string, string];
+}) {
+  const byKey = new Map(fields.map((f) => [f.key, f]));
+  const active = view.conds.filter((c) => byKey.has(c.field) && fxReady(c));
+  const all = view.sort.filter((s) => byKey.has(s.key));
+  // the usual A → Z by name needs no chip
+  const sorted = all.length === 1 && all[0].key === "name" && all[0].dir === "asc" ? [] : all;
+  if (!active.length && !sorted.length) return null;
+  return (
+    <div className="fx-chips">
+      <span className="fx-chips-n"><b>{shown.toLocaleString("en-GB")}</b> of {total.toLocaleString("en-GB")} {total === 1 ? noun[0] : noun[1]}</span>
+      {active.map((c, i) => {
+        const f = byKey.get(c.field)!;
+        return (
+          <span key={c.id} className="fx-chip" style={{ ["--i" as string]: i } as CSSProperties}>
+            {i > 0 && <em>{view.match === "all" ? "and" : "or"}</em>}
+            <button type="button" onClick={onEdit}><b>{f.label}</b> {fxSummary(f, c)}</button>
+            <button type="button" className="fx-chip-x" aria-label="Remove" onClick={() => onView({ ...view, conds: view.conds.filter((x) => x.id !== c.id) })}>×</button>
+          </span>
+        );
+      })}
+      {sorted.length > 0 && (
+        <span className="fx-chip is-sort">
+          <button type="button" onClick={() => onView({ ...view, sort: [] })} title="Click to remove the sort">
+            Sorted by {sorted.map((s) => `${byKey.get(s.key)!.label} ${s.dir === "asc" ? "↑" : "↓"}`).join(", then ")}
+          </button>
+          <button type="button" className="fx-chip-x" aria-label="Remove sort" onClick={() => onView({ ...view, sort: [] })}>×</button>
+        </span>
+      )}
+      {active.length > 0 && <button type="button" className="fx-chips-clear" onClick={() => onView({ ...view, conds: [] })}>Clear filters</button>}
+    </div>
+  );
+}
+
+/** Saved views kept per person (profiles.prefs). */
+export function useSavedViews(prefKey: string): [SavedView[], (list: SavedView[]) => void] {
+  const [list, setList] = useState<SavedView[]>([]);
+  useEffect(() => { loadPrefs().then((p) => { if (Array.isArray(p[prefKey])) setList(p[prefKey]); }).catch(() => {}); }, [prefKey]);
+  const save = (next: SavedView[]) => { setList(next); savePref(prefKey, next).catch(() => {}); };
+  return [list, save];
+}
+/** The current filters + sort, remembered on this browser between visits. */
+export function useStoredView(storeKey: string, initial: FView): [FView, (v: FView) => void] {
+  const [view, setView] = useState<FView>(() => {
+    try { const raw = localStorage.getItem(storeKey); if (raw) { const v = JSON.parse(raw); if (v && Array.isArray(v.conds) && Array.isArray(v.sort)) return { match: v.match === "any" ? "any" : "all", conds: v.conds, sort: v.sort }; } } catch { /* no storage */ }
+    return initial;
+  });
+  const set = (v: FView) => { setView(v); try { localStorage.setItem(storeKey, JSON.stringify(v)); } catch { /* no storage */ } };
+  return [view, set];
 }

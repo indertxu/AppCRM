@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { flushSync } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import type { Client, Project, ProjectType } from "./clientsTypes";
 import { effectiveRate, effectiveSupervisionRate, projectValue } from "./clientsTypes";
@@ -10,6 +10,8 @@ import MentionInput, { type MentionPerson } from "../../framework/MentionInput";
 import { addTask, toggleTask, updateTaskMeta, type TaskPriority, type TrackTask } from "../sales/sales/salesApi";
 import { listCompanyFields, listContactFields, sessionUserId, type CompanyField, type ContactField } from "../companies/companiesApi";
 import { countryLabel, formatAddress, languageName, linkedInHandle } from "../contacts/contactProfile";
+import Select from "../../framework/Select";
+import DatePicker from "../../framework/DatePicker";
 import "../../framework/MentionInput.css";
 import "./ClientWorkspace.css";
 
@@ -1044,12 +1046,11 @@ export default function ClientWorkspace({
                               ))}
                             </div>
                             <div className="cw-logrow">
-                              <input list="cw-people-list" value={logWho} placeholder="With whom" onChange={(e) => setLogWho(e.target.value)} />
-                              <input type="date" className="is-date" value={logDate} max={todayISO()} onChange={(e) => setLogDate(e.target.value || todayISO())} />
+                              <PersonCombo value={logWho} onChange={setLogWho} people={persons} />
+                              <span className="cw-date"><DatePicker value={logDate} maxDate={todayISO()} onChange={(d) => setLogDate(d || todayISO())} /></span>
                             </div>
                             <input value={logWhy} placeholder="What was it about?" onChange={(e) => setLogWhy(e.target.value)}
                               onKeyDown={(e) => { if (e.key === "Enter" && !logBusy) void saveLog(); }} />
-                            <datalist id="cw-people-list">{persons.map((p) => <option key={p.key} value={p.name} />)}</datalist>
                             {logErr && <p className="cw-err">{logErr}</p>}
                             <div className="cw-logactions"><button className="cw-btn-primary is-sm" disabled={logBusy} onClick={saveLog}>{logBusy ? "Saving…" : "Save contact"}</button></div>
                           </div>
@@ -1296,11 +1297,9 @@ export default function ClientWorkspace({
                           <div className="cw-pri">
                             {PRI.map((p) => <button key={p} data-p={p} className={taskPri === p ? "is-on" : ""} onClick={() => setTaskPri(p)}><i />{p}</button>)}
                           </div>
-                          <input type="date" className="cw-tadd-date" value={taskDue} onChange={(e) => setTaskDue(e.target.value)} aria-label="Due date" />
+                          <span className="cw-tadd-date"><DatePicker value={taskDue} onChange={setTaskDue} placeholder="Due date" /></span>
                           {deals.length > 1 && (
-                            <select className="cw-tadd-deal" value={taskDeal} onChange={(e) => setTaskDeal(e.target.value)} aria-label="Deal">
-                              {deals.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-                            </select>
+                            <span className="cw-tadd-deal"><Select size="sm" aria-label="Deal" value={taskDeal} onChange={setTaskDeal} options={deals.map((d) => ({ value: d.id, label: d.name }))} /></span>
                           )}
                         </div>
                       </div>
@@ -1441,6 +1440,50 @@ export default function ClientWorkspace({
         </div>
         <TipLayer tip={tip} />
       </div>
+    </div>
+  );
+}
+
+/** "With whom": type a name, or pick one of the client's people from the list under it. */
+function PersonCombo({ value, onChange, people }: { value: string; onChange: (v: string) => void; people: { key: string; name: string; position?: string }[] }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [hi, setHi] = useState(0);
+  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
+  const q = value.trim().toLowerCase();
+  const list = people.filter((p) => !q || p.name.toLowerCase().includes(q) || (p.position ?? "").toLowerCase().includes(q)).slice(0, 7);
+  const show = open && list.length > 0 && !(list.length === 1 && list[0].name === value);
+  useLayoutEffect(() => {
+    if (!show) return;
+    const place = () => { const r = ref.current?.getBoundingClientRect(); if (r) setPos({ top: r.bottom + 6, left: r.left, width: Math.max(r.width, 240) }); };
+    place();
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => { window.removeEventListener("scroll", place, true); window.removeEventListener("resize", place); };
+  }, [show]);
+  const pick = (n: string) => { onChange(n); setOpen(false); };
+  return (
+    <div className="cw-combo" ref={ref}>
+      <input value={value} placeholder="With whom" autoComplete="off"
+        onChange={(e) => { onChange(e.target.value); setOpen(true); setHi(0); }}
+        onFocus={() => setOpen(true)} onBlur={() => window.setTimeout(() => setOpen(false), 120)}
+        onKeyDown={(e) => {
+          if (!show) return;
+          if (e.key === "ArrowDown") { e.preventDefault(); setHi((i) => Math.min(list.length - 1, i + 1)); }
+          else if (e.key === "ArrowUp") { e.preventDefault(); setHi((i) => Math.max(0, i - 1)); }
+          else if (e.key === "Enter") { e.preventDefault(); pick(list[hi].name); }
+          else if (e.key === "Escape") { e.stopPropagation(); setOpen(false); }
+        }} />
+      {show && pos && createPortal(
+        <div className="sel-pop is-sm cw-combo-pop" style={{ top: pos.top, left: pos.left, minWidth: pos.width }} onMouseDown={(e) => e.preventDefault()}>
+          {list.map((p, i) => (
+            <button type="button" key={p.key} className={`sel-option ${i === hi ? "is-hi" : ""}`} onMouseEnter={() => setHi(i)} onClick={() => pick(p.name)}>
+              <span>{p.name}{p.position && <small>{p.position}</small>}</span>
+            </button>
+          ))}
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }

@@ -22,6 +22,7 @@ import {
   type Column, type Ctx, type Entity, type ExistingMode, type RecordDiff, type ImportState, type Plan, type NewField, type Person, type Rule, type FieldType, type PlanRow, type RunResult, type CompanyName, type ContactName,
 } from "./dealImportEngine";
 import "./DealImport.css";
+import Select from "../../../framework/Select";
 
 const TYPE_LABEL: Record<FieldType, string> = { text: "Text", number: "Number", date: "Date", boolean: "Yes / No", select: "Choice list" };
 const uid = () => Math.random().toString(36).slice(2, 9);
@@ -1650,23 +1651,20 @@ export function ColumnTools({ col, columns, rows, prep, onPrep, target, targetLa
           {rules.map((r, k) => (
             <div key={r.id} className="di-rulerow" style={{ ["--j" as string]: k } as CSSProperties}>
               <em>{k + 1}</em>
-              <select value={r.op} onChange={(e) => patchRule(r.id, { op: e.target.value as ColRuleOp })}>
-                {RULE_OPS.map((op) => <option key={op} value={op}>{RULE_LABEL[op]}</option>)}
-              </select>
+              <Select size="sm" value={r.op} onChange={(v) => patchRule(r.id, { op: v as ColRuleOp })}
+                options={RULE_OPS.map((op) => ({ value: op, label: RULE_LABEL[op] }))} />
               {(r.op === "dropWords" || r.op === "keepWords" || r.op === "dropLastWords" || r.op === "keepLastWords") && (
                 <label className="di-rulep"><input type="number" min={1} max={20} value={r.n ?? 1} onChange={(e) => patchRule(r.id, { n: Math.max(1, +e.target.value || 1) })} /><span>{(r.n ?? 1) === 1 ? "word" : "words"}</span></label>
               )}
               {r.op === "removeCol" && (
-                <select value={r.col ?? ""} onChange={(e) => patchRule(r.id, { col: +e.target.value })}>
-                  {columns.filter((c) => c.i !== col.i).map((c) => <option key={c.i} value={c.i}>{c.letter} · {c.header}</option>)}
-                </select>
+                <Select size="sm" value={r.col != null ? String(r.col) : ""} onChange={(v) => patchRule(r.id, { col: +v })} placeholder="Which column?"
+                  options={columns.filter((c) => c.i !== col.i).map((c) => ({ value: String(c.i), label: `${c.letter} · ${c.header}` }))} />
               )}
               {(r.op === "before" || r.op === "after") && (
                 <>
                   <input className="di-rulet" value={r.text ?? ""} placeholder="e.g. ,  or  -" onChange={(e) => patchRule(r.id, { text: e.target.value })} />
-                  <select value={r.last ? "last" : "first"} onChange={(e) => patchRule(r.id, { last: e.target.value === "last" })}>
-                    <option value="first">first time it appears</option><option value="last">last time it appears</option>
-                  </select>
+                  <Select size="sm" value={r.last ? "last" : "first"} onChange={(v) => patchRule(r.id, { last: v === "last" })}
+                    options={[{ value: "first", label: "first time it appears" }, { value: "last", label: "last time it appears" }]} />
                 </>
               )}
               {r.op === "replace" && (
@@ -1677,18 +1675,15 @@ export function ColumnTools({ col, columns, rows, prep, onPrep, target, targetLa
                 </>
               )}
               {r.op === "case" && (
-                <select value={r.to ?? "title"} onChange={(e) => patchRule(r.id, { to: e.target.value as ColRule["to"] })}>
-                  <option value="title">Title Case</option><option value="upper">UPPERCASE</option><option value="lower">lowercase</option>
-                </select>
+                <Select size="sm" value={r.to ?? "title"} onChange={(v) => patchRule(r.id, { to: v as ColRule["to"] })}
+                  options={[{ value: "title", label: "Title Case" }, { value: "upper", label: "UPPERCASE" }, { value: "lower", label: "lowercase" }]} />
               )}
               <button className="di-rulex is-del" onClick={() => setRules(rules.filter((x) => x.id !== r.id))} aria-label="Remove rule">×</button>
             </div>
           ))}
           <div className="di-rules-foot">
-            <select value="" onChange={(e) => e.target.value && addRule(e.target.value as ColRuleOp)}>
-              <option value="">+ Add a rule…</option>
-              {RULE_OPS.map((op) => <option key={op} value={op}>{RULE_LABEL[op]}</option>)}
-            </select>
+            <Select size="sm" className="is-add" value="" placeholder="+ Add a rule…" onChange={(v) => v && addRule(v as ColRuleOp)}
+              options={RULE_OPS.map((op) => ({ value: op, label: RULE_LABEL[op] }))} />
             <span>Applied in order, before the value is imported.</span>
           </div>
           {rulePreview.length > 0 && (

@@ -11,6 +11,7 @@ import {
   type AccessPerson, type AccessSettings, type RuleMap, type SubjectType, type Source, type PipeRule, type EffectivePerms,
 } from "./salesAccess";
 import "./AccessStudio.css";
+import Select from "../../../framework/Select";
 
 const initials = (s: string) => s.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "?";
 const KNOWN_JOBS = ["boss", "sales_manager", "sales", "marketing_manager", "marketing"];
@@ -395,9 +396,7 @@ export default function AccessStudio({ people, roles: initialRoles, pipelines, p
               </div>
               {previewPeople.length === 0 || !previewPerson || !perms ? <p className="acs-note">Nobody has this yet.</p> : (
                 <>
-                  <select className="acs-select" value={previewPerson.id} onChange={(e) => setPreviewId(e.target.value)} aria-label="Preview as">
-                    {previewPeople.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                  </select>
+                  <div className="acs-select"><Select size="sm" aria-label="Preview as" value={previewPerson.id} onChange={setPreviewId} options={previewPeople.map((p) => ({ value: p.id, label: p.name }))} /></div>
                   {!perms.canOpen ? (
                     <div className="acs-big is-off"><b>No access</b><small>Sales is closed to {previewPerson.name.split(" ")[0]}</small></div>
                   ) : seen && (

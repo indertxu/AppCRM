@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import "./ActualModal.css";
+import Select from "../../framework/Select";
 
 const HOURS = Array.from({ length: 17 }, (_, i) => 5 + i);
 const MINUTES = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55];
@@ -81,13 +82,9 @@ export default function ActualModal({ planned, existing, onSave, onClear, onClos
           <div className="am-field">
             <label>Actual start</label>
             <div className="am-time">
-              <select value={startH} onChange={(e) => setStartH(Number(e.target.value))}>
-                {HOURS.map((h) => (<option key={h} value={h}>{hourLabel(h)}</option>))}
-              </select>
+              <Select size="sm" aria-label="Hour" value={String(startH)} onChange={(v) => setStartH(Number(v))} options={HOURS.map((h) => ({ value: String(h), label: hourLabel(h) }))} />
               <span className="am-colon">:</span>
-              <select value={startM} onChange={(e) => setStartM(Number(e.target.value))}>
-                {MINUTES.map((m) => (<option key={m} value={m}>{String(m).padStart(2, "0")}</option>))}
-              </select>
+              <Select size="sm" aria-label="Minutes" value={String(startM)} onChange={(v) => setStartM(Number(v))} options={MINUTES.map((m) => ({ value: String(m), label: String(m).padStart(2, "0") }))} />
             </div>
           </div>
 
@@ -96,13 +93,9 @@ export default function ActualModal({ planned, existing, onSave, onClear, onClos
           <div className="am-field">
             <label>Actual finish</label>
             <div className="am-time">
-              <select value={endH} onChange={(e) => setEndH(Number(e.target.value))}>
-                {HOURS.map((h) => (<option key={h} value={h}>{hourLabel(h)}</option>))}
-              </select>
+              <Select size="sm" aria-label="Hour" value={String(endH)} onChange={(v) => setEndH(Number(v))} options={HOURS.map((h) => ({ value: String(h), label: hourLabel(h) }))} />
               <span className="am-colon">:</span>
-              <select value={endM} onChange={(e) => setEndM(Number(e.target.value))}>
-                {MINUTES.map((m) => (<option key={m} value={m}>{String(m).padStart(2, "0")}</option>))}
-              </select>
+              <Select size="sm" aria-label="Minutes" value={String(endM)} onChange={(v) => setEndM(Number(v))} options={MINUTES.map((m) => ({ value: String(m), label: String(m).padStart(2, "0") }))} />
             </div>
           </div>
         </div>

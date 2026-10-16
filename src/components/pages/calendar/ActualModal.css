@@ -265,4 +265,5 @@
 
 @media (prefers-reduced-motion: reduce) {
   .am-backdrop, .am-card { animation: none; }
-}
+}/* hours / minutes: the app's dropdown */
+.am-time > .sel-trigger { flex: 1; width: auto; height: 46px; justify-content: center; gap: 6px; padding: 0 10px; border-color: var(--line); background: #f4faf6; font-size: 15px; font-weight: 600; }

@@ -12,12 +12,14 @@ import {
   loadPrefs, savePref,
   type Contact, type Company, type Employee, type ContactField,
 } from "../companies/companiesApi";
-import { AddressFields, PhoneField, StatusPills, HistorySection, phoneText, telHref } from "../companies/CompaniesPage";
+import {
+  AddressFields, PhoneField, StatusPills, HistorySection, phoneText, telHref,
+  FilterBar, FilterChips, SortHead, applyView, nextSort, emptyView, useSavedViews, useStoredView, type FField,
+} from "../companies/CompaniesPage";
 import "../clients/ClientsPage.css";
 import "../companies/CompaniesPage.css";
 import ContactImport from "./ContactImport";
 import ContactExport from "./ContactExport";
-import SalesMultiFilter from "../sales/sales/SalesMultiFilter";
 import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
 import {
   PROFILE_FIELDS, isRequired, isProfileKey, missingProfile, tidyProfile, formatAddress,
@@ -49,11 +51,12 @@ export default function ContactsPage() {
   const [showFieldSettings, setShowFieldSettings] = useState(false);
   const [importing, setImporting] = useState(false);
   const [columns, setColumns] = useState<string[]>(["position", "email", "companies"]);
-  const [ctrl1, setCtrl1] = useState<{ field: string; action: string; min?: string; max?: string; values?: string[]; text?: string }>({ field: "", action: "" });
-  const [ctrl2, setCtrl2] = useState<{ field: string; action: string; min?: string; max?: string; values?: string[]; text?: string }>({ field: "", action: "" });
   const [exporting, setExporting] = useState(false);
   const [rel, setRel] = useState<RelationshipSets | null>(null);
-  const [fRel, setFRel] = useState("");  // "", "client", "tracking", "notracking", "none"
+  // filters + sort (remembered on this browser), and the views you saved
+  const [view, setView] = useStoredView("np-contacts-view", emptyView([{ key: "name", dir: "asc" }]));
+  const [savedViews, setSavedViews] = useSavedViews("contactViews");
+  const [filtersOpenTick, setFiltersOpenTick] = useState(0);
   const location = useLocation();
 
   const reload = async () => {
@@ -141,149 +144,60 @@ export default function ContactsPage() {
     return <span className="ct-lmuted">{String(v)}</span>;
   };
 
-  // ---- Compound filter + sort controls ----
-  // The "type" of any filterable field, fixed or custom.
-  const fieldType = (key: string): "text" | "number" | "date" | "boolean" | "select" => {
-    if (key === "email" || key === "position" || key === "phone" || key === "landline" || key === "companies" || key === "name") return "text";
-    if (key === "country" || key === "language") return "select";
-    if (key === "address" || isProfileKey(key)) return "text";
-    if (key === "imported_at") return "date";
-    if (key === "imported_by") return "select";
-    return fieldById(key)?.type ?? "text";
-  };
-  // The comparable value of a contact for a field key.
-  const valueOf = (c: Contact, key: string): any => {
-    if (key === "name") return fullName(c);
-    if (key === "position") return c.position ?? "";
-    if (key === "email") return c.email ?? "";
-    if (key === "phone") return c.phone ?? "";
-    if (key === "landline") return c.landline ?? "";
-    if (key === "companies") return c.companyIds.map(companyName).join(", ");
-    if (key === "address") return formatAddress(c);
-    if (isProfileKey(key)) return (c as any)[key] ?? "";
-    // import provenance (stamped by the database; filterable, never shown on the contact)
-    if (key === "imported_by") return (c as any).imported_by ?? "";
-    if (key === "imported_at") return (c as any).imported_at ?? "";
-    return (c.custom ?? {})[key];
-  };
-  // What a filter can do with a field, based on its type (the first one is the default).
-  const actionsFor = (key: string): { value: string; label: string }[] => {
-    if (!key) return [];
-    const t = fieldType(key);
-    const blanks = [{ value: "has", label: "Has a value" }, { value: "empty", label: "Is empty" }];
-    if (key === "companies") return [{ value: "in", label: "Is one of…" }, { value: "has", label: "Has a company" }, { value: "empty", label: "No company" }, { value: "asc", label: "A → Z" }];
-    if (key === "imported_by") return [{ value: "in", label: "Is one of…" }, { value: "has", label: "Was imported" }, { value: "empty", label: "Added by hand" }];
-    if (t === "select") return [{ value: "in", label: "Is one of…" }, ...blanks];
-    if (t === "boolean") return [{ value: "only_yes", label: "Yes" }, { value: "only_no", label: "No" }];
-    if (t === "number") return [{ value: "range", label: "Between…" }, { value: "desc", label: "High → low" }, { value: "asc", label: "Low → high" }, ...blanks];
-    if (t === "date") return [
-      { value: "last30", label: "Last 30 days" }, { value: "this_month", label: "This month" }, { value: "this_year", label: "This year" },
-      { value: "next30", label: "Next 30 days" }, { value: "past", label: "Before today" }, { value: "custom", label: "Between dates…" },
-      { value: "desc", label: "Newest first" }, { value: "asc", label: "Oldest first" }, ...blanks,
-    ];
-    return [{ value: "contains", label: "Contains…" }, { value: "asc", label: "A → Z" }, { value: "desc", label: "Z → A" }, ...blanks];
-  };
-  /** Choices for "Is one of…": a choice field's options, or the companies. */
-  const choicesFor = (key: string) => key === "companies"
-    ? companies.map((co) => ({ value: co.id as string, label: co.name })).sort((a, b) => a.label.localeCompare(b.label))
-    : key === "imported_by"
-    ? employees.filter((e) => contacts.some((c) => (c as any).imported_by === e.id)).map((e) => ({ value: e.id, label: e.name }))
-    : key === "country"
-    ? [...new Set(contacts.map((c) => c.country).filter(Boolean) as string[])].map((v) => ({ value: v, label: countryLabel(v) })).sort((a, b) => a.label.localeCompare(b.label))
-    : key === "language"
-    ? [...new Set(contacts.map((c) => c.language).filter(Boolean) as string[])].map((v) => ({ value: v, label: languageName(v) })).sort((a, b) => a.label.localeCompare(b.label))
-    : (fieldById(key)?.options ?? []).map((o) => ({ value: o, label: o }));
-  const dayIso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  const dateWindow = (action: string, ctrl: { min?: string; max?: string }): [string, string] | null => {
-    const now = new Date(), y = now.getFullYear(), m = now.getMonth(), d = now.getDate();
-    if (action === "last30") return [dayIso(new Date(y, m, d - 30)), dayIso(now)];
-    if (action === "next30") return [dayIso(now), dayIso(new Date(y, m, d + 30))];
-    if (action === "this_month") return [dayIso(new Date(y, m, 1)), dayIso(new Date(y, m + 1, 0))];
-    if (action === "this_year") return [`${y}-01-01`, `${y}-12-31`];
-    if (action === "past") return ["0000-01-01", dayIso(new Date(y, m, d - 1))];
-    if (action === "custom") return [ctrl.min || "0000-01-01", ctrl.max || "9999-12-31"];
-    return null;
-  };
-  // Field options for the control (name + fixed + custom).
-  const filterFieldOptions = [
-    { value: "", label: "No filter" },
-    { value: "name", label: "Name" },
-    ...availableColumns.map((c) => ({ value: c.key, label: c.label })),
-    { value: "imported_by", label: "Imported by" },
-    { value: "imported_at", label: "Imported on" },
+  // ---- Every field the list can be filtered and sorted by ----
+  const people = () => employees.map((e) => ({ value: e.id, label: e.name }));
+  const valuesOf = (get: (c: Contact) => unknown, label?: (v: string) => string) => () =>
+    [...new Set(contacts.map((c) => String(get(c) ?? "").trim()).filter(Boolean))].map((v) => ({ value: v, label: label ? label(v) : v })).sort((a, b) => a.label.localeCompare(b.label));
+  const coById = new Map(companies.map((co) => [co.id as string, co]));
+  const statusOf = (c: Contact) => contactStatus(c, rel, companies);
+  const statusTags = (c: Contact) => { const s = statusOf(c); return [...(s.client ? ["client"] : []), ...(s.sales ? ["sales"] : []), ...(!s.client && !s.sales ? ["none"] : [])]; };
+  const coList = (c: Contact) => c.companyIds.map((id) => coById.get(id)).filter((x): x is Company => !!x);
+  const allPipes = () => [...new Set([...Object.values(rel?.pipesByContact ?? {}).flat(), ...Object.values(rel?.pipesByCompany ?? {}).flat()])].sort().map((p) => ({ value: p, label: p }));
+  const coValues = (get: (co: Company) => string[]) => () => [...new Set(companies.flatMap(get).filter(Boolean))].sort().map((v) => ({ value: v, label: v }));
+  const filterFields: FField<Contact>[] = [
+    { key: "name", label: "Name", group: "Person", type: "text", get: fullName },
+    { key: "first_name", label: "First name", group: "Person", type: "text", get: (c) => c.first_name },
+    { key: "last_name", label: "Last name", group: "Person", type: "text", get: (c) => c.last_name },
+    { key: "position", label: "Position", group: "Person", type: "text", get: (c) => c.position },
+    { key: "email", label: "Email", group: "Contact details", type: "text", get: (c) => c.email },
+    { key: "phone", label: "Mobile", group: "Contact details", type: "text", get: (c) => phoneText(c.phone, c.phone_ext) },
+    { key: "landline", label: "Landline", group: "Contact details", type: "text", get: (c) => phoneText(c.landline, c.landline_ext) },
+    { key: "linkedin", label: "LinkedIn", group: "Contact details", type: "text", get: (c) => c.linkedin },
+    { key: "language", label: "Language", group: "Contact details", type: "select", get: (c) => c.language ?? "", options: valuesOf((c) => c.language, (v) => languageName(v)) },
+    { key: "companies", label: "Company", group: "Companies", type: "multi", get: (c) => c.companyIds, options: () => companies.filter((co) => co.id).map((co) => ({ value: co.id!, label: co.name })).sort((a, b) => a.label.localeCompare(b.label)) },
+    { key: "companies_count", label: "Number of companies", group: "Companies", type: "number", get: (c) => c.companyIds.length },
+    { key: "co_sector", label: "Company sector", group: "Companies", type: "multi", get: (c) => coList(c).map((co) => co.sector ?? "").filter(Boolean), options: coValues((co) => [co.sector ?? ""]) },
+    { key: "co_type", label: "Company type (client, partner…)", group: "Companies", type: "multi", get: (c) => [...new Set(coList(c).flatMap((co) => co.relationship ?? []))], options: coValues((co) => co.relationship ?? []) },
+    { key: "co_city", label: "Company city", group: "Companies", type: "multi", get: (c) => coList(c).map((co) => (co.city ?? "").trim()).filter(Boolean), options: coValues((co) => [(co.city ?? "").trim()]) },
+    { key: "status", label: "Sales status", group: "Sales", type: "multi", get: statusTags, options: () => [{ value: "client", label: "Client" }, { value: "sales", label: "In sales" }, { value: "none", label: "Not yet in play" }] },
+    { key: "pipelines", label: "Pipeline", group: "Sales", type: "multi", get: (c) => statusOf(c).pipelines, options: allPipes },
+    { key: "address", label: "Full address", group: "Address", type: "text", get: (c) => formatAddress(c) },
+    { key: "street", label: "Street", group: "Address", type: "text", get: (c) => [c.street, c.addr_number].filter(Boolean).join(" ") },
+    { key: "postal_code", label: "Postal code", group: "Address", type: "text", get: (c) => c.postal_code },
+    { key: "city", label: "City", group: "Address", type: "select", get: (c) => (c.city ?? "").trim(), options: valuesOf((c) => c.city) },
+    { key: "province", label: "Province / state", group: "Address", type: "select", get: (c) => (c.province ?? "").trim(), options: valuesOf((c) => c.province) },
+    { key: "country", label: "Country", group: "Address", type: "select", get: (c) => c.country ?? "", options: valuesOf((c) => c.country, (v) => countryLabel(v)) },
+    { key: "addr_complete", label: "Address complete", group: "Address", type: "boolean", get: (c) => missingProfile(c).length === 0 },
+    { key: "visible_to", label: "Visible to", group: "Record", type: "multi", get: (c) => assignees[c.id ?? ""] ?? [], options: people },
+    { key: "created_at", label: "Created on", group: "Record", type: "date", get: (c) => (c as any).created_at },
+    { key: "imported_by", label: "Imported by", group: "Record", type: "select", get: (c) => (c as any).imported_by ?? "", options: people },
+    { key: "imported_at", label: "Imported on", group: "Record", type: "date", get: (c) => (c as any).imported_at },
+    { key: "notes", label: "Notes", group: "Record", type: "text", get: (c) => c.notes },
+    ...fields.map((f): FField<Contact> => ({
+      key: f.id, label: f.label, group: "Your fields", type: f.type === "select" ? "select" : f.type,
+      get: (c) => (c.custom ?? {})[f.id], ...(f.type === "select" ? { options: () => f.options.map((o) => ({ value: o, label: o })) } : {}),
+    })),
   ];
 
-  // Apply one control as a filter (returns true = keep).
-  const passesFilter = (c: Contact, ctrl: { field: string; action: string; min?: string; max?: string; values?: string[]; text?: string }) => {
-    if (!ctrl.field || !ctrl.action) return true;
-    const v = valueOf(c, ctrl.field);
-    const blank = v == null || v === "" || (ctrl.field === "companies" && !c.companyIds.length);
-    if (ctrl.action === "has") return !blank;
-    if (ctrl.action === "empty") return blank;
-    if (ctrl.action === "only_yes") return !!v;
-    if (ctrl.action === "only_no") return !v;
-    if (ctrl.action === "in") {
-      const picked = ctrl.values ?? [];
-      if (!picked.length) return true; // nothing chosen yet → no filter
-      return ctrl.field === "companies" ? c.companyIds.some((id) => picked.includes(id)) : picked.includes(String(v ?? ""));
-    }
-    if (ctrl.action === "contains") {
-      const t = (ctrl.text ?? "").trim();
-      return !t || norm(String(v ?? "")).includes(norm(t));
-    }
-    const win = fieldType(ctrl.field) === "date" ? dateWindow(ctrl.action, ctrl) : null;
-    if (win) { const d = String(v ?? "").slice(0, 10); return !!d && d >= win[0] && d <= win[1]; }
-    if (ctrl.action.startsWith("eq:")) return String(v ?? "") === ctrl.action.slice(3);
-    if (ctrl.action === "range") {
-      const n = Number(v);
-      if (v == null || v === "" || Number.isNaN(n)) return false; // no value → out of any range
-      if (ctrl.min !== undefined && ctrl.min !== "" && n < Number(ctrl.min)) return false;
-      if (ctrl.max !== undefined && ctrl.max !== "" && n > Number(ctrl.max)) return false;
-      return true;
-    }
-    return true; // asc/desc are sorts, not filters
-  };
-  // Compare two contacts for one sort control. 0 if the control isn't a sort.
-  const cmp = (a: Contact, b: Contact, ctrl: { field: string; action: string; min?: string; max?: string; values?: string[]; text?: string }) => {
-    if (!ctrl.field || (ctrl.action !== "asc" && ctrl.action !== "desc")) return 0;
-    const t = fieldType(ctrl.field);
-    let av = valueOf(a, ctrl.field), bv = valueOf(b, ctrl.field);
-    let r = 0;
-    if (t === "number") { r = (Number(av) || 0) - (Number(bv) || 0); }
-    else if (t === "date") { r = String(av ?? "").localeCompare(String(bv ?? "")); }
-    else { r = String(av ?? "").localeCompare(String(bv ?? ""), undefined, { sensitivity: "base" }); }
-    return ctrl.action === "desc" ? -r : r;
-  };
-
-  // Client / in sales — its own, or through its companies (the same as on Companies).
-  const statusOf = (c: Contact) => contactStatus(c, rel, companies);
-  // Relationship filter. "tracking" / "notracking" look only at sales
-  // (a client can also be in a deal); "none" means neither.
-  const relMatches = (c: Contact, f: string) => {
-    const s = statusOf(c);
-    if (f === "client") return s.client;
-    if (f === "tracking") return s.sales;
-    if (f === "notracking") return !s.sales;
-    return !s.client && !s.sales;
-  };
-
-  const shown = contacts.filter((c) => {
-    // Sales people only see the contacts they have been given access to.
-    if (!lead && me && !(assignees[c.id!] ?? []).includes(me.id)) return false;
-    // Compound custom filters.
-    if (!passesFilter(c, ctrl1)) return false;
-    if (!passesFilter(c, ctrl2)) return false;
-    if (fRel && !relMatches(c, fRel)) return false;
+  // Sales people only see the contacts they have been given access to.
+  const visible = contacts.filter((c) => lead || !me || (assignees[c.id!] ?? []).includes(me.id));
+  const searched = (() => {
     const n = norm(q.trim());
-    if (!n) return true;
-    const companyNames = c.companyIds.map(companyName).join(" ");
-    return [fullName(c), c.position, c.email, c.city, companyNames].some((v) => norm(v ?? "").includes(n));
-  }).sort((a, b) => {
-    // Compound sort: control 1 is primary, control 2 breaks ties.
-    const r1 = cmp(a, b, ctrl1);
-    if (r1 !== 0) return r1;
-    return cmp(a, b, ctrl2);
-  });
+    if (!n) return visible;
+    return visible.filter((c) => [fullName(c), c.position, c.email, c.phone, c.city, c.province, c.companyIds.map(companyName).join(" ")].some((v) => norm(v ?? "").includes(n)));
+  })();
+  const shown = applyView(searched, filterFields, view, (a, b) => fullName(a).localeCompare(fullName(b)));
+  const onSort = (key: string, add: boolean) => setView({ ...view, sort: nextSort(view.sort, key, add) });
 
   if (me && !isSalesLead(me) && me.role !== "sales") {
     return (
@@ -302,61 +216,14 @@ export default function ContactsPage() {
       <header className="ct-head">
         <button className="ct-back" onClick={() => navigate("/home")} aria-label="Back">‹</button>
         <h1 className="ct-title">Contacts</h1>
-        <span className="ct-kpi"><b>{shown.length}</b>{shown.length === 1 ? "contact" : "contacts"}</span>
+        <span className="ct-kpi"><b>{shown.length.toLocaleString("en-GB")}</b>{shown.length !== visible.length ? `of ${visible.length.toLocaleString("en-GB")} ` : ""}{visible.length === 1 ? "contact" : "contacts"}</span>
         <div className="ct-search">
           <span className="ct-search-ico">⌕</span>
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, position, company or city…" />
           {q && <button onClick={() => setQ("")}>×</button>}
         </div>
-        <div className="ct-cfilter">
-          <Select value={fRel} onChange={setFRel} placeholder="Any relationship"
-            options={[
-              { value: "", label: "Any relationship" },
-              { value: "client", label: "Clients" },
-              { value: "tracking", label: "In sales tracking" },
-              { value: "notracking", label: "No sales tracking" },
-              { value: "none", label: "Not yet in play" },
-            ]} />
-        </div>
-        <div className="ct-cfilters">
-          {[{ c: ctrl1, set: setCtrl1 }, { c: ctrl2, set: setCtrl2 }].map((ctl, i) => (
-            <div className="ct-cfilter" key={i}>
-              <Select value={ctl.c.field}
-                onChange={(field) => { const acts = actionsFor(field); ctl.set({ field, action: acts[0]?.value ?? "" }); }}
-                options={filterFieldOptions} placeholder={`Filter ${i + 1}`} />
-              {ctl.c.field && (
-                <Select value={ctl.c.action}
-                  onChange={(action) => ctl.set({ ...ctl.c, action })}
-                  options={actionsFor(ctl.c.field)} placeholder="How" />
-              )}
-              {ctl.c.action === "in" && (
-                <div className="ct-fvals">
-                  <SalesMultiFilter values={ctl.c.values ?? []} onChange={(v) => ctl.set({ ...ctl.c, values: v })}
-                    options={choicesFor(ctl.c.field)} placeholder="Choose…" searchFrom={7} noun={ctl.c.field === "companies" ? "companies" : ctl.c.field === "imported_by" ? "people" : ctl.c.field === "country" ? "countries" : ctl.c.field === "language" ? "languages" : "options"} />
-                </div>
-              )}
-              {ctl.c.action === "contains" && (
-                <input className="ct-ftext" value={ctl.c.text ?? ""} onChange={(e) => ctl.set({ ...ctl.c, text: e.target.value })} placeholder="Text…" />
-              )}
-              {ctl.c.action === "custom" && (
-                <div className="ct-fdates">
-                  <DatePicker value={ctl.c.min ?? ""} onChange={(d) => ctl.set({ ...ctl.c, min: d })} placeholder="From" />
-                  <span className="ct-range-sep">–</span>
-                  <DatePicker value={ctl.c.max ?? ""} onChange={(d) => ctl.set({ ...ctl.c, max: d })} placeholder="To" />
-                </div>
-              )}
-              {ctl.c.action === "range" && (
-                <div className="ct-range">
-                  <input type="number" placeholder="Min" value={ctl.c.min ?? ""} onFocus={(e) => e.target.select()}
-                    onChange={(e) => ctl.set({ ...ctl.c, min: e.target.value })} />
-                  <span className="ct-range-sep">–</span>
-                  <input type="number" placeholder="Max" value={ctl.c.max ?? ""} onFocus={(e) => e.target.select()}
-                    onChange={(e) => ctl.set({ ...ctl.c, max: e.target.value })} />
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
+        <FilterBar fields={filterFields} view={view} onView={setView} total={visible.length} shown={shown.length} noun={["contact", "contacts"]}
+          saved={savedViews} onSaved={setSavedViews} openSignal={filtersOpenTick} />
         <ActionsMenu items={[
           { key: "new", group: "Create", label: "New contact", hint: "Add one person by hand", icon: AM_ICON.plus, primary: true, tone: "green", shortcut: "N", onSelect: () => setEditing(empty()) },
           { key: "import", group: "Data", label: "Import", hint: "From Excel or CSV, with their companies", icon: AM_ICON.import, tone: "blue", shortcut: "I", onSelect: () => setImporting(true) },
@@ -365,13 +232,15 @@ export default function ContactsPage() {
         ]} />
       </header>
 
+      <FilterChips fields={filterFields} view={view} onView={setView} onEdit={() => setFiltersOpenTick((x) => x + 1)} shown={shown.length} total={visible.length} noun={["contact", "contacts"]} />
+
       {shown.length === 0 ? (
-        <p className="cl-hint">{contacts.length === 0 ? "No contacts yet. Add your first one." : "No contacts match your search."}</p>
+        <p className="cl-hint">{contacts.length === 0 ? "No contacts yet. Add your first one." : "No contacts match your search and filters."}</p>
       ) : (
         <div className="ct-scroll">
           <div className="ct-lrow ct-lhead" style={{ gridTemplateColumns: `1.9fr ${activeColumns.map(() => "1.4fr").join(" ")}` }}>
-            <span>Name</span>
-            {activeColumns.map((k) => <span key={k}>{columnLabel(k)}</span>)}
+            <span><SortHead label="Name" k="name" sort={view.sort} onSort={onSort} /></span>
+            {activeColumns.map((k) => <span key={k}><SortHead label={columnLabel(k)} k={k} sort={view.sort} onSort={onSort} /></span>)}
           </div>
           <div className="ct-list">
             {shown.map((c) => (

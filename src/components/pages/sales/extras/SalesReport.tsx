@@ -18,6 +18,7 @@ import {
 import "./SalesReport.css";
 import { useInactiveIds } from "../../../framework/peopleStatus";
 import type { TrackingField } from "./trackingFieldsApi";
+import DatePicker from "../../../framework/DatePicker";
 
 /* ─────────────── config ─────────────── */
 
@@ -519,9 +520,9 @@ export default function SalesReport(p: Props) {
             </div>
             {cfg.period.preset === "custom" && (
               <div className="rb-vals rb-custom">
-                <input className="rb-in" type="date" value={cfg.period.from} onChange={(e) => setIn("period", { from: e.target.value })} aria-label="From" />
+                <span className="rb-date"><DatePicker value={cfg.period.from ?? ""} onChange={(d) => setIn("period", { from: d })} placeholder="From" /></span>
                 <span>to</span>
-                <input className="rb-in" type="date" value={cfg.period.to} onChange={(e) => setIn("period", { to: e.target.value })} aria-label="To" />
+                <span className="rb-date"><DatePicker value={cfg.period.to ?? ""} onChange={(d) => setIn("period", { to: d })} placeholder="To" /></span>
               </div>
             )}
             <p className="rb-hint">{cfg.period.preset === "custom" ? "Fixed dates — leave one empty for “from / until”." : "Relative: a saved report on “This quarter” always shows the current quarter."}</p>

@@ -401,4 +401,6 @@
 /* Column chart: labels sit under the bars, and the top axis value isn't clipped */
 .rc-cols { padding-top: 10px; box-sizing: border-box; height: 250px; }
 .rc-xlabel { bottom: -22px; }
-.rc-col { height: 100%; }
+.rc-col { height: 100%; }/* custom period: the app's date picker */
+.rb-date { flex: 1; min-width: 0; }
+.rb-date .dp-trigger { padding: 8px 11px; font-size: 13px; }

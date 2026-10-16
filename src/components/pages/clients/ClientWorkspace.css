@@ -1202,3 +1202,14 @@ button.cw-eng-row:hover { background: #fff; border-color: rgba(18, 181, 127, 0.3
 .cd-err button { border: 0; background: none; color: inherit; font-size: 16px; cursor: pointer; }
 @media (max-width: 860px) { .cw-backdrop .cd-docs { grid-template-columns: minmax(0, 1fr); } }
 @media (prefers-reduced-motion: reduce) { .cw-backdrop .cd-slot, .cd-file, .cd-slot.is-over .cd-drop { animation: none; } }
+/* people combo, date pickers and deal picker (no browser widgets) */
+.cw-combo { position: relative; flex: 1; min-width: 0; display: flex; }
+.cw-combo input { flex: 1; width: 100%; }
+.cw-logrow .cw-date { flex: 0 0 160px; }
+.cw-backdrop .cw-date .dp-trigger, .cw-backdrop .cw-tadd-date .dp-trigger { height: 36px; padding: 0 11px; border-radius: 10px; border: 1px solid var(--line); background: #fff; font-size: 13px; }
+.cw-tadd-date { display: block; }
+.cw-tadd-deal { flex-shrink: 0; max-width: 200px; }
+.cw-combo-pop .sel-option small { display: block; }
+.cw-backdrop span.cw-tadd-date, .cw-backdrop span.cw-tadd-deal { height: auto; padding: 0; border: 0; background: none; }
+.cw-backdrop .cw-tadd-date .dp-trigger { height: 32px; border-radius: 9px; font-size: 12.5px; }
+.cw-backdrop .cw-tadd-deal .sel-trigger { height: 32px; border-radius: 9px; font-size: 12.5px; }
