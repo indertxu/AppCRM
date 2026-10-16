@@ -20,7 +20,24 @@ export interface Company {
   province?: string | null;
   country?: string | null;
   custom?: Record<string, any>;
+  // phones: "phone" is the mobile; each one can carry an extension
+  phone_ext?: string | null;
+  landline?: string | null;
+  landline_ext?: string | null;
+  /** One of the sectors (DEFAULT_SECTORS or one you added). */
+  sector?: string | null;
+  /** What the company is to us: system keys ("sales", "client") plus your own labels ("Partner"…). CRM is implied. */
+  relationship?: string[];
+  /** Who to send invoices to — free: a name, an email, a phone… */
+  billing?: Billing;
+  /** The company above this one in its group. */
+  parent_id?: string | null;
+  // stamped by the database
+  created_at?: string | null;
+  created_by?: string | null;
 }
+
+export interface Billing { name?: string; email?: string; phone?: string; phone_ext?: string; notes?: string }
 
 export interface CompanyField {
   id: string;
@@ -50,6 +67,10 @@ export interface Contact {
   country?: string | null;
   language?: string | null;
   linkedin?: string | null;
+  province?: string | null;
+  phone_ext?: string | null;
+  landline?: string | null;
+  landline_ext?: string | null;
 }
 
 export interface ContactField {
@@ -145,16 +166,37 @@ export async function saveCompany(c: Company): Promise<string | null> {
     postal_code: c.postal_code ?? null, city: c.city ?? null, province: c.province ?? null, country: c.country ?? null,
     custom: c.custom ?? {},
   };
-  if (c.id) {
-    const { error } = await supabase.from("companies").update(row).eq("id", c.id);
-    return error?.message ?? null;
-  }
-  // Created by an import? Send the batch; the database stamps who and when.
-  const batch = (c as any).import_batch_id;
-  const { data, error } = await supabase.from("companies").insert(batch ? { ...row, import_batch_id: batch } : row).select("id").single();
-  if (error) return error.message;
-  (c as any).id = data?.id;
+  // added by the CRM upgrade (crm_upgrade.sql) — only sent when the object carries them
+  const extra = pickNew(c, ["phone_ext", "landline", "landline_ext", "sector", "relationship", "billing", "parent_id"]);
+  const write = async (r: Record<string, any>) => {
+    if (c.id) return { error: (await supabase.from("companies").update(r).eq("id", c.id)).error, id: c.id };
+    // Created by an import? Send the batch; the database stamps who and when (and created_by).
+    const batch = (c as any).import_batch_id;
+    const { data, error } = await supabase.from("companies").insert(batch ? { ...r, import_batch_id: batch } : r).select("id").single();
+    return { error, id: data?.id as string | undefined };
+  };
+  let res = await write({ ...row, ...extra });
+  // the database hasn't been upgraded yet: save what it knows
+  if (res.error && Object.keys(extra).length && missingColumn(res.error.message)) res = await write(row);
+  if (res.error) return friendlyDbError(res.error.message);
+  if (!c.id) (c as any).id = res.id;
   return null;
+}
+
+/** The fields of `obj` among `keys` that are set (undefined = leave the column alone). */
+function pickNew(obj: any, keys: string[]): Record<string, any> {
+  const out: Record<string, any> = {};
+  keys.forEach((k) => { if (obj[k] !== undefined) out[k] = typeof obj[k] === "string" ? obj[k].trim() || null : obj[k]; });
+  return out;
+}
+const missingColumn = (m: string) => /column .* does not exist|could not find the .* column|schema cache/i.test(m);
+const friendlyDbError = (m: string) =>
+  /above itself in the group|own parent company/i.test(m) ? "That company is already below this one in the group — it can't also be above it." : m;
+
+/** Put a company under another one in its group (null = top of its own group). */
+export async function setCompanyParent(id: string, parentId: string | null): Promise<string | null> {
+  const { error } = await supabase.from("companies").update({ parent_id: parentId }).eq("id", id);
+  return error ? friendlyDbError(error.message) : null;
 }
 
 export async function deleteCompany(id: string): Promise<string | null> {
@@ -187,24 +229,29 @@ export async function saveContact(c: Contact): Promise<string | null> {
     city: c.city ?? null, country: c.country ?? null, language: c.language ?? null, linkedin: c.linkedin ?? null,
     custom: c.custom ?? {},
   };
+  const extra = pickNew(c, ["province", "phone_ext", "landline", "landline_ext"]);
   let contactId = c.id;
-  if (contactId) {
-    const { error } = await supabase.from("contacts").update(row).eq("id", contactId);
-    if (error) return error.message;
-  } else {
+  const write = async (r: Record<string, any>) => {
+    if (contactId) return (await supabase.from("contacts").update(r).eq("id", contactId)).error;
     // Created by an import? Send the batch; the database stamps who and when.
     const batch = (c as any).import_batch_id;
-    const { data, error } = await supabase.from("contacts").insert(batch ? { ...row, import_batch_id: batch } : row).select("id").single();
-    if (error) return error.message;
-    contactId = data.id;
-    (c as any).id = contactId;
-  }
-  // replace the company links
-  await supabase.from("company_contacts").delete().eq("contact_id", contactId);
-  if (c.companyIds.length) {
-    const { error } = await supabase.from("company_contacts")
-      .insert(c.companyIds.map((cid) => ({ company_id: cid, contact_id: contactId })));
-    if (error) return error.message;
+    const { data, error } = await supabase.from("contacts").insert(batch ? { ...r, import_batch_id: batch } : r).select("id").single();
+    if (!error) { contactId = data.id; (c as any).id = contactId; }
+    return error;
+  };
+  let error = await write({ ...row, ...extra });
+  if (error && Object.keys(extra).length && missingColumn(error.message)) error = await write(row);
+  if (error) return error.message;
+  // company links: only add and remove what changed (so the history shows real moves)
+  const { data: cur } = await supabase.from("company_contacts").select("company_id").eq("contact_id", contactId);
+  const had = new Set((cur ?? []).map((r: any) => r.company_id as string));
+  const want = new Set(c.companyIds);
+  const drop = [...had].filter((id) => !want.has(id));
+  const add = [...want].filter((id) => !had.has(id));
+  if (drop.length) await supabase.from("company_contacts").delete().eq("contact_id", contactId).in("company_id", drop);
+  if (add.length) {
+    const { error: lErr } = await supabase.from("company_contacts").insert(add.map((cid) => ({ company_id: cid, contact_id: contactId })));
+    if (lErr) return lErr.message;
   }
   return null;
 }
@@ -312,19 +359,22 @@ export async function loadContactActivity(contactId: string, companyIds: string[
 }
 
 
-// ---- Relationship status (client / in a tracking) for companies & contacts ----
+// ---- Relationship status (client / in sales) for companies & contacts ----
 //
-// A company/contact is a CLIENT if it appears in the `clients` table
-// (clients.company_id for companies; clients.contacts — a jsonb array of contact
-// ids — for contacts). It is IN A TRACKING if it appears in any deal:
-// trackings.company_id for companies, tracking_contacts for contacts.
-// These are computed once per page load and cached in a Set for O(1) lookups.
+// A company is a CLIENT if it appears in the `clients` table (clients.company_id),
+// and IN SALES if it is in any deal (trackings.company_id). A contact has the
+// same status as its companies (a deal or a client for the company counts for
+// everyone who works there), plus its own: deals it is on (tracking_contacts)
+// and clients that list it (clients.contacts). So both pages always agree.
 
 export interface RelationshipSets {
   clientCompanyIds: Set<string>;
   clientContactIds: Set<string>;
   trackingCompanyIds: Set<string>;
   trackingContactIds: Set<string>;
+  /** Pipeline names of the deals each company / contact is directly on. */
+  pipesByCompany: Record<string, string[]>;
+  pipesByContact: Record<string, string[]>;
 }
 
 /** Load, in a few queries, everything needed to tag companies & contacts. */
@@ -333,6 +383,8 @@ export async function loadRelationshipSets(): Promise<RelationshipSets> {
   const clientContactIds = new Set<string>();
   const trackingCompanyIds = new Set<string>();
   const trackingContactIds = new Set<string>();
+  const pipesByCompany: Record<string, string[]> = {};
+  const pipesByContact: Record<string, string[]> = {};
 
   // Read every row in pages: the API returns at most 1000 rows per call, and
   // a missing row would wrongly show a company/contact as "No sales tracking".
@@ -346,23 +398,190 @@ export async function loadRelationshipSets(): Promise<RelationshipSets> {
     }
     return out;
   };
-  const [clientsRows, trackRows, tcRows] = await Promise.all([
+  const [clientsRows, trackRows, tcRows, pipeRows] = await Promise.all([
     all("clients", "company_id, contacts"),
-    all("trackings", "company_id"),
-    all("tracking_contacts", "contact_id"),
+    all("trackings", "id, company_id, pipeline_id"),
+    all("tracking_contacts", "contact_id, tracking_id"),
+    all("pipelines", "id, name"),
   ]);
+  const pipeName: Record<string, string> = {};
+  pipeRows.forEach((p: any) => { pipeName[p.id] = p.name; });
+  const pipeOfDeal: Record<string, string> = {};
+  const addPipe = (map: Record<string, string[]>, id: string, name?: string) => {
+    const list = (map[id] ??= []);
+    if (name && !list.includes(name)) list.push(name);
+  };
 
   clientsRows.forEach((r: any) => {
     if (r.company_id) clientCompanyIds.add(r.company_id);
-    // `contacts` may be a jsonb array of ids, or of objects with an id.
+    // `contacts` may be a jsonb array of ids, or of objects; the CRM contact is `sourceId` (or `contact_id`)
     const list = Array.isArray(r.contacts) ? r.contacts : [];
     list.forEach((x: any) => {
-      const id = typeof x === "string" ? x : x?.id ?? x?.contact_id;
+      const id = typeof x === "string" ? x : x?.sourceId ?? x?.contact_id;
       if (id) clientContactIds.add(String(id));
     });
   });
-  trackRows.forEach((r: any) => { if (r.company_id) trackingCompanyIds.add(r.company_id); });
-  tcRows.forEach((r: any) => { if (r.contact_id) trackingContactIds.add(r.contact_id); });
+  trackRows.forEach((r: any) => {
+    const name = r.pipeline_id ? pipeName[r.pipeline_id] : undefined;
+    if (name) pipeOfDeal[r.id] = name;
+    if (r.company_id) { trackingCompanyIds.add(r.company_id); addPipe(pipesByCompany, r.company_id, name); }
+  });
+  tcRows.forEach((r: any) => {
+    if (!r.contact_id) return;
+    trackingContactIds.add(r.contact_id);
+    addPipe(pipesByContact, r.contact_id, pipeOfDeal[r.tracking_id]);
+  });
 
-  return { clientCompanyIds, clientContactIds, trackingCompanyIds, trackingContactIds };
+  return { clientCompanyIds, clientContactIds, trackingCompanyIds, trackingContactIds, pipesByCompany, pipesByContact };
+}
+
+/** Where a company or contact stands: client, and the pipelines it is in sales in. */
+export interface RelStatus { client: boolean; sales: boolean; pipelines: string[] }
+const NO_STATUS: RelStatus = { client: false, sales: false, pipelines: [] };
+
+export function companyStatus(c: { id?: string; relationship?: string[] }, rel: RelationshipSets | null): RelStatus {
+  const tags = c.relationship ?? [];
+  if (!c.id) return { ...NO_STATUS, client: tags.includes("client"), sales: tags.includes("sales") };
+  const pipelines = rel?.pipesByCompany[c.id] ?? [];
+  return {
+    client: !!rel?.clientCompanyIds.has(c.id) || tags.includes("client"),
+    sales: !!rel?.trackingCompanyIds.has(c.id) || tags.includes("sales"),
+    pipelines,
+  };
+}
+/** A contact counts as client / in sales when it is so itself, or through any of its companies. */
+export function contactStatus(ct: { id?: string; companyIds: string[] }, rel: RelationshipSets | null, companies: Company[] = []): RelStatus {
+  if (!rel) return NO_STATUS;
+  const own = ct.id ? { client: rel.clientContactIds.has(ct.id), sales: rel.trackingContactIds.has(ct.id), pipelines: rel.pipesByContact[ct.id] ?? [] } : NO_STATUS;
+  const out: RelStatus = { client: own.client, sales: own.sales, pipelines: [...own.pipelines] };
+  ct.companyIds.forEach((id) => {
+    const co = companies.find((x) => x.id === id) ?? { id };
+    const s = companyStatus(co, rel);
+    out.client ||= s.client;
+    out.sales ||= s.sales;
+    s.pipelines.forEach((p) => { if (!out.pipelines.includes(p)) out.pipelines.push(p); });
+  });
+  return out;
+}
+
+// ---- What a company is to us (relationship types) ----
+/** Built-in types. CRM = every company; "sales" and "client" are switched on by the database when it happens. */
+export const REL_SYSTEM: { key: string; label: string; hint: string }[] = [
+  { key: "crm", label: "CRM", hint: "Every company in the CRM" },
+  { key: "sales", label: "In sales", hint: "Switched on when it enters a sales pipeline" },
+  { key: "client", label: "Client", hint: "Switched on when it becomes a client" },
+];
+export const relLabel = (key: string) => REL_SYSTEM.find((r) => r.key === key)?.label ?? key;
+
+// ---- Sectors ----
+/** The sectors every company can pick from; you can add your own (crm_options). Keywords (es / en) let us guess one. */
+export const DEFAULT_SECTORS: { label: string; words: string[] }[] = [
+  { label: "Agriculture & food", words: ["agri", "agro", "food", "aliment", "bodega", "vino", "wine", "olive", "aceite", "granja", "farm", "fruta", "carnic", "lacteo", "panader", "bebida", "beverage", "cerveza"] },
+  { label: "Automotive", words: ["automo", "motor ", "cars ", "coche", "vehicul", "concesionario", "taller", "recambio"] },
+  { label: "Banking & finance", words: ["bank", "banco", "banca", "financ", "capital", "invest", "inversion", "credit", "credito", "fintech", "asset", "fondo", "patrimonio", "wealth"] },
+  { label: "Construction & real estate", words: ["construc", "inmobiliar", "real estate", "promotor", "property", "obras", "arquitect", "architect", "reforma", "building", "edifica", "vivienda"] },
+  { label: "Consulting & professional services", words: ["consult", "asesor", "advisory", "auditor", "audit", "gestoria", "contabil", "accounting", "servicios profesionales", "partners"] },
+  { label: "Education", words: ["educa", "school", "escuela", "colegio", "universi", "academ", "formacion", "training", "instituto", "learning"] },
+  { label: "Energy & utilities", words: ["energ", "solar", "electric", "power", "renovable", "renewable", "petrol", "oil", "gas ", "agua", "water", "eolic", "utilities"] },
+  { label: "Healthcare & pharma", words: ["health", "salud", "clinic", "hospital", "medic", "pharma", "farma", "dental", "laborator", "biotech", "sanitar", "veterinar"] },
+  { label: "Hospitality & tourism", words: ["hotel", "hostel", "turism", "touris", "travel", "viaje", "restaur", "catering", "hospitality", "resort", "camping"] },
+  { label: "Industrial & manufacturing", words: ["industri", "manufact", "fabric", "metal", "steel", "acero", "maquinaria", "machinery", "plastic", "quimic", "chemical", "packaging", "envase"] },
+  { label: "Insurance", words: ["insur", "seguro", "aseguradora", "mutua", "reaseguro"] },
+  { label: "IT & software", words: ["software", "tech", "tecnolog", "informatic", "digital", "cloud", "saas", "data", "sistemas", "systems", "solutions", "apps", "ciberseg", "cyber", "web ", "robot"] },
+  { label: "Legal", words: ["legal", "abogad", "law", "lawyer", "juridic", "notari", "bufete", "attorney"] },
+  { label: "Logistics & transport", words: ["logist", "transport", "shipping", "freight", "mensajer", "courier", "almacen", "warehouse", "cargo", "naviera", "fleet"] },
+  { label: "Marketing & media", words: ["marketing", "media", "publicidad", "advert", "agencia", "agency", "comunicacion", "design", "diseno", "studio", "estudio", "prensa", "editorial", "radio", "tv"] },
+  { label: "Public sector", words: ["ayuntamiento", "gobierno", "government", "ministerio", "diputacion", "consejeria", "public", "municipal", "generalitat", "junta de"] },
+  { label: "Retail & e-commerce", words: ["retail", "tienda", "shop", "store", "comercio", "ecommerce", "e-commerce", "moda online", "distribuc", "supermerc", "market"] },
+  { label: "Telecommunications", words: ["telecom", "telefon", "fibra", "fiber", "network", "redes", "movil", "mobile", "internet"] },
+  { label: "Textile & fashion", words: ["textil", "textile", "fashion", "moda", "ropa", "clothing", "calzado", "shoes", "apparel"] },
+  { label: "Non-profit", words: ["fundacion", "foundation", "asociacion", "association", "ong", "ngo", "charity", "non-profit", "sin animo"] },
+  { label: "Other", words: [] },
+];
+const sNorm = (s: unknown) => ` ${String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()} `;
+
+/** A keyword ending in a space must be a whole word; otherwise it is a word start ("tecnolog" → "tecnología"). */
+const wordHit = (text: string, w: string) => { const k = sNorm(w); return w.endsWith(" ") ? text.includes(k) : text.includes(k.slice(0, -1)); };
+
+/** Our best guess at a company's sector from its name, legal name, website and notes ("" when nothing fits). */
+export function guessSector(c: Partial<Company>): string {
+  const text = sNorm([c.name, c.legal_name, (c.website ?? "").replace(/^https?:\/\/(www\.)?/i, "").replace(/\.[a-z.]+(\/.*)?$/i, ""), c.notes].filter(Boolean).join(" "));
+  let best = "", score = 0;
+  for (const s of DEFAULT_SECTORS) {
+    const hits = s.words.reduce((n, w) => n + (wordHit(text, w) ? 1 : 0), 0);
+    if (hits > score) { best = s.label; score = hits; }
+  }
+  return best;
+}
+/** A sector written any way ("software", "Tecnología", "IT") → one of `options` ("" when it can't tell). */
+export function matchSector(raw: unknown, options: string[]): string {
+  const n = sNorm(raw).trim();
+  if (!n) return "";
+  const exact = options.find((o) => sNorm(o).trim() === n);
+  if (exact) return exact;
+  const part = options.find((o) => { const on = sNorm(o).trim(); return on.length > 3 && (on.includes(n) || n.includes(on)); });
+  if (part) return part;
+  // by keyword: the default sector whose words appear, if it is among the options
+  let best = "", score = 0;
+  for (const s of DEFAULT_SECTORS) {
+    if (!options.includes(s.label)) continue;
+    const hits = s.words.reduce((k, w) => k + (wordHit(` ${n} `, w) ? 1 : 0), 0);
+    if (hits > score) { best = s.label; score = hits; }
+  }
+  return best;
+}
+
+// ---- Your own option lists (sectors, relationship types) ----
+export interface CrmOption { id: string; kind: "sector" | "relationship"; label: string; sort: number }
+export async function listCrmOptions(): Promise<CrmOption[]> {
+  const { data, error } = await supabase.from("crm_options").select("id, kind, label, sort").order("sort").order("label");
+  if (error) return [];
+  return (data ?? []) as CrmOption[];
+}
+export async function addCrmOption(kind: CrmOption["kind"], label: string, sort = 0): Promise<string | null> {
+  const { error } = await supabase.from("crm_options").insert({ kind, label: label.trim(), sort });
+  return error ? (/duplicate|unique/i.test(error.message) ? null : error.message) : null;
+}
+export async function deleteCrmOption(id: string): Promise<string | null> {
+  const { error } = await supabase.from("crm_options").delete().eq("id", id);
+  return error?.message ?? null;
+}
+/** Every sector to choose from: the defaults, then yours. */
+export const sectorOptions = (opts: CrmOption[]) => {
+  const out = DEFAULT_SECTORS.map((s) => s.label).filter((l) => l !== "Other");
+  opts.filter((o) => o.kind === "sector").forEach((o) => { if (!out.includes(o.label)) out.push(o.label); });
+  return [...out, "Other"];
+};
+/** Every relationship type: the built-in ones, then yours. */
+export const relationshipOptions = (opts: CrmOption[]) => [
+  ...REL_SYSTEM.map((r) => ({ key: r.key, label: r.label, system: true })),
+  ...opts.filter((o) => o.kind === "relationship" && !REL_SYSTEM.some((r) => r.key === o.label)).map((o) => ({ key: o.label, label: o.label, system: false })),
+];
+
+// ---- History (written by the database: crm_history) ----
+export interface HistoryEntry { id: string; at: string; actor: string | null; action: string; detail: Record<string, any> }
+export async function loadHistory(entity: "company" | "contact", id: string): Promise<HistoryEntry[] | null> {
+  const { data, error } = await supabase.from("crm_history").select("id, at, actor, action, detail")
+    .eq("entity", entity).eq("entity_id", id).order("at", { ascending: false }).range(0, 499);
+  if (error) return null; // not set up yet
+  return (data ?? []) as HistoryEntry[];
+}
+
+// ---- Groups ----
+/** Ids of every company below `id` in its group (children, grandchildren…). */
+export function descendantsOf(id: string, companies: Company[]): Set<string> {
+  const out = new Set<string>();
+  const walk = (p: string) => companies.forEach((c) => { if (c.parent_id === p && c.id && !out.has(c.id)) { out.add(c.id); walk(c.id); } });
+  walk(id);
+  return out;
+}
+/** The company at the top of `id`'s group. */
+export function groupRootOf(id: string, companies: Company[]): string {
+  const seen = new Set<string>();
+  let cur = id;
+  for (;;) {
+    const p = companies.find((c) => c.id === cur)?.parent_id;
+    if (!p || seen.has(p)) return cur;
+    seen.add(cur); cur = p;
+  }
 }

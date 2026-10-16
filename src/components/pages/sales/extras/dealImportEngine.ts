@@ -80,7 +80,8 @@ export const COMPANY_COLS = ["name", "legal_name", "vat_number", "reg_number", "
 /** Targets whose file values are matched one by one to our options. */
 export const VALUE_TARGETS = new Set(["deal.pipeline", "deal.phase", "deal.status", "deal.product", "deal.loss_reason"]);
 /** Targets more than one column may use (their values are joined). */
-const MULTI_OK = new Set(["deal.notes", "deal.title", "company.notes", "contact.notes"]);
+/** Fields that take several columns as they are (joined), never merged by priority. */
+export const MULTI_OK = new Set(["deal.notes", "deal.title", "company.notes", "contact.notes"]);
 /** "phase_at:<phase id>": the column says the deal reached that phase, and when. */
 export const PHASE_AT = "phase_at:";
 export const isPhaseAt = (t: string) => t.startsWith(PHASE_AT);
@@ -364,8 +365,12 @@ export interface ImportState {
   /** row index → pipeline chosen by hand in the review */
   pipeOverride: Record<number, string>;
   createContacts: boolean;
-  /** A deal for the same company in the same pipeline is already in the CRM. */
-  dupMode: "skip" | "import";
+  /**
+   * A deal of the file is already in the CRM (same company — or contact — and pipeline,
+   * and the same title when both have one): skip it, update it with the file's data,
+   * or create it again anyway.
+   */
+  dupMode: "skip" | "update" | "import";
   /** Stamp the phases before the current one as passed (keeps reports and roles right). */
   markPassed: boolean;
   /** Companies already in the CRM: fill their empty fields, replace their data with the file's, or keep them as they are. */
@@ -550,8 +555,10 @@ export type NewContact = ContactName;
 
 export interface PlanRow {
   idx: number;
-  status: "new" | "dup" | "error";
+  status: "new" | "update" | "dup" | "error";
   reason?: string;
+  /** The deal already in the CRM this row is (skipped, or updated). */
+  dupOf: string | null;
   issues: string[];
   companyRef: string | null; companyLabel: string | null; companyKey: string | null;
   contactRef: string | null; contactLabel: string | null; contactKey: string | null;
@@ -573,7 +580,7 @@ export interface Plan {
   /** The contacts that will be created. */
   newContacts: ContactName[];
   counts: {
-    new: number; dup: number; error: number; warn: number; coNew: number; coFound: number; coSimilar: number; ctNew: number; ctFound: number; ctLink: number;
+    new: number; update: number; dup: number; error: number; warn: number; coNew: number; coFound: number; coSimilar: number; ctNew: number; ctFound: number; ctLink: number;
     noOwner: number; clients: number; won: number;
     /** Companies / contacts in the CRM the import touches, and how many of their fields it would fill or change. */
     coExisting: number; coFill: number; coChange: number; ctExisting: number; ctFill: number; ctChange: number;
@@ -587,6 +594,8 @@ interface Parsed {
   issues: string[];
 }
 
+/** A deal title as compared for duplicates (case, accents, spaces and punctuation don't count). */
+const titleKey = (s: string | null | undefined) => normHeader((s ?? "").slice(0, 200));
 const minDay = (xs: (string | null | undefined)[]) => xs.filter((x): x is string => !!x).sort()[0] ?? null;
 const maxDay = (xs: (string | null | undefined)[]) => xs.filter((x): x is string => !!x).sort().reverse()[0] ?? null;
 
@@ -611,8 +620,15 @@ export function buildPlan(ctx: Ctx, columns: Column[], rows: SheetCell[][], stat
     const p = phoneKey(c.phone); if (p) ctByPhone.set(p, [...(ctByPhone.get(p) ?? []), c]);
   });
   const clients = new Set(ctx.clientCompanies ?? []);
-  const existingDeals = new Set(ctx.trackings.map((t) => `${t.company_id ?? ""}|${t.pipeline_id ?? ""}`));
-  const existingContactDeals = new Set(ctx.trackings.flatMap((t) => (t.company_id ? [] : (t.contactIds ?? []).map((c) => `${c}|${t.pipeline_id ?? ""}`))));
+  // deals already in the CRM, by who they're for and their pipeline (newest first)
+  const dealsByKey = new Map<string, Tracking[]>();
+  const addDeal = (k: string, t: Tracking) => dealsByKey.set(k, [...(dealsByKey.get(k) ?? []), t]);
+  ctx.trackings.forEach((t) => {
+    if (t.company_id) addDeal(`co:${t.company_id}|${t.pipeline_id ?? ""}`, t);
+    else (t.contactIds ?? []).forEach((c) => addDeal(`ct:${c}|${t.pipeline_id ?? ""}`, t));
+  });
+  /** The same deal twice in the file: who + pipeline + title (or product) → first row. */
+  const seenInFile = new Map<string, number>();
 
   /* ---- 1) read every row ---- */
   const parsed: Parsed[] = rows.map((r) => {
@@ -926,11 +942,32 @@ export function buildPlan(ctx: Ctx, columns: Column[], rows: SheetCell[][], stat
     team.forEach((pid) => { const role = resolveDealRole(ctx.roles, pid, pipelineId, state.personRole[pid]); if (role) dealRoles[pid] = role.id; });
 
     /* status of the row */
-    let status: PlanRow["status"] = "new"; let reason: string | undefined;
+    let status: PlanRow["status"] = "new"; let reason: string | undefined; let dupOf: string | null = null;
     if (!companyRef && !contactRef) { status = "error"; reason = companyKey || ctKey ? "Company and contact are both skipped" : "No company or contact"; }
     else if (!pipelineId || !ord.length) { status = "error"; reason = pipelineId ? "This pipeline has no phases" : "No pipeline"; }
-    else if (companyRef?.startsWith("crm:") ? existingDeals.has(`${companyRef.slice(4)}|${pipelineId}`) : (!companyRef && contactRef?.startsWith("crm:") && existingContactDeals.has(`${contactRef.slice(4)}|${pipelineId}`))) {
-      status = state.dupMode === "skip" ? "dup" : "new"; reason = "Already has a deal in this pipeline";
+    else {
+      const title = titleKey(p.get["deal.title"]?.join(" · "));
+      const fileKey = `${companyRef ? `co:${companyRef}` : `ct:${contactRef}`}|${pipelineId}|${title || `p:${productId ?? ""}`}`;
+      if (seenInFile.has(fileKey)) {
+        // the same deal twice in this file: only the first one counts
+        status = "dup"; reason = "Same deal as an earlier row of the file";
+      } else {
+        seenInFile.set(fileKey, idx);
+        const crmWho = companyRef?.startsWith("crm:") ? `co:${companyRef.slice(4)}` : !companyRef && contactRef?.startsWith("crm:") ? `ct:${contactRef.slice(4)}` : null;
+        const theirs = crmWho ? dealsByKey.get(`${crmWho}|${pipelineId}`) ?? [] : [];
+        if (theirs.length) {
+          const same = title ? theirs.find((t) => titleKey(t.deal_name) === title) : undefined;
+          // a title different from every (named) deal already there → another deal: an upsell, a renewal…
+          const another = !!title && !same && theirs.every((t) => !!titleKey(t.deal_name));
+          if (another) {
+            issues.push(`${theirs.length === 1 ? "Another deal" : `${theirs.length} other deals`} of this ${companyRef ? "company" : "contact"} ${theirs.length === 1 ? "is" : "are"} already in this pipeline — imported as a different deal (its title is different)`);
+          } else {
+            dupOf = (same ?? theirs[0]).id;
+            status = state.dupMode === "import" ? "new" : state.dupMode === "update" ? "update" : "dup";
+            reason = same ? "Already in the CRM — same company, pipeline and title" : "Already has a deal in this pipeline";
+          }
+        }
+      }
     }
     if (status === "new") {
       const missing = ctx.fields.filter((f) => f.required).filter((f) => { const v = p.custom[`custom:${f.id}`]; return v == null || v === "" || (f.type === "boolean" && v === false); });
@@ -940,7 +977,7 @@ export function buildPlan(ctx: Ctx, columns: Column[], rows: SheetCell[][], stat
     const becomesClient = status === "new" && state.makeClients && dealStatus === "won" && !!closedOn && !!companyRef && !coIsClient;
     if (dealStatus === "won" && closedOn && !companyRef) issues.push("Won with a close date, but without a company it can't become a client");
     return {
-      idx, status, reason, issues, companyRef, companyLabel, companyKey, contactRef, contactLabel, contactKey: ctKey,
+      idx, status, reason, dupOf, issues, companyRef, companyLabel, companyKey, contactRef, contactLabel, contactKey: ctKey,
       pipelineId, pipeOverridden, phaseId: phase?.id ?? null, reachedPhaseId: reached?.id ?? null, dealStatus, phaseDates,
       value, productId, productDefaulted, owner, team, dealRoles, expectedClose, closedOn, probability, created, becomesClient,
       title: p.get["deal.title"]?.join(" · ") ?? null, notes: p.get["deal.notes"] ?? [], lossReason, lossDetails, newLossReason, custom: p.custom,
@@ -975,7 +1012,7 @@ export function buildPlan(ctx: Ctx, columns: Column[], rows: SheetCell[][], stat
   return {
     rows: planRows, companies: companyList, contacts: contactList, newContacts: nc,
     counts: {
-      new: ok.length, dup: planRows.filter((x) => x.status === "dup").length, error: planRows.filter((x) => x.status === "error").length,
+      new: ok.length, update: planRows.filter((x) => x.status === "update").length, dup: planRows.filter((x) => x.status === "dup").length, error: planRows.filter((x) => x.status === "error").length,
       warn: ok.filter((x) => x.issues.length).length,
       coNew: [...usedCo].filter((x) => x?.startsWith("new:")).length,
       coFound: [...usedCo].filter((x) => x?.startsWith("crm:")).length,
@@ -1034,11 +1071,11 @@ export function peopleWithSeveralRoles(ctx: Ctx, plan: Plan): { id: string; role
 /* ═══════════════════════════ running it ═══════════════════════════ */
 
 export interface RunResult {
-  created: number; failed: { row: number; reason: string }[];
+  created: number; updated: number; failed: { row: number; reason: string }[];
   coCreated: number; ctCreated: number; coUpdated: number; ctUpdated: number; ctLinked: number;
   clientsCreated: number; newFields: number; batchId: string | null;
 }
-export const emptyResult = (): RunResult => ({ created: 0, failed: [], coCreated: 0, ctCreated: 0, coUpdated: 0, ctUpdated: 0, ctLinked: 0, clientsCreated: 0, newFields: 0, batchId: null });
+export const emptyResult = (): RunResult => ({ created: 0, updated: 0, failed: [], coCreated: 0, ctCreated: 0, coUpdated: 0, ctUpdated: 0, ctLinked: 0, clientsCreated: 0, newFields: 0, batchId: null });
 
 async function startBatch(entity: "deal" | "company" | "contact", fileName: string): Promise<string | null> {
   const { data, error } = await supabase.from("import_batches").insert({ entity, file_name: fileName || null }).select("id").single();
@@ -1248,6 +1285,40 @@ export async function runImport(ctx: Ctx, state: ImportState, columns: Column[],
     }
   };
   await Promise.all(Array.from({ length: Math.min(4, todo.length || 1) }, worker));
+
+  /* 4b) deals already in the CRM, updated with the file's data (only what the file maps) */
+  const upd = plan.rows.filter((r) => r.status === "update" && r.dupOf);
+  if (upd.length) {
+    const mapped = new Set(Object.values(state.mapping).filter(Boolean));
+    const has = (t: string) => mapped.has(t);
+    const phaseMapped = has("deal.phase") || has("deal.status") || [...mapped].some(isPhaseAt);
+    const byId = new Map(ctx.trackings.map((t) => [t.id, t]));
+    let k = 0;
+    onProgress({ done: 0, total: upd.length, phase: "Updating deals already in the CRM…" });
+    for (const r of upd) {
+      const cur: any = byId.get(r.dupOf!) ?? {};
+      const product = r.productId ? ctx.products.find((p) => p.id === r.productId) : null;
+      const price = r.value ?? product?.tiers?.[0]?.price ?? null;
+      const cust = resolveCustom(r.custom);
+      const patch: Record<string, any> = {
+        ...(phaseMapped && r.phaseId ? { current_phase_id: r.phaseId, status: r.dealStatus } : {}),
+        ...(has("deal.product") && r.productId ? { product_id: r.productId } : {}),
+        ...((has("deal.value") || has("deal.product")) && price != null ? { product_price: price } : {}),
+        ...(has("deal.probability") && r.probability != null ? { rep_close_prob: r.probability } : {}),
+        ...(has("deal.expected_close") && r.expectedClose ? { rep_close_date: r.expectedClose } : {}),
+        ...(has("deal.loss_reason") && r.lossReason ? { loss_reason: r.lossReason } : {}),
+        ...(has("deal.loss_reason") && r.lossDetails ? { loss_details: r.lossDetails } : {}),
+        ...(r.closedOn ? { close_date: r.closedOn } : {}),
+        ...(r.title ? { deal_name: r.title.replace(/\s+/g, " ").trim().slice(0, 200) } : {}),
+        ...(Object.keys(cust).length ? { custom: { ...(cur.custom ?? {}), ...cust } } : {}),
+      };
+      if (Object.keys(patch).length) {
+        const { error } = await supabase.from("trackings").update(patch).eq("id", r.dupOf!);
+        if (error) failed.push({ row: r.idx + rowOffset, reason: `Deal not updated — ${error.message}` }); else res.updated++;
+      }
+      onProgress({ done: ++k, total: upd.length, phase: "Updating deals already in the CRM…" });
+    }
+  }
 
   /* 5) won with a close date → the company becomes a client */
   const clientRows = todo.filter((r) => r.becomesClient && dealIdOf.has(r.idx));

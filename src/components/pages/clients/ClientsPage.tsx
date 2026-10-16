@@ -5,7 +5,10 @@ import NewClientForm from "./NewClientForm";
 import ClientWorkspace from "./ClientWorkspace";
 import Select from "../../framework/Select";
 import { useClientsData } from "./useClientsData";
-import { projectValue, type Client, type Project, type ProjectType } from "./clientsTypes";
+import { projectValue, effectiveRate, type Client, type Project, type ProjectType } from "./clientsTypes";
+import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
+import { downloadBlob, tableToXlsx, type ExportCell } from "../../framework/exportFile";
+import { ClientImport } from "../contacts/ContactImport";
 import "./ClientsPage.css";
 
 // Re-export shared types & helpers from their new home so existing imports
@@ -259,6 +262,43 @@ export default function ClientsPage() {
   // Deleting a client cascades to its projects, so the confirmation is sized to
   // the damage. This flow is clients-only, so it lives here, not in the hook.
   const [deleteTarget, setDeleteTarget] = useState<{ client: Client; count: number } | null>(null);
+  const [importing, setImporting] = useState(false);
+
+  /** One row per project (a client without projects gets one row) — the same columns the importer reads. */
+  const exportClients = () => {
+    const svc = (id: string) => projectTypes.find((t) => t.id === id)?.name ?? "";
+    const date = (s: string) => (s ? { date: s.slice(0, 10) } : null);
+    const rows: ExportCell[][] = [];
+    [...clients].sort((a, b) => a.name.localeCompare(b.name)).forEach((c) => {
+      const ps = projects.filter((p) => p.clientId === c.id);
+      if (!ps.length) { rows.push([c.name, ...Array(28).fill(null)]); return; }
+      ps.forEach((p) => {
+        const ct = p.contacts?.find((x) => x.billing) ?? p.contacts?.[0];
+        const u = usage[p.id] ?? { planned: 0, done: 0 };
+        const rate = p.discountMode === "rate" ? effectiveRate(p.pricePerDay, p.discountMode, p.discountValue) : p.pricePerDay;
+        rows.push([
+          c.name, p.legalName || null, p.vatNumber || null,
+          p.address?.street || null, p.address?.number || null, p.address?.postalCode || null, p.address?.city || null, p.address?.country || null,
+          ct?.name || null, ct?.email || null, ct?.phone || null, ct?.position || null,
+          svc(p.projectTypeId) || null, p.status === "closed" ? "Closed" : "Open",
+          date(p.signingDate), date(p.kickoffDate), date(p.endDate),
+          p.consultorDays, p.connectorDays, rate, p.supervisionDays, p.supervisionPrice,
+          p.discountMode === "percent" ? p.discountValue : null, p.discountMode === "total" ? p.discountValue : null,
+          p.taxed ? p.taxRate : null, p.paymentDays || null,
+          Math.round(projectValue(p) * 100) / 100, Math.round(u.done * 100) / 100, Math.round(u.planned * 100) / 100,
+        ]);
+      });
+    });
+    const cols: [string, "text" | "number" | "money" | "date" | "percent"][] = [
+      ["Client", "text"], ["Legal name", "text"], ["VAT", "text"], ["Street", "text"], ["Number", "text"], ["Postal code", "text"], ["City", "text"], ["Country", "text"],
+      ["Contact", "text"], ["Contact email", "text"], ["Contact phone", "text"], ["Position", "text"], ["Service", "text"], ["Status", "text"],
+      ["Signing date", "date"], ["Kick-off", "date"], ["End date", "date"], ["Consultancy days", "number"], ["Connector days", "number"], ["Price per day", "money"],
+      ["Supervision days", "number"], ["Supervision price", "money"], ["Discount %", "number"], ["Discount total", "money"], ["Tax rate", "number"], ["Payment days", "number"],
+      ["Value", "money"], ["Used days", "number"], ["Booked days", "number"],
+    ];
+    const blob = tableToXlsx({ columns: cols.map(([label, format]) => ({ label, format })), rows }, "Clients");
+    downloadBlob(blob, `clients-${new Date().toISOString().slice(0, 10)}.xlsx`);
+  };
   const [deleteTyped, setDeleteTyped] = useState("");
   const [deleteImpact, setDeleteImpact] = useState<{ invoices: number; entries: number } | null>(null);
 
@@ -290,7 +330,11 @@ export default function ClientsPage() {
           <h1 className="cl-title">Clients</h1>
         </div>
         <div className="cl-actions">
-          <button className="cl-primary" onClick={() => setShowForm(true)}>+ New client</button>
+          <ActionsMenu items={[
+            { key: "new", group: "Create", label: "New client", hint: "Add one client and its first project", icon: AM_ICON.plus, primary: true, tone: "green", shortcut: "N", onSelect: () => setShowForm(true) },
+            { key: "import", group: "Data", label: "Import", hint: "Clients and projects from Excel or CSV", icon: AM_ICON.import, tone: "blue", shortcut: "I", onSelect: () => setImporting(true) },
+            { key: "export", group: "Data", label: "Export", hint: "Every client and project to Excel — re-importable", icon: AM_ICON.export, tone: "violet", shortcut: "E", onSelect: exportClients },
+          ]} />
         </div>
       </header>
 
@@ -317,6 +361,8 @@ export default function ClientsPage() {
           onClose={() => setDetailClient(null)}
         />
       )}
+
+      {importing && <ClientImport onClose={() => setImporting(false)} onDone={() => { void loadAll(); }} />}
 
       {showForm && (
         <NewClientForm

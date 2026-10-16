@@ -812,3 +812,67 @@
   .di-fail-why { grid-column: 2 / 3; }
   .di-fail-cells { padding-left: 16px; }
 }
+/* deals already in the CRM: updated instead of duplicated */
+.di-pill.is-update { background: rgba(224, 164, 60, 0.15); color: #8a5a10; }
+.rv .di-pill.is-update { color: #a06a14; }
+.rv-ask.is-danger { border-color: rgba(214, 69, 69, 0.35); background: linear-gradient(160deg, rgba(214, 69, 69, 0.05), #fff 60%); }
+.rv-ask.is-danger .rv-ask-ico { background: var(--red); color: #fff; }
+
+/* ---------- cleaning & merging columns (every importer) ---------- */
+.di-tools { display: flex; flex-direction: column; gap: 8px; padding: 0 12px 10px 12px; }
+.di-tools-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.di-tool {
+  display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 999px;
+  border: 1px dashed rgba(10, 111, 77, 0.22); background: none; color: var(--muted); font: 600 11.5px "Inter", sans-serif; cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.di-tool svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.di-tool:hover { background: rgba(18, 181, 127, 0.07); color: var(--forest); border-color: rgba(18, 181, 127, 0.4); }
+.di-tool.is-on { border-style: solid; background: rgba(18, 181, 127, 0.1); color: var(--forest); border-color: rgba(18, 181, 127, 0.35); }
+.di-tool.is-merge { border-style: solid; background: rgba(139, 111, 214, 0.1); color: #5b3fb0; border-color: rgba(139, 111, 214, 0.35); }
+.di-tool-note { font-size: 11.5px; color: #5b3fb0; }
+
+.di-rules, .di-merge { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 12px; background: var(--paper); border: 1px solid var(--line); animation: di-in 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+.di-merge { background: linear-gradient(160deg, rgba(139, 111, 214, 0.06), #fff 70%); border-color: rgba(139, 111, 214, 0.22); display: grid; grid-template-columns: minmax(200px, 0.9fr) minmax(0, 1.4fr); gap: 10px 18px; }
+.di-rulerow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; animation: di-in 0.25s cubic-bezier(0.16, 1, 0.3, 1) backwards; animation-delay: calc(var(--j, 0) * 30ms); }
+.di-rulerow em { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; background: #fff; border: 1px solid var(--line); font-style: normal; font-size: 10.5px; font-weight: 700; color: var(--muted); }
+.di-rules select, .di-rules input, .di-merge input {
+  height: 28px; padding: 0 8px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font: 500 12px "Inter", sans-serif; color: var(--ink); outline: none;
+}
+.di-rules select:focus, .di-rules input:focus, .di-merge input:focus { border-color: var(--emerald); box-shadow: 0 0 0 3px rgba(18, 181, 127, 0.12); }
+.di-rulep { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
+.di-rulep input { width: 54px; }
+.di-rulet { width: 150px; }
+.di-rulex { color: var(--faint); font-size: 13px; }
+.di-rulex.is-del { margin-left: auto; width: 24px; height: 24px; border: 0; border-radius: 7px; background: none; cursor: pointer; font-size: 16px; }
+.di-rulex.is-del:hover { background: rgba(214, 69, 69, 0.08); color: var(--red); }
+.di-rules-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.di-rules-foot span { font-size: 11.5px; color: var(--faint); }
+.di-prev { display: flex; flex-direction: column; gap: 3px; margin-top: 2px; padding-top: 8px; border-top: 1px dashed var(--line); }
+.di-merge .di-prev { grid-column: 1 / -1; }
+.di-prev > div { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }
+.di-prev s { flex: 0 1 auto; min-width: 0; max-width: 40%; text-decoration: none; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.di-prev.is-merge s { max-width: 28%; padding: 1px 6px; border-radius: 5px; background: #fff; border: 1px solid var(--line); }
+.di-prev svg { flex-shrink: 0; width: 13px; height: 13px; fill: none; stroke: var(--emerald); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.di-prev b { min-width: 0; font-weight: 650; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.di-prev b i { font-style: normal; font-weight: 500; color: #b03a3a; }
+.di-merge-h { display: block; margin-bottom: 4px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #5b3fb0; }
+.di-merge-order { display: flex; flex-direction: column; gap: 4px; }
+.di-merge-col { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 9px; background: #fff; border: 1px solid var(--line); font-size: 12px; animation: di-in 0.25s cubic-bezier(0.16, 1, 0.3, 1) backwards; animation-delay: calc(var(--j, 0) * 40ms); }
+.di-merge-col em { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 5px; background: #5b3fb0; color: #fff; font-style: normal; font-size: 10px; font-weight: 700; }
+.di-merge-col b { color: var(--muted); }
+.di-merge-col span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.di-merge-col button { width: 22px; height: 22px; border: 0; border-radius: 6px; background: var(--paper); color: var(--muted); cursor: pointer; }
+.di-merge-col button:hover:not(:disabled) { background: rgba(139, 111, 214, 0.15); color: #5b3fb0; }
+.di-merge-col button:disabled { opacity: 0.3; cursor: default; }
+.di-merge-modes { display: flex; flex-wrap: wrap; gap: 4px; }
+.di-merge-modes button { height: 26px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--line); background: #fff; color: var(--muted); font: 600 11.5px "Inter", sans-serif; cursor: pointer; transition: all 0.15s; }
+.di-merge-modes button.is-on { background: #5b3fb0; border-color: #5b3fb0; color: #fff; }
+.di-merge-sep { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 12px; color: var(--muted); }
+.di-merge-sep input { width: 80px; }
+.di-merge-stat { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+.di-merge-stat b { color: #5b3fb0; }
+@media (max-width: 760px) { .di-merge { grid-template-columns: minmax(0, 1fr); } }
+/* "who can see it" for a whole import */
+.rv-opt.is-people { align-items: center; }
+.rv-opt.is-people > :last-child { flex: 0 0 300px; }

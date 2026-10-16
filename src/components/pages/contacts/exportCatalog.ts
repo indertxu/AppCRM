@@ -11,13 +11,17 @@
  *    team, every product of a deal, the real deal total, phase history, counts
  *
  * Contact fields look at the contact; company fields at each of its companies;
- * deal fields at each of its deals.
+ * deal fields at each of its deals. With `root: "company"` (the Companies
+ * export) it's the other way round: each row is a company, and contact fields
+ * look at each of its contacts.
  */
 import { languageName, countryLabel } from "./contactProfile";
 
 export type Kind ="text" | "number" | "date" | "bool" | "enum";
 export type Src = "contact" | "company" | "deal";
-export interface Ctx { c: any; cos: any[]; deals: any[] }
+/** One row's world: the record itself (`c`), its companies, its contacts and its deals. */
+export interface Ctx { c: any; cos: any[]; deals: any[]; cts?: any[] }
+export type Root = "contact" | "company";
 export interface XF {
   key: string;
   src: Src;
@@ -26,7 +30,7 @@ export interface XF {
   options?: { value: string; label: string }[];
   /** All values for a contact: one for contact fields, one per company/deal otherwise. */
   get: (x: Ctx) => any[];
-  /** True when the field is about one company/deal at a time ("same deal" logic applies). */
+  /** True when the field is about one related record at a time ("same deal" logic applies). */
   perEntity: boolean;
   money?: boolean;
   noColumn?: boolean;
@@ -50,6 +54,8 @@ export interface CatalogInput {
   shownIds?: string[];
   /** Import batch id → "file · date · person". */
   imports?: Record<string, string>;
+  /** What each row is: a contact (default) or a company. */
+  root?: Root;
 }
 
 const SKIP = new Set(["id", "tenant_id", "companyIds", "contactIds", "custom"]);
@@ -119,9 +125,10 @@ export function buildCatalog(inp: CatalogInput): XF[] {
     { name: "companies", map: companyNames }, { name: "people", map: inp.people }, { name: "contacts", map: contactNames },
   ];
   const peopleOpts = sortOpts(Object.entries(inp.people).map(([value, label]) => ({ value, label })));
-  const entities = (src: Src, x: Ctx) => (src === "contact" ? [x.c] : src === "company" ? x.cos : x.deals);
+  const root: Root = inp.root ?? "contact";
+  const entities = (src: Src, x: Ctx) => entitiesOf(root, src, x);
   const mk = (src: Src, key: string, label: string, kind: Kind, value: (e: any, x: Ctx) => any, extra: Partial<XF> = {}): XF => ({
-    key: `${src}:${key}`, src, label, kind, perEntity: src !== "contact",
+    key: `${src}:${key}`, src, label, kind, perEntity: src !== root,
     get: (x) => entities(src, x).flatMap((e) => { const v = value(e, x); return Array.isArray(v) ? v : [v]; }),
     ...extra,
   });
@@ -133,12 +140,19 @@ export function buildCatalog(inp: CatalogInput): XF[] {
     mk("contact", "@client", "Is a client contact", "bool", (c) => inp.clientContactIds.has(c.id)),
     mk("contact", "@assigned", "Assigned to", "enum", (c) => inp.contactAssignees[c.id] ?? [], { options: peopleOpts }),
     mk("contact", "@ncompanies", "Number of companies", "number", (c) => (c.companyIds ?? []).length),
-    mk("contact", "@ndeals", "Number of deals", "number", (_c, x) => x.deals.length),
+    ...(root === "contact" ? [mk("contact", "@ndeals", "Number of deals", "number", (_c, x) => x.deals.length)] : []),
   );
-  if (inp.shownIds) { const shown = new Set(inp.shownIds); out.push(mk("contact", "@onscreen", "On screen right now", "bool", (c) => shown.has(c.id), { noColumn: true })); }
+  if (inp.shownIds) { const shown = new Set(inp.shownIds); out.push(mk(root, "@onscreen", "On screen right now", "bool", (e) => shown.has(e.id), { noColumn: true })); }
+  if (root === "company") {
+    out.push(
+      { key: "contact:@has", src: "contact", label: "Has a contact", kind: "bool", perEntity: false, get: (x) => [(x.cts ?? []).length > 0], noColumn: true },
+      mk("company", "@ncontacts", "Number of contacts", "number", (_co, x) => (x.cts ?? []).length),
+      mk("company", "@ndeals", "Number of deals", "number", (_co, x) => x.deals.length),
+    );
+  }
   out.push(
     mk("company", "@which", "Company", "enum", (co) => co.id, { options: sortOpts(inp.companies.map((c) => ({ value: c.id, label: c.name }))) }),
-    { key: "company:@has", src: "company", label: "Has a company", kind: "bool", perEntity: false, get: (x) => [x.cos.length > 0], noColumn: true },
+    ...(root === "contact" ? [{ key: "company:@has", src: "company", label: "Has a company", kind: "bool", perEntity: false, get: (x: Ctx) => [x.cos.length > 0], noColumn: true } as XF] : []),
     mk("company", "@client", "Is a client", "bool", (co) => inp.clientCompanyIds.has(co.id)),
     mk("company", "@hasdeal", "Has a deal", "bool", (co) => (inp.dealsByCompany[co.id] ?? []).length > 0),
     mk("company", "@opendeal", "Has an open deal", "bool", (co) => (inp.dealsByCompany[co.id] ?? []).some((d) => d.status === "active")),
@@ -243,16 +257,25 @@ export const condReady = (f: XF | undefined, c: Cond) => !!f && (NO_VALUE.has(c.
  * company, and deal conditions for the same deal (the default), instead of being
  * satisfied by different ones.
  */
-export function contactMatches(x: Ctx, conds: { f: XF; c: Cond }[], match: "all" | "any", same: { company: boolean; deal: boolean }, inPeriod: (d: string, key: string) => boolean): boolean {
+export function contactMatches(x: Ctx, conds: { f: XF; c: Cond }[], match: "all" | "any", same: { company?: boolean; deal?: boolean; contact?: boolean }, inPeriod: (d: string, key: string) => boolean): boolean {
   if (!conds.length) return true;
   if (match === "any") return conds.some(({ f, c }) => condPasses(f, c, x, inPeriod));
-  const grouped = (src: "company" | "deal") => conds.filter(({ f, c }) => f.src === src && f.perEntity && same[src] && !NEGATIVE.has(c.op));
-  const coG = grouped("company"), dG = grouped("deal");
-  const rest = conds.filter((k) => !coG.includes(k) && !dG.includes(k));
-  if (!rest.every(({ f, c }) => condPasses(f, c, x, inPeriod))) return false;
-  if (coG.length && !x.cos.some((co) => coG.every(({ f, c }) => condPasses(f, c, { ...x, cos: [co] }, inPeriod)))) return false;
-  if (dG.length && !x.deals.some((d) => dG.every(({ f, c }) => condPasses(f, c, { ...x, deals: [d] }, inPeriod)))) return false;
+  // per-entity fields are only ever the non-root kinds, so `c` (the row itself) is never narrowed
+  const LIST = { company: "cos", contact: "cts", deal: "deals" } as const;
+  const groups = (["company", "contact", "deal"] as Src[]).map((src) => ({ src, conds: conds.filter(({ f, c }) => f.src === src && f.perEntity && same[src] && !NEGATIVE.has(c.op)) }));
+  const grouped = new Set(groups.flatMap((g) => g.conds));
+  if (!conds.filter((k) => !grouped.has(k)).every(({ f, c }) => condPasses(f, c, x, inPeriod))) return false;
+  for (const g of groups) {
+    if (!g.conds.length) continue;
+    const list: any[] = (x as any)[LIST[g.src]] ?? [];
+    if (!list.some((e) => g.conds.every(({ f, c }) => condPasses(f, c, { ...x, [LIST[g.src]]: [e] }, inPeriod)))) return false;
+  }
   return true;
+}
+/** The records a field looks at for one row. */
+export function entitiesOf(root: Root, src: Src, x: Ctx): any[] {
+  if (src === root) return [x.c];
+  return src === "company" ? x.cos : src === "contact" ? x.cts ?? [] : x.deals;
 }
 
 /* ---------- a field as an export cell ---------- */

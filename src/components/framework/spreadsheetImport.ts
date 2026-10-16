@@ -232,3 +232,142 @@ export function parseBool(c: SheetCell): boolean | null {
   if (["no", "n", "false", "0", "falso"].includes(s)) return false;
   return null;
 }
+/* ───────────────────────── cleaning & merging columns (every importer) ─────────────────────────
+ * Before an import reads a file, each column can get rules that clean its values
+ * ("drop the first word", "remove what column B has", "keep the text before ','"…),
+ * and several columns can feed the same field: the importer then sees ONE column
+ * per field, whose value is picked by priority, or the longest, or all joined. */
+
+export type ColRuleOp =
+  | "dropWords" | "keepWords" | "dropLastWords" | "keepLastWords"
+  | "removeCol" | "before" | "after" | "replace" | "case";
+export interface ColRule {
+  id: string; op: ColRuleOp;
+  /** words (drop / keep) */
+  n?: number;
+  /** the other column (removeCol) */
+  col?: number;
+  /** separator (before / after) or text to find (replace) */
+  text?: string;
+  /** replacement (replace) */
+  with?: string;
+  /** before / after: use the last time the separator appears instead of the first */
+  last?: boolean;
+  to?: "title" | "upper" | "lower";
+}
+export type MergeMode = "first" | "last" | "longest" | "shortest" | "join";
+export interface MergeRule { order: number[]; mode: MergeMode; sep: string }
+export interface ImportPrep {
+  /** column → its cleaning rules, applied in order */
+  rules: Record<number, ColRule[]>;
+  /** target field → how its columns are merged */
+  merges: Record<string, MergeRule>;
+}
+export const emptyPrep = (): ImportPrep => ({ rules: {}, merges: {} });
+
+export const RULE_LABEL: Record<ColRuleOp, string> = {
+  dropWords: "Remove the first words", keepWords: "Keep only the first words",
+  dropLastWords: "Remove the last words", keepLastWords: "Keep only the last words",
+  removeCol: "Remove what another column has", before: "Keep the text before", after: "Keep the text after",
+  replace: "Replace text", case: "Change capitals",
+};
+export const MERGE_LABEL: Record<MergeMode, string> = {
+  first: "First with data, by priority", last: "Last with data, by priority", longest: "The longest value", shortest: "The shortest value", join: "Join them all",
+};
+
+const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const squash = (s: string) => s.replace(/\s+/g, " ").replace(/^[\s,;·\-–]+|[\s,;·\-–]+$/g, "").trim();
+const titleCase = (s: string) => s.toLowerCase().replace(/(^|[\s\-'’(])(\p{L})/gu, (_m, a: string, b: string) => a + b.toUpperCase());
+
+/** One column's value after its rules (other columns of the same row are read raw). */
+export function applyColRules(value: string, rules: ColRule[] | undefined, row: SheetCell[]): string {
+  let s = value ?? "";
+  for (const r of rules ?? []) {
+    const words = s.trim().split(/\s+/).filter(Boolean);
+    const n = Math.max(0, Math.floor(r.n ?? 1));
+    switch (r.op) {
+      case "dropWords": s = words.slice(n).join(" "); break;
+      case "keepWords": s = words.slice(0, n).join(" "); break;
+      case "dropLastWords": s = words.slice(0, Math.max(0, words.length - n)).join(" "); break;
+      case "keepLastWords": s = n ? words.slice(-n).join(" ") : ""; break;
+      case "removeCol": {
+        const other = r.col == null ? "" : cellText(row[r.col] ?? null).trim();
+        if (!other) break;
+        const whole = new RegExp(`(^|[\\s,;])${escRe(other)}(?=$|[\\s,;])`, "i");
+        if (whole.test(s)) s = s.replace(whole, "$1");
+        else for (const w of other.split(/\s+/).filter(Boolean)) s = s.replace(new RegExp(`(^|[\\s,;])${escRe(w)}(?=$|[\\s,;])`, "i"), "$1");
+        s = squash(s);
+        break;
+      }
+      case "before": case "after": {
+        const sep = r.text ?? "";
+        if (!sep) break;
+        const i = r.last ? s.toLowerCase().lastIndexOf(sep.toLowerCase()) : s.toLowerCase().indexOf(sep.toLowerCase());
+        if (i < 0) break;
+        s = r.op === "before" ? s.slice(0, i) : s.slice(i + sep.length);
+        break;
+      }
+      case "replace": if (r.text) s = s.replace(new RegExp(escRe(r.text), "gi"), r.with ?? ""); break;
+      case "case": s = r.to === "upper" ? s.toUpperCase() : r.to === "lower" ? s.toLowerCase() : titleCase(s); break;
+    }
+    s = squash(s);
+  }
+  return s;
+}
+
+/** The value a merged field takes from its columns' values (already cleaned, in priority order). */
+export function mergeValues(values: string[], rule: Pick<MergeRule, "mode" | "sep">): string {
+  const vs = values.map((v) => (v ?? "").trim()).filter(Boolean);
+  if (!vs.length) return "";
+  switch (rule.mode) {
+    case "last": return vs[vs.length - 1];
+    case "longest": return vs.reduce((a, b) => (b.length > a.length ? b : a));
+    case "shortest": return vs.reduce((a, b) => (b.length < a.length ? b : a));
+    case "join": return [...new Set(vs)].join(rule.sep ?? " ");
+    default: return vs[0];
+  }
+}
+
+/** Fields fed by several columns (fields that already take several, like notes, don't merge). */
+export function mergeGroups(mapping: Record<number, string>, multiOk: Set<string>, prep?: ImportPrep): Record<string, number[]> {
+  const by: Record<string, number[]> = {};
+  Object.entries(mapping).forEach(([c, t]) => { if (t && !multiOk.has(t)) (by[t] ??= []).push(+c); });
+  const out: Record<string, number[]> = {};
+  for (const [t, cols] of Object.entries(by)) {
+    if (cols.length < 2) continue;
+    const order = (prep?.merges[t]?.order ?? []).filter((c) => cols.includes(c));
+    out[t] = [...order, ...cols.filter((c) => !order.includes(c)).sort((a, b) => a - b)];
+  }
+  return out;
+}
+
+/**
+ * The file as the importer should read it: cleaned cells, and one column per merged
+ * field (the first by priority carries the merged value; the others stop importing).
+ */
+export function prepareImport(rows: SheetCell[][], mapping: Record<number, string>, prep: ImportPrep, multiOk: Set<string>): {
+  rows: SheetCell[][]; mapping: Record<number, string>; groups: Record<string, number[]>;
+} {
+  const ruled = Object.entries(prep.rules).filter(([, rs]) => rs?.length).map(([c, rs]) => [+c, rs] as const);
+  const groups = mergeGroups(mapping, multiOk, prep);
+  const groupList = Object.entries(groups);
+  if (!ruled.length && !groupList.length) return { rows, mapping, groups };
+  const out = rows.map((r) => {
+    const row = r.slice();
+    for (const [c, rs] of ruled) {
+      const v = applyColRules(cellText(r[c] ?? null), rs, r);
+      row[c] = v === "" ? null : v;
+    }
+    for (const [t, cols] of groupList) {
+      const rule = prep.merges[t] ?? { order: cols, mode: "first" as MergeMode, sep: " " };
+      const v = mergeValues(cols.map((c) => cellText(row[c] ?? null)), rule);
+      // a single value keeps its cell as it was (a real date or number stays one)
+      const only = cols.filter((c) => cellText(row[c] ?? null).trim());
+      row[cols[0]] = only.length === 1 && rule.mode !== "join" ? row[only[0]] : v === "" ? null : v;
+    }
+    return row;
+  });
+  const m = { ...mapping };
+  for (const [, cols] of groupList) cols.slice(1).forEach((c) => { m[c] = ""; });
+  return { rows: out, mapping: m, groups };
+}

@@ -4,17 +4,21 @@ import { createPortal } from "react-dom";
 import SalesMultiFilter from "../sales/SalesMultiFilter";
 import DealRolePicker from "./DealRolePicker";
 import { useBackToClose } from "../../../framework/useBackToClose";
-import { readSpreadsheet, colLetter, cellText, normHeader, parseNumber, type Sheet, type Workbook } from "../../../framework/spreadsheetImport";
+import {
+  readSpreadsheet, colLetter, cellText, normHeader, parseNumber, applyColRules, mergeValues, prepareImport, emptyPrep, RULE_LABEL, MERGE_LABEL,
+  type Sheet, type Workbook, type SheetCell, type ColRule, type ColRuleOp, type ImportPrep, type MergeMode, type MergeRule,
+} from "../../../framework/spreadsheetImport";
 import { listCompanies, listContacts, listCompanyFields, listContactFields, type Company, type CompanyField, type Contact, type ContactField } from "../../companies/companiesApi";
 import type { Pipeline, Phase } from "../../settings/pipelineApi";
 import type { Product } from "../../settings/catalogApi";
-import { listLossReasons, type LossReason, type Tracking } from "../sales/salesApi";
+import { listLossReasons, listTrackings, type LossReason, type Tracking } from "../sales/salesApi";
+import { supabase } from "../../../api/supabase";
 import { listTrackingFields, type TrackingField } from "./trackingFieldsApi";
 import type { SalesRole } from "./salesRolesApi";
 import {
   BASE_TARGETS, VALUE_TARGETS, STATUS_LABEL, EMAIL_RE, PHASE_AT, ENTITY_LABEL,
   guessTarget, guessPhaseAt, guessType, canonicalOptions, guessOwnerColumn, distinctValues, choiceFor, matchPerson, buildPlan, mapProblem, peopleWithSeveralRoles,
-  runImport, sortedPipelines, phasesOf, defOf, hasValueStep, isPhaseAt, targetLabelOf, emptyState, emptyResult, listClientCompanyIds, EXISTING_LABEL,
+  runImport, sortedPipelines, MULTI_OK, phasesOf, defOf, hasValueStep, isPhaseAt, targetLabelOf, emptyState, emptyResult, listClientCompanyIds, EXISTING_LABEL,
   type Column, type Ctx, type Entity, type ExistingMode, type RecordDiff, type ImportState, type Plan, type NewField, type Person, type Rule, type FieldType, type PlanRow, type RunResult, type CompanyName, type ContactName,
 } from "./dealImportEngine";
 import "./DealImport.css";
@@ -69,7 +73,13 @@ export default function DealImport({ pipelines, phaseByPipe, products, people, r
     listContacts().then(setContacts).catch(() => {});
     listLossReasons().then(setLossReasons).catch(() => {});
     listClientCompanyIds().then(setClientCompanies).catch(() => {});
+    // The deals already in the CRM, read fresh from the database — never the page's
+    // cached copy, which can be from before the last import and let duplicates through.
+    listTrackings().then(setFreshDeals).catch(() => setDealsErr(true));
   }, []);
+  const [freshDeals, setFreshDeals] = useState<Tracking[] | null>(null);
+  const [dealsErr, setDealsErr] = useState(false);
+  const dealsReady = !!freshDeals || dealsErr;
 
   /* ─────────────── the file ─────────────── */
   const [fileName, setFileName] = useState("");
@@ -95,6 +105,8 @@ export default function DealImport({ pipelines, phaseByPipe, products, people, r
 
   /* ─────────────── import state ─────────────── */
   const [st, setSt] = useState<ImportState>(() => emptyState());
+  /** Cleaning rules per column, and how columns that feed the same field are merged. */
+  const [prep, setPrep] = useState<ImportPrep>(emptyPrep);
   const patch = (p: Partial<ImportState>) => setSt((s) => ({ ...s, ...p }));
   const [openValues, setOpenValues] = useState<Record<number, boolean>>({});
   const touched = useRef(false);
@@ -108,14 +120,14 @@ export default function DealImport({ pipelines, phaseByPipe, products, people, r
       const best = book.sheets.reduce((bi, s, i) => (s.rows.length > book.sheets[bi].rows.length ? i : bi), 0);
       const first = book.sheets[best].rows;
       const looksHeader = !!first[0] && first[0].every((c) => c == null || (typeof c === "string" && !EMAIL_RE.test(c) && parseNumber(c) == null));
-      setWb(book); setSheetIdx(best); setHasHeader(looksHeader); setFileName(f.name);
+      setWb(book); setSheetIdx(best); setHasHeader(looksHeader); setFileName(f.name); setPrep(emptyPrep());
       setSt((s) => ({ ...s, mapping: {}, newFields: [], valueMaps: {}, rules: [], companyChoice: {}, contactChoice: {}, pipeOverride: {} }));
       if (!first.length) setFileErr("This sheet is empty.");
     } catch (e: any) { setFileErr(e?.message ?? "Couldn't read this file."); setWb(null); }
     setLoading(false);
   };
   const clearFile = () => {
-    setWb(null); setFileName(""); setFileErr(null); touched.current = false;
+    setWb(null); setFileName(""); setFileErr(null); touched.current = false; setPrep(emptyPrep());
     setSt((s) => ({ ...s, mapping: {}, newFields: [], valueMaps: {}, rules: [], companyChoice: {}, contactChoice: {}, pipeOverride: {} }));
   };
 
@@ -141,8 +153,19 @@ export default function DealImport({ pipelines, phaseByPipe, products, people, r
     setSt((s) => ({ ...s, mapping: m, ...(nextRules ? { rules: nextRules } : {}) }));
   }, [sheet, hasHeader, columns, fields, companyFields, contactFields, pipelines, phaseByPipe]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const ctx: Ctx = useMemo(() => ({ pipelines, phaseByPipe, products, lossReasons, fields, companyFields, contactFields, people, roles, companies, contacts, trackings, clientCompanies }),
-    [pipelines, phaseByPipe, products, lossReasons, fields, companyFields, contactFields, people, roles, companies, contacts, trackings, clientCompanies]);
+  const dealsNow = freshDeals ?? trackings;
+  const ctx: Ctx = useMemo(() => ({ pipelines, phaseByPipe, products, lossReasons, fields, companyFields, contactFields, people, roles, companies, contacts, trackings: dealsNow, clientCompanies }),
+    [pipelines, phaseByPipe, products, lossReasons, fields, companyFields, contactFields, people, roles, companies, contacts, dealsNow, clientCompanies]);
+
+  /** This same file was imported before (by its name). */
+  const [prevImport, setPrevImport] = useState<{ at: string; created: number } | null>(null);
+  useEffect(() => {
+    if (!fileName) { setPrevImport(null); return; }
+    let alive = true;
+    supabase.from("import_batches").select("created_at, rows_created").eq("entity", "deal").eq("file_name", fileName).order("created_at", { ascending: false }).limit(1)
+      .then(({ data }: any) => { if (alive) setPrevImport(data?.[0] ? { at: data[0].created_at, created: Number(data[0].rows_created) || 0 } : null); });
+    return () => { alive = false; };
+  }, [fileName]);
 
   const setTarget = (col: number, v: string) => {
     touched.current = true;
@@ -184,9 +207,14 @@ export default function DealImport({ pipelines, phaseByPipe, products, people, r
   };
   const setValueChoice = (target: string, key: string, choice: string) => setSt((s) => ({ ...s, valueMaps: { ...s.valueMaps, [target]: { ...(s.valueMaps[target] ?? {}), [key]: choice } } }));
 
-  const mapIssue = mapProblem(ctx, st);
+  // the file as the import reads it: cleaned values, one column per merged field
+  const eff = useMemo(() => prepareImport(rows, st.mapping, prep, MULTI_OK), [rows, st.mapping, prep]);
+  const effColumns = useMemo(() => (eff.rows === rows ? columns : columnsFromRows(columns, eff.rows)), [eff.rows, rows, columns]);
+  const effSt = useMemo(() => (eff.mapping === st.mapping ? st : { ...st, mapping: eff.mapping }), [st, eff.mapping]);
+  const effCol = (i: number) => effColumns.find((c) => c.i === i);
+  const mapIssue = mapProblem(ctx, effSt);
   const planNeeded = step === "people" || step === "review" || step === "run";
-  const plan = useMemo(() => (planNeeded ? buildPlan(ctx, columns, rows, st) : null), [planNeeded, ctx, columns, rows, st]);
+  const plan = useMemo(() => (planNeeded ? buildPlan(ctx, effColumns, eff.rows, effSt) : null), [planNeeded, ctx, effColumns, eff.rows, effSt]);
 
   /* ─────────────── labels ─────────────── */
   const personName = (id: string | null | undefined) => people.find((p) => p.id === id)?.name ?? "—";
@@ -237,15 +265,27 @@ export default function DealImport({ pipelines, phaseByPipe, products, people, r
   const [result, setResult] = useState<RunResult | null>(null);
   const [runErr, setRunErr] = useState<string | null>(null);
   const [ranPlan, setRanPlan] = useState<Plan | null>(null);
+  const running = useRef(false);
   const run = async () => {
-    if (!plan) return;
-    setRanPlan(plan);
+    if (!plan || running.current) return;
+    running.current = true;
     setStep("run"); setRunErr(null);
+    setProgress({ done: 0, total: 0, phase: "Checking the deals already in the CRM…" });
+    // last check right before writing: deals created since the review (another import,
+    // someone else) are caught too
+    let runCtx = ctx, runPlan = plan;
     try {
-      const r = await runImport(ctx, st, columns, plan, fileName, rowOffset, setProgress);
+      const latest = await listTrackings();
+      runCtx = { ...ctx, trackings: latest };
+      runPlan = buildPlan(runCtx, effColumns, eff.rows, effSt);
+    } catch { /* keep the reviewed plan */ }
+    setRanPlan(runPlan);
+    try {
+      const r = await runImport(runCtx, effSt, effColumns, runPlan, fileName, rowOffset, setProgress);
       setResult(r);
     } catch (e: any) { setRunErr(e?.message ?? "The import stopped unexpectedly."); setResult(emptyResult()); }
     setStep("done");
+    running.current = false;
     onDone();
   };
   useEffect(() => {
@@ -290,7 +330,7 @@ export default function DealImport({ pipelines, phaseByPipe, products, people, r
   };
 
   /* ─────────────── review filters ─────────────── */
-  const [tab, setTab] = useState<"all" | "new" | "warn" | "dup" | "error" | "client" | "moved">("all");
+  const [tab, setTab] = useState<"all" | "new" | "update" | "warn" | "dup" | "error" | "client" | "moved">("all");
   const [rvTab, setRvTab] = useState<"deals" | "companies" | "contacts" | "options">("deals");
   const [coFilter, setCoFilter] = useState<"check" | "new" | "found" | "all">("all");
   const [ctFilter, setCtFilter] = useState<"new" | "found" | "all">("all");
@@ -393,7 +433,7 @@ export default function DealImport({ pipelines, phaseByPipe, products, people, r
                   </label>
                   <div className="di-seg is-small">
                     {([["all", "All", columns.length], ["mapped", "Mapped", columns.filter((c) => st.mapping[c.i]).length], ["unmapped", "Not imported", columns.filter((c) => !st.mapping[c.i]).length],
-                      ["check", "To check", columns.filter((c) => { const t = st.mapping[c.i]; return t && hasValueStep(ctx, st, t) && distinctValues(c.values).some((d) => !choiceFor(ctx, st, t, d.text).matched); }).length]] as const).map(([k, l, n]) => (
+                      ["check", "To check", effColumns.filter((c) => { const t = eff.mapping[c.i]; return t && hasValueStep(ctx, st, t) && distinctValues(c.values).some((d) => !choiceFor(ctx, st, t, d.text).matched); }).length]] as const).map(([k, l, n]) => (
                       <button key={k} className={`${colFilter === k ? "is-on" : ""} ${k === "check" && n ? "is-warn" : ""}`} onClick={() => setColFilter(k)}>{l}<i>{n}</i></button>
                     ))}
                   </div>
@@ -401,8 +441,9 @@ export default function DealImport({ pipelines, phaseByPipe, products, people, r
                 {columns.map((c, k) => {
                   const t = st.mapping[c.i] ?? "";
                   const nf = t.startsWith("new:") ? st.newFields.find((n) => `new:${n.tmp}` === t) ?? null : null;
-                  const valued = !!t && hasValueStep(ctx, st, t);
-                  const dist = valued ? distinctValues(c.values) : [];
+                  // a column merged into another one shows its values there
+                  const valued = !!t && !!eff.mapping[c.i] && hasValueStep(ctx, st, t);
+                  const dist = valued ? distinctValues(effCol(c.i)?.values ?? c.values) : [];
                   const decisions = dist.map((d) => ({ ...d, ...choiceFor(ctx, st, t, d.text) }));
                   const open = decisions.filter((d) => !d.matched).length;
                   if (colQ.trim() && !normHeader(`${c.header} ${c.letter} ${t ? targetLabel(t) : ""}`).includes(normHeader(colQ))) return null;
@@ -424,6 +465,10 @@ export default function DealImport({ pipelines, phaseByPipe, products, people, r
                           {people && <span className="di-used">Gives the {people.as === "owner" ? "owner" : "people"} · next step</span>}
                         </div>
                       </div>
+                      {t && (
+                        <ColumnTools col={c} columns={columns} rows={rows} prep={prep} onPrep={setPrep}
+                          target={t} targetLabel={targetLabel(t)} group={eff.groups[t] ?? null} />
+                      )}
                       {phase && (
                         <div className="di-hintbar is-phase">
                           <i>⟶</i>
@@ -589,7 +634,7 @@ export default function DealImport({ pipelines, phaseByPipe, products, people, r
             const c = plan.counts;
             const facts: [string, number, string?][] = [
               ["won", c.won], ["new companies", c.coNew], ["companies in the CRM", c.coFound], ["new contacts", c.ctNew], ["contacts in the CRM", c.ctFound], ["become clients", c.clients, "is-gold"],
-              ["skipped · already there", c.dup, "is-muted"], ["with errors", c.error, "is-red"],
+              ["to update · already there", c.update, "is-gold"], ["skipped · already there", c.dup, "is-muted"], ["with errors", c.error, "is-red"],
             ];
             return (
               <div className="rv">
@@ -599,6 +644,45 @@ export default function DealImport({ pipelines, phaseByPipe, products, people, r
                     {facts.filter(([, n]) => n > 0).map(([l, n, cls]) => <li key={l} className={cls ?? ""}><b>{fmtN(n)}</b>{l}</li>)}
                   </ul>
                 </div>
+
+                {(c.dup + c.update > 0 || (st.dupMode === "import" && plan.rows.some((r) => r.dupOf)) || prevImport) && (() => {
+                  const already = plan.rows.filter((r) => r.dupOf).length;
+                  const inFile = plan.rows.filter((r) => r.status === "dup" && !r.dupOf).length;
+                  return (
+                    <section className={`rv-ask ${st.dupMode === "import" && already ? "is-danger" : ""}`}>
+                      <div className="rv-ask-h">
+                        <span className="rv-ask-ico">!</span>
+                        <div>
+                          <b>
+                            {already ? `${fmtN(already)} ${already === 1 ? "deal of this file is" : "deals of this file are"} already in the CRM` : "This file was imported before"}
+                            {inFile ? ` · ${fmtN(inFile)} ${inFile === 1 ? "row repeats" : "rows repeat"} another row of the file` : ""}
+                          </b>
+                          <span>
+                            {prevImport && `“${fileName}” was already imported on ${new Date(prevImport.at).toLocaleString("es-ES", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}${prevImport.created ? ` (${fmtN(prevImport.created)} deals)` : ""}. `}
+                            Same company (or contact) and pipeline, and the same title when both have one. Repeated rows are always left out.
+                          </span>
+                        </div>
+                      </div>
+                      {already > 0 && (
+                        <div className="rv-ask-row">
+                          <span className="rv-ask-l"><b>Deals already there</b><small>{fmtN(already)} in the CRM</small></span>
+                          <div className="rv-ask-opts" role="radiogroup" aria-label="Deals already in the CRM">
+                            {([
+                              ["skip", "Skip them", "recommended", "Nothing changes — they stay as they are"],
+                              ["update", "Update them", null, "Their phase, status, value, dates and fields take the file's values"],
+                              ["import", "Create them again", null, "A second copy of each — only if they really are different deals"],
+                            ] as const).map(([m, l, tag, d]) => (
+                              <button key={m} role="radio" aria-checked={st.dupMode === m} className={`rv-ask-opt ${st.dupMode === m ? "is-on" : ""} ${m === "import" ? "is-strong" : ""}`} onClick={() => patch({ dupMode: m })}>
+                                <i />
+                                <span><b>{l}{tag && <em>{tag}</em>}</b><small>{d}</small></span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </section>
+                  );
+                })()}
 
                 {(c.coExisting > 0 || c.ctExisting > 0) && (
                   <section className="rv-ask">
@@ -636,7 +720,7 @@ export default function DealImport({ pipelines, phaseByPipe, products, people, r
                           <input value={dq} onChange={(e) => { setDq(e.target.value); setLimit(200); }} placeholder="Find a deal, company or contact…" />
                         </label>
                         <div className="rv-chips">
-                          {([["all", "All", plan.rows.length], ["new", "To import", c.new], ["client", "Become clients", plan.rows.filter((r) => r.becomesClient).length], ["moved", "Moved", plan.rows.filter((r) => r.pipeOverridden).length], ["warn", "Warnings", c.warn], ["dup", "Already there", c.dup], ["error", "Errors", c.error]] as const)
+                          {([["all", "All", plan.rows.length], ["new", "To import", c.new], ["client", "Become clients", plan.rows.filter((r) => r.becomesClient).length], ["moved", "Moved", plan.rows.filter((r) => r.pipeOverridden).length], ["update", "To update", c.update], ["warn", "Warnings", c.warn], ["dup", "Already there", c.dup], ["error", "Errors", c.error]] as const)
                             .filter(([k, , n]) => k === "all" || k === "new" || n > 0).map(([k, l, n]) => (
                               <button key={k} className={`${tab === k ? "is-on" : ""} ${(k === "error" || k === "warn") && n ? "is-warn" : ""}`} onClick={() => { setTab(k); setLimit(200); }}>{l} <i>{fmtN(n)}</i></button>
                             ))}
@@ -672,8 +756,12 @@ export default function DealImport({ pipelines, phaseByPipe, products, people, r
                   {rvTab === "options" && (
                     <div className="rv-options">
                       <div className="rv-opt">
-                        <div><b>Deals already in the CRM</b><span>Same company and pipeline as a deal you already have.</span></div>
-                        <div className="di-seg is-small"><button className={st.dupMode === "skip" ? "is-on" : ""} onClick={() => patch({ dupMode: "skip" })}>Skip them</button><button className={st.dupMode === "import" ? "is-on" : ""} onClick={() => patch({ dupMode: "import" })}>Import anyway</button></div>
+                        <div><b>Deals already in the CRM</b><span>Same company (or contact) and pipeline — and the same title when both have one.</span></div>
+                        <div className="di-seg is-small">
+                          <button className={st.dupMode === "skip" ? "is-on" : ""} onClick={() => patch({ dupMode: "skip" })}>Skip them</button>
+                          <button className={st.dupMode === "update" ? "is-on" : ""} onClick={() => patch({ dupMode: "update" })}>Update them</button>
+                          <button className={st.dupMode === "import" ? "is-on" : ""} onClick={() => patch({ dupMode: "import" })}>Create again</button>
+                        </div>
                       </div>
                       {([
                         ["createContacts", "Create contacts that aren't in the CRM", "Otherwise those deals keep only their company."],
@@ -710,7 +798,7 @@ export default function DealImport({ pipelines, phaseByPipe, products, people, r
                   <span className={`di-done-ico ${result.failed.length || runErr ? "is-partial" : ""}`}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg></span>
                   <h3>{result.failed.length || runErr ? "Imported with some problems" : "Import complete"}</h3>
                   <div className="di-tiles is-final">
-                    <div className="is-new"><b>{fmtN(result.created)}</b>deals created</div>
+                    <div className="is-new"><b>{fmtN(result.created)}</b>deals created{result.updated > 0 && <small>{fmtN(result.updated)} updated</small>}</div>
                     <div className="is-co"><b>{fmtN(result.coCreated)}</b>companies created{result.coUpdated > 0 && <small>{fmtN(result.coUpdated)} filled in</small>}</div>
                     <div className="is-ct"><b>{fmtN(result.ctCreated)}</b>contacts created{(result.ctUpdated > 0 || result.ctLinked > 0) && <small>{fmtN(result.ctUpdated)} filled in · {fmtN(result.ctLinked)} linked</small>}</div>
                     <div className="is-client"><b>{fmtN(result.clientsCreated)}</b>new clients</div>
@@ -721,7 +809,7 @@ export default function DealImport({ pipelines, phaseByPipe, products, people, r
                   {result.failed.length > 0 && (
                     <FailReport failed={result.failed} plan={ranPlan} rowOffset={rowOffset} sheet={sheet} hasHeader={hasHeader} onDownload={downloadErrors} />
                   )}
-                  {!!ranPlan?.counts.dup && <p className="di-muted">{fmtN(ranPlan.counts.dup)} {ranPlan.counts.dup === 1 ? "deal was" : "deals were"} skipped because {ranPlan.counts.dup === 1 ? "it was" : "they were"} already in the CRM.</p>}
+                  {!!ranPlan?.counts.dup && <p className="di-muted">{fmtN(ranPlan.counts.dup)} {ranPlan.counts.dup === 1 ? "deal was" : "deals were"} skipped because {ranPlan.counts.dup === 1 ? "it was" : "they were"} already in the CRM (or repeated in the file).</p>}
                 </>
               )}
             </div>
@@ -734,7 +822,9 @@ export default function DealImport({ pipelines, phaseByPipe, products, people, r
               {step === "file" && (wb ? `${fmtN(rows.length)} deals ready to map` : "Nothing changes until the last step.")}
               {step === "map" && (mapIssue ?? "Looks good — next, who gets each deal.")}
               {step === "people" && plan && (plan.counts.noOwner ? `${fmtN(plan.counts.noOwner)} of ${fmtN(plan.counts.new)} deals have no owner yet.` : `Every deal has an owner.`)}
-              {step === "review" && plan && `${fmtN(plan.counts.new)} deals will be created${plan.counts.coNew ? `, with ${fmtN(plan.counts.coNew)} new companies` : ""}${plan.counts.ctNew ? ` and ${fmtN(plan.counts.ctNew)} new contacts` : ""}${plan.counts.clients && st.makeClients ? ` · ${fmtN(plan.counts.clients)} companies become clients` : ""}.`}
+              {step === "review" && !dealsReady && "Checking the deals already in the CRM…"}
+              {step === "review" && dealsReady && dealsErr && "Couldn't read the deals already in the CRM — duplicates can't be checked. "}
+              {step === "review" && plan && dealsReady && `${fmtN(plan.counts.new)} deals will be created${plan.counts.update ? `, ${fmtN(plan.counts.update)} updated` : ""}`}{step === "review" && plan && dealsReady && `${plan.counts.coNew ? `, with ${fmtN(plan.counts.coNew)} new companies` : ""}${plan.counts.ctNew ? ` and ${fmtN(plan.counts.ctNew)} new contacts` : ""}${plan.counts.clients && st.makeClients ? ` · ${fmtN(plan.counts.clients)} companies become clients` : ""}.`}
             </span>
             <div className="di-foot-actions">
               {step === "map" && <button className="di-btn is-ghost" onClick={() => setStep("file")}>Back</button>}
@@ -744,7 +834,11 @@ export default function DealImport({ pipelines, phaseByPipe, products, people, r
               {step === "file" && <button className="di-btn is-primary" disabled={!wb || !rows.length} onClick={() => setStep("map")}>Map columns →</button>}
               {step === "map" && <button className="di-btn is-primary" disabled={!!mapIssue} onClick={() => setStep("people")}>People →</button>}
               {step === "people" && <button className="di-btn is-primary" onClick={() => { setTab(plan?.counts.error ? "error" : "all"); setStep("review"); }}>Review →</button>}
-              {step === "review" && plan && <button className="di-btn is-primary" disabled={!plan.counts.new} onClick={run}>Import {fmtN(plan.counts.new)} {plan.counts.new === 1 ? "deal" : "deals"}</button>}
+              {step === "review" && plan && (
+                <button className="di-btn is-primary" disabled={!dealsReady || !(plan.counts.new + plan.counts.update)} onClick={run}>
+                  {!dealsReady ? "Checking…" : plan.counts.new ? `Import ${fmtN(plan.counts.new)} ${plan.counts.new === 1 ? "deal" : "deals"}${plan.counts.update ? ` · update ${fmtN(plan.counts.update)}` : ""}` : `Update ${fmtN(plan.counts.update)} ${plan.counts.update === 1 ? "deal" : "deals"}`}
+                </button>
+              )}
             </div>
           </footer>
         )}
@@ -1011,7 +1105,7 @@ export function TargetPicker({ value, options, used, onChange }: { value: string
                   return (
                     <button key={o.value} type="button" role="option" aria-selected={o.value === value} className={`di-tp-opt is-${o.tone} ${o.value === value ? "is-on" : ""} ${taken ? "is-taken" : ""}`} onClick={() => choose(o.value)}>
                       <i />
-                      <span><b>{o.label}</b>{(o.hint || taken) && <small>{taken ? "Already used by another column" : o.hint}</small>}</span>
+                      <span><b>{o.label}</b>{(o.hint || taken) && <small>{taken ? "Also used by another column — you'll choose which one wins" : o.hint}</small>}</span>
                       {o.value === value && <svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>}
                     </button>
                   );
@@ -1330,7 +1424,7 @@ function DealRow({ r, offset, phaseById, personName, productName, pipeOptions, o
         {r.productId && <small className={r.productDefaulted ? "is-default" : ""} title={r.productDefaulted ? "Default product" : undefined}>{productName(r.productId)}</small>}
       </span>
       <span className="di-res">
-        <span className={`di-pill is-${r.status}`}>{r.status === "new" ? "Import" : r.status === "dup" ? "Skip" : "Error"}</span>
+        <span className={`di-pill is-${r.status}`}>{r.status === "new" ? "Import" : r.status === "update" ? "Update" : r.status === "dup" ? "Skip" : "Error"}</span>
         {(r.reason || r.issues.length > 0) && <small title={[r.reason, ...r.issues].filter(Boolean).join("\n")}>{r.reason ?? r.issues[0]}{r.issues.length > 1 && !r.reason ? ` (+${r.issues.length - 1})` : ""}</small>}
       </span>
     </div>
@@ -1451,6 +1545,199 @@ export function SheetViewer({ sheet, name, hasHeader, mapping, labelOf, canJump,
         </table>
         {shown.length === 0 && <p className="di-muted di-pad">No row has “{q}”.</p>}
       </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════ cleaning & merging columns (shared by every importer) ═══════════════════════════ */
+
+/** A column's values recomputed from rows that were cleaned / merged. */
+export function columnsFromRows(columns: Column[], rows: SheetCell[][]): Column[] {
+  return columns.map((c) => {
+    const values = rows.map((r) => r[c.i] ?? null);
+    const filled = values.filter((v) => v != null && v !== "");
+    return { ...c, values, filled: filled.length, samples: filled.slice(0, 3) };
+  });
+}
+
+const RULE_OPS: ColRuleOp[] = ["dropWords", "keepWords", "dropLastWords", "keepLastWords", "removeCol", "before", "after", "replace", "case"];
+const ruleUid = () => Math.random().toString(36).slice(2, 9);
+
+/**
+ * Under a mapped column: rules that clean its values, and — when several columns go to
+ * the same field — which one wins when they both have data.
+ */
+export function ColumnTools({ col, columns, rows, prep, onPrep, target, targetLabel, group }: {
+  col: Column; columns: Column[]; rows: SheetCell[][]; prep: ImportPrep; onPrep: (p: ImportPrep) => void;
+  target: string; targetLabel: string;
+  /** The columns feeding this field, in priority order (null = only this one). */
+  group: number[] | null;
+}) {
+  const rules = prep.rules[col.i] ?? [];
+  const [openRules, setOpenRules] = useState(false);
+  const merge = group ? prep.merges[target] ?? { order: group, mode: "first" as MergeMode, sep: " " } : null;
+  const primary = group ? group[0] === col.i : false;
+  const [openMerge, setOpenMerge] = useState(!prep.merges[target]);
+  const letter = (i: number) => columns.find((c) => c.i === i)?.letter ?? "?";
+  const header = (i: number) => columns.find((c) => c.i === i)?.header ?? "";
+
+  const setRules = (rs: ColRule[]) => onPrep({ ...prep, rules: { ...prep.rules, [col.i]: rs } });
+  const patchRule = (id: string, p: Partial<ColRule>) => setRules(rules.map((r) => (r.id === id ? { ...r, ...p } : r)));
+  const addRule = (op: ColRuleOp) => {
+    const other = group?.find((c) => c !== col.i) ?? columns.find((c) => c.i !== col.i)?.i;
+    setRules([...rules, { id: ruleUid(), op, n: 1, col: op === "removeCol" ? other : undefined, text: op === "before" || op === "after" ? "," : "", with: "", to: "title" }]);
+    setOpenRules(true);
+  };
+  const setMerge = (p: Partial<MergeRule>) => onPrep({ ...prep, merges: { ...prep.merges, [target]: { ...merge!, order: group!, ...p } } });
+  const move = (i: number, d: -1 | 1) => {
+    const o = [...group!]; const j = i + d;
+    if (j < 0 || j >= o.length) return;
+    [o[i], o[j]] = [o[j], o[i]];
+    setMerge({ order: o });
+  };
+
+  // previews
+  const clean = (r: SheetCell[], c: number) => applyColRules(cellText(r[c] ?? null), prep.rules[c], r);
+  const rulePreview = useMemo(() => {
+    if (!rules.length) return [];
+    const out: { from: string; to: string }[] = [];
+    for (const r of rows) {
+      const from = cellText(r[col.i] ?? null).trim();
+      if (!from) continue;
+      out.push({ from, to: applyColRules(from, rules, r) });
+      if (out.length >= 5) break;
+    }
+    return out;
+  }, [rules, rows, col.i]);
+  const changed = useMemo(() => (rules.length ? rows.filter((r) => { const v = cellText(r[col.i] ?? null).trim(); return v && applyColRules(v, rules, r) !== v; }).length : 0), [rules, rows, col.i]);
+  const mergeInfo = useMemo(() => {
+    if (!group || !primary || !merge) return null;
+    let both = 0, conflict = 0;
+    const sample: { vals: string[]; out: string }[] = [];
+    for (const r of rows) {
+      const vals = group.map((c) => clean(r, c));
+      const filled = vals.filter(Boolean);
+      if (filled.length < 2) continue;
+      both++;
+      if (new Set(filled.map((v) => normHeader(v))).size > 1) {
+        conflict++;
+        if (sample.length < 5) sample.push({ vals, out: mergeValues(vals, merge) });
+      }
+    }
+    return { both, conflict, sample };
+  }, [group, primary, merge, rows, prep.rules]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div className="di-tools">
+      <div className="di-tools-bar">
+        <button className={`di-tool ${rules.length ? "is-on" : ""}`} onClick={() => setOpenRules((o) => !o)} aria-expanded={openRules}>
+          <svg viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
+          {rules.length ? `${rules.length} ${rules.length === 1 ? "rule" : "rules"} on the values · ${changed} changed` : "Clean the values"}
+        </button>
+        {group && primary && (
+          <button className="di-tool is-merge" onClick={() => setOpenMerge((o) => !o)}>
+            <svg viewBox="0 0 24 24"><path d="M8 3v5a4 4 0 0 0 4 4h0a4 4 0 0 1 4 4v5M16 3v5a4 4 0 0 1-4 4" /></svg>
+            {group.length} columns → “{targetLabel}” · {MERGE_LABEL[merge!.mode].toLowerCase()}
+          </button>
+        )}
+        {group && !primary && (
+          <span className="di-tool-note">Merged into “{targetLabel}” — priority {group.indexOf(col.i) + 1} of {group.length}; the merge is set on column {letter(group[0])}</span>
+        )}
+      </div>
+
+      {openRules && (
+        <div className="di-rules">
+          {rules.map((r, k) => (
+            <div key={r.id} className="di-rulerow" style={{ ["--j" as string]: k } as CSSProperties}>
+              <em>{k + 1}</em>
+              <select value={r.op} onChange={(e) => patchRule(r.id, { op: e.target.value as ColRuleOp })}>
+                {RULE_OPS.map((op) => <option key={op} value={op}>{RULE_LABEL[op]}</option>)}
+              </select>
+              {(r.op === "dropWords" || r.op === "keepWords" || r.op === "dropLastWords" || r.op === "keepLastWords") && (
+                <label className="di-rulep"><input type="number" min={1} max={20} value={r.n ?? 1} onChange={(e) => patchRule(r.id, { n: Math.max(1, +e.target.value || 1) })} /><span>{(r.n ?? 1) === 1 ? "word" : "words"}</span></label>
+              )}
+              {r.op === "removeCol" && (
+                <select value={r.col ?? ""} onChange={(e) => patchRule(r.id, { col: +e.target.value })}>
+                  {columns.filter((c) => c.i !== col.i).map((c) => <option key={c.i} value={c.i}>{c.letter} · {c.header}</option>)}
+                </select>
+              )}
+              {(r.op === "before" || r.op === "after") && (
+                <>
+                  <input className="di-rulet" value={r.text ?? ""} placeholder="e.g. ,  or  -" onChange={(e) => patchRule(r.id, { text: e.target.value })} />
+                  <select value={r.last ? "last" : "first"} onChange={(e) => patchRule(r.id, { last: e.target.value === "last" })}>
+                    <option value="first">first time it appears</option><option value="last">last time it appears</option>
+                  </select>
+                </>
+              )}
+              {r.op === "replace" && (
+                <>
+                  <input className="di-rulet" value={r.text ?? ""} placeholder="find" onChange={(e) => patchRule(r.id, { text: e.target.value })} />
+                  <span className="di-rulex">→</span>
+                  <input className="di-rulet" value={r.with ?? ""} placeholder="replace with (empty = remove)" onChange={(e) => patchRule(r.id, { with: e.target.value })} />
+                </>
+              )}
+              {r.op === "case" && (
+                <select value={r.to ?? "title"} onChange={(e) => patchRule(r.id, { to: e.target.value as ColRule["to"] })}>
+                  <option value="title">Title Case</option><option value="upper">UPPERCASE</option><option value="lower">lowercase</option>
+                </select>
+              )}
+              <button className="di-rulex is-del" onClick={() => setRules(rules.filter((x) => x.id !== r.id))} aria-label="Remove rule">×</button>
+            </div>
+          ))}
+          <div className="di-rules-foot">
+            <select value="" onChange={(e) => e.target.value && addRule(e.target.value as ColRuleOp)}>
+              <option value="">+ Add a rule…</option>
+              {RULE_OPS.map((op) => <option key={op} value={op}>{RULE_LABEL[op]}</option>)}
+            </select>
+            <span>Applied in order, before the value is imported.</span>
+          </div>
+          {rulePreview.length > 0 && (
+            <div className="di-prev">
+              {rulePreview.map((p, i) => (
+                <div key={i}><s title={p.from}>{p.from}</s><svg viewBox="0 0 24 24"><path d="M5 12h13M13 6l6 6-6 6" /></svg><b title={p.to}>{p.to || <i>empty</i>}</b></div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {group && primary && openMerge && merge && (
+        <div className="di-merge">
+          <div className="di-merge-order">
+            <span className="di-merge-h">Priority</span>
+            {group.map((c, i) => (
+              <div key={c} className="di-merge-col" style={{ ["--j" as string]: i } as CSSProperties}>
+                <em>{i + 1}</em><b>{letter(c)}</b><span title={header(c)}>{header(c)}</span>
+                <button disabled={i === 0} onClick={() => move(i, -1)} aria-label="Higher priority">↑</button>
+                <button disabled={i === group.length - 1} onClick={() => move(i, 1)} aria-label="Lower priority">↓</button>
+              </div>
+            ))}
+          </div>
+          <div className="di-merge-mode">
+            <span className="di-merge-h">When several have data</span>
+            <div className="di-merge-modes">
+              {(Object.keys(MERGE_LABEL) as MergeMode[]).map((m) => (
+                <button key={m} className={merge.mode === m ? "is-on" : ""} onClick={() => setMerge({ mode: m })}>{MERGE_LABEL[m]}</button>
+              ))}
+            </div>
+            {merge.mode === "join" && (
+              <label className="di-merge-sep">Separator <input value={merge.sep} onChange={(e) => setMerge({ sep: e.target.value })} placeholder="space" /></label>
+            )}
+            {mergeInfo && (
+              <p className="di-merge-stat">
+                {mergeInfo.both ? <>{fmtN(mergeInfo.both)} {mergeInfo.both === 1 ? "row has" : "rows have"} data in more than one · <b>{fmtN(mergeInfo.conflict)} with different values</b></> : "No row has data in more than one — each row takes the one it has."}
+              </p>
+            )}
+          </div>
+          {mergeInfo && mergeInfo.sample.length > 0 && (
+            <div className="di-prev is-merge">
+              {mergeInfo.sample.map((s, i) => (
+                <div key={i}>{s.vals.map((v, j) => <s key={j} title={v}>{letter(group[j])}: {v || "—"}</s>)}<svg viewBox="0 0 24 24"><path d="M5 12h13M13 6l6 6-6 6" /></svg><b title={s.out}>{s.out}</b></div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

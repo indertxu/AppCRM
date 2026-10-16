@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from "react";
 import { supabase } from "../../api/supabase";
 import "./ClientDirectory.css";
 
@@ -325,6 +325,182 @@ export default function ClientDirectory({ clientId, tenantId }: Props) {
         )}
         {busy && <div className="cdir-uploading">Uploading…</div>}
       </div>
+    </div>
+  );
+}
+// ============================ Contract documents ============================
+/**
+ * Three drop zones on the Contract tab — license contracts, service contracts and
+ * proposals. Drop (or pick) any PDF / Word / … file and it is stored for this client.
+ * Each zone is a folder of the client's Directory (created the first time it is used),
+ * so the same files also show in the Docs tab.
+ */
+export const CONTRACT_SLOTS = [
+  { key: "license", folder: "License contracts", title: "License contracts", hint: "Software licences, subscriptions, renewals", tone: "violet", icon: "M9 12l2 2 4-4M12 3l7 3v5c0 4.5-3 8.5-7 10-4-1.5-7-5.5-7-10V6z" },
+  { key: "service", folder: "Service contracts", title: "Service contracts", hint: "Consultancy, implementation, support", tone: "blue", icon: "M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M8 13h8M8 17h5" },
+  { key: "proposal", folder: "Proposals", title: "Proposals", hint: "Offers and quotes sent", tone: "amber", icon: "M22 2L11 13M22 2l-7 20-4-9-9-4z" },
+] as const;
+type SlotKey = (typeof CONTRACT_SLOTS)[number]["key"];
+
+const fmtDay = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+const DragType = "application/x-contract-file";
+
+export function ContractDocs({ clientId, tenantId, onCount }: { clientId: string; tenantId: string | null; onCount?: (n: number) => void }) {
+  const [folderIds, setFolderIds] = useState<Partial<Record<SlotKey, string>>>({});
+  const [files, setFiles] = useState<CFile[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [over, setOver] = useState<SlotKey | null>(null);
+  const [uploading, setUploading] = useState<{ id: string; slot: SlotKey; name: string }[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  const [confirmDel, setConfirmDel] = useState<string | null>(null);
+  const inputs = useRef<Partial<Record<SlotKey, HTMLInputElement | null>>>({});
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const { data: fd } = await supabase.from("client_folders").select("id, name, parent_id").eq("client_id", clientId).is("parent_id", null);
+      const ids: Partial<Record<SlotKey, string>> = {};
+      CONTRACT_SLOTS.forEach((s) => { const f = (fd ?? []).find((x: any) => String(x.name).trim().toLowerCase() === s.folder.toLowerCase()); if (f) ids[s.key] = f.id; });
+      const all = Object.values(ids) as string[];
+      const { data: fl } = all.length
+        ? await supabase.from("client_files").select("*").eq("client_id", clientId).in("folder_id", all).order("created_at", { ascending: false })
+        : { data: [] as any[] };
+      if (!alive) return;
+      setFolderIds(ids); setFiles((fl ?? []) as CFile[]); setLoaded(true);
+    })();
+    return () => { alive = false; };
+  }, [clientId]);
+  useEffect(() => { onCount?.(files.length); }, [files.length, onCount]);
+
+  const slotOf = (f: CFile): SlotKey | null => (CONTRACT_SLOTS.find((s) => folderIds[s.key] === f.folder_id)?.key ?? null);
+
+  /** The slot's folder, created on first use. */
+  const ensureFolder = async (slot: SlotKey): Promise<string | null> => {
+    if (folderIds[slot]) return folderIds[slot]!;
+    const def = CONTRACT_SLOTS.find((s) => s.key === slot)!;
+    const { data, error } = await supabase.from("client_folders")
+      .insert({ client_id: clientId, parent_id: null, name: def.folder, sort: CONTRACT_SLOTS.indexOf(def) }).select("id").single();
+    if (error || !data) { setErr(error?.message ?? "Could not create the folder."); return null; }
+    setFolderIds((m) => ({ ...m, [slot]: data.id }));
+    return data.id as string;
+  };
+
+  const upload = async (slot: SlotKey, list: FileList | File[]) => {
+    const arr = Array.from(list);
+    if (!arr.length) return;
+    if (!tenantId) { setErr("Still loading — try again in a moment."); return; }
+    setErr(null);
+    const pending = arr.map((f) => ({ id: crypto.randomUUID(), slot, name: f.name }));
+    setUploading((u) => [...u, ...pending]);
+    const folder = await ensureFolder(slot);
+    if (!folder) { setUploading((u) => u.filter((x) => !pending.some((p) => p.id === x.id))); return; }
+    await Promise.all(arr.map(async (f, i) => {
+      try {
+        const safe = f.name.replace(/[^\w.\-]+/g, "_");
+        const path = `${tenantId}/${clientId}/${crypto.randomUUID()}_${safe}`;
+        const up = await supabase.storage.from(BUCKET).upload(path, f, { contentType: f.type || undefined });
+        if (up.error) { setErr(`${f.name}: ${up.error.message}`); return; }
+        const { data, error } = await supabase.from("client_files").insert({
+          client_id: clientId, folder_id: folder, storage_path: path, name: f.name, mime: f.type || null, size_bytes: f.size,
+        }).select().single();
+        if (error) { setErr(`${f.name}: ${error.message}`); await supabase.storage.from(BUCKET).remove([path]); return; }
+        setFiles((xs) => [data as CFile, ...xs]);
+      } finally {
+        setUploading((u) => u.filter((x) => x.id !== pending[i].id));
+      }
+    }));
+    const inp = inputs.current[slot];
+    if (inp) inp.value = "";
+  };
+
+  const move = async (fileId: string, slot: SlotKey) => {
+    const f = files.find((x) => x.id === fileId);
+    if (!f || slotOf(f) === slot) return;
+    const folder = await ensureFolder(slot);
+    if (!folder) return;
+    setFiles((xs) => xs.map((x) => (x.id === fileId ? { ...x, folder_id: folder } : x)));
+    const { error } = await supabase.from("client_files").update({ folder_id: folder }).eq("id", fileId);
+    if (error) setErr(error.message);
+  };
+  const open = async (f: CFile, download = false) => {
+    const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(f.storage_path, 120, download ? { download: f.name } : undefined);
+    if (error || !data) { setErr(error?.message ?? "Could not open the file."); return; }
+    window.open(data.signedUrl, "_blank", "noopener");
+  };
+  const remove = async (f: CFile) => {
+    setConfirmDel(null);
+    setFiles((xs) => xs.filter((x) => x.id !== f.id));
+    await supabase.storage.from(BUCKET).remove([f.storage_path]);
+    await supabase.from("client_files").delete().eq("id", f.id);
+  };
+
+  const onDrop = (slot: SlotKey) => (e: DragEvent) => {
+    e.preventDefault(); setOver(null);
+    const moved = e.dataTransfer.getData(DragType);
+    if (moved) { void move(moved, slot); return; }
+    if (e.dataTransfer.files?.length) void upload(slot, e.dataTransfer.files);
+  };
+
+  return (
+    <div className="cd-docs">
+      {CONTRACT_SLOTS.map((s, si) => {
+        const list = files.filter((f) => folderIds[s.key] && f.folder_id === folderIds[s.key]);
+        const busy = uploading.filter((u) => u.slot === s.key);
+        return (
+          <section key={s.key} className={`cd-slot ${over === s.key ? "is-over" : ""}`} data-tone={s.tone} style={{ ["--i" as string]: si } as CSSProperties}
+            onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = e.dataTransfer.types.includes(DragType) ? "move" : "copy"; if (over !== s.key) setOver(s.key); }}
+            onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOver(null); }}
+            onDrop={onDrop(s.key)}>
+            <header className="cd-slot-h">
+              <span className="cd-slot-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={s.icon} /></svg></span>
+              <div><h4>{s.title}</h4><small>{s.hint}</small></div>
+              <em>{list.length}</em>
+            </header>
+
+            <button type="button" className="cd-drop" onClick={() => inputs.current[s.key]?.click()}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 16V4M7 9l5-5 5 5M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" /></svg>
+              <span><b>{over === s.key ? "Drop to add" : "Drop files here"}</b><small>or click to choose · PDF, Word, any file</small></span>
+            </button>
+            <input ref={(el) => { inputs.current[s.key] = el; }} type="file" multiple hidden onChange={(e) => e.target.files && upload(s.key, e.target.files)} />
+
+            <ul className="cd-files">
+              {busy.map((u) => (
+                <li key={u.id} className="cd-file is-busy"><span className="cd-kind">…</span><span className="cd-file-t"><b>{u.name}</b><small>Uploading…</small></span><i className="cd-spin" /></li>
+              ))}
+              {list.map((f, i) => {
+                const k = kindOf(f.name, f.mime);
+                return (
+                  <li key={f.id} className="cd-file" draggable style={{ ["--j" as string]: i } as CSSProperties}
+                    onDragStart={(e) => { e.dataTransfer.setData(DragType, f.id); e.dataTransfer.effectAllowed = "move"; }}>
+                    <span className={`cd-kind is-${k.toLowerCase()}`}>{k}</span>
+                    <button type="button" className="cd-file-t" onClick={() => void open(f)} title={`Open ${f.name}`}>
+                      <b>{f.name}</b>
+                      <small>{[prettySize(f.size_bytes), fmtDay(f.created_at)].filter(Boolean).join(" · ")}</small>
+                    </button>
+                    {confirmDel === f.id ? (
+                      <span className="cd-confirm">
+                        <button type="button" className="is-del" onClick={() => void remove(f)}>Delete</button>
+                        <button type="button" onClick={() => setConfirmDel(null)}>Keep</button>
+                      </span>
+                    ) : (
+                      <span className="cd-acts">
+                        <button type="button" aria-label="Download" title="Download" onClick={() => void open(f, true)}>
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4v12M7 11l5 5 5-5M4 20h16" /></svg>
+                        </button>
+                        <button type="button" aria-label="Delete" title="Delete" onClick={() => setConfirmDel(f.id)}>
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" /></svg>
+                        </button>
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
+              {loaded && !list.length && !busy.length && <li className="cd-none">Nothing here yet</li>}
+            </ul>
+          </section>
+        );
+      })}
+      {err && <p className="cd-err" role="alert">{err}<button type="button" onClick={() => setErr(null)} aria-label="Dismiss">×</button></p>}
     </div>
   );
 }

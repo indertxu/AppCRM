@@ -15,7 +15,7 @@ import {
   listCompanyFields, loadRelationshipSets, listEmployees, loadContactAssignees, loadCompanyAssignees,
   type Company, type Contact, type ContactField, type CompanyField, type RelationshipSets,
 } from "../companies/companiesApi";
-import { buildCatalog, contactMatches, condReady, cellOf, formatOf, OPS, DEFAULT_OP, NO_VALUE, type XF, type Ctx, type Cond, type Src } from "./exportCatalog";
+import { buildCatalog, contactMatches, condReady, cellOf, formatOf, OPS, DEFAULT_OP, NO_VALUE, type XF, type Ctx, type Cond, type Src, type Root } from "./exportCatalog";
 import { listImportBatches, batchLabel } from "./importBatches";
 import "./ContactExport.css";
 
@@ -30,23 +30,35 @@ const fmtN = (n: number) => n.toLocaleString("es-ES");
 /* ═══════════════════════════ component ═══════════════════════════ */
 
 type Step = "who" | "rows" | "columns" | "download";
-const STEPS: { key: Step; label: string; hint: string }[] = [
-  { key: "who", label: "Who", hint: "Choose the contacts" },
+const stepsFor = (noun: string): { key: Step; label: string; hint: string }[] => [
+  { key: "who", label: "Who", hint: `Choose the ${noun}` },
   { key: "rows", label: "Rows", hint: "What each row is" },
   { key: "columns", label: "Columns", hint: "What to include" },
   { key: "download", label: "Download", hint: "Check and export" },
 ];
 
-export default function ContactExport({ contacts, companies, contactFields, shownIds, onClose }: {
+/**
+ * Contacts → Export, and Companies → Export (`root="company"`): the same four
+ * steps, with each row a contact or a company. Conditions and columns can look
+ * at the record itself, at its companies / contacts and at its deals.
+ */
+export default function ContactExport({ contacts, companies, contactFields, shownIds, onClose, root = "contact" }: {
   /** The contacts this person may see (already filtered by access). */
   contacts: Contact[];
+  /** The companies this person may see. */
   companies: Company[];
   contactFields: ContactField[];
-  /** Contacts currently listed on the page (search + filters), for "start from what I see". */
+  /** Records currently listed on the page (search + filters), for "start from what I see". */
   shownIds?: string[];
   onClose: () => void;
+  /** What each row is: a contact (Contacts page) or a company (Companies page). */
+  root?: Root;
 }) {
-  useBackToClose("contact-export", onClose);
+  useBackToClose(root === "company" ? "company-export" : "contact-export", onClose);
+  const isCo = root === "company";
+  const noun = isCo ? "companies" : "contacts", one = isCo ? "company" : "contact";
+  const STEPS = stepsFor(noun);
+  const nameOf = (r: any) => (isCo ? r.name ?? "" : fullName(r));
   const [step, setStep] = useState<Step>("who");
   const [trackings, setTrackings] = useState<Tracking[]>([]);
   const [extra, setExtra] = useState<{
@@ -61,12 +73,12 @@ export default function ContactExport({ contacts, companies, contactFields, show
   const [conds, setConds] = useState<Cond[]>([]);
   const [match, setMatch] = useState<"all" | "any">("all");
   const [dealScope, setDealScope] = useState<"direct" | "company">("direct");
-  const [same, setSame] = useState({ company: true, deal: true });
-  const [rowMode, setRowMode] = useState<RowMode>("contact");
+  const [same, setSame] = useState({ company: true, deal: true, contact: true });
+  const [rowMode, setRowMode] = useState<RowMode>(root);
   const [cols, setCols] = useState<string[]>([]);
   const [colQ, setColQ] = useState("");
   const [format, setFormat] = useState<"xlsx" | "csv">("xlsx");
-  const [fileName, setFileName] = useState(`contacts-${new Date().toISOString().slice(0, 10)}`);
+  const [fileName, setFileName] = useState(`${root === "company" ? "companies" : "contacts"}-${new Date().toISOString().slice(0, 10)}`);
   const [done, setDone] = useState(false);
 
   useEffect(() => {
@@ -129,7 +141,20 @@ export default function ContactExport({ contacts, companies, contactFields, show
     trackings.forEach((t) => { if (t.company_id) (m[t.company_id] ??= []).push(t); });
     return m;
   }, [trackings]);
-  const ctxOf = (c: Contact): Ctx => {
+  const contactsByCompany = useMemo(() => {
+    const m = new Map<string, Contact[]>();
+    contacts.forEach((c) => c.companyIds.forEach((id) => { const a = m.get(id) ?? []; a.push(c); m.set(id, a); }));
+    return m;
+  }, [contacts]);
+  const ctxOf = (r: any): Ctx => {
+    if (isCo) {
+      // a company: its contacts, and its deals (also its contacts' deals, if chosen)
+      const cts = contactsByCompany.get(r.id as string) ?? [];
+      const direct = dealsByCompany[r.id as string] ?? [];
+      const deals = dealScope === "company" ? [...new Map([...direct, ...cts.flatMap((ct) => dealsByContact.get(ct.id as string) ?? [])].map((d) => [d.id, d])).values()] : direct;
+      return { c: r, cos: [r], cts, deals };
+    }
+    const c = r as Contact;
     const cos = c.companyIds.map((id) => companyById.get(id)).filter(Boolean) as Company[];
     const direct = dealsByContact.get(c.id as string) ?? [];
     const deals = dealScope === "company" ? [...new Map([...direct, ...cos.flatMap((co) => dealsByCompany[co.id as string] ?? [])].map((d) => [d.id, d])).values()] : direct;
@@ -142,73 +167,90 @@ export default function ContactExport({ contacts, companies, contactFields, show
     people: extra.people, pipelines: extra.pipelines, phases: extra.phases, products: extra.products,
     clientCompanyIds: extra.rel?.clientCompanyIds ?? new Set(), clientContactIds: extra.rel?.clientContactIds ?? new Set(),
     contactAssignees: extra.contactAssignees, companyAssignees: extra.companyAssignees, owners: extra.owners, team: extra.team,
-    dealProducts: extra.dealProducts, dealTotals: extra.dealTotals, phaseHistory: extra.phaseHistory, dealsByCompany, shownIds, imports: extra.imports,
-  }) : []), [extra, contacts, companies, trackings, contactFields, dealsByCompany, shownIds]);
+    dealProducts: extra.dealProducts, dealTotals: extra.dealTotals, phaseHistory: extra.phaseHistory, dealsByCompany, shownIds, imports: extra.imports, root,
+  }) : []), [extra, contacts, companies, trackings, contactFields, dealsByCompany, shownIds, root]);
   const fieldBy = useMemo(() => new Map(fields.map((f) => [f.key, f])), [fields]);
 
   /* ---- who matches ---- */
   const ready = conds.filter((c) => condReady(fieldBy.get(c.field), c));
+  const records: any[] = isCo ? companies : contacts;
   const matched = useMemo(() => {
     const active = ready.map((c) => ({ f: fieldBy.get(c.field)!, c }));
-    if (!active.length) return contacts;
-    return contacts.filter((c) => contactMatches(ctxOf(c), active, match, same, inPeriod));
-  }, [contacts, conds, match, same, fieldBy, dealScope, dealsByContact]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!active.length) return records;
+    return records.filter((r) => contactMatches(ctxOf(r), active, match, same, inPeriod));
+  }, [records, conds, match, same, fieldBy, dealScope, dealsByContact, contactsByCompany]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const addCond = (field = "", preset?: Partial<Cond>) => {
     const f = fieldBy.get(field);
     setConds((cs) => [...cs, { id: uid(), field, op: f ? DEFAULT_OP[f.kind] : "", vals: [], a: f?.kind === "date" ? "this_year" : "", b: "", ...preset }]);
   };
   const patchCond = (id: string, patch: Partial<Cond>) => setConds((cs) => cs.map((c) => (c.id === id ? { ...c, ...patch } : c)));
-  const quick = [
+  const q1 = (field: string, op: string) => () => setConds([{ id: uid(), field, op, vals: [], a: "", b: "" }]);
+  const quick = isCo ? [
+    { k: "all", label: "All companies", apply: () => setConds([]) },
+    { k: "clients", label: "Clients", apply: q1("company:@client", "yes") },
+    { k: "open", label: "With an open deal", apply: q1("deal:@open", "yes") },
+    { k: "nodeal", label: "Never in a deal", apply: q1("deal:@has", "no") },
+    { k: "nocontact", label: "Without contacts", apply: q1("contact:@has", "no") },
+    ...(shownIds ? [{ k: "screen", label: `On screen now (${shownIds.length})`, apply: q1("company:@onscreen", "yes") }] : []),
+  ] : [
     { k: "all", label: "All contacts", apply: () => setConds([]) },
-    { k: "open", label: "In an open deal", apply: () => setConds([{ id: uid(), field: "deal:@open", op: "yes", vals: [], a: "", b: "" }]) },
-    { k: "clients", label: "At client companies", apply: () => setConds([{ id: uid(), field: "company:@client", op: "yes", vals: [], a: "", b: "" }]) },
-    { k: "nocompany", label: "Without a company", apply: () => setConds([{ id: uid(), field: "company:@has", op: "no", vals: [], a: "", b: "" }]) },
-    ...(shownIds ? [{ k: "screen", label: `On screen now (${shownIds.length})`, apply: () => setConds([{ id: uid(), field: "contact:@onscreen", op: "yes", vals: [], a: "", b: "" }]) }] : []),
+    { k: "open", label: "In an open deal", apply: q1("deal:@open", "yes") },
+    { k: "clients", label: "At client companies", apply: q1("company:@client", "yes") },
+    { k: "nocompany", label: "Without a company", apply: q1("company:@has", "no") },
+    ...(shownIds ? [{ k: "screen", label: `On screen now (${shownIds.length})`, apply: q1("contact:@onscreen", "yes") }] : []),
   ];
 
   /* ---- columns: every field of the catalogue can be a column ---- */
   const columns = useMemo(() => fields.filter((f) => !f.noColumn), [fields]);
   const colBy = fieldBy;
-  const presetBasic = ["contact:@name", "contact:position", "contact:email", "contact:phone", "company:@which"].filter((k) => fieldBy.has(k));
+  const presetBasic = (isCo
+    ? ["company:@which", "company:vat_number", "company:city", "company:country", "company:@ncontacts", "contact:@name"]
+    : ["contact:@name", "contact:position", "contact:email", "contact:phone", "company:@which"]).filter((k) => fieldBy.has(k));
   useEffect(() => { if (!cols.length && columns.length) setCols(presetBasic); }, [columns.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* ---- rows: per contact, or per contact × company / deal (each row then looks at that one) ---- */
+  /* ---- rows: per record, or per record × company / contact / deal (each row then looks at that one) ---- */
   const rows = useMemo<XRow[]>(() => {
     const out: XRow[] = [];
-    matched.forEach((c) => {
-      const x = ctxOf(c);
-      if (rowMode === "company" && x.cos.length) x.cos.forEach((co) => out.push({ ctx: { ...x, cos: [co] }, key: `${c.id}|${co.id}` }));
-      else if (rowMode === "deal" && x.deals.length) x.deals.forEach((d) => out.push({ ctx: { ...x, deals: [d] }, key: `${c.id}|${d.id}` }));
-      else out.push({ ctx: x, key: String(c.id) });
+    matched.forEach((r) => {
+      const x = ctxOf(r);
+      if (rowMode === "company" && !isCo && x.cos.length) x.cos.forEach((co) => out.push({ ctx: { ...x, cos: [co] }, key: `${r.id}|${co.id}` }));
+      else if (rowMode === "contact" && isCo && x.cts?.length) x.cts.forEach((ct) => out.push({ ctx: { ...x, cts: [ct] }, key: `${r.id}|${ct.id}` }));
+      else if (rowMode === "deal" && x.deals.length) x.deals.forEach((d) => out.push({ ctx: { ...x, deals: [d] }, key: `${r.id}|${d.id}` }));
+      else out.push({ ctx: x, key: String(r.id) });
     });
     return out;
-  }, [matched, rowMode, dealScope, dealsByContact]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [matched, rowMode, dealScope, dealsByContact, contactsByCompany]); // eslint-disable-line react-hooks/exhaustive-deps
   const table = useMemo(() => {
     const chosen = cols.map((k) => colBy.get(k)).filter(Boolean) as XF[];
     return {
-      columns: chosen.map((f) => ({ label: f.src === "contact" ? f.label : f.label.startsWith(SRC_LABEL[f.src]) ? f.label : `${SRC_LABEL[f.src]} · ${f.label}`, format: formatOf(f) })),
+      columns: chosen.map((f) => ({ label: f.src === root ? f.label : f.label.startsWith(SRC_LABEL[f.src]) ? f.label : `${SRC_LABEL[f.src]} · ${f.label}`, format: formatOf(f) })),
       rows: rows.map((r) => chosen.map((f) => cellOf(f, r.ctx) as ExportCell)),
     };
   }, [cols, colBy, rows]);
   const show = (v: ExportCell) => (v == null ? "" : typeof v === "object" ? v.date.split("-").reverse().join("/") : typeof v === "number" ? v.toLocaleString("es-ES") : v);
 
   const doExport = () => {
-    const base = (fileName.trim() || "contacts").replace(/[\\/:*?"<>|]+/g, "-").replace(/\.(xlsx|csv)$/i, "");
-    const blob = format === "xlsx" ? tableToXlsx(table, "Contacts") : tableToCsv(table);
+    const base = (fileName.trim() || noun).replace(/[\\/:*?"<>|]+/g, "-").replace(/\.(xlsx|csv)$/i, "");
+    const blob = format === "xlsx" ? tableToXlsx(table, isCo ? "Companies" : "Contacts") : tableToCsv(table);
     downloadBlob(blob, `${base}.${format}`);
     setDone(true); window.setTimeout(() => setDone(false), 2600);
   };
 
   /* ---- step navigation ---- */
   const idx = STEPS.findIndex((s) => s.key === step);
-  const problem = step === "who" ? (matched.length ? null : "No contact matches these conditions.") : step === "columns" ? (cols.length ? null : "Choose at least one column.") : null;
+  const problem = step === "who" ? (matched.length ? null : `No ${one} matches these conditions.`) : step === "columns" ? (cols.length ? null : "Choose at least one column.") : null;
   const usesDeals = ready.some((c) => c.field.startsWith("deal:")) || cols.some((k) => k.startsWith("deal:")) || rowMode === "deal";
   const usesSame = (src: Src) => ready.filter((c) => c.field.startsWith(`${src}:`) && fieldBy.get(c.field)?.perEntity).length > 1;
   const animatedCount = useCount(matched.length);
 
-  const fieldOptions = (["contact", "company", "deal"] as Src[]).flatMap((src) => fields.filter((f) => f.src === src).map((f) => ({ value: f.key, label: `${SRC_LABEL[src]} · ${f.label}${f.auto ? " · auto" : ""}` })));
-  const groups: { src: Src; title: string; hint: string }[] = [
+  const order: Src[] = isCo ? ["company", "contact", "deal"] : ["contact", "company", "deal"];
+  const fieldOptions = order.flatMap((src) => fields.filter((f) => f.src === src).map((f) => ({ value: f.key, label: `${SRC_LABEL[src]} · ${f.label}${f.auto ? " · auto" : ""}` })));
+  const groups: { src: Src; title: string; hint: string }[] = isCo ? [
+    { src: "company", title: "Company", hint: "Its own details and custom fields" },
+    { src: "contact", title: "Contacts", hint: "From the people who work there (several are joined with “;”)" },
+    { src: "deal", title: "Deals", hint: "From its deals" },
+  ] : [
     { src: "contact", title: "Contact", hint: "Their own details and custom fields" },
     { src: "company", title: "Company", hint: "From the companies they belong to (several are joined with “;”)" },
     { src: "deal", title: "Deals", hint: "From the deals they’re in" },
@@ -217,9 +259,9 @@ export default function ContactExport({ contacts, companies, contactFields, show
 
   return createPortal(
     <div className="cx-backdrop" onMouseDown={onClose}>
-      <div className="cx" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Export contacts">
+      <div className="cx" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={`Export ${noun}`}>
         <header className="cx-head">
-          <div className="cx-head-txt"><span className="cx-eyebrow">Export</span><h2>Contacts</h2></div>
+          <div className="cx-head-txt"><span className="cx-eyebrow">Export</span><h2>{isCo ? "Companies" : "Contacts"}</h2></div>
           <nav className="cx-steps">
             {STEPS.map((s, i) => (
               <button key={s.key} className={`cx-step ${i === idx ? "is-on" : ""} ${i < idx ? "is-done" : ""}`} onClick={() => i <= idx && setStep(s.key)} disabled={i > idx}>
@@ -236,14 +278,16 @@ export default function ContactExport({ contacts, companies, contactFields, show
             {/* ===== 1. WHO ===== */}
             {step === "who" && (
               <>
-                <Explain n={1} title="Which contacts do you want?" text="Start from everyone, or add conditions. Conditions can look at the contact, at the companies they belong to and at the deals they’re in — for example “Deal · Phase is Demo” or “Company · City is Madrid”." />
+                <Explain n={1} title={`Which ${noun} do you want?`} text={isCo
+                  ? "Start from all of them, or add conditions. Conditions can look at the company, at the people who work there and at its deals — for example “Deal · Phase is Demo” or “Contact · Language is English”."
+                  : "Start from everyone, or add conditions. Conditions can look at the contact, at the companies they belong to and at the deals they’re in — for example “Deal · Phase is Demo” or “Company · City is Madrid”."} />
                 <div className="cx-quick">
                   {quick.map((q) => <button key={q.k} onClick={q.apply}>{q.label}</button>)}
                 </div>
                 <div className="cx-who">
                   <div className="cx-conds">
                     {conds.length > 1 && (
-                      <div className="cx-match">Show contacts that match
+                      <div className="cx-match">Show {noun} that match
                         <div className="cx-seg"><button className={match === "all" ? "is-on" : ""} onClick={() => setMatch("all")}>all</button><button className={match === "any" ? "is-on" : ""} onClick={() => setMatch("any")}>any</button></div>
                         of these conditions
                       </div>
@@ -284,14 +328,18 @@ export default function ContactExport({ contacts, companies, contactFields, show
                     })}
                     <div className="cx-add">
                       <span>Add a condition about</span>
-                      {(["contact", "company", "deal"] as Src[]).map((src) => (
+                      {order.map((src) => (
                         <button key={src} className={`is-${src}`} onClick={() => addCond(fields.find((f) => f.src === src)?.key ?? "")}>
                           + {SRC_LABEL[src].toLowerCase()}
                         </button>
                       ))}
                     </div>
-                    {match === "all" && (usesSame("company") || usesSame("deal")) && (
+                    {match === "all" && (usesSame("company") || usesSame("deal") || usesSame("contact")) && (
                       <div className="cx-scope is-same">
+                        {usesSame("contact") && (
+                          <label className="cx-switch"><input type="checkbox" checked={same.contact} onChange={(e) => setSame((v) => ({ ...v, contact: e.target.checked }))} /><i />
+                            Contact conditions must all be true <b>for the same contact</b></label>
+                        )}
                         {usesSame("company") && (
                           <label className="cx-switch"><input type="checkbox" checked={same.company} onChange={(e) => setSame((v) => ({ ...v, company: e.target.checked }))} /><i />
                             Company conditions must all be true <b>for the same company</b></label>
@@ -304,23 +352,25 @@ export default function ContactExport({ contacts, companies, contactFields, show
                     )}
                     {usesDeals && (
                       <div className="cx-scope">
-                        <span>Deals that count for a contact</span>
+                        <span>Deals that count for a {one}</span>
                         <div className="cx-seg">
-                          <button className={dealScope === "direct" ? "is-on" : ""} onClick={() => setDealScope("direct")}>Deals they’re added to</button>
-                          <button className={dealScope === "company" ? "is-on" : ""} onClick={() => setDealScope("company")}>Also their company’s deals</button>
+                          <button className={dealScope === "direct" ? "is-on" : ""} onClick={() => setDealScope("direct")}>{isCo ? "The company’s own deals" : "Deals they’re added to"}</button>
+                          <button className={dealScope === "company" ? "is-on" : ""} onClick={() => setDealScope("company")}>{isCo ? "Also deals of its contacts" : "Also their company’s deals"}</button>
                         </div>
                       </div>
                     )}
                   </div>
                   <aside className="cx-count">
-                    <span className="cx-k">Matching contacts</span>
+                    <span className="cx-k">Matching {noun}</span>
                     <b>{loading ? "…" : fmtN(Math.round(animatedCount))}</b>
-                    <em>of {fmtN(contacts.length)} you can see</em>
+                    <em>of {fmtN(records.length)} you can see</em>
                     <div className="cx-faces">
-                      {matched.slice(0, 7).map((c, i) => <i key={c.id} style={{ ["--h" as string]: hue(fullName(c)), ["--j" as string]: i } as CSSProperties} title={fullName(c)}>{initials(fullName(c))}</i>)}
+                      {matched.slice(0, 7).map((r, i) => <i key={r.id} style={{ ["--h" as string]: hue(nameOf(r)), ["--j" as string]: i } as CSSProperties} title={nameOf(r)}>{initials(nameOf(r))}</i>)}
                       {matched.length > 7 && <i className="is-more">+{matched.length - 7}</i>}
                     </div>
-                    <ul>{matched.slice(0, 4).map((c) => <li key={c.id}>{fullName(c)}<span>{c.companyIds.map((id) => companyById.get(id)?.name).filter(Boolean).join(", ")}</span></li>)}</ul>
+                    <ul>{matched.slice(0, 4).map((r) => <li key={r.id}>{nameOf(r)}<span>{isCo
+                      ? [r.city, ((n: number) => `${n} ${n === 1 ? "contact" : "contacts"}`)((contactsByCompany.get(r.id) ?? []).length)].filter(Boolean).join(" · ")
+                      : r.companyIds.map((id: string) => companyById.get(id)?.name).filter(Boolean).join(", ")}</span></li>)}</ul>
                   </aside>
                 </div>
               </>
@@ -329,16 +379,22 @@ export default function ContactExport({ contacts, companies, contactFields, show
             {/* ===== 2. ROWS ===== */}
             {step === "rows" && (
               <>
-                <Explain n={2} title="What should each row of the file be?" text="Most of the time one row per contact is what you want. If a contact belongs to several companies or is in several deals, you can also get one row for each of them." />
+                <Explain n={2} title="What should each row of the file be?" text={isCo
+                  ? "Most of the time one row per company is what you want. You can also get one row for each of its contacts — a mailing list with the company's data — or one for each of its deals."
+                  : "Most of the time one row per contact is what you want. If a contact belongs to several companies or is in several deals, you can also get one row for each of them."} />
                 <div className="cx-modes">
-                  {([
+                  {((isCo ? [
+                    ["company", "One row per company", "Contacts and deals are listed together in their columns, separated with “;”.", `${fmtN(matched.length)} rows`],
+                    ["contact", "One row per company and contact", "A company with three contacts appears three times — a mailing list with the company’s data.", `${fmtN(matched.reduce((s, r) => s + Math.max(1, (contactsByCompany.get(r.id) ?? []).length), 0))} rows`],
+                    ["deal", "One row per company and deal", "A company with two deals appears twice, each with that deal’s phase and value.", `${fmtN(matched.reduce((n, r) => n + Math.max(1, ctxOf(r).deals.length), 0))} rows`],
+                  ] : [
                     ["contact", "One row per contact", "Companies and deals are listed together in their columns, separated with “;”.", `${fmtN(matched.length)} rows`],
                     ["company", "One row per contact and company", "A contact at two companies appears twice — handy to group by company.", `${fmtN(matched.reduce((s, c) => s + Math.max(1, c.companyIds.length), 0))} rows`],
                     ["deal", "One row per contact and deal", "A contact in three deals appears three times, each with that deal’s phase and value.", `${fmtN(matched.reduce((n, c) => n + Math.max(1, ctxOf(c).deals.length), 0))} rows`],
-                  ] as [RowMode, string, string, string][]).map(([k, t, d, n], i) => (
+                  ]) as [RowMode, string, string, string][]).map(([k, t, d, n], i) => (
                     <button key={k} className={`cx-mode ${rowMode === k ? "is-on" : ""}`} onClick={() => setRowMode(k)} style={{ ["--i" as string]: i } as CSSProperties}>
                       <span className="cx-mode-art" aria-hidden="true">
-                        {Array.from({ length: k === "contact" ? 3 : 4 }, (_, j) => <i key={j} className={k !== "contact" && j > 0 && j < 3 ? "is-dup" : ""} />)}
+                        {Array.from({ length: k === root ? 3 : 4 }, (_, j) => <i key={j} className={k !== root && j > 0 && j < 3 ? "is-dup" : ""} />)}
                       </span>
                       <b>{t}</b><em>{d}</em><span className="cx-mode-n">{n}</span>
                     </button>
@@ -350,7 +406,9 @@ export default function ContactExport({ contacts, companies, contactFields, show
             {/* ===== 3. COLUMNS ===== */}
             {step === "columns" && (
               <>
-                <Explain n={3} title="Which columns do you want in the file?" text="Tick the information you need. Company columns come from the contact’s companies and deal columns from their deals. Put them in the order you like on the right." />
+                <Explain n={3} title="Which columns do you want in the file?" text={isCo
+                  ? "Tick the information you need. Contact columns come from the people at each company and deal columns from its deals. Put them in the order you like on the right."
+                  : "Tick the information you need. Company columns come from the contact’s companies and deal columns from their deals. Put them in the order you like on the right."} />
                 <div className="cx-cols">
                   <div className="cx-avail">
                     <div className="cx-avail-top">
@@ -400,8 +458,8 @@ export default function ContactExport({ contacts, companies, contactFields, show
                 <Explain n={4} title="Check it and download" text="This is exactly what the file will contain. Pick Excel or CSV, name it and download." />
                 <div className="cx-final">
                   <div className="cx-summary">
-                    <div><b>{fmtN(matched.length)}</b><span>contacts</span></div>
-                    <div><b>{fmtN(rows.length)}</b><span>rows · {rowMode === "contact" ? "one per contact" : rowMode === "company" ? "one per contact and company" : "one per contact and deal"}</span></div>
+                    <div><b>{fmtN(matched.length)}</b><span>{noun}</span></div>
+                    <div><b>{fmtN(rows.length)}</b><span>rows · {rowMode === root ? `one per ${one}` : `one per ${one} and ${rowMode}`}</span></div>
                     <div><b>{cols.length}</b><span>columns</span></div>
                   </div>
                   <div className="cx-preview">
@@ -430,7 +488,7 @@ export default function ContactExport({ contacts, companies, contactFields, show
         </div>
 
         <footer className="cx-foot">
-          <span className={`cx-foot-note ${problem ? "is-warn" : ""}`}>{problem ?? (step === "who" ? `${fmtN(matched.length)} contacts selected` : step === "rows" ? `${fmtN(rows.length)} rows` : step === "columns" ? `${cols.length} columns chosen` : "Ready")}</span>
+          <span className={`cx-foot-note ${problem ? "is-warn" : ""}`}>{problem ?? (step === "who" ? `${fmtN(matched.length)} ${noun} selected` : step === "rows" ? `${fmtN(rows.length)} rows` : step === "columns" ? `${cols.length} columns chosen` : "Ready")}</span>
           <div className="cx-foot-actions">
             {idx > 0 ? <button className="cx-btn is-ghost" onClick={() => setStep(STEPS[idx - 1].key)}>Back</button> : <button className="cx-btn is-ghost" onClick={onClose}>Cancel</button>}
             {step !== "download" && <button className="cx-btn is-primary" disabled={!!problem || loading} onClick={() => setStep(STEPS[idx + 1].key)}>Next: {STEPS[idx + 1].label} →</button>}

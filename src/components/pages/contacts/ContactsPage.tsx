@@ -8,10 +8,11 @@ import {
   listContacts, saveContact, deleteContact, listCompanies,
   myProfile, isSalesLead, listEmployees, loadContactAssignees, setContactAssignees,
   listContactFields, addContactField, updateContactField, deleteContactField,
-  loadRelationshipSets, type RelationshipSets,
+  loadRelationshipSets, type RelationshipSets, contactStatus,
   loadPrefs, savePref,
   type Contact, type Company, type Employee, type ContactField,
 } from "../companies/companiesApi";
+import { AddressFields, PhoneField, StatusPills, HistorySection, phoneText, telHref } from "../companies/CompaniesPage";
 import "../clients/ClientsPage.css";
 import "../companies/CompaniesPage.css";
 import ContactImport from "./ContactImport";
@@ -26,8 +27,8 @@ import {
 import "./ContactsPage.css";
 
 const empty = (): Contact => ({
-  first_name: "", last_name: "", position: "", email: "", phone: "", is_billing: false, notes: "", companyIds: [],
-  street: "", addr_number: "", postal_code: "", city: "", country: "", language: "", linkedin: "",
+  first_name: "", last_name: "", position: "", email: "", phone: "", phone_ext: "", landline: "", landline_ext: "", is_billing: false, notes: "", companyIds: [],
+  street: "", addr_number: "", postal_code: "", city: "", province: "", country: "", language: "", linkedin: "",
 });
 
 const fullName = (c: Contact) => [c.first_name, c.last_name].filter(Boolean).join(" ") || "Unnamed";
@@ -89,10 +90,12 @@ export default function ContactsPage() {
   const availableColumns = [
     { key: "position", label: "Position" },
     { key: "email", label: "Email" },
-    { key: "phone", label: "Phone" },
+    { key: "phone", label: "Mobile" },
+    { key: "landline", label: "Landline" },
     { key: "companies", label: "Companies" },
     { key: "address", label: "Address" },
     { key: "city", label: "City" },
+    { key: "province", label: "Province" },
     { key: "postal_code", label: "Postal code" },
     { key: "country", label: "Country" },
     { key: "language", label: "Language" },
@@ -109,7 +112,8 @@ export default function ContactsPage() {
   const renderCell = (c: Contact, key: string) => {
     if (key === "position") return <span className="ct-lmuted">{c.position || "—"}</span>;
     if (key === "email") return <span className="ct-lemail">{c.email || "—"}</span>;
-    if (key === "phone") return <span className="ct-lmuted">{c.phone || "—"}</span>;
+    if (key === "phone") return <span className="ct-lmuted">{phoneText(c.phone, c.phone_ext) || "—"}</span>;
+    if (key === "landline") return <span className="ct-lmuted">{phoneText(c.landline, c.landline_ext) || "—"}</span>;
     if (key === "companies") return c.companyIds.length === 0
       ? <span className="ct-lmuted">—</span>
       : <span className="ct-lcompanies">
@@ -140,7 +144,7 @@ export default function ContactsPage() {
   // ---- Compound filter + sort controls ----
   // The "type" of any filterable field, fixed or custom.
   const fieldType = (key: string): "text" | "number" | "date" | "boolean" | "select" => {
-    if (key === "email" || key === "position" || key === "phone" || key === "companies" || key === "name") return "text";
+    if (key === "email" || key === "position" || key === "phone" || key === "landline" || key === "companies" || key === "name") return "text";
     if (key === "country" || key === "language") return "select";
     if (key === "address" || isProfileKey(key)) return "text";
     if (key === "imported_at") return "date";
@@ -153,6 +157,7 @@ export default function ContactsPage() {
     if (key === "position") return c.position ?? "";
     if (key === "email") return c.email ?? "";
     if (key === "phone") return c.phone ?? "";
+    if (key === "landline") return c.landline ?? "";
     if (key === "companies") return c.companyIds.map(companyName).join(", ");
     if (key === "address") return formatAddress(c);
     if (isProfileKey(key)) return (c as any)[key] ?? "";
@@ -250,20 +255,16 @@ export default function ContactsPage() {
     return ctrl.action === "desc" ? -r : r;
   };
 
-  // "client" (in the Clients page), "tracking" (in any deal), or "none".
-  const relOf = (c: Contact): "client" | "tracking" | "none" => {
-    if (rel && c.id && rel.clientContactIds.has(c.id)) return "client";
-    if (rel && c.id && rel.trackingContactIds.has(c.id)) return "tracking";
-    return "none";
-  };
-
+  // Client / in sales — its own, or through its companies (the same as on Companies).
+  const statusOf = (c: Contact) => contactStatus(c, rel, companies);
   // Relationship filter. "tracking" / "notracking" look only at sales
-  // trackings (a client can also be in one); "none" means neither.
-  const inTracking = (c: Contact) => !!(rel && c.id && rel.trackingContactIds.has(c.id));
+  // (a client can also be in a deal); "none" means neither.
   const relMatches = (c: Contact, f: string) => {
-    if (f === "tracking") return inTracking(c);
-    if (f === "notracking") return !inTracking(c);
-    return relOf(c) === f;
+    const s = statusOf(c);
+    if (f === "client") return s.client;
+    if (f === "tracking") return s.sales;
+    if (f === "notracking") return !s.sales;
+    return !s.client && !s.sales;
   };
 
   const shown = contacts.filter((c) => {
@@ -378,10 +379,8 @@ export default function ContactsPage() {
                 style={{ gridTemplateColumns: `1.9fr ${activeColumns.map(() => "1.4fr").join(" ")}` }}>
                 <span className="ct-lcell ct-lid">
                   <span className="ct-avatar">{fullName(c).slice(0, 1).toUpperCase()}</span>
-                  <span className="ct-lname">{fullName(c)}{c.is_billing && <i className="ct-billing" title="Billing contact">€</i>}</span>
-                  {(() => { const r = relOf(c); return r === "none" ? null : (
-                    <span className={`ct-rel ct-rel-${r}`}>{r === "client" ? "Client" : "In tracking"}</span>
-                  ); })()}
+                  <span className="ct-lname">{fullName(c)}</span>
+                  <StatusPills status={statusOf(c)} />
                 </span>
                 {activeColumns.map((k) => <span key={k} className="ct-lcell">{renderCell(c, k)}</span>)}
               </button>
@@ -397,6 +396,7 @@ export default function ContactsPage() {
           employees={employees}
           fields={fields}
           canAssign={lead}
+          rel={rel}
           assigned={assignees[editing.id!] ?? []}
           onClose={() => setEditing(null)}
           onSaved={async () => { setEditing(null); await reload(); }}
@@ -437,8 +437,9 @@ export default function ContactsPage() {
   );
 }
 
-function ContactEditor({ contact, companies, employees, fields, canAssign, assigned, onClose, onSaved, onDeleted, onOpenCompany }: {
+function ContactEditor({ contact, companies, employees, fields, canAssign, assigned, rel, onClose, onSaved, onDeleted, onOpenCompany }: {
   contact: Contact; companies: Company[]; employees: Employee[]; fields: ContactField[]; canAssign: boolean; assigned: string[];
+  rel: RelationshipSets | null;
   onClose: () => void; onSaved: () => void; onDeleted: () => void;
   /** Open a company on the Companies page. */
   onOpenCompany: (id: string) => void;
@@ -520,7 +521,17 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
     ...(canAssign ? [{ k: "access", label: "Visibility", icon: "lock", count: who.length }] : []),
     ...(fields.length ? [{ k: "custom", label: "Additional details", icon: "sliders" }] : []),
     { k: "notes", label: "Notes", icon: "note" },
+    { k: "history", label: "History", icon: "clock" },
   ];
+  const status = contactStatus(c, rel, companies);
+  // history: field names and values in words
+  const FIELD_NAMES: Record<string, string> = {
+    first_name: "First name", last_name: "Last name", position: "Position", email: "Email", phone: "Mobile", phone_ext: "Mobile ext.",
+    landline: "Landline", landline_ext: "Landline ext.", notes: "Notes", street: "Street", addr_number: "Number", postal_code: "Postal code",
+    city: "City", province: "Province", country: "Country", language: "Language", linkedin: "LinkedIn",
+  };
+  const histLabel = (k: string) => k.startsWith("custom.") ? fields.find((f) => f.id === k.slice(7))?.label ?? null : FIELD_NAMES[k] ?? null;
+  const histValue = (k: string, v: any) => v == null || v === "" ? "—" : k === "country" ? countryLabel(v) : k === "language" ? languageName(String(v)) : typeof v === "boolean" ? (v ? "Yes" : "No") : String(v);
 
   return (
     <div className={`dw-backdrop ${closing ? "is-closing" : ""}`} onMouseDown={() => close()}>
@@ -532,12 +543,13 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
             <h2 className="dw-title">{displayName || "New contact"}</h2>
             <p className="dw-hero-sub">{[c.position, c.companyIds.map(companyName).join(", ")].filter(Boolean).join(" · ") || "Fill in the details below"}</p>
             <div className="dw-hero-tags">
+              <StatusPills status={status} hero />
               {c.email && <a className="dw-tag" href={`mailto:${c.email}`}><DwIcon name="mail" />{c.email}</a>}
-              {c.phone && <a className="dw-tag" href={`tel:${c.phone.replace(/\s+/g, "")}`}><DwIcon name="phone" />{c.phone}</a>}
+              {c.phone && <a className="dw-tag" href={telHref(c.phone, c.phone_ext)}><DwIcon name="phone" />{phoneText(c.phone, c.phone_ext)}</a>}
+              {c.landline && <a className="dw-tag" href={telHref(c.landline, c.landline_ext)}><DwIcon name="phone" />{phoneText(c.landline, c.landline_ext)}</a>}
               {isLinkedIn(li) && <a className="dw-tag" href={li} target="_blank" rel="noreferrer"><DwIcon name="link" />LinkedIn</a>}
               {(c.city || c.country) && <span className="dw-tag"><DwIcon name="pin" />{[c.city, c.country ? countryLabel(c.country) : ""].filter(Boolean).join(", ")}</span>}
               {c.language && <span className="dw-tag"><DwIcon name="globe" />{languageName(c.language)}</span>}
-              {c.is_billing && <span className="dw-tag is-ok"><DwIcon name="euro" />Billing contact</span>}
               {missing.length > 0 && <button type="button" className="dw-tag is-warn" onClick={() => goTo("address")}>Address incomplete</button>}
             </div>
           </div>
@@ -561,18 +573,6 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
                   <input value={c.position ?? ""} onChange={(e) => set({ position: e.target.value })} placeholder="e.g. CFO" />
                 </div>
               </div>
-              <div className="dw-toggle">
-                <span className="dw-toggle-ico"><DwIcon name="euro" /></span>
-                <div className="dw-toggle-txt">
-                  <b>Billing contact</b>
-                  <span>Invoices go to this person.</span>
-                </div>
-                <button type="button" role="switch" aria-checked={!!c.is_billing}
-                  className={`dw-switch ${c.is_billing ? "on" : ""}`}
-                  onClick={() => set({ is_billing: !c.is_billing })}>
-                  <span className="dw-switch-knob" />
-                </button>
-              </div>
             </section>
 
             <section className="dw-sec" data-sec="reach" data-tone="blue">
@@ -581,9 +581,8 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
                 <div className="dw-f"><label>Email</label>
                   <input type="email" value={c.email ?? ""} onChange={(e) => set({ email: e.target.value })} placeholder="name@company.com" />
                 </div>
-                <div className="dw-f"><label>Phone</label>
-                  <input value={c.phone ?? ""} onChange={(e) => set({ phone: e.target.value })} placeholder="+34 600 000 000" />
-                </div>
+                <PhoneField label="Mobile" value={c.phone} ext={c.phone_ext} onValue={(v) => set({ phone: v })} onExt={(v) => set({ phone_ext: v })} placeholder="+34 600 000 000" />
+                <PhoneField label="Landline" value={c.landline} ext={c.landline_ext} onValue={(v) => set({ landline: v })} onExt={(v) => set({ landline_ext: v })} placeholder="+34 910 000 000" />
                 <div className="dw-f"><label>LinkedIn{req("linkedin")}</label>
                   <input value={c.linkedin ?? ""} placeholder="linkedin.com/in/…"
                     onChange={(e) => set({ linkedin: e.target.value })}
@@ -597,26 +596,13 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
             </section>
 
             <section className="dw-sec" data-sec="address" data-tone="amber">
-              <DwSecHead icon="pin" title="Address" hint="Where they are — needed to save the contact"
+              <DwSecHead icon="pin" title="Address" hint="Where they are — start typing the street or the postal code"
                 aside={missing.length ? <span className="dw-pill is-warn">{missing.length} missing</span> : <span className="dw-pill is-ok">Complete</span>} />
-              <div className="dw-grid is-3">
-                <div className="dw-f dw-col2"><label>Street{req("street")}</label>
-                  <input value={c.street ?? ""} onChange={(e) => set({ street: e.target.value })} placeholder="e.g. Calle de Alcalá" />
-                </div>
-                <div className="dw-f"><label>Number{req("addr_number")}</label>
-                  <input value={c.addr_number ?? ""} onChange={(e) => set({ addr_number: e.target.value })} placeholder="e.g. 42, 3º B" />
-                </div>
-                <div className="dw-f"><label>Postal code{req("postal_code")}</label>
-                  <input value={c.postal_code ?? ""} onChange={(e) => set({ postal_code: e.target.value })} placeholder="e.g. 28014" />
-                </div>
-                <div className="dw-f"><label>City{req("city")}</label>
-                  <input value={c.city ?? ""} onChange={(e) => set({ city: e.target.value })} placeholder="e.g. Madrid" />
-                </div>
-                <div className="dw-f"><label>Country{req("country")}</label>
+              <AddressFields value={c} onChange={(p) => set(p as Partial<Contact>)} countryAs="code" req={(k) => req(k as ProfileKey)}
+                renderCountry={() => (
                   <ProfilePicker value={c.country ?? ""} options={countryChoices} placeholder="Choose a country…"
                     onChange={(v) => set({ country: v })} />
-                </div>
-              </div>
+                )} />
             </section>
 
             <section className="dw-sec" data-sec="companies" data-tone="indigo">
@@ -700,6 +686,8 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
               <DwSecHead icon="note" title="Notes" hint="Anything worth remembering about this person" />
               <textarea className="dw-area" value={c.notes ?? ""} onChange={(e) => set({ notes: e.target.value })} placeholder="How you met, what they care about, next steps…" />
             </section>
+
+            <HistorySection entity="contact" id={c.id} employees={employees} fieldLabel={histLabel} formatValue={histValue} />
           </div>
         </div>
 
@@ -827,7 +815,7 @@ function FieldSettings({ fields, availableColumns, columns, onColumns, onClose, 
                 <div className="cf-row is-builtin" key={f.key}>
                   <div className="cf-row-main">
                     <span className="cf-row-name">{f.label}</span>
-                    <span className="cf-row-type">{f.key === "language" ? "Language list" : f.key === "country" ? "Country list" : f.key === "linkedin" ? "LinkedIn link" : "Text"} · on every contact</span>
+                    <span className="cf-row-type">{f.key === "language" ? "Language list" : f.key === "country" ? "Country list" : f.key === "linkedin" ? "LinkedIn link" : f.key === "province" ? "Text · filled from the postal code" : "Text"} · on every contact</span>
                   </div>
                   {f.required && <span className="cf-col-tag">required</span>}
                 </div>
@@ -1027,6 +1015,7 @@ const DW_ICON: Record<string, string> = {
   euro: "M17.5 7.5a6 6 0 1 0 0 9M5 10.5h9M5 13.5h9",
   id: "M3 5h18v14H3zM7 10h4M7 14h6M15 10h2.5M15 14h2.5",
   arrow: "M5 12h13M13 6l6 6-6 6",
+  clock: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2",
 };
 function DwIcon({ name }: { name: string }) {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={DW_ICON[name] ?? ""} /></svg>;

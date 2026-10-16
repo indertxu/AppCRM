@@ -7,7 +7,7 @@
  * and the field settings all read it from here.
  */
 
-export type ProfileKey = "street" | "addr_number" | "postal_code" | "city" | "country" | "language" | "linkedin";
+export type ProfileKey = "street" | "addr_number" | "postal_code" | "city" | "province" | "country" | "language" | "linkedin";
 export interface ProfileField { key: ProfileKey; label: string; required: boolean }
 
 export const PROFILE_FIELDS: ProfileField[] = [
@@ -15,6 +15,7 @@ export const PROFILE_FIELDS: ProfileField[] = [
   { key: "addr_number", label: "Number", required: true },
   { key: "postal_code", label: "Postal code", required: true },
   { key: "city", label: "City", required: true },
+  { key: "province", label: "Province / state", required: false },
   { key: "country", label: "Country", required: true },
   { key: "language", label: "Language", required: false },
   { key: "linkedin", label: "LinkedIn", required: false },
@@ -40,7 +41,8 @@ export function tidyProfile(c: ProfileLike): Record<ProfileKey, string | null> {
 /** "Calle de Alcalá 42, 28014 Madrid, Spain" */
 export function formatAddress(c: ProfileLike): string {
   const line1 = [str(c.street), str(c.addr_number)].filter(Boolean).join(" ");
-  const line2 = [str(c.postal_code), str(c.city)].filter(Boolean).join(" ");
+  const prov = str(c.province);
+  const line2 = [str(c.postal_code), str(c.city), prov && norm(prov) !== norm(c.city) ? `(${prov})` : ""].filter(Boolean).join(" ");
   return [line1, line2, countryLabel(c.country)].filter(Boolean).join(", ");
 }
 /** Turn old free-text country / language values ("España", "Español") into codes when they can be recognised. */
@@ -53,7 +55,7 @@ export function withProfileCodes<T extends ProfileLike>(c: T): T {
 /** Names a custom field can no longer take — they are built in now. */
 const RESERVED = new Set([
   "street", "calle", "address", "direccion", "domicilio", "number", "numero", "street number", "postal code", "postcode", "zip", "zip code",
-  "codigo postal", "cp", "city", "ciudad", "localidad", "country", "pais", "language", "idioma", "lengua", "linkedin", "linked in", "linkedin url",
+  "codigo postal", "cp", "city", "ciudad", "localidad", "province", "provincia", "state", "region", "country", "pais", "language", "idioma", "lengua", "linkedin", "linked in", "linkedin url",
   "perfil linkedin", "perfil de linkedin",
 ]);
 export const isReservedLabel = (label: string) => RESERVED.has(norm(label));
@@ -200,3 +202,111 @@ export function normalizeLinkedIn(raw: unknown): string {
 export const isLinkedIn = (s: string | null | undefined) => LI_URL.test(str(s));
 /** "https://www.linkedin.com/in/ana-lopez" → "in/ana-lopez" */
 export const linkedInHandle = (url: string | null | undefined) => str(url).replace(/^https?:\/\/([a-z]{2,3}\.)?(www\.)?linkedin\.com\//i, "") || str(url);
+
+/* ═══════════════════════════ address lookup ═══════════════════════════
+ * Free, no key: Photon (OpenStreetMap, photon.komoot.io) for streets and towns,
+ * Zippopotam (api.zippopotam.us) for postal codes, and the Spanish provinces
+ * straight from the first two digits of the postal code (works offline).
+ */
+
+/** Spanish provinces by the first two digits of the postal code. */
+const ES_PROVINCES: Record<string, string> = {
+  "01": "Álava", "02": "Albacete", "03": "Alicante", "04": "Almería", "05": "Ávila", "06": "Badajoz", "07": "Illes Balears", "08": "Barcelona",
+  "09": "Burgos", "10": "Cáceres", "11": "Cádiz", "12": "Castellón", "13": "Ciudad Real", "14": "Córdoba", "15": "A Coruña", "16": "Cuenca",
+  "17": "Girona", "18": "Granada", "19": "Guadalajara", "20": "Gipuzkoa", "21": "Huelva", "22": "Huesca", "23": "Jaén", "24": "León",
+  "25": "Lleida", "26": "La Rioja", "27": "Lugo", "28": "Madrid", "29": "Málaga", "30": "Murcia", "31": "Navarra", "32": "Ourense",
+  "33": "Asturias", "34": "Palencia", "35": "Las Palmas", "36": "Pontevedra", "37": "Salamanca", "38": "Santa Cruz de Tenerife", "39": "Cantabria",
+  "40": "Segovia", "41": "Sevilla", "42": "Soria", "43": "Tarragona", "44": "Teruel", "45": "Toledo", "46": "Valencia", "47": "Valladolid",
+  "48": "Bizkaia", "49": "Zamora", "50": "Zaragoza", "51": "Ceuta", "52": "Melilla",
+};
+/** "28014" → "Madrid" (Spain only, or when no country is set). */
+export function provinceFromPostal(postal: unknown, country?: unknown): string {
+  const cc = matchCountry(country) ?? (str(country) ? null : "ES");
+  const cp = str(postal).replace(/\s+/g, "");
+  return cc === "ES" && /^\d{5}$/.test(cp) ? ES_PROVINCES[cp.slice(0, 2)] ?? "" : "";
+}
+/** Long enough to look up? (5 digits in Spain; 3+ characters elsewhere) */
+export function postalLooksComplete(postal: unknown, country?: unknown): boolean {
+  const cc = matchCountry(country) ?? "ES";
+  const cp = str(postal).replace(/\s+/g, "");
+  if (cc === "ES" || cc === "FR" || cc === "DE" || cc === "IT" || cc === "US") return /^\d{5}$/.test(cp);
+  if (cc === "PT") return /^\d{4}-?\d{3}$/.test(cp);
+  return cp.length >= 3;
+}
+
+/** One suggestion: what to show, and the address parts it fills (country = ISO code). */
+export interface AddressHit {
+  key: string; label: string; sub: string; kind: "address" | "street" | "city";
+  street?: string; number?: string; postal_code?: string; city?: string; province?: string; country?: string;
+}
+
+const lookCache = new Map<string, Promise<any>>();
+async function getJson(url: string, signal?: AbortSignal): Promise<any> {
+  if (!lookCache.has(url)) {
+    const p = (async () => {
+      const ctl = new AbortController();
+      const t = window.setTimeout(() => ctl.abort(), 6000);
+      try {
+        const r = await fetch(url, { signal: ctl.signal });
+        if (!r.ok) return null;
+        return await r.json();
+      } catch { return null; } finally { window.clearTimeout(t); }
+    })();
+    lookCache.set(url, p);
+    p.then((v) => { if (v == null) lookCache.delete(url); });
+  }
+  const res = await lookCache.get(url)!;
+  if (signal?.aborted) throw new DOMException("aborted", "AbortError");
+  return res;
+}
+
+/** Streets / addresses or towns that match what was typed — best first. `near` narrows it to a town or country. */
+export async function searchPlaces(q: string, kind: "address" | "city", near: { city?: string; country?: string } = {}, signal?: AbortSignal): Promise<AddressHit[]> {
+  const text = str(q);
+  if (text.length < 3) return [];
+  const cc = matchCountry(near.country) ?? "";
+  const query = kind === "address" && near.city && !norm(text).includes(norm(near.city)) ? `${text}, ${near.city}` : text;
+  // lean on Spain unless another country is set
+  const bias = !cc || cc === "ES" ? "&lat=40.2&lon=-3.7&location_bias_scale=0.3" : "";
+  const layers = kind === "city" ? "&layer=city&layer=locality" : "&layer=house&layer=street";
+  const base = `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}${bias}`;
+  // older Photon servers don't know "layer": then ask for more and keep the right kinds ourselves
+  const data = (await getJson(`${base}&limit=8${layers}`, signal)) ?? (await getJson(`${base}&limit=15`, signal));
+  const wanted = kind === "city" ? ["city", "locality", "district"] : ["house", "street"];
+  const out: AddressHit[] = [];
+  const seen = new Set<string>();
+  for (const f of (data?.features ?? []) as any[]) {
+    const p = f?.properties ?? {};
+    if (p.type && !wanted.includes(p.type)) continue;
+    const country = str(p.countrycode).toUpperCase() || undefined;
+    if (cc && country && country !== cc) continue;
+    const postal = str(p.postcode).split(/[;,]/)[0].trim() || undefined;
+    const isCity = kind === "city";
+    const city = (isCity ? str(p.name) : str(p.city) || str(p.locality) || str(p.district)) || undefined;
+    const province = (country === "ES" ? provinceFromPostal(postal, "ES") : "") || str(p.county) || str(p.state) || undefined;
+    const street = isCity ? undefined : (p.type === "house" || p.osm_key === "building" ? str(p.street) : str(p.street) || str(p.name)) || undefined;
+    const number = isCity ? undefined : str(p.housenumber) || undefined;
+    if (!isCity && !street) continue;
+    const label = isCity ? city! : [street, number].filter(Boolean).join(" ");
+    const sub = [isCity ? postal : [postal, city].filter(Boolean).join(" "), province && norm(province) !== norm(city) ? province : "", country ? countryName(country) : ""].filter(Boolean).join(", ");
+    const key = `${label}|${sub}`;
+    if (!label || seen.has(key)) continue;
+    seen.add(key);
+    out.push({ key, label, sub, kind: isCity ? "city" : number ? "address" : "street", street, number, postal_code: postal, city, province, country });
+    if (out.length >= 8) break;
+  }
+  return out;
+}
+
+/** Postal code → the towns it covers, the province and the country. */
+export async function lookupPostal(postal: string, country?: string, signal?: AbortSignal): Promise<{ cities: string[]; province: string; country: string } | null> {
+  const cc = matchCountry(country) ?? "ES";
+  const cp = str(postal).replace(/\s+/g, "");
+  if (!postalLooksComplete(cp, cc)) return null;
+  const data = await getJson(`https://api.zippopotam.us/${cc.toLowerCase()}/${encodeURIComponent(cp)}`, signal);
+  const places = (data?.places ?? []) as any[];
+  const cities = [...new Set(places.map((p) => str(p["place name"])).filter(Boolean))];
+  const province = provinceFromPostal(cp, cc) || str(places[0]?.state);
+  if (!cities.length && !province) return null;
+  return { cities, province, country: cc };
+}
