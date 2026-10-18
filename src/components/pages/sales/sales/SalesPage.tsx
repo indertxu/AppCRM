@@ -9,7 +9,7 @@ import { supabase } from "../../../api/supabase";
 import { listCompanies, listContacts, myProfile, sessionUserId, type Company, type Contact } from "../../companies/companiesApi";
 import { listPipelines, loadPipeline, loadPhasesByPipeline, type Pipeline, type Phase } from "../../settings/pipelineApi";
 import { loadProducts, loadServices, type Product } from "../../settings/catalogApi";
-import { listTrackings, loadTrackingTeams, loadSalesBoot, type SalesBootRows, setTrackingPhase, setTrackingStatus, stampPhaseEntry, clearPhaseEventsAfter, trackingPct, loadPotentialTotals, type Tracking } from "./salesApi";
+import { listTrackings, loadTrackingTeams, loadSalesBoot, type SalesBootRows, setTrackingPhase, setTrackingStatus, stampPhaseEntry, clearPhaseEventsAfter, trackingPct, loadPotentialTotals, yearTotalsFromLastRows, type Tracking } from "./salesApi";
 import TrackingDetail from "../trackings/TrackingDetail";
 import ExportModal from "../extras/ExportModal";
 import SalesReport from "../extras/SalesReport";
@@ -345,6 +345,10 @@ export default function SalesPage() {
   const [bootStep, setBootStep] = useState<{ done: number; total: number }>({ done: 0, total: 1 });
   /** True while the kept copy is on screen and the fresh data is still coming. */
   const [refreshing, setRefreshing] = useState(!!snap0);
+  /** The loading screen stays until its fade-out has finished. */
+  const [bootGone, setBootGone] = useState(false);
+  // never trap the page behind it: a very slow or failed load lets go after 15 s
+  useEffect(() => { const t = window.setTimeout(() => setBootGone(true), 15000); return () => window.clearTimeout(t); }, []);
   const [rawTotals, setPotentialTotals] = useState<Record<string, number>>(() => snap0?.deals[1] ?? {});
   const [companies, setCompanies] = useState<Company[]>(() => snap0?.companies ?? []);
   const [contacts, setContacts] = useState<Contact[]>(() => snap0?.contacts ?? []);
@@ -729,12 +733,16 @@ export default function SalesPage() {
     if (perms && allowedViews.length && !(allowedViews as readonly string[]).includes(view)) setView(allowedViews[0]);
   }, [perms, view]); // eslint-disable-line react-hooks/exhaustive-deps
   // Values shown for a frozen deal are the ones it had at the handover.
+  // Deal value: the whole contract (a 3-year subscription × 3) or only this year's share.
+  const [valueMode, setValueModeS] = useState<"term" | "year">(() => { try { return localStorage.getItem("sales.valueMode") === "year" ? "year" : "term"; } catch { return "term"; } });
+  const setValueMode = (v: "term" | "year") => { setValueModeS(v); try { localStorage.setItem("sales.valueMode", v); } catch { /* private mode */ } };
+  const baseTotals = useMemo(() => (valueMode === "year" ? yearTotalsFromLastRows() ?? rawTotals : rawTotals), [valueMode, rawTotals]);
   const potentialTotals = useMemo(() => {
-    if (!frozenById.size) return rawTotals;
-    const out = { ...rawTotals };
+    if (!frozenById.size) return baseTotals;
+    const out = { ...baseTotals };
     frozenById.forEach((h, id) => { out[id] = Number(h.snapshot?.total) || 0; });
     return out;
-  }, [rawTotals, frozenById]);
+  }, [baseTotals, frozenById]);
   const visiblePipelines = useMemo(() => (access.pipelines ? pipelines.filter((p) => access.pipelines!.has(p.id)) : pipelines), [pipelines, access]);
 
 
@@ -791,18 +799,19 @@ export default function SalesPage() {
     });
   }, [mine, q, fPipeline, fProduct, fCompany, fPhase, fOwner, fMember, fRanges, probView, companies, contacts, pipelines, products, phaseByPipe, potentialTotals, trackAssignees, trackOwners, me]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /** The KPI cards follow every filter (owner, pipeline, ranges, search…). */
+  /** The KPI cards follow every filter — owner, pipeline, ranges, search… and the status (won / lost / on hold…) too. */
   const metrics = useMemo(() => {
+    const base = fStatus.length ? filteredBase.filter((t) => fStatus.includes(t.status)) : filteredBase;
     const val = (list: Tracking[]) => list.reduce((s, t) => s + (potentialTotals[t.id!] || 0), 0);
-    const open = filteredBase.filter((t) => t.status === "active" || t.status === "paused");
-    const won = filteredBase.filter((t) => t.status === "won");
-    const lost = filteredBase.filter((t) => t.status === "lost");
+    const open = base.filter((t) => t.status === "active" || t.status === "paused");
+    const won = base.filter((t) => t.status === "won");
+    const lost = base.filter((t) => t.status === "lost");
     return {
-      total: filteredBase.length, totalValue: val(filteredBase),
+      total: base.length, totalValue: val(base),
       open: open.length, openValue: val(open),
       won: won.length, wonValue: val(won), lost: lost.length,
     };
-  }, [filteredBase, potentialTotals]);
+  }, [filteredBase, fStatus, potentialTotals]);
 
   const shown = useMemo(() => {
     let list = filteredBase.filter((t) => !fStatus.length || fStatus.includes(t.status));
@@ -1098,7 +1107,7 @@ export default function SalesPage() {
       ) : (
       /* Status cards: each one filters the list, clicking it again clears it. */
       <div className={`so-kpis is-stats ${ready ? "" : "is-loading"}`} key="status-kpis" aria-busy={!ready}>
-        <SoStatTotal label={anyFilterButStatus ? "Deals in this selection" : "Total deals"} loading={!ready}
+        <SoStatTotal label={anyFilterButStatus || fStatus.length ? "Deals in this selection" : "Total deals"} loading={!ready}
           total={metrics.total} value={metrics.totalValue} open={metrics.open} openValue={metrics.openValue} won={metrics.won} lost={metrics.lost}
           on={fStatus.length === 0} onClick={() => setFStatus([])} />
         <SoStatWon won={metrics.won} value={metrics.wonValue} total={metrics.total} totalValue={metrics.totalValue} loading={!ready}
@@ -1142,6 +1151,8 @@ export default function SalesPage() {
             options={salesPeople.map((e) => ({ value: e.id, label: e.name }))} />
           <SalesRangeFilter value={fRanges} onChange={setFRanges}
             probLabel={probView === "rep" ? "Sales estimate" : probView === "mgr" ? "Management estimate" : probView === "avg" ? "Average of all" : "Phase probability"} />
+          <SalesMultiFilter single values={[valueMode]} onChange={(v) => v[0] && setValueMode(v[0] as "term" | "year")} placeholder="Deal value" searchFrom={99}
+            options={[{ value: "term", label: "Value: whole contract" }, { value: "year", label: "Value: this year only" }]} />
           <SalesMultiFilter single values={[sort]} onChange={(v) => v[0] && setSort(v[0])} placeholder="Sort" searchFrom={99}
             options={[{ value: "recent", label: "Most recent" }, { value: "oldest", label: "Oldest" }, { value: "az", label: "A-Z" }, { value: "za", label: "Z-A" }, { value: "stage_lo", label: "Stage: early → late" }, { value: "stage_hi", label: "Stage: late → early" }, { value: "prod_az", label: "Product: A-Z" }, { value: "prod_za", label: "Product: Z-A" }, { value: "prob_hi", label: "Probability: high → low" }, { value: "prob_lo", label: "Probability: low → high" }, { value: "close_soon", label: "Expected close: soonest first" }, { value: "close_late", label: "Expected close: latest first" }, { value: "rev_hi", label: "Revenue: high → low" }, { value: "rev_lo", label: "Revenue: low → high" }]} />
           </div>
@@ -1338,6 +1349,7 @@ export default function SalesPage() {
           onClose={() => setFieldsOpen(false)}
         />
       )}
+      {!bootGone && <SalesBoot leaving={ready && !refreshing} onGone={() => setBootGone(true)} />}
     </div>
   );
 }
@@ -1594,6 +1606,35 @@ function SalesSkeleton({ rows = 7 }: { rows?: number }) {
           <span className="so-skel-chance"><i className="sk-l2" /></span>
         </div>
       ))}
+    </div>
+  );
+}
+/**
+ * Loading screen of Sales. The page renders straight away underneath a frosted,
+ * see-through layer; a small glass card shows a deal travelling through the
+ * phases. When the fresh data is in, the blur melts away and the page comes into
+ * focus. On a quick load the card never appears — only the blur.
+ */
+function SalesBoot({ leaving, onGone }: { leaving: boolean; onGone: () => void }) {
+  useEffect(() => {
+    if (!leaving) return;
+    const t = window.setTimeout(onGone, 620);
+    return () => window.clearTimeout(t);
+  }, [leaving]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div className={`sb${leaving ? " is-leaving" : ""}`} role="status" aria-live="polite" aria-busy={!leaving}
+      aria-label={leaving ? "Pipeline loaded" : "Loading your pipeline"}>
+      <div className="sb-card">
+        <div className="sb-pipe" aria-hidden="true">
+          <span className="sb-track"><i className="sb-fill" /></span>
+          {[0, 1, 2, 3, 4].map((i) => (
+            <span key={i} className="sb-node" style={{ ["--i" as string]: i } as CSSProperties}><i /></span>
+          ))}
+          <span className="sb-deal"><i /></span>
+        </div>
+        <span className="sb-title">Loading your pipeline</span>
+        <span className="sb-sub">Deals · phases · forecast</span>
+      </div>
     </div>
   );
 }

@@ -7,8 +7,9 @@ import { effectiveRate, effectiveSupervisionRate, projectValue } from "./clients
 import { supabase } from "../../api/supabase";
 import ClientDirectory, { ContractDocs } from "./ClientDirectory";
 import MentionInput, { type MentionPerson } from "../../framework/MentionInput";
-import { addTask, toggleTask, updateTaskMeta, type TaskPriority, type TrackTask } from "../sales/sales/salesApi";
-import { listCompanyFields, listContactFields, sessionUserId, type CompanyField, type ContactField } from "../companies/companiesApi";
+import { addTask, toggleTask, updateTaskMeta, saveClientProducts, type PaymentSchedule, type TaskPriority, type TrackTask } from "../sales/sales/salesApi";
+import { loadProducts, type Product as CatalogProduct } from "../settings/catalogApi";
+import { listCompanyFields, listContactFields, sessionUserId, saveContact, type CompanyField, type ContactField } from "../companies/companiesApi";
 import { countryLabel, formatAddress, languageName, linkedInHandle } from "../contacts/contactProfile";
 import Select from "../../framework/Select";
 import DatePicker from "../../framework/DatePicker";
@@ -28,19 +29,25 @@ interface Props {
 
 type Tab = "overview" | "projects" | "contract" | "tasks" | "notes" | "docs";
 
-interface Note { id: string; body: string; mentions: string[]; author_id: string | null; created_at: string; src: "client" | "sale"; deal?: string | null }
+interface Note { id: string; body: string; mentions: string[]; author_id: string | null; created_at: string; src: "client" | "sale"; deal?: string | null; dealId?: string | null }
 interface ContactLog { id: string; contacted_at: string; channel: string | null; contact_name: string | null; reason: string | null; logged_by: string | null; }
 interface TrackFile { id: string; name: string; note: string | null; mime: string | null; storage_path: string; created_at: string; }
 interface Touch { at: string; kind: string; who: string; why: string }
 interface Person { key: string; id: string | null; name: string; position: string; email: string; phone: string; billing: boolean; crm: boolean; c: any | null }
 interface Deal { id: string; name: string; status: string | null }
-type Line = Record<string, any> & { id: string; name: string };
-type Task = TrackTask & { tracking_id: string; assignees: string[] };
+export type Line = Record<string, any> & { id: string; name: string };
+/** A task from one of the client's sales (tracking_tasks) or the client's own (client_tasks, src "client"). */
+type Task = TrackTask & { tracking_id: string; assignees: string[]; src?: "client" | "sale" };
 
 /* ============================== helpers ============================== */
 
 const DAY = 86400000;
 const str = (v: unknown) => (v == null ? "" : String(v).trim());
+/** "Sale · Won", "Sale · Hold"… for the blocks that keep each sale's tasks and notes apart. */
+const saleSub = (status?: string | null) => {
+  const s = status === "paused" ? "hold" : (status ?? "");
+  return s ? `Sale · ${s.charAt(0).toUpperCase()}${s.slice(1)}` : "Sale";
+};
 const norm = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
 const clamp = (n: number, a = 0, b = 1) => Math.max(a, Math.min(b, n));
 const toDate = (s: string) => new Date(s.length === 10 ? `${s}T12:00:00` : s);
@@ -107,14 +114,36 @@ const lineTotal = (l: Line) => {
   return p * q;
 };
 const lineAnnual = (l: Line) => (l.recurring ? lineTotal(l) * perYear(l.period) : 0);
-const isActive = (l: Line) => !l.status || /active|signed|live/i.test(String(l.status));
+/** The payment terms of a line (null = paid as one block, no increases). */
+const scheduleOf = (l: Line): PaymentSchedule | null => {
+  const sc = l.schedule;
+  if (!sc || typeof sc !== "object" || !(Number(sc.count) > 0)) return null;
+  return { count: Math.round(Number(sc.count)), increases: Array.isArray(sc.increases) ? sc.increases.map((x: unknown) => Number(x) || 0) : [] };
+};
+/** Each term of a recurring line: its length, its price per period (with the increases so far) and what it adds up to. */
+const termsOf = (l: Line, sc: PaymentSchedule | null = scheduleOf(l)) => {
+  const years = Number(l.term_years) || 1;
+  const count = sc?.count ?? 1;
+  const len = years / count;
+  const unit = lineTotal(l);
+  let mult = 1;
+  return Array.from({ length: count }, (_, i) => {
+    mult *= 1 + (sc?.increases[i] ?? 0) / 100;
+    const u = unit * mult;
+    return { i, len, from: i * len, inc: sc?.increases[i] ?? 0, unit: u, amount: u * perYear(l.period) * len };
+  });
+};
+/** What a signed product is worth over its contract: every term of a recurring line (1 year when no term), or the one-off price, plus the set-up fee. */
+export const lineContractValue = (l: Line) => (l.recurring ? termsOf(l).reduce((t, x) => t + x.amount, 0) : lineTotal(l)) + (Number(l.one_time_fee) || 0);
+export { lineAnnual, lineTotal };
+export const isActive = (l: Line) => !l.status || /active|signed|live/i.test(String(l.status));
 const addYears = (d0: Date, y: number) => {
   const d = new Date(d0);
   d.setFullYear(d.getFullYear() + Math.floor(y));
   d.setMonth(d.getMonth() + Math.round((y % 1) * 12));
   return d;
 };
-function termOf(l: Line) {
+export function termOf(l: Line) {
   const s = str(l.start_date) || str(l.signing_date);
   const y = Number(l.term_years) || 0;
   if (!s || !y) return null;
@@ -243,15 +272,22 @@ function Avatar({ name, size = 34 }: { name: string; size?: number }) {
   return <span className="cw-ava" style={cssVars({ "--h": hue(name), width: size, height: size, fontSize: Math.round(size * 0.36) })}>{initials(name)}</span>;
 }
 
-function Fact({ k, v, wide }: { k: string; v: React.ReactNode; wide?: boolean }) {
-  const empty = v == null || v === "" || v === "—";
+/** Label → value rows; only what is filled in. */
+function FactRows({ rows, empty = "Nothing filled in yet" }: { rows: { k: string; v: React.ReactNode }[]; empty?: string }) {
+  const xs = rows.filter((r) => r.v != null && r.v !== "" && r.v !== "—" && r.v !== false);
+  if (!xs.length) return <p className="cw-rows-empty">{empty}</p>;
+  return <dl className="cw-rows">{xs.map((r) => <div key={r.k}><dt>{r.k}</dt><dd>{r.v}</dd></div>)}</dl>;
+}
+
+/** A quick action: call, email, website, map… */
+function Act({ icon, href, children, ext }: { icon: string; href: string; children: React.ReactNode; ext?: boolean }) {
   return (
-    <div className={`cw-fact ${empty ? "is-empty" : ""} ${wide ? "is-wide" : ""}`}>
-      <dt>{k}</dt>
-      <dd>{empty ? "—" : v}</dd>
-    </div>
+    <a className="cw-act" href={href} {...(ext ? { target: "_blank", rel: "noreferrer" } : {})} onClick={(e) => e.stopPropagation()}>
+      <Ico n={icon} s={14} /><span>{children}</span>
+    </a>
   );
 }
+const telHref = (p: string) => `tel:${p.replace(/[^\d+]/g, "")}`;
 
 const customValue = (v: unknown, type: string) => {
   if (v == null || v === "") return "";
@@ -343,28 +379,33 @@ function PersonCard({ p, i, open, onToggle, last, fields, onOpenContact, onLog, 
         <Avatar name={p.name} size={40} />
         <span className="cw-pc-id">
           <b>{p.name}</b>
-          <small>{p.position || (p.crm ? "Contact" : "Project contact")}</small>
+          <small>{p.position || (p.crm ? "Contact" : "Project contact")}{p.phone && <> · <a className="cw-pc-tel" href={telHref(p.phone)} onClick={(e) => e.stopPropagation()}>{p.phone}</a></>}</small>
         </span>
         <span className="cw-pc-quick">
           {p.email && <a href={`mailto:${p.email}`} onClick={(e) => e.stopPropagation()} aria-label="Email"><Ico n="mail" s={14} /></a>}
-          {p.phone && <a href={`tel:${p.phone}`} onClick={(e) => e.stopPropagation()} aria-label="Call"><Ico n="phone" s={14} /></a>}
+          {p.phone && <a href={telHref(p.phone)} onClick={(e) => e.stopPropagation()} aria-label="Call"><Ico n="phone" s={14} /></a>}
           {c.linkedin && <a href={c.linkedin} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} aria-label="LinkedIn"><Ico n="linkedin" s={14} /></a>}
         </span>
         <span className={`cw-pc-last is-${tone}`}><i />{d == null ? "never" : shortAgo(last!)}</span>
       </div>
       <div className="cw-reveal" aria-hidden={!open}>
         <div className="cw-reveal-in">
-          <dl className="cw-facts is-2 is-filled">
-            <Fact k="Email" v={p.email && <a href={`mailto:${p.email}`}>{p.email}</a>} />
-            <Fact k="Phone" v={p.phone && <a href={`tel:${p.phone}`}>{p.phone}</a>} />
-            <Fact k="Position" v={p.position} />
-            <Fact k="Language" v={c.language ? languageName(c.language) : ""} />
-            <Fact k="LinkedIn" v={c.linkedin && <a href={c.linkedin} target="_blank" rel="noreferrer">{linkedInHandle(c.linkedin)}</a>} />
-            <Fact k="Last contact" v={last ? `${fmt(last)} · ${ago(last)}` : ""} />
-            <Fact k="Address" v={addr} wide />
-            {custom.map((x) => <Fact key={x.k} k={x.k} v={x.v} />)}
-            {str(c.notes) && <Fact k="Notes" v={str(c.notes)} wide />}
-          </dl>
+          {(p.phone || p.email || c.linkedin) && (
+            <div className="cw-acts">
+              {p.phone && <Act icon="phone" href={telHref(p.phone)}>{p.phone}</Act>}
+              {p.email && <Act icon="mail" href={`mailto:${p.email}`}>{p.email}</Act>}
+              {c.linkedin && <Act icon="linkedin" href={c.linkedin} ext>{linkedInHandle(c.linkedin)}</Act>}
+            </div>
+          )}
+          <FactRows rows={[
+            { k: "Position", v: p.position },
+            { k: "Role", v: p.billing ? "Billing contact" : "" },
+            { k: "Language", v: c.language ? languageName(c.language) : "" },
+            { k: "Last contact", v: last ? `${fmt(last)} · ${ago(last)}` : "" },
+            { k: "Address", v: addr },
+            ...custom,
+            { k: "Notes", v: str(c.notes) },
+          ]} empty="No more details on file" />
           <div className="cw-pc-actions">
             <button className="cw-ghost" onClick={() => onLog(p.name)}><Ico n="pulse" s={14} />Log contact</button>
             {p.crm && p.id && <button className="cw-ghost is-go" onClick={() => onOpenContact(p.id!)}>Open in Contacts<Ico n="arrow" s={14} /></button>}
@@ -372,6 +413,161 @@ function PersonCard({ p, i, open, onToggle, last, fields, onOpenContact, onLog, 
         </div>
       </div>
     </article>
+  );
+}
+
+/* ============================== payment terms ============================== */
+
+/** Split a multi-year contract into terms, each with its own increase %. */
+function ScheduleEditor({ years, unit, per, value, onChange }: {
+  years: number; unit: number; per: string; value: PaymentSchedule; onChange: (v: PaymentSchedule) => void;
+}) {
+  const [all, setAll] = useState("");
+  const max = Math.max(1, Math.min(24, Math.round(years * 12)));
+  const count = Math.min(Math.max(1, value.count), max);
+  const incs = Array.from({ length: count }, (_, i) => value.increases[i] ?? 0);
+  const setCount = (n: number) => { const c = Math.min(max, Math.max(1, n)); onChange({ count: c, increases: Array.from({ length: c }, (_, i) => value.increases[i] ?? 0) }); };
+  const setInc = (i: number, v: string) => onChange({ count, increases: incs.map((x, j) => (j === i ? Number(String(v).replace(",", ".")) || 0 : x)) });
+  const len = years / count;
+  const lenLabel = (k: number) => {
+    const a = k * len, b = (k + 1) * len;
+    const fmtY = (y: number) => (Number.isInteger(y) ? `${y}` : y.toFixed(1));
+    return len >= 1 && Number.isInteger(len) ? (len === 1 ? `Year ${b}` : `Years ${fmtY(a + 1)}–${fmtY(b)}`) : `${Math.round(a * 12) + 1}–${Math.round(b * 12)} mo`;
+  };
+  let mult = 1;
+  return (
+    <div className="cw-sched">
+      <div className="cw-sched-head">
+        <span className="cw-sched-k">Paid in</span>
+        <span className="cw-step">
+          <button type="button" onClick={() => setCount(count - 1)} disabled={count <= 1}>−</button>
+          <b>{count}</b>
+          <button type="button" onClick={() => setCount(count + 1)} disabled={count >= max}>+</button>
+        </span>
+        <span className="cw-sched-k">term{count === 1 ? "" : "s"} over {years} year{years === 1 ? "" : "s"}</span>
+        {count > 1 && (
+          <span className="cw-sched-all">
+            <input inputMode="decimal" value={all} placeholder="%" onChange={(e) => setAll(e.target.value)} />
+            <button type="button" onClick={() => { const v = Number(all.replace(",", ".")) || 0; onChange({ count, increases: incs.map((_, i) => (i === 0 ? 0 : v)) }); }}>Same increase each term</button>
+          </span>
+        )}
+      </div>
+      {count > 1 && (
+        <div className="cw-sched-rows">
+          {incs.map((inc, i) => {
+            mult *= 1 + inc / 100;
+            return (
+              <div className="cw-sched-row" key={i}>
+                <span className="cw-sched-n">{i + 1}</span>
+                <span className="cw-sched-t">{lenLabel(i)}</span>
+                <label className="cw-sched-inc">
+                  <input inputMode="decimal" value={inc ? String(inc) : ""} placeholder="0" disabled={i === 0 && !inc} onChange={(e) => setInc(i, e.target.value)} />
+                  <em>% {i === 0 ? "start" : "increase"}</em>
+                </label>
+                <b className="cw-sched-v">{eur(unit * mult)}<em> / {per}</em></b>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================== add a signed product by hand ============================== */
+
+function AddLineForm({ clientId, persons, onCancel, onSaved }: {
+  clientId: string; persons: Person[]; onCancel: () => void; onSaved: () => void | Promise<void>;
+}) {
+  const [products, setProducts] = useState<CatalogProduct[] | null>(null);
+  const [pid, setPid] = useState("");
+  const [tier, setTier] = useState("");
+  const [price, setPrice] = useState("");
+  const [qty, setQty] = useState("1");
+  const [disc, setDisc] = useState("");
+  const [signed, setSigned] = useState(todayISO());
+  const [term, setTerm] = useState("1");
+  const [renew, setRenew] = useState(true);
+  const [fee, setFee] = useState("");
+  const [ref, setRef] = useState("");
+  const [billing, setBilling] = useState(persons.find((p) => p.billing)?.key ?? "");
+  const [sched, setSched] = useState<PaymentSchedule>({ count: 1, increases: [] });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { loadProducts().then((xs) => setProducts(xs.filter((x) => x.active !== false))).catch(() => setProducts([])); }, []);
+  const prod = products?.find((x) => x.id === pid) ?? null;
+  const recurring = prod?.billing === "recurring";
+  const period = prod?.billing_period === "yearly" ? "year" : "month";
+  const pick = (id: string) => {
+    setPid(id);
+    const pr = products?.find((x) => x.id === id);
+    const t = pr?.tiers?.[0];
+    setTier(t?.id ?? t?.name ?? "");
+    setPrice(t ? String(t.price) : "");
+  };
+  const pickTier = (k: string) => {
+    setTier(k);
+    const t = prod?.tiers.find((x) => (x.id ?? x.name) === k);
+    if (t) setPrice(String(t.price));
+  };
+  const n = (v: string) => Number(String(v).replace(",", ".")) || 0;
+  const unit = n(price) * (n(qty) || 1) * (1 - Math.min(100, n(disc)) / 100);
+  const save = async () => {
+    if (!prod?.id) { setErr("Pick a product."); return; }
+    if (!signed) { setErr("Add the signing date."); return; }
+    setBusy(true); setErr(null);
+    const who = persons.find((p) => p.key === billing);
+    const e = await saveClientProducts(clientId, null, [{
+      productId: prod.id, price: n(price), quantity: n(qty) || 1, recurring, period: recurring ? period : null,
+      termYears: recurring ? n(term) || null : null, discountMode: n(disc) ? "percent" : null, discountValue: n(disc) || null,
+      signingDate: signed, oneTimeFee: n(fee), autoRenew: recurring && renew, renewYears: recurring && renew ? n(term) || 1 : null,
+      contractRef: ref.trim(), billingContactName: who?.name ?? null, billingContactEmail: who?.email || null,
+      schedule: recurring && (sched.count > 1 || sched.increases.some(Boolean)) ? sched : null,
+    }]);
+    setBusy(false);
+    if (e) { setErr(e); return; }
+    await onSaved();
+  };
+  return (
+    <div className="cw-logform cw-addl">
+      <div className="cw-addl-grid">
+        <label className="is-wide"><span>Product</span>
+          <Select value={pid} onChange={pick} placeholder={products ? (products.length ? "Pick a product…" : "No products in the catalog yet") : "Loading…"}
+            options={(products ?? []).map((x) => ({ value: x.id!, label: x.name, hint: x.billing === "recurring" ? `Every ${x.billing_period === "yearly" ? "year" : "month"}` : "One-off" }))} />
+        </label>
+        {prod && prod.tiers.length > 1 && (
+          <label><span>Tier</span>
+            <Select value={tier} onChange={pickTier} options={prod.tiers.map((t) => ({ value: t.id ?? t.name, label: t.name, hint: eur(t.price) }))} />
+          </label>
+        )}
+        <label><span>Price{recurring ? ` / ${period}` : ""}</span><input inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="0" /></label>
+        <label><span>Quantity</span><input inputMode="numeric" value={qty} onChange={(e) => setQty(e.target.value)} /></label>
+        <label><span>Discount %</span><input inputMode="decimal" value={disc} onChange={(e) => setDisc(e.target.value)} placeholder="0" /></label>
+        <label><span>Signed on</span><span className="cw-date"><DatePicker value={signed} onChange={(d) => setSigned(d || "")} /></span></label>
+        {recurring && <label><span>Term (years)</span><input inputMode="decimal" value={term} onChange={(e) => setTerm(e.target.value)} /></label>}
+        <label><span>Set-up fee</span><input inputMode="decimal" value={fee} onChange={(e) => setFee(e.target.value)} placeholder="0" /></label>
+        <label><span>Contract ref.</span><input value={ref} onChange={(e) => setRef(e.target.value)} placeholder="e.g. CT-2026-031" /></label>
+        {persons.length > 0 && (
+          <label><span>Billing contact</span>
+            <Select value={billing} onChange={setBilling} placeholder="—" options={[{ value: "", label: "—" }, ...persons.map((p) => ({ value: p.key, label: p.name, hint: p.email }))]} />
+          </label>
+        )}
+        {recurring && (
+          <button type="button" className={`cw-addp-bill ${renew ? "is-on" : ""}`} onClick={() => setRenew((v) => !v)}>
+            <i>{renew && <Ico n="check" s={11} />}</i>Renews automatically
+          </button>
+        )}
+      </div>
+      {recurring && n(term) > 1 && (
+        <ScheduleEditor years={n(term)} unit={unit} per={period} value={sched} onChange={setSched} />
+      )}
+      {err && <p className="cw-err">{err}</p>}
+      <div className="cw-logactions">
+        <span className="cw-addl-sum">{prod ? <>{eur(unit)}{recurring ? <em> / {period}</em> : null}{n(fee) ? <em> + {eur(n(fee))} set-up</em> : null}</> : null}</span>
+        <button className="cw-ghost" onClick={onCancel}>Cancel</button>
+        <button className="cw-btn-primary is-sm" disabled={busy || !prod} onClick={() => void save()}>{busy ? "Saving…" : "Add signed product"}</button>
+      </div>
+    </div>
   );
 }
 
@@ -397,13 +593,16 @@ export default function ClientWorkspace({
   const [notes, setNotes] = useState<Note[]>([]);
   const [saleNotes, setSaleNotes] = useState<Note[]>([]);
   const [contactLog, setContactLog] = useState<ContactLog[]>([]);
-  const [trackFiles, setTrackFiles] = useState<TrackFile[]>([]);
+  const [, setTrackFiles] = useState<TrackFile[]>([]);
   const [meetings, setMeetings] = useState<{ at: string; title: string }[]>([]);
   const [nextMeeting, setNextMeeting] = useState<{ at: string; title: string } | null>(null);
   const [calendar, setCalendar] = useState<Touch[]>([]);
   const [lines, setLines] = useState<Line[]>([]);
   const [deals, setDeals] = useState<Deal[]>([]);
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [saleTasks, setTasks] = useState<Task[]>([]);
+  /** The client's own tasks, made once it is a client (client_tasks, handoff_v2.sql). */
+  const [clientTasks, setClientTasks] = useState<Task[]>([]);
+  const tasks = useMemo(() => [...clientTasks, ...saleTasks], [clientTasks, saleTasks]);
 
   // UI state
   const [coOpen, setCoOpen] = useState(false);
@@ -422,10 +621,13 @@ export default function ClientWorkspace({
   const [projFilter, setProjFilter] = useState<"all" | "open" | "closed">("all");
   const [confirmDel, setConfirmDel] = useState<string | null>(null);
   const [taskFilter, setTaskFilter] = useState<"open" | "late" | "done" | "all">("open");
+  /** Tasks from the sales (before it was a client) or the client's own (after). */
+  const [taskSrc, setTaskSrc] = useState<"all" | "client" | "sale">("all");
   const [taskDraft, setTaskDraft] = useState("");
   const [taskDue, setTaskDue] = useState("");
   const [taskPri, setTaskPri] = useState<TaskPriority>("normal");
-  const [taskDeal, setTaskDeal] = useState("");
+  /** Where a new task goes: "client" (general) or a sale's id. */
+  const [taskDeal, setTaskDeal] = useState("client");
   const [taskBusy, setTaskBusy] = useState(false);
   const [taskErr, setTaskErr] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState("");
@@ -433,6 +635,12 @@ export default function ClientWorkspace({
   const [noteQ, setNoteQ] = useState("");
   const [noteErr, setNoteErr] = useState<string | null>(null);
   const [confirmNote, setConfirmNote] = useState<string | null>(null);
+  const [addPerson, setAddPerson] = useState<{ first: string; last: string; position: string; email: string; phone: string; billing: boolean } | null>(null);
+  const [addPersonBusy, setAddPersonBusy] = useState(false);
+  const [addPersonErr, setAddPersonErr] = useState<string | null>(null);
+  const [addLine, setAddLine] = useState(false);
+  const [schedEdit, setSchedEdit] = useState<{ id: string; v: PaymentSchedule } | null>(null);
+  const [schedErr, setSchedErr] = useState<string | null>(null);
 
   const pulseRef = useRef<HTMLElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -488,6 +696,8 @@ export default function ClientWorkspace({
         setClientRow(cl.data ?? null);
         setTenantId((cl.data as any)?.tenant_id ?? null);
         setNotes(((nt.data ?? []) as any[]).map((n) => ({ ...n, mentions: n.mentions ?? [], src: "client" as const })));
+        supabase.from("client_tasks").select("*").eq("client_id", client.id).order("created_at", { ascending: false })
+          .then(({ data, error }) => { if (alive && !error) setClientTasks(((data ?? []) as any[]).map((t) => ({ ...toTask({ ...t, tracking_id: "" }, []), src: "client" as const }))); });
         setContactLog((lg.data ?? []) as ContactLog[]);
         setCoFields(cf);
         setCtFields(ctf);
@@ -529,35 +739,37 @@ export default function ClientWorkspace({
         }
         const dl: Deal[] = ((trk.data ?? []) as any[]).map((t) => ({ id: t.id, name: str(t.deal_name) || client.name, status: t.status ?? null }));
         setDeals(dl);
-        setTaskDeal(dl[0]?.id ?? "");
         const ids = dl.map((d) => d.id);
         if (!ids.length) return;
         const nowIso = new Date().toISOString();
         const [tf, mt, nx, tt, tn] = await Promise.all([
-          supabase.from("tracking_files").select("id, name, note, mime, storage_path, created_at").in("tracking_id", ids),
+          supabase.from("tracking_files").select("*").in("tracking_id", ids),
           supabase.from("tracking_meetings").select("title, meet_at").in("tracking_id", ids).not("meet_at", "is", null).lte("meet_at", nowIso).order("meet_at", { ascending: false }).limit(15),
           supabase.from("tracking_meetings").select("title, meet_at").in("tracking_id", ids).gt("meet_at", nowIso).order("meet_at", { ascending: true }).limit(1),
           supabase.from("tracking_tasks").select("*").in("tracking_id", ids).order("created_at", { ascending: false }),
           supabase.from("tracking_notes").select("*").in("tracking_id", ids).order("created_at", { ascending: false }),
         ]);
         if (!alive) return;
-        setTrackFiles((tf.data ?? []) as TrackFile[]);
+        // Sales can keep items out of the handoff (share_client = false, handoff_v2.sql);
+        // documents copied into the client folders are flagged the same way.
+        const shared = (r: any) => r.share_client !== false;
+        setTrackFiles(((tf.data ?? []) as any[]).filter(shared) as TrackFile[]);
         setMeetings(((mt.data ?? []) as any[]).map((m) => ({ at: m.meet_at, title: m.title })));
         const n0 = (nx.data ?? [])[0] as any;
         setNextMeeting(n0 ? { at: n0.meet_at, title: n0.title } : null);
         const dealName = new Map(dl.map((d) => [d.id, d.name]));
-        setSaleNotes(((tn.data ?? []) as any[]).filter((n) => str(n.body)).map((n) => ({
+        setSaleNotes(((tn.data ?? []) as any[]).filter((n) => str(n.body) && shared(n)).map((n) => ({
           id: n.id, body: n.body, mentions: [], created_at: n.created_at,
-          author_id: n.created_by ?? n.author_id ?? n.user_id ?? null, src: "sale" as const, deal: dealName.get(n.tracking_id) ?? null,
+          author_id: n.created_by ?? n.author_id ?? n.user_id ?? null, src: "sale" as const, deal: dealName.get(n.tracking_id) ?? null, dealId: n.tracking_id,
         })));
-        const taskRows = (tt.data ?? []) as any[];
+        const taskRows = ((tt.data ?? []) as any[]).filter(shared);
         const byTask: Record<string, string[]> = {};
         if (taskRows.length) {
           const { data: ta } = await supabase.from("tracking_assignees").select("item_id, employee_id")
             .eq("item_type", "task").eq("kind", "employee").in("item_id", taskRows.map((t) => t.id));
           (ta ?? []).forEach((a: any) => { (byTask[a.item_id] ??= []).push(a.employee_id); });
         }
-        if (alive) setTasks(taskRows.map((t) => toTask(t, byTask[t.id] ?? [])));
+        if (alive) setTasks(taskRows.map((t) => ({ ...toTask(t, byTask[t.id] ?? []), src: "sale" as const })));
       } finally {
         if (alive) setLoaded(true);
       }
@@ -578,9 +790,7 @@ export default function ClientWorkspace({
     acc.signed += signed; acc.done += u.done; acc.booked += u.planned; acc.value += projectValue(p);
     return acc;
   }, { signed: 0, done: 0, booked: 0, value: 0 }), [projects, usage]);
-  const left = +(totals.signed - totals.done - totals.booked).toFixed(2);
   const donePct = totals.signed > 0 ? Math.min(100, (totals.done / totals.signed) * 100) : 0;
-  const gauge = useCount(donePct, 1300);
 
   const info = projects[0];
   const co = company ?? {};
@@ -646,6 +856,11 @@ export default function ClientWorkspace({
   const activeLines = lines.filter(isActive);
   const recurringYear = activeLines.reduce((s, l) => s + lineAnnual(l), 0);
   const oneTime = lines.reduce((s, l) => s + (l.recurring ? 0 : lineTotal(l)) + (Number(l.one_time_fee) || 0), 0);
+  /** What the sale signed: recurring lines for their whole term (1 year when none), one-offs and set-up fees. */
+  const lineContract = lineContractValue;
+  const contractValue = activeLines.reduce((s, l) => s + lineContract(l), 0);
+  const openProjects = projects.filter((p) => p.status !== "closed");
+  const openValue = openProjects.reduce((s, p) => s + projectValue(p), 0);
   const nextRenewal = activeLines.map(termOf).filter((t): t is NonNullable<ReturnType<typeof termOf>> => !!t && t.left >= 0)
     .sort((a, b) => a.end.getTime() - b.end.getTime())[0] ?? null;
 
@@ -665,15 +880,22 @@ export default function ClientWorkspace({
   // notes
   const allNotes = useMemo(() => [...notes, ...saleNotes].sort((a, b) => b.created_at.localeCompare(a.created_at)), [notes, saleNotes]);
   const shownNotes = allNotes.filter((n) => (noteFilter === "all" || n.src === noteFilter) && (!noteQ || norm(plain(n.body)).includes(norm(noteQ))));
+  // One block for the client's own notes, then one per sale.
   const noteGroups = useMemo(() => {
-    const g: { label: string; items: Note[] }[] = [];
-    shownNotes.forEach((n) => {
-      const label = toDate(n.created_at).toLocaleDateString(undefined, { month: "long", year: "numeric" });
-      if (!g.length || g[g.length - 1].label !== label) g.push({ label, items: [] });
-      g[g.length - 1].items.push(n);
-    });
+    const g: { key: string; label: string; sub: string; items: Note[] }[] = [];
+    const own = shownNotes.filter((n) => n.src === "client");
+    if (own.length) g.push({ key: "client", label: "Client", sub: "Since it became a client", items: own });
+    const order = deals.map((d) => d.id);
+    const bySale = new Map<string, Note[]>();
+    shownNotes.filter((n) => n.src === "sale").forEach((n) => { const k = n.dealId ?? ""; bySale.set(k, [...(bySale.get(k) ?? []), n]); });
+    Array.from(bySale.entries())
+      .sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]))
+      .forEach(([k, items]) => {
+        const d = deals.find((x) => x.id === k);
+        g.push({ key: k || "sale", label: d?.name ?? items[0]?.deal ?? "Sale", sub: saleSub(d?.status), items });
+      });
     return g;
-  }, [shownNotes]);
+  }, [shownNotes, deals]);
 
   /* ---- tabs + sliding ink ---- */
   const TABS: { v: Tab; label: string; icon: string; n?: number; alert?: boolean }[] = [
@@ -705,6 +927,38 @@ export default function ClientWorkspace({
   /* ---- actions ---- */
   const openCompany = () => co.id && navigate("/companies", { state: { focusCompanyId: co.id } });
   const openContact = (id: string) => navigate("/contacts", { state: { focusContactId: id } });
+  const savePerson = async () => {
+    if (!addPerson || !addPerson.first.trim()) return;
+    setAddPersonBusy(true); setAddPersonErr(null);
+    const d = addPerson;
+    if (co.id) {
+      const c: any = {
+        first_name: d.first.trim(), last_name: d.last.trim() || null, position: d.position.trim() || null,
+        email: d.email.trim() || null, phone: d.phone.trim() || null, is_billing: d.billing, custom: {}, companyIds: [co.id],
+      };
+      const e = await saveContact(c);
+      setAddPersonBusy(false);
+      if (e) { setAddPersonErr(e); return; }
+      setCrmContacts((xs) => [...xs, { ...c, id: c.id }]);
+    } else {
+      const next = [...(Array.isArray(cr.contacts) ? cr.contacts : []), {
+        name: [d.first.trim(), d.last.trim()].filter(Boolean).join(" "), position: d.position.trim(), email: d.email.trim(), phone: d.phone.trim(), billing: d.billing,
+      }];
+      const { error } = await supabase.from("clients").update({ contacts: next }).eq("id", client.id);
+      setAddPersonBusy(false);
+      if (error) { setAddPersonErr(error.message); return; }
+      setClientRow((x: any) => ({ ...(x ?? {}), contacts: next }));
+    }
+    setAddPerson(null);
+  };
+  const reloadLines = async () => {
+    const { data } = await supabase.from("client_products").select("*").eq("client_id", client.id);
+    const raw = (data ?? []) as any[];
+    const pids = [...new Set(raw.map((r) => r.product_id).filter(Boolean))];
+    const pn: Record<string, string> = {};
+    if (pids.length) ((await supabase.from("products").select("id,name").in("id", pids)).data ?? []).forEach((x: any) => { pn[x.id] = x.name; });
+    setLines(raw.map((r) => ({ ...r, name: pn[r.product_id] ?? "Product" })).sort((a, b) => str(b.signing_date).localeCompare(str(a.signing_date))));
+  };
   const togglePerson = (k: string) => setOpenPeople((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
   const startLog = (who = "") => {
     setLogWho(who); setLogErr(null); setLogDate(todayISO()); setLogOpen(true);
@@ -754,21 +1008,44 @@ export default function ClientWorkspace({
     const title = taskDraft.trim();
     if (!title || !taskDeal) return;
     setTaskBusy(true); setTaskErr(null);
-    const t = await addTask(taskDeal, null, title, taskDue ? `${taskDue}T18:00:00` : null, { priority: taskPri });
-    setTaskBusy(false);
-    if (!t) { setTaskErr("Could not create the task."); return; }
-    setTasks((xs) => [toTask({ ...t, tracking_id: taskDeal }, []), ...xs]);
+    if (taskDeal === "client") {
+      const { data, error } = await supabase.from("client_tasks").insert({
+        client_id: client.id, title, due_at: taskDue ? `${taskDue}T18:00:00` : null, priority: taskPri, status: "todo", done: false, created_by: me,
+      }).select().single();
+      setTaskBusy(false);
+      if (error || !data) { setTaskErr(/client_tasks/i.test(error?.message ?? "") ? "Run handoff_v2.sql in Supabase to enable client tasks." : (error?.message ?? "Could not create the task.")); return; }
+      setClientTasks((xs) => [{ ...toTask({ ...(data as any), tracking_id: "" }, []), src: "client" }, ...xs]);
+    } else {
+      const t = await addTask(taskDeal, null, title, taskDue ? `${taskDue}T18:00:00` : null, { priority: taskPri });
+      setTaskBusy(false);
+      if (!t) { setTaskErr("Could not create the task."); return; }
+      setTasks((xs) => [{ ...toTask({ ...t, tracking_id: taskDeal }, []), src: "sale" }, ...xs]);
+    }
     setTaskDraft(""); setTaskDue(""); setTaskPri("normal");
     if (taskFilter === "done") setTaskFilter("open");
   };
   const flipTask = async (t: Task) => {
     const done = !t.done;
-    setTasks((xs) => xs.map((x) => (x.id === t.id ? { ...x, done, status: done ? "done" : "todo", progress: done ? 100 : x.progress } : x)));
+    const patch = (xs: Task[]) => xs.map((x) => (x.id === t.id ? { ...x, done, status: done ? "done" as const : "todo" as const, progress: done ? 100 : x.progress } : x));
+    if (t.src === "client") {
+      setClientTasks(patch);
+      await supabase.from("client_tasks").update({ done, status: done ? "done" : "todo" }).eq("id", t.id);
+      return;
+    }
+    setTasks(patch);
     await toggleTask(t.id, done);
     void updateTaskMeta(t.id, { status: done ? "done" : "todo" });
   };
 
-  const dealName = (id: string) => deals.find((d) => d.id === id)?.name ?? "Deal";
+  const dealName = (id: string) => (id ? deals.find((d) => d.id === id)?.name ?? "Deal" : "Client");
+  /**
+   * Tasks and notes are kept apart by where they come from: the client's own
+   * (made once it is a client) first, then one block per sale.
+   */
+  const sources = useMemo(() => [
+    { key: "client", title: "Client", sub: "Since it became a client" },
+    ...deals.map((d) => ({ key: d.id, title: d.name, sub: saleSub(d.status) })),
+  ], [deals]);
   const firstSigned = projects.map((p) => p.signingDate).filter(Boolean).sort()[0] ?? "";
   const firstKick = projects.map((p) => p.kickoffDate).filter(Boolean).sort()[0] ?? "";
 
@@ -822,6 +1099,7 @@ export default function ClientWorkspace({
   const projRows = (f: (p: Project) => React.ReactNode): [string, React.ReactNode][] => projects.map((p) => [typeName(p.projectTypeId), f(p)]);
   const missing = [...identity, ...reach, ...place, ...custom].filter((x) => !x.v).map((x) => x.k);
   const placeLine = [city, country && countryLabel(country)].filter(Boolean).join(", ");
+  const fullAddress = [street, [str(co.postal_code) || str(addr.postalCode), city].filter(Boolean).join(" "), str(co.province) !== city ? str(co.province) : "", country ? countryLabel(country) : ""].filter(Boolean).join(", ");
   const legal = str(identity[1].v) || str(identity[0].v);
   const vat = str(identity[2].v);
 
@@ -847,24 +1125,38 @@ export default function ClientWorkspace({
       </div>
       <div className="cw-reveal" aria-hidden={!coOpen}>
         <div className="cw-reveal-in">
-          <div className="cw-co-groups">
-            {[
-              { t: "Identity", icon: "building", rows: identity },
-              { t: "Reach", icon: "globe", rows: reach },
-              { t: "Address", icon: "pin", rows: place },
-              { t: "Engagement", icon: "briefcase", rows: engagement },
-              ...(custom.length ? [{ t: "Custom fields", icon: "spark", rows: custom }] : []),
-            ].map((g, gi) => (
-              <div className="cw-co-group" key={g.t} style={cssVars({ "--i": gi })}>
-                <h4><Ico n={g.icon} s={13} />{g.t}</h4>
-                <dl className="cw-facts">{g.rows.map((r) => <Fact key={r.k} k={r.k} v={r.v} />)}</dl>
+          <div className="cw-co2">
+            {(website || str(co.email) || str(co.phone) || fullAddress) && (
+              <div className="cw-acts">
+                {str(co.phone) && <Act icon="phone" href={telHref(str(co.phone))}>{co.phone}</Act>}
+                {str(co.email) && <Act icon="mail" href={`mailto:${co.email}`}>{co.email}</Act>}
+                {website && <Act icon="globe" href={webHref} ext>{webHost}</Act>}
+                {fullAddress && <Act icon="pin" href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(fullAddress)}`} ext>{fullAddress}</Act>}
               </div>
-            ))}
+            )}
+            <div className="cw-co2-grid">
+              {[
+                { t: "Identity", icon: "building", rows: identity },
+                { t: "Engagement", icon: "briefcase", rows: engagement },
+                ...(custom.some((x) => x.v) ? [{ t: "More details", icon: "spark", rows: custom }] : []),
+              ].map((g, gi) => (
+                <section className="cw-co2-g" key={g.t} style={cssVars({ "--i": gi })}>
+                  <h4><Ico n={g.icon} s={13} />{g.t}</h4>
+                  <FactRows rows={g.rows} />
+                </section>
+              ))}
+            </div>
             {str(co.notes) && (
-              <div className="cw-co-group is-notes" style={cssVars({ "--i": 6 })}>
+              <section className="cw-co2-about" style={cssVars({ "--i": 3 })}>
                 <h4><Ico n="note" s={13} />About</h4>
                 <p>{co.notes}</p>
-              </div>
+              </section>
+            )}
+            {missing.length > 0 && (
+              <p className="cw-co2-miss">
+                <span>Missing: {missing.join(", ")}</span>
+                {co.id && <button className="cw-linkbtn" onClick={openCompany}>Fill in Companies<Ico n="arrow" s={13} /></button>}
+              </p>
             )}
           </div>
         </div>
@@ -898,37 +1190,6 @@ export default function ClientWorkspace({
               </div>
             </div>
 
-            <div className="cw-kpis">
-              <div className="cw-kpi cw-kpi-gauge" style={cssVars({ "--i": 0 })}
-                {...tipOn(<TipCard title={`${Math.round(donePct)}% of signed days used`} rows={projRows((p) => {
-                  const s = p.consultorDays + p.connectorDays + p.supervisionDays; const u = usage[p.id] ?? { planned: 0, done: 0 };
-                  return `${s > 0 ? Math.round((u.done / s) * 100) : 0}% · ${d2(u.done)} / ${d2(s)}${unitOf(p)}`;
-                })} />)}>
-                <div className="cw-ring">
-                  <svg viewBox="0 0 140 82" aria-hidden="true">
-                    <defs>
-                      <linearGradient id="cw-arc-g" x1="0" x2="1" y1="0" y2="0"><stop offset="0" stopColor="#12b57f" /><stop offset="1" stopColor="#35ffa0" /></linearGradient>
-                    </defs>
-                    <path className="cw-arc-bg" d="M16 70 A54 54 0 0 1 124 70" pathLength={100} />
-                    <path className="cw-arc-fill" d="M16 70 A54 54 0 0 1 124 70" pathLength={100} style={{ strokeDasharray: `${gauge.toFixed(2)} 100` }} />
-                  </svg>
-                  <span className="cw-ring-mid"><b>{Math.round(gauge)}</b><i>% used</i></span>
-                </div>
-                <div className="cw-kpi-side"><span className="cw-kpi-k">Signed</span><b className="cw-kpi-v"><Num v={totals.signed} dp={2} /></b></div>
-              </div>
-              {([
-                ["Used", totals.done, (p: Project) => `${d2((usage[p.id] ?? { done: 0 }).done)}${unitOf(p)}`, ""],
-                ["Booked", totals.booked, (p: Project) => `${d2((usage[p.id] ?? { planned: 0 }).planned)}${unitOf(p)}`, ""],
-                ["Left", left, (p: Project) => { const u = usage[p.id] ?? { planned: 0, done: 0 }; return `${d2(p.consultorDays + p.connectorDays + p.supervisionDays - u.done - u.planned)}${unitOf(p)}`; }, left < 0 ? "is-over" : "is-neon"],
-              ] as [string, number, (p: Project) => string, string][]).map(([k, v, f, cls], i) => (
-                <div className="cw-kpi" key={k} style={cssVars({ "--i": i + 1 })} {...tipOn(<TipCard title={`${k} · ${d2(v)}`} rows={projRows(f)} />)}>
-                  <span className="cw-kpi-k">{k}</span><b className={`cw-kpi-v ${cls}`}><Num v={v} dp={2} /></b>
-                </div>
-              ))}
-              <div className="cw-kpi" style={cssVars({ "--i": 4 })} {...tipOn(<TipCard title={`Contract value · ${eur(totals.value)}`} rows={projRows((p) => eur(projectValue(p)))} />)}>
-                <span className="cw-kpi-k">Value</span><b className="cw-kpi-v is-neon"><Num v={totals.value} /><em>€</em></b>
-              </div>
-            </div>
           </div>
 
           <nav className="cw-tabs" ref={tabsRef} role="tablist">
@@ -953,7 +1214,8 @@ export default function ClientWorkspace({
                   <button className="cw-tile" data-tone="green" style={cssVars({ "--i": 0 })} onClick={() => go("projects")}
                     {...tipOn(<TipCard title="Projects" rows={projRows((p) => `${p.status || "open"} · ${eur(projectValue(p))}`)} />)}>
                     <span className="cw-tile-top"><span className="cw-tile-ico"><Ico n="briefcase" s={15} /></span><span className="cw-tile-k">Projects</span></span>
-                    <b className="cw-tile-v"><Num v={projects.filter((p) => p.status !== "closed").length} /><small> open of {projects.length}</small></b>
+                    <b className="cw-tile-v"><Num v={openValue} /><small> €</small></b>
+                    <span className="cw-tile-sub">{openProjects.length} open of {projects.length}{projects.length > openProjects.length ? ` · ${eur(totals.value)} in all` : ""}</span>
                     <span className="cw-tile-bar"><span style={{ width: `${donePct}%` }} /></span>
                   </button>
                   <button className="cw-tile" data-tone="violet" style={cssVars({ "--i": 1 })} onClick={() => go("contract")}
@@ -962,17 +1224,25 @@ export default function ClientWorkspace({
                       ["Active products", activeLines.length ? String(activeLines.length) : ""],
                       ["Next renewal", nextRenewal ? `${fmtD(nextRenewal.end)} · in ${nextRenewal.left}d` : ""],
                     ]} />)}>
-                    <span className="cw-tile-top"><span className="cw-tile-ico"><Ico n="contract" s={15} /></span><span className="cw-tile-k">Contract</span></span>
-                    <b className="cw-tile-v">{recurringYear > 0 ? <><Num v={recurringYear} /><small> € / year</small></> : <><Num v={totals.value + oneTime} /><small> €</small></>}</b>
+                    <span className="cw-tile-top"><span className="cw-tile-ico"><Ico n="repeat" s={15} /></span><span className="cw-tile-k">Recurring</span></span>
+                    <b className="cw-tile-v"><Num v={recurringYear} /><small> € / year</small></b>
+                    <span className="cw-tile-sub">{activeLines.filter((l) => l.recurring).length ? `${activeLines.filter((l) => l.recurring).length} subscription${activeLines.filter((l) => l.recurring).length === 1 ? "" : "s"}` : "No subscriptions"}</span>
                   </button>
-                  <button className={`cw-tile ${lateTasks.length ? "is-alert" : ""}`} data-tone="amber" style={cssVars({ "--i": 2 })} onClick={() => go("tasks")}
+                  <button className="cw-tile" data-tone="pink" style={cssVars({ "--i": 2 })} onClick={() => go("contract")}
+                    {...tipOn(<TipCard title="Sales contract" sub="Signed products over their term, plus one-offs and set-up fees"
+                      rows={activeLines.map((l) => [l.name, eur(lineContract(l))] as [string, React.ReactNode])} />)}>
+                    <span className="cw-tile-top"><span className="cw-tile-ico"><Ico n="contract" s={15} /></span><span className="cw-tile-k">Sales contract</span></span>
+                    <b className="cw-tile-v"><Num v={contractValue} /><small> €</small></b>
+                    <span className="cw-tile-sub">{activeLines.length ? `${activeLines.length} signed product${activeLines.length === 1 ? "" : "s"}${nextRenewal ? ` · renews ${fmtD(nextRenewal.end)}` : ""}` : "Nothing signed yet"}</span>
+                  </button>
+                  <button className={`cw-tile ${lateTasks.length ? "is-alert" : ""}`} data-tone="amber" style={cssVars({ "--i": 3 })} onClick={() => go("tasks")}
                     {...tipOn(openTasks.length
                       ? <TipCard title={`${openTasks.length} open task${openTasks.length === 1 ? "" : "s"}`} rows={openTasks.slice(0, 5).map((t) => [plain(t.title).slice(0, 38), dueInfo(t.due_at)?.label ?? "No date"] as [string, React.ReactNode])} />
                       : <TipCard title="No open tasks" />)}>
                     <span className="cw-tile-top"><span className="cw-tile-ico"><Ico n="tasks" s={15} /></span><span className="cw-tile-k">Tasks</span></span>
                     <b className="cw-tile-v"><Num v={openTasks.length} /><small> open{lateTasks.length ? <em> · {lateTasks.length} late</em> : null}</small></b>
                   </button>
-                  <button className="cw-tile" data-tone="blue" style={cssVars({ "--i": 3 })} onClick={() => go("notes")}
+                  <button className="cw-tile" data-tone="blue" style={cssVars({ "--i": 4 })} onClick={() => go("notes")}
                     {...tipOn(allNotes[0] ? <TipCard title={people[allNotes[0].author_id ?? ""] ?? "Note"} sub={`${fmt(allNotes[0].created_at)} · ${ago(allNotes[0].created_at)}`}>{plain(allNotes[0].body)}</TipCard> : null)}>
                     <span className="cw-tile-top"><span className="cw-tile-ico"><Ico n="note" s={15} /></span><span className="cw-tile-k">Latest note</span></span>
                     <span className="cw-tile-note">{allNotes[0] ? plain(allNotes[0].body) : "No notes yet"}</span>
@@ -989,7 +1259,34 @@ export default function ClientWorkspace({
                         {persons.length > PEOPLE_LIMIT && (
                           <label className="cw-search"><Ico n="search" s={14} /><input value={peopleQ} placeholder="Search people" onChange={(e) => setPeopleQ(e.target.value)} /></label>
                         )}
+                        <button className="cw-btn-primary is-sm" onClick={() => { setAddPersonErr(null); setAddPerson((v) => (v ? null : { first: "", last: "", position: "", email: "", phone: "", billing: false })); }}>
+                          <Ico n={addPerson ? "x" : "plus"} s={14} />{addPerson ? "Cancel" : "Add"}
+                        </button>
                       </SecHead>
+                      <div className={`cw-reveal ${addPerson ? "is-on" : ""}`} aria-hidden={!addPerson}>
+                        <div className="cw-reveal-in">
+                          {addPerson && (
+                            <div className="cw-logform cw-addp">
+                              <div className="cw-addp-grid">
+                                <label><span>First name</span><input autoFocus value={addPerson.first} onChange={(e) => setAddPerson({ ...addPerson, first: e.target.value })} /></label>
+                                <label><span>Last name</span><input value={addPerson.last} onChange={(e) => setAddPerson({ ...addPerson, last: e.target.value })} /></label>
+                                <label><span>Position</span><input value={addPerson.position} placeholder="e.g. CFO" onChange={(e) => setAddPerson({ ...addPerson, position: e.target.value })} /></label>
+                                <label><span>Email</span><input type="email" value={addPerson.email} onChange={(e) => setAddPerson({ ...addPerson, email: e.target.value })} /></label>
+                                <label><span>Phone</span><input type="tel" value={addPerson.phone} placeholder="+34 600 000 000" onChange={(e) => setAddPerson({ ...addPerson, phone: e.target.value })}
+                                  onKeyDown={(e) => { if (e.key === "Enter" && !addPersonBusy) void savePerson(); }} /></label>
+                                <button type="button" className={`cw-addp-bill ${addPerson.billing ? "is-on" : ""}`} onClick={() => setAddPerson({ ...addPerson, billing: !addPerson.billing })}>
+                                  <i>{addPerson.billing && <Ico n="check" s={11} />}</i>Billing contact
+                                </button>
+                              </div>
+                              {addPersonErr && <p className="cw-err">{addPersonErr}</p>}
+                              <div className="cw-logactions">
+                                <span className="cw-addp-note">{co.id ? `Saved to ${str(co.name) || "the company"} in Contacts` : "Saved on this client"}</span>
+                                <button className="cw-btn-primary is-sm" disabled={addPersonBusy || !addPerson.first.trim()} onClick={() => void savePerson()}>{addPersonBusy ? "Saving…" : "Save contact"}</button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
                       {persons.length === 0 ? (
                         <div className="cw-empty"><Ico n="users" s={20} /><p>{loaded ? "No contacts on file for this client." : "Loading contacts…"}</p></div>
                       ) : (
@@ -1058,7 +1355,7 @@ export default function ClientWorkspace({
                       </div>
 
                       {touches.length > 0 && (
-                        <ol className="cw-timeline">
+                        <ol className={`cw-timeline ${historyAll ? "is-all" : ""}`}>
                           {(historyAll ? touches : touches.slice(0, 4)).map((t, i) => (
                             <li key={`${t.at}-${i}`} data-kind={t.kind} style={cssVars({ "--i": i })}
                               {...tipOn(<TipCard title={t.who} sub={`${t.kind} · ${fmt(t.at)} · ${ago(t.at)}`}>{t.why}</TipCard>)}>
@@ -1190,10 +1487,18 @@ export default function ClientWorkspace({
                 </section>
 
                 <section className="cw-card">
-                  <SecHead icon="contract" tone="violet" title="Signed products" sub={lines.length ? `${activeLines.length} active` : "Added when a deal is won"} />
-                  {lines.length === 0 ? (
-                    <div className="cw-empty"><Ico n="contract" s={20} /><p>{loaded ? "No signed products yet." : "Loading…"}</p></div>
-                  ) : (
+                  <SecHead icon="contract" tone="violet" title="Signed products" sub={lines.length ? `${activeLines.length} active` : "Added when a deal is won, or by hand"}>
+                    {lines.length > 0 && (
+                      <button className="cw-btn-primary is-sm" onClick={() => setAddLine((v) => !v)}><Ico n={addLine ? "x" : "plus"} s={14} />{addLine ? "Cancel" : "Add product"}</button>
+                    )}
+                  </SecHead>
+                  {addLine && <AddLineForm clientId={client.id} persons={persons} onCancel={() => setAddLine(false)} onSaved={async () => { setAddLine(false); await reloadLines(); }} />}
+                  {lines.length === 0 ? (!addLine && (
+                    <button className="cw-empty is-action" onClick={() => setAddLine(true)} disabled={!loaded}>
+                      <span className="cw-empty-plus"><Ico n="plus" s={18} /></span>
+                      <p>{loaded ? <><b>No signed products yet</b><small>Add a signed contract with one of your products</small></> : "Loading…"}</p>
+                    </button>
+                  )) : (
                     <div className="cw-lines">
                       {lines.map((l, i) => {
                         const term = termOf(l);
@@ -1222,6 +1527,58 @@ export default function ClientWorkspace({
                               <span className="cw-line-price"><b>{eur(lineTotal(l))}{l.recurring && <em> / {per}</em>}</b></span>
                               <span className={`cw-status ${isActive(l) ? "is-open" : "is-closed"}`}><i />{l.status || "active"}</span>
                             </div>
+                            {Array.isArray(l.breakdown?.rows) && l.breakdown.rows.length > 0 && (
+                              <div className="cw-line-bd">
+                                {l.breakdown.rows.map((r: any, j: number) => (
+                                  <div key={j}>
+                                    <span>{r.label}{r.detail ? <em> {r.detail}</em> : null}</span>
+                                    <b>{eur(Number(r.amount) || 0)}{Number(r.discount) ? <i> −{eur(Number(r.discount))}</i> : null}</b>
+                                  </div>
+                                ))}
+                                <div className="is-total">
+                                  <span>{l.breakdown.version ? `Sold as ${l.breakdown.version}` : "Sold"}{l.breakdown.multiplier ? ` · ${l.breakdown.multiplier}` : ""}</span>
+                                  <b>{eur(Number(l.breakdown.total) || 0)}</b>
+                                </div>
+                              </div>
+                            )}
+                            {l.recurring && (Number(l.term_years) || 0) > 1 && (() => {
+                              const sc = scheduleOf(l);
+                              const ts = termsOf(l, sc);
+                              const editing = schedEdit?.id === l.id;
+                              const s0 = str(l.start_date) || str(l.signing_date);
+                              const el = s0 ? (Date.now() - toDate(s0).getTime()) / (365.25 * DAY) : -1;
+                              return (
+                                <div className="cw-line-sched" onMouseEnter={hideTip}>
+                                  {!editing ? (
+                                    <div className="cw-line-terms">
+                                      {sc && sc.count > 1 ? ts.map((t) => (
+                                        <span key={t.i} className={el >= t.from && el < t.from + t.len ? "is-now" : ""}>
+                                          <i>T{t.i + 1}</i>{eur(t.unit)}<em>/{per}</em>{t.inc ? <small>+{t.inc}%</small> : null}
+                                        </span>
+                                      )) : <span className="is-plain">Paid as one {l.term_years}-year term</span>}
+                                      <button className="cw-linkbtn" onClick={() => { setSchedErr(null); setSchedEdit({ id: l.id, v: sc ?? { count: 1, increases: [] } }); }}>
+                                        {sc && sc.count > 1 ? "Edit terms" : "Split into terms"}<Ico n="arrow" s={12} />
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <>
+                                      <ScheduleEditor years={Number(l.term_years) || 1} unit={lineTotal(l)} per={per} value={schedEdit.v} onChange={(v) => setSchedEdit({ id: l.id, v })} />
+                                      {schedErr && <p className="cw-err">{schedErr}</p>}
+                                      <div className="cw-logactions">
+                                        <button className="cw-ghost" onClick={() => setSchedEdit(null)}>Cancel</button>
+                                        <button className="cw-btn-primary is-sm" onClick={async () => {
+                                          const v = schedEdit.v.count > 1 || schedEdit.v.increases.some(Boolean) ? schedEdit.v : null;
+                                          const { error } = await supabase.from("client_products").update({ schedule: v }).eq("id", l.id);
+                                          if (error) { setSchedErr(/schedule/i.test(error.message) ? "Run client_terms.sql in Supabase first." : error.message); return; }
+                                          setLines((xs) => xs.map((x) => (x.id === l.id ? { ...x, schedule: v } : x)));
+                                          setSchedEdit(null);
+                                        }}>Save terms</button>
+                                      </div>
+                                    </>
+                                  )}
+                                </div>
+                              );
+                            })()}
                             {term && (
                               <div className="cw-term">
                                 <div className="cw-term-bar"><span style={{ width: `${term.pct * 100}%` }} /></div>
@@ -1281,9 +1638,7 @@ export default function ClientWorkspace({
                   ))}
                 </div>
 
-                {deals.length === 0 ? (
-                  <p className="cw-hint"><Ico n="flag" s={14} /> {loaded ? "Tasks live on the client's sales deals, and this client has none yet." : "Loading…"}</p>
-                ) : (
+                {(
                   <section className={`cw-card cw-tadd ${taskDraft.trim() ? "is-typing" : ""}`}>
                     <div className="cw-tadd-row">
                       <span className="cw-tadd-ico"><Ico n="plus" s={15} /></span>
@@ -1298,9 +1653,8 @@ export default function ClientWorkspace({
                             {PRI.map((p) => <button key={p} data-p={p} className={taskPri === p ? "is-on" : ""} onClick={() => setTaskPri(p)}><i />{p}</button>)}
                           </div>
                           <span className="cw-tadd-date"><DatePicker value={taskDue} onChange={setTaskDue} placeholder="Due date" /></span>
-                          {deals.length > 1 && (
-                            <span className="cw-tadd-deal"><Select size="sm" aria-label="Deal" value={taskDeal} onChange={setTaskDeal} options={deals.map((d) => ({ value: d.id, label: d.name }))} /></span>
-                          )}
+                          <span className="cw-tadd-deal"><Select size="sm" aria-label="Where the task goes" value={taskDeal} onChange={setTaskDeal}
+                            options={[{ value: "client", label: "Client", hint: "General" }, ...deals.map((d) => ({ value: d.id, label: d.name, hint: "Sale" }))]} /></span>
                         </div>
                       </div>
                     </div>
@@ -1315,13 +1669,30 @@ export default function ClientWorkspace({
                     { v: "done", label: "Done", n: tasks.length - openTasks.length },
                     { v: "all", label: "All", n: tasks.length },
                   ]} />
+                  <Seg value={taskSrc} onChange={setTaskSrc} options={[
+                    { v: "all", label: "Everything" },
+                    { v: "client", label: "Client", n: tasks.filter((t) => t.src === "client").length },
+                    { v: "sale", label: "From sales", n: tasks.filter((t) => t.src !== "client").length },
+                  ]} />
                 </div>
 
                 {shownTasks.length === 0 ? (
                   <div className="cw-empty is-big"><Ico n="tasks" s={24} /><p>{taskFilter === "late" ? "Nothing overdue." : taskFilter === "done" ? "No finished tasks yet." : tasks.length ? "All caught up." : "No tasks for this client yet."}</p></div>
                 ) : (
+                  <>{sources.map((src) => {
+                    if (taskSrc !== "all" && (src.key === "client") !== (taskSrc === "client")) return null;
+                    const list = shownTasks.filter((t) => (src.key === "client" ? t.src === "client" : t.src !== "client" && t.tracking_id === src.key));
+                    if (!list.length) return null;
+                    const open = list.filter((t) => !t.done).length;
+                    return (
+                      <div className={`cw-sgroup ${src.key === "client" ? "is-client" : "is-sale"}`} key={src.key}>
+                        <h4 className="cw-sgroup-h">
+                          <span className="cw-sgroup-ico"><Ico n={src.key === "client" ? "briefcase" : "flag"} s={13} /></span>
+                          <b>{src.title}</b><em>{src.sub}</em>
+                          <i>{taskFilter === "done" ? `${list.length} done` : `${open} open`}</i>
+                        </h4>
                   <ul className="cw-tasks">
-                    {shownTasks.map((t, i) => {
+                    {list.map((t, i) => {
                       const due = dueInfo(t.due_at);
                       return (
                         <li key={t.id} className={`cw-task ${t.done ? "is-done" : ""}`} data-p={t.priority} style={cssVars({ "--i": i })}
@@ -1337,6 +1708,7 @@ export default function ClientWorkspace({
                             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
                           </button>
                           <p className="cw-task-title">{renderNoteBody(t.title)}</p>
+                          {t.src !== "client" && <span className="cw-badge is-violet">Sales</span>}
                           {t.kind === "process" && !t.done && <span className="cw-tprog"><span><i style={{ width: `${t.progress ?? 0}%` }} /></span></span>}
                           {due && !t.done && <span className={`cw-due is-${due.tone}`}>{due.label}</span>}
                           <span className="cw-task-people">{t.assignees.slice(0, 3).map((id) => <span key={id}><Avatar name={people[id] ?? "?"} size={22} /></span>)}</span>
@@ -1344,6 +1716,9 @@ export default function ClientWorkspace({
                       );
                     })}
                   </ul>
+                      </div>
+                    );
+                  })}</>
                 )}
               </div>
             )}
@@ -1377,8 +1752,11 @@ export default function ClientWorkspace({
                 {noteGroups.length === 0 ? (
                   <div className="cw-empty is-big"><Ico n="note" s={24} /><p>{allNotes.length ? "No notes match." : "No notes yet. Write the first one above."}</p></div>
                 ) : noteGroups.map((g) => (
-                  <div className="cw-ngroup" key={g.label}>
-                    <h4 className="cw-ngroup-h">{g.label}</h4>
+                  <div className={`cw-ngroup cw-sgroup ${g.key === "client" ? "is-client" : "is-sale"}`} key={g.key}>
+                    <h4 className="cw-sgroup-h">
+                      <span className="cw-sgroup-ico"><Ico n={g.key === "client" ? "briefcase" : "flag"} s={13} /></span>
+                      <b>{g.label}</b><em>{g.sub}</em><i>{g.items.length} note{g.items.length === 1 ? "" : "s"}</i>
+                    </h4>
                     <ol className="cw-nlist">
                       {g.items.map((n, i) => {
                         const who = people[n.author_id ?? ""] ?? (n.src === "sale" ? "Sales" : "Unknown");
@@ -1414,22 +1792,7 @@ export default function ClientWorkspace({
 
             {/* ===== DOCS ===== */}
             {tab === "docs" && (
-              <div className="cw-docs">
-                <div className="cw-docs-left">
-                  <section className="cw-card">
-                    <SecHead icon="file" tone="blue" title="From the sale" sub="Attached during the sales tracking" />
-                    {trackFiles.length === 0 ? <div className="cw-empty"><Ico n="file" s={20} /><p>No files were attached during the sale.</p></div> : (
-                      <div className="cw-trackfiles">
-                        {trackFiles.map((f, i) => (
-                          <div className="cw-tf" key={f.id} style={cssVars({ "--i": i })} {...tipOn(<TipCard title={f.name} sub={`Added ${fmt(f.created_at)}`}>{f.note}</TipCard>)}>
-                            <span className="cw-tf-kind" style={cssVars({ "--h": hue((f.name.split(".").pop() ?? "").toLowerCase()) })}>{(f.name.split(".").pop() ?? "•").slice(0, 4).toUpperCase()}</span>
-                            <span className="cw-tf-t"><b>{f.name}</b></span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </section>
-                </div>
+              <div className="cw-docs is-solo">
                 <div className="cw-docs-right">
                   <h3 className="cw-dir-title"><Ico n="folder" s={15} />Client directory</h3>
                   <ClientDirectory clientId={client.id} tenantId={tenantId} />

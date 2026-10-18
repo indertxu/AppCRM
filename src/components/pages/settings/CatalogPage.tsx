@@ -319,7 +319,7 @@ const VAR_TYPES: { value: CalcVarType; label: string; hint: string }[] = [
   { value: "percent",   label: "% of base", hint: "a percentage of the base amount" },
 ];
 
-function CalculatorEditor({ calc, onChange, ownerType, basePrice, unit, currencySuffix }: {
+function CalculatorEditor({ calc, onChange, ownerType, basePrice, unit, currencySuffix, rates = [] }: {
   calc: Calculator | null | undefined;
   onChange: (c: Calculator | null) => void;
   ownerType: "product" | "service";
@@ -328,6 +328,8 @@ function CalculatorEditor({ calc, onChange, ownerType, basePrice, unit, currency
   /** Rate unit for services: "hour" or "day". Ignored for products. */
   unit?: "hour" | "day";
   currencySuffix?: string;
+  /** Services: the role rates set above, offered as the supervision rate. */
+  rates?: { label: string; price: number; supervision?: boolean }[];
 }) {
   const isService = ownerType === "service";
   const unitWord = unit === "hour" ? "hours" : "days";
@@ -358,6 +360,13 @@ function CalculatorEditor({ calc, onChange, ownerType, basePrice, unit, currency
     onChange({ ...calc, variables: calc.variables.map((v, j) => (j === i ? { ...v, ...patch } : v)) });
   const addVar = () => onChange({ ...calc, variables: [...calc.variables, emptyCalcVariable(calc.variables.length)] });
   const removeVar = (i: number) => onChange({ ...calc, variables: calc.variables.filter((_, j) => j !== i) });
+  // Only one variable can carry the supervision days.
+  const setSupervision = (i: number, on: boolean) => {
+    const pm = rates.find((r) => r.supervision);
+    onChange({ ...calc, variables: calc.variables.map((v, j) => (j === i
+      ? { ...v, is_supervision: on, rate: on ? (v.rate ?? pm?.price ?? null) : v.rate }
+      : on ? { ...v, is_supervision: false } : v)) });
+  };
 
   const key = (v: CalcVariable, i: number) => v.id ?? String(i);
   // The result shown below uses each variable's default value.
@@ -488,6 +497,39 @@ function CalculatorEditor({ calc, onChange, ownerType, basePrice, unit, currency
                 </label>
               )}
             </div>
+
+            {isQty && (
+              <div className={`cat-calc-sup ${v.is_supervision ? "is-on" : ""}`}>
+                <button type="button" role="switch" aria-checked={!!v.is_supervision} className={`cat-calc-sup-switch ${v.is_supervision ? "on" : ""}`}
+                  onClick={() => setSupervision(i, !v.is_supervision)}><i /></button>
+                <div className="cat-calc-sup-txt">
+                  <b>Supervision</b>
+                  <span>{v.is_supervision
+                    ? `The ${unitWord} this adds become the project's supervision ${unitWord}, billed at the rate below. The rest is consultancy.`
+                    : `Mark it if the ${unitWord} this adds are project management / supervision.`}</span>
+                </div>
+                {v.is_supervision && (
+                  <div className="cat-calc-sup-rate">
+                    <div className="cat-price-input">
+                      <span>€</span>
+                      <input type="number" min="0" className="cat-nospin" value={v.rate ?? ""} placeholder="Line rate"
+                        onFocus={(e) => e.target.select()}
+                        onChange={(e) => setVar(i, { rate: e.target.value === "" ? null : Number(e.target.value) || 0 })} />
+                      <em>/{unit === "hour" ? "h" : "d"}</em>
+                    </div>
+                    {rates.length > 0 && (
+                      <div className="cat-calc-sup-chips">
+                        {rates.map((r) => (
+                          <button type="button" key={r.label} className={Number(v.rate) === r.price ? "on" : ""} onClick={() => setVar(i, { rate: r.price })}>
+                            {r.label} · {money(r.price)}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         );
       })}
@@ -660,6 +702,7 @@ function ServiceEditor({ service, blueprints, roles, onClose, onSaved, onDeleted
             ownerType="service"
             basePrice={0}
             unit={s.rate_unit}
+            rates={s.roles.map((r) => ({ label: roleName(r.role_id) || "Role", price: Number(r.price) || 0, supervision: !!roles.find((x) => x.id === r.role_id)?.isSupervision }))}
           />
           </section>
 

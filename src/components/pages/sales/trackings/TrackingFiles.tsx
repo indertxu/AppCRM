@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type DragEvent } from "react";
 import { supabase } from "../../../api/supabase";
 import Select from "../../../framework/Select";
 import "./TrackingFiles.css";
@@ -14,7 +14,13 @@ interface TFile {
   mime: string | null;
   size_bytes: number | null;
   created_at: string;
+  /** Set when the file belongs to one version of a revenue line (handoff_v2.sql). */
+  line_id?: string | null;
+  line_kind?: "product" | "service" | null;
+  /** False once handed off (copied to the client) or excluded from the handoff. */
+  share_client?: boolean | null;
 }
+export type { TFile };
 
 interface Props {
   trackingId: string;
@@ -24,7 +30,7 @@ interface Props {
 
 const BUCKET = "tracking-files";
 
-const prettySize = (b: number | null) => {
+export const prettySize = (b: number | null) => {
   if (!b) return "";
   if (b < 1024) return `${b} B`;
   if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)} KB`;
@@ -32,7 +38,7 @@ const prettySize = (b: number | null) => {
 };
 
 /** A little glyph per file kind. */
-const kindOf = (name: string, mime: string | null): string => {
+export const kindOf = (name: string, mime: string | null): string => {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
   if (ext === "pdf" || mime === "application/pdf") return "PDF";
   if (["doc", "docx"].includes(ext)) return "DOC";
@@ -52,7 +58,7 @@ const KIND_FA: Record<string, string> = {
   PDF: "fa-file-pdf", DOC: "fa-file-word", XLS: "fa-file-excel",
   PPT: "fa-file-powerpoint", IMG: "fa-file-image", ZIP: "fa-file-zipper",
 };
-function FileIcon({ kind }: { kind: string }) {
+export function FileIcon({ kind }: { kind: string }) {
   const color = KIND_COLOR[kind] ?? "#5a7d6d";
   const fa = KIND_FA[kind] ?? "fa-file-lines";
   return (
@@ -85,7 +91,8 @@ export default function TrackingFiles({ trackingId, phaseId, phases = [] }: Prop
     supabase.from("tracking_files").select("*")
       .eq("tracking_id", trackingId)
       .order("created_at", { ascending: false })
-      .then(({ data }) => { if (alive) setFiles((data ?? []) as TFile[]); });
+      // Version documents live on their revenue line, not in this list.
+      .then(({ data }) => { if (alive) setFiles(((data ?? []) as TFile[]).filter((f) => !f.line_id)); });
     return () => { alive = false; };
   }, [trackingId]);
 
@@ -306,6 +313,125 @@ export default function TrackingFiles({ trackingId, phaseId, phases = [] }: Prop
           </div>
         </div>
       )}
+    </div>
+  );
+}
+/** Opens a sales document in a new tab. */
+export async function openTrackingFile(path: string, bucket = BUCKET) {
+  const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, 120);
+  if (error || !data) { alert(error?.message ?? "Could not open file."); return; }
+  window.open(data.signedUrl, "_blank");
+}
+
+/** Every document on a deal, version documents included (for the handoff). */
+export async function loadAllTrackingFiles(trackingId: string): Promise<TFile[]> {
+  const { data } = await supabase.from("tracking_files").select("*").eq("tracking_id", trackingId).order("created_at", { ascending: false });
+  return (data ?? []) as TFile[];
+}
+
+/**
+ * Contract proposals for ONE version of a revenue line (product or service).
+ * Each version keeps its own PDF / Word / Excel files; they travel with the
+ * handoff to the client's contract slots.
+ */
+export function LineDocs({ trackingId, lineId, lineKind, phaseId, versionLabel }: {
+  trackingId: string; lineId: string; lineKind: "product" | "service"; phaseId: string | null; versionLabel: string;
+}) {
+  const [files, setFiles] = useState<TFile[]>([]);
+  const [over, setOver] = useState(false);
+  const [busy, setBusy] = useState(0);
+  const [err, setErr] = useState<string | null>(null);
+  const [confirmDel, setConfirmDel] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setFiles([]); setErr(null);
+    supabase.from("tracking_files").select("*").eq("line_id", lineId).order("created_at", { ascending: true })
+      .then(({ data }) => { if (alive) setFiles((data ?? []) as TFile[]); });
+    return () => { alive = false; };
+  }, [lineId]);
+
+  const upload = async (list: FileList | File[]) => {
+    const arr = Array.from(list);
+    if (!arr.length) return;
+    setErr(null); setBusy((n) => n + arr.length);
+    const { data: tr } = await supabase.from("trackings").select("tenant_id").eq("id", trackingId).maybeSingle();
+    const tenantId = (tr as any)?.tenant_id;
+    if (!tenantId) { setErr("Could not resolve the workspace — try again."); setBusy((n) => n - arr.length); return; }
+    await Promise.all(arr.map(async (f) => {
+      try {
+        const safe = f.name.replace(/[^\w.\-]+/g, "_");
+        const path = `${tenantId}/${trackingId}/${crypto.randomUUID()}_${safe}`;
+        const up = await supabase.storage.from(BUCKET).upload(path, f, { contentType: f.type || undefined, upsert: false });
+        if (up.error) { setErr(up.error.message); return; }
+        const { data, error } = await supabase.from("tracking_files").insert({
+          tracking_id: trackingId, phase_id: phaseId, storage_path: path, name: f.name,
+          mime: f.type || null, size_bytes: f.size, line_id: lineId, line_kind: lineKind,
+        }).select().single();
+        if (error) {
+          await supabase.storage.from(BUCKET).remove([path]);
+          setErr(/line_id|line_kind|column/i.test(error.message) ? "Run handoff_v2.sql in Supabase to enable version documents." : error.message);
+          return;
+        }
+        setFiles((xs) => [...xs, data as TFile]);
+      } finally { setBusy((n) => n - 1); }
+    }));
+    if (inputRef.current) inputRef.current.value = "";
+  };
+
+  const remove = async (f: TFile) => {
+    setConfirmDel(null);
+    setFiles((xs) => xs.filter((x) => x.id !== f.id));
+    await supabase.storage.from(BUCKET).remove([f.storage_path]);
+    await supabase.from("tracking_files").delete().eq("id", f.id);
+  };
+
+  const drop = {
+    onDragOver: (e: DragEvent) => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setOver(true); } },
+    onDragLeave: (e: DragEvent) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOver(false); },
+    onDrop: (e: DragEvent) => { e.preventDefault(); setOver(false); if (e.dataTransfer.files.length) upload(e.dataTransfer.files); },
+  };
+
+  return (
+    <div className={`tf-line ${over ? "is-over" : ""} ${files.length ? "has-files" : ""}`} {...drop}>
+      <div className="tf-line-head">
+        <span className="tf-line-t">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6" /></svg>
+          Proposal documents <em>{versionLabel}</em>
+        </span>
+        <button type="button" className="tf-line-add" onClick={() => inputRef.current?.click()}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
+          Add
+        </button>
+      </div>
+      {files.length === 0 && busy === 0 ? (
+        <button type="button" className="tf-line-drop" onClick={() => inputRef.current?.click()}>
+          Drop the PDF, Word or Excel proposal for this version
+        </button>
+      ) : (
+        <div className="tf-line-list">
+          {files.map((f) => (
+            <div className="tf-line-file" key={f.id} title={f.name}>
+              <FileIcon kind={kindOf(f.name, f.mime)} />
+              <button type="button" className="tf-line-name" onClick={() => openTrackingFile(f.storage_path)}>{f.name}</button>
+              <span className="tf-line-size">{prettySize(f.size_bytes)}</span>
+              {confirmDel === f.id ? (
+                <span className="tf-line-confirm">
+                  <button type="button" className="is-del" onClick={() => remove(f)}>Delete</button>
+                  <button type="button" onClick={() => setConfirmDel(null)}>Keep</button>
+                </span>
+              ) : (
+                <button type="button" className="tf-line-x" onClick={() => setConfirmDel(f.id)} aria-label={`Remove ${f.name}`}>×</button>
+              )}
+            </div>
+          ))}
+          {busy > 0 && <div className="tf-line-file is-busy"><span className="tf-line-spin" />Uploading {busy}…</div>}
+        </div>
+      )}
+      {err && <p className="tf-line-err">{err}</p>}
+      <input ref={inputRef} type="file" multiple hidden accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.odt,.ods,image/*"
+        onChange={(e) => e.target.files && upload(e.target.files)} />
     </div>
   );
 }

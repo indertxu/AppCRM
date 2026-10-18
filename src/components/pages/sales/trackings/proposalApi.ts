@@ -65,14 +65,53 @@ export async function resolveBrandAssets(t: ProposalTemplate): Promise<ProposalT
       assets[k] = b64.replace(/^data:/, ""); // "image/png;base64,…"
     } catch { assets[k] = undefined; }
   }));
+  // The generators read PNG / JPEG only: anything else (SVG, WebP, GIF…) is drawn to a PNG first.
+  await Promise.all(Object.keys(assets).map(async (k) => {
+    const v = assets[k];
+    if (!v || /^image\/(png|jpe?g);base64,/i.test(v)) return;
+    assets[k] = (await toPng(`data:${v.replace(/^data:/, "")}`).catch(() => null)) ?? undefined;
+  }));
   return { ...t, brand: { ...t.brand, assets: assets as any } };
+}
+
+/** Any image data URL → "image/png;base64,…" (browser only). */
+async function toPng(src: string): Promise<string | null> {
+  if (typeof document === "undefined") return null;
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  await new Promise<void>((ok, bad) => { img.onload = () => ok(); img.onerror = () => bad(new Error("image")); img.src = src; });
+  const w = img.naturalWidth || 600, h = img.naturalHeight || 200;
+  const scale = Math.min(1, 1600 / Math.max(w, h));
+  const c = document.createElement("canvas");
+  c.width = Math.max(1, Math.round(w * scale)); c.height = Math.max(1, Math.round(h * scale));
+  c.getContext("2d")!.drawImage(img, 0, 0, c.width, c.height);
+  return c.toDataURL("image/png").replace(/^data:/, "");
 }
 
 const safeName = (s: string) => s.replace(/[^\w\-]+/g, "_").slice(0, 60);
 
+/** Colours as the generators want them ("0A6F4D": no "#", 6 digits) and fonts / colours always present. */
+const DEFAULT_COLORS = { primary: "0A6F4D", accent: "12B57F", mint: "86EFC0", ink: "0B241A", muted: "5A7D6D", light: "F4F9F6" };
+const hex6 = (v: unknown, fb: string) => {
+  let h = String(v ?? "").trim().replace(/^#/, "");
+  if (/^[0-9a-f]{3}$/i.test(h)) h = h.split("").map((c) => c + c).join("");
+  return /^[0-9a-f]{6}$/i.test(h) ? h.toUpperCase() : fb;
+};
+export function normalizeTemplate(t: ProposalTemplate): ProposalTemplate {
+  const b: any = t.brand ?? {};
+  const c: any = b.colors ?? {};
+  const colors = Object.fromEntries(Object.entries(DEFAULT_COLORS).map(([k, fb]) => [k, hex6(c[k], fb)])) as typeof DEFAULT_COLORS;
+  return {
+    ...t,
+    sections: Array.isArray(t.sections) ? t.sections : [],
+    terms: t.terms ?? {},
+    brand: { ...b, company: String(b.company ?? "").trim() || "Proposal", colors, fonts: { heading: b.fonts?.heading || "Arial", body: b.fonts?.body || "Arial" } },
+  };
+}
+
 /** Generate and download a proposal in the requested format. */
 export async function generateProposal(kind: "pptx" | "pdf", data: ProposalData, template: ProposalTemplate) {
-  const t = await resolveBrandAssets(template);
+  const t = await resolveBrandAssets(normalizeTemplate(template));
   const base = `${safeName(t.brand.company)}-Propuesta-${safeName(data.client.name)}`;
   if (kind === "pptx") {
     const mod: any = await import("pptxgenjs");

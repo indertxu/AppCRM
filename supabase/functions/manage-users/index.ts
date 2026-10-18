@@ -6,14 +6,243 @@ const ANON = Deno.env.get("SUPABASE_ANON_KEY")!;
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, content-type, apikey, x-client-info",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "authorization, content-type, apikey, x-client-info, x-api-key",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
 };
 const json = (o: unknown, status = 200) =>
   new Response(JSON.stringify(o), { status, headers: { ...cors, "Content-Type": "application/json" } });
 
+/* =====================================================================
+   Client files API  —  /functions/v1/manage-users/api/...
+   Auth: header  x-api-key: fck_...   (keys made in Settings → Client page)
+   Read keys list and download; write keys also upload, replace, rename,
+   move and delete files and folders. Scoped to the key's workspace and,
+   when the key lists clients, to those clients only.
+   ===================================================================== */
+const BUCKET = "client-files";
+const sha256 = async (t: string) =>
+  Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t))))
+    .map((b) => b.toString(16).padStart(2, "0")).join("");
+const safeName = (n: string) => n.replace(/[^\w.\-]+/g, "_");
+
+async function handleApi(req: Request, route: string): Promise<Response> {
+  const admin = createClient(URL, SERVICE);
+  const raw = req.headers.get("x-api-key") ?? (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
+  if (!raw || !raw.startsWith("fck_")) return json({ error: "Missing API key (x-api-key header)." }, 401);
+  const { data: key } = await admin.from("client_api_keys").select("*").eq("key_hash", await sha256(raw)).maybeSingle();
+  if (!key || key.revoked_at) return json({ error: "Invalid or revoked API key." }, 401);
+  if (key.expires_at && new Date(key.expires_at).getTime() < Date.now()) return json({ error: "This API key has expired." }, 401);
+  admin.from("client_api_keys").update({ last_used_at: new Date().toISOString() }).eq("id", key.id).then(() => {});
+
+  const tenant = key.tenant_id as string;
+  const canWrite = key.access === "write";
+  const allowed: string[] | null = Array.isArray(key.client_ids) && key.client_ids.length ? key.client_ids.map(String) : null;
+  const m = req.method.toUpperCase();
+  const url = new globalThis.URL(req.url);
+  const seg = route.split("/").filter(Boolean).map(decodeURIComponent);
+  if (m !== "GET" && !canWrite) return json({ error: "This API key is read-only." }, 403);
+
+  // inserts carry tenant_id when the table has it
+  const ins = async (table: string, row: Record<string, unknown>) => {
+    let r = await admin.from(table).insert({ ...row, tenant_id: tenant }).select().single();
+    if (r.error && /tenant_id/i.test(r.error.message)) r = await admin.from(table).insert(row).select().single();
+    return r;
+  };
+
+  // GET /clients
+  if (seg[0] === "clients" && seg.length === 1 && m === "GET") {
+    let q = admin.from("clients").select("id, name").eq("tenant_id", tenant).order("name");
+    if (allowed) q = q.in("id", allowed);
+    const { data, error } = await q;
+    if (error) return json({ error: error.message }, 400);
+    return json({ clients: data });
+  }
+  if (seg[0] !== "clients" || !seg[1]) return json({ error: "Unknown endpoint. See Settings → Client page → API." }, 404);
+
+  const cid = seg[1];
+  if (allowed && !allowed.includes(cid)) return json({ error: "This key has no access to that client." }, 403);
+  const { data: client } = await admin.from("clients").select("id, name, tenant_id").eq("id", cid).maybeSingle();
+  if (!client || String(client.tenant_id) !== String(tenant)) return json({ error: "Client not found." }, 404);
+
+  const { data: fRows } = await admin.from("client_folders").select("id, parent_id, name, sort").eq("client_id", cid);
+  const folders = (fRows ?? []) as { id: string; parent_id: string | null; name: string; sort: number }[];
+  const byId = new Map(folders.map((f) => [f.id, f]));
+  const pathOf = (id: string | null): string => {
+    const parts: string[] = []; let cur = id ? byId.get(id) : undefined; let guard = 0;
+    while (cur && guard++ < 50) { parts.unshift(cur.name); cur = cur.parent_id ? byId.get(cur.parent_id) : undefined; }
+    return parts.join("/");
+  };
+  // folder by id, or by "A/B/C" path (created when create = true)
+  const resolveFolder = async (idOrPath: string | null, create: boolean): Promise<string | null | false> => {
+    if (!idOrPath) return null;
+    if (byId.has(idOrPath)) return idOrPath;
+    let parent: string | null = null;
+    for (const name of idOrPath.split("/").map((x) => x.trim()).filter(Boolean)) {
+      const hit = folders.find((f) => f.parent_id === parent && f.name.trim().toLowerCase() === name.toLowerCase());
+      if (hit) { parent = hit.id; continue; }
+      if (!create) return false;
+      const sort = folders.filter((f) => f.parent_id === parent).length;
+      const { data, error } = await ins("client_folders", { client_id: cid, parent_id: parent, name, sort });
+      if (error || !data) return false;
+      folders.push(data); byId.set(data.id, data); parent = data.id;
+    }
+    return parent;
+  };
+  const fileOut = (f: any) => ({
+    id: f.id, name: f.name, folder_id: f.folder_id, folder: pathOf(f.folder_id), mime: f.mime, size: f.size_bytes, note: f.note, created_at: f.created_at,
+  });
+  const getFile = async (id: string) => {
+    const { data } = await admin.from("client_files").select("*").eq("id", id).eq("client_id", cid).maybeSingle();
+    return data as any;
+  };
+
+  // GET /clients/:id/tree
+  if (seg[2] === "tree" && m === "GET") {
+    const { data: files } = await admin.from("client_files").select("*").eq("client_id", cid).order("created_at", { ascending: false });
+    return json({
+      client: { id: client.id, name: client.name },
+      folders: folders.map((f) => ({ id: f.id, parent_id: f.parent_id, name: f.name, path: pathOf(f.id) })),
+      files: (files ?? []).map(fileOut),
+    });
+  }
+
+  // /clients/:id/files[/:fileId[/content]]
+  if (seg[2] === "files") {
+    const fid = seg[3];
+    if (!fid && m === "GET") {
+      const target = await resolveFolder(url.searchParams.get("folder"), false);
+      if (target === false) return json({ error: "Folder not found." }, 404);
+      let q = admin.from("client_files").select("*").eq("client_id", cid);
+      if (url.searchParams.has("folder")) q = target ? q.eq("folder_id", target) : q.is("folder_id", null);
+      const { data, error } = await q.order("created_at", { ascending: false });
+      if (error) return json({ error: error.message }, 400);
+      return json({ files: (data ?? []).map(fileOut) });
+    }
+    if (!fid && m === "POST") {
+      const name = url.searchParams.get("name") ?? "";
+      if (!name.trim()) return json({ error: "Add ?name=file.pdf" }, 400);
+      const folder = await resolveFolder(url.searchParams.get("folder"), true);
+      if (folder === false) return json({ error: "Could not find or create the folder." }, 400);
+      const body = new Uint8Array(await req.arrayBuffer());
+      if (!body.length) return json({ error: "Send the file bytes as the request body." }, 400);
+      const mime = req.headers.get("content-type") || "application/octet-stream";
+      const path = `${tenant}/${cid}/${crypto.randomUUID()}_${safeName(name)}`;
+      const up = await admin.storage.from(BUCKET).upload(path, body, { contentType: mime });
+      if (up.error) return json({ error: up.error.message }, 400);
+      const { data, error } = await ins("client_files", {
+        client_id: cid, folder_id: folder, storage_path: path, name: name.trim(), mime, size_bytes: body.length, note: url.searchParams.get("note"),
+      });
+      if (error) { await admin.storage.from(BUCKET).remove([path]); return json({ error: error.message }, 400); }
+      return json({ file: fileOut(data) }, 201);
+    }
+    if (!fid) return json({ error: "Method not allowed." }, 405);
+    const f = await getFile(fid);
+    if (!f) return json({ error: "File not found." }, 404);
+
+    if (m === "GET" && seg[4] === "content") {
+      const dl = await admin.storage.from(BUCKET).download(f.storage_path);
+      if (dl.error || !dl.data) return json({ error: dl.error?.message ?? "Could not read the file." }, 400);
+      return new Response(dl.data, { headers: { ...cors, "Content-Type": f.mime || "application/octet-stream",
+        "Content-Disposition": `attachment; filename="${String(f.name).replace(/"/g, "")}"` } });
+    }
+    if (m === "GET") {
+      const s = await admin.storage.from(BUCKET).createSignedUrl(f.storage_path, 600, { download: f.name });
+      if (url.searchParams.get("redirect") === "1" && s.data?.signedUrl) return Response.redirect(s.data.signedUrl, 302);
+      return json({ file: fileOut(f), download_url: s.data?.signedUrl ?? null, expires_in: 600 });
+    }
+    if (m === "PUT") {
+      const body = new Uint8Array(await req.arrayBuffer());
+      if (!body.length) return json({ error: "Send the new file bytes as the request body." }, 400);
+      const mime = req.headers.get("content-type") || f.mime || "application/octet-stream";
+      const path = `${tenant}/${cid}/${crypto.randomUUID()}_${safeName(f.name)}`;
+      const up = await admin.storage.from(BUCKET).upload(path, body, { contentType: mime });
+      if (up.error) return json({ error: up.error.message }, 400);
+      const { data, error } = await admin.from("client_files").update({ storage_path: path, mime, size_bytes: body.length }).eq("id", f.id).select().single();
+      if (error) { await admin.storage.from(BUCKET).remove([path]); return json({ error: error.message }, 400); }
+      await admin.storage.from(BUCKET).remove([f.storage_path]);
+      return json({ file: fileOut(data) });
+    }
+    if (m === "PATCH") {
+      const b = await req.json().catch(() => ({}));
+      const patch: Record<string, unknown> = {};
+      if (typeof b.name === "string" && b.name.trim()) patch.name = b.name.trim();
+      if (typeof b.note === "string" || b.note === null) patch.note = b.note;
+      if ("folder" in b || "folder_id" in b) {
+        const to = await resolveFolder(b.folder_id ?? b.folder ?? null, true);
+        if (to === false) return json({ error: "Could not find or create the folder." }, 400);
+        patch.folder_id = to;
+      }
+      if (!Object.keys(patch).length) return json({ error: "Nothing to change (name, note, folder or folder_id)." }, 400);
+      const { data, error } = await admin.from("client_files").update(patch).eq("id", f.id).select().single();
+      if (error) return json({ error: error.message }, 400);
+      return json({ file: fileOut(data) });
+    }
+    if (m === "DELETE") {
+      await admin.storage.from(BUCKET).remove([f.storage_path]);
+      const { error } = await admin.from("client_files").delete().eq("id", f.id);
+      if (error) return json({ error: error.message }, 400);
+      return json({ ok: true });
+    }
+    return json({ error: "Method not allowed." }, 405);
+  }
+
+  // /clients/:id/folders[/:folderId]
+  if (seg[2] === "folders") {
+    const fo = seg[3];
+    if (!fo && m === "GET") return json({ folders: folders.map((f) => ({ id: f.id, parent_id: f.parent_id, name: f.name, path: pathOf(f.id) })) });
+    if (!fo && m === "POST") {
+      const b = await req.json().catch(() => ({}));
+      const parent = b.parent_id ?? b.parent ?? null;
+      const base = await resolveFolder(parent, true);
+      if (base === false) return json({ error: "Parent folder not found." }, 400);
+      const full = [pathOf(base), String(b.name ?? b.path ?? "")].filter(Boolean).join("/");
+      if (!String(b.name ?? b.path ?? "").trim()) return json({ error: "Add a name." }, 400);
+      const id = await resolveFolder(full, true);
+      if (!id) return json({ error: "Could not create the folder." }, 400);
+      return json({ folder: { id, path: pathOf(id) } }, 201);
+    }
+    if (!fo) return json({ error: "Method not allowed." }, 405);
+    const target = byId.get(fo);
+    if (!target) return json({ error: "Folder not found." }, 404);
+    if (m === "PATCH") {
+      const b = await req.json().catch(() => ({}));
+      const patch: Record<string, unknown> = {};
+      if (typeof b.name === "string" && b.name.trim()) patch.name = b.name.trim();
+      if ("parent_id" in b || "parent" in b) {
+        const to = await resolveFolder(b.parent_id ?? b.parent ?? null, true);
+        if (to === false) return json({ error: "Parent folder not found." }, 400);
+        let cur = to ? byId.get(to) : undefined;
+        while (cur) { if (cur.id === fo) return json({ error: "A folder can't go inside itself." }, 400); cur = cur.parent_id ? byId.get(cur.parent_id) : undefined; }
+        patch.parent_id = to;
+      }
+      if (!Object.keys(patch).length) return json({ error: "Nothing to change (name, parent or parent_id)." }, 400);
+      const { error } = await admin.from("client_folders").update(patch).eq("id", fo);
+      if (error) return json({ error: error.message }, 400);
+      return json({ ok: true });
+    }
+    if (m === "DELETE") {
+      const all = new Set([fo]); let grew = true;
+      while (grew) { grew = false; folders.forEach((f) => { if (f.parent_id && all.has(f.parent_id) && !all.has(f.id)) { all.add(f.id); grew = true; } }); }
+      const { data: inside } = await admin.from("client_files").select("id, storage_path").eq("client_id", cid).in("folder_id", [...all]);
+      const paths = (inside ?? []).map((x: any) => x.storage_path);
+      if (paths.length) await admin.storage.from(BUCKET).remove(paths);
+      await admin.from("client_files").delete().eq("client_id", cid).in("folder_id", [...all]);
+      const { error } = await admin.from("client_folders").delete().eq("id", fo);
+      if (error) return json({ error: error.message }, 400);
+      return json({ ok: true, removed_files: paths.length });
+    }
+    return json({ error: "Method not allowed." }, 405);
+  }
+  return json({ error: "Unknown endpoint. See Settings → Client page → API." }, 404);
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
+  const apiMatch = new globalThis.URL(req.url).pathname.match(/\/api(\/.*)?$/);
+  if (apiMatch) {
+    try { return await handleApi(req, apiMatch[1] ?? "/"); }
+    catch (e) { return json({ error: String(e) }, 500); }
+  }
   try {
     const authHeader = req.headers.get("Authorization") ?? "";
     const admin = createClient(URL, SERVICE);

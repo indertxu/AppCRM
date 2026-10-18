@@ -28,6 +28,10 @@ export interface CalcVariable {
   default_value: number;
   round_mode: "up" | "down";
   sort: number;
+  /** Services: the time this variable adds is supervision (project management), not consultancy. One per calculator. */
+  is_supervision?: boolean | null;
+  /** Services: rate per day/hour for this variable's time (empty = the line's rate). */
+  rate?: number | null;
 }
 export interface Calculator {
   id?: string;
@@ -101,6 +105,13 @@ export function calcBreakdown(
         add = blocks * amt;
         detail = `${billable} ${unit} = ${blocks} x ${size} block${blocks === 1 ? "" : "s"} x ${amt}`;
       }
+    }
+    // Duration calculators: the time of a row can be set by hand on the deal
+    // (e.g. the supervision days), stored as "<key>@days" in the values.
+    const ov = values[`${key}@days`];
+    if (calc.output_kind === "quantity" && ov != null) {
+      add = Math.max(0, Number(ov) || 0);
+      detail = `set to ${add}`;
     }
     push(key, v.name || "Variable", detail, add);
   }
@@ -195,8 +206,14 @@ async function saveCalculatorFor(ownerType: "product" | "service", ownerId: stri
       var_type: v.var_type, amount: v.amount || 0, block_size: v.block_size || 1,
       included: v.included || 0, default_value: v.default_value || 0,
       round_mode: v.round_mode || "up", sort: i,
+      is_supervision: !!v.is_supervision, rate: v.rate == null || (v.rate as any) === "" ? null : Number(v.rate),
     }));
-    const { error } = await supabase.from("calculator_variables").insert(rows);
+    let { error } = await supabase.from("calculator_variables").insert(rows);
+    // Before handoff_v3.sql the supervision columns don't exist: save the rest.
+    if (error && /is_supervision|rate/i.test(error.message)) {
+      ({ error } = await supabase.from("calculator_variables").insert(rows.map(({ is_supervision: _s, rate: _r, ...r }) => r)));
+      if (!error && calc.variables.some((v) => v.is_supervision)) return "Saved, but the supervision variable needs handoff_v3.sql in Supabase.";
+    }
     if (error) return error.message;
   }
   return null;

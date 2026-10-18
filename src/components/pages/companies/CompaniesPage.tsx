@@ -16,7 +16,7 @@ import {
   loadHistory, type HistoryEntry, descendantsOf, groupRootOf,
   type Company, type Contact, type Employee, type CompanyField, type ContactField, type Billing,
 } from "./companiesApi";
-import { searchPlaces, lookupPostal, postalLooksComplete, provinceFromPostal, countryName, matchCountry, type AddressHit } from "../contacts/contactProfile";
+import { searchPlaces, lookupPostal, postalLooksComplete, provinceFromPostal, countryName, matchCountry, normalizeLinkedIn, isLinkedIn, linkedInHandle, type AddressHit } from "../contacts/contactProfile";
 import "../clients/ClientsPage.css";
 import CompanyImport from "./CompanyImport";
 import ContactExport from "../contacts/ContactExport";
@@ -24,7 +24,7 @@ import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
 import "./CompaniesPage.css";
 
 const empty = (): Company => ({
-  name: "", legal_name: "", vat_number: "", reg_number: "", website: "", phone: "", email: "", notes: "",
+  name: "", legal_name: "", vat_number: "", reg_number: "", website: "", linkedin: "", phone: "", email: "", notes: "",
   street: "", addr_number: "", addr_details: "", postal_code: "", city: "", province: "", country: "",
 });
 
@@ -107,6 +107,7 @@ export default function CompaniesPage() {
     { key: "sector", label: "Sector", group: "Company", type: "select", get: (c) => c.sector, options: () => [...new Set([...sectorOptions(options), ...companies.map((c) => c.sector ?? "").filter(Boolean)])].map((v) => ({ value: v, label: v })) },
     { key: "relationship", label: "Type (client, partner…)", group: "Company", type: "multi", get: typeTags, options: () => relationshipOptions(options).map((o) => ({ value: o.key, label: o.label })) },
     { key: "website", label: "Website", group: "Contact details", type: "text", get: (c) => c.website },
+    { key: "linkedin", label: "LinkedIn", group: "Contact details", type: "text", get: (c) => c.linkedin },
     { key: "email", label: "Email", group: "Contact details", type: "text", get: (c) => c.email },
     { key: "phone", label: "Mobile", group: "Contact details", type: "text", get: (c) => phoneText(c.phone, c.phone_ext) },
     { key: "landline", label: "Landline", group: "Contact details", type: "text", get: (c) => phoneText(c.landline, c.landline_ext) },
@@ -626,6 +627,9 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
 
   const save = async () => {
     if (!c.name.trim()) { setErr("Give the company a name."); return; }
+    const li = normalizeLinkedIn(c.linkedin);
+    if (li && !isLinkedIn(li)) { setErr("LinkedIn: paste the company page link (linkedin.com/company/…)."); return; }
+    c.linkedin = li || null;
     for (const f of fields) {
       if (!f.required) continue;
       const v = customVal(f.id);
@@ -680,7 +684,7 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
 
   // ---- history: field names and values in words ----
   const FIELD_NAMES: Record<string, string> = {
-    name: "Name", legal_name: "Legal name", vat_number: "VAT / Tax ID", reg_number: "Registration nº", website: "Website", email: "Email",
+    name: "Name", legal_name: "Legal name", vat_number: "VAT / Tax ID", reg_number: "Registration nº", website: "Website", linkedin: "LinkedIn", email: "Email",
     phone: "Mobile", phone_ext: "Mobile ext.", landline: "Landline", landline_ext: "Landline ext.", notes: "Notes", street: "Street",
     addr_number: "Number", addr_details: "Address details", postal_code: "Postal code", city: "City", province: "Province", country: "Country",
     sector: "Sector", relationship: "Type", billing: "Billing details", parent_id: "Parent company",
@@ -730,6 +734,7 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
             <div className="dw-hero-tags">
               <StatusPills status={status} tags={tags} hero />
               {site && <a className="dw-tag" href={siteHref} target="_blank" rel="noreferrer"><DwIcon name="link" />{site.replace(/^https?:\/\//i, "").replace(/\/$/, "")}</a>}
+              {isLinkedIn(c.linkedin) && <a className="dw-tag" href={c.linkedin!} target="_blank" rel="noreferrer"><DwIcon name="link" />LinkedIn</a>}
               {c.email && <a className="dw-tag" href={`mailto:${c.email}`}><DwIcon name="mail" />{c.email}</a>}
               {c.phone && <a className="dw-tag" href={telHref(c.phone, c.phone_ext)}><DwIcon name="phone" />{phoneText(c.phone, c.phone_ext)}</a>}
               {c.landline && <a className="dw-tag" href={telHref(c.landline, c.landline_ext)}><DwIcon name="phone" />{phoneText(c.landline, c.landline_ext)}</a>}
@@ -817,6 +822,11 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
               <div className="dw-grid">
                 <div className="dw-f"><label>Website</label>
                   <input value={c.website ?? ""} onChange={(e) => set({ website: e.target.value })} placeholder="https://" />
+                </div>
+                <div className="dw-f"><label>LinkedIn</label>
+                  <input value={c.linkedin ?? ""} placeholder="linkedin.com/company/…" title={c.linkedin ? linkedInHandle(c.linkedin) : undefined}
+                    onChange={(e) => set({ linkedin: e.target.value })}
+                    onBlur={(e) => set({ linkedin: normalizeLinkedIn(e.target.value) })} />
                 </div>
                 <div className="dw-f"><label>Email</label>
                   <input type="email" value={c.email ?? ""} onChange={(e) => set({ email: e.target.value })} placeholder="info@company.com" />
@@ -1513,6 +1523,273 @@ export interface AddrValue {
 }
 type AddrKey = keyof AddrValue;
 
+/* ═══════════════════════ address globe ═══════════════════════
+ * A panel beside the editor that follows the address as it is typed: the
+ * globe turns to the country (lit up), then flies down to the town and the
+ * street. Same recipe as the LocationMap of the other app, all free, no key:
+ *   · MapLibre GL (globe projection + flyTo)
+ *   · OpenFreeMap styles ("liberty", "positron" as fallback)
+ *   · world-atlas (Natural Earth 1:50m) to light up the country
+ *   · Photon (OpenStreetMap) to find the place
+ * Loaded on demand the first time the panel opens.
+ */
+type GlobeLevel = "country" | "region" | "city" | "street";
+interface GlobeTarget { lon: number; lat: number; zoom: number; level: GlobeLevel; label: string }
+
+const MAP_STYLES = ["https://tiles.openfreemap.org/styles/liberty", "https://tiles.openfreemap.org/styles/positron"];
+// ISO 3166 alpha-2 → numeric (world-atlas ids are numeric)
+const ISO_NUM = (() => {
+  const raw = "AW533AF004AO024AI660AX248AL008AD020AE784AR032AM051AS016AQ010TF260AG028AU036AT040AZ031BI108BE056BJ204BQ535BF854BD050BG100BH048BS044BA070BL652BY112BZ084BM060BO068BR076BB052BN096BT064BV074BW072CF140CA124CC166CH756CL152CN156CI384CM120CD180CG178CK184CO170KM174CV132CR188CU192CW531CX162KY136CY196CZ203DE276DJ262DM212DK208DO214DZ012EC218EG818ER232EH732ES724EE233ET231FI246FJ242FK238FR250FO234FM583GA266GB826GE268GG831GH288GI292GN324GP312GM270GW624GQ226GR300GD308GL304GT320GF254GU316GY328HK344HM334HN340HR191HT332HU348ID360IM833IN356IO086IE372IR364IQ368IS352IL376IT380JM388JE832JO400JP392KZ398KE404KG417KH116KI296KN659KR410KW414LA418LB422LR430LY434LC662LI438LK144LS426LT440LU442LV428MO446MF663MA504MC492MD498MG450MV462MX484MH584MK807ML466MT470MM104ME499MN496MP580MZ508MR478MS500MQ474MU480MW454MY458YT175NA516NC540NE562NF574NG566NI558NU570NL528NO578NP524NR520NZ554OM512PK586PA591PN612PE604PH608PW585PG598PL616PR630KP408PT620PY600PS275PF258QA634RE638RO642RU643RW646SA682SD729SN686SG702GS239SH654SJ744SB090SL694SV222SM674SO706PM666RS688SS728ST678SR740SK703SI705SE752SZ748SX534SC690SY760TC796TD148TG768TH764TJ762TK772TM795TL626TO776TT780TN788TR792TV798TW158TZ834UG800UA804UM581UY858US840UZ860VA336VC670VE862VG092VI850VN704VU548WF876WS882YE887ZA710ZM894ZW716";
+  const m = new Map<string, string>();
+  for (let i = 0; i < raw.length; i += 5) m.set(raw.slice(i, i + 2), raw.slice(i + 2, i + 5));
+  return m;
+})();
+
+type MapLib = { ml: any; byId: Map<string, any> };
+let mapLibPromise: Promise<MapLib> | null = null;
+/** MapLibre, its worker (Vite: ?worker&url), its CSS and the countries — once, on demand. */
+const loadMapLib = () => (mapLibPromise ??= Promise.all([
+  import("maplibre-gl"),
+  import("maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url"),
+  import("maplibre-gl/dist/maplibre-gl.css"),
+  import("topojson-client"),
+  import("world-atlas/countries-50m.json?url"),
+]).then(async ([ml, worker, , topo, worldUrl]) => {
+  const lib: any = (ml as any).default ?? ml;
+  lib.setWorkerUrl(worker.default);
+  const w = await (await fetch(worldUrl.default)).json();
+  const feats = ((topo as any).feature(w, w.objects.countries).features ?? []) as any[];
+  return { ml: lib, byId: new Map(feats.map((f) => [String(f.id ?? f.properties?.name), f])) };
+}).catch((err) => { mapLibPromise = null; throw err; }));   // can be retried
+
+/** The main part of a country (without far-away territories), as bounds. */
+function mainBounds(feature: any): [[number, number], [number, number]] | null {
+  const g = feature?.geometry;
+  if (!g) return null;
+  const polys: number[][][][] = g.type === "MultiPolygon" ? g.coordinates : [g.coordinates];
+  const box = (rings: number[][][]) => {
+    let x0 = 180, y0 = 90, x1 = -180, y1 = -90;
+    rings[0].forEach(([x, y]) => { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); });
+    return [x0, y0, x1, y1];
+  };
+  const area = (b: number[]) => (b[2] - b[0]) * (b[3] - b[1]);
+  const boxes = polys.map(box).sort((a, b) => area(b) - area(a));
+  const big = boxes[0];
+  const near = boxes.filter((b) => b[0] < big[2] + 6 && b[2] > big[0] - 6 && b[1] < big[3] + 6 && b[3] > big[1] - 6);
+  return [[Math.min(...near.map((b) => b[0])), Math.min(...near.map((b) => b[1]))], [Math.max(...near.map((b) => b[2])), Math.max(...near.map((b) => b[3]))]];
+}
+
+const geoCache = new Map<string, Promise<GlobeTarget | null>>();
+/** The most precise place we can find for what has been typed so far. */
+function locate(a: AddrValue): Promise<GlobeTarget | null> {
+  const s = (x?: string | null) => String(x ?? "").trim();
+  const cc = matchCountry(a.country) ?? "";
+  const country = cc ? countryName(cc) : s(a.country);
+  const street = [s(a.street), s(a.addr_number)].filter(Boolean).join(" ");
+  const town = s(a.city), prov = s(a.province), postal = s(a.postal_code);
+  let level: GlobeLevel, q: string, label: string;
+  if (street && (town || postal)) { level = "street"; q = [street, [postal, town].filter(Boolean).join(" "), country].filter(Boolean).join(", "); label = street; }
+  else if (town || postal) { level = "city"; q = [[postal, town].filter(Boolean).join(" "), prov, country].filter(Boolean).join(", "); label = town || postal; }
+  else if (prov) { level = "region"; q = [prov, country].filter(Boolean).join(", "); label = prov; }
+  else if (country) { level = "country"; q = country; label = country; }
+  else return Promise.resolve(null);
+  if (!geoCache.has(q)) {
+    const tag = level === "country" ? "&osm_tag=place:country" : "";
+    const p = fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=6${tag}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: any) => {
+        const feats = (d?.features ?? []) as any[];
+        // keep to the chosen country
+        const f = feats.find((x) => !cc || String(x.properties?.countrycode ?? "").toUpperCase() === cc) ?? null;
+        const c = f?.geometry?.coordinates;
+        if (!c) return null;
+        const pp = f.properties ?? {};
+        let zoom = ({ house: 17, street: 16, locality: 15, district: 14, postcode: 14, city: 12, county: 10, state: 8, country: 5 } as Record<string, number>)[pp.type] ?? 13;
+        if (Array.isArray(pp.extent) && pp.type !== "house" && pp.type !== "street") {
+          const [x0, y0, x1, y1] = pp.extent as number[];
+          const span = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0) * 1.6, 1e-4);
+          zoom = Math.max(5, Math.min(16, Math.floor(Math.log2((600 * 360) / (256 * span)))));
+        }
+        return { lon: c[0], lat: c[1], zoom: Math.min(16.5, zoom), level, label };
+      })
+      .catch(() => { geoCache.delete(q); return null; });
+    geoCache.set(q, p);
+  }
+  return geoCache.get(q)!;
+}
+
+/** The globe/map panel. `value` is the address being edited; it stays mounted once opened. */
+function AddressGlobe({ value, anchor, open }: { value: AddrValue; anchor: React.RefObject<HTMLElement | null>; open: boolean }) {
+  const elRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<any>(null);
+  const markerRef = useRef<any>(null);
+  const userMoved = useRef(false);
+  const [mounted, setMounted] = useState(false);
+  const [box, setBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  const [target, setTarget] = useState<GlobeTarget | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [lib, setLib] = useState<MapLib | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const [ready, setReady] = useState(0);
+  useEffect(() => { if (open) setMounted(true); }, [open]);
+
+  // to the left of the editor, same height
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const dw = anchor.current?.closest(".dw") as HTMLElement | null;
+      const r = dw?.getBoundingClientRect();
+      if (!r) { setBox(null); return; }
+      const width = Math.min(r.width, r.left - 28);
+      setBox(width < 300 ? null : { left: r.left - 14 - width, top: r.top, width, height: r.height });
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [open, anchor]);
+
+  useEffect(() => {
+    if (!mounted) return;
+    let off = false;
+    loadMapLib().then((l) => { if (!off) { setLib(l); setFailed(false); } }).catch(() => { if (!off) setFailed(true); });
+    return () => { off = true; };
+  }, [mounted, attempt]);
+
+  // the map, once per library
+  const hasBox = !!box;
+  useEffect(() => {
+    if (!lib || !elRef.current || !hasBox) return undefined;
+    const { ml } = lib;
+    const locale = (navigator.language || "es").slice(0, 2);
+    let styleIdx = 0, styleOk = false;
+    const map = new ml.Map({
+      container: elRef.current, style: MAP_STYLES[0], center: [8, 30], zoom: 1.1,
+      attributionControl: { compact: true }, scrollZoom: false, dragRotate: false, pitchWithRotate: false, touchPitch: false,
+    });
+    mapRef.current = map;
+    map.addControl(new ml.NavigationControl({ showCompass: false }), "bottom-right");
+    map.on("error", () => { if (!styleOk && styleIdx < MAP_STYLES.length - 1) map.setStyle(MAP_STYLES[++styleIdx]); });
+    map.on("style.load", () => {
+      styleOk = true;
+      try { map.setProjection({ type: "globe" }); } catch { /* older style spec */ }
+      // labels in the user's language when the name exists
+      (map.getStyle().layers ?? []).forEach((l: any) => {
+        if (l.type !== "symbol") return;
+        const tf = map.getLayoutProperty(l.id, "text-field");
+        if (tf && JSON.stringify(tf).includes('"name')) {
+          try { map.setLayoutProperty(l.id, "text-field", ["coalesce", ["get", `name:${locale}`], ["get", "name:latin"], ["get", "name"]]); } catch { /* no name */ }
+        }
+      });
+      const firstLabel = (map.getStyle().layers ?? []).find((l: any) => l.type === "symbol")?.id;
+      if (!map.getSource("sel-country")) map.addSource("sel-country", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      if (!map.getLayer("sel-country-fill")) map.addLayer({ id: "sel-country-fill", type: "fill", source: "sel-country", paint: { "fill-color": "#12b57f", "fill-opacity": 0.18 } }, firstLabel);
+      if (!map.getLayer("sel-country-line")) map.addLayer({ id: "sel-country-line", type: "line", source: "sel-country", paint: { "line-color": "#0a6f4d", "line-width": 2 } }, firstLabel);
+      setReady((r) => r + 1);
+    });
+    map.on("dragstart", () => { userMoved.current = true; });
+    const ro = new ResizeObserver(() => map.resize());
+    ro.observe(elRef.current);
+    return () => { ro.disconnect(); markerRef.current?.remove(); markerRef.current = null; map.remove(); mapRef.current = null; };
+  }, [lib, hasBox]);
+
+  // what to look at: the most precise part typed so far (looked up after a pause)
+  const key = [value.country, value.province, value.city, value.postal_code, value.street, value.addr_number].map((x) => String(x ?? "").trim()).join("|");
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    setBusy(true);
+    const t = window.setTimeout(() => {
+      locate(value).then((tg) => { if (!alive) return; setBusy(false); setTarget(tg); });
+    }, 450);
+    return () => { alive = false; window.clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, open]);
+
+  const cc = matchCountry(value.country) ?? "";
+  const feature = lib && cc ? lib.byId.get(cc === "XK" ? "Kosovo" : ISO_NUM.get(cc) ?? "") ?? null : null;
+  const point = target && target.level !== "country" ? target : null;
+
+  // nothing yet: the globe turns slowly
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map || cc || point || !open) return undefined;
+    userMoved.current = false;
+    let raf = 0;
+    const tick = () => {
+      if (!userMoved.current && !map.isMoving()) { const c = map.getCenter(); map.setCenter([c.lng + 0.08, c.lat]); }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [ready, cc, point, open]);
+
+  // the country: light it up and fly to it
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map) return;
+    map.getSource("sel-country")?.setData({ type: "FeatureCollection", features: feature ? [feature] : [] });
+    if (point) return;
+    const b = feature ? mainBounds(feature) : null;
+    const cam = b ? map.cameraForBounds(b, { padding: 50, maxZoom: 6.5 }) : null;
+    if (cam) map.flyTo({ ...cam, speed: 0.9, curve: 1.5, essential: true });
+    else if (target) map.flyTo({ center: [target.lon, target.lat], zoom: 4, speed: 0.9, curve: 1.5, essential: true });
+  }, [ready, feature, point, target]);
+
+  // a place: down to the town or the street, with the pin
+  const pKey = point ? `${point.lat},${point.lon},${point.zoom}` : "";
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map || !lib) return;
+    markerRef.current?.remove(); markerRef.current = null;
+    if (!point) return;
+    markerRef.current = new lib.ml.Marker({ color: point.level === "street" ? "#12b57f" : "#0b3a2b" }).setLngLat([point.lon, point.lat]).addTo(map);
+    map.flyTo({ center: [point.lon, point.lat], zoom: Math.min(16.5, point.zoom), speed: 1.1, curve: 1.6, essential: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, lib, pKey]);
+
+  if (!mounted || !box) return null;
+  const s = (x?: string | null) => String(x ?? "").trim();
+  const crumbs = [
+    { k: "world", t: "World", on: true },
+    { k: "country", t: cc ? countryName(cc) : s(value.country), on: !!s(value.country) },
+    { k: "region", t: s(value.province), on: !!s(value.province) },
+    { k: "city", t: [s(value.postal_code), s(value.city)].filter(Boolean).join(" "), on: !!(s(value.city) || s(value.postal_code)) },
+    { k: "street", t: [s(value.street), s(value.addr_number)].filter(Boolean).join(" "), on: !!s(value.street) },
+  ].filter((c) => c.on);
+  const reached = target?.level ?? "world";
+
+  return createPortal(
+    <div className={`ag ${open ? "" : "is-hidden"}`} style={{ left: box.left, top: box.top, width: box.width, height: box.height }}>
+      <div className="ag-map"><div ref={elRef} style={{ width: "100%", height: "100%" }} /></div>
+      {!lib && !failed && <div className="ag-loading"><i className="ag-spin" />Loading the map…</div>}
+      {failed && (
+        <div className="ag-loading">
+          <button type="button" onClick={() => setAttempt((a) => a + 1)}>The map could not load · Retry</button>
+        </div>
+      )}
+      <div className="ag-top">
+        <span className="ag-eyebrow">
+          {busy ? <><i className="ag-spin" />Locating…</> : target ? "Located" : "Where is it?"}
+          {cc && <img className="ag-flag" src={`https://flagcdn.com/${cc.toLowerCase()}.svg`} alt="" />}
+        </span>
+        <div className="ag-crumbs">
+          {crumbs.map((c, i) => (
+            <span key={c.k} className={`ag-crumb ${c.k === reached ? "is-here" : ""}`} style={{ ["--i" as string]: i } as CSSProperties}>{c.t}</span>
+          ))}
+        </div>
+      </div>
+      {target && (
+        <div className="ag-foot">
+          <span className="ag-coords">{Math.abs(target.lat).toFixed(4)}° {target.lat >= 0 ? "N" : "S"} · {Math.abs(target.lon).toFixed(4)}° {target.lon >= 0 ? "E" : "W"}</span>
+        </div>
+      )}
+    </div>,
+    document.body,
+  );
+}
+
+
 /**
  * The address block, filling itself in: pick a street and the rest comes with it,
  * type a postal code and the town, province and country appear, pick a town and
@@ -1606,9 +1883,26 @@ export function AddressFields({ value, onChange, countryAs, req, renderCountry, 
     }).catch(() => {});
   };
   const mark = (k: AddrKey) => (auto.has(k) ? "is-auto" : "");
+  // the globe beside the editor: open while the address is being edited
+  const addrRef = useRef<HTMLDivElement>(null);
+  const [globe, setGlobe] = useState(false);
+  const hideT = useRef<number | null>(null);
+  const keepGlobe = () => { if (hideT.current) window.clearTimeout(hideT.current); hideT.current = null; setGlobe(true); };
+  const dropGlobe = () => {
+    if (hideT.current) window.clearTimeout(hideT.current);
+    const check = () => {
+      // still typing in the address, or using the map (zoom buttons, dragging): keep it
+      if (addrRef.current?.contains(document.activeElement)) return;
+      if (document.querySelector(".ag:hover")) { hideT.current = window.setTimeout(check, 800); return; }
+      setGlobe(false);
+    };
+    hideT.current = window.setTimeout(check, 1400);
+  };
+  useEffect(() => () => { if (hideT.current) window.clearTimeout(hideT.current); }, []);
 
   return (
-    <div className="dw-addr">
+    <div className="dw-addr" ref={addrRef} onFocus={keepGlobe} onBlur={dropGlobe}>
+      <AddressGlobe value={value} anchor={addrRef} open={globe} />
       <div className="dw-grid is-3">
         <div className="dw-f dw-col2"><label>Street{req?.("street")}<span className="dw-f-assist">Type to search</span></label>
           <PlaceInput value={v("street")} onType={(x) => typed("street", x)} onPick={pickStreet} kind="address" auto={auto.has("street")}

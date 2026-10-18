@@ -362,9 +362,13 @@ export default function NewClientForm({ onSave, onClose, roles = [], projectType
   const dirty = snapshot !== initial.current;
 
   const closingRef = useRef(false);
-  const requestClose = () => {
+  const [askDiscard, setAskDiscard] = useState(false);
+  const askRef = useRef(false);
+  askRef.current = askDiscard;
+  const requestClose = (force = false) => {
     if (closingRef.current) return;
-    if (dirty && !window.confirm("Discard your changes?")) return;
+    if (dirty && !force) { setAskDiscard(true); return; }
+    setAskDiscard(false);
     closingRef.current = true;
     setClosing(true);
     window.setTimeout(onClose, reduceMotion() ? 0 : 260);
@@ -376,6 +380,7 @@ export default function NewClientForm({ onSave, onClose, roles = [], projectType
       if (e.key !== "Escape") return;
       // a date or select popover handles its own Escape
       if (document.querySelector(".sel-layer, .dp-layer, .tp-layer")) return;
+      if (askRef.current) { setAskDiscard(false); return; }
       closeRef.current();
     };
     window.addEventListener("keydown", onKey);
@@ -444,12 +449,12 @@ export default function NewClientForm({ onSave, onClose, roles = [], projectType
   const saveLabel = editingProject ? "Save changes" : client ? "Create project" : "Create client";
 
   return (
-    <div className={`pf-backdrop ${closing ? "is-closing" : ""}`} onMouseDown={requestClose}>
+    <div className={`pf-backdrop ${closing ? "is-closing" : ""}`} onMouseDown={() => requestClose()}>
       <div className={`pf ${soldFrom && showSold ? "has-sold" : ""}`} onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={eyebrow}>
         {/* ---------- header ---------- */}
         <header className="pf-head">
           <span className="pf-glow" aria-hidden="true" />
-          <button className="pf-x" onClick={requestClose} aria-label="Close"><Ico n="x" s={17} /></button>
+          <button className="pf-x" onClick={() => requestClose()} aria-label="Close"><Ico n="x" s={17} /></button>
           <div className="pf-head-row">
             <div className="pf-id">
               <span className="pf-av">{initials(title)}</span>
@@ -808,11 +813,25 @@ export default function NewClientForm({ onSave, onClose, roles = [], projectType
             {tab !== "details" && <button className="pf-btn is-ghost" onClick={() => setTab(TABS[TABS.findIndex((t) => t.v === tab) - 1].v)}>Back</button>}
             {tab !== "plan" && <button className="pf-btn is-ghost" onClick={() => setTab(TABS[TABS.findIndex((t) => t.v === tab) + 1].v)}>Next</button>}
           </div>
-          <button className="pf-btn is-quiet" onClick={requestClose}>Cancel</button>
+          <button className="pf-btn is-quiet" onClick={() => requestClose()}>Cancel</button>
           <button className="pf-btn is-save" onClick={submit} disabled={!canSave} title={canSave ? saveLabel : "Give the client a name first"}>
             <Ico n={editingProject ? "check" : "plus"} s={15} />{saveLabel}
           </button>
         </footer>
+
+        {askDiscard && (
+          <div className="pf-ask" onMouseDown={(e) => { e.stopPropagation(); if (e.target === e.currentTarget) setAskDiscard(false); }}>
+            <div className="pf-ask-card" role="alertdialog" aria-modal="true" aria-label="Discard changes">
+              <span className="pf-ask-ic"><Ico n="x" s={20} /></span>
+              <h3>Discard your changes?</h3>
+              <p>What you changed in this {editingProject ? "project" : client ? "project" : "client"} will be lost.</p>
+              <div className="pf-ask-act">
+                <button className="pf-btn is-quiet" autoFocus onClick={() => setAskDiscard(false)}>Keep editing</button>
+                <button className="pf-btn is-danger" onClick={() => requestClose(true)}>Discard</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

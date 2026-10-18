@@ -356,3 +356,60 @@
 .tf-modal-body { background: #f2f5f3; }
 @media (max-width: 760px) { .tf-grid { grid-template-columns: minmax(0, 1fr); } }
 @media (prefers-reduced-motion: reduce) { .tf-modal, .tf-cell { animation: none !important; transition: none !important; } }
+/* =====================================================================
+   Proposal documents per version of a revenue line
+   ===================================================================== */
+.sl-rev-card:has(> .tf-line) .sl-rev-toolbar { border-radius: 0; }
+.tf-line {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px 12px 12px; border-top: 1px dashed rgba(10, 111, 77, 0.14);
+  border-radius: 0 0 18px 18px; background: #fbfdfc;
+  transition: background 0.18s, box-shadow 0.18s;
+}
+.tf-line.is-over { background: rgba(31, 185, 138, 0.08); box-shadow: inset 0 0 0 2px rgba(31, 185, 138, 0.55); }
+.tf-line-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.tf-line-t { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 650; color: #44544d; }
+.tf-line-t svg { width: 14px; height: 14px; color: #1fb98a; }
+.tf-line-t em { font-style: normal; padding: 1px 7px; border-radius: 999px; background: rgba(31, 185, 138, 0.12); color: #0b6b4c; font-size: 11px; font-weight: 700; }
+.tf-line-add {
+  display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 8px;
+  border: 1px solid rgba(10, 111, 77, 0.16); background: #fff; color: #0b6b4c;
+  font: inherit; font-size: 11.5px; font-weight: 700; cursor: pointer; transition: background 0.15s, border-color 0.15s;
+}
+.tf-line-add svg { width: 12px; height: 12px; }
+.tf-line-add:hover { background: rgba(31, 185, 138, 0.08); border-color: rgba(31, 185, 138, 0.4); }
+.tf-line-drop {
+  width: 100%; padding: 11px 12px; border-radius: 11px; cursor: pointer;
+  border: 1.5px dashed rgba(10, 111, 77, 0.2); background: transparent;
+  font: inherit; font-size: 12px; color: #7a8a83; text-align: center;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.tf-line-drop:hover { border-color: rgba(31, 185, 138, 0.55); color: #0b6b4c; background: rgba(31, 185, 138, 0.05); }
+.tf-line-list { display: flex; flex-direction: column; gap: 6px; }
+.tf-line-file {
+  display: flex; align-items: center; gap: 9px; min-width: 0;
+  padding: 6px 8px 6px 6px; border-radius: 11px; background: #fff; border: 1px solid rgba(14, 26, 21, 0.07);
+  font-size: 12.5px; color: #44544d;
+  animation: tf-line-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes tf-line-in { from { opacity: 0; transform: translateY(4px); } }
+.tf-line-file .tf-fi { width: 30px; height: 30px; flex-shrink: 0; border-radius: 9px; }
+.tf-line-file .tf-fi i { font-size: 15px; }
+.tf-line-name {
+  flex: 1; min-width: 0; padding: 0; border: none; background: none; cursor: pointer; text-align: left;
+  font: inherit; font-weight: 650; color: #0e1a15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tf-line-name:hover { color: #0b6b4c; text-decoration: underline; }
+.tf-line-size { flex-shrink: 0; font-size: 11px; color: #8a9893; }
+.tf-line-x {
+  flex-shrink: 0; width: 24px; height: 24px; border: none; border-radius: 7px; background: transparent;
+  color: #8a9893; font-size: 16px; line-height: 1; cursor: pointer; transition: background 0.15s, color 0.15s;
+}
+.tf-line-x:hover { background: rgba(224, 96, 79, 0.12); color: #c0473a; }
+.tf-line-confirm { display: inline-flex; gap: 4px; flex-shrink: 0; }
+.tf-line-confirm button { padding: 3px 8px; border-radius: 7px; border: 1px solid rgba(14, 26, 21, 0.1); background: #fff; font: inherit; font-size: 11px; font-weight: 700; cursor: pointer; color: #44544d; }
+.tf-line-confirm .is-del { background: #c0473a; border-color: #c0473a; color: #fff; }
+.tf-line-file.is-busy { color: #7a8a83; padding: 9px 10px; }
+.tf-line-spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(31, 185, 138, 0.25); border-top-color: #1fb98a; animation: tf-line-spin 0.8s linear infinite; }
+@keyframes tf-line-spin { to { transform: rotate(360deg); } }
+.tf-line-err { margin: 0; font-size: 11.5px; color: #c0473a; }

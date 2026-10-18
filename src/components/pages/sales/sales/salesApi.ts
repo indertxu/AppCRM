@@ -188,6 +188,25 @@ export async function stampPhaseEntry(trackingId: string, phaseId: string): Prom
   return (data as any) ?? null;
 }
 
+/** Set (or correct) the day a deal entered a phase. */
+export async function setPhaseEntryDate(trackingId: string, phaseId: string, enteredAt: string): Promise<PhaseEvent | null> {
+  const { data: existing } = await supabase.from("tracking_phase_events")
+    .select("id").eq("tracking_id", trackingId).eq("phase_id", phaseId).maybeSingle();
+  const q = existing
+    ? supabase.from("tracking_phase_events").update({ entered_at: enteredAt }).eq("id", (existing as any).id).select().single()
+    : supabase.from("tracking_phase_events").insert({ tracking_id: trackingId, phase_id: phaseId, entered_at: enteredAt }).select().single();
+  const { data } = await q;
+  return (data as any) ?? null;
+}
+
+/** Phases jumped over get the same date as the phase the deal landed on. */
+export async function fillPhaseEntries(trackingId: string, phaseIds: string[], enteredAt: string): Promise<PhaseEvent[]> {
+  if (!phaseIds.length) return [];
+  const { data } = await supabase.from("tracking_phase_events")
+    .insert(phaseIds.map((phase_id) => ({ tracking_id: trackingId, phase_id, entered_at: enteredAt }))).select();
+  return ((data ?? []) as any[]) as PhaseEvent[];
+}
+
 // ---- Attached employees ----
 export async function loadTrackingEmployees(trackingId: string): Promise<string[]> {
   const { data } = await supabase.from("tracking_employees").select("profile_id").eq("tracking_id", trackingId);
@@ -332,7 +351,10 @@ export function unitBreakdown(l: RevenueLineFields, calculator?: Calculator | nu
     const baseRate = Number(l.price) || 0;
     const timeRows = calcBreakdown(calculator, l.calc_values ?? {}, Number(calculator.base_amount) || 0);
     const rows: CalcRow[] = timeRows.rows.map((r) => {
-      const rate = rates[r.key] == null ? baseRate : Number(rates[r.key]) || 0;
+      // A variable can carry its own rate (the supervision one, set in Settings).
+      const v = calculator.variables.find((x) => (x.id ?? String(x.sort)) === r.key);
+      const own = v?.rate != null && (v.rate as any) !== "" ? Number(v.rate) : null;
+      const rate = rates[r.key] == null ? (own ?? baseRate) : Number(rates[r.key]) || 0;
       const amount = r.amount * rate;
       const discount = discountOf(amount, discounts[r.key]);
       const detail = `${r.detail ? r.detail + " = " : ""}${r.amount} x ${rate}`;
@@ -1181,7 +1203,10 @@ export interface HandoffService {
   gross?: number;
   discount?: number;
   /** How the price was built up, so management can see the variables. */
-  rows?: { label: string; detail: string; amount: number; discount: number; days?: number; rate?: number }[];
+  rows?: { label: string; detail: string; amount: number; discount: number; days?: number; rate?: number; supervision?: boolean }[];
+  /** Days of the calculator's supervision variable, and their rate; the rest of the days are consultancy. */
+  supervision_days?: number;
+  supervision_rate?: number;
   /** Days or hours sold, so management can prefill the project without guessing. */
   days?: number;
   /** Rate per day/hour behind that price. */
@@ -1202,6 +1227,8 @@ export interface Handoff {
   created_project_id: string | null;
   created_at: string;
   converted_at: string | null;
+  /** Everything sales chose to pass on, by block (handoff_v2.sql). Empty on older handoffs. */
+  package?: any;
 }
 
 // Does management already have a client for this sales company?
@@ -1277,7 +1304,8 @@ export async function buildClientPrefill(companyId: string, trackingId?: string)
   // products already on the deal, priced with their discounts
   let products: any[] = [];
   if (trackingId) {
-    const { data: tp } = await supabase.from("tracking_products").select("*").eq("tracking_id", trackingId).order("created_at");
+    const { data: tpAll } = await supabase.from("tracking_products").select("*").eq("tracking_id", trackingId).order("created_at");
+    const tp = activeVersions(tpAll ?? []);
     const pids = Array.from(new Set((tp ?? []).map((r: any) => r.product_id).filter(Boolean)));
     const nameById: Record<string, string> = {};
     if (pids.length) {
@@ -1381,7 +1409,8 @@ export async function buildAttachPrefill(companyId: string, trackingId: string):
   const uid = () => (globalThis.crypto?.randomUUID?.() ?? String(Math.random()));
   const today = new Date().toISOString().slice(0, 10);
 
-  const { data: tp } = await supabase.from("tracking_products").select("*").eq("tracking_id", trackingId).order("created_at");
+  const { data: tpAll } = await supabase.from("tracking_products").select("*").eq("tracking_id", trackingId).order("created_at");
+  const tp = activeVersions(tpAll ?? []);
   const pids = Array.from(new Set((tp ?? []).map((r: any) => r.product_id).filter(Boolean)));
   const nameById: Record<string, string> = {};
   if (pids.length) {
@@ -1422,6 +1451,13 @@ export async function hasClientProductsForTracking(trackingId: string): Promise<
 }
 
 // Save the product contracts a client signed (one row per product).
+/** One line per version group: the active version (or the newest). Older versions are proposals, not sold. */
+export function activeVersions<T extends { id: string; version_group?: string | null; version_active?: boolean | null; created_at?: string | null }>(rows: T[]): T[] {
+  const groups = new Map<string, T[]>();
+  rows.forEach((r) => { const g = r.version_group ?? r.id; groups.set(g, [...(groups.get(g) ?? []), r]); });
+  return Array.from(groups.values()).map((g) => g.find((x) => x.version_active) ?? [...g].sort((a, b) => String(a.created_at ?? "").localeCompare(String(b.created_at ?? ""))).pop()!);
+}
+
 export async function saveClientProducts(clientId: string, trackingId: string | null, products: {
   productId: string; price: number; quantity: number; recurring: boolean; period: string | null;
   termYears: number | null; discountMode: string | null; discountValue: number | null; signingDate: string;
@@ -1429,6 +1465,8 @@ export async function saveClientProducts(clientId: string, trackingId: string | 
   renewYears?: number | null; annualIncreasePct?: number | null; paymentTermsDays?: number | null;
   contractRef?: string; externalRef?: string;
   billingContactName?: string | null; billingContactEmail?: string | null;
+  /** How a multi-year contract is paid: in `count` terms, each with its own increase over the one before. */
+  schedule?: PaymentSchedule | null;
 }[]): Promise<string | null> {
   if (!products.length) return null;
   const rows = products.map((p) => ({
@@ -1449,10 +1487,16 @@ export async function saveClientProducts(clientId: string, trackingId: string | 
     billing_contact_name: p.billingContactName ?? null,
     billing_contact_email: p.billingContactEmail ?? null,
     status: "active",
+    ...(p.schedule ? { schedule: p.schedule } : {}),
   }));
-  const { error } = await supabase.from("client_products").insert(rows);
+  let { error } = await supabase.from("client_products").insert(rows);
+  // client_terms.sql not run yet: save without the payment terms
+  if (error && /schedule/i.test(error.message)) ({ error } = await supabase.from("client_products").insert(rows.map((r: any) => { const c = { ...r }; delete c.schedule; return c; })));
   return error?.message ?? null;
 }
+
+/** Payment terms of a signed product: the contract is paid in `count` equal terms; `increases[i]` is term i's % over the previous term (term 1 is usually 0). */
+export interface PaymentSchedule { count: number; increases: number[] }
 
 // Create one handoff row per destination pipeline.
 export async function createHandoffs(input: {
@@ -1462,8 +1506,10 @@ export async function createHandoffs(input: {
   product_id: string | null;
   /** Each destination carries only what belongs to it. */
   destinations: { id: string; name: string; services: HandoffService[]; potential_value: number }[];
+  /** The handoff package (client, deal, revenue, documents, notes, tasks). */
+  package?: any;
 }): Promise<number> {
-  const rows = input.destinations.map((d) => ({
+  const rows: any[] = input.destinations.map((d) => ({
     tracking_id: input.tracking_id,
     company_id: input.company_id,
     company_name: input.company_name,
@@ -1473,10 +1519,16 @@ export async function createHandoffs(input: {
     services: d.services,
     potential_value: Math.round(d.potential_value),
     status: "pending",
+    ...(input.package ? { package: input.package } : {}),
   }));
   if (!rows.length) return 0;
-  const { error } = await supabase.from("handoffs").insert(rows);
-  return error ? 0 : rows.length;
+  let { error } = await supabase.from("handoffs").insert(rows);
+  // Before handoff_v2.sql there is no package column: send the rest anyway.
+  if (error && input.package && /package/i.test(error.message)) {
+    ({ error } = await supabase.from("handoffs").insert(rows.map(({ package: _p, ...r }) => r)));
+  }
+  if (error) throw new Error(error.message);
+  return rows.length;
 }
 
 /** Every handoff ever created for this deal, whatever its state. */
@@ -1532,8 +1584,22 @@ export async function loadPotentialTotals(pre?: {
   return potentialTotalsFromRows(trRows as any[], tpRows, svcRows, products as any[], services as any[]);
 }
 
+/** The rows behind the last totals, so the "this year only" view can be worked out without reading again. */
+let lastTotalsRows: [any[], any[], any[], any[], any[]] | null = null;
+/**
+ * Potential revenue per deal counting only one year of each recurring line
+ * (a 3-year subscription counts its first year). Null until totals were loaded once.
+ */
+export function yearTotalsFromLastRows(): Record<string, number> | null {
+  if (!lastTotalsRows) return null;
+  const [tr, tp, svc, products, services] = lastTotalsRows;
+  const oneYear = (rows: any[]) => rows.map((l) => (l.recurring && Number(l.term_years) > 1 ? { ...l, term_years: 1 } : l));
+  return potentialTotalsFromRows(tr, oneYear(tp), oneYear(svc), products, services, true);
+}
+
 /** Potential revenue per deal from rows already read (deals, product and service lines, catalog). */
-export function potentialTotalsFromRows(trRows: any[], tpRows: any[], svcRows: any[], products: any[], services: any[]): Record<string, number> {
+export function potentialTotalsFromRows(trRows: any[], tpRows: any[], svcRows: any[], products: any[], services: any[], noCache = false): Record<string, number> {
+  if (!noCache) lastTotalsRows = [trRows, tpRows, svcRows, products, services];
   const tr = { data: trRows }, tp = { data: tpRows }, svc = { data: svcRows };
   const prodById = new Map<string, any>((products as any[]).map((p) => [p.id, p]));
   const svcById = new Map<string, any>((services as any[]).map((x) => [x.id, x]));

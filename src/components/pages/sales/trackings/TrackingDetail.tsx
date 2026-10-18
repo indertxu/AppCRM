@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 import { createPortal } from "react-dom";
 import DatePicker from "../../../framework/DatePicker";
 import TimePicker from "../../../framework/TimePicker";
@@ -19,8 +20,8 @@ const MEETING_KINDS: { value: MeetingKind; label: string; icon: JSX.Element }[] 
 const cleanMentionsFn = (t: string) => t.replace(/@\[([^\]]+)\]\([^)]+\)/g, "@$1");
 import { supabase } from "../../../api/supabase";
 import HandoffClientForm from "./HandoffClientForm";
-import HandoffConfirmServices, { type ConfirmService, type ConfirmClient } from "./HandoffConfirmServices";
-import TrackingFiles from "./TrackingFiles";
+import HandoffConfirmServices, { destFolder, type ConfirmService, type ConfirmProduct, type ConfirmClient, type HandoffExtras, type HandoffDoc, type HandoffPackage } from "./HandoffConfirmServices";
+import TrackingFiles, { LineDocs, loadAllTrackingFiles } from "./TrackingFiles";
 import TrackingFieldsPanel from "../extras/TrackingFieldsPanel";
 import HandoverConfirm from "./HandoverConfirm";
 import { planHandover, performHandover, rolesFor, resolveDealRole, saveDealRoles, orderPhases, type SalesRole, type HandoverPlan } from "../extras/salesRolesApi";
@@ -43,7 +44,7 @@ import {
   loadTasks, addTask, toggleTask, updateTask, deleteTask, canDeleteTask,
   loadMeetings, addMeeting, updateMeeting, deleteMeeting, syncMeetingToOutlook, MEETING_OUTLOOK_EVENT, setDealName,
   syncDeletedMeetingsFromOutlook,
-  loadPhaseEvents, stampPhaseEntry, clearPhaseEventsAfter,
+  loadPhaseEvents, stampPhaseEntry, clearPhaseEventsAfter, setPhaseEntryDate, fillPhaseEntries,
   loadPotentialServices, addPotentialService, updatePotentialServiceTerm, deletePotentialService,
   loadBlueprintsForServices, billableQty, type PhaseBlueprint,
   loadTrackingEmployees, setTrackingEmployees, loadTrackingOwner, setTrackingOwner,
@@ -69,7 +70,7 @@ import {
  * One revenue line: the numbers, a receipt you can expand, and a calculator
  * button that opens everything that decides those numbers.
  */
-function RevLine({ name, tag, tagClass, line, unit, minUnit, calculator, catalogBase, onRemove, onOpenCalc, money, versionIdx, versionCount, onPrev, onNext, onNewVersion }: {
+function RevLine({ name, tag, line, unit, minUnit, calculator, catalogBase, onRemove, onOpenCalc, money, versionIdx, versionCount, onPrev, onNext, onNewVersion, footer }: {
   name: string;
   tag: string;
   tagClass?: string;
@@ -86,6 +87,8 @@ function RevLine({ name, tag, tagClass, line, unit, minUnit, calculator, catalog
   onPrev?: () => void;
   onNext?: () => void;
   onNewVersion?: (copy: boolean) => void;
+  /** Shown under the card: the proposal documents of the version on screen. */
+  footer?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [verMenu, setVerMenu] = useState(false);
@@ -106,79 +109,68 @@ function RevLine({ name, tag, tagClass, line, unit, minUnit, calculator, catalog
         : qty === 1 ? `${money(bd.unitPrice)} one-time` : `${money(bd.unitPrice)} x ${qty}`;
 
   return (
-    <div className={`sl-rev-item sl-rev-card ${tag === "Product" ? "is-product" : "is-service"}`}>
-      <div className="sl-rev-head">
-        <span className="sl-rev-ico" aria-hidden="true">
+    <div className={`sl-rv ${tag === "Product" ? "is-product" : "is-service"} ${open ? "is-open" : ""}`}>
+      <div className="sl-rv-main" role="button" tabIndex={0} onClick={() => setOpen((o) => !o)} onKeyDown={(e) => { if (e.key === "Enter") setOpen((o) => !o); }}
+        aria-expanded={open} title={open ? "Hide details" : "Show breakdown and documents"}>
+        <span className="sl-rv-ico" aria-hidden="true">
           {tag === "Product" ? (
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" /><path d="M3.3 7L12 12l8.7-5M12 22V12" /></svg>
           ) : (
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" /></svg>
           )}
         </span>
-        <div className="sl-rev-titles">
-          <span className="sl-rev-name" title={name}>{name}</span>
-          <span className={`sl-rev-tag ${tagClass ?? ""}`}>{tag}</span>
-        </div>
-        <div className="sl-rev-amountwrap">
-          <b className="sl-rev-amount">{money(bd.total)}</b>
-          <span className="sl-rev-sub">{summary}</span>
-        </div>
+        <span className="sl-rv-txt">
+          <span className="sl-rv-name" title={name}>{name}</span>
+          <span className="sl-rv-sub">{summary}</span>
+        </span>
+        <span className="sl-rv-amt">
+          <b>{money(bd.total)}</b>
+          {bd.discount > 0 && <i>−{money(bd.discount)} off</i>}
+          {bd.qty !== bd.rawQty && <i className="is-round" title={`Calculated ${bd.rawQty}, billed in steps of ${minUnit}`}>{bd.rawQty} → {bd.qty}</i>}
+        </span>
+        <span className={`sl-rv-chev ${open ? "is-on" : ""}`} aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6" /></svg>
+        </span>
       </div>
 
-      <div className="sl-rev-toolbar">
-        <div className="sl-rev-versionbar">
-          {(versionCount ?? 1) > 1 && (
-            <div className="sl-ver-nav">
-              <button className="sl-ver-arrow" onClick={onPrev} disabled={!onPrev} aria-label="Previous version">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
-              </button>
-              <span className="sl-ver-label">v{(versionIdx ?? 0) + 1}<i>/{versionCount}</i></span>
-              <button className="sl-ver-arrow" onClick={onNext} disabled={!onNext} aria-label="Next version">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
-              </button>
-            </div>
-          )}
-          <div className="sl-ver-newwrap">
-            <button className="sl-ver-new" onClick={() => setVerMenu((v) => !v)} title="New version">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14" /></svg>
-              <span>Version</span>
+      <div className="sl-rv-tools">
+        {(versionCount ?? 1) > 1 ? (
+          <span className="sl-rv-ver">
+            <button onClick={onPrev} disabled={!onPrev} aria-label="Previous version">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
             </button>
-            {verMenu && (
-              <>
-                <div className="sl-ver-layer" onMouseDown={() => setVerMenu(false)} />
-                <div className="sl-ver-menu">
-                  <button onClick={() => { setVerMenu(false); onNewVersion?.(true); }}>Copy current</button>
-                  <button onClick={() => { setVerMenu(false); onNewVersion?.(false); }}>Start from scratch</button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-
-        <div className="sl-rev-actions">
-          {bd.qty !== bd.rawQty && (
-            <span className="sl-rev-round" title={`Calculated ${bd.rawQty}, billed in steps of ${minUnit}`}>{bd.rawQty} → <b>{bd.qty}</b></span>
+            <b>v{(versionIdx ?? 0) + 1}</b><i>of {versionCount}</i>
+            <button onClick={onNext} disabled={!onNext} aria-label="Next version">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
+            </button>
+          </span>
+        ) : <span className="sl-rv-ver is-one"><b>v1</b></span>}
+        <span className="sl-rv-newwrap">
+          <button className="sl-rv-tool" onClick={() => setVerMenu((v) => !v)} title="New version of this line">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14" /></svg>Version
+          </button>
+          {verMenu && (
+            <>
+              <div className="sl-ver-layer" onMouseDown={() => setVerMenu(false)} />
+              <div className="sl-ver-menu">
+                <button onClick={() => { setVerMenu(false); onNewVersion?.(true); }}>Copy current</button>
+                <button onClick={() => { setVerMenu(false); onNewVersion?.(false); }}>Start from scratch</button>
+              </div>
+            </>
           )}
-          {bd.discount > 0 && <span className="sl-rev-disc">-{money(bd.discount)}</span>}
-          <button className="sl-rev-icon" onClick={onOpenCalc} title="Open calculator" aria-label="Open calculator">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="4" y="2" width="16" height="20" rx="2" /><path d="M8 6h8M8 11h.01M12 11h.01M16 11h.01M8 15h.01M12 15h.01M16 15h.01M8 19h4" />
-            </svg>
-          </button>
-          <button className={`sl-rev-icon ${open ? "is-on" : ""}`} onClick={() => setOpen((o) => !o)}
-            title="Show breakdown" aria-expanded={open} aria-label="Show breakdown">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d={open ? "M18 15l-6-6-6 6" : "M6 9l6 6 6-6"} />
-            </svg>
-          </button>
-          <button className="sl-rev-icon sl-rev-icon-del" onClick={onRemove} title="Remove" aria-label="Remove line">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
-          </button>
-        </div>
+        </span>
+        <span className="sl-rv-spacer" />
+        <button className="sl-rv-tool is-calc" onClick={onOpenCalc} title="Open the calculator">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="2" width="16" height="20" rx="2" /><path d="M8 6h8M8 11h.01M12 11h.01M16 11h.01M8 15h.01M12 15h.01M16 15h.01M8 19h4" /></svg>
+          Calculator
+        </button>
+        <button className="sl-rv-tool is-del" onClick={onRemove} title="Remove this line" aria-label="Remove line">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" /></svg>
+        </button>
       </div>
 
       {open && (
-        <div className="sl-rev-receipt">
+        <div className="sl-rev-receipt sl-rv-receipt">
           {bd.rows.map((r) => (
             <div key={r.key} className="sl-rc-row">
               <span>{r.label}{r.detail ? ` (${r.detail})` : ""}</span>
@@ -211,6 +203,7 @@ function RevLine({ name, tag, tagClass, line, unit, minUnit, calculator, catalog
           <div className="sl-rc-row sl-rc-total"><span>Total</span><em>{money(bd.total)}</em></div>
         </div>
       )}
+      {open && footer && <div className="sl-rv-docs">{footer}</div>}
     </div>
   );
 }
@@ -222,10 +215,67 @@ const statusText = (s: string | null | undefined) => (s === "paused" ? "hold" : 
  * The deal's people: its contacts first, then the rest of the company's
  * contacts (one click adds them to the deal).
  */
+/** Small "links" menu: a chevron that opens every place you can jump to. */
+type QuickLink = { label: string; sub?: string; icon: string; href?: string; ext?: boolean; onClick?: () => void };
+const QL_ICON: Record<string, string> = {
+  open: "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3",
+  phone: "M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z",
+  mail: "M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM22 6l-10 7L2 6",
+  globe: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z",
+  linkedin: "M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-4 0v7h-4v-7a6 6 0 0 1 6-6zM2 9h4v12H2zM4 6a2 2 0 1 0 0-4 2 2 0 0 0 0 4z",
+  building: "M3 21h18M5 21V5a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v16M16 9h3a2 2 0 0 1 2 2v10M9 7h3M9 11h3M9 15h3",
+  user: "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
+  pin: "M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 0 1 18 0zM12 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
+};
+const QlIco = ({ n, s = 14 }: { n: string; s?: number }) => (
+  <svg viewBox="0 0 24 24" width={s} height={s} fill={n === "linkedin" ? "currentColor" : "none"} stroke={n === "linkedin" ? "none" : "currentColor"} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={QL_ICON[n] ?? QL_ICON.open} /></svg>
+);
+function LinksMenu({ links, label }: { links: QuickLink[]; label: string }) {
+  const [open, setOpen] = useState(false);
+  if (!links.length) return null;
+  return (
+    <span className="sl-ql">
+      <button type="button" className={`sl-ql-btn ${open ? "is-on" : ""}`} onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }} aria-label={label} title={label}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6" /></svg>
+      </button>
+      {open && (
+        <>
+          <span className="sl-ql-scrim" onMouseDown={() => setOpen(false)} />
+          <span className="sl-ql-menu" role="menu">
+            {links.map((l) => {
+              const body = <><span className="sl-ql-ico"><QlIco n={l.icon} /></span><span className="sl-ql-t"><b>{l.label}</b>{l.sub && <small>{l.sub}</small>}</span></>;
+              return l.href
+                ? <a key={l.label} role="menuitem" href={l.href} {...(l.ext ? { target: "_blank", rel: "noreferrer" } : {})} onClick={() => setOpen(false)}>{body}</a>
+                : <button key={l.label} role="menuitem" type="button" onClick={() => { setOpen(false); l.onClick?.(); }}>{body}</button>;
+            })}
+          </span>
+        </>
+      )}
+    </span>
+  );
+}
+const webHref = (w?: string | null) => { const s = String(w ?? "").trim(); return !s ? "" : /^https?:\/\//i.test(s) ? s : `https://${s}`; };
+const telOf = (p?: string | null) => `tel:${String(p ?? "").replace(/[^\d+]/g, "")}`;
+/** Everywhere a company can be reached from: Companies, web, LinkedIn, phones, email, map. */
+function companyQuickLinks(company: Company, openCompany: () => void): QuickLink[] {
+  const coAddr = [company.street, company.addr_number, company.postal_code, company.city, company.country].filter(Boolean).join(" ");
+  const li = String((company as any).linkedin ?? "");
+  return [
+    { label: "Open in Companies", icon: "building", onClick: openCompany },
+    ...(company.website ? [{ label: "Website", sub: company.website.replace(/^https?:\/\//i, ""), icon: "globe", href: webHref(company.website), ext: true }] : []),
+    ...(li ? [{ label: "LinkedIn", sub: li.replace(/^https?:\/\/(www\.)?linkedin\.com\//i, ""), icon: "linkedin", href: li, ext: true }] : []),
+    ...(company.phone ? [{ label: "Call", sub: company.phone, icon: "phone", href: telOf(company.phone) }] : []),
+    ...(company.landline ? [{ label: "Call landline", sub: company.landline, icon: "phone", href: telOf(company.landline) }] : []),
+    ...(company.email ? [{ label: "Email", sub: company.email, icon: "mail", href: `mailto:${company.email}` }] : []),
+    ...(coAddr ? [{ label: "Map", sub: coAddr, icon: "pin", href: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(coAddr)}`, ext: true }] : []),
+  ];
+}
+
 function DealPeople({ company, contacts, companyContactIds, dealIds, onChange }: {
   company: Company | undefined; contacts: Contact[]; companyContactIds: string[]; dealIds: string[];
   onChange: (ids: string[]) => void;
 }) {
+  const navigate = useNavigate();
   const [showAll, setShowAll] = useState(false);
   const byId = new Map(contacts.map((c) => [c.id!, c]));
   const onDeal = dealIds.map((id) => byId.get(id)).filter((c): c is Contact => !!c);
@@ -234,29 +284,54 @@ function DealPeople({ company, contacts, companyContactIds, dealIds, onChange }:
   const othersShown = showAll ? others : others.slice(0, 3);
   const name = (c: Contact) => [c.first_name, c.last_name].filter(Boolean).join(" ") || c.email || "Contact";
   const ini = (c: Contact) => name(c).split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
+  const openContact = (c: Contact) => c.id && navigate("/contacts", { state: { focusContactId: c.id } });
+  const openCompany = () => company?.id && navigate("/companies", { state: { focusCompanyId: company.id } });
+  const contactLinks = (c: Contact): QuickLink[] => [
+    { label: "Open in Contacts", icon: "user", onClick: () => openContact(c) },
+    ...(c.phone ? [{ label: "Call", sub: c.phone, icon: "phone", href: telOf(c.phone) }] : []),
+    ...(c.landline ? [{ label: "Call landline", sub: c.landline, icon: "phone", href: telOf(c.landline) }] : []),
+    ...(c.email ? [{ label: "Email", sub: c.email, icon: "mail", href: `mailto:${c.email}` }] : []),
+    ...(c.linkedin ? [{ label: "LinkedIn", sub: c.linkedin.replace(/^https?:\/\/(www\.)?linkedin\.com\//i, ""), icon: "linkedin", href: c.linkedin, ext: true }] : []),
+    ...(company ? [{ label: `Open ${company.name}`, sub: "in Companies", icon: "building", onClick: openCompany }] : []),
+  ];
+  const companyLinks: QuickLink[] = company ? companyQuickLinks(company, openCompany) : [];
   const row = (c: Contact, inDeal: boolean, i: number) => (
     <div key={c.id} className={`sl-ppl ${inDeal ? "is-deal" : ""}`} style={{ ["--i" as string]: Math.min(i, 10) } as CSSProperties}>
-      <span className="sl-ppl-av">{ini(c)}</span>
+      <button type="button" className="sl-ppl-av" onClick={() => openContact(c)} title="Open in Contacts">{ini(c)}</button>
       <span className="sl-ppl-main">
-        <b>{name(c)}{c.is_billing && <em>Billing</em>}</b>
-        {c.position && <small>{c.position}</small>}
-        {(c.email || c.phone) && (
-          <span className="sl-ppl-links">
-            {c.email && <a href={`mailto:${c.email}`} title={c.email}>{c.email}</a>}
-            {c.phone && <a href={`tel:${c.phone.replace(/\s+/g, "")}`}>{c.phone}</a>}
+        <button type="button" className="sl-ppl-name" onClick={() => openContact(c)} title="Open in Contacts">{name(c)}{c.is_billing && <em>Billing</em>}</button>
+        {(c.position || company) && (
+          <small>
+            {c.position}{c.position && company ? " · " : ""}
+            {company && <button type="button" className="sl-ppl-colink" onClick={openCompany} title="Open in Companies">{company.name}</button>}
+          </small>
+        )}
+        {(c.phone || c.email || c.linkedin) && (
+          <span className="sl-ppl-acts">
+            {c.phone && <a className="sl-ppl-act" href={telOf(c.phone)} title={`Call ${c.phone}`}><QlIco n="phone" s={12} />{c.phone}</a>}
+            {c.email && <a className="sl-ppl-act is-icon" href={`mailto:${c.email}`} title={c.email}><QlIco n="mail" s={13} /></a>}
+            {c.linkedin && <a className="sl-ppl-act is-icon is-li" href={c.linkedin} target="_blank" rel="noreferrer" title="LinkedIn"><QlIco n="linkedin" s={12} /></a>}
           </span>
         )}
       </span>
-      {inDeal
-        ? <button className="sl-ppl-x" onClick={() => onChange(dealIds.filter((x) => x !== c.id))} title="Take off this deal" aria-label={`Take ${name(c)} off this deal`}>×</button>
-        : <button className="sl-ppl-add" onClick={() => onChange([...dealIds, c.id!])}>+ Add</button>}
+      <span className="sl-ppl-side">
+        <LinksMenu links={contactLinks(c)} label={`Links for ${name(c)}`} />
+        {inDeal
+          ? <button className="sl-ppl-x" onClick={() => onChange(dealIds.filter((x) => x !== c.id))} title="Take off this deal" aria-label={`Take ${name(c)} off this deal`}>×</button>
+          : <button className="sl-ppl-add" onClick={() => onChange([...dealIds, c.id!])}>+ Add</button>}
+      </span>
     </div>
   );
   return (
     <section className="sl-panel sl-panel-people">
       <div className="sl-calc-head-row">
         <h3 className="sl-panel-title">Contacts{onDeal.length > 0 && <span>{onDeal.length}</span>}</h3>
-        {company && <span className="sl-ppl-co">{company.name}</span>}
+        {company && (
+          <span className="sl-ppl-cohead">
+            <button type="button" className="sl-ppl-co" onClick={openCompany} title="Open in Companies"><QlIco n="building" s={12} />{company.name}</button>
+            <LinksMenu links={companyLinks} label={`Links for ${company.name}`} />
+          </span>
+        )}
       </div>
       {onDeal.length === 0 && <p className="sl-hint">No contacts on this deal yet{others.length ? " — add one from the company below." : "."}</p>}
       <div className="sl-ppl-list">{onDeal.map((c, i) => row(c, true, i))}</div>
@@ -279,6 +354,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   salesRoles?: SalesRole[];
   onBack: () => void;
 }) {
+  const navigate = useNavigate();
   const [pendingHandover, setPendingHandover] = useState<{ plan: HandoverPlan; phaseId: string } | null>(null);
   const inactive = useInactiveIds(); // laid-off people aren't offered for the team or @mentions
   // Browser Back returns to the Sales overview instead of leaving the page.
@@ -323,6 +399,8 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   const [confirmServices, setConfirmServices] = useState<ConfirmService[]>([]);
   const [confirmClient, setConfirmClient] = useState<ConfirmClient | null>(null);
   const [confirmSkipPrompt, setConfirmSkipPrompt] = useState(false);
+  /** Deal details, revenue, documents, notes and tasks shown in the handoff panel. */
+  const [confirmExtras, setConfirmExtras] = useState<HandoffExtras | null>(null);
   const [trackingContactIds, setTrackingContactIds] = useState<string[]>([]);
   useEffect(() => { loadTrackingContactIds(tracking.id).then(setTrackingContactIds).catch(() => {}); }, [tracking.id]);
   const [clientCatalog, setClientCatalog] = useState<Product[]>([]);
@@ -588,9 +666,10 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     const picked = handoffTargets.filter((t) => handoffPicked.has(t.id));
     const ids = new Set<string>();
     picked.forEach((tg) => (tg.items ?? []).forEach((it: any) => { if (it.type === "service") ids.add(it.id); }));
-    const today = new Date().toISOString().slice(0, 10);
-    const source = ids.size ? potentials.filter((p) => ids.has(svcKey(p))) : potentials;
-    return source.map((p) => ({
+    // The version on screen of each line comes first; the others (proposals)
+    // can be picked in the handoff panel. The signing date is set there.
+    const source = ids.size ? activePotentials.filter((p) => ids.has(svcKey(p))) : activePotentials;
+    const card = (p: PotentialService, label: string, group: string): ConfirmService => ({
       key: p.id,
       serviceId: p.service_id ?? "",
       name: p.label || serviceName(p.service_id),
@@ -598,10 +677,33 @@ export default function TrackingDetail({ tracking, companies, contacts, products
       calculator: (serviceOf(p.service_id)?.calculator as Calculator | null) ?? null,
       unit: (serviceUnit(p.service_id) === "hour" ? "hour" : "day"),
       minUnit: serviceMin(p.service_id),
-      signingDate: today,
+      signingDate: "",
       contactIds: (((p as any).contact_ids ?? []) as string[]),
-    }));
+      group, versionLabel: label,
+    });
+    return source.map((p) => {
+      const group = p.version_group ?? p.id;
+      const grp = groupOf(potentials, group) as PotentialService[];
+      const alts = grp.map((v, i) => card(v, `v${i + 1}`, group));
+      return { ...card(p, `v${Math.max(0, grp.findIndex((x) => x.id === p.id)) + 1}`, group), alts };
+    });
   };
+  /** The deal's products with every version, for the handoff panel. */
+  const confirmProductCards = (): ConfirmProduct[] => activeTprods.filter((tp) => tp.product_id).map((tp) => {
+    const group = tp.version_group ?? tp.id;
+    const grp = groupOf(tprods, group) as TrackingProduct[];
+    const one = (v: TrackingProduct, i: number) => {
+      const prod = productOf(v.product_id);
+      return {
+        key: v.id, group, productId: v.product_id as string, name: productName(v.product_id), line: { ...(v as any) },
+        calculator: (prod?.calculator as Calculator | null) ?? null,
+        catalogBase: prod?.tiers?.find((x) => x.id === v.tier_id)?.price,
+        versionLabel: `v${i + 1}`,
+      };
+    };
+    const alts = grp.map(one);
+    return { ...one(tp, Math.max(0, grp.findIndex((x) => x.id === tp.id))), alts };
+  });
 
   /**
    * Handoff destinations = pipelines referenced by any phase's handover_to.
@@ -672,6 +774,18 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     curPhaseObj?.close_probability != null ? curPhaseObj.close_probability : null;
   const probTone = closeProb == null ? "none" : closeProb >= 70 ? "hi" : closeProb >= 40 ? "mid" : "lo";
   const phaseEnteredAt = (phaseId: string) => events.find((e) => e.phase_id === phaseId)?.entered_at ?? null;
+  // Correct the day a phase was reached by hand (clicking a phase still stamps today).
+  const [dateEdit, setDateEdit] = useState<string | null>(null);
+  const dateAnchor = useRef<HTMLElement | null>(null);
+  const changePhaseDate = async (phaseId: string, day: string) => {
+    if (!day) return;
+    const iso = new Date(`${day}T12:00:00`).toISOString();
+    const ev = await setPhaseEntryDate(tracking.id, phaseId, iso);
+    setEvents((xs) => {
+      const rest = xs.filter((x) => x.phase_id !== phaseId);
+      return [...rest, ev ?? { id: `tmp-${phaseId}`, phase_id: phaseId, entered_at: iso }];
+    });
+  };
 
   // Move to a phase. Past the last phase a sales role sees, the deal is handed
   // over first (double confirmation); otherwise it just moves.
@@ -707,9 +821,15 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     const keepIds = phases.slice(0, newIdx + 1).map((p) => p.id);
     const e = await stampPhaseEntry(tracking.id, id);
     await clearPhaseEventsAfter(tracking.id, keepIds);
+    // Phases jumped over (first → last, say) take the same date as the one the deal landed on.
+    const landedAt = e?.entered_at ?? events.find((x) => x.phase_id === id)?.entered_at ?? new Date().toISOString();
+    const have = new Set(events.map((x) => x.phase_id));
+    const gaps = phases.slice(0, newIdx).filter((p) => !p.sales_outcome && !have.has(p.id)).map((p) => p.id);
+    const filled = await fillPhaseEntries(tracking.id, gaps, landedAt).catch(() => [] as PhaseEvent[]);
     setEvents((xs) => {
       let next = xs.filter((ev) => ev.phase_id && keepIds.includes(ev.phase_id));
       if (e && !next.find((x) => x.phase_id === id)) next = [...next, e];
+      filled.forEach((f) => { if (!next.find((x) => x.phase_id === f.phase_id)) next = [...next, f]; });
       return next;
     });
     const ph = phases.find((p) => p.id === id);
@@ -1187,6 +1307,104 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     return out;
   })();
 
+  /**
+   * Everything else on the deal for the handoff panel: details, the revenue
+   * lines as sold, every document (version proposals included), notes, tasks,
+   * and the client's own folders to file documents into.
+   */
+  const buildHandoffExtras = async (): Promise<HandoffExtras> => {
+    const phaseName = (id: string | null | undefined) => (id ? allPhases.find((p) => p.id === id)?.name ?? null : null);
+    const [files, fresh, cl] = await Promise.all([
+      loadAllTrackingFiles(tracking.id).catch(() => []),
+      supabase.from("trackings").select("custom").eq("id", tracking.id).maybeSingle().then((r) => (r.data as any)?.custom ?? tracking.custom ?? {}, () => tracking.custom ?? {}),
+      tracking.company_id ? supabase.from("clients").select("id").eq("company_id", tracking.company_id).limit(1).then((r) => (r.data ?? [])[0] as any) : Promise.resolve(null),
+    ]);
+    let folders: string[] = [];
+    if (cl?.id) {
+      const { data } = await supabase.from("client_folders").select("name").eq("client_id", cl.id).is("parent_id", null).order("sort");
+      folders = ((data ?? []) as any[]).map((f) => String(f.name));
+    }
+    const pct = (n: number | null) => (n == null ? "" : `${n}%`);
+    const day = (d: string | null | undefined) => (d ? new Date(d.length === 10 ? `${d}T12:00:00` : d).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "");
+    const customVal = (f: TrackingField) => {
+      const v = (fresh as any)?.[f.id];
+      if (v == null || v === "") return "";
+      if (f.type === "boolean") return v ? "Yes" : "No";
+      if (f.type === "date") return day(String(v));
+      return String(v);
+    };
+    const fields = [
+      { label: "Deal", value: dealName || company?.name || "" },
+      { label: "Pipeline", value: allPipelines.find((p) => p.id === tracking.pipeline_id)?.name ?? "" },
+      { label: "Phase", value: phaseName(curPhase) ?? "" },
+      { label: "Status", value: statusText(status) },
+      { label: "Owner", value: owner ? empName(owner) : "" },
+      { label: "Team", value: team.map(empName).join(", ") },
+      { label: "Deal contacts", value: trackingContactIds.map(contactName).filter(Boolean).join(", ") },
+      { label: "Close probability (rep)", value: pct(repProb) },
+      { label: "Close probability (manager)", value: pct(mgrProb) },
+      { label: "Expected close (rep)", value: day(repDate) },
+      { label: "Expected close (manager)", value: day(mgrDate) },
+      { label: "Closed on", value: day(closedOn) },
+      { label: "Created", value: day(tracking.created_at) },
+      ...trackingFields.map((f) => ({ label: f.label, value: customVal(f) })),
+    ].filter((f) => f.value);
+
+    const revOf = (l: any, kind: "product" | "service") => {
+      const calc = (kind === "product" ? productOf(l.product_id)?.calculator : serviceOf(l.service_id)?.calculator) as Calculator | null;
+      const base = kind === "product" ? productOf(l.product_id)?.tiers?.find((x) => x.id === l.tier_id)?.price : undefined;
+      const bd = lineBreakdown(l, calc, base, kind === "service" ? serviceMin(l.service_id) : undefined);
+      const grp = groupOf(kind === "product" ? tprods : potentials, l.version_group ?? l.id);
+      const unit = kind === "service" ? (serviceUnit(l.service_id) === "hour" ? "hours" : "days") : "";
+      const summary = l.recurring
+        ? `${money(bd.unitPrice)} per ${l.period === "monthly" ? "month" : "year"} ${bd.multiplierLabel ?? ""}`.trim()
+        : kind === "service" ? `${bd.qty} ${unit}` : `${money(bd.unitPrice)} x ${Number(l.quantity ?? 1)}`;
+      return {
+        key: l.id, kind, label: kind === "product" ? productName(l.product_id) : (l.label || serviceName(l.service_id)),
+        total: bd.total, gross: bd.gross, discount: bd.discount, summary,
+        version: grp.length > 1 ? `v${grp.findIndex((x) => x.id === l.id) + 1} of ${grp.length}` : "",
+        rows: bd.rows.map((r) => ({ label: r.label, detail: r.detail, amount: r.amount, discount: r.discount })),
+      };
+    };
+    const revenue = [...activeTprods.map((l) => revOf(l, "product")), ...activePotentials.map((l) => revOf(l, "service"))];
+
+    const docs: HandoffDoc[] = files.map((f): HandoffDoc => {
+      const base = { id: f.id, name: f.name, mime: f.mime, size: f.size_bytes, note: f.note, created_at: f.created_at, bucket: "tracking-files", path: f.storage_path };
+      if (!f.line_id) return { ...base, group: "deal" as const };
+      const prod = tprods.find((x) => x.id === f.line_id);
+      const svc = prod ? null : potentials.find((x) => x.id === f.line_id);
+      const line: any = prod ?? svc;
+      if (!line) return { ...base, group: "revenue" as const, lineLabel: "Removed line", active: false };
+      const kind = prod ? "product" as const : "service" as const;
+      const list: any[] = prod ? tprods : potentials;
+      const grp = groupOf(list, line.version_group ?? line.id);
+      const live = activeOfGroup(list, line.version_group ?? line.id);
+      return {
+        ...base, group: "revenue" as const, kind,
+        lineLabel: prod ? productName(line.product_id) : (line.label || serviceName(line.service_id)),
+        version: `v${grp.findIndex((x) => x.id === line.id) + 1}`, active: live?.id === line.id,
+      };
+    }).sort((a, b) => (a.lineLabel ?? "").localeCompare(b.lineLabel ?? "") || (a.version ?? "").localeCompare(b.version ?? ""));
+
+    return {
+      deal: { title: dealName || company?.name || "Deal", fields },
+      revenue, docs, folders,
+      notes: notes.map((n) => ({ id: n.id, body: n.body, created_at: n.created_at, author: n.created_by ? empName(n.created_by) : null, phase: phaseName(n.phase_id) })),
+      tasks: tasks.map((t) => ({ id: t.id, title: t.title, description: t.description ?? null, done: t.done, due_at: t.due_at ?? null, status: t.status ?? null, priority: t.priority ?? null, phase: phaseName(t.phase_id) })),
+    };
+  };
+  // Load the extras whenever the handoff panel opens (whichever path opened it).
+  useEffect(() => {
+    if (!confirmOpen) { setConfirmExtras(null); return; }
+    let alive = true;
+    buildHandoffExtras().then((x) => { if (alive) setConfirmExtras(x); }).catch((e) => {
+      console.error("handoff extras failed:", e);
+      if (alive) setConfirmExtras({ deal: { title: "", fields: [] }, revenue: [], docs: [], notes: [], tasks: [], folders: [] });
+    });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [confirmOpen]);
+
   const switchProdVersion = async (vg: string, id: string) => {
     setTProds((xs) => xs.map((x) => (x.version_group ?? x.id) === vg ? { ...x, version_active: x.id === id } : x));
     await setLineVersionActive("tracking_products", vg, id).catch(() => {});
@@ -1209,8 +1427,9 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     const base = prod?.tiers?.find((x) => x.id === p.tier_id)?.price;
     return s + lineTotal(p, prod?.calculator as Calculator | null, base);
   }, 0);
-  const totalPotential = productsTotal + activePotentials.reduce(
+  const servicesTotal = activePotentials.reduce(
     (s, p) => s + lineTotal(p, serviceOf(p.service_id)?.calculator as Calculator | null, undefined, serviceMin(p.service_id)), 0);
+  const totalPotential = productsTotal + servicesTotal;
   const money = (n: number) =>
     `\u20ac${(Number(n) || 0).toLocaleString("de-DE", { maximumFractionDigits: 0 })}`;
 
@@ -1247,22 +1466,15 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     ));
   }, [handoffMenu]);
 
-  const doHandoff = async () => {
-   try {
-    const picked = handoffTargets.filter((t) => handoffPicked.has(t.id));
-    if (!picked.length) return;
-
-    /**
-     * Each destination only receives what belongs to it: the products and
-     * services listed on the handoff phase that points at that pipeline.
-     * Sending the whole deal to every destination made every card in
-     * management look identical.
-     */
-    const destinations = picked.map((tg) => {
+  /**
+   * What each destination receives: the products and services listed on the
+   * handoff phase that points at that pipeline, priced from the calculator.
+   */
+  const destinationsFor = (picked: { id: string; name: string; items?: any[] }[], pots: PotentialService[], prods: TrackingProduct[] = activeTprods) => picked.map((tg) => {
       const ids = new Set((tg.items ?? []).map((it: any) => it.id));
       const lines: any[] = [];
 
-      tprods.filter((tp) => tp.product_id && ids.has(tp.product_id)).forEach((tp) => {
+      prods.filter((tp) => tp.product_id && ids.has(tp.product_id)).forEach((tp) => {
         const prod = productOf(tp.product_id);
         const base = prod?.tiers?.find((x) => x.id === tp.tier_id)?.price;
         const bd = lineBreakdown(tp, prod?.calculator as Calculator | null, base);
@@ -1274,7 +1486,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
         });
       });
 
-      potentials.filter((p) => ids.has(svcKey(p))).forEach((p) => {
+      pots.filter((p) => ids.has(svcKey(p))).forEach((p) => {
         const svcCalc = serviceOf(p.service_id)?.calculator as Calculator | null;
         const minU = serviceMin(p.service_id);
         const bd = lineBreakdown(p, svcCalc, undefined, minU);
@@ -1293,19 +1505,28 @@ export default function TrackingDetail({ tracking, companies, contacts, products
         const lineRate = svcCalc?.output_kind === "quantity"
           ? baseRate
           : (days > 0 ? Math.round(bd.total / days) : Math.round(bd.total));
+        // The calculator's supervision variable (Settings) splits its days off
+        // as supervision, at its own rate; management builds the project from it.
+        const isSup = (key: string) => !!svcCalc?.variables.find((v) => (v.id ?? String(v.sort)) === key)?.is_supervision;
+        const rows = bd.rows.map((r) => {
+          const tr = timeRows.find((x) => x.key === r.key);
+          const d = tr ? tr.amount : undefined;
+          return {
+            label: r.label, detail: r.detail, amount: r.amount, discount: r.discount,
+            days: d, rate: d && d > 0 ? Math.round(r.amount / d) : undefined,
+            supervision: isSup(r.key) || undefined,
+          };
+        });
+        const supRows = rows.filter((r) => r.supervision && (r.days ?? 0) > 0);
+        const supDays = supRows.reduce((a, r) => a + (r.days ?? 0), 0);
         lines.push({
           label: p.label || serviceName(p.service_id), kind: "service",
           price: Math.round(bd.total), days,
           gross: Math.round(bd.gross), discount: Math.round(bd.discount),
           rate: Math.round(lineRate),
-          rows: bd.rows.map((r) => {
-            const tr = timeRows.find((x) => x.key === r.key);
-            const d = tr ? tr.amount : undefined;
-            return {
-              label: r.label, detail: r.detail, amount: r.amount, discount: r.discount,
-              days: d, rate: d && d > 0 ? Math.round(r.amount / d) : undefined,
-            };
-          }),
+          rows,
+          supervision_days: supDays || undefined,
+          supervision_rate: supDays ? Math.round(supRows.reduce((a, r) => a + r.amount, 0) / supDays) : undefined,
         });
       });
 
@@ -1317,6 +1538,19 @@ export default function TrackingDetail({ tracking, companies, contacts, products
           .reduce((s, l) => s + (l.price || 0), 0),
       };
     });
+
+  const doHandoff = async () => {
+   try {
+    const picked = handoffTargets.filter((t) => handoffPicked.has(t.id));
+    if (!picked.length) return;
+
+    /**
+     * Each destination only receives what belongs to it: the products and
+     * services listed on the handoff phase that points at that pipeline.
+     * Sending the whole deal to every destination made every card in
+     * management look identical.
+     */
+    const destinations = destinationsFor(picked, activePotentials);
 
     // Management keys clients by company. If no client exists yet for this
     // company, sales must create it (with legal info) BEFORE the handoff builds
@@ -1382,13 +1616,14 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   };
 
   // The actual write, shared by the direct path and the after-client-created path.
-  const sendHandoff = async (destinations: { id: string; name: string; services: any[]; potential_value: number }[]) => {
+  const sendHandoff = async (destinations: { id: string; name: string; services: any[]; potential_value: number }[], pkg?: HandoffPackage) => {
     await createHandoffs({
       tracking_id: tracking.id,
       company_id: tracking.company_id,
       company_name: company?.name ?? null,
       product_id: tracking.product_id,
       destinations,
+      package: pkg,
     });
     setHandoffSent(true);
     loadTrackingHandoffs(tracking.id).then(setHandoffs).catch(() => {});
@@ -1503,8 +1738,15 @@ export default function TrackingDetail({ tracking, companies, contacts, products
           <div className="sl-d-metaline">
             <span className={`sl-d-badge sl-badge-${status}`}>{statusText(status)}</span>
             <span className="sl-d-sub">
-              {company ? (dealName.trim() ? company.name : "Company") : "Contact"}
-              {tracking.contactIds.length > 0 && ` \u00b7 ${tracking.contactIds.map(contactName).join(", ")}`}
+              {company ? (
+                <span className="sl-d-co">
+                  <button type="button" className="sl-d-colink" onClick={() => navigate("/companies", { state: { focusCompanyId: company.id } })} title="Open in Companies">{company.name}</button>
+                  <LinksMenu links={companyQuickLinks(company, () => navigate("/companies", { state: { focusCompanyId: company.id } }))} label={`Links for ${company.name}`} />
+                </span>
+              ) : "Contact"}
+              {tracking.contactIds.length > 0 && <> · {tracking.contactIds.map((cid, i) => (
+                <span key={cid}>{i > 0 ? ", " : ""}<button type="button" className="sl-d-colink is-person" onClick={() => navigate("/contacts", { state: { focusContactId: cid } })} title="Open in Contacts">{contactName(cid)}</button></span>
+              ))}</>}
               {product && ` \u00b7 ${product.name}`}
             </span>
           </div>
@@ -1684,13 +1926,24 @@ export default function TrackingDetail({ tracking, companies, contacts, products
                     <span className="sl-flow-num">{p.sales_outcome === "win" ? "★" : p.sales_outcome === "loss" ? "✕" : state === "done" ? "✓" : i + 1}</span>
                     <span className="sl-flow-text">
                       <span className="sl-flow-name">{p.name}</span>
-                      <span className="sl-flow-date">{entered ? fmtDate(entered) : "—"}</span>
+                      <span className={`sl-flow-date ${state !== "future" ? "is-edit" : ""} ${dateEdit === p.id ? "is-on" : ""}`}
+                        title={state !== "future" ? "Change the date" : undefined}
+                        onClick={(ev) => { if (state === "future") return; ev.stopPropagation(); dateAnchor.current = ev.currentTarget; setDateEdit(p.id); }}>
+                        {entered ? fmtDate(entered) : state !== "future" ? "+ date" : "—"}
+                        {state !== "future" && <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>}
+                      </span>
                     </span>
                   </button>
                 </div>
               );
             })}
             </div>
+            {dateEdit && (
+              <DatePicker hideTrigger open anchorRef={dateAnchor} value={(phaseEnteredAt(dateEdit) ?? "").slice(0, 10)}
+                maxDate={new Date().toISOString().slice(0, 10)}
+                onOpenChange={(o) => { if (!o) setDateEdit(null); }}
+                onChange={(d) => { const id = dateEdit; setDateEdit(null); void changePhaseDate(id, d); }} />
+            )}
           </div>
         </div>
 
@@ -1813,6 +2066,12 @@ export default function TrackingDetail({ tracking, companies, contacts, products
               </div>
             )}
           </section>
+          <DealPeople company={company} contacts={contacts} companyContactIds={companyContactIds}
+            dealIds={Array.from(new Set([...trackingContactIds, ...tracking.contactIds]))}
+            onChange={async (ids) => {
+              setTrackingContactIds(ids); tracking.contactIds = ids;
+              await setTrackingContacts(tracking.id, ids).catch(() => {});
+            }} />
           </div>
 
           <div className="sl-col-right">
@@ -1900,16 +2159,28 @@ export default function TrackingDetail({ tracking, companies, contacts, products
 
           <div className="sl-col-calc">
           <section className="sl-panel sl-panel-calc">
-            <div className="sl-calc-head-row">
-              <h3 className="sl-panel-title">Potential revenue</h3>
-              <span className="sl-calc-headtotal">{money(totalPotential)}</span>
+            <div className="sl-rvh">
+              <div className="sl-rvh-top">
+                <h3 className="sl-panel-title">Potential revenue</h3>
+                <b className="sl-rvh-total">{money(totalPotential)}</b>
+              </div>
+              <div className="sl-rvh-bar" aria-hidden="true">
+                <i className="is-product" style={{ flexGrow: Math.max(0.0001, productsTotal) }} />
+                <i className="is-service" style={{ flexGrow: Math.max(0.0001, servicesTotal) }} />
+              </div>
+              <div className="sl-rvh-legend">
+                <span className="is-product"><i />Products<b>{money(productsTotal)}</b></span>
+                <span className="is-service"><i />Services<b>{money(servicesTotal)}</b></span>
+              </div>
             </div>
 
-            {tprods.length === 0 && potentials.length === 0 && (
-              <p className="sl-hint">No products or services yet.</p>
-            )}
-
-            <div className="sl-calc-cards">
+            <div className="sl-rvg is-product">
+              <div className="sl-rvg-head">
+                <span className="sl-rvg-t"><i />Products<em>{activeTprods.length}</em></span>
+                <b>{money(productsTotal)}</b>
+              </div>
+              {activeTprods.length === 0 && <p className="sl-rvg-empty">No products yet.</p>}
+              <div className="sl-calc-cards">
               {activeTprods.map((tp) => {
                 const vg = tp.version_group ?? tp.id;
                 const grp = groupOf(tprods, vg);
@@ -1923,9 +2194,25 @@ export default function TrackingDetail({ tracking, companies, contacts, products
                     versionIdx={idx} versionCount={grp.length}
                     onPrev={idx > 0 ? () => switchProdVersion(vg, grp[idx - 1].id) : undefined}
                     onNext={idx < grp.length - 1 ? () => switchProdVersion(vg, grp[idx + 1].id) : undefined}
-                    onNewVersion={(copy) => newProdVersion(tp.id, copy)} />
+                    onNewVersion={(copy) => newProdVersion(tp.id, copy)}
+                    footer={<LineDocs key={tp.id} trackingId={tracking.id} lineId={tp.id} lineKind="product" phaseId={curPhase} versionLabel={`v${idx + 1}`} />} />
                 );
               })}
+              </div>
+              {availableProducts.length > 0 && (
+                <div className="sl-rvg-add">
+                  <Select value="" onChange={(v) => v && addProduct(v)} placeholder="+ Add product" options={availableProducts.map((p) => ({ value: p.id!, label: p.name }))} />
+                </div>
+              )}
+            </div>
+
+            <div className="sl-rvg is-service">
+              <div className="sl-rvg-head">
+                <span className="sl-rvg-t"><i />Services<em>{activePotentials.length}</em></span>
+                <b>{money(servicesTotal)}</b>
+              </div>
+              {activePotentials.length === 0 && <p className="sl-rvg-empty">No services yet.</p>}
+              <div className="sl-calc-cards">
               {activePotentials.map((p) => {
                 const vg = p.version_group ?? p.id;
                 const grp = groupOf(potentials, vg);
@@ -1939,22 +2226,20 @@ export default function TrackingDetail({ tracking, companies, contacts, products
                     versionIdx={idx} versionCount={grp.length}
                     onPrev={idx > 0 ? () => switchSvcVersion(vg, grp[idx - 1].id) : undefined}
                     onNext={idx < grp.length - 1 ? () => switchSvcVersion(vg, grp[idx + 1].id) : undefined}
-                    onNewVersion={(copy) => newSvcVersion(p.id, copy)} />
+                    onNewVersion={(copy) => newSvcVersion(p.id, copy)}
+                    footer={<LineDocs key={p.id} trackingId={tracking.id} lineId={p.id} lineKind="service" phaseId={curPhase} versionLabel={`v${idx + 1}`} />} />
                 );
               })}
-            </div>
-
-            <div className="sl-calc-adds">
-              {availableProducts.length > 0 && (
-                <Select value="" onChange={(v) => v && addProduct(v)} placeholder="+ Add product" options={availableProducts.map((p) => ({ value: p.id!, label: p.name }))} />
-              )}
+              </div>
               {services.length > 0 && (
-                <Select value="" onChange={(v) => v && addPotential(v)} placeholder="+ Add potential service" options={services.map((s) => ({ value: s.id!, label: s.name }))} />
+                <div className="sl-rvg-add">
+                  <Select value="" onChange={(v) => v && addPotential(v)} placeholder="+ Add service" options={services.map((s) => ({ value: s.id!, label: s.name }))} />
+                </div>
               )}
             </div>
 
             {revErr && <p className="sl-rev-err">Could not save: {revErr}</p>}
-            <div className="sl-calc-foot sl-calc-foot-actions" onMouseLeave={() => setPropMenu(false)}>
+            <div className="sl-calc-foot sl-calc-foot-actions">
               <span>Total if won</span>
               <div className="sl-prop-wrap">
                 <button className={`sl-prop-btn ${propBusy ? "is-busy" : ""}`} onClick={() => setPropMenu((v) => !v)} disabled={!!propBusy} title="Generate proposal">
@@ -1965,6 +2250,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
                   )}
                   <span>{propBusy ? "Generating…" : "Proposal"}</span>
                 </button>
+                {propMenu && <div className="sl-prop-scrim" onMouseDown={() => setPropMenu(false)} />}
                 {propMenu && (
                   <div className="sl-prop-menu">
                     <button onClick={() => runProposal("pptx")}>
@@ -1981,12 +2267,6 @@ export default function TrackingDetail({ tracking, companies, contacts, products
             {propErr && <p className="sl-rev-err">{propErr}</p>}
           </section>
 
-          <DealPeople company={company} contacts={contacts} companyContactIds={companyContactIds}
-            dealIds={Array.from(new Set([...trackingContactIds, ...tracking.contactIds]))}
-            onChange={async (ids) => {
-              setTrackingContactIds(ids); tracking.contactIds = ids;
-              await setTrackingContacts(tracking.id, ids).catch(() => {});
-            }} />
           </div>
         </div>
       </div>
@@ -2042,17 +2322,56 @@ export default function TrackingDetail({ tracking, companies, contacts, products
           skipPrompt={confirmSkipPrompt}
           client={confirmClient}
           services={confirmServices}
+          products={confirmProductCards()}
+          extras={confirmExtras}
           money={money}
           onClose={() => { setConfirmOpen(false); setPendingHandoff(null); }}
-          onConfirm={async ({ services, mode, client, paymentDays }) => {
-            // Client-level edits: legal, address, payment (NOT contacts — those are
-            // per-service now and live on the service rows + tracking_contacts).
-            if (tracking.company_id && (mode === "update" || client)) {
-              await supabase.from("clients").update({
-                legal_name: client.legalName || null, vat_number: client.vatNumber || null,
-                address: client.address, payment_days: paymentDays,
-              }).eq("company_id", tracking.company_id);
+          onConfirm={async ({ services, client, share, pkg, products: chosenProducts }) => {
+            // The versions picked in the panel become the active ones on the deal.
+            for (const sv of services) {
+              const g = sv.group ?? sv.key;
+              if (activeOfGroup(potentials, g)?.id !== sv.key) await switchSvcVersion(g, sv.key);
             }
+            for (const pr of chosenProducts) {
+              if (activeOfGroup(tprods, pr.group)?.id !== pr.key) await switchProdVersion(pr.group, pr.key);
+            }
+            // The client's contract gets the product version picked here, priced
+            // from its calculator, with the breakdown to show on the client page.
+            const signed = services.map((x) => x.signingDate).filter(Boolean).sort()[0] || null;
+            const cidRow = tracking.company_id ? (await supabase.from("clients").select("id").eq("company_id", tracking.company_id).limit(1)).data?.[0] as any : null;
+            if (cidRow?.id) {
+              for (const pr of chosenProducts) {
+                const l: any = pr.line;
+                const bd = lineBreakdown(pr.line, pr.calculator, pr.catalogBase);
+                const patch: Record<string, any> = {
+                  price: Math.round(bd.unitPrice * 100) / 100, quantity: l.recurring ? 1 : bd.qty,
+                  recurring: !!l.recurring, period: l.period ?? null, term_years: l.term_years ?? null,
+                  discount_mode: "none", discount_value: 0,
+                  breakdown: {
+                    version: pr.versionLabel, multiplier: bd.multiplierLabel, gross: bd.gross, discount: bd.discount, total: bd.total,
+                    rows: bd.rows.map((r) => ({ label: r.label, detail: r.detail, amount: r.amount, discount: r.discount })),
+                  },
+                };
+                const write = async (body: Record<string, any>) => {
+                  const up = await supabase.from("client_products").update(body)
+                    .eq("client_id", cidRow.id).eq("tracking_id", tracking.id).eq("product_id", pr.productId).select("id");
+                  if (up.error) return up.error;
+                  if ((up.data ?? []).length) return null;
+                  const ins = await supabase.from("client_products").insert({
+                    ...body, client_id: cidRow.id, tracking_id: tracking.id, product_id: pr.productId,
+                    signing_date: signed, start_date: signed, status: "active",
+                  });
+                  return ins.error;
+                };
+                let e = await write(patch);
+                // Before handoff_v3.sql there is no breakdown column.
+                if (e && /breakdown/i.test(e.message)) { const { breakdown: _b, ...rest } = patch; e = await write(rest); }
+                if (e) console.warn("client product not updated:", e.message);
+              }
+            }
+            // Client details, payment terms and documents are NOT written here: they
+            // travel in the package and management applies them on "Build project"
+            // (keep / fill blanks / update; documents are added, never replaced).
             // Create any brand-new contacts on the company; capture their real ids.
             let created: { localId: string; id: string }[] = [];
             if (tracking.company_id) {
@@ -2084,8 +2403,52 @@ export default function TrackingDetail({ tracking, companies, contacts, products
             await setTrackingContacts(tracking.id, unionIds).catch(() => {});
             setTrackingContactIds(unionIds);
 
+            const extras = confirmExtras;
+            // What the client page shows from sales: excluded notes/tasks are hidden,
+            // and the deal's documents now live in the client folders (or stay in sales).
+            if (extras) {
+              const offSet = new Set(share.off);
+              const split = (items: { id: string }[], prefix: string, blockOn: boolean) => ({
+                yes: items.filter((x) => blockOn && !offSet.has(`${prefix}:${x.id}`)).map((x) => x.id),
+                no: items.filter((x) => !blockOn || offSet.has(`${prefix}:${x.id}`)).map((x) => x.id),
+              });
+              const n = split(extras.notes, "note", share.blocks.notes);
+              const t = split(extras.tasks, "task", share.blocks.tasks);
+              await Promise.all([
+                n.yes.length && supabase.from("tracking_notes").update({ share_client: true }).in("id", n.yes),
+                n.no.length && supabase.from("tracking_notes").update({ share_client: false }).in("id", n.no),
+                t.yes.length && supabase.from("tracking_tasks").update({ share_client: true }).in("id", t.yes),
+                t.no.length && supabase.from("tracking_tasks").update({ share_client: false }).in("id", t.no),
+                // "Don't send" documents stay in sales; the rest are copied on Build project.
+                (() => {
+                  const hide = extras.docs.filter((d) => !destFolder(share.docDest[d.id] ?? "skip")).map((d) => d.id);
+                  return hide.length && supabase.from("tracking_files").update({ share_client: false }).in("id", hide);
+                })(),
+              ].map((p) => Promise.resolve(p).catch(() => null)));
+            }
+
+            // Rebuild what goes to management from the calculator as edited in this
+            // panel (the destinations were first priced before those edits).
+            let toSend = pendingHandoff;
+            if (pendingHandoff) {
+              // Per line: the version picked in the panel, with the edits made there.
+              const chosen = new Map(services.map((x) => [x.group ?? x.key, x]));
+              const pots = activePotentials.map((p) => {
+                const c = chosen.get(p.version_group ?? p.id);
+                if (!c) return p;
+                const row = potentials.find((q) => q.id === c.key) ?? p;
+                return { ...row, ...(c.line as any), version_active: true } as PotentialService;
+              });
+              const picked = handoffTargets.filter((t) => pendingHandoff.some((d) => d.id === t.id));
+              const chosenP = new Map(chosenProducts.map((x) => [x.group, x]));
+              const prods = activeTprods.map((tp) => {
+                const c = chosenP.get(tp.version_group ?? tp.id);
+                return c ? ({ ...(tprods.find((q) => q.id === c.key) ?? tp), version_active: true } as TrackingProduct) : tp;
+              });
+              if (picked.length) toSend = destinationsFor(picked, pots, prods);
+            }
+            if (toSend) { await sendHandoff(toSend, pkg); setPendingHandoff(null); }
             setConfirmOpen(false);
-            if (pendingHandoff) { await sendHandoff(pendingHandoff); setPendingHandoff(null); }
           }}
         />
       )}

@@ -357,3 +357,18 @@
 .cat-add-role { margin-top: 10px; }
 
 @media (max-width: 620px) { .cat-unit-row { grid-template-columns: 1fr; } }
+/* Supervision variable: its days become the project's supervision days */
+.cat-calc-sup { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 12px; margin-top: 10px; padding: 10px 12px; border-radius: 12px; border: 1px dashed rgba(10, 111, 77, 0.18); background: rgba(10, 111, 77, 0.025); transition: background 0.2s, border-color 0.2s; }
+.cat-calc-sup.is-on { border-style: solid; border-color: rgba(18, 181, 127, 0.45); background: rgba(18, 181, 127, 0.07); }
+.cat-calc-sup-switch { flex-shrink: 0; position: relative; width: 36px; height: 21px; padding: 0; border: none; border-radius: 999px; background: #d6dfdb; cursor: pointer; transition: background 0.2s; }
+.cat-calc-sup-switch i { position: absolute; top: 3px; left: 3px; width: 15px; height: 15px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2); transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1); }
+.cat-calc-sup-switch.on { background: #12b57f; }
+.cat-calc-sup-switch.on i { transform: translateX(15px); }
+.cat-calc-sup-txt { flex: 1 1 260px; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.cat-calc-sup-txt b { font-size: 13px; font-weight: 700; color: var(--ink, #0b241a); }
+.cat-calc-sup-txt span { font-size: 12px; color: var(--muted, #5a7d6d); }
+.cat-calc-sup-rate { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.cat-calc-sup-rate .cat-price-input { width: 150px; }
+.cat-calc-sup-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.cat-calc-sup-chips button { padding: 5px 10px; border-radius: 999px; border: 1px solid rgba(10, 111, 77, 0.16); background: #fff; font: inherit; font-size: 11.5px; font-weight: 600; color: var(--muted, #5a7d6d); cursor: pointer; }
+.cat-calc-sup-chips button.on { border-color: #12b57f; background: rgba(18, 181, 127, 0.1); color: #0a6f4d; }

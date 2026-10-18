@@ -895,3 +895,46 @@ button.co-cc-main { padding: 0; border: 0; background: none; font: inherit; text
 @media (max-width: 760px) { .fx-in.is-num { flex-basis: 80px; } .fx-chip > button:not(.fx-chip-x) { max-width: 240px; } }
 .co-lcontacts .fx-sort > span { overflow: visible; text-overflow: clip; }
 .sel-trigger.fx-op { padding-right: 10px; }
+
+/* ===================================================================
+   Address globe — beside the editor while the address is being typed
+   (MapLibre globe + OpenFreeMap; the panel stays mounted, hidden between uses)
+   =================================================================== */
+.ag {
+  position: fixed; z-index: 201; overflow: hidden; border-radius: 24px; isolation: isolate;
+  background: radial-gradient(120% 90% at 50% 45%, #134a35 0%, #06221a 55%, #030c09 100%);
+  box-shadow: 0 50px 120px -30px rgba(4, 24, 16, 0.75), 0 0 0 1px rgba(201, 242, 221, 0.06);
+  font-family: "Inter", system-ui, sans-serif; color: #eef8f2;
+  transition: opacity 0.35s ease, transform 0.5s cubic-bezier(0.16, 1, 0.3, 1), filter 0.35s ease;
+  animation: ag-in 0.7s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+@keyframes ag-in { from { opacity: 0; transform: translateX(60px) scale(0.97); filter: blur(8px); } }
+.ag.is-hidden { opacity: 0; transform: translateX(40px) scale(0.98); filter: blur(6px); pointer-events: none; }
+.ag-map { position: absolute; inset: 0; }
+.ag-map .maplibregl-canvas { outline: none; }
+.ag-map .maplibregl-ctrl-group { border-radius: 12px; overflow: hidden; box-shadow: 0 8px 20px -10px rgba(6, 26, 19, 0.6); }
+.ag-map .maplibregl-ctrl-bottom-right { bottom: 8px; right: 8px; }
+.ag-loading { position: absolute; inset: 0; z-index: 2; display: grid; place-items: center; align-content: center; gap: 10px; font-size: 13px; font-weight: 600; color: #c9f2dd; }
+.ag-loading button { padding: 10px 16px; border-radius: 12px; border: 1px solid rgba(201, 242, 221, 0.25); background: rgba(255, 255, 255, 0.08); color: #eef8f2; font: inherit; cursor: pointer; }
+.ag-top {
+  position: absolute; z-index: 3; left: 18px; right: 18px; top: 18px; display: flex; flex-direction: column; gap: 10px; padding: 14px 16px;
+  border-radius: 18px; background: rgba(6, 26, 19, 0.66); border: 1px solid rgba(201, 242, 221, 0.12); pointer-events: none;
+  backdrop-filter: blur(12px) saturate(140%); -webkit-backdrop-filter: blur(12px) saturate(140%);
+}
+.ag-eyebrow { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 650; color: #c9f2dd; }
+.ag-eyebrow::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #35ffa0; box-shadow: 0 0 10px #35ffa0; }
+.ag-flag { width: 22px; height: 15px; margin-left: auto; border-radius: 3px; object-fit: cover; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25); }
+.ag-spin { display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 2px solid rgba(201, 242, 221, 0.25); border-top-color: #35ffa0; animation: ag-rot 0.8s linear infinite; }
+@keyframes ag-rot { to { transform: rotate(360deg); } }
+.ag-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ag-crumb {
+  display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px; font-size: 13px; font-weight: 650;
+  background: rgba(255, 255, 255, 0.07); color: rgba(238, 248, 242, 0.75); animation: ag-crumb 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.ag-crumb + .ag-crumb::before { content: "›"; margin: 0 2px 0 -2px; color: rgba(238, 248, 242, 0.35); }
+.ag-crumb.is-here { background: linear-gradient(120deg, #c9f2dd, #1fb98a); color: #072419; }
+.ag-crumb.is-here::before { color: #072419; }
+@keyframes ag-crumb { from { opacity: 0; transform: translateY(6px); } }
+.ag-foot { position: absolute; z-index: 3; left: 14px; bottom: 14px; pointer-events: none; }
+.ag-coords { display: inline-block; padding: 5px 10px; border-radius: 9px; background: rgba(6, 26, 19, 0.7); font-size: 12px; font-weight: 650; font-variant-numeric: tabular-nums; color: #c9f2dd; backdrop-filter: blur(8px); }
+@media (prefers-reduced-motion: reduce) { .ag, .ag-crumb { animation: none !important; transition: none !important; } }

@@ -21,6 +21,7 @@ import "../companies/CompaniesPage.css";
 import ContactImport from "./ContactImport";
 import ContactExport from "./ContactExport";
 import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
+import { LinkedInExtensionModal } from "./LinkedInCapture";
 import {
   PROFILE_FIELDS, isRequired, isProfileKey, missingProfile, tidyProfile, formatAddress,
   languageOptions, languageName, countryOptions, countryLabel, withProfileCodes, normalizeLinkedIn, isLinkedIn, linkedInHandle, isReservedLabel,
@@ -52,6 +53,7 @@ export default function ContactsPage() {
   const [importing, setImporting] = useState(false);
   const [columns, setColumns] = useState<string[]>(["position", "email", "companies"]);
   const [exporting, setExporting] = useState(false);
+  const [linkedInOpen, setLinkedInOpen] = useState(false);
   const [rel, setRel] = useState<RelationshipSets | null>(null);
   // filters + sort (remembered on this browser), and the views you saved
   const [view, setView] = useStoredView("np-contacts-view", emptyView([{ key: "name", dir: "asc" }]));
@@ -228,6 +230,7 @@ export default function ContactsPage() {
           { key: "new", group: "Create", label: "New contact", hint: "Add one person by hand", icon: AM_ICON.plus, primary: true, tone: "green", shortcut: "N", onSelect: () => setEditing(empty()) },
           { key: "import", group: "Data", label: "Import", hint: "From Excel or CSV, with their companies", icon: AM_ICON.import, tone: "blue", shortcut: "I", onSelect: () => setImporting(true) },
           { key: "export", group: "Data", label: "Export", hint: "Pick contacts by company, deal or phase", icon: AM_ICON.export, tone: "violet", shortcut: "E", onSelect: () => setExporting(true) },
+          { key: "linkedin", group: "Data", label: "Save from LinkedIn", hint: "Browser extension: add people & companies from LinkedIn", icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-4 0v7h-4v-7a6 6 0 0 1 6-6zM2 9h4v12H2zM4 6a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" /></svg>, tone: "blue", shortcut: "L", onSelect: () => setLinkedInOpen(true) },
           { key: "fields", group: "Setup", label: "Fields & columns", hint: "Custom fields and what the list shows", icon: AM_ICON.fields, tone: "amber", shortcut: "F", onSelect: () => setShowFieldSettings(true) },
         ]} />
       </header>
@@ -283,6 +286,8 @@ export default function ContactsPage() {
           onClose={() => setExporting(false)}
         />
       )}
+
+      {linkedInOpen && <LinkedInExtensionModal onClose={() => setLinkedInOpen(false)} />}
 
       {importing && (
         <ContactImport

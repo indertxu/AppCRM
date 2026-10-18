@@ -158,3 +158,137 @@
 /* country / language pickers match the 44px fields of the side panel */
 .dw .pp-trigger { height: 44px; border-radius: 12px; background: var(--dw-field, #f6f9f7); border-color: rgba(10,111,77,0.14); }
 .dw .pp-trigger:focus-visible, .dw .pp-trigger.is-open { background: #fff; }
+/* =====================================================================
+   LinkedIn → CRM: the capture window (/linkedin) and the install modal
+   ===================================================================== */
+.lic {
+  --emerald: #12b57f; --forest: #0a6f4d; --ink: #0b241a; --muted: #5a7d6d; --line: rgba(10,111,77,0.14); --li: #0a66c2;
+  min-height: 100vh; box-sizing: border-box; padding: 14px; display: flex; align-items: stretch; justify-content: center;
+  font-family: "Inter", system-ui, sans-serif; color: var(--ink);
+  background: radial-gradient(120% 70% at 0% 0%, #e3f7ee 0%, transparent 60%), radial-gradient(90% 60% at 100% 100%, #e6f0fb 0%, transparent 60%), #f5f9f7;
+}
+.lic-card {
+  width: 100%; max-width: 560px; display: flex; flex-direction: column; height: calc(100vh - 28px); min-height: 420px; box-sizing: border-box;
+  border-radius: 22px; background: #fff; border: 1px solid var(--line); overflow: hidden;
+  box-shadow: 0 30px 70px -40px rgba(10,111,77,0.55); animation: lic-in 0.5s cubic-bezier(0.16,1,0.3,1) both;
+}
+.lic-card.is-center { align-items: center; justify-content: center; text-align: center; gap: 10px; padding: 28px; }
+.lic-card.is-center h1 { margin: 6px 0 0; font: 650 22px "Space Grotesk", "Inter", sans-serif; color: var(--forest); }
+.lic-note { margin: 0 0 8px; font-size: 13.5px; color: var(--muted); line-height: 1.5; max-width: 320px; }
+.lic-li {
+  display: inline-grid; place-items: center; width: 44px; height: 44px; border-radius: 12px; background: var(--li); color: #fff;
+  font: 800 21px/1 Arial, sans-serif; letter-spacing: -0.03em; box-shadow: 0 12px 24px -12px rgba(10,102,194,0.8);
+}
+.lic-li.is-big { width: 54px; height: 54px; border-radius: 15px; font-size: 26px; }
+.lic-in {
+  width: 100%; max-width: 320px; height: 42px; box-sizing: border-box; padding: 0 14px; border-radius: 12px; border: 1px solid var(--line);
+  font: inherit; font-size: 14px; outline: none; transition: border-color 0.15s, box-shadow 0.15s;
+}
+.lic-in:focus { border-color: var(--emerald); box-shadow: 0 0 0 3px rgba(18,181,127,0.15); }
+.lic-btn {
+  display: inline-flex; align-items: center; justify-content: center; height: 40px; padding: 0 18px; border: 0; border-radius: 12px; cursor: pointer;
+  background: linear-gradient(120deg, var(--emerald), var(--forest)); color: #fff; font: 650 13.5px "Inter", sans-serif;
+  box-shadow: 0 12px 24px -14px rgba(10,111,77,0.8); transition: transform 0.2s, opacity 0.2s, box-shadow 0.2s;
+}
+.lic-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 16px 28px -14px rgba(10,111,77,0.9); }
+.lic-btn:disabled { opacity: 0.5; cursor: default; }
+.lic-btn.is-ghost { background: #fff; color: var(--muted); border: 1px solid var(--line); box-shadow: none; }
+.lic-btn.is-ghost:hover:not(:disabled) { color: var(--ink); background: #f4f8f6; }
+.lic-err { margin: 0; font-size: 12.5px; font-weight: 600; color: #c0392b; }
+.lic-row { display: flex; gap: 8px; margin-top: 6px; }
+
+.lic-head {
+  position: relative; display: flex; align-items: center; gap: 14px; padding: 20px 20px 18px;
+  background: linear-gradient(135deg, #0a6f4d, #0e8a62 55%, #12b57f); color: #fff;
+}
+.lic-pic { width: 58px; height: 58px; border-radius: 16px; object-fit: cover; flex-shrink: 0; border: 2px solid rgba(255,255,255,0.7); background: #fff; }
+.lic-pic.is-ph { display: grid; place-items: center; color: var(--forest); font: 700 20px "Space Grotesk", sans-serif; }
+.lic-head-t { min-width: 0; flex: 1; }
+.lic-head-t h1 { margin: 3px 0 2px; font: 650 19px/1.2 "Space Grotesk", "Inter", sans-serif; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lic-head-t p { margin: 0; font-size: 12.5px; opacity: 0.85; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.lic-kind { display: inline-flex; align-items: center; gap: 6px; font-size: 10.5px; font-weight: 750; letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.9; }
+.lic-kind i { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; background: #fff; color: var(--li); font: 800 10px/1 Arial, sans-serif; font-style: normal; }
+.lic-open {
+  position: absolute; top: 12px; right: 12px; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 9px;
+  background: rgba(255,255,255,0.16); color: #fff; text-decoration: none; font-size: 14px; transition: background 0.2s;
+}
+.lic-open:hover { background: rgba(255,255,255,0.3); }
+
+.lic-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
+.lic-loading { display: flex; align-items: center; gap: 10px; justify-content: center; padding: 50px 0; color: var(--muted); font-size: 13px; }
+.lic-spin { width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid rgba(18,181,127,0.2); border-top-color: var(--emerald); animation: lic-spin 0.8s linear infinite; }
+.lic-match {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 11px 13px; border-radius: 14px;
+  background: #fff8ec; border: 1px solid #f3dcb2; animation: lic-in 0.4s cubic-bezier(0.16,1,0.3,1) both;
+}
+.lic-match.is-off { background: #f4f8f6; border-color: var(--line); }
+.lic-match-t { display: flex; flex-direction: column; flex: 1; min-width: 140px; }
+.lic-match-t b { font-size: 12px; color: #9a5a12; }
+.lic-match.is-off .lic-match-t b { color: var(--muted); }
+.lic-match-t span { font-size: 13.5px; font-weight: 650; }
+.lic-seg { display: inline-flex; padding: 3px; border-radius: 10px; background: #fff; border: 1px solid var(--line); }
+.lic-seg button { border: 0; background: none; padding: 6px 10px; border-radius: 7px; font: 650 12px "Inter", sans-serif; color: var(--muted); cursor: pointer; }
+.lic-seg button.is-on { background: var(--emerald); color: #fff; }
+.lic-linkbtn { border: 0; background: none; padding: 4px; font: 650 12px "Inter", sans-serif; color: var(--forest); cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+
+.lic-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+.lic-f { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.lic-f.is-wide { grid-column: 1 / -1; }
+.lic-f > span { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.lic-f > span em { font-style: normal; text-transform: none; letter-spacing: 0; font-weight: 650; font-size: 10.5px; padding: 1px 6px; border-radius: 6px; background: #fff1e0; color: #9a5a12; }
+.lic-f input, .lic-f select, .lic-f textarea, .lic-co select, .lic-co input {
+  width: 100%; box-sizing: border-box; height: 38px; padding: 0 11px; border-radius: 10px; border: 1px solid var(--line); background: #fff;
+  font: 13.5px "Inter", sans-serif; color: var(--ink); outline: none; transition: border-color 0.15s, box-shadow 0.15s;
+}
+.lic-f textarea { height: auto; padding: 9px 11px; resize: vertical; line-height: 1.45; }
+.lic-f input:focus, .lic-f select:focus, .lic-f textarea:focus, .lic-co select:focus, .lic-co input:focus { border-color: var(--emerald); box-shadow: 0 0 0 3px rgba(18,181,127,0.14); }
+.lic-f.is-keep input, .lic-f.is-keep select, .lic-f.is-keep textarea { background: #fbfaf6; color: var(--muted); }
+.lic-f small { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lic-co { display: flex; flex-direction: column; gap: 6px; padding: 12px; border-radius: 14px; background: #f4f8f6; border: 1px solid var(--line); }
+.lic-co-k { font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.lic-hint { margin: 0; padding: 10px 12px; border-radius: 12px; background: #eef5fc; color: #2c5f8f; font-size: 12.5px; line-height: 1.45; }
+.lic-foot { display: flex; align-items: center; gap: 8px; justify-content: flex-end; flex-wrap: wrap; padding: 12px 18px; border-top: 1px solid var(--line); background: #fbfdfc; }
+.lic-foot .lic-err { flex: 1 1 100%; }
+.lic-done h1 { margin-top: 4px !important; }
+.lic-tick {
+  display: grid; place-items: center; width: 62px; height: 62px; border-radius: 50%; color: #fff;
+  background: linear-gradient(135deg, var(--emerald), var(--forest)); box-shadow: 0 16px 30px -14px rgba(10,111,77,0.85);
+  animation: lic-pop 0.6s cubic-bezier(0.34,1.5,0.64,1) both;
+}
+.lic-tick svg { width: 30px; height: 30px; stroke-dasharray: 30; stroke-dashoffset: 30; animation: lic-draw 0.5s 0.25s ease forwards; }
+@keyframes lic-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes lic-spin { to { transform: rotate(360deg); } }
+@keyframes lic-pop { from { transform: scale(0.4); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes lic-draw { to { stroke-dashoffset: 0; } }
+@media (max-width: 420px) { .lic-grid { grid-template-columns: 1fr; } }
+
+.lix-backdrop {
+  position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 20px;
+  background: rgba(8, 26, 19, 0.45); backdrop-filter: blur(5px); animation: lic-fade 0.2s ease both;
+}
+.lix {
+  --emerald: #12b57f; --forest: #0a6f4d; --ink: #0b241a; --muted: #5a7d6d; --line: rgba(10,111,77,0.14); --li: #0a66c2;
+  position: relative; width: min(520px, 100%); max-height: calc(100vh - 40px); overflow-y: auto; box-sizing: border-box;
+  padding: 28px 28px 22px; border-radius: 24px; background: #fff; font-family: "Inter", system-ui, sans-serif; color: var(--ink);
+  box-shadow: 0 50px 120px -40px rgba(4,18,13,0.8); animation: lic-in 0.45s cubic-bezier(0.16,1,0.3,1) both;
+}
+.lix-x { position: absolute; top: 14px; right: 14px; width: 32px; height: 32px; border: 0; border-radius: 10px; background: #f4f8f6; color: var(--muted); font-size: 20px; cursor: pointer; }
+.lix-x:hover { color: var(--ink); background: #e9f2ee; }
+.lix h2 { margin: 14px 0 6px; font: 650 22px "Space Grotesk", "Inter", sans-serif; color: var(--forest); }
+.lix-sub { margin: 0 0 18px; font-size: 13.5px; color: var(--muted); line-height: 1.5; }
+.lix-steps { list-style: none; margin: 0 0 14px; padding: 0; display: flex; flex-direction: column; gap: 10px; counter-reset: s; }
+.lix-steps li {
+  counter-increment: s; position: relative; display: flex; flex-direction: column; gap: 3px; padding: 12px 14px 12px 50px; border-radius: 14px;
+  background: #f6faf8; border: 1px solid var(--line); animation: lic-in 0.45s cubic-bezier(0.16,1,0.3,1) both; animation-delay: calc(var(--i) * 70ms + 100ms);
+}
+.lix-steps li::before {
+  content: counter(s); position: absolute; left: 14px; top: 12px; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 8px;
+  background: var(--emerald); color: #fff; font: 700 12.5px "Inter", sans-serif;
+}
+.lix-steps b { font-size: 13.5px; }
+.lix-steps span { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+.lix code { font: 12px ui-monospace, Menlo, monospace; padding: 1px 5px; border-radius: 5px; background: #eaf3ef; color: var(--ink); }
+.lix-tip { margin: 0 0 18px; padding: 10px 12px; border-radius: 12px; background: #eef5fc; color: #2c5f8f; font-size: 12.5px; line-height: 1.5; }
+.lix-act { display: flex; align-items: center; gap: 12px; justify-content: space-between; flex-wrap: wrap; }
+.lix-app { font-size: 12px; color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@keyframes lic-fade { from { opacity: 0; } to { opacity: 1; } }

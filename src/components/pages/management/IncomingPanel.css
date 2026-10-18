@@ -320,7 +320,7 @@
 
 /* ---------- Handoff rows ---------- */
 .ic-list { display: flex; flex-direction: column; gap: 8px; }
-.ic-grid { display: grid; align-items: center; column-gap: 26px; grid-template-columns: minmax(260px, 1.5fr) minmax(200px, 1.3fr) 110px 130px 250px; }
+.ic-grid { display: grid; align-items: center; column-gap: 26px; grid-template-columns: minmax(260px, 1.5fr) minmax(200px, 1.3fr) 110px 130px 330px; }
 .ic-head { padding: 4px 18px 4px 20px; font-size: 12px; font-weight: 600; color: var(--mute2); }
 .ic-r { text-align: right; justify-self: end; }
 
@@ -439,10 +439,10 @@
 @media (max-width: 1320px) {
   .ic-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ic-kpi.is-mix { grid-column: 1 / -1; }
-  .ic-grid { grid-template-columns: minmax(230px, 1.4fr) minmax(170px, 1.2fr) 100px 120px 240px; column-gap: 20px; }
+  .ic-grid { grid-template-columns: minmax(230px, 1.4fr) minmax(170px, 1.2fr) 100px 120px 320px; column-gap: 20px; }
 }
 @media (max-width: 1100px) {
-  .ic-grid { grid-template-columns: minmax(0, 1fr) 100px 120px 240px; }
+  .ic-grid { grid-template-columns: minmax(0, 1fr) 100px 120px 320px; }
   .ic-svcs, .ic-head > span:nth-child(2) { display: none; }
 }
 @media (max-width: 760px) {
@@ -474,3 +474,6 @@
     transition-duration: 0.001ms !important; transition-delay: 0s !important;
   }
 }
+/* Info: opens what sales handed over, read-only */
+.ic-act.is-info { border: 1px solid rgba(31, 185, 138, 0.3); background: rgba(31, 185, 138, 0.07); color: #0b6b4c; }
+.ic-act.is-info:hover { background: rgba(31, 185, 138, 0.14); border-color: rgba(31, 185, 138, 0.5); }

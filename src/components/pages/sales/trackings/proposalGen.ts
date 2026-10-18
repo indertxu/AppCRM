@@ -395,7 +395,10 @@ export function buildOrderFormPdf(jsPDF: any, data: ProposalData, t: ProposalTem
 
   const header = () => {
     doc.setFillColor(...hex(C.primary)); doc.rect(0, 0, PW, 30, "F");
-    if (B.assets?.logoLight) doc.addImage(dataUrl(B.assets.logoLight), "PNG", ML, 8, 34, 9);
+    if (B.assets?.logoLight) {
+      const src = dataUrl(B.assets.logoLight);
+      try { doc.addImage(src, /^data:image\/jpe?g/i.test(src) ? "JPEG" : "PNG", ML, 8, 34, 9); } catch { /* a logo jsPDF can't read: leave it out */ }
+    }
     doc.setTextColor(255, 255, 255); doc.setFont("helvetica", "normal"); doc.setFontSize(8.5);
     doc.text([B.legalName ?? B.company, B.address ?? "", B.vat ? `VAT ${B.vat}` : ""].filter(Boolean).join(" · "), PW - MR, 14, { align: "right" });
     if (B.web) doc.text(B.web, PW - MR, 19, { align: "right" });

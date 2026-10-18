@@ -28,6 +28,8 @@ export function useClientsData() {
   const [usage, setUsage] = useState<Record<string, { planned: number; done: number }>>({});
   const [lineUsage, setLineUsage] = useState<Record<string, { done: number; booked: number }>>({});
   const [units, setUnits] = useState<Record<string, "hour" | "day">>({});
+  /** True once the first load finished (the page shows its loading scene until then). */
+  const [loaded, setLoaded] = useState(false);
 
   const [showForm, setShowForm] = useState(false);
   const [detailClient, setDetailClient] = useState<Client | null>(null);
@@ -209,9 +211,10 @@ export function useClientsData() {
     });
     setUsage(agg);
     setLineUsage(byLine);
+    setLoaded(true);
   };
 
-  useEffect(() => { loadAll(); }, []);
+  useEffect(() => { loadAll().catch(() => {}).finally(() => setLoaded(true)); }, []);
 
   /** Saves a client row and one project row. */
   const saveClientProject = async (c: Client, p: Project) => {
@@ -298,7 +301,7 @@ export function useClientsData() {
 
   return {
     // data
-    clients, projects, projectTypes, blueprints, roles, usage, lineUsage, units,
+    clients, projects, projectTypes, blueprints, roles, usage, lineUsage, units, loaded,
     // ui state
     showForm, setShowForm, detailClient, setDetailClient, editing, setEditing,
     // handoff

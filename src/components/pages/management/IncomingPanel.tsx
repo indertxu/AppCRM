@@ -5,6 +5,7 @@ import { supabase } from "../../api/supabase";
 import { listHandoffs, dismissHandoff, type Handoff } from "../sales/sales/salesApi";
 import Select from "../../framework/Select";
 import IncomingConvertModal from "./IncomingConvertModal";
+import { HandoffInfo } from "../sales/trackings/HandoffConfirmServices";
 import "./IncomingPanel.css";
 
 const eur = (n: number) => Math.round(n).toLocaleString("en-US");
@@ -69,6 +70,7 @@ const IC_ICON = {
   lock: "M6 11h12a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1zM8 11V7a4 4 0 0 1 8 0v4",
   search: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-4-4",
   empty: "M4 7l8-4 8 4-8 4zM4 12l8 4 8-4M4 17l8 4 8-4",
+  info: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 16v-4M12 8h.01",
   build: "M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94z",
 };
 function IcIcon({ d, w = 2 }: { d: string; w?: number }) {
@@ -87,6 +89,8 @@ export default function IncomingPanel() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [convert, setConvert] = useState<Handoff | null>(null);
+  /** The handoff whose package is open, read-only. */
+  const [info, setInfo] = useState<Handoff | null>(null);
   const [q, setQ] = useState("");
   const [fClient, setFClient] = useState("");
   const [fService, setFService] = useState("");
@@ -443,6 +447,9 @@ export default function IncomingPanel() {
                     <span className="ic-num is-val"><b>{eur(total)} €</b></span>
 
                     <span className="ic-actions">
+                      <button type="button" className="ic-act is-info" onClick={() => setInfo(h)} title="Everything sales handed over" aria-label="Handoff info">
+                        <IcIcon d={IC_ICON.info} w={2.1} />Info
+                      </button>
                       <button type="button" className="ic-act is-ghost" onClick={() => dismiss(h)} disabled={busy === h.id}>Dismiss</button>
                       <button
                         type="button"
@@ -479,6 +486,21 @@ export default function IncomingPanel() {
           </div>
         )}
       </section>
+
+      {info && (
+        <HandoffInfo
+          pkg={info.package}
+          title={info.company_name || "Handoff"}
+          route={<><span>Sales</span><IcIcon d={IC_ICON.arrow} w={2.2} /><b>{info.dest_pipeline_name || "Pipeline"}</b><span>· arrived {ago(info.created_at)}</span></>}
+          fallbackServices={(info.services ?? []).map((s: any) => ({
+            name: s.label || "Service", total: Number(s.price) || 0, gross: s.gross, discount: s.discount,
+            qty: s.days ? `${num(s.days)}d${s.rate ? ` · ${eur(s.rate)} €/day` : ""}` : (s.kind === "product" ? "Product" : undefined),
+            rows: s.rows,
+          }))}
+          money={(n) => `${eur(n)} €`}
+          onClose={() => setInfo(null)}
+        />
+      )}
 
       {convert && (
         <IncomingConvertModal

@@ -6,6 +6,9 @@ import { markHandoffConverted, type Handoff } from "../sales/sales/salesApi";
 import DatePicker from "../../framework/DatePicker";
 import Select from "../../framework/Select";
 import type { Phase, TeamMember, ClientRole, ProjectType, Blueprint } from "./ClientsPage";
+import { destFolder, destOptions, type HandoffDoc, type HandoffPackage } from "../sales/trackings/HandoffConfirmServices";
+import { FileIcon, kindOf, prettySize, openTrackingFile } from "../sales/trackings/TrackingFiles";
+import { copyIntoClientFolders } from "../clients/ClientDirectory";
 import "./IncomingConvertModal.css";
 
 const uid = () => (globalThis.crypto?.randomUUID?.() ?? String(Math.random()));
@@ -71,10 +74,25 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
   const [pricePerDay, setPricePerDay] = useState(0);
   const [supervisionDays, setSupervisionDays] = useState(0);
   const [supervisionPrice, setSupervisionPrice] = useState(0);
+  /** Discounts sales gave: consultancy as € off the total, supervision as € off each day. */
+  const [discount, setDiscount] = useState(0);
+  const [supDiscount, setSupDiscount] = useState(0);
   const [paymentDays, setPaymentDays] = useState(0);
   const [phases, setPhases] = useState<Phase[]>([]);
   const [team, setTeam] = useState<TeamMember[]>([]);
   const [editMember, setEditMember] = useState<string | null>(null);
+
+  // --- What sales handed over that lands on the client ----------------------
+  const pkg: HandoffPackage | null = (handoff as any).package?.v ? (handoff as any).package : null;
+  /** The client as it is now, to compare with what sales sent. */
+  const [clientNow, setClientNow] = useState<any>(null);
+  /** keep = leave the client as is · fill = only empty fields · update = overwrite with sales' data. */
+  const [clientMode, setClientMode] = useState<"keep" | "fill" | "update">(pkg?.client?.mode === "update" ? "update" : "fill");
+  const [folders, setFolders] = useState<string[]>([]);
+  const [existing, setExisting] = useState<{ folder: string; name: string; size: number | null }[]>([]);
+  const [docDest, setDocDest] = useState<Record<string, string>>({});
+  /** What sales sold, split: consultancy and supervision days at their own rates. */
+  const [sold, setSold] = useState<{ conDays: number; conRate: number; supDays: number; supRate: number } | null>(null);
 
   // --- Sales breakdown (read-only) -----------------------------------------
   const svcs = useMemo(() => (handoff.services ?? []).filter((s) => s.kind !== "product"), [handoff]);
@@ -85,12 +103,19 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
 
   useEffect(() => {
     (async () => {
+      // Names of the calculator variables marked as supervision (Settings): older
+      // handoffs don't carry the flag, so their rows are matched by name.
+      const supNames = new Set<string>();
+      {
+        const { data, error } = await supabase.from("calculator_variables").select("name").eq("is_supervision", true);
+        if (!error) (data ?? []).forEach((v: any) => v.name && supNames.add(String(v.name).trim().toLowerCase()));
+      }
       const [pts, bps, rls, cli] = await Promise.all([
         supabase.from("services").select("id,name,blueprint_id,active").order("name"),
         supabase.from("phase_blueprints").select("*"),
         supabase.from("client_roles").select("*"),
         handoff.company_id
-          ? supabase.from("clients").select("id, project_type_id, signing_date, payment_days").eq("company_id", handoff.company_id).limit(1)
+          ? supabase.from("clients").select("*").eq("company_id", handoff.company_id).limit(1)
           : Promise.resolve({ data: [] } as any),
       ]);
       setProjectTypes(((pts.data ?? []) as any[]).filter((r) => r.active !== false)
@@ -106,13 +131,66 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
       const c: any = (cli as any).data?.[0];
       if (c) {
         setClientId(c.id);
+        setClientNow(c);
         if (c.project_type_id) setProjectTypeId(c.project_type_id);
         if (c.signing_date) setSigning(c.signing_date);
-        setPaymentDays(Number(c.payment_days) || 0);
+        setPaymentDays(Number(pkg?.client?.paymentDays ?? c.payment_days) || 0);
+        // The client's folders and files: offered as destinations, and used to
+        // spot documents that are already there.
+        const [{ data: fo }, { data: fi }] = await Promise.all([
+          supabase.from("client_folders").select("id, name, parent_id").eq("client_id", c.id),
+          supabase.from("client_files").select("name, size_bytes, folder_id").eq("client_id", c.id),
+        ]);
+        const roots = ((fo ?? []) as any[]).filter((f) => !f.parent_id);
+        setFolders(roots.map((f) => String(f.name)));
+        const nameOf = new Map(roots.map((f) => [f.id, String(f.name)]));
+        const ex = ((fi ?? []) as any[]).filter((f) => nameOf.has(f.folder_id)).map((f) => ({ folder: nameOf.get(f.folder_id)!, name: String(f.name), size: f.size_bytes ?? null }));
+        setExisting(ex);
+        // Default destination: what sales picked, unless that exact file is already in that folder.
+        const dd: Record<string, string> = {};
+        (pkg?.documents ?? []).forEach((d) => {
+          const dest = d.dest ?? "skip";
+          const folder = destFolder(dest);
+          const dup = !!folder && ex.some((x) => x.folder.toLowerCase() === folder.toLowerCase() && x.name === d.name && (x.size == null || d.size == null || x.size === d.size));
+          dd[d.id] = dup ? "skip" : dest;
+        });
+        setDocDest(dd);
       }
-      // Rate comes from what sales sold; consultancy days start from the sold days.
-      setPricePerDay(Math.round(soldDays > 0 ? soldValue / soldDays : (svcs[0]?.rate ?? 0)));
-      setConsultorDays(Math.round(soldDays));
+      // Split what sales sold: the calculator's supervision variable gives the
+      // supervision days and their rate; everything else is consultancy, at the
+      // line's own rate (not an average of the two).
+      let supDays = 0, supValue = 0, conDays = 0, conValue = 0, supOff = 0, soldNet = 0;
+      svcs.forEach((sv: any) => {
+        const total = Number(sv.days) || 0;
+        const rows = (sv.rows ?? []) as any[];
+        const supRows = rows.filter((r) => r.supervision || supNames.has(String(r.label ?? "").trim().toLowerCase()));
+        const sd = sv.supervision_days != null ? Number(sv.supervision_days) || 0 : supRows.reduce((a, r) => a + (Number(r.days) || 0), 0);
+        const sr = sv.supervision_rate != null ? Number(sv.supervision_rate) || 0
+          : sd > 0 ? supRows.reduce((a, r) => a + (Number(r.amount) || 0), 0) / sd : 0;
+        const cd = Math.max(0, total - sd);
+        const cr = Number(sv.rate) || (total > 0 ? (Number(sv.price) || 0) / total : 0);
+        supDays += sd; supValue += sd * sr; conDays += cd; conValue += cd * cr;
+        supOff += supRows.reduce((a, r) => a + (Number(r.discount) || 0), 0);
+        soldNet += Number(sv.price) || 0;
+      });
+      // Whatever the full rates add up to beyond what was sold is the discount
+      // sales gave (row discounts): supervision keeps its own, the rest comes off
+      // the consultancy total, so the project is worth exactly what was sold.
+      const supPerDay = supDays > 0 ? Math.round((supOff / supDays) * 100) / 100 : 0;
+      const conRateR = Math.round(conDays > 0 ? conValue / conDays : 0);
+      const supRateR = Math.round(supDays > 0 ? supValue / supDays : 0);
+      const grossAtRates = conDays * conRateR + supDays * Math.max(0, supRateR - supPerDay);
+      const rest = Math.round((grossAtRates - soldNet) * 100) / 100;
+      setSupDiscount(supPerDay);
+      setDiscount(rest > 0.5 ? rest : 0);
+      setConsultorDays(Math.round(conDays * 100) / 100);
+      setPricePerDay(Math.round(conDays > 0 ? conValue / conDays : (svcs[0]?.rate ?? 0)));
+      setSupervisionDays(Math.round(supDays * 100) / 100);
+      setSupervisionPrice(Math.round(supDays > 0 ? supValue / supDays : 0));
+      setSold({ conDays, conRate: conDays > 0 ? conValue / conDays : 0, supDays, supRate: supDays > 0 ? supValue / supDays : 0 });
+      // The signing date comes from sales (per service in the handoff).
+      const signed = (pkg?.services ?? []).map((x) => x.signingDate).filter(Boolean).sort()[0];
+      if (signed) setSigning(signed);
       setReady(true);
     })();
 
@@ -157,12 +235,50 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
   const addPhase = () => setPhases((p) => [...p, { id: uid(), name: "", days: 0, tasks: [] }]);
 
   const totalConsultancy = consultorDays + connectorDays;
-  const value = totalConsultancy * pricePerDay + supervisionDays * supervisionPrice;
+  const consultancyNet = Math.max(0, totalConsultancy * pricePerDay - discount);
+  const supervisionNet = supervisionDays * Math.max(0, supervisionPrice - supDiscount);
+  const value = consultancyNet + supervisionNet;
   const phaseTotal = phases.reduce((s, p) => s + (Number(p.days) || 0), 0);
   const maxDays = totalConsultancy + supervisionDays;
   const ptName = projectTypes.find((p) => p.id === projectTypeId)?.name ?? "—";
 
-  const canSave = !!clientId && !!kickoffDate && (consultorDays + connectorDays + supervisionDays) > 0 && !saving;
+  /* ---- client details: what changes for each choice ---- */
+  const CLIENT_FIELDS: { key: string; label: string; now: (c: any) => string; sent: (p: NonNullable<HandoffPackage["client"]>) => string }[] = [
+    { key: "legal_name", label: "Legal name", now: (c) => c?.legal_name ?? "", sent: (p) => p.legalName ?? "" },
+    { key: "vat_number", label: "VAT / Tax ID", now: (c) => c?.vat_number ?? "", sent: (p) => p.vatNumber ?? "" },
+    { key: "payment_days", label: "Payment terms", now: (c) => (c?.payment_days != null && c.payment_days !== "" ? String(c.payment_days) : ""), sent: (p) => (p.paymentDays != null ? String(p.paymentDays) : "") },
+    ...(["street", "number", "details", "postalCode", "city", "country"] as const).map((k) => ({
+      key: `address.${k}`, label: { street: "Street", number: "Number", details: "Address details", postalCode: "Postal code", city: "City", country: "Country" }[k],
+      now: (c: any) => String(c?.address?.[k] ?? ""), sent: (p: any) => String(p.address?.[k] ?? ""),
+    })),
+  ];
+  const clientRows = pkg?.client ? CLIENT_FIELDS.map((f) => {
+    const now = f.now(clientNow).trim(); const sent = f.sent(pkg.client!).trim();
+    const takes = !!sent && sent !== now && (clientMode === "update" || (clientMode === "fill" && !now));
+    return { ...f, nowV: now, sentV: sent, differs: !!sent && sent !== now, takes };
+  }) : [];
+  const changing = clientRows.filter((r) => r.takes).length;
+  const clientPatch = (): Record<string, any> | null => {
+    if (!pkg?.client || clientMode === "keep" || !changing) return null;
+    const patch: Record<string, any> = {};
+    const addr = { ...(clientNow?.address ?? {}) };
+    let addrTouched = false;
+    clientRows.filter((r) => r.takes).forEach((r) => {
+      if (r.key.startsWith("address.")) { addr[r.key.slice(8)] = r.sentV; addrTouched = true; }
+      else if (r.key === "payment_days") patch.payment_days = Number(r.sentV) || 0;
+      else patch[r.key] = r.sentV;
+    });
+    if (addrTouched) patch.address = addr;
+    return patch;
+  };
+  const docOpts = useMemo(() => destOptions(folders), [folders]);
+  const isDup = (d: HandoffDoc, dest: string) => {
+    const folder = destFolder(dest);
+    return !!folder && existing.some((x) => x.folder.toLowerCase() === folder.toLowerCase() && x.name === d.name && (x.size == null || d.size == null || x.size === d.size));
+  };
+  const docsIn = (pkg?.documents ?? []).filter((d) => destFolder(docDest[d.id] ?? "skip")).length;
+
+  const canSave = !!clientId && !!signingDate && !!kickoffDate && (consultorDays + connectorDays + supervisionDays) > 0 && !saving;
 
   const save = async () => {
     if (!canSave || !clientId) return;
@@ -180,12 +296,37 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
         price_per_day: pricePerDay,
         supervision_days: supervisionDays,
         supervision_price: supervisionPrice,
+        discount_mode: discount > 0 ? "total" : "none",
+        discount_value: discount > 0 ? discount : 0,
+        supervision_discount_mode: supDiscount > 0 ? "rate" : "none",
+        supervision_discount_value: supDiscount > 0 ? supDiscount : 0,
         payment_days: paymentDays,
         phases, team,
         status: "open",
       });
       if (error) { alert(`Could not create project: ${error.message}`); return; }
+
+      const problems: string[] = [];
+      // Client details, as chosen: keep, fill only the blanks, or update.
+      const patch = clientPatch();
+      if (patch) {
+        const { error: cErr } = await supabase.from("clients").update(patch).eq("id", clientId);
+        if (cErr) problems.push(`Client details: ${cErr.message}`);
+      }
+      // Documents are added to the client's folders, next to what is already there.
+      const docs = (pkg?.documents ?? []).map((d) => ({ d, folder: destFolder(docDest[d.id] ?? "skip") })).filter((x): x is { d: HandoffDoc; folder: string } => !!x.folder);
+      if (docs.length) {
+        const res = await copyIntoClientFolders(clientId, docs.map(({ d, folder }) => ({
+          key: d.id, fromBucket: d.bucket, fromPath: d.path, name: d.name, mime: d.mime, size: d.size, note: d.note, folder,
+        })));
+        problems.push(...res.errors);
+        const copied = Object.keys(res.done);
+        // The sales copy no longer needs to show on the client page.
+        if (copied.length) await Promise.resolve(supabase.from("tracking_files").update({ share_client: false }).in("id", copied)).catch(() => null);
+      }
+
       await markHandoffConverted(handoff.id, clientId, projectId).catch(() => {});
+      if (problems.length) alert(`Project created. Some things could not be brought over:\n\n${problems.join("\n")}`);
       onConverted();
     } finally { setSaving(false); }
   };
@@ -213,6 +354,7 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
   // Why the button is off, from the same conditions canSave checks.
   const missing = !ready ? null
     : !clientId ? "No client found for this company yet"
+    : !signingDate ? "Set the signing date"
     : !kickoffDate ? "Pick a kick-off date to create the project"
     : (consultorDays + connectorDays + supervisionDays) <= 0 ? "Add at least one day"
     : null;
@@ -241,20 +383,23 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
             </div>
           </div>
           <div className="icm-head-right">
-            <div className="icm-total">
-              <span>Engagement value</span>
+            <div className="icm-total" title="Engagement value" aria-label={`Engagement value: ${eur(value)} €`}>
+              <i aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 6.5A6.5 6.5 0 1 0 17 17.5M4 10.5h9M4 13.5h9" /></svg>
+              </i>
               <b>{eur(shownValue)}<em>€</em></b>
             </div>
-            <div className="icm-go">
-              <button type="button" className="icm-primary" disabled={!canSave} onClick={save}>
-                {saving ? "Creating…" : "Create project"}
-                {!saving && <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12h13M12 5l7 7-7 7" /></svg>}
-              </button>
-              {missing && <small className="icm-missing">{missing}</small>}
-            </div>
-            <button type="button" className="icm-x" onClick={requestClose} aria-label="Close">
+            <button type="button" className="icm-primary" disabled={!canSave} onClick={save} title={missing ?? undefined}>
+              {missing && (
+                <span className="icm-missing-ico" aria-label={missing}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /></svg>
+                </span>
+              )}
+              {saving ? "Creating…" : "Create project"}
+              {!saving && !missing && <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12h13M12 5l7 7-7 7" /></svg>}
+            </button>
+            <button type="button" className="icm-x" onClick={requestClose} aria-label="Close (Esc)" title="Close (Esc)">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12" /></svg>
-              <kbd>Esc</kbd>
             </button>
           </div>
         </header>
@@ -285,10 +430,17 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
                       {(s.rows ?? []).map((r, j) => (
                         <li key={j}>
                           <span className="icm-r-l">{r.label}</span>
-                          <span className="icm-r-a">{eur(r.amount)} €</span>
+                          <span className="icm-r-a">{eur(r.amount)} €{r.discount ? <i className="icm-r-off"> −{eur(r.discount)} €</i> : null}</span>
                           <span className="icm-r-d">{r.detail}</span>
                         </li>
                       ))}
+                      {/* What the rows add up to vs what was sold: the gap is the discount. */}
+                      {Math.round((s.rows ?? []).reduce((a, r) => a + (Number(r.amount) || 0), 0) - (Number(s.price) || 0)) > 0 && (
+                        <li className="icm-r-sum">
+                          <span className="icm-r-l">Discount given</span>
+                          <span className="icm-r-a">−{eur((s.rows ?? []).reduce((a, r) => a + (Number(r.amount) || 0), 0) - (Number(s.price) || 0))} €</span>
+                        </li>
+                      )}
                     </ul>
                   )}
                 </li>
@@ -303,7 +455,12 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
             <div className="icm-sold-foot">
               <div><span>Days sold</span><b>{num(soldDays)}</b></div>
               <div><span>Value</span><b>{eur(soldValue)} €</b></div>
-              <div><span>Rate</span><b>{eur(soldRate)} €/d</b></div>
+              {sold && sold.supDays > 0 ? (
+                <>
+                  <div><span>Consultancy</span><b>{num(sold.conDays)}d · {eur(sold.conRate)} €</b></div>
+                  <div><span>Supervision</span><b>{num(sold.supDays)}d · {eur(sold.supRate)} €</b></div>
+                </>
+              ) : <div><span>Rate</span><b>{eur(sold?.conRate || soldRate)} €/d</b></div>}
             </div>
           </aside>
 
@@ -320,10 +477,19 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
                     <b>{ptName}</b>
                     <i>from sales</i>
                   </div>
-                  <div className="icm-auto-cell">
+                  <div className={`icm-auto-cell ${signingDate ? "" : "is-needed"}`}>
                     <span>Signing date</span>
-                    <b>{signingDate ? new Date(signingDate).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" }) : "—"}</b>
-                    <i>from sales</i>
+                    {(pkg?.services ?? []).some((x) => x.signingDate) && signingDate ? (
+                      <>
+                        <b>{new Date(`${signingDate}T12:00:00`).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" })}</b>
+                        <i>from sales</i>
+                      </>
+                    ) : (
+                      <>
+                        <div className="icm-auto-date"><DatePicker value={signingDate} onChange={setSigning} placeholder="Pick the date" /></div>
+                        <i className="is-warn">{signingDate ? "set here" : "sales didn't send it"}</i>
+                      </>
+                    )}
                   </div>
                   <div className="icm-auto-cell">
                     <span>Payment terms</span>
@@ -331,6 +497,93 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
                     <i>from sales</i>
                   </div>
                 </div>
+
+                {/* What lands on the client */}
+                {pkg && (pkg.client || (pkg.documents?.length ?? 0) > 0 || (pkg.notes?.length ?? 0) > 0 || (pkg.tasks?.length ?? 0) > 0) && (
+                  <div className="icm-block icm-bring" style={{ animationDelay: "250ms" }}>
+                    <div className="icm-block-head">
+                      <span className="icm-step">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 21h18M5 21V7l7-4 7 4v14M9 21v-6h6v6" /></svg>
+                      </span>
+                      <span className="icm-sec-title">Bring into the client</span>
+                      <span className="icm-phase-sum">{clientNow?.name ?? handoff.company_name}</span>
+                    </div>
+
+                    {pkg.client && (
+                      <div className="icm-bring-part">
+                        <div className="icm-bring-t">
+                          <b>Client details</b>
+                          <span>{clientMode === "keep" ? "Nothing changes" : changing ? `${changing} field${changing === 1 ? "" : "s"} will change` : "Already up to date"}</span>
+                        </div>
+                        <div className="icm-modes" role="radiogroup" aria-label="Client details">
+                          {([
+                            ["keep", "Keep current", "Leave the client as it is"],
+                            ["fill", "Fill the blanks", "Only add what is missing"],
+                            ["update", "Update", "Take everything sales sent"],
+                          ] as const).map(([v, t, sub]) => (
+                            <button type="button" key={v} role="radio" aria-checked={clientMode === v} className={clientMode === v ? "is-on" : ""} onClick={() => setClientMode(v)}>
+                              <b>{t}</b><small>{sub}</small>
+                            </button>
+                          ))}
+                        </div>
+                        {pkg.client.mode === "update" && <p className="icm-hint">Sales suggested updating the details.</p>}
+                        {clientRows.some((r) => r.differs) ? (
+                          <table className="icm-diff">
+                            <thead><tr><th /><th>On the client</th><th>Sent by sales</th></tr></thead>
+                            <tbody>
+                              {clientRows.filter((r) => r.differs).map((r) => (
+                                <tr key={r.key} className={r.takes ? "is-taking" : ""}>
+                                  <th>{r.label}</th>
+                                  <td className={r.takes ? "is-old" : ""}>{r.nowV || <em>empty</em>}</td>
+                                  <td>{r.sentV}{r.takes && <i>will be saved</i>}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        ) : <p className="icm-hint">Sales sent the same details the client already has.</p>}
+                      </div>
+                    )}
+
+                    {(pkg.documents?.length ?? 0) > 0 && (
+                      <div className="icm-bring-part">
+                        <div className="icm-bring-t">
+                          <b>Documents</b>
+                          <span>{docsIn} of {pkg.documents!.length} added · existing files are never replaced</span>
+                        </div>
+                        <ul className="icm-docs">
+                          {pkg.documents!.map((d) => {
+                            const dest = docDest[d.id] ?? "skip";
+                            const dupHere = isDup(d, d.dest ?? "skip");
+                            return (
+                              <li key={d.id} className={`icm-doc ${dest === "skip" ? "is-skip" : ""}`}>
+                                <FileIcon kind={kindOf(d.name, d.mime)} />
+                                <span className="icm-doc-main">
+                                  <button type="button" onClick={() => openTrackingFile(d.path, d.bucket)} title={`Open ${d.name}`}>{d.name}</button>
+                                  <small>
+                                    {d.lineLabel ? `${d.lineLabel}${d.version ? ` · ${d.version}` : ""} · ` : ""}{prettySize(d.size)}
+                                    {dupHere && <em> · already in {destFolder(d.dest ?? "skip")}</em>}
+                                  </small>
+                                </span>
+                                <span className="icm-doc-dest">
+                                  <Select size="sm" value={dest} onChange={(v) => setDocDest((m) => ({ ...m, [d.id]: v }))} options={docOpts} aria-label={`Where ${d.name} goes`} />
+                                </span>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
+                    )}
+
+                    {((pkg.notes?.length ?? 0) > 0 || (pkg.tasks?.length ?? 0) > 0) && (
+                      <p className="icm-bring-note">
+                        {[
+                          pkg.notes?.length ? `${pkg.notes.length} note${pkg.notes.length === 1 ? "" : "s"}` : "",
+                          pkg.tasks?.length ? `${pkg.tasks.length} task${pkg.tasks.length === 1 ? "" : "s"}` : "",
+                        ].filter(Boolean).join(" and ")} from this sale show on the client in their own block, apart from the client's own.
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {/* Kick-off */}
                 <div className={`icm-block ${kickoffDate ? "is-done" : "is-needed"}`} style={{ animationDelay: "280ms" }}>
@@ -347,13 +600,20 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
                   <div className="icm-block-head">
                     <span className="icm-step">2</span>
                     <span className="icm-sec-title">Consultancy</span>
-                    <span className="icm-rate-pill">{eur(pricePerDay)} €/day <em>from the sold rate</em></span>
+                    <span className="icm-rate-pill">{num(consultorDays + supervisionDays)} days sold <em>{num(supervisionDays)} go to supervision</em></span>
                   </div>
-                  <div className="icm-grid2">
+                  <div className="icm-grid3">
                     <div className="icm-field"><label>Consultor days</label><NumField value={consultorDays} onChange={setConsultorDays} suffix="d" /></div>
                     <div className="icm-field"><label>Connector days</label><NumField value={connectorDays} onChange={setConnectorDays} suffix="d" /></div>
+                    <div className="icm-field"><label>Price / day</label><NumField value={pricePerDay} onChange={setPricePerDay} suffix="€" /></div>
                   </div>
-                  <div className="icm-line"><span>{num(totalConsultancy)} days × {eur(pricePerDay)} €</span><b>{eur(totalConsultancy * pricePerDay)} €</b></div>
+                  <div className="icm-grid3">
+                    <div className="icm-field"><label>Discount (€ off the total)</label><NumField value={discount} onChange={setDiscount} suffix="€" /></div>
+                  </div>
+                  <div className="icm-line">
+                    <span>{num(totalConsultancy)} days × {eur(pricePerDay)} €{discount > 0 ? ` − ${eur(discount)} € discount` : ""}</span>
+                    <b>{eur(consultancyNet)} €</b>
+                  </div>
                 </div>
 
                 {/* Supervision */}
@@ -362,11 +622,17 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
                     <span className="icm-step">3</span>
                     <span className="icm-sec-title">Supervision</span>
                   </div>
-                  <div className="icm-grid2">
+                  <div className="icm-grid3">
                     <div className="icm-field"><label>Days</label><NumField value={supervisionDays} onChange={setSupervisionDays} suffix="d" /></div>
                     <div className="icm-field"><label>Price / day</label><NumField value={supervisionPrice} onChange={setSupervisionPrice} suffix="€" /></div>
+                    <div className="icm-field"><label>Discount / day</label><NumField value={supDiscount} onChange={setSupDiscount} suffix="€" /></div>
                   </div>
-                  {supervisionDays > 0 && <div className="icm-line"><span>{num(supervisionDays)} days × {eur(supervisionPrice)} €</span><b>{eur(supervisionDays * supervisionPrice)} €</b></div>}
+                  {supervisionDays > 0 && (
+                    <div className="icm-line">
+                      <span>{num(supervisionDays)} days × {eur(Math.max(0, supervisionPrice - supDiscount))} €{supDiscount > 0 ? ` (${eur(supervisionPrice)} − ${eur(supDiscount)})` : ""}</span>
+                      <b>{eur(supervisionNet)} €</b>
+                    </div>
+                  )}
                 </div>
 
                 {/* Blueprint + phases */}

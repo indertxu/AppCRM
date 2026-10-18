@@ -504,3 +504,48 @@ export function ContractDocs({ clientId, tenantId, onCount }: { clientId: string
     </div>
   );
 }
+
+/**
+ * Copies files from another bucket (the deal's sales documents) into a
+ * client's root folders by name — the contract slots or any directory folder —
+ * creating the folder on first use. Returns the new storage path per item key.
+ */
+export async function copyIntoClientFolders(clientId: string, items: {
+  key: string; fromBucket: string; fromPath: string; name: string; mime: string | null; size: number | null; note?: string | null; folder: string;
+}[]): Promise<{ done: Record<string, string>; errors: string[] }> {
+  const done: Record<string, string> = {};
+  const errors: string[] = [];
+  if (!items.length) return { done, errors };
+  const { data: cl } = await supabase.from("clients").select("tenant_id").eq("id", clientId).maybeSingle();
+  const tenantId = (cl as any)?.tenant_id as string | undefined;
+  if (!tenantId) return { done, errors: ["Could not resolve the client's workspace."] };
+  const { data: roots } = await supabase.from("client_folders").select("id, name").eq("client_id", clientId).is("parent_id", null);
+  const ids = new Map<string, string>(((roots ?? []) as any[]).map((f) => [String(f.name).trim().toLowerCase(), f.id as string]));
+  let extra = (roots ?? []).length;
+  const ensure = async (name: string): Promise<string | null> => {
+    const k = name.trim().toLowerCase();
+    if (ids.has(k)) return ids.get(k)!;
+    const slot = CONTRACT_SLOTS.findIndex((s) => s.folder.toLowerCase() === k);
+    const { data, error } = await supabase.from("client_folders")
+      .insert({ client_id: clientId, parent_id: null, name: name.trim(), sort: slot >= 0 ? slot : 3 + extra++ }).select("id").single();
+    if (error || !data) { errors.push(`${name}: ${error?.message ?? "could not create the folder"}`); return null; }
+    ids.set(k, data.id as string);
+    return data.id as string;
+  };
+  for (const it of items) {
+    const folder = await ensure(it.folder);
+    if (!folder) continue;
+    const dl = await supabase.storage.from(it.fromBucket).download(it.fromPath);
+    if (dl.error || !dl.data) { errors.push(`${it.name}: ${dl.error?.message ?? "could not read the file"}`); continue; }
+    const safe = it.name.replace(/[^\w.\-]+/g, "_");
+    const path = `${tenantId}/${clientId}/${crypto.randomUUID()}_${safe}`;
+    const up = await supabase.storage.from(BUCKET).upload(path, dl.data, { contentType: it.mime || undefined });
+    if (up.error) { errors.push(`${it.name}: ${up.error.message}`); continue; }
+    const { error } = await supabase.from("client_files").insert({
+      client_id: clientId, folder_id: folder, storage_path: path, name: it.name, mime: it.mime, size_bytes: it.size, note: it.note ?? null,
+    });
+    if (error) { errors.push(`${it.name}: ${error.message}`); await supabase.storage.from(BUCKET).remove([path]); continue; }
+    done[it.key] = path;
+  }
+  return { done, errors };
+}

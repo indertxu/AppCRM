@@ -9,6 +9,8 @@ export interface Company {
   vat_number?: string | null;
   reg_number?: string | null;
   website?: string | null;
+  /** The company's LinkedIn page (linkedin.com/company/…). */
+  linkedin?: string | null;
   phone?: string | null;
   email?: string | null;
   notes?: string | null;
@@ -167,7 +169,7 @@ export async function saveCompany(c: Company): Promise<string | null> {
     custom: c.custom ?? {},
   };
   // added by the CRM upgrade (crm_upgrade.sql) — only sent when the object carries them
-  const extra = pickNew(c, ["phone_ext", "landline", "landline_ext", "sector", "relationship", "billing", "parent_id"]);
+  const extra = pickNew(c, ["phone_ext", "landline", "landline_ext", "sector", "relationship", "billing", "parent_id", "linkedin"]);
   const write = async (r: Record<string, any>) => {
     if (c.id) return { error: (await supabase.from("companies").update(r).eq("id", c.id)).error, id: c.id };
     // Created by an import? Send the batch; the database stamps who and when (and created_by).

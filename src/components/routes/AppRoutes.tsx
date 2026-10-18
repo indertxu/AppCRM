@@ -14,6 +14,7 @@ import CompaniesPage from "../pages/companies/CompaniesPage";
 import ContactsPage from "../pages/contacts/ContactsPage";
 import SalesPage from "../pages/sales/sales/SalesPage";
 import SettingsPage from "../pages/settings/SettingsPage";
+import LinkedInCapturePage from "../pages/contacts/LinkedInCapture";
 import SuperAdminHome from "../pages/superadmin/SuperAdminHome";
 import SuperAdminClient from "../pages/superadmin/SuperAdminClient";
 
@@ -64,6 +65,8 @@ export default function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<LoginRoute />} />
+      {/* the window the LinkedIn extension opens (signs in by itself) */}
+      <Route path="/linkedin" element={<LinkedInCapturePage />} />
 
       {/* Superadmin platform panel — protected by login, but outside the app layout */}
       <Route element={<ProtectedRoute />}>
