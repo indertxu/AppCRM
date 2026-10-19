@@ -4,11 +4,90 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../../api/supabase";
 import { useAuth } from "../../api/AuthProvider";
 import { markHandoffConverted } from "../sales/sales/salesApi";
-import { roleSeesAll } from "../companies/companiesApi";
+import { roleSeesAll, saveCompany, saveContact } from "../companies/companiesApi";
 import {
   emptyAddress,
   type Client, type Project, type ProjectType, type Blueprint, type ClientRole,
 } from "./clientsTypes";
+
+const crmKey = (s: unknown) => String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+  .replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim()
+  .replace(/\s(s\s?l\s?u?|s\s?a\s?u?|slp|sll|sccl|scp|cb|ab|gmbh|ltd|llc|inc|bv|srl|spa|sas|sarl|plc|ag|nv)$/, "").trim();
+const vatKey = (s: unknown) => String(s ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+
+/**
+ * A client is also a company in the CRM, and the people on its projects are
+ * contacts there. Finds (or creates) the company, links the client to it, and
+ * adds any project contact that is not in Contacts yet, linked to that company.
+ * Never blocks saving the client: problems are only logged.
+ */
+async function syncClientToCrm(clientId: string, clientName: string, p: Project, knownCompanyId: string | null) {
+  try {
+    let coId = knownCompanyId;
+    if (!coId) {
+      const { data: cl } = await supabase.from("clients").select("company_id").eq("id", clientId).maybeSingle();
+      coId = (cl as any)?.company_id ?? null;
+    }
+    if (!coId) {
+      const { data: cos } = await supabase.from("companies").select("id, name, legal_name, vat_number");
+      const list = (cos ?? []) as any[];
+      const vat = vatKey(p.vatNumber);
+      const names = [crmKey(clientName), crmKey(p.legalName)].filter(Boolean);
+      const hit = (vat && list.find((c) => vatKey(c.vat_number) === vat))
+        || list.find((c) => names.includes(crmKey(c.name)) || (c.legal_name && names.includes(crmKey(c.legal_name))));
+      if (hit) coId = hit.id;
+      else {
+        const a: any = p.address ?? {};
+        const co: any = {
+          name: clientName.trim(), legal_name: p.legalName?.trim() || null, vat_number: p.vatNumber?.trim() || null,
+          street: a.street || null, addr_number: a.number || null, addr_details: a.details || null,
+          postal_code: a.postalCode || null, city: a.city || null, country: a.country || null,
+          relationship: ["client"],
+        };
+        const err = await saveCompany(co);
+        if (err) { console.warn("Client → company:", err); return; }
+        coId = co.id ?? null;
+      }
+      if (coId) await supabase.from("clients").update({ company_id: coId }).eq("id", clientId);
+    }
+    if (!coId) return;
+    // Fill what the company is missing from the project (never overwrite).
+    const { data: cur } = await supabase.from("companies").select("legal_name, vat_number").eq("id", coId).maybeSingle();
+    const fill: any = {};
+    if (!(cur as any)?.legal_name && p.legalName?.trim()) fill.legal_name = p.legalName.trim();
+    if (!(cur as any)?.vat_number && p.vatNumber?.trim()) fill.vat_number = p.vatNumber.trim();
+    if (Object.keys(fill).length) await supabase.from("companies").update(fill).eq("id", coId);
+
+    const people = (p.contacts ?? []).filter((ct) => (ct.name ?? "").trim() || (ct.email ?? "").trim());
+    if (!people.length) return;
+    const { data: all } = await supabase.from("contacts").select("id, first_name, last_name, email");
+    const { data: links } = await supabase.from("company_contacts").select("contact_id").eq("company_id", coId);
+    const linked = new Set(((links ?? []) as any[]).map((l) => l.contact_id));
+    const rows = (all ?? []) as any[];
+    for (const ct of people) {
+      const email = (ct.email ?? "").trim().toLowerCase();
+      const full = crmKey(ct.name);
+      const hit = (email && rows.find((r) => (r.email ?? "").trim().toLowerCase() === email))
+        || rows.find((r) => linked.has(r.id) && crmKey(`${r.first_name ?? ""} ${r.last_name ?? ""}`) === full);
+      if (hit) {
+        if (!linked.has(hit.id)) { await supabase.from("company_contacts").insert({ company_id: coId, contact_id: hit.id }); linked.add(hit.id); }
+        continue;
+      }
+      const parts = (ct.name ?? "").trim().split(/\s+/);
+      const first = parts.shift() || email.split("@")[0] || "Contact";
+      const nc: any = {
+        first_name: first, last_name: parts.join(" ") || null, email: ct.email?.trim() || null,
+        phone: ct.phone?.trim() || null, position: ct.position?.trim() || null, is_billing: !!ct.billing,
+        companyIds: [coId],
+      };
+      const err = await saveContact(nc);
+      if (err) console.warn("Client contact → contacts:", err);
+      else { rows.push({ id: nc.id, first_name: nc.first_name, last_name: nc.last_name, email: nc.email }); linked.add(nc.id); }
+    }
+  } catch (e) {
+    console.warn("Could not sync client to CRM:", e);
+  }
+}
 
 /**
  * Everything the Clients and Projects pages share: the data (clients, projects,
@@ -157,41 +236,29 @@ export function useClientsData() {
     endDate: r.end_date ?? "",
   });
 
+  /**
+   * Everything in one go, then one update: fetching in parallel and setting the
+   * state together means the page draws once with all its numbers, instead of
+   * appearing and then changing as each query lands.
+   */
   const loadAll = async () => {
-    const { data: pts } = await supabase.from("services").select("id,name,blueprint_id,active").order("name");
-    setProjectTypes((pts ?? []).filter((r: any) => r.active !== false)
-      .map((r: any) => ({ id: r.id, name: r.name, blueprintId: r.blueprint_id ?? null })));
-
-    const { data: bps } = await supabase.from("phase_blueprints").select("*");
-    setBlueprints((bps ?? []).map((r: any) => ({
-      id: r.id, name: r.name ?? "", projectTypeId: r.service_id ?? r.project_type_id ?? "", phases: r.phases ?? [],
-    })));
-
-    const { data: rls } = await supabase.from("client_roles").select("*");
-    setRoles((rls ?? []).map((r: any) => ({
-      id: r.id, name: r.name ?? "", userIds: r.user_ids ?? [], isSupervision: !!r.is_supervision,
-    })));
-
     const seesAll = roleSeesAll(role);
     const myId = session?.user?.id ?? "";
+    const [{ data: pts }, { data: bps }, { data: rls }, { data: pjs }, { data: cls }, { data: pu, error: puErr }] = await Promise.all([
+      supabase.from("services").select("id,name,blueprint_id,active").order("name"),
+      supabase.from("phase_blueprints").select("*"),
+      supabase.from("client_roles").select("*"),
+      supabase.from("projects").select("*").order("created_at"),
+      supabase.from("clients").select("*").order("name"),
+      supabase.from("project_usage").select("project_id, billing_line, done, booked"),
+    ]);
+    if (puErr) console.error("project_usage load failed", puErr);
 
-    const { data: pjs } = await supabase.from("projects").select("*").order("created_at");
     const allProjects = (pjs ?? []).map(mapProject);
     const visibleProjects = seesAll
       ? allProjects
       : allProjects.filter((p: any) => (p.team ?? []).some((m: any) => m.userId === myId));
-    setProjects(visibleProjects);
     const allowedClients = new Set(visibleProjects.map((p: any) => p.clientId));
-
-    const { data: cls } = await supabase.from("clients").select("*").order("name");
-    setClients((cls ?? [])
-      .map((r: any) => ({ id: r.id, name: r.name ?? "" }))
-      .filter((c: any) => seesAll || allowedClients.has(c.id)));
-
-    const { data: pu, error: puErr } = await supabase
-      .from("project_usage")
-      .select("project_id, billing_line, done, booked");
-    if (puErr) console.error("project_usage load failed", puErr);
 
     const agg: Record<string, { planned: number; done: number }> = {};
     const byLine: Record<string, { done: number; booked: number }> = {};
@@ -209,6 +276,19 @@ export function useClientsData() {
       byLine[k].done += done;
       byLine[k].booked += booked;
     });
+
+    setProjectTypes((pts ?? []).filter((r: any) => r.active !== false)
+      .map((r: any) => ({ id: r.id, name: r.name, blueprintId: r.blueprint_id ?? null })));
+    setBlueprints((bps ?? []).map((r: any) => ({
+      id: r.id, name: r.name ?? "", projectTypeId: r.service_id ?? r.project_type_id ?? "", phases: r.phases ?? [],
+    })));
+    setRoles((rls ?? []).map((r: any) => ({
+      id: r.id, name: r.name ?? "", userIds: r.user_ids ?? [], isSupervision: !!r.is_supervision,
+    })));
+    setProjects(visibleProjects);
+    setClients((cls ?? [])
+      .map((r: any) => ({ id: r.id, name: r.name ?? "" }))
+      .filter((c: any) => seesAll || allowedClients.has(c.id)));
     setUsage(agg);
     setLineUsage(byLine);
     setLoaded(true);
@@ -252,6 +332,9 @@ export function useClientsData() {
       end_date: p.endDate || null,
     });
     if (pErr) { alert(`Could not save project: ${pErr.message}`); return; }
+
+    // Also in Companies and Contacts.
+    await syncClientToCrm(c.id, c.name, p, companyId ?? null);
 
     if (handoffId) {
       await markHandoffConverted(handoffId, c.id, p.id).catch(() => {});

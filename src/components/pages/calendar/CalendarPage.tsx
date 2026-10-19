@@ -12,7 +12,8 @@ import { cutoffOf, periodOf, inBillingMonth, periodForDate } from "./billingPeri
 import { effectiveRate, effectiveSupervisionRate } from "../clients/ClientsPage";
 import ActualModal, { type ActualValue } from "./ActualModal";
 import { supabase } from "../../api/supabase";
-import { syncEntryToOutlook, deleteEntryFromOutlook } from "../../api/outlookSync";
+import { deleteEntryFromOutlook, syncCalendarEntry } from "../../api/outlookSync";
+import HomeTodo from "../homepage/shared/HomeTodo";
 import "./CalendarPage.css";
 
 /** Fallback window, used until the configured hours arrive. */
@@ -29,6 +30,14 @@ interface DayHours {
 }
 
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri"];
+/** The billing lines the bar can count. */
+const STAT_LINES: { id: string; label: string; hint: string }[] = [
+  { id: "all", label: "All billable", hint: "Consultancy and project management, against your goal" },
+  { id: "consultor", label: "Consultancy", hint: "Consultant days only" },
+  { id: "supervision", label: "Project management", hint: "Supervision days" },
+  { id: "connector", label: "Connector", hint: "Billed to the client, not to your target" },
+];
+
 const MONTHS = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
@@ -68,6 +77,21 @@ function addDays(d: Date, n: number): Date {
   x.setDate(x.getDate() + n);
   return x;
 }
+/** ISO-8601 week number, the one people say out loud ("week 42"). */
+function isoWeek(d: Date): number {
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const day = t.getUTCDay() || 7;
+  t.setUTCDate(t.getUTCDate() + 4 - day);
+  const y0 = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+  return Math.ceil(((t.getTime() - y0.getTime()) / 864e5 + 1) / 7);
+}
+
+/** Small icon for how an entry happens, shown next to its time. */
+const MEET_ICON: Record<string, string> = {
+  teams: "M15 10l4.5-2.6v9.2L15 14M4 6h9a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z",
+  phone: "M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3 19.5 19.5 0 0 1-6-6 19.8 19.8 0 0 1-3-8.7A2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .3 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.2a2 2 0 0 1 2.1-.5c.9.4 1.8.6 2.8.7a2 2 0 0 1 1.7 2z",
+};
+
 function sameDay(a: Date, b: Date): boolean {
   return (
     a.getFullYear() === b.getFullYear() &&
@@ -95,6 +119,79 @@ function fmtRange(start: Date, end: Date): string {
     ? `${sM} ${start.getDate()} – ${end.getDate()}, ${y}`
     : `${sM} ${start.getDate()} – ${eM} ${end.getDate()}, ${y}`;
 }
+/** A number that rolls to its new value instead of jumping. */
+function CountUp({ v, dec = 0, sep = false }: { v: number; dec?: number; sep?: boolean }) {
+  const [shown, setShown] = useState(0);
+  const from = useRef(0);
+  useEffect(() => {
+    const a = from.current; const t0 = performance.now(); let raf = 0;
+    const step = (t: number) => {
+      const k = Math.min(1, (t - t0) / 650); const e = 1 - Math.pow(1 - k, 3);
+      const x = a + (v - a) * e; setShown(x); from.current = x;
+      if (k < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [v]);
+  const txt = sep ? Math.round(shown).toLocaleString() : (Math.round(shown * 10 ** dec) / 10 ** dec).toFixed(dec).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+  return <>{txt}</>;
+}
+
+/** A small month calendar under the date range: click any day to jump to its week (or month). */
+export function JumpPicker({ value, mode = "week", onPick, onClose }: {
+  value: Date; mode?: "week" | "month"; onPick: (d: Date) => void; onClose: () => void;
+}) {
+  const [anchor, setAnchor] = useState(() => new Date(value.getFullYear(), value.getMonth(), 1));
+  const [dirA, setDirA] = useState<1 | -1>(1);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const off = (e: MouseEvent) => { if (ref.current && !ref.current.parentElement?.contains(e.target as Node)) onClose(); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("mousedown", off); document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", off); document.removeEventListener("keydown", esc); };
+  }, [onClose]);
+  const first = new Date(anchor);
+  const lead = (first.getDay() + 6) % 7;
+  const cells = Array.from({ length: 42 }, (_, i) => new Date(anchor.getFullYear(), anchor.getMonth(), 1 - lead + i));
+  const rows = Array.from({ length: 6 }, (_, r) => cells.slice(r * 7, r * 7 + 7)).filter((r, i) => i < 5 || r[0].getMonth() === anchor.getMonth());
+  const now = new Date();
+  const selWeek = startOfWeek(value).getTime();
+  const shift = (n: 1 | -1) => { setDirA(n); setAnchor((a) => new Date(a.getFullYear(), a.getMonth() + n, 1)); };
+  const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  return (
+    <div className="cv-jump" ref={ref} role="dialog" aria-label="Jump to date">
+      <div className="cv-jump-head">
+        <button type="button" onClick={() => shift(-1)} aria-label="Previous month">‹</button>
+        <b key={`${anchor.getFullYear()}-${anchor.getMonth()}`} className={dirA === 1 ? "is-next" : "is-prev"}>
+          {MONTH_NAMES[anchor.getMonth()]} <em>{anchor.getFullYear()}</em>
+        </b>
+        <button type="button" onClick={() => shift(1)} aria-label="Next month">›</button>
+      </div>
+      <div className="cv-jump-dow">{["M", "T", "W", "T", "F", "S", "S"].map((d, i) => <span key={i}>{d}</span>)}</div>
+      <div key={`g-${anchor.getFullYear()}-${anchor.getMonth()}`} className={`cv-jump-grid ${dirA === 1 ? "is-next" : "is-prev"}`}>
+        {rows.map((r) => {
+          const on = mode === "week" ? startOfWeek(r[0]).getTime() === selWeek : false;
+          return (
+            <div key={r[0].toISOString()} className={`cv-jump-row ${on ? "is-on" : ""} ${mode === "week" ? "is-week" : ""}`}>
+              {r.map((d) => (
+                <button type="button" key={d.toISOString()}
+                  className={`${d.getMonth() !== anchor.getMonth() ? "is-out" : ""} ${sameDay(d, now) ? "is-today" : ""} ${d.getDay() === 0 || d.getDay() === 6 ? "is-we" : ""} ${mode === "month" && d.getMonth() === value.getMonth() && d.getFullYear() === value.getFullYear() && d.getMonth() === anchor.getMonth() ? "is-mon" : ""}`}
+                  onClick={() => { onPick(d); onClose(); }}>
+                  {d.getDate()}
+                </button>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+      <div className="cv-jump-foot">
+        <button type="button" onClick={() => { onPick(new Date()); onClose(); }}>Today</button>
+        <span><kbd>←</kbd><kbd>→</kbd> move · <kbd>T</kbd> today</span>
+      </div>
+    </div>
+  );
+}
+
 function monthMatrix(anchor: Date): Date[][] {
   const first = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
   const last = new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0);
@@ -221,7 +318,16 @@ export default function CalendarPage() {
 const [modal, setModal] = useState<ModalState | null>(null);
 const [showSettings, setShowSettings] = useState(false);
 const [dragging, setDragging] = useState<{ id: string; grabMin: number } | null>(null);
+  /** Hover / drag-to-create preview on the week grid, in minutes. */
+  const [ghost, setGhost] = useState<{ key: string; anchor: number; cur: number; drag: boolean; len?: number } | null>(null);
+  useEffect(() => {
+    if (!ghost?.drag) return;
+    const up = () => setGhost(null);
+    window.addEventListener("mouseup", up);
+    return () => window.removeEventListener("mouseup", up);
+  }, [ghost?.drag]);
 const [view, setView] = useState<"week" | "month">("week");
+  const [jumpOpen, setJumpOpen] = useState(false);
   const [actuals, setActuals] = useState<Record<string, ActualValue>>({});
   const [actualFor, setActualFor] = useState<Entry | null>(null);
   const [monthAnchor, setMonthAnchor] = useState<Date>(() => new Date());
@@ -321,6 +427,20 @@ const [targets, setTargets] = useState<Targets>({ perDay: 1, minPerDay: 0.5, min
   const [hoursPerDay, setHoursPerDay] = useState(8);
   /** The days/hours breakdown behind the headline figure, opened on click. */
   const [showSplit, setShowSplit] = useState(false);
+  const [statLine, setStatLine] = useState<string>(() => { try { return localStorage.getItem("cal.statLine") || "all"; } catch { return "all"; } });
+  const [lineOpen, setLineOpen] = useState(false);
+  const lineRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!lineOpen) return;
+    const off = (e: MouseEvent) => { if (lineRef.current && !lineRef.current.contains(e.target as Node)) setLineOpen(false); };
+    document.addEventListener("mousedown", off);
+    return () => document.removeEventListener("mousedown", off);
+  }, [lineOpen]);
+  /** The to-do panel on the right, open or closed — remembered on this browser. */
+  const [todoOpen, setTodoOpen] = useState<boolean>(() => { try { return localStorage.getItem("cal.todo") === "1"; } catch { return false; } });
+  const [todoSeen, setTodoSeen] = useState(false);
+  useEffect(() => { if (todoOpen) setTodoSeen(true); }, [todoOpen]);
+  const toggleTodo = () => setTodoOpen((v) => { try { localStorage.setItem("cal.todo", v ? "0" : "1"); } catch { /* ignore */ } return !v; });
   useEffect(() => {
     (async () => {
       const { data: svc } = await supabase.from("services").select("id, rate_unit").eq("rate_unit", "hour");
@@ -638,6 +758,26 @@ const { data: ea } = await supabase.from("entry_actuals").select("*");
     [weekStart]
   );
 
+  const jumpTo = (d: Date) => {
+    const t = startOfWeek(d);
+    setDir(t.getTime() < weekStart.getTime() ? -1 : 1);
+    setWeekStart(t);
+    setMonthAnchor(new Date(d.getFullYear(), d.getMonth(), 1));
+  };
+  // Keyboard: ←/→ move, T today, W/M switch view. Ignored while typing or with a popup open.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement;
+      if (e.metaKey || e.ctrlKey || e.altKey || t.closest("input, textarea, select, [contenteditable=true]") || document.querySelector("[role=dialog]")) return;
+      if (e.key === "ArrowLeft") { e.preventDefault(); go(-1); }
+      else if (e.key === "ArrowRight") { e.preventDefault(); go(1); }
+      else if (e.key === "t" || e.key === "T") goToday();
+      else if (e.key === "w" || e.key === "W") switchView("week");
+      else if (e.key === "m" || e.key === "M") switchView("month");
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 const go = (delta: 1 | -1) => {
     setDir(delta);
 if (view === "month") {
@@ -673,11 +813,10 @@ const goToday = () => {
     setWeekStart(t);
   };
 
-  const openNew = (day: Date, hour: number) => {
+  const openNew = (day: Date, hour: number) => openRange(day, hour * 60, Math.min(hour * 60 + 60, DAY_END));
+  const openRange = (day: Date, startMin: number, endMin: number) => {
     // Booking while looking at other calendars is the point of looking: the
     // entry is yours, since your own week is always one of the ones on screen.
-    const startMin = hour * 60;
-    const endMin = Math.min(hour * 60 + 60, DAY_END);
     const billable = Math.max(0.25, Math.round((endMin - startMin) / 60 / 0.25) * 0.25);
 setModal({ day, startMin, endMin, type: workTypes[0]?.id ?? "", billable, clientId: "", projectId: "", phaseId: "", taskId: "", attendees: "", notes: "", line: "", roleId: "" });
   };
@@ -813,25 +952,11 @@ notes: v.notes || null,
       );
       setModal(null);
 
-      // One-way Outlook sync (no-op if the consultant hasn't connected Outlook).
-      const existing = entries.find((e) => e.id === id) as any;
-      const wtName = workTypes.find((t) => t.id === v.type)?.name ?? "";
-      const outlookEventId = await syncEntryToOutlook({
-        outlookEventId: existing?.outlookEventId ?? null,
-        date: iso,
-        startMin: v.startMin,
-        endMin: v.endMin,
-        workType: wtName,
-        client: v.clientId ? clientNames[v.clientId] ?? "" : "",
-        project: v.projectId || "",
-        phase: v.phaseId || "",
-        tasks: v.taskId || "",
-        notes: v.notes || "",
+      // Into the booker's Outlook with everything on it, colleagues invited
+      // (no-op if Outlook isn't connected).
+      void syncCalendarEntry(id).then((r) => {
+        if (r.ok && r.eventId) setEntries((list) => list.map((e) => (e.id === id ? { ...e, outlookEventId: r.eventId } as any : e)));
       });
-      if (outlookEventId) {
-        await supabase.from("calendar_entries").update({ outlook_event_id: outlookEventId }).eq("id", id);
-        setEntries((list) => list.map((e) => (e.id === id ? { ...e, outlookEventId } as any : e)));
-      }
     })();
   };
 const moveEntry = async (id: string, day: Date, newStart: number) => {
@@ -849,6 +974,7 @@ const moveEntry = async (id: string, day: Date, newStart: number) => {
       .update({ start_min: start, end_min: end, date_key: key, entry_date: iso })
       .eq("id", id);
     if (error) alert(`Could not move entry: ${error.message}`);
+    else void syncCalendarEntry(id);
   };
 
 const saveActual = async (entryId: string, v: ActualValue) => {
@@ -884,6 +1010,7 @@ const saveActual = async (entryId: string, v: ActualValue) => {
     setEntries((list) => list.map((e) => (e.id === id ? { ...e, status: next } : e)));
     const { error } = await supabase.from("calendar_entries").update({ status: next }).eq("id", id);
     if (error) alert(`Could not update: ${error.message}`);
+    else void syncCalendarEntry(id);
   };
 
   const deleteModal = async () => {
@@ -894,7 +1021,7 @@ const saveActual = async (entryId: string, v: ActualValue) => {
     setEntries((list) => list.filter((e) => e.id !== modal.editingId));
     setModal(null);
     // Remove the matching Outlook event (best-effort, no-op if not connected).
-    if (entry?.outlookEventId) await deleteEntryFromOutlook(entry.outlookEventId);
+    if (entry?.outlookEventId) await deleteEntryFromOutlook(entry.outlookEventId, modal.editingId);
   };
 
 const clientTypeIds = new Set(workTypes.filter((t) => t.clientRelated).map((t) => t.id));
@@ -988,9 +1115,6 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
     : 0;
   // Against the target while one exists, against what is booked otherwise.
   const trackBase = scopeGoal > 0 ? scopeGoal : weekPlanned;
-  const trackPct = trackBase > 0 ? Math.min(100, (weekPlanned / trackBase) * 100) : 0;
-  const trackDonePct = trackBase > 0 ? Math.min(100, (weekDone / trackBase) * 100) : 0;
-  const weekPct = scopeGoal > 0 ? Math.min(100, (weekPlanned / scopeGoal) * 100) : 0;
   const weekDonePct = scopeGoal > 0 ? Math.min(100, (weekDone / scopeGoal) * 100) : 0;
 
   const holidaySet = new Map(holidays.map((h) => [h.date, h.name]));
@@ -1006,16 +1130,152 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
   const nowVisible = nowMin >= DAY_START && nowMin <= DAY_END;
   const nowPct = ((nowMin - DAY_START) / SPAN) * 100;
 
+  const minAt = (el: HTMLElement, clientY: number) => {
+    const r = el.getBoundingClientRect();
+    const m = DAY_START + ((clientY - r.top) / r.height) * SPAN;
+    return Math.max(DAY_START, Math.min(DAY_END - 30, Math.floor(m / 30) * 30));
+  };
+  const ghostRange = (g: { anchor: number; cur: number; len?: number }) => g.len
+    ? [g.cur, Math.min(DAY_END, g.cur + g.len)]
+    : g.cur >= g.anchor ? [g.anchor, Math.min(DAY_END, g.cur + 30)] : [g.cur, Math.min(DAY_END, g.anchor + 30)];
+  const durLabel = (m: number) => (m >= 60 ? `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ""}` : `${m}m`);
+  const num2 = (n: number) => String(Math.round(n * 100) / 100);
+
+  /** Billing figures in the bar: which line they count. */
+  const daysOnLine = (list: Entry[], onlyConfirmed: boolean) => list
+    .filter((e) => clientTypeIds.has(e.type) && (onlyConfirmed ? e.status === "confirmed" : e.status !== "cancelled"))
+    .filter((e) => (statLine === "all" ? e.line !== "connector" : (e.line || "consultor") === statLine))
+    .reduce((sum, e) => sum + effDays(e), 0);
+  const cutoffInfo = (() => {
+    const per = periodForDate(isoOf(today), cutoffs, defaultCutoffDay);
+    const cIso = cutoffOf(per, cutoffs, defaultCutoffDay);
+    if (!cIso) return null;
+    const c = new Date(`${cIso}T00:00:00`);
+    const left = Math.round((c.getTime() - new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()) / 864e5);
+    return { left, label: `${MONTHS[c.getMonth()]} ${c.getDate()}`, month: MONTHS_FULL[Number(per.slice(5)) - 1] ?? per };
+  })();
+
   return (
-    <div className="cal">
+    <div className="cal cal-ov cal-v3">
       <div className="cal-scan-wrap" aria-hidden="true">
         <div className="cal-scan" />
       </div>
 
-<header className="cal-bar">
-        <div className="cal-bar-left">
-          <button className="cal-home" onClick={() => navigate("/home")} aria-label="Back to home" title="Home">‹</button>
-          <h1 className="cal-title">Calendar</h1>
+<header className="cv-bar">
+        <div className="cv-l">
+          <button className="cal-home" onClick={() => navigate("/home")} aria-label="Back to home" title="Home">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
+          </button>
+          <div className="cv-title">
+            <h1 className="cal-title">Calendar</h1>
+            <span className="cv-title-sub">{view === "month" ? `${MONTHS_FULL[monthAnchor.getMonth()]} ${monthAnchor.getFullYear()}` : `Week ${isoWeek(weekStart)} · ${weekStart.getFullYear()}`}</span>
+          </div>
+          <div className="cal-view-seg" data-view={view}>
+            <span className="cal-view-slider" />
+            <button className={view === "week" ? "is-on" : ""} onClick={() => switchView("week")} title="Week (W)">Week</button>
+            <button className={view === "month" ? "is-on" : ""} onClick={() => switchView("month")} title="Month (M)">Month</button>
+          </div>
+          <div className="cv-nav">
+            <button className="cv-nav-today" onClick={goToday} title="Jump to today (T)">Today</button>
+            <span className="cv-nav-sep" />
+            <button className="cv-nav-arrow" onClick={() => go(-1)} aria-label={view === "month" ? "Previous month" : "Previous week"} title="Previous (←)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
+            </button>
+            <div className="cv-nav-range-wrap">
+              <button className={`cv-nav-range ${jumpOpen ? "is-open" : ""}`} onClick={() => setJumpOpen((v) => !v)} title="Pick a date">
+                <span key={view === "month" ? monthAnchor.getTime() : weekStart.getTime()} className={dirClass === "slide-next" ? "is-next" : "is-prev"}>
+                  {view === "month" ? `${MONTHS_FULL[monthAnchor.getMonth()]} ${monthAnchor.getFullYear()}` : fmtRange(weekStart, addDays(weekStart, 4))}
+                </span>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+              </button>
+              {jumpOpen && (
+                <JumpPicker value={view === "month" ? monthAnchor : weekStart} mode={view}
+                  onPick={jumpTo} onClose={() => setJumpOpen(false)} />
+              )}
+            </div>
+            <button className="cv-nav-arrow" onClick={() => go(1)} aria-label={view === "month" ? "Next month" : "Next week"} title="Next (→)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
+            </button>
+          </div>
+        </div>
+
+        {/* One line of billing figures: the line you pick, for everyone on screen. */}
+        <div className="cv-stats">
+          <div className="cv-line" ref={lineRef}>
+            <button type="button" className={`cv-line-btn ${lineOpen ? "is-open" : ""}`} onClick={() => setLineOpen((v) => !v)} title="Which billing line the figures count">
+              {STAT_LINES.find((l) => l.id === statLine)?.label}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+            </button>
+            {lineOpen && (
+              <div className="cv-line-pop" role="listbox">
+                {STAT_LINES.map((l) => (
+                  <button key={l.id} type="button" role="option" aria-selected={statLine === l.id} className={statLine === l.id ? "is-on" : ""}
+                    onClick={() => { setStatLine(l.id); setLineOpen(false); try { localStorage.setItem("cal.statLine", l.id); } catch { /* ignore */ } }}>
+                    <b>{l.label}</b><small>{l.hint}</small>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          {seenIds.slice(0, 4).map((uid) => {
+            const mine = uid === myId;
+            const booked = daysOnLine(scopeEntries.filter((e) => e.userId === uid), false);
+            const done = daysOnLine(scopeEntries.filter((e) => e.userId === uid), true);
+            const goal = mine && statLine === "all" ? scopeGoal : 0;
+            const pct = goal > 0 ? Math.min(100, (booked / goal) * 100) : 0;
+            const dpct = goal > 0 ? Math.min(100, (done / goal) * 100) : 0;
+            return (
+              <div key={uid} className={`cv-stat ${mine && hasHours ? "is-click" : ""}`} title={`${nameOf(uid) || "You"}: ${booked.toFixed(2)}d booked · ${done.toFixed(2)}d confirmed`}
+                onClick={() => mine && hasHours && setShowSplit((v) => !v)}>
+                {viewingOther && <i className="cv-stat-dot" style={{ background: colourOf(uid) }} />}
+                {viewingOther && <span className="cv-stat-who">{mine ? "You" : (nameOf(uid) || "").split(" ")[0]}</span>}
+                <b className={goal > 0 && booked < goal ? "is-under" : ""}><CountUp v={booked} dec={2} /><em>d</em></b>
+                {goal > 0 && <small>/ {goal.toFixed(2).replace(/\.00$/, "")}</small>}
+                {goal > 0 && <span className="cv-stat-bar"><i className="is-plan" style={{ width: `${pct}%` }} /><i className="is-done" style={{ width: `${dpct}%` }} /></span>}
+                {!viewingOther && <span className="cv-stat-sub">{done.toFixed(2).replace(/\.00$/, "")}d confirmed</span>}
+                {mine && showSplit && hasHours && (
+              <span className="cal-wk-split" role="dialog">
+                <span className="cal-wk-split-head">Booked this period</span>
+                {hasDays && (
+                  <span className="cal-wk-split-row">
+                    <em>Day-rate work</em><b>{plannedSplit.days.toFixed(2)}<i>d</i></b>
+                  </span>
+                )}
+                <span className="cal-wk-split-row">
+                  <em>Hourly work</em>
+                  <b>{plannedSplit.hours.toFixed(2)}<i>h</i></b>
+                </span>
+                <span className="cal-wk-split-row is-conv">
+                  <em>at {hoursPerDay}h per day</em>
+                  <b>{(plannedSplit.hours / (hoursPerDay || 8)).toFixed(2)}<i>d</i></b>
+                </span>
+                <span className="cal-wk-split-row is-total">
+                  <em>Total</em><b>{weekPlanned.toFixed(2)}<i>d</i></b>
+                </span>
+                <span className="cal-wk-split-row is-done">
+                  <em>Of which confirmed</em><b>{weekDone.toFixed(2)}<i>d</i></b>
+                </span>
+              </span>
+            )}
+              </div>
+            );
+          })}
+          {!viewingOther && (
+            <div className="cv-stat is-rev" title={scopeRevenueGoal > 0 ? `${Math.round(revPct)}% of the revenue target` : "Revenue booked"}>
+              <b><CountUp v={scopeRevenue} sep /><em>€</em></b>
+              {scopeRevenueGoal > 0 && <small>/ {Math.round(scopeRevenueGoal).toLocaleString()}</small>}
+              {scopeRevenueGoal > 0 && <span className="cv-stat-bar"><i className="is-done" style={{ width: `${revPct}%` }} /></span>}
+            </div>
+          )}
+          {cutoffInfo && (
+            <div className={`cv-stat is-cut ${cutoffInfo.left <= 3 ? "is-hot" : ""}`} title={`Billing for ${cutoffInfo.month} closes ${cutoffInfo.label}`}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 21V4h11l-1.5 4H20l-1.5 4H15v9" /></svg>
+              <span>{cutoffInfo.left === 0 ? "Closes today" : cutoffInfo.left > 0 ? `${cutoffInfo.left}d to cutoff` : "Closed"}</span>
+            </div>
+          )}
+        </div>
+
+        <div className="cv-r">
           {people.length > 1 && (
             <div className="cal-who" ref={whoRef}>
               <button type="button" className={`cal-who-btn ${whoOpen ? "is-open" : ""}`}
@@ -1064,95 +1324,8 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
               )}
             </div>
           )}
-        </div>
-        <div className="cal-week-bar">
-          {/* Measured against the target when there is one; against what is
-              booked when there is not, so the bar always means something. */}
-          {/* One figure, always in days. Hourly work is converted with the
-              hours-per-day setting, so the total is directly comparable to the
-              goal. The days/hours split is a click away rather than inline. */}
-          <span className="cal-wk-main">
-            <b className={scopeGoal > 0 && weekPlanned < scopeGoal ? "is-under" : ""}>
-              {weekPlanned.toFixed(2)}<i>d</i>
-            </b>
-            {scopeGoal > 0 && (
-              <span className="cal-wk-goal">/ {scopeGoal.toFixed(2).replace(/\.00$/, "")}<i>d</i></span>
-            )}
-          </span>
-
-          <span className="cal-wk-barwrap">
-            <span
-              className={`cal-wk-track ${hasHours ? "is-clickable" : ""}`}
-              role={hasHours ? "button" : undefined}
-              tabIndex={hasHours ? 0 : undefined}
-              title={hasHours ? "See the days and hours behind this" : undefined}
-              onClick={() => hasHours && setShowSplit((v) => !v)}
-              onKeyDown={(ev) => {
-                if (hasHours && (ev.key === "Enter" || ev.key === " ")) {
-                  ev.preventDefault();
-                  setShowSplit((v) => !v);
-                }
-              }}
-            >
-              <i className="is-plan" style={{ width: `${trackPct}%` }} />
-              <i className="is-done" style={{ width: `${trackDonePct}%` }} />
-            </span>
-
-            {showSplit && hasHours && (
-              <span className="cal-wk-split" role="dialog">
-                <span className="cal-wk-split-head">Booked this period</span>
-                {hasDays && (
-                  <span className="cal-wk-split-row">
-                    <em>Day-rate work</em><b>{plannedSplit.days.toFixed(2)}<i>d</i></b>
-                  </span>
-                )}
-                <span className="cal-wk-split-row">
-                  <em>Hourly work</em>
-                  <b>{plannedSplit.hours.toFixed(2)}<i>h</i></b>
-                </span>
-                <span className="cal-wk-split-row is-conv">
-                  <em>at {hoursPerDay}h per day</em>
-                  <b>{(plannedSplit.hours / (hoursPerDay || 8)).toFixed(2)}<i>d</i></b>
-                </span>
-                <span className="cal-wk-split-row is-total">
-                  <em>Total</em><b>{weekPlanned.toFixed(2)}<i>d</i></b>
-                </span>
-                <span className="cal-wk-split-row is-done">
-                  <em>Of which confirmed</em><b>{weekDone.toFixed(2)}<i>d</i></b>
-                </span>
-              </span>
-            )}
-          </span>
-
-          {scopeRevenueGoal > 0 && (
-            <div className="cal-rev">
-              <span className="cal-rev-fig">
-                <strong className={scopeRevenue < scopeRevenueGoal ? "is-under" : ""}>
-                  {Math.round(scopeRevenue).toLocaleString()}
-                </strong>
-                <em>/ {Math.round(scopeRevenueGoal).toLocaleString()}</em>
-              </span>
-              <div className="cal-rev-track">
-                <div className="cal-rev-fill" style={{ width: `${revPct}%` }} />
-              </div>
-            </div>
-          )}
-        </div>
-        <div className="cal-nav">
-<div className="cal-nav-btns">
-            <div className="cal-view-seg" data-view={view}>
-              <span className="cal-view-slider" />
-              <button className={view === "week" ? "is-on" : ""} onClick={() => switchView("week")}>Week</button>
-              <button className={view === "month" ? "is-on" : ""} onClick={() => switchView("month")}>Month</button>
-            </div>
-<button className="cal-btn" onClick={() => go(-1)} aria-label="Previous week">‹</button>
-<button className="cal-today" onClick={goToday} title="Jump to today">
-              {view === "month"
-                ? `${MONTHS_FULL[monthAnchor.getMonth()]} ${monthAnchor.getFullYear()}`
-                : fmtRange(weekStart, addDays(weekStart, 4))}
-            </button>
-            <button className="cal-btn" onClick={() => go(1)} aria-label="Next week">›</button>
-            <div className="cal-bell-wrap" ref={bellRef}>
+          <div className="cv-icons">
+          <div className="cal-bell-wrap" ref={bellRef}>
           <button className="cal-bell" onClick={() => setTrayOpen((v) => !v)}
             aria-label={`${invites.length} invitations`} title="Invitations">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"/></svg>
@@ -1173,11 +1346,19 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
               onClose={() => { setTrayOpen(false); setUnseenReplies(0); }} />
           )}
         </div>
-            <button className="cal-btn cal-gear" onClick={() => setShowSettings(true)} aria-label="Calendar settings" title="Calendar settings">⚙</button>
+          <button className="cal-btn cal-gear" onClick={() => setShowSettings(true)} aria-label="Calendar settings" title="Calendar settings">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </button>
           </div>
+          <button className={`cv-todo-btn ${todoOpen ? "is-on" : ""}`} onClick={toggleTodo} title={todoOpen ? "Hide your to-do" : "Show your to-do"} aria-pressed={todoOpen}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6h11M9 12h11M9 18h11M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2" /></svg>
+            To-do
+          </button>
         </div>
       </header>
 
+      <div className={`cv-main ${todoOpen ? "has-todo" : ""}`}>
+      <section className="cv-cal">
 {view === "month" ? (
       <div key={`m-${monthAnchor.getFullYear()}-${monthAnchor.getMonth()}`} className={`cal-month ${dirClass}`}>
           <div className="cal-month-head">
@@ -1186,7 +1367,7 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
           <div className="cal-month-body">
         {monthMatrix(monthAnchor).map((row, ri) => (
               <div className="cal-month-row" key={ri}>
-                {row.map((d) => {
+                {row.map((d, ci) => {
               const inMonth = d.getMonth() === monthAnchor.getMonth();
                   const dayList = entries.filter((e) => e.dateKey === dateKey(d));
                   const planned = billableOf(dayList);
@@ -1196,8 +1377,15 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
                     <div
                       className={`cal-mcell ${inMonth ? "" : "is-out"} ${sameDay(d, today) ? "is-today" : ""} ${isCutoff ? "is-cutoff" : ""}`}
                       key={d.toISOString()}
+                      style={{ ["--i" as string]: ri * 5 + ci }}
                       onClick={() => openNew(d, 9)}
                     >
+                      <span className="cv-madd" aria-hidden="true">+</span>
+                      {inMonth && dayList.length > 0 && (
+                        <span className={`cv-mload ${under ? "is-under" : ""}`}>
+                          <i style={{ width: `${Math.min(100, (planned / (targets.minPerDay || 1)) * 100)}%` }} />
+                        </span>
+                      )}
                       <div className="cal-mcell-head">
                         <span className="cal-mcell-date">{d.getDate()}</span>
                         {isCutoff && (
@@ -1208,7 +1396,7 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
                           </span>
                         )}
                         {dayList.length > 0 && (
-                          <span className={`cal-mcell-sum ${under ? "is-under" : ""}`}>{planned.toFixed(2)}</span>
+                          <span className={`cal-mcell-sum ${under ? "is-under" : ""}`}>{num2(planned)}d</span>
                         )}
                       </div>
                       <div className="cal-mcell-list">
@@ -1221,13 +1409,13 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
                               <button
                                 key={e.id}
                                className={`cal-mchip is-${e.status} ${e.line === "connector" ? "is-connector" : ""}`}
-                                style={{ background: bgOf(e.userId, wt?.color) }}
+                                style={{ ["--ec" as string]: bgOf(e.userId, wt?.color) }}
                                 onClick={(ev) => { ev.stopPropagation(); if (!opaque(e.userId) && e.merged === 1) openEdit(d, e); }}
                                 title={`${fmtTime(e.startMin)} – ${fmtTime(e.endMin)}`}
                               >
                                 <span className="cal-mchip-time">{fmtTime(e.startMin).replace(":00", "")}</span>
                                 <span className="cal-mchip-name">
-                                  {e.clientId ? clientNames[e.clientId] ?? "—" : wt?.name ?? "—"}
+                                  {e.clientId ? clientNames[e.clientId] ?? "—" : wt?.name ?? "Meeting"}
                                 </span>
                               </button>
                             );
@@ -1261,25 +1449,29 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
                   <em>Billing cutoff</em>
                 </span>
               )}
-<span className="cal-dow">{DOW[i]}</span>
-              {(() => {
-                const dayList = entries.filter((e) => e.dateKey === dateKey(d));
+{(() => {
+                const dayList = entries.filter((e) => e.dateKey === dateKey(d) && e.userId === myId);
                 const planned = billableOf(dayList);
                 const done = confirmedOf(dayList);
                 const goal = targets.minPerDay || 1;
-                const pFrac = Math.min(1, planned / goal);
-                const dFrac = Math.min(1, done / goal);
-                const under = planned < targets.minPerDay;
+                const under = targets.minPerDay > 0 && planned < targets.minPerDay;
                 return (
-                  <span
-                    className={`cal-ring ${under ? "is-under" : ""}`}
-                    title={`${planned} planned · ${done} completed · min ${targets.minPerDay}`}
-                    style={{
-                      background: `conic-gradient(#12b57f 0turn ${dFrac}turn, rgba(18,181,127,0.32) ${dFrac}turn ${pFrac}turn, rgba(10,111,77,0.1) ${pFrac}turn 1turn)`,
-                    }}
-                  >
-                    <span className="cal-ring-inner">{d.getDate()}</span>
-                  </span>
+                  <>
+                    <span className="cv-hd-date">{d.getDate()}</span>
+                    <span className="cv-hd-txt">
+                      <span className="cal-dow">
+                        {DOW[i]}
+                        {hoursByDay[d.getDay()]?.remote && <em className="cv-hd-tag" title="Remote day">Remote</em>}
+                      </span>
+                      <span className={`cv-hd-load ${under ? "is-under" : ""}`} title={`${num2(planned)}d planned · ${num2(done)}d confirmed · min ${targets.minPerDay}d`}>
+                        <span className="cv-hd-bar">
+                          <i className="is-plan" style={{ width: `${Math.min(100, (planned / goal) * 100)}%` }} />
+                          <i className="is-done" style={{ width: `${Math.min(100, (done / goal) * 100)}%` }} />
+                        </span>
+                        <b>{num2(planned)}</b><em>/{num2(goal)}d</em>
+                      </span>
+                    </span>
+                  </>
                 );
               })()}
             </div>
@@ -1317,7 +1509,39 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
                   const snapped = Math.round(raw / 15) * 15;
                   moveEntry(dragging.id, d, snapped);
                   setDragging(null);
+                  setGhost(null);
                 }}
+                onDragOverCapture={(ev) => {
+                  if (!dragging) return;
+                  const ent = entries.find((x) => x.id === dragging.id);
+                  if (!ent) return;
+                  const len = ent.endMin - ent.startMin;
+                  const r = ev.currentTarget.getBoundingClientRect();
+                  const raw = DAY_START + ((ev.clientY - r.top) / r.height) * SPAN - dragging.grabMin;
+                  const m = Math.max(DAY_START, Math.min(DAY_END - len, Math.round(raw / 15) * 15));
+                  if (!ghost || ghost.key !== key || ghost.cur !== m) setGhost({ key, anchor: m, cur: m, drag: false, len });
+                }}
+                onMouseDown={(ev) => {
+                  if (ev.button !== 0 || dragging || (ev.target as HTMLElement).closest(".cal-event, .cal-daytag")) return;
+                  ev.preventDefault();
+                  const m = minAt(ev.currentTarget, ev.clientY);
+                  setGhost({ key, anchor: m, cur: m, drag: true });
+                }}
+                onMouseMove={(ev) => {
+                  if (dragging) return;
+                  if ((ev.target as HTMLElement).closest(".cal-event")) { if (ghost && !ghost.drag) setGhost(null); return; }
+                  const m = minAt(ev.currentTarget, ev.clientY);
+                  if (ghost?.drag) { if (ghost.key === key && ghost.cur !== m) setGhost({ ...ghost, cur: m }); return; }
+                  if (!ghost || ghost.key !== key || ghost.cur !== m) setGhost({ key, anchor: m, cur: m, drag: false });
+                }}
+                onMouseUp={(ev) => {
+                  if (!ghost?.drag || ghost.key !== key) return;
+                  ev.stopPropagation();
+                  const [s0, e0] = ghostRange(ghost);
+                  setGhost(null);
+                  openRange(d, s0, ghost.cur === ghost.anchor ? Math.min(DAY_END, s0 + 60) : e0);
+                }}
+                onMouseLeave={() => { if (ghost && !ghost.drag && ghost.key === key) setGhost(null); }}
               >
                 {(holidayName != null || isVacation) && (
                   <span className={`cal-daytag ${isVacation ? "is-vac" : "is-hol"}`}>
@@ -1356,24 +1580,39 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
                   />
                 ))}
 
-                {isToday && nowVisible && (
-                  <span className="cal-now" style={{ top: `${nowPct}%` }} />
+                {nowVisible && days.some((x) => sameDay(x, today)) && (
+                  <span className={`cal-now ${isToday ? "" : "is-faint"}`} style={{ top: `${nowPct}%` }}>
+                    {isToday && <em>{fmtTime(nowMin)}</em>}
+                  </span>
                 )}
 
-                {dayEntries.map((e) => {
+                {ghost && ghost.key === key && (() => {
+                  const [gs, ge] = ghostRange(ghost);
+                  const short = ghost.cur === ghost.anchor && !ghost.len ? Math.min(DAY_END, gs + 60) : ge;
+                  return (
+                    <span className={`cv-ghost ${ghost.drag ? "is-drag" : ""} ${ghost.len ? "is-move" : ""}`}
+                      style={{ top: `${((gs - DAY_START) / SPAN) * 100}%`, height: `${((short - gs) / SPAN) * 100}%` }}>
+                      <b>{ghost.len ? "Move here" : ghost.drag ? "New entry" : "+ Add"}</b>
+                      <em>{fmtTime(gs)} – {fmtTime(short)} · {durLabel(short - gs)}</em>
+                    </span>
+                  );
+                })()}
+
+                {dayEntries.map((e, ei) => {
                   const top = ((e.startMin - DAY_START) / SPAN) * 100;
 const height = ((e.endMin - e.startMin) / SPAN) * 100;
 const wt = workTypes.find((t) => t.id === e.type);
                     return (
 <div
                       key={e.id}
-                 className={`cal-event is-${e.status} ${e.line === "connector" ? "is-connector" : ""} ${e.line === "closure" ? "is-closure" : ""} ${opaque(e.userId) || e.merged > 1 ? "is-opaque" : ""}`}
+                 className={`cal-event is-${e.status} ${e.endMin - e.startMin <= 60 ? "is-short" : ""} ${dragging?.id === e.id ? "is-lifted" : ""} ${e.line === "connector" ? "is-connector" : ""} ${e.line === "closure" ? "is-closure" : ""} ${opaque(e.userId) || e.merged > 1 ? "is-opaque" : ""}`}
                       style={{
                         top: `${top}%`, height: `${height}%`,
                         left: `calc(${e.left}% + 2px)`,
                         width: `calc(${e.width}% - 4px)`,
                         zIndex: 2 + e.lane,
-                        background: bgOf(e.userId, wt?.color),
+                        ["--ec" as string]: bgOf(e.userId, wt?.color),
+                        ["--i" as string]: ei,
                       }}
                       title={viewingOther ? nameOf(e.userId) : undefined}
                       data-shared={attendees[e.id]?.length ? "1" : undefined}
@@ -1387,7 +1626,7 @@ onClick={(ev) => { ev.stopPropagation(); if (!opaque(e.userId) && e.merged === 1
                         setDragging({ id: e.id, grabMin: Math.round(offsetPct * (e.endMin - e.startMin)) });
                         ev.dataTransfer.effectAllowed = "move";
                       }}
-                      onDragEnd={() => setDragging(null)}
+                      onDragEnd={() => { setDragging(null); setGhost(null); }}
                     >
 {(attendees[e.id]?.length ?? 0) > 0 && (() => {
                         const who = attendees[e.id];
@@ -1410,13 +1649,19 @@ onClick={(ev) => { ev.stopPropagation(); if (!opaque(e.userId) && e.merged === 1
                             ? `Busy · ${e.merged}`
                             : opaque(e.userId)
                               ? "Busy"
-                              : e.clientId ? clientNames[e.clientId] ?? "—" : wt?.name ?? "—"}
+                              : e.clientId ? clientNames[e.clientId] ?? "—" : wt?.name ?? "Meeting"}
                         </span>
-                        {!opaque(e.userId) && e.merged === 1 && <span className="cal-event-bill">{e.billable}{unitOf(e)}</span>}
+                        {!opaque(e.userId) && e.merged === 1 && <span className="cal-event-bill">{num2(e.billable)}{unitOf(e)}</span>}
                       </span>
                       <span className="cal-event-time">
+                        {MEET_ICON[e.meetKind ?? ""] && !opaque(e.userId) && e.merged === 1 && (
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={MEET_ICON[e.meetKind ?? ""]} /></svg>
+                        )}
                         {fmtTime(e.startMin)} – {fmtTime(e.endMin)}
                       </span>
+                      {!opaque(e.userId) && e.merged === 1 && (e.clientId && wt?.name || e.notes) && (
+                        <span className="cal-event-meta">{[e.clientId ? wt?.name : "", e.notes].filter(Boolean).join(" · ")}</span>
+                      )}
 {actuals[e.id] && <span className="cal-event-actual" title="Actuals logged">⏱</span>}
                       {(e.status === "confirmed" || e.status === "cancelled") && (
                         <span className="cal-event-flag">{e.status === "confirmed" ? "✓" : "✕"}</span>
@@ -1442,6 +1687,11 @@ onClick={(ev) => { ev.stopPropagation(); if (!opaque(e.userId) && e.merged === 1
 </div>
       </div>
       )}
+      </section>
+      <aside className="cv-todo" aria-label="Your to-do" aria-hidden={!todoOpen}>
+        <div className="cv-todo-in">{(todoOpen || todoSeen) && <HomeTodo />}</div>
+      </aside>
+      </div>
 
 {actualFor && (
         <ActualModal

@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { supabase } from "../../api/supabase";
+import { unsyncCalendarEntry } from "../../api/outlookSync";
 
 /**
  * The sales calendar.
@@ -259,6 +260,7 @@ export async function updateSalesMeeting(
 }
 
 export async function deleteSalesMeeting(id: string): Promise<string | null> {
+  await unsyncCalendarEntry(id);
   const { error } = await supabase.from("calendar_entries").delete().eq("id", id);
   return error?.message ?? null;
 }
@@ -344,8 +346,8 @@ export async function createSalesBlock(input: {
   notes: string | null;
   company_id: string | null;
   contact_id: string | null;
-}): Promise<string | null> {
-  const { error } = await supabase.from("calendar_entries").insert({
+}): Promise<{ id: string | null; error: string | null }> {
+  const { data, error } = await supabase.from("calendar_entries").insert({
     ...input,
     kind: "work",
     billing_line: "sales",
@@ -364,6 +366,7 @@ export async function updateSalesBlock(
 }
 
 export async function deleteSalesBlock(id: string): Promise<string | null> {
+  await unsyncCalendarEntry(id);
   const { error } = await supabase.from("calendar_entries").delete().eq("id", id);
   return error?.message ?? null;
 }

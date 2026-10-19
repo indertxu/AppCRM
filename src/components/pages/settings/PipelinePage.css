@@ -345,3 +345,11 @@
 .pl-del-next:disabled, .pl-del-go:disabled, .pl-del-cancel:disabled { opacity: 0.45; cursor: default; box-shadow: none; transform: none; }
 @media (max-width: 520px) { .pl-del-impact { grid-template-columns: repeat(2, minmax(0, 1fr)); } .pl-del-select { padding-left: 0; } }
 @media (prefers-reduced-motion: reduce) { .pl-del, .pl-del-backdrop { animation: none; } }
+/* ===== reorder: drag rows, saved for the company ===== */
+.pl-list-hint { margin: 0 0 2px 4px; font-size: 11.5px; font-weight: 600; letter-spacing: 0.02em; color: var(--muted); }
+.pl-list-err { margin: 0; padding: 8px 11px; border-radius: 10px; font-size: 12px; color: #a8452f; background: #fdebe8; }
+.pl-row-grip { flex-shrink: 0; width: 12px; margin-right: -4px; font-size: 13px; line-height: 1; letter-spacing: -2px; color: #b3c0ba; cursor: grab; opacity: 0.6; transition: opacity 0.15s, color 0.15s; }
+.pl-row:hover .pl-row-grip { opacity: 1; color: var(--forest, #0a6f4d); }
+.pl-row[draggable="true"]:active { cursor: grabbing; }
+.pl-row.is-dragging { opacity: 0.45; transform: scale(0.98); }
+.pl-row.is-over { border-color: var(--emerald); box-shadow: 0 0 0 2px rgba(18, 181, 127, 0.22), 0 14px 30px -22px rgba(10, 111, 77, 0.5); }

@@ -140,6 +140,8 @@ export function ClientList({
   useEffect(() => { loadPrefs().then((p) => { if (Array.isArray(p.clientColumns) && p.clientColumns.length) setCols(p.clientColumns); }).catch(() => {}); }, []);
   const saveCols = (next: string[]) => { setCols(next); savePref("clientColumns", next).catch(() => {}); };
   const known = (k: string) => KPIS.some((x) => x.key === k);
+  /** Your saved figures, so the cards don't draw with the defaults and then swap. */
+  const [prefsReady, setPrefsReady] = useState(false);
   useEffect(() => {
     loadPrefs().then((p) => {
       if (Array.isArray(p.clientKpiSlots) && p.clientKpiSlots.length) {
@@ -149,7 +151,7 @@ export function ClientList({
         const xs = (p.clientKpis as string[]).filter(known).map((k) => [k]);
         if (xs.length) setSlots(xs);
       }
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => setPrefsReady(true));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const saveSlots = (next: string[][]) => {
     const clean = next.map((sl) => sl.filter(Boolean).slice(0, 2)).filter((sl) => sl.length);
@@ -182,8 +184,9 @@ export function ClientList({
   const personName = (id: string, fb?: string) => people[id] || (fb && fb !== "—" ? fb : "") || "Unknown";
 
   // what the client popup shows, for every client at once
-  const [extra, setExtra] = useState<{ lines: Line[]; last: Record<string, string>; tasks: Record<string, { open: number; late: number }>; co: Record<string, any> } | null>(null);
+  const [extra, setExtra] = useState<{ lines: Line[]; last: Record<string, string>; tasks: Record<string, { open: number; late: number }>; co: Record<string, any>; cos?: any[] } | null>(null);
   useEffect(() => {
+    if (!loaded) return;
     let alive = true;
     (async () => {
       const [cp, pr, lg, ct, cl] = await Promise.all([
@@ -206,15 +209,21 @@ export function ClientList({
       });
       const coOf: Record<string, string> = {};
       ((cl.data ?? []) as any[]).forEach((x) => { if (x.company_id) coOf[x.id] = x.company_id; });
-      const ids = [...new Set(Object.values(coOf))];
+      // Every company, so a client can also be found by the company's other name
+      // (common or legal) even when the two are not linked.
       const cos: Record<string, any> = {};
-      if (ids.length) ((await supabase.from("companies").select("id, city, province, country, sector").in("id", ids)).data ?? []).forEach((x: any) => { cos[x.id] = x; });
+      const allCos: any[] = [];
+      for (let from = 0; ; from += 1000) {
+        const { data: page } = await supabase.from("companies").select("id, name, legal_name, vat_number, city, province, country, sector").range(from, from + 999);
+        ((page ?? []) as any[]).forEach((x) => { cos[x.id] = x; allCos.push(x); });
+        if (!page || page.length < 1000) break;
+      }
       const co: Record<string, any> = {};
       Object.entries(coOf).forEach(([cid, coid]) => { if (cos[coid]) co[cid] = cos[coid]; });
-      if (alive) setExtra({ lines: ((cp.data ?? []) as any[]).map((r) => ({ ...r, name: pn[r.product_id] ?? "Product" })), last, tasks, co });
-    })().catch(() => setExtra({ lines: [], last: {}, tasks: {}, co: {} }));
+      if (alive) setExtra({ lines: ((cp.data ?? []) as any[]).map((r) => ({ ...r, name: pn[r.product_id] ?? "Product" })), last, tasks, co, cos: allCos });
+    })().catch(() => setExtra({ lines: [], last: {}, tasks: {}, co: {}, cos: [] }));
     return () => { alive = false; };
-  }, [clients.length]);
+  }, [loaded, clients.length]);
 
   const typeName = (id: string) => projectTypes.find((t) => t.id === id)?.name ?? "No service";
   const rows = useMemo<ClientRow[]>(() => clients.map((c) => {
@@ -278,18 +287,61 @@ export function ClientList({
   ];
 
   const norm = (s: string) => (s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
-  const searched = useMemo(() => {
-    const n = norm(q.trim());
-    if (!n) return rows;
-    return rows.filter((r) => norm([r.name, r.city, r.sector, ...r.services, ...r.products].join(" ")).includes(n));
+  // Search: every word you type has to appear somewhere — name, legal names,
+  // VAT, linked company, contacts, city, sector, services or products — in any
+  // order, ignoring accents, case and punctuation ("S.L." = "SL").
+  const flat = (s: unknown) => norm(String(s ?? "")).replace(/[^a-z0-9@\s]/g, "");
+  /** Name without its legal form, so "Helix Pharma" meets "Helix Pharma, S.A.". */
+  const bare = (s: unknown) => flat(s).replace(/\s+/g, " ").trim()
+    .replace(/\s(s\s?l\s?u?|s\s?a\s?u?|slp|sll|sccl|scp|cb|sociedad limitada|sociedad anonima|ab|gmbh|ltd|llc|inc|bv|srl|spa|sas|sarl|plc|ag|nv)$/, "").trim();
+  // Companies by any of their names / VAT, to pick up the other name of a client.
+  const coIndex = useMemo(() => {
+    const m = new Map<string, any[]>();
+    const put = (k: string, c: any) => { if (!k) return; const l = m.get(k) ?? []; l.push(c); m.set(k, l); };
+    (extra?.cos ?? []).forEach((c) => { put(bare(c.name), c); put(bare(c.legal_name), c); put(flat(c.vat_number).replace(/\s+/g, ""), c); });
+    return m;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, q]);
+  }, [extra]);
+  // Names first: if what you type matches a client's own name (or its
+  // company's common/legal name, or a VAT), only those clients show. Only when
+  // no name matches does it fall back to city, sector, service, product and
+  // contacts — so "Konsolidator" finds the client, not everyone on that service.
+  const searchInfo = useMemo(() => {
+    const words = flat(q).split(/\s+/).filter(Boolean);
+    if (!words.length) return { list: rows, by: "" as "" | "name" | "other" };
+    const hit = (txt: string) => { const tight = txt.replace(/\s+/g, ""); return words.every((w) => txt.includes(w) || tight.includes(w)); };
+    const scored = rows.map((r) => {
+      const mine = projects.filter((p) => p.clientId === r.c.id);
+      const co = extra?.co[r.c.id] ?? {};
+      const twins = [
+        ...(coIndex.get(bare(r.name)) ?? []),
+        ...mine.flatMap((p) => [...(coIndex.get(bare(p.legalName)) ?? []), ...(coIndex.get(flat(p.vatNumber).replace(/\s+/g, "")) ?? [])]),
+      ];
+      const names = flat([
+        r.name, co.name, co.legal_name, co.vat_number,
+        ...twins.flatMap((t) => [t.name, t.legal_name, t.vat_number]),
+        ...mine.flatMap((p) => [p.legalName, p.vatNumber]),
+      ].filter(Boolean).join(" "));
+      const other = flat([
+        r.city, r.country, r.sector, ...r.services, ...r.products,
+        ...mine.flatMap((p) => [p.address?.city, ...(p.contacts ?? []).flatMap((ct) => [ct.name, ct.email])]),
+      ].filter(Boolean).join(" "));
+      const own = flat(r.name);
+      const exact = own === words.join(" ") ? 0 : own.startsWith(words[0]) ? 1 : 2;
+      return { r, byName: hit(names), byAny: hit(`${names} ${other}`), exact };
+    });
+    const named = scored.filter((x) => x.byName);
+    if (named.length) return { list: named.sort((a, b) => a.exact - b.exact).map((x) => x.r), by: "name" as const };
+    return { list: scored.filter((x) => x.byAny).map((x) => x.r), by: "other" as const };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, q, projects, extra, coIndex]);
+  const searched = searchInfo.list;
   const shown = applyView(searched, fields, view);
   const sortKey = view.sort[0]?.key ?? "";
   const sortDir = view.sort[0]?.dir ?? "desc";
   const setSort = (key: string, dir: "asc" | "desc" = sortDir) => setView({ ...view, sort: key ? [{ key, dir }] : [] });
 
-  if (!loaded || (clients.length > 0 && !extra)) return <ClientsLoading />;
+  if (!loaded || !prefsReady || (clients.length > 0 && !extra)) return <ClientsLoading />;
   if (clients.length === 0) {
     return (
       <div className="cl-empty">
@@ -350,21 +402,22 @@ export function ClientList({
           const two = sl.length > 1;
           const flip = () => { if (two) setShownAlt((x) => ({ ...x, [i]: at + 1 })); };
           return (
-            <div className={`cx-kpi tone-${k.tone ?? "mint"} ${two ? "is-alt" : ""}`} key={`${i}-${k.key}`} style={{ ["--i" as any]: i }} onPointerMove={spot}
+            <div className={`cx-kpi tone-${k.tone ?? "mint"} ${two ? "is-alt" : ""} ${shownAlt[i] != null ? "is-flipped" : ""}`} key={`slot-${i}-${sl.join("|")}`} style={{ ["--i" as any]: i }} onPointerMove={spot}
               role={two ? "button" : undefined} tabIndex={two ? 0 : undefined}
               title={two ? `Click to show ${kpiOf(sl[(at + 1) % sl.length])?.label}` : undefined}
               onClick={flip} onKeyDown={(e) => { if (e.key === "Enter") flip(); }}>
               <span className="cx-kpi-top">
-                <span className="cx-kpi-ico">{kIco(k.icon)}</span><span className="cx-kpi-k">{k.label}</span>
+                <span className="cx-kpi-ico" key={`ico-${k.key}`}>{kIco(k.icon)}</span><span className="cx-kpi-k" key={`k-${k.key}`}>{k.label}</span>
                 {two && <span className="cx-kpi-dots" aria-hidden="true">{sl.map((_, n) => <i key={n} className={n === at ? "is-on" : ""} />)}</span>}
                 <button className="cx-kpi-swap" aria-label="Change this figure" title="Change this figure"
                   onClick={(e) => { e.stopPropagation(); const b = (e.currentTarget.closest(".cx-kpi") as HTMLElement).getBoundingClientRect(); setSlotEdit({ i, top: b.bottom + 8, left: Math.max(8, Math.min(b.left, window.innerWidth - 328)) }); }}>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m17 1 4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 23l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3" /></svg>
                 </button>
               </span>
-              <b className="cx-kpi-v">{r.v}{r.unit && <em>{r.unit}</em>}</b>
-              {r.sub && <span className="cx-kpi-sub">{r.sub}</span>}
-              {r.bar != null && <span className="cx-kpi-bar"><i style={{ width: `${Math.max(0, Math.min(100, r.bar))}%` }} /></span>}
+              <b className="cx-kpi-v" key={`v-${k.key}`}>{r.v}{r.unit && <em>{r.unit}</em>}</b>
+              {r.sub && <span className="cx-kpi-sub" key={`s-${k.key}`}>{r.sub}</span>}
+              {r.bar != null && <span className="cx-kpi-bar" key={`b-${k.key}`}><i style={{ width: `${Math.max(0, Math.min(100, r.bar))}%` }} /></span>}
+              {two && shownAlt[i] != null && <span className="cx-kpi-sweep" key={`sw-${shownAlt[i]}`} aria-hidden="true" />}
             </div>
           );
         })}
@@ -444,6 +497,9 @@ export function ClientList({
           </div>
         </div>
         <FilterChips fields={fields} view={view} onView={setView} onEdit={() => setFiltersOpenTick((x) => x + 1)} shown={shown.length} total={rows.length} noun={["client", "clients"]} />
+        {q.trim() && searchInfo.by === "other" && shown.length > 0 && (
+          <p className="cx-search-note">No client is called “{q.trim()}” — showing clients where it appears in their service, products, city or contacts.</p>
+        )}
 
         <div className="cl-scroll">
           {shown.length === 0 ? (

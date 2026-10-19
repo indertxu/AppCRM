@@ -40,8 +40,8 @@ export interface Column { i: number; letter: string; header: string; values: She
 
 export interface BaseTarget { key: string; label: string; group: "Company" | "Contact" | "Deal"; hint?: string }
 export const BASE_TARGETS: BaseTarget[] = [
-  { key: "company.name", label: "Company name", group: "Company", hint: "Found in your companies, or created" },
-  { key: "company.legal_name", label: "Legal name", group: "Company" },
+  { key: "company.name", label: "Company name (common)", group: "Company", hint: "How people call it, e.g. Genesal. A legal form (S.L., S.A., GmbH…) is moved to Legal name" },
+  { key: "company.legal_name", label: "Legal name (razón social)", group: "Company", hint: "Razón social, as on invoices, e.g. Genesal Energy, S.L." },
   { key: "company.vat_number", label: "VAT / tax ID", group: "Company", hint: "The surest way to find the company" },
   { key: "company.reg_number", label: "Registration number", group: "Company" },
   { key: "company.website", label: "Website", group: "Company" },
@@ -88,7 +88,7 @@ export const isPhaseAt = (t: string) => t.startsWith(PHASE_AT);
 
 const SYN: Record<string, string[]> = {
   "company.name": ["company", "company name", "empresa", "nombre empresa", "nombre de la empresa", "compania", "organization", "organisation", "organizacion", "account", "account name", "cliente", "client", "customer", "bedrijf", "bedrijfsnaam", "firma", "unternehmen", "lead company", "organization name"],
-  "company.legal_name": ["legal name", "razon social", "nombre fiscal", "denominacion social", "company legal name", "nombre legal", "statutaire naam"],
+  "company.legal_name": ["legal name", "razon social", "nombre fiscal", "denominacion social", "company legal name", "nombre legal", "statutaire naam", "raison sociale", "registered name", "official name", "nombre registrado", "legal entity", "entidad legal"],
   "company.vat_number": ["vat", "vat number", "cif", "nif", "cif nif", "nif cif", "tax id", "btw", "btw nummer", "company vat", "vat id", "ust id", "numero fiscal"],
   "company.reg_number": ["registration number", "reg number", "company number", "kvk", "kvk nummer", "numero de registro", "registro mercantil", "handelsregister", "chamber of commerce"],
   "company.website": ["website", "web", "url", "domain", "company website", "sitio web", "pagina web", "company domain", "dominio"],
@@ -129,6 +129,103 @@ export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const LEGAL = /\b(s\s?l\s?u?|s\s?a\s?u?|s\s?l\s?l|s\s?c|s\s?coop|ltd|limited|llc|inc|corp|corporation|gmbh|ag|bv|nv|sarl|sas|srl|spa|plc|co|bvba|vof|cb|slp|aie)\b/g;
 /** Company matching key: no accents/punctuation/legal suffix ("Acme, S.L." = "ACME"). */
 export const nameKey = (s: string | null | undefined) => normHeader((s ?? "").replace(/\./g, "")).replace(LEGAL, " ").replace(/\s+/g, " ").trim();
+/* ===========================================================================
+   Tidy names and addresses — shared by every importer and the data clean-up
+   =========================================================================== */
+/** A legal form at the end of a company name: ", S.L.", " S.A.U.", " GmbH", " B.V."… */
+const LEGAL_TAIL = /[\s,]+(?:s\.?\s?l\.?\s?u\.?|s\.?\s?l\.?\s?l\.?|s\.?\s?l\.?\s?p\.?|s\.?\s?l\.?|s\.?\s?a\.?\s?u\.?|s\.?\s?a\.?|s\.?\s?coop\.?(?:\s?and\.?)?|s\.?\s?c\.?|c\.?\s?b\.?|a\.?\s?i\.?\s?e\.?|ltd\.?|limited|llc|l\.?\s?l\.?\s?c\.?|inc\.?|corp\.?|corporation|gmbh|ag|b\.?\s?v\.?|n\.?\s?v\.?|bvba|vof|sarl|sas|s\.?\s?r\.?\s?l\.?|s\.?\s?p\.?\s?a\.?|plc|lda\.?)\s*\.?$/i;
+export const hasLegalForm = (s: string | null | undefined) => !!s && LEGAL_TAIL.test(s.trim());
+const SMALL_WORDS = new Set(["de", "del", "la", "las", "los", "el", "y", "e", "i", "en", "of", "and", "the", "van", "der", "den", "und", "et", "da", "do", "dos"]);
+/** "GENESAL ENERGY, S.L." → "Genesal Energy" (keeps casing unless the whole name is in capitals). */
+export function commonCompanyName(s: string): string {
+  let out = s.trim();
+  for (let i = 0; i < 3 && LEGAL_TAIL.test(out); i++) out = out.replace(LEGAL_TAIL, "").trim();
+  out = out.replace(/[\s,.;-]+$/, "").trim() || s.trim();
+  const letters = out.replace(/[^A-Za-zÀ-ÿ]/g, "");
+  if (letters.length > 3 && letters === letters.toUpperCase()) {
+    out = out.split(/(\s+)/).map((w, i) => {
+      if (/^\s+$/.test(w)) return w;
+      const lw = w.toLowerCase();
+      if (i > 0 && SMALL_WORDS.has(lw)) return lw;
+      if (w.replace(/[^A-Za-zÀ-ÿ]/g, "").length <= 3) return w; // BBVA-style acronyms stay
+      return lw.charAt(0).toUpperCase() + lw.slice(1);
+    }).join("");
+  }
+  return out;
+}
+/**
+ * The common name is what people call the company ("Genesal"); the legal name
+ * is the one on invoices ("Genesal Energy, S.L."). A name with a legal form and
+ * no legal name moves there and keeps a clean common name.
+ */
+export function splitCompanyNames(name: string | null | undefined, legal: string | null | undefined): { name: string; legal: string | null } {
+  const n = (name ?? "").trim(), l = (legal ?? "").trim();
+  if (n && !l && hasLegalForm(n)) return { name: commonCompanyName(n), legal: n };
+  if (!n && l) return { name: commonCompanyName(l), legal: l };
+  if (n && l && hasLegalForm(n) && nameKey(n) === nameKey(l)) return { name: commonCompanyName(n), legal: l };
+  return { name: n, legal: l || null };
+}
+
+/** First names that often come second in a compound one (José María, María José…). */
+const FIRST_NAMES = new Set(["maria", "jose", "luis", "carmen", "antonio", "juan", "angel", "manuel", "jesus", "pilar", "isabel", "francisco", "javier", "miguel", "ignacio", "teresa", "rosa", "elena", "ana", "victoria", "dolores", "luisa", "carlos", "pedro", "pablo", "fernando", "eugenia", "cristina", "angeles", "mercedes", "jaime", "andres", "ramon", "alberto", "enrique", "esther", "paz", "sol", "mar", "del", "de", "la", "los", "lluis", "josep", "joan", "jordi", "pau", "montserrat", "nuria", "laura", "marta", "eva", "alejandro", "david", "daniel", "felipe", "rafael", "vicente", "emilio", "ricardo", "eduardo", "gabriel", "agustin", "tomas", "martin", "lucia", "paula", "sofia", "ines", "beatriz", "belen", "raquel", "elisa", "eugenio", "gloria", "consuelo", "inmaculada", "concepcion", "asuncion", "amparo", "rocio", "lourdes", "begona", "guadalupe", "fatima", "jacinto", "ignasi", "xavier", "enric", "oriol", "albert", "marc", "anna", "mireia", "gemma", "clara", "ainhoa", "iker", "unai", "mikel", "jon", "ander", "aitor"]);
+const foldName = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+/**
+ * A first name that also carries the surname ("Ana García" / "García") loses
+ * the repeated part. Returns null when nothing needs changing.
+ */
+export function dedupePersonName(first: string | null | undefined, last: string | null | undefined): { first: string; last: string | null; sure: boolean } | null {
+  const f = (first ?? "").trim().replace(/\s+/g, " "), l = (last ?? "").trim().replace(/\s+/g, " ");
+  if (!f || !l) return null;
+  const fw = f.split(" "), lw = l.split(" ");
+  const ff = foldName(f), fl = foldName(l);
+  if (ff === fl) return null;
+  // the whole surname at the end of the first name: "Ana García López" / "García López"
+  if (fw.length > lw.length && ff.endsWith(" " + fl)) return { first: fw.slice(0, fw.length - lw.length).join(" "), last: l, sure: true };
+  // the first name written again at the start of the surname: "Ana" / "Ana García"
+  if (lw.length > fw.length && fl.startsWith(ff + " ")) {
+    // "Rolando Pampillo" / "Rolando Pampillo González": the full name is in the
+    // surname field, so the first name is its first word (asks for a look).
+    if (fw.length >= 2 && fw.slice(1).some((w) => !FIRST_NAMES.has(foldName(w)))) return { first: fw[0], last: lw.slice(1).join(" "), sure: false };
+    return { first: f, last: lw.slice(fw.length).join(" "), sure: true };
+  }
+  // part of the surname repeated: "Ana García" / "García López"
+  for (let k = Math.min(fw.length - 1, lw.length); k >= 1; k--) {
+    // "Pablo Serrano" / "Serrano Ruiz" is the usual case; "José María" / "María
+    // López" could be a compound first name, so those ask for a look first.
+    if (foldName(fw.slice(-k).join(" ")) === foldName(lw.slice(0, k).join(" "))) {
+      return { first: fw.slice(0, fw.length - k).join(" "), last: l, sure: !FIRST_NAMES.has(foldName(fw[fw.length - k])) };
+    }
+  }
+  return null;
+}
+
+/**
+ * "Calle Mayor 12", "C/ Alcalá, nº 45, 3º B", "Avda. Diagonal 640-642" → street,
+ * number and the rest. A number inside the name ("Calle 5 de Mayo") is left
+ * alone. Returns null when the street has no number to take out.
+ */
+export function splitStreetNumber(street: string | null | undefined): { street: string; number: string; details: string | null } | null {
+  const s = (street ?? "").trim().replace(/\s+/g, " ");
+  if (!s) return null;
+  const NUM = String.raw`(?:n[º°o]\.?\s*|num\.?\s*|nº\s*|no\.?\s*)?(\d{1,5}\s?[A-Za-z]?(?:\s?[-/]\s?\d{1,5}\s?[A-Za-z]?)?|s\/?n)`;
+  const FLOOR = String.raw`(?:\d+\s*[ºª°o]|bajo|bj|entlo|entresuelo|principal|pral|planta|piso|puerta|pta|local|esc|escalera|izq|izda|dcha|dch|ático|atico|oficina|of|bloque|portal|nave|km)`;
+  const tries: RegExp[] = [
+    new RegExp(`^(.+?\\D)[,\\s]+${NUM}$`, "i"),                       // … 12
+    new RegExp(`^(.+?\\D),\\s*${NUM}\\s*[,\\-]\\s*(.+)$`, "i"),           // …, 12, 3º B
+    new RegExp(`^(.+?\\D)\\s+${NUM}[,\\s]+(${FLOOR}.*)$`, "i"),         // … 12 3º B / … 12 bajo
+  ];
+  for (const re of tries) {
+    const m = s.match(re);
+    if (!m) continue;
+    const st = m[1].replace(/[,\s]+$/, "").trim();
+    if (st.length < 3 || /^\d+$/.test(st)) continue;
+    // "Polígono Sur, nave 3", "Carretera N-II km 5": that number isn't the street number
+    if (/(?:^|[\s,])(?:nave|local|km|kilometro|kilómetro|portal|bloque|puerta|piso|planta|parcela|oficina|edificio|módulo|modulo|n|nº)\.?$/i.test(st)) continue;
+    return { street: st, number: m[2].replace(/\s+/g, "").toUpperCase().replace("S/N", "s/n").replace(/^SN$/, "s/n"), details: m[3]?.trim() || null };
+  }
+  return null;
+}
+
 export const vatKey = (s: string | null | undefined) => (s ?? "").toUpperCase().replace(/[\s.\-/]/g, "").replace(/^(ES|BE|NL|FR|DE|PT|IT|LU|AT)(?=[A-Z0-9]\d{6,})/, "");
 const personKey = (s: string | null | undefined) => normHeader(s ?? "");
 const phoneKey = (s: string | null | undefined) => { const d = (s ?? "").replace(/\D/g, ""); return d.length >= 7 ? d.slice(-9) : ""; };
@@ -681,6 +778,10 @@ export function buildPlan(ctx: Ctx, columns: Column[], rows: SheetCell[][], stat
     e.count++;
     if (!e.name || (e.name === vat && (name || legal))) e.name = name || legal || e.name;
     for (const col of COMPANY_COLS) { const v = oneOf(p, `company.${col}`); if (v && !e.data[col]) e.data[col] = col === "vat_number" ? v.toUpperCase().replace(/[\s.\-/]/g, "") : v; }
+    if (e.data.street && !e.data.addr_number) {
+      const sp = splitStreetNumber(e.data.street);
+      if (sp) { e.data.street = sp.street; e.data.addr_number = sp.number; if (sp.details && !e.data.addr_details) e.data.addr_details = sp.details; }
+    }
     if (!e.data.name) e.data.name = e.name;
     for (const [k, v] of Object.entries(p.coCustom)) if (!(k in e.custom)) e.custom[k] = v;
     companies.set(key, e);
@@ -746,6 +847,7 @@ export function buildPlan(ctx: Ctx, columns: Column[], rows: SheetCell[][], stat
       const f = full.includes(",") ? full.split(",").map((x) => x.trim()).reverse().join(" ") : full;
       const parts = f.split(/\s+/); first = parts[0]; if (!last && parts.length > 1) last = parts.slice(1).join(" ");
     }
+    { const dd = dedupePersonName(first, last); if (dd) { first = dd.first; last = dd.last ?? last; } }
     const rawEmail = (oneOf(p, "contact.email") ?? "").trim().toLowerCase() || null;
     const email = rawEmail && EMAIL_RE.test(rawEmail) ? rawEmail : null;
     if (rawEmail && !email) p.issues.push(`“${rawEmail}” isn't a valid email`);
@@ -1180,7 +1282,8 @@ export async function runImport(ctx: Ctx, state: ImportState, columns: Column[],
     onProgress({ done: 0, total: coTodo.length, phase: "Creating companies…" });
     let k = 0;
     for (const c of coTodo) {
-      const row: any = { ...c.data, name: c.name, custom: resolveCustom(c.custom), import_batch_id: await (coBatchP ??= startBatch("company", `${fileName} (deals import)`)) };
+      const nm = splitCompanyNames(c.name, c.data.legal_name);
+      const row: any = { ...c.data, name: nm.name, legal_name: nm.legal, custom: resolveCustom(c.custom), import_batch_id: await (coBatchP ??= startBatch("company", `${fileName} (deals import)`)) };
       const e = await saveCompany(row as Company).catch((x: any) => x?.message ?? "Failed");
       if (!e && row.id) { coIds.set(c.key, row.id); res.coCreated++; } else failed.push({ row: 0, reason: `Company “${c.name}”: ${e}` });
       onProgress({ done: ++k, total: coTodo.length, phase: "Creating companies…" });

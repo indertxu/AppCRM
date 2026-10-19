@@ -14,6 +14,8 @@ import TaskSettings from "./TaskSettings";
 import { usePageAccess } from "../../framework/pageAccess";
 import { SuperAdminSwitch } from "../../framework/SuperAdmin";
 import { connectOutlook, completeOutlookConnect, outlookStatus, disconnectOutlook, outlookConnectError, OUTLOOK_CONNECTION_EVENT } from "../../api/outlookSync";
+import { DOCK_ITEMS, DOCK_ORDER_KEY, DOCK_ORDER_EVENT, orderDock } from "../../framework/Dock";
+import { loadPrefs, savePref } from "../companies/companiesApi";
 import "./SettingsPage.css";
 
 const levelLabel = (id: string | null) => LEVELS.find((l) => l.id === id)?.label ?? id ?? "—";
@@ -37,7 +39,7 @@ export default function SettingsPage() {
   console.log("my role →", role);
   const isBoss = (role ?? "").toString().toLowerCase() === "boss";
   /** Who may edit Page access: by SECURITY LEVEL (read live, as Organization shows it). */
-  const { level: secLevel, isSuper: secSuper, canPanel, ready: accessReady } = usePageAccess();
+  const { level: secLevel, isSuper: secSuper, canPanel, ready: accessReady, canSee: canSeePage } = usePageAccess();
   const canEditAccess = secLevel === "boss" || secSuper || isSuperadmin === true;
   console.log("[page-access] security level (live) →", secLevel, "| can edit:", canEditAccess);
   const isManager = role === "consultancy_manager" || role === "sales_manager"
@@ -143,6 +145,34 @@ export default function SettingsPage() {
     localStorage.setItem(DOCK_LABELS_KEY, String(next));
     window.dispatchEvent(new CustomEvent(DOCK_LABELS_EVENT, { detail: next }));
     if (uid) await supabase.from("profiles").update({ dock_labels: next }).eq("id", uid);
+  };
+
+  // Your own order of the toolbar: dragged here, saved to your profile.
+  const [dockOrder, setDockOrder] = useState<string[]>(() => { try { const v = JSON.parse(localStorage.getItem(DOCK_ORDER_KEY) ?? "[]"); return Array.isArray(v) ? v : []; } catch { return []; } });
+  const [dockDrag, setDockDrag] = useState<string | null>(null);
+  const [dockOver, setDockOver] = useState<string | null>(null);
+  useEffect(() => { loadPrefs().then((p) => { if (Array.isArray(p.dockOrder)) setDockOrder(p.dockOrder); }).catch(() => {}); }, []);
+  const saveDockOrder = (next: string[]) => {
+    setDockOrder(next);
+    try { localStorage.setItem(DOCK_ORDER_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+    window.dispatchEvent(new CustomEvent(DOCK_ORDER_EVENT, { detail: next }));
+    savePref("dockOrder", next).catch(() => {});
+  };
+  const dockShown = orderDock(DOCK_ITEMS.filter((it) => canSeePage(it.page)), dockOrder);
+  const dropDock = (target: string, after: boolean) => {
+    if (!dockDrag || dockDrag === target) return;
+    const paths = orderDock(DOCK_ITEMS, dockOrder).map((it) => it.path).filter((p) => p !== dockDrag);
+    paths.splice(paths.indexOf(target) + (after ? 1 : 0), 0, dockDrag);
+    saveDockOrder(paths);
+  };
+  const moveDock = (path: string, by: number) => {
+    const paths = orderDock(DOCK_ITEMS, dockOrder).map((it) => it.path);
+    const shown = dockShown.map((it) => it.path);
+    const i = shown.indexOf(path), j = i + by;
+    if (j < 0 || j >= shown.length) return;
+    const a = paths.indexOf(shown[i]), b = paths.indexOf(shown[j]);
+    [paths[a], paths[b]] = [paths[b], paths[a]];
+    saveDockOrder(paths);
   };
 
   // Outlook connection state
@@ -572,6 +602,31 @@ export default function SettingsPage() {
             </button>
           </div>
 
+          <div className="st-dock-order">
+            <div className="st-toggle-text">
+              <span className="st-toggle-label">Toolbar order</span>
+              <span className="st-toggle-note">Drag the items into the order that suits you. Only you see this order.</span>
+            </div>
+            <div className="st-dock-list">
+              {dockShown.map((it, i) => (
+                <div key={it.path} draggable
+                  className={`st-dock-row ${dockDrag === it.path ? "is-dragging" : ""} ${dockOver === it.path && dockDrag !== it.path ? "is-over" : ""}`}
+                  onDragStart={(e) => { setDockDrag(it.path); e.dataTransfer.effectAllowed = "move"; }}
+                  onDragEnd={() => { setDockDrag(null); setDockOver(null); }}
+                  onDragOver={(e) => { if (!dockDrag) return; e.preventDefault(); if (dockOver !== it.path) setDockOver(it.path); }}
+                  onDrop={(e) => { e.preventDefault(); const b = e.currentTarget.getBoundingClientRect(); dropDock(it.path, e.clientY > b.top + b.height / 2); setDockDrag(null); setDockOver(null); }}>
+                  <span className="st-dock-grip" aria-hidden="true">⋮⋮</span>
+                  <span className="st-dock-ico">{it.icon}</span>
+                  <span className="st-dock-name">{it.label}</span>
+                  <span className="st-dock-pos">{i + 1}</span>
+                  <button type="button" className="st-dock-mv" onClick={() => moveDock(it.path, -1)} disabled={i === 0} aria-label={`Move ${it.label} up`}>↑</button>
+                  <button type="button" className="st-dock-mv" onClick={() => moveDock(it.path, 1)} disabled={i === dockShown.length - 1} aria-label={`Move ${it.label} down`}>↓</button>
+                </div>
+              ))}
+            </div>
+            {dockOrder.length > 0 && <button type="button" className="st-dock-reset" onClick={() => saveDockOrder([])}>Reset to the default order</button>}
+          </div>
+
           <div className="st-toggle-row" style={{ marginTop: "1.1rem" }}>
             <div className="st-toggle-text">
               <span className="st-toggle-label">Sync calendar to Outlook</span>
@@ -619,6 +674,20 @@ export default function SettingsPage() {
           <button className="cl-primary" onClick={changeOwnPassword}>Update</button>
         </div>
         {pwMsg && <p className={pwMsg.ok ? "st-ok" : "su-error"}>{pwMsg.text}</p>}
+      </section>
+
+      <section className="st-section st-signout" style={{ maxWidth: 640 }}>
+        <div>
+          <h2 className="st-h2">Sign out</h2>
+          <p className="st-signout-sub">Close your session on this device.</p>
+        </div>
+        <button className="st-signout-btn" onClick={async () => {
+          await supabase.auth.signOut().catch(() => {});
+          window.location.assign("/login");
+        }}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" /></svg>
+          Sign out
+        </button>
       </section>
     </div>
   );

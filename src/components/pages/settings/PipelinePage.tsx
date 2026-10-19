@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import { supabase } from "../../api/supabase";
 import Select from "../../framework/Select";
 import {
-  listPipelines, createPipeline, renamePipeline, pipelineUsage, deletePipelineSafely,
+  listPipelines, createPipeline, renamePipeline, savePipelineOrder, pipelineUsage, deletePipelineSafely,
   loadPipeline, addPhase, updatePhase, deletePhase, addLink, removeLink,
   setPhaseDepartments, setPhaseItems, setPipelineSource, syncPipelineToBlueprint, setPipelineSales,
   type Pipeline, type Phase, type PipelineLink, type PipelineUsage,
@@ -49,6 +49,19 @@ export default function PipelinePage({ onBack }: Props) {
   const [openId, setOpenId] = useState<string | null>(null);
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<Pipeline | null>(null);
+  // Order of the list: dragged here, saved for the whole company.
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
+  const [orderMsg, setOrderMsg] = useState<string | null>(null);
+  const dropOn = async (targetId: string, after: boolean) => {
+    if (!dragId || dragId === targetId) return;
+    const ids = pipelines.map((p) => p.id).filter((id) => id !== dragId);
+    const at = ids.indexOf(targetId) + (after ? 1 : 0);
+    ids.splice(at, 0, dragId);
+    setPipelines(ids.map((id) => pipelines.find((p) => p.id === id)!));
+    const err = await savePipelineOrder(ids);
+    setOrderMsg(err);
+  };
 
   const refresh = async () => {
     const ps = await listPipelines().catch(() => []);
@@ -83,12 +96,25 @@ export default function PipelinePage({ onBack }: Props) {
       ) : (
         <div className="pl-overview">
           <div className="pl-list">
+            <p className="pl-list-hint">Drag to reorder · same order for everyone</p>
+            {orderMsg && <p className="pl-list-err">{orderMsg}</p>}
             {pipelines.map((p) => (
               <div
                 key={p.id}
-                className={`pl-row ${previewId === p.id ? "is-active" : ""}`}
+                className={`pl-row ${previewId === p.id ? "is-active" : ""} ${dragId === p.id ? "is-dragging" : ""} ${overId === p.id && dragId !== p.id ? "is-over" : ""}`}
                 onClick={() => clickCard(p.id)}
+                draggable
+                onDragStart={(e) => { setDragId(p.id); e.dataTransfer.effectAllowed = "move"; }}
+                onDragEnd={() => { setDragId(null); setOverId(null); }}
+                onDragOver={(e) => { if (!dragId) return; e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (overId !== p.id) setOverId(p.id); }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const box = e.currentTarget.getBoundingClientRect();
+                  void dropOn(p.id, e.clientY > box.top + box.height / 2);
+                  setDragId(null); setOverId(null);
+                }}
               >
+                <span className="pl-row-grip" aria-hidden="true" title="Drag to reorder">⋮⋮</span>
                 <span className="pl-row-icon">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                     <circle cx="5" cy="6" r="2.4" /><circle cx="5" cy="18" r="2.4" /><circle cx="19" cy="12" r="2.4" />

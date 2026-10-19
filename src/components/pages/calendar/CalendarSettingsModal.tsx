@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import DatePicker from "../../framework/DatePicker";
 import { billingWindow, cutoffOf, periodOf, type Cutoffs } from "./billingPeriods";
 import HoursEditor from "./HoursEditor";
@@ -175,9 +175,19 @@ export default function CalendarSettingsModal({
     if (openId === id) setOpenId(null);
   };
 
+  // The white pill under the active tab slides to whichever tab is picked.
+  const tabsRef = useRef<HTMLDivElement>(null);
+  const [inkStyle, setInkStyle] = useState<CSSProperties | undefined>(undefined);
+  useLayoutEffect(() => {
+    const box = tabsRef.current;
+    const on = box?.querySelector<HTMLElement>(".cws-tab.is-on");
+    if (!box || !on) return;
+    setInkStyle({ ["--ink-x" as string]: `${on.offsetLeft}px`, ["--ink-w" as string]: `${on.offsetWidth}px` });
+  }, [tab]);
+
   return (
     <div className="cws-backdrop" onMouseDown={onClose}>
-      <div className="cws-card" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+      <div className={`cws-card ${managementMode ? "" : "is-cal"}`} onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
         <div className="cws-head">
           <div>
             <span className="cws-eyebrow">{managementMode ? "Management settings" : "Calendar settings"}</span>
@@ -187,6 +197,8 @@ export default function CalendarSettingsModal({
         </div>
 
        <div className="cws-tabs" style={targetsOnly && !managementMode ? { display: "none" } : undefined}>
+        <div className="cws-tabs-in" ref={tabsRef} style={inkStyle}>
+          <span className="cws-tab-ink" aria-hidden="true" />
           {!managementMode && !hideTargets && <button className={`cws-tab ${tab === "targets" ? "is-on" : ""}`} onClick={() => setTab("targets")}>Targets</button>}
           {!managementMode && <button className={`cws-tab ${tab === "request" ? "is-on" : ""}`} onClick={() => setTab("request")}>My time off</button>}
           {!managementMode && canSetup && <button className={`cws-tab ${tab === "timeoff" ? "is-on" : ""}`} onClick={() => setTab("timeoff")}>Time off</button>}
@@ -194,15 +206,16 @@ export default function CalendarSettingsModal({
           {canCompany && !securityOnly && <button className={`cws-tab ${tab === "billing" ? "is-on" : ""}`} onClick={() => setTab("billing")}>Cutoffs</button>}
           {managementMode && securityPanel && <button className={`cws-tab ${tab === "security" ? "is-on" : ""}`} onClick={() => setTab("security")}>Security</button>}
         </div>
+        </div>
 
         {tab === "security" && securityPanel ? (
-          <div className="cws-body cws-body-wide cws-sec-body">{securityPanel}</div>
+          <div key={tab} className="cws-body cws-body-wide cws-sec-body">{securityPanel}</div>
         ) : tab === "request" ? (
-          <div className="cws-body"><TimeOffRequestPanel allowance={vacationAllowance} /></div>
+          <div key={tab} className="cws-body"><TimeOffRequestPanel allowance={vacationAllowance} /></div>
         ) : tab === "hours" ? (
-          <div className="cws-body cws-body-wide"><HoursEditor /></div>
+          <div key={tab} className="cws-body cws-body-wide"><HoursEditor /></div>
         ) : tab === "targets" ? (
-<div className="cws-body">
+<div key={tab} className="cws-body">
             <p className="cws-hint cws-intro">Billable consultancy days expected from each consultant.</p>
 
             {[
@@ -265,7 +278,7 @@ export default function CalendarSettingsModal({
             </div>
           </div>
         ) : tab === "timeoff" ? (
-          <div className="cws-body">
+          <div key={tab} className="cws-body">
             <p className="cws-hint cws-intro">
               Holidays are company-wide non-working days. The yearly allowance is how many
               vacation days each person may take — everyone books their own from the calendar.
@@ -330,7 +343,7 @@ export default function CalendarSettingsModal({
             )}
           </div>
         ) : tab === "billing" ? (
-          <div className="cws-body cx">
+          <div key={tab} className="cws-body cx">
             <p className="cws-hint cws-intro">
               Each billing month closes on its cutoff day. It covers everything from the day after the
               previous month’s cutoff up to and including its own.
@@ -410,7 +423,7 @@ export default function CalendarSettingsModal({
             </div>
           </div>
         ) : tab === "capacity" ? (
-          <div className="cws-body">
+          <div key={tab} className="cws-body">
             <p className="cws-hint" style={{ margin: "0 0 1rem" }}>
               Per consultant: weekly capacity, monthly billing targets and the variable bonus.
               Two tiers — reach the minimum to earn bonus %1; billing above the higher target earns %2.

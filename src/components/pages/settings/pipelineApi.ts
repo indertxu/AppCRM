@@ -1,7 +1,68 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { supabase } from "../../api/supabase";
 
-export interface Pipeline { id: string; name: string; description?: string | null; source_blueprint_id?: string | null; is_sales?: boolean; }
+export interface Pipeline { id: string; name: string; description?: string | null; source_blueprint_id?: string | null; is_sales?: boolean; sort_order?: number | null; created_at?: string; }
+
+/** The company's order (Settings → Pipelines), then oldest first for any not placed yet. */
+export function sortPipelines<T extends { sort_order?: number | null; created_at?: string }>(ps: T[]): T[] {
+  return [...ps].sort((a, b) => {
+    const x = a.sort_order ?? Number.MAX_SAFE_INTEGER, y = b.sort_order ?? Number.MAX_SAFE_INTEGER;
+    return x !== y ? x - y : String(a.created_at ?? "").localeCompare(String(b.created_at ?? ""));
+  });
+}
+
+/**
+ * Save the order of the pipelines for the whole company: everyone sees the
+ * list (here, in Sales, in filters) in this order. Needs the sort_order
+ * column (pipelines_order.sql); without it the order isn't kept.
+ */
+export async function savePipelineOrder(ids: string[]): Promise<string | null> {
+  for (let i = 0; i < ids.length; i++) {
+    const { error } = await supabase.from("pipelines").update({ sort_order: i }).eq("id", ids[i]);
+    if (error) return /sort_order/.test(error.message) ? "Run pipelines_order.sql in Supabase once so the order can be saved." : error.message;
+  }
+  return null;
+}
+
+/**
+ * Move deals to another pipeline. Each keeps its phase when the new pipeline
+ * has one with the same name; won and lost deals land on its win/loss phase;
+ * anything else starts at its first phase. Notes, tasks and meetings filed
+ * under the old phase follow the deal.
+ */
+export async function moveDealsToPipeline(dealIds: string[], toPipelineId: string): Promise<string | null> {
+  if (!dealIds.length) return null;
+  const { data: deals, error: dErr } = await supabase.from("trackings").select("id, status, current_phase_id, pipeline_id").in("id", dealIds);
+  if (dErr) return dErr.message;
+  const { phases } = await loadPipeline(toPipelineId);
+  const visible = phases.filter((p) => p.sales_visible !== false);
+  const first = visible.find((p) => !p.sales_outcome) ?? visible[0] ?? phases[0] ?? null;
+  const win = visible.find((p) => p.sales_outcome === "win"), loss = visible.find((p) => p.sales_outcome === "loss");
+  const fromPipes = Array.from(new Set(((deals ?? []) as any[]).map((d) => d.pipeline_id).filter(Boolean)));
+  const { data: oldPhases } = fromPipes.length
+    ? await supabase.from("pipeline_phases").select("id, name, pipeline_id").in("pipeline_id", fromPipes)
+    : { data: [] as any[] };
+  const oldName = new Map(((oldPhases ?? []) as any[]).map((p) => [p.id, p.name as string]));
+  const norm = (x: string) => x.trim().toLowerCase();
+  for (const d of (deals ?? []) as any[]) {
+    if (d.pipeline_id === toPipelineId) continue;
+    const was = d.current_phase_id ? oldName.get(d.current_phase_id) : undefined;
+    const target = (was && phases.find((p) => norm(p.name) === norm(was)))
+      || (d.status === "won" ? win : d.status === "lost" ? loss : undefined) || first;
+    const { error } = await supabase.from("trackings").update({ pipeline_id: toPipelineId, current_phase_id: target?.id ?? null }).eq("id", d.id);
+    if (error) return `Couldn't move a deal: ${error.message}`;
+    const oldIds = ((oldPhases ?? []) as any[]).filter((p) => p.pipeline_id === d.pipeline_id).map((p) => p.id);
+    if (oldIds.length) {
+      const to = target?.id ?? null;
+      await supabase.from("tracking_notes").update({ phase_id: to }).eq("tracking_id", d.id).in("phase_id", oldIds);
+      await supabase.from("tracking_tasks").update({ phase_id: to }).eq("tracking_id", d.id).in("phase_id", oldIds);
+      await supabase.from("calendar_entries").update({ phase_id_ref: to }).eq("tracking_id", d.id).in("phase_id_ref", oldIds);
+      await supabase.from("tracking_phase_events").delete().eq("tracking_id", d.id).in("phase_id", oldIds);
+    }
+    if (target) await supabase.from("tracking_phase_events").insert({ tracking_id: d.id, phase_id: target.id });
+  }
+  return null;
+}
 export interface Phase {
   id: string; pipeline_id: string; name: string;
   pos_x: number; pos_y: number; color?: string | null;
@@ -17,7 +78,7 @@ export interface PipelineLink { id: string; from_phase: string; to_phase: string
 
 export async function listPipelines(): Promise<Pipeline[]> {
   const { data } = await supabase.from("pipelines").select("*").order("created_at");
-  return (data ?? []) as Pipeline[];
+  return sortPipelines((data ?? []) as Pipeline[]);
 }
 
 export async function createPipeline(name: string): Promise<Pipeline | null> {

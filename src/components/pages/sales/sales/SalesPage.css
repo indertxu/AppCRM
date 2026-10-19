@@ -3519,3 +3519,25 @@ button.sl-ppl-co:hover { background: #f1f7f4; color: var(--forest); }
 .sl-d-co .sl-ql-btn { width: 22px; height: 22px; color: inherit; margin-left: 4px; }
 .sl-d-co .sl-ql-btn:hover, .sl-d-co .sl-ql-btn.is-on { background: rgba(255, 255, 255, 0.12); color: #fff; }
 .sl-d-co .sl-ql-menu { left: 0; right: auto; }
+
+/* ===== multi-select on the deal list ===== */
+.so-th-deal { display: flex; align-items: center; gap: 12px; }
+.so-th-deal .bk-check { margin-left: 9px; opacity: 0.55; transition: opacity 0.2s; }
+.so-thead:hover .so-th-deal .bk-check, .so-th-deal .bk-check.is-on, .so-th-deal .bk-check.is-partial { opacity: 1; }
+.so-av-wrap { position: relative; flex-shrink: 0; width: 40px; height: 40px; }
+.so-av-wrap .bk-check { position: absolute; inset: 9px; opacity: 0; transform: scale(0.7); transition: opacity 0.2s, transform 0.25s var(--spring, cubic-bezier(0.34, 1.56, 0.64, 1)); }
+.so-av-wrap .so-av { transition: opacity 0.2s, transform 0.25s; }
+.so-row:hover .so-av-wrap .bk-check, .so-row.is-selecting .so-av-wrap .bk-check { opacity: 1; transform: none; }
+.so-row:hover .so-av-wrap .so-av, .so-row.is-selecting .so-av-wrap .so-av { opacity: 0; transform: scale(0.8); }
+.so-row.is-sel { border-color: rgba(31, 185, 138, 0.55); background: #f3fbf7; box-shadow: 0 0 0 2px rgba(31, 185, 138, 0.16); }
+.sl-ov .so-list { padding-bottom: 72px; }
+.so-kcard .so-av-wrap { width: 36px; height: 36px; }
+.so-kcard .so-av-wrap .bk-check { inset: 7px; opacity: 0; transform: scale(0.7); transition: opacity 0.2s, transform 0.25s; }
+.so-kcard:hover .so-av-wrap .bk-check, .so-kcard.is-selecting .so-av-wrap .bk-check { opacity: 1; transform: none; }
+.so-kcard:hover .so-av-wrap .so-av, .so-kcard.is-selecting .so-av-wrap .so-av { opacity: 0; }
+.so-kcard.is-sel { border-color: rgba(31, 185, 138, 0.6); box-shadow: 0 0 0 2px rgba(31, 185, 138, 0.2); background: #f3fbf7; }
+
+/* Room for the hover lift: a card that rises (and its shadow) is no longer
+   cut off by the edge of the scrolling list, top or sides. */
+.sl-ov .sl-scroll { margin: -10px -16px 0; padding: 12px 16px 32px; }
+.so-kcol-body { padding-top: 8px; padding-left: 12px; padding-right: 12px; margin: 0 -2px; }

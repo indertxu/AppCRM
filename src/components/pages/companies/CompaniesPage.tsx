@@ -45,6 +45,7 @@ export default function CompaniesPage() {
   const [fields, setFields] = useState<CompanyField[]>([]);
   const [contactFields, setContactFields] = useState<ContactField[]>([]);
   const [showFieldSettings, setShowFieldSettings] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
   const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [rel, setRel] = useState<RelationshipSets | null>(null);
@@ -151,6 +152,72 @@ export default function CompaniesPage() {
       .some((v) => norm(v ?? "").includes(n)));
   })();
   const shown = applyView(searched, filterFields, view, (a, b) => a.name.localeCompare(b.name));
+
+  // ---- Multi-select: tag, assign, group, export or delete many companies ----
+  const bulk = useBulkSelection(shown.map((c) => c.id as string));
+  const [exportIds, setExportIds] = useState<string[] | null>(null);
+  const pickedCos = () => companies.filter((c) => bulk.has(c.id as string));
+  const BI = (d: string) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>;
+  const saveMany = async (patch: (c: Company) => Partial<Company> | null, label: string) => {
+    let n = 0;
+    for (const c of pickedCos()) { const p = patch(c); if (!p) continue; const e = await saveCompany({ ...c, ...p }); if (e) { await reload(); return e; } n++; }
+    await reload(); bulk.clear();
+    return { done: `${label} · ${n} ${n === 1 ? "company" : "companies"}` };
+  };
+  const bulkActions: BulkAction[] = [
+    {
+      key: "assign", label: "Assign to", icon: BI("M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2 21a7 7 0 0 1 14 0M19 8v6M16 11h6"),
+      options: employees.map((e) => ({ value: e.id, label: e.name, hint: e.role?.replace(/_/g, " ") })),
+      disabledReason: lead ? undefined : "Only boss and sales managers can assign companies.",
+      run: async (v) => {
+        if (!v) return null;
+        let n = 0;
+        for (const c of pickedCos()) { const cur = assignees[c.id!] ?? []; if (!cur.includes(v)) { await setCompanyAssignees(c.id!, [...cur, v]); n++; } }
+        await reload(); bulk.clear();
+        return { done: `${employees.find((e) => e.id === v)?.name ?? "They"} now see ${n} more` };
+      },
+    },
+    {
+      key: "type", label: "Add a type", icon: BI("M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L2 12V2h10l8.6 8.6a2 2 0 0 1 0 2.8zM7 7h.01"),
+      options: relationshipOptions(options).map((o) => ({ value: o.key, label: o.label })),
+      run: (v) => (v ? saveMany((c) => ((c.relationship ?? []).includes(v) ? null : { relationship: [...(c.relationship ?? []), v] }), `Tagged ${relLabel(v)}`) : null),
+    },
+    {
+      key: "untype", label: "Remove a type", more: true, icon: BI("M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L2 12V2h10l8.6 8.6a2 2 0 0 1 0 2.8zM15 9l-6 6"),
+      options: relationshipOptions(options).filter((o) => pickedCos().some((c) => (c.relationship ?? []).includes(o.key))).map((o) => ({ value: o.key, label: o.label })),
+      run: (v) => (v ? saveMany((c) => ((c.relationship ?? []).includes(v) ? { relationship: (c.relationship ?? []).filter((x) => x !== v) } : null), `Untagged ${relLabel(v)}`) : null),
+    },
+    {
+      key: "sector", label: "Set sector", more: true, icon: BI("M3 21h18M5 21V7l7-4 7 4v14M9 9h1M14 9h1M9 13h1M14 13h1M9 17h1M14 17h1"),
+      options: [...new Set([...sectorOptions(options), ...companies.map((c) => c.sector ?? "").filter(Boolean)])].sort().map((v) => ({ value: v, label: v })),
+      run: (v) => (v ? saveMany((c) => (c.sector === v ? null : { sector: v }), `Sector ${v}`) : null),
+    },
+    {
+      key: "group", label: "Part of a group", more: true, icon: BI("M4 3h8v6H4zM12 15h8v6h-8zM8 9v4a2 2 0 0 0 2 2h2"),
+      options: [{ value: "__none", label: "No group", hint: "Make them standalone" }, ...companies.filter((c) => !bulk.has(c.id as string)).map((c) => ({ value: c.id as string, label: c.name }))],
+      run: async (v) => {
+        if (!v) return null;
+        let n = 0;
+        for (const c of pickedCos()) { const e = await setCompanyParent(c.id!, v === "__none" ? null : v); if (e) { await reload(); return e; } n++; }
+        await reload(); bulk.clear();
+        return { done: v === "__none" ? `${n} made standalone` : `${n} now part of ${companies.find((c) => c.id === v)?.name}` };
+      },
+    },
+    {
+      key: "export", label: "Export these", more: true, icon: BI("M12 3v12M7 10l5 5 5-5M5 21h14"),
+      run: () => { setExportIds(bulk.ids); setExporting(true); return null; },
+    },
+    {
+      key: "delete", label: "Delete", danger: true, more: true, icon: BI("M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"),
+      disabledReason: lead ? undefined : "Only boss and sales managers can delete companies.",
+      run: async () => {
+        let n = 0;
+        for (const id of bulk.ids) { const e = await deleteCompany(id); if (e) { await reload(); return e; } n++; }
+        bulk.clear(); await reload();
+        return { done: `${n} deleted` };
+      },
+    },
+  ];
   const onSort = (key: string, add: boolean) => setView({ ...view, sort: nextSort(view.sort, key, add) });
   const [filtersOpenTick, setFiltersOpenTick] = useState(0);
   const fieldById = (id: string) => fields.find((f) => f.id === id);
@@ -243,6 +310,7 @@ export default function CompaniesPage() {
           { key: "import", group: "Data", label: "Import", hint: "Companies from Excel or CSV, with their contacts", icon: AM_ICON.import, tone: "blue", shortcut: "I", onSelect: () => setImporting(true) },
           { key: "export", group: "Data", label: "Export", hint: "Pick companies by client, deal, phase or contact", icon: AM_ICON.export, tone: "violet", shortcut: "E", onSelect: () => setExporting(true) },
           { key: "fields", group: "Setup", label: "Fields & columns", hint: "Custom fields and what the list shows", icon: AM_ICON.fields, tone: "amber", shortcut: "F", onSelect: () => setShowFieldSettings(true) },
+          ...(lead ? [{ key: "cleanup", group: "Setup", label: "Clean up data", hint: "Fix doubled surnames, legal names and street numbers", icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M15 4l5 5M4 20l7-7M13.5 5.5l5 5-7.5 7.5H6v-5z" /></svg>, tone: "amber" as const, onSelect: () => setCleaning(true) },] : []),
         ]} />
       </header>
 
@@ -253,7 +321,7 @@ export default function CompaniesPage() {
       ) : (
         <div className="co-scroll">
           <div className="co-lrow co-lhead" style={{ gridTemplateColumns: rowGrid }}>
-            <span><SortHead label="Company" k="name" sort={view.sort} onSort={onSort} /></span>
+            <span className="co-lid-head"><BulkCheck on={bulk.allOn} partial={bulk.someOn} onToggle={bulk.toggleAll} label="Select every company shown" /><SortHead label="Company" k="name" sort={view.sort} onSort={onSort} /></span>
             {dataColumns.map((k) => <span key={k} className="co-lhcell"><SortHead label={columnLabel(k)} k={sortKeyOf(k)} sort={view.sort} onSort={onSort} /></span>)}
             {showContacts && <span className="co-lright co-lcontacts"><SortHead label={columnLabel("contacts")} k="contacts_count" sort={view.sort} onSort={onSort} /></span>}
           </div>
@@ -263,12 +331,15 @@ export default function CompaniesPage() {
               const isOpen = open === c.id;
               return (
                 <div className="co-item" key={c.id}>
-                  <div className="co-lrow" role="button" tabIndex={0}
+                  <div className={`co-lrow ${bulk.has(c.id as string) ? "is-sel" : ""} ${bulk.active ? "is-selecting" : ""}`} role="button" tabIndex={0}
                     style={{ gridTemplateColumns: rowGrid }}
-                    onClick={() => setEditing(structuredClone(c))}
+                    onClick={(e) => { if (bulk.active || e.shiftKey || e.metaKey || e.ctrlKey) bulk.toggle(c.id as string, e.shiftKey); else setEditing(structuredClone(c)); }}
                     onKeyDown={(e) => { if (e.key === "Enter") setEditing(structuredClone(c)); }}>
                     <span className="co-lcell co-lid">
-                      <span className="co-avatar">{(c.name || "?").slice(0, 1).toUpperCase()}</span>
+                      <span className="co-av-wrap">
+                        <span className="co-avatar">{(c.name || "?").slice(0, 1).toUpperCase()}</span>
+                        <BulkCheck on={bulk.has(c.id as string)} onToggle={(e) => bulk.toggle(c.id as string, e.shiftKey)} label={`Select ${c.name}`} />
+                      </span>
                       <span className="co-lid-text">
                         <span className="co-lname-row">
                           <span className="co-lname">{c.name}</span>
@@ -346,10 +417,13 @@ export default function CompaniesPage() {
           companies={companies.filter((c) => lead || !me || (assignees[c.id!] ?? []).includes(me.id))}
           contacts={contacts}
           contactFields={contactFields}
-          shownIds={shown.map((c) => c.id as string)}
-          onClose={() => setExporting(false)}
+          shownIds={exportIds ?? shown.map((c) => c.id as string)}
+          onClose={() => { setExporting(false); setExportIds(null); }}
         />
       )}
+
+      <BulkBar count={bulk.ids.length} noun={["company", "companies"]} actions={bulkActions} onClear={bulk.clear}
+        onSelectAll={bulk.toggleAll} allOn={bulk.allOn} total={shown.length} />
 
       {importing && (
         <CompanyImport
@@ -359,6 +433,7 @@ export default function CompaniesPage() {
         />
       )}
 
+      {cleaning && <DataCleanup onClose={() => setCleaning(false)} onDone={() => { void reload(); }} />}
       {showFieldSettings && (
         <FieldSettings
           fields={fields}
@@ -2533,4 +2608,349 @@ export function useStoredView(storeKey: string, initial: FView): [FView, (v: FVi
   });
   const set = (v: FView) => { setView(v); try { localStorage.setItem(storeKey, JSON.stringify(v)); } catch { /* no storage */ } };
   return [view, set];
+}
+
+/* =====================================================================
+   Multi-select for lists (deals, contacts…): pick rows, then act on all
+   of them from a bar that floats over the bottom of the page.
+   ===================================================================== */
+export interface BulkAction {
+  key: string;
+  label: string;
+  icon?: ReactNode;
+  /** Pick one of these first (a pipeline, a company, a person…). `group` puts a heading over a run of options. */
+  options?: { value: string; label: string; hint?: string; group?: string }[];
+  /** Type a value first instead: a date or a percentage. */
+  input?: "date" | "percent";
+  /** Ask "Sure?" before running (deleting). */
+  danger?: boolean;
+  /** Shown instead of running, e.g. no permission. */
+  disabledReason?: string;
+  /** Tucked under "More" so the bar stays short. */
+  more?: boolean;
+  /** Returns an error text, or { done } with what happened. */
+  run: (value?: string) => Promise<string | null | void | { done: string }> | string | null | void | { done: string };
+}
+
+export function useBulkSelection(order: string[]) {
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const last = useRef<string | null>(null);
+  // Rows that left the list (filtered out, deleted) drop out of the selection.
+  useEffect(() => {
+    setSel((cur) => {
+      if (!cur.size) return cur;
+      const keep = new Set(order);
+      const next = new Set([...cur].filter((id) => keep.has(id)));
+      return next.size === cur.size ? cur : next;
+    });
+  }, [order.join("|")]); // eslint-disable-line react-hooks/exhaustive-deps
+  const toggle = (id: string, range = false) => {
+    setSel((cur) => {
+      const next = new Set(cur);
+      if (range && last.current && order.includes(last.current)) {
+        const a = order.indexOf(last.current), b = order.indexOf(id);
+        const [from, to] = a < b ? [a, b] : [b, a];
+        order.slice(from, to + 1).forEach((x) => next.add(x));
+      } else if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+    last.current = id;
+  };
+  const allOn = order.length > 0 && order.every((id) => sel.has(id));
+  const toggleAll = () => setSel(allOn ? new Set() : new Set(order));
+  const clear = () => setSel(new Set());
+  return { sel, ids: [...sel], has: (id: string) => sel.has(id), toggle, toggleAll, allOn, someOn: sel.size > 0 && !allOn, clear, active: sel.size > 0 };
+}
+
+/** The round tick used on rows and in the list header. */
+export function BulkCheck({ on, partial, onToggle, label }: { on: boolean; partial?: boolean; onToggle: (e: React.MouseEvent) => void; label: string }) {
+  return (
+    <span role="checkbox" aria-checked={partial ? "mixed" : on} aria-label={label} tabIndex={0}
+      className={`bk-check ${on ? "is-on" : ""} ${partial ? "is-partial" : ""}`}
+      onClick={(e) => { e.stopPropagation(); e.preventDefault(); onToggle(e); }}
+      onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.stopPropagation(); e.preventDefault(); onToggle(e as any); } }}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round">
+        {partial ? <path d="M6 12h12" /> : <path d="M5 12.5l4.5 4.5L19 7.5" />}
+      </svg>
+    </span>
+  );
+}
+
+export function BulkBar({ count, noun, actions, onClear, onSelectAll, allOn, total }: {
+  count: number; noun: [string, string]; actions: BulkAction[]; onClear: () => void; onSelectAll?: () => void; allOn?: boolean; total?: number;
+}) {
+  const [open, setOpen] = useState<string | null>(null);   // an action's picker, or "__more"
+  const [armed, setArmed] = useState<{ key: string; value?: string } | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [q, setQ] = useState("");
+  const [val, setVal] = useState("");
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) { setOpen(null); setArmed(null); } };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { if (open || armed) { setOpen(null); setArmed(null); } else onClear(); } };
+    document.addEventListener("mousedown", onDown); document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
+  }, [open, armed, onClear]);
+  useEffect(() => { if (!msg) return; const t = window.setTimeout(() => setMsg(null), 4000); return () => window.clearTimeout(t); }, [msg]);
+  if (count === 0 && !msg) return null;
+
+  const go = async (a: BulkAction, value?: string) => {
+    if (a.disabledReason) { setMsg({ ok: false, text: a.disabledReason }); setOpen(null); return; }
+    if (a.danger && (!armed || armed.key !== a.key || armed.value !== value)) { setArmed({ key: a.key, value }); setOpen(null); return; }
+    setArmed(null); setOpen(null); setBusy(a.key);
+    try {
+      const r = await a.run(value);
+      if (r && typeof r === "object") setMsg({ ok: true, text: r.done });
+      else if (r) setMsg({ ok: false, text: r });
+      else setMsg({ ok: true, text: "Done" });
+    } catch (e: any) { setMsg({ ok: false, text: e?.message ?? String(e) }); }
+    setBusy(null);
+  };
+  const openPicker = (a: BulkAction) => {
+    if (a.disabledReason) { setMsg({ ok: false, text: a.disabledReason }); setOpen(null); return; }
+    if (a.options || a.input) { setOpen(open === a.key ? null : a.key); setQ(""); setVal(""); } else void go(a);
+  };
+  const main = actions.filter((a) => !a.more), extra = actions.filter((a) => a.more);
+  const current = actions.find((a) => a.key === open);
+
+  const picker = (a: BulkAction) => (
+    <div className="bk-pop" role="dialog" aria-label={a.label}>
+      <p className="bk-pop-title">{a.label} · {count} {count === 1 ? noun[0] : noun[1]}</p>
+      {a.input ? (
+        <form className="bk-pop-input" onSubmit={(e) => { e.preventDefault(); if (val !== "") void go(a, val); }}>
+          {a.input === "date"
+            ? <input type="date" autoFocus value={val} onChange={(e) => setVal(e.target.value)} />
+            : <span className="bk-pop-pct"><input type="number" min={0} max={100} step={5} autoFocus value={val} onChange={(e) => setVal(e.target.value)} placeholder="0–100" /><em>%</em></span>}
+          <button type="submit" disabled={val === ""}>Apply</button>
+          <button type="button" className="is-clear" onClick={() => void go(a, "")}>Clear it</button>
+        </form>
+      ) : (
+        <>
+          {(a.options?.length ?? 0) > 7 && <input className="bk-pop-q" autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" />}
+          <div className="bk-pop-list">
+            {(a.options ?? []).filter((o) => !q || `${o.label} ${o.hint ?? ""} ${o.group ?? ""}`.toLowerCase().includes(q.toLowerCase())).map((o, i, arr) => (
+              <div key={o.value} className="bk-pop-row">
+                {o.group && o.group !== arr[i - 1]?.group && <span className="bk-pop-group">{o.group}</span>}
+                <button type="button" role="option" className="bk-pop-opt" onClick={() => void go(a, o.value)}>
+                  <span>{o.label}</span>{o.hint && <small>{o.hint}</small>}
+                </button>
+              </div>
+            ))}
+            {(a.options?.length ?? 0) === 0 && <p className="bk-pop-empty">Nothing to pick</p>}
+          </div>
+        </>
+      )}
+    </div>
+  );
+
+  return createPortal(
+    <div className="bk-bar" ref={ref} role="toolbar" aria-label="Selected items">
+      {count > 0 && (
+        <>
+          <span className="bk-count"><b>{count}</b> {count === 1 ? noun[0] : noun[1]} selected</span>
+          {onSelectAll && !allOn && <button type="button" className="bk-link" onClick={onSelectAll}>Select all{total ? ` ${total}` : ""}</button>}
+          <span className="bk-sep" />
+          {main.map((a) => {
+            const isArmed = armed?.key === a.key;
+            return (
+              <div className="bk-act-wrap" key={a.key}>
+                <button type="button" className={`bk-act ${a.danger ? "is-danger" : ""} ${isArmed ? "is-armed" : ""} ${a.disabledReason ? "is-off" : ""} ${open === a.key ? "is-open" : ""}`}
+                  disabled={busy !== null} title={a.disabledReason}
+                  onClick={() => (isArmed ? void go(a, armed?.value) : openPicker(a))}>
+                  {busy === a.key ? <i className="bk-spin" /> : a.icon}
+                  {isArmed ? `Sure? ${a.label} ${count}` : a.label}
+                  {(a.options || a.input) && !isArmed && <svg className="bk-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 15l6-6 6 6" /></svg>}
+                </button>
+                {open === a.key && picker(a)}
+              </div>
+            );
+          })}
+          {extra.length > 0 && (
+            <div className="bk-act-wrap">
+              <button type="button" className={`bk-act ${open === "__more" || (current?.more ?? false) ? "is-open" : ""} ${armed && extra.some((a) => a.key === armed.key) ? "is-armed" : ""}`}
+                disabled={busy !== null}
+                onClick={() => {
+                  const ar = armed && extra.find((a) => a.key === armed.key);
+                  if (ar) { void go(ar, armed!.value); return; }
+                  setOpen(open === "__more" || current?.more ? null : "__more");
+                }}>
+                {busy && extra.some((a) => a.key === busy) ? <i className="bk-spin" /> : <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="19" cy="12" r="2" /></svg>}
+                {armed && extra.some((a) => a.key === armed.key) ? `Sure? ${extra.find((a) => a.key === armed!.key)!.label} ${count}` : "More"}
+              </button>
+              {open === "__more" && (
+                <div className="bk-pop bk-more" role="menu">
+                  {extra.map((a) => (
+                    <button type="button" role="menuitem" key={a.key} className={`bk-more-opt ${a.danger ? "is-danger" : ""} ${a.disabledReason ? "is-off" : ""}`}
+                      title={a.disabledReason} onClick={() => openPicker(a)}>
+                      <span className="bk-more-ico">{a.icon}</span>
+                      <span>{a.label}</span>
+                      {(a.options || a.input) && <svg className="bk-more-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6l6 6-6 6" /></svg>}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {current?.more && picker(current)}
+            </div>
+          )}
+          <button type="button" className="bk-x" onClick={onClear} aria-label="Clear selection" title="Clear selection (Esc)">×</button>
+        </>
+      )}
+      {msg && <span className={`bk-msg ${msg.ok ? "is-ok" : "is-err"}`}>{msg.text}</span>}
+    </div>,
+    document.body,
+  );
+}
+
+/* =====================================================================
+   Data clean-up: names and addresses imported before the importer could
+   tell them apart. Finds what looks wrong, shows before → after, and fixes
+   only what you leave ticked.
+   ===================================================================== */
+type CleanKind = "people" | "companies" | "addresses";
+interface CleanFix { id: string; kind: CleanKind; entity: "contact" | "company"; who: string; before: string; after: string; sure: boolean; base: any; patch: Record<string, any> }
+
+export function DataCleanup({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const [fixes, setFixes] = useState<CleanFix[] | null>(null);
+  const [tab, setTab] = useState<CleanKind>("people");
+  const [off, setOff] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState<{ done: number; total: number } | null>(null);
+  const [result, setResult] = useState<{ ok: number; failed: string[] } | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      const { dedupePersonName, splitCompanyNames, splitStreetNumber } = await import("../sales/extras/dealImportEngine");
+      const [contacts, companies] = await Promise.all([listContacts().catch(() => []), listCompanies().catch(() => [])]);
+      const out: CleanFix[] = [];
+      const fn = (f?: string | null, l?: string | null) => [f, l].filter(Boolean).join(" ") || "—";
+      contacts.forEach((c) => {
+        const dd = dedupePersonName(c.first_name, c.last_name);
+        if (dd) out.push({
+          id: `p:${c.id}`, kind: "people", entity: "contact", who: fn(c.first_name, c.last_name), sure: dd.sure,
+          before: `${c.first_name} · ${c.last_name}`, after: `${dd.first} · ${dd.last ?? ""}`,
+          base: c, patch: { first_name: dd.first, last_name: dd.last },
+        });
+        const sp = !c.addr_number ? splitStreetNumber(c.street) : null;
+        if (sp) out.push({
+          id: `a:c:${c.id}`, kind: "addresses", entity: "contact", who: fn(c.first_name, c.last_name), sure: true,
+          before: c.street ?? "", after: `${sp.street} · nº ${sp.number}${sp.details ? ` · ${sp.details}` : ""}`,
+          // contacts have no floor/door field: it stays with the street
+          base: c, patch: { street: sp.details ? `${sp.street}, ${sp.details}` : sp.street, addr_number: sp.number },
+        });
+      });
+      companies.forEach((co) => {
+        const nm = splitCompanyNames(co.name, co.legal_name);
+        if (nm.name && (nm.name !== co.name || (nm.legal ?? "") !== (co.legal_name ?? ""))) out.push({
+          id: `n:${co.id}`, kind: "companies", entity: "company", who: co.name, sure: true,
+          before: `${co.name}${co.legal_name ? ` · legal: ${co.legal_name}` : " · no legal name"}`,
+          after: `${nm.name} · legal: ${nm.legal ?? "—"}`,
+          base: co, patch: { name: nm.name, legal_name: nm.legal },
+        });
+        const sp = !co.addr_number ? splitStreetNumber(co.street) : null;
+        if (sp) out.push({
+          id: `a:o:${co.id}`, kind: "addresses", entity: "company", who: co.name, sure: true,
+          before: co.street ?? "", after: `${sp.street} · nº ${sp.number}${sp.details ? ` · ${sp.details}` : ""}`,
+          base: co, patch: { street: sp.street, addr_number: sp.number, addr_details: co.addr_details || sp.details },
+        });
+      });
+      setFixes(out);
+      // the less sure ones start unticked
+      setOff(new Set(out.filter((f) => !f.sure).map((f) => f.id)));
+      const first = (["people", "companies", "addresses"] as CleanKind[]).find((k) => out.some((f) => f.kind === k));
+      if (first) setTab(first);
+    })();
+  }, []);
+
+  const list = (fixes ?? []).filter((f) => f.kind === tab);
+  const count = (k: CleanKind) => (fixes ?? []).filter((f) => f.kind === k).length;
+  const picked = (fixes ?? []).filter((f) => !off.has(f.id));
+  const allOn = list.length > 0 && list.every((f) => !off.has(f.id));
+  const flip = (id: string) => setOff((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const flipAll = () => setOff((s) => { const n = new Set(s); list.forEach((f) => (allOn ? n.add(f.id) : n.delete(f.id))); return n; });
+
+  const apply = async () => {
+    // Fixes on the same contact or company are saved together, in one go.
+    const byEntity = new Map<string, { f: CleanFix; patch: Record<string, any>; n: number }>();
+    picked.forEach((f) => {
+      const k = `${f.entity}:${f.base.id}`;
+      const cur = byEntity.get(k);
+      if (cur) { Object.assign(cur.patch, f.patch); cur.n++; } else byEntity.set(k, { f, patch: { ...f.patch }, n: 1 });
+    });
+    const todo = [...byEntity.values()];
+    setBusy({ done: 0, total: todo.length });
+    let ok = 0; const failed: string[] = [];
+    for (let i = 0; i < todo.length; i++) {
+      const { f, patch, n } = todo[i];
+      const row = { ...f.base, ...patch };
+      const err = await (f.entity === "contact" ? saveContact(row) : saveCompany(row)).catch((e: any) => e?.message ?? "Failed");
+      if (err) failed.push(`${f.who}: ${err}`); else ok += n;
+      setBusy({ done: i + 1, total: todo.length });
+    }
+    setBusy(null); setResult({ ok, failed });
+    onDone();
+  };
+
+  const TABS: [CleanKind, string, string][] = [
+    ["people", "Contact names", "The surname repeated in the first name"],
+    ["companies", "Company names", "Legal form (S.L., S.A.…) moved to the legal name"],
+    ["addresses", "Addresses", "Street and number split apart"],
+  ];
+
+  return (
+    <div className="dw-backdrop" onMouseDown={() => !busy && onClose()}>
+      <div className="dw dc-cl" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Clean up data">
+        <div className="dw-head">
+          <div>
+            <span className="dw-eyebrow">Data quality</span>
+            <h2 className="dw-title">Clean up names and addresses</h2>
+          </div>
+          <button className="dw-x" onClick={onClose} disabled={!!busy}>×</button>
+        </div>
+        <div className="dw-body">
+          {!fixes ? <p className="dc-cl-empty">Looking through your contacts and companies…</p> : result ? (
+            <div className="dc-cl-done">
+              <b>{result.ok} fixed</b>
+              {result.failed.length > 0 && <><span>{result.failed.length} couldn't be saved:</span><ul>{result.failed.slice(0, 20).map((f) => <li key={f}>{f}</li>)}</ul></>}
+              <button className="dc-cl-apply" onClick={onClose}>Close</button>
+            </div>
+          ) : fixes.length === 0 ? <p className="dc-cl-empty">Nothing to fix — names and addresses look clean.</p> : (
+            <>
+              <div className="dc-cl-tabs" role="tablist">
+                {TABS.map(([k, label, hint]) => (
+                  <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? "is-on" : ""} onClick={() => setTab(k)} disabled={count(k) === 0}>
+                    <b>{label}</b><small>{hint}</small><i>{count(k)}</i>
+                  </button>
+                ))}
+              </div>
+              <div className="dc-cl-head">
+                <BulkCheck on={allOn} partial={!allOn && list.some((f) => !off.has(f.id))} onToggle={flipAll} label="Tick all" />
+                <span>{list.filter((f) => !off.has(f.id)).length} of {list.length} ticked</span>
+                {list.some((f) => !f.sure) && <em>“Check” ones may be a compound name — left unticked</em>}
+              </div>
+              <div className="dc-cl-list">
+                {list.map((f) => (
+                  <div key={f.id} className={`dc-cl-row ${off.has(f.id) ? "is-off" : ""}`} onClick={() => flip(f.id)}>
+                    <BulkCheck on={!off.has(f.id)} onToggle={() => flip(f.id)} label={`Fix ${f.who}`} />
+                    <span className="dc-cl-who">{f.who}{!f.sure && <i>Check</i>}<small>{f.entity}</small></span>
+                    <span className="dc-cl-before">{f.before}</span>
+                    <span className="dc-cl-arrow">→</span>
+                    <span className="dc-cl-after">{f.after}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+        {fixes && fixes.length > 0 && !result && (
+          <div className="dc-cl-foot">
+            <span>{picked.length} changes across all tabs</span>
+            <button className="dc-cl-apply" onClick={apply} disabled={!!busy || picked.length === 0}>
+              {busy ? `Saving ${busy.done} / ${busy.total}…` : `Apply ${picked.length} changes`}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }

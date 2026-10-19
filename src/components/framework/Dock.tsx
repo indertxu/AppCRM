@@ -1,4 +1,5 @@
-import { useState, useRef, type ReactNode } from "react";
+import { useEffect, useState, useRef, type ReactNode } from "react";
+import { loadPrefs } from "../pages/companies/companiesApi";
 import { useNavigate, useLocation } from "react-router-dom";
 import { usePageAccess, type PageKey } from "./pageAccess";
 
@@ -76,6 +77,16 @@ const settingsIcon = (
   </svg>
 );
 
+/** Each person's own order of the toolbar (Settings → Interface), by path. */
+export const DOCK_ORDER_KEY = "next.dockOrder";
+export const DOCK_ORDER_EVENT = "next:dock-order";
+const readOrder = (): string[] => { try { const v = JSON.parse(localStorage.getItem(DOCK_ORDER_KEY) ?? "[]"); return Array.isArray(v) ? v : []; } catch { return []; } };
+/** Items in that order; anything new or not placed keeps its default spot at the end. */
+export function orderDock<T extends { path: string }>(list: T[], order: string[]): T[] {
+  const pos = (p: string) => { const i = order.indexOf(p); return i < 0 ? order.length + list.findIndex((x) => x.path === p) : i; };
+  return [...list].sort((a, b) => pos(a.path) - pos(b.path));
+}
+
 const items: DockItem[] = [
   { label: "Home", path: "/home", icon: homeIcon, page: "home" },
   { label: "Calendar", path: "/calendar", icon: calendarIcon, page: "calendar" },
@@ -88,6 +99,9 @@ const items: DockItem[] = [
   { label: "Settings", path: "/settings", icon: settingsIcon, page: "settings" },
 ];
 
+/** What the order editor in Settings shows. */
+export const DOCK_ITEMS = items;
+
 export default function Dock() {
   const [open, setOpen] = useState(false);
   const hideTimer = useRef<number | null>(null);
@@ -95,7 +109,17 @@ export default function Dock() {
   const location = useLocation();
   const { canSee } = usePageAccess();
 
-  const visible = items.filter((it) => canSee(it.page));
+  const [order, setOrder] = useState<string[]>(readOrder);
+  useEffect(() => {
+    const on = (e: Event) => setOrder(Array.isArray((e as CustomEvent).detail) ? (e as CustomEvent).detail : readOrder());
+    window.addEventListener(DOCK_ORDER_EVENT, on);
+    // The saved order follows you to any browser.
+    loadPrefs().then((p) => {
+      if (Array.isArray(p.dockOrder)) { setOrder(p.dockOrder); try { localStorage.setItem(DOCK_ORDER_KEY, JSON.stringify(p.dockOrder)); } catch { /* ignore */ } }
+    }).catch(() => {});
+    return () => window.removeEventListener(DOCK_ORDER_EVENT, on);
+  }, []);
+  const visible = orderDock(items.filter((it) => canSee(it.page)), order);
 
   const show = () => {
     if (hideTimer.current) {

@@ -33,7 +33,7 @@ import { startImportBatch, finishImportBatch } from "./importBatches";
 import { PROFILE_FIELDS, isRequired, matchCountry, matchLanguage, normalizeLinkedIn, isLinkedIn, languageOptions, countryOptions } from "./contactProfile";
 import { TargetPicker, NewFieldEditor, ExistingChoice, DiffNote, SheetViewer, FailReport, ColumnTools, columnsFromRows, type TOpt, type Tone } from "../sales/extras/DealImport";
 import {
-  EMAIL_RE, nameKey, vatKey, domainKey, companySimilarity, closestCompany, diffRecord, patchFor, guessType, distinctValues, asDate,
+  EMAIL_RE, nameKey, vatKey, domainKey, splitCompanyNames, dedupePersonName, splitStreetNumber, companySimilarity, closestCompany, diffRecord, patchFor, guessType, distinctValues, asDate,
   type ExistingMode, type RecordDiff, type NewField, type FieldType, type Column, type CompanyFoundBy, type ContactFoundBy,
 } from "../sales/extras/dealImportEngine";
 import "./ContactImport.css";
@@ -66,8 +66,8 @@ const BASE: Base[] = [
   { key: "contact.is_billing", label: "Billing contact (yes / no)", group: "contact", hint: "Yes → becomes the company's billing details" },
   { key: "contact.notes", label: "Notes", group: "contact" },
   { key: "contact.visible_to", label: "Who can see it", group: "contact", hint: "Names or emails of your team, separated by commas" },
-  { key: "company.name", label: "Company name", group: "company", hint: "Found in your companies, or created" },
-  { key: "company.legal_name", label: "Legal name", group: "company" },
+  { key: "company.name", label: "Company name (common)", group: "company", hint: "How people call it, e.g. Genesal. A legal form (S.L., S.A., GmbH…) is moved to Legal name" },
+  { key: "company.legal_name", label: "Legal name (razón social)", group: "company", hint: "Razón social, as on invoices, e.g. Genesal Energy, S.L." },
   { key: "company.vat_number", label: "VAT / tax ID", group: "company", hint: "The surest way to find the company" },
   { key: "company.reg_number", label: "Registration number", group: "company" },
   { key: "company.website", label: "Website", group: "company", hint: "Also finds the company by its domain" },
@@ -131,7 +131,7 @@ const RAW_SYN: Record<string, string[]> = {
   "contact.visible_to": ["visible to", "visible para", "visible por", "visibilidad para", "quien puede verlo", "visibility", "visibilidad", "owner", "propietario", "responsable", "assigned to", "asignado a", "comercial", "sales rep", "account owner", "contact owner", "who can see", "quien lo ve", "acceso"],
   "contact.notes": ["notes", "note", "notas", "nota", "comments", "comentarios", "observaciones", "description", "descripcion"],
   "company.name": ["name", "nombre", "company", "company name", "empresa", "nombre empresa", "nombre de la empresa", "compania", "organization", "organisation", "organizacion", "account", "account name", "cliente", "client", "customer", "bedrijf", "bedrijfsnaam", "firma", "unternehmen", "organization name", "nombre comercial", "brand", "marca"],
-  "company.legal_name": ["legal name", "razon social", "nombre fiscal", "denominacion social", "company legal name", "nombre legal", "statutaire naam"],
+  "company.legal_name": ["legal name", "razon social", "nombre fiscal", "denominacion social", "company legal name", "nombre legal", "statutaire naam", "raison sociale", "registered name", "official name", "nombre registrado", "razon social empresa", "legal entity", "entidad legal"],
   "company.vat_number": ["vat", "vat number", "cif", "nif", "cif nif", "nif cif", "tax id", "btw", "btw nummer", "company vat", "vat id", "ust id", "numero fiscal", "tax number"],
   "company.reg_number": ["registration number", "reg number", "company number", "kvk", "kvk nummer", "numero de registro", "registro mercantil", "handelsregister", "chamber of commerce"],
   "company.website": ["website", "web", "url", "domain", "company website", "sitio web", "pagina web", "company domain", "dominio", "web empresa"],
@@ -447,6 +447,11 @@ function buildPlan(ctx: Ctx, files: FileData[], st: IState): Plan {
       data[col] = v;
     }
     if (data.postal_code && /^\d{4}$/.test(data.postal_code) && matchCountry(data.country) === "ES") data.postal_code = `0${data.postal_code}`;
+    // "Calle Mayor 12, 3º B" in one column: street, number and the rest apart
+    if (data.street && !data.addr_number) {
+      const sp = splitStreetNumber(data.street);
+      if (sp) { data.street = sp.street; data.addr_number = sp.number; if (sp.details && !data.addr_details) data.addr_details = sp.details; }
+    }
     const named = (p.get["company.name"] ?? []).flatMap((t) => t.split(/[;|\n]/)).map((x) => x.trim()).filter(Boolean);
     let names = [...new Map(named.map((n) => [nameKey(n) || n, n])).values()];
     const fallback = !names.length;
@@ -527,6 +532,8 @@ function buildPlan(ctx: Ctx, files: FileData[], st: IState): Plan {
       const f = full.includes(",") ? full.split(",").map((x) => x.trim()).reverse().join(" ") : full;
       const parts = f.split(/\s+/); first = parts[0]; if (!last && parts.length > 1) last = parts.slice(1).join(" ");
     }
+    // "Ana García" + "García": the surname only once
+    { const dd = dedupePersonName(first, last); if (dd) { first = dd.first; last = dd.last ?? last; } }
     const rawEmail = (one(p, "contact.email") ?? "").toLowerCase() || null;
     const email = rawEmail && EMAIL_RE.test(rawEmail) ? rawEmail : null;
     if (rawEmail && !email) p.issues.push(`“${rawEmail}” isn't a valid email`);
@@ -570,6 +577,10 @@ function buildPlan(ctx: Ctx, files: FileData[], st: IState): Plan {
       let v = col === "postal_code" || col === "addr_number" ? numText(p.cells[k], p.get[k][0]) : p.get[k][0];
       if (col === "linkedin") { const l = normalizeLinkedIn(v); if (!isLinkedIn(l)) { p.issues.push(`“${v}” isn't a LinkedIn link`); continue; } v = l; }
       e.profile[col] = v;
+    }
+    if (e.profile.street && !e.profile.addr_number) {
+      const sp = splitStreetNumber(e.profile.street);
+      if (sp) { e.profile.street = sp.street; e.profile.addr_number = sp.number; }
     }
     for (const [k, v] of Object.entries(p.ctCustom)) if (!(k in e.custom)) e.custom[k] = v;
     keys.forEach((k) => { if (!e.coKeys.includes(k)) { e.coKeys.push(k); companies.get(k)!.contacts++; } });
@@ -751,8 +762,9 @@ async function runImport(ctx: Ctx, st: IState, files: FileData[], plan: Plan, na
     onProgress({ done: 0, total: coTodo.length, phase: "Creating companies…" });
     let k = 0;
     for (const c of coTodo) {
+      const nm = splitCompanyNames(c.name, (c.data as any).legal_name);
       const row: any = {
-        ...c.data, name: c.name, custom: resolveCustom(c.custom), import_batch_id: await coBatch(),
+        ...c.data, name: nm.name, legal_name: nm.legal, custom: resolveCustom(c.custom), import_batch_id: await coBatch(),
         ...(c.rel.length ? { relationship: c.rel } : {}), ...(hasBilling(c.billing) ? { billing: c.billing } : {}),
       };
       const e = await saveCompany(row as Company).catch((x: any) => x?.message ?? "Failed");
@@ -2167,7 +2179,8 @@ async function runClImport(ctx: ClCtx, st: ClState, plan: ClPlan, offset: number
         const nk = nameKey(e.co.legal_name || e.name);
         if (createdCos.has(nk)) companyId = createdCos.get(nk)!;
         else {
-          const co: Company = { name: e.name, ...(e.co as any) };
+          const nm = splitCompanyNames((e.co as any).name || e.name, (e.co as any).legal_name);
+          const co: Company = { ...(e.co as any), name: nm.name, legal_name: nm.legal };
           const err = await saveCompany(co);
           if (err) res.failed.push({ row, reason: `Company not created — ${err}` });
           else { companyId = co.id ?? null; res.coCreated++; if (companyId) createdCos.set(nk, companyId); }

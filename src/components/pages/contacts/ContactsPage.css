@@ -292,3 +292,18 @@
 .lix-act { display: flex; align-items: center; gap: 12px; justify-content: space-between; flex-wrap: wrap; }
 .lix-app { font-size: 12px; color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @keyframes lic-fade { from { opacity: 0; } to { opacity: 1; } }
+
+/* ===== multi-select ===== */
+.ct-lid-head { display: flex; align-items: center; gap: 22px; }
+.ct-lid-head .bk-check { margin-left: 9px; opacity: 0.55; transition: opacity 0.2s; }
+.ct-lhead:hover .ct-lid-head .bk-check, .ct-lid-head .bk-check.is-on, .ct-lid-head .bk-check.is-partial { opacity: 1; }
+.ct-av-wrap { position: relative; flex-shrink: 0; width: 40px; height: 40px; }
+.ct-av-wrap .bk-check { position: absolute; inset: 9px; opacity: 0; transform: scale(0.7); transition: opacity 0.2s, transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.ct-av-wrap .ct-avatar { transition: opacity 0.2s, transform 0.25s; }
+.ct-lrow:hover .ct-av-wrap .bk-check, .ct-lrow.is-selecting .ct-av-wrap .bk-check { opacity: 1; transform: none; }
+.ct-lrow:hover .ct-av-wrap .ct-avatar, .ct-lrow.is-selecting .ct-av-wrap .ct-avatar { opacity: 0; transform: scale(0.8); }
+.ct-lrow.is-sel { background: #f3fbf7; border-color: rgba(31, 185, 138, 0.55); box-shadow: 0 0 0 2px rgba(31, 185, 138, 0.16); }
+.ct-list { padding-bottom: 72px; }
+
+/* Room for the hover lift (rise + slight grow + shadow) inside the scroller. */
+.ct-scroll { margin: -10px -16px 0; padding: 10px 22px 0 16px; }

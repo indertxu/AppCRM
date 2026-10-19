@@ -7,9 +7,10 @@ import SalesRangeFilter, { EMPTY_RANGES, activeRangeCount, HeaderRangePopover, r
 import SalesForecast, { type ForecastKpis } from "./SalesForecast";
 import { supabase } from "../../../api/supabase";
 import { listCompanies, listContacts, myProfile, sessionUserId, type Company, type Contact } from "../../companies/companiesApi";
-import { listPipelines, loadPipeline, loadPhasesByPipeline, type Pipeline, type Phase } from "../../settings/pipelineApi";
+import { listPipelines, loadPipeline, loadPhasesByPipeline, sortPipelines, moveDealsToPipeline, type Pipeline, type Phase } from "../../settings/pipelineApi";
+import { useBulkSelection, BulkBar, BulkCheck, type BulkAction } from "../../companies/CompaniesPage";
 import { loadProducts, loadServices, type Product } from "../../settings/catalogApi";
-import { listTrackings, loadTrackingTeams, loadSalesBoot, type SalesBootRows, setTrackingPhase, setTrackingStatus, stampPhaseEntry, clearPhaseEventsAfter, trackingPct, loadPotentialTotals, yearTotalsFromLastRows, type Tracking } from "./salesApi";
+import { listTrackings, loadTrackingTeams, loadSalesBoot, type SalesBootRows, setTrackingPhase, setTrackingStatus, deleteTracking, setTrackingOwner, addTrackingEmployee, removeTrackingEmployee, setDealCloseDate, setDealCloseProb, stampPhaseEntry, clearPhaseEventsAfter, trackingPct, loadPotentialTotals, yearTotalsFromLastRows, type Tracking } from "./salesApi";
 import TrackingDetail from "../trackings/TrackingDetail";
 import ExportModal from "../extras/ExportModal";
 import SalesReport from "../extras/SalesReport";
@@ -506,7 +507,7 @@ export default function SalesPage() {
     /** Everything the list needs is in: one render, then the console report. */
     const finish = (dealsB: DealsBundle, meRow: SalesSnap["me"], cos: Company[], ps: Pipeline[], phases: Record<string, Phase[]>, profs: any[]) => {
       if (!alive) return;
-      const sales = ps.filter((p) => p.is_sales);
+      const sales = sortPipelines(ps.filter((p) => p.is_sales));
       applyDeals(dealsB);
       setMe(meRow);
       dealList = cos;
@@ -1015,6 +1016,150 @@ export default function SalesPage() {
     return () => io.disconnect();
   }, [listCap, shown.length > listCap, view]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ---- Multi-select (list and board): act on many deals at once ----
+  const bulk = useBulkSelection(view === "list" ? shown.slice(0, listCap).map((t) => t.id) : view === "kanban" ? shown.filter((t) => t.pipeline_id === kanbanPipe).map((t) => t.id) : []);
+  const [exportIds, setExportIds] = useState<string[] | null>(null);
+  const canAssignDeals = canManage || !!(me && (me.is_superadmin || ["boss", "sales_manager"].includes(me.role)));
+  /** Selected deals that can be changed (handed-over ones are a frozen copy). */
+  const picked = () => bulk.ids.map((id) => trackings.find((t) => t.id === id)).filter((t): t is Tracking => !!t && !frozenById.has(t.id));
+  const skippedNote = (done: number, total: number, why: string) => (done === total ? "" : ` · ${total - done} skipped (${why})`);
+  const nameOfEmp = (id: string) => employees.find((e) => e.id === id)?.name ?? "someone";
+  const people = employees.filter((e) => !inactive.has(e.id)).map((e) => ({ value: e.id, label: e.name, hint: e.role?.replace(/_/g, " ") }));
+  const selPipes = Array.from(new Set(picked().map((t) => t.pipeline_id).filter(Boolean) as string[]));
+  const bulkStatus = async (status: string) => {
+    let n = 0;
+    for (const t of picked()) {
+      const phs = phaseByPipe[t.pipeline_id ?? ""] ?? [];
+      if (status === "won" || status === "lost") {
+        const ph = phs.find((p) => p.sales_outcome === (status === "won" ? "win" : "loss"));
+        if (ph) { await moveTrackingToPhase(t.id, ph.id, phs, true); n++; continue; }
+      } else {
+        const cur = phs.find((p) => p.id === t.current_phase_id);
+        if (cur?.sales_outcome) {
+          const back = phs.filter((p) => !p.sales_outcome).pop();
+          if (back) { await setTrackingPhase(t.id, back.id); await stampPhaseEntry(t.id, back.id); }
+        }
+      }
+      await setTrackingStatus(t.id, status); n++;
+    }
+    await reload();
+    return n;
+  };
+  const ICO = (d: string) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>;
+  const bulkActions: BulkAction[] = [
+    {
+      key: "move", label: "Move to pipeline", icon: ICO("M5 12h14M13 6l6 6-6 6"),
+      options: visiblePipelines.map((p) => ({ value: p.id, label: p.name, hint: `${(phaseByPipe[p.id] ?? []).length} phases` })),
+      run: async (v) => {
+        if (!v) return null;
+        const ds = picked().filter((t) => t.pipeline_id !== v);
+        if (!ds.length) return "They're already in that pipeline.";
+        const err = await moveDealsToPipeline(ds.map((t) => t.id), v);
+        await reload(); bulk.clear();
+        return err ?? { done: `${ds.length} moved to ${pipelineName(v)}` };
+      },
+    },
+    {
+      key: "phase", label: "Move to phase", icon: ICO("M4 6h10M4 12h16M4 18h7"),
+      options: selPipes.flatMap((pid) => (phaseByPipe[pid] ?? []).map((ph) => ({ value: ph.id, label: ph.name, group: selPipes.length > 1 ? pipelineName(pid) : undefined, hint: ph.sales_outcome === "win" ? "Won" : ph.sales_outcome === "loss" ? "Lost" : undefined }))),
+      disabledReason: selPipes.length === 0 ? "These deals have no pipeline yet." : undefined,
+      run: async (v) => {
+        if (!v) return null;
+        const pid = selPipes.find((p) => (phaseByPipe[p] ?? []).some((ph) => ph.id === v))!;
+        const phs = phaseByPipe[pid] ?? [];
+        const ds = picked().filter((t) => t.pipeline_id === pid);
+        let n = 0, handover = 0;
+        for (const t of ds) {
+          if (t.current_phase_id === v) { n++; continue; }
+          // past the last phase a sales role sees: that needs the hand-over, deal by deal
+          const plan = planHandover({ roles: salesRoles, pipelineId: t.pipeline_id, phases: phs, fromPhaseId: t.current_phase_id, toPhaseId: v, owner: trackOwners[t.id] ?? null, team: trackAssignees[t.id] ?? [], dealRoles: t.deal_roles });
+          if (plan) { handover++; continue; }
+          await moveTrackingToPhase(t.id, v, phs, true); n++;
+        }
+        await reload(); bulk.clear();
+        const total = picked().length || bulk.ids.length;
+        return { done: `${n} moved to ${phs.find((p) => p.id === v)?.name ?? "the phase"}${handover ? ` · ${handover} need a hand-over (open them one by one)` : ""}${skippedNote(n + handover, Math.max(total, ds.length), "other pipeline")}` };
+      },
+    },
+    {
+      key: "owner", label: "Main sales rep", icon: ICO("M12 2l3 6.5 7 1-5 5 1.2 7L12 18l-6.2 3.5L7 14.5l-5-5 7-1z"),
+      options: [{ value: "__none", label: "Nobody", hint: "Clear the owner" }, ...people],
+      disabledReason: canAssignDeals ? undefined : "Only boss and sales managers can change who owns a deal.",
+      run: async (v) => {
+        if (!v) return null;
+        const ds = picked();
+        for (const t of ds) await setTrackingOwner(t.id, v === "__none" ? null : v);
+        await reload(); bulk.clear();
+        return { done: v === "__none" ? `Owner cleared on ${ds.length}` : `${nameOfEmp(v)} now owns ${ds.length}` };
+      },
+    },
+    {
+      key: "status", label: "Mark as", icon: ICO("M9 12l2 2 4-4M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z"),
+      options: [{ value: "active", label: "Active" }, { value: "paused", label: "Paused" }, { value: "won", label: "Won", hint: "Goes to the pipeline's win phase" }, { value: "lost", label: "Lost", hint: "Goes to the pipeline's loss phase" }],
+      run: async (v) => { if (!v) return null; const n = await bulkStatus(v); bulk.clear(); return { done: `${n} marked ${v}` }; },
+    },
+    {
+      key: "team-add", label: "Add to the team", more: true, icon: ICO("M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2 21a7 7 0 0 1 14 0M19 8v6M16 11h6"),
+      options: people,
+      disabledReason: canAssignDeals ? undefined : "Only boss and sales managers can change the team.",
+      run: async (v) => {
+        if (!v) return null;
+        let n = 0;
+        for (const t of picked()) if (!(trackAssignees[t.id] ?? []).includes(v)) { await addTrackingEmployee(t.id, v); n++; }
+        await reload(); bulk.clear();
+        return { done: `${nameOfEmp(v)} added to ${n} deal${n === 1 ? "" : "s"}` };
+      },
+    },
+    {
+      key: "team-remove", label: "Remove from the team", more: true, icon: ICO("M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2 21a7 7 0 0 1 14 0M16 11h6"),
+      options: people.filter((p) => picked().some((t) => (trackAssignees[t.id] ?? []).includes(p.value))),
+      disabledReason: canAssignDeals ? undefined : "Only boss and sales managers can change the team.",
+      run: async (v) => {
+        if (!v) return null;
+        let n = 0;
+        for (const t of picked()) if ((trackAssignees[t.id] ?? []).includes(v)) {
+          if (trackOwners[t.id] === v) await setTrackingOwner(t.id, null);
+          await removeTrackingEmployee(t.id, v); n++;
+        }
+        await reload(); bulk.clear();
+        return { done: `${nameOfEmp(v)} taken off ${n} deal${n === 1 ? "" : "s"}` };
+      },
+    },
+    {
+      key: "rep-date", label: "Expected close (sales)", more: true, input: "date", icon: ICO("M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"),
+      run: async (v) => { const ds = picked(); for (const t of ds) await setDealCloseDate(t.id, "rep", v || null); await reload(); bulk.clear(); return { done: v ? `Expected close set on ${ds.length}` : `Expected close cleared on ${ds.length}` }; },
+    },
+    {
+      key: "rep-prob", label: "Sales estimate (%)", more: true, input: "percent", icon: ICO("M19 5L5 19M6.5 9a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM17.5 20a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z"),
+      run: async (v) => { const ds = picked(); const n = v === "" || v == null ? null : Math.max(0, Math.min(100, Number(v))); for (const t of ds) await setDealCloseProb(t.id, "rep", n); await reload(); bulk.clear(); return { done: n == null ? `Sales estimate cleared on ${ds.length}` : `Sales estimate ${n}% on ${ds.length}` }; },
+    },
+    ...(canManage ? [
+      {
+        key: "mgr-date", label: "Expected close (management)", more: true, input: "date" as const, icon: ICO("M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM9 15l2 2 4-4"),
+        run: async (v?: string) => { const ds = picked(); for (const t of ds) await setDealCloseDate(t.id, "mgr", v || null); await reload(); bulk.clear(); return { done: `Management close date on ${ds.length}` }; },
+      },
+      {
+        key: "mgr-prob", label: "Management estimate (%)", more: true, input: "percent" as const, icon: ICO("M19 5L5 19M6.5 9a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM17.5 20a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z"),
+        run: async (v?: string) => { const ds = picked(); const n = v === "" || v == null ? null : Math.max(0, Math.min(100, Number(v))); for (const t of ds) await setDealCloseProb(t.id, "mgr", n); await reload(); bulk.clear(); return { done: `Management estimate on ${ds.length}` }; },
+      },
+    ] : []),
+    {
+      key: "export", label: "Export these", more: true, icon: ICO("M12 3v12M7 10l5 5 5-5M5 21h14"),
+      run: () => { setExportIds(bulk.ids); setExporting(true); return null; },
+    },
+    {
+      key: "delete", label: "Delete", danger: true, more: true, icon: ICO("M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"),
+      disabledReason: canManage ? undefined : "Only boss and sales managers can delete deals.",
+      run: async () => {
+        const ds = picked();
+        for (const t of ds) await deleteTracking(t.id);
+        setTrackings((xs) => xs.filter((x) => !ds.some((d) => d.id === x.id)));
+        bulk.clear(); await reload();
+        return { done: `${ds.length} deleted` };
+      },
+    },
+  ];
+
   if (openId) {
     const t = mine.find((x) => x.id === openId);
     const frozen = t ? frozenById.get(t.id) : undefined;
@@ -1201,7 +1346,12 @@ export default function SalesPage() {
             trackTitle={trackTitle}
             companyName={companyName}
             onOpen={(id) => setOpenId(id)}
-            onMove={moveTrackingToPhase}
+            onMove={(id, phaseId, phs) => {
+              // dragging one of several ticked cards moves all of them
+              if (bulk.has(id) && bulk.ids.length > 1) { const a = bulkActions.find((x) => x.key === "phase"); void a?.run(phaseId); return; }
+              void moveTrackingToPhase(id, phaseId, phs);
+            }}
+            selected={bulk.has} selecting={bulk.active} onToggle={(id, range) => bulk.toggle(id, range)}
           />
         ) : shown.length === 0 && ready ? (
           <div className="so-empty">
@@ -1215,7 +1365,7 @@ export default function SalesPage() {
           <div className="sl-scroll">
             {/* One header for the whole list, so rows don't repeat a label under every figure. */}
             <div className="so-thead">
-              <span>{headBtn("deal", "Deal")}</span>
+              <span className="so-th-deal"><BulkCheck on={bulk.allOn} partial={bulk.someOn} onToggle={bulk.toggleAll} label="Select every deal shown" />{headBtn("deal", "Deal")}</span>
               <span>{headBtn("stage", "Stage")}</span>
               <span>{headBtn("product", "Product and owner")}</span>
               <span className="is-r so-th-stack">{headBtn("rev", "Potential value")}{headBtn("close", "Expected close")}</span>
@@ -1248,6 +1398,9 @@ export default function SalesPage() {
                   probLabel={probView === "phase" ? "close" : probView === "rep" ? "sales" : probView === "mgr" ? "mgmt" : "avg"}
                   handedOver={frozenById.has(t.id)}
                   onOpen={() => setOpenId(t.id)}
+                  selected={bulk.has(t.id)}
+                  selecting={bulk.active}
+                  onToggle={(range) => bulk.toggle(t.id, range)}
                 />
               ))}
               {shown.length > listCap && (
@@ -1260,9 +1413,14 @@ export default function SalesPage() {
         )}
       </section>
 
+      {view !== "forecast" && (
+        <BulkBar count={bulk.ids.length} noun={["deal", "deals"]} actions={bulkActions} onClear={bulk.clear}
+          onSelectAll={bulk.toggleAll} allOn={bulk.allOn} />
+      )}
+
       {exporting && (
         <ExportModal
-          deals={exportDeals}
+          deals={exportIds ? exportDeals.filter((t) => exportIds.includes(t.id)) : exportDeals}
           contacts={exportContacts}
           companies={exportCompanies}
           employees={employees}
@@ -1273,7 +1431,7 @@ export default function SalesPage() {
           phaseNames={allPhaseNames}
           trackingFields={trackingFields}
           helpers={{ pipelineName, productName, phaseName, phaseProbOf, closeDateOf }}
-          onClose={() => setExporting(false)}
+          onClose={() => { setExporting(false); setExportIds(null); }}
         />
       )}
       {reporting && (
@@ -1354,8 +1512,9 @@ export default function SalesPage() {
   );
 }
 
-function TrackingRow({ tracking, title, company, contactCount, pipeline, phases, product, revenue, ownerName, closeDate, closeProbOverride, probLabel, onOpen, index = 0, handedOver = false }: {
+function TrackingRow({ tracking, title, company, contactCount, pipeline, phases, product, revenue, ownerName, closeDate, closeProbOverride, probLabel, onOpen, index = 0, handedOver = false, selected = false, selecting = false, onToggle }: {
   tracking: Tracking; title: string; company: string | null; contactCount: number; handedOver?: boolean;
+  selected?: boolean; selecting?: boolean; onToggle?: (range: boolean) => void;
   pipeline: string; phases: Phase[]; product: string | null; revenue?: number; closeDate?: string | null;
   ownerName?: string | null; closeProbOverride?: number | null; probLabel?: string; onOpen: () => void; index?: number;
 }) {
@@ -1379,14 +1538,18 @@ function TrackingRow({ tracking, title, company, contactCount, pipeline, phases,
 
   return (
     <button
-      className={`so-row is-${tracking.status} prob-${probTone}`}
+      className={`so-row is-${tracking.status} prob-${probTone} ${selected ? "is-sel" : ""} ${selecting ? "is-selecting" : ""}`}
       data-spot=""
       style={soVars({ "--i": Math.min(index, 14), "--h": soHue(title), "--cp": `${cp}%` })}
-      onClick={onOpen}
+      // While picking, a click picks; shift-click picks a run of rows.
+      onClick={(e) => { if (onToggle && (selecting || e.shiftKey || e.metaKey || e.ctrlKey)) onToggle(e.shiftKey); else onOpen(); }}
     >
       {/* deal */}
       <span className="so-who">
-        <span className="so-av">{title.slice(0, 1).toUpperCase()}</span>
+        <span className="so-av-wrap">
+          <span className="so-av">{title.slice(0, 1).toUpperCase()}</span>
+          {onToggle && <BulkCheck on={selected} onToggle={(e) => onToggle(e.shiftKey)} label={`Select ${title}`} />}
+        </span>
         <span className="so-who-t">
           <span className="so-name">
             <b>{title}{handedOver && <span className="so-handed" title="You handed this deal over — you see it as it was then">Handed over</span>}</b>
@@ -1459,8 +1622,10 @@ function TrackingRow({ tracking, title, company, contactCount, pipeline, phases,
 }
 
 // ============================ Kanban view ============================
-function KanbanView({ kanbanPipe, phaseByPipe, trackings, potentialTotals, trackTitle, companyName, onOpen, onMove }: {
+function KanbanView({ kanbanPipe, phaseByPipe, trackings, potentialTotals, trackTitle, companyName, onOpen, onMove, selected, selecting = false, onToggle }: {
   kanbanPipe: string;
+  /** Multi-select: ticked cards, and a click picks instead of opening while any is ticked. */
+  selected?: (id: string) => boolean; selecting?: boolean; onToggle?: (id: string, range: boolean) => void;
   phaseByPipe: Record<string, Phase[]>;
   trackings: Tracking[];
   potentialTotals: Record<string, number>;
@@ -1554,15 +1719,18 @@ function KanbanView({ kanbanPipe, phaseByPipe, trackings, potentialTotals, track
                   return (
                     <div
                       key={t.id}
-                      className={`so-kcard is-${t.status} ${dragId === t.id ? "is-dragging" : ""}`}
+                      className={`so-kcard is-${t.status} ${dragId === t.id ? "is-dragging" : ""} ${selected?.(t.id) ? "is-sel" : ""} ${selecting ? "is-selecting" : ""}`}
                       data-spot=""
                       style={soVars({ "--h": soHue(title), "--i": Math.min(ci, 8) + pi })}
                       draggable
                       onDragStart={() => setDragId(t.id)}
                       onDragEnd={() => { setDragId(null); setOverPhase(null); }}
-                      onClick={() => onOpen(t.id)}
+                      onClick={(e) => { if (onToggle && (selecting || e.shiftKey || e.metaKey || e.ctrlKey)) onToggle(t.id, e.shiftKey); else onOpen(t.id); }}
                     >
-                      <span className="so-av">{title.slice(0, 1).toUpperCase()}</span>
+                      <span className="so-av-wrap">
+                        <span className="so-av">{title.slice(0, 1).toUpperCase()}</span>
+                        {onToggle && <BulkCheck on={!!selected?.(t.id)} onToggle={(e) => onToggle(t.id, e.shiftKey)} label={`Select ${title}`} />}
+                      </span>
                       <span className="so-kcard-t">
                         <b>{title}</b>
                         <small>{companyName(t.company_id) ? (t.deal_name?.trim() ? companyName(t.company_id) : "Company") : "Contact"}</small>

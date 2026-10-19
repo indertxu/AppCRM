@@ -263,6 +263,12 @@ export interface OutlookEntryPayload {
   /** Ask Outlook for a Teams link. */
   online?: boolean;
   location?: string;
+  /** Event title. Older callers leave it out and the function builds one. */
+  subject?: string;
+  /** Rows of the details table in the event body, in order. */
+  details?: [string, string][];
+  /** A meeting deleted in Outlook gets a new event instead of being reported gone. */
+  recreate?: boolean;
 }
 
 export interface OutlookSyncResult {
@@ -331,4 +337,151 @@ export async function meetingsGoneFromOutlook(entryIds: string[]): Promise<strin
   } catch {
     return [];
   }
+}
+
+/* ===========================================================================
+   Any calendar entry → its organiser's Outlook
+   ---------------------------------------------------------------------------
+   Reads the entry and everything it points at (type of work, client, project,
+   phase and tasks, company, deal, contacts, summoned colleagues) and puts it
+   in the event: a clear subject, a details table, the notes, and the people
+   as attendees so Outlook invites them. Only events still to come invite
+   anyone: logging yesterday's work must not email a meeting request.
+   Colleagues summoned are always attendees; for a sales meeting the contacts
+   picked under "Who with" are too. Client contacts on delivery work are
+   listed in the body, not invited.
+   =========================================================================== */
+const KIND_LABEL: Record<string, string> = { teams: "Teams meeting", phone: "Phone call", in_person: "In person" };
+const LINE_LABEL: Record<string, string> = { consultor: "Consultancy", supervision: "Project management", connector: "Connector", closure: "Project closure", sales: "Sales" };
+const fullName = (r: any) => [r?.first_name, r?.last_name].filter(Boolean).join(" ") || r?.username || r?.email || "";
+
+export async function syncCalendarEntry(entryId: string): Promise<OutlookSyncResult> {
+  try {
+    const [{ data: auth }, { data: row }] = await Promise.all([
+      supabase.auth.getUser(),
+      supabase.from("calendar_entries").select("*").eq("id", entryId).maybeSingle(),
+    ]);
+    const e = row as any;
+    const me = auth?.user;
+    if (!e || !me) return { ok: false, eventId: null, error: "Entry not found" };
+    // The function writes to the signed-in user's own calendar.
+    if (e.user_id !== me.id) return { ok: false, skipped: true, eventId: e.outlook_event_id ?? null };
+
+    const ids = (v: unknown) => String(v ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+    const isMeeting = e.kind === "meeting";
+    const [wt, cl, pj, co, trk, inv, mc, ct] = await Promise.all([
+      e.work_type_id ? supabase.from("work_types").select("name").eq("id", e.work_type_id).maybeSingle() : Promise.resolve({ data: null }),
+      e.client_id ? supabase.from("clients").select("name").eq("id", e.client_id).maybeSingle() : Promise.resolve({ data: null }),
+      e.project_id ? supabase.from("projects").select("*").eq("id", e.project_id).maybeSingle() : Promise.resolve({ data: null }),
+      e.company_id ? supabase.from("companies").select("name").eq("id", e.company_id).maybeSingle() : Promise.resolve({ data: null }),
+      e.tracking_id ? supabase.from("trackings").select("deal_name, company_id").eq("id", e.tracking_id).maybeSingle() : Promise.resolve({ data: null }),
+      supabase.from("entry_invites").select("invitee_id, status").eq("entry_id", entryId),
+      isMeeting ? supabase.from("meeting_contacts").select("contact_id").eq("meeting_id", entryId) : Promise.resolve({ data: [] }),
+      e.contact_id ? supabase.from("contacts").select("id, first_name, last_name, email").eq("id", e.contact_id).maybeSingle() : Promise.resolve({ data: null }),
+    ]);
+    const project = (pj as any).data;
+    let service = "";
+    if (project?.service_id || project?.project_type_id) {
+      const { data: sv } = await supabase.from("services").select("name").eq("id", project.service_id ?? project.project_type_id).maybeSingle();
+      service = (sv as any)?.name ?? "";
+    }
+    const projectName = project ? (project.name || [service || "Project", project.kickoff_date].filter(Boolean).join(" · ")) : "";
+    const phases: any[] = Array.isArray(project?.phases) ? project.phases : [];
+    const phaseName = phases.find((p) => p.id === e.phase_id)?.name ?? "";
+    const taskSet = new Set(ids(e.task_ids));
+    const tasks = phases.flatMap((p) => (p.tasks ?? []).filter((t: any) => taskSet.has(t.id)).map((t: any) => `${t.name}${p.name ? ` (${p.name})` : ""}`));
+    const clientContacts = (Array.isArray(project?.contacts) ? project.contacts : []).filter((c: any) => ids(e.attendees).includes(c.id));
+
+    let companyName = ((co as any).data?.name as string) ?? "";
+    const dealName = ((trk as any).data?.deal_name as string) ?? "";
+    if (!companyName && (trk as any).data?.company_id) {
+      const { data: c2 } = await supabase.from("companies").select("name").eq("id", (trk as any).data.company_id).maybeSingle();
+      companyName = (c2 as any)?.name ?? "";
+    }
+
+    // People: summoned colleagues, and for a meeting the contacts it is with.
+    const invitedIds = (((inv as any).data ?? []) as any[]).filter((i) => i.status !== "declined").map((i) => i.invitee_id);
+    const contactIds = (((mc as any).data ?? []) as any[]).map((m) => m.contact_id);
+    const [{ data: profs }, { data: cons }] = await Promise.all([
+      invitedIds.length ? supabase.from("profiles").select("id, first_name, last_name, username, email").in("id", invitedIds) : Promise.resolve({ data: [] }),
+      contactIds.length ? supabase.from("contacts").select("id, first_name, last_name, email").in("id", contactIds) : Promise.resolve({ data: [] }),
+    ]);
+    const colleagues = ((profs ?? []) as any[]).filter((r) => r.id !== me.id).map((r) => ({ email: r.email as string, name: fullName(r) }));
+    const contacts = ((cons ?? []) as any[]).map((r) => ({ email: r.email as string, name: fullName(r) }));
+    const linkedContact = (ct as any).data ? { email: (ct as any).data.email, name: fullName((ct as any).data) } : null;
+
+    const end = new Date(`${e.entry_date}T${String(Math.floor(e.end_min / 60)).padStart(2, "0")}:${String(e.end_min % 60).padStart(2, "0")}:00`);
+    const upcoming = end.getTime() > Date.now();
+    const attendees = upcoming
+      ? [
+          ...colleagues,
+          ...(isMeeting ? contacts : []),
+          // Client people picked on a consultancy entry are invited too.
+          ...clientContacts.map((c: any) => ({ email: String(c.email ?? "").trim(), name: c.name || c.email })),
+        ].filter((a) => a.email && a.email.toLowerCase() !== (me.email ?? "").toLowerCase())
+      : [];
+
+    const wtName = ((wt as any).data?.name as string) ?? "";
+    const clientName = ((cl as any).data?.name as string) ?? "";
+    const how = KIND_LABEL[e.meeting_kind ?? ""] ?? "";
+    const unit = e.billing_line === "sales" ? "" : `${Number(e.billable) || 0}`;
+    const details: [string, string][] = isMeeting
+      ? [
+          ["Meeting", how],
+          ["Company", companyName],
+          ["Deal", dealName && dealName !== companyName ? dealName : ""],
+          ["With", contacts.map((c) => c.name).join(", ")],
+          ["Team", colleagues.map((c) => c.name).join(", ")],
+        ]
+      : [
+          ["Type of work", wtName],
+          ["How", how],
+          ["Client", clientName || companyName],
+          ["Project", projectName],
+          ["Phase", phaseName],
+          ["Tasks", tasks.join("\n")],
+          ["Role", LINE_LABEL[e.billing_line] ?? ""],
+          ["Billable", e.client_id && unit !== "0" ? unit : ""],
+          ["Client people", clientContacts.map((c: any) => c.name).filter(Boolean).join(", ")],
+          ["Contact", linkedContact?.name ?? ""],
+          ["Team", colleagues.map((c) => c.name).join(", ")],
+          ["Status", e.billing_line === "sales" ? "" : e.status === "confirmed" ? "Took place" : e.status === "cancelled" ? "Did not take place" : ""],
+        ];
+    const subject = isMeeting
+      ? [companyName || contacts[0]?.name, e.title].filter(Boolean).join(" · ") || "Meeting"
+      : [e.status === "cancelled" ? "Cancelled:" : "", [clientName || companyName, e.title || wtName || "Work"].filter(Boolean).join(" · ")].filter(Boolean).join(" ");
+
+    const r = await syncEntryToOutlookDetailed({
+      outlookEventId: e.outlook_event_id ?? null,
+      date: e.entry_date,
+      startMin: e.start_min,
+      endMin: e.end_min,
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      kind: isMeeting ? "meeting" : undefined,
+      recreate: true,
+      subject,
+      details: details.filter(([, v]) => !!v),
+      description: (e.notes ?? "") as string,
+      notes: (e.notes ?? "") as string,
+      attendees,
+      online: e.meeting_kind === "teams",
+      location: e.meeting_kind === "in_person" ? (companyName || clientName || undefined) : undefined,
+      // older outlook-sync reads these
+      workType: wtName, client: clientName || companyName, project: projectName, phase: phaseName, tasks: tasks.join(", "),
+    });
+    if (r.ok && r.eventId && r.eventId !== e.outlook_event_id) {
+      await supabase.from("calendar_entries").update({ outlook_event_id: r.eventId }).eq("id", entryId);
+    }
+    if (!r.ok && !r.skipped) console.warn("[outlook] entry", entryId, "not synced:", r.error);
+    return r;
+  } catch (err: any) {
+    return { ok: false, eventId: null, error: err?.message ?? String(err) };
+  }
+}
+
+/** Remove an entry's Outlook event, reading its id first. Call before deleting the row. */
+export async function unsyncCalendarEntry(entryId: string): Promise<void> {
+  const { data } = await supabase.from("calendar_entries").select("outlook_event_id").eq("id", entryId).maybeSingle();
+  const ev = (data as any)?.outlook_event_id ?? null;
+  if (ev) await Promise.race([deleteEntryFromOutlook(ev, entryId), new Promise((r) => setTimeout(r, 8000))]);
 }

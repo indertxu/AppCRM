@@ -15,6 +15,7 @@ import {
 import {
   AddressFields, PhoneField, StatusPills, HistorySection, phoneText, telHref,
   FilterBar, FilterChips, SortHead, applyView, nextSort, emptyView, useSavedViews, useStoredView, type FField,
+  useBulkSelection, BulkBar, BulkCheck, type BulkAction, DataCleanup,
 } from "../companies/CompaniesPage";
 import "../clients/ClientsPage.css";
 import "../companies/CompaniesPage.css";
@@ -50,6 +51,7 @@ export default function ContactsPage() {
   const [me, setMe] = useState<{ id: string; role: string; is_superadmin: boolean } | null>(null);
   const [fields, setFields] = useState<ContactField[]>([]);
   const [showFieldSettings, setShowFieldSettings] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
   const [importing, setImporting] = useState(false);
   const [columns, setColumns] = useState<string[]>(["position", "email", "companies"]);
   const [exporting, setExporting] = useState(false);
@@ -201,6 +203,75 @@ export default function ContactsPage() {
   const shown = applyView(searched, filterFields, view, (a, b) => fullName(a).localeCompare(fullName(b)));
   const onSort = (key: string, add: boolean) => setView({ ...view, sort: nextSort(view.sort, key, add) });
 
+  // ---- Multi-select: link, assign, export or delete many contacts at once ----
+  const bulk = useBulkSelection(shown.map((c) => c.id as string));
+  const [exportIds, setExportIds] = useState<string[] | null>(null);
+  const picked = () => contacts.filter((c) => bulk.has(c.id as string));
+  const bulkActions: BulkAction[] = [
+    {
+      key: "company", label: "Add to company",
+      icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="3" width="10" height="18" rx="1.5" /><path d="M14 8h6v13H4M18 2v4M16 4h4" /></svg>,
+      options: companies.map((co) => ({ value: co.id as string, label: co.name })),
+      run: async (v) => {
+        if (!v) return null;
+        for (const c of picked()) {
+          if (c.companyIds.includes(v)) continue;
+          const err = await saveContact({ ...c, companyIds: [...c.companyIds, v] });
+          if (err) return err;
+        }
+        await reload(); bulk.clear();
+        return null;
+      },
+    },
+    {
+      key: "uncompany", label: "Remove from company", more: true,
+      icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="3" width="10" height="18" rx="1.5" /><path d="M14 8h6v13H4M16 4h4" /></svg>,
+      options: companies.filter((co) => picked().some((c) => c.companyIds.includes(co.id as string))).map((co) => ({ value: co.id as string, label: co.name })),
+      run: async (v) => {
+        if (!v) return null;
+        let n = 0;
+        for (const c of picked()) {
+          if (!c.companyIds.includes(v)) continue;
+          const err = await saveContact({ ...c, companyIds: c.companyIds.filter((x) => x !== v) });
+          if (err) return err;
+          n++;
+        }
+        await reload(); bulk.clear();
+        return { done: `${n} taken off ${companies.find((co) => co.id === v)?.name ?? "the company"}` };
+      },
+    },
+    {
+      key: "assign", label: "Assign to",
+      icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="8" r="3.5" /><path d="M2.5 20a6.5 6.5 0 0 1 13 0M19 8v6M16 11h6" /></svg>,
+      options: employees.map((e) => ({ value: e.id, label: e.name, hint: e.role?.replace(/_/g, " ") })),
+      disabledReason: lead ? undefined : "Only boss and sales managers can assign contacts.",
+      run: async (v) => {
+        if (!v) return null;
+        for (const c of picked()) {
+          const cur = assignees[c.id as string] ?? [];
+          if (!cur.includes(v)) await setContactAssignees(c.id as string, [...cur, v]);
+        }
+        await reload(); bulk.clear();
+        return null;
+      },
+    },
+    {
+      key: "export", label: "Export these", more: true,
+      icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12M7 10l5 5 5-5M5 21h14" /></svg>,
+      run: () => { setExportIds(bulk.ids); setExporting(true); return null; },
+    },
+    {
+      key: "delete", label: "Delete", danger: true, more: true,
+      icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" /></svg>,
+      disabledReason: lead ? undefined : "Only boss and sales managers can delete contacts.",
+      run: async () => {
+        for (const id of bulk.ids) { const err = await deleteContact(id); if (err) { await reload(); return err; } }
+        bulk.clear(); await reload();
+        return null;
+      },
+    },
+  ];
+
   if (me && !isSalesLead(me) && me.role !== "sales") {
     return (
       <div className="ct">
@@ -232,6 +303,7 @@ export default function ContactsPage() {
           { key: "export", group: "Data", label: "Export", hint: "Pick contacts by company, deal or phase", icon: AM_ICON.export, tone: "violet", shortcut: "E", onSelect: () => setExporting(true) },
           { key: "linkedin", group: "Data", label: "Save from LinkedIn", hint: "Browser extension: add people & companies from LinkedIn", icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-4 0v7h-4v-7a6 6 0 0 1 6-6zM2 9h4v12H2zM4 6a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" /></svg>, tone: "blue", shortcut: "L", onSelect: () => setLinkedInOpen(true) },
           { key: "fields", group: "Setup", label: "Fields & columns", hint: "Custom fields and what the list shows", icon: AM_ICON.fields, tone: "amber", shortcut: "F", onSelect: () => setShowFieldSettings(true) },
+          ...(lead ? [{ key: "cleanup", group: "Setup", label: "Clean up data", hint: "Fix doubled surnames, legal names and street numbers", icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M15 4l5 5M4 20l7-7M13.5 5.5l5 5-7.5 7.5H6v-5z" /></svg>, tone: "amber" as const, onSelect: () => setCleaning(true) },] : []),
         ]} />
       </header>
 
@@ -242,15 +314,19 @@ export default function ContactsPage() {
       ) : (
         <div className="ct-scroll">
           <div className="ct-lrow ct-lhead" style={{ gridTemplateColumns: `1.9fr ${activeColumns.map(() => "1.4fr").join(" ")}` }}>
-            <span><SortHead label="Name" k="name" sort={view.sort} onSort={onSort} /></span>
+            <span className="ct-lid-head"><BulkCheck on={bulk.allOn} partial={bulk.someOn} onToggle={bulk.toggleAll} label="Select every contact shown" /><SortHead label="Name" k="name" sort={view.sort} onSort={onSort} /></span>
             {activeColumns.map((k) => <span key={k}><SortHead label={columnLabel(k)} k={k} sort={view.sort} onSort={onSort} /></span>)}
           </div>
           <div className="ct-list">
             {shown.map((c) => (
-              <button key={c.id} className="ct-lrow" onClick={() => setEditing(structuredClone(c))}
+              <button key={c.id} className={`ct-lrow ${bulk.has(c.id as string) ? "is-sel" : ""} ${bulk.active ? "is-selecting" : ""}`}
+                onClick={(e) => { if (bulk.active || e.shiftKey || e.metaKey || e.ctrlKey) bulk.toggle(c.id as string, e.shiftKey); else setEditing(structuredClone(c)); }}
                 style={{ gridTemplateColumns: `1.9fr ${activeColumns.map(() => "1.4fr").join(" ")}` }}>
                 <span className="ct-lcell ct-lid">
-                  <span className="ct-avatar">{fullName(c).slice(0, 1).toUpperCase()}</span>
+                  <span className="ct-av-wrap">
+                    <span className="ct-avatar">{fullName(c).slice(0, 1).toUpperCase()}</span>
+                    <BulkCheck on={bulk.has(c.id as string)} onToggle={(e) => bulk.toggle(c.id as string, e.shiftKey)} label={`Select ${fullName(c)}`} />
+                  </span>
                   <span className="ct-lname">{fullName(c)}</span>
                   <StatusPills status={statusOf(c)} />
                 </span>
@@ -282,10 +358,13 @@ export default function ContactsPage() {
           contacts={contacts.filter((c) => lead || !me || (assignees[c.id!] ?? []).includes(me.id))}
           companies={companies}
           contactFields={fields}
-          shownIds={shown.map((c) => c.id as string)}
-          onClose={() => setExporting(false)}
+          shownIds={exportIds ?? shown.map((c) => c.id as string)}
+          onClose={() => { setExporting(false); setExportIds(null); }}
         />
       )}
+
+      <BulkBar count={bulk.ids.length} noun={["contact", "contacts"]} actions={bulkActions} onClear={bulk.clear}
+        onSelectAll={bulk.toggleAll} allOn={bulk.allOn} total={shown.length} />
 
       {linkedInOpen && <LinkedInExtensionModal onClose={() => setLinkedInOpen(false)} />}
 
@@ -297,6 +376,7 @@ export default function ContactsPage() {
         />
       )}
 
+      {cleaning && <DataCleanup onClose={() => setCleaning(false)} onDone={() => { void reload(); }} />}
       {showFieldSettings && (
         <FieldSettings
           fields={fields}

@@ -267,3 +267,26 @@
   .am-backdrop, .am-card { animation: none; }
 }/* hours / minutes: the app's dropdown */
 .am-time > .sel-trigger { flex: 1; width: auto; height: 46px; justify-content: center; gap: 6px; padding: 0 10px; border-color: var(--line); background: #f4faf6; font-size: 15px; font-weight: 600; }
+
+/* ===== v5: pine header like the booking popup, no outer ring ===== */
+.am-backdrop { background: rgba(4, 18, 13, 0.55); backdrop-filter: blur(8px) saturate(0.9); animation: v5-fade 0.25s ease; }
+.am-card { border: 0; border-radius: 24px; overflow: hidden; box-shadow: 0 50px 100px -40px rgba(0, 0, 0, 0.7); animation: v5-modal 0.42s cubic-bezier(0.16, 1, 0.3, 1); }
+.am-head {
+  position: relative; isolation: isolate; overflow: hidden; align-items: center;
+  margin: -1.8rem -1.9rem 1.2rem; padding: 1.4rem 1.9rem 1.25rem;
+  background: linear-gradient(150deg, #0e4a36 0%, #072419 70%);
+}
+.am-head::before {
+  content: ""; position: absolute; z-index: -1; inset: -40% -10% auto -10%; height: 220%; pointer-events: none;
+  background: radial-gradient(40% 60% at 15% 30%, rgba(31, 185, 138, 0.45), transparent 70%), radial-gradient(30% 50% at 90% 10%, rgba(26, 143, 134, 0.4), transparent 70%);
+  filter: blur(18px);
+}
+.am-eyebrow { color: #c9f2dd; opacity: 0.85; letter-spacing: 0.18em; font-size: 10.5px; font-weight: 700; }
+.am-title { color: #fff; font: 700 24px/1.15 "Space Grotesk", sans-serif; letter-spacing: -0.02em; }
+.am-x { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 12px; font-size: 20px; color: #eef8f2; background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.14); transition: background 0.18s, transform 0.25s cubic-bezier(0.16, 1, 0.3, 1); }
+.am-x:hover { background: rgba(255, 255, 255, 0.16); color: #fff; transform: rotate(90deg); }
+.am-card > *:not(.am-head) { animation: v5-body 0.4s cubic-bezier(0.16, 1, 0.3, 1) backwards; }
+.am-card > *:nth-child(3) { animation-delay: 0.05s; } .am-card > *:nth-child(4) { animation-delay: 0.1s; } .am-card > *:nth-child(5) { animation-delay: 0.15s; } .am-card > *:nth-child(n+6) { animation-delay: 0.2s; }
+@keyframes v5-fade { from { opacity: 0; } }
+@keyframes v5-modal { from { opacity: 0; transform: translateY(18px) scale(0.96); } }
+@keyframes v5-body { from { opacity: 0; transform: translateY(6px); } }

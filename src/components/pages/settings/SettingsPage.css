@@ -793,3 +793,36 @@
   .cps-ep { grid-template-columns: 64px 1fr; }
   .cps-ep-d { grid-column: 1 / -1; }
 }
+
+/* ===== Interface → toolbar order (per person) ===== */
+.st-dock-order { margin-top: 1.4rem; padding-top: 1.2rem; border-top: 1px solid rgba(10, 111, 77, 0.1); display: flex; flex-direction: column; gap: 12px; }
+.st-dock-list { display: flex; flex-direction: column; gap: 6px; }
+.st-dock-row {
+  display: flex; align-items: center; gap: 12px; padding: 8px 10px 8px 12px; border-radius: 12px; background: #fff; cursor: grab;
+  border: 1px solid rgba(10, 111, 77, 0.12); transition: border-color 0.15s, box-shadow 0.15s, opacity 0.15s, transform 0.15s;
+}
+.st-dock-row:hover { border-color: rgba(18, 181, 127, 0.4); }
+.st-dock-row.is-dragging { opacity: 0.45; transform: scale(0.98); }
+.st-dock-row.is-over { border-color: #12b57f; box-shadow: 0 0 0 2px rgba(18, 181, 127, 0.2); }
+.st-dock-grip { font-size: 12px; letter-spacing: -2px; color: #b3c0ba; }
+.st-dock-ico { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; background: #eef7f2; color: #0a6f4d; }
+.st-dock-ico svg { width: 17px; height: 17px; }
+.st-dock-name { flex: 1; font: 600 14px "Space Grotesk", sans-serif; color: #0b241a; }
+.st-dock-pos { min-width: 22px; text-align: center; font-size: 11.5px; font-weight: 700; color: #8a9a93; font-variant-numeric: tabular-nums; }
+.st-dock-mv { width: 28px; height: 28px; border-radius: 8px; border: 1px solid transparent; background: #f2f6f4; color: #0a6f4d; cursor: pointer; font-weight: 700; }
+.st-dock-mv:hover:not(:disabled) { background: #e3f2ea; }
+.st-dock-mv:disabled { opacity: 0.35; cursor: default; }
+.st-dock-reset { align-self: flex-start; padding: 7px 12px; border-radius: 10px; border: 1px solid rgba(10, 111, 77, 0.16); background: #fff; color: #0a6f4d; font: 600 12.5px "Inter", sans-serif; cursor: pointer; }
+.st-dock-reset:hover { background: #f3fbf7; }
+
+/* Account → sign out */
+.st-signout { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.st-signout .st-h2 { margin: 0; }
+.st-signout-sub { margin: 4px 0 0; font-size: 13px; color: #5a7d6d; }
+.st-signout-btn {
+  display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 16px; flex-shrink: 0;
+  border: 1px solid rgba(214, 69, 69, 0.3); border-radius: 12px; background: #fff; color: #c43d3d;
+  font: 650 13.5px "Inter", sans-serif; cursor: pointer; transition: background 0.18s, color 0.18s, border-color 0.18s;
+}
+.st-signout-btn svg { width: 16px; height: 16px; }
+.st-signout-btn:hover { background: #d64545; border-color: #d64545; color: #fff; }

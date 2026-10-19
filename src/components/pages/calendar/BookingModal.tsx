@@ -176,6 +176,15 @@ const closeDate = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2,
   const [summonNote, setSummonNote] = useState("");
   /** How the time is spent: on a call, on Teams, or in the room. */
   const [meetKind, setMeetKind] = useState<string>(initial.meetKind ?? "in_person");
+  /** Which step of the flow is on screen; editing opens on the review. */
+  const [wizStep, setWizStep] = useState<"work" | "when" | "client" | "tasks" | "people" | "notes">(editing ? "notes" : "work");
+  const [wizDir, setWizDir] = useState<1 | -1>(1);
+  const [confirmDel, setConfirmDel] = useState(false);
+  /** Steps already shown, so a step only ticks once you have been through it. */
+  const [seen, setSeen] = useState<Set<string>>(() => new Set(editing ? ["work", "when", "client", "tasks", "people", "notes"] : ["work"]));
+  useEffect(() => { setSeen((s) => (s.has(wizStep) ? s : new Set([...s, wizStep]))); }, [wizStep]);
+  const [clientQ, setClientQ] = useState("");
+  const [peopleOpen, setPeopleOpen] = useState(false);
   /** Who was already summoned, so reopening shows them and they can be dropped. */
   useEffect(() => {
     if (!entryId) return;
@@ -187,9 +196,6 @@ const closeDate = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2,
         setSummoned(m);
       });
   }, [entryId]);
-  /** Folded when editing, since the type is already decided; open when logging
-   *  new work, where the list is the first thing you need. */
-  const [typesOpen, setTypesOpen] = useState(!editing);
   const [mates, setMates] = useState<{ id: string; name: string; role: string }[]>([]);
   useEffect(() => {
     supabase.auth.getUser().then(({ data: u }) => {
@@ -324,19 +330,10 @@ const clientProjects = projects.filter((p) => p.clientId === clientId && p.statu
   const unitShort = unit === "hour" ? "h" : "d";
   const phases = project?.phases ?? [];
   const contacts = project?.contacts ?? [];
-  const showPanel = isClientWork && !!project;
   const projectLabel = (p: Project) => {
     const t = projectTypes.find((x) => x.id === p.projectTypeId)?.name ?? "Project";
     return p.kickoffDate ? `${t} · ${p.kickoffDate}` : t;
   };
-  const showThird = showPanel && taskIds.length > 0;
-  // Colleagues can be summoned to anything that takes up time, not just client
-  // work, so internal bookings and meetings open the same panel. Client work
-  // still waits until tasks are picked, since the panel summarises them.
-  const showAside = showThird || (!!selectedType && !isClientWork);
-  // Notes should be available for any work, including non-client (still logged, just not billed).
-  const showNotes = !!selectedType && (showThird || !isClientWork);
-
   // Selected tasks resolved back to their phase, for the summary panel
   const picked = phases.flatMap((p) =>
     (p.tasks ?? [])
@@ -454,6 +451,7 @@ startMin, endMin, type, billable, clientId, projectId,
       notes,
       line: line || "consultor",
       roleId,
+      meetKind,
     });
   };
 
@@ -474,22 +472,19 @@ startMin, endMin, type, billable, clientId, projectId,
     </div>
   );
 
- // Notes no longer live in a fourth panel, so the shell only shifts for the side one.
- // The summary panel counts too: with it open the set is 1572 wide, so the
- // shift has to match or it hangs off the right of the screen.
- // Three panels for client work; card + summon panel only for internal work,
- // which sits right beside the card instead of leaving a gap where the
- // client/phase panel would have been.
- const shellClass = `bm-shell ${
-   showThird ? "has-third" : showAside ? "has-third-only" : showPanel ? "has-side" : ""
- }`;
-
 if (!pickedLine) {
     return (
       <div className="bm-backdrop" onMouseDown={onClose}>
-        <div className="bm-pick" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-          <span className="bm-eyebrow">Log work</span>
-          <h2 className="bm-pick-title">What kind of day is this?</h2>
+        <div className="bm-pick bm-pick5" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+          <header className="bm-pick-head">
+            <div>
+              <span className="bm-eyebrow">Log work · {DOW_LONG[day.getDay()]}, {MONTHS_LONG[day.getMonth()]} {day.getDate()}</span>
+              <h2 className="bm-pick-title">What kind of job is this?</h2>
+              <p className="bm-pick-sub">Pick the line this time is billed on.</p>
+            </div>
+            <button className="bm-x" onClick={onClose} aria-label="Close">×</button>
+          </header>
+          <div className="bm-pick-body">
           <div className="bm-pick-opts">
             {roles.length === 0 && (
               <p className="bm-pick-none">
@@ -498,25 +493,41 @@ if (!pickedLine) {
               </p>
             )}
             {roles.map((r, i) => (
-              <button key={r.id} className="bm-pick-opt" style={{ animationDelay: `${i * 45}ms` }}
+              <button key={r.id} className={`bm-pick-opt ${r.is_supervision ? "is-sup" : "is-con"}`} style={{ animationDelay: `${60 + i * 50}ms` }}
                 onClick={() => pickRole(r)}>
-                <span className="bm-pick-ico">{r.is_supervision ? "🧭" : "👤"}</span>
-                <span className="bm-pick-name">{r.name}</span>
-                <span className="bm-pick-note">
-                  {r.is_supervision ? "Billed at the supervision rate." : "Counts towards your billable target."}
+                <span className="bm-pick-ico">
+                  {r.is_supervision
+                    ? <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M15.5 8.5l-2 5-5 2 2-5z" /></svg>
+                    : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></svg>}
                 </span>
+                <span className="bm-pick-txt">
+                  <span className="bm-pick-name">{r.name}</span>
+                  <span className="bm-pick-note">{r.is_supervision ? "Billed at the supervision rate." : "Counts towards your billable target."}</span>
+                </span>
+                <svg className="bm-pick-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
               </button>
             ))}
-            <button className="bm-pick-opt" style={{ animationDelay: `${roles.length * 45}ms` }}
+            <button className="bm-pick-opt is-link" style={{ animationDelay: `${60 + roles.length * 50}ms` }}
               onClick={() => { setLine("connector"); setRoleId(""); setPickedLine(true); }}>
-              <span className="bm-pick-ico">🔗</span>
-              <span className="bm-pick-name">Connector</span>
-              <span className="bm-pick-note">Billed to the client, not to your target.</span>
+              <span className="bm-pick-ico">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" /><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" /></svg>
+              </span>
+              <span className="bm-pick-txt">
+                <span className="bm-pick-name">Connector</span>
+                <span className="bm-pick-note">Billed to the client, not to your target.</span>
+              </span>
+              <svg className="bm-pick-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
             </button>
-            <button className="bm-pick-opt" onClick={() => setClosing(true)}>
-              <span className="bm-pick-ico">🏁</span>
-              <span className="bm-pick-name">Finalize a project</span>
-              <span className="bm-pick-note">Set its end date and close it.</span>
+            <button className={`bm-pick-opt is-fin ${closing ? "is-on" : ""}`} style={{ animationDelay: `${60 + (roles.length + 1) * 50}ms` }}
+              onClick={() => setClosing((v) => !v)} aria-expanded={closing}>
+              <span className="bm-pick-ico">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 21V4h11l-1.5 4H20l-1.5 4H15v9" /></svg>
+              </span>
+              <span className="bm-pick-txt">
+                <span className="bm-pick-name">Finalize a project</span>
+                <span className="bm-pick-note">Set its end date and close it.</span>
+              </span>
+              <svg className="bm-pick-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
             </button>
           </div>
 
@@ -557,312 +568,259 @@ if (!pickedLine) {
             </div>
           )}
 
-          <button className="bm-cancel bm-pick-cancel" onClick={onClose}>Cancel</button>
+          </div>
+          <footer className="bm-pick-foot">
+            <button className="bm-cancel bm-pick-cancel" onClick={onClose}>Cancel</button>
+          </footer>
         </div>
       </div>
     );
   }
 
-  return (
-    <div className="bm-backdrop" onMouseDown={onClose}>
-      <div className={shellClass} onMouseDown={(e) => e.stopPropagation()}>
-        <div className="bm-card" role="dialog" aria-modal="true">
-          <div className="bm-head">
-            <div>
-           <span className="bm-eyebrow">
-                {editing ? "Edit entry" : "Log work"} · {line === "connector"
-                  ? "Connector"
-                  : roles.find((r) => r.id === roleId)?.name ?? (line === "supervision" ? "Project management" : "Consultor")}
-              </span>
-              <h2 className="bm-date">
-                {DOW_LONG[day.getDay()]}, {MONTHS_LONG[day.getMonth()]} {day.getDate()}
-              </h2>
-            </div>
-            <button className="bm-x" onClick={onClose} aria-label="Close">×</button>
-          </div>
+  // ===== Step-by-step flow =====
+  type StepId = "work" | "when" | "client" | "tasks" | "people" | "notes";
+  const steps: { id: StepId; label: string }[] = [
+    { id: "work", label: "Type of work" },
+    { id: "when", label: "When & how" },
+    ...(isClientWork ? [{ id: "client" as StepId, label: "Client & project" }, { id: "tasks" as StepId, label: "Tasks & time" }] : []),
+    { id: "people", label: "People" },
+    { id: "notes", label: editing ? "Notes & review" : "Review" },
+  ];
+  const stepIdx = Math.max(0, steps.findIndex((s) => s.id === wizStep));
+  const cur = steps[stepIdx] ?? steps[0];
+  const go = (id: StepId) => {
+    const to = steps.findIndex((s) => s.id === id);
+    setWizDir(to >= stepIdx ? 1 : -1);
+    setWizStep(id);
+    setConfirmDel(false);
+  };
+  const next = () => { const n = steps[stepIdx + 1]; if (n) go(n.id); };
+  const back = () => { const p = steps[stepIdx - 1]; if (p) go(p.id); };
+  const timeOk = endMin > startMin && startMin >= DAY_MIN && endMin <= DAY_MAX;
+  const stepDone = (id: StepId) => seen.has(id) && id !== wizStep && stepReady(id);
+  const stepReady = (id: StepId) =>
+    id === "work" ? !!type
+    : id === "when" ? timeOk
+    : id === "client" ? !!clientId && !!projectId
+    : id === "tasks" ? true
+    : id === "people" ? true
+    : !!notes.trim();
+  // You can jump back to anything, and forward only past steps that are ready.
+  const canReach = (i: number) => editing || steps.slice(0, i).every((s) => stepReady(s.id));
+  const blocker =
+    cur.id === "work" ? (!type ? "Pick a type of work" : "")
+    : cur.id === "when" ? (!timeOk ? (endMin <= startMin ? "Finish must be after the start" : "Between 5 AM and 9 PM") : "")
+    : cur.id === "client" ? (!clientId ? "Pick a client" : !projectId ? "Pick a project" : "")
+    : "";
+  const fmt = (m: number) => `${hourLabel(Math.floor(m / 60)).replace(" ", ":" + String(m % 60).padStart(2, "0") + " ")}`;
+  const howOf = MEET_KINDS.find((k) => k.id === meetKind);
+  const clientList = clients.filter((c) => !clientQ.trim() || c.name.toLowerCase().includes(clientQ.trim().toLowerCase()));
+  const later = (fn: () => void) => window.setTimeout(fn, 220);
+  const budget = (() => {
+    if (!project) return null;
+    const ln = line || "consultor";
+    const signed = signedDays[`${project.id}|${ln}`] ?? 0;
+    const u = used[`${project.id}|${ln}`] ?? { done: 0, booked: 0 };
+    const left = +(signed - u.done - u.booked - (editing ? 0 : billable)).toFixed(2);
+    const pct = (n: number) => (signed > 0 ? Math.min(100, (n / signed) * 100) : 0);
+    return { signed, u, left, pct };
+  })();
+  const summonedList = mates.filter((m) => m.id in summoned);
+  const contactList = contacts.filter((c) => attendeeIds.includes(c.id));
+  const everyone = [
+    ...summonedList.map((m) => ({ key: `m${m.id}`, name: m.name, kind: "is-mate", note: `${(summoned[m.id] ?? 0)}${unitShort}` })),
+    ...contactList.map((c) => ({ key: `c${c.id}`, name: c.name || c.email || "Contact", kind: "is-client", note: "" })),
+  ];
+  const roleName = line === "connector" ? "Connector" : roles.find((r) => r.id === roleId)?.name ?? (line === "supervision" ? "Project management" : "Consultor");
 
-          {/* One control, not four boxes: the range reads left to right and the
-              duration is part of the same block. */}
-          <div className="bm-range">
-            <div className="bm-range-side">
-              <span className="bm-range-lbl">Start</span>
-              <TimeField hour={startH} minute={startM} onHour={setStartH} onMinute={setStartM} />
-            </div>
+  const preview: Record<StepId, string> = {
+    work: selectedType?.name ?? "",
+    when: timeOk ? `${fmt(startMin)} – ${fmt(endMin)} · ${durLabel}${howOf ? ` · ${howOf.label}` : ""}` : "",
+    client: client ? [client.name, project ? projectLabel(project) : ""].filter(Boolean).join(" · ") : "",
+    tasks: taskIds.length || billable ? [taskIds.length ? `${taskIds.length} task${taskIds.length > 1 ? "s" : ""}` : "", `${billable.toFixed(decimals)}${unitShort}`].filter(Boolean).join(" · ") : "",
+    people: [summonedList.length ? `${summonedList.length} colleague${summonedList.length > 1 ? "s" : ""}` : "", contactList.length ? `${contactList.length} from ${client?.name ?? "client"}` : ""].filter(Boolean).join(" · "),
+    notes: notes.trim() ? `${notes.trim().length} chars of notes` : "",
+  };
 
-            <span className="bm-range-sep" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h13M12 5l7 7-7 7" /></svg>
-            </span>
-
-            <div className="bm-range-side">
-              <span className="bm-range-lbl">Finish</span>
-              <TimeField hour={endH} minute={endM} onHour={setEndH} onMinute={setEndM} />
-            </div>
-
-            <div className="bm-range-dur">
-              <span>Duration</span>
-              <b>{durLabel}</b>
-            </div>
-          </div>
-
-
-          <div className="bm-field bm-block">
-            <label>Type of work</label>
+  const panel = (() => {
+    switch (cur.id) {
+      case "work":
+        return (
+          <>
+            <p className="bm6-lead">What are you spending this time on?</p>
             {types.length === 0 ? (
               <p className="bm-empty">No types of work yet — add them in Catalog, under Blueprints.</p>
             ) : (
-              /* Once picked, the list folds down to the chosen one. Clicking it
-                 again opens the list back up, so the card never needs to scroll. */
-              <div className={`bm-types ${type && !typesOpen ? "is-folded" : ""}`}>
-                {(type && !typesOpen ? types.filter((x) => x.id === type) : types).map((t) => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    className={`bm-type ${type === t.id ? "is-sel" : ""}`}
-                    style={type === t.id ? { borderColor: t.color, background: `${t.color}1a` } : undefined}
-                    onClick={() => {
-                      if (type === t.id && !typesOpen) { setTypesOpen(true); return; }
-                      pickType(t.id);
-                      setTypesOpen(false);
-                    }}
-                  >
-                    <span className="bm-dot" style={{ background: t.color }} />
-                    <span className="bm-type-name">{t.name || "Untitled type"}</span>
-                    {!t.clientRelated && <span className="bm-type-tag">Non-client</span>}
-                    {type === t.id && (
-                      <svg className="bm-type-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d={typesOpen ? "M18 15l-6-6-6 6" : "M6 9l6 6 6-6"} />
-                      </svg>
-                    )}
+              <div className="bm6-types">
+                {types.map((t, i) => (
+                  <button key={t.id} type="button" style={{ ["--tc" as string]: t.color, ["--i" as string]: i }}
+                    className={`bm6-type ${type === t.id ? "is-on" : ""}`}
+                    onClick={() => { pickType(t.id); later(() => { setWizDir(1); setWizStep("when"); }); }}>
+                    <span className="bm6-type-dot" />
+                    <span className="bm6-type-txt">
+                      <b>{t.name || "Untitled type"}</b>
+                      <small>{t.clientRelated ? "Client work · billable" : "Internal · not billed"}</small>
+                    </span>
+                    <svg className="bm6-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
                   </button>
                 ))}
               </div>
             )}
-          </div>
-
-          <div className="bm-field bm-block">
-            <label>How</label>
-            <div className="bm-hows">
-              {MEET_KINDS.map((k) => (
-                <button key={k.id} type="button"
-                  className={`bm-how ${meetKind === k.id ? "is-on" : ""}`}
-                  onClick={() => setMeetKind(k.id)}>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={k.icon} /></svg>
-                  {k.label}
+          </>
+        );
+      case "when":
+        return (
+          <>
+            <p className="bm6-lead">When does it happen, and how?</p>
+            <div className="bm-range">
+              <div className="bm-range-side">
+                <span className="bm-range-lbl">Start</span>
+                <TimeField hour={startH} minute={startM} onHour={setStartH} onMinute={setStartM} />
+              </div>
+              <span className="bm-range-sep" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h13M12 5l7 7-7 7" /></svg>
+              </span>
+              <div className="bm-range-side">
+                <span className="bm-range-lbl">Finish</span>
+                <TimeField hour={endH} minute={endM} onHour={setEndH} onMinute={setEndM} />
+              </div>
+              <div className="bm-range-dur"><span>Duration</span><b key={durLabel} className="bm6-pop">{durLabel}</b></div>
+            </div>
+            <label className="bm6-label">How</label>
+            <div className="bm6-hows">
+              {MEET_KINDS.map((k, i) => (
+                <button key={k.id} type="button" style={{ ["--i" as string]: i }}
+                  className={`bm6-how ${meetKind === k.id ? "is-on" : ""}`}
+                  onClick={() => { setMeetKind(k.id); if (timeOk) later(next); }}>
+                  <span className="bm6-how-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={k.icon} /></svg></span>
+                  <b>{k.label}</b>
+                  <small>{k.id === "teams" ? "Outlook adds a Teams link" : k.id === "phone" ? "A call, no room" : "At the client or the office"}</small>
                 </button>
               ))}
             </div>
-          </div>
-
-          {isClientWork && (
-            <div className="bm-field bm-block">
-              <label>Client</label>
-              <Select
-                value={clientId}
-                onChange={pickClient}
-                options={clients.map((c) => ({ value: c.id, label: c.name }))}
-                placeholder="Select client"
-              />
-            </div>
-          )}
-
-          {isClientWork && !!clientId && (
-            <div className="bm-field bm-block">
-              <label>Project</label>
-              <Select
-                value={projectId}
-                onChange={pickProject}
-                options={clientProjects.map((p) => ({ value: p.id, label: projectLabel(p) }))}
-                placeholder={clientProjects.length ? "Select project" : "No projects for this client"}
-              />
-            </div>
-          )}
-
-          {error && <p className="bm-error">{error}</p>}
-
-            {/* Inside the card, above the buttons: as a sibling of the card it
-                rendered outside the white panel entirely. */}
-          {showNotes && (
-            <div className="bm-notesbar">
-              <label className="bm-notesbar-label" htmlFor="bm-notes-field">
-                {isClientWork ? "Session notes" : "Notes"}
-                <span>{notes.trim().length > 0 ? `${notes.trim().length} chars` : "optional"}</span>
-              </label>
-              <textarea
-                id="bm-notes-field"
-                className="bm-notes"
-                rows={3}
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder={isClientWork
-                  ? "What was covered, decisions taken, blockers, follow-ups…"
-                  : "What this time was spent on — keep it logged even if it isn't billed."}
-              />
-            </div>
-          )}
-          <div className="bm-actions">
-            {editing && onDelete ? (
-              <button className="bm-delete" onClick={onDelete}>Delete</button>
-            ) : (<span />)}
-            <div className="bm-actions-right">
-              <button className="bm-cancel" onClick={onClose}>Cancel</button>
-              <button className="bm-save" onClick={save} disabled={!!error}>
-                {editing ? "Save changes" : "Add entry"}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Panel 2 — phases & tasks */}
-        {showPanel && (
-<aside className="bm-side" key={projectId}>
-            <div className="bm-side-head">
-              <span className="bm-eyebrow">Working on</span>
-              <h3 className="bm-side-title">{client?.name}</h3>
-<p className="bm-side-sub">{project ? projectLabel(project) : ""}</p>
-              {project && (() => {
-const ln = line || "consultor";
-                const signed = signedDays[`${project.id}|${ln}`] ?? 0;
-                const u = used[`${project.id}|${ln}`] ?? { done: 0, booked: 0 };
-                const left = +(signed - u.done - u.booked).toFixed(2);
-                const pct = (n: number) => (signed > 0 ? Math.min(100, (n / signed) * 100) : 0);
-                return (
-                  <div className="bm-budget">
-                    <div className="bm-budget-track">
-                      <div className="bm-budget-fill" style={{ width: `${pct(u.done + u.booked)}%` }} />
-                      <div className="bm-budget-fill is-done" style={{ width: `${pct(u.done)}%` }} />
-                    </div>
-                    <div className="bm-budget-row">
-                      <span>{u.done.toFixed(2)} used · {u.booked.toFixed(2)} booked · {signed} signed</span>
-                      <strong className={left < 0 ? "is-over" : ""}>
-                        {left < 0
-                          ? `${Math.abs(left).toFixed(decimals)}${unitShort} over`
-                          : `${left.toFixed(decimals)}${unitShort} left`}
-                      </strong>
-                    </div>
-                  </div>
-                );
-              })()}
-            </div>
-
-            <div className="bm-side-body">
-              <label className="bm-side-label">Phase &amp; tasks</label>
-              {phases.length === 0 ? (
-                <p className="bm-empty">This client has no phases yet.</p>
-              ) : (
-                <div className="bm-phases">
-                  {phases.map((p, i) => {
-                    const open = openPhaseId === p.id;
-                    const count = (p.tasks ?? []).filter((t) => taskIds.includes(t.id)).length;
+          </>
+        );
+      case "client":
+        return (
+          <>
+            {!clientId ? (
+              <>
+                <p className="bm6-lead">Which client is it for?</p>
+                <label className="bm6-search">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>
+                  <input autoFocus value={clientQ} onChange={(e) => setClientQ(e.target.value)} placeholder="Search a client…" />
+                </label>
+                <div className="bm6-list">
+                  {clientList.length === 0 && <p className="bm-empty">No client matches.</p>}
+                  {clientList.map((c, i) => {
+                    const n = openProjectsOf(c.id).length;
                     return (
-                      <div className={`bm-phase ${open ? "is-open" : ""}`} key={p.id}>
-                        <button
-                          type="button"
-                          className="bm-phase-head"
-                          onClick={() => setOpenPhaseId(open ? "" : p.id)}
-                        >
-                          <span className="bm-phase-num">{i + 1}</span>
-                          <span className="bm-phase-name">{p.name || "Untitled phase"}</span>
-                          {count > 0 && <span className="bm-phase-count">{count}</span>}
-                          <span className="bm-phase-days">{p.days}{unitShort}</span>
-                        </button>
-                        {open && (
-                          <div className="bm-tasks">
-                            {(p.tasks ?? []).length === 0 ? (
-                              <p className="bm-empty bm-empty-sm">No tasks in this phase.</p>
-                            ) : (
-                              (p.tasks ?? []).map((t) => (
-                                <button
-                                  key={t.id}
-                                  type="button"
-                                  className={`bm-task ${taskIds.includes(t.id) ? "is-sel" : ""}`}
-                                  onClick={() => toggleTask(t.id)}
-                                >
-                                  <span className="bm-task-dot" />
-                                  {t.name || "Untitled task"}
-                                </button>
-                              ))
-                            )}
-                          </div>
-                        )}
-                      </div>
+                      <button key={c.id} type="button" className="bm6-row" style={{ ["--i" as string]: Math.min(i, 12) }}
+                        onClick={() => {
+                          pickClient(c.id);
+                          const ps = openProjectsOf(c.id);
+                          if (ps.length === 1) { pickProject(ps[0].id); later(() => { setWizDir(1); setWizStep("tasks"); }); }
+                        }}>
+                        <span className="bm6-av">{c.name.slice(0, 2).toUpperCase()}</span>
+                        <span className="bm6-row-txt"><b>{c.name}</b><small>{n ? `${n} open project${n > 1 ? "s" : ""}` : "No open projects"}</small></span>
+                        <svg className="bm6-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
+                      </button>
                     );
                   })}
                 </div>
-              )}
-
-              <div className="bm-side-sep" />
-              {stepper}
-            </div>
-          </aside>
-        )}
-
-        {/* Panel 3 — summary + attendees */}
-        {showAside && (
-          <aside className="bm-third">
-            <div className="bm-side-head">
-              <span className="bm-eyebrow">{showThird ? "Summary" : "Who is coming"}</span>
-              <h3 className="bm-side-title">
-                {showThird
-                  ? `${picked.length} task${picked.length > 1 ? "s" : ""} selected`
-                  : selectedType?.name ?? "Internal work"}
-              </h3>
-            </div>
-
-            <div className="bm-side-body">
-              {showThird && (
-                <>
-                  <label className="bm-side-label">Selected work</label>
-                  <div className="bm-picked-list">
-                    {picked.map((p) => (
-                      <div className="bm-picked-row" key={p.taskId}>
-                        <span className="bm-picked-text">
-                          <span className="bm-picked-task">{p.taskName}</span>
-                          <span className="bm-picked-phase">{p.phaseName}</span>
+              </>
+            ) : (
+              <>
+                <button type="button" className="bm6-chosen" onClick={() => { pickClient(""); setClientQ(""); }}>
+                  <span className="bm6-av">{(client?.name ?? "?").slice(0, 2).toUpperCase()}</span>
+                  <span className="bm6-row-txt"><small>Client</small><b>{client?.name}</b></span>
+                  <em>Change</em>
+                </button>
+                <p className="bm6-lead">Which project?</p>
+                <div className="bm6-list">
+                  {clientProjects.length === 0 && <p className="bm-empty">This client has no open projects.</p>}
+                  {clientProjects.map((p, i) => {
+                    const ln = line || "consultor";
+                    const signed = signedDays[`${p.id}|${ln}`] ?? 0;
+                    const u = used[`${p.id}|${ln}`] ?? { done: 0, booked: 0 };
+                    const pct = signed > 0 ? Math.min(100, ((u.done + u.booked) / signed) * 100) : 0;
+                    return (
+                      <button key={p.id} type="button" style={{ ["--i" as string]: i }}
+                        className={`bm6-row bm6-proj ${projectId === p.id ? "is-on" : ""}`}
+                        onClick={() => { pickProject(p.id); later(() => { setWizDir(1); setWizStep("tasks"); }); }}>
+                        <span className="bm6-row-txt">
+                          <b>{projectLabel(p)}</b>
+                          <small>{signed ? `${(u.done + u.booked).toFixed(2)} of ${signed}${unitShort} used or booked` : "No signed days on this line"}</small>
+                          <span className="bm6-mini"><i style={{ width: `${pct}%` }} /></span>
                         </span>
-                        <button
-                          type="button"
-                          className="bm-picked-x"
-                          onClick={() => toggleTask(p.taskId)}
-                          aria-label="Remove task"
-                        >×</button>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="bm-side-sep" />
-                </>
-              )}
-
-              {/* Summon colleagues: they get an invitation to accept, and the
-                  organiser decides what each of them bills for being there. */}
-              <div className="bm-summon">
-                <label className="bm-side-label">
-                  Summon colleagues
-                  {Object.keys(summoned).length > 0 && <i>{Object.keys(summoned).length}</i>}
-                </label>
-
-                <div className="bm-summon-list">
+                        <svg className="bm6-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </>
+        );
+      case "tasks":
+        return (
+          <>
+            <p className="bm6-lead">What did you work on, and what goes to the client?</p>
+            {phases.length === 0 ? (
+              <p className="bm-empty">This project has no phases yet.</p>
+            ) : (
+              <div className="bm-phases bm6-phases">
+                {phases.map((p, i) => {
+                  const open = openPhaseId === p.id;
+                  const count = (p.tasks ?? []).filter((t) => taskIds.includes(t.id)).length;
+                  return (
+                    <div className={`bm-phase ${open ? "is-open" : ""}`} key={p.id} style={{ ["--i" as string]: i }}>
+                      <button type="button" className="bm-phase-head" onClick={() => setOpenPhaseId(open ? "" : p.id)}>
+                        <span className="bm-phase-num">{i + 1}</span>
+                        <span className="bm-phase-name">{p.name || "Untitled phase"}</span>
+                        {count > 0 && <span className="bm-phase-count">{count}</span>}
+                        <span className="bm-phase-days">{p.days}{unitShort}</span>
+                      </button>
+                      {open && (
+                        <div className="bm-tasks">
+                          {(p.tasks ?? []).length === 0 ? (
+                            <p className="bm-empty bm-empty-sm">No tasks in this phase.</p>
+                          ) : (p.tasks ?? []).map((t) => (
+                            <button key={t.id} type="button" className={`bm-task ${taskIds.includes(t.id) ? "is-sel" : ""}`} onClick={() => toggleTask(t.id)}>
+                              <span className="bm-task-dot" />{t.name || "Untitled task"}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        );
+      case "people":
+        return (
+          <>
+            <p className="bm6-lead">Who else is in it? They get an invitation in the app and in Outlook.</p>
+            <div className={`bm6-people ${isClientWork && project ? "has-two" : ""}`}>
+              <div className="bm6-col">
+                <label className="bm6-label">Colleagues {summonedList.length > 0 && <i>{summonedList.length}</i>}</label>
+                <div className="bm6-list bm6-list-sm">
                   {mates.map((m) => {
                     const on = m.id in summoned;
                     return (
                       <div className={`bm-summon-row ${on ? "is-on" : ""}`} key={m.id}>
                         <button type="button" className="bm-summon-pick" onClick={() => toggleMate(m.id)}>
                           <span className="bm-person-av">{(m.name || "?").charAt(0).toUpperCase()}</span>
-                          <span className="bm-person-text">
-                            <span className="bm-person-name">{m.name}</span>
-                            <span className="bm-person-pos">{m.role}</span>
-                          </span>
-                          <span className={`bm-free ${busyMates.has(m.id) ? "is-busy" : ""}`}>
-                            {busyMates.has(m.id) ? "Busy" : "Free"}
-                          </span>
+                          <span className="bm-person-text"><span className="bm-person-name">{m.name}</span><span className="bm-person-pos">{m.role}</span></span>
+                          <span className={`bm-free ${busyMates.has(m.id) ? "is-busy" : ""}`}>{busyMates.has(m.id) ? "Busy" : "Free"}</span>
                           {on && <span className="bm-person-check">✓</span>}
                         </button>
-
                         {on && (
                           <div className="bm-summon-bill">
                             <span>bills</span>
-                            <input type="number" min="0" step={step} className="cat-nospin"
-                              value={summoned[m.id]}
+                            <input type="number" min="0" step={step} className="cat-nospin" value={summoned[m.id]}
                               onFocus={(e) => e.target.select()}
                               onChange={(e) => setSummoned((s) => ({ ...s, [m.id]: Number(e.target.value) || 0 }))} />
                             <em>{unitShort}</em>
@@ -872,48 +830,177 @@ const ln = line || "consultor";
                     );
                   })}
                 </div>
-
-                {Object.keys(summoned).length > 0 && (
-                  <input className="bm-summon-note" value={summonNote}
-                    onChange={(e) => setSummonNote(e.target.value)}
-                    placeholder="Add a line for them (optional)" />
+                {summonedList.length > 0 && (
+                  <input className="bm-summon-note" value={summonNote} onChange={(e) => setSummonNote(e.target.value)} placeholder="Add a line for them (optional)" />
                 )}
               </div>
-
-              {showThird && (
-                <>
-                  <div className="bm-side-sep" />
-
-                  <div className="bm-people">
-                    <label className="bm-side-label">People from {client?.name}</label>
-                    {contacts.length === 0 ? (
-                      <p className="bm-empty bm-empty-sm">No contacts saved for this client.</p>
-                    ) : (
-                      <div className="bm-people-list">
-                        {contacts.map((c) => (
-                          <button
-                            key={c.id}
-                            type="button"
-                            className={`bm-person ${attendeeIds.includes(c.id) ? "is-sel" : ""}`}
-                            onClick={() => toggleAttendee(c.id)}
-                          >
-                            <span className="bm-person-av">{(c.name || "?").charAt(0).toUpperCase()}</span>
-                            <span className="bm-person-text">
-                              <span className="bm-person-name">{c.name || "Unnamed"}</span>
-                              {c.position && <span className="bm-person-pos">{c.position}</span>}
-                            </span>
-                            {attendeeIds.includes(c.id) && <span className="bm-person-check">✓</span>}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </>
+              {isClientWork && project && (
+                <div className="bm6-col">
+                  <label className="bm6-label">From {client?.name} {contactList.length > 0 && <i>{contactList.length}</i>}</label>
+                  {contacts.length === 0 ? (
+                    <p className="bm-empty bm-empty-sm">No contacts saved for this client.</p>
+                  ) : (
+                    <div className="bm6-list bm6-list-sm">
+                      {contacts.map((c) => (
+                        <button key={c.id} type="button" className={`bm-person ${attendeeIds.includes(c.id) ? "is-sel" : ""}`} onClick={() => toggleAttendee(c.id)}>
+                          <span className="bm-person-av">{(c.name || "?").charAt(0).toUpperCase()}</span>
+                          <span className="bm-person-text">
+                            <span className="bm-person-name">{c.name || "Unnamed"}</span>
+                            <span className="bm-person-pos">{[c.position, c.email].filter(Boolean).join(" · ") || "No email — not invited in Outlook"}</span>
+                          </span>
+                          {attendeeIds.includes(c.id) && <span className="bm-person-check">✓</span>}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               )}
             </div>
-          </aside>
-        )}
+          </>
+        );
+      default:
+        return (
+          <>
+            <label className="bm6-label" htmlFor="bm-notes-field">{isClientWork ? "Session notes" : "Notes"} <small>{notes.trim() ? `${notes.trim().length} chars` : "optional"}</small></label>
+            <textarea id="bm-notes-field" className="bm-notes bm6-notes" rows={4} value={notes} onChange={(e) => setNotes(e.target.value)}
+              placeholder={isClientWork ? "What was covered, decisions taken, blockers, follow-ups…" : "What this time was spent on — keep it logged even if it isn't billed."} />
+            <div className="bm6-review">
+              {steps.filter((s) => s.id !== "notes").map((s, i) => s.id === "people" ? (
+                <div key={s.id} className={`bm6-rv bm6-rv-people ${everyone.length ? "" : "is-empty"} ${peopleOpen ? "is-open" : ""}`} style={{ ["--i" as string]: i }}>
+                  <small>{s.label}</small>
+                  {everyone.length === 0 ? <b>—</b> : (
+                    <div className="bm6-who">
+                      {(peopleOpen ? everyone : everyone.slice(0, 3)).map((p) => (
+                        <span key={p.key} className={`bm6-who-chip ${p.kind}`}>
+                          <i>{(p.name || "?").charAt(0).toUpperCase()}</i>{p.name}
+                          {p.note && <u>{p.note}</u>}
+                        </span>
+                      ))}
+                      {!peopleOpen && everyone.length > 3 && (
+                        <span className="bm6-more" tabIndex={0} role="button" onClick={() => setPeopleOpen(true)}
+                          onKeyDown={(e) => { if (e.key === "Enter") setPeopleOpen(true); }}>
+                          +{everyone.length - 3}
+                          <span className="bm6-more-pop" role="tooltip">
+                            {everyone.slice(3).map((p) => <span key={p.key}><i>{(p.name || "?").charAt(0).toUpperCase()}</i>{p.name}</span>)}
+                          </span>
+                        </span>
+                      )}
+                      {peopleOpen && everyone.length > 3 && <button type="button" className="bm6-less" onClick={() => setPeopleOpen(false)}>Show less</button>}
+                    </div>
+                  )}
+                  <button type="button" className="bm6-rv-edit" onClick={() => go("people")}>Edit</button>
+                </div>
+              ) : (
+                <button type="button" key={s.id} className={`bm6-rv ${preview[s.id] ? "" : "is-empty"}`} style={{ ["--i" as string]: i }} onClick={() => go(s.id)}>
+                  <small>{s.label}</small>
+                  <b>{preview[s.id] || "—"}</b>
+                  <em>Edit</em>
+                </button>
+              ))}
+            </div>
+            {picked.length > 0 && (
+              <div className="bm6-chips">{picked.map((p) => <span key={p.taskId}>{p.taskName}<i>{p.phaseName}</i></span>)}</div>
+            )}
+          </>
+        );
+    }
+  })();
 
+  return (
+    <div className="bm-backdrop" onMouseDown={onClose}>
+      <div className="bm6" role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
+        {/* Left: the steps, each with what you picked, and a live summary */}
+        <aside className="bm6-rail">
+          <div className="bm6-rail-head">
+            <span className="bm-eyebrow">{editing ? "Edit entry" : "Log work"} · {roleName}</span>
+            <h2>{DOW_LONG[day.getDay()]}, {MONTHS_LONG[day.getMonth()]} {day.getDate()}</h2>
+            {!editing && (
+              <button type="button" className="bm6-line" onClick={() => setPickedLine(false)}>Change job type</button>
+            )}
+          </div>
+          <ol className="bm6-steps">
+            {steps.map((s, i) => {
+              const done = stepDone(s.id);
+              const on = s.id === cur.id;
+              const reach = canReach(i);
+              return (
+                <li key={s.id} className={`bm6-step ${on ? "is-on" : ""} ${done ? "is-done" : ""} ${reach ? "" : "is-locked"}`} style={{ ["--i" as string]: i }}>
+                  <button type="button" disabled={!reach} onClick={() => go(s.id)}>
+                    <span className="bm6-step-n">{done && !on ? <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg> : i + 1}</span>
+                    <span className="bm6-step-txt">
+                      <b>{s.label}</b>
+                      {preview[s.id] && <small key={preview[s.id]}>{preview[s.id]}</small>}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ol>
+          <div className="bm6-sum">
+            <div className="bm6-sum-row">
+              <span>Billable</span>
+              <b key={billable}>{isClientWork ? `${billable.toFixed(decimals)} ${unitLabel}` : "Not billed"}</b>
+            </div>
+            {budget && budget.signed > 0 && (
+              <div className="bm6-budget">
+                <div className="bm6-budget-track">
+                  <i className="is-booked" style={{ width: `${budget.pct(budget.u.done + budget.u.booked + (editing ? 0 : billable))}%` }} />
+                  <i className="is-done" style={{ width: `${budget.pct(budget.u.done)}%` }} />
+                </div>
+                <span className={budget.left < 0 ? "is-over" : ""}>
+                  {budget.left < 0 ? `${Math.abs(budget.left).toFixed(decimals)}${unitShort} over the signed ${budget.signed}${unitShort}` : `${budget.left.toFixed(decimals)}${unitShort} left of ${budget.signed}${unitShort}`}
+                </span>
+              </div>
+            )}
+            {(summonedList.length > 0 || contactList.length > 0) && (
+              <div className="bm6-faces">
+                {[...summonedList.map((m) => m.name), ...contactList.map((c) => c.name)].slice(0, 6).map((n, i) => (
+                  <i key={`${n}${i}`} title={n} style={{ ["--i" as string]: i }}>{(n || "?").charAt(0).toUpperCase()}</i>
+                ))}
+              </div>
+            )}
+          </div>
+        </aside>
+
+        {/* Right: the step you are on */}
+        <section className="bm6-main">
+          <header className="bm6-head">
+            <div>
+              <small>Step {stepIdx + 1} of {steps.length}</small>
+              <h3>{cur.label}</h3>
+            </div>
+            <div className="bm6-prog"><i style={{ width: `${((stepIdx + 1) / steps.length) * 100}%` }} /></div>
+            <button className="bm-x bm6-x" onClick={onClose} aria-label="Close">×</button>
+          </header>
+          <div key={cur.id} className={`bm6-body ${wizDir === 1 ? "is-fwd" : "is-back"}`}>{panel}</div>
+          {/* Always in view on the tasks step, however many phases there are. */}
+          {cur.id === "tasks" && <div className="bm6-pinned">{stepper}</div>}
+          <footer className="bm6-foot">
+            {editing && onDelete ? (
+              confirmDel ? (
+                <div className="bm6-confirm">
+                  <span>Delete this entry{entryId ? " (and its Outlook event)" : ""}?</span>
+                  <button type="button" className="bm6-keep" onClick={() => setConfirmDel(false)}>Keep it</button>
+                  <button type="button" className="bm6-kill" onClick={onDelete}>Yes, delete</button>
+                </div>
+              ) : (
+                <button className="bm-delete" onClick={() => setConfirmDel(true)}>Delete</button>
+              )
+            ) : <span />}
+            {!confirmDel && (
+              <div className="bm6-foot-r">
+                {blocker && <span className="bm6-hint">{blocker}</span>}
+                {stepIdx > 0 ? <button className="bm-cancel" onClick={back}>Back</button> : <button className="bm-cancel" onClick={onClose}>Cancel</button>}
+                {editing && cur.id !== "notes" && <button className="bm-cancel bm6-save-now" onClick={save} disabled={!!error}>Save</button>}
+                {cur.id === "notes" ? (
+                  <button className="bm-save" onClick={save} disabled={!!error} title={error ?? undefined}>{editing ? "Save changes" : "Add entry"}</button>
+                ) : (
+                  <button className="bm-save" onClick={next} disabled={!!blocker}>Continue</button>
+                )}
+              </div>
+            )}
+          </footer>
+        </section>
       </div>
     </div>
   );

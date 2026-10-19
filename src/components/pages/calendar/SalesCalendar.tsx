@@ -13,7 +13,19 @@ import {
 import InvitesTray from "./InvitesTray";
 import CalendarSettingsModal from "./CalendarSettingsModal";
 import { loadMyInvites, inviteToEntry, busyAt, type InviteCard } from "./invitesApi";
+import { syncCalendarEntry } from "../../api/outlookSync";
+import HomeTodo from "../homepage/shared/HomeTodo";
+import { JumpPicker } from "./CalendarPage";
+import "./CalendarPage.css";
 import "./SalesCalendar.css";
+
+type ScLine = "meetings" | "hours" | "deals" | "blocks";
+const SC_LINES: { id: ScLine; label: string; hint: string }[] = [
+  { id: "meetings", label: "Meetings", hint: "Meetings booked this week" },
+  { id: "hours", label: "Client time", hint: "Hours spent with clients" },
+  { id: "deals", label: "Deals moved", hint: "Deals touched by a meeting" },
+  { id: "blocks", label: "Own work", hint: "Hours blocked for own work" },
+];
 
 const DOW = ["MON", "TUE", "WED", "THU", "FRI"];
 const KINDS: { id: MeetingKind; label: string; icon: string }[] = [
@@ -35,6 +47,14 @@ const sameDay = (a: Date, b: Date) => isoOf(a) === isoOf(b);
 const fmtHour = (h: number) => `${h % 12 === 0 ? 12 : h % 12} ${h < 12 ? "AM" : "PM"}`;
 const lasts = (mins: number) =>
   mins < 60 ? `${mins}m` : mins % 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins / 60}h`;
+
+/** ISO-8601 week number. */
+const isoWeekOf = (d: Date) => {
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const day = t.getUTCDay() || 7;
+  t.setUTCDate(t.getUTCDate() + 4 - day);
+  return Math.ceil(((t.getTime() - Date.UTC(t.getUTCFullYear(), 0, 1)) / 864e5 + 1) / 7);
+};
 
 const hhmm = (d: Date) => {
   // A bad date used to print NaN:NaN straight onto the calendar.
@@ -327,6 +347,37 @@ export default function SalesCalendar() {
   const [canSeeDetail, setCanSeeDetail] = useState(false);
   const [detailDept, setDetailDept] = useState<string | null>(null);
   const [whoOpen, setWhoOpen] = useState(false);
+  const [scLine, setScLine] = useState<ScLine>(() => { try { return (localStorage.getItem("sc.statLine") as ScLine) || "meetings"; } catch { return "meetings"; } });
+  const [lineOpen, setLineOpen] = useState(false);
+  const lineRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!lineOpen) return;
+    const off = (e: MouseEvent) => { if (lineRef.current && !lineRef.current.contains(e.target as Node)) setLineOpen(false); };
+    document.addEventListener("mousedown", off);
+    return () => document.removeEventListener("mousedown", off);
+  }, [lineOpen]);
+  const [todoOpen, setTodoOpen] = useState(() => { try { return localStorage.getItem("cal.todo") === "1"; } catch { return false; } });
+  const [todoSeen, setTodoSeen] = useState(false);
+  useEffect(() => { if (todoOpen) setTodoSeen(true); }, [todoOpen]);
+  const [jumpOpen, setJumpOpen] = useState(false);
+  const [navDir, setNavDir] = useState<1 | -1>(1);
+  const moveTo = (d: Date) => {
+    const t = startOfWeek(d);
+    setNavDir(t.getTime() < weekStart.getTime() ? -1 : 1);
+    setWeekStart(t);
+  };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement;
+      if (e.metaKey || e.ctrlKey || e.altKey || t.closest("input, textarea, select, [contenteditable=true]") || document.querySelector("[role=dialog]")) return;
+      if (e.key === "ArrowLeft") { e.preventDefault(); moveTo(addDays(weekStart, -7)); }
+      else if (e.key === "ArrowRight") { e.preventDefault(); moveTo(addDays(weekStart, 7)); }
+      else if (e.key === "t" || e.key === "T") moveTo(new Date());
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+  const toggleTodo = () => setTodoOpen((v) => { try { localStorage.setItem("cal.todo", v ? "0" : "1"); } catch { /* ignore */ } return !v; });
   const whoRef = useRef<HTMLDivElement | null>(null);
 
   const seenIds = useMemo(() => [myId, ...alsoView].filter(Boolean), [myId, alsoView]);
@@ -418,6 +469,8 @@ export default function SalesCalendar() {
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState<{ day: Date; hour: number } | null>(null);
   const [drag, setDrag] = useState<{ id: string; grab: number } | null>(null);
+  const [dropAt, setDropAt] = useState<{ iso: string; min: number; len: number } | null>(null);
+  useEffect(() => { if (!drag) setDropAt(null); }, [drag]);
   const [editing, setEditing] = useState<SalesMeeting | null>(null);
   /** Which block is one click away from being removed. */
   const [killing, setKilling] = useState<string | null>(null);
@@ -476,6 +529,7 @@ export default function SalesCalendar() {
     at.setHours(Math.floor(mins / 60), mins % 60, 0, 0);
     setDrag(null);
     await updateSalesMeeting(drag.id, { meet_at: at.toISOString() });
+    void syncCalendarEntry(drag.id);
     load();
   };
 
@@ -560,17 +614,89 @@ export default function SalesCalendar() {
   };
   const dayBlocks = (d: Date) => dayLanes(d).filter((x: any) => x.b);
 
-  const weekCount = meetings.length;
-  const byKind = KINDS.map((k) => ({ ...k, n: meetings.filter((m) => m.kind === k.id).length }));
+
+  const statOf = (uid: string) => {
+    const ms = meetings.filter((m) => (m.assignee_id ?? myId) === uid);
+    const bs = blocks.filter((b) => (b.user_id ?? myId) === uid);
+    const hrs = (m: number) => (m / 60).toFixed(1).replace(/\.0$/, "");
+    if (scLine === "hours") return { v: hrs(ms.reduce((n, m) => n + durOf(m), 0)), u: "h", sub: `${ms.length} meetings` };
+    if (scLine === "deals") return { v: String(new Set(ms.map((m) => m.tracking_id).filter(Boolean)).size), u: " deals", sub: `${new Set(ms.map((m) => m.company_name).filter(Boolean)).size} companies` };
+    if (scLine === "blocks") return { v: hrs(bs.reduce((n, b) => n + Math.max(0, b.end_min - b.start_min), 0)), u: "h", sub: `${bs.length} blocks` };
+    return { v: String(ms.length), u: "", sub: KINDS.map((k) => ({ k, n: ms.filter((m) => m.kind === k.id).length })).filter((x) => x.n).map((x) => `${x.n} ${x.k.label}`).join(" · ") || "none yet" };
+  };
+  const todaysMine = meetings.filter((m) => (m.assignee_id ?? myId) === myId && sameDay(new Date(m.meet_at), today)).sort((a, b) => +new Date(a.meet_at) - +new Date(b.meet_at));
+  const nextUp = todaysMine.find((m) => new Date(m.meet_at).getTime() + durOf(m) * 60000 > Date.now());
 
   return (
-    <div className="sc">
-      <header className="sc-bar">
-        <div className="sc-bar-left">
-          <button className="sc-home" onClick={() => navigate("/home")} aria-label="Back">‹</button>
-          <h1 className="sc-title">Calendar</h1>
-          <span className="sc-badge">Sales</span>
+    <div className="sc cal-ov cal-v3">
+      <header className="cv-bar">
+        <div className="cv-l">
+          <button className="cal-home" onClick={() => navigate("/home")} aria-label="Back to home" title="Home">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
+          </button>
+          <div className="cv-title">
+            <h1 className="cal-title">Calendar</h1>
+            <span className="cv-title-sub">Sales · Week {isoWeekOf(weekStart)}</span>
+          </div>
+          <div className="cv-nav">
+            <button className="cv-nav-today" onClick={() => moveTo(new Date())} title="Jump to this week (T)">Today</button>
+            <span className="cv-nav-sep" />
+            <button className="cv-nav-arrow" onClick={() => moveTo(addDays(weekStart, -7))} aria-label="Previous week" title="Previous (←)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
+            </button>
+            <div className="cv-nav-range-wrap">
+              <button className={`cv-nav-range ${jumpOpen ? "is-open" : ""}`} onClick={() => setJumpOpen((v) => !v)} title="Pick a date">
+                <span key={weekStart.getTime()} className={navDir === 1 ? "is-next" : "is-prev"}>
+                  {weekStart.toLocaleDateString(undefined, { day: "numeric", month: "short" })}
+                  {" – "}
+                  {addDays(weekStart, 4).toLocaleDateString(undefined, { day: "numeric", month: "short" })}
+                </span>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+              </button>
+              {jumpOpen && <JumpPicker value={weekStart} onPick={moveTo} onClose={() => setJumpOpen(false)} />}
+            </div>
+            <button className="cv-nav-arrow" onClick={() => moveTo(addDays(weekStart, 7))} aria-label="Next week" title="Next (→)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
+            </button>
+          </div>
+        </div>
 
+        {/* One line of figures: the measure you pick, for everyone on screen. */}
+        <div className="cv-stats">
+          <div className="cv-line" ref={lineRef}>
+            <button type="button" className={`cv-line-btn ${lineOpen ? "is-open" : ""}`} onClick={() => setLineOpen((v) => !v)} title="What the figures count">
+              {SC_LINES.find((l) => l.id === scLine)?.label}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+            </button>
+            {lineOpen && (
+              <div className="cv-line-pop" role="listbox">
+                {SC_LINES.map((l) => (
+                  <button key={l.id} type="button" role="option" aria-selected={scLine === l.id} className={scLine === l.id ? "is-on" : ""}
+                    onClick={() => { setScLine(l.id); setLineOpen(false); try { localStorage.setItem("sc.statLine", l.id); } catch { /* ignore */ } }}>
+                    <b>{l.label}</b><small>{l.hint}</small>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          {seenIds.slice(0, 4).map((uid) => {
+            const st = statOf(uid);
+            return (
+              <div key={uid} className="cv-stat" title={`${uid === myId ? "You" : nameOf(uid)}: ${st.v}${st.u} · ${st.sub}`}>
+                {viewingOther && <i className="cv-stat-dot" style={{ background: colourOf(uid) }} />}
+                {viewingOther && <span className="cv-stat-who">{uid === myId ? "You" : (nameOf(uid) || "").split(" ")[0]}</span>}
+                <b>{st.v}<em>{st.u}</em></b>
+                {!viewingOther && <span className="cv-stat-sub">{st.sub}</span>}
+              </div>
+            );
+          })}
+          <div className={`cv-stat is-today ${nextUp ? "is-next" : ""}`} title="Today">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+            <span>{nextUp ? `Next ${hhmm(new Date(nextUp.meet_at))} · ${nextUp.company_name ?? nextUp.title ?? "Meeting"}` : todaysMine.length ? "Done for today" : "Nothing today"}</span>
+          </div>
+        </div>
+
+        <div className="cv-r">
           {people.length > 1 && (
             <div className="cal-who" ref={whoRef}>
               <button type="button" className={`cal-who-btn ${whoOpen ? "is-open" : ""}`}
@@ -619,32 +745,7 @@ export default function SalesCalendar() {
               )}
             </div>
           )}
-        </div>
-
-        <div className="sc-week-bar">
-          <span className="sc-wk-main">
-            <b>{weekCount}</b>
-            <span>{weekCount === 1 ? "meeting" : "meetings"} this week</span>
-          </span>
-          <span className="sc-wk-kinds">
-            {byKind.filter((k) => k.n > 0).map((k) => (
-              <span key={k.id} className={`sc-wk-kind is-${k.id}`}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={k.icon} /></svg>
-                {k.n}
-              </span>
-            ))}
-          </span>
-        </div>
-
-        <div className="sc-nav">
-          <button onClick={() => setWeekStart(addDays(weekStart, -7))} aria-label="Previous week">‹</button>
-          <button className="sc-nav-label" onClick={() => setWeekStart(startOfWeek(new Date()))}>
-            {weekStart.toLocaleDateString(undefined, { day: "numeric", month: "short" })}
-            {" – "}
-            {addDays(weekStart, 4).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}
-          </button>
-          <button onClick={() => setWeekStart(addDays(weekStart, 7))} aria-label="Next week">›</button>
-
+          <div className="cv-icons">
           <div className="cal-bell-wrap" ref={bellRef}>
           <button className="cal-bell" onClick={() => setTrayOpen((v) => !v)}
             aria-label={`${invites.length} invitations`} title="Invitations">
@@ -658,27 +759,43 @@ export default function SalesCalendar() {
               onClose={() => setTrayOpen(false)} />
           )}
         </div>
-
-          <button className="sc-gear" onClick={() => setShowSettings(true)}
-            aria-label="Calendar settings" title="Calendar settings">⚙</button>
+          <button className="cal-btn cal-gear" onClick={() => setShowSettings(true)} aria-label="Calendar settings" title="Calendar settings">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </button>
+          </div>
+          <button className={`cv-todo-btn ${todoOpen ? "is-on" : ""}`} onClick={toggleTodo} title={todoOpen ? "Hide your to-do" : "Show your to-do"} aria-pressed={todoOpen}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6h11M9 12h11M9 18h11M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2" /></svg>
+            To-do
+          </button>
         </div>
       </header>
 
+      <div className={`cv-main ${todoOpen ? "has-todo" : ""}`}>
+      <section className="cv-cal">
       <div className="sc-grid" style={{ ["--sc-h" as string]: `${HOURS.length * 62}px` }}>
         <div className="sc-corner" />
 
         <div className="sc-head-days">
           {days.map((d, i) => (
             <div className={`sc-head-day ${sameDay(d, today) ? "is-today" : ""}`} key={isoOf(d)}>
-              <span className="sc-dow">
-                {DOW[i]}
-                {hoursByDay[d.getDay()]?.remote && (
-                  <svg className="sc-home-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>
-                  </svg>
-                )}
-              </span>
-              <span className="sc-date">{d.getDate()}</span>
+              {(() => {
+                const n = meetings.filter((m) => (m.assignee_id ?? myId) === myId && sameDay(new Date(m.meet_at), d)).length;
+                return (
+                  <>
+                    <span className="cv-hd-date">{d.getDate()}</span>
+                    <span className="cv-hd-txt">
+                      <span className="sc-dow">
+                        {DOW[i]}
+                        {hoursByDay[d.getDay()]?.remote && <em className="cv-hd-tag" title="Remote day">Remote</em>}
+                      </span>
+                      <span className="cv-hd-load">
+                        <span className="cv-hd-bar"><i className="is-done" style={{ width: `${Math.min(100, n * 25)}%` }} /></span>
+                        <b>{n}</b><em>&nbsp;{n === 1 ? "meeting" : "meetings"}</em>
+                      </span>
+                    </span>
+                  </>
+                );
+              })()}
             </div>
           ))}
         </div>
@@ -696,7 +813,31 @@ export default function SalesCalendar() {
             <div className={`sc-col ${sameDay(d, today) ? "is-today" : ""} ${drag ? "is-dropping" : ""} ${hoursByDay[d.getDay()]?.remote ? "is-remote" : ""}`}
               key={isoOf(d)}
               ref={(el) => { colRefs.current[isoOf(d)] = el; }}
-              onMouseUp={(e) => dropOn(d, e.clientY)}>
+              onMouseUp={(e) => { setDropAt(null); dropOn(d, e.clientY); }}
+              onMouseMove={(e) => {
+                if (!drag) return;
+                const mv = meetings.find((x) => x.id === drag.id);
+                if (!mv) return;
+                const box = e.currentTarget.getBoundingClientRect();
+                const ratio = Math.max(0, Math.min(1, (e.clientY - box.top) / box.height));
+                const min = Math.round((DAY_START + ratio * SPAN - drag.grab) / 15) * 15;
+                if (!dropAt || dropAt.iso !== isoOf(d) || dropAt.min !== min) setDropAt({ iso: isoOf(d), min, len: durOf(mv) });
+              }}>
+              {drag && dropAt && dropAt.iso === isoOf(d) && (
+                <span className="cv-ghost is-move" style={{ top: `${((dropAt.min - DAY_START) / SPAN) * 100}%`, height: `${(dropAt.len / SPAN) * 100}%` }}>
+                  <b>Move here</b>
+                  <em>{hhmm(new Date(2000, 0, 1, Math.floor(dropAt.min / 60), dropAt.min % 60))} · {dropAt.len} min</em>
+                </span>
+              )}
+              {days.some((x) => sameDay(x, today)) && (() => {
+                const nm = today.getHours() * 60 + today.getMinutes();
+                if (nm < DAY_START || nm > DAY_END) return null;
+                return (
+                  <span className={`sc-now ${sameDay(d, today) ? "" : "is-faint"}`} style={{ top: `${((nm - DAY_START) / SPAN) * 100}%` }}>
+                    {sameDay(d, today) && <em>{hhmm(today)}</em>}
+                  </span>
+                );
+              })()}
               {(() => {
                 const hd = hoursByDay[d.getDay()];
                 if (!hd) return null;
@@ -719,12 +860,12 @@ export default function SalesCalendar() {
               })()}
 
               {HOURS.map((h) => (
-                <button className="sc-slot" key={h}
+                <button className="sc-slot" key={h} data-at={fmtHour(h)}
                   onClick={() => setDraft({ day: d, hour: h })}
                   aria-label={`Book a meeting at ${fmtHour(h)}`} />
               ))}
 
-              {dayBlocks(d).map(({ b, left, width, merged }: any) => {
+              {dayBlocks(d).map(({ b, left, width, merged }: any, bi: number) => {
                 const top = ((b.start_min - DAY_START) / SPAN) * 100;
                 const h = ((b.end_min - b.start_min) / SPAN) * 100;
                 return (
@@ -734,6 +875,7 @@ export default function SalesCalendar() {
                       left: `calc(${left}% + 3px)`,
                       width: `calc(${width}% - 6px)`,
                       zIndex: 1,
+                      ["--i" as string]: bi,
                       ...(viewingOther ? {
                         borderLeftColor: colourOf(b.user_id ?? myId),
                         background: `color-mix(in srgb, ${colourOf(b.user_id ?? myId)} 14%, #fff)`,
@@ -777,7 +919,7 @@ export default function SalesCalendar() {
                 );
               })}
 
-              {dayLanes(d).filter((x: any) => x.m).map(({ m, left, width, merged }: any) => {
+              {dayLanes(d).filter((x: any) => x.m).map(({ m, left, width, merged }: any, mi: number) => {
                 const at = new Date(m.meet_at);
                 const mins = at.getHours() * 60 + at.getMinutes();
                 const top = ((mins - DAY_START) / SPAN) * 100;
@@ -791,6 +933,7 @@ export default function SalesCalendar() {
                       left: `calc(${left}% + 3px)`,
                       width: `calc(${width}% - 6px)`,
                       zIndex: 2,
+                      ["--i" as string]: mi + 1,
                       ...(viewingOther ? {
                         borderLeftColor: colourOf(m.assignee_id ?? myId),
                         background: `color-mix(in srgb, ${colourOf(m.assignee_id ?? myId)} 14%, #fff)`,
@@ -859,6 +1002,12 @@ export default function SalesCalendar() {
             </div>
           ))}
         </div>
+      </div>
+
+      </section>
+      <aside className="cv-todo" aria-label="Your to-do" aria-hidden={!todoOpen}>
+        <div className="cv-todo-in">{(todoOpen || todoSeen) && <HomeTodo />}</div>
+      </aside>
       </div>
 
       {loading && <p className="sc-loading">Loading…</p>}
@@ -1025,6 +1174,7 @@ function NewMeeting({ day, hour, deals, userId, hours, links, edit, onClose, onS
       });
       setBusy(false);
       if (e) { setErr(e); return; }
+      void syncCalendarEntry(edit.id);
       onSaved();
       return;
     }
@@ -1046,6 +1196,7 @@ function NewMeeting({ day, hour, deals, userId, hours, links, edit, onClose, onS
       if (res.error) { setErr(res.error); return; }
       if (res.id) {
         const iErr = await sendInvites(res.id);
+        void syncCalendarEntry(res.id);
         if (iErr) { setErr(`Meeting saved, but the invitations failed: ${iErr}`); return; }
       }
     } else {
@@ -1061,6 +1212,7 @@ function NewMeeting({ day, hour, deals, userId, hours, links, edit, onClose, onS
       if (res.error) { setErr(res.error); return; }
       if (res.id) {
         const iErr = await sendInvites(res.id);
+        void syncCalendarEntry(res.id);
         if (iErr) { setErr(`Block saved, but the invitations failed: ${iErr}`); return; }
       }
     }
