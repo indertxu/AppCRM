@@ -1181,7 +1181,9 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
         <div className="cal-scan" />
       </div>
 
-<header className="cv-bar">
+<header className="cv-bar"
+        onMouseMove={(e) => { const r = e.currentTarget.getBoundingClientRect(); e.currentTarget.style.setProperty("--hx", `${e.clientX - r.left}px`); e.currentTarget.style.setProperty("--hy", `${e.clientY - r.top}px`); }}>
+        <span className="cv-bar-fx" aria-hidden="true" />
         <div className="cv-l">
           <button className="cal-home" onClick={() => navigate("/home")} aria-label="Back to home" title="Home">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>

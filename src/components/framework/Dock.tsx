@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback, lazy, Suspense, type ReactNode, type MouseEvent as ReactMouseEvent, type FocusEvent as ReactFocusEvent } from "react";
+import { useEffect, useLayoutEffect, useState, useRef, useCallback, lazy, Suspense, type ReactNode, type MouseEvent as ReactMouseEvent, type FocusEvent as ReactFocusEvent, type PointerEvent as ReactPointerEvent, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { loadPrefs } from "../pages/companies/companiesApi";
 import { useNavigate, useLocation } from "react-router-dom";
@@ -17,10 +17,14 @@ interface DockItem {
   page: PageKey;
 }
 
+// Home is the Next logo (the cube with the N, the chart and the bars), drawn in outline like the other icons.
 const homeIcon = (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M3 10.5 12 3l9 7.5" />
-    <path d="M5 9.5V20a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V9.5" />
+    <path d="M12 2.8l8.6 4.6v9.2L12 21.2l-8.6-4.6V7.4z" />
+    <path d="M3.4 7.4L12 12l8.6-4.6M12 12v9.2" />
+    <path d="M6 15.4v-4.3l3.4 6.1v-4.3" strokeWidth="1.5" />
+    <path d="M15 17.6v-2.4M18 16v-3.6" strokeWidth="1.6" />
+    <path d="M8.6 7.6l2.4-1 1.6.8 2.8-1.6" strokeWidth="1.4" />
   </svg>
 );
 const calendarIcon = (
@@ -111,18 +115,6 @@ export const DOCK_ITEMS = items;
 const searchIcon = (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" /></svg>
 );
-const RailLogo = () => (
-  <svg viewBox="14 15 92 93" role="img" aria-label="Next">
-    <g transform="matrix(1,0.5,-1,0.5,60,17)">
-      <rect width="38" height="38" rx="2" fill="#86efc0" />
-      <polyline points="7,30 15,19 22,24 31.7,10.1" fill="none" stroke="#0a6f4d" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
-      <polygon points="36,4 35.1,12.5 28.2,7.7" fill="#0a6f4d" />
-    </g>
-    <g transform="translate(16,47) skewY(26.565)"><rect width="38" height="40" rx="2" fill="#12b57f" /><text x="19" y="30" textAnchor="middle" fill="#fff" fontFamily="Arial" fontWeight="700" fontSize="27">N</text></g>
-    <g transform="translate(66,66) skewY(-26.565)"><rect width="38" height="40" rx="2" fill="#0a6f4d" /><rect x="6" y="24" width="6" height="11" rx="1.5" fill="#fff" /><rect x="16" y="16" width="6" height="19" rx="1.5" fill="#fff" /><rect x="26" y="8" width="6" height="27" rx="1.5" fill="#fff" /></g>
-  </svg>
-);
-
 /** The app's sidebar: a fixed dark rail, always there. Icons with their name on hover
  *  (or always, with "Always show menu labels" in Settings › Interface). */
 export default function Dock() {
@@ -188,14 +180,81 @@ export default function Dock() {
   }, []);
   useEffect(() => { setSearch(false); setMenu(false); setTip(null); }, [location.pathname, location.search]);
 
-  // ---- tooltips: drawn on <body> so a page or its overlays never hide them ----
-  const [tip, setTip] = useState<{ text: ReactNode; y: number } | null>(null);
+  // ---- tooltips: drawn on <body> so a page or its overlays never hide them.
+  // One tooltip that glides from item to item; it only fades when the pointer leaves the rail.
+  const [tipRaw, setTipRaw] = useState<{ text: ReactNode; y: number; on: boolean; glide: boolean } | null>(null);
+  const tipTimer = useRef<number | null>(null);
+  const showTip = (text: ReactNode, y: number) => {
+    if (tipTimer.current) { window.clearTimeout(tipTimer.current); tipTimer.current = null; }
+    setTipRaw((t) => ({ text, y, on: true, glide: !!t?.on }));
+  };
+  const hideTip = () => {
+    if (tipTimer.current) window.clearTimeout(tipTimer.current);
+    tipTimer.current = window.setTimeout(() => setTipRaw((t) => (t ? { ...t, on: false } : t)), 110);
+  };
+  const setTip = (v: null) => { if (tipTimer.current) window.clearTimeout(tipTimer.current); setTipRaw(v); };
+  const tip = tipRaw;
   const tipOn = (text: ReactNode) => ({
-    onMouseEnter: (e: ReactMouseEvent<HTMLElement>) => { const r = e.currentTarget.getBoundingClientRect(); setTip({ text, y: r.top + r.height / 2 }); },
-    onMouseLeave: () => setTip(null),
-    onFocus: (e: ReactFocusEvent<HTMLElement>) => { if (!e.currentTarget.matches(":focus-visible")) return; const r = e.currentTarget.getBoundingClientRect(); setTip({ text, y: r.top + r.height / 2 }); },
-    onBlur: () => setTip(null),
+    onMouseEnter: (e: ReactMouseEvent<HTMLElement>) => { const r = e.currentTarget.getBoundingClientRect(); showTip(text, r.top + r.height / 2); },
+    onMouseLeave: hideTip,
+    onFocus: (e: ReactFocusEvent<HTMLElement>) => { if (!e.currentTarget.matches(":focus-visible")) return; const r = e.currentTarget.getBoundingClientRect(); showTip(text, r.top + r.height / 2); },
+    onBlur: hideTip,
   });
+
+  // ---- motion: a sliding active pill, a glow that follows the pointer, magnetic icons, ripples ----
+  const navRef = useRef<HTMLElement>(null);
+  const inkRef = useRef<HTMLSpanElement>(null);
+  const [inkReady, setInkReady] = useState(false);
+  const placeInk = useCallback(() => {
+    const nav = navRef.current, ink = inkRef.current;
+    if (!nav || !ink) return;
+    const on = nav.querySelector<HTMLElement>(".rail-item.is-on");
+    if (!on) { ink.style.opacity = "0"; return; }
+    // offsets, not screen boxes: entrance / hover transforms must not shift where the pill lands
+    let x = 0, y = 0, el: HTMLElement | null = on;
+    while (el && el !== nav) { x += el.offsetLeft; y += el.offsetTop; el = el.offsetParent as HTMLElement | null; }
+    if (el !== nav) { const n = nav.getBoundingClientRect(), r = on.getBoundingClientRect(); x = r.left - n.left; y = r.top - n.top; }
+    ink.style.opacity = "1";
+    ink.style.width = `${on.offsetWidth}px`;
+    ink.style.height = `${on.offsetHeight}px`;
+    ink.style.borderRadius = getComputedStyle(on).borderRadius;
+    ink.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+    setInkReady(true);
+  }, []);
+  useLayoutEffect(() => { placeInk(); });
+  useEffect(() => {
+    const nav = navRef.current;
+    if (!nav || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => placeInk());
+    ro.observe(nav);
+    window.addEventListener("resize", placeInk);
+    return () => { ro.disconnect(); window.removeEventListener("resize", placeInk); };
+  }, [placeInk]);
+  const glowRaf = useRef(0);
+  const onRailMove = (e: ReactMouseEvent<HTMLElement>) => {
+    const nav = navRef.current; if (!nav) return;
+    const y = e.clientY - nav.getBoundingClientRect().top;
+    cancelAnimationFrame(glowRaf.current);
+    glowRaf.current = requestAnimationFrame(() => { nav.style.setProperty("--gy", `${y}px`); nav.classList.add("is-near"); });
+  };
+  const onRailLeave = () => { navRef.current?.classList.remove("is-near"); hideTip(); };
+  const magnet = {
+    onMouseMove: (e: ReactMouseEvent<HTMLElement>) => {
+      const el = e.currentTarget, r = el.getBoundingClientRect();
+      const dx = (e.clientX - (r.left + r.width / 2)) / (r.width / 2), dy = (e.clientY - (r.top + r.height / 2)) / (r.height / 2);
+      el.style.setProperty("--mx", `${(dx * 3).toFixed(2)}px`); el.style.setProperty("--my", `${(dy * 3).toFixed(2)}px`);
+    },
+    onMouseLeave: (e: ReactMouseEvent<HTMLElement>) => { e.currentTarget.style.setProperty("--mx", "0px"); e.currentTarget.style.setProperty("--my", "0px"); },
+    onPointerDown: (e: ReactPointerEvent<HTMLElement>) => {
+      const el = e.currentTarget, r = el.getBoundingClientRect();
+      const dot = document.createElement("span");
+      dot.className = "rail-ripple";
+      dot.style.left = `${e.clientX - r.left}px`; dot.style.top = `${e.clientY - r.top}px`;
+      el.appendChild(dot);
+      dot.addEventListener("animationend", () => dot.remove(), { once: true });
+      window.setTimeout(() => dot.remove(), 900);
+    },
+  };
   const openSearch = () => {
     const home = document.querySelector<HTMLInputElement>(".home .gs-box input");
     if (home) { home.focus(); return; }
@@ -203,28 +262,36 @@ export default function Dock() {
   };
 
   const item = (it: DockItem) => (
-    <button key={it.path} type="button" className={`rail-item ${isOn(it.path) ? "is-on" : ""}`} onClick={() => { setTip(null); navigate(it.path); }}
-      aria-label={it.label} aria-current={isOn(it.path) ? "page" : undefined} {...tipOn(it.label)}>
+    <button key={it.path} type="button" className={`rail-item k-${it.page} ${isOn(it.path) ? "is-on" : ""}`} onClick={() => { setTip(null); navigate(it.path); }}
+      aria-label={it.label} aria-current={isOn(it.path) ? "page" : undefined} {...tipOn(it.label)}
+      onMouseMove={magnet.onMouseMove} onPointerDown={magnet.onPointerDown}
+      onMouseLeave={(e) => { magnet.onMouseLeave(e); hideTip(); }}>
       <span className="rail-ico">{it.icon}</span>
       <span className="rail-label">{it.label}</span>
     </button>
   );
 
+  const homeItem = main.find((it) => it.path === "/home") ?? null;
+  const rest = main.filter((it) => it !== homeItem);
+
   return (
     <>
-      <nav className="rail" aria-label="Main">
-        <button type="button" className="rail-logo" onClick={() => navigate("/home")} aria-label="Home"><RailLogo /></button>
-        <span className="rail-sep" />
-        <button type="button" className="rail-item is-search" onClick={() => { setTip(null); openSearch(); }} aria-label="Search"
-          {...tipOn(<>Search <kbd>{/mac/i.test(navigator.platform) ? "⌘" : "Ctrl"} K</kbd></>)}>
+      <nav className={`rail ${inkReady ? "has-ink" : ""}`} aria-label="Main" ref={navRef} onMouseMove={onRailMove} onMouseLeave={onRailLeave}>
+        <span className="rail-ink" ref={inkRef} aria-hidden="true" />
+        {/* Home (the Next logo) sits on top, where the logo used to be */}
+        {homeItem && <div className="rail-slot" style={{ ["--i" as string]: 0 } as CSSProperties}>{item(homeItem)}</div>}
+        <button type="button" className="rail-item is-search k-search" style={{ ["--i" as string]: 1 } as CSSProperties} onClick={() => { setTip(null); openSearch(); }} aria-label="Search"
+          {...tipOn(<>Search <kbd>{/mac/i.test(navigator.platform) ? "⌘" : "Ctrl"} K</kbd></>)}
+          onMouseMove={magnet.onMouseMove} onPointerDown={magnet.onPointerDown}
+          onMouseLeave={(e) => { magnet.onMouseLeave(e); hideTip(); }}>
           <span className="rail-ico">{searchIcon}</span>
           <span className="rail-label">Search</span>
         </button>
         <div className="rail-list">
-          {main.map((it, i) => (
-            <div key={it.path} className="rail-slot">
+          {rest.map((it, i) => (
+            <div key={it.path} className="rail-slot" style={{ ["--i" as string]: i + 2 } as CSSProperties}>
               {/* a quiet line between Home/Calendar and the CRM pages */}
-              {i > 0 && main[i - 1].path === "/calendar" && <span className="rail-sep is-thin" />}
+              {i > 0 && rest[i - 1].path === "/calendar" && <span className="rail-sep is-thin" />}
               {item(it)}
             </div>
           ))}
@@ -248,7 +315,10 @@ export default function Dock() {
           </div>
         </div>
       </nav>
-      {tip && createPortal(<div className="rail-tip-float" role="tooltip" style={{ top: tip.y }}>{tip.text}</div>, document.body)}
+      {tip && createPortal(
+        <div className={`rail-tip-float ${tip.on ? "is-on" : ""} ${tip.glide ? "is-glide" : ""}`} role="tooltip" style={{ top: tip.y }}>
+          <span key={typeof tip.text === "string" ? tip.text : "x"} className="rail-tip-txt">{tip.text}</span>
+        </div>, document.body)}
       {search && createPortal(
         <div className="rail-pal-back" onMouseDown={(e) => { if (e.target === e.currentTarget) setSearch(false); }}
           onKeyDown={(e) => { if (e.key === "Escape") setSearch(false); }}>

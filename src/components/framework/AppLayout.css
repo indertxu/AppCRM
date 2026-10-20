@@ -302,3 +302,128 @@
   .rail-labels .rail-item { width: 34px; height: 34px; padding: 0; border-radius: 50%; }
 
 }
+
+/* =====================================================================
+   Motion — the rail feels alive: a sliding active pill, a glow that
+   follows the pointer, magnetic icons with their own little gestures,
+   ripples on press, a tooltip that glides, a staggered entrance.
+   Only transform / opacity animate (60fps); reduced motion turns it off.
+   ===================================================================== */
+.rail { overflow: visible; isolation: isolate; }
+/* a slow sheen across the rail */
+.rail::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background:
+    linear-gradient(115deg, transparent 30%, rgba(134, 239, 192, 0.07) 45%, transparent 60%) 0 0 / 100% 300% no-repeat,
+    radial-gradient(90% 25% at 50% 100%, rgba(18, 181, 127, 0.14), transparent 70%);
+  animation: rail-sheen 9s ease-in-out infinite;
+}
+@keyframes rail-sheen { 0%, 100% { background-position: 0 -120%, 0 0; } 50% { background-position: 0 120%, 0 0; } }
+/* the glow that follows the pointer along the rail */
+.rail::after {
+  content: ""; position: absolute; left: 0; right: 0; top: 0; height: 220px; z-index: -1; pointer-events: none;
+  background: radial-gradient(60px 90px at 50% 50%, rgba(134, 239, 192, 0.18), transparent 70%);
+  transform: translate3d(0, calc(var(--gy, -300px) - 110px), 0);
+  opacity: 0; transition: opacity 0.35s ease;
+}
+.rail.is-near::after { opacity: 1; }
+
+/* the active pill: one white shape that slides (with a little spring) to the page you open */
+.rail-ink {
+  position: absolute; top: 0; left: 0; z-index: 0; width: 44px; height: 44px; border-radius: 50%;
+  background: #fff; opacity: 0; pointer-events: none;
+  box-shadow: 0 10px 22px -10px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.6) inset, 0 0 24px -4px rgba(134, 239, 192, 0.45);
+  transition: transform 0.55s cubic-bezier(0.34, 1.45, 0.5, 1), width 0.35s cubic-bezier(0.16, 1, 0.3, 1), height 0.35s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.25s ease;
+  will-change: transform;
+}
+.rail:not(.has-ink) .rail-ink { transition: none; }
+.rail.has-ink .rail-item.is-on { background: transparent; box-shadow: none; }
+.rail-item { z-index: 1; overflow: hidden; isolation: isolate; }
+.rail-item.is-on { color: #0a5a3f; }
+
+/* magnetic icons: they lean towards the pointer */
+.rail-ico { transform: translate3d(var(--mx, 0px), var(--my, 0px), 0); transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1); }
+.rail-item:hover .rail-ico { transition-duration: 0.12s; }
+.rail-item:hover { transform: scale(1.06); }
+.rail-item:active { transform: scale(0.93); transition-duration: 0.08s; }
+.rail-item:hover:not(.is-on) { background: rgba(255, 255, 255, 0.1); box-shadow: 0 0 0 1px rgba(134, 239, 192, 0.12) inset; }
+
+/* press ripple */
+.rail-ripple {
+  position: absolute; z-index: -1; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%;
+  background: rgba(134, 239, 192, 0.5); pointer-events: none; animation: rail-ripple 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.rail-item.is-on .rail-ripple { background: rgba(18, 181, 127, 0.28); }
+@keyframes rail-ripple { from { transform: scale(0); opacity: 1; } to { transform: scale(9); opacity: 0; } }
+
+/* each icon's own little gesture on hover */
+.rail-ico svg * { transform-box: fill-box; transform-origin: center; }
+.rail-item:hover .rail-ico svg { animation-duration: 0.6s; animation-timing-function: cubic-bezier(0.34, 1.4, 0.5, 1); }
+.k-home:hover .rail-ico svg { animation-name: ri-bob; }
+.k-home:hover .rail-ico svg path:last-child { stroke-dasharray: 12; animation: ri-draw 0.7s cubic-bezier(0.16, 1, 0.3, 1); }
+.k-search:hover .rail-ico svg circle { animation: ri-pulse 0.6s cubic-bezier(0.34, 1.4, 0.5, 1); }
+.k-search:hover .rail-ico svg path { animation: ri-nudge 0.6s cubic-bezier(0.34, 1.4, 0.5, 1); }
+.k-calendar:hover .rail-ico svg { animation-name: ri-flip; }
+.k-calendar:hover .rail-ico svg rect:last-child { animation: ri-hop 0.6s cubic-bezier(0.34, 1.4, 0.5, 1) 0.1s; }
+.k-contacts:hover .rail-ico svg { animation-name: ri-tilt; }
+.k-companies:hover .rail-ico svg { animation-name: ri-rise; }
+.k-clients:hover .rail-ico svg circle:first-of-type, .k-clients:hover .rail-ico svg path:first-of-type { animation: ri-hop 0.55s cubic-bezier(0.34, 1.4, 0.5, 1); }
+.k-clients:hover .rail-ico svg circle:last-of-type, .k-clients:hover .rail-ico svg path:last-of-type { animation: ri-hop 0.55s cubic-bezier(0.34, 1.4, 0.5, 1) 0.08s; }
+.k-projects:hover .rail-ico svg path:first-child { transform-origin: bottom; animation: ri-open 0.6s cubic-bezier(0.34, 1.4, 0.5, 1); }
+.k-sales:hover .rail-ico svg path:nth-of-type(2) { stroke-dasharray: 20; animation: ri-draw 0.75s cubic-bezier(0.16, 1, 0.3, 1); }
+.k-sales:hover .rail-ico svg circle { animation: ri-pulse 0.6s cubic-bezier(0.34, 1.4, 0.5, 1) 0.2s; }
+.k-management:hover .rail-ico svg rect { animation: ri-pop 0.5s cubic-bezier(0.34, 1.6, 0.5, 1) backwards; }
+.k-management:hover .rail-ico svg rect:nth-child(2) { animation-delay: 0.05s; }
+.k-management:hover .rail-ico svg rect:nth-child(3) { animation-delay: 0.1s; }
+.k-management:hover .rail-ico svg rect:nth-child(4) { animation-delay: 0.15s; }
+.k-settings .rail-ico svg { transition: transform 0.6s cubic-bezier(0.34, 1.3, 0.5, 1); }
+.k-settings:hover .rail-ico svg { transform: rotate(90deg); }
+@keyframes ri-bob { 0%, 100% { transform: none; } 35% { transform: translateY(-3px) rotate(-6deg); } 70% { transform: translateY(1px) rotate(2deg); } }
+@keyframes ri-draw { from { stroke-dashoffset: 20; } to { stroke-dashoffset: 0; } }
+@keyframes ri-pulse { 0%, 100% { transform: none; } 45% { transform: scale(1.18); } }
+@keyframes ri-nudge { 0%, 100% { transform: none; } 45% { transform: translate(1.5px, 1.5px); } }
+@keyframes ri-flip { 0%, 100% { transform: none; } 40% { transform: perspective(60px) rotateX(-28deg); } }
+@keyframes ri-hop { 0%, 100% { transform: none; } 40% { transform: translateY(-2.5px); } }
+@keyframes ri-tilt { 0%, 100% { transform: none; } 30% { transform: rotate(-8deg); } 65% { transform: rotate(5deg); } }
+@keyframes ri-rise { 0%, 100% { transform: none; } 40% { transform: translateY(-3px) scaleY(1.06); } 70% { transform: translateY(0.5px) scaleY(0.98); } }
+@keyframes ri-open { 0%, 100% { transform: none; } 40% { transform: skewX(-10deg) scaleY(0.9); } }
+@keyframes ri-pop { 0%, 100% { transform: none; } 45% { transform: scale(0.75); } }
+
+/* staggered entrance */
+.rail-slot, .rail-item.is-search, .rail-foot { animation: rail-in 0.6s cubic-bezier(0.16, 1, 0.3, 1) backwards; animation-delay: calc(var(--i, 0) * 40ms + 60ms); }
+.rail-foot { --i: 11; }
+@keyframes rail-in { from { opacity: 0; transform: translateX(-14px) scale(0.85); } }
+
+/* the tooltip glides between items and only fades when you leave the rail */
+.rail-tip-float { opacity: 0; animation: none; transform: translate(-6px, -50%) scale(0.96); transform-origin: left center;
+  transition: opacity 0.18s ease, transform 0.25s cubic-bezier(0.16, 1, 0.3, 1); }
+.rail-tip-float.is-on { opacity: 1; transform: translate(0, -50%); }
+.rail-tip-float.is-glide { transition: opacity 0.18s ease, transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), top 0.32s cubic-bezier(0.34, 1.25, 0.5, 1); }
+.rail-tip-txt { display: inline-flex; align-items: center; gap: 8px; animation: rail-tip-txt 0.22s ease; }
+@keyframes rail-tip-txt { from { opacity: 0; transform: translateY(3px); } }
+
+/* you: a living ring */
+.rail-avatar { overflow: visible; }
+.rail-avatar::before {
+  content: ""; position: absolute; inset: -5px; border-radius: 50%; pointer-events: none;
+  background: conic-gradient(from 0deg, rgba(134, 239, 192, 0), rgba(134, 239, 192, 0.9), rgba(18, 181, 127, 0), rgba(134, 239, 192, 0));
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px));
+          mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px));
+  opacity: 0; transition: opacity 0.3s ease; animation: rail-spin 2.4s linear infinite;
+}
+.rail-avatar:hover::before, .rail-avatar.is-open::before { opacity: 1; }
+@keyframes rail-spin { to { transform: rotate(360deg); } }
+.rail-menu { transform-origin: bottom left; animation: rail-menu-in 0.32s cubic-bezier(0.34, 1.3, 0.5, 1); }
+.rail-menu > * { animation: rail-menu-item 0.35s cubic-bezier(0.16, 1, 0.3, 1) backwards; }
+.rail-menu > *:nth-child(2) { animation-delay: 0.04s; } .rail-menu > *:nth-child(3) { animation-delay: 0.08s; } .rail-menu > *:nth-child(4) { animation-delay: 0.12s; }
+.rail-menu button { transition: background 0.15s, transform 0.2s cubic-bezier(0.16, 1, 0.3, 1); }
+.rail-menu button:hover { transform: translateX(3px); }
+@keyframes rail-menu-in { from { opacity: 0; transform: translateY(10px) scale(0.92); } }
+@keyframes rail-menu-item { from { opacity: 0; transform: translateX(-6px); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .rail::before, .rail::after, .rail-avatar::before, .rail-ripple { display: none; }
+  .rail-ink, .rail-ico, .rail-tip-float, .rail-tip-float.is-glide { transition: none !important; }
+  .rail-slot, .rail-item.is-search, .rail-foot, .rail-menu, .rail-menu > *, .rail-tip-txt, .rail-item:hover .rail-ico svg, .rail-item:hover .rail-ico svg * { animation: none !important; }
+  .rail-item:hover, .k-settings:hover .rail-ico svg { transform: none; }
+}
