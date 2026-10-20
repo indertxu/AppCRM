@@ -333,3 +333,6 @@
 .lc-pt-remove { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; height: 34px; padding: 0 12px; border: 1.5px solid rgba(184, 69, 47, 0.18); border-radius: 11px; background: #fff; font: inherit; font-size: 12.5px; font-weight: 700; color: #b8452f; cursor: pointer; transition: background 0.15s, border-color 0.15s; }
 .lc-pt-remove svg { width: 13px; height: 13px; }
 .lc-pt-remove:hover { background: #fdebe8; border-color: rgba(184, 69, 47, 0.4); }
+.lc-pt-pick { min-width: 220px; }
+.lc-money.is-changed { border-color: rgba(214, 138, 30, 0.45); background: #fffaf1; }
+.lc-hint.lc-ovr { color: #9a5b14; }

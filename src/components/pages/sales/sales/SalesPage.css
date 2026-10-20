@@ -3934,3 +3934,11 @@ button.sl-ppl-co:hover { background: #f1f7f4; color: var(--forest); }
 .pst-rm:hover { background: #fdebe8; border-color: rgba(184, 69, 47, 0.4); }
 .pst-rm.is-back { border-color: rgba(18, 181, 127, 0.3); color: #0a6f4d; }
 .pst-rm.is-back:hover { background: #e9f6ef; border-color: #12b57f; }
+
+/* Fields: jump to where a field shows */
+.pst-field { cursor: pointer; margin: 0 -8px; padding: 6px 8px; border-radius: 12px; transition: background 0.15s, box-shadow 0.15s; }
+.pst-field.is-active { background: rgba(18, 181, 127, 0.07); box-shadow: 0 0 0 1.5px rgba(18, 181, 127, 0.45); }
+.pst-goto { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; height: 22px; padding: 0 8px; border: 1px solid rgba(10, 111, 77, 0.18); border-radius: 7px; background: #fff; font: inherit; font-size: 11px; font-weight: 700; color: #0a6f4d; cursor: pointer; white-space: nowrap; transition: background 0.15s, border-color 0.15s; }
+.pst-goto svg { width: 11px; height: 11px; }
+.pst-goto:hover { background: #e9f6ef; border-color: #12b57f; }
+.pst-field.is-active .pst-goto { background: #0a6f4d; border-color: #0a6f4d; color: #fff; }

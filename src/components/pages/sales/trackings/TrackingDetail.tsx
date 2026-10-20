@@ -6,7 +6,7 @@ import DatePicker from "../../../framework/DatePicker";
 import TimePicker from "../../../framework/TimePicker";
 import Select from "../../../framework/Select";
 import { loadProposalTemplateFor, renderProposal, downloadBlob, listProposalDecks, loadProposalDeckFile, deckSlidesFor, type ProposalDeckRow } from "./proposalApi";
-import { parseDeck, fillDeck, loadDeckPreview, resolveTokens, deckNumbering, slideRef, isKnownToken, DECK_TOKENS, TOKEN_RE, type ProposalData, type DeckInfo, type PvDeck, type DeckContext } from "./proposalGen";
+import { parseDeck, fillDeck, loadDeckPreview, resolveTokens, deckNumbering, slideRef, isKnownToken, DECK_TOKENS, TOKEN_RE, tokensIn, type ProposalData, type DeckInfo, type PvDeck, type DeckContext } from "./proposalGen";
 import { SlidePreview } from "../../settings/ProposalTemplateEditor";
 import MentionInput, { type MentionPerson } from "../../../framework/MentionInput";
 import "../../../framework/MentionInput.css";
@@ -474,12 +474,11 @@ function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onGe
                 })}
               </div>
               {(decks?.length ?? 0) > 1 && (
-                <label className="sl-pz-tpl">
+                <div className="sl-pz-tpl">
                   <span>Deck</span>
-                  <select value={edit.deck_id ?? ""} onChange={(e) => setEdit({ ...edit, deck_id: e.target.value || null })}>
-                    {decks!.map((d) => <option key={d.id} value={d.id}>{d.name}{d.is_default ? " (default)" : ""}</option>)}
-                  </select>
-                </label>
+                  <Select value={edit.deck_id ?? ""} onChange={(v) => setEdit({ ...edit, deck_id: v || null })} aria-label="Deck"
+                    options={decks!.map((d) => ({ value: d.id, label: d.name, hint: d.is_default ? "default" : undefined }))} />
+                </div>
               )}
               <div className="sl-pz-foot">
                 <div className="sl-pz-sum">
@@ -661,21 +660,24 @@ function ProposalStudio({ proposal, decks, data, productIds, serviceIds, seller,
 
   // ---- the fields the kept slides use ----
   const fields = useMemo(() => {
-    if (!info) return [] as { key: string; token: string; group: string; label: string; auto: string; free: boolean; multi: boolean; slides: number }[];
-    const out = new Map<string, { key: string; token: string; group: string; label: string; auto: string; free: boolean; multi: boolean; slides: number }>();
+    if (!info) return [] as { key: string; token: string; group: string; label: string; auto: string; free: boolean; multi: boolean; slides: number; where: { ref: string; key: string }[] }[];
+    const out = new Map<string, { key: string; token: string; group: string; label: string; auto: string; free: boolean; multi: boolean; slides: number; where: { ref: string; key: string }[] }>();
     included.forEach((e) => {
       const sl = info.slides.find((s) => s.n === e.n);
       (sl?.tokens ?? []).forEach((t) => {
         if (t === "num" || t.includes("#")) return;
         const key = fieldKey(t, e.scope);
+        // where it shows: the texts of this slide that use it (edit keys of this copy of the slide)
+        const here = (sl?.texts ?? []).filter((x) => tokensIn(x.text).includes(t))
+          .map((x) => ({ ref: e.ref, key: `${e.ref}${x.key.slice(String(e.n).length)}` }));
         const prev = out.get(key);
-        if (prev) { prev.slides++; return; }
+        if (prev) { prev.slides++; prev.where.push(...here); return; }
         const def = DECK_TOKENS.find((d) => d.key === t || (d.key.includes("N") && new RegExp(`^${d.key.replace(/\./g, "\\.").replace(/N/g, "\\d+")}$`).test(t)));
         const free = !isKnownToken(t);
         const pi = e.scope.product ?? 0, si = e.scope.service ?? 0;
         const group = free ? "To fill in" : t.startsWith("product") ? `Product · ${data.products[pi]?.name ?? "—"}` : t.startsWith("service") ? `Service · ${data.services[si]?.name ?? "—"}` : "General";
         out.set(key, {
-          key, token: t, group, free, slides: 1, multi: !!def?.multi,
+          key, token: t, group, free, slides: 1, multi: !!def?.multi, where: here,
           label: FIELD_LABELS[t] ?? (def?.label ? (def.key === t ? def.label : `${def.label} ${t.match(/\d+/)?.[0] ?? ""}`.trim()) : niceLabel(t.replace(/[._]/g, " "))),
           auto: free ? "" : autoFor(e.scope)[t] ?? "",
         });
@@ -724,6 +726,16 @@ function ProposalStudio({ proposal, decks, data, productIds, serviceIds, seller,
   const curVals = cur ? valuesFor(cur) : {};
   const curIdx = cur ? plan.indexOf(cur) : -1;
   const go = (d: number) => { const e = plan[curIdx + d]; if (e) { setSel(e.ref); setSelKey(null); } };
+  /** Fields → the slide and text where a field shows (each click on the same field goes to its next place). */
+  const [jump, setJump] = useState<{ field: string; i: number } | null>(null);
+  const jumpTo = (f: { key: string; where: { ref: string; key: string }[] }, next = false) => {
+    if (!f.where.length) return;
+    const i = jump?.field === f.key ? (next ? (jump.i + 1) % f.where.length : jump.i) : 0;
+    const w = f.where[i];
+    setJump({ field: f.key, i });
+    setSel(w.ref); setSelKey(w.key);
+    setTimeout(() => document.getElementById(`pst-thumb-${w.ref}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" }), 30);
+  };
   const textInfo = useMemo(() => {
     if (!selKey || !cur || !info) return null;
     const rest = selKey.slice(cur.ref.length + 1);
@@ -820,12 +832,11 @@ function ProposalStudio({ proposal, decks, data, productIds, serviceIds, seller,
           </div>
           <div className="pst-head-r">
             {decks.length > 1 && (
-              <label className="pst-decksel">
+              <div className="pst-decksel">
                 <span>Deck</span>
-                <select value={deckId ?? ""} onChange={(e) => switchDeck(e.target.value)}>
-                  {decks.map((d) => <option key={d.id} value={d.id}>{d.name}{d.is_default ? " · default" : ""}</option>)}
-                </select>
-              </label>
+                <Select size="sm" value={deckId ?? ""} onChange={(v) => switchDeck(v)} aria-label="Deck"
+                  options={decks.map((d) => ({ value: d.id, label: d.name, hint: d.is_default ? "default" : undefined }))} />
+              </div>
             )}
             <span className={`pst-save is-${saveState}`} title={saveErr ?? undefined}>
               {saveState === "saving" ? <><span className="pst-spin" />Saving…</> : saveState === "saved" ? <><SIco d="check" />Saved</> : saveState === "error" ? <><SIco d="alert" />Not saved</> : <>Changes save automatically</>}
@@ -875,7 +886,7 @@ function ProposalStudio({ proposal, decks, data, productIds, serviceIds, seller,
                   return (
                     <div key={e.ref}>
                       {showSection && <div className={`pst-sec is-${e.kind}`} title={e.who}><i /><span>{kindLabel(e)} · {e.who}</span></div>}
-                      <div className={`pst-thumb ${sel === e.ref ? "is-sel" : ""} ${on ? "" : "is-off"}`}
+                      <div id={`pst-thumb-${e.ref}`} className={`pst-thumb ${sel === e.ref ? "is-sel" : ""} ${on ? "" : "is-off"}`}
                         onClick={() => { setSel(e.ref); setSelKey(null); }}>
                         <div className="pst-thumb-top">
                           <span className="pst-thumb-n">{i + 1}</span>
@@ -1004,16 +1015,27 @@ function ProposalStudio({ proposal, decks, data, productIds, serviceIds, seller,
                             id: `pst-f-${f.key}`, className: `pst-input ${need ? "is-need" : ""}`, value: v ?? f.auto,
                             placeholder: f.free ? "Type the value for this proposal" : "Empty",
                             onChange: (e: any) => setValue(f.key, e.target.value),
+                            onFocus: () => { if (jump?.field !== f.key) jumpTo(f); },
                           };
+                          const active = jump?.field === f.key;
+                          const spot = active && f.where.length ? f.where[jump!.i] : null;
+                          const spotIdx = spot ? plan.findIndex((x) => x.ref === spot.ref) : -1;
                           return (
-                            <label key={f.key} className={`pst-field ${changed && !f.free ? "is-changed" : ""}`}>
+                            <div key={f.key} className={`pst-field ${changed && !f.free ? "is-changed" : ""} ${active ? "is-active" : ""}`}
+                              onClick={(e) => { if ((e.target as HTMLElement).closest("input, textarea, button")) return; jumpTo(f, active); }}>
                               <span className="pst-field-top">
                                 <span className="pst-field-l">{f.label}</span>
                                 {changed && !f.free && <button type="button" className="pst-mini" onClick={(e) => { e.preventDefault(); setValue(f.key, null); }} title={`Automatic: ${f.auto || "empty"}`}><SIco d="reset" />Auto</button>}
-                                {f.slides > 1 && <em>{f.slides} slides</em>}
+                                {f.where.length > 0 && (
+                                  <button type="button" className="pst-goto" onClick={(e) => { e.preventDefault(); jumpTo(f, active); }}
+                                    title={f.where.length > 1 ? "Show where it is · click again for the next place" : "Show where it is on the slides"}>
+                                    <SIco d="cursor" />
+                                    {spotIdx >= 0 ? `Slide ${spotIdx + 1}${f.where.length > 1 ? ` · ${jump!.i + 1}/${f.where.length}` : ""}` : f.where.length > 1 ? `${f.where.length} places` : "Show"}
+                                  </button>
+                                )}
                               </span>
                               {f.multi || (v ?? f.auto).includes("\n") ? <textarea rows={3} {...common} /> : <input {...common} />}
-                            </label>
+                            </div>
                           );
                         })}
                       </section>

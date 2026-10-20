@@ -383,7 +383,8 @@ export function unitBreakdown(l: RevenueLineFields, calculator?: Calculator | nu
   }
 
   if (calculator) {
-    const base = catalogBase == null ? Number(l.price) || 0 : catalogBase;
+    // The line's own price wins (a tier's price can be changed on the deal and the tier kept); the catalogue's only fills a gap.
+    const base = Number(l.price) > 0 ? Number(l.price) : catalogBase ?? 0;
     const bd = calcBreakdown(calculator, l.calc_values ?? {}, base, discounts);
     return { rows: bd.rows, gross: bd.gross, discount: bd.discount, net: bd.total };
   }

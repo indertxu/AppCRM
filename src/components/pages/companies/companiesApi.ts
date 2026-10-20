@@ -280,7 +280,8 @@ export async function addContactField(input: { label: string; type: ContactField
   return { id: data.id, label: data.label, type: data.type, required: !!data.required, options: data.options ?? [], sort: data.sort ?? 0 };
 }
 export async function updateContactField(id: string, patch: Partial<{ label: string; type: string; required: boolean; options: string[]; sort: number }>) {
-  await supabase.from("contact_fields").update(patch).eq("id", id);
+  const { error } = await supabase.from("contact_fields").update(patch).eq("id", id);
+  return error?.message ?? null;
 }
 export async function deleteContactField(id: string) {
   await supabase.from("contact_fields").delete().eq("id", id);
@@ -316,7 +317,8 @@ export async function addCompanyField(input: { label: string; type: CompanyField
   return { id: data.id, label: data.label, type: data.type, required: !!data.required, options: data.options ?? [], sort: data.sort ?? 0 };
 }
 export async function updateCompanyField(id: string, patch: Partial<{ label: string; type: string; required: boolean; options: string[]; sort: number }>) {
-  await supabase.from("company_fields").update(patch).eq("id", id);
+  const { error } = await supabase.from("company_fields").update(patch).eq("id", id);
+  return error?.message ?? null;
 }
 export async function deleteCompanyField(id: string) {
   await supabase.from("company_fields").delete().eq("id", id);
@@ -618,6 +620,18 @@ export function partnerCut(gross: number, mode: string | null | undefined, value
   const v = Number(value) || 0;
   if (!v || !gross) return 0;
   return mode === "amount" ? Math.min(v, gross) : Math.round(gross * Math.min(v, 100)) / 100;
+}
+
+/** A dropdown option renamed in Settings: the records that had the old value get the new one. */
+export async function renameCustomValue(table: "companies" | "contacts", fieldId: string, from: string, to: string): Promise<string | null> {
+  if (!from || from === to) return null;
+  const { data, error } = await supabase.from(table).select("id, custom").eq(`custom->>${fieldId}`, from);
+  if (error) return error.message;
+  for (const r of (data ?? []) as any[]) {
+    const { error: e } = await supabase.from(table).update({ custom: { ...(r.custom ?? {}), [fieldId]: to } }).eq("id", r.id);
+    if (e) return e.message;
+  }
+  return null;
 }
 
 // ---- History (written by the database: crm_history) ----

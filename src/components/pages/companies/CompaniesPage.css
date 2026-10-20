@@ -1257,3 +1257,41 @@ button.co-cc-main { padding: 0; border: 0; background: none; font: inherit; text
   .prt-row { flex-wrap: wrap; }
   .prt-row-hint { flex-basis: 100%; order: 3; }
 }
+
+/* ---- Custom fields: reorder + edit ---- */
+.cfe-move { flex: none; display: flex; flex-direction: column; gap: 1px; }
+.cfe-move button, .cfe-ed-mv button { display: grid; place-items: center; width: 22px; height: 16px; padding: 0; border: 0; border-radius: 5px; background: none; color: var(--dw-mute2); cursor: pointer; transition: background 0.15s, color 0.15s; }
+.cfe-move button svg, .cfe-ed-mv button svg { width: 13px; height: 13px; }
+.cfe-move button:hover:not(:disabled), .cfe-ed-mv button:hover:not(:disabled) { background: rgba(18, 181, 127, 0.1); color: var(--dw-forest); }
+.cfe-move button:disabled, .cfe-ed-mv button:disabled { opacity: 0.3; cursor: default; }
+.cfe-edit { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 10px; background: none; color: var(--dw-mute2); cursor: pointer; transition: background 0.15s, color 0.15s; }
+.cfe-edit svg { width: 15px; height: 15px; }
+.cfe-edit:hover { background: rgba(18, 181, 127, 0.1); color: var(--dw-forest); }
+.cfe-row.is-editing { display: block; padding: 14px; border-color: rgba(18, 181, 127, 0.45); box-shadow: 0 0 0 4px rgba(18, 181, 127, 0.07), 0 16px 32px -26px rgba(10, 60, 40, 0.6); }
+.cfe-ed { display: flex; flex-direction: column; gap: 12px; }
+.cfe-ed-top { display: flex; gap: 10px; flex-wrap: wrap; }
+.cfe-ed-f { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.cfe-ed-f.is-name { flex: 1 1 240px; }
+.cfe-ed-f.is-type { flex: 0 0 170px; }
+.cfe-ed-f > span, .cfe-ed-k { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dw-mute); }
+.cfe-ed-k em { margin-left: 4px; font-style: normal; color: var(--dw-mute2); }
+.cfe-ed-f input, .cfe-ed-opts li input, .cfe-ed-add input { width: 100%; box-sizing: border-box; height: 40px; padding: 0 12px; border: 1px solid rgba(10, 111, 77, 0.14); border-radius: 12px; background: #fff; font: inherit; font-size: 13.5px; color: var(--dw-ink); outline: none; transition: border-color 0.15s, box-shadow 0.15s; }
+.cfe-ed-f input:focus, .cfe-ed-opts li input:focus, .cfe-ed-add input:focus { border-color: var(--dw-em); box-shadow: 0 0 0 3px rgba(18, 181, 127, 0.12); }
+.cfe-ed-f.is-name input { font-weight: 700; }
+.cfe-ed-warn { margin: 0; padding: 8px 11px; border-radius: 10px; background: #fff6e8; font-size: 12px; color: #8a5a12; }
+.cfe-ed-opts { display: flex; flex-direction: column; gap: 7px; padding: 12px; border-radius: 14px; background: var(--dw-field, #f6faf8); border: 1px solid var(--dw-line); }
+.cfe-ed-opts ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow-y: auto; }
+.cfe-ed-opts li { display: flex; align-items: center; gap: 6px; }
+.cfe-ed-opts li input { height: 36px; flex: 1; min-width: 0; }
+.cfe-ed-mv { flex: none; display: flex; flex-direction: column; gap: 1px; }
+.cfe-ed-was { flex: none; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 600; color: #9a5b14; }
+.cfe-ed-x { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 9px; background: none; color: var(--dw-mute2); cursor: pointer; transition: background 0.15s, color 0.15s; }
+.cfe-ed-x svg { width: 13px; height: 13px; }
+.cfe-ed-x:hover { background: rgba(214, 69, 69, 0.1); color: #d64545; }
+.cfe-ed-add { display: flex; gap: 6px; margin-left: 28px; }
+.cfe-ed-add input { height: 36px; flex: 1; border-style: dashed; }
+.cfe-ed-add button { flex: none; height: 36px; padding: 0 14px; border: 1px solid rgba(18, 181, 127, 0.35); border-radius: 11px; background: #fff; font: inherit; font-size: 12.5px; font-weight: 700; color: var(--dw-forest); cursor: pointer; }
+.cfe-ed-add button:disabled { opacity: 0.45; cursor: default; }
+.cfe-ed-foot { display: flex; justify-content: flex-end; gap: 8px; }
+.cfe-ed-cancel { height: 38px; padding: 0 14px; border: 0; border-radius: 11px; background: none; font: inherit; font-size: 13px; font-weight: 700; color: var(--dw-mute); cursor: pointer; }
+.cfe-ed-cancel:hover { background: rgba(10, 111, 77, 0.06); color: var(--dw-ink); }

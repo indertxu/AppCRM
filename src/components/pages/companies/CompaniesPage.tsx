@@ -16,6 +16,7 @@ import {
   partnerCompanies, listPartnerRates, savePartnerRate, deletePartnerRate, type PartnerRate,
   loadHistory, type HistoryEntry, descendantsOf, groupRootOf,
   type Company, type Contact, type Employee, type CompanyField, type ContactField, type Billing,
+  renameCustomValue,
 } from "./companiesApi";
 import { searchPlaces, lookupPostal, postalLooksComplete, provinceFromPostal, countryName, matchCountry, normalizeLinkedIn, isLinkedIn, linkedInHandle, type AddressHit } from "../contacts/contactProfile";
 import "../clients/ClientsPage.css";
@@ -1244,8 +1245,10 @@ export function CustomFieldsEditor({ fields, api, examples, isReserved, onChange
   fields: CustomFieldLike[];
   api: {
     add: (f: { label: string; type: CustomFieldLike["type"]; required: boolean; options: string[]; sort: number }) => Promise<unknown>;
-    update: (id: string, patch: { required: boolean }) => Promise<unknown>;
+    update: (id: string, patch: Partial<{ label: string; type: CustomFieldLike["type"]; required: boolean; options: string[]; sort: number }>) => Promise<unknown>;
     remove: (id: string) => Promise<unknown>;
+    /** A dropdown option was renamed: move the stored values to the new name. */
+    renameValue?: (fieldId: string, from: string, to: string) => Promise<unknown>;
   };
   /** Placeholders for the name and the dropdown options. */
   examples: { name: string; options: string };
@@ -1260,6 +1263,15 @@ export function CustomFieldsEditor({ fields, api, examples, isReserved, onChange
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [askDel, setAskDel] = useState<string | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
+  const move = async (i: number, d: number) => {
+    const j = i + d;
+    if (j < 0 || j >= fields.length) return;
+    const order = [...fields];
+    [order[i], order[j]] = [order[j], order[i]];
+    await Promise.all(order.map((f, k) => api.update(f.id, { sort: k })));
+    await onChanged();
+  };
   const add = async () => {
     const l = label.trim();
     if (!l) return;
@@ -1278,8 +1290,20 @@ export function CustomFieldsEditor({ fields, api, examples, isReserved, onChange
         <p className="cfe-empty">No custom fields yet. Add the first one below.</p>
       ) : (
         <ul className="cfe-list">
-          {fields.map((f, i) => (
+          {fields.map((f, i) => editing === f.id ? (
+            <FieldEditRow key={f.id} field={f} others={fields.filter((x) => x.id !== f.id)} isReserved={isReserved}
+              onCancel={() => setEditing(null)}
+              onSave={async (patch, renames) => {
+                await api.update(f.id, patch);
+                if (api.renameValue) for (const [from, to] of renames) await api.renameValue(f.id, from, to);
+                setEditing(null); await onChanged();
+              }} />
+          ) : (
             <li key={f.id} className="cfe-row" style={{ ["--i" as string]: i } as CSSProperties}>
+              <span className="cfe-move">
+                <button type="button" disabled={i === 0} onClick={() => void move(i, -1)} aria-label="Move up" title="Move up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 15l6-6 6 6" /></svg></button>
+                <button type="button" disabled={i === fields.length - 1} onClick={() => void move(i, 1)} aria-label="Move down" title="Move down"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg></button>
+              </span>
               <span className="cfe-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={FIELD_TYPE_ICON[f.type]} /></svg></span>
               <span className="cfe-main">
                 <b>{f.label}</b>
@@ -1294,6 +1318,9 @@ export function CustomFieldsEditor({ fields, api, examples, isReserved, onChange
               <button type="button" role="switch" aria-checked={f.required} className={`cfe-req ${f.required ? "is-on" : ""}`}
                 onClick={async () => { await api.update(f.id, { required: !f.required }); await onChanged(); }}>
                 <i />Required
+              </button>
+              <button type="button" className="cfe-edit" onClick={() => { setEditing(f.id); setAskDel(null); }} aria-label={`Edit ${f.label}`} title="Edit name, type and options">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" /></svg>
               </button>
               {askDel === f.id ? (
                 <span className="cfe-ask">
@@ -1332,6 +1359,99 @@ export function CustomFieldsEditor({ fields, api, examples, isReserved, onChange
         {err && <p className="dw-err">{err}</p>}
       </div>
     </div>
+  );
+}
+
+/** One custom field opened for editing: name, type, and (for dropdowns) its options — rename, reorder, add, remove. */
+function FieldEditRow({ field, others, isReserved, onCancel, onSave }: {
+  field: CustomFieldLike; others: CustomFieldLike[];
+  isReserved?: (label: string) => boolean;
+  onCancel: () => void;
+  onSave: (patch: { label: string; type: CustomFieldLike["type"]; options: string[] }, renames: [string, string][]) => Promise<void>;
+}) {
+  const [label, setLabel] = useState(field.label);
+  const [type, setType] = useState<CustomFieldLike["type"]>(field.type);
+  // each option remembers what it was called when the editor opened (to move stored values on a rename)
+  const [opts, setOpts] = useState<{ k: number; was: string | null; v: string }[]>(() => field.options.map((o, k) => ({ k, was: o, v: o })));
+  const [newOpt, setNewOpt] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const nextK = useRef(field.options.length + 1);
+  const addOpt = () => {
+    const v = newOpt.trim();
+    if (!v) return;
+    if (opts.some((o) => o.v.trim().toLowerCase() === v.toLowerCase())) { setErr(`“${v}” is already an option.`); return; }
+    setOpts((xs) => [...xs, { k: nextK.current++, was: null, v }]); setNewOpt(""); setErr(null);
+  };
+  const moveOpt = (i: number, d: number) => setOpts((xs) => {
+    const j = i + d; if (j < 0 || j >= xs.length) return xs;
+    const c = [...xs]; [c[i], c[j]] = [c[j], c[i]]; return c;
+  });
+  const typeChanged = type !== field.type;
+  const save = async () => {
+    const l = label.trim();
+    if (!l) { setErr("The field needs a name."); return; }
+    if (l.toLowerCase() !== field.label.trim().toLowerCase()) {
+      if (isReserved?.(l)) { setErr(`“${l}” is already a built-in field.`); return; }
+      if (others.some((f) => f.label.trim().toLowerCase() === l.toLowerCase())) { setErr(`There is already a field called “${l}”.`); return; }
+    }
+    const clean = opts.map((o) => ({ ...o, v: o.v.trim() })).filter((o) => o.v);
+    const seen = new Set<string>();
+    for (const o of clean) { const k = o.v.toLowerCase(); if (seen.has(k)) { setErr(`“${o.v}” is in the list twice.`); return; } seen.add(k); }
+    if (type === "select" && !clean.length) { setErr("Add at least one option."); return; }
+    setBusy(true); setErr(null);
+    const renames: [string, string][] = type === "select" ? clean.filter((o) => o.was && o.was !== o.v).map((o) => [o.was!, o.v]) : [];
+    await onSave({ label: l, type, options: type === "select" ? clean.map((o) => o.v) : [] }, renames);
+    setBusy(false);
+  };
+  return (
+    <li className="cfe-row is-editing">
+      <div className="cfe-ed">
+        <div className="cfe-ed-top">
+          <label className="cfe-ed-f is-name">
+            <span>Name</span>
+            <input value={label} autoFocus onChange={(e) => { setLabel(e.target.value); setErr(null); }}
+              onKeyDown={(e) => { if (e.key === "Enter") void save(); if (e.key === "Escape") onCancel(); }} />
+          </label>
+          <div className="cfe-ed-f is-type">
+            <span>Type</span>
+            <Select value={type} onChange={(v) => { setType(v as CustomFieldLike["type"]); setErr(null); }}
+              options={(Object.keys(FIELD_TYPE_LABEL) as CustomFieldLike["type"][]).map((t) => ({ value: t, label: FIELD_TYPE_LABEL[t] }))} />
+          </div>
+        </div>
+        {typeChanged && <p className="cfe-ed-warn">Values already saved stay as they are; ones that don't fit the new type may show empty.</p>}
+        {type === "select" && (
+          <div className="cfe-ed-opts">
+            <span className="cfe-ed-k">Options <em>{opts.length}</em></span>
+            <ul>
+              {opts.map((o, i) => (
+                <li key={o.k}>
+                  <span className="cfe-ed-mv">
+                    <button type="button" disabled={i === 0} onClick={() => moveOpt(i, -1)} aria-label="Move up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 15l6-6 6 6" /></svg></button>
+                    <button type="button" disabled={i === opts.length - 1} onClick={() => moveOpt(i, 1)} aria-label="Move down"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg></button>
+                  </span>
+                  <input value={o.v} onChange={(e) => { const v = e.target.value; setOpts((xs) => xs.map((x) => x.k === o.k ? { ...x, v } : x)); setErr(null); }} />
+                  {o.was && o.was !== o.v.trim() && o.v.trim() && <small className="cfe-ed-was" title="Records with the old value get the new one">was “{o.was}”</small>}
+                  <button type="button" className="cfe-ed-x" onClick={() => setOpts((xs) => xs.filter((x) => x.k !== o.k))} aria-label={`Remove ${o.v}`} title="Remove — records keep the old value">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <div className="cfe-ed-add">
+              <input value={newOpt} placeholder="Add an option…" onChange={(e) => { setNewOpt(e.target.value); setErr(null); }}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addOpt(); } }} />
+              <button type="button" onClick={addOpt} disabled={!newOpt.trim()}>+ Add</button>
+            </div>
+          </div>
+        )}
+        {err && <p className="dw-err">{err}</p>}
+        <div className="cfe-ed-foot">
+          <button type="button" className="cfe-ed-cancel" onClick={onCancel}>Cancel</button>
+          <button type="button" className="dw-save" onClick={() => void save()} disabled={busy}>{busy ? "Saving…" : "Save field"}</button>
+        </div>
+      </div>
+    </li>
   );
 }
 
@@ -3333,7 +3453,7 @@ export function CompanySettings({ onBack }: { onBack: () => void }) {
           { k: "fields", label: "Custom fields", icon: "sliders", tone: "indigo", count: fields.length,
             title: "Custom fields", hint: "Extra fields on every company, in its panel under Additional details",
             body: <CustomFieldsEditor fields={fields} onChanged={reloadFields}
-              api={{ add: (f) => addCompanyField(f), update: (id, patch) => updateCompanyField(id, patch), remove: (id) => deleteCompanyField(id) }}
+              api={{ add: (f) => addCompanyField(f), update: (id, patch) => updateCompanyField(id, patch), remove: (id) => deleteCompanyField(id), renameValue: (id, from, to) => renameCustomValue("companies", id, from, to) }}
               examples={{ name: "Field name, e.g. Founded, Key account", options: "SME, Mid-market, Enterprise" }} /> },
         ]} />
       {tool === "import" && <CompanyImport fields={fields} onClose={() => setTool(null)} onDone={async () => { await load(); }} />}

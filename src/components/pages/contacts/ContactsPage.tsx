@@ -11,6 +11,7 @@ import {
   loadRelationshipSets, type RelationshipSets, contactStatus,
   loadPrefs, savePref,
   type Contact, type Company, type Employee, type ContactField,
+  renameCustomValue,
 } from "../companies/companiesApi";
 import {
   AddressFields, PhoneField, StatusPills, HistorySection, phoneText, telHref,
@@ -731,7 +732,7 @@ export function ContactSettings({ onBack }: { onBack: () => void }) {
           { k: "fields", label: "Custom fields", icon: "sliders", tone: "indigo", count: fields.length,
             title: "Custom fields", hint: "Extra fields on every contact, in its panel",
             body: <CustomFieldsEditor fields={fields} onChanged={async () => setFields(await listContactFields().catch(() => []))}
-              api={{ add: (f) => addContactField(f), update: (id, patch) => updateContactField(id, patch), remove: (id) => deleteContactField(id) }}
+              api={{ add: (f) => addContactField(f), update: (id, patch) => updateContactField(id, patch), remove: (id) => deleteContactField(id), renameValue: (id, from, to) => renameCustomValue("contacts", id, from, to) }}
               isReserved={isReservedLabel}
               examples={{ name: "Field name, e.g. Birthday, VIP", options: "Low, Medium, High" }} /> },
         ]} />

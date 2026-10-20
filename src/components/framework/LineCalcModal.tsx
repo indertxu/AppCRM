@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { calcBreakdown, discountOf, BASE_KEY, type Calculator, type CalcDiscount } from "../pages/settings/catalogApi";
 import { lineBreakdown, type RevenueLineFields, type TermPatch } from "../pages/sales/sales/salesApi";
+import Select from "./Select";
 import { listCompanies, listPartnerRates, partnerCompanies, partnerDefault, partnerCut, type PartnerRate } from "../pages/companies/companiesApi";
 import "./LineCalcModal.css";
 
@@ -98,6 +99,12 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
   const [roleId, setRoleId] = useState<string>(line.role_id ?? "");
   const [values, setValues] = useState<Record<string, number>>(line.calc_values ?? {});
   const [manualPrice, setManualPrice] = useState<number>(Number(line.price) || 0);
+  // A price typed over the tier's / rate's own (null = use theirs).
+  const [override, setOverride] = useState<number | null>(() => {
+    const own = Number(line.price) || 0;
+    const list = line.tier_id ? tiers?.find((t) => t.id === line.tier_id)?.price : line.role_id ? roles?.find((r) => r.role_id === line.role_id)?.price : undefined;
+    return list != null && own > 0 && Math.abs(own - Number(list)) > 0.0001 ? own : null;
+  });
   const [qty, setQty] = useState<number>(line.quantity == null ? 1 : Number(line.quantity));
   const [years, setYears] = useState<number>(line.term_years == null ? 1 : Number(line.term_years));
   const [discounts, setDiscounts] = useState<Record<string, CalcDiscount>>(() => {
@@ -138,7 +145,9 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
   // Base unit price: the chosen tier, the chosen role, or whatever was typed.
   const tierPrice = tiers?.find((t) => t.id === tierId)?.price;
   const rolePrice = roles?.find((r) => r.role_id === roleId)?.price;
-  const basePrice = tierPrice ?? rolePrice ?? manualPrice;
+  // The tier's / rate's price is a starting point: it can be changed and the tier / rate is kept.
+  const listPrice = tierPrice ?? rolePrice;
+  const basePrice = listPrice != null ? (override ?? listPrice) : manualPrice;
 
   // A price calculator overrides the unit price. A quantity calculator sets
   // how many units instead, leaving the price alone.
@@ -269,8 +278,8 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
               <section className="lc-sec">
                 <h4 className="lc-sec-t"><i>1</i>Tier</h4>
                 {choice([
-                  ...tiers.map((t) => ({ key: t.id ?? t.name, on: tierId === t.id, name: t.name || "Unnamed", sub: money(t.price), pick: () => setTierId(t.id ?? "") })),
-                  { key: "__custom", on: tierId === "", name: "Custom", sub: "Type a price", pick: () => setTierId("") },
+                  ...tiers.map((t) => ({ key: t.id ?? t.name, on: tierId === t.id, name: t.name || "Unnamed", sub: money(t.price), pick: () => { setTierId(t.id ?? ""); setOverride(null); } })),
+                  { key: "__custom", on: tierId === "", name: "Custom", sub: "Type a price", pick: () => { if (listPrice != null) setManualPrice(basePrice); setTierId(""); setOverride(null); } },
                 ])}
               </section>
             )}
@@ -279,8 +288,8 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
               <section className="lc-sec">
                 <h4 className="lc-sec-t"><i>1</i>Rate</h4>
                 {choice([
-                  ...roles.map((r, i) => ({ key: r.role_id, on: roleId === r.role_id, name: roleName ? roleName(r.role_id) : `Rate ${i + 1}`, sub: `${money(r.price)}/${unit ?? "day"}`, pick: () => setRoleId(r.role_id) })),
-                  { key: "__custom", on: roleId === "", name: "Custom", sub: "Type a rate", pick: () => setRoleId("") },
+                  ...roles.map((r, i) => ({ key: r.role_id, on: roleId === r.role_id, name: roleName ? roleName(r.role_id) : `Rate ${i + 1}`, sub: `${money(r.price)}/${unit ?? "day"}`, pick: () => { setRoleId(r.role_id); setOverride(null); } })),
+                  { key: "__custom", on: roleId === "", name: "Custom", sub: "Type a rate", pick: () => { if (listPrice != null) setManualPrice(basePrice); setRoleId(""); setOverride(null); } },
                 ])}
               </section>
             )}
@@ -288,13 +297,19 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
             <section className="lc-sec">
               <h4 className="lc-sec-t"><i>{(tiers?.length || roles?.length) ? 2 : 1}</i>{unit ? `Rate per ${unit}` : "Base price"}</h4>
               <div className="lc-price">
-                <label className={`lc-money ${tierPrice != null || rolePrice != null ? "is-locked" : ""}`}>
-                  <input type="number" min="0" value={tierPrice ?? rolePrice ?? manualPrice}
-                    disabled={tierPrice != null || rolePrice != null} onFocus={(e) => e.target.select()}
-                    onChange={(e) => setManualPrice(parseFloat(e.target.value) || 0)} />
+                <label className={`lc-money ${listPrice != null && override != null ? "is-changed" : ""}`}>
+                  <input type="number" min="0" value={basePrice} onFocus={(e) => e.target.select()}
+                    onChange={(e) => { const v = parseFloat(e.target.value) || 0; if (listPrice != null) setOverride(Math.abs(v - listPrice) > 0.0001 ? v : null); else setManualPrice(v); }} />
                   <em>€{unit ? ` / ${unit}` : ""}</em>
                 </label>
-                {(tierPrice != null || rolePrice != null) && <span className="lc-hint">From the {tierPrice != null ? "tier" : "rate"} — pick Custom to type your own</span>}
+                {listPrice != null && (override != null ? (
+                  <span className="lc-hint lc-ovr">
+                    {tierPrice != null ? "Tier" : "Rate"} price {money(listPrice)} · changed for this deal ·{" "}
+                    <button type="button" className="lc-pt-reset" onClick={() => setOverride(null)}>Use {money(listPrice)}</button>
+                  </span>
+                ) : (
+                  <span className="lc-hint">From the {tierPrice != null ? "tier" : "rate"} — type to change it (the {tierPrice != null ? "tier" : "rate"} stays)</span>
+                ))}
                 <span className="lc-var-gap" />
                 {qtyCalc
                   ? <DiscountControl dkey={BASE_KEY} amount={bd.rows.find((r) => r.key === BASE_KEY)?.amount ?? 0} discounts={discounts} setDisc={setDisc} money={money} />
@@ -326,13 +341,14 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
               <section className="lc-sec lc-partner">
                 <h4 className="lc-sec-t"><i>{2 + (tiers?.length || roles?.length ? 1 : 0) + 1 + (vars.length ? 1 : 0)}</i>Partner</h4>
                 <div className="lc-price">
-                  <label className="lc-pt-pick">
-                    <select value={partnerId} onChange={(e) => pickPartner(e.target.value)}>
-                      <option value="">No partner</option>
-                      {(partnerData?.partners ?? []).map((pt) => <option key={pt.id} value={pt.id}>{pt.name}</option>)}
-                      {partnerId && partnerData && !partnerData.partners.some((x) => x.id === partnerId) && <option value={partnerId}>Partner (no longer tagged)</option>}
-                    </select>
-                  </label>
+                  <div className="lc-pt-pick">
+                    <Select value={partnerId} onChange={pickPartner} aria-label="Partner" placeholder="No partner"
+                      options={[
+                        { value: "", label: "No partner" },
+                        ...(partnerData?.partners ?? []).map((pt) => ({ value: pt.id, label: pt.name })),
+                        ...(partnerId && partnerData && !partnerData.partners.some((x) => x.id === partnerId) ? [{ value: partnerId, label: "Partner (no longer tagged)" }] : []),
+                      ]} />
+                  </div>
                   {partnerId && (
                     <>
                       <div className="lc-seg lc-seg-xs">
