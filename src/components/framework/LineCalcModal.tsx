@@ -3,7 +3,13 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { calcBreakdown, discountOf, BASE_KEY, type Calculator, type CalcDiscount } from "../pages/settings/catalogApi";
 import { lineBreakdown, type RevenueLineFields, type TermPatch } from "../pages/sales/sales/salesApi";
+import { listCompanies, listPartnerRates, partnerCompanies, partnerDefault, partnerCut, type PartnerRate } from "../pages/companies/companiesApi";
 import "./LineCalcModal.css";
+
+/** Partners and their default cuts, read once per visit. */
+let partnerCache: Promise<{ partners: { id: string; name: string }[]; rates: PartnerRate[] }> | null = null;
+const loadPartners = () => (partnerCache ??= Promise.all([listCompanies().catch(() => []), listPartnerRates().catch(() => [])])
+  .then(([cos, rates]) => ({ partners: partnerCompanies(cos as any).map((c: any) => ({ id: c.id, name: c.name })), rates })));
 
 /** A row's discount: hidden behind "+ Discount" until used, then % or € with the amount it takes off. */
 function DiscountControl({ dkey, amount, discounts, setDisc, money }: {
@@ -72,7 +78,7 @@ function Stepper({ value, onChange, step = 1, disabled, suffix, wide }: {
  * Per-line calculator popup: tier, calculator inputs, term or quantity, and a
  * discount. Everything that decides the value of one revenue line lives here.
  */
-export default function LineCalcModal({ title, line, tiers, roles, roleName, calculator, unit, minUnit, onApply, onClose, money, variant }: {
+export default function LineCalcModal({ title, line, tiers, roles, roleName, calculator, unit, minUnit, onApply, onClose, money, variant, partnerItem }: {
   title: string;
   line: RevenueLineFields;
   tiers?: { id?: string; name: string; price: number }[];
@@ -85,6 +91,8 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
   onClose: () => void;
   money: (n: number) => string;
   variant?: "modern";
+  /** Shows the partner section: which catalogue item this line is (for the partner's default cut). */
+  partnerItem?: { type: "product" | "service"; id: string | null };
 }) {
   const [tierId, setTierId] = useState<string>(line.tier_id ?? "");
   const [roleId, setRoleId] = useState<string>(line.role_id ?? "");
@@ -104,6 +112,19 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
     setDiscounts((x) => ({ ...x, [key]: { mode: "none", value: 0, ...(x[key] ?? {}), ...patch } }));
   const [rates, setRates] = useState<Record<string, number>>(line.calc_rates ?? {});
   const setRate = (key: string, v: number) => setRates((x) => ({ ...x, [key]: v }));
+  const [partnerId, setPartnerId] = useState<string>(line.partner_id ?? "");
+  const [partnerMode, setPartnerMode] = useState<"percent" | "amount">(line.partner_mode === "amount" ? "amount" : "percent");
+  const [partnerValue, setPartnerValue] = useState<number>(Number(line.partner_value) || 0);
+  const [partnerData, setPartnerData] = useState<{ partners: { id: string; name: string }[]; rates: PartnerRate[] } | null>(null);
+  const wantsPartner = !!partnerItem;
+  useEffect(() => { if (wantsPartner) loadPartners().then(setPartnerData).catch(() => {}); }, [wantsPartner]);
+  const pickPartner = (id: string) => {
+    setPartnerId(id);
+    if (!id || !partnerItem || !partnerData) return;
+    const d = partnerDefault(partnerData.rates, id, partnerItem.type, partnerItem.id);
+    if (d) { setPartnerMode(d.mode); setPartnerValue(d.value); }
+  };
+  const partnerDef = partnerId && partnerItem && partnerData ? partnerDefault(partnerData.rates, partnerId, partnerItem.type, partnerItem.id) : null;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -158,6 +179,7 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
       calc_rates: rates,
       discount_mode: "none",
       discount_value: 0,
+      ...(partnerItem ? { partner_id: partnerId || null, partner_mode: partnerId ? partnerMode : null, partner_value: partnerId ? partnerValue : null } : {}),
     });
     onClose();
   };
@@ -172,9 +194,11 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
     const out = qtyBd ? (qtyBd.rows.find((r) => r.key === k)?.amount ?? 0) : null;
     const showRate = !!qtyCalc;
     const showDisc = !!priceCalc || !!qtyCalc;
-    // The supervision row's days can be set by hand (they start from the calculator).
+    // A row billed as its own role (a project manager, say) can have its days
+    // set by hand (they start from the calculator).
+    const ownRole = v.role_id ? (roleName ? roleName(v.role_id) : "Own role") : v.is_supervision ? "Supervision" : "";
     const dk = `${k}@days`;
-    const supDays = qtyCalc && v.is_supervision && (val || v.var_type === "percent") ? (
+    const supDays = qtyCalc && ownRole && (val || v.var_type === "percent") ? (
       <span className="lc-supdays">
         <Stepper value={values[dk] ?? (out ?? 0)} onChange={(n) => setValues((x) => ({ ...x, [dk]: n }))} suffix={unitWord} />
         {values[dk] != null && (
@@ -204,8 +228,8 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
           <div className="lc-var-sub">
             {supDays ?? (out != null && <span className="lc-out">{out} {unitWord}</span>)}
             {out == null && rowAmount > 0 && <span className="lc-out">{money(rowAmount)}</span>}
-            {showRate && <RateControl rkey={k} rates={rates} baseRate={v.rate != null && v.rate !== "" ? Number(v.rate) : basePrice} setRate={setRate} unit={unit ?? "day"} />}
-            {v.is_supervision && <span className="lc-sup">Supervision</span>}
+            {showRate && <RateControl rkey={k} rates={rates} baseRate={v.rate != null && v.rate !== "" ? Number(v.rate) : v.role_rate != null ? Number(v.role_rate) : basePrice} setRate={setRate} unit={unit ?? "day"} />}
+            {ownRole && <span className="lc-sup" title="This time is billed as this role">{ownRole}</span>}
             <span className="lc-var-gap" />
             {showDisc && <DiscountControl dkey={k} amount={rowAmount} discounts={discounts} setDisc={setDisc} money={money} />}
           </div>
@@ -224,6 +248,8 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
     </div>
   );
   const totalShown = rounds ? billableTotal : bd.total;
+  const partnerOff = partnerId ? partnerCut(totalShown, partnerMode, partnerValue) : 0;
+  const partnerName = partnerData?.partners.find((x) => x.id === partnerId)?.name ?? "Partner";
 
   return createPortal(
     <div className="lc-backdrop" onMouseDown={onClose}>
@@ -295,6 +321,48 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
                 )}
               </div>
             </section>
+
+            {partnerItem && (
+              <section className="lc-sec lc-partner">
+                <h4 className="lc-sec-t"><i>{2 + (tiers?.length || roles?.length ? 1 : 0) + 1 + (vars.length ? 1 : 0)}</i>Partner</h4>
+                <div className="lc-price">
+                  <label className="lc-pt-pick">
+                    <select value={partnerId} onChange={(e) => pickPartner(e.target.value)}>
+                      <option value="">No partner</option>
+                      {(partnerData?.partners ?? []).map((pt) => <option key={pt.id} value={pt.id}>{pt.name}</option>)}
+                      {partnerId && partnerData && !partnerData.partners.some((x) => x.id === partnerId) && <option value={partnerId}>Partner (no longer tagged)</option>}
+                    </select>
+                  </label>
+                  {partnerId && (
+                    <>
+                      <div className="lc-seg lc-seg-xs">
+                        <button type="button" className={partnerMode === "percent" ? "is-on" : ""} onClick={() => setPartnerMode("percent")}>%</button>
+                        <button type="button" className={partnerMode === "amount" ? "is-on" : ""} onClick={() => setPartnerMode("amount")}>{"\u20ac"}</button>
+                      </div>
+                      <label className="lc-money lc-pt-val">
+                        <input type="number" min="0" value={partnerValue} onFocus={(e) => e.target.select()}
+                          onChange={(e) => setPartnerValue(parseFloat(e.target.value) || 0)} aria-label="Partner cut" />
+                        <em>{partnerMode === "percent" ? "%" : "\u20ac"}</em>
+                      </label>
+                      <span className="lc-disc-off">-{money(partnerOff)}</span>
+                      <button type="button" className="lc-pt-remove" onClick={() => { setPartnerId(""); setPartnerValue(0); }} title="Remove the partner from this line">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                        Remove partner
+                      </button>
+                    </>
+                  )}
+                </div>
+                {partnerData && partnerData.partners.length === 0 && !partnerId && (
+                  <span className="lc-hint">No partners yet: tag a company with the relationship type “Partner”.</span>
+                )}
+                {partnerDef && (partnerDef.mode !== partnerMode || partnerDef.value !== partnerValue) && (
+                  <span className="lc-hint">
+                    Default for this partner: {partnerDef.mode === "percent" ? `${partnerDef.value}%` : money(partnerDef.value)} ·{" "}
+                    <button type="button" className="lc-pt-reset" onClick={() => { setPartnerMode(partnerDef.mode); setPartnerValue(partnerDef.value); }}>Use it</button>
+                  </span>
+                )}
+              </section>
+            )}
           </div>
 
           <aside className="lc-sum">
@@ -307,6 +375,9 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
                   {discTotal > 0 && rounds && " · "}
                   {rounds && <>+{money(roundExtra)} rounding</>}
                 </small>
+              )}
+              {partnerOff > 0 && (
+                <small className="lc-total-pt">{partnerName} −{money(partnerOff)} · <b>{money(totalShown - partnerOff)}</b> for us</small>
               )}
             </div>
             <div className="lc-rows">
@@ -323,6 +394,15 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
                   <span>Round up to the billable minimum (+{roundExtraDays} {unit ? unitWord : "units"})</span>
                   <b>+{money(roundExtra)}</b>
                 </div>
+              )}
+              {partnerOff > 0 && (
+                <>
+                  <div className="lc-row is-partner">
+                    <span>{partnerName}{partnerMode === "percent" ? <em> {partnerValue}%</em> : null}</span>
+                    <b>−{money(partnerOff)}</b>
+                  </div>
+                  <div className="lc-row is-sub"><span>Deal value (for us)</span><b>{money(totalShown - partnerOff)}</b></div>
+                </>
               )}
             </div>
             <div className="lc-actions">

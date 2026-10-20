@@ -318,3 +318,18 @@
 .lc-supdays .lc-step input { width: 46px; font-size: 14px; }
 .lc-supdays-reset { padding: 4px 9px; border-radius: 8px; border: 1px solid rgba(14, 26, 21, 0.12); background: #fff; font: inherit; font-size: 11.5px; font-weight: 700; color: #66756f; cursor: pointer; }
 .lc-supdays-reset:hover { color: #0b6b4c; border-color: rgba(31, 185, 138, 0.4); }
+
+/* ---- Partner cut ---- */
+.lc-partner .lc-price { flex-wrap: wrap; gap: 10px; }
+.lc-pt-pick select { appearance: none; min-width: 200px; padding: 10px 34px 10px 14px; border-radius: 13px; border: 1.5px solid transparent; background: var(--field) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%235a7d6d' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 12px center / 14px; font: inherit; font-size: 14px; font-weight: 650; color: var(--ink); cursor: pointer; outline: none; transition: border-color 0.16s; }
+.lc-pt-pick select:focus { border-color: var(--jade); background-color: #fff; }
+.lc-pt-val input { width: 80px; font-size: 18px; }
+.lc-partner .lc-hint { display: block; margin-top: 8px; }
+.lc-pt-reset { border: none; background: none; padding: 0; font: inherit; font-weight: 700; color: var(--jade); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.lc-total small.lc-total-pt { display: block; margin-top: 4px; color: #ffd7a8; }
+.lc-total small.lc-total-pt b { font-size: inherit; font-weight: 800; letter-spacing: 0; color: #fff; }
+.lc-row.is-partner { color: #9a5b14; }
+
+.lc-pt-remove { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; height: 34px; padding: 0 12px; border: 1.5px solid rgba(184, 69, 47, 0.18); border-radius: 11px; background: #fff; font: inherit; font-size: 12.5px; font-weight: 700; color: #b8452f; cursor: pointer; transition: background 0.15s, border-color 0.15s; }
+.lc-pt-remove svg { width: 13px; height: 13px; }
+.lc-pt-remove:hover { background: #fdebe8; border-color: rgba(184, 69, 47, 0.4); }

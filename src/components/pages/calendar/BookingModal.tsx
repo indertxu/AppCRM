@@ -6,6 +6,11 @@ import DatePicker from "../../framework/DatePicker";
 import { supabase } from "../../api/supabase";
 import { busyAt } from "./invitesApi";
 import { useAuth } from "../../api/AuthProvider";
+import { loadRoles } from "../settings/blueprintsApi";
+import {
+  legacyRoleMap, resolveRoleKey, resolvedLinesOf, roleLinesOfRow, roleKeyOf, roleCounts, roleColor, roleNameOf,
+  sortRoles, type ClientRole, type RoleLine,
+} from "../clients/clientsTypes";
 import "./BookingModal.css";
 
 const MODAL_HOURS = Array.from({ length: 17 }, (_, i) => 5 + i); // 5..21
@@ -157,9 +162,15 @@ const [projectTypes, setProjectTypes] = useState<ProjectType[]>([]);
     initial.taskId ? initial.taskId.split(",").filter(Boolean) : []
   );
 const [notes, setNotes] = useState(initial.notes ?? "");
-  const [line, setLine] = useState(initial.line ?? "");
+  /** The role this time is logged on: one of the roles sold on the project. */
   const [roleId, setRoleId] = useState(initial.roleId ?? "");
-  const [roles, setRoles] = useState<{ id: string; name: string; is_supervision: boolean }[]>([]);
+  /** Every role in the catalogue, and the ones this person is assigned to. */
+  const [allRoles, setAllRoles] = useState<ClientRole[]>([]);
+  const [roles, setRoles] = useState<ClientRole[]>([]);
+  /** The role the entry already had when editing: it stays available so saving never moves it. */
+  const [keepRole, setKeepRole] = useState(initial.roleId ?? "");
+  /** The roles sold on each project (old projects read through their legacy columns). */
+  const [projLines, setProjLines] = useState<Record<string, RoleLine[]>>({});
   /** Rate unit and smallest bookable amount, per service, from the catalogue. */
   const [svcUnits, setSvcUnits] = useState<Record<string, { unit: "hour" | "day"; min: number }>>({});
 const [pickedLine, setPickedLine] = useState(editing || !!initial.line);
@@ -224,15 +235,24 @@ const closeDate = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2,
   );
 
   // Options come from the roles defined in the catalogue, filtered to the ones
-  // this person is assigned to there. Each role still maps to a billing line,
-  // because Backlog, Billing and Bonus all group by that.
+  // this person is assigned to there. On a project, the role is narrowed to
+  // the roles that project was sold with (see projRoles).
   useEffect(() => {
     (async () => {
       const { data: auth } = await supabase.auth.getUser();
       const uid = auth?.user?.id ?? "";
-      const { data } = await supabase.from("client_roles").select("id, name, is_supervision, user_ids").order("name");
-      setRoles(((data ?? []) as any[]).filter((r) => (Array.isArray(r.user_ids) ? r.user_ids : []).includes(uid)));
+      const all = await loadRoles();
+      setAllRoles(all);
+      // Your own roles, plus every role that doesn't count for the target
+      // (connector work, which anyone could always log).
+      setRoles(all.filter((r) => (r.userIds ?? []).includes(uid) || !r.countsForTarget));
+      // An entry from before roles were stored only has its line: show it on the matching role.
+      if (!initial.roleId && initial.line && initial.line !== "closure" && initial.line !== "sales") {
+        const k = resolveRoleKey(initial.line, legacyRoleMap(all));
+        if (k !== initial.line) { setRoleId(k); setKeepRole(k); }
+      }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -246,9 +266,8 @@ const closeDate = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2,
     });
   }, []);
 
-  const pickRole = (r: { id: string; name: string; is_supervision: boolean }) => {
-    setLine(r.is_supervision ? "supervision" : "consultor");
-    setRoleId(r.id);
+  const pickRole = (r: ClientRole | null) => {
+    setRoleId(r?.id ?? "");
     setPickedLine(true);
   };
 
@@ -284,13 +303,16 @@ team: (r.team as { userId?: string }[]) ?? [],
       const allowed = new Set(visible.map((p) => p.clientId));
       const { data: cs } = await supabase.from("clients").select("id, name").order("name");
       setClients(((cs ?? []) as unknown as Client[]).filter((c) => seesAll || allowed.has(c.id)));
-setSignedDays(Object.fromEntries(((ps ?? []) as Record<string, unknown>[]).flatMap((r) => [
-     [`${r.id}|consultor`, Number(r.consultor_days) || 0],
-        [`${r.id}|connector`, Number(r.connector_days) || 0],
-        [`${r.id}|supervision`, Number(r.supervision_days) || 0],
-      ])));
+      // Days sold per project and role, and what is already used on each.
+      const legacy = legacyRoleMap(await loadRoles());
+      const lines: Record<string, RoleLine[]> = {};
+      ((ps ?? []) as Record<string, unknown>[]).forEach((r) => {
+        lines[r.id as string] = resolvedLinesOf({ roleLines: roleLinesOfRow(r) }, legacy);
+      });
+      setProjLines(lines);
+      setSignedDays(Object.fromEntries(Object.entries(lines).flatMap(([pid, ls]) => ls.map((l) => [`${pid}|${l.roleId}`, l.days]))));
 
-      const { data: ce } = await supabase.from("calendar_entries").select("id, project_id, billable, status, billing_line");
+      const { data: ce } = await supabase.from("calendar_entries").select("id, project_id, billable, status, billing_line, role_id");
       const { data: ea } = await supabase.from("entry_actuals").select("entry_id, actual_billable");
       const actualMap = Object.fromEntries(((ea ?? []) as Record<string, unknown>[])
         .map((r) => [r.entry_id as string, Number(r.actual_billable) || 0]));
@@ -299,7 +321,9 @@ setSignedDays(Object.fromEntries(((ps ?? []) as Record<string, unknown>[]).flatM
         const pid = r.project_id as string | null;
         if (!pid || r.status === "cancelled") return;
 const v = actualMap[r.id as string] ?? (Number(r.billable) || 0);
-        const k = `${pid}|${(r.billing_line as string) || "consultor"}`;
+        // When editing, the entry itself is left out: the bar adds what is on screen.
+        if (editing && r.id === entryId) return;
+        const k = `${pid}|${resolveRoleKey(roleKeyOf(r as { role_id?: string | null; billing_line?: string | null }), legacy)}`;
         if (!agg[k]) agg[k] = { done: 0, booked: 0 };
         if (r.status === "confirmed") agg[k].done += v;
         else agg[k].booked += v;
@@ -330,6 +354,37 @@ const clientProjects = projects.filter((p) => p.clientId === clientId && p.statu
   const unitShort = unit === "hour" ? "h" : "d";
   const phases = project?.phases ?? [];
   const contacts = project?.contacts ?? [];
+  /**
+   * The roles you can log on a project: the ones it was sold with that you
+   * hold. If you hold none of them, any role on the project (someone has to be
+   * able to log the time); a project with no roles at all leaves the choice open.
+   */
+  const projRolesOf = (pid: string): RoleLine[] => {
+    const ls = projLines[pid] ?? [];
+    const mine = ls.filter((l) => roles.some((r) => r.id === l.roleId) || (editing && l.roleId === keepRole));
+    const counting = mine.filter((l) => roleCounts(l.roleId, allRoles));
+    // nothing of yours that counts: any counting role on the project (someone has to log the time)
+    const base = counting.length ? mine : [...ls.filter((l) => roleCounts(l.roleId, allRoles)), ...mine.filter((l) => !counting.includes(l))];
+    const out = base.length ? base : ls;
+    // counting roles first, so a fallback never lands on a connector-type role
+    return [...out.filter((l) => roleCounts(l.roleId, allRoles)), ...out.filter((l) => !roleCounts(l.roleId, allRoles))]
+      .filter((l, i, a) => a.findIndex((x) => x.roleId === l.roleId) === i);
+  };
+  const projRoles = project ? projRolesOf(project.id) : [];
+  /**
+   * The role a project is logged on. The one picked stays when the project has
+   * it, or when it is a role that doesn't count (connector time is logged as
+   * such even on a project sold without it). A counting role the project
+   * wasn't sold with moves to the project's own consultancy role.
+   */
+  const roleFor = (pid: string) => {
+    const opts = projRolesOf(pid);
+    if (roleId && (opts.some((l) => l.roleId === roleId) || (projLines[pid] ?? []).some((l) => l.roleId === roleId))) return roleId;
+    if (roleId && allRoles.some((r) => r.id === roleId && !r.countsForTarget)) return roleId;
+    return opts[0]?.roleId ?? roleId;
+  };
+  const roleIdx = (id: string) => sortRoles(allRoles).findIndex((r) => r.id === id);
+  const colorOf = (id: string) => roleColor(allRoles.find((r) => r.id === id), Math.max(0, roleIdx(id)));
   const projectLabel = (p: Project) => {
     const t = projectTypes.find((x) => x.id === p.projectTypeId)?.name ?? "Project";
     return p.kickoffDate ? `${t} · ${p.kickoffDate}` : t;
@@ -356,6 +411,8 @@ if (!t?.clientRelated) { setClientId(""); setProjectId(""); setOpenPhaseId(""); 
   };
   const pickProject = (id: string) => {
     setProjectId(id); setOpenPhaseId(""); setTaskIds([]); setAttendeeIds([]);
+    // The role follows the project: one it was sold with, ideally the one picked.
+    if (id) setRoleId(roleFor(id));
   };
 
 const startMin = startH * 60 + startM;
@@ -449,8 +506,9 @@ startMin, endMin, type, billable, clientId, projectId,
       summoned: Object.entries(summoned).map(([id, b]) => ({ id, billable: Number(b) || 0 })),
       summonNote: summonNote.trim() || undefined,
       notes,
-      line: line || "consultor",
-      roleId,
+      // Project work is one line now; the role says what it bills as.
+      line: initial.line === "sales" || initial.line === "closure" ? initial.line : "consultor",
+      roleId: initial.line === "closure" ? (initial.roleId ?? "") : isClientWork && projectId ? roleFor(projectId) : roleId,
       meetKind,
     });
   };
@@ -480,45 +538,50 @@ if (!pickedLine) {
             <div>
               <span className="bm-eyebrow">Log work · {DOW_LONG[day.getDay()]}, {MONTHS_LONG[day.getMonth()]} {day.getDate()}</span>
               <h2 className="bm-pick-title">What kind of job is this?</h2>
-              <p className="bm-pick-sub">Pick the line this time is billed on.</p>
+              <p className="bm-pick-sub">Pick the role this time is logged on.</p>
             </div>
             <button className="bm-x" onClick={onClose} aria-label="Close">×</button>
           </header>
           <div className="bm-pick-body">
           <div className="bm-pick-opts">
-            {roles.length === 0 && (
+            {!roles.some((r) => r.countsForTarget) && (
               <p className="bm-pick-none">
-                You are not assigned to any role in the catalogue, so there is no
-                consultancy line to log against. Ask a manager to add you.
+                You are not assigned to any role in the catalogue. You can still log
+                project work: it goes on one of the roles the project was sold with.
               </p>
             )}
-            {roles.map((r, i) => (
-              <button key={r.id} className={`bm-pick-opt ${r.is_supervision ? "is-sup" : "is-con"}`} style={{ animationDelay: `${60 + i * 50}ms` }}
-                onClick={() => pickRole(r)}>
+            {sortRoles(roles).map((r, i) => {
+              const counts = roleCounts(r.id, allRoles);
+              return (
+                <button key={r.id} className={`bm-pick-opt is-role ${counts ? "is-con" : "is-link"}`}
+                  style={{ animationDelay: `${60 + i * 50}ms`, ["--rc" as string]: colorOf(r.id) }}
+                  onClick={() => pickRole(r)}>
+                  <span className="bm-pick-ico">
+                    {counts
+                      ? <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></svg>
+                      : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" /><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" /></svg>}
+                  </span>
+                  <span className="bm-pick-txt">
+                    <span className="bm-pick-name">{r.name}</span>
+                    <span className="bm-pick-note">{counts ? "Counts towards your billable target." : "Billed to the client, not to your target."}</span>
+                  </span>
+                  <svg className="bm-pick-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
+                </button>
+              );
+            })}
+            {!roles.some((r) => r.countsForTarget) && (
+              <button className="bm-pick-opt is-con" style={{ animationDelay: "60ms" }} onClick={() => pickRole(null)}>
                 <span className="bm-pick-ico">
-                  {r.is_supervision
-                    ? <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M15.5 8.5l-2 5-5 2 2-5z" /></svg>
-                    : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></svg>}
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></svg>
                 </span>
                 <span className="bm-pick-txt">
-                  <span className="bm-pick-name">{r.name}</span>
-                  <span className="bm-pick-note">{r.is_supervision ? "Billed at the supervision rate." : "Counts towards your billable target."}</span>
+                  <span className="bm-pick-name">Project work</span>
+                  <span className="bm-pick-note">The role comes from the project you pick.</span>
                 </span>
                 <svg className="bm-pick-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
               </button>
-            ))}
-            <button className="bm-pick-opt is-link" style={{ animationDelay: `${60 + roles.length * 50}ms` }}
-              onClick={() => { setLine("connector"); setRoleId(""); setPickedLine(true); }}>
-              <span className="bm-pick-ico">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" /><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" /></svg>
-              </span>
-              <span className="bm-pick-txt">
-                <span className="bm-pick-name">Connector</span>
-                <span className="bm-pick-note">Billed to the client, not to your target.</span>
-              </span>
-              <svg className="bm-pick-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
-            </button>
-            <button className={`bm-pick-opt is-fin ${closing ? "is-on" : ""}`} style={{ animationDelay: `${60 + (roles.length + 1) * 50}ms` }}
+            )}
+            <button className={`bm-pick-opt is-fin ${closing ? "is-on" : ""}`} style={{ animationDelay: `${60 + Math.max(1, roles.length) * 50}ms` }}
               onClick={() => setClosing((v) => !v)} aria-expanded={closing}>
               <span className="bm-pick-ico">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 21V4h11l-1.5 4H20l-1.5 4H15v9" /></svg>
@@ -616,12 +679,14 @@ if (!pickedLine) {
   const howOf = MEET_KINDS.find((k) => k.id === meetKind);
   const clientList = clients.filter((c) => !clientQ.trim() || c.name.toLowerCase().includes(clientQ.trim().toLowerCase()));
   const later = (fn: () => void) => window.setTimeout(fn, 220);
+  /** The role the time will be saved on (on a project, always one it was sold with). */
+  const curRole = project ? roleFor(project.id) : roleId;
   const budget = (() => {
     if (!project) return null;
-    const ln = line || "consultor";
-    const signed = signedDays[`${project.id}|${ln}`] ?? 0;
-    const u = used[`${project.id}|${ln}`] ?? { done: 0, booked: 0 };
-    const left = +(signed - u.done - u.booked - (editing ? 0 : billable)).toFixed(2);
+    const signed = signedDays[`${project.id}|${curRole}`] ?? 0;
+    const u = used[`${project.id}|${curRole}`] ?? { done: 0, booked: 0 };
+    // The entry being edited is left out of `used`, so its time is added here as on screen.
+    const left = +(signed - u.done - u.booked - billable).toFixed(2);
     const pct = (n: number) => (signed > 0 ? Math.min(100, (n / signed) * 100) : 0);
     return { signed, u, left, pct };
   })();
@@ -631,7 +696,7 @@ if (!pickedLine) {
     ...summonedList.map((m) => ({ key: `m${m.id}`, name: m.name, kind: "is-mate", note: `${(summoned[m.id] ?? 0)}${unitShort}` })),
     ...contactList.map((c) => ({ key: `c${c.id}`, name: c.name || c.email || "Contact", kind: "is-client", note: "" })),
   ];
-  const roleName = line === "connector" ? "Connector" : roles.find((r) => r.id === roleId)?.name ?? (line === "supervision" ? "Project management" : "Consultor");
+  const roleName = curRole ? roleNameOf(curRole, allRoles) : "Project work";
 
   const preview: Record<StepId, string> = {
     work: selectedType?.name ?? "",
@@ -740,7 +805,7 @@ if (!pickedLine) {
                 <div className="bm6-list">
                   {clientProjects.length === 0 && <p className="bm-empty">This client has no open projects.</p>}
                   {clientProjects.map((p, i) => {
-                    const ln = line || "consultor";
+                    const ln = roleFor(p.id);
                     const signed = signedDays[`${p.id}|${ln}`] ?? 0;
                     const u = used[`${p.id}|${ln}`] ?? { done: 0, booked: 0 };
                     const pct = signed > 0 ? Math.min(100, ((u.done + u.booked) / signed) * 100) : 0;
@@ -750,7 +815,7 @@ if (!pickedLine) {
                         onClick={() => { pickProject(p.id); later(() => { setWizDir(1); setWizStep("tasks"); }); }}>
                         <span className="bm6-row-txt">
                           <b>{projectLabel(p)}</b>
-                          <small>{signed ? `${(u.done + u.booked).toFixed(2)} of ${signed}${unitShort} used or booked` : "No signed days on this line"}</small>
+                          <small>{ln ? `${roleNameOf(ln, allRoles)} · ` : ""}{signed ? `${(u.done + u.booked).toFixed(2)} of ${signed}${unitShort} used or booked` : "No signed days on this role"}</small>
                           <span className="bm6-mini"><i style={{ width: `${pct}%` }} /></span>
                         </span>
                         <svg className="bm6-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
@@ -765,6 +830,27 @@ if (!pickedLine) {
       case "tasks":
         return (
           <>
+            {projRoles.length > 1 && (
+              <div className="bm6-roles" role="radiogroup" aria-label="Role on this project">
+                <label className="bm6-label">Role on this project</label>
+                <div className="bm6-roles-row">
+                  {projRoles.map((l, i) => {
+                    const u = used[`${project!.id}|${l.roleId}`] ?? { done: 0, booked: 0 };
+                    const left = +(l.days - u.done - u.booked).toFixed(2);
+                    return (
+                      <button key={l.roleId} type="button" role="radio" aria-checked={curRole === l.roleId}
+                        className={`bm6-role ${curRole === l.roleId ? "is-on" : ""} ${roleCounts(l.roleId, allRoles) ? "" : "is-nocount"}`}
+                        style={{ ["--rc" as string]: colorOf(l.roleId), ["--i" as string]: i }}
+                        onClick={() => setRoleId(l.roleId)}>
+                        <i />
+                        <b>{roleNameOf(l.roleId, allRoles)}</b>
+                        <small>{l.days ? `${left.toFixed(decimals)}${unitShort} left` : "No days sold"}{roleCounts(l.roleId, allRoles) ? "" : " · not on your target"}</small>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             <p className="bm6-lead">What did you work on, and what goes to the client?</p>
             {phases.length === 0 ? (
               <p className="bm-empty">This project has no phases yet.</p>
@@ -944,7 +1030,7 @@ if (!pickedLine) {
             {budget && budget.signed > 0 && (
               <div className="bm6-budget">
                 <div className="bm6-budget-track">
-                  <i className="is-booked" style={{ width: `${budget.pct(budget.u.done + budget.u.booked + (editing ? 0 : billable))}%` }} />
+                  <i className="is-booked" style={{ width: `${budget.pct(budget.u.done + budget.u.booked + billable)}%` }} />
                   <i className="is-done" style={{ width: `${budget.pct(budget.u.done)}%` }} />
                 </div>
                 <span className={budget.left < 0 ? "is-over" : ""}>

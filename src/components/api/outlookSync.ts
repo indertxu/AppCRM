@@ -369,7 +369,8 @@ export async function syncCalendarEntry(entryId: string): Promise<OutlookSyncRes
 
     const ids = (v: unknown) => String(v ?? "").split(",").map((x) => x.trim()).filter(Boolean);
     const isMeeting = e.kind === "meeting";
-    const [wt, cl, pj, co, trk, inv, mc, ct] = await Promise.all([
+    const ownLine = e.billing_line === "closure" || e.billing_line === "sales";
+    const [wt, cl, pj, co, trk, inv, mc, ct, rl] = await Promise.all([
       e.work_type_id ? supabase.from("work_types").select("name").eq("id", e.work_type_id).maybeSingle() : Promise.resolve({ data: null }),
       e.client_id ? supabase.from("clients").select("name").eq("id", e.client_id).maybeSingle() : Promise.resolve({ data: null }),
       e.project_id ? supabase.from("projects").select("*").eq("id", e.project_id).maybeSingle() : Promise.resolve({ data: null }),
@@ -378,7 +379,10 @@ export async function syncCalendarEntry(entryId: string): Promise<OutlookSyncRes
       supabase.from("entry_invites").select("invitee_id, status").eq("entry_id", entryId),
       isMeeting ? supabase.from("meeting_contacts").select("contact_id").eq("meeting_id", entryId) : Promise.resolve({ data: [] }),
       e.contact_id ? supabase.from("contacts").select("id, first_name, last_name, email").eq("id", e.contact_id).maybeSingle() : Promise.resolve({ data: null }),
+      // The role the time is logged on (a catalogue role); old entries only have their line.
+      e.role_id && !ownLine ? supabase.from("client_roles").select("name").eq("id", e.role_id).maybeSingle() : Promise.resolve({ data: null }),
     ]);
+    const roleLabel = ((rl as any).data?.name as string) || LINE_LABEL[e.billing_line] || "";
     const project = (pj as any).data;
     let service = "";
     if (project?.service_id || project?.project_type_id) {
@@ -440,7 +444,7 @@ export async function syncCalendarEntry(entryId: string): Promise<OutlookSyncRes
           ["Project", projectName],
           ["Phase", phaseName],
           ["Tasks", tasks.join("\n")],
-          ["Role", LINE_LABEL[e.billing_line] ?? ""],
+          ["Role", roleLabel],
           ["Billable", e.client_id && unit !== "0" ? unit : ""],
           ["Client people", clientContacts.map((c: any) => c.name).filter(Boolean).join(", ")],
           ["Contact", linkedContact?.name ?? ""],

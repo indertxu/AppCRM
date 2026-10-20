@@ -104,7 +104,8 @@ export const destLabel = (d: DocDest): string =>
   d === "skip" ? "Not sent" : SLOT_LABEL[d] ? `Contracts · ${SLOT_LABEL[d]}` : d.startsWith("folder:") ? `Directory · ${d.slice(7)}` : d;
 /** Sensible first guess: the live version's proposal is the contract; older versions are proposals. */
 export const defaultDest = (d: HandoffDoc): DocDest =>
-  d.group === "deal" ? "folder:Sales documents"
+  // proposals generated in the deal (their note starts "Proposal · ") go to the Proposals folder
+  d.group === "deal" ? (/^proposal\s*·/i.test(d.note ?? "") ? "proposal" : "folder:Sales documents")
     : d.active === false ? "proposal"
     : d.kind === "product" ? "license" : "service";
 
@@ -156,6 +157,43 @@ function Check({ on, onClick, disabled, label }: { on: boolean; onClick: () => v
 
 // Inline fallbacks so the panel is always usable even if its stylesheet fails to load.
 const BACKDROP: CSSProperties = { position: "fixed", inset: 0, zIndex: 260, display: "grid", placeItems: "center", padding: "3vh", background: "rgba(6, 18, 13, 0.5)" };
+
+const PROMPT_ICONS: Record<string, string> = {
+  check: "M20 6L9 17l-5-5",
+  trophy: "M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0V4zM7 6H4a3 3 0 0 0 3 4M17 6h3a3 3 0 0 1-3 4",
+  send: "M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z",
+};
+/**
+ * A small centred question in the handoff style: "deal won, create the client
+ * now?" and "send this to management?" both use it.
+ */
+export function HxPrompt({ icon = "check", title, sub, ghost, primary, onGhost, onPrimary, onClose, busy = false }: {
+  icon?: "check" | "trophy" | "send"; title: string; sub: ReactNode; ghost: string; primary: string;
+  onGhost: () => void; onPrimary: () => void; onClose: () => void; busy?: boolean;
+}) {
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
+    window.addEventListener("keydown", k, true);
+    return () => window.removeEventListener("keydown", k, true);
+  }, [onClose]);
+  return createPortal(
+    <div className="hx-backdrop" style={{ ...BACKDROP, zIndex: 320 }} onMouseDown={onClose}>
+      <div className="hx-prompt" onMouseDown={(e) => e.stopPropagation()} role="alertdialog" aria-modal="true" aria-label={title}>
+        <span className="hx-prompt-glow" aria-hidden="true" />
+        <div className="hx-prompt-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={PROMPT_ICONS[icon]} /></svg>
+        </div>
+        <h2 className="hx-prompt-title">{title}</h2>
+        <p className="hx-prompt-sub">{sub}</p>
+        <div className="hx-prompt-actions">
+          {ghost && <button className="hx-btn-ghost" onClick={onGhost} disabled={busy}>{ghost}</button>}
+          <button className="hx-btn-primary" onClick={onPrimary} disabled={busy} autoFocus>{busy ? "Working…" : primary}</button>
+        </div>
+        <button className="hx-prompt-x" onClick={onClose} aria-label="Close">×</button>
+      </div>
+    </div>,
+    document.body);
+}
 const PANEL: CSSProperties = { width: "min(1360px, 96vw)", height: "92vh", display: "flex", flexDirection: "column", background: "#f2f5f3", borderRadius: 26, overflow: "hidden" };
 
 interface ShellSection { key: BlockKey; on: boolean; locked?: boolean; count?: string; toggle?: () => void; tools?: ReactNode; body: ReactNode }
@@ -498,6 +536,8 @@ export default function HandoffConfirmServices({ clientName, skipPrompt = false,
   const [paymentDays, setPaymentDays] = useState<number | null>(30);
   const [calcFor, setCalcFor] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  /** "Send to management?" — the last check before anything leaves sales. */
+  const [askSend, setAskSend] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [blocks, setBlocks] = useState<Record<BlockKey, boolean>>(ALL_ON);
   const [off, setOff] = useState<Set<string>>(new Set());
@@ -856,7 +896,7 @@ export default function HandoffConfirmServices({ clientName, skipPrompt = false,
           onClose={onClose}
           action={
             <span className="hx2-send">
-              <button className="hx-btn-primary hx2-sendbtn" disabled={saving || services.length === 0 || unsigned > 0} onClick={confirm}
+              <button className="hx-btn-primary hx2-sendbtn" disabled={saving || services.length === 0 || unsigned > 0} onClick={() => { if (!unsigned) setAskSend(true); }}
                 title={unsigned ? "Set the signing date first" : undefined}>
                 {unsigned > 0 && <i className="hx2-warn" aria-label="Set the signing date first"><Ico d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" w={2.4} /></i>}
                 {saving ? "Sending…" : "Send to management"}
@@ -865,6 +905,17 @@ export default function HandoffConfirmServices({ clientName, skipPrompt = false,
             </span>
           }
         />
+      )}
+
+      {askSend && (
+        <HxPrompt icon="send" title="Send to management?"
+          sub={<>
+            <b>{services.length} service{services.length === 1 ? "" : "s"}</b> for <b>{clientName}</b>, {money(total)}.
+            {" "}Management builds the project from what you send, so check the data before it goes.
+          </>}
+          ghost="Back to review" primary="Yes, send it"
+          onGhost={() => setAskSend(false)} onClose={() => setAskSend(false)}
+          onPrimary={() => { setAskSend(false); void confirm(); }} />
       )}
 
       {/* editable calculator */}

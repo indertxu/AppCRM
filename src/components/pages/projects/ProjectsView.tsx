@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import type { Client, Project, ProjectType } from "../clients/clientsTypes";
-import { projectValue } from "../clients/clientsTypes";
+import type { Client, Project, ProjectType, ClientRole } from "../clients/clientsTypes";
+import { projectValue, legacyRoleMap, resolvedLinesOf, roleNameOf, roleColor, roleCounts } from "../clients/clientsTypes";
 import Select from "../../framework/Select";
 import { supabase } from "../../api/supabase";
 
@@ -11,20 +11,17 @@ interface Props {
   projects: Project[];
   projectTypes: ProjectType[];
   usage: Usage;
+  /** Every role, to name and colour each project's role lines. */
+  roles: ClientRole[];
   onOpenProject: (c: Client, p: Project) => void;
   onReopen: (p: Project) => void;
   onClose_: (p: Project) => void;
 }
 
-const LINES: { key: string; label: string }[] = [
-  { key: "consultor", label: "Consultancy" },
-  { key: "connector", label: "Connector" },
-];
-
 type Sort = "recent" | "value" | "days" | "progress" | "left";
 
 export default function ProjectsView({
-  clients, projects, projectTypes, usage, onOpenProject, onReopen, onClose_,
+  clients, projects, projectTypes, usage, roles, onOpenProject, onReopen, onClose_,
 }: Props) {
   const [q, setQ] = useState("");
   const [fClient, setFClient] = useState("");
@@ -60,34 +57,25 @@ export default function ProjectsView({
   const clientName = (id: string) => clients.find((c) => c.id === id)?.name ?? "—";
   const typeName = (id: string) => projectTypes.find((t) => t.id === id)?.name ?? "No service";
 
-  const signedOf = (p: Project, line: string) =>
-    line === "connector" ? p.connectorDays : p.consultorDays + p.supervisionDays;
-  const totalSigned = (p: Project) => p.consultorDays + p.connectorDays + p.supervisionDays;
-
-  /**
-   * The consultancy column is signed as consultorDays + supervisionDays, so its
-   * usage has to include the supervision line too. Reading only `|consultor`
-   * left every supervision day counted in the denominator and never in the
-   * numerator, so supervision always looked 0% delivered.
-   */
-  const usageOf = (p: Project, line: string) => {
-    const keys = line === "connector"
-      ? [`${p.id}|connector`]
-      : [`${p.id}|consultor`, `${p.id}|supervision`];
-    return keys.reduce(
-      (acc, k) => {
-        const u = usage[k];
-        if (u) { acc.done += u.done; acc.booked += u.booked; }
-        return acc;
-      },
-      { done: 0, booked: 0 }
-    );
+  const legacy = useMemo(() => legacyRoleMap(roles), [roles]);
+  /** The project's roles with what was sold and what is done / booked on each.
+   *  A role with time logged but not sold on the project shows too (0 sold). */
+  const roleRowsOf = (p: Project) => {
+    const lines = resolvedLinesOf(p, legacy);
+    const rows = lines.map((l) => ({ roleId: l.roleId, signed: l.days, done: 0, booked: 0 }));
+    const prefix = `${p.id}|`;
+    for (const [k, u] of Object.entries(usage)) {
+      if (!k.startsWith(prefix)) continue;
+      const roleId = k.slice(prefix.length);
+      let r = rows.find((x) => x.roleId === roleId);
+      if (!r) { r = { roleId, signed: 0, done: 0, booked: 0 }; rows.push(r); }
+      r.done += u.done; r.booked += u.booked;
+    }
+    return rows;
   };
-
-  const totalUsed = (p: Project) =>
-    LINES.reduce((s, ln) => s + usageOf(p, ln.key).done, 0);
-  const totalBooked = (p: Project) =>
-    LINES.reduce((s, ln) => s + usageOf(p, ln.key).booked, 0);
+  const totalSigned = (p: Project) => roleRowsOf(p).reduce((s, r) => s + r.signed, 0);
+  const totalUsed = (p: Project) => roleRowsOf(p).reduce((s, r) => s + r.done, 0);
+  const totalBooked = (p: Project) => roleRowsOf(p).reduce((s, r) => s + r.booked, 0);
   const progressOf = (p: Project) => {
     const t = totalSigned(p);
     return t > 0 ? (totalUsed(p) / t) * 100 : 0;
@@ -255,8 +243,7 @@ export default function ProjectsView({
           <div className="pv-hrow">
             <span>Project</span>
             <span>Dates</span>
-            <span>Consultancy</span>
-            <span>Connector</span>
+            <span>Roles · done / sold</span>
             <span className="pv-right">Value</span>
             <span />
           </div>
@@ -279,32 +266,34 @@ export default function ProjectsView({
                   <span><em>End</em>{p.endDate || "—"}</span>
                 </div>
 
-                {LINES.map((ln) => {
-                  const signed = signedOf(p, ln.key);
-                  const u = usageOf(p, ln.key);
-                  const left = +(signed - u.done - u.booked).toFixed(2);
-                  const pct = (n: number) => (signed > 0 ? Math.min(100, (n / signed) * 100) : 0);
-                  return (
-                    <div className="pv-cell pv-cell-line" key={ln.key}>
-                      {signed === 0 && u.done === 0 && u.booked === 0 ? (
-                        <span className="pv-none">—</span>
-                      ) : (
-                        <>
+                <div className="pv-cell pv-cell-roles">
+                  {(() => {
+                    const rows = roleRowsOf(p);
+                    if (!rows.length) return <span className="pv-none">No roles sold</span>;
+                    return rows.map((r) => {
+                      const left = +(r.signed - r.done - r.booked).toFixed(2);
+                      const pct = (n: number) => (r.signed > 0 ? Math.min(100, (n / r.signed) * 100) : n > 0 ? 100 : 0);
+                      const at = roles.findIndex((x) => x.id === r.roleId);
+                      const counts = roleCounts(r.roleId, roles);
+                      return (
+                        <div className={`pv-role ${counts ? "" : "is-nocount"}`} key={r.roleId} style={{ ["--c" as any]: roleColor(roles[at], at < 0 ? 0 : at) }}
+                          title={counts ? undefined : "Doesn't count for the consultant's billing"}>
+                          <span className="pv-role-nm"><i />{roleNameOf(r.roleId, roles)}</span>
                           <div className="pv-track">
-                            <div className="pv-fill" style={{ width: `${pct(u.done + u.booked)}%` }} />
-                            <div className="pv-fill is-done" style={{ width: `${pct(u.done)}%` }} />
+                            <div className="pv-fill" style={{ width: `${pct(r.done + r.booked)}%` }} />
+                            <div className="pv-fill is-done" style={{ width: `${pct(r.done)}%` }} />
                           </div>
                           <span className="pv-figs">
-                            <b>{u.done.toFixed(2)}</b>/{signed}{unitOf(p)}
+                            <b>{+r.done.toFixed(2)}</b>/{r.signed}{unitOf(p)}
                             <i className={left < 0 ? "is-over" : ""}>
                               {left < 0 ? `${Math.abs(left).toFixed(2)}${unitOf(p)} over` : `${left.toFixed(2)}${unitOf(p)} left`}
                             </i>
                           </span>
-                        </>
-                      )}
-                    </div>
-                  );
-                })}
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
 
                 <div className="pv-cell pv-right pv-cell-value">
                   {Math.round(projectValue(p)).toLocaleString()} €

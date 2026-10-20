@@ -1,34 +1,39 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /**
- * Home · CONSULTANCY
- *
- * The right-hand side of the home page for the consultancy department:
- * department backlog, team (or your own) performance and outstanding bills.
- * The calendar now lives in the shared column on the left, for everyone.
+ * Home · CONSULTANCY — the whole page, in three columns:
+ *   left    the ticket desk (to-do + tickets)
+ *   middle  your calendar (tall) and, under it, the department backlog as a 2×2
+ *   right   team (or your own) performance, then outstanding bills
+ * The calendar and the desk come from the shared home pieces (props).
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../../api/supabase";
+import { loadRoles } from "../../settings/blueprintsApi";
+import { roleLinesOfRow, resolveRoleKey, legacyRoleMap, roleKeyOf, roleCounts, rateOn, lineRate } from "../../clients/clientsTypes";
 import "./ConsultancyHome.css";
 
 const eur = (n: number) => Math.round(n).toLocaleString("en-US");
 const d1 = (n: number) => (+n.toFixed(1)).toLocaleString();
-const d2 = (n: number) => (+n.toFixed(2)).toLocaleString();
 
 interface Props {
   userId: string;
   isLead: boolean;   // boss / consultancy_manager sees the whole team; consultant sees self
   hoursPerDay: number;
+  /** The shared calendar card (middle column, on top). */
+  calendar: ReactNode;
+  /** The ticket desk (left column). */
+  desk: ReactNode;
 }
 
 interface Bill { id: string; client: string; period: string; amount: number; due: string | null; late: number; }
 interface PersonRow { userId: string; name: string; daysDone: number; daysPlanned: number; daysTarget: number; billed: number; billedPlanned: number; billTarget: number; bonus: number; }
 
-export default function ConsultancyHome({ userId, isLead, hoursPerDay }: Props) {
+export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar, desk }: Props) {
   const nav = useNavigate();
   const [loading, setLoading] = useState(true);
   const [bills, setBills] = useState<Bill[]>([]);
-  const [backlog, setBacklog] = useState({ consDays: 0, connDays: 0, valueCore: 0, valueConn: 0, value: 0, projects: 0 });
+  const [backlog, setBacklog] = useState({ consDays: 0, connDays: 0, valueCore: 0, valueConn: 0, value: 0, projects: 0, otherLabel: "Other roles" });
   const [team, setTeam] = useState<PersonRow[]>([]);
   const [teamTotals, setTeamTotals] = useState({ daysDone: 0, daysTarget: 0, billed: 0, billTarget: 0 });
 
@@ -36,48 +41,57 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay }: Props) 
     let alive = true;
     (async () => {
       const todayISO = new Date().toISOString().slice(0, 10);
-      const hpd = hoursPerDay > 0 ? hoursPerDay : 8;
 
       // ---- department backlog — replicates the Management Backlog page exactly ----
-      // available = sold − billed (confirmed) per line; planned/booked does NOT
-      // count as consumed. value = consultancy days × rate + connector × rate +
-      // supervision × supRate. Only kicked-off projects count.
-      const { data: projs } = await supabase.from("projects").select("*");
-      const { data: pu } = await supabase.from("project_usage").select("project_id, billing_line, done");
-      // billed (confirmed) per project per line
-      const billedByProjLine: Record<string, { consultor: number; supervision: number; connector: number }> = {};
+      // available = sold − billed (confirmed) per role; planned/booked does NOT
+      // count as consumed. value = Σ available × that role's rate. Roles that
+      // count for the consultant's target make the consultancy bucket, the rest
+      // (a connector, say) the other one. Only kicked-off projects count.
+      const [{ data: projs }, { data: pu }, roles] = await Promise.all([
+        supabase.from("projects").select("*"),
+        supabase.from("project_role_usage").select("project_id, role_key, done"),
+        loadRoles(),
+      ]);
+      const legacy = legacyRoleMap(roles);
+      const linesOf = (p: any) => {
+        const out: ReturnType<typeof roleLinesOfRow> = [];
+        for (const l of roleLinesOfRow(p)) {
+          const roleId = resolveRoleKey(l.roleId, legacy);
+          const same = out.find((x) => x.roleId === roleId);
+          if (same) same.days += l.days; else out.push({ ...l, roleId });
+        }
+        return out;
+      };
+      // billed (confirmed) per project per role
+      const billedByProjRole: Record<string, Record<string, number>> = {};
       (pu ?? []).forEach((r: any) => {
-        const line = (r.billing_line === "connector" ? "connector" : r.billing_line === "supervision" ? "supervision" : "consultor") as "consultor" | "supervision" | "connector";
-        if (!billedByProjLine[r.project_id]) billedByProjLine[r.project_id] = { consultor: 0, supervision: 0, connector: 0 };
-        billedByProjLine[r.project_id][line] += Number(r.done) || 0;
+        const k = resolveRoleKey(r.role_key || "consultor", legacy);
+        (billedByProjRole[r.project_id] ??= {})[k] = (billedByProjRole[r.project_id]?.[k] || 0) + (Number(r.done) || 0);
       });
 
       let consDays = 0, connDays = 0, valueCore = 0, valueConn = 0, projCount = 0;
       (projs ?? []).forEach((p: any) => {
         // only kicked-off projects enter the backlog
         if (p.kickoff_date && p.kickoff_date > todayISO) return;
-        const soldC = Number(p.consultor_days) || 0;
-        const soldS = Number(p.supervision_days) || 0;
-        const soldK = Number(p.connector_days) || 0;
-        if (soldC + soldS + soldK === 0) return;
-        const b = billedByProjLine[p.id] || { consultor: 0, supervision: 0, connector: 0 };
-        const availC = Math.max(0, soldC - b.consultor);
-        const availS = Math.max(0, soldS - b.supervision);
-        const availK = Math.max(0, soldK - b.connector);
-        if (availC + availS + availK <= 0.001) return;
-        projCount += 1;
-        const rate = Number(p.price_per_day) || 0;
-        const supRate = Number(p.supervision_price) || 0;
-        // consultancy bucket = consultor + supervision (days and value)
-        consDays += availC + availS;
-        connDays += availK;
-        valueCore += availC * rate + availS * supRate;
-        valueConn += availK * rate;
+        const lines = linesOf(p);
+        if (lines.reduce((s, l) => s + l.days, 0) === 0) return;
+        const b = billedByProjRole[p.id] || {};
+        let any = false;
+        for (const l of lines) {
+          const avail = Math.max(0, l.days - (b[l.roleId] || 0));
+          if (avail <= 0.001) continue;
+          any = true;
+          if (roleCounts(l.roleId, roles)) { consDays += avail; valueCore += avail * lineRate(l); }
+          else { connDays += avail; valueConn += avail * lineRate(l); }
+        }
+        if (any) projCount += 1;
       });
+      const others = roles.filter((r) => !r.countsForTarget).map((r) => r.name);
       if (alive) setBacklog({
         consDays, connDays, valueCore, valueConn,
         value: valueCore + valueConn,
         projects: projCount,
+        otherLabel: others.length ? others.join(", ") : "Other roles",
       });
 
       // ---- team panel: MATCHES the Management Team tab (Month scope) ----
@@ -94,7 +108,7 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay }: Props) 
         supabase.from("user_targets").select("*"),
         supabase.from("billing_settings").select("min_days_month, min_billing_month, bonus_pct_1").eq("id", "default").maybeSingle(),
         supabase.from("services").select("id, rate_unit"),
-        supabase.from("calendar_entries").select("user_id, billable, billing_line, entry_date, billing_period, project_id, status")
+        supabase.from("calendar_entries").select("user_id, billable, billing_line, role_id, entry_date, billing_period, project_id, status")
           .neq("status", "cancelled").neq("billing_line", "closure")
           .gte("entry_date", new Date(nowP.getFullYear(), nowP.getMonth() - 1, 10).toISOString().slice(0, 10))
           .lte("entry_date", new Date(nowP.getFullYear(), nowP.getMonth() + 1, 10).toISOString().slice(0, 10))
@@ -113,9 +127,8 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay }: Props) 
       const capById: Record<string, any> = {}; (ut ?? []).forEach((r: any) => { capById[r.user_id] = r; });
       const nameById: Record<string, string> = {};
       (prof ?? []).forEach((p: any) => { nameById[p.id] = [p.first_name, p.last_name].filter(Boolean).join(" ") || "—"; });
-      const rateByProj: Record<string, number> = {};
-      const supRateByProj: Record<string, number> = {};
-      (projs ?? []).forEach((p: any) => { rateByProj[p.id] = Number(p.price_per_day) || 0; supRateByProj[p.id] = Number(p.supervision_price) || 0; });
+      const linesByProj: Record<string, ReturnType<typeof roleLinesOfRow>> = {};
+      (projs ?? []).forEach((p: any) => { linesByProj[p.id] = linesOf(p); });
 
       // team = everyone who appears on a project's team (like Management's inTeam)
       const inTeam = new Set<string>();
@@ -129,14 +142,15 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay }: Props) 
       const billedByUser: Record<string, number> = {};
       const billedPlannedByUser: Record<string, number> = {};
       (allCe ?? []).forEach((e: any) => {
-        if (e.billing_line === "connector") return;                 // connector excluded like Management
+        const key = resolveRoleKey(roleKeyOf(e), legacy);
+        if (key !== "sales" && !roleCounts(key, roles)) return;    // roles that don't count are excluded, like Management
         const per = e.billing_period || periodForDate(e.entry_date);
         if (per !== curPeriod) return;
         // hourly projects' days are NOT summed into the day figure
         if (isHourProj[e.project_id]) return;
         const dv = Number(e.billable) || 0;
         if (dv <= 0) return;
-        const rate = e.billing_line === "supervision" ? (supRateByProj[e.project_id] || 0) : (rateByProj[e.project_id] || 0);
+        const rate = rateOn(linesByProj[e.project_id] ?? [], key);
         if (e.status === "confirmed") {
           doneByUser[e.user_id] = (doneByUser[e.user_id] || 0) + dv;
           billedByUser[e.user_id] = (billedByUser[e.user_id] || 0) + dv * rate;
@@ -192,7 +206,7 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay }: Props) 
           return { id: `${i.project_id}|${i.period}`, client: clientByProj[cid] || "—", period: i.period, amount: Number(i.amount) || 0, due: null, late: 0 };
         })
         .sort((a: any, b: any) => b.amount - a.amount)
-        .slice(0, 8);
+        .slice(0, 40);
       if (alive) setBills(unpaid);
 
       if (alive) setLoading(false);
@@ -205,40 +219,43 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay }: Props) 
   const teamBillPct = teamTotals.billTarget > 0 ? Math.min(100, (teamTotals.billed / teamTotals.billTarget) * 100) : 0;
 
   return (
-    <div className="ch-bento">
-      {/* ============ TOP: backlog summary ============ */}
-      <section className="ch-card ch-backlog">
-        <div className="ch-head"><span className="ch-eyebrow">Department backlog</span>
-          <button className="ch-open" onClick={() => nav("/management")}>Backlog →</button></div>
-        <div className="ch-bk-grid">
-          {/* total unbilled value — the hero, matches Management */}
-          <div className="ch-bk-hero ch-bk-value">
-            <span className="ch-bk-k">Unbilled value</span>
-            <b className="ch-bk-v is-neon">{eur(backlog.value)}<i>€</i></b>
-            <span className="ch-bk-sub">{d1(backlog.consDays + backlog.connDays)} days left to deliver</span>
-          </div>
-          {/* consultancy */}
-          <div className="ch-bk-split">
-            <span className="ch-bk-split-k"><i className="dot-core" />Consultancy</span>
-            <div className="ch-bk-split-figs">
-              <b>{d1(backlog.consDays)}<i>d</i></b>
-              <span>{eur(backlog.valueCore)} €</span>
-            </div>
-          </div>
-          {/* connector */}
-          <div className="ch-bk-split">
-            <span className="ch-bk-split-k"><i className="dot-conn" />Connector</span>
-            <div className="ch-bk-split-figs">
-              <b>{d1(backlog.connDays)}<i>d</i></b>
-              <span>{eur(backlog.valueConn)} €</span>
-            </div>
-          </div>
-          {/* projects */}
-          <div className="ch-bk-mini"><span>Projects</span><b>{backlog.projects}</b></div>
-        </div>
-      </section>
+    <div className="ch-home">
+      {/* ============ LEFT: ticket desk ============ */}
+      <div className="ch-col ch-col-desk">{desk}</div>
 
-      {/* ============ BOTTOM-LEFT: team panel ============ */}
+      {/* ============ MIDDLE: calendar + backlog 2×2 ============ */}
+      <div className="ch-col ch-col-mid">
+        {calendar}
+        <section className="ch-card ch-backlog">
+          <div className="ch-head"><span className="ch-eyebrow">Department backlog</span>
+            <button className="ch-open" onClick={() => nav("/management")}>Backlog →</button></div>
+          <div className="ch-bk2">
+            <div className="ch-kpi is-hero">
+              <span className="ch-kpi-k">Unbilled value</span>
+              <b className="ch-kpi-v is-neon">{loading ? "…" : eur(backlog.value)}<i>€</i></b>
+              <span className="ch-kpi-s">{d1(backlog.consDays + backlog.connDays)} days left to deliver</span>
+            </div>
+            <div className="ch-kpi">
+              <span className="ch-kpi-k"><i className="dot-core" />Consultancy</span>
+              <b className="ch-kpi-v">{d1(backlog.consDays)}<i>d</i></b>
+              <span className="ch-kpi-s">{eur(backlog.valueCore)} €</span>
+            </div>
+            <div className="ch-kpi">
+              <span className="ch-kpi-k" title="Roles that don't count for the consultant's target"><i className="dot-conn" />{backlog.otherLabel}</span>
+              <b className="ch-kpi-v">{d1(backlog.connDays)}<i>d</i></b>
+              <span className="ch-kpi-s">{eur(backlog.valueConn)} €</span>
+            </div>
+            <div className="ch-kpi">
+              <span className="ch-kpi-k">Projects in backlog</span>
+              <b className="ch-kpi-v">{backlog.projects}</b>
+              <span className="ch-kpi-s">kicked off, days to deliver</span>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      {/* ============ RIGHT: team + bills ============ */}
+      <div className="ch-col ch-col-right">
       <section className="ch-card ch-team">
         <div className="ch-head"><span className="ch-eyebrow">{isLead ? "Team performance" : "Your performance"}</span>
           <button className="ch-open" onClick={() => nav("/management")}>Management →</button></div>
@@ -259,37 +276,36 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay }: Props) 
         )}
 
         <div className="ch-team-list">
-          <div className="ch-team-head"><span>Consultant</span><span>Days delivered</span><span className="ch-r">Billed</span><span className="ch-r">Bonus</span></div>
-          {loading ? <div className="ch-skel" /> : team.map((r) => {
+          {loading ? <div className="ch-skel" /> : team.length === 0 ? <p className="ch-empty">No delivery booked this month yet.</p> : team.map((r) => {
             const donePct = r.daysTarget > 0 ? Math.min(100, (r.daysDone / r.daysTarget) * 100) : 0;
             const planPct = r.daysTarget > 0 ? Math.min(100, ((r.daysDone + r.daysPlanned) / r.daysTarget) * 100) : 0;
             const pct = Math.round(donePct);
             return (
-              <div className="ch-team-row" key={r.userId}>
-                <span className="ch-team-who"><span className="ch-team-av">{r.name.charAt(0)}</span>{r.name}</span>
-                <span className="ch-team-prog">
-                  <span className="ch-team-prog-top">
-                    <b>{d1(r.daysDone)}</b>
-                    {r.daysPlanned > 0 && <em className="ch-team-plan">+{d1(r.daysPlanned)}</em>}
-                    <span className="ch-team-of">/ {d1(r.daysTarget)}d</span>
+              <div className="ch-person" key={r.userId}>
+                <span className="ch-team-av">{r.name.charAt(0)}</span>
+                <div className="ch-person-main">
+                  <span className="ch-person-top">
+                    <b className="ch-person-name">{r.name}</b>
                     <span className={`ch-team-pct ${pct >= 100 ? "is-hit" : ""}`}>{pct}%</span>
                   </span>
                   <span className="ch-team-bar">
                     <span className="ch-team-bar-plan" style={{ width: `${planPct}%` }} />
                     <span className="ch-team-bar-done" style={{ width: `${donePct}%` }} />
                   </span>
-                </span>
-                <span className="ch-r ch-team-billed">{eur(r.billed)} €</span>
-                <span className={`ch-r ch-team-bonus ${r.bonus > 0 ? "is-on" : ""}`}>{r.bonus > 0 ? `${eur(r.bonus)} €` : "—"}</span>
+                  <span className="ch-person-meta">
+                    <span><b>{d1(r.daysDone)}</b>{r.daysPlanned > 0 && <em className="ch-team-plan"> +{d1(r.daysPlanned)}</em>} / {d1(r.daysTarget)} d</span>
+                    <span>{eur(r.billed)} €</span>
+                    <span className={`ch-team-bonus ${r.bonus > 0 ? "is-on" : ""}`}>{r.bonus > 0 ? `bonus ${eur(r.bonus)} €` : "no bonus yet"}</span>
+                  </span>
+                </div>
               </div>
             );
           })}
         </div>
       </section>
 
-      {/* ============ BOTTOM-RIGHT: outstanding bills ============ */}
       <section className="ch-card ch-bills">
-        <div className="ch-head"><span className="ch-eyebrow">Outstanding bills</span>
+        <div className="ch-head"><span className="ch-eyebrow">{isLead ? "Team outstanding bills" : "Outstanding bills"}</span>
           <span className="ch-bills-total">{eur(outstandingTotal)} €</span></div>
         {loading ? <div className="ch-skel" /> : bills.length === 0 ? (
           <p className="ch-empty ch-empty-good">Nothing outstanding. ✓</p>
@@ -305,6 +321,7 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay }: Props) 
           </div>
         )}
       </section>
+      </div>
     </div>
   );
 }

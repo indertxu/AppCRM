@@ -26,7 +26,7 @@ import { supabase } from "../../api/supabase";
 import {
   saveContact, saveCompany, listCompanies, listContacts,
   listContactFields, listCompanyFields, addContactField, addCompanyField, updateContactField, updateCompanyField,
-  listEmployees, listCrmOptions, addCrmOption, sectorOptions, matchSector, relationshipOptions, setCompanyParent,
+  listEmployees, listCrmOptions, addCrmOption, sectorOptions, matchSector, sourceOptions, matchSource, relationshipOptions, setCompanyParent,
   type Contact, type Company, type ContactField, type CompanyField, type Employee, type CrmOption, type Billing,
 } from "../companies/companiesApi";
 import { startImportBatch, finishImportBatch } from "./importBatches";
@@ -37,6 +37,7 @@ import {
   type ExistingMode, type RecordDiff, type NewField, type FieldType, type Column, type CompanyFoundBy, type ContactFoundBy,
 } from "../sales/extras/dealImportEngine";
 import "./ContactImport.css";
+import { mapClientRole, legacyRoleMap, roleLinesOfRow, parseRoleLines, type RoleLine } from "../clients/clientsTypes";
 
 /* ═══════════════════════════ targets ═══════════════════════════ */
 
@@ -77,6 +78,7 @@ const BASE: Base[] = [
   { key: "company.landline_ext", label: "Landline extension", group: "company" },
   { key: "company.email", label: "Email", group: "company" },
   { key: "company.sector", label: "Sector", group: "company", hint: "Matched to your sector list" },
+  { key: "company.source", label: "Source", group: "company", hint: "Where it came from; matched to your source list" },
   { key: "company.relationship", label: "What it is (client, partner…)", group: "company", hint: "Several separated by commas; new ones join your list" },
   { key: "company.street", label: "Street", group: "company" },
   { key: "company.addr_number", label: "Street number", group: "company" },
@@ -94,7 +96,7 @@ const BASE: Base[] = [
 ];
 const TARGETS = BASE.map((b) => b.key);
 /** Company columns saved from the file (the name is handled on its own). */
-const CO_DATA = ["legal_name", "vat_number", "reg_number", "website", "phone", "phone_ext", "landline", "landline_ext", "email", "sector", "notes", "street", "addr_number", "addr_details", "postal_code", "city", "province", "country"] as const;
+const CO_DATA = ["legal_name", "vat_number", "reg_number", "website", "phone", "phone_ext", "landline", "landline_ext", "email", "sector", "source", "notes", "street", "addr_number", "addr_details", "postal_code", "city", "province", "country"] as const;
 type CoCol = (typeof CO_DATA)[number];
 type ProfCol = "street" | "addr_number" | "postal_code" | "city" | "province" | "country" | "language" | "linkedin";
 const PROF: ProfCol[] = ["street", "addr_number", "postal_code", "city", "province", "country", "language", "linkedin"];
@@ -139,6 +141,7 @@ const RAW_SYN: Record<string, string[]> = {
   "company.phone_ext": ["extension", "ext", "phone extension", "extension telefono"],
   "company.landline": ["landline", "telefono fijo", "fijo", "centralita", "main phone", "office phone", "switchboard", "telefono centralita"],
   "company.landline_ext": ["landline extension", "extension fijo", "ext fijo", "extension centralita"],
+  "company.source": ["source", "origen", "origin", "fuente", "procedencia", "lead source", "canal", "channel", "como nos conocio", "how did you hear"],
   "company.sector": ["sector", "industry", "industria", "actividad", "sector de actividad", "vertical", "rubro", "cnae", "branche", "sector empresa"],
   "company.relationship": ["type", "tipo", "relationship", "relacion", "company type", "tipo de empresa", "tipo de cuenta", "account type", "tipo de cliente", "category", "categoria"],
   "company.billing_name": ["billing contact", "billing name", "contacto de facturacion", "contacto facturacion", "invoice contact", "facturar a", "bill to", "nombre facturacion"],
@@ -442,6 +445,7 @@ function buildPlan(ctx: Ctx, files: FileData[], st: IState): Plan {
       if (!p.get[k]) continue;
       let v = col === "notes" ? p.get[k].join("\n") : NUMERIC_TEXT.includes(col) ? numText(p.cells[k], p.get[k][0]) : p.get[k][0];
       if (col === "sector") v = matchSector(v, sectorOptions(ctx.options ?? [])) || v;
+      if (col === "source") v = matchSource(v, sourceOptions(ctx.options ?? []));
       if (col === "vat_number") v = v.toUpperCase().replace(/[\s.\-/]/g, "");
       if (col === "email") { v = v.toLowerCase(); if (!EMAIL_RE.test(v)) { p.issues.push(`Company email “${v}” isn't valid`); continue; } }
       data[col] = v;
@@ -750,6 +754,8 @@ async function runImport(ctx: Ctx, st: IState, files: FileData[], plan: Plan, na
   const knownTypes = relationshipOptions(ctx.options ?? []).map((o) => o.key);
   const newTypes = [...new Set(usedCos.flatMap((c) => c.rel).filter((r) => !knownTypes.includes(r)))];
   for (const s of newSectors) await addCrmOption("sector", s).catch(() => null);
+  const knownSources = sourceOptions(ctx.options ?? []);
+  for (const s of [...new Set(usedCos.map((c) => (c.data as any).source).filter((x): x is string => !!x && !knownSources.includes(x)))]) await addCrmOption("source", s).catch(() => null);
   for (const r of newTypes) await addCrmOption("relationship", r).catch(() => null);
   const hasBilling = (b: Billing) => !!(b.name || b.email || b.phone);
 
@@ -1636,7 +1642,7 @@ function Coverage({ used, ctx }: { used: Set<string>; ctx: Ctx }) {
       ["Language", ["contact.language"], "language"], ["LinkedIn", ["contact.linkedin"], "linkedin"], ["Who can see it", ["contact.visible_to"]]] },
     { title: "Company", items: [["Name / VAT", ["company.name", "company.legal_name", "company.vat_number"]], ["Website · phone · email", ["company.website", "company.phone", "company.landline", "company.email"]],
       ["Address", ["company.street", "company.postal_code", "company.city", "company.province", "company.country"]],
-      ["Sector · type", ["company.sector", "company.relationship"]], ["Billing", ["company.billing_name", "company.billing_email", "company.billing_phone"]],
+      ["Sector · source · type", ["company.sector", "company.source", "company.relationship"]], ["Billing", ["company.billing_name", "company.billing_email", "company.billing_phone"]],
       ["Group", ["company.parent"]], ["Who can see it", ["company.visible_to"]]] },
   ];
   const req = ctx.ctFields.filter((f) => f.required);
@@ -2150,6 +2156,60 @@ function buildClPlan(ctx: ClCtx, columns: Column[], rows: SheetCell[][], st: ClS
   return { entries: list, orphans, counts };
 }
 
+/** Columns of a project row that decide its role lines. */
+const PRICING_COLS = ["consultor_days", "connector_days", "price_per_day", "supervision_days", "supervision_price", "discount_mode", "discount_value"];
+
+/**
+ * The tenant's roles for imported projects: the old consultancy / supervision
+ * / connector columns of a sheet become role lines (consultancy on the
+ * service's main role). Empty when the tenant has no roles yet, so the
+ * project falls back to the legacy columns.
+ */
+async function importRoles() {
+  const [{ data: rls }, { data: srs }] = await Promise.all([
+    supabase.from("client_roles").select("*"),
+    supabase.from("service_roles").select("service_id, role_id, is_main, sort"),
+  ]);
+  const map = legacyRoleMap(((rls ?? []) as any[]).map(mapClientRole));
+  const svcMain = new Map<string, string>();
+  [...((srs ?? []) as any[])].sort((a, b) => Number(!!b.is_main) - Number(!!a.is_main) || (Number(a.sort) || 0) - (Number(b.sort) || 0))
+    .forEach((r) => { if (r.role_id && !svcMain.has(r.service_id)) svcMain.set(r.service_id, r.role_id); });
+  /** Legacy columns of a row as lines on real roles; null if a line has no role to go to. */
+  const linesOf = (row: any): RoleLine[] | null => {
+    const out: RoleLine[] = [];
+    for (const l of roleLinesOfRow({ ...row, role_lines: [] })) {
+      const roleId = l.roleId === "consultor" ? (svcMain.get(row.service_id) ?? map.consultor) : map[l.roleId];
+      if (!roleId) return null;
+      const same = out.find((x) => x.roleId === roleId);
+      if (same) same.days += l.days; else out.push({ ...l, roleId });
+    }
+    return out.filter((l) => l.days > 0 || out.length === 1);
+  };
+  /**
+   * Role lines after an import changed an existing project's columns. Lines on
+   * roles the sheet doesn't speak about stay; the main role keeps the
+   * consultancy days other consultancy roles haven't taken.
+   */
+  const patchLines = (existing: any, patch: Record<string, any>): RoleLine[] | null => {
+    if (!PRICING_COLS.some((k) => k in patch)) return null;
+    const fresh = linesOf({ ...existing, ...patch });
+    if (!fresh) return null;
+    const cur = parseRoleLines(existing.role_lines);
+    if (!cur.length) return fresh;
+    const main = svcMain.get(existing.service_id) ?? map.consultor;
+    const freshIds = new Set(fresh.map((l) => l.roleId));
+    const others = cur.filter((l) => !freshIds.has(l.roleId)).reduce((a, l) => a + l.days, 0);
+    const out = cur.map((l) => {
+      const f = fresh.find((x) => x.roleId === l.roleId);
+      if (!f) return l;
+      return { ...f, days: l.roleId === main ? Math.max(0, f.days - others) : f.days };
+    });
+    fresh.filter((f) => !cur.some((l) => l.roleId === f.roleId)).forEach((f) => out.push(f));
+    return out;
+  };
+  return { linesOf, patchLines };
+}
+
 interface ClResult { clCreated: number; clLinked: number; coCreated: number; coUpdated: number; prCreated: number; prUpdated: number; ctCreated: number; ctLinked: number; notes: number; failed: { row: number; reason: string }[] }
 
 async function runClImport(ctx: ClCtx, st: ClState, plan: ClPlan, offset: number, onProgress: (p: { done: number; total: number; phase: string }) => void): Promise<ClResult> {
@@ -2161,6 +2221,7 @@ async function runClImport(ctx: ClCtx, st: ClState, plan: ClPlan, offset: number
   const ctByEmail = new Map(ctx.contacts.filter((c) => c.email).map((c) => [normHeader(c.email!), c]));
   const ctByName = new Map(ctx.contacts.map((c) => [normHeader(fullName(c)), c]));
   const createdCos = new Map<string, string>();
+  const tenantRoles = await importRoles();
   let k = 0;
   for (const e of going) {
     onProgress({ done: k, total: going.length, phase: `Importing ${e.name}…` });
@@ -2226,6 +2287,9 @@ async function runClImport(ctx: ClCtx, st: ClState, plan: ClPlan, offset: number
       for (const p of e.projects) {
         if (p.existing) {
           const patch = p.diff ? patchFor(st.projExisting, p.existing, p.diff, p.data, {}) : null;
+          // Days or rates changed: the project's role lines follow.
+          const lines = patch ? tenantRoles.patchLines(p.existing, patch) : null;
+          if (patch && lines) patch.role_lines = lines;
           if (patch) {
             const { error } = await supabase.from("projects").update(patch).eq("id", p.existing.id);
             if (error) res.failed.push({ row: p.idx + offset, reason: `Project not updated — ${error.message}` }); else res.prUpdated++;
@@ -2245,6 +2309,8 @@ async function runClImport(ctx: ClCtx, st: ClState, plan: ClPlan, offset: number
           taxed: d.taxed ?? false, tax_rate: d.tax_rate ?? 0, payment_days: d.payment_days ?? 0,
           discount_mode: d.discount_mode ?? "none", discount_value: d.discount_value ?? 0,
           supervision_discount_mode: "none", supervision_discount_value: 0,
+          // The same days and rates as role lines on the tenant's roles.
+          role_lines: tenantRoles.linesOf({ ...d, service_id: d.service_id ?? null }) ?? [],
           phases: [], team: [], status: d.status ?? "open",
         });
         if (error) res.failed.push({ row: p.idx + offset, reason: `Project not created — ${error.message}` }); else res.prCreated++;

@@ -28,6 +28,8 @@ export interface Company {
   landline_ext?: string | null;
   /** One of the sectors (DEFAULT_SECTORS or one you added). */
   sector?: string | null;
+  /** Where the company came from (web, event, partner…), one of your Source list (crm_options). */
+  source?: string | null;
   /** What the company is to us: system keys ("sales", "client") plus your own labels ("Partner"…). CRM is implied. */
   relationship?: string[];
   /** Who to send invoices to — free: a name, an email, a phone… */
@@ -169,7 +171,7 @@ export async function saveCompany(c: Company): Promise<string | null> {
     custom: c.custom ?? {},
   };
   // added by the CRM upgrade (crm_upgrade.sql) — only sent when the object carries them
-  const extra = pickNew(c, ["phone_ext", "landline", "landline_ext", "sector", "relationship", "billing", "parent_id", "linkedin"]);
+  const extra = pickNew(c, ["phone_ext", "landline", "landline_ext", "sector", "source", "relationship", "billing", "parent_id", "linkedin"]);
   const write = async (r: Record<string, any>) => {
     if (c.id) return { error: (await supabase.from("companies").update(r).eq("id", c.id)).error, id: c.id };
     // Created by an import? Send the batch; the database stamps who and when (and created_by).
@@ -377,6 +379,8 @@ export interface RelationshipSets {
   /** Pipeline names of the deals each company / contact is directly on. */
   pipesByCompany: Record<string, string[]>;
   pipesByContact: Record<string, string[]>;
+  /** Companies with a won deal: a won deal is no longer "in the sales pipeline". */
+  wonCompanyIds: Set<string>;
 }
 
 /** Load, in a few queries, everything needed to tag companies & contacts. */
@@ -400,12 +404,18 @@ export async function loadRelationshipSets(): Promise<RelationshipSets> {
     }
     return out;
   };
-  const [clientsRows, trackRows, tcRows, pipeRows] = await Promise.all([
+  const [clientsRows, trackRows, tcRows, pipeRows, phaseRows] = await Promise.all([
     all("clients", "company_id, contacts"),
-    all("trackings", "id, company_id, pipeline_id"),
+    all("trackings", "id, company_id, pipeline_id, status, current_phase_id"),
     all("tracking_contacts", "contact_id, tracking_id"),
     all("pipelines", "id, name"),
+    all("pipeline_phases", "id, sales_outcome"),
   ]);
+  // A won deal (status, or sitting in the pipeline's win phase) is closed: it no longer counts as "in sales".
+  const winPhase = new Set(phaseRows.filter((p: any) => p.sales_outcome === "win").map((p: any) => p.id));
+  const isWon = (r: any) => r.status === "won" || (!!r.current_phase_id && winPhase.has(r.current_phase_id));
+  const wonDeal = new Set<string>();
+  const wonCompanyIds = new Set<string>();
   const pipeName: Record<string, string> = {};
   pipeRows.forEach((p: any) => { pipeName[p.id] = p.name; });
   const pipeOfDeal: Record<string, string> = {};
@@ -426,15 +436,16 @@ export async function loadRelationshipSets(): Promise<RelationshipSets> {
   trackRows.forEach((r: any) => {
     const name = r.pipeline_id ? pipeName[r.pipeline_id] : undefined;
     if (name) pipeOfDeal[r.id] = name;
+    if (isWon(r)) { wonDeal.add(r.id); if (r.company_id) wonCompanyIds.add(r.company_id); return; }
     if (r.company_id) { trackingCompanyIds.add(r.company_id); addPipe(pipesByCompany, r.company_id, name); }
   });
   tcRows.forEach((r: any) => {
-    if (!r.contact_id) return;
+    if (!r.contact_id || wonDeal.has(r.tracking_id)) return;
     trackingContactIds.add(r.contact_id);
     addPipe(pipesByContact, r.contact_id, pipeOfDeal[r.tracking_id]);
   });
 
-  return { clientCompanyIds, clientContactIds, trackingCompanyIds, trackingContactIds, pipesByCompany, pipesByContact };
+  return { clientCompanyIds, clientContactIds, trackingCompanyIds, trackingContactIds, pipesByCompany, pipesByContact, wonCompanyIds };
 }
 
 /** Where a company or contact stands: client, and the pipelines it is in sales in. */
@@ -447,7 +458,8 @@ export function companyStatus(c: { id?: string; relationship?: string[] }, rel: 
   const pipelines = rel?.pipesByCompany[c.id] ?? [];
   return {
     client: !!rel?.clientCompanyIds.has(c.id) || tags.includes("client"),
-    sales: !!rel?.trackingCompanyIds.has(c.id) || tags.includes("sales"),
+    // the "sales" tag stays on the company after its deal is won: an open deal decides
+    sales: !!rel?.trackingCompanyIds.has(c.id) || (tags.includes("sales") && !rel?.wonCompanyIds.has(c.id)),
     pipelines,
   };
 }
@@ -534,7 +546,7 @@ export function matchSector(raw: unknown, options: string[]): string {
 }
 
 // ---- Your own option lists (sectors, relationship types) ----
-export interface CrmOption { id: string; kind: "sector" | "relationship"; label: string; sort: number }
+export interface CrmOption { id: string; kind: "sector" | "relationship" | "source" | "product_kind"; label: string; sort: number }
 export async function listCrmOptions(): Promise<CrmOption[]> {
   const { data, error } = await supabase.from("crm_options").select("id, kind, label, sort").order("sort").order("label");
   if (error) return [];
@@ -554,11 +566,59 @@ export const sectorOptions = (opts: CrmOption[]) => {
   opts.filter((o) => o.kind === "sector").forEach((o) => { if (!out.includes(o.label)) out.push(o.label); });
   return [...out, "Other"];
 };
+/** Every source a company can have (your list, in its order). */
+export const sourceOptions = (opts: CrmOption[]) => opts.filter((o) => o.kind === "source").map((o) => o.label);
+/** A source written any way ("WEB", "web site") → the one on your list, else as written. */
+export const matchSource = (v: string, opts: string[]) => {
+  const k = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  return opts.find((o) => k(o) === k(v)) ?? v.trim();
+};
 /** Every relationship type: the built-in ones, then yours. */
 export const relationshipOptions = (opts: CrmOption[]) => [
   ...REL_SYSTEM.map((r) => ({ key: r.key, label: r.label, system: true })),
   ...opts.filter((o) => o.kind === "relationship" && !REL_SYSTEM.some((r) => r.key === o.label)).map((o) => ({ key: o.label, label: o.label, system: false })),
 ];
+
+/** Every product kind (your list; SaaS / Physical when there is none yet). */
+export const productKindOptions = (opts: CrmOption[]) => {
+  const own = opts.filter((o) => o.kind === "product_kind").map((o) => o.label);
+  return own.length ? own : ["SaaS", "Physical"];
+};
+
+// ---- Partners: companies whose relationship type is "Partner" ----
+export const isPartnerTag = (tag: string) => /partner/i.test(tag);
+export const isPartner = (c: { relationship?: string[] }) => (c.relationship ?? []).some(isPartnerTag);
+export const partnerCompanies = (companies: Company[]) => companies.filter(isPartner).sort((a, b) => a.name.localeCompare(b.name));
+
+/** A partner's cut: a % of the line or a fixed amount. item null = any product / service of that partner. */
+export interface PartnerRate { id: string; partner_id: string; item_type: "product" | "service" | null; item_id: string | null; mode: "percent" | "amount"; value: number }
+export async function listPartnerRates(): Promise<PartnerRate[]> {
+  const { data, error } = await supabase.from("partner_rates").select("id, partner_id, item_type, item_id, mode, value");
+  if (error) return [];
+  return (data ?? []).map((r: any) => ({ ...r, value: Number(r.value) || 0 })) as PartnerRate[];
+}
+export async function savePartnerRate(r: Omit<PartnerRate, "id"> & { id?: string }): Promise<string | null> {
+  const row = { partner_id: r.partner_id, item_type: r.item_type, item_id: r.item_id, mode: r.mode, value: r.value };
+  const { error } = r.id ? await supabase.from("partner_rates").update(row).eq("id", r.id) : await supabase.from("partner_rates").insert(row);
+  return error?.message ?? null;
+}
+export async function deletePartnerRate(id: string): Promise<string | null> {
+  const { error } = await supabase.from("partner_rates").delete().eq("id", id);
+  return error?.message ?? null;
+}
+/** The default cut of a partner on a product / service: its own rate, else the partner's general one, else none. */
+export function partnerDefault(rates: PartnerRate[], partnerId: string, itemType: "product" | "service", itemId: string | null): { mode: "percent" | "amount"; value: number } | null {
+  const own = itemId ? rates.find((r) => r.partner_id === partnerId && r.item_type === itemType && r.item_id === itemId) : undefined;
+  const gen = rates.find((r) => r.partner_id === partnerId && !r.item_type && !r.item_id);
+  const r = own ?? gen;
+  return r ? { mode: r.mode, value: r.value } : null;
+}
+/** What the partner takes from a line worth `gross`. */
+export function partnerCut(gross: number, mode: string | null | undefined, value: number | null | undefined): number {
+  const v = Number(value) || 0;
+  if (!v || !gross) return 0;
+  return mode === "amount" ? Math.min(v, gross) : Math.round(gross * Math.min(v, 100)) / 100;
+}
 
 // ---- History (written by the database: crm_history) ----
 export interface HistoryEntry { id: string; at: string; actor: string | null; action: string; detail: Record<string, any> }

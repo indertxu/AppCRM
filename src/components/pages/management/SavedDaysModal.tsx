@@ -1,10 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { supabase } from "../../api/supabase";
+import { legacyRoleMap, resolveRoleKey, roleNameOf, roleColor, type ClientRole } from "../clients/clientsTypes";
 import "./SavedDaysModal.css";
 
-type Line = "consultor" | "supervision";
+/** A locker line: the role the days were saved on (legacy rows: "consultor" / "supervision"). */
+type Line = string;
 
 interface Movement {
   user_id: string;
@@ -23,6 +25,8 @@ interface Props {
   people: Record<string, string>;
   clientNames: Record<string, string>;
   projectNames: Record<string, string>;
+  /** Catalogue roles, to name and colour each line. */
+  roles?: ClientRole[];
   onClose: () => void;
 }
 
@@ -32,9 +36,12 @@ const baDate = (iso: string) => {
   const d = new Date(iso);
   return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
 };
-const lineLabel: Record<Line, string> = { consultor: "Consultancy", supervision: "Supervision" };
+const NO_ROLES: ClientRole[] = [];
 
-export default function SavedDaysModal({ seesAll, myUserId, people, clientNames, projectNames, onClose }: Props) {
+export default function SavedDaysModal({ seesAll, myUserId, people, clientNames, projectNames, roles = NO_ROLES, onClose }: Props) {
+  const legacy = useMemo(() => legacyRoleMap(roles), [roles]);
+  const lineLabel = (ln: Line) => roleNameOf(ln, roles);
+  const lineColor = (ln: Line) => { const at = roles.findIndex((r) => r.id === ln); return roleColor(roles[at], at < 0 ? 0 : at); };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
@@ -57,10 +64,10 @@ export default function SavedDaysModal({ seesAll, myUserId, people, clientNames,
         .order("created_at", { ascending: false });
       if (!seesAll && myUserId) q = q.eq("user_id", myUserId);
       const { data } = await q;
-      setMoves(((data ?? []) as any[]).map((m) => ({ ...m, delta: Number(m.delta) || 0 })));
+      setMoves(((data ?? []) as any[]).map((m) => ({ ...m, line: resolveRoleKey(m.line || "consultor", legacy), delta: Number(m.delta) || 0 })));
       setLoading(false);
     })();
-  }, [seesAll, myUserId]);
+  }, [seesAll, myUserId, legacy]);
 
   // Group: user -> client -> project -> line -> { balance, movements }
   const tree = useMemo(() => {
@@ -71,9 +78,10 @@ export default function SavedDaysModal({ seesAll, myUserId, people, clientNames,
       u.total += m.delta;
       const c = (u.clients[m.client_id] ??= { total: 0, projects: {} });
       c.total += m.delta;
-      const p = (c.projects[m.project_id] ??= { consultor: { balance: 0, moves: [] }, supervision: { balance: 0, moves: [] } });
-      p[m.line].balance += m.delta;
-      p[m.line].moves.push(m);
+      const p = (c.projects[m.project_id] ??= {});
+      const leaf = (p[m.line] ??= { balance: 0, moves: [] });
+      leaf.balance += m.delta;
+      leaf.moves.push(m);
     });
     return byUser;
   }, [moves]);
@@ -127,8 +135,9 @@ export default function SavedDaysModal({ seesAll, myUserId, people, clientNames,
                               <b>{d2(c.total)}d</b>
                             </div>
                             {Object.entries(c.projects).map(([pid, byLine]) =>
-                              (["consultor", "supervision"] as Line[]).map((ln) => {
+                              Object.keys(byLine).map((ln) => {
                                 const leaf = byLine[ln];
+                                if (!leaf) return null;
                                 if (leaf.balance <= 0.001 && leaf.moves.length === 0) return null;
                                 if (Math.abs(leaf.balance) < 0.001 && leaf.moves.length === 0) return null;
                                 const key = `${uid}|${cid}|${pid}|${ln}`;
@@ -136,7 +145,7 @@ export default function SavedDaysModal({ seesAll, myUserId, people, clientNames,
                                 return (
                                   <div className="sd-proj" key={key}>
                                     <button className="sd-proj-row" onClick={() => setOriginOf(showOrigin ? null : key)}>
-                                      <span className={`sd-ptag is-${ln}`}>{lineLabel[ln]}</span>
+                                      <span className="sd-ptag" style={{ "--c": lineColor(ln) } as CSSProperties}>{lineLabel(ln)}</span>
                                       <span className="sd-pname">{projectNames[pid] ?? "Project"}</span>
                                       <span className="sd-pdays">{d2(leaf.balance)}<em>d</em></span>
                                       <span className="sd-origin-toggle">{showOrigin ? "Hide" : "Where from"}</span>

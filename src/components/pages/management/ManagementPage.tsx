@@ -4,7 +4,10 @@ import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../api/supabase";
 import { inBillingMonth, periodOf, billingWindow, type Cutoffs } from "../calendar/billingPeriods";
-import { effectiveRate, effectiveSupervisionRate } from "../clients/ClientsPage";
+import {
+  mapClientRole, sortRoles, roleColor, roleLinesOfRow, resolvedLinesOf, legacyRoleMap, resolveRoleKey, roleKeyOf,
+  roleNameOf, roleCounts, rateOn, totalDiscountOf, type ClientRole, type RoleLine,
+} from "../clients/clientsTypes";
 import CalendarSettingsModal, { type WorkTypeDef, type Targets, type CapValue } from "../calendar/CalendarSettingsModal";
 import UserTargetModal, { type UserTarget } from "./UserTargetModal";
 import DatePicker from "../../framework/DatePicker";
@@ -46,11 +49,10 @@ interface Proj {
   clientId: string;
   typeId: string;
   kickoff: string;
-  rate: number;
-  supervision: number;
-  consultorDays: number;
-  connectorDays: number;
-  supervisionDays: number;
+  /** The roles sold on the project: days, rate and discount for each. */
+  lines: RoleLine[];
+  /** € off the whole project ("total" discount), 0 when none. */
+  totalDiscount: number;
   status: string;
   taxed: boolean;
   taxRate: number;
@@ -122,7 +124,7 @@ function windowFor(anchor: Date, scope: string): [string, string] | null {
 
 /** Pages through the rows: a plain select stops at a thousand. */
 async function fetchEntriesUncached(range: [string, string] | null): Promise<any[]> {
-  const cols = "id, user_id, project_id, entry_date, billable, status, billing_line, work_type_id, start_min, end_min, billing_period";
+  const cols = "id, user_id, project_id, entry_date, billable, status, billing_line, role_id, work_type_id, start_min, end_min, billing_period";
   const out: any[] = [];
   for (let from = 0; ; from += 1000) {
     let q = supabase.from("calendar_entries").select(cols)
@@ -614,7 +616,8 @@ const [people, setPeople] = useState<Record<string, string>>({});
       setSeesAllSaved(boss || r === "consultancy_manager");
     })();
   }, []);
-const [supRoles, setSupRoles] = useState<Set<string>>(new Set());
+  /** Every role of the catalogue: its name, colour and whether it counts for the consultant's target. */
+  const [roles, setRoles] = useState<ClientRole[]>([]);
 const [typeNames, setTypeNames] = useState<Record<string, string>>({});
   /** service_id -> the role_id marked as that service's "main" role (Catalog > service > Roles and rates). */
   const [mainRoleByService, setMainRoleByService] = useState<Record<string, string>>({});
@@ -744,7 +747,9 @@ perDay: 1, minPerDay: 0.5, minPerWeek: 3, minPerMonth: 12, minRevenueWeek: 0, mi
           date: iso,
           billable: actual[r.id] ?? (Number(r.billable) || 0),
           status: r.status ?? "planned",
-          line: r.billing_line ?? "consultor",
+          // the role the time was logged on (closing / sales keep their line);
+          // legacy line keys are swapped for real roles once roles are loaded
+          line: roleKeyOf(r),
           typeId: r.work_type_id ?? "",
           durationDays: dur > 0 ? +(dur / fullDay).toFixed(3) : 0,
           durationMin: dur > 0 ? dur : 0,
@@ -768,10 +773,10 @@ perDay: 1, minPerDay: 0.5, minPerWeek: 3, minPerMonth: 12, minRevenueWeek: 0, mi
         { data: svcMain },
       ] = await Promise.all([
         supabase.from("work_types").select("id, client_related"),
-        supabase.from("projects").select("id, client_id, service_id, project_type_id, kickoff_date, price_per_day, supervision_price, discount_mode, discount_value, supervision_discount_mode, supervision_discount_value, team, consultor_days, connector_days, supervision_days, status, legal_name, vat_number, address, contacts, taxed, tax_rate"),
+        supabase.from("projects").select("id, client_id, service_id, project_type_id, kickoff_date, price_per_day, supervision_price, discount_mode, discount_value, supervision_discount_mode, supervision_discount_value, role_lines, team, consultor_days, connector_days, supervision_days, status, legal_name, vat_number, address, contacts, taxed, tax_rate"),
         supabase.from("user_targets").select("*"),
         supabase.from("services").select("id, name"),
-        supabase.from("client_roles").select("id, is_supervision"),
+        supabase.from("client_roles").select("*"),
         supabase.from("clients").select("id, name"),
         supabase.from("calendar_targets").select("*").eq("id", "default").maybeSingle(),
         supabase.from("work_types").select("*").order("created_at"),
@@ -783,24 +788,23 @@ perDay: 1, minPerDay: 0.5, minPerWeek: 3, minPerMonth: 12, minRevenueWeek: 0, mi
 
       setClientTypeIds(new Set(((wtypes ?? []) as any[]).filter((t) => t.client_related).map((t) => t.id)));
 
+      const roleList = sortRoles(((rl ?? []) as any[]).map(mapClientRole));
+      const legacy = legacyRoleMap(roleList);
+      processedEntries.forEach((e) => { e.line = resolveRoleKey(e.line, legacy); });
+
       // Entries + projects (and everything below) applied together in one batch,
       // so the panel never renders new entries against old projects.
       setEntries(processedEntries);
+      setRoles(roleList);
 
       setProjects(Object.fromEntries(((pj ?? []) as any[]).map((r) => {
-        const base = Number(r.price_per_day) || 0;
-        const d = Number(r.discount_value) || 0;
-        const sd = Number(r.supervision_discount_value) || 0;
 return [r.id, {
           id: r.id,
           clientId: r.client_id,
           typeId: r.service_id ?? r.project_type_id ?? "",
           kickoff: r.kickoff_date ?? "",
-          rate: effectiveRate(base, r.discount_mode, d),
-supervision: effectiveSupervisionRate(Number(r.supervision_price) || 0, r.supervision_discount_mode ?? "none", sd),
-          consultorDays: Number(r.consultor_days) || 0,
-          connectorDays: Number(r.connector_days) || 0,
-          supervisionDays: Number(r.supervision_days) || 0,
+          lines: resolvedLinesOf({ roleLines: roleLinesOfRow(r) }, legacy),
+          totalDiscount: totalDiscountOf({ discountMode: r.discount_mode, discountValue: Number(r.discount_value) || 0 }),
           status: r.status ?? "open",
           legalName: r.legal_name ?? "",
           vat: r.vat_number ?? "",
@@ -830,7 +834,6 @@ minRevenueWeek: r.min_revenue_week === null ? null : Number(r.min_revenue_week),
       setTypeNames(Object.fromEntries(((pt ?? []) as any[]).map((t) => [t.id, t.name ?? ""])));
       setMainRoleByService(Object.fromEntries(((svcMain ?? []) as any[]).map((r) => [r.service_id, r.role_id])));
 
-      setSupRoles(new Set(((rl ?? []) as any[]).filter((r) => r.is_supervision).map((r) => r.id)));
 
       setClientNames(Object.fromEntries(((cl ?? []) as any[]).map((c) => [c.id, c.name])));
 
@@ -1128,14 +1131,19 @@ min_revenue_week: v.minRevenueWeek,
   /** Weeks-worth of target covered by the custom range, so goals stay comparable. */
   const rangeWeeks = scope === "custom" ? businessDays(rangeFrom, rangeTo) / 5 : 0;
 
-const rateFor = (p: Proj, line: string, _userId: string): { rate: number; kind: string } => {
-    // Rate follows the line the user picked when logging, not their project role.
-    if (line === "connector") return { rate: p.rate, kind: "Connector" };
-    const isSup = line === "supervision";
-    return isSup
-      ? { rate: p.supervision, kind: "Project management" }
-      : { rate: p.rate, kind: "Consultancy" };
-  };
+  /**
+   * The rate an entry bills at: the project's line for the role it was logged
+   * on (its own discount applied). `kind` is that role, the key used to group.
+   */
+  const rateFor = (p: Proj, line: string, _userId: string): { rate: number; kind: string } =>
+    ({ rate: rateOn(p.lines, line), kind: line });
+  /** Project time on a role that doesn't count for the consultant's target (a connector, say). */
+  const noCount = (line: string) => line !== "closure" && line !== "sales" && !roleCounts(line, roles);
+  /** Names of the roles that don't count, for the card that lists their time. */
+  const noCountName = (() => {
+    const ns = roles.filter((r) => !r.countsForTarget).map((r) => r.name);
+    return ns.length ? ns.join(" · ") : "Roles that don't count";
+  })();
 
   const allRows = useMemo<Row[]>(() => {
     const acc: Record<string, Row> = {};
@@ -1156,7 +1164,7 @@ const { rate, kind } = rateFor(p, e.line, e.userId);
       const amount = e.billable * rate;
       if (!acc[e.userId]) acc[e.userId] = blank(e.userId);
       const row = acc[e.userId];
-if (e.line === "connector") return;
+if (noCount(e.line)) return;
       const inHours = hourProjects.has(e.projectId);
       if (e.status === "confirmed") {
         if (inHours) row.hoursDone += e.billable; else row.daysDone += e.billable;
@@ -1187,7 +1195,7 @@ if (e.line === "connector") return;
       (b.amountDone + b.amountPlanned) - (a.amountDone + a.amountPlanned)
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [entries, projects, people, supRoles, excluded, anchor, scope, rangeFrom, rangeTo, cutoffs, defaultCutoffDay, inactive]);
+}, [entries, projects, people, roles, excluded, anchor, scope, rangeFrom, rangeTo, cutoffs, defaultCutoffDay, inactive]);
   // Team access "own": only the signed-in consultant's card, KPIs and figures.
   const rows = lvTeam === "own" ? allRows.filter((r) => r.userId === access.userId) : allRows;
 
@@ -1270,9 +1278,9 @@ const moneyGoal =
   const totalDone = rows.reduce((s, r) => s + r.amountDone, 0);
   const totalPlanned = rows.reduce((s, r) => s + r.amountPlanned, 0);
   const totalDays = rows.reduce((s, r) => s + r.daysDone, 0);
-  // Connector work is billed at the project day rate but deliberately excluded
-  // from consultants' figures, so it isn't visible anywhere else — surface it on
-  // its own, grouped by calendar month.
+  // Time on roles that don't count for the target (a connector, say) is billed
+  // at that role's rate but deliberately excluded from consultants' figures, so
+  // it isn't visible anywhere else — surface it on its own, grouped by month.
   const monthLabel = (ym: string) => {
     const [y, mo] = ym.split("-").map(Number);
     return new Date(y, (mo || 1) - 1, 1).toLocaleDateString(undefined, { month: "short", year: "numeric" });
@@ -1280,10 +1288,10 @@ const moneyGoal =
   const connectorByMonth = (() => {
     const m = new Map<string, { days: number; value: number; count: number }>();
     for (const e of entries) {
-      if (e.line !== "connector" || e.status === "cancelled" || !inScope(e.date)) continue;
+      if (!noCount(e.line) || e.status === "cancelled" || !inScope(e.date)) continue;
       if (lvTeam === "own" && e.userId !== access.userId) continue;
       const p = projects[e.projectId];
-      const rate = p ? rateFor(p, "connector", e.userId).rate : 0;
+      const rate = p ? rateFor(p, e.line, e.userId).rate : 0;
       const key = e.date.slice(0, 7);
       const cur = m.get(key) ?? { days: 0, value: 0, count: 0 };
       cur.days += e.billable || 0;
@@ -1295,28 +1303,28 @@ const moneyGoal =
   })();
   const connectorDaysTotal = connectorByMonth.reduce((s, r) => s + r.days, 0);
   const connectorValueTotal = connectorByMonth.reduce((s, r) => s + r.value, 0);
-  // Billable days consumed per project, split by line, from the loaded entries
+  // Billable days consumed per project, split by role, from the loaded entries
   // (full in All-time view). Lets the project detail show consumed vs signed.
   const consumedByProject = (() => {
-    const m = new Map<string, { consultor: number; connector: number; supervision: number }>();
+    const m = new Map<string, Record<string, number>>();
     for (const e of entries) {
-      if (e.status === "cancelled" || e.line === "closure") continue;
-      const b = e.line === "connector" ? "connector" : e.line === "supervision" ? "supervision" : "consultor";
-      const cur = m.get(e.projectId) ?? { consultor: 0, connector: 0, supervision: 0 };
-      cur[b] += e.billable || 0;
+      if (e.status === "cancelled" || e.line === "closure" || e.line === "sales") continue;
+      const cur = m.get(e.projectId) ?? {};
+      cur[e.line] = (cur[e.line] ?? 0) + (e.billable || 0);
       m.set(e.projectId, cur);
     }
     return m;
   })();
   const nameByUser: Record<string, string> = Object.fromEntries(rows.map((r) => [r.userId, r.name]));
   const connectorEntries = entries
-    .filter((e) => e.line === "connector" && e.status !== "cancelled" && inScope(e.date) && (lvTeam !== "own" || e.userId === access.userId))
+    .filter((e) => noCount(e.line) && e.status !== "cancelled" && inScope(e.date) && (lvTeam !== "own" || e.userId === access.userId))
     .map((e) => {
       const p = projects[e.projectId];
-      const rate = p ? rateFor(p, "connector", e.userId).rate : 0;
+      const rate = p ? rateFor(p, e.line, e.userId).rate : 0;
       return {
         date: e.date,
-        user: nameByUser[e.userId] ?? "—",
+        user: nameByUser[e.userId] ?? people[e.userId] ?? "—",
+        role: roleNameOf(e.line, roles),
         client: p ? (clientNames[p.clientId] ?? "Client") : "—",
         project: p ? (typeNames[p.typeId] ?? "Project") : "—",
         days: e.billable || 0,
@@ -1406,7 +1414,7 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
 
   const insightsFor = (uid: string) => {
     const mine = entries.filter((e) =>
-      e.userId === uid && e.status !== "cancelled" && e.line !== "closure" && e.line !== "connector" && inScope(e.date)
+      e.userId === uid && e.status !== "cancelled" && e.line !== "closure" && !noCount(e.line) && inScope(e.date)
     );
 
     let billableDays = 0, billableAmount = 0;
@@ -1447,7 +1455,7 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
     // not the work date, because bonuses are paid on what the client was invoiced.
     let invoicedAmount = 0, invoicedDays = 0;
     entries.forEach((e) => {
-      if (e.userId !== uid || e.status === "cancelled" || e.line === "closure" || e.line === "connector") return;
+      if (e.userId !== uid || e.status === "cancelled" || e.line === "closure" || noCount(e.line)) return;
       if (!e.projectId) return;
       if (!inBillingScope(e)) return;
       const p = projects[e.projectId];
@@ -1663,6 +1671,7 @@ minPerMonth: targets.minPerMonth,
           myUserId={myUserId}
           people={people}
           clientNames={clientNames}
+          roles={roles}
           projectNames={Object.fromEntries(Object.values(projects).map((p) => [
             p.id,
             `${clientNames[p.clientId] ?? "Client"} · ${typeNames[p.typeId] ?? "Service"}`,
@@ -1830,7 +1839,7 @@ minPerMonth: targets.minPerMonth,
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M8 12h8" /><circle cx="5" cy="12" r="2.4" /><circle cx="19" cy="12" r="2.4" /><path d="M12 8V5M12 19v-3" /></svg>
                   </span>
                   <div className="cn-card-txt">
-                    <span className="cn-card-name">Connectors</span>
+                    <span className="cn-card-name">{noCountName}</span>
                     <span className="cn-card-sub">{connectorPeople} {connectorPeople === 1 ? "person" : "people"} · {connectorEntries.length} {connectorEntries.length === 1 ? "entry" : "entries"} · tap for detail</span>
                   </div>
                   <div className="cn-card-fig">
@@ -1917,7 +1926,7 @@ minPerMonth: targets.minPerMonth,
                           key,
                           client: clientNames[projects[pid]?.clientId ?? ""] ?? "\u2014",
                           service: typeNames[projects[pid]?.typeId ?? ""] || "No service",
-                          rateKind: v.rateKind,
+                          rateKind: roleNameOf(v.rateKind, roles),
                           rate: v.rate,
                           hourly,
                           amountPlanned: v.amountPlanned,
@@ -1925,13 +1934,20 @@ minPerMonth: targets.minPerMonth,
                           amountDone: v.amountDone,
                           daysDone: v.daysDone,
                           kickoff: projects[pid]?.kickoff ?? null,
-                          signedDays: (projects[pid]?.consultorDays || 0) + (projects[pid]?.connectorDays || 0) + (projects[pid]?.supervisionDays || 0),
-                          split: {
-                            consultor: projects[pid]?.consultorDays || 0,
-                            connector: projects[pid]?.connectorDays || 0,
-                            supervision: projects[pid]?.supervisionDays || 0,
-                          },
-                          consumed: consumedByProject.get(pid) ?? { consultor: 0, connector: 0, supervision: 0 },
+                          signedDays: (projects[pid]?.lines ?? []).reduce((n, l) => n + l.days, 0),
+                          split: (() => {
+                            const used = consumedByProject.get(pid) ?? {};
+                            const keys = [...(projects[pid]?.lines ?? []).map((l) => l.roleId), ...Object.keys(used)]
+                              .filter((k, i, a) => a.indexOf(k) === i);
+                            return keys.map((k, i) => {
+                              const at = roles.findIndex((x) => x.id === k);
+                              return {
+                                key: k, name: roleNameOf(k, roles), color: roleColor(roles[at], at < 0 ? i : at),
+                                signed: (projects[pid]?.lines ?? []).filter((l) => l.roleId === k).reduce((n, l) => n + l.days, 0),
+                                used: used[k] ?? 0,
+                              };
+                            });
+                          })(),
                         };
                       });
 
@@ -1944,10 +1960,7 @@ minPerMonth: targets.minPerMonth,
                           .filter((e) =>
                             e.userId === r.userId && e.projectId === projId &&
                             e.status !== "cancelled" && e.line !== "closure" &&
-                            inScope(e.date) &&
-                            (kind === "Supervision" ? e.line === "supervision"
-                              : kind === "Connector" ? e.line === "connector"
-                              : (e.line !== "supervision" && e.line !== "connector")))
+                            inScope(e.date) && e.line === kind)
                           .sort((a, b) => a.date.localeCompare(b.date));
                         return (
                           <>
@@ -2011,7 +2024,7 @@ minPerMonth: targets.minPerMonth,
             <div className="cn-modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
               <header className="cn-head">
                 <div>
-                  <span className="cn-eyebrow">Connectors</span>
+                  <span className="cn-eyebrow">{noCountName}</span>
                   <h3 className="cn-title">Who did what · which project · when</h3>
                 </div>
                 <div className="cn-tot">
@@ -2029,7 +2042,7 @@ minPerMonth: targets.minPerMonth,
                     <div className="cn-tr" key={i}>
                       <span className="cn-date">{fmtDay(e.date)}</span>
                       <span className="cn-user">{e.user}</span>
-                      <span className="cn-proj"><b>{e.client}</b> · {e.project}</span>
+                      <span className="cn-proj"><b>{e.client}</b> · {e.project}{roles.filter((x) => !x.countsForTarget).length > 1 ? ` · ${e.role}` : ""}</span>
                       <span className="cn-r cn-d">{(+e.days.toFixed(2)).toLocaleString()}</span>
                       <b className="cn-r cn-v">{Math.round(e.value).toLocaleString()} €</b>
                     </div>
@@ -2048,7 +2061,7 @@ minPerMonth: targets.minPerMonth,
             clientNames={clientNames}
             typeNames={typeNames}
             people={people}
-            supRoles={supRoles}
+            roles={roles}
             hourProjects={hourProjects}
             hoursPerDay={hoursPerDay}
             scope={scope}
@@ -2068,7 +2081,7 @@ minPerMonth: targets.minPerMonth,
           clientNames={clientNames}
           typeNames={typeNames}
           people={people}
-          supRoles={supRoles}
+          roles={roles}
           hourProjects={hourProjects}
           anchor={anchor}
           cutoffs={cutoffs}
@@ -2085,7 +2098,7 @@ minPerMonth: targets.minPerMonth,
           people={people}
           clientNames={clientNames}
           clientTypeIds={clientTypeIds}
-          supRoles={supRoles}
+          clientRoles={roles}
           cutoffs={cutoffs}
           defaultCutoffDay={defaultCutoffDay}
           asOf={bonusAsOf}

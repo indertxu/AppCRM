@@ -7,6 +7,7 @@ import DatePicker from "../../framework/DatePicker";
 import Select from "../../framework/Select";
 import { downloadBlob, sheetToXlsx, type XCell, type XStyle } from "../../framework/exportFile";
 import BillingAdjustModal, { type SavePayload } from "./BillingAdjustModal";
+import { lineRate, roleNameOf, roleColor, roleCounts, type ClientRole, type RoleLine } from "../clients/clientsTypes";
 import "./BillingPanel.css";
 
 export interface BiEntry {
@@ -23,8 +24,8 @@ export interface BiProj {
   id: string;
   clientId: string;
   typeId: string;
-  rate: number;
-  supervision: number;
+  /** The roles sold on the project: each bills at its own rate. */
+  lines: RoleLine[];
   taxed: boolean;
   taxRate: number;
   legalName: string;
@@ -40,19 +41,19 @@ interface Props {
   clientNames: Record<string, string>;
   typeNames: Record<string, string>;
   people: Record<string, string>;
-  supRoles: Set<string>;
+  /** Catalogue roles, to name and colour each line of a bill. */
+  roles: ClientRole[];
   hourProjects?: Set<string>;
   anchor?: Date;
   cutoffs?: Cutoffs;
   defaultCutoffDay?: number;
 }
 
-type Line = "consultor" | "supervision" | "connector";
-const lineLabel: Record<Line, string> = {
-  consultor: "Consultancy",
-  supervision: "Supervision",
-  connector: "Connector",
-};
+/** A bill line: the role the time was logged on (role id). */
+type Line = string;
+/** Days on each role of a bill. */
+type Lines = Record<Line, number>;
+const sumLines = (l: Lines) => Object.values(l).reduce((s, v) => s + v, 0);
 type Phase = "tobill" | "sent" | "paid" | "history";
 type SortKey = "amount_desc" | "amount_asc" | "date_desc" | "date_asc" | "expired";
 
@@ -187,16 +188,18 @@ interface Bill {
   vat: string;
   address: string;
   contact: { name: string; email: string } | null;
+  /** The project's main rate: what a role not sold on the project bills at. */
   rate: number;
-  supervisionRate: number;
+  /** Rate of each role sold on the project, its own discount applied. */
+  rates: Record<Line, number>;
   taxed: boolean;
   taxRate: number;
-  lines: Record<Line, number>;
+  lines: Lines;
   rows: { id: string; date: string; userId: string; days: number; line: Line; status: string; moved?: boolean }[];
 }
 
 export default function BillingPanel({
-  entries, projects, clientNames, typeNames, people, supRoles,
+  entries, projects, clientNames, typeNames, people, roles,
   hourProjects = new Set(), anchor = new Date(), cutoffs = {}, defaultCutoffDay = 0,
 }: Props) {
   /** "h" if the bill's project is billed by the hour, otherwise "d". */
@@ -251,6 +254,14 @@ export default function BillingPanel({
 
   /** Persist a previewed adjustment via the atomic RPC. Returns an error
       message to show in the modal, or null on success. */
+  /** Rate a bill's line is charged at. */
+  const rateOf = (b: { rate: number; rates: Record<string, number> }, line: Line) => b.rates[line] ?? b.rate;
+  /** Name, colour and order of a line (role). */
+  const lineLabel = (ln: Line) => roleNameOf(ln, roles);
+  const lineColor = (ln: Line) => { const at = roles.findIndex((r) => r.id === ln); return roleColor(roles[at], at < 0 ? 0 : at); };
+  const lineOrder = (ln: Line) => { const at = roles.findIndex((r) => r.id === ln); return at < 0 ? 999 : at; };
+  const linesOf = (l: Lines) => Object.keys(l).sort((a, b) => lineOrder(a) - lineOrder(b));
+
   const saveAdjustment = async (p: SavePayload): Promise<string | null> => {
     const { error } = await supabase.rpc("save_billing_adjustment", {
       p_project_id: p.projectId,
@@ -264,6 +275,7 @@ export default function BillingPanel({
       p_tax_rate: p.orig.taxRate,
       p_rate: p.orig.rate,
       p_supervision_rate: p.orig.supervisionRate,
+      p_rates: p.orig.rates,
       p_orig_lines: p.origLines,
       p_net_after: p.after.net,
       p_amount_after: p.after.amount,
@@ -400,14 +412,10 @@ export default function BillingPanel({
     return !!inv && !!inv.sentDate && inv.sentDate <= asOfDate;
   };
 
-  const lineOf = (p: BiProj, line: string, _userId: string): Line => {
-    // The billing line follows what the user picked when logging (consultor /
-    // connector / project management), NOT their role on the project. Someone who
-    // is the PM can still log consultancy work at the consultancy rate if they choose to.
-    if (line === "connector") return "connector";
-    if (line === "supervision") return "supervision";
-    return "consultor";
-  };
+  // The billing line follows the role the user picked when logging, NOT their
+  // role on the project team. Someone who is the PM can still log consultancy
+  // work at the consultancy rate if they choose to.
+  const lineOf = (_p: BiProj, line: string, _userId: string): Line => line;
   const counts = (e: BiEntry) =>
     status === "all" ? e.status !== "cancelled"
     : status === "billed" ? e.status === "confirmed"
@@ -427,11 +435,11 @@ export default function BillingPanel({
           vat: p.vat,
           address: fmtAddress(p.address),
           contact: billingContact(p.contacts),
-          rate: p.rate,
-          supervisionRate: p.supervision,
+          rate: (() => { const m = p.lines.find((l) => roleCounts(l.roleId, roles)) ?? p.lines[0]; return m ? lineRate(m) : 0; })(),
+          rates: Object.fromEntries(p.lines.map((l) => [l.roleId, lineRate(l)])),
           taxed: p.taxed,
           taxRate: p.taxRate,
-          lines: { consultor: 0, supervision: 0, connector: 0 },
+          lines: {},
           rows: [],
         };
       }
@@ -448,7 +456,7 @@ export default function BillingPanel({
       const per = override || periodForDate(e.date, localCutoffs, defaultCutoffDay);
       const bill = ensure(p, per);
       const bucket = lineOf(p, e.line, e.userId);
-      bill.lines[bucket] += e.billable;
+      bill.lines[bucket] = (bill.lines[bucket] ?? 0) + e.billable;
       bill.rows.push({ id: e.id, date: e.date, userId: e.userId, days: e.billable, line: bucket, status: e.status, moved: !!override && override !== periodForDate(e.date, localCutoffs, defaultCutoffDay) });
     });
 
@@ -456,8 +464,7 @@ export default function BillingPanel({
       // A bill needs at least one row AND some billable value. Periods that
       // hold only non-billable work (internal, demos, client prep) would
       // otherwise appear as phantom 0.00 invoices in the To-bill tab.
-      .filter((b) => b.rows.length > 0
-        && (b.lines.consultor + b.lines.supervision + b.lines.connector) > 0)
+      .filter((b) => b.rows.length > 0 && sumLines(b.lines) > 0)
       .map((b) => {
         const sorted = b.rows.sort((x, y) => x.date.localeCompare(y.date));
         const adj = adjustMap[b.key];
@@ -467,20 +474,19 @@ export default function BillingPanel({
         const rows = sorted
           .filter((r) => !adj[r.id]?.removed)
           .map((r) => (adj[r.id] ? { ...r, days: adj[r.id].daysAfter } : r));
-        const lines = { consultor: 0, supervision: 0, connector: 0 };
-        rows.forEach((r) => { lines[r.line] += r.days; });
+        const lines: Lines = {};
+        rows.forEach((r) => { lines[r.line] = (lines[r.line] ?? 0) + r.days; });
         return { ...b, rows, lines };
       })
       // A bill whose adjustment emptied it out drops off the list.
-      .filter((b) => b.rows.length > 0
-        && (b.lines.consultor + b.lines.supervision + b.lines.connector) > 0);
+      .filter((b) => b.rows.length > 0 && sumLines(b.lines) > 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entries, projects, clientNames, typeNames, supRoles, status, localCutoffs, defaultCutoffDay, localMoves, adjustMap]);
+  }, [entries, projects, clientNames, typeNames, roles, status, localCutoffs, defaultCutoffDay, localMoves, adjustMap]);
 
   /** An invoice without VAT (older rows saved without a net figure fall back to the total). */
   const netOf = (i: Invoice) => (i.net > 0 || i.amount === 0 ? i.net : i.amount);
   const net = (b: Bill) =>
-    b.lines.consultor * b.rate + b.lines.connector * b.rate + b.lines.supervision * b.supervisionRate;
+    Object.entries(b.lines).reduce((s, [ln, d]) => s + d * rateOf(b, ln), 0);
   const gross = (b: Bill) => net(b) * (b.taxed ? 1 + b.taxRate / 100 : 1);
 
   const billByKey = useMemo(() => {
@@ -493,7 +499,7 @@ export default function BillingPanel({
     const per: Record<string, { days: number; value: number }> = {};
     b.rows.forEach((r) => {
       if (!per[r.userId]) per[r.userId] = { days: 0, value: 0 };
-      const rate = r.line === "supervision" ? b.supervisionRate : b.rate;
+      const rate = rateOf(b, r.line);
       per[r.userId].days += r.days;
       per[r.userId].value += r.days * rate;
     });
@@ -519,7 +525,7 @@ export default function BillingPanel({
     setBusy(b.key);
     const sent = sendDateFor(b.period);
     const due = new Date(sent); due.setDate(due.getDate() + paymentDays);
-    const rowDays = b.lines.consultor + b.lines.supervision + b.lines.connector;
+    const rowDays = sumLines(b.lines);
     const payload = {
       project_id: b.projectId, period: b.period,
       net: +net(b).toFixed(2), amount: +gross(b).toFixed(2), days: rowDays,
@@ -542,12 +548,12 @@ export default function BillingPanel({
    * TODAY (respecting manual period moves, which the live bill already reflects).
    * Only net/amount/days change; status, dates and paid state are untouched.
    */
-  const recomputeInvoice = async (inv: Invoice, b: Bill, override?: { consultor: number; supervision: number; connector: number }) => {
+  const recomputeInvoice = async (inv: Invoice, b: Bill, override?: Lines) => {
     const key = `${inv.projectId}|${inv.period}`;
     setBusy(key);
     const ln = override ?? b.lines;
-    const days = +(ln.consultor + ln.supervision + ln.connector).toFixed(2);
-    const newNet = +(ln.consultor * b.rate + ln.connector * b.rate + ln.supervision * b.supervisionRate).toFixed(2);
+    const days = +sumLines(ln).toFixed(2);
+    const newNet = +Object.entries(ln).reduce((s, [k, d]) => s + d * rateOf(b, k), 0).toFixed(2);
     const newAmount = +(newNet * (b.taxed ? 1 + b.taxRate / 100 : 1)).toFixed(2);
     const { error } = await supabase.from("invoices")
       .update({ net: newNet, amount: newAmount, days }).eq("id", inv.id);
@@ -563,10 +569,9 @@ export default function BillingPanel({
       const k = `${r.line}|${r.userId}`;
       agg.set(k, (agg.get(k) ?? 0) + r.days);
     });
-    const order: Line[] = ["consultor", "supervision", "connector"];
     return [...agg.entries()]
       .map(([k, days]) => { const [line, userId] = k.split("|"); return { line: line as Line, userId, days: String(+days.toFixed(2)) }; })
-      .sort((a, b2) => order.indexOf(a.line) - order.indexOf(b2.line) || (people[a.userId] ?? "").localeCompare(people[b2.userId] ?? ""));
+      .sort((a, b2) => lineOrder(a.line) - lineOrder(b2.line) || (people[a.userId] ?? "").localeCompare(people[b2.userId] ?? ""));
   };
   // Open the Fix dialog pre-filled with the live (recomputed) split.
   const openFix = (inv: Invoice, b: Bill) => setFixing({ inv, bill: b, cells: cellsFromBill(b) });
@@ -582,7 +587,7 @@ export default function BillingPanel({
     if (targets.length === 0) return;
     if (!window.confirm(`Recompute ${targets.length} invoice${targets.length === 1 ? "" : "s"} to match their entries?\n\nSome may be marked paid. This updates each amount to what its entries now sum to.`)) return;
     for (const t of targets) {
-      const days = +(t.comp.lines.consultor + t.comp.lines.supervision + t.comp.lines.connector).toFixed(2);
+      const days = +sumLines(t.comp.lines).toFixed(2);
       const newNet = +net(t.comp).toFixed(2);
       const newAmount = +gross(t.comp).toFixed(2);
       const { error } = await supabase.from("invoices").update({ net: newNet, amount: newAmount, days }).eq("id", t.inv.id);
@@ -720,9 +725,9 @@ export default function BillingPanel({
   /**
    * Invoicing sheet, laid out exactly like the finance team's template:
    * row 1 empty, headers from column B, one row per billing line. A bill with
-   * both consultancy and supervision work is split into two rows. Every row is
-   * labelled in column A ("Senior Consultant" / "Project Manager"). Connector days bill at the consultancy rate, so they join
-   * the consultancy row. Amounts are live formulas (price × days) with totals.
+   * work on several roles is split into one row per role, each at its own
+   * rate, labelled in column A with the role's name (e.g. "Main Consultant" /
+   * "Project Manager"). Amounts are live formulas (price × days) with totals.
    */
   const exportSelected = async () => {
     const chosen = outstanding.filter((b) => selected.has(b.key));
@@ -750,10 +755,9 @@ export default function BillingPanel({
       type Part = { role: string; days: number; rate: number };
       const lines: { b: Bill; part: Part }[] = [];
       chosen.forEach((b) => {
-        const parts: Part[] = [];
-        const cons = b.lines.consultor + b.lines.connector;
-        if (cons > 0) parts.push({ role: "Senior Consultant", days: cons, rate: b.rate });
-        if (b.lines.supervision > 0) parts.push({ role: "Project Manager", days: b.lines.supervision, rate: b.supervisionRate });
+        const parts: Part[] = linesOf(b.lines)
+          .filter((ln) => b.lines[ln] > 0)
+          .map((ln) => ({ role: lineLabel(ln), days: b.lines[ln], rate: rateOf(b, ln) }));
         parts.forEach((part) => lines.push({ b, part }));
       });
 
@@ -877,15 +881,15 @@ export default function BillingPanel({
                 <span className="bn-bd-val">{eur(fNet)} €</span>
               </div>
             ) : (
-              (["consultor", "supervision", "connector"] as Line[]).map((ln) =>
+              linesOf(b.lines).map((ln) =>
                 b.lines[ln] > 0 ? (
-                  <div className={`bn-bd is-${ln}`} key={ln}>
-                    <span className="bn-bd-name"><i />{lineLabel[ln]}</span>
+                  <div className="bn-bd" key={ln} style={bnVars({ "--c": lineColor(ln) })}>
+                    <span className="bn-bd-name"><i />{lineLabel(ln)}</span>
                     <span className="bn-bd-calc">
-                      {b.lines[ln].toFixed(2)}{u} × {(ln === "supervision" ? b.supervisionRate : b.rate).toLocaleString()} €
+                      {b.lines[ln].toFixed(2)}{u} × {rateOf(b, ln).toLocaleString()} €
                     </span>
                     <span className="bn-bd-val">
-                      {eur(b.lines[ln] * (ln === "supervision" ? b.supervisionRate : b.rate))} €
+                      {eur(b.lines[ln] * rateOf(b, ln))} €
                     </span>
                   </div>
                 ) : null
@@ -953,11 +957,11 @@ export default function BillingPanel({
                 {bnDate(r.date)}{r.moved && <span className="bn-moved">moved</span>}
               </span>
               <span className="bn-lwho">{people[r.userId] ?? "Unknown"}</span>
-              <span className={`bn-lline is-${r.line}`}>{lineLabel[r.line]}</span>
+              <span className="bn-lline" style={bnVars({ "--c": lineColor(r.line) })}>{lineLabel(r.line)}</span>
               <span className={`bn-lstatus is-${r.status}`}>{r.status}</span>
               <span className="bn-r bn-lnum">{r.days.toFixed(2)}{u}</span>
               <span className="bn-r bn-lnum">
-                {eur(r.days * (r.line === "supervision" ? b.supervisionRate : b.rate))} €
+                {eur(r.days * rateOf(b, r.line))} €
               </span>
             </div>
           ))}
@@ -1160,7 +1164,7 @@ export default function BillingPanel({
               </div>
               {outstanding.map((b, bi) => {
                 const isOpen = open === b.key;
-                const totalDays = b.lines.consultor + b.lines.supervision + b.lines.connector;
+                const totalDays = sumLines(b.lines);
                 const canDrop = !!dragEntry && dragEntry.projectId === b.projectId && dragEntry.fromPeriod !== b.period;
                 const isDropHover = canDrop && dropTarget === b.key;
                 return (
@@ -1305,7 +1309,7 @@ export default function BillingPanel({
                   const comp = billByKey[invKey];
                   const isOpen = open === invKey;
                   // Does the frozen invoice still match what the entries sum to?
-                  const liveDays = comp ? +(comp.lines.consultor + comp.lines.supervision + comp.lines.connector).toFixed(2) : inv.days;
+                  const liveDays = comp ? +sumLines(comp.lines).toFixed(2) : inv.days;
                   const liveAmount = comp ? +gross(comp).toFixed(2) : inv.amount;
                   const mismatch = comp ? Math.abs(liveAmount - inv.amount) > 0.01 : false;
                   const u = unitOf(inv.projectId);
@@ -1425,7 +1429,7 @@ export default function BillingPanel({
                       <div className="bn-alert-main">
                         <b>{a.project_id ? projName(a.project_id) : "Unknown client"}</b>
                         <span>
-                          {a.billable.toFixed(2)}{a.project_id ? unitOf(a.project_id) : "d"} {a.billing_line ?? "consultor"}, dated {bnDate(a.entry_date)}, would fall in {periodLabel(a.period)}
+                          {a.billable.toFixed(2)}{a.project_id ? unitOf(a.project_id) : "d"} {lineLabel(a.billing_line ?? "consultor").toLowerCase()}, dated {bnDate(a.entry_date)}, would fall in {periodLabel(a.period)}
                         </span>
                         <small>
                           by {a.attempted_by ? (people[a.attempted_by] ?? "someone") : "someone"} on {new Date(a.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
@@ -1448,23 +1452,21 @@ export default function BillingPanel({
       {fixing && (() => {
         const b = fixing.bill;
         const u = unitOf(b.projectId);
-        const rateOf = (line: Line) => line === "supervision" ? b.supervisionRate : b.rate;
-        const lineLabels: Record<Line, string> = { consultor: "Consultancy", supervision: "Supervision", connector: "Connector", closure: "Closure" } as Record<Line, string>;
+        const rateOfLine = (line: Line) => rateOf(b, line);
 
         const num = (v: string) => (v === "" || isNaN(Number(v)) ? 0 : Number(v));
         const invalid = fixing.cells.some((c) => c.days !== "" && isNaN(Number(c.days)));
 
         // Totals per line and grand totals.
         const lineTotal = (line: Line) => fixing.cells.filter((c) => c.line === line).reduce((s2, c) => s2 + num(c.days), 0);
-        const consultor = lineTotal("consultor");
-        const supervision = lineTotal("supervision");
-        const connector = lineTotal("connector");
-        const newNet = consultor * b.rate + connector * b.rate + supervision * b.supervisionRate;
+        // Group cells by line (role), in catalogue order, for rendering.
+        const lines: Line[] = fixing.cells.map((c) => c.line)
+          .filter((l, i, a) => a.indexOf(l) === i)
+          .sort((x, y) => lineOrder(x) - lineOrder(y));
+        const totals: Lines = Object.fromEntries(lines.map((l) => [l, lineTotal(l)]));
+        const newNet = lines.reduce((s2, l) => s2 + totals[l] * rateOfLine(l), 0);
         const newAmount = newNet * (b.taxed ? 1 + b.taxRate / 100 : 1);
-        const newDays = +(consultor + supervision + connector).toFixed(2);
-
-        // Group cells by line, preserving order, for rendering.
-        const lines: Line[] = ["consultor", "supervision", "connector"];
+        const newDays = +sumLines(totals).toFixed(2);
         const setCell = (i: number, v: string) =>
           setFixing((f) => f && { ...f, cells: f.cells.map((c, j) => j === i ? { ...c, days: v } : c) });
 
@@ -1488,10 +1490,10 @@ export default function BillingPanel({
                   const idxs = fixing.cells.map((c, i) => ({ c, i })).filter((x) => x.c.line === line);
                   if (idxs.length === 0) return null;
                   return (
-                    <div className={`bn-fix-group is-${line}`} key={line}>
+                    <div className="bn-fix-group" key={line} style={bnVars({ "--c": lineColor(line) })}>
                       <div className="bn-fix-ghead">
-                        <span><i />{lineLabels[line]}</span>
-                        <span className="bn-fix-grate">{rateOf(line).toLocaleString()} €/{u}</span>
+                        <span><i />{lineLabel(line)}</span>
+                        <span className="bn-fix-grate">{rateOfLine(line).toLocaleString()} €/{u}</span>
                         <b>{(+lineTotal(line).toFixed(2))}{u}</b>
                       </div>
                       {idxs.map(({ c, i }) => (
@@ -1510,7 +1512,7 @@ export default function BillingPanel({
 
               <button type="button" className="bn-fix-reset"
                 onClick={() => setFixing((f) => f && { ...f, cells: cellsFromBill(f.bill) })}>
-                Reset to entries ({(+(b.lines.consultor + b.lines.supervision + b.lines.connector).toFixed(2))}{u})
+                Reset to entries ({(+sumLines(b.lines).toFixed(2))}{u})
               </button>
 
               <div className="bn-fix-preview">
@@ -1524,7 +1526,7 @@ export default function BillingPanel({
                 <button type="button" className="bn-act is-ghost" onClick={() => setFixing(null)}>Cancel</button>
                 <button type="button" className="bn-act is-pay" disabled={invalid || busy === `${fixing.inv.projectId}|${fixing.inv.period}`}
                   onClick={async () => {
-                    await recomputeInvoice(fixing.inv, b, { consultor, supervision, connector });
+                    await recomputeInvoice(fixing.inv, b, totals);
                     setFixing(null);
                   }}>
                   Save invoice
@@ -1543,6 +1545,7 @@ export default function BillingPanel({
           clientName={clientNames[adjusting.bill.clientId] ?? adjusting.bill.legalName ?? "Client"}
           people={people}
           periodLabel={periodLabel(adjusting.bill.period)}
+          roles={roles}
           onClose={() => setAdjusting(null)}
           onSave={saveAdjustment}
         />

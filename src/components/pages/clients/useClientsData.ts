@@ -6,8 +6,8 @@ import { useAuth } from "../../api/AuthProvider";
 import { markHandoffConverted } from "../sales/sales/salesApi";
 import { roleSeesAll, saveCompany, saveContact } from "../companies/companiesApi";
 import {
-  emptyAddress,
-  type Client, type Project, type ProjectType, type Blueprint, type ClientRole,
+  emptyAddress, mapClientRole, sortRoles, parseRoleLines, legacyRoleMap, resolveRoleKey, legacyColumnsOf,
+  type Client, type Project, type ProjectType, type Blueprint, type ClientRole, type RoleLine,
 } from "./clientsTypes";
 
 const crmKey = (s: unknown) => String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
@@ -87,6 +87,25 @@ async function syncClientToCrm(clientId: string, clientName: string, p: Project,
   } catch (e) {
     console.warn("Could not sync client to CRM:", e);
   }
+}
+
+/**
+ * Role lines for a project arriving from a sales handoff: the roles sales
+ * priced (services[].roles), else every day on the service's main role.
+ */
+function handoffLines(svcs: any[], pt: ProjectType | undefined, days: number, money: number): RoleLine[] {
+  const out: RoleLine[] = [];
+  for (const s of svcs) {
+    for (const r of (Array.isArray(s.roles) ? s.roles : []) as any[]) {
+      if (!r?.roleId) continue;
+      const same = out.find((x) => x.roleId === r.roleId);
+      if (same) { same.days += Number(r.days) || 0; continue; }
+      out.push({ roleId: String(r.roleId), days: Number(r.days) || 0, rate: Number(r.rate) || 0, discountMode: "none", discountValue: 0 });
+    }
+  }
+  if (out.length) return out;
+  const main = pt?.roles?.find((r) => r.isMain) ?? pt?.roles?.[0];
+  return main ? [{ roleId: main.roleId, days, rate: days > 0 ? Math.round(money / days) : main.price, discountMode: "none", discountValue: 0 }] : [];
 }
 
 /**
@@ -194,6 +213,7 @@ export function useClientsData() {
         })),
         projectTypeId: pt?.id ?? "",
         kickoffDate: "", signingDate: "",
+        roleLines: handoffLines(svcs, pt, days, money),
         consultorDays: days,
         connectorDays: 0,
         pricePerDay: days > 0 ? Math.round(money / days) : 0,
@@ -230,6 +250,7 @@ export function useClientsData() {
     discountValue: Number(r.discount_value) || 0,
     supervisionDiscountMode: (r.supervision_discount_mode ?? "none") as "none" | "rate" | "percent",
     supervisionDiscountValue: Number(r.supervision_discount_value) || 0,
+    roleLines: parseRoleLines(r.role_lines),
     phases: r.phases ?? [],
     team: r.team ?? [],
     status: r.status ?? "open",
@@ -244,15 +265,18 @@ export function useClientsData() {
   const loadAll = async () => {
     const seesAll = roleSeesAll(role);
     const myId = session?.user?.id ?? "";
-    const [{ data: pts }, { data: bps }, { data: rls }, { data: pjs }, { data: cls }, { data: pu, error: puErr }] = await Promise.all([
+    const [{ data: pts }, { data: bps }, { data: rls }, { data: pjs }, { data: cls }, { data: pu, error: puErr }, { data: srs }] = await Promise.all([
       supabase.from("services").select("id,name,blueprint_id,active").order("name"),
       supabase.from("phase_blueprints").select("*"),
       supabase.from("client_roles").select("*"),
       supabase.from("projects").select("*").order("created_at"),
       supabase.from("clients").select("*").order("name"),
-      supabase.from("project_usage").select("project_id, billing_line, done, booked"),
+      supabase.from("project_role_usage").select("project_id, role_key, done, booked"),
+      supabase.from("service_roles").select("service_id, role_id, price, is_main, sort"),
     ]);
-    if (puErr) console.error("project_usage load failed", puErr);
+    if (puErr) console.error("project_role_usage load failed", puErr);
+    const roleList = sortRoles(((rls ?? []) as any[]).map(mapClientRole));
+    const legacy = legacyRoleMap(roleList);
 
     const allProjects = (pjs ?? []).map(mapProject);
     const visibleProjects = seesAll
@@ -267,7 +291,7 @@ export function useClientsData() {
       if (!pid) return;
       const done = Number(r.done) || 0;
       const booked = Number(r.booked) || 0;
-      const ln = (r.billing_line as string) || "consultor";
+      const ln = resolveRoleKey((r.role_key as string) || "consultor", legacy);
       if (!agg[pid]) agg[pid] = { planned: 0, done: 0 };
       agg[pid].done += done;
       agg[pid].planned += booked;
@@ -277,14 +301,17 @@ export function useClientsData() {
       byLine[k].booked += booked;
     });
 
+    const svcRoles = ((srs ?? []) as any[]).sort((a, b) => (Number(a.sort) || 0) - (Number(b.sort) || 0));
     setProjectTypes((pts ?? []).filter((r: any) => r.active !== false)
-      .map((r: any) => ({ id: r.id, name: r.name, blueprintId: r.blueprint_id ?? null })));
+      .map((r: any) => ({
+        id: r.id, name: r.name, blueprintId: r.blueprint_id ?? null,
+        roles: svcRoles.filter((x) => x.service_id === r.id && x.role_id)
+          .map((x) => ({ roleId: x.role_id as string, price: Number(x.price) || 0, isMain: !!x.is_main })),
+      })));
     setBlueprints((bps ?? []).map((r: any) => ({
       id: r.id, name: r.name ?? "", projectTypeId: r.service_id ?? r.project_type_id ?? "", phases: r.phases ?? [],
     })));
-    setRoles((rls ?? []).map((r: any) => ({
-      id: r.id, name: r.name ?? "", userIds: r.user_ids ?? [], isSupervision: !!r.is_supervision,
-    })));
+    setRoles(roleList);
     setProjects(visibleProjects);
     setClients((cls ?? [])
       .map((r: any) => ({ id: r.id, name: r.name ?? "" }))
@@ -314,18 +341,18 @@ export function useClientsData() {
       service_id: p.projectTypeId || null,
       kickoff_date: p.kickoffDate || null,
       signing_date: p.signingDate || null,
-      consultor_days: p.consultorDays,
-      connector_days: p.connectorDays,
-      price_per_day: p.pricePerDay,
-      supervision_days: p.supervisionDays,
-      supervision_price: p.supervisionPrice,
+      ...(p.roleLines.length ? legacyColumnsOf(p.roleLines, roles) : {
+        consultor_days: p.consultorDays, connector_days: p.connectorDays, price_per_day: p.pricePerDay,
+        supervision_days: p.supervisionDays, supervision_price: p.supervisionPrice,
+        supervision_discount_mode: p.supervisionDiscountMode, supervision_discount_value: p.supervisionDiscountValue,
+      }),
+      role_lines: p.roleLines,
       taxed: p.taxed,
       tax_rate: p.taxRate,
       payment_days: p.paymentDays,
-      discount_mode: p.discountMode,
-      discount_value: p.discountValue,
-      supervision_discount_mode: p.supervisionDiscountMode,
-      supervision_discount_value: p.supervisionDiscountValue,
+      // per-role discounts live on the lines; only a "total" discount stays here
+      discount_mode: !p.roleLines.length || p.discountMode === "total" ? p.discountMode : "none",
+      discount_value: !p.roleLines.length || p.discountMode === "total" ? p.discountValue : 0,
       phases: p.phases,
       team: p.team,
       status: p.status || "open",
@@ -377,6 +404,7 @@ export function useClientsData() {
       taxed: false, taxRate: 0, paymentDays: 0,
       discountMode: "none", discountValue: 0,
       supervisionDiscountMode: "none", supervisionDiscountValue: 0,
+      roleLines: [],
       phases: [], team: [], status: "open", endDate: "",
     };
     setEditing({ client: c, project: blank });

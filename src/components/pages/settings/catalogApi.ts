@@ -6,11 +6,14 @@ export interface ProductTier { id?: string; name: string; price: number; sort: n
 export interface Product {
   id?: string;
   name: string;
-  kind: "physical" | "saas";
+  /** A product kind from your list (Settings › Catalog), e.g. "SaaS", "Physical". */
+  kind: string;
   billing: "one_time" | "recurring";
   billing_period?: "monthly" | "yearly"; // only meaningful when recurring
   description?: string | null;
   active?: boolean;
+  /** Offered when building proposals (13_proposal_decks.sql; missing = yes). */
+  in_proposals?: boolean;
   tiers: ProductTier[];
   calculator?: Calculator | null;
 }
@@ -28,8 +31,12 @@ export interface CalcVariable {
   default_value: number;
   round_mode: "up" | "down";
   sort: number;
-  /** Services: the time this variable adds is supervision (project management), not consultancy. One per calculator. */
+  /** Legacy: the time was supervision. Replaced by role_id (migrated to the supervision role). */
   is_supervision?: boolean | null;
+  /** Services: the role this variable's time is billed as (empty = the service's main role). */
+  role_id?: string | null;
+  /** Loaded only: the service's price for role_id (what the row bills at when rate is empty). */
+  role_rate?: number | null;
   /** Services: rate per day/hour for this variable's time (empty = the line's rate). */
   rate?: number | null;
 }
@@ -143,7 +150,11 @@ export function calcTotal(calc: Calculator, values: Record<string, number>, base
   return total;
 }
 
-export interface ServiceRole { id?: string; role_id: string; price: number; sort: number; }
+export interface ServiceRole {
+  id?: string; role_id: string; price: number; sort: number;
+  /** The service's main role: where time goes when nothing else says which role. */
+  is_main?: boolean;
+}
 export interface Service {
   id?: string;
   name: string;
@@ -153,6 +164,8 @@ export interface Service {
   blueprint_id?: string | null;
   description?: string | null;
   active?: boolean;
+  /** Offered when building proposals (13_proposal_decks.sql; missing = yes). */
+  in_proposals?: boolean;
   roles: ServiceRole[];
   calculator?: Calculator | null;
 }
@@ -206,13 +219,14 @@ async function saveCalculatorFor(ownerType: "product" | "service", ownerId: stri
       var_type: v.var_type, amount: v.amount || 0, block_size: v.block_size || 1,
       included: v.included || 0, default_value: v.default_value || 0,
       round_mode: v.round_mode || "up", sort: i,
-      is_supervision: !!v.is_supervision, rate: v.rate == null || (v.rate as any) === "" ? null : Number(v.rate),
+      is_supervision: v.role_id ? false : !!v.is_supervision, role_id: v.role_id || null,
+      rate: v.rate == null || (v.rate as any) === "" ? null : Number(v.rate),
     }));
     let { error } = await supabase.from("calculator_variables").insert(rows);
-    // Before handoff_v3.sql the supervision columns don't exist: save the rest.
-    if (error && /is_supervision|rate/i.test(error.message)) {
-      ({ error } = await supabase.from("calculator_variables").insert(rows.map(({ is_supervision: _s, rate: _r, ...r }) => r)));
-      if (!error && calc.variables.some((v) => v.is_supervision)) return "Saved, but the supervision variable needs handoff_v3.sql in Supabase.";
+    // Before 09_roles_migration.sql the role column doesn't exist: save the rest.
+    if (error && /role_id/i.test(error.message)) {
+      ({ error } = await supabase.from("calculator_variables").insert(rows.map(({ role_id: _r, ...r }) => r)));
+      if (!error && calc.variables.some((v) => v.role_id)) return "Saved, but the role of each row needs 09_roles_migration.sql in Supabase.";
     }
     if (error) return error.message;
   }
@@ -254,23 +268,43 @@ export async function loadServices(): Promise<Service[]> {
 /** Services with their roles and calculators, from rows already read. */
 export function servicesFromRows(svcs: any[], roles: any[], calcs: Record<string, Calculator>): Service[] {
   const rolesBySvc: Record<string, ServiceRole[]> = {};
-  roles.forEach((r: any) => { (rolesBySvc[r.service_id] ??= []).push({ id: r.id, role_id: r.role_id, price: r.price, sort: r.sort }); });
-  return svcs.map((s: any) => ({ ...s, roles: rolesBySvc[s.id] ?? [], calculator: calcs[s.id] ?? null }));
+  roles.forEach((r: any) => { (rolesBySvc[r.service_id] ??= []).push({ id: r.id, role_id: r.role_id, price: r.price, sort: r.sort, is_main: !!r.is_main }); });
+  return svcs.map((s: any) => {
+    const roles = rolesBySvc[s.id] ?? [];
+    const calc = calcs[s.id] ?? null;
+    // A row billed as one of the service's roles bills at that role's price unless it has its own rate.
+    const calculator = calc ? {
+      ...calc,
+      variables: calc.variables.map((v) => {
+        const r = v.role_id ? roles.find((x) => x.role_id === v.role_id) : undefined;
+        return r ? { ...v, role_rate: Number(r.price) || 0 } : v;
+      }),
+    } : null;
+    return { ...s, roles, calculator };
+  });
+}
+
+/** Writes a product / service row; before 13_proposal_decks.sql there is no in_proposals column, so it retries without it. */
+async function writeRow(table: "products" | "services", id: string | undefined, row: Record<string, any>): Promise<{ id?: string; error: string | null }> {
+  const go = async (r: Record<string, any>) => id
+    ? await supabase.from(table).update(r).eq("id", id).then(({ error }) => ({ id, error }))
+    : await supabase.from(table).insert(r).select("id").single().then(({ data, error }) => ({ id: (data as any)?.id as string | undefined, error }));
+  let res = await go(row);
+  if (res.error && "in_proposals" in row && /in_proposals/i.test(res.error.message)) {
+    const { in_proposals: _skip, ...rest } = row; void _skip;
+    res = await go(rest);
+  }
+  return { id: res.id, error: res.error?.message ?? null };
 }
 
 // ---- Save a product (upsert product, then replace its tiers + durations) ----
 export async function saveProduct(p: Product): Promise<string | null> {
   // upsert product row
-  const base = { name: p.name, kind: p.kind, billing: p.billing, billing_period: p.billing_period ?? "monthly", description: p.description ?? null, active: p.active ?? true };
-  let productId = p.id;
-  if (productId) {
-    const { error } = await supabase.from("products").update(base).eq("id", productId);
-    if (error) return error.message;
-  } else {
-    const { data, error } = await supabase.from("products").insert(base).select("id").single();
-    if (error) return error.message;
-    productId = data.id;
-  }
+  const base = { name: p.name, kind: p.kind, billing: p.billing, billing_period: p.billing_period ?? "monthly", description: p.description ?? null, active: p.active ?? true, in_proposals: p.in_proposals !== false };
+  const w = await writeRow("products", p.id, base);
+  if (w.error) return w.error;
+  const productId = w.id;
+  if (!productId) return "Could not save the product.";
   // wipe & rewrite tiers (simplest correct approach for a small editor)
   await supabase.from("product_tiers").delete().eq("product_id", productId);
   for (let i = 0; i < p.tiers.length; i++) {
@@ -306,22 +340,20 @@ export async function saveService(s: Service): Promise<string | null> {
     blueprint_id: s.blueprint_id ?? null,
     description: s.description ?? null,
     active: s.active ?? true,
+    in_proposals: s.in_proposals !== false,
   };
-  let serviceId = s.id;
-  if (serviceId) {
-    const { error } = await supabase.from("services").update(base).eq("id", serviceId);
-    if (error) return error.message;
-  } else {
-    const { data, error } = await supabase.from("services").insert(base).select("id").single();
-    if (error) return error.message;
-    serviceId = data.id;
-  }
+  const w = await writeRow("services", s.id, base);
+  if (w.error) return w.error;
+  const serviceId = w.id;
+  if (!serviceId) return "Could not save the service.";
   await supabase.from("service_roles").delete().eq("service_id", serviceId);
-  for (let i = 0; i < s.roles.length; i++) {
-    const r = s.roles[i];
-    if (!r.role_id) continue;
+  // exactly one main role: the starred one, else the first
+  const kept = s.roles.filter((r) => r.role_id);
+  const mainAt = Math.max(0, kept.findIndex((r) => r.is_main));
+  for (let i = 0; i < kept.length; i++) {
+    const r = kept[i];
     const { error } = await supabase.from("service_roles")
-      .insert({ service_id: serviceId, role_id: r.role_id, price: r.price, sort: i });
+      .insert({ service_id: serviceId, role_id: r.role_id, price: r.price, sort: i, is_main: i === mainAt });
     if (error) return error.message;
   }
   return await saveCalculatorFor("service", serviceId!, s.calculator);

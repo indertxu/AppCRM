@@ -15,7 +15,7 @@ import {
 import {
   AddressFields, PhoneField, StatusPills, HistorySection, phoneText, telHref,
   FilterBar, FilterChips, SortHead, applyView, nextSort, emptyView, useSavedViews, useStoredView, type FField,
-  useBulkSelection, BulkBar, BulkCheck, type BulkAction, DataCleanup,
+  useBulkSelection, BulkBar, BulkCheck, type BulkAction, DataCleanup, DataTools, GEAR, SettingsShell, ColumnsEditor, CustomFieldsEditor,
 } from "../companies/CompaniesPage";
 import "../clients/ClientsPage.css";
 import "../companies/CompaniesPage.css";
@@ -51,8 +51,6 @@ export default function ContactsPage() {
   const [me, setMe] = useState<{ id: string; role: string; is_superadmin: boolean } | null>(null);
   const [fields, setFields] = useState<ContactField[]>([]);
   const [showFieldSettings, setShowFieldSettings] = useState(false);
-  const [cleaning, setCleaning] = useState(false);
-  const [importing, setImporting] = useState(false);
   const [columns, setColumns] = useState<string[]>(["position", "email", "companies"]);
   const [exporting, setExporting] = useState(false);
   const [linkedInOpen, setLinkedInOpen] = useState(false);
@@ -299,11 +297,9 @@ export default function ContactsPage() {
           saved={savedViews} onSaved={setSavedViews} openSignal={filtersOpenTick} />
         <ActionsMenu items={[
           { key: "new", group: "Create", label: "New contact", hint: "Add one person by hand", icon: AM_ICON.plus, primary: true, tone: "green", shortcut: "N", onSelect: () => setEditing(empty()) },
-          { key: "import", group: "Data", label: "Import", hint: "From Excel or CSV, with their companies", icon: AM_ICON.import, tone: "blue", shortcut: "I", onSelect: () => setImporting(true) },
-          { key: "export", group: "Data", label: "Export", hint: "Pick contacts by company, deal or phase", icon: AM_ICON.export, tone: "violet", shortcut: "E", onSelect: () => setExporting(true) },
           { key: "linkedin", group: "Data", label: "Save from LinkedIn", hint: "Browser extension: add people & companies from LinkedIn", icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-4 0v7h-4v-7a6 6 0 0 1 6-6zM2 9h4v12H2zM4 6a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" /></svg>, tone: "blue", shortcut: "L", onSelect: () => setLinkedInOpen(true) },
-          { key: "fields", group: "Setup", label: "Fields & columns", hint: "Custom fields and what the list shows", icon: AM_ICON.fields, tone: "amber", shortcut: "F", onSelect: () => setShowFieldSettings(true) },
-          ...(lead ? [{ key: "cleanup", group: "Setup", label: "Clean up data", hint: "Fix doubled surnames, legal names and street numbers", icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M15 4l5 5M4 20l7-7M13.5 5.5l5 5-7.5 7.5H6v-5z" /></svg>, tone: "amber" as const, onSelect: () => setCleaning(true) },] : []),
+          { key: "fields", group: "Setup", label: "Columns", hint: "What the list shows, and in which order", icon: AM_ICON.fields, tone: "amber", shortcut: "F", onSelect: () => setShowFieldSettings(true) },
+          ...(lead ? [{ key: "settings", group: "Setup", label: "Contacts settings", hint: "Custom fields, import, export and clean-up", icon: GEAR, tone: "violet" as const, shortcut: "S", onSelect: () => navigate("/settings", { state: { settingsView: "contactspage" } }) }] : []),
         ]} />
       </header>
 
@@ -368,23 +364,12 @@ export default function ContactsPage() {
 
       {linkedInOpen && <LinkedInExtensionModal onClose={() => setLinkedInOpen(false)} />}
 
-      {importing && (
-        <ContactImport
-          fields={fields}
-          onClose={() => setImporting(false)}
-          onDone={async () => { await reload(); }}
-        />
-      )}
-
-      {cleaning && <DataCleanup onClose={() => setCleaning(false)} onDone={() => { void reload(); }} />}
       {showFieldSettings && (
         <FieldSettings
-          fields={fields}
           availableColumns={availableColumns}
           columns={activeColumns}
           onColumns={setColumnsPersist}
           onClose={() => setShowFieldSettings(false)}
-          onChanged={async () => { setFields(await listContactFields().catch(() => [])); }}
         />
       )}
     </div>
@@ -660,178 +645,34 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
   );
 }
 // ============================ Field settings modal ============================
-function FieldSettings({ fields, availableColumns, columns, onColumns, onClose, onChanged }: {
-  fields: ContactField[];
+/** The list's columns (Name first, up to 4 more, drag to reorder) — on the Contacts page. */
+function FieldSettings({ availableColumns, columns, onColumns, onClose }: {
   availableColumns: { key: string; label: string }[];
   columns: string[];
   onColumns: (next: string[]) => void;
   onClose: () => void;
-  onChanged: () => void | Promise<void>;
 }) {
-  const [items, setItems] = useState<ContactField[]>(fields);
-  const [dragKey, setDragKey] = useState<string | null>(null);
-  const [dragOver, setDragOver] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  // new-field draft
-  const [label, setLabel] = useState("");
-  const [type, setType] = useState<ContactField["type"]>("text");
-  const [required, setRequired] = useState(false);
-  const [optionsText, setOptionsText] = useState("");
-  const [addErr, setAddErr] = useState<string | null>(null);
-
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
-
-  const refresh = async () => { await onChanged(); setItems(await listContactFields().catch(() => [])); };
-
-  const add = async () => {
-    if (!label.trim()) return;
-    if (isReservedLabel(label)) { setAddErr(`“${label.trim()}” is already a built-in field on every contact.`); return; }
-    setAddErr(null);
-    setBusy(true);
-    const options = type === "select" ? optionsText.split(",").map((s) => s.trim()).filter(Boolean) : [];
-    await addContactField({ label: label.trim(), type, required, options, sort: items.length });
-    setLabel(""); setType("text"); setRequired(false); setOptionsText("");
-    await refresh();
-    setBusy(false);
-  };
-  const remove = async (id: string) => {
-    if (!confirm("Delete this field? Existing contacts keep their stored value but it won't show anymore.")) return;
-    await deleteContactField(id);
-    await refresh();
-  };
-  const toggleRequired = async (f: ContactField) => {
-    await updateContactField(f.id, { required: !f.required });
-    await refresh();
-  };
-
-  const TYPE_LABEL: Record<ContactField["type"], string> = {
-    text: "Text", number: "Number", date: "Date", boolean: "Yes / No", select: "Dropdown",
-  };
-
   return (
     <div className="dw-backdrop" onMouseDown={onClose}>
       <div className="dw dw-narrow" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
         <div className="dw-head">
           <div>
             <span className="dw-eyebrow">Configure</span>
-            <h2 className="dw-title">Contact fields</h2>
+            <h2 className="dw-title">Contact list columns</h2>
           </div>
           <button className="dw-x" onClick={onClose}>×</button>
         </div>
-
         <div className="dw-body">
           <div className="dw-sec">
             <p className="dw-sec-title">Overview columns</p>
-            <p className="dw-empty-hint" style={{ marginTop: 0 }}>Name is always first. Pick up to 4 more and drag to reorder.</p>
-            <div className="cf-cols">
-              <div className="cf-col cf-col-fixed"><span className="cf-col-grip">⋮⋮</span>Name<span className="cf-col-tag">fixed</span></div>
-              {columns.map((k) => (
-                <div key={k}
-                  className={`cf-col ${dragKey === k ? "is-dragging" : ""} ${dragOver === k ? "is-over" : ""}`}
-                  draggable
-                  onDragStart={(e) => { setDragKey(k); e.dataTransfer.effectAllowed = "move"; }}
-                  onDragEnd={() => { setDragKey(null); setDragOver(null); }}
-                  onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (k !== dragOver) setDragOver(k); }}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    if (!dragKey || dragKey === k) { setDragKey(null); setDragOver(null); return; }
-                    // insert dragged before/after k depending on cursor position in the row
-                    const rect = e.currentTarget.getBoundingClientRect();
-                    const after = e.clientY > rect.top + rect.height / 2;
-                    const next = columns.filter((x) => x !== dragKey);
-                    let idx = next.indexOf(k);
-                    if (after) idx += 1;
-                    next.splice(idx, 0, dragKey);
-                    onColumns(next); setDragKey(null); setDragOver(null);
-                  }}>
-                  <span className="cf-col-grip">⋮⋮</span>
-                  {availableColumns.find((c) => c.key === k)?.label ?? k}
-                  <button className="cf-col-x" onClick={() => onColumns(columns.filter((x) => x !== k))} aria-label="Remove column">×</button>
-                </div>
-              ))}
-            </div>
-            {columns.length < 4 && availableColumns.some((c) => !columns.includes(c.key)) && (
-              <div className="cf-col-add">
-                <Select value="" onChange={(v) => v && onColumns([...columns, v])} placeholder="+ Add column"
-                  options={[{ value: "", label: "+ Add column" }, ...availableColumns.filter((c) => !columns.includes(c.key)).map((c) => ({ value: c.key, label: c.label }))]} />
-              </div>
-            )}
-          </div>
-
-          <div className="dw-sec">
-            <p className="dw-sec-title">Built-in fields</p>
-            <div className="cf-list">
-              {PROFILE_FIELDS.map((f) => (
-                <div className="cf-row is-builtin" key={f.key}>
-                  <div className="cf-row-main">
-                    <span className="cf-row-name">{f.label}</span>
-                    <span className="cf-row-type">{f.key === "language" ? "Language list" : f.key === "country" ? "Country list" : f.key === "linkedin" ? "LinkedIn link" : f.key === "province" ? "Text · filled from the postal code" : "Text"} · on every contact</span>
-                  </div>
-                  {f.required && <span className="cf-col-tag">required</span>}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="dw-sec">
-            <p className="dw-sec-title">Your custom fields</p>
-            {items.length === 0 ? (
-              <p className="dw-empty-hint">No custom fields yet. Add one below.</p>
-            ) : (
-              <div className="cf-list">
-                {items.map((f) => (
-                  <div className="cf-row" key={f.id}>
-                    <div className="cf-row-main">
-                      <span className="cf-row-name">{f.label}</span>
-                      <span className="cf-row-type">{TYPE_LABEL[f.type]}{f.type === "select" && f.options.length ? ` · ${f.options.length} options` : ""}</span>
-                    </div>
-                    <button type="button" role="switch" aria-checked={f.required}
-                      className={`cf-req ${f.required ? "on" : ""}`} onClick={() => toggleRequired(f)}
-                      title="Required">Required</button>
-                    <button className="cf-del" onClick={() => remove(f.id)} aria-label="Delete field">×</button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="dw-sec">
-            <p className="dw-sec-title">Add a field</p>
-            <div className="dw-grid">
-              <div className="dw-f dw-col2"><label>Field name</label>
-                <input value={label} onChange={(e) => { setLabel(e.target.value); setAddErr(null); }} placeholder="e.g. Birthday, VIP, Source" />
-              </div>
-              <div className="dw-f"><label>Type</label>
-                <Select value={type} onChange={(v) => setType(v as ContactField["type"])}
-                  options={[
-                    { value: "text", label: "Text" },
-                    { value: "number", label: "Number" },
-                    { value: "date", label: "Date" },
-                    { value: "boolean", label: "Yes / No" },
-                    { value: "select", label: "Dropdown" },
-                  ]} />
-              </div>
-              <div className="dw-f"><label>Required</label>
-                <button type="button" role="switch" aria-checked={required}
-                  className={`dw-switch ${required ? "on" : ""}`} onClick={() => setRequired((v) => !v)}>
-                  <span className="dw-switch-knob" />
-                </button>
-              </div>
-              {type === "select" && (
-                <div className="dw-f dw-col2"><label>Options (comma-separated)</label>
-                  <input value={optionsText} onChange={(e) => setOptionsText(e.target.value)} placeholder="e.g. Low, Medium, High" />
-                </div>
-              )}
-            </div>
-            {addErr && <p className="dw-err">{addErr}</p>}
-            <button className="dw-save cf-add" onClick={add} disabled={busy || !label.trim()}>{busy ? "Adding…" : "+ Add field"}</button>
+            <ColumnsEditor availableColumns={availableColumns} columns={columns} onColumns={onColumns} />
           </div>
         </div>
-
         <div className="dw-foot">
           <div className="dw-foot-right">
             <button className="dw-save" onClick={onClose}>Done</button>
@@ -839,6 +680,69 @@ function FieldSettings({ fields, availableColumns, columns, onColumns, onClose, 
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Settings › Contacts page: the contact fields (built-in and custom) and the
+ * data tools (import, export, clean-up, LinkedIn). The Contacts page only links here.
+ */
+export function ContactSettings({ onBack }: { onBack: () => void }) {
+  const [fields, setFields] = useState<ContactField[]>([]);
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [tool, setTool] = useState<"import" | "export" | "cleanup" | "linkedin" | null>(null);
+  const load = async () => {
+    const [f, ct, co] = await Promise.all([listContactFields().catch(() => []), listContacts().catch(() => []), listCompanies().catch(() => [])]);
+    setFields(f); setContacts(ct); setCompanies(co);
+  };
+  useEffect(() => { void load(); }, []);
+  const I = (d: string) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>;
+  const kindOf = (k: string) => k === "language" ? "Language list" : k === "country" ? "Country list" : k === "linkedin" ? "LinkedIn link" : k === "province" ? "Filled from the postal code" : "Text";
+  return (
+    <>
+      <SettingsShell icon="users" title="Contacts page" sub="The fields every contact has, your own fields, and bringing people in and out"
+        onBack={onBack}
+        tags={<>
+          <span className="sx-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z" /></svg>{contacts.length.toLocaleString("en-GB")} contact{contacts.length === 1 ? "" : "s"}</span>
+          <span className="sx-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1M15 4v4M9 10v4M17 16v4" /></svg>{fields.length} custom field{fields.length === 1 ? "" : "s"}</span>
+        </>}
+        sections={[
+          { k: "data", label: "Import & export", icon: "upload", tone: "blue", title: "Import, export & clean-up", hint: "Bring people in from a file or LinkedIn, take them out, and tidy what is there",
+            body: <DataTools items={[
+              { key: "import", title: "Import", hint: "From Excel or CSV, with their companies", icon: I("M12 15V3M7 8l5-5 5 5M5 21h14"), tone: "#3f7fd8", onOpen: () => setTool("import") },
+              { key: "export", title: "Export", hint: "Pick contacts by company, deal or phase", icon: I("M12 3v12M7 10l5 5 5-5M5 21h14"), tone: "#8b5cf6", onOpen: () => setTool("export") },
+              { key: "cleanup", title: "Clean up data", hint: "Fix doubled surnames, legal names and street numbers", icon: I("M3 21l9-9M12.2 6.2l5.6 5.6M14 4l6 6-8 8-6-6z"), tone: "#d98324", onOpen: () => setTool("cleanup") },
+              { key: "linkedin", title: "Save from LinkedIn", hint: "Browser extension: add people & companies from LinkedIn", icon: I("M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-4 0v7h-4v-7a6 6 0 0 1 6-6zM2 9h4v12H2zM4 6a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"), tone: "#0a66c2", onOpen: () => setTool("linkedin") },
+            ]} /> },
+          { k: "builtin", label: "Built-in fields", icon: "id", tone: "slate", count: PROFILE_FIELDS.length,
+            title: "Built-in fields", hint: "On every contact, besides name, position, email and phones",
+            body: (
+              <ul className="cfe-list">
+                {PROFILE_FIELDS.map((f, i) => (
+                  <li key={f.key} className="cfe-row is-builtin" style={{ ["--i" as string]: i } as CSSProperties}>
+                    <span className="cfe-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M6 11h12a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1zM8 11V7a4 4 0 0 1 8 0v4" /></svg></span>
+                    <span className="cfe-main"><b>{f.label}</b><small>{kindOf(f.key)}</small></span>
+                    {f.required && <span className="cf-col-tag">required</span>}
+                  </li>
+                ))}
+              </ul>
+            ) },
+          { k: "fields", label: "Custom fields", icon: "sliders", tone: "indigo", count: fields.length,
+            title: "Custom fields", hint: "Extra fields on every contact, in its panel",
+            body: <CustomFieldsEditor fields={fields} onChanged={async () => setFields(await listContactFields().catch(() => []))}
+              api={{ add: (f) => addContactField(f), update: (id, patch) => updateContactField(id, patch), remove: (id) => deleteContactField(id) }}
+              isReserved={isReservedLabel}
+              examples={{ name: "Field name, e.g. Birthday, VIP", options: "Low, Medium, High" }} /> },
+        ]} />
+      {tool === "import" && <ContactImport fields={fields} onClose={() => setTool(null)} onDone={async () => { await load(); }} />}
+      {tool === "export" && (
+        <ContactExport contacts={contacts} companies={companies} contactFields={fields}
+          shownIds={contacts.map((c) => c.id as string)} onClose={() => setTool(null)} />
+      )}
+      {tool === "cleanup" && <DataCleanup onClose={() => setTool(null)} onDone={() => { void load(); }} />}
+      {tool === "linkedin" && <LinkedInExtensionModal onClose={() => setTool(null)} />}
+    </>
   );
 }
 

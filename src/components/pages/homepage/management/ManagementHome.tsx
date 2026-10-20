@@ -11,6 +11,8 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../../api/supabase";
 import { periodForDate, periodOf, type Cutoffs } from "../../calendar/billingPeriods";
+import { loadRoles } from "../../settings/blueprintsApi";
+import { roleLinesOfRow, resolveRoleKey, legacyRoleMap, roleKeyOf, roleCounts, rateOn, lineRate } from "../../clients/clientsTypes";
 import "./ManagementHome.css";
 
 const eur = (n: number) => Math.round(n).toLocaleString("en-US");
@@ -295,29 +297,45 @@ function ManagementSummary() {
       });
 
       // Projects for rates + backlog
-      const { data: pj } = await supabase.from("projects").select("id, price_per_day, supervision_price, consultor_days, supervision_days, connector_days, status");
+      const [{ data: pj }, roles] = await Promise.all([
+        supabase.from("projects").select("*"),
+        loadRoles(),
+      ]);
+      const legacy = legacyRoleMap(roles);
       const projects: Record<string, any> = Object.fromEntries(((pj ?? []) as any[]).map((p) => [p.id, p]));
+      // each project's roles (legacy rows read through the old columns)
+      const linesById: Record<string, ReturnType<typeof roleLinesOfRow>> = {};
+      ((pj ?? []) as any[]).forEach((p) => {
+        const out: ReturnType<typeof roleLinesOfRow> = [];
+        for (const l of roleLinesOfRow(p)) {
+          const roleId = resolveRoleKey(l.roleId, legacy);
+          const same = out.find((x) => x.roleId === roleId);
+          if (same) same.days += l.days; else out.push({ ...l, roleId });
+        }
+        linesById[p.id] = out;
+      });
 
       // Entries: consumed days per project + invoiced base for bonus
       const { data: ce } = await supabase
         .from("calendar_entries")
-        .select("user_id, project_id, entry_date, billable, status, billing_line, billing_period, work_type_id");
+        .select("user_id, project_id, entry_date, billable, status, billing_line, role_id, billing_period, work_type_id");
 
-      // Backlog value = sold value − delivered value, across live projects
-      const deliveredByProj: Record<string, number> = {};
+      // Backlog value = sold value − delivered value, role by role, across live projects
+      const deliveredByProj: Record<string, Record<string, number>> = {};
       ((ce ?? []) as any[]).forEach((e) => {
-        if (e.status === "cancelled" || e.billing_line === "closure") return;
+        if (e.status === "cancelled" || e.billing_line === "closure" || e.billing_line === "sales") return;
         if (!e.project_id) return;
-        deliveredByProj[e.project_id] = (deliveredByProj[e.project_id] ?? 0) + (Number(e.billable) || 0);
+        const k = resolveRoleKey(roleKeyOf(e), legacy);
+        const d = (deliveredByProj[e.project_id] ??= {});
+        d[k] = (d[k] ?? 0) + (Number(e.billable) || 0);
       });
       let backlogValue = 0;
       ((pj ?? []) as any[]).forEach((p) => {
         if (p.status && p.status !== "active" && p.status !== "live" && p.status !== "open") return;
-        const rate = Number(p.price_per_day) || 0;
-        const sold = (Number(p.consultor_days) || 0) + (Number(p.supervision_days) || 0) + (Number(p.connector_days) || 0);
-        const delivered = deliveredByProj[p.id] ?? 0;
-        const remaining = Math.max(0, sold - delivered);
-        backlogValue += remaining * rate;
+        const delivered = deliveredByProj[p.id] ?? {};
+        for (const l of linesById[p.id] ?? []) {
+          backlogValue += Math.max(0, l.days - (delivered[l.roleId] ?? 0)) * lineRate(l);
+        }
       });
 
       // Bonus to pay this month = invoiced N months ago × tiered pct, per consultant
@@ -328,13 +346,15 @@ function ManagementSummary() {
 
       const invByUser: Record<string, { amount: number; days: number }> = {};
       ((ce ?? []) as any[]).forEach((e) => {
-        if (e.status === "cancelled" || e.billing_line === "closure" || e.billing_line === "connector") return;
+        if (e.status === "cancelled" || e.billing_line === "closure") return;
         if (!e.project_id || !e.user_id) return;
         const p = projects[e.project_id];
         if (!p) return;
+        const key = resolveRoleKey(roleKeyOf(e), legacy);
+        if (key !== "sales" && !roleCounts(key, roles)) return;   // roles that don't count (connector) stay out
         const per = e.billing_period || periodForDate(e.entry_date, cutoffs, defaultCutoffDay);
         if (per !== forMonth) return;
-        const rate = e.billing_line === "supervision" ? (Number(p.supervision_price) || 0) : (Number(p.price_per_day) || 0);
+        const rate = rateOn(linesById[e.project_id] ?? [], key);
         const bill = Number(e.billable) || 0;
         if (rate <= 0 || bill <= 0) return;
         if (!invByUser[e.user_id]) invByUser[e.user_id] = { amount: 0, days: 0 };

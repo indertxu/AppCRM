@@ -1,11 +1,18 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { supabase } from "../../api/supabase";
+import { mapClientRole, sortRoles, type ClientRole } from "../clients/clientsTypes";
+export type { ClientRole };
 
 export interface BlueprintTask { id: string; name: string; percent: number; }
 export interface BlueprintPhase { id: string; name: string; percent: number; tasks: BlueprintTask[]; }
 export interface Blueprint { id: string; name: string; projectTypeId: string; phases: BlueprintPhase[]; }
 export interface ProjectType { id: string; name: string; }
-export interface ClientRole { id: string; name: string; userIds: string[]; isSupervision: boolean; }
+
+/** Every role of the tenant, in catalogue order. */
+export async function loadRoles(): Promise<ClientRole[]> {
+  const { data } = await supabase.from("client_roles").select("*");
+  return sortRoles((data ?? []).map(mapClientRole));
+}
 
 export async function loadBlueprintData(): Promise<{
   projectTypes: ProjectType[]; blueprints: Blueprint[]; roles: ClientRole[];
@@ -18,10 +25,7 @@ export async function loadBlueprintData(): Promise<{
     id: r.id, name: r.name ?? "", projectTypeId: r.project_type_id ?? "", phases: r.phases ?? [],
   }));
 
-  const { data: rls } = await supabase.from("client_roles").select("*");
-  const roles = (rls ?? []).map((r: any) => ({
-    id: r.id, name: r.name ?? "", userIds: r.user_ids ?? [], isSupervision: !!r.is_supervision,
-  }));
+  const roles = await loadRoles();
 
   return { projectTypes, blueprints, roles };
 }
@@ -52,7 +56,8 @@ export async function saveBlueprintData(
   const delR = (exR ?? []).filter((r: any) => !keepR.has(r.id)).map((r: any) => r.id);
   if (delR.length) await supabase.from("client_roles").delete().in("id", delR);
   if (roles.length)
-    await supabase.from("client_roles").upsert(roles.map((r) => ({
+    await supabase.from("client_roles").upsert(roles.map((r, i) => ({
       id: r.id, name: r.name, user_ids: r.userIds, is_supervision: r.isSupervision,
+      counts_for_target: r.countsForTarget, color: r.color ?? null, sort: i + 1,
     })));
 }

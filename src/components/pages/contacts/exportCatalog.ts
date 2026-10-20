@@ -68,14 +68,14 @@ const LABEL: Record<string, string> = {
   product_price: "Main product price", rep_close_prob: "Close probability · sales (%)", mgr_close_prob: "Close probability · management (%)",
   rep_close_date: "Expected close · sales", mgr_close_date: "Expected close · management", close_date: "Close date", loss_reason: "Loss reason", loss_details: "Loss details",
   imported_by: "Imported by", imported_at: "Imported on", import_batch_id: "Import",
-  language: "Language", linkedin: "LinkedIn",
+  language: "Language", linkedin: "LinkedIn", sector: "Sector", source: "Source",
 };
 const STATUS: Record<string, string> = { active: "Active", won: "Won", lost: "Lost", paused: "On hold" };
 const TEXTISH = /phone|vat|postal|zip|iban|reg_number|tax|cif|nif|code|number$/i;
 /** Columns we know are free text / known to be a short list, whatever the data looks like. */
 const FORCE_TEXT = new Set(["first_name", "last_name", "email", "phone", "position", "notes", "name", "legal_name", "vat_number", "reg_number",
   "website", "street", "addr_number", "addr_details", "postal_code", "loss_details", "linkedin"]);
-const FORCE_ENUM = new Set(["city", "province", "country", "status", "loss_reason", "language"]);
+const FORCE_ENUM = new Set(["city", "province", "country", "status", "loss_reason", "language", "sector", "source"]);
 const EMAIL_OR_URL = /^[^\s@]+@[^\s@]+\.[^\s@]+$|^(https?:\/\/|www\.)|^[a-z0-9-]+(\.[a-z0-9-]+)+(\/\S*)?$|^in\//i;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}/;
 export const isEmpty = (v: any) => v == null || v === "" || (Array.isArray(v) && !v.length);

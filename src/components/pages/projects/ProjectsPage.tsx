@@ -31,6 +31,7 @@ export default function ProjectsPage() {
         projects={projects}
         projectTypes={projectTypes}
         usage={lineUsage}
+        roles={roles}
         onOpenProject={(c, p) => setEditing({ client: c, project: p })}
         onReopen={(p) => setProjectStatus(p, "open", null)}
         onClose_={(p) => {

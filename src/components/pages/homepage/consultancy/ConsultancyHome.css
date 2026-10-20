@@ -163,3 +163,83 @@
   .ch-team-list, .ch-bills-list { max-height: none; }
 }
 @keyframes ch-slide { from { opacity: 0; transform: translateY(6px); } }
+/* =====================================================================
+   Consultancy home v2 — three columns that fill the screen
+     desk (tickets) | calendar + backlog 2×2 | team + bills
+   ===================================================================== */
+.ch-home {
+  --emerald: #12b57f; --forest: #0a6f4d; --ink: #0b241a; --muted: #5a7d6d; --line: rgba(10, 111, 77, 0.12);
+  display: grid; gap: 18px; align-items: stretch;
+  grid-template-columns: minmax(330px, 0.95fr) minmax(0, 1.3fr) minmax(310px, 0.95fr);
+  grid-template-areas: "desk mid right";
+}
+.ch-col { min-width: 0; display: flex; flex-direction: column; gap: 18px; }
+.ch-col-desk { grid-area: desk; }
+.ch-col-mid { grid-area: mid; }
+.ch-col-right { grid-area: right; }
+.ch-col > .hs-card, .ch-col > .ch-card { margin: 0; }
+
+/* backlog as a compact 2×2 */
+.ch-home .ch-backlog { flex: 0 0 auto; padding: 14px 16px 16px; }
+.ch-home .ch-head { margin-bottom: 10px; }
+.ch-bk2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.ch-kpi {
+  position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 2px; min-width: 0;
+  padding: 11px 14px 12px; border-radius: 14px; background: #f7fbf9; border: 1px solid rgba(18, 181, 127, 0.12);
+  animation: ch-in 0.5s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+.ch-kpi:nth-child(2) { animation-delay: 0.05s; } .ch-kpi:nth-child(3) { animation-delay: 0.1s; } .ch-kpi:nth-child(4) { animation-delay: 0.15s; }
+.ch-kpi.is-hero { background: linear-gradient(150deg, #effaf4, #e1f5ea); border-color: rgba(18, 181, 127, 0.24); }
+.ch-kpi.is-hero::after { content: ""; position: absolute; right: -30px; top: -30px; width: 90px; height: 90px; border-radius: 50%; background: radial-gradient(circle, rgba(18, 181, 127, 0.22), transparent 70%); }
+.ch-kpi-k { display: flex; align-items: center; gap: 6px; font-size: 9.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ch-kpi-k i { flex-shrink: 0; width: 7px; height: 7px; border-radius: 2px; }
+.ch-kpi-k .dot-core { background: #12b57f; }
+.ch-kpi-k .dot-conn { background: #d98324; }
+.ch-kpi-v { display: flex; align-items: baseline; gap: 3px; font-family: "Space Grotesk", sans-serif; font-size: 22px; font-weight: 700; letter-spacing: -0.03em; line-height: 1.15; color: var(--ink); font-variant-numeric: tabular-nums; }
+.ch-kpi-v i { font-style: normal; font-size: 12px; font-weight: 500; color: var(--muted); }
+.ch-kpi-v.is-neon { color: #0b9e6d; }
+.ch-kpi-s { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* team: one person per row, stacked (fits a narrow column) */
+.ch-home .ch-team, .ch-home .ch-bills { padding: 14px 16px; }
+.ch-home .ch-team-totals { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+.ch-home .ch-tt { padding: 9px 11px; border-radius: 12px; }
+.ch-team-list { display: flex; flex-direction: column; gap: 2px; }
+.ch-person { display: flex; align-items: center; gap: 11px; padding: 8px 4px; border-bottom: 1px solid rgba(10, 111, 77, 0.06); animation: ch-in 0.45s cubic-bezier(0.16, 1, 0.3, 1) backwards; }
+.ch-person:last-child { border-bottom: 0; }
+.ch-person .ch-team-av { flex-shrink: 0; }
+.ch-person-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.ch-person-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.ch-person-name { font-size: 13px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ch-person-meta { display: flex; gap: 10px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.ch-person-meta b { color: var(--ink); font-weight: 700; }
+.ch-person-meta .ch-team-bonus { margin-left: auto; }
+.ch-person-meta .ch-team-bonus.is-on { color: var(--forest); font-weight: 600; }
+
+/* full-screen: the page doesn't scroll, the long lists do */
+@media (min-width: 1081px) and (min-height: 700px) {
+  .home > .ch-home { flex: 1 1 auto; min-height: 0; }
+  .ch-col { min-height: 0; }
+  .ch-col-desk > .tk-desk { flex: 1 1 auto; min-height: 0; }
+  .ch-col-mid > .hs-cal { flex: 1 1 0; min-height: 300px; display: flex; flex-direction: column; }
+  .ch-col-mid > .hs-cal .hs-head, .ch-col-mid > .hs-cal .hs-days, .ch-col-mid > .hs-cal .hs-month { flex-shrink: 0; }
+  .ch-col-mid > .hs-cal .hs-agenda { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 60px; }
+  .ch-col-mid > .hs-cal .hs-agenda-list { flex: 1 1 auto; min-height: 0; max-height: none; overflow-y: auto; margin-right: -6px; padding-right: 6px; }
+  .ch-col-right > .ch-team { flex: 1.25 1 0; min-height: 200px; }
+  .ch-col-right > .ch-bills { flex: 1 1 0; min-height: 160px; }
+  .ch-col-right .ch-team-list, .ch-col-right .ch-bills-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; margin-right: -8px; padding-right: 8px; scrollbar-width: thin; }
+}
+
+/* narrower: desk + middle side by side, team / bills below */
+@media (max-width: 1280px) and (min-width: 1081px) {
+  .ch-home { grid-template-columns: minmax(320px, 1fr) minmax(0, 1.25fr); grid-template-areas: "desk mid" "right right"; }
+  .ch-col-right { display: grid; grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 1280px) and (min-width: 1081px) and (min-height: 700px) {
+  .home:has(> .ch-home) { height: auto; overflow: visible; }
+  .ch-col-desk > .tk-desk { height: 80vh; }
+}
+@media (max-width: 1080px) {
+  .ch-home { grid-template-columns: minmax(0, 1fr); grid-template-areas: "mid" "desk" "right"; }
+  .ch-col-desk > .tk-desk { max-height: 80vh; }
+}

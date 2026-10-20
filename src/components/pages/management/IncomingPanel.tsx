@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { supabase } from "../../api/supabase";
 import { listHandoffs, dismissHandoff, type Handoff } from "../sales/sales/salesApi";
+import { roleLinesOfRow } from "../clients/clientsTypes";
 import Select from "../../framework/Select";
 import IncomingConvertModal from "./IncomingConvertModal";
 import { HandoffInfo } from "../sales/trackings/HandoffConfirmServices";
@@ -159,7 +160,7 @@ export default function IncomingPanel() {
       const clientIds = (cls ?? []).map((c: any) => c.id);
       if (!clientIds.length) return;
       const { data: pjs } = await supabase.from("projects")
-        .select("id, client_id, service_id, status, consultor_days, connector_days, supervision_days")
+        .select("id, client_id, service_id, status, role_lines, consultor_days, connector_days, supervision_days")
         .in("client_id", clientIds);
       const { data: ents } = await supabase.from("calendar_entries")
         .select("project_id, billable, status")
@@ -174,7 +175,7 @@ export default function IncomingPanel() {
         const c = (cls ?? []).find((x: any) => x.id === p.client_id);
         out[`${c?.company_id}|${p.service_id}`] = {
           done: doneBy[p.id] ?? 0,
-          signed: Number(p.consultor_days || 0) + Number(p.connector_days || 0) + Number(p.supervision_days || 0),
+          signed: roleLinesOfRow(p).reduce((n, l) => n + l.days, 0),
           closed: p.status === "closed",
           client: c?.name ?? "",
         };

@@ -11,8 +11,9 @@ import {
   listContactFields, saveContact,
   loadRelationshipSets, type RelationshipSets,
   loadPrefs, savePref, setCompanyParent,
-  companyStatus, type RelStatus, REL_SYSTEM, relLabel, relationshipOptions, sectorOptions, guessSector, DEFAULT_SECTORS,
+  companyStatus, type RelStatus, REL_SYSTEM, relLabel, relationshipOptions, sectorOptions, sourceOptions, guessSector, DEFAULT_SECTORS,
   listCrmOptions, addCrmOption, deleteCrmOption, type CrmOption,
+  partnerCompanies, listPartnerRates, savePartnerRate, deletePartnerRate, type PartnerRate,
   loadHistory, type HistoryEntry, descendantsOf, groupRootOf,
   type Company, type Contact, type Employee, type CompanyField, type ContactField, type Billing,
 } from "./companiesApi";
@@ -21,12 +22,16 @@ import "../clients/ClientsPage.css";
 import CompanyImport from "./CompanyImport";
 import ContactExport from "../contacts/ContactExport";
 import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
+import { loadProducts, loadServices } from "../settings/catalogApi";
 import "./CompaniesPage.css";
 
 const empty = (): Company => ({
   name: "", legal_name: "", vat_number: "", reg_number: "", website: "", linkedin: "", phone: "", email: "", notes: "",
   street: "", addr_number: "", addr_details: "", postal_code: "", city: "", province: "", country: "",
 });
+
+/** Settings gear, for the "… settings" entry of the actions menu. */
+export const GEAR = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></svg>;
 
 // Strip accents/diacritics so "brujula" matches "brújula".
 const norm = (s: string) => (s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
@@ -45,8 +50,6 @@ export default function CompaniesPage() {
   const [fields, setFields] = useState<CompanyField[]>([]);
   const [contactFields, setContactFields] = useState<ContactField[]>([]);
   const [showFieldSettings, setShowFieldSettings] = useState(false);
-  const [cleaning, setCleaning] = useState(false);
-  const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [rel, setRel] = useState<RelationshipSets | null>(null);
   // filters + sort (remembered on this browser), and the views you saved
@@ -106,6 +109,7 @@ export default function CompaniesPage() {
     { key: "vat_number", label: "VAT / Tax ID", group: "Company", type: "text", get: (c) => c.vat_number },
     { key: "reg_number", label: "Registration nº", group: "Company", type: "text", get: (c) => c.reg_number },
     { key: "sector", label: "Sector", group: "Company", type: "select", get: (c) => c.sector, options: () => [...new Set([...sectorOptions(options), ...companies.map((c) => c.sector ?? "").filter(Boolean)])].map((v) => ({ value: v, label: v })) },
+    { key: "source", label: "Source", group: "Company", type: "select", get: (c) => c.source ?? "", options: () => [...new Set([...sourceOptions(options), ...companies.map((c) => c.source ?? "").filter(Boolean)])].map((v) => ({ value: v, label: v })) },
     { key: "relationship", label: "Type (client, partner…)", group: "Company", type: "multi", get: typeTags, options: () => relationshipOptions(options).map((o) => ({ value: o.key, label: o.label })) },
     { key: "website", label: "Website", group: "Contact details", type: "text", get: (c) => c.website },
     { key: "linkedin", label: "LinkedIn", group: "Contact details", type: "text", get: (c) => c.linkedin },
@@ -148,7 +152,7 @@ export default function CompaniesPage() {
   const searched = (() => {
     const n = norm(q.trim());
     if (!n) return visible;
-    return visible.filter((c) => [c.name, c.legal_name, c.vat_number, c.street, c.city, c.province, c.country, c.postal_code, c.sector, c.email, c.website]
+    return visible.filter((c) => [c.name, c.legal_name, c.vat_number, c.street, c.city, c.province, c.country, c.postal_code, c.sector, c.source, c.email, c.website]
       .some((v) => norm(v ?? "").includes(n)));
   })();
   const shown = applyView(searched, filterFields, view, (a, b) => a.name.localeCompare(b.name));
@@ -191,6 +195,11 @@ export default function CompaniesPage() {
       key: "sector", label: "Set sector", more: true, icon: BI("M3 21h18M5 21V7l7-4 7 4v14M9 9h1M14 9h1M9 13h1M14 13h1M9 17h1M14 17h1"),
       options: [...new Set([...sectorOptions(options), ...companies.map((c) => c.sector ?? "").filter(Boolean)])].sort().map((v) => ({ value: v, label: v })),
       run: (v) => (v ? saveMany((c) => (c.sector === v ? null : { sector: v }), `Sector ${v}`) : null),
+    },
+    {
+      key: "source", label: "Set source", more: true, icon: BI("M12 22s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 15.8 12 22 12 22zM12 13a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z"),
+      options: [...new Set([...sourceOptions(options), ...companies.map((c) => c.source ?? "").filter(Boolean)])].map((v) => ({ value: v, label: v })),
+      run: (v) => (v ? saveMany((c) => (c.source === v ? null : { source: v }), `Source ${v}`) : null),
     },
     {
       key: "group", label: "Part of a group", more: true, icon: BI("M4 3h8v6H4zM12 15h8v6h-8zM8 9v4a2 2 0 0 0 2 2h2"),
@@ -237,6 +246,7 @@ export default function CompaniesPage() {
     { key: "phone", label: "Mobile" },
     { key: "landline", label: "Landline" },
     { key: "sector", label: "Sector" },
+    { key: "source", label: "Source" },
     { key: "group", label: "Group" },
     { key: "created_by", label: "Created by" },
     { key: "contacts", label: "Contacts" },
@@ -260,6 +270,7 @@ export default function CompaniesPage() {
     if (key === "phone") return <span className="co-lmono">{phoneText(c.phone, c.phone_ext) || "—"}</span>;
     if (key === "landline") return <span className="co-lmono">{phoneText(c.landline, c.landline_ext) || "—"}</span>;
     if (key === "sector") return <span className="co-laddr">{c.sector || "—"}</span>;
+    if (key === "source") return <span className="co-laddr">{c.source || "—"}</span>;
     if (key === "group") return <span className="co-laddr">{c.parent_id ? `↳ ${companies.find((x) => x.id === c.parent_id)?.name ?? "—"}` : companies.some((x) => x.parent_id === c.id) ? "Top of a group" : "—"}</span>;
     if (key === "created_by") return <span className="co-laddr">{employees.find((e) => e.id === c.created_by)?.name ?? "—"}</span>;
     if (key === "contacts") return (
@@ -307,10 +318,8 @@ export default function CompaniesPage() {
           saved={savedViews} onSaved={setSavedViews} openSignal={filtersOpenTick} />
         <ActionsMenu items={[
           { key: "new", group: "Create", label: "New company", hint: "Add one company by hand", icon: AM_ICON.plus, primary: true, tone: "green", shortcut: "N", onSelect: () => setEditing(empty()) },
-          { key: "import", group: "Data", label: "Import", hint: "Companies from Excel or CSV, with their contacts", icon: AM_ICON.import, tone: "blue", shortcut: "I", onSelect: () => setImporting(true) },
-          { key: "export", group: "Data", label: "Export", hint: "Pick companies by client, deal, phase or contact", icon: AM_ICON.export, tone: "violet", shortcut: "E", onSelect: () => setExporting(true) },
-          { key: "fields", group: "Setup", label: "Fields & columns", hint: "Custom fields and what the list shows", icon: AM_ICON.fields, tone: "amber", shortcut: "F", onSelect: () => setShowFieldSettings(true) },
-          ...(lead ? [{ key: "cleanup", group: "Setup", label: "Clean up data", hint: "Fix doubled surnames, legal names and street numbers", icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M15 4l5 5M4 20l7-7M13.5 5.5l5 5-7.5 7.5H6v-5z" /></svg>, tone: "amber" as const, onSelect: () => setCleaning(true) },] : []),
+          { key: "fields", group: "Setup", label: "Columns", hint: "What the list shows, and in which order", icon: AM_ICON.fields, tone: "amber", shortcut: "F", onSelect: () => setShowFieldSettings(true) },
+          ...(lead ? [{ key: "settings", group: "Setup", label: "Companies settings", hint: "Custom fields, sectors & sources, import, export and clean-up", icon: GEAR, tone: "violet" as const, shortcut: "S", onSelect: () => navigate("/settings", { state: { settingsView: "companiespage" } }) }] : []),
         ]} />
       </header>
 
@@ -425,25 +434,12 @@ export default function CompaniesPage() {
       <BulkBar count={bulk.ids.length} noun={["company", "companies"]} actions={bulkActions} onClear={bulk.clear}
         onSelectAll={bulk.toggleAll} allOn={bulk.allOn} total={shown.length} />
 
-      {importing && (
-        <CompanyImport
-          fields={fields}
-          onClose={() => setImporting(false)}
-          onDone={async () => { await reload(); }}
-        />
-      )}
-
-      {cleaning && <DataCleanup onClose={() => setCleaning(false)} onDone={() => { void reload(); }} />}
       {showFieldSettings && (
         <FieldSettings
-          fields={fields}
-          options={options}
-          onOptionsChanged={reloadOptions}
           availableColumns={availableColumns}
           columns={activeColumns}
           onColumns={setColumnsPersist}
           onClose={() => setShowFieldSettings(false)}
-          onChanged={async () => { setFields(await listCompanyFields().catch(() => [])); }}
         />
       )}
     </div>
@@ -626,6 +622,8 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
 
   // ---- sector: picked from the list; for a new company we guess it from the name / website ----
   const sectors = sectorOptions(options);
+  /** Where companies come from: the list kept in Settings › Companies page. */
+  const sources = sourceOptions(options);
   const [sectorTouched, setSectorTouched] = useState(!!company.sector);
   const [sectorAuto, setSectorAuto] = useState(false);
   const guess = guessSector(c);
@@ -762,7 +760,7 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
     name: "Name", legal_name: "Legal name", vat_number: "VAT / Tax ID", reg_number: "Registration nº", website: "Website", linkedin: "LinkedIn", email: "Email",
     phone: "Mobile", phone_ext: "Mobile ext.", landline: "Landline", landline_ext: "Landline ext.", notes: "Notes", street: "Street",
     addr_number: "Number", addr_details: "Address details", postal_code: "Postal code", city: "City", province: "Province", country: "Country",
-    sector: "Sector", relationship: "Type", billing: "Billing details", parent_id: "Parent company",
+    sector: "Sector", source: "Source", relationship: "Type", billing: "Billing details", parent_id: "Parent company",
   };
   const histLabel = (k: string) => k.startsWith("custom.") ? fields.find((f) => f.id === k.slice(7))?.label ?? null : FIELD_NAMES[k] ?? null;
   const histValue = (k: string, v: any) => {
@@ -847,8 +845,7 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
                       <Select value={c.sector ?? ""} placeholder="Choose a sector…"
                         onChange={(v) => { if (v === "__add") { setNewSector(""); return; } set({ sector: v || null }); setSectorTouched(true); setSectorAuto(false); }}
                         options={[{ value: "", label: "— No sector" }, ...sectors.map((s) => ({ value: s, label: s })),
-                          ...(c.sector && !sectors.includes(c.sector) ? [{ value: c.sector, label: `${c.sector} (as imported)` }] : []),
-                          { value: "__add", label: "+ Add a sector…" }]} />
+                          ...(c.sector && !sectors.includes(c.sector) ? [{ value: c.sector, label: `${c.sector} (as imported)` }] : [])]} />
                       {!c.sector && guess && (
                         <button type="button" className="dw-suggest" onClick={() => { set({ sector: guess }); setSectorTouched(true); }}>
                           <DwIcon name="spark" />Looks like <b>{guess}</b>
@@ -863,6 +860,12 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
                       <button type="button" className="dw-cancel" onClick={() => setNewSector(null)}>Cancel</button>
                     </div>
                   )}
+                </div>
+                <div className="dw-f dw-col2"><label>Source</label>
+                  <Select value={c.source ?? ""} placeholder="Where did it come from?"
+                    onChange={(v) => set({ source: v || null })}
+                    options={[{ value: "", label: "— No source" }, ...sources.map((x) => ({ value: x, label: x })),
+                      ...(c.source && !sources.includes(c.source) ? [{ value: c.source, label: `${c.source} (as imported)` }] : [])]} />
                 </div>
               </div>
               <div className="dw-rel">
@@ -879,7 +882,7 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
                     );
                   })}
                   {newType === null ? (
-                    <button type="button" className="dw-rel-chip is-new" onClick={() => setNewType("")}>+ New type</button>
+                    null /* new types are added in Settings › Companies page */
                   ) : (
                     <span className="dw-rel-add">
                       <input autoFocus value={newType} onChange={(e) => setNewType(e.target.value)} placeholder="e.g. Partner"
@@ -1144,159 +1147,34 @@ function GroupTree({ companies, focus, onOpen, onDetach, detachable }: {
   );
 }
 // ============================ Field settings modal ============================
-function FieldSettings({ fields, options, onOptionsChanged, availableColumns, columns, onColumns, onClose, onChanged }: {
-  fields: CompanyField[];
-  options: CrmOption[];
-  onOptionsChanged: () => Promise<void> | void;
+/** The list's columns (Name first, up to 4 more, drag to reorder) — on the Companies page. */
+function FieldSettings({ availableColumns, columns, onColumns, onClose }: {
   availableColumns: { key: string; label: string }[];
   columns: string[];
   onColumns: (next: string[]) => void;
   onClose: () => void;
-  onChanged: () => void | Promise<void>;
 }) {
-  const [items, setItems] = useState<CompanyField[]>(fields);
-  const [dragKey, setDragKey] = useState<string | null>(null);
-  const [dragOver, setDragOver] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [label, setLabel] = useState("");
-  const [type, setType] = useState<CompanyField["type"]>("text");
-  const [required, setRequired] = useState(false);
-  const [optionsText, setOptionsText] = useState("");
-
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
-
-  const refresh = async () => { await onChanged(); setItems(await listCompanyFields().catch(() => [])); };
-  const add = async () => {
-    if (!label.trim()) return;
-    setBusy(true);
-    const options = type === "select" ? optionsText.split(",").map((s) => s.trim()).filter(Boolean) : [];
-    await addCompanyField({ label: label.trim(), type, required, options, sort: items.length });
-    setLabel(""); setType("text"); setRequired(false); setOptionsText("");
-    await refresh();
-    setBusy(false);
-  };
-  const remove = async (id: string) => {
-    if (!confirm("Delete this field? Existing companies keep their stored value but it won't show anymore.")) return;
-    await deleteCompanyField(id);
-    await refresh();
-  };
-  const toggleRequired = async (f: CompanyField) => { await updateCompanyField(f.id, { required: !f.required }); await refresh(); };
-
-  const TYPE_LABEL: Record<CompanyField["type"], string> = {
-    text: "Text", number: "Number", date: "Date", boolean: "Yes / No", select: "Dropdown",
-  };
-
   return (
     <div className="dw-backdrop" onMouseDown={onClose}>
       <div className="dw dw-narrow" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
         <div className="dw-head">
           <div>
             <span className="dw-eyebrow">Configure</span>
-            <h2 className="dw-title">Company fields</h2>
+            <h2 className="dw-title">Company list columns</h2>
           </div>
           <button className="dw-x" onClick={onClose}>×</button>
         </div>
-
         <div className="dw-body">
           <div className="dw-sec">
             <p className="dw-sec-title">Overview columns</p>
-            <p className="dw-empty-hint" style={{ marginTop: 0 }}>Name is always first. Pick up to 4 more and drag to reorder.</p>
-            <div className="cf-cols">
-              <div className="cf-col cf-col-fixed"><span className="cf-col-grip">⋮⋮</span>Name<span className="cf-col-tag">fixed</span></div>
-              {columns.map((k) => (
-                <div key={k}
-                  className={`cf-col ${dragKey === k ? "is-dragging" : ""} ${dragOver === k ? "is-over" : ""}`}
-                  draggable
-                  onDragStart={(e) => { setDragKey(k); e.dataTransfer.effectAllowed = "move"; }}
-                  onDragEnd={() => { setDragKey(null); setDragOver(null); }}
-                  onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (k !== dragOver) setDragOver(k); }}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    if (!dragKey || dragKey === k) { setDragKey(null); setDragOver(null); return; }
-                    const rect = e.currentTarget.getBoundingClientRect();
-                    const after = e.clientY > rect.top + rect.height / 2;
-                    const next = columns.filter((x) => x !== dragKey);
-                    let idx = next.indexOf(k);
-                    if (after) idx += 1;
-                    next.splice(idx, 0, dragKey);
-                    onColumns(next); setDragKey(null); setDragOver(null);
-                  }}>
-                  <span className="cf-col-grip">⋮⋮</span>
-                  {availableColumns.find((c) => c.key === k)?.label ?? k}
-                  <button className="cf-col-x" onClick={() => onColumns(columns.filter((x) => x !== k))} aria-label="Remove column">×</button>
-                </div>
-              ))}
-            </div>
-            {columns.length < 4 && availableColumns.some((c) => !columns.includes(c.key)) && (
-              <div className="cf-col-add">
-                <Select value="" onChange={(v) => v && onColumns([...columns, v])} placeholder="+ Add column"
-                  options={[{ value: "", label: "+ Add column" }, ...availableColumns.filter((c) => !columns.includes(c.key)).map((c) => ({ value: c.key, label: c.label }))]} />
-              </div>
-            )}
-          </div>
-
-          <OptionList kind="sector" title="Sectors" options={options} onChanged={onOptionsChanged}
-            builtIn={DEFAULT_SECTORS.map((s) => s.label)} placeholder="e.g. Aerospace"
-            hint="Every company can have one. New companies get one guessed from their name; imports match what the file says." />
-          <OptionList kind="relationship" title="What a company can be" options={options} onChanged={onOptionsChanged}
-            builtIn={REL_SYSTEM.map((r) => r.label)} placeholder="e.g. Partner, Supplier"
-            hint="CRM, In sales and Client are switched on by themselves; add your own (Partner, Supplier…) to pick by hand." />
-
-          <div className="dw-sec">
-            <p className="dw-sec-title">Current fields</p>
-            {items.length === 0 ? (
-              <p className="dw-empty-hint">No custom fields yet. Add one below.</p>
-            ) : (
-              <div className="cf-list">
-                {items.map((f) => (
-                  <div className="cf-row" key={f.id}>
-                    <div className="cf-row-main">
-                      <span className="cf-row-name">{f.label}</span>
-                      <span className="cf-row-type">{TYPE_LABEL[f.type]}{f.type === "select" && f.options.length ? ` · ${f.options.length} options` : ""}</span>
-                    </div>
-                    <button type="button" role="switch" aria-checked={f.required}
-                      className={`cf-req ${f.required ? "on" : ""}`} onClick={() => toggleRequired(f)}>Required</button>
-                    <button className="cf-del" onClick={() => remove(f.id)} aria-label="Delete field">×</button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="dw-sec">
-            <p className="dw-sec-title">Add a field</p>
-            <div className="dw-grid">
-              <div className="dw-f dw-col2"><label>Field name</label>
-                <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Sector, Founded, Key account" />
-              </div>
-              <div className="dw-f"><label>Type</label>
-                <Select value={type} onChange={(v) => setType(v as CompanyField["type"])}
-                  options={[
-                    { value: "text", label: "Text" }, { value: "number", label: "Number" },
-                    { value: "date", label: "Date" }, { value: "boolean", label: "Yes / No" },
-                    { value: "select", label: "Dropdown" },
-                  ]} />
-              </div>
-              <div className="dw-f"><label>Required</label>
-                <button type="button" role="switch" aria-checked={required}
-                  className={`dw-switch ${required ? "on" : ""}`} onClick={() => setRequired((v) => !v)}>
-                  <span className="dw-switch-knob" />
-                </button>
-              </div>
-              {type === "select" && (
-                <div className="dw-f dw-col2"><label>Options (comma-separated)</label>
-                  <input value={optionsText} onChange={(e) => setOptionsText(e.target.value)} placeholder="e.g. SME, Mid-market, Enterprise" />
-                </div>
-              )}
-            </div>
-            <button className="dw-save cf-add" onClick={add} disabled={busy || !label.trim()}>{busy ? "Adding…" : "+ Add field"}</button>
+            <ColumnsEditor availableColumns={availableColumns} columns={columns} onColumns={onColumns} />
           </div>
         </div>
-
         <div className="dw-foot">
           <div className="dw-foot-right">
             <button className="dw-save" onClick={onClose}>Done</button>
@@ -1307,13 +1185,166 @@ function FieldSettings({ fields, options, onOptionsChanged, availableColumns, co
   );
 }
 
-/** A list you can add to (sectors, relationship types): the built-in ones, then yours with a remove button. */
-function OptionList({ kind, title, hint, options, builtIn, placeholder, onChanged }: {
-  kind: CrmOption["kind"]; title: string; hint: string; options: CrmOption[]; builtIn: string[]; placeholder: string;
+/** Name first, then up to 4 columns you pick and drag into order (Companies and Contacts lists). */
+export function ColumnsEditor({ availableColumns, columns, onColumns }: {
+  availableColumns: { key: string; label: string }[]; columns: string[]; onColumns: (next: string[]) => void;
+}) {
+  const [dragKey, setDragKey] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState<string | null>(null);
+  return (
+    <>
+      <p className="dw-empty-hint" style={{ marginTop: 0 }}>Name is always first. Pick up to 4 more and drag to reorder.</p>
+      <div className="cf-cols">
+        <div className="cf-col cf-col-fixed"><span className="cf-col-grip">⋮⋮</span>Name<span className="cf-col-tag">fixed</span></div>
+        {columns.map((k) => (
+          <div key={k}
+            className={`cf-col ${dragKey === k ? "is-dragging" : ""} ${dragOver === k ? "is-over" : ""}`}
+            draggable
+            onDragStart={(e) => { setDragKey(k); e.dataTransfer.effectAllowed = "move"; }}
+            onDragEnd={() => { setDragKey(null); setDragOver(null); }}
+            onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (k !== dragOver) setDragOver(k); }}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (!dragKey || dragKey === k) { setDragKey(null); setDragOver(null); return; }
+              const rect = e.currentTarget.getBoundingClientRect();
+              const after = e.clientY > rect.top + rect.height / 2;
+              const next = columns.filter((x) => x !== dragKey);
+              let idx = next.indexOf(k);
+              if (after) idx += 1;
+              next.splice(idx, 0, dragKey);
+              onColumns(next); setDragKey(null); setDragOver(null);
+            }}>
+            <span className="cf-col-grip">⋮⋮</span>
+            {availableColumns.find((c) => c.key === k)?.label ?? k}
+            <button className="cf-col-x" onClick={() => onColumns(columns.filter((x) => x !== k))} aria-label="Remove column">×</button>
+          </div>
+        ))}
+      </div>
+      {columns.length < 4 && availableColumns.some((c) => !columns.includes(c.key)) && (
+        <div className="cf-col-add">
+          <Select value="" onChange={(v) => v && onColumns([...columns, v])} placeholder="+ Add column"
+            options={[{ value: "", label: "+ Add column" }, ...availableColumns.filter((c) => !columns.includes(c.key)).map((c) => ({ value: c.key, label: c.label }))]} />
+        </div>
+      )}
+    </>
+  );
+}
+
+type CustomFieldLike = { id: string; label: string; type: "text" | "number" | "date" | "boolean" | "select"; required: boolean; options: string[] };
+const FIELD_TYPE_LABEL: Record<CustomFieldLike["type"], string> = { text: "Text", number: "Number", date: "Date", boolean: "Yes / No", select: "Dropdown" };
+const FIELD_TYPE_ICON: Record<CustomFieldLike["type"], string> = {
+  text: "M4 7V5h16v2M9 19h6M12 5v14", number: "M4 9h16M4 15h16M10 3 8 21M16 3l-2 18", date: "M4 5h16v16H4zM4 10h16M8 3v4M16 3v4",
+  boolean: "M7 7h10a5 5 0 0 1 0 10H7A5 5 0 0 1 7 7zM16 12h.01", select: "M4 6h16M4 12h16M4 18h10M17 16l2 2 2-2",
+};
+/**
+ * Custom fields of companies or contacts: the list (required on/off, delete)
+ * and a form to add one. `api` says where they are stored.
+ */
+export function CustomFieldsEditor({ fields, api, examples, isReserved, onChanged }: {
+  fields: CustomFieldLike[];
+  api: {
+    add: (f: { label: string; type: CustomFieldLike["type"]; required: boolean; options: string[]; sort: number }) => Promise<unknown>;
+    update: (id: string, patch: { required: boolean }) => Promise<unknown>;
+    remove: (id: string) => Promise<unknown>;
+  };
+  /** Placeholders for the name and the dropdown options. */
+  examples: { name: string; options: string };
+  /** A label that is already a built-in field (refused). */
+  isReserved?: (label: string) => boolean;
   onChanged: () => Promise<void> | void;
 }) {
   const [label, setLabel] = useState("");
+  const [type, setType] = useState<CustomFieldLike["type"]>("text");
+  const [required, setRequired] = useState(false);
+  const [optionsText, setOptionsText] = useState("");
+  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [askDel, setAskDel] = useState<string | null>(null);
+  const add = async () => {
+    const l = label.trim();
+    if (!l) return;
+    if (isReserved?.(l)) { setErr(`“${l}” is already a built-in field.`); return; }
+    if (fields.some((f) => f.label.trim().toLowerCase() === l.toLowerCase())) { setErr(`There is already a field called “${l}”.`); return; }
+    setBusy(true); setErr(null);
+    const options = type === "select" ? optionsText.split(",").map((x) => x.trim()).filter(Boolean) : [];
+    await api.add({ label: l, type, required, options, sort: fields.length });
+    setLabel(""); setType("text"); setRequired(false); setOptionsText("");
+    await onChanged();
+    setBusy(false);
+  };
+  return (
+    <div className="cfe">
+      {fields.length === 0 ? (
+        <p className="cfe-empty">No custom fields yet. Add the first one below.</p>
+      ) : (
+        <ul className="cfe-list">
+          {fields.map((f, i) => (
+            <li key={f.id} className="cfe-row" style={{ ["--i" as string]: i } as CSSProperties}>
+              <span className="cfe-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={FIELD_TYPE_ICON[f.type]} /></svg></span>
+              <span className="cfe-main">
+                <b>{f.label}</b>
+                <small>{FIELD_TYPE_LABEL[f.type]}{f.type === "select" && f.options.length ? ` · ${f.options.length} option${f.options.length === 1 ? "" : "s"}` : ""}</small>
+                {f.type === "select" && f.options.length > 0 && (
+                  <span className="cfe-chips" title={f.options.join("\n")}>
+                    {f.options.slice(0, 4).map((o, k) => <i key={k}>{o}</i>)}
+                    {f.options.length > 4 && <i className="is-more">+{f.options.length - 4}</i>}
+                  </span>
+                )}
+              </span>
+              <button type="button" role="switch" aria-checked={f.required} className={`cfe-req ${f.required ? "is-on" : ""}`}
+                onClick={async () => { await api.update(f.id, { required: !f.required }); await onChanged(); }}>
+                <i />Required
+              </button>
+              {askDel === f.id ? (
+                <span className="cfe-ask">
+                  Delete?
+                  <button type="button" className="is-yes" onClick={async () => { setAskDel(null); await api.remove(f.id); await onChanged(); }}>Yes</button>
+                  <button type="button" onClick={() => setAskDel(null)}>No</button>
+                </span>
+              ) : (
+                <button type="button" className="cfe-del" onClick={() => setAskDel(f.id)} aria-label={`Delete ${f.label}`} title="Delete — stored values are kept but no longer shown">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" /></svg>
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="cfe-add">
+        <span className="cfe-add-k">Add a field</span>
+        <div className="cfe-add-row">
+          <input value={label} onChange={(e) => { setLabel(e.target.value); setErr(null); }} placeholder={examples.name}
+            onKeyDown={(e) => { if (e.key === "Enter" && type !== "select") { e.preventDefault(); void add(); } }} />
+          <div className="cfe-type">
+            <Select value={type} onChange={(v) => setType(v as CustomFieldLike["type"])}
+              options={(Object.keys(FIELD_TYPE_LABEL) as CustomFieldLike["type"][]).map((t) => ({ value: t, label: FIELD_TYPE_LABEL[t] }))} />
+          </div>
+          <button type="button" role="switch" aria-checked={required} className={`cfe-req ${required ? "is-on" : ""}`} onClick={() => setRequired((v) => !v)}>
+            <i />Required
+          </button>
+          <button type="button" className="dw-save" onClick={() => void add()} disabled={busy || !label.trim()}>{busy ? "Adding…" : "+ Add"}</button>
+        </div>
+        <div className={`cfe-opts ${type === "select" ? "is-on" : ""}`}>
+          <div className="cfe-opts-in">
+            <input value={optionsText} onChange={(e) => setOptionsText(e.target.value)} placeholder={`Options, separated by commas — ${examples.options}`} tabIndex={type === "select" ? 0 : -1} />
+          </div>
+        </div>
+        {err && <p className="dw-err">{err}</p>}
+      </div>
+    </div>
+  );
+}
+
+/** A list you can add to (sectors, sources, relationship types): the built-in ones, then yours with a remove button. */
+function OptionList({ kind, title, hint, options, builtIn, placeholder, onChanged, bare = false }: {
+  kind: CrmOption["kind"]; title?: string; hint?: string; options: CrmOption[]; builtIn: string[]; placeholder: string;
+  onChanged: () => Promise<void> | void;
+  /** Without its own card and title (inside a settings section). */
+  bare?: boolean;
+}) {
+  const [label, setLabel] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [askDel, setAskDel] = useState<string | null>(null);
   const mine = options.filter((o) => o.kind === kind);
   const add = async () => {
     const l = label.trim();
@@ -1323,17 +1354,23 @@ function OptionList({ kind, title, hint, options, builtIn, placeholder, onChange
     if (e) { setErr(/crm_options/i.test(e) ? "Run the CRM upgrade in Supabase first." : e); return; }
     setLabel(""); setErr(null); await onChanged();
   };
-  return (
-    <div className="dw-sec">
-      <p className="dw-sec-title">{title}</p>
-      <p className="dw-empty-hint" style={{ marginTop: 0 }}>{hint}</p>
+  const body = (
+    <>
       <div className="cf-opts">
-        {builtIn.map((b) => <span key={b} className="cf-opt is-builtin">{b}</span>)}
+        {builtIn.map((b) => <span key={b} className="cf-opt is-builtin" title="Built in">{b}</span>)}
         {mine.map((o) => (
-          <span key={o.id} className="cf-opt">{o.label}
-            <button type="button" aria-label={`Remove ${o.label}`} onClick={async () => { if (confirm(`Remove “${o.label}” from the list? Companies that have it keep it.`)) { await deleteCrmOption(o.id); await onChanged(); } }}>×</button>
+          <span key={o.id} className={`cf-opt ${askDel === o.id ? "is-asking" : ""}`}>{o.label}
+            {askDel === o.id ? (
+              <span className="cf-opt-ask">remove?
+                <button type="button" className="is-yes" onClick={async () => { setAskDel(null); await deleteCrmOption(o.id); await onChanged(); }}>yes</button>
+                <button type="button" onClick={() => setAskDel(null)}>no</button>
+              </span>
+            ) : (
+              <button type="button" aria-label={`Remove ${o.label}`} title="Remove from the list — records that have it keep it" onClick={() => setAskDel(o.id)}>×</button>
+            )}
           </span>
         ))}
+        {!builtIn.length && !mine.length && <span className="cf-opt-none">Nothing on the list yet.</span>}
       </div>
       <div className="cf-opt-add">
         <input value={label} onChange={(e) => { setLabel(e.target.value); setErr(null); }} placeholder={placeholder}
@@ -1341,6 +1378,14 @@ function OptionList({ kind, title, hint, options, builtIn, placeholder, onChange
         <button type="button" className="dw-save" onClick={() => void add()} disabled={!label.trim()}>+ Add</button>
       </div>
       {err && <p className="dw-err">{err}</p>}
+    </>
+  );
+  if (bare) return body;
+  return (
+    <div className="dw-sec">
+      {title && <p className="dw-sec-title">{title}</p>}
+      {hint && <p className="dw-empty-hint" style={{ marginTop: 0 }}>{hint}</p>}
+      {body}
     </div>
   );
 }
@@ -2952,5 +2997,351 @@ export function DataCleanup({ onClose, onDone }: { onClose: () => void; onDone: 
         )}
       </div>
     </div>
+  );
+}
+
+// ============================ Settings pages (Companies, Contacts, Client page) ============================
+export interface DataTool { key: string; title: string; hint: string; icon: ReactNode; tone: string; onOpen: () => void }
+/** The data tools of a list (import, export, clean-up…) as a row of cards. */
+export function DataTools({ items }: { items: DataTool[] }) {
+  return (
+    <div className="crm-tools">
+      {items.map((t, i) => (
+        <button key={t.key} type="button" className="crm-tool" style={{ ["--tone" as string]: t.tone, ["--i" as string]: i } as CSSProperties} onClick={t.onOpen}>
+          <span className="crm-tool-ico">{t.icon}</span>
+          <span className="crm-tool-txt"><b>{t.title}</b><small>{t.hint}</small></span>
+          <svg className="crm-tool-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export interface SxSection {
+  k: string; label: string; icon: string; title: string; hint: string;
+  tone?: "green" | "blue" | "amber" | "indigo" | "violet" | "slate" | "rose";
+  count?: number; aside?: ReactNode; body: ReactNode;
+}
+/**
+ * A settings page: the usual Settings header, a sticky index of its sections on
+ * the left (follows the scroll, jumps on click) and the sections as cards that
+ * fold open and closed. Same feel as the company / contact panel, laid out as a page.
+ */
+export function SettingsShell({ icon, title, sub, tags, sections, onBack }: {
+  icon: string; eyebrow?: string; title: string; sub: string; tags?: ReactNode; sections: SxSection[]; onBack: () => void;
+}) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  /** Only the sections scroll; the header and the index stay put. */
+  const mainRef = useRef<HTMLDivElement>(null);
+  const navRef = useRef<HTMLElement>(null);
+  const [active, setActive] = useState(sections[0]?.k ?? "");
+  const [closed, setClosed] = useState<Set<string>>(new Set());
+  const lock = useRef(0);
+  // which section is on screen
+  useEffect(() => {
+    const sc = mainRef.current;
+    if (!sc) return;
+    const onScroll = () => {
+      if (Date.now() < lock.current) return;
+      const secs = Array.from(sc.querySelectorAll<HTMLElement>("[data-sec]"));
+      if (!secs.length) return;
+      const top = sc.getBoundingClientRect().top;
+      let cur = secs[0].dataset.sec!;
+      for (const el of secs) if (el.getBoundingClientRect().top - top <= 120) cur = el.dataset.sec!;
+      if (sc.scrollTop > 0 && sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 4) cur = secs[secs.length - 1].dataset.sec!;
+      setActive(cur);
+    };
+    onScroll();
+    sc.addEventListener("scroll", onScroll, { passive: true });
+    return () => sc.removeEventListener("scroll", onScroll);
+  }, []);
+  const scrollTo = (k: string) => {
+    const sc = mainRef.current;
+    const el = sc?.querySelector<HTMLElement>(`[data-sec="${k}"]`);
+    if (!sc || !el) return;
+    setActive(k);
+    lock.current = Date.now() + 800;
+    sc.scrollTo({ top: Math.max(0, el.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop - 4), behavior: "smooth" });
+    el.classList.remove("is-flash"); void el.offsetWidth; el.classList.add("is-flash");
+    window.setTimeout(() => el.classList.remove("is-flash"), 1200);
+  };
+  const go = (k: string) => {
+    if (closed.has(k)) { setClosed((x) => { const n = new Set(x); n.delete(k); return n; }); window.setTimeout(() => scrollTo(k), 80); }
+    else scrollTo(k);
+  };
+  const toggle = (k: string) => setClosed((x) => { const n = new Set(x); if (n.has(k)) n.delete(k); else n.add(k); return n; });
+  const allClosed = sections.every((s) => closed.has(s.k));
+  // the white pill that slides to the active item
+  const [ink, setInk] = useState<{ top: number; height: number } | null>(null);
+  useLayoutEffect(() => {
+    const el = navRef.current?.querySelector<HTMLElement>(".sx-nav-item.is-on");
+    if (el) setInk({ top: el.offsetTop, height: el.offsetHeight });
+  }, [active, sections.length]);
+  return (
+    <div className="st sx" ref={rootRef}>
+      <header className="st-bar st-bar-back sx-bar">
+        <button className="uv-back" onClick={onBack}>‹ Settings</button>
+        <div className="sx-bar-row">
+          <span className="sx-badge"><DwIcon name={icon} /></span>
+          <div className="sx-bar-txt">
+            <h1 className="st-title">{title}</h1>
+            <p className="st-sub">{sub}</p>
+          </div>
+          {tags && <div className="sx-tags">{tags}</div>}
+        </div>
+      </header>
+      <div className="sx-layout">
+        <aside className="sx-side">
+          <nav className="sx-nav" ref={navRef} aria-label="Sections">
+            {ink && <span className="sx-nav-ink" style={{ top: ink.top, height: ink.height }} aria-hidden="true" />}
+            {sections.map((s, i) => (
+              <button key={s.k} type="button" className={`sx-nav-item ${active === s.k ? "is-on" : ""}`} data-tone={s.tone ?? "green"}
+                style={{ ["--n" as string]: i } as CSSProperties} onClick={() => go(s.k)}>
+                <i><DwIcon name={s.icon} /></i>
+                <span>{s.label}</span>
+                {s.count != null && s.count > 0 && <em>{s.count}</em>}
+              </button>
+            ))}
+          </nav>
+          <button type="button" className="sx-foldall" onClick={() => setClosed(allClosed ? new Set() : new Set(sections.map((s) => s.k)))}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={allClosed ? "M7 10l5 5 5-5M7 4l5 5 5-5" : "M7 14l5-5 5 5M7 20l5-5 5 5"} /></svg>
+            {allClosed ? "Open all" : "Fold all"}
+          </button>
+        </aside>
+        <div className="sx-main" ref={mainRef}>
+          {sections.map((s, i) => {
+            const open = !closed.has(s.k);
+            return (
+              <section key={s.k} className={`dw-sec sx-sec ${open ? "is-open" : ""}`} data-sec={s.k} data-tone={s.tone ?? "green"}
+                style={{ ["--n" as string]: i } as CSSProperties}>
+                <div className="sx-sec-h" onClick={() => toggle(s.k)}>
+                  <DwSecHead icon={s.icon} title={s.title} hint={s.hint}
+                    aside={<>
+                      {s.aside}
+                      {s.count != null && <span className="dw-pill">{s.count}</span>}
+                      <button type="button" className="sx-chev" aria-expanded={open} aria-label={open ? `Fold ${s.label}` : `Open ${s.label}`}
+                        onClick={(e) => { e.stopPropagation(); toggle(s.k); }}>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+                      </button>
+                    </>} />
+                </div>
+                <div className="sx-fold" inert={!open ? true : undefined}>
+                  <div className="sx-fold-in">{s.body}</div>
+                </div>
+              </section>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Settings › Companies page: what sets up the Companies list — its custom
+ * fields, the sector / source / type lists — and its data tools (import,
+ * export, clean-up). The Companies page only links here.
+ */
+// ---- Partners: their default cut, in general and per product / service ----
+interface PartnerItem { type: "product" | "service"; id: string; name: string }
+const rateText = (r: { mode: string; value: number } | null | undefined) =>
+  !r ? "" : r.mode === "amount" ? `€${(Number(r.value) || 0).toLocaleString("en-GB", { maximumFractionDigits: 2 })}` : `${(Number(r.value) || 0).toLocaleString("en-GB", { maximumFractionDigits: 2 })}%`;
+
+/** A % / € switch and a number; saves when you leave the field or flip the switch. */
+function RateInput({ rate, onSave, placeholder }: {
+  rate: { mode: "percent" | "amount"; value: number } | null;
+  onSave: (r: { mode: "percent" | "amount"; value: number } | null) => Promise<void>;
+  placeholder?: string;
+}) {
+  const [mode, setMode] = useState<"percent" | "amount">(rate?.mode ?? "percent");
+  const [val, setVal] = useState(rate ? String(rate.value) : "");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setMode(rate?.mode ?? "percent"); setVal(rate ? String(rate.value) : ""); }, [rate?.mode, rate?.value]);
+  const commit = async (m = mode, v = val) => {
+    const n = v.trim() === "" ? null : Number(v.replace(",", "."));
+    if (n != null && (!isFinite(n) || n < 0)) { setVal(rate ? String(rate.value) : ""); return; }
+    const next = n == null ? null : { mode: m, value: m === "percent" ? Math.min(n, 100) : n };
+    if ((next?.mode ?? null) === (rate?.mode ?? null) && (next?.value ?? null) === (rate?.value ?? null)) return;
+    if (!next && !rate) return;
+    setBusy(true);
+    try { await onSave(next); } finally { setBusy(false); }
+  };
+  return (
+    <span className={`prt-rate ${busy ? "is-busy" : ""}`}>
+      <span className="prt-mode" role="group" aria-label="Percent or fixed amount">
+        <button type="button" className={mode === "percent" ? "is-on" : ""} onClick={() => { setMode("percent"); void commit("percent"); }}>%</button>
+        <button type="button" className={mode === "amount" ? "is-on" : ""} onClick={() => { setMode("amount"); void commit("amount"); }}>€</button>
+        <i style={{ transform: mode === "amount" ? "translateX(100%)" : undefined }} />
+      </span>
+      <input inputMode="decimal" value={val} placeholder={placeholder ?? "—"} onChange={(e) => setVal(e.target.value)}
+        onBlur={() => void commit()} onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
+      <em>{mode === "percent" ? "%" : "€"}</em>
+    </span>
+  );
+}
+
+function PartnerRatesEditor({ partners, rates, items, onChanged }: {
+  partners: Company[]; rates: PartnerRate[]; items: PartnerItem[]; onChanged: () => Promise<void> | void;
+}) {
+  const [open, setOpen] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [askDel, setAskDel] = useState<string | null>(null);
+  const itemName = (r: PartnerRate) => items.find((i) => i.type === r.item_type && i.id === r.item_id)?.name ?? (r.item_type === "product" ? "Removed product" : "Removed service");
+  const saveRate = async (partnerId: string, existing: PartnerRate | undefined, itemType: "product" | "service" | null, itemId: string | null, next: { mode: "percent" | "amount"; value: number } | null) => {
+    setErr(null);
+    const e = next
+      ? await savePartnerRate({ id: existing?.id, partner_id: partnerId, item_type: itemType, item_id: itemId, mode: next.mode, value: next.value })
+      : existing ? await deletePartnerRate(existing.id) : null;
+    if (e) setErr(/partner_rates|relation|schema/i.test(e) ? "Run 12_proposals_partners.sql in Supabase to save partner rates." : e);
+    await onChanged();
+  };
+  if (partners.length === 0) {
+    return <p className="cfe-empty">Mark a company as Partner (relationship type) to set its rates.</p>;
+  }
+  return (
+    <div className="prt">
+      {err && <p className="prt-err">{err}</p>}
+      <ul className="cfe-list">
+        {partners.map((p, i) => {
+          const pid = p.id as string;
+          const mine = rates.filter((r) => r.partner_id === pid);
+          const general = mine.find((r) => !r.item_type && !r.item_id);
+          const overrides = mine.filter((r) => r.item_type && r.item_id).sort((a, b) => itemName(a).localeCompare(itemName(b)));
+          const free = items.filter((it) => !overrides.some((r) => r.item_type === it.type && r.item_id === it.id));
+          const isOpen = open === pid;
+          return (
+            <li key={pid} className={`prt-card ${isOpen ? "is-open" : ""}`} style={{ ["--i" as any]: i }}>
+              <button type="button" className="prt-head" onClick={() => setOpen(isOpen ? null : pid)} aria-expanded={isOpen}>
+                <span className="prt-av">{(p.name || "?").slice(0, 1).toUpperCase()}</span>
+                <span className="cfe-main">
+                  <b>{p.name}</b>
+                  <small>
+                    {general ? `${rateText(general)} on everything` : "No general rate"}
+                    {overrides.length > 0 && ` · ${overrides.length} product${overrides.length === 1 ? "" : "s"} / service${overrides.length === 1 ? "" : "s"} with their own`}
+                  </small>
+                </span>
+                {general && <span className="prt-badge">{rateText(general)}</span>}
+                <svg className="prt-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+              </button>
+              <div className="prt-fold"><div className="prt-fold-in">
+                <div className="prt-row is-general">
+                  <span className="prt-row-k"><DwIcon name="star" />General</span>
+                  <span className="prt-row-hint">Any product or service sold with this partner</span>
+                  <RateInput rate={general ? { mode: general.mode, value: general.value } : null} placeholder="None"
+                    onSave={(r) => saveRate(pid, general, null, null, r)} />
+                </div>
+                {overrides.map((r) => (
+                  <div key={r.id} className="prt-row">
+                    <span className={`prt-kind is-${r.item_type}`}>{r.item_type === "product" ? "Product" : "Service"}</span>
+                    <span className="prt-row-name">{itemName(r)}</span>
+                    <RateInput rate={{ mode: r.mode, value: r.value }} onSave={(n) => saveRate(pid, r, r.item_type, r.item_id, n)} />
+                    {askDel === r.id ? (
+                      <span className="cfe-ask">Remove?
+                        <button type="button" onClick={() => setAskDel(null)}>No</button>
+                        <button type="button" className="is-yes" onClick={() => { setAskDel(null); void saveRate(pid, r, r.item_type, r.item_id, null); }}>Yes</button>
+                      </span>
+                    ) : (
+                      <button type="button" className="cfe-del" aria-label="Remove" onClick={() => setAskDel(r.id)}>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                      </button>
+                    )}
+                  </div>
+                ))}
+                {free.length > 0 ? (
+                  <div className="prt-add">
+                    <Select value="" placeholder="+ Own rate for a product or service"
+                      options={[
+                        ...free.filter((f) => f.type === "product").map((f) => ({ value: `product:${f.id}`, label: `Product · ${f.name}` })),
+                        ...free.filter((f) => f.type === "service").map((f) => ({ value: `service:${f.id}`, label: `Service · ${f.name}` })),
+                      ]}
+                      onChange={(v) => {
+                        if (!v) return;
+                        const [t, id] = v.split(":") as ["product" | "service", string];
+                        void saveRate(pid, undefined, t, id, general ? { mode: general.mode, value: general.value } : { mode: "percent", value: 0 });
+                      }} />
+                  </div>
+                ) : items.length === 0 ? (
+                  <p className="prt-note">Add products and services in Settings › Products &amp; Services to give them their own rate.</p>
+                ) : null}
+              </div></div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+export function CompanySettings({ onBack }: { onBack: () => void }) {
+  const [fields, setFields] = useState<CompanyField[]>([]);
+  const [options, setOptions] = useState<CrmOption[]>([]);
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [contactFields, setContactFields] = useState<ContactField[]>([]);
+  const [tool, setTool] = useState<"import" | "export" | "cleanup" | null>(null);
+  const [rates, setRates] = useState<PartnerRate[]>([]);
+  const [items, setItems] = useState<PartnerItem[]>([]);
+  const reloadRates = async () => setRates(await listPartnerRates().catch(() => []));
+  const reloadOptions = async () => setOptions(await listCrmOptions().catch(() => []));
+  const reloadFields = async () => setFields(await listCompanyFields().catch(() => []));
+  const load = async () => {
+    const [f, o, co, ct, cf] = await Promise.all([
+      listCompanyFields().catch(() => []), listCrmOptions().catch(() => []), listCompanies().catch(() => []),
+      listContacts().catch(() => []), listContactFields().catch(() => []),
+    ]);
+    setFields(f); setOptions(o); setCompanies(co); setContacts(ct); setContactFields(cf);
+    void reloadRates();
+    const [pr, sv] = await Promise.all([loadProducts().catch(() => []), loadServices().catch(() => [])]);
+    setItems([
+      ...pr.filter((x) => x.id).map((x) => ({ type: "product" as const, id: x.id as string, name: x.name || "Untitled product" })),
+      ...sv.filter((x) => x.id).map((x) => ({ type: "service" as const, id: x.id as string, name: x.name || "Untitled service" })),
+    ]);
+  };
+  useEffect(() => { void load(); }, []);
+  const partners = partnerCompanies(companies);
+  const I = (d: string) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>;
+  const n = (kind: CrmOption["kind"]) => options.filter((o) => o.kind === kind).length;
+  const used = (get: (c: Company) => string | null | undefined) => new Set(companies.map(get).filter(Boolean)).size;
+  return (
+    <>
+      <SettingsShell icon="building" title="Companies page" sub="Custom fields, the lists you pick from, and bringing companies in and out"
+        onBack={onBack}
+        tags={<>
+          <span className="sx-tag"><DwIcon name="building" />{companies.length.toLocaleString("en-GB")} compan{companies.length === 1 ? "y" : "ies"}</span>
+          <span className="sx-tag"><DwIcon name="sliders" />{fields.length} custom field{fields.length === 1 ? "" : "s"}</span>
+          <span className="sx-tag"><DwIcon name="pin" />{n("source")} source{n("source") === 1 ? "" : "s"}</span>
+        </>}
+        sections={[
+          { k: "data", label: "Import & export", icon: "upload", tone: "blue", title: "Import, export & clean-up", hint: "Bring companies in from a file, take them out, and tidy what is there",
+            body: <DataTools items={[
+              { key: "import", title: "Import", hint: "Companies from Excel or CSV, with their contacts", icon: I("M12 15V3M7 8l5-5 5 5M5 21h14"), tone: "#3f7fd8", onOpen: () => setTool("import") },
+              { key: "export", title: "Export", hint: "Pick companies by client, deal, phase or contact", icon: I("M12 3v12M7 10l5 5 5-5M5 21h14"), tone: "#8b5cf6", onOpen: () => setTool("export") },
+              { key: "cleanup", title: "Clean up data", hint: "Fix doubled surnames, legal names and street numbers", icon: I("M3 21l9-9M12.2 6.2l5.6 5.6M14 4l6 6-8 8-6-6z"), tone: "#d98324", onOpen: () => setTool("cleanup") },
+            ]} /> },
+          { k: "sectors", label: "Sectors", icon: "tag", tone: "green", count: DEFAULT_SECTORS.length + n("sector"),
+            title: "Sectors", hint: `Every company can have one; new ones get it guessed from their name · ${used((c) => c.sector)} in use`,
+            body: <OptionList bare kind="sector" options={options} onChanged={reloadOptions} builtIn={DEFAULT_SECTORS.map((x) => x.label)} placeholder="Add a sector, e.g. Aerospace" /> },
+          { k: "sources", label: "Sources", icon: "pin", tone: "amber", count: n("source"),
+            title: "Sources", hint: `Where a company came from; imports match what the file says · ${used((c) => c.source)} in use`,
+            body: <OptionList bare kind="source" options={options} onChanged={reloadOptions} builtIn={[]} placeholder="Add a source, e.g. Website, Event, Partner" /> },
+          { k: "types", label: "Types", icon: "star", tone: "violet", count: REL_SYSTEM.length + n("relationship"),
+            title: "What a company can be", hint: "CRM, In sales and Client switch on by themselves; add your own (Partner, Supplier…) to pick by hand",
+            body: <OptionList bare kind="relationship" options={options} onChanged={reloadOptions} builtIn={REL_SYSTEM.map((r) => r.label)} placeholder="Add a type, e.g. Partner, Supplier" /> },
+          { k: "partners", label: "Partners", icon: "users", tone: "rose", count: partners.length,
+            title: "Partners", hint: "What each partner takes from a deal line, as a % or a fixed amount; you can always change it in the deal",
+            body: <PartnerRatesEditor partners={partners} rates={rates} items={items} onChanged={reloadRates} /> },
+          { k: "fields", label: "Custom fields", icon: "sliders", tone: "indigo", count: fields.length,
+            title: "Custom fields", hint: "Extra fields on every company, in its panel under Additional details",
+            body: <CustomFieldsEditor fields={fields} onChanged={reloadFields}
+              api={{ add: (f) => addCompanyField(f), update: (id, patch) => updateCompanyField(id, patch), remove: (id) => deleteCompanyField(id) }}
+              examples={{ name: "Field name, e.g. Founded, Key account", options: "SME, Mid-market, Enterprise" }} /> },
+        ]} />
+      {tool === "import" && <CompanyImport fields={fields} onClose={() => setTool(null)} onDone={async () => { await load(); }} />}
+      {tool === "export" && (
+        <ContactExport root="company" companies={companies} contacts={contacts} contactFields={contactFields}
+          shownIds={companies.map((c) => c.id as string)} onClose={() => setTool(null)} />
+      )}
+      {tool === "cleanup" && <DataCleanup onClose={() => setTool(null)} onDone={() => { void load(); }} />}
+    </>
   );
 }

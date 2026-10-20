@@ -1,11 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useState, useEffect, useMemo, type PointerEvent as RPointerEvent, type ReactNode } from "react";
+import { useState, useEffect, useMemo, useRef, type PointerEvent as RPointerEvent, type ReactNode } from "react";
 import { supabase } from "../../api/supabase";
 import NewClientForm from "./NewClientForm";
 import ClientWorkspace, { isActive, termOf, lineAnnual, lineTotal, lineContractValue, type Line } from "./ClientWorkspace";
 import Select from "../../framework/Select";
 import { useClientsData } from "./useClientsData";
-import { projectValue, effectiveRate, type Client, type Project, type ProjectType } from "./clientsTypes";
+import { projectValue, signedOf, legacyRoleMap, resolvedLinesOf, roleCounts, roleNameOf, lineRate, type Client, type Project, type ProjectType } from "./clientsTypes";
 import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
 import { downloadBlob, tableToXlsx, type ExportCell } from "../../framework/exportFile";
 import { ClientImport } from "../contacts/ContactImport";
@@ -235,7 +235,7 @@ export function ClientList({
     const signedAt = [...mine.map((p) => p.signingDate), ...ls.map((l) => l.signing_date)].filter(Boolean).sort()[0] ?? null;
     const last = extra?.last[c.id] ?? null;
     const days = last ? Math.max(0, Math.floor((Date.now() - new Date(last).getTime()) / 864e5)) : null;
-    const signed = mine.reduce((t, p) => t + p.consultorDays + p.connectorDays + p.supervisionDays, 0);
+    const signed = mine.reduce((t, p) => t + signedOf(p), 0);
     const used = mine.reduce((t, p) => t + (usage[p.id]?.done ?? 0), 0);
     const lastP = mine[mine.length - 1];
     const co = extra?.co[c.id] ?? {};
@@ -643,6 +643,15 @@ export default function ClientsPage() {
   const [importing, setImporting] = useState(false);
   const [colsTick, setColsTick] = useState(0);
 
+  /** Arriving with ?client=… (global search, a ticket's link) opens that client. */
+  const askedClient = useRef<string | null>(new URLSearchParams(window.location.search).get("client"));
+  useEffect(() => {
+    const id = askedClient.current;
+    if (!id || !loaded) return;
+    const c = clients.find((x) => x.id === id);
+    if (c) { askedClient.current = null; setDetailClient(c); }
+  }, [loaded, clients, setDetailClient]);
+
   /** One row per project (a client without projects gets one row) — the same columns the importer reads. */
   const exportClients = () => {
     const svc = (id: string) => projectTypes.find((t) => t.id === id)?.name ?? "";
@@ -650,21 +659,32 @@ export default function ClientsPage() {
     const rows: ExportCell[][] = [];
     [...clients].sort((a, b) => a.name.localeCompare(b.name)).forEach((c) => {
       const ps = projects.filter((p) => p.clientId === c.id);
-      if (!ps.length) { rows.push([c.name, ...Array(28).fill(null)]); return; }
+      if (!ps.length) { rows.push([c.name, ...Array(29).fill(null)]); return; }
+      const legacy = legacyRoleMap(roles);
       ps.forEach((p) => {
         const ct = p.contacts?.find((x) => x.billing) ?? p.contacts?.[0];
         const u = usage[p.id] ?? { planned: 0, done: 0 };
-        const rate = p.discountMode === "rate" ? effectiveRate(p.pricePerDay, p.discountMode, p.discountValue) : p.pricePerDay;
+        // The importer reads the three classic columns: the supervision role,
+        // the roles that don't count (connector) and the rest as consultancy.
+        const lines = resolvedLinesOf(p, legacy);
+        const sup = lines.filter((l) => l.roleId === legacy.supervision);
+        const conn = lines.filter((l) => l.roleId !== legacy.supervision && !roleCounts(l.roleId, roles));
+        const cons = lines.filter((l) => !sup.includes(l) && !conn.includes(l));
+        const days = (ls: typeof lines) => ls.reduce((t, l) => t + l.days, 0);
+        const avg = (ls: typeof lines) => (days(ls) > 0 ? Math.round((ls.reduce((t, l) => t + l.days * lineRate(l), 0) / days(ls)) * 100) / 100 : ls[0] ? lineRate(ls[0]) : 0);
+        const rate = avg(cons.length ? cons : conn);
+        const roleText = lines.map((l) => `${roleNameOf(l.roleId, roles)}: ${l.days}d × ${Math.round(lineRate(l) * 100) / 100}€`).join("; ");
         rows.push([
           c.name, p.legalName || null, p.vatNumber || null,
           p.address?.street || null, p.address?.number || null, p.address?.postalCode || null, p.address?.city || null, p.address?.country || null,
           ct?.name || null, ct?.email || null, ct?.phone || null, ct?.position || null,
           svc(p.projectTypeId) || null, p.status === "closed" ? "Closed" : "Open",
           date(p.signingDate), date(p.kickoffDate), date(p.endDate),
-          p.consultorDays, p.connectorDays, rate, p.supervisionDays, p.supervisionPrice,
-          p.discountMode === "percent" ? p.discountValue : null, p.discountMode === "total" ? p.discountValue : null,
+          days(cons), days(conn), rate, days(sup), sup.length ? avg(sup) : null,
+          null, p.discountMode === "total" ? p.discountValue : null,
           p.taxed ? p.taxRate : null, p.paymentDays || null,
           Math.round(projectValue(p) * 100) / 100, Math.round(u.done * 100) / 100, Math.round(u.planned * 100) / 100,
+          roleText || null,
         ]);
       });
     });
@@ -673,7 +693,7 @@ export default function ClientsPage() {
       ["Contact", "text"], ["Contact email", "text"], ["Contact phone", "text"], ["Position", "text"], ["Service", "text"], ["Status", "text"],
       ["Signing date", "date"], ["Kick-off", "date"], ["End date", "date"], ["Consultancy days", "number"], ["Connector days", "number"], ["Price per day", "money"],
       ["Supervision days", "number"], ["Supervision price", "money"], ["Discount %", "number"], ["Discount total", "money"], ["Tax rate", "number"], ["Payment days", "number"],
-      ["Value", "money"], ["Used days", "number"], ["Booked days", "number"],
+      ["Value", "money"], ["Used days", "number"], ["Booked days", "number"], ["Roles", "text"],
     ];
     const blob = tableToXlsx({ columns: cols.map(([label, format]) => ({ label, format })), rows }, "Clients");
     downloadBlob(blob, `clients-${new Date().toISOString().slice(0, 10)}.xlsx`);
@@ -740,6 +760,7 @@ export default function ClientsPage() {
           projects={projects.filter((p) => p.clientId === detailClient.id)}
           projectTypes={projectTypes}
           usage={usage}
+          roles={roles}
           onOpenProject={(p) => setEditing({ client: detailClient, project: p })}
           onNewProject={() => openNewProject(detailClient)}
           onDeleteProject={deleteProject}

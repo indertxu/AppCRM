@@ -11,6 +11,7 @@ import {
   planFor, matchStrength, evaluate, periodActivity, tiersFromLegacy, activeConditions, legacyKey, planFromRow, planToRow, yearSlots,
   type Plan, type Person, type ActivityIndex, type Metric, type Tier,
 } from "./bonusEngine";
+import { roleCounts, rateOn, type ClientRole, type RoleLine } from "../clients/clientsTypes";
 import "./BonusPanel.css";
 
 export interface BonusEntry {
@@ -26,7 +27,7 @@ export interface BonusEntry {
   /** Minutes logged (any kind of work) — feeds the "hours worked" condition. */
   durationMin?: number;
 }
-interface Proj { clientId: string; typeId: string; rate: number; supervision: number; team: { userId?: string; role?: string }[]; }
+interface Proj { clientId: string; typeId: string; lines: RoleLine[]; team: { userId?: string; role?: string }[]; }
 
 interface Props {
   entries: BonusEntry[];
@@ -34,7 +35,8 @@ interface Props {
   people: Record<string, string>;
   clientNames: Record<string, string>;
   clientTypeIds: Set<string>;
-  supRoles: Set<string>;
+  /** Catalogue roles: only time on roles that count for the target feeds the bonus. */
+  clientRoles: ClientRole[];
   cutoffs: Cutoffs;
   defaultCutoffDay: number;
   /** Everything is measured as of this date (like Backlog). */
@@ -126,7 +128,7 @@ const paidLabel = (pl: Plan | undefined, key: string) => {
 interface PayItem { key: string; userId: string; name: string; plan: Plan; periodKey: string; payMonth: string; amount: number; tier: Tier | null; act: ReturnType<typeof periodActivity> }
 
 export default function BonusPanel({
-  entries, projects, people, clientNames, clientTypeIds, cutoffs, defaultCutoffDay, asOf,
+  entries, projects, people, clientNames, clientTypeIds, clientRoles, cutoffs, defaultCutoffDay, asOf,
   hourProjects = new Set(), hoursPerDay = 8, onlyUser, canEdit = false, canPay = false, legacy,
 }: Props) {
   const [plans, setPlans] = useState<Plan[]>([]);
@@ -166,11 +168,12 @@ export default function BonusPanel({
       const ym = e.billingPeriod || periodForDate(e.date, cutoffs, defaultCutoffDay);
       const a = ((out[e.userId] ??= {})[ym] ??= { billing: 0, days: 0, hours: 0, byClient: {} });
       if (e.line !== "closure") a.hours += (e.durationMin ?? 0) / 60;
-      if (e.line === "closure" || e.line === "connector" || !e.projectId) return;
+      if (e.line === "closure" || !e.projectId) return;
+      if (e.line !== "sales" && !roleCounts(e.line, clientRoles)) return;   // e.g. connector time
       const p = projects[e.projectId];
       if (!p) return;
       const isClient = clientTypeIds.size === 0 ? true : clientTypeIds.has(e.typeId);
-      const rate = e.line === "supervision" ? p.supervision : p.rate;
+      const rate = rateOn(p.lines, e.line);
       if (!(isClient && rate > 0 && e.billable > 0)) return;
       const amt = e.billable * rate;
       const dayEq = hourProjects.has(e.projectId) ? e.billable / hpd : e.billable;
@@ -179,7 +182,7 @@ export default function BonusPanel({
       c.billing += amt; c.days += dayEq;
     });
     return out;
-  }, [entries, projects, clientNames, clientTypeIds, cutoffs, defaultCutoffDay, hourProjects, hoursPerDay]);
+  }, [entries, projects, clientNames, clientTypeIds, clientRoles, cutoffs, defaultCutoffDay, hourProjects, hoursPerDay]);
 
   /* ---- who, which plan, what's due ---- */
   const asOfYm = asOf.slice(0, 7);

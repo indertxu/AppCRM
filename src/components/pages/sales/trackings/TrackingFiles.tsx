@@ -93,7 +93,14 @@ export default function TrackingFiles({ trackingId, phaseId, phases = [] }: Prop
       .order("created_at", { ascending: false })
       // Version documents live on their revenue line, not in this list.
       .then(({ data }) => { if (alive) setFiles(((data ?? []) as TFile[]).filter((f) => !f.line_id)); });
-    return () => { alive = false; };
+    // A proposal generated on the deal lands here too.
+    const reload = (e: Event) => {
+      if ((e as CustomEvent).detail?.trackingId !== trackingId) return;
+      supabase.from("tracking_files").select("*").eq("tracking_id", trackingId).order("created_at", { ascending: false })
+        .then(({ data }) => { if (alive) setFiles(((data ?? []) as TFile[]).filter((f) => !f.line_id)); });
+    };
+    window.addEventListener(TRACKING_FILES_EVENT, reload);
+    return () => { alive = false; window.removeEventListener(TRACKING_FILES_EVENT, reload); };
   }, [trackingId]);
 
   const upload = async (fileList: FileList | File[]) => {
@@ -321,6 +328,27 @@ export async function openTrackingFile(path: string, bucket = BUCKET) {
   const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, 120);
   if (error || !data) { alert(error?.message ?? "Could not open file."); return; }
   window.open(data.signedUrl, "_blank");
+}
+
+/** Fired when a file is added to a deal from elsewhere (a generated proposal), so its list reloads. */
+export const TRACKING_FILES_EVENT = "next:tracking-files";
+
+/** Store a file made in the app (a generated proposal) as a deal document. */
+export async function uploadTrackingFile(trackingId: string, phaseId: string | null, blob: Blob, name: string, note?: string | null): Promise<{ file: TFile | null; error: string | null }> {
+  const { data: tr } = await supabase.from("trackings").select("tenant_id").eq("id", trackingId).maybeSingle();
+  const tenantId = (tr as any)?.tenant_id;
+  if (!tenantId) return { file: null, error: "Could not read the deal." };
+  const safe = name.replace(/[^\w.\-]+/g, "_");
+  const path = `${tenantId}/${trackingId}/${crypto.randomUUID()}_${safe}`;
+  const up = await supabase.storage.from(BUCKET).upload(path, blob, { contentType: blob.type || undefined, upsert: false });
+  if (up.error) return { file: null, error: up.error.message };
+  const { data, error } = await supabase.from("tracking_files").insert({
+    tracking_id: trackingId, phase_id: phaseId, storage_path: path, name,
+    mime: blob.type || null, size_bytes: blob.size, note: note ?? null,
+  }).select().single();
+  if (error) { await supabase.storage.from(BUCKET).remove([path]); return { file: null, error: error.message }; }
+  window.dispatchEvent(new CustomEvent(TRACKING_FILES_EVENT, { detail: { trackingId } }));
+  return { file: data as TFile, error: null };
 }
 
 /** Every document on a deal, version documents included (for the handoff). */

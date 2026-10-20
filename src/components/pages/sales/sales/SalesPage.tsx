@@ -10,8 +10,10 @@ import { listCompanies, listContacts, myProfile, sessionUserId, type Company, ty
 import { listPipelines, loadPipeline, loadPhasesByPipeline, sortPipelines, moveDealsToPipeline, type Pipeline, type Phase } from "../../settings/pipelineApi";
 import { useBulkSelection, BulkBar, BulkCheck, type BulkAction } from "../../companies/CompaniesPage";
 import { loadProducts, loadServices, type Product } from "../../settings/catalogApi";
-import { listTrackings, loadTrackingTeams, loadSalesBoot, type SalesBootRows, setTrackingPhase, setTrackingStatus, deleteTracking, setTrackingOwner, addTrackingEmployee, removeTrackingEmployee, setDealCloseDate, setDealCloseProb, stampPhaseEntry, clearPhaseEventsAfter, trackingPct, loadPotentialTotals, yearTotalsFromLastRows, type Tracking } from "./salesApi";
+import { listTrackings, loadTrackingTeams, loadSalesBoot, type SalesBootRows, setTrackingPhase, setTrackingStatus, deleteTracking, setTrackingOwner, addTrackingEmployee, removeTrackingEmployee, setDealCloseDate, setDealCloseProb, stampPhaseEntry, clearPhaseEventsAfter, trackingPct, loadPotentialTotals, yearTotalsFromLastRows, type Tracking,
+  clientExistsForCompany, hasClientProductsForTracking, loadTrackingProducts } from "./salesApi";
 import TrackingDetail from "../trackings/TrackingDetail";
+import { HxPrompt } from "../trackings/HandoffConfirmServices";
 import ExportModal from "../extras/ExportModal";
 import SalesReport from "../extras/SalesReport";
 import NewTracking from "./NewTracking";
@@ -953,7 +955,7 @@ export default function SalesPage() {
   useEffect(() => { console.info("[sales] build: forecast KPIs in top row (v3)"); }, []);
 
   // Move a tracking to a phase (drag in kanban). Mirrors the detail logic.
-  const moveTrackingToPhase = async (trackingId: string, phaseId: string, pipelinePhases: Phase[], skipHandover = false) => {
+  const moveTrackingToPhase = async (trackingId: string, phaseId: string, pipelinePhases: Phase[], skipHandover = false, askClient = true) => {
     const t = trackings.find((x) => x.id === trackingId);
     if (!t || t.current_phase_id === phaseId || frozenById.has(trackingId)) return;
     // Past the last phase a role sees: hand it over first (double confirmation).
@@ -973,7 +975,24 @@ export default function SalesPage() {
     await stampPhaseEntry(trackingId, phaseId);
     await clearPhaseEventsAfter(trackingId, keepIds);
     await setTrackingStatus(trackingId, nextStatus);
+    // Just won and its client isn't set up yet: ask to create it now.
+    if (askClient && nextStatus === "won" && t.status !== "won" && t.company_id) {
+      const need = !(await clientExistsForCompany(t.company_id).catch(() => true))
+        || ((await loadTrackingProducts(t.id).catch(() => [])).length > 0 && !(await hasClientProductsForTracking(t.id).catch(() => true)));
+      if (need) setWonAsk(t);
+    }
   };
+  /** A deal just dropped on Won whose client isn't set up: "create the client now?". */
+  const [wonAsk, setWonAsk] = useState<Tracking | null>(null);
+  /** The deal opened to create its client right away (from that question). */
+  const [clientFor, setClientFor] = useState<string | null>(null);
+  const wonAskModal = wonAsk && (
+    <HxPrompt icon="trophy" title="Deal won — create the client?"
+      sub={<>Set up <b>{trackTitle(wonAsk)}</b> now with its legal details, contacts and the products signed. Signing dates start on the day it was won. The handoff to management stays for later.</>}
+      ghost="Later" primary="Create client"
+      onGhost={() => setWonAsk(null)} onClose={() => setWonAsk(null)}
+      onPrimary={() => { setClientFor(wonAsk.id); setOpenId(wonAsk.id); setWonAsk(null); }} />
+  );
 
   const confirmHandover = async () => {
     const p = pendingHandover;
@@ -1032,7 +1051,7 @@ export default function SalesPage() {
       const phs = phaseByPipe[t.pipeline_id ?? ""] ?? [];
       if (status === "won" || status === "lost") {
         const ph = phs.find((p) => p.sales_outcome === (status === "won" ? "win" : "loss"));
-        if (ph) { await moveTrackingToPhase(t.id, ph.id, phs, true); n++; continue; }
+        if (ph) { await moveTrackingToPhase(t.id, ph.id, phs, true, false); n++; continue; }
       } else {
         const cur = phs.find((p) => p.id === t.current_phase_id);
         if (cur?.sales_outcome) {
@@ -1074,7 +1093,7 @@ export default function SalesPage() {
           // past the last phase a sales role sees: that needs the hand-over, deal by deal
           const plan = planHandover({ roles: salesRoles, pipelineId: t.pipeline_id, phases: phs, fromPhaseId: t.current_phase_id, toPhaseId: v, owner: trackOwners[t.id] ?? null, team: trackAssignees[t.id] ?? [], dealRoles: t.deal_roles });
           if (plan) { handover++; continue; }
-          await moveTrackingToPhase(t.id, v, phs, true); n++;
+          await moveTrackingToPhase(t.id, v, phs, true, false); n++;
         }
         await reload(); bulk.clear();
         const total = picked().length || bulk.ids.length;
@@ -1164,7 +1183,8 @@ export default function SalesPage() {
     const t = mine.find((x) => x.id === openId);
     const frozen = t ? frozenById.get(t.id) : undefined;
     if (t && frozen) return <HandedOverView tracking={t} handover={frozen} companies={companies} contacts={contacts} employees={employees} trackingFields={trackingFields} onBack={() => { setOpenId(null); reload(); }} />;
-    if (t) return <TrackingDetail tracking={t} companies={companies} contacts={contacts} products={products} employees={employees} trackingFields={trackingFields} salesRoles={salesRoles} onBack={() => { setOpenId(null); reload(); }} />;
+    if (t) return <TrackingDetail tracking={t} companies={companies} contacts={contacts} products={products} employees={employees} trackingFields={trackingFields} salesRoles={salesRoles}
+      startWithClient={clientFor === t.id} onBack={() => { setOpenId(null); setClientFor(null); reload(); }} />;
   }
 
 
@@ -1467,6 +1487,7 @@ export default function SalesPage() {
         />
       )}
       {handoverModal}
+      {wonAskModal}
       {importing && (
         <DealImport
           pipelines={pipelines} phaseByPipe={phaseByPipe} products={products}

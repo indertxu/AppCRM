@@ -1416,3 +1416,23 @@
 .bm6-less { border: 0; background: none; color: #0a6f4d; font: 650 12px "Inter", sans-serif; cursor: pointer; padding: 4px 6px; }
 .bm6-review { overflow: visible; }
 .bm6-rv-people { grid-column: 1 / -1; }
+
+/* Roles from the catalogue: each option takes its role's colour */
+.bm-pick5 .bm-pick-opt.is-role { --pc: var(--rc, #12b57f); }
+
+/* Role on the project (tasks step), when it was sold with more than one you hold */
+.bm6-roles { margin-bottom: 14px; }
+.bm6-roles .bm6-label { margin-top: 0; }
+.bm6-roles-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.bm6-role {
+  position: relative; display: grid; grid-template-columns: 10px auto; grid-template-rows: auto auto; column-gap: 9px; row-gap: 2px; align-items: center;
+  padding: 9px 13px 9px 11px; border-radius: 12px; border: 1px solid rgba(7, 36, 25, 0.1); background: #fff; text-align: left; cursor: pointer;
+  font: inherit; transition: border-color 0.18s, background 0.18s, box-shadow 0.18s;
+  animation: bm-opt6 0.32s cubic-bezier(0.16, 1, 0.3, 1) backwards; animation-delay: calc(var(--i, 0) * 40ms);
+}
+.bm6-role i { grid-row: 1 / 3; width: 10px; height: 10px; border-radius: 50%; background: var(--rc); box-shadow: 0 0 0 3px color-mix(in srgb, var(--rc) 18%, transparent); }
+.bm6-role.is-nocount i { background: repeating-linear-gradient(45deg, var(--rc) 0 2px, color-mix(in srgb, var(--rc) 35%, #fff) 2px 4px); }
+.bm6-role b { font-size: 13.5px; font-weight: 650; color: #0b241a; white-space: nowrap; }
+.bm6-role small { font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.bm6-role:hover { border-color: color-mix(in srgb, var(--rc) 45%, transparent); background: color-mix(in srgb, var(--rc) 4%, #fff); }
+.bm6-role.is-on { border-color: color-mix(in srgb, var(--rc) 60%, transparent); background: color-mix(in srgb, var(--rc) 8%, #fff); box-shadow: 0 0 0 3px color-mix(in srgb, var(--rc) 14%, transparent); }

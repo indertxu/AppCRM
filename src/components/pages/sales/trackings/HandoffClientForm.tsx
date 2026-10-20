@@ -56,6 +56,10 @@ interface Props {
   catalog: Product[];             // full products with calculator + tiers
   /** "create" = brand-new client (scenario A). "attach" = existing client buying new products (scenario C). */
   mode?: "create" | "attach";
+  /** The day the deal was won: every product's signing date starts there. */
+  signingDefault?: string;
+  /** Opened when the deal was won: only the client is set up, nothing is sent to management yet. */
+  standalone?: boolean;
   onClose: () => void;
   onConfirm: (data: {
     client: { name: string; legalName: string; vatNumber: string; address: HandoffPrefill["address"]; contacts: HandoffContact[] };
@@ -75,7 +79,7 @@ const IconAddress = () => <svg viewBox="0 0 24 24" fill="none" stroke="currentCo
 const IconContacts = () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9.5" cy="7" r="3.5" /><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></svg>;
 const IconProducts = () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7l9-4 9 4-9 4-9-4zM3 7v10l9 4 9-4V7" /><path d="M12 11v10" /></svg>;
 
-export default function HandoffClientForm({ prefill, catalog, mode = "create", onClose, onConfirm }: Props) {
+export default function HandoffClientForm({ prefill, catalog, mode = "create", signingDefault, standalone = false, onClose, onConfirm }: Props) {
   const attach = mode === "attach";
   // attach mode opens on a "revise or reuse" gate; create mode goes straight to the form.
   const [gate, setGate] = useState<"prompt" | "revise" | "reuse">(attach ? "prompt" : "revise");
@@ -84,7 +88,8 @@ export default function HandoffClientForm({ prefill, catalog, mode = "create", o
   const [vat, setVat] = useState(prefill.vatNumber);
   const [addr, setAddr] = useState(prefill.address);
   const [contacts, setContacts] = useState<HandoffContact[]>(prefill.contacts);
-  const [products, setProducts] = useState<HandoffProduct[]>(prefill.products);
+  const [products, setProducts] = useState<HandoffProduct[]>(() =>
+    signingDefault ? prefill.products.map((p) => ({ ...p, signingDate: signingDefault })) : prefill.products);
   const [adding, setAdding] = useState(false);
   const [saving, setSaving] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());   // contract drawer
@@ -107,7 +112,7 @@ export default function HandoffClientForm({ prefill, catalog, mode = "create", o
       recurring: c.billing === "recurring", period: c.billing_period ?? (c.billing === "recurring" ? "yearly" : null),
       termYears: c.billing === "recurring" ? 1 : null, discountMode: null, discountValue: null,
       tierId: null, calcValues: {}, calcDiscounts: {}, calcRates: {},
-      signingDate: today, fromTracking: false,
+      signingDate: signingDefault || today, fromTracking: false,
     }]);
     setAdding(false);
   };
@@ -139,7 +144,8 @@ export default function HandoffClientForm({ prefill, catalog, mode = "create", o
 
   const stillAddable = useMemo(() => catalog.filter((c) => !products.some((p) => p.productId === c.id)), [catalog, products]);
   const productsValue = products.reduce((s, p) => s + bdOf(p).total, 0);
-  const canSave = name.trim().length > 0 && products.length > 0 && products.every((p) => p.signingDate);
+  // A services-only deal still gets its client; products, when there are any, need their signing date.
+  const canSave = name.trim().length > 0 && (products.length > 0 || standalone) && products.every((p) => p.signingDate);
 
   const confirm = async () => {
     if (!canSave || saving) return;
@@ -179,7 +185,7 @@ export default function HandoffClientForm({ prefill, catalog, mode = "create", o
         <header className="hc-head">
           <span className="hc-head-glow" aria-hidden="true" />
           <div className="hc-head-txt">
-            <span className="hc-eyebrow">{attach ? "Handoff · new products" : "Handoff · create client"}</span>
+            <span className="hc-eyebrow">{standalone ? (attach ? "Deal won · new products" : "Deal won · create client") : attach ? "Handoff · new products" : "Handoff · create client"}</span>
             <h2 className="hc-title">{name || "New client"}</h2>
           </div>
           <div className="hc-head-right">
@@ -188,7 +194,7 @@ export default function HandoffClientForm({ prefill, catalog, mode = "create", o
               <b>{money(productsValue)}</b>
             </div>
             <button className="hc-btn-primary" disabled={!canSave || saving} onClick={confirm}>
-              {saving ? (attach ? "Attaching…" : "Creating…") : (attach ? "Attach & send handoff" : "Create & send handoff")}
+              {saving ? (attach ? "Attaching…" : "Creating…") : standalone ? (attach ? "Add products to client" : "Create client") : (attach ? "Attach & send handoff" : "Create & send handoff")}
             </button>
             <button className="hc-x" onClick={onClose} aria-label="Close">×</button>
           </div>
@@ -243,7 +249,7 @@ export default function HandoffClientForm({ prefill, catalog, mode = "create", o
           <div className="hc-col hc-col-right">
             <section className="hc-sec hc-sec-products">
               <h3 className="hc-sec-title"><span className="hc-icon"><IconProducts /></span>Signed products <i className="hc-count">{products.length}</i></h3>
-              {products.length === 0 && <p className="hc-empty">Add at least one product the client is signing.</p>}
+              {products.length === 0 && <p className="hc-empty">{standalone ? "No products on this deal. Add one if the client is signing any." : "Add at least one product the client is signing."}</p>}
               <div className="hc-products">
                 {products.map((p) => {
                   const bd = bdOf(p);

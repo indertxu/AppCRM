@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import Select from "../../framework/Select";
 import { useInactiveIds } from "../../framework/peopleStatus";
+import { lineRate, roleCounts, roleNameOf, type ClientRole, type RoleLine } from "../clients/clientsTypes";
 import "./BacklogPanel.css";
 
 export interface BkEntry {
@@ -19,11 +20,8 @@ export interface BkProj {
   clientId: string;
   typeId: string;
   kickoff: string;
-  rate: number;
-  supervision: number;
-  consultorDays: number;
-  connectorDays: number;
-  supervisionDays: number;
+  /** The roles sold on the project (days, rate, discount each). */
+  lines: RoleLine[];
   status: string;
   team: { userId?: string; role?: string }[];
 }
@@ -34,7 +32,8 @@ interface Props {
   clientNames: Record<string, string>;
   typeNames: Record<string, string>;
   people: Record<string, string>;
-  supRoles: Set<string>;
+  /** Catalogue roles: names, and whether a role counts for the consultant's target. */
+  roles: ClientRole[];
   hourProjects: Set<string>;
   hoursPerDay: number;
   scope: "week" | "month" | "year" | "all" | "custom";
@@ -221,11 +220,12 @@ function ColHeader({
 }
 
 
-type Line = "consultor" | "supervision" | "connector";
-type Tally = Record<Line, number>;
+/** Days per role (role id → days). */
+type Tally = Record<string, number>;
 
-const blank = (): Tally => ({ consultor: 0, supervision: 0, connector: 0 });
-const sum = (t: Tally) => t.consultor + t.supervision + t.connector;
+const blank = (): Tally => ({});
+const sum = (t: Tally) => Object.values(t).reduce((s, v) => s + v, 0);
+const add = (t: Tally, k: string, v: number) => { t[k] = (t[k] ?? 0) + v; };
 
 interface ProjRow {
   id: string;
@@ -237,12 +237,14 @@ interface ProjRow {
   billed: Tally;
   planned: Tally;
   byUser: Record<string, { billed: number; planned: number }>;
+  /** Rate of each sold role, its own discount applied. */
+  rates: Record<string, number>;
+  /** The project's day rate for headline averages: its main counting role. */
   rate: number;
-  supervisionRate: number;
 }
 
 export default function BacklogPanel({
-  entries, projects, clientNames, typeNames, people, supRoles,
+  entries, projects, clientNames, typeNames, people, roles,
   hourProjects, hoursPerDay,
   scope, anchor, rangeFrom, rangeTo, mainRoleByService, asOf: asOfProp, lockUser,
 }: Props) {
@@ -258,23 +260,33 @@ export default function BacklogPanel({
   const [onlyLeft, setOnlyLeft] = useState(true);
   const [onlyUnowned, setOnlyUnowned] = useState(false);
 
-  /** Which contracted bucket an entry eats into. Mirrors the team panel's rate logic. */
-  const lineOf = (p: BkProj, line: string, userId: string): Line => {
-    if (line === "connector") return "connector";
-    const member = (p.team ?? []).find((m) => m.userId === userId);
-    if (line === "supervision" || supRoles.has(member?.role ?? "")) return "supervision";
-    return "consultor";
-  };
+  /** Whether time on a role counts for the consultant (a connector, say, doesn't). */
+  const counts = (k: string) => roleCounts(k, roles);
+  /** Label for the roles that don't count, e.g. "Connector". */
+  const otherLabel = (() => {
+    const ns = roles.filter((r) => !r.countsForTarget).map((r) => r.name);
+    return ns.length ? ns.join(" · ") : "Other roles";
+  })();
 
-  /** The team member holding the service's "main" role — the project's owner. */
+  /** The service's "main" role on a project, else its first counting role. */
+  const mainRoleOf = (p: BkProj): string | null =>
+    mainRoleByService[p.typeId] ?? p.lines.find((l) => counts(l.roleId))?.roleId ?? null;
+  /** The team member holding the project's main role — the project's owner. */
   const ownerOf = (p: BkProj): string | null => {
-    const mainRole = mainRoleByService[p.typeId];
+    const mainRole = mainRoleOf(p);
     if (!mainRole) return null;
     return (p.team ?? []).find((m) => m.role === mainRole)?.userId ?? null;
   };
-  /** True if this consultant holds a supervision-tagged role on the project's team. */
-  const isSupervisorOn = (p: BkProj, userId: string): boolean =>
-    (p.team ?? []).some((m) => m.userId === userId && supRoles.has(m.role ?? ""));
+  /** The roles a consultant holds on the project's team. */
+  const rolesOn = (p: BkProj, userId: string): Set<string> =>
+    new Set((p.team ?? []).filter((m) => m.userId === userId && m.role).map((m) => m.role as string));
+  /** True when the consultant is answerable for some counting role sold on the project. */
+  const responsibleOn = (p: BkProj, userId: string): boolean => {
+    const mine = rolesOn(p, userId);
+    return p.lines.some((l) => counts(l.roleId) && mine.has(l.roleId));
+  };
+  /** True if somebody on the team holds this role. */
+  const heldOn = (p: BkProj, roleId: string) => (p.team ?? []).some((m) => m.role === roleId && m.userId);
 
   const [consultantPick, setConsultantFilter] = useState<string>("");
   const consultantFilter = lockUser ?? consultantPick;
@@ -325,16 +337,12 @@ export default function BacklogPanel({
         type: typeNames[p.typeId] || "No project type",
         status: p.status,
         kickoff: p.kickoff,
-        sold: {
-          consultor: p.consultorDays,
-          supervision: p.supervisionDays,
-          connector: p.connectorDays,
-        },
+        sold: Object.fromEntries(p.lines.map((l) => [l.roleId, l.days])),
         billed: blank(),
         planned: blank(),
         byUser: {},
-        rate: p.rate,
-        supervisionRate: p.supervision,
+        rates: Object.fromEntries(p.lines.map((l) => [l.roleId, lineRate(l)])),
+        rate: (() => { const m = p.lines.find((l) => l.roleId === mainRoleOf(p)) ?? p.lines.find((l) => counts(l.roleId)) ?? p.lines[0]; return m ? lineRate(m) : 0; })(),
       };
     });
 
@@ -347,10 +355,10 @@ export default function BacklogPanel({
       const row = acc[e.projectId];
       if (!p || !row) return;
 
-      const bucket = lineOf(p, e.line, e.userId);
+      const bucket = e.line;   // the role the time was logged on
       const done = e.status === "confirmed";
-      if (done) row.billed[bucket] += e.billable;
-      else row.planned[bucket] += e.billable;
+      if (done) add(row.billed, bucket, e.billable);
+      else add(row.planned, bucket, e.billable);
 
       if (!row.byUser[e.userId]) row.byUser[e.userId] = { billed: 0, planned: 0 };
       if (done) row.byUser[e.userId].billed += e.billable;
@@ -359,37 +367,33 @@ export default function BacklogPanel({
 
     return Object.values(acc);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entries, projects, typeNames, supRoles, asOf]);
+  }, [entries, projects, typeNames, roles, asOf]);
 
-  /** Still to deliver = sold minus what's already billed. Scheduled days still count as pending. */
-  const availableOf = (r: ProjRow): Tally => ({
-    consultor: Math.max(0, r.sold.consultor - r.billed.consultor),
-    supervision: Math.max(0, r.sold.supervision - r.billed.supervision),
-    connector: Math.max(0, r.sold.connector - r.billed.connector),
-  });
+  /** Still to deliver = sold minus what's already billed, role by role. Scheduled days still count as pending. */
+  const availableOf = (r: ProjRow): Tally =>
+    Object.fromEntries(Object.entries(r.sold).map(([k, v]) => [k, Math.max(0, v - (r.billed[k] ?? 0))]));
   const valueOf = (r: ProjRow, t: Tally) =>
-    t.consultor * r.rate + t.connector * r.rate + t.supervision * r.supervisionRate;
+    Object.entries(t).reduce((s, [k, v]) => s + v * (r.rates[k] ?? r.rate), 0);
+  /** Only the roles that count (core) / that don't (e.g. connector). */
+  const pick = (t: Tally, core: boolean): Tally =>
+    Object.fromEntries(Object.entries(t).filter(([k]) => counts(k) === core));
 
   /** When a consultant is selected, a project only counts the backlog for the
-      line THAT person is responsible for — the consultor bucket if they own it,
-      the supervision bucket if they supervise it — never the whole project.
-      (Connector is tracked separately and stays out of person views.) Mirrors
-      myBreakdown so the rows and the KPIs agree. Without a person selected it is
-      just the full project availability. */
+      roles THAT person holds on its team — the main role if they own it, a
+      supervision role if they supervise it, and so on — never the whole
+      project. (Roles that don't count, like connector, are tracked separately
+      and stay out of person views.) Mirrors myBreakdown so the rows and the KPIs
+      agree. Without a person selected it is just the full project availability. */
   const availForRow = (r: ProjRow): Tally => {
     if (!consultantFilter) return availableOf(r);
     const p = projects[r.id];
     if (!p) return blank();
-    const avail = availableOf(r);
-    const t = blank();
-    if (ownerOf(p) === consultantFilter) t.consultor = avail.consultor;
-    if (isSupervisorOn(p, consultantFilter)) t.supervision = avail.supervision;
-    return t;
+    const mine = rolesOn(p, consultantFilter);
+    return Object.fromEntries(Object.entries(availableOf(r)).filter(([k]) => counts(k) && mine.has(k)));
   };
 
-  /** Consultancy backlog that can't be attributed to anyone yet — the project's
-      service has no "main" role set in Products & Services, or nobody on the
-      team holds that role. This is why summing every consultant's personal
+  /** Backlog on counting roles nobody on the team holds yet — e.g. the main
+      consultant isn't assigned. This is why summing every consultant's personal
       backlog can land below the panel's overall total: this slice sits in the
       total but is invisible in every individual view until it's assigned. */
   const unownedBacklog = useMemo(() => {
@@ -400,16 +404,18 @@ export default function BacklogPanel({
       if (onlyLeft && sum(availableOf(r)) <= 0.001) return;
       const p = projects[r.id];
       if (!p) return;
-      if (ownerOf(p) !== null) return;
-      const avail = availableOf(r);
-      if (avail.consultor <= 0.001) return;
-      days += inDays(r.id, avail.consultor);
-      value += avail.consultor * r.rate;
-      ids.add(r.id);
+      let hit = false;
+      Object.entries(availableOf(r)).forEach(([k, v]) => {
+        if (v <= 0.001 || !counts(k) || heldOn(p, k)) return;
+        days += inDays(r.id, v);
+        value += v * (r.rates[k] ?? r.rate);
+        hit = true;
+      });
+      if (hit) ids.add(r.id);
     });
     return { days, value, projectCount: ids.size, ids };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, projects, onlyLeft, mainRoleByService]);
+  }, [rows, projects, onlyLeft, mainRoleByService, roles]);
 
   const visible = rows
     .filter((r) => {
@@ -419,10 +425,8 @@ export default function BacklogPanel({
       if (consultantFilter) {
         const p = projects[r.id];
         if (!p) return false;
-        const owns = ownerOf(p) === consultantFilter;
-        const supervises = isSupervisorOn(p, consultantFilter);
-        if (!owns && !supervises) return false;
-        // Don't keep a project whose only remaining backlog is in a line this
+        if (!responsibleOn(p, consultantFilter)) return false;
+        // Don't keep a project whose only remaining backlog is in a role this
         // person isn't responsible for (e.g. supervision left, but they only
         // consult on it).
         if (onlyLeft && sum(availForRow(r)) <= 0.001) return false;
@@ -505,46 +509,52 @@ export default function BacklogPanel({
       if (!p || sum(r.sold) === 0) return;
       const owner = ownerOf(p);
       if (owner) ids.add(owner);
-      (p.team ?? []).forEach((m) => { if (m.userId && supRoles.has(m.role ?? "")) ids.add(m.userId); });
+      // anyone holding a counting role that was sold on the project
+      (p.team ?? []).forEach((m) => { if (m.userId && m.role && counts(m.role) && p.lines.some((l) => l.roleId === m.role)) ids.add(m.userId); });
     });
     return Array.from(ids)
       .filter((id) => !inactive.has(id))
       .map((id) => ({ id, name: people[id] || "Unknown" }))
       .sort((a, b) => a.name.localeCompare(b.name));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, projects, people, supRoles, mainRoleByService, inactive]);
+  }, [rows, projects, people, roles, mainRoleByService, inactive]);
 
-  /** For the selected consultant: consultancy backlog comes only from projects
-      they OWN (their main-role assignment), and never counts connector or
-      supervision lines. Supervision backlog is separate — it comes from any
-      project (owned or not) where they hold a supervision-tagged role. */
+  /** For the selected consultant: their backlog on each counting role they
+      hold on a project's team (main consultant on the projects they own, a
+      supervision role where they supervise, …). Roles that don't count, like
+      connector, never enter it. One figure per role. */
   const myBreakdown = useMemo(() => {
     if (!consultantFilter) return null;
-    let consultDays = 0, consultValue = 0, superDays = 0, superValue = 0;
+    const byRole: Record<string, { days: number; value: number }> = {};
     rows.forEach((r) => {
       if (sum(r.sold) === 0) return;
       if (onlyLeft && sum(availableOf(r)) <= 0.001) return;
       const p = projects[r.id];
       if (!p) return;
-      const avail = availableOf(r);
-      if (ownerOf(p) === consultantFilter) {
-        consultDays += inDays(r.id, avail.consultor);
-        consultValue += avail.consultor * r.rate;
-      }
-      if (isSupervisorOn(p, consultantFilter)) {
-        superDays += inDays(r.id, avail.supervision);
-        superValue += avail.supervision * r.supervisionRate;
-      }
+      const mine = rolesOn(p, consultantFilter);
+      Object.entries(availableOf(r)).forEach(([k, v]) => {
+        if (!counts(k) || !mine.has(k)) return;
+        const b = (byRole[k] ??= { days: 0, value: 0 });
+        b.days += inDays(r.id, v);
+        b.value += v * (r.rates[k] ?? r.rate);
+      });
     });
-    return { consultDays, consultValue, superDays, superValue };
+    const order = (k: string) => { const i = roles.findIndex((x) => x.id === k); return i < 0 ? 999 : i; };
+    const list = Object.entries(byRole).sort((a, b) => order(a[0]) - order(b[0]))
+      .map(([k, v]) => ({ roleId: k, name: roleNameOf(k, roles), ...v }));
+    return {
+      list,
+      days: list.reduce((s, x) => s + x.days, 0),
+      value: list.reduce((s, x) => s + x.value, 0),
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [consultantFilter, rows, projects, onlyLeft, mainRoleByService, supRoles]);
+  }, [consultantFilter, rows, projects, onlyLeft, mainRoleByService, roles]);
 
   /** When a consultant is picked, the headline KPIs reflect only THEIR share:
-   *  consultancy on projects they own + supervision where they supervise, in
-   *  days and value, plus the sold/billed for the % dial — never the whole
-   *  project. Connector is tracked apart (their owned projects), split into
-   *  implemented (billed) vs pending, and never folded into the totals. */
+   *  the counting roles they hold on each project's team, in days and value,
+   *  plus the sold/billed for the % dial — never the whole project. Roles that
+   *  don't count (connector) are tracked apart on the projects they own, split
+   *  into implemented (billed) vs pending, and never folded into the totals. */
   const personalKpis = useMemo(() => {
     if (!consultantFilter) return null;
     let soldDays = 0, billedDays = 0, plannedDays = 0, availDays = 0, availValue = 0;
@@ -554,37 +564,29 @@ export default function BacklogPanel({
       const p = projects[r.id];
       if (!p) return;
       const owns = ownerOf(p) === consultantFilter;
-      const supervises = isSupervisorOn(p, consultantFilter);
-      if (!owns && !supervises) return;
+      const mine = rolesOn(p, consultantFilter);
+      if (!owns && !responsibleOn(p, consultantFilter)) return;
 
-      // Consultancy line counts only for projects this person owns.
-      if (owns) {
-        const soldC = r.sold.consultor, billedC = r.billed.consultor, plannedC = r.planned.consultor;
-        const availC = Math.max(0, soldC - billedC);
-        soldDays += inDays(r.id, soldC);
-        billedDays += inDays(r.id, billedC);
-        plannedDays += inDays(r.id, plannedC);
-        availDays += inDays(r.id, availC);
-        availValue += availC * r.rate;
-
-        // Connector of their owned projects — kept out of the totals above.
-        const connImpl = r.billed.connector;
-        const connPend = Math.max(0, r.sold.connector - r.billed.connector);
-        connImplDays += inDays(r.id, connImpl);
-        connPendDays += inDays(r.id, connPend);
-        connImplValue += connImpl * r.rate;
-        connPendValue += connPend * r.rate;
-      }
-      // Supervision line counts wherever they hold a supervision role.
-      if (supervises) {
-        const soldS = r.sold.supervision, billedS = r.billed.supervision, plannedS = r.planned.supervision;
-        const availS = Math.max(0, soldS - billedS);
-        soldDays += inDays(r.id, soldS);
-        billedDays += inDays(r.id, billedS);
-        plannedDays += inDays(r.id, plannedS);
-        availDays += inDays(r.id, availS);
-        availValue += availS * r.supervisionRate;
-      }
+      Object.entries(r.sold).forEach(([k, sold]) => {
+        const billed = r.billed[k] ?? 0, planned = r.planned[k] ?? 0;
+        const avail = Math.max(0, sold - billed);
+        const rate = r.rates[k] ?? r.rate;
+        if (counts(k)) {
+          // a counting role is theirs when they hold it on the team
+          if (!mine.has(k)) return;
+          soldDays += inDays(r.id, sold);
+          billedDays += inDays(r.id, billed);
+          plannedDays += inDays(r.id, planned);
+          availDays += inDays(r.id, avail);
+          availValue += avail * rate;
+        } else if (owns) {
+          // roles that don't count, on the projects they own — kept out of the totals above
+          connImplDays += inDays(r.id, billed);
+          connPendDays += inDays(r.id, avail);
+          connImplValue += billed * rate;
+          connPendValue += avail * rate;
+        }
+      });
     });
     return {
       soldDays, billedDays, plannedDays, availDays, availValue,
@@ -592,7 +594,7 @@ export default function BacklogPanel({
       connTotalDays: connImplDays + connPendDays,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [consultantFilter, rows, projects, mainRoleByService, supRoles]);
+  }, [consultantFilter, rows, projects, mainRoleByService, roles]);
 
   const totalSold = visible.reduce((s, r) => s + inDays(r.id, sum(r.sold)), 0);
   const totalBilled = visible.reduce((s, r) => s + inDays(r.id, sum(r.billed)), 0);
@@ -612,17 +614,11 @@ export default function BacklogPanel({
   const availDayDays = visible.filter((r) => !isHourly(r.id)).reduce((s, r) => s + sum(availableOf(r)), 0);
   const availHourHours = visible.filter((r) => isHourly(r.id)).reduce((s, r) => s + sum(availableOf(r)), 0);
 
-  // Connector days bill on their own pool, so they get their own counter.
-  const coreOf = (r: ProjRow) => {
-    const a = availableOf(r);
-    return { consultor: a.consultor, supervision: a.supervision, connector: 0 } as Tally;
-  };
-  const connOf = (r: ProjRow) => {
-    const a = availableOf(r);
-    return { consultor: 0, supervision: 0, connector: a.connector } as Tally;
-  };
-  const availCore = visible.reduce((s, r) => s + inDays(r.id, r.sold.consultor + r.sold.supervision - r.billed.consultor - r.billed.supervision), 0);
-  const availConnector = visible.reduce((s, r) => s + inDays(r.id, availableOf(r).connector), 0);
+  // Roles that don't count (connector) bill on their own pool, so they get their own counter.
+  const coreOf = (r: ProjRow) => pick(availableOf(r), true);
+  const connOf = (r: ProjRow) => pick(availableOf(r), false);
+  const availCore = visible.reduce((s, r) => s + inDays(r.id, sum(coreOf(r))), 0);
+  const availConnector = visible.reduce((s, r) => s + inDays(r.id, sum(connOf(r))), 0);
   const valueCore = visible.reduce((s, r) => s + valueOf(r, coreOf(r)), 0);
   const valueConnector = visible.reduce((s, r) => s + valueOf(r, connOf(r)), 0);
 
@@ -632,9 +628,13 @@ export default function BacklogPanel({
     visible.forEach((r) => {
       if (r.rate > 0) { rateSum += r.rate; count += 1; }
       // Hourly: rate is €/hour and volume is hours — put both on a day basis.
-      const days = inDays(r.id, r.sold.consultor);
-      const dayRate = isHourly(r.id) ? r.rate * hpd : r.rate;
-      if (days > 0 && dayRate > 0) { weighted += dayRate * days; daySum += days; }
+      // Weighted over the counting roles sold, each at its own rate.
+      Object.entries(pick(r.sold, true)).forEach(([k, v]) => {
+        const days = inDays(r.id, v);
+        const rt = r.rates[k] ?? r.rate;
+        const dayRate = isHourly(r.id) ? rt * hpd : rt;
+        if (days > 0 && dayRate > 0) { weighted += dayRate * days; daySum += days; }
+      });
     });
     const byDays = daySum > 0 ? weighted / daySum : 0;
     const simple = count > 0 ? rateSum / count : 0;
@@ -741,7 +741,7 @@ export default function BacklogPanel({
         const p = projects[e.projectId];
         if (p) {
           if (!billedSoFar[e.projectId]) billedSoFar[e.projectId] = blank();
-          billedSoFar[e.projectId][lineOf(p, e.line, e.userId)] += e.billable;
+          add(billedSoFar[e.projectId], e.line, e.billable);
         }
         i += 1;
       }
@@ -751,16 +751,16 @@ export default function BacklogPanel({
       Object.values(projects).forEach((p) => {
         if (p.kickoff && p.kickoff > b.end) return;
         const bl = billedSoFar[p.id] ?? blank();
-        const c = Math.max(0, p.consultorDays - bl.consultor);
-        const s = Math.max(0, p.supervisionDays - bl.supervision);
-        const k = Math.max(0, p.connectorDays - bl.connector);
-        days += c + s + k;
-        value += c * p.rate + k * p.rate + s * p.supervision;
+        p.lines.forEach((l) => {
+          const left = Math.max(0, l.days - (bl[l.roleId] ?? 0));
+          days += left;
+          value += left * lineRate(l);
+        });
       });
       return { label: b.label, end: b.end, days, value };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bounds, entries, projects, supRoles]);
+  }, [bounds, entries, projects]);
 
   const chartKey = chartMode === "days" ? "days" : "value";
   const peak = Math.max(1, ...series.map((p) => p[chartKey]));
@@ -827,7 +827,7 @@ export default function BacklogPanel({
               {personalKpis ? (
                 <>
                   <span><b>{kAvailable.toFixed(1)}</b>Their work</span>
-                  <span className="is-conn"><b>{personalKpis.connTotalDays.toFixed(1)}</b>Connector</span>
+                  <span className="is-conn"><b>{personalKpis.connTotalDays.toFixed(1)}</b>{otherLabel}</span>
                 </>
               ) : split ? (
                 <>
@@ -837,7 +837,7 @@ export default function BacklogPanel({
               ) : (
                 <>
                   <span><b>{availCore.toFixed(1)}</b>Consultancy</span>
-                  <span className="is-conn"><b>{availConnector.toFixed(1)}</b>Connector</span>
+                  <span className="is-conn"><b>{availConnector.toFixed(1)}</b>{otherLabel}</span>
                 </>
               )}
             </span>
@@ -849,11 +849,11 @@ export default function BacklogPanel({
               <>
                 <span className="bl-facts">
                   <span><b>{blEur(kValue)}</b>Their work</span>
-                  <span className="is-conn"><b>{blEur(personalKpis.connPendValue)}</b>Connector left</span>
+                  <span className="is-conn"><b>{blEur(personalKpis.connPendValue)}</b>{otherLabel} left</span>
                 </span>
                 <span className="bl-facts" style={{ marginTop: 6 }}>
-                  <span><b>{personalKpis.connImplDays.toFixed(1)}d</b>Connector done</span>
-                  <span className="is-conn"><b>{personalKpis.connPendDays.toFixed(1)}d</b>Connector pending</span>
+                  <span><b>{personalKpis.connImplDays.toFixed(1)}d</b>{otherLabel} done</span>
+                  <span className="is-conn"><b>{personalKpis.connPendDays.toFixed(1)}d</b>{otherLabel} pending</span>
                 </span>
               </>
             ) : (
@@ -864,7 +864,7 @@ export default function BacklogPanel({
                 </span>
                 <span className="bl-facts">
                   <span><b>{blEur(valueCore)}</b>Consultancy</span>
-                  <span className="is-conn"><b>{blEur(valueConnector)}</b>Connector</span>
+                  <span className="is-conn"><b>{blEur(valueConnector)}</b>{otherLabel}</span>
                 </span>
               </>
             )}
@@ -954,20 +954,24 @@ export default function BacklogPanel({
               </span>
             </span>
             <div className="bl-mine-figs">
-              <div className="bl-mine-fig">
-                <span>Consultancy <i>owned projects</i></span>
-                <b><BlCount value={myBreakdown.consultDays} fmt={(n) => n.toFixed(1)} /><em>d</em></b>
-                <small>{blEur(myBreakdown.consultValue)} €</small>
-              </div>
-              <div className="bl-mine-fig is-super">
-                <span>Supervision <i>assigned as supervisor</i></span>
-                <b><BlCount value={myBreakdown.superDays} fmt={(n) => n.toFixed(1)} /><em>d</em></b>
-                <small>{blEur(myBreakdown.superValue)} €</small>
-              </div>
+              {myBreakdown.list.length === 0 && (
+                <div className="bl-mine-fig">
+                  <span>No roles <i>assigned on a project</i></span>
+                  <b><BlCount value={0} fmt={(n) => n.toFixed(1)} /><em>d</em></b>
+                  <small>{blEur(0)} €</small>
+                </div>
+              )}
+              {myBreakdown.list.map((x, i) => (
+                <div className={`bl-mine-fig ${i % 2 === 1 ? "is-super" : ""}`} key={x.roleId}>
+                  <span>{x.name} <i>assigned on the team</i></span>
+                  <b><BlCount value={x.days} fmt={(n) => n.toFixed(1)} /><em>d</em></b>
+                  <small>{blEur(x.value)} €</small>
+                </div>
+              ))}
               <div className="bl-mine-fig is-total">
                 <span>Total</span>
-                <b><BlCount value={myBreakdown.consultDays + myBreakdown.superDays} fmt={(n) => n.toFixed(1)} /><em>d</em></b>
-                <small>{blEur(myBreakdown.consultValue + myBreakdown.superValue)} €</small>
+                <b><BlCount value={myBreakdown.days} fmt={(n) => n.toFixed(1)} /><em>d</em></b>
+                <small>{blEur(myBreakdown.value)} €</small>
               </div>
             </div>
           </div>
@@ -979,8 +983,8 @@ export default function BacklogPanel({
             <span className="bl-unowned-ico"><BlIcon d={BL_ICON.warn} w={1.9} /></span>
             <span>
               <b>{unownedBacklog.days.toFixed(1)}d</b> ({blEur(unownedBacklog.value)} €) of consultancy backlog across{" "}
-              <b>{unownedBacklog.projectCount}</b> project{unownedBacklog.projectCount === 1 ? "" : "s"} isn't owned by anyone yet. Set a main role for
-              {" "}the service in Products &amp; Services, or add that person to the project's team, and it'll show up under them here.
+              <b>{unownedBacklog.projectCount}</b> project{unownedBacklog.projectCount === 1 ? "" : "s"} is on a role nobody on the team holds yet.
+              {" "}Add the person who covers that role to the project's team, and it'll show up under them here.
             </span>
             <button type="button" className="bl-unowned-btn" onClick={() => setOnlyUnowned((v) => !v)}>
               {onlyUnowned ? "Show all" : `Show the ${unownedBacklog.projectCount}`}
@@ -1144,9 +1148,9 @@ export default function BacklogPanel({
                     <div className="bl-detail">
                       <div className="bl-chips">
                         <span className="bl-chips-k">Sold</span>
-                        {r.sold.consultor > 0 && <i>{r.sold.consultor} consultancy</i>}
-                        {r.sold.supervision > 0 && <i>{r.sold.supervision} supervision</i>}
-                        {r.sold.connector > 0 && <i className="is-conn">{r.sold.connector} connector</i>}
+                        {Object.entries(r.sold).filter(([, v]) => v > 0).map(([k, v]) => (
+                          <i key={k} className={counts(k) ? "" : "is-conn"}>{v} {roleNameOf(k, roles).toLowerCase()}</i>
+                        ))}
                       </div>
                       {team.length > 0 && (
                         <div className="bl-dtable">

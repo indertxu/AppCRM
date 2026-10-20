@@ -5,7 +5,9 @@ import { supabase } from "../../api/supabase";
 import { markHandoffConverted, type Handoff } from "../sales/sales/salesApi";
 import DatePicker from "../../framework/DatePicker";
 import Select from "../../framework/Select";
-import type { Phase, TeamMember, ClientRole, ProjectType, Blueprint } from "./ClientsPage";
+import type { Phase, TeamMember, ClientRole, ProjectType, Blueprint, RoleLine } from "../clients/clientsTypes";
+import { mapClientRole, sortRoles, lineRate, roleNameOf, legacyRoleMap, resolveRoleKey, legacyColumnsOf } from "../clients/clientsTypes";
+import { RoleLinesEditor } from "../clients/NewClientForm";
 import { destFolder, destOptions, type HandoffDoc, type HandoffPackage } from "../sales/trackings/HandoffConfirmServices";
 import { FileIcon, kindOf, prettySize, openTrackingFile } from "../sales/trackings/TrackingFiles";
 import { copyIntoClientFolders } from "../clients/ClientDirectory";
@@ -69,14 +71,10 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
   const [projectTypeId, setProjectTypeId] = useState("");
   const [signingDate, setSigning] = useState("");
   const [kickoffDate, setKickoff] = useState("");
-  const [consultorDays, setConsultorDays] = useState(0);
-  const [connectorDays, setConnectorDays] = useState(0);
-  const [pricePerDay, setPricePerDay] = useState(0);
-  const [supervisionDays, setSupervisionDays] = useState(0);
-  const [supervisionPrice, setSupervisionPrice] = useState(0);
-  /** Discounts sales gave: consultancy as € off the total, supervision as € off each day. */
+  /** The roles sold, each with its days and rate (prefilled from what sales sold). */
+  const [lines, setLines] = useState<RoleLine[]>([]);
+  /** Whatever sales discounted beyond the role rates, as € off the whole project. */
   const [discount, setDiscount] = useState(0);
-  const [supDiscount, setSupDiscount] = useState(0);
   const [paymentDays, setPaymentDays] = useState(0);
   const [phases, setPhases] = useState<Phase[]>([]);
   const [team, setTeam] = useState<TeamMember[]>([]);
@@ -91,8 +89,8 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
   const [folders, setFolders] = useState<string[]>([]);
   const [existing, setExisting] = useState<{ folder: string; name: string; size: number | null }[]>([]);
   const [docDest, setDocDest] = useState<Record<string, string>>({});
-  /** What sales sold, split: consultancy and supervision days at their own rates. */
-  const [sold, setSold] = useState<{ conDays: number; conRate: number; supDays: number; supRate: number } | null>(null);
+  /** What sales sold, split by role: days and the rate each role earns. */
+  const [sold, setSold] = useState<RoleLine[] | null>(null);
 
   // --- Sales breakdown (read-only) -----------------------------------------
   const svcs = useMemo(() => (handoff.services ?? []).filter((s) => s.kind !== "product"), [handoff]);
@@ -110,22 +108,29 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
         const { data, error } = await supabase.from("calculator_variables").select("name").eq("is_supervision", true);
         if (!error) (data ?? []).forEach((v: any) => v.name && supNames.add(String(v.name).trim().toLowerCase()));
       }
-      const [pts, bps, rls, cli] = await Promise.all([
+      const [pts, bps, rls, srs, cli] = await Promise.all([
         supabase.from("services").select("id,name,blueprint_id,active").order("name"),
         supabase.from("phase_blueprints").select("*"),
         supabase.from("client_roles").select("*"),
+        supabase.from("service_roles").select("service_id, role_id, price, is_main, sort"),
         handoff.company_id
           ? supabase.from("clients").select("*").eq("company_id", handoff.company_id).limit(1)
           : Promise.resolve({ data: [] } as any),
       ]);
-      setProjectTypes(((pts.data ?? []) as any[]).filter((r) => r.active !== false)
-        .map((r) => ({ id: r.id, name: r.name, blueprintId: r.blueprint_id ?? null })));
+      const svcRoles = ((srs.data ?? []) as any[]).sort((a, b) => (Number(a.sort) || 0) - (Number(b.sort) || 0));
+      const types: ProjectType[] = ((pts.data ?? []) as any[]).filter((r) => r.active !== false)
+        .map((r) => ({
+          id: r.id, name: r.name, blueprintId: r.blueprint_id ?? null,
+          roles: svcRoles.filter((x) => x.service_id === r.id && x.role_id)
+            .map((x) => ({ roleId: x.role_id as string, price: Number(x.price) || 0, isMain: !!x.is_main })),
+        }));
+      setProjectTypes(types);
       setBlueprints(((bps.data ?? []) as any[]).map((r) => ({
         id: r.id, name: r.name ?? "", projectTypeId: r.service_id ?? r.project_type_id ?? "", phases: r.phases ?? [],
       })));
-      setRoles(((rls.data ?? []) as any[]).map((r) => ({
-        id: r.id, name: r.name ?? "", userIds: r.user_ids ?? [], isSupervision: !!r.is_supervision,
-      })));
+      const roleList = sortRoles(((rls.data ?? []) as any[]).map(mapClientRole));
+      setRoles(roleList);
+      const legacy = legacyRoleMap(roleList);
 
       // Auto-fill from the client sales already created.
       const c: any = (cli as any).data?.[0];
@@ -156,12 +161,30 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
         });
         setDocDest(dd);
       }
-      // Split what sales sold: the calculator's supervision variable gives the
-      // supervision days and their rate; everything else is consultancy, at the
-      // line's own rate (not an average of the two).
-      let supDays = 0, supValue = 0, conDays = 0, conValue = 0, supOff = 0, soldNet = 0;
+      // Split what sales sold by role. Handoffs carry the days per role (each
+      // calculator variable is billed as a role); older ones only know the
+      // supervision rows, so those go to the supervision role and the rest to
+      // the service's main role.
+      const acc = new Map<string, { days: number; value: number }>();
+      const bump = (k: string, d: number, v: number) => {
+        if (d <= 0) return;
+        const a = acc.get(k) ?? { days: 0, value: 0 };
+        a.days += d; a.value += v; acc.set(k, a);
+      };
+      let soldNet = 0;
       svcs.forEach((sv: any) => {
+        soldNet += Number(sv.price) || 0;
         const total = Number(sv.days) || 0;
+        const svcType = types.find((t) => t.name.trim().toLowerCase() === String(sv.label ?? "").trim().toLowerCase());
+        const main = (svcType?.roles?.find((r) => r.isMain) ?? svcType?.roles?.[0])?.roleId ?? legacy.consultor ?? "consultor";
+        const sentRoles = (Array.isArray(sv.roles) ? sv.roles : []) as { roleId: string; days: number; rate: number }[];
+        if (sentRoles.length) {
+          sentRoles.forEach((r) => {
+            const k = r.roleId === "consultor" ? main : resolveRoleKey(String(r.roleId), legacy);
+            bump(k, Number(r.days) || 0, (Number(r.days) || 0) * (Number(r.rate) || 0));
+          });
+          return;
+        }
         const rows = (sv.rows ?? []) as any[];
         const supRows = rows.filter((r) => r.supervision || supNames.has(String(r.label ?? "").trim().toLowerCase()));
         const sd = sv.supervision_days != null ? Number(sv.supervision_days) || 0 : supRows.reduce((a, r) => a + (Number(r.days) || 0), 0);
@@ -169,25 +192,21 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
           : sd > 0 ? supRows.reduce((a, r) => a + (Number(r.amount) || 0), 0) / sd : 0;
         const cd = Math.max(0, total - sd);
         const cr = Number(sv.rate) || (total > 0 ? (Number(sv.price) || 0) / total : 0);
-        supDays += sd; supValue += sd * sr; conDays += cd; conValue += cd * cr;
-        supOff += supRows.reduce((a, r) => a + (Number(r.discount) || 0), 0);
-        soldNet += Number(sv.price) || 0;
+        bump(legacy.supervision ?? main, sd, sd * sr);
+        bump(main, cd, cd * cr);
       });
-      // Whatever the full rates add up to beyond what was sold is the discount
-      // sales gave (row discounts): supervision keeps its own, the rest comes off
-      // the consultancy total, so the project is worth exactly what was sold.
-      const supPerDay = supDays > 0 ? Math.round((supOff / supDays) * 100) / 100 : 0;
-      const conRateR = Math.round(conDays > 0 ? conValue / conDays : 0);
-      const supRateR = Math.round(supDays > 0 ? supValue / supDays : 0);
-      const grossAtRates = conDays * conRateR + supDays * Math.max(0, supRateR - supPerDay);
+      const soldLines: RoleLine[] = [...acc.entries()].map(([roleId, a]) => ({
+        roleId, days: Math.round(a.days * 100) / 100, rate: Math.round(a.days > 0 ? a.value / a.days : 0),
+        discountMode: "none" as const, discountValue: 0,
+      }));
+      // Whatever the role rates add up to beyond what was sold is the discount
+      // sales gave: it comes off the whole project, so the project is worth
+      // exactly what was sold.
+      const grossAtRates = soldLines.reduce((a, l) => a + l.days * l.rate, 0);
       const rest = Math.round((grossAtRates - soldNet) * 100) / 100;
-      setSupDiscount(supPerDay);
       setDiscount(rest > 0.5 ? rest : 0);
-      setConsultorDays(Math.round(conDays * 100) / 100);
-      setPricePerDay(Math.round(conDays > 0 ? conValue / conDays : (svcs[0]?.rate ?? 0)));
-      setSupervisionDays(Math.round(supDays * 100) / 100);
-      setSupervisionPrice(Math.round(supDays > 0 ? supValue / supDays : 0));
-      setSold({ conDays, conRate: conDays > 0 ? conValue / conDays : 0, supDays, supRate: supDays > 0 ? supValue / supDays : 0 });
+      setLines(soldLines);
+      setSold(soldLines);
       // The signing date comes from sales (per service in the handoff).
       const signed = (pkg?.services ?? []).map((x) => x.signingDate).filter(Boolean).sort()[0];
       if (signed) setSigning(signed);
@@ -214,7 +233,7 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
   const applyBlueprint = (bpId: string) => {
     const bp = blueprints.find((b) => b.id === bpId);
     if (!bp) return;
-    const total = consultorDays + connectorDays + supervisionDays;
+    const total = lines.reduce((a, l) => a + l.days, 0);
     setPhases(bp.phases.map((ph) => ({
       id: uid(), name: ph.name,
       days: Math.round(((Number(ph.percent) || 0) / 100) * total),
@@ -234,13 +253,13 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
   const removePhase = (id: string) => setPhases((p) => p.filter((x) => x.id !== id));
   const addPhase = () => setPhases((p) => [...p, { id: uid(), name: "", days: 0, tasks: [] }]);
 
-  const totalConsultancy = consultorDays + connectorDays;
-  const consultancyNet = Math.max(0, totalConsultancy * pricePerDay - discount);
-  const supervisionNet = supervisionDays * Math.max(0, supervisionPrice - supDiscount);
-  const value = consultancyNet + supervisionNet;
+  const grossValue = lines.reduce((a, l) => a + l.days * lineRate(l), 0);
+  const value = Math.max(0, grossValue - discount);
   const phaseTotal = phases.reduce((s, p) => s + (Number(p.days) || 0), 0);
-  const maxDays = totalConsultancy + supervisionDays;
-  const ptName = projectTypes.find((p) => p.id === projectTypeId)?.name ?? "—";
+  const maxDays = lines.reduce((a, l) => a + l.days, 0);
+  const pt = projectTypes.find((p) => p.id === projectTypeId);
+  const ptName = pt?.name ?? "—";
+  const svcRate = (roleId: string) => pt?.roles?.find((r) => r.roleId === roleId)?.price;
 
   /* ---- client details: what changes for each choice ---- */
   const CLIENT_FIELDS: { key: string; label: string; now: (c: any) => string; sent: (p: NonNullable<HandoffPackage["client"]>) => string }[] = [
@@ -278,7 +297,7 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
   };
   const docsIn = (pkg?.documents ?? []).filter((d) => destFolder(docDest[d.id] ?? "skip")).length;
 
-  const canSave = !!clientId && !!signingDate && !!kickoffDate && (consultorDays + connectorDays + supervisionDays) > 0 && !saving;
+  const canSave = !!clientId && !!signingDate && !!kickoffDate && maxDays > 0 && !saving;
 
   const save = async () => {
     if (!canSave || !clientId) return;
@@ -291,15 +310,10 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
         service_id: projectTypeId || null,
         kickoff_date: kickoffDate || null,
         signing_date: signingDate || null,
-        consultor_days: consultorDays,
-        connector_days: connectorDays,
-        price_per_day: pricePerDay,
-        supervision_days: supervisionDays,
-        supervision_price: supervisionPrice,
+        role_lines: lines.filter((l) => l.roleId),
+        ...legacyColumnsOf(lines, roles),
         discount_mode: discount > 0 ? "total" : "none",
         discount_value: discount > 0 ? discount : 0,
-        supervision_discount_mode: supDiscount > 0 ? "rate" : "none",
-        supervision_discount_value: supDiscount > 0 ? supDiscount : 0,
         payment_days: paymentDays,
         phases, team,
         status: "open",
@@ -356,7 +370,7 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
     : !clientId ? "No client found for this company yet"
     : !signingDate ? "Set the signing date"
     : !kickoffDate ? "Pick a kick-off date to create the project"
-    : (consultorDays + connectorDays + supervisionDays) <= 0 ? "Add at least one day"
+    : maxDays <= 0 ? "Add at least one day to a role"
     : null;
   const phasePct = maxDays > 0 ? Math.min(100, (phaseTotal / maxDays) * 100) : 0;
   const over = phaseTotal > maxDays;
@@ -455,12 +469,9 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
             <div className="icm-sold-foot">
               <div><span>Days sold</span><b>{num(soldDays)}</b></div>
               <div><span>Value</span><b>{eur(soldValue)} €</b></div>
-              {sold && sold.supDays > 0 ? (
-                <>
-                  <div><span>Consultancy</span><b>{num(sold.conDays)}d · {eur(sold.conRate)} €</b></div>
-                  <div><span>Supervision</span><b>{num(sold.supDays)}d · {eur(sold.supRate)} €</b></div>
-                </>
-              ) : <div><span>Rate</span><b>{eur(sold?.conRate || soldRate)} €/d</b></div>}
+              {sold && sold.length > 1 ? (
+                sold.map((l) => <div key={l.roleId}><span>{roleNameOf(l.roleId, roles)}</span><b>{num(l.days)}d · {eur(l.rate)} €</b></div>)
+              ) : <div><span>{sold?.[0] ? roleNameOf(sold[0].roleId, roles) : "Rate"}</span><b>{eur(sold?.[0]?.rate || soldRate)} €/d</b></div>}
             </div>
           </aside>
 
@@ -595,50 +606,29 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
                   <div className="icm-date"><DatePicker value={kickoffDate} onChange={setKickoff} placeholder="Select kick-off" /></div>
                 </div>
 
-                {/* Consultancy */}
+                {/* Roles */}
                 <div className="icm-block" style={{ animationDelay: "330ms" }}>
                   <div className="icm-block-head">
                     <span className="icm-step">2</span>
-                    <span className="icm-sec-title">Consultancy</span>
-                    <span className="icm-rate-pill">{num(consultorDays + supervisionDays)} days sold <em>{num(supervisionDays)} go to supervision</em></span>
+                    <span className="icm-sec-title">Roles</span>
+                    <span className="icm-rate-pill">{num(maxDays)} days <em>{num(soldDays)} sold</em></span>
                   </div>
-                  <div className="icm-grid3">
-                    <div className="icm-field"><label>Consultor days</label><NumField value={consultorDays} onChange={setConsultorDays} suffix="d" /></div>
-                    <div className="icm-field"><label>Connector days</label><NumField value={connectorDays} onChange={setConnectorDays} suffix="d" /></div>
-                    <div className="icm-field"><label>Price / day</label><NumField value={pricePerDay} onChange={setPricePerDay} suffix="€" /></div>
+                  <div className="icm-roles">
+                    <RoleLinesEditor lines={lines} roles={roles} onChange={setLines} rateOf={svcRate} />
                   </div>
                   <div className="icm-grid3">
                     <div className="icm-field"><label>Discount (€ off the total)</label><NumField value={discount} onChange={setDiscount} suffix="€" /></div>
                   </div>
                   <div className="icm-line">
-                    <span>{num(totalConsultancy)} days × {eur(pricePerDay)} €{discount > 0 ? ` − ${eur(discount)} € discount` : ""}</span>
-                    <b>{eur(consultancyNet)} €</b>
+                    <span>{lines.map((l) => `${num(l.days)}d ${roleNameOf(l.roleId, roles)} × ${eur(lineRate(l))} €`).join(" + ") || "No roles yet"}{discount > 0 ? ` − ${eur(discount)} € discount` : ""}</span>
+                    <b>{eur(value)} €</b>
                   </div>
-                </div>
-
-                {/* Supervision */}
-                <div className="icm-block" style={{ animationDelay: "380ms" }}>
-                  <div className="icm-block-head">
-                    <span className="icm-step">3</span>
-                    <span className="icm-sec-title">Supervision</span>
-                  </div>
-                  <div className="icm-grid3">
-                    <div className="icm-field"><label>Days</label><NumField value={supervisionDays} onChange={setSupervisionDays} suffix="d" /></div>
-                    <div className="icm-field"><label>Price / day</label><NumField value={supervisionPrice} onChange={setSupervisionPrice} suffix="€" /></div>
-                    <div className="icm-field"><label>Discount / day</label><NumField value={supDiscount} onChange={setSupDiscount} suffix="€" /></div>
-                  </div>
-                  {supervisionDays > 0 && (
-                    <div className="icm-line">
-                      <span>{num(supervisionDays)} days × {eur(Math.max(0, supervisionPrice - supDiscount))} €{supDiscount > 0 ? ` (${eur(supervisionPrice)} − ${eur(supDiscount)})` : ""}</span>
-                      <b>{eur(supervisionNet)} €</b>
-                    </div>
-                  )}
                 </div>
 
                 {/* Blueprint + phases */}
                 <div className="icm-block" style={{ animationDelay: "430ms" }}>
                   <div className="icm-block-head">
-                    <span className="icm-step">4</span>
+                    <span className="icm-step">3</span>
                     <span className="icm-sec-title">Phases</span>
                     <span className="icm-phase-sum" data-over={over ? "1" : undefined}>{num(phaseTotal)} / {num(maxDays)} days</span>
                   </div>
@@ -669,7 +659,7 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
                 {/* Team */}
                 <div className="icm-block" style={{ animationDelay: "480ms" }}>
                   <div className="icm-block-head">
-                    <span className="icm-step">5</span>
+                    <span className="icm-step">4</span>
                     <span className="icm-sec-title">Team</span>
                     {team.length > 0 && <span className="icm-phase-sum">{team.filter((m) => m.userId).length} assigned</span>}
                   </div>

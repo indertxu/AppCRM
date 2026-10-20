@@ -216,7 +216,7 @@
 }
 .pv-hrow, .pv-row {
   display: grid;
-  grid-template-columns: 1.5fr 1fr 1.4fr 1.4fr 0.8fr auto;
+  grid-template-columns: 1.5fr 1fr 2.8fr 0.8fr auto;
   gap: 16px;
   align-items: center;
   padding: 12px 18px;
@@ -390,3 +390,11 @@
   }
   .pv-cell-act { grid-column: 1 / -1; justify-content: flex-start; }
 }
+/* one mini bar per role sold on the project */
+.pv-cell-roles { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.pv-role { display: grid; grid-template-columns: minmax(90px, 0.9fr) minmax(60px, 1fr) minmax(130px, 1.1fr); align-items: center; gap: 10px; }
+.pv-role-nm { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 11.5px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pv-role-nm i { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
+.pv-role .pv-fill.is-done { background: var(--c); }
+.pv-role .pv-fill { background: color-mix(in srgb, var(--c) 30%, transparent); }
+.pv-role.is-nocount .pv-role-nm { color: var(--muted); font-style: italic; }

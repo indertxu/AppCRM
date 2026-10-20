@@ -43,8 +43,8 @@ export interface ProjectRow {
   /** contract context (shown in the project detail) */
   kickoff?: string | null;
   signedDays?: number;
-  split?: { consultor: number; connector: number; supervision: number };
-  consumed?: { consultor: number; connector: number; supervision: number };
+  /** Signed vs consumed, role by role (whatever roles the project was sold with). */
+  split?: { key: string; name: string; color: string; signed: number; used: number }[];
 }
 
 interface Props {
@@ -493,16 +493,12 @@ function ProjectView({
           <StatCard i={6} icon={ICON.left} label="Left to bill" value={<Count value={remAmt} />} unit="€" sub={`${d2(remDays)}${u} still open`} />
         </div>
 
-        {(row.kickoff || (row.signedDays ?? 0) > 0 || row.split) && (() => {
-          const sp = row.split ?? { consultor: 0, connector: 0, supervision: 0 };
-          const cs = row.consumed ?? { consultor: 0, connector: 0, supervision: 0 };
-          const types = [
-            { k: "Consultor", signed: sp.consultor, used: cs.consultor, c: "#3fcf9a" },
-            { k: "Connector", signed: sp.connector, used: cs.connector, c: "#f0b450" },
-            { k: "Supervision", signed: sp.supervision, used: cs.supervision, c: "#86b3e6" },
-          ].filter((t) => t.signed > 0.001 || t.used > 0.001);
+        {(row.kickoff || (row.signedDays ?? 0) > 0 || (row.split?.length ?? 0) > 0) && (() => {
+          const types = (row.split ?? [])
+            .map((t) => ({ k: t.key, name: t.name, signed: t.signed, used: t.used, c: t.color }))
+            .filter((t) => t.signed > 0.001 || t.used > 0.001);
           const signed = row.signedDays ?? 0;
-          const used = cs.consultor + cs.connector + cs.supervision;
+          const used = (row.split ?? []).reduce((n, t) => n + t.used, 0);
           const usedPct = signed > 0 ? (used / signed) * 100 : 0;
           const kDate = (() => {
             if (!row.kickoff) return "—";
@@ -524,7 +520,7 @@ function ProjectView({
                     const over = t.used > t.signed + 0.001;
                     return (
                       <div className={`cm-pm-row ${over ? "is-over" : ""}`} key={t.k} style={vars({ "--c": t.c })}>
-                        <span className="cm-pm-name"><i />{t.k}</span>
+                        <span className="cm-pm-name"><i />{t.name}</span>
                         <span className="cm-pm-track"><span style={{ width: `${Math.min(100, pct)}%` }} /></span>
                         <span className="cm-pm-fig"><b>{d2(t.used)}</b> / {d2(t.signed)}{u}</span>
                         <span className="cm-pm-pct">{pct0(pct)}%</span>

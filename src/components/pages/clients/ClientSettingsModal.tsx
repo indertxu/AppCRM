@@ -62,7 +62,7 @@ export default function ClientSettingsModal({
   // Roles
   const addRole = () => {
     const id = uid();
-setRoles((r) => [...r, { id, name: "", userIds: [], isSupervision: false }]);
+    setRoles((r) => [...r, { id, name: "", userIds: [], isSupervision: false, countsForTarget: true }]);
     setOpenRoleId(id);
   };
   const patchRole = (id: string, patch: Partial<ClientRole>) =>

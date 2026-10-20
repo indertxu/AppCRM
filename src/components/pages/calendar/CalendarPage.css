@@ -2526,3 +2526,11 @@
 .cal.cal-v3 .cal-col.is-today::after { display: none; }
 .cv-bar button:focus { outline: none; }
 .cv-bar button:focus-visible { outline: 2px solid #c9f2dd; outline-offset: 2px; }
+
+/* Project time on a role that doesn't count for the target: striped edge in the role's colour, role name after the time */
+.cal-event.is-connector::before { background: repeating-linear-gradient(45deg, var(--rc, rgba(255, 255, 255, 0.95)) 0 4px, color-mix(in srgb, var(--rc, #fff) 35%, #fff) 4px 8px); }
+.cal-event.is-connector .cal-event-time::after { content: "· " attr(data-role); }
+.cal-event.is-connector .cal-event-time:not([data-role])::after { content: "· NOT ON TARGET"; }
+.cal-ov .cal-event.is-connector::before { background: repeating-linear-gradient(45deg, var(--rc, var(--ec)) 0 4px, color-mix(in srgb, var(--rc, var(--ec)) 35%, #fff) 4px 8px); }
+.cal-ov .cal-mchip.is-connector::before { background: var(--rc, var(--ec)); }
+.cv-line-dot { display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; vertical-align: 1px; flex-shrink: 0; }

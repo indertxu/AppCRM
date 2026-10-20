@@ -59,8 +59,8 @@
 .sd-proj-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 10px; border: none; background: rgba(10, 111, 77, 0.03); border-radius: 9px; cursor: pointer; font-family: inherit; text-align: left; transition: background 0.14s; }
 .sd-proj-row:hover { background: rgba(18, 181, 127, 0.08); }
 .sd-ptag { flex-shrink: 0; font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 6px; }
-.sd-ptag.is-consultor { background: rgba(10, 111, 77, 0.12); color: var(--forest); }
-.sd-ptag.is-supervision { background: rgba(139, 75, 176, 0.14); color: #8b4bb0; }
+/* each role in its own colour (--c, set inline from the catalogue) */
+.sd-ptag { background: color-mix(in srgb, var(--c, #0a6f4d) 13%, transparent); color: color-mix(in srgb, var(--c, #0a6f4d) 80%, #10251c); }
 .sd-pname { flex: 1; min-width: 0; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sd-pdays { font-family: "Space Grotesk", sans-serif; font-weight: 700; font-size: 13px; }
 .sd-pdays em { font-style: normal; font-size: 10px; color: var(--muted); margin-left: 1px; }

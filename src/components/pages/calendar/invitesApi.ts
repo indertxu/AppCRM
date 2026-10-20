@@ -18,6 +18,8 @@ export interface EntryInvite {
   invitee_id: string;
   billable: number;
   billing_line: string;
+  /** The role the invitee's time is logged on (the organiser's role on the entry). */
+  role_id?: string | null;
   status: "pending" | "accepted" | "declined";
   message: string | null;
   created_at: string;
@@ -50,6 +52,7 @@ export async function inviteToEntry(
   people: { id: string; billable: number }[],
   line: string,
   message?: string,
+  roleId?: string | null,
 ): Promise<string | null> {
   if (!people.length) return null;
   const { error } = await supabase.from("entry_invites").insert(
@@ -59,6 +62,7 @@ export async function inviteToEntry(
       invitee_id: p.id,
       billable: p.billable,
       billing_line: line,
+      ...(roleId !== undefined ? { role_id: roleId || null } : {}),
       message: message ?? null,
     })),
   );
@@ -78,7 +82,7 @@ export async function loadMyInvites(userId: string): Promise<InviteCard[]> {
 
   const { data: ents } = await supabase
     .from("calendar_entries")
-    .select("id, kind, title, date_key, entry_date, start_min, end_min, work_type_id, project_id, client_id, company_id, tracking_id, meeting_kind, notes")
+    .select("id, kind, title, date_key, entry_date, start_min, end_min, work_type_id, project_id, client_id, company_id, tracking_id, meeting_kind, notes, role_id")
     .in("id", rows.map((r) => r.entry_id));
   const byId: Record<string, any> = {};
   ((ents ?? []) as any[]).forEach((e) => { byId[e.id] = e; });
@@ -102,6 +106,8 @@ export async function loadMyInvites(userId: string): Promise<InviteCard[]> {
     const e = byId[r.entry_id];
     return {
       ...r,
+      // Invites sent before roles were stored take the entry's role.
+      role_id: r.role_id ?? e.role_id ?? null,
       organiser_name: nameById[r.organiser_id] ?? "A colleague",
       kind: e.kind ?? "work",
       title: e.title,
@@ -162,6 +168,8 @@ export async function acceptInvite(
     meeting_kind: inv.meeting_kind,
     billable: inv.billable,
     billing_line: inv.billing_line,
+    // Same role as the organiser booked it on, so it bills on that project role.
+    ...(inv.role_id ? { role_id: inv.role_id } : {}),
     // Confirmed means the work happened; something still ahead is planned.
     status: inv.entry_date <= todayIso() ? "confirmed" : "planned",
     notes: inv.notes,
@@ -424,7 +432,10 @@ export async function syncInvites(
   people: { id: string; billable: number }[],
   line: string,
   message?: string,
+  /** The role on the entry; invitees log their time on it too. */
+  roleId?: string | null,
 ): Promise<string | null> {
+  const role = roleId !== undefined ? { role_id: roleId || null } : {};
   const { data } = await supabase.from("entry_invites")
     .select("id, invitee_id, status").eq("entry_id", entryId);
   const existing = (data ?? []) as any[];
@@ -443,7 +454,7 @@ export async function syncInvites(
       .update({
         status: "pending", responded_at: null, seen_by_organiser: true,
         billable: people.find((p) => p.id === a.invitee_id)?.billable ?? 0,
-        billing_line: line, message: message ?? null,
+        billing_line: line, ...role, message: message ?? null,
       })
       .eq("id", a.id);
     if (error) return error.message;
@@ -455,7 +466,7 @@ export async function syncInvites(
     const { error } = await supabase.from("entry_invites").insert(
       added.map((p) => ({
         entry_id: entryId, organiser_id: organiserId, invitee_id: p.id,
-        billable: p.billable, billing_line: line, message: message ?? null,
+        billable: p.billable, billing_line: line, ...role, message: message ?? null,
       })),
     );
     if (error) return error.message;

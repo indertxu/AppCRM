@@ -1,10 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Client, Project, Contact, Phase, TeamMember, ClientRole, ProjectType, Blueprint } from "./ClientsPage";
-import { effectiveRate, effectiveSupervisionRate } from "./ClientsPage";
+import type { Client, Project, Contact, Phase, TeamMember, ClientRole, ProjectType, Blueprint, RoleLine } from "./clientsTypes";
+import { lineRate, roleCounts, roleColor, roleNameOf, sortRoles, legacyRoleMap, resolvedLinesOf, legacyColumnsOf } from "./clientsTypes";
 import DatePicker from "../../framework/DatePicker";
 import Select from "../../framework/Select";
 import { supabase } from "../../api/supabase";
+import "./ClientsPage.css";
 
 const uid = () => crypto.randomUUID();
 const emptyAddr = { street: "", number: "", details: "", postalCode: "", city: "", country: "" };
@@ -126,6 +127,81 @@ function Chips<T extends string>({ value, options, onChange }: { value: T; optio
   );
 }
 
+/**
+ * The roles a project was sold with: each one its days, its rate and its own
+ * discount on that rate. Roles come from the catalogue; a role that doesn't
+ * count for the consultant's billing (a connector, say) is marked as such.
+ * Also used when a sales handoff is turned into a project.
+ */
+export function RoleLinesEditor({ lines, roles, onChange, unit = "day", rateOf }: {
+  lines: RoleLine[];
+  roles: ClientRole[];
+  onChange: (lines: RoleLine[]) => void;
+  unit?: "day" | "hour";
+  /** The list price of a role when it is added (the service's price for it). */
+  rateOf?: (roleId: string) => number | undefined;
+}) {
+  const sorted = sortRoles(roles);
+  const set = (i: number, patch: Partial<RoleLine>) => onChange(lines.map((l, k) => (k === i ? { ...l, ...patch } : l)));
+  const add = (roleId: string) => {
+    if (!roleId) return;
+    onChange([...lines, { roleId, days: 0, rate: rateOf?.(roleId) ?? lines[0]?.rate ?? 0, discountMode: "none", discountValue: 0 }]);
+  };
+  const remove = (i: number) => onChange(lines.filter((_, k) => k !== i));
+  const free = sorted.filter((r) => !lines.some((l) => l.roleId === r.id));
+  const u = unit === "hour" ? "h" : "d";
+  return (
+    <div className="rle">
+      {lines.length === 0 ? (
+        <p className="rle-empty"><Ico n="users" s={18} />No roles yet — add the roles this project was sold with.</p>
+      ) : (
+        <ul className="rle-list">
+          {lines.map((l, i) => {
+            const r = roles.find((x) => x.id === l.roleId);
+            const at = sorted.findIndex((x) => x.id === l.roleId);
+            const counts = roleCounts(l.roleId, roles);
+            const eff = lineRate(l);
+            const opts = sorted.filter((x) => x.id === l.roleId || !lines.some((y) => y.roleId === x.id)).map((x) => ({ value: x.id, label: x.name }));
+            if (!r) opts.unshift({ value: l.roleId, label: roleNameOf(l.roleId, roles) });
+            return (
+              <li key={`${l.roleId}-${i}`} className="rle-row" style={vars({ "--c": roleColor(r, at < 0 ? i : at), "--i": i })}>
+                <div className="rle-h">
+                  <span className="rle-dot" aria-hidden="true" />
+                  <div className="rle-role"><Select value={l.roleId} onChange={(v) => v && set(i, { roleId: v })} options={opts} /></div>
+                  <span className={`rle-tag ${counts ? "is-on" : ""}`} title={counts ? "Time on this role counts for the consultant's billing and bonus" : "Time on this role doesn't count for the consultant's billing"}>
+                    {counts ? "Counts for billing" : "Doesn't count"}
+                  </span>
+                  <b className="rle-amt">{eur(l.days * eff)}</b>
+                  <button type="button" className="pf-icon is-danger" onClick={() => remove(i)} aria-label="Remove role"><Ico n="trash" s={14} /></button>
+                </div>
+                <div className="rle-f">
+                  <Field label={unit === "hour" ? "Hours" : "Days"}><div className="pf-unit"><NumField min="0" value={l.days} onChange={(n) => set(i, { days: n })} /><i>{u}</i></div></Field>
+                  <Field label={`Price / ${unit}`}><div className="pf-unit"><NumField min="0" value={l.rate} onChange={(n) => set(i, { rate: n })} /><i>€</i></div></Field>
+                  <div className="rle-disc">
+                    <span className="pf-label">Discount</span>
+                    <Chips value={l.discountMode} onChange={(v) => set(i, { discountMode: v, discountValue: v === "none" ? 0 : l.discountValue })} options={[
+                      { v: "none", label: "None" }, { v: "rate", label: `€ / ${unit}` }, { v: "percent", label: `% / ${unit}` },
+                    ]} />
+                    <div className={`pf-disc-val ${l.discountMode !== "none" ? "is-on" : ""}`}>
+                      <div className="pf-unit"><NumField min="0" value={l.discountValue} onChange={(n) => set(i, { discountValue: n })} disabled={l.discountMode === "none"} /><i>{l.discountMode === "percent" ? "%" : "€"}</i></div>
+                    </div>
+                    {eff !== l.rate && <small className="rle-eff">{eur(eff)} / {unit}</small>}
+                  </div>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {free.length > 0 && (
+        <div className="rle-add">
+          <Select value="" onChange={add} options={free.map((x) => ({ value: x.id, label: x.name }))} placeholder="+ Add a role" />
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface Props {
   onSave: (client: Client, project: Project) => void;
   onClose: () => void;
@@ -170,15 +246,11 @@ export default function NewClientForm({ onSave, onClose, roles = [], projectType
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [overIndex, setOverIndex] = useState<number | null>(null);
 
-  const [consultorDays, setConsultorDays] = useState(project?.consultorDays ?? 0);
-  const [connectorDays, setConnectorDays] = useState(project?.connectorDays ?? 0);
-  const [pricePerDay, setPricePerDay] = useState(project?.pricePerDay ?? 0);
-  const [discountMode, setDiscountMode] = useState<"none" | "rate" | "total" | "percent">(project?.discountMode ?? "none");
-  const [discountValue, setDiscountValue] = useState(project?.discountValue ?? 0);
-  const [supervisionDays, setSupervisionDays] = useState(project?.supervisionDays ?? 0);
-  const [supervisionPrice, setSupervisionPrice] = useState(project?.supervisionPrice ?? 0);
-  const [supDiscountMode, setSupDiscountMode] = useState<"none" | "rate" | "percent">(project?.supervisionDiscountMode ?? "none");
-  const [supDiscountValue, setSupDiscountValue] = useState(project?.supervisionDiscountValue ?? 0);
+  /** The roles sold, each with its days, rate and discount (old projects are read through the legacy columns). */
+  const [lines, setLines] = useState<RoleLine[]>(() => (project ? resolvedLinesOf(project, legacyRoleMap(roles)) : []));
+  /** Only a discount on the whole project stays at project level; per-day discounts are per role. */
+  const [discountMode, setDiscountMode] = useState<"none" | "total">(project?.discountMode === "total" ? "total" : "none");
+  const [discountValue, setDiscountValue] = useState(project?.discountMode === "total" ? project.discountValue : 0);
   const [taxed, setTaxed] = useState(project?.taxed ?? false);
   const [taxRate, setTaxRate] = useState(project?.taxRate ?? 0);
   const [paymentDays, setPaymentDays] = useState(project?.paymentDays ?? 0);
@@ -317,7 +389,7 @@ export default function NewClientForm({ onSave, onClose, roles = [], projectType
   const applyBlueprint = (bpId: string) => {
     const bp = blueprints.find((b) => b.id === bpId);
     if (!bp) return;
-    const total = consultorDays + connectorDays + supervisionDays;
+    const total = lines.reduce((s, l) => s + l.days, 0);
     setPhases(bp.phases.map((ph) => ({
       id: uid(), name: ph.name,
       days: Math.round(((Number(ph.percent) || 0) / 100) * total),
@@ -339,25 +411,38 @@ export default function NewClientForm({ onSave, onClose, roles = [], projectType
   };
   const removeMember = (id: string) => setTeam((t) => t.filter((x) => x.id !== id));
 
-  const totalConsultancy = consultorDays + connectorDays;
-  const maxDays = totalConsultancy + supervisionDays;
+  const maxDays = lines.reduce((s, l) => s + l.days, 0);
+  const countedDays = lines.filter((l) => roleCounts(l.roleId, roles)).reduce((s, l) => s + l.days, 0);
   const phaseTotal = phases.reduce((s, p) => s + (Number(p.days) || 0), 0);
   const remaining = maxDays - phaseTotal;
-  const effRate = effectiveRate(pricePerDay, discountMode, discountValue);
-  const effSupRate = effectiveSupervisionRate(supervisionPrice, supDiscountMode, supDiscountValue);
-  const grossValue = totalConsultancy * effRate + supervisionDays * effSupRate;
+  const grossValue = lines.reduce((s, l) => s + l.days * lineRate(l), 0);
   const value = discountMode === "total" ? Math.max(0, grossValue - discountValue) : grossValue;
-  const listValue = totalConsultancy * pricePerDay + supervisionDays * supervisionPrice;
+  const listValue = lines.reduce((s, l) => s + l.days * l.rate, 0);
   const savings = listValue - value;
+  const effRate = maxDays > 0 ? value / maxDays : 0;
+  const listRate = maxDays > 0 ? listValue / maxDays : 0;
   const tax = taxed ? value * (taxRate / 100) : 0;
   const canSave = name.trim().length > 0;
   const roleName = (id: string) => roles.find((r) => r.id === id)?.name ?? "";
   const editingProject = !!project?.projectTypeId || !!project?.kickoffDate;
-  const service = projectTypes.find((t) => t.id === projectTypeId)?.name ?? "";
+  const svc = projectTypes.find((t) => t.id === projectTypeId);
+  const service = svc?.name ?? "";
+  const unit = "day" as const;
+  const svcRate = (roleId: string) => svc?.roles?.find((r) => r.roleId === roleId)?.price;
+  /** Picking a service on a project with no roles yet brings in the service's roles at their list price. */
+  const pickService = (id: string) => {
+    setProjectTypeId(id);
+    const s = projectTypes.find((t) => t.id === id);
+    if (!lines.length && s?.roles?.length) {
+      const ordered = [...s.roles].sort((a, b) => Number(b.isMain) - Number(a.isMain));
+      setLines(ordered.filter((r) => roles.some((x) => x.id === r.roleId))
+        .map((r) => ({ roleId: r.roleId, days: 0, rate: r.price, discountMode: "none" as const, discountValue: 0 })));
+    }
+  };
 
   // everything the form edits, to know when there are unsaved changes
-  const snapshot = JSON.stringify([name, legalName, vatNumber, projectTypeId, kickoffDate, signingDate, addr, contacts, consultorDays, connectorDays, pricePerDay,
-    discountMode, discountValue, supervisionDays, supervisionPrice, supDiscountMode, supDiscountValue, taxed, taxRate, paymentDays, phases, team]);
+  const snapshot = JSON.stringify([name, legalName, vatNumber, projectTypeId, kickoffDate, signingDate, addr, contacts, lines,
+    discountMode, discountValue, taxed, taxRate, paymentDays, phases, team]);
   const initial = useRef(snapshot);
   const dirty = snapshot !== initial.current;
 
@@ -402,11 +487,16 @@ export default function NewClientForm({ onSave, onClose, roles = [], projectType
         projectTypeId,
         kickoffDate,
         signingDate,
-        consultorDays, connectorDays, pricePerDay,
-        supervisionDays, supervisionPrice,
+        roleLines: lines.filter((l) => l.roleId),
+        ...(() => {
+          const c = legacyColumnsOf(lines, roles);
+          return {
+            consultorDays: c.consultor_days, connectorDays: c.connector_days, pricePerDay: c.price_per_day,
+            supervisionDays: 0, supervisionPrice: 0, supervisionDiscountMode: "none" as const, supervisionDiscountValue: 0,
+          };
+        })(),
         taxed, taxRate: taxed ? taxRate : 0, paymentDays,
         discountMode, discountValue: discountMode === "none" ? 0 : discountValue,
-        supervisionDiscountMode: supDiscountMode, supervisionDiscountValue: supDiscountMode === "none" ? 0 : supDiscountValue,
         phases, team,
         status: project?.status ?? "open",
         endDate: project?.endDate ?? "",
@@ -468,8 +558,8 @@ export default function NewClientForm({ onSave, onClose, roles = [], projectType
               </div>
             </div>
             <div className="pf-kpis">
-              <div className="pf-kpi" style={vars({ "--i": 0 })}><span>Days</span><b><Num v={maxDays} /></b><small>{totalConsultancy} cons. · {supervisionDays} sup.</small></div>
-              <div className="pf-kpi" style={vars({ "--i": 1 })}><span>Rate</span><b><Num v={effRate} /><em>€</em></b><small>{effRate !== pricePerDay ? `list ${eur(pricePerDay)}` : "per day"}</small></div>
+              <div className="pf-kpi" style={vars({ "--i": 0 })}><span>Days</span><b><Num v={maxDays} /></b><small>{lines.length ? `${lines.length} role${lines.length === 1 ? "" : "s"} · ${countedDays} count` : "no roles yet"}</small></div>
+              <div className="pf-kpi" style={vars({ "--i": 1 })}><span>Rate</span><b><Num v={effRate} /><em>€</em></b><small>{Math.round(effRate) !== Math.round(listRate) ? `list ${eur(listRate)}` : "per day, average"}</small></div>
               <div className="pf-kpi is-plan" style={vars({ "--i": 2 })}>
                 <span>Planned</span><b className={remaining < 0 ? "is-over" : ""}><Num v={phaseTotal} /><em>/ {maxDays}d</em></b>
                 <i className="pf-kpi-bar"><i style={{ width: `${planPct}%` }} className={remaining < 0 ? "is-over" : ""} /></i>
@@ -509,7 +599,7 @@ export default function NewClientForm({ onSave, onClose, roles = [], projectType
                       <Field label="Legal name"><input className="pf-input" value={legalName} onChange={(e) => setLegalName(e.target.value)} placeholder="Registered legal name" /></Field>
                       <Field label="VAT number"><input className="pf-input" value={vatNumber} onChange={(e) => setVatNumber(e.target.value)} placeholder="e.g. ESB12345678" /></Field>
                       <Field label="Service" wide>
-                        <Select value={projectTypeId} onChange={setProjectTypeId} options={projectTypes.map((t) => ({ value: t.id, label: t.name }))} placeholder="Select service" />
+                        <Select value={projectTypeId} onChange={pickService} options={projectTypes.map((t) => ({ value: t.id, label: t.name }))} placeholder="Select service" />
                       </Field>
                       <Field label="Kick-off"><DatePicker value={kickoffDate} onChange={setKickoff} /></Field>
                       <Field label="Signing"><DatePicker value={signingDate} onChange={setSigning} /></Field>
@@ -612,38 +702,17 @@ export default function NewClientForm({ onSave, onClose, roles = [], projectType
               {tab === "pricing" && (
                 <div className="pf-grid is-pricing">
                   <div className="pf-col">
-                    <Card icon="briefcase" tone="green" title="Consultancy" sub="Days sold and the day rate" i={0}>
-                      <div className="pf-fields is-3">
-                        <Field label="Consultor days"><NumField min="0" value={consultorDays} onChange={setConsultorDays} /></Field>
-                        <Field label="Connector days"><NumField min="0" value={connectorDays} onChange={setConnectorDays} /></Field>
-                        <Field label="Price / day"><div className="pf-unit"><NumField min="0" value={pricePerDay} onChange={setPricePerDay} /><i>€</i></div></Field>
-                      </div>
+                    <Card icon="briefcase" tone="green" title="Roles" sub="What was sold, role by role — each with its own rate and discount" i={0}>
+                      <RoleLinesEditor lines={lines} roles={roles} onChange={setLines} unit={unit} rateOf={svcRate} />
                       <div className="pf-disc">
-                        <span className="pf-label">Discount</span>
-                        <Chips value={discountMode} onChange={setDiscountMode} options={[
-                          { v: "none", label: "None" }, { v: "rate", label: "€ / day" }, { v: "percent", label: "% / day" }, { v: "total", label: "€ total" },
-                        ]} />
+                        <span className="pf-label">Discount on the whole project</span>
+                        <Chips value={discountMode} onChange={setDiscountMode} options={[{ v: "none", label: "None" }, { v: "total", label: "€ total" }]} />
                         <div className={`pf-disc-val ${discountMode !== "none" ? "is-on" : ""}`}>
-                          <div className="pf-unit"><NumField min="0" value={discountValue} onChange={setDiscountValue} disabled={discountMode === "none"} /><i>{discountMode === "percent" ? "%" : "€"}</i></div>
+                          <div className="pf-unit"><NumField min="0" value={discountValue} onChange={setDiscountValue} disabled={discountMode === "none"} /><i>€</i></div>
                         </div>
                       </div>
                     </Card>
-                    <Card icon="eye" tone="amber" title="Supervision" sub="Billed at its own rate" i={1}>
-                      <div className="pf-fields">
-                        <Field label="Days"><NumField min="0" value={supervisionDays} onChange={setSupervisionDays} /></Field>
-                        <Field label="Price / day"><div className="pf-unit"><NumField min="0" value={supervisionPrice} onChange={setSupervisionPrice} /><i>€</i></div></Field>
-                      </div>
-                      <div className="pf-disc">
-                        <span className="pf-label">Discount</span>
-                        <Chips value={supDiscountMode} onChange={setSupDiscountMode} options={[
-                          { v: "none", label: "None" }, { v: "rate", label: "€ / day" }, { v: "percent", label: "% / day" },
-                        ]} />
-                        <div className={`pf-disc-val ${supDiscountMode !== "none" ? "is-on" : ""}`}>
-                          <div className="pf-unit"><NumField min="0" value={supDiscountValue} onChange={setSupDiscountValue} disabled={supDiscountMode === "none"} /><i>{supDiscountMode === "percent" ? "%" : "€"}</i></div>
-                        </div>
-                      </div>
-                    </Card>
-                    <Card icon="clock" tone="blue" title="Terms" i={2}>
+                    <Card icon="clock" tone="blue" title="Terms" i={1}>
                       <div className="pf-terms">
                         <label className="pf-toggle"><Switch on={taxed} onChange={setTaxed} label="Taxed" />Taxed</label>
                         <div className={`pf-disc-val ${taxed ? "is-on" : ""}`}>
@@ -657,8 +726,10 @@ export default function NewClientForm({ onSave, onClose, roles = [], projectType
                   <aside className="pf-receipt" style={vars({ "--i": 3 })}>
                     <header><Ico n="receipt" s={16} /><b>Quote</b><small>live</small></header>
                     <dl>
-                      <div><dt>Consultancy <small>{totalConsultancy}d × {eur(effRate)}</small></dt><dd><Num v={totalConsultancy * effRate} suffix=" €" /></dd></div>
-                      <div><dt>Supervision <small>{supervisionDays}d × {eur(effSupRate)}</small></dt><dd><Num v={supervisionDays * effSupRate} suffix=" €" /></dd></div>
+                      {lines.length === 0 && <div><dt>No roles yet</dt><dd>0 €</dd></div>}
+                      {lines.map((l, k) => (
+                        <div key={`${l.roleId}-${k}`}><dt>{roleNameOf(l.roleId, roles)} <small>{l.days}d × {eur(lineRate(l))}</small></dt><dd><Num v={l.days * lineRate(l)} suffix=" €" /></dd></div>
+                      ))}
                       {discountMode === "total" && discountValue > 0 && <div className="is-disc"><dt>Discount on total</dt><dd>−{eur(Math.min(discountValue, grossValue))}</dd></div>}
                       {savings > 0 && <div className="is-save"><dt>Discount given</dt><dd>{eur(savings)}</dd></div>}
                       <div className="is-total"><dt>Total</dt><dd><Num v={value} suffix=" €" /></dd></div>

@@ -2,10 +2,10 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { useNavigate } from "react-router-dom";
-import type { Client, Project, ProjectType } from "./clientsTypes";
-import { effectiveRate, effectiveSupervisionRate, projectValue } from "./clientsTypes";
+import type { Client, Project, ProjectType, ClientRole } from "./clientsTypes";
+import { projectValue, signedOf, legacyRoleMap, resolvedLinesOf, lineRate, roleNameOf, roleCounts, totalDiscountOf } from "./clientsTypes";
 import { supabase } from "../../api/supabase";
-import ClientDirectory, { ContractDocs } from "./ClientDirectory";
+import ClientDirectory, { copyIntoClientFolders } from "./ClientDirectory";
 import MentionInput, { type MentionPerson } from "../../framework/MentionInput";
 import { addTask, toggleTask, updateTaskMeta, saveClientProducts, type PaymentSchedule, type TaskPriority, type TrackTask } from "../sales/sales/salesApi";
 import { loadProducts, type Product as CatalogProduct } from "../settings/catalogApi";
@@ -21,20 +21,27 @@ interface Props {
   projects: Project[];
   projectTypes: ProjectType[];
   usage: Record<string, { planned: number; done: number }>;
+  /** Every role, to name each project's role lines. */
+  roles?: ClientRole[];
   onOpenProject: (p: Project) => void;
   onNewProject: () => void;
   onDeleteProject: (id: string) => void;
   onClose: () => void;
 }
 
-type Tab = "overview" | "projects" | "contract" | "tasks" | "notes" | "docs";
+type Tab = "overview" | "deals" | "projects" | "contract";
 
 interface Note { id: string; body: string; mentions: string[]; author_id: string | null; created_at: string; src: "client" | "sale"; deal?: string | null; dealId?: string | null }
 interface ContactLog { id: string; contacted_at: string; channel: string | null; contact_name: string | null; reason: string | null; logged_by: string | null; }
-interface TrackFile { id: string; name: string; note: string | null; mime: string | null; storage_path: string; created_at: string; }
+interface TrackFile { id: string; tracking_id: string; name: string; note: string | null; mime: string | null; storage_path: string; created_at: string; size_bytes?: number | null; line_id?: string | null }
+/** A proposal sales generated on a deal (deal_proposals): a named scenario with its value and document. */
+interface DealProposal { id: string; tracking_id: string; name: string; is_main: boolean; total: number | null; file_id: string | null; created_at: string }
 interface Touch { at: string; kind: string; who: string; why: string }
 interface Person { key: string; id: string | null; name: string; position: string; email: string; phone: string; billing: boolean; crm: boolean; c: any | null }
-interface Deal { id: string; name: string; status: string | null }
+interface Deal {
+  id: string; name: string; status: string | null;
+  phase?: string | null; pipeline?: string | null; created_at?: string | null; close_date?: string | null; price?: number | null;
+}
 export type Line = Record<string, any> & { id: string; name: string };
 /** A task from one of the client's sales (tracking_tasks) or the client's own (client_tasks, src "client"). */
 type Task = TrackTask & { tracking_id: string; assignees: string[]; src?: "client" | "sale" };
@@ -218,6 +225,11 @@ const IC: Record<string, string> = {
   shrink: "M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7",
   euro: "M4 10h12M4 14h9M19 6a7.7 7.7 0 0 0-5.2-2A7.9 7.9 0 0 0 6 12c0 4.4 3.5 8 7.8 8 2 0 3.8-.8 5.2-2",
   flag: "M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1zM4 22v-7",
+  send: "M22 2 11 13M22 2l-7 20-4-9-9-4z",
+  deal: "M3 3v18h18M7 15l4-4 3 3 6-7",
+  download: "M12 3v12M7 10l5 5 5-5M5 21h14",
+  star: "M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z",
+  copy: "M20 9h-9a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2zM5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1",
 };
 const Ico = ({ n, s = 16 }: { n: string; s?: number }) => (
   <svg viewBox="0 0 24 24" width={s} height={s} fill="none" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -574,7 +586,7 @@ function AddLineForm({ clientId, persons, onCancel, onSaved }: {
 /* ============================== workspace ============================== */
 
 export default function ClientWorkspace({
-  client, projects, projectTypes, usage, onOpenProject, onNewProject, onDeleteProject, onClose,
+  client, projects, projectTypes, usage, roles = [], onOpenProject, onNewProject, onDeleteProject, onClose,
 }: Props) {
   const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>("overview");
@@ -593,7 +605,13 @@ export default function ClientWorkspace({
   const [notes, setNotes] = useState<Note[]>([]);
   const [saleNotes, setSaleNotes] = useState<Note[]>([]);
   const [contactLog, setContactLog] = useState<ContactLog[]>([]);
-  const [, setTrackFiles] = useState<TrackFile[]>([]);
+  const [trackFiles, setTrackFiles] = useState<TrackFile[]>([]);
+  const [proposals, setProposals] = useState<DealProposal[]>([]);
+  /** What already sits in the client's folders ("name|size" and bare names), to tell which sales files arrived. */
+  const [dirKeys, setDirKeys] = useState<{ sized: Set<string>; names: Set<string> }>({ sized: new Set(), names: new Set() });
+  const [dirRev, setDirRev] = useState(0);
+  const [copyBusy, setCopyBusy] = useState<string | null>(null);
+  const [copyMsg, setCopyMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [meetings, setMeetings] = useState<{ at: string; title: string }[]>([]);
   const [nextMeeting, setNextMeeting] = useState<{ at: string; title: string } | null>(null);
   const [calendar, setCalendar] = useState<Touch[]>([]);
@@ -728,7 +746,7 @@ export default function ClientWorkspace({
         const [co, links, trk] = await Promise.all([
           supabase.from("companies").select("*").eq("id", companyId).maybeSingle(),
           supabase.from("company_contacts").select("contact_id").eq("company_id", companyId),
-          supabase.from("trackings").select("id, deal_name, status, created_at").eq("company_id", companyId).order("created_at", { ascending: false }),
+          supabase.from("trackings").select("*").eq("company_id", companyId).order("created_at", { ascending: false }),
         ]);
         if (!alive) return;
         setCompany(co.data ?? null);
@@ -737,10 +755,30 @@ export default function ClientWorkspace({
           const { data } = await supabase.from("contacts").select("*").in("id", cids);
           if (alive) setCrmContacts(data ?? []);
         }
-        const dl: Deal[] = ((trk.data ?? []) as any[]).map((t) => ({ id: t.id, name: str(t.deal_name) || client.name, status: t.status ?? null }));
+        const trows = (trk.data ?? []) as any[];
+        const dl: Deal[] = trows.map((t) => ({
+          id: t.id, name: str(t.deal_name) || client.name, status: t.status ?? null, created_at: t.created_at ?? null,
+          close_date: t.close_date ?? null, price: t.product_price != null ? Number(t.product_price) : null,
+        }));
         setDeals(dl);
         const ids = dl.map((d) => d.id);
         if (!ids.length) return;
+        // where each deal stands: its pipeline and phase
+        const phaseIds = [...new Set(trows.map((t) => t.current_phase_id).filter(Boolean))];
+        const pipeIds = [...new Set(trows.map((t) => t.pipeline_id).filter(Boolean))];
+        void Promise.all([
+          phaseIds.length ? supabase.from("pipeline_phases").select("id, name").in("id", phaseIds) : Promise.resolve({ data: [] as any[] }),
+          pipeIds.length ? supabase.from("pipelines").select("id, name").in("id", pipeIds) : Promise.resolve({ data: [] as any[] }),
+        ]).then(([ph, pi]) => {
+          if (!alive) return;
+          const phN = new Map(((ph.data ?? []) as any[]).map((x) => [x.id, String(x.name)]));
+          const piN = new Map(((pi.data ?? []) as any[]).map((x) => [x.id, String(x.name)]));
+          const byId = new Map(trows.map((t) => [t.id, t]));
+          setDeals((xs) => xs.map((d) => ({ ...d, phase: phN.get(byId.get(d.id)?.current_phase_id) ?? null, pipeline: piN.get(byId.get(d.id)?.pipeline_id) ?? null })));
+        });
+        // the proposals sales generated (deal_proposals — missing until its SQL is run)
+        supabase.from("deal_proposals").select("*").in("tracking_id", ids).order("created_at", { ascending: false })
+          .then(({ data, error }) => { if (alive && !error) setProposals(((data ?? []) as any[]).map((p) => ({ ...p, total: p.total != null ? Number(p.total) : null }))); });
         const nowIso = new Date().toISOString();
         const [tf, mt, nx, tt, tn] = await Promise.all([
           supabase.from("tracking_files").select("*").in("tracking_id", ids),
@@ -779,13 +817,27 @@ export default function ClientWorkspace({
 
   /* ---- derived ---- */
   const unitOf = (p: Project) => (units[p.projectTypeId] === "hour" ? "h" : "d");
+  const legacy = useMemo(() => legacyRoleMap(roles), [roles]);
+  /** The roles sold on a project (legacy rows read as their real roles). */
+  const linesOf = (p: Project) => resolvedLinesOf(p, legacy);
+  /** Average day rate over every role, after each role's discount. */
+  const avgRate = (p: Project) => {
+    const ls = linesOf(p);
+    const d = ls.reduce((t, l) => t + l.days, 0);
+    return d > 0 ? ls.reduce((t, l) => t + l.days * lineRate(l), 0) / d : ls[0] ? lineRate(ls[0]) : 0;
+  };
+  /** One tooltip row per role: days and rate, marked when it doesn't count for billing. */
+  const roleTipRows = (p: Project, un: string): [string, React.ReactNode][] => linesOf(p).map((l) => [
+    `${roleNameOf(l.roleId, roles)}${roleCounts(l.roleId, roles) ? "" : " (doesn't count)"}`,
+    `${d2(l.days)}${un} · ${eur(lineRate(l))}${lineRate(l) !== l.rate ? ` (list ${eur(l.rate)})` : ""}`,
+  ]);
   const typeName = (id: string) => projectTypes.find((t) => t.id === id)?.name ?? "No service";
   const mentionPeople: MentionPerson[] = useMemo(
     () => Object.entries(people).map(([id, name]) => ({ id: `employee:${id}`, name, kind: "employee" as const })),
     [people]);
 
   const totals = useMemo(() => projects.reduce((acc, p) => {
-    const signed = p.consultorDays + p.connectorDays + p.supervisionDays;
+    const signed = signedOf(p);
     const u = usage[p.id] ?? { planned: 0, done: 0 };
     acc.signed += signed; acc.done += u.done; acc.booked += u.planned; acc.value += projectValue(p);
     return acc;
@@ -897,32 +949,130 @@ export default function ClientWorkspace({
     return g;
   }, [shownNotes, deals]);
 
-  /* ---- tabs + sliding ink ---- */
-  const TABS: { v: Tab; label: string; icon: string; n?: number; alert?: boolean }[] = [
-    { v: "overview", label: "Overview", icon: "overview" },
-    { v: "projects", label: "Projects", icon: "briefcase", n: projects.length },
-    { v: "contract", label: "Contract", icon: "contract", n: lines.length || undefined },
-    { v: "tasks", label: "Tasks", icon: "tasks", n: openTasks.length || undefined, alert: lateTasks.length > 0 },
-    { v: "notes", label: "Notes", icon: "note", n: allNotes.length || undefined },
-    { v: "docs", label: "Docs", icon: "folder" },
+  /* ---- deals: their proposals and documents ---- */
+  const isProposalFile = useCallback((f: TrackFile) => /^proposal\s*·/i.test(f.note ?? "") || proposals.some((p) => p.file_id === f.id), [proposals]);
+  const inFolders = (f: TrackFile) => {
+    const n = f.name.toLowerCase();
+    return f.size_bytes != null ? dirKeys.sized.has(`${n}|${f.size_bytes}`) || (!dirKeys.sized.size && dirKeys.names.has(n)) : dirKeys.names.has(n);
+  };
+  const dealView = useMemo(() => deals.map((d) => {
+    const files = trackFiles.filter((f) => f.tracking_id === d.id);
+    const props = proposals.filter((p) => p.tracking_id === d.id)
+      .sort((a, b) => Number(b.is_main) - Number(a.is_main) || b.created_at.localeCompare(a.created_at));
+    const linked = new Set(props.map((p) => p.file_id).filter(Boolean));
+    // proposal files with no proposal row (made before the table existed) still count as proposals
+    const looseProps = files.filter((f) => !linked.has(f.id) && /^proposal\s*·/i.test(f.note ?? ""));
+    const docs = files.filter((f) => !isProposalFile(f));
+    const main = props.find((p) => p.is_main) ?? null;
+    return {
+      d, props, looseProps, docs, main,
+      value: main?.total ?? (d.price || null),
+      tasksOpen: saleTasks.filter((t) => t.tracking_id === d.id && !t.done).length,
+      notesN: saleNotes.filter((n) => n.dealId === d.id).length,
+    };
+  }), [deals, trackFiles, proposals, saleTasks, saleNotes, isProposalFile]);
+  const fileById = useMemo(() => new Map(trackFiles.map((f) => [f.id, f])), [trackFiles]);
+  const proposalFiles = useMemo(() => dealView.flatMap((v) => [...v.props.map((p) => (p.file_id ? fileById.get(p.file_id) : undefined)), ...v.looseProps])
+    .filter((f): f is TrackFile => !!f), [dealView, fileById]);
+  const proposalsMissing = proposalFiles.filter((f) => !inFolders(f));
+  const wonDeals = deals.filter((d) => /won|handed|closed_won|client/i.test(String(d.status ?? ""))).length;
+
+  /* ---- side menu: the four sections, each with what is inside it ---- */
+  const TABS: { v: Tab; label: string; icon: string; hint: string; n?: number; alert?: boolean }[] = [
+    { v: "overview", label: "Overview", icon: "overview", hint: "People, tasks & notes", alert: lateTasks.length > 0 },
+    { v: "deals", label: "Deals", icon: "deal", hint: "Sales & proposals", n: deals.length || undefined },
+    { v: "projects", label: "Projects", icon: "briefcase", hint: "Services delivered", n: projects.length || undefined },
+    { v: "contract", label: "Contracts", icon: "contract", hint: "Signed & folders", n: lines.length || undefined },
   ];
-  const tabsRef = useRef<HTMLElement>(null);
-  const [ink, setInk] = useState<{ x: number; w: number } | null>(null);
+  const SUBS: Record<Tab, { k: string; label: string; n?: number }[]> = {
+    overview: [
+      { k: "glance", label: "At a glance" }, { k: "company", label: "Company" }, { k: "people", label: "Contacts", n: persons.length || undefined },
+      { k: "pulse", label: "Last contacted" }, { k: "tasks", label: "Tasks", n: openTasks.length || undefined }, { k: "notes", label: "Notes", n: allNotes.length || undefined },
+    ],
+    deals: deals.length > 1 ? deals.map((d) => ({ k: `deal-${d.id}`, label: d.name })) : [],
+    projects: [],
+    contract: [
+      { k: "summary", label: "Summary" }, { k: "docs", label: "Folders" },
+      { k: "products", label: "Signed products", n: lines.length || undefined }, { k: "services", label: "Service engagements", n: projects.length || undefined },
+    ],
+  };
+  const subs = SUBS[tab];
+  const [spy, setSpy] = useState("");
+  const sideRef = useRef<HTMLElement>(null);
+  const [ink, setInk] = useState<{ y: number; h: number } | null>(null);
   useLayoutEffect(() => {
-    const nav = tabsRef.current;
+    const nav = sideRef.current;
     if (!nav) return;
     const place = () => {
       const b = nav.querySelector<HTMLElement>(`[data-tab="${tab}"]`);
-      if (!b) return;
-      setInk({ x: b.offsetLeft, w: b.offsetWidth });
-      if (nav.scrollWidth > nav.clientWidth) nav.scrollTo({ left: b.offsetLeft - 24, behavior: reduceMotion() ? "auto" : "smooth" });
+      if (b) setInk({ y: b.offsetTop, h: b.offsetHeight });
     };
     place();
     const ro = new ResizeObserver(place);
     ro.observe(nav);
     return () => ro.disconnect();
   }, [tab]);
-  const go = (t: Tab) => { setTab(t); bodyRef.current?.scrollTo({ top: 0 }); };
+  /** Which section of the page is at the top of the scroll. */
+  const spyNow = () => {
+    const body = bodyRef.current;
+    if (!body || subs.length < 2) return;
+    const line = body.getBoundingClientRect().top + 110;
+    const present = subs.filter((x) => body.querySelector(`[data-sec="${x.k}"]`));
+    if (!present.length) return;
+    let cur = present[0].k, best = -Infinity;
+    present.forEach((x) => {
+      const y = body.querySelector<HTMLElement>(`[data-sec="${x.k}"]`)!.getBoundingClientRect().top;
+      if (y <= line && y > best) { best = y; cur = x.k; }
+    });
+    if (body.scrollTop > 0 && body.scrollTop + body.clientHeight >= body.scrollHeight - 4) cur = present[present.length - 1].k;
+    setSpy(cur);
+  };
+  const jump = (k: string) => {
+    const body = bodyRef.current;
+    const el = body?.querySelector<HTMLElement>(`[data-sec="${k}"]`);
+    if (!body || !el) return;
+    body.scrollTo({ top: el.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop - 14, behavior: reduceMotion() ? "auto" : "smooth" });
+    setSpy(k);
+  };
+  /** Go to a section of a page (switching page first when needed). */
+  const goSec = (t: Tab, k: string) => {
+    hideTip();
+    if (tab === t) { jump(k); return; }
+    setTab(t); setSpy(k);
+    window.setTimeout(() => jump(k), 80);
+  };
+  const go = (t: Tab) => { setTab(t); setSpy(SUBS[t][0]?.k ?? ""); bodyRef.current?.scrollTo({ top: 0, behavior: "auto" }); };
+
+  const openDeal = (id: string) => navigate(`/sales?tracking=${id}`);
+  const openSalesFile = async (f: TrackFile) => {
+    const { data, error } = await supabase.storage.from("tracking-files").createSignedUrl(f.storage_path, 60);
+    if (error || !data) { setCopyMsg({ ok: false, text: error?.message ?? "Could not open the file." }); return; }
+    window.open(data.signedUrl, "_blank");
+  };
+  /** Copies sales files into the client's folders: proposals to "Proposals", the rest to "Sales documents". */
+  const copyToFolders = async (fs: TrackFile[], busyKey: string) => {
+    if (!fs.length) return;
+    setCopyBusy(busyKey); setCopyMsg(null);
+    const res = await copyIntoClientFolders(client.id, fs.map((f) => ({
+      key: f.id, fromBucket: "tracking-files", fromPath: f.storage_path, name: f.name, mime: f.mime, size: f.size_bytes ?? null, note: f.note,
+      folder: isProposalFile(f) ? "Proposals" : "Sales documents",
+    })));
+    setCopyBusy(null);
+    const n = Object.keys(res.done).length;
+    setCopyMsg(res.errors.length ? { ok: false, text: res.errors.join(" · ") } : { ok: true, text: `${n} file${n === 1 ? "" : "s"} copied to the client's folders` });
+    setDirRev((v) => v + 1);
+  };
+  useEffect(() => {
+    let alive = true;
+    supabase.from("client_files").select("name, size_bytes").eq("client_id", client.id).then(({ data }) => {
+      if (!alive) return;
+      const sized = new Set<string>(), names = new Set<string>();
+      ((data ?? []) as any[]).forEach((f) => { const n = String(f.name).toLowerCase(); names.add(n); if (f.size_bytes != null) sized.add(`${n}|${f.size_bytes}`); });
+      setDirKeys({ sized, names });
+    });
+    return () => { alive = false; };
+  }, [client.id, dirRev]);
+  useEffect(() => { if (!copyMsg?.ok) return; const t = window.setTimeout(() => setCopyMsg(null), 4000); return () => window.clearTimeout(t); }, [copyMsg]);
 
   /* ---- actions ---- */
   const openCompany = () => co.id && navigate("/companies", { state: { focusCompanyId: co.id } });
@@ -1105,7 +1255,7 @@ export default function ClientWorkspace({
 
   /* ---- the company card: full width when opened, in the main column when closed ---- */
   const companyCard = (
-    <section className={`cw-card cw-co ${coOpen ? "is-open" : ""} ${coMoved ? "is-moved" : ""}`} style={{ ...vt("cw-co"), ...cssVars({ "--i": 4 }) }}>
+    <section data-sec="company" className={`cw-card cw-co ${coOpen ? "is-open" : ""} ${coMoved ? "is-moved" : ""}`} style={{ ...vt("cw-co"), ...cssVars({ "--i": 4 }) }}>
       <SecHead icon="building" tone="green" title="Company" sub={`${filled} of ${totalFacts} details filled`}>
         {co.id && <button className="cw-icon-btn" onClick={openCompany} aria-label="Open in Companies" {...tipOn(<TipCard title="Open in Companies" />)}><Ico n="out" s={15} /></button>}
         <button className="cw-ghost" onClick={() => { hideTip(); morph(() => { setCoMoved(true); setCoOpen((o) => !o); }); }} aria-expanded={coOpen}>
@@ -1189,28 +1339,67 @@ export default function ClientWorkspace({
                 </div>
               </div>
             </div>
-
-          </div>
-
-          <nav className="cw-tabs" ref={tabsRef} role="tablist">
-            {ink && <span className="cw-tabs-ink" style={{ transform: `translateX(${ink.x}px)`, width: ink.w }} aria-hidden="true" />}
-            {TABS.map((t, i) => (
-              <button key={t.v} data-tab={t.v} role="tab" aria-selected={tab === t.v}
-                className={tab === t.v ? "is-on" : ""} style={cssVars({ "--i": i })} onClick={() => { hideTip(); go(t.v); }}>
-                <Ico n={t.icon} s={15} />{t.label}
-                {t.n != null && <i className={t.alert ? "is-alert" : ""}>{t.n}</i>}
+            <div className="cw-kpis">
+              <div className="cw-kpi" style={cssVars({ "--i": 0 })} {...tipOn(<TipCard title="Signed with this client" rows={[["Projects", eur(totals.value)], ["Products", eur(contractValue)]]} />)}>
+                <span className="cw-kpi-k">Signed</span>
+                <span className="cw-kpi-v is-neon">{eur(totals.value + contractValue)}</span>
+              </div>
+              <div className="cw-kpi" style={cssVars({ "--i": 1 })}>
+                <span className="cw-kpi-k">Recurring</span>
+                <span className="cw-kpi-v">{eur(recurringYear)}<em>/yr</em></span>
+              </div>
+              <button className="cw-kpi is-btn" style={cssVars({ "--i": 2 })} onClick={() => go("deals")}>
+                <span className="cw-kpi-k">Deals</span>
+                <span className="cw-kpi-v">{deals.length}{wonDeals ? <em>{wonDeals} won</em> : null}</span>
               </button>
-            ))}
-          </nav>
+            </div>
+          </div>
         </header>
 
+        <div className="cw-layout">
+          {/* ---------- side menu ---------- */}
+          <aside className="cw-side">
+            <span className="cw-side-k">Client</span>
+            <nav className="cw-side-nav" ref={sideRef} role="tablist" aria-orientation="vertical">
+              {ink && <span className="cw-side-ink" style={{ transform: `translateY(${ink.y}px)`, height: ink.h }} aria-hidden="true" />}
+              {TABS.map((t, i) => (
+                <div className={`cw-side-grp ${tab === t.v ? "is-on" : ""}`} key={t.v}>
+                  <button data-tab={t.v} role="tab" title={t.label} aria-selected={tab === t.v} className={`cw-side-item ${tab === t.v ? "is-on" : ""}`}
+                    style={cssVars({ "--i": i })} onClick={() => { hideTip(); go(t.v); }}>
+                    <i className="cw-side-ico"><Ico n={t.icon} s={15} /></i>
+                    <span className="cw-side-t"><b>{t.label}</b><small>{t.hint}</small></span>
+                    {t.alert ? <em className="is-alert" aria-label="Overdue tasks" /> : t.n != null ? <em>{t.n}</em> : null}
+                  </button>
+                  {tab === t.v && SUBS[t.v].length > 1 && (
+                    <div className="cw-side-subs">
+                      {SUBS[t.v].map((x, j) => (
+                        <button key={x.k} className={(spy || SUBS[t.v][0].k) === x.k ? "is-on" : ""} style={cssVars({ "--i": j })} onClick={() => goSec(t.v, x.k)}>
+                          <i /><span>{x.label}</span>{x.n != null && <em>{x.n}</em>}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </nav>
+            <div className="cw-side-foot">
+              <button className={`cw-side-health is-${health}`} onClick={() => goSec("overview", "pulse")}>
+                <i />
+                <span><b>{healthLabel}</b><small>{last ? `Last contact ${ago(last.at)}` : "No contact on record"}</small></span>
+              </button>
+              {nextMeeting && (
+                <p className="cw-side-next"><Ico n="cal" s={13} /><span>{nextMeeting.title || "Meeting"}<small>{fmt(nextMeeting.at)}</small></span></p>
+              )}
+            </div>
+          </aside>
+
         {/* ---------- body ---------- */}
-        <div className={`cw-body ${tab === "docs" ? "is-fixed" : ""}`} ref={bodyRef} onScroll={hideTip}>
+        <div className="cw-body" ref={bodyRef} onScroll={() => { hideTip(); spyNow(); }}>
           <div className="cw-panel" key={tab}>
             {/* ===== OVERVIEW ===== */}
             {tab === "overview" && (
               <div className="cw-ov">
-                <div className="cw-snap" style={vt("cw-snap")}>
+                <div className="cw-snap" data-sec="glance" style={vt("cw-snap")}>
                   <button className="cw-tile" data-tone="green" style={cssVars({ "--i": 0 })} onClick={() => go("projects")}
                     {...tipOn(<TipCard title="Projects" rows={projRows((p) => `${p.status || "open"} · ${eur(projectValue(p))}`)} />)}>
                     <span className="cw-tile-top"><span className="cw-tile-ico"><Ico n="briefcase" s={15} /></span><span className="cw-tile-k">Projects</span></span>
@@ -1235,14 +1424,14 @@ export default function ClientWorkspace({
                     <b className="cw-tile-v"><Num v={contractValue} /><small> €</small></b>
                     <span className="cw-tile-sub">{activeLines.length ? `${activeLines.length} signed product${activeLines.length === 1 ? "" : "s"}${nextRenewal ? ` · renews ${fmtD(nextRenewal.end)}` : ""}` : "Nothing signed yet"}</span>
                   </button>
-                  <button className={`cw-tile ${lateTasks.length ? "is-alert" : ""}`} data-tone="amber" style={cssVars({ "--i": 3 })} onClick={() => go("tasks")}
+                  <button className={`cw-tile ${lateTasks.length ? "is-alert" : ""}`} data-tone="amber" style={cssVars({ "--i": 3 })} onClick={() => jump("tasks")}
                     {...tipOn(openTasks.length
                       ? <TipCard title={`${openTasks.length} open task${openTasks.length === 1 ? "" : "s"}`} rows={openTasks.slice(0, 5).map((t) => [plain(t.title).slice(0, 38), dueInfo(t.due_at)?.label ?? "No date"] as [string, React.ReactNode])} />
                       : <TipCard title="No open tasks" />)}>
                     <span className="cw-tile-top"><span className="cw-tile-ico"><Ico n="tasks" s={15} /></span><span className="cw-tile-k">Tasks</span></span>
                     <b className="cw-tile-v"><Num v={openTasks.length} /><small> open{lateTasks.length ? <em> · {lateTasks.length} late</em> : null}</small></b>
                   </button>
-                  <button className="cw-tile" data-tone="blue" style={cssVars({ "--i": 4 })} onClick={() => go("notes")}
+                  <button className="cw-tile" data-tone="blue" style={cssVars({ "--i": 4 })} onClick={() => jump("notes")}
                     {...tipOn(allNotes[0] ? <TipCard title={people[allNotes[0].author_id ?? ""] ?? "Note"} sub={`${fmt(allNotes[0].created_at)} · ${ago(allNotes[0].created_at)}`}>{plain(allNotes[0].body)}</TipCard> : null)}>
                     <span className="cw-tile-top"><span className="cw-tile-ico"><Ico n="note" s={15} /></span><span className="cw-tile-k">Latest note</span></span>
                     <span className="cw-tile-note">{allNotes[0] ? plain(allNotes[0].body) : "No notes yet"}</span>
@@ -1253,7 +1442,7 @@ export default function ClientWorkspace({
                 <div className="cw-ov-cols">
                   <div className="cw-ov-main">
                     {!coOpen && companyCard}
-                    <section className="cw-card cw-people" style={{ ...vt("cw-people"), ...cssVars({ "--i": 6 }) }}>
+                    <section data-sec="people" className="cw-card cw-people" style={{ ...vt("cw-people"), ...cssVars({ "--i": 6 }) }}>
                       <SecHead icon="users" tone="blue" title="Contacts"
                         sub={`${persons.length} ${persons.length === 1 ? "person" : "people"}${persons.some((p) => p.billing) ? ` · ${persons.filter((p) => p.billing).length} billing` : ""}`}>
                         {persons.length > PEOPLE_LIMIT && (
@@ -1307,7 +1496,7 @@ export default function ClientWorkspace({
                   </div>
 
                   <div className="cw-ov-side">
-                    <section ref={pulseRef} className={`cw-card cw-pulse is-${health}`} style={{ ...vt("cw-pulse"), ...cssVars({ "--i": 5 }) }}>
+                    <section ref={pulseRef} data-sec="pulse" className={`cw-card cw-pulse is-${health}`} style={{ ...vt("cw-pulse"), ...cssVars({ "--i": 5 }) }}>
                       <SecHead icon="pulse" tone="teal" title="Last contacted" sub={touches.length ? `${touches.length} touchpoint${touches.length === 1 ? "" : "s"}` : "Nothing on record yet"}>
                         <button className="cw-btn-primary is-sm" onClick={() => (logOpen ? setLogOpen(false) : startLog())}>
                           <Ico n={logOpen ? "x" : "plus"} s={14} />{logOpen ? "Cancel" : "Log"}
@@ -1375,6 +1564,276 @@ export default function ClientWorkspace({
                     </section>
                   </div>
                 </div>
+
+                <section className="cw-zone" data-sec="tasks" data-tone="amber" style={cssVars({ "--i": 7 })}>
+                  <header className="cw-zone-h">
+                    <span className="cw-zone-ico"><Ico n="tasks" s={17} /></span>
+                    <div><h3>Tasks</h3><small>{openTasks.length ? `${openTasks.length} open${lateTasks.length ? ` · ${lateTasks.length} overdue` : ""}` : "Nothing open"} · the client's own and those from sales</small></div>
+                  </header>
+                <div className="cw-stack">
+                  <div className="cw-tstats">
+                    {[
+                      { k: "Open", v: openTasks.length, tone: "green" },
+                      { k: "Overdue", v: lateTasks.length, tone: "red" },
+                      { k: "This week", v: openTasks.filter((t) => { const d = dueInfo(t.due_at); return !!d && d.n >= 0 && d.n <= 7; }).length, tone: "amber" },
+                      { k: "Done", v: tasks.length - openTasks.length, tone: "blue" },
+                    ].map((x, i) => (
+                      <div className="cw-tstat" data-tone={x.tone} key={x.k} style={cssVars({ "--i": i })}><b><Num v={x.v} /></b><span>{x.k}</span></div>
+                    ))}
+                  </div>
+
+                  {(
+                    <section className={`cw-card cw-tadd ${taskDraft.trim() ? "is-typing" : ""}`}>
+                      <div className="cw-tadd-row">
+                        <span className="cw-tadd-ico"><Ico n="plus" s={15} /></span>
+                        <input value={taskDraft} placeholder="Add a task for this client…" onChange={(e) => setTaskDraft(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === "Enter" && !taskBusy) void createTask(); }} />
+                        <button className="cw-btn-primary is-sm" disabled={!taskDraft.trim() || taskBusy} onClick={createTask}>{taskBusy ? "Adding…" : "Add"}</button>
+                      </div>
+                      <div className="cw-reveal">
+                        <div className="cw-reveal-in">
+                          <div className="cw-tadd-opts">
+                            <div className="cw-pri">
+                              {PRI.map((p) => <button key={p} data-p={p} className={taskPri === p ? "is-on" : ""} onClick={() => setTaskPri(p)}><i />{p}</button>)}
+                            </div>
+                            <span className="cw-tadd-date"><DatePicker value={taskDue} onChange={setTaskDue} placeholder="Due date" /></span>
+                            <span className="cw-tadd-deal"><Select size="sm" aria-label="Where the task goes" value={taskDeal} onChange={setTaskDeal}
+                              options={[{ value: "client", label: "Client", hint: "General" }, ...deals.map((d) => ({ value: d.id, label: d.name, hint: "Sale" }))]} /></span>
+                          </div>
+                        </div>
+                      </div>
+                      {taskErr && <p className="cw-err">{taskErr}</p>}
+                    </section>
+                  )}
+
+                  <div className="cw-toolbar">
+                    <Seg value={taskFilter} onChange={setTaskFilter} options={[
+                      { v: "open", label: "Open", n: openTasks.length },
+                      { v: "late", label: "Overdue", n: lateTasks.length },
+                      { v: "done", label: "Done", n: tasks.length - openTasks.length },
+                      { v: "all", label: "All", n: tasks.length },
+                    ]} />
+                    <Seg value={taskSrc} onChange={setTaskSrc} options={[
+                      { v: "all", label: "Everything" },
+                      { v: "client", label: "Client", n: tasks.filter((t) => t.src === "client").length },
+                      { v: "sale", label: "From sales", n: tasks.filter((t) => t.src !== "client").length },
+                    ]} />
+                  </div>
+
+                  {shownTasks.length === 0 ? (
+                    <div className="cw-empty is-big"><Ico n="tasks" s={24} /><p>{taskFilter === "late" ? "Nothing overdue." : taskFilter === "done" ? "No finished tasks yet." : tasks.length ? "All caught up." : "No tasks for this client yet."}</p></div>
+                  ) : (
+                    <>{sources.map((src) => {
+                      if (taskSrc !== "all" && (src.key === "client") !== (taskSrc === "client")) return null;
+                      const list = shownTasks.filter((t) => (src.key === "client" ? t.src === "client" : t.src !== "client" && t.tracking_id === src.key));
+                      if (!list.length) return null;
+                      const open = list.filter((t) => !t.done).length;
+                      return (
+                        <div className={`cw-sgroup ${src.key === "client" ? "is-client" : "is-sale"}`} key={src.key}>
+                          <h4 className="cw-sgroup-h">
+                            <span className="cw-sgroup-ico"><Ico n={src.key === "client" ? "briefcase" : "flag"} s={13} /></span>
+                            <b>{src.title}</b><em>{src.sub}</em>
+                            <i>{taskFilter === "done" ? `${list.length} done` : `${open} open`}</i>
+                          </h4>
+                    <ul className="cw-tasks">
+                      {list.map((t, i) => {
+                        const due = dueInfo(t.due_at);
+                        return (
+                          <li key={t.id} className={`cw-task ${t.done ? "is-done" : ""}`} data-p={t.priority} style={cssVars({ "--i": i })}
+                            {...tipOn(<TipCard title={plain(t.title)}
+                              sub={[t.priority !== "normal" ? `${t.priority} priority` : "", t.status === "in_progress" ? "in progress" : t.status === "blocked" ? "blocked" : ""].filter(Boolean).join(" · ") || undefined}
+                              rows={[
+                                ["Due", t.due_at ? `${fmt(t.due_at)}${due && !t.done ? ` · ${due.label}` : ""}` : ""], ["Deal", dealName(t.tracking_id)],
+                                ["Progress", t.kind === "process" ? `${t.progress ?? 0}%` : ""],
+                                ["Assigned", t.assignees.map((id) => people[id]).filter(Boolean).join(", ")],
+                                ["Created", t.created_at ? `${fmt(t.created_at)}${t.created_by && people[t.created_by] ? ` by ${people[t.created_by]}` : ""}` : ""],
+                              ]}>{t.description ? plain(String(t.description)) : null}</TipCard>)}>
+                            <button className="cw-check" onClick={() => flipTask(t)} aria-pressed={t.done} aria-label={t.done ? "Mark as open" : "Mark as done"}>
+                              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+                            </button>
+                            <p className="cw-task-title">{renderNoteBody(t.title)}</p>
+                            {t.src !== "client" && <span className="cw-badge is-violet">Sales</span>}
+                            {t.kind === "process" && !t.done && <span className="cw-tprog"><span><i style={{ width: `${t.progress ?? 0}%` }} /></span></span>}
+                            {due && !t.done && <span className={`cw-due is-${due.tone}`}>{due.label}</span>}
+                            <span className="cw-task-people">{t.assignees.slice(0, 3).map((id) => <span key={id}><Avatar name={people[id] ?? "?"} size={22} /></span>)}</span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                        </div>
+                      );
+                    })}</>
+                  )}
+                </div>
+                </section>
+
+                <section className="cw-zone" data-sec="notes" data-tone="blue" style={cssVars({ "--i": 8 })}>
+                  <header className="cw-zone-h">
+                    <span className="cw-zone-ico"><Ico n="note" s={17} /></span>
+                    <div><h3>Notes</h3><small>{allNotes.length ? `${allNotes.length} note${allNotes.length === 1 ? "" : "s"}${saleNotes.length ? ` · ${saleNotes.length} from sales` : ""}` : "Nothing written yet"}</small></div>
+                  </header>
+                <div className="cw-notes-wrap">
+                  <section className="cw-card cw-composer">
+                    <div className="cw-composer-head">
+                      {me && <Avatar name={people[me] ?? "Me"} size={34} />}
+                      <div className="cw-note-add">
+                        <MentionInput value={noteDraft} onChange={setNoteDraft} people={mentionPeople}
+                          placeholder="Write a note… type @ to tag someone" multiline className="cw-mention" />
+                      </div>
+                    </div>
+                    <div className={`cw-composer-foot ${noteDraft.trim() ? "is-on" : ""}`}>
+                      <div><button className="cw-btn-primary is-sm" disabled={!noteDraft.trim()} onClick={addNote}><Ico n="note" s={14} />Add note</button></div>
+                    </div>
+                    {noteErr && <p className="cw-err">{noteErr}</p>}
+                  </section>
+
+                  <div className="cw-toolbar">
+                    <Seg value={noteFilter} onChange={setNoteFilter} options={[
+                      { v: "all", label: "All", n: allNotes.length },
+                      { v: "client", label: "Client", n: notes.length },
+                      { v: "sale", label: "From sales", n: saleNotes.length },
+                    ]} />
+                    <label className="cw-search"><Ico n="search" s={14} /><input value={noteQ} placeholder="Search notes" onChange={(e) => setNoteQ(e.target.value)} /></label>
+                  </div>
+
+                  {noteGroups.length === 0 ? (
+                    <div className="cw-empty is-big"><Ico n="note" s={24} /><p>{allNotes.length ? "No notes match." : "No notes yet. Write the first one above."}</p></div>
+                  ) : noteGroups.map((g) => (
+                    <div className={`cw-ngroup cw-sgroup ${g.key === "client" ? "is-client" : "is-sale"}`} key={g.key}>
+                      <h4 className="cw-sgroup-h">
+                        <span className="cw-sgroup-ico"><Ico n={g.key === "client" ? "briefcase" : "flag"} s={13} /></span>
+                        <b>{g.label}</b><em>{g.sub}</em><i>{g.items.length} note{g.items.length === 1 ? "" : "s"}</i>
+                      </h4>
+                      <ol className="cw-nlist">
+                        {g.items.map((n, i) => {
+                          const who = people[n.author_id ?? ""] ?? (n.src === "sale" ? "Sales" : "Unknown");
+                          return (
+                            <li key={`${n.src}-${n.id}`} className={`cw-note is-${n.src}`} style={cssVars({ "--i": i })}>
+                              <Avatar name={who} size={32} />
+                              <div className="cw-note-card">
+                                <div className="cw-note-top">
+                                  <b>{who}</b>
+                                  <time {...tipOn(<TipCard title={toDate(n.created_at).toLocaleString(undefined, { dateStyle: "full", timeStyle: "short" })}
+                                    sub={n.src === "sale" ? `From the sale${n.deal ? ` · ${n.deal}` : ""}` : n.mentions.length ? `Tagged ${n.mentions.map((m) => people[m]).filter(Boolean).join(", ")}` : undefined} />)}>
+                                    {ago(n.created_at)}
+                                  </time>
+                                  {n.src === "sale" && <span className="cw-badge is-violet">Sales</span>}
+                                  {n.src === "client" && n.author_id && n.author_id === me && (
+                                    confirmNote === n.id ? (
+                                      <span className="cw-note-confirm">Delete?<button className="is-yes" onClick={() => deleteNote(n.id)}>Yes</button><button onClick={() => setConfirmNote(null)}>No</button></span>
+                                    ) : (
+                                      <button className="cw-note-del" onClick={() => setConfirmNote(n.id)} aria-label="Delete note"><Ico n="trash" s={13} /></button>
+                                    )
+                                  )}
+                                </div>
+                                <p>{renderNoteBody(n.body)}</p>
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ol>
+                    </div>
+                  ))}
+                </div>
+                </section>
+              </div>
+            )}
+
+            {/* ===== DEALS ===== */}
+            {tab === "deals" && (
+              <div className="cw-stack">
+                <div className="cw-toolbar cw-deals-bar">
+                  <p className="cw-deals-lead">
+                    <b>{deals.length} deal{deals.length === 1 ? "" : "s"}</b>
+                    <span>{(() => { const n = dealView.reduce((t, v) => t + v.props.length + v.looseProps.length, 0); return `${n} proposal${n === 1 ? "" : "s"} sent`; })()} · a deal's main proposal is what it sold</span>
+                  </p>
+                  {proposalsMissing.length > 0 && (
+                    <button className="cw-btn-primary is-sm" disabled={copyBusy === "all"} onClick={() => void copyToFolders(proposalsMissing, "all")}>
+                      <Ico n="copy" s={14} />{copyBusy === "all" ? "Copying…" : `Copy ${proposalsMissing.length} proposal${proposalsMissing.length === 1 ? "" : "s"} to the folders`}
+                    </button>
+                  )}
+                </div>
+                {copyMsg && <p className={copyMsg.ok ? "cw-okmsg" : "cw-err"}>{copyMsg.text}</p>}
+                {deals.length === 0 ? (
+                  <div className="cw-empty is-big"><Ico n="deal" s={24} /><p>{loaded ? (co.id ? "No sales deals for this company." : "This client isn't linked to a CRM company, so it has no deals.") : "Loading deals…"}</p></div>
+                ) : dealView.map((v, i) => {
+                  const st = String(v.d.status ?? "open").toLowerCase();
+                  const tone = /won|handed|client/.test(st) ? "won" : /lost|cancel/.test(st) ? "lost" : /paused|hold/.test(st) ? "hold" : "open";
+                  const stLabel = st === "paused" ? "On hold" : st.charAt(0).toUpperCase() + st.slice(1).replace(/_/g, " ");
+                  const fileRow = (f: TrackFile, extra?: React.ReactNode) => {
+                    const there = inFolders(f);
+                    return (
+                      <div className="cw-dfile" key={f.id}>
+                        <button className="cw-dfile-open" onClick={() => void openSalesFile(f)} {...tipOn(<TipCard title={f.name} sub={[fmt(f.created_at), f.note ?? ""].filter(Boolean).join(" · ")} />)}>
+                          <span className="cw-dfile-ico" data-k={(f.name.split(".").pop() ?? "").slice(0, 4).toUpperCase()}><Ico n="file" s={14} /></span>
+                          <span className="cw-dfile-name">{extra ?? f.name}</span>
+                          <Ico n="download" s={13} />
+                        </button>
+                        {there ? <span className="cw-dfile-in" {...tipOn(<TipCard title="Already in the client's folders" />)}><Ico n="check" s={12} />In folders</span>
+                          : <button className="cw-dfile-copy" disabled={copyBusy === f.id} onClick={() => void copyToFolders([f], f.id)}>
+                            <Ico n="copy" s={12} />{copyBusy === f.id ? "Copying…" : "To folders"}
+                          </button>}
+                      </div>
+                    );
+                  };
+                  return (
+                    <article key={v.d.id} className="cw-deal" data-sec={`deal-${v.d.id}`} data-st={tone} style={cssVars({ "--i": i })}>
+                      <header className="cw-deal-h">
+                        <span className="cw-deal-ico"><Ico n={tone === "won" ? "star" : "flag"} s={17} /></span>
+                        <div className="cw-deal-id">
+                          <h4>{v.d.name}</h4>
+                          <small>{[v.d.pipeline, v.d.phase].filter(Boolean).join(" · ") || "Sales deal"}</small>
+                        </div>
+                        <span className={`cw-dstat is-${tone}`}><i />{stLabel}</span>
+                        <div className="cw-deal-val">
+                          <b>{v.value != null ? eur(v.value) : "—"}</b>
+                          <small>{v.main ? `Main: ${v.main.name}` : "Deal value"}</small>
+                        </div>
+                        <button className="cw-icon-btn" onClick={() => openDeal(v.d.id)} aria-label="Open in Sales" {...tipOn(<TipCard title="Open in Sales" />)}><Ico n="out" s={15} /></button>
+                      </header>
+                      <div className="cw-deal-facts">
+                        {v.d.created_at && <span><Ico n="cal" s={12} />Opened {fmt(v.d.created_at)}</span>}
+                        {v.d.close_date && <span><Ico n="check" s={12} />Closed {fmt(v.d.close_date)}</span>}
+                        <button onClick={() => goSec("overview", "tasks")}><Ico n="tasks" s={12} />{v.tasksOpen} open task{v.tasksOpen === 1 ? "" : "s"}</button>
+                        <button onClick={() => goSec("overview", "notes")}><Ico n="note" s={12} />{v.notesN} note{v.notesN === 1 ? "" : "s"}</button>
+                      </div>
+                      <div className="cw-deal-grid">
+                        <section className="cw-deal-col" data-tone="amber">
+                          <h5><Ico n="send" s={13} />Proposals<i>{v.props.length + v.looseProps.length}</i></h5>
+                          {v.props.length + v.looseProps.length === 0 ? <p className="cw-deal-empty">No proposals generated on this deal.</p> : (
+                            <div className="cw-dprops">
+                              {v.props.map((pr) => {
+                                const f = pr.file_id ? fileById.get(pr.file_id) : undefined;
+                                return (
+                                  <div className={`cw-dprop ${pr.is_main ? "is-main" : ""}`} key={pr.id}>
+                                    <div className="cw-dprop-top">
+                                      <b>{pr.name}</b>
+                                      {pr.is_main && <span className="cw-dprop-main"><Ico n="star" s={11} />Main</span>}
+                                      <em>{pr.total != null ? eur(pr.total) : ""}</em>
+                                    </div>
+                                    {f ? fileRow(f) : <p className="cw-deal-empty is-sm">No document generated yet</p>}
+                                  </div>
+                                );
+                              })}
+                              {v.looseProps.map((f) => (
+                                <div className="cw-dprop" key={f.id}>
+                                  <div className="cw-dprop-top"><b>{(f.note ?? "").replace(/^proposal\s*·\s*/i, "") || "Proposal"}</b></div>
+                                  {fileRow(f)}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </section>
+                        <section className="cw-deal-col" data-tone="blue">
+                          <h5><Ico n="file" s={13} />Documents<i>{v.docs.length}</i></h5>
+                          {v.docs.length === 0 ? <p className="cw-deal-empty">No documents shared from this deal.</p> : (
+                            <div className="cw-dfiles">{v.docs.map((f) => fileRow(f))}</div>
+                          )}
+                        </section>
+                      </div>
+                    </article>
+                  );
+                })}
               </div>
             )}
 
@@ -1394,7 +1853,7 @@ export default function ClientWorkspace({
                 ) : (
                   <div className="cw-proj-grid">
                     {filteredProjects.map((p, i) => {
-                      const days = p.consultorDays + p.connectorDays + p.supervisionDays;
+                      const days = signedOf(p);
                       const u = usage[p.id] ?? { planned: 0, done: 0 };
                       const pl = +(days - u.planned - u.done).toFixed(2);
                       const pct = (n: number) => (days > 0 ? Math.min(100, (n / days) * 100) : 0);
@@ -1403,7 +1862,7 @@ export default function ClientWorkspace({
                       const s = p.kickoffDate || p.signingDate;
                       const elapsed = s && p.endDate ? clamp((Date.now() - toDate(s).getTime()) / Math.max(1, toDate(p.endDate).getTime() - toDate(s).getTime())) : null;
                       const C = 2 * Math.PI * 26;
-                      const rate = effectiveRate(p.pricePerDay, p.discountMode, p.discountValue);
+                      const rate = avgRate(p);
                       const un = unitOf(p);
                       return (
                         <article key={p.id} className={`cw-proj ${closed ? "is-closed" : ""} ${pl < 0 ? "is-over" : ""}`} style={cssVars({ "--i": i })}
@@ -1413,7 +1872,7 @@ export default function ClientWorkspace({
                             ["Used", `${d2(u.done)}${un}`], ["Booked", `${d2(u.planned)}${un}`], ["Left", `${d2(pl)}${un}`], ["Signed", `${d2(days)}${un}`],
                             ["Kick-off", p.kickoffDate ? fmt(p.kickoffDate) : ""], ["End", p.endDate ? fmt(p.endDate) : ""],
                             ["Time elapsed", elapsed != null ? `${Math.round(elapsed * 100)}%` : ""],
-                            ["Rate", `${eur(rate)} / ${un === "h" ? "hour" : "day"}`], ["Team", (p.team ?? []).map((m) => m.name).filter(Boolean).join(", ")],
+                            ["Rate", `${eur(rate)} / ${un === "h" ? "hour" : "day"}${linesOf(p).length > 1 ? " avg." : ""}`], ...roleTipRows(p, un), ["Team", (p.team ?? []).map((m) => m.name).filter(Boolean).join(", ")],
                           ]} />)}>
                           <header className="cw-proj-top">
                             <div className="cw-proj-ring">
@@ -1462,7 +1921,7 @@ export default function ClientWorkspace({
             {/* ===== CONTRACT ===== */}
             {tab === "contract" && (
               <div className="cw-stack">
-                <div className="cw-ckpis">
+                <div className="cw-ckpis" data-sec="summary">
                   {[
                     { k: "Engagement", v: totals.value, sub: "€ in projects", icon: "briefcase", tone: "green", rows: projRows((p) => eur(projectValue(p))) },
                     { k: "Recurring", v: recurringYear, sub: "€ per year", icon: "repeat", tone: "violet", rows: activeLines.filter((l) => l.recurring).map((l) => [l.name, eur(lineAnnual(l))] as [string, React.ReactNode]) },
@@ -1481,12 +1940,20 @@ export default function ClientWorkspace({
                   </div>
                 </div>
 
-                <section className="cw-card cw-cdocs-card">
-                  <SecHead icon="folder" tone="violet" title="Contract documents" sub="Drop PDFs, Word files or anything else — they're kept for this client" />
-                  <ContractDocs clientId={client.id} tenantId={tenantId} />
+                <section className="cw-card cw-dir-card" data-sec="docs">
+                  <SecHead icon="folder" tone="violet" title="Folders" sub="Contracts, proposals and everything filed for this client — sales documents land here at handoff">
+                    {proposalsMissing.length > 0 && (
+                      <button className="cw-ghost" disabled={copyBusy === "all"} onClick={() => void copyToFolders(proposalsMissing, "all")}
+                        {...tipOn(<TipCard title="Proposals not in the folders yet" rows={proposalsMissing.map((f) => [f.name, deals.find((d) => d.id === f.tracking_id)?.name ?? ""] as [string, React.ReactNode])} />)}>
+                        <Ico n="copy" s={14} />{copyBusy === "all" ? "Copying…" : `Bring ${proposalsMissing.length} proposal${proposalsMissing.length === 1 ? "" : "s"} from sales`}
+                      </button>
+                    )}
+                  </SecHead>
+                  {copyMsg && <p className={copyMsg.ok ? "cw-okmsg" : "cw-err"}>{copyMsg.text}</p>}
+                  <div className="cw-dir-box"><ClientDirectory key={dirRev} clientId={client.id} tenantId={tenantId} /></div>
                 </section>
 
-                <section className="cw-card">
+                <section className="cw-card" data-sec="products">
                   <SecHead icon="contract" tone="violet" title="Signed products" sub={lines.length ? `${activeLines.length} active` : "Added when a deal is won, or by hand"}>
                     {lines.length > 0 && (
                       <button className="cw-btn-primary is-sm" onClick={() => setAddLine((v) => !v)}><Ico n={addLine ? "x" : "plus"} s={14} />{addLine ? "Cancel" : "Add product"}</button>
@@ -1592,27 +2059,24 @@ export default function ClientWorkspace({
                   )}
                 </section>
 
-                <section className="cw-card">
+                <section className="cw-card" data-sec="services">
                   <SecHead icon="briefcase" tone="green" title="Service engagements" sub="Hover a row for rates, tax and payment" />
                   {projects.length === 0 ? <div className="cw-empty"><Ico n="briefcase" s={20} /><p>No projects signed yet.</p></div> : (
                     <div className="cw-eng">
                       <div className="cw-eng-row is-head"><span>Service</span><span>Signed</span><span>Days</span><span>Day rate</span><span className="is-r">Value</span></div>
                       {projects.map((p, i) => {
-                        const rate = effectiveRate(p.pricePerDay, p.discountMode, p.discountValue);
-                        const sup = effectiveSupervisionRate(p.supervisionPrice, p.supervisionDiscountMode, p.supervisionDiscountValue);
+                        const rate = avgRate(p);
                         const un = unitOf(p);
                         return (
                           <button className="cw-eng-row" key={p.id} style={cssVars({ "--i": i })} onClick={() => { hideTip(); onOpenProject(p); }}
                             {...tipOn(<TipCard title={typeName(p.projectTypeId)} rows={[
-                              ["Consultancy", `${d2(p.consultorDays)}${un}`], ["Connector", p.connectorDays ? `${d2(p.connectorDays)}${un}` : ""],
-                              ["Supervision", p.supervisionDays ? `${d2(p.supervisionDays)}${un} · ${eur(sup)}` : ""],
-                              ["List rate", rate !== p.pricePerDay ? eur(p.pricePerDay) : ""],
-                              ["Discount", p.discountMode !== "none" && p.discountValue ? (p.discountMode === "percent" ? `${p.discountValue}%` : `${eur(p.discountValue)} ${p.discountMode === "total" ? "total" : "/ day"}`) : ""],
+                              ...roleTipRows(p, un),
+                              ["Discount", totalDiscountOf(p) ? `${eur(totalDiscountOf(p))} total` : ""],
                               ["Tax", p.taxed ? `${p.taxRate}%` : "No tax"], ["Payment", p.paymentDays ? `${p.paymentDays} days` : ""],
                             ]} />)}>
                             <span data-k="Service"><b>{typeName(p.projectTypeId)}</b></span>
                             <span data-k="Signed">{fmt(p.signingDate)}</span>
-                            <span data-k="Days">{d2(p.consultorDays + p.connectorDays + p.supervisionDays)}{un}</span>
+                            <span data-k="Days">{d2(signedOf(p))}{un}</span>
                             <span data-k="Day rate">{eur(rate)}</span>
                             <span data-k="Value" className="is-r"><b>{eur(projectValue(p))}</b></span>
                           </button>
@@ -1624,182 +2088,8 @@ export default function ClientWorkspace({
               </div>
             )}
 
-            {/* ===== TASKS ===== */}
-            {tab === "tasks" && (
-              <div className="cw-stack is-narrow">
-                <div className="cw-tstats">
-                  {[
-                    { k: "Open", v: openTasks.length, tone: "green" },
-                    { k: "Overdue", v: lateTasks.length, tone: "red" },
-                    { k: "This week", v: openTasks.filter((t) => { const d = dueInfo(t.due_at); return !!d && d.n >= 0 && d.n <= 7; }).length, tone: "amber" },
-                    { k: "Done", v: tasks.length - openTasks.length, tone: "blue" },
-                  ].map((x, i) => (
-                    <div className="cw-tstat" data-tone={x.tone} key={x.k} style={cssVars({ "--i": i })}><b><Num v={x.v} /></b><span>{x.k}</span></div>
-                  ))}
-                </div>
-
-                {(
-                  <section className={`cw-card cw-tadd ${taskDraft.trim() ? "is-typing" : ""}`}>
-                    <div className="cw-tadd-row">
-                      <span className="cw-tadd-ico"><Ico n="plus" s={15} /></span>
-                      <input value={taskDraft} placeholder="Add a task for this client…" onChange={(e) => setTaskDraft(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === "Enter" && !taskBusy) void createTask(); }} />
-                      <button className="cw-btn-primary is-sm" disabled={!taskDraft.trim() || taskBusy} onClick={createTask}>{taskBusy ? "Adding…" : "Add"}</button>
-                    </div>
-                    <div className="cw-reveal">
-                      <div className="cw-reveal-in">
-                        <div className="cw-tadd-opts">
-                          <div className="cw-pri">
-                            {PRI.map((p) => <button key={p} data-p={p} className={taskPri === p ? "is-on" : ""} onClick={() => setTaskPri(p)}><i />{p}</button>)}
-                          </div>
-                          <span className="cw-tadd-date"><DatePicker value={taskDue} onChange={setTaskDue} placeholder="Due date" /></span>
-                          <span className="cw-tadd-deal"><Select size="sm" aria-label="Where the task goes" value={taskDeal} onChange={setTaskDeal}
-                            options={[{ value: "client", label: "Client", hint: "General" }, ...deals.map((d) => ({ value: d.id, label: d.name, hint: "Sale" }))]} /></span>
-                        </div>
-                      </div>
-                    </div>
-                    {taskErr && <p className="cw-err">{taskErr}</p>}
-                  </section>
-                )}
-
-                <div className="cw-toolbar">
-                  <Seg value={taskFilter} onChange={setTaskFilter} options={[
-                    { v: "open", label: "Open", n: openTasks.length },
-                    { v: "late", label: "Overdue", n: lateTasks.length },
-                    { v: "done", label: "Done", n: tasks.length - openTasks.length },
-                    { v: "all", label: "All", n: tasks.length },
-                  ]} />
-                  <Seg value={taskSrc} onChange={setTaskSrc} options={[
-                    { v: "all", label: "Everything" },
-                    { v: "client", label: "Client", n: tasks.filter((t) => t.src === "client").length },
-                    { v: "sale", label: "From sales", n: tasks.filter((t) => t.src !== "client").length },
-                  ]} />
-                </div>
-
-                {shownTasks.length === 0 ? (
-                  <div className="cw-empty is-big"><Ico n="tasks" s={24} /><p>{taskFilter === "late" ? "Nothing overdue." : taskFilter === "done" ? "No finished tasks yet." : tasks.length ? "All caught up." : "No tasks for this client yet."}</p></div>
-                ) : (
-                  <>{sources.map((src) => {
-                    if (taskSrc !== "all" && (src.key === "client") !== (taskSrc === "client")) return null;
-                    const list = shownTasks.filter((t) => (src.key === "client" ? t.src === "client" : t.src !== "client" && t.tracking_id === src.key));
-                    if (!list.length) return null;
-                    const open = list.filter((t) => !t.done).length;
-                    return (
-                      <div className={`cw-sgroup ${src.key === "client" ? "is-client" : "is-sale"}`} key={src.key}>
-                        <h4 className="cw-sgroup-h">
-                          <span className="cw-sgroup-ico"><Ico n={src.key === "client" ? "briefcase" : "flag"} s={13} /></span>
-                          <b>{src.title}</b><em>{src.sub}</em>
-                          <i>{taskFilter === "done" ? `${list.length} done` : `${open} open`}</i>
-                        </h4>
-                  <ul className="cw-tasks">
-                    {list.map((t, i) => {
-                      const due = dueInfo(t.due_at);
-                      return (
-                        <li key={t.id} className={`cw-task ${t.done ? "is-done" : ""}`} data-p={t.priority} style={cssVars({ "--i": i })}
-                          {...tipOn(<TipCard title={plain(t.title)}
-                            sub={[t.priority !== "normal" ? `${t.priority} priority` : "", t.status === "in_progress" ? "in progress" : t.status === "blocked" ? "blocked" : ""].filter(Boolean).join(" · ") || undefined}
-                            rows={[
-                              ["Due", t.due_at ? `${fmt(t.due_at)}${due && !t.done ? ` · ${due.label}` : ""}` : ""], ["Deal", dealName(t.tracking_id)],
-                              ["Progress", t.kind === "process" ? `${t.progress ?? 0}%` : ""],
-                              ["Assigned", t.assignees.map((id) => people[id]).filter(Boolean).join(", ")],
-                              ["Created", t.created_at ? `${fmt(t.created_at)}${t.created_by && people[t.created_by] ? ` by ${people[t.created_by]}` : ""}` : ""],
-                            ]}>{t.description ? plain(String(t.description)) : null}</TipCard>)}>
-                          <button className="cw-check" onClick={() => flipTask(t)} aria-pressed={t.done} aria-label={t.done ? "Mark as open" : "Mark as done"}>
-                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
-                          </button>
-                          <p className="cw-task-title">{renderNoteBody(t.title)}</p>
-                          {t.src !== "client" && <span className="cw-badge is-violet">Sales</span>}
-                          {t.kind === "process" && !t.done && <span className="cw-tprog"><span><i style={{ width: `${t.progress ?? 0}%` }} /></span></span>}
-                          {due && !t.done && <span className={`cw-due is-${due.tone}`}>{due.label}</span>}
-                          <span className="cw-task-people">{t.assignees.slice(0, 3).map((id) => <span key={id}><Avatar name={people[id] ?? "?"} size={22} /></span>)}</span>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                      </div>
-                    );
-                  })}</>
-                )}
-              </div>
-            )}
-
-            {/* ===== NOTES ===== */}
-            {tab === "notes" && (
-              <div className="cw-notes-wrap">
-                <section className="cw-card cw-composer">
-                  <div className="cw-composer-head">
-                    {me && <Avatar name={people[me] ?? "Me"} size={34} />}
-                    <div className="cw-note-add">
-                      <MentionInput value={noteDraft} onChange={setNoteDraft} people={mentionPeople}
-                        placeholder="Write a note… type @ to tag someone" multiline className="cw-mention" />
-                    </div>
-                  </div>
-                  <div className={`cw-composer-foot ${noteDraft.trim() ? "is-on" : ""}`}>
-                    <div><button className="cw-btn-primary is-sm" disabled={!noteDraft.trim()} onClick={addNote}><Ico n="note" s={14} />Add note</button></div>
-                  </div>
-                  {noteErr && <p className="cw-err">{noteErr}</p>}
-                </section>
-
-                <div className="cw-toolbar">
-                  <Seg value={noteFilter} onChange={setNoteFilter} options={[
-                    { v: "all", label: "All", n: allNotes.length },
-                    { v: "client", label: "Client", n: notes.length },
-                    { v: "sale", label: "From sales", n: saleNotes.length },
-                  ]} />
-                  <label className="cw-search"><Ico n="search" s={14} /><input value={noteQ} placeholder="Search notes" onChange={(e) => setNoteQ(e.target.value)} /></label>
-                </div>
-
-                {noteGroups.length === 0 ? (
-                  <div className="cw-empty is-big"><Ico n="note" s={24} /><p>{allNotes.length ? "No notes match." : "No notes yet. Write the first one above."}</p></div>
-                ) : noteGroups.map((g) => (
-                  <div className={`cw-ngroup cw-sgroup ${g.key === "client" ? "is-client" : "is-sale"}`} key={g.key}>
-                    <h4 className="cw-sgroup-h">
-                      <span className="cw-sgroup-ico"><Ico n={g.key === "client" ? "briefcase" : "flag"} s={13} /></span>
-                      <b>{g.label}</b><em>{g.sub}</em><i>{g.items.length} note{g.items.length === 1 ? "" : "s"}</i>
-                    </h4>
-                    <ol className="cw-nlist">
-                      {g.items.map((n, i) => {
-                        const who = people[n.author_id ?? ""] ?? (n.src === "sale" ? "Sales" : "Unknown");
-                        return (
-                          <li key={`${n.src}-${n.id}`} className={`cw-note is-${n.src}`} style={cssVars({ "--i": i })}>
-                            <Avatar name={who} size={32} />
-                            <div className="cw-note-card">
-                              <div className="cw-note-top">
-                                <b>{who}</b>
-                                <time {...tipOn(<TipCard title={toDate(n.created_at).toLocaleString(undefined, { dateStyle: "full", timeStyle: "short" })}
-                                  sub={n.src === "sale" ? `From the sale${n.deal ? ` · ${n.deal}` : ""}` : n.mentions.length ? `Tagged ${n.mentions.map((m) => people[m]).filter(Boolean).join(", ")}` : undefined} />)}>
-                                  {ago(n.created_at)}
-                                </time>
-                                {n.src === "sale" && <span className="cw-badge is-violet">Sales</span>}
-                                {n.src === "client" && n.author_id && n.author_id === me && (
-                                  confirmNote === n.id ? (
-                                    <span className="cw-note-confirm">Delete?<button className="is-yes" onClick={() => deleteNote(n.id)}>Yes</button><button onClick={() => setConfirmNote(null)}>No</button></span>
-                                  ) : (
-                                    <button className="cw-note-del" onClick={() => setConfirmNote(n.id)} aria-label="Delete note"><Ico n="trash" s={13} /></button>
-                                  )
-                                )}
-                              </div>
-                              <p>{renderNoteBody(n.body)}</p>
-                            </div>
-                          </li>
-                        );
-                      })}
-                    </ol>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* ===== DOCS ===== */}
-            {tab === "docs" && (
-              <div className="cw-docs is-solo">
-                <div className="cw-docs-right">
-                  <h3 className="cw-dir-title"><Ico n="folder" s={15} />Client directory</h3>
-                  <ClientDirectory clientId={client.id} tenantId={tenantId} />
-                </div>
-              </div>
-            )}
           </div>
+        </div>
         </div>
         <TipLayer tip={tip} />
       </div>

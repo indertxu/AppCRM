@@ -5,8 +5,9 @@ import { createPortal } from "react-dom";
 import DatePicker from "../../../framework/DatePicker";
 import TimePicker from "../../../framework/TimePicker";
 import Select from "../../../framework/Select";
-import { loadProposalTemplate, generateProposal } from "./proposalApi";
-import type { ProposalData } from "./proposalGen";
+import { loadProposalTemplateFor, renderProposal, downloadBlob, listProposalDecks, loadProposalDeckFile, deckSlidesFor, type ProposalDeckRow } from "./proposalApi";
+import { parseDeck, fillDeck, loadDeckPreview, resolveTokens, deckNumbering, slideRef, isKnownToken, DECK_TOKENS, TOKEN_RE, type ProposalData, type DeckInfo, type PvDeck, type DeckContext } from "./proposalGen";
+import { SlidePreview } from "../../settings/ProposalTemplateEditor";
 import MentionInput, { type MentionPerson } from "../../../framework/MentionInput";
 import "../../../framework/MentionInput.css";
 
@@ -20,14 +21,16 @@ const MEETING_KINDS: { value: MeetingKind; label: string; icon: JSX.Element }[] 
 const cleanMentionsFn = (t: string) => t.replace(/@\[([^\]]+)\]\([^)]+\)/g, "@$1");
 import { supabase } from "../../../api/supabase";
 import HandoffClientForm from "./HandoffClientForm";
-import HandoffConfirmServices, { destFolder, type ConfirmService, type ConfirmProduct, type ConfirmClient, type HandoffExtras, type HandoffDoc, type HandoffPackage } from "./HandoffConfirmServices";
-import TrackingFiles, { LineDocs, loadAllTrackingFiles } from "./TrackingFiles";
-import TrackingFieldsPanel from "../extras/TrackingFieldsPanel";
+import HandoffConfirmServices, { HxPrompt, destFolder, type ConfirmService, type ConfirmProduct, type ConfirmClient, type HandoffExtras, type HandoffDoc, type HandoffPackage } from "./HandoffConfirmServices";
+import TrackingFiles, { LineDocs, loadAllTrackingFiles, uploadTrackingFile, openTrackingFile, FileIcon, kindOf } from "./TrackingFiles";
+import TrackingFieldsPanel, { FoldPanel } from "../extras/TrackingFieldsPanel";
 import HandoverConfirm from "./HandoverConfirm";
 import { planHandover, performHandover, rolesFor, resolveDealRole, saveDealRoles, orderPhases, type SalesRole, type HandoverPlan } from "../extras/salesRolesApi";
 import DealRolePicker from "../extras/DealRolePicker";
 import type { TrackingField } from "../extras/trackingFieldsApi";
 import LineCalcModal from "../../../framework/LineCalcModal";
+import { loadRoles } from "../../settings/blueprintsApi";
+import { roleNameOf, type ClientRole } from "../../clients/clientsTypes";
 import { useBackToClose } from "../../../framework/useBackToClose";
 import { loadPipeline, listPipelines, type Phase, type Pipeline } from "../../settings/pipelineApi";
 import { myProfile, isSalesLead } from "../../companies/companiesApi";
@@ -57,6 +60,7 @@ import {
   TASK_PRIORITIES, loadTaskTemplates, fromTemplate, type TaskPriority, type TaskKind, type MyTask, type TaskTemplate, type TaskStep,
   type Tracking, type TrackNote, type TrackTask, type TrackMeeting, type MeetingKind, type PhaseEvent, type PotentialService, type Assignee,
   type TrackingProduct, type TermPatch, type RevenueLineFields,
+  listDealProposals, saveDealProposal, deleteDealProposal, setMainProposal, saveProposalDoc, type DealProposal, type ProposalLine, type ProposalDoc,
 } from "../sales/salesApi";
 
 
@@ -126,6 +130,7 @@ function RevLine({ name, tag, line, unit, minUnit, calculator, catalogBase, onRe
         <span className="sl-rv-amt">
           <b>{money(bd.total)}</b>
           {bd.discount > 0 && <i>−{money(bd.discount)} off</i>}
+          {bd.partner > 0 && <i className="is-partner" title="The partner's cut: the deal counts what is left">−{money(bd.partner)} partner</i>}
           {bd.qty !== bd.rawQty && <i className="is-round" title={`Calculated ${bd.rawQty}, billed in steps of ${minUnit}`}>{bd.rawQty} → {bd.qty}</i>}
         </span>
         <span className={`sl-rv-chev ${open ? "is-on" : ""}`} aria-hidden="true">
@@ -201,10 +206,827 @@ function RevLine({ name, tag, line, unit, minUnit, calculator, catalogBase, onRe
             </>
           ) : null}
           <div className="sl-rc-row sl-rc-total"><span>Total</span><em>{money(bd.total)}</em></div>
+          {bd.partner > 0 && (
+            <>
+              <div className="sl-rc-row sl-rc-partner"><span>Partner{line.partner_mode === "percent" ? ` (${Number(line.partner_value) || 0}%)` : ""}</span><em>−{money(bd.partner)}</em></div>
+              <div className="sl-rc-row sl-rc-total"><span>Deal value</span><em>{money(bd.net)}</em></div>
+            </>
+          )}
         </div>
       )}
       {open && footer && <div className="sl-rv-docs">{footer}</div>}
     </div>
+  );
+}
+
+/* ============================ Proposals ============================ */
+/** One line group of the deal, with every version it has (for building proposals). */
+export interface PropGroup {
+  kind: "product" | "service"; group: string; name: string;
+  /** "product:<catalogue id>" / "service:<catalogue id>": whose own template applies. */
+  ownerKey: string | null;
+  activeId: string | null;
+  versions: { id: string; label: string; total: number; partner: number; net: number }[];
+}
+const PROP_ICON = {
+  star: "M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z",
+  edit: "M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z",
+  del: "M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14",
+  file: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6",
+  plus: "M12 5v14M5 12h14",
+  sync: "M21 12a9 9 0 1 1-2.64-6.36M21 4v5h-5",
+  deck: "M3 4h18v12H3zM8 20h8M12 16v4",
+};
+const PIco = ({ d }: { d: keyof typeof PROP_ICON }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={PROP_ICON[d]} /></svg>
+);
+
+/** Live numbers of a proposal from the deal's lines as they are now. */
+export function proposalFigures(lines: ProposalLine[], groups: PropGroup[]) {
+  let gross = 0, partner = 0, net = 0; const picked: { g: PropGroup; v: PropGroup["versions"][number] }[] = [];
+  lines.forEach((l) => {
+    if (!l.line) return;
+    const g = groups.find((x) => x.kind === l.kind && x.group === l.group);
+    const v = g?.versions.find((x) => x.id === l.line);
+    if (!g || !v) return;
+    gross += v.total; partner += v.partner; net += v.net; picked.push({ g, v });
+  });
+  return { gross, partner, total: net, picked };
+}
+
+function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onGenerate, onStudio, onMain }: {
+  trackingId: string;
+  /** The line groups a proposal can use (products / services available in proposals). */
+  groups: PropGroup[];
+  /** The company's proposal decks (Settings › Proposal template); empty / null = none yet. */
+  decks: ProposalDeckRow[] | null;
+  money: (n: number) => string;
+  /** The proposal being generated, if any. */
+  busy: string | null;
+  reloadKey: number;
+  /** The built-in generator (order form PDF; PPT when there is no deck). */
+  onGenerate: (p: DealProposal, kind: "pptx" | "pdf") => void;
+  /** Opens the proposal in the deck studio. */
+  onStudio: (p: DealProposal) => void;
+  /** After a proposal became the main one: its versions are now the active ones. */
+  onMain: (p: DealProposal) => void;
+}) {
+  const [list, setList] = useState<DealProposal[] | null>([]);
+  const [missing, setMissing] = useState(false);
+  const [files, setFiles] = useState<Record<string, { name: string; storage_path: string; created_at: string }>>({});
+  const [edit, setEdit] = useState<null | { id?: string; name: string; picks: Record<string, string | null>; deck_id: string | null; is_main?: boolean }>(null);
+  const hasDeck = !!decks?.length;
+  const defaultDeck = decks?.find((d) => d.is_default)?.id ?? decks?.[0]?.id ?? null;
+  const [err, setErr] = useState<string | null>(null);
+  const [delAsk, setDelAsk] = useState<string | null>(null);
+  const keyOf = (g: { kind: string; group: string }) => `${g.kind}:${g.group}`;
+
+  useEffect(() => {
+    let alive = true;
+    listDealProposals(trackingId).then((xs) => {
+      if (!alive) return;
+      setMissing(xs == null); setList(xs ?? []);
+      const ids = (xs ?? []).map((p) => p.file_id).filter(Boolean) as string[];
+      if (ids.length) supabase.from("tracking_files").select("id, name, storage_path, created_at").in("id", ids)
+        .then(({ data }) => { if (alive) setFiles(Object.fromEntries(((data ?? []) as any[]).map((f) => [f.id, f]))); });
+    });
+    return () => { alive = false; };
+  }, [trackingId, reloadKey]);
+
+  const startNew = () => setEdit({
+    name: `Proposal ${(list?.length ?? 0) + 1}`, deck_id: defaultDeck,
+    picks: Object.fromEntries(groups.map((g) => [keyOf(g), g.activeId])),
+  });
+  const startEdit = (p: DealProposal) => setEdit({
+    id: p.id, name: p.name, deck_id: p.deck_id ?? defaultDeck, is_main: p.is_main,
+    picks: Object.fromEntries(groups.map((g) => [keyOf(g), p.lines.find((l) => keyOf(l) === keyOf(g))?.line ?? null])),
+  });
+  const linesOf = (picks: Record<string, string | null>): ProposalLine[] =>
+    groups.map((g) => ({ kind: g.kind, group: g.group, line: picks[keyOf(g)] ?? null }));
+
+  const save = async () => {
+    if (!edit) return;
+    const lines = linesOf(edit.picks);
+    const f = proposalFigures(lines, groups);
+    const old = list?.find((x) => x.id === edit.id);
+    const { proposal, error } = await saveDealProposal({
+      id: edit.id, tracking_id: trackingId, name: edit.name, lines, template_id: old?.template_id ?? null,
+      deck_id: hasDeck ? edit.deck_id : undefined,
+      gross: f.gross, partner: f.partner, total: f.total, file_id: old?.file_id ?? null,
+      is_main: edit.id ? undefined : !(list ?? []).length,
+    });
+    if (error || !proposal) { setErr(error ?? "Could not save the proposal."); return; }
+    setErr(null); setEdit(null);
+    setList((xs) => (xs ?? []).some((x) => x.id === proposal.id) ? (xs ?? []).map((x) => x.id === proposal.id ? proposal : x) : [...(xs ?? []), proposal]);
+    // The first proposal is the main one; a main one that changed moves the deal with it.
+    if (proposal.is_main) await makeMain(proposal);
+  };
+  const makeMain = async (p: DealProposal) => {
+    const e = await setMainProposal(trackingId, p);
+    if (e) { setErr(e); return; }
+    setErr(null);
+    setList((xs) => (xs ?? []).map((x) => ({ ...x, is_main: x.id === p.id })));
+    onMain(p);
+  };
+  const remove = async (id: string) => {
+    setDelAsk(null);
+    const e = await deleteDealProposal(id);
+    if (e) { setErr(e); return; }
+    setList((xs) => (xs ?? []).filter((x) => x.id !== id));
+  };
+
+  const main = (list ?? []).find((p) => p.is_main);
+  const mainFig = main ? proposalFigures(main.lines, groups) : null;
+
+  return (
+    <FoldPanel className="sl-props-panel" title="Proposals" count={list?.length ?? 0}
+      summary={main ? `Main: ${main.name} · ${money(mainFig?.total ?? 0)}` : (list?.length ? `${list.length} scenario${list.length === 1 ? "" : "s"}, none main` : "Scenarios to send the client")}
+      aside={!missing && groups.length > 0 && !edit ? (
+        <button type="button" className="sl-rv-tool" onClick={startNew}><PIco d="plus" />New</button>
+      ) : undefined}>
+      <div className="sl-props">
+        {missing && <p className="sl-rvg-empty">Run 12_proposals_partners.sql in Supabase to save proposals.</p>}
+        {!missing && groups.length === 0 && <p className="sl-rvg-empty">Add products or services below, then build proposals from their versions.</p>}
+        {!missing && groups.length > 0 && (list ?? []).length === 0 && !edit && (
+          <button type="button" className="sl-props-empty" onClick={startNew}>
+            <PIco d="plus" /><span><b>Build the first proposal</b><i>Pick a version of each line; its total becomes the deal value.</i></span>
+          </button>
+        )}
+
+        {(list ?? []).map((p) => {
+          if (edit?.id === p.id) return null;
+          const f = proposalFigures(p.lines, groups);
+          // Main: every group it covers must show its version, and the ones it leaves out must be off.
+          const inSync = !p.is_main || p.lines.every((l) => {
+            const g = groups.find((x) => x.kind === l.kind && x.group === l.group);
+            if (!g) return true;
+            const want = l.line && g.versions.some((v) => v.id === l.line) ? l.line : null;
+            return g.activeId === want;
+          });
+          const file = p.file_id ? files[p.file_id] : undefined;
+          const left = groups.length - f.picked.length;
+          return (
+            <div key={p.id} className={`sl-prop ${p.is_main ? "is-main" : ""}`}>
+              <div className="sl-prop-top">
+                <span className="sl-prop-name">
+                  {p.is_main && <span className="sl-prop-badge"><PIco d="star" />Main</span>}
+                  <b title={p.name}>{p.name}</b>
+                </span>
+                <span className="sl-prop-amt">
+                  <b>{money(f.total)}</b>
+                  {f.partner > 0 && <i>{money(f.gross)} − {money(f.partner)} partner</i>}
+                </span>
+              </div>
+              <div className="sl-prop-lines">
+                {f.picked.map(({ g, v }) => (
+                  <span key={keyOf(g)} className={`sl-prop-chip is-${g.kind}`} title={`${g.name} ${v.label}: ${money(v.total)}`}>
+                    {g.name}{g.versions.length > 1 && <em>{v.label}</em>}
+                  </span>
+                ))}
+                {left > 0 && <span className="sl-prop-chip is-out">{left} left out</span>}
+              </div>
+              {!inSync && (
+                <p className="sl-prop-warn">
+                  The deal shows other versions than this proposal.
+                  <button type="button" onClick={() => makeMain(p)}><PIco d="sync" />Apply again</button>
+                </p>
+              )}
+              <div className="sl-prop-tools">
+                {!p.is_main && <button type="button" className="sl-rv-tool" onClick={() => makeMain(p)} title="Its total becomes the deal value and it is what goes to the handoff"><PIco d="star" />Make main</button>}
+                <button type="button" className="sl-rv-tool" onClick={() => startEdit(p)}><PIco d="edit" />Edit</button>
+                <span className="sl-rv-spacer" />
+                {hasDeck ? (
+                  <button type="button" className="sl-prop-deck" disabled={!!busy || !f.picked.length} onClick={() => onStudio(p)}
+                    title="Fill and edit the company deck for this proposal, then download it">
+                    {busy === `${p.id}:studio` ? <span className="sl-prop-spin" /> : <PIco d="deck" />}Deck
+                  </button>
+                ) : (
+                  <button type="button" className="sl-rv-tool is-calc" disabled={!!busy || !f.picked.length} onClick={() => onGenerate(p, "pptx")}>{busy === `${p.id}:pptx` ? <span className="sl-prop-spin" /> : <PIco d="file" />}PPT</button>
+                )}
+                <button type="button" className="sl-rv-tool is-calc" disabled={!!busy || !f.picked.length} onClick={() => onGenerate(p, "pdf")} title="Order form (PDF)">{busy === `${p.id}:pdf` ? <span className="sl-prop-spin" /> : <PIco d="file" />}PDF</button>
+                {delAsk === p.id ? (
+                  <span className="sl-prop-del">
+                    <button type="button" className="sl-rv-tool is-del" onClick={() => remove(p.id)}>Delete</button>
+                    <button type="button" className="sl-rv-tool" onClick={() => setDelAsk(null)}>Keep</button>
+                  </span>
+                ) : (
+                  <button type="button" className="sl-rv-tool is-del" onClick={() => setDelAsk(p.id)} aria-label="Delete proposal"><PIco d="del" /></button>
+                )}
+              </div>
+              {file && (
+                <button type="button" className="sl-prop-file" onClick={() => openTrackingFile(file.storage_path)} title={`Open ${file.name}`}>
+                  <FileIcon kind={kindOf(file.name, null)} />
+                  <span className="sl-prop-file-txt">
+                    <b>{file.name}</b>
+                    <i>Generated {new Date(file.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</i>
+                  </span>
+                  <span className="sl-prop-file-open" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4v11M7 10l5 5 5-5M5 20h14" /></svg>
+                  </span>
+                </button>
+              )}
+            </div>
+          );
+        })}
+
+        {edit && (() => {
+          const lines = linesOf(edit.picks);
+          const f = proposalFigures(lines, groups);
+          return (
+            <div className="sl-prop is-edit">
+              <div className="sl-pz-head">
+                <span className="sl-pz-eyebrow">{edit.id ? "Edit proposal" : "New proposal"}</span>
+                <button type="button" className="sl-pz-x" onClick={() => setEdit(null)} aria-label="Cancel">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                </button>
+              </div>
+              <input className="sl-pz-name" value={edit.name} autoFocus placeholder="Name it, e.g. Full platform · 3 years"
+                onChange={(e) => setEdit({ ...edit, name: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") setEdit(null); }} />
+              <div className="sl-pz-groups">
+                {groups.map((g) => {
+                  const cur = edit.picks[keyOf(g)] ?? null;
+                  const pick = (id: string | null) => setEdit({ ...edit, picks: { ...edit.picks, [keyOf(g)]: id } });
+                  return (
+                    <div key={keyOf(g)} className={`sl-pz-g is-${g.kind} ${cur ? "" : "is-off"}`}>
+                      <div className="sl-pz-g-head">
+                        <i className="sl-pz-dot" />
+                        <b title={g.name}>{g.name}</b>
+                        <span className="sl-pz-kind">{g.kind === "product" ? "Product" : "Service"}</span>
+                      </div>
+                      <div className="sl-pz-opts">
+                        {g.versions.map((v) => (
+                          <button type="button" key={v.id} className={`sl-pz-opt ${cur === v.id ? "is-on" : ""}`} onClick={() => pick(v.id)}
+                            title={v.partner > 0 ? `${money(v.total)} − ${money(v.partner)} partner` : money(v.total)}>
+                            <span className="sl-pz-check" />
+                            <span className="sl-pz-opt-txt">
+                              <span className="sl-pz-opt-lbl">{v.label}</span>
+                              <span className="sl-pz-opt-amt">{money(v.net)}</span>
+                            </span>
+                          </button>
+                        ))}
+                        <button type="button" className={`sl-pz-opt is-out ${!cur ? "is-on" : ""}`} onClick={() => pick(null)}>
+                          <span className="sl-pz-check" />
+                          <span className="sl-pz-opt-txt"><span className="sl-pz-opt-lbl">Leave out</span><span className="sl-pz-opt-amt">Not included</span></span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {(decks?.length ?? 0) > 1 && (
+                <label className="sl-pz-tpl">
+                  <span>Deck</span>
+                  <select value={edit.deck_id ?? ""} onChange={(e) => setEdit({ ...edit, deck_id: e.target.value || null })}>
+                    {decks!.map((d) => <option key={d.id} value={d.id}>{d.name}{d.is_default ? " (default)" : ""}</option>)}
+                  </select>
+                </label>
+              )}
+              <div className="sl-pz-foot">
+                <div className="sl-pz-sum">
+                  <div><span>Client pays</span><b>{money(f.gross)}</b></div>
+                  {f.partner > 0 && <div className="is-partner"><span>Partners</span><b>−{money(f.partner)}</b></div>}
+                  <div className="is-total"><span>Deal value</span><b>{money(f.total)}</b></div>
+                </div>
+                <div className="sl-pz-actions">
+                  <button type="button" className="sl-pz-cancel" onClick={() => setEdit(null)}>Cancel</button>
+                  <button type="button" className="sl-prop-save" disabled={!edit.name.trim() || !f.picked.length} onClick={save}>{edit.id ? "Save changes" : "Create proposal"}</button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+        {err && <p className="sl-rev-err">{err}</p>}
+      </div>
+    </FoldPanel>
+  );
+}
+
+/* ============================ Proposal studio ============================ */
+/** One slide of the proposal: a slide of the deck, for one product / service when its rule says so. */
+interface StudioEntry { n: number; ref: string; scope: { product?: number; service?: number }; title: string; who: string; kind: "always" | "product" | "service" }
+
+/** Where an override of a field applies: product / service fields are per line, the rest everywhere. */
+const fieldKey = (token: string, scope: { product?: number; service?: number }) =>
+  token.startsWith("product") ? `${token}@p${scope.product ?? 0}` : token.startsWith("service") ? `${token}@s${scope.service ?? 0}` : token;
+const tokenOfField = (key: string) => key.replace(/@[ps]\d+$/, "");
+const fileSafe = (s: string) => s.replace(/[^\w\-]+/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "").slice(0, 60);
+
+const STUDIO_ICON = {
+  close: "M6 6l12 12M18 6L6 18",
+  down: "M12 4v11M7 10l5 5 5-5M5 20h14",
+  eye: "M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
+  eyeOff: "M3 3l18 18M10.6 5.1A10.4 10.4 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.2 4M6.6 6.6C3.9 8.3 2 12 2 12s3.6 7 10 7a9.8 9.8 0 0 0 5.4-1.6M9.9 9.9a3 3 0 0 0 4.2 4.2",
+  left: "M15 18l-6-6 6-6",
+  right: "M9 18l6-6-6-6",
+  reset: "M3 12a9 9 0 1 0 2.6-6.4M3 4v5h5",
+  text: "M4 7V5h16v2M9 19h6M12 5v14",
+  list: "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01",
+  alert: "M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z",
+  check: "M20 6L9 17l-5-5",
+  cursor: "M4 4l7 17 2.5-7.5L21 11z",
+};
+const SIco = ({ d, className }: { d: keyof typeof STUDIO_ICON; className?: string }) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={STUDIO_ICON[d]} /></svg>
+);
+
+/** A slide's name for the list: its biggest text (the title), else what the deck file says. */
+function slideTitleOf(pv: PvDeck | null, n: number, fallback: string): string {
+  const sl = pv?.slides.find((x) => x.n === n);
+  let best = "", size = 0, top = Infinity;
+  sl?.shapes.forEach((sh) => {
+    if (sh.layer !== "slide" || !sh.text) return;
+    sh.text.paras.forEach((p) => {
+      const txt = p.runs.map((r) => r.text).join("").replace(TOKEN_RE, "").replace(/\s+/g, " ").trim();
+      if (txt.replace(/[^A-Za-zÀ-ÿ]/g, "").length < 4) return;
+      const sz = Math.max(0, ...p.runs.map((r) => r.size)) * (sh.text!.scale ?? 1);
+      if (sz > size + 0.5 || (Math.abs(sz - size) <= 0.5 && sh.y < top)) { best = txt; size = sz; top = sh.y; }
+    });
+  });
+  const t = (best || fallback).replace(/^[\s\-–—·|:]+/, "");
+  // titles in capitals read better as "Propuesta económica"
+  return t === t.toUpperCase() ? t.charAt(0) + t.slice(1).toLowerCase() : t;
+}
+const FIELD_LABELS: Record<string, string> = { agenda: "Agenda (one line per product / service)", "agenda.upper": "Agenda, in capitals" };
+const niceLabel = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** A slide thumbnail drawn only once it scrolls into view (a deck can be heavy). */
+function StudioThumb({ deck, entry, values, edits, width }: { deck: PvDeck; entry: StudioEntry; values: Record<string, string>; edits: Record<string, string>; width: number }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [seen, setSeen] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || seen) return;
+    const io = new IntersectionObserver((xs) => { if (xs.some((x) => x.isIntersecting)) { setSeen(true); io.disconnect(); } }, { rootMargin: "300px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [seen]);
+  const h = (width * deck.cy) / deck.cx;
+  return (
+    <div ref={ref} className="pst-thumb-img" style={{ width, height: h }}>
+      {seen && <SlidePreview deck={deck} n={entry.n} refId={entry.ref} values={values} edits={edits} width={width} />}
+    </div>
+  );
+}
+
+function ProposalStudio({ proposal, decks, data, productIds, serviceIds, seller, onClose, onSaveDoc, onGenerated }: {
+  proposal: DealProposal;
+  decks: ProposalDeckRow[];
+  data: ProposalData;
+  /** Catalogue ids of data.products / data.services, same order (which slides go in). */
+  productIds: string[]; serviceIds: string[];
+  seller: { name?: string; email?: string; phone?: string };
+  onClose: () => void;
+  onSaveDoc: (deckId: string | null, doc: ProposalDoc) => Promise<string | null>;
+  /** The generated file: keep it on the deal. Returns an error, if any. */
+  onGenerated: (blob: Blob, fileName: string) => Promise<string | null>;
+}) {
+  const [deckId, setDeckId] = useState<string | null>(() =>
+    proposal.deck_id && decks.some((d) => d.id === proposal.deck_id) ? proposal.deck_id : (decks.find((d) => d.is_default)?.id ?? decks[0]?.id ?? null));
+  const deck = decks.find((d) => d.id === deckId) ?? null;
+  const [stage, setStage] = useState<"download" | "read" | "ready" | "error">("download");
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [buf, setBuf] = useState<ArrayBuffer | null>(null);
+  const [info, setInfo] = useState<DeckInfo | null>(null);
+  const [pv, setPv] = useState<PvDeck | null>(null);
+  const [doc, setDoc] = useState<ProposalDoc>(() => ({
+    values: { ...(proposal.doc?.values ?? {}) }, edits: { ...(proposal.doc?.edits ?? {}) }, slides: { ...(proposal.doc?.slides ?? {}) },
+  }));
+  const [sel, setSel] = useState<string | null>(null);         // selected slide ref
+  const [selKey, setSelKey] = useState<string | null>(null);   // selected text
+  const [tab, setTab] = useState<"text" | "fields">("text");
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [saveErr, setSaveErr] = useState<string | null>(null);
+  const [gen, setGen] = useState<"idle" | "building" | "saving" | "done">("idle");
+  const [genMsg, setGenMsg] = useState<string | null>(null);
+  const [askMissing, setAskMissing] = useState(false);
+
+  // ---- the deck file: downloaded and read once per deck ----
+  useEffect(() => {
+    if (!deck) return;
+    let alive = true;
+    setStage("download"); setLoadErr(null); setInfo(null); setPv(null); setBuf(null);
+    (async () => {
+      try {
+        const b = await loadProposalDeckFile(deck);
+        if (!alive) return;
+        setStage("read");
+        const [i, p] = await Promise.all([parseDeck(b), loadDeckPreview(b)]);
+        if (!alive) return;
+        setBuf(b); setInfo(i); setPv(p); setStage("ready");
+      } catch (e: any) {
+        if (alive) { setStage("error"); setLoadErr(e?.message ?? "Could not open the deck."); }
+      }
+    })();
+    return () => { alive = false; };
+  }, [deck?.id, deck?.storage_path]);
+
+  // ---- which slides go in ----
+  const plan: StudioEntry[] = useMemo(() => {
+    if (!deck || !info) return [];
+    // a slide without a rule (added to the file later) goes in always
+    const rules = info.slides.map((s) => deck.slides.find((r) => r.n === s.n) ?? { n: s.n, when: "always" as const, ids: [] });
+    const occ = new Map<number, number>();
+    return deckSlidesFor(rules, productIds, serviceIds).map((e) => {
+      const i = occ.get(e.n) ?? 0; occ.set(e.n, i + 1);
+      const sl = info.slides.find((s) => s.n === e.n);
+      const who = e.scope.product != null ? data.products[e.scope.product]?.name ?? "" : e.scope.service != null ? data.services[e.scope.service]?.name ?? "" : "";
+      return { n: e.n, ref: slideRef(e.n, i), scope: e.scope, title: slideTitleOf(pv, e.n, sl?.title || `Slide ${e.n}`), who, kind: e.scope.product != null ? "product" : e.scope.service != null ? "service" : "always" };
+    });
+  }, [deck, info, pv, productIds, serviceIds, data]);
+  const included = plan.filter((e) => doc.slides?.[e.ref] !== false);
+  const nums = useMemo(() => (info ? deckNumbering(info, included.map((e) => e.n)) : []), [info, included.map((e) => e.ref).join()]);
+  const numOf = (ref: string) => { const i = included.findIndex((e) => e.ref === ref); return i >= 0 ? nums[i] ?? "" : ""; };
+  useEffect(() => { if (plan.length && (!sel || !plan.some((e) => e.ref === sel))) setSel(plan[0].ref); }, [plan, sel]);
+
+  // ---- values: from the deal, then the seller's overrides ----
+  const ctx: DeckContext = useMemo(() => ({
+    data, proposalName: proposal.name, validityDays: 30, lang: "es",
+    sellerName: seller.name, sellerEmail: seller.email, sellerPhone: seller.phone,
+  }), [data, proposal.name, seller.name, seller.email, seller.phone]);
+  const autoCache = useMemo(() => new Map<string, Record<string, string>>(), [ctx]);
+  const autoFor = (scope: StudioEntry["scope"]) => {
+    const k = `${scope.product ?? "-"}:${scope.service ?? "-"}`;
+    let v = autoCache.get(k);
+    if (!v) { v = resolveTokens(ctx, scope); autoCache.set(k, v); }
+    return v;
+  };
+  const valuesFor = (e: StudioEntry): Record<string, string> => {
+    const v: Record<string, string> = { ...autoFor(e.scope), num: numOf(e.ref) };
+    Object.entries(doc.values ?? {}).forEach(([k, val]) => {
+      const tok = tokenOfField(k);
+      if (fieldKey(tok, e.scope) === k) v[tok] = val;
+    });
+    return v;
+  };
+
+  // ---- the fields the kept slides use ----
+  const fields = useMemo(() => {
+    if (!info) return [] as { key: string; token: string; group: string; label: string; auto: string; free: boolean; multi: boolean; slides: number }[];
+    const out = new Map<string, { key: string; token: string; group: string; label: string; auto: string; free: boolean; multi: boolean; slides: number }>();
+    included.forEach((e) => {
+      const sl = info.slides.find((s) => s.n === e.n);
+      (sl?.tokens ?? []).forEach((t) => {
+        if (t === "num" || t.includes("#")) return;
+        const key = fieldKey(t, e.scope);
+        const prev = out.get(key);
+        if (prev) { prev.slides++; return; }
+        const def = DECK_TOKENS.find((d) => d.key === t || (d.key.includes("N") && new RegExp(`^${d.key.replace(/\./g, "\\.").replace(/N/g, "\\d+")}$`).test(t)));
+        const free = !isKnownToken(t);
+        const pi = e.scope.product ?? 0, si = e.scope.service ?? 0;
+        const group = free ? "To fill in" : t.startsWith("product") ? `Product · ${data.products[pi]?.name ?? "—"}` : t.startsWith("service") ? `Service · ${data.services[si]?.name ?? "—"}` : "General";
+        out.set(key, {
+          key, token: t, group, free, slides: 1, multi: !!def?.multi,
+          label: FIELD_LABELS[t] ?? (def?.label ? (def.key === t ? def.label : `${def.label} ${t.match(/\d+/)?.[0] ?? ""}`.trim()) : niceLabel(t.replace(/[._]/g, " "))),
+          auto: free ? "" : autoFor(e.scope)[t] ?? "",
+        });
+      });
+    });
+    const order = (g: string) => (g === "To fill in" ? 0 : g === "General" ? 1 : g.startsWith("Product") ? 2 : 3);
+    return Array.from(out.values()).sort((a, b) => order(a.group) - order(b.group) || a.group.localeCompare(b.group));
+  }, [info, included.map((e) => e.ref).join(), ctx]);
+  const missing = fields.filter((f) => f.free && !(doc.values?.[f.key] ?? "").trim());
+
+  // ---- autosave ----
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) { first.current = false; return; }
+    setSaveState("saving");
+    const t = setTimeout(async () => {
+      const e = await onSaveDoc(deckId, doc);
+      setSaveErr(e); setSaveState(e ? "error" : "saved");
+    }, 700);
+    return () => clearTimeout(t);
+  }, [doc, deckId]);
+
+  const setValue = (key: string, v: string | null) => setDoc((d) => {
+    const values = { ...(d.values ?? {}) };
+    if (v == null) delete values[key]; else values[key] = v;
+    return { ...d, values };
+  });
+  const setEdit = (key: string, v: string | null) => setDoc((d) => {
+    const edits = { ...(d.edits ?? {}) };
+    if (v == null) delete edits[key]; else edits[key] = v;
+    return { ...d, edits };
+  });
+  const toggleSlide = (ref: string) => setDoc((d) => {
+    const slides = { ...(d.slides ?? {}) };
+    if (slides[ref] === false) delete slides[ref]; else slides[ref] = false;
+    return { ...d, slides };
+  });
+  const switchDeck = (id: string) => {
+    // texts and slides belong to the deck they were changed in; the field values carry over
+    setDoc((d) => ({ values: d.values, edits: {}, slides: {} }));
+    setSelKey(null); setSel(null); setDeckId(id);
+  };
+
+  // ---- the selected slide and text ----
+  const cur = plan.find((e) => e.ref === sel) ?? null;
+  const curVals = cur ? valuesFor(cur) : {};
+  const curIdx = cur ? plan.indexOf(cur) : -1;
+  const go = (d: number) => { const e = plan[curIdx + d]; if (e) { setSel(e.ref); setSelKey(null); } };
+  const textInfo = useMemo(() => {
+    if (!selKey || !cur || !info) return null;
+    const rest = selKey.slice(cur.ref.length + 1);
+    const rep = /r(\d+)\.(\d+)c/.exec(rest);
+    const baseKey = `${cur.n}:${rest.replace(/r(\d+)\.(\d+)c/, "r$1c")}`;
+    const t = info.slides.find((s) => s.n === cur.n)?.texts.find((x) => x.key === baseKey);
+    if (!t) return null;
+    const tpl = rep ? t.text.replace(/#/g, rep[2]) : t.text;
+    const auto = tpl.replace(TOKEN_RE, (_m, k: string) => curVals[k.trim()] ?? (isKnownToken(k.trim()) ? "" : `{{${k.trim()}}}`));
+    return { template: tpl, auto, tokens: Array.from(tpl.matchAll(TOKEN_RE), (m) => m[1].trim()) };
+  }, [selKey, cur?.ref, info, JSON.stringify(curVals)]);
+
+  // ---- the center stage size ----
+  const stageRef = useRef<HTMLDivElement>(null);
+  const [stageW, setStageW] = useState(900);
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el) return;
+    const fit = () => {
+      const r = el.getBoundingClientRect();
+      const ratio = pv ? pv.cy / pv.cx : 9 / 16;
+      setStageW(Math.max(320, Math.floor(Math.min(r.width - 64, (r.height - 96) / ratio))));
+    };
+    fit();
+    const ro = new ResizeObserver(fit); ro.observe(el);
+    return () => ro.disconnect();
+  }, [stage, pv]);
+
+  // ---- keys: Esc closes, ↑ ↓ move between slides (not while typing) ----
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const typing = /input|textarea|select/i.test((e.target as HTMLElement)?.tagName ?? "");
+      if (e.key === "Escape") { if (typing) (e.target as HTMLElement).blur(); else if (selKey) setSelKey(null); else onClose(); }
+      if (typing) return;
+      if (e.key === "ArrowDown" || e.key === "ArrowRight") { e.preventDefault(); go(1); }
+      if (e.key === "ArrowUp" || e.key === "ArrowLeft") { e.preventDefault(); go(-1); }
+      if (e.key === "Delete" && cur) { e.preventDefault(); toggleSlide(cur.ref); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  // ---- generate ----
+  const generate = async (force = false) => {
+    if (!buf || !info) return;
+    if (missing.length && !force) { setTab("fields"); setAskMissing(true); return; }
+    setAskMissing(false); setGen("building"); setGenMsg(null);
+    try {
+      // edits are keyed by the slide's place in the plan; in the file, copies count among the kept slides only
+      const occ = new Map<number, number>();
+      const genRef = new Map<string, string>();
+      included.forEach((e) => { const g = occ.get(e.n) ?? 0; occ.set(e.n, g + 1); genRef.set(e.ref, slideRef(e.n, g)); });
+      const edits: Record<string, string> = {};
+      Object.entries(doc.edits ?? {}).forEach(([k, v]) => {
+        const i = k.indexOf(":");
+        const to = genRef.get(k.slice(0, i));
+        if (to) edits[`${to}${k.slice(i)}`] = v;
+      });
+      const byN = new Map<number, StudioEntry[]>();
+      included.forEach((e) => byN.set(e.n, [...(byN.get(e.n) ?? []), e]));
+      const blob = await fillDeck(buf, {
+        include: included.map((e) => e.n),
+        values: (n, i) => { const e = byN.get(n)?.[i]; return e ? valuesFor(e) : {}; },
+        edits,
+      });
+      const fileName = `${fileSafe(data.client.name || "Client")}-${fileSafe(proposal.name || "Proposal")}.pptx`;
+      downloadBlob(blob, fileName);
+      setGen("saving");
+      const e = await onGenerated(blob, fileName);
+      setGen("done"); setGenMsg(e ? `Downloaded, but not saved on the deal: ${e}` : "Downloaded and saved in the deal documents");
+      setTimeout(() => setGen((g) => (g === "done" ? "idle" : g)), 4000);
+    } catch (e: any) {
+      setGen("idle"); setGenMsg(e?.message ?? "Could not build the deck.");
+    }
+  };
+
+  const thumbW = typeof window !== "undefined" && window.innerWidth <= 1180 ? 160 : 200;
+  const kindLabel = (e: StudioEntry) => (e.kind === "product" ? "Product" : e.kind === "service" ? "Service" : "");
+  const groups = Array.from(new Set(fields.map((f) => f.group)));
+
+  return createPortal(
+    <div className="pst-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="pst" role="dialog" aria-modal="true" aria-label="Proposal deck">
+        {/* ---- header ---- */}
+        <header className="pst-head">
+          <div className="pst-head-l">
+            <span className="pst-logo"><SIco d="list" /></span>
+            <div className="pst-titles">
+              <span className="pst-eyebrow">Proposal deck</span>
+              <h2 className="pst-title" title={proposal.name}>{proposal.name}</h2>
+            </div>
+            <span className="pst-chip">{data.client.name}</span>
+            {stage === "ready" && <span className="pst-chip is-soft">{included.length} of {plan.length} slides</span>}
+          </div>
+          <div className="pst-head-r">
+            {decks.length > 1 && (
+              <label className="pst-decksel">
+                <span>Deck</span>
+                <select value={deckId ?? ""} onChange={(e) => switchDeck(e.target.value)}>
+                  {decks.map((d) => <option key={d.id} value={d.id}>{d.name}{d.is_default ? " · default" : ""}</option>)}
+                </select>
+              </label>
+            )}
+            <span className={`pst-save is-${saveState}`} title={saveErr ?? undefined}>
+              {saveState === "saving" ? <><span className="pst-spin" />Saving…</> : saveState === "saved" ? <><SIco d="check" />Saved</> : saveState === "error" ? <><SIco d="alert" />Not saved</> : <>Changes save automatically</>}
+            </span>
+            <button type="button" className="pst-primary" disabled={stage !== "ready" || gen === "building" || gen === "saving" || !included.length} onClick={() => generate()}>
+              {gen === "building" ? <><span className="pst-spin is-light" />Building…</> : gen === "saving" ? <><span className="pst-spin is-light" />Saving…</> : gen === "done" ? <><SIco d="check" />Done</> : <><SIco d="down" />Download PPTX</>}
+            </button>
+            <button type="button" className="pst-x" onClick={onClose} aria-label="Close"><SIco d="close" /></button>
+          </div>
+        </header>
+        {genMsg && <div className={`pst-toast ${/not|could/i.test(genMsg) ? "is-warn" : ""}`}>{genMsg}<button type="button" onClick={() => setGenMsg(null)} aria-label="Dismiss"><SIco d="close" /></button></div>}
+
+        {stage !== "ready" ? (
+          <div className="pst-loading">
+            {stage === "error" ? (
+              <div className="pst-load-card is-err">
+                <SIco d="alert" />
+                <b>Could not open the deck</b>
+                <span>{loadErr}</span>
+                <button type="button" className="pst-ghost" onClick={onClose}>Close</button>
+              </div>
+            ) : (
+              <div className="pst-load-card">
+                <span className="pst-load-ring" />
+                <b>{stage === "download" ? "Downloading the deck…" : "Reading the slides…"}</b>
+                <span>{deck?.file_name ?? deck?.name}{deck?.size_bytes ? ` · ${(deck.size_bytes / 1048576).toFixed(1)} MB` : ""}</span>
+                <div className="pst-load-steps">
+                  <i className="is-on" /><i className={stage === "read" ? "is-on" : ""} /><i />
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="pst-body">
+            {/* ---- slides ---- */}
+            <aside className="pst-slides">
+              <div className="pst-side-head">
+                <span>Slides</span>
+                <em>{included.length}/{plan.length}</em>
+              </div>
+              <div className="pst-slide-list">
+                {plan.map((e, i) => {
+                  const on = doc.slides?.[e.ref] !== false;
+                  const num = numOf(e.ref);
+                  const prevKind = i > 0 ? `${plan[i - 1].kind}:${plan[i - 1].who}` : "";
+                  const showSection = e.kind !== "always" && `${e.kind}:${e.who}` !== prevKind;
+                  return (
+                    <div key={e.ref}>
+                      {showSection && <div className={`pst-sec is-${e.kind}`} title={e.who}><i /><span>{kindLabel(e)} · {e.who}</span></div>}
+                      <div className={`pst-thumb ${sel === e.ref ? "is-sel" : ""} ${on ? "" : "is-off"}`}
+                        onClick={() => { setSel(e.ref); setSelKey(null); }}>
+                        <div className="pst-thumb-top">
+                          <span className="pst-thumb-n">{i + 1}</span>
+                          <span className="pst-thumb-t" title={e.title}>{num ? <b>{num}</b> : null}{e.title}</span>
+                          <button type="button" className={`pst-eye ${on ? "" : "is-off"}`} title={on ? "Leave this slide out" : "Put this slide back"}
+                            onClick={(ev) => { ev.stopPropagation(); toggleSlide(e.ref); }}>
+                            <SIco d={on ? "eye" : "eyeOff"} />
+                          </button>
+                        </div>
+                        <div className="pst-thumb-frame">
+                          <StudioThumb deck={pv!} entry={e} values={valuesFor(e)} edits={doc.edits ?? {}} width={thumbW} />
+                          {!on && <span className="pst-thumb-out">Left out</span>}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+                {!plan.length && <p className="pst-empty">No slide of this deck goes with these products and services. Check the slide rules in Settings › Proposal template.</p>}
+              </div>
+            </aside>
+
+            {/* ---- stage ---- */}
+            <main className="pst-stage" ref={stageRef} onClick={() => setSelKey(null)}>
+              {cur && pv && (
+                <>
+                  <div className={`pst-canvas ${doc.slides?.[cur.ref] === false ? "is-off" : ""}`} style={{ width: stageW }} onClick={(e) => e.stopPropagation()}>
+                    <SlidePreview deck={pv} n={cur.n} refId={cur.ref} values={curVals} edits={doc.edits ?? {}} width={stageW}
+                      onPickText={(k) => { setSelKey(k); setTab("text"); }} highlightKey={selKey} />
+                    {doc.slides?.[cur.ref] === false && (
+                      <div className="pst-canvas-off"><span>Left out of this proposal</span>
+                        <button type="button" onClick={() => toggleSlide(cur.ref)}><SIco d="eye" />Put it back</button></div>
+                    )}
+                  </div>
+                  <div className="pst-stage-bar" onClick={(e) => e.stopPropagation()}>
+                    <button type="button" className="pst-nav" disabled={curIdx <= 0} onClick={() => go(-1)} aria-label="Previous slide"><SIco d="left" /></button>
+                    <span className="pst-stage-cap">
+                      <b>Slide {curIdx + 1}</b> of {plan.length}
+                      {cur.who && <em className={`is-${cur.kind}`}>{cur.who}</em>}
+                    </span>
+                    <button type="button" className="pst-nav" disabled={curIdx >= plan.length - 1} onClick={() => go(1)} aria-label="Next slide"><SIco d="right" /></button>
+                    {doc.slides?.[cur.ref] === false ? (
+                      <button type="button" className="pst-rm is-back" onClick={() => toggleSlide(cur.ref)} title="Put this slide back in the proposal"><SIco d="eye" />Put back</button>
+                    ) : (
+                      <button type="button" className="pst-rm" onClick={() => toggleSlide(cur.ref)} title="Remove this slide from the proposal (Delete key)"><SIco d="eyeOff" />Remove slide</button>
+                    )}
+                    <span className="pst-hint"><SIco d="cursor" />Click any text to edit it</span>
+                  </div>
+                </>
+              )}
+            </main>
+
+            {/* ---- editor ---- */}
+            <aside className="pst-edit">
+              <div className="pst-tabs">
+                <button type="button" className={tab === "text" ? "is-on" : ""} onClick={() => setTab("text")}><SIco d="text" />Text</button>
+                <button type="button" className={tab === "fields" ? "is-on" : ""} onClick={() => setTab("fields")}>
+                  <SIco d="list" />Fields{missing.length > 0 ? <span className="pst-badge is-warn">{missing.length}</span> : <span className="pst-badge">{fields.length}</span>}
+                </button>
+              </div>
+              <div className="pst-edit-body">
+                {tab === "text" ? (
+                  !selKey || !textInfo ? (
+                    <div className="pst-blank">
+                      <span className="pst-blank-ico"><SIco d="cursor" /></span>
+                      <b>Pick a text on the slide</b>
+                      <p>Every text is editable. Values from the deal (client, prices, phases…) are filled in for you; change them here or in <button type="button" onClick={() => setTab("fields")}>Fields</button> to change them everywhere.</p>
+                      {missing.length > 0 && (
+                        <button type="button" className="pst-miss" onClick={() => setTab("fields")}>
+                          <SIco d="alert" />{missing.length} field{missing.length === 1 ? "" : "s"} still to fill in
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="pst-text">
+                      <div className="pst-lbl-row">
+                        <span className="pst-lbl">Text on this slide</span>
+                        {doc.edits?.[selKey] !== undefined && <span className="pst-tag">Edited</span>}
+                      </div>
+                      <textarea className="pst-area" autoFocus rows={6}
+                        value={doc.edits?.[selKey] ?? textInfo.auto}
+                        onChange={(e) => setEdit(selKey, e.target.value)} />
+                      {doc.edits?.[selKey] !== undefined && (
+                        <button type="button" className="pst-reset" onClick={() => setEdit(selKey, null)}><SIco d="reset" />Back to automatic</button>
+                      )}
+                      {textInfo.tokens.length > 0 && (
+                        <div className="pst-src">
+                          <span className="pst-lbl">From the template</span>
+                          <p>{textInfo.template.split(TOKEN_RE).map((part, i) => i % 2 ? <code key={i}>{part.trim()}</code> : <span key={i}>{part}</span>)}</p>
+                          <span className="pst-note">
+                            {doc.edits?.[selKey] !== undefined
+                              ? "This text is now fixed: changes to the deal no longer update it."
+                              : "Filled from the deal. Typing here fixes this text only; use Fields to change a value everywhere."}
+                          </span>
+                          <div className="pst-src-fields">
+                            {Array.from(new Set(textInfo.tokens)).filter((t) => t !== "num" && !t.includes("#")).map((t) => (
+                              <button type="button" key={t} onClick={() => { setTab("fields"); setTimeout(() => document.getElementById(`pst-f-${fieldKey(t, cur!.scope)}`)?.focus(), 60); }}>
+                                {t}<SIco d="right" />
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                ) : (
+                  <div className="pst-fields">
+                    {askMissing && missing.length > 0 && (
+                      <div className="pst-ask">
+                        <SIco d="alert" />
+                        <div>
+                          <b>{missing.length} field{missing.length === 1 ? "" : "s"} without a value</b>
+                          <span>They would come out empty in the deck.</span>
+                          <button type="button" onClick={() => generate(true)}>Download anyway</button>
+                        </div>
+                      </div>
+                    )}
+                    {!fields.length && <p className="pst-empty">The kept slides use no fields.</p>}
+                    {groups.map((g) => (
+                      <section key={g} className={`pst-fgroup ${g === "To fill in" ? "is-free" : ""}`}>
+                        <h4>{g}</h4>
+                        {fields.filter((f) => f.group === g).map((f) => {
+                          const v = doc.values?.[f.key];
+                          const changed = v !== undefined;
+                          const need = f.free && !(v ?? "").trim();
+                          const common = {
+                            id: `pst-f-${f.key}`, className: `pst-input ${need ? "is-need" : ""}`, value: v ?? f.auto,
+                            placeholder: f.free ? "Type the value for this proposal" : "Empty",
+                            onChange: (e: any) => setValue(f.key, e.target.value),
+                          };
+                          return (
+                            <label key={f.key} className={`pst-field ${changed && !f.free ? "is-changed" : ""}`}>
+                              <span className="pst-field-top">
+                                <span className="pst-field-l">{f.label}</span>
+                                {changed && !f.free && <button type="button" className="pst-mini" onClick={(e) => { e.preventDefault(); setValue(f.key, null); }} title={`Automatic: ${f.auto || "empty"}`}><SIco d="reset" />Auto</button>}
+                                {f.slides > 1 && <em>{f.slides} slides</em>}
+                              </span>
+                              {f.multi || (v ?? f.auto).includes("\n") ? <textarea rows={3} {...common} /> : <input {...common} />}
+                            </label>
+                          );
+                        })}
+                      </section>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </aside>
+          </div>
+        )}
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -323,16 +1145,16 @@ function DealPeople({ company, contacts, companyContactIds, dealIds, onChange }:
     </div>
   );
   return (
-    <section className="sl-panel sl-panel-people">
-      <div className="sl-calc-head-row">
-        <h3 className="sl-panel-title">Contacts{onDeal.length > 0 && <span>{onDeal.length}</span>}</h3>
-        {company && (
-          <span className="sl-ppl-cohead">
-            <button type="button" className="sl-ppl-co" onClick={openCompany} title="Open in Companies"><QlIco n="building" s={12} />{company.name}</button>
-            <LinksMenu links={companyLinks} label={`Links for ${company.name}`} />
-          </span>
-        )}
-      </div>
+    <FoldPanel className="sl-panel-people" title="Contacts" count={onDeal.length}
+      summary={onDeal.length
+        ? onDeal.slice(0, 2).map(name).join(", ") + (onDeal.length > 2 ? ` +${onDeal.length - 2}` : "")
+        : others.length ? `None yet · ${others.length} at the company` : "None yet"}
+      aside={company && (
+        <span className="sl-ppl-cohead">
+          <button type="button" className="sl-ppl-co" onClick={openCompany} title="Open in Companies"><QlIco n="building" s={12} />{company.name}</button>
+          <LinksMenu links={companyLinks} label={`Links for ${company.name}`} />
+        </span>
+      )}>
       {onDeal.length === 0 && <p className="sl-hint">No contacts on this deal yet{others.length ? " — add one from the company below." : "."}</p>}
       <div className="sl-ppl-list">{onDeal.map((c, i) => row(c, true, i))}</div>
       {others.length > 0 && (
@@ -342,16 +1164,18 @@ function DealPeople({ company, contacts, companyContactIds, dealIds, onChange }:
           {others.length > 3 && <button className="sl-ppl-more" onClick={() => setShowAll((v) => !v)}>{showAll ? "Show fewer" : `Show all ${others.length}`}</button>}
         </>
       )}
-    </section>
+    </FoldPanel>
   );
 }
 
-export default function TrackingDetail({ tracking, companies, contacts, products, employees, trackingFields = [], salesRoles = [], onBack }: {
+export default function TrackingDetail({ tracking, companies, contacts, products, employees, trackingFields = [], salesRoles = [], startWithClient = false, onBack }: {
   tracking: Tracking; companies: Company[]; contacts: Contact[]; products: Product[]; employees: Employee[];
   /** Custom deal fields, shown in the Details card. */
   trackingFields?: TrackingField[];
   /** Sales roles: moving the deal past a role's last phase hands it over. */
   salesRoles?: SalesRole[];
+  /** Just dropped on Won from the board and the user chose to create the client: open its form. */
+  startWithClient?: boolean;
   onBack: () => void;
 }) {
   const navigate = useNavigate();
@@ -371,6 +1195,9 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   const ask = (opts: { title: string; message: string; confirmLabel?: string; onConfirm: () => void }) => setConfirmDlg(opts);
   const [events, setEvents] = useState<PhaseEvent[]>([]);
   const [services, setServices] = useState<Service[]>([]);
+  /** The catalogue roles (Main Consultant, Project Manager, Connector…), to name a service's rates. */
+  const [clientRoles, setClientRoles] = useState<ClientRole[]>([]);
+  useEffect(() => { loadRoles().then(setClientRoles).catch(() => {}); }, []);
   const [potentials, setPotentials] = useState<PotentialService[]>([]);
   const [tprods, setTProds] = useState<TrackingProduct[]>([]);
   const [calcFor, setCalcFor] = useState<{ kind: "product" | "service"; id: string } | null>(null);
@@ -405,6 +1232,11 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   useEffect(() => { loadTrackingContactIds(tracking.id).then(setTrackingContactIds).catch(() => {}); }, [tracking.id]);
   const [clientCatalog, setClientCatalog] = useState<Product[]>([]);
   const [clientFormMode, setClientFormMode] = useState<"create" | "attach">("create"); // "attach" = scenario C
+  /** The deal was just won and its client isn't set up: offer to create it now. */
+  const [wonPrompt, setWonPrompt] = useState(false);
+  /** The client was created from the won prompt: say so and point at the handoff. */
+  const [clientDone, setClientDone] = useState(false);
+  const [clientBusy, setClientBusy] = useState(false);
   const [attachClientId, setAttachClientId] = useState<string | null>(null);
 
   // Save the client + project from the form, then fire the deferred handoff.
@@ -442,6 +1274,8 @@ export default function TrackingDetail({ tracking, companies, contacts, products
 
     setClientFormOpen(false);
     setClientPrefill(null);
+    // Opened from "deal won": the client is ready; the handoff is sent later.
+    if (!pendingHandoff) { setClientDone(true); return; }
     // Client now exists → show the SERVICE confirmation before sending, same as
     // the existing-client path. Build the service cards + client details.
     const svcCards: ConfirmService[] = confirmServiceCards();
@@ -501,6 +1335,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     setClientPrefill(null);
     setAttachClientId(null);
     setClientFormMode("create");
+    if (!pendingHandoff) { setClientDone(true); return; }
 
     // Now confirm the SERVICES tied to the new product, then send the handoff.
     const svcCards: ConfirmService[] = confirmServiceCards();
@@ -677,7 +1512,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
       calculator: (serviceOf(p.service_id)?.calculator as Calculator | null) ?? null,
       unit: (serviceUnit(p.service_id) === "hour" ? "hour" : "day"),
       minUnit: serviceMin(p.service_id),
-      signingDate: "",
+      signingDate: wonDay(),
       contactIds: (((p as any).contact_ids ?? []) as string[]),
       group, versionLabel: label,
     });
@@ -834,8 +1669,11 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     });
     const ph = phases.find((p) => p.id === id);
     const next = ph?.sales_outcome === "win" ? "won" : ph?.sales_outcome === "loss" ? "lost" : "active";
+    const wasWon = status === "won";
     setStatus(next); await setTrackingStatus(tracking.id, next);
     if (next === "lost") setLossModal(true);
+    // Just won: if the client isn't set up yet, ask to create it right away.
+    if (next === "won" && !wasWon && await clientNeeded().catch(() => false)) setWonPrompt(true);
   };
 
   // Clicking a status button: sync the phase too.
@@ -1007,7 +1845,9 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   const [propMenu, setPropMenu] = useState(false);
   const [propBusy, setPropBusy] = useState<null | "pptx" | "pdf">(null);
   const [propErr, setPropErr] = useState<string | null>(null);
-  const buildProposalData = (sel?: Record<string, { include: boolean; versionId: string }>, phaseOverride?: Record<string, { name: string; days: number; tasks: string[] }[]>): ProposalData => {
+  const buildProposalData = (sel?: Record<string, { include: boolean; versionId: string }>, phaseOverride?: Record<string, { name: string; days: number; tasks: string[] }[]>,
+    /** Filled with the catalogue ids of the products / services, in the order they come out. */
+    ids?: { products: string[]; services: string[] }): ProposalData => {
     const co: any = company ?? {};
     const primaryContact = tracking.contactIds[0] ? contacts.find((x) => x.id === tracking.contactIds[0]) : undefined;
     // Resolve which product/service line to use per group: the selected version,
@@ -1029,9 +1869,19 @@ export default function TrackingDetail({ tracking, companies, contacts, products
 
     const productsOut = prodGroups.map((vg) => pickProd(vg as string)).filter(Boolean).map((tp: any) => {
       const prod = productOf(tp.product_id);
-      const base = prod?.tiers?.find((x) => x.id === tp.tier_id)?.price;
+      const tier = prod?.tiers?.find((x) => x.id === tp.tier_id);
+      const base = tier?.price;
       const bd = lineBreakdown(tp, prod?.calculator as Calculator | null, base);
+      ids?.products.push(tp.product_id ?? "");
+      // The contract lengths the plan offers: price per year, before / after each length's discount.
+      const annualGross = bd.unitPrice * (tp.recurring && tp.period === "monthly" ? 12 : 1);
+      const durs = (tier?.durations ?? []).filter((d) => Number(d.months) > 0);
+      const terms = (durs.length ? durs : [{ months: 12, discount_pct: 0 }]).map((d) => {
+        const pct = Number(d.discount_pct) || 0;
+        return { years: Math.round((Number(d.months) / 12) * 100) / 100, discountPct: pct, annualGross, annual: annualGross * (1 - pct / 100) };
+      });
       return {
+        terms,
         name: productName(tp.product_id), tier: prod?.tiers?.find((x) => x.id === tp.tier_id)?.name,
         recurring: !!tp.recurring, period: (tp.period as any) ?? "yearly", termYears: Number(tp.term_years ?? 1) || 1,
         unitPrice: bd.unitPrice, qty: Number(tp.quantity ?? 1) || 1,
@@ -1042,13 +1892,29 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     const servicesOut = svcGroups.map((vg) => ({ vg, p: pickSvc(vg as string) })).filter((x) => x.p).map(({ vg, p }: any) => {
       const svc = serviceOf(p.service_id);
       const bd = lineBreakdown(p, svc?.calculator as Calculator | null, undefined, serviceMin(p.service_id));
+      ids?.services.push(p.service_id ?? "");
       const unit = (serviceUnit(p.service_id) === "hour" ? "hour" : "day") as "hour" | "day";
       const ov = phaseOverride?.[`s:${vg}`];
       const rateRows = bd.rows.filter((r: any) => r.days && r.days > 0);
       const phases = ov
         ? ov.map((f) => ({ name: f.name, bullets: f.tasks ?? [], days: f.days }))
         : (rateRows.length ? rateRows.map((r: any) => ({ name: r.label, bullets: r.detail ? [r.detail] : [], days: r.days })) : [{ name: p.label || serviceName(p.service_id), bullets: [], days: bd.qty }]);
+      // Who does the work: each calculator row's role (Settings), the rest goes to the service's main role.
+      const svcRoles = svc?.roles ?? [];
+      const mainRole = (svcRoles.find((r) => r.is_main) ?? svcRoles[0])?.role_id || "consultor";
+      const varOf = (key: string) => (svc?.calculator as Calculator | null)?.variables.find((v) => (v.id ?? String(v.sort)) === key);
+      const byRole = new Map<string, { name: string; days: number; amount: number }>();
+      rateRows.forEach((r: any) => {
+        const id = varOf(r.key)?.role_id || mainRole;
+        const cur = byRole.get(id) ?? { name: roleNameOf(id, clientRoles), days: 0, amount: 0 };
+        cur.days += Number(r.days) || 0; cur.amount += Number(r.amount) || 0;
+        byRole.set(id, cur);
+      });
+      const roles = byRole.size
+        ? Array.from(byRole.values()).map((r) => ({ name: r.name, days: r.days, rate: r.days ? r.amount / r.days : r.amount }))
+        : [{ name: roleNameOf(mainRole, clientRoles), days: bd.qty, rate: bd.qty ? (bd.total + bd.discount) / bd.qty : bd.unitPrice }];
       return {
+        roles,
         name: p.label || serviceName(p.service_id), unit, days: bd.qty, rate: bd.unitPrice,
         rows: bd.rows.map((r: any) => ({ label: r.label, detail: r.detail, amount: r.amount, days: r.days })),
         phases, discount: bd.discount, total: bd.total,
@@ -1067,17 +1933,91 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   };
   const [propPick, setPropPick] = useState<null | "pptx" | "pdf">(null);
   const [phaseEditor, setPhaseEditor] = useState<null | { sel: Record<string, { include: boolean; versionId: string }>; services: { key: string; name: string; totalDays: number; minUnit: number; phases: { name: string; percent: number; days: number; tasks: string[] }[] }[] }>(null);
-  const runProposal = (kind: "pptx" | "pdf") => { setPropMenu(false); setPropPick(kind); };
+  const runProposal = (kind: "pptx" | "pdf") => { propTarget.current = null; setPropMenu(false); setPropPick(kind); };
 
+  /** The saved proposal being generated (its document is kept on the deal), or null for a one-off. */
+  const propTarget = useRef<DealProposal | null>(null);
+  const [propBusyId, setPropBusyId] = useState<string | null>(null);
+  const [propsReload, setPropsReload] = useState(0);
+  /** The built-in generator's template (Settings › Proposal template). */
+  const templateFor = async (_sel: Record<string, { include: boolean; versionId: string }>, _pickedId?: string | null) => loadProposalTemplateFor(null, null);
   const generateWithSel = async (kind: "pptx" | "pdf", sel: Record<string, { include: boolean; versionId: string }>, phaseOverride?: Record<string, { name: string; days: number; tasks: string[] }[]>) => {
+    const target = propTarget.current;
+    propTarget.current = null;
     setPropBusy(kind); setPropErr(null);
+    if (target) setPropBusyId(`${target.id}:${kind}`);
     try {
-      const tpl = await loadProposalTemplate();
+      const tpl = await templateFor(sel, target?.template_id);
       if (!tpl) { setPropErr("No proposal template configured for your company yet."); return; }
-      await generateProposal(kind, buildProposalData(sel, phaseOverride), tpl);
+      const { blob, fileName } = await renderProposal(kind, buildProposalData(sel, phaseOverride), tpl.template, target?.name);
+      downloadBlob(blob, fileName);
+      if (target) {
+        // Kept on the deal: it goes with the handoff into the client's folders.
+        const { file, error } = await uploadTrackingFile(tracking.id, curPhase, blob, fileName, `Proposal · ${target.name}`);
+        if (error || !file) { setPropErr(`Downloaded, but not saved on the deal: ${error ?? "unknown error"}`); return; }
+        const f = proposalFigures(target.lines, proposalGroups);
+        const { error: e2 } = await saveDealProposal({ ...target, file_id: file.id, gross: f.gross, partner: f.partner, total: f.total, is_main: undefined });
+        if (e2) setPropErr(e2);
+        setPropsReload((n) => n + 1);
+      }
     } catch (e: any) { setPropErr(e?.message ?? "Could not generate the proposal."); }
-    finally { setPropBusy(null); }
+    finally { setPropBusy(null); setPropBusyId(null); }
   };
+  /** Generate a saved proposal: its versions, the lines it leaves out excluded. */
+  /** A saved proposal as a selection: its versions; lines it leaves out, and lines kept out of proposals, excluded. */
+  const selOfProposal = (p: DealProposal) => {
+    const sel: Record<string, { include: boolean; versionId: string }> = {};
+    allProposalGroups.forEach((g) => {
+      const visible = proposalGroups.includes(g);
+      const l = p.lines.find((x) => x.kind === g.kind && x.group === g.group);
+      const ok = visible && !!l?.line && g.versions.some((v) => v.id === l.line);
+      sel[`${g.kind === "product" ? "p" : "s"}:${g.group}`] = { include: ok, versionId: ok ? l!.line! : g.activeId ?? "" };
+    });
+    return sel;
+  };
+  const generateProposalFor = (p: DealProposal, kind: "pptx" | "pdf") => {
+    propTarget.current = p;
+    doGenerate(kind, selOfProposal(p));
+  };
+
+  /** Each included service's phases, from its blueprint (days spread by the blueprint's %). */
+  const blueprintPhases = async (sel: Record<string, { include: boolean; versionId: string }>) => {
+    const picked = Array.from(new Set(potentials.map((p) => p.version_group ?? p.id)))
+      .filter((vg) => sel[`s:${vg}`]?.include !== false)
+      .map((vg) => (groupOf(potentials, vg as string).find((x) => x.id === sel[`s:${vg}`]?.versionId)) || activeOfGroup(potentials, vg as string))
+      .filter(Boolean) as any[];
+    const ids = Array.from(new Set(picked.map((p) => p.service_id).filter(Boolean)));
+    const out: Record<string, { name: string; days: number; tasks: string[] }[]> = {};
+    if (!ids.length) return out;
+    const bps = await loadBlueprintsForServices(ids).catch(() => ({} as Record<string, PhaseBlueprint>));
+    picked.forEach((p) => {
+      const bp = p.service_id ? bps[p.service_id] : null;
+      if (!bp?.phases?.length) return;
+      const totalDays = lineBreakdown(p, serviceOf(p.service_id)?.calculator as Calculator | null, undefined, serviceMin(p.service_id)).qty;
+      const minUnit = serviceMin(p.service_id) || 0.5;
+      out[`s:${p.version_group ?? p.id}`] = bp.phases.map((ph) => ({
+        name: ph.name, days: billableQty((totalDays * (ph.percent || 0)) / 100, minUnit), tasks: (ph.tasks ?? []).map((tk) => tk.name),
+      }));
+    });
+    return out;
+  };
+
+  // ---- Proposal decks (the company's own PowerPoint) ----
+  const [decks, setDecks] = useState<ProposalDeckRow[] | null>(null);
+  useEffect(() => { listProposalDecks().then(setDecks).catch(() => setDecks([])); }, []);
+  const [studio, setStudio] = useState<null | { proposal: DealProposal; data: ProposalData; productIds: string[]; serviceIds: string[] }>(null);
+  const openStudio = async (p: DealProposal) => {
+    setPropBusyId(`${p.id}:studio`); setPropErr(null);
+    try {
+      const sel = selOfProposal(p);
+      const phases = await blueprintPhases(sel);
+      const ids = { products: [] as string[], services: [] as string[] };
+      const data = buildProposalData(sel, phases, ids);
+      setStudio({ proposal: p, data, productIds: ids.products, serviceIds: ids.services });
+    } catch (e: any) { setPropErr(e?.message ?? "Could not open the proposal."); }
+    finally { setPropBusyId(null); }
+  };
+  const seller = (() => { const e: any = employees.find((x) => x.id === me?.id); return { name: e?.name, email: e?.email, phone: e?.phone }; })();
 
   const doGenerate = async (kind: "pptx" | "pdf", sel: Record<string, { include: boolean; versionId: string }>) => {
     setPropPick(null);
@@ -1271,7 +2211,12 @@ export default function TrackingDetail({ tracking, companies, contacts, products
 
   const addPotential = async (serviceId: string) => {
     const svc = services.find((s) => s.id === serviceId);
-    const price = svc?.roles?.reduce((sum: number, r: any) => sum + (r.price || 0), 0) ?? 0;
+    // A duration calculator bills each role's time at that role's rate, so the
+    // line's own rate is the main role's. Flat services keep the sum of their roles.
+    const main = svc?.roles?.find((r) => r.is_main) ?? svc?.roles?.[0];
+    const price = svc?.calculator?.output_kind === "quantity" && main
+      ? Number(main.price) || 0
+      : svc?.roles?.reduce((sum: number, r: any) => sum + (r.price || 0), 0) ?? 0;
     const p = await addPotentialService(tracking.id, serviceId, svc?.name ?? null, price);
     if (p) setPotentials((xs) => [...xs, p]);
   };
@@ -1291,10 +2236,15 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   const groupOf = (list: any[], vg: string | null | undefined) =>
     list.filter((x) => (x.version_group ?? x.id) === (vg ?? "__none__"))
       .sort((a, b) => String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")));
+  /** The version that counts; none when every version is off (left out by the main proposal). */
   const activeOfGroup = (list: any[], vg: string | null | undefined) => {
     const g = groupOf(list, vg);
+    if (g.length && g.every((x) => x.version_active === false)) return undefined;
     return g.find((x) => x.version_active) ?? g[g.length - 1];
   };
+  /** Line groups left out of the deal (every version off), to show and bring back. */
+  const leftOutGroups = (list: any[]) => Array.from(new Set(list.map((x) => x.version_group ?? x.id)))
+    .filter((vg) => !activeOfGroup(list, vg)).map((vg) => ({ vg, rows: groupOf(list, vg) }));
   // The distinct groups, each represented by its active line.
   const activeTprods = (() => {
     const seen = new Set<string>(); const out: TrackingProduct[] = [];
@@ -1430,6 +2380,70 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   const servicesTotal = activePotentials.reduce(
     (s, p) => s + lineTotal(p, serviceOf(p.service_id)?.calculator as Calculator | null, undefined, serviceMin(p.service_id)), 0);
   const totalPotential = productsTotal + servicesTotal;
+  /** What partners take from the active lines (already out of the totals above). */
+  const partnersTotal = [
+    ...activeTprods.map((p) => lineBreakdown(p, productOf(p.product_id)?.calculator as Calculator | null, productOf(p.product_id)?.tiers?.find((x) => x.id === p.tier_id)?.price).partner),
+    ...activePotentials.map((p) => lineBreakdown(p, serviceOf(p.service_id)?.calculator as Calculator | null, undefined, serviceMin(p.service_id)).partner),
+  ].reduce((a, b) => a + b, 0);
+  /** Every line group with its versions, for building proposals. */
+  const allProposalGroups: PropGroup[] = [
+    ...Array.from(new Set(tprods.map((p) => p.version_group ?? p.id))).map((vg): PropGroup => {
+      const grp = groupOf(tprods, vg); const act = activeOfGroup(tprods, vg);
+      return {
+        kind: "product", group: vg, name: productName(grp[0]?.product_id ?? null), activeId: act?.id ?? null,
+        ownerKey: grp[0]?.product_id ? `product:${grp[0].product_id}` : null,
+        versions: grp.map((v, i) => {
+          const prod = productOf(v.product_id);
+          const bd = lineBreakdown(v, prod?.calculator as Calculator | null, prod?.tiers?.find((x) => x.id === v.tier_id)?.price);
+          return { id: v.id, label: `v${i + 1}`, total: bd.total, partner: bd.partner, net: bd.net };
+        }),
+      };
+    }),
+    ...Array.from(new Set(potentials.map((p) => p.version_group ?? p.id))).map((vg): PropGroup => {
+      const grp = groupOf(potentials, vg); const act = activeOfGroup(potentials, vg);
+      return {
+        kind: "service", group: vg, name: grp[0]?.label || serviceName(grp[0]?.service_id ?? null), activeId: act?.id ?? null,
+        ownerKey: grp[0]?.service_id ? `service:${grp[0].service_id}` : null,
+        versions: grp.map((v, i) => {
+          const bd = lineBreakdown(v, serviceOf(v.service_id)?.calculator as Calculator | null, undefined, serviceMin(v.service_id));
+          return { id: v.id, label: `v${i + 1}`, total: bd.total, partner: bd.partner, net: bd.net };
+        }),
+      };
+    }),
+  ];
+  /** The groups proposals can use: products / services switched off for proposals (catalogue) stay out of them. */
+  const proposalGroups = allProposalGroups.filter((g) => {
+    const id = g.ownerKey?.split(":")[1];
+    const item: any = id ? (g.kind === "product" ? productOf(id) : serviceOf(id)) : null;
+    return item?.in_proposals !== false;
+  });
+  /** A proposal became the main one: show its versions as the active ones. */
+  const applyMainLocally = (p: DealProposal) => {
+    // undefined = not in the proposal (left as is); null = left out (every version off).
+    const pick = (kind: "product" | "service", vg: string) => { const l = p.lines.find((x) => x.kind === kind && x.group === vg); return l ? (l.line ?? null) : undefined; };
+    setTProds((xs) => xs.map((x) => { const id = pick("product", x.version_group ?? x.id); return id === undefined ? x : { ...x, version_active: x.id === id }; }));
+    setPotentials((xs) => xs.map((x) => { const id = pick("service", x.version_group ?? x.id); return id === undefined ? x : { ...x, version_active: x.id === id }; }));
+  };
+  /** A line left out by the main proposal, back in (its newest version). */
+  const includeGroup = (kind: "product" | "service", vg: string, rows: any[]) => {
+    const last = rows[rows.length - 1]; if (!last) return;
+    if (kind === "product") switchProdVersion(vg, last.id); else switchSvcVersion(vg, last.id);
+  };
+  const leftOutRows = (kind: "product" | "service", list: any[]) => {
+    const out = leftOutGroups(list);
+    if (!out.length) return null;
+    return (
+      <div className="sl-rv-out">
+        {out.map(({ vg, rows }) => (
+          <div key={vg} className="sl-rv-outrow">
+            <span className="sl-rv-outname">{kind === "product" ? productName(rows[0]?.product_id ?? null) : (rows[0]?.label || serviceName(rows[0]?.service_id ?? null))}</span>
+            <em>Left out by the main proposal</em>
+            <button type="button" className="sl-rv-tool" onClick={() => includeGroup(kind, vg, rows)}>Include</button>
+          </div>
+        ))}
+      </div>
+    );
+  };
   const money = (n: number) =>
     `\u20ac${(Number(n) || 0).toLocaleString("de-DE", { maximumFractionDigits: 0 })}`;
 
@@ -1505,18 +2519,48 @@ export default function TrackingDetail({ tracking, companies, contacts, products
         const lineRate = svcCalc?.output_kind === "quantity"
           ? baseRate
           : (days > 0 ? Math.round(bd.total / days) : Math.round(bd.total));
-        // The calculator's supervision variable (Settings) splits its days off
-        // as supervision, at its own rate; management builds the project from it.
-        const isSup = (key: string) => !!svcCalc?.variables.find((v) => (v.id ?? String(v.sort)) === key)?.is_supervision;
+        // Each calculator variable is billed as a role (Settings); the rest of
+        // the time, and the base row, go to the service's main role. Management
+        // builds the project's role lines from this.
+        const svcRoles = serviceOf(p.service_id)?.roles ?? [];
+        const mainRole = (svcRoles.find((r) => r.is_main) ?? svcRoles[0])?.role_id || "consultor";
+        const varOf = (key: string) => svcCalc?.variables.find((v) => (v.id ?? String(v.sort)) === key);
+        const isSup = (key: string) => !varOf(key)?.role_id && !!varOf(key)?.is_supervision;
+        // Legacy supervision rows (not migrated yet) travel as "supervision"; management maps it to its role.
+        const roleOfRow = (key: string) => varOf(key)?.role_id || (isSup(key) ? "supervision" : mainRole);
         const rows = bd.rows.map((r) => {
           const tr = timeRows.find((x) => x.key === r.key);
           const d = tr ? tr.amount : undefined;
+          const roleId = roleOfRow(r.key);
           return {
             label: r.label, detail: r.detail, amount: r.amount, discount: r.discount,
             days: d, rate: d && d > 0 ? Math.round(r.amount / d) : undefined,
+            roleId, roleName: roleNameOf(roleId, clientRoles),
             supervision: isSup(r.key) || undefined,
           };
         });
+        // Days and net money per role; the rate is what the role's rows earn per day.
+        const acc = new Map<string, { days: number; net: number }>();
+        const bump = (k: string, d: number, net: number) => {
+          const a = acc.get(k) ?? { days: 0, net: 0 };
+          a.days += d; a.net += net; acc.set(k, a);
+        };
+        if (svcCalc?.output_kind === "quantity") rows.forEach((r) => bump(r.roleId, r.days ?? 0, r.amount - r.discount));
+        const rowDays = [...acc.values()].reduce((a, x) => a + x.days, 0);
+        const mainAcc = acc.get(mainRole);
+        const mainRate = mainAcc && mainAcc.days > 0 ? mainAcc.net / mainAcc.days : lineRate;
+        if (!acc.size) bump(mainRole, days, bd.total);
+        // Rounding up to the billable minimum adds days to the main role.
+        const extra = acc.size && rowDays < days ? days - rowDays : 0;
+        const roles = [...acc.entries()]
+          .map(([roleId, a]) => {
+            const isMain = roleId === mainRole;
+            const d = a.days + (isMain ? extra : 0);
+            const rate = isMain ? (a.days > 0 ? a.net / a.days : mainRate) : (a.days > 0 ? a.net / a.days : 0);
+            return { roleId, days: Math.round(d * 100) / 100, rate: Math.round(rate) };
+          })
+          .filter((x) => x.days > 0);
+        if (extra > 0 && !roles.some((x) => x.roleId === mainRole)) roles.unshift({ roleId: mainRole, days: Math.round(extra * 100) / 100, rate: Math.round(mainRate) });
         const supRows = rows.filter((r) => r.supervision && (r.days ?? 0) > 0);
         const supDays = supRows.reduce((a, r) => a + (r.days ?? 0), 0);
         lines.push({
@@ -1525,6 +2569,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
           gross: Math.round(bd.gross), discount: Math.round(bd.discount),
           rate: Math.round(lineRate),
           rows,
+          roles,
           supervision_days: supDays || undefined,
           supervision_rate: supDays ? Math.round(supRows.reduce((a, r) => a + r.amount, 0) / supDays) : undefined,
         });
@@ -1538,6 +2583,71 @@ export default function TrackingDetail({ tracking, companies, contacts, products
           .reduce((s, l) => s + (l.price || 0), 0),
       };
     });
+
+  /** The day the deal was won: the default signing date of everything signed with it. */
+  const wonDay = () => {
+    const ev = winPhase ? events.find((x) => x.phase_id === winPhase.id)?.entered_at : null;
+    return (closedOn || tracking.close_date || ev || new Date().toISOString()).slice(0, 10);
+  };
+  /** No client for this company yet, or it is buying products not on file yet. */
+  const clientNeeded = async () => {
+    if (!tracking.company_id) return false;
+    if (!(await clientExistsForCompany(tracking.company_id))) return true;
+    const tp = tprods.length ? tprods : await loadTrackingProducts(tracking.id).catch(() => [] as TrackingProduct[]);
+    return tp.length > 0 && !(await hasClientProductsForTracking(tracking.id));
+  };
+  /**
+   * Opens the client form when the client still has to be created (or the
+   * deal's new products added to it). `destinations` set = the handoff waits
+   * for it; null = opened on its own (deal won), nothing is sent.
+   * Returns false when there was nothing to set up.
+   */
+  const openClientForm = async (destinations: { id: string; name: string; services: any[]; potential_value: number }[] | null) => {
+    if (!tracking.company_id) return false;
+    const signDay = wonDay();
+    const exists = await clientExistsForCompany(tracking.company_id);
+    if (!exists) {
+      const [prefill, catalog] = await Promise.all([buildClientPrefill(tracking.company_id, tracking.id), listCatalogProducts()]);
+      if (!prefill) return false;
+      setClientCatalog(catalog);
+      setPendingHandoff(destinations);
+      setClientPrefill({ ...prefill, products: prefill.products.map((p: any) => ({ ...p, signingDate: signDay })) });
+      setClientFormMode("create");
+      setClientFormOpen(true);
+      return true;
+    }
+    const tp = tprods.length ? tprods : await loadTrackingProducts(tracking.id).catch(() => [] as TrackingProduct[]);
+    if (tp.length > 0 && !(await hasClientProductsForTracking(tracking.id))) {
+      const [attach, catalog] = await Promise.all([buildAttachPrefill(tracking.company_id, tracking.id), listCatalogProducts()]);
+      if (attach) {
+        setClientCatalog(catalog as any);
+        setPendingHandoff(destinations);
+        setClientPrefill({ ...attach.prefill, products: attach.prefill.products.map((p: any) => ({ ...p, signingDate: signDay })) });
+        setAttachClientId(attach.clientId);
+        setClientFormMode("attach");
+        setClientFormOpen(true);
+        return true;
+      }
+    }
+    return false;
+  };
+  const createClientNow = async () => {
+    setClientBusy(true);
+    try {
+      const opened = await openClientForm(null);
+      setWonPrompt(false);
+      if (!opened) setClientDone(true);
+    } catch (err: any) {
+      alert("Could not open the client form: " + (err?.message ?? String(err)));
+    } finally { setClientBusy(false); }
+  };
+  // Opened from the board right after dropping the deal on Won: go straight to the client form.
+  const autoClientDone = useRef(false);
+  useEffect(() => {
+    if (!startWithClient || autoClientDone.current) return;
+    autoClientDone.current = true;
+    clientNeeded().then((need) => { if (need) void createClientNow(); }).catch(() => {});
+  }, [startWithClient]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const doHandoff = async () => {
    try {
@@ -1555,47 +2665,10 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     // Management keys clients by company. If no client exists yet for this
     // company, sales must create it (with legal info) BEFORE the handoff builds
     // a project. Open the prefilled form; the handoff fires once it's saved.
-    const exists = await clientExistsForCompany(tracking.company_id);
-    if (!exists && tracking.company_id) {
-      const [prefill, catalog] = await Promise.all([
-        buildClientPrefill(tracking.company_id, tracking.id),
-        listCatalogProducts(),
-      ]);
-      // Catalog minus products already on the deal, so the picker only offers new ones.
-      // Pass the FULL catalog: the form needs every product's calculator/tiers
-      // (including the deal's own products). The picker filters internally.
-      setClientCatalog(catalog);
-      setPendingHandoff(destinations);
-      setClientPrefill(prefill);
-      setClientFormMode("create");
-      setClientFormOpen(true);
-      setHandoffMenu(false);
-      return;
-    }
-
-    // Client EXISTS and this deal carries new PRODUCTS → scenario C (attach). But
-    // if THIS tracking's products were already written to client_products (the
-    // client was created earlier in this same deal and only the services still
-    // need sending), skip the attach prompt and go straight to the services
-    // confirm below — re-capturing the products would duplicate them.
-    const productsAlreadyCaptured = await hasClientProductsForTracking(tracking.id);
-    if (exists && tracking.company_id && tprods.length > 0 && !productsAlreadyCaptured) {
-      const [attach, catalog] = await Promise.all([
-        buildAttachPrefill(tracking.company_id, tracking.id),
-        listCatalogProducts(),
-      ]);
-      if (attach) {
-        setClientCatalog(catalog as any);
-        setPendingHandoff(destinations);
-        setClientPrefill(attach.prefill);
-        setAttachClientId(attach.clientId);
-        setClientFormMode("attach");
-        setClientFormOpen(true);
-        setHandoffMenu(false);
-        return;
-      }
-      // Couldn't load the client record → fall through to services-only.
-    }
+    // Management keys clients by company. If the client isn't set up yet (it
+    // is normally created when the deal is won), the form opens first and the
+    // handoff continues once it is saved.
+    if (await openClientForm(destinations)) { setHandoffMenu(false); return; }
 
     // Client exists → confirm the SERVICES (with editable calculators) before
     // sending. Build the service cards from this deal's potentials.
@@ -2079,8 +3152,12 @@ export default function TrackingDetail({ tracking, companies, contacts, products
             <TrackingFiles trackingId={tracking.id} phaseId={curPhase} phases={phases} />
           </section>
 
-          <section className="sl-panel sl-prob-panel">
-            <h3 className="sl-panel-title">Close probability</h3>
+          <FoldPanel className="sl-prob-panel" title="Close probability"
+            summary={[
+              `Sales ${repProb == null ? "—" : `${repProb}%`}`,
+              `Mgmt ${mgrProb == null ? "—" : `${mgrProb}%`}`,
+              closedOn && (status === "won" || status === "lost") ? `${status === "won" ? "Won" : "Lost"} ${new Date(`${closedOn}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : "",
+            ].filter(Boolean).join(" · ")}>
 
             <div className="sl-probfield">
               <span className="sl-probfield-k">Sales estimate</span>
@@ -2149,7 +3226,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
                 </span>
               </div>
             </div>
-          </section>
+          </FoldPanel>
 
           {trackingFields.length > 0 && (
             <TrackingFieldsPanel trackingId={tracking.id} fields={trackingFields} initial={tracking.custom}
@@ -2158,6 +3235,8 @@ export default function TrackingDetail({ tracking, companies, contacts, products
           </div>
 
           <div className="sl-col-calc">
+          <DealProposals trackingId={tracking.id} groups={proposalGroups} decks={decks} money={money}
+            busy={propBusyId} reloadKey={propsReload} onGenerate={generateProposalFor} onStudio={openStudio} onMain={applyMainLocally} />
           <section className="sl-panel sl-panel-calc">
             <div className="sl-rvh">
               <div className="sl-rvh-top">
@@ -2171,6 +3250,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
               <div className="sl-rvh-legend">
                 <span className="is-product"><i />Products<b>{money(productsTotal)}</b></span>
                 <span className="is-service"><i />Services<b>{money(servicesTotal)}</b></span>
+                {partnersTotal > 0 && <span className="is-partner" title="Already taken out of the figures above"><i />Partners<b>−{money(partnersTotal)}</b></span>}
               </div>
             </div>
 
@@ -2179,7 +3259,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
                 <span className="sl-rvg-t"><i />Products<em>{activeTprods.length}</em></span>
                 <b>{money(productsTotal)}</b>
               </div>
-              {activeTprods.length === 0 && <p className="sl-rvg-empty">No products yet.</p>}
+              {activeTprods.length === 0 && !leftOutGroups(tprods).length && <p className="sl-rvg-empty">No products yet.</p>}
               <div className="sl-calc-cards">
               {activeTprods.map((tp) => {
                 const vg = tp.version_group ?? tp.id;
@@ -2199,6 +3279,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
                 );
               })}
               </div>
+              {leftOutRows("product", tprods)}
               {availableProducts.length > 0 && (
                 <div className="sl-rvg-add">
                   <Select value="" onChange={(v) => v && addProduct(v)} placeholder="+ Add product" options={availableProducts.map((p) => ({ value: p.id!, label: p.name }))} />
@@ -2211,7 +3292,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
                 <span className="sl-rvg-t"><i />Services<em>{activePotentials.length}</em></span>
                 <b>{money(servicesTotal)}</b>
               </div>
-              {activePotentials.length === 0 && <p className="sl-rvg-empty">No services yet.</p>}
+              {activePotentials.length === 0 && !leftOutGroups(potentials).length && <p className="sl-rvg-empty">No services yet.</p>}
               <div className="sl-calc-cards">
               {activePotentials.map((p) => {
                 const vg = p.version_group ?? p.id;
@@ -2231,6 +3312,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
                 );
               })}
               </div>
+              {leftOutRows("service", potentials)}
               {services.length > 0 && (
                 <div className="sl-rvg-add">
                   <Select value="" onChange={(v) => v && addPotential(v)} placeholder="+ Add service" options={services.map((s) => ({ value: s.id!, label: s.name }))} />
@@ -2283,6 +3365,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
               tiers={prod?.tiers}
               calculator={prod?.calculator as Calculator | null}
               money={money}
+              partnerItem={{ type: "product", id: tp.product_id }}
               onApply={(patch) => patchProduct(tp.id, patch)}
               onClose={() => setCalcFor(null)}
             />
@@ -2296,10 +3379,12 @@ export default function TrackingDetail({ tracking, companies, contacts, products
             title={ps.label || svc?.name || "Service"}
             line={ps}
             roles={svc?.roles}
+            roleName={(id) => roleNameOf(id, clientRoles)}
             calculator={svc?.calculator as Calculator | null}
             unit={svc?.rate_unit ?? "day"}
             minUnit={serviceMin(ps.service_id)}
             money={money}
+            partnerItem={{ type: "service", id: ps.service_id }}
             onApply={(patch) => patchPotential(ps.id, patch)}
             onClose={() => setCalcFor(null)}
           />
@@ -2311,6 +3396,8 @@ export default function TrackingDetail({ tracking, companies, contacts, products
           prefill={clientPrefill}
           catalog={clientCatalog}
           mode={clientFormMode}
+          signingDefault={wonDay()}
+          standalone={!pendingHandoff}
           onClose={() => { setClientFormOpen(false); setPendingHandoff(null); setClientPrefill(null); setAttachClientId(null); setClientFormMode("create"); }}
           onConfirm={clientFormMode === "attach" ? attachClientAndHandoff : saveClientAndHandoff}
         />
@@ -2453,6 +3540,24 @@ export default function TrackingDetail({ tracking, companies, contacts, products
         />
       )}
 
+      {studio && decks && decks.length > 0 && (
+        <ProposalStudio
+          proposal={studio.proposal} decks={decks} data={studio.data}
+          productIds={studio.productIds} serviceIds={studio.serviceIds} seller={seller}
+          onClose={() => { setStudio(null); setPropsReload((n) => n + 1); }}
+          onSaveDoc={(deckId, doc) => saveProposalDoc(studio.proposal.id, deckId, doc)}
+          onGenerated={async (blob, fileName) => {
+            const p = studio.proposal;
+            // Kept on the deal: it goes with the handoff into the client's folders.
+            const { file, error } = await uploadTrackingFile(tracking.id, curPhase, blob, fileName, `Proposal · ${p.name}`);
+            if (error || !file) return error ?? "unknown error";
+            const f = proposalFigures(p.lines, proposalGroups);
+            const { error: e2 } = await saveDealProposal({ ...p, deck_id: undefined, file_id: file.id, gross: f.gross, partner: f.partner, total: f.total, is_main: undefined });
+            return e2;
+          }}
+        />
+      )}
+
       {phaseEditor && (
         <PhaseEditor
           services={phaseEditor.services}
@@ -2469,22 +3574,36 @@ export default function TrackingDetail({ tracking, companies, contacts, products
             ...Array.from(new Set(tprods.map((p) => p.version_group ?? p.id))).map((vg) => {
               const grp = groupOf(tprods, vg as string);
               const active = activeOfGroup(tprods, vg as string);
-              return { key: `p:${vg}`, tag: "Product", name: productName(active?.product_id ?? null),
+              return { key: `p:${vg}`, tag: "Product", name: productName((active ?? grp[0])?.product_id ?? null),
                 versions: grp.map((v, i) => ({ id: v.id, label: `v${i + 1}`, amount: lineBreakdown(v, productOf(v.product_id)?.calculator as Calculator | null, productOf(v.product_id)?.tiers?.find((x: any) => x.id === v.tier_id)?.price).total })),
-                activeId: active?.id ?? grp[0]?.id };
+                activeId: active?.id ?? grp[grp.length - 1]?.id, leftOut: !active };
             }),
             ...Array.from(new Set(potentials.map((p) => p.version_group ?? p.id))).map((vg) => {
               const grp = groupOf(potentials, vg as string);
               const active = activeOfGroup(potentials, vg as string);
-              return { key: `s:${vg}`, tag: "Service", name: (active?.label || serviceName(active?.service_id ?? null)),
+              return { key: `s:${vg}`, tag: "Service", name: ((active ?? grp[0])?.label || serviceName((active ?? grp[0])?.service_id ?? null)),
                 versions: grp.map((v, i) => ({ id: v.id, label: `v${i + 1}`, amount: lineBreakdown(v, serviceOf(v.service_id)?.calculator as Calculator | null, undefined, serviceMin(v.service_id)).total })),
-                activeId: active?.id ?? grp[0]?.id };
+                activeId: active?.id ?? grp[grp.length - 1]?.id, leftOut: !active };
             }),
           ]}
           money={money}
           onClose={() => setPropPick(null)}
           onConfirm={(sel) => doGenerate(propPick, sel)}
         />
+      )}
+
+      {wonPrompt && (
+        <HxPrompt icon="trophy" title="Deal won — create the client?"
+          sub={<>Set up <b>{company?.name ?? "the client"}</b> now with its legal details, contacts and the products signed. Signing dates start on the day it was won. The handoff to management stays for later.</>}
+          ghost="Later" primary="Create client" busy={clientBusy}
+          onGhost={() => setWonPrompt(false)} onClose={() => setWonPrompt(false)} onPrimary={() => void createClientNow()} />
+      )}
+      {clientDone && (
+        <HxPrompt icon="check" title="Client ready"
+          sub={<><b>{company?.name ?? "The client"}</b> is set up. When the services are ready, send them to management with <b>Handoff</b>.</>}
+          ghost={canHandoff ? "Close" : ""} primary={canHandoff ? "Open handoff" : "Done"}
+          onGhost={() => setClientDone(false)} onClose={() => setClientDone(false)}
+          onPrimary={() => { setClientDone(false); if (canHandoff) setHandoffMenu(true); }} />
       )}
 
       {lossModal && (
@@ -3175,14 +4294,14 @@ function LossReasonModal({ reasons, reason, details, onReasons, onSave, onClose 
 // ============================ Proposal picker (lines + versions) ============================
 function ProposalPicker({ kind, groups, money, onClose, onConfirm }: {
   kind: "pptx" | "pdf";
-  groups: { key: string; tag: string; name: string; versions: { id: string; label: string; amount: number }[]; activeId: string }[];
+  groups: { key: string; tag: string; name: string; versions: { id: string; label: string; amount: number }[]; activeId: string; leftOut?: boolean }[];
   money: (n: number) => string;
   onClose: () => void;
   onConfirm: (sel: Record<string, { include: boolean; versionId: string }>) => void;
 }) {
   const [sel, setSel] = useState<Record<string, { include: boolean; versionId: string }>>(() => {
     const o: Record<string, { include: boolean; versionId: string }> = {};
-    groups.forEach((g) => { o[g.key] = { include: true, versionId: g.activeId }; });
+    groups.forEach((g) => { o[g.key] = { include: !g.leftOut, versionId: g.activeId }; });
     return o;
   });
   useEffect(() => {

@@ -1,9 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import type { CSSProperties } from "react";
+import { roleCounts, roleNameOf, roleColor, type ClientRole } from "../clients/clientsTypes";
 import "./BillingAdjustModal.css";
 
-export type Line = "consultor" | "supervision" | "connector";
+/** A bill line: the role the time was logged on (role id; legacy rows: a line name). */
+export type Line = string;
 
 export interface AdjustBill {
   key: string;
@@ -16,8 +19,10 @@ export interface AdjustBill {
   vat: string;
   address: string;
   contact: { name: string; email: string } | null;
+  /** The project's main rate: what a role not sold on the project bills at. */
   rate: number;
-  supervisionRate: number;
+  /** Rate of each role sold on the project. */
+  rates: Record<Line, number>;
   taxed: boolean;
   taxRate: number;
   lines: Record<Line, number>;
@@ -38,6 +43,8 @@ interface Props {
   clientName: string;
   people: Record<string, string>;
   periodLabel: string;
+  /** Catalogue roles: names, colours, and which ones feed the saved-days locker. */
+  roles?: ClientRole[];
   onClose: () => void;
   /** Persist the adjustment. Returns an error message to show, or null on success. */
   onSave?: (payload: SavePayload) => Promise<string | null>;
@@ -53,18 +60,19 @@ export interface SavePayload {
   clientId: string;
   period: string;
   invoiceId: string | null;
-  orig: { net: number; amount: number; days: number; taxed: boolean; taxRate: number; rate: number; supervisionRate: number };
+  orig: { net: number; amount: number; days: number; taxed: boolean; taxRate: number; rate: number; supervisionRate: number; rates: Record<Line, number> };
   origLines: { entry_id: string; entry_date: string; user_id: string; line: Line; days: number; status: string }[];
   after: { net: number; amount: number; days: number };
   note: string;
   changes: {
     entry_id: string; entry_date: string; user_id: string; line: Line;
     days_before: number; days_after: number; removed: boolean; locker_delta: number;
+    /** Whether this role's days go to (or come from) the client's saved-days locker. */
+    feeds_locker: boolean;
   }[];
 }
 
 const eur = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const lineLabel: Record<Line, string> = { consultor: "Consultancy", supervision: "Supervision", connector: "Connector" };
 const baDate = (iso: string) => {
   if (!iso) return "—";
   const d = new Date(`${iso}T00:00:00`);
@@ -73,8 +81,12 @@ const baDate = (iso: string) => {
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 export default function BillingAdjustModal({
-  bill, invoice, unit, minUnit, clientName, people, periodLabel, onClose, onSave,
+  bill, invoice, unit, minUnit, clientName, people, periodLabel, roles = [], onClose, onSave,
 }: Props) {
+  const lineLabel = (ln: Line) => roleNameOf(ln, roles);
+  const lineColor = (ln: Line) => { const at = roles.findIndex((r) => r.id === ln); return roleColor(roles[at], at < 0 ? 0 : at); };
+  const lineOrder = (ln: Line) => { const at = roles.findIndex((r) => r.id === ln); return at < 0 ? 999 : at; };
+  const sumOf = (l: Record<Line, number>) => Object.values(l).reduce((s, v) => s + v, 0);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
@@ -90,7 +102,7 @@ export default function BillingAdjustModal({
       .map((r) => ({ ...r, origDays: r.days, removed: false }))
   );
 
-  const rateOf = (ln: Line) => (ln === "supervision" ? bill.supervisionRate : bill.rate);
+  const rateOf = (ln: Line) => bill.rates[ln] ?? bill.rate;
 
   const bump = (id: string, dir: 1 | -1) =>
     setRows((rs) => rs.map((r) => r.id === id
@@ -102,19 +114,19 @@ export default function BillingAdjustModal({
     setRows((rs) => rs.map((r) => ({ ...r, days: r.origDays, removed: false })));
 
   const live = useMemo(() => {
-    const lines: Record<Line, number> = { consultor: 0, supervision: 0, connector: 0 };
+    const lines: Record<Line, number> = {};
     const per: Record<string, { days: number; value: number }> = {};
     rows.forEach((r) => {
       if (r.removed) return;
-      lines[r.line] += r.days;
+      lines[r.line] = (lines[r.line] ?? 0) + r.days;
       if (!per[r.userId]) per[r.userId] = { days: 0, value: 0 };
       per[r.userId].days += r.days;
       per[r.userId].value += r.days * rateOf(r.line);
     });
-    const net = (["consultor", "supervision", "connector"] as Line[]).reduce((s, ln) => s + lines[ln] * rateOf(ln), 0);
+    const net = Object.entries(lines).reduce((s, [ln, d]) => s + d * rateOf(ln), 0);
     const gross = net * (bill.taxed ? 1 + bill.taxRate / 100 : 1);
     const owners = Object.entries(per).sort((a, b) => b[1].value - a[1].value);
-    const totalDays = lines.consultor + lines.supervision + lines.connector;
+    const totalDays = sumOf(lines);
     return { lines, net, gross, owners, totalDays };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows]);
@@ -132,25 +144,29 @@ export default function BillingAdjustModal({
     setSaving(true);
     // A change's locker delta: subtracting days deposits into the bag (+),
     // adding takes out (−). Removing an entry deposits all its days. Only
-    // consultor/supervision feed the locker (connector doesn't).
+    // roles that count for the consultant feed the locker (connector doesn't).
     const changes = rows
       .filter((r) => r.removed || r.days !== r.origDays)
       .map((r) => {
         const daysAfter = r.removed ? 0 : r.days;
-        const feedsLocker = r.line === "consultor" || r.line === "supervision";
+        const feedsLocker = roleCounts(r.line, roles);
         const lockerDelta = feedsLocker ? round2(r.origDays - daysAfter) : 0;
         return {
           entry_id: r.id, entry_date: r.date, user_id: r.userId, line: r.line,
           days_before: r.origDays, days_after: daysAfter, removed: r.removed, locker_delta: lockerDelta,
+          feeds_locker: feedsLocker,
         };
       });
     const payload: SavePayload = {
       projectId: bill.projectId, clientId: bill.clientId, period: bill.period,
       invoiceId: invoice?.id ?? null,
       orig: {
-        net: invoice?.net ?? bill.lines.consultor * bill.rate + bill.lines.supervision * bill.supervisionRate + bill.lines.connector * bill.rate,
-        amount: invoice?.amount ?? 0, days: invoice?.days ?? (bill.lines.consultor + bill.lines.supervision + bill.lines.connector),
-        taxed: bill.taxed, taxRate: bill.taxRate, rate: bill.rate, supervisionRate: bill.supervisionRate,
+        net: invoice?.net ?? Object.entries(bill.lines).reduce((s, [ln, d]) => s + d * rateOf(ln), 0),
+        amount: invoice?.amount ?? 0, days: invoice?.days ?? sumOf(bill.lines),
+        taxed: bill.taxed, taxRate: bill.taxRate, rate: bill.rate,
+        // the old single supervision rate, kept for older reports: a supervision role's rate if there is one
+        supervisionRate: (() => { const r = roles.find((x) => x.isSupervision && bill.rates[x.id] != null); return r ? bill.rates[r.id] : 0; })(),
+        rates: bill.rates,
       },
       origLines: bill.rows.map((r) => ({
         entry_id: r.id, entry_date: r.date, user_id: r.userId, line: r.line, days: r.days, status: r.status,
@@ -188,10 +204,10 @@ export default function BillingAdjustModal({
           <div className="ba-top">
             <section className="ba-card">
               <h3 className="ba-card-h">How this bill was invoiced</h3>
-              {(["consultor", "supervision", "connector"] as Line[]).map((ln) =>
+              {Object.keys(live.lines).sort((a, b) => lineOrder(a) - lineOrder(b)).map((ln) =>
                 live.lines[ln] > 0 ? (
-                  <div className={`ba-line is-${ln}`} key={ln}>
-                    <span className="ba-line-name"><i />{lineLabel[ln]}</span>
+                  <div className="ba-line is-role" key={ln} style={{ "--c": lineColor(ln) } as CSSProperties}>
+                    <span className="ba-line-name"><i />{lineLabel(ln)}</span>
                     <span className="ba-line-calc">{live.lines[ln].toFixed(2)}{unit} × {rateOf(ln).toLocaleString()} €</span>
                     <span className="ba-line-val">{eur(live.lines[ln] * rateOf(ln))} €</span>
                   </div>
@@ -256,7 +272,7 @@ export default function BillingAdjustModal({
                     <div className={`ba-lrow ${r.removed ? "is-removed" : ""} ${r.days !== r.origDays ? "is-edited" : ""}`} key={r.id}>
                       <span className="ba-ldate">{baDate(r.date)}{r.moved && <em className="ba-lmoved">moved</em>}</span>
                       <span className="ba-lname">{people[r.userId] ?? "Unknown"}</span>
-                      <span className={`ba-ltag is-${r.line}`}>{lineLabel[r.line]}</span>
+                      <span className="ba-ltag" style={{ "--c": lineColor(r.line) } as CSSProperties}>{lineLabel(r.line)}</span>
                       <span className="ba-r ba-ldays">
                         {r.days.toFixed(2)}
                         {r.days !== r.origDays && <em className="ba-lorig">was {r.origDays.toFixed(2)}</em>}

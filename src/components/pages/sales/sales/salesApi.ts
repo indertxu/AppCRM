@@ -123,6 +123,10 @@ export interface RevenueLineFields {
   calc_rates?: Record<string, number> | null;
   discount_mode?: "none" | "percent" | "amount" | string | null;
   discount_value?: number | null;
+  /** A partner's cut on this line (partner_rates gives the default): a % of the line or a fixed amount. */
+  partner_id?: string | null;
+  partner_mode?: "percent" | "amount" | string | null;
+  partner_value?: number | null;
 }
 
 export interface PotentialService extends RevenueLineFields {
@@ -301,6 +305,7 @@ export type TermPatch = {
   calc_discounts?: Record<string, CalcDiscount>;
   calc_rates?: Record<string, number>;
   discount_mode?: "none" | "percent" | "amount"; discount_value?: number;
+  partner_id?: string | null; partner_mode?: "percent" | "amount" | null; partner_value?: number | null;
   billing_contact_name?: string | null; billing_contact_email?: string | null;
   contact_ids?: string[];
 };
@@ -330,7 +335,19 @@ export interface LineBreakdown {
   multiplierLabel: string;
   gross: number;
   discount: number;
+  /** What the client pays for the line (after discounts). */
   total: number;
+  /** What the partner on the line takes from that. */
+  partner: number;
+  /** What is left for us: total − partner. This is what counts as deal value. */
+  net: number;
+}
+
+/** What the partner on a line takes from `total`. */
+export function partnerCutOf(l: RevenueLineFields, total: number): number {
+  const v = Number(l.partner_value) || 0;
+  if (!l.partner_id || !v || !total) return 0;
+  return l.partner_mode === "amount" ? Math.min(v, total) : Math.round(total * Math.min(v, 100)) / 100;
 }
 
 /**
@@ -351,9 +368,9 @@ export function unitBreakdown(l: RevenueLineFields, calculator?: Calculator | nu
     const baseRate = Number(l.price) || 0;
     const timeRows = calcBreakdown(calculator, l.calc_values ?? {}, Number(calculator.base_amount) || 0);
     const rows: CalcRow[] = timeRows.rows.map((r) => {
-      // A variable can carry its own rate (the supervision one, set in Settings).
+      // A variable can carry its own rate (e.g. one billed as another role, set in Settings).
       const v = calculator.variables.find((x) => (x.id ?? String(x.sort)) === r.key);
-      const own = v?.rate != null && (v.rate as any) !== "" ? Number(v.rate) : null;
+      const own = v?.rate != null && (v.rate as any) !== "" ? Number(v.rate) : v?.role_rate != null ? Number(v.role_rate) : null;
       const rate = rates[r.key] == null ? (own ?? baseRate) : Number(rates[r.key]) || 0;
       const amount = r.amount * rate;
       const discount = discountOf(amount, discounts[r.key]);
@@ -418,14 +435,17 @@ export function lineBreakdown(l: RevenueLineFields, calculator?: Calculator | nu
     multiplierLabel = qty === 1 ? "" : `x ${qty}`;
   }
   const total = unitPrice * mult;
+  const partner = partnerCutOf(l, total);
   return {
     rows: u.rows, rawQty, qty, unitGross: u.gross, unitDiscount: u.discount, unitPrice,
     multiplierLabel, gross: u.gross * mult, discount: u.discount * mult, total,
+    partner, net: total - partner,
   };
 }
 
+/** The deal value of a line: what the client pays less the partner's cut. */
 export function lineTotal(l: RevenueLineFields, calculator?: Calculator | null, catalogBase?: number, minUnit?: number | null): number {
-  return lineBreakdown(l, calculator, catalogBase, minUnit).total;
+  return lineBreakdown(l, calculator, catalogBase, minUnit).net;
 }
 /**
  * Columns each revenue table actually has. The line calculator is shared by
@@ -437,8 +457,20 @@ const SHARED_COLS = [
   "price", "quantity", "recurring", "period", "term_years",
   "calc_values", "calc_discounts", "calc_rates", "discount_mode", "discount_value",
 ] as const;
-const PRODUCT_COLS = [...SHARED_COLS, "tier_id"] as const;
-const SERVICE_COLS = [...SHARED_COLS, "role_id", "billing_contact_name", "billing_contact_email", "contact_ids"] as const;
+const PARTNER_COLS = ["partner_id", "partner_mode", "partner_value"] as const;
+const PRODUCT_COLS = [...SHARED_COLS, ...PARTNER_COLS, "tier_id"] as const;
+const SERVICE_COLS = [...SHARED_COLS, ...PARTNER_COLS, "role_id", "billing_contact_name", "billing_contact_email", "contact_ids"] as const;
+
+/** Update a revenue line; if the partner columns aren't there yet (SQL 12 not run), save the rest anyway. */
+async function updateLine(table: "tracking_products" | "tracking_potential_services", id: string, row: Record<string, unknown>) {
+  let { error } = await supabase.from(table).update(row).eq("id", id);
+  if (error && /partner_/i.test(error.message) && PARTNER_COLS.some((k) => k in row)) {
+    const rest = { ...row }; PARTNER_COLS.forEach((k) => delete rest[k]);
+    ({ error } = Object.keys(rest).length ? await supabase.from(table).update(rest).eq("id", id) : { error: null } as any);
+    if (!error) return "Partner not saved: run 12_proposals_partners.sql in Supabase.";
+  }
+  return error?.message ?? null;
+}
 
 function pick(patch: TermPatch, cols: readonly string[]): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -449,16 +481,16 @@ function pick(patch: TermPatch, cols: readonly string[]): Record<string, unknown
 }
 
 export async function updateTrackingProduct(id: string, trackingId: string, patch: TermPatch): Promise<string | null> {
-  const { error } = await supabase.from("tracking_products").update(pick(patch, PRODUCT_COLS)).eq("id", id);
-  if (error) { console.error("updateTrackingProduct failed:", error.message, patch); return error.message; }
+  const error = await updateLine("tracking_products", id, pick(patch, PRODUCT_COLS));
+  if (error) console.error("updateTrackingProduct failed:", error, patch);
   await syncLegacyProduct(trackingId);
-  return null;
+  return error;
 }
 
 export async function updatePotentialServiceTerm(id: string, patch: TermPatch): Promise<string | null> {
-  const { error } = await supabase.from("tracking_potential_services").update(pick(patch, SERVICE_COLS)).eq("id", id);
-  if (error) { console.error("updatePotentialServiceTerm failed:", error.message, patch); return error.message; }
-  return null;
+  const error = await updateLine("tracking_potential_services", id, pick(patch, SERVICE_COLS));
+  if (error) console.error("updatePotentialServiceTerm failed:", error, patch);
+  return error;
 }
 
 export async function loadTrackingProducts(trackingId: string): Promise<TrackingProduct[]> {
@@ -1203,8 +1235,15 @@ export interface HandoffService {
   gross?: number;
   discount?: number;
   /** How the price was built up, so management can see the variables. */
-  rows?: { label: string; detail: string; amount: number; discount: number; days?: number; rate?: number; supervision?: boolean }[];
-  /** Days of the calculator's supervision variable, and their rate; the rest of the days are consultancy. */
+  rows?: { label: string; detail: string; amount: number; discount: number; days?: number; rate?: number; roleId?: string; roleName?: string; supervision?: boolean }[];
+  /**
+   * The roles the time was sold as: days per role and the rate per day they
+   * earn after the row discounts. Management builds the project's role lines
+   * from this. A role id can be a legacy key ("consultor" / "supervision")
+   * for calculators not migrated yet.
+   */
+  roles?: { roleId: string; days: number; rate: number }[];
+  /** Legacy: days of the calculator's supervision variable, and their rate. Superseded by `roles`. */
   supervision_days?: number;
   supervision_rate?: number;
   /** Days or hours sold, so management can prefill the project without guessing. */
@@ -1451,11 +1490,13 @@ export async function hasClientProductsForTracking(trackingId: string): Promise<
 }
 
 // Save the product contracts a client signed (one row per product).
-/** One line per version group: the active version (or the newest). Older versions are proposals, not sold. */
+/** One line per version group: the active version (or the newest). Older versions are proposals, not sold.
+ *  A group whose versions are all switched off (left out by the main proposal) has none. */
 export function activeVersions<T extends { id: string; version_group?: string | null; version_active?: boolean | null; created_at?: string | null }>(rows: T[]): T[] {
   const groups = new Map<string, T[]>();
   rows.forEach((r) => { const g = r.version_group ?? r.id; groups.set(g, [...(groups.get(g) ?? []), r]); });
-  return Array.from(groups.values()).map((g) => g.find((x) => x.version_active) ?? [...g].sort((a, b) => String(a.created_at ?? "").localeCompare(String(b.created_at ?? ""))).pop()!);
+  return Array.from(groups.values()).filter((g) => !g.every((x) => x.version_active === false))
+    .map((g) => g.find((x) => x.version_active) ?? [...g].sort((a, b) => String(a.created_at ?? "").localeCompare(String(b.created_at ?? ""))).pop()!);
 }
 
 export async function saveClientProducts(clientId: string, trackingId: string | null, products: {
@@ -1638,6 +1679,12 @@ export async function setLineVersionActive(table: "tracking_products" | "trackin
   await supabase.from(table).update({ version_active: true }).eq("id", activeId);
 }
 
+/** Leave a whole line out of the deal (every version off): it counts nowhere and isn't handed off. */
+export async function excludeLineGroup(table: "tracking_products" | "tracking_potential_services", versionGroup: string) {
+  await supabase.from(table).update({ version_active: false }).eq("version_group", versionGroup);
+  await supabase.from(table).update({ version_active: false }).eq("id", versionGroup); // a line without a group is its own group
+}
+
 /** Add a new version to a product line's group — a copy of `sourceId`, or empty. */
 export async function addProductVersion(sourceId: string, copy: boolean): Promise<TrackingProduct | null> {
   const { data: src } = await supabase.from("tracking_products").select("*").eq("id", sourceId).single();
@@ -1668,6 +1715,78 @@ export async function addServiceVersion(sourceId: string, copy: boolean): Promis
   }
   const { data } = await supabase.from("tracking_potential_services").insert(base).select().single();
   return (data as any) ?? null;
+}
+
+// ============================ Deal proposals ============================
+// A proposal is a named scenario: one version of each line (or the line left out),
+// its value, and the document generated from it. The main one is what the deal is
+// worth and what goes to the handoff (its versions are the active ones).
+export interface ProposalLine { kind: "product" | "service"; group: string; line: string | null }
+export interface DealProposal {
+  id: string; tracking_id: string; name: string; is_main: boolean;
+  lines: ProposalLine[];
+  gross: number | null; partner: number | null; total: number | null;
+  template_id: string | null; file_id: string | null; notes?: string | null;
+  /** The company deck it is built from, and what the seller changed in it (13_proposal_decks.sql). */
+  deck_id?: string | null; doc?: ProposalDoc | null;
+  created_at?: string; updated_at?: string;
+}
+/** A proposal's own changes to the deck: field values, edited texts, slides left out (by slide ref). */
+export interface ProposalDoc { values?: Record<string, string>; edits?: Record<string, string>; slides?: Record<string, boolean> }
+const proposalFrom = (r: any): DealProposal => ({
+  ...r, is_main: !!r.is_main, lines: Array.isArray(r.lines) ? r.lines : [], doc: r.doc && typeof r.doc === "object" ? r.doc : null,
+  gross: r.gross == null ? null : Number(r.gross), partner: r.partner == null ? null : Number(r.partner), total: r.total == null ? null : Number(r.total),
+});
+/** null when the table isn't there yet (SQL 12 not run). */
+export async function listDealProposals(trackingId: string): Promise<DealProposal[] | null> {
+  const { data, error } = await supabase.from("deal_proposals").select("*").eq("tracking_id", trackingId).order("created_at");
+  if (error) return null;
+  return (data ?? []).map(proposalFrom);
+}
+export async function saveDealProposal(p: Partial<DealProposal> & { tracking_id: string; name: string }): Promise<{ proposal: DealProposal | null; error: string | null }> {
+  const row: any = {
+    tracking_id: p.tracking_id, name: p.name.trim() || "Proposal", lines: p.lines ?? [],
+    gross: p.gross ?? null, partner: p.partner ?? null, total: p.total ?? null,
+    template_id: p.template_id ?? null, file_id: p.file_id ?? null, updated_at: new Date().toISOString(),
+  };
+  if (p.is_main != null) row.is_main = p.is_main;
+  if (p.deck_id !== undefined) row.deck_id = p.deck_id;
+  let q = p.id ? supabase.from("deal_proposals").update(row).eq("id", p.id) : supabase.from("deal_proposals").insert(row);
+  let res = await q.select().single();
+  if (res.error && "deck_id" in row && /deck_id|column/i.test(res.error.message)) {
+    delete row.deck_id;
+    q = p.id ? supabase.from("deal_proposals").update(row).eq("id", p.id) : supabase.from("deal_proposals").insert(row);
+    res = await q.select().single();
+  }
+  return { proposal: res.data ? proposalFrom(res.data) : null, error: res.error?.message ?? null };
+}
+/** Saves the deck a proposal uses and the seller's changes to it. */
+export async function saveProposalDoc(id: string, deckId: string | null, doc: ProposalDoc): Promise<string | null> {
+  const { error } = await supabase.from("deal_proposals").update({ deck_id: deckId, doc, updated_at: new Date().toISOString() }).eq("id", id);
+  if (error && /deck_id|doc|column/i.test(error.message)) return "Changes not saved: run 13_proposal_decks.sql in Supabase.";
+  return error?.message ?? null;
+}
+export async function deleteDealProposal(id: string): Promise<string | null> {
+  const { error } = await supabase.from("deal_proposals").delete().eq("id", id);
+  return error?.message ?? null;
+}
+/**
+ * Make a proposal the main one: only it is flagged, and the line version it picked in
+ * each group becomes the active one (so the deal value and the handoff follow it).
+ * A group it leaves out is switched off entirely: it counts nowhere and isn't handed off.
+ * Groups added after the proposal was made aren't in it and stay as they are.
+ */
+export async function setMainProposal(trackingId: string, p: DealProposal): Promise<string | null> {
+  const off = await supabase.from("deal_proposals").update({ is_main: false }).eq("tracking_id", trackingId).neq("id", p.id);
+  if (off.error) return off.error.message;
+  const on = await supabase.from("deal_proposals").update({ is_main: true }).eq("id", p.id);
+  if (on.error) return on.error.message;
+  for (const l of p.lines) {
+    const table = l.kind === "product" ? "tracking_products" : "tracking_potential_services";
+    if (l.line) await setLineVersionActive(table, l.group, l.line);
+    else await excludeLineGroup(table, l.group);
+  }
+  return null;
 }
 
 // ============================ Phase blueprints (for proposals) ============================

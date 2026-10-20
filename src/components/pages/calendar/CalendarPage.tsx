@@ -9,7 +9,11 @@ import { loadMyInvites, syncInvites, loadAttendees, loadMyReplies,
   type InviteCard, type Attendee } from "./invitesApi";
 import type { Cutoffs } from "./billingPeriods";
 import { cutoffOf, periodOf, inBillingMonth, periodForDate } from "./billingPeriods";
-import { effectiveRate, effectiveSupervisionRate } from "../clients/ClientsPage";
+import {
+  legacyRoleMap, resolveRoleKey, resolvedLinesOf, roleLinesOfRow, roleKeyOf, roleCounts, rateOn, roleColor, sortRoles,
+  type ClientRole, type RoleLine,
+} from "../clients/clientsTypes";
+import { loadRoles } from "../settings/blueprintsApi";
 import ActualModal, { type ActualValue } from "./ActualModal";
 import { supabase } from "../../api/supabase";
 import { deleteEntryFromOutlook, syncCalendarEntry } from "../../api/outlookSync";
@@ -30,13 +34,6 @@ interface DayHours {
 }
 
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri"];
-/** The billing lines the bar can count. */
-const STAT_LINES: { id: string; label: string; hint: string }[] = [
-  { id: "all", label: "All billable", hint: "Consultancy and project management, against your goal" },
-  { id: "consultor", label: "Consultancy", hint: "Consultant days only" },
-  { id: "supervision", label: "Project management", hint: "Supervision days" },
-  { id: "connector", label: "Connector", hint: "Billed to the client, not to your target" },
-];
 
 const MONTHS = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -309,6 +306,7 @@ attendees: string;
   notes: string;
   line: string;
   roleId: string;
+  meetKind?: string;
 }
 export default function CalendarPage() {
   const navigate = useNavigate();
@@ -573,7 +571,9 @@ const [targets, setTargets] = useState<Targets>({ perDay: 1, minPerDay: 0.5, min
   const [vacations, setVacations] = useState<{ id: string; date: string }[]>([]);
   const [vacationAllowance, setVacationAllowance] = useState(22);
   const [defaultCutoffDay, setDefaultCutoffDay] = useState(0);
-  const [rates, setRates] = useState<Record<string, { consultor: number; supervision: number; connector: number }>>({});
+  /** The roles sold on each project (rate per role), and every role of the catalogue. */
+  const [projLines, setProjLines] = useState<Record<string, RoleLine[]>>({});
+  const [allRoles, setAllRoles] = useState<ClientRole[]>([]);
 useEffect(() => {
     (async () => {
       // Only the weeks around the one on screen. Loading two years to draw
@@ -644,19 +644,15 @@ const { data: ea } = await supabase.from("entry_actuals").select("*");
         highRevenueMonth: Number(ut?.high_billing_month) || 0,
       });
 
-      const { data: pj } = await supabase.from("projects").select("id, price_per_day, supervision_price, discount_mode, discount_value");
-      setRates(Object.fromEntries(((pj ?? []) as Record<string, unknown>[]).map((r) => {
-        const base = Number(r.price_per_day) || 0;
-        const sup = Number(r.supervision_price) || 0;
-        const d = Number(r.discount_value) || 0;
-        const mode = r.discount_mode as string;
-        const cons = effectiveRate(base, mode, d);
-        return [r.id as string, {
-          consultor: cons,
-          connector: cons, // connector bills at the consultancy day rate
-          supervision: effectiveSupervisionRate(sup, mode, d),
-        }];
-      })));
+      // Each project's roles with their own rate; old projects read through their legacy columns.
+      const [{ data: pj }, roleList] = await Promise.all([
+        supabase.from("projects").select("id, role_lines, consultor_days, connector_days, supervision_days, price_per_day, supervision_price, discount_mode, discount_value, supervision_discount_mode, supervision_discount_value"),
+        loadRoles(),
+      ]);
+      const legacy = legacyRoleMap(roleList);
+      setAllRoles(roleList);
+      setProjLines(Object.fromEntries(((pj ?? []) as Record<string, unknown>[]).map((r) =>
+        [r.id as string, resolvedLinesOf({ roleLines: roleLinesOfRow(r) }, legacy)])));
 
       const { data } = await supabase.from("work_types").select("*").order("created_at");
       setWorkTypes((data ?? []).map((r: { id: string; name: string | null; client_related: boolean; color: string | null }) => ({
@@ -893,7 +889,8 @@ if (!modal) return;
               period,
               entry_date: iso,
               billable: v.billable,
-              billing_line: v.line || "consultor",
+              // The role it was logged on (what the line was before roles).
+              billing_line: v.roleId || v.line || "consultor",
               attempted_by: u.user.id,
             });
           } catch (e) {
@@ -942,6 +939,7 @@ notes: v.notes || null,
           v.summoned.map((s) => ({ id: s.id, billable: s.billable })),
           v.line || "consultor",
           v.summonNote,
+          v.roleId || null,
         ).catch(() => {});
       }
 
@@ -1042,11 +1040,24 @@ const effBillable = (e: Entry) =>
       ? v / hoursPerDay
       : v;
   };
+  /** The role an entry is logged on (old entries: their line, read as the matching role). */
+  const roleMap = useMemo(() => legacyRoleMap(allRoles), [allRoles]);
+  const keyOf = (e: Entry) => resolveRoleKey(roleKeyOf(e), roleMap);
+  /** Whether an entry's time counts for the consultant's target (a connector role doesn't). */
+  const counts = (e: Entry) => roleCounts(keyOf(e), allRoles);
+  const roleOf = (e: Entry) => allRoles.find((r) => r.id === keyOf(e));
+  /** Project time on a role that doesn't count: drawn with a striped edge in the role's colour. */
+  const noCount = (e: Entry) => !!e.projectId && e.line !== "closure" && e.line !== "sales" && !counts(e);
+  const roleIdx = (id: string) => sortRoles(allRoles).findIndex((r) => r.id === id);
+  const noCountStyle = (e: Entry) => {
+    const r = roleOf(e);
+    return { ["--rc" as string]: roleColor(r, Math.max(0, roleIdx(r?.id ?? ""))) };
+  };
 const billableOf = (list: Entry[]) =>
-    list.filter((e) => clientTypeIds.has(e.type) && e.status !== "cancelled" && e.line !== "connector")
+    list.filter((e) => clientTypeIds.has(e.type) && e.status !== "cancelled" && counts(e))
         .reduce((s, e) => s + effDays(e), 0);
   const confirmedOf = (list: Entry[]) =>
-    list.filter((e) => clientTypeIds.has(e.type) && e.status === "confirmed" && e.line !== "connector")
+    list.filter((e) => clientTypeIds.has(e.type) && e.status === "confirmed" && counts(e))
         .reduce((s, e) => s + effDays(e), 0);
 
 const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() === monthAnchor.getMonth());
@@ -1065,7 +1076,7 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
    */
   const split = (list: Entry[], onlyConfirmed: boolean) => {
     const rows = list.filter((e) =>
-      clientTypeIds.has(e.type) && e.line !== "connector"
+      clientTypeIds.has(e.type) && counts(e)
       && (onlyConfirmed ? e.status === "confirmed" : e.status !== "cancelled"));
     let days = 0, hours = 0;
     rows.forEach((e) => {
@@ -1094,13 +1105,10 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
   const highRevRaw = (targets.highRevenueMonth ?? 0) / div;
   const highRev = highRevRaw > minRev ? highRevRaw : 0;
 
-  /** Per-day rate for an entry, picking supervision/connector/consultancy. */
+  /** Per-day rate for an entry: its role's rate on the project, after that role's discount. */
   const rateOf = (e: Entry) => {
-    const r = rates[e.projectId];
-    if (!r) return 0;
-    if (e.line === "supervision") return r.supervision;
-    if (e.line === "connector") return r.connector;
-    return r.consultor;
+    const ls = projLines[e.projectId];
+    return ls ? rateOn(ls, keyOf(e)) : 0;
   };
 
   const revenueOf = (list: Entry[]) =>
@@ -1141,10 +1149,22 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
   const durLabel = (m: number) => (m >= 60 ? `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ""}` : `${m}m`);
   const num2 = (n: number) => String(Math.round(n * 100) / 100);
 
+  /** What the bar can count: everything that counts for the target, or one role. */
+  const statLines: { id: string; label: string; hint: string; color?: string }[] = [
+    { id: "all", label: "All billable", hint: "Every role that counts for your target" },
+    ...sortRoles(allRoles).map((r, i) => ({
+      id: r.id, label: r.name, color: roleColor(r, i),
+      hint: r.countsForTarget ? "Counts for your target" : "Billed to the client, not to your target",
+    })),
+  ];
+  // A choice saved before roles (a line name) is read as its role; a role that is gone falls back to all.
+  const statKey = statLine === "all" ? "all" : resolveRoleKey(statLine, roleMap);
+  const statCur = statLines.find((l) => l.id === statKey) ?? statLines[0];
+  const statId = statCur.id;
   /** Billing figures in the bar: which line they count. */
   const daysOnLine = (list: Entry[], onlyConfirmed: boolean) => list
     .filter((e) => clientTypeIds.has(e.type) && (onlyConfirmed ? e.status === "confirmed" : e.status !== "cancelled"))
-    .filter((e) => (statLine === "all" ? e.line !== "connector" : (e.line || "consultor") === statLine))
+    .filter((e) => (statId === "all" ? counts(e) : keyOf(e) === statId))
     .reduce((sum, e) => sum + effDays(e), 0);
   const cutoffInfo = (() => {
     const per = periodForDate(isoOf(today), cutoffs, defaultCutoffDay);
@@ -1203,15 +1223,16 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
         <div className="cv-stats">
           <div className="cv-line" ref={lineRef}>
             <button type="button" className={`cv-line-btn ${lineOpen ? "is-open" : ""}`} onClick={() => setLineOpen((v) => !v)} title="Which billing line the figures count">
-              {STAT_LINES.find((l) => l.id === statLine)?.label}
+              {statCur.color && <i className="cv-line-dot" style={{ background: statCur.color }} />}
+              {statCur.label}
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
             </button>
             {lineOpen && (
               <div className="cv-line-pop" role="listbox">
-                {STAT_LINES.map((l) => (
-                  <button key={l.id} type="button" role="option" aria-selected={statLine === l.id} className={statLine === l.id ? "is-on" : ""}
+                {statLines.map((l) => (
+                  <button key={l.id} type="button" role="option" aria-selected={statId === l.id} className={statId === l.id ? "is-on" : ""}
                     onClick={() => { setStatLine(l.id); setLineOpen(false); try { localStorage.setItem("cal.statLine", l.id); } catch { /* ignore */ } }}>
-                    <b>{l.label}</b><small>{l.hint}</small>
+                    <b>{l.color && <i className="cv-line-dot" style={{ background: l.color }} />}{l.label}</b><small>{l.hint}</small>
                   </button>
                 ))}
               </div>
@@ -1221,7 +1242,7 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
             const mine = uid === myId;
             const booked = daysOnLine(scopeEntries.filter((e) => e.userId === uid), false);
             const done = daysOnLine(scopeEntries.filter((e) => e.userId === uid), true);
-            const goal = mine && statLine === "all" ? scopeGoal : 0;
+            const goal = mine && statId === "all" ? scopeGoal : 0;
             const pct = goal > 0 ? Math.min(100, (booked / goal) * 100) : 0;
             const dpct = goal > 0 ? Math.min(100, (done / goal) * 100) : 0;
             return (
@@ -1408,8 +1429,8 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
                             return (
                               <button
                                 key={e.id}
-                               className={`cal-mchip is-${e.status} ${e.line === "connector" ? "is-connector" : ""}`}
-                                style={{ ["--ec" as string]: bgOf(e.userId, wt?.color) }}
+                               className={`cal-mchip is-${e.status} ${noCount(e) ? "is-connector" : ""}`}
+                                style={{ ["--ec" as string]: bgOf(e.userId, wt?.color), ...(noCount(e) ? noCountStyle(e) : {}) }}
                                 onClick={(ev) => { ev.stopPropagation(); if (!opaque(e.userId) && e.merged === 1) openEdit(d, e); }}
                                 title={`${fmtTime(e.startMin)} – ${fmtTime(e.endMin)}`}
                               >
@@ -1605,7 +1626,7 @@ const wt = workTypes.find((t) => t.id === e.type);
                     return (
 <div
                       key={e.id}
-                 className={`cal-event is-${e.status} ${e.endMin - e.startMin <= 60 ? "is-short" : ""} ${dragging?.id === e.id ? "is-lifted" : ""} ${e.line === "connector" ? "is-connector" : ""} ${e.line === "closure" ? "is-closure" : ""} ${opaque(e.userId) || e.merged > 1 ? "is-opaque" : ""}`}
+                 className={`cal-event is-${e.status} ${e.endMin - e.startMin <= 60 ? "is-short" : ""} ${dragging?.id === e.id ? "is-lifted" : ""} ${noCount(e) ? "is-connector" : ""} ${e.line === "closure" ? "is-closure" : ""} ${opaque(e.userId) || e.merged > 1 ? "is-opaque" : ""}`}
                       style={{
                         top: `${top}%`, height: `${height}%`,
                         left: `calc(${e.left}% + 2px)`,
@@ -1613,6 +1634,7 @@ const wt = workTypes.find((t) => t.id === e.type);
                         zIndex: 2 + e.lane,
                         ["--ec" as string]: bgOf(e.userId, wt?.color),
                         ["--i" as string]: ei,
+                        ...(noCount(e) ? noCountStyle(e) : {}),
                       }}
                       title={viewingOther ? nameOf(e.userId) : undefined}
                       data-shared={attendees[e.id]?.length ? "1" : undefined}
@@ -1653,7 +1675,7 @@ onClick={(ev) => { ev.stopPropagation(); if (!opaque(e.userId) && e.merged === 1
                         </span>
                         {!opaque(e.userId) && e.merged === 1 && <span className="cal-event-bill">{num2(e.billable)}{unitOf(e)}</span>}
                       </span>
-                      <span className="cal-event-time">
+                      <span className="cal-event-time" data-role={noCount(e) ? (roleOf(e)?.name ?? "Not on target").toUpperCase() : undefined}>
                         {MEET_ICON[e.meetKind ?? ""] && !opaque(e.userId) && e.merged === 1 && (
                           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={MEET_ICON[e.meetKind ?? ""]} /></svg>
                         )}
@@ -1732,6 +1754,7 @@ attendees: modal.attendees,
             notes: modal.notes,
             line: modal.line,
             roleId: modal.roleId,
+            meetKind: modal.meetKind,
           }}
           onSave={saveModal}
           onDelete={modal.editingId ? deleteModal : undefined}

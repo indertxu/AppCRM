@@ -444,3 +444,10 @@
 .icm-total { flex-direction: row; align-items: center; gap: 10px; }
 .icm-total > i { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 9px; background: rgba(201, 242, 221, 0.14); color: #c9f2dd; }
 .icm-total > i svg { width: 16px; height: 16px; }
+
+/* The roles editor is shared with the Clients form; give it the palette it expects. */
+.icm-roles {
+  --ink: var(--icm-ink); --muted: var(--mute); --faint: var(--mute2); --forest: #0a6f4d; --green: #12b57f;
+  --line: #e3ebe7; --soft: #f4f8f6; --red: #d64545;
+}
+.icm-roles .rle-row { background: var(--field); }

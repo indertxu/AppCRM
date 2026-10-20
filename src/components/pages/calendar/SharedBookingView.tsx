@@ -33,6 +33,8 @@ interface Detail {
   end_min: number;
   billable: number;
   billing_line: string;
+  /** The role the time is logged on, by name. */
+  role_name: string | null;
   notes: string | null;
   work_type: { name: string; color: string } | null;
   client_name: string | null;
@@ -61,13 +63,13 @@ export default function SharedBookingView({ entryId, inviteId, onLeft, onClose }
   useEffect(() => {
     (async () => {
       const { data: e } = await supabase.from("calendar_entries")
-        .select("title, entry_date, start_min, end_min, billable, billing_line, notes, work_type_id, client_id, company_id, project_id, phase_id, task_ids")
+        .select("title, entry_date, start_min, end_min, billable, billing_line, role_id, notes, work_type_id, client_id, company_id, project_id, phase_id, task_ids")
         .eq("id", entryId).maybeSingle();
       if (!e) { setLoading(false); return; }
       const row = e as any;
 
       // Each name comes from its own table; missing ones simply do not show.
-      const [wt, cl, co, pj] = await Promise.all([
+      const [wt, cl, co, pj, rl] = await Promise.all([
         row.work_type_id
           ? supabase.from("work_types").select("name, color").eq("id", row.work_type_id).maybeSingle()
           : Promise.resolve({ data: null }),
@@ -79,6 +81,9 @@ export default function SharedBookingView({ entryId, inviteId, onLeft, onClose }
           : Promise.resolve({ data: null }),
         row.project_id
           ? supabase.from("projects").select("service_id, phases").eq("id", row.project_id).maybeSingle()
+          : Promise.resolve({ data: null }),
+        row.role_id && row.project_id
+          ? supabase.from("client_roles").select("name").eq("id", row.role_id).maybeSingle()
           : Promise.resolve({ data: null }),
       ]);
 
@@ -127,6 +132,7 @@ export default function SharedBookingView({ entryId, inviteId, onLeft, onClose }
         end_min: row.end_min,
         billable: Number(row.billable) || 0,
         billing_line: row.billing_line,
+        role_name: (rl as any)?.data?.name ?? null,
         notes: row.notes,
         work_type: (wt as any)?.data ?? null,
         client_name: (cl as any)?.data?.name ?? null,
@@ -202,6 +208,12 @@ export default function SharedBookingView({ entryId, inviteId, onLeft, onClose }
                 <div className="sb-fact">
                   <dt>Phase</dt>
                   <dd>{d.phase_name}</dd>
+                </div>
+              )}
+              {d.role_name && (
+                <div className="sb-fact">
+                  <dt>Role</dt>
+                  <dd>{d.role_name}</dd>
                 </div>
               )}
               {d.billable > 0 && (

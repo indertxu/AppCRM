@@ -7,7 +7,7 @@ import UserDetailModal from "./UserDetailModal";
 import Organization from "./Organization";
 import CatalogPage from "./CatalogPage";
 import PipelinePage from "./PipelinePage";
-import ProposalTemplateEditor from "./ProposalTemplateEditor";
+import { ProposalSettings } from "./ProposalTemplateEditor";
 import PageAccessModal from "./PageAccessModal";
 import Select from "../../framework/Select";
 import TaskSettings from "./TaskSettings";
@@ -15,12 +15,15 @@ import { usePageAccess } from "../../framework/pageAccess";
 import { SuperAdminSwitch } from "../../framework/SuperAdmin";
 import { connectOutlook, completeOutlookConnect, outlookStatus, disconnectOutlook, outlookConnectError, OUTLOOK_CONNECTION_EVENT } from "../../api/outlookSync";
 import { DOCK_ITEMS, DOCK_ORDER_KEY, DOCK_ORDER_EVENT, orderDock } from "../../framework/Dock";
-import { loadPrefs, savePref } from "../companies/companiesApi";
+import { loadPrefs, savePref, isSalesLead } from "../companies/companiesApi";
+import { CompanySettings, SettingsShell } from "../companies/CompaniesPage";
+import { ContactSettings } from "../contacts/ContactsPage";
+import { useLocation, useNavigate } from "react-router-dom";
 import "./SettingsPage.css";
 
 const levelLabel = (id: string | null) => LEVELS.find((l) => l.id === id)?.label ?? id ?? "—";
 
-type View = "home" | "users" | "organization" | "account" | "interface" | "catalog" | "pipeline" | "proposal" | "tasks" | "salespage" | "mgmtpage" | "clientpage";
+type View = "home" | "users" | "organization" | "account" | "interface" | "catalog" | "pipeline" | "proposal" | "tasks" | "salespage" | "mgmtpage" | "clientpage" | "companiespage" | "contactspage";
 /** Which Page-access panel opens each view (Settings → Organization → Page access → Settings). */
 const VIEW_PANEL: Partial<Record<View, string>> = {
   organization: "settings.organization",
@@ -59,6 +62,18 @@ export default function SettingsPage() {
     : [];
 
   const [viewRaw, setView] = useState<View>("home");
+  /** Companies / Contacts set-up (fields, lists, import, export, clean-up): sales leads. */
+  const crmLead = isSalesLead({ role, is_superadmin: isSuperadmin === true });
+  // Opened from the Companies or Contacts page ("… settings"): go straight to that section.
+  const location = useLocation();
+  const navigate = useNavigate();
+  useEffect(() => {
+    const v = (location.state as any)?.settingsView as View | undefined;
+    if (!v) return;
+    setView(v);
+    navigate(location.pathname, { replace: true, state: null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state]);
   // A panel switched off in Page access can't be opened (also not while it's open).
   const view: View = VIEW_PANEL[viewRaw] && !(accessReady && canPanel(VIEW_PANEL[viewRaw]!)) ? "home" : viewRaw;
   const seesCompanyCards = ["settings.organization", "settings.catalog", "settings.pipelines", "settings.proposal"].some((k) => canPanel(k));
@@ -346,7 +361,7 @@ export default function SettingsPage() {
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h11l5 5v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" /><path d="M14 4v5h5M8 13h8M8 17h8M8 9h2" /></svg>
               </span>
               <span className="nav-card-title">Proposal template</span>
-              <span className="nav-card-sub">Brand, copy &amp; terms for proposals</span>
+              <span className="nav-card-sub">Your PowerPoint deck &amp; order form</span>
               <span className="nav-card-spacer" />
               <span className="nav-card-go">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
@@ -428,6 +443,32 @@ export default function SettingsPage() {
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
               </span>
           </button>
+          {crmLead && (
+            <button className="nav-card" style={{ ["--accent" as any]: "#d98324" }} onClick={() => setView("companiespage")}>
+              <span className="nav-card-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 21h18M5 21V7l7-4 7 4v14M9 21v-4h6v4M9 9h.01M15 9h.01M9 13h.01M15 13h.01" /></svg>
+              </span>
+              <span className="nav-card-title">Companies page</span>
+              <span className="nav-card-sub">Custom fields, sectors &amp; sources, import, export &amp; clean-up</span>
+              <span className="nav-card-spacer" />
+              <span className="nav-card-go">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+              </span>
+            </button>
+          )}
+          {crmLead && (
+            <button className="nav-card" style={{ ["--accent" as any]: "#e0574b" }} onClick={() => setView("contactspage")}>
+              <span className="nav-card-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8" /></svg>
+              </span>
+              <span className="nav-card-title">Contacts page</span>
+              <span className="nav-card-sub">Fields, import, export &amp; clean-up</span>
+              <span className="nav-card-spacer" />
+              <span className="nav-card-go">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+              </span>
+            </button>
+          )}
           <button className="nav-card" style={{ ["--accent" as any]: "#12b57f" }} onClick={() => setView("clientpage")}>
             <span className="nav-card-icon">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M7 8l-4 4 4 4M17 8l4 4-4 4M14 5l-4 14" /></svg>
@@ -446,6 +487,8 @@ export default function SettingsPage() {
   }
 
   // ---- Page settings (second row) ----
+  if (view === "companiespage" && crmLead) return <CompanySettings onBack={() => setView("home")} />;
+  if (view === "contactspage" && crmLead) return <ContactSettings onBack={() => setView("home")} />;
   if (view === "clientpage") return <ClientPageSettings onBack={() => setView("home")} canManage={canManage || isSuperadmin === true} />;
   if (view === "salespage" || view === "mgmtpage") {
     return (
@@ -513,17 +556,7 @@ export default function SettingsPage() {
 
   // ---- Proposal template ----
   if (view === "proposal") {
-    return (
-      <div className="st">
-        <header className="st-bar st-bar-row">
-          <button className="st-back" onClick={() => setView("home")} aria-label="Back">‹</button>
-          <div>
-            <h1 className="st-title">Proposal template</h1>
-          </div>
-        </header>
-        <ProposalTemplateEditor canManage={canManage} />
-      </div>
-    );
+    return <ProposalSettings canManage={canManage} onBack={() => setView("home")} />;
   }
 
   // ---- Users ----
@@ -721,7 +754,7 @@ const hashKey = async (t: string) =>
   Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t))))
     .map((b) => b.toString(16).padStart(2, "0")).join("");
 
-function ClientPageSettings({ onBack, canManage }: { onBack: () => void; canManage: boolean }) {
+export function ClientPageSettings({ onBack, canManage }: { onBack: () => void; canManage: boolean }) {
   const [keys, setKeys] = useState<ApiKeyRow[] | null>(null);
   const [clients, setClients] = useState<{ id: string; name: string }[]>([]);
   const [err, setErr] = useState<string | null>(null);
@@ -776,136 +809,143 @@ function ClientPageSettings({ onBack, canManage }: { onBack: () => void; canMana
   const shownClients = q ? clients.filter((c) => c.name.toLowerCase().includes(q.toLowerCase())) : clients;
   const sample = `curl -H "x-api-key: fck_…" "${API_BASE}/clients"`;
 
-  return (
-    <div className="st cps">
-      <header className="st-bar st-bar-back">
-        <button className="uv-back" onClick={onBack}>‹ Settings</button>
-        <h1 className="st-title">Client page</h1>
-        <p className="st-sub">Let other apps read and manage client documents</p>
-      </header>
+  const keysBody = (
+    <>
+      <div className="cps-keybar">
+        <p className="st-note">Each key reaches the documents and folders of all clients, or only the ones you pick. Read keys list and download; write keys also upload, replace, rename, move and delete.</p>
+        {canManage && !form && <button className="cl-primary" onClick={() => { setForm({ name: "", access: "read", scope: "all", picked: [], expires: "0" }); setFresh(null); setErr(null); }}>+ New key</button>}
+      </div>
 
-      <section className="st-section cps-sec">
-        <div className="st-section-head">
-          <div>
-            <h2 className="st-h2">API keys</h2>
-            <p className="st-note">Each key reaches the documents and folders of all clients, or only the ones you pick. Read keys list and download; write keys also upload, replace, rename, move and delete.</p>
+      {fresh && (
+        <div className="cps-fresh">
+          <b>Your new key</b>
+          <p>Copy it now: it won't be shown again.</p>
+          <div className="cps-base is-key">
+            <code>{fresh}</code>
+            <button className="cps-copy" onClick={() => copy(fresh, "fresh")}>{copied === "fresh" ? "Copied" : "Copy"}</button>
           </div>
-          {canManage && !form && <button className="cl-primary" onClick={() => { setForm({ name: "", access: "read", scope: "all", picked: [], expires: "0" }); setFresh(null); setErr(null); }}>New key</button>}
+          <button className="cps-link" onClick={() => setFresh(null)}>Done</button>
         </div>
+      )}
 
-        <div className="cps-base">
-          <span className="cps-k">Base URL</span>
-          <code>{API_BASE}</code>
-          <button className="cps-copy" onClick={() => copy(API_BASE, "base")}>{copied === "base" ? "Copied" : "Copy"}</button>
-        </div>
-
-        {fresh && (
-          <div className="cps-fresh">
-            <b>Your new key</b>
-            <p>Copy it now: it won't be shown again.</p>
-            <div className="cps-base is-key">
-              <code>{fresh}</code>
-              <button className="cps-copy" onClick={() => copy(fresh, "fresh")}>{copied === "fresh" ? "Copied" : "Copy"}</button>
-            </div>
-            <button className="cps-link" onClick={() => setFresh(null)}>Done</button>
+      {form && (
+        <div className="cps-form">
+          <div className="cl-field"><label>Name</label>
+            <input className="cl-input" autoFocus placeholder="e.g. SharePoint sync" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
           </div>
-        )}
-
-        {form && (
-          <div className="cps-form">
-            <div className="cl-field"><label>Name</label>
-              <input className="cl-input" autoFocus placeholder="e.g. SharePoint sync" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-            </div>
-            <div className="cps-row">
-              <div className="cl-field"><label>Access</label>
-                <div className="cps-seg">
-                  {(["read", "write"] as const).map((a) => (
-                    <button key={a} className={form.access === a ? "is-on" : ""} onClick={() => setForm({ ...form, access: a })}>{a === "read" ? "Read only" : "Read & write"}</button>
-                  ))}
-                </div>
-              </div>
-              <div className="cl-field"><label>Clients</label>
-                <div className="cps-seg">
-                  <button className={form.scope === "all" ? "is-on" : ""} onClick={() => setForm({ ...form, scope: "all" })}>All clients</button>
-                  <button className={form.scope === "some" ? "is-on" : ""} onClick={() => setForm({ ...form, scope: "some" })}>Only some</button>
-                </div>
-              </div>
-              <div className="cl-field"><label>Expires</label>
-                <Select value={form.expires} onChange={(v) => setForm({ ...form, expires: v })}
-                  options={[{ value: "0", label: "Never" }, { value: "30", label: "In 30 days" }, { value: "90", label: "In 90 days" }, { value: "365", label: "In a year" }]} />
+          <div className="cps-row">
+            <div className="cl-field"><label>Access</label>
+              <div className="cps-seg">
+                {(["read", "write"] as const).map((a) => (
+                  <button key={a} className={form.access === a ? "is-on" : ""} onClick={() => setForm({ ...form, access: a })}>{a === "read" ? "Read only" : "Read & write"}</button>
+                ))}
               </div>
             </div>
-            {form.scope === "some" && (
-              <div className="cps-pick">
-                <input className="cl-input" placeholder="Search clients…" value={q} onChange={(e) => setQ(e.target.value)} />
-                <div className="cps-pick-list">
-                  {shownClients.map((c) => {
-                    const on = form.picked.includes(c.id);
-                    return (
-                      <button key={c.id} className={`cps-chip ${on ? "is-on" : ""}`}
-                        onClick={() => setForm({ ...form, picked: on ? form.picked.filter((x) => x !== c.id) : [...form.picked, c.id] })}>
-                        <i />{c.name || "Unnamed"}
-                      </button>
-                    );
-                  })}
-                  {!shownClients.length && <span className="st-note">No clients match.</span>}
-                </div>
+            <div className="cl-field"><label>Clients</label>
+              <div className="cps-seg">
+                <button className={form.scope === "all" ? "is-on" : ""} onClick={() => setForm({ ...form, scope: "all" })}>All clients</button>
+                <button className={form.scope === "some" ? "is-on" : ""} onClick={() => setForm({ ...form, scope: "some" })}>Only some</button>
               </div>
-            )}
-            <div className="cps-actions">
-              <button className="cps-link" onClick={() => { setForm(null); setErr(null); }}>Cancel</button>
-              <button className="cl-primary" disabled={busy || !form.name.trim()} onClick={create}>{busy ? "Creating…" : "Create key"}</button>
+            </div>
+            <div className="cl-field"><label>Expires</label>
+              <Select value={form.expires} onChange={(v) => setForm({ ...form, expires: v })}
+                options={[{ value: "0", label: "Never" }, { value: "30", label: "In 30 days" }, { value: "90", label: "In 90 days" }, { value: "365", label: "In a year" }]} />
             </div>
           </div>
-        )}
-
-        {err && <p className="su-error">{err}</p>}
-
-        <div className="cps-keys">
-          {keys === null && <p className="st-note">Loading…</p>}
-          {keys?.length === 0 && !err && <p className="st-note">No keys yet.</p>}
-          {keys?.map((k) => {
-            const st = statusOf(k);
-            return (
-              <div className={`cps-key is-${st}`} key={k.id}>
-                <div className="cps-key-main">
-                  <b>{k.name}</b>
-                  <code>{k.prefix}…</code>
-                </div>
-                <span className={`cps-badge is-${k.access}`}>{k.access === "write" ? "Read & write" : "Read only"}</span>
-                <span className="cps-scope" title={k.client_ids?.length ? k.client_ids.map(clientName).join(", ") : undefined}>
-                  {k.client_ids?.length ? `${k.client_ids.length} client${k.client_ids.length === 1 ? "" : "s"}` : "All clients"}
-                </span>
-                <span className="cps-meta">Used {k.last_used_at ? shortDate(k.last_used_at) : "never"}</span>
-                <span className="cps-meta">{k.expires_at ? `Expires ${shortDate(k.expires_at)}` : "No expiry"}</span>
-                {st !== "active" ? <span className={`cps-badge is-${st}`}>{st === "revoked" ? "Revoked" : "Expired"}</span>
-                  : !canManage ? <span className="cps-badge is-active">Active</span>
-                  : askRevoke === k.id ? (
-                    <span className="cps-ask">Revoke? <button className="is-yes" onClick={() => revoke(k.id)}>Yes</button><button onClick={() => setAskRevoke(null)}>No</button></span>
-                  ) : <button className="cps-revoke" onClick={() => setAskRevoke(k.id)}>Revoke</button>}
+          {form.scope === "some" && (
+            <div className="cps-pick">
+              <input className="cl-input" placeholder="Search clients…" value={q} onChange={(e) => setQ(e.target.value)} />
+              <div className="cps-pick-list">
+                {shownClients.map((c) => {
+                  const on = form.picked.includes(c.id);
+                  return (
+                    <button key={c.id} className={`cps-chip ${on ? "is-on" : ""}`}
+                      onClick={() => setForm({ ...form, picked: on ? form.picked.filter((x) => x !== c.id) : [...form.picked, c.id] })}>
+                      <i />{c.name || "Unnamed"}
+                    </button>
+                  );
+                })}
+                {!shownClients.length && <span className="st-note">No clients match.</span>}
               </div>
-            );
-          })}
-        </div>
-      </section>
-
-      <section className="st-section cps-sec">
-        <h2 className="st-h2">Endpoints</h2>
-        <p className="st-note">Send the key in the <code>x-api-key</code> header. Folders can be given by id or by path, like <code>Contracts/2026</code>.</p>
-        <div className="cps-eps">
-          {API_ENDPOINTS.map(([m, path, what, write]) => (
-            <div className="cps-ep" key={m + path}>
-              <span className={`cps-m is-${m.toLowerCase()}`}>{m}</span>
-              <code>{path}</code>
-              <span className="cps-ep-d">{what}{write && <em>write</em>}</span>
             </div>
-          ))}
+          )}
+          <div className="cps-actions">
+            <button className="cps-link" onClick={() => { setForm(null); setErr(null); }}>Cancel</button>
+            <button className="cl-primary" disabled={busy || !form.name.trim()} onClick={create}>{busy ? "Creating…" : "Create key"}</button>
+          </div>
         </div>
-        <div className="cps-base is-sample">
-          <code>{sample}</code>
-          <button className="cps-copy" onClick={() => copy(sample, "sample")}>{copied === "sample" ? "Copied" : "Copy"}</button>
+      )}
+
+      {err && <p className="su-error">{err}</p>}
+
+      <div className="cps-keys">
+        {keys === null && <p className="st-note">Loading…</p>}
+        {keys?.length === 0 && !err && <p className="cps-none">No keys yet. Create one to let another app reach client documents.</p>}
+        {keys?.map((k, i) => {
+          const st = statusOf(k);
+          return (
+            <div className={`cps-key is-${st}`} key={k.id} style={{ ["--i" as any]: i }}>
+              <span className="cps-key-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M15 7a4 4 0 1 1-3.9 4.9L3 20v-3h3v-3h3l2.1-2.1A4 4 0 0 1 15 7zM16 10h.01" /></svg></span>
+              <div className="cps-key-main">
+                <b>{k.name}</b>
+                <code>{k.prefix}…</code>
+              </div>
+              <span className={`cps-badge is-${k.access}`}>{k.access === "write" ? "Read & write" : "Read only"}</span>
+              <span className="cps-scope" title={k.client_ids?.length ? k.client_ids.map(clientName).join(", ") : undefined}>
+                {k.client_ids?.length ? `${k.client_ids.length} client${k.client_ids.length === 1 ? "" : "s"}` : "All clients"}
+              </span>
+              <span className="cps-meta">Used {k.last_used_at ? shortDate(k.last_used_at) : "never"}</span>
+              <span className="cps-meta">{k.expires_at ? `Expires ${shortDate(k.expires_at)}` : "No expiry"}</span>
+              {st !== "active" ? <span className={`cps-badge is-${st}`}>{st === "revoked" ? "Revoked" : "Expired"}</span>
+                : !canManage ? <span className="cps-badge is-active">Active</span>
+                : askRevoke === k.id ? (
+                  <span className="cps-ask">Revoke? <button className="is-yes" onClick={() => revoke(k.id)}>Yes</button><button onClick={() => setAskRevoke(null)}>No</button></span>
+                ) : <button className="cps-revoke" onClick={() => setAskRevoke(k.id)}>Revoke</button>}
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+  const eps = (pred: (path: string) => boolean) => (
+    <div className="cps-eps">
+      {API_ENDPOINTS.filter(([, path]) => pred(path)).map(([m, path, what, write], i) => (
+        <div className="cps-ep" key={m + path} style={{ ["--i" as any]: i }}>
+          <span className={`cps-m is-${m.toLowerCase()}`}>{m}</span>
+          <code>{path}</code>
+          <span className="cps-ep-d">{what}{write && <em>write</em>}</span>
         </div>
-      </section>
+      ))}
     </div>
+  );
+  const active = (keys ?? []).filter((k) => statusOf(k) === "active").length;
+  return (
+    <SettingsShell icon="lock" title="Client page" sub="Let other apps read and manage client documents and folders" onBack={onBack}
+      tags={<>
+        <span className="sx-tag is-ok">{active} active key{active === 1 ? "" : "s"}</span>
+        <span className="sx-tag">{clients.length} clients</span>
+        <span className="sx-tag">{API_ENDPOINTS.length} endpoints</span>
+      </>}
+      sections={[
+        { k: "keys", label: "API keys", icon: "lock", tone: "green", count: (keys ?? []).length, title: "API keys", hint: "Who can reach client documents from outside, and how much they can do", body: keysBody },
+        { k: "connect", label: "Connecting", icon: "link", tone: "blue", title: "Connecting", hint: "Where to call and how to send the key",
+          body: (
+            <>
+              <div className="cps-base">
+                <span className="cps-k">Base URL</span>
+                <code>{API_BASE}</code>
+                <button className="cps-copy" onClick={() => copy(API_BASE, "base")}>{copied === "base" ? "Copied" : "Copy"}</button>
+              </div>
+              <p className="st-note">Send the key in the <code>x-api-key</code> header. Folders can be given by id or by path, like <code>Contracts/2026</code>.</p>
+              <div className="cps-base is-sample">
+                <code>{sample}</code>
+                <button className="cps-copy" onClick={() => copy(sample, "sample")}>{copied === "sample" ? "Copied" : "Copy"}</button>
+              </div>
+            </>
+          ) },
+        { k: "clients", label: "Clients", icon: "building", tone: "violet", count: API_ENDPOINTS.filter(([, p]) => !/\/(files|folders)/.test(p)).length, title: "Clients & tree", hint: "The clients a key reaches, and everything in one client at once", body: eps((p) => !/\/(files|folders)/.test(p)) },
+        { k: "files", label: "Files", icon: "note", tone: "amber", count: API_ENDPOINTS.filter(([, p]) => /\/files/.test(p)).length, title: "Files", hint: "List, download, upload, replace, rename, move and delete files", body: eps((p) => /\/files/.test(p)) },
+        { k: "folders", label: "Folders", icon: "tree", tone: "indigo", count: API_ENDPOINTS.filter(([, p]) => /\/folders/.test(p)).length, title: "Folders", hint: "Create, rename, move and delete folders", body: eps((p) => /\/folders/.test(p)) },
+      ]} />
   );
 }
