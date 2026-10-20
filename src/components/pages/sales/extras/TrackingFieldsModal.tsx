@@ -113,7 +113,7 @@ export default function TrackingFieldsModal({ canEdit, onClose, onChanged }: {
 
         <div className="dw-body">
           <p className="tfm-where">
-            Extra information every sales tracking can carry. Fields show up when you <b>start a tracking</b>,
+            Extra information every deal can carry. Fields show up when you <b>open a deal</b>,
             in each deal's <b>Details</b> card, and in <b>Reports</b> and <b>Export</b> as columns and conditions.
           </p>
 
@@ -208,7 +208,7 @@ export default function TrackingFieldsModal({ canEdit, onClose, onChanged }: {
                     className={`dw-switch ${required ? "on" : ""}`} onClick={() => setRequired((v) => !v)}>
                     <span className="dw-switch-knob" />
                   </button>
-                  <span><b>Required</b> · a tracking can't be started without it</span>
+                  <span><b>Required</b> · a deal can't be opened without it</span>
                 </div>
               </div>
               {label.trim() && items.some((f) => f.label.trim().toLowerCase() === label.trim().toLowerCase()) && (

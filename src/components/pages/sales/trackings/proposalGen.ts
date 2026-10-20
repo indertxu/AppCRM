@@ -1462,11 +1462,16 @@ async function treeShapes(tree: XEl, cx: Ctx, layer: PvShape["layer"], opts: { n
   return out;
 }
 
-/** Reads images of a deck as object URLs (browser) or data URLs (node), once each. */
-function imageReader(zip: any) {
-  const imgCache = new Map<string, Promise<string | undefined>>();
+/** Image URLs per deck file (the very buffer): the preview and the editor of one file share them, so an image never reloads. */
+const sharedImages = new WeakMap<object, Map<string, Promise<string | undefined>>>();
+/** Reads images of a deck as object URLs (browser) or data URLs (node), once each (once per file when `key` is the file's buffer). */
+function imageReader(zip: any, key?: unknown) {
+  let imgCache = key && typeof key === "object" ? sharedImages.get(key as object) : undefined;
+  if (!imgCache) { imgCache = new Map<string, Promise<string | undefined>>(); if (key && typeof key === "object") sharedImages.set(key as object, imgCache); }
+  const shared = !!key && typeof key === "object";
+  const cache = imgCache;
   const img = (path: string) => {
-    if (!imgCache.has(path)) imgCache.set(path, (async () => {
+    if (!cache.has(path)) cache.set(path, (async () => {
       const f = zip.file(path);
       const ext = path.split(".").pop()?.toLowerCase() ?? "";
       const mime = ({ png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", svg: "image/svg+xml", bmp: "image/bmp", webp: "image/webp" } as any)[ext];
@@ -1476,9 +1481,9 @@ function imageReader(zip: any) {
       }
       return `data:${mime};base64,${await f.async("base64")}`;
     })());
-    return imgCache.get(path)!;
+    return cache.get(path)!;
   };
-  return { img, cache: imgCache };
+  return { img, cache, shared };
 }
 
 /** Draws slides of an open deck: `draw(s, doc?)` — doc overrides the slide's XML (the editor's pending changes). */
@@ -1552,11 +1557,11 @@ function slideDrawer(zip: any, img: (path: string) => Promise<string | undefined
 }
 
 /** Everything the slide preview needs, for every slide (or just `slides`). Images become object URLs in the browser. */
-export async function loadDeckPreview(buf: ArrayBuffer | Uint8Array | Blob, opts: { slides?: number[] } = {}): Promise<PvDeck> {
+export async function loadDeckPreview(buf: ArrayBuffer | Uint8Array | Blob, opts: { slides?: number[]; shareImages?: boolean } = {}): Promise<PvDeck> {
   const zip = await openZip(buf);
   const info = await parseDeck(buf);
   const order = await slideOrder(zip);
-  const { img } = imageReader(zip);
+  const { img } = imageReader(zip, opts.shareImages ? buf : undefined);
   const drawSlide = slideDrawer(zip, img);
   const want = opts.slides ? new Set(opts.slides) : null;
   const slides: PvSlide[] = [];
@@ -1874,11 +1879,11 @@ export interface DeckEditSession {
 }
 
 /** Opens a deck for editing: renders slides with pending changes in memory, saves a new .pptx. */
-export async function openDeckEditor(buf: ArrayBuffer | Uint8Array | Blob): Promise<DeckEditSession> {
+export async function openDeckEditor(buf: ArrayBuffer | Uint8Array | Blob, opts: { shareImages?: boolean } = {}): Promise<DeckEditSession> {
   const zip = await openZip(buf);
   const order = await slideOrder(zip);
   const info = await parseDeck(buf);
-  const { img, cache } = imageReader(zip);
+  const { img, cache, shared } = imageReader(zip, opts.shareImages ? buf : undefined);
   const drawSlide = slideDrawer(zip, img);
   const orig = new Map<string, string>();
   const xmlOf = async (path: string) => { if (!orig.has(path)) orig.set(path, await zip.file(path).async("string")); return orig.get(path)!; };
@@ -1906,6 +1911,8 @@ export async function openDeckEditor(buf: ArrayBuffer | Uint8Array | Blob): Prom
       return new Blob([bytes as any], { type: PPTX_MIME });
     },
     dispose() {
+      // images shared with the file's preview stay (the preview still shows them)
+      if (shared) return;
       cache.forEach((p) => p.then((u) => { if (u && u.startsWith("blob:")) URL.revokeObjectURL(u); }).catch(() => undefined));
     },
   };

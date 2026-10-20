@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import SalesMultiFilter from "../sales/SalesMultiFilter";
 import DealRolePicker from "./DealRolePicker";
 import { useBackToClose } from "../../../framework/useBackToClose";
+import { useCloseGuard } from "../../../framework/Dock";
 import {
   readSpreadsheet, colLetter, cellText, normHeader, parseNumber, applyColRules, mergeValues, prepareImport, emptyPrep, RULE_LABEL, MERGE_LABEL,
   type Sheet, type Workbook, type SheetCell, type ColRule, type ColRuleOp, type ImportPrep, type MergeMode, type MergeRule,
@@ -57,7 +58,6 @@ export default function DealImport({ pipelines, phaseByPipe, products, people, r
   onClose: () => void;
   onDone: () => void;
 }) {
-  useBackToClose("deal-import", onClose);
   const [step, setStep] = useState<Step>("file");
   const [fields, setFields] = useState<TrackingField[]>([]);
   const [companyFields, setCompanyFields] = useState<CompanyField[]>([]);
@@ -91,6 +91,9 @@ export default function DealImport({ pipelines, phaseByPipe, products, people, r
   const [fileErr, setFileErr] = useState<string | null>(null);
   const [viewer, setViewer] = useState(false);
   const sheet = wb?.sheets[sheetIdx] ?? null;
+  // Esc / backdrop / × / Cancel / Back ask before throwing away a file being imported.
+  const guard = useCloseGuard({ dirty: (!!wb || step !== "file") && step !== "done", busy: step === "run", onClose, what: "import", noun: "deal import" });
+  useBackToClose("deal-import", onClose, true, guard.holdBack);
   const rows = useMemo(() => (sheet ? (hasHeader ? sheet.rows.slice(1) : sheet.rows) : []).filter((r) => r.some((c) => c != null && c !== "")), [sheet, hasHeader]);
   const columns: Column[] = useMemo(() => {
     if (!sheet) return [];
@@ -291,14 +294,14 @@ export default function DealImport({ pipelines, phaseByPipe, products, people, r
   };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || step === "run" || document.querySelector(".smf-menu, .di-tp-menu")) return;
+      if (e.key !== "Escape" || guard.asking || document.querySelector(".sel-pop, .smf-menu, .di-tp-menu")) return;
       if (viewer) { setViewer(false); return; }
-      onClose();
+      guard.requestClose();
     };
     window.addEventListener("keydown", onKey);
     document.body.style.overflow = "hidden";
     return () => { window.removeEventListener("keydown", onKey); document.body.style.overflow = ""; };
-  }, [onClose, step, viewer]);
+  }, [guard.requestClose, guard.asking, viewer]);
 
   /* ─────────────── downloads ─────────────── */
   const download = (name: string, lines: string[][]) => {
@@ -358,8 +361,8 @@ export default function DealImport({ pipelines, phaseByPipe, products, people, r
 
   /* ═══════════════════════════ render ═══════════════════════════ */
   return createPortal(
-    <div className="di-backdrop" onMouseDown={() => step !== "run" && onClose()}>
-      <div className="di" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Import deals">
+    <div className="di-backdrop" {...guard.backdrop}>
+      <div className="di" role="dialog" aria-modal="true" aria-label="Import deals">
         <header className="di-head">
           <div className="di-head-txt">
             <span className="di-eyebrow">Import</span>
@@ -376,7 +379,7 @@ export default function DealImport({ pipelines, phaseByPipe, products, people, r
                 <span>Sheet</span>
               </button>
             )}
-            <button className="di-x" onClick={onClose} disabled={step === "run"} aria-label="Close">×</button>
+            <button className="di-x" onClick={guard.requestClose} disabled={step === "run"} aria-label="Close">×</button>
           </div>
         </header>
 
@@ -831,7 +834,7 @@ export default function DealImport({ pipelines, phaseByPipe, products, people, r
               {step === "map" && <button className="di-btn is-ghost" onClick={() => setStep("file")}>Back</button>}
               {step === "people" && <button className="di-btn is-ghost" onClick={() => setStep("map")}>Back</button>}
               {step === "review" && <button className="di-btn is-ghost" onClick={() => setStep("people")}>Back</button>}
-              {step === "done" ? <button className="di-btn is-primary" onClick={onClose}>Done</button> : <button className="di-btn is-ghost" onClick={onClose}>Cancel</button>}
+              {step === "done" ? <button className="di-btn is-primary" onClick={onClose}>Done</button> : <button className="di-btn is-ghost" onClick={guard.requestClose}>Cancel</button>}
               {step === "file" && <button className="di-btn is-primary" disabled={!wb || !rows.length} onClick={() => setStep("map")}>Map columns →</button>}
               {step === "map" && <button className="di-btn is-primary" disabled={!!mapIssue} onClick={() => setStep("people")}>People →</button>}
               {step === "people" && <button className="di-btn is-primary" onClick={() => { setTab(plan?.counts.error ? "error" : "all"); setStep("review"); }}>Review →</button>}
@@ -850,6 +853,7 @@ export default function DealImport({ pipelines, phaseByPipe, products, people, r
             canJump={step === "map"} onJump={jumpToColumn} onClose={() => setViewer(false)} />
         )}
       </div>
+      {guard.prompt}
     </div>,
     document.body,
   );
@@ -961,7 +965,7 @@ function explain(reason: string): { title: string; hint: string } {
   const r = reason.toLowerCase();
   if (r.startsWith("no company or contact")) return { title: "No company or contact", hint: "The row has neither a company name nor a contact. Fill one in the file, or map the column that has it." };
   if (r.includes("both skipped")) return { title: "Company and contact skipped", hint: "You chose “No company” and no contact for this row in the review — give it one of the two." };
-  if (r.startsWith("required:")) return { title: "A required deal field is empty", hint: "Map a column to that field, or make it optional in Sales → Deal fields." };
+  if (r.startsWith("required:")) return { title: "A required deal field is empty", hint: "Map a column to that field, or make it optional in Deals → Deal fields." };
   if (r.startsWith("no pipeline")) return { title: "No pipeline", hint: "Choose a default pipeline, or map the column that says it." };
   if (r.includes("no phases")) return { title: "The pipeline has no phases", hint: "Add phases to that pipeline in Settings → Client pipelines, then import again." };
   if (r.includes("couldn't be created")) return { title: "Its company or contact couldn't be created", hint: "Look at the company / contact errors in this list — the deal depends on them." };

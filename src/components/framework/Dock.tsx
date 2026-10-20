@@ -1,7 +1,13 @@
-import { useEffect, useState, useRef, type ReactNode } from "react";
+import { useEffect, useState, useRef, useCallback, lazy, Suspense, type ReactNode, type MouseEvent as ReactMouseEvent, type FocusEvent as ReactFocusEvent } from "react";
+import { createPortal } from "react-dom";
 import { loadPrefs } from "../pages/companies/companiesApi";
 import { useNavigate, useLocation } from "react-router-dom";
 import { usePageAccess, type PageKey } from "./pageAccess";
+import { supabase } from "../api/supabase";
+import { useAuth } from "../api/AuthProvider";
+
+// The search lives on the home page; the rail opens the same one as a palette (loaded on demand).
+const SearchPalette = lazy(() => import("../pages/homepage/HomePage").then((m) => ({ default: m.GlobalSearch })));
 
 interface DockItem {
   label: string;
@@ -94,7 +100,7 @@ const items: DockItem[] = [
   { label: "Companies", path: "/companies", icon: companiesIcon, page: "companies" },
   { label: "Clients", path: "/clients", icon: clientsIcon, page: "clients" },
   { label: "Projects", path: "/projects", icon: projectsIcon, page: "projects" },
-  { label: "Sales", path: "/sales", icon: salesIcon, page: "sales" },
+  { label: "Deals", path: "/sales", icon: salesIcon, page: "sales" },
   { label: "Management", path: "/management", icon: managementIcon, page: "management" },
   { label: "Settings", path: "/settings", icon: settingsIcon, page: "settings" },
 ];
@@ -102,12 +108,29 @@ const items: DockItem[] = [
 /** What the order editor in Settings shows. */
 export const DOCK_ITEMS = items;
 
+const searchIcon = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" /></svg>
+);
+const RailLogo = () => (
+  <svg viewBox="14 15 92 93" role="img" aria-label="Next">
+    <g transform="matrix(1,0.5,-1,0.5,60,17)">
+      <rect width="38" height="38" rx="2" fill="#86efc0" />
+      <polyline points="7,30 15,19 22,24 31.7,10.1" fill="none" stroke="#0a6f4d" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
+      <polygon points="36,4 35.1,12.5 28.2,7.7" fill="#0a6f4d" />
+    </g>
+    <g transform="translate(16,47) skewY(26.565)"><rect width="38" height="40" rx="2" fill="#12b57f" /><text x="19" y="30" textAnchor="middle" fill="#fff" fontFamily="Arial" fontWeight="700" fontSize="27">N</text></g>
+    <g transform="translate(66,66) skewY(-26.565)"><rect width="38" height="40" rx="2" fill="#0a6f4d" /><rect x="6" y="24" width="6" height="11" rx="1.5" fill="#fff" /><rect x="16" y="16" width="6" height="19" rx="1.5" fill="#fff" /><rect x="26" y="8" width="6" height="27" rx="1.5" fill="#fff" /></g>
+  </svg>
+);
+
+/** The app's sidebar: a fixed dark rail, always there. Icons with their name on hover
+ *  (or always, with "Always show menu labels" in Settings › Interface). */
 export default function Dock() {
-  const [open, setOpen] = useState(false);
-  const hideTimer = useRef<number | null>(null);
   const navigate = useNavigate();
   const location = useLocation();
   const { canSee } = usePageAccess();
+  const { session } = useAuth();
+  const uid = session?.user?.id ?? null;
 
   const [order, setOrder] = useState<string[]>(readOrder);
   useEffect(() => {
@@ -120,35 +143,233 @@ export default function Dock() {
     return () => window.removeEventListener(DOCK_ORDER_EVENT, on);
   }, []);
   const visible = orderDock(items.filter((it) => canSee(it.page)), order);
+  const main = visible.filter((it) => it.path !== "/settings");
+  const settings = visible.find((it) => it.path === "/settings");
+  const isOn = (path: string) => location.pathname === path || location.pathname.startsWith(`${path}/`);
 
-  const show = () => {
-    if (hideTimer.current) {
-      clearTimeout(hideTimer.current);
-      hideTimer.current = null;
-    }
-    setOpen(true);
+  // ---- who I am (avatar + menu) ----
+  const [me, setMe] = useState<{ name: string; email: string; initials: string } | null>(null);
+  useEffect(() => {
+    if (!uid) return;
+    let alive = true;
+    supabase.from("profiles").select("first_name, last_name, email").eq("id", uid).maybeSingle().then(({ data }) => {
+      if (!alive) return;
+      const d: any = data ?? {};
+      const name = [d.first_name, d.last_name].filter(Boolean).join(" ") || session?.user?.email || "";
+      const initials = (name.split(/\s+/).map((x: string) => x[0]).join("").slice(0, 2) || "?").toUpperCase();
+      setMe({ name, email: d.email ?? session?.user?.email ?? "", initials });
+    });
+    return () => { alive = false; };
+  }, [uid]);
+  const [menu, setMenu] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const meRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!menu) return;
+    const down = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (!menuRef.current?.contains(t) && !meRef.current?.contains(t)) setMenu(false);
+    };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") setMenu(false); };
+    document.addEventListener("mousedown", down); document.addEventListener("keydown", key);
+    return () => { document.removeEventListener("mousedown", down); document.removeEventListener("keydown", key); };
+  }, [menu]);
+
+  // ---- search palette (⌘K anywhere; on Home the page's own search answers) ----
+  const [search, setSearch] = useState(false);
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (!(e.key === "k" && (e.metaKey || e.ctrlKey))) return;
+      if (document.querySelector(".home .gs-box input")) return; // the home page has it on screen
+      e.preventDefault(); setSearch(true);
+    };
+    document.addEventListener("keydown", key);
+    return () => document.removeEventListener("keydown", key);
+  }, []);
+  useEffect(() => { setSearch(false); setMenu(false); setTip(null); }, [location.pathname, location.search]);
+
+  // ---- tooltips: drawn on <body> so a page or its overlays never hide them ----
+  const [tip, setTip] = useState<{ text: ReactNode; y: number } | null>(null);
+  const tipOn = (text: ReactNode) => ({
+    onMouseEnter: (e: ReactMouseEvent<HTMLElement>) => { const r = e.currentTarget.getBoundingClientRect(); setTip({ text, y: r.top + r.height / 2 }); },
+    onMouseLeave: () => setTip(null),
+    onFocus: (e: ReactFocusEvent<HTMLElement>) => { if (!e.currentTarget.matches(":focus-visible")) return; const r = e.currentTarget.getBoundingClientRect(); setTip({ text, y: r.top + r.height / 2 }); },
+    onBlur: () => setTip(null),
+  });
+  const openSearch = () => {
+    const home = document.querySelector<HTMLInputElement>(".home .gs-box input");
+    if (home) { home.focus(); return; }
+    setSearch(true);
   };
-  const hide = () => {
-    hideTimer.current = window.setTimeout(() => setOpen(false), 220);
-  };
+
+  const item = (it: DockItem) => (
+    <button key={it.path} type="button" className={`rail-item ${isOn(it.path) ? "is-on" : ""}`} onClick={() => { setTip(null); navigate(it.path); }}
+      aria-label={it.label} aria-current={isOn(it.path) ? "page" : undefined} {...tipOn(it.label)}>
+      <span className="rail-ico">{it.icon}</span>
+      <span className="rail-label">{it.label}</span>
+    </button>
+  );
 
   return (
     <>
-      <div className="dock-trigger" onMouseEnter={show} onMouseLeave={hide} />
-      <div className={`dock ${open ? "dock-open" : ""}`} onMouseEnter={show} onMouseLeave={hide}>
-        <div className="dock-bar">
-          {visible.map((it) => (
-            <button
-              key={it.path}
-              className={`dock-app ${it.path === "/settings" ? "dock-app-settings" : ""} ${location.pathname === it.path ? "dock-app-active" : ""}`}
-    onClick={() => navigate(it.path)}
-            >
-              <span className="dock-icon">{it.icon}</span>
-              <span className="dock-label">{it.label}</span>
-            </button>
+      <nav className="rail" aria-label="Main">
+        <button type="button" className="rail-logo" onClick={() => navigate("/home")} aria-label="Home"><RailLogo /></button>
+        <span className="rail-sep" />
+        <button type="button" className="rail-item is-search" onClick={() => { setTip(null); openSearch(); }} aria-label="Search"
+          {...tipOn(<>Search <kbd>{/mac/i.test(navigator.platform) ? "⌘" : "Ctrl"} K</kbd></>)}>
+          <span className="rail-ico">{searchIcon}</span>
+          <span className="rail-label">Search</span>
+        </button>
+        <div className="rail-list">
+          {main.map((it, i) => (
+            <div key={it.path} className="rail-slot">
+              {/* a quiet line between Home/Calendar and the CRM pages */}
+              {i > 0 && main[i - 1].path === "/calendar" && <span className="rail-sep is-thin" />}
+              {item(it)}
+            </div>
           ))}
         </div>
-      </div>
+        <div className="rail-foot">
+          {settings && item(settings)}
+          <div className="rail-me" ref={meRef}>
+            <button type="button" className={`rail-avatar ${menu ? "is-open" : ""}`} onClick={() => { setTip(null); setMenu((v) => !v); }} aria-label="Your account" aria-expanded={menu}
+              {...(menu ? {} : tipOn(me?.name || "Your account"))}>
+              {me?.initials ?? ""}
+            </button>
+            {menu && createPortal(
+              <div className="rail-menu" role="menu" ref={menuRef}>
+                <div className="rail-menu-who"><b>{me?.name}</b><span>{me?.email}</span></div>
+                <button type="button" role="menuitem" onClick={() => navigate("/settings", { state: { settingsView: "account" } })}>Account</button>
+                {settings && <button type="button" role="menuitem" onClick={() => navigate("/settings", { state: { settingsView: "interface" } })}>Interface</button>}
+                <button type="button" role="menuitem" className="is-out" onClick={async () => { setMenu(false); await supabase.auth.signOut().catch(() => {}); }}>Sign out</button>
+              </div>,
+              document.body,
+            )}
+          </div>
+        </div>
+      </nav>
+      {tip && createPortal(<div className="rail-tip-float" role="tooltip" style={{ top: tip.y }}>{tip.text}</div>, document.body)}
+      {search && createPortal(
+        <div className="rail-pal-back" onMouseDown={(e) => { if (e.target === e.currentTarget) setSearch(false); }}
+          onKeyDown={(e) => { if (e.key === "Escape") setSearch(false); }}>
+          <div className="rail-pal">
+            <Suspense fallback={<div className="rail-pal-wait">Loading search…</div>}>
+              <PaletteFocus onClose={() => setSearch(false)}><SearchPalette /></PaletteFocus>
+            </Suspense>
+          </div>
+        </div>,
+        document.body,
+      )}
     </>
+  );
+}
+
+/** Focuses the palette's search box when it appears; Escape on an empty box closes the palette. */
+function PaletteFocus({ children, onClose }: { children: ReactNode; onClose: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const t = window.setTimeout(() => ref.current?.querySelector<HTMLInputElement>("input")?.focus(), 30);
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      const inp = ref.current?.querySelector<HTMLInputElement>("input");
+      if (!inp || !inp.value) onClose();
+    };
+    document.addEventListener("keydown", key);
+    return () => { window.clearTimeout(t); document.removeEventListener("keydown", key); };
+  }, [onClose]);
+  return <div ref={ref} className="rail-pal-in">{children}</div>;
+}
+
+/* ══════════════ Closing a modal with work in it (imports, exports…) ══════════════ */
+/**
+ * Escape, the backdrop, × and Cancel never throw away work silently:
+ * - nothing done yet → closes as usual;
+ * - work in progress (`dirty`) → asks "Discard…?" (Keep working is the default);
+ * - something running (`busy`) → explains it can't close until it finishes.
+ * The backdrop only closes on a click that started AND ended on it (dragging out of a field doesn't close).
+ * Usage: const g = useCloseGuard({ dirty, busy, onClose, what: "import" });
+ *        backdrop: <div {...g.backdrop}> · ×/Cancel/Esc: g.requestClose() · render {g.prompt}
+ */
+export function useCloseGuard(opts: { dirty: boolean; busy?: boolean; onClose: () => void; what: "import" | "export"; noun?: string }) {
+  const [asking, setAsking] = useState(false);
+  const ref = useRef(opts); ref.current = opts;
+  const downOnBackdrop = useRef(false);
+  const requestClose = useCallback(() => {
+    const o = ref.current;
+    if (o.busy || o.dirty) setAsking(true); else o.onClose();
+  }, []);
+  const backdrop = {
+    onMouseDown: (e: ReactMouseEvent) => { downOnBackdrop.current = e.target === e.currentTarget; },
+    onClick: (e: ReactMouseEvent) => {
+      const ok = downOnBackdrop.current && e.target === e.currentTarget;
+      downOnBackdrop.current = false;
+      if (ok) requestClose();
+    },
+  };
+  /** For useBackToClose's `holdBack`: Back asks too instead of closing. */
+  const holdBack = useCallback(() => {
+    const o = ref.current;
+    if (o.busy || o.dirty) { setAsking(true); return true; }
+    return false;
+  }, []);
+  const prompt = asking ? (
+    <CloseGuardPrompt what={opts.what} noun={opts.noun} busy={!!opts.busy}
+      onKeep={() => setAsking(false)}
+      onDiscard={() => { setAsking(false); ref.current.onClose(); }} />
+  ) : null;
+  return { requestClose, holdBack, backdrop, prompt, asking };
+}
+
+const CG_CSS = `
+.cg-back{position:fixed;inset:0;z-index:10050;display:grid;place-items:center;padding:16px;background:rgba(6,26,19,.42);backdrop-filter:blur(3px);animation:cg-fade .18s ease}
+.cg{position:relative;width:min(420px,100%);padding:26px 26px 20px;border-radius:22px;background:#fff;box-shadow:0 30px 70px -30px rgba(6,26,19,.65),0 0 0 1px rgba(10,111,77,.08);font-family:inherit;color:#0b241a;animation:cg-pop .26s cubic-bezier(.16,1,.3,1)}
+.cg-ico{display:grid;place-items:center;width:46px;height:46px;margin-bottom:14px;border-radius:14px;background:#fff4e2;color:#c27a12}
+.cg-ico.is-busy{background:#e8f6ef;color:#0a6f4d}
+.cg-ico svg{width:22px;height:22px}
+.cg h2{margin:0 0 6px;font-size:18px;font-weight:750;letter-spacing:-.01em}
+.cg p{margin:0 0 20px;font-size:13.5px;line-height:1.5;color:#5a7d6d}
+.cg-act{display:flex;justify-content:flex-end;gap:8px}
+.cg-act button{height:40px;padding:0 18px;border-radius:12px;font:inherit;font-size:13.5px;font-weight:700;cursor:pointer;transition:background .15s,border-color .15s,transform .15s,box-shadow .15s}
+.cg-keep{border:0;background:linear-gradient(120deg,#12b57f,#0a6f4d);color:#fff;box-shadow:0 10px 20px -12px rgba(10,111,77,.95)}
+.cg-keep:hover{transform:translateY(-1px)}
+.cg-keep:focus-visible{outline:3px solid rgba(18,181,127,.35);outline-offset:2px}
+.cg-discard{border:1.5px solid rgba(184,69,47,.22);background:#fff;color:#b8452f}
+.cg-discard:hover{background:#fdebe8;border-color:rgba(184,69,47,.45)}
+@keyframes cg-fade{from{opacity:0}}
+@keyframes cg-pop{from{opacity:0;transform:translateY(8px) scale(.97)}}
+`;
+
+function CloseGuardPrompt({ what, noun, busy, onKeep, onDiscard }: { what: "import" | "export"; noun?: string; busy: boolean; onKeep: () => void; onDiscard: () => void }) {
+  // Escape here only closes this question (back to the import / export), never the modal behind it.
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); onKeep(); } };
+    window.addEventListener("keydown", k, true);
+    return () => window.removeEventListener("keydown", k, true);
+  }, [onKeep]);
+  const thing = noun ?? (what === "import" ? "import" : "export");
+  const title = busy ? `The ${thing} is still running` : what === "import" ? `Discard this ${thing}?` : `Close the ${thing}?`;
+  const sub = busy
+    ? `Closing now would stop it halfway. Wait until it finishes — it only takes a moment.`
+    : what === "import"
+      ? "The file, the column mapping and everything you've set up here will be lost."
+      : "The rows, conditions and columns you've set up here won't be kept unless you save the export.";
+  return createPortal(
+    <div className="cg-back" onMouseDown={(e) => { if (e.target === e.currentTarget) e.stopPropagation(); }} onClick={(e) => { if (e.target === e.currentTarget) onKeep(); }}>
+      <style>{CG_CSS}</style>
+      <div className="cg" role="alertdialog" aria-modal="true" aria-label={title} onMouseDown={(e) => e.stopPropagation()}>
+        <span className={`cg-ico ${busy ? "is-busy" : ""}`}>
+          {busy
+            ? <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
+            : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /></svg>}
+        </span>
+        <h2>{title}</h2>
+        <p>{sub}</p>
+        <div className="cg-act">
+          {!busy && <button type="button" className="cg-discard" onClick={onDiscard}>Discard</button>}
+          <button type="button" className="cg-keep" onClick={onKeep} autoFocus>Keep working</button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }

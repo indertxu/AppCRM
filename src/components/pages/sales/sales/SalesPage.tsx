@@ -6,7 +6,7 @@ import SalesMultiFilter from "./SalesMultiFilter";
 import SalesRangeFilter, { EMPTY_RANGES, activeRangeCount, HeaderRangePopover, rangeActive, clearRange, type SalesRanges, type RangeKind } from "./SalesRangeFilter";
 import SalesForecast, { type ForecastKpis } from "./SalesForecast";
 import { supabase } from "../../../api/supabase";
-import { listCompanies, listContacts, myProfile, sessionUserId, type Company, type Contact } from "../../companies/companiesApi";
+import { listCompanies, listContacts, myProfile, sessionUserId, loadPrefs, savePref, type Company, type Contact } from "../../companies/companiesApi";
 import { listPipelines, loadPipeline, loadPhasesByPipeline, sortPipelines, moveDealsToPipeline, type Pipeline, type Phase } from "../../settings/pipelineApi";
 import { useBulkSelection, BulkBar, BulkCheck, type BulkAction } from "../../companies/CompaniesPage";
 import { loadProducts, loadServices, type Product } from "../../settings/catalogApi";
@@ -335,6 +335,107 @@ async function companiesByIds(ids: (string | null | undefined)[]): Promise<Compa
 /** How many rows the list draws at first; more follow as you scroll. */
 const LIST_STEP = 60;
 
+// ============================ Deals list columns ============================
+/** The rich built-in columns (as before) plus plain ones; the deal column is always first. */
+type ColDef = { key: string; label: string; min: number; track: string; right?: boolean; sort?: "stage" | "product" | "rev" | "close" | "prob" };
+const BUILTIN_COLS: ColDef[] = [
+  { key: "stage", label: "Stage", min: 200, track: "minmax(200px, 1.25fr)", sort: "stage" },
+  { key: "product", label: "Product and owner", min: 170, track: "minmax(170px, 1fr)", sort: "product" },
+  { key: "value", label: "Potential value · expected close", min: 150, track: "150px", right: true, sort: "rev" },
+  { key: "prob", label: "Close chance", min: 110, track: "110px", right: true, sort: "prob" },
+];
+const PLAIN_COLS: ColDef[] = [
+  { key: "company", label: "Company", min: 150, track: "minmax(150px, 1fr)" },
+  { key: "pipeline", label: "Pipeline", min: 130, track: "minmax(130px, 0.8fr)" },
+  { key: "phase", label: "Phase", min: 130, track: "minmax(130px, 0.8fr)" },
+  { key: "status", label: "Status", min: 90, track: "90px" },
+  { key: "owner", label: "Owner", min: 130, track: "minmax(130px, 0.8fr)" },
+  { key: "team", label: "People on the deal", min: 150, track: "minmax(150px, 1fr)" },
+  { key: "productName", label: "Product", min: 140, track: "minmax(140px, 0.9fr)" },
+  { key: "revenue", label: "Potential value", min: 120, track: "120px", right: true, sort: "rev" },
+  { key: "expected", label: "Expected close", min: 120, track: "120px", right: true, sort: "close" },
+  { key: "closed", label: "Won / lost on", min: 110, track: "110px", right: true },
+  { key: "started", label: "Started", min: 100, track: "100px", right: true },
+  { key: "contacts", label: "Contacts", min: 90, track: "90px", right: true },
+  { key: "phaseProb", label: "Phase probability", min: 110, track: "110px", right: true },
+  { key: "repProb", label: "Sales estimate", min: 110, track: "110px", right: true },
+  { key: "mgrProb", label: "Management estimate", min: 120, track: "120px", right: true },
+];
+const DEFAULT_COLS = ["stage", "product", "value", "prob"];
+const COLS_PREF = "deals.columns";
+const fieldCol = (f: TrackingField): ColDef => ({ key: `f:${f.id}`, label: f.label, min: 130, track: f.type === "number" || f.type === "date" ? "120px" : "minmax(130px, 0.9fr)", right: f.type === "number" });
+const fmtDay = (iso?: string | null) => (iso ? new Date(iso).toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "2-digit" }) : "");
+const fmtField = (f: TrackingField, v: unknown): string => {
+  if (v == null || v === "") return "";
+  if (f.type === "boolean") return v === true || v === "true" ? "Yes" : "No";
+  if (f.type === "date") return fmtDay(String(v));
+  if (f.type === "number") return Number(v).toLocaleString("de-DE");
+  return Array.isArray(v) ? v.join(", ") : String(v);
+};
+
+/** Pick, order and reset the list's columns (saved per person). */
+function DealColumns({ all, cols, onChange }: { all: ColDef[]; cols: string[]; onChange: (next: string[]) => void }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const down = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); setOpen(false); } };
+    document.addEventListener("mousedown", down); document.addEventListener("keydown", key, true);
+    return () => { document.removeEventListener("mousedown", down); document.removeEventListener("keydown", key, true); };
+  }, [open]);
+  const byKey = new Map(all.map((c) => [c.key, c]));
+  const shown = cols.filter((k) => byKey.has(k));
+  const hidden = all.filter((c) => !shown.includes(c.key) && c.label.toLowerCase().includes(q.trim().toLowerCase()));
+  const move = (i: number, d: number) => { const j = i + d; if (j < 0 || j >= shown.length) return; const n = [...shown]; [n[i], n[j]] = [n[j], n[i]]; onChange(n); };
+  const same = shown.join() === DEFAULT_COLS.join();
+  return (
+    <div className="so-colpick" ref={ref}>
+      <button type="button" className={`so-colbtn ${open ? "is-on" : ""}`} onClick={() => setOpen((v) => !v)} aria-expanded={open} title="Choose the columns">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16M15 4v16" /></svg>
+        Columns<em>{shown.length + 1}</em>
+      </button>
+      {open && (
+        <div className="so-colpop" role="dialog" aria-label="Columns">
+          <div className="so-colpop-head">
+            <b>Columns</b>
+            {!same && <button type="button" onClick={() => onChange(DEFAULT_COLS)}>Reset</button>}
+          </div>
+          <span className="so-colpop-k">Shown · in this order</span>
+          <ul className="so-colpop-list">
+            <li className="is-fixed"><span className="so-colpop-grip" />Deal<em>always first</em></li>
+            {shown.map((k, i) => (
+              <li key={k}>
+                <span className="so-colpop-mv">
+                  <button type="button" disabled={i === 0} onClick={() => move(i, -1)} aria-label="Move up"><svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6" /></svg></button>
+                  <button type="button" disabled={i === shown.length - 1} onClick={() => move(i, 1)} aria-label="Move down"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg></button>
+                </span>
+                <span className="so-colpop-l">{byKey.get(k)!.label}</span>
+                <button type="button" className="so-colpop-x" onClick={() => onChange(shown.filter((x) => x !== k))} aria-label={`Hide ${byKey.get(k)!.label}`}>
+                  <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <span className="so-colpop-k">Add a column</span>
+          <input className="so-colpop-q" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search columns…" />
+          <ul className="so-colpop-list is-add">
+            {hidden.map((c) => (
+              <li key={c.key}>
+                <button type="button" onClick={() => onChange([...shown, c.key])}>
+                  <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>{c.label}{c.key.startsWith("f:") && <em>custom</em>}
+                </button>
+              </li>
+            ))}
+            {!hidden.length && <li className="is-none">Nothing else to add.</li>}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function SalesPage() {
   const navigate = useNavigate();
   // Last time's data (if any): the page paints with it straight away and refreshes underneath.
@@ -387,6 +488,18 @@ export default function SalesPage() {
   /** Custom deal fields (Actions → Deal fields). */
   const [trackingFields, setTrackingFields] = useState<TrackingField[]>(() => snap0?.trackingFields ?? []);
   const [view, setView] = useState<"list" | "kanban" | "forecast">("list");
+  // List columns: saved per person (profile prefs), with a local copy so they show at once.
+  const [cols, setCols] = useState<string[]>(() => {
+    try { const v = JSON.parse(localStorage.getItem(COLS_PREF) ?? "null"); return Array.isArray(v) ? v : DEFAULT_COLS; } catch { return DEFAULT_COLS; }
+  });
+  useEffect(() => {
+    loadPrefs().then((p) => { if (Array.isArray(p?.[COLS_PREF])) setCols(p[COLS_PREF]); }).catch(() => {});
+  }, []);
+  const saveCols = (next: string[]) => {
+    setCols(next);
+    try { localStorage.setItem(COLS_PREF, JSON.stringify(next)); } catch { /* private mode */ }
+    savePref(COLS_PREF, next).catch(() => {});
+  };
   const [fcKpi, setFcKpi] = useState<ForecastKpis | null>(null);
   // Board view needs a pipeline; if none is picked when switching to it, pick
   // the first sales pipeline (or the first available) so the board isn't empty.
@@ -1190,6 +1303,34 @@ export default function SalesPage() {
 
   const ready = booted;
 
+  // ---- list columns ----
+  const allCols: ColDef[] = [...BUILTIN_COLS, ...PLAIN_COLS, ...trackingFields.map(fieldCol)];
+  const activeCols = cols.map((k) => allCols.find((c) => c.key === k)).filter(Boolean) as ColDef[];
+  const colTemplate = ["minmax(240px, 1.5fr)", ...activeCols.map((c) => c.track), "30px"].join(" ");
+  const colMinW = 240 + activeCols.reduce((n, c) => n + c.min, 0) + 30 + (activeCols.length + 1) * 28 + 42;
+  const plainCell = (k: string, t: Tracking): ReactNode => {
+    const pct = (v: number | null | undefined) => (v == null ? "" : `${v}%`);
+    switch (k) {
+      case "company": return companyName(t.company_id) ?? "";
+      case "pipeline": return pipelineName(t.pipeline_id);
+      case "phase": return phaseName(t);
+      case "status": return t.status === "active" ? "Active" : t.status === "won" ? "Won" : t.status === "lost" ? "Lost" : "Hold";
+      case "owner": return trackOwners[t.id] ? employeeById.get(trackOwners[t.id])?.name ?? "" : "";
+      case "team": return (trackAssignees[t.id] ?? []).map((id) => employeeById.get(id)?.name).filter(Boolean).join(", ");
+      case "productName": return productName(t.product_id) ?? "";
+      case "revenue": { const v = potentialTotals[t.id] ?? 0; return v > 0 ? `${v.toLocaleString("de-DE")} €` : ""; }
+      case "expected": return fmtDay(closeDateOf(t));
+      case "closed": return t.status === "won" || t.status === "lost" ? fmtDay(t.close_date) : "";
+      case "started": return fmtDay(t.created_at);
+      case "contacts": return t.contactIds.length ? String(t.contactIds.length) : "";
+      case "phaseProb": return pct(phaseProbOf(t));
+      case "repProb": return pct(t.rep_close_prob);
+      case "mgrProb": return pct(t.mgr_close_prob);
+    }
+    if (k.startsWith("f:")) { const f = trackingFields.find((x) => `f:${x.id}` === k); return f ? fmtField(f, (t.custom ?? {})[f.id]) : ""; }
+    return "";
+  };
+
   // Who can open Sales at all: anyone with at least one view (Who sees what → Adjust settings).
   // (While loading, the page shows its own layout with skeleton rows — see SalesSkeleton.)
   if (me && rolesReady && perms && !perms.canOpen) {
@@ -1197,12 +1338,12 @@ export default function SalesPage() {
       <div className="sl sl-ov">
         <header className="sl-head">
           <button className="sl-back" onClick={() => navigate("/home")} aria-label="Back">‹</button>
-          <h1 className="sl-title">Sales</h1>
+          <h1 className="sl-title">Deals</h1>
         </header>
         <section className="so-sheet">
           <div className="so-empty">
             <span className="so-empty-art"><SoIcon d={SO_ICON.empty} w={1.6} /></span>
-            <p>This page is only available to the sales team.</p>
+            <p>Deals are only available to the sales team.</p>
           </div>
         </section>
       </div>
@@ -1213,7 +1354,7 @@ export default function SalesPage() {
     <div className="sl sl-ov" onPointerMove={soSpotlight}>
       <header className="sl-head">
         <button className="sl-back" onClick={() => navigate("/home")} aria-label="Back">‹</button>
-        <h1 className="sl-title">Sales Tracking</h1>
+        <h1 className="sl-title">Deals</h1>
         {allowedViews.length > 1 && (
           <div className="so-views" data-view={view} role="tablist" aria-label="View">
             <span className="so-views-pill" aria-hidden="true" style={{ transform: `translateX(${Math.max(0, allowedViews.indexOf(view)) * 94}px)` }} />
@@ -1235,11 +1376,11 @@ export default function SalesPage() {
           </div>
         )}
         {(() => { const items: ActionItem[] = [
-          ...(createLevel !== "none" ? [{ key: "new", group: "Create", label: "New tracking", hint: "Start following a client", icon: AM_ICON.plus, primary: true, tone: "green" as const, shortcut: "N", onSelect: () => setCreating(true) }] : []),
+          ...(createLevel !== "none" ? [{ key: "new", group: "Create", label: "New deal", hint: "Open a deal with a company or contact", icon: AM_ICON.plus, primary: true, tone: "green" as const, shortcut: "N", onSelect: () => setCreating(true) }] : []),
           ...(canReports ? [{ key: "reports", group: "Analyse", label: "Reports", hint: "Lists, boards, forecasts and charts", icon: <SoIcon d={SO_ICON.report} w={1.9} />, tone: "blue" as const, shortcut: "R", onSelect: () => setReporting(true) }] : []),
           ...(exportLevel !== "none" ? [{ key: "export", group: "Analyse", label: "Export", hint: exportLevel === "all" ? "Every deal, contact or company to Excel" : "The deals you can see, to Excel", icon: AM_ICON.export, tone: "violet" as const, shortcut: "E", onSelect: () => setExporting(true) }] : []),
           ...(canImport ? [{ key: "import", group: "Analyse", label: "Import deals", hint: "From another CRM's Excel or CSV", icon: AM_ICON.import, tone: "violet" as const, shortcut: "I", onSelect: () => setImporting(true) }] : []),
-          ...(canFields ? [{ key: "fields", group: "Setup", label: "Deal fields", hint: trackingFields.length ? `${trackingFields.length} custom ${trackingFields.length === 1 ? "field" : "fields"} on every tracking` : "Add your own fields to every tracking", icon: AM_ICON.fields, tone: "amber" as const, shortcut: "F", onSelect: () => setFieldsOpen(true) }] : []),
+          ...(canFields ? [{ key: "fields", group: "Setup", label: "Deal fields", hint: trackingFields.length ? `${trackingFields.length} custom ${trackingFields.length === 1 ? "field" : "fields"} on every deal` : "Add your own fields to every deal", icon: AM_ICON.fields, tone: "amber" as const, shortcut: "F", onSelect: () => setFieldsOpen(true) }] : []),
           ...(canManage ? [
             { key: "roles", group: "Setup", label: "Sales roles", hint: salesRoles.length ? `${salesRoles.length} ${salesRoles.length === 1 ? "role" : "roles"} · who sees which deals` : "Who sees which pipelines, and handovers", icon: <SoIcon d={SO_ICON.roles} w={1.9} />, tone: "slate" as const, shortcut: "O", onSelect: () => setRolesOpen(true) },
           ] : []),
@@ -1326,6 +1467,7 @@ export default function SalesPage() {
           </button>
           </div>
           {anyFilter && <button className="sl-clear" onClick={clearAll}>Clear</button>}
+          {view === "list" && <DealColumns all={allCols} cols={cols} onChange={saveCols} />}
           <span className={`so-count ${ready ? "" : "is-loading"}`}>{ready
             ? <><b>{shown.length.toLocaleString("de-DE")}</b> {shown.length === 1 ? "deal" : "deals"}</>
             : <><i className="so-count-dots" aria-hidden="true"><i /><i /><i /></i> deals</>}</span>
@@ -1376,20 +1518,25 @@ export default function SalesPage() {
         ) : shown.length === 0 && ready ? (
           <div className="so-empty">
             <span className="so-empty-art"><SoIcon d={SO_ICON.empty} w={1.6} /></span>
-            <p>{trackings.length === 0 ? "No trackings yet. Start one to follow a client through your pipeline." : "No trackings match those filters."}</p>
+            <p>{trackings.length === 0 ? "No deals yet. Open one to follow a company through your pipeline." : "No deals match those filters."}</p>
             {trackings.length === 0
-              ? <button className="sl-new" onClick={() => setCreating(true)}>Start your first tracking</button>
+              ? <button className="sl-new" onClick={() => setCreating(true)}>Open your first deal</button>
               : anyFilter && <button className="sl-clear" onClick={clearAll}>Clear filters</button>}
           </div>
         ) : (
-          <div className="sl-scroll">
+          <div className="sl-scroll so-xscroll">
+            <div className="so-cols" style={{ ["--so-cols" as string]: colTemplate, ["--so-minw" as string]: `${colMinW}px` } as CSSProperties}>
             {/* One header for the whole list, so rows don't repeat a label under every figure. */}
             <div className="so-thead">
               <span className="so-th-deal"><BulkCheck on={bulk.allOn} partial={bulk.someOn} onToggle={bulk.toggleAll} label="Select every deal shown" />{headBtn("deal", "Deal")}</span>
-              <span>{headBtn("stage", "Stage")}</span>
-              <span>{headBtn("product", "Product and owner")}</span>
-              <span className="is-r so-th-stack">{headBtn("rev", "Potential value")}{headBtn("close", "Expected close")}</span>
-              <span className="is-r">{headBtn("prob", probView === "phase" ? "Close chance" : probView === "rep" ? "Sales estimate" : probView === "mgr" ? "Mgmt estimate" : "Avg. estimate")}</span>
+              {activeCols.map((c) => (
+                <span key={c.key} className={`${c.right ? "is-r" : ""} ${c.key === "value" ? "so-th-stack" : ""}`}>
+                  {c.key === "value" ? <>{headBtn("rev", "Potential value")}{headBtn("close", "Expected close")}</>
+                    : c.key === "prob" ? headBtn("prob", probView === "phase" ? "Close chance" : probView === "rep" ? "Sales estimate" : probView === "mgr" ? "Mgmt estimate" : "Avg. estimate")
+                    : c.sort ? headBtn(c.sort, c.label)
+                    : <span className="so-th so-th-plain" title={c.label}>{c.label}</span>}
+                </span>
+              ))}
               <span />
             </div>
             {headPop && (
@@ -1421,6 +1568,8 @@ export default function SalesPage() {
                   selected={bulk.has(t.id)}
                   selecting={bulk.active}
                   onToggle={(range) => bulk.toggle(t.id, range)}
+                  cols={activeCols}
+                  cell={(k) => plainCell(k, t)}
                 />
               ))}
               {shown.length > listCap && (
@@ -1428,6 +1577,7 @@ export default function SalesPage() {
                   <i /><i /><i />
                 </div>
               )}
+            </div>
             </div>
           </div>
         )}
@@ -1533,7 +1683,9 @@ export default function SalesPage() {
   );
 }
 
-function TrackingRow({ tracking, title, company, contactCount, pipeline, phases, product, revenue, ownerName, closeDate, closeProbOverride, probLabel, onOpen, index = 0, handedOver = false, selected = false, selecting = false, onToggle }: {
+function TrackingRow({ tracking, title, company, contactCount, pipeline, phases, product, revenue, ownerName, closeDate, closeProbOverride, probLabel, onOpen, index = 0, handedOver = false, selected = false, selecting = false, onToggle, cols = BUILTIN_COLS, cell }: {
+  /** The columns after the deal, in order (built-in rich ones or plain values from `cell`). */
+  cols?: ColDef[]; cell?: (key: string) => ReactNode;
   tracking: Tracking; title: string; company: string | null; contactCount: number; handedOver?: boolean;
   selected?: boolean; selecting?: boolean; onToggle?: (range: boolean) => void;
   pipeline: string; phases: Phase[]; product: string | null; revenue?: number; closeDate?: string | null;
@@ -1578,15 +1730,20 @@ function TrackingRow({ tracking, title, company, contactCount, pipeline, phases,
             {tracking.status !== "active" && <span className={`so-status is-${tracking.status}`}>{statusText(tracking.status)}</span>}
           </span>
           <span className="so-meta">
-            <span>{company ? (tracking.deal_name?.trim() ? company : "Company") : "Contact"}</span>
+            <span className={`so-co ${company ? "" : "is-none"}`} title={company ? `Company: ${company}` : "No company"}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 21V5a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v16M15 9h4a1 1 0 0 1 1 1v11M8 8h3M8 12h3M8 16h3M3 21h18" /></svg>
+              {company ?? "No company"}
+            </span>
             {contactCount > 0 && <span>{contactCount} contact{contactCount !== 1 ? "s" : ""}</span>}
             <span>{pipeline}</span>
           </span>
         </span>
       </span>
 
-      {/* stage: one track, one segment per phase */}
-      <span className="so-stage" title={`${pct}% through the pipeline`}>
+      {cols.map((c) => {
+        switch (c.key) {
+          case "stage": return (
+      <span key="stage" className="so-stage" title={`${pct}% through the pipeline`}>
         <span className="so-stage-top">
           <b>{stage}</b>
           <small>{curIdx >= 0 && phases.length > 0 ? `Step ${curIdx + 1} of ${phases.length}` : "Not started"}</small>
@@ -1598,9 +1755,9 @@ function TrackingRow({ tracking, title, company, contactCount, pipeline, phases,
           ))}
         </span>
       </span>
-
-      {/* product and owner */}
-      <span className="so-tags">
+          );
+          case "product": return (
+      <span key="product" className="so-tags">
         {product ? <span className="so-tag">{product}</span> : <span className="so-tag is-empty">No product</span>}
         <span className="so-sub">
           {ownerName && (
@@ -1612,9 +1769,9 @@ function TrackingRow({ tracking, title, company, contactCount, pipeline, phases,
           <span>Started {started}</span>
         </span>
       </span>
-
-      {/* potential revenue + expected close */}
-      <span className="so-value">
+          );
+          case "value": return (
+      <span key="value" className="so-value">
         <b className={revenue && revenue > 0 ? "" : "is-none"}>{revenue && revenue > 0 ? `${revenue.toLocaleString("de-DE")} €` : "No value yet"}</b>
         {(tracking.status === "won" || tracking.status === "lost") && tracking.close_date ? (
           <small className={`is-closed is-${tracking.status}`} title="Close date">
@@ -1626,9 +1783,9 @@ function TrackingRow({ tracking, title, company, contactCount, pipeline, phases,
           </small>
         )}
       </span>
-
-      {/* close probability */}
-      <span className="so-chance" title={probLabel ? `Close probability (${probLabel})` : undefined}>
+          );
+          case "prob": return (
+      <span key="prob" className="so-chance" title={probLabel ? `Close probability (${probLabel})` : undefined}>
         {closeProb == null ? (
           <b className="is-none">—</b>
         ) : (
@@ -1636,6 +1793,13 @@ function TrackingRow({ tracking, title, company, contactCount, pipeline, phases,
         )}
         <span className="so-chance-bar" aria-hidden="true"><i /></span>
       </span>
+          );
+          default: {
+            const v = cell?.(c.key);
+            return <span key={c.key} className={`so-cell ${c.right ? "is-r" : ""} ${v ? "" : "is-none"}`} title={typeof v === "string" ? v : undefined}>{v || "—"}</span>;
+          }
+        }
+      })}
 
       <span className="so-go" aria-hidden="true"><SoIcon d={SO_ICON.arrow} w={2.2} /></span>
     </button>

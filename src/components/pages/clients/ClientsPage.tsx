@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo, useRef, type PointerEvent as RPointerEvent, type ReactNode } from "react";
 import { supabase } from "../../api/supabase";
 import NewClientForm from "./NewClientForm";
-import ClientWorkspace, { isActive, termOf, lineAnnual, lineTotal, lineContractValue, type Line } from "./ClientWorkspace";
+import ClientWorkspace, { CompanyLogo, isActive, termOf, lineAnnual, lineTotal, lineContractValue, type Line } from "./ClientWorkspace";
 import Select from "../../framework/Select";
 import { useClientsData } from "./useClientsData";
 import { projectValue, signedOf, legacyRoleMap, resolvedLinesOf, roleCounts, roleNameOf, lineRate, type Client, type Project, type ProjectType } from "./clientsTypes";
@@ -19,8 +19,15 @@ import "./ClientsPage.css";
 export * from "./clientsTypes";
 
 /** Everything the client popup knows, one row per client — what the KPIs, filters and cards read. */
+/** "Acme Iberia, S.L." → "acme iberia": to match a client with its CRM company by name. */
+const bareName = (s: unknown) => String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+  .replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim()
+  .replace(/\s(s\s?l\s?u?|s\s?a\s?u?|slp|sll|sccl|scp|cb|ab|gmbh|ltd|llc|inc|bv|srl|spa|sas|sarl|plc|ag|nv)$/, "").trim();
+
 interface ClientRow {
   c: Client; name: string; services: string[]; consultants: string[];
+  /** The company's website (for its logo), and whether another client looks like the same one. */
+  website: string; dupOf: string | null;
   city: string; country: string; sector: string;
   projects: number; openProjects: number; projectsValue: number; openValue: number;
   signed: number; used: number; delivered: number;
@@ -214,7 +221,7 @@ export function ClientList({
       const cos: Record<string, any> = {};
       const allCos: any[] = [];
       for (let from = 0; ; from += 1000) {
-        const { data: page } = await supabase.from("companies").select("id, name, legal_name, vat_number, city, province, country, sector").range(from, from + 999);
+        const { data: page } = await supabase.from("companies").select("id, name, legal_name, vat_number, city, province, country, sector, website").range(from, from + 999);
         ((page ?? []) as any[]).forEach((x) => { cos[x.id] = x; allCos.push(x); });
         if (!page || page.length < 1000) break;
       }
@@ -226,6 +233,17 @@ export function ClientList({
   }, [loaded, clients.length]);
 
   const typeName = (id: string) => projectTypes.find((t) => t.id === id)?.name ?? "No service";
+  /** Clients that look like the same one (same CRM company, or the same name once accents / legal form are dropped). */
+  const dupOf = useMemo(() => {
+    const key = (n: string) => n.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim()
+      .replace(/\s(s\s?l\s?u?|s\s?a\s?u?|slp|sll|sccl|scp|cb|ab|gmbh|ltd|llc|inc|bv|srl|spa|sas|sarl|plc|ag|nv)$/, "").trim();
+    const groups = new Map<string, Client[]>();
+    const add = (k: string, c: Client) => { if (!k) return; const l = groups.get(k) ?? []; if (!l.includes(c)) l.push(c); groups.set(k, l); };
+    clients.forEach((c) => { add(`n:${key(c.name)}`, c); const co = extra?.co[c.id]; if (co?.id) add(`c:${co.id}`, c); });
+    const out = new Map<string, string>();
+    groups.forEach((l) => { if (l.length > 1) l.forEach((c) => { if (!out.has(c.id)) out.set(c.id, l.filter((x) => x.id !== c.id).map((x) => x.name).join(", ")); }); });
+    return out;
+  }, [clients, extra]);
   const rows = useMemo<ClientRow[]>(() => clients.map((c) => {
     const mine = projects.filter((p) => p.clientId === c.id);
     const open = mine.filter((p) => p.status !== "closed");
@@ -239,8 +257,9 @@ export function ClientList({
     const used = mine.reduce((t, p) => t + (usage[p.id]?.done ?? 0), 0);
     const lastP = mine[mine.length - 1];
     const co = extra?.co[c.id] ?? {};
+    const twinSite = !co.website ? (extra?.cos ?? []).find((x) => x.website && bareName(x.name) === bareName(c.name))?.website : "";
     return {
-      c, name: c.name,
+      c, name: c.name, website: co.website || twinSite || "", dupOf: dupOf.get(c.id) ?? null,
       services: [...new Set(mine.map((p) => typeName(p.projectTypeId)))],
       consultants: [...new Set(mine.flatMap((p) => (p.team ?? []).map((m) => m.userId).filter(Boolean)))] as string[],
       city: co.city || lastP?.address?.city || "", country: co.country || lastP?.address?.country || "", sector: co.sector || "",
@@ -255,7 +274,7 @@ export function ClientList({
       openTasks: extra?.tasks[c.id]?.open ?? 0, lateTasks: extra?.tasks[c.id]?.late ?? 0,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [clients, projects, extra, usage, projectTypes]);
+  }), [clients, projects, extra, usage, projectTypes, dupOf]);
 
   const opts = (xs: string[]) => () => [...new Set(xs.filter(Boolean))].sort().map((v) => ({ value: v, label: v }));
   const fields: FField<ClientRow>[] = [
@@ -354,7 +373,6 @@ export function ClientList({
   }
 
   const money = (n: number) => `${Math.round(n).toLocaleString()} €`;
-  const initials = (t: string) => t.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "?";
   const ring = (pct: number) => {
     const r = 17, c = 2 * Math.PI * r;
     return (
@@ -517,8 +535,8 @@ export function ClientList({
                     <div className="cx-tr" key={r.c.id} role="button" tabIndex={0} style={{ ["--i" as any]: Math.min(i, 16) }}
                       onClick={() => onOpen(r.c)} onKeyDown={(e) => { if (e.key === "Enter") onOpen(r.c); }}>
                       <span className="cx-td-name">
-                        <span className="cx-av is-sm">{initials(r.name)}</span>
-                        <span className="cx-id"><b>{r.name}</b><small>{[r.city, r.sector].filter(Boolean).join(" · ") || "—"}</small></span>
+                        <CompanyLogo className="cx-av is-sm" name={r.name} website={r.website} />
+                        <span className="cx-id"><b>{r.name}</b><small>{r.dupOf && <i className="cx-dup" title={`Looks like the same client as: ${r.dupOf}`}>Duplicate?</i>}{[r.city, r.sector].filter(Boolean).join(" · ") || (r.dupOf ? "" : "—")}</small></span>
                       </span>
                       {colFields.map((f) => <span key={f.key} className={f.type === "number" ? "is-num" : ""}>{cell(f, r)}</span>)}
                       <span className="cx-td-go">
@@ -541,10 +559,10 @@ export function ClientList({
                   <div className="cx-card" key={c.id} role="button" tabIndex={0} style={{ ["--i" as any]: Math.min(i, 14) }}
                     onClick={() => onOpen(c)} onKeyDown={(e) => { if (e.key === "Enter") onOpen(c); }}>
                     <div className="cx-card-top">
-                      <span className="cx-av">{initials(c.name)}</span>
+                      <CompanyLogo className="cx-av" name={c.name} website={r.website} />
                       <span className="cx-id">
                         <b>{c.name}</b>
-                        <small>{[r.city, r.sector].filter(Boolean).join(" · ") || "No details yet"}</small>
+                        <small>{r.dupOf && <i className="cx-dup" title={`Looks like the same client as: ${r.dupOf}`}>Duplicate?</i>}{[r.city, r.sector].filter(Boolean).join(" · ") || (r.dupOf ? "" : "No details yet")}</small>
                       </span>
                       {r.daysSince != null && <span className={`cx-health is-${r.health}`} title={`${HEALTH[r.health]} · last contact ${r.daysSince}d ago`}><i />{r.daysSince}d</span>}
                       {onDelete && (

@@ -97,7 +97,7 @@ export default function SalesRolesModal({ canEdit, employees, pipelines, phaseBy
   }, [employees, roles, rules, visQ]); // eslint-disable-line react-hooks/exhaustive-deps
   /** How far this person sees, in words. */
   const reachOf = (p: EffectivePerms): string => {
-    if (!p.canOpen) return "No access to Sales";
+    if (!p.canOpen) return "No access to Deals";
     const list = Object.entries(p.pipelines);
     if (list.every(([, x]) => x.access && !x.maxPhaseId)) return "Every pipeline, every phase";
     const on = list.filter(([, x]) => x.access);
@@ -207,7 +207,7 @@ export default function SalesRolesModal({ canEdit, employees, pipelines, phaseBy
           <div className="dw-body">
             <button type="button" className="srl-studio" onClick={() => setStudio(true)}>
               <span className="srl-studio-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" /></svg></span>
-              <span className="srl-studio-txt"><b>Adjust settings</b><small>Pipelines and phases, views, new trackings, reports, export, import… by person, sales role or job role.</small></span>
+              <span className="srl-studio-txt"><b>Adjust settings</b><small>Pipelines and phases, views, new deals, reports, export, import… by person, sales role or job role.</small></span>
               <svg className="srl-studio-go" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6" /></svg>
             </button>
             <p className="srl-intro">

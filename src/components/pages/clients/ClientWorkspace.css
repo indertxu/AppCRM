@@ -1594,3 +1594,110 @@ button.cw-eng-row:hover { background: #fff; border-color: rgba(18, 181, 127, 0.3
   .cw-deal-h { flex-wrap: wrap; }
   .cw-deal-val { align-items: flex-start; }
 }
+
+/* =====================================================================
+   v3 — one column, clearly separated sections (Overview, Contracts),
+   and Folders as a page of its own
+   ===================================================================== */
+.cw .cw-ov, .cw .cw-secs { display: flex; flex-direction: column; gap: 0; max-width: 1080px; margin: 0 auto; width: 100%; }
+.cw .cw-ov > *, .cw .cw-secs > * { order: 0; margin: 0; padding: 30px 0 0; border-top: 1px solid var(--line); }
+.cw .cw-ov > * + *, .cw .cw-secs > * + * { margin-top: 32px; }
+.cw .cw-ov > :first-child, .cw .cw-secs > :first-child { padding-top: 4px; border-top: 0; }
+
+/* sections drop their card: the header sits on the page, the content gets one quiet white box */
+.cw .cw-ov > .cw-card, .cw .cw-secs > .cw-card {
+  background: none; border-left: 0; border-right: 0; border-bottom: 0; border-radius: 0; box-shadow: none; padding-left: 0; padding-right: 0; padding-bottom: 0;
+}
+.cw .cw-ov > .cw-card:hover, .cw .cw-secs > .cw-card:hover { box-shadow: none; border-color: var(--line); }
+.cw .cw-ov > .cw-card:first-child:hover, .cw .cw-secs > .cw-card:first-child:hover { border-color: transparent; }
+.cw .cw-ov .cw-sh, .cw .cw-secs .cw-sh { margin-bottom: 16px; }
+.cw .cw-ov .cw-sh-t h3, .cw .cw-secs .cw-sh-t h3, .cw .cw-ov .cw-zone-h h3 { font-size: 17px; }
+.cw .cw-ov .cw-card:hover .cw-sh-ico, .cw .cw-secs .cw-card:hover .cw-sh-ico { transform: none; }
+.cw-sec-body { padding: 16px 18px; border-radius: 16px; background: #fff; border: 1px solid var(--line); }
+.cw .cw-pulse { border-top-width: 1px; border-top-style: solid; }
+.cw .cw-pulse .cw-sec-body { box-shadow: inset 0 2px 0 var(--state); }
+.cw .cw-co .cw-co-meter { margin-top: 12px; }
+
+/* zones (tasks, notes) already have their own heading: the section rule replaces the dashed one */
+.cw .cw-ov > .cw-zone { gap: 16px; animation: none; }
+.cw .cw-ov .cw-zone-h { padding-top: 0; border-top: 0; }
+
+/* at a glance + task counts + contract summary: one strip, figures split by hairlines (no separate cards) */
+.cw .cw-ov > .cw-snap, .cw .cw-tstats, .cw .cw-secs > .cw-ckpis {
+  display: grid; gap: 0; padding: 0; border: 1px solid var(--line); border-radius: 16px; background: #fff; overflow: hidden;
+}
+.cw .cw-ov > .cw-snap { grid-template-columns: repeat(5, minmax(0, 1fr)); margin-top: 0; }
+.cw .cw-tstats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.cw .cw-secs > .cw-ckpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.cw .cw-ov > .cw-snap > .cw-tile, .cw .cw-tstats > .cw-tstat, .cw .cw-secs > .cw-ckpis > .cw-ckpi {
+  border: 0; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); margin-bottom: -1px; border-radius: 0; background: #fff; box-shadow: none; transform: none; animation: none;
+}
+.cw .cw-ov > .cw-snap > .cw-tile:last-child, .cw .cw-tstats > .cw-tstat:last-child, .cw .cw-secs > .cw-ckpis > .cw-ckpi:last-child { border-right: 0; }
+.cw .cw-ov > .cw-snap > .cw-tile::before, .cw .cw-secs > .cw-ckpis > .cw-ckpi::before, .cw .cw-secs > .cw-ckpis > .cw-ckpi::after, .cw .cw-tstats > .cw-tstat::before { display: none; }
+.cw .cw-ov > .cw-snap > .cw-tile { padding: 16px 18px; }
+.cw .cw-ov > .cw-snap > .cw-tile:hover { transform: none; box-shadow: none; background: var(--soft); }
+.cw .cw-ov > .cw-snap > .cw-tile:hover .cw-tile-ico { transform: none; }
+.cw .cw-tstats > .cw-tstat { padding: 14px 18px; }
+.cw .cw-secs > .cw-ckpis > .cw-ckpi { padding: 16px 18px; }
+@media (max-width: 1240px) { .cw .cw-ov > .cw-snap { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 1080px) { .cw .cw-ov > .cw-snap, .cw .cw-secs > .cw-ckpis, .cw .cw-tstats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 1240px) {
+  .cw .cw-ov > .cw-snap > .cw-tile:last-child, .cw .cw-tstats > .cw-tstat:last-child, .cw .cw-secs > .cw-ckpis > .cw-ckpi:last-child { border-right: 1px solid var(--line); }
+}
+
+/* contacts: one row per person in a single box */
+.cw .cw-people-grid.is-rows { display: flex; flex-direction: column; align-items: stretch; gap: 0; border: 1px solid var(--line); border-radius: 16px; background: #fff; overflow: hidden; }
+.cw .cw-people-grid.is-rows > .cw-pc { width: auto; box-sizing: border-box; border: 0; border-radius: 0; box-shadow: none; padding: 12px 16px; border-bottom: 1px solid var(--line); animation: none; }
+.cw .cw-people-grid.is-rows > .cw-pc:last-child { border-bottom: 0; }
+.cw .cw-people-grid.is-rows > .cw-pc:hover { background: var(--soft); box-shadow: none; transform: none; }
+.cw .cw-people-grid.is-rows > .cw-pc.is-open { background: #fbfdfc; box-shadow: inset 3px 0 0 var(--blue); }
+.cw .cw-people-grid.is-rows > .cw-pc.is-billing::before { top: 12px; bottom: 12px; left: 0; }
+.cw .cw-people-grid.is-rows .cw-pc-quick { opacity: 1; transform: none; }
+.cw .cw-ov .cw-more-btn { margin-top: 10px; }
+
+/* contracts: product lines and engagements inside one box each */
+.cw .cw-secs .cw-lines { display: flex; flex-direction: column; gap: 10px; }
+.cw .cw-secs .cw-eng { padding: 6px 10px; border: 1px solid var(--line); border-radius: 16px; background: #fff; }
+
+/* ---- Folders page ---- */
+.cw-folders { display: flex; flex-direction: column; gap: 16px; height: 100%; min-height: 0; max-width: 1180px; margin: 0 auto; width: 100%; }
+.cw-folders-h { flex: none; display: flex; align-items: center; gap: 14px; --tone: var(--violet); }
+.cw-folders-t { flex: 1; min-width: 0; }
+.cw-folders-t h3 { margin: 0; font-family: "Space Grotesk", sans-serif; font-size: 19px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); }
+.cw-folders-t small { display: block; margin-top: 3px; max-width: 640px; font-size: 12.5px; line-height: 1.45; color: var(--muted); }
+.cw-folders > .cw-okmsg, .cw-folders > .cw-err { flex: none; margin: 0; }
+.cw-folders-box { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding: 16px 18px 18px; border: 1px solid var(--line); border-radius: 18px; background: #fff; }
+.cw-folders-box > .cdir { flex: 1; height: auto; min-height: 0; }
+.cw-folders-box .cdir-grid-wrap { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; padding: 12px 12px 0; border: 1.5px dashed rgba(10, 111, 77, 0.18); background: #fafcfb; scrollbar-width: thin; }
+.cw-folders-box .cdir-grid-wrap::after {
+  content: "Drop files anywhere here to upload them to this folder"; position: sticky; display: block; bottom: 0; flex: none; margin: auto -12px 0; padding: 22px 0 16px;
+  text-align: center; font-size: 12.5px; font-weight: 600; color: var(--muted); background: linear-gradient(transparent, #fafcfb 40%); pointer-events: none;
+}
+.cw-folders-box .cdir-grid-wrap.is-over { border-color: var(--green); background: rgba(18, 181, 127, 0.06); }
+.cw-folders-box .cdir-grid-wrap.is-over::after { content: "Release to upload"; color: var(--forest); background: none; }
+.cw-folders-box .cdir-empty { min-height: 260px; }
+@media (max-width: 900px) { .cw-folders { height: auto; } .cw-folders-box { min-height: 520px; } }
+
+/* ---- Company logo (from the website) ---- */
+.cw-av, .cx-av { position: relative; overflow: hidden; }
+.cw-av.has-logo, .cx-av.has-logo { background: #fff !important; color: transparent; box-shadow: 0 0 0 1px rgba(10, 60, 40, 0.1) inset; }
+.co-logo-img { display: block; width: 74%; height: 74%; object-fit: contain; border-radius: 4px; }
+.has-logo > .co-logo-img { animation: co-logo-in 0.35s ease both; }
+@keyframes co-logo-in { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: none; } }
+
+/* ---- Website & LinkedIn, edited in place ---- */
+.cw-web { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.cw-web-chip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 260px; height: 28px; padding: 0 10px; border-radius: 9px; background: #f3f7f5; font-size: 12.5px; font-weight: 600; color: #24332d; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cw-web-chip svg { flex: none; color: #5a7d6d; }
+.cw-web-chip.is-empty { background: none; border: 1px dashed rgba(10, 60, 40, 0.18); color: #8a9893; font-weight: 500; }
+.cw-web-edit { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 0; border-radius: 9px; background: none; font: inherit; font-size: 12.5px; font-weight: 700; color: #0a6f4d; cursor: pointer; }
+.cw-web-edit:hover { background: rgba(18, 181, 127, 0.1); }
+.cw-web.is-edit label { flex: 1 1 220px; display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 10px; border: 1.5px solid rgba(10, 60, 40, 0.12); border-radius: 10px; background: #fff; color: #5a7d6d; transition: border-color 0.15s, box-shadow 0.15s; }
+.cw-web.is-edit label:focus-within { border-color: #12b57f; box-shadow: 0 0 0 3px rgba(18, 181, 127, 0.12); }
+.cw-web.is-edit input { flex: 1; min-width: 0; border: 0; outline: none; background: none; font: inherit; font-size: 13px; color: #0e1a15; }
+.cw-web-cancel, .cw-web-save { height: 36px; padding: 0 14px; border-radius: 10px; font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+.cw-web-cancel { border: 0; background: none; color: #5a7d6d; }
+.cw-web-cancel:hover { background: rgba(10, 60, 40, 0.06); }
+.cw-web-save { border: 0; background: linear-gradient(120deg, #12b57f, #0a6f4d); color: #fff; }
+.cw-web-save:disabled { opacity: 0.55; cursor: default; }
+.cw-web-err { flex-basis: 100%; font-size: 12px; color: #b8452f; }

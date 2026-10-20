@@ -40,7 +40,7 @@ const FIELDS: FieldDef[] = [
   { id: "views.list", section: "views", label: "List", hint: "The deals table", options: bool(), get: (s) => s.views?.list, set: setView("list"), eff: (p) => p.views.list, icon: I("M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01") },
   { id: "views.board", section: "views", label: "Board", hint: "Drag deals between phases", options: bool(), get: (s) => s.views?.board, set: setView("board"), eff: (p) => p.views.board, icon: I("M4 4h5v16H4zM10 4h5v10h-5zM16 4h4v7h-4z") },
   { id: "views.forecast", section: "views", label: "Forecast", hint: "Revenue by month and weighted pipeline", options: bool(), get: (s) => s.views?.forecast, set: setView("forecast"), eff: (p) => p.views.forecast, icon: I("M3 3v18h18M7 15l4-4 3 3 5-6") },
-  { id: "create", section: "actions", label: "New tracking", hint: "Start deals — and for whom.",
+  { id: "create", section: "actions", label: "New deal", hint: "Open deals — and for whom.",
     options: (["none", "self", "team", "anyone"] as const).map((v) => ({ v, label: CREATE_LABEL[v], hint: CREATE_HINT[v] })), get: (s) => s.create, set: setTop("create"), eff: (p) => p.create, icon: I("M12 5v14M5 12h14") },
   { id: "reports", section: "actions", label: "Reports", hint: "Lists, boards, forecasts and charts — always on what they can see.", options: bool(), get: (s) => s.reports, set: setTop("reports"), eff: (p) => p.reports, icon: I("M4 20V10M10 20V4M16 20v-7M22 20H2") },
   { id: "export", section: "actions", label: "Export", hint: "Deals, contacts or companies to Excel.",
@@ -273,7 +273,7 @@ export default function AccessStudio({ people, roles: initialRoles, pipelines, p
                 <span className="acs-hero-type">{typeLabel}</span>
                 <h3>{subject.name}</h3>
                 <p>
-                  {subject.locked ? "Always has full access to Sales — this can't be limited, so nobody gets locked out."
+                  {subject.locked ? "Always has full access to Deals — this can't be limited, so nobody gets locked out."
                     : subject.type === "everyone" ? "What everyone gets unless their job role, sales role or own settings say otherwise."
                     : subject.type === "user" ? "Settings just for this person. Anything on “Inherit” comes from their sales role, job role or Everyone."
                     : `Applies to ${affects} ${affects === 1 ? "person" : "people"}. Anything on “Inherit” comes from ${subject.type === "sales_role" ? "their job role or Everyone" : "Everyone"}.`}
@@ -406,7 +406,7 @@ export default function AccessStudio({ people, roles: initialRoles, pipelines, p
                     <div><dt>Deals</dt><dd>{perms.scope.value === "all" ? "All deals" : "Only theirs"}<SourceChip s={perms.scope.source} /></dd></div>
                     {pipelines.map((p) => { const ep = perms.pipelines[p.id]; return ep ? <div key={p.id}><dt>{p.name}</dt><dd className={ep.access ? "" : "is-off"}>{!ep.access ? "No access" : ep.maxPhaseId ? `Up to ${phaseName(p.id, ep.maxPhaseId)}` : "Every phase"}<SourceChip s={ep.source} /></dd></div> : null; })}
                     <div><dt>Views</dt><dd className="acs-res-views">{(["list", "board", "forecast"] as const).map((v) => <span key={v} className={perms.views[v].value ? "is-on" : ""} title={perms.views[v].source.label}>{v === "list" ? "List" : v === "board" ? "Board" : "Forecast"}</span>)}</dd></div>
-                    <div><dt>New tracking</dt><dd className={perms.create.value === "none" ? "is-off" : ""}>{CREATE_LABEL[perms.create.value]}<SourceChip s={perms.create.source} /></dd></div>
+                    <div><dt>New deal</dt><dd className={perms.create.value === "none" ? "is-off" : ""}>{CREATE_LABEL[perms.create.value]}<SourceChip s={perms.create.source} /></dd></div>
                     <div><dt>Reports</dt><dd className={perms.reports.value ? "" : "is-off"}>{perms.reports.value ? "Yes" : "No"}<SourceChip s={perms.reports.source} /></dd></div>
                     <div><dt>Export</dt><dd className={perms.export.value === "none" ? "is-off" : ""}>{EXPORT_LABEL[perms.export.value]}<SourceChip s={perms.export.source} /></dd></div>
                     <div><dt>Import deals</dt><dd className={perms.import.value ? "" : "is-off"}>{perms.import.value ? "Yes" : "No"}<SourceChip s={perms.import.source} /></dd></div>

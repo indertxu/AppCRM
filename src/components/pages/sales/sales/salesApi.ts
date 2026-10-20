@@ -3,6 +3,7 @@ import { supabase } from "../../../api/supabase";
 import { syncEntryToOutlookDetailed, deleteEntryFromOutlook, meetingsGoneFromOutlook } from "../../../api/outlookSync";
 import type { Phase } from "../../settings/pipelineApi";
 import { calcBreakdown, discountOf, BASE_KEY, type Calculator, type CalcRow, type CalcDiscount } from "../../settings/catalogApi";
+import type { DeckEditOp } from "../trackings/proposalGen";
 
 /**
  * Signed-in user id from the local session. Not auth.getUser(): that asks the
@@ -1500,6 +1501,50 @@ export function activeVersions<T extends { id: string; version_group?: string | 
     .map((g) => g.find((x) => x.version_active) ?? [...g].sort((a, b) => String(a.created_at ?? "").localeCompare(String(b.created_at ?? ""))).pop()!);
 }
 
+/* ---------- One client per company: find the one that already exists ---------- */
+const LEGAL_FORMS = new Set(["sl", "sa", "slu", "sau", "slne", "sll", "slp", "sc", "scp", "scl", "sccl", "cb", "inc", "incorporated", "ltd", "limited", "llc", "llp", "lp", "plc", "gmbh", "ag", "kg", "ohg", "bv", "nv", "srl", "spa", "sas", "sarl", "sasu", "eurl", "oy", "ab", "as", "aps", "corp", "corporation", "co", "company", "cia", "lda", "ltda", "sociedad", "limitada", "anonima"]);
+/** "Grupo Acmé, S.L.U." → "grupo acme" (accents, case, punctuation and legal forms ignored). */
+export function normClientName(s: string | null | undefined): string {
+  const words = String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+    .replace(/\b([a-z])\.(?=[a-z]\.)/g, "$1").replace(/\./g, "").replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean);
+  while (words.length > 1 && LEGAL_FORMS.has(words[words.length - 1])) words.pop();
+  return words.join(" ");
+}
+/** "ES-B12.345.678" → "B12345678" (country prefix ignored). */
+export function normVat(v: string | null | undefined): string {
+  const x = String(v ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return x.length > 8 && /^[A-Z]{2}/.test(x) ? x.slice(2) : x;
+}
+export interface ClientMatchRow { id: string; name: string | null; company_id: string | null; vat_number: string | null }
+/** Every client, for matching (id, name, company, VAT). */
+export async function loadClientIndex(): Promise<ClientMatchRow[]> {
+  return (await allRows(() => supabase.from("clients").select("id, name, company_id, vat_number").order("created_at").order("id")).catch(() => [])) as ClientMatchRow[];
+}
+/** The client that already stands for this company: same company, else same name (legal forms ignored) or same VAT. */
+export function matchClient(rows: ClientMatchRow[], m: { companyId?: string | null; name?: string | null; vat?: string | null }): ClientMatchRow | null {
+  if (m.companyId) { const r = rows.find((x) => x.company_id === m.companyId); if (r) return r; }
+  const vat = normVat(m.vat);
+  if (vat.length >= 5) { const r = rows.find((x) => normVat(x.vat_number) === vat); if (r) return r; }
+  const n = normClientName(m.name);
+  if (n) {
+    const r = rows.find((x) => normClientName(x.name) === n && (!m.companyId || !x.company_id || x.company_id === m.companyId));
+    if (r) return r;
+  }
+  return null;
+}
+/** Reuse a matched client: keep its name, link the company only when it had none, fill blanks only. */
+export async function adoptClient(c: ClientMatchRow, fill: { companyId?: string | null; legal_name?: string | null; vat_number?: string | null; address?: any }): Promise<void> {
+  const { data } = await supabase.from("clients").select("legal_name, vat_number, address, company_id").eq("id", c.id).maybeSingle();
+  const cur: any = data ?? {};
+  const empty = (v: any) => v == null || v === "" || (typeof v === "object" && !Array.isArray(v) && !Object.values(v).some((x) => x != null && String(x).trim() !== ""));
+  const patch: Record<string, any> = {};
+  if (fill.companyId && !cur.company_id) patch.company_id = fill.companyId;
+  if (fill.legal_name && empty(cur.legal_name)) patch.legal_name = fill.legal_name;
+  if (fill.vat_number && empty(cur.vat_number)) patch.vat_number = fill.vat_number;
+  if (fill.address && empty(cur.address) && !empty(fill.address)) patch.address = fill.address;
+  if (Object.keys(patch).length) await supabase.from("clients").update(patch).eq("id", c.id);
+}
+
 export async function saveClientProducts(clientId: string, trackingId: string | null, products: {
   productId: string; price: number; quantity: number; recurring: boolean; period: string | null;
   termYears: number | null; discountMode: string | null; discountValue: number | null; signingDate: string;
@@ -1733,7 +1778,8 @@ export interface DealProposal {
   created_at?: string; updated_at?: string;
 }
 /** A proposal's own changes to the deck: field values, edited texts, slides left out (by slide ref). */
-export interface ProposalDoc { values?: Record<string, string>; edits?: Record<string, string>; slides?: Record<string, boolean> }
+/** What a seller changed in one proposal: field values, words, slides left out, and the layout (boxes moved, added, removed — per slide of the deck). */
+export interface ProposalDoc { values?: Record<string, string>; edits?: Record<string, string>; slides?: Record<string, boolean>; ops?: DeckEditOp[] }
 const proposalFrom = (r: any): DealProposal => ({
   ...r, is_main: !!r.is_main, lines: Array.isArray(r.lines) ? r.lines : [], doc: r.doc && typeof r.doc === "object" ? r.doc : null,
   gross: r.gross == null ? null : Number(r.gross), partner: r.partner == null ? null : Number(r.partner), total: r.total == null ? null : Number(r.total),

@@ -751,3 +751,38 @@
 .dse-fail b { color: var(--ink); font-size: 15px; }
 
 @media (max-width: 1180px) { .dse-body { grid-template-columns: 150px minmax(0, 1fr) 300px; } .dse-thumb-img { width: 104px; } .dse-thumb-img > .spv { transform: scale(calc(104 / 132)); } .dse-tools .dse-btn span { display: none; } }
+
+/* ===== Steady slide canvas (shared by the deck editor and the proposal studio) ===== */
+.scv, .dse-vars { --ink: #0b241a; --muted: #5a7d6d; --faint: #8fa59b; --line: #e3ebe7; --jade: #12b57f; --forest: #0a6f4d; --sel: #12b57f; }
+.scv, .scv * , .dse-vars, .dse-vars * { box-sizing: border-box; }
+.scv { position: relative; flex: 1; width: 100%; min-width: 0; min-height: 0; align-self: stretch; }
+/* the slide's size never depends on scrollbars coming and going */
+.scv-scroll { position: absolute; inset: 0; overflow: auto; scrollbar-gutter: stable both-edges; scrollbar-width: thin; overscroll-behavior: contain; }
+.scv-pad { display: flex; align-items: center; justify-content: center; min-width: 100%; min-height: 100%; }
+.scv-loading { display: flex; align-items: center; gap: 10px; font-size: 13.5px; color: var(--muted); }
+.scv-canvas { position: relative; flex: none; border-radius: 4px; box-shadow: 0 30px 60px -30px rgba(6, 30, 20, 0.55), 0 0 0 1px rgba(10, 40, 30, 0.08); contain: layout; }
+.scv-slide { border-radius: 4px; }
+.scv-overlay { position: absolute; inset: 0; z-index: 2; }
+.scv-hit { position: absolute; cursor: move; border-radius: 2px; touch-action: none; }
+.scv-hit.is-hover { outline: 1.5px solid rgba(18, 181, 127, 0.75); outline-offset: 0; background: rgba(18, 181, 127, 0.05); }
+.scv-sel { position: absolute; z-index: 3; pointer-events: none; outline: 2px solid var(--sel); outline-offset: 0; box-shadow: 0 0 0 4px rgba(18, 181, 127, 0.16); border-radius: 1px; }
+.scv-sel-tag { position: absolute; left: -2px; bottom: calc(100% + 6px); display: inline-flex; align-items: center; gap: 5px; max-width: 260px; padding: 3px 8px; border-radius: 6px; background: var(--forest); color: #fff; font: 700 11px "Inter", system-ui, sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-shadow: 0 6px 14px -8px rgba(0, 0, 0, 0.5); }
+.scv-sel-tag i { display: inline-grid; } .scv-sel-tag svg { width: 12px; height: 12px; }
+.scv-sel-size { position: absolute; left: 50%; top: calc(100% + 8px); transform: translateX(-50%); padding: 3px 8px; border-radius: 6px; background: #0b241a; color: #fff; font: 700 11px "Inter", system-ui, sans-serif; white-space: nowrap; }
+.scv-h { position: absolute; width: 11px; height: 11px; margin: -5.5px 0 0 -5.5px; border-radius: 3px; background: #fff; border: 2px solid var(--sel); box-shadow: 0 2px 5px rgba(0, 0, 0, 0.25); pointer-events: auto; touch-action: none; }
+.scv-h.is-nw { left: 0; top: 0; cursor: nwse-resize; } .scv-h.is-n { left: 50%; top: 0; cursor: ns-resize; } .scv-h.is-ne { left: 100%; top: 0; cursor: nesw-resize; }
+.scv-h.is-e { left: 100%; top: 50%; cursor: ew-resize; } .scv-h.is-se { left: 100%; top: 100%; cursor: nwse-resize; } .scv-h.is-s { left: 50%; top: 100%; cursor: ns-resize; }
+.scv-h.is-sw { left: 0; top: 100%; cursor: nesw-resize; } .scv-h.is-w { left: 0; top: 50%; cursor: ew-resize; }
+/* guides stay on the slide (they never make the stage scroll) */
+.scv-guide { position: absolute; pointer-events: none; background: #ff4f9a; z-index: 4; }
+.scv-guide.is-v { top: 0; bottom: 0; width: 1px; }
+.scv-guide.is-h { left: 0; right: 0; height: 1px; }
+.scv-foot { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 5; max-width: calc(100% - 24px); }
+.dse-stage { display: flex; padding: 0; overflow: hidden; }
+.dse-stage .dse-hintbar { position: static; margin: 0; }
+/* typing on the slide: the box's own look, no jump */
+.dse-inline { background: transparent; box-shadow: 0 0 0 2px var(--sel), 0 0 0 6px rgba(18, 181, 127, 0.14); border-radius: 2px; }
+.dse-inline textarea { display: block; box-sizing: border-box; background: rgba(255, 255, 255, 0.0); border-radius: 2px; overflow: hidden; white-space: pre-wrap; }
+.dse-inline-bar { position: absolute; left: -2px; top: calc(100% + 8px); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 10px 22px -14px rgba(6, 30, 20, 0.5); }
+.dse-inline.is-closing { box-shadow: none; pointer-events: none; }
+.dse-name.is-static { display: block; height: auto; padding: 0; margin: 0; border: none; background: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

@@ -2587,3 +2587,6 @@
 .rle-eff { font: 600 12px "Inter", sans-serif; color: #127a5b; white-space: nowrap; }
 .rle-add { max-width: 260px; }
 @media (max-width: 720px) { .rle-f { grid-template-columns: 1fr 1fr; } .rle-disc { grid-column: 1 / -1; } }
+
+/* A client that looks like another one (same company / same name) */
+.cx-dup { display: inline-flex; align-items: center; height: 17px; margin-right: 6px; padding: 0 7px; border-radius: 6px; background: #fff3e0; color: #9a5b14; font-style: normal; font-size: 10.5px; font-weight: 700; letter-spacing: 0.01em; vertical-align: 2px; cursor: help; }

@@ -21,6 +21,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEven
 import { createPortal } from "react-dom";
 import SalesMultiFilter from "../sales/sales/SalesMultiFilter";
 import { useBackToClose } from "../../framework/useBackToClose";
+import { useCloseGuard } from "../../framework/Dock";
 import { readSpreadsheet, colLetter, cellText, normHeader, parseNumber, parseDate, parseBool, prepareImport, emptyPrep, type SheetCell, type Workbook, type ImportPrep } from "../../framework/spreadsheetImport";
 import { supabase } from "../../api/supabase";
 import {
@@ -952,7 +953,6 @@ export default function ContactImport({ fields: initialFields, onClose, onDone, 
   /** Where it was opened from: that file is required and comes first; the other is optional. */
   primary?: Ent;
 }) {
-  useBackToClose("contact-import", onClose);
   const [step, setStep] = useState<Step>("file");
   const [ctFields, setCtFields] = useState<ContactField[]>(initialFields ?? []);
   const [coFields, setCoFields] = useState<CompanyField[]>([]);
@@ -981,6 +981,9 @@ export default function ContactImport({ fields: initialFields, onClose, onDone, 
   const cur: Ent = both ? mapTab : has(primary) ? primary : secondary;
   const reportFile: Ent = has("contact") ? "contact" : "company";
   const [viewer, setViewer] = useState(false);
+  // Esc / backdrop / × / Cancel / Back ask before throwing away a file being imported.
+  const guard = useCloseGuard({ dirty: (!!ctF.wb || !!coF.wb || step !== "file") && step !== "done", busy: step === "run", onClose, what: "import" });
+  useBackToClose("contact-import", onClose, true, guard.holdBack);
 
   /* ─────────────── import state ─────────────── */
   const [st, setSt] = useState<IState>(emptyState);
@@ -1138,14 +1141,14 @@ export default function ContactImport({ fields: initialFields, onClose, onDone, 
   };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || step === "run" || document.querySelector(".smf-menu, .di-tp-menu")) return;
+      if (e.key !== "Escape" || guard.asking || document.querySelector(".sel-pop, .smf-menu, .di-tp-menu")) return;
       if (viewer) { setViewer(false); return; }
-      onClose();
+      guard.requestClose();
     };
     window.addEventListener("keydown", onKey);
     document.body.style.overflow = "hidden";
     return () => { window.removeEventListener("keydown", onKey); document.body.style.overflow = ""; };
-  }, [onClose, step, viewer]);
+  }, [guard.requestClose, guard.asking, viewer]);
 
   /* ─────────────── downloads ─────────────── */
   const download = (name: string, lines: string[][]) => {
@@ -1222,8 +1225,8 @@ export default function ContactImport({ fields: initialFields, onClose, onDone, 
   const createSugg = suggestions.filter((x) => x.sg.kind === "create").map((x) => ({ col: x.c.i, sg: x.sg as Extract<Suggestion, { kind: "create" }> }));
 
   return createPortal(
-    <div className="di-backdrop ci-import" onMouseDown={() => step !== "run" && onClose()}>
-      <div className="di" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={`Import ${title.toLowerCase()}`}>
+    <div className="di-backdrop ci-import" {...guard.backdrop}>
+      <div className="di" role="dialog" aria-modal="true" aria-label={`Import ${title.toLowerCase()}`}>
         <header className="di-head">
           <div className="di-head-txt">
             <span className="di-eyebrow">Import</span>
@@ -1240,7 +1243,7 @@ export default function ContactImport({ fields: initialFields, onClose, onDone, 
                 <span>Sheet</span>
               </button>
             )}
-            <button className="di-x" onClick={onClose} disabled={step === "run"} aria-label="Close">×</button>
+            <button className="di-x" onClick={guard.requestClose} disabled={step === "run"} aria-label="Close">×</button>
           </div>
         </header>
 
@@ -1545,7 +1548,7 @@ export default function ContactImport({ fields: initialFields, onClose, onDone, 
             <div className="di-foot-actions">
               {step === "map" && <button className="di-btn is-ghost" onClick={() => setStep("file")}>Back</button>}
               {step === "review" && <button className="di-btn is-ghost" onClick={() => setStep("map")}>Back</button>}
-              {step === "done" ? <button className="di-btn is-primary" onClick={onClose}>Done</button> : <button className="di-btn is-ghost" onClick={onClose}>Cancel</button>}
+              {step === "done" ? <button className="di-btn is-primary" onClick={onClose}>Done</button> : <button className="di-btn is-ghost" onClick={guard.requestClose}>Cancel</button>}
               {step === "file" && <button className="di-btn is-primary" disabled={!has(primary)} onClick={() => { setMapTab(primary); setStep("map"); }}>Map columns →</button>}
               {step === "map" && <button className="di-btn is-primary" disabled={!!mapIssue} onClick={() => { setRvTab(has("contact") ? "contacts" : "companies"); setStep("review"); }}>Review →</button>}
               {step === "review" && plan && (() => {
@@ -1564,6 +1567,7 @@ export default function ContactImport({ fields: initialFields, onClose, onDone, 
             canJump={step === "map"} onJump={jumpToColumn} onClose={() => setViewer(false)} />
         )}
       </div>
+      {guard.prompt}
     </div>,
     document.body,
   );
@@ -2347,7 +2351,6 @@ const CLIENT_TEMPLATE = ["Client", "Legal name", "VAT", "Website", "Street", "Nu
   "Service", "Status", "Signing date", "Kick-off", "End date", "Consultancy days", "Connector days", "Price per day", "Supervision days", "Supervision price", "Discount %", "Tax rate", "Payment days", "Notes"];
 
 export function ClientImport({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
-  useBackToClose("client-import", onClose);
   const [step, setStep] = useState<Step>("file");
   const [ctx, setCtx] = useState<ClCtx>({ clients: [], projects: [], companies: [], contacts: [], services: [] });
   useEffect(() => {
@@ -2372,6 +2375,8 @@ export function ClientImport({ onClose, onDone }: { onClose: () => void; onDone:
   const [clPrep, setClPrep] = useState<ImportPrep>(emptyPrep);
   const patch = (p: Partial<ClState>) => setSt((s) => ({ ...s, ...p }));
   const [viewer, setViewer] = useState(false);
+  const guard = useCloseGuard({ dirty: (!!f.wb || step !== "file") && step !== "done", busy: step === "run", onClose, what: "import", noun: "client import" });
+  useBackToClose("client-import", onClose, true, guard.holdBack);
   const [openValues, setOpenValues] = useState<Record<number, boolean>>({});
 
   useEffect(() => {
@@ -2429,14 +2434,14 @@ export function ClientImport({ onClose, onDone }: { onClose: () => void; onDone:
   };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || step === "run" || document.querySelector(".smf-menu, .di-tp-menu")) return;
+      if (e.key !== "Escape" || guard.asking || document.querySelector(".sel-pop, .smf-menu, .di-tp-menu")) return;
       if (viewer) { setViewer(false); return; }
-      onClose();
+      guard.requestClose();
     };
     window.addEventListener("keydown", onKey);
     document.body.style.overflow = "hidden";
     return () => { window.removeEventListener("keydown", onKey); document.body.style.overflow = ""; };
-  }, [onClose, step, viewer]);
+  }, [guard.requestClose, guard.asking, viewer]);
 
   const download = (name: string, lines: string[][]) => {
     const esc = (s: string) => (/[",;\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
@@ -2486,8 +2491,8 @@ export function ClientImport({ onClose, onDone }: { onClose: () => void; onDone:
   };
 
   return createPortal(
-    <div className="di-backdrop ci-import cl-import" onMouseDown={() => step !== "run" && onClose()}>
-      <div className="di" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Import clients">
+    <div className="di-backdrop ci-import cl-import" {...guard.backdrop}>
+      <div className="di" role="dialog" aria-modal="true" aria-label="Import clients">
         <header className="di-head">
           <div className="di-head-txt">
             <span className="di-eyebrow">Import</span>
@@ -2504,7 +2509,7 @@ export function ClientImport({ onClose, onDone }: { onClose: () => void; onDone:
                 <span>Sheet</span>
               </button>
             )}
-            <button className="di-x" onClick={onClose} disabled={step === "run"} aria-label="Close">×</button>
+            <button className="di-x" onClick={guard.requestClose} disabled={step === "run"} aria-label="Close">×</button>
           </div>
         </header>
 
@@ -2812,7 +2817,7 @@ export function ClientImport({ onClose, onDone }: { onClose: () => void; onDone:
             <div className="di-foot-actions">
               {step === "map" && <button className="di-btn is-ghost" onClick={() => setStep("file")}>Back</button>}
               {step === "review" && <button className="di-btn is-ghost" onClick={() => setStep("map")}>Back</button>}
-              {step === "done" ? <button className="di-btn is-primary" onClick={onClose}>Done</button> : <button className="di-btn is-ghost" onClick={onClose}>Cancel</button>}
+              {step === "done" ? <button className="di-btn is-primary" onClick={onClose}>Done</button> : <button className="di-btn is-ghost" onClick={guard.requestClose}>Cancel</button>}
               {step === "file" && <button className="di-btn is-primary" disabled={!f.wb || !f.rows.length} onClick={() => setStep("map")}>Map columns →</button>}
               {step === "map" && <button className="di-btn is-primary" disabled={!!mapIssue} onClick={() => { setRvTab("clients"); setStep("review"); }}>Review →</button>}
               {step === "review" && plan && (() => {
@@ -2829,6 +2834,7 @@ export function ClientImport({ onClose, onDone }: { onClose: () => void; onDone:
             canJump={step === "map"} onJump={jumpToColumn} onClose={() => setViewer(false)} />
         )}
       </div>
+      {guard.prompt}
     </div>,
     document.body,
   );

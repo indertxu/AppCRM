@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { createPortal, flushSync } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import type { Client, Project, ProjectType, ClientRole } from "./clientsTypes";
-import { projectValue, signedOf, legacyRoleMap, resolvedLinesOf, lineRate, roleNameOf, roleCounts, totalDiscountOf } from "./clientsTypes";
+import { projectValue, signedOf, legacyRoleMap, resolvedLinesOf, lineRate, roleNameOf, roleCounts, totalDiscountOf, domainOf, logoCandidates } from "./clientsTypes";
 import { supabase } from "../../api/supabase";
 import ClientDirectory, { copyIntoClientFolders } from "./ClientDirectory";
 import MentionInput, { type MentionPerson } from "../../framework/MentionInput";
@@ -29,7 +29,7 @@ interface Props {
   onClose: () => void;
 }
 
-type Tab = "overview" | "deals" | "projects" | "contract";
+type Tab = "overview" | "deals" | "projects" | "contract" | "folders";
 
 interface Note { id: string; body: string; mentions: string[]; author_id: string | null; created_at: string; src: "client" | "sale"; deal?: string | null; dealId?: string | null }
 interface ContactLog { id: string; contacted_at: string; channel: string | null; contact_name: string | null; reason: string | null; logged_by: string | null; }
@@ -77,6 +77,83 @@ const ago = (s: string) => {
 };
 const hue = (s: string) => { let h = 0; for (const ch of s) h = (h * 31 + ch.charCodeAt(0)) % 360; return h; };
 const initials = (s: string) => s.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join("") || "?";
+
+/** Website and LinkedIn of the client's company, edited in place (the logo comes from the website). */
+function WebLinks({ companyId, website, linkedin, onSaved }: {
+  companyId: string; website: string; linkedin: string;
+  onSaved: (patch: { website: string | null; linkedin: string | null }) => void;
+}) {
+  const [edit, setEdit] = useState(false);
+  const [w, setW] = useState(website);
+  const [l, setL] = useState(linkedin);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { if (!edit) { setW(website); setL(linkedin); } }, [website, linkedin, edit]);
+  const clean = (v: string) => v.trim().replace(/\/+$/, "");
+  const save = async () => {
+    const patch = { website: clean(w) || null, linkedin: clean(l) || null };
+    setBusy(true); setErr(null);
+    const { error } = await supabase.from("companies").update(patch).eq("id", companyId);
+    setBusy(false);
+    if (error) { setErr(error.message); return; }
+    onSaved(patch); setEdit(false);
+  };
+  const host = website.replace(/^https?:\/\//i, "").replace(/\/$/, "");
+  if (!edit) {
+    return (
+      <div className="cw-web">
+        <span className={`cw-web-chip ${website ? "" : "is-empty"}`}><Ico n="globe" s={13} />{website ? host : "No website"}</span>
+        <span className={`cw-web-chip ${linkedin ? "" : "is-empty"}`}><Ico n="linkedin" s={13} />{linkedin ? linkedInHandle(linkedin) : "No LinkedIn"}</span>
+        <button className="cw-web-edit" onClick={() => setEdit(true)}>
+          <Ico n="edit" s={13} />{website || linkedin ? "Edit links" : "Add website & LinkedIn"}
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="cw-web is-edit" onKeyDown={(e) => { if (e.key === "Enter") void save(); if (e.key === "Escape") { e.stopPropagation(); setEdit(false); } }}>
+      <label><Ico n="globe" s={13} /><input autoFocus value={w} onChange={(e) => setW(e.target.value)} placeholder="www.company.com" /></label>
+      <label><Ico n="linkedin" s={13} /><input value={l} onChange={(e) => setL(e.target.value)} placeholder="linkedin.com/company/…" /></label>
+      <button className="cw-web-cancel" onClick={() => setEdit(false)}>Cancel</button>
+      <button className="cw-web-save" disabled={busy} onClick={() => void save()}>{busy ? "Saving…" : "Save"}</button>
+      {err && <span className="cw-web-err">{err}</span>}
+    </div>
+  );
+}
+
+/* ---- Company logos (from the website; LinkedIn has no public way to read a logo) ---- */
+/** Per domain, for the session: which candidate to try next (a failed one is never asked for again) and which loaded. */
+const logoNext = new Map<string, number>();
+const logoGood = new Map<string, string>();
+/**
+ * The company's logo from its website, else its initials. Initials show until the
+ * image has really loaded, so nothing flickers; a blank default icon counts as no logo.
+ */
+export function CompanyLogo({ name, website, className = "" }: { name: string; website?: string | null; className?: string }) {
+  const d = domainOf(website) ?? "";
+  const cands = useMemo(() => logoCandidates(website), [website]);
+  const [i, setI] = useState(() => logoNext.get(d) ?? 0);
+  const [ok, setOk] = useState(() => !!logoGood.get(d));
+  useEffect(() => { setI(logoNext.get(d) ?? 0); setOk(!!logoGood.get(d)); }, [d]);
+  const src = logoGood.get(d) ?? cands[i];
+  const miss = () => { const n = i + 1; logoNext.set(d, n); setI(n); setOk(false); };
+  return (
+    <span className={`${className} ${src && ok ? "has-logo" : ""}`.trim()}>
+      {!(src && ok) && initials(name)}
+      {src && (
+        <img className="co-logo-img" src={src} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" draggable={false}
+          style={ok ? undefined : { position: "absolute", width: 1, height: 1, opacity: 0 }}
+          onLoad={(e) => {
+            const w = e.currentTarget.naturalWidth;
+            // Google answers an unknown site with its 16px globe: that is not a logo
+            if (!w || (i === 0 && !logoGood.get(d) && w <= 16)) { miss(); return; }
+            logoGood.set(d, src); setOk(true);
+          }}
+          onError={miss} />
+      )}
+    </span>
+  );
+}
 const plain = (body: string) => body.replace(/@\[([^\]]+)\]\([^)]+\)/g, "@$1");
 const reduceMotion = () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 const vt = (name: string) => ({ viewTransitionName: name } as React.CSSProperties);
@@ -220,6 +297,7 @@ const IC: Record<string, string> = {
   search: "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.35-4.35",
   trash: "M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2",
   linkedin: "M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-4 0v7h-4v-7a6 6 0 0 1 6-6zM2 9h4v12H2zM4 6a2 2 0 1 0 0-4 2 2 0 0 0 0 4z",
+  edit: "M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z",
   spark: "M12 3l1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2z",
   expand: "M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7",
   shrink: "M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7",
@@ -982,7 +1060,8 @@ export default function ClientWorkspace({
     { v: "overview", label: "Overview", icon: "overview", hint: "People, tasks & notes", alert: lateTasks.length > 0 },
     { v: "deals", label: "Deals", icon: "deal", hint: "Sales & proposals", n: deals.length || undefined },
     { v: "projects", label: "Projects", icon: "briefcase", hint: "Services delivered", n: projects.length || undefined },
-    { v: "contract", label: "Contracts", icon: "contract", hint: "Signed & folders", n: lines.length || undefined },
+    { v: "contract", label: "Contracts", icon: "contract", hint: "What they signed", n: lines.length || undefined },
+    { v: "folders", label: "Folders", icon: "folder", hint: "Every file of this client" },
   ];
   const SUBS: Record<Tab, { k: string; label: string; n?: number }[]> = {
     overview: [
@@ -992,9 +1071,10 @@ export default function ClientWorkspace({
     deals: deals.length > 1 ? deals.map((d) => ({ k: `deal-${d.id}`, label: d.name })) : [],
     projects: [],
     contract: [
-      { k: "summary", label: "Summary" }, { k: "docs", label: "Folders" },
+      { k: "summary", label: "Summary" },
       { k: "products", label: "Signed products", n: lines.length || undefined }, { k: "services", label: "Service engagements", n: projects.length || undefined },
     ],
+    folders: [],
   };
   const subs = SUBS[tab];
   const [spy, setSpy] = useState("");
@@ -1262,6 +1342,7 @@ export default function ClientWorkspace({
           <Ico n={coOpen ? "shrink" : "expand"} s={14} />{coOpen ? "Less" : "See everything"}
         </button>
       </SecHead>
+      <div className="cw-sec-body">
       <div className="cw-co-hero" {...(coOpen ? {} : tipOn(
         <TipCard title={legal} sub={str(co.name) && str(co.name) !== legal ? `Trades as ${co.name}` : undefined}
           rows={[["VAT", vat], ["Registry", str(co.reg_number)], ["Website", webHost], ["Email", str(co.email)], ["Phone", str(co.phone)],
@@ -1273,6 +1354,8 @@ export default function ClientWorkspace({
       <div className="cw-co-meter" {...tipOn(<TipCard title={`${filled} of ${totalFacts} details filled`} sub={missing.length ? `Missing: ${missing.join(", ")}` : "Everything is filled in"} />)}>
         <span style={{ width: `${(filled / Math.max(1, totalFacts)) * 100}%` }} />
       </div>
+      {co.id && <WebLinks companyId={co.id} website={str(co.website)} linkedin={str(co.linkedin)}
+        onSaved={(patch) => setCompany((c: any) => (c ? { ...c, ...patch } : c))} />}
       <div className="cw-reveal" aria-hidden={!coOpen}>
         <div className="cw-reveal-in">
           <div className="cw-co2">
@@ -1311,6 +1394,7 @@ export default function ClientWorkspace({
           </div>
         </div>
       </div>
+      </div>
     </section>
   );
 
@@ -1325,7 +1409,7 @@ export default function ClientWorkspace({
 
           <div className="cw-head-row">
             <div className="cw-id">
-              <span className="cw-av">{initials(client.name)}</span>
+              <CompanyLogo className="cw-av" name={client.name} website={str(company?.website) || null} />
               <div className="cw-id-t">
                 <h2 className="cw-name">{client.name}</h2>
                 <div className="cw-tags">
@@ -1394,7 +1478,7 @@ export default function ClientWorkspace({
           </aside>
 
         {/* ---------- body ---------- */}
-        <div className="cw-body" ref={bodyRef} onScroll={() => { hideTip(); spyNow(); }}>
+        <div className={`cw-body ${tab === "folders" ? "is-fixed" : ""}`} ref={bodyRef} onScroll={() => { hideTip(); spyNow(); }}>
           <div className="cw-panel" key={tab}>
             {/* ===== OVERVIEW ===== */}
             {tab === "overview" && (
@@ -1438,10 +1522,7 @@ export default function ClientWorkspace({
                   </button>
                 </div>
 
-                {coOpen && companyCard}
-                <div className="cw-ov-cols">
-                  <div className="cw-ov-main">
-                    {!coOpen && companyCard}
+                {companyCard}
                     <section data-sec="people" className="cw-card cw-people" style={{ ...vt("cw-people"), ...cssVars({ "--i": 6 }) }}>
                       <SecHead icon="users" tone="blue" title="Contacts"
                         sub={`${persons.length} ${persons.length === 1 ? "person" : "people"}${persons.some((p) => p.billing) ? ` · ${persons.filter((p) => p.billing).length} billing` : ""}`}>
@@ -1479,7 +1560,7 @@ export default function ClientWorkspace({
                       {persons.length === 0 ? (
                         <div className="cw-empty"><Ico n="users" s={20} /><p>{loaded ? "No contacts on file for this client." : "Loading contacts…"}</p></div>
                       ) : (
-                        <div className="cw-people-grid">
+                        <div className="cw-people-grid is-rows">
                           {peopleShown.map((p, i) => (
                             <PersonCard key={p.key} p={p} i={i} open={openPeople.has(p.key)} onToggle={() => { hideTip(); togglePerson(p.key); }}
                               last={lastByPerson.get(norm(p.name)) ?? null} fields={ctFields}
@@ -1493,9 +1574,7 @@ export default function ClientWorkspace({
                         </button>
                       )}
                     </section>
-                  </div>
 
-                  <div className="cw-ov-side">
                     <section ref={pulseRef} data-sec="pulse" className={`cw-card cw-pulse is-${health}`} style={{ ...vt("cw-pulse"), ...cssVars({ "--i": 5 }) }}>
                       <SecHead icon="pulse" tone="teal" title="Last contacted" sub={touches.length ? `${touches.length} touchpoint${touches.length === 1 ? "" : "s"}` : "Nothing on record yet"}>
                         <button className="cw-btn-primary is-sm" onClick={() => (logOpen ? setLogOpen(false) : startLog())}>
@@ -1503,6 +1582,7 @@ export default function ClientWorkspace({
                         </button>
                       </SecHead>
 
+                      <div className="cw-sec-body">
                       <div className="cw-pulse-top" {...tipOn(last ? <TipCard title={last.who} sub={`${last.kind} · ${fmt(last.at)} · ${ago(last.at)}`}>{last.why}</TipCard> : null)}>
                         <div className="cw-pring">
                           <svg viewBox="0 0 110 110" aria-hidden="true">
@@ -1561,9 +1641,8 @@ export default function ClientWorkspace({
                           {historyAll ? "Show less" : `Full history · ${touches.length}`}<Ico n="chev" s={14} />
                         </button>
                       )}
+                      </div>
                     </section>
-                  </div>
-                </div>
 
                 <section className="cw-zone" data-sec="tasks" data-tone="amber" style={cssVars({ "--i": 7 })}>
                   <header className="cw-zone-h">
@@ -1920,7 +1999,7 @@ export default function ClientWorkspace({
 
             {/* ===== CONTRACT ===== */}
             {tab === "contract" && (
-              <div className="cw-stack">
+              <div className="cw-stack cw-secs">
                 <div className="cw-ckpis" data-sec="summary">
                   {[
                     { k: "Engagement", v: totals.value, sub: "€ in projects", icon: "briefcase", tone: "green", rows: projRows((p) => eur(projectValue(p))) },
@@ -1939,19 +2018,6 @@ export default function ClientWorkspace({
                     <small>{nextRenewal ? `in ${nextRenewal.left} days` : "No term on file"}</small>
                   </div>
                 </div>
-
-                <section className="cw-card cw-dir-card" data-sec="docs">
-                  <SecHead icon="folder" tone="violet" title="Folders" sub="Contracts, proposals and everything filed for this client — sales documents land here at handoff">
-                    {proposalsMissing.length > 0 && (
-                      <button className="cw-ghost" disabled={copyBusy === "all"} onClick={() => void copyToFolders(proposalsMissing, "all")}
-                        {...tipOn(<TipCard title="Proposals not in the folders yet" rows={proposalsMissing.map((f) => [f.name, deals.find((d) => d.id === f.tracking_id)?.name ?? ""] as [string, React.ReactNode])} />)}>
-                        <Ico n="copy" s={14} />{copyBusy === "all" ? "Copying…" : `Bring ${proposalsMissing.length} proposal${proposalsMissing.length === 1 ? "" : "s"} from sales`}
-                      </button>
-                    )}
-                  </SecHead>
-                  {copyMsg && <p className={copyMsg.ok ? "cw-okmsg" : "cw-err"}>{copyMsg.text}</p>}
-                  <div className="cw-dir-box"><ClientDirectory key={dirRev} clientId={client.id} tenantId={tenantId} /></div>
-                </section>
 
                 <section className="cw-card" data-sec="products">
                   <SecHead icon="contract" tone="violet" title="Signed products" sub={lines.length ? `${activeLines.length} active` : "Added when a deal is won, or by hand"}>
@@ -2085,6 +2151,27 @@ export default function ClientWorkspace({
                     </div>
                   )}
                 </section>
+              </div>
+            )}
+
+            {/* ===== FOLDERS ===== */}
+            {tab === "folders" && (
+              <div className="cw-folders">
+                <header className="cw-folders-h">
+                  <span className="cw-zone-ico"><Ico n="folder" s={18} /></span>
+                  <div className="cw-folders-t">
+                    <h3>Folders</h3>
+                    <small>Contracts, proposals and everything filed for this client. Drop files anywhere below to upload them to the open folder; sales documents land here at handoff.</small>
+                  </div>
+                  {proposalsMissing.length > 0 && (
+                    <button className="cw-btn-primary is-sm" disabled={copyBusy === "all"} onClick={() => void copyToFolders(proposalsMissing, "all")}
+                      {...tipOn(<TipCard title="Proposals not in the folders yet" rows={proposalsMissing.map((f) => [f.name, deals.find((d) => d.id === f.tracking_id)?.name ?? ""] as [string, React.ReactNode])} />)}>
+                      <Ico n="copy" s={14} />{copyBusy === "all" ? "Copying…" : `Bring ${proposalsMissing.length} proposal${proposalsMissing.length === 1 ? "" : "s"} from sales`}
+                    </button>
+                  )}
+                </header>
+                {copyMsg && <p className={copyMsg.ok ? "cw-okmsg" : "cw-err"}>{copyMsg.text}</p>}
+                <div className="cw-folders-box"><ClientDirectory key={dirRev} clientId={client.id} tenantId={tenantId} /></div>
               </div>
             )}
 

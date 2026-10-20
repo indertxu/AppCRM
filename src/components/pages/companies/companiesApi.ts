@@ -75,6 +75,8 @@ export interface Contact {
   phone_ext?: string | null;
   landline?: string | null;
   landline_ext?: string | null;
+  /** More email addresses besides the main one (15_contacts_fields.sql). */
+  emails?: string[] | null;
 }
 
 export interface ContactField {
@@ -234,6 +236,7 @@ export async function saveContact(c: Contact): Promise<string | null> {
     custom: c.custom ?? {},
   };
   const extra = pickNew(c, ["province", "phone_ext", "landline", "landline_ext"]);
+  if (c.emails !== undefined) extra.emails = (c.emails ?? []).map((x) => x.trim()).filter(Boolean);
   let contactId = c.id;
   const write = async (r: Record<string, any>) => {
     if (contactId) return (await supabase.from("contacts").update(r).eq("id", contactId)).error;
@@ -364,6 +367,86 @@ export async function loadContactActivity(contactId: string, companyIds: string[
   })) as ContactDeal[];
 }
 
+
+// ---- Deals of a company / a contact (drawers) ----
+export interface DealRef {
+  id: string; name: string; status: string; pipeline: string | null; phase: string | null;
+  companyId: string | null; companyName: string | null; created_at: string | null; won: boolean;
+  /** For a contact: on the deal itself, or only through one of their companies. */
+  via?: "direct" | "company";
+}
+async function dealRefs(rows: any[]): Promise<DealRef[]> {
+  if (!rows.length) return [];
+  const pipeIds = Array.from(new Set(rows.map((r) => r.pipeline_id).filter(Boolean)));
+  const phaseIds = Array.from(new Set(rows.map((r) => r.current_phase_id).filter(Boolean)));
+  const coIds = Array.from(new Set(rows.map((r) => r.company_id).filter(Boolean)));
+  const [pipes, phases, cos] = await Promise.all([
+    pipeIds.length ? supabase.from("pipelines").select("id, name").in("id", pipeIds) : Promise.resolve({ data: [] as any[] }),
+    phaseIds.length ? supabase.from("pipeline_phases").select("id, name, sales_outcome").in("id", phaseIds) : Promise.resolve({ data: [] as any[] }),
+    coIds.length ? supabase.from("companies").select("id, name").in("id", coIds) : Promise.resolve({ data: [] as any[] }),
+  ]);
+  const pn = new Map(((pipes as any).data ?? []).map((p: any) => [p.id, p.name as string]));
+  const ph = new Map(((phases as any).data ?? []).map((p: any) => [p.id, p]));
+  const cn = new Map(((cos as any).data ?? []).map((c: any) => [c.id, c.name as string]));
+  return rows.map((r) => {
+    const phase: any = r.current_phase_id ? ph.get(r.current_phase_id) : null;
+    const companyName = r.company_id ? cn.get(r.company_id) ?? null : null;
+    return {
+      id: r.id, name: (r.deal_name ?? "").trim() || companyName || "Deal", status: r.status ?? "active",
+      pipeline: r.pipeline_id ? pn.get(r.pipeline_id) ?? null : null, phase: phase?.name ?? null,
+      companyId: r.company_id ?? null, companyName, created_at: r.created_at ?? null,
+      won: r.status === "won" || phase?.sales_outcome === "win",
+    } as DealRef;
+  }).sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
+}
+const DEAL_COLS = "id, deal_name, status, pipeline_id, current_phase_id, company_id, created_at";
+/** Every deal of a company. */
+export async function listCompanyDeals(companyId: string): Promise<DealRef[]> {
+  const { data, error } = await supabase.from("trackings").select(DEAL_COLS).eq("company_id", companyId);
+  if (error) return [];
+  return dealRefs(data ?? []);
+}
+/** A contact's deals: the ones they are on, then (marked "company") their companies' other deals. */
+export async function listContactDeals(contactId: string, companyIds: string[]): Promise<DealRef[]> {
+  const { data: tc } = await supabase.from("tracking_contacts").select("tracking_id").eq("contact_id", contactId);
+  const direct = new Set((tc ?? []).map((r: any) => r.tracking_id as string));
+  const parts: string[] = [];
+  if (direct.size) parts.push(`id.in.(${Array.from(direct).join(",")})`);
+  if (companyIds.length) parts.push(`company_id.in.(${companyIds.join(",")})`);
+  if (!parts.length) return [];
+  const { data, error } = await supabase.from("trackings").select(DEAL_COLS).or(parts.join(","));
+  if (error) return [];
+  return (await dealRefs(data ?? [])).map((d) => ({ ...d, via: direct.has(d.id) ? "direct" : "company" }));
+}
+/** Every deal (to put a contact on one). */
+export async function listAllDeals(): Promise<DealRef[]> {
+  const out: any[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabase.from("trackings").select(DEAL_COLS).range(from, from + 999);
+    if (error || !data) break;
+    out.push(...data);
+    if (data.length < 1000) break;
+  }
+  return dealRefs(out);
+}
+/** Put a contact on deals / take them off (tracking_contacts). */
+export async function setContactDeals(contactId: string, add: string[], remove: string[]): Promise<string | null> {
+  if (remove.length) {
+    const { error } = await supabase.from("tracking_contacts").delete().eq("contact_id", contactId).in("tracking_id", remove);
+    if (error) return error.message;
+  }
+  if (add.length) {
+    const { error } = await supabase.from("tracking_contacts").insert(add.map((t) => ({ tracking_id: t, contact_id: contactId })));
+    if (error && !/duplicate|unique/i.test(error.message)) return error.message;
+  }
+  return null;
+}
+
+/** Languages a contact can speak with you (ISO code → name), the ones sales asked for first. */
+export const CONTACT_LANGUAGES: { code: string; name: string }[] = [
+  { code: "es", name: "Spanish" }, { code: "en", name: "English" }, { code: "pt", name: "Portuguese" },
+  { code: "fr", name: "French" }, { code: "de", name: "German" }, { code: "it", name: "Italian" },
+];
 
 // ---- Relationship status (client / in sales) for companies & contacts ----
 //

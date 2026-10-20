@@ -307,3 +307,31 @@
 
 /* Room for the hover lift (rise + slight grow + shadow) inside the scroller. */
 .ct-scroll { margin: -10px -16px 0; padding: 10px 22px 0 16px; }
+
+/* ===== Fork H: emails, wide list ===== */
+.ct-emails { display: flex; flex-direction: column; gap: 8px; }
+.ct-email-row { display: flex; align-items: center; gap: 8px; }
+.ct-email-row input { flex: 1; min-width: 0; height: 42px; box-sizing: border-box; padding: 0 13px; border: 1px solid rgba(10, 111, 77, 0.14); border-radius: 12px; background: var(--dw-field, #f6faf8); font: inherit; font-size: 14px; color: var(--dw-ink, #0b241a); outline: none; transition: border-color 0.15s, background 0.15s; }
+.ct-email-row input:focus { border-color: var(--dw-em, #12b57f); background: #fff; }
+.ct-email-tag { flex: none; padding: 4px 10px; border-radius: 999px; background: #e2f6ec; color: #0a6f4d; font-size: 11px; font-weight: 750; }
+.ct-email-main { flex: none; height: 30px; padding: 0 10px; border: 1px solid rgba(10, 111, 77, 0.18); border-radius: 9px; background: #fff; font: inherit; font-size: 11.5px; font-weight: 700; color: #0a6f4d; cursor: pointer; }
+.ct-email-main:disabled { opacity: 0.4; cursor: default; }
+.ct-email-x { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 9px; background: none; color: var(--dw-mute2, #8aa79a); font-size: 16px; cursor: pointer; }
+.ct-email-x:hover { background: rgba(214, 69, 69, 0.1); color: #d64545; }
+.ct-email-add { align-self: flex-start; height: 32px; padding: 0 12px; border: 1px dashed rgba(18, 181, 127, 0.45); border-radius: 10px; background: none; font: inherit; font-size: 12.5px; font-weight: 700; color: #0a6f4d; cursor: pointer; }
+.ct-email-add:hover { background: #e9f6ef; }
+
+/* many columns: the list scrolls sideways, the name stays */
+.ct-scroll.is-xscroll { overflow: auto; }
+.ct-scroll.is-xscroll .ct-lrow { min-width: var(--row-min, 100%); }
+.ct-scroll.is-xscroll .ct-lrow:not(.ct-lhead):hover { transform: translateY(-2px); }
+.ct-scroll.is-xscroll .ct-lrow { padding-left: 0; }
+.ct-scroll.is-xscroll .ct-lcell.ct-lid, .ct-scroll.is-xscroll .ct-lid-head { position: sticky; left: -16px; z-index: 1; align-self: stretch; display: flex; align-items: center; margin: -13px 0; padding: 13px 10px 13px 20px; background: #fff; border-radius: 13px 0 0 13px; }
+.ct-scroll.is-xscroll .ct-lid-head { background: #f4f9f6; margin-top: -11px; margin-bottom: -11px; padding-top: 11px; padding-bottom: 11px; }
+.ct-scroll.is-scrolled-x .ct-lcell.ct-lid, .ct-scroll.is-scrolled-x .ct-lid-head { box-shadow: 10px 0 14px -12px rgba(10, 60, 40, 0.35); }
+.ct-scroll.is-compact .ct-list { gap: 4px; }
+.ct-scroll.is-compact .ct-lrow:not(.ct-lhead) { padding-top: 7px; padding-bottom: 7px; border-radius: 10px; }
+.ct-scroll.is-compact.is-xscroll .ct-lcell.ct-lid { margin-top: -7px; margin-bottom: -7px; padding-top: 7px; padding-bottom: 7px; border-radius: 10px 0 0 10px; }
+.ct-scroll.is-compact .ct-avatar, .ct-scroll.is-compact .ct-av-wrap { width: 30px; height: 30px; font-size: 12px; }
+.ct-scroll.is-compact .ct-lcell { font-size: 13px; }
+.ct-scroll.is-xscroll .ct-lcell:not(.ct-lid) > span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

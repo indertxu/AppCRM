@@ -9,6 +9,7 @@ import { downloadBlob, tableToCsv, tableToXlsx, type ExportCell, type ExportColu
 import { inPeriod, PERIODS, periodLabel, prettyRange, dealCustomFields } from "./salesReportEngine";
 import type { TrackingField } from "./trackingFieldsApi";
 import { useBackToClose } from "../../../framework/useBackToClose";
+import { useCloseGuard } from "../../../framework/Dock";
 import "./ExportModal.css";
 
 /**
@@ -239,7 +240,6 @@ const DEFAULT_COLS: Record<RowMode, string[]> = {
 /* ─────────────── component ─────────────── */
 
 export default function ExportModal(p: Props) {
-  useBackToClose("sales-export", p.onClose);
   const { deals, contacts, companies, employees, trackAssignees, potentialTotals, helpers } = p;
 
   const [mode, setMode] = useState<RowMode>(lastConfig?.mode ?? "contacts");
@@ -250,7 +250,7 @@ export default function ExportModal(p: Props) {
   const [cols, setCols] = useState<string[]>(lastConfig?.cols ?? DEFAULT_COLS.contacts);
   const [touchedCols, setTouchedCols] = useState(lastConfig?.touchedCols ?? false);
   const [format, setFormat] = useState<"xlsx" | "csv">(lastConfig?.format ?? "xlsx");
-  const [fileName, setFileName] = useState(`sales-export-${new Date().toISOString().slice(0, 10)}`);
+  const [fileName, setFileName] = useState(`deals-export-${new Date().toISOString().slice(0, 10)}`);
   const [colQ, setColQ] = useState("");
   const [contactLabels, setContactLabels] = useState<Record<string, string>>({});
   const [companyLabels, setCompanyLabels] = useState<Record<string, string>>({});
@@ -272,6 +272,15 @@ export default function ExportModal(p: Props) {
   const cfgNow = (): Config & { fileName: string } => ({ mode, source, merge, match, conds, cols, format, touchedCols, fileName });
   const savedRow = savedList.find((x) => x.id === savedId);
   const dirty = savedId ? JSON.stringify(cfgNow()) !== snap || (!!savedRow && (savedRow.name !== savedName || savedRow.shared !== shared)) : false;
+  // Closing asks first when the set-up changed since it opened (or a saved one has unsaved changes) and it wasn't exported as it is.
+  const openedAs = useRef(JSON.stringify(cfgNow()));
+  const [exportedAs, setExportedAs] = useState<string | null>(null);
+  const cfgStr = JSON.stringify(cfgNow());
+  const guard = useCloseGuard({
+    dirty: (savedId ? dirty : cfgStr !== openedAs.current) && cfgStr !== exportedAs,
+    busy, onClose: p.onClose, what: "export",
+  });
+  useBackToClose("sales-export", p.onClose, true, guard.holdBack);
 
   useEffect(() => { lastSaved = { id: savedId, name: savedName, shared, snap }; }, [savedId, savedName, shared, snap]);
   useEffect(() => { supabase.auth.getUser().then(({ data }: any) => setMe(data?.user?.id ?? null)); loadSavedExports(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -335,10 +344,10 @@ export default function ExportModal(p: Props) {
     loadFieldLabels("company_fields").then(setCompanyLabels);
   }, []);
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") p.onClose(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !guard.asking && !document.querySelector(".sel-pop, .smf-menu, .dp-pop")) guard.requestClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [p]);
+  }, [guard.requestClose, guard.asking]);
 
   const companyById = useMemo(() => new Map(companies.map((c) => [c.id as string, c])), [companies]);
   /**
@@ -505,9 +514,10 @@ export default function ExportModal(p: Props) {
 
   const doExport = () => {
     if (!table.columns.length || !table.rows.length) return;
-    const base = (fileName.trim() || "sales-export").replace(/[\\/:*?"<>|]+/g, "-").replace(/\.(xlsx|csv)$/i, "");
+    const base = (fileName.trim() || "deals-export").replace(/[\\/:*?"<>|]+/g, "-").replace(/\.(xlsx|csv)$/i, "");
     const blob = format === "xlsx" ? tableToXlsx(table, "Export") : tableToCsv(table);
     downloadBlob(blob, `${base}.${format}`);
+    setExportedAs(JSON.stringify(cfgNow()));
   };
 
   const fieldOptions = available.map((f) => ({ value: f.key, label: `${GROUP_LABEL[f.group]} · ${f.label}` }));
@@ -566,7 +576,7 @@ export default function ExportModal(p: Props) {
               {busy ? "Saving…" : savedId ? "Save" : "Save export"}
             </button>
           </div>
-          <button className="xp-x" onClick={p.onClose} aria-label="Close">
+          <button className="xp-x" onClick={guard.requestClose} aria-label="Close">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
           </button>
         </header>
@@ -756,7 +766,7 @@ export default function ExportModal(p: Props) {
             <input value={fileName} onChange={(e) => setFileName(e.target.value)} aria-label="File name" />
             <span>.{format}</span>
           </div>
-          <button className="xp-cancel" onClick={p.onClose}>Cancel</button>
+          <button className="xp-cancel" onClick={guard.requestClose}>Cancel</button>
           <button className="xp-go" disabled={!colFields.length || !table.rows.length} onClick={doExport}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4v11M7 10l5 5 5-5M5 20h14" /></svg>
             Export {table.rows.length > 0 ? table.rows.length : ""} {table.rows.length === 1 ? "row" : "rows"}
@@ -764,6 +774,7 @@ export default function ExportModal(p: Props) {
         </footer>
         {note && <div className="xp-toast" role="status">{note}</div>}
       </div>
+      {guard.prompt}
     </div>,
     document.body,
   );

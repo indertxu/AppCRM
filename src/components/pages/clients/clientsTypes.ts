@@ -291,3 +291,26 @@ export function resolvedLinesOf(p: Parameters<typeof roleLinesOf>[0], map: Recor
   }
   return out;
 }
+
+// ---- Company logos from the website (no API key; the browser loads them) ----
+/** "https://www.acme.es/about" → "acme.es" (null when there is no usable domain). */
+export function domainOf(url?: string | null): string | null {
+  const raw = String(url ?? "").trim();
+  if (!raw) return null;
+  try {
+    const u = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+    const host = u.hostname.replace(/^www\./i, "").toLowerCase();
+    if (!host.includes(".") || /(^|\.)linkedin\.com$/.test(host)) return null;
+    return host;
+  } catch { return null; }
+}
+/** Logo candidates for a company, best first: the site's icon at a large size, then smaller fallbacks.
+ *  Use with <img onError> moving to the next one, and initials when all fail. */
+export function logoCandidates(website?: string | null): string[] {
+  const d = domainOf(website);
+  if (!d) return [];
+  return [
+    `https://www.google.com/s2/favicons?domain=${encodeURIComponent(d)}&sz=128`,
+    `https://icons.duckduckgo.com/ip3/${encodeURIComponent(d)}.ico`,
+  ];
+}

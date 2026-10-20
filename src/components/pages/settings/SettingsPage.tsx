@@ -119,9 +119,7 @@ export default function SettingsPage() {
   const [selected, setSelected] = useState<UserRow | null>(null);
 
   // localStorage is a fast cache to avoid a flash on load; the profile is the source of truth.
-  const [dockPinned, setDockPinned] = useState<boolean>(
-    () => localStorage.getItem(DOCK_PINNED_KEY) === "true"
-  );
+  // (The sidebar is always fixed now; only the labels are a choice.)
   const [dockLabels, setDockLabels] = useState<boolean>(
     () => localStorage.getItem(DOCK_LABELS_KEY) === "true"
   );
@@ -132,27 +130,14 @@ export default function SettingsPage() {
   useEffect(() => {
     if (!uid) return;
     (async () => {
-      const { data } = await supabase.from("profiles").select("dock_pinned, dock_labels").eq("id", uid).maybeSingle();
-      if (data && typeof data.dock_pinned === "boolean") {
-        setDockPinned(data.dock_pinned);
-        localStorage.setItem(DOCK_PINNED_KEY, String(data.dock_pinned));
-        window.dispatchEvent(new CustomEvent(DOCK_PINNED_EVENT, { detail: data.dock_pinned }));
-      }
-      if (data && typeof data.dock_labels === "boolean") {
-        setDockLabels(data.dock_labels);
-        localStorage.setItem(DOCK_LABELS_KEY, String(data.dock_labels));
-        window.dispatchEvent(new CustomEvent(DOCK_LABELS_EVENT, { detail: data.dock_labels }));
+      const { data } = await supabase.from("profiles").select("dock_labels").eq("id", uid).maybeSingle();
+      if (data && typeof (data as any).dock_labels === "boolean") {
+        setDockLabels((data as any).dock_labels);
+        localStorage.setItem(DOCK_LABELS_KEY, String((data as any).dock_labels));
+        window.dispatchEvent(new CustomEvent(DOCK_LABELS_EVENT, { detail: (data as any).dock_labels }));
       }
     })();
   }, [uid]);
-
-  const toggleDock = async () => {
-    const next = !dockPinned;
-    setDockPinned(next);
-    localStorage.setItem(DOCK_PINNED_KEY, String(next));
-    window.dispatchEvent(new CustomEvent(DOCK_PINNED_EVENT, { detail: next }));
-    if (uid) await supabase.from("profiles").update({ dock_pinned: next }).eq("id", uid);
-  };
 
   const toggleLabels = async () => {
     const next = !dockLabels;
@@ -390,10 +375,10 @@ export default function SettingsPage() {
               </svg>
             </span>
             <span className="nav-card-title">Interface</span>
-            <span className="nav-card-sub">Toolbar &amp; layout</span>
+            <span className="nav-card-sub">Sidebar &amp; layout</span>
             <span className="nav-card-spacer" />
             <div className="nav-insights">
-              <div className="nav-stat"><b>{dockPinned ? "On" : "Off"}</b><span>toolbar pinned</span></div>
+              <div className="nav-stat"><b>{dockLabels ? "On" : "Off"}</b><span>menu labels</span></div>
               <div className="nav-stat"><b>{outlookConnected ? "Yes" : "No"}</b><span>outlook synced</span></div>
             </div>
             <span className="nav-card-go">
@@ -425,8 +410,8 @@ export default function SettingsPage() {
             <span className="nav-card-icon">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2" /></svg>
             </span>
-            <span className="nav-card-title">Sales page</span>
-            <span className="nav-card-sub">Settings for the sales pipeline &amp; deals</span>
+            <span className="nav-card-title">Deals page</span>
+            <span className="nav-card-sub">Settings for the deals pipeline</span>
             <span className="nav-card-spacer" />
             <span className="nav-card-go">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
@@ -495,7 +480,7 @@ export default function SettingsPage() {
       <div className="st">
         <header className="st-bar st-bar-back">
           <button className="uv-back" onClick={() => setView("home")}>‹ Settings</button>
-          <h1 className="st-title">{view === "salespage" ? "Sales page" : "Management page"}</h1>
+          <h1 className="st-title">{view === "salespage" ? "Deals page" : "Management page"}</h1>
           <p className="st-sub">Settings for this page</p>
         </header>
         <section className="st-section cps-empty">
@@ -601,27 +586,9 @@ export default function SettingsPage() {
         <section className="st-section" style={{ maxWidth: 640 }}>
           <div className="st-toggle-row">
             <div className="st-toggle-text">
-              <span className="st-toggle-label">Keep the toolbar expanded</span>
-              <span className="st-toggle-note">
-                When off, the dock stays hidden and slides in when you reach the left edge.
-              </span>
-            </div>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={dockPinned}
-              className={`st-switch ${dockPinned ? "on" : ""}`}
-              onClick={toggleDock}
-            >
-              <span className="st-switch-knob" />
-            </button>
-          </div>
-
-          <div className="st-toggle-row" style={{ marginTop: "1.1rem" }}>
-            <div className="st-toggle-text">
               <span className="st-toggle-label">Always show menu labels</span>
               <span className="st-toggle-note">
-                Show each item's name next to its icon instead of only on hover.
+                Show each item's name under its icon in the sidebar instead of only on hover.
               </span>
             </div>
             <button

@@ -17,7 +17,9 @@ import {
   loadHistory, type HistoryEntry, descendantsOf, groupRootOf,
   type Company, type Contact, type Employee, type CompanyField, type ContactField, type Billing,
   renameCustomValue,
+  listCompanyDeals, type DealRef,
 } from "./companiesApi";
+import { logoCandidates } from "../clients/clientsTypes";
 import { searchPlaces, lookupPostal, postalLooksComplete, provinceFromPostal, countryName, matchCountry, normalizeLinkedIn, isLinkedIn, linkedInHandle, type AddressHit } from "../contacts/contactProfile";
 import "../clients/ClientsPage.css";
 import CompanyImport from "./CompanyImport";
@@ -57,6 +59,7 @@ export default function CompaniesPage() {
   const [view, setView] = useStoredView("np-companies-view", emptyView([{ key: "name", dir: "asc" }]));
   const [savedViews, setSavedViews] = useSavedViews("companyViews");
   const [columns, setColumns] = useState<string[]>(["vat_number", "address", "contacts"]);
+  const [compact, setCompact] = useState(false);
   const [options, setOptions] = useState<CrmOption[]>([]);
   const reloadOptions = async () => setOptions(await listCrmOptions().catch(() => []));
 
@@ -73,7 +76,7 @@ export default function CompaniesPage() {
   useEffect(() => {
     myProfile().then(setMe).catch(() => {});
     listEmployees().then(setEmployees).catch(() => {});
-    loadPrefs().then((p) => { if (Array.isArray(p.companyColumns)) setColumns(p.companyColumns); }).catch(() => {});
+    loadPrefs().then((p) => { if (Array.isArray(p.companyColumns)) setColumns(p.companyColumns); if (typeof p.companyCompact === "boolean") setCompact(p.companyCompact); }).catch(() => {});
     reload();
   }, []);
 
@@ -254,12 +257,15 @@ export default function CompaniesPage() {
     ...fields.map((f) => ({ key: f.id, label: f.label })),
   ];
   const columnLabel = (key: string) => availableColumns.find((c) => c.key === key)?.label ?? key;
-  const activeColumns = columns.filter((k) => availableColumns.some((c) => c.key === k)).slice(0, 4);
+  const activeColumns = columns.filter((k) => availableColumns.some((c) => c.key === k));
   // The contacts counter + dropdown always sits at the far right of the card,
   // in its own narrow column, whatever position it has in the column settings.
   const dataColumns = activeColumns.filter((k) => k !== "contacts");
   const showContacts = activeColumns.includes("contacts");
-  const rowGrid = ["minmax(0, 2.4fr)", ...dataColumns.map(() => "minmax(0, 1.4fr)"), ...(showContacts ? ["auto"] : [])].join(" ");
+  // Every column keeps a readable width; when they don't fit, the list scrolls sideways (the name stays put).
+  const colMin = (k: string) => (k === "address" ? 220 : k === "email" ? 190 : k === "vat_number" || k === "phone" || k === "landline" ? 130 : 150);
+  const rowGrid = ["minmax(260px, 2.4fr)", ...dataColumns.map((k) => `minmax(${colMin(k)}px, 1.4fr)`), ...(showContacts ? ["minmax(70px, auto)"] : [])].join(" ");
+  const rowMin = 260 + dataColumns.reduce((n, k) => n + colMin(k), 0) + (showContacts ? 70 : 0) + 20 * (dataColumns.length + (showContacts ? 1 : 0)) + 40;
   const setColumnsPersist = (next: string[]) => { setColumns(next); savePref("companyColumns", next).catch(() => {}); };
 
   const renderCell = (c: Company, key: string) => {
@@ -329,7 +335,8 @@ export default function CompaniesPage() {
       {shown.length === 0 ? (
         <p className="cl-hint">{companies.length === 0 ? "No companies yet. Create your first one." : "No companies match your search and filters."}</p>
       ) : (
-        <div className="co-scroll">
+        <div className={`co-scroll is-xscroll ${compact ? "is-compact" : ""}`} style={{ ["--row-min" as string]: `${rowMin}px` } as CSSProperties}
+          onScroll={(e) => e.currentTarget.classList.toggle("is-scrolled-x", e.currentTarget.scrollLeft > 4)}>
           <div className="co-lrow co-lhead" style={{ gridTemplateColumns: rowGrid }}>
             <span className="co-lid-head"><BulkCheck on={bulk.allOn} partial={bulk.someOn} onToggle={bulk.toggleAll} label="Select every company shown" /><SortHead label="Company" k="name" sort={view.sort} onSort={onSort} /></span>
             {dataColumns.map((k) => <span key={k} className="co-lhcell"><SortHead label={columnLabel(k)} k={sortKeyOf(k)} sort={view.sort} onSort={onSort} /></span>)}
@@ -347,7 +354,7 @@ export default function CompaniesPage() {
                     onKeyDown={(e) => { if (e.key === "Enter") setEditing(structuredClone(c)); }}>
                     <span className="co-lcell co-lid">
                       <span className="co-av-wrap">
-                        <span className="co-avatar">{(c.name || "?").slice(0, 1).toUpperCase()}</span>
+                        <CompanyLogo name={c.name || "?"} website={c.website} className="co-avatar" />
                         <BulkCheck on={bulk.has(c.id as string)} onToggle={(e) => bulk.toggle(c.id as string, e.shiftKey)} label={`Select ${c.name}`} />
                       </span>
                       <span className="co-lid-text">
@@ -440,6 +447,7 @@ export default function CompaniesPage() {
           availableColumns={availableColumns}
           columns={activeColumns}
           onColumns={setColumnsPersist}
+          compact={compact} onCompact={(v) => { setCompact(v); savePref("companyCompact", v).catch(() => {}); }}
           onClose={() => setShowFieldSettings(false)}
         />
       )}
@@ -617,6 +625,16 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
     return () => window.removeEventListener("keydown", onKey);
   }, [close]);
 
+  // ---- the company's deals (read-only list; each opens in Deals) ----
+  const navigate = useNavigate();
+  const [deals, setDeals] = useState<DealRef[] | null>(company.id ? null : []);
+  useEffect(() => {
+    if (!company.id) return;
+    let alive = true;
+    listCompanyDeals(company.id).then((d) => { if (alive) setDeals(d); }).catch(() => { if (alive) setDeals([]); });
+    return () => { alive = false; };
+  }, [company.id]);
+
   const setCustom = (fieldId: string, value: any) =>
     setC((x) => ({ ...x, custom: { ...(x.custom ?? {}), [fieldId]: value } }));
   const customVal = (fieldId: string) => (c.custom ?? {})[fieldId];
@@ -781,23 +799,21 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
   const creator = c.created_by ? employees.find((e) => e.id === c.created_by)?.name : null;
   const createdOn = c.created_at ? new Date(c.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "";
   const sections: DwNavItem[] = [
-    { k: "company", label: "Company", icon: "id" },
-    { k: "reach", label: "Contact details", icon: "mail" },
-    { k: "address", label: "Address", icon: "pin" },
-    { k: "billing", label: "Billing", icon: "euro", count: billFilled ? 1 : 0 },
-    { k: "group", label: "Group", icon: "tree", count: groupSize > 1 ? groupSize : 0 },
+    { k: "company", label: "Company information", icon: "id" },
+    { k: "custom", label: "Additional details", icon: "sliders", count: fields.length ? fields.filter((f) => { const v = customVal(f.id); return v != null && v !== "" && v !== false; }).length : 0 },
+    { k: "deals", label: "Deals", icon: "trend", count: deals?.length ?? 0 },
     { k: "people", label: "Contacts", icon: "users", count: peopleCount },
-    ...(canAssign ? [{ k: "access", label: "Visibility", icon: "lock", count: who.length }] : []),
-    ...(fields.length ? [{ k: "custom", label: "Additional details", icon: "sliders" }] : []),
     { k: "notes", label: "Notes", icon: "note" },
+    { k: "group", label: "Group", icon: "tree", count: groupSize > 1 ? groupSize : 0 },
     { k: "history", label: "History", icon: "clock" },
+    ...(canAssign ? [{ k: "access", label: "Visibility", icon: "lock", count: who.length }] : []),
   ];
 
   return (
     <div className={`dw-backdrop ${closing ? "is-closing" : ""}`} onMouseDown={() => close()}>
       <div className="dw is-wide" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={c.name || "New company"}>
         <header className="dw-hero">
-          <span className="dw-hero-av">{(c.name || "+").trim().slice(0, 1).toUpperCase()}</span>
+          <CompanyLogo name={c.name || "+"} website={c.website} className="dw-hero-av" />
           <div className="dw-hero-txt">
             <span className="dw-eyebrow">{c.id ? "Company" : "New company"}{c.sector ? ` · ${c.sector}` : ""}</span>
             <h2 className="dw-title">{c.name || "New company"}</h2>
@@ -824,7 +840,7 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
 
           <div className="dw-body" ref={bodyRef}>
             <section className="dw-sec" data-sec="company" data-tone="green">
-              <DwSecHead icon="id" title="Company" hint="Its name, how it is registered, its sector and what it is to you"
+              <DwSecHead icon="id" title="Company information" hint="Who they are, where they are, how to reach them and what they are to you"
                 aside={c.id && (creator || createdOn) ? <span className="dw-created"><DwIcon name="person" />{creator ? `Created by ${creator}` : "Created"}{createdOn ? ` · ${createdOn}` : ""}</span> : undefined} />
               <div className="dw-grid">
                 <div className="dw-f"><label>Common name<span className="dw-req"> *</span></label>
@@ -839,6 +855,11 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
                 <div className="dw-f"><label>Registration nº</label>
                   <input value={c.reg_number ?? ""} onChange={(e) => set({ reg_number: e.target.value })} />
                 </div>
+              </div>
+              <div className="dw-subh"><DwIcon name="pin" />Address</div>
+              <AddressFields value={c} onChange={(p) => set(p as Partial<Company>)} countryAs="name" withDetails />
+              <div className="dw-subh"><DwIcon name="globe" />Sector, web &amp; phones</div>
+              <div className="dw-grid">
                 <div className={`dw-f dw-col2 ${sectorAuto ? "is-auto" : ""}`}>
                   <label>Sector{sectorAuto && <span className="dw-f-assist">Guessed from the name — change it if it's wrong</span>}</label>
                   {newSector === null ? (
@@ -861,6 +882,19 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
                       <button type="button" className="dw-cancel" onClick={() => setNewSector(null)}>Cancel</button>
                     </div>
                   )}
+                </div>
+                <div className="dw-f"><label>Website</label>
+                  <input value={c.website ?? ""} onChange={(e) => set({ website: e.target.value })} placeholder="https://" />
+                </div>
+                <div className="dw-f"><label>LinkedIn</label>
+                  <input value={c.linkedin ?? ""} placeholder="linkedin.com/company/…" title={c.linkedin ? linkedInHandle(c.linkedin) : undefined}
+                    onChange={(e) => set({ linkedin: e.target.value })}
+                    onBlur={(e) => set({ linkedin: normalizeLinkedIn(e.target.value) })} />
+                </div>
+                <PhoneField label="Telephone" value={c.landline} ext={c.landline_ext} onValue={(v) => set({ landline: v })} onExt={(v) => set({ landline_ext: v })} placeholder="+34 910 000 000" />
+                <PhoneField label="Mobile" value={c.phone} ext={c.phone_ext} onValue={(v) => set({ phone: v })} onExt={(v) => set({ phone_ext: v })} placeholder="+34 600 000 000" />
+                <div className="dw-f"><label>Email</label>
+                  <input type="email" value={c.email ?? ""} onChange={(e) => set({ email: e.target.value })} placeholder="info@company.com" />
                 </div>
                 <div className="dw-f dw-col2"><label>Source</label>
                   <Select value={c.source ?? ""} placeholder="Where did it come from?"
@@ -894,35 +928,7 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
                   )}
                 </div>
               </div>
-            </section>
-
-            <section className="dw-sec" data-sec="reach" data-tone="blue">
-              <DwSecHead icon="mail" title="Contact details" hint="Website and the company's general email and phones" />
-              <div className="dw-grid">
-                <div className="dw-f"><label>Website</label>
-                  <input value={c.website ?? ""} onChange={(e) => set({ website: e.target.value })} placeholder="https://" />
-                </div>
-                <div className="dw-f"><label>LinkedIn</label>
-                  <input value={c.linkedin ?? ""} placeholder="linkedin.com/company/…" title={c.linkedin ? linkedInHandle(c.linkedin) : undefined}
-                    onChange={(e) => set({ linkedin: e.target.value })}
-                    onBlur={(e) => set({ linkedin: normalizeLinkedIn(e.target.value) })} />
-                </div>
-                <div className="dw-f"><label>Email</label>
-                  <input type="email" value={c.email ?? ""} onChange={(e) => set({ email: e.target.value })} placeholder="info@company.com" />
-                </div>
-                <PhoneField label="Mobile" value={c.phone} ext={c.phone_ext} onValue={(v) => set({ phone: v })} onExt={(v) => set({ phone_ext: v })} placeholder="+34 600 000 000" />
-                <PhoneField label="Landline" value={c.landline} ext={c.landline_ext} onValue={(v) => set({ landline: v })} onExt={(v) => set({ landline_ext: v })} placeholder="+34 910 000 000" />
-              </div>
-            </section>
-
-            <section className="dw-sec" data-sec="address" data-tone="amber">
-              <DwSecHead icon="pin" title="Address" hint="Where the company is based — start typing the street or the postal code" />
-              <AddressFields value={c} onChange={(p) => set(p as Partial<Company>)} countryAs="name" withDetails />
-            </section>
-
-            <section className="dw-sec" data-sec="billing" data-tone="green">
-              <DwSecHead icon="euro" title="Billing" hint="Who receives the invoices — a person, a shared inbox, a phone… whatever you need"
-                aside={billFilled ? <span className="dw-pill is-ok">Set</span> : undefined} />
+              <div className="dw-subh"><DwIcon name="euro" />Billing{billFilled && <span className="dw-pill is-ok">Set</span>}</div>
               <div className="dw-grid">
                 <div className="dw-f"><label>Name</label>
                   <input value={bill.name ?? ""} onChange={(e) => setBill({ name: e.target.value })} placeholder="e.g. Accounts payable" />
@@ -947,100 +953,10 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
               )}
             </section>
 
-            <section className="dw-sec" data-sec="group" data-tone="indigo">
-              <DwSecHead icon="tree" title="Group" hint="Companies of the same group, and which one sits above which"
-                aside={groupSize > 1 ? <span className="dw-pill">{groupSize} companies</span> : undefined} />
-              <div className="dw-grid">
-                <div className="dw-f"><label>Parent company</label>
-                  <Select value={c.parent_id ?? ""} onChange={(v) => set({ parent_id: v || null })} placeholder="None — top of its group"
-                    options={[{ value: "", label: "None — top of its group" }, ...parentChoices.map((x) => ({ value: x.id!, label: x.name }))]} />
-                </div>
-                <div className="dw-f"><label>Add a company below this one</label>
-                  <Select value="" onChange={(v) => v && setChildren((xs) => [...xs, v])} placeholder="+ Add a subsidiary"
-                    options={childChoices.map((x) => ({ value: x.id!, label: x.parent_id ? `${x.name} (now under ${nameOf(x.parent_id)})` : x.name }))} />
-                </div>
-              </div>
-              {groupSize > 1 ? (
-                <GroupTree companies={graphCompanies} focus={selfNode.id!}
-                  onOpen={(id) => id !== selfNode.id && leaveFor(() => onOpenCompany(id))}
-                  onDetach={(id) => setChildren((xs) => xs.filter((x) => x !== id))} detachable={children} />
-              ) : (
-                <p className="dw-empty-hint">On its own. Pick a parent company or add the companies below it to build the group.</p>
-              )}
-            </section>
-
-            <section className="dw-sec" data-sec="people" data-tone="indigo">
-              <DwSecHead icon="users" title="Contacts" hint="People who work here — link existing ones or create new"
-                aside={<span className="dw-pill">{peopleCount}</span>} />
-
-              {peopleCount === 0 && !addingContact && (
-                <p className="dw-empty-hint">No contacts yet. Link an existing one or create a new contact.</p>
-              )}
-
-              <div className="co-cc-list">
-                {linked.map((ct) => (
-                  <div className="co-cc-row is-link" key={ct.id}>
-                    <span className="co-cc-avatar">{(ct.first_name?.[0] ?? "?").toUpperCase()}</span>
-                    <button type="button" className="co-cc-main" title="Open this contact"
-                      onClick={() => leaveFor(() => onOpenContact(ct.id!))}>
-                      <span className="co-cc-name">{contactName(ct)}<span className="co-cc-go"><DwIcon name="arrow" /></span></span>
-                      <span className="co-cc-meta">{[ct.position, ct.email].filter(Boolean).join(" · ") || "—"}</span>
-                    </button>
-                    <button type="button" className="co-cc-x" aria-label="Unlink contact" onClick={() => detachExisting(ct.id!)}>×</button>
-                  </div>
-                ))}
-                {newContacts.map((ct, i) => (
-                  <div className="co-cc-row" key={`new-${i}`}>
-                    <span className="co-cc-avatar co-cc-avatar-new">{(ct.first_name?.[0] ?? "+").toUpperCase()}</span>
-                    <div className="co-cc-main">
-                      <span className="co-cc-name">{contactName(ct)}<i className="co-cc-newtag">New</i></span>
-                      <span className="co-cc-meta">{[ct.position, ct.email].filter(Boolean).join(" · ") || "—"}</span>
-                    </div>
-                    <button type="button" className="co-cc-x" aria-label="Remove contact" onClick={() => removeNewContact(i)}>×</button>
-                  </div>
-                ))}
-              </div>
-
-              {addingContact ? (
-                <NewContactInline
-                  fields={contactFields}
-                  onCancel={() => setAddingContact(false)}
-                  onAdd={(ct) => { setNewContacts((xs) => [...xs, ct]); setAddingContact(false); }}
-                />
-              ) : (
-                <div className="co-cc-actions">
-                  {attachable.length > 0 && (
-                    <ContactPicker contacts={attachable} onPick={attachExisting} />
-                  )}
-                  <button type="button" className="co-cc-new-btn" onClick={() => setAddingContact(true)}>+ New contact</button>
-                </div>
-              )}
-            </section>
-
-            {canAssign && (
-              <section className="dw-sec" data-sec="access" data-tone="violet">
-                <DwSecHead icon="lock" title="Visibility" hint="Who in the team can see this company" />
-                <div className="dw-chips">
-                  {who.map((id) => (
-                    <span key={id} className="dw-chip">
-                      <DwIcon name="person" />{employees.find((e) => e.id === id)?.name ?? "Unknown"}
-                      <button onClick={() => setWho((xs) => xs.filter((x) => x !== id))} aria-label="Remove">×</button>
-                    </span>
-                  ))}
-                </div>
-                {who.length === 0 && (
-                  <p className="dw-empty-hint">Only boss and sales managers can see it. Add people to widen access.</p>
-                )}
-                {employees.filter((e) => !who.includes(e.id)).length > 0 && (
-                  <Select value="" onChange={(v) => v && setWho((xs) => [...xs, v])} placeholder="+ Give access to"
-                    options={employees.filter((e) => !who.includes(e.id)).map((e) => ({ value: e.id, label: e.name }))} />
-                )}
-              </section>
-            )}
-
-            {fields.length > 0 && (
+            {(
               <section className="dw-sec" data-sec="custom" data-tone="slate">
-                <DwSecHead icon="sliders" title="Additional details" hint="Your own fields — set them up in Fields & columns" />
+                <DwSecHead icon="sliders" title="Additional details" hint="Your own fields — set them up in Settings › Companies page" />
+                {fields.length === 0 && <p className="dw-empty-hint">No custom fields yet.</p>}
                 <div className="dw-grid">
                   {fields.map((f) => (
                     <div className={`dw-f ${f.type === "text" || f.type === "select" ? "dw-col2" : ""}`} key={f.id}>
@@ -1073,12 +989,110 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
               </section>
             )}
 
+            <section className="dw-sec" data-sec="deals" data-tone="blue">
+              <DwSecHead icon="trend" title="Deals" hint="Every opportunity with this company — click one to open it"
+                aside={deals && deals.length ? <span className="dw-pill">{deals.length}</span> : undefined} />
+              {!c.id ? <p className="dw-empty-hint">Save the company first; its deals show here.</p>
+                : <DealRows deals={deals} empty="No deals with this company yet." onOpen={(id) => leaveFor(() => navigate(`/sales?tracking=${id}`))} />}
+            </section>
+
+            <section className="dw-sec" data-sec="people" data-tone="indigo">
+              <DwSecHead icon="users" title="Contacts" hint="People who work here — link existing ones or create new"
+                aside={<span className="dw-pill">{peopleCount}</span>} />
+
+              {peopleCount === 0 && !addingContact && (
+                <p className="dw-empty-hint">No contacts yet. Link an existing one or create a new contact.</p>
+              )}
+
+              <div className="co-cc-list">
+                {linked.map((ct) => (
+                  <div className="co-cc-row is-link" key={ct.id}>
+                    <span className="co-cc-avatar">{(ct.first_name?.[0] ?? "?").toUpperCase()}</span>
+                    <button type="button" className="co-cc-main" title="Open this contact"
+                      onClick={() => leaveFor(() => onOpenContact(ct.id!))}>
+                      <span className="co-cc-name">{contactName(ct)}<span className="co-cc-go"><DwIcon name="arrow" /></span></span>
+                      <span className="co-cc-meta">{[ct.position, ct.email].filter(Boolean).join(" · ") || "—"}</span>
+                    </button>
+                    <ConfirmX className="co-cc-x" label="Unlink contact" question="Unlink?" onConfirm={() => detachExisting(ct.id!)} />
+                  </div>
+                ))}
+                {newContacts.map((ct, i) => (
+                  <div className="co-cc-row" key={`new-${i}`}>
+                    <span className="co-cc-avatar co-cc-avatar-new">{(ct.first_name?.[0] ?? "+").toUpperCase()}</span>
+                    <div className="co-cc-main">
+                      <span className="co-cc-name">{contactName(ct)}<i className="co-cc-newtag">New</i></span>
+                      <span className="co-cc-meta">{[ct.position, ct.email].filter(Boolean).join(" · ") || "—"}</span>
+                    </div>
+                    <ConfirmX className="co-cc-x" label="Remove contact" onConfirm={() => removeNewContact(i)} />
+                  </div>
+                ))}
+              </div>
+
+              {addingContact ? (
+                <NewContactInline
+                  fields={contactFields}
+                  onCancel={() => setAddingContact(false)}
+                  onAdd={(ct) => { setNewContacts((xs) => [...xs, ct]); setAddingContact(false); }}
+                />
+              ) : (
+                <div className="co-cc-actions">
+                  {attachable.length > 0 && (
+                    <ContactPicker contacts={attachable} onPick={attachExisting} />
+                  )}
+                  <button type="button" className="co-cc-new-btn" onClick={() => setAddingContact(true)}>+ New contact</button>
+                </div>
+              )}
+            </section>
+
             <section className="dw-sec" data-sec="notes" data-tone="rose">
               <DwSecHead icon="note" title="Notes" hint="Anything worth remembering about this company" />
               <textarea className="dw-area" value={c.notes ?? ""} onChange={(e) => set({ notes: e.target.value })} placeholder="History, how you work with them, next steps…" />
             </section>
 
+            <section className="dw-sec" data-sec="group" data-tone="indigo">
+              <DwSecHead icon="tree" title="Group" hint="Companies of the same group, and which one sits above which"
+                aside={groupSize > 1 ? <span className="dw-pill">{groupSize} companies</span> : undefined} />
+              <div className="dw-grid">
+                <div className="dw-f"><label>Parent company</label>
+                  <Select value={c.parent_id ?? ""} onChange={(v) => set({ parent_id: v || null })} placeholder="None — top of its group"
+                    options={[{ value: "", label: "None — top of its group" }, ...parentChoices.map((x) => ({ value: x.id!, label: x.name }))]} />
+                </div>
+                <div className="dw-f"><label>Add a company below this one</label>
+                  <Select value="" onChange={(v) => v && setChildren((xs) => [...xs, v])} placeholder="+ Add a subsidiary"
+                    options={childChoices.map((x) => ({ value: x.id!, label: x.parent_id ? `${x.name} (now under ${nameOf(x.parent_id)})` : x.name }))} />
+                </div>
+              </div>
+              {groupSize > 1 ? (
+                <GroupTree companies={graphCompanies} focus={selfNode.id!}
+                  onOpen={(id) => id !== selfNode.id && leaveFor(() => onOpenCompany(id))}
+                  onDetach={(id) => setChildren((xs) => xs.filter((x) => x !== id))} detachable={children} />
+              ) : (
+                <p className="dw-empty-hint">On its own. Pick a parent company or add the companies below it to build the group.</p>
+              )}
+            </section>
+
             <HistorySection entity="company" id={c.id} employees={employees} fieldLabel={histLabel} formatValue={histValue} />
+            {canAssign && (
+              <section className="dw-sec" data-sec="access" data-tone="violet">
+                <DwSecHead icon="lock" title="Visibility" hint="Who in the team can see this company" />
+                <div className="dw-chips">
+                  {who.map((id) => (
+                    <span key={id} className="dw-chip">
+                      <DwIcon name="person" />{employees.find((e) => e.id === id)?.name ?? "Unknown"}
+                      <ConfirmX label="Remove access" question="Remove?" onConfirm={() => setWho((xs) => xs.filter((x) => x !== id))} />
+                    </span>
+                  ))}
+                </div>
+                {who.length === 0 && (
+                  <p className="dw-empty-hint">Only boss and sales managers can see it. Add people to widen access.</p>
+                )}
+                {employees.filter((e) => !who.includes(e.id)).length > 0 && (
+                  <Select value="" onChange={(v) => v && setWho((xs) => [...xs, v])} placeholder="+ Give access to"
+                    options={employees.filter((e) => !who.includes(e.id)).map((e) => ({ value: e.id, label: e.name }))} />
+                )}
+              </section>
+            )}
+
           </div>
         </div>
 
@@ -1135,7 +1149,7 @@ function GroupTree({ companies, focus, onOpen, onDetach, detachable }: {
             <span className="gt-av">{(co.name || "?").slice(0, 1).toUpperCase()}</span>
             <span className="gt-txt"><b>{co.name}</b><em>{id === focus ? (id === root ? "This company · top of the group" : "This company") : id === root ? "Top of the group" : [co.sector, co.city].filter(Boolean).join(" · ") || "—"}</em></span>
           </button>
-          {detachable.includes(id) && <button type="button" className="gt-x" onClick={() => onDetach(id)} aria-label={`Take ${co.name} out of the group`}>×</button>}
+          {detachable.includes(id) && <ConfirmX className="gt-x" label={`Take ${co.name} out of the group`} question="Take out?" onConfirm={() => onDetach(id)} />}
         </div>
         {ch.length > 0 && <ul className="gt-ul">{ch.map((k) => node(k.id!, depth + 1))}</ul>}
       </li>
@@ -1149,10 +1163,11 @@ function GroupTree({ companies, focus, onOpen, onDetach, detachable }: {
 }
 // ============================ Field settings modal ============================
 /** The list's columns (Name first, up to 4 more, drag to reorder) — on the Companies page. */
-function FieldSettings({ availableColumns, columns, onColumns, onClose }: {
+function FieldSettings({ availableColumns, columns, onColumns, compact, onCompact, onClose }: {
   availableColumns: { key: string; label: string }[];
   columns: string[];
   onColumns: (next: string[]) => void;
+  compact?: boolean; onCompact?: (v: boolean) => void;
   onClose: () => void;
 }) {
   useEffect(() => {
@@ -1173,7 +1188,7 @@ function FieldSettings({ availableColumns, columns, onColumns, onClose }: {
         <div className="dw-body">
           <div className="dw-sec">
             <p className="dw-sec-title">Overview columns</p>
-            <ColumnsEditor availableColumns={availableColumns} columns={columns} onColumns={onColumns} />
+            <ColumnsEditor availableColumns={availableColumns} columns={columns} onColumns={onColumns} compact={compact} onCompact={onCompact} />
           </div>
         </div>
         <div className="dw-foot">
@@ -1186,15 +1201,22 @@ function FieldSettings({ availableColumns, columns, onColumns, onClose }: {
   );
 }
 
-/** Name first, then up to 4 columns you pick and drag into order (Companies and Contacts lists). */
-export function ColumnsEditor({ availableColumns, columns, onColumns }: {
+/** Name first, then as many columns as you like, dragged into order (Companies and Contacts lists).
+ *  With many, the list scrolls sideways and the name stays in place. Optional compact rows. */
+export function ColumnsEditor({ availableColumns, columns, onColumns, compact, onCompact }: {
   availableColumns: { key: string; label: string }[]; columns: string[]; onColumns: (next: string[]) => void;
+  compact?: boolean; onCompact?: (v: boolean) => void;
 }) {
   const [dragKey, setDragKey] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null);
   return (
     <>
-      <p className="dw-empty-hint" style={{ marginTop: 0 }}>Name is always first. Pick up to 4 more and drag to reorder.</p>
+      <p className="dw-empty-hint" style={{ marginTop: 0 }}>Name is always first. Add as many columns as you need and drag to reorder — when they don't fit, the list scrolls sideways and the name stays in place.</p>
+      {onCompact && (
+        <button type="button" role="switch" aria-checked={!!compact} className={`cfe-req cf-compact ${compact ? "is-on" : ""}`} onClick={() => onCompact(!compact)}>
+          <i />Compact rows — fit more on screen
+        </button>
+      )}
       <div className="cf-cols">
         <div className="cf-col cf-col-fixed"><span className="cf-col-grip">⋮⋮</span>Name<span className="cf-col-tag">fixed</span></div>
         {columns.map((k) => (
@@ -1217,11 +1239,11 @@ export function ColumnsEditor({ availableColumns, columns, onColumns }: {
             }}>
             <span className="cf-col-grip">⋮⋮</span>
             {availableColumns.find((c) => c.key === k)?.label ?? k}
-            <button className="cf-col-x" onClick={() => onColumns(columns.filter((x) => x !== k))} aria-label="Remove column">×</button>
+            <button className="cf-col-x" onClick={() => onColumns(columns.filter((x) => x !== k))} aria-label="Remove column" title="Hide this column (you can add it back any time)">×</button>
           </div>
         ))}
       </div>
-      {columns.length < 4 && availableColumns.some((c) => !columns.includes(c.key)) && (
+      {availableColumns.some((c) => !columns.includes(c.key)) && (
         <div className="cf-col-add">
           <Select value="" onChange={(v) => v && onColumns([...columns, v])} placeholder="+ Add column"
             options={[{ value: "", label: "+ Add column" }, ...availableColumns.filter((c) => !columns.includes(c.key)).map((c) => ({ value: c.key, label: c.label }))]} />
@@ -1542,6 +1564,78 @@ const DW_ICON: Record<string, string> = {
 };
 function DwIcon({ name }: { name: string }) {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={DW_ICON[name] ?? ""} /></svg>;
+}
+
+/** A remove "×" that asks first: the first click turns it into "Remove? Yes / No". */
+export function ConfirmX({ onConfirm, label = "Remove", question, className = "", children }: {
+  onConfirm: () => void; label?: string; question?: string; className?: string; children?: ReactNode;
+}) {
+  const [ask, setAsk] = useState(false);
+  useEffect(() => {
+    if (!ask) return;
+    const t = window.setTimeout(() => setAsk(false), 6000);
+    return () => window.clearTimeout(t);
+  }, [ask]);
+  if (ask) return (
+    <span className="cx-ask" onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
+      <span>{question ?? `${label}?`}</span>
+      <button type="button" className="is-yes" autoFocus onClick={(e) => { e.stopPropagation(); setAsk(false); onConfirm(); }}
+        onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setAsk(false); } }}>Yes</button>
+      <button type="button" onClick={(e) => { e.stopPropagation(); setAsk(false); }}>No</button>
+    </span>
+  );
+  return (
+    <button type="button" className={`cx-x ${className}`} aria-label={label} title={label}
+      onClick={(e) => { e.stopPropagation(); setAsk(true); }}>{children ?? "×"}</button>
+  );
+}
+
+/** Deals as rows: name, pipeline · phase, status; click opens the deal. Optional remove (asks first) and add buttons. */
+export function DealRows({ deals, empty, onOpen, onRemove, onAdd, removeLabel = "Take off this deal" }: {
+  deals: (DealRef & { pending?: "add" | "remove" })[] | null; empty: string;
+  onOpen: (id: string) => void;
+  onRemove?: (d: DealRef) => void;
+  onAdd?: (d: DealRef) => void;
+  removeLabel?: string;
+}) {
+  if (deals === null) return <p className="dw-empty-hint">Loading deals…</p>;
+  if (!deals.length) return <p className="dw-empty-hint">{empty}</p>;
+  return (
+    <div className="dl-list">
+      {deals.map((d) => {
+        const st = d.won ? "won" : d.status === "lost" ? "lost" : d.status === "paused" ? "hold" : "open";
+        return (
+          <div key={d.id} className={`dl-row is-${st} ${d.pending ? `is-pending-${d.pending}` : ""}`}>
+            <span className="dl-ico"><DwIcon name="trend" /></span>
+            <button type="button" className="dl-main" onClick={() => onOpen(d.id)} title="Open this deal">
+              <span className="dl-name">{d.name}<span className="dl-go"><DwIcon name="arrow" /></span></span>
+              <span className="dl-meta">{[d.companyName && d.companyName !== d.name ? d.companyName : "", d.pipeline, d.phase].filter(Boolean).join(" · ") || "—"}</span>
+            </button>
+            {d.pending === "add" && <span className="dl-tag is-new">Added</span>}
+            <span className={`dl-st is-${st}`}>{st === "won" ? "Won" : st === "lost" ? "Lost" : st === "hold" ? "On hold" : "Open"}</span>
+            {onAdd && <button type="button" className="dl-add" onClick={() => onAdd(d)} title="Put this contact on the deal">+ Add</button>}
+            {onRemove && <ConfirmX onConfirm={() => onRemove(d)} label={removeLabel} question="Take off?" />}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** A company's logo from its website (first candidate that loads with a real size), else its initial. */
+export function CompanyLogo({ name, website, className = "" }: { name: string; website?: string | null; className?: string }) {
+  const cands = logoCandidates(website);
+  const [i, setI] = useState(0);
+  useEffect(() => { setI(0); }, [website]);
+  const src = cands[i];
+  if (!src) return <span className={className}>{(name || "?").trim().slice(0, 1).toUpperCase()}</span>;
+  return (
+    <span className={`${className} has-logo`}>
+      <img src={src} alt="" loading="lazy" referrerPolicy="no-referrer"
+        onLoad={(e) => { if ((e.currentTarget.naturalWidth || 0) <= 16) setI((x) => x + 1); }}
+        onError={() => setI((x) => x + 1)} />
+    </span>
+  );
 }
 /** Section title: coloured icon tile, name, one line saying what goes there, optional badge on the right. */
 function DwSecHead({ icon, title, hint, aside }: { icon: string; title: string; hint: string; aside?: ReactNode }) {

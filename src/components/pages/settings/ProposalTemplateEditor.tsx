@@ -692,12 +692,16 @@ export default function ProposalTemplateEditor({ canManage, owner, onClose, onOw
  * shapes / rows that come out empty disappear); without, the tokens show as
  * typed. `edits` override paragraphs by key. Clicking a text calls onPickText.
  */
-export function SlidePreview({ deck, n, refId, values, edits, width, onPickText, highlightKey, className }: {
+export function SlidePreview({ deck, n, refId, values, edits, width, onPickText, highlightKey, className, hide, hideText }: {
   deck: PvDeck; n: number;
   /** For a repeated slide's copy: its ref ("17.1", see slideRef) — edit keys use it instead of n. */
   refId?: string;
   values?: Record<string, string>; edits?: Record<string, string>; width: number;
   onPickText?: (key: string) => void; highlightKey?: string | null; className?: string;
+  /** Top-level slide shapes not to draw (just deleted). */
+  hide?: string[];
+  /** Top-level slide shapes whose words aren't drawn (being typed over in place). */
+  hideText?: string[];
 }) {
   const ref = refId ?? String(n);
   const slide = deck.slides.find((x) => x.n === n);
@@ -716,7 +720,7 @@ export function SlidePreview({ deck, n, refId, values, edits, width, onPickText,
     // the paragraph's own size sets the line box (else the page's 16px would)
     const lineSize = Math.max(p.endSize, ...p.runs.map((r) => r.size)) * pt * scale;
     return (
-      <div key={i} className={`spv-p ${pick ? "is-pick" : ""} ${on ? "is-on" : ""}`}
+      <div key={i} data-key={p.key} className={`spv-p ${pick ? "is-pick" : ""} ${on ? "is-on" : ""}`}
         onClick={pick ? (e) => { e.stopPropagation(); pick(); } : undefined}
         style={{
           textAlign: p.align === "ctr" ? "center" : p.align === "r" ? "right" : p.align === "just" ? "justify" : "left",
@@ -755,8 +759,9 @@ export function SlidePreview({ deck, n, refId, values, edits, width, onPickText,
     };
   };
 
-  const shapeView = (s: PvShape, i: number) => {
+  const shapeView = (s: PvShape, i: number | string) => {
     if (values && s.hideIf && nameHides(s.name, get)) return null;
+    if (hide && s.layer === "slide" && s.top && hide.includes(s.top)) return null;
     const box: React.CSSProperties = {
       left: s.x * k, top: s.y * k, width: Math.max(s.w * k, 0.5), height: Math.max(s.h * k, 0.5),
       transform: [s.rot ? `rotate(${s.rot}deg)` : "", s.flipH && !s.connector ? "scaleX(-1)" : "", s.flipV && !s.connector ? "scaleY(-1)" : ""].join(" ").trim() || undefined,
@@ -771,14 +776,14 @@ export function SlidePreview({ deck, n, refId, values, edits, width, onPickText,
       );
     }
     let text: ReturnType<typeof textView> | null = null;
-    if (s.text) {
+    if (s.text && !(hideText && s.layer === "slide" && s.top && hideText.includes(s.top))) {
       text = textView(s.text);
       if (text.drop) return null;
     }
     const radius = s.geom === "ellipse" ? "50%" : s.radius ? s.radius * k : s.geom === "flowChartTerminator" ? s.h * k / 2 : undefined;
     const border = s.line && !s.path ? `${Math.max(0.6, s.line.w * k)}px ${s.line.dash ? "dashed" : "solid"} ${s.line.color}` : undefined;
     return (
-      <div key={i} className="spv-shape" style={box}>
+      <div key={i} className="spv-shape" data-top={s.layer === "slide" ? s.top : undefined} style={box}>
         {s.path ? (
           <svg className="spv-fill" viewBox={`0 0 ${s.path[0]?.w ?? 1} ${s.path[0]?.h ?? 1}`} preserveAspectRatio="none" width="100%" height="100%">
             {s.path.map((p, j) => <path key={j} d={p.d} fill={s.fill ?? "none"} stroke={s.line?.color ?? "none"} strokeWidth={s.line ? (s.line.w * (p.w / Math.max(1, s.w))) : 0} vectorEffect="non-scaling-stroke" />)}
@@ -837,10 +842,16 @@ export function SlidePreview({ deck, n, refId, values, edits, width, onPickText,
     return <div className="spv-table">{out}</div>;
   };
 
+  const seen = new Map<string, number>();
   return (
     <div className={`spv ${className ?? ""}`} style={{ width, height, background: slide.bg ?? "#fff" }}>
       {slide.bgImg && <img className="spv-bg" src={slide.bgImg} alt="" draggable={false} />}
-      {slide.shapes.map(shapeView)}
+      {slide.shapes.map((s, i) => {
+        // stable keys: a shape keeps its DOM (and its image) when others are added, removed or reordered
+        const base = `${s.layer}:${s.sid || i}`;
+        const c = (seen.get(base) ?? 0) + 1; seen.set(base, c);
+        return shapeView(s, c > 1 ? `${base}#${c}` : base);
+      })}
     </div>
   );
 }
@@ -1705,7 +1716,7 @@ function FieldsPanel({ used, unknown }: { used: string[]; unknown: string[] }) {
  */
 const EMU_CM = 360000;
 const cm = (emu: number) => Math.round((emu / EMU_CM) * 100) / 100;
-type Box = { x: number; y: number; w: number; h: number };
+export type Box = { x: number; y: number; w: number; h: number };
 type Handle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 const HANDLES: Handle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 const KIND_LABEL: Record<EditShape["kind"], string> = { text: "Text box", shape: "Shape", picture: "Picture", table: "Table", group: "Group", line: "Line" };
@@ -1730,7 +1741,7 @@ const DSE_ICON = {
   shape: "M4 6h16v12H4z", table: "M4 5h16v14H4zM4 10h16M4 15h16M10 5v14",
   group: "M4 4h7v7H4zM13 13h7v7h-7zM13 4h7v7h-7", line: "M4 20L20 4",
 };
-const DIco = ({ d }: { d: keyof typeof DSE_ICON }) => (
+export const DIco = ({ d }: { d: keyof typeof DSE_ICON }) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={DSE_ICON[d]} /></svg>
 );
 const kindIco = (k: EditShape["kind"]): keyof typeof DSE_ICON => (k === "text" ? "text" : k === "picture" ? "pic" : k === "table" ? "table" : k === "group" ? "group" : k === "line" ? "line" : "shape");
@@ -1753,6 +1764,213 @@ function warpSlide(slide: PvSlide, sid: string, a: Box, b: Box): PvSlide {
   };
 }
 
+/** A slide as a canvas draws it: the slide with the changes `ops` (the very array it was drawn with). */
+export interface CanvasView { n: number; slide: PvSlide; shapes: EditShape[]; nextId: number; ops: DeckEditOp[] }
+
+/** The changes a view hasn't drawn yet (it was drawn with the start of `ops`). */
+export function pendingOf(view: CanvasView | null, ops: DeckEditOp[]): DeckEditOp[] {
+  if (!view) return [];
+  let i = 0;
+  while (i < ops.length && i < view.ops.length && ops[i] === view.ops[i]) i++;
+  return ops.slice(i);
+}
+/** The paragraph (edit key) under the pointer, through the boxes drawn over the slide. */
+const paraAt = (x: number, y: number): string | undefined =>
+  (document.elementsFromPoint(x, y).find((el) => (el as HTMLElement).classList?.contains("spv-p") && (el as HTMLElement).dataset.key) as HTMLElement | undefined)?.dataset.key;
+
+const SCV_PAD = 36, SCV_TOP = 40, SCV_BOTTOM = 76;
+
+/**
+ * The slide on a stage you can edit: click to select a box, drag to move, handles to
+ * resize, snapping guides. Steady while you work: the slide keeps its size, a change
+ * shows at once (before the slide is redrawn), and images are never reloaded.
+ */
+export function SlideCanvas({ cx, cy, n, view, ops, sel, onSel, zoom = 1, onCommit, editable = true, values, edits, refId, highlightKey, onPickText, onDblShape, hide, hideText, overlay, footer, children, onBackground, loading, outline }: {
+  cx: number; cy: number; n: number;
+  view: CanvasView | null;
+  /** The changes on this slide now (the view may be a step behind). */
+  ops: DeckEditOp[];
+  sel: string | null; onSel: (sid: string | null) => void;
+  zoom?: number;
+  onCommit: (ops: DeckEditOp[]) => void;
+  editable?: boolean;
+  values?: Record<string, string>; edits?: Record<string, string>; refId?: string; highlightKey?: string | null;
+  /** A click (no drag) on a text: the paragraph clicked. */
+  onPickText?: (key: string) => void;
+  onDblShape?: (s: EditShape, key?: string) => void;
+  hide?: string[];
+  hideText?: string[];
+  /** More things over the slide, in slide pixels (k = px per EMU). */
+  overlay?: (k: number, box: (s: EditShape) => Box) => React.ReactNode;
+  footer?: React.ReactNode;
+  children?: React.ReactNode;
+  onBackground?: () => void;
+  loading?: React.ReactNode;
+  /** A box to outline (hovered in a list beside). */
+  outline?: string | null;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [room, setRoom] = useState({ w: 0, h: 0 });
+  useLayoutEffect(() => {
+    const el = scrollRef.current; if (!el) return;
+    const measure = () => setRoom((r) => (r.w === el.clientWidth && r.h === el.clientHeight ? r : { w: el.clientWidth, h: el.clientHeight }));
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const fitW = Math.max(200, Math.floor(Math.min(room.w - SCV_PAD * 2, (room.h - SCV_TOP - SCV_BOTTOM) * (cx / cy))));
+  const width = Math.round(fitW * zoom);
+  const height = Math.round((width * cy) / cx);
+  const k = width / cx;
+
+  const [hover, setHover] = useState<string | null>(null);
+  const [drag, setDrag] = useState<null | { sid: string; mode: "move" | Handle; sx: number; sy: number; orig: Box; box: Box; moved: boolean }>(null);
+  const [guides, setGuides] = useState<{ x: number[]; y: number[] }>({ x: [], y: [] });
+
+  const v = view && view.n === n ? view : null;
+  // what the view hasn't drawn yet shows at once: moved boxes where they go, deleted ones gone
+  const pending = pendingOf(v, ops);
+  const pendBox = new Map<string, Box>();
+  const pendGone = new Set<string>();
+  pending.forEach((o) => {
+    if (o.op === "xfrm") pendBox.set(o.sid, { x: o.x, y: o.y, w: o.w, h: o.h });
+    if (o.op === "delete") pendGone.add(o.sid);
+  });
+  const shapes: EditShape[] = (v?.shapes ?? []).filter((s) => !pendGone.has(s.sid)).map((s) => (pendBox.has(s.sid) ? { ...s, ...pendBox.get(s.sid)! } : s));
+  const shown = useMemo(() => {
+    if (!v) return null;
+    let sl = v.slide;
+    pendBox.forEach((b, sid) => { const s0 = v.shapes.find((x) => x.sid === sid); if (s0) sl = warpSlide(sl, sid, s0, b); });
+    if (drag?.moved) sl = warpSlide(sl, drag.sid, drag.orig, drag.box);
+    return sl;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [v, drag, pending.length, JSON.stringify(Array.from(pendBox))]);
+  const hidden = useMemo(() => [...(hide ?? []), ...pendGone], [hide?.join(), Array.from(pendGone).join()]);
+  const boxOf = (s: EditShape): Box => (drag?.moved && drag.sid === s.sid ? drag.box : s);
+  const cur = shapes.find((s) => s.sid === sel) ?? null;
+
+  /* ---- snapping ---- */
+  const snap = (b: Box, mode: "move" | Handle, sid: string): { box: Box; gx: number[]; gy: number[] } => {
+    const th = 6 / k;
+    const others = shapes.filter((s) => s.sid !== sid);
+    const xs = [0, cx / 2, cx, ...others.flatMap((s) => [s.x, s.x + s.w / 2, s.x + s.w])];
+    const ys = [0, cy / 2, cy, ...others.flatMap((s) => [s.y, s.y + s.h / 2, s.y + s.h])];
+    const out = { ...b }; const gx: number[] = [], gy: number[] = [];
+    const best = (cands: number[], vals: number[]) => {
+      let bd = th, bv: number | null = null, bi = -1;
+      vals.forEach((val, i) => cands.forEach((c) => { const d = Math.abs(c - val); if (d < bd) { bd = d; bv = c - val; bi = i; } }));
+      return bv === null ? null : { delta: bv as number, i: bi };
+    };
+    if (mode === "move") {
+      const bx = best(xs, [b.x, b.x + b.w / 2, b.x + b.w]); if (bx) { out.x += bx.delta; gx.push([out.x, out.x + out.w / 2, out.x + out.w][bx.i]); }
+      const by = best(ys, [b.y, b.y + b.h / 2, b.y + b.h]); if (by) { out.y += by.delta; gy.push([out.y, out.y + out.h / 2, out.y + out.h][by.i]); }
+    } else {
+      if (mode.includes("w")) { const r = best(xs, [b.x]); if (r) { out.x += r.delta; out.w -= r.delta; gx.push(out.x); } }
+      if (mode.includes("e")) { const r = best(xs, [b.x + b.w]); if (r) { out.w += r.delta; gx.push(out.x + out.w); } }
+      if (mode.includes("n")) { const r = best(ys, [b.y]); if (r) { out.y += r.delta; out.h -= r.delta; gy.push(out.y); } }
+      if (mode.includes("s")) { const r = best(ys, [b.y + b.h]); if (r) { out.h += r.delta; gy.push(out.y + out.h); } }
+    }
+    return { box: out, gx, gy };
+  };
+
+  /* ---- pointer ---- */
+  const startDrag = (e: React.PointerEvent, s: EditShape, mode: "move" | Handle) => {
+    if (e.button !== 0) return;
+    e.stopPropagation(); e.preventDefault();
+    if (sel !== s.sid) onSel(s.sid);
+    const orig = { x: s.x, y: s.y, w: s.w, h: s.h };
+    setDrag({ sid: s.sid, mode, sx: e.clientX, sy: e.clientY, orig, box: orig, moved: false });
+  };
+  useEffect(() => {
+    if (!drag) return;
+    const move = (e: PointerEvent) => {
+      if (!drag.moved && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 3) return;
+      const dx = (e.clientX - drag.sx) / k, dy = (e.clientY - drag.sy) / k;
+      const o = drag.orig;
+      let b: Box = { ...o };
+      if (drag.mode === "move") b = { ...o, x: o.x + dx, y: o.y + dy };
+      else {
+        const m = drag.mode;
+        if (m.includes("e")) b.w = o.w + dx;
+        if (m.includes("w")) { b.x = o.x + dx; b.w = o.w - dx; }
+        if (m.includes("s")) b.h = o.h + dy;
+        if (m.includes("n")) { b.y = o.y + dy; b.h = o.h - dy; }
+        if (e.shiftKey && o.w > 0 && o.h > 0 && m.length === 2) {
+          const r = o.w / o.h;
+          if (Math.abs(b.w / o.w) > Math.abs(b.h / o.h)) { const nh = b.w / r; if (m.includes("n")) b.y += b.h - nh; b.h = nh; }
+          else { const nw = b.h * r; if (m.includes("w")) b.x += b.w - nw; b.w = nw; }
+        }
+        const min = 12700 * 4;
+        if (b.w < min) { if (m.includes("w")) b.x -= min - b.w; b.w = min; }
+        const minH = o.h < min ? o.h : min;
+        if (b.h < minH) { if (m.includes("n")) b.y -= minH - b.h; b.h = minH; }
+      }
+      const sn = e.altKey ? { box: b, gx: [], gy: [] } : snap(b, drag.mode, drag.sid);
+      setGuides((g) => (g.x.join() === sn.gx.join() && g.y.join() === sn.gy.join() ? g : { x: sn.gx, y: sn.gy }));
+      setDrag({ ...drag, box: sn.box, moved: true });
+    };
+    const up = (e: PointerEvent) => {
+      if (drag.moved) onCommit([{ op: "xfrm", n, sid: drag.sid, x: drag.box.x, y: drag.box.y, w: drag.box.w, h: drag.box.h }]);
+      else if (onPickText && drag.mode === "move") { const key = paraAt(e.clientX, e.clientY); if (key) onPickText(key); }
+      setDrag(null); setGuides({ x: [], y: [] });
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    return () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drag, k]);
+
+  return (
+    <div className="scv">
+      <div className="scv-scroll" ref={scrollRef} onPointerDown={() => onBackground?.()}>
+        <div className="scv-pad" style={{ minWidth: width + SCV_PAD * 2, minHeight: height + SCV_TOP + SCV_BOTTOM, padding: `${SCV_TOP}px ${SCV_PAD}px ${SCV_BOTTOM}px` }}>
+          {!shown || room.w === 0 ? (
+            <div className="scv-loading">{loading ?? <><span className="pd-spin" />Drawing the slide…</>}</div>
+          ) : (
+            <div className="scv-canvas" style={{ width, height }}>
+              <SlidePreview deck={{ cx, cy, slides: [shown], info: null as any }} n={n} refId={refId} values={values} edits={edits} width={width}
+                highlightKey={highlightKey} hide={hidden} hideText={hideText} className="scv-slide"
+                onPickText={!editable ? onPickText : undefined} />
+              {editable && (
+                <div className="scv-overlay" onPointerLeave={() => setHover(null)}>
+                  {shapes.map((s) => {
+                    const b = boxOf(s);
+                    const tw = b.w * k < 8, th = b.h * k < 8;
+                    return (
+                      <div key={s.sid} className={`scv-hit ${sel === s.sid ? "is-sel" : ""} ${(hover === s.sid || outline === s.sid) && sel !== s.sid && !drag ? "is-hover" : ""}`}
+                        style={{ left: b.x * k - (tw ? 4 : 0), top: b.y * k - (th ? 4 : 0), width: Math.max(8, b.w * k), height: Math.max(8, b.h * k), transform: s.rot ? `rotate(${s.rot}deg)` : undefined, zIndex: sel === s.sid ? 2 : undefined }}
+                        onPointerEnter={() => setHover(s.sid)}
+                        onPointerDown={(e) => startDrag(e, s, "move")}
+                        onDoubleClick={(e) => { e.stopPropagation(); onDblShape?.(s, paraAt(e.clientX, e.clientY)); }}
+                        title={plainName(s.name) || KIND_LABEL[s.kind]} />
+                    );
+                  })}
+                  {cur && (() => {
+                    const b = boxOf(cur);
+                    return (
+                      <div className="scv-sel" style={{ left: b.x * k, top: b.y * k, width: Math.max(1, b.w * k), height: Math.max(1, b.h * k) }}>
+                        <span className="scv-sel-tag">{plainName(cur.name) || KIND_LABEL[cur.kind]}{condsOf(cur.name).length > 0 && <i title="Shown only when a field has a value"><DIco d="eye" /></i>}</span>
+                        {HANDLES.map((h) => <span key={h} className={`scv-h is-${h}`} onPointerDown={(e) => startDrag(e, cur, h)} />)}
+                        {drag?.moved && <span className="scv-sel-size">{cm(b.w)} × {cm(b.h)} cm</span>}
+                      </div>
+                    );
+                  })()}
+                  {guides.x.map((x, i) => <span key={`gx${i}`} className="scv-guide is-v" style={{ left: x * k }} />)}
+                  {guides.y.map((y, i) => <span key={`gy${i}`} className="scv-guide is-h" style={{ top: y * k }} />)}
+                  {overlay?.(k, boxOf)}
+                </div>
+              )}
+              {children}
+            </div>
+          )}
+        </div>
+      </div>
+      {footer && <div className="scv-foot" onPointerDown={(e) => e.stopPropagation()}>{footer}</div>}
+    </div>
+  );
+}
+
 export function DeckSlideEditor({ buf, base, startN, deckName, onSave, onClose }: {
   buf: ArrayBuffer;
   /** The deck as saved (thumbnails of slides without changes). */
@@ -1769,26 +1987,20 @@ export function DeckSlideEditor({ buf, base, startN, deckName, onSave, onClose }
   const [ops, setOps] = useState<DeckEditOp[]>([]);
   const [past, setPast] = useState<DeckEditOp[][]>([]);
   const [future, setFuture] = useState<DeckEditOp[][]>([]);
-  const [view, setView] = useState<{ n: number; slide: PvSlide; shapes: EditShape[]; nextId: number } | null>(null);
+  const [view, setView] = useState<CanvasView | null>(null);
   const [rendered, setRendered] = useState<Record<number, PvSlide>>({});
   const [sel, setSel] = useState<string | null>(null);
-  const [hover, setHover] = useState<string | null>(null);
-  const [drag, setDrag] = useState<null | { sid: string; mode: "move" | Handle; sx: number; sy: number; orig: Box; box: Box; moved: boolean }>(null);
-  const [guides, setGuides] = useState<{ x: number[]; y: number[] }>({ x: [], y: [] });
-  const [inline, setInline] = useState<null | { sid: string; text: string }>(null);
+  const [inline, setInline] = useState<null | { sid: string; text: string; closing?: boolean }>(null);
   const [saving, setSaving] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [askClose, setAskClose] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [fieldsFor, setFieldsFor] = useState<null | { anchor: DOMRect }>(null);
-  const stageRef = useRef<HTMLDivElement>(null);
-  const [stage, setStage] = useState({ w: 0, h: 0 });
+  const [layerHover, setLayerHover] = useState<string | null>(null);
   const lastNudge = useRef<{ sid: string; at: number } | null>(null);
   /** The text field the user typed in last (for "Insert field"). */
   const focusField = useRef<{ el: HTMLTextAreaElement | HTMLInputElement; apply: (v: string) => void } | null>(null);
   const renderSeq = useRef(0);
-  const sideRef = useRef<HTMLElement>(null);
-  useEffect(() => { if (sel) sideRef.current?.scrollTo({ top: 0, behavior: "smooth" }); }, [sel]);
 
   // open the deck once
   useEffect(() => {
@@ -1798,28 +2010,21 @@ export function DeckSlideEditor({ buf, base, startN, deckName, onSave, onClose }
     return () => { alive = false; opened?.dispose(); };
   }, [buf]);
 
-  // draw the current slide with its pending changes
-  const opsOf = useCallback((m: number) => ops.filter((o) => o.n === m), [ops]);
+  // draw the current slide with its pending changes (the canvas shows moves at once, before this lands)
+  const opsN = useMemo(() => ops.filter((o) => o.n === n), [ops, n]);
   useEffect(() => {
     if (!ses) return;
     const seq = ++renderSeq.current;
-    ses.render(n, opsOf(n)).then((r) => {
+    const these = opsN;
+    ses.render(n, these).then((r) => {
       if (seq !== renderSeq.current) return;
-      setView({ n, ...r });
-      setRendered((m) => ({ ...m, [n]: r.slide }));
+      setView({ n, ...r, ops: these });
+      setRendered((m) => (m[n] === r.slide ? m : { ...m, [n]: r.slide }));
     }).catch((e) => setLoadErr(e.message ?? String(e)));
-  }, [ses, n, opsOf]);
-
-  // fit the slide in the stage
-  useEffect(() => {
-    const el = stageRef.current; if (!el) return;
-    const ro = new ResizeObserver(([e]) => setStage({ w: e.contentRect.width, h: e.contentRect.height }));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [ses]);
-  const fitW = Math.max(200, Math.floor(Math.min(stage.w - 64, (stage.h - 64) * (base.cx / base.cy))));
-  const width = Math.round(fitW * zoom);
-  const k = width / base.cx;
+  }, [ses, n, opsN]);
+  const caughtUp = !!view && view.n === n && pendingOf(view, opsN).length === 0;
+  // a text typed on the slide stays drawn by the editor until the slide is redrawn with it (no flash of the old text)
+  useEffect(() => { if (inline?.closing && caughtUp) setInline(null); }, [inline?.closing, caughtUp]);
 
   const dirty = ops.length > 0 && saving !== "saved";
   const dirtyNs = useMemo(() => new Set(ops.map((o) => o.n)), [ops]);
@@ -1841,7 +2046,14 @@ export function DeckSlideEditor({ buf, base, startN, deckName, onSave, onClose }
   const undo = () => { if (!past.length) return; setFuture((f) => [ops, ...f]); setOps(past[past.length - 1]); setPast((p) => p.slice(0, -1)); lastNudge.current = null; };
   const redo = () => { if (!future.length) return; setPast((p) => [...p, ops]); setOps(future[0]); setFuture((f) => f.slice(1)); lastNudge.current = null; };
 
-  const shapes = view?.n === n ? view.shapes : [];
+  // the shapes as they are now (pending moves included)
+  const shapes = useMemo(() => {
+    if (!view || view.n !== n) return [];
+    const pend = pendingOf(view, opsN);
+    const box = new Map<string, Box>(), gone = new Set<string>();
+    pend.forEach((o) => { if (o.op === "xfrm") box.set(o.sid, { x: o.x, y: o.y, w: o.w, h: o.h }); if (o.op === "delete") gone.add(o.sid); });
+    return view.shapes.filter((s) => !gone.has(s.sid)).map((s) => (box.has(s.sid) ? { ...s, ...box.get(s.sid)! } : s));
+  }, [view, n, opsN]);
   const cur = shapes.find((s) => s.sid === sel) ?? null;
   const setBox = (s: EditShape, b: Box, merge = false) => commit([{ op: "xfrm", n, sid: s.sid, x: b.x, y: b.y, w: b.w, h: b.h }], { merge });
   const del = (s: EditShape) => { commit([{ op: "delete", n, sid: s.sid }]); setSel(null); };
@@ -1862,76 +2074,7 @@ export function DeckSlideEditor({ buf, base, startN, deckName, onSave, onClose }
   const setText = (sid: string, paras: string[], cell?: { r: number; c: number }) => commit([{ op: "text", n, sid, paras, ...(cell ? { cell } : {}) }]);
   const setStyle = (s: EditShape, st: Omit<Extract<DeckEditOp, { op: "style" }>, "op" | "n" | "sid">) => commit([{ op: "style", n, sid: s.sid, ...st }]);
   const rename = (s: EditShape, name: string) => { if (name !== s.name) commit([{ op: "name", n, sid: s.sid, name }]); };
-
-  /* ---- snapping ---- */
-  const snap = (b: Box, mode: "move" | Handle, sid: string): { box: Box; gx: number[]; gy: number[] } => {
-    const th = 6 / k;
-    const others = shapes.filter((s) => s.sid !== sid);
-    const xs = [0, base.cx / 2, base.cx, ...others.flatMap((s) => [s.x, s.x + s.w / 2, s.x + s.w])];
-    const ys = [0, base.cy / 2, base.cy, ...others.flatMap((s) => [s.y, s.y + s.h / 2, s.y + s.h])];
-    const out = { ...b }; const gx: number[] = [], gy: number[] = [];
-    const best = (cands: number[], vals: number[]) => {
-      let bd = th, bv: number | null = null, bi = -1;
-      vals.forEach((v, i) => cands.forEach((c) => { const d = Math.abs(c - v); if (d < bd) { bd = d; bv = c - v; bi = i; } }));
-      return bv === null ? null : { delta: bv as number, i: bi };
-    };
-    if (mode === "move") {
-      const bx = best(xs, [b.x, b.x + b.w / 2, b.x + b.w]); if (bx) { out.x += bx.delta; gx.push([out.x, out.x + out.w / 2, out.x + out.w][bx.i]); }
-      const by = best(ys, [b.y, b.y + b.h / 2, b.y + b.h]); if (by) { out.y += by.delta; gy.push([out.y, out.y + out.h / 2, out.y + out.h][by.i]); }
-    } else {
-      if (mode.includes("w")) { const r = best(xs, [b.x]); if (r) { out.x += r.delta; out.w -= r.delta; gx.push(out.x); } }
-      if (mode.includes("e")) { const r = best(xs, [b.x + b.w]); if (r) { out.w += r.delta; gx.push(out.x + out.w); } }
-      if (mode.includes("n")) { const r = best(ys, [b.y]); if (r) { out.y += r.delta; out.h -= r.delta; gy.push(out.y); } }
-      if (mode.includes("s")) { const r = best(ys, [b.y + b.h]); if (r) { out.h += r.delta; gy.push(out.y + out.h); } }
-    }
-    return { box: out, gx, gy };
-  };
-
-  /* ---- pointer ---- */
-  const startDrag = (e: React.PointerEvent, s: EditShape, mode: "move" | Handle) => {
-    if (e.button !== 0) return;
-    e.stopPropagation(); e.preventDefault();
-    setSel(s.sid); setInline(null);
-    const orig = { x: s.x, y: s.y, w: s.w, h: s.h };
-    setDrag({ sid: s.sid, mode, sx: e.clientX, sy: e.clientY, orig, box: orig, moved: false });
-  };
-  useEffect(() => {
-    if (!drag) return;
-    const move = (e: PointerEvent) => {
-      const dx = (e.clientX - drag.sx) / k, dy = (e.clientY - drag.sy) / k;
-      if (!drag.moved && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 3) return;
-      const o = drag.orig;
-      let b: Box = { ...o };
-      if (drag.mode === "move") b = { ...o, x: o.x + dx, y: o.y + dy };
-      else {
-        const m = drag.mode;
-        if (m.includes("e")) b.w = o.w + dx;
-        if (m.includes("w")) { b.x = o.x + dx; b.w = o.w - dx; }
-        if (m.includes("s")) b.h = o.h + dy;
-        if (m.includes("n")) { b.y = o.y + dy; b.h = o.h - dy; }
-        if (e.shiftKey && o.w > 0 && o.h > 0 && m.length === 2) {
-          const r = o.w / o.h;
-          if (Math.abs(b.w / o.w) > Math.abs(b.h / o.h)) { const nh = b.w / r; if (m.includes("n")) b.y += b.h - nh; b.h = nh; }
-          else { const nw = b.h * r; if (m.includes("w")) b.x += b.w - nw; b.w = nw; }
-        }
-        const min = 12700 * 4;
-        if (b.w < min) { if (m.includes("w")) b.x -= min - b.w; b.w = min; }
-        if (b.h < (o.h < min ? o.h : min)) { if (m.includes("n")) b.y -= (o.h < min ? o.h : min) - b.h; b.h = o.h < min ? o.h : min; }
-      }
-      const sn = e.altKey ? { box: b, gx: [], gy: [] } : snap(b, drag.mode, drag.sid);
-      setGuides({ x: sn.gx, y: sn.gy });
-      setDrag({ ...drag, box: sn.box, moved: true });
-    };
-    const up = () => {
-      const s = shapes.find((x) => x.sid === drag.sid);
-      if (s && drag.moved) setBox(s, drag.box);
-      setDrag(null); setGuides({ x: [], y: [] });
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-    return () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [drag, k, shapes]);
+  const openInline = (s: EditShape) => { if (s.kind === "text" && s.paras) setInline({ sid: s.sid, text: s.paras.join("\n") }); };
 
   /* ---- keys ---- */
   useEffect(() => {
@@ -1944,7 +2087,7 @@ export function DeckSlideEditor({ buf, base, startN, deckName, onSave, onClose }
       if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); save(); return; }
       if (e.key === "Escape") {
         if (fieldsFor) { setFieldsFor(null); return; }
-        if (inline) { setInline(null); return; }
+        if (inline && !inline.closing) { setInline(null); return; }
         if (typing) { t.blur(); return; }
         if (askClose) { setAskClose(false); return; }
         if (sel) { setSel(null); return; }
@@ -1953,7 +2096,7 @@ export function DeckSlideEditor({ buf, base, startN, deckName, onSave, onClose }
       if (typing || !cur) return;
       if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); del(cur); return; }
       if (mod && e.key.toLowerCase() === "d") { e.preventDefault(); dup(cur); return; }
-      if (e.key === "Enter" && (cur.kind === "text") && cur.paras) { e.preventDefault(); setInline({ sid: cur.sid, text: cur.paras.join("\n") }); return; }
+      if (e.key === "Enter" && cur.kind === "text" && cur.paras) { e.preventDefault(); openInline(cur); return; }
       const step = (e.shiftKey ? 10 : 1) * 12700;
       const d = e.key === "ArrowLeft" ? [-step, 0] : e.key === "ArrowRight" ? [step, 0] : e.key === "ArrowUp" ? [0, -step] : e.key === "ArrowDown" ? [0, step] : null;
       if (d) {
@@ -2002,15 +2145,9 @@ export function DeckSlideEditor({ buf, base, startN, deckName, onSave, onClose }
   };
   const track = (el: HTMLTextAreaElement | HTMLInputElement, apply: (v: string) => void) => { focusField.current = { el, apply }; };
 
-  /* ---- drawing ---- */
-  const shown = useMemo(() => {
-    if (!view || view.n !== n) return null;
-    if (drag?.moved) return warpSlide(view.slide, drag.sid, drag.orig, drag.box);
-    return view.slide;
-  }, [view, n, drag]);
   const deckOf = (slide: PvSlide): PvDeck => ({ cx: base.cx, cy: base.cy, slides: [slide], info: base.info });
-  const boxOf = (s: EditShape): Box => (drag?.moved && drag.sid === s.sid ? drag.box : s);
   const curIdx = base.slides.findIndex((s) => s.n === n);
+  const goTo = (m: number) => { if (m === n) return; setN(m); setSel(null); setInline(null); };
 
   if (loadErr) {
     return createPortal(
@@ -2064,7 +2201,7 @@ export function DeckSlideEditor({ buf, base, startN, deckName, onSave, onClose }
           {base.slides.map((s) => {
             const pv = rendered[s.n];
             return (
-              <button key={s.n} className={`dse-thumb ${s.n === n ? "is-on" : ""}`} onClick={() => { setN(s.n); setSel(null); setInline(null); }}>
+              <button key={s.n} className={`dse-thumb ${s.n === n ? "is-on" : ""}`} onClick={() => goTo(s.n)}>
                 <span className="dse-thumb-n">{s.n}{dirtyNs.has(s.n) && <i title="Unsaved changes" />}</span>
                 <StripSlide deck={pv ? deckOf(pv) : base} n={s.n} />
               </button>
@@ -2073,66 +2210,46 @@ export function DeckSlideEditor({ buf, base, startN, deckName, onSave, onClose }
         </nav>
 
         {/* ---- canvas ---- */}
-        <main className="dse-stage" ref={stageRef} onPointerDown={() => { setSel(null); setInline(null); }}>
-          {!ses || !shown ? (
-            <div className="dse-loading"><span className="pd-spin" />{ses ? "Drawing the slide…" : "Opening the deck…"}</div>
-          ) : (
-            <div className="dse-canvas-wrap" style={{ width, height: base.cy * k }}>
-              <SlidePreview deck={deckOf(shown)} n={n} width={width} className="dse-slide" />
-              <div className="dse-overlay" onPointerLeave={() => setHover(null)}>
-                {shapes.map((s) => {
-                  const b = boxOf(s);
-                  const thin = b.w * k < 8 || b.h * k < 8;
-                  return (
-                    <div key={s.sid} className={`dse-hit ${sel === s.sid ? "is-sel" : ""} ${hover === s.sid && sel !== s.sid ? "is-hover" : ""} ${thin ? "is-thin" : ""}`}
-                      style={{ left: b.x * k - (b.w * k < 8 ? 4 : 0), top: b.y * k - (b.h * k < 8 ? 4 : 0), width: Math.max(8, b.w * k), height: Math.max(8, b.h * k), transform: s.rot ? `rotate(${s.rot}deg)` : undefined, zIndex: sel === s.sid ? 2 : undefined }}
-                      onPointerEnter={() => setHover(s.sid)}
-                      onPointerDown={(e) => startDrag(e, s, "move")}
-                      onDoubleClick={(e) => { e.stopPropagation(); if (s.kind === "text" && s.paras) setInline({ sid: s.sid, text: s.paras.join("\n") }); }}
-                      title={plainName(s.name) || KIND_LABEL[s.kind]} />
-                  );
-                })}
-                {cur && !inline && (() => {
-                  const b = boxOf(cur);
-                  return (
-                    <div className="dse-sel" style={{ left: b.x * k, top: b.y * k, width: Math.max(1, b.w * k), height: Math.max(1, b.h * k) }}>
-                      <span className="dse-sel-tag">{plainName(cur.name) || KIND_LABEL[cur.kind]}{condsOf(cur.name).length > 0 && <i title="Shown only when a field has a value"><DIco d="eye" /></i>}</span>
-                      {HANDLES.map((h) => <span key={h} className={`dse-h is-${h}`} onPointerDown={(e) => startDrag(e, cur, h)} />)}
-                      {drag?.moved && <span className="dse-sel-size">{cm(b.w)} × {cm(b.h)} cm</span>}
-                    </div>
-                  );
-                })()}
-                {guides.x.map((x, i) => <span key={`gx${i}`} className="dse-guide is-v" style={{ left: x * k }} />)}
-                {guides.y.map((y, i) => <span key={`gy${i}`} className="dse-guide is-h" style={{ top: y * k }} />)}
-                {inline && (() => {
-                  const s = shapes.find((x) => x.sid === inline.sid);
-                  if (!s) return null;
-                  const size = Math.max(11, Math.min(28, (s.style?.size ?? 14) * 12700 * k));
-                  return (
-                    <InlineText key={s.sid} box={{ left: s.x * k, top: s.y * k, width: Math.max(120, s.w * k), minHeight: Math.max(36, s.h * k) }} size={size}
-                      align={s.style?.align} value={inline.text} onFocusField={track}
-                      onChange={(v) => setInline({ ...inline, text: v })}
-                      onDone={(keep) => { if (keep && inline.text !== (s.paras ?? []).join("\n")) setText(s.sid, inline.text.split("\n")); setInline(null); }}
-                      onFields={(r) => setFieldsFor({ anchor: r })} />
-                  );
-                })()}
+        <main className="dse-stage">
+          <SlideCanvas cx={base.cx} cy={base.cy} n={n} view={ses ? view : null} ops={opsN} sel={sel} zoom={zoom} outline={layerHover}
+            onSel={(sid) => { setSel(sid); if (inline && !inline.closing && inline.sid !== sid) setInline(null); }}
+            onCommit={(o) => commit(o)}
+            onBackground={() => { setSel(null); if (inline && !inline.closing) setInline(null); }}
+            onDblShape={(s) => openInline(s)}
+            hideText={inline ? [inline.sid] : undefined}
+            loading={<><span className="pd-spin" />{ses ? "Drawing the slide…" : "Opening the deck…"}</>}
+            overlay={(k) => {
+              if (!inline || !view) return null;
+              const s = shapes.find((x) => x.sid === inline.sid);
+              if (!s) return null;
+              const look = textLookOf(view.slide, s.sid, k);
+              return (
+                <InlineText key={s.sid} box={{ left: s.x * k, top: s.y * k, width: Math.max(40, s.w * k), minHeight: Math.max(18, s.h * k) }} look={look}
+                  value={inline.text} readOnly={!!inline.closing} onFocusField={track}
+                  onChange={(v) => setInline({ ...inline, text: v })}
+                  onDone={(keep) => {
+                    if (keep && inline.text !== (s.paras ?? []).join("\n")) { setText(s.sid, inline.text.split("\n")); setInline({ ...inline, closing: true }); }
+                    else setInline(null);
+                  }}
+                  onFields={(r) => setFieldsFor({ anchor: r })} />
+              );
+            }}
+            footer={(
+              <div className="dse-hintbar">
+                <button className="dse-nav" disabled={curIdx <= 0} onClick={() => goTo(base.slides[curIdx - 1].n)} aria-label="Previous slide"><DIco d="up" /></button>
+                <span>Click a box to select · drag to move · double-click a text to edit · <kbd>Alt</kbd> turns off snapping</span>
+                <button className="dse-nav" disabled={curIdx >= base.slides.length - 1} onClick={() => goTo(base.slides[curIdx + 1].n)} aria-label="Next slide"><DIco d="down" /></button>
               </div>
-            </div>
-          )}
-          <div className="dse-hintbar" onPointerDown={(e) => e.stopPropagation()}>
-            <button className="dse-nav" disabled={curIdx <= 0} onClick={() => { setN(base.slides[curIdx - 1].n); setSel(null); }} aria-label="Previous slide"><DIco d="up" /></button>
-            <span>Click a box to select · drag to move · double-click a text to edit · <kbd>Alt</kbd> turns off snapping</span>
-            <button className="dse-nav" disabled={curIdx >= base.slides.length - 1} onClick={() => { setN(base.slides[curIdx + 1].n); setSel(null); }} aria-label="Next slide"><DIco d="down" /></button>
-          </div>
+            )} />
         </main>
 
         {/* ---- inspector ---- */}
-        <aside className="dse-side" ref={sideRef} onPointerDown={(e) => e.stopPropagation()}>
+        <aside className="dse-side" onPointerDown={(e) => e.stopPropagation()}>
           {cur ? (
             <ShapePanel key={`${n}:${cur.sid}`} s={cur} slideW={base.cx} slideH={base.cy}
               onBox={(b) => setBox(cur, b)} onText={setText} onStyle={(st) => setStyle(cur, st)} onRename={(nm) => rename(cur, nm)}
               onOrder={(d) => order(cur, d)} onDup={() => dup(cur)} onDel={() => del(cur)} onFocusField={track}
-              onFields={(r) => setFieldsFor({ anchor: r })} onEditInline={() => cur.paras && setInline({ sid: cur.sid, text: cur.paras.join("\n") })} />
+              onFields={(r) => setFieldsFor({ anchor: r })} onEditInline={() => openInline(cur)} />
           ) : (
             <div className="dse-empty">
               <span className="dse-empty-ico"><DIco d="layers" /></span>
@@ -2146,7 +2263,7 @@ export function DeckSlideEditor({ buf, base, startN, deckName, onSave, onClose }
               </ul>
             </div>
           )}
-          <LayerList shapes={shapes} sel={sel} onPick={(sid) => { setSel(sid); setInline(null); }} onHover={setHover} />
+          <LayerList shapes={shapes} sel={sel} onPick={(sid) => { setSel(sid); setInline(null); }} onHover={setLayerHover} />
         </aside>
       </div>
 
@@ -2154,6 +2271,24 @@ export function DeckSlideEditor({ buf, base, startN, deckName, onSave, onClose }
     </div>,
     document.body,
   );
+}
+
+/** How a text box's words look on the slide (for typing over it in place). */
+export function textLookOf(slide: PvSlide, sid: string, k: number): InlineLook {
+  const sh = slide.shapes.find((x) => x.layer === "slide" && x.top === sid && x.text) ?? slide.shapes.find((x) => x.layer === "slide" && x.sid === sid);
+  const t = sh?.text;
+  const p = t?.paras.find((x) => x.runs.some((r) => r.text.trim())) ?? t?.paras[0];
+  const r = p?.runs.find((x) => x.text.trim()) ?? p?.runs[0];
+  const pt = 12700 * k * (t?.scale ?? 1);
+  return {
+    size: Math.max(9, ((r?.size ?? p?.endSize ?? 18) * pt)),
+    color: r?.color ?? p?.color ?? "#0b241a",
+    font: r?.font ? `"${r.font}", Arial, sans-serif` : `${slide.font ? `"${slide.font}", ` : ""}Arial, sans-serif`,
+    bold: !!r?.bold, italic: !!r?.italic,
+    align: p?.align,
+    pad: t ? `${t.t * k}px ${t.r * k}px ${t.b * k}px ${t.l * k}px` : "4px 6px",
+    lineHeight: p?.lnSpc ? 1.18 * p.lnSpc : 1.18,
+  };
 }
 
 function StripSlide({ deck, n }: { deck: PvDeck; n: number }) {
@@ -2169,34 +2304,44 @@ function StripSlide({ deck, n }: { deck: PvDeck; n: number }) {
 }
 
 /** Typing straight on the slide: one line per paragraph. */
-function InlineText({ box, size, align, value, onChange, onDone, onFocusField, onFields }: {
-  box: { left: number; top: number; width: number; minHeight: number }; size: number; align?: string; value: string;
+export interface InlineLook { size: number; color: string; font: string; bold: boolean; italic: boolean; align?: string; pad: string; lineHeight: number }
+/** Typing straight on the slide: the text box's own font, size and colour, in its own place (the drawn text is hidden meanwhile). */
+export function InlineText({ box, look, value, readOnly, onChange, onDone, onFocusField, onFields }: {
+  box: { left: number; top: number; width: number; minHeight: number }; look: InlineLook; value: string; readOnly?: boolean;
   onChange: (v: string) => void; onDone: (keep: boolean) => void;
   onFocusField: (el: HTMLTextAreaElement, apply: (v: string) => void) => void; onFields: (r: DOMRect) => void;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const btn = useRef<HTMLButtonElement>(null);
-  useEffect(() => { const el = ref.current; if (el) { el.focus(); el.select(); } }, []);
-  useLayoutEffect(() => { const el = ref.current; if (el) { el.style.height = "auto"; el.style.height = `${Math.max(box.minHeight, el.scrollHeight)}px`; } }, [value, box.minHeight]);
+  useEffect(() => { const el = ref.current; if (el && !readOnly) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }, []);
+  useLayoutEffect(() => { const el = ref.current; if (el) { el.style.height = "0px"; el.style.height = `${Math.max(box.minHeight, el.scrollHeight)}px`; } }, [value, box.minHeight, look.size]);
   return (
-    <div className="dse-inline" style={{ left: box.left, top: box.top, width: box.width }} onPointerDown={(e) => e.stopPropagation()}>
-      <textarea ref={ref} value={value} spellCheck={false}
-        style={{ fontSize: size, textAlign: align === "ctr" ? "center" : align === "r" ? "right" : "left" }}
+    <div className={`dse-inline ${readOnly ? "is-closing" : ""}`} style={{ left: box.left, top: box.top, width: box.width }} onPointerDown={(e) => e.stopPropagation()}>
+      <textarea ref={ref} value={value} spellCheck={false} readOnly={readOnly}
+        style={{ fontSize: look.size, color: look.color, fontFamily: look.font, fontWeight: look.bold ? 700 : 400, fontStyle: look.italic ? "italic" : undefined,
+          textAlign: look.align === "ctr" ? "center" : look.align === "r" ? "right" : "left", padding: look.pad, lineHeight: look.lineHeight }}
         onFocus={(e) => onFocusField(e.currentTarget, onChange)}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); onDone(false); } if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); onDone(true); } }}
-        onBlur={(e) => { if (e.relatedTarget && (e.relatedTarget === btn.current || (e.relatedTarget as HTMLElement).closest?.(".dse-fp"))) return; onDone(true); }} />
-      <div className="dse-inline-bar">
-        <button ref={btn} onMouseDown={(e) => e.preventDefault()} onClick={() => onFields(btn.current!.getBoundingClientRect())}><DIco d="field" />Insert field</button>
-        <span>Enter = new paragraph · ⌘Enter to finish</span>
-      </div>
+        onBlur={(e) => { if (readOnly) return; if (e.relatedTarget && (e.relatedTarget === btn.current || (e.relatedTarget as HTMLElement).closest?.(".dse-fp"))) return; onDone(true); }} />
+      {!readOnly && (
+        <div className="dse-inline-bar">
+          <button ref={btn} onMouseDown={(e) => e.preventDefault()} onClick={() => onFields(btn.current!.getBoundingClientRect())}><DIco d="field" />Insert field</button>
+          <span>Enter = new paragraph · ⌘Enter to finish</span>
+        </div>
+      )}
     </div>
   );
 }
 
 /** The selected shape: position, texts, look, show-when, arrange. */
-function ShapePanel({ s, slideW, slideH, onBox, onText, onStyle, onRename, onOrder, onDup, onDel, onFocusField, onFields, onEditInline }: {
+export function ShapePanel({ s, slideW, slideH, onBox, onText, onStyle, onRename, onOrder, onDup, onDel, onFocusField, onFields, onEditInline, mode = "template", ownText, onPickText }: {
   s: EditShape; slideW: number; slideH: number;
+  /** "proposal": a seller's layout for one proposal — no names / conditions; the template's words are edited in the Text tab. */
+  mode?: "template" | "proposal";
+  /** A box added in this proposal: its words are part of the layout. */
+  ownText?: boolean;
+  onPickText?: () => void;
   onBox: (b: Box) => void; onText: (sid: string, paras: string[], cell?: { r: number; c: number }) => void;
   onStyle: (st: { size?: number; bold?: boolean; italic?: boolean; color?: string | null; align?: "l" | "ctr" | "r" | "just" }) => void;
   onRename: (name: string) => void; onOrder: (d: "forward" | "backward" | "front" | "back") => void; onDup: () => void; onDel: () => void;
@@ -2223,9 +2368,11 @@ function ShapePanel({ s, slideW, slideH, onBox, onText, onStyle, onRename, onOrd
         <span className={`dse-kind is-${s.kind}`}><DIco d={kindIco(s.kind)} /></span>
         <div>
           <span className="dse-eyebrow">{KIND_LABEL[s.kind]}{s.ph ? " · from the layout" : ""}</span>
-          <input key={s.name} className="dse-name" defaultValue={plainName(s.name)} placeholder={KIND_LABEL[s.kind]}
-            onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-            onBlur={(e) => onRename(withConds(`${e.target.value}${tokensIn(s.name).filter((t) => !t.startsWith("?")).map((t) => ` {{${t}}}`).join("")}`, conds))} />
+          {mode === "proposal" ? <b className="dse-name is-static">{plainName(s.name) || KIND_LABEL[s.kind]}</b> : (
+            <input key={s.name} className="dse-name" defaultValue={plainName(s.name)} placeholder={KIND_LABEL[s.kind]}
+              onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+              onBlur={(e) => onRename(withConds(`${e.target.value}${tokensIn(s.name).filter((t) => !t.startsWith("?")).map((t) => ` {{${t}}}`).join("")}`, conds))} />
+          )}
         </div>
       </div>
 
@@ -2243,14 +2390,21 @@ function ShapePanel({ s, slideW, slideH, onBox, onText, onStyle, onRename, onOrd
         </div>
       </section>
 
-      {s.kind === "text" && s.paras && (
+      {s.kind === "text" && s.paras && (mode === "template" || ownText) && (
         <section className="dse-sec">
           <div className="dse-sec-head"><h4>Text</h4>{fieldBtn}</div>
           <ParaFields paras={s.paras} onChange={(p) => onText(s.sid, p)} onFocusField={onFocusField} />
           <button className="dse-link" onClick={onEditInline}>Type on the slide instead</button>
         </section>
       )}
-      {s.kind === "group" && (s.children?.length ?? 0) > 0 && (
+      {mode === "proposal" && !ownText && (s.kind === "text" || s.kind === "group" || s.kind === "table") && (
+        <section className="dse-sec">
+          <h4>Text</h4>
+          <p className="dse-muted">Its words come from the template and the deal. Click the text on the slide to change them for this proposal.</p>
+          {onPickText && <button className="dse-btn is-sm" onClick={onPickText}><DIco d="text" />Edit the words</button>}
+        </section>
+      )}
+      {mode === "template" && s.kind === "group" && (s.children?.length ?? 0) > 0 && (
         <section className="dse-sec">
           <div className="dse-sec-head"><h4>Texts in this group</h4>{fieldBtn}</div>
           {s.children!.map((c) => (
@@ -2261,7 +2415,7 @@ function ShapePanel({ s, slideW, slideH, onBox, onText, onStyle, onRename, onOrd
           ))}
         </section>
       )}
-      {s.kind === "table" && (s.cells?.length ?? 0) > 0 && (
+      {mode === "template" && s.kind === "table" && (s.cells?.length ?? 0) > 0 && (
         <section className="dse-sec">
           <div className="dse-sec-head"><h4>Table cells</h4>{fieldBtn}</div>
           <p className="dse-muted">A row with a <code>#</code> field (e.g. <code>{"{{service.phase#.name}}"}</code>) repeats once per item.</p>
@@ -2303,7 +2457,7 @@ function ShapePanel({ s, slideW, slideH, onBox, onText, onStyle, onRename, onOrd
         </section>
       )}
 
-      <section className="dse-sec">
+      {mode === "template" && <section className="dse-sec">
         <h4>Show only when…</h4>
         <p className="dse-muted">Hide this box in a proposal when a field comes out empty (a 3-year price, a 2nd role…).</p>
         {conds.map((c) => (
@@ -2318,7 +2472,7 @@ function ShapePanel({ s, slideW, slideH, onBox, onText, onStyle, onRename, onOrd
           <button className="dse-btn is-sm" disabled={!cond} onClick={() => { onRename(withConds(s.name, Array.from(new Set([...conds, cond])))); setCond(""); }}>Add</button>
           <datalist id="dse-token-list">{DECK_TOKENS.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}</datalist>
         </div>
-      </section>
+      </section>}
 
       <section className="dse-sec">
         <h4>Arrange</h4>
@@ -2374,7 +2528,7 @@ function AutoArea({ value, onCommit, onFocusField }: { value: string; onCommit: 
 }
 
 /** Every box of the slide, top first. */
-function LayerList({ shapes, sel, onPick, onHover }: { shapes: EditShape[]; sel: string | null; onPick: (sid: string) => void; onHover: (sid: string | null) => void }) {
+export function LayerList({ shapes, sel, onPick, onHover }: { shapes: EditShape[]; sel: string | null; onPick: (sid: string) => void; onHover: (sid: string | null) => void }) {
   const [open, setOpen] = useState(true);
   const list = [...shapes].reverse();
   return (
@@ -2399,7 +2553,7 @@ function LayerList({ shapes, sel, onPick, onHover }: { shapes: EditShape[]; sel:
 }
 
 /** Pick a {{field}} to insert (deal values, or a free one the seller types). */
-function FieldPicker({ anchor, onPick, onClose }: { anchor: DOMRect; onPick: (key: string) => void; onClose: () => void }) {
+export function FieldPicker({ anchor, onPick, onClose }: { anchor: DOMRect; onPick: (key: string) => void; onClose: () => void }) {
   const [q, setQ] = useState("");
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {

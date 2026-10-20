@@ -5,6 +5,7 @@ import { supabase } from "../../api/supabase";
 import SalesMultiFilter from "../sales/sales/SalesMultiFilter";
 import DatePicker from "../../framework/DatePicker";
 import { useBackToClose } from "../../framework/useBackToClose";
+import { useCloseGuard } from "../../framework/Dock";
 import { downloadBlob, tableToCsv, tableToXlsx, type ExportCell } from "../../framework/exportFile";
 import { inPeriod, PERIODS } from "../sales/extras/salesReportEngine";
 import { listTrackingFields, type TrackingField } from "../sales/extras/trackingFieldsApi";
@@ -54,7 +55,6 @@ export default function ContactExport({ contacts, companies, contactFields, show
   /** What each row is: a contact (Contacts page) or a company (Companies page). */
   root?: Root;
 }) {
-  useBackToClose(root === "company" ? "company-export" : "contact-export", onClose);
   const isCo = root === "company";
   const noun = isCo ? "companies" : "contacts", one = isCo ? "company" : "contact";
   const STEPS = stepsFor(noun);
@@ -80,6 +80,10 @@ export default function ContactExport({ contacts, companies, contactFields, show
   const [format, setFormat] = useState<"xlsx" | "csv">("xlsx");
   const [fileName, setFileName] = useState(`${root === "company" ? "companies" : "contacts"}-${new Date().toISOString().slice(0, 10)}`);
   const [done, setDone] = useState(false);
+  const [downloaded, setDownloaded] = useState(false);
+  // Conditions set or steps gone through: Esc / backdrop / × / Cancel / Back ask first (not once downloaded).
+  const guard = useCloseGuard({ dirty: (step !== "who" || conds.length > 0) && !downloaded, onClose, what: "export" });
+  useBackToClose(root === "company" ? "company-export" : "contact-export", onClose, true, guard.holdBack);
 
   useEffect(() => {
     (async () => {
@@ -123,11 +127,11 @@ export default function ContactExport({ contacts, companies, contactFields, show
     })();
   }, []);
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !document.querySelector(".smf-menu, .dp-pop")) onClose(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !guard.asking && !document.querySelector(".sel-pop, .smf-menu, .dp-pop")) guard.requestClose(); };
     window.addEventListener("keydown", onKey);
     document.body.style.overflow = "hidden";
     return () => { window.removeEventListener("keydown", onKey); document.body.style.overflow = ""; };
-  }, [onClose]);
+  }, [guard.requestClose, guard.asking]);
 
   /* ---- lookups ---- */
   const companyById = useMemo(() => new Map(companies.map((c) => [c.id as string, c])), [companies]);
@@ -234,7 +238,7 @@ export default function ContactExport({ contacts, companies, contactFields, show
     const base = (fileName.trim() || noun).replace(/[\\/:*?"<>|]+/g, "-").replace(/\.(xlsx|csv)$/i, "");
     const blob = format === "xlsx" ? tableToXlsx(table, isCo ? "Companies" : "Contacts") : tableToCsv(table);
     downloadBlob(blob, `${base}.${format}`);
-    setDone(true); window.setTimeout(() => setDone(false), 2600);
+    setDone(true); setDownloaded(true); window.setTimeout(() => setDone(false), 2600);
   };
 
   /* ---- step navigation ---- */
@@ -258,8 +262,8 @@ export default function ContactExport({ contacts, companies, contactFields, show
   const nq = norm(colQ);
 
   return createPortal(
-    <div className="cx-backdrop" onMouseDown={onClose}>
-      <div className="cx" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={`Export ${noun}`}>
+    <div className="cx-backdrop" {...guard.backdrop}>
+      <div className="cx" role="dialog" aria-modal="true" aria-label={`Export ${noun}`}>
         <header className="cx-head">
           <div className="cx-head-txt"><span className="cx-eyebrow">Export</span><h2>{isCo ? "Companies" : "Contacts"}</h2></div>
           <nav className="cx-steps">
@@ -270,7 +274,7 @@ export default function ContactExport({ contacts, companies, contactFields, show
               </button>
             ))}
           </nav>
-          <button className="cx-x" onClick={onClose} aria-label="Close">×</button>
+          <button className="cx-x" onClick={guard.requestClose} aria-label="Close">×</button>
         </header>
 
         <div className="cx-body">
@@ -490,12 +494,13 @@ export default function ContactExport({ contacts, companies, contactFields, show
         <footer className="cx-foot">
           <span className={`cx-foot-note ${problem ? "is-warn" : ""}`}>{problem ?? (step === "who" ? `${fmtN(matched.length)} ${noun} selected` : step === "rows" ? `${fmtN(rows.length)} rows` : step === "columns" ? `${cols.length} columns chosen` : "Ready")}</span>
           <div className="cx-foot-actions">
-            {idx > 0 ? <button className="cx-btn is-ghost" onClick={() => setStep(STEPS[idx - 1].key)}>Back</button> : <button className="cx-btn is-ghost" onClick={onClose}>Cancel</button>}
+            {idx > 0 ? <button className="cx-btn is-ghost" onClick={() => setStep(STEPS[idx - 1].key)}>Back</button> : <button className="cx-btn is-ghost" onClick={guard.requestClose}>Cancel</button>}
             {step !== "download" && <button className="cx-btn is-primary" disabled={!!problem || loading} onClick={() => setStep(STEPS[idx + 1].key)}>Next: {STEPS[idx + 1].label} →</button>}
-            {step === "download" && <button className="cx-btn is-ghost" onClick={onClose}>Close</button>}
+            {step === "download" && <button className="cx-btn is-ghost" onClick={guard.requestClose}>Close</button>}
           </div>
         </footer>
       </div>
+      {guard.prompt}
     </div>,
     document.body,
   );

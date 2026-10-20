@@ -22,7 +22,7 @@ import {
 import type { Pipeline, Phase } from "../../settings/pipelineApi";
 import type { Product } from "../../settings/catalogApi";
 import type { LossReason, Tracking } from "../sales/salesApi";
-import { addLossReason, saveClientProducts } from "../sales/salesApi";
+import { addLossReason, saveClientProducts, loadClientIndex, matchClient, adoptClient } from "../sales/salesApi";
 import type { TrackingField } from "./trackingFieldsApi";
 import { addTrackingField, updateTrackingField, listTrackingFields } from "./trackingFieldsApi";
 import { orderPhases, resolveDealRole, rolesFor, type SalesRole } from "./salesRolesApi";
@@ -1429,16 +1429,20 @@ export async function runImport(ctx: Ctx, state: ImportState, columns: Column[],
   clientRows.forEach((r) => { const id = coId(r.companyRef); if (id) byCompany.set(id, [...(byCompany.get(id) ?? []), r]); });
   if (byCompany.size) {
     onProgress({ done: 0, total: byCompany.size, phase: "Creating clients…" });
-    const ids = [...byCompany.keys()];
-    const { data: existing } = await supabase.from("clients").select("id, company_id").in("company_id", ids);
-    const already = new Set((existing ?? []).map((c: any) => c.company_id));
+    // Existing clients: same company, else same name (legal forms ignored) or same VAT — never a duplicate.
+    const known = await loadClientIndex();
     let k = 0;
     for (const [companyId, dRows] of byCompany) {
       k++;
-      if (already.has(companyId)) { onProgress({ done: k, total: byCompany.size, phase: "Creating clients…" }); continue; }
       const crm = ctx.companies.find((c) => c.id === companyId);
       const fileCo = plan.companies.find((c) => coId(c.ref) === companyId);
       const pick = (col: (typeof COMPANY_COLS)[number]) => ((crm as any)?.[col] || fileCo?.data[col] || "") as string;
+      const same = matchClient(known, { companyId, name: crm?.name ?? fileCo?.name ?? null, vat: pick("vat_number") || null });
+      if (same) {
+        await adoptClient(same, { companyId, legal_name: pick("legal_name") || null, vat_number: pick("vat_number") || null }).catch(() => {});
+        if (!same.company_id) same.company_id = companyId;
+        onProgress({ done: k, total: byCompany.size, phase: "Creating clients…" }); continue;
+      }
       const cts = [
         ...ctx.contacts.filter((c) => c.companyIds.includes(companyId)),
         ...plan.newContacts.filter((c) => coId(c.companyRef) === companyId && ctIds.has(c.key)).map((c) => ({ ...c, id: ctIds.get(c.key) })),
@@ -1452,6 +1456,7 @@ export async function runImport(ctx: Ctx, state: ImportState, columns: Column[],
       };
       const { data, error } = await supabase.from("clients").insert(clientRow).select("id").single();
       if (error || !(data as any)?.id) { failed.push({ row: 0, reason: `Client “${clientRow.name}”: ${error?.message ?? "couldn't be created"}` }); continue; }
+      known.push({ id: (data as any).id, name: clientRow.name, company_id: companyId, vat_number: clientRow.vat_number });
       res.clientsCreated++;
       // the products of its won deals, signed on the close date
       for (const r of dRows) {

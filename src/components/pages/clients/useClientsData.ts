@@ -324,11 +324,26 @@ export function useClientsData() {
   useEffect(() => { loadAll().catch(() => {}).finally(() => setLoaded(true)); }, []);
 
   /** Saves a client row and one project row. */
-  const saveClientProject = async (c: Client, p: Project) => {
+  const saveClientProject = async (c0: Client, p0: Project) => {
     const companyId = (location.state as any)?.handoff?.companyId ?? pendingCompanyId;
+    // A NEW client that already exists (same CRM company, or the same name — e.g. loaded for
+    // consultancy before it was won in sales) gets the project instead of a second client.
+    let c = c0, p = p0;
+    const { data: own } = await supabase.from("clients").select("id").eq("id", c0.id).maybeSingle();
+    if (!own) {
+      const { data: all } = await supabase.from("clients").select("id, name, company_id");
+      const list = (all ?? []) as any[];
+      const twin = (companyId && list.find((x) => x.company_id === companyId))
+        || list.find((x) => crmKey(x.name) && crmKey(x.name) === crmKey(c0.name) && (!companyId || !x.company_id || x.company_id === companyId));
+      if (twin) { c = { ...c0, id: twin.id, name: twin.name || c0.name }; p = { ...p0, clientId: twin.id }; }
+    }
+    const isTwin = c.id !== c0.id;
     const clientRow: any = { id: c.id, name: c.name };
     if (companyId) clientRow.company_id = companyId;
-    const { error: cErr } = await supabase.from("clients").upsert(clientRow);
+    const { error: cErr } = isTwin
+      // the existing client keeps its name; it only learns its company when it had none
+      ? (companyId ? await supabase.from("clients").update({ company_id: companyId }).eq("id", c.id).is("company_id", null) : { error: null })
+      : await supabase.from("clients").upsert(clientRow);
     if (cErr) { alert(`Could not save client: ${cErr.message}`); return; }
 
     const { error: pErr } = await supabase.from("projects").upsert({
@@ -372,7 +387,7 @@ export function useClientsData() {
     await loadAll();
     setShowForm(false);
     setEditing(null);
-    setDetailClient((d) => (d && d.id === c.id ? c : d));
+    setDetailClient((d) => (d && (d.id === c.id || d.id === c0.id) ? c : d));
   };
 
   const deleteProject = async (id: string) => {

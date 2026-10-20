@@ -241,7 +241,7 @@ export default function NewTracking({ companies, contacts, pipelines, products, 
       ),
     });
     setBusy(false);
-    if (!id) { setErr("Could not create the tracking."); return; }
+    if (!id) { setErr("Could not create the deal."); return; }
     // The people picked here are on the deal; the owner gets the star.
     const finalTeam = Array.from(new Set([...team, ...(owner ? [owner] : [])]));
     if (finalTeam.length) await setTrackingEmployees(id, finalTeam).catch(() => {});
@@ -254,7 +254,7 @@ export default function NewTracking({ companies, contacts, pipelines, products, 
       <div className="dw" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
         <div className="dw-head">
           <div>
-            <span className="dw-eyebrow">New tracking</span>
+            <span className="dw-eyebrow">New deal</span>
             <h2 className="dw-title">Start following a client</h2>
           </div>
           <button className="dw-x" onClick={onClose}>×</button>
@@ -272,7 +272,7 @@ export default function NewTracking({ companies, contacts, pipelines, products, 
               <label htmlFor="nt-deal-name">Deal name <span className="nt-optional">optional</span></label>
               <input id="nt-deal-name" className="tfi-in" value={dealName} maxLength={120} onChange={(e) => setDealName(e.target.value)}
                 placeholder={company ? `e.g. ${company.name} — licence renewal 2027` : "e.g. Licence renewal 2027"} />
-              <small className="nt-name-hint">{dealName.trim() ? "This is how the deal shows in Sales and in Outlook." : company ? `Leave it empty to call it “${company.name}”.` : "Leave it empty to use the company or contact name."}</small>
+              <small className="nt-name-hint">{dealName.trim() ? "This is how the deal shows in Deals and in Outlook." : company ? `Leave it empty to call it “${company.name}”.` : "Leave it empty to use the company or contact name."}</small>
             </div>
             <label className="dw-f-label">Contacts</label>
             <div className="dw-chips">
