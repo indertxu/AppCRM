@@ -1,7 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import NewClientForm from "../clients/NewClientForm";
 import { useClientsData } from "../clients/useClientsData";
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { useFloatingHero, fhMove, fhLeave } from "../clients/ClientsPage";
 import ProjectsView, { type ProjectsViewMode } from "./ProjectsView";
 import { PageLoader } from "../../framework/AppLayout";
 import "../clients/ClientsPage.css";
@@ -25,11 +26,19 @@ export default function ProjectsPage() {
   });
   const pick = (v: ProjectsViewMode) => { setView(v); try { localStorage.setItem("projects.view", v); } catch { /* private mode */ } };
 
+  // Same dark floating header as Clients: sized to the title bar + figures, glow follows the pointer.
+  const fhRef = useRef<HTMLDivElement>(null);
+  useFloatingHero(fhRef, ".cl-bar, .cx-kpis");
+  const open = projects.filter((p) => p.status !== "closed").length;
+
   return (
-    <div className={`cl pj-page is-${view}`}>
+    <div className={`cl cl-ov fh pj-page pj-ov is-${view}`} ref={fhRef} onPointerMove={fhMove} onPointerLeave={fhLeave}>
       <header className="cl-bar">
         <div className="cl-bar-left">
-          <h1 className="cl-title">Projects</h1>
+          <div>
+            <h1 className="cl-title">Projects</h1>
+            <p className="cx-sub">{projects.length} project{projects.length === 1 ? "" : "s"} · {open} open · {clients.length} client{clients.length === 1 ? "" : "s"}</p>
+          </div>
         </div>
         <div className="pj-views" role="tablist" aria-label="View">
           <span className="pj-views-ink" style={{ transform: view === "canvas" ? "translateX(100%)" : "none" }} />
@@ -42,7 +51,7 @@ export default function ProjectsPage() {
         </div>
       </header>
 
-      {!loaded ? <PageLoader label="Loading projects…" /> : (
+      {!loaded ? <section className="cx-sheet pj-sheet"><PageLoader label="Loading projects…" /></section> : (
       <div className="pj-in">
       <ProjectsView
         clients={clients}

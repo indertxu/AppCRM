@@ -5,6 +5,7 @@ import type { Client, Project, ProjectType, ClientRole, Blueprint } from "../cli
 import { projectValue, legacyRoleMap, resolvedLinesOf, roleNameOf, roleColor, roleCounts } from "../clients/clientsTypes";
 import Select from "../../framework/Select";
 import { supabase } from "../../api/supabase";
+import { ClientLogo } from "../clients/ClientWorkspace";
 
 export type Usage = Record<string, { done: number; booked: number }>;
 export type ProjectsViewMode = "list" | "canvas";
@@ -26,6 +27,13 @@ interface Props {
 }
 
 type Sort = "recent" | "value" | "days" | "progress" | "left";
+
+/* Figures on the dark header — same glass cards as Clients (.cl-ov .cx-kpi). */
+const kIco = (d: string) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>;
+const kSpot = (e: { clientX: number; clientY: number; currentTarget: HTMLElement }) => {
+  const el = e.currentTarget, b = el.getBoundingClientRect();
+  el.style.setProperty("--mx", `${e.clientX - b.left}px`); el.style.setProperty("--my", `${e.clientY - b.top}px`);
+};
 
 export default function ProjectsView({
   clients, projects, projectTypes, usage, roles, onOpenProject, onReopen, onClose_, view = "list", blueprints = [],
@@ -157,17 +165,39 @@ export default function ProjectsView({
 
   return (
     <>
-<div className="pv-bar">
-        <div className="pv-search">
-          <span className="pv-search-ico" aria-hidden="true">⌕</span>
-          <input
-            className="pv-search-input"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search client, service, VAT…"
-          />
-          {q && <button className="pv-search-x" onClick={() => setQ("")} aria-label="Clear">×</button>}
+      <div className="cx-kpis pj-kpis" style={{ ["--n" as any]: 4 }}>
+        <div className="cx-kpi tone-mint" style={{ ["--i" as any]: 0 }} onPointerMove={kSpot}>
+          <span className="cx-kpi-top"><span className="cx-kpi-ico">{kIco("M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z")}</span><span className="cx-kpi-k">Projects</span></span>
+          <b className="cx-kpi-v">{shown.length}</b>
+          <span className="cx-kpi-sub">{shown.filter((p) => p.status !== "closed").length} still open</span>
         </div>
+        <div className="cx-kpi tone-teal" style={{ ["--i" as any]: 1 }} onPointerMove={kSpot}>
+          <span className="cx-kpi-top"><span className="cx-kpi-ico">{kIco("M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11")}</span><span className="cx-kpi-k">Signed</span></span>
+          <b className="cx-kpi-v">
+            {signedSplit.days.toLocaleString()}<em>d</em>
+            {signedSplit.hours > 0 && <><em className="pj-kpi-plus">/</em>{signedSplit.hours.toLocaleString()}<em>h</em></>}
+          </b>
+          <span className="cx-kpi-sub">committed to deliver</span>
+        </div>
+        <div className="cx-kpi tone-jade" style={{ ["--i" as any]: 2 }} onPointerMove={kSpot}>
+          <span className="cx-kpi-top"><span className="cx-kpi-ico">{kIco("M23 6l-9.5 9.5-5-5L1 18M17 6h6v6")}</span><span className="cx-kpi-k">Delivered</span></span>
+          <b className="cx-kpi-v">{pctDone}<em>%</em></b>
+          <span className="cx-kpi-bar"><i style={{ width: `${Math.max(0, Math.min(100, pctDone))}%` }} /></span>
+        </div>
+        <div className="cx-kpi tone-gold" style={{ ["--i" as any]: 3 }} onPointerMove={kSpot}>
+          <span className="cx-kpi-top"><span className="cx-kpi-ico">{kIco("M4 10h12M4 14h9M19 6a7.7 7.7 0 0 0-5.2-2A7.9 7.9 0 0 0 6 12c0 4.4 3.5 8 7.8 8 2 0 3.8-.8 5.2-2")}</span><span className="cx-kpi-k">Contract value</span></span>
+          <b className="cx-kpi-v">{Math.round(sumValue).toLocaleString()}<em>€</em></b>
+          <span className="cx-kpi-sub">across {shown.length} project{shown.length === 1 ? "" : "s"}</span>
+        </div>
+      </div>
+
+      <section className="cx-sheet pj-sheet">
+      <div className="cx-tools pj-tools">
+        <label className="cx-search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search client, service, VAT…" />
+          {q && <button onClick={() => setQ("")} aria-label="Clear">×</button>}
+        </label>
 
         <div className="pv-filter">
           <Select
@@ -222,32 +252,7 @@ export default function ProjectsView({
         </div>
 
         {anyFilter && <button className="pv-clear" onClick={clearAll}>Clear</button>}
-      </div>
-
-      <div className="cl-kpis">
-        <div className="cl-kpi">
-          <span className="cl-kpi-k">Projects</span>
-          <b className="cl-kpi-v">{shown.length}</b>
-          <span className="cl-kpi-sub">{shown.filter((p) => p.status !== "closed").length} still open</span>
-        </div>
-        <div className="cl-kpi">
-          <span className="cl-kpi-k">Signed</span>
-          <b className="cl-kpi-v">
-            {signedSplit.days.toLocaleString()}<em>d</em>
-            {signedSplit.hours > 0 && <><span className="cl-kpi-plus">/</span>{signedSplit.hours.toLocaleString()}<em>h</em></>}
-          </b>
-          <span className="cl-kpi-sub">committed to deliver</span>
-        </div>
-        <div className="cl-kpi">
-          <span className="cl-kpi-k">Delivered</span>
-          <b className="cl-kpi-v">{pctDone}<em>%</em></b>
-          <span className="cl-kpi-meter"><i style={{ width: `${pctDone}%` }} /></span>
-        </div>
-        <div className="cl-kpi cl-kpi-money">
-          <span className="cl-kpi-k">Contract value</span>
-          <b className="cl-kpi-v">{Math.round(sumValue).toLocaleString()}<em>€</em></b>
-          <span className="cl-kpi-sub">across {shown.length} project{shown.length === 1 ? "" : "s"}</span>
-        </div>
+        <span className="pj-count"><b>{shown.length}</b> of {projects.length}</span>
       </div>
 
       {shown.length === 0 ? (
@@ -274,11 +279,14 @@ export default function ProjectsView({
                 onClick={(e) => { if ((e.target as HTMLElement).closest("button, a, input")) return; setOpenId(p.id); }}
                 onKeyDown={(e) => { if (e.key === "Enter" && e.target === e.currentTarget) setOpenId(p.id); }}>
                 <div className="pv-cell pv-cell-id">
-                  <span className="pv-client">{clientName(p.clientId)}</span>
-                  <span className="pv-type">
-                    {typeName(p.projectTypeId)}
-                    <i className={`pv-dot-status ${closed ? "is-closed" : ""}`} />
-                    {closed ? "closed" : "open"}
+                  <ClientLogo className="cx-av pj-logo" name={clientName(p.clientId)} clientId={p.clientId} />
+                  <span className="pj-id">
+                    <span className="pv-client">{clientName(p.clientId)}</span>
+                    <span className="pv-type">
+                      {typeName(p.projectTypeId)}
+                      <i className={`pv-dot-status ${closed ? "is-closed" : ""}`} />
+                      {closed ? "closed" : "open"}
+                    </span>
                   </span>
                 </div>
 
@@ -341,6 +349,7 @@ export default function ProjectsView({
         </div>
         </div>
       )}
+      </section>
 
       {(() => {
         const p = openId ? projects.find((x) => x.id === openId) : null;
@@ -599,6 +608,7 @@ function ProjectCanvas({ projects, activity, blueprints, projectTypes, clientNam
                       <button type="button" key={p.id} className={`pjc-card ${stale ? "is-stale" : ""} ${!st.started && p.status !== "closed" ? "is-new" : ""}`}
                         style={{ ["--k" as any]: k } as CSSProperties} onClick={() => onOpen(p)}>
                         <span className="pjc-card-top">
+                          <ClientLogo className="pjc-logo" name={clientName(p.clientId)} clientId={p.clientId} />
                           <b title={clientName(p.clientId)}>{clientName(p.clientId)}</b>
                           <i className="pjc-pct">{Math.round(progressOf(p))}%</i>
                         </span>
@@ -765,7 +775,7 @@ function ProjectDrawer({ project: p, client, serviceName, blueprintName, unit, r
       <div className="pjd" role="dialog" aria-modal="true" aria-label={`${client?.name ?? "Project"} · ${serviceName}`}>
         <header className="pjd-hero">
           <div className="pjd-hero-l">
-            <span className="pjd-av">{initialsOf(client?.name ?? "?")}</span>
+            <ClientLogo className="pjd-av" name={client?.name ?? "?"} clientId={client?.id ?? p.clientId} />
             <div className="pjd-hero-t">
               <span className="pjd-eyebrow">Implementation · {serviceName}</span>
               <h2>{client?.name ?? "Project"}</h2>

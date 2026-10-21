@@ -619,7 +619,7 @@ export function ClientList({
 
 /* The dark header floats as a rounded card (index.css: .fh). The card is sized to the header + figures
    (they change height with the data, the tab and the width) and a soft glow follows the pointer over it. */
-function useFloatingHero(ref: { current: HTMLElement | null }, sel: string) {
+export function useFloatingHero(ref: { current: HTMLElement | null }, sel: string) {
   useEffect(() => {
     const root = ref.current;
     if (!root) return;
@@ -643,7 +643,7 @@ function useFloatingHero(ref: { current: HTMLElement | null }, sel: string) {
     return () => { ro.disconnect(); mo.disconnect(); if (raf) cancelAnimationFrame(raf); };
   });
 }
-function fhMove(e: { clientX: number; clientY: number; currentTarget: HTMLElement; pointerType?: string }) {
+export function fhMove(e: { clientX: number; clientY: number; currentTarget: HTMLElement; pointerType?: string }) {
   if (e.pointerType && e.pointerType !== "mouse") return;
   const root = e.currentTarget;
   const r = root.getBoundingClientRect();
@@ -653,7 +653,7 @@ function fhMove(e: { clientX: number; clientY: number; currentTarget: HTMLElemen
   root.style.setProperty("--fh-y", `${Math.round(y)}px`);
   root.style.setProperty("--fh-on", x >= 0 && y >= 0 && y <= h && x <= r.width - 28 ? "1" : "0");
 }
-const fhLeave = (e: { currentTarget: HTMLElement }) => e.currentTarget.style.setProperty("--fh-on", "0");
+export const fhLeave = (e: { currentTarget: HTMLElement }) => e.currentTarget.style.setProperty("--fh-on", "0");
 
 export default function ClientsPage() {
   const fhRef = useRef<HTMLDivElement>(null);
