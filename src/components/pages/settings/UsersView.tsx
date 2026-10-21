@@ -1,4 +1,5 @@
 import { LEVELS, TITLES } from "./NewUserModal";
+import { PageLoader } from "../../framework/AppLayout";
 
 export interface UserRow {
   id: string;
@@ -46,7 +47,7 @@ export default function UsersView({ users, loading, scope, onBack, onNew, onOpen
       </header>
 
       {loading ? (
-        <p className="st-note">Loading…</p>
+        <PageLoader fill={false} size={96} label="Loading users" />
       ) : users.length === 0 ? (
         <p className="st-note">No users yet.</p>
       ) : (

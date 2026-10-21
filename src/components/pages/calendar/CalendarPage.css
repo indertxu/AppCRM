@@ -2610,3 +2610,14 @@
 /* v7: the floating bar is a little narrower — quieter figures first */
 @media (max-width: 1520px) { .cv-stat-sub { display: none; } }
 @media (max-width: 1360px) { .cv-stat.is-cut span { display: none; } }
+
+/* ---- Today steps aside while today is on screen (week/month), slides back in once you leave ---- */
+.cv-nav-todaywrap {
+  display: inline-grid; grid-template-columns: 1fr; align-items: center; opacity: 1;
+  transition: grid-template-columns 0.5s cubic-bezier(0.34, 1.35, 0.5, 1), opacity 0.3s ease, margin 0.5s cubic-bezier(0.34, 1.35, 0.5, 1);
+}
+.cv-nav-todayin { display: inline-flex; align-items: center; min-width: 0; overflow: hidden; }
+.cv-nav-todaywrap .cv-nav-today { transform: scale(1); transition: background 0.18s, color 0.18s, transform 0.45s cubic-bezier(0.34, 1.5, 0.5, 1) !important; }
+.cv-nav-todaywrap.is-here { grid-template-columns: 0fr; opacity: 0; margin-right: -2px; pointer-events: none; }
+.cv-nav-todaywrap.is-here .cv-nav-today { transform: scale(0.6) !important; }
+@media (prefers-reduced-motion: reduce) { .cv-nav-todaywrap, .cv-nav-todaywrap .cv-nav-today { transition: none !important; } }

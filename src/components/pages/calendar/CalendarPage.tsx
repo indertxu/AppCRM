@@ -18,6 +18,7 @@ import ActualModal, { type ActualValue } from "./ActualModal";
 import { supabase } from "../../api/supabase";
 import { deleteEntryFromOutlook, syncCalendarEntry } from "../../api/outlookSync";
 import HomeTodo from "../homepage/shared/HomeTodo";
+import { PageCover } from "../../framework/AppLayout";
 import "./CalendarPage.css";
 
 /** Fallback window, used until the configured hours arrive. */
@@ -574,6 +575,10 @@ const [targets, setTargets] = useState<Targets>({ perDay: 1, minPerDay: 0.5, min
   /** The roles sold on each project (rate per role), and every role of the catalogue. */
   const [projLines, setProjLines] = useState<Record<string, RoleLine[]>>({});
   const [allRoles, setAllRoles] = useState<ClientRole[]>([]);
+  /** The shared loader covers the page until the first week of entries is in. */
+  const [firstLoad, setFirstLoad] = useState(true);
+  // Never leave the cover up if the first fetch fails.
+  useEffect(() => { const t = window.setTimeout(() => setFirstLoad(false), 9000); return () => window.clearTimeout(t); }, []);
 useEffect(() => {
     (async () => {
       // Only the weeks around the one on screen. Loading two years to draw
@@ -591,6 +596,7 @@ useEffect(() => {
         ce.push(...(rows ?? []));
         if (!rows || rows.length < 1000) break;
       }
+      setFirstLoad(false);
       setEntries((ce ?? []).map((r: Record<string, unknown>) => ({
         id: r.id as string,
         dateKey: r.date_key as string,
@@ -801,6 +807,13 @@ if (view === "month") {
     }
     setView(next);
   };
+
+// Is today on screen? (then the Today button steps aside)
+  const atToday = (() => {
+    const now = new Date();
+    if (view === "month") return monthAnchor.getFullYear() === now.getFullYear() && monthAnchor.getMonth() === now.getMonth();
+    return startOfWeek(now).getTime() === startOfWeek(weekStart).getTime();
+  })();
 
 const goToday = () => {
     setMonthAnchor(new Date());
@@ -1177,6 +1190,7 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
 
   return (
     <div className="cal cal-ov cal-v3">
+      <PageCover show={firstLoad} label="Loading your calendar" />
       <div className="cal-scan-wrap" aria-hidden="true">
         <div className="cal-scan" />
       </div>
@@ -1198,8 +1212,13 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
             <button className={view === "month" ? "is-on" : ""} onClick={() => switchView("month")} title="Month (M)">Month</button>
           </div>
           <div className="cv-nav">
-            <button className="cv-nav-today" onClick={goToday} title="Jump to today (T)">Today</button>
-            <span className="cv-nav-sep" />
+            {/* Today only shows once you leave the current week / month (it slides in and out) */}
+            <span className={`cv-nav-todaywrap ${atToday ? "is-here" : ""}`} aria-hidden={atToday}>
+              <span className="cv-nav-todayin">
+                <button className="cv-nav-today" onClick={goToday} title="Jump to today (T)" tabIndex={atToday ? -1 : 0}>Today</button>
+                <span className="cv-nav-sep" />
+              </span>
+            </span>
             <button className="cv-nav-arrow" onClick={() => go(-1)} aria-label={view === "month" ? "Previous month" : "Previous week"} title="Previous (←)">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
             </button>

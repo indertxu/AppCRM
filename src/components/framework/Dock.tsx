@@ -27,6 +27,18 @@ const homeIcon = (
     <path d="M8.6 7.6l2.4-1 1.6.8 2.8-1.6" strokeWidth="1.4" />
   </svg>
 );
+const successIcon = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 20.5s-7.5-4.4-7.5-10.2A4.3 4.3 0 0 1 12 7.6a4.3 4.3 0 0 1 7.5 2.7c0 5.8-7.5 10.2-7.5 10.2z" />
+    <path d="M8.5 12.2h2l1.2-2.2 1.6 4 1.2-1.8h1.5" />
+  </svg>
+);
+const marketingIcon = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M4 10v4a1 1 0 0 0 1 1h2l5 4V5L7 9H5a1 1 0 0 0-1 1z" />
+    <path d="M16 9.5a3.5 3.5 0 0 1 0 5M18.5 7a7 7 0 0 1 0 10" />
+  </svg>
+);
 const calendarIcon = (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
     <rect x="3" y="4.5" width="18" height="16" rx="3" />
@@ -105,6 +117,8 @@ const items: DockItem[] = [
   { label: "Clients", path: "/clients", icon: clientsIcon, page: "clients" },
   { label: "Projects", path: "/projects", icon: projectsIcon, page: "projects" },
   { label: "Deals", path: "/sales", icon: salesIcon, page: "sales" },
+  { label: "Customer success", path: "/success", icon: successIcon, page: "success" },
+  { label: "Marketing", path: "/marketing", icon: marketingIcon, page: "marketing" },
   { label: "Management", path: "/management", icon: managementIcon, page: "management" },
   { label: "Settings", path: "/settings", icon: settingsIcon, page: "settings" },
 ];

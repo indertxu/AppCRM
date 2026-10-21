@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../../api/supabase";
 import { useAuth } from "../../api/AuthProvider";
-import { markHandoffConverted } from "../sales/sales/salesApi";
+import { markHandoffConverted, createTracking } from "../sales/sales/salesApi";
 import { roleSeesAll, saveCompany, saveContact } from "../companies/companiesApi";
 import {
   emptyAddress, mapClientRole, sortRoles, parseRoleLines, legacyRoleMap, resolveRoleKey, legacyColumnsOf,
@@ -438,3 +438,224 @@ export function useClientsData() {
 }
 
 export type ClientsData = ReturnType<typeof useClientsData>;
+/* ============================================================================
+   Customer success (17_customer_success.sql): owners, cadence, health,
+   upsells, QBRs, ARR base, revenue movements, automatic follow-ups.
+   Every call tolerates the tables not being there yet (returns NEEDS_CS).
+   ============================================================================ */
+export const NEEDS_CS = "Run 17_customer_success.sql in Supabase to turn on customer success.";
+const csMissing = (e: { message?: string } | null | undefined) => !!e && /relation|does not exist|schema cache|column/i.test(e.message ?? "");
+const csErr = (e: { message?: string } | null | undefined) => (!e ? null : csMissing(e) ? NEEDS_CS : e.message ?? "Not saved.");
+
+export type CsHealthStatus = "green" | "amber" | "red";
+export const CS_REASONS: { key: string; label: string; tone: CsHealthStatus }[] = [
+  { key: "healthy", label: "Healthy client", tone: "green" },
+  { key: "champion_left", label: "Champion left", tone: "red" },
+  { key: "low_usage", label: "Low usage", tone: "amber" },
+  { key: "billing_issue", label: "Billing issue", tone: "amber" },
+  { key: "unhappy", label: "Unhappy with the service", tone: "red" },
+  { key: "competitor", label: "Talking to a competitor", tone: "red" },
+  { key: "budget_cut", label: "Budget cut", tone: "amber" },
+  { key: "merger", label: "Merger / reorganisation", tone: "amber" },
+  { key: "other", label: "Other", tone: "amber" },
+];
+export const UPSELL_STATUSES: { key: CsUpsell["status"]; label: string }[] = [
+  { key: "idea", label: "Idea" }, { key: "planned", label: "Planned" }, { key: "contacted", label: "Contacted" },
+  { key: "proposal", label: "Proposal" }, { key: "won", label: "Won" }, { key: "lost", label: "Lost" },
+];
+export const SPICED = [
+  { key: "s", label: "Situation" }, { key: "p", label: "Pain" }, { key: "i", label: "Impact" },
+  { key: "c", label: "Critical event" }, { key: "e", label: "Decision criteria" }, { key: "d", label: "Decision process" },
+] as const;
+
+export interface CsOwner { id: string; client_id: string; profile_id: string; is_primary: boolean }
+export interface CsHealth { client_id: string; status: CsHealthStatus; reason: string | null; note: string | null; updated_at: string; updated_by: string | null }
+export interface CsUpsell {
+  id: string; client_id: string; kind: "product" | "tier" | "service" | "other";
+  product_id: string | null; tier_id: string | null; service_id: string | null;
+  title: string; est_value: number; ideal_contact_date: string | null;
+  status: "idea" | "planned" | "contacted" | "proposal" | "won" | "lost";
+  owner_id: string | null; notes: string | null; deal_id: string | null; won_at: string | null;
+  created_at: string; updated_at: string;
+}
+export interface CsQbr { id: string; client_id: string; meeting_date: string; spiced: Record<string, boolean>; status: "planned" | "done" | "cancelled"; notes: string | null; owner_id: string | null }
+export interface ArrSnapshot { id: string; year: number; initial_arr: number; by_client: Record<string, number>; taken_at: string }
+export interface RevenueEvent { id: string; client_id: string | null; event_date: string; kind: "expansion" | "contraction" | "churn"; amount: number; reason: string | null; upsell_id: string | null }
+export interface CsSettings { id: string | null; default_cadence_days: number; auto_tasks: boolean }
+export interface CsData {
+  ready: boolean;
+  owners: CsOwner[]; health: CsHealth[]; upsells: CsUpsell[]; qbrs: CsQbr[];
+  snapshots: ArrSnapshot[]; events: RevenueEvent[]; settings: CsSettings;
+  /** Each client's own cadence (days), when it has one. */
+  cadence: Record<string, number>;
+}
+const num = (v: unknown) => Number(v) || 0;
+
+export async function loadCsData(): Promise<CsData> {
+  const empty: CsData = { ready: false, owners: [], health: [], upsells: [], qbrs: [], snapshots: [], events: [], settings: { id: null, default_cadence_days: 30, auto_tasks: true }, cadence: {} };
+  const [ow, he, up, qb, sn, ev, st, cl] = await Promise.all([
+    supabase.from("client_cs_owners").select("id, client_id, profile_id, is_primary"),
+    supabase.from("client_health").select("client_id, status, reason, note, updated_at, updated_by"),
+    supabase.from("client_upsells").select("*").order("created_at", { ascending: false }),
+    supabase.from("qbr_meetings").select("*").order("meeting_date"),
+    supabase.from("arr_snapshots").select("*").order("year"),
+    supabase.from("cs_revenue_events").select("*").order("event_date", { ascending: false }),
+    supabase.from("cs_settings").select("*").limit(1).maybeSingle(),
+    supabase.from("clients").select("id, contact_cadence_days"),
+  ]);
+  if (ow.error && csMissing(ow.error)) return empty;
+  const cadence: Record<string, number> = {};
+  ((cl.error ? [] : cl.data ?? []) as any[]).forEach((r) => { if (r.contact_cadence_days) cadence[r.id] = Number(r.contact_cadence_days); });
+  const s: any = st.data;
+  return {
+    ready: true,
+    owners: (ow.data ?? []) as CsOwner[],
+    health: (he.data ?? []) as CsHealth[],
+    upsells: ((up.data ?? []) as any[]).map((u) => ({ ...u, est_value: num(u.est_value) })) as CsUpsell[],
+    qbrs: ((qb.data ?? []) as any[]).map((q) => ({ ...q, spiced: q.spiced ?? {} })) as CsQbr[],
+    snapshots: ((sn.data ?? []) as any[]).map((x) => ({ ...x, initial_arr: num(x.initial_arr), by_client: x.by_client ?? {} })) as ArrSnapshot[],
+    events: ((ev.data ?? []) as any[]).map((x) => ({ ...x, amount: num(x.amount) })) as RevenueEvent[],
+    settings: s ? { id: s.id, default_cadence_days: Number(s.default_cadence_days) || 30, auto_tasks: s.auto_tasks !== false } : empty.settings,
+    cadence,
+  };
+}
+
+/** Who looks after a client: the whole list (the primary one first). */
+export async function setClientOwners(clientId: string, profileIds: string[], primaryId: string | null): Promise<string | null> {
+  const { data: cur, error } = await supabase.from("client_cs_owners").select("id, profile_id").eq("client_id", clientId);
+  if (error) return csErr(error);
+  const had = new Map(((cur ?? []) as any[]).map((r) => [r.profile_id as string, r.id as string]));
+  const drop = [...had.keys()].filter((p) => !profileIds.includes(p));
+  if (drop.length) { const { error: e } = await supabase.from("client_cs_owners").delete().eq("client_id", clientId).in("profile_id", drop); if (e) return csErr(e); }
+  const add = profileIds.filter((p) => !had.has(p));
+  if (add.length) { const { error: e } = await supabase.from("client_cs_owners").insert(add.map((p) => ({ client_id: clientId, profile_id: p, is_primary: p === primaryId }))); if (e) return csErr(e); }
+  // one primary at most
+  if (profileIds.length) {
+    const prim = primaryId && profileIds.includes(primaryId) ? primaryId : profileIds[0];
+    await supabase.from("client_cs_owners").update({ is_primary: false }).eq("client_id", clientId).neq("profile_id", prim);
+    await supabase.from("client_cs_owners").update({ is_primary: true }).eq("client_id", clientId).eq("profile_id", prim);
+  }
+  return null;
+}
+
+export async function saveClientHealth(clientId: string, h: { status: CsHealthStatus; reason: string | null; note: string | null }): Promise<string | null> {
+  const { data: auth } = await supabase.auth.getUser();
+  const row = { client_id: clientId, status: h.status, reason: h.reason, note: h.note, updated_at: new Date().toISOString(), updated_by: auth.user?.id ?? null };
+  const { error } = await supabase.from("client_health").upsert(row, { onConflict: "client_id" });
+  return csErr(error);
+}
+
+export async function saveUpsell(u: Partial<CsUpsell> & { client_id: string; title: string }): Promise<{ upsell: CsUpsell | null; error: string | null }> {
+  const row: any = {
+    client_id: u.client_id, kind: u.kind ?? "product", product_id: u.product_id ?? null, tier_id: u.tier_id ?? null, service_id: u.service_id ?? null,
+    title: u.title.trim(), est_value: num(u.est_value), ideal_contact_date: u.ideal_contact_date || null, status: u.status ?? "idea",
+    owner_id: u.owner_id ?? null, notes: u.notes?.trim() || null, deal_id: u.deal_id ?? null,
+    won_at: u.status === "won" ? (u.won_at ?? new Date().toISOString().slice(0, 10)) : null,
+    updated_at: new Date().toISOString(),
+  };
+  const res = u.id
+    ? await supabase.from("client_upsells").update(row).eq("id", u.id).select().single()
+    : await supabase.from("client_upsells").insert(row).select().single();
+  if (res.error || !res.data) return { upsell: null, error: csErr(res.error) ?? "Not saved." };
+  const saved = { ...(res.data as any), est_value: num((res.data as any).est_value) } as CsUpsell;
+  // a won upsell is expansion revenue (one movement per upsell, kept in step)
+  if (saved.status === "won") {
+    const { data: ex } = await supabase.from("cs_revenue_events").select("id").eq("upsell_id", saved.id).maybeSingle();
+    const ev = { client_id: saved.client_id, kind: "expansion", amount: saved.est_value, event_date: saved.won_at ?? new Date().toISOString().slice(0, 10), reason: `Upsell: ${saved.title}`, upsell_id: saved.id };
+    if (ex) await supabase.from("cs_revenue_events").update(ev).eq("id", (ex as any).id);
+    else await supabase.from("cs_revenue_events").insert(ev);
+  } else {
+    await supabase.from("cs_revenue_events").delete().eq("upsell_id", saved.id);
+  }
+  return { upsell: saved, error: null };
+}
+export async function deleteUpsell(id: string): Promise<string | null> {
+  const { error } = await supabase.from("client_upsells").delete().eq("id", id);
+  return csErr(error);
+}
+
+export async function saveQbr(q: Partial<CsQbr> & { client_id: string; meeting_date: string }): Promise<{ qbr: CsQbr | null; error: string | null }> {
+  const row: any = { client_id: q.client_id, meeting_date: q.meeting_date, spiced: q.spiced ?? {}, status: q.status ?? "planned", notes: q.notes ?? null, owner_id: q.owner_id ?? null };
+  const res = q.id ? await supabase.from("qbr_meetings").update(row).eq("id", q.id).select().single() : await supabase.from("qbr_meetings").insert(row).select().single();
+  if (res.error || !res.data) return { qbr: null, error: csErr(res.error) ?? "Not saved." };
+  return { qbr: { ...(res.data as any), spiced: (res.data as any).spiced ?? {} } as CsQbr, error: null };
+}
+export async function deleteQbr(id: string): Promise<string | null> {
+  const { error } = await supabase.from("qbr_meetings").delete().eq("id", id);
+  return csErr(error);
+}
+
+/** Freezes the ARR a year starts with (the base for NRR and churn). */
+export async function freezeArr(year: number, total: number, byClient: Record<string, number>): Promise<string | null> {
+  const { data: ex } = await supabase.from("arr_snapshots").select("id").eq("year", year).maybeSingle();
+  const row = { year, initial_arr: Math.round(total * 100) / 100, by_client: byClient, taken_at: new Date().toISOString() };
+  const { error } = ex ? await supabase.from("arr_snapshots").update(row).eq("id", (ex as any).id) : await supabase.from("arr_snapshots").insert(row);
+  return csErr(error);
+}
+
+export async function addRevenueEvent(e: Omit<RevenueEvent, "id" | "upsell_id">): Promise<string | null> {
+  const { error } = await supabase.from("cs_revenue_events").insert({ ...e, amount: Math.abs(num(e.amount)) });
+  return csErr(error);
+}
+export async function deleteRevenueEvent(id: string): Promise<string | null> {
+  const { error } = await supabase.from("cs_revenue_events").delete().eq("id", id);
+  return csErr(error);
+}
+
+export async function saveCsSettings(s: CsSettings): Promise<string | null> {
+  const row = { default_cadence_days: Math.max(1, Math.round(s.default_cadence_days)), auto_tasks: s.auto_tasks, updated_at: new Date().toISOString() };
+  const { error } = s.id ? await supabase.from("cs_settings").update(row).eq("id", s.id) : await supabase.from("cs_settings").insert(row);
+  return csErr(error);
+}
+export async function setClientCadence(clientId: string, days: number | null): Promise<string | null> {
+  const { error } = await supabase.from("clients").update({ contact_cadence_days: days && days > 0 ? Math.round(days) : null }).eq("id", clientId);
+  return csErr(error);
+}
+
+/** Logs a contact with a client (the same log the client popup keeps). */
+export async function logClientContact(clientId: string, l: { channel: string; reason?: string | null; who?: string | null }): Promise<string | null> {
+  const { data: auth } = await supabase.auth.getUser();
+  const row = { client_id: clientId, contacted_at: new Date().toISOString(), channel: l.channel, contact_name: l.who?.trim() || null, reason: l.reason?.trim() || null, logged_by: auth.user?.id ?? null };
+  const { error } = await supabase.from("client_contacts_log").insert(row);
+  return error?.message ?? null;
+}
+
+/** A follow-up for a client, as a ticket on someone's desk (falls back to the client's own tasks before 14_tickets.sql). */
+export async function createClientFollowUp(clientId: string, title: string, assigneeId: string | null, ref?: string): Promise<string | null> {
+  const due = new Date(Date.now() + 2 * 864e5).toISOString();
+  const { data: auth } = await supabase.auth.getUser();
+  const me = auth.user?.id ?? null;
+  const full = { tracking_id: null, title, kind: "quick", priority: "high", status: "todo", progress: 0, due_at: due, client_id: clientId, assignee_id: assigneeId, external_ref: ref ?? null, source: "manual", stage: "new" };
+  const { error } = await supabase.from("tracking_tasks").insert(full);
+  if (!error) return null;
+  if (!csMissing(error)) return error.message;
+  const { error: e2 } = await supabase.from("client_tasks").insert({ client_id: clientId, title, due_at: due, priority: "high", status: "todo", done: false, created_by: me });
+  return e2?.message ?? null;
+}
+
+/** Runs the automatic follow-ups now (the database function; idempotent). Number created, or null when it isn't installed. */
+export async function generateContactTasks(): Promise<number | null> {
+  const { data, error } = await supabase.rpc("cs_generate_contact_tasks");
+  if (error) return null;
+  return Number(data) || 0;
+}
+
+/** Turns an upsell into a deal in the first sales pipeline (its first phase), linked back to the upsell. */
+export async function convertUpsellToDeal(u: CsUpsell, clientName: string): Promise<{ dealId: string | null; error: string | null }> {
+  const { data: cl } = await supabase.from("clients").select("company_id").eq("id", u.client_id).maybeSingle();
+  const { data: pipes } = await supabase.from("pipelines").select("id, is_sales, sort_order, created_at").order("created_at");
+  const ps = ((pipes ?? []) as any[]).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+  const pipe = ps.find((p) => p.is_sales) ?? ps[0];
+  if (!pipe) return { dealId: null, error: "There is no sales pipeline yet." };
+  const { data: phases } = await supabase.from("pipeline_phases").select("id, pos_x, sales_outcome").eq("pipeline_id", pipe.id);
+  const first = ((phases ?? []) as any[]).filter((p) => !p.sales_outcome).sort((a, b) => (a.pos_x ?? 0) - (b.pos_x ?? 0))[0];
+  const dealId = await createTracking({
+    company_id: (cl as any)?.company_id ?? null, pipeline_id: pipe.id,
+    products: u.product_id ? [{ id: u.product_id, price: u.est_value }] : [],
+    current_phase_id: first?.id ?? null, contactIds: [],
+    deal_name: `${clientName} · ${u.title}`,
+  });
+  if (!dealId) return { dealId: null, error: "Could not create the deal." };
+  const { error } = await supabase.from("client_upsells").update({ deal_id: dealId, status: u.status === "idea" || u.status === "planned" ? "proposal" : u.status }).eq("id", u.id);
+  return { dealId, error: csErr(error) };
+}

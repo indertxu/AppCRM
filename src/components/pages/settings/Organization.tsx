@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useRef, useState, useCallback } from "react";
+import { PageLoader } from "../../framework/AppLayout";
 import { createPortal } from "react-dom";
 import { supabase } from "../../api/supabase";
 import Select from "../../framework/Select";
@@ -614,7 +615,7 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
           onPointerUp={endPan}
           onClick={(e) => { if (e.target === e.currentTarget && downOnEmpty.current) { setSelDeptId(null); setSelUserId(null); } }}
         >
-          {loading && <div className="org-loading">Loading…</div>}
+          {loading && <div className="org-loading"><PageLoader fill={false} size={96} tone="dark" label="Loading the organization" /></div>}
 
           <div
             ref={trashRef}

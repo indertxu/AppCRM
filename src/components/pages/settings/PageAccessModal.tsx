@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { PageLoader } from "../../framework/AppLayout";
 import { createPortal } from "react-dom";
 import { supabase } from "../../api/supabase";
 import { LEVELS } from "./NewUserModal";
@@ -23,6 +24,8 @@ const PAGE_ICON: Record<PageKey, ReactNode> = {
   projects: svg(<><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><path d="M8 13h8M8 16h5" /></>),
   sales: svg(<><path d="M3 3v18h18" /><path d="M7 14l3-3 3 2 5-6" /></>),
   management: svg(<><rect x="3" y="3" width="8" height="7" rx="1.6" /><rect x="13" y="3" width="8" height="4.5" rx="1.6" /><rect x="13" y="10.5" width="8" height="10.5" rx="1.6" /><rect x="3" y="13" width="8" height="8" rx="1.6" /></>),
+  success: svg(<><path d="M12 20.5s-7.5-4.4-7.5-10.2A4.3 4.3 0 0 1 12 7.6a4.3 4.3 0 0 1 7.5 2.7c0 5.8-7.5 10.2-7.5 10.2z" /><path d="M8.5 12.2h2l1.2-2.2 1.6 4 1.2-1.8h1.5" /></>),
+  marketing: svg(<><path d="M4 10v4a1 1 0 0 0 1 1h2l5 4V5L7 9H5a1 1 0 0 0-1 1z" /><path d="M16 9.5a3.5 3.5 0 0 1 0 5M18.5 7a7 7 0 0 1 0 10" /></>),
   settings: svg(<><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1" /></>),
 };
 const LOCK = svg(<><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></>);
@@ -437,7 +440,7 @@ export default function PageAccessModal({ onClose, scope = "all", focus }: { onC
           </div>
         )}
 
-        {loading ? <div className="pas-loading">Loading…</div> : mode === "overview" ? (
+        {loading ? <div className="pas-loading"><PageLoader fill={false} size={88} label="Loading access rules" /></div> : mode === "overview" ? (
           /* ─────────── overview: every person × every page / panel ─────────── */
           <div className="pas-ov">
             <div className="pas-ov-top">

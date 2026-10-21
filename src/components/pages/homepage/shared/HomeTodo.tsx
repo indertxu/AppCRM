@@ -37,6 +37,8 @@ import {
   type MyTask, type DelegatedTask, type TaskPriority, type TaskStatus, type TaskKind, type TaskUpdate, type TaskTemplate, type TaskStep,
 } from "../../sales/sales/salesApi";
 import { isoDay } from "./HomeCalendar";
+import { outlookMailStatus, syncTicketMail, sendOutlookMail, connectOutlook, fetchMailAttachment, OUTLOOK_CONNECTION_EVENT, type OutlookMailStatus, type MailSyncResult } from "../../../api/outlookSync";
+import { loadPrefs, savePref } from "../../companies/companiesApi";
 import "./HomeShared.css";
 
 type Tab = "quick" | "process" | "delegated" | "done";
@@ -1205,6 +1207,10 @@ export interface Ticket {
   tags: string[]; source: string; due: string | null;
   createdAt: string; updatedAt: string | null; resolvedAt: string | null;
   kind: TaskKind; progress: number; checklist: TaskStep[];
+  /** First reply to the requester (SLA). */
+  firstResponseAt: string | null;
+  /** Merged into this ticket (19_ticket_mail.sql). */
+  mergedInto: string | null;
 }
 export const ticketRef = (t: Pick<Ticket, "no" | "id">) => (t.no ? `T-${t.no}` : `#${t.id.slice(0, 4).toUpperCase()}`);
 
@@ -1225,6 +1231,7 @@ function toTicket(r: any, watchers: string[]): Ticket {
     kind: r.kind === "process" ? "process" : "quick", progress: Math.max(0, Math.min(100, Number(r.progress) || 0)),
     checklist: (Array.isArray(r.checklist) ? r.checklist : []).filter((x: any) => x && typeof x.text === "string")
       .map((x: any) => ({ id: String(x.id ?? newStepId()), text: x.text, done: !!x.done })),
+    firstResponseAt: r.first_response_at ?? null, mergedInto: r.merged_into ?? null,
   };
 }
 
@@ -1403,6 +1410,216 @@ export async function loadTicket(id: string): Promise<{ ticket: Ticket | null; r
   return { ticket: toTicket(data, watchers), ready: "ticket_no" in (data as any) };
 }
 
+
+/* =====================================================================
+   E-MAIL, SLA, RULES, MERGING (19_ticket_mail.sql + the outlook-sync function)
+   ===================================================================== */
+export const MAIL_SQL = "Run 19_ticket_mail.sql in Supabase to bring e-mail into the desk.";
+const missingTable = (m?: string | null) => /relation|does not exist|schema cache|column/i.test(m ?? "");
+
+export interface MailPerson { name: string; email: string }
+export interface MailAttachment { id: string; name: string; size: number; contentType: string }
+export interface MailMsg {
+  id: string; ticketId: string | null; mailboxId: string | null; ruleId: string | null; direction: "in" | "out";
+  fromName: string | null; fromEmail: string | null; to: MailPerson[]; cc: MailPerson[];
+  subject: string; snippet: string; html: string; at: string; conversationId: string | null;
+  attachments: MailAttachment[]; status: "new" | "assigned" | "ignored"; sentBy: string | null;
+}
+const toMail = (r: any): MailMsg => ({
+  id: r.id, ticketId: r.ticket_id ?? null, mailboxId: r.mailbox_id ?? null, ruleId: r.rule_id ?? null, direction: r.direction === "out" ? "out" : "in",
+  fromName: r.from_name ?? null, fromEmail: r.from_email ?? null,
+  to: Array.isArray(r.to_recipients) ? r.to_recipients : [], cc: Array.isArray(r.cc_recipients) ? r.cc_recipients : [],
+  subject: r.subject ?? "", snippet: r.snippet ?? "", html: r.body_html ?? "", at: r.received_at ?? r.created_at,
+  conversationId: r.conversation_id ?? null, attachments: Array.isArray(r.attachments) ? r.attachments : [],
+  status: r.status === "assigned" || r.status === "ignored" ? r.status : "new", sentBy: r.sent_by ?? null,
+});
+/** The e-mails of a ticket (in and out), oldest first. null = the table is missing. */
+export async function loadTicketMail(ticketId: string): Promise<MailMsg[] | null> {
+  const { data, error } = await supabase.from("ticket_mail_messages").select("*").eq("ticket_id", ticketId).order("received_at");
+  if (error) return missingTable(error.message) ? null : [];
+  return ((data ?? []) as any[]).map(toMail);
+}
+/** Mail that reached the desk and isn't on a ticket yet. null = the table is missing. */
+export async function loadInboxMail(): Promise<MailMsg[] | null> {
+  const { data, error } = await supabase.from("ticket_mail_messages").select("*").eq("status", "new").is("ticket_id", null)
+    .order("received_at", { ascending: false }).limit(300);
+  if (error) return missingTable(error.message) ? null : [];
+  return ((data ?? []) as any[]).map(toMail);
+}
+/** Puts a mail (and the rest of its conversation still in the Inbox) on a ticket. */
+export async function setMailTicket(m: MailMsg, ticketId: string): Promise<string | null> {
+  const { error } = await supabase.from("ticket_mail_messages").update({ ticket_id: ticketId, status: "assigned" }).eq("id", m.id);
+  if (error) return error.message;
+  if (m.conversationId) await supabase.from("ticket_mail_messages").update({ ticket_id: ticketId, status: "assigned" }).eq("conversation_id", m.conversationId).is("ticket_id", null);
+  tell();
+  return null;
+}
+export async function ignoreMail(id: string): Promise<string | null> {
+  const { error } = await supabase.from("ticket_mail_messages").update({ status: "ignored" }).eq("id", id);
+  return error?.message ?? null;
+}
+/** A new ticket from an e-mail: subject, text, requester (and their contact / company when known). */
+export async function createTicketFromMail(m: MailMsg, dir: Directory, ready: boolean, extra: Partial<Ticket> = {}): Promise<{ id: string | null; error: string | null }> {
+  const contact = m.fromEmail ? dir.contacts.find((c) => (c.email ?? "").toLowerCase() === m.fromEmail!.toLowerCase()) : undefined;
+  const res = await createTicket({
+    title: (m.subject || "(no subject)").slice(0, 300), description: m.snippet, source: "email",
+    requesterName: m.fromName, requesterEmail: m.fromEmail, requesterContactId: contact?.id ?? null, assignee: dir.me,
+    ...extra,
+  }, ready);
+  if (res.id) await setMailTicket(m, res.id);
+  return res;
+}
+
+/* ---- SLA ---- */
+export interface SlaTarget { firstResponse: number | null; resolution: number | null }   // minutes
+export type SlaMap = Record<TaskPriority, SlaTarget>;
+export const DEFAULT_SLA: SlaMap = {
+  urgent: { firstResponse: 60, resolution: 480 }, high: { firstResponse: 240, resolution: 1440 },
+  normal: { firstResponse: 480, resolution: 4320 }, low: { firstResponse: 1440, resolution: 10080 },
+};
+export async function loadSla(): Promise<{ sla: SlaMap; ready: boolean }> {
+  const { data, error } = await supabase.from("ticket_sla").select("priority, first_response_minutes, resolution_minutes");
+  if (error) return { sla: DEFAULT_SLA, ready: false };
+  const out: SlaMap = { ...DEFAULT_SLA };
+  ((data ?? []) as any[]).forEach((r) => {
+    if (r.priority in out) out[r.priority as TaskPriority] = { firstResponse: r.first_response_minutes ?? null, resolution: r.resolution_minutes ?? null };
+  });
+  return { sla: out, ready: true };
+}
+export async function saveSla(priority: TaskPriority, t: SlaTarget): Promise<string | null> {
+  const row = { priority, first_response_minutes: t.firstResponse, resolution_minutes: t.resolution };
+  const { data } = await supabase.from("ticket_sla").select("id").eq("priority", priority).maybeSingle();
+  const { error } = data ? await supabase.from("ticket_sla").update(row).eq("id", (data as any).id) : await supabase.from("ticket_sla").insert(row);
+  return error ? (missingTable(error.message) ? MAIL_SQL : error.message) : null;
+}
+/** Where a ticket stands against its SLA right now. */
+export interface SlaState { kind: "response" | "resolution"; dueAt: number; left: number; window: number; breached: boolean }
+export function slaOf(t: Ticket, sla: SlaMap, now = Date.now()): SlaState | null {
+  if (!isActive(t.stage) || t.mergedInto) return null;
+  const target = sla[t.priority];
+  const start = new Date(t.createdAt).getTime();
+  if (!t.firstResponseAt && target.firstResponse) {
+    const dueAt = start + target.firstResponse * 60000;
+    return { kind: "response", dueAt, left: dueAt - now, window: target.firstResponse * 60000, breached: dueAt < now };
+  }
+  if (target.resolution) {
+    const dueAt = start + target.resolution * 60000;
+    return { kind: "resolution", dueAt, left: dueAt - now, window: target.resolution * 60000, breached: dueAt < now };
+  }
+  return null;
+}
+export const span = (ms: number) => {
+  const m = Math.max(0, Math.round(Math.abs(ms) / 60000));
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60), r = m % 60;
+  if (h < 24) return r && h < 10 ? `${h}h ${r}m` : `${h}h`;
+  const d = Math.floor(h / 24), rh = h % 24;
+  return rh && d < 7 ? `${d}d ${rh}h` : `${d}d`;
+};
+
+/* ---- mailboxes ---- */
+export interface Mailbox {
+  id: string; address: string; label: string | null; kind: "personal" | "shared"; ownerId: string | null; active: boolean;
+  canSend: boolean; isDefaultFrom: boolean; storeAll: boolean; lastSyncAt: string | null; lastError: string | null;
+}
+const toBox = (r: any): Mailbox => ({
+  id: r.id, address: r.address, label: r.label ?? null, kind: r.kind === "personal" ? "personal" : "shared", ownerId: r.owner_id ?? null,
+  active: r.active !== false, canSend: r.can_send !== false, isDefaultFrom: !!r.is_default_from, storeAll: !!r.store_all,
+  lastSyncAt: r.last_sync_at ?? null, lastError: r.last_error ?? null,
+});
+export async function loadMailboxes(): Promise<Mailbox[] | null> {
+  const { data, error } = await supabase.from("ticket_mailboxes").select("*").order("created_at");
+  if (error) return missingTable(error.message) ? null : [];
+  return ((data ?? []) as any[]).map(toBox);
+}
+export async function saveMailbox(b: Partial<Mailbox> & { address: string }): Promise<string | null> {
+  const row: any = {
+    address: b.address.trim().toLowerCase(), label: b.label?.trim() || null, kind: b.kind ?? "shared", owner_id: b.ownerId ?? null,
+    active: b.active ?? true, can_send: b.canSend ?? true, is_default_from: !!b.isDefaultFrom, store_all: !!b.storeAll,
+  };
+  if (row.is_default_from) await supabase.from("ticket_mailboxes").update({ is_default_from: false }).neq("id", b.id ?? "00000000-0000-0000-0000-000000000000");
+  const { error } = b.id ? await supabase.from("ticket_mailboxes").update(row).eq("id", b.id) : await supabase.from("ticket_mailboxes").insert(row);
+  return error ? (missingTable(error.message) ? MAIL_SQL : /duplicate|unique/i.test(error.message) ? "That mailbox is already on the list." : error.message) : null;
+}
+export async function deleteMailbox(id: string): Promise<string | null> {
+  const { error } = await supabase.from("ticket_mailboxes").delete().eq("id", id);
+  return error?.message ?? null;
+}
+
+/* ---- mail rules ---- */
+export interface RuleConditions {
+  match: "all" | "any";
+  from_contains?: string; from_emails?: string[]; from_contact_ids?: string[]; from_company_id?: string | null;
+  mailbox?: string; subject_contains?: string; subject_regex?: string; body_contains?: string;
+}
+export interface RuleSet { type?: string | null; priority?: TaskPriority | null; assignee_id?: string | null; team?: string | null; tags?: string[]; client_id?: string | null; company_id?: string | null }
+export interface MailRule {
+  id: string; name: string; sort: number; active: boolean; conditions: RuleConditions;
+  action: "create" | "append" | "ignore"; targetTicketId: string | null; set: RuleSet; hits: number; lastHitAt: string | null;
+}
+const toRule = (r: any): MailRule => ({
+  id: r.id, name: r.name ?? "Rule", sort: r.sort ?? 0, active: r.active !== false,
+  conditions: { match: "all", ...(r.conditions ?? {}) }, action: ["create", "append", "ignore"].includes(r.action) ? r.action : "create",
+  targetTicketId: r.target_ticket_id ?? null, set: r.set_fields ?? {}, hits: r.hits ?? 0, lastHitAt: r.last_hit_at ?? null,
+});
+export async function loadMailRules(): Promise<MailRule[] | null> {
+  const { data, error } = await supabase.from("ticket_mail_rules").select("*").order("sort").order("created_at");
+  if (error) return missingTable(error.message) ? null : [];
+  return ((data ?? []) as any[]).map(toRule);
+}
+export async function saveMailRule(r: Partial<MailRule> & { name: string }): Promise<string | null> {
+  const row: any = {
+    name: r.name.trim() || "Rule", sort: r.sort ?? 0, active: r.active ?? true, conditions: r.conditions ?? { match: "all" },
+    action: r.action ?? "create", target_ticket_id: r.action === "append" ? r.targetTicketId ?? null : null, set_fields: r.set ?? {},
+  };
+  const { error } = r.id ? await supabase.from("ticket_mail_rules").update(row).eq("id", r.id) : await supabase.from("ticket_mail_rules").insert(row);
+  return error ? (missingTable(error.message) ? MAIL_SQL : error.message) : null;
+}
+export async function deleteMailRule(id: string): Promise<string | null> {
+  const { error } = await supabase.from("ticket_mail_rules").delete().eq("id", id);
+  return error?.message ?? null;
+}
+/** Same test the server runs (to preview a rule against the Inbox). */
+export function ruleMatchesMail(c: RuleConditions, m: MailMsg, dir: Directory | null): boolean {
+  const lc = (x: unknown) => String(x ?? "").trim().toLowerCase();
+  const from = lc(m.fromEmail), fromAll = `${lc(m.fromName)} ${from}`;
+  const tests: boolean[] = [];
+  if (c.from_contains) tests.push(fromAll.includes(lc(c.from_contains)));
+  if (c.from_emails?.length) tests.push(c.from_emails.map(lc).some((e) => e && (from === e || (e.startsWith("@") && from.endsWith(e)))));
+  if (c.from_contact_ids?.length) {
+    const emails = (dir?.contacts ?? []).filter((x) => c.from_contact_ids!.includes(x.id)).map((x) => lc(x.email));
+    tests.push(emails.includes(from));
+  }
+  if (c.mailbox) tests.push([...m.to, ...m.cc].some((x) => lc(x.email) === lc(c.mailbox)));
+  if (c.subject_contains) tests.push(lc(m.subject).includes(lc(c.subject_contains)));
+  if (c.subject_regex) { try { tests.push(new RegExp(c.subject_regex, "i").test(m.subject)); } catch { tests.push(false); } }
+  if (c.body_contains) tests.push(lc(m.snippet).includes(lc(c.body_contains)) || lc(m.html).includes(lc(c.body_contains)));
+  if (!tests.length) return false;
+  return c.match === "any" ? tests.some(Boolean) : tests.every(Boolean);
+}
+
+/* ---- merging ---- */
+/** Merges `from` into `into`: notes, e-mails and watchers move; `from` is closed and points to `into`. */
+export async function mergeTicket(from: Ticket, into: Ticket, ready: boolean): Promise<string | null> {
+  if (from.id === into.id) return "Pick another ticket.";
+  const { error: e1 } = await supabase.from("tracking_task_updates").update({ task_id: into.id }).eq("task_id", from.id);
+  if (e1) return e1.message;
+  await supabase.from("ticket_mail_messages").update({ ticket_id: into.id }).eq("ticket_id", from.id);
+  for (const w of from.watchers) if (!into.watchers.includes(w)) await setWatcher(into.id, w, true);
+  if (from.assignee && from.assignee !== into.assignee && !into.watchers.includes(from.assignee)) await setWatcher(into.id, from.assignee, true);
+  const { data: s } = await supabase.auth.getSession();
+  await supabase.from("tracking_task_updates").insert({ task_id: into.id, author_id: s?.session?.user?.id ?? null, body: `Merged ${ticketRef(from)} “${plain(from.title)}” into this ticket.`, status: STAGE_STATUS[into.stage], progress: into.progress });
+  const patch: any = { stage: "closed" };
+  const { error: e2 } = await supabase.from("tracking_tasks").update({ ...(ready ? { stage: "closed" } : { status: "done", done: true }), merged_into: into.id, tags: [...new Set([...from.tags, "merged"])] }).eq("id", from.id);
+  if (e2) {
+    // before 19_ticket_mail.sql: close it and say where it went
+    const e3 = await saveTicket(from.id, { ...patch, tags: [...new Set([...from.tags, `merged-into-${ticketRef(into)}`])] }, ready);
+    if (e3) return e3;
+  }
+  tell();
+  return null;
+}
+
 /* ---------------------------- small pieces ---------------------------- */
 const TK_ICON: Record<string, string> = {
   plus: "M12 5v14M5 12h14",
@@ -1425,6 +1642,21 @@ const TK_ICON: Record<string, string> = {
   deal: "M3 12l4-4 4 4 6-6 4 4M21 10v6h-6",
   folder: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
   briefcase: "M3 8h18v12H3zM8 8V5a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v3",
+  refresh: "M21 12a9 9 0 1 1-2.64-6.36M21 4v5h-5",
+  gear: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3 1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8 1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z",
+  merge: "M7 4v5a5 5 0 0 0 5 5 5 5 0 0 0 5-5V4M12 14v7M9 18l3 3 3-3",
+  clip: "M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5",
+  send: "M22 2 11 13M22 2l-7 20-4-9-9-4z",
+  keyboard: "M3 6h18v12H3zM7 10h.01M11 10h.01M15 10h.01M7 14h10",
+  filter: "M3 5h18l-7 8v6l-4 2v-8z",
+  bolt: "M13 2 4 14h7l-1 8 9-12h-7z",
+  arrow: "M5 12h14M13 6l6 6-6 6",
+  up: "M12 19V5M5 12l7-7 7 7",
+  down: "M12 5v14M19 12l-7 7-7-7",
+  bookmark: "M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z",
+  reply: "M9 14 4 9l5-5M4 9h11a5 5 0 0 1 5 5v6",
+  ban: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM5 5l14 14",
+  out: "M7 17 17 7M8 7h9v9",
 };
 export const TkIco = ({ d, className }: { d: keyof typeof TK_ICON; className?: string }) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={TK_ICON[d]} /></svg>
@@ -1510,6 +1742,20 @@ function linkLabel(t: Ticket, dir: Directory | null): { icon: keyof typeof TK_IC
   return null;
 }
 
+/* mail sync: one at a time per page, every few minutes while the home page is open */
+let lastDeskSync = 0;
+let deskSyncBusy = false;
+const AUTO_SYNC_MS = 5 * 60000;
+interface SavedView { name: string; tab: DeskTab; view: DeskView; sort: DeskSort; q: string; prio: TaskPriority | ""; type: string }
+const VIEWS_PREF = "tickets.views";
+const typingIn = (el: EventTarget | null) => {
+  const e = el as HTMLElement | null;
+  if (!e) return false;
+  if (e.tagName === "INPUT") return !["checkbox", "radio", "button", "submit", "reset"].includes((e as HTMLInputElement).type);
+  return e.isContentEditable || ["TEXTAREA", "SELECT"].includes(e.tagName);
+};
+const cleanSubject = (s: string) => s.replace(/^\s*((re|fw|fwd|aw|sv|rv)\s*:\s*)+/i, "").replace(/\[T-\d+\]/g, "").trim();
+
 /**
  * The ticket desk: the to-do as a ticketing tool. In the home column it is a
  * card; `full` turns it into the full-window view (filters + table).
@@ -1534,18 +1780,81 @@ export function TicketDesk({ full = false, onClose }: { full?: boolean; onClose?
   const [err, setErr] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [sortMenu, setSortMenu] = useState<DOMRect | null>(null);
+  // e-mail, SLA, bulk, views, shortcuts
+  const [pane, setPane] = useState<"tickets" | "inbox">("tickets");
+  const [inbox, setInbox] = useState<MailMsg[] | null | undefined>(undefined);
+  const [boxes, setBoxes] = useState<Mailbox[]>([]);
+  const [mailSt, setMailSt] = useState<OutlookMailStatus | null>(null);
+  const [sla, setSla] = useState<SlaMap | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncNote, setSyncNote] = useState<{ text: string; bad?: boolean } | null>(null);
+  const [settings, setSettings] = useState<{ start?: SettingsTab; prefill?: Partial<MailRule> | null } | null>(null);
+  const [preview, setPreview] = useState<MailMsg | null>(null);
+  const [addPick, setAddPick] = useState<{ m: MailMsg; rect: DOMRect } | null>(null);
+  const [sel, setSel] = useState<Set<string>>(() => new Set());
+  const [bulk, setBulk] = useState<{ kind: "stage" | "assignee" | "priority" | "merge"; rect: DOMRect } | null>(null);
+  const [views, setViews] = useState<SavedView[]>([]);
+  const [viewName, setViewName] = useState<string | null>(null);
+  const [help, setHelp] = useState(false);
+  const [cursor, setCursor] = useState(-1);
+  const [now, setNow] = useState(() => Date.now());
+  const qRef = useRef<HTMLInputElement>(null);
 
   const reload = useCallback(() => { loadTickets().then(setData).catch(() => setData({ tickets: [], ready: false, ownedDeals: [] })); }, []);
+  const reloadMail = useCallback(() => {
+    loadInboxMail().then(setInbox).catch(() => setInbox([]));
+    loadMailboxes().then((b) => setBoxes(b ?? [])).catch(() => {});
+  }, []);
   useEffect(() => {
     reload();
+    reloadMail();
     loadDirectory().then(setDir).catch(() => {});
     loadTicketTypes().then(setTypes).catch(() => {});
-    const on = () => reload();
+    loadSla().then((r) => setSla(r.sla)).catch(() => setSla(DEFAULT_SLA));
+    getMailStatus().then(setMailSt).catch(() => {});
+    if (full) loadPrefs().then((p) => { const v = p?.[VIEWS_PREF]; if (Array.isArray(v)) setViews(v); }).catch(() => {});
+    const on = () => { reload(); reloadMail(); };
+    const conn = () => { getMailStatus(true).then(setMailSt).catch(() => {}); };
     const openOne = (e: Event) => { const id = (e as CustomEvent).detail; if (typeof id === "string") setOpenId(id); };
+    const iv = window.setInterval(() => setNow(Date.now()), 60000);
     window.addEventListener(TICKETS_EVENT, on);
+    window.addEventListener(OUTLOOK_CONNECTION_EVENT, conn);
     window.addEventListener("open-ticket", openOne);
-    return () => { window.removeEventListener(TICKETS_EVENT, on); window.removeEventListener("open-ticket", openOne); };
-  }, [reload]);
+    return () => {
+      window.clearInterval(iv);
+      window.removeEventListener(TICKETS_EVENT, on); window.removeEventListener(OUTLOOK_CONNECTION_EVENT, conn); window.removeEventListener("open-ticket", openOne);
+    };
+  }, [reload, reloadMail, full]);
+
+  /** Reads new mail of the desk's mailboxes (rules, threads, Inbox). */
+  const syncNow = useCallback(async (quiet = false) => {
+    if (deskSyncBusy) return;
+    deskSyncBusy = true; setSyncing(true);
+    const r: MailSyncResult = await syncTicketMail().catch((e) => ({ error: String(e?.message ?? e) }));
+    deskSyncBusy = false; setSyncing(false);
+    lastDeskSync = Date.now();
+    if (r.error) {
+      if (!quiet) setSyncNote({ text: r.error === "mail_scope_missing" || /scope|permission/i.test(r.error) ? "Outlook needs mail permission — connect again with mail." : r.error === "not_connected" ? "Connect Outlook to read mail." : r.error, bad: true });
+    } else {
+      const bits: string[] = [];
+      if (r.stored) bits.push(`${r.stored} new e-mail${r.stored === 1 ? "" : "s"}`);
+      if (r.created) bits.push(`${r.created} ticket${r.created === 1 ? "" : "s"} opened`);
+      if (r.threaded) bits.push(`${r.threaded} added to tickets`);
+      if (r.inbox) bits.push(`${r.inbox} in the Inbox`);
+      const errs = r.errors ?? [];
+      setSyncNote(errs.length ? { text: errs[0], bad: true } : { text: bits.length ? bits.join(" · ") : r.note || r.skipped || "Up to date" });
+    }
+    reload(); reloadMail();
+  }, [reload, reloadMail]);
+  const mailOn = !!mailSt?.connected && !!mailSt?.mail;
+  const hasBoxes = boxes.some((b) => b.active);
+  useEffect(() => {
+    if (full || !mailOn || !hasBoxes) return;
+    const tick = () => { if (!document.hidden && Date.now() - lastDeskSync > AUTO_SYNC_MS - 15000) syncNow(true); };
+    tick();
+    const iv = window.setInterval(tick, AUTO_SYNC_MS);
+    return () => window.clearInterval(iv);
+  }, [full, mailOn, hasBoxes, syncNow]);
 
   const me = dir?.me ?? null;
   const ready = data?.ready ?? false;
@@ -1563,7 +1872,7 @@ export function TicketDesk({ full = false, onClose }: { full?: boolean; onClose?
   const inView = (t: Ticket) => view === "done" ? !isActive(t.stage) : view === "waiting" ? t.stage === "waiting" : isActive(t.stage);
   const f = fold(q.trim());
   const matches = (t: Ticket) => !f || fold(`${t.title} ${ticketRef(t)} ${t.type ?? ""} ${t.tags.join(" ")} ${t.requesterName ?? ""} ${linkLabel(t, dir)?.text ?? ""}`).includes(f);
-  const shown = all.filter((t) => inTab(t, tab) && inView(t) && matches(t) && (!fPrio || t.priority === fPrio) && (!fType || t.type === fType));
+  const shown = all.filter((t) => !t.mergedInto && inTab(t, tab) && inView(t) && matches(t) && (!fPrio || t.priority === fPrio) && (!fType || t.type === fType));
   const rank: Record<TaskPriority, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
   const sorted = [...shown].sort((a, b) => {
     if (sort === "priority") return rank[a.priority] - rank[b.priority] || (a.due ?? "9").localeCompare(b.due ?? "9");
@@ -1571,7 +1880,10 @@ export function TicketDesk({ full = false, onClose }: { full?: boolean; onClose?
     if (sort === "number") return (b.no ?? 0) - (a.no ?? 0);
     return (a.due ?? "9999").localeCompare(b.due ?? "9999") || rank[a.priority] - rank[b.priority];
   });
-  const counts = Object.fromEntries(DESK_TABS.map((x) => [x.key, all.filter((t) => isActive(t.stage) && inTab(t, x.key)).length])) as Record<DeskTab, number>;
+  const counts = Object.fromEntries(DESK_TABS.map((x) => [x.key, all.filter((t) => !t.mergedInto && isActive(t.stage) && inTab(t, x.key)).length])) as Record<DeskTab, number>;
+  const breached = sla ? all.filter((t) => inTab(t, tab) && slaOf(t, sla, now)?.breached).length : 0;
+  const inboxShown = (inbox ?? []).filter((m) => !f || fold(`${m.subject} ${m.fromName ?? ""} ${m.fromEmail ?? ""} ${m.snippet}`).includes(f));
+  const lastSync = Math.max(lastDeskSync, ...boxes.map((b) => (b.lastSyncAt ? new Date(b.lastSyncAt).getTime() : 0)));
   const lateCount = all.filter((t) => isActive(t.stage) && inTab(t, tab) && groupOf(t, today) === "overdue").length;
   const person = (id: string | null) => (id ? dir?.people.find((p) => p.id === id) ?? null : null);
 
@@ -1592,11 +1904,98 @@ export function TicketDesk({ full = false, onClose }: { full?: boolean; onClose?
   const cyclePrio = () => setDraftPrio((p) => TASK_PRIORITIES[(TASK_PRIORITIES.indexOf(p) + 1) % TASK_PRIORITIES.length]);
   const openT = all.find((t) => t.id === openId) ?? null;
 
+  /* ---- Inbox actions ---- */
+  const dropMail = (id: string) => { setInbox((xs) => (xs ? xs.filter((x) => x.id !== id) : xs)); setPreview((p) => (p?.id === id ? null : p)); };
+  const mailToTicket = async (m: MailMsg) => {
+    if (!dir) return;
+    dropMail(m.id);
+    const res = await createTicketFromMail(m, dir, ready);
+    if (res.error || !res.id) { setErr(res.error); reloadMail(); return; }
+    setErr(null); setOpenId(res.id);
+  };
+  const mailIntoTicket = async (m: MailMsg, t: Ticket) => {
+    dropMail(m.id);
+    const e = await setMailTicket(m, t.id);
+    if (e) { setErr(e); reloadMail(); return; }
+    setErr(null);
+    if (!t.requesterEmail && m.fromEmail) await saveTicket(t.id, { requesterEmail: m.fromEmail, requesterName: m.fromName }, ready);
+  };
+  const mailIgnore = async (m: MailMsg) => { dropMail(m.id); const e = await ignoreMail(m.id); if (e) { setErr(e); reloadMail(); } };
+  const ruleFrom = (m: MailMsg) => {
+    const subj = cleanSubject(m.subject);
+    const contact = m.fromEmail ? dir?.contacts.find((c) => (c.email ?? "").toLowerCase() === m.fromEmail!.toLowerCase()) : undefined;
+    const who = m.fromName || m.fromEmail || "Sender";
+    setPreview(null);
+    setSettings({ start: "rules", prefill: {
+      name: `${who}${subj ? ` · ${subj.slice(0, 40)}` : ""}`,
+      conditions: { match: "all", ...(contact ? { from_contact_ids: [contact.id] } : { from_emails: m.fromEmail ? [m.fromEmail] : [] }), ...(subj ? { subject_contains: subj.slice(0, 60) } : {}) },
+      action: "create", set: { assignee_id: me },
+    } });
+  };
+
+  /* ---- bulk (full view) ---- */
+  const selected = sorted.filter((t) => sel.has(t.id));
+  const toggleSel = (id: string) => setSel((s0) => { const s1 = new Set(s0); if (s1.has(id)) s1.delete(id); else s1.add(id); return s1; });
+  const bulkPatch = async (p: Partial<Ticket>) => {
+    const ids = new Set(selected.map((t) => t.id));
+    setBulk(null);
+    setData((d) => d && { ...d, tickets: d.tickets.map((x) => (ids.has(x.id) ? { ...x, ...p } : x)) });
+    const errs = (await Promise.all(selected.map((t) => saveTicket(t.id, p, ready)))).filter(Boolean);
+    if (errs.length) { setErr(errs[0]); reload(); } else { setErr(null); setSel(new Set()); }
+  };
+  const bulkMerge = async (into: Ticket) => {
+    setBulk(null);
+    for (const t of selected) if (t.id !== into.id) { const e = await mergeTicket(t, into, ready); if (e) { setErr(e); break; } }
+    setSel(new Set()); reload();
+  };
+
+  /* ---- saved views ---- */
+  const applyView = (v: SavedView) => { setTab(v.tab); setView(v.view); setSort(v.sort); setQ(v.q); setFPrio(v.prio); setFType(v.type); setPane("tickets"); };
+  const storeViews = (vs: SavedView[]) => { setViews(vs); savePref(VIEWS_PREF, vs).catch(() => {}); };
+  const saveView = () => {
+    const name = (viewName ?? "").trim();
+    setViewName(null);
+    if (!name) return;
+    storeViews([...views.filter((v) => v.name !== name), { name, tab, view, sort, q, prio: fPrio, type: fType }]);
+  };
+  const isView = (v: SavedView) => v.tab === tab && v.view === view && v.sort === sort && v.q === q && v.prio === fPrio && v.type === fType;
+
+  /* ---- keyboard ---- */
+  const keyState = useRef({ sorted, cursor, pane, full });
+  keyState.current = { sorted, cursor, pane, full };
+  const blocked = !!(openT || creating || settings || preview || help || addPick || bulk || menu || sortMenu || (!full && expanded));
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => {
+      if (blocked || e.metaKey || e.ctrlKey || e.altKey || typingIn(e.target)) return;
+      if (!full && document.querySelector(".tk-full, .td-back")) return;
+      const st = keyState.current;
+      const cur = st.sorted[st.cursor];
+      const go = (d: number) => { const n = st.sorted.length; if (!n) return; const i = Math.max(0, Math.min(n - 1, (st.cursor < 0 ? (d > 0 ? -1 : n) : st.cursor) + d)); setCursor(i); window.setTimeout(() => document.querySelector(`[data-tk="${st.sorted[i].id}"]`)?.scrollIntoView({ block: "nearest" }), 0); };
+      switch (e.key) {
+        case "n": e.preventDefault(); setCreating({ assignee: me }); break;
+        case "/": e.preventDefault(); setPane("tickets"); window.setTimeout(() => qRef.current?.focus(), 0); break;
+        case "j": case "ArrowDown": if (e.key === "ArrowDown" && !full) return; e.preventDefault(); go(1); break;
+        case "k": case "ArrowUp": if (e.key === "ArrowUp" && !full) return; e.preventDefault(); go(-1); break;
+        case "Enter": case "o": if (cur && st.pane === "tickets") { e.preventDefault(); setOpenId(cur.id); } break;
+        case "e": if (cur && isActive(cur.stage)) patch(cur, { stage: "resolved" }); break;
+        case "a": if (cur && me && cur.assignee !== me) patch(cur, { assignee: me }); break;
+        case "x": if (cur && st.full) toggleSel(cur.id); break;
+        case "i": setPane((p) => (p === "inbox" ? "tickets" : "inbox")); break;
+        case "s": syncNow(); break;
+        case "?": setHelp(true); break;
+        default: return;
+      }
+    };
+    document.addEventListener("keydown", k);
+    return () => document.removeEventListener("keydown", k);
+  });
+  useEffect(() => { setCursor(-1); }, [tab, view, q, fPrio, fType, sort, pane]);
+
   const row = (t: Ticket, i: number) => {
     const link = linkLabel(t, dir);
     const late = isActive(t.stage) && groupOf(t, today) === "overdue";
     return (
-      <div key={t.id} className={`tk-row is-p-${t.priority} ${late ? "is-late" : ""} ${isActive(t.stage) ? "" : "is-done"}`} style={{ ["--i" as string]: Math.min(i, 12) } as React.CSSProperties}
+      <div key={t.id} data-tk={t.id} className={`tk-row is-p-${t.priority} ${late ? "is-late" : ""} ${isActive(t.stage) ? "" : "is-done"} ${sorted[cursor]?.id === t.id ? "is-cur" : ""}`} style={{ ["--i" as string]: Math.min(i, 12) } as React.CSSProperties}
         onClick={() => setOpenId(t.id)} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter") setOpenId(t.id); }}>
         <span className="tk-row-bar" aria-hidden="true" />
         <div className="tk-row-main">
@@ -1610,7 +2009,8 @@ export function TicketDesk({ full = false, onClose }: { full?: boolean; onClose?
           <div className="tk-row-meta">
             {link && <span className="tk-link"><TkIco d={link.icon} />{link.text}</span>}
             <DueChip dueAt={t.due} todayIso={today} done={!isActive(t.stage)} />
-            {t.kind === "process" && t.progress > 0 && <span className="tk-pct"><i style={{ width: `${t.progress}%` }} />{t.progress}%</span>}
+            <SlaBadge t={t} sla={sla} now={now} compact />
+            {(t.checklist.length > 0 || (t.kind === "process" && t.progress > 0)) && <span className="tk-pct"><i style={{ ["--w" as string]: `${t.checklist.length ? Math.round((t.checklist.filter((x) => x.done).length / t.checklist.length) * 100) : t.progress}%` } as React.CSSProperties} />{t.checklist.length ? `${t.checklist.filter((x) => x.done).length}/${t.checklist.length}` : `${t.progress}%`}</span>}
           </div>
         </div>
         <div className="tk-row-side" onClick={(e) => e.stopPropagation()}>
@@ -1632,9 +2032,11 @@ export function TicketDesk({ full = false, onClose }: { full?: boolean; onClose?
     <div className="tk-filters">
       <div className="tk-q">
         <TkIco d="search" />
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter tickets…" />
+        <input ref={qRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder={pane === "inbox" ? "Filter e-mail…" : "Filter tickets…"}
+          onKeyDown={(e) => { if (e.key === "Escape") { setQ(""); (e.target as HTMLInputElement).blur(); } }} />
         {q && <button type="button" onClick={() => setQ("")} aria-label="Clear"><TkIco d="x" /></button>}
       </div>
+      {pane === "tickets" && <>
       <div className="tk-seg" role="tablist">
         {(["active", "waiting", "done"] as DeskView[]).map((v) => (
           <button key={v} type="button" className={view === v ? "is-on" : ""} onClick={() => setView(v)}>{v === "active" ? "Open" : v === "waiting" ? "Waiting" : "Done"}</button>
@@ -1652,6 +2054,7 @@ export function TicketDesk({ full = false, onClose }: { full?: boolean; onClose?
           options={[{ value: "", label: "Any priority" }, ...TASK_PRIORITIES.map((p) => ({ value: p, label: PRIORITY_LABEL[p] }))]} />
         <Select size="sm" value={fType} onChange={setFType} aria-label="Type" options={[{ value: "", label: "Any type" }, ...types.map((t) => ({ value: t, label: t }))]} />
       </>}
+      </>}
     </div>
   );
 
@@ -1663,16 +2066,24 @@ export function TicketDesk({ full = false, onClose }: { full?: boolean; onClose?
     </div>
   ) : full ? (
     <div className="tk-table">
-      <div className="tk-th"><span>Ticket</span><span>Linked to</span><span>Type</span><span>Priority</span><span>Due</span><span>Owner</span><span>Stage</span></div>
+      <div className="tk-th">
+        <span className="tk-cb"><input type="checkbox" aria-label="Select all" checked={!!sorted.length && selected.length === sorted.length}
+          ref={(el) => { if (el) el.indeterminate = selected.length > 0 && selected.length < sorted.length; }}
+          onChange={() => setSel(selected.length === sorted.length ? new Set() : new Set(sorted.map((t) => t.id)))} /></span>
+        <span>Ticket</span><span>Linked to</span><span>Type</span><span>Priority</span><span>Due</span><span>SLA</span><span>Owner</span><span>Stage</span>
+      </div>
       {sorted.map((t, i) => {
         const link = linkLabel(t, dir);
+        const pct = t.checklist.length ? Math.round((t.checklist.filter((x) => x.done).length / t.checklist.length) * 100) : null;
         return (
-          <div key={t.id} className={`tk-tr is-p-${t.priority} ${openId === t.id ? "is-sel" : ""}`} style={{ ["--i" as string]: Math.min(i, 14) } as React.CSSProperties} onClick={() => setOpenId(t.id)}>
-            <span className="tk-td-title"><em className="tk-ref">{ticketRef(t)}</em><b>{plain(t.title)}</b></span>
+          <div key={t.id} data-tk={t.id} className={`tk-tr is-p-${t.priority} ${openId === t.id || sel.has(t.id) ? "is-sel" : ""} ${sorted[cursor]?.id === t.id ? "is-cur" : ""}`} style={{ ["--i" as string]: Math.min(i, 14) } as React.CSSProperties} onClick={() => setOpenId(t.id)}>
+            <span className="tk-cb" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={sel.has(t.id)} onChange={() => toggleSel(t.id)} aria-label={`Select ${ticketRef(t)}`} /></span>
+            <span className="tk-td-title"><em className="tk-ref">{ticketRef(t)}</em><b>{plain(t.title)}</b>{t.source === "email" && <span className="tk-src" title="Came in by e-mail"><TkIco d="mail" /></span>}{pct !== null && <span className="tk-pct is-sm"><i style={{ ["--w" as string]: `${pct}%` } as React.CSSProperties} />{pct}%</span>}</span>
             <span className="tk-td-muted">{link ? <span className="tk-link"><TkIco d={link.icon} />{link.text}</span> : "—"}</span>
             <span className="tk-td-muted">{t.type ?? "—"}</span>
             <span><span className={`tk-prio is-${t.priority}`}><FlagIcon />{PRIORITY_LABEL[t.priority]}</span></span>
             <span>{t.due ? <DueChip dueAt={t.due} todayIso={today} done={!isActive(t.stage)} /> : <i className="tk-td-muted">—</i>}</span>
+            <span>{slaOf(t, sla ?? DEFAULT_SLA, now) ? <SlaBadge t={t} sla={sla} now={now} compact /> : <i className="tk-td-muted">{t.firstResponseAt && !isActive(t.stage) ? "Done" : "—"}</i>}</span>
             <span onClick={(e) => e.stopPropagation()}>
               <button type="button" className="tk-owner" onClick={(e) => setMenu({ id: t.id, kind: "assignee", rect: e.currentTarget.getBoundingClientRect() })}>
                 <Avatar person={person(t.assignee)} size={22} /><span>{person(t.assignee)?.name ?? "Unassigned"}</span>
@@ -1694,9 +2105,97 @@ export function TicketDesk({ full = false, onClose }: { full?: boolean; onClose?
     </div>
   );
 
+  const syncBar = (
+    <div className="tm-sync">
+      <span className={`tm-sync-dot ${mailOn && hasBoxes ? "is-on" : ""} ${syncing ? "is-busy" : ""}`} />
+      <span className="tm-sync-txt">
+        {syncing ? "Reading mail…" : syncNote ? <span className={syncNote.bad ? "is-bad" : ""}>{syncNote.text}</span>
+          : lastSync > 0 ? <>Read {ago(new Date(lastSync).toISOString())}{mailOn && hasBoxes && !full ? " · every 5 min" : ""}</> : hasBoxes ? "Not read yet" : "No mailbox yet"}
+      </span>
+      <button type="button" className="tm-sync-btn" onClick={() => syncNow()} disabled={syncing || !mailOn} title={mailOn ? "Read new mail now (S)" : "Connect Outlook with mail first"}>
+        <TkIco d="refresh" className={syncing ? "is-spin" : ""} />Sync now
+      </button>
+    </div>
+  );
+  const mailBanner = inbox === null ? <p className="tk-note">{MAIL_SQL}</p>
+    : mailSt && !mailOn ? (
+      <div className="tm-banner">
+        <span className="tm-banner-ico"><TkIco d="mail" /></span>
+        <div><b>{mailSt.connected ? "Give the desk access to your mail" : "Bring e-mail into the desk"}</b>
+          <span>{mailSt.connected ? "Your Outlook is connected for the calendar only. Connect again to read and send mail." : "Connect Outlook to read mailboxes, file mail into tickets and reply by e-mail."}</span></div>
+        <button type="button" className="td-primary is-sm" onClick={() => connectOutlook({ withMail: true })}>Connect mail</button>
+      </div>
+    ) : mailSt && !hasBoxes ? (
+      <div className="tm-banner is-soft">
+        <span className="tm-banner-ico"><TkIco d="inbox" /></span>
+        <div><b>No mailbox is being read yet</b><span>Add your support / department mailbox, or switch on your own inbox.</span></div>
+        <button type="button" className="td-ghost is-sm" onClick={() => setSettings({ start: "mailboxes" })}><TkIco d="gear" />Mailboxes</button>
+      </div>
+    ) : null;
+  const inboxPane = (
+    <div className="tm-pane">
+      {mailBanner}
+      {inbox !== null && syncBar}
+      {inbox === undefined ? <div className="hs-skel tk-skel" /> : inbox === null ? null : !inboxShown.length ? (
+        <div className="tk-empty">
+          <span className="tk-empty-ico"><TkIco d="inbox" /></span>
+          <b>{q ? "No e-mail matches" : "Inbox zero"}</b>
+          <span>{q ? "Try another word." : "E-mail that no rule or ticket picks up lands here, to sort by hand."}</span>
+        </div>
+      ) : (
+        <div className="tm-list">
+          {inboxShown.map((m, i) => (
+            <MailRow key={m.id} m={m} boxes={boxes} i={i} onOpen={() => setPreview(m)} onCreate={() => mailToTicket(m)}
+              onAdd={(rect) => setAddPick({ m, rect })} onRule={() => ruleFrom(m)} onIgnore={() => mailIgnore(m)} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+  const bulkBar = full && selected.length > 0 && pane === "tickets" ? (
+    <div className="tk-bulk">
+      <b>{selected.length} selected</b>
+      <button type="button" onClick={(e) => setBulk({ kind: "stage", rect: e.currentTarget.getBoundingClientRect() })}><span className="tk-dot is-open" />Stage</button>
+      <button type="button" onClick={(e) => setBulk({ kind: "assignee", rect: e.currentTarget.getBoundingClientRect() })}><TkIco d="user" />Owner</button>
+      <button type="button" onClick={(e) => setBulk({ kind: "priority", rect: e.currentTarget.getBoundingClientRect() })}><FlagIcon />Priority</button>
+      {selected.length > 1 && <button type="button" onClick={(e) => setBulk({ kind: "merge", rect: e.currentTarget.getBoundingClientRect() })}><TkIco d="merge" />Merge</button>}
+      <button type="button" onClick={() => bulkPatch({ stage: "resolved" })}><TkIco d="check" />Resolve</button>
+      <span className="td-spacer" />
+      <button type="button" className="is-clear" onClick={() => setSel(new Set())}><TkIco d="x" />Clear</button>
+    </div>
+  ) : null;
+
   const menuT = menu ? all.find((t) => t.id === menu.id) : null;
   const overlays = (
     <>
+      {bulk && dir && (
+        <Pop anchor={bulk.rect} onClose={() => setBulk(null)} width={bulk.kind === "merge" ? 340 : bulk.kind === "assignee" ? 250 : 200}>
+          {bulk.kind === "stage" ? (
+            <div className="tk-pop-list">{TICKET_STAGES.map((s) => <button key={s.key} type="button" className="tk-pop-opt" onClick={() => bulkPatch({ stage: s.key })}><span className={`tk-dot is-${s.key}`} /><span>{s.label}</span></button>)}</div>
+          ) : bulk.kind === "priority" ? (
+            <div className="tk-pop-list">{TASK_PRIORITIES.map((p) => <button key={p} type="button" className="tk-pop-opt" onClick={() => bulkPatch({ priority: p })}><span className={`tk-prio is-${p}`}><FlagIcon /></span><span>{PRIORITY_LABEL[p]}</span></button>)}</div>
+          ) : bulk.kind === "assignee" ? (
+            <PeopleMenu dir={dir} value={null} onPick={(id) => bulkPatch({ assignee: id })} />
+          ) : (
+            <TicketPick tickets={selected} onPick={bulkMerge} placeholder="Keep which one? The others merge into it." />
+          )}
+        </Pop>
+      )}
+      {addPick && (
+        <Pop anchor={addPick.rect} onClose={() => setAddPick(null)} width={340}>
+          <TicketPick tickets={all} onPick={(t) => { const m = addPick.m; setAddPick(null); mailIntoTicket(m, t); }} placeholder="Add this e-mail to which ticket?" />
+        </Pop>
+      )}
+      {preview && (
+        <MailPreview m={preview} boxes={boxes} onClose={() => setPreview(null)} onCreate={() => mailToTicket(preview)}
+          onAdd={(rect) => setAddPick({ m: preview, rect })} onRule={() => ruleFrom(preview)} onIgnore={() => mailIgnore(preview)} />
+      )}
+      {settings && dir && (
+        <DeskSettings dir={dir} types={types} tickets={all} inbox={inbox ?? []} start={settings.start} prefill={settings.prefill} mail={mailSt}
+          onClose={() => { setSettings(null); reloadMail(); loadSla().then((r) => setSla(r.sla)).catch(() => {}); }}
+          onConnect={() => connectOutlook({ withMail: true })} />
+      )}
+      {help && <ShortcutHelp onClose={() => setHelp(false)} />}
       {sortMenu && (
         <Pop anchor={sortMenu} onClose={() => setSortMenu(null)} width={190}>
           <div className="tk-pop-list">
@@ -1724,7 +2223,7 @@ export function TicketDesk({ full = false, onClose }: { full?: boolean; onClose?
         </Pop>
       )}
       {(openT || creating) && dir && (
-        <TicketDrawer ticket={openT} draft={creating} dir={dir} types={types} ready={ready}
+        <TicketDrawer ticket={openT} draft={creating} dir={dir} types={types} ready={ready} tickets={all}
           onTypes={setTypes}
           onClose={() => { setOpenId(null); setCreating(null); }}
           onCreated={(id) => { setCreating(null); setOpenId(id); }}
@@ -1742,6 +2241,9 @@ export function TicketDesk({ full = false, onClose }: { full?: boolean; onClose?
             <span className="hs-eyebrow">Ticket desk</span>
             <h2 className="tk-full-title">{counts[tab]} open {tab === "mine" ? "on your desk" : tab === "team" ? "in your team" : tab === "unassigned" ? "without an owner" : "in the company"}</h2>
           </div>
+          {breached > 0 && <span className="tk-breach-pill"><TkIco d="bolt" />{breached} past SLA</span>}
+          <button type="button" className="tk-icon-btn" onClick={() => setHelp(true)} title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts"><TkIco d="keyboard" /></button>
+          <button type="button" className="tk-icon-btn" onClick={() => setSettings({})} title="Mail rules, mailboxes and SLAs" aria-label="Desk settings"><TkIco d="gear" /></button>
           <button type="button" className="tk-new" onClick={() => setCreating({ assignee: me })}><TkIco d="plus" />New ticket</button>
           <button type="button" className="tk-icon-btn" onClick={onClose} aria-label="Close"><TkIco d="x" /></button>
         </header>
@@ -1749,8 +2251,22 @@ export function TicketDesk({ full = false, onClose }: { full?: boolean; onClose?
           <nav className="tk-full-nav">
             <span className="tk-nav-k">Views</span>
             {DESK_TABS.map((x) => (
-              <button key={x.key} type="button" className={tab === x.key ? "is-on" : ""} onClick={() => setTab(x.key)}>{x.label}<i>{counts[x.key]}</i></button>
+              <button key={x.key} type="button" className={pane === "tickets" && tab === x.key ? "is-on" : ""} onClick={() => { setTab(x.key); setPane("tickets"); }}>{x.label}<i>{counts[x.key]}</i></button>
             ))}
+            <button type="button" className={`tk-nav-inbox ${pane === "inbox" ? "is-on" : ""}`} onClick={() => setPane("inbox")}><TkIco d="inbox" />Inbox<i className={inbox?.length ? "is-new" : ""}>{inbox?.length ?? 0}</i></button>
+            <span className="tk-nav-k">Saved views</span>
+            {views.map((v) => (
+              <div key={v.name} className={`tk-nav-view ${pane === "tickets" && isView(v) ? "is-on" : ""}`}>
+                <button type="button" onClick={() => applyView(v)}><TkIco d="bookmark" />{v.name}</button>
+                <button type="button" className="tk-nav-view-x" onClick={() => storeViews(views.filter((x) => x.name !== v.name))} aria-label={`Delete view ${v.name}`}><TkIco d="x" /></button>
+              </div>
+            ))}
+            {viewName !== null ? (
+              <input className="tk-nav-in" autoFocus value={viewName} placeholder="Name this view…" onChange={(e) => setViewName(e.target.value)} onBlur={saveView}
+                onKeyDown={(e) => { if (e.key === "Enter") saveView(); if (e.key === "Escape") setViewName(null); }} />
+            ) : (
+              <button type="button" className="tk-nav-add" onClick={() => setViewName("")}><TkIco d="plus" />Save current view</button>
+            )}
             <span className="tk-nav-k">By stage</span>
             {TICKET_STAGES.map((s) => {
               const n = all.filter((t) => inTab(t, tab) && t.stage === s.key).length;
@@ -1759,9 +2275,10 @@ export function TicketDesk({ full = false, onClose }: { full?: boolean; onClose?
           </nav>
           <div className="tk-full-main">
             {filters}
+            {bulkBar}
             {err && <p className="tk-err">{err}</p>}
             {!ready && data && <p className="tk-note">{NEEDS_SQL} Until then your tasks show here with their status.</p>}
-            {list}
+            {pane === "inbox" ? inboxPane : list}
           </div>
         </div>
         {overlays}
@@ -1774,20 +2291,38 @@ export function TicketDesk({ full = false, onClose }: { full?: boolean; onClose?
       <header className="hs-head tk-head">
         <div className="hs-titles">
           <span className="hs-eyebrow">To-do &amp; tickets</span>
-          <h2 className="hs-title"><span className="hs-count">{counts[tab]}</span> open{lateCount > 0 && <span className="hs-late-pill">{lateCount} late</span>}</h2>
+          <h2 className="hs-title"><span className="hs-count">{counts[tab]}</span> open{lateCount > 0 && <span className="hs-late-pill">{lateCount} late</span>}{breached > 0 && <span className="tk-breach-pill is-sm" title="Past their SLA"><TkIco d="bolt" />{breached}</span>}</h2>
         </div>
         <div className="tk-head-btns">
-          <button type="button" className="tk-new is-sm" onClick={() => setCreating({ assignee: me })} title="New ticket with all the details"><TkIco d="plus" />New</button>
+          <button type="button" className="tk-new is-sm" onClick={() => setCreating({ assignee: me })} title="New ticket with all the details (N)"><TkIco d="plus" />New</button>
+          <button type="button" className="tk-icon-btn" onClick={() => setSettings({})} title="Mail rules, mailboxes and SLAs" aria-label="Desk settings"><TkIco d="gear" /></button>
           <button type="button" className="tk-icon-btn" onClick={() => setExpanded(true)} title="Open the full ticket desk" aria-label="Full view"><TkIco d="expand" /></button>
         </div>
       </header>
       <div className="tk-tabs" role="tablist">
         {DESK_TABS.map((x) => (
-          <button key={x.key} type="button" role="tab" aria-selected={tab === x.key} className={tab === x.key ? "is-on" : ""} onClick={() => setTab(x.key)}>
+          <button key={x.key} type="button" role="tab" aria-selected={pane === "tickets" && tab === x.key} className={pane === "tickets" && tab === x.key ? "is-on" : ""} onClick={() => { setTab(x.key); setPane("tickets"); }}>
             {x.label}{counts[x.key] > 0 && <i>{counts[x.key]}</i>}
           </button>
         ))}
+        <button type="button" role="tab" aria-selected={pane === "inbox"} className={`tk-tab-inbox ${pane === "inbox" ? "is-on" : ""}`} onClick={() => setPane("inbox")} title="E-mail waiting to be sorted (I)">
+          <TkIco d="inbox" />Inbox{(inbox?.length ?? 0) > 0 && <i className="is-new">{inbox!.length}</i>}
+        </button>
       </div>
+      {pane === "inbox" ? (
+        <>
+          <div className="tk-filters">
+            <div className="tk-q">
+              <TkIco d="search" />
+              <input ref={qRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter e-mail…" />
+              {q && <button type="button" onClick={() => setQ("")} aria-label="Clear"><TkIco d="x" /></button>}
+            </div>
+          </div>
+          {err && <p className="tk-err">{err}</p>}
+          {inboxPane}
+          {overlays}
+        </>
+      ) : <>
       <div className="tk-quick">
         <button type="button" className={`tk-quick-prio is-${draftPrio}`} onClick={cyclePrio} title={`Priority: ${PRIORITY_LABEL[draftPrio]} (click to change)`}><FlagIcon /></button>
         <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={tab === "unassigned" ? "Log a ticket for the team…" : "Log a ticket or to-do…"}
@@ -1798,6 +2333,7 @@ export function TicketDesk({ full = false, onClose }: { full?: boolean; onClose?
       {err && <p className="tk-err">{err}</p>}
       {list}
       {overlays}
+      </>}
     </section>
   );
 }
@@ -1819,8 +2355,10 @@ function eventText(e: TicketEvent, dir: Directory): string {
   }
 }
 
-export function TicketDrawer({ ticket, draft, dir, types, ready, onClose, onCreated, onLocal, onTypes }: {
+export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, onClose, onCreated, onLocal, onTypes }: {
   ticket: Ticket | null;
+  /** The desk's tickets (to merge into); loaded on demand when missing. */
+  tickets?: Ticket[];
   /** Creating: the fields to start from. */
   draft?: Partial<Ticket> | null;
   dir: Directory; types: string[]; ready: boolean;
@@ -1836,6 +2374,7 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, onClose, onCrea
     id: "", no: null, title: "", description: "", stage: "new", priority: "normal", type: null, assignee: dir.me, createdBy: dir.me, watchers: [], team: dir.myDept,
     requesterName: null, requesterEmail: null, requesterContactId: null, clientId: null, companyId: null, projectId: null, trackingId: null,
     tags: [], source: "manual", due: null, createdAt: new Date().toISOString(), updatedAt: null, resolvedAt: null, kind: "quick", progress: 0, checklist: [],
+    firstResponseAt: null, mergedInto: null,
     ...(draft ?? {}),
   };
   const [t, setT] = useState<Ticket>(ticket ?? blank);
@@ -1850,14 +2389,44 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, onClose, onCrea
   const [newType, setNewType] = useState<string | null>(null);
   const [watchAdd, setWatchAdd] = useState<DOMRect | null>(null);
   const titleRef = useRef<HTMLTextAreaElement>(null);
+  // e-mail, SLA, merging
+  const [mails, setMails] = useState<MailMsg[] | null>(null);
+  const [mailOk, setMailOk] = useState<OutlookMailStatus | null>(null);
+  const [boxes, setBoxes] = useState<Mailbox[]>([]);
+  const [sla, setSla] = useState<SlaMap | null>(null);
+  const [byMail, setByMail] = useState(true);
+  const [fromAddr, setFromAddr] = useState("");
+  const [cc, setCc] = useState("");
+  const [needPerm, setNeedPerm] = useState(false);
+  const [mergeAt, setMergeAt] = useState<DOMRect | null>(null);
+  const [mergeInto, setMergeInto] = useState<Ticket | null>(null);
+  const [pickList, setPickList] = useState<Ticket[] | null>(tickets ?? null);
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => { if (ticket) loadTicketThread(ticket.id).then(setThread).catch(() => setThread({ posts: [], events: [] })); }, [ticket?.id]);
+  const reloadMail = useCallback(() => { if (ticket) loadTicketMail(ticket.id).then(setMails).catch(() => setMails([])); }, [ticket?.id]);
+  useEffect(() => {
+    reloadMail();
+    getMailStatus().then(setMailOk).catch(() => {});
+    loadSla().then((r) => setSla(r.sla)).catch(() => setSla(DEFAULT_SLA));
+    loadMailboxes().then((b) => {
+      const list = b ?? [];
+      setBoxes(list);
+      const def = list.find((x) => x.kind === "shared" && x.active && x.canSend && x.isDefaultFrom);
+      if (def) setFromAddr((v) => v || def.address);
+    }).catch(() => {});
+    const iv = window.setInterval(() => setNow(Date.now()), 60000);
+    const on = () => reloadMail();
+    window.addEventListener(TICKETS_EVENT, on);
+    return () => { window.clearInterval(iv); window.removeEventListener(TICKETS_EVENT, on); };
+  }, [reloadMail]);
+  useEffect(() => { if (tickets) setPickList(tickets); }, [tickets]);
   useEffect(() => { grow(titleRef.current); }, [t.title]);
   useEffect(() => {
-    const k = (e: KeyboardEvent) => { if (e.key === "Escape" && !watchAdd) onClose(); };
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape" && !watchAdd && !mergeAt) onClose(); };
     document.addEventListener("keydown", k);
     return () => document.removeEventListener("keydown", k);
-  }, [onClose, watchAdd]);
+  }, [onClose, watchAdd, mergeAt]);
 
   const set = async (p: Partial<Ticket>) => {
     const next = { ...t, ...p };
@@ -1876,15 +2445,73 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, onClose, onCrea
     if (res.error || !res.id) { setErr(res.error); return; }
     onCreated?.(res.id);
   };
+  const lastIn = [...(mails ?? [])].reverse().find((m) => m.direction === "in");
+  const replyTo = (lastIn?.fromEmail || t.requesterEmail || "").trim();
+  const mailSubject = (() => {
+    const ref = `[${ticketRef(t)}]`;
+    const base = lastIn?.subject ? (/^(re|aw|sv):/i.test(lastIn.subject) ? lastIn.subject : `RE: ${lastIn.subject}`) : plain(t.title);
+    return base.includes(ref) ? base : `${base} ${ref}`;
+  })();
+  const fromChoices = [
+    { value: "", label: mailOk?.email ? `Me · ${mailOk.email}` : "My mailbox" },
+    ...boxes.filter((b) => b.kind === "shared" && b.active && b.canSend).map((b) => ({ value: b.address, label: b.label ? `${b.label} · ${b.address}` : b.address })),
+  ];
+  const mailReady = !!mailOk?.connected && !!mailOk?.mail;
+  const willMail = mode === "reply" && byMail && mails !== null;
   const send = async () => {
     if (!reply.trim() || !ticket || busy) return;
-    setBusy(true);
+    setBusy(true); setNeedPerm(false);
+    if (willMail) {
+      if (!replyTo) { setBusy(false); setErr("Add the requester's e-mail first (on the right), or untick “Send by e-mail”."); return; }
+      const html = reply.trim().split(/\n{2,}/).map((p) => `<p>${p.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>")}</p>`).join("");
+      const r = await sendOutlookMail({
+        to: [replyTo], cc: cc.split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean),
+        subject: mailSubject, html, from: fromAddr || null, ref: `ticket:${t.id}`,
+      });
+      if (!r.ok) {
+        setBusy(false);
+        if (r.needsMailPermission) { setNeedPerm(true); setErr(null); return; }
+        setErr(r.retryAfter ? `Outlook is busy — try again in ${r.retryAfter}s.` : r.error ?? "Not sent.");
+        return;
+      }
+      // the sent mail is the reply: it shows on the thread; the ticket counts as answered
+      if (ready) {
+        await supabase.from("tracking_tasks").update({ first_response_at: new Date().toISOString() }).eq("id", t.id).is("first_response_at", null);
+        if (t.stage === "new") await saveTicket(t.id, { stage: "open" }, ready);
+        else window.dispatchEvent(new Event(TICKETS_EVENT));
+      }
+      setBusy(false); setReply(""); setCc(""); setErr(null);
+      if (!t.firstResponseAt) { const next = { ...t, firstResponseAt: new Date().toISOString(), stage: t.stage === "new" ? "open" as TicketStage : t.stage }; setT(next); onLocal?.(next); }
+      reloadMail();
+      loadTicketThread(t.id).then(setThread).catch(() => {});
+      return;
+    }
     const res = await postToTicket(t, reply, mode, ready);
     setBusy(false);
     if (res.error || !res.post) { setErr(res.error); return; }
     setReply(""); setErr(null);
+    if (mode === "reply" && !t.firstResponseAt) { const next = { ...t, firstResponseAt: new Date().toISOString() }; setT(next); onLocal?.(next); }
     loadTicketThread(t.id).then(setThread).catch(() => {});
   };
+  const doMerge = async () => {
+    if (!mergeInto || busy) return;
+    setBusy(true);
+    const e = await mergeTicket(t, mergeInto, ready);
+    setBusy(false);
+    if (e) { setErr(e); setMergeInto(null); return; }
+    const into = mergeInto.id;
+    onClose();
+    window.setTimeout(() => window.dispatchEvent(new CustomEvent("open-ticket", { detail: into })), 50);
+  };
+  const openMerge = (r: DOMRect) => {
+    setMergeAt(r);
+    if (!pickList) loadTickets().then((d) => setPickList(d.tickets)).catch(() => setPickList([]));
+  };
+  const setChecklist = (checklist: TaskStep[]) => {
+    const progress = checklist.length ? Math.round((checklist.filter((x) => x.done).length / checklist.length) * 100) : t.progress;
+    set({ checklist, progress });
+  };
+  const mergedTarget = t.mergedInto ? (pickList ?? []).find((x) => x.id === t.mergedInto) ?? null : null;
   const remove = async () => {
     const e = await deleteTicket(t.id);
     if (e) { setErr(e); setDelAsk(false); return; }
@@ -1921,7 +2548,12 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, onClose, onCrea
   const items = [
     ...(thread?.posts ?? []).map((p) => ({ at: p.at, k: "post" as const, p })),
     ...(thread?.events ?? []).filter((e) => e.action !== "title").map((e) => ({ at: e.at, k: "event" as const, e })),
+    ...(mails ?? []).map((m) => ({ at: m.at, k: "mail" as const, m })),
   ].sort((a, b) => a.at.localeCompare(b.at));
+  const newestMail = (mails ?? []).length ? (mails ?? [])[(mails ?? []).length - 1].id : null;
+  const [threadFilter, setThreadFilter] = useState<"all" | "mail" | "notes">("all");
+  const visibleItems = items.filter((it) => threadFilter === "all" || (threadFilter === "mail" ? it.k === "mail" : it.k === "post"));
+  const allAtt = (mails ?? []).flatMap((m) => m.attachments.map((a) => ({ m, a })));
   const opt = (xs: { id: string; name: string }[], none: string) => [{ value: "", label: none }, ...xs.map((x) => ({ value: x.id, label: x.name }))];
   const deal = t.trackingId ? dir.deals.find((d) => d.id === t.trackingId) : null;
   const departments = [...new Set(dir.people.map((p) => p.department).filter(Boolean))] as string[];
@@ -1935,6 +2567,7 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, onClose, onCrea
             {t.type && <span className="td-chip">{t.type}</span>}
             <span className="td-chip is-src">{t.source === "email" ? <TkIco d="mail" /> : null}{TICKET_SOURCES[t.source] ?? t.source}</span>
             {!creatingMode && isActive(t.stage) && dueInfo(t.due, today)?.tone === "late" && <span className="td-chip is-late">Overdue</span>}
+            {!creatingMode && <SlaBadge t={t} sla={sla} now={now} />}
             <span className="td-spacer" />
             <button type="button" className="td-x" onClick={onClose} aria-label="Close"><TkIco d="x" /></button>
           </div>
@@ -1951,10 +2584,15 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, onClose, onCrea
               </button>
             ))}
           </div>
+          {t.mergedInto && (
+            <div className="td-merged"><TkIco d="merge" />Merged into {mergedTarget ? <b>{ticketRef(mergedTarget)} “{plain(mergedTarget.title)}”</b> : "another ticket"}
+              <button type="button" onClick={() => { const id = t.mergedInto; onClose(); window.setTimeout(() => window.dispatchEvent(new CustomEvent("open-ticket", { detail: id })), 50); }}>Open it →</button></div>
+          )}
         </header>
 
         <div className="td-body">
           <div className="td-main">
+            {!creatingMode && <ProgressPanel t={t} events={thread?.events ?? []} sla={sla} now={now} onChecklist={setChecklist} />}
             <section className="td-sec">
               <span className="td-k">Description</span>
               <textarea className="td-desc" value={t.description} placeholder="Add the details: what's asked, by whom, what done looks like…"
@@ -1962,7 +2600,7 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, onClose, onCrea
                 onBlur={() => { if (!creatingMode && ticket && t.description !== ticket.description) set({ description: t.description }); }} />
             </section>
 
-            {t.checklist.length > 0 && (
+            {creatingMode && t.checklist.length > 0 && (
               <section className="td-sec">
                 <span className="td-k">Checklist <em>{t.checklist.filter((s) => s.done).length}/{t.checklist.length}</em></span>
                 <div className="td-check">
@@ -1982,22 +2620,59 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, onClose, onCrea
 
             {!creatingMode && (
               <section className="td-sec td-conv">
-                <span className="td-k">Conversation &amp; activity</span>
-                <div className={`td-composer is-${mode}`}>
-                  <div className="td-composer-tabs">
-                    <button type="button" className={mode === "internal" ? "is-on" : ""} onClick={() => setMode("internal")}><TkIco d="lock" />Internal note</button>
-                    <button type="button" className={mode === "reply" ? "is-on" : ""} onClick={() => setMode("reply")}><TkIco d="mail" />Reply to requester</button>
-                  </div>
-                  <textarea value={reply} onChange={(e) => { setReply(e.target.value); grow(e.target); }} rows={2}
-                    placeholder={mode === "internal" ? "Only your team sees this…" : `Write to ${t.requesterName || t.requesterEmail || "the requester"}… (e-mail sending comes with Outlook)`}
-                    onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(); }} />
-                  <div className="td-composer-foot">
-                    <span>⌘ Enter to send</span>
-                    <button type="button" className="td-send" onClick={send} disabled={!reply.trim() || busy}>{mode === "internal" ? "Add note" : "Send reply"}</button>
+                <div className="td-conv-h">
+                  <span className="td-k">Conversation &amp; activity</span>
+                  <div className="tk-seg is-xs">
+                    {([["all", "All"], ["mail", `E-mail${mails?.length ? ` ${mails.length}` : ""}`], ["notes", "Notes"]] as const).map(([k, l]) => (
+                      <button key={k} type="button" className={threadFilter === k ? "is-on" : ""} onClick={() => setThreadFilter(k)}>{l}</button>
+                    ))}
                   </div>
                 </div>
+                <div className={`td-composer is-${mode} ${willMail ? "is-mail" : ""}`}>
+                  <div className="td-composer-tabs">
+                    <button type="button" className={mode === "internal" ? "is-on" : ""} onClick={() => setMode("internal")}><TkIco d="lock" />Internal note</button>
+                    <button type="button" className={mode === "reply" ? "is-on" : ""} onClick={() => setMode("reply")}><TkIco d="reply" />Reply to requester</button>
+                  </div>
+                  {mode === "reply" && mails !== null && (
+                    <div className="td-mailbar">
+                      <label className="td-mail-toggle"><input type="checkbox" checked={byMail} onChange={() => setByMail((v) => !v)} />Send by e-mail</label>
+                      {byMail && (
+                        <>
+                          <span className="td-mail-f"><em>To</em><b>{replyTo || "no address yet"}</b></span>
+                          {fromChoices.length > 1 && <span className="td-mail-f is-from"><em>From</em><Select size="sm" value={fromAddr} onChange={setFromAddr} options={fromChoices} aria-label="From" /></span>}
+                          <span className="td-mail-f is-cc"><em>Cc</em><input value={cc} onChange={(e) => setCc(e.target.value)} placeholder="optional" /></span>
+                          <span className="td-mail-subj" title={mailSubject}><em>Subject</em>{mailSubject}</span>
+                        </>
+                      )}
+                    </div>
+                  )}
+                  <textarea value={reply} onChange={(e) => { setReply(e.target.value); grow(e.target); }} rows={2}
+                    placeholder={mode === "internal" ? "Only your team sees this…" : willMail ? `Write to ${t.requesterName || replyTo || "the requester"} — goes out from Outlook…` : `Note the reply to ${t.requesterName || t.requesterEmail || "the requester"}…`}
+                    onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(); }} />
+                  {(needPerm || (willMail && mailOk && !mailReady)) && (
+                    <div className="td-perm">
+                      <TkIco d="mail" />
+                      <span>{mailOk?.connected ? "Your Outlook connection can't send mail yet — connect again with mail permission." : "Connect Outlook to send replies by e-mail."}</span>
+                      <button type="button" onClick={() => connectOutlook({ withMail: true })}>Connect with mail</button>
+                    </div>
+                  )}
+                  <div className="td-composer-foot">
+                    <span>⌘ Enter to send</span>
+                    <button type="button" className="td-send" onClick={send} disabled={!reply.trim() || busy}>
+                      {busy ? "Sending…" : mode === "internal" ? "Add note" : willMail ? <><TkIco d="send" />Send e-mail</> : "Log reply"}
+                    </button>
+                  </div>
+                </div>
+                {allAtt.length > 0 && (
+                  <div className="td-files">
+                    <span className="td-k"><TkIco d="clip" />Files on this ticket <em>{allAtt.length}</em></span>
+                    <div className="tm-att">{(mails ?? []).filter((m) => m.attachments.length).map((m) => <Attachments key={m.id} m={m} />)}</div>
+                  </div>
+                )}
                 <div className="td-thread">
-                  {!thread ? <div className="hs-skel" /> : !items.length ? <p className="td-none">No notes yet. Updates and changes will show up here.</p> : [...items].reverse().map((it) => it.k === "post" ? (
+                  {!thread ? <div className="hs-skel" /> : !visibleItems.length ? <p className="td-none">{threadFilter === "mail" ? "No e-mail on this ticket yet." : "No notes yet. Updates and changes will show up here."}</p> : [...visibleItems].reverse().map((it) => it.k === "mail" ? (
+                    <MailCard key={it.m.id} m={it.m} open={it.m.id === newestMail} />
+                  ) : it.k === "post" ? (
                     <div key={it.p.id} className={`td-post is-${it.p.visibility}`}>
                       <Avatar person={person(it.p.author)} size={30} />
                       <div className="td-post-body">
@@ -2118,6 +2793,10 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, onClose, onCrea
           {canDelete && (delAsk ? (
             <span className="td-del-ask">Delete this ticket for good?<button type="button" className="td-del" onClick={remove}>Delete</button><button type="button" className="td-ghost" onClick={() => setDelAsk(false)}>Keep</button></span>
           ) : <button type="button" className="td-ghost is-del" onClick={() => setDelAsk(true)}><TkIco d="trash" />Delete</button>)}
+          {!creatingMode && !t.mergedInto && (mergeInto ? (
+            <span className="td-del-ask is-merge"><span>Merge into <b>{ticketRef(mergeInto)}</b>? Notes, e-mails and watchers move; this one closes.</span>
+              <button type="button" className="td-primary is-sm" onClick={doMerge} disabled={busy}>Merge</button><button type="button" className="td-ghost" onClick={() => setMergeInto(null)}>Cancel</button></span>
+          ) : <button type="button" className="td-ghost" onClick={(e) => openMerge(e.currentTarget.getBoundingClientRect())}><TkIco d="merge" />Merge into…</button>)}
           <span className="td-spacer" />
           {creatingMode ? (
             <>
@@ -2133,6 +2812,11 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, onClose, onCrea
             </>
           )}
         </footer>
+        {mergeAt && (
+          <Pop anchor={mergeAt} onClose={() => setMergeAt(null)} width={340}>
+            {pickList ? <TicketPick tickets={pickList} exclude={t.id} onPick={(x) => { setMergeAt(null); setMergeInto(x); }} placeholder="Merge into which ticket?" /> : <div className="hs-skel" />}
+          </Pop>
+        )}
         {watchAdd && (
           <Pop anchor={watchAdd} onClose={() => setWatchAdd(null)} width={250}>
             <PeopleMenu dir={dir} value={null} allowNone={false} onPick={(id) => { setWatchAdd(null); if (id && !t.watchers.includes(id)) toggleWatch(id); }} />
@@ -2155,4 +2839,619 @@ export function TicketDrawerById({ id, onClose }: { id: string; onClose: () => v
   if (!state?.t) return null;
   return <TicketDrawer ticket={state.t} dir={state.dir} types={state.types} ready={state.ready} onClose={onClose}
     onLocal={(t) => setState((s) => s && { ...s, t })} onTypes={(types) => setState((s) => s && { ...s, types })} />;
+}
+
+/* =====================================================================
+   DESK PIECES — mail, SLA, progress, settings
+   ===================================================================== */
+/* ---- the Outlook connection (one check per page) ---- */
+let mailStatusP: Promise<OutlookMailStatus> | null = null;
+export function getMailStatus(fresh = false): Promise<OutlookMailStatus> {
+  if (!mailStatusP || fresh) {
+    mailStatusP = outlookMailStatus();
+    mailStatusP.catch(() => { mailStatusP = null; });
+  }
+  return mailStatusP;
+}
+if (typeof window !== "undefined") window.addEventListener(OUTLOOK_CONNECTION_EVENT, () => { mailStatusP = null; });
+
+/** An e-mail body made safe: no scripts / handlers / forms, links open outside, remote images held back until asked. */
+export function sanitizeMail(html: string, blockImages: boolean): { html: string; blocked: number } {
+  let blocked = 0;
+  try {
+    const doc = new DOMParser().parseFromString(html || "", "text/html");
+    doc.querySelectorAll("script, iframe, object, embed, form, base, link, meta").forEach((n) => n.remove());
+    doc.querySelectorAll("*").forEach((el) => {
+      [...el.attributes].forEach((a) => {
+        const n = a.name.toLowerCase();
+        if (n.startsWith("on") || ((n === "href" || n === "src" || n === "xlink:href" || n === "action") && /^\s*(javascript|vbscript):/i.test(a.value))) el.removeAttribute(a.name);
+      });
+      if (el.tagName === "A") { el.setAttribute("target", "_blank"); el.setAttribute("rel", "noopener noreferrer"); }
+      if (blockImages && el.tagName === "IMG" && /^\s*https?:/i.test(el.getAttribute("src") ?? "")) { el.removeAttribute("src"); el.removeAttribute("srcset"); blocked++; }
+    });
+    return { html: doc.body ? doc.body.innerHTML : "", blocked };
+  } catch { return { html: "", blocked: 0 }; }
+}
+/** The e-mail, in a sandboxed frame (no scripts) sized to its content. */
+function MailFrame({ html, maxHeight = 560 }: { html: string; maxHeight?: number }) {
+  const ref = useRef<HTMLIFrameElement>(null);
+  const [h, setH] = useState(90);
+  const [images, setImages] = useState(false);
+  const safe = useMemo(() => sanitizeMail(html, !images), [html, images]);
+  const doc = useMemo(() => `<!doctype html><html><head><meta charset="utf-8"><base target="_blank"><style>
+    html,body{margin:0;padding:0;background:#fff}body{font:13.5px/1.55 Inter,system-ui,-apple-system,sans-serif;color:#0b241a;padding:14px 16px;overflow-wrap:anywhere}
+    img{max-width:100%;height:auto}blockquote{margin:6px 0;padding-left:10px;border-left:3px solid #d4e2dc;color:#5a7d6d}table{max-width:100%!important}a{color:#0a6f4d}p{margin:0 0 8px}
+  </style></head><body>${safe.html}</body></html>`, [safe.html]);
+  const fit = () => { try { const b = ref.current?.contentDocument?.body; if (b) setH(Math.min(maxHeight, Math.max(56, b.scrollHeight + 6))); } catch { /* sandboxed */ } };
+  return (
+    <div className="tm-frame-wrap">
+      {safe.blocked > 0 && !images && (
+        <button type="button" className="tm-imgs" onClick={() => setImages(true)}><TkIco d="eye" />{safe.blocked} image{safe.blocked === 1 ? "" : "s"} held back · show</button>
+      )}
+      <iframe ref={ref} className="tm-frame" title="E-mail" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" srcDoc={doc} style={{ height: h }} onLoad={fit} />
+    </div>
+  );
+}
+const fmtBytes = (n: number) => (n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`);
+const fullDate = (iso: string) => new Date(iso).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+function Attachments({ m }: { m: MailMsg }) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  if (!m.attachments.length) return null;
+  const get = async (a: MailAttachment) => {
+    setBusy(a.id); setErr(null);
+    const r = await fetchMailAttachment(m.id, a.id);
+    setBusy(null);
+    if ("error" in r) { setErr(r.error); return; }
+    const url = URL.createObjectURL(r.blob);
+    const link = document.createElement("a"); link.href = url; link.download = r.name; document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  };
+  return (
+    <div className="tm-att">
+      {m.attachments.map((a) => (
+        <button key={a.id} type="button" className="tm-att-chip" onClick={() => get(a)} disabled={busy === a.id} title={`Download ${a.name}`}>
+          <TkIco d="clip" /><span>{a.name}</span><em>{busy === a.id ? "…" : fmtBytes(a.size || 0)}</em>
+        </button>
+      ))}
+      {err && <span className="tm-att-err">{err}</span>}
+    </div>
+  );
+}
+/** One e-mail on a ticket's thread: folded to its preview, open to read it all. */
+function MailCard({ m, open: open0 = false }: { m: MailMsg; open?: boolean }) {
+  const [open, setOpen] = useState(open0);
+  const who = m.direction === "out" ? (m.to.map((x) => x.name || x.email).join(", ") || "—") : (m.fromName || m.fromEmail || "Someone");
+  return (
+    <div className={`tm-card is-${m.direction} ${open ? "is-open" : ""}`}>
+      <span className="tm-card-ico"><TkIco d={m.direction === "out" ? "send" : "mail"} /></span>
+      <div className="tm-card-body">
+        <button type="button" className="tm-card-h" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+          <b>{m.direction === "out" ? "E-mail sent to " : ""}{who}</b>
+          {m.direction === "in" && m.fromEmail && m.fromName && <em>{m.fromEmail}</em>}
+          {m.attachments.length > 0 && <span className="tm-card-clip"><TkIco d="clip" />{m.attachments.length}</span>}
+          <time title={fullDate(m.at)}>{ago(m.at)}</time>
+          <TkIco d="chev" className="tm-card-chev" />
+        </button>
+        <span className="tm-card-subj">{m.subject || "(no subject)"}</span>
+        {open ? (
+          <>
+            <div className="tm-card-meta">
+              {m.direction === "in" ? <>To {m.to.map((x) => x.email).join(", ") || "—"}{m.cc.length ? ` · Cc ${m.cc.map((x) => x.email).join(", ")}` : ""}</> : <>From {m.fromEmail ?? "you"}{m.cc.length ? ` · Cc ${m.cc.map((x) => x.email).join(", ")}` : ""}</>}
+              <span>{fullDate(m.at)}</span>
+            </div>
+            {m.html ? <MailFrame html={m.html} /> : <p className="tm-card-snip">{m.snippet}</p>}
+            <Attachments m={m} />
+          </>
+        ) : <p className="tm-card-snip">{m.snippet}</p>}
+      </div>
+    </div>
+  );
+}
+
+/* ---- SLA badge ---- */
+export function SlaBadge({ t, sla, now, compact = false }: { t: Ticket; sla: SlaMap | null; now: number; compact?: boolean }) {
+  if (!sla) return null;
+  const st = slaOf(t, sla, now);
+  if (!st) return null;
+  const tone = st.breached ? "is-breach" : st.left < st.window * 0.25 ? "is-soon" : "is-ok";
+  const what = st.kind === "response" ? "First reply" : "Resolve";
+  const text = st.breached ? `${compact ? "" : `${what} `}late ${span(st.left)}` : `${compact ? "" : `${what} in `}${span(st.left)}`;
+  return (
+    <span className={`tk-sla ${tone}`} title={`${what} due ${fullDate(new Date(st.dueAt).toISOString())} (SLA for ${PRIORITY_LABEL[t.priority].toLowerCase()} priority)`}>
+      <TkIco d="bolt" />{text}
+    </span>
+  );
+}
+
+/* ---- progress: where the ticket stands and where its time went ---- */
+const STAGE_PCT: Record<TicketStage, number> = { new: 0, open: 15, in_progress: 50, waiting: 60, resolved: 100, closed: 100 };
+function stageSegments(t: Ticket, events: TicketEvent[], now: number) {
+  const moves = events.filter((e) => e.action === "stage" && e.detail?.to).sort((a, b) => a.at.localeCompare(b.at));
+  const first = (moves[0]?.detail?.from as TicketStage) || (moves.length ? "new" : t.stage);
+  const segs: { stage: TicketStage; from: number; to: number; ongoing: boolean }[] = [];
+  let cur: TicketStage = TICKET_STAGES.some((s) => s.key === first) ? first : "new";
+  let at = new Date(t.createdAt).getTime();
+  for (const mv of moves) {
+    const when = new Date(mv.at).getTime();
+    if (when > at) segs.push({ stage: cur, from: at, to: when, ongoing: false });
+    cur = mv.detail.to as TicketStage; at = Math.max(at, when);
+  }
+  segs.push({ stage: t.stage, from: at, to: isActive(t.stage) ? now : Math.max(at, new Date(t.resolvedAt ?? t.updatedAt ?? t.createdAt).getTime()), ongoing: isActive(t.stage) });
+  return segs.filter((s) => s.to >= s.from);
+}
+function ProgressPanel({ t, events, sla, now, onChecklist }: {
+  t: Ticket; events: TicketEvent[]; sla: SlaMap | null; now: number; onChecklist: (steps: TaskStep[]) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const done = t.checklist.filter((x) => x.done).length;
+  const pct = t.checklist.length ? Math.round((done / t.checklist.length) * 100) : STAGE_PCT[t.stage];
+  const segs = stageSegments(t, events, now);
+  const total = Math.max(1, segs.reduce((n, s) => n + (s.to - s.from), 0));
+  const target = sla?.[t.priority];
+  const created = new Date(t.createdAt).getTime();
+  const timer = (label: string, minutes: number | null | undefined, doneAt: string | null) => {
+    if (!minutes) return <div className="tp-sla is-none"><span>{label}</span><b>No target</b></div>;
+    const due = created + minutes * 60000;
+    if (doneAt) {
+      const took = new Date(doneAt).getTime() - created;
+      const ok = new Date(doneAt).getTime() <= due;
+      return <div className={`tp-sla ${ok ? "is-met" : "is-breach"}`}><span>{label}</span><b>{ok ? "Met" : "Missed"} · {span(took)}</b><em>target {span(minutes * 60000)}</em></div>;
+    }
+    if (!isActive(t.stage)) return <div className="tp-sla is-none"><span>{label}</span><b>—</b><em>target {span(minutes * 60000)}</em></div>;
+    const left = due - now;
+    const tone = left < 0 ? "is-breach" : left < minutes * 60000 * 0.25 ? "is-soon" : "is-ok";
+    return (
+      <div className={`tp-sla ${tone}`}>
+        <span>{label}</span><b>{left < 0 ? `Late ${span(left)}` : `${span(left)} left`}</b><em>target {span(minutes * 60000)}</em>
+        <i className="tp-sla-bar"><i style={{ width: `${Math.max(0, Math.min(100, 100 - (left / (minutes * 60000)) * 100))}%` }} /></i>
+      </div>
+    );
+  };
+  const addStep = () => {
+    const v = draft.trim();
+    if (!v) return;
+    setDraft("");
+    onChecklist([...t.checklist, { id: newStepId(), text: v, done: false }]);
+  };
+  return (
+    <section className="tp">
+      <div className="tp-top">
+        <div className="tp-ring" style={{ ["--p" as string]: pct } as React.CSSProperties}>
+          <svg viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="15.5" /><circle cx="18" cy="18" r="15.5" className="tp-ring-v" style={{ strokeDasharray: `${(pct / 100) * 97.4} 97.4` }} /></svg>
+          <b>{pct}<i>%</i></b>
+        </div>
+        <div className="tp-top-txt">
+          <span className="td-k">Progress</span>
+          <b>{t.checklist.length ? `${done} of ${t.checklist.length} steps done` : `${stageLabel(t.stage)} — add steps to track it in detail`}</b>
+          <span className="tp-top-sub">Open {span(now - created)}{t.resolvedAt && !isActive(t.stage) ? ` · resolved in ${span(new Date(t.resolvedAt).getTime() - created)}` : ""}</span>
+        </div>
+        <div className="tp-slas">
+          {timer("First reply", target?.firstResponse, t.firstResponseAt)}
+          {timer("Resolution", target?.resolution, isActive(t.stage) ? null : t.resolvedAt)}
+        </div>
+      </div>
+      <div className="tp-time" aria-label="Time in each stage">
+        <div className="tp-bar">
+          {segs.map((sg, i) => (
+            <span key={i} className={`tp-seg is-${sg.stage} ${sg.ongoing ? "is-now" : ""}`} style={{ flexGrow: Math.max(0.04, (sg.to - sg.from) / total) }} title={`${stageLabel(sg.stage)} · ${span(sg.to - sg.from)}`} />
+          ))}
+        </div>
+        <ol className="tp-steps">
+          {segs.map((sg, i) => (
+            <li key={i} className={`is-${sg.stage} ${sg.ongoing ? "is-now" : ""}`}>
+              <span className={`tk-dot is-${sg.stage}`} />
+              <b>{stageLabel(sg.stage)}</b>
+              <em>{span(sg.to - sg.from)}{sg.ongoing ? " so far" : ""}</em>
+              <time>{new Date(sg.from).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</time>
+            </li>
+          ))}
+        </ol>
+      </div>
+      <div className="tp-check">
+        {t.checklist.map((x) => (
+          <label key={x.id} className={x.done ? "is-done" : ""}>
+            <input type="checkbox" checked={x.done} onChange={() => onChecklist(t.checklist.map((y) => (y.id === x.id ? { ...y, done: !y.done } : y)))} />
+            <span>{x.text}</span>
+            <button type="button" className="tp-check-x" onClick={(e) => { e.preventDefault(); onChecklist(t.checklist.filter((y) => y.id !== x.id)); }} aria-label="Remove step"><TkIco d="x" /></button>
+          </label>
+        ))}
+        <div className="tp-add">
+          <TkIco d="plus" />
+          <input value={draft} placeholder={t.checklist.length ? "Add a step…" : "Break it into steps — progress follows them"} onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addStep(); } }} onBlur={addStep} />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ---- pick a ticket (merge / add a mail to / rule target) ---- */
+function TicketPick({ tickets, exclude, onPick, placeholder = "Find a ticket by number or title…" }: {
+  tickets: Ticket[]; exclude?: string; onPick: (t: Ticket) => void; placeholder?: string;
+}) {
+  const [q, setQ] = useState("");
+  const f = fold(q.trim());
+  const list = tickets.filter((t) => t.id !== exclude && !t.mergedInto && (!f || fold(`${ticketRef(t)} ${t.title} ${t.requesterName ?? ""} ${t.requesterEmail ?? ""}`).includes(f)))
+    .sort((a, b) => Number(isActive(b.stage)) - Number(isActive(a.stage)) || (b.no ?? 0) - (a.no ?? 0)).slice(0, 40);
+  return (
+    <div className="tk-people">
+      <input className="tk-pop-q" autoFocus placeholder={placeholder} value={q} onChange={(e) => setQ(e.target.value)} />
+      <div className="tk-pop-list">
+        {list.map((t) => (
+          <button key={t.id} type="button" className="tk-pop-opt" onClick={() => onPick(t)}>
+            <span className={`tk-dot is-${t.stage}`} />
+            <span>{plain(t.title)}<em>{ticketRef(t)} · {stageLabel(t.stage)}{t.requesterEmail ? ` · ${t.requesterEmail}` : ""}</em></span>
+          </button>
+        ))}
+        {!list.length && <p className="tk-pop-empty">No ticket matches.</p>}
+      </div>
+    </div>
+  );
+}
+
+/* ---- the Inbox: mail that reached the desk without a ticket ---- */
+function MailRow({ m, boxes, i, onOpen, onCreate, onAdd, onRule, onIgnore }: {
+  m: MailMsg; boxes: Mailbox[]; i: number;
+  onOpen: () => void; onCreate: () => void; onAdd: (r: DOMRect) => void; onRule: () => void; onIgnore: () => void;
+}) {
+  const box = boxes.find((b) => b.id === m.mailboxId);
+  const name = m.fromName || m.fromEmail || "Unknown sender";
+  return (
+    <div className="tm-row" style={{ ["--i" as string]: Math.min(i, 12) } as React.CSSProperties} role="button" tabIndex={0}
+      onClick={onOpen} onKeyDown={(e) => { if (e.key === "Enter") onOpen(); }}>
+      <span className="tm-row-av" style={{ background: toneOf(m.fromEmail || name) }}>{initials(name)}</span>
+      <div className="tm-row-main">
+        <div className="tm-row-top">
+          <b>{name}</b>
+          {box && <span className="tm-box">{box.label || box.address}</span>}
+          {m.attachments.length > 0 && <TkIco d="clip" className="tm-row-clip" />}
+          <time title={fullDate(m.at)}>{ago(m.at)}</time>
+        </div>
+        <span className="tm-row-subj">{m.subject || "(no subject)"}</span>
+        <span className="tm-row-snip">{m.snippet}</span>
+      </div>
+      <div className="tm-row-acts" onClick={(e) => e.stopPropagation()}>
+        <button type="button" className="tm-act is-main" onClick={onCreate} title="Create a ticket from this e-mail"><TkIco d="plus" />Ticket</button>
+        <button type="button" className="tm-act" onClick={(e) => onAdd(e.currentTarget.getBoundingClientRect())} title="Add to an existing ticket"><TkIco d="link" /></button>
+        <button type="button" className="tm-act" onClick={onRule} title="Make a rule from this e-mail"><TkIco d="filter" /></button>
+        <button type="button" className="tm-act" onClick={onIgnore} title="Ignore — hide it from the Inbox"><TkIco d="ban" /></button>
+      </div>
+    </div>
+  );
+}
+function MailPreview({ m, boxes, onClose, onCreate, onAdd, onRule, onIgnore }: {
+  m: MailMsg; boxes: Mailbox[]; onClose: () => void; onCreate: () => void; onAdd: (r: DOMRect) => void; onRule: () => void; onIgnore: () => void;
+}) {
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", k);
+    return () => document.removeEventListener("keydown", k);
+  }, [onClose]);
+  const box = boxes.find((b) => b.id === m.mailboxId);
+  return createPortal(
+    <div className="td-back tm-back" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="tm-modal" role="dialog" aria-label="E-mail">
+        <header className="tm-modal-h">
+          <span className="tm-row-av is-lg" style={{ background: toneOf(m.fromEmail || "x") }}>{initials(m.fromName || m.fromEmail || "?")}</span>
+          <div className="tm-modal-who">
+            <b>{m.fromName || m.fromEmail}</b>
+            <span>{m.fromEmail}{box ? ` → ${box.label || box.address}` : ""} · {fullDate(m.at)}</span>
+          </div>
+          <button type="button" className="td-x" onClick={onClose} aria-label="Close"><TkIco d="x" /></button>
+        </header>
+        <h3 className="tm-modal-subj">{m.subject || "(no subject)"}</h3>
+        {(m.to.length > 0 || m.cc.length > 0) && <p className="tm-modal-to">To {m.to.map((x) => x.email).join(", ")}{m.cc.length ? ` · Cc ${m.cc.map((x) => x.email).join(", ")}` : ""}</p>}
+        <div className="tm-modal-body">{m.html ? <MailFrame html={m.html} maxHeight={2000} /> : <p className="tm-card-snip">{m.snippet}</p>}<Attachments m={m} /></div>
+        <footer className="tm-modal-f">
+          <button type="button" className="td-ghost" onClick={onIgnore}><TkIco d="ban" />Ignore</button>
+          <button type="button" className="td-ghost" onClick={onRule}><TkIco d="filter" />Make a rule</button>
+          <span className="td-spacer" />
+          <button type="button" className="td-ghost" onClick={(e) => onAdd(e.currentTarget.getBoundingClientRect())}><TkIco d="link" />Add to ticket…</button>
+          <button type="button" className="td-primary" onClick={onCreate}><TkIco d="plus" />Create ticket</button>
+        </footer>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/* ---- keyboard help ---- */
+const SHORTCUTS: [string, string][] = [
+  ["N", "New ticket"], ["/", "Filter"], ["J / K", "Next / previous ticket"], ["Enter", "Open it"], ["E", "Resolve it"],
+  ["A", "Assign it to me"], ["X", "Select it (full view)"], ["I", "Inbox"], ["S", "Sync mail"], ["?", "This help"],
+];
+function ShortcutHelp({ onClose }: { onClose: () => void }) {
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape" || e.key === "?") onClose(); };
+    document.addEventListener("keydown", k);
+    return () => document.removeEventListener("keydown", k);
+  }, [onClose]);
+  return createPortal(
+    <div className="td-back tm-back" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="tk-keys" role="dialog" aria-label="Keyboard shortcuts">
+        <header><TkIco d="keyboard" /><b>Keyboard shortcuts</b><button type="button" className="td-x" onClick={onClose} aria-label="Close"><TkIco d="x" /></button></header>
+        <dl>{SHORTCUTS.map(([k, v]) => <div key={k}><dt>{k.split(" / ").map((x, i) => <kbd key={i}>{x}</kbd>)}</dt><dd>{v}</dd></div>)}</dl>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/* ---- desk settings: mail rules, mailboxes, SLA ---- */
+type SettingsTab = "rules" | "mailboxes" | "sla";
+const blankRule = (sort: number, from?: Partial<MailRule>): MailRule => ({
+  id: "", name: "", sort, active: true, conditions: { match: "all" }, action: "create", targetTicketId: null, set: {}, hits: 0, lastHitAt: null, ...(from ?? {}),
+});
+function ruleSummary(r: MailRule, dir: Directory | null, tickets: Ticket[]): { when: string; then: string } {
+  const c = r.conditions, parts: string[] = [];
+  if (c.from_emails?.length) parts.push(`from ${c.from_emails.join(" or ")}`);
+  if (c.from_contains) parts.push(`sender contains “${c.from_contains}”`);
+  if (c.from_contact_ids?.length) parts.push(`from ${c.from_contact_ids.map((id) => dir?.contacts.find((x) => x.id === id)?.name ?? "a contact").join(" or ")}`);
+  if (c.from_company_id) parts.push(`from someone at ${dir?.companies.find((x) => x.id === c.from_company_id)?.name ?? "a company"}`);
+  if (c.mailbox) parts.push(`sent to ${c.mailbox}`);
+  if (c.subject_contains) parts.push(`subject contains “${c.subject_contains}”`);
+  if (c.subject_regex) parts.push(`subject matches /${c.subject_regex}/`);
+  if (c.body_contains) parts.push(`text contains “${c.body_contains}”`);
+  const when = parts.length ? parts.join(c.match === "any" ? " or " : " and ") : "no conditions yet (never runs)";
+  const tgt = r.targetTicketId ? tickets.find((t) => t.id === r.targetTicketId) : null;
+  const then = r.action === "ignore" ? "ignore it"
+    : r.action === "append" ? `add it to ${tgt ? `${ticketRef(tgt)} “${plain(tgt.title)}”` : "a ticket"}`
+    : `open a ticket${r.set.type ? ` (${r.set.type})` : ""}${r.set.priority ? `, ${PRIORITY_LABEL[r.set.priority].toLowerCase()} priority` : ""}${r.set.assignee_id ? ` for ${dir?.people.find((p) => p.id === r.set.assignee_id)?.name ?? "someone"}` : ""}`;
+  return { when, then };
+}
+function RuleEditor({ rule, dir, types, tickets, boxes, inbox, onSave, onCancel }: {
+  rule: MailRule; dir: Directory; types: string[]; tickets: Ticket[]; boxes: Mailbox[]; inbox: MailMsg[];
+  onSave: (r: MailRule) => Promise<void>; onCancel: () => void;
+}) {
+  const [r, setR] = useState<MailRule>(rule);
+  const [emails, setEmails] = useState((rule.conditions.from_emails ?? []).join(", "));
+  const [busy, setBusy] = useState(false);
+  const [pick, setPick] = useState<DOMRect | null>(null);
+  const c = r.conditions;
+  const setC = (p: Partial<RuleConditions>) => setR({ ...r, conditions: { ...c, ...p } });
+  const setS = (p: Partial<RuleSet>) => setR({ ...r, set: { ...r.set, ...p } });
+  const live: MailRule = { ...r, conditions: { ...c, from_emails: emails.split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean) } };
+  const hits = inbox.filter((m) => ruleMatchesMail(live.conditions, m, dir));
+  const departments = [...new Set(dir.people.map((p) => p.department).filter(Boolean))] as string[];
+  const target = r.targetTicketId ? tickets.find((t) => t.id === r.targetTicketId) : null;
+  const opt = (xs: { id: string; name: string }[], none: string) => [{ value: "", label: none }, ...xs.map((x) => ({ value: x.id, label: x.name }))];
+  return (
+    <div className="tr-ed">
+      <input className="tr-name" value={r.name} autoFocus placeholder="Name this rule, e.g. “Acme support requests”" onChange={(e) => setR({ ...r, name: e.target.value })} />
+      <div className="tr-block">
+        <div className="tr-block-h"><span className="tr-step">1</span><b>When an e-mail arrives</b>
+          <div className="tk-seg">
+            <button type="button" className={c.match !== "any" ? "is-on" : ""} onClick={() => setC({ match: "all" })}>matching all</button>
+            <button type="button" className={c.match === "any" ? "is-on" : ""} onClick={() => setC({ match: "any" })}>any</button>
+          </div>
+        </div>
+        <div className="tr-grid">
+          <label><span>From these addresses</span><input className="td-in" value={emails} placeholder="ana@acme.es, @acme.es" onChange={(e) => setEmails(e.target.value)} /></label>
+          <label><span>Sender contains</span><input className="td-in" value={c.from_contains ?? ""} placeholder="acme" onChange={(e) => setC({ from_contains: e.target.value })} /></label>
+          <div className="tr-f"><span>From these contacts</span>
+            <div className="tr-chips">
+              {(c.from_contact_ids ?? []).map((id) => (
+                <span key={id} className="td-tag">{dir.contacts.find((x) => x.id === id)?.name ?? "Contact"}<button type="button" onClick={() => setC({ from_contact_ids: (c.from_contact_ids ?? []).filter((x) => x !== id) })} aria-label="Remove"><TkIco d="x" /></button></span>
+              ))}
+              <div className="tr-chip-add"><Select searchable value="" onChange={(v) => v && setC({ from_contact_ids: [...new Set([...(c.from_contact_ids ?? []), v])] })} options={opt(dir.contacts.filter((x) => x.email), "+ contact")} /></div>
+            </div>
+          </div>
+          <div className="tr-f"><span>From anyone at</span><Select searchable value={c.from_company_id ?? ""} onChange={(v) => setC({ from_company_id: v || null })} options={opt(dir.companies, "Any company")} /></div>
+          <div className="tr-f"><span>Sent to mailbox</span><Select value={c.mailbox ?? ""} onChange={(v) => setC({ mailbox: v })} options={[{ value: "", label: "Any mailbox" }, ...boxes.map((b) => ({ value: b.address, label: b.label ? `${b.label} · ${b.address}` : b.address }))]} /></div>
+          <label><span>Subject contains</span><input className="td-in" value={c.subject_contains ?? ""} placeholder="Invoice" onChange={(e) => setC({ subject_contains: e.target.value })} /></label>
+          <label><span>Subject matches (regex)</span><input className="td-in tr-mono" value={c.subject_regex ?? ""} placeholder="^(RE: )?Ticket #\d+" onChange={(e) => setC({ subject_regex: e.target.value })} /></label>
+          <label><span>Text contains</span><input className="td-in" value={c.body_contains ?? ""} placeholder="urgent" onChange={(e) => setC({ body_contains: e.target.value })} /></label>
+        </div>
+      </div>
+      <div className="tr-block">
+        <div className="tr-block-h"><span className="tr-step">2</span><b>Then</b></div>
+        <div className="tr-actions">
+          {([["create", "Open a new ticket", "plus"], ["append", "Add it to a ticket", "link"], ["ignore", "Ignore it", "ban"]] as const).map(([k, l, ic]) => (
+            <button key={k} type="button" className={r.action === k ? "is-on" : ""} onClick={() => setR({ ...r, action: k })}><TkIco d={ic} />{l}</button>
+          ))}
+        </div>
+        {r.action === "create" && (
+          <div className="tr-grid">
+            <div className="tr-f"><span>Type</span><Select value={r.set.type ?? ""} onChange={(v) => setS({ type: v || null })} options={[{ value: "", label: "No type" }, ...types.map((x) => ({ value: x, label: x }))]} /></div>
+            <div className="tr-f"><span>Priority</span><Select value={r.set.priority ?? ""} onChange={(v) => setS({ priority: (v || null) as TaskPriority | null })} options={[{ value: "", label: "Normal" }, ...TASK_PRIORITIES.map((p) => ({ value: p, label: PRIORITY_LABEL[p] }))]} /></div>
+            <div className="tr-f"><span>Owner</span><Select searchable value={r.set.assignee_id ?? ""} onChange={(v) => setS({ assignee_id: v || null })} options={opt(dir.people, "Unassigned")} /></div>
+            <div className="tr-f"><span>Team</span><Select value={r.set.team ?? ""} onChange={(v) => setS({ team: v || null })} options={[{ value: "", label: "Any team" }, ...departments.map((d) => ({ value: d, label: d[0].toUpperCase() + d.slice(1) }))]} /></div>
+            <div className="tr-f"><span>Client</span><Select searchable value={r.set.client_id ?? ""} onChange={(v) => setS({ client_id: v || null })} options={opt(dir.clients, "From the sender")} /></div>
+            <label><span>Tags</span><input className="td-in" value={(r.set.tags ?? []).join(", ")} placeholder="support, acme" onChange={(e) => setS({ tags: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} /></label>
+          </div>
+        )}
+        {r.action === "append" && (
+          <button type="button" className="tr-target" onClick={(e) => setPick(e.currentTarget.getBoundingClientRect())}>
+            <TkIco d="link" />{target ? <><b>{ticketRef(target)}</b>{plain(target.title)}</> : "Pick the ticket…"}
+          </button>
+        )}
+      </div>
+      <div className={`tr-preview ${hits.length ? "is-hit" : ""}`}>
+        <TkIco d="inbox" />
+        {hits.length ? <span><b>{hits.length}</b> e-mail{hits.length === 1 ? "" : "s"} in the Inbox match{hits.length === 1 ? "es" : ""}: {hits.slice(0, 3).map((m) => `“${m.subject || "(no subject)"}”`).join(", ")}{hits.length > 3 ? "…" : ""}</span>
+          : <span>No e-mail in the Inbox matches yet. Rules run on new mail as it arrives.</span>}
+      </div>
+      <div className="tr-foot">
+        <button type="button" className="td-ghost" onClick={onCancel}>Cancel</button>
+        <button type="button" className="td-primary" disabled={busy || !r.name.trim() || (r.action === "append" && !r.targetTicketId)}
+          onClick={async () => { setBusy(true); await onSave(live); setBusy(false); }}>{busy ? "Saving…" : r.id ? "Save rule" : "Create rule"}</button>
+      </div>
+      {pick && (
+        <Pop anchor={pick} onClose={() => setPick(null)} width={340}>
+          <TicketPick tickets={tickets} onPick={(t) => { setPick(null); setR({ ...r, targetTicketId: t.id }); }} />
+        </Pop>
+      )}
+    </div>
+  );
+}
+function DeskSettings({ dir, types, tickets, inbox, start, prefill, mail, onClose, onConnect }: {
+  dir: Directory; types: string[]; tickets: Ticket[]; inbox: MailMsg[];
+  start?: SettingsTab; prefill?: Partial<MailRule> | null; mail: OutlookMailStatus | null;
+  onClose: () => void; onConnect: () => void;
+}) {
+  const [tab, setTab] = useState<SettingsTab>(start ?? "rules");
+  const [rules, setRules] = useState<MailRule[] | null>(null);
+  const [boxes, setBoxes] = useState<Mailbox[] | null>(null);
+  const [sla, setSla] = useState<SlaMap | null>(null);
+  const [missing, setMissing] = useState(false);
+  const [editing, setEditing] = useState<MailRule | null>(prefill ? blankRule(0, prefill) : null);
+  const [err, setErr] = useState<string | null>(null);
+  const [newBox, setNewBox] = useState({ address: "", label: "" });
+  const reload = useCallback(async () => {
+    const [r, b, s] = await Promise.all([loadMailRules(), loadMailboxes(), loadSla()]);
+    setMissing(r === null || b === null || !s.ready);
+    setRules(r ?? []); setBoxes(b ?? []); setSla(s.sla);
+  }, []);
+  useEffect(() => { reload(); }, [reload]);
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape" && !editing) onClose(); };
+    document.addEventListener("keydown", k);
+    return () => document.removeEventListener("keydown", k);
+  }, [onClose, editing]);
+  const run = async (p: Promise<string | null>) => { const e = await p; setErr(e); if (!e) await reload(); return e; };
+  const myInbox = (boxes ?? []).find((b) => b.kind === "personal" && b.ownerId === dir.me);
+  const move = async (i: number, d: number) => {
+    const list = [...(rules ?? [])]; const j = i + d;
+    if (j < 0 || j >= list.length) return;
+    [list[i], list[j]] = [list[j], list[i]];
+    setRules(list);
+    await Promise.all(list.map((x, k) => saveMailRule({ ...x, sort: k })));
+    reload();
+  };
+  return createPortal(
+    <div className="td-back tm-back" onMouseDown={(e) => { if (e.target === e.currentTarget && !editing) onClose(); }}>
+      <div className="ts" role="dialog" aria-label="Desk settings">
+        <header className="ts-h">
+          <span className="ts-ico"><TkIco d="gear" /></span>
+          <div><span className="hs-eyebrow">Ticket desk</span><h3>Mail &amp; service levels</h3></div>
+          <span className="td-spacer" />
+          <button type="button" className="td-x" onClick={onClose} aria-label="Close"><TkIco d="x" /></button>
+        </header>
+        <nav className="ts-tabs">
+          {([["rules", "Mail rules", "filter"], ["mailboxes", "Mailboxes", "inbox"], ["sla", "Service levels", "bolt"]] as const).map(([k, l, ic]) => (
+            <button key={k} type="button" className={tab === k ? "is-on" : ""} onClick={() => { setTab(k); setEditing(null); }}><TkIco d={ic} />{l}
+              {k === "rules" && rules ? <i>{rules.length}</i> : k === "mailboxes" && boxes ? <i>{boxes.length}</i> : null}</button>
+          ))}
+        </nav>
+        <div className="ts-body">
+          {missing && <p className="tk-note">{MAIL_SQL}</p>}
+          {mail && (!mail.connected || !mail.mail) && (
+            <div className="ts-connect">
+              <TkIco d="mail" />
+              <div><b>{mail.connected ? "Your Outlook can't read or send mail yet" : "Connect your Outlook"}</b>
+                <span>The desk reads mailboxes and sends replies through your Microsoft 365 account. Connect once with mail permission.</span></div>
+              <button type="button" className="td-primary" onClick={onConnect}>Connect with mail</button>
+            </div>
+          )}
+          {err && <p className="tk-err">{err}</p>}
+
+          {tab === "rules" && (editing ? (
+            <RuleEditor rule={editing} dir={dir} types={types} tickets={tickets} boxes={boxes ?? []} inbox={inbox}
+              onCancel={() => setEditing(null)}
+              onSave={async (r) => { const e = await run(saveMailRule({ ...r, sort: r.id ? r.sort : (rules?.length ?? 0) })); if (!e) setEditing(null); }} />
+          ) : (
+            <>
+              <p className="ts-lead">New mail runs through these rules from top to bottom; the first one that matches decides. Replies to a ticket (its <code>[T-1042]</code> in the subject, or the same Outlook conversation) always go back to that ticket.</p>
+              <div className="ts-list">
+                {!rules ? <div className="hs-skel" /> : !rules.length ? (
+                  <div className="tk-empty"><span className="tk-empty-ico"><TkIco d="filter" /></span><b>No rules yet</b><span>E-mail that matches nothing waits in the Inbox for someone to sort it.</span></div>
+                ) : rules.map((r, i) => {
+                  const sm = ruleSummary(r, dir, tickets);
+                  return (
+                    <div key={r.id} className={`ts-rule ${r.active ? "" : "is-off"}`} style={{ ["--i" as string]: i } as React.CSSProperties}>
+                      <span className="ts-rule-n">{i + 1}</span>
+                      <div className="ts-rule-main" onClick={() => setEditing(r)} role="button" tabIndex={0}>
+                        <b>{r.name}</b>
+                        <span><em>When</em> {sm.when}</span>
+                        <span><em>Then</em> {sm.then}</span>
+                        <small>{r.hits ? `Used ${r.hits} time${r.hits === 1 ? "" : "s"}${r.lastHitAt ? ` · last ${ago(r.lastHitAt)}` : ""}` : "Not used yet"}</small>
+                      </div>
+                      <div className="ts-rule-side">
+                        <button type="button" role="switch" aria-checked={r.active} className={`ts-switch ${r.active ? "is-on" : ""}`} onClick={() => run(saveMailRule({ ...r, active: !r.active }))} title={r.active ? "On" : "Off"}><i /></button>
+                        <button type="button" className="tk-icon-btn" disabled={i === 0} onClick={() => move(i, -1)} aria-label="Move up"><TkIco d="up" /></button>
+                        <button type="button" className="tk-icon-btn" disabled={i === rules.length - 1} onClick={() => move(i, 1)} aria-label="Move down"><TkIco d="down" /></button>
+                        <button type="button" className="tk-icon-btn is-del" onClick={() => run(deleteMailRule(r.id))} aria-label="Delete rule"><TkIco d="trash" /></button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <button type="button" className="tk-new ts-add" onClick={() => setEditing(blankRule(rules?.length ?? 0))}><TkIco d="plus" />New rule</button>
+            </>
+          ))}
+
+          {tab === "mailboxes" && (
+            <>
+              <p className="ts-lead">The desk reads the inboxes listed here every few minutes while someone has the home page open (or on a schedule, see 19_ticket_mail.sql). Shared mailboxes need you to have access to them in Outlook.</p>
+              <div className={`ts-mine ${myInbox ? "is-on" : ""}`}>
+                <TkIco d="user" />
+                <div><b>My own inbox{mail?.email ? ` · ${mail.email}` : ""}</b>
+                  <span>{myInbox ? (myInbox.storeAll ? "Every e-mail lands in the desk's Inbox." : "Only replies to tickets and mail that matches a rule come in — the rest stays private.") : "Off — your personal mail stays out of the desk."}</span></div>
+                {myInbox && (
+                  <label className="ts-check"><input type="checkbox" checked={myInbox.storeAll} onChange={() => run(saveMailbox({ ...myInbox, storeAll: !myInbox.storeAll }))} />Bring in everything</label>
+                )}
+                <button type="button" role="switch" aria-checked={!!myInbox} className={`ts-switch ${myInbox ? "is-on" : ""}`}
+                  onClick={() => myInbox ? run(deleteMailbox(myInbox.id)) : run(saveMailbox({ address: mail?.email || dir.people.find((p) => p.id === dir.me)?.email || "", kind: "personal", ownerId: dir.me, label: "My inbox", canSend: true }))}><i /></button>
+              </div>
+              <div className="ts-list">
+                {(boxes ?? []).filter((b) => b.kind === "shared").map((b, i) => (
+                  <div key={b.id} className={`ts-box ${b.active ? "" : "is-off"}`} style={{ ["--i" as string]: i } as React.CSSProperties}>
+                    <span className="ts-box-ico"><TkIco d="inbox" /></span>
+                    <div className="ts-box-main">
+                      <b>{b.label || b.address}</b>
+                      <span>{b.address}{b.lastSyncAt ? ` · read ${ago(b.lastSyncAt)}` : " · not read yet"}</span>
+                      {b.lastError && <small className="ts-box-err">{b.lastError.slice(0, 160)}</small>}
+                    </div>
+                    <label className="ts-check"><input type="checkbox" checked={b.canSend} onChange={() => run(saveMailbox({ ...b, canSend: !b.canSend }))} />Reply from it</label>
+                    <label className="ts-check"><input type="radio" name="tk-default-from" checked={b.isDefaultFrom} onChange={() => run(saveMailbox({ ...b, isDefaultFrom: true }))} />Default “From”</label>
+                    <button type="button" role="switch" aria-checked={b.active} className={`ts-switch ${b.active ? "is-on" : ""}`} onClick={() => run(saveMailbox({ ...b, active: !b.active }))}><i /></button>
+                    <button type="button" className="tk-icon-btn is-del" onClick={() => run(deleteMailbox(b.id))} aria-label="Remove mailbox"><TkIco d="trash" /></button>
+                  </div>
+                ))}
+              </div>
+              <div className="ts-newbox">
+                <input className="td-in" value={newBox.address} placeholder="support@yourcompany.com" type="email" onChange={(e) => setNewBox({ ...newBox, address: e.target.value })} />
+                <input className="td-in" value={newBox.label} placeholder="Label (Support, Consultancy…)" onChange={(e) => setNewBox({ ...newBox, label: e.target.value })} />
+                <button type="button" className="tk-new" disabled={!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(newBox.address.trim())}
+                  onClick={async () => { const e = await run(saveMailbox({ address: newBox.address, label: newBox.label, kind: "shared", isDefaultFrom: !(boxes ?? []).some((b) => b.isDefaultFrom) })); if (!e) setNewBox({ address: "", label: "" }); }}>
+                  <TkIco d="plus" />Add shared mailbox</button>
+              </div>
+            </>
+          )}
+
+          {tab === "sla" && sla && (
+            <>
+              <p className="ts-lead">How fast a ticket should get its first reply to the requester and be resolved, by priority. Tickets show the time left — amber in the last quarter, red when late.</p>
+              <div className="ts-sla">
+                <div className="ts-sla-h"><span>Priority</span><span>First reply within</span><span>Resolved within</span></div>
+                {TASK_PRIORITIES.map((p) => (
+                  <SlaRow key={p} p={p} v={sla[p]} onSave={(v) => run(saveSla(p, v))} />
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+function SlaRow({ p, v, onSave }: { p: TaskPriority; v: SlaTarget; onSave: (v: SlaTarget) => void }) {
+  const toH = (m: number | null) => (m == null ? "" : String(+(m / 60).toFixed(2)));
+  const [fr, setFr] = useState(toH(v.firstResponse));
+  const [res, setRes] = useState(toH(v.resolution));
+  useEffect(() => { setFr(toH(v.firstResponse)); setRes(toH(v.resolution)); }, [v.firstResponse, v.resolution]);
+  const commit = () => {
+    const m = (x: string) => (x.trim() === "" ? null : Math.max(1, Math.round(Number(x.replace(",", ".")) * 60)) || null);
+    const next = { firstResponse: m(fr), resolution: m(res) };
+    if (next.firstResponse !== v.firstResponse || next.resolution !== v.resolution) onSave(next);
+  };
+  return (
+    <div className="ts-sla-r">
+      <span className={`tk-prio is-${p}`}><FlagIcon />{PRIORITY_LABEL[p]}</span>
+      <label><input className="td-in" inputMode="decimal" value={fr} placeholder="No target" onChange={(e) => setFr(e.target.value)} onBlur={commit} /><em>hours</em></label>
+      <label><input className="td-in" inputMode="decimal" value={res} placeholder="No target" onChange={(e) => setRes(e.target.value)} onBlur={commit} /><em>hours</em></label>
+    </div>
+  );
 }

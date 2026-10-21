@@ -15,3 +15,80 @@ body {
   overflow-x: hidden;
   font-family: "Inter", system-ui, -apple-system, sans-serif;
 }
+/* =====================================================================
+   Floating dark hero — Clients, Deals and Management.
+   The dark header + figures sit on a rounded card with a light gap from
+   the sidebar and the top (like the Calendar bar), instead of a dark band
+   running into the rail. The card is sized by the page (--fh-h), a soft
+   glow follows the pointer (--fh-x/--fh-y/--fh-on), a slow sheen and the
+   aurora drift inside it.
+   ===================================================================== */
+@property --fh-on { syntax: "<number>"; inherits: true; initial-value: 0; }
+:is(.cl.cl-ov, .sl.sl-ov, .mg.mg-dark).fh {
+  background: var(--paper, #f2f5f3); padding-top: 12px;
+  transition: --fh-on 0.45s ease;
+}
+:is(.cl.cl-ov, .sl.sl-ov, .mg.mg-dark).fh::before {
+  inset: 12px 14px auto 14px; height: var(--fh-h, 0px); border-radius: 26px; filter: none; z-index: 0;
+  background:
+    radial-gradient(42% 70% at 12% 16%, rgba(18, 148, 102, 0.55), transparent 70%),
+    radial-gradient(38% 70% at 88% 6%, rgba(26, 143, 134, 0.42), transparent 70%),
+    radial-gradient(28% 60% at 58% 100%, rgba(185, 138, 46, 0.16), transparent 70%),
+    linear-gradient(105deg, #0e4a36 0%, #0a3527 45%, #072419 100%);
+  background-size: 150% 150%, 150% 150%, 150% 150%, 100% 100%;
+  background-position: 0% 0%, 100% 0%, 50% 100%, 0 0;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.05) inset, 0 1px 0 rgba(255, 255, 255, 0.08) inset,
+    0 26px 50px -30px rgba(4, 30, 20, 0.85), 0 8px 18px -12px rgba(4, 30, 20, 0.4);
+  animation: fh-in 0.7s cubic-bezier(0.16, 1, 0.3, 1) backwards, fh-aurora 22s ease-in-out infinite alternate;
+}
+:is(.cl.cl-ov, .sl.sl-ov, .mg.mg-dark).fh::after {
+  inset: 12px 14px auto 14px; height: var(--fh-h, 0px); border-radius: 26px; z-index: 0;
+  -webkit-mask-image: none; mask-image: none;
+  background:
+    radial-gradient(380px circle at var(--fh-x, -600px) var(--fh-y, -600px), rgba(134, 239, 192, calc(0.15 * var(--fh-on))), transparent 70%),
+    linear-gradient(100deg, transparent 42%, rgba(201, 242, 221, 0.07) 50%, transparent 58%),
+    radial-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1.2px);
+  background-size: 100% 100%, 260% 100%, 22px 22px;
+  background-position: 0 0, 100% 0, 0 0;
+  animation: fh-in 0.7s cubic-bezier(0.16, 1, 0.3, 1) backwards, fh-sheen 9s ease-in-out infinite;
+}
+@keyframes fh-in { from { opacity: 0; transform: translateY(-10px) scale(0.985); } }
+@keyframes fh-aurora {
+  50% { background-position: 30% 22%, 70% 30%, 40% 80%, 0 0; }
+  100% { background-position: 10% 34%, 92% 12%, 70% 92%, 0 0; }
+}
+@keyframes fh-sheen { 0%, 100% { background-position: 0 0, 100% 0, 0 0; } 50% { background-position: 0 0, 0% 0, 0 0; } }
+
+/* the light sheet below no longer has to cover a dark band: no lip, no shadow, same colour as the page */
+.fh :is(.cx-sheet, .so-sheet, .tm-sheet, .bl-sheet, .bn-sheet, .bp-sheet, .ic-sheet) {
+  border-radius: 0 !important; box-shadow: none !important; background: var(--paper, #f2f5f3);
+}
+
+/* springy controls in the card */
+.fh :is(.cl-bar, .sl-head, .mg-bar) button { transition: transform 0.22s cubic-bezier(0.34, 1.45, 0.5, 1), background 0.18s, color 0.18s, border-color 0.18s, box-shadow 0.22s; }
+.fh :is(.cl-bar, .sl-head, .mg-bar) button:active { transform: scale(0.94); }
+.fh :is(.sl-back, .mg-home):hover { transform: translateX(-2px); }
+.fh :is(.so-views-pill, .mg-tabseg-slider, .mg-seg-slider) { transition-timing-function: cubic-bezier(0.34, 1.4, 0.5, 1) !important; }
+.fh :is(.cl-title, .sl-title, .mg-title) {
+  background: linear-gradient(90deg, #fff 0%, #fff 40%, #c9f2dd 50%, #fff 60%, #fff 100%) 0 0 / 300% 100%;
+  -webkit-background-clip: text; background-clip: text; color: transparent !important;
+  animation: fh-title 7s ease-in-out infinite;
+}
+@keyframes fh-title { 0%, 100% { background-position: 100% 0; } 50% { background-position: 0% 0; } }
+
+/* Deals: the stat cards' glows stay inside the card; a little air under them */
+.sl.sl-ov.fh .so-kpi.so-stat { overflow: hidden; }
+.sl.sl-ov.fh .so-kpis { padding-bottom: 30px; }
+
+@media (max-width: 860px) {
+  :is(.cl.cl-ov, .sl.sl-ov, .mg.mg-dark).fh { padding-top: 8px; }
+  :is(.cl.cl-ov, .sl.sl-ov, .mg.mg-dark).fh::before,
+  :is(.cl.cl-ov, .sl.sl-ov, .mg.mg-dark).fh::after { inset: 8px 8px auto 8px; border-radius: 20px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  :is(.cl.cl-ov, .sl.sl-ov, .mg.mg-dark).fh::before,
+  :is(.cl.cl-ov, .sl.sl-ov, .mg.mg-dark).fh::after,
+  .fh :is(.cl-title, .sl-title, .mg-title) { animation: none !important; }
+  :is(.cl.cl-ov, .sl.sl-ov, .mg.mg-dark).fh { --fh-on: 0 !important; }
+}

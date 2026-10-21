@@ -236,8 +236,8 @@ export default function DealImport({ pipelines, phaseByPipe, products, people, r
       group: `Phase reached · ${p.name}`, tone: "phase", hint: "Has a value → the deal got here, on that date",
     })));
     fields.forEach((f) => out.push({ value: `custom:${f.id}`, label: f.label, group: "Your deal fields", tone: "field", hint: TYPE_LABEL[f.type] }));
-    companyFields.forEach((f) => out.push({ value: `cocustom:${f.id}`, label: f.label, group: "Your company fields", tone: "field", hint: TYPE_LABEL[f.type] }));
-    contactFields.forEach((f) => out.push({ value: `ctcustom:${f.id}`, label: f.label, group: "Your contact fields", tone: "field", hint: TYPE_LABEL[f.type] }));
+    companyFields.forEach((f) => out.push({ value: `cocustom:${f.id}`, label: f.label, group: "Your company fields", tone: "field", hint: (TYPE_LABEL as Record<string, string>)[f.type] ?? "Multiple choice" }));
+    contactFields.forEach((f) => out.push({ value: `ctcustom:${f.id}`, label: f.label, group: "Your contact fields", tone: "field", hint: (TYPE_LABEL as Record<string, string>)[f.type] ?? "Multiple choice" }));
     st.newFields.forEach((n) => out.push({ value: `new:${n.tmp}`, label: n.label || "Untitled", group: "New fields", tone: "new", hint: `${ENTITY_LABEL[n.entity]} · ${TYPE_LABEL[n.type]}` }));
     (["deal", "company", "contact"] as Entity[]).forEach((e) => out.push({ value: `__create:${e}`, label: `New ${ENTITY_LABEL[e].toLowerCase()} field from this column`, group: "Create", tone: "create" }));
     return out;

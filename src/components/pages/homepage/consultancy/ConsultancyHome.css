@@ -164,14 +164,14 @@
 }
 @keyframes ch-slide { from { opacity: 0; transform: translateY(6px); } }
 /* =====================================================================
-   Consultancy home v2 — three columns that fill the screen
-     desk (tickets) | calendar + backlog 2×2 | team + bills
+   Consultancy home v3 — three columns that fill the screen
+     calendar + backlog 2×2 | to-do & tickets | team + bills
    ===================================================================== */
 .ch-home {
   --emerald: #12b57f; --forest: #0a6f4d; --ink: #0b241a; --muted: #5a7d6d; --line: rgba(10, 111, 77, 0.12);
   display: grid; gap: 18px; align-items: stretch;
-  grid-template-columns: minmax(330px, 0.95fr) minmax(0, 1.3fr) minmax(310px, 0.95fr);
-  grid-template-areas: "desk mid right";
+  grid-template-columns: minmax(0, 1.25fr) minmax(340px, 1fr) minmax(300px, 0.9fr);
+  grid-template-areas: "mid desk right";
 }
 .ch-col { min-width: 0; display: flex; flex-direction: column; gap: 18px; }
 .ch-col-desk { grid-area: desk; }
@@ -230,9 +230,9 @@
   .ch-col-right .ch-team-list, .ch-col-right .ch-bills-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; margin-right: -8px; padding-right: 8px; scrollbar-width: thin; }
 }
 
-/* narrower: desk + middle side by side, team / bills below */
+/* narrower: calendar + desk side by side, team / bills below */
 @media (max-width: 1280px) and (min-width: 1081px) {
-  .ch-home { grid-template-columns: minmax(320px, 1fr) minmax(0, 1.25fr); grid-template-areas: "desk mid" "right right"; }
+  .ch-home { grid-template-columns: minmax(0, 1.2fr) minmax(320px, 1fr); grid-template-areas: "mid desk" "right right"; }
   .ch-col-right { display: grid; grid-template-columns: 1fr 1fr; }
 }
 @media (max-width: 1280px) and (min-width: 1081px) and (min-height: 700px) {

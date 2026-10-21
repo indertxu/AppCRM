@@ -1362,3 +1362,61 @@ button.co-cc-main { padding: 0; border: 0; background: none; font: inherit; text
 /* the section index fits "Company information" / "Contact information" */
 .dw-layout { grid-template-columns: 236px minmax(0, 1fr); }
 .dw-nav-item span { letter-spacing: -0.005em; }
+
+/* ---- Sticky column header: one opaque band from the top of the scroller (no rows peeking above or at its corners) ---- */
+.co-scroll { --list-bg: #eef6f2; }
+.co-lhead-wrap {
+  position: sticky; top: -10px; z-index: 5;
+  /* covers the scroller's 10px top padding and its side paddings, and grows with a wide (scrolling) row */
+  margin: -10px -22px 0 -16px; padding: 10px 22px 6px 16px;
+  width: max-content; min-width: calc(100% + 38px); box-sizing: border-box;
+  background: var(--list-bg);
+  transition: box-shadow 0.25s ease;
+}
+.co-lhead-wrap .co-lhead { position: relative; top: auto; z-index: auto; margin-bottom: 0; }
+.co-scroll.is-scrolled-y .co-lhead-wrap { box-shadow: 0 12px 16px -16px rgba(10, 60, 40, 0.45); }
+
+/* ── Multiple-choice custom field (chips + search) ── */
+.mc { position: relative; width: 100%; }
+.mc-box {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 44px; box-sizing: border-box;
+  padding: 6px 34px 6px 8px; border: 1px solid rgba(10, 111, 77, 0.14); border-radius: 12px;
+  background: var(--dw-field, #f7fbf9); cursor: text; position: relative;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+.mc-box:hover { border-color: rgba(10, 111, 77, 0.26); }
+.mc.is-open .mc-box { border-color: var(--dw-em, #12b57f); background: #fff; box-shadow: 0 0 0 4px rgba(18, 181, 127, 0.13); }
+.mc .mc-input {
+  flex: 1 1 90px; min-width: 90px; width: auto; height: 30px; padding: 0 6px; border: 0; border-radius: 0;
+  background: transparent; box-shadow: none; font-family: inherit; font-size: 14px; color: var(--dw-ink, #0b241a); outline: none;
+}
+.mc .mc-input:hover, .mc .mc-input:focus { border: 0; background: transparent; box-shadow: none; }
+.mc-chev { position: absolute; right: 12px; top: 50%; width: 15px; height: 15px; margin-top: -7.5px; color: #8aa79a; pointer-events: none; transition: transform 0.15s; }
+.mc.is-open .mc-chev { transform: rotate(180deg); }
+.mc-chip {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%; height: 28px; box-sizing: border-box;
+  padding: 0 4px 0 10px; border-radius: 999px; background: rgba(18, 181, 127, 0.12); border: 1px solid rgba(10, 111, 77, 0.16);
+  color: #0a6f4d; font-family: "Space Grotesk", sans-serif; font-size: 12.5px; font-weight: 600; white-space: nowrap;
+}
+.mc-chip button { display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; cursor: pointer; opacity: 0.65; }
+.mc-chip button:hover { opacity: 1; background: rgba(10, 111, 77, 0.14); }
+.mc-chip button svg { width: 11px; height: 11px; }
+.mc-chip.is-sm { height: 22px; padding: 0 9px; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; display: inline-block; line-height: 20px; max-width: 160px; }
+.mc-list {
+  position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 30; max-height: 240px; overflow-y: auto;
+  padding: 6px; background: #fff; border: 1px solid rgba(10, 111, 77, 0.16); border-radius: 13px;
+  box-shadow: 0 14px 34px rgba(11, 36, 26, 0.14);
+}
+.mc-opt {
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: 0; border-radius: 9px;
+  background: transparent; font-family: inherit; font-size: 13.5px; color: #0b241a; text-align: left; cursor: pointer;
+}
+.mc-opt.is-hi { background: #f1f8f4; }
+.mc-opt i { display: grid; place-items: center; flex-shrink: 0; width: 18px; height: 18px; border-radius: 6px; border: 1.5px solid rgba(10, 111, 77, 0.3); background: #fff; color: transparent; }
+.mc-opt i svg { width: 12px; height: 12px; }
+.mc-opt.is-on i { background: #12b57f; border-color: #12b57f; color: #fff; }
+.mc-opt.is-new { color: #0a6f4d; font-weight: 600; }
+.mc-opt.is-new i { border-style: dashed; color: #0a6f4d; }
+.mc-empty { padding: 10px; font-size: 12.5px; color: #7d978b; }
+.mc-cell { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; overflow: hidden; }
+.mc-more { flex-shrink: 0; font-family: "Space Grotesk", sans-serif; font-size: 11.5px; font-weight: 700; color: #5a7d6d; padding: 0 4px; }

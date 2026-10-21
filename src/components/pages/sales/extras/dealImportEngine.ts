@@ -498,9 +498,10 @@ const withDefaults = (s: Partial<ImportState>): ImportState => {
 
 /** The custom field a target writes to: deal (custom:), company (cocustom:), contact (ctcustom:) or new (new:). */
 export function defOf(ctx: Pick<Ctx, "fields" | "companyFields" | "contactFields">, state: Pick<ImportState, "newFields">, t: string): FieldDef | null {
-  const pick = (list: { id: string; label: string; type: FieldType; options: string[]; required?: boolean }[], id: string, entity: Entity) => {
+  const pick = (list: { id: string; label: string; type: string; options: string[]; required?: boolean }[], id: string, entity: Entity) => {
     const f = list.find((x) => x.id === id);
-    return f ? { label: f.label, type: f.type, options: f.options ?? [], required: !!f.required, entity } : null;
+    // a multiple-choice company / contact field imports like a dropdown (one value per row)
+    return f ? { label: f.label, type: (f.type === "multiselect" ? "select" : f.type) as FieldType, options: f.options ?? [], required: !!f.required, entity } : null;
   };
   if (t.startsWith("custom:")) return pick(ctx.fields, t.slice(7), "deal");
   if (t.startsWith("cocustom:")) return pick(ctx.companyFields ?? [], t.slice(9), "company");

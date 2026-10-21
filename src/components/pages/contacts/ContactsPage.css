@@ -334,4 +334,17 @@
 .ct-scroll.is-compact.is-xscroll .ct-lcell.ct-lid { margin-top: -7px; margin-bottom: -7px; padding-top: 7px; padding-bottom: 7px; border-radius: 10px 0 0 10px; }
 .ct-scroll.is-compact .ct-avatar, .ct-scroll.is-compact .ct-av-wrap { width: 30px; height: 30px; font-size: 12px; }
 .ct-scroll.is-compact .ct-lcell { font-size: 13px; }
-.ct-scroll.is-xscroll .ct-lcell:not(.ct-lid) > span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ct-scroll.is-xscroll .ct-lcell:not(.ct-lid) > span:not(.mc-cell) { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---- Sticky column header: one opaque band from the top of the scroller (no rows peeking above or at its corners) ---- */
+.ct-scroll { --list-bg: #eef6f2; }
+.ct-lhead-wrap {
+  position: sticky; top: -10px; z-index: 5;
+  /* covers the scroller's 10px top padding and its side paddings, and grows with a wide (scrolling) row */
+  margin: -10px -22px 0 -16px; padding: 10px 22px 6px 16px;
+  width: max-content; min-width: calc(100% + 38px); box-sizing: border-box;
+  background: var(--list-bg);
+  transition: box-shadow 0.25s ease;
+}
+.ct-lhead-wrap .ct-lhead { position: relative; top: auto; z-index: auto; margin-bottom: 0; }
+.ct-scroll.is-scrolled-y .ct-lhead-wrap { box-shadow: 0 12px 16px -16px rgba(10, 60, 40, 0.45); }

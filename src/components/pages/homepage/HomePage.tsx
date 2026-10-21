@@ -25,6 +25,7 @@ import SalesHome from "./sales/SalesHome";
 import ConsultancyHome from "./consultancy/ConsultancyHome";
 import ManagementHome from "./management/ManagementHome";
 import { applyRolePreview } from "../../framework/SuperAdmin";
+import { PageCube } from "../../framework/AppLayout";
 import "./HomePage.css";
 
 const greeting = () => {
@@ -42,10 +43,155 @@ const NextLogo = () => (
       <polyline points="7,30 15,19 22,24 31.7,10.1" fill="none" stroke="#0a6f4d" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
       <polygon points="36,4 35.1,12.5 28.2,7.7" fill="#0a6f4d" />
     </g>
-    <g transform="translate(16,47) skewY(26.565)"><rect width="38" height="40" rx="2" fill="#12b57f" /><text x="19" y="30" textAnchor="middle" fill="#fff" fontFamily="Arial" fontWeight="700" fontSize="27">N</text></g>
+    <g transform="translate(16,47) skewY(26.565)"><rect width="38" height="40" rx="2" fill="#12b57f" /><path d="M10.5 31V10h5.1l6.8 12.6V10h5.1v21h-5.1l-6.8-12.6V31z" fill="#fff" /></g>
     <g transform="translate(66,66) skewY(-26.565)"><rect width="38" height="40" rx="2" fill="#0a6f4d" /><rect x="6" y="24" width="6" height="11" rx="1.5" fill="#fff" /><rect x="16" y="16" width="6" height="19" rx="1.5" fill="#fff" /><rect x="26" y="8" width="6" height="27" rx="1.5" fill="#fff" /></g>
   </svg>
 );
+
+/* ---------------------------------------------------------------------------
+   Booting the home page — a paced sequence tied to what is really loading.
+   Each step ticks only once its data has actually arrived (the session, your
+   profile, then a count from the calendar, the tickets and the team), and the
+   ring fills only once the panels underneath have stopped changing.
+     · after the sign-in ("arrive"): full screen, on the same deep green the
+       sign-in left; at the end the cube and the ring shrink into the rail's
+       Home icon while the screen closes in after them.
+     · on a direct visit ("page"): the same sequence in the page, lighter.
+   Reduced motion: no choreography, the page shows as soon as it can.
+   --------------------------------------------------------------------------- */
+const JUST_SIGNED_IN_KEY = "next:just-signed-in";
+const prefersStill = () => { try { return window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { return false; } };
+type StepKey = "auth" | "workspace" | "calendar" | "tickets" | "team";
+const BOOT_STEPS: { k: StepKey; label: string }[] = [
+  { k: "auth", label: "Authenticating" },
+  { k: "workspace", label: "Loading your workspace" },
+  { k: "calendar", label: "Calendar" },
+  { k: "tickets", label: "Tickets" },
+  { k: "team", label: "Team" },
+];
+type BootMode = "arrive" | "page";
+type BootPhase = "boot" | "done" | "out" | "none";
+interface Boot { mode: BootMode; phase: BootPhase; ticked: number; progress: number }
+
+function useBoot(ready: Record<StepKey, boolean>, settled: boolean): Boot {
+  const [mode] = useState<BootMode>(() => {
+    try {
+      const v = sessionStorage.getItem(JUST_SIGNED_IN_KEY);
+      if (v && Date.now() - Number(v) < 15000 && !prefersStill()) return "arrive";
+    } catch { /* ignore */ }
+    return "page";
+  });
+  const [, render] = useState(0);
+  const st = useRef({ phase: "boot" as BootPhase, ticked: 0, t0: performance.now(), last: 0, at: 0 });
+  const live = useRef({ ready, settled });
+  live.current = { ready, settled };
+  // played once: forget it (in an effect, so a strict-mode double render still sees it)
+  useEffect(() => { try { sessionStorage.removeItem(JUST_SIGNED_IN_KEY); } catch { /* ignore */ } }, []);
+  useEffect(() => {
+    const still = prefersStill();
+    // pacing: the first tick after the cube has settled, then one step at a time
+    const START = still ? 0 : mode === "arrive" ? 520 : 260;
+    const GAP = still ? 0 : mode === "arrive" ? 400 : 270;
+    const HOLD = still ? 0 : mode === "arrive" ? 520 : 320;
+    const OUT = still ? 0 : mode === "arrive" ? 1080 : 560;
+    const s = st.current;
+    const id = window.setInterval(() => {
+      const now = performance.now(), t = now - s.t0;
+      const { ready: r, settled: done } = live.current;
+      if (s.phase === "boot") {
+        if (s.ticked < BOOT_STEPS.length) {
+          const k = BOOT_STEPS[s.ticked].k;
+          if (t >= START && now - s.last >= GAP && (r[k] || t > 8000)) { s.ticked += 1; s.last = now; render((x) => x + 1); }
+        } else if (now - s.last >= GAP * 0.8 && (done || t > 10000)) { s.phase = "done"; s.at = now; render((x) => x + 1); }
+      } else if (s.phase === "done" && now - s.at >= HOLD) { s.phase = "out"; s.at = now; render((x) => x + 1); }
+      else if (s.phase === "out" && now - s.at >= OUT) { s.phase = "none"; render((x) => x + 1); window.clearInterval(id); }
+    }, 50);
+    return () => window.clearInterval(id);
+  }, [mode]);
+  const s = st.current;
+  const progress = s.phase === "boot" ? (s.ticked / BOOT_STEPS.length) * 0.9 : 1;
+  return { mode, phase: s.phase, ticked: s.ticked, progress };
+}
+
+/** Quiet = nothing in the page has changed for a moment (the panels have drawn their data). */
+function useSettled(root: React.RefObject<HTMLElement | null>, armed: boolean): boolean {
+  const [settled, setSettled] = useState(false);
+  useEffect(() => {
+    if (!armed || settled || !root.current) return;
+    let timer = window.setTimeout(() => setSettled(true), 450);
+    const mo = new MutationObserver((recs) => {
+      if (recs.every((r) => (r.target as Element).closest?.(".home-boot") || (r.target.parentElement?.closest(".home-boot")))) return;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setSettled(true), 450);
+    });
+    mo.observe(root.current, { childList: true, subtree: true, characterData: true });
+    return () => { mo.disconnect(); window.clearTimeout(timer); };
+  }, [root, armed, settled]);
+  return settled;
+}
+
+function HomeBoot({ boot, details, hello, top }: { boot: Boot; details: Partial<Record<StepKey, string>>; hello: string; top: number }) {
+  const ref = useRef<HTMLDivElement>(null);
+  // at the end, fly into the rail's Home icon: measure it exactly
+  useEffect(() => {
+    if (boot.mode !== "arrive" || boot.phase !== "out" || !ref.current) return;
+    const icon = document.querySelector<HTMLElement>(".rail-item.k-home .rail-ico") ?? document.querySelector<HTMLElement>(".rail-item.k-home");
+    const W = window.innerWidth, H = window.innerHeight;
+    const r = icon?.getBoundingClientRect();
+    const ix = r ? r.left + r.width / 2 : 34, iy = r ? r.top + r.height / 2 : 36, is = r ? Math.max(r.width, r.height) : 24;
+    const el = ref.current;
+    el.style.setProperty("--ix", `${ix}px`);
+    el.style.setProperty("--iy", `${iy}px`);
+    el.style.setProperty("--tx", `${ix - W / 2}px`);
+    el.style.setProperty("--ty", `${iy - H * 0.46}px`);
+    el.style.setProperty("--ts", `${(is * 1.15) / 168}`);
+    const item = document.querySelector<HTMLElement>(".rail-item.k-home");
+    const t1 = window.setTimeout(() => item?.classList.add("is-landing"), 820);
+    const t2 = window.setTimeout(() => item?.classList.remove("is-landing"), 1900);
+    return () => { window.clearTimeout(t1); window.clearTimeout(t2); item?.classList.remove("is-landing"); };
+  }, [boot.mode, boot.phase]);
+
+  const pct = Math.round(boot.progress * 100);
+  return (
+    <div ref={ref} className={`home-boot is-${boot.mode} is-${boot.phase}`} style={boot.mode === "page" ? { top } : undefined}
+      role="status" aria-live="polite" aria-label={boot.phase === "boot" ? `Loading your home, ${pct}%` : "Home ready"}>
+      {boot.mode === "arrive" ? <div className="hb-bg" aria-hidden="true"><i className="hb-grid" /><i className="hb-aura" /></div> : (
+        <div className="hl-skel" aria-hidden="true">
+          <div className="hl-col"><i className="is-tall" /><i /></div>
+          <div className="hl-col"><i className="is-full" /></div>
+          <div className="hl-col"><i /><i className="is-tall" /></div>
+        </div>
+      )}
+      <div className="hb-orb" aria-hidden="true">
+        <span className="hb-glow" />
+        <svg className="hb-ring" viewBox="0 0 200 200">
+          <circle className="hb-ring-track" cx="100" cy="100" r="92" />
+          <circle className="hb-ring-fill" cx="100" cy="100" r="92" pathLength={1} style={{ strokeDashoffset: 1 - boot.progress }} />
+        </svg>
+        <span className="hb-orbit-dot" />
+        <div className="hb-cube-pos"><span className="hb-pc"><PageCube size={boot.mode === "arrive" ? 250 : 160} /></span></div>
+      </div>
+      <div className="hb-panel">
+        <p className="hb-hi">{hello}</p>
+        <ol className="hb-steps">
+          {BOOT_STEPS.map((s, i) => {
+            const state = i < boot.ticked ? "is-done" : i === boot.ticked && boot.phase === "boot" ? "is-active" : "";
+            return (
+              <li key={s.k} className={state}>
+                <span className="hb-mark" aria-hidden="true">
+                  <svg viewBox="0 0 16 16"><path d="M4 8.4l2.6 2.6L12 5.4" pathLength={1} /></svg>
+                </span>
+                <b>{s.label}</b>
+                <em>{i < boot.ticked ? details[s.k] ?? "" : ""}</em>
+              </li>
+            );
+          })}
+        </ol>
+        <span className="hb-pct">{boot.phase === "boot" ? `${pct}%` : "Ready"}</span>
+      </div>
+    </div>
+  );
+}
 
 const areaTitle = (a: Area) => a === "consultancy" ? "Consultancy" : a === "sales" ? "Sales" : a === "management" ? "Management" : "Next Management";
 
@@ -95,11 +241,45 @@ export default function HomePage() {
   const isLead = r === "boss" || r === "consultancy_manager";
   const seesSalesTeam = r === "boss" || r === "sales_manager" || !!me?.isSuper;
 
-  return (
-    <div className="home">
-      <div className="home-flood" aria-hidden="true" />
+  // ---- the boot sequence: real probes behind every step ----
+  const [probe, setProbe] = useState<{ calendar?: number | null; tickets?: number | null; team?: number | null }>({});
+  useEffect(() => {
+    if (!uid) return;
+    let alive = true;
+    const day = (n: number) => { const d = new Date(); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+    const run = (k: "calendar" | "tickets" | "team", q: PromiseLike<{ count: number | null; error: unknown }>) =>
+      Promise.resolve(q).then((res) => { if (alive) setProbe((p) => ({ ...p, [k]: res.error ? null : res.count ?? null })); }, () => { if (alive) setProbe((p) => ({ ...p, [k]: null })); });
+    run("calendar", supabase.from("calendar_entries").select("id", { count: "exact", head: true }).eq("user_id", uid).gte("entry_date", day(0)).lte("entry_date", day(14)) as any);
+    run("tickets", supabase.from("tracking_tasks").select("id", { count: "exact", head: true }).eq("assignee_id", uid).eq("done", false) as any);
+    run("team", supabase.from("profiles").select("id", { count: "exact", head: true }) as any);
+    return () => { alive = false; };
+  }, [uid]);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const barRef = useRef<HTMLElement>(null);
+  const settled = useSettled(rootRef, !!me);
+  const boot = useBoot({ auth: !!uid, workspace: !!me, calendar: "calendar" in probe, tickets: "tickets" in probe, team: "team" in probe }, settled);
+  const n = (v: number | null | undefined, one: string, many: string) => (typeof v === "number" ? `${v} ${v === 1 ? one : many}` : "");
+  const details: Partial<Record<StepKey, string>> = {
+    auth: "Signed in",
+    workspace: me ? `${areaTitle(area)}` : "",
+    calendar: n(probe.calendar, "entry ahead", "entries ahead"),
+    tickets: n(probe.tickets, "open", "open"),
+    team: n(probe.team, "person", "people"),
+  };
+  const [bootTop, setBootTop] = useState(90);
+  useEffect(() => {
+    const m = () => { const b = barRef.current; if (b) setBootTop(b.offsetTop + b.offsetHeight + 12); };
+    m(); window.addEventListener("resize", m);
+    return () => window.removeEventListener("resize", m);
+  }, []);
+  const booting = boot.phase === "boot" || boot.phase === "done";
+  const hello = `${greeting()}${me?.firstName ? `, ${me.firstName}` : ""}`;
 
-      <header className="home-bar">
+  return (
+    <div ref={rootRef} className={`home ${booting ? (boot.mode === "arrive" ? "is-held" : "is-held-grid") : ""} ${boot.phase === "out" ? `is-revealing is-revealing-${boot.mode}` : ""}`}>
+      {boot.phase !== "none" && <HomeBoot boot={boot} details={details} hello={hello} top={bootTop} />}
+
+      <header className="home-bar" ref={barRef}>
         <span className="home-logo-mini" aria-hidden="true"><NextLogo /></span>
         <div className="home-hello">
           <span className="home-eyebrow">{areaTitle(area)}</span>
@@ -109,12 +289,9 @@ export default function HomePage() {
         <span className="home-date">{new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}</span>
       </header>
 
-      {!uid ? (
-        <div className="home-grid">
-          <div className="home-side"><div className="home-ghost" /><div className="home-ghost is-short" /></div>
-          <div className="home-main"><div className="home-ghost" /></div>
-        </div>
-      ) : me && area === "consultancy" ? (
+      {!uid || !me ? (
+        <div className="home-wait" aria-hidden="true" />
+      ) : area === "consultancy" ? (
         <ConsultancyHome userId={me.id} isLead={isLead} hoursPerDay={hoursPerDay}
           calendar={<HomeCalendar userId={uid} hoursPerDay={hoursPerDay} />}
           desk={<TicketDesk />} />
@@ -124,9 +301,7 @@ export default function HomePage() {
             <HomeCalendar userId={uid} hoursPerDay={hoursPerDay} />
             <HomeTodo />
           </aside>
-          {!me ? (
-            <main className="home-main"><div className="home-ghost" /></main>
-          ) : area && (
+          {area && (
             <main className="home-main">
               {area === "sales" && <SalesHome userId={me.id} seesTeam={seesSalesTeam} />}
               {area === "management" && <ManagementHome />}

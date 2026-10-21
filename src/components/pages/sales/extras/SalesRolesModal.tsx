@@ -49,8 +49,10 @@ export interface AccessData {
   handovers: TrackingHandover[];
 }
 
-export default function SalesRolesModal({ canEdit, employees, pipelines, phaseByPipe, access, meId = null, transfer, onClose, onChanged }: {
+export default function SalesRolesModal({ canEdit, employees, pipelines, phaseByPipe, access, meId = null, transfer, onClose, onChanged, inline = false }: {
   canEdit: boolean;
+  /** Render as a plain block (Settings › Deals page) instead of a drawer. */
+  inline?: boolean;
   employees: { id: string; name: string; role?: string; is_superadmin?: boolean }[];
   pipelines: Pipeline[];
   phaseByPipe: Record<string, Phase[]>;
@@ -62,7 +64,7 @@ export default function SalesRolesModal({ canEdit, employees, pipelines, phaseBy
   onClose: () => void;
   onChanged: (roles: SalesRole[]) => void;
 }) {
-  useBackToClose("sales-roles", onClose);
+  useBackToClose("sales-roles", onClose, !inline);
   const [tab, setTab] = useState<"roles" | "access" | "transfers">("roles");
   const [rules, setRules] = useState<RuleMap>(access?.rules ?? {});
   const visMissing = !access;
@@ -121,11 +123,11 @@ export default function SalesRolesModal({ canEdit, employees, pipelines, phaseBy
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || document.querySelector(".smf-menu, .dp-pop, .hov-backdrop, .acs-backdrop")) return;
-      if (draft) setDraft(null); else onClose();
+      if (draft) setDraft(null); else if (!inline) onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [draft, onClose]);
+  }, [draft, onClose, inline]);
 
   const name = (id: string | null) => employees.find((e) => e.id === id)?.name ?? "—";
   const phasesOf = (pid: string) => orderPhases(phaseByPipe[pid] ?? []).filter((p) => !p.sales_outcome);
@@ -172,16 +174,15 @@ export default function SalesRolesModal({ canEdit, employees, pipelines, phaseBy
   };
   const memberOptions = employees.map((e) => ({ value: e.id, label: e.name }));
 
-  return (
-    <div className="dw-backdrop srl-backdrop" onMouseDown={onClose}>
-      <div className="dw srl" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Sales roles">
-        <div className="dw-head">
+  const panel = (
+      <div className={`dw srl${inline ? " is-inline" : ""}`} onMouseDown={(e) => e.stopPropagation()} role={inline ? undefined : "dialog"} aria-modal={inline ? undefined : true} aria-label="Sales roles">
+        {(!inline || draft) && <div className="dw-head">
           <div>
             <span className="dw-eyebrow">{draft ? (draft.id ? "Edit role" : "New role") : "Configure"}</span>
             <h2 className="dw-title">{draft ? (draft.name.trim() || "Untitled role") : "Sales roles"}</h2>
           </div>
           <button className="dw-x" onClick={draft ? () => setDraft(null) : onClose} aria-label={draft ? "Back to roles" : "Close"}>{draft ? "‹" : "×"}</button>
-        </div>
+        </div>}
 
         {!draft && (
           <div className="srl-tabs" role="tablist">
@@ -410,6 +411,11 @@ export default function SalesRolesModal({ canEdit, employees, pipelines, phaseBy
           />
         )}
       </div>
+  );
+  if (inline) return panel;
+  return (
+    <div className="dw-backdrop srl-backdrop" onMouseDown={onClose}>
+      {panel}
     </div>
   );
 }

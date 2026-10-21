@@ -1426,9 +1426,6 @@ function DealPeople({ company, contacts, companyContactIds, dealIds, onChange }:
   const others = companyContactIds.filter((id) => !dealIds.includes(id)).map((id) => byId.get(id)).filter((c): c is Contact => !!c)
     .sort((a, b) => `${a.first_name} ${a.last_name ?? ""}`.localeCompare(`${b.first_name} ${b.last_name ?? ""}`));
   const othersShown = showAll ? others : others.slice(0, 3);
-  // any contact can join the deal (company people first)
-  const pickable = contacts.filter((c) => c.id && !dealIds.includes(c.id))
-    .sort((a, b) => Number(companyContactIds.includes(b.id!)) - Number(companyContactIds.includes(a.id!)) || `${a.first_name} ${a.last_name ?? ""}`.localeCompare(`${b.first_name} ${b.last_name ?? ""}`));
   const name = (c: Contact) => [c.first_name, c.last_name].filter(Boolean).join(" ") || c.email || "Contact";
   const ini = (c: Contact) => name(c).split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
   const openContact = (c: Contact) => c.id && navigate("/contacts", { state: { focusContactId: c.id } });
@@ -1476,24 +1473,17 @@ function DealPeople({ company, contacts, companyContactIds, dealIds, onChange }:
     </div>
   );
   return (
-    <FoldPanel className="sl-panel-people" title="Contacts" count={onDeal.length} defaultOpen
+    <FoldPanel className="sl-panel-people" title="Contacts" count={onDeal.length}
       summary={onDeal.length
         ? onDeal.slice(0, 2).map(name).join(", ") + (onDeal.length > 2 ? ` +${onDeal.length - 2}` : "")
         : others.length ? `None yet · ${others.length} at the company` : "None yet"}
-      aside={pickable.length > 0 ? (
-        <div className="sl-ppl-addany">
-          <Select value="" onChange={(v) => v && onChange([...dealIds, v])} placeholder="+ Add a contact" size="sm" searchable aria-label="Add a contact to this deal"
-            options={pickable.map((c) => ({ value: c.id!, label: name(c), hint: [c.position, c.email].filter(Boolean).join(" · ") || undefined }))} />
-        </div>
-      ) : undefined}>
-      {company && (
-        <div className="sl-ppl-cobar">
+      aside={company && (
+        <span className="sl-ppl-cohead">
           <button type="button" className="sl-ppl-co" onClick={openCompany} title="Open in Companies"><QlIco n="building" s={12} />{company.name}</button>
-          <span>People on this deal — click one to open it in Contacts</span>
           <LinksMenu links={companyLinks} label={`Links for ${company.name}`} />
-        </div>
-      )}
-      {onDeal.length === 0 && <p className="sl-hint">No contacts on this deal yet{others.length ? " — add one from the company below, or any contact with “Add a contact”." : " — add one with “Add a contact”."}</p>}
+        </span>
+      )}>
+      {onDeal.length === 0 && <p className="sl-hint">No contacts on this deal yet{others.length ? " — add one from the company below." : "."}</p>}
       <div className="sl-ppl-list">{onDeal.map((c, i) => row(c, true, i))}</div>
       {others.length > 0 && (
         <>
@@ -1503,87 +1493,6 @@ function DealPeople({ company, contacts, companyContactIds, dealIds, onChange }:
         </>
       )}
     </FoldPanel>
-  );
-}
-
-/* ============================ Deal sections ============================ */
-const DV_ICON: Record<string, string> = {
-  overview: "M3 12h4l3-8 4 16 3-8h4",
-  revenue: "M12 2v20M17 6H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6",
-  contacts: "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75",
-  tasks: "M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11",
-  meetings: "M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2",
-  notes: "M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z",
-  documents: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6",
-  probability: "M18 20V10M12 20V4M6 20v-6",
-  history: "M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 3",
-};
-const DvIco = ({ k }: { k: string }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={DV_ICON[k] ?? DV_ICON.overview} /></svg>
-);
-type DvItem = { k: string; label: string; count?: number; warn?: boolean };
-/** The deal's section index, like the one in the Company / Contact panels. */
-function DealNav({ items, active, onGo }: { items: DvItem[]; active: string; onGo: (k: string) => void }) {
-  return (
-    <nav className="dv-nav" aria-label="Deal sections">
-      <span className="dv-nav-k">Sections</span>
-      {items.map((s) => (
-        <button key={s.k} type="button" className={`dv-nav-item ${active === s.k ? "is-on" : ""}`} onClick={() => onGo(s.k)} aria-current={active === s.k ? "true" : undefined}>
-          <i><DvIco k={s.k} /></i>
-          <span>{s.label}</span>
-          {s.warn ? <b className="dv-dot" title="Something to fill in" /> : s.count ? <em>{s.count}</em> : null}
-        </button>
-      ))}
-    </nav>
-  );
-}
-type DealFact = { k: string; label: string; value: ReactNode; sub?: ReactNode; tone?: "green" | "amber" | "red" | "none"; onClick?: () => void };
-/** "Deal info": the figures that say where the deal stands. */
-function DealFacts({ facts }: { facts: DealFact[] }) {
-  return (
-    <section className="sl-panel dv-facts">
-      <div className="dv-h">
-        <span className="dv-h-ico"><DvIco k="overview" /></span>
-        <div className="dv-h-txt"><h3>Deal info</h3><p>Value, dates, chances and who is on it</p></div>
-      </div>
-      <div className="dv-facts-grid">
-        {facts.map((f) => {
-          const body = (
-            <>
-              <span className="dv-fact-k">{f.label}</span>
-              <span className={`dv-fact-v ${f.tone ? `is-${f.tone}` : ""}`}>{f.value}</span>
-              {f.sub && <span className="dv-fact-sub">{f.sub}</span>}
-            </>
-          );
-          return f.onClick
-            ? <button key={f.k} type="button" className="dv-fact is-link" onClick={f.onClick}>{body}</button>
-            : <div key={f.k} className="dv-fact">{body}</div>;
-        })}
-      </div>
-    </section>
-  );
-}
-type DealEvent = { at: string; label: string; tone?: "green" | "red" | "amber" | "blue" };
-/** What happened to the deal, newest first. */
-function DealHistory({ items }: { items: DealEvent[] }) {
-  return (
-    <section className="sl-panel dv-hist">
-      <div className="dv-h">
-        <span className="dv-h-ico"><DvIco k="history" /></span>
-        <div className="dv-h-txt"><h3>History</h3><p>When the deal opened, moved and closed</p></div>
-      </div>
-      {items.length === 0 ? <p className="sl-hint">Nothing recorded yet.</p> : (
-        <ol className="dv-hist-list">
-          {items.map((e, i) => (
-            <li key={i} className={e.tone ? `is-${e.tone}` : ""}>
-              <i />
-              <span>{e.label}</span>
-              <time>{new Date(e.at.length === 10 ? `${e.at}T12:00:00` : e.at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</time>
-            </li>
-          ))}
-        </ol>
-      )}
-    </section>
   );
 }
 
@@ -2510,34 +2419,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     if (k === "tasks") resetTaskDraft();
     if (k === "meetings") { setMeetTitle(""); setMeetDate(""); setMeetTime("10:00"); setMeetEnd("11:00"); }
   };
-  // The box being written in gets more room (the others stay visible: every section is its own card now).
-  const panelOn = (k: Composer) => (composing === k ? " is-composing" : "");
-  // Section index: which card is on screen, and a smooth jump to one.
-  const dvScrollRef = useRef<HTMLDivElement>(null);
-  const [dvActive, setDvActive] = useState("overview");
-  const dvLock = useRef(0);
-  const goSection = (k: string) => {
-    const root = dvScrollRef.current;
-    const el = root?.querySelector<HTMLElement>(`[data-dsec="${k}"]`);
-    if (!root || !el) return;
-    setDvActive(k); dvLock.current = Date.now() + 700;
-    root.scrollTo({ top: el.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop - 16, behavior: "smooth" });
-  };
-  useEffect(() => {
-    const root = dvScrollRef.current;
-    if (!root) return;
-    const onScroll = () => {
-      if (Date.now() < dvLock.current) return;
-      const secs = Array.from(root.querySelectorAll<HTMLElement>("[data-dsec]"));
-      const top = root.getBoundingClientRect().top + 140;
-      let cur = secs[0]?.dataset.dsec ?? "overview";
-      secs.forEach((el) => { if (el.getBoundingClientRect().top <= top) cur = el.dataset.dsec ?? cur; });
-      if (root.scrollTop + root.clientHeight >= root.scrollHeight - 4) cur = secs[secs.length - 1]?.dataset.dsec ?? cur;
-      setDvActive(cur);
-    };
-    root.addEventListener("scroll", onScroll, { passive: true });
-    return () => root.removeEventListener("scroll", onScroll);
-  }, []);
+  const panelState = (k: Composer) => (composing ? (composing === k ? " is-composing" : " is-folded") : "");
   const composeCancel = (k: Composer) => composing === k && (
     <button type="button" className="sl-compose-x" onClick={() => cancelComposer(k)} title="Discard and show everything again">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
@@ -3232,50 +3114,6 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     );
   };
 
-  // ---- sections: index, figures, history ----
-  const dealContactIds = Array.from(new Set([...trackingContactIds, ...tracking.contactIds]));
-  const dvItems: DvItem[] = [
-    { k: "overview", label: "Deal info" },
-    { k: "revenue", label: "Revenue" },
-    { k: "contacts", label: "Contacts", count: dealContactIds.length },
-    { k: "tasks", label: "Tasks", count: tasks.filter((t) => !t.done).length, warn: overdueCount > 0 },
-    { k: "meetings", label: "Meetings", count: meetings.length },
-    { k: "notes", label: "Notes", count: notes.length },
-    { k: "documents", label: "Documents" },
-    { k: "probability", label: "Close probability" },
-    { k: "history", label: "History" },
-  ];
-  const fmtDay = (d: string | null | undefined) => (d ? new Date(d.length === 10 ? `${d}T12:00:00` : d).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "");
-  const expected = [repDate, mgrDate].filter(Boolean).sort()[0] ?? "";
-  const dealFacts: DealFact[] = [
-    { k: "value", label: "Potential value", value: totalPotential > 0 ? money(totalPotential) : "No value yet", tone: totalPotential > 0 ? "green" : "none",
-      sub: partnersTotal > 0 ? `after −${money(partnersTotal)} partners` : undefined, onClick: () => goSection("revenue") },
-    { k: "close", label: status === "won" || status === "lost" ? (status === "won" ? "Won on" : "Lost on") : "Expected close",
-      value: status === "won" || status === "lost" ? (fmtDay(closedOn) || "No date") : (fmtDay(expected) || "Not set"),
-      tone: status === "won" ? "green" : status === "lost" ? "red" : expected ? undefined : "none",
-      sub: status !== "won" && status !== "lost" && repDate && mgrDate && repDate !== mgrDate ? `Sales ${fmtDay(repDate)} · Mgmt ${fmtDay(mgrDate)}` : undefined,
-      onClick: () => goSection("probability") },
-    { k: "chance", label: "Close chance", value: closeProb == null ? "—" : `${closeProb}%`, tone: closeProb == null ? "none" : closeProb >= 70 ? "green" : closeProb >= 40 ? "amber" : "red",
-      sub: `Sales ${repProb == null ? "—" : `${repProb}%`} · Mgmt ${mgrProb == null ? "—" : `${mgrProb}%`}`, onClick: () => goSection("probability") },
-    { k: "phase", label: "Phase", value: phases.find((p) => p.id === curPhase)?.name ?? "Not started", sub: `${pct}% of ${allPipelines.find((p) => p.id === tracking.pipeline_id)?.name ?? "the pipeline"}` },
-    { k: "owner", label: "Owner", value: owner ? empName(owner) : "No owner", tone: owner ? undefined : "none",
-      sub: team.length ? `${team.length} ${team.length === 1 ? "person" : "people"} on the deal` : "Nobody else on it" },
-    { k: "company", label: "Company", value: company?.name ?? "No company", tone: company ? undefined : "none",
-      sub: company ? "Open in Companies" : undefined,
-      onClick: company ? () => navigate("/companies", { state: { focusCompanyId: company.id } }) : undefined },
-    { k: "contacts", label: "Contacts", value: dealContactIds.length ? `${dealContactIds.length} on the deal` : "None yet", tone: dealContactIds.length ? undefined : "none",
-      sub: dealContactIds.slice(0, 2).map(contactName).filter(Boolean).join(", ") || undefined, onClick: () => goSection("contacts") },
-    { k: "started", label: "Opened", value: fmtDay(tracking.created_at) || "—" },
-  ];
-  const dealHistory: DealEvent[] = [
-    ...(tracking.created_at ? [{ at: tracking.created_at, label: "Deal opened", tone: "blue" as const }] : []),
-    ...phases.map((p) => ({ p, at: phaseEnteredAt(p.id) })).filter((x) => !!x.at).map((x) => ({
-      at: x.at!, label: x.p.sales_outcome === "win" ? `Won · ${x.p.name}` : x.p.sales_outcome === "loss" ? `Lost · ${x.p.name}` : `Moved to ${x.p.name}`,
-      tone: x.p.sales_outcome === "win" ? "green" as const : x.p.sales_outcome === "loss" ? "red" as const : undefined,
-    })),
-    ...(closedOn && (status === "won" || status === "lost") ? [{ at: closedOn, label: status === "won" ? "Closed · won" : "Closed · lost", tone: status === "won" ? "green" as const : "red" as const }] : []),
-  ].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
-
   return (
     <div className="sl sl-detail">
       {pendingHandover && (
@@ -3473,7 +3311,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
         </div>
       </header>
 
-      <div className="sl-scroll" ref={dvScrollRef}>
+      <div className="sl-scroll">
         {/* Pipeline flow — hero */}
         <div className={`sl-pipe sl-pipe-${status}`}>
           <div className="sl-pipe-body">
@@ -3518,345 +3356,335 @@ export default function TrackingDetail({ tracking, companies, contacts, products
           </div>
         </div>
 
-        {/* The deal, section by section: an index on the left, one column of cards (like Companies and Contacts) */}
-        <div className="sl-work dv">
-          <DealNav items={dvItems} active={dvActive} onGo={goSection} />
-          <div className="dv-main">
-            <div className="dv-sec" data-dsec="overview">
-              <DealFacts facts={dealFacts} />
-            {trackingFields.length > 0 && (
-              <TrackingFieldsPanel trackingId={tracking.id} fields={trackingFields} initial={tracking.custom}
-                onSaved={(c) => { tracking.custom = c; }} />
-            )}
+        {/* Four columns */}
+        <div className="sl-work">
+          <div className={`sl-col-left${composing ? " has-composer" : ""}`}>
+          <section className={`sl-panel sl-panel-compact sl-panel-notes${panelState("notes")}`} aria-hidden={composing && composing !== "notes" ? true : undefined}>
+            <div className="sl-note-head">
+              <h3 className="sl-panel-title">Notes{notes.length > 0 && <span>{notes.length}</span>}</h3>
+              {composeCancel("notes") || notes.length > 0 && (
+                <button className="sl-see-icon" onClick={() => setItemsModal("notes")} title={`See all ${notes.length} notes`} aria-label="See all notes">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></svg>
+                </button>
+              )}
             </div>
-            <div className="dv-sec" data-dsec="revenue">
-            <DealProposals trackingId={tracking.id} groups={proposalGroups} decks={decks} money={money}
-              busy={propBusyId} reloadKey={propsReload} onGenerate={generateProposalFor} onStudio={openStudio} onMain={applyMainLocally} />
-            <section className="sl-panel sl-panel-calc">
-              <div className="sl-rvh">
-                <div className="sl-rvh-top">
-                  <h3 className="sl-panel-title">Potential revenue</h3>
-                  <b className="sl-rvh-total">{money(totalPotential)}</b>
-                </div>
-                <div className="sl-rvh-bar" aria-hidden="true">
-                  <i className="is-product" style={{ flexGrow: Math.max(0.0001, productsTotal) }} />
-                  <i className="is-service" style={{ flexGrow: Math.max(0.0001, servicesTotal) }} />
-                </div>
-                <div className="sl-rvh-legend">
-                  <span className="is-product"><i />Products<b>{money(productsTotal)}</b></span>
-                  <span className="is-service"><i />Services<b>{money(servicesTotal)}</b></span>
-                  {partnersTotal > 0 && <span className="is-partner" title="Already taken out of the figures above"><i />Partners<b>−{money(partnersTotal)}</b></span>}
-                </div>
-              </div>
+            <div className={`sl-note-add sl-note-add-fluid ${cleanMentions(newNote).trim() ? "is-writing" : ""}`}>
+              <MentionInput multiline value={newNote} onChange={setNewNote} people={mentionPeople}
+                onMention={() => {}} placeholder="Write a note... use @ to mention" />
+              <button className="sl-add-btn sl-add-btn-inline" onClick={submitNote} disabled={!cleanMentions(newNote).trim()}>Add</button>
+            </div>
+          </section>
 
-              <div className="sl-rvg is-product">
-                <div className="sl-rvg-head">
-                  <span className="sl-rvg-t"><i />Products<em>{activeTprods.length}</em></span>
-                  <b>{money(productsTotal)}</b>
-                </div>
-                {activeTprods.length === 0 && !leftOutGroups(tprods).length && <p className="sl-rvg-empty">No products yet.</p>}
-                <div className="sl-calc-cards">
-                {activeTprods.map((tp) => {
-                  const vg = tp.version_group ?? tp.id;
-                  const grp = groupOf(tprods, vg);
-                  const idx = grp.findIndex((x) => x.id === tp.id);
-                  return (
-                    <RevLine key={vg} name={productName(tp.product_id)} tag="Product" line={tp} money={money}
-                      onRemove={() => removeProduct(tp.id)}
-                      calculator={productOf(tp.product_id)?.calculator as Calculator | null}
-                      catalogBase={productOf(tp.product_id)?.tiers?.find((x) => x.id === tp.tier_id)?.price}
-                      onOpenCalc={() => setCalcFor({ kind: "product", id: tp.id })}
-                      versionIdx={idx} versionCount={grp.length}
-                      onPrev={idx > 0 ? () => switchProdVersion(vg, grp[idx - 1].id) : undefined}
-                      onNext={idx < grp.length - 1 ? () => switchProdVersion(vg, grp[idx + 1].id) : undefined}
-                      onNewVersion={(copy) => newProdVersion(tp.id, copy)}
-                      footer={<LineDocs key={tp.id} trackingId={tracking.id} lineId={tp.id} lineKind="product" phaseId={curPhase} versionLabel={`v${idx + 1}`} />} />
-                  );
-                })}
-                </div>
-                {leftOutRows("product", tprods)}
-                {availableProducts.length > 0 && (
-                  <div className="sl-rvg-add">
-                    <Select value="" onChange={(v) => v && addProduct(v)} placeholder="+ Add product" options={availableProducts.map((p) => ({ value: p.id!, label: p.name }))} />
-                  </div>
-                )}
-              </div>
-
-              <div className="sl-rvg is-service">
-                <div className="sl-rvg-head">
-                  <span className="sl-rvg-t"><i />Services<em>{activePotentials.length}</em></span>
-                  <b>{money(servicesTotal)}</b>
-                </div>
-                {activePotentials.length === 0 && !leftOutGroups(potentials).length && <p className="sl-rvg-empty">No services yet.</p>}
-                <div className="sl-calc-cards">
-                {activePotentials.map((p) => {
-                  const vg = p.version_group ?? p.id;
-                  const grp = groupOf(potentials, vg);
-                  const idx = grp.findIndex((x) => x.id === p.id);
-                  return (
-                    <RevLine key={vg} name={p.label || serviceName(p.service_id)} tag="Service" tagClass="sl-rev-tag-svc"
-                      line={p} money={money} unit={serviceUnit(p.service_id)} minUnit={serviceMin(p.service_id)}
-                      onRemove={() => removePotential(p.id)}
-                      calculator={serviceOf(p.service_id)?.calculator as Calculator | null}
-                      onOpenCalc={() => setCalcFor({ kind: "service", id: p.id })}
-                      versionIdx={idx} versionCount={grp.length}
-                      onPrev={idx > 0 ? () => switchSvcVersion(vg, grp[idx - 1].id) : undefined}
-                      onNext={idx < grp.length - 1 ? () => switchSvcVersion(vg, grp[idx + 1].id) : undefined}
-                      onNewVersion={(copy) => newSvcVersion(p.id, copy)}
-                      footer={<LineDocs key={p.id} trackingId={tracking.id} lineId={p.id} lineKind="service" phaseId={curPhase} versionLabel={`v${idx + 1}`} />} />
-                  );
-                })}
-                </div>
-                {leftOutRows("service", potentials)}
-                {services.length > 0 && (
-                  <div className="sl-rvg-add">
-                    <Select value="" onChange={(v) => v && addPotential(v)} placeholder="+ Add service" options={services.map((s) => ({ value: s.id!, label: s.name }))} />
-                  </div>
-                )}
-              </div>
-
-              {revErr && <p className="sl-rev-err">Could not save: {revErr}</p>}
-              <div className="sl-calc-foot sl-calc-foot-actions">
-                <span>Total if won</span>
-                <div className="sl-prop-wrap">
-                  <button className={`sl-prop-btn ${propBusy ? "is-busy" : ""}`} onClick={() => setPropMenu((v) => !v)} disabled={!!propBusy} title="Generate proposal">
-                    {propBusy ? (
-                      <span className="sl-prop-spin" />
-                    ) : (
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6M12 18v-6M9 15l3 3 3-3" /></svg>
-                    )}
-                    <span>{propBusy ? "Generating…" : "Proposal"}</span>
-                  </button>
-                  {propMenu && <div className="sl-prop-scrim" onMouseDown={() => setPropMenu(false)} />}
-                  {propMenu && (
-                    <div className="sl-prop-menu">
-                      <button onClick={() => runProposal("pptx")}>
-                        <b>PowerPoint deck</b><i>Commercial presentation, ready to send</i>
-                      </button>
-                      <button onClick={() => runProposal("pdf")}>
-                        <b>PDF order form</b><i>Scope, prices and signatures</i>
-                      </button>
-                    </div>
-                  )}
-                </div>
-                <b>{money(totalPotential)}</b>
-              </div>
-              {propErr && <p className="sl-rev-err">{propErr}</p>}
-            </section>
+          <section className={`sl-panel sl-panel-compact sl-panel-notes${panelState("tasks")}`} aria-hidden={composing && composing !== "tasks" ? true : undefined}>
+            <div className="sl-note-head">
+              <h3 className="sl-panel-title sl-tasks-title">Tasks
+                {/* Only counts that say something: no "0" and no "0 ✓" on an empty list. */}
+                {tasks.some((t) => !t.done) && <span className="sl-tcount sl-tcount-todo" title="To do">{tasks.filter((t) => !t.done).length}</span>}
+                {tasks.some((t) => t.done) && <span className="sl-tcount sl-tcount-done" title="Completed">{tasks.filter((t) => t.done).length} ✓</span>}
+                {overdueCount > 0 && <span className="sl-tcount sl-tcount-late" title="Overdue">{overdueCount} late</span>}
+                {urgentCount > 0 && <span className="sl-tcount sl-tcount-urgent" title="Urgent">{urgentCount} urgent</span>}
+              </h3>
+              {composeCancel("tasks") || tasks.length > 0 && (
+                <button className="sl-see-icon" onClick={() => setItemsModal("tasks")} title={`See all ${tasks.length} tasks`} aria-label="See all tasks">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></svg>
+                </button>
+              )}
             </div>
-            <div className="dv-sec" data-dsec="contacts">
-            <DealPeople company={company} contacts={contacts} companyContactIds={companyContactIds}
-              dealIds={Array.from(new Set([...trackingContactIds, ...tracking.contactIds]))}
-              onChange={async (ids) => {
-                setTrackingContactIds(ids); tracking.contactIds = ids;
-                await setTrackingContacts(tracking.id, ids).catch(() => {});
-              }} />
-            </div>
-            <div className={`dv-sec dv-compose${composing ? " has-composer" : ""}`} data-dsec="tasks">
-            <section className={`sl-panel sl-panel-compact sl-panel-notes${panelOn("tasks")}`}>
-              <div className="sl-note-head">
-                <h3 className="sl-panel-title sl-tasks-title">Tasks
-                  {/* Only counts that say something: no "0" and no "0 ✓" on an empty list. */}
-                  {tasks.some((t) => !t.done) && <span className="sl-tcount sl-tcount-todo" title="To do">{tasks.filter((t) => !t.done).length}</span>}
-                  {tasks.some((t) => t.done) && <span className="sl-tcount sl-tcount-done" title="Completed">{tasks.filter((t) => t.done).length} ✓</span>}
-                  {overdueCount > 0 && <span className="sl-tcount sl-tcount-late" title="Overdue">{overdueCount} late</span>}
-                  {urgentCount > 0 && <span className="sl-tcount sl-tcount-urgent" title="Urgent">{urgentCount} urgent</span>}
-                </h3>
-                {composeCancel("tasks") || tasks.length > 0 && (
-                  <button className="sl-see-icon" onClick={() => setItemsModal("tasks")} title={`See all ${tasks.length} tasks`} aria-label="See all tasks">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></svg>
-                  </button>
-                )}
+            <div className="sl-task-add">
+              <div className="sl-task-name-row">
+                <MentionInput value={newTask} onChange={setNewTask} people={mentionPeople}
+                  onMention={() => {}} placeholder="Task name... use @ to mention" />
+                {!cleanMentions(newTask).trim() && <TemplatePicker templates={taskTemplates} kind="quick" onPick={pickTaskTemplate} compact />}
               </div>
-              <div className="sl-task-add">
-                <div className="sl-task-name-row">
-                  <MentionInput value={newTask} onChange={setNewTask} people={mentionPeople}
-                    onMention={() => {}} placeholder="Task name... use @ to mention" />
-                  {!cleanMentions(newTask).trim() && <TemplatePicker templates={taskTemplates} kind="quick" onPick={pickTaskTemplate} compact />}
-                </div>
-                <div className={`sl-meet-reveal ${cleanMentions(newTask).trim() ? "is-writing" : ""}`}>
-                  <MentionInput multiline value={newTaskDesc} onChange={setNewTaskDesc} people={mentionPeople} className="sl-task-desc-input"
-                    onMention={() => {}} placeholder="Description (optional) — the details, what done looks like…" />
-                  {taskFrom && (
-                    <div className="hs-add-from">
-                      <span>✦ From a template{taskFrom.checklist.length ? ` · ${taskFrom.checklist.length} steps` : ""}</span>
-                      <button type="button" onClick={() => setTaskFrom(null)} aria-label="Don't use the template">×</button>
-                    </div>
-                  )}
-                  <div className="sl-task-opts">
-                    <div className="sl-task-prios" role="radiogroup" aria-label="Priority">
-                      {TASK_PRIORITIES.map((p) => (
-                        <button key={p} type="button" role="radio" aria-checked={taskPrio === p}
-                          className={`hs-prio is-${p} ${taskPrio === p ? "is-on" : ""}`} onClick={() => setTaskPrio(p)}>
-                          <FlagIcon /><span>{PRIORITY_LABEL[p]}</span>
-                        </button>
-                      ))}
-                    </div>
-                    <div className="sl-task-kind" role="radiogroup" aria-label="Kind of task">
-                      {(["quick", "process"] as TaskKind[]).map((k) => (
-                        <button key={k} type="button" role="radio" aria-checked={taskKind === k} className={taskKind === k ? "is-on" : ""}
-                          onClick={() => setTaskKind(k)} title={k === "quick" ? "Tick it off and forget it" : "Longer work: status, % and progress notes"}>
-                          {k === "quick" ? "Quick" : "Process"}
-                        </button>
-                      ))}
-                    </div>
+              <div className={`sl-meet-reveal ${cleanMentions(newTask).trim() ? "is-writing" : ""}`}>
+                <MentionInput multiline value={newTaskDesc} onChange={setNewTaskDesc} people={mentionPeople} className="sl-task-desc-input"
+                  onMention={() => {}} placeholder="Description (optional) — the details, what done looks like…" />
+                {taskFrom && (
+                  <div className="hs-add-from">
+                    <span>✦ From a template{taskFrom.checklist.length ? ` · ${taskFrom.checklist.length} steps` : ""}</span>
+                    <button type="button" onClick={() => setTaskFrom(null)} aria-label="Don't use the template">×</button>
                   </div>
-                  <div className="sl-task-due">
-                    <span className="sl-task-due-lbl">Due</span>
-                    <DatePicker value={taskDue} onChange={setTaskDue} placeholder="Date" />
-                    <TimePicker value={taskDueTime} onChange={setTaskDueTime} ariaLabel="Due time" />
-                  </div>
-                  <button className="sl-add-btn sl-meet-schedule" onClick={submitTask} disabled={!cleanMentions(newTask).trim() || !taskDue}>Add task</button>
-                </div>
-              </div>
-            </section>
-            </div>
-            <div className="dv-sec dv-compose" data-dsec="meetings">
-            <section className={`sl-panel sl-panel-compact sl-panel-notes${panelOn("meetings")}`}>
-              <div className="sl-note-head">
-                <h3 className="sl-panel-title">Meetings{meetings.length > 0 && <span>{meetings.length}</span>}</h3>
-                {composeCancel("meetings") || meetings.length > 0 && (
-                  <button className="sl-see-icon" onClick={() => setItemsModal("meetings")} title={`See all ${meetings.length} meetings`} aria-label="See all meetings">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></svg>
-                  </button>
                 )}
-              </div>
-              <div className="sl-meet-add">
-                <MentionInput multiline value={meetTitle} onChange={setMeetTitle} people={mentionPeople}
-                  onMention={() => {}} placeholder="Meeting title... use @ to mention" />
-                <div className={`sl-meet-reveal ${cleanMentions(meetTitle).trim() ? "is-writing" : ""}`}>
-                  <MeetingWhen date={meetDate} start={meetTime} end={meetEnd}
-                    onDate={setMeetDate} onStart={setMeetTime} onEnd={setMeetEnd} />
-                  <div className="mf-kinds" role="radiogroup" aria-label="Type of meeting">
-                    {MEETING_KINDS.map((k) => (
-                      <button key={k.value} type="button" role="radio" aria-checked={meetKind === k.value}
-                        className={meetKind === k.value ? "is-on" : ""} onClick={() => setMeetKind(k.value)}>
-                        {k.icon}<span>{k.label}</span>
+                <div className="sl-task-opts">
+                  <div className="sl-task-prios" role="radiogroup" aria-label="Priority">
+                    {TASK_PRIORITIES.map((p) => (
+                      <button key={p} type="button" role="radio" aria-checked={taskPrio === p}
+                        className={`hs-prio is-${p} ${taskPrio === p ? "is-on" : ""}`} onClick={() => setTaskPrio(p)}>
+                        <FlagIcon /><span>{PRIORITY_LABEL[p]}</span>
                       </button>
                     ))}
                   </div>
-                  <button className="sl-add-btn sl-meet-schedule" onClick={submitMeeting} disabled={!cleanMentions(meetTitle).trim() || !meetDate || !spanOk(meetTime, meetEnd)}>Schedule</button>
+                  <div className="sl-task-kind" role="radiogroup" aria-label="Kind of task">
+                    {(["quick", "process"] as TaskKind[]).map((k) => (
+                      <button key={k} type="button" role="radio" aria-checked={taskKind === k} className={taskKind === k ? "is-on" : ""}
+                        onClick={() => setTaskKind(k)} title={k === "quick" ? "Tick it off and forget it" : "Longer work: status, % and progress notes"}>
+                        {k === "quick" ? "Quick" : "Process"}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
-              {meetSync && (
-                <div className={`sl-ol-status is-${meetSync.state}`} role="status">
-                  <span className="sl-ol-ico">{OUTLOOK_ICON}</span>
-                  <span className="sl-ol-txt">
-                    {meetSync.state === "syncing" ? "Adding to your Outlook…"
-                      : meetSync.state === "ok" ? <>Added to your Outlook calendar
-                          {meetSync.invited ? ` · ${meetSync.invited} ${meetSync.invited === 1 ? "person" : "people"} invited` : ""}
-                          {meetSync.teams === "yes" ? " · Teams link created" : meetSync.teams === "skipped" ? " · no Teams link (not available on this account)" : ""}.</>
-                      : meetSync.state === "gone" ? <><b>{meetSync.count && meetSync.count > 1 ? `${meetSync.count} meetings were` : "A meeting was"} deleted in Outlook</b> — removed here too.</>
-                      : <><b>Not added to Outlook.</b> {meetSync.msg}</>}
-                  </span>
-                  {meetSync.state === "err" && <button className="sl-ol-retry" onClick={() => retryOutlook(meetSync.id)}>Try again</button>}
-                  {meetSync.state !== "syncing" && <button className="sl-ol-x" onClick={() => setMeetSync(null)} aria-label="Dismiss">×</button>}
+                <div className="sl-task-due">
+                  <span className="sl-task-due-lbl">Due</span>
+                  <DatePicker value={taskDue} onChange={setTaskDue} placeholder="Date" />
+                  <TimePicker value={taskDueTime} onChange={setTaskDueTime} ariaLabel="Due time" />
                 </div>
-              )}
-            </section>
-            </div>
-            <div className="dv-sec dv-compose" data-dsec="notes">
-            <section className={`sl-panel sl-panel-compact sl-panel-notes${panelOn("notes")}`}>
-              <div className="sl-note-head">
-                <h3 className="sl-panel-title">Notes{notes.length > 0 && <span>{notes.length}</span>}</h3>
-                {composeCancel("notes") || notes.length > 0 && (
-                  <button className="sl-see-icon" onClick={() => setItemsModal("notes")} title={`See all ${notes.length} notes`} aria-label="See all notes">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></svg>
-                  </button>
-                )}
+                <button className="sl-add-btn sl-meet-schedule" onClick={submitTask} disabled={!cleanMentions(newTask).trim() || !taskDue}>Add task</button>
               </div>
-              <div className={`sl-note-add sl-note-add-fluid ${cleanMentions(newNote).trim() ? "is-writing" : ""}`}>
-                <MentionInput multiline value={newNote} onChange={setNewNote} people={mentionPeople}
-                  onMention={() => {}} placeholder="Write a note... use @ to mention" />
-                <button className="sl-add-btn sl-add-btn-inline" onClick={submitNote} disabled={!cleanMentions(newNote).trim()}>Add</button>
-              </div>
-            </section>
             </div>
-            <div className="dv-sec" data-dsec="documents">
-            <section className="sl-panel sl-panel-docs">
-              <TrackingFiles trackingId={tracking.id} phaseId={curPhase} phases={phases} />
-            </section>
-            </div>
-            <div className="dv-sec" data-dsec="probability">
-            <FoldPanel className="sl-prob-panel" title="Close probability"
-              summary={[
-                `Sales ${repProb == null ? "—" : `${repProb}%`}`,
-                `Mgmt ${mgrProb == null ? "—" : `${mgrProb}%`}`,
-                closedOn && (status === "won" || status === "lost") ? `${status === "won" ? "Won" : "Lost"} ${new Date(`${closedOn}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : "",
-              ].filter(Boolean).join(" · ")}>
+          </section>
 
-              <div className="sl-probfield">
-                <span className="sl-probfield-k">Sales estimate</span>
-                <div className="sl-probfield-row">
+          <section className={`sl-panel sl-panel-compact sl-panel-notes${panelState("meetings")}`} aria-hidden={composing && composing !== "meetings" ? true : undefined}>
+            <div className="sl-note-head">
+              <h3 className="sl-panel-title">Meetings{meetings.length > 0 && <span>{meetings.length}</span>}</h3>
+              {composeCancel("meetings") || meetings.length > 0 && (
+                <button className="sl-see-icon" onClick={() => setItemsModal("meetings")} title={`See all ${meetings.length} meetings`} aria-label="See all meetings">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></svg>
+                </button>
+              )}
+            </div>
+            <div className="sl-meet-add">
+              <MentionInput multiline value={meetTitle} onChange={setMeetTitle} people={mentionPeople}
+                onMention={() => {}} placeholder="Meeting title... use @ to mention" />
+              <div className={`sl-meet-reveal ${cleanMentions(meetTitle).trim() ? "is-writing" : ""}`}>
+                <MeetingWhen date={meetDate} start={meetTime} end={meetEnd}
+                  onDate={setMeetDate} onStart={setMeetTime} onEnd={setMeetEnd} />
+                <div className="mf-kinds" role="radiogroup" aria-label="Type of meeting">
+                  {MEETING_KINDS.map((k) => (
+                    <button key={k.value} type="button" role="radio" aria-checked={meetKind === k.value}
+                      className={meetKind === k.value ? "is-on" : ""} onClick={() => setMeetKind(k.value)}>
+                      {k.icon}<span>{k.label}</span>
+                    </button>
+                  ))}
+                </div>
+                <button className="sl-add-btn sl-meet-schedule" onClick={submitMeeting} disabled={!cleanMentions(meetTitle).trim() || !meetDate || !spanOk(meetTime, meetEnd)}>Schedule</button>
+              </div>
+            </div>
+            {meetSync && (
+              <div className={`sl-ol-status is-${meetSync.state}`} role="status">
+                <span className="sl-ol-ico">{OUTLOOK_ICON}</span>
+                <span className="sl-ol-txt">
+                  {meetSync.state === "syncing" ? "Adding to your Outlook…"
+                    : meetSync.state === "ok" ? <>Added to your Outlook calendar
+                        {meetSync.invited ? ` · ${meetSync.invited} ${meetSync.invited === 1 ? "person" : "people"} invited` : ""}
+                        {meetSync.teams === "yes" ? " · Teams link created" : meetSync.teams === "skipped" ? " · no Teams link (not available on this account)" : ""}.</>
+                    : meetSync.state === "gone" ? <><b>{meetSync.count && meetSync.count > 1 ? `${meetSync.count} meetings were` : "A meeting was"} deleted in Outlook</b> — removed here too.</>
+                    : <><b>Not added to Outlook.</b> {meetSync.msg}</>}
+                </span>
+                {meetSync.state === "err" && <button className="sl-ol-retry" onClick={() => retryOutlook(meetSync.id)}>Try again</button>}
+                {meetSync.state !== "syncing" && <button className="sl-ol-x" onClick={() => setMeetSync(null)} aria-label="Dismiss">×</button>}
+              </div>
+            )}
+          </section>
+          <DealPeople company={company} contacts={contacts} companyContactIds={companyContactIds}
+            dealIds={Array.from(new Set([...trackingContactIds, ...tracking.contactIds]))}
+            onChange={async (ids) => {
+              setTrackingContactIds(ids); tracking.contactIds = ids;
+              await setTrackingContacts(tracking.id, ids).catch(() => {});
+            }} />
+          </div>
+
+          <div className="sl-col-right">
+          <section className="sl-panel sl-panel-docs">
+            <TrackingFiles trackingId={tracking.id} phaseId={curPhase} phases={phases} />
+          </section>
+
+          <FoldPanel className="sl-prob-panel" title="Close probability"
+            summary={[
+              `Sales ${repProb == null ? "—" : `${repProb}%`}`,
+              `Mgmt ${mgrProb == null ? "—" : `${mgrProb}%`}`,
+              closedOn && (status === "won" || status === "lost") ? `${status === "won" ? "Won" : "Lost"} ${new Date(`${closedOn}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : "",
+            ].filter(Boolean).join(" · ")}>
+
+            <div className="sl-probfield">
+              <span className="sl-probfield-k">Sales estimate</span>
+              <div className="sl-probfield-row">
+                <input
+                  className="sl-probfield-range"
+                  type="range" min={0} max={100} step={5}
+                  value={repProb ?? 0}
+                  onChange={(e) => { const v = Number(e.target.value); setRepProb(v); saveProb("rep", v); }}
+                />
+                <span className="sl-probfield-v">{repProb == null ? "—" : `${repProb}%`}</span>
+                <span className="sl-probfield-datewrap">
+                  <DatePicker value={repDate} placeholder="+ expected"
+                    onChange={(v) => { setRepDate(v); setDealCloseDate(tracking.id, "rep", v || null).catch(() => {}); }} />
+                </span>
+              </div>
+            </div>
+
+            <div className={`sl-probfield sl-probfield-mgr ${canAssign ? "" : "is-locked"}`}>
+              <span className="sl-probfield-k">
+                Management estimate
+                {!canAssign && (
+                  <svg className="sl-probfield-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
+                )}
+              </span>
+              <div className="sl-probfield-row">
+                {canAssign ? (
                   <input
                     className="sl-probfield-range"
                     type="range" min={0} max={100} step={5}
-                    value={repProb ?? 0}
-                    onChange={(e) => { const v = Number(e.target.value); setRepProb(v); saveProb("rep", v); }}
+                    value={mgrProb ?? 0}
+                    onChange={(e) => { const v = Number(e.target.value); setMgrProb(v); saveProb("mgr", v); }}
                   />
-                  <span className="sl-probfield-v">{repProb == null ? "—" : `${repProb}%`}</span>
-                  <span className="sl-probfield-datewrap">
-                    <DatePicker value={repDate} placeholder="+ expected"
-                      onChange={(v) => { setRepDate(v); setDealCloseDate(tracking.id, "rep", v || null).catch(() => {}); }} />
-                  </span>
-                </div>
-              </div>
-
-              <div className={`sl-probfield sl-probfield-mgr ${canAssign ? "" : "is-locked"}`}>
-                <span className="sl-probfield-k">
-                  Management estimate
-                  {!canAssign && (
-                    <svg className="sl-probfield-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
-                  )}
-                </span>
-                <div className="sl-probfield-row">
+                ) : (
+                  <div className="sl-probfield-track">
+                    <span className="sl-probfield-fill" style={{ width: `${mgrProb ?? 0}%` }} />
+                  </div>
+                )}
+                <span className="sl-probfield-v">{mgrProb == null ? "—" : `${mgrProb}%`}</span>
+                <span className="sl-probfield-datewrap">
                   {canAssign ? (
-                    <input
-                      className="sl-probfield-range"
-                      type="range" min={0} max={100} step={5}
-                      value={mgrProb ?? 0}
-                      onChange={(e) => { const v = Number(e.target.value); setMgrProb(v); saveProb("mgr", v); }}
-                    />
+                    <DatePicker value={mgrDate} placeholder="+ expected"
+                      onChange={(v) => { setMgrDate(v); setDealCloseDate(tracking.id, "mgr", v || null).catch(() => {}); }} />
                   ) : (
-                    <div className="sl-probfield-track">
-                      <span className="sl-probfield-fill" style={{ width: `${mgrProb ?? 0}%` }} />
-                    </div>
+                    <span className="sl-probfield-date-ro">{mgrDate ? new Date(mgrDate).toLocaleDateString() : "—"}</span>
                   )}
-                  <span className="sl-probfield-v">{mgrProb == null ? "—" : `${mgrProb}%`}</span>
-                  <span className="sl-probfield-datewrap">
-                    {canAssign ? (
-                      <DatePicker value={mgrDate} placeholder="+ expected"
-                        onChange={(v) => { setMgrDate(v); setDealCloseDate(tracking.id, "mgr", v || null).catch(() => {}); }} />
-                    ) : (
-                      <span className="sl-probfield-date-ro">{mgrDate ? new Date(mgrDate).toLocaleDateString() : "—"}</span>
-                    )}
-                  </span>
-                </div>
-              </div>
-              <p className="sl-probfield-note">The dates above are the <b>expected</b> close dates.</p>
-
-              <div className={`sl-probfield sl-closedon ${status === "won" ? "is-won" : status === "lost" ? "is-lost" : ""}`}>
-                <span className="sl-probfield-k">
-                  Close date
-                  <em>{status === "won" ? "Won" : status === "lost" ? "Lost" : "Not closed yet"}</em>
                 </span>
-                <div className="sl-probfield-row">
-                  <span className="sl-closedon-txt">
-                    {closedOn
-                      ? `${status === "lost" ? "Lost" : status === "won" ? "Won" : "Closed"} on ${new Date(`${closedOn}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}`
-                      : status === "won" || status === "lost" ? "No date recorded" : "Filled in when the deal is won or lost"}
-                  </span>
-                  <span className="sl-probfield-datewrap">
-                    <DatePicker value={closedOn} placeholder="+ date"
-                      onChange={(v) => { setClosedOn(v); tracking.close_date = v || null; setDealClosedOn(tracking.id, v || null).catch(() => {}); }} />
-                  </span>
-                </div>
               </div>
-            </FoldPanel>
             </div>
-            <div className="dv-sec" data-dsec="history">
-              <DealHistory items={dealHistory} />
+            <p className="sl-probfield-note">The dates above are the <b>expected</b> close dates.</p>
+
+            <div className={`sl-probfield sl-closedon ${status === "won" ? "is-won" : status === "lost" ? "is-lost" : ""}`}>
+              <span className="sl-probfield-k">
+                Close date
+                <em>{status === "won" ? "Won" : status === "lost" ? "Lost" : "Not closed yet"}</em>
+              </span>
+              <div className="sl-probfield-row">
+                <span className="sl-closedon-txt">
+                  {closedOn
+                    ? `${status === "lost" ? "Lost" : status === "won" ? "Won" : "Closed"} on ${new Date(`${closedOn}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}`
+                    : status === "won" || status === "lost" ? "No date recorded" : "Filled in when the deal is won or lost"}
+                </span>
+                <span className="sl-probfield-datewrap">
+                  <DatePicker value={closedOn} placeholder="+ date"
+                    onChange={(v) => { setClosedOn(v); tracking.close_date = v || null; setDealClosedOn(tracking.id, v || null).catch(() => {}); }} />
+                </span>
+              </div>
             </div>
+          </FoldPanel>
+
+          {trackingFields.length > 0 && (
+            <TrackingFieldsPanel trackingId={tracking.id} fields={trackingFields} initial={tracking.custom}
+              onSaved={(c) => { tracking.custom = c; }} />
+          )}
+          </div>
+
+          <div className="sl-col-calc">
+          <DealProposals trackingId={tracking.id} groups={proposalGroups} decks={decks} money={money}
+            busy={propBusyId} reloadKey={propsReload} onGenerate={generateProposalFor} onStudio={openStudio} onMain={applyMainLocally} />
+          <section className="sl-panel sl-panel-calc">
+            <div className="sl-rvh">
+              <div className="sl-rvh-top">
+                <h3 className="sl-panel-title">Potential revenue</h3>
+                <b className="sl-rvh-total">{money(totalPotential)}</b>
+              </div>
+              <div className="sl-rvh-bar" aria-hidden="true">
+                <i className="is-product" style={{ flexGrow: Math.max(0.0001, productsTotal) }} />
+                <i className="is-service" style={{ flexGrow: Math.max(0.0001, servicesTotal) }} />
+              </div>
+              <div className="sl-rvh-legend">
+                <span className="is-product"><i />Products<b>{money(productsTotal)}</b></span>
+                <span className="is-service"><i />Services<b>{money(servicesTotal)}</b></span>
+                {partnersTotal > 0 && <span className="is-partner" title="Already taken out of the figures above"><i />Partners<b>−{money(partnersTotal)}</b></span>}
+              </div>
+            </div>
+
+            <div className="sl-rvg is-product">
+              <div className="sl-rvg-head">
+                <span className="sl-rvg-t"><i />Products<em>{activeTprods.length}</em></span>
+                <b>{money(productsTotal)}</b>
+              </div>
+              {activeTprods.length === 0 && !leftOutGroups(tprods).length && <p className="sl-rvg-empty">No products yet.</p>}
+              <div className="sl-calc-cards">
+              {activeTprods.map((tp) => {
+                const vg = tp.version_group ?? tp.id;
+                const grp = groupOf(tprods, vg);
+                const idx = grp.findIndex((x) => x.id === tp.id);
+                return (
+                  <RevLine key={vg} name={productName(tp.product_id)} tag="Product" line={tp} money={money}
+                    onRemove={() => removeProduct(tp.id)}
+                    calculator={productOf(tp.product_id)?.calculator as Calculator | null}
+                    catalogBase={productOf(tp.product_id)?.tiers?.find((x) => x.id === tp.tier_id)?.price}
+                    onOpenCalc={() => setCalcFor({ kind: "product", id: tp.id })}
+                    versionIdx={idx} versionCount={grp.length}
+                    onPrev={idx > 0 ? () => switchProdVersion(vg, grp[idx - 1].id) : undefined}
+                    onNext={idx < grp.length - 1 ? () => switchProdVersion(vg, grp[idx + 1].id) : undefined}
+                    onNewVersion={(copy) => newProdVersion(tp.id, copy)}
+                    footer={<LineDocs key={tp.id} trackingId={tracking.id} lineId={tp.id} lineKind="product" phaseId={curPhase} versionLabel={`v${idx + 1}`} />} />
+                );
+              })}
+              </div>
+              {leftOutRows("product", tprods)}
+              {availableProducts.length > 0 && (
+                <div className="sl-rvg-add">
+                  <Select value="" onChange={(v) => v && addProduct(v)} placeholder="+ Add product" options={availableProducts.map((p) => ({ value: p.id!, label: p.name }))} />
+                </div>
+              )}
+            </div>
+
+            <div className="sl-rvg is-service">
+              <div className="sl-rvg-head">
+                <span className="sl-rvg-t"><i />Services<em>{activePotentials.length}</em></span>
+                <b>{money(servicesTotal)}</b>
+              </div>
+              {activePotentials.length === 0 && !leftOutGroups(potentials).length && <p className="sl-rvg-empty">No services yet.</p>}
+              <div className="sl-calc-cards">
+              {activePotentials.map((p) => {
+                const vg = p.version_group ?? p.id;
+                const grp = groupOf(potentials, vg);
+                const idx = grp.findIndex((x) => x.id === p.id);
+                return (
+                  <RevLine key={vg} name={p.label || serviceName(p.service_id)} tag="Service" tagClass="sl-rev-tag-svc"
+                    line={p} money={money} unit={serviceUnit(p.service_id)} minUnit={serviceMin(p.service_id)}
+                    onRemove={() => removePotential(p.id)}
+                    calculator={serviceOf(p.service_id)?.calculator as Calculator | null}
+                    onOpenCalc={() => setCalcFor({ kind: "service", id: p.id })}
+                    versionIdx={idx} versionCount={grp.length}
+                    onPrev={idx > 0 ? () => switchSvcVersion(vg, grp[idx - 1].id) : undefined}
+                    onNext={idx < grp.length - 1 ? () => switchSvcVersion(vg, grp[idx + 1].id) : undefined}
+                    onNewVersion={(copy) => newSvcVersion(p.id, copy)}
+                    footer={<LineDocs key={p.id} trackingId={tracking.id} lineId={p.id} lineKind="service" phaseId={curPhase} versionLabel={`v${idx + 1}`} />} />
+                );
+              })}
+              </div>
+              {leftOutRows("service", potentials)}
+              {services.length > 0 && (
+                <div className="sl-rvg-add">
+                  <Select value="" onChange={(v) => v && addPotential(v)} placeholder="+ Add service" options={services.map((s) => ({ value: s.id!, label: s.name }))} />
+                </div>
+              )}
+            </div>
+
+            {revErr && <p className="sl-rev-err">Could not save: {revErr}</p>}
+            <div className="sl-calc-foot sl-calc-foot-actions">
+              <span>Total if won</span>
+              <div className="sl-prop-wrap">
+                <button className={`sl-prop-btn ${propBusy ? "is-busy" : ""}`} onClick={() => setPropMenu((v) => !v)} disabled={!!propBusy} title="Generate proposal">
+                  {propBusy ? (
+                    <span className="sl-prop-spin" />
+                  ) : (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6M12 18v-6M9 15l3 3 3-3" /></svg>
+                  )}
+                  <span>{propBusy ? "Generating…" : "Proposal"}</span>
+                </button>
+                {propMenu && <div className="sl-prop-scrim" onMouseDown={() => setPropMenu(false)} />}
+                {propMenu && (
+                  <div className="sl-prop-menu">
+                    <button onClick={() => runProposal("pptx")}>
+                      <b>PowerPoint deck</b><i>Commercial presentation, ready to send</i>
+                    </button>
+                    <button onClick={() => runProposal("pdf")}>
+                      <b>PDF order form</b><i>Scope, prices and signatures</i>
+                    </button>
+                  </div>
+                )}
+              </div>
+              <b>{money(totalPotential)}</b>
+            </div>
+            {propErr && <p className="sl-rev-err">{propErr}</p>}
+          </section>
+
           </div>
         </div>
       </div>

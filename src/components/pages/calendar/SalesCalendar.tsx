@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { PageCover } from "../../framework/AppLayout";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../api/supabase";
 import { useAuth } from "../../api/AuthProvider";
@@ -467,6 +468,8 @@ export default function SalesCalendar() {
   }, []);
   const [links, setLinks] = useState<{ companies: { id: string; label: string }[]; contacts: { id: string; label: string }[] }>({ companies: [], contacts: [] });
   const [loading, setLoading] = useState(true);
+  /** First load only — later week changes refresh in place under the small inline hint. */
+  const [booted, setBooted] = useState(false);
   const [draft, setDraft] = useState<{ day: Date; hour: number } | null>(null);
   const [drag, setDrag] = useState<{ id: string; grab: number } | null>(null);
   const [dropAt, setDropAt] = useState<{ iso: string; min: number; len: number } | null>(null);
@@ -551,6 +554,7 @@ export default function SalesCalendar() {
     setLinks(lk);
     loadMyInvites(myId).then(setInvites).catch(() => {});
     setLoading(false);
+    setBooted(true);
   };
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [seenKey, weekStart.getTime()]);
 
@@ -627,8 +631,9 @@ export default function SalesCalendar() {
   const todaysMine = meetings.filter((m) => (m.assignee_id ?? myId) === myId && sameDay(new Date(m.meet_at), today)).sort((a, b) => +new Date(a.meet_at) - +new Date(b.meet_at));
   const nextUp = todaysMine.find((m) => new Date(m.meet_at).getTime() + durOf(m) * 60000 > Date.now());
 
+  const atThisWeek = startOfWeek(new Date()).getTime() === startOfWeek(weekStart).getTime();
   return (
-    <div className="sc cal-ov cal-v3">
+    <div className="sc cal-ov cal-v3" aria-busy={loading}>
       <header className="cv-bar">
         <div className="cv-l">
           <button className="cal-home" onClick={() => navigate("/home")} aria-label="Back to home" title="Home">
@@ -639,8 +644,13 @@ export default function SalesCalendar() {
             <span className="cv-title-sub">Sales · Week {isoWeekOf(weekStart)}</span>
           </div>
           <div className="cv-nav">
-            <button className="cv-nav-today" onClick={() => moveTo(new Date())} title="Jump to this week (T)">Today</button>
-            <span className="cv-nav-sep" />
+            {/* Today only shows once you leave this week (it slides in and out) */}
+            <span className={`cv-nav-todaywrap ${atThisWeek ? "is-here" : ""}`} aria-hidden={atThisWeek}>
+              <span className="cv-nav-todayin">
+                <button className="cv-nav-today" onClick={() => moveTo(new Date())} title="Jump to this week (T)" tabIndex={atThisWeek ? -1 : 0}>Today</button>
+                <span className="cv-nav-sep" />
+              </span>
+            </span>
             <button className="cv-nav-arrow" onClick={() => moveTo(addDays(weekStart, -7))} aria-label="Previous week" title="Previous (←)">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
             </button>
@@ -1010,7 +1020,7 @@ export default function SalesCalendar() {
       </aside>
       </div>
 
-      {loading && <p className="sc-loading">Loading…</p>}
+      <PageCover show={!booted && !!myId} label="Loading the sales calendar" />
 
       {showSettings && (
         // A rep only gets the time-off tab; targets, cutoffs and work types

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { PageLoader } from "../../framework/AppLayout";
 import { supabase } from "../../api/supabase";
 import { useAuth } from "../../api/authContext";
 import NewUserModal, { LEVELS, type NewUserPayload } from "./NewUserModal";
@@ -18,6 +19,7 @@ import { DOCK_ITEMS, DOCK_ORDER_KEY, DOCK_ORDER_EVENT, orderDock } from "../../f
 import { loadPrefs, savePref, isSalesLead } from "../companies/companiesApi";
 import { CompanySettings, SettingsShell } from "../companies/CompaniesPage";
 import { ContactSettings } from "../contacts/ContactsPage";
+import SalesPage from "../sales/sales/SalesPage";
 import { useLocation, useNavigate } from "react-router-dom";
 import "./SettingsPage.css";
 
@@ -411,7 +413,7 @@ export default function SettingsPage() {
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2" /></svg>
             </span>
             <span className="nav-card-title">Deals page</span>
-            <span className="nav-card-sub">Settings for the deals pipeline</span>
+            <span className="nav-card-sub">Import, export, deal fields &amp; sales roles</span>
             <span className="nav-card-spacer" />
             <span className="nav-card-go">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
@@ -475,12 +477,13 @@ export default function SettingsPage() {
   if (view === "companiespage" && crmLead) return <CompanySettings onBack={() => setView("home")} />;
   if (view === "contactspage" && crmLead) return <ContactSettings onBack={() => setView("home")} />;
   if (view === "clientpage") return <ClientPageSettings onBack={() => setView("home")} canManage={canManage || isSuperadmin === true} />;
-  if (view === "salespage" || view === "mgmtpage") {
+  if (view === "salespage") return <SalesPage settings={{ onBack: () => setView("home") }} />;
+  if (view === "mgmtpage") {
     return (
       <div className="st">
         <header className="st-bar st-bar-back">
           <button className="uv-back" onClick={() => setView("home")}>‹ Settings</button>
-          <h1 className="st-title">{view === "salespage" ? "Deals page" : "Management page"}</h1>
+          <h1 className="st-title">Management page</h1>
           <p className="st-sub">Settings for this page</p>
         </header>
         <section className="st-section cps-empty">
@@ -846,7 +849,7 @@ export function ClientPageSettings({ onBack, canManage }: { onBack: () => void; 
       {err && <p className="su-error">{err}</p>}
 
       <div className="cps-keys">
-        {keys === null && <p className="st-note">Loading…</p>}
+        {keys === null && <PageLoader fill={false} size={80} label="Loading keys" />}
         {keys?.length === 0 && !err && <p className="cps-none">No keys yet. Create one to let another app reach client documents.</p>}
         {keys?.map((k, i) => {
           const st = statusOf(k);

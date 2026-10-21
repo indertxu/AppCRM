@@ -1,8 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * Home · CONSULTANCY — the whole page, in three columns:
- *   left    the ticket desk (to-do + tickets)
- *   middle  your calendar (tall) and, under it, the department backlog as a 2×2
+ *   left    your calendar (tall) and, under it, the department backlog as a 2×2
+ *   middle  the ticket desk (to-do + tickets), full height
  *   right   team (or your own) performance, then outstanding bills
  * The calendar and the desk come from the shared home pieces (props).
  */
@@ -20,9 +20,9 @@ interface Props {
   userId: string;
   isLead: boolean;   // boss / consultancy_manager sees the whole team; consultant sees self
   hoursPerDay: number;
-  /** The shared calendar card (middle column, on top). */
+  /** The shared calendar card (left column, on top). */
   calendar: ReactNode;
-  /** The ticket desk (left column). */
+  /** The ticket desk (middle column). */
   desk: ReactNode;
 }
 
@@ -220,10 +220,7 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar,
 
   return (
     <div className="ch-home">
-      {/* ============ LEFT: ticket desk ============ */}
-      <div className="ch-col ch-col-desk">{desk}</div>
-
-      {/* ============ MIDDLE: calendar + backlog 2×2 ============ */}
+      {/* ============ LEFT: calendar + backlog 2×2 ============ */}
       <div className="ch-col ch-col-mid">
         {calendar}
         <section className="ch-card ch-backlog">
@@ -253,6 +250,9 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar,
           </div>
         </section>
       </div>
+
+      {/* ============ MIDDLE: to-do & tickets ============ */}
+      <div className="ch-col ch-col-desk">{desk}</div>
 
       {/* ============ RIGHT: team + bills ============ */}
       <div className="ch-col ch-col-right">

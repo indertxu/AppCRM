@@ -44,7 +44,11 @@ import { mapClientRole, legacyRoleMap, roleLinesOfRow, parseRoleLines, type Role
 
 type Ent = "contact" | "company";
 const ENT: Record<Ent, string> = { contact: "Contact", company: "Company" };
-const TYPE_LABEL: Record<FieldType, string> = { text: "Text", number: "Number", date: "Date", boolean: "Yes / No", select: "Choice list" };
+/** Custom field types — the import engine's types plus "multiselect" (several choices, stored as a list). */
+type CFType = FieldType | "multiselect";
+const TYPE_LABEL: Record<CFType, string> = { text: "Text", number: "Number", date: "Date", boolean: "Yes / No", select: "Choice list", multiselect: "Multiple choice" };
+/** Splits a cell of a multiple-choice column: "A; B, C" → ["A","B","C"]. */
+const splitChoices = (txt: string) => txt.split(/\s*[;,]\s*/).map((x) => x.trim()).filter(Boolean);
 
 interface Base { key: string; label: string; group: Ent; hint?: string }
 const BASE: Base[] = [
@@ -71,7 +75,6 @@ const BASE: Base[] = [
   { key: "company.name", label: "Company name (common)", group: "company", hint: "How people call it, e.g. Genesal. A legal form (S.L., S.A., GmbH…) is moved to Legal name" },
   { key: "company.legal_name", label: "Legal name (razón social)", group: "company", hint: "Razón social, as on invoices, e.g. Genesal Energy, S.L." },
   { key: "company.vat_number", label: "VAT / tax ID", group: "company", hint: "The surest way to find the company" },
-  { key: "company.reg_number", label: "Registration number", group: "company" },
   { key: "company.website", label: "Website", group: "company", hint: "Also finds the company by its domain" },
   { key: "company.phone", label: "Mobile / phone", group: "company" },
   { key: "company.phone_ext", label: "Mobile extension", group: "company" },
@@ -97,7 +100,7 @@ const BASE: Base[] = [
 ];
 const TARGETS = BASE.map((b) => b.key);
 /** Company columns saved from the file (the name is handled on its own). */
-const CO_DATA = ["legal_name", "vat_number", "reg_number", "website", "phone", "phone_ext", "landline", "landline_ext", "email", "sector", "source", "notes", "street", "addr_number", "addr_details", "postal_code", "city", "province", "country"] as const;
+const CO_DATA = ["legal_name", "vat_number", "website", "phone", "phone_ext", "landline", "landline_ext", "email", "sector", "source", "notes", "street", "addr_number", "addr_details", "postal_code", "city", "province", "country"] as const;
 type CoCol = (typeof CO_DATA)[number];
 type ProfCol = "street" | "addr_number" | "postal_code" | "city" | "province" | "country" | "language" | "linkedin";
 const PROF: ProfCol[] = ["street", "addr_number", "postal_code", "city", "province", "country", "language", "linkedin"];
@@ -136,7 +139,6 @@ const RAW_SYN: Record<string, string[]> = {
   "company.name": ["name", "nombre", "company", "company name", "empresa", "nombre empresa", "nombre de la empresa", "compania", "organization", "organisation", "organizacion", "account", "account name", "cliente", "client", "customer", "bedrijf", "bedrijfsnaam", "firma", "unternehmen", "organization name", "nombre comercial", "brand", "marca"],
   "company.legal_name": ["legal name", "razon social", "nombre fiscal", "denominacion social", "company legal name", "nombre legal", "statutaire naam", "raison sociale", "registered name", "official name", "nombre registrado", "razon social empresa", "legal entity", "entidad legal"],
   "company.vat_number": ["vat", "vat number", "cif", "nif", "cif nif", "nif cif", "tax id", "btw", "btw nummer", "company vat", "vat id", "ust id", "numero fiscal", "tax number"],
-  "company.reg_number": ["registration number", "reg number", "company number", "kvk", "kvk nummer", "numero de registro", "registro mercantil", "handelsregister", "chamber of commerce"],
   "company.website": ["website", "web", "url", "domain", "company website", "sitio web", "pagina web", "company domain", "dominio", "web empresa"],
   "company.phone": ["phone", "telephone", "tel", "telefono", "mobile", "movil", "telefono movil"],
   "company.phone_ext": ["extension", "ext", "phone extension", "extension telefono"],
@@ -297,10 +299,10 @@ async function grantAccess(kind: Ent, id: string, people: string[]) {
   const add = [...new Set(people)].filter((x) => !have.has(x));
   if (add.length) await supabase.from(table).insert(add.map((profile_id) => ({ [col]: id, profile_id })));
 }
-interface Def { label: string; type: FieldType; options: string[]; required: boolean; entity: Ent }
+interface Def { label: string; type: CFType; options: string[]; required: boolean; entity: Ent }
 
 function defOf(ctx: Ctx, st: Pick<IState, "newFields">, t: string): Def | null {
-  const pick = (list: { id: string; label: string; type: FieldType; options: string[]; required?: boolean }[], id: string, entity: Ent) => {
+  const pick = (list: { id: string; label: string; type: CFType; options: string[]; required?: boolean }[], id: string, entity: Ent) => {
     const f = list.find((x) => x.id === id);
     return f ? { label: f.label, type: f.type, options: f.options ?? [], required: !!f.required, entity } : null;
   };
@@ -375,7 +377,7 @@ const phoneKey = (s: string | null | undefined) => { const d = (s ?? "").replace
 const cap = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 const domainLabel = (w: string) => cap(w.replace(/^https?:\/\//i, "").replace(/^www\./i, "").split(/[/?#]/)[0].split(".")[0] ?? "");
 const numText = (c: SheetCell | undefined, txt: string) => (typeof c === "number" ? String(Math.round(c)) : txt);
-const blank = (v: any, type?: FieldType) => v == null || v === "" || (type === "boolean" && v === false);
+const blank = (v: any, type?: CFType) => v == null || v === "" || (Array.isArray(v) && v.length === 0) || (type === "boolean" && v === false);
 const fullName = (c: { first_name?: string | null; last_name?: string | null }) => [c.first_name, c.last_name].filter(Boolean).join(" ");
 /** A file contact's own fields, as the contacts table names them. */
 const contactFile = (c: CtEntry): Record<string, any> => ({ last_name: c.last_name, email: c.email, phone: c.phone, position: c.position, notes: c.notes, ...(c.is_billing ? { is_billing: true } : {}), ...c.profile, ...c.extra });
@@ -403,6 +405,7 @@ function parseRow(ctx: Ctx, st: IState, file: Ent, r: SheetCell[], idx: number):
       if (def.type === "number") { const n = parseNumber(cell); if (n != null) bucket[t] = n; else p.issues.push(`${def.label}: “${txt}” isn't a number`); }
       else if (def.type === "date") { const d = asDate(cell) ?? parseDate(cell); if (d) bucket[t] = d; else p.issues.push(`${def.label}: “${txt}” isn't a date`); }
       else if (def.type === "boolean") { const b = parseBool(cell); if (b != null) bucket[t] = b; else p.issues.push(`${def.label}: “${txt}” isn't yes/no`); }
+      else if (def.type === "multiselect") { const vals = [...new Set(splitChoices(txt).map((x) => optionMatch(def.options, x) ?? x))]; if (vals.length) bucket[t] = vals; }
       else if (def.type === "select") { const ch = choiceFor(ctx, st, t, txt).choice; if (ch === "__new") bucket[t] = def.options.find((o) => normHeader(o) === normHeader(txt)) ?? txt; else if (ch !== "__empty") bucket[t] = ch; }
       else bucket[t] = txt;
       continue;
@@ -696,6 +699,17 @@ async function runImport(ctx: Ctx, st: IState, files: FileData[], plan: Plan, na
 
   /* 1) new fields, and new options on existing choice lists */
   const used = new Set(files.flatMap((f) => Object.values(st.maps[f.entity]).filter(Boolean)));
+  /** Choices a multiple-choice column brings that the field doesn't list yet. */
+  const multiExtra = (t: string, base: string[]) => {
+    const add: string[] = [];
+    for (const f of files) for (const [colS, tt] of Object.entries(st.maps[f.entity])) {
+      if (tt !== t) continue;
+      f.columns.find((c) => c.i === +colS)?.values.forEach((v) => splitChoices(cellText(v)).forEach((x) => {
+        if (!optionMatch(base, x) && !add.some((o) => normHeader(o) === normHeader(x))) add.push(x);
+      }));
+    }
+    return add;
+  };
   const extraOptions = (t: string, base: string[]) => {
     const add: string[] = [];
     for (const f of files) for (const [colS, tt] of Object.entries(st.maps[f.entity])) {
@@ -735,8 +749,8 @@ async function runImport(ctx: Ctx, st: IState, files: FileData[], plan: Plan, na
   for (const t of used) {
     if (!/^(ctcustom|cocustom):/.test(t)) continue;
     const def = defOf(ctx, st, t);
-    if (!def || def.type !== "select") continue;
-    const add = extraOptions(t, def.options);
+    if (!def || (def.type !== "select" && def.type !== "multiselect")) continue;
+    const add = def.type === "multiselect" ? multiExtra(t, def.options) : extraOptions(t, def.options);
     if (!add.length) continue;
     const id = t.slice(t.indexOf(":") + 1);
     if (def.entity === "company") await updateCompanyField(id, { options: [...def.options, ...add] });
@@ -1180,7 +1194,7 @@ export default function ContactImport({ fields: initialFields, onClose, onDone, 
     const out: TOpt[] = [{ value: "__none", label: "Don't import", group: "", tone: "none" }];
     const order: Ent[] = file === "contact" ? ["contact", "company"] : ["company", "contact"];
     order.forEach((e) => BASE.filter((b) => b.group === e).forEach((b) => out.push({ value: b.key, label: b.label, group: ENT[e], tone: e === "company" ? "co" : "ct", hint: b.hint })));
-    order.forEach((e) => ((e === "contact" ? ctx.ctFields : ctx.coFields) as { id: string; label: string; type: FieldType }[]).forEach((f) =>
+    order.forEach((e) => ((e === "contact" ? ctx.ctFields : ctx.coFields) as { id: string; label: string; type: CFType }[]).forEach((f) =>
       out.push({ value: `${e === "contact" ? "ctcustom" : "cocustom"}:${f.id}`, label: f.label, group: `Your ${e} fields`, tone: "field", hint: TYPE_LABEL[f.type] })));
     st.newFields.forEach((n) => out.push({ value: `new:${n.tmp}`, label: n.label || "Untitled", group: "New fields", tone: "new", hint: `${ENT[n.entity as Ent]} · ${TYPE_LABEL[n.type]}` }));
     order.forEach((e) => out.push({ value: `__create:${e}`, label: `New ${e} field from this column`, group: "Create", tone: "create" }));

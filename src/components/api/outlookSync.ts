@@ -4,6 +4,9 @@ import { supabase } from "./supabase";
 const CLIENT_ID = import.meta.env.VITE_MS_CLIENT_ID as string;
 const AUTH_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
 const SCOPES = "Calendars.ReadWrite offline_access User.Read";
+/** Asked when connecting "with mail" (ticket desk e-mail, campaigns). Users of tenants that block
+ *  user consent need an admin to grant these once (Azure › API permissions › Grant admin consent). */
+const MAIL_SCOPES = "Mail.ReadWrite Mail.Send Mail.ReadWrite.Shared Mail.Send.Shared";
 const REDIRECT_URI = `${window.location.origin}/settings`; // must match Azure redirect URIs
 
 // --- PKCE helpers (required for SPA registrations) ---
@@ -101,7 +104,7 @@ const OAUTH_PARAMS = ["code", "state", "session_state", "error", "error_descript
       return;
     }
     // Same-window return (popup was blocked): keep the code for this tab.
-    if (code) ss.set(PENDING_KEY, JSON.stringify({ code, verifier: ss.get("ms_pkce_verifier") ?? "" }));
+    if (code) ss.set(PENDING_KEY, JSON.stringify({ code, verifier: ss.get("ms_pkce_verifier") ?? "", withMail: ss.get("ms_oauth_mail") === "1" }));
     else if (error) ss.set(ERROR_KEY, error);
     ss.del("ms_oauth_state");
   } catch { /* never break start-up */ }
@@ -115,7 +118,9 @@ export const outlookConnectError = (): string | null => ss.get(ERROR_KEY);
  * connection here. Resolves when it's done (true = connected). Falls back to a
  * full-page redirect if the browser blocks the popup.
  */
-export async function connectOutlook(): Promise<boolean> {
+export async function connectOutlook(opts: { withMail?: boolean } = {}): Promise<boolean> {
+  const withMail = !!opts.withMail;
+  const scope = withMail ? `${SCOPES} ${MAIL_SCOPES}` : SCOPES;
   ss.del(ERROR_KEY);
   ss.del(PENDING_KEY);
   // A leftover "<…>-code-verifier" from an earlier Supabase sign-in is what makes
@@ -130,7 +135,7 @@ export async function connectOutlook(): Promise<boolean> {
     response_type: "code",
     redirect_uri: REDIRECT_URI,
     response_mode: "query",
-    scope: SCOPES,
+    scope,
     state,
     code_challenge: challenge,
     code_challenge_method: "S256",
@@ -148,6 +153,7 @@ export async function connectOutlook(): Promise<boolean> {
     const plain = crypto.randomUUID();
     ss.set("ms_oauth_state", plain);
     ss.set("ms_pkce_verifier", verifier);
+    ss.set("ms_oauth_mail", withMail ? "1" : "");
     window.location.href = authUrl(plain);
     return false;
   }
@@ -165,7 +171,7 @@ export async function connectOutlook(): Promise<boolean> {
         window.dispatchEvent(new CustomEvent(OUTLOOK_CONNECTION_EVENT, { detail: { connected: false, error } }));
         resolve(false); return;
       }
-      ss.set(PENDING_KEY, JSON.stringify({ code: msg.code, verifier }));
+      ss.set(PENDING_KEY, JSON.stringify({ code: msg.code, verifier, withMail }));
       resolve(await completeOutlookConnect());
     };
     const onMessage = (e: MessageEvent) => { if (e.origin === window.location.origin) void finish(e.data); };
@@ -209,13 +215,14 @@ export async function completeOutlookConnect(): Promise<boolean> {
   inflight = (async () => {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) return false; // keep it until you've signed in
-    let pending: { code: string; verifier: string };
+    let pending: { code: string; verifier: string; withMail?: boolean };
     try { pending = JSON.parse(raw); } catch { ss.del(PENDING_KEY); return false; }
     ss.del(PENDING_KEY); // a Microsoft code works only once
     let r: any;
-    try { r = await call("connect", { code: pending.code, redirectUri: REDIRECT_URI, codeVerifier: pending.verifier }); }
+    try { r = await call("connect", { code: pending.code, redirectUri: REDIRECT_URI, codeVerifier: pending.verifier, withMail: !!pending.withMail }); }
     catch (e) { r = { error: (e as Error)?.message ?? String(e) }; }
     ss.del("ms_pkce_verifier");
+    ss.del("ms_oauth_mail");
     const connected = !!r?.connected;
     let error = connected ? null : String(r?.error?.message ?? r?.error_description ?? r?.error ?? "Microsoft didn't accept the connection.");
     if (error && /AADSTS70008|AADSTS54005|expired|already redeemed/i.test(error)) {
@@ -488,4 +495,60 @@ export async function unsyncCalendarEntry(entryId: string): Promise<void> {
   const { data } = await supabase.from("calendar_entries").select("outlook_event_id").eq("id", entryId).maybeSingle();
   const ev = (data as any)?.outlook_event_id ?? null;
   if (ev) await Promise.race([deleteEntryFromOutlook(ev, entryId), new Promise((r) => setTimeout(r, 8000))]);
+}
+
+/* ---------- E-mail through Outlook (Microsoft Graph, via the outlook-sync function) ---------- */
+/** One e-mail to send. `from` = a shared / department mailbox the user may send as (empty = the user's own). */
+export interface OutlookMail {
+  to: string[]; cc?: string[]; bcc?: string[];
+  subject: string; html: string;
+  from?: string | null; replyTo?: string | null;
+  /** Free tag stored with the send (e.g. "campaign:<id>", "ticket:<id>"). */
+  ref?: string | null;
+}
+export interface OutlookMailResult {
+  ok: boolean; error: string | null; messageId?: string | null;
+  /** Microsoft is throttling: wait this many seconds before the next send (about 30 mails / minute / mailbox). */
+  retryAfter?: number;
+  /** The Outlook connection has no mail permission yet: connect again "with mail". */
+  needsMailPermission?: boolean;
+}
+/** Sends one e-mail through the user's Outlook connection (outlook-sync › mail_send). */
+export async function sendOutlookMail(m: OutlookMail): Promise<OutlookMailResult> {
+  try {
+    const r = await call("mail_send", m);
+    if (r?.error) {
+      const e = String(r.error);
+      if (e === "mail_scope_missing") return { ok: false, error: "Your Outlook connection can't send mail yet: connect it again with mail.", needsMailPermission: true };
+      if (e === "throttled") return { ok: false, error: "Outlook is limiting sends; trying again shortly.", retryAfter: Number(r.retryAfter) || 30 };
+      return { ok: false, error: e };
+    }
+    return { ok: true, error: null, messageId: r?.messageId ?? null };
+  } catch (e: any) { return { ok: false, error: e?.message ?? "Could not send." }; }
+}
+
+export interface OutlookMailStatus { connected: boolean; mail: boolean; email: string | null; needsSql?: boolean }
+/** Is Outlook connected, and with mail? */
+export async function outlookMailStatus(): Promise<OutlookMailStatus> {
+  try {
+    const r = await call("mail_status");
+    if (r?.error) return { connected: false, mail: false, email: null };
+    return { connected: !!r.connected, mail: !!r.mail, email: r.email ?? null, needsSql: !!r.needsSql };
+  } catch { return { connected: false, mail: false, email: null }; }
+}
+export interface MailSyncResult { read?: number; stored?: number; threaded?: number; created?: number; ignored?: number; inbox?: number; errors?: string[]; skipped?: string; note?: string; error?: string }
+/** Reads new mail of the desk's mailboxes into the ticket desk (threads, rules, Inbox). */
+export async function syncTicketMail(): Promise<MailSyncResult> {
+  try { return (await call("mail_sync")) as MailSyncResult; } catch (e: any) { return { error: e?.message ?? "Sync failed." }; }
+}
+/** One attachment of a received e-mail, as a Blob to download. */
+export async function fetchMailAttachment(messageId: string, attachmentId: string): Promise<{ blob: Blob; name: string } | { error: string }> {
+  try {
+    const r = await call("mail_attachment", { messageId, attachmentId });
+    if (r?.error) return { error: String(r.error) };
+    const bin = atob(String(r.contentBytes ?? ""));
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return { blob: new Blob([bytes], { type: r.contentType || "application/octet-stream" }), name: r.name || "attachment" };
+  } catch (e: any) { return { error: e?.message ?? "Could not download." }; }
 }

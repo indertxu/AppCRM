@@ -11,18 +11,19 @@ import {
   loadRelationshipSets, type RelationshipSets, contactStatus,
   loadPrefs, savePref,
   type Contact, type Company, type Employee, type ContactField,
-  renameCustomValue,
+  renameCustomValue, customList,
   listContactDeals, listAllDeals, setContactDeals, CONTACT_LANGUAGES, type DealRef,
 } from "../companies/companiesApi";
 import {
   AddressFields, PhoneField, StatusPills, HistorySection, phoneText, telHref,
   FilterBar, FilterChips, SortHead, applyView, nextSort, emptyView, useSavedViews, useStoredView, type FField,
   useBulkSelection, BulkBar, BulkCheck, type BulkAction, DataCleanup, DataTools, GEAR, SettingsShell, ColumnsEditor, CustomFieldsEditor,
-  ConfirmX, DealRows,
+  ConfirmX, DealRows, MultiChoice, CustomChips, isChoiceType,
 } from "../companies/CompaniesPage";
 import "../clients/ClientsPage.css";
 import "../companies/CompaniesPage.css";
 import ContactImport from "./ContactImport";
+import { PageLoader } from "../../framework/AppLayout";
 import ContactExport from "./ContactExport";
 import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
 import { LinkedInExtensionModal } from "./LinkedInCapture";
@@ -46,6 +47,8 @@ const norm = (s: string) => (s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/
 export default function ContactsPage() {
   const navigate = useNavigate();
   const [contacts, setContacts] = useState<Contact[]>([]);
+  /** False until the first load finishes — shows the shared loader instead of "No contacts yet". */
+  const [loaded, setLoaded] = useState(false);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [editing, setEditing] = useState<Contact | null>(null);
   const [q, setQ] = useState("");
@@ -71,6 +74,7 @@ export default function ContactsPage() {
     setAssignees(await loadContactAssignees().catch(() => ({})));
     setFields(await listContactFields().catch(() => []));
     setRel(await loadRelationshipSets().catch(() => null));
+    setLoaded(true);
   };
   useEffect(() => {
     myProfile().then(setMe).catch(() => {});
@@ -151,6 +155,7 @@ export default function ContactsPage() {
     const f = fieldById(key);
     const v = (c.custom ?? {})[key];
     if (!f) return <span className="ct-lmuted">—</span>;
+    if (f.type === "multiselect") return <CustomChips value={v} />;
     if (v == null || v === "") return <span className="ct-lmuted">—</span>;
     if (f.type === "boolean") return <span className="ct-lmuted">{v ? "Yes" : "No"}</span>;
     return <span className="ct-lmuted">{String(v)}</span>;
@@ -196,8 +201,9 @@ export default function ContactsPage() {
     { key: "imported_at", label: "Imported on", group: "Record", type: "date", get: (c) => (c as any).imported_at },
     { key: "notes", label: "Notes", group: "Record", type: "text", get: (c) => c.notes },
     ...fields.map((f): FField<Contact> => ({
-      key: f.id, label: f.label, group: "Your fields", type: f.type === "select" ? "select" : f.type,
-      get: (c) => (c.custom ?? {})[f.id], ...(f.type === "select" ? { options: () => f.options.map((o) => ({ value: o, label: o })) } : {}),
+      key: f.id, label: f.label, group: "Your fields", type: f.type === "multiselect" ? "multi" : f.type,
+      get: (c) => (f.type === "multiselect" ? customList((c.custom ?? {})[f.id]) : (c.custom ?? {})[f.id]),
+      ...(isChoiceType(f.type) ? { options: () => [...new Set([...f.options, ...(f.type === "multiselect" ? contacts.flatMap((c) => customList((c.custom ?? {})[f.id])) : [])])].map((o) => ({ value: o, label: o })) } : {}),
     })),
   ];
 
@@ -263,6 +269,43 @@ export default function ContactsPage() {
         return null;
       },
     },
+    ...(fields.some((f) => f.type === "multiselect") ? [{
+      key: "tagf", label: "Add a choice", more: true,
+      icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7l2 2 4-4M3 15l2 2 4-4M13 7h8M13 15h8" /></svg>,
+      options: fields.filter((f) => f.type === "multiselect").flatMap((f) => f.options.map((o) => ({ value: `${f.id}\u0001${o}`, label: o, group: f.label }))),
+      run: async (v?: string) => {
+        if (!v) return null;
+        const [fid, opt] = v.split("\u0001");
+        let n = 0;
+        for (const c of picked()) {
+          const cur = customList((c.custom ?? {})[fid]);
+          if (cur.includes(opt)) continue;
+          const err = await saveContact({ ...c, custom: { ...(c.custom ?? {}), [fid]: [...cur, opt] } });
+          if (err) { await reload(); return err; }
+          n++;
+        }
+        await reload(); bulk.clear();
+        return { done: `${opt} added to ${n} contact${n === 1 ? "" : "s"}` };
+      },
+    }, {
+      key: "untagf", label: "Remove a choice", more: true,
+      icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7l2 2 4-4M3 15l2 2 4-4M13 11h8" /></svg>,
+      options: fields.filter((f) => f.type === "multiselect").flatMap((f) => [...new Set(picked().flatMap((c) => customList((c.custom ?? {})[f.id])))].map((o) => ({ value: `${f.id}\u0001${o}`, label: o, group: f.label }))),
+      run: async (v?: string) => {
+        if (!v) return null;
+        const [fid, opt] = v.split("\u0001");
+        let n = 0;
+        for (const c of picked()) {
+          const cur = customList((c.custom ?? {})[fid]);
+          if (!cur.includes(opt)) continue;
+          const err = await saveContact({ ...c, custom: { ...(c.custom ?? {}), [fid]: cur.filter((x) => x !== opt) } });
+          if (err) { await reload(); return err; }
+          n++;
+        }
+        await reload(); bulk.clear();
+        return { done: `${opt} removed from ${n} contact${n === 1 ? "" : "s"}` };
+      },
+    }] as BulkAction[] : []),
     {
       key: "export", label: "Export these", more: true,
       icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12M7 10l5 5 5-5M5 21h14" /></svg>,
@@ -315,14 +358,17 @@ export default function ContactsPage() {
 
       <FilterChips fields={filterFields} view={view} onView={setView} onEdit={() => setFiltersOpenTick((x) => x + 1)} shown={shown.length} total={visible.length} noun={["contact", "contacts"]} />
 
-      {shown.length === 0 ? (
+      {!loaded ? <PageLoader label="Loading contacts…" fill={false} /> : shown.length === 0 ? (
         <p className="cl-hint">{contacts.length === 0 ? "No contacts yet. Add your first one." : "No contacts match your search and filters."}</p>
       ) : (
         <div className={`ct-scroll is-xscroll ${compact ? "is-compact" : ""}`} style={{ ["--row-min" as string]: `${rowMin}px` } as CSSProperties}
-          onScroll={(e) => e.currentTarget.classList.toggle("is-scrolled-x", e.currentTarget.scrollLeft > 4)}>
+          onScroll={(e) => { const el = e.currentTarget; el.classList.toggle("is-scrolled-x", el.scrollLeft > 4); el.classList.toggle("is-scrolled-y", el.scrollTop > 2); }}>
+          {/* the sticky header sits on an opaque band of the page colour: rows never show above or around it */}
+          <div className="ct-lhead-wrap">
           <div className="ct-lrow ct-lhead" style={{ gridTemplateColumns: rowGrid }}>
             <span className="ct-lid-head"><BulkCheck on={bulk.allOn} partial={bulk.someOn} onToggle={bulk.toggleAll} label="Select every contact shown" /><SortHead label="Name" k="name" sort={view.sort} onSort={onSort} /></span>
             {activeColumns.map((k) => <span key={k}><SortHead label={columnLabel(k)} k={k} sort={view.sort} onSort={onSort} /></span>)}
+          </div>
           </div>
           <div className="ct-list">
             {shown.map((c) => (
@@ -470,7 +516,7 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
     for (const f of fields) {
       if (!f.required) continue;
       const v = customVal(f.id);
-      const empty = v == null || v === "" || (f.type === "boolean" && v === false);
+      const empty = v == null || v === "" || (f.type === "boolean" && v === false) || (Array.isArray(v) && v.length === 0);
       if (empty) { setErr(`"${f.label}" is required.`); return; }
     }
     setBusy(true); setErr(null);
@@ -500,7 +546,7 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
   const li = normalizeLinkedIn(c.linkedin);
   const sections: DwNavItem[] = [
     { k: "info", label: "Contact information", icon: "person" },
-    { k: "custom", label: "Custom fields", icon: "sliders", count: fields.filter((f) => { const v = customVal(f.id); return v != null && v !== "" && v !== false; }).length },
+    { k: "custom", label: "Custom fields", icon: "sliders", count: fields.filter((f) => { const v = customVal(f.id); return v != null && v !== "" && v !== false && !(Array.isArray(v) && v.length === 0); }).length },
     { k: "address", label: "Contact address", icon: "pin", warn: missing.length > 0 },
     { k: "companies", label: "Companies", icon: "building", count: c.companyIds.length },
     { k: "deals", label: "Deals", icon: "trend", count: onDeals.length },
@@ -596,7 +642,7 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
                 {fields.length === 0 && <p className="dw-empty-hint">No custom fields yet.</p>}
                 <div className="dw-grid">
                   {fields.map((f) => (
-                    <div className={`dw-f ${f.type === "text" || f.type === "select" ? "dw-col2" : ""}`} key={f.id}>
+                    <div className={`dw-f ${f.type === "text" || isChoiceType(f.type) ? "dw-col2" : ""}`} key={f.id}>
                       <label>{f.label}{f.required && <span className="dw-req"> *</span>}</label>
                       {f.type === "text" && (
                         <input value={customVal(f.id) ?? ""} onChange={(e) => setCustom(f.id, e.target.value)} />
@@ -619,6 +665,10 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
                         <Select value={customVal(f.id) ?? ""} onChange={(v) => setCustom(f.id, v)}
                           placeholder="Select…"
                           options={[{ value: "", label: "—" }, ...f.options.map((o) => ({ value: o, label: o }))]} />
+                      )}
+                      {f.type === "multiselect" && (
+                        <MultiChoice value={customVal(f.id)} options={f.options} onChange={(v) => setCustom(f.id, v)}
+                          onCreate={canAssign ? (_label, next) => updateContactField(f.id, { options: next }) : undefined} />
                       )}
                     </div>
                   ))}

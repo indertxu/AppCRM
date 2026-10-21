@@ -12,6 +12,8 @@ import ClientsPage from "../pages/clients/ClientsPage";
 import ProjectsPage from "../pages/projects/ProjectsPage";
 import CompaniesPage from "../pages/companies/CompaniesPage";
 import ContactsPage from "../pages/contacts/ContactsPage";
+import { MarketingPage } from "../pages/contacts/ContactExport";
+import { CustomerSuccessPage } from "../pages/clients/ClientsPage";
 import SalesPage from "../pages/sales/sales/SalesPage";
 import SettingsPage from "../pages/settings/SettingsPage";
 import LinkedInCapturePage from "../pages/contacts/LinkedInCapture";
@@ -89,6 +91,8 @@ export default function AppRoutes() {
             <Route element={<PageRoute page="companies" />}><Route path="/companies" element={<CompaniesPage />} /></Route>
             <Route element={<PageRoute page="contacts" />}><Route path="/contacts" element={<ContactsPage />} /></Route>
             <Route element={<PageRoute page="sales" />}><Route path="/sales" element={<SalesPage />} /></Route>
+            <Route element={<PageRoute page="marketing" />}><Route path="/marketing" element={<MarketingPage />} /></Route>
+            <Route element={<PageRoute page="success" />}><Route path="/success" element={<CustomerSuccessPage />} /></Route>
           </Route>
         </Route>
       </Route>

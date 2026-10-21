@@ -1,11 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { createPortal, flushSync } from "react-dom";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import type { Client, Project, ProjectType, ClientRole } from "./clientsTypes";
 import { projectValue, signedOf, legacyRoleMap, resolvedLinesOf, lineRate, roleNameOf, roleCounts, totalDiscountOf, domainOf, logoCandidates } from "./clientsTypes";
 import { supabase } from "../../api/supabase";
 import ClientDirectory, { copyIntoClientFolders } from "./ClientDirectory";
+import { ClientUpsells } from "./ClientsPage";
 import MentionInput, { type MentionPerson } from "../../framework/MentionInput";
 import { addTask, toggleTask, updateTaskMeta, saveClientProducts, type PaymentSchedule, type TaskPriority, type TrackTask } from "../sales/sales/salesApi";
 import { loadProducts, type Product as CatalogProduct } from "../settings/catalogApi";
@@ -29,7 +30,7 @@ interface Props {
   onClose: () => void;
 }
 
-type Tab = "overview" | "deals" | "projects" | "contract" | "folders";
+type Tab = "overview" | "deals" | "projects" | "contract" | "upsells" | "folders";
 
 interface Note { id: string; body: string; mentions: string[]; author_id: string | null; created_at: string; src: "client" | "sale"; deal?: string | null; dealId?: string | null }
 interface ContactLog { id: string; contacted_at: string; channel: string | null; contact_name: string | null; reason: string | null; logged_by: string | null; }
@@ -137,16 +138,17 @@ export function CompanyLogo({ name, website, className = "" }: { name: string; w
   useEffect(() => { setI(logoNext.get(d) ?? 0); setOk(!!logoGood.get(d)); }, [d]);
   const src = logoGood.get(d) ?? cands[i];
   const miss = () => { const n = i + 1; logoNext.set(d, n); setI(n); setOk(false); };
+  // One fixed square: the initials, and the logo laid over them once it has really loaded.
+  // The image never shows at its own size and never sits next to the initials.
   return (
-    <span className={`${className} ${src && ok ? "has-logo" : ""}`.trim()}>
-      {!(src && ok) && initials(name)}
+    <span className={`co-logo ${className} ${src && ok ? "is-img" : ""}`.trim()} aria-hidden="true">
+      <span className="co-logo-ini">{initials(name)}</span>
       {src && (
-        <img className="co-logo-img" src={src} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" draggable={false}
-          style={ok ? undefined : { position: "absolute", width: 1, height: 1, opacity: 0 }}
+        <img key={src} className="co-logo-img" src={src} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" draggable={false}
           onLoad={(e) => {
-            const w = e.currentTarget.naturalWidth;
-            // Google answers an unknown site with its 16px globe: that is not a logo
-            if (!w || (i === 0 && !logoGood.get(d) && w <= 16)) { miss(); return; }
+            const w = e.currentTarget.naturalWidth, h = e.currentTarget.naturalHeight;
+            // too small to be a logo (Google's 16px globe, a tiny favicon): try the next one / keep the initials
+            if (!w || !h || Math.max(w, h) < 32) { miss(); return; }
             logoGood.set(d, src); setOk(true);
           }}
           onError={miss} />
@@ -156,15 +158,7 @@ export function CompanyLogo({ name, website, className = "" }: { name: string; w
 }
 const plain = (body: string) => body.replace(/@\[([^\]]+)\]\([^)]+\)/g, "@$1");
 const reduceMotion = () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-const vt = (name: string) => ({ viewTransitionName: name } as React.CSSProperties);
 const cssVars = (o: Record<string, string | number>) => o as React.CSSProperties;
-
-/** Animate a layout change (a card growing to full width) where the browser can. */
-function morph(fn: () => void) {
-  const d = document as any;
-  if (!d.startViewTransition || reduceMotion()) { fn(); return; }
-  d.startViewTransition(() => flushSync(fn));
-}
 
 /** Render a note body, turning "@[name](id)" tokens into mention pills. */
 function renderNoteBody(body: string): React.ReactNode {
@@ -1061,6 +1055,7 @@ export default function ClientWorkspace({
     { v: "deals", label: "Deals", icon: "deal", hint: "Sales & proposals", n: deals.length || undefined },
     { v: "projects", label: "Projects", icon: "briefcase", hint: "Services delivered", n: projects.length || undefined },
     { v: "contract", label: "Contracts", icon: "contract", hint: "What they signed", n: lines.length || undefined },
+    { v: "upsells", label: "Upsells", icon: "spark", hint: "What else they could buy" },
     { v: "folders", label: "Folders", icon: "folder", hint: "Every file of this client" },
   ];
   const SUBS: Record<Tab, { k: string; label: string; n?: number }[]> = {
@@ -1074,6 +1069,7 @@ export default function ClientWorkspace({
       { k: "summary", label: "Summary" },
       { k: "products", label: "Signed products", n: lines.length || undefined }, { k: "services", label: "Service engagements", n: projects.length || undefined },
     ],
+    upsells: [],
     folders: [],
   };
   const subs = SUBS[tab];
@@ -1335,10 +1331,10 @@ export default function ClientWorkspace({
 
   /* ---- the company card: full width when opened, in the main column when closed ---- */
   const companyCard = (
-    <section data-sec="company" className={`cw-card cw-co ${coOpen ? "is-open" : ""} ${coMoved ? "is-moved" : ""}`} style={{ ...vt("cw-co"), ...cssVars({ "--i": 4 }) }}>
+    <section data-sec="company" className={`cw-card cw-co ${coOpen ? "is-open" : ""} ${coMoved ? "is-moved" : ""}`} style={cssVars({ "--i": 4 })}>
       <SecHead icon="building" tone="green" title="Company" sub={`${filled} of ${totalFacts} details filled`}>
         {co.id && <button className="cw-icon-btn" onClick={openCompany} aria-label="Open in Companies" {...tipOn(<TipCard title="Open in Companies" />)}><Ico n="out" s={15} /></button>}
-        <button className="cw-ghost" onClick={() => { hideTip(); morph(() => { setCoMoved(true); setCoOpen((o) => !o); }); }} aria-expanded={coOpen}>
+        <button className="cw-ghost" onClick={() => { hideTip(); setCoMoved(true); setCoOpen((o) => !o); }} aria-expanded={coOpen}>
           <Ico n={coOpen ? "shrink" : "expand"} s={14} />{coOpen ? "Less" : "See everything"}
         </button>
       </SecHead>
@@ -1404,9 +1400,6 @@ export default function ClientWorkspace({
       <div className="cw" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={client.name}>
         {/* ---------- header ---------- */}
         <header className="cw-head">
-          <span className="cw-orb is-a" aria-hidden="true" />
-          <button className="cw-x" onClick={requestClose} aria-label="Close"><Ico n="x" s={18} /></button>
-
           <div className="cw-head-row">
             <div className="cw-id">
               <CompanyLogo className="cw-av" name={client.name} website={str(company?.website) || null} />
@@ -1437,10 +1430,11 @@ export default function ClientWorkspace({
                 <span className="cw-kpi-v">{deals.length}{wonDeals ? <em>{wonDeals} won</em> : null}</span>
               </button>
             </div>
+            <button className="cw-x" onClick={requestClose} aria-label="Close"><Ico n="x" s={18} /></button>
           </div>
         </header>
 
-        <div className="cw-layout">
+        <div className={`cw-layout t-${tab}`}>
           {/* ---------- side menu ---------- */}
           <aside className="cw-side">
             <span className="cw-side-k">Client</span>
@@ -1479,11 +1473,28 @@ export default function ClientWorkspace({
 
         {/* ---------- body ---------- */}
         <div className={`cw-body ${tab === "folders" ? "is-fixed" : ""}`} ref={bodyRef} onScroll={() => { hideTip(); spyNow(); }}>
-          <div className="cw-panel" key={tab}>
+          <div className={`cw-panel is-${tab} ${!loaded && (tab === "overview" || tab === "deals") ? "is-loading" : ""}`} key={tab}>
+            {tab !== "folders" && (() => {
+              const t = TABS.find((x) => x.v === tab);
+              return t ? (
+                <header className="cw-tabhead">
+                  <span className="cw-tabhead-ico"><Ico n={t.icon} s={18} /></span>
+                  <div className="cw-tabhead-t"><h2>{t.label}</h2><small>{t.hint}</small></div>
+                </header>
+              ) : null;
+            })()}
+            {!loaded && (tab === "overview" || tab === "deals") && (
+              <div className="cw-skel" aria-hidden="true">
+                <span className="cw-skel-strip" />
+                {[0, 1, 2].map((k) => (
+                  <span className="cw-skel-sec" key={k}><i /><i /><i /><i /></span>
+                ))}
+              </div>
+            )}
             {/* ===== OVERVIEW ===== */}
             {tab === "overview" && (
               <div className="cw-ov">
-                <div className="cw-snap" data-sec="glance" style={vt("cw-snap")}>
+                <div className="cw-snap" data-sec="glance">
                   <button className="cw-tile" data-tone="green" style={cssVars({ "--i": 0 })} onClick={() => go("projects")}
                     {...tipOn(<TipCard title="Projects" rows={projRows((p) => `${p.status || "open"} · ${eur(projectValue(p))}`)} />)}>
                     <span className="cw-tile-top"><span className="cw-tile-ico"><Ico n="briefcase" s={15} /></span><span className="cw-tile-k">Projects</span></span>
@@ -1523,7 +1534,7 @@ export default function ClientWorkspace({
                 </div>
 
                 {companyCard}
-                    <section data-sec="people" className="cw-card cw-people" style={{ ...vt("cw-people"), ...cssVars({ "--i": 6 }) }}>
+                    <section data-sec="people" className="cw-card cw-people" style={cssVars({ "--i": 6 })}>
                       <SecHead icon="users" tone="blue" title="Contacts"
                         sub={`${persons.length} ${persons.length === 1 ? "person" : "people"}${persons.some((p) => p.billing) ? ` · ${persons.filter((p) => p.billing).length} billing` : ""}`}>
                         {persons.length > PEOPLE_LIMIT && (
@@ -1575,7 +1586,7 @@ export default function ClientWorkspace({
                       )}
                     </section>
 
-                    <section ref={pulseRef} data-sec="pulse" className={`cw-card cw-pulse is-${health}`} style={{ ...vt("cw-pulse"), ...cssVars({ "--i": 5 }) }}>
+                    <section ref={pulseRef} data-sec="pulse" className={`cw-card cw-pulse is-${health}`} style={cssVars({ "--i": 5 })}>
                       <SecHead icon="pulse" tone="teal" title="Last contacted" sub={touches.length ? `${touches.length} touchpoint${touches.length === 1 ? "" : "s"}` : "Nothing on record yet"}>
                         <button className="cw-btn-primary is-sm" onClick={() => (logOpen ? setLogOpen(false) : startLog())}>
                           <Ico n={logOpen ? "x" : "plus"} s={14} />{logOpen ? "Cancel" : "Log"}
@@ -2151,6 +2162,13 @@ export default function ClientWorkspace({
                     </div>
                   )}
                 </section>
+              </div>
+            )}
+
+            {/* ===== UPSELLS ===== */}
+            {tab === "upsells" && (
+              <div className="cw-stack cw-upsells">
+                <ClientUpsells clientId={client.id} clientName={client.name} />
               </div>
             )}
 

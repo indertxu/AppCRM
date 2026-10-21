@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useMemo, useState, useEffect, useRef } from "react";
+import { PageLoader } from "../../framework/AppLayout";
 import { createPortal } from "react-dom";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { supabase } from "../../api/supabase";
@@ -344,7 +345,7 @@ export default function BonusPanel({
   const hue = (s2: string) => { let h = 7; for (let i = 0; i < s2.length; i++) h = (h * 31 + s2.charCodeAt(i)) % 360; return h; };
   const initials = (n: string) => n.split(" ").filter(Boolean).map((w) => w[0]).slice(0, 2).join("").toUpperCase() || "?";
 
-  if (!loaded) return <div className="bp"><div className="bp-sheet"><p className="bx-muted">Loading bonus…</p></div></div>;
+  if (!loaded) return <div className="bp"><div className="bp-sheet"><PageLoader fill={false} size={96} label="Loading bonus" /></div></div>;
 
   return (
     <div className="bp" onPointerMove={bpSpot}>

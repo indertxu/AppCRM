@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { PageLoader } from "../../framework/AppLayout";
 import { createPortal } from "react-dom";
 import Select from "../../framework/Select";
 import {
@@ -384,7 +385,7 @@ export default function ProposalTemplateEditor({ canManage, owner, onClose, onOw
     finally { setSampling(null); }
   };
 
-  if (loading) return <div className="pte"><div className="pte-loading">Loading template…</div></div>;
+  if (loading) return <div className="pte"><PageLoader label="Loading template" /></div>;
 
   const company = brand.company || "Tu empresa";
   const activePreviewKey = tab === "slides" ? openSec : null;
@@ -1200,7 +1201,7 @@ function DeckManager({ canManage }: { canManage: boolean }) {
   };
 
   // ---- states ----
-  if (decks === undefined) return <div className="pd-loading"><span className="pd-spin" />Loading…</div>;
+  if (decks === undefined) return <PageLoader fill={false} size={88} label="Loading decks" />;
   if (decks === null) {
     return (
       <div className="pd-card pd-missing">

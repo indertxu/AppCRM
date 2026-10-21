@@ -46,7 +46,8 @@ export interface Billing { name?: string; email?: string; phone?: string; phone_
 export interface CompanyField {
   id: string;
   label: string;
-  type: "text" | "number" | "date" | "boolean" | "select";
+  /** "multiselect" = several options at once (stored as a list). */
+  type: "text" | "number" | "date" | "boolean" | "select" | "multiselect";
   required: boolean;
   options: string[];
   sort: number;
@@ -82,7 +83,8 @@ export interface Contact {
 export interface ContactField {
   id: string;
   label: string;
-  type: "text" | "number" | "date" | "boolean" | "select";
+  /** "multiselect" = several options at once (stored as a list). */
+  type: "text" | "number" | "date" | "boolean" | "select" | "multiselect";
   required: boolean;
   options: string[];
   sort: number;
@@ -708,14 +710,27 @@ export function partnerCut(gross: number, mode: string | null | undefined, value
 /** A dropdown option renamed in Settings: the records that had the old value get the new one. */
 export async function renameCustomValue(table: "companies" | "contacts", fieldId: string, from: string, to: string): Promise<string | null> {
   if (!from || from === to) return null;
-  const { data, error } = await supabase.from(table).select("id, custom").eq(`custom->>${fieldId}`, from);
-  if (error) return error.message;
-  for (const r of (data ?? []) as any[]) {
-    const { error: e } = await supabase.from(table).update({ custom: { ...(r.custom ?? {}), [fieldId]: to } }).eq("id", r.id);
+  // single choice: the value is the text; multiple choice: the value is a list that contains it
+  const [one, many] = await Promise.all([
+    supabase.from(table).select("id, custom").eq(`custom->>${fieldId}`, from),
+    supabase.from(table).select("id, custom").contains("custom", { [fieldId]: [from] }),
+  ]);
+  if (one.error) return one.error.message;
+  const rows = new Map<string, any>();
+  [...(one.data ?? []), ...(many.error ? [] : many.data ?? [])].forEach((r: any) => rows.set(r.id, r));
+  for (const r of rows.values()) {
+    const cur = (r.custom ?? {})[fieldId];
+    const next = Array.isArray(cur) ? [...new Set(cur.map((x: any) => (x === from ? to : x)))] : to;
+    const { error: e } = await supabase.from(table).update({ custom: { ...(r.custom ?? {}), [fieldId]: next } }).eq("id", r.id);
     if (e) return e.message;
   }
   return null;
 }
+
+/** A custom value as a list (multiple-choice fields; also reads older single text values). */
+export const customList = (v: unknown): string[] =>
+  Array.isArray(v) ? v.map((x) => String(x)).filter((x) => x.trim() !== "")
+    : v == null || v === "" ? [] : String(v).split(/\s*[;,]\s*/).filter(Boolean);
 
 // ---- History (written by the database: crm_history) ----
 export interface HistoryEntry { id: string; at: string; actor: string | null; action: string; detail: Record<string, any> }

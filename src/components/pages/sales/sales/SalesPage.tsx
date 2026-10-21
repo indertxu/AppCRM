@@ -8,7 +8,8 @@ import SalesForecast, { type ForecastKpis } from "./SalesForecast";
 import { supabase } from "../../../api/supabase";
 import { listCompanies, listContacts, myProfile, sessionUserId, loadPrefs, savePref, type Company, type Contact } from "../../companies/companiesApi";
 import { listPipelines, loadPipeline, loadPhasesByPipeline, sortPipelines, moveDealsToPipeline, type Pipeline, type Phase } from "../../settings/pipelineApi";
-import { useBulkSelection, BulkBar, BulkCheck, type BulkAction } from "../../companies/CompaniesPage";
+import { useBulkSelection, BulkBar, BulkCheck, DataTools, SettingsShell, GEAR, type BulkAction, type SxSection } from "../../companies/CompaniesPage";
+import { PageCover, PageLoader } from "../../../framework/AppLayout";
 import { loadProducts, loadServices, type Product } from "../../settings/catalogApi";
 import { listTrackings, loadTrackingTeams, loadSalesBoot, type SalesBootRows, setTrackingPhase, setTrackingStatus, deleteTracking, setTrackingOwner, addTrackingEmployee, removeTrackingEmployee, setDealCloseDate, setDealCloseProb, stampPhaseEntry, clearPhaseEventsAfter, trackingPct, loadPotentialTotals, yearTotalsFromLastRows, type Tracking,
   clientExistsForCompany, hasClientProductsForTracking, loadTrackingProducts } from "./salesApi";
@@ -436,7 +437,52 @@ function DealColumns({ all, cols, onChange }: { all: ColDef[]; cols: string[]; o
   );
 }
 
-export default function SalesPage() {
+
+/* The dark header floats as a rounded card (index.css: .fh). The card is sized to the header + figures
+   (they change height with the data, the tab and the width) and a soft glow follows the pointer over it. */
+function useFloatingHero(ref: { current: HTMLElement | null }, sel: string) {
+  useEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+    let raf = 0;
+    const measure = () => {
+      raf = 0;
+      const rt = root.getBoundingClientRect();
+      let bottom = 0;
+      root.querySelectorAll<HTMLElement>(sel).forEach((el) => {
+        const r = el.getBoundingClientRect();
+        if (r.height > 0) bottom = Math.max(bottom, r.bottom - rt.top + root.scrollTop);
+      });
+      root.style.setProperty("--fh-h", `${Math.max(0, Math.round(bottom - 22))}px`);
+    };
+    const queue = () => { if (!raf) raf = requestAnimationFrame(measure); };
+    const ro = new ResizeObserver(queue);
+    const watch = () => { ro.observe(root); root.querySelectorAll<HTMLElement>(sel).forEach((el) => ro.observe(el)); };
+    watch(); measure();
+    const mo = new MutationObserver(() => { watch(); queue(); });
+    mo.observe(root, { childList: true, subtree: true });
+    return () => { ro.disconnect(); mo.disconnect(); if (raf) cancelAnimationFrame(raf); };
+  });
+}
+function fhMove(e: { clientX: number; clientY: number; currentTarget: HTMLElement; pointerType?: string }) {
+  if (e.pointerType && e.pointerType !== "mouse") return;
+  const root = e.currentTarget;
+  const r = root.getBoundingClientRect();
+  const x = e.clientX - r.left - 14, y = e.clientY - r.top + root.scrollTop - 12;
+  const h = parseFloat(root.style.getPropertyValue("--fh-h")) || 0;
+  root.style.setProperty("--fh-x", `${Math.round(x)}px`);
+  root.style.setProperty("--fh-y", `${Math.round(y)}px`);
+  root.style.setProperty("--fh-on", x >= 0 && y >= 0 && y <= h && x <= r.width - 28 ? "1" : "0");
+}
+const fhLeave = (e: { currentTarget: HTMLElement }) => e.currentTarget.style.setProperty("--fh-on", "0");
+
+/**
+ * The Deals page. With `settings`, the same page renders as Settings › Deals page instead:
+ * import & export, deal fields and sales roles, with the data and permissions the page already loads.
+ */
+export default function SalesPage({ settings }: { settings?: { onBack: () => void } } = {}) {
+  const fhRef = useRef<HTMLDivElement>(null);
+  useFloatingHero(fhRef, ".sl-head, .so-kpis");
   const navigate = useNavigate();
   // Last time's data (if any): the page paints with it straight away and refreshes underneath.
   const [snap0] = useState(readSalesSnap);
@@ -449,10 +495,9 @@ export default function SalesPage() {
   const [bootStep, setBootStep] = useState<{ done: number; total: number }>({ done: 0, total: 1 });
   /** True while the kept copy is on screen and the fresh data is still coming. */
   const [refreshing, setRefreshing] = useState(!!snap0);
-  /** The loading screen stays until its fade-out has finished. */
-  const [bootGone, setBootGone] = useState(false);
-  // never trap the page behind it: a very slow or failed load lets go after 15 s
-  useEffect(() => { const t = window.setTimeout(() => setBootGone(true), 15000); return () => window.clearTimeout(t); }, []);
+  /** The shared page loader covers the first load; never trap the page behind it: a very slow or failed load lets go after 15 s. */
+  const [coverGaveUp, setCoverGaveUp] = useState(false);
+  useEffect(() => { const t = window.setTimeout(() => setCoverGaveUp(true), 15000); return () => window.clearTimeout(t); }, []);
   const [rawTotals, setPotentialTotals] = useState<Record<string, number>>(() => snap0?.deals[1] ?? {});
   const [companies, setCompanies] = useState<Company[]>(() => snap0?.companies ?? []);
   const [contacts, setContacts] = useState<Contact[]>(() => snap0?.contacts ?? []);
@@ -473,8 +518,6 @@ export default function SalesPage() {
   const [creating, setCreating] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [reporting, setReporting] = useState(false);
-  const [fieldsOpen, setFieldsOpen] = useState(false);
-  const [rolesOpen, setRolesOpen] = useState(false);
   const [importing, setImporting] = useState(false);
   /** Sales roles (who sees which pipelines, up to which phase) and the handovers they caused. */
   const [salesRoles, setSalesRoles] = useState<SalesRole[]>(() => snap0?.deals[3].roles ?? []);
@@ -1331,8 +1374,91 @@ export default function SalesPage() {
     return "";
   };
 
+  const exportModal = exporting && (
+    <ExportModal
+      deals={exportIds ? exportDeals.filter((t) => exportIds.includes(t.id)) : exportDeals}
+      contacts={exportContacts}
+      companies={exportCompanies}
+      employees={employees}
+      trackAssignees={trackAssignees}
+      potentialTotals={exportLevel === "all" ? rawTotals : potentialTotals}
+      pipelineNames={pipelines.map((p) => p.name)}
+      productNames={products.map((p) => p.name)}
+      phaseNames={allPhaseNames}
+      trackingFields={trackingFields}
+      helpers={{ pipelineName, productName, phaseName, phaseProbOf, closeDateOf }}
+      onClose={() => { setExporting(false); setExportIds(null); }}
+    />
+  );
+  const importModal = importing && (
+    <DealImport
+      pipelines={pipelines} phaseByPipe={phaseByPipe} products={products}
+      people={employees.filter((e) => !inactive.has(e.id))} roles={salesRoles}
+      trackings={trackings} meId={me?.id ?? null}
+      onDone={() => {
+        // new companies and contacts may have been created too
+        reload();
+        listCompanies().then(setCompanies).catch(() => {});
+        listContacts().then(setContacts).catch(() => {});
+      }}
+      onClose={() => setImporting(false)}
+    />
+  );
+
+  // ---- Settings › Deals page ----
+  if (settings) {
+    if ((!me || !rolesReady || !perms || !ready || refreshing) && !coverGaveUp) return <PageLoader label="Loading deal settings…" />;
+    const I = (d: string) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>;
+    const dataItems = [
+      ...(canImport ? [{ key: "import", title: "Import deals", hint: "From another CRM's Excel or CSV, with their companies and contacts", icon: I("M12 15V3M7 8l5-5 5 5M5 21h14"), tone: "#3f7fd8", onOpen: () => setImporting(true) }] : []),
+      ...(exportLevel !== "none" ? [{ key: "export", title: "Export", hint: exportLevel === "all" ? "Every deal, contact or company to Excel" : "The deals you can see, to Excel", icon: I("M12 3v12M7 10l5 5 5-5M5 21h14"), tone: "#8b5cf6", onOpen: () => setExporting(true) }] : []),
+    ];
+    const sections: SxSection[] = [
+      ...(dataItems.length ? [{ k: "data", label: "Import & export", icon: "upload", tone: "blue" as const, title: "Import & export", hint: "Bring deals in from another CRM, and take them out to Excel", body: <DataTools items={dataItems} /> }] : []),
+      ...(canFields ? [{ k: "fields", label: "Deal fields", icon: "sliders", tone: "amber" as const, count: trackingFields.length, title: "Deal fields", hint: "Your own fields on every deal: add, rename, reorder and mark them required",
+        body: <TrackingFieldsModal inline canEdit={canFields} onChanged={setTrackingFields} onClose={settings.onBack} /> }] : []),
+      ...(canManage ? [{ k: "roles", label: "Sales roles", icon: "users", tone: "violet" as const, count: salesRoles.length, title: "Sales roles", hint: "Who sees which pipelines and deals, and moving deals between people",
+        body: (
+          <SalesRolesModal
+            inline
+            canEdit={canManage}
+            employees={employees.filter((e) => !inactive.has(e.id))}
+            pipelines={pipelines}
+            phaseByPipe={phaseByPipe}
+            access={{
+              rules: accessRules, missing: accessMissing, onRulesChanged: setAccessRules,
+              trackings, owners: trackOwners, teams: trackAssignees, events: phaseEvents, handovers,
+            }}
+            meId={me?.id ?? null}
+            transfer={{
+              people: employees, inactive, trackings, owners: trackOwners, teams: trackAssignees, totals: rawTotals,
+              dealTitle: trackTitle, onDone: () => { reload(); },
+            }}
+            onChanged={setSalesRoles}
+            onClose={settings.onBack}
+          />
+        ) }] : []),
+    ];
+    if (!sections.length) sections.push({ k: "none", label: "Deals page", icon: "lock", tone: "slate", title: "Nothing to set up", hint: "Import, export, deal fields and sales roles are for the sales managers",
+      body: <p className="st-note">Ask a sales manager or the boss if you need one of these.</p> });
+    return (
+      <>
+        <SettingsShell icon="trend" title="Deals page" sub="Bringing deals in and out, the fields every deal carries, and who sees what"
+          onBack={settings.onBack}
+          tags={<>
+            <span className="sx-tag">{trackings.length.toLocaleString("en-GB")} deal{trackings.length === 1 ? "" : "s"}</span>
+            <span className="sx-tag">{trackingFields.length} custom field{trackingFields.length === 1 ? "" : "s"}</span>
+            <span className="sx-tag">{salesRoles.length} sales role{salesRoles.length === 1 ? "" : "s"}</span>
+          </>}
+          sections={sections} />
+        {exportModal}
+        {importModal}
+      </>
+    );
+  }
+
   // Who can open Sales at all: anyone with at least one view (Who sees what → Adjust settings).
-  // (While loading, the page shows its own layout with skeleton rows — see SalesSkeleton.)
+  // (While the first load runs, the shared page loader covers the page — see PageCover below.)
   if (me && rolesReady && perms && !perms.canOpen) {
     return (
       <div className="sl sl-ov">
@@ -1351,7 +1477,7 @@ export default function SalesPage() {
   }
 
   return (
-    <div className="sl sl-ov" onPointerMove={soSpotlight}>
+    <div className="sl sl-ov fh" ref={fhRef} onPointerMove={(e) => { soSpotlight(e); fhMove(e); }} onPointerLeave={fhLeave}>
       <header className="sl-head">
         <button className="sl-back" onClick={() => navigate("/home")} aria-label="Back">‹</button>
         <h1 className="sl-title">Deals</h1>
@@ -1378,12 +1504,7 @@ export default function SalesPage() {
         {(() => { const items: ActionItem[] = [
           ...(createLevel !== "none" ? [{ key: "new", group: "Create", label: "New deal", hint: "Open a deal with a company or contact", icon: AM_ICON.plus, primary: true, tone: "green" as const, shortcut: "N", onSelect: () => setCreating(true) }] : []),
           ...(canReports ? [{ key: "reports", group: "Analyse", label: "Reports", hint: "Lists, boards, forecasts and charts", icon: <SoIcon d={SO_ICON.report} w={1.9} />, tone: "blue" as const, shortcut: "R", onSelect: () => setReporting(true) }] : []),
-          ...(exportLevel !== "none" ? [{ key: "export", group: "Analyse", label: "Export", hint: exportLevel === "all" ? "Every deal, contact or company to Excel" : "The deals you can see, to Excel", icon: AM_ICON.export, tone: "violet" as const, shortcut: "E", onSelect: () => setExporting(true) }] : []),
-          ...(canImport ? [{ key: "import", group: "Analyse", label: "Import deals", hint: "From another CRM's Excel or CSV", icon: AM_ICON.import, tone: "violet" as const, shortcut: "I", onSelect: () => setImporting(true) }] : []),
-          ...(canFields ? [{ key: "fields", group: "Setup", label: "Deal fields", hint: trackingFields.length ? `${trackingFields.length} custom ${trackingFields.length === 1 ? "field" : "fields"} on every deal` : "Add your own fields to every deal", icon: AM_ICON.fields, tone: "amber" as const, shortcut: "F", onSelect: () => setFieldsOpen(true) }] : []),
-          ...(canManage ? [
-            { key: "roles", group: "Setup", label: "Sales roles", hint: salesRoles.length ? `${salesRoles.length} ${salesRoles.length === 1 ? "role" : "roles"} · who sees which deals` : "Who sees which pipelines, and handovers", icon: <SoIcon d={SO_ICON.roles} w={1.9} />, tone: "slate" as const, shortcut: "O", onSelect: () => setRolesOpen(true) },
-          ] : []),
+          ...(exportLevel !== "none" || canImport || canFields || canManage ? [{ key: "settings", group: "Setup", label: "Deals settings", hint: "Import, export, deal fields and sales roles", icon: GEAR, tone: "slate" as const, shortcut: "S", onSelect: () => navigate("/settings", { state: { settingsView: "salespage" } }) }] : []),
         ]; return items.length ? <ActionsMenu items={items} /> : null; })()}
       </header>
 
@@ -1514,6 +1635,21 @@ export default function SalesPage() {
               void moveTrackingToPhase(id, phaseId, phs);
             }}
             selected={bulk.has} selecting={bulk.active} onToggle={(id, range) => bulk.toggle(id, range)}
+            cardDetail={(t) => {
+              const owner = trackOwners[t.id] ? employeeById.get(trackOwners[t.id])?.name ?? null : null;
+              const close = closeDateOf(t);
+              const prob = shownProbOf(t);
+              const prod = productName(t.product_id);
+              return (
+                <>
+                  {prod && <span className="so-kx"><b>{prod}</b></span>}
+                  {owner && <span className="so-kx"><SoIcon d={SO_ICON.star} fill />{owner}</span>}
+                  <span className="so-kx">{close ? `Close ${new Date(close).toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "2-digit" })}` : "No close date"}</span>
+                  {prob != null && <span className="so-kx"><b>{prob}%</b> chance</span>}
+                  {t.contactIds.length > 0 && <span className="so-kx">{t.contactIds.length} contact{t.contactIds.length === 1 ? "" : "s"}</span>}
+                </>
+              );
+            }}
           />
         ) : shown.length === 0 && ready ? (
           <div className="so-empty">
@@ -1545,7 +1681,6 @@ export default function SalesPage() {
                 onClose={() => setHeadPop(null)}
                 probLabel={probView === "rep" ? "Sales estimate" : probView === "mgr" ? "Management estimate" : probView === "avg" ? "Average estimate" : "Phase probability"} />
             )}
-            {!ready && <SalesSkeleton />}
             <div className={`so-list ${loadedLate ? "is-after-load" : ""}`}>
               {shown.slice(0, listCap).map((t, i) => (
                 <TrackingRow
@@ -1588,22 +1723,7 @@ export default function SalesPage() {
           onSelectAll={bulk.toggleAll} allOn={bulk.allOn} />
       )}
 
-      {exporting && (
-        <ExportModal
-          deals={exportIds ? exportDeals.filter((t) => exportIds.includes(t.id)) : exportDeals}
-          contacts={exportContacts}
-          companies={exportCompanies}
-          employees={employees}
-          trackAssignees={trackAssignees}
-          potentialTotals={exportLevel === "all" ? rawTotals : potentialTotals}
-          pipelineNames={pipelines.map((p) => p.name)}
-          productNames={products.map((p) => p.name)}
-          phaseNames={allPhaseNames}
-          trackingFields={trackingFields}
-          helpers={{ pipelineName, productName, phaseName, phaseProbOf, closeDateOf }}
-          onClose={() => { setExporting(false); setExportIds(null); }}
-        />
-      )}
+      {exportModal}
       {reporting && (
         <SalesReport
           deals={mine}
@@ -1638,47 +1758,8 @@ export default function SalesPage() {
       )}
       {handoverModal}
       {wonAskModal}
-      {importing && (
-        <DealImport
-          pipelines={pipelines} phaseByPipe={phaseByPipe} products={products}
-          people={employees.filter((e) => !inactive.has(e.id))} roles={salesRoles}
-          trackings={trackings} meId={me?.id ?? null}
-          onDone={() => {
-            // new companies and contacts may have been created too
-            reload();
-            listCompanies().then(setCompanies).catch(() => {});
-            listContacts().then(setContacts).catch(() => {});
-          }}
-          onClose={() => setImporting(false)}
-        />
-      )}
-      {rolesOpen && (
-        <SalesRolesModal
-          canEdit={canManage}
-          employees={employees.filter((e) => !inactive.has(e.id))}
-          pipelines={pipelines}
-          phaseByPipe={phaseByPipe}
-          access={{
-            rules: accessRules, missing: accessMissing, onRulesChanged: setAccessRules,
-            trackings, owners: trackOwners, teams: trackAssignees, events: phaseEvents, handovers,
-          }}
-          meId={me?.id ?? null}
-          transfer={{
-            people: employees, inactive, trackings, owners: trackOwners, teams: trackAssignees, totals: rawTotals,
-            dealTitle: trackTitle, onDone: () => { reload(); },
-          }}
-          onChanged={setSalesRoles}
-          onClose={() => setRolesOpen(false)}
-        />
-      )}
-      {fieldsOpen && (
-        <TrackingFieldsModal
-          canEdit={canFields}
-          onChanged={setTrackingFields}
-          onClose={() => setFieldsOpen(false)}
-        />
-      )}
-      {!bootGone && <SalesBoot leaving={ready && !refreshing} onGone={() => setBootGone(true)} />}
+      {importModal}
+      <PageCover show={!ready && !coverGaveUp} label="Loading deals…" />
     </div>
   );
 }
@@ -1708,6 +1789,7 @@ function TrackingRow({ tracking, title, company, contactCount, pipeline, phases,
   const probTone = closeProb == null ? "none" : closeProb >= 70 ? "hi" : closeProb >= 40 ? "mid" : "lo";
   const started = tracking.created_at ? new Date(tracking.created_at).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "2-digit" }) : "-";
   const cp = Math.max(0, Math.min(100, closeProb ?? 0));
+  const teamCount = Object.keys(tracking.deal_roles ?? {}).length;
 
   return (
     <button
@@ -1734,8 +1816,6 @@ function TrackingRow({ tracking, title, company, contactCount, pipeline, phases,
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 21V5a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v16M15 9h4a1 1 0 0 1 1 1v11M8 8h3M8 12h3M8 16h3M3 21h18" /></svg>
               {company ?? "No company"}
             </span>
-            {contactCount > 0 && <span>{contactCount} contact{contactCount !== 1 ? "s" : ""}</span>}
-            <span>{pipeline}</span>
           </span>
         </span>
       </span>
@@ -1746,7 +1826,6 @@ function TrackingRow({ tracking, title, company, contactCount, pipeline, phases,
       <span key="stage" className="so-stage" title={`${pct}% through the pipeline`}>
         <span className="so-stage-top">
           <b>{stage}</b>
-          <small>{curIdx >= 0 && phases.length > 0 ? `Step ${curIdx + 1} of ${phases.length}` : "Not started"}</small>
           <em>{pct}%</em>
         </span>
         <span className="so-track" aria-hidden="true">
@@ -1759,15 +1838,6 @@ function TrackingRow({ tracking, title, company, contactCount, pipeline, phases,
           case "product": return (
       <span key="product" className="so-tags">
         {product ? <span className="so-tag">{product}</span> : <span className="so-tag is-empty">No product</span>}
-        <span className="so-sub">
-          {ownerName && (
-            <span className="so-owner" title={`Owner: ${ownerName}`}>
-              <SoIcon d={SO_ICON.star} fill />
-              {ownerName}
-            </span>
-          )}
-          <span>Started {started}</span>
-        </span>
       </span>
           );
           case "value": return (
@@ -1791,7 +1861,6 @@ function TrackingRow({ tracking, title, company, contactCount, pipeline, phases,
         ) : (
           <b>{closeProb}<i>%</i></b>
         )}
-        <span className="so-chance-bar" aria-hidden="true"><i /></span>
       </span>
           );
           default: {
@@ -1802,13 +1871,33 @@ function TrackingRow({ tracking, title, company, contactCount, pipeline, phases,
       })}
 
       <span className="so-go" aria-hidden="true"><SoIcon d={SO_ICON.arrow} w={2.2} /></span>
+
+      {/* More about the deal: unfolds on hover / keyboard focus, so the list stays calm. */}
+      <span className="so-x" aria-hidden="true">
+        <span className="so-x-in">
+          <span className="so-xi"><i>Owner</i><b className={ownerName ? "" : "is-none"}>{ownerName ? <><SoIcon d={SO_ICON.star} fill />{ownerName}</> : "No owner"}</b></span>
+          <span className="so-xi"><i>Pipeline</i><b>{pipeline || "—"}</b></span>
+          <span className="so-xi"><i>Step</i><b>{curIdx >= 0 && phases.length > 0 ? `${curIdx + 1} of ${phases.length}` : "Not started"}</b></span>
+          <span className="so-xi"><i>Product</i><b className={product ? "" : "is-none"}>{product ?? "None yet"}</b></span>
+          <span className="so-xi"><i>People</i><b>{contactCount} contact{contactCount === 1 ? "" : "s"}{teamCount ? ` · ${teamCount} on the team` : ""}</b></span>
+          {(tracking.rep_close_prob != null || tracking.mgr_close_prob != null) && (
+            <span className="so-xi"><i>Estimates</i><b>{tracking.rep_close_prob != null ? `Sales ${tracking.rep_close_prob}%` : "Sales —"} · {tracking.mgr_close_prob != null ? `Mgmt ${tracking.mgr_close_prob}%` : "Mgmt —"}</b></span>
+          )}
+          <span className="so-xi"><i>Started</i><b>{started}</b></span>
+          {closeProb != null && (
+            <span className="so-xi is-bar"><i>Close chance</i><span className="so-chance-bar" aria-hidden="true"><i /></span></span>
+          )}
+        </span>
+      </span>
     </button>
   );
 }
 
 // ============================ Kanban view ============================
-function KanbanView({ kanbanPipe, phaseByPipe, trackings, potentialTotals, trackTitle, companyName, onOpen, onMove, selected, selecting = false, onToggle }: {
+function KanbanView({ kanbanPipe, phaseByPipe, trackings, potentialTotals, trackTitle, companyName, onOpen, onMove, selected, selecting = false, onToggle, cardDetail }: {
   kanbanPipe: string;
+  /** What a card unfolds on hover (product, owner, close date, chance…). */
+  cardDetail?: (t: Tracking) => ReactNode;
   /** Multi-select: ticked cards, and a click picks instead of opening while any is ticked. */
   selected?: (id: string) => boolean; selecting?: boolean; onToggle?: (id: string, range: boolean) => void;
   phaseByPipe: Record<string, Phase[]>;
@@ -1924,6 +2013,7 @@ function KanbanView({ kanbanPipe, phaseByPipe, trackings, potentialTotals, track
                         <span className={`so-status is-${t.status}`}>{statusText(t.status)}</span>
                         {rev > 0 && <span className="so-kcard-rev">{fmtRev(rev)}</span>}
                       </span>
+                      {cardDetail && <span className="so-x" aria-hidden="true"><span className="so-x-in">{cardDetail(t)}</span></span>}
                     </div>
                   );
                 })}
@@ -1942,52 +2032,3 @@ function KanbanView({ kanbanPipe, phaseByPipe, trackings, potentialTotals, track
   );
 }
 
-/**
- * First load of Sales: skeleton rows in the list's own shape, under one light
- * sweep that runs across all of them, so the page looks like itself from the
- * first frame. When the data lands they give way and the real rows rise in.
- */
-function SalesSkeleton({ rows = 7 }: { rows?: number }) {
-  return (
-    <div className="so-skel" role="status" aria-live="polite" aria-label="Loading your pipeline">
-      {Array.from({ length: rows }, (_, i) => (
-        <div key={i} className="so-skel-row" style={{ ["--i" as string]: i } as CSSProperties} aria-hidden="true">
-          <span className="so-skel-who"><i className="sk-av" /><span><i className="sk-l1" style={{ width: `${46 + ((i * 17) % 30)}%` }} /><i className="sk-l2" /></span></span>
-          <span className="so-skel-stage"><span><i className="sk-l1" style={{ width: `${30 + ((i * 11) % 22)}%` }} /><i className="sk-pc" /></span><span className="sk-segs">{[0, 1, 2, 3, 4].map((k) => <i key={k} />)}</span></span>
-          <span className="so-skel-prod"><i className="sk-l1" style={{ width: "48%" }} /><i className="sk-l2" style={{ width: "72%" }} /></span>
-          <span className="so-skel-val"><i className="sk-l1" /><i className="sk-l2" /></span>
-          <span className="so-skel-chance"><i className="sk-l2" /></span>
-        </div>
-      ))}
-    </div>
-  );
-}
-/**
- * Loading screen of Sales. The page renders straight away underneath a frosted,
- * see-through layer; a small glass card shows a deal travelling through the
- * phases. When the fresh data is in, the blur melts away and the page comes into
- * focus. On a quick load the card never appears — only the blur.
- */
-function SalesBoot({ leaving, onGone }: { leaving: boolean; onGone: () => void }) {
-  useEffect(() => {
-    if (!leaving) return;
-    const t = window.setTimeout(onGone, 620);
-    return () => window.clearTimeout(t);
-  }, [leaving]); // eslint-disable-line react-hooks/exhaustive-deps
-  return (
-    <div className={`sb${leaving ? " is-leaving" : ""}`} role="status" aria-live="polite" aria-busy={!leaving}
-      aria-label={leaving ? "Pipeline loaded" : "Loading your pipeline"}>
-      <div className="sb-card">
-        <div className="sb-pipe" aria-hidden="true">
-          <span className="sb-track"><i className="sb-fill" /></span>
-          {[0, 1, 2, 3, 4].map((i) => (
-            <span key={i} className="sb-node" style={{ ["--i" as string]: i } as CSSProperties}><i /></span>
-          ))}
-          <span className="sb-deal"><i /></span>
-        </div>
-        <span className="sb-title">Loading your pipeline</span>
-        <span className="sb-sub">Deals · phases · forecast</span>
-      </div>
-    </div>
-  );
-}

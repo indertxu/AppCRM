@@ -2271,3 +2271,6 @@
 .mg-noaccess-ico svg { width: 32px; height: 32px; }
 .mg-noaccess h2 { margin: 0; font-family: "Space Grotesk", sans-serif; font-size: 24px; font-weight: 700; letter-spacing: -0.01em; }
 .mg-noaccess p { margin: 0 0 12px; max-width: 42ch; font-size: 14px; line-height: 1.5; color: var(--on2, rgba(225, 240, 233, 0.75)); }
+/* Subtle backlog overlay now hosts the shared cube loader. */
+.mg-loading.is-subtle .mg-loading-card.is-cube { padding: 18px 30px 20px; gap: 0; }
+.mg-loading.is-subtle .mg-loading-card.is-cube .pgl { padding: 0; }

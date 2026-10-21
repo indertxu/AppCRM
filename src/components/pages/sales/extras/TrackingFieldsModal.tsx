@@ -22,13 +22,15 @@ const splitOptions = (s: string) => Array.from(new Set(s.split(/[,\n]/).map((x) 
  * change dropdown options, mark required and delete; everyone else sees the
  * list read-only.
  */
-export default function TrackingFieldsModal({ canEdit, onClose, onChanged }: {
+export default function TrackingFieldsModal({ canEdit, onClose, onChanged, inline = false }: {
   canEdit: boolean;
+  /** Render as a plain block (Settings › Deals page) instead of a drawer. */
+  inline?: boolean;
   onClose: () => void;
   /** Called after every change, so the page can reload the definitions. */
   onChanged: (fields: TrackingField[]) => void;
 }) {
-  useBackToClose("sales-fields", onClose);
+  useBackToClose("sales-fields", onClose, !inline);
   const [items, setItems] = useState<TrackingField[]>([]);
   const [loading, setLoading] = useState(true);
   const [missing, setMissing] = useState(false);
@@ -51,10 +53,11 @@ export default function TrackingFieldsModal({ canEdit, onClose, onChanged }: {
   };
   useEffect(() => { refresh(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
+    if (inline) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !document.querySelector(".dp-pop")) onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, inline]);
 
   const run = async (fn: () => Promise<string | null>) => {
     setBusy(true); setErr(null);
@@ -100,16 +103,15 @@ export default function TrackingFieldsModal({ canEdit, onClose, onChanged }: {
     run(() => reorderTrackingFields(ids));
   };
 
-  return (
-    <div className="dw-backdrop tfm-backdrop" onMouseDown={onClose}>
-      <div className="dw dw-narrow tfm" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Deal fields">
-        <div className="dw-head">
+  const panel = (
+      <div className={`dw dw-narrow tfm${inline ? " is-inline" : ""}`} onMouseDown={(e) => e.stopPropagation()} role={inline ? undefined : "dialog"} aria-modal={inline ? undefined : true} aria-label="Deal fields">
+        {!inline && <div className="dw-head">
           <div>
             <span className="dw-eyebrow">Configure</span>
             <h2 className="dw-title">Deal fields</h2>
           </div>
           <button className="dw-x" onClick={onClose} aria-label="Close">×</button>
-        </div>
+        </div>}
 
         <div className="dw-body">
           <p className="tfm-where">
@@ -220,12 +222,17 @@ export default function TrackingFieldsModal({ canEdit, onClose, onChanged }: {
           {err && <p className="dw-err">{err}</p>}
         </div>
 
-        <div className="dw-foot">
+        {!inline && <div className="dw-foot">
           <div className="dw-foot-right">
             <button className="dw-save" onClick={onClose}>Done</button>
           </div>
-        </div>
+        </div>}
       </div>
+  );
+  if (inline) return panel;
+  return (
+    <div className="dw-backdrop tfm-backdrop" onMouseDown={onClose}>
+      {panel}
     </div>
   );
 }

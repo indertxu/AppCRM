@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { PageLoader } from "../../framework/AppLayout";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { supabase } from "../../api/supabase";
 import { listHandoffs, dismissHandoff, type Handoff } from "../sales/sales/salesApi";
@@ -282,7 +283,7 @@ export default function IncomingPanel() {
     return (
       <div className="ic">
         <section className="ic-sheet is-only">
-          <div className="ic-empty"><span className="ic-empty-art is-busy"><IcIcon d={IC_ICON.inbox} w={1.6} /></span><p>Loading handoffs…</p></div>
+          <PageLoader fill={false} size={96} label="Loading handoffs" />
         </section>
       </div>
     );

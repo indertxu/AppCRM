@@ -16,6 +16,7 @@
  * look at each of its contacts.
  */
 import { languageName, countryLabel } from "./contactProfile";
+import { customList } from "../companies/companiesApi";
 
 export type Kind ="text" | "number" | "date" | "bool" | "enum";
 export type Src = "contact" | "company" | "deal";
@@ -58,7 +59,8 @@ export interface CatalogInput {
   root?: Root;
 }
 
-const SKIP = new Set(["id", "tenant_id", "companyIds", "contactIds", "custom"]);
+// reg_number: no longer shown anywhere (the column stays in the database)
+const SKIP = new Set(["id", "tenant_id", "companyIds", "contactIds", "custom", "reg_number"]);
 const LABEL: Record<string, string> = {
   first_name: "First name", last_name: "Last name", position: "Position", email: "Email", phone: "Phone", is_billing: "Billing contact",
   notes: "Notes", created_at: "Created", updated_at: "Last updated", created_by: "Created by", name: "Name", legal_name: "Legal name",
@@ -85,7 +87,7 @@ export const prettify = (k: string) => {
 };
 const fullName = (c: any) => [c?.first_name, c?.last_name].filter(Boolean).join(" ");
 const sortOpts = (o: { value: string; label: string }[]) => o.sort((a, b) => a.label.localeCompare(b.label));
-const customKind = (t: string): Kind => (t === "select" ? "enum" : t === "boolean" ? "bool" : t === "number" ? "number" : t === "date" ? "date" : "text");
+const customKind = (t: string): Kind => (t === "select" || t === "multiselect" ? "enum" : t === "boolean" ? "bool" : t === "number" ? "number" : t === "date" ? "date" : "text");
 
 /** Guess what kind of values a column holds. */
 function infer(key: string, values: any[], idMaps: { name: string; map: Record<string, string> }[]): { kind: Kind; options?: { value: string; label: string }[]; idMap?: Record<string, string> } {
@@ -196,8 +198,9 @@ export function buildCatalog(inp: CatalogInput): XF[] {
     // custom fields: from their definition, plus any custom value without one
     if (defs) {
       const defined = new Set(defs.map((d) => d.id));
-      defs.forEach((d) => out.push(mk(src, `custom:${d.id}`, d.label, customKind(d.type), (e) => e?.custom?.[d.id],
-        { options: d.type === "select" ? d.options.map((o) => ({ value: o, label: o })) : undefined })));
+      // A multiple-choice field holds a list (older single values are split on ; or ,); each choice is one value.
+      defs.forEach((d) => out.push(mk(src, `custom:${d.id}`, d.label, customKind(d.type), (e) => (d.type === "multiselect" ? customList(e?.custom?.[d.id]) : e?.custom?.[d.id]),
+        { options: d.type === "select" || d.type === "multiselect" ? [...new Set([...d.options, ...rows.flatMap((r) => (d.type === "multiselect" ? customList(r?.custom?.[d.id]) : []))])].map((o) => ({ value: o, label: o })) : undefined })));
       const orphan = new Set<string>(); rows.forEach((r) => Object.keys(r?.custom ?? {}).forEach((ck) => { if (!defined.has(ck)) orphan.add(ck); }));
       orphan.forEach((ck) => { const g = infer(ck, rows.map((r) => r?.custom?.[ck]), idMaps); out.push(mk(src, `custom:${ck}`, `${prettify(ck)} (custom)`, g.kind, (e) => e?.custom?.[ck], { options: g.options, auto: true })); });
     } else {
@@ -219,7 +222,7 @@ export const OPS: Record<Kind, { value: string; label: string }[]> = {
   number: [{ value: "gte", label: "is at least" }, { value: "lte", label: "is at most" }, { value: "between", label: "is between" }, { value: "not_empty", label: "has a value" }, { value: "empty", label: "is empty" }],
   date: [{ value: "period", label: "is in" }, { value: "between", label: "is between" }, { value: "not_empty", label: "has a date" }, { value: "empty", label: "has no date" }],
   bool: [{ value: "yes", label: "is yes" }, { value: "no", label: "is no" }],
-  enum: [{ value: "any", label: "is any of" }, { value: "none", label: "is none of" }, { value: "not_empty", label: "has a value" }, { value: "empty", label: "is empty" }],
+  enum: [{ value: "any", label: "is any of" }, { value: "all", label: "has all of" }, { value: "none", label: "is none of" }, { value: "not_empty", label: "has a value" }, { value: "empty", label: "is empty" }],
 };
 export const DEFAULT_OP: Record<Kind, string> = { text: "contains", number: "gte", date: "period", bool: "yes", enum: "any" };
 export const NO_VALUE = new Set(["empty", "not_empty", "yes", "no"]);
@@ -242,6 +245,7 @@ export function condPasses(f: XF, cond: Cond, x: Ctx, inPeriod: (d: string, key:
     case "gte": return cond.a !== "" && filled.some((v) => Number(v) >= Number(cond.a));
     case "lte": return cond.a !== "" && filled.some((v) => Number(v) <= Number(cond.a));
     case "any": return cond.vals.length > 0 && filled.some((v) => cond.vals.includes(String(v)));
+    case "all": return cond.vals.length > 0 && cond.vals.every((w) => filled.some((v) => String(v) === w));
     case "none": return !filled.some((v) => cond.vals.includes(String(v)));
     case "period": return !!cond.a && filled.some((v) => inPeriod(iso(v), cond.a));
     case "between":

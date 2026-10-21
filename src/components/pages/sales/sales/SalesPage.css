@@ -4151,3 +4151,66 @@ button.sl-ppl-co:hover { background: #f1f7f4; color: var(--forest); }
 .dv [data-dsec="documents"] .tf-grid { margin-top: 0; }
 .dv [data-dsec="documents"] .tf-header { margin-bottom: 14px; }
 @media (min-width: 761px) { .so-cols .so-row::after { z-index: 3; } }
+
+/* Deals list: the column header sticks flush under the filters. The list scroller has 12px of top padding
+   (room for the hover lift) and a sticky header stops at that padding, so rows used to peek through the strip
+   above it — pull the header up over the padding and keep it opaque. */
+.so-sheet .sl-scroll .so-thead { top: -14px; z-index: 5; background: var(--paper); box-shadow: 0 -4px 0 var(--paper); }
+.so-sheet .sl-scroll .so-th-deal { background: var(--paper); }
+
+/* ============ Deals list: calm rows that unfold on hover (R2) ============ */
+/* Default: only what matters at a glance — deal + company, stage, product, value + close date, chance. */
+.sl-ov .so-row { min-height: 58px; padding-top: 10px; padding-bottom: 10px; transition: transform 0.5s var(--ease), box-shadow 0.4s, border-color 0.3s, padding 0.4s var(--ease); }
+.sl-ov .so-row .so-who-t { gap: 1px; }
+.sl-ov .so-row .so-stage { gap: 6px; }
+.sl-ov .so-row .so-value { gap: 2px; }
+.sl-ov .so-row .so-chance { gap: 0; }
+/* The unfolding part: a full-width strip under the row (grid rows 0fr → 1fr, so only this row grows). */
+.so-row .so-x { grid-column: 1 / -1; display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows 0.42s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.25s ease 0.05s; }
+.so-row .so-x-in {
+  min-height: 0; overflow: hidden; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 22px;
+  margin-left: 53px; /* lines up with the deal name, past the avatar */
+}
+.so-row .so-xi { display: inline-flex; flex-direction: column; gap: 2px; min-width: 0; max-width: 260px; padding-top: 12px; transform: translateY(-6px); transition: transform 0.45s cubic-bezier(0.16, 1, 0.3, 1); }
+.so-row .so-xi > i { font-style: normal; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mute2); }
+.so-row .so-xi > b { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; font-weight: 650; color: var(--so-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.so-row .so-xi > b.is-none { color: var(--mute2); font-weight: 500; }
+.so-row .so-xi > b svg { width: 12px; height: 12px; color: #d4962a; flex-shrink: 0; }
+.so-row .so-xi.is-bar .so-chance-bar { width: 120px; margin-top: 5px; }
+.so-row .so-xi:nth-child(2) { transition-delay: 0.02s; } .so-row .so-xi:nth-child(3) { transition-delay: 0.04s; }
+.so-row .so-xi:nth-child(4) { transition-delay: 0.06s; } .so-row .so-xi:nth-child(5) { transition-delay: 0.08s; }
+.so-row .so-xi:nth-child(6) { transition-delay: 0.1s; } .so-row .so-xi:nth-child(7) { transition-delay: 0.12s; } .so-row .so-xi:nth-child(8) { transition-delay: 0.14s; }
+
+@media (hover: hover) {
+  .so-row:hover .so-x, .so-row:focus-visible .so-x { grid-template-rows: 1fr; opacity: 1; transition-delay: 0.12s, 0.16s; }
+  .so-row:hover .so-xi, .so-row:focus-visible .so-xi { transform: none; }
+  .so-row:hover .so-x-in, .so-row:focus-visible .so-x-in { padding-bottom: 2px; }
+}
+.so-row:focus-visible { outline: 2px solid #12b57f; outline-offset: 2px; }
+/* Narrow screens: the strip is the row's last line. */
+@media (max-width: 760px) {
+  .so-row .so-x { grid-row: 4; margin-top: -12px; }
+  .so-row .so-x-in { margin-left: 0; }
+}
+
+/* Board cards: the same idea — compact, unfolding on hover. */
+.so-kcard { row-gap: 0; }
+.so-kcard .so-x { grid-column: 1 / -1; display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows 0.4s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.22s ease; }
+.so-kcard .so-x-in { min-height: 0; overflow: hidden; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.so-kcard .so-kx { display: inline-flex; align-items: center; gap: 5px; padding-top: 8px; font-size: 11.5px; color: var(--mute); white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.so-kcard .so-kx b { font-weight: 700; color: var(--so-ink); }
+.so-kcard .so-kx svg { width: 11px; height: 11px; color: #d4962a; }
+@media (hover: hover) {
+  .so-kcard:not(.is-dragging):hover .so-x, .so-kcard:focus-visible .so-x { grid-template-rows: 1fr; opacity: 1; transition-delay: 0.1s, 0.14s; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .so-row .so-x, .so-row .so-xi, .so-kcard .so-x, .sl-ov .so-row { transition: none; }
+}
+
+/* Settings › Deals page: deal fields and sales roles as plain blocks inside their section cards (R2) */
+.dw.is-inline, .dw.dw-narrow.is-inline { width: 100%; height: auto; overflow: visible; border-radius: 0; background: transparent; box-shadow: none; animation: none; }
+.dw.is-inline .dw-body { flex: none; overflow: visible; padding: 0; }
+.dw.is-inline .dw-head { padding: 0 0 14px; background: transparent; border-bottom: 1px solid var(--dw-line); margin-bottom: 14px; }
+.dw.is-inline .dw-foot { padding: 14px 0 0; margin-top: 14px; background: transparent; border-top: 1px solid var(--dw-line); }
+.dw.is-inline .srl-tabs { padding-left: 0; padding-right: 0; background: transparent; margin-bottom: 14px; }

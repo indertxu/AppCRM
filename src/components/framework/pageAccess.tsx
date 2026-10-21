@@ -21,7 +21,7 @@ import SuperAdminBubble, { getRolePreview } from "./SuperAdmin";
 
 export type PageKey =
   | "home" | "calendar" | "contacts" | "companies" | "clients"
-  | "projects" | "sales" | "management" | "settings";
+  | "projects" | "sales" | "management" | "settings" | "marketing" | "success";
 
 export interface PageDef {
   key: PageKey;
@@ -43,6 +43,8 @@ export const PAGES: PageDef[] = [
   { key: "clients", path: "/clients", label: "Clients", hint: "Clients and contracts" },
   { key: "projects", path: "/projects", label: "Projects", hint: "Delivery projects" },
   { key: "management", path: "/management", label: "Management", hint: "Team, backlog, billing, bonus" },
+  { key: "marketing", path: "/marketing", label: "Marketing", hint: "Lists and e-mail campaigns" },
+  { key: "success", path: "/success", label: "Customer success", hint: "Retention, health, renewals and upsells" },
   { key: "settings", path: "/settings", label: "Settings", hint: "Personal and company settings", locked: true },
 ];
 export const PAGE_KEYS = PAGES.map((p) => p.key);
@@ -92,6 +94,8 @@ const DEFAULTS: Record<PageKey, "all" | string[]> = {
   contacts: SALES_TEAM, companies: SALES_TEAM, sales: SALES_TEAM,
   clients: ["boss"],
   management: MANAGER_ROLES,
+  marketing: ["boss", "marketing_manager", "sales_manager"],
+  success: ["boss", "customer_success", "consultancy_manager", "sales_manager"],
 };
 export const defaultAllowed = (page: PageKey, level: string | null | undefined) => {
   const d = DEFAULTS[page];
@@ -272,7 +276,8 @@ export function PageAccessProvider({ children }: { children: ReactNode }) {
     if (!previewing && rows.length && rows.some((r) => isPanelKey(r.page))) {
       const pages = Object.fromEntries(PAGES.map((p) => {
         const r = rows.find((x) => x.page === p.key);
-        return [p.key, r ? { allowed: !!r.allowed, source: r.source } : { allowed: !!p.locked, source: "default" as const }];
+        // a page the database doesn't know yet (added after its rules were installed): the built-in default
+        return [p.key, r ? { allowed: !!r.allowed, source: r.source } : { allowed: !!p.locked || !!rows[0].is_superadmin || defaultAllowed(p.key, rows[0].security_level), source: "default" as const }];
       })) as Record<PageKey, PageResult>;
       const panels = Object.fromEntries(PANELS.map((p) => {
         const r = rows.find((x) => x.page === p.key);

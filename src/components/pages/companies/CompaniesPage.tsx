@@ -16,13 +16,14 @@ import {
   partnerCompanies, listPartnerRates, savePartnerRate, deletePartnerRate, type PartnerRate,
   loadHistory, type HistoryEntry, descendantsOf, groupRootOf,
   type Company, type Contact, type Employee, type CompanyField, type ContactField, type Billing,
-  renameCustomValue,
+  renameCustomValue, customList,
   listCompanyDeals, type DealRef,
 } from "./companiesApi";
 import { logoCandidates } from "../clients/clientsTypes";
 import { searchPlaces, lookupPostal, postalLooksComplete, provinceFromPostal, countryName, matchCountry, normalizeLinkedIn, isLinkedIn, linkedInHandle, type AddressHit } from "../contacts/contactProfile";
 import "../clients/ClientsPage.css";
 import CompanyImport from "./CompanyImport";
+import { PageLoader } from "../../framework/AppLayout";
 import ContactExport from "../contacts/ContactExport";
 import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
 import { loadProducts, loadServices } from "../settings/catalogApi";
@@ -42,6 +43,8 @@ const norm = (s: string) => (s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/
 export default function CompaniesPage() {
   const navigate = useNavigate();
   const [companies, setCompanies] = useState<Company[]>([]);
+  /** False until the first load finishes — shows the shared loader instead of "No companies yet". */
+  const [loaded, setLoaded] = useState(false);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [editing, setEditing] = useState<Company | null>(null);
   const [q, setQ] = useState("");
@@ -72,6 +75,7 @@ export default function CompaniesPage() {
     setFields(await listCompanyFields().catch(() => []));
     setContactFields(await listContactFields().catch(() => []));
     setRel(await loadRelationshipSets().catch(() => null));
+    setLoaded(true);
   };
   useEffect(() => {
     myProfile().then(setMe).catch(() => {});
@@ -111,7 +115,6 @@ export default function CompaniesPage() {
     { key: "name", label: "Name", group: "Company", type: "text", get: (c) => c.name },
     { key: "legal_name", label: "Legal name", group: "Company", type: "text", get: (c) => c.legal_name },
     { key: "vat_number", label: "VAT / Tax ID", group: "Company", type: "text", get: (c) => c.vat_number },
-    { key: "reg_number", label: "Registration nº", group: "Company", type: "text", get: (c) => c.reg_number },
     { key: "sector", label: "Sector", group: "Company", type: "select", get: (c) => c.sector, options: () => [...new Set([...sectorOptions(options), ...companies.map((c) => c.sector ?? "").filter(Boolean)])].map((v) => ({ value: v, label: v })) },
     { key: "source", label: "Source", group: "Company", type: "select", get: (c) => c.source ?? "", options: () => [...new Set([...sourceOptions(options), ...companies.map((c) => c.source ?? "").filter(Boolean)])].map((v) => ({ value: v, label: v })) },
     { key: "relationship", label: "Type (client, partner…)", group: "Company", type: "multi", get: typeTags, options: () => relationshipOptions(options).map((o) => ({ value: o.key, label: o.label })) },
@@ -144,8 +147,9 @@ export default function CompaniesPage() {
     { key: "imported_at", label: "Imported on", group: "Record", type: "date", get: (c) => (c as any).imported_at },
     { key: "notes", label: "Notes", group: "Record", type: "text", get: (c) => c.notes },
     ...fields.map((f): FField<Company> => ({
-      key: f.id, label: f.label, group: "Your fields", type: f.type === "select" ? "select" : f.type,
-      get: (c) => (c.custom ?? {})[f.id], ...(f.type === "select" ? { options: () => f.options.map((o) => ({ value: o, label: o })) } : {}),
+      key: f.id, label: f.label, group: "Your fields", type: f.type === "multiselect" ? "multi" : f.type,
+      get: (c) => (f.type === "multiselect" ? customList((c.custom ?? {})[f.id]) : (c.custom ?? {})[f.id]),
+      ...(isChoiceType(f.type) ? { options: () => [...new Set([...f.options, ...(f.type === "multiselect" ? companies.flatMap((c) => customList((c.custom ?? {})[f.id])) : [])])].map((o) => ({ value: o, label: o })) } : {}),
     })),
   ];
   // the header of each column sorts by this field
@@ -205,6 +209,23 @@ export default function CompaniesPage() {
       options: [...new Set([...sourceOptions(options), ...companies.map((c) => c.source ?? "").filter(Boolean)])].map((v) => ({ value: v, label: v })),
       run: (v) => (v ? saveMany((c) => (c.source === v ? null : { source: v }), `Source ${v}`) : null),
     },
+    ...(fields.some((f) => f.type === "multiselect") ? [{
+      key: "tagf", label: "Add a choice", more: true, icon: BI("M3 7l2 2 4-4M3 15l2 2 4-4M13 7h8M13 15h8"),
+      options: fields.filter((f) => f.type === "multiselect").flatMap((f) => f.options.map((o) => ({ value: `${f.id}\u0001${o}`, label: o, group: f.label }))),
+      run: (v?: string) => {
+        if (!v) return null;
+        const [fid, opt] = v.split("\u0001");
+        return saveMany((c) => { const cur = customList((c.custom ?? {})[fid]); return cur.includes(opt) ? null : { custom: { ...(c.custom ?? {}), [fid]: [...cur, opt] } }; }, `Added ${opt}`);
+      },
+    }, {
+      key: "untagf", label: "Remove a choice", more: true, icon: BI("M3 7l2 2 4-4M3 15l2 2 4-4M13 11h8"),
+      options: fields.filter((f) => f.type === "multiselect").flatMap((f) => [...new Set(pickedCos().flatMap((c) => customList((c.custom ?? {})[f.id])))].map((o) => ({ value: `${f.id}\u0001${o}`, label: o, group: f.label }))),
+      run: (v?: string) => {
+        if (!v) return null;
+        const [fid, opt] = v.split("\u0001");
+        return saveMany((c) => { const cur = customList((c.custom ?? {})[fid]); return cur.includes(opt) ? { custom: { ...(c.custom ?? {}), [fid]: cur.filter((x) => x !== opt) } } : null; }, `Removed ${opt}`);
+      },
+    }] as BulkAction[] : []),
     {
       key: "group", label: "Part of a group", more: true, icon: BI("M4 3h8v6H4zM12 15h8v6h-8zM8 9v4a2 2 0 0 0 2 2h2"),
       options: [{ value: "__none", label: "No group", hint: "Make them standalone" }, ...companies.filter((c) => !bulk.has(c.id as string)).map((c) => ({ value: c.id as string, label: c.name }))],
@@ -293,6 +314,7 @@ export default function CompaniesPage() {
     // custom field
     const f = fieldById(key);
     const v = (c.custom ?? {})[key];
+    if (f?.type === "multiselect") return <CustomChips value={v} />;
     if (!f || v == null || v === "") return <span className="co-laddr">—</span>;
     if (f.type === "boolean") return <span className="co-laddr">{v ? "Yes" : "No"}</span>;
     return <span className="co-laddr">{String(v)}</span>;
@@ -332,15 +354,18 @@ export default function CompaniesPage() {
 
       <FilterChips fields={filterFields} view={view} onView={setView} onEdit={() => setFiltersOpenTick((x) => x + 1)} shown={shown.length} total={visible.length} noun={["company", "companies"]} />
 
-      {shown.length === 0 ? (
+      {!loaded ? <PageLoader label="Loading companies…" fill={false} /> : shown.length === 0 ? (
         <p className="cl-hint">{companies.length === 0 ? "No companies yet. Create your first one." : "No companies match your search and filters."}</p>
       ) : (
         <div className={`co-scroll is-xscroll ${compact ? "is-compact" : ""}`} style={{ ["--row-min" as string]: `${rowMin}px` } as CSSProperties}
-          onScroll={(e) => e.currentTarget.classList.toggle("is-scrolled-x", e.currentTarget.scrollLeft > 4)}>
+          onScroll={(e) => { const el = e.currentTarget; el.classList.toggle("is-scrolled-x", el.scrollLeft > 4); el.classList.toggle("is-scrolled-y", el.scrollTop > 2); }}>
+          {/* the sticky header sits on an opaque band of the page colour: rows never show above or around it */}
+          <div className="co-lhead-wrap">
           <div className="co-lrow co-lhead" style={{ gridTemplateColumns: rowGrid }}>
             <span className="co-lid-head"><BulkCheck on={bulk.allOn} partial={bulk.someOn} onToggle={bulk.toggleAll} label="Select every company shown" /><SortHead label="Company" k="name" sort={view.sort} onSort={onSort} /></span>
             {dataColumns.map((k) => <span key={k} className="co-lhcell"><SortHead label={columnLabel(k)} k={sortKeyOf(k)} sort={view.sort} onSort={onSort} /></span>)}
             {showContacts && <span className="co-lright co-lcontacts"><SortHead label={columnLabel("contacts")} k="contacts_count" sort={view.sort} onSort={onSort} /></span>}
+          </div>
           </div>
           <div className="co-list">
             {shown.map((c) => {
@@ -576,6 +601,7 @@ function NewContactInline({ fields, onAdd, onCancel }: {
               <Select value={customVal(f.id) ?? ""} onChange={(v) => setCustom(f.id, v)} placeholder="Select…"
                 options={[{ value: "", label: "—" }, ...f.options.map((o) => ({ value: o, label: o }))]} />
             )}
+            {f.type === "multiselect" && <MultiChoice value={customVal(f.id)} options={f.options} onChange={(v) => setCustom(f.id, v)} />}
           </div>
         ))}
       </div>
@@ -852,9 +878,6 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
                 <div className="dw-f"><label>VAT / Tax ID</label>
                   <input value={c.vat_number ?? ""} onChange={(e) => set({ vat_number: e.target.value })} placeholder="e.g. B12345678" />
                 </div>
-                <div className="dw-f"><label>Registration nº</label>
-                  <input value={c.reg_number ?? ""} onChange={(e) => set({ reg_number: e.target.value })} />
-                </div>
               </div>
               <div className="dw-subh"><DwIcon name="pin" />Address</div>
               <AddressFields value={c} onChange={(p) => set(p as Partial<Company>)} countryAs="name" withDetails />
@@ -959,7 +982,7 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
                 {fields.length === 0 && <p className="dw-empty-hint">No custom fields yet.</p>}
                 <div className="dw-grid">
                   {fields.map((f) => (
-                    <div className={`dw-f ${f.type === "text" || f.type === "select" ? "dw-col2" : ""}`} key={f.id}>
+                    <div className={`dw-f ${f.type === "text" || isChoiceType(f.type) ? "dw-col2" : ""}`} key={f.id}>
                       <label>{f.label}{f.required && <span className="dw-req"> *</span>}</label>
                       {f.type === "text" && (
                         <input value={customVal(f.id) ?? ""} onChange={(e) => setCustom(f.id, e.target.value)} />
@@ -982,6 +1005,10 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
                         <Select value={customVal(f.id) ?? ""} onChange={(v) => setCustom(f.id, v)}
                           placeholder="Select…"
                           options={[{ value: "", label: "—" }, ...f.options.map((o) => ({ value: o, label: o }))]} />
+                      )}
+                      {f.type === "multiselect" && (
+                        <MultiChoice value={customVal(f.id)} options={f.options} onChange={(v) => setCustom(f.id, v)}
+                          onCreate={canAssign ? (_label, next) => updateCompanyField(f.id, { options: next }) : undefined} />
                       )}
                     </div>
                   ))}
@@ -1253,12 +1280,110 @@ export function ColumnsEditor({ availableColumns, columns, onColumns, compact, o
   );
 }
 
-type CustomFieldLike = { id: string; label: string; type: "text" | "number" | "date" | "boolean" | "select"; required: boolean; options: string[] };
-const FIELD_TYPE_LABEL: Record<CustomFieldLike["type"], string> = { text: "Text", number: "Number", date: "Date", boolean: "Yes / No", select: "Dropdown" };
+type CustomFieldLike = { id: string; label: string; type: "text" | "number" | "date" | "boolean" | "select" | "multiselect"; required: boolean; options: string[] };
+const FIELD_TYPE_LABEL: Record<CustomFieldLike["type"], string> = { text: "Text", number: "Number", date: "Date", boolean: "Yes / No", select: "Dropdown", multiselect: "Multiple choice" };
+/** Fields with a list of options: a dropdown (one) or multiple choice (several, like tags). */
+export const isChoiceType = (t: string) => t === "select" || t === "multiselect";
 const FIELD_TYPE_ICON: Record<CustomFieldLike["type"], string> = {
   text: "M4 7V5h16v2M9 19h6M12 5v14", number: "M4 9h16M4 15h16M10 3 8 21M16 3l-2 18", date: "M4 5h16v16H4zM4 10h16M8 3v4M16 3v4",
   boolean: "M7 7h10a5 5 0 0 1 0 10H7A5 5 0 0 1 7 7zM16 12h.01", select: "M4 6h16M4 12h16M4 18h10M17 16l2 2 2-2",
+  multiselect: "M3 7l2 2 4-4M3 15l2 2 4-4M13 7h8M13 15h8",
 };
+/* ---------- Multiple-choice custom fields (several options at once, like tags) ---------- */
+const mcNorm = (x: string) => x.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+
+/** Pick several options of a multiple-choice field: chips + a search list that opens under them.
+ *  `onCreate` (people allowed to edit fields) adds a new option to the field on the fly. */
+export function MultiChoice({ value, options, onChange, onCreate, placeholder = "Choose…" }: {
+  value: unknown; options: string[]; onChange: (v: string[]) => void;
+  /** Adds a new option to the field; gets the label and the full option list to save (includes earlier ones made here). */
+  onCreate?: (label: string, nextOptions: string[]) => Promise<unknown> | unknown; placeholder?: string;
+}) {
+  const sel = customList(value);
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [hi, setHi] = useState(0);
+  /** Options created here — the parent's field list may not have reloaded yet. */
+  const [made, setMade] = useState<string[]>([]);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: MouseEvent) => { if (!wrapRef.current?.contains(e.target as Node)) { setOpen(false); setQ(""); } };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [open]);
+  const all = [...new Set([...options, ...made, ...sel])];
+  const list = all.filter((o) => !q.trim() || mcNorm(o).includes(mcNorm(q)));
+  const canCreate = !!onCreate && !!q.trim() && !all.some((o) => mcNorm(o) === mcNorm(q));
+  const toggle = (o: string) => onChange(sel.includes(o) ? sel.filter((x) => x !== o) : [...sel, o]);
+  const create = async () => {
+    const label = q.trim();
+    if (!label || !onCreate) return;
+    await onCreate(label, [...new Set([...options, ...made, label])]);
+    setMade((m) => [...m, label]);
+    onChange([...sel, label]); setQ(""); setHi(0);
+  };
+  const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Escape") { e.stopPropagation(); setOpen(false); setQ(""); return; }
+    if (e.key === "ArrowDown") { e.preventDefault(); setOpen(true); setHi((h) => Math.min(h + 1, list.length - (canCreate ? 0 : 1))); return; }
+    if (e.key === "ArrowUp") { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); return; }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (hi < list.length && list[hi]) { toggle(list[hi]); setQ(""); } else if (canCreate) void create();
+      return;
+    }
+    if (e.key === "Backspace" && !q && sel.length) onChange(sel.slice(0, -1));
+  };
+  return (
+    <div className={`mc ${open ? "is-open" : ""}`} ref={wrapRef}>
+      <div className="mc-box" onClick={() => { setOpen(true); inputRef.current?.focus(); }}>
+        {sel.map((o) => (
+          <span className="mc-chip" key={o}>
+            {o}
+            <button type="button" aria-label={`Remove ${o}`} onClick={(e) => { e.stopPropagation(); toggle(o); }}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round"><path d="M7 7l10 10M17 7L7 17" /></svg>
+            </button>
+          </span>
+        ))}
+        <input ref={inputRef} className="mc-input" value={q} placeholder={sel.length ? "Add…" : placeholder}
+          onFocus={() => setOpen(true)} onChange={(e) => { setQ(e.target.value); setOpen(true); setHi(0); }} onKeyDown={onKey} />
+        <svg className="mc-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+      </div>
+      {open && (
+        <div className="mc-list" role="listbox" aria-multiselectable="true">
+          {list.map((o, i) => (
+            <button type="button" key={o} role="option" aria-selected={sel.includes(o)}
+              className={`mc-opt ${sel.includes(o) ? "is-on" : ""} ${i === hi ? "is-hi" : ""}`}
+              onMouseDown={(e) => e.preventDefault()} onMouseEnter={() => setHi(i)} onClick={() => toggle(o)}>
+              <i aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg></i>
+              <span>{o}</span>
+            </button>
+          ))}
+          {canCreate && (
+            <button type="button" className={`mc-opt is-new ${hi === list.length ? "is-hi" : ""}`} onMouseDown={(e) => e.preventDefault()} onClick={() => void create()}>
+              <i aria-hidden="true">+</i><span>Create “{q.trim()}”</span>
+            </button>
+          )}
+          {!list.length && !canCreate && <p className="mc-empty">{all.length ? "Nothing matches." : "No options yet — add them in Settings."}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A multiple-choice value in a list cell: the first chips, then "+N". */
+export function CustomChips({ value, max = 2 }: { value: unknown; max?: number }) {
+  const list = customList(value);
+  if (!list.length) return <span className="co-laddr">—</span>;
+  return (
+    <span className="mc-cell" title={list.join(", ")}>
+      {list.slice(0, max).map((o) => <span className="mc-chip is-sm" key={o}>{o}</span>)}
+      {list.length > max && <span className="mc-more">+{list.length - max}</span>}
+    </span>
+  );
+}
+
 /**
  * Custom fields of companies or contacts: the list (required on/off, delete)
  * and a form to add one. `api` says where they are stored.
@@ -1300,7 +1425,7 @@ export function CustomFieldsEditor({ fields, api, examples, isReserved, onChange
     if (isReserved?.(l)) { setErr(`“${l}” is already a built-in field.`); return; }
     if (fields.some((f) => f.label.trim().toLowerCase() === l.toLowerCase())) { setErr(`There is already a field called “${l}”.`); return; }
     setBusy(true); setErr(null);
-    const options = type === "select" ? optionsText.split(",").map((x) => x.trim()).filter(Boolean) : [];
+    const options = isChoiceType(type) ? optionsText.split(",").map((x) => x.trim()).filter(Boolean) : [];
     await api.add({ label: l, type, required, options, sort: fields.length });
     setLabel(""); setType("text"); setRequired(false); setOptionsText("");
     await onChanged();
@@ -1329,8 +1454,8 @@ export function CustomFieldsEditor({ fields, api, examples, isReserved, onChange
               <span className="cfe-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={FIELD_TYPE_ICON[f.type]} /></svg></span>
               <span className="cfe-main">
                 <b>{f.label}</b>
-                <small>{FIELD_TYPE_LABEL[f.type]}{f.type === "select" && f.options.length ? ` · ${f.options.length} option${f.options.length === 1 ? "" : "s"}` : ""}</small>
-                {f.type === "select" && f.options.length > 0 && (
+                <small>{FIELD_TYPE_LABEL[f.type]}{isChoiceType(f.type) && f.options.length ? ` · ${f.options.length} option${f.options.length === 1 ? "" : "s"}` : ""}</small>
+                {isChoiceType(f.type) && f.options.length > 0 && (
                   <span className="cfe-chips" title={f.options.join("\n")}>
                     {f.options.slice(0, 4).map((o, k) => <i key={k}>{o}</i>)}
                     {f.options.length > 4 && <i className="is-more">+{f.options.length - 4}</i>}
@@ -1363,7 +1488,7 @@ export function CustomFieldsEditor({ fields, api, examples, isReserved, onChange
         <span className="cfe-add-k">Add a field</span>
         <div className="cfe-add-row">
           <input value={label} onChange={(e) => { setLabel(e.target.value); setErr(null); }} placeholder={examples.name}
-            onKeyDown={(e) => { if (e.key === "Enter" && type !== "select") { e.preventDefault(); void add(); } }} />
+            onKeyDown={(e) => { if (e.key === "Enter" && !isChoiceType(type)) { e.preventDefault(); void add(); } }} />
           <div className="cfe-type">
             <Select value={type} onChange={(v) => setType(v as CustomFieldLike["type"])}
               options={(Object.keys(FIELD_TYPE_LABEL) as CustomFieldLike["type"][]).map((t) => ({ value: t, label: FIELD_TYPE_LABEL[t] }))} />
@@ -1373,9 +1498,9 @@ export function CustomFieldsEditor({ fields, api, examples, isReserved, onChange
           </button>
           <button type="button" className="dw-save" onClick={() => void add()} disabled={busy || !label.trim()}>{busy ? "Adding…" : "+ Add"}</button>
         </div>
-        <div className={`cfe-opts ${type === "select" ? "is-on" : ""}`}>
+        <div className={`cfe-opts ${isChoiceType(type) ? "is-on" : ""}`}>
           <div className="cfe-opts-in">
-            <input value={optionsText} onChange={(e) => setOptionsText(e.target.value)} placeholder={`Options, separated by commas — ${examples.options}`} tabIndex={type === "select" ? 0 : -1} />
+            <input value={optionsText} onChange={(e) => setOptionsText(e.target.value)} placeholder={`Options, separated by commas — ${examples.options}`} tabIndex={isChoiceType(type) ? 0 : -1} />
           </div>
         </div>
         {err && <p className="dw-err">{err}</p>}
@@ -1420,10 +1545,10 @@ function FieldEditRow({ field, others, isReserved, onCancel, onSave }: {
     const clean = opts.map((o) => ({ ...o, v: o.v.trim() })).filter((o) => o.v);
     const seen = new Set<string>();
     for (const o of clean) { const k = o.v.toLowerCase(); if (seen.has(k)) { setErr(`“${o.v}” is in the list twice.`); return; } seen.add(k); }
-    if (type === "select" && !clean.length) { setErr("Add at least one option."); return; }
+    if (isChoiceType(type) && !clean.length) { setErr("Add at least one option."); return; }
     setBusy(true); setErr(null);
-    const renames: [string, string][] = type === "select" ? clean.filter((o) => o.was && o.was !== o.v).map((o) => [o.was!, o.v]) : [];
-    await onSave({ label: l, type, options: type === "select" ? clean.map((o) => o.v) : [] }, renames);
+    const renames: [string, string][] = isChoiceType(type) ? clean.filter((o) => o.was && o.was !== o.v).map((o) => [o.was!, o.v]) : [];
+    await onSave({ label: l, type, options: isChoiceType(type) ? clean.map((o) => o.v) : [] }, renames);
     setBusy(false);
   };
   return (
@@ -1441,8 +1566,10 @@ function FieldEditRow({ field, others, isReserved, onCancel, onSave }: {
               options={(Object.keys(FIELD_TYPE_LABEL) as CustomFieldLike["type"][]).map((t) => ({ value: t, label: FIELD_TYPE_LABEL[t] }))} />
           </div>
         </div>
-        {typeChanged && <p className="cfe-ed-warn">Values already saved stay as they are; ones that don't fit the new type may show empty.</p>}
-        {type === "select" && (
+        {typeChanged && <p className="cfe-ed-warn">{field.type === "select" && type === "multiselect"
+          ? "Each record keeps its current choice and can now take more."
+          : "Values already saved stay as they are; ones that don't fit the new type may show empty."}</p>}
+        {isChoiceType(type) && (
           <div className="cfe-ed-opts">
             <span className="cfe-ed-k">Options <em>{opts.length}</em></span>
             <ul>

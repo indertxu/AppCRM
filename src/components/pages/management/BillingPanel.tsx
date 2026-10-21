@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useMemo, useState, useEffect, useRef } from "react";
+import { PageLoader } from "../../framework/AppLayout";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { supabase } from "../../api/supabase";
 import { periodForDate, cutoffOf, type Cutoffs } from "../calendar/billingPeriods";
@@ -1146,7 +1147,7 @@ export default function BillingPanel({
 
         {/* ---------- lists ---------- */}
         {!loaded ? (
-          <div className="bn-empty"><span className="bn-empty-art is-busy"><BnIcon d={BN_ICON.out} w={1.6} /></span><p>Loading invoices…</p></div>
+          <PageLoader fill={false} size={96} label="Loading invoices" />
         ) : phase === "tobill" ? (
           outstanding.length === 0 ? (
             <div className="bn-empty"><span className="bn-empty-art"><BnIcon d={BN_ICON.paid} w={1.6} /></span><p>Nothing to bill for these filters.</p></div>

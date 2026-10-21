@@ -2,6 +2,7 @@
 import { Fragment, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { useNavigate } from "react-router-dom";
+import { PageCover, PageLoader } from "../../framework/AppLayout";
 import { supabase } from "../../api/supabase";
 import { inBillingMonth, periodOf, billingWindow, type Cutoffs } from "../calendar/billingPeriods";
 import {
@@ -161,22 +162,16 @@ async function fetchEntries(range: [string, string] | null): Promise<any[]> {
 }
 
 /**
- * Full loading overlay shown while Management's first load is in flight.
- * An "equalizer" of bars pulsing in a wave, over a slowly drifting aurora
- * background, with a shimmering label — deliberately not a spinner or dots.
+ * Management's loading states use the app-wide cube loader. The full one
+ * covers the page area (rail stays visible) and fades out; the subtle one
+ * sits over the backlog panel while the long history loads.
  */
-function LoadingOverlay({ subtle = false }: { subtle?: boolean }) {
-  const bars = [0, 1, 2, 3, 4, 5, 6];
+function LoadingOverlay({ subtle = false, show = true }: { subtle?: boolean; show?: boolean }) {
+  if (!subtle) return <PageCover show={show} label="Crunching the numbers" />;
   return (
-    <div className={`mg-loading ${subtle ? "is-subtle" : ""}`} role="status" aria-live="polite">
-      {!subtle && <div className="mg-loading-aurora" />}
-      <div className="mg-loading-card">
-        <div className="mg-loading-eq">
-          {bars.map((i) => (
-            <span key={i} className="mg-loading-bar" style={{ animationDelay: `${i * 0.09}s` }} />
-          ))}
-        </div>
-        <span className="mg-loading-text">Crunching the numbers</span>
+    <div className="mg-loading is-subtle" role="status" aria-live="polite">
+      <div className="mg-loading-card is-cube">
+        <PageLoader fill={false} size={92} label="Loading the full history" />
       </div>
     </div>
   );
@@ -533,7 +528,48 @@ function TeamCard({
   );
 }
 
+
+/* The dark header floats as a rounded card (index.css: .fh). The card is sized to the header + figures
+   (they change height with the data, the tab and the width) and a soft glow follows the pointer over it. */
+function useFloatingHero(ref: { current: HTMLElement | null }, sel: string) {
+  useEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+    let raf = 0;
+    const measure = () => {
+      raf = 0;
+      const rt = root.getBoundingClientRect();
+      let bottom = 0;
+      root.querySelectorAll<HTMLElement>(sel).forEach((el) => {
+        const r = el.getBoundingClientRect();
+        if (r.height > 0) bottom = Math.max(bottom, r.bottom - rt.top + root.scrollTop);
+      });
+      root.style.setProperty("--fh-h", `${Math.max(0, Math.round(bottom - 22))}px`);
+    };
+    const queue = () => { if (!raf) raf = requestAnimationFrame(measure); };
+    const ro = new ResizeObserver(queue);
+    const watch = () => { ro.observe(root); root.querySelectorAll<HTMLElement>(sel).forEach((el) => ro.observe(el)); };
+    watch(); measure();
+    const mo = new MutationObserver(() => { watch(); queue(); });
+    mo.observe(root, { childList: true, subtree: true });
+    return () => { ro.disconnect(); mo.disconnect(); if (raf) cancelAnimationFrame(raf); };
+  });
+}
+function fhMove(e: { clientX: number; clientY: number; currentTarget: HTMLElement; pointerType?: string }) {
+  if (e.pointerType && e.pointerType !== "mouse") return;
+  const root = e.currentTarget;
+  const r = root.getBoundingClientRect();
+  const x = e.clientX - r.left - 14, y = e.clientY - r.top + root.scrollTop - 12;
+  const h = parseFloat(root.style.getPropertyValue("--fh-h")) || 0;
+  root.style.setProperty("--fh-x", `${Math.round(x)}px`);
+  root.style.setProperty("--fh-y", `${Math.round(y)}px`);
+  root.style.setProperty("--fh-on", x >= 0 && y >= 0 && y <= h && x <= r.width - 28 ? "1" : "0");
+}
+const fhLeave = (e: { currentTarget: HTMLElement }) => e.currentTarget.style.setProperty("--fh-on", "0");
+
 export default function ManagementPage() {
+  const fhRef = useRef<HTMLDivElement>(null);
+  useFloatingHero(fhRef, ".mg-bar, .tm-hero, .bl-hero, .bn-hero, .bp-hero");
   const navigate = useNavigate();
   const [anchor, setAnchor] = useState(() => new Date());
   const [scope, setScope] = useState<Scope>("month");
@@ -1566,8 +1602,9 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
   }
 
   return (
-    <div className={`mg mg-tab-${tab} ${tab === "team" || tab === "backlog" || tab === "billing" || tab === "bonus" || tab === "incoming" ? "mg-dark" : ""}`}>
-      {loading && <LoadingOverlay />}
+    <div ref={fhRef} onPointerMove={fhMove} onPointerLeave={fhLeave}
+      className={`mg mg-tab-${tab} ${tab === "team" || tab === "backlog" || tab === "billing" || tab === "bonus" || tab === "incoming" ? "mg-dark fh" : ""}`}>
+      <LoadingOverlay show={loading} />
       <header className="mg-bar">
         <div className="mg-bar-left">
           <button className="mg-home" onClick={() => navigate("/home")} aria-label="Back to home">‹</button>
@@ -1826,7 +1863,7 @@ minPerMonth: targets.minPerMonth,
           </header>
 
           {loading ? (
-            <p className="tm-empty">Loading…</p>
+            <PageLoader fill={false} size={80} label="Loading the team" />
           ) : rows.length === 0 ? (
             <p className="tm-empty">No consultants found for this period. Anyone on a project team, or with time logged, shows up here.</p>
           ) : filteredRows.length === 0 ? (
