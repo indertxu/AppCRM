@@ -13,12 +13,13 @@ import {
   type Contact, type Company, type Employee, type ContactField,
   renameCustomValue, customList,
   listContactDeals, listAllDeals, setContactDeals, CONTACT_LANGUAGES, type DealRef,
+  useRequiredFields,
 } from "../companies/companiesApi";
 import {
   AddressFields, PhoneField, StatusPills, HistorySection, phoneText, telHref,
   FilterBar, FilterChips, SortHead, applyView, nextSort, emptyView, useSavedViews, useStoredView, type FField,
   useBulkSelection, BulkBar, BulkCheck, type BulkAction, DataCleanup, DataTools, GEAR, SettingsShell, ColumnsEditor, CustomFieldsEditor,
-  ConfirmX, DealRows, MultiChoice, CustomChips, isChoiceType,
+  ConfirmX, DealRows, MultiChoice, CustomChips, isChoiceType, RequiredFieldsEditor,
 } from "../companies/CompaniesPage";
 import "../clients/ClientsPage.css";
 import "../companies/CompaniesPage.css";
@@ -28,9 +29,8 @@ import ContactExport from "./ContactExport";
 import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
 import { LinkedInExtensionModal } from "./LinkedInCapture";
 import {
-  PROFILE_FIELDS, isRequired, isProfileKey, missingProfile, tidyProfile, formatAddress,
+  isRequired, isProfileKey, missingProfile, tidyProfile, formatAddress, missingFixed,
   languageOptions, languageName, countryOptions, countryLabel, withProfileCodes, normalizeLinkedIn, isLinkedIn, linkedInHandle, isReservedLabel,
-  type ProfileKey,
 } from "./contactProfile";
 import "./ContactsPage.css";
 
@@ -434,6 +434,9 @@ export default function ContactsPage() {
   );
 }
 
+/** The built-in fields in the "Contact information" section (for its warning dot). */
+const INFO_KEYS = ["last_name", "position", "email", "landline", "phone", "linkedin", "language"];
+
 function ContactEditor({ contact, companies, employees, fields, canAssign, assigned, rel, onClose, onSaved, onDeleted, onOpenCompany }: {
   contact: Contact; companies: Company[]; employees: Employee[]; fields: ContactField[]; canAssign: boolean; assigned: string[];
   rel: RelationshipSets | null;
@@ -490,8 +493,12 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
     setC((x) => ({ ...x, custom: { ...(x.custom ?? {}), [fieldId]: value } }));
   const customVal = (fieldId: string) => (c.custom ?? {})[fieldId];
 
-  // Built-in fields: a "*" when required, and the pick lists (built once).
-  const req = (k: ProfileKey) => (isRequired(k) ? <span className="dw-req"> *</span> : null);
+  // Built-in fields: a "*" when required (Settings › Contacts page › Required fields), red once a save was tried.
+  useRequiredFields();
+  const [tried, setTried] = useState(false);
+  const req = (k: string) => (isRequired(k) ? <span className="dw-req"> *</span> : null);
+  const miss = (k: string) => tried && isRequired(k) && missingFixed("contact", c, [k]).length > 0;
+  const mc = (k: string) => (miss(k) ? "is-missing" : "");
   // the languages the team works in first, then every other one
   const [langOpts] = useState(() => {
     const all = languageOptions();
@@ -506,19 +513,24 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
     ? [langOpts[0], { value: c.language, label: `${c.language} (as imported)` }, ...langOpts.slice(1)] : langOpts;
 
   const save = async () => {
-    if (!c.first_name.trim()) { setErr("A first name is required."); return; }
-    // Built-in required fields (address…).
-    const missing = missingProfile(c);
-    if (missing.length) { setErr(`Please fill in: ${missing.join(", ")}.`); return; }
+    if (!c.first_name.trim()) { setTried(true); setErr("A first name is required."); goTo("info"); return; }
+    // Built-in required fields (Settings › Contacts page › Required fields) and required custom fields.
+    const missing = missingFixed("contact", c);
+    const missCustom = fields.filter((f) => {
+      if (!f.required) return false;
+      const v = customVal(f.id);
+      return v == null || v === "" || (f.type === "boolean" && v === false) || (Array.isArray(v) && v.length === 0);
+    }).map((f) => f.label);
+    if (missing.length || missCustom.length) {
+      setTried(true);
+      setErr(`Required — please fill in: ${[...missing, ...missCustom].join(", ")}.`);
+      const first = missingFixed("contact", c, INFO_KEYS).length ? "info" : missingProfile(c).length ? "address"
+        : missingFixed("contact", c, ["companies"]).length ? "companies" : "custom";
+      goTo(first);
+      return;
+    }
     const linkedin = normalizeLinkedIn(c.linkedin);
     if (linkedin && !isLinkedIn(linkedin)) { setErr("LinkedIn: paste the profile link (linkedin.com/in/…)."); return; }
-    // Enforce required custom fields.
-    for (const f of fields) {
-      if (!f.required) continue;
-      const v = customVal(f.id);
-      const empty = v == null || v === "" || (f.type === "boolean" && v === false) || (Array.isArray(v) && v.length === 0);
-      if (empty) { setErr(`"${f.label}" is required.`); return; }
-    }
     setBusy(true); setErr(null);
     const toSave: Contact = { ...c, ...tidyProfile(c) };
     const e = await saveContact(toSave);
@@ -542,13 +554,14 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
   const { bodyRef, active, goTo } = useDrawerSections("info");
   const displayName = [c.first_name, c.last_name].filter(Boolean).join(" ");
   const initials = [c.first_name, c.last_name].map((x) => (x ?? "").trim()[0] ?? "").join("").toUpperCase();
-  const missing = missingProfile(c);
+  const missing = missingFixed("contact", c, ["street", "addr_number", "postal_code", "city", "province", "country"]);
+  const missingAll = missingFixed("contact", c);
   const li = normalizeLinkedIn(c.linkedin);
   const sections: DwNavItem[] = [
-    { k: "info", label: "Contact information", icon: "person" },
+    { k: "info", label: "Contact information", icon: "person", warn: missingFixed("contact", c, INFO_KEYS).length > 0 },
     { k: "custom", label: "Custom fields", icon: "sliders", count: fields.filter((f) => { const v = customVal(f.id); return v != null && v !== "" && v !== false && !(Array.isArray(v) && v.length === 0); }).length },
     { k: "address", label: "Contact address", icon: "pin", warn: missing.length > 0 },
-    { k: "companies", label: "Companies", icon: "building", count: c.companyIds.length },
+    { k: "companies", label: "Companies", icon: "building", count: c.companyIds.length, warn: missingFixed("contact", c, ["companies"]).length > 0 },
     { k: "deals", label: "Deals", icon: "trend", count: onDeals.length },
     { k: "notes", label: "Notes", icon: "note" },
     { k: "history", label: "History", icon: "clock" },
@@ -581,7 +594,7 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
               {isLinkedIn(li) && <a className="dw-tag" href={li} target="_blank" rel="noreferrer"><DwIcon name="link" />LinkedIn</a>}
               {(c.city || c.country) && <span className="dw-tag"><DwIcon name="pin" />{[c.city, c.country ? countryLabel(c.country) : ""].filter(Boolean).join(", ")}</span>}
               {c.language && <span className="dw-tag"><DwIcon name="globe" />{languageName(c.language)}</span>}
-              {missing.length > 0 && <button type="button" className="dw-tag is-warn" onClick={() => goTo("address")}>Address incomplete</button>}
+              {missingAll.length > 0 && <button type="button" className="dw-tag is-warn" onClick={() => goTo(missing.length ? "address" : "info")} title={`Missing: ${missingAll.join(", ")}`}>{missingAll.length} required missing</button>}
             </div>
           </div>
           <button className="dw-x" onClick={() => close()} aria-label="Close">×</button>
@@ -594,18 +607,18 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
             <section className="dw-sec" data-sec="info" data-tone="green">
               <DwSecHead icon="person" title="Contact information" hint="Who they are, how to reach them and in which language" />
               <div className="dw-grid">
-                <div className="dw-f"><label>Name<span className="dw-req"> *</span></label>
+                <div className={`dw-f ${tried && !c.first_name.trim() ? "is-missing" : ""}`}><label>Name<span className="dw-req"> *</span></label>
                   <input value={c.first_name} onChange={(e) => set({ first_name: e.target.value })} placeholder="e.g. Ana María" />
                 </div>
-                <div className="dw-f"><label>Surname</label>
+                <div className={`dw-f ${mc("last_name")}`}><label>Surname{req("last_name")}</label>
                   <input value={c.last_name ?? ""} onChange={(e) => set({ last_name: e.target.value })} placeholder="e.g. López García" />
                 </div>
-                <div className="dw-f dw-col2"><label>Position / title</label>
+                <div className={`dw-f dw-col2 ${mc("position")}`}><label>Position / title{req("position")}</label>
                   <input value={c.position ?? ""} onChange={(e) => set({ position: e.target.value })} placeholder="e.g. CFO" />
                 </div>
               </div>
-              <div className="dw-subh"><DwIcon name="mail" />Emails</div>
-              <div className="ct-emails">
+              <div className="dw-subh"><DwIcon name="mail" />Emails{req("email")}</div>
+              <div className={`ct-emails ${mc("email")}`}>
                 <div className="ct-email-row">
                   <input type="email" value={c.email ?? ""} onChange={(e) => set({ email: e.target.value })} placeholder="name@company.com" />
                   <span className="ct-email-tag">Main</span>
@@ -622,14 +635,14 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
               </div>
               <div className="dw-subh"><DwIcon name="phone" />Phones, LinkedIn &amp; language</div>
               <div className="dw-grid">
-                <PhoneField label="Telephone" value={c.landline} ext={c.landline_ext} onValue={(v) => set({ landline: v })} onExt={(v) => set({ landline_ext: v })} placeholder="+34 910 000 000" />
-                <PhoneField label="Mobile" value={c.phone} ext={c.phone_ext} onValue={(v) => set({ phone: v })} onExt={(v) => set({ phone_ext: v })} placeholder="+34 600 000 000" />
-                <div className="dw-f"><label>LinkedIn{req("linkedin")}</label>
+                <PhoneField label="Telephone" value={c.landline} ext={c.landline_ext} onValue={(v) => set({ landline: v })} onExt={(v) => set({ landline_ext: v })} placeholder="+34 910 000 000" req={isRequired("landline")} missing={miss("landline")} />
+                <PhoneField label="Mobile" value={c.phone} ext={c.phone_ext} onValue={(v) => set({ phone: v })} onExt={(v) => set({ phone_ext: v })} placeholder="+34 600 000 000" req={isRequired("phone")} missing={miss("phone")} />
+                <div className={`dw-f ${mc("linkedin")}`}><label>LinkedIn{req("linkedin")}</label>
                   <input value={c.linkedin ?? ""} placeholder="linkedin.com/in/…"
                     onChange={(e) => set({ linkedin: e.target.value })}
                     onBlur={(e) => set({ linkedin: normalizeLinkedIn(e.target.value) })} />
                 </div>
-                <div className="dw-f"><label>Language{req("language")}<span className="dw-f-assist">To group contacts by the language you speak with them</span></label>
+                <div className={`dw-f ${mc("language")}`}><label>Language{req("language")}<span className="dw-f-assist">To group contacts by the language you speak with them</span></label>
                   <ProfilePicker value={c.language || "__none"} options={langChoices} placeholder="Choose a language…"
                     onChange={(v) => set({ language: v === "__none" ? "" : v })} />
                 </div>
@@ -679,7 +692,7 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
             <section className="dw-sec" data-sec="address" data-tone="amber">
               <DwSecHead icon="pin" title="Contact address" hint="Where they are — start typing the street or the postal code"
                 aside={missing.length ? <span className="dw-pill is-warn">{missing.length} missing</span> : <span className="dw-pill is-ok">Complete</span>} />
-              <AddressFields value={c} onChange={(p) => set(p as Partial<Contact>)} countryAs="code" req={(k) => req(k as ProfileKey)}
+              <AddressFields value={c} onChange={(p) => set(p as Partial<Contact>)} countryAs="code" req={(k) => req(k)} missing={(k) => miss(k)}
                 renderCountry={() => (
                   <ProfilePicker value={c.country ?? ""} options={countryChoices} placeholder="Choose a country…"
                     onChange={(v) => set({ country: v })} />
@@ -688,7 +701,8 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
 
             <section className="dw-sec" data-sec="companies" data-tone="indigo">
               <DwSecHead icon="building" title="Companies" hint="Where they work — a contact can belong to several"
-                aside={c.companyIds.length ? <span className="dw-pill">{c.companyIds.length}</span> : undefined} />
+                aside={c.companyIds.length ? <span className="dw-pill">{c.companyIds.length}</span>
+                  : isRequired("companies") ? <span className={`dw-pill ${tried ? "is-warn" : ""}`}>Required</span> : undefined} />
               <div className="dw-chips">
                 {c.companyIds.map((id) => (
                   <span key={id} className="dw-chip is-link">
@@ -764,8 +778,8 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
 
         <footer className="dw-foot">
           {c.id && <button className="dw-del" onClick={remove}>Delete</button>}
-          <span className={`dw-foot-note ${err ? "is-err" : missing.length ? "is-warn" : ""}`}>
-            {err ?? (missing.length ? `Still missing: ${missing.join(", ")}` : c.id ? "Everything required is filled in." : "Nothing is saved until you click Save.")}
+          <span className={`dw-foot-note ${err ? "is-err" : missingAll.length ? "is-warn" : ""}`}>
+            {err ?? (missingAll.length ? `Still missing: ${missingAll.join(", ")}` : c.id ? "Everything required is filled in." : "Nothing is saved until you click Save.")}
           </span>
           <div className="dw-foot-right">
             <button className="dw-cancel" onClick={() => close()}>Cancel</button>
@@ -831,7 +845,6 @@ export function ContactSettings({ onBack }: { onBack: () => void }) {
   };
   useEffect(() => { void load(); }, []);
   const I = (d: string) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>;
-  const kindOf = (k: string) => k === "language" ? "Language list" : k === "country" ? "Country list" : k === "linkedin" ? "LinkedIn link" : k === "province" ? "Filled from the postal code" : "Text";
   return (
     <>
       <SettingsShell icon="users" title="Contacts page" sub="The fields every contact has, your own fields, and bringing people in and out"
@@ -848,25 +861,16 @@ export function ContactSettings({ onBack }: { onBack: () => void }) {
               { key: "cleanup", title: "Clean up data", hint: "Fix doubled surnames, legal names and street numbers", icon: I("M3 21l9-9M12.2 6.2l5.6 5.6M14 4l6 6-8 8-6-6z"), tone: "#d98324", onOpen: () => setTool("cleanup") },
               { key: "linkedin", title: "Save from LinkedIn", hint: "Browser extension: add people & companies from LinkedIn", icon: I("M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-4 0v7h-4v-7a6 6 0 0 1 6-6zM2 9h4v12H2zM4 6a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"), tone: "#0a66c2", onOpen: () => setTool("linkedin") },
             ]} /> },
-          { k: "builtin", label: "Built-in fields", icon: "id", tone: "slate", count: PROFILE_FIELDS.length,
-            title: "Built-in fields", hint: "On every contact, besides name, position, email and phones",
-            body: (
-              <ul className="cfe-list">
-                {PROFILE_FIELDS.map((f, i) => (
-                  <li key={f.key} className="cfe-row is-builtin" style={{ ["--i" as string]: i } as CSSProperties}>
-                    <span className="cfe-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M6 11h12a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1zM8 11V7a4 4 0 0 1 8 0v4" /></svg></span>
-                    <span className="cfe-main"><b>{f.label}</b><small>{kindOf(f.key)}</small></span>
-                    {f.required && <span className="cf-col-tag">required</span>}
-                  </li>
-                ))}
-              </ul>
-            ) },
           { k: "fields", label: "Custom fields", icon: "sliders", tone: "indigo", count: fields.length,
             title: "Custom fields", hint: "Extra fields on every contact, in its panel",
             body: <CustomFieldsEditor fields={fields} onChanged={async () => setFields(await listContactFields().catch(() => []))}
               api={{ add: (f) => addContactField(f), update: (id, patch) => updateContactField(id, patch), remove: (id) => deleteContactField(id), renameValue: (id, from, to) => renameCustomValue("contacts", id, from, to) }}
               isReserved={isReservedLabel}
               examples={{ name: "Field name, e.g. Birthday, VIP", options: "Low, Medium, High" }} /> },
+          { k: "required", label: "Required fields", icon: "asterisk", tone: "amber",
+            title: "Required fields", hint: "What must be filled in before a contact can be saved — built-in fields and your own",
+            body: <RequiredFieldsEditor scope="contact" custom={fields}
+              onCustomToggle={async (id, on) => { await updateContactField(id, { required: on }); setFields(await listContactFields().catch(() => [])); }} /> },
         ]} />
       {tool === "import" && <ContactImport fields={fields} onClose={() => setTool(null)} onDone={async () => { await load(); }} />}
       {tool === "export" && (

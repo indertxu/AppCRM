@@ -29,9 +29,10 @@ import {
   listContactFields, listCompanyFields, addContactField, addCompanyField, updateContactField, updateCompanyField,
   listEmployees, listCrmOptions, addCrmOption, sectorOptions, matchSector, sourceOptions, matchSource, relationshipOptions, setCompanyParent,
   type Contact, type Company, type ContactField, type CompanyField, type Employee, type CrmOption, type Billing,
+  useRequiredFields,
 } from "../companies/companiesApi";
 import { startImportBatch, finishImportBatch } from "./importBatches";
-import { PROFILE_FIELDS, isRequired, matchCountry, matchLanguage, normalizeLinkedIn, isLinkedIn, languageOptions, countryOptions } from "./contactProfile";
+import { isFixedRequired, missingFixed, matchCountry, matchLanguage, normalizeLinkedIn, isLinkedIn, languageOptions, countryOptions } from "./contactProfile";
 import { TargetPicker, NewFieldEditor, ExistingChoice, DiffNote, SheetViewer, FailReport, ColumnTools, columnsFromRows, type TOpt, type Tone } from "../sales/extras/DealImport";
 import {
   EMAIL_RE, nameKey, vatKey, domainKey, splitCompanyNames, dedupePersonName, splitStreetNumber, companySimilarity, closestCompany, diffRecord, patchFor, guessType, distinctValues, asDate,
@@ -360,7 +361,7 @@ interface CtEntry {
   /** Its companies ("crm:" / "new:"), and the ones it isn't linked to yet. */
   coRefs: string[]; newLinks: string[];
   status: "new" | "found" | "skip" | "error"; reason?: string; issues: string[];
-  /** Required address fields it would still miss. */
+  /** Required built-in fields it would still miss (address, email…). */
   incomplete: string[];
   diff: RecordDiff | null;
 }
@@ -642,7 +643,13 @@ function buildPlan(ctx: Ctx, files: FileData[], st: IState): Plan {
     if (e.status === "new" || e.status === "found") {
       const fromFile = st.ctExisting === "keep" && crm ? {} : Object.fromEntries(Object.entries(e.profile).filter(([, v]) => v));
       const merged: Record<string, any> = { ...(crm ?? {}), ...fromFile };
-      e.incomplete = PROFILE_FIELDS.filter((f) => f.required && !String(merged[f.key] ?? "").trim()).map((f) => f.label);
+      // every required built-in field (Settings › Contacts page › Required fields) it would still miss
+      const pick = (k: string, v: unknown) => (st.ctExisting === "keep" && crm ? (crm as any)[k] : v || (crm as any)?.[k]);
+      e.incomplete = missingFixed("contact", {
+        ...merged, last_name: pick("last_name", e.last_name), position: pick("position", e.position), email: pick("email", e.email),
+        phone: pick("phone", e.phone), landline: pick("landline", e.extra.landline),
+        companyIds: [...(crm?.companyIds ?? []), ...e.coRefs],
+      });
     }
     e.diff = crm ? diffRecord(crm, contactFile(e), planCustom(e.custom), fieldLabel(ctx, st, "contact")) : null;
     e.issues = [...new Set(e.issues)];
@@ -655,6 +662,11 @@ function buildPlan(ctx: Ctx, files: FileData[], st: IState): Plan {
     e.used = !!e.ref && (e.fileRows.length > 0 || refUsed.has(e.ref));
     const crm = e.ref?.startsWith("crm:") ? crmCo.get(e.ref.slice(4)) : null;
     e.diff = crm ? diffRecord(crm, { ...e.data }, planCustom(e.custom), fieldLabel(ctx, st, "company")) : null;
+    // a new company that misses a required built-in field (Settings › Companies page › Required fields) is flagged
+    if (e.used && e.ref?.startsWith("new:")) {
+      const gap = missingFixed("company", { ...e.data, billing: e.billing });
+      if (gap.length) e.issues.push(`Required field${gap.length === 1 ? "" : "s"} empty: ${gap.join(", ")}`);
+    }
     e.issues = [...new Set(e.issues)];
   });
 
@@ -968,6 +980,8 @@ export default function ContactImport({ fields: initialFields, onClose, onDone, 
   primary?: Ent;
 }) {
   const [step, setStep] = useState<Step>("file");
+  // which built-in fields are required (Settings): the plan is re-made when they load
+  const reqVer = useRequiredFields();
   const [ctFields, setCtFields] = useState<ContactField[]>(initialFields ?? []);
   const [coFields, setCoFields] = useState<CompanyField[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -1138,7 +1152,7 @@ export default function ContactImport({ fields: initialFields, onClose, onDone, 
   const fileData = useMemo<FileData[]>(() => (["contact", "company"] as Ent[]).filter(has).map((e) => ({ entity: e, columns: effColumnsOf(e), rows: effOf(e).rows, offset: fileOf(e).offset })),
     [ctF.wb, ctF.columns, ctF.rows, ctF.offset, coF.wb, coF.columns, coF.rows, coF.offset, effCt, effCo]); // eslint-disable-line react-hooks/exhaustive-deps
   const planNeeded = step === "review" || step === "run";
-  const plan = useMemo(() => (planNeeded ? buildPlan(ctx, fileData, effSt) : null), [planNeeded, ctx, fileData, effSt]);
+  const plan = useMemo(() => (planNeeded ? buildPlan(ctx, fileData, effSt) : null), [planNeeded, ctx, fileData, effSt, reqVer]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ─────────────── run ─────────────── */
   const [progress, setProgress] = useState({ done: 0, total: 0, phase: "" });
@@ -1439,7 +1453,7 @@ export default function ContactImport({ fields: initialFields, onClose, onDone, 
             const ctGoing = c.ctNew + c.ctFound;
             const facts: [string, number, string?][] = [
               ["new contacts", c.ctNew], ["contacts in the CRM", c.ctFound], ["new companies", c.coNew], ["companies in the CRM", c.coFound],
-              ["without a company", c.ctNoCompany, "is-muted"], ["address incomplete", c.ctIncomplete, "is-gold"], ["left out", c.ctSkip + c.coSkip, "is-muted"], ["with errors", c.ctError + c.orphans, "is-red"],
+              ["without a company", c.ctNoCompany, "is-muted"], ["missing required fields", c.ctIncomplete, "is-gold"], ["left out", c.ctSkip + c.coSkip, "is-muted"], ["with errors", c.ctError + c.orphans, "is-red"],
             ];
             return (
               <div className="rv">
@@ -1654,32 +1668,40 @@ function DropCard({ entity, side: s, optional, hint, recognised, onPick, onClear
 
 /** Which fields the mapping fills, contact and company. */
 function Coverage({ used, ctx }: { used: Set<string>; ctx: Ctx }) {
-  const groups: { title: string; items: [string, string[], string?][] }[] = [
-    { title: "Contact", items: [["Name", ["contact.full_name", "contact.first_name"]], ["Email · phone", ["contact.email", "contact.phone", "contact.landline"]], ["Position", ["contact.position"]],
-      ["Street & number", ["contact.street", "contact.addr_number"], "street"], ["Postal code & city", ["contact.postal_code", "contact.city"], "city"], ["Country", ["contact.country"], "country"],
-      ["Language", ["contact.language"], "language"], ["LinkedIn", ["contact.linkedin"], "linkedin"], ["Who can see it", ["contact.visible_to"]]] },
-    { title: "Company", items: [["Name / VAT", ["company.name", "company.legal_name", "company.vat_number"]], ["Website · phone · email", ["company.website", "company.phone", "company.landline", "company.email"]],
-      ["Address", ["company.street", "company.postal_code", "company.city", "company.province", "company.country"]],
-      ["Sector · source · type", ["company.sector", "company.source", "company.relationship"]], ["Billing", ["company.billing_name", "company.billing_email", "company.billing_phone"]],
+  // the 3rd item: the built-in fields it covers — tagged "required" when Settings makes one of them required and nothing maps it
+  const groups: { title: string; scope: "contact" | "company"; items: [string, string[], string[]?][] }[] = [
+    { title: "Contact", scope: "contact", items: [["Name", ["contact.full_name", "contact.first_name"]], ["Surname", ["contact.full_name", "contact.last_name"], ["last_name"]],
+      ["Email · phone", ["contact.email", "contact.phone", "contact.landline"], ["email", "phone", "landline"]], ["Position", ["contact.position"], ["position"]],
+      ["Street & number", ["contact.street", "contact.addr_number"], ["street", "addr_number"]], ["Postal code & city", ["contact.postal_code", "contact.city"], ["postal_code", "city"]],
+      ["Province", ["contact.province"], ["province"]], ["Country", ["contact.country"], ["country"]],
+      ["Language", ["contact.language"], ["language"]], ["LinkedIn", ["contact.linkedin"], ["linkedin"]], ["Who can see it", ["contact.visible_to"]]] },
+    { title: "Company", scope: "company", items: [["Name / VAT", ["company.name", "company.legal_name", "company.vat_number"], ["legal_name", "vat_number"]],
+      ["Website · phone · email", ["company.website", "company.phone", "company.landline", "company.email"], ["website", "phone", "landline", "email"]],
+      ["Address", ["company.street", "company.postal_code", "company.city", "company.province", "company.country"], ["street", "addr_number", "postal_code", "city", "province", "country"]],
+      ["Sector · source · type", ["company.sector", "company.source", "company.relationship"], ["sector", "source"]],
+      ["Billing", ["company.billing_name", "company.billing_email", "company.billing_phone"], ["billing_name", "billing_email", "billing_phone"]],
       ["Group", ["company.parent"]], ["Who can see it", ["company.visible_to"]]] },
   ];
   const req = ctx.ctFields.filter((f) => f.required);
+  const coReq = ctx.coFields.filter((f) => f.required);
   return (
     <div className="di-cover">
       {groups.map((g) => (
         <div key={g.title}>
           <span className="di-cover-h">{g.title}</span>
           <ul className="di-checks">
-            {g.items.map(([l, ks, prof]) => {
+            {g.items.map(([l, ks, keys]) => {
               const on = ks.some((k) => used.has(k));
-              return <li key={l} className={on ? "is-on" : ""}><i>{on ? "✓" : ""}</i>{l}{!on && prof && isRequired(prof) && <em>required</em>}</li>;
+              const must = !!keys?.some((k) => isFixedRequired(g.scope, k));
+              return <li key={l} className={on ? "is-on" : ""}><i>{on ? "✓" : ""}</i>{l}{!on && must && <em>required</em>}</li>;
             })}
           </ul>
         </div>
       ))}
-      {req.length > 0 && (
+      {(req.length > 0 || coReq.length > 0) && (
         <ul className="di-checks">
           {req.map((f) => { const on = used.has(`ctcustom:${f.id}`); return <li key={f.id} className={on ? "is-on" : ""}><i>{on ? "✓" : ""}</i>{f.label}{!on && <em>required</em>}</li>; })}
+          {coReq.map((f) => { const on = used.has(`cocustom:${f.id}`); return <li key={f.id} className={on ? "is-on" : ""}><i>{on ? "✓" : ""}</i>{f.label}{!on && <em>required</em>}</li>; })}
         </ul>
       )}
     </div>
@@ -1721,7 +1743,7 @@ function ContactsReview({ plan, st, offset, contactOptions, companyOptions, onCh
           <input value={q} onChange={(e) => { setQ(e.target.value); setLimit(300); }} placeholder="Find a contact…" />
         </label>
         <div className="rv-chips">
-          {([["all", "All"], ["new", "New"], ["found", "In the CRM"], ["nocompany", "No company"], ["incomplete", "Address incomplete"], ["warn", "To look at"], ["skip", "Left out"], ["error", "Errors"]] as const)
+          {([["all", "All"], ["new", "New"], ["found", "In the CRM"], ["nocompany", "No company"], ["incomplete", "Required missing"], ["warn", "To look at"], ["skip", "Left out"], ["error", "Errors"]] as const)
             .filter(([k]) => k === "all" || n[k] > 0).map(([k, l]) => (
               <button key={k} className={`${filter === k ? "is-on" : ""} ${(k === "error" || k === "warn" || k === "nocompany") && n[k] ? "is-warn" : ""}`} onClick={() => { setFilter(k); setLimit(300); }}>{l} <i>{fmtN(n[k])}</i></button>
             ))}
@@ -1752,7 +1774,7 @@ function ContactsReview({ plan, st, offset, contactOptions, companyOptions, onCh
                       return <span key={r} className={`rv-rel ${linked ? "is-ok" : c.status === "new" || st.linkContacts ? "is-link" : "is-off"}`}>{linked ? "At" : c.status === "new" || st.linkContacts ? "Joins" : "Not linked to"} {coName(r)}{r.startsWith("new:") ? " (new)" : ""}</span>;
                     }) : <span className="rv-rel is-off">No company</span>}
                     {c.status === "found" && <DiffNote diff={c.diff} mode={st.ctExisting} />}
-                    {c.incomplete.length > 0 && <span className="ci-miss" title={`Missing: ${c.incomplete.join(", ")}`}>Address: {c.incomplete.length} missing</span>}
+                    {c.incomplete.length > 0 && <span className="ci-miss" title={`Missing: ${c.incomplete.join(", ")}`}>{c.incomplete.length} required missing</span>}
                     {c.issues.length > 0 && <span className="ci-issue" title={c.issues.join("\n")}>{c.issues[0]}{c.issues.length > 1 ? ` (+${c.issues.length - 1})` : ""}</span>}
                   </>
                 )}

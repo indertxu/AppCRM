@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { supabase } from "../../api/supabase";
 import { legacyRoleMap, resolveRoleKey, roleNameOf, roleColor, type ClientRole } from "../clients/clientsTypes";
+import { ClientLogo } from "../clients/ClientWorkspace";
 import "./SavedDaysModal.css";
 
 /** A locker line: the role the days were saved on (legacy rows: "consultor" / "supervision"). */
@@ -131,7 +132,7 @@ export default function SavedDaysModal({ seesAll, myUserId, people, clientNames,
                         {Object.entries(u.clients).sort((a, b) => b[1].total - a[1].total).map(([cid, c]) => (
                           <div className="sd-client" key={cid}>
                             <div className="sd-client-h">
-                              <span>{clientNames[cid] ?? "Unknown client"}</span>
+                              <span className="sd-client-n"><ClientLogo className="mg-logo mg-logo-xs" name={clientNames[cid] ?? "?"} clientId={cid} />{clientNames[cid] ?? "Unknown client"}</span>
                               <b>{d2(c.total)}d</b>
                             </div>
                             {Object.entries(c.projects).map(([pid, byLine]) =>

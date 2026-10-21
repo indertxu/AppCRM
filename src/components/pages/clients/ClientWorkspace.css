@@ -993,3 +993,6 @@
 }
 .cw-folders-h::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: linear-gradient(180deg, #2fb3ae, var(--teal)); }
 .cw-folders-h .cw-zone-ico { color: #fff; background: linear-gradient(145deg, #2fb3ae, var(--teal)); box-shadow: 0 6px 14px -6px color-mix(in srgb, var(--teal) 70%, transparent); }
+
+/* required built-in contact field (Settings › Contacts page › Required fields) */
+.cw-addp-grid .cw-req { font-style: normal; font-weight: 800; color: var(--green, #12b57f); }

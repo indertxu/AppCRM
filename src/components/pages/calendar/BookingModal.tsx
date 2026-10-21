@@ -45,6 +45,8 @@ clientId: string;
   attendees: string;
   /** teams, phone or in_person. */
   meetKind?: string;
+  /** The day it happens, when moved from the one the modal opened on. */
+  date?: Date;
 }
 
 interface BookingModalProps {
@@ -148,6 +150,12 @@ export default function BookingModal({
   const [endM, setEndM] = useState(initial.endMin % 60);
   const [type, setType] = useState<string>(initial.type || types[0]?.id || "");
   const [billable, setBillable] = useState(initial.billable);
+  /** The day it happens. Starts on the clicked day and can be moved at the last minute. */
+  const [when, setWhen] = useState<Date>(() => new Date(day.getFullYear(), day.getMonth(), day.getDate()));
+  const [dayOpen, setDayOpen] = useState(false);
+  const dayBtnRef = useRef<HTMLButtonElement>(null);
+  const isoOf = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const moved = isoOf(when) !== isoOf(day);
 
 const { session, role } = useAuth();
   const [clients, setClients] = useState<Client[]>([]);
@@ -177,7 +185,7 @@ const [pickedLine, setPickedLine] = useState(editing || !!initial.line);
   const [closing, setClosing] = useState(false);
   const [closeClient, setCloseClient] = useState("");
   const [closeProject, setCloseProject] = useState("");
-const closeDate = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
+const closeDate = `${when.getFullYear()}-${String(when.getMonth() + 1).padStart(2, "0")}-${String(when.getDate()).padStart(2, "0")}`;
   const [closeBusy, setCloseBusy] = useState(false);
   /**
    * Colleagues summoned to this meeting. The organiser decides what each of
@@ -422,11 +430,11 @@ const startMin = startH * 60 + startM;
   const [busyMates, setBusyMates] = useState<Set<string>>(new Set());
   useEffect(() => {
     if (!mates.length) return;
-    const d = day;
+    const d = when;
     const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
     busyAt(mates.map((m) => m.id), iso, startMin, endMin).then(setBusyMates).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mates, day, startMin, endMin]);
+  }, [mates, when, startMin, endMin]);
 
   const doClose = async () => {
     if (!closeProject || !closeDate) return;
@@ -441,7 +449,7 @@ const { error } = await supabase
     const proj = projects.find((p) => p.id === closeProject);
     await supabase.from("calendar_entries").insert({
       user_id: u?.user?.id,
-      date_key: `${day.getFullYear()}-${day.getMonth()}-${day.getDate()}`,
+      date_key: `${when.getFullYear()}-${when.getMonth()}-${when.getDate()}`,
       entry_date: closeDate,
       start_min: startMin,
       end_min: endMin,
@@ -510,6 +518,7 @@ startMin, endMin, type, billable, clientId, projectId,
       line: initial.line === "sales" || initial.line === "closure" ? initial.line : "consultor",
       roleId: initial.line === "closure" ? (initial.roleId ?? "") : isClientWork && projectId ? roleFor(projectId) : roleId,
       meetKind,
+      date: moved ? when : undefined,
     });
   };
 
@@ -536,7 +545,7 @@ if (!pickedLine) {
         <div className="bm-pick bm-pick5" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
           <header className="bm-pick-head">
             <div>
-              <span className="bm-eyebrow">Log work · {DOW_LONG[day.getDay()]}, {MONTHS_LONG[day.getMonth()]} {day.getDate()}</span>
+              <span className="bm-eyebrow">Log work · {DOW_LONG[when.getDay()]}, {MONTHS_LONG[when.getMonth()]} {when.getDate()}</span>
               <h2 className="bm-pick-title">What kind of job is this?</h2>
               <p className="bm-pick-sub">Pick the role this time is logged on.</p>
             </div>
@@ -618,7 +627,7 @@ if (!pickedLine) {
               )}
 {!!closeProject && (
                 <p className="bm-close-note">
-                  End date: <strong>{DOW_LONG[day.getDay()]}, {MONTHS_LONG[day.getMonth()]} {day.getDate()}</strong>
+                  End date: <strong>{DOW_LONG[when.getDay()]}, {MONTHS_LONG[when.getMonth()]} {when.getDate()}</strong>
                 </p>
               )}
               <button
@@ -737,6 +746,32 @@ if (!pickedLine) {
         return (
           <>
             <p className="bm6-lead">When does it happen, and how?</p>
+            <div className={`bm-day ${moved ? "is-moved" : ""}`}>
+              <span className="bm-range-lbl">Day</span>
+              <button ref={dayBtnRef} type="button" className={`bm-day-btn ${dayOpen ? "is-open" : ""}`}
+                onClick={() => setDayOpen(true)}>
+                <span className="bm-day-cal" aria-hidden="true">
+                  <small>{MONTHS_LONG[when.getMonth()].slice(0, 3)}</small>
+                  <b key={isoOf(when)} className="bm6-pop">{when.getDate()}</b>
+                </span>
+                <span className="bm-day-txt">
+                  <b key={`d${isoOf(when)}`} className="bm6-pop">{DOW_LONG[when.getDay()]}, {MONTHS_LONG[when.getMonth()]} {when.getDate()}</b>
+                  <small>{moved ? `Moved from ${DOW_LONG[day.getDay()].slice(0, 3)}, ${MONTHS_LONG[day.getMonth()].slice(0, 3)} ${day.getDate()}` : "Same times and details, any day"}</small>
+                </span>
+                <span className="bm-day-chg">
+                  Change
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+                </span>
+              </button>
+              {moved && (
+                <button type="button" className="bm-day-undo" onClick={() => setWhen(new Date(day.getFullYear(), day.getMonth(), day.getDate()))}>
+                  Undo
+                </button>
+              )}
+              <DatePicker hideTrigger open={dayOpen} onOpenChange={setDayOpen} anchorRef={dayBtnRef}
+                value={isoOf(when)}
+                onChange={(iso) => { const [y, m, d] = iso.split("-").map(Number); if (y && m && d) setWhen(new Date(y, m - 1, d)); }} />
+            </div>
             <div className="bm-range">
               <div className="bm-range-side">
                 <span className="bm-range-lbl">Start</span>
@@ -999,7 +1034,7 @@ if (!pickedLine) {
         <aside className="bm6-rail">
           <div className="bm6-rail-head">
             <span className="bm-eyebrow">{editing ? "Edit entry" : "Log work"} · {roleName}</span>
-            <h2>{DOW_LONG[day.getDay()]}, {MONTHS_LONG[day.getMonth()]} {day.getDate()}</h2>
+            <h2 key={isoOf(when)} className="bm6-pop">{DOW_LONG[when.getDay()]}, {MONTHS_LONG[when.getMonth()]} {when.getDate()}</h2>
             {!editing && (
               <button type="button" className="bm6-line" onClick={() => setPickedLine(false)}>Change job type</button>
             )}

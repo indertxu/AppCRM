@@ -9,6 +9,7 @@ import Select from "../../framework/Select";
 import { downloadBlob, sheetToXlsx, type XCell, type XStyle } from "../../framework/exportFile";
 import BillingAdjustModal, { type SavePayload } from "./BillingAdjustModal";
 import { lineRate, roleNameOf, roleColor, roleCounts, type ClientRole, type RoleLine } from "../clients/clientsTypes";
+import { ClientLogo } from "../clients/ClientWorkspace";
 import "./BillingPanel.css";
 
 export interface BiEntry {
@@ -299,6 +300,14 @@ export default function BillingPanel({
   /** Bills ticked for Excel export (To-bill tab only). Keyed by bill.key. */
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [exporting, setExporting] = useState(false);
+  /** "Did you download the report?" check shown before marking a bill as sent. */
+  const [sendAsk, setSendAsk] = useState<{ bill: Bill; downloaded: boolean } | null>(null);
+  useEffect(() => {
+    if (!sendAsk) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setSendAsk(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [sendAsk]);
   /** Off by default: the checkbox column only appears once the user opts in. */
   const [selectMode, setSelectMode] = useState(false);
   // Drag & drop: local period overrides + the entry currently being dragged
@@ -507,7 +516,9 @@ export default function BillingPanel({
     return Object.entries(per).sort((a, b2) => b2[1].value - a[1].value);
   };
 
-  const isoDate = (d: Date) => d.toISOString().slice(0, 10);
+  // Local calendar date (YYYY-MM-DD). toISOString() would shift to UTC and,
+  // in Spain, turn local midnight into the previous day.
+  const isoDate = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   const sendDateFor = (per: string) => new Date(`${cutoffOf(per, localCutoffs, defaultCutoffDay)}T00:00:00`);
 
   /** Append a row to the invoice status history (best-effort; never blocks the action). */
@@ -524,7 +535,9 @@ export default function BillingPanel({
 
   const markSent = async (b: Bill) => {
     setBusy(b.key);
-    const sent = sendDateFor(b.period);
+    // Sent date is the day it is actually marked as sent (today), not the
+    // period's cutoff; the due date counts from there.
+    const sent = new Date(); sent.setHours(0, 0, 0, 0);
     const due = new Date(sent); due.setDate(due.getDate() + paymentDays);
     const rowDays = sumLines(b.lines);
     const payload = {
@@ -730,8 +743,8 @@ export default function BillingPanel({
    * rate, labelled in column A with the role's name (e.g. "Main Consultant" /
    * "Project Manager"). Amounts are live formulas (price × days) with totals.
    */
-  const exportSelected = async () => {
-    const chosen = outstanding.filter((b) => selected.has(b.key));
+  const exportSelected = async (only?: Bill[]) => {
+    const chosen = only ?? outstanding.filter((b) => selected.has(b.key));
     if (chosen.length === 0) return;
     setExporting(true);
     try {
@@ -1125,7 +1138,7 @@ export default function BillingPanel({
             {phase === "tobill" && (
               selectMode ? (
                 <div className="bn-xlsx-group">
-                  <button type="button" className="bn-xlsx is-go" disabled={selected.size === 0 || exporting} onClick={exportSelected}
+                  <button type="button" className="bn-xlsx is-go" disabled={selected.size === 0 || exporting} onClick={() => exportSelected()}
                     title={selected.size === 0 ? "Tick rows to export" : `Download ${selected.size} selected`}>
                     <BnIcon d={BN_ICON.xls} w={1.9} />
                     {exporting ? "…" : `Download${selected.size ? ` (${selected.size})` : ""}`}
@@ -1191,7 +1204,7 @@ export default function BillingPanel({
                     )}
                     <button type="button" className="bn-row-main bn-grid-bill" data-spot="" onClick={() => setOpen(isOpen ? null : b.key)} aria-expanded={isOpen}>
                       <span className="bn-who">
-                        <span className="bn-av">{(b.legalName || "?").charAt(0).toUpperCase()}</span>
+                        <ClientLogo className="bn-av mg-logo" name={clientNames[b.clientId] || b.legalName || "?"} clientId={b.clientId} />
                         <span className="bn-who-t">
                           <span className="bn-name">
                             <b>{b.legalName}</b>
@@ -1229,7 +1242,7 @@ export default function BillingPanel({
                           <button type="button" className="bn-adjust" onClick={() => setAdjusting({ bill: b, invoice: null })}>
                             <BnIcon d={BN_ICON.tune} w={2.2} /> Adjust calculation
                           </button>
-                          <button type="button" className="bn-send" disabled={busy === b.key} onClick={() => markSent(b)}>
+                          <button type="button" className="bn-send" disabled={busy === b.key} onClick={() => setSendAsk({ bill: b, downloaded: false })}>
                             {busy === b.key ? "Saving…" : <>Mark as sent <BnIcon d={BN_ICON.sent} w={2.2} /></>}
                           </button>
                         </div>
@@ -1328,7 +1341,7 @@ export default function BillingPanel({
                         onKeyDown={(e) => { if (comp && (e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) { e.preventDefault(); toggle(); } }}
                       >
                         <span className="bn-who">
-                          <span className="bn-av">{projName(inv.projectId).charAt(0).toUpperCase()}</span>
+                          <ClientLogo className="bn-av mg-logo" name={projName(inv.projectId)} clientId={projects[inv.projectId]?.clientId} />
                           <span className="bn-who-t">
                             <span className="bn-name"><b>{projName(inv.projectId)}</b></span>
                             <span className="bn-meta">
@@ -1531,6 +1544,51 @@ export default function BillingPanel({
                     setFixing(null);
                   }}>
                   Save invoice
+                </button>
+              </footer>
+            </div>
+          </div>
+        );
+      })()}
+
+      {sendAsk && (() => {
+        const b = sendAsk.bill;
+        // If this bill is part of a ticked selection, the report covers the whole selection.
+        const group = selected.has(b.key) ? outstanding.filter((x) => selected.has(x.key)) : [b];
+        const close = () => setSendAsk(null);
+        return (
+          <div className="bn-pop-backdrop" onMouseDown={close}>
+            <div className="bn-pop is-ask" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Confirm sending">
+              <header className="bn-pop-head">
+                <span className="bn-pop-ico is-warn"><BnIcon d={BN_ICON.xls} w={2} /></span>
+                <div>
+                  <h3>Have you downloaded the billing report?</h3>
+                  <small>Download the Excel first. Once sent, it leaves To bill.</small>
+                </div>
+              </header>
+              <div className="bn-ask-body">
+                <div className="bn-ask-bill">
+                  <ClientLogo clientId={b.clientId} name={clientNames[b.clientId] || b.legalName} className="bn-av mg-logo bn-ask-logo" />
+                  <div className="bn-ask-txt">
+                    <b>{b.legalName || clientNames[b.clientId]}</b>
+                    <small>{periodLabel(b.period)} · {(+sumLines(b.lines).toFixed(2))}{unitOf(b.projectId)}</small>
+                  </div>
+                  <span className="bn-ask-amt">{eur(net(b))} €</span>
+                </div>
+                <button type="button" className={`bn-ask-dl${sendAsk.downloaded ? " is-done" : ""}`} disabled={exporting}
+                  onClick={async () => { await exportSelected(group); setSendAsk((a) => a && { ...a, downloaded: true }); }}>
+                  <span className="bn-ask-dl-ico"><BnIcon d={sendAsk.downloaded ? BN_ICON.paid : BN_ICON.xls} w={2.2} /></span>
+                  <span className="bn-ask-dl-txt">
+                    <b>{exporting ? "Preparing…" : sendAsk.downloaded ? "Report downloaded" : "Download report"}</b>
+                    <small>{group.length > 1 ? `Excel with the ${group.length} selected bills` : "Excel for this bill"}</small>
+                  </span>
+                </button>
+              </div>
+              <footer className="bn-pop-foot">
+                <button type="button" className="bn-act is-ghost" onClick={close}>Cancel</button>
+                <button type="button" className="bn-act is-pay" disabled={busy === b.key}
+                  onClick={async () => { close(); await markSent(b); }}>
+                  Yes, send <BnIcon d={BN_ICON.sent} w={2.2} />
                 </button>
               </footer>
             </div>

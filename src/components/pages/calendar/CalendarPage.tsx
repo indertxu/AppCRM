@@ -852,7 +852,7 @@ attendees: e.attendees ?? "",
       meetKind: e.meetKind ?? "in_person",
     });
   };
-const saveModal = (v: {
+const saveModal = (vIn: {
     startMin: number;
     endMin: number;
     type: string;
@@ -868,11 +868,14 @@ attendees: string;
     meetKind?: string;
     summoned?: { id: string; billable: number }[];
     summonNote?: string;
+    /** Set when the entry was moved to another day in the modal. */
+    date?: Date;
   }) => {
 if (!modal) return;
-    const key = dateKey(modal.day);
+    const { date: movedTo, ...v } = vIn;
+    const d = movedTo ?? modal.day;
+    const key = dateKey(d);
     const id = modal.editingId ?? crypto.randomUUID();
-    const d = modal.day;
     const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
     (async () => {

@@ -3,26 +3,118 @@
  * They are real columns on the contacts table (see 20261016_contacts_profile_fields.sql),
  * so every contact has them and they can't be deleted from "Fields & columns".
  *
- * To change what is mandatory, flip `required` below — the editor, the importer
- * and the field settings all read it from here.
+ * Which built-in fields are mandatory (for contacts AND companies) is set in
+ * Settings › Contacts page / Companies page › Required fields and kept in
+ * crm_options (kind "required_field"). The editors, the importer and the field
+ * settings read it through the store below; `def` is what applies until the
+ * team changes it.
  */
 
 export type ProfileKey = "street" | "addr_number" | "postal_code" | "city" | "province" | "country" | "language" | "linkedin";
 export interface ProfileField { key: ProfileKey; label: string; required: boolean }
 
-export const PROFILE_FIELDS: ProfileField[] = [
-  { key: "street", label: "Street", required: true },
-  { key: "addr_number", label: "Number", required: true },
-  { key: "postal_code", label: "Postal code", required: true },
-  { key: "city", label: "City", required: true },
-  { key: "province", label: "Province / state", required: false },
-  { key: "country", label: "Country", required: true },
-  { key: "language", label: "Language", required: false },
-  { key: "linkedin", label: "LinkedIn", required: false },
+/* ═══════════════════════════ required built-in fields (contacts + companies) ═══════════════════════════ */
+
+export type ReqScope = "company" | "contact";
+export interface FixedField {
+  key: string; label: string; group: string;
+  /** Always required, can't be switched off (the name). */
+  locked?: boolean;
+  /** Required until the team changes it in Settings. */
+  def?: boolean;
+}
+export const CONTACT_FIXED: FixedField[] = [
+  { key: "first_name", label: "Name", group: "Who they are", locked: true },
+  { key: "last_name", label: "Surname", group: "Who they are" },
+  { key: "position", label: "Position / title", group: "Who they are" },
+  { key: "companies", label: "Company", group: "Who they are" },
+  { key: "email", label: "Email", group: "How to reach them" },
+  { key: "landline", label: "Telephone", group: "How to reach them" },
+  { key: "phone", label: "Mobile", group: "How to reach them" },
+  { key: "linkedin", label: "LinkedIn", group: "How to reach them" },
+  { key: "language", label: "Language", group: "How to reach them" },
+  { key: "street", label: "Street", group: "Address", def: true },
+  { key: "addr_number", label: "Number", group: "Address", def: true },
+  { key: "postal_code", label: "Postal code", group: "Address", def: true },
+  { key: "city", label: "City", group: "Address", def: true },
+  { key: "province", label: "Province / state", group: "Address" },
+  { key: "country", label: "Country", group: "Address", def: true },
 ];
-export const PROFILE_KEYS: ProfileKey[] = PROFILE_FIELDS.map((f) => f.key);
+export const COMPANY_FIXED: FixedField[] = [
+  { key: "name", label: "Name", group: "Who they are", locked: true },
+  { key: "legal_name", label: "Legal name", group: "Who they are" },
+  { key: "vat_number", label: "VAT / Tax ID", group: "Who they are" },
+  { key: "sector", label: "Sector", group: "Who they are" },
+  { key: "source", label: "Source", group: "Who they are" },
+  { key: "website", label: "Website", group: "How to reach them" },
+  { key: "linkedin", label: "LinkedIn", group: "How to reach them" },
+  { key: "email", label: "Email", group: "How to reach them" },
+  { key: "landline", label: "Telephone", group: "How to reach them" },
+  { key: "phone", label: "Mobile", group: "How to reach them" },
+  { key: "street", label: "Street", group: "Address" },
+  { key: "addr_number", label: "Number", group: "Address" },
+  { key: "postal_code", label: "Postal code", group: "Address" },
+  { key: "city", label: "City", group: "Address" },
+  { key: "province", label: "Province / state", group: "Address" },
+  { key: "country", label: "Country", group: "Address" },
+  { key: "billing_name", label: "Billing name", group: "Billing" },
+  { key: "billing_email", label: "Billing email", group: "Billing" },
+  { key: "billing_phone", label: "Billing phone", group: "Billing" },
+];
+export const fixedFieldsOf = (scope: ReqScope) => (scope === "company" ? COMPANY_FIXED : CONTACT_FIXED);
+const defaultsOf = (scope: ReqScope) => new Set(fixedFieldsOf(scope).filter((f) => f.def || f.locked).map((f) => f.key));
+
+const reqState: Record<ReqScope, Set<string>> = { company: defaultsOf("company"), contact: defaultsOf("contact") };
+let reqVersion = 0;
+const reqListeners = new Set<() => void>();
+/** The keys required right now (always includes the locked name). */
+export const requiredKeys = (scope: ReqScope): Set<string> => reqState[scope];
+export function setRequiredKeys(scope: ReqScope, keys: Iterable<string> | null) {
+  const next = keys ? new Set(keys) : defaultsOf(scope);
+  fixedFieldsOf(scope).forEach((f) => { if (f.locked) next.add(f.key); });
+  const known = new Set(fixedFieldsOf(scope).map((f) => f.key));
+  for (const k of [...next]) if (!known.has(k)) next.delete(k);
+  reqState[scope] = next;
+  reqVersion++;
+  reqListeners.forEach((fn) => fn());
+}
+export const subscribeRequired = (fn: () => void) => { reqListeners.add(fn); return () => { reqListeners.delete(fn); }; };
+export const requiredVersion = () => reqVersion;
+export const isFixedRequired = (scope: ReqScope, key: string) => reqState[scope].has(key);
+
+/** What a record holds for a built-in field, as text ("" = empty). */
+export function fixedValue(scope: ReqScope, row: any, key: string): string {
+  if (!row) return "";
+  if (scope === "contact" && key === "companies") return Array.isArray(row.companyIds) && row.companyIds.length ? "yes" : "";
+  if (scope === "company" && key.startsWith("billing_")) { const b = row.billing ?? {}; const v = b[key.slice(8)]; return v == null ? "" : String(v).trim(); }
+  const v = row[key];
+  if (Array.isArray(v)) return v.length ? "yes" : "";
+  return v == null ? "" : String(v).trim();
+}
+/** Labels of the required built-in fields a record is missing (the name is checked apart). `only` limits it to the fields a form shows. */
+export function missingFixed(scope: ReqScope, row: any, only?: string[]): string[] {
+  return fixedFieldsOf(scope)
+    .filter((f) => !f.locked && reqState[scope].has(f.key) && (!only || only.includes(f.key)) && !fixedValue(scope, row, f.key))
+    .map((f) => f.label);
+}
+
+const PROFILE_BASE: { key: ProfileKey; label: string }[] = [
+  { key: "street", label: "Street" },
+  { key: "addr_number", label: "Number" },
+  { key: "postal_code", label: "Postal code" },
+  { key: "city", label: "City" },
+  { key: "province", label: "Province / state" },
+  { key: "country", label: "Country" },
+  { key: "language", label: "Language" },
+  { key: "linkedin", label: "LinkedIn" },
+];
+/** The built-in profile fields; `required` follows Settings (read it at use time). */
+export const PROFILE_FIELDS: ProfileField[] = PROFILE_BASE.map((b) => ({
+  ...b, get required() { return reqState.contact.has(b.key); },
+} as ProfileField));
+export const PROFILE_KEYS: ProfileKey[] = PROFILE_BASE.map((f) => f.key);
 export const isProfileKey = (k: string): k is ProfileKey => (PROFILE_KEYS as string[]).includes(k);
-export const isRequired = (k: string) => PROFILE_FIELDS.some((f) => f.key === k && f.required);
+export const isRequired = (k: string) => reqState.contact.has(k);
 
 const str = (v: unknown) => (v == null ? "" : String(v).trim());
 const norm = (s: unknown) => str(s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();

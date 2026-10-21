@@ -6,7 +6,7 @@ import { supabase } from "../../../api/supabase";
 import type { Company, Contact } from "../../companies/companiesApi";
 import type { Tracking } from "../sales/salesApi";
 import { downloadBlob, tableToCsv, tableToXlsx, type ExportCell, type ExportColumn } from "../../../framework/exportFile";
-import { inPeriod, PERIODS, periodLabel, prettyRange, dealCustomFields } from "./salesReportEngine";
+import { inPeriod, PERIODS, periodLabel, prettyRange, dealCustomFields, loadFieldLabels, withCustomDefs } from "./salesReportEngine";
 import type { TrackingField } from "./trackingFieldsApi";
 import { useBackToClose } from "../../../framework/useBackToClose";
 import { useCloseGuard } from "../../../framework/Dock";
@@ -31,7 +31,7 @@ type RowMode = "deals" | "contacts" | "companies";
 type Source = "deal" | "company" | "both";
 
 interface Row { deal: Tracking; contact: Contact | null; company: Company | null }
-interface Field { key: string; group: Group; label: string; kind: Kind; options?: string[]; sum?: boolean; get: (r: Row) => any }
+interface Field { key: string; group: Group; label: string; kind: Kind; options?: string[]; sum?: boolean; get: (r: Row) => any; list?: (r: Row) => string[] }
 interface Cond { id: string; field: string; op: string; a: string; b: string; vals: string[] }
 
 export interface ExportHelpers {
@@ -104,6 +104,7 @@ function condTest(c: Cond, f: Field, r: Row): boolean {
   const empty = v == null || v === "";
   if (c.op === "is_empty") return empty;
   if (c.op === "is_set") return !empty;
+  if (f.kind === "enum" && f.list) { const hit = f.list(r).some((x) => c.vals.includes(x)); return c.op === "in" ? hit : !hit; }
   if (f.kind === "enum") { const s = empty ? "" : String(v); return c.op === "in" ? c.vals.includes(s) : !c.vals.includes(s); }
   if (f.kind === "text") {
     const has = !empty && norm(String(v)).includes(norm(c.a.trim()));
@@ -185,19 +186,6 @@ function discover(rows: any[], group: Group, pick: (r: Row) => any, labels: Reco
     get: (r: Row) => cleanVal(pick(r)?.custom?.[k]),
   });
   return out;
-}
-
-async function loadFieldLabels(table: string): Promise<Record<string, string>> {
-  try {
-    const { data } = await supabase.from(table).select("*");
-    const map: Record<string, string> = {};
-    (data ?? []).forEach((f: any) => {
-      const label = f.label ?? f.name ?? f.title;
-      if (!label) return;
-      [f.key, f.id, f.slug, f.name].filter(Boolean).forEach((k: string) => { map[k] = label; });
-    });
-    return map;
-  } catch { return {}; }
 }
 
 /* ─────────────── formatting ─────────────── */
@@ -411,10 +399,10 @@ export default function ExportModal(p: Props) {
     ];
     const contact: Field[] = [
       { key: "contact.name", group: "contact", label: "Full name", kind: "text", get: (r) => (r.contact ? [(r.contact as any).first_name, (r.contact as any).last_name].filter(Boolean).join(" ") || null : null) },
-      ...discover(contacts, "contact", (r) => r.contact, contactLabels).filter((f) => !/compan/i.test(f.key)),
+      ...withCustomDefs(discover(contacts, "contact", (r) => r.contact, contactLabels).filter((f) => !/compan/i.test(f.key) || f.key.startsWith("contact.custom.")), "contact", (r) => r.contact as any),
       { key: "contact.company", group: "contact", label: "Company", kind: "text", get: (r) => { const cc = contactCompany(r.contact); return cc ? (cc.id ? (companyById.get(cc.id) as any)?.name ?? null : cc.name) : null; } },
     ];
-    const company = discover(companies, "company", (r) => r.company, companyLabels);
+    const company = withCustomDefs(discover(companies, "company", (r) => r.company, companyLabels), "company", (r) => r.company as any);
     return [...deal, ...contact, ...company];
   }, [companies, contacts, companyById, contactCompany, contactLabels, companyLabels, employees, empName, trackAssignees, potentialTotals, helpers, p.pipelineNames, p.phaseNames, p.productNames, p.trackingFields]);
 

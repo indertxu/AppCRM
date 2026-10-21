@@ -4214,3 +4214,153 @@ button.sl-ppl-co:hover { background: #f1f7f4; color: var(--forest); }
 .dw.is-inline .dw-head { padding: 0 0 14px; background: transparent; border-bottom: 1px solid var(--dw-line); margin-bottom: 14px; }
 .dw.is-inline .dw-foot { padding: 14px 0 0; margin-top: 14px; background: transparent; border-top: 1px solid var(--dw-line); }
 .dw.is-inline .srl-tabs { padding-left: 0; padding-right: 0; background: transparent; margin-bottom: 14px; }
+
+/* ============ Deals list v3: one calm table, hairline rows, logos (fast: no per-row shadows, no page-wide restyles) ============ */
+.dz-table {
+  --dz-pad-l: 16px; --dz-pad-r: 14px; --dz-gap: 28px;
+  position: relative; background: #fff; border-radius: 18px;
+  box-shadow: 0 0 0 1px rgba(14, 26, 21, 0.07), 0 1px 2px rgba(14, 26, 21, 0.04), 0 8px 28px -18px rgba(14, 26, 21, 0.18);
+}
+.dz-table .dz-list { gap: 0; padding-bottom: 6px; }
+.sl-ov .dz-table .dz-list { padding-bottom: 6px; }
+
+/* header: a quiet band inside the card, stuck under the filters */
+.so-sheet .sl-scroll .dz-table .so-thead,
+.dz-table .so-thead {
+  margin: 0; top: -14px; min-height: 42px; padding: 0 var(--dz-pad-r) 0 var(--dz-pad-l); column-gap: var(--dz-gap);
+  background: #fff; border-radius: 18px 18px 0 0; box-shadow: inset 0 -1px 0 rgba(14, 26, 21, 0.07), 0 -14px 0 var(--paper);
+  font-size: 11.5px; font-weight: 600; letter-spacing: 0.01em; color: var(--mute2); animation: none;
+}
+.dz-table .so-thead::after { display: none; }
+.so-sheet .sl-scroll .dz-table .so-th-deal, .dz-table .so-th-deal { background: #fff; margin-left: calc(-1 * var(--dz-pad-l)); padding-left: var(--dz-pad-l); border-top-left-radius: 18px; align-self: stretch; display: flex; align-items: center; gap: 12px; }
+.dz-table .so-th-deal .bk-check { margin-left: 4px; }
+
+/* rows */
+.dz-row {
+  --sc: #1fb98a; --sc-soft: #e6f6ee; --sc-text: #0a7a54; --pc: var(--so-ink);
+  position: relative; display: grid; align-items: center; width: 100%; min-width: 0; min-height: 60px;
+  grid-template-columns: var(--so-cols, minmax(240px, 1.5fr) minmax(200px, 1.25fr) minmax(170px, 1fr) 150px 110px 30px);
+  column-gap: var(--dz-gap); padding: 9px var(--dz-pad-r) 9px var(--dz-pad-l);
+  border: 0; border-radius: 0; margin: 0; background: #fff; color: var(--so-ink); text-align: left; cursor: pointer; font: inherit;
+  box-shadow: inset 0 -1px 0 rgba(14, 26, 21, 0.055);
+  transition: background-color 0.18s ease;
+  /* rows far off screen skip layout and paint */
+  content-visibility: auto; contain-intrinsic-size: auto 60px;
+}
+.dz-row:last-child { box-shadow: none; border-radius: 0 0 18px 18px; }
+.dz-row.is-won    { --sc: #d4962a; --sc-soft: #fbf1dc; --sc-text: #93640f; }
+.dz-row.is-lost   { --sc: #d9534a; --sc-soft: #fdebe8; --sc-text: #b8452f; }
+.dz-row.is-paused { --sc: #9aa7a2; --sc-soft: #eef2f0; --sc-text: #6f7d78; }
+.dz-row.prob-hi  { --pc: #0f9a6a; }
+.dz-row.prob-mid { --pc: #b9791a; }
+.dz-row.prob-lo  { --pc: #6f8290; }
+.dz-row:focus-visible { outline: 2px solid #12b57f; outline-offset: -2px; border-radius: 10px; }
+.dz-row.is-sel { background: #f1faf5; }
+
+/* deal: logo + name + company */
+.dz-who { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.dz-lead { position: relative; flex: none; width: 34px; height: 34px; }
+.dz-logo {
+  position: relative; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; overflow: hidden;
+  background: #eef4f1; color: #0a6f4d; font-size: 13.5px; font-weight: 750; line-height: 1; user-select: none;
+  box-shadow: inset 0 0 0 1px rgba(10, 111, 77, 0.08);
+  transition: opacity 0.18s, transform 0.22s var(--ease);
+}
+.dz-logo > img {
+  position: absolute; inset: 0; margin: auto; width: 72% !important; height: 72% !important; max-width: none; object-fit: contain;
+  opacity: 0; transition: opacity 0.25s ease; pointer-events: none;
+}
+.dz-logo.is-img { background: #fff; box-shadow: inset 0 0 0 1px rgba(14, 26, 21, 0.09); }
+.dz-logo.is-img > img { opacity: 1; }
+.dz-logo.is-img > .dz-logo-ini { opacity: 0; }
+.dz-lead .bk-check { position: absolute; inset: 7px; opacity: 0; transform: scale(0.75); transition: opacity 0.15s, transform 0.2s var(--ease); }
+.dz-row.is-selecting .dz-lead .bk-check, .dz-row.is-sel .dz-lead .bk-check { opacity: 1; transform: none; }
+.dz-row.is-selecting .dz-logo, .dz-row.is-sel .dz-logo { opacity: 0; transform: scale(0.85); }
+.dz-who-t { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.dz-name { min-width: 0; font-size: 14px; font-weight: 650; letter-spacing: -0.012em; color: var(--so-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dz-sub { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; color: var(--mute); }
+.dz-co { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dz-co.is-none { color: var(--mute2); }
+.dz-flag { flex: none; padding: 1px 6px; border-radius: 5px; font-size: 10.5px; font-weight: 650; color: #6f5a16; background: #fbf1dc; }
+
+/* stage: dot + name, one hairline of progress */
+.dz-stage { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.dz-stage-t { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 13px; }
+.dz-stage-t b { min-width: 0; font-weight: 600; color: var(--ink2, #3a4843); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dz-stage-t em { flex: none; font-style: normal; text-transform: capitalize; font-size: 11px; font-weight: 650; padding: 1px 7px; border-radius: 999px; color: var(--sc-text); background: var(--sc-soft); }
+.dz-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--sc); box-shadow: 0 0 0 3px var(--sc-soft); }
+.dz-bar { display: block; height: 3px; max-width: 220px; border-radius: 3px; background: #edf1ef; overflow: hidden; }
+.dz-bar i { display: block; height: 100%; width: 100%; border-radius: inherit; background: var(--sc); transform-origin: left; transform: scaleX(var(--pct-n, 0)); }
+
+/* product + owner */
+.dz-prod { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.dz-chip { min-width: 0; padding: 3px 9px; border-radius: 7px; font-size: 12px; font-weight: 600; color: var(--ink2, #3a4843); background: #f1f4f3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dz-none { font-size: 12.5px; color: var(--mute2); }
+.dz-owner {
+  flex: none; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%;
+  font-size: 9.5px; font-weight: 750; letter-spacing: 0.02em; color: #0a6f4d; background: #e3f3eb; box-shadow: 0 0 0 2px #fff;
+}
+
+/* value + close date */
+.dz-value { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; min-width: 0; }
+.dz-value b { font-size: 14px; font-weight: 700; letter-spacing: -0.015em; color: var(--so-ink); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.dz-value b.is-none { color: #c3ccc8; font-weight: 600; }
+.dz-value small { font-size: 11.5px; color: var(--mute); white-space: nowrap; }
+.dz-value small.is-none { color: var(--mute2); }
+.dz-value small.is-won { color: #93640f; font-weight: 600; }
+.dz-value small.is-lost { color: #b03a3a; font-weight: 600; }
+
+/* chance */
+.dz-prob { display: flex; justify-content: flex-end; min-width: 0; }
+.dz-prob b { display: inline-flex; align-items: baseline; padding: 3px 9px; border-radius: 8px; font-size: 13px; font-weight: 700; letter-spacing: -0.01em; color: var(--pc); background: color-mix(in srgb, var(--pc) 9%, #fff); font-variant-numeric: tabular-nums; }
+.dz-prob b i { font-style: normal; font-size: 10.5px; margin-left: 1px; opacity: 0.8; }
+.dz-prob b.is-none { background: none; color: #c3ccc8; }
+
+.dz-cell { min-width: 0; font-size: 13px; font-weight: 500; color: var(--ink2, #3a4843); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dz-cell.is-r { text-align: right; font-variant-numeric: tabular-nums; }
+.dz-cell.is-none { color: #c3ccc8; }
+
+.dz-go { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; color: var(--mute2); opacity: 0; transform: translateX(-4px); transition: opacity 0.18s, transform 0.25s var(--ease), background-color 0.18s, color 0.18s; }
+.dz-go svg { width: 14px; height: 14px; }
+
+/* the unfolding strip: only after the pointer rests on a row, so sweeping over the list stays still */
+.dz-x { grid-column: 1 / -1; display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows 0.32s var(--ease), opacity 0.2s ease; }
+.dz-x-in { min-height: 0; overflow: hidden; display: flex; flex-wrap: wrap; gap: 6px 26px; padding-left: 46px; }
+.dz-xi { display: inline-flex; flex-direction: column; gap: 1px; min-width: 0; max-width: 240px; padding-top: 10px; }
+.dz-xi > i { font-style: normal; font-size: 10px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--mute2); }
+.dz-xi > b { font-size: 12.5px; font-weight: 600; color: var(--ink2, #3a4843); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dz-xi > b.is-none { color: var(--mute2); font-weight: 500; }
+
+@media (hover: hover) {
+  .dz-row:hover { background: #f7faf8; }
+  .dz-row:hover .dz-go { opacity: 1; transform: none; color: #0a6f4d; background: #e8f4ee; }
+  .dz-row:hover .dz-lead .bk-check { opacity: 1; transform: none; }
+  .dz-row:hover .dz-logo { opacity: 0; transform: scale(0.85); }
+  .dz-row:hover .dz-name { color: #0a6f4d; }
+  .dz-row:hover .dz-x, .dz-row:focus-visible .dz-x { grid-template-rows: 1fr; opacity: 1; transition-delay: 0.38s, 0.4s; }
+  .dz-row:hover .dz-x-in { padding-bottom: 3px; }
+}
+.dz-row:active { background: #f1f7f4; }
+
+/* sideways scroll: the deal column stays put */
+@media (min-width: 761px) {
+  .dz-table .dz-who { position: sticky; left: 0; z-index: 2; align-self: stretch; margin: -9px 0 -9px calc(-1 * var(--dz-pad-l)); padding: 9px 0 9px var(--dz-pad-l); background: inherit; }
+}
+
+/* narrow screens: deal + value on top, stage underneath */
+@media (max-width: 760px) {
+  .dz-table .so-thead { display: none; }
+  .dz-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 10px; column-gap: 12px; padding: 12px 14px; }
+  .dz-row .dz-who { grid-column: 1; grid-row: 1; }
+  .dz-row .dz-value { grid-column: 2; grid-row: 1; }
+  .dz-row .dz-stage { grid-column: 1 / -1; grid-row: 2; }
+  .dz-row .dz-prod, .dz-row .dz-prob, .dz-row .dz-cell, .dz-row .dz-go, .dz-row .dz-x { display: none; }
+  .dz-row:first-of-type { border-radius: 18px 18px 0 0; }
+}
+
+.so-list.dz-list.is-after-load .dz-row { animation: dz-in 0.45s var(--ease) backwards; }
+.so-list.dz-list.is-after-load .dz-row:nth-child(n+16) { animation: none; }
+@keyframes dz-in { from { opacity: 0; transform: translateY(6px); } }
+@media (prefers-reduced-motion: reduce) {
+  .dz-row, .dz-x, .dz-go, .dz-logo, .so-list.dz-list.is-after-load .dz-row { transition: none; animation: none; }
+}

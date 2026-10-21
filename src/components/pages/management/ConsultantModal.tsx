@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { ClientLogo } from "../clients/ClientWorkspace";
 import "./ConsultantModal.css";
 
 /* The numbers are computed in ManagementPage (insightsFor / computeBonus /
@@ -436,7 +437,16 @@ function ProjectView({
     : row.daysPlanned > 0 ? (row.daysDone / row.daysPlanned) * 100 : 0;
   const remAmt = Math.max(0, row.amountPlanned - row.amountDone);
   const remDays = Math.max(0, row.daysPlanned - row.daysDone);
-  const arc = Math.min(100, Math.max(0, done));
+  // Contract context (signed vs consumed), used by the facts panel and as the
+  // ring's fallback when nothing is booked in this period.
+  const signedTot = row.signedDays ?? 0;
+  const usedTot = (row.split ?? []).reduce((n, t) => n + t.used, 0);
+  const usedPctTot = signedTot > 0 ? (usedTot / signedTot) * 100 : 0;
+  const ringMode: "booked" | "signed" | "none" =
+    row.amountPlanned > 0 || row.daysPlanned > 0 ? "booked" : signedTot > 0 ? "signed" : "none";
+  const ringVal = ringMode === "booked" ? done : ringMode === "signed" ? usedPctTot : 0;
+  const arc = Math.min(100, Math.max(0, ringVal));
+  const ringOver = ringVal > 100.5;
 
   return (
     <div className="cm-pview" style={vars({ "--h": hueOf(row.client) })}>
@@ -457,18 +467,18 @@ function ProjectView({
 
         <div className="cm-phero-main">
           <div className="cm-phero-id cm-rise" style={vars({ "--i": 1 })}>
-            <span className="cm-plogo is-lg">{(row.client || "?").charAt(0).toUpperCase()}</span>
+            <ClientLogo className="cm-plogo is-lg mg-logo" name={row.client || "?"} />
             <div className="cm-phero-text">
               <h2 className="cm-title">{row.client}</h2>
               <div className="cm-chips">
                 <span className="cm-chip">{row.service}</span>
                 <span className="cm-chip">{row.rateKind}</span>
-                <span className="cm-chip is-ghost">Value per {unitWord}</span>
+                <span className="cm-chip is-ghost">Billed per {unitWord}</span>
               </div>
             </div>
           </div>
 
-          <div className="cm-ring cm-rise" style={vars({ "--i": 2 })}>
+          <div className={`cm-ring cm-rise ${ringMode === "none" ? "is-empty" : ""} ${ringOver ? "is-over" : ""} ${arc < 0.5 ? "is-zero" : ""}`} style={vars({ "--i": 2 })}>
             <svg viewBox="0 0 42 42" aria-hidden="true">
               <defs>
                 <linearGradient id={`r${gid}`} x1="0" y1="0" x2="1" y2="1">
@@ -480,8 +490,12 @@ function ProjectView({
               <circle className="cm-ring-arc" cx="21" cy="21" r="15.9155" stroke={`url(#r${gid})`} style={{ strokeDasharray: `${arc} ${100 - arc}` }} />
             </svg>
             <div className="cm-ring-c">
-              <b><Count value={done} format={pct0} delay={300} /><em>%</em></b>
-              <span>of booked</span>
+              {ringMode === "none" ? (
+                <><b>—</b><span>Nothing booked or signed</span></>
+              ) : (
+                <><b><Count value={ringVal} format={pct0} delay={300} /><em>%</em></b>
+                <span>{ringMode === "booked" ? "of booked delivered" : "of signed consumed"}</span></>
+              )}
             </div>
           </div>
         </div>
@@ -493,37 +507,52 @@ function ProjectView({
           <StatCard i={6} icon={ICON.left} label="Left to bill" value={<Count value={remAmt} />} unit="€" sub={`${d2(remDays)}${u} still open`} />
         </div>
 
-        {(row.kickoff || (row.signedDays ?? 0) > 0 || (row.split?.length ?? 0) > 0) && (() => {
+        {(row.kickoff || signedTot > 0 || (row.split?.length ?? 0) > 0) && (() => {
           const types = (row.split ?? [])
             .map((t) => ({ k: t.key, name: t.name, signed: t.signed, used: t.used, c: t.color }))
             .filter((t) => t.signed > 0.001 || t.used > 0.001);
-          const signed = row.signedDays ?? 0;
-          const used = (row.split ?? []).reduce((n, t) => n + t.used, 0);
-          const usedPct = signed > 0 ? (used / signed) * 100 : 0;
+          const remaining = signedTot - usedTot;
+          const overAll = remaining < -0.001;
           const kDate = (() => {
             if (!row.kickoff) return "—";
             const d = new Date(row.kickoff + "T00:00:00");
-            return isNaN(+d) ? row.kickoff : d.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" });
+            return isNaN(+d) ? row.kickoff : d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
           })();
           return (
-            <section className="cm-pm cm-rise" style={vars({ "--i": 4 })}>
-              <div className="cm-pm-top">
-                <div className="cm-pm-stat"><span>Kick-off</span><b>{kDate}</b></div>
-                <div className="cm-pm-stat"><span>Signed</span><b>{d2(signed)}<em>{u}</em></b></div>
-                <div className="cm-pm-stat"><span>Consumed</span><b>{d2(used)}<em>{u}</em></b><small>{pct0(usedPct)}% of signed</small></div>
-                <div className="cm-pm-stat"><span>Remaining</span><b>{d2(Math.max(0, signed - used))}<em>{u}</em></b></div>
+            <section className={`cm-pm cm-rise ${types.length ? "" : "is-solo"}`} style={vars({ "--i": 7 })}>
+              <div className="cm-pm-main">
+                <header className="cm-pm-h">
+                  <span className="cm-pm-eyebrow">Contract</span>
+                  {signedTot > 0 && (
+                    <span className={`cm-pm-badge ${overAll ? "is-over" : usedPctTot >= 85 ? "is-warn" : ""}`}>
+                      {overAll ? `${d2(-remaining)}${u} over` : `${pct0(usedPctTot)}% used`}
+                    </span>
+                  )}
+                </header>
+                <div className="cm-pm-top">
+                  <div className="cm-pm-stat"><span>Kick-off</span><b>{kDate}</b></div>
+                  <div className="cm-pm-stat"><span>Signed</span><b>{d2(signedTot)}<em>{u}</em></b></div>
+                  <div className="cm-pm-stat"><span>Consumed</span><b>{d2(usedTot)}<em>{u}</em></b></div>
+                  <div className={`cm-pm-stat ${overAll ? "is-over" : ""}`}><span>{overAll ? "Over" : "Remaining"}</span><b>{d2(Math.abs(remaining))}<em>{u}</em></b></div>
+                </div>
+                {signedTot > 0 && (
+                  <div className={`cm-pm-total ${overAll ? "is-over" : ""}`} title={`${pct0(usedPctTot)}% of signed`}>
+                    <span style={vars({ "--w": `${Math.min(100, usedPctTot)}%` })} />
+                  </div>
+                )}
               </div>
               {types.length > 0 && (
                 <div className="cm-pm-types">
-                  {types.map((t) => {
+                  <span className="cm-pm-eyebrow">By role</span>
+                  {types.map((t, n) => {
                     const pct = t.signed > 0 ? (t.used / t.signed) * 100 : 0;
                     const over = t.used > t.signed + 0.001;
                     return (
-                      <div className={`cm-pm-row ${over ? "is-over" : ""}`} key={t.k} style={vars({ "--c": t.c })}>
+                      <div className={`cm-pm-row ${over ? "is-over" : ""}`} key={t.k} style={vars({ "--c": t.c || "#3fcf9a", "--n": n })}>
                         <span className="cm-pm-name"><i />{t.name}</span>
-                        <span className="cm-pm-track"><span style={{ width: `${Math.min(100, pct)}%` }} /></span>
+                        <span className="cm-pm-track"><span style={vars({ "--w": `${Math.min(100, pct)}%` })} /></span>
                         <span className="cm-pm-fig"><b>{d2(t.used)}</b> / {d2(t.signed)}{u}</span>
-                        <span className="cm-pm-pct">{pct0(pct)}%</span>
+                        <span className="cm-pm-pct">{t.signed > 0 ? `${pct0(pct)}%` : "—"}</span>
                       </div>
                     );
                   })}
@@ -849,7 +878,7 @@ export default function ConsultantModal({
                             aria-label={`Open ${v.client}, ${v.service}`}
                           >
                             <span className="cm-p-id">
-                              <span className="cm-plogo">{(v.client || "?").charAt(0).toUpperCase()}</span>
+                              <ClientLogo className="cm-plogo mg-logo" name={v.client || "?"} />
                               <span className="cm-p-name">
                                 <b>{v.client}</b>
                                 <small>{v.service}<i>{v.rateKind}</i></small>

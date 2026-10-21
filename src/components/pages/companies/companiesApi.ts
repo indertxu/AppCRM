@@ -1,6 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { supabase } from "../../api/supabase";
 import { applyRolePreview } from "../../framework/SuperAdmin";
+import { useEffect, useSyncExternalStore } from "react";
+import { setRequiredKeys, requiredKeys, subscribeRequired, requiredVersion, type ReqScope } from "../contacts/contactProfile";
 
 export interface Company {
   id?: string;
@@ -758,4 +760,57 @@ export function groupRootOf(id: string, companies: Company[]): string {
     if (!p || seen.has(p)) return cur;
     seen.add(cur); cur = p;
   }
+}
+
+// ---- Which built-in company / contact fields are mandatory (Settings › … page › Required fields) ----
+// Kept in crm_options as kind "required_field": one row per required key ("contact:email"), plus a
+// marker row ("contact:*") once the team has saved its own choice — until then the defaults apply.
+const REQ_KIND = "required_field";
+let reqLoad: Promise<void> | null = null;
+/** Loads the team's choice into the shared store (once per session unless `force`). */
+export function loadRequiredFields(force = false): Promise<void> {
+  if (reqLoad && !force) return reqLoad;
+  reqLoad = (async () => {
+    const { data, error } = await supabase.from("crm_options").select("label").eq("kind", REQ_KIND);
+    if (error) return;
+    const labels = ((data ?? []) as { label: string }[]).map((r) => String(r.label));
+    (["company", "contact"] as ReqScope[]).forEach((scope) => {
+      if (!labels.includes(`${scope}:*`)) return;
+      setRequiredKeys(scope, labels.filter((l) => l.startsWith(`${scope}:`) && l !== `${scope}:*`).map((l) => l.slice(scope.length + 1)));
+    });
+  })();
+  return reqLoad;
+}
+/** Turns one built-in field required on/off for every company or contact. Returns an error message or null. */
+export async function setFixedRequired(scope: ReqScope, key: string, on: boolean): Promise<string | null> {
+  const before = new Set(requiredKeys(scope));
+  const next = new Set(before);
+  if (on) next.add(key); else next.delete(key);
+  setRequiredKeys(scope, next); // instant in the UI; rolled back below if it can't be saved
+  const fail = (m: string) => {
+    setRequiredKeys(scope, before);
+    return /check constraint|crm_options_kind|violates/i.test(m) ? "Run 23_required_fields.sql in Supabase to save which fields are required." : m;
+  };
+  // the marker says "the team chose" — written first so a half-saved change never falls back to the defaults
+  const { data: mk } = await supabase.from("crm_options").select("id").eq("kind", REQ_KIND).eq("label", `${scope}:*`).limit(1);
+  if (!mk?.length) {
+    // first change: write down the defaults, then the marker
+    for (const label of [...[...before].map((k) => `${scope}:${k}`), `${scope}:*`]) {
+      const { error } = await supabase.from("crm_options").insert({ kind: REQ_KIND, label, sort: 0 });
+      if (error && !/duplicate|unique/i.test(error.message)) return fail(error.message);
+    }
+  }
+  if (on) {
+    const { error } = await supabase.from("crm_options").insert({ kind: REQ_KIND, label: `${scope}:${key}`, sort: 0 });
+    if (error && !/duplicate|unique/i.test(error.message)) return fail(error.message);
+  } else {
+    const { error } = await supabase.from("crm_options").delete().eq("kind", REQ_KIND).eq("label", `${scope}:${key}`);
+    if (error) return fail(error.message);
+  }
+  return null;
+}
+/** Re-renders when the required fields change, and loads them the first time. Returns a number that changes with them. */
+export function useRequiredFields(): number {
+  useEffect(() => { void loadRequiredFields(); }, []);
+  return useSyncExternalStore(subscribeRequired, requiredVersion, requiredVersion);
 }

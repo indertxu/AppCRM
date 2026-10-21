@@ -10,8 +10,8 @@ import { ClientUpsells } from "./ClientsPage";
 import MentionInput, { type MentionPerson } from "../../framework/MentionInput";
 import { addTask, toggleTask, updateTaskMeta, saveClientProducts, type PaymentSchedule, type TaskPriority, type TrackTask } from "../sales/sales/salesApi";
 import { loadProducts, type Product as CatalogProduct } from "../settings/catalogApi";
-import { listCompanyFields, listContactFields, sessionUserId, saveContact, type CompanyField, type ContactField } from "../companies/companiesApi";
-import { countryLabel, formatAddress, languageName, linkedInHandle } from "../contacts/contactProfile";
+import { listCompanyFields, listContactFields, sessionUserId, saveContact, useRequiredFields, type CompanyField, type ContactField } from "../companies/companiesApi";
+import { countryLabel, formatAddress, languageName, linkedInHandle, isFixedRequired, missingFixed } from "../contacts/contactProfile";
 import Select from "../../framework/Select";
 import DatePicker from "../../framework/DatePicker";
 import "../../framework/MentionInput.css";
@@ -155,6 +155,89 @@ export function CompanyLogo({ name, website, className = "" }: { name: string; w
       )}
     </span>
   );
+}
+/* ---- Client → website lookup, shared by every page that only knows a client id or name (Management, …).
+   Loaded once per session in a few light queries, then read synchronously from memory. ---- */
+const siteKey = (s: unknown) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase()
+  .replace(/[.,]/g, " ").replace(/\b(s\s?a\s?u?|s\s?l\s?u?|s\s?c|inc|ltd|llc|gmbh|ag|bv|sas|srl|spa|plc|corp)\b/g, " ").replace(/\s+/g, " ").trim();
+const clientSites = new Map<string, string>();
+let clientSitesP: Promise<void> | null = null;
+let clientSitesVer = 0;
+const clientSiteSubs = new Set<(v: number) => void>();
+function loadClientSites(): Promise<void> {
+  if (clientSitesP) return clientSitesP;
+  clientSitesP = (async () => {
+    try {
+      const { data: cls } = await supabase.from("clients").select("id, name, company_id");
+      const clients = (cls ?? []) as { id: string; name: string | null; company_id: string | null }[];
+      const ids = Array.from(new Set(clients.map((c) => c.company_id).filter(Boolean))) as string[];
+      const cos: { id: string; name: string | null; legal_name?: string | null; website: string | null }[] = [];
+      for (let i = 0; i < ids.length; i += 200) {
+        const { data } = await supabase.from("companies").select("id, name, legal_name, website").in("id", ids.slice(i, i + 200));
+        cos.push(...((data ?? []) as any[]));
+      }
+      // clients with no linked company (or one with no website): look for a company with the same name
+      const byId = new Map(cos.map((c) => [c.id, c]));
+      const orphanNames = clients.filter((c) => c.name && !(c.company_id && byId.get(c.company_id)?.website)).map((c) => c.name as string);
+      for (let i = 0; i < orphanNames.length; i += 150) {
+        const { data } = await supabase.from("companies").select("id, name, legal_name, website").in("name", orphanNames.slice(i, i + 150)).not("website", "is", null);
+        cos.push(...((data ?? []) as any[]));
+      }
+      cos.forEach((c) => {
+        if (!c.website || !domainOf(c.website)) return;
+        clientSites.set(`co:${c.id}`, c.website);
+        [c.name, c.legal_name].forEach((n) => { const k = siteKey(n); if (k && !clientSites.has(`n:${k}`)) clientSites.set(`n:${k}`, c.website!); });
+      });
+      clients.forEach((c) => {
+        const w = (c.company_id && byId.get(c.company_id)?.website) || clientSites.get(`n:${siteKey(c.name)}`) || "";
+        if (w && domainOf(w)) { clientSites.set(`id:${c.id}`, w); const k = siteKey(c.name); if (k && !clientSites.has(`n:${k}`)) clientSites.set(`n:${k}`, w); }
+      });
+    } catch { /* no logos: the initials stay */ }
+    clientSitesVer++;
+    clientSiteSubs.forEach((f) => f(clientSitesVer));
+  })();
+  return clientSitesP;
+}
+/** Companies that aren't clients yet (e.g. incoming handoffs): asked for by id, batched, once each. */
+const companyAsked = new Set<string>();
+let companyQueue: string[] = [];
+let companyTimer: ReturnType<typeof setTimeout> | null = null;
+function askCompanySite(id: string) {
+  if (companyAsked.has(id)) return;
+  companyAsked.add(id); companyQueue.push(id);
+  if (companyTimer) return;
+  companyTimer = setTimeout(async () => {
+    const ids = companyQueue; companyQueue = []; companyTimer = null;
+    try {
+      for (let i = 0; i < ids.length; i += 200) {
+        const { data } = await supabase.from("companies").select("id, name, legal_name, website").in("id", ids.slice(i, i + 200));
+        ((data ?? []) as any[]).forEach((c) => {
+          if (!c.website || !domainOf(c.website)) return;
+          clientSites.set(`co:${c.id}`, c.website);
+          [c.name, c.legal_name].forEach((n: string | null) => { const k = siteKey(n); if (k && !clientSites.has(`n:${k}`)) clientSites.set(`n:${k}`, c.website); });
+        });
+      }
+    } catch { /* initials stay */ }
+    clientSitesVer++;
+    clientSiteSubs.forEach((f) => f(clientSitesVer));
+  }, 30);
+}
+/** The website we know for a client (by client id, company id, else by name); "" until loaded or when there is none. */
+export function useClientSite(name?: string | null, clientId?: string | null, companyId?: string | null): string {
+  const [, setV] = useState(clientSitesVer);
+  useEffect(() => {
+    clientSiteSubs.add(setV);
+    void loadClientSites();
+    return () => { clientSiteSubs.delete(setV); };
+  }, []);
+  useEffect(() => { if (companyId) askCompanySite(companyId); }, [companyId]);
+  return (clientId && clientSites.get(`id:${clientId}`)) || (companyId && clientSites.get(`co:${companyId}`))
+    || (name ? clientSites.get(`n:${siteKey(name)}`) : "") || "";
+}
+/** CompanyLogo for places that only know the client's id / company id / name. */
+export function ClientLogo({ name, clientId, companyId, website, className = "" }: { name: string; clientId?: string | null; companyId?: string | null; website?: string | null; className?: string }) {
+  const known = useClientSite(name, clientId, companyId);
+  return <CompanyLogo name={name || "?"} website={website || known} className={className} />;
 }
 const plain = (body: string) => body.replace(/@\[([^\]]+)\]\([^)]+\)/g, "@$1");
 const reduceMotion = () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
@@ -728,6 +811,9 @@ export default function ClientWorkspace({
   const [addPerson, setAddPerson] = useState<{ first: string; last: string; position: string; email: string; phone: string; billing: boolean } | null>(null);
   const [addPersonBusy, setAddPersonBusy] = useState(false);
   const [addPersonErr, setAddPersonErr] = useState<string | null>(null);
+  useRequiredFields();
+  /** "*" on a built-in contact field the team made required (only when the person goes into the CRM). */
+  const pReq = (k: string) => (co.id && isFixedRequired("contact", k) ? <em className="cw-req"> *</em> : null);
   const [addLine, setAddLine] = useState(false);
   const [schedEdit, setSchedEdit] = useState<{ id: string; v: PaymentSchedule } | null>(null);
   const [schedErr, setSchedErr] = useState<string | null>(null);
@@ -1155,8 +1241,13 @@ export default function ClientWorkspace({
   const openContact = (id: string) => navigate("/contacts", { state: { focusContactId: id } });
   const savePerson = async () => {
     if (!addPerson || !addPerson.first.trim()) return;
-    setAddPersonBusy(true); setAddPersonErr(null);
     const d = addPerson;
+    if (co.id) {
+      // the built-in fields this form shows that Settings › Contacts page makes required
+      const gap = missingFixed("contact", { last_name: d.last, position: d.position, email: d.email, phone: d.phone }, ["last_name", "position", "email", "phone"]);
+      if (gap.length) { setAddPersonErr(`Required — please fill in: ${gap.join(", ")}.`); return; }
+    }
+    setAddPersonBusy(true); setAddPersonErr(null);
     if (co.id) {
       const c: any = {
         first_name: d.first.trim(), last_name: d.last.trim() || null, position: d.position.trim() || null,
@@ -1550,10 +1641,10 @@ export default function ClientWorkspace({
                             <div className="cw-logform cw-addp">
                               <div className="cw-addp-grid">
                                 <label><span>First name</span><input autoFocus value={addPerson.first} onChange={(e) => setAddPerson({ ...addPerson, first: e.target.value })} /></label>
-                                <label><span>Last name</span><input value={addPerson.last} onChange={(e) => setAddPerson({ ...addPerson, last: e.target.value })} /></label>
-                                <label><span>Position</span><input value={addPerson.position} placeholder="e.g. CFO" onChange={(e) => setAddPerson({ ...addPerson, position: e.target.value })} /></label>
-                                <label><span>Email</span><input type="email" value={addPerson.email} onChange={(e) => setAddPerson({ ...addPerson, email: e.target.value })} /></label>
-                                <label><span>Phone</span><input type="tel" value={addPerson.phone} placeholder="+34 600 000 000" onChange={(e) => setAddPerson({ ...addPerson, phone: e.target.value })}
+                                <label><span>Last name{pReq("last_name")}</span><input value={addPerson.last} onChange={(e) => setAddPerson({ ...addPerson, last: e.target.value })} /></label>
+                                <label><span>Position{pReq("position")}</span><input value={addPerson.position} placeholder="e.g. CFO" onChange={(e) => setAddPerson({ ...addPerson, position: e.target.value })} /></label>
+                                <label><span>Email{pReq("email")}</span><input type="email" value={addPerson.email} onChange={(e) => setAddPerson({ ...addPerson, email: e.target.value })} /></label>
+                                <label><span>Phone{pReq("phone")}</span><input type="tel" value={addPerson.phone} placeholder="+34 600 000 000" onChange={(e) => setAddPerson({ ...addPerson, phone: e.target.value })}
                                   onKeyDown={(e) => { if (e.key === "Enter" && !addPersonBusy) void savePerson(); }} /></label>
                                 <button type="button" className={`cw-addp-bill ${addPerson.billing ? "is-on" : ""}`} onClick={() => setAddPerson({ ...addPerson, billing: !addPerson.billing })}>
                                   <i>{addPerson.billing && <Ico n="check" s={11} />}</i>Billing contact

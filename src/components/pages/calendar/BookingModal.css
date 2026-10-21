@@ -1436,3 +1436,57 @@
 .bm6-role small { font-size: 11.5px; color: var(--muted); white-space: nowrap; }
 .bm6-role:hover { border-color: color-mix(in srgb, var(--rc) 45%, transparent); background: color-mix(in srgb, var(--rc) 4%, #fff); }
 .bm6-role.is-on { border-color: color-mix(in srgb, var(--rc) 60%, transparent); background: color-mix(in srgb, var(--rc) 8%, #fff); box-shadow: 0 0 0 3px color-mix(in srgb, var(--rc) 14%, transparent); }
+
+/* ===== Day: move the entry to another day without losing anything ===== */
+.bm-day {
+  position: relative;
+  display: grid; grid-template-columns: 1fr auto; align-items: center;
+  gap: 7px 10px; margin-bottom: 12px;
+}
+.bm-day > .bm-range-lbl { grid-column: 1 / -1; }
+.bm-day-btn {
+  all: unset; box-sizing: border-box; cursor: pointer;
+  display: flex; align-items: center; gap: 14px; min-width: 0;
+  padding: 10px 14px 10px 10px; border-radius: 16px;
+  background: #fff; border: 1px solid rgba(18,181,127,0.24);
+  box-shadow: 0 1px 2px rgba(6,40,28,0.05);
+  transition: border-color .2s, box-shadow .25s, transform .25s cubic-bezier(0.16,1,0.3,1);
+}
+.bm-day-btn:hover { border-color: var(--emerald); box-shadow: 0 8px 22px -12px rgba(10,111,77,0.45); transform: translateY(-1px); }
+.bm-day-btn.is-open { border-color: var(--emerald); box-shadow: 0 0 0 4px rgba(18,181,127,0.14); }
+.bm-day-cal {
+  flex: none; width: 44px; height: 46px; border-radius: 11px; overflow: hidden;
+  display: flex; flex-direction: column; align-items: center;
+  background: linear-gradient(160deg, #0d8a5f, #0a6f4d); color: #fff;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.12), 0 6px 14px -8px rgba(10,111,77,0.8);
+}
+.bm-day-cal small {
+  width: 100%; text-align: center; padding: 3px 0 2px;
+  font-size: 9px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase;
+  background: rgba(255,255,255,0.14);
+}
+.bm-day-cal b { font-family: "Space Grotesk", sans-serif; font-size: 20px; line-height: 26px; font-weight: 700; }
+.bm-day-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.bm-day-txt b { font-family: "Space Grotesk", sans-serif; font-size: 15px; font-weight: 700; color: var(--forest); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bm-day-txt small { font-size: 11.5px; color: var(--muted); }
+.bm-day.is-moved .bm-day-txt small { color: #b7791f; font-weight: 600; }
+.bm-day.is-moved .bm-day-btn { border-color: rgba(214,158,46,0.55); background: linear-gradient(150deg, #fffaf0, #fff); }
+.bm-day-chg {
+  flex: none; display: inline-flex; align-items: center; gap: 4px;
+  padding: 6px 10px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 700; color: var(--forest);
+  background: rgba(18,181,127,0.1); transition: background .2s;
+}
+.bm-day-chg svg { width: 13px; height: 13px; transition: transform .25s; }
+.bm-day-btn:hover .bm-day-chg { background: rgba(18,181,127,0.18); }
+.bm-day-btn.is-open .bm-day-chg svg { transform: rotate(180deg); }
+.bm-day-undo {
+  all: unset; cursor: pointer; padding: 8px 12px; border-radius: 12px;
+  font-size: 12px; font-weight: 700; color: #b7791f;
+  background: rgba(214,158,46,0.12);
+  animation: bm-day-in .35s cubic-bezier(0.16,1,0.3,1);
+  transition: background .2s;
+}
+.bm-day-undo:hover { background: rgba(214,158,46,0.22); }
+.bm-day:not(.is-moved) .bm-day-btn { grid-column: 1 / -1; }
+@keyframes bm-day-in { from { opacity: 0; transform: translateX(-6px) scale(.96); } to { opacity: 1; transform: none; } }

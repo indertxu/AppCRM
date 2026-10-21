@@ -19,7 +19,11 @@ export type Source = "deal" | "company" | "both";
 export type ProbSource = "phase" | "rep" | "mgr" | "avg";
 
 export interface Row { deal: Tracking; contact: Contact | null; company: Company | null }
-export interface Field { key: string; group: Group; label: string; kind: Kind; options?: string[]; sum?: boolean; get: (r: Row) => any }
+export interface Field {
+  key: string; group: Group; label: string; kind: Kind; options?: string[]; sum?: boolean; get: (r: Row) => any;
+  /** Multiple-choice fields: the picked values, so "is any of" matches any of them. */
+  list?: (r: Row) => string[];
+}
 export interface Cond { id: string; field: string; op: string; a: string; b: string; vals: string[] }
 
 export const GROUP_LABEL: Record<Group, string> = { deal: "Deal", contact: "Contact", company: "Company" };
@@ -141,6 +145,7 @@ export function condTest(c: Cond, f: Field, r: Row): boolean {
   const empty = v == null || v === "";
   if (c.op === "is_empty") return empty;
   if (c.op === "is_set") return !empty;
+  if (f.kind === "enum" && f.list) { const hit = f.list(r).some((x) => c.vals.includes(x)); return c.op === "in" ? hit : !hit; }
   if (f.kind === "enum") { const s = empty ? "" : String(v); return c.op === "in" ? c.vals.includes(s) : !c.vals.includes(s); }
   if (f.kind === "text") { const has = !empty && norm(String(v)).includes(norm(c.a.trim())); return c.op === "contains" ? has : !has; }
   if (empty) return false;
@@ -220,9 +225,57 @@ function discover(rows: any[], group: Group, pick: (r: Row) => any, labels: Reco
   return out;
 }
 
+/* ─────────────── custom field definitions (contact_fields / company_fields) ─────────────── */
+
+export interface CustomDef { id: string; label: string; type: string; options: string[]; sort: number }
+/** Definitions per table, filled by loadFieldLabels — so every field a company defines is reportable, even before anyone fills it. */
+const DEFS: Record<string, CustomDef[]> = {};
+const DEF_TABLE: Partial<Record<Group, string>> = { contact: "contact_fields", company: "company_fields" };
+export const customDefs = (group: Group): CustomDef[] => DEFS[DEF_TABLE[group] ?? ""] ?? [];
+
+const asList = (v: any): string[] =>
+  Array.isArray(v) ? v.map(String).filter(Boolean) : v == null || v === "" ? [] : String(v).split(/\s*[,;|]\s*/).filter(Boolean);
+
+/** One report / export field for a custom field definition, typed by its definition. */
+export function customDefField(group: Group, d: CustomDef, pick: (r: Row) => any): Field {
+  const key = `${group}.custom.${d.id}`;
+  const raw = (r: Row) => pick(r)?.custom?.[d.id];
+  switch (d.type) {
+    case "boolean": return { key, group, label: d.label, kind: "enum", options: ["Yes", "No"], get: (r) => { const v = raw(r); return v === true || v === "true" ? "Yes" : v === false || v === "false" ? "No" : null; } };
+    case "select": return { key, group, label: d.label, kind: "enum", options: d.options, get: (r) => { const v = raw(r); return v == null || v === "" ? null : Array.isArray(v) ? v.join(", ") : String(v); } };
+    case "multiselect": return {
+      key, group, label: d.label, kind: "enum", options: d.options,
+      get: (r) => { const l = asList(raw(r)); return l.length ? l.join(", ") : null; },
+      list: (r) => asList(raw(r)),
+    };
+    case "number": return { key, group, label: d.label, kind: "number", get: (r) => { const v = raw(r); const n = Number(v); return v == null || v === "" || !Number.isFinite(n) ? null : n; } };
+    case "date": return { key, group, label: d.label, kind: "date", get: (r) => isoDay(raw(r)) };
+    default: return { key, group, label: d.label, kind: "text", get: (r) => { const v = raw(r); return v == null || v === "" ? null : Array.isArray(v) ? v.join(", ") : String(v); } };
+  }
+}
+
+/**
+ * Swap the data-guessed custom fields of a group for the defined ones: every
+ * definition (in the order set in Settings, typed properly — multiple choice
+ * included) plus any leftover key found in the data that has no definition.
+ */
+export function withCustomDefs<F extends Field>(fields: F[], group: Group, pick: (r: Row) => any): F[] {
+  const defs = [...customDefs(group)].sort((a, b) => a.sort - b.sort);
+  if (!defs.length) return fields;
+  const defined = new Set(defs.map((d) => `${group}.custom.${d.id}`));
+  const pre = `${group}.custom.`;
+  const plain = fields.filter((f) => !f.key.startsWith(pre));
+  const leftovers = fields.filter((f) => f.key.startsWith(pre) && !defined.has(f.key));
+  return [...plain, ...(defs.map((d) => customDefField(group, d, pick)) as F[]), ...leftovers];
+}
+
 export async function loadFieldLabels(table: string): Promise<Record<string, string>> {
   try {
     const { data } = await supabase.from(table).select("*");
+    DEFS[table] = (data ?? []).filter((f: any) => f.id && (f.label ?? f.name)).map((f: any) => ({
+      id: String(f.id), label: String(f.label ?? f.name), type: String(f.type ?? "text"),
+      options: Array.isArray(f.options) ? f.options.map(String) : [], sort: Number(f.sort ?? 0),
+    }));
     const map: Record<string, string> = {};
     (data ?? []).forEach((f: any) => {
       const label = f.label ?? f.name ?? f.title;
@@ -330,10 +383,10 @@ export function buildFields(ctx: EngineCtx): Field[] {
   ];
   const contact: Field[] = [
     { key: "contact.name", group: "contact", label: "Full name", kind: "text", get: (r) => (r.contact ? [(r.contact as any).first_name, (r.contact as any).last_name].filter(Boolean).join(" ") || null : null) },
-    ...discover(ctx.contacts, "contact", (r) => r.contact, ctx.contactLabels).filter((f) => !/compan/i.test(f.key)),
+    ...withCustomDefs(discover(ctx.contacts, "contact", (r) => r.contact, ctx.contactLabels).filter((f) => !/compan/i.test(f.key) || f.key.startsWith("contact.custom.")), "contact", (r) => r.contact),
     { key: "contact.company", group: "contact", label: "Company", kind: "text", get: (r) => { const cc = ofContact(r.contact); return cc ? (cc.id ? (companyById.get(cc.id) as any)?.name ?? null : cc.name) : null; } },
   ];
-  const company = discover(ctx.companies, "company", (r) => r.company, ctx.companyLabels);
+  const company = withCustomDefs(discover(ctx.companies, "company", (r) => r.company, ctx.companyLabels), "company", (r) => r.company);
   return [...deal, ...contact, ...company];
 }
 
@@ -346,6 +399,7 @@ export function buildFields(ctx: EngineCtx): Field[] {
 export function dealCustomFields(defs: TrackingField[]): Field[] {
   return defs.map((d): Field => {
     const raw = (r: Row) => (r.deal as any).custom?.[d.id];
+    if ((d.type as string) === "multiselect") return { ...customDefField("deal", { id: d.id, label: d.label, type: "multiselect", options: d.options, sort: d.sort }, (r) => r.deal), key: `deal.custom.${d.id}` };
     if (d.type === "boolean") return { key: `deal.custom.${d.id}`, group: "deal", label: d.label, kind: "enum", options: ["Yes", "No"], get: (r) => { const v = raw(r); return v === true ? "Yes" : v === false ? "No" : null; } };
     if (d.type === "select") return { key: `deal.custom.${d.id}`, group: "deal", label: d.label, kind: "enum", options: d.options, get: (r) => { const v = raw(r); return v == null || v === "" ? null : String(v); } };
     if (d.type === "number") return { key: `deal.custom.${d.id}`, group: "deal", label: d.label, kind: "number", get: (r) => { const v = raw(r); const n = Number(v); return v == null || v === "" || !Number.isFinite(n) ? null : n; } };

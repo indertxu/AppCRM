@@ -5,6 +5,7 @@ import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { supabase } from "../../api/supabase";
 import { listHandoffs, dismissHandoff, type Handoff } from "../sales/sales/salesApi";
 import { roleLinesOfRow } from "../clients/clientsTypes";
+import { ClientLogo } from "../clients/ClientWorkspace";
 import Select from "../../framework/Select";
 import IncomingConvertModal from "./IncomingConvertModal";
 import { HandoffInfo } from "../sales/trackings/HandoffConfirmServices";
@@ -16,7 +17,6 @@ const ago = (iso: string) => {
   const d = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
   return d <= 0 ? "today" : d === 1 ? "yesterday" : d < 30 ? `${d} days ago` : fmtDate(iso);
 };
-const monogram = (s: string) => s.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
 const num = (n: number) => Number(n).toLocaleString("es-ES", { maximumFractionDigits: 2 });
 
 /* ===================================================================
@@ -292,7 +292,7 @@ export default function IncomingPanel() {
   return (
     <div className="ic" onPointerMove={icSpot}>
       {/* ---------- headline cards on the dark band ---------- */}
-      {rows.length > 0 && (
+      {(
         <section className="ic-hero">
           <div className="ic-kpis">
             <div className="ic-kpi is-main" data-spot="tilt" style={icVars({ "--i": 0 })}>
@@ -325,7 +325,8 @@ export default function IncomingPanel() {
                 <span className="ic-kpi-label">By service</span>
               </span>
               <ul className="ic-mix">
-                {stats.byType.slice(0, 4).map(([label, s], i) => (
+                {stats.byType.length === 0 && <li className="ic-mix-more">Nothing incoming yet</li>}
+                {stats.byType.slice(0, 3).map(([label, s], i) => (
                   <li key={label} style={icVars({ "--d": i })}>
                     <span className="ic-mix-name"><em>{s.count}×</em>{label}</span>
                     <span className="ic-mix-days">{num(s.days)}d</span>
@@ -333,7 +334,7 @@ export default function IncomingPanel() {
                     <span className="ic-mix-bar" aria-hidden="true"><i style={{ width: `${(s.value / mixMax) * 100}%` }} /></span>
                   </li>
                 ))}
-                {stats.byType.length > 4 && <li className="ic-mix-more">+{stats.byType.length - 4} more</li>}
+                {stats.byType.length > 3 && <li className="ic-mix-more">+{stats.byType.length - 3} more</li>}
               </ul>
             </div>
           </div>
@@ -416,7 +417,7 @@ export default function IncomingPanel() {
                 >
                   <div className="ic-row-main ic-grid" data-spot="">
                     <span className="ic-who">
-                      <span className="ic-av">{blocked ? <IcIcon d={IC_ICON.lock} w={2} /> : monogram(h.company_name || "?")}</span>
+                      {blocked ? <span className="ic-av"><IcIcon d={IC_ICON.lock} w={2} /></span> : <ClientLogo className="ic-av mg-logo" name={h.company_name || "?"} companyId={h.company_id} />}
                       <span className="ic-who-t">
                         <span className="ic-name">
                           <b>{h.company_name || "Unknown company"}</b>

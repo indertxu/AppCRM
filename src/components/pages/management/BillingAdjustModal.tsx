@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import type { CSSProperties } from "react";
 import { roleCounts, roleNameOf, roleColor, type ClientRole } from "../clients/clientsTypes";
+import { ClientLogo } from "../clients/ClientWorkspace";
 import "./BillingAdjustModal.css";
 
 /** A bill line: the role the time was logged on (role id; legacy rows: a line name). */
@@ -190,7 +191,7 @@ export default function BillingAdjustModal({
       <div className="ba" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={`Adjust ${clientName} ${periodLabel}`}>
         <header className="ba-head">
           <div className="ba-head-main">
-            <span className="ba-av">{clientName.charAt(0).toUpperCase()}</span>
+            <ClientLogo className="ba-av mg-logo" name={clientName} clientId={bill.clientId} />
             <div className="ba-id">
               <h2 className="ba-name">{clientName}</h2>
               <span className="ba-sub">{bill.type} · {periodLabel}</span>

@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Fragment, useEffect, useId, useMemo, useRef, useState } from "react";
-import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { PageCover, PageLoader } from "../../framework/AppLayout";
 import { supabase } from "../../api/supabase";
@@ -21,6 +21,7 @@ import IncomingPanel from "./IncomingPanel";
 import MgmtSecurityModal from "./MgmtSecurityModal";
 import { useMgmtAccess, type Level } from "./mgmtAccess";
 import { useInactiveIds } from "../../framework/peopleStatus";
+import { ClientLogo } from "../clients/ClientWorkspace";
 import "./ManagementPage.css";
 
 const MONTHS_FULL = [
@@ -250,6 +251,8 @@ const TM_ICON = {
   money: "M12 3v18M16.5 6.5H10a3 3 0 0 0 0 6h4a3 3 0 0 1 0 6H7",
   swap: "M16 3l4 4-4 4M4 7h16M8 21l-4-4 4-4M20 17H4",
   arrow: "M5 12h14M13 6l6 6-6 6",
+  team: "M16 19v-1a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v1M9 10a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM22 19v-1a4 4 0 0 0-3-3.87M16 3.13a3.5 3.5 0 0 1 0 6.75",
+  rate: "M4 19V9M10 19V5M16 19v-7M22 19H2",
   sliders: "M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0M14 4v4M8 10v4M16 16v4",
 };
 function TmIcon({ d, w = 2 }: { d: string; w?: number }) {
@@ -362,6 +365,20 @@ function TeamKpi({
         <span><i className="is-proj" />With planned<b>{goal > 0 ? `${Math.round(projPct)}%` : "–"}</b></span>
       </span>
     </button>
+  );
+}
+
+/** A compact headline card on the Team band: label, one figure and a footer of facts. */
+function TeamStat({ index, icon, label, value, unit, fmt, children }: {
+  index: number; icon: string; label: string; value: number; unit?: string;
+  fmt: (n: number) => string; children?: ReactNode;
+}) {
+  return (
+    <div className="tm-kpi tm-stat" data-spot="tilt" style={tmVars({ "--i": index })}>
+      <span className="tm-kpi-label"><span className="tm-kpi-ico"><TmIcon d={icon} /></span>{label}</span>
+      <b className="tm-kpi-val"><TmCount value={value} format={fmt} />{unit && <em>{unit}</em>}</b>
+      {children}
+    </div>
   );
 }
 
@@ -529,31 +546,111 @@ function TeamCard({
 }
 
 
-/* The dark header floats as a rounded card (index.css: .fh). The card is sized to the header + figures
-   (they change height with the data, the tab and the width) and a soft glow follows the pointer over it. */
-function useFloatingHero(ref: { current: HTMLElement | null }, sel: string) {
-  useEffect(() => {
-    const root = ref.current;
+/* The dark header floats as a rounded card (index.css: .fh). Every tab gives its
+   headline cards the same fixed height (--mg-hero-h), so the card is sized from the
+   title bar plus that height — known before any data loads, identical on every tab,
+   measured before paint — and only shrinks while a panel scrolls its cards away. */
+const MG_HERO = ".tm-hero, .bl-hero, .bn-hero, .bp-hero, .ic-hero";
+const mgLiveHero = (root: HTMLElement) =>
+  Array.from(root.querySelectorAll<HTMLElement>(MG_HERO)).find((el) => !el.closest(".mg-xfade")) ?? null;
+function useFloatingHero(root: HTMLElement | null) {
+  useLayoutEffect(() => {
     if (!root) return;
     let raf = 0;
+    let heroH = 0;
+    const readH = () => {
+      const v = parseFloat(getComputedStyle(root).getPropertyValue("--mg-hero-h"));
+      heroH = Number.isFinite(v) ? v : 0;
+    };
     const measure = () => {
       raf = 0;
-      const rt = root.getBoundingClientRect();
-      let bottom = 0;
-      root.querySelectorAll<HTMLElement>(sel).forEach((el) => {
-        const r = el.getBoundingClientRect();
-        if (r.height > 0) bottom = Math.max(bottom, r.bottom - rt.top + root.scrollTop);
-      });
-      root.style.setProperty("--fh-h", `${Math.max(0, Math.round(bottom - 22))}px`);
+      const bar = root.querySelector<HTMLElement>(":scope > .mg-bar");
+      if (!bar) return;
+      // Layout box, not the painted one: the bar rises in with a transform on load.
+      const barB = bar.offsetParent === root ? bar.offsetTop + bar.offsetHeight
+        : bar.getBoundingClientRect().bottom - root.getBoundingClientRect().top + root.scrollTop;
+      const hero = mgLiveHero(root);
+      const has = hero ? "1" : "0";
+      if (root.dataset.hero !== has) root.dataset.hero = has;
+      // Only a panel that scrolls as a whole (a direct child) carries its cards away.
+      const sc = hero?.parentElement;
+      const cut = sc && sc.parentElement === root ? Math.max(0, sc.scrollTop) : 0;
+      root.style.setProperty("--mg-bar-b", `${Math.round(barB)}px`);
+      root.style.setProperty("--fh-h", `${Math.max(0, Math.round(barB - 22 + Math.max(0, heroH + 10 - cut)))}px`);
     };
     const queue = () => { if (!raf) raf = requestAnimationFrame(measure); };
-    const ro = new ResizeObserver(queue);
-    const watch = () => { ro.observe(root); root.querySelectorAll<HTMLElement>(sel).forEach((el) => ro.observe(el)); };
-    watch(); measure();
-    const mo = new MutationObserver(() => { watch(); queue(); });
+    const ro = new ResizeObserver(() => { readH(); queue(); });
+    const bar = root.querySelector<HTMLElement>(":scope > .mg-bar");
+    ro.observe(root); if (bar) ro.observe(bar);
+    readH(); measure();
+    // Tabs and loading states swap the panel: re-check which hero is live.
+    const mo = new MutationObserver(queue);
     mo.observe(root, { childList: true, subtree: true });
-    return () => { ro.disconnect(); mo.disconnect(); if (raf) cancelAnimationFrame(raf); };
-  });
+    if (document.fonts?.ready) document.fonts.ready.then(() => { readH(); queue(); });
+    // When a panel scrolls, its headline cards scroll up under the title bar.
+    // Fade them out and feather their cut edge so no clipped fragments show,
+    // and re-measure every frame so the dark card shrinks with them.
+    const HERO = ":scope > .tm-hero, :scope > .bl-hero, :scope > .bn-hero, :scope > .bp-hero, :scope > .ic-hero";
+    let sraf = 0; let scroller: HTMLElement | null = null;
+    const paint = () => {
+      sraf = 0;
+      const t = scroller; if (!t) return;
+      const hero = t.querySelector<HTMLElement>(HERO);
+      if (!hero) return;
+      const y = t.scrollTop, h = hero.offsetHeight || 1;
+      if (y <= 0) {
+        hero.style.opacity = ""; hero.style.maskImage = ""; hero.style.webkitMaskImage = ""; hero.style.pointerEvents = "";
+      } else {
+        const p = Math.min(1, y / (h * 0.55));
+        const m = `linear-gradient(180deg, transparent ${y}px, #000 ${y + 56}px)`;
+        hero.style.opacity = String(+(1 - p).toFixed(3));
+        hero.style.maskImage = m; hero.style.webkitMaskImage = m;
+        hero.style.pointerEvents = p > 0.6 ? "none" : "";
+      }
+      measure();
+    };
+    const onScroll = (e: Event) => {
+      const t = e.target;
+      if (!(t instanceof HTMLElement) || t.parentElement !== root) return;
+      scroller = t;
+      if (!sraf) sraf = requestAnimationFrame(paint);
+    };
+    root.addEventListener("scroll", onScroll, { capture: true, passive: true });
+    return () => {
+      ro.disconnect(); mo.disconnect(); if (raf) cancelAnimationFrame(raf); if (sraf) cancelAnimationFrame(sraf);
+      root.removeEventListener("scroll", onScroll, { capture: true } as EventListenerOptions);
+    };
+  }, [root]);
+}
+/**
+ * Switching tabs keeps the dark card where it is: the outgoing headline cards are
+ * copied into a still layer that fades out while the incoming ones rise in, and the
+ * card eases back to full height if the old panel had scrolled its cards away.
+ */
+function mgCrossfade(root: HTMLElement | null) {
+  if (!root) return;
+  root.querySelectorAll(".mg-xfade").forEach((n) => n.remove());
+  const w = window as unknown as { __mgTabT?: number };
+  window.clearTimeout(w.__mgTabT);
+  root.dataset.tabbing = "1";
+  w.__mgTabT = window.setTimeout(() => { delete root.dataset.tabbing; }, 650);
+  if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+  const hero = mgLiveHero(root);
+  if (!hero || !hero.parentElement) return;
+  const rt = root.getBoundingClientRect();
+  const hr = hero.getBoundingClientRect();
+  if (hr.height < 4) return;
+  const shell = hero.parentElement.cloneNode(false) as HTMLElement;
+  shell.removeAttribute("style");
+  shell.appendChild(hero.cloneNode(true));
+  const ghost = document.createElement("div");
+  ghost.className = "mg-xfade";
+  ghost.setAttribute("aria-hidden", "true");
+  ghost.style.top = `${Math.round(hr.top - rt.top + root.scrollTop)}px`;
+  ghost.style.height = `${Math.round(hr.height)}px`;
+  ghost.appendChild(shell);
+  root.appendChild(ghost);
+  window.setTimeout(() => ghost.remove(), 460);
 }
 function fhMove(e: { clientX: number; clientY: number; currentTarget: HTMLElement; pointerType?: string }) {
   if (e.pointerType && e.pointerType !== "mouse") return;
@@ -568,8 +665,10 @@ function fhMove(e: { clientX: number; clientY: number; currentTarget: HTMLElemen
 const fhLeave = (e: { currentTarget: HTMLElement }) => e.currentTarget.style.setProperty("--fh-on", "0");
 
 export default function ManagementPage() {
-  const fhRef = useRef<HTMLDivElement>(null);
-  useFloatingHero(fhRef, ".mg-bar, .tm-hero, .bl-hero, .bn-hero, .bp-hero");
+  const fhRef = useRef<HTMLDivElement | null>(null);
+  const [fhEl, setFhEl] = useState<HTMLDivElement | null>(null);
+  const fhSet = useCallback((el: HTMLDivElement | null) => { fhRef.current = el; if (el) setFhEl(el); }, []);
+  useFloatingHero(fhEl);
   const navigate = useNavigate();
   const [anchor, setAnchor] = useState(() => new Date());
   const [scope, setScope] = useState<Scope>("month");
@@ -1376,6 +1475,15 @@ const moneyGoal =
 const totalDaysPlanned = rows.reduce((s, r) => s + r.daysPlanned, 0);
   const teamDayGoal = rows.reduce((s, r) => s + goalsFor(r.userId).days, 0);
 const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
+  /** How many consultants sit below their minimum, meet it or reach the high tier. */
+  const teamTones = rows.reduce((acc, r) => {
+    const g = goalsFor(r.userId);
+    const set = [tmTone(g.days, g.daysHigh, r.daysDone), tmTone(g.money, g.moneyHigh, r.amountDone)].filter((t) => t !== "none");
+    const o: TmTone = set.length === 0 ? "none" : set.includes("red") ? "red" : set.every((t) => t === "purple") ? "purple" : "green";
+    acc[o] += 1;
+    return acc;
+  }, { none: 0, red: 0, green: 0, purple: 0 } as Record<TmTone, number>);
+  const teamTargeted = teamTones.red + teamTones.green + teamTones.purple;
 
   const dayPct = teamDayGoal > 0 ? (totalDays / teamDayGoal) * 100 : 0;
   const moneyPct = teamMoneyGoal > 0 ? (totalDone / teamMoneyGoal) * 100 : 0;
@@ -1602,7 +1710,7 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
   }
 
   return (
-    <div ref={fhRef} onPointerMove={fhMove} onPointerLeave={fhLeave}
+    <div ref={fhSet} onPointerMove={fhMove} onPointerLeave={fhLeave}
       className={`mg mg-tab-${tab} ${tab === "team" || tab === "backlog" || tab === "billing" || tab === "bonus" || tab === "incoming" ? "mg-dark fh" : ""}`}>
       <LoadingOverlay show={loading} />
       <header className="mg-bar">
@@ -1613,7 +1721,7 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
             <span className="mg-tabseg-slider" style={{ transform: `translateX(${Math.max(0, visibleTabs.findIndex((t) => t.key === tab)) * 84}px)` }} />
             {visibleTabs.map((t) => (
               <button key={t.key} className={tab === t.key ? "is-on" : ""}
-                onClick={() => { setTab(t.key); if (t.key === "billing") setScope("month"); }}>
+                onClick={() => { if (t.key === tab) return; mgCrossfade(fhRef.current); setTab(t.key); if (t.key === "billing") setScope("month"); }}>
                 {t.label}
               </button>
             ))}
@@ -1686,6 +1794,13 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
           )}
         </div>
       </header>
+
+      {/* Same-size placeholders while a tab has no headline cards yet (loading). */}
+      <div className="mg-hero-skel" aria-hidden="true">
+        {Array.from({ length: tab === "billing" ? 5 : tab === "incoming" ? 3 : 4 }, (_, i) => (
+          <span key={i} style={tmVars({ "--i": i })}><i /><b /><em /></span>
+        ))}
+      </div>
 
       {targetFor && (
         <UserTargetModal
@@ -1779,6 +1894,26 @@ minPerMonth: targets.minPerMonth,
                 onToggle={() => setKpiBreakdown((prev) => ({ ...prev, [c.key]: !prev[c.key] }))}
               />
             ))}
+            <TeamStat index={2} icon={TM_ICON.team} label="On target" value={teamTones.green + teamTones.purple}
+              unit={`/ ${teamTargeted || rows.length}`} fmt={(n) => Math.round(n).toLocaleString()}>
+              <span className="tm-stat-bar" aria-hidden="true">
+                {(["red", "green", "purple"] as const).map((t) => (
+                  <i key={t} className={`tone-${t}`} style={{ flexGrow: teamTones[t] }} />
+                ))}
+              </span>
+              <span className="tm-stat-facts">
+                <span className="tone-red"><i />{teamTones.red} below</span>
+                <span className="tone-green"><i />{teamTones.green} met</span>
+                <span className="tone-purple"><i />{teamTones.purple} high</span>
+              </span>
+            </TeamStat>
+            <TeamStat index={3} icon={TM_ICON.rate} label="Avg day rate" value={totalDays > 0 ? totalDone / totalDays : 0}
+              unit="€/day" fmt={(n) => Math.round(n).toLocaleString()}>
+              <span className="tm-stat-facts is-plain">
+                <span><b>{rows.length ? (+(totalDays / rows.length).toFixed(1)).toLocaleString() : 0}d</b>per consultant</span>
+                <span><b>{rows.length ? Math.round(totalDone / rows.length).toLocaleString() : 0} €</b>each</span>
+              </span>
+            </TeamStat>
           </div>
         </section>
 
@@ -2009,8 +2144,8 @@ minPerMonth: targets.minPerMonth,
                               <p className="cm-empty" style={{ padding: "6px 4px" }}>No entries.</p>
                             ) : feed.map((e) => (
                               <div className="cm-dl-row" key={e.id}>
-                                <span className="cm-dl-date">
-                                  {e.date}
+                                <span className="cm-dl-date" title={e.date}>
+                                  {(() => { const d = new Date(e.date + "T00:00:00"); return isNaN(+d) ? e.date : d.toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", month: "short", year: "numeric" }); })()}
                                   {e.billingPeriod && <span className="cm-dl-moved">→ {e.billingPeriod}</span>}
                                 </span>
                                 <span className={`cm-dl-status is-${e.status}`}>{e.status}</span>
@@ -2079,7 +2214,7 @@ minPerMonth: targets.minPerMonth,
                     <div className="cn-tr" key={i}>
                       <span className="cn-date">{fmtDay(e.date)}</span>
                       <span className="cn-user">{e.user}</span>
-                      <span className="cn-proj"><b>{e.client}</b> · {e.project}{roles.filter((x) => !x.countsForTarget).length > 1 ? ` · ${e.role}` : ""}</span>
+                      <span className="cn-proj"><ClientLogo className="mg-logo mg-logo-xs" name={e.client} /><b>{e.client}</b> · {e.project}{roles.filter((x) => !x.countsForTarget).length > 1 ? ` · ${e.role}` : ""}</span>
                       <span className="cn-r cn-d">{(+e.days.toFixed(2)).toLocaleString()}</span>
                       <b className="cn-r cn-v">{Math.round(e.value).toLocaleString()} €</b>
                     </div>

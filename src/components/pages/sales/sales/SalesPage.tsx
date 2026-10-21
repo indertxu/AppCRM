@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode, PointerEvent as ReactPointerEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import SalesMultiFilter from "./SalesMultiFilter";
@@ -30,6 +30,7 @@ import {
   loadSalesRoles, loadHandovers, loadAllPhaseEvents, frozenCopy, planHandover, performHandover,
   type SalesRole, type TrackingHandover, type HandoverPlan,
 } from "../extras/salesRolesApi";
+import { domainOf, logoCandidates } from "../../clients/clientsTypes";
 import "../../companies/CompaniesPage.css";
 import "./SalesPage.css";
 import "../trackings/Handover.css";
@@ -335,6 +336,7 @@ async function companiesByIds(ids: (string | null | undefined)[]): Promise<Compa
 
 /** How many rows the list draws at first; more follow as you scroll. */
 const LIST_STEP = 60;
+const NO_PHASES: Phase[] = [];
 
 // ============================ Deals list columns ============================
 /** The rich built-in columns (as before) plus plain ones; the deal column is always first. */
@@ -441,8 +443,12 @@ function DealColumns({ all, cols, onChange }: { all: ColDef[]; cols: string[]; o
 /* The dark header floats as a rounded card (index.css: .fh). The card is sized to the header + figures
    (they change height with the data, the tab and the width) and a soft glow follows the pointer over it. */
 function useFloatingHero(ref: { current: HTMLElement | null }, sel: string) {
+  // Set up once per mounted header (the page swaps to a deal and back), not on every render.
+  const live = useRef<{ root: HTMLElement; stop: () => void } | null>(null);
   useEffect(() => {
     const root = ref.current;
+    if (live.current?.root === root) return;
+    live.current?.stop(); live.current = null;
     if (!root) return;
     let raf = 0;
     const measure = () => {
@@ -457,12 +463,16 @@ function useFloatingHero(ref: { current: HTMLElement | null }, sel: string) {
     };
     const queue = () => { if (!raf) raf = requestAnimationFrame(measure); };
     const ro = new ResizeObserver(queue);
-    const watch = () => { ro.observe(root); root.querySelectorAll<HTMLElement>(sel).forEach((el) => ro.observe(el)); };
-    watch(); measure();
+    const seen = new WeakSet<Element>();
+    const watch = () => { root.querySelectorAll<HTMLElement>(sel).forEach((el) => { if (!seen.has(el)) { seen.add(el); ro.observe(el); } }); };
+    ro.observe(root); watch(); measure();
+    // Only the header's own children matter; the (long) list below never triggers a re-measure.
     const mo = new MutationObserver(() => { watch(); queue(); });
-    mo.observe(root, { childList: true, subtree: true });
-    return () => { ro.disconnect(); mo.disconnect(); if (raf) cancelAnimationFrame(raf); };
+    root.querySelectorAll<HTMLElement>(":scope > *").forEach((el) => { if (!el.querySelector(".so-list")) mo.observe(el, { childList: true, subtree: true }); });
+    mo.observe(root, { childList: true });
+    live.current = { root, stop: () => { ro.disconnect(); mo.disconnect(); if (raf) cancelAnimationFrame(raf); } };
   });
+  useEffect(() => () => { live.current?.stop(); live.current = null; }, []);
 }
 function fhMove(e: { clientX: number; clientY: number; currentTarget: HTMLElement; pointerType?: string }) {
   if (e.pointerType && e.pointerType !== "mouse") return;
@@ -475,6 +485,28 @@ function fhMove(e: { clientX: number; clientY: number; currentTarget: HTMLElemen
   root.style.setProperty("--fh-on", x >= 0 && y >= 0 && y <= h && x <= r.width - 28 ? "1" : "0");
 }
 const fhLeave = (e: { currentTarget: HTMLElement }) => e.currentTarget.style.setProperty("--fh-on", "0");
+/* The page's pointer effects (header glow, card spotlights) run at most once a frame, and only over the dark
+   header: below it they're switched off once, so moving over the list never restyles the whole page. */
+let soRaf = 0;
+let soLast: { x: number; y: number; root: HTMLElement; target: HTMLElement; type: string } | null = null;
+function soPointer(e: ReactPointerEvent<HTMLElement>) {
+  if (e.pointerType !== "mouse") return;
+  soLast = { x: e.clientX, y: e.clientY, root: e.currentTarget, target: e.target as HTMLElement, type: e.pointerType };
+  if (soRaf) return;
+  soRaf = requestAnimationFrame(() => {
+    soRaf = 0;
+    const l = soLast; if (!l) return;
+    const root = l.root;
+    const h = parseFloat(root.style.getPropertyValue("--fh-h")) || 0;
+    const top = root.getBoundingClientRect().top;
+    if (l.y - top + root.scrollTop > h + 40) {
+      if (root.style.getPropertyValue("--fh-on") !== "0") root.style.setProperty("--fh-on", "0");
+      return;
+    }
+    fhMove({ clientX: l.x, clientY: l.y, currentTarget: root, pointerType: l.type });
+    soSpotlight({ pointerType: l.type, target: l.target, clientX: l.x, clientY: l.y } as unknown as ReactPointerEvent<HTMLElement>);
+  });
+}
 
 /**
  * The Deals page. With `settings`, the same page renders as Settings › Deals page instead:
@@ -1177,6 +1209,12 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   /** The list arrived after the skeleton (first load): rows rise in right away, no entrance delay. */
   const [loadedLate] = useState(() => !snap0);
 
+  // Rows are memoised: they get stable handlers (reading the latest state through a ref)
+  // and a revision that changes whenever data a plain column shows changes.
+  const rowApi = useRef<{ open: (id: string) => void; toggle: (id: string, range: boolean) => void; cell: (k: string, t: Tracking) => ReactNode }>({ open: () => {}, toggle: () => {}, cell: () => null });
+  const rowOpen = useCallback((id: string) => rowApi.current.open(id), []);
+  const rowToggle = useCallback((id: string, range: boolean) => rowApi.current.toggle(id, range), []);
+  const rowCell = useCallback((k: string, t: Tracking) => rowApi.current.cell(k, t), []);
   // Big lists draw in steps: the first rows now, the next ones as you scroll near the end.
   const [listCap, setListCap] = useState(LIST_STEP);
   useEffect(() => { setListCap(LIST_STEP); }, [shown]);
@@ -1193,6 +1231,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
 
   // ---- Multi-select (list and board): act on many deals at once ----
   const bulk = useBulkSelection(view === "list" ? shown.slice(0, listCap).map((t) => t.id) : view === "kanban" ? shown.filter((t) => t.pipeline_id === kanbanPipe).map((t) => t.id) : []);
+  const rowRev = useMemo(() => ({}), [trackOwners, trackAssignees, potentialTotals, trackingFields, companies, pipelines, products, employees, probView]); // eslint-disable-line react-hooks/exhaustive-deps
   const [exportIds, setExportIds] = useState<string[] | null>(null);
   const canAssignDeals = canManage || !!(me && (me.is_superadmin || ["boss", "sales_manager"].includes(me.role)));
   /** Selected deals that can be changed (handed-over ones are a frozen copy). */
@@ -1374,6 +1413,8 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
     return "";
   };
 
+  rowApi.current = { open: (id) => setOpenId(id), toggle: (id, range) => bulk.toggle(id, range), cell: plainCell };
+
   const exportModal = exporting && (
     <ExportModal
       deals={exportIds ? exportDeals.filter((t) => exportIds.includes(t.id)) : exportDeals}
@@ -1477,7 +1518,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   }
 
   return (
-    <div className="sl sl-ov fh" ref={fhRef} onPointerMove={(e) => { soSpotlight(e); fhMove(e); }} onPointerLeave={fhLeave}>
+    <div className="sl sl-ov fh" ref={fhRef} onPointerMove={soPointer} onPointerLeave={fhLeave}>
       <header className="sl-head">
         <button className="sl-back" onClick={() => navigate("/home")} aria-label="Back">‹</button>
         <h1 className="sl-title">Deals</h1>
@@ -1628,6 +1669,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
             potentialTotals={potentialTotals}
             trackTitle={trackTitle}
             companyName={companyName}
+            companyWebsite={(id) => (id ? companyById.get(id)?.website ?? null : null)}
             onOpen={(id) => setOpenId(id)}
             onMove={(id, phaseId, phs) => {
               // dragging one of several ticked cards moves all of them
@@ -1661,7 +1703,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
           </div>
         ) : (
           <div className="sl-scroll so-xscroll">
-            <div className="so-cols" style={{ ["--so-cols" as string]: colTemplate, ["--so-minw" as string]: `${colMinW}px` } as CSSProperties}>
+            <div className="so-cols dz-table" style={{ ["--so-cols" as string]: colTemplate, ["--so-minw" as string]: `${colMinW}px` } as CSSProperties}>
             {/* One header for the whole list, so rows don't repeat a label under every figure. */}
             <div className="so-thead">
               <span className="so-th-deal"><BulkCheck on={bulk.allOn} partial={bulk.someOn} onToggle={bulk.toggleAll} label="Select every deal shown" />{headBtn("deal", "Deal")}</span>
@@ -1681,17 +1723,17 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
                 onClose={() => setHeadPop(null)}
                 probLabel={probView === "rep" ? "Sales estimate" : probView === "mgr" ? "Management estimate" : probView === "avg" ? "Average estimate" : "Phase probability"} />
             )}
-            <div className={`so-list ${loadedLate ? "is-after-load" : ""}`}>
-              {shown.slice(0, listCap).map((t, i) => (
+            <div className={`so-list dz-list ${loadedLate ? "is-after-load" : ""}`}>
+              {shown.slice(0, listCap).map((t) => (
                 <TrackingRow
                   key={t.id}
-                  index={i}
                   tracking={t}
                   title={trackTitle(t)}
                   company={companyName(t.company_id)}
+                  website={t.company_id ? companyById.get(t.company_id)?.website ?? null : null}
                   contactCount={t.contactIds.length}
                   pipeline={pipelineName(t.pipeline_id)}
-                  phases={phaseByPipe[t.pipeline_id ?? ""] ?? []}
+                  phases={phaseByPipe[t.pipeline_id ?? ""] ?? NO_PHASES}
                   product={productName(t.product_id)}
                   revenue={potentialTotals[t.id!] ?? 0}
                   ownerName={trackOwners[t.id] ? (employeeById.get(trackOwners[t.id])?.name ?? null) : null}
@@ -1699,12 +1741,13 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
                   closeProbOverride={shownProbOf(t)}
                   probLabel={probView === "phase" ? "close" : probView === "rep" ? "sales" : probView === "mgr" ? "mgmt" : "avg"}
                   handedOver={frozenById.has(t.id)}
-                  onOpen={() => setOpenId(t.id)}
+                  onOpen={rowOpen}
                   selected={bulk.has(t.id)}
                   selecting={bulk.active}
-                  onToggle={(range) => bulk.toggle(t.id, range)}
+                  onToggle={rowToggle}
                   cols={activeCols}
-                  cell={(k) => plainCell(k, t)}
+                  cell={rowCell}
+                  rev={rowRev}
                 />
               ))}
               {shown.length > listCap && (
@@ -1764,20 +1807,53 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   );
 }
 
-function TrackingRow({ tracking, title, company, contactCount, pipeline, phases, product, revenue, ownerName, closeDate, closeProbOverride, probLabel, onOpen, index = 0, handedOver = false, selected = false, selecting = false, onToggle, cols = BUILTIN_COLS, cell }: {
+/* ---- Company logo for a deal: the site's icon over the initial, cached per domain so a long list fetches each once ---- */
+const dlLogoGood = new Map<string, string>();
+const dlLogoNext = new Map<string, number>();
+const dlLogoBad = new Set<string>();
+function DealLogo({ name, website, className = "" }: { name: string; website?: string | null; className?: string }) {
+  const d = domainOf(website) ?? "";
+  const cands = useMemo(() => logoCandidates(website), [website]);
+  const [i, setI] = useState(() => dlLogoNext.get(d) ?? 0);
+  const [ok, setOk] = useState(() => !!dlLogoGood.get(d));
+  useEffect(() => { setI(dlLogoNext.get(d) ?? 0); setOk(!!dlLogoGood.get(d)); }, [d]);
+  const src = d && !dlLogoBad.has(d) ? dlLogoGood.get(d) ?? cands[i] : undefined;
+  const miss = () => { const n = i + 1; dlLogoNext.set(d, n); if (n >= cands.length) dlLogoBad.add(d); setI(n); setOk(false); };
+  const ini = (name.trim()[0] ?? "?").toUpperCase();
+  return (
+    <span className={`dz-logo ${className} ${src && ok ? "is-img" : ""}`} aria-hidden="true">
+      <span className="dz-logo-ini">{ini}</span>
+      {src && (
+        <img key={src} src={src} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" draggable={false}
+          onLoad={(e) => {
+            const w = e.currentTarget.naturalWidth, h = e.currentTarget.naturalHeight;
+            if (!w || !h || Math.max(w, h) < 32) { miss(); return; }
+            dlLogoGood.set(d, src); setOk(true);
+          }}
+          onError={miss} />
+      )}
+    </span>
+  );
+}
+
+type RowProps = {
   /** The columns after the deal, in order (built-in rich ones or plain values from `cell`). */
-  cols?: ColDef[]; cell?: (key: string) => ReactNode;
-  tracking: Tracking; title: string; company: string | null; contactCount: number; handedOver?: boolean;
-  selected?: boolean; selecting?: boolean; onToggle?: (range: boolean) => void;
+  cols: ColDef[]; cell: (key: string, t: Tracking) => ReactNode;
+  tracking: Tracking; title: string; company: string | null; website?: string | null; contactCount: number; handedOver?: boolean;
+  selected?: boolean; selecting?: boolean; onToggle?: (id: string, range: boolean) => void;
   pipeline: string; phases: Phase[]; product: string | null; revenue?: number; closeDate?: string | null;
-  ownerName?: string | null; closeProbOverride?: number | null; probLabel?: string; onOpen: () => void; index?: number;
-}) {
+  ownerName?: string | null; closeProbOverride?: number | null; probLabel?: string; onOpen: (id: string) => void;
+  /** Changes when data behind the plain columns changes (the row is memoised). */
+  rev?: unknown;
+};
+const dlDay = (iso: string) => new Date(iso).toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "2-digit" });
+const dlIni = (n: string) => n.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
+
+/** One deal in the list. Memoised: hovering, scrolling or ticking a box re-renders only the rows that changed. */
+const TrackingRow = memo(function TrackingRow({ tracking, title, company, website, contactCount, pipeline, phases, product, revenue, ownerName, closeDate, closeProbOverride, probLabel, onOpen, handedOver = false, selected = false, selecting = false, onToggle, cols, cell }: RowProps) {
   const curIdx = phases.findIndex((p) => p.id === tracking.current_phase_id);
-  // Same adaptive formula as the detail view: first phase 0%, win phase 100%.
   const pct = trackingPct(phases, tracking.current_phase_id);
   const stage = curIdx >= 0 ? phases[curIdx]?.name ?? "-" : "Not started";
-  // The overview chooses which probability to show (phase / sales / mgmt / avg);
-  // it's passed in. Fall back to the phase value if not provided.
   const curPhase = curIdx >= 0 ? phases[curIdx] : undefined;
   const phaseProb: number | null =
     tracking.status === "won" ? 100 :
@@ -1787,35 +1863,28 @@ function TrackingRow({ tracking, title, company, contactCount, pipeline, phases,
     curPhase?.close_probability != null ? curPhase.close_probability : null;
   const closeProb: number | null = closeProbOverride !== undefined ? closeProbOverride : phaseProb;
   const probTone = closeProb == null ? "none" : closeProb >= 70 ? "hi" : closeProb >= 40 ? "mid" : "lo";
-  const started = tracking.created_at ? new Date(tracking.created_at).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "2-digit" }) : "-";
-  const cp = Math.max(0, Math.min(100, closeProb ?? 0));
   const teamCount = Object.keys(tracking.deal_roles ?? {}).length;
+  const closed = (tracking.status === "won" || tracking.status === "lost") && tracking.close_date;
+  const id = tracking.id;
 
   return (
     <button
-      className={`so-row is-${tracking.status} prob-${probTone} ${selected ? "is-sel" : ""} ${selecting ? "is-selecting" : ""}`}
-      data-spot=""
-      style={soVars({ "--i": Math.min(index, 14), "--h": soHue(title), "--cp": `${cp}%` })}
+      type="button"
+      className={`dz-row is-${tracking.status} prob-${probTone} ${selected ? "is-sel" : ""} ${selecting ? "is-selecting" : ""}`}
+      style={{ ["--pct-n" as string]: Math.max(0, Math.min(1, pct / 100)) } as CSSProperties}
       // While picking, a click picks; shift-click picks a run of rows.
-      onClick={(e) => { if (onToggle && (selecting || e.shiftKey || e.metaKey || e.ctrlKey)) onToggle(e.shiftKey); else onOpen(); }}
+      onClick={(e) => { if (onToggle && (selecting || e.shiftKey || e.metaKey || e.ctrlKey)) onToggle(id, e.shiftKey); else onOpen(id); }}
     >
-      {/* deal */}
-      <span className="so-who">
-        <span className="so-av-wrap">
-          <span className="so-av">{title.slice(0, 1).toUpperCase()}</span>
-          {onToggle && <BulkCheck on={selected} onToggle={(e) => onToggle(e.shiftKey)} label={`Select ${title}`} />}
+      <span className="dz-who">
+        <span className="dz-lead">
+          <DealLogo name={company ?? title} website={website} />
+          {onToggle && <BulkCheck on={selected} onToggle={(e) => onToggle(id, e.shiftKey)} label={`Select ${title}`} />}
         </span>
-        <span className="so-who-t">
-          <span className="so-name">
-            <b>{title}{handedOver && <span className="so-handed" title="You handed this deal over — you see it as it was then">Handed over</span>}</b>
-            {/* Active is the default, so only the exceptions get a pill. */}
-            {tracking.status !== "active" && <span className={`so-status is-${tracking.status}`}>{statusText(tracking.status)}</span>}
-          </span>
-          <span className="so-meta">
-            <span className={`so-co ${company ? "" : "is-none"}`} title={company ? `Company: ${company}` : "No company"}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 21V5a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v16M15 9h4a1 1 0 0 1 1 1v11M8 8h3M8 12h3M8 16h3M3 21h18" /></svg>
-              {company ?? "No company"}
-            </span>
+        <span className="dz-who-t">
+          <b className="dz-name">{title}</b>
+          <span className="dz-sub">
+            {company ? <span className="dz-co">{company}</span> : <span className="dz-co is-none">No company</span>}
+            {handedOver && <span className="dz-flag" title="You handed this deal over — you see it as it was then">Handed over</span>}
           </span>
         </span>
       </span>
@@ -1823,79 +1892,69 @@ function TrackingRow({ tracking, title, company, contactCount, pipeline, phases,
       {cols.map((c) => {
         switch (c.key) {
           case "stage": return (
-      <span key="stage" className="so-stage" title={`${pct}% through the pipeline`}>
-        <span className="so-stage-top">
-          <b>{stage}</b>
-          <em>{pct}%</em>
-        </span>
-        <span className="so-track" aria-hidden="true">
-          {(phases.length > 0 ? phases : [{ id: "none" } as Phase]).map((ph, i) => (
-            <i key={ph.id} className={i < curIdx ? "is-done" : i === curIdx ? "is-cur" : ""} />
-          ))}
-        </span>
-      </span>
+            <span key="stage" className="dz-stage" title={`${stage} · ${pct}% through the pipeline${curIdx >= 0 && phases.length ? ` (step ${curIdx + 1} of ${phases.length})` : ""}`}>
+              <span className="dz-stage-t"><i className="dz-dot" aria-hidden="true" /><b>{stage}</b>{tracking.status !== "active" && <em>{statusText(tracking.status)}</em>}</span>
+              <span className="dz-bar" aria-hidden="true"><i /></span>
+            </span>
           );
           case "product": return (
-      <span key="product" className="so-tags">
-        {product ? <span className="so-tag">{product}</span> : <span className="so-tag is-empty">No product</span>}
-      </span>
+            <span key="product" className="dz-prod">
+              {product ? <span className="dz-chip" title={product}>{product}</span> : <span className="dz-none">No product</span>}
+              {ownerName && <span className="dz-owner" title={`Owner: ${ownerName}`}>{dlIni(ownerName)}</span>}
+            </span>
           );
           case "value": return (
-      <span key="value" className="so-value">
-        <b className={revenue && revenue > 0 ? "" : "is-none"}>{revenue && revenue > 0 ? `${revenue.toLocaleString("de-DE")} €` : "No value yet"}</b>
-        {(tracking.status === "won" || tracking.status === "lost") && tracking.close_date ? (
-          <small className={`is-closed is-${tracking.status}`} title="Close date">
-            {`${tracking.status === "won" ? "Won" : "Lost"} ${new Date(tracking.close_date).toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "2-digit" })}`}
-          </small>
-        ) : (
-          <small className={closeDate ? "" : "is-none"} title="Expected close date">
-            {closeDate ? `Expected ${new Date(closeDate).toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "2-digit" })}` : "No expected close date"}
-          </small>
-        )}
-      </span>
+            <span key="value" className="dz-value">
+              <b className={revenue && revenue > 0 ? "" : "is-none"}>{revenue && revenue > 0 ? `${revenue.toLocaleString("de-DE")} €` : "—"}</b>
+              {closed ? (
+                <small className={`is-${tracking.status}`} title="Close date">{`${tracking.status === "won" ? "Won" : "Lost"} ${dlDay(tracking.close_date!)}`}</small>
+              ) : (
+                <small className={closeDate ? "" : "is-none"} title="Expected close date">{closeDate ? `Close ${dlDay(closeDate)}` : "No close date"}</small>
+              )}
+            </span>
           );
           case "prob": return (
-      <span key="prob" className="so-chance" title={probLabel ? `Close probability (${probLabel})` : undefined}>
-        {closeProb == null ? (
-          <b className="is-none">—</b>
-        ) : (
-          <b>{closeProb}<i>%</i></b>
-        )}
-      </span>
+            <span key="prob" className="dz-prob" title={probLabel ? `Close probability (${probLabel})` : undefined}>
+              {closeProb == null ? <b className="is-none">—</b> : <b>{closeProb}<i>%</i></b>}
+            </span>
           );
           default: {
-            const v = cell?.(c.key);
-            return <span key={c.key} className={`so-cell ${c.right ? "is-r" : ""} ${v ? "" : "is-none"}`} title={typeof v === "string" ? v : undefined}>{v || "—"}</span>;
+            const v = cell(c.key, tracking);
+            return <span key={c.key} className={`dz-cell ${c.right ? "is-r" : ""} ${v ? "" : "is-none"}`} title={typeof v === "string" ? v : undefined}>{v || "—"}</span>;
           }
         }
       })}
 
-      <span className="so-go" aria-hidden="true"><SoIcon d={SO_ICON.arrow} w={2.2} /></span>
+      <span className="dz-go" aria-hidden="true"><SoIcon d={SO_ICON.arrow} w={2.2} /></span>
 
-      {/* More about the deal: unfolds on hover / keyboard focus, so the list stays calm. */}
-      <span className="so-x" aria-hidden="true">
-        <span className="so-x-in">
-          <span className="so-xi"><i>Owner</i><b className={ownerName ? "" : "is-none"}>{ownerName ? <><SoIcon d={SO_ICON.star} fill />{ownerName}</> : "No owner"}</b></span>
-          <span className="so-xi"><i>Pipeline</i><b>{pipeline || "—"}</b></span>
-          <span className="so-xi"><i>Step</i><b>{curIdx >= 0 && phases.length > 0 ? `${curIdx + 1} of ${phases.length}` : "Not started"}</b></span>
-          <span className="so-xi"><i>Product</i><b className={product ? "" : "is-none"}>{product ?? "None yet"}</b></span>
-          <span className="so-xi"><i>People</i><b>{contactCount} contact{contactCount === 1 ? "" : "s"}{teamCount ? ` · ${teamCount} on the team` : ""}</b></span>
+      {/* More about the deal: unfolds when the pointer rests on the row (not while sweeping past). */}
+      <span className="dz-x" aria-hidden="true">
+        <span className="dz-x-in">
+          <span className="dz-xi"><i>Owner</i><b className={ownerName ? "" : "is-none"}>{ownerName ?? "No owner"}</b></span>
+          <span className="dz-xi"><i>Pipeline</i><b>{pipeline || "—"}</b></span>
+          <span className="dz-xi"><i>Step</i><b>{curIdx >= 0 && phases.length > 0 ? `${curIdx + 1} of ${phases.length}` : "Not started"}</b></span>
+          <span className="dz-xi"><i>People</i><b>{contactCount} contact{contactCount === 1 ? "" : "s"}{teamCount ? ` · ${teamCount} on the team` : ""}</b></span>
           {(tracking.rep_close_prob != null || tracking.mgr_close_prob != null) && (
-            <span className="so-xi"><i>Estimates</i><b>{tracking.rep_close_prob != null ? `Sales ${tracking.rep_close_prob}%` : "Sales —"} · {tracking.mgr_close_prob != null ? `Mgmt ${tracking.mgr_close_prob}%` : "Mgmt —"}</b></span>
+            <span className="dz-xi"><i>Estimates</i><b>{tracking.rep_close_prob != null ? `Sales ${tracking.rep_close_prob}%` : "Sales —"} · {tracking.mgr_close_prob != null ? `Mgmt ${tracking.mgr_close_prob}%` : "Mgmt —"}</b></span>
           )}
-          <span className="so-xi"><i>Started</i><b>{started}</b></span>
-          {closeProb != null && (
-            <span className="so-xi is-bar"><i>Close chance</i><span className="so-chance-bar" aria-hidden="true"><i /></span></span>
-          )}
+          <span className="dz-xi"><i>Started</i><b>{tracking.created_at ? dlDay(tracking.created_at) : "—"}</b></span>
         </span>
       </span>
     </button>
   );
-}
+}, (a, b) => {
+  for (const k in a) {
+    const key = k as keyof RowProps;
+    if (key === "cols") { if (a.cols.map((c) => c.key).join("|") !== b.cols.map((c) => c.key).join("|")) return false; continue; }
+    if (!Object.is(a[key], b[key])) return false;
+  }
+  return true;
+});
 
 // ============================ Kanban view ============================
-function KanbanView({ kanbanPipe, phaseByPipe, trackings, potentialTotals, trackTitle, companyName, onOpen, onMove, selected, selecting = false, onToggle, cardDetail }: {
+function KanbanView({ kanbanPipe, phaseByPipe, trackings, potentialTotals, trackTitle, companyName, companyWebsite, onOpen, onMove, selected, selecting = false, onToggle, cardDetail }: {
   kanbanPipe: string;
+  companyWebsite?: (id: string | null) => string | null;
   /** What a card unfolds on hover (product, owner, close date, chance…). */
   cardDetail?: (t: Tracking) => ReactNode;
   /** Multi-select: ticked cards, and a click picks instead of opening while any is ticked. */
@@ -2002,7 +2061,7 @@ function KanbanView({ kanbanPipe, phaseByPipe, trackings, potentialTotals, track
                       onClick={(e) => { if (onToggle && (selecting || e.shiftKey || e.metaKey || e.ctrlKey)) onToggle(t.id, e.shiftKey); else onOpen(t.id); }}
                     >
                       <span className="so-av-wrap">
-                        <span className="so-av">{title.slice(0, 1).toUpperCase()}</span>
+                        <DealLogo className="so-av" name={companyName(t.company_id) ?? title} website={companyWebsite?.(t.company_id)} />
                         {onToggle && <BulkCheck on={!!selected?.(t.id)} onToggle={(e) => onToggle(t.id, e.shiftKey)} label={`Select ${title}`} />}
                       </span>
                       <span className="so-kcard-t">

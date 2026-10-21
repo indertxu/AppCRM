@@ -18,9 +18,11 @@ import {
   type Company, type Contact, type Employee, type CompanyField, type ContactField, type Billing,
   renameCustomValue, customList,
   listCompanyDeals, type DealRef,
+  setFixedRequired, useRequiredFields,
 } from "./companiesApi";
 import { logoCandidates } from "../clients/clientsTypes";
-import { searchPlaces, lookupPostal, postalLooksComplete, provinceFromPostal, countryName, matchCountry, normalizeLinkedIn, isLinkedIn, linkedInHandle, type AddressHit } from "../contacts/contactProfile";
+import { searchPlaces, lookupPostal, postalLooksComplete, provinceFromPostal, countryName, matchCountry, normalizeLinkedIn, isLinkedIn, linkedInHandle, type AddressHit,
+  fixedFieldsOf, isFixedRequired, missingFixed, type ReqScope, languageOptions, countryOptions } from "../contacts/contactProfile";
 import "../clients/ClientsPage.css";
 import CompanyImport from "./CompanyImport";
 import { PageLoader } from "../../framework/AppLayout";
@@ -544,6 +546,7 @@ function ContactPicker({ contacts, onPick }: { contacts: Contact[]; onPick: (id:
 }
 
 // Inline "create a new contact" form used inside CompanyEditor.
+// Shows the basics plus any other built-in field the team made required (Settings › Contacts page).
 function NewContactInline({ fields, onAdd, onCancel }: {
   fields: ContactField[];
   onAdd: (c: Contact) => void;
@@ -553,37 +556,64 @@ function NewContactInline({ fields, onAdd, onCancel }: {
     first_name: "", last_name: "", position: "", email: "", phone: "", phone_ext: "", is_billing: false, notes: "", companyIds: [], custom: {},
   });
   const [err, setErr] = useState<string | null>(null);
+  const [tried, setTried] = useState(false);
+  useRequiredFields();
   const set = (patch: Partial<Contact>) => setC((x) => ({ ...x, ...patch }));
   const setCustom = (id: string, v: any) => setC((x) => ({ ...x, custom: { ...(x.custom ?? {}), [id]: v } }));
   const customVal = (id: string) => (c.custom ?? {})[id];
+  const isReq = (k: string) => isFixedRequired("contact", k);
+  const rq = (k: string) => (isReq(k) ? <span className="dw-req"> *</span> : null);
+  // it is created inside this company, so "Company" is always there
+  const asSaved = { ...c, companyIds: ["this"] };
+  const miss = (k: string) => tried && isReq(k) && missingFixed("contact", asSaved, [k]).length > 0;
+  const mc = (k: string) => (miss(k) ? "is-missing" : "");
+  const ADDR = ["street", "addr_number", "postal_code", "city", "province", "country"];
+  const needAddr = ADDR.some(isReq);
+  const [langs] = useState(() => [{ value: "", label: "— Not set" }, ...languageOptions()]);
+  const [countries] = useState(() => countryOptions());
 
   const add = () => {
-    if (!c.first_name.trim()) { setErr("A first name is required."); return; }
-    for (const f of fields) {
-      if (!f.required) continue;
+    if (!c.first_name.trim()) { setTried(true); setErr("A first name is required."); return; }
+    const missing = missingFixed("contact", asSaved);
+    const missCustom = fields.filter((f) => {
+      if (!f.required) return false;
       const v = customVal(f.id);
-      const empty = v == null || v === "" || (f.type === "boolean" && v === false);
-      if (empty) { setErr(`"${f.label}" is required.`); return; }
-    }
+      return v == null || v === "" || (f.type === "boolean" && v === false) || (Array.isArray(v) && v.length === 0);
+    }).map((f) => f.label);
+    if (missing.length || missCustom.length) { setTried(true); setErr(`Required — please fill in: ${[...missing, ...missCustom].join(", ")}.`); return; }
     onAdd(c);
   };
 
   return (
     <div className="co-cc-form">
       <div className="dw-grid">
-        <div className="dw-f"><label>First name *</label>
+        <div className={`dw-f ${tried && !c.first_name.trim() ? "is-missing" : ""}`}><label>First name *</label>
           <input autoFocus value={c.first_name} onChange={(e) => set({ first_name: e.target.value })} />
         </div>
-        <div className="dw-f"><label>Last name</label>
+        <div className={`dw-f ${mc("last_name")}`}><label>Last name{rq("last_name")}</label>
           <input value={c.last_name ?? ""} onChange={(e) => set({ last_name: e.target.value })} />
         </div>
-        <div className="dw-f"><label>Position</label>
+        <div className={`dw-f ${mc("position")}`}><label>Position{rq("position")}</label>
           <input value={c.position ?? ""} onChange={(e) => set({ position: e.target.value })} />
         </div>
-        <div className="dw-f"><label>Email</label>
+        <div className={`dw-f ${mc("email")}`}><label>Email{rq("email")}</label>
           <input value={c.email ?? ""} onChange={(e) => set({ email: e.target.value })} />
         </div>
-        <PhoneField label="Mobile" value={c.phone} ext={c.phone_ext} onValue={(v) => set({ phone: v })} onExt={(v) => set({ phone_ext: v })} />
+        <PhoneField label="Mobile" value={c.phone} ext={c.phone_ext} onValue={(v) => set({ phone: v })} onExt={(v) => set({ phone_ext: v })} req={isReq("phone")} missing={miss("phone")} />
+        {isReq("landline") && (
+          <PhoneField label="Telephone" value={c.landline} ext={c.landline_ext} onValue={(v) => set({ landline: v })} onExt={(v) => set({ landline_ext: v })} req missing={miss("landline")} />
+        )}
+        {isReq("linkedin") && (
+          <div className={`dw-f ${mc("linkedin")}`}><label>LinkedIn{rq("linkedin")}</label>
+            <input value={c.linkedin ?? ""} placeholder="linkedin.com/in/…" onChange={(e) => set({ linkedin: e.target.value })}
+              onBlur={(e) => set({ linkedin: normalizeLinkedIn(e.target.value) })} />
+          </div>
+        )}
+        {isReq("language") && (
+          <div className={`dw-f ${mc("language")}`}><label>Language{rq("language")}</label>
+            <Select value={c.language ?? ""} onChange={(v) => set({ language: v })} options={langs} placeholder="Choose a language…" />
+          </div>
+        )}
         {fields.map((f) => (
           <div className="dw-f dw-col2" key={f.id}>
             <label>{f.label}{f.required && <span className="dw-req"> *</span>}</label>
@@ -605,6 +635,13 @@ function NewContactInline({ fields, onAdd, onCancel }: {
           </div>
         ))}
       </div>
+      {needAddr && (
+        <>
+          <div className="dw-subh"><DwIcon name="pin" />Address</div>
+          <AddressFields value={c} onChange={(p) => set(p as Partial<Contact>)} countryAs="code" req={(k) => rq(k)} missing={(k) => miss(k)}
+            renderCountry={() => <Select value={c.country ?? ""} onChange={(v) => set({ country: v })} options={countries} placeholder="Choose a country…" />} />
+        </>
+      )}
       {err && <p className="dw-err" style={{ marginTop: 10 }}>{err}</p>}
       <div className="co-cc-form-foot">
         <button type="button" className="dw-cancel" onClick={onCancel}>Cancel</button>
@@ -642,6 +679,13 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const set = (patch: Partial<Company>) => setC((x) => ({ ...x, ...patch }));
+  // required built-in fields (Settings › Companies page › Required fields): "*" on the label, red once a save was tried
+  useRequiredFields();
+  const [tried, setTried] = useState(false);
+  const rq = (k: string) => (isFixedRequired("company", k) ? <span className="dw-req"> *</span> : null);
+  const isReq = (k: string) => isFixedRequired("company", k);
+  const miss = (k: string) => tried && isReq(k) && missingFixed("company", c, [k]).length > 0;
+  const mc = (k: string) => (miss(k) ? "is-missing" : "");
   const dirty = () => JSON.stringify(c) !== initial || newContacts.length > 0 || pendingRemoveIds.length > 0 || children.join() !== childInitial.join();
 
   const { closing, close } = useDrawerClose(onClose);
@@ -748,11 +792,18 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
     const li = normalizeLinkedIn(c.linkedin);
     if (li && !isLinkedIn(li)) { setErr("LinkedIn: paste the company page link (linkedin.com/company/…)."); return; }
     c.linkedin = li || null;
-    for (const f of fields) {
-      if (!f.required) continue;
+    const missing = missingFixed("company", c);
+    const missCustom = fields.filter((f) => {
+      if (!f.required) return false;
       const v = customVal(f.id);
-      const empty = v == null || v === "" || (f.type === "boolean" && v === false);
-      if (empty) { setErr(`"${f.label}" is required.`); return; }
+      return v == null || v === "" || (f.type === "boolean" && v === false) || (Array.isArray(v) && v.length === 0);
+    }).map((f) => f.label);
+    if (missing.length || missCustom.length) {
+      setTried(true);
+      const all = [...missing, ...missCustom];
+      setErr(`Required — please fill in: ${all.join(", ")}.`);
+      window.setTimeout(() => goTo(missing.length ? "company" : "custom"), 30);
+      return;
     }
     setBusy(true); setErr(null);
     const e = await saveCompany(c);
@@ -872,19 +923,19 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
                 <div className="dw-f"><label>Common name<span className="dw-req"> *</span></label>
                   <input value={c.name} onChange={(e) => set({ name: e.target.value })} placeholder="e.g. Acme" />
                 </div>
-                <div className="dw-f"><label>Legal name</label>
+                <div className={`dw-f ${mc("legal_name")}`}><label>Legal name{rq("legal_name")}</label>
                   <input value={c.legal_name ?? ""} onChange={(e) => set({ legal_name: e.target.value })} placeholder="e.g. Acme Holdings S.L." />
                 </div>
-                <div className="dw-f"><label>VAT / Tax ID</label>
+                <div className={`dw-f ${mc("vat_number")}`}><label>VAT / Tax ID{rq("vat_number")}</label>
                   <input value={c.vat_number ?? ""} onChange={(e) => set({ vat_number: e.target.value })} placeholder="e.g. B12345678" />
                 </div>
               </div>
               <div className="dw-subh"><DwIcon name="pin" />Address</div>
-              <AddressFields value={c} onChange={(p) => set(p as Partial<Company>)} countryAs="name" withDetails />
+              <AddressFields value={c} onChange={(p) => set(p as Partial<Company>)} countryAs="name" withDetails req={(k) => rq(k)} missing={(k) => miss(k)} />
               <div className="dw-subh"><DwIcon name="globe" />Sector, web &amp; phones</div>
               <div className="dw-grid">
-                <div className={`dw-f dw-col2 ${sectorAuto ? "is-auto" : ""}`}>
-                  <label>Sector{sectorAuto && <span className="dw-f-assist">Guessed from the name — change it if it's wrong</span>}</label>
+                <div className={`dw-f dw-col2 ${sectorAuto ? "is-auto" : ""} ${mc("sector")}`}>
+                  <label>Sector{rq("sector")}{sectorAuto && <span className="dw-f-assist">Guessed from the name — change it if it's wrong</span>}</label>
                   {newSector === null ? (
                     <div className="dw-sector">
                       <Select value={c.sector ?? ""} placeholder="Choose a sector…"
@@ -906,20 +957,20 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
                     </div>
                   )}
                 </div>
-                <div className="dw-f"><label>Website</label>
+                <div className={`dw-f ${mc("website")}`}><label>Website{rq("website")}</label>
                   <input value={c.website ?? ""} onChange={(e) => set({ website: e.target.value })} placeholder="https://" />
                 </div>
-                <div className="dw-f"><label>LinkedIn</label>
+                <div className={`dw-f ${mc("linkedin")}`}><label>LinkedIn{rq("linkedin")}</label>
                   <input value={c.linkedin ?? ""} placeholder="linkedin.com/company/…" title={c.linkedin ? linkedInHandle(c.linkedin) : undefined}
                     onChange={(e) => set({ linkedin: e.target.value })}
                     onBlur={(e) => set({ linkedin: normalizeLinkedIn(e.target.value) })} />
                 </div>
-                <PhoneField label="Telephone" value={c.landline} ext={c.landline_ext} onValue={(v) => set({ landline: v })} onExt={(v) => set({ landline_ext: v })} placeholder="+34 910 000 000" />
-                <PhoneField label="Mobile" value={c.phone} ext={c.phone_ext} onValue={(v) => set({ phone: v })} onExt={(v) => set({ phone_ext: v })} placeholder="+34 600 000 000" />
-                <div className="dw-f"><label>Email</label>
+                <PhoneField label="Telephone" value={c.landline} ext={c.landline_ext} onValue={(v) => set({ landline: v })} onExt={(v) => set({ landline_ext: v })} placeholder="+34 910 000 000" req={isReq("landline")} missing={miss("landline")} />
+                <PhoneField label="Mobile" value={c.phone} ext={c.phone_ext} onValue={(v) => set({ phone: v })} onExt={(v) => set({ phone_ext: v })} placeholder="+34 600 000 000" req={isReq("phone")} missing={miss("phone")} />
+                <div className={`dw-f ${mc("email")}`}><label>Email{rq("email")}</label>
                   <input type="email" value={c.email ?? ""} onChange={(e) => set({ email: e.target.value })} placeholder="info@company.com" />
                 </div>
-                <div className="dw-f dw-col2"><label>Source</label>
+                <div className={`dw-f dw-col2 ${mc("source")}`}><label>Source{rq("source")}</label>
                   <Select value={c.source ?? ""} placeholder="Where did it come from?"
                     onChange={(v) => set({ source: v || null })}
                     options={[{ value: "", label: "— No source" }, ...sources.map((x) => ({ value: x, label: x })),
@@ -953,13 +1004,13 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
               </div>
               <div className="dw-subh"><DwIcon name="euro" />Billing{billFilled && <span className="dw-pill is-ok">Set</span>}</div>
               <div className="dw-grid">
-                <div className="dw-f"><label>Name</label>
+                <div className={`dw-f ${mc("billing_name")}`}><label>Name{rq("billing_name")}</label>
                   <input value={bill.name ?? ""} onChange={(e) => setBill({ name: e.target.value })} placeholder="e.g. Accounts payable" />
                 </div>
-                <div className="dw-f"><label>Email</label>
+                <div className={`dw-f ${mc("billing_email")}`}><label>Email{rq("billing_email")}</label>
                   <input type="email" value={bill.email ?? ""} onChange={(e) => setBill({ email: e.target.value })} placeholder="invoices@company.com" />
                 </div>
-                <PhoneField label="Phone" value={bill.phone} ext={bill.phone_ext} onValue={(v) => setBill({ phone: v })} onExt={(v) => setBill({ phone_ext: v })} placeholder="+34 910 000 000" />
+                <PhoneField label="Phone" value={bill.phone} ext={bill.phone_ext} onValue={(v) => setBill({ phone: v })} onExt={(v) => setBill({ phone_ext: v })} placeholder="+34 910 000 000" req={isReq("billing_phone")} missing={miss("billing_phone")} />
                 <div className="dw-f"><label>Notes</label>
                   <input value={bill.notes ?? ""} onChange={(e) => setBill({ notes: e.target.value })} placeholder="e.g. PO number on every invoice" />
                 </div>
@@ -1125,8 +1176,9 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
 
         <footer className="dw-foot">
           {c.id && <button className="dw-del" onClick={remove}>Delete</button>}
-          <span className={`dw-foot-note ${err ? "is-err" : !c.name.trim() ? "is-warn" : ""}`}>
-            {err ?? (!c.name.trim() ? "Give the company a name to save it." : "Nothing is saved until you click Save.")}
+          <span className={`dw-foot-note ${err ? "is-err" : !c.name.trim() || missingFixed("company", c).length ? "is-warn" : ""}`}>
+            {err ?? (!c.name.trim() ? "Give the company a name to save it."
+              : missingFixed("company", c).length ? `Still missing: ${missingFixed("company", c).join(", ")}` : "Nothing is saved until you click Save.")}
           </span>
           <div className="dw-foot-right">
             <button className="dw-cancel" onClick={() => close()}>Cancel</button>
@@ -1687,6 +1739,7 @@ const DW_ICON: Record<string, string> = {
   clock: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2",
   tree: "M9 3h6v5H9zM3 16h6v5H3zM15 16h6v5h-6zM12 8v4M6 16v-4h12v4",
   spark: "M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5L18 18M18 6l-2.5 2.5M8.5 15.5L6 18",
+  asterisk: "M12 4v16M5.1 8l13.8 8M5.1 16l13.8-8",
   dot: "M12 12h.01",
 };
 function DwIcon({ name }: { name: string }) {
@@ -1856,12 +1909,16 @@ function useDrawerClose(onClose: () => void) {
 // ============================ Shared CRM pieces (Companies and Contacts) ============================
 
 /** A phone and its extension, side by side. */
-export function PhoneField({ label, value, ext, onValue, onExt, placeholder }: {
+export function PhoneField({ label, value, ext, onValue, onExt, placeholder, req, missing }: {
   label: string; value?: string | null; ext?: string | null;
   onValue: (v: string) => void; onExt: (v: string) => void; placeholder?: string;
+  /** Required: shows the "*". */
+  req?: boolean;
+  /** Required and still empty after a save was tried. */
+  missing?: boolean;
 }) {
   return (
-    <div className="dw-f"><label>{label}</label>
+    <div className={`dw-f ${missing ? "is-missing" : ""}`}><label>{label}{req && <span className="dw-req"> *</span>}</label>
       <div className="dw-phone">
         <input value={value ?? ""} onChange={(e) => onValue(e.target.value)} placeholder={placeholder} inputMode="tel" autoComplete="off" />
         <span className="dw-phone-sep" aria-hidden="true">ext.</span>
@@ -2257,8 +2314,10 @@ function AddressGlobe({ value, anchor, open }: { value: AddrValue; anchor: React
  * you get its province and country. Only empty fields (or ones it filled before)
  * are filled on their own; what you typed is never overwritten.
  */
-export function AddressFields({ value, onChange, countryAs, req, renderCountry, withDetails }: {
+export function AddressFields({ value, onChange, countryAs, req, missing, renderCountry, withDetails }: {
   value: AddrValue;
+  /** Required and still empty after a save was tried: shown in red. */
+  missing?: (k: AddrKey) => boolean;
   onChange: (patch: Partial<AddrValue>) => void;
   /** Contacts keep the ISO code ("ES"), companies the name ("Spain"). */
   countryAs: "code" | "name";
@@ -2361,15 +2420,16 @@ export function AddressFields({ value, onChange, countryAs, req, renderCountry, 
   };
   useEffect(() => () => { if (hideT.current) window.clearTimeout(hideT.current); }, []);
 
+  const miss = (k: AddrKey) => (missing?.(k) ? "is-missing" : "");
   return (
     <div className="dw-addr" ref={addrRef} onFocus={keepGlobe} onBlur={dropGlobe}>
       <AddressGlobe value={value} anchor={addrRef} open={globe} />
       <div className="dw-grid is-3">
-        <div className="dw-f dw-col2"><label>Street{req?.("street")}<span className="dw-f-assist">Type to search</span></label>
+        <div className={`dw-f dw-col2 ${miss("street")}`}><label>Street{req?.("street")}<span className="dw-f-assist">Type to search</span></label>
           <PlaceInput value={v("street")} onType={(x) => typed("street", x)} onPick={pickStreet} kind="address" auto={auto.has("street")}
             near={{ city: v("city") || undefined, country: value.country || undefined }} placeholder="e.g. Calle de Alcalá 42" />
         </div>
-        <div className={`dw-f ${mark("addr_number")}`}><label>Number{req?.("addr_number")}</label>
+        <div className={`dw-f ${mark("addr_number")} ${miss("addr_number")}`}><label>Number{req?.("addr_number")}</label>
           <input ref={numberRef} value={v("addr_number")} onChange={(e) => typed("addr_number", e.target.value)} placeholder="e.g. 42" />
         </div>
         {withDetails && (
@@ -2377,19 +2437,19 @@ export function AddressFields({ value, onChange, countryAs, req, renderCountry, 
             <input value={v("addr_details")} onChange={(e) => typed("addr_details", e.target.value)} placeholder="e.g. 3º B" />
           </div>
         )}
-        <div className={`dw-f ${mark("postal_code")}`}><label>Postal code{req?.("postal_code")}</label>
+        <div className={`dw-f ${mark("postal_code")} ${miss("postal_code")}`}><label>Postal code{req?.("postal_code")}</label>
           <input value={postal} onChange={(e) => typed("postal_code", e.target.value)} placeholder="e.g. 28014" inputMode="numeric" />
         </div>
-        <div className="dw-f"><label>City{req?.("city")}</label>
+        <div className={`dw-f ${miss("city")}`}><label>City{req?.("city")}</label>
           <div onBlur={settleCity}>
             <PlaceInput value={v("city")} onType={(x) => { typed("city", x); setHint(null); }} onPick={pickCity} kind="city" auto={auto.has("city")}
               near={{ country: value.country || undefined }} placeholder="e.g. Madrid" />
           </div>
         </div>
-        <div className={`dw-f ${mark("province")}`}><label>Province / state{req?.("province")}</label>
+        <div className={`dw-f ${mark("province")} ${miss("province")}`}><label>Province / state{req?.("province")}</label>
           <input value={v("province")} onChange={(e) => typed("province", e.target.value)} placeholder="e.g. Madrid" />
         </div>
-        <div className={`dw-f ${withDetails ? "dw-col2" : ""} ${renderCountry ? "" : mark("country")}`}><label>Country{req?.("country")}</label>
+        <div className={`dw-f ${withDetails ? "dw-col2" : ""} ${renderCountry ? "" : mark("country")} ${miss("country")}`}><label>Country{req?.("country")}</label>
           {renderCountry ? renderCountry() : <input value={v("country")} onChange={(e) => typed("country", e.target.value)} placeholder="e.g. Spain" />}
         </div>
       </div>
@@ -3358,6 +3418,74 @@ export function DataTools({ items }: { items: DataTool[] }) {
   );
 }
 
+/**
+ * Settings › Companies / Contacts page › Required fields: which built-in fields
+ * must be filled in before a company / contact can be saved (the name always is),
+ * next to the custom fields' own "Required" switch, so it is all in one place.
+ */
+export function RequiredFieldsEditor({ scope, custom, onCustomToggle }: {
+  scope: ReqScope;
+  custom: { id: string; label: string; required: boolean }[];
+  onCustomToggle: (id: string, on: boolean) => Promise<unknown>;
+}) {
+  useRequiredFields();
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const all = fixedFieldsOf(scope);
+  const groups = [...new Set(all.map((f) => f.group))];
+  const flip = async (key: string) => {
+    setBusy(key); setErr(null);
+    const e = await setFixedRequired(scope, key, !isFixedRequired(scope, key));
+    setBusy(null);
+    if (e) setErr(e);
+  };
+  const flipCustom = async (id: string, on: boolean) => {
+    setBusy(`c:${id}`); setErr(null);
+    try { await onCustomToggle(id, on); } catch (e: any) { setErr(e?.message ?? "Could not save."); }
+    setBusy(null);
+  };
+  const noun = scope === "company" ? "company" : "contact";
+  let n = 0;
+  const Item = ({ k, label, on, locked, onClick, isBusy }: { k: string; label: string; on: boolean; locked?: boolean; onClick?: () => void; isBusy?: boolean }) => (
+    <button key={k} type="button" role="switch" aria-checked={on} disabled={locked || isBusy}
+      className={`rqf-item ${on ? "is-on" : ""} ${locked ? "is-locked" : ""} ${isBusy ? "is-busy" : ""}`}
+      style={{ ["--i" as string]: n++ } as CSSProperties} onClick={onClick}
+      title={locked ? `Every ${noun} needs it` : on ? "Required — click to make it optional" : "Optional — click to make it required"}>
+      <span className="rqf-sw"><i /></span>
+      <b>{label}</b>
+      {locked ? <em>Always</em> : on ? <em className="is-req">Required</em> : null}
+    </button>
+  );
+  const onCount = all.filter((f) => !f.locked && isFixedRequired(scope, f.key)).length + custom.filter((f) => f.required).length;
+  return (
+    <div className="rqf">
+      <p className="rqf-note">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /></svg>
+        <span>Required fields get a <b>*</b> and must be filled in before a {noun} can be saved. Imports flag the rows that miss them. <b>{onCount}</b> required now.</span>
+      </p>
+      {groups.map((g) => (
+        <div className="rqf-group" key={g}>
+          <span className="rqf-h">{g}</span>
+          <div className="rqf-grid">
+            {all.filter((f) => f.group === g).map((f) => Item({
+              k: f.key, label: f.label, on: !!f.locked || isFixedRequired(scope, f.key), locked: f.locked, isBusy: busy === f.key, onClick: () => void flip(f.key),
+            }))}
+          </div>
+        </div>
+      ))}
+      {custom.length > 0 && (
+        <div className="rqf-group">
+          <span className="rqf-h">Your custom fields</span>
+          <div className="rqf-grid">
+            {custom.map((f) => Item({ k: `c:${f.id}`, label: f.label, on: f.required, isBusy: busy === `c:${f.id}`, onClick: () => void flipCustom(f.id, !f.required) }))}
+          </div>
+        </div>
+      )}
+      {err && <p className="dw-err">{err}</p>}
+    </div>
+  );
+}
+
 export interface SxSection {
   k: string; label: string; icon: string; title: string; hint: string;
   tone?: "green" | "blue" | "amber" | "indigo" | "violet" | "slate" | "rose";
@@ -3676,6 +3804,10 @@ export function CompanySettings({ onBack }: { onBack: () => void }) {
             body: <CustomFieldsEditor fields={fields} onChanged={reloadFields}
               api={{ add: (f) => addCompanyField(f), update: (id, patch) => updateCompanyField(id, patch), remove: (id) => deleteCompanyField(id), renameValue: (id, from, to) => renameCustomValue("companies", id, from, to) }}
               examples={{ name: "Field name, e.g. Founded, Key account", options: "SME, Mid-market, Enterprise" }} /> },
+          { k: "required", label: "Required fields", icon: "asterisk", tone: "amber",
+            title: "Required fields", hint: "What must be filled in before a company can be saved — built-in fields and your own",
+            body: <RequiredFieldsEditor scope="company" custom={fields}
+              onCustomToggle={async (id, on) => { await updateCompanyField(id, { required: on }); await reloadFields(); }} /> },
         ]} />
       {tool === "import" && <CompanyImport fields={fields} onClose={() => setTool(null)} onDone={async () => { await load(); }} />}
       {tool === "export" && (

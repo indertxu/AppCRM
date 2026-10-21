@@ -5,6 +5,7 @@ import Select from "../../framework/Select";
 import { useInactiveIds } from "../../framework/peopleStatus";
 import { lineRate, roleCounts, roleNameOf, type ClientRole, type RoleLine } from "../clients/clientsTypes";
 import "./BacklogPanel.css";
+import { ClientLogo } from "../clients/ClientWorkspace";
 
 export interface BkEntry {
   id: string;
@@ -382,7 +383,7 @@ export default function BacklogPanel({
       roles THAT person holds on its team — the main role if they own it, a
       supervision role if they supervise it, and so on — never the whole
       project. (Roles that don't count, like connector, are tracked separately
-      and stay out of person views.) Mirrors myBreakdown so the rows and the KPIs
+      and stay out of person views.) Mirrors personalKpis so the rows and the KPIs
       agree. Without a person selected it is just the full project availability. */
   const availForRow = (r: ProjRow): Tally => {
     if (!consultantFilter) return availableOf(r);
@@ -519,36 +520,6 @@ export default function BacklogPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, projects, people, roles, mainRoleByService, inactive]);
 
-  /** For the selected consultant: their backlog on each counting role they
-      hold on a project's team (main consultant on the projects they own, a
-      supervision role where they supervise, …). Roles that don't count, like
-      connector, never enter it. One figure per role. */
-  const myBreakdown = useMemo(() => {
-    if (!consultantFilter) return null;
-    const byRole: Record<string, { days: number; value: number }> = {};
-    rows.forEach((r) => {
-      if (sum(r.sold) === 0) return;
-      if (onlyLeft && sum(availableOf(r)) <= 0.001) return;
-      const p = projects[r.id];
-      if (!p) return;
-      const mine = rolesOn(p, consultantFilter);
-      Object.entries(availableOf(r)).forEach(([k, v]) => {
-        if (!counts(k) || !mine.has(k)) return;
-        const b = (byRole[k] ??= { days: 0, value: 0 });
-        b.days += inDays(r.id, v);
-        b.value += v * (r.rates[k] ?? r.rate);
-      });
-    });
-    const order = (k: string) => { const i = roles.findIndex((x) => x.id === k); return i < 0 ? 999 : i; };
-    const list = Object.entries(byRole).sort((a, b) => order(a[0]) - order(b[0]))
-      .map(([k, v]) => ({ roleId: k, name: roleNameOf(k, roles), ...v }));
-    return {
-      list,
-      days: list.reduce((s, x) => s + x.days, 0),
-      value: list.reduce((s, x) => s + x.value, 0),
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [consultantFilter, rows, projects, onlyLeft, mainRoleByService, roles]);
 
   /** When a consultant is picked, the headline KPIs reflect only THEIR share:
    *  the counting roles they hold on each project's team, in days and value,
@@ -943,40 +914,6 @@ export default function BacklogPanel({
           </label>
         </div>
 
-        {/* ---------- one consultant's backlog ---------- */}
-        {myBreakdown && (
-          <div className="bl-card bl-mine">
-            <span className="bl-mine-who">
-              <span className="bl-av is-lg">{(people[consultantFilter] || "?").charAt(0).toUpperCase()}</span>
-              <span className="bl-mine-name">
-                <b>{people[consultantFilter] || "This consultant"}</b>
-                <small>Personal backlog</small>
-              </span>
-            </span>
-            <div className="bl-mine-figs">
-              {myBreakdown.list.length === 0 && (
-                <div className="bl-mine-fig">
-                  <span>No roles <i>assigned on a project</i></span>
-                  <b><BlCount value={0} fmt={(n) => n.toFixed(1)} /><em>d</em></b>
-                  <small>{blEur(0)} €</small>
-                </div>
-              )}
-              {myBreakdown.list.map((x, i) => (
-                <div className={`bl-mine-fig ${i % 2 === 1 ? "is-super" : ""}`} key={x.roleId}>
-                  <span>{x.name} <i>assigned on the team</i></span>
-                  <b><BlCount value={x.days} fmt={(n) => n.toFixed(1)} /><em>d</em></b>
-                  <small>{blEur(x.value)} €</small>
-                </div>
-              ))}
-              <div className="bl-mine-fig is-total">
-                <span>Total</span>
-                <b><BlCount value={myBreakdown.days} fmt={(n) => n.toFixed(1)} /><em>d</em></b>
-                <small>{blEur(myBreakdown.value)} €</small>
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* ---------- backlog nobody owns yet ---------- */}
         {unownedBacklog.days > 0.05 && (
           <div className={`bl-unowned ${onlyUnowned ? "is-active" : ""}`}>
@@ -1097,7 +1034,7 @@ export default function BacklogPanel({
                 <div className={`bl-row ${isOpen ? "is-open" : ""} ${unownedBacklog.ids.has(r.id) ? "is-unowned" : ""}`} key={r.id} style={blVars({ "--i": Math.min(ri, 14) })}>
                   <button type="button" className="bl-row-main" data-spot="" onClick={() => setOpen(isOpen ? null : r.id)} aria-expanded={isOpen}>
                     <span className="bl-who">
-                      <span className="bl-av">{(clientNames[r.clientId] ?? "?").charAt(0).toUpperCase()}</span>
+                      <ClientLogo className="bl-av mg-logo" name={clientNames[r.clientId] ?? "?"} clientId={r.clientId} />
                       <span className="bl-who-t">
                         <b>{clientNames[r.clientId] ?? "—"}</b>
                         <small>{r.type}</small>
