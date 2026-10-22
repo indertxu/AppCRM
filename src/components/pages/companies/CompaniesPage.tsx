@@ -5,7 +5,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import Select from "../../framework/Select";
 import DatePicker from "../../framework/DatePicker";
 import {
-  listCompanies, saveCompany, deleteCompany, companyContactCounts, listContacts,
+  listCompanies, saveCompany, deleteCompany, companyContactCounts, listContacts, linkContactToCompany, unlinkContactFromCompany, renameCrmOption,
   myProfile, isSalesLead, listEmployees, loadCompanyAssignees, setCompanyAssignees,
   listCompanyFields, addCompanyField, updateCompanyField, deleteCompanyField,
   listContactFields, saveContact,
@@ -70,9 +70,16 @@ export default function CompaniesPage() {
 
   const reload = async () => {
     void reloadOptions();
-    setCompanies(await listCompanies().catch(() => []));
-    setCounts(await companyContactCounts().catch(() => ({})));
-    setContacts(await listContacts().catch(() => []));
+    // companies and their people arrive together: a company opened while its
+    // people were still loading used to show none (and "0 contacts")
+    const [cos, cts, cnt] = await Promise.all([
+      listCompanies().catch(() => [] as Company[]),
+      listContacts().catch(() => [] as Contact[]),
+      companyContactCounts().catch(() => ({} as Record<string, number>)),
+    ]);
+    setCompanies(cos);
+    setContacts(cts);
+    setCounts(cnt);
     setAssignees(await loadCompanyAssignees().catch(() => ({})));
     setFields(await listCompanyFields().catch(() => []));
     setContactFields(await listContactFields().catch(() => []));
@@ -110,6 +117,7 @@ export default function CompaniesPage() {
   contacts.forEach((ct) => ct.companyIds.forEach((id) => { if (ct.id) (ctOf.get(id) ?? ctOf.set(id, []).get(id)!).push(ct.id); }));
   const addrOf = (c: Company) => [c.street, c.addr_number, c.postal_code, c.city, c.province, c.country].filter(Boolean).join(", ");
   const statusTags = (c: Company) => { const s = companyStatus(c, rel); return [...(s.client ? ["client"] : []), ...(s.sales ? ["sales"] : []), ...(!s.client && !s.sales ? ["none"] : [])]; };
+  const typeRank = (c: Company) => typeSortKey(typeTags(c));
   const typeTags = (c: Company) => { const s = companyStatus(c, rel); return [...new Set(["crm", ...(c.relationship ?? []), ...(s.client ? ["client"] : []), ...(s.sales ? ["sales"] : [])])]; };
   const allPipes = () => [...new Set(Object.values(rel?.pipesByCompany ?? {}).flat())].sort().map((p) => ({ value: p, label: p }));
   const billing = (c: Company) => c.billing ?? {};
@@ -119,7 +127,7 @@ export default function CompaniesPage() {
     { key: "vat_number", label: "VAT / Tax ID", group: "Company", type: "text", get: (c) => c.vat_number },
     { key: "sector", label: "Sector", group: "Company", type: "select", get: (c) => c.sector, options: () => [...new Set([...sectorOptions(options), ...companies.map((c) => c.sector ?? "").filter(Boolean)])].map((v) => ({ value: v, label: v })) },
     { key: "source", label: "Source", group: "Company", type: "select", get: (c) => c.source ?? "", options: () => [...new Set([...sourceOptions(options), ...companies.map((c) => c.source ?? "").filter(Boolean)])].map((v) => ({ value: v, label: v })) },
-    { key: "relationship", label: "Type (client, partner…)", group: "Company", type: "multi", get: typeTags, options: () => relationshipOptions(options).map((o) => ({ value: o.key, label: o.label })) },
+    { key: "relationship", label: "Type (client, partner…)", group: "Company", type: "multi", get: typeTags, sort: typeRank, options: () => relationshipOptions(options).map((o) => ({ value: o.key, label: o.label })) },
     { key: "website", label: "Website", group: "Contact details", type: "text", get: (c) => c.website },
     { key: "linkedin", label: "LinkedIn", group: "Contact details", type: "text", get: (c) => c.linkedin },
     { key: "email", label: "Email", group: "Contact details", type: "text", get: (c) => c.email },
@@ -265,6 +273,7 @@ export default function CompaniesPage() {
 
   // Configurable overview columns (Name is always first).
   const availableColumns = [
+    { key: "relationship", label: "Types" },
     { key: "vat_number", label: "VAT / Tax ID" },
     { key: "address", label: "Address" },
     { key: "city", label: "City" },
@@ -286,12 +295,13 @@ export default function CompaniesPage() {
   const dataColumns = activeColumns.filter((k) => k !== "contacts");
   const showContacts = activeColumns.includes("contacts");
   // Every column keeps a readable width; when they don't fit, the list scrolls sideways (the name stays put).
-  const colMin = (k: string) => (k === "address" ? 220 : k === "email" ? 190 : k === "vat_number" || k === "phone" || k === "landline" ? 130 : 150);
+  const colMin = (k: string) => (k === "address" ? 220 : k === "email" || k === "relationship" ? 190 : k === "vat_number" || k === "phone" || k === "landline" ? 130 : 150);
   const rowGrid = ["minmax(260px, 2.4fr)", ...dataColumns.map((k) => `minmax(${colMin(k)}px, 1.4fr)`), ...(showContacts ? ["minmax(70px, auto)"] : [])].join(" ");
   const rowMin = 260 + dataColumns.reduce((n, k) => n + colMin(k), 0) + (showContacts ? 70 : 0) + 20 * (dataColumns.length + (showContacts ? 1 : 0)) + 40;
   const setColumnsPersist = (next: string[]) => { setColumns(next); savePref("companyColumns", next).catch(() => {}); };
 
   const renderCell = (c: Company, key: string) => {
+    if (key === "relationship") return <TypeChips tags={typeTags(c).map((tag) => ({ tag }))} pipelines={companyStatus(c, rel).pipelines} />;
     if (key === "vat_number") return <span className="co-lmono">{c.vat_number || "—"}</span>;
     if (key === "address") return <span className="co-laddr">{addrLine(c)}</span>;
     if (key === "city") return <span className="co-laddr">{c.city || "—"}</span>;
@@ -387,7 +397,7 @@ export default function CompaniesPage() {
                       <span className="co-lid-text">
                         <span className="co-lname-row">
                           <span className="co-lname">{c.name}</span>
-                          <StatusPills status={companyStatus(c, rel)} tags={c.relationship} />
+                          {!dataColumns.includes("relationship") && <StatusPills status={companyStatus(c, rel)} tags={c.relationship} />}
                         </span>
                         {(c.legal_name || c.parent_id) && (
                           <span className="co-lsub">{[c.legal_name, c.parent_id ? `part of ${companies.find((x) => x.id === c.parent_id)?.name ?? "a group"}` : ""].filter(Boolean).join(" · ")}</span>
@@ -668,6 +678,14 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
   // Contacts linked to this company, edited live in the drawer.
   const linkedInitial = company.id ? contacts.filter((ct) => ct.companyIds.includes(company.id!)) : [];
   const [linked, setLinked] = useState<Contact[]>(linkedInitial);
+  // The people may still be loading when the panel opens (or reload after a save
+  // elsewhere): follow the list until you add or take someone off here yourself.
+  const [linkTouched, setLinkTouched] = useState(false);
+  useEffect(() => {
+    if (linkTouched || !company.id) return;
+    setLinked(contacts.filter((ct) => ct.companyIds.includes(company.id!)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contacts]);
   // New contacts created inline (not yet in the DB); saved when the company saves.
   const [newContacts, setNewContacts] = useState<Contact[]>([]);
   const [addingContact, setAddingContact] = useState(false);
@@ -778,10 +796,12 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
   const attachable = contacts.filter((ct) => ct.id && !linkedIds.has(ct.id) && !pendingRemoveIds.includes(ct.id!));
   const attachExisting = (id: string) => {
     const ct = contacts.find((x) => x.id === id); if (!ct) return;
+    setLinkTouched(true);
     setLinked((xs) => [...xs, ct]);
     setPendingRemoveIds((xs) => xs.filter((x) => x !== id));
   };
   const detachExisting = (id: string) => {
+    setLinkTouched(true);
     setLinked((xs) => xs.filter((x) => x.id !== id));
     if (contacts.some((x) => x.id === id)) setPendingRemoveIds((xs) => [...xs, id]);
   };
@@ -823,19 +843,20 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
         const err = await saveContact({ ...nc, companyIds: [companyId] });
         if (err) { setBusy(false); setErr(`Contact "${contactName(nc)}": ${err}`); return; }
       }
-      // Existing contacts newly attached here: add this company to their links.
+      // Existing contacts newly attached here: add just this link (the rest of the contact,
+      // and its other companies, are left exactly as they are in the database).
       for (const ct of linked) {
         if (!ct.id) continue;
         if (!ct.companyIds.includes(companyId)) {
-          const err = await saveContact({ ...ct, companyIds: [...ct.companyIds, companyId] });
+          const err = await linkContactToCompany(ct.id, companyId);
           if (err) { setBusy(false); setErr(`Contact "${contactName(ct)}": ${err}`); return; }
         }
       }
-      // Contacts detached here: drop this company from their links.
+      // Contacts detached here: drop just this link.
       for (const id of pendingRemoveIds) {
         const ct = contacts.find((x) => x.id === id);
-        if (ct && ct.companyIds.includes(companyId)) {
-          const err = await saveContact({ ...ct, companyIds: ct.companyIds.filter((x) => x !== companyId) });
+        if (ct?.id) {
+          const err = await unlinkContactFromCompany(ct.id, companyId);
           if (err) { setBusy(false); setErr(`Contact "${contactName(ct)}": ${err}`); return; }
         }
       }
@@ -1458,11 +1479,27 @@ export function CustomFieldsEditor({ fields, api, examples, isReserved, onChange
   const [label, setLabel] = useState("");
   const [type, setType] = useState<CustomFieldLike["type"]>("text");
   const [required, setRequired] = useState(false);
-  const [optionsText, setOptionsText] = useState("");
+  // the new field's options, one by one (typing a comma or pasting a list splits them)
+  const [newOpts, setNewOpts] = useState<string[]>([]);
+  const [optDraft, setOptDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [askDel, setAskDel] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
+  const pushOpts = (raw: string) => {
+    const parts = raw.split(/[,\n;]/).map((x) => x.trim()).filter(Boolean);
+    if (!parts.length) return;
+    setNewOpts((xs) => {
+      const out = [...xs];
+      parts.forEach((p) => { if (!out.some((o) => o.toLowerCase() === p.toLowerCase())) out.push(p); });
+      return out;
+    });
+    setOptDraft(""); setErr(null);
+  };
+  const moveNewOpt = (i: number, d: number) => setNewOpts((xs) => {
+    const j = i + d; if (j < 0 || j >= xs.length) return xs;
+    const c = [...xs]; [c[i], c[j]] = [c[j], c[i]]; return c;
+  });
   const move = async (i: number, d: number) => {
     const j = i + d;
     if (j < 0 || j >= fields.length) return;
@@ -1476,10 +1513,12 @@ export function CustomFieldsEditor({ fields, api, examples, isReserved, onChange
     if (!l) return;
     if (isReserved?.(l)) { setErr(`“${l}” is already a built-in field.`); return; }
     if (fields.some((f) => f.label.trim().toLowerCase() === l.toLowerCase())) { setErr(`There is already a field called “${l}”.`); return; }
+    const draft = optDraft.split(/[,\n;]/).map((x) => x.trim()).filter(Boolean);
+    const options = isChoiceType(type) ? [...newOpts, ...draft.filter((d) => !newOpts.some((o) => o.toLowerCase() === d.toLowerCase()))] : [];
+    if (isChoiceType(type) && !options.length) { setErr("Add at least one option."); return; }
     setBusy(true); setErr(null);
-    const options = isChoiceType(type) ? optionsText.split(",").map((x) => x.trim()).filter(Boolean) : [];
     await api.add({ label: l, type, required, options, sort: fields.length });
-    setLabel(""); setType("text"); setRequired(false); setOptionsText("");
+    setLabel(""); setType("text"); setRequired(false); setNewOpts([]); setOptDraft("");
     await onChanged();
     setBusy(false);
   };
@@ -1552,7 +1591,34 @@ export function CustomFieldsEditor({ fields, api, examples, isReserved, onChange
         </div>
         <div className={`cfe-opts ${isChoiceType(type) ? "is-on" : ""}`}>
           <div className="cfe-opts-in">
-            <input value={optionsText} onChange={(e) => setOptionsText(e.target.value)} placeholder={`Options, separated by commas — ${examples.options}`} tabIndex={isChoiceType(type) ? 0 : -1} />
+            <div className="cfe-ed-opts is-new">
+              <span className="cfe-ed-k">Options <em>{newOpts.length}</em></span>
+              {newOpts.length > 0 && (
+                <ul>
+                  {newOpts.map((o, i) => (
+                    <li key={i}>
+                      <span className="cfe-ed-mv">
+                        <button type="button" disabled={i === 0} onClick={() => moveNewOpt(i, -1)} aria-label="Move up" tabIndex={isChoiceType(type) ? 0 : -1}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 15l6-6 6 6" /></svg></button>
+                        <button type="button" disabled={i === newOpts.length - 1} onClick={() => moveNewOpt(i, 1)} aria-label="Move down" tabIndex={isChoiceType(type) ? 0 : -1}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg></button>
+                      </span>
+                      <input value={o} tabIndex={isChoiceType(type) ? 0 : -1}
+                        onChange={(e) => { const v = e.target.value; setNewOpts((xs) => xs.map((x, k) => (k === i ? v : x))); }}
+                        onBlur={() => setNewOpts((xs) => xs.map((x) => x.trim()).filter(Boolean))} />
+                      <button type="button" className="cfe-ed-x" onClick={() => setNewOpts((xs) => xs.filter((_, k) => k !== i))} aria-label={`Remove ${o}`} title="Remove" tabIndex={isChoiceType(type) ? 0 : -1}>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="cfe-ed-add">
+                <input value={optDraft} tabIndex={isChoiceType(type) ? 0 : -1} placeholder={newOpts.length ? "Add another option…" : `Add an option — e.g. ${examples.options.split(",")[0]?.trim() || "Gold"}`}
+                  onChange={(e) => { const v = e.target.value; if (/[,\n;]/.test(v)) pushOpts(v); else { setOptDraft(v); setErr(null); } }}
+                  onPaste={(e) => { const t = e.clipboardData.getData("text"); if (/[,\n;]/.test(t)) { e.preventDefault(); pushOpts(optDraft + t); } }}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); pushOpts(optDraft); } }} />
+                <button type="button" onClick={() => pushOpts(optDraft)} disabled={!optDraft.trim()} tabIndex={isChoiceType(type) ? 0 : -1}>+ Add</button>
+              </div>
+            </div>
           </div>
         </div>
         {err && <p className="dw-err">{err}</p>}
@@ -1666,7 +1732,22 @@ function OptionList({ kind, title, hint, options, builtIn, placeholder, onChange
   const [label, setLabel] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [askDel, setAskDel] = useState<string | null>(null);
+  // renaming one of yours: its id and the name being typed
+  const [edit, setEdit] = useState<{ id: string; label: string } | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
   const mine = options.filter((o) => o.kind === kind);
+  const saveEdit = async () => {
+    if (!edit) return;
+    const o = mine.find((x) => x.id === edit.id);
+    const l = edit.label.trim();
+    if (!o || !l || l === o.label) { setEdit(null); return; }
+    if ([...builtIn, ...mine.filter((x) => x.id !== o.id).map((x) => x.label)].some((x) => x.toLowerCase() === l.toLowerCase())) { setErr(`“${l}” is already there.`); return; }
+    setSavingEdit(true);
+    const e = await renameCrmOption(o, l);
+    setSavingEdit(false);
+    if (e) { setErr(e); return; }
+    setEdit(null); setErr(null); await onChanged();
+  };
   const add = async () => {
     const l = label.trim();
     if (!l) return;
@@ -1679,8 +1760,23 @@ function OptionList({ kind, title, hint, options, builtIn, placeholder, onChange
     <>
       <div className="cf-opts">
         {builtIn.map((b) => <span key={b} className="cf-opt is-builtin" title="Built in">{b}</span>)}
-        {mine.map((o) => (
+        {mine.map((o) => edit?.id === o.id ? (
+          <span key={o.id} className="cf-opt is-editing">
+            <input autoFocus value={edit.label} disabled={savingEdit} aria-label={`New name for ${o.label}`}
+              onChange={(e) => { setEdit({ id: o.id, label: e.target.value }); setErr(null); }}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void saveEdit(); } if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setEdit(null); } }}
+              size={Math.max(6, edit.label.length + 1)} />
+            <button type="button" className="is-yes" onClick={() => void saveEdit()} disabled={savingEdit || !edit.label.trim()} title="Save — every record with it is renamed too">{savingEdit ? "…" : "save"}</button>
+            <button type="button" onClick={() => setEdit(null)} disabled={savingEdit}>cancel</button>
+          </span>
+        ) : (
           <span key={o.id} className={`cf-opt ${askDel === o.id ? "is-asking" : ""}`}>{o.label}
+            {askDel !== o.id && (
+              <button type="button" className="cf-opt-edit" aria-label={`Rename ${o.label}`} title="Rename — every record with it follows"
+                onClick={() => { setAskDel(null); setErr(null); setEdit({ id: o.id, label: o.label }); }}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16zM14 6l4 4" /></svg>
+              </button>
+            )}
             {askDel === o.id ? (
               <span className="cf-opt-ask">remove?
                 <button type="button" className="is-yes" onClick={async () => { setAskDel(null); await deleteCrmOption(o.id); await onChanged(); }}>yes</button>
@@ -1933,22 +2029,77 @@ export const telHref = (phone?: string | null, ext?: string | null) =>
 export const phoneText = (phone?: string | null, ext?: string | null) => (phone ? `${phone}${ext ? ` · ext. ${ext}` : ""}` : "");
 
 /** The client / in-sales pills — the same on Companies and Contacts. */
-export function StatusPills({ status, tags = [], hero }: { status: RelStatus; tags?: string[]; hero?: boolean }) {
+export function StatusPills({ status, tags = [], hero, from }: {
+  status: RelStatus; tags?: string[]; hero?: boolean;
+  /** Where each pill comes from (contacts: the companies they work for), shown on hover. */
+  from?: Record<string, string[]>;
+}) {
   const custom = tags.filter((t) => t !== "sales" && t !== "client" && t !== "crm");
   const pipes = status.pipelines;
   const salesTxt = `In sales${pipes.length ? ` · ${pipes[0]}${pipes.length > 1 ? ` +${pipes.length - 1}` : ""}` : ""}`;
+  const via = (k: string) => (from?.[k]?.length ? `from ${from[k].join(", ")}` : "");
+  const tip = (...parts: string[]) => parts.filter(Boolean).join(" · ") || undefined;
   if (hero) return (
     <>
-      {status.client && <span className="dw-tag is-ok"><DwIcon name="star" />Client</span>}
-      {status.sales && <span className="dw-tag is-sales" title={pipes.join(", ")}><DwIcon name="trend" />{salesTxt}</span>}
-      {custom.map((t) => <span key={t} className="dw-tag"><DwIcon name="tag" />{t}</span>)}
+      {status.client && <span className="dw-tag is-ok" title={tip(via("client"))}><DwIcon name="star" />Client</span>}
+      {status.sales && <span className="dw-tag is-sales" title={tip(pipes.join(", "), via("sales"))}><DwIcon name="trend" />{salesTxt}</span>}
+      {custom.map((t) => <span key={t} className="dw-tag" title={tip(via(t))}><DwIcon name="tag" />{relLabel(t)}</span>)}
     </>
   );
   return (
     <>
-      {status.client && <span className="co-rel co-rel-client">Client</span>}
-      {status.sales && <span className="co-rel co-rel-tracking" title={pipes.join(", ")}>{salesTxt}</span>}
-      {custom.slice(0, 2).map((t) => <span key={t} className="co-rel co-rel-tag">{t}</span>)}
+      {status.client && <span className="co-rel co-rel-client" title={tip(via("client"))}>Client</span>}
+      {status.sales && <span className="co-rel co-rel-tracking" title={tip(pipes.join(", "), via("sales"))}>{salesTxt}</span>}
+      {custom.slice(0, 2).map((t) => <span key={t} className="co-rel co-rel-tag" title={tip(via(t))}>{relLabel(t)}</span>)}
+      {custom.length > 2 && <span className="co-rel co-rel-inh-more" title={custom.slice(2).map((t) => [relLabel(t), via(t)].filter(Boolean).join(" — ")).join("\n")}>+{custom.length - 2}</span>}
+    </>
+  );
+}
+
+/** Sorting by type: clients first, then in sales, then your own types (A→Z), CRM-only last. */
+export const typeSortKey = (tags: string[]) =>
+  `${tags.includes("client") ? 0 : 1}${tags.includes("sales") ? 0 : 1}${tags.filter((t) => t !== "crm" && t !== "client" && t !== "sales").map((t) => t.toLowerCase()).sort().join(",") || "~"}`;
+
+/**
+ * Every type of a company or contact as chips, in one order on both pages:
+ * CRM, Client, In sales, then your own (Partner, Supplier…). Used by the
+ * "Types" column; hovering a chip says where it comes from.
+ */
+export function TypeChips({ tags, pipelines = [], max = 4 }: { tags: { tag: string; from?: string[] }[]; pipelines?: string[]; max?: number }) {
+  const order = (k: string) => (k === "crm" ? 0 : k === "client" ? 1 : k === "sales" ? 2 : 3);
+  const list = [...tags].sort((a, b) => order(a.tag) - order(b.tag));
+  const cls = (k: string) => (k === "crm" ? "co-rel co-rel-inh is-crm" : k === "client" ? "co-rel co-rel-client" : k === "sales" ? "co-rel co-rel-tracking" : "co-rel co-rel-tag");
+  const tip = (t: { tag: string; from?: string[] }) =>
+    [relLabel(t.tag), t.tag === "sales" && pipelines.length ? pipelines.join(", ") : "", t.from?.length ? `from ${t.from.join(", ")}` : ""].filter(Boolean).join(" · ");
+  return (
+    <span className="co-types">
+      {list.slice(0, max).map((t) => <span key={t.tag} className={cls(t.tag)} title={tip(t)}>{relLabel(t.tag)}</span>)}
+      {list.length > max && <span className="co-rel co-rel-inh-more" title={list.slice(max).map(tip).join("\n")}>+{list.length - max}</span>}
+    </span>
+  );
+}
+
+/**
+ * The types a contact gets from its companies (CRM, Client, In sales, Partner…),
+ * marked with a small building so you can tell they come from the company.
+ * In the list only your own types show (client / in sales are already in the
+ * status pills); the panel shows them all, with the company they come from.
+ */
+export function InheritedTags({ tags, hero, max = 2 }: { tags: { tag: string; from: string[] }[]; hero?: boolean; max?: number }) {
+  const bld = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={DW_ICON.building} /></svg>;
+  const why = (t: { tag: string; from: string[] }) => `${relLabel(t.tag)} — from ${t.from.join(", ")}`;
+  if (hero) {
+    const shown = tags.filter((t) => t.tag !== "client" && t.tag !== "sales");
+    return <>{shown.map((t) => (
+      <span key={t.tag} className="dw-tag is-inh" title={why(t)}><DwIcon name="building" />{relLabel(t.tag)}<small>{t.from.length > 1 ? `${t.from.length} companies` : t.from[0]}</small></span>
+    ))}</>;
+  }
+  const own = tags.filter((t) => t.tag !== "crm" && t.tag !== "client" && t.tag !== "sales");
+  if (!own.length) return null;
+  return (
+    <>
+      {own.slice(0, max).map((t) => <span key={t.tag} className="co-rel co-rel-inh" title={why(t)}>{bld}<span>{relLabel(t.tag)}</span></span>)}
+      {own.length > max && <span className="co-rel co-rel-inh co-rel-inh-more" title={own.slice(max).map(why).join("\n")}>+{own.length - max}</span>}
     </>
   );
 }

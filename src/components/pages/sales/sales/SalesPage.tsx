@@ -11,9 +11,10 @@ import { listPipelines, loadPipeline, loadPhasesByPipeline, sortPipelines, moveD
 import { useBulkSelection, BulkBar, BulkCheck, DataTools, SettingsShell, GEAR, type BulkAction, type SxSection } from "../../companies/CompaniesPage";
 import { PageCover, PageLoader } from "../../../framework/AppLayout";
 import { loadProducts, loadServices, type Product } from "../../settings/catalogApi";
-import { listTrackings, loadTrackingTeams, loadSalesBoot, type SalesBootRows, setTrackingPhase, setTrackingStatus, deleteTracking, setTrackingOwner, addTrackingEmployee, removeTrackingEmployee, setDealCloseDate, setDealCloseProb, stampPhaseEntry, clearPhaseEventsAfter, trackingPct, loadPotentialTotals, yearTotalsFromLastRows, type Tracking,
+import { listTrackings, loadTrackingTeams, loadSalesBoot, type SalesBootRows, setTrackingPhase, setTrackingStatus, deleteTracking, setTrackingOwner, addTrackingEmployee, removeTrackingEmployee, setDealCloseDate, setDealCloseProb, stampPhaseEntry, clearPhaseEventsAfter, trackingPct, loadPotentialTotals, totalsFromLastRows, useRevenueMode, REVENUE_MODES, type RevenueMode, type Tracking,
   clientExistsForCompany, hasClientProductsForTracking, loadTrackingProducts } from "./salesApi";
 import TrackingDetail from "../trackings/TrackingDetail";
+import { RevenueModeSetting } from "../trackings/HandoffClientForm";
 import { HxPrompt } from "../trackings/HandoffConfirmServices";
 import ExportModal from "../extras/ExportModal";
 import SalesReport from "../extras/SalesReport";
@@ -124,6 +125,7 @@ const SO_ICON = {
   search: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-4-4",
   empty: "M4 7l8-4 8 4-8 4zM4 12l8 4 8-4M4 17l8 4 8-4",
   roles: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM19 8v6M22 11h-6",
+  users: "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75",
 };
 function SoIcon({ d, w = 2, fill = false }: { d: string; w?: number; fill?: boolean }) {
   return (
@@ -924,10 +926,9 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
     if (perms && allowedViews.length && !(allowedViews as readonly string[]).includes(view)) setView(allowedViews[0]);
   }, [perms, view]); // eslint-disable-line react-hooks/exhaustive-deps
   // Values shown for a frozen deal are the ones it had at the handover.
-  // Deal value: the whole contract (a 3-year subscription × 3) or only this year's share.
-  const [valueMode, setValueModeS] = useState<"term" | "year">(() => { try { return localStorage.getItem("sales.valueMode") === "year" ? "year" : "term"; } catch { return "term"; } });
-  const setValueMode = (v: "term" | "year") => { setValueModeS(v); try { localStorage.setItem("sales.valueMode", v); } catch { /* private mode */ } };
-  const baseTotals = useMemo(() => (valueMode === "year" ? yearTotalsFromLastRows() ?? rawTotals : rawTotals), [valueMode, rawTotals]);
+  // Deal value: products' first year or every year, services counted or not (team setting, switchable per viewer).
+  const [valueMode, setValueMode] = useRevenueMode();
+  const baseTotals = useMemo(() => totalsFromLastRows(valueMode) ?? rawTotals, [valueMode, rawTotals]);
   const potentialTotals = useMemo(() => {
     if (!frozenById.size) return baseTotals;
     const out = { ...baseTotals };
@@ -1455,6 +1456,8 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
       ...(exportLevel !== "none" ? [{ key: "export", title: "Export", hint: exportLevel === "all" ? "Every deal, contact or company to Excel" : "The deals you can see, to Excel", icon: I("M12 3v12M7 10l5 5 5-5M5 21h14"), tone: "#8b5cf6", onOpen: () => setExporting(true) }] : []),
     ];
     const sections: SxSection[] = [
+      { k: "revenue", label: "Potential revenue", icon: "trend", tone: "green" as const, title: "Potential revenue", hint: "Which figure every deal is worth on the list, the board, the forecast and the reports",
+        body: <RevenueModeSetting canEdit={canManage || canFields} /> },
       ...(dataItems.length ? [{ k: "data", label: "Import & export", icon: "upload", tone: "blue" as const, title: "Import & export", hint: "Bring deals in from another CRM, and take them out to Excel", body: <DataTools items={dataItems} /> }] : []),
       ...(canFields ? [{ k: "fields", label: "Deal fields", icon: "sliders", tone: "amber" as const, count: trackingFields.length, title: "Deal fields", hint: "Your own fields on every deal: add, rename, reorder and mark them required",
         body: <TrackingFieldsModal inline canEdit={canFields} onChanged={setTrackingFields} onClose={settings.onBack} /> }] : []),
@@ -1619,8 +1622,8 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
             options={salesPeople.map((e) => ({ value: e.id, label: e.name }))} />
           <SalesRangeFilter value={fRanges} onChange={setFRanges}
             probLabel={probView === "rep" ? "Sales estimate" : probView === "mgr" ? "Management estimate" : probView === "avg" ? "Average of all" : "Phase probability"} />
-          <SalesMultiFilter single values={[valueMode]} onChange={(v) => v[0] && setValueMode(v[0] as "term" | "year")} placeholder="Deal value" searchFrom={99}
-            options={[{ value: "term", label: "Value: whole contract" }, { value: "year", label: "Value: this year only" }]} />
+          <SalesMultiFilter single values={[valueMode]} onChange={(v) => v[0] && setValueMode(v[0] as RevenueMode)} placeholder="Deal value" searchFrom={99}
+            options={REVENUE_MODES.map((m) => ({ value: m.value, label: `Value: ${m.label}` }))} />
           <SalesMultiFilter single values={[sort]} onChange={(v) => v[0] && setSort(v[0])} placeholder="Sort" searchFrom={99}
             options={[{ value: "recent", label: "Most recent" }, { value: "oldest", label: "Oldest" }, { value: "az", label: "A-Z" }, { value: "za", label: "Z-A" }, { value: "stage_lo", label: "Stage: early → late" }, { value: "stage_hi", label: "Stage: late → early" }, { value: "prod_az", label: "Product: A-Z" }, { value: "prod_za", label: "Product: Z-A" }, { value: "prob_hi", label: "Probability: high → low" }, { value: "prob_lo", label: "Probability: low → high" }, { value: "close_soon", label: "Expected close: soonest first" }, { value: "close_late", label: "Expected close: latest first" }, { value: "rev_hi", label: "Revenue: high → low" }, { value: "rev_lo", label: "Revenue: low → high" }]} />
           </div>
@@ -1848,6 +1851,18 @@ type RowProps = {
 };
 const dlDay = (iso: string) => new Date(iso).toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "2-digit" });
 const dlIni = (n: string) => n.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
+/** "in 12 days", "3 weeks ago", "today"… (calendar days, local time). */
+function dlRel(iso: string): { text: string; past: boolean } {
+  const d = new Date(iso); const t = new Date();
+  const day = (x: Date) => Date.UTC(x.getFullYear(), x.getMonth(), x.getDate());
+  const n = Math.round((day(d) - day(t)) / 86400000);
+  if (n === 0) return { text: "today", past: false };
+  if (n === 1) return { text: "tomorrow", past: false };
+  if (n === -1) return { text: "yesterday", past: true };
+  const a = Math.abs(n);
+  const span = a < 14 ? `${a} days` : a < 60 ? `${Math.round(a / 7)} weeks` : a < 730 ? `${Math.round(a / 30.4)} months` : `${Math.round(a / 365)} years`;
+  return n > 0 ? { text: `in ${span}`, past: false } : { text: `${span} ago`, past: true };
+}
 
 /** One deal in the list. Memoised: hovering, scrolling or ticking a box re-renders only the rows that changed. */
 const TrackingRow = memo(function TrackingRow({ tracking, title, company, website, contactCount, pipeline, phases, product, revenue, ownerName, closeDate, closeProbOverride, probLabel, onOpen, handedOver = false, selected = false, selecting = false, onToggle, cols, cell }: RowProps) {
@@ -1927,17 +1942,79 @@ const TrackingRow = memo(function TrackingRow({ tracking, title, company, websit
 
       <span className="dz-go" aria-hidden="true"><SoIcon d={SO_ICON.arrow} w={2.2} /></span>
 
-      {/* More about the deal: unfolds when the pointer rests on the row (not while sweeping past). */}
+      {/* More about the deal: a quiet panel that unfolds when the pointer rests on the row (not while sweeping past). */}
       <span className="dz-x" aria-hidden="true">
         <span className="dz-x-in">
-          <span className="dz-xi"><i>Owner</i><b className={ownerName ? "" : "is-none"}>{ownerName ?? "No owner"}</b></span>
-          <span className="dz-xi"><i>Pipeline</i><b>{pipeline || "—"}</b></span>
-          <span className="dz-xi"><i>Step</i><b>{curIdx >= 0 && phases.length > 0 ? `${curIdx + 1} of ${phases.length}` : "Not started"}</b></span>
-          <span className="dz-xi"><i>People</i><b>{contactCount} contact{contactCount === 1 ? "" : "s"}{teamCount ? ` · ${teamCount} on the team` : ""}</b></span>
-          {(tracking.rep_close_prob != null || tracking.mgr_close_prob != null) && (
-            <span className="dz-xi"><i>Estimates</i><b>{tracking.rep_close_prob != null ? `Sales ${tracking.rep_close_prob}%` : "Sales —"} · {tracking.mgr_close_prob != null ? `Mgmt ${tracking.mgr_close_prob}%` : "Mgmt —"}</b></span>
-          )}
-          <span className="dz-xi"><i>Started</i><b>{tracking.created_at ? dlDay(tracking.created_at) : "—"}</b></span>
+          <span className="dz-xp">
+            {/* 1 · where it is in the pipeline */}
+            <span className="dz-xs dz-xs-pipe">
+              <span className="dz-xh">{pipeline && pipeline !== "—" ? pipeline : "Pipeline"}</span>
+              <span className="dz-tl" style={{ ["--n" as string]: Math.max(phases.length, 1) } as CSSProperties}>
+                {phases.length > 0 ? phases.map((p, i) => (
+                  <i key={p.id} title={p.name}
+                    className={i < curIdx || tracking.status === "won" ? "is-done" : i === curIdx ? "is-cur" : ""} />
+                )) : <i />}
+              </span>
+              <span className="dz-tl-t">
+                <b>{stage}</b>
+                <small>
+                  {tracking.status === "won" ? "Won" : tracking.status === "lost" ? "Lost" : tracking.status === "paused" ? "On hold" :
+                    curIdx >= 0 && phases.length ? `Step ${curIdx + 1} of ${phases.length}${phases[curIdx + 1] ? ` · next: ${phases[curIdx + 1].name}` : " · last step"}` : "Not started yet"}
+                </small>
+              </span>
+            </span>
+
+            {/* 2 · when */}
+            <span className="dz-xs dz-xs-when">
+              <span className="dz-xh">{closed ? (tracking.status === "won" ? "Won on" : "Lost on") : "Expected close"}</span>
+              {(() => {
+                const iso = closed ? tracking.close_date! : closeDate;
+                if (!iso) return <span className="dz-big is-none">No date yet</span>;
+                const rel = dlRel(iso);
+                return (
+                  <>
+                    <span className="dz-big">{dlDay(iso)}</span>
+                    <span className={`dz-rel ${!closed && rel.past ? "is-late" : ""}`}>{!closed && rel.past ? `${rel.text === "yesterday" ? "1 day" : rel.text.replace(/ ago$/, "")} overdue` : rel.text}</span>
+                  </>
+                );
+              })()}
+              <span className="dz-meta">Started {tracking.created_at ? `${dlDay(tracking.created_at)} · ${dlRel(tracking.created_at).text}` : "—"}</span>
+            </span>
+
+            {/* 3 · who */}
+            <span className="dz-xs dz-xs-who">
+              <span className="dz-xh">People</span>
+              <span className="dz-person">
+                <span className={`dz-av ${ownerName ? "" : "is-none"}`}>{ownerName ? dlIni(ownerName) : "?"}</span>
+                <span className="dz-person-t"><b className={ownerName ? "" : "is-none"}>{ownerName ?? "No owner"}</b><small>Owner</small></span>
+              </span>
+              <span className="dz-pills">
+                <span className="dz-pill"><SoIcon d={SO_ICON.users} w={2} />{contactCount} contact{contactCount === 1 ? "" : "s"}</span>
+                {teamCount > 0 && <span className="dz-pill">{teamCount} on the team</span>}
+              </span>
+            </span>
+
+            {/* 4 · how likely */}
+            <span className="dz-xs dz-xs-odds">
+              <span className="dz-xh">Confidence</span>
+              {([
+                ["Pipeline", phaseProb],
+                ["Sales", tracking.rep_close_prob ?? null],
+                ["Management", tracking.mgr_close_prob ?? null],
+              ] as [string, number | null][]).map(([k, v]) => (
+                <span key={k} className={`dz-odd ${v == null ? "is-none" : v >= 70 ? "is-hi" : v >= 40 ? "is-mid" : "is-lo"}`}>
+                  <i>{k}</i>
+                  <span className="dz-odd-bar"><em style={{ ["--v" as string]: (v ?? 0) / 100 } as CSSProperties} /></span>
+                  <b>{v == null ? "—" : `${v}%`}</b>
+                </span>
+              ))}
+            </span>
+
+            <span className="dz-xs dz-xs-go">
+              <span className="dz-open">Open deal <SoIcon d={SO_ICON.arrow} w={2.2} /></span>
+              {product && <span className="dz-xprod" title={product}>{product}</span>}
+            </span>
+          </span>
         </span>
       </span>
     </button>

@@ -137,9 +137,9 @@ export async function listEmployees(): Promise<Employee[]> {
 
 // ---- Who can see what ----
 export async function loadCompanyAssignees(): Promise<Record<string, string[]>> {
-  const { data } = await supabase.from("company_assignees").select("company_id, profile_id");
+  const data = await readAll<any>("company_assignees", "company_id, profile_id", ["company_id", "profile_id"]).catch(() => []);
   const out: Record<string, string[]> = {};
-  (data ?? []).forEach((r: any) => { (out[r.company_id] ??= []).push(r.profile_id); });
+  data.forEach((r: any) => { (out[r.company_id] ??= []).push(r.profile_id); });
   return out;
 }
 export async function setCompanyAssignees(companyId: string, profileIds: string[]) {
@@ -149,9 +149,9 @@ export async function setCompanyAssignees(companyId: string, profileIds: string[
   }
 }
 export async function loadContactAssignees(): Promise<Record<string, string[]>> {
-  const { data } = await supabase.from("contact_assignees").select("contact_id, profile_id");
+  const data = await readAll<any>("contact_assignees", "contact_id, profile_id", ["contact_id", "profile_id"]).catch(() => []);
   const out: Record<string, string[]> = {};
-  (data ?? []).forEach((r: any) => { (out[r.contact_id] ??= []).push(r.profile_id); });
+  data.forEach((r: any) => { (out[r.contact_id] ??= []).push(r.profile_id); });
   return out;
 }
 export async function setContactAssignees(contactId: string, profileIds: string[]) {
@@ -162,9 +162,27 @@ export async function setContactAssignees(contactId: string, profileIds: string[
 }
 
 // ---- Companies ----
+/**
+ * Every row of a table. The API hands back at most 1000 rows per call, so a
+ * plain select silently drops the rest (a contact linked past row 1000 looked
+ * unlinked on its company). Pages through until the end.
+ */
+async function readAll<T = any>(table: string, cols: string, orders: string[]): Promise<T[]> {
+  const out: T[] = [];
+  for (let from = 0; ; from += 1000) {
+    let q = supabase.from(table).select(cols);
+    // a stable order (ending in a unique key) so pages never overlap or skip
+    orders.forEach((o) => { q = q.order(o); });
+    const { data, error } = await q.range(from, from + 999);
+    if (error) { if (from === 0) throw error; break; }
+    out.push(...((data ?? []) as T[]));
+    if (!data || data.length < 1000) break;
+  }
+  return out;
+}
+
 export async function listCompanies(): Promise<Company[]> {
-  const { data } = await supabase.from("companies").select("*").order("name");
-  return (data ?? []) as Company[];
+  return readAll<Company>("companies", "*", ["name", "id"]);
 }
 
 export async function saveCompany(c: Company): Promise<string | null> {
@@ -216,19 +234,22 @@ export async function deleteCompany(id: string): Promise<string | null> {
 
 // How many contacts each company has (for list badges).
 export async function companyContactCounts(): Promise<Record<string, number>> {
-  const { data } = await supabase.from("company_contacts").select("company_id");
+  const data = await readAll<any>("company_contacts", "company_id, contact_id", ["company_id", "contact_id"]);
   const out: Record<string, number> = {};
-  (data ?? []).forEach((r: any) => { out[r.company_id] = (out[r.company_id] ?? 0) + 1; });
+  data.forEach((r: any) => { out[r.company_id] = (out[r.company_id] ?? 0) + 1; });
   return out;
 }
 
 // ---- Contacts ----
 export async function listContacts(): Promise<Contact[]> {
-  const { data: rows } = await supabase.from("contacts").select("*").order("first_name");
-  const { data: links } = await supabase.from("company_contacts").select("contact_id,company_id");
+  // every contact and every link, in pages (past 1000 rows a plain select drops the rest)
+  const [rows, links] = await Promise.all([
+    readAll<any>("contacts", "*", ["first_name", "id"]),
+    readAll<any>("company_contacts", "contact_id, company_id", ["contact_id", "company_id"]),
+  ]);
   const byContact: Record<string, string[]> = {};
-  (links ?? []).forEach((l: any) => { (byContact[l.contact_id] ??= []).push(l.company_id); });
-  return (rows ?? []).map((r: any) => ({ ...r, companyIds: byContact[r.id] ?? [] }));
+  links.forEach((l: any) => { const list = (byContact[l.contact_id] ??= []); if (!list.includes(l.company_id)) list.push(l.company_id); });
+  return rows.map((r: any) => ({ ...r, companyIds: byContact[r.id] ?? [] }));
 }
 
 export async function saveContact(c: Contact): Promise<string | null> {
@@ -265,6 +286,17 @@ export async function saveContact(c: Contact): Promise<string | null> {
     if (lErr) return lErr.message;
   }
   return null;
+}
+
+/** Link one contact to one company (only that link: nothing else on the contact is rewritten). */
+export async function linkContactToCompany(contactId: string, companyId: string): Promise<string | null> {
+  const { error } = await supabase.from("company_contacts").insert({ company_id: companyId, contact_id: contactId });
+  return error && !/duplicate|unique/i.test(error.message) ? error.message : null;
+}
+/** Take one contact off one company (the contact and its other companies stay). */
+export async function unlinkContactFromCompany(contactId: string, companyId: string): Promise<string | null> {
+  const { error } = await supabase.from("company_contacts").delete().eq("contact_id", contactId).eq("company_id", companyId);
+  return error?.message ?? null;
 }
 
 export async function deleteContact(id: string): Promise<string | null> {
@@ -649,6 +681,59 @@ export async function deleteCrmOption(id: string): Promise<string | null> {
   const { error } = await supabase.from("crm_options").delete().eq("id", id);
   return error?.message ?? null;
 }
+/**
+ * Rename one of your own list entries (a type, sector, source or product kind)
+ * and carry the new name to every record that uses it, so nothing is left
+ * pointing at the old name.
+ */
+export async function renameCrmOption(opt: CrmOption, to: string): Promise<string | null> {
+  const next = to.trim();
+  const from = opt.label;
+  if (!next || next === from) return null;
+  const { error } = await supabase.from("crm_options").update({ label: next }).eq("id", opt.id);
+  if (error) return /duplicate|unique/i.test(error.message) ? `“${next}” is already on the list.` : error.message;
+  if (opt.kind === "relationship") {
+    // companies keep their types as a list of names
+    const rows = await readAll<any>("companies", "id, relationship", ["id"]).catch(() => []);
+    for (const r of rows) {
+      const list: string[] = Array.isArray(r.relationship) ? r.relationship : [];
+      if (!list.includes(from)) continue;
+      const { error: e } = await supabase.from("companies").update({ relationship: [...new Set(list.map((x) => (x === from ? next : x)))] }).eq("id", r.id);
+      if (e) return e.message;
+    }
+  } else if (opt.kind === "sector" || opt.kind === "source") {
+    const { error: e } = await supabase.from("companies").update({ [opt.kind]: next }).eq(opt.kind, from);
+    if (e) return e.message;
+  } else if (opt.kind === "product_kind") {
+    const { error: e } = await supabase.from("products").update({ kind: next }).eq("kind", from);
+    if (e && !/column .* does not exist/i.test(e.message)) return e.message;
+  }
+  return null;
+}
+
+const coIndex = new WeakMap<Company[], Map<string, Company>>();
+/**
+ * The types a contact gets from the companies it works for (CRM, Client,
+ * In sales and your own, e.g. Partner), with the companies each one comes from.
+ * Worked out live from the links, never stored on the contact.
+ */
+export function inheritedCompanyTags(ct: { companyIds: string[] }, companies: Company[], rel: RelationshipSets | null): { tag: string; from: string[] }[] {
+  const out = new Map<string, string[]>();
+  const add = (tag: string, name: string) => { const l = out.get(tag) ?? []; if (!l.includes(name)) l.push(name); out.set(tag, l); };
+  let byId = coIndex.get(companies);
+  if (!byId) { byId = new Map(companies.map((x) => [x.id as string, x])); coIndex.set(companies, byId); }
+  ct.companyIds.forEach((id) => {
+    const co = byId!.get(id);
+    if (!co) return;
+    const s = companyStatus(co, rel);
+    add("crm", co.name);
+    if (s.client) add("client", co.name);
+    if (s.sales) add("sales", co.name);
+    (co.relationship ?? []).forEach((t) => { if (t !== "crm" && t !== "client" && t !== "sales") add(t, co.name); });
+  });
+  return [...out.entries()].map(([tag, from]) => ({ tag, from }));
+}
+
 /** Every sector to choose from: the defaults, then yours. */
 export const sectorOptions = (opts: CrmOption[]) => {
   const out = DEFAULT_SECTORS.map((s) => s.label).filter((l) => l !== "Other");

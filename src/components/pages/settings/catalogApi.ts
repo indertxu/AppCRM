@@ -16,6 +16,43 @@ export interface Product {
   in_proposals?: boolean;
   tiers: ProductTier[];
   calculator?: Calculator | null;
+  /**
+   * Multi-year contracts (29_catalog_builder.sql). When true the product can be
+   * sold for several years; the deal calculator (LineCalcModal) should offer a
+   * number of years starting at `default_years` and apply the annual increase
+   * `increment_mode` / `increment_value` to each year after the first
+   * ("percent": +value % on the previous year, compounded; "amount": +value €
+   * per year; "none": flat). `yearlySchedule()` below does the maths.
+   * Missing (before the SQL) = single year, no increase.
+   */
+  multi_year?: boolean;
+  default_years?: number;
+  increment_mode?: IncrementMode;
+  increment_value?: number;
+}
+
+export type IncrementMode = "none" | "percent" | "amount";
+/**
+ * The value of each contract year: year 1 is `firstYear`, every later year
+ * goes up by the increase (percent compounds on the previous year; amount is
+ * added once per year). Shared by the catalog preview and the deal calculator.
+ */
+export function yearlySchedule(firstYear: number, years: number, mode: IncrementMode | null | undefined, value: number | null | undefined): number[] {
+  const n = Math.max(1, Math.min(20, Math.round(Number(years) || 1)));
+  const v = Number(value) || 0;
+  const out: number[] = [];
+  let cur = Number(firstYear) || 0;
+  for (let i = 0; i < n; i++) {
+    if (i > 0) cur = mode === "percent" ? cur * (1 + v / 100) : mode === "amount" ? cur + v : cur;
+    out.push(Math.round(cur * 100) / 100);
+  }
+  return out;
+}
+/** Short text for an annual increase: "+3% / year", "+€500 / year", "Flat". */
+export function incrementLabel(mode: IncrementMode | null | undefined, value: number | null | undefined): string {
+  const v = Number(value) || 0;
+  if (!mode || mode === "none" || !v) return "Flat";
+  return mode === "percent" ? `+${v}% / year` : `+€${v.toLocaleString(undefined, { maximumFractionDigits: 2 })} / year`;
 }
 
 // ---- Calculator (optional, one per product or service) ----
@@ -284,27 +321,46 @@ export function servicesFromRows(svcs: any[], roles: any[], calcs: Record<string
   });
 }
 
-/** Writes a product / service row; before 13_proposal_decks.sql there is no in_proposals column, so it retries without it. */
-async function writeRow(table: "products" | "services", id: string | undefined, row: Record<string, any>): Promise<{ id?: string; error: string | null }> {
+/** Columns added by later SQL files: a database without them still saves the rest. */
+const OPTIONAL_COLS = ["in_proposals", "multi_year", "default_years", "increment_mode", "increment_value"];
+/** Writes a product / service row; retries without any optional column the database doesn't have yet (13_proposal_decks.sql, 29_catalog_builder.sql). */
+async function writeRow(table: "products" | "services", id: string | undefined, row: Record<string, any>): Promise<{ id?: string; error: string | null; dropped: string[] }> {
   const go = async (r: Record<string, any>) => id
     ? await supabase.from(table).update(r).eq("id", id).then(({ error }) => ({ id, error }))
     : await supabase.from(table).insert(r).select("id").single().then(({ data, error }) => ({ id: (data as any)?.id as string | undefined, error }));
-  let res = await go(row);
-  if (res.error && "in_proposals" in row && /in_proposals/i.test(res.error.message)) {
-    const { in_proposals: _skip, ...rest } = row; void _skip;
-    res = await go(rest);
+  let cur = { ...row };
+  const dropped: string[] = [];
+  let res = await go(cur);
+  for (let n = 0; n < OPTIONAL_COLS.length && res.error; n++) {
+    const msg = res.error.message;
+    const col = OPTIONAL_COLS.find((c) => c in cur && msg.toLowerCase().includes(c));
+    if (!col) break;
+    const { [col]: _skip, ...rest } = cur; void _skip;
+    cur = rest; dropped.push(col);
+    res = await go(cur);
   }
-  return { id: res.id, error: res.error?.message ?? null };
+  return { id: res.id, error: res.error?.message ?? null, dropped };
 }
 
 // ---- Save a product (upsert product, then replace its tiers + durations) ----
+/**
+ * Returns null when saved, an error message when not, or a message starting
+ * with "Saved, but" when it saved without something (a missing SQL upgrade).
+ */
 export async function saveProduct(p: Product): Promise<string | null> {
   // upsert product row
-  const base = { name: p.name, kind: p.kind, billing: p.billing, billing_period: p.billing_period ?? "monthly", description: p.description ?? null, active: p.active ?? true, in_proposals: p.in_proposals !== false };
+  const years = Math.max(1, Math.min(10, Math.round(Number(p.default_years) || 1)));
+  const base = {
+    name: p.name, kind: p.kind, billing: p.billing, billing_period: p.billing_period ?? "monthly", description: p.description ?? null, active: p.active ?? true, in_proposals: p.in_proposals !== false,
+    multi_year: !!p.multi_year, default_years: p.multi_year ? years : 1,
+    increment_mode: p.multi_year ? (p.increment_mode ?? "none") : "none",
+    increment_value: p.multi_year && p.increment_mode && p.increment_mode !== "none" ? Number(p.increment_value) || 0 : 0,
+  };
   const w = await writeRow("products", p.id, base);
   if (w.error) return w.error;
   const productId = w.id;
   if (!productId) return "Could not save the product.";
+  const lostTerms = w.dropped.some((c) => c !== "in_proposals") && (!!p.multi_year || (p.increment_mode ?? "none") !== "none");
   // wipe & rewrite tiers (simplest correct approach for a small editor)
   await supabase.from("product_tiers").delete().eq("product_id", productId);
   for (let i = 0; i < p.tiers.length; i++) {
@@ -321,7 +377,10 @@ export async function saveProduct(p: Product): Promise<string | null> {
       if (dErr) return dErr.message;
     }
   }
-  return await saveCalculatorFor("product", productId!, p.calculator);
+  const calcMsg = await saveCalculatorFor("product", productId!, p.calculator);
+  if (calcMsg && !/^Saved, but/.test(calcMsg)) return calcMsg;
+  if (lostTerms) return "Saved, but the multi-year settings need 29_catalog_builder.sql in Supabase.";
+  return calcMsg;
 }
 
 export async function deleteProduct(id: string): Promise<string | null> {
@@ -342,7 +401,7 @@ export async function saveService(s: Service): Promise<string | null> {
     active: s.active ?? true,
     in_proposals: s.in_proposals !== false,
   };
-  const w = await writeRow("services", s.id, base);
+  const w = await writeRow("services", s.id, base as Record<string, any>);
   if (w.error) return w.error;
   const serviceId = w.id;
   if (!serviceId) return "Could not save the service.";

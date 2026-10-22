@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { supabase } from "../../../api/supabase";
-import type { ProposalTemplate, ProposalData } from "./proposalGen";
-import { buildProposalDeck, buildOrderFormPdf } from "./proposalGen";
+import type { ProposalTemplate, ProposalData, DocTemplate, DocKind, DocTheme } from "./proposalGen";
+import { buildProposalDeck, buildOrderFormPdf, DEFAULT_DOC_THEME } from "./proposalGen";
 
 /** The tenant's default proposal template (RLS scopes it to the caller's tenant). */
 export async function loadProposalTemplate(): Promise<ProposalTemplate | null> {
@@ -195,9 +195,11 @@ const DECK_BUCKET = "tracking-files";
 
 /** Every deck of the company (default first). null = the table is missing (SQL 13 not run). */
 export async function listProposalDecks(): Promise<ProposalDeckRow[] | null> {
-  const { data, error } = await supabase.from("proposal_decks").select("*").order("is_default", { ascending: false }).order("created_at");
+  // only PowerPoint decks: the same table also keeps the HTML templates (28_proposal_html.sql)
+  let { data, error } = await supabase.from("proposal_decks").select("*").or("format.is.null,format.eq.pptx").order("is_default", { ascending: false }).order("created_at");
+  if (error && /format/i.test(error.message)) ({ data, error } = await supabase.from("proposal_decks").select("*").order("is_default", { ascending: false }).order("created_at"));
   if (error) return /relation|does not exist|schema cache/i.test(error.message) ? null : [];
-  return (data ?? []).map((r: any) => ({ ...r, slides: Array.isArray(r.slides) ? r.slides : [] })) as ProposalDeckRow[];
+  return (data ?? []).filter((r: any) => !r.format || r.format === "pptx").map((r: any) => ({ ...r, slides: Array.isArray(r.slides) ? r.slides : [] })) as ProposalDeckRow[];
 }
 
 /** Uploads a .pptx and creates its deck row (the first one becomes the default). */
@@ -234,7 +236,10 @@ export async function replaceProposalDeckFile(deck: ProposalDeckRow, file: File,
 }
 
 export async function saveProposalDeck(id: string, patch: Partial<Pick<ProposalDeckRow, "name" | "slides" | "is_default">>): Promise<string | null> {
-  if (patch.is_default) await supabase.from("proposal_decks").update({ is_default: false }).neq("id", id);
+  if (patch.is_default) {
+    const r = await supabase.from("proposal_decks").update({ is_default: false }).neq("id", id).or("format.is.null,format.eq.pptx");
+    if (r.error && /format/i.test(r.error.message)) await supabase.from("proposal_decks").update({ is_default: false }).neq("id", id);
+  }
   const { error } = await supabase.from("proposal_decks").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", id);
   return error?.message ?? null;
 }
@@ -294,4 +299,152 @@ export function guessDeckRules(slides: { n: number; tokens: string[] }[]): DeckS
     n: s.n, ids: [],
     when: s.tokens.some((t) => t.startsWith("service")) ? "service" : s.tokens.some((t) => t.startsWith("product")) ? "product" : "always",
   }));
+}
+
+/* ---------- HTML documents: proposal and contract templates (28_proposal_html.sql) ---------- */
+export interface DocTemplateRow extends DocTemplate { id: string; updated_at?: string }
+const docFrom = (r: any): DocTemplateRow => {
+  const d = r.doc && typeof r.doc === "object" ? r.doc : {};
+  return {
+    id: r.id, name: r.name ?? "Template", kind: r.kind === "contract" ? "contract" : "proposal", lang: d.lang === "en" ? "en" : "es",
+    sectors: Array.isArray(r.sectors) ? r.sectors : [], isDefault: !!r.is_default,
+    theme: { ...DEFAULT_DOC_THEME, ...(d.theme ?? {}) }, blocks: Array.isArray(d.blocks) ? d.blocks : [], terms: d.terms ?? {},
+    reference: d.reference ?? null, updated_at: r.updated_at,
+  };
+};
+const MISSING = /format|kind|sectors|column|relation|does not exist|schema cache|null value in column "storage_path"/i;
+/** The company's HTML templates (default first). null = 28_proposal_html.sql not run yet. */
+export async function listDocTemplates(kind?: DocKind): Promise<DocTemplateRow[] | null> {
+  let q = supabase.from("proposal_decks").select("*").eq("format", "html");
+  if (kind) q = q.eq("kind", kind);
+  const { data, error } = await q.order("is_default", { ascending: false }).order("created_at");
+  if (error) return MISSING.test(error.message) ? null : [];
+  return (data ?? []).map(docFrom);
+}
+/** Saves a template (creates it when it has no id). The first one of its kind becomes the default. */
+export async function saveDocTemplate(t: DocTemplate): Promise<{ id: string | null; error: string | null }> {
+  const row: any = {
+    name: t.name.trim() || "Template", kind: t.kind, sectors: t.sectors ?? [], format: "html",
+    doc: { theme: t.theme, blocks: t.blocks, terms: t.terms ?? {}, lang: t.lang, reference: t.reference ?? null },
+    updated_at: new Date().toISOString(),
+  };
+  if (t.id) {
+    const { error } = await supabase.from("proposal_decks").update(row).eq("id", t.id);
+    return { id: t.id, error: error ? (MISSING.test(error.message) ? "Run 28_proposal_html.sql in Supabase to save templates." : error.message) : null };
+  }
+  const existing = await listDocTemplates(t.kind);
+  if (existing === null) return { id: null, error: "Run 28_proposal_html.sql in Supabase to save templates." };
+  const { data, error } = await supabase.from("proposal_decks").insert({ ...row, slides: [], storage_path: null, is_default: !existing.length }).select("id").single();
+  if (error) return { id: null, error: MISSING.test(error.message) ? "Run 28_proposal_html.sql in Supabase to save templates." : error.message };
+  return { id: (data as any).id, error: null };
+}
+export async function deleteDocTemplate(id: string): Promise<string | null> {
+  const { error } = await supabase.from("proposal_decks").delete().eq("id", id);
+  return error?.message ?? null;
+}
+/** Makes a template the default of its kind (for deals whose sector has no template of its own). */
+export async function setDefaultDocTemplate(id: string, kind: DocKind): Promise<string | null> {
+  const off = await supabase.from("proposal_decks").update({ is_default: false }).eq("format", "html").eq("kind", kind).neq("id", id);
+  if (off.error) return off.error.message;
+  const { error } = await supabase.from("proposal_decks").update({ is_default: true }).eq("id", id);
+  return error?.message ?? null;
+}
+/** The template for a deal: the one for its sector, else the default, else the first. */
+export function pickDocTemplate<T extends DocTemplate>(list: T[], kind: DocKind, sector?: string | null): T | null {
+  const own = list.filter((t) => t.kind === kind);
+  const sec = (sector ?? "").trim().toLowerCase();
+  return (sec && own.find((t) => t.sectors.some((x) => x.trim().toLowerCase() === sec))) || own.find((t) => t.isDefault) || own[0] || null;
+}
+/** Colours, fonts, logo and company data from the existing proposal template (Order form tab), to start new templates with. */
+export async function docThemeSeed(): Promise<Partial<DocTheme>> {
+  const row = await loadProposalTemplateRow().catch(() => null);
+  if (!row) return {};
+  const b: any = row.brand ?? {}, c: any = b.colors ?? {}, a: any = b.assets ?? {};
+  const hx = (v: any) => (v && /^#?[0-9a-f]{6}$/i.test(String(v)) ? `#${String(v).replace(/^#/, "").toUpperCase()}` : undefined);
+  const img = (v?: string) => (!v ? undefined : /^https?:|^data:/i.test(v) ? v : `data:${v}`);
+  const out: Partial<DocTheme> = {
+    primary: hx(c.primary), accent: hx(c.accent), ink: hx(c.ink), muted: hx(c.muted),
+    company: b.company || undefined, legalName: b.legalName || undefined, vat: b.vat || undefined, address: b.address || undefined, web: b.web || undefined,
+    logo: img(a.logoLight) ?? img(a.logoDark), logoDark: img(a.logoDark),
+  };
+  return Object.fromEntries(Object.entries(out).filter(([, v]) => v != null)) as Partial<DocTheme>;
+}
+/** An image for a template: uploaded to the brand bucket (or kept inline if Storage refuses). Returns something an <img> shows. */
+export async function uploadDocImage(file: Blob, key = "doc"): Promise<string> {
+  let f: File = file instanceof File ? file : new File([file], `${key}.${/png/.test(file.type) ? "png" : "jpg"}`, { type: file.type || "image/jpeg" });
+  // big photos are shrunk first
+  if (f.size > 700 * 1024 && typeof document !== "undefined" && /^image\/(png|jpe?g|webp)/.test(f.type)) {
+    try {
+      const url = URL.createObjectURL(f);
+      const im = new Image(); await new Promise<void>((ok, bad) => { im.onload = () => ok(); im.onerror = () => bad(new Error("image")); im.src = url; });
+      const k = Math.min(1, 1800 / Math.max(im.naturalWidth, im.naturalHeight));
+      const cv = document.createElement("canvas"); cv.width = Math.round(im.naturalWidth * k); cv.height = Math.round(im.naturalHeight * k);
+      cv.getContext("2d")!.drawImage(im, 0, 0, cv.width, cv.height); URL.revokeObjectURL(url);
+      const blob: Blob = await new Promise((ok) => cv.toBlob((b) => ok(b ?? f), "image/jpeg", 0.86));
+      f = new File([blob], f.name.replace(/\.\w+$/, ".jpg"), { type: "image/jpeg" });
+    } catch { /* keep the original */ }
+  }
+  const { value, inline } = await uploadBrandAsset(f, key);
+  return inline ? `data:${value.replace(/^data:/, "")}` : value;
+}
+
+/** Opens the print dialog for a document (the browser's "Save as PDF" gives a vector PDF). */
+export function printDocHtml(html: string) {
+  const f = document.createElement("iframe");
+  f.setAttribute("aria-hidden", "true");
+  Object.assign(f.style, { position: "fixed", right: "0", bottom: "0", width: "1px", height: "1px", border: "0", opacity: "0" });
+  document.body.appendChild(f);
+  f.srcdoc = html;
+  f.onload = async () => {
+    try { await (f.contentDocument as any)?.fonts?.ready; } catch { /* fonts are optional */ }
+    setTimeout(() => { f.contentWindow?.focus(); f.contentWindow?.print(); setTimeout(() => f.remove(), 60000); }, 350);
+  };
+}
+
+/**
+ * A PDF file of a document (to keep in the deal's files): the print layout drawn page by page, A4,
+ * cutting between blocks, cards and rows rather than through them.
+ */
+export async function docToPdfBlob(html: string): Promise<Blob> {
+  const W = 794, H = 1123;
+  const f = document.createElement("iframe");
+  Object.assign(f.style, { position: "fixed", left: "-10000px", top: "0", width: `${W}px`, height: `${H}px`, border: "0" });
+  document.body.appendChild(f);
+  try {
+    await new Promise<void>((ok) => { f.onload = () => ok(); f.srcdoc = html; });
+    const doc = f.contentDocument!;
+    try { await (doc as any).fonts?.ready; } catch { /* fonts are optional */ }
+    await Promise.all(Array.from(doc.images).map((im) => (im.complete ? null : new Promise((ok) => { im.onload = im.onerror = () => ok(null); }))));
+    await new Promise((ok) => setTimeout(ok, 250));
+    const root = doc.body;
+    const total = Math.ceil(root.scrollHeight);
+    // where a page may end: between blocks and between the pieces inside them
+    const cuts = new Set<number>([total]);
+    root.querySelectorAll(".blk, .sh, .rv, tr, li, p, h2, h3, .pc-head, .pc-foot, .pr-tot, .cd, .st, .tl-i, .tm, .pt").forEach((el) => {
+      const r = (el as HTMLElement).getBoundingClientRect();
+      cuts.add(Math.round(r.top + (doc.defaultView?.scrollY ?? 0)));
+    });
+    const stops = Array.from(cuts).filter((y) => y > 0).sort((a, b) => a - b);
+    const mod: any = await import("html2canvas");
+    const h2c = mod.default ?? mod;
+    const scale = 2;
+    const canvas: HTMLCanvasElement = await h2c(root, { scale, useCORS: true, backgroundColor: "#ffffff", windowWidth: W, width: W, height: total, logging: false });
+    const { jsPDF } = await import("jspdf");
+    const pdf = new jsPDF({ unit: "px", format: [W, H], orientation: "portrait", hotfixes: ["px_scaling"], compress: true });
+    let y = 0, page = 0;
+    while (y < total - 4) {
+      const limit = y + H;
+      let end = limit >= total ? total : stops.filter((s) => s > y + H * 0.35 && s <= limit).pop() ?? limit;
+      if (end <= y) end = limit;
+      const slice = document.createElement("canvas");
+      slice.width = W * scale; slice.height = Math.round((end - y) * scale);
+      const g = slice.getContext("2d")!;
+      g.fillStyle = "#ffffff"; g.fillRect(0, 0, slice.width, slice.height);
+      g.drawImage(canvas, 0, Math.round(y * scale), slice.width, slice.height, 0, 0, slice.width, slice.height);
+      if (page) pdf.addPage([W, H], "portrait");
+      pdf.addImage(slice.toDataURL("image/jpeg", 0.9), "JPEG", 0, 0, W, end - y);
+      y = end; page++;
+    }
+    return pdf.output("blob") as Blob;
+  } finally { f.remove(); }
 }

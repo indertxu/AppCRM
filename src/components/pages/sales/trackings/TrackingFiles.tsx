@@ -1,7 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useRef, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { createPortal } from "react-dom";
 import { supabase } from "../../../api/supabase";
 import Select from "../../../framework/Select";
+import { listDocTemplates, saveDocTemplate, pickDocTemplate, docThemeSeed, uploadDocImage, printDocHtml, docToPdfBlob, downloadBlob, type DocTemplateRow } from "./proposalApi";
+import { defaultDocTemplate, DEFAULT_DOC_THEME, type DocKind, type DocTemplate, type DocInstance, type ProposalData, type ContractTerms, type DocTheme, type DocBlock } from "./proposalGen";
+import { DocBuilder, docHtmlFor, type DocCtxIn } from "../../settings/ProposalTemplateEditor";
 import "./TrackingFiles.css";
 
 interface TFile {
@@ -325,6 +329,16 @@ export default function TrackingFiles({ trackingId, phaseId, phases = [] }: Prop
 }
 /** Opens a sales document in a new tab. */
 export async function openTrackingFile(path: string, bucket = BUCKET) {
+  // web pages (HTML proposals) open as pages, not as their source text
+  if (/\.html?$/i.test(path)) {
+    const win = window.open("", "_blank");
+    const { data, error } = await supabase.storage.from(bucket).download(path);
+    if (error || !data) { win?.close(); alert(error?.message ?? "Could not open file."); return; }
+    const url = URL.createObjectURL(new Blob([await data.text()], { type: "text/html" }));
+    if (win) win.location.href = url; else window.open(url, "_blank");
+    setTimeout(() => URL.revokeObjectURL(url), 120000);
+    return;
+  }
   const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, 120);
   if (error || !data) { alert(error?.message ?? "Could not open file."); return; }
   window.open(data.signedUrl, "_blank");
@@ -461,5 +475,216 @@ export function LineDocs({ trackingId, lineId, lineKind, phaseId, versionLabel }
       <input ref={inputRef} type="file" multiple hidden accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.odt,.ods,image/*"
         onChange={(e) => e.target.files && upload(e.target.files)} />
     </div>
+  );
+}
+
+/* =====================================================================
+ *  Proposal / contract studio of a deal: the web document built from a
+ *  template, edited for this proposal only, exported as page or PDF.
+ * ===================================================================== */
+type HtmlDocs = Partial<Record<DocKind, DocInstance>>;
+const DS_ICON = {
+  pdf: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 13h2a1.5 1.5 0 0 1 0 3H8v-5M13 16v-5h1.5a2.5 2.5 0 0 1 0 5zM18 11h-2v5M16 13.5h1.5",
+  globe: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20",
+  save: "M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2zM17 21v-8H7v8M7 3v5h8",
+  print: "M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v8H6z",
+  down: "M12 3v12M7 10l5 5 5-5M4 19h16", tpl: "M4 4h16v16H4zM4 9h16M9 9v11", undo: "M3 7v6h6M3 13a9 9 0 1 0 3-7.7L3 7", chev: "M6 9l6 6 6-6",
+  deck: "M3 4h18v13H3zM8 21h8M12 17v4",
+};
+const DsIco = ({ d }: { d: keyof typeof DS_ICON }) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={DS_ICON[d]} /></svg>;
+const fileSafe = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\w\-]+/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "").slice(0, 60);
+
+export function DocStudio({ trackingId, phaseId, kind: kind0, proposal, data, productIds, serviceIds, seller, sector, contract, dealValue, onClose, onSaveDoc, onSavedFile, onLegacyDeck }: {
+  trackingId: string; phaseId: string | null;
+  /** What opens first: the proposal document or the contract. */
+  kind: DocKind;
+  proposal: { id: string; name: string; doc: any };
+  data: ProposalData; productIds: string[]; serviceIds: string[];
+  seller: { name?: string; email?: string; phone?: string };
+  /** The deal's company sector: picks the template. */
+  sector?: string | null;
+  /** The deal's contract terms (contract panel), if any. */
+  contract?: ContractTerms | null;
+  /** The deal's potential revenue. */
+  dealValue?: number | null;
+  onClose: () => void;
+  /** Saves this proposal's documents (both kinds). Returns an error or null. */
+  onSaveDoc: (html: HtmlDocs) => Promise<string | null>;
+  /** A file was kept on the deal from this proposal. */
+  onSavedFile?: (fileId: string, kind: DocKind) => Promise<string | null | void> | void;
+  /** Opens the old PowerPoint deck of this proposal (when the company still has decks). */
+  onLegacyDeck?: () => void;
+}) {
+  const [kind, setKind] = useState<DocKind>(kind0);
+  const [templates, setTemplates] = useState<DocTemplateRow[] | null | undefined>(undefined);
+  const [seed, setSeed] = useState<Partial<DocTheme>>({});
+  const [docs, setDocs] = useState<HtmlDocs>(() => (proposal.doc?.html && typeof proposal.doc.html === "object" ? proposal.doc.html : {}));
+  const [save, setSave] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [saveErr, setSaveErr] = useState<string | null>(null);
+  const [menu, setMenu] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [ask, setAsk] = useState<null | "reset" | "totemplate">(null);
+  useEffect(() => {
+    listDocTemplates().then(setTemplates).catch(() => setTemplates([]));
+    docThemeSeed().then(setSeed).catch(() => undefined);
+  }, []);
+
+  const ofKind = useMemo(() => (templates ?? []).filter((t) => t.kind === kind), [templates, kind]);
+  const builtIn = useMemo<DocTemplate>(() => ({ ...defaultDocTemplate(kind, "es", { ...DEFAULT_DOC_THEME, ...seed }), id: null }), [kind, seed]);
+  const inst = docs[kind];
+  const tpl: DocTemplate = useMemo(() => {
+    const own = inst?.templateId ? ofKind.find((t) => t.id === inst.templateId) : null;
+    return own ?? pickDocTemplate(ofKind, kind, sector) ?? builtIn;
+  }, [inst?.templateId, ofKind, kind, sector, builtIn]);
+  // first time on this kind: copy the template
+  useEffect(() => {
+    if (templates === undefined || inst) return;
+    setDocs((d) => ({ ...d, [kind]: { templateId: tpl.id ?? null, blocks: JSON.parse(JSON.stringify(tpl.blocks)), values: {}, theme: tpl.theme } }));
+  }, [templates, inst, kind, tpl]);
+
+  // autosave (debounced)
+  const first = useRef(true);
+  const docsRef = useRef(docs); docsRef.current = docs;
+  useEffect(() => {
+    if (first.current) { first.current = false; return; }
+    setSave("saving");
+    const t = setTimeout(async () => {
+      const e = await onSaveDoc(docsRef.current);
+      setSave(e ? "error" : "saved"); setSaveErr(e);
+    }, 1100);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docs]);
+
+  const upd = useCallback((patch: Partial<DocInstance>) => setDocs((d) => ({ ...d, [kind]: { ...(d[kind] as DocInstance), ...patch, updatedAt: new Date().toISOString() } })), [kind]);
+  const theme = inst?.theme ?? tpl.theme;
+  const ctx: DocCtxIn = useMemo(() => ({
+    data, lang: tpl.lang, sellerName: seller.name, sellerEmail: seller.email, sellerPhone: seller.phone, proposalName: proposal.name, contract: contract ?? null, dealValue: dealValue ?? null,
+  }), [data, tpl.lang, seller.name, seller.email, seller.phone, proposal.name, contract, dealValue]);
+  const title = `${kind === "contract" ? "Contrato" : "Propuesta"} · ${data.client.name || proposal.name}`;
+  const htmlOf = (mode: "view" | "print") => docHtmlFor(mode, { theme, blocks: inst?.blocks ?? [], kind, lang: tpl.lang, ctx, terms: tpl.terms, values: inst?.values, productIds, serviceIds, title });
+  const baseName = `${fileSafe(theme.company || "Doc")}-${kind === "contract" ? "Contrato" : "Propuesta"}-${fileSafe(data.client.name || proposal.name)}`;
+
+  const switchTemplate = (id: string) => {
+    const t = id === "builtin" ? builtIn : ofKind.find((x) => x.id === id);
+    if (!t) return;
+    setDocs((d) => ({ ...d, [kind]: { templateId: t.id ?? null, blocks: JSON.parse(JSON.stringify(t.blocks)), values: d[kind]?.values ?? {}, theme: t.theme } }));
+    setMsg({ kind: "ok", text: `Now using “${t.name}”. Your field values were kept.` });
+  };
+  const keepFile = async (fmt: "pdf" | "html") => {
+    setMenu(false); setBusy(fmt); setMsg(null);
+    try {
+      const blob = fmt === "pdf" ? await docToPdfBlob(htmlOf("print")) : new Blob([htmlOf("view")], { type: "text/html" });
+      const name = `${baseName}.${fmt}`;
+      const { file, error } = await uploadTrackingFile(trackingId, phaseId, blob, name, `${kind === "contract" ? "Contract" : "Proposal"} · ${proposal.name}`);
+      if (error || !file) throw new Error(error ?? "Could not save the file.");
+      const e2 = await onSavedFile?.(file.id, kind);
+      if (e2) throw new Error(e2);
+      setMsg({ kind: "ok", text: `${name} is now in the deal's documents.` });
+    } catch (e: any) { setMsg({ kind: "err", text: e?.message ?? "Could not save the file." }); }
+    finally { setBusy(null); }
+  };
+  const download = async (fmt: "pdf" | "html") => {
+    setMenu(false);
+    if (fmt === "html") { downloadBlob(new Blob([htmlOf("view")], { type: "text/html" }), `${baseName}.html`); return; }
+    setBusy("dl");
+    try { downloadBlob(await docToPdfBlob(htmlOf("print")), `${baseName}.pdf`); }
+    catch (e: any) { setMsg({ kind: "err", text: e?.message ?? "Could not make the PDF." }); }
+    finally { setBusy(null); }
+  };
+  const toTemplate = async () => {
+    setAsk(null); setBusy("tpl");
+    const next: DocTemplate = { ...tpl, blocks: inst?.blocks ?? tpl.blocks, theme };
+    if (!tpl.id) next.name = `${tpl.name} (${data.client.name || "deal"})`;
+    const r = await saveDocTemplate(next);
+    setBusy(null);
+    if (r.error) { setMsg({ kind: "err", text: r.error }); return; }
+    setMsg({ kind: "ok", text: tpl.id ? `“${tpl.name}” now starts with this layout. Values stay variables.` : "Saved as a new template." });
+    if (!tpl.id && r.id) upd({ templateId: r.id });
+    listDocTemplates().then(setTemplates).catch(() => undefined);
+  };
+  const reset = () => { setAsk(null); upd({ blocks: JSON.parse(JSON.stringify(tpl.blocks)), theme: tpl.theme }); setMsg({ kind: "ok", text: "Back to the template. Your field values were kept." }); };
+
+  if (templates === undefined || !inst) {
+    return createPortal(<div className="dss-load"><span className="dss-spin" /><b>Opening the {kind}…</b></div>, document.body);
+  }
+  const saveLabel = save === "saving" ? "Saving…" : save === "saved" ? "All changes saved" : save === "error" ? (saveErr ?? "Not saved") : "Changes save by themselves";
+  return (
+    <>
+      <DocBuilder
+        mode="deal" kind={kind} lang={tpl.lang} title={title}
+        theme={theme} onTheme={(t) => upd({ theme: t })}
+        blocks={inst.blocks} onBlocks={(b: DocBlock[]) => upd({ blocks: b })}
+        terms={tpl.terms}
+        values={inst.values} onValues={(v) => upd({ values: v })}
+        ctx={ctx} productIds={productIds} serviceIds={serviceIds}
+        catalog={{ products: productIds.map((id, i) => ({ id, name: data.products[i]?.name ?? "Product" })), services: serviceIds.map((id, i) => ({ id, name: data.services[i]?.name ?? "Service" })) }}
+        uploadImage={(f) => uploadDocImage(f, "deal")}
+        previewHtml={() => htmlOf("view")}
+        head={(
+          <div className="dss-head">
+            <div className="dxb-seg dss-kind" role="tablist" aria-label="Document">
+              <button type="button" className={kind === "proposal" ? "is-on" : ""} onClick={() => setKind("proposal")}>Proposal</button>
+              <button type="button" className={kind === "contract" ? "is-on" : ""} onClick={() => setKind("contract")}>Contract</button>
+            </div>
+            <div className="dxb-title">
+              <span className="dxb-eyebrow">{proposal.name}</span>
+              <b>{data.client.name || "Client"}</b>
+            </div>
+            <div className="dss-tpl">
+              <span><DsIco d="tpl" />Template</span>
+              <Select size="sm" value={inst.templateId ?? "builtin"} onChange={switchTemplate} aria-label="Template"
+                options={[...ofKind.map((t) => ({ value: t.id, label: t.name, hint: t.sectors.length ? t.sectors.join(", ") : t.isDefault ? "default" : undefined })), ...(!ofKind.length || !inst.templateId ? [{ value: "builtin", label: "Our design", hint: "built-in" }] : [])]} />
+            </div>
+          </div>
+        )}
+        actions={(
+          <>
+            {onLegacyDeck && kind === "proposal" && <button type="button" className="dxb-btn" onClick={onLegacyDeck} title="The old PowerPoint deck of this proposal"><DsIco d="deck" />PowerPoint</button>}
+            <button type="button" className="dxb-btn" onClick={() => printDocHtml(htmlOf("print"))} title="Print, or Save as PDF from the print dialog"><DsIco d="print" />Print</button>
+            <div className="dss-menu">
+              <button type="button" className="dxb-btn is-primary" onClick={() => setMenu((m) => !m)} disabled={!!busy} aria-expanded={menu}>
+                {busy && busy !== "tpl" ? <span className="dxb-spin" /> : <DsIco d="save" />}Export<DsIco d="chev" />
+              </button>
+              {menu && (
+                <div className="dss-pop" role="menu" onMouseLeave={() => setMenu(false)}>
+                  <button type="button" role="menuitem" onClick={() => keepFile("pdf")}><DsIco d="pdf" /><span><b>Save PDF to the deal</b><i>Goes with the handoff to the client's folders</i></span></button>
+                  <button type="button" role="menuitem" onClick={() => keepFile("html")}><DsIco d="globe" /><span><b>Save web page to the deal</b><i>Interactive, opens in any browser</i></span></button>
+                  <hr />
+                  <button type="button" role="menuitem" onClick={() => download("pdf")}><DsIco d="down" /><span><b>Download PDF</b><i>A4, ready to send</i></span></button>
+                  <button type="button" role="menuitem" onClick={() => download("html")}><DsIco d="down" /><span><b>Download web page</b><i>A single .html file</i></span></button>
+                  <hr />
+                  <button type="button" role="menuitem" onClick={() => { setMenu(false); setAsk("totemplate"); }}><DsIco d="tpl" /><span><b>{tpl.id ? "Save layout to template" : "Save as a new template"}</b><i>Next proposals start like this one</i></span></button>
+                  <button type="button" role="menuitem" onClick={() => { setMenu(false); setAsk("reset"); }}><DsIco d="undo" /><span><b>Back to the template</b><i>Drops this proposal's layout changes</i></span></button>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+        status={(
+          <>
+            <span className={`dss-save is-${save}`}><i />{saveLabel}</span>
+            {msg && <span className={`dxb-msg is-${msg.kind}`}>{msg.text}</span>}
+            {busy === "pdf" || busy === "dl" ? <span className="dxb-msg">Making the PDF…</span> : null}
+            {templates === null && <span className="dxb-msg">Run 28_proposal_html.sql to keep templates — this {kind} uses our built-in design.</span>}
+          </>
+        )}
+        onClose={onClose}
+      />
+      {ask && createPortal(
+        <div className="dxk-back" style={{ zIndex: 2147483000 }} onMouseDown={(e) => { if (e.target === e.currentTarget) setAsk(null); }}>
+          <div className="dxc" role="alertdialog" aria-modal="true">
+            <b>{ask === "reset" ? "Go back to the template?" : tpl.id ? `Update “${tpl.name}”?` : "Save as a new template?"}</b>
+            <p>{ask === "reset"
+              ? "The sections and texts of this document go back to how the template has them. The values you typed for this deal stay."
+              : tpl.id ? "Every new document made from this template will start with this layout and these texts. Deal values stay as variables, so they keep filling in for each deal." : "A new template with this layout; deal values stay as variables."}</p>
+            <div>
+              <button type="button" className="dxb-btn" onClick={() => setAsk(null)}>Cancel</button>
+              <button type="button" className="dxb-btn is-primary" onClick={ask === "reset" ? reset : toTemplate}>{ask === "reset" ? "Back to the template" : tpl.id ? "Update template" : "Save template"}</button>
+            </div>
+          </div>
+        </div>, document.body)}
+    </>
   );
 }

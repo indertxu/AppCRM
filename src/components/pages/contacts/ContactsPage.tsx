@@ -14,12 +14,14 @@ import {
   renameCustomValue, customList,
   listContactDeals, listAllDeals, setContactDeals, CONTACT_LANGUAGES, type DealRef,
   useRequiredFields,
+  inheritedCompanyTags, listCrmOptions, relationshipOptions, relLabel, listCompanyFields, linkContactToCompany, unlinkContactFromCompany,
+  type CrmOption, type CompanyField,
 } from "../companies/companiesApi";
 import {
   AddressFields, PhoneField, StatusPills, HistorySection, phoneText, telHref,
   FilterBar, FilterChips, SortHead, applyView, nextSort, emptyView, useSavedViews, useStoredView, type FField,
   useBulkSelection, BulkBar, BulkCheck, type BulkAction, DataCleanup, DataTools, GEAR, SettingsShell, ColumnsEditor, CustomFieldsEditor,
-  ConfirmX, DealRows, MultiChoice, CustomChips, isChoiceType, RequiredFieldsEditor,
+  ConfirmX, DealRows, MultiChoice, CustomChips, isChoiceType, RequiredFieldsEditor, InheritedTags, TypeChips, typeSortKey,
 } from "../companies/CompaniesPage";
 import "../clients/ClientsPage.css";
 import "../companies/CompaniesPage.css";
@@ -57,11 +59,14 @@ export default function ContactsPage() {
   const [me, setMe] = useState<{ id: string; role: string; is_superadmin: boolean } | null>(null);
   const [fields, setFields] = useState<ContactField[]>([]);
   const [showFieldSettings, setShowFieldSettings] = useState(false);
-  const [columns, setColumns] = useState<string[]>(["position", "email", "companies"]);
+  const [columns, setColumns] = useState<string[]>(["co_type", "position", "email", "companies"]);
   const [compact, setCompact] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [linkedInOpen, setLinkedInOpen] = useState(false);
   const [rel, setRel] = useState<RelationshipSets | null>(null);
+  // company types (yours: Partner…) and company fields — contacts are filtered by their companies' ones
+  const [crmOptions, setCrmOptions] = useState<CrmOption[]>([]);
+  const [companyFields, setCompanyFields] = useState<CompanyField[]>([]);
   // filters + sort (remembered on this browser), and the views you saved
   const [view, setView] = useStoredView("np-contacts-view", emptyView([{ key: "name", dir: "asc" }]));
   const [savedViews, setSavedViews] = useSavedViews("contactViews");
@@ -75,6 +80,8 @@ export default function ContactsPage() {
     setFields(await listContactFields().catch(() => []));
     setRel(await loadRelationshipSets().catch(() => null));
     setLoaded(true);
+    listCrmOptions().then(setCrmOptions).catch(() => {});
+    listCompanyFields().then(setCompanyFields).catch(() => {});
   };
   useEffect(() => {
     myProfile().then(setMe).catch(() => {});
@@ -101,6 +108,7 @@ export default function ContactsPage() {
 
   // All columns the user can pick from: fixed ones + custom fields.
   const availableColumns = [
+    { key: "co_type", label: "Types" },
     { key: "position", label: "Position" },
     { key: "email", label: "Email" },
     { key: "emails", label: "Other emails" },
@@ -119,7 +127,7 @@ export default function ContactsPage() {
   const columnLabel = (key: string) => availableColumns.find((c) => c.key === key)?.label ?? key;
   const activeColumns = columns.filter((k) => availableColumns.some((c) => c.key === k));
   // Every column keeps a readable width; when they don't fit, the list scrolls sideways (the name stays put).
-  const colMin = (k: string) => (k === "address" ? 220 : k === "email" || k === "companies" || k === "linkedin" ? 180 : k === "postal_code" || k === "language" ? 110 : 140);
+  const colMin = (k: string) => (k === "address" ? 220 : k === "co_type" ? 190 : k === "email" || k === "companies" || k === "linkedin" ? 180 : k === "postal_code" || k === "language" ? 110 : 140);
   const rowGrid = ["minmax(240px, 1.9fr)", ...activeColumns.map((k) => `minmax(${colMin(k)}px, 1.4fr)`)].join(" ");
   const rowMin = 240 + activeColumns.reduce((n, k) => n + colMin(k), 0) + 20 * activeColumns.length + 40;
 
@@ -128,6 +136,7 @@ export default function ContactsPage() {
   // Render one cell for a given column key + contact.
   const fieldById = (id: string) => fields.find((f) => f.id === id);
   const renderCell = (c: Contact, key: string) => {
+    if (key === "co_type") return <TypeChips tags={typesOf(c)} pipelines={statusOf(c).pipelines} />;
     if (key === "position") return <span className="ct-lmuted">{c.position || "—"}</span>;
     if (key === "email") return <span className="ct-lemail">{c.email || "—"}</span>;
     if (key === "emails") return <span className="ct-lemail" title={(c.emails ?? []).join("\n")}>{(c.emails ?? []).filter(Boolean).join(", ") || "—"}</span>;
@@ -171,6 +180,41 @@ export default function ContactsPage() {
   const coList = (c: Contact) => c.companyIds.map((id) => coById.get(id)).filter((x): x is Company => !!x);
   const allPipes = () => [...new Set([...Object.values(rel?.pipesByContact ?? {}).flat(), ...Object.values(rel?.pipesByCompany ?? {}).flat()])].sort().map((p) => ({ value: p, label: p }));
   const coValues = (get: (co: Company) => string[]) => () => [...new Set(companies.flatMap(get).filter(Boolean))].sort().map((v) => ({ value: v, label: v }));
+  // the types each contact gets from its companies (CRM, Client, In sales, Partner…), worked out once per load
+  const inhById = useMemo(() => {
+    const m = new Map<string, { tag: string; from: string[] }[]>();
+    contacts.forEach((c) => { if (c.id) m.set(c.id, inheritedCompanyTags(c, companies, rel)); });
+    return m;
+  }, [contacts, companies, rel]);
+  const inhOf = (c: Contact) => (c.id ? inhById.get(c.id) : undefined) ?? inheritedCompanyTags(c, companies, rel);
+  /**
+   * A contact's types, the same as a company's: CRM, Client and In sales (its own
+   * deals or its companies'), plus the types of every company it works for
+   * (Partner, Supplier…). Live from the links — nothing is stored on the contact.
+   */
+  const typesOf = (c: Contact) => {
+    const s = statusOf(c);
+    const inh = inhOf(c);
+    const fromOf = (k: string) => inh.find((t) => t.tag === k)?.from;
+    return [
+      { tag: "crm", from: fromOf("crm") },
+      ...(s.client ? [{ tag: "client", from: fromOf("client") }] : []),
+      ...(s.sales ? [{ tag: "sales", from: fromOf("sales") }] : []),
+      ...inh.filter((t) => t.tag !== "crm" && t.tag !== "client" && t.tag !== "sales"),
+    ];
+  };
+  const fromMap = (c: Contact) => Object.fromEntries(inhOf(c).map((t) => [t.tag, t.from]));
+  const typeOptions = () => {
+    const known = relationshipOptions(crmOptions).map((o) => ({ value: o.key, label: o.label }));
+    // types written on companies that are no longer on your list still filter
+    const extra = [...new Set(companies.flatMap((co) => co.relationship ?? []))].filter((t) => !known.some((k) => k.value === t)).map((t) => ({ value: t, label: relLabel(t) }));
+    return [...known, ...extra];
+  };
+  // a company field's value(s), for every company the contact works for
+  const coFieldValues = (c: Contact, f: CompanyField) => [...new Set(coList(c).flatMap((co) => {
+    const v = (co.custom ?? {})[f.id];
+    return f.type === "multiselect" ? customList(v) : v == null || v === "" ? [] : [String(v)];
+  }))];
   const filterFields: FField<Contact>[] = [
     { key: "name", label: "Name", group: "Person", type: "text", get: fullName },
     { key: "first_name", label: "First name", group: "Person", type: "text", get: (c) => c.first_name },
@@ -184,8 +228,18 @@ export default function ContactsPage() {
     { key: "companies", label: "Company", group: "Companies", type: "multi", get: (c) => c.companyIds, options: () => companies.filter((co) => co.id).map((co) => ({ value: co.id!, label: co.name })).sort((a, b) => a.label.localeCompare(b.label)) },
     { key: "companies_count", label: "Number of companies", group: "Companies", type: "number", get: (c) => c.companyIds.length },
     { key: "co_sector", label: "Company sector", group: "Companies", type: "multi", get: (c) => coList(c).map((co) => co.sector ?? "").filter(Boolean), options: coValues((co) => [co.sector ?? ""]) },
-    { key: "co_type", label: "Company type (client, partner…)", group: "Companies", type: "multi", get: (c) => [...new Set(coList(c).flatMap((co) => co.relationship ?? []))], options: coValues((co) => co.relationship ?? []) },
+    { key: "co_type", label: "Type (client, partner…)", group: "Person", type: "multi", get: (c) => typesOf(c).map((t) => t.tag), sort: (c) => typeSortKey(typesOf(c).map((t) => t.tag)), options: typeOptions },
     { key: "co_city", label: "Company city", group: "Companies", type: "multi", get: (c) => coList(c).map((co) => (co.city ?? "").trim()).filter(Boolean), options: coValues((co) => [(co.city ?? "").trim()]) },
+    // the companies' own choice fields (e.g. "Konsolidator Iberia Customer", "Partner Latam") reach their people too
+    ...companyFields.filter((f) => isChoiceType(f.type)).map((f): FField<Contact> => ({
+      key: `co_field_${f.id}`, label: `Company · ${f.label}`, group: "Companies", type: "multi",
+      get: (c) => coFieldValues(c, f),
+      options: () => [...new Set([...f.options, ...companies.flatMap((co) => { const v = (co.custom ?? {})[f.id]; return f.type === "multiselect" ? customList(v) : v ? [String(v)] : []; })])].map((o) => ({ value: o, label: o })),
+    })),
+    ...companyFields.filter((f) => f.type === "boolean").map((f): FField<Contact> => ({
+      key: `co_field_${f.id}`, label: `Company · ${f.label}`, group: "Companies", type: "boolean",
+      get: (c) => coList(c).some((co) => !!(co.custom ?? {})[f.id]),
+    })),
     { key: "status", label: "Sales status", group: "Sales", type: "multi", get: statusTags, options: () => [{ value: "client", label: "Client" }, { value: "sales", label: "In sales" }, { value: "none", label: "Not yet in play" }] },
     { key: "pipelines", label: "Pipeline", group: "Sales", type: "multi", get: (c) => statusOf(c).pipelines, options: allPipes },
     { key: "address", label: "Full address", group: "Address", type: "text", get: (c) => formatAddress(c) },
@@ -229,8 +283,8 @@ export default function ContactsPage() {
       run: async (v) => {
         if (!v) return null;
         for (const c of picked()) {
-          if (c.companyIds.includes(v)) continue;
-          const err = await saveContact({ ...c, companyIds: [...c.companyIds, v] });
+          if (c.companyIds.includes(v) || !c.id) continue;
+          const err = await linkContactToCompany(c.id, v);
           if (err) return err;
         }
         await reload(); bulk.clear();
@@ -245,8 +299,8 @@ export default function ContactsPage() {
         if (!v) return null;
         let n = 0;
         for (const c of picked()) {
-          if (!c.companyIds.includes(v)) continue;
-          const err = await saveContact({ ...c, companyIds: c.companyIds.filter((x) => x !== v) });
+          if (!c.companyIds.includes(v) || !c.id) continue;
+          const err = await unlinkContactFromCompany(c.id, v);
           if (err) return err;
           n++;
         }
@@ -381,7 +435,7 @@ export default function ContactsPage() {
                     <BulkCheck on={bulk.has(c.id as string)} onToggle={(e) => bulk.toggle(c.id as string, e.shiftKey)} label={`Select ${fullName(c)}`} />
                   </span>
                   <span className="ct-lname">{fullName(c)}</span>
-                  <StatusPills status={statusOf(c)} />
+                  {!activeColumns.includes("co_type") && <StatusPills status={statusOf(c)} tags={typesOf(c).map((t) => t.tag)} from={fromMap(c)} />}
                 </span>
                 {activeColumns.map((k) => <span key={k} className="ct-lcell">{renderCell(c, k)}</span>)}
               </button>
@@ -588,6 +642,7 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
             <p className="dw-hero-sub">{[c.position, c.companyIds.map(companyName).join(", ")].filter(Boolean).join(" · ") || "Fill in the details below"}</p>
             <div className="dw-hero-tags">
               <StatusPills status={status} hero />
+              <InheritedTags tags={inheritedCompanyTags(c, companies, rel)} hero />
               {c.email && <a className="dw-tag" href={`mailto:${c.email}`}><DwIcon name="mail" />{c.email}</a>}
               {c.phone && <a className="dw-tag" href={telHref(c.phone, c.phone_ext)}><DwIcon name="phone" />{phoneText(c.phone, c.phone_ext)}</a>}
               {c.landline && <a className="dw-tag" href={telHref(c.landline, c.landline_ext)}><DwIcon name="phone" />{phoneText(c.landline, c.landline_ext)}</a>}

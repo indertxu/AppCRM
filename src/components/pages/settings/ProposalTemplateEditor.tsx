@@ -7,12 +7,17 @@ import {
   loadProposalTemplateRow, saveProposalTemplate, uploadBrandAsset, generateProposal, loadProposalTemplateRowFor, saveProposalTemplateFor, deleteProposalTemplate, type ProposalTemplateRow,
   listProposalDecks, uploadProposalDeck, replaceProposalDeckFile, saveProposalDeck, deleteProposalDeck, loadProposalDeckFile, deckSlidesFor, guessDeckRules, downloadBlob,
   type DeckSlideRule, type ProposalDeckRow,
+  listDocTemplates, saveDocTemplate, deleteDocTemplate, setDefaultDocTemplate, docThemeSeed, uploadDocImage, type DocTemplateRow,
 } from "../sales/trackings/proposalApi";
 import {
   defaultSlideTitle, previewTexts, repeatCount, isKnownToken, condFails, nameHides, loadDeckPreview, DECK_TOKENS, openDeckEditor, tokensIn,
   type ProposalData, type ProposalTemplate, type TemplateSection, type PvDeck, type PvShape, type PvText, type PvPara, type DeckInfo, type DeckTokenDef,
   type PvSlide, type DeckEditOp, type EditShape, type DeckEditSession,
+  planDoc, docValues, renderDocHtml, renderDocBody, docCss, DOC_FONTS, DOC_BLOCKS, docBlockMeta, docTokenLabel, docTokenGroups, docUsedTokens, docFreeTokens,
+  cleanRich, richToText, newDocBlock, newDocItem, cloneBlock, defaultDocTemplate, DEFAULT_DOC_THEME, importReferenceDoc, assignImages,
+  type DocTheme, type DocBlock, type DocBlockType, type DocKind, type DocLang, type DocTemplate, type DocContext, type DocPlaced, type DocRenderOptions,
 } from "../sales/trackings/proposalGen";
+import { listCrmOptions, DEFAULT_SECTORS } from "../companies/companiesApi";
 import { loadProducts, loadServices } from "./catalogApi";
 import "./ProposalTemplateEditor.css";
 
@@ -863,27 +868,34 @@ export function SlidePreview({ deck, n, refId, values, edits, width, onPickText,
  * brand / copy editor above). Sales build every proposal from the deck.
  */
 export function ProposalSettings({ canManage, onBack }: { canManage: boolean; onBack: () => void }) {
-  const [tab, setTab] = useState<"deck" | "pdf">("deck");
+  const [tab, setTab] = useState<"proposal" | "contract" | "deck" | "pdf">("proposal");
+  const TABS: { k: typeof tab; label: string; d: string }[] = [
+    { k: "proposal", label: "Proposals", d: "M4 4h16v16H4zM4 9h16M9 9v11" },
+    { k: "contract", label: "Contracts", d: "M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M8 17c2-2 3 1 5-1s2-3 4-1" },
+    { k: "deck", label: "PowerPoint (legacy)", d: "M3 4h18v13H3zM8 21h8M12 17v4" },
+    { k: "pdf", label: "Order form (PDF)", d: "M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M8 13h8M8 17h5" },
+  ];
   return (
     <div className="st pd-page">
       <header className="st-bar st-bar-row pd-bar">
         <button className="st-back" onClick={onBack} aria-label="Back">‹</button>
         <div className="pd-bar-txt">
-          <h1 className="st-title">Proposal template</h1>
-          <p className="st-sub">Your own PowerPoint, filled in from each deal.</p>
+          <h1 className="st-title">Proposals & contracts</h1>
+          <p className="st-sub">Web documents per sector, filled in from each deal — send the link or a PDF.</p>
         </div>
         <div className="pd-tabs" role="tablist">
-          <button role="tab" aria-selected={tab === "deck"} className={tab === "deck" ? "is-on" : ""} onClick={() => setTab("deck")}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="13" rx="2" /><path d="M8 21h8M12 17v4" /></svg>
-            Deck
-          </button>
-          <button role="tab" aria-selected={tab === "pdf"} className={tab === "pdf" ? "is-on" : ""} onClick={() => setTab("pdf")}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" /><path d="M14 3v6h6M8 13h8M8 17h5" /></svg>
-            Order form (PDF)
-          </button>
+          {TABS.map((t) => (
+            <button key={t.k} role="tab" aria-selected={tab === t.k} className={tab === t.k ? "is-on" : ""} onClick={() => setTab(t.k)}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={t.d} /></svg>
+              {t.label}
+            </button>
+          ))}
         </div>
       </header>
-      {tab === "deck" ? <DeckManager canManage={canManage} /> : <ProposalTemplateEditor canManage={canManage} variant="orderform" />}
+      {tab === "proposal" ? <DocTemplatesPanel key="p" kind="proposal" canManage={canManage} />
+        : tab === "contract" ? <DocTemplatesPanel key="c" kind="contract" canManage={canManage} />
+        : tab === "deck" ? <><div className="pte-flash is-info dxt-legacy"><span>PowerPoint decks still work for older proposals. New proposals are built as web pages from the Proposals tab.</span></div><DeckManager canManage={canManage} /></>
+        : <ProposalTemplateEditor canManage={canManage} variant="orderform" />}
     </div>
   );
 }
@@ -2593,5 +2605,1025 @@ export function FieldPicker({ anchor, onPick, onClose }: { anchor: DOMRect; onPi
         )}
       </div>
     </div>
+  );
+}
+
+/* =====================================================================
+ *  HTML documents — the builder (templates in Settings, proposals in a deal)
+ * ===================================================================== */
+const DXI = (d: string, w = 1.9) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={w} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>;
+const DX_ICON = {
+  x: "M6 6l12 12M18 6L6 18", plus: "M12 5v14M5 12h14", eye: "M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6",
+  eyeOff: "M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19M1 1l22 22",
+  grip: "M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01", up: "M12 19V5M5 12l7-7 7 7", down: "M12 5v14M19 12l-7 7-7-7",
+  copy: "M9 9h11v11H9zM5 15V5a2 2 0 0 1 2-2h10", trash: "M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14", play: "M7 4l13 8-13 8z",
+  monitor: "M3 4h18v12H3zM8 20h8M12 16v4", phone: "M7 2h10v20H7zM11 18h2", page: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6",
+  image: "M3 5h18v14H3zM8.5 10.5a1.5 1.5 0 1 0 0-.01M21 15l-5-5L5 19", search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4",
+  ext: "M14 3h7v7M10 14L21 3M21 14v7H3V3h7", spark: "M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z", check: "M5 12.5l4.5 4.5L19 7.5",
+  undo: "M3 7v6h6M3 13a9 9 0 1 0 3-7.7L3 7", file: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M9 13h6M9 17h4",
+  upload: "M12 15V3M7 8l5-5 5 5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4", palette: "M12 22a10 10 0 1 1 10-10c0 2.2-1.8 3-4 3h-1.5a2 2 0 0 0-1.5 3.3A2 2 0 0 1 12 22zM7.5 11.5h.01M10.5 7.5h.01M15.5 7.5h.01",
+  layers: "M12 2l10 5-10 5L2 7zM2 17l10 5 10-5M2 12l10 5 10-5", braces: "M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5a2 2 0 0 0 2 2h1M16 3h1a2 2 0 0 1 2 2v5a2 2 0 0 0 2 2 2 2 0 0 0-2 2v5a2 2 0 0 1-2 2h-1",
+  sliders: "M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6", fields: "M4 6h16M4 12h10M4 18h7",
+};
+const DIcon = ({ d, w }: { d: keyof typeof DX_ICON; w?: number }) => DXI(DX_ICON[d], w);
+
+/** A document context without the template parts (the builder adds theme and terms). */
+export type DocCtxIn = Omit<DocContext, "theme" | "terms">;
+export interface DocCanvasApi { insertToken: (key: string) => boolean; flash: (key: string) => void; scrollTo: (blockId: string) => void; hasCaret: () => boolean }
+
+/** The live document: an iframe in editing mode. Texts are typed in place; values are chips. */
+function DocCanvas({ theme, blocks, kind, lang, ctx, terms, productIds, serviceIds, values, chipsAsLabels, selected, width, onSelect, onField, onAction, onImageDrop, onTokenClick, apiRef }: {
+  theme: DocTheme; blocks: DocBlock[]; kind: DocKind; lang: DocLang; ctx: DocCtxIn; terms?: DocTemplate["terms"];
+  productIds: string[]; serviceIds: string[]; values?: Record<string, string>; chipsAsLabels: boolean; selected: string | null; width: number | null;
+  onSelect: (id: string) => void; onField: (path: string, value: string) => void; onAction: (act: string, id: string, k?: number) => void;
+  onImageDrop: (blockId: string, file: File) => void; onTokenClick?: (key: string) => void; apiRef: React.MutableRefObject<DocCanvasApi | null>;
+}) {
+  const frame = useRef<HTMLIFrameElement>(null);
+  const [ready, setReady] = useState(false);
+  const placed = useMemo(() => planDoc(blocks, ctx.data, productIds, serviceIds, true), [blocks, ctx.data, productIds, serviceIds]);
+  const fullCtx = useMemo<DocContext>(() => ({ ...ctx, theme, terms }), [ctx, theme, terms]);
+  const valsCache = useRef(new Map<string, Record<string, string>>());
+  const valuesFor = useCallback((p: DocPlaced) => {
+    const k = `${p.scope.product ?? ""}|${p.scope.service ?? ""}`;
+    let v = valsCache.current.get(k);
+    if (!v) { v = { ...docValues(fullCtx, p.scope), ...(values ?? {}) }; valsCache.current.set(k, v); }
+    return v;
+  }, [fullCtx, values]);
+  useMemo(() => valsCache.current.clear(), [fullCtx, values]);
+  const selRef = useRef(selected); selRef.current = selected;
+  const opts = (): DocRenderOptions => ({ mode: "edit", placed, data: ctx.data, contract: ctx.contract, terms, kind, lang, valuesFor, chipsAsLabels, selected: selRef.current });
+  const [initial] = useState(() => renderDocHtml(theme, opts()));
+  const cb = useRef({ onSelect, onField, onAction, onImageDrop, onTokenClick });
+  cb.current = { onSelect, onField, onAction, onImageDrop, onTokenClick };
+  const selfAt = useRef(0);
+  const dirty = useRef(false);
+  const range = useRef<Range | null>(null);
+  const placedRef = useRef(placed); placedRef.current = placed;
+  const valuesForRef = useRef(valuesFor); valuesForRef.current = valuesFor;
+  const chipsRef = useRef(chipsAsLabels); chipsRef.current = chipsAsLabels;
+
+  const paint = useCallback(() => {
+    const doc = frame.current?.contentDocument;
+    const main = doc?.getElementById("doc");
+    if (!doc || !main) return;
+    const se = doc.scrollingElement ?? doc.documentElement;
+    const y = se.scrollTop;
+    main.innerHTML = renderDocBody(theme, opts());
+    se.scrollTop = y;
+    doc.body.className = `dm-edit st-${theme.style ?? "soft"} k-${kind}`;
+    const css = doc.getElementById("dx-css");
+    if (css) css.textContent = docCss(theme);
+    const fonts = Array.from(new Set([theme.headingFont, theme.bodyFont])).filter((f) => DOC_FONTS.includes(f) && f !== "Arial" && f !== "Georgia");
+    const href = fonts.length ? `https://fonts.googleapis.com/css2?${fonts.map((f) => `family=${encodeURIComponent(f)}:wght@400;500;600;700;800`).join("&")}&display=swap` : "";
+    let link = doc.getElementById("dx-fonts") as HTMLLinkElement | null;
+    if (!link) { doc.querySelectorAll('link[href*="fonts.googleapis.com/css2"]').forEach((l) => l.remove()); link = doc.createElement("link"); link.id = "dx-fonts"; link.rel = "stylesheet"; doc.head.appendChild(link); }
+    if (href && link.href !== href) link.href = href;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [theme, placed, valuesFor, chipsAsLabels, kind, lang, terms]);
+
+  useEffect(() => {
+    if (!ready) return;
+    if (Date.now() - selfAt.current < 600) { selfAt.current = 0; return; }   // the page already shows what was typed
+    paint();
+  }, [ready, paint]);
+  // the selection alone just moves the outline
+  useEffect(() => {
+    const doc = frame.current?.contentDocument;
+    doc?.querySelectorAll("section.blk").forEach((s) => s.classList.toggle("is-sel", (s as HTMLElement).dataset.b === selected));
+  }, [selected]);
+
+  const serialize = (el: HTMLElement) => {
+    const c = el.cloneNode(true) as HTMLElement;
+    c.querySelectorAll(".tk").forEach((t) => t.replaceWith(el.ownerDocument.createTextNode(`{{${t.getAttribute("data-tk")}}}`)));
+    c.querySelectorAll(".dx-tools,.dx-it-del,.dx-it-add,.dx-ins").forEach((x) => x.remove());
+    return el.dataset.rich ? cleanRich(c.innerHTML.replace(/​/g, "")) : (c.textContent ?? "").replace(/​/g, "").replace(/\s*\n\s*/g, " ");
+  };
+  const chipFor = (doc: Document, key: string, host: HTMLElement) => {
+    const chip = doc.createElement("span");
+    chip.className = "tk"; chip.contentEditable = "false"; chip.dataset.tk = key; chip.title = `{{${key}}}`;
+    const sec = host.closest("section.blk") as HTMLElement | null;
+    const p = placedRef.current.find((x) => `b-${x.key}` === sec?.id) ?? placedRef.current[0];
+    const v = p ? valuesForRef.current(p)[key] : "";
+    if (chipsRef.current) { chip.classList.add("is-label"); chip.textContent = docTokenLabel(key); }
+    else { chip.textContent = v || docTokenLabel(key); if (!v) chip.classList.add("is-empty"); }
+    return chip;
+  };
+  const insertAt = (r: Range, key: string): boolean => {
+    const doc = frame.current?.contentDocument;
+    if (!doc) return false;
+    const node = r.startContainer.nodeType === 1 ? (r.startContainer as HTMLElement) : r.startContainer.parentElement;
+    const host = node?.closest?.("[data-f]") as HTMLElement | null;
+    if (!host) return false;
+    r.deleteContents();
+    const chip = chipFor(doc, key, host);
+    r.insertNode(chip);
+    const space = doc.createTextNode(" ");
+    chip.after(space);
+    host.focus();
+    const sel = doc.getSelection();
+    const after = doc.createRange(); after.setStartAfter(space); after.collapse(true);
+    sel?.removeAllRanges(); sel?.addRange(after);
+    range.current = after.cloneRange();
+    host.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  };
+  apiRef.current = {
+    insertToken: (key) => (range.current && frame.current?.contentDocument?.contains(range.current.startContainer) ? insertAt(range.current, key) : false),
+    hasCaret: () => !!range.current && !!frame.current?.contentDocument?.contains(range.current.startContainer),
+    flash: (key) => {
+      const doc = frame.current?.contentDocument;
+      const els = Array.from(doc?.querySelectorAll(`.tk[data-tk="${CSS.escape(key)}"]`) ?? []) as HTMLElement[];
+      if (!els.length) return;
+      els[0].scrollIntoView({ behavior: "smooth", block: "center" });
+      els.forEach((e) => { e.classList.remove("is-flash"); void e.offsetWidth; e.classList.add("is-flash"); setTimeout(() => e.classList.remove("is-flash"), 2900); });
+    },
+    scrollTo: (id) => (frame.current?.contentDocument?.querySelector(`section[data-b="${CSS.escape(id)}"]`) as HTMLElement | null)?.scrollIntoView({ behavior: "smooth", block: "start" }),
+  };
+
+  const onLoad = () => {
+    const doc = frame.current?.contentDocument;
+    if (!doc) return;
+    doc.addEventListener("input", (e) => {
+      const el = (e.target as HTMLElement)?.closest?.("[data-f]") as HTMLElement | null;
+      if (!el) return;
+      selfAt.current = Date.now(); dirty.current = true;
+      cb.current.onField(el.dataset.f!, serialize(el));
+    });
+    doc.addEventListener("keydown", (e) => {
+      const el = (e.target as HTMLElement)?.closest?.("[data-f]") as HTMLElement | null;
+      if (el && e.key === "Enter" && !el.dataset.rich) { e.preventDefault(); el.blur(); }
+      if (el && e.key === "Escape") el.blur();
+    });
+    doc.addEventListener("paste", (e) => {
+      const el = (e.target as HTMLElement)?.closest?.("[data-f]");
+      if (!el) return;
+      e.preventDefault();
+      doc.execCommand("insertText", false, e.clipboardData?.getData("text/plain") ?? "");
+    });
+    doc.addEventListener("selectionchange", () => {
+      const s = doc.getSelection();
+      if (!s?.rangeCount) return;
+      const r = s.getRangeAt(0);
+      const n = r.startContainer.nodeType === 1 ? (r.startContainer as HTMLElement) : r.startContainer.parentElement;
+      if (n?.closest?.("[data-f]")) range.current = r.cloneRange();
+    });
+    doc.addEventListener("focusout", () => {
+      if (!dirty.current) return;
+      setTimeout(() => {
+        const a = doc.activeElement as HTMLElement | null;
+        if (a?.closest?.("[data-f]")) return;      // moved to another text: repaint later
+        if (!doc.hasFocus()) return;               // went to the side panels (e.g. to pick a value): keep the caret where it is
+        dirty.current = false; selfAt.current = 0; paintRef.current();
+      }, 0);
+    });
+    doc.addEventListener("click", (e) => {
+      const t = e.target as HTMLElement;
+      const act = t.closest?.("[data-act]") as HTMLElement | null;
+      if (act) { e.preventDefault(); e.stopPropagation(); cb.current.onAction(act.dataset.act!, act.dataset.b ?? act.dataset.at ?? "", act.dataset.k != null ? Number(act.dataset.k) : undefined); return; }
+      const tk = t.closest?.(".tk") as HTMLElement | null;
+      if (tk) cb.current.onTokenClick?.(tk.dataset.tk!);
+      if (t.closest?.("a") && !t.closest?.("[data-f]")) e.preventDefault();
+      const sec = t.closest?.("section.blk") as HTMLElement | null;
+      if (sec) cb.current.onSelect(sec.dataset.b!);
+    });
+    const secOf = (e: DragEvent) => (e.target as HTMLElement)?.closest?.("section.blk") as HTMLElement | null;
+    let over: HTMLElement | null = null;
+    const mark = (s: HTMLElement | null) => { if (over === s) return; over?.classList.remove("is-drop"); over = s; s?.classList.add("is-drop"); };
+    doc.addEventListener("dragover", (e) => {
+      const types = Array.from(e.dataTransfer?.types ?? []);
+      if (types.includes("application/x-doc-token")) {
+        const r = (doc as any).caretRangeFromPoint?.(e.clientX, e.clientY) as Range | null;
+        const n = r ? (r.startContainer.nodeType === 1 ? (r.startContainer as HTMLElement) : r.startContainer.parentElement) : null;
+        if (n?.closest?.("[data-f]")) { e.preventDefault(); e.dataTransfer!.dropEffect = "copy"; }
+      } else if (types.includes("Files")) { e.preventDefault(); mark(secOf(e)); }
+    });
+    doc.addEventListener("dragleave", (e) => { if (!(e.relatedTarget as Node | null) || !doc.contains(e.relatedTarget as Node)) mark(null); });
+    doc.addEventListener("drop", (e) => {
+      mark(null);
+      const key = e.dataTransfer?.getData("application/x-doc-token");
+      if (key) {
+        e.preventDefault();
+        const r = (doc as any).caretRangeFromPoint?.(e.clientX, e.clientY) as Range | null;
+        if (r) insertAt(r, key);
+        return;
+      }
+      const file = Array.from(e.dataTransfer?.files ?? []).find((f) => f.type.startsWith("image/"));
+      const sec = secOf(e);
+      if (file && sec) { e.preventDefault(); cb.current.onImageDrop(sec.dataset.b!, file); }
+    });
+    setReady(true);
+  };
+  const paintRef = useRef(paint); paintRef.current = paint;
+
+  return (
+    <div className={`dxb-canvas ${width ? "is-device" : ""}`}>
+      <iframe ref={frame} title="Document" srcDoc={initial} onLoad={onLoad} style={width ? { width } : undefined} />
+    </div>
+  );
+}
+
+/** A finished document, animated, in a large overlay (with device sizes and "open in a tab"). */
+function DocPreview({ html, onClose, title }: { html: string; onClose: () => void; title: string }) {
+  const [dev, setDev] = useState<"web" | "tablet" | "phone">("web");
+  useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } }; window.addEventListener("keydown", k, true); return () => window.removeEventListener("keydown", k, true); }, [onClose]);
+  const openTab = () => { const u = URL.createObjectURL(new Blob([html], { type: "text/html" })); window.open(u, "_blank", "noopener"); setTimeout(() => URL.revokeObjectURL(u), 60000); };
+  return createPortal(
+    <div className="dxp" role="dialog" aria-modal="true" aria-label="Preview">
+      <div className="dxp-bar">
+        <b>{title}</b>
+        <div className="dxb-seg">
+          {(["web", "tablet", "phone"] as const).map((d) => (
+            <button key={d} type="button" className={dev === d ? "is-on" : ""} onClick={() => setDev(d)}>
+              <DIcon d={d === "phone" ? "phone" : "monitor"} />{d === "web" ? "Desktop" : d === "tablet" ? "Tablet" : "Phone"}
+            </button>
+          ))}
+        </div>
+        <button type="button" className="dxb-btn" onClick={openTab}><DIcon d="ext" />Open in a tab</button>
+        <button type="button" className="dxb-x" onClick={onClose} aria-label="Close preview"><DIcon d="x" w={2.2} /></button>
+      </div>
+      <div className="dxp-stage">
+        <iframe key={dev} title="Preview" srcDoc={html} className={`dxp-frame is-${dev}`} />
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/** Picks the kind of block to add. */
+function BlockPicker({ kind, onPick, onClose }: { kind: DocKind; onPick: (t: DocBlockType) => void; onClose: () => void }) {
+  const list = [...DOC_BLOCKS].sort((a, b) => Number(b.kinds.includes(kind)) - Number(a.kinds.includes(kind)));
+  useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } }; window.addEventListener("keydown", k, true); return () => window.removeEventListener("keydown", k, true); }, [onClose]);
+  return createPortal(
+    <div className="dxk-back" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="dxk" role="dialog" aria-modal="true" aria-label="Add a block">
+        <div className="dxk-head"><b>Add a block</b><span>Pick what comes next — you can move it later.</span><button type="button" className="dxb-x" onClick={onClose} aria-label="Close"><DIcon d="x" w={2.2} /></button></div>
+        <div className="dxk-grid">
+          {list.map((b, i) => (
+            <button key={b.type} type="button" className={`dxk-it ${b.kinds.includes(kind) ? "" : "is-other"}`} style={{ animationDelay: `${i * 18}ms` }} onClick={() => onPick(b.type)}>
+              <span className="dxk-ic">{DXI(b.icon, 1.8)}</span>
+              <b>{b.label}</b><i>{b.hint}</i>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+const DOC_PALETTES: { name: string; t: Partial<DocTheme> }[] = [
+  { name: "Forest", t: { primary: "#0A6F4D", accent: "#12B57F", ink: "#0B241A", paper: "#FBFDFC", muted: "#5A7D6D" } },
+  { name: "Ocean", t: { primary: "#1D3F8F", accent: "#2F80ED", ink: "#0E1A33", paper: "#FBFCFF", muted: "#5B6B8C" } },
+  { name: "Graphite", t: { primary: "#1F2933", accent: "#F2A93B", ink: "#111827", paper: "#FCFCFB", muted: "#6B7280" } },
+  { name: "Plum", t: { primary: "#4C1D95", accent: "#C026D3", ink: "#1E1033", paper: "#FDFBFF", muted: "#6E5B8A" } },
+  { name: "Ember", t: { primary: "#9A2B13", accent: "#F06A3A", ink: "#2A120B", paper: "#FFFCFA", muted: "#8A6A5E" } },
+  { name: "Teal", t: { primary: "#0F5F66", accent: "#16B3A6", ink: "#0B2427", paper: "#FAFDFD", muted: "#4F7A7D" } },
+];
+const hexOk6 = (v: string) => /^#[0-9a-f]{6}$/i.test(v);
+
+function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  const [txt, setTxt] = useState(value);
+  useEffect(() => setTxt(value), [value]);
+  return (
+    <label className="dxf-color">
+      <span>{label}</span>
+      <span className="dxf-color-in">
+        <input type="color" value={hexOk6(value) ? value : "#000000"} onChange={(e) => onChange(e.target.value.toUpperCase())} />
+        <input value={txt} onChange={(e) => { setTxt(e.target.value); const v = e.target.value.trim(); const h = v.startsWith("#") ? v : `#${v}`; if (hexOk6(h)) onChange(h.toUpperCase()); }} spellCheck={false} />
+      </span>
+    </label>
+  );
+}
+
+/** Upload / drop an image; shows it, with Remove. */
+function ImagePick({ value, onPick, onClear, label, busy, wide }: { value?: string; onPick: (f: File) => void; onClear: () => void; label: string; busy?: boolean; wide?: boolean }) {
+  const inp = useRef<HTMLInputElement>(null);
+  const [over, setOver] = useState(false);
+  return (
+    <div className={`dxf-img ${wide ? "is-wide" : ""} ${over ? "is-over" : ""}`}
+      onDragOver={(e) => { if (Array.from(e.dataTransfer.types).includes("Files")) { e.preventDefault(); setOver(true); } }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => { e.preventDefault(); setOver(false); const f = Array.from(e.dataTransfer.files).find((x) => x.type.startsWith("image/")); if (f) onPick(f); }}>
+      <span className="dxf-lbl">{label}</span>
+      <button type="button" className="dxf-img-box" onClick={() => inp.current?.click()} disabled={busy}>
+        {busy ? <span className="dxb-spin" /> : value ? <img src={value} alt="" /> : <span className="dxf-img-ph"><DIcon d="image" />Drop or choose</span>}
+      </button>
+      {value && <button type="button" className="dxf-link" onClick={onClear}>Remove</button>}
+      <input ref={inp} type="file" accept="image/*" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) onPick(f); e.target.value = ""; }} />
+    </div>
+  );
+}
+
+export interface DocBuilderProps {
+  mode: "template" | "deal";
+  kind: DocKind;
+  lang: DocLang;
+  theme: DocTheme; onTheme: (t: DocTheme) => void;
+  blocks: DocBlock[]; onBlocks: (b: DocBlock[]) => void;
+  terms?: DocTemplate["terms"]; onTerms?: (t: DocTemplate["terms"]) => void;
+  values?: Record<string, string>; onValues?: (v: Record<string, string>) => void;
+  ctx: DocCtxIn; productIds: string[]; serviceIds: string[];
+  /** Product / service names for "only with…" (catalogue id → name). */
+  catalog?: { products: { id: string; name: string }[]; services: { id: string; name: string }[] };
+  /** Left of the top bar: title and template choice. */
+  head: React.ReactNode;
+  /** Right of the top bar: save, export… */
+  actions: React.ReactNode;
+  /** A line under the top bar (saving state, warnings). */
+  status?: React.ReactNode;
+  /** Extra tab for the template's own settings (template mode). */
+  docTab?: React.ReactNode;
+  onClose: () => void;
+  /** Html of the finished document (view mode) for the preview. */
+  previewHtml: () => string;
+  title: string;
+  /** Upload an image; returns what <img> shows. */
+  uploadImage: (f: File) => Promise<string>;
+}
+
+/** The document editor: outline on the left, the page in the middle, settings on the right. */
+export function DocBuilder(p: DocBuilderProps) {
+  const { mode, kind, lang, theme, blocks, ctx } = p;
+  const [sel, setSel] = useState<string | null>(blocks[0]?.id ?? null);
+  const [tab, setTab] = useState<"fields" | "block" | "vars" | "look" | "doc">(mode === "deal" ? "fields" : "block");
+  const [picker, setPicker] = useState<null | { after: string | null }>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [device, setDevice] = useState<"web" | "phone">("web");
+  const [busyImg, setBusyImg] = useState<string | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
+  const [q, setQ] = useState("");
+  const [find, setFind] = useState({ text: "", token: "client" });
+  const [dragId, setDragId] = useState<string | null>(null);
+  const api = useRef<DocCanvasApi | null>(null);
+  const [labels, setLabels] = useState(mode === "template");
+  const imgInput = useRef<HTMLInputElement>(null);
+  const imgFor = useRef<string | null>(null);
+  const block = blocks.find((b) => b.id === sel) ?? null;
+  const blocksRef = useRef(blocks); blocksRef.current = blocks;
+  const setBlocks = (fn: (b: DocBlock[]) => DocBlock[]) => p.onBlocks(fn(blocksRef.current));
+  const patchBlock = (id: string, patch: Partial<DocBlock>) => setBlocks((bs) => bs.map((b) => (b.id === id ? { ...b, ...patch } : b)));
+  useEffect(() => { if (hint) { const t = setTimeout(() => setHint(null), 2600); return () => clearTimeout(t); } }, [hint]);
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape" && !picker && !preview && !(document.activeElement as HTMLElement)?.closest?.(".dxb-right input, .dxb-right textarea")) p.onClose(); };
+    window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k);
+  });
+
+  const onField = (path: string, value: string) => {
+    const [id, f, k, f2] = path.split("|");
+    setBlocks((bs) => bs.map((b) => {
+      if (b.id !== id) return b;
+      if (f === "items") return { ...b, items: (b.items ?? []).map((x, i) => (i === Number(k) ? { ...x, [f2]: value } : x)) };
+      return { ...b, [f]: value };
+    }));
+  };
+  const addBlock = (type: DocBlockType, after: string | null) => {
+    const nb = newDocBlock(type, kind, lang);
+    setBlocks((bs) => { const i = after ? bs.findIndex((b) => b.id === after) : bs.length - 1; const out = [...bs]; out.splice(i + 1, 0, nb); return out; });
+    setSel(nb.id); setTab("block"); setPicker(null);
+    setTimeout(() => api.current?.scrollTo(nb.id), 120);
+  };
+  const move = (id: string, d: -1 | 1) => setBlocks((bs) => { const i = bs.findIndex((b) => b.id === id); const j = i + d; if (i < 0 || j < 0 || j >= bs.length) return bs; const o = [...bs]; [o[i], o[j]] = [o[j], o[i]]; return o; });
+  const remove = (id: string) => { setBlocks((bs) => bs.filter((b) => b.id !== id)); if (sel === id) setSel(null); };
+  const dup = (id: string) => { const b = blocksRef.current.find((x) => x.id === id); if (!b) return; const c = cloneBlock(b); setBlocks((bs) => { const i = bs.findIndex((x) => x.id === id); const o = [...bs]; o.splice(i + 1, 0, c); return o; }); setSel(c.id); };
+  const onAction = (act: string, id: string, k?: number) => {
+    if (act === "up") move(id, -1);
+    else if (act === "down") move(id, 1);
+    else if (act === "dup") dup(id);
+    else if (act === "del") remove(id);
+    else if (act === "hide") { const b = blocksRef.current.find((x) => x.id === id); if (b) patchBlock(id, { hidden: !b.hidden }); }
+    else if (act === "insert") setPicker({ after: id });
+    else if (act === "add-item") { const b = blocksRef.current.find((x) => x.id === id); if (b) patchBlock(id, { items: [...(b.items ?? []), newDocItem()] }); }
+    else if (act === "del-item" && k != null) { const b = blocksRef.current.find((x) => x.id === id); if (b) patchBlock(id, { items: (b.items ?? []).filter((_, i) => i !== k) }); }
+    else if (act === "pick-image") { imgFor.current = id; imgInput.current?.click(); }
+  };
+  const setImage = async (blockId: string, file: File, itemIdx?: number) => {
+    setBusyImg(itemIdx != null ? `${blockId}:${itemIdx}` : blockId);
+    try {
+      const url = await p.uploadImage(file);
+      const b = blocksRef.current.find((x) => x.id === blockId);
+      if (!b) return;
+      if (itemIdx != null) patchBlock(blockId, { items: (b.items ?? []).map((x, i) => (i === itemIdx ? { ...x, image: url } : x)) });
+      else patchBlock(blockId, { image: url, ...(b.type === "text" && !b.layout ? { layout: "right" as const } : {}) });
+      setSel(blockId);
+    } catch (e: any) { setHint(e?.message ?? "Could not upload the image."); }
+    finally { setBusyImg(null); }
+  };
+  const insertToken = (key: string) => {
+    if (!api.current?.insertToken(key)) setHint("Click inside a text of the page first, then pick the value — or drag it onto the text.");
+  };
+  const replaceAll = () => {
+    const txt = find.text.trim();
+    if (!txt) return;
+    let n = 0;
+    const rep = (s?: string) => { if (!s || !s.includes(txt)) return s; n += s.split(txt).length - 1; return s.split(txt).join(`{{${find.token}}}`); };
+    setBlocks((bs) => bs.map((b) => ({ ...b, eyebrow: rep(b.eyebrow), title: rep(b.title), body: rep(b.body), items: b.items?.map((x) => ({ ...x, title: rep(x.title), text: rep(x.text), value: rep(x.value) })) })));
+    setHint(n ? `Replaced ${n} time${n === 1 ? "" : "s"} with {{${find.token}}}.` : `“${txt}” isn't in the document.`);
+  };
+
+  const fullCtx = useMemo<DocContext>(() => ({ ...ctx, theme, terms: p.terms }), [ctx, theme, p.terms]);
+  const autoValues = useMemo(() => docValues(fullCtx, {}), [fullCtx]);
+  const used = useMemo(() => docUsedTokens(blocks), [blocks]);
+  const free = useMemo(() => docFreeTokens(blocks), [blocks]);
+  const groups = useMemo(() => docTokenGroups(kind), [kind]);
+  const ql = q.trim().toLowerCase();
+
+  const tabs: { k: typeof tab; label: string; icon: keyof typeof DX_ICON }[] = [
+    ...(mode === "deal" ? [{ k: "fields" as const, label: "Fields", icon: "fields" as const }] : []),
+    { k: "block", label: "Block", icon: "layers" },
+    { k: "vars", label: "Variables", icon: "braces" },
+    { k: "look", label: "Look", icon: "palette" },
+    ...(p.docTab ? [{ k: "doc" as const, label: "Template", icon: "sliders" as const }] : []),
+  ];
+
+  return createPortal(
+    <div className="dxb" role="dialog" aria-modal="true" aria-label={p.title}>
+      <header className="dxb-top">
+        <button type="button" className="dxb-x" onClick={p.onClose} aria-label="Close"><DIcon d="x" w={2.2} /></button>
+        <div className="dxb-head">{p.head}</div>
+        <div className="dxb-actions">
+          <button type="button" className="dxb-btn" onClick={() => setPreview(p.previewHtml())}><DIcon d="play" />Preview</button>
+          {p.actions}
+        </div>
+      </header>
+      {p.status && <div className="dxb-status">{p.status}</div>}
+      <div className="dxb-body">
+        <aside className="dxb-left">
+          <div className="dxb-left-head"><b>Sections</b><span>{blocks.length}</span></div>
+          <ol className="dxb-outline">
+            {blocks.map((b, i) => {
+              const meta = docBlockMeta(b.type);
+              const when = b.when ?? (b.type === "products" ? "product" : b.type === "services" ? "service" : "always");
+              const label = richToText(b.title ?? "").replace(/\{\{([^}]+)\}\}/g, (_m, k: string) => `‹${docTokenLabel(k.trim())}›`) || meta.label;
+              return (
+                <li key={b.id} className={`${sel === b.id ? "is-on" : ""} ${b.hidden ? "is-hidden" : ""} ${dragId === b.id ? "is-drag" : ""}`}
+                  draggable onDragStart={(e) => { setDragId(b.id); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", b.id); }}
+                  onDragEnd={() => setDragId(null)}
+                  onDragOver={(e) => { if (dragId && dragId !== b.id) { e.preventDefault(); } }}
+                  onDrop={(e) => { e.preventDefault(); if (!dragId || dragId === b.id) return; setBlocks((bs) => { const from = bs.findIndex((x) => x.id === dragId); const o = [...bs]; const [m] = o.splice(from, 1); const to = o.findIndex((x) => x.id === b.id); o.splice(from < i ? to + 1 : to, 0, m); return o; }); setDragId(null); }}
+                  style={{ animationDelay: `${Math.min(i, 14) * 22}ms` }}>
+                  <button type="button" className="dxb-ol-main" onClick={() => { setSel(b.id); setTab("block"); api.current?.scrollTo(b.id); }}>
+                    <span className="dxb-ol-ic">{DXI(meta.icon, 1.8)}</span>
+                    <span className="dxb-ol-txt"><b>{label}</b><i>{meta.label}{when !== "always" ? ` · per ${when}` : ""}</i></span>
+                  </button>
+                  <button type="button" className="dxb-ol-eye" onClick={() => patchBlock(b.id, { hidden: !b.hidden })} title={b.hidden ? "Show" : "Hide"} aria-label={b.hidden ? "Show" : "Hide"}><DIcon d={b.hidden ? "eyeOff" : "eye"} /></button>
+                </li>
+              );
+            })}
+          </ol>
+          <button type="button" className="dxb-add" onClick={() => setPicker({ after: sel })}><DIcon d="plus" w={2.2} />Add a block</button>
+        </aside>
+
+        <main className="dxb-stage">
+          <div className="dxb-stage-bar">
+            <div className="dxb-seg is-sm">
+              <button type="button" className={device === "web" ? "is-on" : ""} onClick={() => setDevice("web")}><DIcon d="monitor" />Desktop</button>
+              <button type="button" className={device === "phone" ? "is-on" : ""} onClick={() => setDevice("phone")}><DIcon d="phone" />Phone</button>
+            </div>
+            <label className="dxb-switch" title="Show the variables by name instead of this deal's values">
+              <input type="checkbox" checked={labels} onChange={(e) => setLabels(e.target.checked)} /><i />Variable names
+            </label>
+            <span className="dxb-tip">Click any text to edit it · drag a value onto a text · drop images on a section</span>
+          </div>
+          <DocCanvas theme={theme} blocks={blocks} kind={kind} lang={lang} ctx={ctx} terms={p.terms} productIds={p.productIds} serviceIds={p.serviceIds}
+            values={p.values} chipsAsLabels={labels} selected={sel} width={device === "phone" ? 400 : null}
+            onSelect={(id) => { setSel(id); if (tab !== "fields" && tab !== "vars") setTab("block"); }} onField={onField} onAction={onAction}
+            onImageDrop={(id, f) => setImage(id, f)} onTokenClick={(k) => { if (mode === "deal") { setTab("fields"); setTimeout(() => document.getElementById(`dxf-v-${k}`)?.focus(), 60); } }} apiRef={api} />
+          {hint && <div className="dxb-hint" role="status">{hint}</div>}
+        </main>
+
+        <aside className="dxb-right">
+          <nav className="dxb-tabs" role="tablist">
+            {tabs.map((t) => (
+              <button key={t.k} type="button" role="tab" aria-selected={tab === t.k} className={tab === t.k ? "is-on" : ""} onClick={() => setTab(t.k)}>
+                <DIcon d={t.icon} />{t.label}{t.k === "fields" && free.some((k) => !(p.values ?? {})[k]) ? <i className="dxb-dot" /> : null}
+              </button>
+            ))}
+          </nav>
+          <div className="dxb-panel" key={tab}>
+            {tab === "fields" && (
+              <div className="dxf">
+                <p className="dxf-note">What this document says for this deal. Values come from the deal; type over any of them for this document only.</p>
+                {free.length > 0 && (
+                  <section className="dxf-sec is-warn">
+                    <h4>To fill in</h4>
+                    {free.map((k) => (
+                      <label key={k} className="dxf-row">
+                        <span>{k.replace(/_/g, " ")}</span>
+                        <input id={`dxf-v-${k}`} value={(p.values ?? {})[k] ?? ""} placeholder="Type the value" onFocus={() => api.current?.flash(k)}
+                          onChange={(e) => p.onValues?.({ ...(p.values ?? {}), [k]: e.target.value })} />
+                      </label>
+                    ))}
+                  </section>
+                )}
+                <section className="dxf-sec">
+                  <h4>From the deal</h4>
+                  {used.filter((k) => !free.includes(k)).map((k) => {
+                    const own = (p.values ?? {})[k];
+                    const auto = autoValues[k] ?? "";
+                    const scoped = /^(product|service)\b/.test(k);
+                    return (
+                      <div key={k} className={`dxf-row ${own != null ? "is-own" : ""}`}>
+                        <button type="button" className="dxf-jump" onClick={() => api.current?.flash(k)} title="Show it in the document">{docTokenLabel(k)}</button>
+                        {scoped ? <span className="dxf-auto">Per product / service</span> : (
+                          <input id={`dxf-v-${k}`} value={own ?? auto} placeholder={auto || "Empty"} onFocus={() => api.current?.flash(k)}
+                            onChange={(e) => p.onValues?.({ ...(p.values ?? {}), [k]: e.target.value })} />
+                        )}
+                        {own != null && <button type="button" className="dxf-reset" title="Back to the deal's value" onClick={() => { const v = { ...(p.values ?? {}) }; delete v[k]; p.onValues?.(v); }}><DIcon d="undo" /></button>}
+                      </div>
+                    );
+                  })}
+                  {!used.length && <p className="dxf-empty">This document uses no values yet. Add some from Variables.</p>}
+                </section>
+              </div>
+            )}
+
+            {tab === "block" && (block ? (() => {
+              const meta = docBlockMeta(block.type);
+              const when = block.when ?? (block.type === "products" ? "product" : block.type === "services" ? "service" : "always");
+              const list = when === "product" ? p.catalog?.products ?? [] : when === "service" ? p.catalog?.services ?? [] : [];
+              const auto = ["pricing", "schedule", "parties", "signature"].includes(block.type) || (block.type === "timeline" && !(block.items ?? []).length);
+              const itemLabel: Partial<Record<DocBlockType, [string, string?]>> = { cover: ["Details", "label"], stats: ["Figures", "label"], cards: ["Cards"], terms: ["Conditions"], team: ["People", "role"], clauses: ["Clauses"], timeline: ["Steps", "when"], products: ["Features"], services: ["Points"] };
+              const il = itemLabel[block.type];
+              return (
+                <div className="dxf">
+                  <div className="dxf-blk-head">
+                    <span className="dxf-blk-ic">{DXI(meta.icon, 1.8)}</span>
+                    <div><b>{meta.label}</b><i>{meta.hint}</i></div>
+                  </div>
+                  {auto && <p className="dxf-note is-auto"><DIcon d="spark" />Filled from the deal{block.type === "timeline" ? " (the services' phases) — or add your own steps" : ""}.</p>}
+                  <section className="dxf-sec">
+                    <h4>Goes in</h4>
+                    <div className="dxb-seg is-full">
+                      {(["always", "product", "service"] as const).map((w) => (
+                        <button key={w} type="button" className={when === w ? "is-on" : ""} onClick={() => patchBlock(block.id, { when: w, ids: [] })}>{w === "always" ? "Always" : w === "product" ? "Each product" : "Each service"}</button>
+                      ))}
+                    </div>
+                    {when !== "always" && (
+                      <>
+                        <p className="dxf-note">Repeats once per {when} of the deal; its {when} values are that {when}'s.{list.length ? " Limit it to some:" : ""}</p>
+                        {list.length > 0 && (
+                          <div className="dxf-chips">
+                            {list.map((x) => {
+                              const on = (block.ids ?? []).includes(x.id);
+                              return <button key={x.id} type="button" className={on ? "is-on" : ""} onClick={() => patchBlock(block.id, { ids: on ? (block.ids ?? []).filter((y) => y !== x.id) : [...(block.ids ?? []), x.id] })}>{on && <DIcon d="check" w={3} />}{x.name}</button>;
+                            })}
+                          </div>
+                        )}
+                        {list.length > 0 && !(block.ids ?? []).length && <p className="dxf-sub">None picked: every {when}.</p>}
+                      </>
+                    )}
+                  </section>
+                  <section className="dxf-sec">
+                    <h4>Background</h4>
+                    <div className="dxf-tones">
+                      {(["light", "tint", "dark", "brand"] as const).map((t) => (
+                        <button key={t} type="button" className={`t-${t} ${(block.tone ?? "") === t ? "is-on" : ""}`} onClick={() => patchBlock(block.id, { tone: t })} title={t}><i /></button>
+                      ))}
+                      <button type="button" className={`t-auto ${!block.tone ? "is-on" : ""}`} onClick={() => patchBlock(block.id, { tone: undefined })}>Auto</button>
+                    </div>
+                  </section>
+                  {["cover", "text", "quote", "image"].includes(block.type) && (
+                    <section className="dxf-sec">
+                      <h4>{block.type === "cover" ? "Background image" : block.type === "quote" ? "Photo" : "Image"}</h4>
+                      <ImagePick label="" value={block.image} busy={busyImg === block.id} wide={block.type !== "quote"} onPick={(f) => setImage(block.id, f)} onClear={() => patchBlock(block.id, { image: undefined })} />
+                      {block.type === "text" && (
+                        <div className="dxb-seg is-full">
+                          {(["left", "right", "center"] as const).map((l) => (
+                            <button key={l} type="button" className={(block.layout ?? (block.image ? "right" : "left")) === l ? "is-on" : ""} onClick={() => patchBlock(block.id, { layout: l })}>{l === "left" ? (block.image ? "Image left" : "Left") : l === "right" ? (block.image ? "Image right" : "Right") : "Centred"}</button>
+                          ))}
+                        </div>
+                      )}
+                    </section>
+                  )}
+                  {il && (
+                    <section className="dxf-sec">
+                      <h4>{il[0]}</h4>
+                      <ol className="dxf-items">
+                        {(block.items ?? []).map((x, k) => (
+                          <li key={x.id}>
+                            <span className="dxf-it-n">{k + 1}</span>
+                            <span className="dxf-it-t">{richToText(x.title || x.text || x.value || "") || <em>Empty</em>}</span>
+                            {block.type === "team" || block.type === "cards" ? (
+                              <label className="dxf-it-img" title="Picture">{busyImg === `${block.id}:${k}` ? <span className="dxb-spin" /> : x.image ? <img src={x.image} alt="" /> : <DIcon d="image" />}
+                                <input type="file" accept="image/*" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) setImage(block.id, f, k); e.target.value = ""; }} />
+                              </label>
+                            ) : null}
+                            <button type="button" disabled={!k} onClick={() => patchBlock(block.id, { items: (() => { const o = [...(block.items ?? [])]; [o[k - 1], o[k]] = [o[k], o[k - 1]]; return o; })() })} aria-label="Up"><DIcon d="up" /></button>
+                            <button type="button" onClick={() => patchBlock(block.id, { items: (block.items ?? []).filter((_, i) => i !== k) })} aria-label="Remove"><DIcon d="trash" /></button>
+                          </li>
+                        ))}
+                      </ol>
+                      <button type="button" className="dxf-add" onClick={() => patchBlock(block.id, { items: [...(block.items ?? []), newDocItem()] })}><DIcon d="plus" w={2.2} />Add</button>
+                      <p className="dxf-sub">Type the texts on the page.</p>
+                    </section>
+                  )}
+                  <div className="dxf-blk-tools">
+                    <button type="button" onClick={() => move(block.id, -1)}><DIcon d="up" />Up</button>
+                    <button type="button" onClick={() => move(block.id, 1)}><DIcon d="down" />Down</button>
+                    <button type="button" onClick={() => dup(block.id)}><DIcon d="copy" />Duplicate</button>
+                    <button type="button" onClick={() => patchBlock(block.id, { hidden: !block.hidden })}><DIcon d={block.hidden ? "eye" : "eyeOff"} />{block.hidden ? "Show" : "Hide"}</button>
+                    <button type="button" className="is-del" onClick={() => remove(block.id)}><DIcon d="trash" />Delete</button>
+                  </div>
+                </div>
+              );
+            })() : <div className="dxf"><p className="dxf-empty">Click a section of the page (or in the list) to set it up.</p></div>)}
+
+            {tab === "vars" && (
+              <div className="dxf">
+                <p className="dxf-note">Click a text on the page, then a value to put it there — or drag the value onto the text. It always shows this deal's figure.</p>
+                <label className="dxf-search"><DIcon d="search" /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search values" /></label>
+                {groups.map((g) => {
+                  const ts = g.tokens.filter((t) => !ql || t.label.toLowerCase().includes(ql) || t.key.includes(ql));
+                  if (!ts.length) return null;
+                  return (
+                    <section key={g.group} className="dxf-sec">
+                      <h4>{g.group}</h4>
+                      <div className="dxf-tokens">
+                        {ts.map((t) => {
+                          const key = t.key.replace(/N/g, "1");
+                          return (
+                            <button key={t.key} type="button" draggable className={used.includes(key) ? "is-used" : ""} title={`{{${key}}} · e.g. ${t.example}`}
+                              onDragStart={(e) => { e.dataTransfer.setData("application/x-doc-token", key); e.dataTransfer.setData("text/plain", `{{${key}}}`); e.dataTransfer.effectAllowed = "copy"; }}
+                              onMouseDown={(e) => e.preventDefault()} onClick={() => insertToken(key)}>
+                              <b>{t.label}</b><i>{(autoValues[key] ?? "").replace(/\n/g, " · ") || t.example}</i>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  );
+                })}
+                <section className="dxf-sec">
+                  <h4>Replace text with a value</h4>
+                  <p className="dxf-sub">E.g. every “Grupo Mundomóvil” becomes the client of each deal.</p>
+                  <input className="dxf-in" value={find.text} onChange={(e) => setFind({ ...find, text: e.target.value })} placeholder="Text to find" />
+                  <Select size="sm" value={find.token} onChange={(v) => setFind({ ...find, token: v })} aria-label="Value"
+                    options={groups.flatMap((g) => g.tokens.filter((t) => !/^(product|service)\./.test(t.key) || true).map((t) => ({ value: t.key.replace(/N/g, "1"), label: t.label, hint: g.group })))} />
+                  <button type="button" className="dxb-btn is-primary is-full" disabled={!find.text.trim()} onClick={replaceAll}>Replace everywhere</button>
+                </section>
+              </div>
+            )}
+
+            {tab === "look" && (
+              <div className="dxf">
+                <section className="dxf-sec">
+                  <h4>Style</h4>
+                  <div className="dxf-styles">
+                    {([["soft", "Soft", "Rounded, airy"], ["sharp", "Editorial", "Square, refined"], ["bold", "Bold", "Big type, strong colour"]] as const).map(([k, l, h]) => (
+                      <button key={k} type="button" className={`s-${k} ${(theme.style ?? "soft") === k ? "is-on" : ""}`} onClick={() => p.onTheme({ ...theme, style: k })}><i /><b>{l}</b><span>{h}</span></button>
+                    ))}
+                  </div>
+                </section>
+                <section className="dxf-sec">
+                  <h4>Colours</h4>
+                  <div className="dxf-pals">
+                    {DOC_PALETTES.map((pl) => (
+                      <button key={pl.name} type="button" title={pl.name} onClick={() => p.onTheme({ ...theme, ...pl.t })} className={theme.primary === pl.t.primary ? "is-on" : ""}>
+                        <i style={{ background: pl.t.primary }} /><i style={{ background: pl.t.accent }} /><i style={{ background: pl.t.ink }} />
+                      </button>
+                    ))}
+                  </div>
+                  <div className="dxf-colors">
+                    <ColorField label="Main" value={theme.primary} onChange={(v) => p.onTheme({ ...theme, primary: v })} />
+                    <ColorField label="Accent" value={theme.accent} onChange={(v) => p.onTheme({ ...theme, accent: v })} />
+                    <ColorField label="Text" value={theme.ink} onChange={(v) => p.onTheme({ ...theme, ink: v })} />
+                    <ColorField label="Soft text" value={theme.muted} onChange={(v) => p.onTheme({ ...theme, muted: v })} />
+                    <ColorField label="Page" value={theme.paper} onChange={(v) => p.onTheme({ ...theme, paper: v })} />
+                  </div>
+                </section>
+                <section className="dxf-sec">
+                  <h4>Fonts</h4>
+                  <label className="dxf-row is-stack"><span>Headings</span><Select size="sm" value={theme.headingFont} onChange={(v) => p.onTheme({ ...theme, headingFont: v })} options={DOC_FONTS.map((f) => ({ value: f, label: f }))} aria-label="Heading font" /></label>
+                  <label className="dxf-row is-stack"><span>Text</span><Select size="sm" value={theme.bodyFont} onChange={(v) => p.onTheme({ ...theme, bodyFont: v })} options={DOC_FONTS.map((f) => ({ value: f, label: f }))} aria-label="Body font" /></label>
+                </section>
+                <section className="dxf-sec">
+                  <h4>Logo</h4>
+                  <div className="dxf-logos">
+                    <ImagePick label="On dark (cover)" value={theme.logo} busy={busyImg === "logo"} onPick={async (f) => { setBusyImg("logo"); try { p.onTheme({ ...theme, logo: await p.uploadImage(f) }); } catch (e: any) { setHint(e?.message ?? "Upload failed"); } finally { setBusyImg(null); } }} onClear={() => p.onTheme({ ...theme, logo: undefined })} />
+                    <ImagePick label="On light" value={theme.logoDark} busy={busyImg === "logoDark"} onPick={async (f) => { setBusyImg("logoDark"); try { p.onTheme({ ...theme, logoDark: await p.uploadImage(f) }); } catch (e: any) { setHint(e?.message ?? "Upload failed"); } finally { setBusyImg(null); } }} onClear={() => p.onTheme({ ...theme, logoDark: undefined })} />
+                  </div>
+                </section>
+                <section className="dxf-sec">
+                  <h4>Your company</h4>
+                  <p className="dxf-sub">Used on covers, parties and signatures.</p>
+                  {([["company", "Name"], ["legalName", "Legal name"], ["vat", "VAT"], ["address", "Address"], ["city", "City (signature place)"], ["web", "Website"]] as const).map(([k, l]) => (
+                    <label key={k} className="dxf-row is-stack"><span>{l}</span><input value={(theme as any)[k] ?? ""} onChange={(e) => p.onTheme({ ...theme, [k]: e.target.value })} /></label>
+                  ))}
+                </section>
+              </div>
+            )}
+            {tab === "doc" && p.docTab}
+          </div>
+        </aside>
+      </div>
+      <input ref={imgInput} type="file" accept="image/*" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f && imgFor.current) setImage(imgFor.current, f); e.target.value = ""; }} />
+      {picker && <BlockPicker kind={kind} onClose={() => setPicker(null)} onPick={(t) => addBlock(t, picker.after)} />}
+      {preview && <DocPreview html={preview} title={p.title} onClose={() => setPreview(null)} />}
+    </div>,
+    document.body,
+  );
+}
+
+/** Html of a document for one deal: the preview / file (view), print, or PDF layout. */
+export function docHtmlFor(mode: "view" | "print", o: { theme: DocTheme; blocks: DocBlock[]; kind: DocKind; lang: DocLang; ctx: DocCtxIn; terms?: DocTemplate["terms"]; values?: Record<string, string>; productIds: string[]; serviceIds: string[]; title: string }): string {
+  const full: DocContext = { ...o.ctx, theme: o.theme, terms: o.terms };
+  const placed = planDoc(o.blocks, o.ctx.data, o.productIds, o.serviceIds);
+  return renderDocHtml(o.theme, { mode, placed, data: o.ctx.data, contract: o.ctx.contract, terms: o.terms, kind: o.kind, lang: o.lang, title: o.title, valuesFor: (pl) => ({ ...docValues(full, pl.scope), ...(o.values ?? {}) }) });
+}
+
+/** Sample deal for editing templates. */
+export function docSampleCtx(theme: DocTheme): DocCtxIn {
+  const data = sampleData();
+  data.products[0].terms = [{ years: 1, discountPct: 0, annualGross: 12000, annual: 12000 }, { years: 3, discountPct: 4.2, annualGross: 12000, annual: 11500 }];
+  void theme;
+  return {
+    data, lang: "es", sellerName: "Laura Gómez", sellerEmail: "laura@tuempresa.com", sellerPhone: "+34 600 000 000", proposalName: "Licencia + implantación",
+    contract: { signDate: new Date().toISOString().slice(0, 10), contractStart: new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10), termYears: 3, increments: { mode: "pct", value: 3 } },
+    dealValue: data.totals.total,
+  };
+}
+
+/* ---------- Settings › Proposals / Contracts ---------- */
+/** Small live picture of a template (its cover, as a 1280-wide page scaled down). */
+function DocThumb({ t }: { t: DocTemplate }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [seen, setSeen] = useState(false);
+  const [k, setK] = useState(0.25);
+  useEffect(() => {
+    const el = ref.current; if (!el) return;
+    const io = new IntersectionObserver((es) => { if (es[0].isIntersecting) { setSeen(true); io.disconnect(); } }, { rootMargin: "200px" });
+    io.observe(el);
+    const ro = new ResizeObserver(() => setK(el.clientWidth / 1280));
+    ro.observe(el);
+    return () => { io.disconnect(); ro.disconnect(); };
+  }, []);
+  const html = useMemo(() => (seen ? docHtmlFor("view", { theme: t.theme, blocks: t.blocks.slice(0, 4), kind: t.kind, lang: t.lang, ctx: docSampleCtx(t.theme), terms: t.terms, productIds: [], serviceIds: [], title: t.name }) : ""), [seen, t]);
+  return (
+    <div ref={ref} className="dxt-thumb" style={{ height: Math.round(800 * k) }}>
+      {seen && <iframe title={t.name} srcDoc={html} tabIndex={-1} aria-hidden="true" style={{ transform: `scale(${k})` }} />}
+    </div>
+  );
+}
+
+/** Settings page for one kind of document: the templates, which is default, sectors. */
+export function DocTemplatesPanel({ kind, canManage }: { kind: DocKind; canManage: boolean }) {
+  const [list, setList] = useState<DocTemplateRow[] | null | undefined>(undefined);
+  const [editing, setEditing] = useState<DocTemplate | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [flash, setFlash] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [delAsk, setDelAsk] = useState<string | null>(null);
+  const reload = useCallback(() => listDocTemplates(kind).then(setList).catch(() => setList([])), [kind]);
+  useEffect(() => { reload(); }, [reload]);
+  const noun = kind === "contract" ? "contract" : "proposal";
+  const open = (t: DocTemplate) => setEditing(JSON.parse(JSON.stringify(t)));
+  const dupT = async (t: DocTemplateRow) => {
+    const { id: _id, ...rest } = t; void _id;
+    const r = await saveDocTemplate({ ...rest, id: null, name: `${t.name} (copy)`, isDefault: false });
+    if (r.error) setFlash({ kind: "err", text: r.error }); else { setFlash({ kind: "ok", text: "Template duplicated." }); reload(); }
+  };
+  const del = async (t: DocTemplateRow) => {
+    setDelAsk(null);
+    const e = await deleteDocTemplate(t.id);
+    if (e) setFlash({ kind: "err", text: e }); else { setFlash({ kind: "ok", text: `“${t.name}” deleted.` }); reload(); }
+  };
+  const makeDefault = async (t: DocTemplateRow) => {
+    const e = await setDefaultDocTemplate(t.id, kind);
+    if (e) setFlash({ kind: "err", text: e }); else reload();
+  };
+  if (list === undefined) return <PageLoader label="Loading templates…" />;
+  return (
+    <div className="dxt">
+      {list === null && (
+        <div className="pte-flash is-info"><span>Run <b>28_proposal_html.sql</b> in Supabase to save templates. Until then you can try the editor — nothing is saved.</span></div>
+      )}
+      {flash && <DeckFlash flash={flash} onClose={() => setFlash(null)} />}
+      <div className="dxt-intro">
+        <div>
+          <h2>{kind === "contract" ? "Contract templates" : "Proposal templates"}</h2>
+          <p>{kind === "contract"
+            ? "Contracts as clean web pages and PDFs: parties, clauses, prices and the year-by-year schedule come from the deal and its contract terms."
+            : "Proposals as interactive web pages that open in any browser and print to PDF. One template per sector; each deal fills it with its client, products and prices."}</p>
+        </div>
+        {canManage && <button type="button" className="pte-btn is-primary" onClick={() => setCreating(true)}>{Ico.plus}New template</button>}
+      </div>
+      <div className="dxt-grid">
+        {(list ?? []).map((t, i) => (
+          <article key={t.id} className={`dxt-card ${t.isDefault ? "is-default" : ""}`} style={{ animationDelay: `${i * 40}ms` }}>
+            <button type="button" className="dxt-open" onClick={() => open(t)} aria-label={`Open ${t.name}`}><DocThumb t={t} /></button>
+            <div className="dxt-meta">
+              <div className="dxt-name"><b>{t.name}</b>{t.isDefault && <span className="dxt-badge">{Ico.star}Default</span>}</div>
+              <div className="dxt-secs">{t.sectors.length ? t.sectors.map((s) => <span key={s}>{s}</span>) : <em>Every sector</em>}</div>
+              <div className="dxt-sub">{t.blocks.length} sections · {t.lang === "en" ? "English" : "Spanish"}{t.reference ? ` · from ${t.reference.fileName}` : ""}</div>
+            </div>
+            {canManage && (
+              <div className="dxt-tools">
+                <button type="button" className="pte-btn is-sm" onClick={() => open(t)}>{Ico.pen}Edit</button>
+                {!t.isDefault && <button type="button" className="pte-btn is-sm" onClick={() => makeDefault(t)}>{Ico.star}Make default</button>}
+                <button type="button" className="pte-btn is-sm" onClick={() => dupT(t)}>{Ico.copy}Duplicate</button>
+                {delAsk === t.id ? (
+                  <span className="dxt-del"><button type="button" className="pte-btn is-sm is-ghost" onClick={() => del(t)}>Delete</button><button type="button" className="pte-btn is-sm" onClick={() => setDelAsk(null)}>Keep</button></span>
+                ) : <button type="button" className="pte-btn is-sm is-ghost" onClick={() => setDelAsk(t.id)} aria-label="Delete">{Ico.trash}</button>}
+              </div>
+            )}
+          </article>
+        ))}
+        {canManage && (
+          <button type="button" className="dxt-new" onClick={() => setCreating(true)}>
+            <span>{Ico.plus}</span><b>New {noun} template</b><i>Start from our design or from one of your documents</i>
+          </button>
+        )}
+        {!canManage && !(list ?? []).length && <p className="dxf-empty">No templates yet.</p>}
+      </div>
+      {creating && <NewDocTemplate kind={kind} onClose={() => setCreating(false)} onReady={(t) => { setCreating(false); setEditing(t); }} />}
+      {editing && <DocTemplateEditor initial={editing} onClose={(changed) => { setEditing(null); if (changed) reload(); }} />}
+    </div>
+  );
+}
+
+/** New template: our design, or built from a reference document. */
+function NewDocTemplate({ kind, onClose, onReady }: { kind: DocKind; onClose: () => void; onReady: (t: DocTemplate) => void }) {
+  const [lang, setLang] = useState<DocLang>("es");
+  const [stage, setStage] = useState<null | string>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [over, setOver] = useState(false);
+  const inp = useRef<HTMLInputElement>(null);
+  const seedTheme = async (): Promise<DocTheme> => ({ ...DEFAULT_DOC_THEME, ...(await docThemeSeed().catch(() => ({}))) });
+  const fromDesign = async (style: DocTheme["style"]) => {
+    setStage("Preparing…");
+    const th = { ...(await seedTheme()), style };
+    const t = defaultDocTemplate(kind, lang, th);
+    onReady({ ...t, id: null });
+  };
+  const fromFile = async (f: File) => {
+    setErr(null); setStage(`Reading ${f.name}…`);
+    try {
+      const imp = await importReferenceDoc(f, kind, {});
+      setStage("Building the template…");
+      const seed = await seedTheme();
+      const theme: DocTheme = { ...seed, ...Object.fromEntries(Object.entries(imp.theme).filter(([, v]) => v)), headingFont: seed.headingFont, bodyFont: seed.bodyFont };
+      if (imp.theme.headingFont) theme.headingFont = imp.theme.headingFont;
+      if (imp.theme.bodyFont) theme.bodyFont = imp.theme.bodyFont;
+      let blocks = imp.blocks;
+      if (imp.images.length) {
+        setStage(`Keeping ${imp.images.length} picture${imp.images.length === 1 ? "" : "s"}…`);
+        const urls: string[] = [];
+        for (const b of imp.images.slice(0, 5)) { try { urls.push(await uploadDocImage(b, "ref")); } catch { /* skip that one */ } }
+        blocks = assignImages(blocks, urls);
+      }
+      const base = defaultDocTemplate(kind, lang, theme);
+      onReady({ ...base, id: null, name: f.name.replace(/\.[a-z0-9]+$/i, "").replace(/[_-]+/g, " ").trim() || base.name, blocks, theme, reference: { fileName: f.name, kind: imp.source, at: new Date().toISOString() } });
+    } catch (e: any) { setStage(null); setErr(e?.message ?? "Could not read that document."); }
+  };
+  return createPortal(
+    <div className="dxk-back" onMouseDown={(e) => { if (e.target === e.currentTarget && !stage) onClose(); }}>
+      <div className="dxn" role="dialog" aria-modal="true" aria-label="New template">
+        <div className="dxk-head"><b>New {kind} template</b><span>You can change everything afterwards.</span><button type="button" className="dxb-x" onClick={onClose} aria-label="Close" disabled={!!stage}><DIcon d="x" w={2.2} /></button></div>
+        {stage ? (
+          <div className="dxn-busy"><span className="dxb-spin is-lg" /><b>{stage}</b><i>Placing the deal's values where they fit…</i></div>
+        ) : (
+          <>
+            <div className="dxn-lang">
+              <span>Language of the document</span>
+              <div className="dxb-seg is-sm">
+                <button type="button" className={lang === "es" ? "is-on" : ""} onClick={() => setLang("es")}>Spanish</button>
+                <button type="button" className={lang === "en" ? "is-on" : ""} onClick={() => setLang("en")}>English</button>
+              </div>
+            </div>
+            <div className="dxn-grid">
+              <div className="dxn-col">
+                <h4>Start from our design</h4>
+                <p>Ready-made copy and layout with every value in place.</p>
+                <div className="dxn-styles">
+                  {([["soft", "Soft"], ["sharp", "Editorial"], ["bold", "Bold"]] as const).map(([k, l]) => (
+                    <button key={k} type="button" className={`dxn-style s-${k}`} onClick={() => fromDesign(k)}>
+                      <span className="dxn-mini"><i /><i /><i /></span><b>{l}</b>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="dxn-col">
+                <h4>Build it from your document</h4>
+                <p>Drop a {kind === "contract" ? "contract" : "proposal"} you already use — PowerPoint, PDF, Word or text. We read its sections, colours and pictures and put the values in.</p>
+                <button type="button" className={`dxn-drop ${over ? "is-over" : ""}`} onClick={() => inp.current?.click()}
+                  onDragOver={(e) => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)}
+                  onDrop={(e) => { e.preventDefault(); setOver(false); const f = e.dataTransfer.files?.[0]; if (f) fromFile(f); }}>
+                  <DIcon d="upload" /><b>Drop a file or click to choose</b><i>.pptx · .pdf · .docx · .txt · .md · .html</i>
+                </button>
+                <input ref={inp} type="file" hidden accept=".pptx,.pdf,.docx,.txt,.md,.html,.htm" onChange={(e) => { const f = e.target.files?.[0]; if (f) fromFile(f); e.target.value = ""; }} />
+                {err && <p className="dxn-err">{err}</p>}
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/** Editing one template (Settings). */
+function DocTemplateEditor({ initial, onClose }: { initial: DocTemplate; onClose: (changed: boolean) => void }) {
+  const [t, setT] = useState<DocTemplate>(initial);
+  const [dirty, setDirty] = useState(!initial.id);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [closeAsk, setCloseAsk] = useState(false);
+  const [sectorOpts, setSectorOpts] = useState<string[]>([]);
+  const [catalog, setCatalog] = useState<{ products: { id: string; name: string }[]; services: { id: string; name: string }[] }>({ products: [], services: [] });
+  const [reimport, setReimport] = useState<string | null>(null);
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    listCrmOptions().then((os) => setSectorOpts(Array.from(new Set([...os.filter((o) => o.kind === "sector").map((o) => o.label), ...DEFAULT_SECTORS.map((s) => s.label)])))).catch(() => setSectorOpts(DEFAULT_SECTORS.map((s) => s.label)));
+    Promise.all([loadProducts(), loadServices()]).then(([ps, ss]) => setCatalog({ products: ps.map((x: any) => ({ id: x.id, name: x.name })), services: ss.map((x: any) => ({ id: x.id, name: x.name })) })).catch(() => undefined);
+  }, []);
+  const upd = (patch: Partial<DocTemplate>) => { setT((x) => ({ ...x, ...patch })); setDirty(true); setMsg(null); };
+  const ctx = useMemo(() => docSampleCtx(t.theme), [t.theme]);
+  const save = async () => {
+    setSaving(true);
+    const r = await saveDocTemplate(t);
+    setSaving(false);
+    if (r.error) { setMsg({ kind: "err", text: r.error }); return; }
+    setT((x) => ({ ...x, id: r.id })); setDirty(false); setSaved(true); setMsg({ kind: "ok", text: "Saved." });
+  };
+  const rebuild = async (f: File) => {
+    setReimport(`Reading ${f.name}…`);
+    try {
+      const imp = await importReferenceDoc(f, t.kind, {});
+      let blocks = imp.blocks;
+      if (imp.images.length) { const urls: string[] = []; for (const b of imp.images.slice(0, 5)) { try { urls.push(await uploadDocImage(b, "ref")); } catch { /* skip */ } } blocks = assignImages(blocks, urls); }
+      upd({ blocks, reference: { fileName: f.name, kind: imp.source, at: new Date().toISOString() } });
+      setMsg({ kind: "ok", text: `Rebuilt from ${f.name}: ${blocks.length} sections. Check them and save.` });
+    } catch (e: any) { setMsg({ kind: "err", text: e?.message ?? "Could not read that document." }); }
+    finally { setReimport(null); }
+  };
+  const close = () => { if (dirty) setCloseAsk(true); else onClose(saved); };
+  const docTab = (
+    <div className="dxf">
+      <section className="dxf-sec">
+        <h4>Sectors</h4>
+        <p className="dxf-sub">Deals of companies in these sectors get this template. None = any sector (when it's the default).</p>
+        <div className="dxf-chips">
+          {sectorOpts.map((s) => { const on = t.sectors.includes(s); return <button key={s} type="button" className={on ? "is-on" : ""} onClick={() => upd({ sectors: on ? t.sectors.filter((x) => x !== s) : [...t.sectors, s] })}>{on && <DIcon d="check" w={3} />}{s}</button>; })}
+        </div>
+      </section>
+      <section className="dxf-sec">
+        <h4>Language</h4>
+        <div className="dxb-seg is-full">
+          <button type="button" className={t.lang === "es" ? "is-on" : ""} onClick={() => upd({ lang: "es" })}>Spanish</button>
+          <button type="button" className={t.lang === "en" ? "is-on" : ""} onClick={() => upd({ lang: "en" })}>English</button>
+        </div>
+        <p className="dxf-sub">Dates, the price tables and the schedule follow it.</p>
+      </section>
+      <section className="dxf-sec">
+        <h4>Commercial terms</h4>
+        <label className="dxf-row"><span>Offer valid (days)</span><input type="number" min={0} value={t.terms?.validityDays ?? 30} onChange={(e) => upd({ terms: { ...t.terms, validityDays: Number(e.target.value) || 0 } })} /></label>
+        <label className="dxf-row"><span>Payment (days)</span><input type="number" min={0} value={t.terms?.paymentDays ?? 30} onChange={(e) => upd({ terms: { ...t.terms, paymentDays: Number(e.target.value) || 0 } })} /></label>
+        <label className="dxf-row"><span>Yearly increase (%)</span><input type="number" step={0.5} min={0} value={t.terms?.annualIncreasePct ?? 0} onChange={(e) => upd({ terms: { ...t.terms, annualIncreasePct: Number(e.target.value) || 0 } })} /></label>
+        <p className="dxf-sub">The deal's contract terms win when it has them.</p>
+      </section>
+      <section className="dxf-sec">
+        <h4>Reference document</h4>
+        {t.reference ? <p className="dxf-sub">Built from <b>{t.reference.fileName}</b>.</p> : <p className="dxf-sub">Rebuild the sections from one of your documents (replaces the current ones).</p>}
+        <button type="button" className="dxb-btn is-full" disabled={!!reimport} onClick={() => ref.current?.click()}>{reimport ? <><span className="dxb-spin" />{reimport}</> : <><DIcon d="upload" />Rebuild from a document</>}</button>
+        <input ref={ref} type="file" hidden accept=".pptx,.pdf,.docx,.txt,.md,.html,.htm" onChange={(e) => { const f = e.target.files?.[0]; if (f) rebuild(f); e.target.value = ""; }} />
+      </section>
+    </div>
+  );
+  return (
+    <>
+      <DocBuilder
+        mode="template" kind={t.kind} lang={t.lang} title={t.name}
+        theme={t.theme} onTheme={(theme) => upd({ theme })}
+        blocks={t.blocks} onBlocks={(blocks) => upd({ blocks })}
+        terms={t.terms} onTerms={(terms) => upd({ terms })}
+        ctx={ctx} productIds={["sample-p"]} serviceIds={["sample-s"]} catalog={catalog}
+        uploadImage={(f) => uploadDocImage(f, "doc")}
+        previewHtml={() => docHtmlFor("view", { theme: t.theme, blocks: t.blocks, kind: t.kind, lang: t.lang, ctx, terms: t.terms, productIds: ["sample-p"], serviceIds: ["sample-s"], title: t.name })}
+        head={(
+          <div className="dxb-title">
+            <span className="dxb-eyebrow">{t.kind === "contract" ? "Contract template" : "Proposal template"}{t.sectors.length ? ` · ${t.sectors.join(", ")}` : ""}</span>
+            <input value={t.name} onChange={(e) => upd({ name: e.target.value })} aria-label="Template name" />
+          </div>
+        )}
+        actions={(
+          <>
+            {dirty && <span className="dxb-dirty"><i />Unsaved</span>}
+            <button type="button" className="dxb-btn is-primary" disabled={saving || !dirty} onClick={save}>{saving ? <span className="dxb-spin" /> : <DIcon d="check" w={2.4} />}{t.id ? "Save" : "Create template"}</button>
+          </>
+        )}
+        status={msg ? <span className={`dxb-msg is-${msg.kind}`}>{msg.text}</span> : <span className="dxb-msg">Editing with a sample deal — every value will be the deal's own.</span>}
+        docTab={docTab}
+        onClose={close}
+      />
+      {closeAsk && createPortal(
+        <div className="dxk-back" style={{ zIndex: 2147483000 }}>
+          <div className="dxc" role="alertdialog" aria-modal="true">
+            <b>Leave without saving?</b>
+            <p>Your changes to this template will be lost.</p>
+            <div><button type="button" className="dxb-btn" onClick={() => setCloseAsk(false)}>Keep editing</button><button type="button" className="dxb-btn is-danger" onClick={() => onClose(saved)}>Discard changes</button><button type="button" className="dxb-btn is-primary" onClick={async () => { await save(); setCloseAsk(false); }}>Save</button></div>
+          </div>
+        </div>, document.body)}
+    </>
   );
 }

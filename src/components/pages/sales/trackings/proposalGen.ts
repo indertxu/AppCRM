@@ -1932,3 +1932,1175 @@ export async function editDeck(buf: ArrayBuffer | Uint8Array | Blob, ops: DeckEd
   const bytes: Uint8Array = await zip.generateAsync({ type: "uint8array", compression: "DEFLATE", mimeType: PPTX_MIME });
   return new Blob([bytes as any], { type: PPTX_MIME });
 }
+
+// =====================================================================
+//  HTML documents — proposals and contracts as interactive web pages
+// =====================================================================
+/**
+ * A document template is a theme plus an ordered list of blocks. Blocks hold
+ * text with {{tokens}}; some blocks draw their content from the deal (pricing,
+ * timeline, schedule, parties, signature). A block can go in always, or once
+ * per product / service of the proposal (optionally only for given catalogue
+ * ids) — then its product.* / service.* tokens are that item's.
+ * One renderer serves the editor (contenteditable, token chips, block tools),
+ * the animated preview, the standalone .html file and print / PDF.
+ */
+export type DocKind = "proposal" | "contract";
+export type DocLang = "es" | "en";
+export interface DocTheme {
+  primary: string; accent: string; ink: string; paper: string; muted: string;
+  headingFont: string; bodyFont: string;
+  logo?: string; logoDark?: string;
+  /** soft = rounded and airy, sharp = editorial with square edges, bold = big type and strong colour */
+  style?: "soft" | "sharp" | "bold";
+  /** who sends it (parties, footer) */
+  company?: string; legalName?: string; vat?: string; address?: string; web?: string; city?: string;
+}
+export type DocBlockType =
+  | "cover" | "text" | "stats" | "cards" | "products" | "services" | "pricing" | "timeline" | "team"
+  | "quote" | "image" | "terms" | "cta" | "parties" | "clauses" | "schedule" | "signature";
+export interface DocItem { id: string; title?: string; text?: string; value?: string; image?: string }
+export interface DocBlock {
+  id: string; type: DocBlockType;
+  eyebrow?: string; title?: string; body?: string; items?: DocItem[]; image?: string;
+  layout?: "left" | "right" | "center"; tone?: "light" | "tint" | "dark" | "brand";
+  when?: "always" | "product" | "service"; ids?: string[]; hidden?: boolean;
+}
+export interface DocTemplate {
+  id?: string | null; name: string; kind: DocKind; lang: DocLang; sectors: string[]; isDefault?: boolean;
+  theme: DocTheme; blocks: DocBlock[];
+  terms?: { validityDays?: number; paymentDays?: number; annualIncreasePct?: number };
+  reference?: { fileName: string; kind: string; at: string } | null;
+}
+/** A document as one deal has it: the template's blocks copied and edited, values typed by the seller. */
+export interface DocInstance { templateId: string | null; blocks: DocBlock[]; values: Record<string, string>; theme?: DocTheme; updatedAt?: string }
+
+/** What the contract says, as the deal stores it (trackings.contract_terms, the contract panel). Read loosely. */
+export interface ContractTerms {
+  signDate?: string | null; contractStart?: string | null; termYears?: number | null;
+  /** pct / fixed: value a year; custom: perYear holds each year's amount */
+  increments?: { mode?: "pct" | "fixed" | "none" | "custom" | string; value?: number | null; perYear?: (number | null)[] | null } | null;
+  paymentTermsDays?: number | null; autoRenew?: boolean; renewYears?: number | null; contractRef?: string | null;
+  /** list / discount / final: the whole term; firstYear: year 1 */
+  license?: { list?: number; discount?: number; final?: number; firstYear?: number } | null;
+  services?: { list?: number; discount?: number; final?: number } | null;
+  schedule?: { year: number; license: number; services: number; total: number }[] | null;
+  total?: number | null;
+}
+
+export const DOC_FONTS = ["Inter", "Manrope", "DM Sans", "Plus Jakarta Sans", "Outfit", "Space Grotesk", "Playfair Display", "Fraunces", "Source Serif 4", "Libre Baskerville", "Arial", "Georgia"];
+const GOOGLE_FONTS = new Set(DOC_FONTS.filter((f) => f !== "Arial" && f !== "Georgia"));
+const SERIF = /playfair|fraunces|serif|baskerville|georgia|garamond|times/i;
+const fontStack = (f: string) => `"${f}", ${SERIF.test(f) ? 'Georgia, "Times New Roman", serif' : 'system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif'}`;
+
+export const DOC_BLOCKS: { type: DocBlockType; label: string; hint: string; kinds: DocKind[]; icon: string }[] = [
+  { type: "cover", label: "Cover", hint: "Big opening with title, client and date", kinds: ["proposal", "contract"], icon: "M4 4h16v16H4zM4 15l5-5 4 4 3-3 4 4" },
+  { type: "text", label: "Text", hint: "A heading and paragraphs, optional image", kinds: ["proposal", "contract"], icon: "M4 6h16M4 12h16M4 18h10" },
+  { type: "stats", label: "Key figures", hint: "Big numbers that count up", kinds: ["proposal"], icon: "M4 20V10M10 20V4M16 20v-7M22 20H2" },
+  { type: "cards", label: "Cards", hint: "Points in a grid: challenges, benefits, features", kinds: ["proposal", "contract"], icon: "M3 3h8v8H3zM13 3h8v8h-8zM3 13h8v8H3zM13 13h8v8h-8z" },
+  { type: "products", label: "Product", hint: "One section per product, with its prices", kinds: ["proposal"], icon: "M21 8l-9-5-9 5 9 5 9-5zM3 8v8l9 5 9-5V8" },
+  { type: "services", label: "Service", hint: "One section per service, with phases and price", kinds: ["proposal"], icon: "M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z" },
+  { type: "pricing", label: "Investment", hint: "Every line and the total", kinds: ["proposal", "contract"], icon: "M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" },
+  { type: "timeline", label: "Timeline", hint: "The phases of the services, step by step", kinds: ["proposal"], icon: "M3 12h18M7 8v8M12 6v12M17 9v6" },
+  { type: "team", label: "Team", hint: "People and roles", kinds: ["proposal"], icon: "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 7a4 4 0 1 0 0 .01M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" },
+  { type: "quote", label: "Quote", hint: "A client testimonial", kinds: ["proposal"], icon: "M7 7h4v6H5V9a2 2 0 0 1 2-2zM15 7h4v6h-6V9a2 2 0 0 1 2-2zM5 13c0 3 1 4 4 5M13 13c0 3 1 4 4 5" },
+  { type: "image", label: "Image", hint: "A full-width picture with caption", kinds: ["proposal", "contract"], icon: "M3 5h18v14H3zM8 11a2 2 0 1 0 0-.01M21 16l-5-5-9 8" },
+  { type: "terms", label: "Conditions", hint: "Commercial conditions, as a list", kinds: ["proposal", "contract"], icon: "M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" },
+  { type: "cta", label: "Closing", hint: "Next steps and the seller's contact", kinds: ["proposal"], icon: "M5 12h14M12 5l7 7-7 7" },
+  { type: "parties", label: "Parties", hint: "Who signs: your company and the client", kinds: ["contract", "proposal"], icon: "M16 21v-2a4 4 0 0 0-8 0v2M12 11a4 4 0 1 0 0-.01M3 21v-1a3 3 0 0 1 3-3M21 21v-1a3 3 0 0 0-3-3" },
+  { type: "clauses", label: "Clauses", hint: "Numbered clauses", kinds: ["contract"], icon: "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" },
+  { type: "schedule", label: "Payment schedule", hint: "Year by year, with the yearly increase", kinds: ["contract", "proposal"], icon: "M3 4h18v18H3zM16 2v4M8 2v4M3 10h18" },
+  { type: "signature", label: "Signatures", hint: "Place, date and signature boxes", kinds: ["contract", "proposal"], icon: "M3 17c3-3 5 1 7-2s2-6 5-3 4 4 6 2M3 21h18" },
+];
+export const docBlockMeta = (t: DocBlockType) => DOC_BLOCKS.find((b) => b.type === t) ?? DOC_BLOCKS[1];
+
+/** Extra values of documents (on top of the deck's). */
+export const DOC_EXTRA_TOKENS: DeckTokenDef[] = [
+  { key: "client.vat", label: "Client VAT", group: "General", example: "B12345678" },
+  { key: "client.address", label: "Client address", group: "General", example: "Calle Mayor 1, Madrid" },
+  { key: "client.contact.role", label: "Client contact role", group: "General", example: "CFO" },
+  { key: "client.contact.email", label: "Client contact email", group: "General", example: "ana@cliente.com" },
+  { key: "value", label: "Potential revenue (deal value)", group: "General", example: "45.000 €" },
+  { key: "provider.name", label: "Your company", group: "General", example: "Konsolidator" },
+  { key: "provider.legal", label: "Your legal name", group: "General", example: "Konsolidator Iberia, S.L." },
+  { key: "provider.vat", label: "Your VAT", group: "General", example: "B00000000" },
+  { key: "provider.address", label: "Your address", group: "General", example: "Paseo de la Castellana 1, Madrid" },
+  { key: "provider.city", label: "Your city (signature place)", group: "General", example: "Madrid" },
+  { key: "terms.payment_days", label: "Payment days", group: "General", example: "30" },
+  { key: "terms.validity_days", label: "Offer valid for (days)", group: "General", example: "30" },
+  { key: "contract.sign_date", label: "Contract: sign date", group: "General", example: "15 de octubre de 2026" },
+  { key: "contract.start", label: "Contract: start date", group: "General", example: "1 de noviembre de 2026" },
+  { key: "contract.end", label: "Contract: end date", group: "General", example: "31 de octubre de 2029" },
+  { key: "contract.years", label: "Contract: years", group: "General", example: "3" },
+  { key: "contract.increment", label: "Contract: yearly increase, in words", group: "General", example: "Incremento anual del 3%" },
+  { key: "contract.license.list", label: "Contract: licence list price (year 1)", group: "General", example: "20.000 €" },
+  { key: "contract.license.discount", label: "Contract: licence discount", group: "General", example: "−2.000 €" },
+  { key: "contract.license.final", label: "Contract: licence final price (year 1)", group: "General", example: "18.000 €" },
+  { key: "contract.services.final", label: "Contract: services final price", group: "General", example: "12.000 €" },
+  { key: "contract.license.term", label: "Contract: licence over the whole term", group: "General", example: "55.620 €" },
+  { key: "contract.ref", label: "Contract: reference", group: "General", example: "KON-2026-014" },
+  { key: "contract.total", label: "Contract: total over its whole term", group: "General", example: "68.000 €" },
+  { key: "contract.yearN.license", label: "Contract: year N licence", group: "General", example: "18.540 €" },
+  { key: "contract.yearN.total", label: "Contract: year N total", group: "General", example: "18.540 €" },
+];
+/** Every value a document can use, grouped for the variable palette. */
+export function docTokenGroups(kind: DocKind): { group: string; tokens: DeckTokenDef[] }[] {
+  const base = DECK_TOKENS.filter((t) => t.group !== "Repeat rows" && t.key !== "num");
+  const contract = DOC_EXTRA_TOKENS.filter((t) => t.key.startsWith("contract."));
+  const general = [...base.filter((t) => t.group === "General"), ...DOC_EXTRA_TOKENS.filter((t) => !t.key.startsWith("contract."))];
+  const out = [
+    { group: "Client & deal", tokens: general.filter((t) => /^(client|deal|proposal|value|date|valid_until)/.test(t.key)) },
+    { group: "Totals", tokens: general.filter((t) => /^(total|agenda)/.test(t.key)) },
+    { group: "You", tokens: general.filter((t) => /^(seller|provider|terms)/.test(t.key)) },
+    { group: "Contract", tokens: contract },
+    { group: "Product (in a product block)", tokens: base.filter((t) => t.group === "Product") },
+    { group: "Service (in a service block)", tokens: base.filter((t) => t.group === "Service") },
+  ];
+  return kind === "contract" ? [out[0], out[3], out[2], out[1], out[4], out[5]] : out;
+}
+export const docTokenLabel = (key: string) => {
+  const k = key.replace(/\d+/g, "N");
+  return [...DOC_EXTRA_TOKENS, ...DECK_TOKENS].find((t) => t.key === k)?.label ?? key;
+};
+
+const rid = () => Math.random().toString(36).slice(2, 10);
+const esc = (s: string) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+// ----------------------------------------------------------- values -----
+export interface DocContext extends DeckContext {
+  theme: DocTheme;
+  terms?: DocTemplate["terms"];
+  contract?: ContractTerms | null;
+  /** The value the deal shows (potential revenue); else the proposal total. */
+  dealValue?: number | null;
+}
+const longDate = (iso: string | null | undefined, lang: DocLang) => {
+  if (!iso) return "";
+  const d = new Date(iso.length <= 10 ? iso + "T12:00:00" : iso);
+  if (isNaN(d.getTime())) return "";
+  return lang === "es" ? `${d.getDate()} de ${MONTHS.es[d.getMonth()].toLowerCase()} de ${d.getFullYear()}` : `${d.getDate()} ${MONTHS.en[d.getMonth()]} ${d.getFullYear()}`;
+};
+/** The contract year by year: the deal's own schedule, else year 1 grown by the yearly increase (services in year 1). */
+export function contractSchedule(data: ProposalData, c: ContractTerms | null | undefined, terms?: DocTemplate["terms"]) {
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const years0 = Math.max(1, Math.ceil(Number(c?.termYears ?? 0) - 1e-9) || Math.max(1, ...data.products.map((p) => (p.recurring ? Math.ceil((p.termYears || 1) - 1e-9) : 1))));
+  const prodYear1 = data.products.reduce((s, p) => s + (p.recurring ? p.total / (p.termYears || 1) : p.total), 0);
+  const prodList1 = data.products.reduce((s, p) => s + (p.recurring ? (p.total + p.discount) / (p.termYears || 1) : p.total + p.discount), 0);
+  const svc = c?.services?.final ?? data.services.reduce((s, x) => s + x.total, 0);
+  const inc = c?.increments ?? (terms?.annualIncreasePct ? { mode: "pct", value: terms.annualIncreasePct } : null);
+  let rows: { year: number; license: number; services: number; total: number }[];
+  if (c?.schedule?.length) rows = c.schedule.map((r) => ({ year: Number(r.year), license: Number(r.license) || 0, services: Number(r.services) || 0, total: Number(r.total) || (Number(r.license) || 0) + (Number(r.services) || 0) }));
+  else {
+    rows = [];
+    const first = c?.license?.firstYear ?? prodYear1;
+    let lic = first;
+    for (let y = 1; y <= years0; y++) {
+      if (y > 1) {
+        const v = Number(inc?.value ?? 0);
+        if (inc?.mode === "pct") lic = lic * (1 + v / 100);
+        else if (inc?.mode === "fixed") lic = lic + v;
+        else if (inc?.mode === "custom") { const c2 = inc.perYear?.[y - 1]; if (c2 != null && Number.isFinite(Number(c2))) lic = Number(c2); }
+      }
+      const sv = y === 1 ? svc : 0;
+      rows.push({ year: y, license: r2(lic), services: sv, total: r2(lic + sv) });
+    }
+  }
+  const years = rows.length || years0;
+  const lic1 = c?.license?.firstYear ?? rows[0]?.license ?? prodYear1;
+  const licList = c?.license?.list != null && years ? c.license.list / Math.max(1, Number(c?.termYears) || years) : prodList1;
+  const licTerm = c?.license?.final ?? rows.reduce((s, r) => s + r.license, 0);
+  const incText = (lang: DocLang) => {
+    const v = Number(inc?.value ?? 0);
+    const es = lang === "es";
+    if (!inc || inc.mode === "none") return es ? "Sin incremento anual" : "No yearly increase";
+    if (inc.mode === "custom") return es ? "Importe de la licencia fijado para cada año" : "Licence amount set for each year";
+    if (!v) return es ? "Sin incremento anual" : "No yearly increase";
+    if (inc.mode === "pct") return es ? `Incremento anual del ${deckNum(v)}% sobre la licencia` : `Yearly increase of ${deckNum(v)}% on the licence`;
+    return es ? `Incremento anual de ${deckMoney(v)} sobre la licencia` : `Yearly increase of ${deckMoney(v)} on the licence`;
+  };
+  const total = c?.total ?? rows.reduce((s, r) => s + r.total, 0);
+  return { rows, years, lic1, licList, licTerm, svc, incText, total };
+}
+
+/** All values of a document for one block (product / service blocks get that item's). */
+export function docValues(ctx: DocContext, scope: DeckScope = {}): Record<string, string> {
+  const lang = (ctx.lang ?? "es") as DocLang;
+  const v = resolveTokens({ ...ctx, validityDays: ctx.terms?.validityDays ?? ctx.validityDays }, scope);
+  const d = ctx.data, th = ctx.theme, c = ctx.contract ?? null;
+  const sch = contractSchedule(d, c, ctx.terms);
+  const start = c?.contractStart || c?.signDate || null;
+  let end = "";
+  if (start) { const e = new Date(start + "T12:00:00"); e.setFullYear(e.getFullYear() + sch.years); e.setDate(e.getDate() - 1); end = longDate(e.toISOString().slice(0, 10), lang); }
+  Object.assign(v, {
+    "client.name": d.client.name ?? "", "client.vat": d.client.vat ?? "", "client.address": d.client.address ?? "",
+    "client.contact.role": d.client.contactRole ?? "", "client.contact.email": d.client.contactEmail ?? "",
+    value: deckMoney(ctx.dealValue ?? d.totals.total),
+    "provider.name": th.company ?? "", "provider.legal": th.legalName || th.company || "", "provider.vat": th.vat ?? "",
+    "provider.address": th.address ?? "", "provider.city": th.city ?? "",
+    "terms.payment_days": String(c?.paymentTermsDays ?? ctx.terms?.paymentDays ?? 30), "terms.validity_days": String(ctx.terms?.validityDays ?? 30),
+    "contract.ref": c?.contractRef ?? "", "contract.license.term": deckMoney(sch.licTerm),
+    "contract.sign_date": longDate(c?.signDate, lang), "contract.start": longDate(start, lang), "contract.end": end,
+    "contract.years": String(sch.years), "contract.increment": sch.incText(lang),
+    "contract.license.list": deckMoney(sch.licList), "contract.license.discount": sch.licList > sch.lic1 ? deckMoney(sch.lic1 - sch.licList) : "",
+    "contract.license.final": deckMoney(sch.lic1), "contract.services.final": deckMoney(sch.svc), "contract.total": deckMoney(sch.total),
+  });
+  sch.rows.forEach((r) => { v[`contract.year${r.year}.license`] = deckMoney(r.license); v[`contract.year${r.year}.total`] = deckMoney(r.total); });
+  return v;
+}
+
+// ------------------------------------------------------ block plan -----
+export interface DocPlaced { block: DocBlock; scope: DeckScope; key: string; who?: string }
+/** The blocks as they come out for this deal: hidden ones out, product / service blocks once per matching item. */
+export function planDoc(blocks: DocBlock[], data: ProposalData, productIds: string[], serviceIds: string[], showHidden = false): DocPlaced[] {
+  const out: DocPlaced[] = [];
+  blocks.forEach((b) => {
+    if (b.hidden && !showHidden) return;
+    const when = b.when ?? (b.type === "products" ? "product" : b.type === "services" ? "service" : "always");
+    if (when === "always") { out.push({ block: b, scope: {}, key: b.id }); return; }
+    const list = when === "product" ? productIds : serviceIds;
+    const names = when === "product" ? data.products.map((p) => p.name) : data.services.map((s) => s.name);
+    const n = Math.max(list.length, names.length);
+    for (let k = 0; k < n; k++) {
+      if (b.ids?.length && !b.ids.includes(list[k] ?? "")) continue;
+      out.push({ block: b, scope: when === "product" ? { product: k } : { service: k }, key: `${b.id}-${k}`, who: names[k] });
+    }
+  });
+  return out;
+}
+
+// ------------------------------------------------------- rich text -----
+const INLINE_OK = /^(b|strong|i|em|u|br|p|ul|ol|li|a|h3|h4|span|div|mark|s)$/i;
+/** Keeps a small safe subset of HTML (bold, italic, lists, links, paragraphs) and the {{tokens}}. */
+export function cleanRich(html: string): string {
+  return String(html ?? "")
+    .replace(/<\s*(script|style|iframe|object|embed|svg|math)[\s\S]*?<\/\s*\1\s*>/gi, "")
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<\s*(\/?)\s*([a-z0-9]+)([^>]*)>/gi, (_m, close: string, tag: string, attrs: string) => {
+      if (!INLINE_OK.test(tag)) return "";
+      const t = tag.toLowerCase() === "div" ? "p" : tag.toLowerCase() === "span" ? "" : tag.toLowerCase();
+      if (!t) return "";
+      if (close) return `</${t}>`;
+      if (t === "a") { const h = /href\s*=\s*"([^"]*)"/i.exec(attrs)?.[1] ?? ""; return /^(https?:|mailto:|tel:)/i.test(h) ? `<a href="${esc(h)}">` : "<a>"; }
+      return `<${t}>`;
+    })
+    .replace(/&nbsp;|\u00a0/g, " ")
+    .replace(/<p>\s*<\/p>/g, "")
+    .trim();
+}
+/** Plain text → paragraphs (blank line = new paragraph, "- " lines = list). Leaves HTML as it is. */
+export function textToRich(s: string): string {
+  if (/<(p|ul|ol|br|b|strong|em|i)\b/i.test(s)) return s;
+  return s.split(/\n{2,}/).map((para) => {
+    const ls = para.split("\n").map((l) => l.trim()).filter(Boolean);
+    if (ls.length && ls.every((l) => /^([-•·*▪–]|\d+[.)])\s+/.test(l))) return `<ul>${ls.map((l) => `<li>${esc(l.replace(/^([-•·*▪–]|\d+[.)])\s+/, ""))}</li>`).join("")}</ul>`;
+    return ls.length ? `<p>${ls.map(esc).join("<br>")}</p>` : "";
+  }).join("");
+}
+export const richToText = (html: string) => String(html ?? "").replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|li|h3|h4)>/gi, "\n").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').trim();
+
+// --------------------------------------------------------- renderer -----
+export type DocMode = "view" | "edit" | "print";
+export interface DocRenderOptions {
+  mode: DocMode;
+  /** The value of a token for one placed block. */
+  valuesFor: (p: DocPlaced) => Record<string, string>;
+  /** In the editor: show {{token}} chips with these names instead of values (template editing). */
+  chipsAsLabels?: boolean;
+  /** Placed blocks (from planDoc). */
+  placed: DocPlaced[];
+  data: ProposalData;
+  contract?: ContractTerms | null;
+  terms?: DocTemplate["terms"];
+  title?: string;
+  /** The block highlighted in the editor. */
+  selected?: string | null;
+  kind: DocKind;
+  lang?: DocLang;
+}
+
+function themeCss(t: DocTheme): string {
+  const style = t.style ?? "soft";
+  const r = style === "sharp" ? 2 : style === "bold" ? 18 : 14;
+  return `:root{--p:${t.primary};--a:${t.accent};--ink:${t.ink};--paper:${t.paper};--mut:${t.muted};--r:${r}px;--hf:${fontStack(t.headingFont)};--bf:${fontStack(t.bodyFont)};--hw:${style === "bold" ? 800 : style === "sharp" ? 600 : 700};--hs:${style === "bold" ? 1.12 : 1}}`;
+}
+
+// colour mixes are worked out here (not with CSS color-mix) so every browser — and the PDF renderer — draws them
+const hexRgb = (h: string): [number, number, number] => {
+  let x = String(h || "").trim().replace(/^#/, "");
+  if (/^[0-9a-f]{3}$/i.test(x)) x = x.split("").map((c) => c + c).join("");
+  if (!/^[0-9a-f]{6}$/i.test(x)) return [0, 0, 0];
+  return [parseInt(x.slice(0, 2), 16), parseInt(x.slice(2, 4), 16), parseInt(x.slice(4, 6), 16)];
+};
+function resolveMixes(css: string, t: DocTheme): string {
+  const vars: Record<string, string> = { "--p": t.primary, "--a": t.accent, "--ink": t.ink, "--paper": t.paper, "--mut": t.muted };
+  const parse = (a: string): [number, number, number, number] => {
+    a = a.trim();
+    if (a === "transparent") return [0, 0, 0, 0];
+    const v = /^var\((--[\w-]+)\)$/.exec(a);
+    const hex = v ? vars[v[1]] ?? "#000" : a;
+    return [...hexRgb(hex), 1];
+  };
+  return css.replace(/color-mix\(in srgb,\s*([^,()]+(?:\([^)]*\))?)\s+(\d+(?:\.\d+)?)%\s*,\s*([^,()]+(?:\([^)]*\))?)\)/g, (_m, a: string, pc: string, b: string) => {
+    const p = Number(pc) / 100, A = parse(a), B = parse(b);
+    const alpha = A[3] * p + B[3] * (1 - p);
+    if (alpha <= 0) return "transparent";
+    const ch = (i: number) => Math.round((A[i] * A[3] * p + B[i] * B[3] * (1 - p)) / alpha);
+    return alpha >= 0.999 ? `rgb(${ch(0)},${ch(1)},${ch(2)})` : `rgba(${ch(0)},${ch(1)},${ch(2)},${alpha.toFixed(3)})`;
+  });
+}
+/** The page's whole stylesheet for a theme. */
+export const docCss = (t: DocTheme) => themeCss(t) + resolveMixes(DOC_CSS, t);
+
+/** Text of a field: tokens become values (view / print) or chips (editor). Conditional paragraphs drop. */
+function fieldHtml(raw: string | undefined, vals: Record<string, string>, o: DocRenderOptions, rich: boolean): string {
+  let s = String(raw ?? "");
+  if (rich) {
+    s = cleanRich(textToRich(s));
+    // a paragraph / list item with {{?x}} goes away when x is empty
+    s = s.replace(/<(p|li)>([\s\S]*?)<\/\1>/g, (m, _t, inner: string) => (condFails(inner, (k) => vals[k]) ? "" : m));
+  } else {
+    s = esc(s);
+  }
+  const out = s.replace(TOKEN_RE, (_m, k0: string) => {
+    const k = k0.trim();
+    if (k.startsWith("?")) return o.mode === "edit" ? `<span class="tk is-cond" contenteditable="false" data-tk="${esc(k)}">if ${esc(k.slice(1))}</span>` : "";
+    const val = vals[k];
+    const shown = val == null || val === "" ? "" : rich ? esc(val).replace(/\n/g, "<br>") : esc(val).replace(/\n/g, " · ");
+    if (o.mode !== "edit") return shown;
+    const label = docTokenLabel(k);
+    const txt = o.chipsAsLabels ? label : shown || label;
+    return `<span class="tk${o.chipsAsLabels ? " is-label" : ""}${!o.chipsAsLabels && !shown ? " is-empty" : ""}" contenteditable="false" data-tk="${esc(k)}" title="{{${esc(k)}}}">${txt}</span>`;
+  });
+  return o.mode === "edit" ? out : out.replace(/(\b[A-Z]{1,3})\.\.(?=\s|<|$)/g, "$1.");
+}
+
+const ICONS: Record<string, string> = {
+  check: "M20 6L9 17l-5-5", arrow: "M5 12h14M12 5l7 7-7 7", spark: "M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8",
+  mail: "M4 4h16v16H4zM4 6l8 7 8-7", phone: "M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z",
+};
+const svg = (k: string, cls = "ic") => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${ICONS[k] ?? k}"/></svg>`;
+
+/** Renders the whole document as one self-contained HTML page. */
+export function renderDocHtml(theme: DocTheme, o: DocRenderOptions): string {
+  const lang = o.lang ?? "es";
+  const fonts = Array.from(new Set([theme.headingFont, theme.bodyFont].filter((f) => GOOGLE_FONTS.has(f))));
+  const fontLink = fonts.length ? `<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?${fonts.map((f) => `family=${encodeURIComponent(f)}:wght@400;500;600;700;800`).join("&")}&display=swap">` : "";
+  const body = renderDocBody(theme, o);
+  const nav = o.mode === "view" ? `<div class="dp-progress"><i></i></div><nav class="dp-dots">${o.placed.filter((p) => p.block.type !== "signature").map((p, i) => `<a href="#b-${esc(p.key)}" title="${esc(richToText(fieldHtml(p.block.title || docBlockMeta(p.block.type).label, o.valuesFor(p), { ...o, mode: "view" }, false)))}"><i></i></a>`.replace("<a ", i === 0 ? '<a class="is-on" ' : "<a ")).join("")}</nav>` : "";
+  return `<!doctype html><html lang="${lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(o.title ?? "Proposal")}</title>${fontLink}<style id="dx-css">${docCss(theme)}</style></head><body class="dm-${o.mode} st-${theme.style ?? "soft"} k-${o.kind}">${nav}<main id="doc">${body}</main>${o.mode === "view" ? `<script>${DOC_JS}</script>` : ""}</body></html>`;
+}
+
+/** Only the sections (the editor swaps them in place, keeping scroll and caret). */
+export function renderDocBody(theme: DocTheme, o: DocRenderOptions): string {
+  const ed = o.mode === "edit";
+  const lang: DocLang = o.lang ?? "es";
+  return o.placed.map((p, i) => {
+    const b = p.block, vals = o.valuesFor(p);
+    const f = (field: keyof DocBlock, rich = false, cls = "", tag = "div") => {
+      const raw = (b as any)[field] as string | undefined;
+      if (!ed && !String(raw ?? "").trim()) return "";
+      const html = fieldHtml(raw, vals, o, rich);
+      if (!ed && !richToText(html) && !/<img/.test(html)) return "";
+      return `<${tag} class="${cls}${ed ? " ed" : ""}"${ed ? ` contenteditable="true" data-f="${b.id}|${String(field)}" data-ph="${esc(PH[String(field)] ?? "Type…")}"${rich ? ' data-rich="1"' : ""}` : ""}>${html}</${tag}>`;
+    };
+    const fi = (it: DocItem, k: number, field: keyof DocItem, rich = false, cls = "", tag = "div") => {
+      const raw = (it as any)[field] as string | undefined;
+      if (!ed && !String(raw ?? "").trim()) return "";
+      const html = fieldHtml(raw, vals, o, rich);
+      return `<${tag} class="${cls}${ed ? " ed" : ""}"${ed ? ` contenteditable="true" data-f="${b.id}|items|${k}|${String(field)}" data-ph="${esc(PH["i." + String(field)] ?? "Type…")}"${rich ? ' data-rich="1"' : ""}` : ""}>${html}</${tag}>`;
+    };
+    const items = b.items ?? [];
+    const itemTools = (k: number) => (ed ? `<button class="dx-it-del" data-act="del-item" data-b="${b.id}" data-k="${k}" title="Remove">×</button>` : "");
+    const addItem = (label: string) => (ed ? `<button class="dx-it-add" data-act="add-item" data-b="${b.id}">+ ${label}</button>` : "");
+    const head = (center = false) => `<header class="sh${center ? " c" : ""} rv">${f("eyebrow", false, "eb")}${f("title", false, "h2", "h2")}${f("body", true, "lead rt")}</header>`;
+    const tone = b.tone ?? DEFAULT_TONE[b.type] ?? "light";
+    const img = (src?: string, cls = "") => (src ? `<img class="${cls}" src="${esc(src)}" alt="">` : "");
+    let inner = "";
+    switch (b.type) {
+      case "cover": {
+        const logo = theme.logo || theme.logoDark;
+        inner = `<div class="cv-bg">${b.image ? `<div class="cv-img" style="background-image:url('${esc(b.image)}')"></div>` : ""}<i class="cv-o o1"></i><i class="cv-o o2"></i><i class="cv-o o3"></i><div class="cv-grid"></div></div>
+<div class="cv-in"><div class="cv-top">${logo ? `<img class="cv-logo" src="${esc(logo)}" alt="">` : `<b class="cv-brand">${esc(theme.company ?? "")}</b>`}${f("eyebrow", false, "cv-eb")}</div>
+<div class="cv-mid">${f("title", false, "cv-t", "h1")}${f("body", true, "cv-sub rt")}</div>
+<div class="cv-foot">${items.map((it, k) => `<div class="cv-meta">${fi(it, k, "title", false, "cv-k")}${fi(it, k, "text", false, "cv-v")}${itemTools(k)}</div>`).join("")}${addItem("detail")}</div></div>
+${o.mode === "view" ? `<a class="cv-down" href="#b-${esc(o.placed[i + 1]?.key ?? "")}" aria-label="Scroll">${svg("M12 5v14M5 12l7 7 7-7")}</a>` : ""}`;
+        break;
+      }
+      case "text":
+        inner = `<div class="wrap tx ${b.image ? `has-img lay-${b.layout ?? "right"}` : `lay-${b.layout ?? "left"}`}"><div class="tx-copy rv">${f("eyebrow", false, "eb")}${f("title", false, "h2", "h2")}${f("body", true, "rt")}</div>${b.image ? `<figure class="tx-img rv d2">${img(b.image)}</figure>` : ""}</div>`;
+        break;
+      case "stats":
+        inner = `<div class="wrap">${head(true)}<div class="st-grid">${items.map((it, k) => `<div class="st rv d${(k % 4) + 1}">${fi(it, k, "value", false, "st-v", "div")}${fi(it, k, "title", false, "st-t")}${fi(it, k, "text", false, "st-x")}${itemTools(k)}</div>`).join("")}${addItem("figure")}</div></div>`;
+        break;
+      case "cards":
+        inner = `<div class="wrap">${head()}<div class="cd-grid n${Math.min(4, Math.max(1, items.length))}">${items.map((it, k) => `<article class="cd rv d${(k % 4) + 1}">${it.image ? img(it.image, "cd-img") : `<span class="cd-n">${String(k + 1).padStart(2, "0")}</span>`}${fi(it, k, "title", false, "cd-t", "h3")}${fi(it, k, "text", true, "cd-x rt")}${itemTools(k)}</article>`).join("")}${addItem("card")}</div></div>`;
+        break;
+      case "products": {
+        const pr = o.data.products[p.scope.product ?? 0];
+        inner = `<div class="wrap pl">${head()}${pr ? productCard(pr, vals, o.kind) : ed ? `<p class="dx-note">Prices of each product of the deal show here.</p>` : ""}${items.length || ed ? `<div class="cd-grid n${Math.min(3, Math.max(1, items.length))} sm">${items.map((it, k) => `<article class="cd rv">${fi(it, k, "title", false, "cd-t", "h3")}${fi(it, k, "text", true, "cd-x rt")}${itemTools(k)}</article>`).join("")}${addItem("feature")}</div>` : ""}</div>`;
+        break;
+      }
+      case "services": {
+        const sv = o.data.services[p.scope.service ?? 0];
+        inner = `<div class="wrap pl">${head()}${sv ? serviceCard(sv) : ed ? `<p class="dx-note">Phases and price of each service of the deal show here.</p>` : ""}${items.length || ed ? `<div class="cd-grid n${Math.min(3, Math.max(1, items.length))} sm">${items.map((it, k) => `<article class="cd rv">${fi(it, k, "title", false, "cd-t", "h3")}${fi(it, k, "text", true, "cd-x rt")}${itemTools(k)}</article>`).join("")}${addItem("point")}</div>` : ""}</div>`;
+        break;
+      }
+      case "pricing":
+        inner = `<div class="wrap">${head()}${o.kind === "contract" ? contractPricing(o.data, o.contract, o.terms, lang) : pricingTable(o.data, o.kind)}</div>`;
+        break;
+      case "timeline": {
+        const phases = o.data.services.flatMap((s) => s.phases.map((ph) => ({ ...ph, svc: s.name })));
+        const manual = items.map((it, k) => `<li class="tl-i rv"><span class="tl-dot"></span>${fi(it, k, "value", false, "tl-d")}${fi(it, k, "title", false, "tl-t", "h3")}${fi(it, k, "text", true, "tl-x rt")}${itemTools(k)}</li>`).join("");
+        const auto = phases.map((ph, k) => `<li class="tl-i rv d${(k % 4) + 1}"><span class="tl-dot">${k + 1}</span><div class="tl-d">${esc(deckNum(ph.days))} ${lang === "es" ? (ph.days === 1 ? "jornada" : "jornadas") : ph.days === 1 ? "day" : "days"}${o.data.services.length > 1 ? ` · ${esc(ph.svc)}` : ""}</div><h3 class="tl-t">${esc(ph.name)}</h3>${ph.bullets?.length ? `<ul class="tl-x">${ph.bullets.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</li>`).join("");
+        inner = `<div class="wrap">${head()}<ol class="tl">${items.length ? manual : auto || (ed ? `<li class="dx-note">The phases of the services show here — or add your own steps.</li>` : "")}</ol>${addItem("step")}</div>`;
+        break;
+      }
+      case "team":
+        inner = `<div class="wrap">${head()}<div class="tm-grid">${items.map((it, k) => `<div class="tm rv d${(k % 4) + 1}">${it.image ? img(it.image, "tm-ph") : `<span class="tm-ph tm-in">${esc(richToText(it.title ?? "").split(/\s+/).map((w) => w[0] ?? "").join("").slice(0, 2).toUpperCase())}</span>`}${fi(it, k, "title", false, "tm-t", "h3")}${fi(it, k, "value", false, "tm-r")}${fi(it, k, "text", true, "tm-x rt")}${itemTools(k)}</div>`).join("")}${addItem("person")}</div></div>`;
+        break;
+      case "quote":
+        inner = `<div class="wrap qt rv"><span class="qt-m">“</span>${f("body", true, "qt-x rt")}<div class="qt-by">${b.image ? img(b.image, "qt-ph") : ""}<div>${f("title", false, "qt-t")}${f("eyebrow", false, "qt-r")}</div></div></div>`;
+        break;
+      case "image":
+        inner = `<figure class="wrap im rv">${b.image ? img(b.image) : ed ? `<div class="dx-drop" data-act="pick-image" data-b="${b.id}">Drop an image here or click to choose one</div>` : ""}${f("title", false, "im-c", "figcaption")}</figure>`;
+        break;
+      case "terms":
+        inner = `<div class="wrap">${head()}<ul class="tr">${items.map((it, k) => `<li class="rv">${svg("check")}<div>${fi(it, k, "title", false, "tr-t")}${fi(it, k, "text", true, "tr-x rt")}</div>${itemTools(k)}</li>`).join("")}</ul>${addItem("condition")}</div>`;
+        break;
+      case "cta": {
+        const sname = vals["seller.name"], smail = vals["seller.email"], sphone = vals["seller.phone"];
+        inner = `<div class="wrap ct rv">${f("eyebrow", false, "eb")}${f("title", false, "ct-t", "h2")}${f("body", true, "ct-x rt")}<div class="ct-card">${sname ? `<span class="ct-av">${esc(sname.split(/\s+/).map((w) => w[0]).join("").slice(0, 2))}</span>` : ""}<div><b>${esc(sname || "")}</b>${smail ? `<a href="mailto:${esc(smail)}">${svg("mail")}${esc(smail)}</a>` : ""}${sphone ? `<a href="tel:${esc(sphone.replace(/\s+/g, ""))}">${svg("phone")}${esc(sphone)}</a>` : ""}</div></div></div>`;
+        break;
+      }
+      case "parties": {
+        const lbl = lang === "es" ? ["De una parte", "De otra parte", "NIF", "Domicilio"] : ["On one side", "On the other side", "VAT", "Address"];
+        const party = (k: string, name: string, legal: string, vat: string, addr: string, extra = "") => `<div class="pt rv"><span class="pt-k">${k}</span><b class="pt-n">${esc(legal || name)}</b>${vat ? `<span><i>${lbl[2]}</i>${esc(vat)}</span>` : ""}${addr ? `<span><i>${lbl[3]}</i>${esc(addr)}</span>` : ""}${extra}</div>`;
+        inner = `<div class="wrap">${head()}<div class="pt-grid">${party(lbl[0], vals["provider.name"], vals["provider.legal"], vals["provider.vat"], vals["provider.address"])}${party(lbl[1], vals.client, vals["client.legal"], vals["client.vat"], vals["client.address"], vals["client.contact"] ? `<span><i>${lang === "es" ? "Contacto" : "Contact"}</i>${esc(vals["client.contact"])}${vals["client.contact.role"] ? ` · ${esc(vals["client.contact.role"])}` : ""}</span>` : "")}</div></div>`;
+        break;
+      }
+      case "clauses":
+        inner = `<div class="wrap cl">${head()}<ol class="cl-l">${items.map((it, k) => `<li class="rv"><span class="cl-n">${k + 1}</span><div class="cl-b">${fi(it, k, "title", false, "cl-t", "h3")}${fi(it, k, "text", true, "cl-x rt")}</div>${itemTools(k)}</li>`).join("")}</ol>${addItem("clause")}</div>`;
+        break;
+      case "schedule":
+        inner = `<div class="wrap">${head()}${scheduleTable(o.data, o.contract, o.terms, lang)}</div>`;
+        break;
+      case "signature": {
+        const l = lang === "es" ? ["Por", "Firma", "Nombre y cargo", "Fecha"] : ["For", "Signature", "Name and title", "Date"];
+        const box = (who: string) => `<div class="sg-b"><span class="sg-k">${l[0]} ${esc(who)}</span><div class="sg-line"></div><span class="sg-l">${l[1]}</span><div class="sg-line s"></div><span class="sg-l">${l[2]}</span><div class="sg-line s"></div><span class="sg-l">${l[3]}</span></div>`;
+        inner = `<div class="wrap sg rv">${f("title", false, "h2", "h2")}${f("body", true, "rt sg-x")}<div class="sg-grid">${box(vals["provider.legal"] || vals["provider.name"] || "—")}${box(vals["client.legal"] || vals.client || "—")}</div></div>`;
+        break;
+      }
+    }
+    const tools = ed ? `<div class="dx-tools" contenteditable="false"><span class="dx-tl">${esc(docBlockMeta(b.type).label)}${p.who ? ` · ${esc(p.who)}` : ""}${b.hidden ? " · hidden" : ""}</span><button data-act="up" data-b="${b.id}" title="Move up">↑</button><button data-act="down" data-b="${b.id}" title="Move down">↓</button><button data-act="dup" data-b="${b.id}" title="Duplicate">⧉</button><button data-act="hide" data-b="${b.id}" title="${b.hidden ? "Show" : "Hide"}">${b.hidden ? "◌" : "◉"}</button><button data-act="del" data-b="${b.id}" title="Delete" class="is-del">✕</button></div><button class="dx-ins" data-act="insert" data-at="${b.id}" contenteditable="false" title="Add a block here">+</button>` : "";
+    return `<section id="b-${esc(p.key)}" class="blk t-${b.type} tone-${tone}${ed && o.selected === b.id ? " is-sel" : ""}${b.hidden ? " is-hidden" : ""}" data-b="${b.id}">${tools}${inner}</section>`;
+  }).join("\n");
+}
+const DEFAULT_TONE: Partial<Record<DocBlockType, DocBlock["tone"]>> = { cover: "brand", stats: "dark", pricing: "tint", cta: "brand", quote: "tint", timeline: "light", schedule: "tint", parties: "tint" };
+const PH: Record<string, string> = { eyebrow: "Small label", title: "Heading", body: "Write here…", "i.title": "Title", "i.text": "Text", "i.value": "Value" };
+
+function productCard(p: ProposalProduct, v: Record<string, string>, kind: DocKind): string {
+  const rows = p.rows.map((r) => `<tr><td>${esc([r.label, r.detail].filter(Boolean).join(" · "))}</td><td class="n">${esc(deckMoney(r.amount * (p.recurring && p.period === "monthly" ? 12 : 1)))}</td></tr>`).join("");
+  const years = p.recurring ? p.termYears || 1 : 1;
+  const terms = (p.terms ?? []).filter((t) => t.years > 0);
+  const opts = terms.length > 1 ? `<div class="pc-opts">${terms.map((t, k) => `<div class="pc-opt rv d${k + 1}${Math.abs(t.years - years) < 0.01 ? " is-on" : ""}"><span>${esc(deckNum(t.years))} ${t.years === 1 ? "año" : "años"}</span><b>${esc(deckMoney(t.annual))}</b><i>/ año${t.discountPct ? ` · −${esc(deckNum(Math.round(t.discountPct * 10) / 10))}%` : ""}</i></div>`).join("")}</div>` : "";
+  return `<div class="pc rv"><div class="pc-head"><div><span class="pc-k">${esc(p.tier || (p.recurring ? "Licencia" : "Producto"))}</span><b class="pc-n">${esc(p.name)}</b></div><div class="pc-price"><b>${esc(v["product.annual"] ?? "")}</b><i>${p.recurring ? "/ año" : ""}</i></div></div>${rows ? `<table class="pc-t"><tbody>${rows}${p.discount ? `<tr class="ds"><td>Descuento</td><td class="n">${esc(v["product.discount"] ?? "")}</td></tr>` : ""}</tbody></table>` : ""}<div class="pc-foot"><span>${p.recurring ? `Contrato de ${esc(String(years))} ${years === 1 ? "año" : "años"}` : "Pago único"}</span><b>${kind === "contract" ? "Total" : "Total contrato"} ${esc(deckMoney(p.total))}</b></div>${opts}</div>`;
+}
+function serviceCard(s: ProposalService): string {
+  const roles = s.roles?.length ? s.roles : [];
+  const ph = s.phases.length ? `<div class="sc-ph">${s.phases.map((f, k) => `<div class="sc-p rv d${(k % 4) + 1}"><span>${String(k + 1).padStart(2, "0")}</span><b>${esc(f.name)}</b><i>${esc(deckNum(f.days))} d</i></div>`).join("")}</div>` : "";
+  return `<div class="pc sc rv"><div class="pc-head"><div><span class="pc-k">Servicio</span><b class="pc-n">${esc(s.name)}</b></div><div class="pc-price"><b>${esc(deckMoney(s.total))}</b><i>${esc(deckNum(s.days))} ${s.unit === "hour" ? "h" : "jornadas"}</i></div></div>${roles.length ? `<table class="pc-t"><tbody>${roles.map((r) => `<tr><td>${esc(r.name)} <i>· ${esc(deckNum(r.days))} × ${esc(deckMoney(r.rate))}</i></td><td class="n">${esc(deckMoney(r.days * r.rate))}</td></tr>`).join("")}${s.discount ? `<tr class="ds"><td>Descuento</td><td class="n">${esc(deckMoney(-s.discount))}</td></tr>` : ""}</tbody></table>` : ""}${ph}</div>`;
+}
+function pricingTable(d: ProposalData, kind: DocKind): string {
+  const rows = [
+    ...d.products.map((p) => ({ k: p.recurring ? "Licencia" : "Producto", n: p.name, x: p.recurring ? `${p.termYears || 1} ${(p.termYears || 1) === 1 ? "año" : "años"} · ${deckMoney(p.total / (p.termYears || 1))} / año` : p.tier ?? "", g: p.total + p.discount, t: p.total })),
+    ...d.services.map((s) => ({ k: "Servicio", n: s.name, x: `${deckNum(s.days)} ${s.unit === "hour" ? "horas" : "jornadas"}`, g: s.total + s.discount, t: s.total })),
+  ];
+  const disc = rows.reduce((s, r) => s + (r.g - r.t), 0);
+  return `<div class="pr rv"><table><thead><tr><th>Concepto</th><th class="n">Importe</th></tr></thead><tbody>${rows.map((r, k) => `<tr class="rv d${(k % 4) + 1}"><td><span class="pr-k">${esc(r.k)}</span><b>${esc(r.n)}</b>${r.x ? `<i>${esc(r.x)}</i>` : ""}</td><td class="n">${r.g !== r.t ? `<s>${esc(deckMoney(r.g))}</s>` : ""}${esc(deckMoney(r.t))}</td></tr>`).join("")}</tbody></table><div class="pr-tot">${disc > 0.5 ? `<div><span>Ahorro</span><b>${esc(deckMoney(-disc))}</b></div>` : ""}<div class="is-t"><span>${kind === "contract" ? "Importe total" : "Inversión total"}</span><b data-count="${Math.round(d.totals.total)}">${esc(deckMoney(d.totals.total))}</b></div><p>Impuestos no incluidos.</p></div></div>`;
+}
+function contractPricing(d: ProposalData, c: ContractTerms | null | undefined, terms: DocTemplate["terms"], lang: DocLang): string {
+  const s = contractSchedule(d, c, terms);
+  const L = lang === "es" ? ["Concepto", "Importe", "Licencia anual", "año 1", "Servicios profesionales", "precio cerrado", "Descuento", "Total del contrato", "Impuestos no incluidos.", "Precio de lista"] : ["Item", "Amount", "Yearly licence", "year 1", "Professional services", "fixed price", "Discount", "Contract total", "Taxes not included.", "List price"];
+  const names = (xs: { name: string }[]) => xs.map((x) => x.name).join(" · ");
+  const disc = s.licList - s.lic1;
+  return `<div class="pr rv"><table><thead><tr><th>${L[0]}</th><th class="n">${L[1]}</th></tr></thead><tbody>${d.products.length || s.lic1 ? `<tr><td><span class="pr-k">${L[2]} · ${L[3]}</span><b>${esc(names(d.products) || L[2])}</b><i>${esc(s.incText(lang))}${s.years > 1 ? ` · ${s.years} ${lang === "es" ? "años" : "years"}` : ""}</i></td><td class="n">${disc > 0.5 ? `<s>${esc(deckMoney(s.licList))}</s>` : ""}${esc(deckMoney(s.lic1))}</td></tr>` : ""}${disc > 0.5 ? `<tr><td><span class="pr-k">${L[6]}</span><b>${L[9]} ${esc(deckMoney(s.licList))}</b></td><td class="n">${esc(deckMoney(-disc))}</td></tr>` : ""}${s.svc ? `<tr><td><span class="pr-k">${L[4]} · ${L[5]}</span><b>${esc(names(d.services) || L[4])}</b></td><td class="n">${esc(deckMoney(s.svc))}</td></tr>` : ""}</tbody></table><div class="pr-tot"><div class="is-t"><span>${L[7]}</span><b data-count="${Math.round(s.total)}">${esc(deckMoney(s.total))}</b></div><p>${L[8]}</p></div></div>`;
+}
+function scheduleTable(d: ProposalData, c: ContractTerms | null | undefined, terms: DocTemplate["terms"], lang: DocLang): string {
+  const s = contractSchedule(d, c, terms);
+  const L = lang === "es" ? ["Año", "Licencia", "Servicios", "Total", "Total del contrato"] : ["Year", "Licence", "Services", "Total", "Contract total"];
+  const max = Math.max(1, ...s.rows.map((r) => r.total));
+  return `<div class="sd rv"><p class="sd-inc">${svg("spark")}${esc(s.incText(lang))}</p><div class="sd-bars">${s.rows.map((r, k) => `<div class="sd-b rv d${(k % 4) + 1}"><i style="--h:${Math.round((r.total / max) * 100)}%"><em style="--s:${Math.round((r.services / Math.max(1, r.total)) * 100)}%"></em></i><span>${L[0]} ${r.year}</span><b>${esc(deckMoney(r.total))}</b></div>`).join("")}</div><table><thead><tr><th>${L[0]}</th><th class="n">${L[1]}</th><th class="n">${L[2]}</th><th class="n">${L[3]}</th></tr></thead><tbody>${s.rows.map((r) => `<tr><td>${L[0]} ${r.year}</td><td class="n">${esc(deckMoney(r.license))}</td><td class="n">${r.services ? esc(deckMoney(r.services)) : "—"}</td><td class="n"><b>${esc(deckMoney(r.total))}</b></td></tr>`).join("")}</tbody><tfoot><tr><td colspan="3">${L[4]}</td><td class="n"><b>${esc(deckMoney(s.total))}</b></td></tr></tfoot></table></div>`;
+}
+
+const DOC_JS = `(function(){var io=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);var c=e.target.querySelectorAll('[data-count]');c.forEach(count)}})},{threshold:.12,rootMargin:'0px 0px -6% 0px'});document.querySelectorAll('.rv').forEach(function(el){io.observe(el)});
+function count(el){var to=+el.getAttribute('data-count');if(!to||el._c)return;el._c=1;var txt=el.textContent,t0=performance.now(),d=1400;function f(t){var k=Math.min(1,(t-t0)/d),v=Math.round(to*(1-Math.pow(1-k,3)));el.textContent=v.toLocaleString('es-ES')+' €';if(k<1)requestAnimationFrame(f);else el.textContent=txt}requestAnimationFrame(f)}
+document.querySelectorAll('.st-v').forEach(function(el){var m=/^([^0-9]*)([0-9][0-9.,]*)(.*)$/.exec(el.textContent.trim());if(!m)return;var n=parseFloat(m[2].replace(/\\./g,'').replace(',','.'));if(!isFinite(n))return;var o=new IntersectionObserver(function(es){if(!es[0].isIntersecting)return;o.disconnect();var t0=performance.now(),dec=(m[2].split(',')[1]||'').length;function f(t){var k=Math.min(1,(t-t0)/1300),v=n*(1-Math.pow(1-k,3));el.textContent=m[1]+v.toLocaleString('es-ES',{minimumFractionDigits:dec,maximumFractionDigits:dec})+m[3];if(k<1)requestAnimationFrame(f)}requestAnimationFrame(f)});o.observe(el)});
+var bar=document.querySelector('.dp-progress i'),dots=[].slice.call(document.querySelectorAll('.dp-dots a')),secs=dots.map(function(a){return document.querySelector(a.getAttribute('href'))});
+function onS(){var h=document.documentElement,p=h.scrollTop/(h.scrollHeight-h.clientHeight||1);if(bar)bar.style.transform='scaleX('+p+')';var cur=0;secs.forEach(function(s,i){if(s&&s.getBoundingClientRect().top<innerHeight*.45)cur=i});dots.forEach(function(d,i){d.classList.toggle('is-on',i===cur)})}addEventListener('scroll',onS,{passive:true});onS();
+document.addEventListener('pointermove',function(e){var c=document.querySelector('.t-cover');if(!c)return;var r=c.getBoundingClientRect();if(e.clientY>r.bottom)return;c.style.setProperty('--mx',((e.clientX/innerWidth)-.5).toFixed(3));c.style.setProperty('--my',(((e.clientY-r.top)/r.height)-.5).toFixed(3))});
+document.querySelectorAll('.cd,.pc,.tm,.st').forEach(function(el){el.addEventListener('pointermove',function(e){var r=el.getBoundingClientRect();el.style.setProperty('--gx',(e.clientX-r.left)+'px');el.style.setProperty('--gy',(e.clientY-r.top)+'px')})});})();`;
+
+const PRINT_CSS = `.dp-progress,.dp-dots,.cv-down,.dx-tools,.dx-ins,.dx-it-add,.dx-it-del{display:none!important}.rv{opacity:1!important;transform:none!important;transition:none!important}.cv-o{animation:none}body{font-size:13.5px}.blk{padding:46px 0;break-inside:auto}.wrap{width:calc(100% - 28mm)}.t-cover{height:297mm;min-height:0;break-after:page}.t-cover .cv-in{min-height:297mm;width:calc(100% - 28mm)}.cv-t{font-size:56px}.h2{font-size:32px}.lead{font-size:16px}.pc,.pr,.sd,.cd,.tl-i,.tm,.pt,.tr li,.cl-l li,.st,.sg-grid,.sh,table,.qt,.ct{break-inside:avoid}.sh,.h2,.eb,.tx-copy>.h2{break-after:avoid;page-break-after:avoid}.sh+*,.h2+*{break-before:avoid;page-break-before:avoid}.st-v{font-size:40px}.pr-tot .is-t b{font-size:34px}.cd:hover,.pc:hover,.tm:hover,.tl-i:hover{transform:none}.sd-b i{transform:none!important}body.k-contract .t-cover,body.k-contract .t-cover .cv-in{height:auto;min-height:150mm;break-after:auto}`;
+/** Prefixes every selector of a flat stylesheet ("body" becomes the scope itself). */
+function scopeCss(css: string, scope: string): string {
+  return css.replace(/([^{}]+)\{([^{}]*)\}/g, (_m, sel: string, decl: string) => `${sel.split(",").map((x) => { x = x.trim(); return x === "body" ? scope : x.startsWith("body") ? scope + x.slice(4) : `${scope} ${x}`; }).join(",")}{${decl}}`);
+}
+const DOC_CSS = `
+*{box-sizing:border-box;margin:0;padding:0}html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}body{font-family:var(--bf);color:var(--ink);background:var(--paper);font-size:17px;line-height:1.62;-webkit-font-smoothing:antialiased;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+img{max-width:100%;display:block}a{color:inherit}
+.blk{position:relative;padding:112px 0;overflow:hidden}.wrap{width:min(1080px,calc(100% - 64px));margin:0 auto;position:relative}
+.tone-tint{background:color-mix(in srgb,var(--p) 6%,var(--paper))}.tone-dark{background:var(--ink);color:#fff}.tone-brand{background:linear-gradient(135deg,var(--p),color-mix(in srgb,var(--p) 55%,var(--ink)));color:#fff}
+.tone-dark .lead,.tone-brand .lead,.tone-dark .rt,.tone-brand .rt{color:rgba(255,255,255,.82)}
+h1,h2,h3,.h2{font-family:var(--hf);font-weight:var(--hw);letter-spacing:-.02em;line-height:1.12}
+.eb{display:inline-flex;align-items:center;gap:10px;font-size:13px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--a);margin-bottom:16px}.eb:before{content:"";width:28px;height:2px;background:currentColor;border-radius:2px}
+.tone-dark .eb,.tone-brand .eb{color:color-mix(in srgb,var(--a) 70%,#fff)}
+.h2{font-size:clamp(32px,4.2vw,52px);margin-bottom:20px;max-width:880px;line-height:calc(1.1*var(--hs))}.sh{margin-bottom:52px}.sh.c{text-align:center}.sh.c .h2,.sh.c .lead{margin-left:auto;margin-right:auto}.sh.c .eb{justify-content:center}
+.lead{font-size:20px;color:var(--mut);max-width:760px}.rt p+p,.rt p+ul,.rt ul+p{margin-top:14px}.rt ul,.rt ol{padding-left:22px}.rt li{margin:6px 0}.rt li::marker{color:var(--a)}.rt b,.rt strong{color:inherit;font-weight:700}.rt a{color:var(--a)}
+.rv{opacity:0;transform:translateY(26px);transition:opacity .8s cubic-bezier(.2,.7,.2,1),transform .8s cubic-bezier(.2,.7,.2,1)}.rv.in{opacity:1;transform:none}.d2{transition-delay:.08s}.d3{transition-delay:.16s}.d4{transition-delay:.24s}
+.dm-edit .rv,.dm-print .rv{opacity:1;transform:none;transition:none}
+/* cover */
+.t-cover{min-height:100vh;display:flex;padding:0;color:#fff}.cv-bg{position:absolute;inset:0;overflow:hidden}.cv-img{position:absolute;inset:-4%;background-size:cover;background-position:center;opacity:.32;transform:translate(calc(var(--mx,0)*-18px),calc(var(--my,0)*-18px)) scale(1.04);transition:transform .6s ease-out;mix-blend-mode:luminosity}
+.cv-o{position:absolute;border-radius:50%;filter:blur(2px);opacity:.55;transition:transform .9s cubic-bezier(.2,.7,.2,1)}.o1{width:620px;height:620px;right:-160px;top:-180px;background:radial-gradient(circle at 30% 30%,color-mix(in srgb,var(--a) 85%,#fff),transparent 70%);transform:translate(calc(var(--mx,0)*40px),calc(var(--my,0)*40px));animation:fl 14s ease-in-out infinite}
+.o2{width:380px;height:380px;left:-120px;bottom:-140px;background:radial-gradient(circle,color-mix(in srgb,var(--a) 60%,transparent),transparent 70%);transform:translate(calc(var(--mx,0)*-30px),calc(var(--my,0)*-30px));animation:fl 18s ease-in-out infinite reverse}.o3{width:160px;height:160px;right:22%;bottom:18%;border:1.5px solid rgba(255,255,255,.35);background:none;filter:none;animation:sp 30s linear infinite}
+.cv-grid{position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,.06) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.06) 1px,transparent 1px);background-size:64px 64px;mask-image:radial-gradient(ellipse at 70% 30%,#000 10%,transparent 70%)}
+@keyframes fl{50%{margin-top:40px;margin-left:-20px}}@keyframes sp{to{transform:rotate(360deg)}}
+.cv-in{position:relative;z-index:1;width:min(1080px,calc(100% - 64px));margin:0 auto;display:flex;flex-direction:column;justify-content:space-between;padding:56px 0 64px;min-height:100vh}
+.cv-top{display:flex;align-items:center;justify-content:space-between;gap:20px}.cv-logo{max-height:46px;max-width:220px;object-fit:contain}.cv-brand{font-family:var(--hf);font-size:22px;letter-spacing:-.01em}.cv-eb{font-size:13px;letter-spacing:.16em;text-transform:uppercase;font-weight:700;padding:8px 14px;border:1px solid rgba(255,255,255,.35);border-radius:999px;backdrop-filter:blur(6px)}
+.cv-mid{max-width:900px;animation:cvIn 1.1s cubic-bezier(.2,.7,.2,1) both}.cv-t{font-size:clamp(46px,7vw,96px);line-height:calc(1.02*var(--hs));letter-spacing:-.035em;margin-bottom:24px}.cv-sub{font-size:22px;color:rgba(255,255,255,.82);max-width:640px}
+@keyframes cvIn{from{opacity:0;transform:translateY(40px)}}.dm-edit .cv-mid{animation:none}
+.cv-foot{display:flex;flex-wrap:wrap;gap:12px 44px;padding-top:28px;border-top:1px solid rgba(255,255,255,.22)}.cv-meta{position:relative}.cv-k{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:rgba(255,255,255,.6);font-weight:600}.cv-v{font-size:18px;font-weight:600}
+.cv-down{position:absolute;left:50%;bottom:26px;z-index:2;width:44px;height:44px;margin-left:-22px;border-radius:50%;border:1px solid rgba(255,255,255,.4);display:grid;place-items:center;animation:bob 2.2s ease-in-out infinite}.cv-down .ic{width:18px;height:18px}@keyframes bob{50%{transform:translateY(8px)}}
+/* text */
+.tx{display:grid;grid-template-columns:1fr;gap:56px;align-items:center}.tx.has-img{grid-template-columns:1.05fr .95fr}.tx.lay-left.has-img .tx-img{order:-1}.tx.lay-center{text-align:center}.tx.lay-center .h2,.tx.lay-center .rt{margin-left:auto;margin-right:auto}.tx .rt{font-size:18px;max-width:720px;color:color-mix(in srgb,var(--ink) 82%,var(--paper))}
+.tone-dark .tx .rt,.tone-brand .tx .rt{color:rgba(255,255,255,.85)}.tx-img{border-radius:calc(var(--r) + 6px);overflow:hidden;box-shadow:0 30px 60px -30px rgba(0,0,0,.35);transform:rotate(-1deg)}.tx-img img{width:100%;height:100%;object-fit:cover;aspect-ratio:4/3;transition:transform 1.2s ease}.tx-img:hover img{transform:scale(1.05)}
+/* stats */
+.st-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:20px}.st{position:relative;padding:30px 28px;border-radius:var(--r);background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);overflow:hidden}.tone-light .st,.tone-tint .st{background:#fff;border-color:color-mix(in srgb,var(--p) 14%,transparent)}
+.st:before{content:"";position:absolute;inset:0;background:radial-gradient(240px circle at var(--gx,-200px) var(--gy,-200px),color-mix(in srgb,var(--a) 22%,transparent),transparent 60%);pointer-events:none}
+.st-v{font-family:var(--hf);font-size:clamp(40px,5vw,60px);font-weight:var(--hw);color:var(--a);line-height:1;letter-spacing:-.03em}.st-t{margin-top:12px;font-weight:700}.st-x{font-size:14.5px;opacity:.7;margin-top:4px}
+/* cards */
+.cd-grid{display:grid;gap:20px}.cd-grid.n1{grid-template-columns:1fr}.cd-grid.n2{grid-template-columns:repeat(2,1fr)}.cd-grid.n3{grid-template-columns:repeat(3,1fr)}.cd-grid.n4{grid-template-columns:repeat(4,1fr)}.cd-grid.sm{margin-top:24px}
+.cd{position:relative;padding:30px 28px 32px;border-radius:var(--r);background:#fff;border:1px solid color-mix(in srgb,var(--ink) 9%,transparent);transition:transform .35s cubic-bezier(.2,.7,.2,1),box-shadow .35s,border-color .35s;overflow:hidden}
+.cd:before{content:"";position:absolute;inset:0;background:radial-gradient(300px circle at var(--gx,-300px) var(--gy,-300px),color-mix(in srgb,var(--a) 12%,transparent),transparent 60%);pointer-events:none}
+.cd:hover{transform:translateY(-6px);box-shadow:0 26px 50px -28px color-mix(in srgb,var(--p) 60%,transparent);border-color:color-mix(in srgb,var(--a) 45%,transparent)}
+.tone-dark .cd,.tone-brand .cd{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.14);color:#fff}
+.cd-n{display:inline-grid;place-items:center;width:44px;height:44px;border-radius:12px;background:color-mix(in srgb,var(--a) 14%,transparent);color:var(--p);font-weight:800;font-family:var(--hf);margin-bottom:20px}.tone-dark .cd-n,.tone-brand .cd-n{color:#fff}
+.cd-img{width:100%;aspect-ratio:16/10;object-fit:cover;border-radius:calc(var(--r) - 4px);margin-bottom:18px}.cd-t{font-size:20px;margin-bottom:8px}.cd-x{font-size:15.5px;color:var(--mut)}.tone-dark .cd-x,.tone-brand .cd-x{color:rgba(255,255,255,.75)}
+/* product / service */
+.pc{border-radius:calc(var(--r) + 4px);background:#fff;border:1px solid color-mix(in srgb,var(--ink) 10%,transparent);box-shadow:0 30px 70px -40px color-mix(in srgb,var(--p) 55%,transparent);overflow:hidden;transition:transform .4s cubic-bezier(.2,.7,.2,1)}.pc:hover{transform:translateY(-4px)}
+.pc-head{display:flex;justify-content:space-between;align-items:flex-end;gap:20px;padding:30px 32px;background:linear-gradient(120deg,color-mix(in srgb,var(--p) 8%,#fff),#fff)}.pc-k{display:block;font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--a)}.pc-n{font-family:var(--hf);font-size:28px;letter-spacing:-.02em;color:var(--ink)}
+.pc-price{text-align:right;color:var(--ink)}.pc-price b{font-family:var(--hf);font-size:36px;letter-spacing:-.03em;color:var(--p)}.pc-price i{display:block;font-style:normal;font-size:13px;color:var(--mut)}
+.pc-t{width:100%;border-collapse:collapse;color:var(--ink)}.pc-t td{padding:14px 32px;border-top:1px solid color-mix(in srgb,var(--ink) 7%,transparent);font-size:15.5px}.pc-t td i{color:var(--mut);font-style:normal}.n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}.pc-t .ds td{color:var(--a);font-weight:600}
+.pc-foot{display:flex;justify-content:space-between;gap:16px;padding:18px 32px;background:color-mix(in srgb,var(--p) 5%,#fff);font-size:14.5px;color:var(--mut)}.pc-foot b{color:var(--ink)}
+.pc-opts{display:flex;gap:14px;padding:0 32px 30px;flex-wrap:wrap;background:color-mix(in srgb,var(--p) 5%,#fff)}.pc-opt{flex:1;min-width:150px;padding:16px 18px;border-radius:var(--r);border:1.5px solid color-mix(in srgb,var(--ink) 10%,transparent);background:#fff;color:var(--ink)}.pc-opt.is-on{border-color:var(--a);box-shadow:0 0 0 4px color-mix(in srgb,var(--a) 15%,transparent)}.pc-opt span{display:block;font-size:13px;color:var(--mut)}.pc-opt b{font-size:22px;font-family:var(--hf)}.pc-opt i{font-style:normal;font-size:13px;color:var(--mut);margin-left:4px}
+.sc-ph{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;background:color-mix(in srgb,var(--ink) 7%,transparent);border-top:1px solid color-mix(in srgb,var(--ink) 7%,transparent)}.sc-p{background:#fff;padding:18px 20px;color:var(--ink)}.sc-p span{font-size:12px;font-weight:800;color:var(--a)}.sc-p b{display:block;font-size:15px;margin:2px 0}.sc-p i{font-style:normal;font-size:13px;color:var(--mut)}
+/* pricing */
+.pr{border-radius:calc(var(--r) + 4px);background:#fff;border:1px solid color-mix(in srgb,var(--ink) 9%,transparent);overflow:hidden;box-shadow:0 40px 80px -50px color-mix(in srgb,var(--p) 60%,transparent);color:var(--ink)}.pr table{width:100%;border-collapse:collapse}
+.pr th{text-align:left;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--mut);padding:18px 32px;border-bottom:1px solid color-mix(in srgb,var(--ink) 8%,transparent)}.pr th.n{text-align:right}
+.pr td{padding:20px 32px;border-bottom:1px solid color-mix(in srgb,var(--ink) 6%,transparent);vertical-align:top}.pr td b{display:block;font-size:18px}.pr td i{font-style:normal;font-size:14px;color:var(--mut)}.pr-k{font-size:11.5px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--a)}.pr td.n{font-size:18px;font-weight:700}.pr td s{display:block;font-size:13px;font-weight:500;color:var(--mut)}
+.pr-tot{padding:26px 32px;background:linear-gradient(120deg,var(--p),color-mix(in srgb,var(--p) 60%,var(--ink)));color:#fff}.pr-tot div{display:flex;justify-content:space-between;align-items:baseline;gap:20px}.pr-tot div+div{margin-top:8px}.pr-tot .is-t span{font-size:15px;opacity:.85}.pr-tot .is-t b{font-family:var(--hf);font-size:clamp(34px,4.6vw,52px);letter-spacing:-.03em}.pr-tot p{font-size:13px;opacity:.7;margin-top:6px}
+/* timeline */
+.tl{list-style:none;position:relative;display:grid;gap:18px;padding-left:34px}.tl:before{content:"";position:absolute;left:13px;top:8px;bottom:8px;width:2px;background:linear-gradient(var(--a),color-mix(in srgb,var(--a) 10%,transparent))}
+.tl-i{position:relative;padding:20px 24px;border-radius:var(--r);background:#fff;border:1px solid color-mix(in srgb,var(--ink) 8%,transparent);transition:transform .3s,box-shadow .3s}.tl-i:hover{transform:translateX(6px);box-shadow:0 20px 40px -28px color-mix(in srgb,var(--p) 55%,transparent)}
+.tl-dot{position:absolute;left:-34px;top:20px;width:28px;height:28px;border-radius:50%;background:var(--a);color:#fff;font-size:12px;font-weight:800;display:grid;place-items:center;box-shadow:0 0 0 6px color-mix(in srgb,var(--a) 18%,var(--paper))}
+.tl-d{font-size:12.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--a)}.tl-t{font-size:19px;margin:2px 0 6px;color:var(--ink)}.tl-x{font-size:15px;color:var(--mut);padding-left:18px}.tl-x li{margin:2px 0}
+/* team */
+.tm-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:22px}.tm{position:relative;text-align:center;padding:28px 22px;border-radius:var(--r);background:#fff;border:1px solid color-mix(in srgb,var(--ink) 8%,transparent);transition:transform .35s}.tm:hover{transform:translateY(-6px)}
+.tm-ph{width:96px;height:96px;border-radius:50%;object-fit:cover;margin:0 auto 16px;box-shadow:0 0 0 5px color-mix(in srgb,var(--a) 20%,transparent)}.tm-in{display:grid;place-items:center;background:linear-gradient(135deg,var(--p),var(--a));color:#fff;font-weight:800;font-size:28px;font-family:var(--hf)}.tm-t{font-size:18px;color:var(--ink)}.tm-r{font-size:13px;font-weight:700;color:var(--a);letter-spacing:.04em;margin:2px 0 8px}.tm-x{font-size:14.5px;color:var(--mut)}
+/* quote */
+.qt{max-width:880px;text-align:center}.qt-m{display:block;font-family:Georgia,serif;font-size:140px;line-height:.6;color:var(--a);opacity:.5}.qt-x{font-family:var(--hf);font-size:clamp(24px,3vw,34px);line-height:1.35;letter-spacing:-.015em}.qt-by{display:flex;justify-content:center;align-items:center;gap:14px;margin-top:28px;text-align:left}.qt-ph{width:56px;height:56px;border-radius:50%;object-fit:cover}.qt-t{font-weight:700}.qt-r{font-size:14px;color:var(--mut)}
+/* image */
+.im img{width:100%;border-radius:calc(var(--r) + 6px);box-shadow:0 40px 80px -50px rgba(0,0,0,.4)}.im-c{text-align:center;font-size:14.5px;color:var(--mut);margin-top:14px}
+/* terms */
+.tr{list-style:none;display:grid;grid-template-columns:repeat(2,1fr);gap:14px 28px}.tr li{position:relative;display:flex;gap:14px;padding:18px 20px;border-radius:var(--r);background:#fff;border:1px solid color-mix(in srgb,var(--ink) 8%,transparent)}.tr .ic{flex:none;width:22px;height:22px;padding:4px;border-radius:50%;background:var(--a);color:#fff;margin-top:2px}.tr-t{font-weight:700}.tr-x{font-size:15px;color:var(--mut)}
+/* closing */
+.ct{text-align:center;max-width:820px}.ct .eb{justify-content:center}.ct-t{font-size:clamp(38px,5.2vw,64px);margin-bottom:18px}.ct-x{font-size:20px;color:rgba(255,255,255,.85)}.tone-light .ct-x,.tone-tint .ct-x{color:var(--mut)}
+.ct-card{display:inline-flex;align-items:center;gap:18px;margin-top:40px;padding:18px 26px 18px 18px;border-radius:999px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);text-align:left;backdrop-filter:blur(8px)}.tone-light .ct-card,.tone-tint .ct-card{background:#fff;border-color:color-mix(in srgb,var(--ink) 10%,transparent)}
+.ct-av{width:52px;height:52px;border-radius:50%;background:#fff;color:var(--p);display:grid;place-items:center;font-weight:800;font-size:18px}.ct-card b{display:block;font-size:17px}.ct-card a{display:flex;align-items:center;gap:8px;font-size:14.5px;text-decoration:none;opacity:.9}.ct-card a:hover{opacity:1;text-decoration:underline}.ct-card .ic{width:15px;height:15px}
+/* contract */
+.pt-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}.pt{display:flex;flex-direction:column;gap:6px;padding:28px;border-radius:var(--r);background:#fff;border:1px solid color-mix(in srgb,var(--ink) 9%,transparent)}.pt-k{font-size:12px;letter-spacing:.12em;text-transform:uppercase;font-weight:700;color:var(--a)}.pt-n{font-family:var(--hf);font-size:22px;margin-bottom:6px}.pt span i{display:inline-block;min-width:90px;font-style:normal;color:var(--mut);font-size:13px;text-transform:uppercase;letter-spacing:.06em}
+.cl-l{list-style:none;display:grid;gap:4px}.cl-l li{position:relative;display:grid;grid-template-columns:48px 1fr;gap:16px;padding:22px 0;border-bottom:1px solid color-mix(in srgb,var(--ink) 8%,transparent)}.cl-n{width:36px;height:36px;border-radius:10px;background:color-mix(in srgb,var(--p) 10%,transparent);color:var(--p);font-weight:800;display:grid;place-items:center;font-family:var(--hf)}.cl-t{font-size:19px;margin-bottom:6px}.cl-x{font-size:15.5px;color:color-mix(in srgb,var(--ink) 80%,var(--paper))}
+.sd{border-radius:calc(var(--r) + 4px);background:#fff;border:1px solid color-mix(in srgb,var(--ink) 9%,transparent);overflow:hidden;color:var(--ink)}.sd-inc{display:flex;align-items:center;gap:10px;padding:18px 28px;font-weight:600;color:var(--p);background:color-mix(in srgb,var(--a) 8%,#fff)}.sd-inc .ic{width:18px;height:18px;color:var(--a)}
+.sd-bars{display:flex;align-items:flex-end;gap:16px;height:220px;padding:24px 28px 0}.sd-b{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;gap:6px}.sd-b i{position:relative;width:100%;max-width:90px;height:var(--h);min-height:6px;border-radius:10px 10px 4px 4px;background:linear-gradient(var(--a),var(--p));overflow:hidden;transform-origin:bottom;transition:transform 1s cubic-bezier(.2,.7,.2,1)}.sd-b i em{position:absolute;left:0;right:0;top:0;height:var(--s);background:color-mix(in srgb,#fff 35%,transparent)}.dm-view .sd-b:not(.in) i{transform:scaleY(.05)}.sd-b span{font-size:12.5px;color:var(--mut);font-weight:600}.sd-b b{font-size:14px}
+.sd table{width:100%;border-collapse:collapse;margin-top:18px}.sd th{font-size:12px;text-transform:uppercase;letter-spacing:.1em;color:var(--mut);text-align:left;padding:12px 28px;border-bottom:1px solid color-mix(in srgb,var(--ink) 8%,transparent)}.sd th.n{text-align:right}.sd td{padding:13px 28px;border-bottom:1px solid color-mix(in srgb,var(--ink) 6%,transparent)}.sd tfoot td{font-weight:700;background:color-mix(in srgb,var(--p) 6%,#fff);border:0;font-size:17px}
+.sg-grid{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:40px}.sg-k{font-weight:700;font-size:15px}.sg-line{height:90px;border-bottom:1.5px solid var(--ink)}.sg-line.s{height:36px}.sg-l{font-size:12.5px;color:var(--mut);text-transform:uppercase;letter-spacing:.08em}.sg-x{color:var(--mut)}
+.k-contract .blk{padding:80px 0}.k-contract .t-cover{min-height:78vh}.k-contract .t-cover .cv-in{min-height:78vh}
+/* sharp / bold */
+.st-sharp .h2{font-weight:600;letter-spacing:-.01em}.st-sharp .eb:before{width:40px;height:1px}.st-sharp .cd,.st-sharp .pc{box-shadow:none}.st-bold .h2{text-transform:none;letter-spacing:-.04em}.st-bold .cv-t{text-transform:uppercase}
+/* nav */
+.dp-progress{position:fixed;top:0;left:0;right:0;height:3px;z-index:50}.dp-progress i{display:block;height:100%;background:linear-gradient(90deg,var(--a),var(--p));transform-origin:left;transform:scaleX(0)}
+.dp-dots{position:fixed;right:20px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:12px;z-index:50}.dp-dots a{width:14px;height:14px;display:grid;place-items:center}.dp-dots i{width:7px;height:7px;border-radius:50%;background:color-mix(in srgb,var(--ink) 30%,transparent);box-shadow:0 0 0 2px rgba(255,255,255,.7);transition:all .3s}.dp-dots a.is-on i{width:11px;height:11px;background:var(--a)}
+@media screen and (max-width:720px){${scopeCss(`.blk{padding:72px 0}.tx.has-img,.cd-grid.n2,.cd-grid.n3,.cd-grid.n4,.tr,.pt-grid,.sg-grid{grid-template-columns:1fr}.dp-dots{display:none}.pc-head{flex-direction:column;align-items:flex-start}.pc-price{text-align:left}.pr td,.pr th,.pc-t td{padding-left:18px;padding-right:18px}`, "body:not(.dm-print)")}}
+@media (prefers-reduced-motion:reduce){.rv{opacity:1;transform:none;transition:none}.cv-o,.cv-down{animation:none}}
+/* print */
+@page{size:A4;margin:0}
+.dm-print .blk,.dm-print .t-cover{min-height:0}
+@media print{${PRINT_CSS}}
+${scopeCss(PRINT_CSS, "body.dm-print")}
+.dm-print .t-cover{height:1123px}.dm-print .t-cover .cv-in{min-height:1123px}.dm-print .cv-o{animation:none}.dm-print.k-contract .t-cover,.dm-print.k-contract .t-cover .cv-in{height:auto;min-height:600px}
+/* editor */
+.dm-edit .ed{outline:none;border-radius:4px;transition:box-shadow .15s,background .15s;min-width:20px}.dm-edit .ed:hover{box-shadow:0 0 0 1.5px color-mix(in srgb,var(--a) 55%,transparent)}.dm-edit .ed:focus{box-shadow:0 0 0 2px var(--a);background:color-mix(in srgb,var(--a) 6%,transparent)}
+.dm-edit .ed:empty:before{content:attr(data-ph);opacity:.4;font-style:italic;width:auto;height:auto;background:none;letter-spacing:normal;text-transform:none}.dm-edit .eb.ed:empty{min-width:120px}
+.tk{display:inline-flex;align-items:center;padding:0 7px;margin:0 1px;border-radius:7px;background:color-mix(in srgb,var(--a) 16%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--a) 45%,transparent);font-size:.92em;line-height:1.45;white-space:nowrap;cursor:default;vertical-align:baseline;user-select:all}.tk.is-label{font-family:var(--bf);font-size:.62em;font-weight:700;letter-spacing:.01em;padding:2px 9px;text-transform:none;color:inherit;vertical-align:.12em;line-height:1.5;border-radius:99px}.tk.is-label:before{content:'{ }';opacity:.55;margin-right:5px;font-weight:800}.tk.is-empty{opacity:.65;font-style:italic}.tk.is-cond{font-size:.62em;font-family:ui-monospace,Menlo,monospace;background:#fff3cf;color:#8a6100;box-shadow:inset 0 0 0 1px #f0c860}.tk.is-flash{animation:tkf 1.4s ease 2}@keyframes tkf{50%{background:var(--a);color:#fff}}
+.dm-edit .blk{transition:box-shadow .2s}.dm-edit .blk:hover{box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--a) 35%,transparent)}.dm-edit .blk.is-sel{box-shadow:inset 0 0 0 3px var(--a)}.dm-edit .blk.is-hidden>*:not(.dx-tools):not(.dx-ins){opacity:.35;filter:grayscale(1)}
+.dx-tools{position:absolute;top:14px;right:14px;z-index:20;display:flex;align-items:center;gap:2px;padding:4px;border-radius:12px;background:#0d1f18;box-shadow:0 10px 30px -10px rgba(0,0,0,.5);opacity:0;transform:translateY(-6px);transition:opacity .2s,transform .2s;font:600 12px/1 system-ui,sans-serif;color:#fff}
+.dm-edit .blk:hover>.dx-tools,.dm-edit .blk.is-sel>.dx-tools{opacity:1;transform:none}.dx-tl{padding:0 10px 0 8px;opacity:.75;white-space:nowrap}.dx-tools button{width:28px;height:28px;border:0;border-radius:8px;background:transparent;color:#fff;cursor:pointer;font-size:14px}.dx-tools button:hover{background:rgba(255,255,255,.14)}.dx-tools .is-del:hover{background:#d9534f}
+.dx-ins{position:absolute;left:50%;bottom:-15px;z-index:21;width:30px;height:30px;margin-left:-15px;border-radius:50%;border:0;background:var(--a);color:#fff;font:700 18px/1 system-ui;cursor:pointer;opacity:0;transform:scale(.6);transition:opacity .2s,transform .2s;box-shadow:0 6px 18px -6px rgba(0,0,0,.4)}.dm-edit .blk:hover>.dx-ins{opacity:1;transform:none}
+.dx-it-del{position:absolute;top:8px;right:8px;width:24px;height:24px;border-radius:50%;border:0;background:#0d1f18;color:#fff;cursor:pointer;opacity:0;transition:opacity .2s;font:600 14px/1 system-ui;z-index:3}.dm-edit *:hover>.dx-it-del{opacity:.85}
+.dx-it-add{align-self:center;justify-self:start;margin-top:10px;padding:10px 16px;border-radius:999px;border:1.5px dashed color-mix(in srgb,var(--a) 70%,transparent);background:transparent;color:inherit;font:600 13px system-ui,sans-serif;cursor:pointer;opacity:.6;transition:opacity .2s}.dx-it-add:hover{opacity:1}
+.dx-note{padding:18px 22px;border-radius:12px;border:1.5px dashed color-mix(in srgb,var(--a) 50%,transparent);color:var(--mut);font-size:14.5px;list-style:none}
+.dx-drop{display:grid;place-items:center;min-height:260px;border-radius:18px;border:2px dashed color-mix(in srgb,var(--a) 60%,transparent);color:var(--mut);cursor:pointer;font-size:15px}
+.dm-edit .blk.is-drop{box-shadow:inset 0 0 0 3px var(--a),inset 0 0 0 9999px color-mix(in srgb,var(--a) 10%,transparent)}
+`;
+
+// --------------------------------------------------- default templates -----
+const it = (title = "", text = "", value = ""): DocItem => ({ id: rid(), title, text, value });
+export const DEFAULT_DOC_THEME: DocTheme = { primary: "#0A6F4D", accent: "#12B57F", ink: "#0B241A", paper: "#FBFDFC", muted: "#5A7D6D", headingFont: "Plus Jakarta Sans", bodyFont: "Inter", style: "soft" };
+/** A ready-to-use template: good copy with variables in place. */
+export function defaultDocTemplate(kind: DocKind, lang: DocLang = "es", theme: DocTheme = DEFAULT_DOC_THEME): DocTemplate {
+  const es = lang === "es";
+  const B = (type: DocBlockType, x: Partial<DocBlock> = {}): DocBlock => ({ id: rid(), type, ...x });
+  if (kind === "contract") return {
+    name: es ? "Contrato de licencia y servicios" : "Licence and services agreement", kind, lang, sectors: [], theme,
+    terms: { paymentDays: 30, validityDays: 30, annualIncreasePct: 3 },
+    blocks: [
+      B("cover", { eyebrow: es ? "Contrato" : "Agreement", title: es ? "Contrato de licencia y servicios" : "Licence and services agreement", body: es ? "<p>{{provider.legal}} y {{client.legal}}</p>" : "<p>{{provider.legal}} and {{client.legal}}</p>", items: [it(es ? "Firma" : "Signed", "{{contract.sign_date}}"), it(es ? "Inicio" : "Start", "{{contract.start}}"), it(es ? "Duración" : "Term", es ? "{{contract.years}} años" : "{{contract.years}} years")] }),
+      B("parties", { eyebrow: es ? "Reunidos" : "Parties", title: es ? "Las partes" : "The parties", body: es ? "<p>Ambas partes se reconocen capacidad suficiente para obligarse y, a tal efecto,</p>" : "<p>Both parties acknowledge they have capacity to enter into this agreement and</p>" }),
+      B("clauses", { eyebrow: es ? "Cláusulas" : "Clauses", title: es ? "Acuerdan" : "They agree", items: es ? [
+        it("Objeto", "<p>{{provider.legal}} concede a {{client.legal}} una licencia de uso de su software y prestará los servicios profesionales descritos en el anexo económico de este contrato.</p>"),
+        it("Duración", "<p>El contrato entra en vigor el {{contract.start}} y se extiende durante {{contract.years}} años, hasta el {{contract.end}}. A su término se renovará por periodos anuales salvo preaviso escrito de tres meses.</p>"),
+        it("Precio y actualización", "<p>La licencia asciende a {{contract.license.final}} el primer año. {{contract.increment}}. Los servicios profesionales tienen un precio cerrado de {{contract.services.final}}.</p>"),
+        it("Facturación y pago", "<p>La licencia se factura anualmente por adelantado y los servicios a la firma. Las facturas se abonarán a {{terms.payment_days}} días. Impuestos no incluidos.</p>"),
+        it("Confidencialidad", "<p>Las partes guardarán secreto sobre la información de la otra a la que tengan acceso con motivo de este contrato, durante su vigencia y los tres años siguientes.</p>"),
+        it("Protección de datos", "<p>{{provider.name}} tratará los datos personales por cuenta de {{client}} únicamente para prestar el servicio, conforme al RGPD y al acuerdo de encargo de tratamiento anexo.</p>"),
+        it("Propiedad intelectual", "<p>El software y su documentación son propiedad de {{provider.legal}}. Los datos del cliente son y seguirán siendo de {{client.legal}}.</p>"),
+        it("Responsabilidad", "<p>La responsabilidad de cada parte queda limitada al importe abonado en los doce meses anteriores al hecho que la origine, salvo dolo o culpa grave.</p>"),
+        it("Ley y jurisdicción", "<p>Este contrato se rige por la ley española. Las partes se someten a los juzgados y tribunales de {{provider.city}}.</p>"),
+      ] : [
+        it("Purpose", "<p>{{provider.legal}} grants {{client.legal}} a licence to use its software and will provide the professional services described in the commercial annex.</p>"),
+        it("Term", "<p>This agreement starts on {{contract.start}} and lasts {{contract.years}} years, until {{contract.end}}. It renews yearly unless either party gives three months' written notice.</p>"),
+        it("Price", "<p>The licence is {{contract.license.final}} in the first year. {{contract.increment}}. Professional services have a fixed price of {{contract.services.final}}.</p>"),
+        it("Invoicing", "<p>The licence is invoiced yearly in advance and services on signature. Invoices are payable within {{terms.payment_days}} days. Taxes not included.</p>"),
+        it("Confidentiality", "<p>Each party keeps the other's information confidential during the agreement and three years after.</p>"),
+        it("Governing law", "<p>This agreement is governed by Spanish law; the courts of {{provider.city}} have jurisdiction.</p>"),
+      ] }),
+      B("pricing", { eyebrow: es ? "Anexo económico" : "Commercial annex", title: es ? "Condiciones económicas" : "Commercial terms" }),
+      B("schedule", { eyebrow: es ? "Calendario" : "Schedule", title: es ? "Importe año a año" : "Year by year", body: es ? "<p>Licencia anual con su actualización y servicios en el primer año.</p>" : "<p>Yearly licence with its increase and services in the first year.</p>" }),
+      B("signature", { title: es ? "Y en prueba de conformidad" : "In witness whereof", body: es ? "<p>Firman el presente contrato en {{provider.city}}, a {{contract.sign_date}}.</p>" : "<p>Signed in {{provider.city}} on {{contract.sign_date}}.</p>" }),
+    ],
+  };
+  return {
+    name: es ? "Propuesta comercial" : "Commercial proposal", kind, lang, sectors: [], theme,
+    terms: { paymentDays: 30, validityDays: 30, annualIncreasePct: 3 },
+    blocks: [
+      B("cover", { eyebrow: es ? "Propuesta" : "Proposal", title: es ? "Una propuesta para {{client}}" : "A proposal for {{client}}", body: es ? "<p>{{deal}}</p>" : "<p>{{deal}}</p>", items: [it(es ? "Preparado para" : "Prepared for", "{{client.contact}}"), it(es ? "Fecha" : "Date", "{{date.long}}"), it(es ? "Válida hasta" : "Valid until", "{{valid_until}}")] }),
+      B("text", { eyebrow: es ? "Resumen" : "Summary", title: es ? "Lo que os proponemos" : "What we propose", body: es ? "<p>Hola {{client.contact}},</p><p>Gracias por el tiempo dedicado a contarnos vuestros retos. En esta propuesta encontraréis cómo podemos ayudar a {{client}}, el alcance del proyecto y la inversión necesaria.</p><p>Un saludo,<br>{{seller.name}}</p>" : "<p>Hi {{client.contact}},</p><p>Thank you for sharing your challenges with us. This proposal explains how we can help {{client}}, the scope of the project and the investment.</p><p>Best regards,<br>{{seller.name}}</p>" }),
+      B("cards", { eyebrow: es ? "El reto" : "The challenge", title: es ? "Dónde estáis hoy" : "Where you are today", items: es ? [it("Procesos manuales", "<p>Horas de trabajo en hojas de cálculo cada cierre.</p>"), it("Datos dispersos", "<p>Información en varios sistemas, difícil de consolidar.</p>"), it("Poca visibilidad", "<p>Los informes llegan tarde a quien tiene que decidir.</p>")] : [it("Manual work", "<p>Hours spent in spreadsheets every close.</p>"), it("Scattered data", "<p>Information spread across systems.</p>"), it("Little visibility", "<p>Reports reach decision makers late.</p>")] }),
+      B("stats", { eyebrow: es ? "Resultados" : "Results", title: es ? "Lo que consiguen nuestros clientes" : "What our clients achieve", items: [it(es ? "más rápido el cierre" : "faster close", "", "70%"), it(es ? "horas ahorradas al mes" : "hours saved a month", "", "120"), it(es ? "clientes en el mundo" : "clients worldwide", "", "500+")] }),
+      B("products", { eyebrow: es ? "Solución" : "Solution", title: "{{product}}", body: es ? "<p>La plataforma que necesitáis, con todo incluido.</p>" : "<p>The platform you need, all included.</p>", when: "product" }),
+      B("services", { eyebrow: es ? "Servicios" : "Services", title: "{{service}}", body: es ? "<p>Un equipo experto acompaña a {{client}} en cada fase.</p>" : "<p>An expert team guides {{client}} through every phase.</p>", when: "service" }),
+      B("timeline", { eyebrow: es ? "Plan" : "Plan", title: es ? "Cómo lo haremos" : "How we'll do it" }),
+      B("pricing", { eyebrow: es ? "Inversión" : "Investment", title: es ? "Resumen económico" : "Investment summary", body: es ? "<p>Oferta válida hasta el {{valid_until}}.</p>" : "<p>Valid until {{valid_until}}.</p>" }),
+      B("terms", { eyebrow: es ? "Condiciones" : "Conditions", title: es ? "Condiciones comerciales" : "Commercial conditions", items: es ? [it("Validez", "<p>{{terms.validity_days}} días desde la fecha de la propuesta.</p>"), it("Pago", "<p>A {{terms.payment_days}} días desde la factura.</p>"), it("Impuestos", "<p>Los importes no incluyen IVA.</p>"), it("Actualización", "<p>La licencia se actualiza anualmente según IPC.</p>")] : [it("Validity", "<p>{{terms.validity_days}} days from the proposal date.</p>"), it("Payment", "<p>{{terms.payment_days}} days from invoice.</p>"), it("Taxes", "<p>Amounts exclude VAT.</p>"), it("Increase", "<p>The licence is updated yearly.</p>")] }),
+      B("cta", { eyebrow: es ? "Siguientes pasos" : "Next steps", title: es ? "¿Empezamos?" : "Shall we start?", body: es ? "<p>Estamos a vuestra disposición para resolver cualquier duda.</p>" : "<p>We're here for any question.</p>" }),
+    ],
+  };
+}
+
+// -------------------------------------- reading a reference document -----
+export interface ImportedDoc { blocks: DocBlock[]; theme: Partial<DocTheme>; images: Blob[]; text: string; pages: number; source: string }
+const GUESS: [RegExp, DocBlockType, DocKind[]][] = [
+  [/precio|inversi[oó]n|econ[oó]mic|pricing|investment|presupuesto|tarifa|importe|honorarios|cost|fee/i, "pricing", ["proposal", "contract"]],
+  [/fase|cronograma|calendario|planificaci[oó]n|timeline|roadmap|metodolog|plan de trabajo|hitos|implantaci[oó]n/i, "timeline", ["proposal"]],
+  [/^(el |nuestro )?equipo|^team|qui[eé]nes somos|^our people/i, "team", ["proposal"]],
+  [/condiciones|t[eé]rminos|terms|conditions/i, "terms", ["proposal"]],
+  [/gracias|thank|^contacto|^contact|siguientes pasos|next steps/i, "cta", ["proposal"]],
+  [/reto|problema|diagn[oó]stico|limitaci|situaci[oó]n actual|challenge|pain|contexto|dolor/i, "cards", ["proposal"]],
+  [/resultados|cifras|figures|results|impact|referencias|casos de [eé]xito|clientes/i, "stats", ["proposal"]],
+  [/cl[aá]usula|estipulaciones|clauses|acuerdan/i, "clauses", ["contract"]],
+  [/reunidos|las partes|^parties|intervienen|exponen/i, "parties", ["contract"]],
+  [/en prueba de conformidad|witness|^firmas?$|^signatures?$/i, "signature", ["contract"]],
+  [/calendario de pagos|payment schedule|anexo econ/i, "schedule", ["contract"]],
+];
+/** "PROPUESTA COMERCIAL" → "Propuesta comercial" (keeps tokens and short acronyms). */
+const sentenceCase = (t: string) => {
+  if (t !== t.toUpperCase() || !/[A-ZÁÉÍÓÚÑ]{4}/.test(t)) return t;
+  const low = t.toLowerCase().replace(/\{\{[^}]*\}\}/g, (m) => m.replace(/[a-z]/g, (c) => c));
+  return low.replace(/(^|[.!?]\s+)(\p{L})/gu, (_m, a: string, c: string) => a + c.toUpperCase())
+    .replace(/\b(konsolidator|excel|sap|erp|crm|bi|power bi|kpi|kpis|saas|iberia|europa|españa)\b/gi, (w) => (w.length <= 4 ? w.toUpperCase() : w[0].toUpperCase() + w.slice(1)));
+};
+/** Puts variables where a reference document has the values of another deal: dates, money, the brand, e-mails. */
+export function autoPlaceTokens(text: string, hints: { clientNames?: string[]; sellerEmail?: string; brand?: string; kind?: DocKind } = {}): string {
+  let s = text;
+  (hints.clientNames ?? []).filter((n) => n && n.length > 2).forEach((n) => { s = s.split(n).join("{{client}}"); });
+  if (hints.kind === "contract") {
+    const D = "\\d{1,2} de (enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre) de 20\\d\\d";
+    s = s.replace(new RegExp(`(desde el|a partir del?|con efectos del?|entra(rá)? en vigor el)\\s+${D}`, "gi"), (m) => m.replace(new RegExp(D, "i"), "{{contract.start}}"));
+    s = s.replace(new RegExp(`(,\\s*a|firman? (el presente )?(contrato )?(en [^,]+, )?(a|el))\\s+${D}`, "gi"), (m) => m.replace(new RegExp(D, "i"), "{{contract.sign_date}}"));
+    s = s.replace(new RegExp(`^(en [^,]{2,30}),\\s*a\\s+${D}`, "i"), "En {{provider.city}}, a {{contract.sign_date}}");
+    const MONEY = "(\\d{1,3}(?:[.,]\\d{3})+(?:,\\d{1,2})?|\\d+(?:,\\d{1,2})?)\\s?(€|euros|EUR)";
+    s = s.replace(new RegExp(`(licencia|licence|license|suscripci[oó]n|subscription)([^.€]{0,90}?)${MONEY}`, "gi"), (_m, a: string, b: string) => `${a}${b}{{contract.license.final}}`);
+    s = s.replace(new RegExp(`(servicios|services|implantaci[oó]n|implementation)([^.€]{0,90}?)${MONEY}`, "gi"), (_m, a: string, b: string) => `${a}${b}{{contract.services.final}}`);
+    s = s.replace(/(duraci[oó]n (inicial )?de|term of|plazo de)\s+(\d+|un|uno|dos|tres|cuatro|cinco|one|two|three|four|five)\s+(años|year|years)/gi, (_m, a: string, b = "", _n: string, y: string) => `${a} ${b ?? ""}{{contract.years}} ${y}`.replace(/\s+/g, " "));
+    s = s.replace(/(actualizable|incremento|increase)[^.]{0,30}?\b\d+(?:,\d+)?\s?%\s*(anual(mente)?|a year|per year|yearly)?/gi, "{{contract.increment}}");
+  }
+  s = s.replace(/\b(\d{1,2}) de (enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre) de (20\d\d)\b/gi, "{{date.long}}");
+  s = s.replace(/\b(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre|january|february|march|april|may|june|july|august|september|october|november|december) (de )?(20\d\d)\b/gi, "{{date}}");
+  s = s.replace(/\b(v[aá]lid[oa]s? hasta( el)?|valid until)\s+\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}/gi, (m) => m.replace(/\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}/, "{{valid_until}}"));
+  s = s.replace(/[\w.+-]+@[\w-]+\.[\w.]+/g, "{{seller.email}}");
+  s = s.replace(/(\+34|\+\d{2})?\s?\d{3}\s?\d{3}\s?\d{3}\b/g, (m) => (m.replace(/\D/g, "").length >= 9 ? "{{seller.phone}}" : m));
+  return s;
+}
+const CLAUSE_RE = /^((cl[aá]usula|art[ií]culo|article|section)\s+)?((\d+|[IVXL]+)\b[.)ºª\-–]*|(primera|segunda|tercera|cuarta|quinta|sexta|s[eé]ptima|octava|novena|d[eé]cima|und[eé]cima|duod[eé]cima|decimotercera|decimocuarta|decimoquinta|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth)\b[.:\-–]?)\s*/i;
+const isUpper = (x: string) => x === x.toUpperCase() && /[A-ZÁÉÍÓÚÑ]{3}/.test(x);
+const isHeading = (l: string) => l.length <= 70 && !/[.,;:]$/.test(l) && (isUpper(l) || /^(\d+[.)]|[IVX]+\.)\s+\S/.test(l) || /^#{1,3}\s/.test(l) || (CLAUSE_RE.test(l) && /^(cl[aá]usula|art[ií]culo|article|primera|segunda|tercera|cuarta|quinta|sexta|s[eé]ptima|octava|novena|d[eé]cima|first|second|third|fourth|fifth)/i.test(l) && l.length < 60));
+/** Short line + longer line after it = a title and its text. */
+function pairLines(lines: string[]): DocItem[] {
+  const out: DocItem[] = [];
+  const clean = (l: string) => l.replace(/^([-•·*▪–]|\d+[.)])\s+/, "").trim();
+  for (let k = 0; k < lines.length; k++) {
+    const a = clean(lines[k]), b = lines[k + 1] != null ? clean(lines[k + 1]) : "";
+    const m = /^([^:–—]{2,48})[:–—]\s*(.+)$/.exec(a);
+    if (m) { out.push(it(sentenceCase(m[1].trim()), `<p>${esc(m[2].trim())}</p>`)); continue; }
+    if (a.length <= 60 && !/[.]$/.test(a) && b && b.length > a.length + 10) { out.push(it(sentenceCase(a), `<p>${esc(b)}</p>`)); k++; continue; }
+    out.push(a.length <= 60 ? it(sentenceCase(a), "") : it("", `<p>${esc(sentenceCase(a))}</p>`));
+  }
+  return out;
+}
+/** Footers, page numbers and slide numerals repeat on every page: they don't belong in the document. */
+function dropBoilerplate(sections: { title: string; lines: string[]; eyebrow?: string }[]): { title: string; lines: string[] }[] {
+  const norm = (l: string) => l.replace(/^[-•·*▪–]\s*/, "").replace(/\s+/g, " ").trim().toLowerCase();
+  const count = new Map<string, number>();
+  sections.forEach((sec) => new Set(sec.lines.map(norm)).forEach((l) => count.set(l, (count.get(l) ?? 0) + 1)));
+  const many = Math.max(3, Math.ceil(sections.length * 0.3));
+  const junk = (l: string) => {
+    const n = norm(l);
+    return !n || (count.get(n) ?? 0) >= many || /^([ivxlc]+|\d{1,3}|página \d+|page \d+|\d+ \/ \d+)$/i.test(n) || /confidencial|confidential|all rights reserved|todos los derechos/i.test(n) && n.length < 70;
+  };
+  return sections.map((sec) => ({ title: sec.title, lines: sec.lines.filter((l) => !junk(l)) }));
+}
+/** Builds blocks from plain sections (heading + paragraphs). */
+function blocksFromSections(sections0: { title: string; lines: string[]; eyebrow?: string }[], kind: DocKind, hints0: Parameters<typeof autoPlaceTokens>[1]): DocBlock[] {
+  const hints = { ...hints0, kind };
+  const sections = dropBoilerplate(sections0).map((x, i) => ({ ...x, eyebrow: sections0[i].eyebrow }));
+  const out: DocBlock[] = [];
+  const clause: DocItem[] = [];
+  const flushClauses = () => { if (clause.length) { out.push({ id: rid(), type: "clauses", eyebrow: "Cláusulas", title: "Acuerdan", items: clause.splice(0) }); } };
+  const NUM = /^-?\s*\{\{num\}\}\s*[-–·.]*\s*/;
+  sections.forEach((sec, i) => {
+    // "{{num}} - ALCANCE" lines are section labels (eyebrows)
+    let eyebrow = (sec as any).eyebrow ?? "";
+    const raw = sec.lines.filter((l) => { if (NUM.test(l)) { eyebrow = eyebrow || sentenceCase(l.replace(NUM, "").trim()); return false; } return !/^-?\s*\d{1,2}$/.test(l.trim()); });
+    let title0 = sec.title;
+    if (NUM.test(title0)) { eyebrow = eyebrow || sentenceCase(title0.replace(NUM, "").trim()); title0 = raw.shift() ?? eyebrow; }
+    let title = sentenceCase(autoPlaceTokens(title0.replace(/^#{1,3}\s*/, "").replace(/^-\s+/, "").trim(), hints));
+    const lines = raw.map((l) => autoPlaceTokens(l, hints)).filter((l) => l.trim());
+    if (title.length > 90) { lines.unshift(title); title = eyebrow || ""; }
+    if (i === 0 && out.length === 0) {
+      out.push({ id: rid(), type: "cover", eyebrow: eyebrow || (kind === "contract" ? "Contrato" : "Propuesta"), title: title || "{{deal}}", body: textToRich(lines.slice(0, 2).map((l) => l.replace(/^-\s+/, "")).join("\n")), items: kind === "contract" ? [it("Firma", "{{contract.sign_date}}"), it("Inicio", "{{contract.start}}")] : [it("Preparado para", "{{client}}"), it("Fecha", "{{date.long}}")] });
+      return;
+    }
+    const joined = lines.join(" ");
+    if (kind === "contract") {
+      // "CLÁUSULAS" on its own is just the heading of the clauses that follow
+      if (/^(cl[aá]usulas|estipulaciones|acuerdan|clauses|terms and conditions)$/i.test(title.trim()) && !lines.length) return;
+      if (CLAUSE_RE.test(sec.title) && !/reunidos|exponen|intervienen|firmas?$|signatures?$/i.test(title)) {
+        clause.push(it(sentenceCase(title.replace(CLAUSE_RE, "").trim()) || title, textToRich(lines.join("\n"))));
+        return;
+      }
+    }
+    let type = (GUESS.find(([re, , ks]) => ks.includes(kind) && re.test(title)) ?? [null, "text"])[1] as DocBlockType;
+    if (/\{\{seller\./.test(joined) && kind === "proposal") type = "cta";
+    if (/\{\{product/.test(title + joined) && kind === "proposal") type = "products";
+    else if (/\{\{service/.test(title + joined) && kind === "proposal") type = "services";
+    if (kind === "contract" && (type === "text" || type === "clauses") && /^(\d+|[IVX]+)[.)ºª]?\s|cl[aá]usula|^[A-ZÁÉÍÓÚÑ ]{4,}$/i.test(sec.title)) {
+      clause.push(it(title.replace(/^(cl[aá]usula\s+)?(\d+|[IVX]+)[.)ºª-]*\s*/i, ""), textToRich(lines.join("\n"))));
+      return;
+    }
+    flushClauses();
+    // the deal fills prices, products and services: one block each is enough
+    if (["pricing", "products", "services", "schedule", "parties", "signature"].includes(type) && out.some((b) => b.type === type)) return;
+    if (type === "products") { out.push({ id: rid(), type, eyebrow: eyebrow || "Solución", title: "{{product}}", when: "product", body: "" }); return; }
+    if (type === "services") { out.push({ id: rid(), type, eyebrow: eyebrow || "Servicios", title: "{{service}}", when: "service", body: "" }); return; }
+    if (type === "pricing" || type === "schedule" || type === "parties" || type === "signature") {
+      out.push({ id: rid(), type, eyebrow, title: type === "pricing" && /\{\{/.test(title) ? "Propuesta económica" : title, body: type === "signature" ? textToRich(lines.join("\n")) : "" });
+      return;
+    }
+    if (type === "stats") {
+      const nums = lines.map((l) => /^-?\s*([+−-]?[\d.,]+\s?[%+€kKmMx]*)\s*(.*)$/.exec(l.trim())).filter(Boolean) as RegExpExecArray[];
+      if (nums.length >= 2) { out.push({ id: rid(), type, eyebrow, title, body: "", items: nums.slice(0, 4).map((n) => it(n[2] || "", "", n[1])) }); return; }
+      type = lines.length >= 4 ? "cards" : "text";
+    }
+    if ((type === "cards" || type === "terms" || type === "team" || type === "timeline" || type === "text") && lines.length >= 3 && lines.filter((l) => l.replace(/^-\s+/, "").length <= 70).length >= 2) {
+      const paras = lines.filter((l) => !/^-\s/.test(l) && l.length > 140);
+      const items = pairLines(lines.filter((l) => !paras.includes(l))).slice(0, 8);
+      if (items.length >= 2) {
+        out.push({ id: rid(), type: type === "text" ? "cards" : type, eyebrow, title, body: textToRich(paras.join("\n")), items });
+        return;
+      }
+    }
+    out.push({ id: rid(), type: type === "cta" ? "cta" : "text", eyebrow, title, body: textToRich(lines.map((l) => l.replace(/^-\s+(?=.{60,})/, "")).join("\n")) });
+  });
+  flushClauses();
+  if (kind === "contract") {
+    if (!out.some((b) => b.type === "parties")) out.splice(1, 0, { id: rid(), type: "parties", title: "Las partes" });
+    if (!out.some((b) => b.type === "signature")) out.push({ id: rid(), type: "signature", title: "Y en prueba de conformidad", body: "<p>Firman en {{provider.city}}, a {{contract.sign_date}}.</p>" });
+    // the money annex goes right before the signatures
+    const before = (b: DocBlock) => { const at = out.findIndex((x) => x.type === "signature"); out.splice(at < 0 ? out.length : at, 0, b); };
+    if (!out.some((b) => b.type === "pricing")) before({ id: rid(), type: "pricing", eyebrow: "Anexo económico", title: "Condiciones económicas" });
+    if (!out.some((b) => b.type === "schedule")) before({ id: rid(), type: "schedule", eyebrow: "Calendario", title: "Importe año a año" });
+  } else {
+    if (!out.some((b) => b.type === "products")) out.push({ id: rid(), type: "products", eyebrow: "Solución", title: "{{product}}", when: "product" });
+    if (!out.some((b) => b.type === "services")) out.push({ id: rid(), type: "services", eyebrow: "Servicios", title: "{{service}}", when: "service" });
+    if (!out.some((b) => b.type === "pricing")) out.push({ id: rid(), type: "pricing", eyebrow: "Inversión", title: "Resumen económico", body: "<p>Oferta válida hasta el {{valid_until}}.</p>" });
+    if (!out.some((b) => b.type === "cta")) out.push({ id: rid(), type: "cta", eyebrow: "Siguientes pasos", title: "¿Empezamos?" });
+    // product and service sections go right before the pricing; the closing goes last
+    const move = (t: DocBlockType, before: () => number) => { const k = out.findIndex((b) => b.type === t); const at = before(); if (k > at && at >= 0) { const [b] = out.splice(k, 1); out.splice(at, 0, b); } };
+    move("services", () => out.findIndex((b) => b.type === "pricing"));
+    move("products", () => out.findIndex((b) => b.type === "services"));
+    const ci = out.findIndex((b) => b.type === "cta"); if (ci >= 0 && ci < out.length - 1) { const [b] = out.splice(ci, 1); out.push(b); }
+  }
+  // tones alternate so the page has rhythm
+  let alt = false;
+  out.forEach((b) => { if (!b.tone && (b.type === "text" || b.type === "cards" || b.type === "timeline" || b.type === "terms")) { b.tone = alt ? "tint" : "light"; alt = !alt; } });
+  return out;
+}
+/** Gives the pictures of a reference document to the cover and the text blocks. */
+export function assignImages(blocks: DocBlock[], urls: string[]): DocBlock[] {
+  const list = [...urls];
+  return blocks.map((b, i) => {
+    if (!list.length || b.image) return b;
+    if (b.type === "cover") return { ...b, image: list.shift() };
+    if (b.type === "text" && richToText(b.body ?? "").length > 40) return { ...b, image: list.shift(), layout: i % 2 ? "left" : "right" };
+    return b;
+  });
+}
+/** Lines of plain text → sections split at headings (wrapped lines joined, small capital labels as eyebrows). */
+function sectionsFromLines(lines0: string[]): { title: string; lines: string[]; eyebrow?: string }[] {
+  const lines: string[] = [];
+  lines0.map((l) => l.replace(/\s+/g, " ").trim()).filter(Boolean).forEach((l) => {
+    const prev = lines[lines.length - 1];
+    if (prev && isUpper(prev) && isUpper(l) && isHeading(prev) && !/[.:;!?]$/.test(prev) && prev.length + l.length < 110) { lines[lines.length - 1] = `${prev} ${l}`; return; }
+    if (prev && !isHeading(prev) && !isHeading(l) && /^[a-záéíóúñ(0-9]/.test(l) && !/[.:;!?]$/.test(prev) && prev.length > 30) { lines[lines.length - 1] = `${prev} ${l}`; return; }
+    lines.push(l);
+  });
+  const out: { title: string; lines: string[]; eyebrow?: string }[] = [];
+  lines.forEach((l) => { if (isHeading(l) || !out.length) out.push({ title: l, lines: [] }); else out[out.length - 1].lines.push(l); });
+  out.forEach((sec) => {
+    const first = sec.lines[0];
+    if (isUpper(sec.title) && sec.title.length <= 28 && first && first.length <= 70 && !isUpper(first) && !/[.]$/.test(first) && !CLAUSE_RE.test(sec.title)) { sec.eyebrow = sentenceCase(sec.title); sec.title = sec.lines.shift()!; }
+  });
+  return out.filter((s) => s.title || s.lines.length);
+}
+// -- PDF: text of the page streams (Flate inflated with the browser's DecompressionStream) --
+async function inflate(bytes: Uint8Array): Promise<Uint8Array | null> {
+  const DS: any = (globalThis as any).DecompressionStream;
+  if (!DS) return null;
+  // the end-of-line before "endstream" is not part of the data
+  let n = bytes.length;
+  while (n > 0 && (bytes[n - 1] === 10 || bytes[n - 1] === 13)) n--;
+  const chunks: Uint8Array[] = [];
+  try {
+    const reader: any = new Blob([bytes.subarray(0, n) as any]).stream().pipeThrough(new DS("deflate")).getReader();
+    for (;;) { const { done, value } = await reader.read(); if (done) break; chunks.push(value as Uint8Array); }
+  } catch { /* keep what came out before any trailing junk */ }
+  if (!chunks.length) return null;
+  const out = new Uint8Array(chunks.reduce((k, c) => k + c.length, 0));
+  let o = 0; chunks.forEach((c) => { out.set(c, o); o += c.length; });
+  return out;
+}
+const latin = (b: Uint8Array) => { let s = ""; for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]); return s; };
+// A small PDF reader: objects (also inside object streams), page fonts with their ToUnicode maps, and the text operators.
+interface PdfObj { dict: string; stream?: Uint8Array }
+async function pdfObjects(buf: Uint8Array): Promise<Map<number, PdfObj>> {
+  const src = latin(buf);
+  const objs = new Map<number, PdfObj>();
+  const re = /(\d+)\s+\d+\s+obj\b/g;
+  let m: RegExpExecArray | null;
+  const streams: { n: number; dict: string }[] = [];
+  while ((m = re.exec(src))) {
+    const n = Number(m[1]);
+    const start = m.index + m[0].length;
+    const end = src.indexOf("endobj", start);
+    if (end < 0) break;
+    const body = src.slice(start, end);
+    const si = body.search(/\bstream\r?\n/);
+    if (si >= 0) {
+      const dict = body.slice(0, si);
+      const s0 = start + si + (body[si + 6] === "\r" ? 8 : 7);
+      const se = src.lastIndexOf("endstream", end);
+      let bytes: Uint8Array | null = buf.subarray(s0, se > s0 ? se : end);
+      if (/\/FlateDecode/.test(dict)) bytes = await inflate(bytes);
+      else if (/\/Filter/.test(dict)) bytes = null;
+      objs.set(n, { dict, stream: bytes ?? undefined });
+      if (/\/Type\s*\/ObjStm/.test(dict) && bytes) streams.push({ n, dict });
+    } else objs.set(n, { dict: body });
+    re.lastIndex = end;
+  }
+  // objects packed in object streams (PDF 1.5+)
+  for (const os of streams) {
+    const data = latin(objs.get(os.n)!.stream!);
+    const N = Number(/\/N\s+(\d+)/.exec(os.dict)?.[1] ?? 0), first = Number(/\/First\s+(\d+)/.exec(os.dict)?.[1] ?? 0);
+    const head = data.slice(0, first).trim().split(/\s+/).map(Number);
+    for (let i = 0; i < N; i++) {
+      const num = head[i * 2], off = head[i * 2 + 1], next = i + 1 < N ? head[i * 2 + 3] : data.length - first;
+      if (!objs.has(num)) objs.set(num, { dict: data.slice(first + off, first + next) });
+    }
+  }
+  return objs;
+}
+/** The value after a key: a nested << >> dictionary, an array, or the object a reference points to. */
+function pdfVal(dict: string, key: string, objs: Map<number, PdfObj>): string {
+  const i = dict.search(new RegExp(`/${key}(?![A-Za-z0-9])`));
+  if (i < 0) return "";
+  let j = i + key.length + 1;
+  while (/\s/.test(dict[j] ?? "")) j++;
+  const ref = /^(\d+)\s+\d+\s+R/.exec(dict.slice(j));
+  if (ref) return objs.get(Number(ref[1]))?.dict ?? "";
+  const open = dict.slice(j, j + 2) === "<<" ? "<<" : dict[j] === "[" ? "[" : "";
+  if (!open) return dict.slice(j, j + 40);
+  const close = open === "<<" ? ">>" : "]";
+  let depth = 0;
+  for (let k = j; k < dict.length; k++) {
+    if (dict.startsWith(open, k)) { depth++; k += open.length - 1; }
+    else if (dict.startsWith(close, k)) { depth--; if (!depth) return dict.slice(j, k + close.length); k += close.length - 1; }
+  }
+  return dict.slice(j);
+}
+interface PdfCmap { len: number; map: Map<string, string>; widths?: Map<number, number>; dw?: number }
+function pdfCmap(text: string): PdfCmap {
+  const map = new Map<string, string>();
+  const u16 = (h: string) => { let o = ""; for (let i = 0; i + 3 < h.length + 1; i += 4) o += String.fromCharCode(parseInt(h.slice(i, i + 4).padEnd(4, "0"), 16)); return o; };
+  const cs = /begincodespacerange\s*<([0-9a-fA-F]+)>/.exec(text);
+  const len = cs ? Math.max(1, cs[1].length / 2) : 2;
+  for (const blk of text.matchAll(/beginbfchar([\s\S]*?)endbfchar/g)) for (const p of blk[1].matchAll(/<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>/g)) map.set(p[1].toLowerCase(), u16(p[2]));
+  for (const blk of text.matchAll(/beginbfrange([\s\S]*?)endbfrange/g)) {
+    for (const p of blk[1].matchAll(/<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>\s*(<[0-9a-fA-F]+>|\[[^\]]*\])/g)) {
+      const lo = parseInt(p[1], 16), hi = parseInt(p[2], 16), w = p[1].length;
+      if (hi - lo > 5000) continue;
+      if (p[3].startsWith("[")) { const ds = Array.from(p[3].matchAll(/<([0-9a-fA-F]+)>/g)).map((x) => x[1]); for (let c = lo; c <= hi; c++) if (ds[c - lo]) map.set(c.toString(16).padStart(w, "0"), u16(ds[c - lo])); }
+      else { const d = p[3].slice(1, -1); const base = parseInt(d.slice(-4), 16); for (let c = lo; c <= hi; c++) map.set(c.toString(16).padStart(w, "0"), u16(d.slice(0, -4)) + String.fromCharCode(base + c - lo)); }
+    }
+  }
+  return { len, map };
+}
+function pdfBytes(lit: string): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < lit.length; i++) {
+    const c = lit[i];
+    if (c !== "\\") { out.push(c.charCodeAt(0) & 255); continue; }
+    const n = lit[++i];
+    if (/[0-7]/.test(n)) { let o = n; while (o.length < 3 && /[0-7]/.test(lit[i + 1] ?? "")) o += lit[++i]; out.push(parseInt(o, 8) & 255); }
+    else if (n === "n") out.push(10); else if (n === "r") out.push(13); else if (n === "t") out.push(9);
+    else if (n === "b" || n === "f") out.push(32); else if (n === "\r" || n === "\n") { /* line continuation */ }
+    else out.push(n.charCodeAt(0) & 255);
+  }
+  return out;
+}
+function pdfDecode(bytes: number[], cm: PdfCmap | null): string {
+  if (!cm || !cm.map.size) return String.fromCharCode(...bytes);
+  let o = "";
+  for (let i = 0; i + cm.len <= bytes.length; i += cm.len) {
+    const k = bytes.slice(i, i + cm.len).map((b) => b.toString(16).padStart(2, "0")).join("");
+    o += cm.map.get(k) ?? (cm.len === 1 ? String.fromCharCode(bytes[i]) : "");
+  }
+  return o;
+}
+async function pdfText(buf: Uint8Array): Promise<{ lines: string[]; pages: number }> {
+  const objs = await pdfObjects(buf);
+  const pages = Array.from(objs.entries()).filter(([, o]) => /\/Type\s*\/Page(?![s\w])/.test(o.dict)).sort((a, b) => a[0] - b[0]);
+  const cmaps = new Map<number, PdfCmap | null>();
+  const lines: string[] = [];
+  for (const [, pg] of pages) {
+    // fonts of the page
+    const res = pdfVal(pg.dict, "Resources", objs);
+    const fontDict = pdfVal(res, "Font", objs);
+    const fonts = new Map<string, PdfCmap | null>();
+    for (const f of fontDict.matchAll(/\/([^\s/<>[\]()]+)\s+(\d+)\s+\d+\s+R/g)) {
+      const n = Number(f[2]);
+      if (!cmaps.has(n)) {
+        const fo = objs.get(n)?.dict ?? "";
+        const tu = /\/ToUnicode\s+(\d+)\s+\d+\s+R/.exec(fo);
+        const st = tu ? objs.get(Number(tu[1]))?.stream : undefined;
+        const cm: PdfCmap = st ? pdfCmap(latin(st)) : { len: /Type0/.test(fo) ? 2 : 1, map: new Map() };
+        // glyph widths (to tell letters from word gaps when every glyph is placed on its own)
+        const widths = new Map<number, number>();
+        const nums = (t: string) => (t.match(/-?[\d.]+/g) ?? []).map(Number);
+        const wArr = pdfVal(fo, "Widths", objs);
+        if (wArr.startsWith("[")) { const fc = Number(/\/FirstChar\s+(\d+)/.exec(fo)?.[1] ?? 0); nums(wArr).forEach((w, i) => widths.set(fc + i, w)); }
+        const desc = pdfVal(fo, "DescendantFonts", objs);
+        const dref = /(\d+)\s+\d+\s+R/.exec(desc);
+        const dd = dref ? objs.get(Number(dref[1]))?.dict ?? "" : desc;
+        if (dd) {
+          cm.dw = Number(/\/DW\s+(\d+)/.exec(dd)?.[1] ?? 1000);
+          const W = pdfVal(dd, "W", objs);
+          for (const g of W.slice(1, -1).matchAll(/(\d+)\s*\[([^\]]*)\]|(\d+)\s+(\d+)\s+(-?[\d.]+)/g)) {
+            if (g[1] != null) nums(g[2]).forEach((w, i) => widths.set(Number(g[1]) + i, w));
+            else for (let c = Number(g[3]); c <= Number(g[4]) && c - Number(g[3]) < 5000; c++) widths.set(c, Number(g[5]));
+          }
+        }
+        cm.widths = widths;
+        cmaps.set(n, cm);
+      }
+      fonts.set(f[1], cmaps.get(n)!);
+    }
+    // the page's content streams
+    const cref = /\/Contents\s*(\[[^\]]*\]|\d+\s+\d+\s+R)/.exec(pg.dict)?.[1] ?? "";
+    const ids = Array.from(cref.matchAll(/(\d+)\s+\d+\s+R/g)).map((x) => Number(x[1]));
+    const content = ids.map((n) => { const st = objs.get(n)?.stream; return st ? latin(st) : ""; }).join("\n");
+    let font: PdfCmap | null = null, size = 10, cur = "", lastY: number | null = null, adv = 0;
+    const advance = (bytes: number[]) => {
+      const L = font?.len ?? 1; let w = 0;
+      for (let i = 0; i + L <= bytes.length; i += L) { let c = 0; for (let k = 0; k < L; k++) c = c * 256 + bytes[i + k]; w += font?.widths?.get(c) ?? font?.dw ?? 500; }
+      return (w / 1000) * size;
+    };
+    const hexBytes = (h: string) => { const x = h.replace(/\s/g, ""); return Array.from({ length: x.length / 2 }, (_, i) => parseInt(x.slice(i * 2, i * 2 + 2), 16)); };
+    const flush = () => { const t = cur.replace(/\s+/g, " ").trim(); if (t) lines.push(t); cur = ""; };
+    const tok = /\/([^\s/<>[\]()]+)\s+([-\d.]+)\s+Tf|\[((?:\\.|[^\]\\])*)\]\s*TJ|\(((?:\\.|[^\\)])*)\)\s*(Tj|'|")|<([0-9A-Fa-f\s]*)>\s*(Tj|'|")|([-\d.]+)\s+([-\d.]+)\s+T[dD]|(?:[-\d.]+\s+){5}([-\d.]+)\s+Tm|\bT\*|\bET\b/g;
+    let m: RegExpExecArray | null;
+    while ((m = tok.exec(content))) {
+      if (m[1]) { font = fonts.get(m[1]) ?? null; size = Math.abs(Number(m[2])) || size; continue; }
+      if (m[3] != null) {
+        adv = 0;
+        for (const part of m[3].matchAll(/\(((?:\\.|[^\\)])*)\)|<([0-9A-Fa-f\s]*)>|(-?[\d.]+)/g)) {
+          if (part[1] != null) { const by = pdfBytes(part[1]); cur += pdfDecode(by, font); adv += advance(by); }
+          else if (part[2] != null) { const by = hexBytes(part[2]); cur += pdfDecode(by, font); adv += advance(by); }
+          else { if (Number(part[3]) < -180) cur += " "; adv -= (Number(part[3]) / 1000) * size; }
+        }
+        continue;
+      }
+      if (m[4] != null || m[6] != null) {
+        if (m[5] === "'" || m[5] === '"' || m[7] === "'" || m[7] === '"') flush();
+        const by = m[4] != null ? pdfBytes(m[4]) : hexBytes(m[6]);
+        cur += pdfDecode(by, font); adv = advance(by);
+        continue;
+      }
+      if (m[8] != null) {
+        const dx = Number(m[8]), dy = Number(m[9]);
+        if (Math.abs(dy) > 0.5) flush();
+        else if (dx > adv + size * 0.15 || dx < 0) cur += " ";      // a gap wider than the glyph before it: a new word
+        adv = 0;
+        continue;
+      }
+      if (m[10] != null) { const y = Number(m[10]); if (lastY == null || Math.abs(y - lastY) > 0.5) flush(); else cur += " "; lastY = y; adv = 0; continue; }
+      flush();
+    }
+    flush();
+  }
+  return { lines: lines.filter((l) => /[a-záéíóúñ0-9]/i.test(l)), pages: pages.length };
+}
+async function docxText(buf: Uint8Array): Promise<{ sections: { title: string; lines: string[] }[]; images: Blob[] }> {
+  const zip = await openZip(buf);
+  const xml = await zip.file("word/document.xml")?.async("string");
+  if (!xml) throw new Error("This Word file has no text.");
+  const body = xpath(xroot(xparse(xml)), "w:body");
+  const sections: { title: string; lines: string[] }[] = [];
+  const paras = xfind(body!, (e) => e.name === "w:p");
+  paras.forEach((p) => {
+    const style = xat(xpath(p, "w:pPr", "w:pStyle"), "w:val") ?? "";
+    const text = xfind(p, (e) => e.name === "w:t" || e.name === "w:tab" || e.name === "w:br").map((e) => (e.name === "w:t" ? xtext(e) : " ")).join("").replace(/\s+/g, " ").trim();
+    if (!text) return;
+    const list = !!xpath(p, "w:pPr", "w:numPr");
+    const head = /^(Title|Heading|Ttulo|T[ií]tulo|Encabezado)/i.test(style) || isHeading(text);
+    if (head || !sections.length) sections.push({ title: text, lines: [] });
+    else sections[sections.length - 1].lines.push(list ? `- ${text}` : text);
+  });
+  const images: Blob[] = [];
+  const media = Object.keys(zip.files).filter((n) => /^word\/media\/.+\.(png|jpe?g)$/i.test(n)).slice(0, 8);
+  for (const n of media) images.push(new Blob([await zip.file(n).async("uint8array")], { type: /png$/i.test(n) ? "image/png" : "image/jpeg" }));
+  return { sections, images };
+}
+/** The main colours of a deck: its theme accents. */
+async function deckTheme(buf: Uint8Array): Promise<Partial<DocTheme>> {
+  try {
+    const zip = await openZip(buf);
+    const name = Object.keys(zip.files).find((n) => /^ppt\/theme\/theme\d*\.xml$/.test(n));
+    if (!name) return {};
+    const th = xroot(xparse(await zip.file(name).async("string")));
+    const clr = xpath(th, "a:themeElements", "a:clrScheme");
+    const get = (k: string) => { const e = xkid(clr, k); const c = xels(e)[0]; const v = xat(c, "val") ?? xat(c, "lastClr"); return v && /^[0-9a-f]{6}$/i.test(v) ? `#${v.toUpperCase()}` : undefined; };
+    const fonts = xpath(th, "a:themeElements", "a:fontScheme");
+    const font = (k: string) => xat(xpath(fonts, k, "a:latin"), "typeface");
+    const sat = (h?: string) => { if (!h) return 0; const r = parseInt(h.slice(1, 3), 16), g = parseInt(h.slice(3, 5), 16), b = parseInt(h.slice(5, 7), 16); return Math.max(r, g, b) - Math.min(r, g, b); };
+    const accents = ["a:accent1", "a:accent2", "a:accent3", "a:accent4", "a:dk2"].map(get).filter(Boolean) as string[];
+    accents.sort((a, b) => sat(b) - sat(a));
+    const pick = (f?: string) => (f && DOC_FONTS.find((x) => x.toLowerCase() === f.toLowerCase())) || undefined;
+    return { primary: get("a:dk2") && sat(get("a:dk2")) > 40 ? get("a:dk2") : accents[0], accent: accents.find((a) => a !== (get("a:dk2"))) ?? accents[1], headingFont: pick(font("a:majorFont")), bodyFont: pick(font("a:minorFont")) };
+  } catch { return {}; }
+}
+/** Who the parties are in a reference contract ("De otra parte, Acme Holding, S.A., con NIF…"): the client's names become {{client}}. */
+type PlaceHints = NonNullable<Parameters<typeof autoPlaceTokens>[1]>;
+function partyHints(text: string, hints: PlaceHints): PlaceHints {
+  const names = new Set(hints?.clientNames ?? []);
+  const m = /(de otra parte|and on the other(?: side| hand)?|y de otra),?\s+(?:la (?:mercantil|sociedad|empresa|entidad)\s+)?([A-ZÁÉÍÓÚÑ0-9][^,\n]{1,60}?)(,?\s+(S\.?\s?L\.?\s?U?\.?|S\.?\s?A\.?\s?U?\.?|S\.?\s?Coop\.?|Ltd\.?|GmbH|Inc\.?|B\.?V\.?|SAS|SRL))?(?=,|\s+con\s|\s+\(|\s+with\s)/i.exec(text);
+  if (m) { const base = m[2].trim(); if (base.length > 2) { if (m[3]) names.add(`${base}${m[3]}`.trim()); names.add(base); } }
+  return { ...hints, clientNames: Array.from(names).sort((a, b) => b.length - a.length) };
+}
+/** Reads any reference document (PowerPoint, PDF, Word, text) and builds a first template from it. */
+export async function importReferenceDoc(file: Blob & { name?: string }, kind: DocKind, hints0: PlaceHints = {}): Promise<ImportedDoc> {
+  let hints: PlaceHints = hints0;
+  const name = (file as any).name ?? "document";
+  const buf = new Uint8Array(await file.arrayBuffer());
+  const isZip = buf[0] === 0x50 && buf[1] === 0x4b;
+  if (/\.pptx$/i.test(name) || (isZip && !/\.docx$/i.test(name) && (await openZip(buf)).file("ppt/presentation.xml"))) {
+    const info = await parseDeck(buf);
+    const theme = await deckTheme(buf);
+    const sections = info.slides.filter((s) => !s.hidden).map((s) => {
+      const texts = s.texts.filter((t) => !t.table).map((t) => t.text.replace(/\s+/g, " ").trim()).filter(Boolean);
+      const title = s.title && texts.includes(s.title) ? s.title : texts[0] ?? s.title;
+      return { title, lines: texts.filter((t) => t !== title).map((t) => (t.length < 90 && !/[.:]$/.test(t) ? `- ${t}` : t)) };
+    });
+    // the pictures of the deck (biggest ones), to reuse
+    const zip = await openZip(buf);
+    const imgs = Object.keys(zip.files).filter((n) => /^ppt\/media\/.+\.(png|jpe?g)$/i.test(n));
+    const sized = await Promise.all(imgs.map(async (n) => ({ n, b: await zip.file(n).async("uint8array") as Uint8Array })));
+    const images = sized.filter((x) => x.b.length > 30000).sort((a, b) => b.b.length - a.b.length).slice(0, 6).map((x) => new Blob([x.b as any], { type: /png$/i.test(x.n) ? "image/png" : "image/jpeg" }));
+    const text = sections.map((s) => [s.title, ...s.lines].join("\n")).join("\n\n");
+    hints = partyHints(text, hints);
+    const blocks = blocksFromSections(sections, kind, hints);
+    return { blocks, theme, images, text, pages: info.slides.length, source: "pptx" };
+  }
+  if (/\.docx$/i.test(name) || isZip) {
+    const { sections, images } = await docxText(buf);
+    const text = sections.map((s) => [s.title, ...s.lines].join("\n")).join("\n\n");
+    hints = partyHints(text, hints);
+    return { blocks: blocksFromSections(sections, kind, hints), theme: {}, images, text, pages: 0, source: "docx" };
+  }
+  if (/\.pdf$/i.test(name) || latin(buf.subarray(0, 5)) === "%PDF-") {
+    const { lines, pages } = await pdfText(buf);
+    if (lines.length < 3) throw new Error("No text could be read from this PDF (it may be scanned). Try the Word or PowerPoint version.");
+    hints = partyHints(lines.join("\n"), hints);
+    return { blocks: blocksFromSections(sectionsFromLines(lines), kind, hints), theme: {}, images: [], text: lines.join("\n"), pages, source: "pdf" };
+  }
+  let text = new TextDecoder().decode(buf);
+  if (/<html|<body|<p[\s>]/i.test(text)) text = text.replace(/<(br|\/p|\/h\d|\/li|\/div)[^>]*>/gi, "\n").replace(/<h\d[^>]*>/gi, "\n# ").replace(/<li[^>]*>/gi, "\n- ").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&");
+  hints = partyHints(text, hints);
+  return { blocks: blocksFromSections(sectionsFromLines(text.split(/\r?\n/)), kind, hints), theme: {}, images: [], text, pages: 0, source: "text" };
+}
+
+/** Field values the template uses that the deal doesn't fill (the seller types them). */
+export function docFreeTokens(blocks: DocBlock[]): string[] {
+  const all = new Set<string>();
+  const add = (s?: string) => tokensIn(String(s ?? "")).forEach((k) => { if (!k.startsWith("?")) all.add(k); });
+  blocks.forEach((b) => { add(b.eyebrow); add(b.title); add(b.body); (b.items ?? []).forEach((x) => { add(x.title); add(x.text); add(x.value); }); });
+  const known = (k: string) => k === "client.name" || isKnownToken(k) || DOC_EXTRA_TOKENS.some((t) => t.key.replace(/N/g, "") === k.replace(/\d+/g, "") || t.key === k);
+  return Array.from(all).filter((k) => !known(k));
+}
+/** Every token a set of blocks uses, in order of appearance. */
+export function docUsedTokens(blocks: DocBlock[]): string[] {
+  const out: string[] = [];
+  const add = (s?: string) => tokensIn(String(s ?? "")).forEach((k) => { if (!k.startsWith("?") && !out.includes(k)) out.push(k); });
+  blocks.forEach((b) => { add(b.eyebrow); add(b.title); add(b.body); (b.items ?? []).forEach((x) => { add(x.title); add(x.value); add(x.text); }); });
+  return out;
+}
+export const newDocBlock = (type: DocBlockType, kind: DocKind, lang: DocLang = "es"): DocBlock => {
+  const tpl = defaultDocTemplate(kind === "contract" && !["clauses", "parties", "schedule", "signature"].includes(type) ? "proposal" : kind, lang).blocks.find((b) => b.type === type)
+    ?? defaultDocTemplate(kind === "proposal" ? "contract" : "proposal", lang).blocks.find((b) => b.type === type);
+  const base: DocBlock = tpl ? JSON.parse(JSON.stringify(tpl)) : { id: "", type, title: docBlockMeta(type).label };
+  if (type === "team" && !base.items) base.items = [it("Nombre Apellido", "<p>Experiencia y papel en el proyecto.</p>", "Rol"), it("Nombre Apellido", "<p>Experiencia y papel en el proyecto.</p>", "Rol")];
+  if (type === "quote" && !base.body) { base.body = "<p>Con ellos cerramos el mes en la mitad de tiempo.</p>"; base.title = "Nombre Apellido"; base.eyebrow = "CFO, Empresa"; }
+  if (type === "image" && !base.title) base.title = "";
+  if (type === "text" && !tpl) { base.title = "Título"; base.body = "<p>Escribe aquí…</p>"; }
+  return { ...base, id: rid(), items: (base.items ?? []).map((x) => ({ ...x, id: rid() })) };
+};
+export const newDocItem = (): DocItem => it("", "");
+export const cloneBlock = (b: DocBlock): DocBlock => ({ ...JSON.parse(JSON.stringify(b)), id: rid(), items: (b.items ?? []).map((x) => ({ ...x, id: rid() })) });

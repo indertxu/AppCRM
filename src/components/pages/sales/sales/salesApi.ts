@@ -1,8 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { useEffect, useState } from "react";
 import { supabase } from "../../../api/supabase";
 import { syncEntryToOutlookDetailed, deleteEntryFromOutlook, meetingsGoneFromOutlook } from "../../../api/outlookSync";
 import type { Phase } from "../../settings/pipelineApi";
-import { calcBreakdown, discountOf, BASE_KEY, type Calculator, type CalcRow, type CalcDiscount } from "../../settings/catalogApi";
+import { calcBreakdown, discountOf, BASE_KEY, yearlySchedule, type Calculator, type CalcRow, type CalcDiscount } from "../../settings/catalogApi";
 import type { DeckEditOp } from "../trackings/proposalGen";
 
 /**
@@ -128,6 +129,66 @@ export interface RevenueLineFields {
   partner_id?: string | null;
   partner_mode?: "percent" | "amount" | string | null;
   partner_value?: number | null;
+  /** Yearly price increases of a multi-year recurring line (27_deal_contracts.sql). */
+  increments?: LineIncrements | null;
+}
+
+/**
+ * How a multi-year recurring line goes up each contract year.
+ *   pct    — every year `value`% over the year before (compounding)
+ *   fixed  — every year `value` € more than the year before
+ *   custom — `perYear[i]` is what year i+1 costs (year 1 is always the line's own price)
+ */
+export interface LineIncrements { mode: "none" | "pct" | "fixed" | "custom"; value?: number | null; perYear?: (number | null)[] | null }
+export const hasIncrements = (inc?: LineIncrements | null) =>
+  !!inc && inc.mode !== "none" && (inc.mode === "custom" ? (inc.perYear ?? []).some((v, i) => i > 0 && v != null && Number.isFinite(Number(v))) : !!Number(inc.value));
+
+/**
+ * What a recurring line costs in each contract year: year 1 is `firstYear`,
+ * the next ones follow the increments. A part year at the end (a 2.5-year term)
+ * is charged pro rata.
+ */
+export function yearAmounts(firstYear: number, years: number, inc?: LineIncrements | null): number[] {
+  const y = Math.max(0, Number(years) || 0);
+  const n = Math.max(1, Math.ceil(y - 1e-9));
+  const frac0 = y - Math.floor(y);
+  // % and € a year: the catalogue's own maths (settings/catalogApi yearlySchedule), so catalogue,
+  // calculator, contract and handoff always agree.
+  if (!inc || inc.mode === "none" || inc.mode === "pct" || inc.mode === "fixed") {
+    const out = yearlySchedule(firstYear, n, !inc || inc.mode === "none" ? "none" : inc.mode === "pct" ? "percent" : "amount", inc?.value ?? 0);
+    if (y > 0 && frac0 > 1e-9) out[out.length - 1] = Math.round(out[out.length - 1] * frac0 * 100) / 100;
+    return out;
+  }
+  // Each year typed by hand (year 1 is always the line's own price; a blank year repeats the one before).
+  const out: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const prev = i > 0 ? out[i - 1] : firstYear;
+    const c = i > 0 ? inc.perYear?.[i] : null;
+    const a = c != null && (c as any) !== "" && Number.isFinite(Number(c)) ? Number(c) : prev;
+    out.push(Math.round(a * 100) / 100);
+  }
+  // the last year is charged pro rata when the term ends part-way through it
+  if (y > 0 && frac0 > 1e-9) out[n - 1] = Math.round(out[n - 1] * frac0 * 100) / 100;
+  return out;
+}
+
+/** The yearly increase a catalogue product brings by default (Settings › Products: multi-year, % or € a year). */
+export function catalogIncrements(prod: { multi_year?: boolean; increment_mode?: string | null; increment_value?: number | null } | null | undefined): LineIncrements | null {
+  if (!prod?.multi_year || !prod.increment_mode || prod.increment_mode === "none" || !Number(prod.increment_value)) return null;
+  return { mode: prod.increment_mode === "percent" ? "pct" : "fixed", value: Number(prod.increment_value) || 0, perYear: [] };
+}
+/** The contract term a catalogue product starts with. */
+export const catalogYears = (prod: { multi_year?: boolean; default_years?: number | null } | null | undefined) =>
+  prod?.multi_year ? Math.max(1, Math.round(Number(prod.default_years) || 1)) : 1;
+
+/** Turn a line's increments into the client contract's payment terms (one term per contract year). */
+export function incrementsToSchedule(firstYear: number, years: number, inc?: LineIncrements | null): PaymentSchedule | null {
+  if (!hasIncrements(inc) || !(Number(years) > 1)) return null;
+  const full = yearAmounts(firstYear, Math.ceil(Number(years)), inc);
+  return {
+    count: full.length,
+    increases: full.map((a, i) => (i === 0 || !full[i - 1] ? 0 : Math.round(((a / full[i - 1]) - 1) * 10000) / 100)),
+  };
 }
 
 export interface PotentialService extends RevenueLineFields {
@@ -307,6 +368,7 @@ export type TermPatch = {
   calc_rates?: Record<string, number>;
   discount_mode?: "none" | "percent" | "amount"; discount_value?: number;
   partner_id?: string | null; partner_mode?: "percent" | "amount" | null; partner_value?: number | null;
+  increments?: LineIncrements | null;
   billing_contact_name?: string | null; billing_contact_email?: string | null;
   contact_ids?: string[];
 };
@@ -342,6 +404,8 @@ export interface LineBreakdown {
   partner: number;
   /** What is left for us: total − partner. This is what counts as deal value. */
   net: number;
+  /** What the client pays in each contract year (recurring lines); one entry with the total otherwise. */
+  years: number[];
 }
 
 /** What the partner on a line takes from `total`. */
@@ -418,6 +482,7 @@ export function lineBreakdown(l: RevenueLineFields, calculator?: Calculator | nu
   const qty = billableQty(rawQty, minUnit);
   let mult: number;
   let multiplierLabel: string;
+  let sched: number[] | null = null;
   if (l.recurring) {
     const perYear = l.period === "monthly" ? 12 : 1;
     const years = l.term_years == null ? 1 : Number(l.term_years) || 0;
@@ -425,6 +490,13 @@ export function lineBreakdown(l: RevenueLineFields, calculator?: Calculator | nu
     multiplierLabel = l.period === "monthly"
       ? `x 12 months x ${years} ${years === 1 ? "year" : "years"}`
       : `x ${years} ${years === 1 ? "year" : "years"}`;
+    if (years > 0) {
+      sched = yearAmounts(unitPrice * perYear, years, l.increments);
+      if (hasIncrements(l.increments) && years > 1) {
+        const inc = l.increments!;
+        multiplierLabel += inc.mode === "pct" ? ` · +${Number(inc.value) || 0}%/yr` : inc.mode === "fixed" ? ` · +${Number(inc.value) || 0} €/yr` : " · custom years";
+      }
+    }
   } else if (calculator?.output_kind === "quantity") {
     // The rows already include their own time, so there is nothing left to
     // multiply by.
@@ -436,12 +508,16 @@ export function lineBreakdown(l: RevenueLineFields, calculator?: Calculator | nu
     mult = qty;
     multiplierLabel = qty === 1 ? "" : `x ${qty}`;
   }
-  const total = unitPrice * mult;
+  const flat = unitPrice * mult;
+  // Yearly increases are added on top of the list price (the discount stays what it was).
+  const total = sched ? sched.reduce((a, b) => a + b, 0) : flat;
+  const extra = total - flat;
   const partner = partnerCutOf(l, total);
   return {
     rows: u.rows, rawQty, qty, unitGross: u.gross, unitDiscount: u.discount, unitPrice,
-    multiplierLabel, gross: u.gross * mult, discount: u.discount * mult, total,
+    multiplierLabel, gross: u.gross * mult + extra, discount: u.discount * mult, total,
     partner, net: total - partner,
+    years: sched ?? [total],
   };
 }
 
@@ -460,12 +536,17 @@ const SHARED_COLS = [
   "calc_values", "calc_discounts", "calc_rates", "discount_mode", "discount_value",
 ] as const;
 const PARTNER_COLS = ["partner_id", "partner_mode", "partner_value"] as const;
-const PRODUCT_COLS = [...SHARED_COLS, ...PARTNER_COLS, "tier_id"] as const;
+const PRODUCT_COLS = [...SHARED_COLS, ...PARTNER_COLS, "tier_id", "increments"] as const;
 const SERVICE_COLS = [...SHARED_COLS, ...PARTNER_COLS, "role_id", "billing_contact_name", "billing_contact_email", "contact_ids"] as const;
 
 /** Update a revenue line; if the partner columns aren't there yet (SQL 12 not run), save the rest anyway. */
 async function updateLine(table: "tracking_products" | "tracking_potential_services", id: string, row: Record<string, unknown>) {
   let { error } = await supabase.from(table).update(row).eq("id", id);
+  if (error && /increments/i.test(error.message) && "increments" in row) {
+    const rest = { ...row }; delete rest.increments;
+    ({ error } = Object.keys(rest).length ? await supabase.from(table).update(rest).eq("id", id) : { error: null } as any);
+    if (!error) return "Yearly increases not saved: run 27_deal_contracts.sql in Supabase.";
+  }
   if (error && /partner_/i.test(error.message) && PARTNER_COLS.some((k) => k in row)) {
     const rest = { ...row }; PARTNER_COLS.forEach((k) => delete rest[k]);
     ({ error } = Object.keys(rest).length ? await supabase.from(table).update(rest).eq("id", id) : { error: null } as any);
@@ -1326,7 +1407,7 @@ export async function buildClientPrefill(companyId: string, trackingId?: string)
   vatNumber: string;
   address: { street: string; number: string; details: string; postalCode: string; city: string; country: string };
   contacts: { id: string; sourceId: string | null; name: string; position: string; email: string; phone: string; billing: boolean }[];
-  products: { key: string; productId: string; name: string; price: number; quantity: number; recurring: boolean; period: string | null; termYears: number | null; discountMode: string | null; discountValue: number | null; tierId: string | null; calcValues: Record<string, number>; calcDiscounts: Record<string, any>; calcRates: Record<string, number>; signingDate: string; fromTracking: boolean }[];
+  products: { key: string; productId: string; name: string; price: number; quantity: number; recurring: boolean; period: string | null; termYears: number | null; discountMode: string | null; discountValue: number | null; tierId: string | null; calcValues: Record<string, number>; calcDiscounts: Record<string, any>; calcRates: Record<string, number>; increments: LineIncrements | null; lineId: string | null; signingDate: string; fromTracking: boolean }[];
 } | null> {
   const { data: co } = await supabase.from("companies").select("*").eq("id", companyId).maybeSingle();
   if (!co) return null;
@@ -1363,6 +1444,7 @@ export async function buildClientPrefill(companyId: string, trackingId?: string)
       calcValues: r.calc_values ?? {},
       calcDiscounts: r.calc_discounts ?? {},
       calcRates: r.calc_rates ?? {},
+      increments: r.increments ?? null, lineId: r.id ?? null,
       signingDate: today, fromTracking: true,
     }));
   }
@@ -1465,6 +1547,7 @@ export async function buildAttachPrefill(companyId: string, trackingId: string):
     discountMode: r.discount_mode ?? null, discountValue: r.discount_value ?? null,
     tierId: r.tier_id ?? null, calcValues: r.calc_values ?? {},
     calcDiscounts: r.calc_discounts ?? {}, calcRates: r.calc_rates ?? {},
+    increments: r.increments ?? null, lineId: r.id ?? null,
     signingDate: today, fromTracking: true,
   }));
 
@@ -1554,6 +1637,8 @@ export async function saveClientProducts(clientId: string, trackingId: string | 
   billingContactName?: string | null; billingContactEmail?: string | null;
   /** How a multi-year contract is paid: in `count` terms, each with its own increase over the one before. */
   schedule?: PaymentSchedule | null;
+  /** How the final price was built (rows, discounts, total) — shown on the client page (handoff_v3.sql). */
+  breakdown?: any;
 }[]): Promise<string | null> {
   if (!products.length) return null;
   const rows = products.map((p) => ({
@@ -1575,15 +1660,122 @@ export async function saveClientProducts(clientId: string, trackingId: string | 
     billing_contact_email: p.billingContactEmail ?? null,
     status: "active",
     ...(p.schedule ? { schedule: p.schedule } : {}),
+    ...(p.breakdown ? { breakdown: p.breakdown } : {}),
   }));
   let { error } = await supabase.from("client_products").insert(rows);
-  // client_terms.sql not run yet: save without the payment terms
-  if (error && /schedule/i.test(error.message)) ({ error } = await supabase.from("client_products").insert(rows.map((r: any) => { const c = { ...r }; delete c.schedule; return c; })));
+  // handoff_v3.sql / client_terms.sql not run yet: save without the breakdown / payment terms
+  if (error && /breakdown/i.test(error.message)) ({ error } = await supabase.from("client_products").insert(rows.map((r: any) => { const c = { ...r }; delete c.breakdown; return c; })));
+  if (error && /schedule/i.test(error.message)) ({ error } = await supabase.from("client_products").insert(rows.map((r: any) => { const c = { ...r }; delete c.schedule; delete c.breakdown; return c; })));
   return error?.message ?? null;
 }
 
 /** Payment terms of a signed product: the contract is paid in `count` equal terms; `increases[i]` is term i's % over the previous term (term 1 is usually 0). */
 export interface PaymentSchedule { count: number; increases: number[] }
+
+/* ============================ The contract of a won deal ============================ */
+/**
+ * A won deal's contract, kept in trackings.contract_terms (27_deal_contracts.sql).
+ * The contract panel writes it; the client's Contracts tab and the contract
+ * document generator read it — keep this shape (add fields, don't rename them).
+ *
+ *   signDate       day it was signed (defaults to the day the deal was won)
+ *   contractStart  day the contract starts, when it differs (optional)
+ *   termYears      signed term in years
+ *   increments     yearly increases of the recurring products (also stored per line)
+ *   license        products: list price, discount, final price (whole term), final first year
+ *   services       services (a one-off fee): list, discount, final
+ *   schedule       what the client pays each contract year (services fall in year 1)
+ *   lines          every line as signed: its final price and its yearly amounts
+ */
+export interface ContractTerms {
+  signDate: string | null;
+  contractStart: string | null;
+  termYears: number;
+  increments: LineIncrements;
+  paymentTermsDays?: number | null;
+  autoRenew?: boolean;
+  renewYears?: number | null;
+  nonTerminableYears?: number | null;
+  contractRef?: string | null;
+  notes?: string | null;
+  license: { list: number; discount: number; final: number; firstYear: number };
+  services: { list: number; discount: number; final: number };
+  schedule: { year: number; license: number; services: number; total: number }[];
+  total: number;
+  lines?: { id?: string | null; kind: "product" | "service"; name: string; list: number; discount: number; final: number; years: number[] }[];
+  updatedAt?: string;
+}
+export const EMPTY_INCREMENTS: LineIncrements = { mode: "none", value: 0, perYear: [] };
+
+/** The money side of a contract from its lines (what the client pays; partners don't change it). */
+export function contractFigures(lines: { id?: string | null; kind: "product" | "service"; name: string; bd: LineBreakdown }[]): Pick<ContractTerms, "license" | "services" | "schedule" | "total" | "lines"> {
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const prods = lines.filter((l) => l.kind === "product");
+  const svcs = lines.filter((l) => l.kind === "service");
+  const sum = (xs: typeof lines, f: (bd: LineBreakdown) => number) => xs.reduce((a, l) => a + f(l.bd), 0);
+  const nYears = Math.max(1, ...prods.map((l) => l.bd.years.length));
+  const schedule = Array.from({ length: nYears }, (_, i) => {
+    const license = r2(prods.reduce((a, l) => a + (l.bd.years[i] ?? 0), 0));
+    const services = i === 0 ? r2(sum(svcs, (b) => b.total)) : 0;
+    return { year: i + 1, license, services, total: r2(license + services) };
+  });
+  const license = { list: r2(sum(prods, (b) => b.gross)), discount: r2(sum(prods, (b) => b.discount)), final: r2(sum(prods, (b) => b.total)), firstYear: r2(prods.reduce((a, l) => a + (l.bd.years[0] ?? 0), 0)) };
+  const services = { list: r2(sum(svcs, (b) => b.gross)), discount: r2(sum(svcs, (b) => b.discount)), final: r2(sum(svcs, (b) => b.total)) };
+  return {
+    license, services, schedule, total: r2(license.final + services.final),
+    lines: lines.map((l) => ({ id: l.id ?? null, kind: l.kind, name: l.name, list: r2(l.bd.gross), discount: r2(l.bd.discount), final: r2(l.bd.total), years: l.bd.years.map(r2) })),
+  };
+}
+
+/** The contract saved on a deal. `missing` = the column isn't there yet (27_deal_contracts.sql). */
+export async function loadDealContract(trackingId: string): Promise<{ terms: ContractTerms | null; missing: boolean }> {
+  const { data, error } = await supabase.from("trackings").select("contract_terms").eq("id", trackingId).maybeSingle();
+  if (error) return { terms: null, missing: /contract_terms/i.test(error.message) };
+  const t = (data as any)?.contract_terms;
+  return { terms: t && typeof t === "object" ? (t as ContractTerms) : null, missing: false };
+}
+export async function saveDealContract(trackingId: string, terms: ContractTerms): Promise<string | null> {
+  const { error } = await supabase.from("trackings").update({ contract_terms: { ...terms, updatedAt: new Date().toISOString() } }).eq("id", trackingId);
+  if (error) return /contract_terms|schema cache/i.test(error.message) ? "Contract not saved: run 27_deal_contracts.sql in Supabase." : error.message;
+  return null;
+}
+/** Carry a deal's contract onto the products already signed on its client (dates, term, increases). */
+export async function applyContractToClientProducts(trackingId: string, terms: ContractTerms, items: { productId: string | null; termYears: number | null; recurring: boolean; schedule: PaymentSchedule | null; annualIncreasePct: number | null; price?: number; quantity?: number; breakdown?: any }[]): Promise<string | null> {
+  let firstErr: string | null = null;
+  for (const it of items) {
+    if (!it.productId) continue;
+    const row: Record<string, any> = {
+      signing_date: terms.signDate || null,
+      start_date: terms.contractStart || terms.signDate || null,
+      term_years: it.termYears,
+      annual_increase_pct: it.annualIncreasePct,
+      schedule: it.schedule,
+    };
+    // The final price as signed (calculator, tier price changed on the deal, discounts applied).
+    if (it.price != null) { row.price = it.price; row.quantity = it.quantity ?? 1; row.discount_mode = "none"; row.discount_value = 0; }
+    if (it.breakdown) row.breakdown = it.breakdown;
+    if (it.recurring) { row.auto_renew = !!terms.autoRenew; row.renew_years = terms.autoRenew ? terms.renewYears ?? it.termYears : null; }
+    if (terms.nonTerminableYears != null) row.non_terminable_years = terms.nonTerminableYears;
+    if (terms.paymentTermsDays != null) row.payment_terms_days = terms.paymentTermsDays;
+    if (terms.contractRef) row.contract_ref = terms.contractRef;
+    let { error } = await supabase.from("client_products").update(row).eq("tracking_id", trackingId).eq("product_id", it.productId);
+    if (error && /breakdown/i.test(error.message)) { delete row.breakdown; ({ error } = await supabase.from("client_products").update(row).eq("tracking_id", trackingId).eq("product_id", it.productId)); }
+    if (error && /schedule/i.test(error.message)) { delete row.schedule; delete row.breakdown; ({ error } = await supabase.from("client_products").update(row).eq("tracking_id", trackingId).eq("product_id", it.productId)); }
+    if (error && !firstErr) firstErr = error.message;
+  }
+  return firstErr;
+}
+
+/** The contracts of several deals (for the client's Contracts tab). */
+export async function loadDealContracts(trackingIds: string[]): Promise<Record<string, ContractTerms>> {
+  const ids = Array.from(new Set(trackingIds.filter(Boolean)));
+  if (!ids.length) return {};
+  const { data, error } = await supabase.from("trackings").select("id, contract_terms").in("id", ids);
+  if (error) return {};
+  const out: Record<string, ContractTerms> = {};
+  ((data ?? []) as any[]).forEach((r) => { if (r.contract_terms && typeof r.contract_terms === "object") out[r.id] = r.contract_terms; });
+  return out;
+}
 
 // Create one handoff row per destination pipeline.
 export async function createHandoffs(input: {
@@ -1671,21 +1863,92 @@ export async function loadPotentialTotals(pre?: {
   return potentialTotalsFromRows(trRows as any[], tpRows, svcRows, products as any[], services as any[]);
 }
 
-/** The rows behind the last totals, so the "this year only" view can be worked out without reading again. */
+/** The rows behind the last totals, so another revenue view can be worked out without reading again. */
 let lastTotalsRows: [any[], any[], any[], any[], any[]] | null = null;
 /**
  * Potential revenue per deal counting only one year of each recurring line
  * (a 3-year subscription counts its first year). Null until totals were loaded once.
  */
 export function yearTotalsFromLastRows(): Record<string, number> | null {
+  return totalsFromLastRows("all_year1");
+}
+/** Potential revenue per deal in a given view, from the rows read last. Null until totals were loaded once. */
+export function totalsFromLastRows(mode: RevenueMode): Record<string, number> | null {
   if (!lastTotalsRows) return null;
   const [tr, tp, svc, products, services] = lastTotalsRows;
-  const oneYear = (rows: any[]) => rows.map((l) => (l.recurring && Number(l.term_years) > 1 ? { ...l, term_years: 1 } : l));
-  return potentialTotalsFromRows(tr, oneYear(tp), oneYear(svc), products, services, true);
+  return potentialTotalsFromRows(tr, tp, svc, products, services, true, mode);
+}
+
+/* ============================ Potential revenue: which figure ============================
+   Services are a fixed fee; products can run for several years. Which figure a deal is
+   "worth" is a team setting (Settings › Deals), and anyone can switch the view for themselves. */
+export type RevenueMode = "product_year1" | "product_term" | "all_year1" | "all_term";
+export const REVENUE_MODES: { value: RevenueMode; label: string; short: string; hint: string }[] = [
+  { value: "product_year1", label: "Product · first year", short: "Product · year 1", hint: "What the products bring in their first contract year. Services left out." },
+  { value: "product_term", label: "Product · all years", short: "Product · all years", hint: "Every contract year of the products, increases included. Services left out." },
+  { value: "all_year1", label: "Product + services · first year", short: "+ services · year 1", hint: "The products' first year plus the services (a one-off fee)." },
+  { value: "all_term", label: "Product + services · whole term", short: "+ services · all years", hint: "Every contract year of the products plus the services." },
+];
+export const DEFAULT_REVENUE_MODE: RevenueMode = "product_year1";
+const isMode = (v: any): v is RevenueMode => REVENUE_MODES.some((m) => m.value === v);
+export const revenueModeLabel = (m: RevenueMode) => REVENUE_MODES.find((x) => x.value === m)?.label ?? m;
+
+/** What one line adds to the deal's potential revenue in a view (after the partner's cut). */
+export function lineRevenue(kind: "product" | "service", bd: LineBreakdown, mode: RevenueMode): number {
+  if (kind === "service") return mode === "all_year1" || mode === "all_term" ? bd.net : 0;
+  if (mode === "product_term" || mode === "all_term") return bd.net;
+  const share = bd.total ? bd.net / bd.total : 1;
+  return (bd.years[0] ?? bd.total) * share;
+}
+
+let teamRevenueMode: RevenueMode = DEFAULT_REVENUE_MODE;
+let teamModeLoaded: Promise<RevenueMode> | null = null;
+const MODE_EVENT = "next:revenue-mode";
+const LOCAL_MODE_KEY = "sales.revenueMode";
+/** This viewer's own choice (null = the team's setting). */
+export function localRevenueMode(): RevenueMode | null {
+  try { const v = localStorage.getItem(LOCAL_MODE_KEY); return isMode(v) ? v : null; } catch { return null; }
+}
+/** The view in use right now: the viewer's own choice, else the team's. */
+export const currentRevenueMode = (): RevenueMode => localRevenueMode() ?? teamRevenueMode;
+export const teamRevenueModeNow = () => teamRevenueMode;
+/** Read the team's setting once per visit (deal_settings, 27_deal_contracts.sql). */
+export function loadRevenueMode(fresh = false): Promise<RevenueMode> {
+  if (!fresh && teamModeLoaded) return teamModeLoaded;
+  teamModeLoaded = Promise.resolve(supabase.from("deal_settings").select("revenue_mode").maybeSingle()).then(({ data, error }: any) => {
+    const v = !error && isMode(data?.revenue_mode) ? data.revenue_mode : DEFAULT_REVENUE_MODE;
+    if (v !== teamRevenueMode) { teamRevenueMode = v; try { window.dispatchEvent(new Event(MODE_EVENT)); } catch { /* no window */ } }
+    return v;
+  }, () => DEFAULT_REVENUE_MODE);
+  return teamModeLoaded;
+}
+/** Save the team's setting. */
+export async function saveRevenueMode(m: RevenueMode): Promise<string | null> {
+  const { error } = await supabase.from("deal_settings").upsert({ revenue_mode: m, updated_at: new Date().toISOString() }, { onConflict: "tenant_id" });
+  if (error) return /relation|does not exist|schema cache/i.test(error.message) ? "Run 27_deal_contracts.sql in Supabase first." : error.message;
+  teamRevenueMode = m; teamModeLoaded = Promise.resolve(m);
+  try { window.dispatchEvent(new Event(MODE_EVENT)); } catch { /* no window */ }
+  return null;
+}
+/** Switch the view for this viewer only (null = back to the team's setting). */
+export function setLocalRevenueMode(m: RevenueMode | null) {
+  try { if (m) localStorage.setItem(LOCAL_MODE_KEY, m); else localStorage.removeItem(LOCAL_MODE_KEY); } catch { /* private mode */ }
+  try { window.dispatchEvent(new Event(MODE_EVENT)); } catch { /* no window */ }
+}
+/** The revenue view in use, following changes made anywhere on the page. */
+export function useRevenueMode(): [RevenueMode, (m: RevenueMode | null) => void] {
+  const [m, setM] = useState<RevenueMode>(currentRevenueMode);
+  useEffect(() => {
+    const on = () => setM(currentRevenueMode());
+    window.addEventListener(MODE_EVENT, on);
+    loadRevenueMode().then(on).catch(() => {});
+    return () => window.removeEventListener(MODE_EVENT, on);
+  }, []);
+  return [m, setLocalRevenueMode];
 }
 
 /** Potential revenue per deal from rows already read (deals, product and service lines, catalog). */
-export function potentialTotalsFromRows(trRows: any[], tpRows: any[], svcRows: any[], products: any[], services: any[], noCache = false): Record<string, number> {
+export function potentialTotalsFromRows(trRows: any[], tpRows: any[], svcRows: any[], products: any[], services: any[], noCache = false, mode: RevenueMode = currentRevenueMode()): Record<string, number> {
   if (!noCache) lastTotalsRows = [trRows, tpRows, svcRows, products, services];
   const tr = { data: trRows }, tp = { data: tpRows }, svc = { data: svcRows };
   const prodById = new Map<string, any>((products as any[]).map((p) => [p.id, p]));
@@ -1699,13 +1962,13 @@ export function potentialTotalsFromRows(trRows: any[], tpRows: any[], svcRows: a
     withLines.add(l.tracking_id);
     const prod = prodById.get(l.product_id);
     const base = prod?.tiers?.find((x: any) => x.id === l.tier_id)?.price;
-    totals[l.tracking_id] = (totals[l.tracking_id] ?? 0) + lineTotal(l, (prod?.calculator ?? null) as Calculator | null, base);
+    totals[l.tracking_id] = (totals[l.tracking_id] ?? 0) + lineRevenue("product", lineBreakdown(l, (prod?.calculator ?? null) as Calculator | null, base), mode);
   });
   ((svc.data ?? []) as any[]).filter(isActive).forEach((l) => {
     if (!l.tracking_id) return;
     const sv = svcById.get(l.service_id);
     const minUnit = sv?.min_unit ?? (sv?.rate_unit === "hour" ? 0.5 : 0.25);
-    totals[l.tracking_id] = (totals[l.tracking_id] ?? 0) + lineTotal(l, (sv?.calculator ?? null) as Calculator | null, undefined, minUnit);
+    totals[l.tracking_id] = (totals[l.tracking_id] ?? 0) + lineRevenue("service", lineBreakdown(l, (sv?.calculator ?? null) as Calculator | null, undefined, minUnit), mode);
   });
   // Very old deals with no product lines yet: keep their single legacy price.
   ((tr.data ?? []) as any[]).forEach((t) => {

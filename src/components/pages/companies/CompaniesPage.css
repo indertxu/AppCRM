@@ -1459,3 +1459,38 @@ button.co-cc-main { padding: 0; border: 0; background: none; font: inherit; text
 .rqf-item.is-locked { cursor: default; background: #f6f9f7; border-style: dashed; }
 .rqf-item.is-locked .rqf-sw { background: #9fc9b6; }
 .rqf-item.is-busy { opacity: 0.6; cursor: progress; }
+
+/* ---- Your own list entries: rename in place ---- */
+.cf-opt .cf-opt-edit { opacity: 0; width: 0; margin-left: -4px; overflow: hidden; transition: opacity .16s ease, width .16s ease, margin .16s ease, background .15s; }
+.cf-opt:hover .cf-opt-edit, .cf-opt:focus-within .cf-opt-edit { opacity: 1; width: 20px; margin-left: 2px; }
+.cf-opt .cf-opt-edit:hover { background: var(--dw-em, #0a6f4d); color: #fff; }
+.cf-opt .cf-opt-edit svg { width: 11px; height: 11px; }
+.cf-opt.is-editing { gap: 5px; padding: 0 4px 0 4px; background: #fff; box-shadow: 0 0 0 1.5px var(--dw-em, #0a6f4d), 0 6px 16px -8px rgba(10, 111, 77, 0.45); animation: cf-opt-pop .22s cubic-bezier(.34, 1.56, .64, 1); }
+.cf-opt.is-editing input { height: 22px; min-width: 70px; padding: 0 8px; border: 0; border-radius: 999px; background: #f1f7f4; color: #10392b; font: inherit; font-size: 12.5px; font-weight: 600; outline: none; }
+.cf-opt.is-editing button { width: auto; height: 22px; padding: 0 9px; border-radius: 999px; background: #eef2f0; color: #49605a; font-size: 11px; font-weight: 700; }
+.cf-opt.is-editing button.is-yes { background: var(--dw-em, #0a6f4d); color: #fff; }
+.cf-opt.is-editing button.is-yes:hover { background: #075a3e; }
+.cf-opt.is-editing button:not(.is-yes):hover { background: #dfe6e3; color: #10392b; }
+.cf-opt.is-editing button:disabled { opacity: .55; cursor: default; }
+@keyframes cf-opt-pop { from { transform: scale(.94); } to { transform: none; } }
+
+/* ---- Types a contact gets from its companies (Contacts list + panel) ---- */
+.co-rel.co-rel-inh { display: inline-flex; align-items: center; gap: 4px; background: #f3effd; color: #6d3fd6; box-shadow: inset 0 0 0 1px rgba(109, 63, 214, 0.14); }
+.co-rel.co-rel-inh svg { width: 10px; height: 10px; flex: none; opacity: .75; }
+.co-rel.co-rel-inh.is-crm { background: #eef3f1; color: #46605a; box-shadow: inset 0 0 0 1px rgba(16, 57, 43, 0.1); }
+.co-rel.co-rel-inh-more { background: #f1f5f3; color: #6a7f78; box-shadow: none; }
+.dw-tag.is-inh { background: rgba(255, 255, 255, 0.12); border: 1px dashed rgba(255, 255, 255, 0.35); }
+.dw-tag.is-inh small { margin-left: 4px; font-size: 10.5px; font-weight: 500; opacity: .7; }
+.ct-lid .co-rel.co-rel-inh { flex-shrink: 0; max-width: 130px; overflow: visible; }
+.co-rel.co-rel-inh > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- Types column (Companies + Contacts): CRM · Client · In sales · your own ---- */
+.co-types { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
+.co-types .co-rel { margin: 0; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.co-types .co-rel.co-rel-inh.is-crm { box-shadow: inset 0 0 0 1px rgba(16, 57, 43, 0.1); }
+
+/* ---- New custom field: options one by one ---- */
+.cfe-opts .cfe-ed-opts.is-new { margin-top: 8px; }
+.cfe-opts .cfe-ed-opts input { margin-top: 0; }
+.cfe-ed-opts.is-new ul { animation: cfeOptIn .25s cubic-bezier(.16,1,.3,1); }
+@keyframes cfeOptIn { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }

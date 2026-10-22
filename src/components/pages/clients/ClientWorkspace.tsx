@@ -8,7 +8,7 @@ import { supabase } from "../../api/supabase";
 import ClientDirectory, { copyIntoClientFolders } from "./ClientDirectory";
 import { ClientUpsells } from "./ClientsPage";
 import MentionInput, { type MentionPerson } from "../../framework/MentionInput";
-import { addTask, toggleTask, updateTaskMeta, saveClientProducts, type PaymentSchedule, type TaskPriority, type TrackTask } from "../sales/sales/salesApi";
+import { addTask, toggleTask, updateTaskMeta, saveClientProducts, loadDealContracts, type ContractTerms, type PaymentSchedule, type TaskPriority, type TrackTask } from "../sales/sales/salesApi";
 import { loadProducts, type Product as CatalogProduct } from "../settings/catalogApi";
 import { listCompanyFields, listContactFields, sessionUserId, saveContact, useRequiredFields, type CompanyField, type ContactField } from "../companies/companiesApi";
 import { countryLabel, formatAddress, languageName, linkedInHandle, isFixedRequired, missingFixed } from "../contacts/contactProfile";
@@ -772,6 +772,15 @@ export default function ClientWorkspace({
   const [calendar, setCalendar] = useState<Touch[]>([]);
   const [lines, setLines] = useState<Line[]>([]);
   const [deals, setDeals] = useState<Deal[]>([]);
+  /** The contracts signed with the deals behind these products (set on the deal's contract panel). */
+  const [dealContracts, setDealContracts] = useState<Record<string, ContractTerms>>({});
+  const contractDealKey = Array.from(new Set(lines.map((l) => String(l.tracking_id ?? "")).filter(Boolean))).sort().join(",");
+  useEffect(() => {
+    if (!contractDealKey) { setDealContracts({}); return; }
+    let alive = true;
+    loadDealContracts(contractDealKey.split(",")).then((x) => { if (alive) setDealContracts(x); }).catch(() => {});
+    return () => { alive = false; };
+  }, [contractDealKey]);
   const [saleTasks, setTasks] = useState<Task[]>([]);
   /** The client's own tasks, made once it is a client (client_tasks, handoff_v2.sql). */
   const [clientTasks, setClientTasks] = useState<Task[]>([]);
@@ -2120,6 +2129,42 @@ export default function ClientWorkspace({
                     <small>{nextRenewal ? `in ${nextRenewal.left} days` : "No term on file"}</small>
                   </div>
                 </div>
+
+                {Object.entries(dealContracts).map(([tid, ct]) => {
+                  const maxY = Math.max(1, ...(ct.schedule ?? []).map((y) => Number(y.total) || 0));
+                  const inc = ct.increments;
+                  const incTxt = !inc || inc.mode === "none" ? "No yearly increase" : inc.mode === "pct" ? `+${Number(inc.value) || 0}% a year` : inc.mode === "fixed" ? `+${eur(Number(inc.value) || 0)} a year` : "Set year by year";
+                  return (
+                    <section className="cw-card cw-ct" data-sec="contract-terms" key={tid}>
+                      <SecHead icon="contract" tone="green" title={`Contract · ${dealName(tid)}`} sub={`${ct.termYears || 1} ${(ct.termYears || 1) === 1 ? "year" : "years"} · ${incTxt}`} />
+                      <div className="cw-ct-facts">
+                        <span><i>Signed</i>{ct.signDate ? fmt(ct.signDate) : "—"}</span>
+                        <span><i>Starts</i>{fmt(ct.contractStart || ct.signDate)}</span>
+                        {ct.paymentTermsDays != null && <span><i>Payment</i>{ct.paymentTermsDays} days</span>}
+                        {ct.autoRenew && <span><i>Renews</i>{ct.renewYears ? `every ${ct.renewYears}y` : "Yes"}</span>}
+                        {ct.nonTerminableYears ? <span><i>Non-terminable</i>{ct.nonTerminableYears}y</span> : null}
+                        {ct.contractRef && <span><i>Ref</i>{ct.contractRef}</span>}
+                      </div>
+                      <div className="cw-ct-money">
+                        <div className="is-lic"><small>Final licence</small><b>{eur(ct.license?.final ?? 0)}</b><em>Year 1 {eur(ct.license?.firstYear ?? 0)}{ct.license?.discount ? ` · −${eur(ct.license.discount)} discount` : ""}</em></div>
+                        <div className="is-svc"><small>Final services</small><b>{eur(ct.services?.final ?? 0)}</b><em>One-off fee{ct.services?.discount ? ` · −${eur(ct.services.discount)} discount` : ""}</em></div>
+                        <div className="is-tot"><small>Contract total</small><b>{eur(ct.total ?? 0)}</b></div>
+                      </div>
+                      {(ct.schedule ?? []).length > 0 && (
+                        <div className="cw-ct-years">
+                          {(ct.schedule ?? []).map((y) => (
+                            <div key={y.year} className="cw-ct-year">
+                              <span>Year {y.year}</span>
+                              <span className="cw-ct-bar"><i className="is-lic" style={{ width: `${(y.license / maxY) * 100}%` }} /><i className="is-svc" style={{ width: `${(y.services / maxY) * 100}%` }} /></span>
+                              <b>{eur(y.total)}</b>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {ct.notes && <p className="cw-ct-notes">{ct.notes}</p>}
+                    </section>
+                  );
+                })}
 
                 <section className="cw-card" data-sec="products">
                   <SecHead icon="contract" tone="violet" title="Signed products" sub={lines.length ? `${activeLines.length} active` : "Added when a deal is won, or by hand"}>

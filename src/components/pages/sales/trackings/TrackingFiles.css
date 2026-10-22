@@ -420,3 +420,33 @@
 .tf-cell { min-width: 0; }
 .tf-cell-open { box-sizing: border-box; padding-right: 28px; }
 .tf-cell-info { overflow: hidden; }
+
+/* ── Proposal / contract studio (.dss-*; the builder itself is .dxb-* in ProposalTemplateEditor.css) ── */
+.dss-load { position: fixed; inset: 0; z-index: 2147482000; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: rgba(233, 240, 237, 0.92); backdrop-filter: blur(6px); font-family: "Space Grotesk", sans-serif; color: #0b241a; animation: dss-in 0.2s ease; }
+.dss-spin { width: 36px; height: 36px; border-radius: 50%; border: 3px solid rgba(10, 111, 77, 0.2); border-top-color: #12b57f; animation: dss-rot 0.7s linear infinite; }
+@keyframes dss-rot { to { transform: rotate(360deg); } }
+@keyframes dss-in { from { opacity: 0; } }
+.dss-head { display: flex; align-items: center; gap: 14px; min-width: 0; flex: 1; }
+.dss-kind button { padding: 8px 14px; font-size: 13px; }
+.dss-tpl { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.dss-tpl > span { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: #5a7d6d; white-space: nowrap; }
+.dss-tpl > span svg { width: 14px; height: 14px; }
+.dss-tpl > :last-child { min-width: 180px; }
+@media (max-width: 1100px) { .dss-tpl > span { display: none; } .dss-head .dxb-title { display: none; } }
+.dss-menu { position: relative; }
+.dss-menu .dxb-btn svg:last-child { width: 13px; height: 13px; margin-left: -2px; }
+.dss-pop { position: absolute; right: 0; top: calc(100% + 8px); z-index: 10; width: 310px; padding: 6px; border-radius: 16px; background: #fff; border: 1px solid rgba(10, 111, 77, 0.14);
+  box-shadow: 0 30px 60px -24px rgba(10, 40, 30, 0.45); animation: dss-pop 0.22s cubic-bezier(0.2, 0.8, 0.2, 1.1); transform-origin: top right; }
+@keyframes dss-pop { from { opacity: 0; transform: translateY(-6px) scale(0.97); } }
+.dss-pop button { width: 100%; display: flex; align-items: flex-start; gap: 11px; padding: 10px 11px; border: 0; background: none; border-radius: 11px; text-align: left; cursor: pointer; color: #0b241a; font-family: "Inter", system-ui, sans-serif; transition: background 0.14s; }
+.dss-pop button:hover { background: rgba(18, 181, 127, 0.08); }
+.dss-pop button > svg { width: 18px; height: 18px; flex: none; margin-top: 1px; color: #0a6f4d; }
+.dss-pop b { display: block; font-size: 13px; font-weight: 600; }
+.dss-pop i { display: block; font-style: normal; font-size: 11.8px; color: #5a7d6d; }
+.dss-pop hr { border: 0; border-top: 1px solid rgba(10, 111, 77, 0.1); margin: 4px 8px; }
+.dss-save { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; }
+.dss-save i { width: 7px; height: 7px; border-radius: 50%; background: #9db8ac; }
+.dss-save.is-saving i { background: #e0a526; animation: dss-blink 0.9s ease infinite; }
+.dss-save.is-saved { color: #0a6f4d; } .dss-save.is-saved i { background: #12b57f; }
+.dss-save.is-error { color: #9c3a3a; } .dss-save.is-error i { background: #c45252; }
+@keyframes dss-blink { 50% { opacity: 0.3; } }

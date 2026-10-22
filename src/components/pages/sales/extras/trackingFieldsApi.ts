@@ -64,6 +64,29 @@ export async function reorderTrackingFields(ids: string[]): Promise<string | nul
   return null;
 }
 
+/**
+ * A dropdown option renamed in the field editor: every deal that had the old
+ * value gets the new one (deals keep their values keyed by the field id).
+ * Also follows a value stored as a list, in case a field ever held several.
+ */
+export async function renameTrackingValue(fieldId: string, from: string, to: string): Promise<string | null> {
+  if (!from || from === to) return null;
+  const [one, many] = await Promise.all([
+    supabase.from("trackings").select("id, custom").eq(`custom->>${fieldId}`, from).range(0, 49999),
+    supabase.from("trackings").select("id, custom").contains("custom", { [fieldId]: [from] }).range(0, 49999),
+  ]);
+  if (one.error) return one.error.message;
+  const rows = new Map<string, any>();
+  [...(one.data ?? []), ...(many.error ? [] : many.data ?? [])].forEach((r: any) => rows.set(r.id, r));
+  for (const r of rows.values()) {
+    const cur = (r.custom ?? {})[fieldId];
+    const next = Array.isArray(cur) ? [...new Set(cur.map((x: any) => (x === from ? to : x)))] : to;
+    const { error } = await supabase.from("trackings").update({ custom: { ...(r.custom ?? {}), [fieldId]: next } }).eq("id", r.id);
+    if (error) return error.message;
+  }
+  return null;
+}
+
 /** Replace the custom values of one deal. */
 export async function saveTrackingCustom(trackingId: string, custom: Record<string, any>): Promise<string | null> {
   const { error } = await supabase.from("trackings").update({ custom: cleanCustom(custom) }).eq("id", trackingId);

@@ -21,9 +21,10 @@ const MEETING_KINDS: { value: MeetingKind; label: string; icon: JSX.Element }[] 
 
 const cleanMentionsFn = (t: string) => t.replace(/@\[([^\]]+)\]\([^)]+\)/g, "@$1");
 import { supabase } from "../../../api/supabase";
-import HandoffClientForm from "./HandoffClientForm";
+import HandoffClientForm, { ContractPanel, type ContractPanelLine } from "./HandoffClientForm";
 import HandoffConfirmServices, { HxPrompt, destFolder, type ConfirmService, type ConfirmProduct, type ConfirmClient, type HandoffExtras, type HandoffDoc, type HandoffPackage } from "./HandoffConfirmServices";
 import TrackingFiles, { LineDocs, loadAllTrackingFiles, uploadTrackingFile, openTrackingFile, FileIcon, kindOf } from "./TrackingFiles";
+import { DocStudio } from "./TrackingFiles";
 import TrackingFieldsPanel, { FoldPanel } from "../extras/TrackingFieldsPanel";
 import HandoverConfirm from "./HandoverConfirm";
 import { planHandover, performHandover, rolesFor, resolveDealRole, saveDealRoles, orderPhases, type SalesRole, type HandoverPlan } from "../extras/salesRolesApi";
@@ -61,6 +62,7 @@ import {
   TASK_PRIORITIES, loadTaskTemplates, fromTemplate, type TaskPriority, type TaskKind, type MyTask, type TaskTemplate, type TaskStep,
   type Tracking, type TrackNote, type TrackTask, type TrackMeeting, type MeetingKind, type PhaseEvent, type PotentialService, type Assignee,
   type TrackingProduct, type TermPatch, type RevenueLineFields,
+  useRevenueMode, lineRevenue, REVENUE_MODES, catalogYears, catalogIncrements, loadDealContract, saveDealContract, applyContractToClientProducts, incrementsToSchedule, type ContractTerms, type RevenueMode,
   listDealProposals, saveDealProposal, deleteDealProposal, setMainProposal, saveProposalDoc, type DealProposal, type ProposalLine, type ProposalDoc,
 } from "../sales/salesApi";
 
@@ -267,8 +269,8 @@ function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onGe
   reloadKey: number;
   /** The built-in generator (order form PDF; PPT when there is no deck). */
   onGenerate: (p: DealProposal, kind: "pptx" | "pdf") => void;
-  /** Opens the proposal in the deck studio. */
-  onStudio: (p: DealProposal) => void;
+  /** Opens the proposal (web page / PDF) or its contract in the document studio. */
+  onStudio: (p: DealProposal, kind?: "proposal" | "contract") => void;
   /** After a proposal became the main one: its versions are now the active ones. */
   onMain: (p: DealProposal) => void;
 }) {
@@ -396,14 +398,14 @@ function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onGe
                 {!p.is_main && <button type="button" className="sl-rv-tool" onClick={() => makeMain(p)} title="Its total becomes the deal value and it is what goes to the handoff"><PIco d="star" />Make main</button>}
                 <button type="button" className="sl-rv-tool" onClick={() => startEdit(p)}><PIco d="edit" />Edit</button>
                 <span className="sl-rv-spacer" />
-                {hasDeck ? (
-                  <button type="button" className="sl-prop-deck" disabled={!!busy || !f.picked.length} onClick={() => onStudio(p)}
-                    title="Fill and edit the company deck for this proposal, then download it">
-                    {busy === `${p.id}:studio` ? <span className="sl-prop-spin" /> : <PIco d="deck" />}Deck
-                  </button>
-                ) : (
-                  <button type="button" className="sl-rv-tool is-calc" disabled={!!busy || !f.picked.length} onClick={() => onGenerate(p, "pptx")}>{busy === `${p.id}:pptx` ? <span className="sl-prop-spin" /> : <PIco d="file" />}PPT</button>
-                )}
+                <button type="button" className="sl-prop-deck" disabled={!!busy || !f.picked.length} onClick={() => onStudio(p, "proposal")}
+                  title="Build this proposal from your template: an interactive web page and a PDF">
+                  {busy === `${p.id}:studio` ? <span className="sl-prop-spin" /> : <PIco d="deck" />}Proposal
+                </button>
+                <button type="button" className="sl-rv-tool is-calc" disabled={!!busy || !f.picked.length} onClick={() => onStudio(p, "contract")}
+                  title="Build the contract from your contract template and the deal's contract terms">
+                  {busy === `${p.id}:contract` ? <span className="sl-prop-spin" /> : <PIco d="file" />}Contract
+                </button>
                 <button type="button" className="sl-rv-tool is-calc" disabled={!!busy || !f.picked.length} onClick={() => onGenerate(p, "pdf")} title="Order form (PDF)">{busy === `${p.id}:pdf` ? <span className="sl-prop-spin" /> : <PIco d="file" />}PDF</button>
                 {delAsk === p.id ? (
                   <span className="sl-prop-del">
@@ -1566,13 +1568,43 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   const [clientDone, setClientDone] = useState(false);
   const [clientBusy, setClientBusy] = useState(false);
   const [attachClientId, setAttachClientId] = useState<string | null>(null);
+  /** The deal's contract (trackings.contract_terms): loaded when a contract step opens. */
+  const [contractInit, setContractInit] = useState<ContractTerms | null>(null);
+  const [contractMissing, setContractMissing] = useState(false);
+  /** The contract panel opened on its own: from the deal ("deal"), or as the handoff's step 2 ("handoff"). */
+  const [contractOpen, setContractOpen] = useState<null | "deal" | "handoff">(null);
+  const [contractBusy, setContractBusy] = useState(false);
+  const [contractErr, setContractErr] = useState<string | null>(null);
+  const loadContractInit = async () => {
+    const r = await loadDealContract(tracking.id).catch(() => ({ terms: null, missing: false }));
+    setContractInit(r.terms); setContractMissing(r.missing);
+    return r.terms;
+  };
+  // A won deal shows whether its contract is set up.
+  useEffect(() => { if (status === "won") void loadContractInit(); }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
+  /** Keep the contract set in the client form on the deal (not fatal when the column isn't there yet). */
+  const keepContract = async (terms: ContractTerms | undefined) => {
+    if (!terms) return;
+    const err = await saveDealContract(tracking.id, terms).catch((e) => String(e));
+    if (err) console.warn("contract not saved on the deal:", err);
+    else setContractInit(terms);
+  };
+  /** A signed product's payment terms from its yearly increases. */
+  const scheduleOfProduct = (p: any) => {
+    if (p.schedule !== undefined) return p.schedule ?? null;
+    if (!p.recurring || !(Number(p.termYears) > 1)) return null;
+    const bd = lineBreakdown({ price: p.price, quantity: p.quantity, recurring: p.recurring, period: p.period, term_years: p.termYears, calc_values: p.calcValues, calc_discounts: p.calcDiscounts, calc_rates: p.calcRates, tier_id: p.tierId, increments: p.increments }, productOf(p.productId)?.calculator as Calculator | null, productOf(p.productId)?.tiers?.find((x) => x.id === p.tierId)?.price);
+    return incrementsToSchedule(bd.years[0] ?? 0, Number(p.termYears), p.increments);
+  };
 
   // Save the client + project from the form, then fire the deferred handoff.
   const saveClientAndHandoff = async (data: {
     client: { name: string; legalName: string; vatNumber: string; address: any; contacts: any[] };
     products: any[];
+    contract?: ContractTerms;
   }) => {
    try {
+    await keepContract(data.contract);
     // One client per company: reuse the one already on file (same company, or same name / VAT)
     // instead of creating a duplicate — it keeps its name; only blanks are filled in.
     const known = matchClient(await loadClientIndex(), { companyId: tracking.company_id, name: data.client.name || data.client.legalName, vat: data.client.vatNumber });
@@ -1605,6 +1637,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
       paymentTermsDays: p.paymentTermsDays, contractRef: p.contractRef, externalRef: p.externalRef,
       billingContactName: data.client.contacts.find((c: any) => c.id === p.billingContactId)?.name ?? null,
       billingContactEmail: data.client.contacts.find((c: any) => c.id === p.billingContactId)?.email ?? null,
+      schedule: scheduleOfProduct(p), breakdown: p.breakdown ?? null,
     })));
     if (pErr) { alert(`Client created, but products failed: ${pErr}`); }
 
@@ -1636,8 +1669,10 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     client: { name: string; legalName: string; vatNumber: string; address: any; contacts: any[] };
     products: any[];
     reviseDetails: boolean;
+    contract?: ContractTerms;
   }) => {
    try {
+    await keepContract(data.contract);
     const clientId = attachClientId;
     if (!clientId) { alert("No existing client to attach to."); return; }
 
@@ -1664,6 +1699,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
       paymentTermsDays: p.paymentTermsDays, contractRef: p.contractRef, externalRef: p.externalRef,
       billingContactName: data.client.contacts.find((c: any) => c.id === p.billingContactId)?.name ?? null,
       billingContactEmail: data.client.contacts.find((c: any) => c.id === p.billingContactId)?.email ?? null,
+      schedule: scheduleOfProduct(p), breakdown: p.breakdown ?? null,
     })));
     if (pErr) { alert(`Products failed to save: ${pErr}`); }
 
@@ -1751,6 +1787,8 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   const [mgrDate, setMgrDate] = useState<string>(tracking.mgr_close_date ?? "");
   /** The day it was actually closed (won / lost). The database stamps it when the status changes; we mirror that here. */
   const [closedOn, setClosedOn] = useState<string>(tracking.close_date ?? "");
+  /** Which figure "potential revenue" shows (team setting; anyone can switch their own view). */
+  const [revMode, setRevMode] = useRevenueMode();
   const prevStatus = useRef(tracking.status);
   useEffect(() => {
     const was = prevStatus.current; prevStatus.current = status;
@@ -1956,6 +1994,23 @@ export default function TrackingDetail({ tracking, companies, contacts, products
       const rest = xs.filter((x) => x.phase_id !== phaseId);
       return [...rest, ev ?? { id: `tmp-${phaseId}`, phase_id: phaseId, entered_at: iso }];
     });
+    // The day the deal reached Won (or Lost) IS its close date: one date, shown everywhere.
+    const closing = (status === "won" && phaseId === winPhase?.id) || (status === "lost" && phaseId === lossPhase?.id);
+    if (closing && day !== closedOn) {
+      setClosedOn(day); tracking.close_date = day;
+      setDealClosedOn(tracking.id, day).catch(() => {});
+    }
+  };
+  /** Change the close date by hand: the Won / Lost step of the timeline follows. */
+  const changeClosedOn = (v: string) => {
+    setClosedOn(v); tracking.close_date = v || null;
+    setDealClosedOn(tracking.id, v || null).catch(() => {});
+    const ph = status === "won" ? winPhase : status === "lost" ? lossPhase : null;
+    if (v && ph && events.some((x) => x.phase_id === ph.id)) {
+      const iso = new Date(`${v}T12:00:00`).toISOString();
+      setEvents((xs) => xs.map((x) => (x.phase_id === ph.id ? { ...x, entered_at: iso } : x)));
+      setPhaseEntryDate(tracking.id, ph.id, iso).catch(() => {});
+    }
   };
 
   // Move to a phase. Past the last phase a sales role sees, the deal is handed
@@ -2178,7 +2233,6 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   const urgentCount = tasks.filter((t) => !t.done && t.priority === "urgent").length;
 
   // ---- Proposal generation (PPT / PDF) ----
-  const [propMenu, setPropMenu] = useState(false);
   const [propBusy, setPropBusy] = useState<null | "pptx" | "pdf">(null);
   const [propErr, setPropErr] = useState<string | null>(null);
   const buildProposalData = (sel?: Record<string, { include: boolean; versionId: string }>, phaseOverride?: Record<string, { name: string; days: number; tasks: string[] }[]>,
@@ -2269,7 +2323,6 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   };
   const [propPick, setPropPick] = useState<null | "pptx" | "pdf">(null);
   const [phaseEditor, setPhaseEditor] = useState<null | { sel: Record<string, { include: boolean; versionId: string }>; services: { key: string; name: string; totalDays: number; minUnit: number; phases: { name: string; percent: number; days: number; tasks: string[] }[] }[] }>(null);
-  const runProposal = (kind: "pptx" | "pdf") => { propTarget.current = null; setPropMenu(false); setPropPick(kind); };
 
   /** The saved proposal being generated (its document is kept on the deal), or null for a one-off. */
   const propTarget = useRef<DealProposal | null>(null);
@@ -2342,14 +2395,20 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   const [decks, setDecks] = useState<ProposalDeckRow[] | null>(null);
   useEffect(() => { listProposalDecks().then(setDecks).catch(() => setDecks([])); }, []);
   const [studio, setStudio] = useState<null | { proposal: DealProposal; data: ProposalData; productIds: string[]; serviceIds: string[] }>(null);
-  const openStudio = async (p: DealProposal) => {
-    setPropBusyId(`${p.id}:studio`); setPropErr(null);
+  /** The proposal / contract as a web document (DocStudio): which proposal, its data and the deal's contract. */
+  const [docStudio, setDocStudio] = useState<null | { proposal: DealProposal; data: ProposalData; productIds: string[]; serviceIds: string[]; kind: "proposal" | "contract"; contract: any }>(null);
+  const openStudio = async (p: DealProposal, kind: "proposal" | "contract" | "deck" = "proposal") => {
+    setPropBusyId(`${p.id}:${kind === "contract" ? "contract" : "studio"}`); setPropErr(null);
     try {
       const sel = selOfProposal(p);
       const phases = await blueprintPhases(sel);
       const ids = { products: [] as string[], services: [] as string[] };
       const data = buildProposalData(sel, phases, ids);
-      setStudio({ proposal: p, data, productIds: ids.products, serviceIds: ids.services });
+      if (kind === "deck") setStudio({ proposal: p, data, productIds: ids.products, serviceIds: ids.services });
+      else {
+        const contract = await loadDealContract(tracking.id).then((r) => r.terms).catch(() => null);
+        setDocStudio({ proposal: p, data, productIds: ids.products, serviceIds: ids.services, kind, contract });
+      }
     } catch (e: any) { setPropErr(e?.message ?? "Could not open the proposal."); }
     finally { setPropBusyId(null); }
   };
@@ -2529,9 +2588,12 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     const row = await addTrackingProduct(tracking.id, productId, price, {
       recurring: prod?.billing === "recurring",
       period: (prod?.billing_period as "monthly" | "yearly") ?? "yearly",
-      term_years: 1,
+      // A multi-year product starts with its catalogue term and yearly increase (changeable per deal).
+      term_years: prod?.billing === "recurring" ? catalogYears(prod) : 1,
     });
     if (row) setTProds((xs) => [...xs, row]);
+    const inc = prod?.billing === "recurring" ? catalogIncrements(prod) : null;
+    if (row && inc) void patchProduct(row.id, { increments: inc });
   };
   const patchProduct = async (id: string, patch: TermPatch) => {
     setTProds((xs) => xs.map((p) => p.id === id ? { ...p, ...patch } : p));
@@ -2716,6 +2778,72 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   const servicesTotal = activePotentials.reduce(
     (s, p) => s + lineTotal(p, serviceOf(p.service_id)?.calculator as Calculator | null, undefined, serviceMin(p.service_id)), 0);
   const totalPotential = productsTotal + servicesTotal;
+  /** Potential revenue in the chosen view: products' first year or every year, services counted or not. */
+  const productsShown = activeTprods.reduce((s, p) => {
+    const prod = productOf(p.product_id);
+    return s + lineRevenue("product", lineBreakdown(p, prod?.calculator as Calculator | null, prod?.tiers?.find((x) => x.id === p.tier_id)?.price), revMode);
+  }, 0);
+  const servicesCounted = revMode === "all_year1" || revMode === "all_term";
+  const servicesShown = servicesCounted ? servicesTotal : 0;
+  const potentialShown = productsShown + servicesShown;
+  const productsYearWord = revMode === "product_term" || revMode === "all_term" ? "all years" : "year 1";
+  /** The contract panel's lines: the deal's active products and services. */
+  const dealContractLines = (): ContractPanelLine[] => [
+    ...activeTprods.map((tp): ContractPanelLine => {
+      const prod = productOf(tp.product_id);
+      return {
+        key: tp.id, kind: "product", name: productName(tp.product_id), line: tp,
+        calculator: prod?.calculator as Calculator | null, catalogBase: prod?.tiers?.find((x) => x.id === tp.tier_id)?.price,
+        tiers: prod?.tiers, partnerItem: { type: "product", id: tp.product_id }, defaultIncrements: catalogIncrements(prod),
+      };
+    }),
+    ...activePotentials.map((p): ContractPanelLine => {
+      const svc = serviceOf(p.service_id);
+      return {
+        key: p.id, kind: "service", name: p.label || serviceName(p.service_id), line: p,
+        calculator: svc?.calculator as Calculator | null, minUnit: serviceMin(p.service_id),
+        roles: svc?.roles, roleName: (id: string) => roleNameOf(id, clientRoles), unit: (svc?.rate_unit ?? "day") as "hour" | "day",
+        partnerItem: { type: "service", id: p.service_id },
+      };
+    }),
+  ];
+  /** A change made on the contract goes straight to the deal's line. */
+  const contractLineChange = (key: string, patch: TermPatch) => {
+    if (tprods.some((x) => x.id === key)) void patchProduct(key, patch);
+    else if (potentials.some((x) => x.id === key)) void patchPotential(key, patch);
+  };
+  const openDealContract = async () => {
+    setContractErr(null);
+    await loadContractInit();
+    setContractOpen("deal");
+  };
+  /** Save the contract on the deal and carry it to the client's signed products. */
+  const saveContract = async (terms: ContractTerms) => {
+    setContractBusy(true); setContractErr(null);
+    try {
+      const err = await saveDealContract(tracking.id, terms);
+      if (err) { setContractErr(err); return false; }
+      setContractInit(terms);
+      if (await hasClientProductsForTracking(tracking.id).catch(() => false)) {
+        const items = activeTprods.map((tp) => {
+          const prod = productOf(tp.product_id);
+          const bd = lineBreakdown(tp, prod?.calculator as Calculator | null, prod?.tiers?.find((x) => x.id === tp.tier_id)?.price);
+          const years = Number(tp.term_years) || 1;
+          return {
+            productId: tp.product_id, termYears: tp.recurring ? years : null, recurring: !!tp.recurring,
+            schedule: tp.recurring ? incrementsToSchedule(bd.years[0] ?? 0, years, tp.increments) : null,
+            annualIncreasePct: tp.increments?.mode === "pct" ? Number(tp.increments.value) || 0 : null,
+            price: Math.round(bd.unitPrice * 100) / 100, quantity: tp.recurring ? 1 : bd.qty,
+            breakdown: { version: null, multiplier: bd.multiplierLabel, gross: bd.gross, discount: bd.discount, total: bd.total, years: bd.years,
+              rows: bd.rows.map((r) => ({ label: r.label, detail: r.detail, amount: r.amount, discount: r.discount })) },
+          };
+        });
+        const cErr = await applyContractToClientProducts(tracking.id, terms, items);
+        if (cErr) console.warn("contract not copied to the client:", cErr);
+      }
+      return true;
+    } finally { setContractBusy(false); }
+  };
   /** What partners take from the active lines (already out of the totals above). */
   const partnersTotal = [
     ...activeTprods.map((p) => lineBreakdown(p, productOf(p.product_id)?.calculator as Calculator | null, productOf(p.product_id)?.tiers?.find((x) => x.id === p.tier_id)?.price).partner),
@@ -2940,7 +3068,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
    */
   const openClientForm = async (destinations: { id: string; name: string; services: any[]; potential_value: number }[] | null) => {
     if (!tracking.company_id) return false;
-    const signDay = wonDay();
+    const signDay = (await loadContractInit())?.signDate || wonDay();
     const exists = await clientExistsForCompany(tracking.company_id);
     if (!exists) {
       const [prefill, catalog] = await Promise.all([buildClientPrefill(tracking.company_id, tracking.id), listCatalogProducts()]);
@@ -3015,7 +3143,10 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     setConfirmServices(svcCards);
     setConfirmSkipPrompt(false);
     setPendingHandoff(destinations);
-    setConfirmOpen(true);
+    // Step 2: the contract on its own panel; the handoff summary follows once it's saved.
+    await loadContractInit();
+    setContractErr(null);
+    setContractOpen("handoff");
     setHandoffMenu(false);
     return;
    } catch (err: any) {
@@ -3557,8 +3688,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
                     : status === "won" || status === "lost" ? "No date recorded" : "Filled in when the deal is won or lost"}
                 </span>
                 <span className="sl-probfield-datewrap">
-                  <DatePicker value={closedOn} placeholder="+ date"
-                    onChange={(v) => { setClosedOn(v); tracking.close_date = v || null; setDealClosedOn(tracking.id, v || null).catch(() => {}); }} />
+                  <DatePicker value={closedOn} placeholder="+ date" onChange={changeClosedOn} />
                 </span>
               </div>
             </div>
@@ -3577,15 +3707,21 @@ export default function TrackingDetail({ tracking, companies, contacts, products
             <div className="sl-rvh">
               <div className="sl-rvh-top">
                 <h3 className="sl-panel-title">Potential revenue</h3>
-                <b className="sl-rvh-total">{money(totalPotential)}</b>
+                <b className="sl-rvh-total" key={revMode}>{money(potentialShown)}</b>
+              </div>
+              <div className="sl-rvmode" role="radiogroup" aria-label="Which potential revenue">
+                {REVENUE_MODES.map((m) => (
+                  <button type="button" key={m.value} role="radio" aria-checked={revMode === m.value} title={m.hint}
+                    className={revMode === m.value ? "is-on" : ""} onClick={() => setRevMode(m.value as RevenueMode)}>{m.short}</button>
+                ))}
               </div>
               <div className="sl-rvh-bar" aria-hidden="true">
-                <i className="is-product" style={{ flexGrow: Math.max(0.0001, productsTotal) }} />
-                <i className="is-service" style={{ flexGrow: Math.max(0.0001, servicesTotal) }} />
+                <i className="is-product" style={{ flexGrow: Math.max(0.0001, productsShown) }} />
+                <i className="is-service" style={{ flexGrow: Math.max(0.0001, servicesShown) }} />
               </div>
               <div className="sl-rvh-legend">
-                <span className="is-product"><i />Products<b>{money(productsTotal)}</b></span>
-                <span className="is-service"><i />Services<b>{money(servicesTotal)}</b></span>
+                <span className="is-product"><i />Products <em>{productsYearWord}</em><b>{money(productsShown)}</b></span>
+                <span className={`is-service ${servicesCounted ? "" : "is-out"}`} title={servicesCounted ? "A one-off fee, counted once" : "Not counted in this view"}><i />Services<b>{servicesCounted ? money(servicesShown) : <s>{money(servicesTotal)}</s>}</b></span>
                 {partnersTotal > 0 && <span className="is-partner" title="Already taken out of the figures above"><i />Partners<b>−{money(partnersTotal)}</b></span>}
               </div>
             </div>
@@ -3658,28 +3794,16 @@ export default function TrackingDetail({ tracking, companies, contacts, products
 
             {revErr && <p className="sl-rev-err">Could not save: {revErr}</p>}
             <div className="sl-calc-foot sl-calc-foot-actions">
-              <span>Total if won</span>
-              <div className="sl-prop-wrap">
-                <button className={`sl-prop-btn ${propBusy ? "is-busy" : ""}`} onClick={() => setPropMenu((v) => !v)} disabled={!!propBusy} title="Generate proposal">
-                  {propBusy ? (
-                    <span className="sl-prop-spin" />
-                  ) : (
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6M12 18v-6M9 15l3 3 3-3" /></svg>
-                  )}
-                  <span>{propBusy ? "Generating…" : "Proposal"}</span>
+              <span className="sl-rv-foot-k">
+                Total if won
+                <em>whole contract{propBusy ? " · generating document…" : ""}</em>
+              </span>
+              {status === "won" && (
+                <button type="button" className="sl-contract-btn" onClick={() => void openDealContract()} title="Dates, term, yearly increases and final prices">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6M8 13h8M8 17h5" /></svg>
+                  <span>{contractInit ? "Contract" : "Set up contract"}</span>
                 </button>
-                {propMenu && <div className="sl-prop-scrim" onMouseDown={() => setPropMenu(false)} />}
-                {propMenu && (
-                  <div className="sl-prop-menu">
-                    <button onClick={() => runProposal("pptx")}>
-                      <b>PowerPoint deck</b><i>Commercial presentation, ready to send</i>
-                    </button>
-                    <button onClick={() => runProposal("pdf")}>
-                      <b>PDF order form</b><i>Scope, prices and signatures</i>
-                    </button>
-                  </div>
-                )}
-              </div>
+              )}
               <b>{money(totalPotential)}</b>
             </div>
             {propErr && <p className="sl-rev-err">{propErr}</p>}
@@ -3702,6 +3826,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
               calculator={prod?.calculator as Calculator | null}
               money={money}
               partnerItem={{ type: "product", id: tp.product_id }}
+              defaultIncrements={catalogIncrements(prod)}
               onApply={(patch) => patchProduct(tp.id, patch)}
               onClose={() => setCalcFor(null)}
             />
@@ -3732,10 +3857,41 @@ export default function TrackingDetail({ tracking, companies, contacts, products
           prefill={clientPrefill}
           catalog={clientCatalog}
           mode={clientFormMode}
-          signingDefault={wonDay()}
+          signingDefault={contractInit?.signDate || wonDay()}
           standalone={!pendingHandoff}
+          services={dealContractLines().filter((l) => l.kind === "service")}
+          onServiceChange={contractLineChange}
+          contractInitial={contractInit}
+          contractMissing={contractMissing}
+          dealName={dealName || company?.name || "Deal"}
           onClose={() => { setClientFormOpen(false); setPendingHandoff(null); setClientPrefill(null); setAttachClientId(null); setClientFormMode("create"); }}
           onConfirm={clientFormMode === "attach" ? attachClientAndHandoff : saveClientAndHandoff}
+        />
+      )}
+
+      {contractOpen && (
+        <ContractPanel
+          dealName={dealName || company?.name || "Deal"}
+          eyebrow={contractOpen === "handoff" ? "Handoff · contract" : "Deal won · contract"}
+          money={money}
+          lines={dealContractLines()}
+          initial={contractInit}
+          signDefault={wonDay()}
+          missing={contractMissing}
+          steps={contractOpen === "handoff" ? [{ label: "Client", done: true }, { label: "Contract", on: true }, { label: "Handoff" }] : undefined}
+          onLineChange={contractLineChange}
+          primaryLabel={contractOpen === "handoff" ? "Save & continue" : "Save contract"}
+          busy={contractBusy}
+          error={contractErr}
+          onSave={async (terms) => {
+            const ok = await saveContract(terms);
+            // The handoff goes on even when the contract column isn't there yet.
+            if (!ok && !(contractOpen === "handoff" && contractMissing)) return;
+            const next = contractOpen;
+            setContractOpen(null);
+            if (next === "handoff") setConfirmOpen(true);
+          }}
+          onClose={() => { if (contractOpen === "handoff") setPendingHandoff(null); setContractOpen(null); }}
         />
       )}
 
@@ -3773,8 +3929,12 @@ export default function TrackingDetail({ tracking, companies, contacts, products
                   breakdown: {
                     version: pr.versionLabel, multiplier: bd.multiplierLabel, gross: bd.gross, discount: bd.discount, total: bd.total,
                     rows: bd.rows.map((r) => ({ label: r.label, detail: r.detail, amount: r.amount, discount: r.discount })),
+                    years: bd.years,
                   },
                 };
+                // Yearly increases travel as the contract's payment terms (one term per year).
+                const sched = l.recurring ? incrementsToSchedule(bd.years[0] ?? 0, Number(l.term_years) || 1, l.increments) : null;
+                if (sched) { patch.schedule = sched; if (l.increments?.mode === "pct") patch.annual_increase_pct = Number(l.increments.value) || 0; }
                 const write = async (body: Record<string, any>) => {
                   const up = await supabase.from("client_products").update(body)
                     .eq("client_id", cidRow.id).eq("tracking_id", tracking.id).eq("product_id", pr.productId).select("id");
@@ -3789,6 +3949,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
                 let e = await write(patch);
                 // Before handoff_v3.sql there is no breakdown column.
                 if (e && /breakdown/i.test(e.message)) { const { breakdown: _b, ...rest } = patch; e = await write(rest); }
+                if (e && /schedule/i.test(e.message)) { const { breakdown: _b, schedule: _s, ...rest } = patch; e = await write(rest); }
                 if (e) console.warn("client product not updated:", e.message);
               }
             }
@@ -3873,6 +4034,26 @@ export default function TrackingDetail({ tracking, companies, contacts, products
             if (toSend) { await sendHandoff(toSend, pkg); setPendingHandoff(null); }
             setConfirmOpen(false);
           }}
+        />
+      )}
+
+      {docStudio && (
+        <DocStudio
+          trackingId={tracking.id} phaseId={curPhase} kind={docStudio.kind}
+          proposal={{ id: docStudio.proposal.id, name: docStudio.proposal.name, doc: docStudio.proposal.doc }}
+          data={docStudio.data} productIds={docStudio.productIds} serviceIds={docStudio.serviceIds} seller={seller}
+          sector={(company as any)?.sector ?? null} contract={docStudio.contract} dealValue={potentialShown}
+          onClose={() => { setDocStudio(null); setPropsReload((n) => n + 1); }}
+          onSaveDoc={(html) => saveProposalDoc(docStudio.proposal.id, docStudio.proposal.deck_id ?? null, { ...(docStudio.proposal.doc ?? {}), html } as any)}
+          onSavedFile={async (fileId, kind) => {
+            // the proposal's document is the one that goes with it (and to the handoff)
+            if (kind !== "proposal") return null;
+            const p = docStudio.proposal;
+            const f = proposalFigures(p.lines, proposalGroups);
+            const { error } = await saveDealProposal({ ...p, deck_id: undefined, file_id: fileId, gross: f.gross, partner: f.partner, total: f.total, is_main: undefined });
+            return error;
+          }}
+          onLegacyDeck={decks && decks.length > 0 ? () => { const d = docStudio; setDocStudio(null); setStudio({ proposal: d.proposal, data: d.data, productIds: d.productIds, serviceIds: d.serviceIds }); } : undefined}
         />
       )}
 

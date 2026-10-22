@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useState, useEffect, useMemo, useRef, type PointerEvent as RPointerEvent, type ReactNode } from "react";
+import { useState, useEffect, useMemo, useRef, type PointerEvent as RPointerEvent, type KeyboardEvent as RKeyboardEvent, type ReactNode } from "react";
 import { supabase } from "../../api/supabase";
 import NewClientForm from "./NewClientForm";
 import ClientWorkspace, { CompanyLogo, isActive, termOf, lineAnnual, lineTotal, lineContractValue, type Line } from "./ClientWorkspace";
@@ -888,6 +888,8 @@ const CSI: Record<string, string> = {
   play: "M5 3l14 9-14 9z",
   trash: "M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14",
   edit: "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z",
+  mail: "M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM22 6l-10 7L2 6",
+  pin: "M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21zM12 12a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z",
 };
 const CsIco = ({ n, s = 16 }: { n: keyof typeof CSI; s?: number }) => (
   <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={CSI[n]} /></svg>
@@ -1096,12 +1098,26 @@ export function ClientUpsells({ clientId, clientName }: { clientId: string; clie
 }
 
 /* ---------- the page ---------- */
+interface CsLog { client_id: string; contacted_at: string; reason: string | null; channel: string | null; contact_name?: string | null }
 interface CsClient {
   id: string; name: string; website: string;
   arr: number; lines: Line[];
   last: string | null; lastWhy: string | null; days: number | null;
   owners: string[]; primary: string | null;
+  /** days since the last contact / the client's cadence (Infinity when never contacted) */
+  ratio: number; cadence: number;
+  health: CsHealthStatus | null;
+  ren: { end: Date; left: number; value: number; auto: boolean } | null;
+  ups: number; upsValue: number;
+  /** what needs doing first, highest first */
+  score: number;
 }
+type CsTab = "accounts" | "upsells" | "qbr" | "revenue";
+type CsFilter = "all" | "contact" | "risk" | "renew" | "orphan" | "upsell";
+type CsSort = "priority" | "contact" | "arr" | "renewal" | "name";
+const CH_ICON: Record<string, keyof typeof CSI> = { call: "phone", email: "mail", meeting: "users", visit: "pin" };
+const csAgo = (days: number | null) => (days == null ? "Never" : days === 0 ? "Today" : days === 1 ? "Yesterday" : days < 90 ? `${days} days ago` : days < 365 ? `${Math.round(days / 30)} months ago` : `${(days / 365).toFixed(1).replace(".", ",")} yr ago`);
+const csPct = (n: number) => `${n.toFixed(1).replace(".", ",")}%`;
 
 function CsPanel({ icon, title, sub, tone = "jade", right, children, className = "", i = 0 }: {
   icon: keyof typeof CSI; title: string; sub?: string; tone?: string; right?: ReactNode; children: ReactNode; className?: string; i?: number;
@@ -1128,30 +1144,54 @@ function CsLocked({ what }: { what: string }) {
   );
 }
 
+/** A small titled block inside the side panel. */
+function CsBlock({ icon, title, right, children, tone = "jade" }: { icon: keyof typeof CSI; title: string; right?: ReactNode; children: ReactNode; tone?: string }) {
+  return (
+    <section className="cs3-block">
+      <header><span className={`cs3-block-ico is-${tone}`}><CsIco n={icon} s={13} /></span><h4>{title}</h4>{right && <span className="cs3-block-r">{right}</span>}</header>
+      {children}
+    </section>
+  );
+}
+
+/** Contact bar: how much of the cadence has gone by since the last contact. */
+function CsCadence({ c, wide = false }: { c: CsClient; wide?: boolean }) {
+  const late = c.days == null || c.days > c.cadence;
+  const soon = !late && (c.days ?? 0) > c.cadence * 0.75;
+  return (
+    <span className={`cs3-cad ${late ? "is-late" : soon ? "is-soon" : ""} ${wide ? "is-wide" : ""}`} title={`Cadence: every ${c.cadence} days`}>
+      <span className="cs3-cad-t"><b>{csAgo(c.days)}</b>{c.lastWhy && wide ? <i>{c.lastWhy}</i> : null}</span>
+      <span className="cs3-cad-bar"><span style={{ width: `${Math.min(100, ((c.days ?? c.cadence * 2) / c.cadence) * 100)}%` }} /></span>
+    </span>
+  );
+}
+
 export function CustomerSuccessPage() {
   const cat = useCsCatalog();
   const nav = useNavigate();
   const [cs, setCs] = useState<CsData | null>(null);
-  const [base, setBase] = useState<{ clients: any[]; lines: Line[]; logs: any[]; sites: Record<string, string> } | null>(null);
+  const [base, setBase] = useState<{ clients: any[]; lines: Line[]; logs: CsLog[]; sites: Record<string, string> } | null>(null);
   const [scope, setScope] = useState<"mine" | "all">("all");
   const [owner, setOwner] = useState("");
+  const [tab, setTab] = useState<CsTab>("accounts");
+  const [filter, setFilter] = useState<CsFilter>("all");
+  const [sort, setSort] = useState<CsSort>("priority");
+  const [q, setQ] = useState("");
+  const [openId, setOpenId] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
-  const [upView, setUpView] = useState<"matrix" | "pipeline">("matrix");
+  const [upView, setUpView] = useState<"pipeline" | "matrix">("pipeline");
   const [edit, setEdit] = useState<(Partial<CsUpsell> & { client_id: string }) | null>(null);
-  const [logFor, setLogFor] = useState<string | null>(null);
   const [logCh, setLogCh] = useState("call");
   const [logWhy, setLogWhy] = useState("");
-  const [showAllTriggers, setShowAllTriggers] = useState(false);
   const [qbrNew, setQbrNew] = useState<{ client: string; date: string }>({ client: "", date: "" });
+  const [qbrDate, setQbrDate] = useState("");
   const [evNew, setEvNew] = useState<{ client: string; kind: RevenueEvent["kind"]; amount: number; date: string; reason: string } | null>(null);
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [bulkOwner, setBulkOwner] = useState("");
-  const [ownEdit, setOwnEdit] = useState<string | null>(null);
-  const [ownQ, setOwnQ] = useState("");
-  const [ownAll, setOwnAll] = useState(false);
-  const [allRisk, setAllRisk] = useState(false);
-  const [allRen, setAllRen] = useState(false);
-  const heroRef = useRef<HTMLElement | null>(null);
+  const [ownPick, setOwnPick] = useState(false);
+  const [autoAt, setAutoAt] = useState<{ top: number; left: number } | null>(null);
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
   const year = new Date().getFullYear();
   const say = (m: string) => { setFlash(m); window.setTimeout(() => setFlash((x) => (x === m ? null : x)), 3200); };
 
@@ -1163,14 +1203,17 @@ export function CustomerSuccessPage() {
         supabase.from("clients").select("id, name, company_id").order("name"),
         supabase.from("client_products").select("*"),
         supabase.from("products").select("id, name"),
-        supabase.from("client_contacts_log").select("client_id, contacted_at, reason, channel"),
+        supabase.from("client_contacts_log").select("client_id, contacted_at, reason, channel, contact_name"),
         supabase.from("companies").select("id, website"),
       ]);
       const pn: Record<string, string> = {};
       ((pr.data ?? []) as any[]).forEach((x) => { pn[x.id] = x.name; });
       const sites: Record<string, string> = {};
       ((co.data ?? []) as any[]).forEach((x) => { if (x.website) sites[x.id] = x.website; });
-      if (alive) setBase({ clients: (cl.data ?? []) as any[], lines: ((cp.data ?? []) as any[]).map((r) => ({ ...r, name: pn[r.product_id] ?? "Product" })), logs: (lg.data ?? []) as any[], sites });
+      // an older log table without contact_name: read it again without that column
+      let logs = (lg.data ?? []) as CsLog[];
+      if (lg.error) { const r2 = await supabase.from("client_contacts_log").select("client_id, contacted_at, reason, channel"); logs = (r2.data ?? []) as CsLog[]; }
+      if (alive) setBase({ clients: (cl.data ?? []) as any[], lines: ((cp.data ?? []) as any[]).map((r) => ({ ...r, name: pn[r.product_id] ?? "Product" })), logs, sites });
       const d = await loadCsData();
       if (!alive) return;
       setCs(d);
@@ -1190,21 +1233,34 @@ export function CustomerSuccessPage() {
 
   const pName = (id: string | null | undefined) => (id ? cat.people.find((p) => p.id === id)?.name ?? "Someone" : "");
   const pTone = (id: string) => Math.abs([...id].reduce((t, c) => t + c.charCodeAt(0), 0));
-  const cadenceOf = (id: string) => cs?.cadence[id] ?? cs?.settings.default_cadence_days ?? 30;
+  const healthOf = (id: string) => cs?.health.find((h) => h.client_id === id) ?? null;
 
   const all: CsClient[] = useMemo(() => {
     if (!base) return [];
+    const now = Date.now();
     return base.clients.map((c) => {
       const ls = base.lines.filter((l) => l.client_id === c.id);
       const logs = base.logs.filter((l) => l.client_id === c.id).sort((a, b) => String(b.contacted_at).localeCompare(String(a.contacted_at)));
       const last = logs[0]?.contacted_at ?? null;
       const own = (cs?.owners ?? []).filter((o) => o.client_id === c.id).sort((a, b) => Number(b.is_primary) - Number(a.is_primary));
+      const days = last ? Math.max(0, Math.floor((now - new Date(last).getTime()) / 864e5)) : null;
+      const cad = cs?.cadence[c.id] ?? cs?.settings.default_cadence_days ?? 30;
+      const ratio = days == null ? Infinity : days / cad;
+      const health = cs?.health.find((h) => h.client_id === c.id)?.status ?? null;
+      const rens = ls.filter(isActive).map((l) => ({ l, t: termOf(l) })).filter((x) => x.t && x.t.end.getTime() >= now).sort((a, b) => a.t!.end.getTime() - b.t!.end.getTime());
+      const r0 = rens[0];
+      const ups = (cs?.upsells ?? []).filter((u) => u.client_id === c.id && !["won", "lost"].includes(u.status));
+      const arr = ls.filter(isActive).reduce((t, l) => t + (l.recurring ? lineAnnual(l) : 0), 0);
+      const ren = r0 ? { end: r0.t!.end, left: r0.t!.left, value: lineAnnual(r0.l), auto: !!r0.l.auto_renew } : null;
+      const score = (ratio === Infinity ? 3 : Math.min(3, ratio)) * 10
+        + (health === "red" ? 30 : health === "amber" ? 14 : 0)
+        + (ren && ren.left <= 90 ? 18 - ren.left / 6 : 0)
+        + Math.min(8, arr / 10000);
       return {
         id: c.id, name: c.name, website: c.company_id ? base.sites[c.company_id] ?? "" : "",
-        lines: ls, arr: ls.filter(isActive).reduce((t, l) => t + (l.recurring ? lineAnnual(l) : 0), 0),
-        last, lastWhy: logs[0]?.reason || logs[0]?.channel || null,
-        days: last ? Math.max(0, Math.floor((Date.now() - new Date(last).getTime()) / 864e5)) : null,
+        lines: ls, arr, last, lastWhy: logs[0]?.reason || logs[0]?.channel || null, days,
         owners: own.map((o) => o.profile_id), primary: own.find((o) => o.is_primary)?.profile_id ?? own[0]?.profile_id ?? null,
+        ratio, cadence: cad, health, ren, ups: ups.length, upsValue: ups.reduce((t, u) => t + u.est_value, 0), score,
       };
     });
   }, [base, cs]);
@@ -1215,6 +1271,7 @@ export function CustomerSuccessPage() {
   }), [all, scope, owner, cat.me]);
   const ids = useMemo(() => new Set(clients.map((c) => c.id)), [clients]);
   const nameOf = (id: string | null) => all.find((c) => c.id === id)?.name ?? "—";
+  const byId = (id: string | null) => all.find((c) => c.id === id) ?? null;
 
   // ---- KPIs ----
   const arrNow = clients.reduce((t, c) => t + c.arr, 0);
@@ -1242,26 +1299,89 @@ export function CustomerSuccessPage() {
     e.currentTarget.style.setProperty("--gy", `${e.clientY - r.top}px`);
   };
 
-  // ---- contact triggers ----
-  const triggers = [...clients].sort((a, b) => {
-    const da = a.days == null ? 1e6 : a.days / cadenceOf(a.id), db = b.days == null ? 1e6 : b.days / cadenceOf(b.id);
-    return db - da;
-  });
-  const overdue = triggers.filter((c) => c.days == null || c.days > cadenceOf(c.id));
+  // ---- the account list ----
+  const needsContact = (c: CsClient) => c.days == null || c.days > c.cadence;
+  const atRisk = (c: CsClient) => c.health === "red" || c.health === "amber";
+  const renewing = (c: CsClient) => !!c.ren && c.ren.left <= 90;
+  const FILTERS: { key: CsFilter; label: string; test: (c: CsClient) => boolean; tone: string }[] = [
+    { key: "all", label: "All accounts", test: () => true, tone: "slate" },
+    { key: "contact", label: "Needs contact", test: needsContact, tone: "coral" },
+    { key: "risk", label: "At risk", test: atRisk, tone: "gold" },
+    { key: "renew", label: "Renewing in 90 d", test: renewing, tone: "teal" },
+    { key: "upsell", label: "Open upsell", test: (c) => c.ups > 0, tone: "violet" },
+    { key: "orphan", label: "No owner", test: (c) => ready && !c.owners.length, tone: "slate" },
+  ];
+  const fTest = FILTERS.find((f) => f.key === filter)?.test ?? (() => true);
+  const list = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    const xs = clients.filter((c) => fTest(c) && (!s || c.name.toLowerCase().includes(s)));
+    const cmp: Record<CsSort, (a: CsClient, b: CsClient) => number> = {
+      priority: (a, b) => b.score - a.score,
+      contact: (a, b) => b.ratio - a.ratio,
+      arr: (a, b) => b.arr - a.arr,
+      renewal: (a, b) => (a.ren?.left ?? 1e9) - (b.ren?.left ?? 1e9),
+      name: (a, b) => a.name.localeCompare(b.name),
+    };
+    return [...xs].sort((a, b) => cmp[sort](a, b) || a.name.localeCompare(b.name));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clients, filter, sort, q]);
+  const open = byId(openId);
+  const overdue = clients.filter(needsContact);
+
+  // the automation popover floats over the page (the hero clips its content); it closes on scroll / resize
+  useEffect(() => {
+    if (!autoAt) return;
+    const close = () => setAutoAt(null);
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", close, true);
+    return () => { window.removeEventListener("resize", close); window.removeEventListener("scroll", close, true); };
+  }, [autoAt]);
+  const toggleAutoPop = (el: HTMLElement) => {
+    if (autoAt) { setAutoAt(null); return; }
+    const r = el.getBoundingClientRect();
+    setAutoAt({ top: r.bottom + 8, left: Math.max(8, Math.min(r.right - 300, window.innerWidth - 308)) });
+  };
+
+  // keyboard: "/" finds, Esc closes the account
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      const typing = !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+      if (e.key === "/" && !typing && tab === "accounts") { e.preventDefault(); searchRef.current?.focus(); }
+      if (e.key === "Escape" && !edit && openId && !typing) setOpenId(null);
+    };
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [tab, openId, edit]);
+  const rowKey = (e: RKeyboardEvent<HTMLDivElement>, id: string) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpenId(id); return; }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const rows = [...(listRef.current?.querySelectorAll<HTMLElement>("[data-row]") ?? [])];
+      const i = rows.indexOf(e.currentTarget);
+      rows[Math.max(0, Math.min(rows.length - 1, i + (e.key === "ArrowDown" ? 1 : -1)))]?.focus();
+    }
+  };
+  const openAccount = (id: string) => { setOpenId(id); setLogWhy(""); setLogCh("call"); setOwnPick(false); setQbrDate(""); };
+
+  // ---- actions ----
   const doLog = async (id: string) => {
     const e = await logClientContact(id, { channel: logCh, reason: logWhy });
     if (e) { say(e); return; }
     const at = new Date().toISOString();
     setBase((b) => b ? { ...b, logs: [...b.logs, { client_id: id, contacted_at: at, reason: logWhy || null, channel: logCh }] } : b);
-    setLogFor(null); setLogWhy(""); say(`Contact logged for ${nameOf(id)}`);
+    setLogWhy(""); say(`Contact logged for ${nameOf(id)}`);
+  };
+  const quickLog = async (c: CsClient) => {
+    const e = await logClientContact(c.id, { channel: "call", reason: null });
+    if (e) { say(e); return; }
+    setBase((b) => b ? { ...b, logs: [...b.logs, { client_id: c.id, contacted_at: new Date().toISOString(), reason: null, channel: "call" }] } : b);
+    say(`Call logged for ${c.name}`);
   };
   const doTask = async (c: CsClient) => {
     const e = await createClientFollowUp(c.id, `Get in touch with ${c.name}${c.days == null ? " (no contact logged yet)" : ` (${c.days} days since last contact)`}`, c.primary ?? cat.me, `cs-contact:${c.id}`);
-    say(e ?? `Follow-up added to ${c.primary ? pName(c.primary) : "your"} desk`);
+    say(e ?? `Follow-up added to ${c.primary ? `${pName(c.primary)}'s` : "your"} desk`);
   };
-
-  // ---- health ----
-  const healthOf = (id: string) => cs?.health.find((h) => h.client_id === id) ?? null;
   const setHealth = async (id: string, patch: { status?: CsHealthStatus; reason?: string | null; note?: string | null }) => {
     const cur = healthOf(id);
     const next = { status: patch.status ?? cur?.status ?? "green", reason: patch.reason !== undefined ? patch.reason : cur?.reason ?? null, note: patch.note !== undefined ? patch.note : cur?.note ?? null };
@@ -1270,27 +1390,17 @@ export function CustomerSuccessPage() {
     const e = await saveClientHealth(id, next);
     if (e) say(e);
   };
-  const watch = clients.filter((c) => healthOf(c.id)).sort((a, b) => {
-    const o: Record<string, number> = { red: 0, amber: 1, green: 2 };
-    return o[healthOf(a.id)!.status] - o[healthOf(b.id)!.status];
-  });
-  const [watchAdd, setWatchAdd] = useState("");
-
-  // ---- QBR ----
-  const qbrs = (cs?.qbrs ?? []).filter((q) => ids.has(q.client_id) && q.status !== "cancelled").sort((a, b) => a.meeting_date.localeCompare(b.meeting_date));
-  const putQbr = async (q: Partial<CsQbr> & { client_id: string; meeting_date: string }) => {
-    const r = await saveQbr(q);
+  const qbrs = (cs?.qbrs ?? []).filter((x) => ids.has(x.client_id) && x.status !== "cancelled").sort((a, b) => a.meeting_date.localeCompare(b.meeting_date));
+  const putQbr = async (x: Partial<CsQbr> & { client_id: string; meeting_date: string }) => {
+    const r = await saveQbr(x);
     if (r.error || !r.qbr) { say(r.error ?? "Not saved"); return; }
-    setCs((d) => d ? { ...d, qbrs: [...d.qbrs.filter((x) => x.id !== r.qbr!.id), r.qbr!] } : d);
+    setCs((d) => d ? { ...d, qbrs: [...d.qbrs.filter((y) => y.id !== r.qbr!.id), r.qbr!] } : d);
   };
-
-  // ---- renewals ----
+  const dropQbr = async (id: string) => { const e = await deleteQbr(id); if (e) say(e); else setCs((d) => d ? { ...d, qbrs: d.qbrs.filter((x) => x.id !== id) } : d); };
   const in12 = Date.now() + 365 * 864e5;
   const renewals = clients.flatMap((c) => c.lines.filter(isActive).map((l) => ({ c, l, t: termOf(l) })))
     .filter((x) => x.t && x.t.end.getTime() >= Date.now() && x.t.end.getTime() <= in12)
     .sort((a, b) => a.t!.end.getTime() - b.t!.end.getTime());
-
-  // ---- upsells ----
   const upsells = (cs?.upsells ?? []).filter((u) => ids.has(u.client_id));
   const openUps = upsells.filter((u) => !["won", "lost"].includes(u.status));
   const upsert = (u: CsUpsell) => setCs((d) => d ? { ...d, upsells: d.upsells.some((x) => x.id === u.id) ? d.upsells.map((x) => x.id === u.id ? u : x) : [u, ...d.upsells] } : d);
@@ -1298,21 +1408,19 @@ export function CustomerSuccessPage() {
     ...cat.products.map((p) => ({ key: `p:${p.id}`, kind: "product" as const, id: p.id!, name: p.name })),
     ...cat.services.map((sv) => ({ key: `s:${sv.id}`, kind: "service" as const, id: sv.id!, name: sv.name })),
   ];
-  const matrixRows = clients.filter((c) => c.lines.length || upsells.some((u) => u.client_id === c.id) || c.arr > 0).slice(0, 60);
+  const matrixRows = clients.filter((c) => c.lines.length || upsells.some((u) => u.client_id === c.id) || c.arr > 0).slice(0, 80);
   const quickUpsell = async (c: CsClient, it: (typeof items)[number]) => {
     const r = await saveUpsell({ client_id: c.id, kind: it.kind, product_id: it.kind === "product" ? it.id : null, service_id: it.kind === "service" ? it.id : null, title: it.name, status: "idea", owner_id: c.primary });
     if (r.error || !r.upsell) { say(r.error ?? "Not saved"); return; }
     upsert(r.upsell); say(`${it.name} noted as an upsell for ${c.name}`);
   };
-
-  // ---- owners ----
   const toggleSel = (id: string) => setSel((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const assignBulk = async () => {
     if (!bulkOwner || !sel.size) return;
     for (const id of sel) {
       const c = all.find((x) => x.id === id);
-      const list = [...new Set([...(c?.owners ?? []), bulkOwner])];
-      const e = await setClientOwners(id, list, c?.primary ?? bulkOwner);
+      const lst = [...new Set([...(c?.owners ?? []), bulkOwner])];
+      const e = await setClientOwners(id, lst, c?.primary ?? bulkOwner);
       if (e) { say(e); return; }
     }
     say(`${pName(bulkOwner)} now looks after ${sel.size} client${sel.size === 1 ? "" : "s"}`);
@@ -1320,231 +1428,486 @@ export function CustomerSuccessPage() {
   };
   const toggleOwner = async (c: CsClient, pid: string) => {
     const on = c.owners.includes(pid);
-    const list = on ? c.owners.filter((x) => x !== pid) : [...c.owners, pid];
-    const e = await setClientOwners(c.id, list, on && c.primary === pid ? list[0] ?? null : c.primary ?? pid);
+    const lst = on ? c.owners.filter((x) => x !== pid) : [...c.owners, pid];
+    const e = await setClientOwners(c.id, lst, on && c.primary === pid ? lst[0] ?? null : c.primary ?? pid);
     if (e) { say(e); return; }
     reload();
   };
   const makePrimary = async (c: CsClient, pid: string) => { const e = await setClientOwners(c.id, c.owners, pid); if (e) say(e); else reload(); };
+  const saveDefaultCadence = async () => { if (!cs) return; const e = await saveCsSettings(cs.settings); if (e) say(e); else { say("Default cadence saved"); reload(); } };
+  const toggleAuto = async () => { if (!cs) return; const s2 = { ...cs.settings, auto_tasks: !cs.settings.auto_tasks }; setCs({ ...cs, settings: s2 }); const e = await saveCsSettings(s2); if (e) say(e); else reload(); };
+  const runNow = async () => { const n = await generateContactTasks(); say(n == null ? NEEDS_CS : n ? `${n} follow-up${n === 1 ? "" : "s"} created` : "Nobody needs a follow-up right now"); };
 
   const loading = !base || !cs;
-  const notReady = cs && !cs.ready;
+  const notReady = !!cs && !cs.ready;
+  const ready = !!cs?.ready;
+  const TABS: { key: CsTab; label: string; icon: keyof typeof CSI; n?: number | string }[] = [
+    { key: "accounts", label: "Accounts", icon: "users", n: clients.length },
+    { key: "upsells", label: "Upsells", icon: "trend", n: openUps.length },
+    { key: "qbr", label: "QBRs", icon: "cal", n: qbrs.filter((x) => x.status === "planned").length },
+    { key: "revenue", label: `Revenue · ${year}`, icon: "euro", n: evs.length },
+  ];
 
-  return (
-    <div className="csx">
-      <header className="csx-hero" ref={heroRef} onPointerMove={glow}>
-        <div className="csx-hero-top">
-          <div className="csx-hero-t">
-            <span className="csx-eyebrow is-light"><CsIco n="heart" s={13} />Customer success</span>
-            <h1>Retention &amp; expansion</h1>
-            <p>{clients.length} client{clients.length === 1 ? "" : "s"} in view · {overdue.length} past their contact cadence · {openUps.length} open upsell{openUps.length === 1 ? "" : "s"}</p>
+  /* ---------- the side panel: one account, everything about it ---------- */
+  const accountPanel = (c: CsClient) => {
+    const h = healthOf(c.id);
+    const logs = (base?.logs ?? []).filter((l) => l.client_id === c.id).sort((a, b) => String(b.contacted_at).localeCompare(String(a.contacted_at)));
+    const myUps = (cs?.upsells ?? []).filter((u) => u.client_id === c.id);
+    const myQbrs = (cs?.qbrs ?? []).filter((x) => x.client_id === c.id && x.status !== "cancelled").sort((a, b) => a.meeting_date.localeCompare(b.meeting_date));
+    const myEvs = (cs?.events ?? []).filter((e) => e.client_id === c.id);
+    const lines = c.lines.filter(isActive);
+    const late = needsContact(c);
+    return (
+      <div className="cs3-acc" key={c.id}>
+        <header className="cs3-acc-h">
+          <CompanyLogo name={c.name} website={c.website} className="cx-av csx-logo is-lg" />
+          <div className="cs3-acc-t">
+            <h3>{c.name}</h3>
+            <span>{c.arr ? <><b>{csMoney(c.arr)}</b>/yr recurring</> : "No recurring products"}{c.ren ? ` · renews ${c.ren.end.toLocaleDateString("en-GB", { month: "short", year: "numeric" })}` : ""}</span>
           </div>
-          <div className="csx-hero-ctl">
-            <div className="csx-seg is-dark">
-              <button type="button" className={scope === "mine" ? "is-on" : ""} onClick={() => setScope("mine")}>My portfolio</button>
-              <button type="button" className={scope === "all" ? "is-on" : ""} onClick={() => setScope("all")}>Everyone</button>
+          <button type="button" className="csx-ghost is-sm" onClick={() => nav(`/clients?client=${c.id}`)} title="Open the client"><CsIco n="arrow" s={13} />Client</button>
+          <button type="button" className="csx-x is-sm" onClick={() => setOpenId(null)} aria-label="Close (Esc)" title="Close (Esc)"><CsIco n="x" s={14} /></button>
+        </header>
+
+        <div className="cs3-acc-b">
+          {/* health */}
+          <CsBlock icon="heart" title="Health" tone={h?.status === "red" ? "coral" : h?.status === "amber" ? "gold" : "jade"}
+            right={h ? <span className="cs3-muted">Updated {csDate(h.updated_at)}</span> : <span className="cs3-muted">Not tracked yet</span>}>
+            {notReady ? <CsLocked what="Health tracking" /> : <>
+              <div className="cs3-health" role="radiogroup" aria-label="Health">
+                {(["green", "amber", "red"] as CsHealthStatus[]).map((st) => (
+                  <button key={st} type="button" role="radio" aria-checked={h?.status === st} className={`is-${st} ${h?.status === st ? "is-on" : ""}`} onClick={() => setHealth(c.id, { status: st })}>
+                    <i />{HEALTH_TONE[st]}
+                  </button>
+                ))}
+              </div>
+              <div className="cs3-health-r">
+                <Select size="sm" value={h?.reason ?? ""} onChange={(v) => setHealth(c.id, { reason: v || null })} placeholder="Why?"
+                  options={[{ value: "", label: "No reason" }, ...CS_REASONS.map((r) => ({ value: r.key, label: r.label }))]} />
+                <input key={`${c.id}-${h?.note ?? ""}`} className="csx-inline is-box" defaultValue={h?.note ?? ""} placeholder="What's going on?"
+                  onBlur={(e) => { if ((e.target.value || null) !== (h?.note ?? null)) setHealth(c.id, { note: e.target.value || null }); }}
+                  onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
+              </div>
+            </>}
+          </CsBlock>
+
+          {/* contact */}
+          <CsBlock icon="phone" title="Contact" tone={late ? "coral" : "jade"}
+            right={<span className="cs3-cadin" title="Get in touch every … days (this client)">every
+              <input type="number" min={1} key={`cad-${c.id}-${cs?.cadence[c.id] ?? ""}`} placeholder={String(cs?.settings.default_cadence_days ?? 30)} defaultValue={cs?.cadence[c.id] ?? ""} disabled={!ready}
+                onBlur={async (e) => { const v = Number(e.target.value) || null; if (v === (cs?.cadence[c.id] ?? null)) return; const er = await setClientCadence(c.id, v); if (er) say(er); else { say(v ? `${c.name}: every ${v} days` : `${c.name} follows the default cadence`); reload(); } }} />days</span>}>
+            <CsCadence c={c} wide />
+            <div className="cs3-log">
+              <span className="csx-chips">{["call", "email", "meeting", "visit"].map((ch) => <button key={ch} type="button" className={logCh === ch ? "is-on" : ""} onClick={() => setLogCh(ch)}><CsIco n={CH_ICON[ch]} s={11} />{ch}</button>)}</span>
+              <div className="cs3-log-r">
+                <input placeholder="What about? (optional)" value={logWhy} onChange={(e) => setLogWhy(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") doLog(c.id); }} />
+                <button type="button" className="csx-primary is-sm" onClick={() => doLog(c.id)}><CsIco n="check" s={12} />Log</button>
+                <button type="button" className="csx-ghost is-sm" onClick={() => doTask(c)} title={`Add a follow-up to ${c.primary ? pName(c.primary) : "your"} desk`}><CsIco n="task" s={12} />Follow-up</button>
+              </div>
             </div>
-            <div className="csx-hero-sel">
-              <Select size="sm" value={owner} onChange={setOwner} placeholder="Any owner" searchable
-                options={[{ value: "", label: "Any owner" }, ...cat.people.map((p) => ({ value: p.id, label: p.name }))]} />
+            {logs.length ? (
+              <ol className="cs3-tl">
+                {logs.slice(0, 6).map((l, i) => (
+                  <li key={`${l.contacted_at}-${i}`}>
+                    <span className="cs3-tl-ico"><CsIco n={CH_ICON[l.channel ?? ""] ?? "phone"} s={11} /></span>
+                    <span className="cs3-tl-m"><b>{l.reason || (l.channel ? `${l.channel[0].toUpperCase()}${l.channel.slice(1)}` : "Contact")}</b>{l.contact_name ? <i>with {l.contact_name}</i> : null}</span>
+                    <time>{csDate(l.contacted_at)}</time>
+                  </li>
+                ))}
+                {logs.length > 6 && <li className="cs3-tl-more">+{logs.length - 6} earlier — see them in the client</li>}
+              </ol>
+            ) : <p className="cs3-empty">No contact logged yet. Log the first one above.</p>}
+          </CsBlock>
+
+          {/* owners */}
+          <CsBlock icon="users" title="Owners" right={<span className="cs3-muted">★ gets the follow-ups</span>}>
+            {notReady ? <CsLocked what="Client owners" /> : (
+              <div className="csx-own-list">
+                {c.owners.map((o) => (
+                  <span key={o} className={`csx-own-chip ${c.primary === o ? "is-primary" : ""}`}>
+                    <button type="button" className="csx-own-star" title={c.primary === o ? "Primary owner" : "Make primary"} onClick={() => makePrimary(c, o)}><CsIco n="star" s={11} /></button>
+                    {pName(o)}
+                    <button type="button" className="csx-own-x" title="Remove" onClick={() => toggleOwner(c, o)}><CsIco n="x" s={10} /></button>
+                  </span>
+                ))}
+                {ownPick ? (
+                  <span className="csx-own-pick">
+                    <Select size="sm" value="" onChange={(v) => { if (v) { toggleOwner(c, v); setOwnPick(false); } }} placeholder="Pick someone…" searchable
+                      options={cat.people.filter((p) => !c.owners.includes(p.id)).map((p) => ({ value: p.id, label: p.name }))} />
+                  </span>
+                ) : <button type="button" className="csx-own-add" onClick={() => setOwnPick(true)}><CsIco n="plus" s={11} />{c.owners.length ? "Owner" : "Assign an owner"}</button>}
+              </div>
+            )}
+          </CsBlock>
+
+          {/* products & renewals */}
+          <CsBlock icon="repeat" title="Products & renewals" right={<span className="cs3-muted">{lines.length} active</span>}>
+            {lines.length ? (
+              <ul className="cs3-prods">
+                {lines.map((l) => { const t = termOf(l); return (
+                  <li key={l.id} className={t && t.left < 90 ? "is-soon" : ""}>
+                    <span className="cs3-prods-m"><b>{l.name}</b><i>{l.recurring ? "recurring" : "one-off"}{t ? ` · ${l.auto_renew ? "renews" : "ends"} ${t.end.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}` : ""}</i></span>
+                    {t && <em>{t.left} d</em>}
+                    <b className="cs3-prods-v">{csMoney(l.recurring ? lineAnnual(l) : Number(l.price) || 0)}{l.recurring ? <small>/yr</small> : null}</b>
+                  </li>
+                ); })}
+              </ul>
+            ) : <p className="cs3-empty">No signed products.</p>}
+          </CsBlock>
+
+          {/* upsells */}
+          <CsBlock icon="trend" title="Upsells" tone="violet"
+            right={<button type="button" className="csx-link" disabled={!ready} onClick={() => setEdit({ client_id: c.id, kind: "product", status: "idea", owner_id: c.primary })}><CsIco n="plus" s={12} />New</button>}>
+            {notReady ? <CsLocked what="Upsell planning" /> : myUps.length ? (
+              <div className="cs3-ups">{myUps.map((u, i) => <UpsellCard key={u.id} u={u} i={i} clientName={UPSELL_STATUSES.find((x) => x.key === u.status)?.label} ownerName={pName(u.owner_id) || undefined} onOpen={() => setEdit(u)} />)}</div>
+            ) : <p className="cs3-empty">Nothing noted. What could {c.name} buy next?</p>}
+          </CsBlock>
+
+          {/* QBRs */}
+          <CsBlock icon="cal" title="QBRs" tone="teal">
+            {notReady ? <CsLocked what="QBR planning" /> : <>
+              {myQbrs.length ? <ul className="cs3-qbrs">{myQbrs.map((x) => {
+                const n = SPICED.filter((s) => x.spiced[s.key]).length;
+                return (
+                  <li key={x.id} className={x.status === "done" ? "is-done" : x.meeting_date < todayIso() ? "is-past" : ""}>
+                    <span className="csx-qbr-date"><b>{new Date(x.meeting_date).getDate()}</b><i>{new Date(x.meeting_date).toLocaleDateString("en-GB", { month: "short" })}</i></span>
+                    <span className="csx-spiced">{SPICED.map((s) => (
+                      <button key={s.key} type="button" title={s.label} className={x.spiced[s.key] ? "is-on" : ""} onClick={() => putQbr({ ...x, spiced: { ...x.spiced, [s.key]: !x.spiced[s.key] } })}>{s.key.toUpperCase()}</button>
+                    ))}<em>{n}/6</em></span>
+                    <button type="button" className={`csx-ghost is-sm is-ico ${x.status === "done" ? "is-on" : ""}`} title={x.status === "done" ? "Done — mark as planned" : "Mark done"} onClick={() => putQbr({ ...x, status: x.status === "done" ? "planned" : "done" })}><CsIco n="check" s={12} /></button>
+                    <button type="button" className="csx-ghost is-sm is-ico" title="Remove" onClick={() => dropQbr(x.id)}><CsIco n="trash" s={12} /></button>
+                  </li>
+                ); })}</ul> : null}
+              <div className="cs3-inline-add">
+                <input type="date" className="csx-date" value={qbrDate} onChange={(e) => setQbrDate(e.target.value)} aria-label="QBR date" />
+                <button type="button" className="csx-ghost is-sm" disabled={!qbrDate || !ready} onClick={async () => { await putQbr({ client_id: c.id, meeting_date: qbrDate, owner_id: c.primary ?? cat.me, spiced: {} }); setQbrDate(""); }}><CsIco n="plus" s={12} />Schedule QBR</button>
+              </div>
+            </>}
+          </CsBlock>
+
+          {myEvs.length > 0 && (
+            <CsBlock icon="euro" title="Revenue movements" tone="blue">
+              <ul className="cs3-evs">{myEvs.map((e) => (
+                <li key={e.id} className={`is-${e.kind}`}><span className="csx-ev-k">{e.kind}</span><i>{e.reason ?? "—"} · {csDate(e.event_date)}</i><b>{e.kind === "expansion" ? "+" : "−"}{csMoney(e.amount)}</b></li>
+              ))}</ul>
+            </CsBlock>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  /* ---------- the side panel when no account is open: what to do today ---------- */
+  const todayPanel = () => {
+    const due = [...overdue].sort((a, b) => b.ratio - a.ratio).slice(0, 5);
+    const soon = renewals.filter((x) => x.t!.left <= 120).slice(0, 4);
+    const nextQ = qbrs.filter((x) => x.status === "planned").slice(0, 3);
+    const risky = clients.filter((c) => c.health === "red").slice(0, 4);
+    return (
+      <div className="cs3-today">
+        <header className="cs3-today-h">
+          <span className="csx-eyebrow"><CsIco n="bolt" s={12} />Today</span>
+          <h3>{!clients.length ? "No accounts yet" : due.length ? `${overdue.length} account${overdue.length === 1 ? "" : "s"} to call` : "Everyone is in touch"}</h3>
+          <p>{clients.length ? "Pick an account to see everything about it." : "Accounts show here once you have clients."}</p>
+        </header>
+
+        <CsBlock icon="play" title="Automatic follow-ups" tone="jade"
+          right={ready ? <button type="button" role="switch" aria-checked={!!cs?.settings.auto_tasks} className={`csx-switch ${cs?.settings.auto_tasks ? "is-on" : ""}`} onClick={toggleAuto}><i />{cs?.settings.auto_tasks ? "On" : "Off"}</button> : undefined}>
+          {notReady ? <CsLocked what="Automatic follow-ups" /> : <>
+            <p className="cs3-auto-p">When an account passes its cadence, a follow-up lands on its starred owner's desk.</p>
+            <div className="cs3-auto">
+              <span>Default: every</span>
+              <input type="number" min={1} value={cs?.settings.default_cadence_days ?? 30}
+                onChange={(e) => setCs((d) => d ? { ...d, settings: { ...d.settings, default_cadence_days: Number(e.target.value) || 30 } } : d)}
+                onBlur={saveDefaultCadence} onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
+              <span>days</span>
+              <button type="button" className="csx-ghost is-sm" onClick={runNow}><CsIco n="play" s={11} />Run now</button>
             </div>
+          </>}
+        </CsBlock>
+
+        <CsBlock icon="phone" title="Call next" tone="coral" right={overdue.length > 5 ? <button type="button" className="csx-link" onClick={() => { setFilter("contact"); setSort("contact"); }}>All {overdue.length}</button> : undefined}>
+          {due.length ? <ul className="cs3-mini">{due.map((c) => (
+            <li key={c.id}>
+              <button type="button" className="cs3-mini-m" onClick={() => openAccount(c.id)}>
+                <CompanyLogo name={c.name} website={c.website} className="cx-av csx-logo is-xs" />
+                <span><b>{c.name}</b><i>{c.days == null ? "never contacted" : `${c.days} days · every ${c.cadence}`}</i></span>
+              </button>
+              <button type="button" className="csx-ghost is-sm is-ico" title="Log a call" onClick={() => quickLog(c)}><CsIco n="phone" s={12} /></button>
+              <button type="button" className="csx-ghost is-sm is-ico" title="Add a follow-up task" onClick={() => doTask(c)}><CsIco n="task" s={12} /></button>
+            </li>
+          ))}</ul> : <p className="cs3-empty">Nobody is past their cadence.</p>}
+        </CsBlock>
+
+        {risky.length > 0 && (
+          <CsBlock icon="alert" title="At risk" tone="gold">
+            <ul className="cs3-mini">{risky.map((c) => (
+              <li key={c.id}><button type="button" className="cs3-mini-m" onClick={() => openAccount(c.id)}>
+                <span className="cs3-dot is-red" /><span><b>{c.name}</b><i>{CS_REASONS.find((r) => r.key === healthOf(c.id)?.reason)?.label ?? healthOf(c.id)?.note ?? "No reason given"}</i></span>
+              </button></li>
+            ))}</ul>
+          </CsBlock>
+        )}
+
+        <CsBlock icon="repeat" title="Renewals coming up" tone="teal" right={<span className="cs3-muted">{csShort(renewals.reduce((t, x) => t + lineAnnual(x.l), 0))}/yr in 12 mo</span>}>
+          {soon.length ? <ul className="cs3-mini">{soon.map(({ c, l, t }) => (
+            <li key={l.id}><button type="button" className="cs3-mini-m" onClick={() => openAccount(c.id)}>
+              <span className={`cs3-days ${t!.left < 60 ? "is-hot" : ""}`}><b>{t!.left}</b><i>days</i></span>
+              <span><b>{c.name}</b><i>{l.name} · {l.auto_renew ? "renews" : "ends"} {t!.end.toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</i></span>
+              <em>{csShort(lineAnnual(l))}</em>
+            </button></li>
+          ))}</ul> : <p className="cs3-empty">Nothing renews in the next 4 months.</p>}
+        </CsBlock>
+
+        {nextQ.length > 0 && (
+          <CsBlock icon="cal" title="Next QBRs" tone="teal" right={<button type="button" className="csx-link" onClick={() => setTab("qbr")}>All</button>}>
+            <ul className="cs3-mini">{nextQ.map((x) => (
+              <li key={x.id}><button type="button" className="cs3-mini-m" onClick={() => openAccount(x.client_id)}>
+                <span className="csx-qbr-date is-sm"><b>{new Date(x.meeting_date).getDate()}</b><i>{new Date(x.meeting_date).toLocaleDateString("en-GB", { month: "short" })}</i></span>
+                <span><b>{nameOf(x.client_id)}</b><i>SPICED {SPICED.filter((s) => x.spiced[s.key]).length}/6</i></span>
+              </button></li>
+            ))}</ul>
+          </CsBlock>
+        )}
+      </div>
+    );
+  };
+
+  /* ---------- tabs ---------- */
+  const accountsTab = () => (
+    <div className={`cs3-ws ${open ? "has-open" : ""}`}>
+      <section className="cs3-list" aria-label="Accounts">
+        <div className="cs3-tools">
+          <span className="csx-search cs3-search">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" /></svg>
+            <input ref={searchRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find an account…" aria-label="Find an account" />
+            {!q && <kbd>/</kbd>}
+          </span>
+          <div className="cs3-sort">
+            <Select size="sm" value={sort} onChange={(v) => setSort(v as CsSort)}
+              options={[{ value: "priority", label: "Sort: what needs you" }, { value: "contact", label: "Sort: longest without contact" }, { value: "renewal", label: "Sort: next renewal" }, { value: "arr", label: "Sort: ARR" }, { value: "name", label: "Sort: name" }]} />
           </div>
         </div>
-        <div className="csx-kpis">
-          <div className="csx-kpi is-lead" style={{ ["--i" as any]: 0 }}>
-            <span className="csx-kpi-k">ARR signed · global</span>
-            <b>{csMoney(arrNow)}</b>
-            <span className="csx-kpi-d">{growth != null ? <em className={growth >= 0 ? "is-up" : "is-down"}><CsIco n={growth >= 0 ? "trend" : "down"} s={12} />{growth.toFixed(1).replace(".", ",")}%</em> : null}{growth != null ? "vs. initial ARR" : "recurring products, per year"}</span>
-          </div>
-          <div className="csx-kpi" style={{ ["--i" as any]: 1 }}>
-            <span className="csx-kpi-k">Initial ARR · {year}</span>
-            {snap ? <b>{csMoney(initial)}</b> : <b className="is-muted">Not set</b>}
-            <span className="csx-kpi-d">{snap ? <><em className="is-flat"><CsIco n="lock" s={11} />Fixed</em>{csDate(snap.taken_at)}</> :
-              <button type="button" className="csx-kpi-btn" disabled={!cs?.ready || loading} onClick={freeze}><CsIco n="lock" s={12} />Freeze today's ARR as the {year} base</button>}</span>
-          </div>
-          <div className="csx-kpi" style={{ ["--i" as any]: 2 }}>
-            <span className="csx-kpi-k">NRR</span>
-            <b className={nrr == null ? "is-muted" : nrr >= 100 ? "is-good" : "is-warn"}>{nrr == null ? "—" : `${nrr.toFixed(1).replace(".", ",")}%`}</b>
-            <span className="csx-kpi-d">{nrr == null ? "needs the initial ARR" : <em className={nrr >= 100 ? "is-good" : "is-warn"}>{nrr >= 100 ? "Healthy" : "Watch"}</em>}<i title="(initial ARR + expansion − contraction − churn) / initial ARR">how</i></span>
-          </div>
-          <div className="csx-kpi" style={{ ["--i" as any]: 3 }}>
-            <span className="csx-kpi-k">Expansion ARR</span>
-            <b>{csMoney(expansion)}</b>
-            <span className="csx-kpi-d">{initial > 0 ? <em className="is-up"><CsIco n="trend" s={12} />{((expansion / initial) * 100).toFixed(1).replace(".", ",")}%</em> : null}won upsells this year</span>
-          </div>
-          <div className={`csx-kpi ${churnRate != null && churnRate > 5 ? "is-alarm" : ""}`} style={{ ["--i" as any]: 4 }}>
-            <span className="csx-kpi-k">Churn rate</span>
-            <b className={churnRate == null ? "is-muted" : churnRate > 5 ? "is-bad" : churnRate > 2 ? "is-warn" : "is-good"}>{churnRate == null ? "—" : `${churnRate.toFixed(1).replace(".", ",")}%`}</b>
-            <span className="csx-kpi-d">{csMoney(churn)} lost{contraction ? ` · ${csMoney(contraction)} contraction` : ""}</span>
-          </div>
+        <div className="cs3-chips" role="tablist" aria-label="Show">
+          {FILTERS.map((f) => {
+            const n = clients.filter(f.test).length;
+            if (f.key !== "all" && !n && filter !== f.key) return null;
+            return (
+              <button key={f.key} type="button" role="tab" aria-selected={filter === f.key} className={`is-${f.tone} ${filter === f.key ? "is-on" : ""}`} onClick={() => setFilter(f.key)}>
+                {f.label}<em>{n}</em>
+              </button>
+            );
+          })}
         </div>
-      </header>
 
-      {notReady && (
-        <div className="csx-banner" role="note">
-          <span className="csx-banner-ico"><CsIco n="lock" s={16} /></span>
-          <div><b>Customer success isn't switched on yet</b><span>Run <code>17_customer_success.sql</code> in Supabase. Contact triggers and renewals already work from your clients; owners, health, QBRs, upsells and revenue movements need the new tables.</span></div>
+        {sel.size > 0 && (
+          <div className="cs3-bulk">
+            <b>{sel.size} selected</b>
+            <span className="cs3-bulk-sel"><Select size="sm" value={bulkOwner} onChange={setBulkOwner} placeholder="Add owner…" searchable options={cat.people.map((p) => ({ value: p.id, label: p.name }))} /></span>
+            <button type="button" className="csx-primary is-sm" disabled={!bulkOwner || !ready} onClick={assignBulk}>Assign owner</button>
+            <button type="button" className="csx-x is-sm" onClick={() => setSel(new Set())} aria-label="Clear the selection"><CsIco n="x" s={13} /></button>
+          </div>
+        )}
+
+        <div className="cs3-table" ref={listRef} role="grid" aria-rowcount={list.length}>
+          <div className="cs3-tr is-head" role="row">
+            <span role="columnheader" />
+            <span role="columnheader">Account</span>
+            <span role="columnheader">Health</span>
+            <span role="columnheader">Last contact</span>
+            <span role="columnheader" className="is-num">Renewal</span>
+            <span role="columnheader" className="is-num">ARR</span>
+            <span role="columnheader" />
+          </div>
+          {list.map((c, i) => (
+            <div key={c.id} data-row role="row" tabIndex={0} aria-selected={openId === c.id}
+              className={`cs3-tr ${openId === c.id ? "is-open" : ""} ${sel.has(c.id) ? "is-sel" : ""} ${needsContact(c) ? "is-late" : ""}`}
+              style={{ ["--i" as any]: Math.min(i, 14) }}
+              onClick={() => openAccount(c.id)} onKeyDown={(e) => rowKey(e, c.id)}>
+              <span className="cs3-td-chk" onClick={(e) => e.stopPropagation()}>
+                <label className="csx-check" title="Select"><input type="checkbox" checked={sel.has(c.id)} onChange={() => toggleSel(c.id)} aria-label={`Select ${c.name}`} /><span><CsIco n="check" s={11} /></span></label>
+              </span>
+              <span className="cs3-td-acc">
+                <CompanyLogo name={c.name} website={c.website} className="cx-av csx-logo" />
+                <span className="cs3-td-n">
+                  <b>{c.name}</b>
+                  <span className="cs3-td-sub">
+                    {c.owners.length ? <span className="csx-owners">{c.owners.slice(0, 3).map((o) => <CsAvatar key={o} name={pName(o)} tone={pTone(o)} size={18} />)}</span> : ready ? <em className="cs3-tag is-gold">No owner</em> : null}
+                    {c.ups > 0 && <em className="cs3-tag is-violet" title={`${c.ups} open upsell${c.ups === 1 ? "" : "s"}`}><CsIco n="trend" s={10} />{csShort(c.upsValue)}</em>}
+                  </span>
+                </span>
+              </span>
+              <span className="cs3-td-h">
+                {c.health ? <span className={`cs3-hpill is-${c.health}`}><i />{HEALTH_TONE[c.health]}</span> : <span className="cs3-hpill is-none">—</span>}
+              </span>
+              <span className="cs3-td-c"><CsCadence c={c} /></span>
+              <span className="cs3-td-r is-num">{c.ren ? <><b className={c.ren.left <= 90 ? "is-hot" : ""}>{c.ren.end.toLocaleDateString("en-GB", { month: "short", year: "2-digit" })}</b><i>in {c.ren.left} d</i></> : <i>—</i>}</span>
+              <span className="cs3-td-v is-num">{c.arr ? <b>{csShort(c.arr)}</b> : <i>—</i>}</span>
+              <span className="cs3-td-a" onClick={(e) => e.stopPropagation()}>
+                <button type="button" className="csx-ghost is-sm is-ico" title="Log a call" onClick={() => quickLog(c)}><CsIco n="phone" s={12} /></button>
+                <button type="button" className="csx-ghost is-sm is-ico" title="Add a follow-up task" onClick={() => doTask(c)}><CsIco n="task" s={12} /></button>
+              </span>
+            </div>
+          ))}
+          {!list.length && (
+            <div className="cs3-none">
+              <span className="csx-empty-ico"><CsIco n={clients.length ? "check" : "users"} s={20} /></span>
+              <b>{!clients.length ? (scope === "mine" ? "You don't look after any account yet" : "No clients yet") : q ? `Nothing matches “${q}”` : "Nothing here — nice"}</b>
+              <i>{!clients.length ? (scope === "mine" ? "Switch to Everyone, select some accounts and assign yourself." : "Clients show here once you have some.") : "Try another filter."}</i>
+              {(filter !== "all" || q) && <button type="button" className="csx-ghost is-sm" onClick={() => { setFilter("all"); setQ(""); }}>Show all accounts</button>}
+            </div>
+          )}
+        </div>
+      </section>
+      <aside className={`cs3-side ${open ? "is-acc" : ""}`} aria-label={open ? `Account: ${open.name}` : "Today"}>
+        {open ? accountPanel(open) : todayPanel()}
+      </aside>
+      {open && <div className="cs3-scrim" onClick={() => setOpenId(null)} aria-hidden="true" />}
+    </div>
+  );
+
+  const upsellsTab = () => (
+    <CsPanel icon="trend" title="Upsell planning" sub={upView === "pipeline" ? "Every open opportunity, by stage" : "What each client has, and what we could sell them next"} tone="violet"
+      right={<>
+        <span className="csx-badge is-violet">{csShort(openUps.reduce((t, u) => t + u.est_value, 0))}/yr open</span>
+        <div className="csx-seg is-sm">
+          <button type="button" className={upView === "pipeline" ? "is-on" : ""} onClick={() => setUpView("pipeline")}><CsIco n="cols" s={12} />Pipeline</button>
+          <button type="button" className={upView === "matrix" ? "is-on" : ""} onClick={() => setUpView("matrix")}><CsIco n="grid" s={12} />Matrix</button>
+        </div>
+      </>}>
+      {notReady ? <CsLocked what="Upsell planning" /> : upView === "matrix" ? (
+        <div className="csx-matrix-wrap">
+          <table className="csx-matrix">
+            <thead><tr><th>Client</th>{items.map((it) => <th key={it.key} title={it.name}><span>{it.name}</span><i>{it.kind === "product" ? "product" : "service"}</i></th>)}</tr></thead>
+            <tbody>
+              {matrixRows.map((c) => (
+                <tr key={c.id}>
+                  <th><button type="button" className="csx-mx-c" onClick={() => { setTab("accounts"); openAccount(c.id); }}><CompanyLogo name={c.name} website={c.website} className="cx-av csx-logo is-xs" />{c.name}</button></th>
+                  {items.map((it) => {
+                    const has = it.kind === "product" && c.lines.some((l) => isActive(l) && l.product_id === it.id);
+                    const up = upsells.find((u) => u.client_id === c.id && (it.kind === "product" ? u.product_id === it.id : u.service_id === it.id));
+                    return (
+                      <td key={it.key}>
+                        {has ? <span className="csx-mx-has" title="Already has it"><CsIco n="check" s={12} /></span>
+                          : up ? <button type="button" className={`csx-mx-up is-${UPS_TONE[up.status]}`} onClick={() => setEdit(up)} title={`${up.title} · ${up.status}`}>{UPSELL_STATUSES.find((x) => x.key === up.status)?.label}</button>
+                          : <button type="button" className="csx-mx-add" disabled={!ready} onClick={() => quickUpsell(c, it)} title={`Note ${it.name} as an upsell for ${c.name}`}><CsIco n="plus" s={12} /></button>}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!matrixRows.length && <p className="csx-none">No clients with products yet.</p>}
+          <p className="csx-legend"><span className="csx-mx-has"><CsIco n="check" s={10} /></span>has it <span className="csx-mx-up is-slate">Idea</span>upsell noted <span className="csx-mx-add"><CsIco n="plus" s={10} /></span>click to note one</p>
+        </div>
+      ) : (
+        <div className="csx-board">
+          {UPSELL_STATUSES.map((st) => {
+            const xs = upsells.filter((u) => u.status === st.key);
+            return (
+              <div key={st.key} className={`csx-col is-${UPS_TONE[st.key]}`}>
+                <div className="csx-col-h"><i />{st.label}<em>{xs.length}</em><span>{csShort(xs.reduce((t, u) => t + u.est_value, 0))}</span></div>
+                {xs.map((u, i) => <UpsellCard key={u.id} u={u} i={i} clientName={nameOf(u.client_id)} ownerName={pName(u.owner_id) || undefined} onOpen={() => setEdit(u)} />)}
+                {st.key === "idea" && (
+                  <div className="csx-col-add">
+                    <Select size="sm" value="" onChange={(v) => v && setEdit({ client_id: v, kind: "product", status: "idea", owner_id: all.find((c) => c.id === v)?.primary ?? null })}
+                      placeholder="+ New upsell for…" searchable options={clients.map((c) => ({ value: c.id, label: c.name }))} />
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
-      {flash && <div className="csx-toast" role="status"><CsIco n="check" s={14} />{flash}</div>}
+    </CsPanel>
+  );
 
-      {loading ? (
-        <PageLoader label="Reading your portfolio" />
-      ) : (
-        <div className="csx-grid">
-          <div className="csx-stack">
-          {/* ---- contact triggers ---- */}
-          <CsPanel i={0} icon="phone" title="Contact triggers" sub="Longest without contact first, against each client's cadence" tone="coral"
-            right={<span className={`csx-badge ${overdue.length ? "is-coral" : "is-jade"}`}>{overdue.length ? `${overdue.length} overdue` : "All in touch"}</span>}>
-            {cs?.ready && <div className="csx-cad">
-              <span>Get in touch every</span>
-              <input type="number" min={1} value={cs?.settings.default_cadence_days ?? 30} disabled={!cs?.ready}
-                onChange={(e) => setCs((d) => d ? { ...d, settings: { ...d.settings, default_cadence_days: Number(e.target.value) || 30 } } : d)}
-                onBlur={async () => { if (!cs) return; const e = await saveCsSettings(cs.settings); if (e) say(e); else { say("Default cadence saved"); reload(); } }} />
-              <span>days</span>
-              <button type="button" role="switch" aria-checked={!!cs?.settings.auto_tasks} disabled={!cs?.ready} className={`csx-switch ${cs?.settings.auto_tasks ? "is-on" : ""}`}
-                onClick={async () => { if (!cs) return; const s2 = { ...cs.settings, auto_tasks: !cs.settings.auto_tasks }; setCs({ ...cs, settings: s2 }); const e = await saveCsSettings(s2); if (e) say(e); else reload(); }}>
-                <i />Auto follow-ups
-              </button>
-              <button type="button" className="csx-ghost is-sm" disabled={!cs?.ready} onClick={async () => { const n = await generateContactTasks(); say(n == null ? NEEDS_CS : n ? `${n} follow-up${n === 1 ? "" : "s"} created` : "Nobody needs a follow-up right now"); }}>
-                <CsIco n="play" s={11} />Run now
-              </button>
-            </div>}
-            <ul className="csx-rows">
-              {(showAllTriggers ? triggers : triggers.slice(0, 8)).map((c, i) => {
-                const cad = cadenceOf(c.id);
-                const late = c.days == null || c.days > cad;
-                const soon = !late && (c.days ?? 0) > cad * 0.75;
-                return (
-                  <li key={c.id} className={`csx-trig ${late ? "is-late" : soon ? "is-soon" : ""}`} style={{ ["--i" as any]: i }}>
-                    <CompanyLogo name={c.name} website={c.website} className="cx-av csx-logo" />
-                    <div className="csx-trig-m">
-                      <b>{c.name}</b>
-                      <span>{c.last ? <>Last: {c.lastWhy ?? "contact"} · {csDate(c.last)}</> : "No contact logged yet"}</span>
-                    </div>
-                    <span className="csx-owners">{c.owners.slice(0, 3).map((o) => <CsAvatar key={o} name={pName(o)} tone={pTone(o)} size={22} />)}</span>
-                    <span className="csx-days" title={`Cadence: every ${cad} days`}>
-                      <b>{c.days == null ? "∞" : c.days}</b><i>{c.days == null ? "never" : `day${c.days === 1 ? "" : "s"}`}</i>
-                      <span className="csx-days-bar"><span style={{ width: `${Math.min(100, ((c.days ?? cad * 2) / cad) * 100)}%` }} /></span>
-                    </span>
-                    {logFor === c.id ? (
-                      <span className="csx-logbox">
-                        <span className="csx-chips">{["call", "email", "meeting", "visit"].map((ch) => <button key={ch} type="button" className={logCh === ch ? "is-on" : ""} onClick={() => setLogCh(ch)}>{ch}</button>)}</span>
-                        <input autoFocus placeholder="What about? (optional)" value={logWhy} onChange={(e) => setLogWhy(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") doLog(c.id); if (e.key === "Escape") setLogFor(null); }} />
-                        <button type="button" className="csx-primary is-sm" onClick={() => doLog(c.id)}>Log</button>
-                        <button type="button" className="csx-x is-sm" onClick={() => setLogFor(null)} aria-label="Cancel"><CsIco n="x" s={13} /></button>
-                      </span>
-                    ) : (
-                      <span className="csx-acts">
-                        <button type="button" className={late ? "csx-primary is-sm" : "csx-ghost is-sm"} onClick={() => { setLogFor(c.id); setLogCh("call"); setLogWhy(""); }}><CsIco n="phone" s={12} />Log contact</button>
-                        <button type="button" className="csx-ghost is-sm is-ico" onClick={() => doTask(c)} title="Add a follow-up task"><CsIco n="task" s={13} /></button>
-                      </span>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-            {!triggers.length && <p className="csx-none">{scope === "mine" ? "None of your clients needs a call. Switch to Everyone to see the whole portfolio." : "No clients yet — they show here once you have some."}</p>}
-            {triggers.length > 8 && <button type="button" className="csx-more" onClick={() => setShowAllTriggers((v) => !v)}>{showAllTriggers ? "Show fewer" : `Show all ${triggers.length}`}</button>}
-          </CsPanel>
-
-          {/* ---- QBR ---- */}
-          <CsPanel i={2} icon="cal" title="QBR · SPICED" sub="Quarterly business reviews and how far each conversation got" tone="teal"
-            right={<span className="csx-badge is-teal">{qbrs.filter((q) => q.status === "planned").length} planned</span>}>
-            {notReady ? <CsLocked what="QBR planning" /> : <>
-            <ul className="csx-rows">
-              {qbrs.map((q, i) => {
-                const n = SPICED.filter((x) => q.spiced[x.key]).length;
-                const past = q.meeting_date < todayIso() && q.status === "planned";
-                return (
-                  <li key={q.id} className={`csx-qbr ${q.status === "done" ? "is-done" : ""} ${past ? "is-past" : ""}`} style={{ ["--i" as any]: i }}>
-                    <span className="csx-qbr-date"><b>{new Date(q.meeting_date).getDate()}</b><i>{new Date(q.meeting_date).toLocaleDateString("en-GB", { month: "short" })}</i></span>
-                    <div className="csx-qbr-m">
-                      <b>{nameOf(q.client_id)}</b>
-                      <span className="csx-spiced">
-                        {SPICED.map((x) => (
-                          <button key={x.key} type="button" title={x.label} className={q.spiced[x.key] ? "is-on" : ""}
-                            onClick={() => putQbr({ ...q, spiced: { ...q.spiced, [x.key]: !q.spiced[x.key] } })}>{x.key.toUpperCase()}</button>
-                        ))}
-                        <em>{n}/6</em>
-                      </span>
-                    </div>
-                    <span className="csx-acts">
-                      <button type="button" className={`csx-ghost is-sm ${q.status === "done" ? "is-on" : ""}`} onClick={() => putQbr({ ...q, status: q.status === "done" ? "planned" : "done" })}><CsIco n="check" s={12} />{q.status === "done" ? "Done" : "Mark done"}</button>
-                      <button type="button" className="csx-ghost is-sm is-ico" title="Remove" onClick={async () => { const e = await deleteQbr(q.id); if (e) say(e); else setCs((d) => d ? { ...d, qbrs: d.qbrs.filter((x) => x.id !== q.id) } : d); }}><CsIco n="trash" s={12} /></button>
-                    </span>
-                  </li>
-                );
-              })}
-              {!qbrs.length && <li className="csx-none">No QBR scheduled. Plan the next ones below.</li>}
-            </ul>
-            <div className="csx-addrow">
-              <Select size="sm" value={qbrNew.client} onChange={(v) => setQbrNew((x) => ({ ...x, client: v }))} placeholder="Client…" searchable options={clients.map((c) => ({ value: c.id, label: c.name }))} />
-              <input type="date" className="csx-date" value={qbrNew.date} onChange={(e) => setQbrNew((x) => ({ ...x, date: e.target.value }))} />
-              <button type="button" className="csx-ghost is-sm" disabled={!qbrNew.client || !qbrNew.date || !cs?.ready}
-                onClick={async () => { await putQbr({ client_id: qbrNew.client, meeting_date: qbrNew.date, owner_id: all.find((c) => c.id === qbrNew.client)?.primary ?? cat.me, spiced: {} }); setQbrNew({ client: "", date: "" }); }}><CsIco n="plus" s={12} />Schedule</button>
-            </div>
-            </>}
-          </CsPanel>
-
+  const qbrTab = () => {
+    const t0 = todayIso();
+    const groups: { key: string; label: string; xs: CsQbr[] }[] = [
+      { key: "past", label: "Overdue — still planned", xs: qbrs.filter((x) => x.status === "planned" && x.meeting_date < t0) },
+      { key: "next", label: "Upcoming", xs: qbrs.filter((x) => x.status === "planned" && x.meeting_date >= t0) },
+      { key: "done", label: "Done", xs: qbrs.filter((x) => x.status === "done").reverse() },
+    ];
+    return (
+      <CsPanel icon="cal" title="QBR · SPICED" sub="Quarterly business reviews and how far each conversation got" tone="teal"
+        right={<span className="csx-badge is-teal">{qbrs.filter((x) => x.status === "planned").length} planned</span>}>
+        {notReady ? <CsLocked what="QBR planning" /> : <>
+          <div className="csx-addrow is-top">
+            <Select size="sm" value={qbrNew.client} onChange={(v) => setQbrNew((x) => ({ ...x, client: v }))} placeholder="Client…" searchable options={clients.map((c) => ({ value: c.id, label: c.name }))} />
+            <input type="date" className="csx-date" value={qbrNew.date} onChange={(e) => setQbrNew((x) => ({ ...x, date: e.target.value }))} aria-label="QBR date" />
+            <button type="button" className="csx-primary is-sm" disabled={!qbrNew.client || !qbrNew.date || !ready}
+              onClick={async () => { await putQbr({ client_id: qbrNew.client, meeting_date: qbrNew.date, owner_id: all.find((c) => c.id === qbrNew.client)?.primary ?? cat.me, spiced: {} }); setQbrNew({ client: "", date: "" }); }}><CsIco n="plus" s={12} />Schedule</button>
           </div>
-          <div className="csx-stack">
-          {/* ---- risk watchlist ---- */}
-          <CsPanel i={1} icon="alert" title="Risk watchlist" sub="Traffic light per client and the reason behind it" tone="gold"
-            right={<span className={`csx-badge ${watch.some((c) => healthOf(c.id)!.status !== "green") ? "is-coral" : ""}`}>{watch.filter((c) => healthOf(c.id)!.status !== "green").length} alerts</span>}>
-            {notReady ? <CsLocked what="The watchlist" /> : <>
-            <ul className="csx-rows">
-              {(allRisk ? watch : watch.slice(0, 6)).map((c, i) => {
-                const h = healthOf(c.id)!;
-                return (
-                  <li key={c.id} className={`csx-risk is-${h.status}`} style={{ ["--i" as any]: i }}>
-                    <span className="csx-light" role="radiogroup" aria-label="Health">
-                      {(["red", "amber", "green"] as CsHealthStatus[]).map((st) => (
-                        <button key={st} type="button" role="radio" aria-checked={h.status === st} className={`is-${st} ${h.status === st ? "is-on" : ""}`} title={HEALTH_TONE[st]} onClick={() => setHealth(c.id, { status: st })} />
-                      ))}
-                    </span>
-                    <div className="csx-risk-m">
-                      <b>{c.name}</b>
-                      <input className="csx-inline" defaultValue={h.note ?? ""} placeholder="What's going on?" onBlur={(e) => { if ((e.target.value || null) !== (h.note ?? null)) setHealth(c.id, { note: e.target.value || null }); }} />
-                    </div>
-                    <div className="csx-risk-r">
-                      <Select size="sm" value={h.reason ?? ""} onChange={(v) => setHealth(c.id, { reason: v || null })} placeholder="Reason"
-                        options={[{ value: "", label: "No reason" }, ...CS_REASONS.map((r) => ({ value: r.key, label: r.label }))]} />
-                    </div>
-                  </li>
-                );
-              })}
-              {!watch.length && <li className="csx-none">No client on the watchlist. Add one below when something worries you.</li>}
-            </ul>
-            {watch.length > 6 && <button type="button" className="csx-more" onClick={() => setAllRisk((v) => !v)}>{allRisk ? "Show fewer" : `Show all ${watch.length}`}</button>}
-            <div className="csx-addrow">
-              <Select size="sm" value={watchAdd} onChange={setWatchAdd} placeholder="Add a client to the watchlist…" searchable
-                options={clients.filter((c) => !healthOf(c.id)).map((c) => ({ value: c.id, label: c.name }))} />
-              <button type="button" className="csx-ghost is-sm" disabled={!watchAdd || !cs?.ready} onClick={() => { setHealth(watchAdd, { status: "amber" }); setWatchAdd(""); }}><CsIco n="plus" s={12} />Watch</button>
+          {!qbrs.length && <p className="csx-none">No QBR scheduled yet. Pick a client and a date above.</p>}
+          {groups.filter((g) => g.xs.length).map((g) => (
+            <div key={g.key} className={`cs3-qgroup is-${g.key}`}>
+              <h4>{g.label}<em>{g.xs.length}</em></h4>
+              <ul className="csx-rows">
+                {g.xs.map((x, i) => {
+                  const n = SPICED.filter((s) => x.spiced[s.key]).length;
+                  const c = byId(x.client_id);
+                  return (
+                    <li key={x.id} className={`csx-qbr ${x.status === "done" ? "is-done" : ""} ${g.key === "past" ? "is-past" : ""}`} style={{ ["--i" as any]: i }}>
+                      <span className="csx-qbr-date"><b>{new Date(x.meeting_date).getDate()}</b><i>{new Date(x.meeting_date).toLocaleDateString("en-GB", { month: "short" })}</i></span>
+                      <div className="csx-qbr-m">
+                        <button type="button" className="cs3-name" onClick={() => { setTab("accounts"); openAccount(x.client_id); }}>{c && <CompanyLogo name={c.name} website={c.website} className="cx-av csx-logo is-xs" />}{nameOf(x.client_id)}</button>
+                        <span className="csx-spiced">
+                          {SPICED.map((s) => (
+                            <button key={s.key} type="button" title={s.label} className={x.spiced[s.key] ? "is-on" : ""} onClick={() => putQbr({ ...x, spiced: { ...x.spiced, [s.key]: !x.spiced[s.key] } })}>{s.key.toUpperCase()}</button>
+                          ))}
+                          <em>{n}/6</em>
+                        </span>
+                      </div>
+                      <span className="csx-acts">
+                        <button type="button" className={`csx-ghost is-sm ${x.status === "done" ? "is-on" : ""}`} onClick={() => putQbr({ ...x, status: x.status === "done" ? "planned" : "done" })}><CsIco n="check" s={12} />{x.status === "done" ? "Done" : "Mark done"}</button>
+                        <button type="button" className="csx-ghost is-sm is-ico" title="Remove" onClick={() => dropQbr(x.id)}><CsIco n="trash" s={12} /></button>
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
             </div>
-            </>}
-          </CsPanel>
+          ))}
+        </>}
+      </CsPanel>
+    );
+  };
 
-          {/* ---- renewals ---- */}
-          <CsPanel i={3} icon="repeat" title="Renewals · next 12 months" sub="Signed products whose term ends or renews" tone="jade"
-            right={<span className="csx-badge is-jade">{csShort(renewals.reduce((t, x) => t + lineAnnual(x.l), 0))}/yr at stake</span>}>
-            <ul className="csx-rows">
-              {(allRen ? renewals : renewals.slice(0, 6)).map(({ c, l, t }, i) => (
-                <li key={l.id} className={`csx-ren ${t!.left < 90 ? "is-soon" : ""}`} style={{ ["--i" as any]: i }}>
-                  <span className="csx-ren-m"><b>{c.name}</b><span>{l.name}{l.auto_renew ? " · renews automatically" : " · ends"}</span></span>
-                  <span className="csx-ren-d"><b>{t!.end.toLocaleDateString("en-GB", { month: "short", year: "numeric" })}</b><i>in {t!.left} days</i></span>
-                  <b className="csx-ren-v">{csMoney(lineAnnual(l))}</b>
-                </li>
+  const revenueTab = () => {
+    const end = initial + expansion - contraction - churn;
+    const max = Math.max(initial, end, initial + expansion, 1);
+    const bars = [
+      { k: "Initial ARR", v: initial, from: 0, to: initial, tone: "slate" },
+      { k: "Expansion", v: expansion, from: initial, to: initial + expansion, tone: "jade", sign: "+" },
+      { k: "Contraction", v: contraction, from: initial + expansion - contraction, to: initial + expansion, tone: "gold", sign: "−" },
+      { k: "Churn", v: churn, from: end, to: initial + expansion - contraction, tone: "coral", sign: "−" },
+      { k: "Net retained", v: end, from: 0, to: end, tone: "pine" },
+    ];
+    return (
+      <div className="cs3-rev">
+        <CsPanel icon="euro" title={`Net revenue retention · ${year}`} sub="From the ARR the year started with to what's kept" tone="blue"
+          right={snap ? <span className="csx-badge"><CsIco n="lock" s={11} />Base fixed {csDate(snap.taken_at)}</span>
+            : <button type="button" className="csx-primary is-sm" disabled={!ready} onClick={freeze}><CsIco n="lock" s={12} />Freeze today's ARR as the {year} base</button>}>
+          {notReady ? <CsLocked what="Revenue movements" /> : !snap ? (
+            <p className="csx-none">NRR and churn are measured against the ARR the year starts with. Freeze it once (button above) — today's ARR is {csMoney(all.reduce((t, c) => t + c.arr, 0))}.</p>
+          ) : (
+            <div className="cs3-bridge" role="img" aria-label={`NRR ${nrr == null ? "—" : csPct(nrr)}`}>
+              {bars.map((b, i) => (
+                <div key={b.k} className={`cs3-bridge-r is-${b.tone}`} style={{ ["--i" as any]: i }}>
+                  <span className="cs3-bridge-k">{b.k}</span>
+                  <span className="cs3-bridge-t">{b.v > 0 && <span style={{ left: `${(Math.min(b.from, b.to) / max) * 100}%`, width: `${Math.max(0.8, (Math.abs(b.to - b.from) / max) * 100)}%` }} />}</span>
+                  <b>{b.sign && b.v ? b.sign : ""}{csMoney(b.v)}</b>
+                </div>
               ))}
-              {!renewals.length && <li className="csx-none">Nothing renews in the next 12 months.</li>}
-            </ul>
-            {renewals.length > 6 && <button type="button" className="csx-more" onClick={() => setAllRen((v) => !v)}>{allRen ? "Show fewer" : `Show all ${renewals.length}`}</button>}
-          </CsPanel>
-
-          {/* ---- revenue movements ---- */}
-          <CsPanel i={5} icon="euro" title={`Revenue movements · ${year}`} sub="Expansion, contraction and churn behind NRR" tone="blue"
-            right={<button type="button" className="csx-ghost is-sm" disabled={!cs?.ready} onClick={() => setEvNew({ client: "", kind: "churn", amount: 0, date: todayIso(), reason: "" })}><CsIco n="plus" s={12} />Add</button>}>
-            {notReady ? <CsLocked what="Revenue movements" /> : <>
+              <p className="cs3-bridge-f">NRR <b className={nrr != null && nrr >= 100 ? "is-good" : "is-warn"}>{nrr == null ? "—" : csPct(nrr)}</b> · churn rate <b>{churnRate == null ? "—" : csPct(churnRate)}</b> · ARR today <b>{csMoney(arrNow)}</b></p>
+            </div>
+          )}
+        </CsPanel>
+        <CsPanel icon="repeat" title="Movements" sub="Expansion, contraction and churn — won upsells add themselves" tone="blue"
+          right={<button type="button" className="csx-ghost is-sm" disabled={!ready} onClick={() => setEvNew({ client: "", kind: "churn", amount: 0, date: todayIso(), reason: "" })}><CsIco n="plus" s={12} />Add</button>}>
+          {notReady ? <CsLocked what="Revenue movements" /> : <>
             {evNew && (
               <div className="csx-evform">
                 <Select size="sm" value={evNew.client} onChange={(v) => setEvNew({ ...evNew, client: v })} placeholder="Client…" searchable options={clients.map((c) => ({ value: c.id, label: c.name }))} />
@@ -1565,121 +1928,103 @@ export function CustomerSuccessPage() {
                   <span className="csx-ev-k">{e.kind}</span>
                   <span className="csx-ev-m"><b>{nameOf(e.client_id)}</b><span>{e.reason ?? "—"} · {csDate(e.event_date)}</span></span>
                   <b className="csx-ev-v">{e.kind === "expansion" ? "+" : "−"}{csMoney(e.amount)}</b>
-                  {!e.upsell_id && <button type="button" className="csx-ghost is-sm is-ico" title="Remove" onClick={async () => { const er = await deleteRevenueEvent(e.id); if (er) say(er); else reload(); }}><CsIco n="trash" s={12} /></button>}
+                  {!e.upsell_id ? <button type="button" className="csx-ghost is-sm is-ico" title="Remove" onClick={async () => { const er = await deleteRevenueEvent(e.id); if (er) say(er); else reload(); }}><CsIco n="trash" s={12} /></button> : <span title="Comes from a won upsell" className="cs3-auto-ev"><CsIco n="trend" s={12} /></span>}
                 </li>
               ))}
               {!evs.length && <li className="csx-none">No movements this year. Won upsells show here on their own.</li>}
             </ul>
-            </>}
-          </CsPanel>
+          </>}
+        </CsPanel>
+      </div>
+    );
+  };
 
+  return (
+    <div className="csx cs3">
+      <header className="csx-hero is-compact" onPointerMove={glow}>
+        <div className="csx-hero-top">
+          <div className="csx-hero-t">
+            <span className="csx-eyebrow is-light"><CsIco n="heart" s={12} />Customer success</span>
+            <h1>Retention &amp; expansion</h1>
           </div>
-          {/* ---- upsells ---- */}
-          <CsPanel i={4} className="is-wide" icon="trend" title="Upsell planning" sub="What each client has, and what we could sell them next" tone="violet"
-            right={<>
-              <span className="csx-badge is-violet">{csShort(openUps.reduce((t, u) => t + u.est_value, 0))}/yr open</span>
-              <div className="csx-seg is-sm">
-                <button type="button" className={upView === "matrix" ? "is-on" : ""} onClick={() => setUpView("matrix")}><CsIco n="grid" s={12} />Matrix</button>
-                <button type="button" className={upView === "pipeline" ? "is-on" : ""} onClick={() => setUpView("pipeline")}><CsIco n="cols" s={12} />Pipeline</button>
-              </div>
-            </>}>
-            {notReady ? <CsLocked what="Upsell planning" /> : upView === "matrix" ? (
-              <div className="csx-matrix-wrap">
-                <table className="csx-matrix">
-                  <thead><tr><th>Client</th>{items.map((it) => <th key={it.key} title={it.name}><span>{it.name}</span><i>{it.kind === "product" ? "product" : "service"}</i></th>)}</tr></thead>
-                  <tbody>
-                    {matrixRows.map((c) => (
-                      <tr key={c.id}>
-                        <th><span className="csx-mx-c"><CompanyLogo name={c.name} website={c.website} className="cx-av csx-logo is-xs" />{c.name}</span></th>
-                        {items.map((it) => {
-                          const has = it.kind === "product" && c.lines.some((l) => isActive(l) && l.product_id === it.id);
-                          const up = upsells.find((u) => u.client_id === c.id && (it.kind === "product" ? u.product_id === it.id : u.service_id === it.id));
-                          return (
-                            <td key={it.key}>
-                              {has ? <span className="csx-mx-has" title="Already has it"><CsIco n="check" s={12} /></span>
-                                : up ? <button type="button" className={`csx-mx-up is-${UPS_TONE[up.status]}`} onClick={() => setEdit(up)} title={`${up.title} · ${up.status}`}>{UPSELL_STATUSES.find((x) => x.key === up.status)?.label}</button>
-                                : <button type="button" className="csx-mx-add" disabled={!cs?.ready} onClick={() => quickUpsell(c, it)} title={`Note ${it.name} as an upsell for ${c.name}`}><CsIco n="plus" s={12} /></button>}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {!matrixRows.length && <p className="csx-none">No clients with products yet.</p>}
-                <p className="csx-legend"><span className="csx-mx-has"><CsIco n="check" s={10} /></span>has it <span className="csx-mx-up is-slate">Idea</span>upsell noted <span className="csx-mx-add"><CsIco n="plus" s={10} /></span>click to note one</p>
-              </div>
-            ) : (
-              <div className="csx-board">
-                {UPSELL_STATUSES.map((st) => {
-                  const xs = upsells.filter((u) => u.status === st.key);
-                  return (
-                    <div key={st.key} className={`csx-col is-${UPS_TONE[st.key]}`}>
-                      <div className="csx-col-h"><i />{st.label}<em>{xs.length}</em><span>{csShort(xs.reduce((t, u) => t + u.est_value, 0))}</span></div>
-                      {xs.map((u, i) => <UpsellCard key={u.id} u={u} i={i} clientName={nameOf(u.client_id)} ownerName={pName(u.owner_id) || undefined} onOpen={() => setEdit(u)} />)}
-                      {st.key === "idea" && (
-                        <div className="csx-col-add">
-                          <Select size="sm" value="" onChange={(v) => v && setEdit({ client_id: v, kind: "product", status: "idea", owner_id: all.find((c) => c.id === v)?.primary ?? null })}
-                            placeholder="+ New upsell for…" searchable options={clients.map((c) => ({ value: c.id, label: c.name }))} />
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </CsPanel>
-
-          {/* ---- owners ---- */}
-          <CsPanel i={6} className="is-wide" icon="users" title="Who looks after whom" sub="Each client can have several owners; the starred one gets the follow-ups" tone="jade"
-            right={sel.size ? (
-              <span className="csx-bulk">
-                <em>{sel.size} selected</em>
-                <Select size="sm" value={bulkOwner} onChange={setBulkOwner} placeholder="Add owner…" searchable options={cat.people.map((p) => ({ value: p.id, label: p.name }))} />
-                <button type="button" className="csx-primary is-sm" disabled={!bulkOwner} onClick={assignBulk}>Assign</button>
-                <button type="button" className="csx-x is-sm" onClick={() => setSel(new Set())} aria-label="Clear"><CsIco n="x" s={13} /></button>
-              </span>
-            ) : <span className="csx-badge">{all.filter((c) => !c.owners.length).length} without owner</span>}>
-            {notReady ? <CsLocked what="Client owners" /> : <>
-            {clients.length > 8 && (
-              <div className="csx-ownbar">
-                <span className="csx-search"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" /></svg>
-                  <input value={ownQ} onChange={(e) => setOwnQ(e.target.value)} placeholder="Find a client…" /></span>
-                <button type="button" className={`csx-ghost is-sm ${ownAll ? "" : ""}`} onClick={() => setOwnAll((v) => !v)}>{ownAll ? "Show fewer" : `Show all ${clients.length}`}</button>
-              </div>
-            )}
-            <div className="csx-owntab">
-              {(() => { const q = ownQ.trim().toLowerCase(); const xs = clients.filter((c) => !q || c.name.toLowerCase().includes(q)); return q || ownAll ? xs : [...xs].sort((a, b) => Number(!!a.owners.length) - Number(!!b.owners.length)).slice(0, 10); })().map((c, i) => (
-                <div key={c.id} className={`csx-own ${sel.has(c.id) ? "is-sel" : ""} ${!c.owners.length ? "is-orphan" : ""}`} style={{ ["--i" as any]: Math.min(i, 20) }}>
-                  <label className="csx-check"><input type="checkbox" checked={sel.has(c.id)} onChange={() => toggleSel(c.id)} /><span><CsIco n="check" s={11} /></span></label>
-                  <span className="csx-own-n"><b>{c.name}</b><i>{c.arr ? `${csShort(c.arr)}/yr` : "no recurring"} · every {cadenceOf(c.id)}d</i></span>
-                  <span className="csx-own-list">
-                    {c.owners.map((o) => (
-                      <span key={o} className={`csx-own-chip ${c.primary === o ? "is-primary" : ""}`}>
-                        <button type="button" className="csx-own-star" title={c.primary === o ? "Primary owner" : "Make primary"} onClick={() => makePrimary(c, o)}><CsIco n="star" s={11} /></button>
-                        {pName(o)}
-                        <button type="button" className="csx-own-x" title="Remove" onClick={() => toggleOwner(c, o)}><CsIco n="x" s={10} /></button>
-                      </span>
-                    ))}
-                    {ownEdit === c.id ? (
-                      <span className="csx-own-pick">
-                        <Select size="sm" value="" onChange={(v) => { if (v) { toggleOwner(c, v); setOwnEdit(null); } }} placeholder="Pick someone…" searchable
-                          options={cat.people.filter((p) => !c.owners.includes(p.id)).map((p) => ({ value: p.id, label: p.name }))} />
-                      </span>
-                    ) : <button type="button" className="csx-own-add" disabled={!cs?.ready} onClick={() => setOwnEdit(c.id)}><CsIco n="plus" s={11} />Owner</button>}
-                  </span>
-                  <span className="csx-own-cad" title="Contact cadence for this client (days)">
-                    <input type="number" min={1} placeholder={String(cs?.settings.default_cadence_days ?? 30)} defaultValue={cs?.cadence[c.id] ?? ""} disabled={!cs?.ready}
-                      onBlur={async (e) => { const v = Number(e.target.value) || null; if (v === (cs?.cadence[c.id] ?? null)) return; const er = await setClientCadence(c.id, v); if (er) say(er); else reload(); }} />
-                    <i>d</i>
-                  </span>
-                  <button type="button" className="csx-ghost is-sm is-ico" title="Open client" onClick={() => nav(`/clients?client=${c.id}`)}><CsIco n="arrow" s={13} /></button>
-                </div>
-              ))}
-              {!clients.length && <p className="csx-none">{scope === "mine" ? "You don't look after any client yet. Switch to Everyone to assign some." : "No clients yet."}</p>}
+          <p className="csx-hero-sub">{clients.length} account{clients.length === 1 ? "" : "s"} · <b>{overdue.length}</b> to contact · <b>{clients.filter(atRisk).length}</b> at risk · <b>{openUps.length}</b> open upsell{openUps.length === 1 ? "" : "s"}</p>
+          <div className="csx-hero-ctl">
+            <div className="csx-seg is-dark">
+              <button type="button" className={scope === "mine" ? "is-on" : ""} onClick={() => setScope("mine")}>My portfolio</button>
+              <button type="button" className={scope === "all" ? "is-on" : ""} onClick={() => setScope("all")}>Everyone</button>
             </div>
-            </>}
-          </CsPanel>
+            <div className="csx-hero-sel">
+              <Select size="sm" value={owner} onChange={setOwner} placeholder="Any owner" searchable
+                options={[{ value: "", label: "Any owner" }, ...cat.people.map((p) => ({ value: p.id, label: p.name }))]} />
+            </div>
+            <span className="cs3-hero-auto">
+              <button type="button" className={`csx-hero-btn ${autoAt ? "is-on" : ""}`} onClick={(e) => toggleAutoPop(e.currentTarget)} aria-expanded={!!autoAt} aria-haspopup="dialog" title="Automatic follow-ups">
+                <CsIco n="bolt" s={14} /><span>Auto follow-ups</span><i className={cs?.settings.auto_tasks && ready ? "is-on" : ""} />
+              </button>
+              {autoAt && createPortal(
+                <div className="cs3-pop-layer" onMouseDown={(e) => { if (e.target === e.currentTarget) setAutoAt(null); }}>
+                  <div className="cs3-pop" role="dialog" aria-label="Automatic follow-ups" style={{ top: autoAt.top, left: autoAt.left }} onKeyDown={(e) => { if (e.key === "Escape") setAutoAt(null); }}>
+                    <b>Automatic follow-ups</b>
+                    <i>When an account passes its contact cadence, a follow-up lands on its starred owner's desk (once a day).</i>
+                    {notReady ? <span className="cs3-pop-lock">Needs <code>17_customer_success.sql</code></span> : <>
+                      <span className="cs3-pop-r"><button type="button" role="switch" aria-checked={!!cs?.settings.auto_tasks} className={`csx-switch ${cs?.settings.auto_tasks ? "is-on" : ""}`} onClick={toggleAuto} autoFocus><i />{cs?.settings.auto_tasks ? "On" : "Off"}</button>
+                        <button type="button" className="csx-ghost is-sm" onClick={runNow}><CsIco n="play" s={11} />Run now</button></span>
+                      <span className="cs3-pop-r">Default cadence
+                        <input type="number" min={1} value={cs?.settings.default_cadence_days ?? 30}
+                          onChange={(e) => setCs((d) => d ? { ...d, settings: { ...d.settings, default_cadence_days: Number(e.target.value) || 30 } } : d)}
+                          onBlur={saveDefaultCadence} />days</span>
+                    </>}
+                  </div>
+                </div>, document.body)}
+            </span>
+          </div>
+        </div>
+        <div className="csx-kpis">
+          <div className="csx-kpi is-lead" style={{ ["--i" as any]: 0 }}>
+            <span className="csx-kpi-k">ARR signed</span>
+            <span className="csx-kpi-v"><b>{loading ? "…" : csMoney(arrNow)}</b>{growth != null && <em className={growth >= 0 ? "is-up" : "is-down"} title="vs. the initial ARR"><CsIco n={growth >= 0 ? "trend" : "down"} s={11} />{csPct(growth)}</em>}</span>
+          </div>
+          <div className="csx-kpi" style={{ ["--i" as any]: 1 }}>
+            <span className="csx-kpi-k">Initial ARR · {year}</span>
+            <span className="csx-kpi-v">{snap ? <><b>{csMoney(initial)}</b><em className="is-flat" title={`Frozen ${csDate(snap.taken_at)}`}><CsIco n="lock" s={10} />fixed</em></> :
+              <button type="button" className="csx-kpi-btn" disabled={!ready || loading} onClick={freeze}><CsIco n="lock" s={11} />Freeze today's ARR</button>}</span>
+          </div>
+          <div className="csx-kpi" style={{ ["--i" as any]: 2 }} title="(initial ARR + expansion − contraction − churn) / initial ARR">
+            <span className="csx-kpi-k">NRR</span>
+            <span className="csx-kpi-v"><b className={nrr == null ? "is-muted" : nrr >= 100 ? "is-good" : "is-warn"}>{nrr == null ? "—" : csPct(nrr)}</b>{nrr != null && <em className={nrr >= 100 ? "is-good" : "is-warn"}>{nrr >= 100 ? "Healthy" : "Watch"}</em>}</span>
+          </div>
+          <div className="csx-kpi" style={{ ["--i" as any]: 3 }} title="Won upsells and other expansion this year">
+            <span className="csx-kpi-k">Expansion</span>
+            <span className="csx-kpi-v"><b>{csMoney(expansion)}</b>{initial > 0 && expansion > 0 && <em className="is-up"><CsIco n="trend" s={11} />{csPct((expansion / initial) * 100)}</em>}</span>
+          </div>
+          <div className={`csx-kpi ${churnRate != null && churnRate > 5 ? "is-alarm" : ""}`} style={{ ["--i" as any]: 4 }} title={`${csMoney(churn)} lost${contraction ? ` · ${csMoney(contraction)} contraction` : ""}`}>
+            <span className="csx-kpi-k">Churn rate</span>
+            <span className="csx-kpi-v"><b className={churnRate == null ? "is-muted" : churnRate > 5 ? "is-bad" : churnRate > 2 ? "is-warn" : "is-good"}>{churnRate == null ? "—" : csPct(churnRate)}</b>{churn > 0 && <em className="is-down">−{csShort(churn)}</em>}</span>
+          </div>
+        </div>
+      </header>
+
+      {notReady && (
+        <div className="csx-banner" role="note">
+          <span className="csx-banner-ico"><CsIco n="lock" s={16} /></span>
+          <div><b>Customer success isn't switched on yet</b><span>Run <code>17_customer_success.sql</code> in Supabase. Contact tracking and renewals already work from your clients; owners, health, QBRs, upsells and revenue movements need the new tables.</span></div>
+        </div>
+      )}
+      {flash && <div className="csx-toast" role="status"><CsIco n="check" s={14} />{flash}</div>}
+
+      <nav className="cs3-tabs" role="tablist" aria-label="Customer success">
+        {TABS.map((t) => (
+          <button key={t.key} type="button" role="tab" aria-selected={tab === t.key} className={tab === t.key ? "is-on" : ""} onClick={() => setTab(t.key)}>
+            <CsIco n={t.icon} s={14} />{t.label}{t.n != null && <em>{t.n}</em>}
+          </button>
+        ))}
+      </nav>
+
+      {loading ? (
+        <PageLoader label="Reading your portfolio" />
+      ) : (
+        <div className="cs3-body" key={tab}>
+          {tab === "accounts" ? accountsTab() : tab === "upsells" ? upsellsTab() : tab === "qbr" ? qbrTab() : revenueTab()}
         </div>
       )}
       {edit && <UpsellEditor initial={edit} clientName={nameOf(edit.client_id)} cat={cat} onClose={() => setEdit(null)} onSaved={upsert}
