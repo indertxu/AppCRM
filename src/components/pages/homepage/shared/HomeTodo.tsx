@@ -40,6 +40,7 @@ import { isoDay } from "./HomeCalendar";
 import { outlookMailStatus, syncTicketMail, sendOutlookMail, connectOutlook, fetchMailAttachment, OUTLOOK_CONNECTION_EVENT, type OutlookMailStatus, type MailSyncResult } from "../../../api/outlookSync";
 import { loadPrefs, savePref } from "../../companies/companiesApi";
 import { MentionText, mentionsToPlain } from "../../../framework/MentionInput";
+import { ClientLogo } from "../../clients/ClientWorkspace";
 import "./HomeShared.css";
 
 type Tab = "quick" | "process" | "delegated" | "done";
@@ -2005,13 +2006,19 @@ export function TicketDesk({ full = false, onClose }: { full?: boolean; onClose?
           </div>
           <span className="tk-row-title"><Rich text={t.title} /></span>
           <div className="tk-row-meta">
-            {link && <span className="tk-link"><TkIco d={link.icon} />{link.text}</span>}
+            {link && <span className={`tk-link ${t.clientId && link.icon === "briefcase" ? "has-logo" : ""}`}>{t.clientId && link.icon === "briefcase" ? <ClientLogo name={link.text} clientId={t.clientId} className="tk-link-logo" /> : <TkIco d={link.icon} />}{link.text}</span>}
             <DueChip dueAt={t.due} todayIso={today} done={!isActive(t.stage)} />
             <SlaBadge t={t} sla={sla} now={now} compact />
             {(t.checklist.length > 0 || (t.kind === "process" && t.progress > 0)) && <span className="tk-pct"><i style={{ ["--w" as string]: `${t.checklist.length ? Math.round((t.checklist.filter((x) => x.done).length / t.checklist.length) * 100) : t.progress}%` } as React.CSSProperties} />{t.checklist.length ? `${t.checklist.filter((x) => x.done).length}/${t.checklist.length}` : `${t.progress}%`}</span>}
           </div>
         </div>
         <div className="tk-row-side" onClick={(e) => e.stopPropagation()}>
+          {/* quick actions: shown when the row is hovered or focused */}
+          <span className="tk-row-acts">
+            {isActive(t.stage) && <button type="button" className="tk-act" title="Resolve (E)" aria-label="Resolve" onClick={() => patch(t, { stage: "resolved" })}><TkIco d="check" /></button>}
+            {me && t.assignee !== me && isActive(t.stage) && <button type="button" className="tk-act" title="Take it (A)" aria-label="Assign to me" onClick={() => patch(t, { assignee: me })}><TkIco d="user" /></button>}
+            <button type="button" className="tk-act" title="Open" aria-label="Open" onClick={() => setOpenId(t.id)}><TkIco d="arrow" /></button>
+          </span>
           <StagePill stage={t.stage} onClick={(e) => setMenu({ id: t.id, kind: "stage", rect: e.currentTarget.getBoundingClientRect() })} />
           <button type="button" className="tk-av-btn" onClick={(e) => setMenu({ id: t.id, kind: "assignee", rect: e.currentTarget.getBoundingClientRect() })} title={person(t.assignee)?.name ?? "Unassigned — click to assign"}>
             <Avatar person={person(t.assignee)} size={26} />

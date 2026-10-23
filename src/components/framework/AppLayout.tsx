@@ -4,7 +4,7 @@ import Dock from "./Dock";
 import { supabase } from "../api/supabase";
 import { useAuth } from "../api/AuthProvider";
 import { DOCK_LABELS_KEY, DOCK_LABELS_EVENT } from "../pages/settings/SettingsPage";
-import { PageAccessProvider } from "./pageAccess";
+import { PageAccessProvider, NAV_RESET_EVENT } from "./pageAccess";
 import "./AppLayout.css";
 
 /** The app: a fixed sidebar rail on the left, always there, and the page to its right. */
@@ -30,11 +30,25 @@ export default function AppLayout() {
     });
   }, [uid]);
 
+  // Sidebar item of the page you're on → back to that page's overview: remount it (every
+  // sub-view, open panel and tab is local state, so a fresh mount is the overview).
+  const [resetKey, setResetKey] = useState(0);
+  useEffect(() => {
+    const on = (e: Event) => {
+      const path = (e as CustomEvent<string>).detail;
+      if (path === "/home") return;     // nothing to reset there (and no reason to replay its intro)
+      setResetKey((k) => k + 1);
+      try { window.scrollTo({ top: 0 }); } catch { /* ignore */ }
+    };
+    window.addEventListener(NAV_RESET_EVENT, on);
+    return () => window.removeEventListener(NAV_RESET_EVENT, on);
+  }, []);
+
   return (
     <PageAccessProvider>
       <div className={`app-shell ${labels ? "rail-labels" : ""}`}>
         <Dock />
-        <div className="app-page">
+        <div className="app-page" key={resetKey}>
           <Outlet />
         </div>
       </div>

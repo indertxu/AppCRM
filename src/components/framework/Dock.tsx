@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useState, useRef, useCallback, lazy, Suspen
 import { createPortal } from "react-dom";
 import { loadPrefs } from "../pages/companies/companiesApi";
 import { useNavigate, useLocation } from "react-router-dom";
-import { usePageAccess, type PageKey } from "./pageAccess";
+import { usePageAccess, clearPendingSection, NAV_RESET_EVENT, type PageKey } from "./pageAccess";
 import { supabase } from "../api/supabase";
 import { useAuth } from "../api/AuthProvider";
 
@@ -192,7 +192,7 @@ export default function Dock() {
     document.addEventListener("keydown", key);
     return () => document.removeEventListener("keydown", key);
   }, []);
-  useEffect(() => { setSearch(false); setMenu(false); setTip(null); }, [location.pathname, location.search]);
+  useEffect(() => { setSearch(false); setMenu(false); setTip(null); }, [location.key]);
 
   // ---- tooltips: drawn on <body> so a page or its overlays never hide them.
   // One tooltip that glides from item to item; it only fades when the pointer leaves the rail.
@@ -276,7 +276,13 @@ export default function Dock() {
   };
 
   const item = (it: DockItem) => (
-    <button key={it.path} type="button" className={`rail-item k-${it.page} ${isOn(it.path) ? "is-on" : ""}`} onClick={() => { setTip(null); navigate(it.path); }}
+    <button key={it.path} type="button" className={`rail-item k-${it.page} ${isOn(it.path) ? "is-on" : ""}`} onClick={() => {
+        setTip(null);
+        clearPendingSection();
+        // already on this page (maybe deep in a sub-section): back to its overview
+        if (isOn(it.path)) window.dispatchEvent(new CustomEvent(NAV_RESET_EVENT, { detail: it.path }));
+        navigate(it.path);
+      }}
       aria-label={it.label} aria-current={isOn(it.path) ? "page" : undefined} {...tipOn(it.label)}
       onMouseMove={magnet.onMouseMove} onPointerDown={magnet.onPointerDown}
       onMouseLeave={(e) => { magnet.onMouseLeave(e); hideTip(); }}>

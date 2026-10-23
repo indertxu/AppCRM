@@ -20,6 +20,7 @@ import { deleteEntryFromOutlook, syncCalendarEntry } from "../../api/outlookSync
 import HomeTodo from "../homepage/shared/HomeTodo";
 import { PageCover } from "../../framework/AppLayout";
 import "./CalendarPage.css";
+import { useNavSection } from "../../framework/pageAccess";
 
 /** Fallback window, used until the configured hours arrive. */
 const DEFAULT_START = 8 * 60;
@@ -326,6 +327,7 @@ const [dragging, setDragging] = useState<{ id: string; grabMin: number } | null>
     return () => window.removeEventListener("mouseup", up);
   }, [ghost?.drag]);
 const [view, setView] = useState<"week" | "month">("week");
+  useNavSection("/calendar", 0, (part) => { if (part === "week" || part === "month") setView(part); });
   const [jumpOpen, setJumpOpen] = useState(false);
   const [actuals, setActuals] = useState<Record<string, ActualValue>>({});
   const [actualFor, setActualFor] = useState<Entry | null>(null);

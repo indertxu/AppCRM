@@ -23,6 +23,7 @@ import { FilterBar, FilterChips, SortHead, applyView, nextSort, emptyView, useSa
 import { loadPrefs, savePref, pagedAll } from "../companies/companiesApi";
 import "../companies/CompaniesPage.css";
 import "./ClientsPage.css";
+import { useNavSection } from "../../framework/pageAccess";
 
 // Re-export shared types & helpers from their new home so existing imports
 // elsewhere (e.g. ./ClientsPage) keep working unchanged.
@@ -1172,6 +1173,7 @@ export function CustomerSuccessPage() {
   const [scope, setScope] = useState<"mine" | "all">("all");
   const [owner, setOwner] = useState("");
   const [tab, setTab] = useState<CsTab>("accounts");
+  useNavSection("/success", 0, (part) => { if (["accounts", "upsells", "qbr", "revenue"].includes(part)) setTab(part as CsTab); });
   const [filter, setFilter] = useState<CsFilter>("all");
   const [sort, setSort] = useState<CsSort>("priority");
   const [q, setQ] = useState("");

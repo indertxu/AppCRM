@@ -17,6 +17,7 @@ import { ROLE_COLORS, roleColor } from "../clients/clientsTypes";
 import { listCrmOptions, addCrmOption, deleteCrmOption, productKindOptions, type CrmOption } from "../companies/companiesApi";
 import "../clients/ClientsPage.css";
 import "./CatalogPage.css";
+import { useNavSection } from "../../framework/pageAccess";
 
 interface Props { onBack: () => void; }
 
@@ -87,6 +88,7 @@ const NotInProposals = () => (
 
 export default function CatalogPage({ onBack }: Props) {
   const [tab, setTab] = useState<Tab>("products");
+  useNavSection("/settings", 1, (part) => { if (part === "products" || part === "services" || part === "blueprints") setTab(part as Tab); }, "catalog");
   const [products, setProducts] = useState<Product[]>([]);
   const [services, setServices] = useState<Service[]>([]);
   const [blueprints, setBlueprints] = useState<Blueprint[]>([]);

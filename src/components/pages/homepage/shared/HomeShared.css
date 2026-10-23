@@ -1796,3 +1796,9 @@
   .tm-row, .tm-card, .tp-seg.is-now, .tk-sla.is-breach, .ts-rule, .ts-box, .tm-modal, .ts, .tk-keys, .is-spin { animation: none; }
 }
 .tk-full-nav button.is-on i.is-new { color: #fff; }
+
+/* ---- hover peek of a day's bookings + quick actions on ticket rows (styled per home) ---- */
+.hs-day-peek { display: none; }
+.tk-row-acts { display: none; }
+.tk-link.has-logo { gap: 5px; }
+.tk-link .tk-link-logo { width: 16px; height: 16px; flex-shrink: 0; border-radius: 5px; font-size: 7px; }

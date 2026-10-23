@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type UIEvent } from "react";
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 import Select from "../../framework/Select";
@@ -8,7 +8,7 @@ import {
   listContacts, saveContact, deleteContact, listCompanies,
   myProfile, isSalesLead, listEmployees, loadContactAssignees, setContactAssignees,
   listContactFields, addContactField, updateContactField, deleteContactField,
-  loadRelationshipSets, type RelationshipSets, contactStatus,
+  loadRelationshipSets, type RelationshipSets, contactStatus, contactsPage,
   loadPrefs, savePref,
   type Contact, type Company, type Employee, type ContactField,
   renameCustomValue, customList,
@@ -42,6 +42,9 @@ const empty = (): Contact => ({
 });
 
 const fullName = (c: Contact) => [c.first_name, c.last_name].filter(Boolean).join(" ") || "Unnamed";
+const NAME_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+/** Rows kept in the page around the visible ones (the rest are spacers): 25,000 contacts stay fluid. */
+const ROW_OVERSCAN = 14;
 
 // Strip accents/diacritics so "brujula" matches "brújula".
 const norm = (s: string) => (s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
@@ -74,15 +77,27 @@ export default function ContactsPage() {
   const location = useLocation();
 
   const reload = async () => {
-    setContacts(await listContacts().catch(() => []));
-    setCompanies(await listCompanies().catch(() => []));
-    setAssignees(await loadContactAssignees().catch(() => ({})));
-    setFields(await listContactFields().catch(() => []));
-    setRel(await loadRelationshipSets().catch(() => null));
-    setLoaded(true);
+    // everything at once (it used to be five reads one after the other)
+    const [cs, cos, asg, fs, rs] = await Promise.all([
+      listContacts().catch(() => [] as Contact[]),
+      listCompanies().catch(() => [] as Company[]),
+      loadContactAssignees().catch(() => ({} as Record<string, string[]>)),
+      listContactFields().catch(() => [] as ContactField[]),
+      loadRelationshipSets().catch(() => null),
+    ]);
+    setContacts(cs); setCompanies(cos); setAssignees(asg); setFields(fs); setRel(rs);
+    setLoaded(true); setPreview(null);
     listCrmOptions().then(setCrmOptions).catch(() => {});
     listCompanyFields().then(setCompanyFields).catch(() => {});
   };
+  // While the full list loads: the first page straight from the database (38_contacts_paging.sql), so the page paints at once.
+  const [preview, setPreview] = useState<{ rows: Contact[]; total: number } | null>(null);
+  useEffect(() => {
+    if (loaded) return;
+    let off = false;
+    const t = setTimeout(() => { contactsPage({ search: q, limit: 80 }).then((r) => { if (!off && r) setPreview(r); }).catch(() => {}); }, q ? 250 : 0);
+    return () => { off = true; clearTimeout(t); };
+  }, [q, loaded]);
   useEffect(() => {
     myProfile().then(setMe).catch(() => {});
     listEmployees().then(setEmployees).catch(() => {});
@@ -102,7 +117,8 @@ export default function ContactsPage() {
 
   const lead = isSalesLead(me);
 
-  const companyName = (id: string) => companies.find((c) => c.id === id)?.name ?? "—";
+  const coById = useMemo(() => new Map(companies.map((co) => [co.id as string, co])), [companies]);
+  const companyName = (id: string, c?: Contact) => coById.get(id)?.name ?? (c as any)?.__coNames?.[id] ?? "—";
   // Company pill in the list → that company on the Companies page, with its panel open.
   const openCompany = (id: string) => navigate("/companies", { state: { focusCompanyId: id } });
 
@@ -134,7 +150,8 @@ export default function ContactsPage() {
   const setColumnsPersist = (next: string[]) => { setColumns(next); savePref("contactColumns", next).catch(() => {}); };
 
   // Render one cell for a given column key + contact.
-  const fieldById = (id: string) => fields.find((f) => f.id === id);
+  const fieldMap = useMemo(() => new Map(fields.map((f) => [f.id, f])), [fields]);
+  const fieldById = (id: string) => fieldMap.get(id);
   const renderCell = (c: Contact, key: string) => {
     if (key === "co_type") return <TypeChips tags={typesOf(c)} pipelines={statusOf(c).pipelines} />;
     if (key === "position") return <span className="ct-lmuted">{c.position || "—"}</span>;
@@ -146,10 +163,10 @@ export default function ContactsPage() {
       ? <span className="ct-lmuted">—</span>
       : <span className="ct-lcompanies">
           {c.companyIds.slice(0, 2).map((id) => (
-            <span key={id} className="ct-chip is-link" role="link" tabIndex={0} title={`Open ${companyName(id)}`}
+            <span key={id} className="ct-chip is-link" role="link" tabIndex={0} title={`Open ${companyName(id, c)}`}
               onClick={(e) => { e.stopPropagation(); openCompany(id); }}
               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); openCompany(id); } }}>
-              {companyName(id)}
+              {companyName(id, c)}
             </span>
           ))}
           {c.companyIds.length > 2 && <span className="ct-chip ct-chip-more">+{c.companyIds.length - 2}</span>}
@@ -174,25 +191,52 @@ export default function ContactsPage() {
   const people = () => employees.map((e) => ({ value: e.id, label: e.name }));
   const valuesOf = (get: (c: Contact) => unknown, label?: (v: string) => string) => () =>
     [...new Set(contacts.map((c) => String(get(c) ?? "").trim()).filter(Boolean))].map((v) => ({ value: v, label: label ? label(v) : v })).sort((a, b) => a.label.localeCompare(b.label));
-  const coById = new Map(companies.map((co) => [co.id as string, co]));
-  const statusOf = (c: Contact) => contactStatus(c, rel, companies);
+  /**
+   * Everything a row needs that is worked out from the links (status, types, where each type comes
+   * from, the search text), once per load — not on every render, keystroke and filter for every row.
+   */
+  const derived = useMemo(() => {
+    const m = new Map<string, { status: ReturnType<typeof contactStatus>; inh: { tag: string; from: string[] }[]; types: { tag: string; from?: string[] }[]; hay: string }>();
+    for (const c of contacts) {
+      if (!c.id) continue;
+      const status = contactStatus(c, rel, companies);
+      const inh = inheritedCompanyTags(c, companies, rel);
+      const fromOf = (k: string) => inh.find((t) => t.tag === k)?.from;
+      const types = [
+        { tag: "crm", from: fromOf("crm") },
+        ...(status.client ? [{ tag: "client", from: fromOf("client") }] : []),
+        ...(status.sales ? [{ tag: "sales", from: fromOf("sales") }] : []),
+        ...inh.filter((t) => t.tag !== "crm" && t.tag !== "client" && t.tag !== "sales"),
+      ];
+      const hay = norm([fullName(c), c.position, c.email, c.phone, c.city, c.province, c.companyIds.map((id) => coById.get(id)?.name ?? "").join(" ")].filter(Boolean).join(" \u0001 "));
+      m.set(c.id, { status, inh, types, hay });
+    }
+    return m;
+  }, [contacts, companies, rel, coById]);
+  const previewTypes = (c: Contact) => ((c as any).__types as string[] | undefined) ?? null;
+  const statusOf = (c: Contact) => {
+    const d = c.id ? derived.get(c.id) : undefined;
+    if (d) return d.status;
+    const pt = previewTypes(c);
+    if (pt) return { client: pt.includes("client"), sales: pt.includes("sales"), pipelines: [] };
+    return contactStatus(c, rel, companies);
+  };
   const statusTags = (c: Contact) => { const s = statusOf(c); return [...(s.client ? ["client"] : []), ...(s.sales ? ["sales"] : []), ...(!s.client && !s.sales ? ["none"] : [])]; };
   const coList = (c: Contact) => c.companyIds.map((id) => coById.get(id)).filter((x): x is Company => !!x);
   const allPipes = () => [...new Set([...Object.values(rel?.pipesByContact ?? {}).flat(), ...Object.values(rel?.pipesByCompany ?? {}).flat()])].sort().map((p) => ({ value: p, label: p }));
   const coValues = (get: (co: Company) => string[]) => () => [...new Set(companies.flatMap(get).filter(Boolean))].sort().map((v) => ({ value: v, label: v }));
   // the types each contact gets from its companies (CRM, Client, In sales, Partner…), worked out once per load
-  const inhById = useMemo(() => {
-    const m = new Map<string, { tag: string; from: string[] }[]>();
-    contacts.forEach((c) => { if (c.id) m.set(c.id, inheritedCompanyTags(c, companies, rel)); });
-    return m;
-  }, [contacts, companies, rel]);
-  const inhOf = (c: Contact) => (c.id ? inhById.get(c.id) : undefined) ?? inheritedCompanyTags(c, companies, rel);
+  const inhOf = (c: Contact) => (c.id ? derived.get(c.id)?.inh : undefined) ?? inheritedCompanyTags(c, companies, rel);
   /**
    * A contact's types, the same as a company's: CRM, Client and In sales (its own
    * deals or its companies'), plus the types of every company it works for
    * (Partner, Supplier…). Live from the links — nothing is stored on the contact.
    */
-  const typesOf = (c: Contact) => {
+  const typesOf = (c: Contact): { tag: string; from?: string[] }[] => {
+    const d = c.id ? derived.get(c.id) : undefined;
+    if (d) return d.types;
+    const pt = previewTypes(c);
+    if (pt) return pt.map((tag) => ({ tag }));
     const s = statusOf(c);
     const inh = inhOf(c);
     const fromOf = (k: string) => inh.find((t) => t.tag === k)?.from;
@@ -262,19 +306,31 @@ export default function ContactsPage() {
   ];
 
   // Sales people only see the contacts they have been given access to.
-  const visible = contacts.filter((c) => lead || !me || (assignees[c.id!] ?? []).includes(me.id));
-  const searched = (() => {
-    const n = norm(q.trim());
+  const visible = useMemo(() => contacts.filter((c) => lead || !me || (assignees[c.id!] ?? []).includes(me.id)), [contacts, lead, me, assignees]);
+  // typing stays instant: the list follows the search a beat later, in the background
+  const dq = useDeferredValue(q);
+  const searched = useMemo(() => {
+    const n = norm(dq.trim());
     if (!n) return visible;
-    return visible.filter((c) => [fullName(c), c.position, c.email, c.phone, c.city, c.province, c.companyIds.map(companyName).join(" ")].some((v) => norm(v ?? "").includes(n)));
-  })();
-  const shown = applyView(searched, filterFields, view, (a, b) => fullName(a).localeCompare(fullName(b)));
+    return visible.filter((c) => (c.id ? derived.get(c.id)?.hay : undefined)?.includes(n) ?? norm([fullName(c), c.position, c.email].join(" ")).includes(n));
+  }, [visible, dq, derived]);
+  const fieldsRef = useRef(filterFields);
+  fieldsRef.current = filterFields;
+  const loadedShown = useMemo(
+    () => applyView(searched, fieldsRef.current, view, (a, b) => NAME_COLLATOR.compare(fullName(a), fullName(b))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [searched, view, derived, fields, companyFields, crmOptions, assignees],
+  );
+  const shown = loaded || !preview ? loadedShown : preview.rows;
   const onSort = (key: string, add: boolean) => setView({ ...view, sort: nextSort(view.sort, key, add) });
 
   // ---- Multi-select: link, assign, export or delete many contacts at once ----
-  const bulk = useBulkSelection(shown.map((c) => c.id as string));
+  const shownIds = useMemo(() => shown.map((c) => c.id as string), [shown]);
+  const bulk = useBulkSelection(shownIds);
   const [exportIds, setExportIds] = useState<string[] | null>(null);
-  const picked = () => contacts.filter((c) => bulk.has(c.id as string));
+  // the picked contacts, worked out once per selection (it ran on every render for every company: 25k × 5k)
+  const pickedList = useMemo(() => (bulk.sel.size ? contacts.filter((c) => bulk.sel.has(c.id as string)) : []), [bulk.sel, contacts]);
+  const picked = () => pickedList;
   const bulkActions: BulkAction[] = [
     {
       key: "company", label: "Add to company",
@@ -294,7 +350,7 @@ export default function ContactsPage() {
     {
       key: "uncompany", label: "Remove from company", more: true,
       icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="3" width="10" height="18" rx="1.5" /><path d="M14 8h6v13H4M16 4h4" /></svg>,
-      options: companies.filter((co) => picked().some((c) => c.companyIds.includes(co.id as string))).map((co) => ({ value: co.id as string, label: co.name })),
+      options: (() => { const on = new Set(pickedList.flatMap((c) => c.companyIds)); return on.size ? companies.filter((co) => on.has(co.id as string)).map((co) => ({ value: co.id as string, label: co.name })) : []; })(),
       run: async (v) => {
         if (!v) return null;
         let n = 0;
@@ -377,6 +433,52 @@ export default function ContactsPage() {
     },
   ];
 
+  // ---- Only the rows on screen are in the page (plus a margin); the others are spacers ----
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const [stride, setStride] = useState(66);
+  const [view0, setView0] = useState({ top: 0, h: 900 });
+  const raf = useRef(0);
+  const onListScroll = useCallback((e: UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    el.classList.toggle("is-scrolled-x", el.scrollLeft > 4);
+    el.classList.toggle("is-scrolled-y", el.scrollTop > 2);
+    cancelAnimationFrame(raf.current);
+    raf.current = requestAnimationFrame(() => setView0((v) => (v.top === el.scrollTop && v.h === el.clientHeight ? v : { top: el.scrollTop, h: el.clientHeight })));
+  }, []);
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (el && el.clientHeight && el.clientHeight !== view0.h) setView0({ top: el.scrollTop, h: el.clientHeight });
+    // the real row height + gap, measured from two rows on screen (compact and normal differ)
+    const rows = listRef.current?.children;
+    if (rows && rows.length >= 2) {
+      const d = (rows[1] as HTMLElement).offsetTop - (rows[0] as HTMLElement).offsetTop;
+      if (d > 20 && Math.abs(d - stride) > 0.5) setStride(d);
+    }
+  });
+  // a new search / filter starts at the top
+  useEffect(() => { scrollRef.current?.scrollTo({ top: 0 }); }, [dq, view]);
+  const win = (() => {
+    const listTop = listRef.current?.offsetTop ?? 80;
+    const first = Math.max(0, Math.floor((view0.top - listTop) / stride) - ROW_OVERSCAN);
+    const last = Math.min(shown.length, Math.ceil((view0.top + view0.h - listTop) / stride) + ROW_OVERSCAN);
+    return { first: Math.min(first, shown.length), last: Math.max(last, Math.min(shown.length, first + 1)) };
+  })();
+  // a row from the first page (before everything loaded) opens once its full record is in
+  const openContact = (c: Contact) => {
+    const full = c.id ? contacts.find((x) => x.id === c.id) : undefined;
+    if (full) { setEditing(structuredClone(full)); return; }
+    if ((c as any).__coNames) { pendingOpen.current = c.id ?? null; return; }
+    setEditing(structuredClone(c));
+  };
+  const pendingOpen = useRef<string | null>(null);
+  useEffect(() => {
+    if (!loaded || !pendingOpen.current) return;
+    const c = contacts.find((x) => x.id === pendingOpen.current);
+    pendingOpen.current = null;
+    if (c) setEditing(structuredClone(c));
+  }, [loaded, contacts]);
+
   if (me && !isSalesLead(me) && me.role !== "sales") {
     return (
       <div className="ct">
@@ -394,7 +496,9 @@ export default function ContactsPage() {
       <header className="ct-head">
         <button className="ct-back" onClick={() => navigate("/home")} aria-label="Back">‹</button>
         <h1 className="ct-title">Contacts</h1>
-        <span className="ct-kpi"><b>{shown.length.toLocaleString("en-GB")}</b>{shown.length !== visible.length ? `of ${visible.length.toLocaleString("en-GB")} ` : ""}{visible.length === 1 ? "contact" : "contacts"}</span>
+        {!loaded && preview
+          ? <span className="ct-kpi"><b>{preview.total.toLocaleString("en-GB")}</b>{preview.total === 1 ? "contact" : "contacts"}</span>
+          : <span className="ct-kpi"><b>{shown.length.toLocaleString("en-GB")}</b>{shown.length !== visible.length ? `of ${visible.length.toLocaleString("en-GB")} ` : ""}{visible.length === 1 ? "contact" : "contacts"}</span>}
         <div className="ct-search">
           <span className="ct-search-ico">⌕</span>
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, position, company or city…" />
@@ -412,11 +516,11 @@ export default function ContactsPage() {
 
       <FilterChips fields={filterFields} view={view} onView={setView} onEdit={() => setFiltersOpenTick((x) => x + 1)} shown={shown.length} total={visible.length} noun={["contact", "contacts"]} />
 
-      {!loaded ? <PageLoader label="Loading contacts…" fill={false} /> : shown.length === 0 ? (
+      {!loaded && !preview ? <PageLoader label="Loading contacts…" fill={false} /> : shown.length === 0 ? (
         <p className="cl-hint">{contacts.length === 0 ? "No contacts yet. Add your first one." : "No contacts match your search and filters."}</p>
       ) : (
-        <div className={`ct-scroll is-xscroll ${compact ? "is-compact" : ""}`} style={{ ["--row-min" as string]: `${rowMin}px` } as CSSProperties}
-          onScroll={(e) => { const el = e.currentTarget; el.classList.toggle("is-scrolled-x", el.scrollLeft > 4); el.classList.toggle("is-scrolled-y", el.scrollTop > 2); }}>
+        <div ref={scrollRef} className={`ct-scroll is-xscroll ${compact ? "is-compact" : ""}`} style={{ ["--row-min" as string]: `${rowMin}px`, position: "relative" } as CSSProperties}
+          onScroll={onListScroll}>
           {/* the sticky header sits on an opaque band of the page colour: rows never show above or around it */}
           <div className="ct-lhead-wrap">
           <div className="ct-lrow ct-lhead" style={{ gridTemplateColumns: rowGrid }}>
@@ -424,10 +528,10 @@ export default function ContactsPage() {
             {activeColumns.map((k) => <span key={k}><SortHead label={columnLabel(k)} k={k} sort={view.sort} onSort={onSort} /></span>)}
           </div>
           </div>
-          <div className="ct-list">
-            {shown.map((c) => (
+          <div ref={listRef} className="ct-list" style={{ paddingTop: win.first * stride, paddingBottom: (shown.length - win.last) * stride + 72 }}>
+            {shown.slice(win.first, win.last).map((c) => (
               <button key={c.id} className={`ct-lrow ${bulk.has(c.id as string) ? "is-sel" : ""} ${bulk.active ? "is-selecting" : ""}`}
-                onClick={(e) => { if (bulk.active || e.shiftKey || e.metaKey || e.ctrlKey) bulk.toggle(c.id as string, e.shiftKey); else setEditing(structuredClone(c)); }}
+                onClick={(e) => { if (bulk.active || e.shiftKey || e.metaKey || e.ctrlKey) bulk.toggle(c.id as string, e.shiftKey); else openContact(c); }}
                 style={{ gridTemplateColumns: rowGrid }}>
                 <span className="ct-lcell ct-lid">
                   <span className="ct-av-wrap">
@@ -465,7 +569,7 @@ export default function ContactsPage() {
           contacts={contacts.filter((c) => lead || !me || (assignees[c.id!] ?? []).includes(me.id))}
           companies={companies}
           contactFields={fields}
-          shownIds={exportIds ?? shown.map((c) => c.id as string)}
+          shownIds={exportIds ?? shownIds}
           onClose={() => { setExporting(false); setExportIds(null); }}
         />
       )}

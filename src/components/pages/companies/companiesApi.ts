@@ -312,6 +312,9 @@ export async function deleteCompany(id: string): Promise<string | null> {
 // How many contacts each company has (for list badges).
 export function companyContactCounts(): ReturnType<typeof companyContactCountsRaw> { return shared("companyContactCounts", companyContactCountsRaw); }
 async function companyContactCountsRaw(): Promise<Record<string, number>> {
+  // counted in the database when 38_contacts_paging.sql is in (one small reply instead of every link)
+  const fast = await companyContactCountsFast().catch(() => null);
+  if (fast) return fast;
   const data = await readAll<any>("company_contacts", "company_id, contact_id", ["company_id", "contact_id"]);
   const out: Record<string, number> = {};
   data.forEach((r: any) => { out[r.company_id] = (out[r.company_id] ?? 0) + 1; });
@@ -329,6 +332,43 @@ async function listContactsRaw(): Promise<Contact[]> {
   const byContact: Record<string, string[]> = {};
   links.forEach((l: any) => { const list = (byContact[l.contact_id] ??= []); if (!list.includes(l.company_id)) list.push(l.company_id); });
   return rows.map((r: any) => ({ ...r, companyIds: byContact[r.id] ?? [] }));
+}
+
+/**
+ * The first page of the contacts list straight from the database (38_contacts_paging.sql),
+ * shown while the full list is still loading: the page paints in well under a second even
+ * with tens of thousands of contacts. null when the function isn't installed yet.
+ * Rows carry `__coNames` (company id → name) and `__types` (CRM, client, sales, own types).
+ */
+let pagingMissing = false;
+export async function contactsPage(opts: { search?: string; sort?: "name" | "created_at"; dir?: "asc" | "desc"; offset?: number; limit?: number }): Promise<{ rows: Contact[]; total: number } | null> {
+  if (pagingMissing) return null;
+  const { data, error } = await supabase.rpc("contacts_page", {
+    p_search: (opts.search ?? "").trim() || null, p_filters: {}, p_sort: opts.sort ?? "name", p_dir: opts.dir ?? "asc",
+    p_offset: opts.offset ?? 0, p_limit: opts.limit ?? 80,
+  });
+  if (error || !data) {
+    if (error && /42883|PGRST202|could not find the function|does not exist/i.test(`${(error as any).code ?? ""} ${error.message ?? ""}`)) pagingMissing = true;
+    return null;
+  }
+  const list = Array.isArray(data) ? data : [];
+  const total = list.length ? Number((list[0] as any).total ?? list.length) : 0;
+  const rows: Contact[] = list.map((r: any) => {
+    const row = r.contact ?? r.row ?? r;
+    const ids: string[] = (r.company_ids ?? []).map(String);
+    const names: string[] = r.company_names ?? [];
+    return { ...row, companyIds: ids, __coNames: Object.fromEntries(ids.map((id, i) => [id, names[i] ?? ""])), __types: r.types ?? [] } as Contact;
+  });
+  return { rows, total };
+}
+
+/** Contacts per company, counted by the database (38); null when the function isn't there. */
+export async function companyContactCountsFast(): Promise<Record<string, number> | null> {
+  const { data, error } = await supabase.rpc("company_contact_counts");
+  if (error || !Array.isArray(data)) return null;
+  const out: Record<string, number> = {};
+  data.forEach((r: any) => { if (r.company_id) out[r.company_id] = Number(r.n ?? r.count ?? 0); });
+  return out;
 }
 
 export async function saveContact(c: Contact): Promise<string | null> {
@@ -638,6 +678,9 @@ export async function loadRelationshipSets(): Promise<RelationshipSets> {
   return { clientCompanyIds, clientContactIds, trackingCompanyIds, trackingContactIds, pipesByCompany, pipesByContact, wonCompanyIds };
 }
 
+/** One id → company Map per companies list (lists are replaced, never mutated, so a WeakMap keyed on the array is safe). */
+const coIndex = new WeakMap<Company[], Map<string, Company>>();
+
 /** Where a company or contact stands: client, and the pipelines it is in sales in. */
 export interface RelStatus { client: boolean; sales: boolean; pipelines: string[] }
 const NO_STATUS: RelStatus = { client: false, sales: false, pipelines: [] };
@@ -658,8 +701,11 @@ export function contactStatus(ct: { id?: string; companyIds: string[] }, rel: Re
   if (!rel) return NO_STATUS;
   const own = ct.id ? { client: rel.clientContactIds.has(ct.id), sales: rel.trackingContactIds.has(ct.id), pipelines: rel.pipesByContact[ct.id] ?? [] } : NO_STATUS;
   const out: RelStatus = { client: own.client, sales: own.sales, pipelines: [...own.pipelines] };
+  // a Map per companies list (built once): a find() per link made 25k contacts × 5k companies freeze the page
+  let byId = coIndex.get(companies);
+  if (!byId) { byId = new Map(companies.map((x) => [x.id as string, x])); coIndex.set(companies, byId); }
   ct.companyIds.forEach((id) => {
-    const co = companies.find((x) => x.id === id) ?? { id };
+    const co = byId!.get(id) ?? { id };
     const s = companyStatus(co, rel);
     out.client ||= s.client;
     out.sales ||= s.sales;
@@ -813,7 +859,6 @@ export async function renameCrmOption(opt: CrmOption, to: string): Promise<strin
   return null;
 }
 
-const coIndex = new WeakMap<Company[], Map<string, Company>>();
 /**
  * The types a contact gets from the companies it works for (CRM, Client,
  * In sales and your own, e.g. Partner), with the companies each one comes from.

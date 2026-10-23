@@ -99,6 +99,10 @@ function resolveHours(rows: any[], userId: string, dept: string | null): Hours {
   return out;
 }
 
+/** Fired with today's load and the five-day totals once the calendar has its data. */
+export const CAL_SUMMARY_EVENT = "home:calendar-summary";
+export interface CalSummary { todayMin: number; todayCap: number; fiveBooked: number; fiveCap: number; next: { date: string; time: string; title: string; today: boolean } | null }
+
 const VIEW_KEY = "home.calendar.view";
 const readView = (): View => { try { return localStorage.getItem(VIEW_KEY) === "month" ? "month" : "days"; } catch { return "days"; } };
 
@@ -225,6 +229,22 @@ export default function HomeCalendar({ userId, hoursPerDay }: { userId: string; 
   const fivePct = fiveCap > 0 ? (fiveBooked / fiveCap) * 100 : fiveBooked > 0 ? 100 : 0;
   const ready = !loading && hrs !== null;
 
+  // Tell the page what today looks like (the consultancy hero shows it as its first figure).
+  const todayMinV = bookedMin(todayIso);
+  const todayCapV = capOn(todayIso);
+  useEffect(() => {
+    if (!ready) return;
+    const now = new Date();
+    const nowM = now.getHours() * 60 + now.getMinutes();
+    const nextIt = items.find((it) => it.date > todayIso || (it.date === todayIso && it.end > nowM)) ?? null;
+    try {
+      window.dispatchEvent(new CustomEvent(CAL_SUMMARY_EVENT, { detail: {
+        todayMin: todayMinV, todayCap: todayCapV, fiveBooked, fiveCap,
+        next: nextIt ? { date: nextIt.date, time: hhmm(nextIt.start), title: nextIt.title, today: nextIt.date === todayIso } : null,
+      } as CalSummary }));
+    } catch { /* old browsers */ }
+  }, [ready, todayMinV, todayCapV, fiveBooked, fiveCap, items, todayIso]);
+
   // What the list shows: the clicked day, or what's coming up from now on.
   const nowMin = today.getHours() * 60 + today.getMinutes();
   const list = useMemo(() => {
@@ -276,8 +296,8 @@ export default function HomeCalendar({ userId, hoursPerDay }: { userId: string; 
               ? `${off.label}${min ? ` · ${hours(min)} booked anyway` : ""}`
               : `${hours(min)} booked of ${hours(cap)} available · ${n} ${n === 1 ? "item" : "items"}`;
             return (
-              <button key={iso} className={`hs-day ${loadClass(min, cap)} ${off ? `is-off is-${off.kind}` : ""} ${iso === todayIso ? "is-today" : ""} ${sel === iso ? "is-sel" : ""}`}
-                style={{ ["--i" as string]: i } as React.CSSProperties}
+              <button key={iso} className={`hs-day ${loadClass(min, cap)} ${off ? `is-off is-${off.kind}` : ""} ${iso === todayIso ? "is-today" : ""} ${sel === iso ? "is-sel" : ""} ${n ? "has-items" : ""}`}
+                style={{ ["--i" as string]: i, ["--p" as string]: ready ? pct : 0 } as React.CSSProperties}
                 onClick={() => toggleDay(iso)} title={tip}>
                 <span className="hs-day-dow">{iso === todayIso ? "Today" : d.toLocaleDateString("en-GB", { weekday: "short" })}</span>
                 <span className="hs-day-num">{d.getDate()}</span>
@@ -295,6 +315,15 @@ export default function HomeCalendar({ userId, hoursPerDay }: { userId: string; 
                     <span className="hs-day-n">{!ready ? "" : free > 0 ? `${hours(free)} free` : free === 0 ? "full" : `+${hours(-free)} over`}</span>
                   </>
                 )}
+                {/* what's booked that day — revealed on hover (consultancy home) */}
+                <span className="hs-day-peek" aria-hidden="true">
+                  {n === 0 ? <em className="hs-peek-none">{off ? off.label : "Nothing booked"}</em> : (byDay.get(iso) ?? []).slice(0, 3).map((it) => (
+                    <span key={it.id} className="hs-peek-it" style={{ ["--c" as string]: it.color } as React.CSSProperties}>
+                      <b>{hhmm(it.start)}</b><span>{it.title}</span>
+                    </span>
+                  ))}
+                  {n > 3 && <em className="hs-peek-more">+{n - 3} more</em>}
+                </span>
               </button>
             );
           })}

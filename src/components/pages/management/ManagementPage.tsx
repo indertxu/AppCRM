@@ -23,6 +23,7 @@ import { useMgmtAccess, type Level } from "./mgmtAccess";
 import { useInactiveIds } from "../../framework/peopleStatus";
 import { ClientLogo } from "../clients/ClientWorkspace";
 import "./ManagementPage.css";
+import { useNavSection } from "../../framework/pageAccess";
 
 const MONTHS_FULL = [
   "January", "February", "March", "April", "May", "June",
@@ -708,6 +709,10 @@ export default function ManagementPage() {
   // planned+realized breakdown instead of its single headline figure.
   const [kpiBreakdown, setKpiBreakdown] = useState<Record<string, boolean>>({});
   const [tab, setTab] = useState<"team" | "backlog" | "billing" | "bonus" | "incoming">("team");
+  // Global search → Management › a tab (deep link "management/<tab>[/<billing phase>]").
+  useNavSection("/management", 0, (part) => {
+    if (["team", "backlog", "billing", "bonus", "incoming"].includes(part)) { setTab(part as typeof tab); if (part === "billing") setScope("month"); }
+  });
 
   /* ---- access control (Security settings, stored in mgmt_access) ---- */
   const access = useMgmtAccess();

@@ -348,3 +348,7 @@
 }
 .ct-lhead-wrap .ct-lhead { position: relative; top: auto; z-index: auto; margin-bottom: 0; }
 .ct-scroll.is-scrolled-y .ct-lhead-wrap { box-shadow: 0 12px 16px -16px rgba(10, 60, 40, 0.45); }
+
+/* Long lists render only the rows on screen: rows that scroll in must not replay the entrance animation */
+.ct-scroll.is-scrolled-y .ct-lrow:not(.ct-lhead) { animation: none; }
+.ct-list > .ct-lrow { contain: layout paint; }

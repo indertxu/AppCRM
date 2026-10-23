@@ -30,6 +30,9 @@ const fold = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCa
  * The app's dropdown: a themed trigger and a floating list (never the browser's own menu).
  * Keyboard: ↑ ↓ to move, Enter to pick, Esc to close, type to search when the list is long.
  */
+/** Options drawn at once; the rest are reached by typing. */
+const SELECT_MAX = 300;
+
 export default function Select({ value, onChange, options, placeholder = "Select…", disabled, size = "md", className, searchable, ...rest }: Props) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
@@ -40,7 +43,9 @@ export default function Select({ value, onChange, options, placeholder = "Select
 
   const current = options.find((o) => o.value === value);
   const withSearch = searchable ?? options.length >= 10;
-  const shown = q ? options.filter((o) => fold(`${o.label} ${o.hint ?? ""}`).includes(fold(q))) : options;
+  const matches = q ? options.filter((o) => fold(`${o.label} ${o.hint ?? ""}`).includes(fold(q))) : options;
+  // very long lists (thousands of contacts or companies) show the first few hundred; typing narrows them down
+  const shown = matches.length > SELECT_MAX ? matches.slice(0, SELECT_MAX) : matches;
 
   const place = () => {
     const r = btnRef.current?.getBoundingClientRect();
@@ -149,6 +154,7 @@ export default function Select({ value, onChange, options, placeholder = "Select
                 </button>
               ))}
               {!shown.length && <p className="sel-none">No matches</p>}
+              {matches.length > shown.length && <p className="sel-none">{(matches.length - shown.length).toLocaleString("en-GB")} more · type to narrow down</p>}
             </div>
           </>,
           document.body

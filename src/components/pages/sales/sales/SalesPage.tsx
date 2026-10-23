@@ -36,6 +36,7 @@ import "../../companies/CompaniesPage.css";
 import "./SalesPage.css";
 import "../trackings/Handover.css";
 import { useInactiveIds } from "../../../framework/peopleStatus";
+import { useNavSection } from "../../../framework/pageAccess";
 
 export interface Employee { id: string; name: string; role?: string; email?: string; is_superadmin?: boolean }
 
@@ -565,6 +566,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   /** Custom deal fields (Actions → Deal fields). */
   const [trackingFields, setTrackingFields] = useState<TrackingField[]>(() => snap0?.trackingFields ?? []);
   const [view, setView] = useState<"list" | "kanban" | "forecast">("list");
+  useNavSection("/sales", 0, (part) => { if (part === "list" || part === "kanban" || part === "forecast") setView(part); });
   // List columns: saved per person (profile prefs), with a local copy so they show at once.
   const [cols, setCols] = useState<string[]>(() => {
     try { const v = JSON.parse(localStorage.getItem(COLS_PREF) ?? "null"); return Array.isArray(v) ? v : DEFAULT_COLS; } catch { return DEFAULT_COLS; }
@@ -810,8 +812,9 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   const companyById = useMemo(() => new Map(companies.map((c) => [c.id, c])), [companies]);
   const employeeById = useMemo(() => new Map(employees.map((e) => [e.id, e])), [employees]);
   const companyName = (id: string | null) => (id ? companyById.get(id)?.name ?? null : null);
+  const contactById = useMemo(() => new Map(contacts.map((c) => [c.id as string, c])), [contacts]);
   const contactName = (id: string) => {
-    const c = contacts.find((x) => x.id === id);
+    const c = contactById.get(id);
     return c ? [c.first_name, c.last_name].filter(Boolean).join(" ") : "—";
   };
   const pipelineName = (id: string | null) => pipelines.find((p) => p.id === id)?.name ?? "—";

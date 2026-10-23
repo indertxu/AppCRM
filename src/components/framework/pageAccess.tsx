@@ -14,7 +14,7 @@
  * can't drift from what's stored; if that function isn't installed yet, the
  * same rules are resolved here from the tables.
  */
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Navigate, Outlet } from "react-router-dom";
 import { supabase } from "../api/supabase";
 import SuperAdminBubble, { getRolePreview } from "./SuperAdmin";
@@ -343,4 +343,57 @@ export function PageRoute({ page }: { page: PageKey }) {
   if (!ready) return null;
   if (!canSee(page)) return <Navigate to="/home" replace />;
   return <Outlet />;
+}
+/* =====================================================================
+   Deep links into a page's sub-sections ("management/billing/sent").
+   goToSection(navigate, "/management", "billing/sent") opens the page and asks
+   each level to switch: ManagementPage reads part 0 ("billing"), BillingPanel
+   part 1 ("sent"). A page that isn't on screen yet reads the request when it
+   mounts (it stays readable for a few seconds); a page already on screen gets
+   it through an event.
+   Clicking the sidebar item of the page you're already on resets it to its
+   overview: NAV_RESET_EVENT, and AppLayout remounts the page.
+   ===================================================================== */
+export const NAV_SECTION_EVENT = "next:nav-section";
+export const NAV_RESET_EVENT = "next:nav-reset";
+let pendingSection: { path: string; parts: string[]; at: number } | null = null;
+const SECTION_TTL = 4000;
+
+export function goToSection(navigate: (to: string, opts?: { replace?: boolean; state?: unknown }) => void, path: string, section?: string | null) {
+  const parts = (section ?? "").split("/").map((s) => s.trim()).filter(Boolean);
+  pendingSection = parts.length ? { path, parts, at: Date.now() } : null;
+  navigate(path, parts.length ? { state: { navSection: parts.join("/"), navAt: Date.now() } } : undefined);
+  if (parts.length) window.setTimeout(() => window.dispatchEvent(new CustomEvent(NAV_SECTION_EVENT, { detail: { path, parts } })), 0);
+}
+/** The part of a pending deep link meant for `level` of `path` (or null). */
+export function pendingSectionPart(path: string, level: number, parentPart?: string): string | null {
+  const p = pendingSection;
+  if (!p || p.path !== path || Date.now() - p.at > SECTION_TTL) return null;
+  if (parentPart !== undefined && p.parts[level - 1] !== parentPart) return null;
+  return p.parts[level] ?? null;
+}
+export function clearPendingSection() { pendingSection = null; }
+
+/**
+ * Switch a page (or a panel inside it) to the requested sub-section.
+ *   level 0 = the page's own tabs/views; level 1 = a panel inside the tab given as `parentPart`.
+ * `apply` returns nothing; unknown values should be ignored by the caller.
+ */
+export function useNavSection(path: string, level: number, apply: (part: string) => void, parentPart?: string) {
+  const ref = useRef(apply);
+  ref.current = apply;
+  useEffect(() => {
+    const now = pendingSectionPart(path, level, parentPart);
+    if (now) ref.current(now);
+    const on = (e: Event) => {
+      const d = (e as CustomEvent<{ path: string; parts: string[] }>).detail;
+      if (!d || d.path !== path) return;
+      if (parentPart !== undefined && d.parts[level - 1] !== parentPart) return;
+      const part = d.parts[level];
+      if (part) ref.current(part);
+    };
+    window.addEventListener(NAV_SECTION_EVENT, on);
+    return () => window.removeEventListener(NAV_SECTION_EVENT, on);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path, level, parentPart]);
 }

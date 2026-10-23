@@ -24,6 +24,7 @@ import {
 import { listCrmOptions, DEFAULT_SECTORS } from "../companies/companiesApi";
 import { loadProducts, loadServices } from "./catalogApi";
 import "./ProposalTemplateEditor.css";
+import { useNavSection } from "../../framework/pageAccess";
 
 /**
  * Settings → Proposal template.
@@ -873,6 +874,7 @@ export function SlidePreview({ deck, n, refId, values, edits, width, onPickText,
  */
 export function ProposalSettings({ canManage, onBack }: { canManage: boolean; onBack: () => void }) {
   const [tab, setTab] = useState<"proposal" | "contract" | "deck" | "pdf">("proposal");
+  useNavSection("/settings", 1, (part) => { if (["proposal", "contract", "deck", "pdf"].includes(part)) setTab(part as typeof tab); }, "proposal");
   const TABS: { k: typeof tab; label: string; d: string }[] = [
     { k: "proposal", label: "Proposals", d: "M4 4h16v16H4zM4 9h16M9 9v11" },
     { k: "contract", label: "Contracts", d: "M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M8 17c2-2 3 1 5-1s2-3 4-1" },

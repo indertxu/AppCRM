@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 import Select from "../../framework/Select";
@@ -80,10 +80,14 @@ export default function CompaniesPage() {
     setCompanies(cos);
     setContacts(cts);
     setCounts(cnt);
-    setAssignees(await loadCompanyAssignees().catch(() => ({})));
-    setFields(await listCompanyFields().catch(() => []));
-    setContactFields(await listContactFields().catch(() => []));
-    setRel(await loadRelationshipSets().catch(() => null));
+    // the rest at once (they were read one after the other)
+    const [asg, fs, cfs, rs] = await Promise.all([
+      loadCompanyAssignees().catch(() => ({} as Record<string, string[]>)),
+      listCompanyFields().catch(() => [] as CompanyField[]),
+      listContactFields().catch(() => [] as ContactField[]),
+      loadRelationshipSets().catch(() => null),
+    ]);
+    setAssignees(asg); setFields(fs); setContactFields(cfs); setRel(rs);
     setLoaded(true);
   };
   useEffect(() => {
@@ -111,10 +115,15 @@ export default function CompaniesPage() {
   const people = () => employees.map((e) => ({ value: e.id, label: e.name }));
   const valuesOf = (get: (c: Company) => unknown) => () =>
     [...new Set(companies.map((c) => String(get(c) ?? "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)).map((v) => ({ value: v, label: v }));
-  const kids = new Map<string, number>();
-  companies.forEach((c) => { if (c.parent_id) kids.set(c.parent_id, (kids.get(c.parent_id) ?? 0) + 1); });
-  const ctOf = new Map<string, string[]>();
-  contacts.forEach((ct) => ct.companyIds.forEach((id) => { if (ct.id) (ctOf.get(id) ?? ctOf.set(id, []).get(id)!).push(ct.id); }));
+  // built once per load (they were rebuilt on every render, and the people of each row were found by scanning every contact)
+  const kids = useMemo(() => { const m = new Map<string, number>(); companies.forEach((c) => { if (c.parent_id) m.set(c.parent_id, (m.get(c.parent_id) ?? 0) + 1); }); return m; }, [companies]);
+  const coName = useMemo(() => new Map(companies.map((c) => [c.id as string, c.name])), [companies]);
+  const peopleOf = useMemo(() => {
+    const m = new Map<string, Contact[]>();
+    contacts.forEach((ct) => ct.companyIds.forEach((id) => { const l = m.get(id); if (l) l.push(ct); else m.set(id, [ct]); }));
+    return m;
+  }, [contacts]);
+  const ctOf = useMemo(() => { const m = new Map<string, string[]>(); peopleOf.forEach((l, id) => m.set(id, l.filter((ct) => ct.id).map((ct) => ct.id as string))); return m; }, [peopleOf]);
   const addrOf = (c: Company) => [c.street, c.addr_number, c.postal_code, c.city, c.province, c.country].filter(Boolean).join(", ");
   const statusTags = (c: Company) => { const s = companyStatus(c, rel); return [...(s.client ? ["client"] : []), ...(s.sales ? ["sales"] : []), ...(!s.client && !s.sales ? ["none"] : [])]; };
   const typeRank = (c: Company) => typeSortKey(typeTags(c));
@@ -166,19 +175,32 @@ export default function CompaniesPage() {
   const sortKeyOf = (col: string) => (col === "contacts" ? "contacts_count" : col === "group" ? "parent" : col);
 
   // Sales people only see the companies they have been assigned to.
-  const visible = companies.filter((c) => lead || !me || (assignees[c.id!] ?? []).includes(me.id));
-  const searched = (() => {
-    const n = norm(q.trim());
+  const visible = useMemo(() => companies.filter((c) => lead || !me || (assignees[c.id!] ?? []).includes(me.id)), [companies, lead, me, assignees]);
+  // the search text of each company, once per load; typing filters a beat later in the background
+  const hayOf = useMemo(() => new Map(companies.map((c) => [c, norm([c.name, c.legal_name, c.vat_number, c.street, c.city, c.province, c.country, c.postal_code, c.sector, c.source, c.email, c.website].filter(Boolean).join(" \u0001 "))])), [companies]);
+  const dq = useDeferredValue(q);
+  const searched = useMemo(() => {
+    const n = norm(dq.trim());
     if (!n) return visible;
-    return visible.filter((c) => [c.name, c.legal_name, c.vat_number, c.street, c.city, c.province, c.country, c.postal_code, c.sector, c.source, c.email, c.website]
-      .some((v) => norm(v ?? "").includes(n)));
-  })();
-  const shown = applyView(searched, filterFields, view, (a, b) => a.name.localeCompare(b.name));
+    return visible.filter((c) => (hayOf.get(c) ?? "").includes(n));
+  }, [visible, dq, hayOf]);
+  const fieldsRef = useRef(filterFields);
+  fieldsRef.current = filterFields;
+  const shown = useMemo(
+    () => applyView(searched, fieldsRef.current, view, (a, b) => a.name.localeCompare(b.name)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [searched, view, counts, rel, fields, contactFields, options, peopleOf, assignees, employees],
+  );
+  // long lists grow as you scroll (a row can open its people, so rows aren't all the same height)
+  const [renderN, setRenderN] = useState(120);
+  useEffect(() => { setRenderN(120); }, [dq, view]);
 
   // ---- Multi-select: tag, assign, group, export or delete many companies ----
-  const bulk = useBulkSelection(shown.map((c) => c.id as string));
+  const shownIds = useMemo(() => shown.map((c) => c.id as string), [shown]);
+  const bulk = useBulkSelection(shownIds);
   const [exportIds, setExportIds] = useState<string[] | null>(null);
-  const pickedCos = () => companies.filter((c) => bulk.has(c.id as string));
+  const pickedList = useMemo(() => (bulk.sel.size ? companies.filter((c) => bulk.sel.has(c.id as string)) : []), [bulk.sel, companies]);
+  const pickedCos = () => pickedList;
   const BI = (d: string) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>;
   const saveMany = async (patch: (c: Company) => Partial<Company> | null, label: string) => {
     let n = 0;
@@ -266,7 +288,7 @@ export default function CompaniesPage() {
   const [filtersOpenTick, setFiltersOpenTick] = useState(0);
   const fieldById = (id: string) => fields.find((f) => f.id === id);
 
-  const contactsOf = (companyId: string) => contacts.filter((ct) => ct.companyIds.includes(companyId));
+  const contactsOf = (companyId: string) => peopleOf.get(companyId) ?? [];
 
   const addrLine = (c: Company) =>
     [c.street, c.addr_number, c.city, c.country].filter(Boolean).join(", ") || "—";
@@ -370,7 +392,10 @@ export default function CompaniesPage() {
         <p className="cl-hint">{companies.length === 0 ? "No companies yet. Create your first one." : "No companies match your search and filters."}</p>
       ) : (
         <div className={`co-scroll is-xscroll ${compact ? "is-compact" : ""}`} style={{ ["--row-min" as string]: `${rowMin}px` } as CSSProperties}
-          onScroll={(e) => { const el = e.currentTarget; el.classList.toggle("is-scrolled-x", el.scrollLeft > 4); el.classList.toggle("is-scrolled-y", el.scrollTop > 2); }}>
+          onScroll={(e) => {
+            const el = e.currentTarget; el.classList.toggle("is-scrolled-x", el.scrollLeft > 4); el.classList.toggle("is-scrolled-y", el.scrollTop > 2);
+            if (renderN < shown.length && el.scrollTop + el.clientHeight > el.scrollHeight - 1600) setRenderN((n) => Math.min(shown.length, n + 160));
+          }}>
           {/* the sticky header sits on an opaque band of the page colour: rows never show above or around it */}
           <div className="co-lhead-wrap">
           <div className="co-lrow co-lhead" style={{ gridTemplateColumns: rowGrid }}>
@@ -380,7 +405,7 @@ export default function CompaniesPage() {
           </div>
           </div>
           <div className="co-list">
-            {shown.map((c) => {
+            {shown.slice(0, renderN).map((c) => {
               const people = contactsOf(c.id!);
               const isOpen = open === c.id;
               return (
@@ -400,7 +425,7 @@ export default function CompaniesPage() {
                           {!dataColumns.includes("relationship") && <StatusPills status={companyStatus(c, rel)} tags={c.relationship} />}
                         </span>
                         {(c.legal_name || c.parent_id) && (
-                          <span className="co-lsub">{[c.legal_name, c.parent_id ? `part of ${companies.find((x) => x.id === c.parent_id)?.name ?? "a group"}` : ""].filter(Boolean).join(" · ")}</span>
+                          <span className="co-lsub">{[c.legal_name, c.parent_id ? `part of ${coName.get(c.parent_id) ?? "a group"}` : ""].filter(Boolean).join(" · ")}</span>
                         )}
                       </span>
                     </span>
@@ -471,7 +496,7 @@ export default function CompaniesPage() {
           companies={companies.filter((c) => lead || !me || (assignees[c.id!] ?? []).includes(me.id))}
           contacts={contacts}
           contactFields={contactFields}
-          shownIds={exportIds ?? shown.map((c) => c.id as string)}
+          shownIds={exportIds ?? shownIds}
           onClose={() => { setExporting(false); setExportIds(null); }}
         />
       )}
@@ -2864,6 +2889,9 @@ function fxMatch<T>(f: FField<T>, c: FCond, row: T): boolean {
 }
 
 /** Rows that pass the view's filters, sorted by its sort (unfinished filters are ignored). */
+/** One collator for every sort: localeCompare with options builds a new one per comparison (seconds on 25k rows). */
+const VIEW_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
 export function applyView<T>(rows: T[], fields: FField<T>[], view: FView, tieBreak?: (a: T, b: T) => number): T[] {
   const byKey = new Map(fields.map((f) => [f.key, f]));
   const conds = view.conds.filter((c) => byKey.has(c.field) && fxReady(c));
@@ -2899,7 +2927,7 @@ export function applyView<T>(rows: T[], fields: FField<T>[], view: FView, tieBre
       if (x === y) continue;
       if (x == null) return 1;           // empty values always last
       if (y == null) return -1;
-      const r = typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y), undefined, { numeric: true, sensitivity: "base" });
+      const r = typeof x === "number" && typeof y === "number" ? x - y : VIEW_COLLATOR.compare(String(x), String(y));
       if (r) return sorts[i].dir === "desc" ? -r : r;
     }
     return tieBreak ? tieBreak(a, b) : 0;
@@ -3275,7 +3303,7 @@ export function useBulkSelection(order: string[]) {
       const next = new Set([...cur].filter((id) => keep.has(id)));
       return next.size === cur.size ? cur : next;
     });
-  }, [order.join("|")]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [order]); // eslint-disable-line react-hooks/exhaustive-deps
   const toggle = (id: string, range = false) => {
     setSel((cur) => {
       const next = new Set(cur);
@@ -3289,7 +3317,7 @@ export function useBulkSelection(order: string[]) {
     });
     last.current = id;
   };
-  const allOn = order.length > 0 && order.every((id) => sel.has(id));
+  const allOn = order.length > 0 && sel.size >= order.length && order.every((id) => sel.has(id));
   const toggleAll = () => setSel(allOn ? new Set() : new Set(order));
   const clear = () => setSel(new Set());
   return { sel, ids: [...sel], has: (id: string) => sel.has(id), toggle, toggleAll, allOn, someOn: sel.size > 0 && !allOn, clear, active: sel.size > 0 };

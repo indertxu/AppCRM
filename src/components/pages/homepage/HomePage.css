@@ -351,3 +351,7 @@
 
 /* The boot cube is the shared vector cube (crisp at any scale, assembles face by face). */
 .hb-cube-pos .hb-pc { position: absolute; left: 50%; top: 50%; line-height: 0; transform: translate(-50%, -50%); }
+
+/* pages and sub-sections in the global search ("Go to") */
+.gs-hit.is-page .gs-hit-ico { background: #eef0ed; color: #3a4642; }
+.gs-hit.is-page.is-sel .gs-hit-ico { background: #121a17; color: #fff; }

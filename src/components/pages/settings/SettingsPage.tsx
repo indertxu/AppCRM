@@ -12,7 +12,7 @@ import { ProposalSettings } from "./ProposalTemplateEditor";
 import PageAccessModal from "./PageAccessModal";
 import Select from "../../framework/Select";
 import TaskSettings from "./TaskSettings";
-import { usePageAccess } from "../../framework/pageAccess";
+import { usePageAccess, useNavSection } from "../../framework/pageAccess";
 import { SuperAdminSwitch } from "../../framework/SuperAdmin";
 import { connectOutlook, completeOutlookConnect, outlookStatus, disconnectOutlook, outlookConnectError, OUTLOOK_CONNECTION_EVENT } from "../../api/outlookSync";
 import { DOCK_ITEMS, DOCK_ORDER_KEY, DOCK_ORDER_EVENT, orderDock } from "../../framework/Dock";
@@ -76,6 +76,11 @@ export default function SettingsPage() {
     navigate(location.pathname, { replace: true, state: null });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state]);
+  // Global search → Settings › a section (deep link "settings/<view>[/<tab>]").
+  useNavSection("/settings", 0, (part) => {
+    const views: View[] = ["home", "organization", "account", "interface", "catalog", "pipeline", "proposal", "tasks", "salespage", "mgmtpage", "clientpage", "companiespage", "contactspage"];
+    if ((views as string[]).includes(part)) setView(part as View);
+  });
   // A panel switched off in Page access can't be opened (also not while it's open).
   const view: View = VIEW_PANEL[viewRaw] && !(accessReady && canPanel(VIEW_PANEL[viewRaw]!)) ? "home" : viewRaw;
   const seesCompanyCards = ["settings.organization", "settings.catalog", "settings.pipelines", "settings.proposal"].some((k) => canPanel(k));

@@ -7,6 +7,7 @@ import ProjectsView, { type ProjectsViewMode } from "./ProjectsView";
 import { PageLoader } from "../../framework/AppLayout";
 import "../clients/ClientsPage.css";
 import "./ProjectsPage.css";
+import { useNavSection } from "../../framework/pageAccess";
 
 /**
  * Projects — its own page and sidebar entry, but built on the same data and
@@ -25,6 +26,7 @@ export default function ProjectsPage() {
     try { return (localStorage.getItem("projects.view") as ProjectsViewMode) || "list"; } catch { return "list"; }
   });
   const pick = (v: ProjectsViewMode) => { setView(v); try { localStorage.setItem("projects.view", v); } catch { /* private mode */ } };
+  useNavSection("/projects", 0, (part) => { if (part === "list" || part === "canvas") pick(part as ProjectsViewMode); });
 
   // Same dark floating header as Clients: sized to the title bar + figures, glow follows the pointer.
   const fhRef = useRef<HTMLDivElement>(null);

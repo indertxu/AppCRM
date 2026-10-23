@@ -26,6 +26,8 @@ import ConsultancyHome from "./consultancy/ConsultancyHome";
 import ManagementHome from "./management/ManagementHome";
 import { applyRolePreview } from "../../framework/SuperAdmin";
 import { PageCube } from "../../framework/AppLayout";
+import { usePageAccess, goToSection, type PageKey } from "../../framework/pageAccess";
+import { isSalesLead } from "../companies/companiesApi";
 import "./HomePage.css";
 
 const greeting = () => {
@@ -276,23 +278,26 @@ export default function HomePage() {
   const hello = `${greeting()}${me?.firstName ? `, ${me.firstName}` : ""}`;
 
   return (
-    <div ref={rootRef} className={`home ${booting ? (boot.mode === "arrive" ? "is-held" : "is-held-grid") : ""} ${boot.phase === "out" ? `is-revealing is-revealing-${boot.mode}` : ""}`}>
+    <div ref={rootRef} className={`home ${area === "consultancy" ? "is-cons" : ""} ${booting ? (boot.mode === "arrive" ? "is-held" : "is-held-grid") : ""} ${boot.phase === "out" ? `is-revealing is-revealing-${boot.mode}` : ""}`}>
       {boot.phase !== "none" && <HomeBoot boot={boot} details={details} hello={hello} top={bootTop} />}
 
-      <header className="home-bar" ref={barRef}>
-        <span className="home-logo-mini" aria-hidden="true"><NextLogo /></span>
-        <div className="home-hello">
-          <span className="home-eyebrow">{areaTitle(area)}</span>
-          <h1 className="home-title">{greeting()}{me?.firstName ? <>, <em>{me.firstName}</em></> : ""}</h1>
-        </div>
-        <GlobalSearch />
-        <span className="home-date">{new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}</span>
-      </header>
+      {area !== "consultancy" && (
+        <header className="home-bar" ref={barRef}>
+          <span className="home-logo-mini" aria-hidden="true"><NextLogo /></span>
+          <div className="home-hello">
+            <span className="home-eyebrow">{areaTitle(area)}</span>
+            <h1 className="home-title">{greeting()}{me?.firstName ? <>, <em>{me.firstName}</em></> : ""}</h1>
+          </div>
+          <GlobalSearch />
+          <span className="home-date">{new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}</span>
+        </header>
+      )}
 
       {!uid || !me ? (
         <div className="home-wait" aria-hidden="true" />
       ) : area === "consultancy" ? (
         <ConsultancyHome userId={me.id} isLead={isLead} hoursPerDay={hoursPerDay}
+          greeting={greeting()} firstName={me.firstName} search={<GlobalSearch />} heroRef={barRef}
           calendar={<HomeCalendar userId={uid} hoursPerDay={hoursPerDay} />}
           desk={<TicketDesk />} />
       ) : (
@@ -319,19 +324,19 @@ export default function HomePage() {
    the page. Empty, it suggests: what you opened lately, your open tickets
    and your next meetings. Results are grouped by kind; ↑ ↓ Enter to open.
    ===================================================================== */
-type HitKind = "client" | "company" | "contact" | "deal" | "project" | "ticket" | "person" | "meeting" | "action";
+type HitKind = "page" | "client" | "company" | "contact" | "deal" | "project" | "ticket" | "person" | "meeting" | "action";
 interface Hit { kind: HitKind; id: string; label: string; sub?: string; score?: number; stage?: TicketStage; extra?: any }
-const KIND_LABEL: Record<HitKind, string> = { client: "Clients", company: "Companies", contact: "Contacts", deal: "Deals", project: "Projects", ticket: "Tickets", person: "People", meeting: "Up next", action: "Actions" };
-const KIND_ONE: Record<HitKind, string> = { client: "Client", company: "Company", contact: "Contact", deal: "Deal", project: "Project", ticket: "Ticket", person: "Person", meeting: "Meeting", action: "" };
-const KIND_ICON: Record<HitKind, "briefcase" | "building" | "user" | "deal" | "folder" | "inbox" | "clock" | "plus"> = {
-  client: "briefcase", company: "building", contact: "user", deal: "deal", project: "folder", ticket: "inbox", person: "user", meeting: "clock", action: "plus",
+const KIND_LABEL: Record<HitKind, string> = { page: "Go to", client: "Clients", company: "Companies", contact: "Contacts", deal: "Deals", project: "Projects", ticket: "Tickets", person: "People", meeting: "Up next", action: "Actions" };
+const KIND_ONE: Record<HitKind, string> = { page: "Page", client: "Client", company: "Company", contact: "Contact", deal: "Deal", project: "Project", ticket: "Ticket", person: "Person", meeting: "Meeting", action: "" };
+const KIND_ICON: Record<HitKind, "arrow" | "briefcase" | "building" | "user" | "deal" | "folder" | "inbox" | "clock" | "plus"> = {
+  page: "arrow", client: "briefcase", company: "building", contact: "user", deal: "deal", project: "folder", ticket: "inbox", person: "user", meeting: "clock", action: "plus",
 };
-const ORDER: HitKind[] = ["ticket", "client", "deal", "company", "contact", "project", "person"];
+const ORDER: HitKind[] = ["page", "ticket", "client", "deal", "company", "contact", "project", "person"];
 const RECENT_KEY = "home.search.recent";
 const readRecent = (): Hit[] => { try { const v = JSON.parse(localStorage.getItem(RECENT_KEY) || "[]"); return Array.isArray(v) ? v.slice(0, 6) : []; } catch { return []; } };
 const pushRecent = (h: Hit) => {
   if (h.kind === "action" || h.kind === "meeting") return;
-  try { localStorage.setItem(RECENT_KEY, JSON.stringify([{ kind: h.kind, id: h.id, label: h.label, sub: h.sub }, ...readRecent().filter((x) => !(x.kind === h.kind && x.id === h.id))].slice(0, 6))); } catch { /* private mode */ }
+  try { localStorage.setItem(RECENT_KEY, JSON.stringify([{ kind: h.kind, id: h.id, label: h.label, sub: h.sub, ...(h.kind === "page" ? { extra: h.extra } : {}) }, ...readRecent().filter((x) => !(x.kind === h.kind && x.id === h.id))].slice(0, 6))); } catch { /* private mode */ }
 };
 const fold = (s: string) => (s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 /** How well `text` answers `q`: whole start > a word start > anywhere (0 = no match). */
@@ -353,8 +358,61 @@ function Mark({ text, q }: { text: string; q: string }) {
   return <>{text.slice(0, i)}<mark>{text.slice(i, i + q.length)}</mark>{text.slice(i + q.length)}</>;
 }
 
+
+/* ---- every page and sub-section you can jump to (deep links: see goToSection) ---- */
+interface NavTarget { id: string; label: string; crumb: string; path: string; section?: string; page: PageKey; panel?: string; words?: string; crmLead?: boolean }
+const NAV_INDEX: NavTarget[] = [
+  { id: "home", label: "Home", crumb: "Your day", path: "/home", page: "home", words: "dashboard start overview tickets to-do" },
+  { id: "cal", label: "Calendar", crumb: "Calendar", path: "/calendar", page: "calendar", words: "agenda bookings hours" },
+  { id: "cal-week", label: "Week view", crumb: "Calendar › Week", path: "/calendar", section: "week", page: "calendar", words: "calendar week semana" },
+  { id: "cal-month", label: "Month view", crumb: "Calendar › Month", path: "/calendar", section: "month", page: "calendar", words: "calendar month mes" },
+  { id: "contacts", label: "Contacts", crumb: "Contacts", path: "/contacts", page: "contacts", words: "people crm contactos" },
+  { id: "companies", label: "Companies", crumb: "Companies", path: "/companies", page: "companies", words: "accounts crm empresas organisations" },
+  { id: "clients", label: "Clients", crumb: "Clients", path: "/clients", page: "clients", words: "customers clientes contracts" },
+  { id: "projects", label: "Projects", crumb: "Projects › List", path: "/projects", section: "list", page: "projects", words: "implementations proyectos" },
+  { id: "projects-canvas", label: "Projects canvas", crumb: "Projects › Canvas", path: "/projects", section: "canvas", page: "projects", words: "board implementations map" },
+  { id: "deals", label: "Deals", crumb: "Deals › List", path: "/sales", section: "list", page: "sales", words: "sales pipeline trackings ventas opportunities" },
+  { id: "deals-board", label: "Deals board", crumb: "Deals › Board", path: "/sales", section: "kanban", page: "sales", words: "kanban pipeline stages" },
+  { id: "deals-forecast", label: "Forecast", crumb: "Deals › Forecast", path: "/sales", section: "forecast", page: "sales", words: "forecast revenue prevision" },
+  { id: "cs", label: "Customer success", crumb: "Customer success › Accounts", path: "/success", section: "accounts", page: "success", words: "retention health accounts cs" },
+  { id: "cs-up", label: "Upsells", crumb: "Customer success › Upsells", path: "/success", section: "upsells", page: "success", words: "expansion upsell cross-sell" },
+  { id: "cs-qbr", label: "QBRs", crumb: "Customer success › QBRs", path: "/success", section: "qbr", page: "success", words: "quarterly business review meetings" },
+  { id: "cs-rev", label: "Revenue", crumb: "Customer success › Revenue", path: "/success", section: "revenue", page: "success", words: "arr nrr churn bridge" },
+  { id: "marketing", label: "Marketing", crumb: "Marketing", path: "/marketing", page: "marketing", words: "lists mailings campaigns newsletter" },
+  { id: "mg", label: "Management", crumb: "Management › Team", path: "/management", section: "team", page: "management", words: "team performance consultants" },
+  { id: "mg-backlog", label: "Backlog", crumb: "Management › Backlog", path: "/management", section: "backlog", page: "management", words: "unbilled days to deliver" },
+  { id: "mg-billing", label: "Billing", crumb: "Management › Billing", path: "/management", section: "billing/tobill", page: "management", words: "invoices facturas bill to bill" },
+  { id: "mg-sent", label: "Sent invoices", crumb: "Management › Billing › Sent", path: "/management", section: "billing/sent", page: "management", words: "awaiting payment outstanding bills" },
+  { id: "mg-paid", label: "Paid invoices", crumb: "Management › Billing › Paid", path: "/management", section: "billing/paid", page: "management", words: "collected cobradas" },
+  { id: "mg-history", label: "Billing history", crumb: "Management › Billing › History", path: "/management", section: "billing/history", page: "management", words: "log invoices history" },
+  { id: "mg-bonus", label: "Bonus", crumb: "Management › Bonus", path: "/management", section: "bonus", page: "management", words: "bonus commissions targets" },
+  { id: "mg-incoming", label: "Incoming", crumb: "Management › Incoming", path: "/management", section: "incoming", page: "management", words: "handoffs won deals new projects" },
+  { id: "st", label: "Settings", crumb: "Settings", path: "/settings", section: "home", page: "settings", words: "preferences configuration ajustes" },
+  { id: "st-org", label: "Organization", crumb: "Settings › Organization", path: "/settings", section: "organization", page: "settings", panel: "settings.organization", words: "users people employees departments roles page access security" },
+  { id: "st-cat", label: "Products & services", crumb: "Settings › Products & services", path: "/settings", section: "catalog/products", page: "settings", panel: "settings.catalog", words: "catalog catalogue products tiers calculator pricing" },
+  { id: "st-svc", label: "Services", crumb: "Settings › Products & services › Services", path: "/settings", section: "catalog/services", page: "settings", panel: "settings.catalog", words: "services rates roles consulting" },
+  { id: "st-bp", label: "Blueprints", crumb: "Settings › Products & services › Blueprints", path: "/settings", section: "catalog/blueprints", page: "settings", panel: "settings.catalog", words: "project types phases templates" },
+  { id: "st-pipe", label: "Client pipelines", crumb: "Settings › Client pipelines", path: "/settings", section: "pipeline", page: "settings", panel: "settings.pipelines", words: "pipelines phases stages" },
+  { id: "st-prop", label: "Proposal templates", crumb: "Settings › Proposals & contracts", path: "/settings", section: "proposal/proposal", page: "settings", panel: "settings.proposal", words: "proposals templates deck html" },
+  { id: "st-contract", label: "Contract templates", crumb: "Settings › Proposals & contracts › Contracts", path: "/settings", section: "proposal/contract", page: "settings", panel: "settings.proposal", words: "contracts order form templates" },
+  { id: "st-pptx", label: "PowerPoint decks", crumb: "Settings › Proposals & contracts › PowerPoint", path: "/settings", section: "proposal/deck", page: "settings", panel: "settings.proposal", words: "pptx legacy deck" },
+  { id: "st-pdf", label: "Order form (PDF)", crumb: "Settings › Proposals & contracts › Order form", path: "/settings", section: "proposal/pdf", page: "settings", panel: "settings.proposal", words: "order form pdf" },
+  { id: "st-tasks", label: "Task settings", crumb: "Settings › Tasks", path: "/settings", section: "tasks", page: "settings", words: "tasks templates tickets types sla" },
+  { id: "st-ui", label: "Interface", crumb: "Settings › Interface", path: "/settings", section: "interface", page: "settings", words: "sidebar dock labels order outlook" },
+  { id: "st-acc", label: "Your account", crumb: "Settings › Your account", path: "/settings", section: "account", page: "settings", words: "profile password email account" },
+  { id: "st-deals", label: "Deals settings", crumb: "Settings › Deals page", path: "/settings", section: "salespage", page: "settings", words: "deal fields sales roles potential revenue import export" },
+  { id: "st-mgmt", label: "Management settings", crumb: "Settings › Management page", path: "/settings", section: "mgmtpage", page: "settings", words: "billing settings targets bonus security" },
+  { id: "st-companies", label: "Companies settings", crumb: "Settings › Companies page", path: "/settings", section: "companiespage", page: "settings", crmLead: true, words: "company fields types sectors sources required import" },
+  { id: "st-contacts", label: "Contacts settings", crumb: "Settings › Contacts page", path: "/settings", section: "contactspage", page: "settings", crmLead: true, words: "contact fields required lists import export" },
+  { id: "st-client", label: "Client page settings", crumb: "Settings › Client page", path: "/settings", section: "clientpage", page: "settings", words: "client kpis folders" },
+];
+
 export function GlobalSearch() {
   const nav = useNavigate();
+  const { canSee, canPanel, ready: accessReady } = usePageAccess();
+  const { role: authRole, isSuperadmin } = useAuth() as any;
+  const crmLead = isSalesLead({ role: authRole ?? undefined, is_superadmin: isSuperadmin === true });
+  const navTargets = useMemo(() => NAV_INDEX.filter((t) => (!t.crmLead || crmLead) && (!accessReady || (canSee(t.page) && (!t.panel || canPanel(t.panel))))), [accessReady, canSee, canPanel, crmLead]);
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
   const [dir, setDir] = useState<Directory | null>(null);
@@ -426,6 +484,11 @@ export function GlobalSearch() {
       const sc = Math.max(...texts.map((t) => scoreOf(t, fq)));
       if (sc > 0) all.push({ kind, id, label, sub, score: sc + boost, extra });
     };
+    // pages and sub-sections: name first, then the path ("settings contacts"), then related words
+    navTargets.forEach((t) => {
+      const sc = Math.max(scoreOf(t.label, fq), scoreOf(t.crumb.replace(/›/g, " "), fq) - 5, (t.words ? scoreOf(t.words, fq) : 0) - 15);
+      if (sc > 0) all.push({ kind: "page", id: t.id, label: t.label, sub: t.crumb, score: sc + 2, extra: t });
+    });
     tickets.forEach((t) => add("ticket", t.id, t.title, `${ticketRef(t)} · ${stageLabel(t.stage)}`, [t.title, ticketRef(t), t.no ? String(t.no) : ""], t.active ? 4 : -10, t));
     (dir?.clients ?? []).forEach((c) => add("client", c.id, c.name, "Client", [c.name], 6));
     (dir?.deals ?? []).forEach((d) => add("deal", d.id, d.name, [d.companyId ? coName.get(d.companyId) : null, d.status].filter(Boolean).join(" · ") || "Deal", [d.name, d.companyId ? coName.get(d.companyId) ?? "" : ""], d.status === "active" ? 3 : 0));
@@ -437,12 +500,12 @@ export function GlobalSearch() {
     const out: { kind: HitKind; title: string; hits: Hit[] }[] = [];
     if (best[0] && (best[0].score ?? 0) >= 60) out.push({ kind: best[0].kind, title: "Top hit", hits: [best[0]] });
     ORDER.forEach((k) => {
-      const hits = best.filter((h) => h.kind === k && h !== out[0]?.hits[0]).slice(0, k === "ticket" ? 4 : 3);
+      const hits = best.filter((h) => h.kind === k && h !== out[0]?.hits[0]).slice(0, k === "ticket" || k === "page" ? 4 : 3);
       if (hits.length) out.push({ kind: k, title: KIND_LABEL[k], hits });
     });
     out.push({ kind: "action", title: "Actions", hits: [{ kind: "action", id: "new-ticket", label: `Log a ticket: “${q.trim()}”`, sub: "Lands on your desk" }] });
     return out;
-  }, [fq, q, dir, tickets, meetings, recent]);
+  }, [fq, q, dir, tickets, meetings, recent, navTargets]);
   const flat = sections.flatMap((s) => s.hits);
   useEffect(() => { setSel(0); }, [fq]);
 
@@ -451,6 +514,7 @@ export function GlobalSearch() {
     setOpen(false); setQ("");
     inputRef.current?.blur();
     switch (h.kind) {
+      case "page": { const t = h.extra as NavTarget; goToSection(nav, t.path, t.section ?? null); break; }
       case "company": nav("/companies", { state: { focusCompanyId: h.id } }); break;
       case "contact": nav("/contacts", { state: { focusContactId: h.id } }); break;
       case "client": nav(`/clients?client=${h.id}`); break;
@@ -476,7 +540,7 @@ export function GlobalSearch() {
     <div className={`gs ${open ? "is-open" : ""}`} ref={boxRef}>
       <div className="gs-box" onClick={() => inputRef.current?.focus()}>
         <TkIco d="search" className="gs-ico" />
-        <input ref={inputRef} value={q} placeholder="Search anything — clients, deals, contacts, tickets…" aria-label="Search everything"
+        <input ref={inputRef} value={q} placeholder="Search or jump to — clients, deals, tickets, any page…" aria-label="Search everything"
           onFocus={() => { setOpen(true); setRecent(readRecent()); if (!loaded.current) loadAll(); }}
           onChange={(e) => { setQ(e.target.value); setOpen(true); }} onKeyDown={onKey} />
         {q ? <button type="button" className="gs-clear" onClick={() => { setQ(""); inputRef.current?.focus(); }} aria-label="Clear"><TkIco d="x" /></button>
@@ -485,7 +549,7 @@ export function GlobalSearch() {
       {open && (
         <div className="gs-panel" role="listbox">
           {loading ? <div className="gs-loading"><span className="gs-spin" />Loading everything…</div>
-            : !sections.length ? <p className="gs-empty">Start typing to search clients, deals, companies, contacts, projects, tickets and people.</p>
+            : !sections.length ? <p className="gs-empty">Start typing to search clients, deals, companies, contacts, projects, tickets and people — or jump to any page, like “billing sent” or “contacts settings”.</p>
             : sections.map((s, si) => (
               <div className="gs-sec" key={`${s.title}-${si}`}>
                 <span className="gs-sec-h">{s.title}</span>
