@@ -14,7 +14,7 @@ import { listTrackings, loadAllTrackingOwners, loadAllTrackingEmployees, loadPot
 import { listPipelines } from "../settings/pipelineApi";
 import { loadProducts } from "../settings/catalogApi";
 import {
-  listCompanyFields, listContactFields, loadRelationshipSets, listEmployees, loadContactAssignees, loadCompanyAssignees,
+  listCompanyFields, listContactFields, loadRelationshipSets, listEmployees, loadContactAssignees, loadCompanyAssignees, pagedAll,
   type Company, type Contact, type ContactField, type CompanyField, type RelationshipSets,
 } from "../companies/companiesApi";
 import { buildCatalog, contactMatches, condReady, cellOf, formatOf, OPS, DEFAULT_OP, NO_VALUE, type XF, type Ctx, type Cond, type Src, type Root } from "./exportCatalog";
@@ -610,16 +610,16 @@ const isThrottle = (e: string | null) => !!e && /429|throttl|too many|rate limit
 
 /* ---------- data ---------- */
 async function mkAll<T = any>(table: string, cols = "*", filter?: (q: any) => any): Promise<{ rows: T[]; missing: boolean }> {
-  const out: T[] = [];
-  for (let from = 0; ; from += 1000) {
-    let q = supabase.from(table).select(cols);
-    if (filter) q = filter(q);
-    const { data, error } = await q.range(from, from + 999);
-    if (error) return { rows: out, missing: MK_MISSING.test(error.message) };
-    out.push(...((data ?? []) as T[]));
-    if (!data || data.length < 1000) break;
+  try {
+    const rows = await pagedAll<T>((count) => {
+      let q = supabase.from(table).select(cols, count ? { count: "exact" } : undefined);
+      if (filter) q = filter(q);
+      return q.order("id");
+    }, true);
+    return { rows, missing: false };
+  } catch (e: any) {
+    return { rows: [], missing: MK_MISSING.test(String(e?.message ?? e)) };
   }
-  return { rows: out, missing: false };
 }
 interface MkWorld { contacts: Contact[]; companies: Company[]; contactFields: ContactField[]; trackings: Tracking[]; extra: ExportExtra }
 async function loadMarketingWorld(): Promise<MkWorld> {

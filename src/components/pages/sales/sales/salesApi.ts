@@ -678,6 +678,17 @@ export async function setTrackingPhase(id: string, phaseId: string) {
 }
 export async function setTrackingStatus(id: string, status: string) {
   await supabase.from("trackings").update({ status }).eq("id", id);
+  // A deal that leaves Won: its won proposal goes back to normal (it stays the main one).
+  if (status !== "won") await clearProposalsWon(id).catch(() => undefined);
+}
+/** Takes the "won" mark off a deal's proposals (they become editable again; the main one stays main). */
+export async function clearProposalsWon(trackingId: string): Promise<void> {
+  const { data, error } = await supabase.from("deal_proposals").select("id, doc").eq("tracking_id", trackingId);
+  if (error || !data) return;
+  for (const r of data as { id: string; doc: any }[]) {
+    if (!r.doc || typeof r.doc !== "object" || !r.doc.wonAt) continue;
+    await supabase.from("deal_proposals").update({ doc: { ...r.doc, wonAt: null } }).eq("id", r.id);
+  }
 }
 export async function deleteTracking(id: string) {
   await supabase.from("trackings").delete().eq("id", id);
@@ -1702,7 +1713,43 @@ export interface ContractTerms {
   services: { list: number; discount: number; final: number };
   schedule: { year: number; license: number; services: number; total: number }[];
   total: number;
-  lines?: { id?: string | null; kind: "product" | "service"; name: string; list: number; discount: number; final: number; years: number[] }[];
+  lines?: { id?: string | null; kind: "product" | "service"; name: string; list: number; discount: number; final: number; years: number[];
+    /** What makes up the line (calculator rows) and how it is sold — for the order form's scope table. */
+    rows?: { label: string; detail?: string | null; amount: number; discount: number }[];
+    qty?: number | null; unit?: string | null; oneTime?: boolean; recurring?: boolean; discountPct?: number | null }[];
+  /* ---- order form: everything a signed order form carries (all optional) ---- */
+  /** The customer as written on the order form. */
+  customer?: { legalName?: string | null; name?: string | null; regNo?: string | null; vat?: string | null; address?: string | null; country?: string | null } | null;
+  /** The customer's contact person for the contract. */
+  contactPerson?: { name?: string | null; email?: string | null; phone?: string | null; role?: string | null } | null;
+  /** The customer's admin user on the platform. */
+  adminUser?: { name?: string | null; email?: string | null } | null;
+  /** How the subscription is billed: "annually" | "quarterly" | "monthly" | "upfront". */
+  billingFrequency?: string | null;
+  currency?: string | null;
+  /** Prices on the order form exclude VAT. */
+  pricesExclVat?: boolean;
+  /** Where the general terms, DPA and SLA live. */
+  termsUrl?: string | null;
+  /** The customer agreed to the newsletter / to be shown as a customer (logo & name). */
+  newsletter?: boolean | null;
+  marketingConsent?: boolean | null;
+  /** Consulting services: billed per day performed or as a fixed fee, with a tolerance on the days. */
+  servicesBilling?: "per_day" | "fixed" | null;
+  servicesTolerancePct?: number | null;
+  servicesNote?: string | null;
+  /** Everyone who signs, on both sides. */
+  signatories?: { side: "supplier" | "customer"; name: string; role?: string | null; email?: string | null; phone?: string | null }[];
+  /** E-signature platform reference (e.g. Oneflow ID) and the contract document kept on the deal. */
+  esignId?: string | null;
+  esignProvider?: string | null;
+  /** The scope as written on the signed PDF (read when the signed contract is attached). */
+  signedScope?: { lines: { name: string; list: number; final: number; discountPct: number | null; qty: number; oneTime: boolean }[]; totals?: { oneTime?: number; annualList?: number; annualFinal?: number }; currency?: string | null; fileName?: string | null } | null;
+  /** Consulting agreed on the signed PDF: who, how many days, at what rate. */
+  servicesRoles?: { label: string; days?: number | null; rate: number }[] | null;
+  documentFileId?: string | null;
+  /** The proposal the deal was won with. */
+  wonProposalId?: string | null;
   updatedAt?: string;
 }
 export const EMPTY_INCREMENTS: LineIncrements = { mode: "none", value: 0, perYear: [] };
@@ -1723,7 +1770,11 @@ export function contractFigures(lines: { id?: string | null; kind: "product" | "
   const services = { list: r2(sum(svcs, (b) => b.gross)), discount: r2(sum(svcs, (b) => b.discount)), final: r2(sum(svcs, (b) => b.total)) };
   return {
     license, services, schedule, total: r2(license.final + services.final),
-    lines: lines.map((l) => ({ id: l.id ?? null, kind: l.kind, name: l.name, list: r2(l.bd.gross), discount: r2(l.bd.discount), final: r2(l.bd.total), years: l.bd.years.map(r2) })),
+    lines: lines.map((l) => ({
+      id: l.id ?? null, kind: l.kind, name: l.name, list: r2(l.bd.gross), discount: r2(l.bd.discount), final: r2(l.bd.total), years: l.bd.years.map(r2),
+      rows: ((l.bd as any).rows ?? []).map((r: any) => ({ label: String(r.label ?? ""), detail: r.detail ?? null, amount: r2(Number(r.amount) || 0), discount: r2(Number(r.discount) || 0) })),
+      qty: (l.bd as any).qty ?? null, discountPct: l.bd.gross > 0 ? Math.round((l.bd.discount / l.bd.gross) * 1000) / 10 : 0,
+    })),
   };
 }
 
@@ -2042,7 +2093,11 @@ export interface DealProposal {
 }
 /** A proposal's own changes to the deck: field values, edited texts, slides left out (by slide ref). */
 /** What a seller changed in one proposal: field values, words, slides left out, and the layout (boxes moved, added, removed — per slide of the deck). */
-export interface ProposalDoc { values?: Record<string, string>; edits?: Record<string, string>; slides?: Record<string, boolean>; ops?: DeckEditOp[] }
+export interface ProposalDoc { values?: Record<string, string>; edits?: Record<string, string>; slides?: Record<string, boolean>; ops?: DeckEditOp[];
+  /** The deal was won with this proposal (it is then kept as signed: no edits, no delete). */
+  wonAt?: string | null;
+  /** The signed contract dropped / attached on this proposal (a deal document, tracking_files.id). */
+  contractFileId?: string | null }
 const proposalFrom = (r: any): DealProposal => ({
   ...r, is_main: !!r.is_main, lines: Array.isArray(r.lines) ? r.lines : [], doc: r.doc && typeof r.doc === "object" ? r.doc : null,
   gross: r.gross == null ? null : Number(r.gross), partner: r.partner == null ? null : Number(r.partner), total: r.total == null ? null : Number(r.total),

@@ -167,22 +167,99 @@ export async function setContactAssignees(contactId: string, profileIds: string[
  * plain select silently drops the rest (a contact linked past row 1000 looked
  * unlinked on its company). Pages through until the end.
  */
+/**
+ * Requests already on their way are shared: two parts of the screen asking for
+ * the same full list at the same moment get one read, not two.
+ */
+const inFlight = new Map<string, Promise<any>>();
+function shared<T>(key: string, run: () => Promise<T>): Promise<T> {
+  // each caller gets its own copy of the list (sorting one never moves the other)
+  const copy = (v: any) => (Array.isArray(v) ? [...v] : v && typeof v === "object" ? { ...v } : v) as T;
+  const cur = inFlight.get(key);
+  if (cur) return (cur as Promise<T>).then(copy);
+  const p = run().finally(() => { inFlight.delete(key); });
+  inFlight.set(key, p);
+  return p.then(copy);
+}
+
 async function readAll<T = any>(table: string, cols: string, orders: string[]): Promise<T[]> {
-  const out: T[] = [];
-  for (let from = 0; ; from += 1000) {
-    let q = supabase.from(table).select(cols);
+  return pagedAll<T>((count) => {
+    let q = supabase.from(table).select(cols, count ? { count: "exact" } : undefined);
     // a stable order (ending in a unique key) so pages never overlap or skip
     orders.forEach((o) => { q = q.order(o); });
-    const { data, error } = await q.range(from, from + 999);
-    if (error) { if (from === 0) throw error; break; }
-    out.push(...((data ?? []) as T[]));
-    if (!data || data.length < 1000) break;
+    return q;
+  }, true);
+}
+
+/**
+ * Every row of a query, fast: the first page also brings the row count, then
+ * every other page is asked for at the same time (6 at once) instead of one
+ * after the other — 10,000 rows take two round trips instead of ten.
+ * `build(count)` returns a fresh query with a stable order; when `count` is
+ * true it must ask for the exact count (select(cols, { count: "exact" })).
+ * `strict`: an error on the first page is thrown (otherwise: what was read).
+ */
+export async function pagedAll<T = any>(build: (count?: boolean) => any, strict = false, page = 1000): Promise<T[]> {
+  const first = await build(true).range(0, page - 1);
+  if (first.error) { if (strict) throw first.error; return []; }
+  const out: T[] = [...((first.data ?? []) as T[])];
+  if (out.length < page) return out;
+  const get = async (n: number): Promise<T[] | null> => {
+    const { data, error } = await build(false).range(n * page, n * page + page - 1);
+    return error || !data ? null : (data as T[]);
+  };
+  const total: number | null = typeof first.count === "number" ? first.count : null;
+  if (total != null) {
+    const idx = Array.from({ length: Math.max(0, Math.ceil(total / page) - 1) }, (_, i) => i + 1);
+    const results: (T[] | null)[] = new Array(idx.length).fill(null);
+    let k = 0;
+    await Promise.all(Array.from({ length: Math.min(6, idx.length) }, async () => {
+      while (k < idx.length) { const i = k++; results[i] = await get(idx[i]); }
+    }));
+    if (results.every(Boolean)) {
+      results.forEach((r) => out.push(...(r as T[])));
+      // rows added while reading: pick up anything past the counted end
+      for (let n = idx.length + 1; ; n++) {
+        if (out.length < (n) * page) break;
+        const r = await get(n);
+        if (!r || !r.length) break;
+        out.push(...r);
+        if (r.length < page) break;
+      }
+      return out;
+    }
+    out.length = 0; out.push(...((first.data ?? []) as T[]));
+  }
+  // no count (or a page failed): page after page
+  for (let n = 1; ; n++) {
+    const r = await get(n);
+    if (!r) break;
+    out.push(...r);
+    if (r.length < page) break;
   }
   return out;
 }
 
-export async function listCompanies(): Promise<Company[]> {
-  return readAll<Company>("companies", "*", ["name", "id"]);
+export function listCompanies(): ReturnType<typeof listCompaniesRaw> { return shared("listCompanies", listCompaniesRaw); }
+async function listCompaniesRaw(): Promise<Company[]> {
+  const [rows, own] = await Promise.all([
+    readAll<Company>("companies", "*", ["name", "id"]),
+    supabase.from("crm_options").select("label").eq("kind", "relationship").then((r) => (r.error ? null : (r.data ?? []).map((x: any) => String(x.label))), () => null),
+  ]);
+  return own ? rows.map((c) => liveTypes(c, own)) : rows;
+}
+
+/**
+ * A company's types without the ones taken off the list in Settings: a type
+ * you remove disappears everywhere at once (companies, contacts, filters),
+ * even on records still carrying the old name.
+ */
+function liveTypes(c: Company, own: string[]): Company {
+  const list = c.relationship;
+  if (!Array.isArray(list) || !list.length) return c;
+  const ok = new Set([...REL_SYSTEM.map((r) => r.key), ...own].map((x) => x.toLowerCase()));
+  const kept = list.filter((t) => ok.has(String(t).toLowerCase()));
+  return kept.length === list.length ? c : { ...c, relationship: kept };
 }
 
 export async function saveCompany(c: Company): Promise<string | null> {
@@ -233,7 +310,8 @@ export async function deleteCompany(id: string): Promise<string | null> {
 }
 
 // How many contacts each company has (for list badges).
-export async function companyContactCounts(): Promise<Record<string, number>> {
+export function companyContactCounts(): ReturnType<typeof companyContactCountsRaw> { return shared("companyContactCounts", companyContactCountsRaw); }
+async function companyContactCountsRaw(): Promise<Record<string, number>> {
   const data = await readAll<any>("company_contacts", "company_id, contact_id", ["company_id", "contact_id"]);
   const out: Record<string, number> = {};
   data.forEach((r: any) => { out[r.company_id] = (out[r.company_id] ?? 0) + 1; });
@@ -241,7 +319,8 @@ export async function companyContactCounts(): Promise<Record<string, number>> {
 }
 
 // ---- Contacts ----
-export async function listContacts(): Promise<Contact[]> {
+export function listContacts(): ReturnType<typeof listContactsRaw> { return shared("listContacts", listContactsRaw); }
+async function listContactsRaw(): Promise<Contact[]> {
   // every contact and every link, in pages (past 1000 rows a plain select drops the rest)
   const [rows, links] = await Promise.all([
     readAll<any>("contacts", "*", ["first_name", "id"]),
@@ -456,13 +535,7 @@ export async function listContactDeals(contactId: string, companyIds: string[]):
 }
 /** Every deal (to put a contact on one). */
 export async function listAllDeals(): Promise<DealRef[]> {
-  const out: any[] = [];
-  for (let from = 0; ; from += 1000) {
-    const { data, error } = await supabase.from("trackings").select(DEAL_COLS).range(from, from + 999);
-    if (error || !data) break;
-    out.push(...data);
-    if (data.length < 1000) break;
-  }
+  const out = await pagedAll<any>((count) => supabase.from("trackings").select(DEAL_COLS, count ? { count: "exact" } : undefined).order("id"));
   return dealRefs(out);
 }
 /** Put a contact on deals / take them off (tracking_contacts). */
@@ -515,16 +588,12 @@ export async function loadRelationshipSets(): Promise<RelationshipSets> {
 
   // Read every row in pages: the API returns at most 1000 rows per call, and
   // a missing row would wrongly show a company/contact as "No sales tracking".
-  const all = async (table: string, cols: string): Promise<any[]> => {
-    const out: any[] = [];
-    for (let from = 0; ; from += 1000) {
-      const { data, error } = await supabase.from(table).select(cols).range(from, from + 999);
-      if (error || !data) break;
-      out.push(...data);
-      if (data.length < 1000) break;
-    }
-    return out;
-  };
+  // (ordered by every column read, so pages never overlap or skip)
+  const all = (table: string, cols: string): Promise<any[]> => pagedAll<any>((count) => {
+    let q = supabase.from(table).select(cols, count ? { count: "exact" } : undefined);
+    cols.split(",").map((c) => c.trim()).filter((c) => /^[a-z_]+$/.test(c) && c !== "contacts").forEach((c) => { q = q.order(c); });
+    return q;
+  });
   const [clientsRows, trackRows, tcRows, pipeRows, phaseRows] = await Promise.all([
     all("clients", "company_id, contacts"),
     all("trackings", "id, company_id, pipeline_id, status, current_phase_id"),
@@ -680,6 +749,39 @@ export async function addCrmOption(kind: CrmOption["kind"], label: string, sort 
 export async function deleteCrmOption(id: string): Promise<string | null> {
   const { error } = await supabase.from("crm_options").delete().eq("id", id);
   return error?.message ?? null;
+}
+/** How many companies use one of your types, sectors or sources (0 for product kinds). */
+export async function crmOptionUses(opt: CrmOption): Promise<number> {
+  if (opt.kind === "relationship") {
+    const rows = await readAll<any>("companies", "id, relationship", ["id"]).catch(() => []);
+    return rows.filter((r) => Array.isArray(r.relationship) && r.relationship.includes(opt.label)).length;
+  }
+  if (opt.kind === "sector" || opt.kind === "source") {
+    if (opt.kind === "sector" && DEFAULT_SECTORS.some((d) => d.label === opt.label)) return 0;
+    const { count } = await supabase.from("companies").select("id", { count: "exact", head: true }).eq(opt.kind, opt.label);
+    return count ?? 0;
+  }
+  return 0;
+}
+/**
+ * Take one of your list entries off the list AND off every company that has
+ * it: a removed type leaves the companies' type lists, a removed sector or
+ * source empties that field. Product kinds stay on the products.
+ */
+export async function removeCrmOption(opt: CrmOption): Promise<string | null> {
+  if (opt.kind === "relationship") {
+    const rows = await readAll<any>("companies", "id, relationship", ["id"]).catch(() => []);
+    for (const r of rows) {
+      const list: string[] = Array.isArray(r.relationship) ? r.relationship : [];
+      if (!list.includes(opt.label)) continue;
+      const { error: e } = await supabase.from("companies").update({ relationship: list.filter((x) => x !== opt.label) }).eq("id", r.id);
+      if (e) return e.message;
+    }
+  } else if ((opt.kind === "sector" && !DEFAULT_SECTORS.some((d) => d.label === opt.label)) || opt.kind === "source") {
+    const { error: e } = await supabase.from("companies").update({ [opt.kind]: null }).eq(opt.kind, opt.label);
+    if (e) return e.message;
+  }
+  return deleteCrmOption(opt.id);
 }
 /**
  * Rename one of your own list entries (a type, sector, source or product kind)

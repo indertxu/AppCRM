@@ -89,7 +89,12 @@ export async function loadAllPhaseEvents(): Promise<Record<string, string[]>> {
 }
 export function phaseEventsFromRows(rows: any[]): Record<string, string[]> {
   const out: Record<string, string[]> = {};
-  rows.forEach((r: any) => { if (r.tracking_id && r.phase_id) (out[r.tracking_id] ??= []).push(r.phase_id); });
+  rows.forEach((r: any) => {
+    if (!r?.tracking_id) return;
+    // One row per phase entered ({tracking_id, phase_id}), or grouped per deal by sales_boot (37): {tracking_id, phase_ids[]}.
+    if (Array.isArray(r.phase_ids)) { r.phase_ids.forEach((p: any) => { if (p) (out[r.tracking_id] ??= []).push(p); }); return; }
+    if (r.phase_id) (out[r.tracking_id] ??= []).push(r.phase_id);
+  });
   return out;
 }
 

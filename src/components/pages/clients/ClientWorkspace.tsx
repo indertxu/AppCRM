@@ -7,7 +7,7 @@ import { projectValue, signedOf, legacyRoleMap, resolvedLinesOf, lineRate, roleN
 import { supabase } from "../../api/supabase";
 import ClientDirectory, { copyIntoClientFolders } from "./ClientDirectory";
 import { ClientUpsells } from "./ClientsPage";
-import MentionInput, { type MentionPerson } from "../../framework/MentionInput";
+import MentionInput, { type MentionPerson, MentionText, mentionsToPlain, registerMentionNames } from "../../framework/MentionInput";
 import { addTask, toggleTask, updateTaskMeta, saveClientProducts, loadDealContracts, type ContractTerms, type PaymentSchedule, type TaskPriority, type TrackTask } from "../sales/sales/salesApi";
 import { loadProducts, type Product as CatalogProduct } from "../settings/catalogApi";
 import { listCompanyFields, listContactFields, sessionUserId, saveContact, useRequiredFields, type CompanyField, type ContactField } from "../companies/companiesApi";
@@ -239,22 +239,13 @@ export function ClientLogo({ name, clientId, companyId, website, className = "" 
   const known = useClientSite(name, clientId, companyId);
   return <CompanyLogo name={name || "?"} website={website || known} className={className} />;
 }
-const plain = (body: string) => body.replace(/@\[([^\]]+)\]\([^)]+\)/g, "@$1");
+const plain = (body: string) => mentionsToPlain(body);
 const reduceMotion = () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 const cssVars = (o: Record<string, string | number>) => o as React.CSSProperties;
 
 /** Render a note body, turning "@[name](id)" tokens into mention pills. */
 function renderNoteBody(body: string): React.ReactNode {
-  const parts: React.ReactNode[] = [];
-  const re = /@\[([^\]]+)\]\((?:employee|contact):[^)\s]+\)/g;
-  let last = 0; let m: RegExpExecArray | null; let i = 0;
-  while ((m = re.exec(body))) {
-    if (m.index > last) parts.push(body.slice(last, m.index));
-    parts.push(<span className="cw-mention-pill" key={i++}>{m[1]}</span>);
-    last = m.index + m[0].length;
-  }
-  if (last < body.length) parts.push(body.slice(last));
-  return parts.length ? parts : body;
+  return <MentionText text={body} />;
 }
 
 /* contract maths */
@@ -1002,6 +993,7 @@ export default function ClientWorkspace({
   const mentionPeople: MentionPerson[] = useMemo(
     () => Object.entries(people).map(([id, name]) => ({ id: `employee:${id}`, name, kind: "employee" as const })),
     [people]);
+  useEffect(() => { registerMentionNames(people); }, [people]);
 
   const totals = useMemo(() => projects.reduce((acc, p) => {
     const signed = signedOf(p);
@@ -2143,8 +2135,42 @@ export default function ClientWorkspace({
                         {ct.paymentTermsDays != null && <span><i>Payment</i>{ct.paymentTermsDays} days</span>}
                         {ct.autoRenew && <span><i>Renews</i>{ct.renewYears ? `every ${ct.renewYears}y` : "Yes"}</span>}
                         {ct.nonTerminableYears ? <span><i>Non-terminable</i>{ct.nonTerminableYears}y</span> : null}
-                        {ct.contractRef && <span><i>Ref</i>{ct.contractRef}</span>}
+                        {ct.contractRef && <span><i>Contract no.</i>{ct.contractRef}</span>}
+                        {ct.billingFrequency && <span><i>Billing</i>{ct.billingFrequency[0].toUpperCase() + ct.billingFrequency.slice(1)}</span>}
+                        {ct.currency && <span><i>Currency</i>{ct.currency}{ct.pricesExclVat !== false ? " · excl. VAT" : ""}</span>}
+                        {ct.esignId && <span><i>E-signature</i>{ct.esignId}</span>}
                       </div>
+                      {(ct.customer || ct.contactPerson || ct.adminUser) && (
+                        <div className="cw-ct-parties">
+                          {ct.customer && (
+                            <div><small>Customer</small><b>{ct.customer.legalName || ct.customer.name || "—"}</b>
+                              <em>{[ct.customer.vat && `VAT ${ct.customer.vat}`, ct.customer.regNo && `Reg. ${ct.customer.regNo}`].filter(Boolean).join(" · ") || "—"}</em>
+                              {(ct.customer.address || ct.customer.country) && <em>{[ct.customer.address, ct.customer.country].filter(Boolean).join(", ")}</em>}
+                            </div>
+                          )}
+                          {ct.contactPerson?.name && <div><small>Contact person</small><b>{ct.contactPerson.name}</b><em>{[ct.contactPerson.role, ct.contactPerson.email, ct.contactPerson.phone].filter(Boolean).join(" · ") || "—"}</em></div>}
+                          {ct.adminUser?.name && <div><small>Admin user</small><b>{ct.adminUser.name}</b><em>{ct.adminUser.email || "—"}</em></div>}
+                        </div>
+                      )}
+                      {(ct.lines ?? []).length > 0 && (
+                        <div className="cw-ct-scope">
+                          <div className="cw-ct-scope-row is-head"><span>Scope</span><span className="is-r">List</span><span className="is-r">Discount</span><span className="is-r">Final</span></div>
+                          {(ct.lines ?? []).map((ln, j) => (
+                            <div key={j} className={`cw-ct-scope-line is-${ln.kind}`}>
+                              <div className="cw-ct-scope-row">
+                                <span><b>{ln.name}</b><em>{ln.kind === "service" ? `Services${ct.servicesBilling === "per_day" ? ` · per day performed${ct.servicesTolerancePct ? ` (±${ct.servicesTolerancePct}%)` : ""}` : " · fixed fee"}` : ln.recurring === false ? "One-time" : "Subscription"}{ln.qty && ln.kind === "service" ? ` · ${ln.qty} ${ln.unit === "hour" ? "hours" : "days"}` : ""}</em></span>
+                                <span className="is-r">{eur(ln.list)}</span>
+                                <span className="is-r">{ln.discount ? `−${eur(ln.discount)}${ln.discountPct ? ` · ${ln.discountPct}%` : ""}` : "—"}</span>
+                                <span className="is-r"><b>{eur(ln.final)}</b></span>
+                              </div>
+                              {(ln.rows ?? []).length > 1 && (ln.rows ?? []).map((r, k) => (
+                                <div key={k} className="cw-ct-scope-row is-sub"><span>{r.label}{r.detail ? <em> {r.detail}</em> : null}</span><span className="is-r">{eur(r.amount)}</span><span className="is-r">{r.discount ? `−${eur(r.discount)}` : ""}</span><span /></div>
+                              ))}
+                            </div>
+                          ))}
+                          {ct.servicesNote && <p className="cw-ct-scope-note">{ct.servicesNote}</p>}
+                        </div>
+                      )}
                       <div className="cw-ct-money">
                         <div className="is-lic"><small>Final licence</small><b>{eur(ct.license?.final ?? 0)}</b><em>Year 1 {eur(ct.license?.firstYear ?? 0)}{ct.license?.discount ? ` · −${eur(ct.license.discount)} discount` : ""}</em></div>
                         <div className="is-svc"><small>Final services</small><b>{eur(ct.services?.final ?? 0)}</b><em>One-off fee{ct.services?.discount ? ` · −${eur(ct.services.discount)} discount` : ""}</em></div>
@@ -2161,6 +2187,26 @@ export default function ClientWorkspace({
                           ))}
                         </div>
                       )}
+                      {(ct.signatories ?? []).length > 0 && (
+                        <div className="cw-ct-signers">
+                          {(ct.signatories ?? []).map((x, j) => (
+                            <span key={j} className={`is-${x.side}`}><i>{x.side === "supplier" ? "Signed for us" : "Signed for the client"}</i><b>{x.name}</b><em>{[x.role, x.email, x.phone].filter(Boolean).join(" · ")}</em></span>
+                          ))}
+                        </div>
+                      )}
+                      <div className="cw-ct-foot">
+                        {ct.termsUrl && <a href={ct.termsUrl} target="_blank" rel="noreferrer">General terms, DPA & SLA</a>}
+                        {ct.newsletter != null && <span>Newsletter: {ct.newsletter ? "yes" : "no"}</span>}
+                        {ct.marketingConsent != null && <span>Logo & name: {ct.marketingConsent ? "yes" : "no"}</span>}
+                        {ct.documentFileId && (
+                          <button type="button" className="cw-btn-primary is-sm" onClick={async () => {
+                            const { data: f } = await supabase.from("tracking_files").select("storage_path").eq("id", ct.documentFileId!).maybeSingle();
+                            if (!f) return;
+                            const { data } = await supabase.storage.from("tracking-files").createSignedUrl((f as any).storage_path, 60);
+                            if (data?.signedUrl) window.open(data.signedUrl, "_blank", "noopener");
+                          }}><Ico n="contract" s={14} />Open signed contract</button>
+                        )}
+                      </div>
                       {ct.notes && <p className="cw-ct-notes">{ct.notes}</p>}
                     </section>
                   );
@@ -2206,6 +2252,19 @@ export default function ClientWorkspace({
                               </span>
                               <span className="cw-line-price"><b>{eur(lineTotal(l))}{l.recurring && <em> / {per}</em>}</b></span>
                               <span className={`cw-status ${isActive(l) ? "is-open" : "is-closed"}`}><i />{l.status || "active"}</span>
+                            </div>
+                            <div className="cw-line-facts">
+                              {[
+                                ["Signed", l.signing_date ? fmt(l.signing_date) : ""],
+                                ["Starts", l.start_date ? fmt(l.start_date) : ""],
+                                ["Term", l.term_years ? `${l.term_years}y${term ? ` · to ${fmtD(term.end)}` : ""}` : ""],
+                                ["Increase", l.annual_increase_pct != null && l.annual_increase_pct !== "" && Number(l.annual_increase_pct) ? `+${l.annual_increase_pct}%/yr` : ""],
+                                ["Renewal", l.auto_renew ? `Auto${l.renew_years ? ` · ${l.renew_years}y` : ""}` : ""],
+                                ["Non-terminable", l.non_terminable_years ? `${l.non_terminable_years}y` : ""],
+                                ["Payment", l.payment_terms_days ? `Net ${l.payment_terms_days}` : ""],
+                                ["Contract no.", str(l.contract_ref)],
+                                ["Bill to", str(l.billing_contact_name)],
+                              ].filter(([, v]) => v).map(([k, v]) => <span key={k}><i>{k}</i>{v}</span>)}
                             </div>
                             {Array.isArray(l.breakdown?.rows) && l.breakdown.rows.length > 0 && (
                               <div className="cw-line-bd">
@@ -2274,7 +2333,26 @@ export default function ClientWorkspace({
 
                 <section className="cw-card" data-sec="services">
                   <SecHead icon="briefcase" tone="green" title="Service engagements" sub="Hover a row for rates, tax and payment" />
-                  {projects.length === 0 ? <div className="cw-empty"><Ico n="briefcase" s={20} /><p>No projects signed yet.</p></div> : (
+                  {(() => {
+                    // Agreed in a contract but not built as a project yet (management builds it from the handoff).
+                    const agreed = Object.values(dealContracts).flatMap((ct) => (ct.lines ?? []).filter((ln) => ln.kind === "service").map((ln) => ({ ln, ct })));
+                    if (projects.length > 0 || !agreed.length) return null;
+                    return (
+                      <div className="cw-eng">
+                        <div className="cw-eng-row is-head"><span>Agreed in the contract</span><span>Signed</span><span>Days</span><span>Billed</span><span className="is-r">Value</span></div>
+                        {agreed.map(({ ln, ct }, i) => (
+                          <div className="cw-eng-row is-static" key={i} style={cssVars({ "--i": i })}>
+                            <span data-k="Service"><b>{ln.name}</b></span>
+                            <span data-k="Signed">{ct.signDate ? fmt(ct.signDate) : "—"}</span>
+                            <span data-k="Days">{ln.qty ?? "—"}</span>
+                            <span data-k="Billed">{ct.servicesBilling === "fixed" ? "Fixed fee" : `Per day${ct.servicesTolerancePct ? ` ±${ct.servicesTolerancePct}%` : ""}`}</span>
+                            <span data-k="Value" className="is-r"><b>{eur(ln.final)}</b></span>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                  {projects.length === 0 ? (Object.values(dealContracts).some((ct) => (ct.lines ?? []).some((ln) => ln.kind === "service")) ? null : <div className="cw-empty"><Ico n="briefcase" s={20} /><p>No projects signed yet.</p></div>) : (
                     <div className="cw-eng">
                       <div className="cw-eng-row is-head"><span>Service</span><span>Signed</span><span>Days</span><span>Day rate</span><span className="is-r">Value</span></div>
                       {projects.map((p, i) => {

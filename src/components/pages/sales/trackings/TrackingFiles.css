@@ -431,7 +431,11 @@
 .dss-tpl { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .dss-tpl > span { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: #5a7d6d; white-space: nowrap; }
 .dss-tpl > span svg { width: 14px; height: 14px; }
-.dss-tpl > :last-child { min-width: 180px; }
+.dss-tpl > :nth-child(2) { min-width: 180px; }
+.dss-from { padding: 7px 11px !important; font-size: 12.5px; white-space: nowrap; border-style: dashed !important; color: #0a6f4d; }
+.dss-from svg { color: #12b57f; }
+.dss-from:hover { border-style: solid !important; background: linear-gradient(120deg, rgba(134, 239, 192, 0.22), rgba(18, 181, 127, 0.1)); }
+@media (max-width: 1250px) { .dss-from { font-size: 0; gap: 0 !important; } }
 @media (max-width: 1100px) { .dss-tpl > span { display: none; } .dss-head .dxb-title { display: none; } }
 .dss-menu { position: relative; }
 .dss-menu .dxb-btn svg:last-child { width: 13px; height: 13px; margin-left: -2px; }

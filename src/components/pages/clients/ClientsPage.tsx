@@ -20,7 +20,7 @@ import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
 import { downloadBlob, tableToXlsx, type ExportCell } from "../../framework/exportFile";
 import { ClientImport } from "../contacts/ContactImport";
 import { FilterBar, FilterChips, SortHead, applyView, nextSort, emptyView, useSavedViews, useStoredView, type FField } from "../companies/CompaniesPage";
-import { loadPrefs, savePref } from "../companies/companiesApi";
+import { loadPrefs, savePref, pagedAll } from "../companies/companiesApi";
 import "../companies/CompaniesPage.css";
 import "./ClientsPage.css";
 
@@ -190,11 +190,9 @@ export function ClientList({
       // (common or legal) even when the two are not linked.
       const cos: Record<string, any> = {};
       const allCos: any[] = [];
-      for (let from = 0; ; from += 1000) {
-        const { data: page } = await supabase.from("companies").select("id, name, legal_name, vat_number, city, province, country, sector, website").range(from, from + 999);
-        ((page ?? []) as any[]).forEach((x) => { cos[x.id] = x; allCos.push(x); });
-        if (!page || page.length < 1000) break;
-      }
+      const coRows = await pagedAll<any>((count) => supabase.from("companies")
+        .select("id, name, legal_name, vat_number, city, province, country, sector, website", count ? { count: "exact" } : undefined).order("id"));
+      coRows.forEach((x) => { cos[x.id] = x; allCos.push(x); });
       const co: Record<string, any> = {};
       Object.entries(coOf).forEach(([cid, coid]) => { if (cos[coid]) co[cid] = cos[coid]; });
       if (alive) setExtra({ lines: ((cp.data ?? []) as any[]).map((r) => ({ ...r, name: pn[r.product_id] ?? "Product" })), last, tasks, co, cos: allCos });

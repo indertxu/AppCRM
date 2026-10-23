@@ -3,9 +3,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } fro
 import { createPortal } from "react-dom";
 import { supabase } from "../../../api/supabase";
 import Select from "../../../framework/Select";
-import { listDocTemplates, saveDocTemplate, pickDocTemplate, docThemeSeed, uploadDocImage, printDocHtml, docToPdfBlob, downloadBlob, type DocTemplateRow } from "./proposalApi";
-import { defaultDocTemplate, DEFAULT_DOC_THEME, type DocKind, type DocTemplate, type DocInstance, type ProposalData, type ContractTerms, type DocTheme, type DocBlock } from "./proposalGen";
-import { DocBuilder, docHtmlFor, type DocCtxIn } from "../../settings/ProposalTemplateEditor";
+import { listDocTemplates, saveDocTemplate, pickDocTemplate, docThemeSeed, uploadDocImage, printDocHtml, docToPdfBlob, downloadBlob, loadDocVariables, type DocTemplateRow } from "./proposalApi";
+import { defaultDocTemplate, DEFAULT_DOC_THEME, setDocCustomVars, type DocKind, type DocTemplate, type DocInstance, type ProposalData, type ContractTerms, type DocTheme, type DocBlock } from "./proposalGen";
+import { DocBuilder, docHtmlFor, StartFrom, AiReview, type DocCtxIn, type StartPicked } from "../../settings/ProposalTemplateEditor";
 import "./TrackingFiles.css";
 
 interface TFile {
@@ -344,6 +344,13 @@ export async function openTrackingFile(path: string, bucket = BUCKET) {
   window.open(data.signedUrl, "_blank");
 }
 
+/** A deal document's bytes (to read a signed contract). */
+export async function readTrackingFileBytes(path: string, bucket = BUCKET): Promise<ArrayBuffer> {
+  const { data, error } = await supabase.storage.from(bucket).download(path);
+  if (error || !data) throw new Error(error?.message ?? "Could not read the file.");
+  return await data.arrayBuffer();
+}
+
 /** Fired when a file is added to a deal from elsewhere (a generated proposal), so its list reloads. */
 export const TRACKING_FILES_EVENT = "next:tracking-files";
 
@@ -489,7 +496,7 @@ const DS_ICON = {
   save: "M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2zM17 21v-8H7v8M7 3v5h8",
   print: "M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v8H6z",
   down: "M12 3v12M7 10l5 5 5-5M4 19h16", tpl: "M4 4h16v16H4zM4 9h16M9 9v11", undo: "M3 7v6h6M3 13a9 9 0 1 0 3-7.7L3 7", chev: "M6 9l6 6 6-6",
-  deck: "M3 4h18v13H3zM8 21h8M12 17v4",
+  deck: "M3 4h18v13H3zM8 21h8M12 17v4", spark: "M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z",
 };
 const DsIco = ({ d }: { d: keyof typeof DS_ICON }) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={DS_ICON[d]} /></svg>;
 const fileSafe = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\w\-]+/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "").slice(0, 60);
@@ -525,10 +532,21 @@ export function DocStudio({ trackingId, phaseId, kind: kind0, proposal, data, pr
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [ask, setAsk] = useState<null | "reset" | "totemplate">(null);
+  /** "Start from…" picker, the AI review after it, and a template to keep once reviewed */
+  const [from, setFrom] = useState(false);
+  const [ai, setAi] = useState(false);
+  const [tplAfter, setTplAfter] = useState<StartPicked | null>(null);
+  /** the deal's other values: stage, company and contacts' data, team, custom fields (multi-choice joined) */
+  const [extra, setExtra] = useState<Record<string, string> | null>(null);
   useEffect(() => {
     listDocTemplates().then(setTemplates).catch(() => setTemplates([]));
     docThemeSeed().then(setSeed).catch(() => undefined);
   }, []);
+  useEffect(() => {
+    let live = true;
+    loadDocVariables(trackingId).then((r) => { if (!live) return; setDocCustomVars(r.defs); setExtra(r.values); }).catch(() => { if (live) setExtra({}); });
+    return () => { live = false; };
+  }, [trackingId]);
 
   const ofKind = useMemo(() => (templates ?? []).filter((t) => t.kind === kind), [templates, kind]);
   const builtIn = useMemo<DocTemplate>(() => ({ ...defaultDocTemplate(kind, "es", { ...DEFAULT_DOC_THEME, ...seed }), id: null }), [kind, seed]);
@@ -540,7 +558,7 @@ export function DocStudio({ trackingId, phaseId, kind: kind0, proposal, data, pr
   // first time on this kind: copy the template
   useEffect(() => {
     if (templates === undefined || inst) return;
-    setDocs((d) => ({ ...d, [kind]: { templateId: tpl.id ?? null, blocks: JSON.parse(JSON.stringify(tpl.blocks)), values: {}, theme: tpl.theme } }));
+    setDocs((d) => ({ ...d, [kind]: { templateId: tpl.id ?? null, blocks: JSON.parse(JSON.stringify(tpl.blocks)), values: {}, theme: tpl.theme, assets: tpl.assets ?? [] } }));
   }, [templates, inst, kind, tpl]);
 
   // autosave (debounced)
@@ -561,7 +579,8 @@ export function DocStudio({ trackingId, phaseId, kind: kind0, proposal, data, pr
   const theme = inst?.theme ?? tpl.theme;
   const ctx: DocCtxIn = useMemo(() => ({
     data, lang: tpl.lang, sellerName: seller.name, sellerEmail: seller.email, sellerPhone: seller.phone, proposalName: proposal.name, contract: contract ?? null, dealValue: dealValue ?? null,
-  }), [data, tpl.lang, seller.name, seller.email, seller.phone, proposal.name, contract, dealValue]);
+    extra,
+  }), [data, tpl.lang, seller.name, seller.email, seller.phone, proposal.name, contract, dealValue, extra]);
   const title = `${kind === "contract" ? "Contrato" : "Propuesta"} · ${data.client.name || proposal.name}`;
   const htmlOf = (mode: "view" | "print") => docHtmlFor(mode, { theme, blocks: inst?.blocks ?? [], kind, lang: tpl.lang, ctx, terms: tpl.terms, values: inst?.values, productIds, serviceIds, title });
   const baseName = `${fileSafe(theme.company || "Doc")}-${kind === "contract" ? "Contrato" : "Propuesta"}-${fileSafe(data.client.name || proposal.name)}`;
@@ -569,7 +588,7 @@ export function DocStudio({ trackingId, phaseId, kind: kind0, proposal, data, pr
   const switchTemplate = (id: string) => {
     const t = id === "builtin" ? builtIn : ofKind.find((x) => x.id === id);
     if (!t) return;
-    setDocs((d) => ({ ...d, [kind]: { templateId: t.id ?? null, blocks: JSON.parse(JSON.stringify(t.blocks)), values: d[kind]?.values ?? {}, theme: t.theme } }));
+    setDocs((d) => ({ ...d, [kind]: { templateId: t.id ?? null, blocks: JSON.parse(JSON.stringify(t.blocks)), values: d[kind]?.values ?? {}, theme: t.theme, assets: Array.from(new Set([...(d[kind]?.assets ?? []), ...(t.assets ?? [])])) } }));
     setMsg({ kind: "ok", text: `Now using “${t.name}”. Your field values were kept.` });
   };
   const keepFile = async (fmt: "pdf" | "html") => {
@@ -593,16 +612,37 @@ export function DocStudio({ trackingId, phaseId, kind: kind0, proposal, data, pr
     catch (e: any) { setMsg({ kind: "err", text: e?.message ?? "Could not make the PDF." }); }
     finally { setBusy(null); }
   };
+  const fresh = !!inst?.source;
   const toTemplate = async () => {
     setAsk(null); setBusy("tpl");
-    const next: DocTemplate = { ...tpl, blocks: inst?.blocks ?? tpl.blocks, theme };
-    if (!tpl.id) next.name = `${tpl.name} (${data.client.name || "deal"})`;
+    const next: DocTemplate = { ...tpl, blocks: inst?.blocks ?? tpl.blocks, theme, assets: Array.from(new Set([...(tpl.assets ?? []), ...(inst?.assets ?? [])])) };
+    if (inst?.source) { next.id = null; next.isDefault = false; next.name = inst.source.name; next.reference = { fileName: inst.source.name, kind: "deal", at: inst.source.at }; }
+    else if (!tpl.id) next.name = `${tpl.name} (${data.client.name || "deal"})`;
     const r = await saveDocTemplate(next);
     setBusy(null);
     if (r.error) { setMsg({ kind: "err", text: r.error }); return; }
-    setMsg({ kind: "ok", text: tpl.id ? `“${tpl.name}” now starts with this layout. Values stay variables.` : "Saved as a new template." });
-    if (!tpl.id && r.id) upd({ templateId: r.id });
+    setMsg({ kind: "ok", text: tpl.id && !fresh ? `“${tpl.name}” now starts with this layout. Values stay variables.` : "Saved as a new template." });
+    if ((fresh || !tpl.id) && r.id) upd({ templateId: r.id, source: undefined });
     listDocTemplates().then(setTemplates).catch(() => undefined);
+  };
+  /** The document now starts from another deal's document or a file: the AI then looks for the other client's values. */
+  const startFrom = (r: StartPicked) => {
+    setFrom(false);
+    setDocs((d) => ({ ...d, [kind]: { templateId: null, blocks: r.blocks, values: d[kind]?.values ?? {}, theme: r.theme, assets: Array.from(new Set([...(d[kind]?.assets ?? []), ...r.assets])), source: { name: r.name, at: new Date().toISOString() }, updatedAt: new Date().toISOString() } }));
+    setTplAfter(r.alsoTemplate ? r : null);
+    setMsg({ kind: "ok", text: `Now built from ${r.reference.fileName}. Your field values were kept.` });
+    setAi(true);
+  };
+  /** Keeps what was picked (after the AI review) as a new template. */
+  const keepAsTemplate = async (r: StartPicked, blocks: DocBlock[]) => {
+    setTplAfter(null); setBusy("tpl");
+    const b = defaultDocTemplate(kind, tpl.lang, r.theme);
+    const res = await saveDocTemplate({ ...b, id: null, name: r.name || b.name, blocks, theme: r.theme, assets: r.assets, terms: { ...b.terms, ...(r.terms ?? {}) }, reference: r.reference });
+    setBusy(null);
+    if (res.error || !res.id) { setMsg({ kind: "err", text: res.error ?? "Could not save the template." }); return; }
+    setMsg({ kind: "ok", text: `Saved as the template “${r.name || b.name}”.` });
+    await listDocTemplates().then(setTemplates).catch(() => undefined);
+    upd({ templateId: res.id, source: undefined });
   };
   const reset = () => { setAsk(null); upd({ blocks: JSON.parse(JSON.stringify(tpl.blocks)), theme: tpl.theme }); setMsg({ kind: "ok", text: "Back to the template. Your field values were kept." }); };
 
@@ -621,6 +661,7 @@ export function DocStudio({ trackingId, phaseId, kind: kind0, proposal, data, pr
         ctx={ctx} productIds={productIds} serviceIds={serviceIds}
         catalog={{ products: productIds.map((id, i) => ({ id, name: data.products[i]?.name ?? "Product" })), services: serviceIds.map((id, i) => ({ id, name: data.services[i]?.name ?? "Service" })) }}
         uploadImage={(f) => uploadDocImage(f, "deal")}
+        assets={inst.assets ?? tpl.assets ?? []} onAssets={(a) => upd({ assets: a })}
         previewHtml={() => htmlOf("view")}
         head={(
           <div className="dss-head">
@@ -634,8 +675,9 @@ export function DocStudio({ trackingId, phaseId, kind: kind0, proposal, data, pr
             </div>
             <div className="dss-tpl">
               <span><DsIco d="tpl" />Template</span>
-              <Select size="sm" value={inst.templateId ?? "builtin"} onChange={switchTemplate} aria-label="Template"
-                options={[...ofKind.map((t) => ({ value: t.id, label: t.name, hint: t.sectors.length ? t.sectors.join(", ") : t.isDefault ? "default" : undefined })), ...(!ofKind.length || !inst.templateId ? [{ value: "builtin", label: "Our design", hint: "built-in" }] : [])]} />
+              <Select size="sm" value={inst.source ? "source" : inst.templateId ?? "builtin"} onChange={(v) => { if (v !== "source") switchTemplate(v); }} aria-label="Template"
+                options={[...(inst.source ? [{ value: "source", label: inst.source.name, hint: "picked" }] : []), ...ofKind.map((t) => ({ value: t.id, label: t.name, hint: t.sectors.length ? t.sectors.join(", ") : t.isDefault ? "default" : undefined })), ...(!ofKind.length || (!inst.templateId && !inst.source) ? [{ value: "builtin", label: "Our design", hint: "built-in" }] : [])]} />
+              <button type="button" className="dxb-btn is-sm dss-from" onClick={() => setFrom(true)} title="Start from another template, a document made on a deal, or a file"><DsIco d="spark" />Start from…</button>
             </div>
           </div>
         )}
@@ -655,7 +697,8 @@ export function DocStudio({ trackingId, phaseId, kind: kind0, proposal, data, pr
                   <button type="button" role="menuitem" onClick={() => download("pdf")}><DsIco d="down" /><span><b>Download PDF</b><i>A4, ready to send</i></span></button>
                   <button type="button" role="menuitem" onClick={() => download("html")}><DsIco d="down" /><span><b>Download web page</b><i>A single .html file</i></span></button>
                   <hr />
-                  <button type="button" role="menuitem" onClick={() => { setMenu(false); setAsk("totemplate"); }}><DsIco d="tpl" /><span><b>{tpl.id ? "Save layout to template" : "Save as a new template"}</b><i>Next proposals start like this one</i></span></button>
+                  <button type="button" role="menuitem" onClick={() => { setMenu(false); setAsk("totemplate"); }}><DsIco d="tpl" /><span><b>{tpl.id && !fresh ? "Save layout to template" : "Save as a new template"}</b><i>Next {kind === "contract" ? "contracts" : "proposals"} start like this one</i></span></button>
+                  <button type="button" role="menuitem" onClick={() => { setMenu(false); setAi(true); }}><DsIco d="spark" /><span><b>AI suggestions</b><i>Values of another client left in the text</i></span></button>
                   <button type="button" role="menuitem" onClick={() => { setMenu(false); setAsk("reset"); }}><DsIco d="undo" /><span><b>Back to the template</b><i>Drops this proposal's layout changes</i></span></button>
                 </div>
               )}
@@ -675,16 +718,28 @@ export function DocStudio({ trackingId, phaseId, kind: kind0, proposal, data, pr
       {ask && createPortal(
         <div className="dxk-back" style={{ zIndex: 2147483000 }} onMouseDown={(e) => { if (e.target === e.currentTarget) setAsk(null); }}>
           <div className="dxc" role="alertdialog" aria-modal="true">
-            <b>{ask === "reset" ? "Go back to the template?" : tpl.id ? `Update “${tpl.name}”?` : "Save as a new template?"}</b>
+            <b>{ask === "reset" ? "Go back to the template?" : tpl.id && !fresh ? `Update “${tpl.name}”?` : "Save as a new template?"}</b>
             <p>{ask === "reset"
               ? "The sections and texts of this document go back to how the template has them. The values you typed for this deal stay."
-              : tpl.id ? "Every new document made from this template will start with this layout and these texts. Deal values stay as variables, so they keep filling in for each deal." : "A new template with this layout; deal values stay as variables."}</p>
+              : tpl.id && !fresh ? "Every new document made from this template will start with this layout and these texts. Deal values stay as variables, so they keep filling in for each deal." : "A new template with this layout; deal values stay as variables."}</p>
             <div>
               <button type="button" className="dxb-btn" onClick={() => setAsk(null)}>Cancel</button>
-              <button type="button" className="dxb-btn is-primary" onClick={ask === "reset" ? reset : toTemplate}>{ask === "reset" ? "Back to the template" : tpl.id ? "Update template" : "Save template"}</button>
+              <button type="button" className="dxb-btn is-primary" onClick={ask === "reset" ? reset : toTemplate}>{ask === "reset" ? "Back to the template" : tpl.id && !fresh ? "Update template" : "Save template"}</button>
             </div>
           </div>
         </div>, document.body)}
+      {from && (
+        <StartFrom kind={kind} lang={tpl.lang} base={theme} trackingId={trackingId} excludeProposalId={proposal.id} offerTemplate
+          templates={ofKind} onTemplate={(t) => { setFrom(false); switchTemplate(t.id); }}
+          onPicked={startFrom} onClose={() => setFrom(false)} />
+      )}
+      {ai && (
+        <AiReview blocks={inst.blocks} kind={kind} lang={tpl.lang} provider={theme.company}
+          clientNames={[]}
+          title={`Find values of another client left in this ${kind} and turn them into ${data.client.name || "this deal"}'s variables.`}
+          onClose={() => { setAi(false); if (tplAfter) keepAsTemplate(tplAfter, inst.blocks); }}
+          onApply={(blocks, summary) => { setAi(false); upd({ blocks }); setMsg({ kind: "ok", text: summary }); if (tplAfter) keepAsTemplate(tplAfter, blocks); }} />
+      )}
     </>
   );
 }

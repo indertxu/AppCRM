@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import FieldInput from "./FieldInput";
 import { saveTrackingCustom, isEmptyValue, type TrackingField } from "./trackingFieldsApi";
 import "./TrackingFields.css";
@@ -11,8 +11,23 @@ const reducedMotion = () => typeof window !== "undefined" && !!window.matchMedia
  * body slides open. The header carries a short summary so the folded card
  * still says something. Used by Contacts, Close probability and Details.
  */
-export function FoldPanel({ className = "", title, count, summary, aside, defaultOpen = false, children }: {
+/** Icons for the folded card headers (SVG path data, 24x24, stroked). */
+export const FOLD_ICON = {
+  proposals: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M9 13h6M9 17h4",
+  contacts: "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75",
+  probability: "M18 20V10M12 20V4M6 20v-6",
+  details: "M4 6h16M4 12h16M4 18h10",
+  calculator: "M6 2h12a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zM8 6h8M8 11h.01M12 11h.01M16 11h.01M8 15h.01M12 15h.01M16 15h.01M8 19h4",
+};
+
+export function FoldPanel({ className = "", title, count, summary, aside, defaultOpen = false, icon, tone, openSignal, children }: {
   className?: string;
+  /** Bump it to open the card from outside (e.g. "New" in the header of a folded card). */
+  openSignal?: number;
+  /** SVG path data for the header's icon chip (see FOLD_ICON). */
+  icon?: string;
+  /** Accent of the card: icon chip, count and hover. */
+  tone?: string;
   title: ReactNode;
   count?: number;
   /** One short line shown on the header while the card is folded. */
@@ -23,6 +38,7 @@ export function FoldPanel({ className = "", title, count, summary, aside, defaul
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  useEffect(() => { if (openSignal) setOpen(true); }, [openSignal]);
   /** Fully open: menus and pickers inside may overflow the card. */
   const [settled, setSettled] = useState(defaultOpen);
   useEffect(() => {
@@ -32,13 +48,19 @@ export function FoldPanel({ className = "", title, count, summary, aside, defaul
     return () => window.clearTimeout(t);
   }, [open]);
   return (
-    <section className={`sl-panel sl-fold ${open ? "is-open" : ""} ${settled ? "is-settled" : ""} ${className}`}>
+    <section className={`sl-panel sl-fold ${icon ? "has-ico" : ""} ${open ? "is-open" : ""} ${settled ? "is-settled" : ""} ${className}`}
+      style={tone ? ({ "--fold-tone": tone } as CSSProperties) : undefined}>
       <div className="sl-fold-head">
         <h3 className="sl-fold-h">
           <button type="button" className="sl-fold-btn" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+            {icon && (
+              <span className="sl-fold-ico" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={icon} /></svg>
+              </span>
+            )}
             <span className="sl-panel-title">{title}{count != null && count > 0 && <span>{count}</span>}</span>
             {summary != null && summary !== "" && <span className="sl-fold-sum" aria-hidden={open}>{summary}</span>}
-            <svg className="sl-fold-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+            <span className="sl-fold-chevw" aria-hidden="true"><svg className="sl-fold-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg></span>
           </button>
         </h3>
         {aside && <div className="sl-fold-aside">{aside}</div>}
@@ -90,7 +112,7 @@ export default function TrackingFieldsPanel({ trackingId, fields, initial, onSav
   const filled = fields.filter((f) => !isEmptyValue(f, values[f.id])).length;
 
   return (
-    <FoldPanel className="tfp" title="Details" count={fields.length}
+    <FoldPanel className="tfp" title="Details" count={fields.length} icon={FOLD_ICON.details} tone="#4a6b5e"
       summary={missing ? `${missing} required empty` : `${filled} of ${fields.length} filled`}
       aside={state !== "idle" ? (
         <span className={`tfp-state is-${state}`} aria-live="polite">

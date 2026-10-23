@@ -39,6 +39,7 @@ import {
 import { isoDay } from "./HomeCalendar";
 import { outlookMailStatus, syncTicketMail, sendOutlookMail, connectOutlook, fetchMailAttachment, OUTLOOK_CONNECTION_EVENT, type OutlookMailStatus, type MailSyncResult } from "../../../api/outlookSync";
 import { loadPrefs, savePref } from "../../companies/companiesApi";
+import { MentionText, mentionsToPlain } from "../../../framework/MentionInput";
 import "./HomeShared.css";
 
 type Tab = "quick" | "process" | "delegated" | "done";
@@ -68,12 +69,9 @@ const ago = (iso: string) => {
   const d = Math.round(h / 24);
   return d === 1 ? "yesterday" : d < 30 ? `${d} days ago` : new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 };
-/** "@[Name](employee:id)" → a bold "@Name". */
-function Rich({ text }: { text: string }) {
-  const parts = (text ?? "").split(/(@\[[^\]]+\]\([^)]+\))/g);
-  return <>{parts.map((p, i) => { const m = /^@\[([^\]]+)\]/.exec(p); return m ? <b key={i}>@{m[1]}</b> : <span key={i}>{p}</span>; })}</>;
-}
-const plain = (t: string) => (t ?? "").replace(/@\[([^\]]+)\]\([^)]+\)/g, "@$1");
+/** "@[Name](employee:id)" → a name pill. */
+function Rich({ text }: { text: string }) { return <MentionText text={text} />; }
+const plain = (t: string) => mentionsToPlain(t);
 const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase()).join("") || "?";
 
 /**
@@ -295,7 +293,7 @@ export default function HomeTodo() {
         {t.description?.trim() && <p className="hs-task-desc"><Rich text={t.description} /></p>}
         <span className="hs-proc-bar" aria-label={`${t.progress}% done`}><i /></span>
         {t.lastNote && (
-          <p className="hs-proc-note">“{plain(t.lastNote.body)}” <small>· {ago(t.lastNote.at)}</small></p>
+          <p className="hs-proc-note">“<Rich text={t.lastNote.body} />” <small>· {ago(t.lastNote.at)}</small></p>
         )}
         <div className="hs-task-meta">
           <DueChip dueAt={t.due_at} todayIso={today} done={t.done} />
@@ -320,7 +318,7 @@ export default function HomeTodo() {
       <p className="hs-task-title"><Rich text={t.title} /></p>
       {t.description?.trim() && <p className="hs-task-desc"><Rich text={t.description} /></p>}
       <span className="hs-proc-bar" aria-label={`${t.progress}% done`}><i /></span>
-      {t.lastNote && <p className="hs-proc-note">“{plain(t.lastNote.body)}” <small>· {ago(t.lastNote.at)}</small></p>}
+      {t.lastNote && <p className="hs-proc-note">“<Rich text={t.lastNote.body} />” <small>· {ago(t.lastNote.at)}</small></p>}
       <div className="hs-task-meta">
         <span className={`hs-st is-${t.status}`}><i />{STATUS_LABEL[t.status]}</span>
         {prioFlag(t)}
@@ -807,7 +805,7 @@ function TaskDetail({ task, layout, onClose, onChange, onOpenDeal, onDelete, onE
                     {u.status && <span className={`hs-st is-${u.status}`}>{STATUS_LABEL[u.status]}{u.progress != null && u.status !== "done" ? ` · ${u.progress}%` : ""}</span>}
                     <small>{ago(u.created_at)}</small>
                   </div>
-                  {u.body && <p>{plain(u.body)}</p>}
+                  {u.body && <p><Rich text={u.body} /></p>}
                 </div>
               </li>
             ))}
@@ -1126,7 +1124,7 @@ export function TaskWorkspace({ initialId, extra, onClose }: {
                         </button>
                         <div className="htw-item-body">
                           <b className="htw-item-title"><Rich text={t.title} /></b>
-                          {t.description?.trim() && <span className="htw-item-desc">{plain(t.description)}</span>}
+                          {t.description?.trim() && <span className="htw-item-desc"><Rich text={t.description} /></span>}
                           <div className="htw-item-meta">
                             {isSent(t) && <span className="hs-sent-who"><span className="hs-avatars">{t.assignees.slice(0, 3).map((a) => <i key={a.id}>{initials(a.name)}</i>)}</span><span>{t.assignees[0]?.name}{t.assignees.length > 1 ? ` +${t.assignees.length - 1}` : ""}</span></span>}
                             {t.priority !== "normal" && <span className={`hs-prio is-${t.priority}`}><FlagIcon /><span>{PRIORITY_LABEL[t.priority]}</span></span>}
@@ -2005,7 +2003,7 @@ export function TicketDesk({ full = false, onClose }: { full?: boolean; onClose?
             {t.priority === "urgent" || t.priority === "high" ? <span className={`tk-prio is-${t.priority}`}><FlagIcon />{PRIORITY_LABEL[t.priority]}</span> : null}
             {t.source === "email" && <span className="tk-src" title="Came in by e-mail"><TkIco d="mail" /></span>}
           </div>
-          <span className="tk-row-title">{plain(t.title)}</span>
+          <span className="tk-row-title"><Rich text={t.title} /></span>
           <div className="tk-row-meta">
             {link && <span className="tk-link"><TkIco d={link.icon} />{link.text}</span>}
             <DueChip dueAt={t.due} todayIso={today} done={!isActive(t.stage)} />
@@ -2078,7 +2076,7 @@ export function TicketDesk({ full = false, onClose }: { full?: boolean; onClose?
         return (
           <div key={t.id} data-tk={t.id} className={`tk-tr is-p-${t.priority} ${openId === t.id || sel.has(t.id) ? "is-sel" : ""} ${sorted[cursor]?.id === t.id ? "is-cur" : ""}`} style={{ ["--i" as string]: Math.min(i, 14) } as React.CSSProperties} onClick={() => setOpenId(t.id)}>
             <span className="tk-cb" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={sel.has(t.id)} onChange={() => toggleSel(t.id)} aria-label={`Select ${ticketRef(t)}`} /></span>
-            <span className="tk-td-title"><em className="tk-ref">{ticketRef(t)}</em><b>{plain(t.title)}</b>{t.source === "email" && <span className="tk-src" title="Came in by e-mail"><TkIco d="mail" /></span>}{pct !== null && <span className="tk-pct is-sm"><i style={{ ["--w" as string]: `${pct}%` } as React.CSSProperties} />{pct}%</span>}</span>
+            <span className="tk-td-title"><em className="tk-ref">{ticketRef(t)}</em><b><Rich text={t.title} /></b>{t.source === "email" && <span className="tk-src" title="Came in by e-mail"><TkIco d="mail" /></span>}{pct !== null && <span className="tk-pct is-sm"><i style={{ ["--w" as string]: `${pct}%` } as React.CSSProperties} />{pct}%</span>}</span>
             <span className="tk-td-muted">{link ? <span className="tk-link"><TkIco d={link.icon} />{link.text}</span> : "—"}</span>
             <span className="tk-td-muted">{t.type ?? "—"}</span>
             <span><span className={`tk-prio is-${t.priority}`}><FlagIcon />{PRIORITY_LABEL[t.priority]}</span></span>

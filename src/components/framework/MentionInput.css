@@ -48,3 +48,18 @@
 .mi-av-ext { background: linear-gradient(150deg, #8ba79b, #5a7d6d); }
 .mi-name { flex: 1; font-size: 13.5px; font-weight: 600; color: #0b241a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mi-kind { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #5a7d6d; padding: 2px 7px; border-radius: 6px; background: #f0f3f1; flex-shrink: 0; }
+/* Read-only mention pill (MentionText) */
+.mt-pill {
+  display: inline-flex; align-items: center; gap: 5px; vertical-align: -0.2em; max-width: 100%;
+  height: 1.55em; padding: 0 8px 0 2px; margin: 0 1px; border-radius: 999px;
+  font-size: 0.92em; font-weight: 600; line-height: 1; white-space: nowrap;
+  color: color-mix(in srgb, var(--mt, #12b57f) 78%, #0b241a);
+  background: color-mix(in srgb, var(--mt, #12b57f) 13%, #fff);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mt, #12b57f) 22%, transparent);
+}
+.mt-pill > i {
+  display: inline-grid; place-items: center; flex: none; width: 1.25em; height: 1.25em; border-radius: 50%;
+  font-style: normal; font-size: 0.78em; font-weight: 700; color: #fff; background: var(--mt, #12b57f);
+}
+.mt-pill.is-contact { color: #46695a; background: #eef2f0; box-shadow: inset 0 0 0 1px rgba(70,105,90,0.18); }
+.mt-pill.is-contact > i { background: #7c9a8c; }

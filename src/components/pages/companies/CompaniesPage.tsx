@@ -12,7 +12,7 @@ import {
   loadRelationshipSets, type RelationshipSets,
   loadPrefs, savePref, setCompanyParent,
   companyStatus, type RelStatus, REL_SYSTEM, relLabel, relationshipOptions, sectorOptions, sourceOptions, guessSector, DEFAULT_SECTORS,
-  listCrmOptions, addCrmOption, deleteCrmOption, type CrmOption,
+  listCrmOptions, addCrmOption, removeCrmOption, crmOptionUses, type CrmOption,
   partnerCompanies, listPartnerRates, savePartnerRate, deletePartnerRate, type PartnerRate,
   loadHistory, type HistoryEntry, descendantsOf, groupRootOf,
   type Company, type Contact, type Employee, type CompanyField, type ContactField, type Billing,
@@ -1731,7 +1731,22 @@ function OptionList({ kind, title, hint, options, builtIn, placeholder, onChange
 }) {
   const [label, setLabel] = useState("");
   const [err, setErr] = useState<string | null>(null);
-  const [askDel, setAskDel] = useState<string | null>(null);
+  const [askDel, setAskDelRaw] = useState<string | null>(null);
+  // how many companies use the one being removed (null while counting)
+  const [uses, setUses] = useState<number | null>(null);
+  const [removing, setRemoving] = useState(false);
+  const setAskDel = (id: string | null) => {
+    setAskDelRaw(id); setUses(null);
+    const o = id ? options.find((x) => x.id === id) : null;
+    if (o) crmOptionUses(o).then((n) => setUses(n)).catch(() => setUses(0));
+  };
+  const remove = async (o: CrmOption) => {
+    setRemoving(true);
+    const e = await removeCrmOption(o);
+    setRemoving(false);
+    if (e) { setErr(e); return; }
+    setAskDel(null); await onChanged();
+  };
   // renaming one of yours: its id and the name being typed
   const [edit, setEdit] = useState<{ id: string; label: string } | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
@@ -1778,12 +1793,15 @@ function OptionList({ kind, title, hint, options, builtIn, placeholder, onChange
               </button>
             )}
             {askDel === o.id ? (
-              <span className="cf-opt-ask">remove?
-                <button type="button" className="is-yes" onClick={async () => { setAskDel(null); await deleteCrmOption(o.id); await onChanged(); }}>yes</button>
-                <button type="button" onClick={() => setAskDel(null)}>no</button>
+              <span className="cf-opt-ask">
+                {uses === null ? "checking…" : uses === 0 ? "remove?" : kind === "relationship"
+                  ? `remove from ${uses} ${uses === 1 ? "company" : "companies"}?`
+                  : `remove? ${uses} ${uses === 1 ? "company loses it" : "companies lose it"}`}
+                <button type="button" className="is-yes" disabled={uses === null || removing} onClick={() => void remove(o)}>{removing ? "…" : "yes"}</button>
+                <button type="button" onClick={() => setAskDel(null)} disabled={removing}>no</button>
               </span>
             ) : (
-              <button type="button" aria-label={`Remove ${o.label}`} title="Remove from the list — records that have it keep it" onClick={() => setAskDel(o.id)}>×</button>
+              <button type="button" aria-label={`Remove ${o.label}`} title={kind === "product_kind" ? "Remove from the list" : "Remove from the list and from every company that has it"} onClick={() => setAskDel(o.id)}>×</button>
             )}
           </span>
         ))}
@@ -2288,7 +2306,7 @@ function locate(a: AddrValue): Promise<GlobeTarget | null> {
 }
 
 /** The globe/map panel. `value` is the address being edited; it stays mounted once opened. */
-function AddressGlobe({ value, anchor, open }: { value: AddrValue; anchor: React.RefObject<HTMLElement | null>; open: boolean }) {
+function AddressGlobe({ value, anchor, open, host }: { value: AddrValue; anchor: React.RefObject<HTMLElement | null>; open: boolean; host?: React.RefObject<HTMLElement | null> }) {
   const elRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const markerRef = useRef<any>(null);
@@ -2307,6 +2325,12 @@ function AddressGlobe({ value, anchor, open }: { value: AddrValue; anchor: React
   useLayoutEffect(() => {
     if (!open) return;
     const place = () => {
+      // laid over a given panel (e.g. the contacts column of the won-deal client step)
+      if (host?.current) {
+        const h = host.current.getBoundingClientRect();
+        setBox(h.width < 240 || h.height < 200 ? null : { left: h.left, top: h.top, width: h.width, height: h.height });
+        return;
+      }
       const dw = anchor.current?.closest(".dw") as HTMLElement | null;
       const r = dw?.getBoundingClientRect();
       if (!r) { setBox(null); return; }
@@ -2315,8 +2339,9 @@ function AddressGlobe({ value, anchor, open }: { value: AddrValue; anchor: React
     };
     place();
     window.addEventListener("resize", place);
-    return () => window.removeEventListener("resize", place);
-  }, [open, anchor]);
+    window.addEventListener("scroll", place, true);
+    return () => { window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); };
+  }, [open, anchor, host]);
 
   useEffect(() => {
     if (!mounted) return;
@@ -2429,7 +2454,7 @@ function AddressGlobe({ value, anchor, open }: { value: AddrValue; anchor: React
   const reached = target?.level ?? "world";
 
   return createPortal(
-    <div className={`ag ${open ? "" : "is-hidden"}`} style={{ left: box.left, top: box.top, width: box.width, height: box.height }}>
+    <div className={`ag ${open ? "" : "is-hidden"} ${host ? "is-hosted" : ""}`} style={{ left: box.left, top: box.top, width: box.width, height: box.height, ...(host ? { zIndex: 4000 } : {}) }}>
       <div className="ag-map"><div ref={elRef} style={{ width: "100%", height: "100%" }} /></div>
       {!lib && !failed && <div className="ag-loading"><i className="ag-spin" />Loading the map…</div>}
       {failed && (
@@ -2465,8 +2490,10 @@ function AddressGlobe({ value, anchor, open }: { value: AddrValue; anchor: React
  * you get its province and country. Only empty fields (or ones it filled before)
  * are filled on their own; what you typed is never overwritten.
  */
-export function AddressFields({ value, onChange, countryAs, req, missing, renderCountry, withDetails }: {
+export function AddressFields({ value, onChange, countryAs, req, missing, renderCountry, withDetails, globeHost }: {
   value: AddrValue;
+  /** Show the map over this panel instead of beside the editor drawer. */
+  globeHost?: React.RefObject<HTMLElement | null>;
   /** Required and still empty after a save was tried: shown in red. */
   missing?: (k: AddrKey) => boolean;
   onChange: (patch: Partial<AddrValue>) => void;
@@ -2557,24 +2584,32 @@ export function AddressFields({ value, onChange, countryAs, req, missing, render
   // the globe beside the editor: open while the address is being edited
   const addrRef = useRef<HTMLDivElement>(null);
   const [globe, setGlobe] = useState(false);
-  const hideT = useRef<number | null>(null);
-  const keepGlobe = () => { if (hideT.current) window.clearTimeout(hideT.current); hideT.current = null; setGlobe(true); };
-  const dropGlobe = () => {
-    if (hideT.current) window.clearTimeout(hideT.current);
-    const check = () => {
-      // still typing in the address, or using the map (zoom buttons, dragging): keep it
-      if (addrRef.current?.contains(document.activeElement)) return;
-      if (document.querySelector(".ag:hover")) { hideT.current = window.setTimeout(check, 800); return; }
-      setGlobe(false);
-    };
-    hideT.current = window.setTimeout(check, 1400);
+  const keepGlobe = () => setGlobe(true);
+  // the address "zone": its fields, the map itself, the street/town suggestions and the country list
+  const inZone = (t: EventTarget | null) => {
+    if (!(t instanceof Element)) return false;
+    return !!(addrRef.current?.contains(t) || t.closest(".ag, .dw-sugg, .sel-pop"));
   };
-  useEffect(() => () => { if (hideT.current) window.clearTimeout(hideT.current); }, []);
+  // focus went to something else (Tab, a click on another field…): close at once
+  const dropGlobe = (e: React.FocusEvent) => { if (e.relatedTarget && !inZone(e.relatedTarget)) setGlobe(false); };
+  // a click anywhere outside the zone, or Esc: close at once (using the map keeps it open)
+  useEffect(() => {
+    if (!globe) return undefined;
+    const down = (e: PointerEvent) => { if (!inZone(e.target)) setGlobe(false); };
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || document.querySelector(".dw-sugg, .sel-pop")) return;
+      e.stopPropagation(); setGlobe(false);
+    };
+    document.addEventListener("pointerdown", down, true);
+    document.addEventListener("keydown", key, true);
+    return () => { document.removeEventListener("pointerdown", down, true); document.removeEventListener("keydown", key, true); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [globe]);
 
   const miss = (k: AddrKey) => (missing?.(k) ? "is-missing" : "");
   return (
     <div className="dw-addr" ref={addrRef} onFocus={keepGlobe} onBlur={dropGlobe}>
-      <AddressGlobe value={value} anchor={addrRef} open={globe} />
+      <AddressGlobe value={value} anchor={addrRef} open={globe} host={globeHost} />
       <div className="dw-grid is-3">
         <div className={`dw-f dw-col2 ${miss("street")}`}><label>Street{req?.("street")}<span className="dw-f-assist">Type to search</span></label>
           <PlaceInput value={v("street")} onType={(x) => typed("street", x)} onPick={pickStreet} kind="address" auto={auto.has("street")}

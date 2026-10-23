@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type DragEvent as RDragEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { createPortal } from "react-dom";
 import DatePicker from "../../../framework/DatePicker";
@@ -9,7 +9,7 @@ import { loadProposalTemplateFor, renderProposal, downloadBlob, listProposalDeck
 import { parseDeck, fillDeck, loadDeckPreview, resolveTokens, deckNumbering, slideRef, isKnownToken, DECK_TOKENS, TOKEN_RE, tokensIn, openDeckEditor, editDeck, type ProposalData, type DeckInfo, type PvDeck, type DeckContext, type DeckEditOp, type DeckEditSession, type EditShape } from "./proposalGen";
 import { SlidePreview, SlideCanvas, ShapePanel, InlineText, FieldPicker, LayerList, textLookOf, pendingOf, type CanvasView, type Box } from "../../settings/ProposalTemplateEditor";
 import { useAuth } from "../../../api/authContext";
-import MentionInput, { type MentionPerson } from "../../../framework/MentionInput";
+import MentionInput, { type MentionPerson, MentionText, mentionsToPlain, registerMentionNames } from "../../../framework/MentionInput";
 import "../../../framework/MentionInput.css";
 
 // Convert serialized mentions "@[Name](id)" into plain "@Name".
@@ -19,13 +19,13 @@ const MEETING_KINDS: { value: MeetingKind; label: string; icon: JSX.Element }[] 
   { value: "in_person", label: "In person", icon: (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9.5" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9"/></svg>) },
 ];
 
-const cleanMentionsFn = (t: string) => t.replace(/@\[([^\]]+)\]\([^)]+\)/g, "@$1");
+const cleanMentionsFn = (t: string) => mentionsToPlain(t);
 import { supabase } from "../../../api/supabase";
-import HandoffClientForm, { ContractPanel, type ContractPanelLine } from "./HandoffClientForm";
+import HandoffClientForm, { ContractPanel, type ContractPanelLine, type ContractDefaults, type SignedFile } from "./HandoffClientForm";
 import HandoffConfirmServices, { HxPrompt, destFolder, type ConfirmService, type ConfirmProduct, type ConfirmClient, type HandoffExtras, type HandoffDoc, type HandoffPackage } from "./HandoffConfirmServices";
-import TrackingFiles, { LineDocs, loadAllTrackingFiles, uploadTrackingFile, openTrackingFile, FileIcon, kindOf } from "./TrackingFiles";
+import TrackingFiles, { LineDocs, loadAllTrackingFiles, uploadTrackingFile, openTrackingFile, readTrackingFileBytes, FileIcon, kindOf } from "./TrackingFiles";
 import { DocStudio } from "./TrackingFiles";
-import TrackingFieldsPanel, { FoldPanel } from "../extras/TrackingFieldsPanel";
+import TrackingFieldsPanel, { FoldPanel, FOLD_ICON } from "../extras/TrackingFieldsPanel";
 import HandoverConfirm from "./HandoverConfirm";
 import { planHandover, performHandover, rolesFor, resolveDealRole, saveDealRoles, orderPhases, type SalesRole, type HandoverPlan } from "../extras/salesRolesApi";
 import DealRolePicker from "../extras/DealRolePicker";
@@ -77,6 +77,98 @@ import {
  * One revenue line: the numbers, a receipt you can expand, and a calculator
  * button that opens everything that decides those numbers.
  */
+/** One short line under each option of the Calculator figure's menu. */
+const REV_HINT: Record<RevenueMode, string> = {
+  product_year1: "First contract year · no services",
+  product_term: "Every contract year · no services",
+  all_year1: "First year + one-off services",
+  all_term: "Whole contract + services",
+};
+
+/** A number that rolls to its new value (eased), formatted on every frame. */
+function RollNum({ value, fmt }: { value: number; fmt: (n: number) => string }) {
+  const [shown, setShown] = useState(value);
+  const from = useRef(value);
+  const raf = useRef(0);
+  useEffect(() => {
+    const a = from.current, b = value;
+    if (a === b) return;
+    if (typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) { from.current = b; setShown(b); return; }
+    const t0 = performance.now();
+    const step = (t: number) => {
+      const k = Math.min(1, (t - t0) / 560);
+      const v = k < 1 ? a + (b - a) * (1 - Math.pow(1 - k, 3)) : b;
+      from.current = v; setShown(v);
+      if (k < 1) raf.current = requestAnimationFrame(step);
+    };
+    cancelAnimationFrame(raf.current);
+    raf.current = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf.current);
+  }, [value]);
+  return <>{fmt(shown === value ? value : Math.round(shown))}</>;
+}
+
+/** A figure you click to choose what it shows: a small menu of the options, each with its own amount. */
+function FigurePick({ value, caption, options, onPick, money, className = "", title, size = "lg" }: {
+  value: number;
+  /** Line under / beside the figure; leave it out for a bare figure (a caret shows on hover). */
+  caption?: ReactNode;
+  options: { key: string; label: string; hint?: string; amount: number; on: boolean; badge?: ReactNode }[];
+  onPick: (key: string) => void;
+  money: (n: number) => string;
+  className?: string;
+  title?: string;
+  size?: "lg" | "sm";
+}) {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const down = (e: MouseEvent) => { if (wrap.current && !wrap.current.contains(e.target as Node)) setOpen(false); };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); setOpen(false); } };
+    document.addEventListener("mousedown", down);
+    document.addEventListener("keydown", key, true);
+    return () => { document.removeEventListener("mousedown", down); document.removeEventListener("keydown", key, true); };
+  }, [open]);
+  const max = Math.max(1, ...options.map((o) => Math.abs(o.amount)));
+  return (
+    <div ref={wrap} className={`sl-fig is-${size} ${open ? "is-open" : ""} ${className}`}>
+      <button type="button" className="sl-fig-btn" aria-haspopup="listbox" aria-expanded={open} title={title}
+        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}>
+        <b className="sl-fig-v"><RollNum value={value} fmt={money} /></b>
+        {caption != null ? (
+          <span className="sl-fig-cap">{caption}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+          </span>
+        ) : (
+          <span className="sl-fig-caret" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6" /></svg>
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="sl-fig-pop" role="listbox">
+          {options.map((o, i) => (
+            <button type="button" key={o.key} role="option" aria-selected={o.on} className={`sl-fig-opt ${o.on ? "is-on" : ""}`}
+              style={{ animationDelay: `${i * 35}ms` }}
+              onClick={(e) => { e.stopPropagation(); setOpen(false); if (!o.on) onPick(o.key); }}>
+              <span className="sl-fig-check" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12l5 5L20 7" /></svg>
+              </span>
+              <span className="sl-fig-opt-t">
+                <b>{o.label}{o.badge}</b>
+                {o.hint && <i>{o.hint}</i>}
+                <span className="sl-fig-bar"><em style={{ width: `${Math.max(3, (Math.abs(o.amount) / max) * 100)}%` }} /></span>
+              </span>
+              <span className="sl-fig-amt">{money(o.amount)}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RevLine({ name, tag, line, unit, minUnit, calculator, catalogBase, onRemove, onOpenCalc, money, versionIdx, versionCount, onPrev, onNext, onNewVersion, footer }: {
   name: string;
   tag: string;
@@ -116,7 +208,7 @@ function RevLine({ name, tag, line, unit, minUnit, calculator, catalogBase, onRe
         : qty === 1 ? `${money(bd.unitPrice)} one-time` : `${money(bd.unitPrice)} x ${qty}`;
 
   return (
-    <div className={`sl-rv ${tag === "Product" ? "is-product" : "is-service"} ${open ? "is-open" : ""}`}>
+    <div className={`sl-rv ${tag === "Product" ? "is-product" : "is-service"} ${open ? "is-open" : ""} ${verMenu ? "has-menu" : ""}`}>
       <div className="sl-rv-main" role="button" tabIndex={0} onClick={() => setOpen((o) => !o)} onKeyDown={(e) => { if (e.key === "Enter") setOpen((o) => !o); }}
         aria-expanded={open} title={open ? "Hide details" : "Show breakdown and documents"}>
         <span className="sl-rv-ico" aria-hidden="true">
@@ -127,7 +219,7 @@ function RevLine({ name, tag, line, unit, minUnit, calculator, catalogBase, onRe
           )}
         </span>
         <span className="sl-rv-txt">
-          <span className="sl-rv-name" title={name}>{name}</span>
+          <span className="sl-rv-name" title={name}>{name}{(versionCount ?? 1) > 1 && <em className="sl-rv-vtag" title={`Version ${(versionIdx ?? 0) + 1} of ${versionCount}`}>v{(versionIdx ?? 0) + 1}/{versionCount}</em>}</span>
           <span className="sl-rv-sub">{summary}</span>
         </span>
         <span className="sl-rv-amt">
@@ -141,6 +233,7 @@ function RevLine({ name, tag, line, unit, minUnit, calculator, catalogBase, onRe
         </span>
       </div>
 
+      <div className="sl-rv-reveal"><div className="sl-rv-reveal-in">
       <div className="sl-rv-tools">
         {(versionCount ?? 1) > 1 ? (
           <span className="sl-rv-ver">
@@ -176,6 +269,7 @@ function RevLine({ name, tag, line, unit, minUnit, calculator, catalogBase, onRe
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" /></svg>
         </button>
       </div>
+      </div></div>
 
       {open && (
         <div className="sl-rev-receipt sl-rv-receipt">
@@ -239,7 +333,14 @@ const PROP_ICON = {
   plus: "M12 5v14M5 12h14",
   sync: "M21 12a9 9 0 1 1-2.64-6.36M21 4v5h-5",
   deck: "M3 4h18v12H3zM8 20h8M12 16v4",
+  trophy: "M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0zM17 5h3v2a3 3 0 0 1-3 3M7 5H4v2a3 3 0 0 0 3 3",
+  sign: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 17c1.5-2 2.5-2 3 0s1.5 2 3 0 2-1 2.5 0",
+  clip: "M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5",
+  unlink: "M18.8 13.5l1.7-1.7a4.5 4.5 0 0 0-6.4-6.4l-1.7 1.7M5.2 10.5l-1.7 1.7a4.5 4.5 0 0 0 6.4 6.4l1.7-1.7M3 3l18 18",
 };
+/** What can be dropped on a proposal as its signed contract. */
+const CONTRACT_EXT = /\.(pdf|docx?)$/i;
+const CONTRACT_MAX = 25 * 1024 * 1024;
 const PIco = ({ d }: { d: keyof typeof PROP_ICON }) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={PROP_ICON[d]} /></svg>
 );
@@ -257,7 +358,7 @@ export function proposalFigures(lines: ProposalLine[], groups: PropGroup[]) {
   return { gross, partner, total: net, picked };
 }
 
-function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onGenerate, onStudio, onMain }: {
+function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onGenerate, onStudio, onMain, onWon, dealWon, phaseId, onContractFile }: {
   trackingId: string;
   /** The line groups a proposal can use (products / services available in proposals). */
   groups: PropGroup[];
@@ -273,6 +374,14 @@ function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onGe
   onStudio: (p: DealProposal, kind?: "proposal" | "contract") => void;
   /** After a proposal became the main one: its versions are now the active ones. */
   onMain: (p: DealProposal) => void;
+  /** The deal was won with this proposal: it is now the main one; the deal moves to Won and the won flow starts. */
+  onWon?: (p: DealProposal) => void | Promise<void>;
+  /** The deal is Won right now: only then is a proposal shown as won (locked). */
+  dealWon?: boolean;
+  /** The deal's current phase (files dropped here are filed under it, like the Documents box). */
+  phaseId?: string | null;
+  /** A signed contract was attached to / taken off a proposal (keeps the deal's contract in step). */
+  onContractFile?: (p: DealProposal, fileId: string | null, prevFileId: string | null) => void | Promise<void>;
 }) {
   const [list, setList] = useState<DealProposal[] | null>([]);
   const [missing, setMissing] = useState(false);
@@ -282,24 +391,54 @@ function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onGe
   const defaultDeck = decks?.find((d) => d.is_default)?.id ?? decks?.[0]?.id ?? null;
   const [err, setErr] = useState<string | null>(null);
   const [delAsk, setDelAsk] = useState<string | null>(null);
+  const [wonAsk, setWonAsk] = useState<string | null>(null);
+  const [wonBusy, setWonBusy] = useState(false);
   const keyOf = (g: { kind: string; group: string }) => `${g.kind}:${g.group}`;
+  /** Won (locked) only while the deal itself is Won; a deal moved back leaves it as a normal (main) proposal. */
+  const isWon = (p: DealProposal) => !!p.doc?.wonAt && dealWon !== false;
+  /** Signed contracts dropped on a proposal. */
+  const [dropOn, setDropOn] = useState<string | null>(null);
+  const dragDepth = useRef<Record<string, number>>({});
+  const [attachBusy, setAttachBusy] = useState<string | null>(null);
+  const [replaceAsk, setReplaceAsk] = useState<{ id: string; file: File } | null>(null);
+  const [unlinkAsk, setUnlinkAsk] = useState<string | null>(null);
+  const [note, setNote] = useState<{ id: string; text: string; tone: "ok" | "err" } | null>(null);
+  const pickRef = useRef<HTMLInputElement>(null);
+  const pickFor = useRef<string | null>(null);
+  useEffect(() => { if (!note) return; const t = window.setTimeout(() => setNote(null), 4200); return () => window.clearTimeout(t); }, [note]);
 
   useEffect(() => {
     let alive = true;
     listDealProposals(trackingId).then((xs) => {
       if (!alive) return;
       setMissing(xs == null); setList(xs ?? []);
-      const ids = (xs ?? []).map((p) => p.file_id).filter(Boolean) as string[];
+      const ids = (xs ?? []).flatMap((p) => [p.file_id, p.doc?.contractFileId]).filter(Boolean) as string[];
       if (ids.length) supabase.from("tracking_files").select("id, name, storage_path, created_at").in("id", ids)
         .then(({ data }) => { if (alive) setFiles(Object.fromEntries(((data ?? []) as any[]).map((f) => [f.id, f]))); });
     });
     return () => { alive = false; };
   }, [trackingId, reloadKey]);
 
-  const startNew = () => setEdit({
+  /** Opens the folded card whenever a proposal is started or edited from its header. */
+  const [openSig, setOpenSig] = useState(0);
+  const editRef = useRef<HTMLDivElement | null>(null);
+  const editKey = edit ? edit.id ?? "new" : null;
+  useEffect(() => {
+    if (!editKey) return;
+    // Wait for the card to unfold, then bring the editor into view and put the cursor in its name.
+    const t = window.setTimeout(() => {
+      const el = editRef.current;
+      if (!el) return;
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      const inp = el.querySelector<HTMLInputElement>("input[type=text], input:not([type])");
+      inp?.focus({ preventScroll: true }); inp?.select?.();
+    }, 380);
+    return () => window.clearTimeout(t);
+  }, [editKey]);
+  const startNew = () => { setOpenSig((n) => n + 1); setEdit({
     name: `Proposal ${(list?.length ?? 0) + 1}`, deck_id: defaultDeck,
     picks: Object.fromEntries(groups.map((g) => [keyOf(g), g.activeId])),
-  });
+  }); };
   const startEdit = (p: DealProposal) => setEdit({
     id: p.id, name: p.name, deck_id: p.deck_id ?? defaultDeck, is_main: p.is_main,
     picks: Object.fromEntries(groups.map((g) => [keyOf(g), p.lines.find((l) => keyOf(l) === keyOf(g))?.line ?? null])),
@@ -331,6 +470,22 @@ function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onGe
     setList((xs) => (xs ?? []).map((x) => ({ ...x, is_main: x.id === p.id })));
     onMain(p);
   };
+  /** Won with this proposal: it becomes the main one and is kept as signed (no edits, no delete). */
+  const markWon = async (p: DealProposal) => {
+    setWonAsk(null); setWonBusy(true);
+    try {
+      await makeMain(p);
+      const wonAt = new Date().toISOString();
+      for (const x of list ?? []) {
+        if (x.id === p.id || !x.doc?.wonAt) continue;
+        await saveProposalDoc(x.id, x.deck_id ?? null, { ...(x.doc ?? {}), wonAt: null });
+      }
+      const e = await saveProposalDoc(p.id, p.deck_id ?? null, { ...(p.doc ?? {}), wonAt });
+      if (e) setErr(e);
+      setList((xs) => (xs ?? []).map((x) => ({ ...x, is_main: x.id === p.id, doc: x.id === p.id ? { ...(x.doc ?? {}), wonAt } : x.doc?.wonAt ? { ...(x.doc ?? {}), wonAt: null } : x.doc })));
+      await onWon?.(p);
+    } finally { setWonBusy(false); }
+  };
   const remove = async (id: string) => {
     setDelAsk(null);
     const e = await deleteDealProposal(id);
@@ -338,14 +493,91 @@ function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onGe
     setList((xs) => (xs ?? []).filter((x) => x.id !== id));
   };
 
+  /** Checks a file before it becomes a proposal's signed contract. */
+  const contractFileProblem = (f: File): string | null => {
+    if (!CONTRACT_EXT.test(f.name) && !/pdf|word/i.test(f.type)) return `${f.name}: drop a PDF (or a Word file) as the contract.`;
+    if (f.size > CONTRACT_MAX) return `${f.name} is ${(f.size / 1048576).toFixed(1)} MB — the limit is 25 MB.`;
+    if (f.size === 0) return `${f.name} is empty.`;
+    return null;
+  };
+  /** Files the dropped PDF in the deal's Documents and links it to the proposal as its contract. */
+  const attachContract = async (p: DealProposal, f: File, force = false) => {
+    const bad = contractFileProblem(f);
+    if (bad) { setNote({ id: p.id, text: bad, tone: "err" }); return; }
+    const prev = p.doc?.contractFileId ?? null;
+    if (prev && !force) { setReplaceAsk({ id: p.id, file: f }); return; }
+    setReplaceAsk(null); setAttachBusy(p.id);
+    try {
+      const { file, error } = await uploadTrackingFile(trackingId, phaseId ?? null, f, f.name, `Signed contract · ${p.name}`);
+      if (error || !file) { setNote({ id: p.id, text: error ?? "Could not upload the file.", tone: "err" }); return; }
+      const doc = { ...(p.doc ?? {}), contractFileId: file.id };
+      const e = await saveProposalDoc(p.id, p.deck_id ?? null, doc);
+      if (e) { setNote({ id: p.id, text: `${f.name} is in Documents, but it couldn't be linked: ${e}`, tone: "err" }); return; }
+      setFiles((m) => ({ ...m, [file.id]: { name: file.name, storage_path: file.storage_path, created_at: file.created_at } }));
+      setList((xs) => (xs ?? []).map((x) => x.id === p.id ? { ...x, doc } : x));
+      setNote({ id: p.id, text: `${f.name} saved in Documents and linked as this proposal's contract.`, tone: "ok" });
+      await onContractFile?.({ ...p, doc }, file.id, prev);
+    } finally { setAttachBusy(null); }
+  };
+  /** Takes the contract off the proposal; the file stays in Documents. */
+  const unlinkContract = async (p: DealProposal) => {
+    setUnlinkAsk(null);
+    const prev = p.doc?.contractFileId ?? null;
+    if (!prev) return;
+    const doc = { ...(p.doc ?? {}), contractFileId: null };
+    const e = await saveProposalDoc(p.id, p.deck_id ?? null, doc);
+    if (e) { setNote({ id: p.id, text: e, tone: "err" }); return; }
+    setList((xs) => (xs ?? []).map((x) => x.id === p.id ? { ...x, doc } : x));
+    setNote({ id: p.id, text: "Contract unlinked — the file is still in Documents.", tone: "ok" });
+    await onContractFile?.({ ...p, doc }, null, prev);
+  };
+  const hasFiles = (e: RDragEvent) => Array.from(e.dataTransfer?.types ?? []).includes("Files");
+  const dropProps = (p: DealProposal) => (edit?.id === p.id || missing ? {} : {
+    onDragEnter: (e: RDragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragDepth.current[p.id] = (dragDepth.current[p.id] ?? 0) + 1;
+      setDropOn(p.id);
+    },
+    onDragOver: (e: RDragEvent) => { if (!hasFiles(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = "copy"; if (dropOn !== p.id) setDropOn(p.id); },
+    onDragLeave: (e: RDragEvent) => {
+      if (!hasFiles(e)) return;
+      const n = (dragDepth.current[p.id] ?? 1) - 1;
+      dragDepth.current[p.id] = n;
+      if (n <= 0) { dragDepth.current[p.id] = 0; setDropOn((id) => id === p.id ? null : id); }
+    },
+    onDrop: (e: RDragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault(); e.stopPropagation();
+      dragDepth.current[p.id] = 0; setDropOn(null);
+      const fs = Array.from(e.dataTransfer.files ?? []);
+      if (!fs.length) return;
+      const f = fs.find((x) => /\.pdf$/i.test(x.name)) ?? fs[0];
+      if (fs.length > 1) setNote({ id: p.id, text: `One contract per proposal — using ${f.name}.`, tone: "ok" });
+      void attachContract(p, f);
+    },
+  });
+
   const main = (list ?? []).find((p) => p.is_main);
   const mainFig = main ? proposalFigures(main.lines, groups) : null;
 
   return (
-    <FoldPanel className="sl-props-panel" title="Proposals" count={list?.length ?? 0}
-      summary={main ? `Main: ${main.name} · ${money(mainFig?.total ?? 0)}` : (list?.length ? `${list.length} scenario${list.length === 1 ? "" : "s"}, none main` : "Scenarios to send the client")}
+    <FoldPanel className="sl-props-panel" title="Proposals" count={list?.length ?? 0} icon={FOLD_ICON.proposals} tone="#b07514" openSignal={openSig}
+      summary={main ? undefined : (list?.length ? `${list.length} scenario${list.length === 1 ? "" : "s"} · none main` : "Scenarios to send the client")}
       aside={!missing && groups.length > 0 && !edit ? (
-        <button type="button" className="sl-rv-tool" onClick={startNew}><PIco d="plus" />New</button>
+        <>
+          {main && (list ?? []).length > 0 && (
+            <FigurePick size="sm" className="sl-props-fig" value={mainFig?.total ?? 0} money={money}
+              title="The main proposal is what the deal is worth. Click to pick another."
+              caption={<><PIco d="star" />Main</>}
+              options={(list ?? []).map((p) => {
+                const pf = proposalFigures(p.lines, groups);
+                return { key: p.id, label: p.name, hint: `${pf.picked.length} line${pf.picked.length === 1 ? "" : "s"}${pf.partner > 0 ? ` · −${money(pf.partner)} partner` : ""}`, amount: pf.total, on: p.is_main };
+              })}
+              onPick={(id) => { const p = (list ?? []).find((x) => x.id === id); if (p) void makeMain(p); }} />
+          )}
+          <button type="button" className="sl-rv-tool sl-props-new" onClick={startNew} title="New proposal"><PIco d="plus" /><span>New</span></button>
+        </>
       ) : undefined}>
       <div className="sl-props">
         {missing && <p className="sl-rvg-empty">Run 12_proposals_partners.sql in Supabase to save proposals.</p>}
@@ -367,12 +599,25 @@ function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onGe
             return g.activeId === want;
           });
           const file = p.file_id ? files[p.file_id] : undefined;
+          const cfId = p.doc?.contractFileId ?? null;
+          const cfile = cfId ? files[cfId] : undefined;
           const left = groups.length - f.picked.length;
+          const asking = delAsk === p.id || wonAsk === p.id || replaceAsk?.id === p.id || unlinkAsk === p.id || attachBusy === p.id || busy?.startsWith(`${p.id}:`);
           return (
-            <div key={p.id} className={`sl-prop ${p.is_main ? "is-main" : ""}`}>
+            <div key={p.id} {...dropProps(p)}
+              className={`sl-prop ${p.is_main ? "is-main" : ""} ${isWon(p) ? "is-won" : ""} ${dropOn === p.id ? "is-drop" : ""} ${asking ? "has-menu" : ""}`}>
+              {(dropOn === p.id || attachBusy === p.id) && (
+                <div className="sl-prop-drop" aria-hidden="true">
+                  <span className="sl-prop-drop-ico">{attachBusy === p.id ? <span className="sl-prop-spin" /> : <PIco d="sign" />}</span>
+                  <span className="sl-prop-drop-txt">
+                    <b>{attachBusy === p.id ? "Saving the contract…" : cfId ? "Drop to replace this proposal's contract" : "Drop to attach as this proposal's contract"}</b>
+                    <i>{attachBusy === p.id ? "Filing it in Documents and linking it here" : "PDF or Word · saved in Documents and linked to this proposal"}</i>
+                  </span>
+                </div>
+              )}
               <div className="sl-prop-top">
                 <span className="sl-prop-name">
-                  {p.is_main && <span className="sl-prop-badge"><PIco d="star" />Main</span>}
+                  {isWon(p) ? <span className="sl-prop-badge is-won"><PIco d="trophy" />Won</span> : p.is_main && <span className="sl-prop-badge"><PIco d="star" />Main</span>}
                   <b title={p.name}>{p.name}</b>
                 </span>
                 <span className="sl-prop-amt">
@@ -394,9 +639,21 @@ function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onGe
                   <button type="button" onClick={() => makeMain(p)}><PIco d="sync" />Apply again</button>
                 </p>
               )}
+              <div className="sl-rv-reveal"><div className="sl-rv-reveal-in">
               <div className="sl-prop-tools">
-                {!p.is_main && <button type="button" className="sl-rv-tool" onClick={() => makeMain(p)} title="Its total becomes the deal value and it is what goes to the handoff"><PIco d="star" />Make main</button>}
-                <button type="button" className="sl-rv-tool" onClick={() => startEdit(p)}><PIco d="edit" />Edit</button>
+                {onWon && !isWon(p) && (wonAsk === p.id ? (
+                  <span className="sl-prop-del is-won">
+                    <span className="sl-prop-ask">Won with this one?</span>
+                    <button type="button" className="sl-rv-tool is-won" disabled={wonBusy} onClick={() => void markWon(p)}>{wonBusy ? <span className="sl-prop-spin" /> : <PIco d="trophy" />}Yes, won</button>
+                    <button type="button" className="sl-rv-tool" onClick={() => setWonAsk(null)}>No</button>
+                  </span>
+                ) : (
+                  <button type="button" className="sl-rv-tool is-won" onClick={() => setWonAsk(p.id)} title="The deal is won with this proposal: it becomes the main one, the deal moves to Won, and you set up the client, the contract and the handoff">
+                    <PIco d="trophy" />Won
+                  </button>
+                ))}
+                {!p.is_main && !isWon(p) && <button type="button" className="sl-rv-tool" onClick={() => makeMain(p)} title="Its total becomes the deal value and it is what goes to the handoff"><PIco d="star" />Make main</button>}
+                {!isWon(p) && <button type="button" className="sl-rv-tool" onClick={() => startEdit(p)}><PIco d="edit" />Edit</button>}
                 <span className="sl-rv-spacer" />
                 <button type="button" className="sl-prop-deck" disabled={!!busy || !f.picked.length} onClick={() => onStudio(p, "proposal")}
                   title="Build this proposal from your template: an interactive web page and a PDF">
@@ -407,7 +664,12 @@ function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onGe
                   {busy === `${p.id}:contract` ? <span className="sl-prop-spin" /> : <PIco d="file" />}Contract
                 </button>
                 <button type="button" className="sl-rv-tool is-calc" disabled={!!busy || !f.picked.length} onClick={() => onGenerate(p, "pdf")} title="Order form (PDF)">{busy === `${p.id}:pdf` ? <span className="sl-prop-spin" /> : <PIco d="file" />}PDF</button>
-                {delAsk === p.id ? (
+                <button type="button" className="sl-rv-tool is-sign" disabled={attachBusy === p.id}
+                  onClick={() => { pickFor.current = p.id; pickRef.current?.click(); }}
+                  title="Attach the signed contract (PDF): it is saved in Documents and linked to this proposal. You can also drop the file on the proposal.">
+                  <PIco d="clip" />{cfId ? "Replace contract" : "Attach signed contract"}
+                </button>
+                {isWon(p) ? null : delAsk === p.id ? (
                   <span className="sl-prop-del">
                     <button type="button" className="sl-rv-tool is-del" onClick={() => remove(p.id)}>Delete</button>
                     <button type="button" className="sl-rv-tool" onClick={() => setDelAsk(null)}>Keep</button>
@@ -416,6 +678,7 @@ function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onGe
                   <button type="button" className="sl-rv-tool is-del" onClick={() => setDelAsk(p.id)} aria-label="Delete proposal"><PIco d="del" /></button>
                 )}
               </div>
+              </div></div>
               {file && (
                 <button type="button" className="sl-prop-file" onClick={() => openTrackingFile(file.storage_path)} title={`Open ${file.name}`}>
                   <FileIcon kind={kindOf(file.name, null)} />
@@ -428,15 +691,53 @@ function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onGe
                   </span>
                 </button>
               )}
+              {cfId && (
+                <div className={`sl-prop-contract ${cfile ? "" : "is-missing"}`}>
+                  <button type="button" className="sl-prop-contract-open" disabled={!cfile} onClick={() => cfile && openTrackingFile(cfile.storage_path)}
+                    title={cfile ? `Open ${cfile.name}` : "The file was removed from Documents"}>
+                    <span className="sl-prop-contract-ico"><PIco d="sign" /></span>
+                    <span className="sl-prop-contract-txt">
+                      <em>Contract</em>
+                      <b>{cfile?.name ?? "File no longer in Documents"}</b>
+                    </span>
+                  </button>
+                  {unlinkAsk === p.id ? (
+                    <span className="sl-prop-contract-ask">
+                      <span>Unlink? It stays in Documents.</span>
+                      <button type="button" className="sl-rv-tool is-del" onClick={() => void unlinkContract(p)}>Unlink</button>
+                      <button type="button" className="sl-rv-tool" onClick={() => setUnlinkAsk(null)}>Keep</button>
+                    </span>
+                  ) : (
+                    <button type="button" className="sl-prop-contract-x" onClick={() => setUnlinkAsk(p.id)} title="Unlink the contract (the file stays in Documents)" aria-label="Unlink contract">
+                      <PIco d="unlink" />
+                    </button>
+                  )}
+                </div>
+              )}
+              {replaceAsk?.id === p.id && (
+                <div className="sl-prop-replace">
+                  <span><b>Replace the contract</b> with {replaceAsk.file.name}? The old file stays in Documents.</span>
+                  <button type="button" className="sl-rv-tool is-sign" onClick={() => void attachContract(p, replaceAsk.file, true)}>Replace</button>
+                  <button type="button" className="sl-rv-tool" onClick={() => setReplaceAsk(null)}>Cancel</button>
+                </div>
+              )}
+              {note?.id === p.id && <p className={`sl-prop-note is-${note.tone}`} role="status">{note.text}</p>}
             </div>
           );
         })}
+        <input ref={pickRef} type="file" hidden accept=".pdf,.doc,.docx,application/pdf"
+          onChange={(e) => {
+            const f = e.target.files?.[0]; const id = pickFor.current;
+            e.target.value = "";
+            const p = (list ?? []).find((x) => x.id === id);
+            if (f && p) void attachContract(p, f);
+          }} />
 
         {edit && (() => {
           const lines = linesOf(edit.picks);
           const f = proposalFigures(lines, groups);
           return (
-            <div className="sl-prop is-edit">
+            <div className="sl-prop is-edit" ref={editRef}>
               <div className="sl-pz-head">
                 <span className="sl-pz-eyebrow">{edit.id ? "Edit proposal" : "New proposal"}</span>
                 <button type="button" className="sl-pz-x" onClick={() => setEdit(null)} aria-label="Cancel">
@@ -1475,7 +1776,7 @@ function DealPeople({ company, contacts, companyContactIds, dealIds, onChange }:
     </div>
   );
   return (
-    <FoldPanel className="sl-panel-people" title="Contacts" count={onDeal.length}
+    <FoldPanel className="sl-panel-people" title="Contacts" count={onDeal.length} icon={FOLD_ICON.contacts} tone="#2b6ea3"
       summary={onDeal.length
         ? onDeal.slice(0, 2).map(name).join(", ") + (onDeal.length > 2 ? ` +${onDeal.length - 2}` : "")
         : others.length ? `None yet · ${others.length} at the company` : "None yet"}
@@ -1571,10 +1872,27 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   /** The deal's contract (trackings.contract_terms): loaded when a contract step opens. */
   const [contractInit, setContractInit] = useState<ContractTerms | null>(null);
   const [contractMissing, setContractMissing] = useState(false);
+  /** A signed contract dropped on the won proposal before the deal's contract existed: it becomes its document. */
+  const [signedFileId, setSignedFileId] = useState<string | null>(null);
   /** The contract panel opened on its own: from the deal ("deal"), or as the handoff's step 2 ("handoff"). */
   const [contractOpen, setContractOpen] = useState<null | "deal" | "handoff">(null);
   const [contractBusy, setContractBusy] = useState(false);
   const [contractErr, setContractErr] = useState<string | null>(null);
+  /**
+   * The guided "deal won" flow: client → contract (+ document) → handoff target → handoff.
+   * "won" = started when the deal was won (or a proposal was marked won); "handoff" = from the Handoff button.
+   */
+  const [flowMode, setFlowMode] = useState<null | "won" | "handoff">(null);
+  /** The client already exists: ask whether to set up the contract now. */
+  const [contractAsk, setContractAsk] = useState(false);
+  /** The flow's last step: where the handoff goes. */
+  const [targetOpen, setTargetOpen] = useState(false);
+  /** Handed off from the flow: say so. */
+  const [flowDone, setFlowDone] = useState<string[] | null>(null);
+  /** Order-form details the contract starts from (customer, people, signatories). */
+  const [contractDefaults, setContractDefaults] = useState<ContractDefaults | null>(null);
+  const [contractDocBusy, setContractDocBusy] = useState(false);
+  const [contractDocFile, setContractDocFile] = useState<{ id: string; name: string; storage_path: string } | null>(null);
   const loadContractInit = async () => {
     const r = await loadDealContract(tracking.id).catch(() => ({ terms: null, missing: false }));
     setContractInit(r.terms); setContractMissing(r.missing);
@@ -1583,8 +1901,9 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   // A won deal shows whether its contract is set up.
   useEffect(() => { if (status === "won") void loadContractInit(); }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
   /** Keep the contract set in the client form on the deal (not fatal when the column isn't there yet). */
-  const keepContract = async (terms: ContractTerms | undefined) => {
-    if (!terms) return;
+  const keepContract = async (terms0: ContractTerms | undefined) => {
+    if (!terms0) return;
+    const terms = { ...terms0, wonProposalId: wonProposalId ?? terms0.wonProposalId ?? contractInit?.wonProposalId ?? null, documentFileId: terms0.documentFileId ?? contractInit?.documentFileId ?? signedFileId ?? null };
     const err = await saveDealContract(tracking.id, terms).catch((e) => String(e));
     if (err) console.warn("contract not saved on the deal:", err);
     else setContractInit(terms);
@@ -1643,6 +1962,8 @@ export default function TrackingDetail({ tracking, companies, contacts, products
 
     setClientFormOpen(false);
     setClientPrefill(null);
+    // Opened from the guided flow: the contract was set in the form's second step → where it goes.
+    if (!pendingHandoff && flowMode) { toTargetStep(); return; }
     // Opened from "deal won": the client is ready; the handoff is sent later.
     if (!pendingHandoff) { setClientDone(true); return; }
     // Client now exists → show the SERVICE confirmation before sending, same as
@@ -1707,6 +2028,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     setClientPrefill(null);
     setAttachClientId(null);
     setClientFormMode("create");
+    if (!pendingHandoff && flowMode) { toTargetStep(); return; }
     if (!pendingHandoff) { setClientDone(true); return; }
 
     // Now confirm the SERVICES tied to the new product, then send the handoff.
@@ -1886,7 +2208,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
       calculator: (serviceOf(p.service_id)?.calculator as Calculator | null) ?? null,
       unit: (serviceUnit(p.service_id) === "hour" ? "hour" : "day"),
       minUnit: serviceMin(p.service_id),
-      signingDate: wonDay(),
+      signingDate: contractInit?.signDate || wonDay(),
       contactIds: (((p as any).contact_ids ?? []) as string[]),
       group, versionLabel: label,
     });
@@ -2062,9 +2384,91 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     const next = ph?.sales_outcome === "win" ? "won" : ph?.sales_outcome === "loss" ? "lost" : "active";
     const wasWon = status === "won";
     setStatus(next); await setTrackingStatus(tracking.id, next);
+    if (wasWon && next !== "won") { setWonProposalId(null); setPropsReload((n) => n + 1); }
     if (next === "lost") setLossModal(true);
-    // Just won: if the client isn't set up yet, ask to create it right away.
-    if (next === "won" && !wasWon && await clientNeeded().catch(() => false)) setWonPrompt(true);
+    // Just won: the guided flow — the client (if it isn't set up), its contract, then the handoff.
+    if (next === "won" && !wasWon) void startWonFlow();
+  };
+
+  /** "Won" on a proposal: it is already the main one; the deal moves to Won and the guided flow starts. */
+  const [wonProposalId, setWonProposalId] = useState<string | null>(null);
+  /** The calculator folded to its summary (remembered per person, in this browser). */
+  const calcFoldKey = `sl-calc-folded:${me?.id ?? "me"}`;
+  const [calcFolded, setCalcFolded] = useState<boolean>(() => { try { return localStorage.getItem("sl-calc-folded:last") === "1"; } catch { return false; } });
+  useEffect(() => { try { const v = localStorage.getItem(calcFoldKey); if (v != null) setCalcFolded(v === "1"); } catch { /* storage off */ } }, [calcFoldKey]);
+  const toggleCalcFold = () => setCalcFolded((v) => {
+    const n = !v;
+    try { localStorage.setItem(calcFoldKey, n ? "1" : "0"); localStorage.setItem("sl-calc-folded:last", n ? "1" : "0"); } catch { /* storage off */ }
+    return n;
+  });
+  /** A signed contract was dropped on / taken off a proposal: the won one's file is the deal contract's document too. */
+  const proposalContractFile = async (p: DealProposal, fileId: string | null, prevFileId: string | null) => {
+    const r = await loadDealContract(tracking.id).catch(() => ({ terms: null as ContractTerms | null, missing: false }));
+    const cur = r.terms ?? contractInit;
+    const isTheWon = !!p.doc?.wonAt || p.id === wonProposalId || (!!cur?.wonProposalId && cur.wonProposalId === p.id)
+      || (status === "won" && p.is_main && !cur?.wonProposalId);
+    if (!isTheWon) return;
+    if (!cur) { setSignedFileId(fileId); return; }
+    // unlinking only clears the deal's document when it was this very file
+    if (!fileId && cur.documentFileId && cur.documentFileId !== prevFileId) return;
+    const next = { ...cur, documentFileId: fileId, wonProposalId: cur.wonProposalId ?? p.id };
+    const e = await saveDealContract(tracking.id, next);
+    if (!e) { setContractInit(next); setSignedFileId(null); }
+  };
+  const wonWithProposal = async (p: DealProposal) => {
+    setWonProposalId(p.id);
+    // a contract already dropped on this proposal is the deal contract's document
+    if (p.doc?.contractFileId) {
+      setSignedFileId(p.doc.contractFileId);
+      void proposalContractFile({ ...p, doc: { ...(p.doc ?? {}), wonAt: p.doc?.wonAt ?? new Date().toISOString() } }, p.doc.contractFileId, null);
+    }
+    if (status !== "won" && winPhase) { await applyStatus("won"); return; } // movePhase starts the flow
+    void startWonFlow();
+  };
+
+  /* ---- the signed contract for the contract step: dropped on the won / main proposal, the deal's contract file, or a signed PDF in Documents ---- */
+  const [signedDoc, setSignedDoc] = useState<{ id: string; name: string; storage_path: string } | null>(null);
+  const loadSignedDoc = async () => {
+    try {
+      const ids: string[] = [];
+      if (signedFileId) ids.push(signedFileId);
+      const props = (await listDealProposals(tracking.id).catch(() => null)) ?? [];
+      const wonId = wonProposalId ?? contractInit?.wonProposalId ?? null;
+      const won = props.find((p) => p.id === wonId) ?? props.find((p) => !!p.doc?.wonAt) ?? props.find((p) => p.is_main);
+      for (const p of [won, ...props.filter((x) => x !== won)]) if (p?.doc?.contractFileId) ids.push(p.doc.contractFileId);
+      if (contractInit?.documentFileId) ids.push(contractInit.documentFileId);
+      let f: { id: string; name: string; storage_path: string } | null = null;
+      if (ids.length) {
+        const { data } = await supabase.from("tracking_files").select("id, name, storage_path").in("id", ids);
+        const by = new Map(((data ?? []) as any[]).map((x) => [x.id, x]));
+        const got = ids.map((i) => by.get(i)).filter(Boolean) as any[];
+        f = got.find((x) => /\.pdf$/i.test(x.name)) ?? got[0] ?? null;
+      }
+      if (!f) {
+        const { data } = await supabase.from("tracking_files").select("id, name, storage_path, note").eq("tracking_id", tracking.id).order("created_at", { ascending: false });
+        f = ((data ?? []) as any[]).find((x) => /\.pdf$/i.test(x.name) && (/signed contract|contrato firmado/i.test(x.note ?? "") || /signed|firmad|order.?form|contrato|contract/i.test(x.name))) ?? null;
+      }
+      setSignedDoc(f ? { id: f.id, name: f.name, storage_path: f.storage_path } : null);
+    } catch { /* no file: the step offers to attach one */ }
+  };
+  useEffect(() => { if (contractOpen || clientFormOpen) void loadSignedDoc(); }, [contractOpen, clientFormOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+  const signedProp: SignedFile | null = useMemo(() => signedDoc
+    ? { name: signedDoc.name, open: () => void openTrackingFile(signedDoc.storage_path), load: () => readTrackingFileBytes(signedDoc.storage_path) }
+    : null, [signedDoc?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  /** A signed PDF dropped / picked in the contract step: into Documents, linked to the won (or main) proposal. */
+  const attachSignedFromStep = async (f: File): Promise<SignedFile | string> => {
+    const { file, error } = await uploadTrackingFile(tracking.id, curPhase ?? null, f, f.name, "Signed contract");
+    if (error || !file) return error ?? "Could not upload the file.";
+    try {
+      const props = (await listDealProposals(tracking.id).catch(() => null)) ?? [];
+      const wonId = wonProposalId ?? contractInit?.wonProposalId ?? null;
+      const p = props.find((x) => x.id === wonId) ?? props.find((x) => !!x.doc?.wonAt) ?? props.find((x) => x.is_main);
+      if (p) await saveProposalDoc(p.id, p.deck_id ?? null, { ...(p.doc ?? {}), contractFileId: file.id });
+      setPropsReload((n) => n + 1);
+    } catch { /* stays in Documents */ }
+    setSignedFileId(file.id);
+    setSignedDoc({ id: file.id, name: file.name, storage_path: file.storage_path });
+    return { name: file.name, open: () => void openTrackingFile(file.storage_path), load: () => readTrackingFileBytes(file.storage_path) };
   };
 
   // Clicking a status button: sync the phase too.
@@ -2084,6 +2488,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
         if (back) { setCurPhase(back.id); await setTrackingPhase(tracking.id, back.id); }
       }
       setStatus(s); await setTrackingStatus(tracking.id, s);
+      if (status === "won") { setWonProposalId(null); setPropsReload((n) => n + 1); }
     }
   };
 
@@ -2108,6 +2513,8 @@ export default function TrackingDetail({ tracking, companies, contacts, products
       .map((c) => ({ id: `contact:${c.id}`, name: [c.first_name, c.last_name].filter(Boolean).join(" "), kind: "contact" }));
     return [...emps, ...linked];
   }, [employees, contacts, companyContactIds, inactive]);
+  // share real names with every read-only mention pill on the page
+  useEffect(() => { registerMentionNames(mentionPeople.map((p) => ({ id: p.id, name: p.name }))); }, [mentionPeople]);
 
   const unassign = async (itemId: string, assigneeId: string) => {
     await removeAssignee(assigneeId);
@@ -2787,6 +3194,11 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   const servicesShown = servicesCounted ? servicesTotal : 0;
   const potentialShown = productsShown + servicesShown;
   const productsYearWord = revMode === "product_term" || revMode === "all_term" ? "all years" : "year 1";
+  /** The same figure in each of the four views (for the figure's menu). */
+  const modeAmount = (m: RevenueMode) => activeTprods.reduce((s, p) => {
+    const prod = productOf(p.product_id);
+    return s + lineRevenue("product", lineBreakdown(p, prod?.calculator as Calculator | null, prod?.tiers?.find((x) => x.id === p.tier_id)?.price), m);
+  }, 0) + (m === "all_year1" || m === "all_term" ? servicesTotal : 0);
   /** The contract panel's lines: the deal's active products and services. */
   const dealContractLines = (): ContractPanelLine[] => [
     ...activeTprods.map((tp): ContractPanelLine => {
@@ -2812,13 +3224,9 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     if (tprods.some((x) => x.id === key)) void patchProduct(key, patch);
     else if (potentials.some((x) => x.id === key)) void patchPotential(key, patch);
   };
-  const openDealContract = async () => {
-    setContractErr(null);
-    await loadContractInit();
-    setContractOpen("deal");
-  };
   /** Save the contract on the deal and carry it to the client's signed products. */
-  const saveContract = async (terms: ContractTerms) => {
+  const saveContract = async (terms0: ContractTerms) => {
+    const terms = { ...terms0, wonProposalId: wonProposalId ?? terms0.wonProposalId ?? contractInit?.wonProposalId ?? null, documentFileId: terms0.documentFileId ?? contractInit?.documentFileId ?? signedFileId ?? null };
     setContractBusy(true); setContractErr(null);
     try {
       const err = await saveDealContract(tracking.id, terms);
@@ -2943,6 +3351,15 @@ export default function TrackingDetail({ tracking, companies, contacts, products
         .map((t) => t.id),
     ));
   }, [handoffMenu]);
+  // The flow's handoff step pre-ticks the same destinations.
+  useEffect(() => {
+    if (!targetOpen) return;
+    setHandoffPicked(new Set(
+      handoffTargets
+        .filter((t) => t.matched.length && handoffState[t.id] !== "pending" && handoffState[t.id] !== "converted")
+        .map((t) => t.id),
+    ));
+  }, [targetOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /**
    * What each destination receives: the products and services listed on the
@@ -3105,6 +3522,73 @@ export default function TrackingDetail({ tracking, companies, contacts, products
       alert("Could not open the client form: " + (err?.message ?? String(err)));
     } finally { setClientBusy(false); }
   };
+  /* ---------------- The guided won flow ---------------- */
+  /** What the order form starts from: the company's legal details, its people and the seller. */
+  const loadContractDefaults = async (): Promise<ContractDefaults> => {
+    const pre = tracking.company_id ? await buildClientPrefill(tracking.company_id, tracking.id).catch(() => null) : null;
+    const a = pre?.address;
+    const address = a ? [[a.street, a.number].filter(Boolean).join(" "), a.details, [a.postalCode, a.city].filter(Boolean).join(" ")].filter((x) => (x || "").trim()).join(", ") : "";
+    const people = (pre?.contacts ?? []).filter((c) => (c.name || "").trim()).map((c) => ({ name: c.name, email: c.email || null, phone: c.phone || null, role: c.position || null }));
+    const main = (pre?.contacts ?? []).find((c) => c.billing) ?? (pre?.contacts ?? [])[0];
+    const cp = main ? { name: main.name, email: main.email || null, phone: main.phone || null, role: main.position || null } : null;
+    const d: ContractDefaults = {
+      customer: { legalName: pre?.legalName || company?.name || null, name: company?.name ?? null, vat: pre?.vatNumber || null, address: address || null, country: a?.country || null },
+      contactPerson: cp, adminUser: cp ? { name: cp.name, email: cp.email } : null,
+      signatories: [
+        ...(cp ? [{ side: "customer" as const, name: cp.name, role: cp.role, email: cp.email, phone: cp.phone }] : []),
+        ...(seller.name ? [{ side: "supplier" as const, name: seller.name, role: null, email: seller.email ?? null, phone: seller.phone ?? null }] : []),
+      ],
+      people: [...people, ...(seller.name ? [{ name: seller.name, email: seller.email ?? null, phone: seller.phone ?? null, role: null }] : [])],
+      currency: "EUR", billingFrequency: "annually", termsUrl: "https://konsolidator.com/legal/",
+    };
+    setContractDefaults(d);
+    return d;
+  };
+  /** Right after the deal is won: the client first (if it isn't set up), else the contract. */
+  const startWonFlow = async () => {
+    setFlowMode("won");
+    void loadContractDefaults();
+    if (await clientNeeded().catch(() => false)) { setWonPrompt(true); return; }
+    await Promise.all([loadContractInit(), loadContractDefaults().catch(() => null)]);
+    setContractAsk(true);
+  };
+  /** The Handoff button: the same steps, from the first one still to do. */
+  const startHandoffFlow = async () => {
+    setFlowMode("handoff");
+    if (await clientNeeded().catch(() => false)) { void loadContractDefaults(); await createClientNow(); return; }
+    const [t] = await Promise.all([loadContractInit(), loadContractDefaults().catch(() => null)]);
+    if (!t) { setContractErr(null); setContractOpen("deal"); return; }
+    // Client and contract are set: the destinations menu as always.
+    setFlowMode(null); setHandoffMenu(true);
+  };
+  /** After the client and its contract are saved: where does it go? */
+  const toTargetStep = () => {
+    if (handoffTargets.length > 0) { setTargetOpen(true); return; }
+    setFlowMode(null); setClientDone(true);
+  };
+  const endFlow = () => { setFlowMode(null); setContractAsk(false); setTargetOpen(false); };
+  /** Saves the contract as it is, then opens the contract document (template) for the main / won proposal. */
+  const generateContractDoc = async (terms0: ContractTerms) => {
+    const terms = { ...terms0, wonProposalId: wonProposalId ?? terms0.wonProposalId ?? contractInit?.wonProposalId ?? null, documentFileId: terms0.documentFileId ?? contractInit?.documentFileId ?? signedFileId ?? null };
+    setContractDocBusy(true); setContractErr(null);
+    try {
+      const err = await saveDealContract(tracking.id, terms);
+      if (err && !contractMissing) { setContractErr(err); return; }
+      if (!err) setContractInit(terms);
+      const list = (await listDealProposals(tracking.id).catch(() => null)) ?? [];
+      const p = list.find((x) => x.id === terms.wonProposalId) ?? list.find((x) => x.is_main) ?? list[0];
+      if (!p) { setContractErr("Build a proposal first: the contract document is generated from it."); return; }
+      await openStudio(p, "contract");
+    } finally { setContractDocBusy(false); }
+  };
+  // The contract document kept on the deal.
+  useEffect(() => {
+    const id = contractInit?.documentFileId;
+    if (!id) { setContractDocFile(null); return; }
+    supabase.from("tracking_files").select("id, name, storage_path").eq("id", id).maybeSingle()
+      .then(({ data }) => setContractDocFile((data as any) ?? null));
+  }, [contractInit?.documentFileId]);
+
   // Opened from the board right after dropping the deal on Won: go straight to the client form.
   const autoClientDone = useRef(false);
   useEffect(() => {
@@ -3141,13 +3625,15 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     const pre = tracking.company_id ? await buildClientPrefill(tracking.company_id, tracking.id) : null;
     setConfirmClient(pre ? { legalName: pre.legalName, vatNumber: pre.vatNumber, address: pre.address, contacts: pre.contacts } : { legalName: "", vatNumber: "", address: { street: "", number: "", details: "", postalCode: "", city: "", country: "" }, contacts: [] });
     setConfirmServices(svcCards);
-    setConfirmSkipPrompt(false);
+    // From the guided flow the client was just set up: no "keep or update its details?" question.
+    setConfirmSkipPrompt(flowMode != null);
     setPendingHandoff(destinations);
-    // Step 2: the contract on its own panel; the handoff summary follows once it's saved.
-    await loadContractInit();
+    setHandoffMenu(false); setTargetOpen(false);
+    // The contract is set before the handoff (won flow / Handoff button): straight to the summary.
+    if (await loadContractInit()) { setConfirmOpen(true); return; }
+    // No contract yet: it opens on its own panel; the handoff summary follows once it's saved.
     setContractErr(null);
     setContractOpen("handoff");
-    setHandoffMenu(false);
     return;
    } catch (err: any) {
      console.error("doHandoff failed:", err);
@@ -3166,6 +3652,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
       package: pkg,
     });
     setHandoffSent(true);
+    if (flowMode) { setFlowDone(destinations.map((d) => d.name)); setFlowMode(null); }
     loadTrackingHandoffs(tracking.id).then(setHandoffs).catch(() => {});
   };
 
@@ -3294,7 +3781,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
         <div className="sl-d-actions">
           {canHandoff && (
             <div className="sl-handoff-wrap">
-              <button className={`sl-handoff-btn ${liveHandoffs.length ? "is-sent" : ""}`} onClick={() => setHandoffMenu((v) => !v)}>
+              <button className={`sl-handoff-btn ${liveHandoffs.length ? "is-sent" : ""}`} onClick={() => { if (handoffMenu) setHandoffMenu(false); else void startHandoffFlow(); }}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
                 Handoff
               </button>
@@ -3619,7 +4106,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
             <TrackingFiles trackingId={tracking.id} phaseId={curPhase} phases={phases} />
           </section>
 
-          <FoldPanel className="sl-prob-panel" title="Close probability"
+          <FoldPanel className="sl-prob-panel" title="Close probability" icon={FOLD_ICON.probability} tone="#0a6f4d"
             summary={[
               `Sales ${repProb == null ? "—" : `${repProb}%`}`,
               `Mgmt ${mgrProb == null ? "—" : `${mgrProb}%`}`,
@@ -3702,19 +4189,33 @@ export default function TrackingDetail({ tracking, companies, contacts, products
 
           <div className="sl-col-calc">
           <DealProposals trackingId={tracking.id} groups={proposalGroups} decks={decks} money={money}
-            busy={propBusyId} reloadKey={propsReload} onGenerate={generateProposalFor} onStudio={openStudio} onMain={applyMainLocally} />
-          <section className="sl-panel sl-panel-calc">
+            busy={propBusyId} reloadKey={propsReload} onGenerate={generateProposalFor} onStudio={openStudio} onMain={applyMainLocally} onWon={wonWithProposal} dealWon={status === "won"}
+            phaseId={curPhase} onContractFile={proposalContractFile} />
+          <section className={`sl-panel sl-panel-calc sl-fold has-ico ${calcFolded ? "is-folded" : "is-open is-settled"}`}
+            style={{ "--fold-tone": "#0a6f4d" } as CSSProperties}>
             <div className="sl-rvh">
-              <div className="sl-rvh-top">
-                <h3 className="sl-panel-title">Potential revenue</h3>
-                <b className="sl-rvh-total" key={revMode}>{money(potentialShown)}</b>
+              <div className="sl-rvh-top sl-fold-head">
+                <h3 className="sl-fold-h">
+                  <button type="button" className="sl-fold-btn sl-calc-fbtn" onClick={toggleCalcFold} aria-expanded={!calcFolded}
+                    title={calcFolded ? "Show the products and services" : "Fold the calculator to a summary"}>
+                    <span className="sl-fold-ico" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={FOLD_ICON.calculator} /></svg>
+                    </span>
+                    <span className="sl-panel-title">Calculator</span>
+                    <span className="sl-fold-sum" aria-hidden={!calcFolded}>
+                      {activeTprods.length} product{activeTprods.length === 1 ? "" : "s"} · {activePotentials.length} service{activePotentials.length === 1 ? "" : "s"}
+                    </span>
+                    <span className="sl-fold-chevw" aria-hidden="true"><svg className="sl-fold-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6" /></svg></span>
+                  </button>
+                </h3>
+                <div className="sl-fold-aside sl-calc-aside">
+                  <FigurePick className="sl-rvh-fig" value={potentialShown} money={money}
+                    title={`Potential revenue · ${REVENUE_MODES.find((m) => m.value === revMode)?.label ?? ""}. Click to choose what it counts.`}
+                    options={REVENUE_MODES.map((m) => ({ key: m.value, label: m.label, hint: REV_HINT[m.value], amount: modeAmount(m.value), on: revMode === m.value }))}
+                    onPick={(k) => setRevMode(k as RevenueMode)} />
+                </div>
               </div>
-              <div className="sl-rvmode" role="radiogroup" aria-label="Which potential revenue">
-                {REVENUE_MODES.map((m) => (
-                  <button type="button" key={m.value} role="radio" aria-checked={revMode === m.value} title={m.hint}
-                    className={revMode === m.value ? "is-on" : ""} onClick={() => setRevMode(m.value as RevenueMode)}>{m.short}</button>
-                ))}
-              </div>
+              <div className="sl-calc-fold"><div className="sl-calc-fold-in">
               <div className="sl-rvh-bar" aria-hidden="true">
                 <i className="is-product" style={{ flexGrow: Math.max(0.0001, productsShown) }} />
                 <i className="is-service" style={{ flexGrow: Math.max(0.0001, servicesShown) }} />
@@ -3724,8 +4225,10 @@ export default function TrackingDetail({ tracking, companies, contacts, products
                 <span className={`is-service ${servicesCounted ? "" : "is-out"}`} title={servicesCounted ? "A one-off fee, counted once" : "Not counted in this view"}><i />Services<b>{servicesCounted ? money(servicesShown) : <s>{money(servicesTotal)}</s>}</b></span>
                 {partnersTotal > 0 && <span className="is-partner" title="Already taken out of the figures above"><i />Partners<b>−{money(partnersTotal)}</b></span>}
               </div>
+              </div></div>
             </div>
 
+            <div className="sl-calc-fold"><div className="sl-calc-fold-in">
             <div className="sl-rvg is-product">
               <div className="sl-rvg-head">
                 <span className="sl-rvg-t"><i />Products<em>{activeTprods.length}</em></span>
@@ -3798,14 +4301,9 @@ export default function TrackingDetail({ tracking, companies, contacts, products
                 Total if won
                 <em>whole contract{propBusy ? " · generating document…" : ""}</em>
               </span>
-              {status === "won" && (
-                <button type="button" className="sl-contract-btn" onClick={() => void openDealContract()} title="Dates, term, yearly increases and final prices">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6M8 13h8M8 17h5" /></svg>
-                  <span>{contractInit ? "Contract" : "Set up contract"}</span>
-                </button>
-              )}
               <b>{money(totalPotential)}</b>
             </div>
+            </div></div>
             {propErr && <p className="sl-rev-err">{propErr}</p>}
           </section>
 
@@ -3864,7 +4362,14 @@ export default function TrackingDetail({ tracking, companies, contacts, products
           contractInitial={contractInit}
           contractMissing={contractMissing}
           dealName={dealName || company?.name || "Deal"}
-          onClose={() => { setClientFormOpen(false); setPendingHandoff(null); setClientPrefill(null); setAttachClientId(null); setClientFormMode("create"); }}
+          contractDefaults={contractDefaults}
+          onGenerateDoc={generateContractDoc}
+          docBusy={contractDocBusy}
+          docFile={contractDocFile ? { name: contractDocFile.name, open: () => openTrackingFile(contractDocFile.storage_path) } : null}
+          extraSteps={flowMode ? ["Handoff"] : []}
+          signed={signedProp}
+          onAttachSigned={attachSignedFromStep}
+          onClose={() => { setClientFormOpen(false); setPendingHandoff(null); setClientPrefill(null); setAttachClientId(null); setClientFormMode("create"); endFlow(); }}
           onConfirm={clientFormMode === "attach" ? attachClientAndHandoff : saveClientAndHandoff}
         />
       )}
@@ -3878,20 +4383,28 @@ export default function TrackingDetail({ tracking, companies, contacts, products
           initial={contractInit}
           signDefault={wonDay()}
           missing={contractMissing}
-          steps={contractOpen === "handoff" ? [{ label: "Client", done: true }, { label: "Contract", on: true }, { label: "Handoff" }] : undefined}
+          steps={contractOpen === "handoff" || flowMode ? [{ label: "Client", done: true }, { label: "Contract", on: true }, { label: "Handoff" }] : undefined}
           onLineChange={contractLineChange}
-          primaryLabel={contractOpen === "handoff" ? "Save & continue" : "Save contract"}
+          primaryLabel={contractOpen === "handoff" || flowMode ? "Save & continue" : "Save contract"}
           busy={contractBusy}
           error={contractErr}
+          defaults={contractDefaults}
+          onGenerateDoc={generateContractDoc}
+          docBusy={contractDocBusy}
+          docFile={contractDocFile ? { name: contractDocFile.name, open: () => openTrackingFile(contractDocFile.storage_path) } : null}
+          onSkip={flowMode ? () => { setContractOpen(null); endFlow(); } : undefined}
+          signed={signedProp}
+          onAttachSigned={attachSignedFromStep}
           onSave={async (terms) => {
             const ok = await saveContract(terms);
             // The handoff goes on even when the contract column isn't there yet.
-            if (!ok && !(contractOpen === "handoff" && contractMissing)) return;
+            if (!ok && !((contractOpen === "handoff" || flowMode) && contractMissing)) return;
             const next = contractOpen;
             setContractOpen(null);
             if (next === "handoff") setConfirmOpen(true);
+            else if (flowMode) toTargetStep();
           }}
-          onClose={() => { if (contractOpen === "handoff") setPendingHandoff(null); setContractOpen(null); }}
+          onClose={() => { if (contractOpen === "handoff") setPendingHandoff(null); setContractOpen(null); endFlow(); }}
         />
       )}
 
@@ -4046,6 +4559,12 @@ export default function TrackingDetail({ tracking, companies, contacts, products
           onClose={() => { setDocStudio(null); setPropsReload((n) => n + 1); }}
           onSaveDoc={(html) => saveProposalDoc(docStudio.proposal.id, docStudio.proposal.deck_id ?? null, { ...(docStudio.proposal.doc ?? {}), html } as any)}
           onSavedFile={async (fileId, kind) => {
+            // The contract document: kept on the deal's contract (shown in the contract step and on the client).
+            if (kind === "contract") {
+              const cur = (await loadDealContract(tracking.id).catch(() => ({ terms: null }))).terms ?? contractInit;
+              if (cur) { const next = { ...cur, documentFileId: fileId }; const e = await saveDealContract(tracking.id, next); if (!e) setContractInit(next); }
+              return null;
+            }
             // the proposal's document is the one that goes with it (and to the handoff)
             if (kind !== "proposal") return null;
             const p = docStudio.proposal;
@@ -4112,9 +4631,33 @@ export default function TrackingDetail({ tracking, companies, contacts, products
 
       {wonPrompt && (
         <HxPrompt icon="trophy" title="Deal won — create the client?"
-          sub={<>Set up <b>{company?.name ?? "the client"}</b> now with its legal details, contacts and the products signed. Signing dates start on the day it was won. The handoff to management stays for later.</>}
+          sub={flowMode ? <>Three quick steps: <b>{company?.name ?? "the client"}</b>'s legal details and contacts, then the contract (dates, prices, signatories — and its PDF), then where it's handed off.</> : <>Set up <b>{company?.name ?? "the client"}</b> now with its legal details, contacts and the products signed. Signing dates start on the day it was won. The handoff to management stays for later.</>}
           ghost="Later" primary="Create client" busy={clientBusy}
-          onGhost={() => setWonPrompt(false)} onClose={() => setWonPrompt(false)} onPrimary={() => void createClientNow()} />
+          onGhost={() => { setWonPrompt(false); endFlow(); }} onClose={() => { setWonPrompt(false); endFlow(); }} onPrimary={() => void createClientNow()} />
+      )}
+      {contractAsk && (
+        <HxPrompt icon="trophy" title="Deal won — set up the contract?"
+          sub={<><b>{company?.name ?? "The client"}</b> is already a client. Review the contract now — dates, prices, people and signatories — and generate it as a PDF. The handoff comes right after.</>}
+          ghost="Later" primary={contractInit ? "Review contract" : "Create contract"}
+          onGhost={endFlow} onClose={endFlow}
+          onPrimary={() => { setContractAsk(false); setContractErr(null); setContractOpen("deal"); }} />
+      )}
+      {targetOpen && (
+        <HandoffTargetStep
+          clientName={company?.name ?? "the client"}
+          targets={handoffTargets}
+          picked={handoffPicked}
+          state={handoffState}
+          onToggle={(id) => setHandoffPicked((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; })}
+          onLater={endFlow}
+          onSend={() => void doHandoff()}
+        />
+      )}
+      <FlowMorph active={!!flowMode || clientFormOpen || !!contractOpen || targetOpen || confirmOpen || wonPrompt || contractAsk || !!flowDone || clientDone} />
+      {flowDone && (
+        <HxPrompt icon="check" title="Handed off"
+          sub={<><b>{company?.name ?? "The client"}</b> went to {flowDone.join(", ")}. It waits in Management, under Incoming.</>}
+          ghost="" primary="Done" onGhost={() => setFlowDone(null)} onClose={() => setFlowDone(null)} onPrimary={() => setFlowDone(null)} />
       )}
       {clientDone && (
         <HxPrompt icon="check" title="Client ready"
@@ -4286,7 +4829,7 @@ function NoteItem({ note, people, onEdit, onDelete, tagged, children, author, ph
         onClick={() => (overflowing || expanded) && setExpanded((v) => !v)}
         style={{ cursor: (overflowing || expanded) ? "pointer" : "default" }}
       >
-        {cleanMentionsFn(note.body)}
+        <MentionText text={note.body} />
       </p>
       {(overflowing || expanded) && (
         <button className="sl-note-more" onClick={() => setExpanded((v) => !v)}>
@@ -4366,8 +4909,8 @@ function TaskItem({ task, people, overdue, onToggle, onEdit, onDelete, onOpen, t
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 13l4 4L19 7" /></svg>
       )}</button>
       <div className="sl-task-body">
-        <span className="sl-task-title">{cleanMentionsFn(task.title)}</span>
-        {task.description?.trim() && <span className="sl-task-desc">{cleanMentionsFn(task.description)}</span>}
+        <span className="sl-task-title"><MentionText text={task.title} /></span>
+        {task.description?.trim() && <span className="sl-task-desc"><MentionText text={task.description} /></span>}
         <div className="sl-task-meta">
           {prio !== "normal" && <span className={`hs-prio is-${prio}`}><FlagIcon /><span>{PRIORITY_LABEL[prio]}</span></span>}
           {!task.done && (isProcess || status !== "todo") && (
@@ -4495,8 +5038,6 @@ function MeetingItem({ meeting, people, fmtMeet, onEdit, onDelete, onKind, onOut
   const past = !!ends && ends.getTime() < Date.now();
   const kind = (meeting.kind ?? "in_person") as MeetingKind;
   const kindDef = MEETING_KINDS.find((k) => k.value === kind) ?? MEETING_KINDS[2];
-  // the text with @mentions shown as names
-  const parts = (meeting.title ?? "").split(/(@\[[^\]]+\]\([^)]+\))/g);
 
   return (
     <div className={`sl-mt ${past ? "is-past" : ""} ${editing ? "is-editing" : ""}`}>
@@ -4529,10 +5070,7 @@ function MeetingItem({ meeting, people, fmtMeet, onEdit, onDelete, onKind, onOut
               onClick={() => (overflowing || expanded) && setExpanded((v) => !v)}
               style={{ cursor: (overflowing || expanded) ? "pointer" : "default" }}
             >
-              {parts.map((t, i) => {
-                const m = /^@\[([^\]]+)\]\([^)]+\)$/.exec(t);
-                return m ? <b key={i} className="sl-mt-at">@{m[1]}</b> : <span key={i}>{t}</span>;
-              })}
+              <MentionText text={meeting.title} />
             </p>
             {(overflowing || expanded) && (
               <button className="sl-mt-more" onClick={() => setExpanded((v) => !v)}>{expanded ? "Show less" : "Show more"}</button>
@@ -4993,6 +5531,201 @@ function PhaseEditor({ services, onClose, onConfirm, onSkip }: {
   );
 }
 // round up to the nearest billable unit (mirrors billableQty, kept local for the editor)
+/** The won flow's last step: which pipelines the client goes to. */
+/* =====================================================================
+   The won / handoff steps as ONE panel: when a step's card gives way to the
+   next one, the panel morphs — size, header and stepper — instead of one modal
+   closing and another popping up. Works on the existing cards (no change to
+   their logic): a shared backdrop, a frame that animates between the two card
+   rectangles, the old card fading out on top and the new one revealed inside.
+   ===================================================================== */
+const FLOW_CARD = ".hx-prompt, .hc, .dct, .hts, .hx2";
+const flowOrder = (el: Element) => (el.matches(".hx-prompt") ? (/handed off|client ready/i.test(el.textContent ?? "") ? 9 : 0)
+  : el.matches(".hc") ? 1 : el.matches(".dct") ? 2 : el.matches(".hts") ? 3 : 4);
+function FlowMorph({ active }: { active: boolean }) {
+  const [live, setLive] = useState(active);
+  // stays on a moment after the last step, so a short gap between two steps doesn't drop the stage
+  useEffect(() => {
+    if (active) { setLive(true); return; }
+    const t = window.setTimeout(() => setLive(false), 900);
+    return () => window.clearTimeout(t);
+  }, [active]);
+  const layerRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!live) return;
+    const body = document.body;
+    body.classList.add("wfx-on");
+    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    let cur: { el: HTMLElement; rect: DOMRect; order: number; radius: string; band: number } | null = null;
+    const measure = () => {
+      if (!cur?.el.isConnected) return;
+      cur.rect = cur.el.getBoundingClientRect();
+      const head = cur.el.querySelector<HTMLElement>(":scope > header, :scope > .hts-head, :scope > .hc-head, :scope > .dct-head, :scope > .hx-head");
+      cur.band = head ? head.getBoundingClientRect().height : 0;
+    };
+    const tick = window.setInterval(measure, 250);
+    const pick = (): HTMLElement | null => {
+      const all = Array.from(document.querySelectorAll<HTMLElement>(FLOW_CARD)).filter((e) => !e.closest(".wfx-layer") && !e.parentElement?.closest(FLOW_CARD));
+      return all[all.length - 1] ?? null;
+    };
+    const track = (el: HTMLElement) => {
+      cur = { el, rect: el.getBoundingClientRect(), order: flowOrder(el), radius: getComputedStyle(el).borderRadius || "26px", band: 0 };
+      measure();
+    };
+    const enter = (el: HTMLElement) => {
+      if (reduced) return;
+      el.animate([{ opacity: 0, transform: "translateY(26px) scale(0.965)" }, { opacity: 1, transform: "none" }], { duration: 520, easing: "cubic-bezier(0.16, 1, 0.3, 1)" });
+    };
+    const morph = (prev: NonNullable<typeof cur>, next: HTMLElement) => {
+      const layer = layerRef.current, stage = stageRef.current;
+      const r0 = prev.rect, r1 = next.getBoundingClientRect();
+      if (!layer || !stage || !r0.width || !r1.width) { enter(next); return; }
+      const dir = flowOrder(next) >= prev.order ? 1 : -1;
+      const ease = "cubic-bezier(0.65, 0, 0.2, 1)";
+      const D = 560;
+      const rad = getComputedStyle(next).borderRadius || "26px";
+      const head1 = next.querySelector<HTMLElement>(":scope > header, :scope > .hts-head, :scope > .hc-head, :scope > .dct-head, :scope > .hx-head");
+      const band1 = head1 ? head1.getBoundingClientRect().height : 0;
+      // 1. the frame: one panel stretching from the old card to the new one
+      const frame = document.createElement("div");
+      frame.className = "wfx-frame";
+      frame.style.borderRadius = rad;
+      const band = document.createElement("div");
+      band.className = "wfx-band";
+      frame.appendChild(band);
+      stage.appendChild(frame);
+      const box = (r: DOMRect) => ({ left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
+      frame.animate([box(r0), box(r1)], { duration: D, easing: ease, fill: "forwards" });
+      band.animate([{ height: `${prev.band}px`, opacity: prev.band ? 1 : 0 }, { height: `${band1}px`, opacity: band1 ? 1 : 0 }], { duration: D, easing: ease, fill: "forwards" });
+      // 2. the old card, back on screen for a moment, sliding out on top
+      const g = prev.el;
+      g.classList.add("wfx-ghost");
+      Object.assign(g.style, { position: "fixed", left: `${r0.left}px`, top: `${r0.top}px`, width: `${r0.width}px`, height: `${r0.height}px`, maxHeight: "none", margin: "0", pointerEvents: "none" });
+      layer.appendChild(g);
+      const clip = (a: DOMRect, b: DOMRect, r: string) => `inset(${Math.max(0, b.top - a.top)}px ${Math.max(0, a.right - b.right)}px ${Math.max(0, a.bottom - b.bottom)}px ${Math.max(0, b.left - a.left)}px round ${r})`;
+      g.animate([
+        { opacity: 1, transform: "none", clipPath: `inset(0 round ${prev.radius})` },
+        { opacity: 0, transform: `translateX(${-dir * 46}px) scale(0.985)`, clipPath: clip(r0, r1, rad) },
+      ], { duration: 340, easing: "cubic-bezier(0.4, 0, 1, 1)", fill: "forwards" });
+      // shared parts (same title, the stepper) glide from where they were
+      const shared = [".dct-steps", ".hc-title, .dct-title, .hts-title, .hx-title"];
+      for (const sel of shared) {
+        const a = g.querySelector<HTMLElement>(sel), b = next.querySelector<HTMLElement>(sel);
+        if (!a || !b) continue;
+        if (sel !== ".dct-steps" && (a.textContent ?? "").trim() !== (b.textContent ?? "").trim()) continue;
+        const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+        a.style.visibility = "hidden";
+        b.animate([{ transform: `translate(${ra.left - rb.left}px, ${ra.top - rb.top}px)` }, { transform: "none" }], { duration: D, easing: ease });
+      }
+      // the step just reached: its connector fills, its dot pops
+      if (dir > 0) next.querySelectorAll(".dct-steps li.is-on").forEach((li) => { li.classList.remove("wfx-adv"); void (li as HTMLElement).offsetWidth; li.classList.add("wfx-adv"); });
+      // 3. the new card, revealed inside the frame as it grows
+      next.animate([
+        { clipPath: clip(r1, r0, prev.radius) },
+        { clipPath: `inset(0 round ${rad})` },
+      ], { duration: D, easing: ease });
+      next.animate([
+        { opacity: 0, transform: `translateX(${dir * 46}px)` },
+        { opacity: 1, transform: "none" },
+      ], { duration: 420, delay: 170, easing: "cubic-bezier(0.16, 1, 0.3, 1)", fill: "backwards" });
+      window.setTimeout(() => {
+        g.remove();
+        frame.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160, fill: "forwards" }).onfinish = () => frame.remove();
+      }, D + 40);
+    };
+    const seen = new WeakSet<HTMLElement>();
+    const first = pick();
+    if (first) { seen.add(first); track(first); enter(first); }
+    const mo = new MutationObserver(() => {
+      const next = pick();
+      if (!next || next === cur?.el) return;
+      const prev = cur;
+      const fresh = !seen.has(next);
+      seen.add(next);
+      track(next);
+      // a card coming back from under a small question, or a question on top of a card: no morph
+      if (!fresh) return;
+      if (!prev || prev.el.isConnected || reduced) { if (!prev) enter(next); return; }
+      morph(prev, next);
+    });
+    mo.observe(body, { childList: true, subtree: true });
+    return () => {
+      mo.disconnect(); window.clearInterval(tick);
+      body.classList.remove("wfx-on");
+      layerRef.current?.replaceChildren();
+      stageRef.current?.replaceChildren();
+    };
+  }, [live]);
+  if (!live) return null;
+  return createPortal(
+    <>
+      <div className={`wfx-stage ${active ? "" : "is-out"}`} ref={stageRef} aria-hidden="true" />
+      <div className="wfx-layer" ref={layerRef} aria-hidden="true" />
+    </>,
+    document.body);
+}
+
+function HandoffTargetStep({ clientName, targets, picked, state, onToggle, onLater, onSend }: {
+  clientName: string;
+  targets: { id: string; name: string; matched: string[] }[];
+  picked: Set<string>;
+  state: Record<string, string>;
+  onToggle: (id: string) => void;
+  onLater: () => void;
+  onSend: () => void;
+}) {
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape") onLater(); };
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [onLater]);
+  return createPortal(
+    <div className="hts-backdrop" onMouseDown={onLater}>
+      <div className="hts" role="dialog" aria-modal="true" aria-label="Handoff" onMouseDown={(e) => e.stopPropagation()}>
+        <header className="hts-head">
+          <span className="dct-eyebrow">Deal won · handoff</span>
+          <h2>Where does <em>{clientName}</em> go?</h2>
+          <ol className="dct-steps">
+            <li className="is-done"><i>✓</i>Client</li>
+            <li className="is-done"><i>✓</i>Contract</li>
+            <li className="is-on"><i>3</i>Handoff</li>
+          </ol>
+        </header>
+        <div className="hts-body">
+          <p className="hts-sub">Pick the teams that take it from here. The ones that run what was sold are ticked.</p>
+          <div className="hts-list">
+            {targets.map((tg, i) => {
+              const on = picked.has(tg.id);
+              const st = state[tg.id];
+              const locked = st === "pending" || st === "converted";
+              const rec = tg.matched.length > 0;
+              return (
+                <button key={tg.id} type="button" disabled={locked} style={{ ["--i" as any]: i }}
+                  className={`hts-dest ${on ? "is-on" : ""} ${locked ? "is-locked" : ""} ${rec ? "is-rec" : ""}`}
+                  onClick={() => onToggle(tg.id)}>
+                  <span className="hts-check">{on || locked ? "✓" : ""}</span>
+                  <span className="hts-dest-txt">
+                    <b>{tg.name}</b>
+                    <i>{st === "converted" ? "Client already created there" : st === "pending" ? "Already waiting in management" : rec ? `Runs ${tg.matched.join(" · ")}` : "Nothing on this deal is routed here"}</i>
+                  </span>
+                  {rec && !locked && <span className="hts-badge">sold</span>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <footer className="hts-foot">
+          <button type="button" className="hc-btn-ghost" onClick={onLater}>Later</button>
+          <button type="button" className="hc-btn-primary" disabled={picked.size === 0} onClick={onSend}>
+            Hand off{picked.size > 0 ? ` to ${picked.size}` : ""} →
+          </button>
+        </footer>
+      </div>
+    </div>,
+    document.body);
+}
+
 function ceilTo(raw: number, minUnit: number): number {
   const m = Number(minUnit) || 0; const q = Number(raw) || 0;
   if (m <= 0) return +q.toFixed(2);

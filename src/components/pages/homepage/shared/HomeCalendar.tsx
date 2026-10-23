@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../../api/supabase";
 import "./HomeShared.css";
+import { mentionsToPlain } from "../../../framework/MentionInput";
 
 type View = "days" | "month";
 interface Item {
@@ -41,7 +42,7 @@ const fromIso = (s: string) => { const [y, m, d] = s.split("-").map(Number); ret
 const addDays = (d: Date, n: number) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
 const hhmm = (m: number) => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
 const hours = (min: number) => { const h = min / 60; return h === 0 ? "0h" : `${+h.toFixed(1)}h`; };
-const plain = (t: string) => (t ?? "").replace(/@\[([^\]]+)\]\([^)]+\)/g, "@$1").replace(/\s+/g, " ").trim();
+const plain = (t: string) => mentionsToPlain(t).replace(/\s+/g, " ").trim();
 const MEETING_COLOR = { teams: "#5b6ee1", phone: "#e0a43c", in_person: "#12b57f" } as const;
 const MEETING_LABEL = { teams: "Teams", phone: "Call", in_person: "In person" } as const;
 

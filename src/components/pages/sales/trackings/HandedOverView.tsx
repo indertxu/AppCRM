@@ -7,6 +7,7 @@ import type { Company, Contact } from "../../companies/companiesApi";
 import { loadNotes, loadTasks, type Tracking, type TrackNote, type TrackTask } from "../sales/salesApi";
 import { orderPhases, type TrackingHandover } from "../extras/salesRolesApi";
 import { displayValue, type TrackingField } from "../extras/trackingFieldsApi";
+import { MentionText } from "../../../framework/MentionInput";
 import "./Handover.css";
 
 /**
@@ -53,7 +54,6 @@ export default function HandedOverView({ tracking, handover, companies, contacts
   const shown = useMemo(() => phases.filter((p) => !p.sales_outcome), [phases]);
   const eur = (n: number) => `${Math.round(n || 0).toLocaleString("es-ES")} €`;
   const fmtDay = (d?: string | null) => (d ? new Date(`${String(d).slice(0, 10)}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—");
-  const clean = (t: string) => t.replace(/@\[([^\]]+)\]\([^)]+\)/g, "@$1");
   const open = async (f: { storage_path: string }) => {
     const { data } = await supabase.storage.from("tracking-files").createSignedUrl(f.storage_path, 60);
     if (data?.signedUrl) window.open(data.signedUrl, "_blank");
@@ -115,7 +115,7 @@ export default function HandedOverView({ tracking, handover, companies, contacts
           <section className="sl-panel">
             <h3 className="sl-panel-title">Notes<span>{notes.length}</span></h3>
             {notes.length === 0 ? <p className="hov-empty">No notes before the handover.</p> : (
-              <ul className="hov-items">{notes.map((n) => <li key={n.id}><p>{clean(n.body)}</p><small>{fmtDay(n.created_at)}</small></li>)}</ul>
+              <ul className="hov-items">{notes.map((n) => <li key={n.id}><p><MentionText text={n.body} /></p><small>{fmtDay(n.created_at)}</small></li>)}</ul>
             )}
           </section>
 
@@ -123,8 +123,8 @@ export default function HandedOverView({ tracking, handover, companies, contacts
             <h3 className="sl-panel-title">Tasks & meetings<span>{tasks.length + meetings.length}</span></h3>
             {tasks.length + meetings.length === 0 ? <p className="hov-empty">Nothing planned before the handover.</p> : (
               <ul className="hov-items">
-                {tasks.map((t) => <li key={t.id}><p>{clean(t.title)}</p><small>Task{t.due_at ? ` · due ${fmtDay(t.due_at)}` : ""}</small></li>)}
-                {meetings.map((m) => <li key={m.id}><p>{clean(m.title)}</p><small>Meeting · {fmtDay(m.when)} {m.when.slice(11)}</small></li>)}
+                {tasks.map((t) => <li key={t.id}><p><MentionText text={t.title} /></p><small>Task{t.due_at ? ` · due ${fmtDay(t.due_at)}` : ""}</small></li>)}
+                {meetings.map((m) => <li key={m.id}><p><MentionText text={m.title} /></p><small>Meeting · {fmtDay(m.when)} {m.when.slice(11)}</small></li>)}
               </ul>
             )}
           </section>

@@ -7,6 +7,7 @@ import LineCalcModal from "../../../framework/LineCalcModal";
 import { lineBreakdown, type RevenueLineFields, type TermPatch } from "../sales/salesApi";
 import type { Calculator } from "../../settings/catalogApi";
 import { FileIcon, kindOf, prettySize, openTrackingFile } from "./TrackingFiles";
+import { MentionText } from "../../../framework/MentionInput";
 import "./HandoffConfirmServices.css";
 
 export interface ConfirmContact { id: string; sourceId?: string | null; name: string; position: string; email: string; phone: string; billing: boolean; selected?: boolean; }
@@ -388,7 +389,7 @@ function NotesView({ notes, off, toggle, disabled }: { notes: HandoffNote[]; off
             {toggle && <Check on={on} onClick={() => toggle(k)} disabled={disabled} label="Send this note" />}
             <div className="hx2-note-main">
               <span className="hx2-note-meta"><b>{n.author || "Someone"}</b>{fmtDay(n.created_at)}{n.phase ? <em>{n.phase}</em> : null}</span>
-              <p className={`hx2-note-body ${long && !isOpen ? "is-clamped" : ""}`}>{n.body}</p>
+              <p className={`hx2-note-body ${long && !isOpen ? "is-clamped" : ""}`}><MentionText text={n.body} /></p>
               {long && <button type="button" className="hx2-link" onClick={() => setOpen((s) => { const x = new Set(s); if (x.has(n.id)) x.delete(n.id); else x.add(n.id); return x; })}>{isOpen ? "Show less" : "Show more"}</button>}
             </div>
           </div>
@@ -409,8 +410,8 @@ function TasksView({ tasks, off, toggle, disabled }: { tasks: HandoffTaskItem[];
             {toggle && <Check on={on} onClick={() => toggle(k)} disabled={disabled} label="Send this task" />}
             <span className={`hx2-task-dot ${t.done ? "is-done" : ""}`} aria-hidden="true" />
             <div className="hx2-task-main">
-              <span className="hx2-task-t">{t.title || "Untitled task"}</span>
-              {t.description && <span className="hx2-task-d">{t.description}</span>}
+              <span className="hx2-task-t">{t.title ? <MentionText text={t.title} /> : "Untitled task"}</span>
+              {t.description && <span className="hx2-task-d"><MentionText text={t.description} /></span>}
             </div>
             <span className="hx2-task-tags">
               {t.phase && <em>{t.phase}</em>}

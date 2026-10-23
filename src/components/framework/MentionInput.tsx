@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useRef, useState, useEffect, useCallback } from "react";
+import { useRef, useState, useEffect, useCallback, type ReactNode, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
+import "./MentionInput.css";
 
 export interface MentionPerson {
   id: string;              // "employee:<id>" or "contact:<id>"
@@ -238,4 +239,49 @@ export default function MentionInput({ value, onChange, people, onMention, place
       )}
     </div>
   );
+}
+
+/* ------------------------------------------------------------------------- */
+/* Read-only rendering of stored text with "@[name](employee:id)" mentions.   */
+/* ------------------------------------------------------------------------- */
+const MENTION_RE = /@\[([^\]]+)\]\(([^)\s]+)\)/g;
+const knownNames = new Map<string, string>();
+/** Pages that already loaded the team can share real display names (id → name). */
+export function registerMentionNames(entries: Record<string, string> | Array<{ id: string; name: string }>) {
+  const list = Array.isArray(entries) ? entries.map((e) => [e.id, e.name] as const) : Object.entries(entries);
+  for (const [id, name] of list) if (id && name) knownNames.set(id.replace(/^(employee|contact):/, ""), name);
+}
+const prettyName = (s: string) => s.trim().split(/\s+/).map((w) => (w ? w[0].toLocaleUpperCase() + w.slice(1) : w)).join(" ");
+const PILL_TONES = ["#12b57f", "#3b82f6", "#8b5cf6", "#f59e0b", "#ec4899", "#0ea5e9", "#14b8a6", "#ef4444"];
+const toneOf = (key: string) => { let h = 0; for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) | 0; return PILL_TONES[Math.abs(h) % PILL_TONES.length]; };
+
+/** Stored text → the same text with mentions as plain names ("Inder"), for search, tooltips and inputs. */
+export function mentionsToPlain(text: string | null | undefined): string {
+  return (text ?? "").replace(MENTION_RE, (_m, label: string, ref: string) => knownNames.get(ref.replace(/^(employee|contact):/, "")) ?? prettyName(label));
+}
+
+/** Shows stored text with each mention as a small pill: avatar initial + name, no "@" and no id. */
+export function MentionText({ text, className }: { text: string | null | undefined; className?: string }) {
+  const src = text ?? "";
+  if (!src.includes("@[")) return <>{src}</>;
+  const out: ReactNode[] = [];
+  let last = 0; let i = 0;
+  for (const m of src.matchAll(MENTION_RE)) {
+    const at = m.index ?? 0;
+    if (at > last) out.push(src.slice(last, at));
+    const ref = m[2];
+    const isContact = ref.startsWith("contact:");
+    const id = ref.replace(/^(employee|contact):/, "");
+    const name = knownNames.get(id) ?? prettyName(m[1]);
+    const tone = toneOf(id || name);
+    out.push(
+      <span key={`m${i++}`} className={`mt-pill ${isContact ? "is-contact" : ""} ${className ?? ""}`} title={`${name} · ${isContact ? "Contact" : "Team member"}`}
+        style={{ ["--mt" as string]: tone } as CSSProperties}>
+        <i aria-hidden="true">{name.trim()[0]?.toUpperCase() ?? "?"}</i>{name}
+      </span>,
+    );
+    last = at + m[0].length;
+  }
+  if (last < src.length) out.push(src.slice(last));
+  return <>{out}</>;
 }
