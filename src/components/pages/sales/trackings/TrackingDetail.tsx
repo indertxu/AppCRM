@@ -1724,7 +1724,8 @@ function DealPeople({ company, contacts, companyContactIds, dealIds, onChange }:
   const navigate = useNavigate();
   const [showAll, setShowAll] = useState(false);
   const [askOff, setAskOff] = useState<string | null>(null);
-  const byId = new Map(contacts.map((c) => [c.id!, c]));
+  // 25,000 contacts: the lookup is built once per list, not on every render of the deal page.
+  const byId = useMemo(() => new Map(contacts.map((c) => [c.id!, c])), [contacts]);
   const onDeal = dealIds.map((id) => byId.get(id)).filter((c): c is Contact => !!c);
   const others = companyContactIds.filter((id) => !dealIds.includes(id)).map((id) => byId.get(id)).filter((c): c is Contact => !!c)
     .sort((a, b) => `${a.first_name} ${a.last_name ?? ""}`.localeCompare(`${b.first_name} ${b.last_name ?? ""}`));
@@ -2508,8 +2509,9 @@ export default function TrackingDetail({ tracking, companies, contacts, products
       .filter((e) => !inactive.has(e.id))
       .map((e) => ({ id: `employee:${e.id}`, name: niceName(e.name), kind: "employee" as const }))
       .filter((e) => e.name);
+    const onCompany = new Set(companyContactIds);
     const linked: MentionPerson[] = contacts
-      .filter((c) => companyContactIds.includes(c.id!))
+      .filter((c) => onCompany.has(c.id!))
       .map((c) => ({ id: `contact:${c.id}`, name: [c.first_name, c.last_name].filter(Boolean).join(" "), kind: "contact" }));
     return [...emps, ...linked];
   }, [employees, contacts, companyContactIds, inactive]);

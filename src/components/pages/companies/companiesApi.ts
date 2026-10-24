@@ -200,13 +200,28 @@ async function readAll<T = any>(table: string, cols: string, orders: string[]): 
  * `strict`: an error on the first page is thrown (otherwise: what was read).
  */
 export async function pagedAll<T = any>(build: (count?: boolean) => any, strict = false, page = 1000): Promise<T[]> {
-  const first = await build(true).range(0, page - 1);
+  // Every page is retried (a busy database or a deep page timing out used to end the read
+  // silently and leave the list cut at 1,000 / 3,000 rows).
+  const tryRange = async (count: boolean, from: number, to: number) => {
+    let last: any = null;
+    for (let a = 0; a < 3; a++) {
+      try {
+        const r = await build(count).range(from, to);
+        if (!r.error && r.data) return r;
+        last = r;
+      } catch (e) { last = { data: null, error: e, count: null }; }
+      await new Promise((res) => setTimeout(res, 250 * (a + 1) * (a + 1)));
+    }
+    return last;
+  };
+  const first = await tryRange(true, 0, page - 1);
   if (first.error) { if (strict) throw first.error; return []; }
   const out: T[] = [...((first.data ?? []) as T[])];
   if (out.length < page) return out;
   const get = async (n: number): Promise<T[] | null> => {
-    const { data, error } = await build(false).range(n * page, n * page + page - 1);
-    return error || !data ? null : (data as T[]);
+    const { data, error } = await tryRange(false, n * page, n * page + page - 1);
+    if (error || !data) { console.warn("[rows] page", n, "could not be read:", (error as any)?.message ?? error); return null; }
+    return data as T[];
   };
   const total: number | null = typeof first.count === "number" ? first.count : null;
   if (total != null) {
@@ -262,7 +277,8 @@ function liveTypes(c: Company, own: string[]): Company {
   return kept.length === list.length ? c : { ...c, relationship: kept };
 }
 
-export async function saveCompany(c: Company): Promise<string | null> {
+/** A company as the table stores it: the base columns, and the upgrade ones (sent only when the object carries them). */
+export function companyRow(c: Company): { row: Record<string, any>; extra: Record<string, any> } {
   const row = {
     name: c.name, legal_name: c.legal_name ?? null, vat_number: c.vat_number ?? null,
     reg_number: c.reg_number ?? null, website: c.website ?? null, phone: c.phone ?? null,
@@ -273,6 +289,11 @@ export async function saveCompany(c: Company): Promise<string | null> {
   };
   // added by the CRM upgrade (crm_upgrade.sql) — only sent when the object carries them
   const extra = pickNew(c, ["phone_ext", "landline", "landline_ext", "sector", "source", "relationship", "billing", "parent_id", "linkedin"]);
+  return { row, extra };
+}
+
+export async function saveCompany(c: Company): Promise<string | null> {
+  const { row, extra } = companyRow(c);
   const write = async (r: Record<string, any>) => {
     if (c.id) return { error: (await supabase.from("companies").update(r).eq("id", c.id)).error, id: c.id };
     // Created by an import? Send the batch; the database stamps who and when (and created_by).
@@ -294,7 +315,7 @@ function pickNew(obj: any, keys: string[]): Record<string, any> {
   keys.forEach((k) => { if (obj[k] !== undefined) out[k] = typeof obj[k] === "string" ? obj[k].trim() || null : obj[k]; });
   return out;
 }
-const missingColumn = (m: string) => /column .* does not exist|could not find the .* column|schema cache/i.test(m);
+export const missingColumn = (m: string) => /column .* does not exist|could not find the .* column|schema cache/i.test(m);
 const friendlyDbError = (m: string) =>
   /above itself in the group|own parent company/i.test(m) ? "That company is already below this one in the group — it can't also be above it." : m;
 
@@ -371,7 +392,8 @@ export async function companyContactCountsFast(): Promise<Record<string, number>
   return out;
 }
 
-export async function saveContact(c: Contact): Promise<string | null> {
+/** A contact as the table stores it: the base columns, and the upgrade ones (sent only when set). */
+export function contactRow(c: Contact): { row: Record<string, any>; extra: Record<string, any> } {
   const row = {
     first_name: c.first_name, last_name: c.last_name ?? null, position: c.position ?? null,
     email: c.email ?? null, phone: c.phone ?? null, is_billing: c.is_billing ?? false, notes: c.notes ?? null,
@@ -381,6 +403,11 @@ export async function saveContact(c: Contact): Promise<string | null> {
   };
   const extra = pickNew(c, ["province", "phone_ext", "landline", "landline_ext"]);
   if (c.emails !== undefined) extra.emails = (c.emails ?? []).map((x) => x.trim()).filter(Boolean);
+  return { row, extra };
+}
+
+export async function saveContact(c: Contact): Promise<string | null> {
+  const { row, extra } = contactRow(c);
   let contactId = c.id;
   const write = async (r: Record<string, any>) => {
     if (contactId) return (await supabase.from("contacts").update(r).eq("id", contactId)).error;
@@ -573,10 +600,18 @@ export async function listContactDeals(contactId: string, companyIds: string[]):
   if (error) return [];
   return (await dealRefs(data ?? [])).map((d) => ({ ...d, via: direct.has(d.id) ? "direct" : "company" }));
 }
-/** Every deal (to put a contact on one). */
-export async function listAllDeals(): Promise<DealRef[]> {
-  const out = await pagedAll<any>((count) => supabase.from("trackings").select(DEAL_COLS, count ? { count: "exact" } : undefined).order("id"));
-  return dealRefs(out);
+/** Every deal (to put a contact on one). Kept for a minute and shared by everyone asking at the same
+ *  time, so opening contact after contact doesn't download the whole pipeline each time. */
+let allDealsCache: { at: number; p: Promise<DealRef[]> } | null = null;
+export async function listAllDeals(force = false): Promise<DealRef[]> {
+  if (!force && allDealsCache && Date.now() - allDealsCache.at < 60_000) return allDealsCache.p;
+  const p = (async () => {
+    const out = await pagedAll<any>((count) => supabase.from("trackings").select(DEAL_COLS, count ? { count: "exact" } : undefined).order("id"));
+    return dealRefs(out);
+  })();
+  allDealsCache = { at: Date.now(), p };
+  p.catch(() => { if (allDealsCache?.p === p) allDealsCache = null; });
+  return p;
 }
 /** Put a contact on deals / take them off (tracking_contacts). */
 export async function setContactDeals(contactId: string, add: string[], remove: string[]): Promise<string | null> {

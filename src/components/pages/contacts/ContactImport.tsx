@@ -25,9 +25,9 @@ import { useCloseGuard } from "../../framework/Dock";
 import { readSpreadsheet, colLetter, cellText, normHeader, parseNumber, parseDate, parseBool, prepareImport, emptyPrep, type SheetCell, type Workbook, type ImportPrep } from "../../framework/spreadsheetImport";
 import { supabase } from "../../api/supabase";
 import {
-  saveContact, saveCompany, listCompanies, listContacts,
+  saveContact, saveCompany, companyRow, contactRow, missingColumn, listCompanies, listContacts,
   listContactFields, listCompanyFields, addContactField, addCompanyField, updateContactField, updateCompanyField,
-  listEmployees, listCrmOptions, addCrmOption, sectorOptions, matchSector, sourceOptions, matchSource, relationshipOptions, setCompanyParent,
+  listEmployees, listCrmOptions, addCrmOption, sectorOptions, matchSector, sourceOptions, matchSource, relationshipOptions,
   type Contact, type Company, type ContactField, type CompanyField, type Employee, type CrmOption, type Billing,
   useRequiredFields,
 } from "../companies/companiesApi";
@@ -35,7 +35,7 @@ import { startImportBatch, finishImportBatch } from "./importBatches";
 import { isFixedRequired, missingFixed, matchCountry, matchLanguage, normalizeLinkedIn, isLinkedIn, languageOptions, countryOptions } from "./contactProfile";
 import { TargetPicker, NewFieldEditor, ExistingChoice, DiffNote, SheetViewer, FailReport, ColumnTools, columnsFromRows, type TOpt, type Tone } from "../sales/extras/DealImport";
 import {
-  EMAIL_RE, nameKey, vatKey, domainKey, splitCompanyNames, dedupePersonName, splitStreetNumber, companySimilarity, closestCompany, diffRecord, patchFor, guessType, distinctValues, asDate,
+  EMAIL_RE, nameKey, vatKey, domainKey, splitCompanyNames, dedupePersonName, splitStreetNumber, companySimilarity, closestCompany, prepareCompanySearch, diffRecord, patchFor, guessType, distinctValues, asDate,
   type ExistingMode, type RecordDiff, type NewField, type FieldType, type Column, type CompanyFoundBy, type ContactFoundBy,
 } from "../sales/extras/dealImportEngine";
 import "./ContactImport.css";
@@ -111,6 +111,8 @@ const CT_EXTRA = ["phone_ext", "landline", "landline_ext"] as const;
 const NUMERIC_TEXT = ["phone", "phone_ext", "landline", "landline_ext", "postal_code", "addr_number"];
 /** Targets more than one column may feed (joined). */
 const MULTI_OK = new Set(["contact.notes", "company.notes", "contact.visible_to", "company.visible_to", "company.relationship"]);
+/** Fields the automatic mapping may feed from two columns, and how it merges them. */
+const AUTO_MERGE: Record<string, "first" | "longest"> = { "company.vat_number": "first", "company.street": "longest", "contact.street": "longest" };
 /** Built-in targets whose values are matched one by one to a list. */
 const VALUE_BUILTIN = new Set(["contact.language", "contact.country"]);
 const WHO_CT = ["contact.full_name", "contact.first_name", "contact.email"];
@@ -123,7 +125,7 @@ const RAW_SYN: Record<string, string[]> = {
   "contact.email": ["email", "e mail", "mail", "email address", "correo", "correo electronico", "contact email", "email contacto", "email del contacto", "work email"],
   "contact.phone": ["phone", "telephone", "tel", "telefono", "mobile", "movil", "cell", "phone number", "whatsapp", "telefono movil", "mobile phone", "contact phone", "telefono contacto", "telefoon", "mobiel"],
   "contact.position": ["position", "job title", "title", "job", "role", "cargo", "puesto", "rol", "funcion", "functie", "job position", "position title"],
-  "contact.street": ["street", "address", "address line 1", "street address", "direccion", "direccion postal", "calle", "domicilio", "adres", "straat"],
+  "contact.street": ["street", "address", "calle numero", "calle y numero", "street and number", "direccion completa", "address line 1", "street address", "direccion", "direccion postal", "calle", "domicilio", "adres", "straat"],
   "contact.addr_number": ["number", "numero", "street number", "num", "house number", "huisnummer", "numero calle"],
   "contact.postal_code": ["postal code", "postcode", "post code", "zip", "zip code", "codigo postal", "cp", "c p"],
   "contact.city": ["city", "ciudad", "town", "localidad", "poblacion", "municipio", "plaats", "stad"],
@@ -147,14 +149,14 @@ const RAW_SYN: Record<string, string[]> = {
   "company.landline_ext": ["landline extension", "extension fijo", "ext fijo", "extension centralita"],
   "company.source": ["source", "origen", "origin", "fuente", "procedencia", "lead source", "canal", "channel", "como nos conocio", "how did you hear"],
   "company.sector": ["sector", "industry", "industria", "actividad", "sector de actividad", "vertical", "rubro", "cnae", "branche", "sector empresa"],
-  "company.relationship": ["type", "tipo", "relationship", "relacion", "company type", "tipo de empresa", "tipo de cuenta", "account type", "tipo de cliente", "category", "categoria"],
+  "company.relationship": ["type", "tipo", "tags", "tag", "etiquetas", "etiqueta", "labels", "relationship", "relacion", "company type", "tipo de empresa", "tipo de cuenta", "account type", "tipo de cliente", "category", "categoria"],
   "company.billing_name": ["billing contact", "billing name", "contacto de facturacion", "contacto facturacion", "invoice contact", "facturar a", "bill to", "nombre facturacion"],
   "company.billing_email": ["billing email", "invoice email", "email facturacion", "correo facturacion", "email de facturacion", "accounts payable", "email facturas"],
   "company.billing_phone": ["billing phone", "telefono facturacion", "invoice phone", "telefono de facturacion"],
   "company.parent": ["parent company", "parent", "matriz", "empresa matriz", "sociedad matriz", "grupo", "group", "holding", "grupo empresarial", "belongs to", "pertenece a", "casa matriz"],
-  "company.visible_to": ["visible to", "visible para", "visible por", "visibilidad para", "quien puede verlo", "visibility", "visibilidad", "owner", "propietario", "responsable", "assigned to", "asignado a", "comercial", "sales rep", "account owner", "company owner", "who can see", "quien lo ve", "acceso"],
+  "company.visible_to": ["gestor de cuentas", "gestor de la cuenta", "gestor", "account manager", "key account manager", "kam", "visible to", "visible para", "visible por", "visibilidad para", "quien puede verlo", "visibility", "visibilidad", "owner", "propietario", "responsable", "assigned to", "asignado a", "comercial", "sales rep", "account owner", "company owner", "who can see", "quien lo ve", "acceso"],
   "company.email": ["email", "e mail", "mail", "correo", "correo electronico", "general email", "info email"],
-  "company.street": ["street", "address", "address line 1", "street address", "direccion", "calle", "domicilio", "domicilio social", "adres", "straat"],
+  "company.street": ["street", "address", "calle numero", "calle y numero", "street and number", "address and number", "direccion completa", "address line 1", "street address", "direccion", "calle", "domicilio", "domicilio social", "adres", "straat"],
   "company.addr_number": ["number", "numero", "street number", "num", "house number", "huisnummer", "numero calle"],
   "company.addr_details": ["address line 2", "address 2", "address details", "piso", "puerta", "piso puerta", "planta", "floor", "suite", "toevoeging"],
   "company.postal_code": ["postal code", "postcode", "post code", "zip", "zip code", "codigo postal", "cp", "c p"],
@@ -286,19 +288,13 @@ function relationshipFrom(ctx: Ctx, values: string[]): string[] {
   values.flatMap((v) => v.split(/[,;|/]/)).map((x) => x.trim()).filter(Boolean).forEach((x) => {
     const n = normHeader(x);
     if (n === "crm") return;
-    const k = SYS[n] ?? opts.find((o) => normHeader(o.label) === n || normHeader(o.key) === n)?.key ?? cap(x);
+    // "0. Potential Client" is your "Potential Client" when your list has it without the number
+    const bare = n.replace(/^\d+ /, "");
+    const k = SYS[n] ?? opts.find((o) => normHeader(o.label) === n || normHeader(o.key) === n)?.key
+      ?? (bare !== n ? SYS[bare] ?? opts.find((o) => normHeader(o.label).replace(/^\d+ /, "") === bare)?.key : undefined) ?? cap(x);
     if (!out.includes(k)) out.push(k);
   });
   return out;
-}
-/** Give these people access to a company / contact (keeps whoever has it already). */
-async function grantAccess(kind: Ent, id: string, people: string[]) {
-  if (!id || !people.length) return;
-  const table = kind === "company" ? "company_assignees" : "contact_assignees", col = kind === "company" ? "company_id" : "contact_id";
-  const { data } = await supabase.from(table).select("profile_id").eq(col, id);
-  const have = new Set((data ?? []).map((r: any) => r.profile_id as string));
-  const add = [...new Set(people)].filter((x) => !have.has(x));
-  if (add.length) await supabase.from(table).insert(add.map((profile_id) => ({ [col]: id, profile_id })));
 }
 interface Def { label: string; type: CFType; options: string[]; required: boolean; entity: Ent }
 
@@ -370,6 +366,8 @@ interface Counts {
   ctNew: number; ctFound: number; ctSkip: number; ctError: number; ctWarn: number; ctNoCompany: number; ctIncomplete: number; ctLink: number;
   coNew: number; coFound: number; coCheck: number; coSkip: number; orphans: number;
   coExisting: number; coFill: number; coChange: number; ctExisting: number; ctFill: number; ctChange: number;
+  /** Found records the import writes to, and the ones it leaves exactly as they are. */
+  coUpdate: number; coSame: number; ctUpdate: number; ctSame: number;
 }
 interface Plan { companies: CoEntry[]; contacts: CtEntry[]; orphans: Orphan[]; counts: Counts }
 
@@ -417,7 +415,52 @@ function parseRow(ctx: Ctx, st: IState, file: Ent, r: SheetCell[], idx: number):
   return p;
 }
 
-function buildPlan(ctx: Ctx, files: FileData[], st: IState): Plan {
+const hasBilling = (b: Billing | null | undefined) => !!(b && (b.name || b.email || b.phone));
+/** What a company already in the CRM gets from the file: fields, new types, billing (null = nothing changes). */
+function companyWrite(st: IState, crm: Company, c: CoEntry, custom: Record<string, any>): { set: Record<string, any>; addRel: string[] } | null {
+  const file = { ...c.data };
+  const set: Record<string, any> = { ...(patchFor(st.coExisting, crm, diffRecord(crm, file, custom, (k) => k), file, custom) ?? {}) };
+  if (hasBilling(c.billing) && st.coExisting !== "keep" && (st.coExisting === "replace" || !hasBilling(crm.billing))) {
+    const b = { ...(crm.billing ?? {}), ...c.billing };
+    if (JSON.stringify(b) !== JSON.stringify(crm.billing ?? {})) set.billing = b;
+  }
+  const tags = crm.relationship ?? [];
+  const addRel = c.rel.filter((r) => !tags.includes(r));
+  return Object.keys(set).length || addRel.length ? { set, addRel } : null;
+}
+/** What a contact already in the CRM gets from the file (null = nothing changes). */
+function contactWrite(st: IState, crm: Contact, c: CtEntry, custom: Record<string, any>): Record<string, any> | null {
+  const file = contactFile(c);
+  return patchFor(st.ctExisting, crm, diffRecord(crm, file, custom, (x) => x), file, custom);
+}
+
+/** Stopped by the person — what was saved stays. */
+class Cancelled extends Error { constructor() { super("Import stopped"); } }
+/** Gives the page its turn (not throttled in a background tab, unlike setTimeout). */
+const breathe = () => new Promise<void>((r) => { const ch = new MessageChannel(); ch.port1.onmessage = () => { ch.port1.close(); r(); }; ch.port2.postMessage(0); });
+type PlanStep = (done: number, total: number, label: string) => void;
+/** Counts a long loop and hands the page back every ~25 ms, so nothing ever freezes. */
+function pacer(onStep?: PlanStep, stop?: () => boolean) {
+  let t = performance.now();
+  return (label: string, total: number) => {
+    let done = 0;
+    return async () => {
+      done++;
+      if (performance.now() - t < 25) return;
+      onStep?.(done, total, label);
+      await breathe();
+      if (stop?.()) throw new Cancelled();
+      t = performance.now();
+    };
+  };
+}
+
+/**
+ * Everything the import will do, worked out ahead (nothing is written). Long files are read
+ * in small slices, so the page stays responsive and shows how far it got.
+ */
+async function buildPlan(ctx: Ctx, files: FileData[], st: IState, onStep?: PlanStep, stop?: () => boolean): Promise<Plan> {
+  const pace = pacer(onStep, stop);
   /* ---- indexes of what's in the CRM ---- */
   const coByVat = new Map<string, Company>(), coByName = new Map<string, Company>(), coByDomain = new Map<string, Company>();
   ctx.companies.forEach((c) => {
@@ -435,7 +478,9 @@ function buildPlan(ctx: Ctx, files: FileData[], st: IState): Plan {
   const crmCt = new Map(ctx.contacts.map((c) => [c.id as string, c]));
 
   /* ---- 1) read every row of both files ---- */
-  const parsed = files.flatMap((f) => f.rows.map((r, idx) => parseRow(ctx, st, f.entity, r, idx)));
+  const nRows = files.reduce((n, f) => n + f.rows.length, 0);
+  const parsed: Parsed[] = [];
+  { const tick = pace("Reading the rows", nRows); for (const f of files) for (let idx = 0; idx < f.rows.length; idx++) { parsed.push(parseRow(ctx, st, f.entity, f.rows[idx], idx)); await tick(); } }
   const one = (p: Parsed, k: string) => p.get[k]?.[0] ?? null;
 
   /* ---- 2) the companies in the files ---- */
@@ -443,7 +488,7 @@ function buildPlan(ctx: Ctx, files: FileData[], st: IState): Plan {
   const keyByVat = new Map<string, string>(), keyByName = new Map<string, string>();
   const mailDomains = new Map<string, Set<string>>();
   const orphans: Orphan[] = [];
-  const rowCoKeys = parsed.map((p) => {
+  const coKeysOf = (p: Parsed): string[] => {
     const data: Partial<Record<CoCol, string>> = {};
     for (const col of CO_DATA) {
       const k = `company.${col}`;
@@ -496,10 +541,14 @@ function buildPlan(ctx: Ctx, files: FileData[], st: IState): Plan {
     const d = domainKey(one(p, "contact.email"));
     if (keys[0] && d) { const s = mailDomains.get(keys[0]) ?? new Set<string>(); s.add(d); mailDomains.set(keys[0], s); }
     return keys;
-  });
+  };
+  const rowCoKeys: string[][] = [];
+  { const tick = pace("Reading the companies", parsed.length); for (const p of parsed) { rowCoKeys.push(coKeysOf(p)); await tick(); } }
 
   /* ---- 3) companies vs the CRM ---- */
-  companies.forEach((e) => {
+  onStep?.(0, companies.size, "Finding the companies in your CRM");
+  await prepareCompanySearch(ctx.companies, async () => { await breathe(); if (stop?.()) throw new Cancelled(); });
+  const matchCompany = (e: CoEntry) => {
     const vk = vatKey(e.data.vat_number);
     let hit: Company | undefined, by: CompanyFoundBy | undefined, score: number | undefined;
     if (vk && coByVat.get(vk)) { hit = coByVat.get(vk); by = "vat"; }
@@ -528,11 +577,12 @@ function buildPlan(ctx: Ctx, files: FileData[], st: IState): Plan {
     else if (!e.suggest && best && best.s >= 0.72) e.suggest = { id: best.c.id!, name: best.c.name, score: best.s, why: `${Math.round(best.s * 100)}% alike` };
     const ch = st.companyChoice[e.key];
     e.ref = ch === "skip" ? null : ch?.startsWith("crm:") ? ch : ch === "create" ? `new:${e.key}` : e.found ?? (e.fileRows.length || st.createCompanies ? `new:${e.key}` : null);
-  });
+  };
+  { const tick = pace("Finding the companies in your CRM", companies.size); for (const e of companies.values()) { matchCompany(e); await tick(); } }
 
   /* ---- 4) the contacts in the files ---- */
   const contacts = new Map<string, CtEntry>();
-  parsed.forEach((p, i) => {
+  const readContact = (p: Parsed, i: number) => {
     const keys = rowCoKeys[i];
     let first = one(p, "contact.first_name"), last = one(p, "contact.last_name");
     const full = one(p, "contact.full_name");
@@ -601,10 +651,11 @@ function buildPlan(ctx: Ctx, files: FileData[], st: IState): Plan {
     e.rows.push({ file: p.file, idx: p.idx });
     e.issues.push(...p.issues);
     contacts.set(key, e);
-  });
+  };
+  { const tick = pace("Reading the contacts", parsed.length); for (let i = 0; i < parsed.length; i++) { readContact(parsed[i], i); await tick(); } }
 
   /* ---- 5) contacts vs the CRM, their companies, what happens ---- */
-  contacts.forEach((e) => {
+  const matchContact = (e: CtEntry) => {
     if (e.profile.postal_code && /^\d{4}$/.test(e.profile.postal_code) && e.profile.country === "ES") e.profile.postal_code = `0${e.profile.postal_code}`;
     if (!e.coKeys.length && st.companyFromDomain) { const d = domainKey(e.email); const hit = d ? coByDomain.get(d) : undefined; if (hit) e.domainCo = hit.id!; }
     const ov = st.contactCompany[e.key];
@@ -653,22 +704,33 @@ function buildPlan(ctx: Ctx, files: FileData[], st: IState): Plan {
     }
     e.diff = crm ? diffRecord(crm, contactFile(e), planCustom(e.custom), fieldLabel(ctx, st, "contact")) : null;
     e.issues = [...new Set(e.issues)];
-  });
+  };
+  { const tick = pace("Finding the contacts in your CRM", contacts.size); for (const e of contacts.values()) { matchContact(e); await tick(); } }
 
   /* ---- 6) which companies are used, and what the file changes in the CRM ones ---- */
   const going = [...contacts.values()].filter((c) => c.status === "new" || c.status === "found");
   const refUsed = new Set(going.flatMap((c) => c.coRefs));
-  companies.forEach((e) => {
+  let coUpdate = 0, coSame = 0;
+  const finishCompany = (e: CoEntry) => {
     e.used = !!e.ref && (e.fileRows.length > 0 || refUsed.has(e.ref));
     const crm = e.ref?.startsWith("crm:") ? crmCo.get(e.ref.slice(4)) : null;
     e.diff = crm ? diffRecord(crm, { ...e.data }, planCustom(e.custom), fieldLabel(ctx, st, "company")) : null;
+    if (crm && e.used) { if (companyWrite(st, crm, e, planCustom(e.custom))) coUpdate++; else coSame++; }
     // a new company that misses a required built-in field (Settings › Companies page › Required fields) is flagged
     if (e.used && e.ref?.startsWith("new:")) {
       const gap = missingFixed("company", { ...e.data, billing: e.billing });
       if (gap.length) e.issues.push(`Required field${gap.length === 1 ? "" : "s"} empty: ${gap.join(", ")}`);
     }
     e.issues = [...new Set(e.issues)];
-  });
+  };
+  { const tick = pace("Comparing with your CRM", companies.size); for (const e of companies.values()) { finishCompany(e); await tick(); } }
+  let ctUpdate = 0, ctSame = 0;
+  for (const c of going) {
+    const crm = c.status === "found" && c.ref ? crmCt.get(c.ref.slice(4)) : null;
+    if (crm) { if (contactWrite(st, crm, c, planCustom(c.custom)) || c.newLinks.length) ctUpdate++; else ctSame++; }
+  }
+  onStep?.(1, 1, "Sorting");
+  await breathe();
 
   const toCheck = (c: CoEntry) => c.used && (c.foundBy === "similar" && c.ref === c.found || (!!c.suggest && !!c.ref?.startsWith("new:")));
   const companyList = [...companies.values()].sort((a, b) => Number(toCheck(b)) - Number(toCheck(a)) || (a.found ? 1 : 0) - (b.found ? 1 : 0) || (b.contacts + b.fileRows.length) - (a.contacts + a.fileRows.length));
@@ -686,7 +748,7 @@ function buildPlan(ctx: Ctx, files: FileData[], st: IState): Plan {
       ctIncomplete: going.filter((c) => c.incomplete.length).length, ctLink: going.filter((c) => c.status === "found" && c.newLinks.length).length,
       coNew: usedCo.filter((c) => c.ref?.startsWith("new:")).length, coFound: usedCo.filter((c) => c.ref?.startsWith("crm:")).length,
       coCheck: companyList.filter(toCheck).length, coSkip: companyList.filter((c) => !c.ref && c.fileRows.length).length, orphans: orphans.length,
-      coExisting: coCrm.length, coFill: sum(coCrm, "fill"), coChange: sum(coCrm, "change"),
+      coExisting: coCrm.length, coFill: sum(coCrm, "fill"), coChange: sum(coCrm, "change"), coUpdate, coSame, ctUpdate, ctSame,
       ctExisting: ctCrm.length, ctFill: sum(ctCrm, "fill"), ctChange: sum(ctCrm, "change"),
     },
   };
@@ -701,44 +763,217 @@ function fieldLabel(ctx: Ctx, st: IState, entity: Ent) {
 
 /* ═══════════════════════════ running it ═══════════════════════════ */
 
-interface Result { ctCreated: number; ctUpdated: number; ctLinked: number; coCreated: number; coUpdated: number; newFields: number; failed: { row: number; reason: string }[] }
+interface Result {
+  ctCreated: number; ctUpdated: number; ctLinked: number; coCreated: number; coUpdated: number; newFields: number;
+  /** Found in the CRM and left exactly as they were. */
+  coSame: number; ctSame: number;
+  failed: { row: number; reason: string }[];
+  /** Stopped before the end (what was saved stays; running it again carries on). */
+  cancelled: boolean;
+}
+const emptyResult = (): Result => ({ ctCreated: 0, ctUpdated: 0, ctLinked: 0, coCreated: 0, coUpdated: 0, newFields: 0, coSame: 0, ctSame: 0, failed: [], cancelled: false });
 
-async function runImport(ctx: Ctx, st: IState, files: FileData[], plan: Plan, names: Record<Ent, string>, reportFile: Ent,
-  onProgress: (p: { done: number; total: number; phase: string }) => void): Promise<Result> {
-  const res: Result = { ctCreated: 0, ctUpdated: 0, ctLinked: 0, coCreated: 0, coUpdated: 0, newFields: 0, failed: [] };
-  const offsetOf = (e: Ent) => files.find((f) => f.entity === e)?.offset ?? 2;
-  const rowOf = (rows: RowRef[]) => { const r = rows.find((x) => x.file === reportFile); return r ? r.idx + offsetOf(reportFile) : 0; };
+/** How far the import got: the current step, its count, and a connection problem it's waiting on. */
+interface Progress { done: number; total: number; phase: string; step: number; steps: number; t0: number; problem?: string | null }
+/** Pause / resume / stop, shared by the import and its screen. */
+interface RunCtl { paused: boolean; cancelled: boolean }
 
-  /* 1) new fields, and new options on existing choice lists */
-  const used = new Set(files.flatMap((f) => Object.values(st.maps[f.entity]).filter(Boolean)));
-  /** Choices a multiple-choice column brings that the field doesn't list yet. */
-  const multiExtra = (t: string, base: string[]) => {
-    const add: string[] = [];
-    for (const f of files) for (const [colS, tt] of Object.entries(st.maps[f.entity])) {
-      if (tt !== t) continue;
-      f.columns.find((c) => c.i === +colS)?.values.forEach((v) => splitChoices(cellText(v)).forEach((x) => {
-        if (!optionMatch(base, x) && !add.some((o) => normHeader(o) === normHeader(x))) add.push(x);
-      }));
-    }
-    return add;
+/* ─────────── writing in bulk ─────────── */
+
+const BATCH = 500;
+const chunk = <T,>(xs: T[], n: number): T[][] => Array.from({ length: Math.ceil(xs.length / n) }, (_, i) => xs.slice(i * n, i * n + n));
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const newId = () => (typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID()
+  : "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (c) => (+c ^ (Math.random() * 16) >> (+c / 4)).toString(16)));
+type Res = { error: any; status?: number; data?: any };
+const errText = (e: any) => String(e?.message ?? e ?? "Failed");
+/** A hiccup worth trying again (no connection, timeout, server busy) — not a problem with the data. */
+function transient(r: Res): boolean {
+  if (!r.error) return false;
+  const code = String(r.error.code ?? ""), st = r.status ?? 0;
+  if (/^(08|53|57)/.test(code) || /failed to fetch|network|timeout|timed out|load failed|aborted|ECONN|gateway|unavailable/i.test(errText(r.error))) return true;
+  return st >= 502 || st === 429 || st === 408 || (!code && (st === 0 || st === 500));
+}
+/** The row was saved by an earlier try whose answer got lost (same id). */
+const alreadyThere = (e: any) => String(e?.code ?? "") === "23505" && /_pkey/i.test(errText(e));
+const missingFn = (e: any) => /PGRST202|42883|could not find the function/i.test(`${e?.code ?? ""} ${errText(e)}`);
+
+/** Runs `fn` over the items, n at a time. */
+async function pool<T>(items: T[], n: number, fn: (x: T) => Promise<void>) {
+  let i = 0;
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => { while (i < items.length) await fn(items[i++]); }));
+}
+
+/**
+ * The writer of one import run: every request goes through `send` (paused / stopped from the
+ * screen, tried again after a hiccup, and — when the connection stays down — paused until
+ * the person presses Retry).
+ */
+function makeWriter(ctl: RunCtl, onProblem: (m: string | null) => void) {
+  const gate = async () => {
+    while (ctl.paused && !ctl.cancelled) await sleep(200);
+    if (ctl.cancelled) throw new Cancelled();
   };
-  const extraOptions = (t: string, base: string[]) => {
-    const add: string[] = [];
-    for (const f of files) for (const [colS, tt] of Object.entries(st.maps[f.entity])) {
-      if (tt !== t) continue;
-      f.columns.find((c) => c.i === +colS)?.values.forEach((v) => {
-        const txt = cellText(v).trim();
-        if (txt && choiceFor(ctx, st, t, txt).choice === "__new" && ![...base, ...add].some((o) => normHeader(o) === normHeader(txt))) add.push(txt);
+  const send = async (fn: () => PromiseLike<Res>): Promise<Res> => {
+    for (let attempt = 0; ; attempt++) {
+      await gate();
+      let r: Res;
+      try { r = await fn(); } catch (e: any) { r = { error: { message: errText(e) }, status: 0 }; }
+      if (!transient(r)) { if (attempt) onProblem(null); return r; }
+      if (attempt < 3) { await sleep([1000, 3000, 8000][attempt]); continue; }
+      // still down: wait for Retry (or Cancel)
+      ctl.paused = true;
+      onProblem(`No answer from the database (${errText(r.error)}).`);
+      attempt = -1;
+    }
+  };
+  /** Saves new rows 500 per request. Ids are made here, so a retried request never doubles a row; a batch the database refuses is sent row by row to find the bad ones. */
+  const insertMany = async (table: string, items: { row: Record<string, any>; extra: Record<string, any> }[], noExtra: { on: boolean },
+    onRow: (i: number, err: string | null) => void, onBatch: (n: number) => void) => {
+    const body = (it: { row: Record<string, any>; extra: Record<string, any> }) => (noExtra.on ? it.row : { ...it.row, ...it.extra });
+    const idx = items.map((_, i) => i);
+    for (const part of chunk(idx, BATCH)) {
+      const ins = () => send(() => supabase.from(table).insert(part.map((i) => body(items[i])), { defaultToNull: false }) as any);
+      let r = await ins();
+      // the database hasn't had the CRM upgrade: save what it knows
+      if (r.error && !noExtra.on && missingColumn(errText(r.error))) { noExtra.on = true; r = await ins(); }
+      if (!r.error) part.forEach((i) => onRow(i, null));
+      else {
+        await pool(part, 6, async (i) => {
+          let x = await send(() => supabase.from(table).insert(body(items[i])) as any);
+          if (x.error && !noExtra.on && missingColumn(errText(x.error))) { noExtra.on = true; x = await send(() => supabase.from(table).insert(body(items[i])) as any); }
+          onRow(i, !x.error || alreadyThere(x.error) ? null : friendly(errText(x.error)));
+        });
+      }
+      onBatch(part.length);
+    }
+  };
+  /** Changes rows already in the CRM: 200 per request with import_update_rows (40_import_companies.sql), 6 at a time without it. */
+  let rpcOk = true;
+  const updateMany = async (table: "companies" | "contacts", items: { id: string; set: Record<string, any>; addRel?: string[]; rel?: string[] }[],
+    onRow: (i: number, err: string | null) => void, onBatch: (n: number) => void) => {
+    const idx = items.map((_, i) => i);
+    for (const part of chunk(idx, 200)) {
+      if (rpcOk) {
+        const r = await send(() => supabase.rpc("import_update_rows", { p_table: table, p_rows: part.map((i) => ({ id: items[i].id, set: items[i].set, add_relationship: items[i].addRel ?? [] })) }) as any);
+        if (!r.error) {
+          const bad = new Map<string, string>(((r.data?.errors ?? []) as any[]).map((e) => [String(e.id), String(e.error)]));
+          part.forEach((i) => onRow(i, bad.has(items[i].id) ? friendly(bad.get(items[i].id)!) : null));
+          onBatch(part.length);
+          continue;
+        }
+        if (missingFn(r.error)) rpcOk = false;
+        else { part.forEach((i) => onRow(i, friendly(errText(r.error)))); onBatch(part.length); continue; }
+      }
+      await pool(part, 6, async (i) => {
+        const it = items[i];
+        let set = { ...it.set, ...(it.addRel?.length && it.rel ? { relationship: it.rel } : {}) };
+        let x = await send(() => supabase.from(table).update(set).eq("id", it.id) as any);
+        if (x.error && missingColumn(errText(x.error))) {
+          set = Object.fromEntries(Object.entries(set).filter(([k]) => !UPGRADE_COLS.has(k)));
+          x = Object.keys(set).length ? await send(() => supabase.from(table).update(set).eq("id", it.id) as any) : { error: null };
+        }
+        onRow(i, x.error ? friendly(errText(x.error)) : null);
+      });
+      onBatch(part.length);
+    }
+  };
+  /** Gives people access (keeps whoever has it already): one look-up and one insert per 300 records. */
+  const grantMany = async (kind: Ent, items: { id: string; people: string[] }[], onBatch: (n: number) => void) => {
+    const table = kind === "company" ? "company_assignees" : "contact_assignees", col = kind === "company" ? "company_id" : "contact_id";
+    for (const part of chunk(items.filter((x) => x.id && x.people.length), 300)) {
+      const r = await send(() => supabase.from(table).select(`profile_id, ${col}`).in(col, part.map((x) => x.id)) as any);
+      const have = new Set(((r.data ?? []) as any[]).map((x) => `${x[col]}|${x.profile_id}`));
+      const add = part.flatMap((x) => [...new Set(x.people)].filter((pid) => !have.has(`${x.id}|${pid}`)).map((profile_id) => ({ [col]: x.id, profile_id })));
+      for (const rows of chunk(add, 1000)) {
+        const w = await send(() => supabase.from(table).insert(rows) as any);
+        if (w.error) await pool(rows, 6, async (row) => { await send(() => supabase.from(table).insert(row) as any); });
+      }
+      onBatch(part.length);
+    }
+  };
+  /** Links contacts to companies, 1000 links per request (a link that's already there is skipped). */
+  const linkMany = async (links: { company_id: string; contact_id: string }[]) => {
+    const failed = new Set<string>();
+    for (const rows of chunk(links, 1000)) {
+      const w = await send(() => supabase.from("company_contacts").insert(rows) as any);
+      if (w.error) await pool(rows, 6, async (row) => {
+        const x = await send(() => supabase.from("company_contacts").insert(row) as any);
+        if (x.error && !/duplicate|unique|23505/i.test(`${x.error.code ?? ""} ${errText(x.error)}`)) failed.add(row.contact_id);
       });
     }
-    return add;
+    return failed;
   };
-  const tmpIds = new Map<string, string>();
-  const usedNew = st.newFields.filter((n) => used.has(`new:${n.tmp}`));
-  if (usedNew.length) {
-    onProgress({ done: 0, total: usedNew.length, phase: "Creating fields…" });
+  return { send, gate, insertMany, updateMany, grantMany, linkMany };
+}
+/** Columns added by the CRM upgrade: left out when the database doesn't have them yet. */
+const UPGRADE_COLS = new Set(["phone_ext", "landline", "landline_ext", "sector", "source", "relationship", "billing", "parent_id", "linkedin", "province", "emails"]);
+const friendly = (m: string) => (/row-level security|42501|permission denied/i.test(m) ? "You don't have permission to change this record." : /above itself in the group|own parent company/i.test(m) ? "That company is already below this one in the group." : m);
+
+async function runImport(ctx: Ctx, st: IState, files: FileData[], plan: Plan, names: Record<Ent, string>, reportFile: Ent,
+  onProgress: (p: Progress) => void, ctl: RunCtl): Promise<Result> {
+  const res = emptyResult();
+  const offsetOf = (e: Ent) => files.find((f) => f.entity === e)?.offset ?? 2;
+  const rowOf = (rows: RowRef[]) => { const r = rows.find((x) => x.file === reportFile); return r ? r.idx + offsetOf(reportFile) : 0; };
+  const coRow = (c: CoEntry) => (reportFile === "company" && c.fileRows.length ? c.fileRows[0] + offsetOf("company") : 0);
+  const crmCo = new Map(ctx.companies.map((c) => [c.id as string, c]));
+  const crmCt = new Map(ctx.contacts.map((c) => [c.id as string, c]));
+  const everyone = (xs: string[]) => [...new Set([...xs, ...st.visibleAll])];
+
+  /* what there is to do, step by step (only the steps with work count) */
+  const usedCos = plan.companies.filter((c) => c.used && c.ref);
+  const coTodo = usedCos.filter((c) => c.ref === `new:${c.key}`);
+  const coFound = usedCos.filter((c) => c.ref!.startsWith("crm:") && crmCo.has(c.ref!.slice(4)));
+  const withParent = usedCos.filter((c) => c.parentName);
+  const ctTodo = plan.contacts.filter((c) => c.status === "new");
+  const ctFound = plan.contacts.filter((c) => c.status === "found" && c.ref && crmCt.has(c.ref.slice(4)));
+  const labels = ["Preparing fields and lists", coTodo.length && "Creating companies", coFound.length && "Updating companies", withParent.length && "Grouping companies",
+    ctTodo.length && "Creating contacts", ctFound.length && "Updating contacts", "Giving access"].filter(Boolean) as string[];
+  let step = 0, cur: Progress = { done: 0, total: 0, phase: labels[0], step: 1, steps: labels.length, t0: Date.now(), problem: null };
+  const begin = (label: string, total: number) => { step = labels.indexOf(label) + 1; cur = { done: 0, total, phase: label, step, steps: labels.length, t0: Date.now(), problem: cur.problem }; onProgress(cur); };
+  const advance = (n: number) => { cur = { ...cur, done: Math.min(cur.total, cur.done + n) }; onProgress(cur); };
+  const w = makeWriter(ctl, (m) => { cur = { ...cur, problem: m }; onProgress(cur); });
+  const tick = pacer(undefined, () => ctl.cancelled);
+
+  let coBatchId: string | null = null, ctBatchId: string | null = null;
+  try {
+    /* 1) new fields, and new options on existing choice lists */
+    const used = new Set(files.flatMap((f) => Object.values(st.maps[f.entity]).filter(Boolean)));
+    /** Choices a multiple-choice column brings that the field doesn't list yet. */
+    const multiExtra = (t: string, base: string[]) => {
+      const add: string[] = [];
+      for (const f of files) for (const [colS, tt] of Object.entries(st.maps[f.entity])) {
+        if (tt !== t) continue;
+        f.columns.find((c) => c.i === +colS)?.values.forEach((v) => splitChoices(cellText(v)).forEach((x) => {
+          if (!optionMatch(base, x) && !add.some((o) => normHeader(o) === normHeader(x))) add.push(x);
+        }));
+      }
+      return add;
+    };
+    const extraOptions = (t: string, base: string[]) => {
+      const add: string[] = [];
+      for (const f of files) for (const [colS, tt] of Object.entries(st.maps[f.entity])) {
+        if (tt !== t) continue;
+        f.columns.find((c) => c.i === +colS)?.values.forEach((v) => {
+          const txt = cellText(v).trim();
+          if (txt && choiceFor(ctx, st, t, txt).choice === "__new" && ![...base, ...add].some((o) => normHeader(o) === normHeader(txt))) add.push(txt);
+        });
+      }
+      return add;
+    };
+    const tmpIds = new Map<string, string>();
+    const usedNew = st.newFields.filter((n) => used.has(`new:${n.tmp}`));
+    const knownSectors = sectorOptions(ctx.options ?? []);
+    const newSectors = [...new Set(usedCos.map((c) => c.data.sector).filter((s): s is string => !!s && !knownSectors.includes(s)))];
+    const knownSources = sourceOptions(ctx.options ?? []);
+    const newSources = [...new Set(usedCos.map((c) => c.data.source).filter((x): x is string => !!x && !knownSources.includes(x)))];
+    const knownTypes = relationshipOptions(ctx.options ?? []).map((o) => o.key);
+    const newTypes = [...new Set(usedCos.flatMap((c) => c.rel).filter((r) => !knownTypes.includes(r)))];
+    const optionFields = [...used].filter((t) => /^(ctcustom|cocustom):/.test(t));
+    begin(labels[0], usedNew.length + optionFields.length + newSectors.length + newSources.length + newTypes.length);
     const sortBase = { contact: ctx.ctFields.length, company: ctx.coFields.length };
     for (const [k, n] of usedNew.entries()) {
+      await w.gate();
       const entity = n.entity as Ent;
       const options = n.type === "select" ? [...n.options, ...extraOptions(`new:${n.tmp}`, n.options)] : [];
       const input = { label: n.label.trim(), type: n.type, required: false, options, sort: sortBase[entity] + k };
@@ -747,7 +982,7 @@ async function runImport(ctx: Ctx, st: IState, files: FileData[], plan: Plan, na
         if (f?.id) tmpIds.set(n.tmp, f.id);
       } catch { /* looked up below */ }
       if (tmpIds.has(n.tmp)) res.newFields++;
-      onProgress({ done: k + 1, total: usedNew.length, phase: "Creating fields…" });
+      advance(1);
     }
     const missing = usedNew.filter((n) => !tmpIds.has(n.tmp));
     if (missing.length) {
@@ -757,150 +992,160 @@ async function runImport(ctx: Ctx, st: IState, files: FileData[], plan: Plan, na
         if (f) { tmpIds.set(n.tmp, f.id); res.newFields++; }
       });
     }
-  }
-  for (const t of used) {
-    if (!/^(ctcustom|cocustom):/.test(t)) continue;
-    const def = defOf(ctx, st, t);
-    if (!def || (def.type !== "select" && def.type !== "multiselect")) continue;
-    const add = def.type === "multiselect" ? multiExtra(t, def.options) : extraOptions(t, def.options);
-    if (!add.length) continue;
-    const id = t.slice(t.indexOf(":") + 1);
-    if (def.entity === "company") await updateCompanyField(id, { options: [...def.options, ...add] });
-    else await updateContactField(id, { options: [...def.options, ...add] });
-  }
-  const resolveCustom = (custom: Record<string, any>) => {
-    const out: Record<string, any> = {};
-    for (const [k, v] of Object.entries(custom)) { const id = k.startsWith("new:") ? tmpIds.get(k.slice(4)) : k.slice(k.indexOf(":") + 1); if (id) out[id] = v; }
-    return out;
-  };
-
-  /* 1b) sectors and company types the file brings that aren't on your lists yet */
-  const usedCos = plan.companies.filter((c) => c.used && c.ref);
-  const knownSectors = sectorOptions(ctx.options ?? []);
-  const newSectors = [...new Set(usedCos.map((c) => c.data.sector).filter((s): s is string => !!s && !knownSectors.includes(s)))];
-  const knownTypes = relationshipOptions(ctx.options ?? []).map((o) => o.key);
-  const newTypes = [...new Set(usedCos.flatMap((c) => c.rel).filter((r) => !knownTypes.includes(r)))];
-  for (const s of newSectors) await addCrmOption("sector", s).catch(() => null);
-  const knownSources = sourceOptions(ctx.options ?? []);
-  for (const s of [...new Set(usedCos.map((c) => (c.data as any).source).filter((x): x is string => !!x && !knownSources.includes(x)))]) await addCrmOption("source", s).catch(() => null);
-  for (const r of newTypes) await addCrmOption("relationship", r).catch(() => null);
-  const hasBilling = (b: Billing) => !!(b.name || b.email || b.phone);
-
-  /* 2) companies: create the new ones, update the found ones */
-  const coIds = new Map<string, string>();
-  let coBatchP: Promise<string | null> | null = null;
-  const coBatch = () => (coBatchP ??= startImportBatch("company", names.company || `${names.contact} (companies named in the contacts)`));
-  const coTodo = plan.companies.filter((c) => c.used && c.ref === `new:${c.key}`);
-  if (coTodo.length) {
-    onProgress({ done: 0, total: coTodo.length, phase: "Creating companies…" });
-    let k = 0;
-    for (const c of coTodo) {
-      const nm = splitCompanyNames(c.name, (c.data as any).legal_name);
-      const row: any = {
-        ...c.data, name: nm.name, legal_name: nm.legal, custom: resolveCustom(c.custom), import_batch_id: await coBatch(),
-        ...(c.rel.length ? { relationship: c.rel } : {}), ...(hasBilling(c.billing) ? { billing: c.billing } : {}),
-      };
-      const e = await saveCompany(row as Company).catch((x: any) => x?.message ?? "Failed");
-      if (!e && row.id) { coIds.set(c.key, row.id); res.coCreated++; await grantAccess("company", row.id, [...c.visibleTo, ...st.visibleAll]).catch(() => {}); }
-      else res.failed.push({ row: reportFile === "company" && c.fileRows.length ? c.fileRows[0] + offsetOf("company") : 0, reason: `Company “${c.name}”: ${e}` });
-      onProgress({ done: ++k, total: coTodo.length, phase: "Creating companies…" });
-    }
-  }
-  if (st.coExisting !== "keep") {
-    for (const c of plan.companies.filter((x) => x.used && x.ref?.startsWith("crm:") && x.diff)) {
-      const crm = ctx.companies.find((x) => x.id === c.ref!.slice(4));
-      if (!crm) continue;
-      const file = { ...c.data }, cust = resolveCustom(c.custom);
-      const p = patchFor(st.coExisting, crm, diffRecord(crm, file, cust, (k) => k), file, cust);
-      if (!p) continue;
-      const { error } = await supabase.from("companies").update(p).eq("id", crm.id!);
-      if (!error) res.coUpdated++; else res.failed.push({ row: 0, reason: `Company “${crm.name}”: ${error.message}` });
-    }
-  }
-  // found companies: add the types, billing details (when they have none or you overwrite), access
-  for (const c of plan.companies.filter((x) => x.used && x.ref?.startsWith("crm:"))) {
-    const crm = ctx.companies.find((x) => x.id === c.ref!.slice(4));
-    if (!crm) continue;
-    const extra: Record<string, any> = {};
-    const tags = crm.relationship ?? [];
-    if (c.rel.some((r) => !tags.includes(r))) extra.relationship = [...new Set([...tags, ...c.rel])];
-    if (hasBilling(c.billing) && st.coExisting !== "keep" && (st.coExisting === "replace" || !hasBilling(crm.billing ?? {}))) extra.billing = { ...(crm.billing ?? {}), ...c.billing };
-    if (Object.keys(extra).length) await supabase.from("companies").update(extra).eq("id", crm.id!);
-    await grantAccess("company", crm.id!, [...c.visibleTo, ...st.visibleAll]).catch(() => {});
-  }
-  const coId = (ref: string) => (ref.startsWith("crm:") ? ref.slice(4) : coIds.get(ref.slice(4)) ?? null);
-
-  /* 2b) groups: put each company under the one the file names (in the CRM, or created just now) */
-  const withParent = plan.companies.filter((c) => c.used && c.ref && c.parentName);
-  if (withParent.length) {
-    const fileByName = new Map<string, string>();
-    plan.companies.forEach((c) => { const id = c.ref ? coId(c.ref) : null; if (id) [c.name, c.data.legal_name].forEach((n) => { const k = nameKey(n); if (k && !fileByName.has(k)) fileByName.set(k, id); }); });
-    for (const c of withParent) {
-      const childId = coId(c.ref!);
-      const pk = nameKey(c.parentName), pv = vatKey(c.parentName);
-      const parentId = fileByName.get(pk)
-        ?? ctx.companies.find((x) => (pv && vatKey(x.vat_number) === pv) || nameKey(x.name) === pk || (x.legal_name && nameKey(x.legal_name) === pk))?.id
-        ?? null;
-      const crm = c.ref!.startsWith("crm:") ? ctx.companies.find((x) => x.id === childId) : null;
-      if (!childId) continue;
-      if (!parentId) { res.failed.push({ row: reportFile === "company" && c.fileRows.length ? c.fileRows[0] + offsetOf("company") : 0, reason: `Company “${c.name}”: parent company “${c.parentName}” not found — left without a group` }); continue; }
-      if (parentId === childId || (crm?.parent_id && st.coExisting !== "replace")) continue;
-      const ge = await setCompanyParent(childId, parentId);
-      if (ge) res.failed.push({ row: 0, reason: `Company “${c.name}”: ${ge}` });
-    }
-  }
-
-  /* 3) contacts: create (4 at a time), then update and link the found ones */
-  const todo = plan.contacts.filter((c) => c.status === "new");
-  const ctBatch = todo.length ? await startImportBatch("contact", names.contact || `${names.company} (contacts in the companies file)`) : null;
-  if (todo.length) {
-    onProgress({ done: 0, total: todo.length, phase: "Importing contacts…" });
-    let cursor = 0, done = 0;
-    const worker = async () => {
-      while (cursor < todo.length) {
-        const c = todo[cursor++];
-        try {
-          const row: any = {
-            first_name: c.first_name, last_name: c.last_name, email: c.email, phone: c.phone, position: c.position, is_billing: !!c.is_billing, notes: c.notes,
-            ...Object.fromEntries(PROF.map((k) => [k, c.profile[k] || null])), ...c.extra,
-            custom: resolveCustom(c.custom), companyIds: [...new Set(c.coRefs.map(coId).filter((x): x is string => !!x))], import_batch_id: ctBatch,
-          };
-          const e = await saveContact(row as Contact).catch((x: any) => x?.message ?? "Failed");
-          if (e) res.failed.push({ row: rowOf(c.rows), reason: `Contact “${fullName(c)}”: ${e}` });
-          else { res.ctCreated++; await grantAccess("contact", row.id, [...c.visibleTo, ...st.visibleAll]).catch(() => {}); }
-        } catch (x: any) { res.failed.push({ row: rowOf(c.rows), reason: `Contact “${fullName(c)}”: ${x?.message ?? "Failed"}` }); }
-        onProgress({ done: ++done, total: todo.length, phase: "Importing contacts…" });
+    for (const t of optionFields) {
+      await w.gate();
+      const def = defOf(ctx, st, t);
+      if (def && (def.type === "select" || def.type === "multiselect")) {
+        const add = def.type === "multiselect" ? multiExtra(t, def.options) : extraOptions(t, def.options);
+        const id = t.slice(t.indexOf(":") + 1);
+        if (add.length) { if (def.entity === "company") await updateCompanyField(id, { options: [...def.options, ...add] }); else await updateContactField(id, { options: [...def.options, ...add] }); }
       }
+      advance(1);
+    }
+    const resolveCustom = (custom: Record<string, any>) => {
+      const out: Record<string, any> = {};
+      for (const [k, v] of Object.entries(custom)) { const id = k.startsWith("new:") ? tmpIds.get(k.slice(4)) : k.slice(k.indexOf(":") + 1); if (id) out[id] = v; }
+      return out;
     };
-    await Promise.all(Array.from({ length: Math.min(4, todo.length) }, worker));
-  }
-  const found = plan.contacts.filter((c) => c.status === "found");
-  if (found.length) {
-    onProgress({ done: 0, total: found.length, phase: "Updating contacts in the CRM…" });
-    let k = 0;
-    for (const c of found) {
-      const crm = ctx.contacts.find((x) => x.id === c.ref!.slice(4));
-      if (crm && st.ctExisting !== "keep") {
-        const file = contactFile(c), cust = resolveCustom(c.custom);
-        const p = patchFor(st.ctExisting, crm, diffRecord(crm, file, cust, (x) => x), file, cust);
-        if (p) { const { error } = await supabase.from("contacts").update(p).eq("id", crm.id!); if (!error) res.ctUpdated++; else res.failed.push({ row: rowOf(c.rows), reason: `Contact “${fullName(c)}”: ${error.message}` }); }
-      }
-      if (crm) await grantAccess("contact", crm.id!, [...c.visibleTo, ...st.visibleAll]).catch(() => {});
-      if (crm) {
-        const add = [...new Set(c.newLinks.map(coId).filter((x): x is string => !!x && !crm.companyIds.includes(x)))];
-        if (add.length) {
-          const { error } = await supabase.from("company_contacts").insert(add.map((company_id) => ({ company_id, contact_id: crm.id })));
-          if (!error) res.ctLinked++;
-        }
-      }
-      onProgress({ done: ++k, total: found.length, phase: "Updating contacts in the CRM…" });
+    // sectors, sources and company types the file brings that aren't on your lists yet
+    for (const [kind, list] of [["sector", newSectors], ["source", newSources], ["relationship", newTypes]] as const) {
+      for (const x of list) { await w.gate(); await addCrmOption(kind, x).catch(() => null); advance(1); }
     }
+
+    /* 2) companies: create the new ones, 500 per request */
+    const coIds = new Map<string, string>();
+    if (coTodo.length) {
+      begin("Creating companies", coTodo.length);
+      coBatchId = await startImportBatch("company", names.company || `${names.contact} (companies named in the contacts)`);
+      const items: { row: Record<string, any>; extra: Record<string, any> }[] = [];
+      for (const c of coTodo) {
+        const nm = splitCompanyNames(c.name, c.data.legal_name);
+        const obj: any = { ...c.data, name: nm.name, legal_name: nm.legal, custom: resolveCustom(c.custom), ...(c.rel.length ? { relationship: c.rel } : {}), ...(hasBilling(c.billing) ? { billing: c.billing } : {}) };
+        const { row, extra } = companyRow(obj as Company);
+        items.push({ row: { ...row, id: newId(), ...(coBatchId ? { import_batch_id: coBatchId } : {}) }, extra });
+        await tick("", 0)();
+      }
+      await w.insertMany("companies", items, { on: false }, (i, err) => {
+        const c = coTodo[i];
+        if (!err) { coIds.set(c.key, items[i].row.id); res.coCreated++; }
+        else res.failed.push({ row: coRow(c), reason: `Company “${c.name}”: ${err}` });
+      }, advance);
+    }
+    const coId = (ref: string) => (ref.startsWith("crm:") ? ref.slice(4) : coIds.get(ref.slice(4)) ?? null);
+
+    /* 3) companies already in the CRM: fields, types, billing — only what changes */
+    if (coFound.length) {
+      // several file rows can be the same CRM company: one write each, with all they bring
+      const byId = new Map<string, { id: string; set: Record<string, any>; addRel: string[]; rel: string[]; cs: CoEntry[] }>();
+      for (const c of coFound) {
+        const crm = crmCo.get(c.ref!.slice(4))!;
+        const wr = companyWrite(st, crm, c, resolveCustom(c.custom));
+        if (wr) {
+          const prev = byId.get(crm.id!);
+          if (!prev) byId.set(crm.id!, { id: crm.id!, ...wr, rel: [...new Set([...(crm.relationship ?? []), ...wr.addRel])], cs: [c] });
+          else {
+            prev.set = { ...wr.set, ...prev.set, ...(prev.set.custom && wr.set.custom ? { custom: { ...wr.set.custom, ...prev.set.custom } } : {}) };
+            prev.addRel = [...new Set([...prev.addRel, ...wr.addRel])]; prev.rel = [...new Set([...prev.rel, ...wr.addRel])]; prev.cs.push(c);
+          }
+        } else res.coSame++;
+        await tick("", 0)();
+      }
+      const upd = [...byId.values()];
+      begin("Updating companies", upd.length);
+      await w.updateMany("companies", upd, (i, err) => {
+        if (!err) res.coUpdated += upd[i].cs.length; else upd[i].cs.forEach((c) => res.failed.push({ row: coRow(c), reason: `Company “${c.name}”: ${err}` }));
+      }, advance);
+    }
+
+    /* 4) groups: put each company under the one the file names (in the CRM, or created just now) */
+    if (withParent.length) {
+      begin("Grouping companies", withParent.length);
+      const fileByName = new Map<string, string>();
+      plan.companies.forEach((c) => { const id = c.ref ? coId(c.ref) : null; if (id) [c.name, c.data.legal_name].forEach((n) => { const k = nameKey(n); if (k && !fileByName.has(k)) fileByName.set(k, id); }); });
+      const crmByKey = new Map<string, string>();
+      ctx.companies.forEach((x) => { [vatKey(x.vat_number), nameKey(x.name), x.legal_name ? nameKey(x.legal_name) : ""].forEach((k) => { if (k && !crmByKey.has(k)) crmByKey.set(k, x.id!); }); });
+      await pool(withParent, 6, async (c) => {
+        const childId = coId(c.ref!);
+        const parentId = fileByName.get(nameKey(c.parentName)) ?? crmByKey.get(vatKey(c.parentName)) ?? crmByKey.get(nameKey(c.parentName)) ?? null;
+        const crm = c.ref!.startsWith("crm:") && childId ? crmCo.get(childId) : null;
+        if (childId && !parentId) res.failed.push({ row: coRow(c), reason: `Company “${c.name}”: parent company “${c.parentName}” not found — left without a group` });
+        else if (childId && parentId && parentId !== childId && !(crm?.parent_id && st.coExisting !== "replace") && crm?.parent_id !== parentId) {
+          const r = await w.send(() => supabase.from("companies").update({ parent_id: parentId }).eq("id", childId) as any);
+          if (r.error) res.failed.push({ row: coRow(c), reason: `Company “${c.name}”: ${friendly(errText(r.error))}` });
+        }
+        advance(1);
+      });
+    }
+
+    /* 5) contacts: create the new ones (500 per request), then their company links */
+    if (ctTodo.length) {
+      begin("Creating contacts", ctTodo.length);
+      ctBatchId = await startImportBatch("contact", names.contact || `${names.company} (contacts in the companies file)`);
+      const items: { row: Record<string, any>; extra: Record<string, any> }[] = [];
+      for (const c of ctTodo) {
+        const obj: any = {
+          first_name: c.first_name, last_name: c.last_name, email: c.email, phone: c.phone, position: c.position, is_billing: !!c.is_billing, notes: c.notes,
+          ...Object.fromEntries(PROF.map((k) => [k, c.profile[k] || null])), ...c.extra, custom: resolveCustom(c.custom),
+        };
+        const { row, extra } = contactRow(obj as Contact);
+        items.push({ row: { ...row, id: newId(), ...(ctBatchId ? { import_batch_id: ctBatchId } : {}) }, extra });
+        await tick("", 0)();
+      }
+      const made: number[] = [];
+      await w.insertMany("contacts", items, { on: false }, (i, err) => {
+        if (!err) made.push(i); else res.failed.push({ row: rowOf(ctTodo[i].rows), reason: `Contact “${fullName(ctTodo[i])}”: ${err}` });
+      }, advance);
+      const links = made.flatMap((i) => [...new Set(ctTodo[i].coRefs.map(coId).filter((x): x is string => !!x))].map((company_id) => ({ company_id, contact_id: items[i].row.id as string })));
+      const bad = await w.linkMany(links);
+      made.forEach((i) => { if (bad.has(items[i].row.id)) res.failed.push({ row: rowOf(ctTodo[i].rows), reason: `Contact “${fullName(ctTodo[i])}”: created, but not linked to its company` }); else res.ctCreated++; });
+      made.forEach((i) => { (ctTodo[i] as any).__id = items[i].row.id; });
+    }
+
+    /* 6) contacts already in the CRM: what changes, and the companies they join */
+    if (ctFound.length) {
+      const upd: { id: string; set: Record<string, any>; c: CtEntry }[] = [];
+      const links: { company_id: string; contact_id: string }[] = [];
+      const linked = new Set<string>();
+      for (const c of ctFound) {
+        const crm = crmCt.get(c.ref!.slice(4))!;
+        const p = contactWrite(st, crm, c, resolveCustom(c.custom));
+        if (p) upd.push({ id: crm.id!, set: p, c });
+        const add = [...new Set(c.newLinks.map(coId).filter((x): x is string => !!x && !crm.companyIds.includes(x)))];
+        add.forEach((company_id) => links.push({ company_id, contact_id: crm.id! }));
+        if (add.length) linked.add(crm.id!);
+        if (!p && !add.length) res.ctSame++;
+        await tick("", 0)();
+      }
+      begin("Updating contacts", upd.length + links.length);
+      await w.updateMany("contacts", upd, (i, err) => {
+        if (!err) res.ctUpdated++; else res.failed.push({ row: rowOf(upd[i].c.rows), reason: `Contact “${fullName(upd[i].c)}”: ${err}` });
+      }, advance);
+      const bad = await w.linkMany(links);
+      linked.forEach((id) => { if (!bad.has(id)) res.ctLinked++; });
+      advance(links.length);
+    }
+
+    /* 7) who can see what this import brought */
+    const access: { kind: Ent; id: string; people: string[] }[] = [];
+    usedCos.forEach((c) => { const id = coId(c.ref!); const people = everyone(c.visibleTo); if (id && people.length && (c.ref!.startsWith("crm:") || coIds.has(c.key))) access.push({ kind: "company", id, people }); });
+    ctTodo.forEach((c) => { const people = everyone(c.visibleTo); if ((c as any).__id && people.length) access.push({ kind: "contact", id: (c as any).__id, people }); });
+    ctFound.forEach((c) => { const people = everyone(c.visibleTo); if (people.length) access.push({ kind: "contact", id: c.ref!.slice(4), people }); });
+    if (access.length) {
+      begin("Giving access", access.length);
+      await w.grantMany("company", access.filter((a) => a.kind === "company"), advance);
+      await w.grantMany("contact", access.filter((a) => a.kind === "contact"), advance);
+    }
+  } catch (e) {
+    if (!(e instanceof Cancelled)) throw e;
+    res.cancelled = true;
   }
 
-  await finishImportBatch(ctBatch, res.ctCreated, res.ctUpdated);
-  if (coBatchP) await finishImportBatch(await coBatchP, res.coCreated, res.coUpdated);
-  plan.contacts.filter((c) => c.status === "error").forEach((c) => res.failed.push({ row: rowOf(c.rows), reason: `${c.reason ?? "Error"} — ${fullName(c) || c.email || "unnamed"}` }));
-  plan.orphans.filter((o) => o.file === reportFile).forEach((o) => res.failed.push({ row: o.idx + offsetOf(reportFile), reason: o.reason }));
+  await finishImportBatch(ctBatchId, res.ctCreated, res.ctUpdated).catch(() => {});
+  await finishImportBatch(coBatchId, res.coCreated, res.coUpdated).catch(() => {});
+  if (!res.cancelled) {
+    plan.contacts.filter((c) => c.status === "error").forEach((c) => res.failed.push({ row: rowOf(c.rows), reason: `${c.reason ?? "Error"} — ${fullName(c) || c.email || "unnamed"}` }));
+    plan.orphans.filter((o) => o.file === reportFile).forEach((o) => res.failed.push({ row: o.idx + offsetOf(reportFile), reason: o.reason }));
+  }
   res.failed.sort((a, b) => a.row - b.row);
   return res;
 }
@@ -1035,16 +1280,26 @@ export default function ContactImport({ fields: initialFields, onClose, onDone, 
       // your field by name, a built-in field, or your field by a very similar name ("Empleados" → "Nº empleados")
       const near = free.map((x) => ({ ...x, s: labelSim(c.header, x.label) + (x.e === file ? 0.01 : 0) })).sort((a, b) => b.s - a.s)[0];
       const g = (hits.find((x) => x.e === file) ?? hits[0])?.t ?? guesses.get(c.i) ?? (near && near.s >= 0.9 ? near.t : null);
-      if (g && (!used.has(g) || MULTI_OK.has(g))) { m[c.i] = g; used.add(g); } else m[c.i] = "";
+      if (g && (!used.has(g) || MULTI_OK.has(g) || AUTO_MERGE[g])) { m[c.i] = g; used.add(g); } else m[c.i] = "";
     }
     if (used.has("contact.first_name")) for (const k of Object.keys(m)) if (m[+k] === "contact.full_name") m[+k] = "";
     return m;
   };
-  useEffect(() => { if (ctF.sheet && !ctF.touched.current) setSt((s) => ({ ...s, maps: { ...s.maps, contact: autoMap("contact", ctF.columns) } })); }, [ctF.sheet, ctF.columns, ctx.ctFields, ctx.coFields]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (coF.sheet && !coF.touched.current) setSt((s) => ({ ...s, maps: { ...s.maps, company: autoMap("company", coF.columns) } })); }, [coF.sheet, coF.columns, ctx.ctFields, ctx.coFields]); // eslint-disable-line react-hooks/exhaustive-deps
-
   /** Cleaning rules and merges, per file. */
   const [prep, setPrep] = useState<Record<Ent, ImportPrep>>(() => ({ contact: emptyPrep(), company: emptyPrep() }));
+  /** The automatic mapping, and how fields it fed from two columns merge them (VAT: the first; street: the longest, which has the number). */
+  const applyAuto = (file: Ent, columns: Column[]) => {
+    const m = autoMap(file, columns);
+    setSt((s) => ({ ...s, maps: { ...s.maps, [file]: m } }));
+    const merges: Record<string, { order: number[]; mode: "first" | "longest"; sep: string }> = {};
+    for (const [t, mode] of Object.entries(AUTO_MERGE)) {
+      const cols = Object.entries(m).filter(([, x]) => x === t).map(([c]) => +c);
+      if (cols.length > 1) merges[t] = { order: cols, mode, sep: " " };
+    }
+    if (Object.keys(merges).length) setPrep((p) => ({ ...p, [file]: { ...p[file], merges: { ...merges, ...p[file].merges } } }));
+  };
+  useEffect(() => { if (ctF.sheet && !ctF.touched.current) applyAuto("contact", ctF.columns); }, [ctF.sheet, ctF.columns, ctx.ctFields, ctx.coFields]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (coF.sheet && !coF.touched.current) applyAuto("company", coF.columns); }, [coF.sheet, coF.columns, ctx.ctFields, ctx.coFields]); // eslint-disable-line react-hooks/exhaustive-deps
   const resetChoices = (e: Ent) => {
     setSt((s) => ({ ...s, maps: { ...s.maps, [e]: {} }, companyChoice: {}, contactChoice: {}, contactCompany: {} }));
     setPrep((p) => ({ ...p, [e]: emptyPrep() }));
@@ -1151,22 +1406,61 @@ export default function ContactImport({ fields: initialFields, onClose, onDone, 
 
   const fileData = useMemo<FileData[]>(() => (["contact", "company"] as Ent[]).filter(has).map((e) => ({ entity: e, columns: effColumnsOf(e), rows: effOf(e).rows, offset: fileOf(e).offset })),
     [ctF.wb, ctF.columns, ctF.rows, ctF.offset, coF.wb, coF.columns, coF.rows, coF.offset, effCt, effCo]); // eslint-disable-line react-hooks/exhaustive-deps
-  const planNeeded = step === "review" || step === "run";
-  const plan = useMemo(() => (planNeeded ? buildPlan(ctx, fileData, effSt) : null), [planNeeded, ctx, fileData, effSt, reqVer]); // eslint-disable-line react-hooks/exhaustive-deps
+  // the plan is worked out in small slices (a big file never freezes the page); the last one stays on screen while a new one is made
+  const [plan, setPlan] = useState<Plan | null>(null);
+  const [planning, setPlanning] = useState<{ done: number; total: number; label: string } | null>(null);
+  const [planErr, setPlanErr] = useState<string | null>(null);
+  const [reloading, setReloading] = useState(false);
+  useEffect(() => {
+    if (step !== "review" || reloading) return;
+    let stop = false;
+    setPlanning({ done: 0, total: 0, label: "Reading the rows" });
+    const t = setTimeout(() => {
+      buildPlan(ctx, fileData, effSt, (done, total, label) => { if (!stop) setPlanning({ done, total, label }); }, () => stop)
+        .then((p) => { if (!stop) { setPlan(p); setPlanErr(null); setPlanning(null); } })
+        .catch((e) => { if (!stop && !(e instanceof Cancelled)) { setPlanErr(e?.message ?? "Couldn't prepare the import."); setPlanning(null); } });
+    }, 40);
+    return () => { stop = true; clearTimeout(t); };
+  }, [step, reloading, ctx, fileData, effSt, reqVer]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ─────────────── run ─────────────── */
-  const [progress, setProgress] = useState({ done: 0, total: 0, phase: "" });
+  const [progress, setProgress] = useState<Progress>({ done: 0, total: 0, phase: "", step: 0, steps: 0, t0: Date.now() });
   const [result, setResult] = useState<Result | null>(null);
   const [runErr, setRunErr] = useState<string | null>(null);
   const [ranPlan, setRanPlan] = useState<Plan | null>(null);
+  const ctl = useRef<RunCtl>({ paused: false, cancelled: false });
+  const [paused, setPaused] = useState(false);
   const run = async () => {
-    if (!plan) return;
+    if (!plan || planning) return;
+    ctl.current = { paused: false, cancelled: false }; setPaused(false);
     setRanPlan(plan); setStep("run"); setRunErr(null);
-    try { setResult(await runImport(ctx, effSt, fileData, plan, { contact: ctF.fileName, company: coF.fileName }, reportFile, setProgress)); }
-    catch (e: any) { setRunErr(e?.message ?? "The import stopped unexpectedly."); setResult({ ctCreated: 0, ctUpdated: 0, ctLinked: 0, coCreated: 0, coUpdated: 0, newFields: 0, failed: [] }); }
+    setProgress({ done: 0, total: 0, phase: "Preparing fields and lists", step: 1, steps: 1, t0: Date.now() });
+    try { setResult(await runImport(ctx, effSt, fileData, plan, { contact: ctF.fileName, company: coF.fileName }, reportFile, setProgress, ctl.current)); }
+    catch (e: any) { setRunErr(e?.message ?? "The import stopped unexpectedly."); setResult(emptyResult()); }
     setStep("done");
     onDone();
   };
+  const pauseRun = (on: boolean) => { ctl.current.paused = on; setPaused(on); if (!on) setProgress((p) => ({ ...p, problem: null })); };
+  const stopRun = () => { ctl.current.cancelled = true; ctl.current.paused = false; setPaused(false); };
+  // a connection problem pauses the run until Retry
+  useEffect(() => { if (progress.problem) setPaused(true); }, [progress.problem]);
+  /** Reads your CRM again and compares the file once more (after an import, or one that was stopped). */
+  const recheck = async () => {
+    setResult(null); setPlan(null); setReloading(true); setStep("review");
+    setPlanning({ done: 0, total: 0, label: "Reading your CRM again" });
+    const [co, ct, opts, cf] = await Promise.all([listCompanies().catch(() => null), listContacts().catch(() => null), listCrmOptions().catch(() => null), listCompanyFields().catch(() => null)]);
+    if (co) setCompanies(co);
+    if (ct) setContacts(ct);
+    if (opts) setCrmOptions(opts);
+    if (cf) setCoFields(cf);
+    setReloading(false);
+  };
+  const eta = (() => {
+    const p = progress, ms = Date.now() - p.t0;
+    if (!p.total || p.done < 1 || ms < 3000 || p.done >= p.total) return "";
+    const left = (ms / p.done) * (p.total - p.done) / 1000;
+    return left < 50 ? "less than a minute left" : left < 90 * 60 ? `about ${Math.round(left / 60)} min left` : `about ${Math.round(left / 3600)} h left`;
+  })();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || guard.asking || document.querySelector(".sel-pop, .smf-menu, .di-tp-menu")) return;
@@ -1448,11 +1742,24 @@ export default function ContactImport({ fields: initialFields, onClose, onDone, 
           )}
 
           {/* ═════ 3. REVIEW ═════ */}
+          {step === "review" && !plan && (
+            <div className="di-run">
+              {planErr ? <><h3>Couldn't prepare the import</h3><p className="di-err">{planErr}</p></> : <>
+                <div className="di-ring" style={{ ["--p" as string]: planning?.total ? planning.done / planning.total : 0 } as CSSProperties}>
+                  <svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="52" pathLength={100} /><circle cx="60" cy="60" r="52" pathLength={100} className="is-fg" /></svg>
+                  <b>{planning?.total ? Math.round((planning.done / planning.total) * 100) : 0}%</b>
+                </div>
+                <h3>Preparing the import…</h3>
+                <p>{planning?.label ?? "Reading the rows"}{planning?.total ? ` · ${fmtN(planning.done)} of ${fmtN(planning.total)}` : ""} · nothing is saved yet</p>
+              </>}
+            </div>
+          )}
           {step === "review" && plan && (() => {
             const c = plan.counts;
             const ctGoing = c.ctNew + c.ctFound;
             const facts: [string, number, string?][] = [
-              ["new contacts", c.ctNew], ["contacts in the CRM", c.ctFound], ["new companies", c.coNew], ["companies in the CRM", c.coFound],
+              ["new contacts", c.ctNew], ["contacts to update", c.ctUpdate], ["contacts unchanged", c.ctSame, "is-muted"],
+              ["new companies", c.coNew], ["companies to update", c.coUpdate], ["companies unchanged", c.coSame, "is-muted"],
               ["without a company", c.ctNoCompany, "is-muted"], ["missing required fields", c.ctIncomplete, "is-gold"], ["left out", c.ctSkip + c.coSkip, "is-muted"], ["with errors", c.ctError + c.orphans, "is-red"],
             ];
             return (
@@ -1536,21 +1843,28 @@ export default function ContactImport({ fields: initialFields, onClose, onDone, 
                     <svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="52" pathLength={100} /><circle cx="60" cy="60" r="52" pathLength={100} className="is-fg" /></svg>
                     <b>{progress.total ? Math.round((progress.done / progress.total) * 100) : 0}%</b>
                   </div>
-                  <h3>{progress.phase || "Importing…"}</h3>
-                  <p>{fmtN(progress.done)} of {fmtN(progress.total)} · keep this window open</p>
+                  <h3>{progress.phase || "Importing…"}{progress.steps > 1 && <small className="di-run-step"> · step {progress.step} of {progress.steps}</small>}</h3>
+                  <p>{progress.total ? `${fmtN(Math.round(progress.done))} of ${fmtN(progress.total)}` : "Starting…"}{paused ? " · paused" : eta ? ` · ${eta}` : ""} · keep this window open</p>
+                  {progress.problem && <p className="di-err">{progress.problem} Check your connection and press Retry — nothing is lost.</p>}
+                  <div className="di-run-actions">
+                    {paused ? <button className="di-btn is-primary" onClick={() => pauseRun(false)}>{progress.problem ? "Retry" : "Resume"}</button>
+                      : <button className="di-btn is-ghost" onClick={() => pauseRun(true)}>Pause</button>}
+                    <button className="di-btn is-ghost" onClick={stopRun}>Stop</button>
+                  </div>
                 </>
               ) : result && (
                 <>
-                  <span className={`di-done-ico ${result.failed.length || runErr ? "is-partial" : ""}`}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg></span>
-                  <h3>{result.failed.length || runErr ? "Imported with some problems" : "Import complete"}</h3>
+                  <span className={`di-done-ico ${result.failed.length || runErr || result.cancelled ? "is-partial" : ""}`}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg></span>
+                  <h3>{result.cancelled ? "Import stopped" : result.failed.length || runErr ? "Imported with some problems" : "Import complete"}</h3>
+                  {result.cancelled && <p>What was saved stays. Import the same file again whenever you like: what's already in is recognised and only the rest is added.</p>}
                   <div className="di-tiles is-final">
                     {(ranPlan?.contacts.length ?? 0) > 0 ? <>
                       <div className="is-new"><b>{fmtN(result.ctCreated)}</b>contacts created</div>
-                      <div className="is-ct"><b>{fmtN(result.ctUpdated)}</b>contacts updated{result.ctLinked > 0 && <small>{fmtN(result.ctLinked)} linked to a company</small>}</div>
+                      <div className="is-ct"><b>{fmtN(result.ctUpdated)}</b>contacts updated{result.ctLinked > 0 && <small>{fmtN(result.ctLinked)} linked to a company</small>}{result.ctSame > 0 && <small>{fmtN(result.ctSame)} unchanged</small>}</div>
                       <div className="is-co"><b>{fmtN(result.coCreated)}</b>companies created{result.coUpdated > 0 && <small>{fmtN(result.coUpdated)} updated</small>}</div>
                     </> : <>
                       <div className="is-new"><b>{fmtN(result.coCreated)}</b>companies created</div>
-                      <div className="is-co"><b>{fmtN(result.coUpdated)}</b>companies updated</div>
+                      <div className="is-co"><b>{fmtN(result.coUpdated)}</b>companies updated{result.coSame > 0 && <small>{fmtN(result.coSame)} unchanged</small>}</div>
                     </>}
                     <div className="is-error"><b>{fmtN(result.failed.length)}</b>not imported</div>
                   </div>
@@ -1571,11 +1885,13 @@ export default function ContactImport({ fields: initialFields, onClose, onDone, 
             <span className={`di-foot-note ${step === "map" && mapIssue ? "is-warn" : ""}`}>
               {step === "file" && (has(primary) ? [has("contact") && `${fmtN(ctF.rows.length)} contacts`, has("company") && `${fmtN(coF.rows.length)} companies`].filter(Boolean).join(" · ") + " ready to map" : "Nothing changes until the last step.")}
               {step === "map" && (mapIssue ?? (createSugg.length ? `${createSugg.length} ${createSugg.length === 1 ? "column could become a field" : "columns could become fields"} — or leave them out.` : "Looks good — next, check who's new and who's already in the CRM."))}
-              {step === "review" && plan && [plan.counts.ctNew + plan.counts.ctFound ? `${fmtN(plan.counts.ctNew)} new and ${fmtN(plan.counts.ctFound)} existing contacts` : null, plan.counts.coNew ? `${fmtN(plan.counts.coNew)} new companies` : null].filter(Boolean).join(" · ") + "."}
+              {step === "review" && planning && `Preparing… ${planning.label}${planning.total ? ` ${fmtN(planning.done)}/${fmtN(planning.total)}` : ""}`}
+              {step === "review" && !planning && plan && [plan.counts.ctNew + plan.counts.ctFound ? `${fmtN(plan.counts.ctNew)} new and ${fmtN(plan.counts.ctFound)} existing contacts` : null, plan.counts.coNew ? `${fmtN(plan.counts.coNew)} new companies` : null, plan.counts.coUpdate ? `${fmtN(plan.counts.coUpdate)} to update` : null, plan.counts.coSame ? `${fmtN(plan.counts.coSame)} unchanged` : null].filter(Boolean).join(" · ") + "."}
             </span>
             <div className="di-foot-actions">
               {step === "map" && <button className="di-btn is-ghost" onClick={() => setStep("file")}>Back</button>}
-              {step === "review" && <button className="di-btn is-ghost" onClick={() => setStep("map")}>Back</button>}
+              {step === "review" && <button className="di-btn is-ghost" onClick={() => { setPlan(null); setStep("map"); }}>Back</button>}
+              {step === "done" && result && (result.cancelled || result.failed.length > 0 || !!runErr) && <button className="di-btn is-ghost" onClick={recheck} title="Read your CRM again and compare the file once more">Check the file again</button>}
               {step === "done" ? <button className="di-btn is-primary" onClick={onClose}>Done</button> : <button className="di-btn is-ghost" onClick={guard.requestClose}>Cancel</button>}
               {step === "file" && <button className="di-btn is-primary" disabled={!has(primary)} onClick={() => { setMapTab(primary); setStep("map"); }}>Map columns →</button>}
               {step === "map" && <button className="di-btn is-primary" disabled={!!mapIssue} onClick={() => { setRvTab(has("contact") ? "contacts" : "companies"); setStep("review"); }}>Review →</button>}
@@ -1583,7 +1899,7 @@ export default function ContactImport({ fields: initialFields, onClose, onDone, 
                 const nC = plan.counts.ctNew + plan.counts.ctFound, nCo = plan.counts.coNew + plan.counts.coFound;
                 const parts = primary === "company" ? [nCo && `${fmtN(nCo)} ${nCo === 1 ? "company" : "companies"}`, nC && `${fmtN(nC)} ${nC === 1 ? "contact" : "contacts"}`]
                   : [nC && `${fmtN(nC)} ${nC === 1 ? "contact" : "contacts"}`, nCo && `${fmtN(nCo)} ${nCo === 1 ? "company" : "companies"}`];
-                return <button className="di-btn is-primary" disabled={!(nC + nCo)} onClick={run}>Import {parts.filter(Boolean).join(" + ") || "nothing"}</button>;
+                return <button className="di-btn is-primary" disabled={!(nC + nCo) || !!planning} onClick={run}>Import {parts.filter(Boolean).join(" + ") || "nothing"}</button>;
               })()}
             </div>
           </footer>
@@ -1720,7 +2036,7 @@ function ContactsReview({ plan, st, offset, contactOptions, companyOptions, onCh
 }) {
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<"all" | "new" | "found" | "nocompany" | "incomplete" | "warn" | "skip" | "error">(plan.counts.ctError ? "error" : "all");
-  const [limit, setLimit] = useState(300);
+  const [limit, setLimit] = useState(100);
   const list = plan.contacts;
   const going = (c: CtEntry) => c.status === "new" || c.status === "found";
   const test: Record<typeof filter, (c: CtEntry) => boolean> = {
@@ -1729,7 +2045,12 @@ function ContactsReview({ plan, st, offset, contactOptions, companyOptions, onCh
   };
   const n = Object.fromEntries(Object.entries(test).map(([k, f]) => [k, list.filter(f).length])) as Record<typeof filter, number>;
   const shown = list.filter((c) => test[filter](c) && (!q.trim() || normHeader(`${fullName(c)} ${c.email ?? ""} ${c.position ?? ""}`).includes(normHeader(q))));
-  const coName = (ref: string) => ref.startsWith("crm:") ? companyOptions.find((o) => o.value === ref)?.label ?? "Company" : plan.companies.find((x) => `new:${x.key}` === ref)?.name ?? "New company";
+  // look-ups and option lists made once (a file of thousands shows hundreds of rows, each with these)
+  const coLabel = useMemo(() => new Map(companyOptions.map((o) => [o.value, o.label])), [companyOptions]);
+  const newCoName = useMemo(() => new Map(plan.companies.map((x) => [`new:${x.key}`, x.name])), [plan.companies]);
+  const ctLabel = useMemo(() => new Map(contactOptions.map((o) => [o.value, o.label])), [contactOptions]);
+  const sameAs = useMemo(() => contactOptions.map((o) => ({ value: o.value, label: `Same as ${o.label}` })), [contactOptions]);
+  const coName = (ref: string) => ref.startsWith("crm:") ? coLabel.get(ref) ?? "Company" : newCoName.get(ref) ?? "New company";
   const coPick = useMemo(() => [
     { value: "none", label: "No company" },
     ...plan.companies.filter((c) => c.ref).map((c) => ({ value: `co:${c.key}`, label: `${c.name}${c.ref?.startsWith("new:") ? " (new)" : ""}` })),
@@ -1740,12 +2061,12 @@ function ContactsReview({ plan, st, offset, contactOptions, companyOptions, onCh
       <div className="rv-tools">
         <label className="di-search is-small">
           <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5" /><path d="M20 20l-4.2-4.2" /></svg>
-          <input value={q} onChange={(e) => { setQ(e.target.value); setLimit(300); }} placeholder="Find a contact…" />
+          <input value={q} onChange={(e) => { setQ(e.target.value); setLimit(100); }} placeholder="Find a contact…" />
         </label>
         <div className="rv-chips">
           {([["all", "All"], ["new", "New"], ["found", "In the CRM"], ["nocompany", "No company"], ["incomplete", "Required missing"], ["warn", "To look at"], ["skip", "Left out"], ["error", "Errors"]] as const)
             .filter(([k]) => k === "all" || n[k] > 0).map(([k, l]) => (
-              <button key={k} className={`${filter === k ? "is-on" : ""} ${(k === "error" || k === "warn" || k === "nocompany") && n[k] ? "is-warn" : ""}`} onClick={() => { setFilter(k); setLimit(300); }}>{l} <i>{fmtN(n[k])}</i></button>
+              <button key={k} className={`${filter === k ? "is-on" : ""} ${(k === "error" || k === "warn" || k === "nocompany") && n[k] ? "is-warn" : ""}`} onClick={() => { setFilter(k); setLimit(100); }}>{l} <i>{fmtN(n[k])}</i></button>
             ))}
         </div>
         {!st.createContacts && <span className="rv-tools-note">New contacts are off (Options)</span>}
@@ -1782,11 +2103,10 @@ function ContactsReview({ plan, st, offset, contactOptions, companyOptions, onCh
               <SalesMultiFilter single values={[coVal]} placeholder="Company" searchFrom={8} options={coPick} onChange={(v) => v[0] && onCompany(c.key, v[0])} />
               <SalesMultiFilter single values={[ch]} placeholder="Choose" searchFrom={8} onChange={(v) => v[0] && onChoose(c.key, v[0])}
                 options={[
-                  ...(c.found ? [{ value: c.found, label: `✓ ${contactOptions.find((o) => o.value === c.found)?.label ?? full}` }] : []),
+                  ...(c.found ? [{ value: c.found, label: `✓ ${ctLabel.get(c.found) ?? full}` }] : []),
                   { value: "create", label: `+ Create “${full}”` },
                   { value: "skip", label: "Leave out" },
-                  ...contactOptions.filter((o) => o.value !== c.found).map((o) => ({ value: o.value, label: `Same as ${o.label}` })),
-                ]} />
+                ].concat(c.found ? sameAs.filter((o) => o.value !== c.found) : sameAs)} />
             </div>
           );
         })}
@@ -1810,18 +2130,21 @@ function CompaniesReview({ plan, st, companies, companyOptions, onChoose, onChoo
   };
   const n = Object.fromEntries(Object.entries(test).map(([k, f]) => [k, list.filter(f).length])) as Record<typeof filter, number>;
   const shown = list.filter((c) => test[filter](c) && (!q.trim() || normHeader(`${c.name} ${c.data.vat_number ?? ""} ${c.data.city ?? ""}`).includes(normHeader(q))));
-  const nameOf = (ref: string | null) => companies.find((x) => `crm:${x.id}` === ref)?.name;
+  const [limit, setLimit] = useState(100);
+  const crmName = useMemo(() => new Map(companies.map((x) => [`crm:${x.id}`, x.name])), [companies]);
+  const nameOf = (ref: string | null) => (ref ? crmName.get(ref) : undefined);
+  const linkTo = useMemo(() => companyOptions.map((o) => ({ value: o.value, label: `Link to ${o.label}` })), [companyOptions]);
   const suggested = list.filter((c) => c.used && c.suggest && c.ref?.startsWith("new:"));
   return (
     <>
       <div className="rv-tools">
         <label className="di-search is-small">
           <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5" /><path d="M20 20l-4.2-4.2" /></svg>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a company…" />
+          <input value={q} onChange={(e) => { setQ(e.target.value); setLimit(100); }} placeholder="Find a company…" />
         </label>
         <div className="rv-chips">
           {([["all", "All"], ["check", "To check"], ["new", "New"], ["found", "In the CRM"], ["skip", "Not created"]] as const).filter(([k]) => k === "all" || n[k] > 0).map(([k, l]) => (
-            <button key={k} className={`${filter === k ? "is-on" : ""} ${k === "check" && n[k] ? "is-warn" : ""}`} onClick={() => setFilter(k)}>{l} <i>{fmtN(n[k])}</i></button>
+            <button key={k} className={`${filter === k ? "is-on" : ""} ${k === "check" && n[k] ? "is-warn" : ""}`} onClick={() => { setFilter(k); setLimit(100); }}>{l} <i>{fmtN(n[k])}</i></button>
           ))}
         </div>
         {suggested.length > 0 && (
@@ -1832,7 +2155,7 @@ function CompaniesReview({ plan, st, companies, companyOptions, onChoose, onChoo
         {!st.createCompanies && <span className="rv-tools-note">New companies from the contacts are off (Options)</span>}
       </div>
       <div className="rv-list">
-        {shown.slice(0, 400).map((c, i) => {
+        {shown.slice(0, limit).map((c, i) => {
           const ch = st.companyChoice[c.key] ?? (!c.ref ? "skip" : c.ref.startsWith("new:") ? "create" : c.ref);
           const linked = nameOf(c.ref);
           const kind = !c.ref ? "skip" : c.ref.startsWith("new:") ? "new" : c.foundBy === "similar" && c.ref === c.found ? "similar" : "crm";
@@ -1863,12 +2186,12 @@ function CompaniesReview({ plan, st, companies, companyOptions, onChoose, onChoo
                   ...(c.found ? [{ value: c.found, label: `✓ ${nameOf(c.found) ?? c.name}` }] : []),
                   { value: "create", label: `+ Create “${c.name}”` },
                   { value: "skip", label: "Don't create — no company" },
-                  ...companyOptions.filter((o) => o.value !== c.found).map((o) => ({ value: o.value, label: `Link to ${o.label}` })),
-                ]} />
+                ].concat(c.found ? linkTo.filter((o) => o.value !== c.found) : linkTo)} />
             </div>
           );
         })}
         {shown.length === 0 && <p className="di-muted di-pad">Nothing here.</p>}
+        {shown.length > limit && <button className="di-more" onClick={() => setLimit((l) => l + 300)}>Show {fmtN(Math.min(300, shown.length - limit))} more of {fmtN(shown.length - limit)}</button>}
       </div>
     </>
   );

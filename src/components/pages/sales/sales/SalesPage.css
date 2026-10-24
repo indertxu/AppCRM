@@ -4696,3 +4696,20 @@ button.sl-ppl-co:hover { background: #f1f7f4; color: var(--forest); }
 /* a folded card is only its header: no gap left for the empty body (Close probability was 12px taller) */
 .sl.sl-detail .sl-fold:not(.is-open) { row-gap: 0; }
 .sl-panel-calc .sl-rvh .sl-calc-fold-in { display: flex; flex-direction: column; gap: 10px; padding-top: 2px; }
+
+/* Virtual list: spacers stand in for the rows above and below the screen */
+.dz-list > .dz-spacer { display: block; flex: none; width: 100%; pointer-events: none; }
+
+/* ---- list read notes: real total while loading, and a cut list said out loud ---- */
+.so-readnote {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin: 10px 14px 0; padding: 9px 14px; border-radius: 12px;
+  font: 600 12.5px/1.35 "Inter", system-ui, sans-serif;
+}
+.so-readnote.is-loading { background: #eef7f2; color: #0a6f4d; border: 1px solid rgba(10, 111, 77, 0.14); }
+.so-readnote.is-gap { background: #fff6e8; color: #8a4b06; border: 1px solid rgba(214, 124, 18, 0.28); }
+.so-readnote button {
+  flex: none; border: 0; border-radius: 999px; padding: 6px 12px; cursor: pointer;
+  background: #8a4b06; color: #fff; font: 700 12px/1 "Inter", system-ui, sans-serif;
+}
+.so-readnote button:hover { background: #6d3a03; }

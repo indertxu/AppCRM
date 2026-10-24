@@ -39,19 +39,30 @@ interface Item {
 }
 
 const pad = (n: number) => String(n).padStart(2, "0");
+/** Deals drawn on the day timeline at a time (a book of thousands opens on a readable slice). */
+const FC_STEP = 150;
+/** Deals listed inside a month card before "show all". */
+const MONTH_CAP = 12;
+/** Undated deals shown as chips before "+N more". */
+const UNDATED_STEP = 60;
 const isoOf = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-const eur = (n: number) => `${Math.round(n).toLocaleString("de-DE")} €`;
+// Formatters are built once (a toLocale…String call builds a new one every time).
+const EUR_FMT = new Intl.NumberFormat("de-DE", { maximumFractionDigits: 0 });
+const F_MONTH_LONG = new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric" });
+const F_MONTH_SHORT = new Intl.DateTimeFormat("en-GB", { month: "short" });
+const F_WEEKDAY = new Intl.DateTimeFormat("en-GB", { weekday: "short" });
+const eur = (n: number) => `${EUR_FMT.format(Math.round(n))} €`;
 const monthTitle = (key: string) => {
   const [y, m] = key.split("-").map(Number);
-  return new Date(y, m - 1, 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+  return F_MONTH_LONG.format(new Date(y, m - 1, 1));
 };
 const monthShort = (key: string) => {
   const [y, m] = key.split("-").map(Number);
-  return new Date(y, m - 1, 1).toLocaleDateString("en-GB", { month: "short" });
+  return F_MONTH_SHORT.format(new Date(y, m - 1, 1));
 };
 const dayParts = (iso: string) => {
   const d = new Date(`${iso}T00:00:00`);
-  return { day: d.getDate(), wd: d.toLocaleDateString("en-GB", { weekday: "short" }), mo: d.toLocaleDateString("en-GB", { month: "short" }) };
+  return { day: d.getDate(), wd: F_WEEKDAY.format(d), mo: F_MONTH_SHORT.format(d) };
 };
 const band = (p: number | null) => (p == null ? "none" : p >= 70 ? "hi" : p >= 40 ? "mid" : "lo");
 const stateOf = (i: Item) => (i.won ? "won" : i.overdue ? "late" : band(i.prob));
@@ -213,11 +224,38 @@ export default function SalesForecast({
     onKpis?.({ ranged: false, pipeline, openCount: open.length, weighted, estimated: estimatedN, probLabel, next90, next90By, overdueCount: overdue.length, overdueValue });
   }, [pipeline, open.length, weighted, estimatedN, probLabel, next90, next90By, overdue.length, overdueValue]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const maxMonth = Math.max(1, ...months.map((m) => m.won + (mode === "weighted" ? m.weighted : m.full)));
-  const maxDeal = Math.max(1, ...dated.map((i) => i.value));
+  // (a reduce, not Math.max(...list): tens of thousands of arguments overflow the call stack)
+  const maxMonth = months.reduce((mx, m) => Math.max(mx, m.won + (mode === "weighted" ? m.weighted : m.full)), 1);
+  const maxDeal = dated.reduce((mx, i) => Math.max(mx, i.value), 1);
   const delay = (i: number): CSSProperties => ({ ["--d" as string]: `${Math.min(i, 28) * 45}ms` });
   const shownValue = (i: Item) => (mode === "weighted" && !i.won ? i.weighted : i.value);
-  const jumpToday = () => todayRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+
+  // ---- A big book draws a slice of the timeline (from last month on), with "earlier" / "later" to widen it ----
+  const startIdx = useMemo(() => {
+    const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1);
+    const from = isoOf(d);
+    const i = dated.findIndex((it) => it.date! >= from);
+    return i < 0 ? Math.max(0, dated.length - FC_STEP) : i;
+  }, [dated]);
+  const todayIdx = useMemo(() => { const i = dated.findIndex((it) => it.date! >= today); return i < 0 ? dated.length : i; }, [dated, today]);
+  const [span, setSpan] = useState<{ from: number; to: number } | null>(null);
+  useEffect(() => { setSpan(null); }, [dated]);
+  const from = span?.from ?? startIdx;
+  const to = Math.min(dated.length, span?.to ?? startIdx + FC_STEP);
+  const [jumpPending, setJumpPending] = useState(false);
+  const jumpToday = () => {
+    if (todayRef.current && todayIdx >= from && todayIdx <= to) { todayRef.current.scrollIntoView({ behavior: "smooth", block: "center" }); return; }
+    setSpan({ from: Math.max(0, todayIdx - 20), to: Math.min(dated.length, todayIdx + FC_STEP) });
+    setJumpPending(true);
+  };
+  useEffect(() => {
+    if (!jumpPending) return;
+    setJumpPending(false);
+    requestAnimationFrame(() => todayRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }));
+  }, [jumpPending]);
+  // Month view: each month card lists its first deals; "show all" opens the rest of that month.
+  const [openMonths, setOpenMonths] = useState<Set<string>>(new Set());
+  const [undatedCap, setUndatedCap] = useState(UNDATED_STEP);
 
   const todayMarker = (key: string) => (
     <div className="fc-today" ref={todayRef} key={key}>
@@ -251,7 +289,7 @@ export default function SalesForecast({
           </div>
           {withDeals && (
             <div className="fc-glist">
-              {withDeals.map((it, k) => {
+              {(openMonths.has(m.key) ? withDeals : withDeals.slice(0, MONTH_CAP)).map((it, k) => {
                 const { day, mo } = dayParts(it.date!);
                 return (
                   <button key={it.t.id} className={`fc-grow is-${stateOf(it)}`} onClick={() => onOpen(it.t.id)} style={delay(idx + k + 1)}>
@@ -267,6 +305,11 @@ export default function SalesForecast({
                   </button>
                 );
               })}
+              {!openMonths.has(m.key) && withDeals.length > MONTH_CAP && (
+                <button type="button" className="fc-more" onClick={() => setOpenMonths((cur) => new Set(cur).add(m.key))}>
+                  Show all {withDeals.length.toLocaleString("de-DE")} deals of {monthTitle(m.key)}
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -276,16 +319,21 @@ export default function SalesForecast({
 
   // Rows for the line (day view interleaves deals; month view nests them in the month card).
   const rows: ReactNode[] = [];
-  let placed = false, n = 0;
+  let placed = false, n = 0, di = 0;
   months.forEach((m) => {
     if (group === "month") {
       if (!placed && m.key >= curMonth) { rows.push(todayMarker("today")); placed = true; }
-      rows.push(monthHeader(m, n, m.list)); n += m.list.length + 1;
+      rows.push(monthHeader(m, n, m.list)); n += Math.min(m.list.length, MONTH_CAP) + 1;
       return;
     }
-    if (!placed && m.key > curMonth) { rows.push(todayMarker("today")); placed = true; }
+    // Day view: only the slice [from, to) of the timeline is drawn (its months' headers too).
+    const mFirst = di, mLast = di + m.list.length;
+    if (mLast <= from || mFirst >= to) { di = mLast; return; }
+    if (!placed && m.key > curMonth && todayIdx >= from) { rows.push(todayMarker("today")); placed = true; }
     rows.push(monthHeader(m, n++));
     m.list.forEach((it) => {
+      const idx = di++;
+      if (idx < from || idx >= to) return;
       if (!placed && it.date! >= today) { rows.push(todayMarker("today")); placed = true; }
       const { day, wd, mo } = dayParts(it.date!);
       const size = 10 + Math.round(Math.sqrt(it.value / maxDeal) * 14);
@@ -318,7 +366,7 @@ export default function SalesForecast({
       );
     });
   });
-  if (!placed && months.length) rows.push(todayMarker("today"));
+  if (!placed && months.length && (group === "month" || to >= dated.length)) rows.push(todayMarker("today"));
 
   const topRow = slot && createPortal(
     <>
@@ -369,7 +417,19 @@ export default function SalesForecast({
       ) : (
         <div className={`fc-line is-${group}`} key={group}>
           <span className="fc-spine" aria-hidden="true" />
+          {group === "day" && from > 0 && (
+            <button type="button" className="fc-more is-top" onClick={() => setSpan({ from: Math.max(0, from - FC_STEP), to })}>
+              Show {Math.min(from, FC_STEP).toLocaleString("de-DE")} earlier {Math.min(from, FC_STEP) === 1 ? "deal" : "deals"}
+              <small>{from.toLocaleString("de-DE")} before {monthTitle(dated[from].date!.slice(0, 7))}</small>
+            </button>
+          )}
           {rows}
+          {group === "day" && to < dated.length && (
+            <button type="button" className="fc-more" onClick={() => setSpan({ from, to: Math.min(dated.length, to + FC_STEP) })}>
+              Show {Math.min(dated.length - to, FC_STEP).toLocaleString("de-DE")} more
+              <small>{(dated.length - to).toLocaleString("de-DE")} later on the timeline</small>
+            </button>
+          )}
           <span className="fc-end" aria-hidden="true" />
         </div>
       )}
@@ -381,11 +441,16 @@ export default function SalesForecast({
             <span>{undated.length} open {undated.length === 1 ? "deal isn't" : "deals aren't"} on the timeline · {eur(undated.reduce((s, i) => s + i.value, 0))}</span>
           </header>
           <div className="fc-chips">
-            {undated.map((i) => (
+            {undated.slice(0, undatedCap).map((i) => (
               <button key={i.t.id} onClick={() => onOpen(i.t.id)}>
                 {trackTitle(i.t)}<em>{i.value > 0 ? eur(i.value) : phaseName(i.t)}</em>
               </button>
             ))}
+            {undated.length > undatedCap && (
+              <button type="button" className="fc-chip-more" onClick={() => setUndatedCap((c) => c + UNDATED_STEP * 4)}>
+                +{(undated.length - undatedCap).toLocaleString("de-DE")} more
+              </button>
+            )}
           </div>
         </section>
       )}

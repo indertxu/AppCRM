@@ -617,8 +617,15 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
     return () => window.removeEventListener("keydown", onKey);
   }, [close]);
 
-  const companyName = (id: string) => companies.find((x) => x.id === id)?.name ?? "—";
-  const available = companies.filter((co) => !c.companyIds.includes(co.id!));
+  // lookups over the directory once per load, never per keystroke (15k companies)
+  const coNameById = useMemo(() => new Map(companies.map((co) => [co.id as string, co.name])), [companies]);
+  const companyName = (id: string) => coNameById.get(id) ?? "—";
+  const linkedKey = c.companyIds.join(",");
+  const companyOptions = useMemo(() => {
+    const on = new Set(c.companyIds);
+    return companies.filter((co) => !on.has(co.id!)).map((co) => ({ value: co.id!, label: co.name }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companies, linkedKey]);
 
   // ---- deals: the ones they are on (tracking_contacts), changed here and saved with the contact ----
   const navigate = useNavigate();
@@ -630,8 +637,9 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
     if (!contact.id) return;
     let alive = true;
     listContactDeals(contact.id, contact.companyIds).then((d) => { if (alive) setDeals(d); }).catch(() => { if (alive) setDeals([]); });
-    listAllDeals().then((d) => { if (alive) setAllDeals(d); }).catch(() => {});
-    return () => { alive = false; };
+    // every deal is only needed for the "put on another deal" picker: fetched once the panel is up and idle
+    const later = window.setTimeout(() => { listAllDeals().then((d) => { if (alive) setAllDeals(d); }).catch(() => {}); }, 700);
+    return () => { alive = false; window.clearTimeout(later); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contact.id]);
   const dealById = (id: string) => deals?.find((d) => d.id === id) ?? allDeals.find((d) => d.id === id);
@@ -641,7 +649,11 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
   ];
   const onIds = new Set(onDeals.map((d) => d.id));
   const viaCompany = (deals ?? []).filter((d) => d.via === "company" && !onIds.has(d.id));
-  const dealChoices = allDeals.filter((d) => !onIds.has(d.id) && !viaCompany.some((x) => x.id === d.id));
+  const dealKey = `${[...onIds].join(",")}|${viaCompany.map((x) => x.id).join(",")}`;
+  const dealOptions = useMemo(() => {
+    const skip = new Set(dealKey.split(/[|,]/));
+    return allDeals.filter((d) => !skip.has(d.id)).map((d) => ({ value: d.id, label: d.name, hint: [d.pipeline, d.phase].filter(Boolean).join(" · ") || undefined }));
+  }, [allDeals, dealKey]);
   const dealsDirty = dealAdd.length > 0 || dealRemove.length > 0;
   const leaveFor = (go: () => void) => { if ((JSON.stringify(c) !== initial || dealsDirty) && !confirm("Leave this contact without saving your changes?")) return; close(go); };
   const addCompany = (id: string) => set({ companyIds: [...c.companyIds, id] });
@@ -874,9 +886,9 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
                 ))}
               </div>
               {c.companyIds.length === 0 && <p className="dw-empty-hint">Not linked to any company yet (optional).</p>}
-              {available.length > 0 && (
+              {companyOptions.length > 0 && (
                 <Select value="" onChange={(v) => v && addCompany(v)} placeholder="+ Link a company"
-                  options={available.map((co) => ({ value: co.id!, label: co.name }))} />
+                  options={companyOptions} />
               )}
             </section>
 
@@ -895,10 +907,10 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
                         onAdd={(d) => { setDealRemove((xs) => xs.filter((x) => x !== d.id)); setDealAdd((xs) => xs.includes(d.id) ? xs : [...xs, d.id]); }} />
                     </>
                   )}
-                  {dealChoices.length > 0 && (
+                  {dealOptions.length > 0 && (
                     <div className="dl-pick">
                       <Select value="" searchable placeholder="+ Put on another deal…" onChange={(v) => { if (!v) return; setDealRemove((xs) => xs.filter((x) => x !== v)); setDealAdd((xs) => xs.includes(v) ? xs : [...xs, v]); }}
-                        options={dealChoices.map((d) => ({ value: d.id, label: d.name, hint: [d.pipeline, d.phase].filter(Boolean).join(" · ") || undefined }))} />
+                        options={dealOptions} />
                     </div>
                   )}
                 </>

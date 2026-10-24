@@ -75,7 +75,8 @@ export async function deleteSalesRole(id: string): Promise<string | null> {
 
 export async function loadHandovers(): Promise<TrackingHandover[]> {
   // Every page, the later ones in parallel (see allRows).
-  const rows = await allRows(() => supabase.from("tracking_handovers").select("*").order("created_at").order("id"));
+  const rows = await allRows(() => supabase.from("tracking_handovers").select("*").order("created_at").order("id"), 1000, "tracking_id");
+  rows.sort((x: any, y: any) => (x.created_at === y.created_at ? (x.id < y.id ? -1 : 1) : (x.created_at ?? "") < (y.created_at ?? "") ? -1 : 1));
   return handoversFromRows(rows);
 }
 export const handoversFromRows = (rows: any[]): TrackingHandover[] =>
@@ -84,7 +85,7 @@ export const handoversFromRows = (rows: any[]): TrackingHandover[] =>
 /** Every phase each deal has entered (used to place won / lost deals). */
 export async function loadAllPhaseEvents(): Promise<Record<string, string[]>> {
   // A fixed order, so parallel pages never skip or repeat a row (rows that tie are identical anyway).
-  const rows = await allRows(() => supabase.from("tracking_phase_events").select("tracking_id, phase_id").order("tracking_id").order("phase_id"));
+  const rows = await allRows(() => supabase.from("tracking_phase_events").select("tracking_id, phase_id").order("tracking_id").order("phase_id"), 1000, "tracking_id");
   return phaseEventsFromRows(rows);
 }
 export function phaseEventsFromRows(rows: any[]): Record<string, string[]> {

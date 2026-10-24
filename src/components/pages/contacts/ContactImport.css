@@ -107,3 +107,7 @@
   .ci-drop, .ci-loaded, .ci-sugg { animation: none; }
   .ci-ftabs-ink, .ci-sugbtn { transition: none; }
 }
+/* import running: step, pause / stop */
+.ci-import .di-run-step { font-family: inherit; font-size: 14px; font-weight: 500; color: var(--muted); }
+.ci-import .di-run-actions { display: flex; gap: 8px; margin-top: 4px; }
+.ci-import .di-run > .di-err { max-width: 460px; }

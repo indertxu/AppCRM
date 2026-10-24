@@ -19,31 +19,96 @@ async function myUser(): Promise<{ id: string; email: string | null } | null> {
 const myId = async () => (await myUser())?.id ?? null;
 
 /**
- * Every row of a list, past Supabase's 1,000-row page. The first page is one
- * request as always; when it comes back full, the next pages are asked for in
- * parallel batches that double each time (2, 4, 8…), so 50,000 rows take about
- * six rounds instead of fifty requests one after the other.
+ * Every row of a list, past Supabase's 1,000-row page — and never a silent
+ * partial list.
+ *
+ * Before, a page that failed (a busy database, a statement timeout on a page
+ * deep into the list, too many requests at once) simply ended the read: with
+ * ~9,000 deals the page showed 1,000 or 3,000 and nobody knew. Now:
+ *  - every page is retried (3 attempts, short back-off) before giving up, and at
+ *    most 4 pages of one list are asked for at a time;
+ *  - reading only stops at a page that comes back SHORT (never on an error,
+ *    never on an estimated count);
+ *  - `split`: the name of a uuid column (e.g. "id" or "tracking_id"). The table
+ *    is then read in 16 slices by that column's first hex digit (+ the rows
+ *    where it's empty), 4 slices at a time. Each slice is a small indexed range
+ *    instead of OFFSET 8,000 over the whole table — fast and steady at 10k–100k.
+ *  - if a page still fails after the retries, what was read is returned and the
+ *    list is flagged incomplete (see `rowsIncomplete` / the "rows-incomplete" event)
+ *    so the screen can say so and offer a retry.
  */
-export async function allRows(query: () => any, page = 1000): Promise<any[]> {
-  const get = async (n: number): Promise<any[] | null> => {
-    const { data, error } = await query().range(n * page, n * page + page - 1);
-    return error || !data ? null : data;
-  };
-  const first = await get(0);
-  if (!first) return [];
-  const out: any[] = [...first];
-  if (first.length < page) return out;
-  for (let next = 1, batch = 2; ; batch = Math.min(batch * 2, 16)) {
-    const pages = await Promise.all(Array.from({ length: batch }, (_, i) => get(next + i)));
-    next += batch;
-    let done = false;
-    for (const rows of pages) {
-      if (!rows) { done = true; break; }
-      out.push(...rows);
-      if (rows.length < page) { done = true; break; }
-    }
-    if (done) return out;
+const RETRIES = 3;
+const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+let incompleteReads = 0;
+/** How many list reads came back incomplete since the last reset (0 = all good). */
+export function rowsIncomplete(): number { return incompleteReads; }
+export function resetRowsIncomplete(): void { incompleteReads = 0; }
+function flagIncomplete(what: string, err: unknown) {
+  incompleteReads += 1;
+  console.warn(`[rows] could not read all of ${what}:`, (err as any)?.message ?? err);
+  try { window.dispatchEvent(new CustomEvent("rows-incomplete", { detail: { what } })); } catch { /* not in a browser */ }
+}
+async function getPage(q: any, from: number, to: number): Promise<{ rows: any[] | null; err: unknown }> {
+  let err: unknown = null;
+  for (let a = 0; a < RETRIES; a++) {
+    try {
+      const { data, error } = await q.range(from, to);
+      if (!error && data) return { rows: data as any[], err: null };
+      err = error ?? new Error("no data");
+    } catch (e) { err = e; }
+    await pause(250 * (a + 1) * (a + 1));
   }
+  return { rows: null, err };
+}
+/** Run `jobs` with at most `n` at a time. */
+async function pool<T>(jobs: (() => Promise<T>)[], n: number): Promise<T[]> {
+  const out: T[] = new Array(jobs.length);
+  let k = 0;
+  await Promise.all(Array.from({ length: Math.min(n, jobs.length) }, async () => {
+    while (k < jobs.length) { const i = k++; out[i] = await jobs[i](); }
+  }));
+  return out;
+}
+/** All pages of one query, one after the other, until a short page. */
+async function readSequential(query: () => any, page: number, what: string): Promise<any[]> {
+  const out: any[] = [];
+  for (let n = 0; ; n++) {
+    const { rows, err } = await getPage(query(), n * page, n * page + page - 1);
+    if (!rows) { flagIncomplete(what, err); return out; }
+    out.push(...rows);
+    if (rows.length < page) return out;
+  }
+}
+const HEX = "0123456789abcdef";
+export async function allRows(query: () => any, page = 1000, split?: string): Promise<any[]> {
+  const what = (() => { try { return String(query()?.url?.pathname ?? "rows"); } catch { return "rows"; } })();
+  if (!split) {
+    // Unsplit: the first page alone, then the rest page after page (each retried).
+    const { rows: first, err } = await getPage(query(), 0, page - 1);
+    if (!first) { flagIncomplete(what, err); return []; }
+    if (first.length < page) return first;
+    const out = [...first];
+    // then windows of 4 pages at a time (bounded, so a big list doesn't flood the database)
+    for (let n = 1; ; n += 4) {
+      const win = await Promise.all([0, 1, 2, 3].map((k) => getPage(query(), (n + k) * page, (n + k) * page + page - 1)));
+      for (const r of win) {
+        if (!r.rows) { flagIncomplete(what, r.err); return out; }
+        out.push(...r.rows);
+        if (r.rows.length < page) return out;
+      }
+    }
+  }
+  const lo = (i: number) => `${HEX[i]}0000000-0000-0000-0000-000000000000`;
+  const slices: (() => Promise<any[]>)[] = Array.from({ length: 16 }, (_, i) => () =>
+    readSequential(() => {
+      let q = query().gte(split, lo(i));
+      if (i < 15) q = q.lt(split, lo(i + 1));
+      return q;
+    }, page, `${what} [${HEX[i]}]`));
+  // rows where the column is empty can't fall in any slice
+  slices.push(() => readSequential(() => query().is(split, null), page, `${what} [empty]`));
+  const parts = await pool(slices, 4);
+  return parts.flat();
 }
 
 export interface Tracking {
@@ -317,7 +382,7 @@ export async function removeTrackingEmployee(trackingId: string, profileId: stri
  * (the list used to read the same table twice).
  */
 export async function loadTrackingTeams(): Promise<{ members: Record<string, string[]>; owners: Record<string, string> }> {
-  const rows = await allRows(() => supabase.from("tracking_employees").select("tracking_id, profile_id, is_owner").order("tracking_id").order("profile_id"));
+  const rows = await allRows(() => supabase.from("tracking_employees").select("tracking_id, profile_id, is_owner").order("tracking_id").order("profile_id"), 1000, "tracking_id");
   return teamsFromRows(rows);
 }
 export function teamsFromRows(rows: any[]): { members: Record<string, string[]>; owners: Record<string, string> } {
@@ -626,9 +691,11 @@ export async function listTrackings(): Promise<Tracking[]> {
   // Deals and their contacts together (they used to load one after the other),
   // and every page of them — not just the first 1,000.
   const [rows, links] = await Promise.all([
-    allRows(() => supabase.from("trackings").select("*").order("created_at", { ascending: false }).order("id")),
-    allRows(() => supabase.from("tracking_contacts").select("tracking_id,contact_id").order("tracking_id").order("contact_id")),
+    allRows(() => supabase.from("trackings").select("*").order("id"), 1000, "id"),
+    allRows(() => supabase.from("tracking_contacts").select("tracking_id,contact_id").order("tracking_id").order("contact_id"), 1000, "tracking_id"),
   ]);
+  // read in slices: put them back newest first, as before
+  rows.sort((a: any, b: any) => (a.created_at === b.created_at ? (a.id < b.id ? -1 : 1) : (a.created_at ?? "") < (b.created_at ?? "") ? 1 : -1));
   return trackingsFromRows(rows, links);
 }
 /** Deals with their contact ids, from rows already read. */
@@ -1905,9 +1972,9 @@ export async function loadPotentialTotals(pre?: {
 }): Promise<Record<string, number>> {
   const { loadProducts, loadServices } = await import("../../settings/catalogApi");
   const [trRows, tpRows, svcRows, products, services] = await Promise.all([
-    pre?.trackings ?? allRows(() => supabase.from("trackings").select("id, product_price").order("id")),
-    allRows(() => supabase.from("tracking_products").select("*").order("id")),
-    allRows(() => supabase.from("tracking_potential_services").select("*").order("id")),
+    pre?.trackings ?? allRows(() => supabase.from("trackings").select("id, product_price").order("id"), 1000, "id"),
+    allRows(() => supabase.from("tracking_products").select("*").order("id"), 1000, "tracking_id"),
+    allRows(() => supabase.from("tracking_potential_services").select("*").order("id"), 1000, "tracking_id"),
     Promise.resolve(pre?.products ?? loadProducts()).catch(() => [] as any[]),
     Promise.resolve(pre?.services ?? loadServices()).catch(() => [] as any[]),
   ]);

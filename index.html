@@ -9,6 +9,14 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      // Development only (npm run dev). React 19's development build records every re-render for the
+      // browser's Performance panel and, to do so, compares every changed prop deeply — with lists of
+      // 25,000 contacts or 15,000 companies passed around, that alone made each keystroke in a panel
+      // take hundreds of milliseconds. Without console.timeStamp React skips that bookkeeping.
+      // The production build doesn't have it, so this line does nothing there.
+      if ("%MODE%" === "development") { try { console.timeStamp = undefined; } catch (e) {} }
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

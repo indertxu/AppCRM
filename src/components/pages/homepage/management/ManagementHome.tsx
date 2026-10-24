@@ -10,6 +10,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../../api/supabase";
+import { pagedAll } from "../../companies/companiesApi";
 import { periodForDate, periodOf, type Cutoffs } from "../../calendar/billingPeriods";
 import { loadRoles } from "../../settings/blueprintsApi";
 import { roleLinesOfRow, resolveRoleKey, legacyRoleMap, roleKeyOf, roleCounts, rateOn, lineRate } from "../../clients/clientsTypes";
@@ -30,9 +31,11 @@ function SalesPipelineWidget() {
   useEffect(() => {
     let alive = true;
     (async () => {
-      const { data: trk } = await supabase
+      // Every deal (a plain read stops at 1,000 rows): pages fetched in parallel, in a stable order.
+      const trk = await pagedAll<any>((count) => supabase
         .from("trackings")
-        .select("id, status, current_phase_id, product_price, pipeline_id");
+        .select("id, status, current_phase_id, product_price, pipeline_id", count ? { count: "exact" } : undefined)
+        .order("id")).catch(() => [] as any[]);
       const { data: ph } = await supabase.from("pipeline_phases").select("id, name, pos_x, sales_visible");
       if (!alive) return;
       const phaseName: Record<string, { name: string; x: number }> = {};

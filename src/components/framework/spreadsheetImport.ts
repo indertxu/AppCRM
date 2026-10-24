@@ -64,7 +64,7 @@ export function readCsv(text: string, delimiter = detectDelimiter(text)): SheetC
 
 async function inflateRaw(data: Uint8Array): Promise<Uint8Array> {
   if (typeof DecompressionStream === "undefined") throw new Error("This browser can't open .xlsx files. Update it, or save the file as CSV.");
-  const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw" as CompressionFormat));
+  const stream = new Blob([data as unknown as BlobPart]).stream().pipeThrough(new DecompressionStream("deflate-raw" as CompressionFormat));
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
@@ -94,6 +94,82 @@ async function unzip(buf: ArrayBuffer, want: (path: string) => boolean): Promise
 }
 
 const xml = (s: string | undefined) => (s ? new DOMParser().parseFromString(s, "application/xml") : null);
+
+/* The two big parts of a workbook (its strings and its sheets) are read with a plain text scan
+   instead of building the whole XML tree: several times faster, and it hands the page back every
+   ~20 ms, so a file of tens of thousands of rows never freezes the screen. */
+const ENT: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+const unescapeXml = (s: string) => (s.indexOf("&") < 0 ? s : s.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (m, e: string) => {
+  if (e[0] !== "#") return ENT[e.toLowerCase()] ?? m;
+  const n = e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+  return Number.isFinite(n) ? String.fromCodePoint(n) : m;
+}));
+/** The text of the <t> elements of a string item (phonetic hints left out); `\r\n` → `\n` as the DOM does. */
+const textOf = (inner: string) => {
+  const body = inner.indexOf("rPh") < 0 ? inner : inner.replace(/<(?:[\w.-]+:)?rPh\b[\s\S]*?<\/(?:[\w.-]+:)?rPh>/g, "");
+  let out = "";
+  const re = /<(?:[\w.-]+:)?t(?:\s[^>]*)?(?:\/>|>([\s\S]*?)<\/(?:[\w.-]+:)?t>)/g;
+  for (let m = re.exec(body); m; m = re.exec(body)) out += m[1] ?? "";
+  return unescapeXml(out.replace(/\r\n?/g, "\n"));
+};
+const ATTR_RE: Record<string, RegExp> = {};
+const attrOf = (attrs: string, name: string) => {
+  const m = (ATTR_RE[name] ??= new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`)).exec(attrs);
+  return m ? unescapeXml(m[1] ?? m[2] ?? "") : null;
+};
+/** Gives the page its turn (not throttled in a background tab, unlike setTimeout). */
+const breathe = () => new Promise<void>((r) => {
+  if (typeof MessageChannel === "undefined") { setTimeout(r, 0); return; }
+  const ch = new MessageChannel(); ch.port1.onmessage = () => { ch.port1.close(); r(); }; ch.port2.postMessage(0);
+});
+const slicer = () => { let t = Date.now(); return async () => { if (Date.now() - t > 20) { await breathe(); t = Date.now(); } }; };
+
+async function readShared(text: string | undefined): Promise<string[]> {
+  const out: string[] = [];
+  if (!text) return out;
+  const turn = slicer();
+  const re = /<(?:[\w.-]+:)?si\b[^>]*?(?:\/>|>([\s\S]*?)<\/(?:[\w.-]+:)?si>)/g;
+  for (let m = re.exec(text), k = 0; m; m = re.exec(text), k++) {
+    out.push(m[1] ? textOf(m[1]) : "");
+    if (k % 500 === 499) await turn();
+  }
+  return out;
+}
+
+/** One sheet's rows, read as text (null when it doesn't look like a sheet this scan understands). */
+async function readSheetRows(text: string, cellOf: (t: string | null, v: string | null, s: string | null, inline: string | null) => SheetCell): Promise<SheetCell[][] | null> {
+  const turn = slicer();
+  const rows: SheetCell[][] = [];
+  const rowRe = /<(?:[\w.-]+:)?row\b([^>]*?)(?:\/>|>([\s\S]*?)<\/(?:[\w.-]+:)?row>)/g;
+  const cellRe = /<(?:[\w.-]+:)?c(?=[\s>/])([^>]*?)(?:\/>|>([\s\S]*?)<\/(?:[\w.-]+:)?c>)/g;
+  const vRe = /<(?:[\w.-]+:)?v(?:\s[^>]*)?>([\s\S]*?)<\/(?:[\w.-]+:)?v>/;
+  const isRe = /<(?:[\w.-]+:)?is\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?is>/;
+  let seen = 0;
+  for (let m = rowRe.exec(text); m; m = rowRe.exec(text)) {
+    seen++;
+    const rAttr = attrOf(m[1], "r");
+    const ri = Number(rAttr ?? rows.length + 1) - 1;
+    const row: SheetCell[] = [];
+    const inner = m[2] ?? "";
+    cellRe.lastIndex = 0;
+    let ci = 0;
+    for (let c = cellRe.exec(inner); c; c = cellRe.exec(inner), ci++) {
+      const ref = attrOf(c[1], "r");
+      const col = ref ? colIndex(ref) : ci;
+      const body = c[2] ?? "";
+      const vm = body ? vRe.exec(body) : null;
+      const t = attrOf(c[1], "t");
+      const im = t === "inlineStr" && body ? isRe.exec(body) : null;
+      row[col] = cellOf(t, vm ? unescapeXml(vm[1].replace(/\r\n?/g, "\n")) : null, attrOf(c[1], "s"), im ? textOf(im[1]) : t === "inlineStr" ? "" : null);
+    }
+    for (let k = 0; k < row.length; k++) if (row[k] === undefined) row[k] = null;
+    if (Number.isFinite(ri) && ri >= 0) rows[ri] = row;
+    if (seen % 200 === 0) await turn();
+  }
+  // a sheet the scan couldn't read (an unusual writer): the full XML reader takes over
+  if (!seen && /<(?:[\w.-]+:)?row[\s>]/.test(text)) return null;
+  return rows;
+}
 const kids = (el: Element | Document | null, tag: string): Element[] => (el ? Array.from(el.getElementsByTagName(tag)) : []);
 const colIndex = (ref: string) => { let n = 0; for (const ch of ref.replace(/\d+$/, "")) n = n * 26 + (ch.charCodeAt(0) - 64); return n - 1; };
 
@@ -119,13 +195,7 @@ async function readXlsx(buf: ArrayBuffer): Promise<Sheet[]> {
     rels.set(r.getAttribute("Id") ?? "", t.startsWith("/") ? t.slice(1) : `xl/${t}`);
   });
 
-  const shared = kids(xml(files.get("xl/sharedStrings.xml")), "si").map((si) =>
-    Array.from(si.childNodes).map((n) => {
-      const el = n as Element;
-      if (el.nodeName === "t") return el.textContent ?? "";
-      if (el.nodeName === "r") return kids(el, "t").map((t) => t.textContent ?? "").join("");
-      return "";
-    }).join(""));
+  const shared = await readShared(files.get("xl/sharedStrings.xml"));
 
   const styles = xml(files.get("xl/styles.xml"));
   const customFmt = new Map<number, string>();
@@ -139,7 +209,29 @@ async function readXlsx(buf: ArrayBuffer): Promise<Sheet[]> {
   const sheets: Sheet[] = [];
   for (const s of kids(wb, "sheet")) {
     const rid = s.getAttribute("r:id") ?? s.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "id") ?? "";
-    const doc = xml(files.get(rels.get(rid) ?? ""));
+    const src = files.get(rels.get(rid) ?? "");
+    if (!src) continue;
+    const valueOf = (t: string | null, v: string | null, st: string | null, inline: string | null): SheetCell => {
+      let val: SheetCell = null;
+      if (t === "s") val = v != null ? shared[Number(v)] ?? null : null;
+      else if (t === "inlineStr") val = inline || null;
+      else if (t === "str") val = v;
+      else if (t === "b") val = v === "1";
+      else if (t === "e") val = null;
+      else if (v != null && v !== "") {
+        const n = Number(v);
+        val = dateStyle[Number(st ?? 0)] && Number.isFinite(n) ? { date: serialToIso(n, date1904) } : Number.isFinite(n) ? n : v;
+      }
+      if (typeof val === "string") val = val.trim() || null;
+      return val;
+    };
+    const fast = await readSheetRows(src, valueOf).catch(() => null);
+    if (fast) {
+      for (let k = 0; k < fast.length; k++) if (!fast[k]) fast[k] = [];
+      sheets.push({ name: s.getAttribute("name") ?? `Sheet ${sheets.length + 1}`, rows: trimRows(fast) });
+      continue;
+    }
+    const doc = xml(src);
     if (!doc) continue;
     const rows: SheetCell[][] = [];
     for (const r of kids(doc, "row")) {
@@ -148,20 +240,7 @@ async function readXlsx(buf: ArrayBuffer): Promise<Sheet[]> {
       kids(r, "c").forEach((c, ci) => {
         const ref = c.getAttribute("r");
         const col = ref ? colIndex(ref) : ci;
-        const t = c.getAttribute("t");
-        const v = kids(c, "v")[0]?.textContent ?? null;
-        let val: SheetCell = null;
-        if (t === "s") val = v != null ? shared[Number(v)] ?? null : null;
-        else if (t === "inlineStr") val = kids(c, "t").map((x) => x.textContent ?? "").join("") || null;
-        else if (t === "str") val = v;
-        else if (t === "b") val = v === "1";
-        else if (t === "e") val = null;
-        else if (v != null && v !== "") {
-          const n = Number(v);
-          val = dateStyle[Number(c.getAttribute("s") ?? 0)] && Number.isFinite(n) ? { date: serialToIso(n, date1904) } : Number.isFinite(n) ? n : v;
-        }
-        if (typeof val === "string") val = val.trim() || null;
-        row[col] = val;
+        row[col] = valueOf(c.getAttribute("t"), kids(c, "v")[0]?.textContent ?? null, c.getAttribute("s"), kids(c, "t").map((x) => x.textContent ?? "").join(""));
       });
       for (let k = 0; k < row.length; k++) if (row[k] === undefined) row[k] = null;
       rows[ri] = row;

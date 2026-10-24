@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode, PointerEvent as ReactPointerEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import SalesMultiFilter from "./SalesMultiFilter";
@@ -12,7 +12,7 @@ import { useBulkSelection, BulkBar, BulkCheck, DataTools, SettingsShell, GEAR, t
 import { PageCover, PageLoader } from "../../../framework/AppLayout";
 import { loadProducts, loadServices, type Product } from "../../settings/catalogApi";
 import { listTrackings, loadTrackingTeams, loadSalesBoot, type SalesBootRows, setTrackingPhase, setTrackingStatus, deleteTracking, setTrackingOwner, addTrackingEmployee, removeTrackingEmployee, setDealCloseDate, setDealCloseProb, stampPhaseEntry, clearPhaseEventsAfter, trackingPct, loadPotentialTotals, totalsFromLastRows, useRevenueMode, REVENUE_MODES, type RevenueMode, type Tracking,
-  clientExistsForCompany, hasClientProductsForTracking, loadTrackingProducts } from "./salesApi";
+  clientExistsForCompany, hasClientProductsForTracking, loadTrackingProducts, rowsIncomplete, resetRowsIncomplete } from "./salesApi";
 import TrackingDetail from "../trackings/TrackingDetail";
 import { RevenueModeSetting } from "../trackings/HandoffClientForm";
 import { HxPrompt } from "../trackings/HandoffConfirmServices";
@@ -41,6 +41,10 @@ import { useNavSection } from "../../../framework/pageAccess";
 export interface Employee { id: string; name: string; role?: string; email?: string; is_superadmin?: boolean }
 
 
+/** One shared comparer for every text sort (a new one per comparison costs seconds at 15k deals). */
+const COLLATOR = new Intl.Collator();
+/** ISO dates and timestamps sort as plain strings. */
+const strCmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 const norm = (s: string) => (s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
 /* ===================================================================
@@ -312,11 +316,19 @@ function readSalesSnap(): SalesSnap | null {
 }
 function writeSalesSnap(s: SalesSnap) {
   salesSnap = s;
-  try {
-    const { contacts: _c, ...light } = s; // contacts are the heavy part: memory only
-    const raw = JSON.stringify(light);
-    if (raw.length < 3_000_000) sessionStorage.setItem(SNAP_KEY, raw); else sessionStorage.removeItem(SNAP_KEY);
-  } catch { /* quota or private mode: memory copy still works */ }
+  // A big book (thousands of deals) would never fit the 3 MB budget: don't spend a
+  // long freeze turning it into text just to throw it away — the memory copy is kept.
+  const big = s.deals[0].length > 2500 || s.companies.length > 4000;
+  const store = () => {
+    try {
+      if (big) { sessionStorage.removeItem(SNAP_KEY); return; }
+      const { contacts: _c, ...light } = s; // contacts are the heavy part: memory only
+      const raw = JSON.stringify(light);
+      if (raw.length < 3_000_000) sessionStorage.setItem(SNAP_KEY, raw); else sessionStorage.removeItem(SNAP_KEY);
+    } catch { /* quota or private mode: memory copy still works */ }
+  };
+  const ric = (window as any).requestIdleCallback as ((cb: () => void, o?: { timeout: number }) => number) | undefined;
+  if (ric) ric(store, { timeout: 3000 }); else window.setTimeout(store, 0);
 }
 function forgetSalesSnap() {
   salesSnap = null;
@@ -338,7 +350,18 @@ async function companiesByIds(ids: (string | null | undefined)[]): Promise<Compa
 }
 
 /** How many rows the list draws at first; more follow as you scroll. */
-const LIST_STEP = 60;
+const LIST_STEP = 40;
+/** Rows drawn above and below the visible ones, so a quick scroll never shows a gap. */
+const LIST_OVERSCAN = 10;
+const NO_IDS: string[] = [];
+/** The element that scrolls the list (null = the page itself). */
+function scrollerOf(el: HTMLElement): HTMLElement | null {
+  for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+    const oy = getComputedStyle(p).overflowY;
+    if ((oy === "auto" || oy === "scroll") && p.scrollHeight > p.clientHeight + 1) return p;
+  }
+  return null;
+}
 const NO_PHASES: Phase[] = [];
 
 // ============================ Deals list columns ============================
@@ -528,6 +551,19 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   const [booted, setBooted] = useState(!!snap0);
   /** Loading progress: requests answered / asked (drives the bar over the list). */
   const [bootStep, setBootStep] = useState<{ done: number; total: number }>({ done: 0, total: 1 });
+  /** How many deals the database holds for you (an exact count, asked at once): the list must reach it. */
+  const [dbTotal, setDbTotal] = useState<number | null>(null);
+  /** Some page of a list could not be read even after retries: say so, offer a retry. */
+  const [readGap, setReadGap] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    resetRowsIncomplete();
+    supabase.from("trackings").select("id", { count: "exact", head: true })
+      .then(({ count, error }: any) => { if (alive && !error && typeof count === "number") setDbTotal(count); }, () => {});
+    const onGap = () => { if (alive) setReadGap(true); };
+    window.addEventListener("rows-incomplete", onGap);
+    return () => { alive = false; window.removeEventListener("rows-incomplete", onGap); };
+  }, []);
   /** True while the kept copy is on screen and the fresh data is still coming. */
   const [refreshing, setRefreshing] = useState(!!snap0);
   /** The shared page loader covers the first load; never trap the page behind it: a very slow or failed load lets go after 15 s. */
@@ -651,10 +687,17 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   /** Deals bundle from the one-call read. */
   const bundleOf = (b: SalesBootRows): DealsBundle => [b.trackings, b.totals, b.teams, b.roles, b.handovers, b.phaseEvents, b.access];
   // After closing a deal or a change: one call when the database has sales_boot(), table by table otherwise.
-  const reload = async () => {
+  // soft: coming back from a deal. The list is painted first; the fresh rows then go in as a
+  // background render, so the page never freezes while 15,000 deals are swapped in.
+  const reload = async (soft = false) => {
+    resetRowsIncomplete(); setReadGap(false);
+    supabase.from("trackings").select("id", { count: "exact", head: true })
+      .then(({ count, error }: any) => { if (!error && typeof count === "number") setDbTotal(count); }, () => {});
     const b = await loadSalesBoot().catch(() => null);
-    applyDeals(b ? bundleOf(b) : await fetchDeals());
+    const d = b ? bundleOf(b) : await fetchDeals();
+    if (soft) startTransition(() => applyDeals(d)); else applyDeals(d);
   };
+  const reloadSoon = () => { window.setTimeout(() => void reload(true), 250); };
 
   useEffect(() => {
     let alive = true;
@@ -784,6 +827,8 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   // Keep what's on screen for next time (written a moment after it settles).
   useEffect(() => {
     if (!booted || refreshing || !me) return;
+    // never keep a cut list as "the" list for next time
+    if (readGap || rowsIncomplete() || (dbTotal != null && trackings.length < dbTotal)) return;
     const t = window.setTimeout(() => {
       sessionUserId().then((uid) => {
         if (!uid || uid !== me.id) return;
@@ -794,7 +839,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
       }).catch(() => {});
     }, 700);
     return () => window.clearTimeout(t);
-  }, [booted, refreshing, me, trackings, rawTotals, trackAssignees, trackOwners, salesRoles, handovers, phaseEvents, accessRules, accessMissing, companies, pipelines, phaseByPipe, employees, products, trackingFields, contacts]);
+  }, [booted, refreshing, me, trackings, rawTotals, trackAssignees, trackOwners, salesRoles, handovers, phaseEvents, accessRules, accessMissing, companies, pipelines, phaseByPipe, employees, products, trackingFields, contacts, readGap, dbTotal]);
 
   // A pipeline that shows up later (none at the moment) still gets its phases.
   useEffect(() => {
@@ -817,15 +862,24 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
     const c = contactById.get(id);
     return c ? [c.first_name, c.last_name].filter(Boolean).join(" ") : "—";
   };
-  const pipelineName = (id: string | null) => pipelines.find((p) => p.id === id)?.name ?? "—";
-  const productName = (id: string | null) => products.find((p) => p.id === id)?.name ?? null;
-  const phaseName = (t: Tracking) => (phaseByPipe[t.pipeline_id ?? ""] ?? []).find((p) => p.id === t.current_phase_id)?.name ?? "—";
+  const pipeNameById = useMemo(() => new Map(pipelines.map((p) => [p.id, p.name])), [pipelines]);
+  const productNameById = useMemo(() => new Map(products.map((p) => [p.id, p.name])), [products]);
+  /** Every visible phase by "pipeline|phase" (a deal's stage is looked up, never searched for). */
+  const phaseByKey = useMemo(() => {
+    const m = new Map<string, Phase>();
+    Object.entries(phaseByPipe).forEach(([pid, phs]) => phs.forEach((ph) => m.set(`${pid}|${ph.id}`, ph)));
+    return m;
+  }, [phaseByPipe]);
+  const pipelineName = (id: string | null) => (id ? pipeNameById.get(id) : undefined) ?? "—";
+  const productName = (id: string | null) => (id ? productNameById.get(id) ?? null : null);
+  const phaseOf = (t: Tracking) => (t.current_phase_id ? phaseByKey.get(`${t.pipeline_id ?? ""}|${t.current_phase_id}`) : undefined);
+  const phaseName = (t: Tracking) => phaseOf(t)?.name ?? "—";
 
   // The three close estimates for a deal, then the one chosen by probView.
   const phaseProbOf = (t: Tracking): number | null => {
     if (t.status === "won") return 100;
     if (t.status === "lost") return 0;
-    const ph = (phaseByPipe[t.pipeline_id ?? ""] ?? []).find((p) => p.id === t.current_phase_id);
+    const ph = phaseOf(t);
     if (!ph) return null;
     if (ph.sales_outcome === "win") return 100;
     if (ph.sales_outcome === "loss") return 0;
@@ -941,15 +995,32 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   const visiblePipelines = useMemo(() => (access.pipelines ? pipelines.filter((p) => access.pipelines!.has(p.id)) : pipelines), [pipelines, access]);
 
 
-  /** Only the companies behind the deals this person can see. */
-  const myCompanies = useMemo(() => {
-    const ids = new Set(mine.map((t) => t.company_id).filter(Boolean));
-    return companies.filter((c) => ids.has(c.id!));
-  }, [mine, companies]);
+
+  /** Each deal's title and searchable text, worked out once per load (not per keystroke). */
+  const titleById = useMemo(() => {
+    const m = new Map<string, string>();
+    mine.forEach((t) => m.set(t.id, trackTitle(t)));
+    return m;
+  }, [mine, companyById, contactById]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Typing stays instant: the list follows the search a beat later.
+  const [qList, setQList] = useState(q);
+  // The searchable text is only built once someone searches (it isn't needed to open the page).
+  const searching = !!qList.trim();
+  const searchById = useMemo(() => {
+    const m = new Map<string, string>();
+    if (!searching) return m;
+    mine.forEach((t) => m.set(t.id, norm([titleById.get(t.id) ?? "", companyName(t.company_id) ?? "", pipelineName(t.pipeline_id), productName(t.product_id) ?? "", ...t.contactIds.map(contactName)].join("\n"))));
+    return m;
+  }, [searching, mine, titleById, pipeNameById, productNameById]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (q === qList) return;
+    const t = window.setTimeout(() => setQList(q), q.trim() ? 220 : 0);
+    return () => window.clearTimeout(t);
+  }, [q]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Every filter except status: what the KPI cards count (the cards themselves pick the status). */
   const filteredBase = useMemo(() => {
-    const n = norm(q.trim());
+    const n = norm(qList.trim());
     return mine.filter((t) => {
       if (fPipeline.length && !fPipeline.includes(t.pipeline_id ?? "")) return false;
       if (fProduct.length && !fProduct.includes(t.product_id ?? "")) return false;
@@ -989,10 +1060,9 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
         if (fRanges.closedTo && cl > fRanges.closedTo) return false;
       }
       if (!n) return true;
-      return [trackTitle(t), companyName(t.company_id) ?? "", pipelineName(t.pipeline_id), productName(t.product_id) ?? "", ...t.contactIds.map(contactName)]
-        .some((v) => norm(v).includes(n));
+      return (searchById.get(t.id) ?? "").includes(n);
     });
-  }, [mine, q, fPipeline, fProduct, fCompany, fPhase, fOwner, fMember, fRanges, probView, companies, contacts, pipelines, products, phaseByPipe, potentialTotals, trackAssignees, trackOwners, me]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mine, qList, searchById, fPipeline, fProduct, fCompany, fPhase, fOwner, fMember, fRanges, probView, phaseByKey, potentialTotals, trackAssignees, trackOwners, me]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** The KPI cards follow every filter — owner, pipeline, ranges, search… and the status (won / lost / on hold…) too. */
   const metrics = useMemo(() => {
@@ -1010,24 +1080,33 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
 
   const shown = useMemo(() => {
     let list = filteredBase.filter((t) => !fStatus.length || fStatus.includes(t.status));
+    const cmp = COLLATOR.compare;
+    const ttl = (t: Tracking) => titleById.get(t.id) ?? trackTitle(t);
+    // Stage progress is worked out once per deal, not once per comparison.
+    const pctOf = new Map<string, number>();
+    if (sort === "stage_lo" || sort === "stage_hi") list.forEach((t) => pctOf.set(t.id, trackingPct(phaseByPipe[t.pipeline_id ?? ""] ?? [], t.current_phase_id)));
+    const closeOf = new Map<string, string | null>();
+    if (sort === "close_soon" || sort === "close_late") list.forEach((t) => closeOf.set(t.id, closeDateOf(t)));
+    const probOfMap = new Map<string, number | null>();
+    if (sort === "prob_hi" || sort === "prob_lo") list.forEach((t) => probOfMap.set(t.id, shownProbOf(t)));
     list = [...list].sort((a, b) => {
-      if (sort === "az") return trackTitle(a).localeCompare(trackTitle(b));
-      if (sort === "za") return trackTitle(b).localeCompare(trackTitle(a));
+      if (sort === "az") return cmp(ttl(a), ttl(b));
+      if (sort === "za") return cmp(ttl(b), ttl(a));
       if (sort === "stage_lo" || sort === "stage_hi") {
-        const sa = trackingPct(phaseByPipe[a.pipeline_id ?? ""] ?? [], a.current_phase_id);
-        const sb = trackingPct(phaseByPipe[b.pipeline_id ?? ""] ?? [], b.current_phase_id);
-        return (sort === "stage_lo" ? sa - sb : sb - sa) || phaseName(a).localeCompare(phaseName(b));
+        const sa = pctOf.get(a.id) ?? 0;
+        const sb = pctOf.get(b.id) ?? 0;
+        return (sort === "stage_lo" ? sa - sb : sb - sa) || cmp(phaseName(a), phaseName(b));
       }
       if (sort === "prod_az" || sort === "prod_za") {
         const na = productName(a.product_id) ?? "", nb = productName(b.product_id) ?? "";
         if (!na && !nb) return 0;
         if (!na) return 1;
         if (!nb) return -1;
-        return sort === "prod_az" ? na.localeCompare(nb) : nb.localeCompare(na);
+        return sort === "prod_az" ? cmp(na, nb) : cmp(nb, na);
       }
-      if (sort === "oldest") return (a.created_at ?? "").localeCompare(b.created_at ?? "");
+      if (sort === "oldest") return strCmp(a.created_at ?? "", b.created_at ?? "");
       if (sort === "prob_hi" || sort === "prob_lo") {
-        const pa = shownProbOf(a), pb = shownProbOf(b);
+        const pa = probOfMap.get(a.id) ?? null, pb = probOfMap.get(b.id) ?? null;
         if (pa == null && pb == null) return 0;
         if (pa == null) return 1;
         if (pb == null) return -1;
@@ -1036,11 +1115,11 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
       // Deals with no close date / no revenue always go to the bottom,
       // whichever direction is chosen.
       if (sort === "close_soon" || sort === "close_late") {
-        const da = closeDateOf(a), db = closeDateOf(b);
+        const da = closeOf.get(a.id) ?? null, db = closeOf.get(b.id) ?? null;
         if (!da && !db) return 0;
         if (!da) return 1;
         if (!db) return -1;
-        return sort === "close_soon" ? da.localeCompare(db) : db.localeCompare(da);
+        return sort === "close_soon" ? strCmp(da, db) : strCmp(db, da);
       }
       if (sort === "rev_hi" || sort === "rev_lo") {
         const ra = potentialTotals[a.id!] || 0, rb = potentialTotals[b.id!] || 0;
@@ -1049,11 +1128,11 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
         if (!rb) return -1;
         return sort === "rev_hi" ? rb - ra : ra - rb;
       }
-      return (b.created_at ?? "").localeCompare(a.created_at ?? "");
+      return strCmp(b.created_at ?? "", a.created_at ?? "");
     });
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredBase, fStatus, sort, probView, phaseByPipe, potentialTotals, me]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [filteredBase, fStatus, sort, probView, phaseByPipe, potentialTotals, me, titleById]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Clicking the KPI card that is already active clears the filter again.
   // Status cards combine: Active + Won shows both; clicking an active card removes it.
@@ -1074,7 +1153,8 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
     const r = el.scrollLeft + el.clientWidth < el.scrollWidth - 2;
     setFEdge((cur) => (cur.l === l && cur.r === r ? cur : { l, r }));
   };
-  useLayoutEffect(measureTrack); // labels change width as filters change
+  // The filter bar only changes size when a filter, the view or the search changes — not on every render.
+  useLayoutEffect(measureTrack, [view, q, fStatus, fPipeline, fProduct, fCompany, fPhase, fOwner, fMember, fRanges, probView, sort, valueMode, booted]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const el = ftrackRef.current;
     if (!el) return;
@@ -1219,22 +1299,71 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   const rowOpen = useCallback((id: string) => rowApi.current.open(id), []);
   const rowToggle = useCallback((id: string, range: boolean) => rowApi.current.toggle(id, range), []);
   const rowCell = useCallback((k: string, t: Tracking) => rowApi.current.cell(k, t), []);
-  // Big lists draw in steps: the first rows now, the next ones as you scroll near the end.
-  const [listCap, setListCap] = useState(LIST_STEP);
-  useEffect(() => { setListCap(LIST_STEP); }, [shown]);
-  const moreRef = useRef<HTMLDivElement>(null);
+  // ---- The list draws only the rows on screen (plus a margin): 30,000 deals scroll like 30. ----
+  // Rows sit in normal flow between two spacers that stand in for everything above and below.
+  const listRef = useRef<HTMLDivElement>(null);
+  const [rowH, setRowH] = useState(60);
+  const [win, setWin] = useState<[number, number]>([0, LIST_STEP]);
+  const winRef = useRef(win);
+  winRef.current = win;
+  const shownLen = useRef(0);
+  shownLen.current = shown.length;
+  const measureWin = useCallback(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const sc = scrollerOf(list);
+    const listTop = list.getBoundingClientRect().top;
+    const viewTop = sc ? sc.getBoundingClientRect().top : 0;
+    const viewH = sc ? sc.clientHeight : window.innerHeight;
+    const first = Math.floor(Math.max(0, viewTop - listTop) / rowH);
+    const n = shownLen.current;
+    const start = Math.max(0, Math.min(first - LIST_OVERSCAN, n - 1));
+    const end = Math.min(n, first + Math.ceil(viewH / rowH) + 1 + LIST_OVERSCAN);
+    const [a, b] = winRef.current;
+    if (a !== start || b !== end) setWin([start, end]);
+  }, [rowH]);
+  // Follow the scroll (one update per frame) and the window size.
   useEffect(() => {
-    const el = moreRef.current;
-    if (!el) return;
-    const io = new IntersectionObserver((es) => {
-      if (es.some((e) => e.isIntersecting)) setListCap((c) => c + LIST_STEP * 2);
-    }, { rootMargin: "800px 0px" });
-    io.observe(el);
-    return () => io.disconnect();
-  }, [listCap, shown.length > listCap, view]); // eslint-disable-line react-hooks/exhaustive-deps
+    const list = listRef.current;
+    if (!list || view !== "list") return;
+    const sc = scrollerOf(list);
+    const target: HTMLElement | Window = sc ?? window;
+    let raf = 0;
+    const onScroll = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; measureWin(); }); };
+    target.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
+    return () => { target.removeEventListener("scroll", onScroll); window.removeEventListener("resize", onScroll); if (raf) cancelAnimationFrame(raf); };
+  }, [measureWin, view, booted, shown.length > 0]); // eslint-disable-line react-hooks/exhaustive-deps
+  // New list (filter, sort, search): work out the window again before painting.
+  useLayoutEffect(() => { measureWin(); }, [shown, measureWin, view]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Learn the real row height from the rows on screen (the hovered one, unfolded, doesn't count).
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const hs: number[] = [];
+    list.querySelectorAll<HTMLElement>(":scope > .dz-row").forEach((el) => { if (!el.matches(":hover") && el.offsetHeight) hs.push(el.offsetHeight); });
+    if (!hs.length) return;
+    const avg = Math.round(hs.reduce((x, y) => x + y, 0) / hs.length);
+    if (Math.abs(avg - rowH) > 1) setRowH(avg);
+  }, [win, shown, rowH]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The rows' entrance animation is for the first paint only, not for rows scrolling in later.
+  const [introOn, setIntroOn] = useState(loadedLate);
+  useEffect(() => {
+    if (!introOn || !booted) return;
+    const t = window.setTimeout(() => setIntroOn(false), 1600);
+    return () => window.clearTimeout(t);
+  }, [introOn, booted]);
+
+  // The forecast's per-deal readers keep their identity between renders, so its timeline
+  // (thousands of deals, sorted) is only rebuilt when the data behind them changes.
+  const fcCloseDateOf = useCallback(closeDateOf, [me, trackAssignees]); // eslint-disable-line react-hooks/exhaustive-deps
+  const fcProbOf = useCallback(shownProbOf, [probView, phaseByKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const fcFallbackProbOf = useCallback((t: Tracking) => trackingPct(phaseByPipe[t.pipeline_id ?? ""] ?? [], t.current_phase_id), [phaseByPipe]);
 
   // ---- Multi-select (list and board): act on many deals at once ----
-  const bulk = useBulkSelection(view === "list" ? shown.slice(0, listCap).map((t) => t.id) : view === "kanban" ? shown.filter((t) => t.pipeline_id === kanbanPipe).map((t) => t.id) : []);
+  const shownIds = useMemo(() => shown.map((t) => t.id), [shown]);
+  const boardIds = useMemo(() => (view === "kanban" ? shown.filter((t) => t.pipeline_id === kanbanPipe).map((t) => t.id) : NO_IDS), [view, shown, kanbanPipe]);
+  const bulk = useBulkSelection(view === "list" ? shownIds : view === "kanban" ? boardIds : NO_IDS);
   const rowRev = useMemo(() => ({}), [trackOwners, trackAssignees, potentialTotals, trackingFields, companies, pipelines, products, employees, probView]); // eslint-disable-line react-hooks/exhaustive-deps
   const [exportIds, setExportIds] = useState<string[] | null>(null);
   const canAssignDeals = canManage || !!(me && (me.is_superadmin || ["boss", "sales_manager"].includes(me.role)));
@@ -1381,9 +1510,9 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   if (openId) {
     const t = mine.find((x) => x.id === openId);
     const frozen = t ? frozenById.get(t.id) : undefined;
-    if (t && frozen) return <HandedOverView tracking={t} handover={frozen} companies={companies} contacts={contacts} employees={employees} trackingFields={trackingFields} onBack={() => { setOpenId(null); reload(); }} />;
+    if (t && frozen) return <HandedOverView tracking={t} handover={frozen} companies={companies} contacts={contacts} employees={employees} trackingFields={trackingFields} onBack={() => { setOpenId(null); reloadSoon(); }} />;
     if (t) return <TrackingDetail tracking={t} companies={companies} contacts={contacts} products={products} employees={employees} trackingFields={trackingFields} salesRoles={salesRoles}
-      startWithClient={clientFor === t.id} onBack={() => { setOpenId(null); setClientFor(null); reload(); }} />;
+      startWithClient={clientFor === t.id} onBack={() => { setOpenId(null); setClientFor(null); reloadSoon(); }} />;
   }
 
 
@@ -1593,6 +1722,18 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
         {/* Real progress of the first load (requests answered / asked); a quiet sweep while a kept copy refreshes. */}
         <div className={`so-loadbar ${ready && !refreshing ? "is-done" : ""} ${refreshing ? "is-quiet" : ""}`} aria-hidden="true"
           style={{ ["--p" as string]: ready && !refreshing ? 1 : Math.max(0.08, bootStep.done / Math.max(1, bootStep.total)) } as CSSProperties}><i /></div>
+        {!ready && dbTotal != null && dbTotal > 0 && (
+          <div className="so-readnote is-loading" role="status">Loading {dbTotal.toLocaleString("de-DE")} deals…</div>
+        )}
+        {ready && !refreshing && (readGap || (dbTotal != null && trackings.length < dbTotal)) && (
+          <div className="so-readnote is-gap" role="alert">
+            <span>
+              Showing {trackings.length.toLocaleString("de-DE")}
+              {dbTotal != null ? <> of {dbTotal.toLocaleString("de-DE")}</> : null} deals — part of the list could not be read (the database was busy).
+            </span>
+            <button type="button" onClick={() => { setRefreshing(true); void reload(false).finally(() => setRefreshing(false)); }}>Load the rest</button>
+          </div>
+        )}
         <div className="sl-filters so-fbar">
           <div className="sl-search">
             <span className="sl-search-ico"><SoIcon d={SO_ICON.search} w={2.1} /></span>
@@ -1656,9 +1797,9 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
               onKpis={setFcKpi}
               trackings={shown}
               potentialTotals={potentialTotals}
-              closeDateOf={closeDateOf}
-              probOf={shownProbOf}
-              fallbackProbOf={(t) => trackingPct(phaseByPipe[t.pipeline_id ?? ""] ?? [], t.current_phase_id)}
+              closeDateOf={fcCloseDateOf}
+              probOf={fcProbOf}
+              fallbackProbOf={fcFallbackProbOf}
               probLabel={probView === "rep" ? "Sales estimate" : probView === "mgr" ? "Management estimate" : probView === "avg" ? "Average estimate" : "Phase probability"}
               trackTitle={trackTitle}
               phaseName={phaseName}
@@ -1729,8 +1870,9 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
                 onClose={() => setHeadPop(null)}
                 probLabel={probView === "rep" ? "Sales estimate" : probView === "mgr" ? "Management estimate" : probView === "avg" ? "Average estimate" : "Phase probability"} />
             )}
-            <div className={`so-list dz-list ${loadedLate ? "is-after-load" : ""}`}>
-              {shown.slice(0, listCap).map((t) => (
+            <div ref={listRef} className={`so-list dz-list ${introOn ? "is-after-load" : ""}`}>
+              {win[0] > 0 && <div className="dz-spacer" style={{ height: win[0] * rowH }} aria-hidden="true" />}
+              {shown.slice(win[0], win[1]).map((t) => (
                 <TrackingRow
                   key={t.id}
                   tracking={t}
@@ -1756,11 +1898,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
                   rev={rowRev}
                 />
               ))}
-              {shown.length > listCap && (
-                <div ref={moreRef} className="so-more" aria-hidden="true">
-                  <i /><i /><i />
-                </div>
-              )}
+              {win[1] < shown.length && <div className="dz-spacer" style={{ height: (shown.length - win[1]) * rowH }} aria-hidden="true" />}
             </div>
             </div>
           </div>
@@ -2032,6 +2170,45 @@ const TrackingRow = memo(function TrackingRow({ tracking, title, company, websit
 });
 
 // ============================ Kanban view ============================
+const fmtKRev = (n: number) => n >= 1000 ? `${(n / 1000).toLocaleString("de-DE", { maximumFractionDigits: n >= 10000 ? 0 : 1 })}k €` : `${Math.round(n)} €`;
+
+/** One board card. Memoised; its hover detail is only built once the pointer reaches it. */
+const KanbanCard = memo(function KanbanCard({ t, title, company, website, rev, order, dragging, selected, selecting, tickable, withDetail, onClick, onTick, detail, onDragStart, onDragEnd, fmtRev }: {
+  t: Tracking; title: string; company: string | null; website: string | null; rev: number; order: number;
+  dragging: boolean; selected: boolean; selecting: boolean; tickable: boolean; withDetail: boolean;
+  onClick: (id: string, e: ReactMouseEvent) => void; onTick: (id: string, range: boolean) => void; detail: (t: Tracking) => ReactNode;
+  onDragStart: (id: string) => void; onDragEnd: () => void; fmtRev: (n: number) => string;
+}) {
+  const [warm, setWarm] = useState(false);
+  return (
+    <div
+      className={`so-kcard is-${t.status} ${dragging ? "is-dragging" : ""} ${selected ? "is-sel" : ""} ${selecting ? "is-selecting" : ""}`}
+      data-spot=""
+      style={soVars({ "--h": soHue(title), "--i": order })}
+      draggable
+      onPointerEnter={() => { if (!warm) setWarm(true); }}
+      onFocus={() => { if (!warm) setWarm(true); }}
+      onDragStart={() => onDragStart(t.id)}
+      onDragEnd={onDragEnd}
+      onClick={(e) => onClick(t.id, e)}
+    >
+      <span className="so-av-wrap">
+        <DealLogo className="so-av" name={company ?? title} website={website} />
+        {tickable && <BulkCheck on={selected} onToggle={(e) => onTick(t.id, e.shiftKey)} label={`Select ${title}`} />}
+      </span>
+      <span className="so-kcard-t">
+        <b>{title}</b>
+        <small>{company ? (t.deal_name?.trim() ? company : "Company") : "Contact"}</small>
+      </span>
+      <span className="so-kcard-side">
+        <span className={`so-status is-${t.status}`}>{statusText(t.status)}</span>
+        {rev > 0 && <span className="so-kcard-rev">{fmtRev(rev)}</span>}
+      </span>
+      {withDetail && <span className="so-x" aria-hidden="true"><span className="so-x-in">{warm ? detail(t) : null}</span></span>}
+    </div>
+  );
+});
+
 function KanbanView({ kanbanPipe, phaseByPipe, trackings, potentialTotals, trackTitle, companyName, companyWebsite, onOpen, onMove, selected, selecting = false, onToggle, cardDetail }: {
   kanbanPipe: string;
   companyWebsite?: (id: string | null) => string | null;
@@ -2051,7 +2228,18 @@ function KanbanView({ kanbanPipe, phaseByPipe, trackings, potentialTotals, track
   const [overPhase, setOverPhase] = useState<string | null>(null);
   const phases = phaseByPipe[kanbanPipe] ?? [];
   // Long columns draw their first cards; the rest come in on demand (a board of thousands stays quick).
-  const COL_STEP = 40;
+  const COL_STEP = 24;
+  // Cards are memoised: they get stable handlers that read the latest props through a ref.
+  const live = useRef({ onOpen, onToggle, cardDetail, selecting });
+  live.current = { onOpen, onToggle, cardDetail, selecting };
+  const cardClick = useCallback((id: string, e: ReactMouseEvent) => {
+    const L = live.current;
+    if (L.onToggle && (L.selecting || e.shiftKey || e.metaKey || e.ctrlKey)) L.onToggle(id, e.shiftKey); else L.onOpen(id);
+  }, []);
+  const cardTick = useCallback((id: string, range: boolean) => live.current.onToggle?.(id, range), []);
+  const cardMore = useCallback((t: Tracking) => live.current.cardDetail?.(t) ?? null, []);
+  const cardDragStart = useCallback((id: string) => setDragId(id), []);
+  const cardDragEnd = useCallback(() => { setDragId(null); setOverPhase(null); }, []);
   const [caps, setCaps] = useState<Record<string, number>>({});
   useEffect(() => { setCaps({}); }, [trackings, kanbanPipe]);
 
@@ -2074,7 +2262,7 @@ function KanbanView({ kanbanPipe, phaseByPipe, trackings, potentialTotals, track
     phases.forEach((p) => { map[p.id] = (byPhase[p.id] ?? []).reduce((sum, t) => sum + (potentialTotals[t.id!] ?? 0), 0); });
     return map;
   }, [phases, byPhase, potentialTotals]);
-  const fmtRev = (n: number) => n >= 1000 ? `${(n / 1000).toLocaleString("de-DE", { maximumFractionDigits: n >= 10000 ? 0 : 1 })}k €` : `${Math.round(n)} €`;
+  const fmtRev = fmtKRev;
 
   const drop = (phaseId: string) => {
     if (dragId) onMove(dragId, phaseId, phases);
@@ -2127,33 +2315,13 @@ function KanbanView({ kanbanPipe, phaseByPipe, trackings, potentialTotals, track
                 {cards.length === 0 ? (
                   <div className="so-kcol-empty">Drop a deal here</div>
                 ) : cards.slice(0, caps[p.id] ?? COL_STEP).map((t, ci) => {
-                  const title = trackTitle(t);
-                  const rev = potentialTotals[t.id!] ?? 0;
+                  const cname = companyName(t.company_id);
                   return (
-                    <div
-                      key={t.id}
-                      className={`so-kcard is-${t.status} ${dragId === t.id ? "is-dragging" : ""} ${selected?.(t.id) ? "is-sel" : ""} ${selecting ? "is-selecting" : ""}`}
-                      data-spot=""
-                      style={soVars({ "--h": soHue(title), "--i": Math.min(ci, 8) + pi })}
-                      draggable
-                      onDragStart={() => setDragId(t.id)}
-                      onDragEnd={() => { setDragId(null); setOverPhase(null); }}
-                      onClick={(e) => { if (onToggle && (selecting || e.shiftKey || e.metaKey || e.ctrlKey)) onToggle(t.id, e.shiftKey); else onOpen(t.id); }}
-                    >
-                      <span className="so-av-wrap">
-                        <DealLogo className="so-av" name={companyName(t.company_id) ?? title} website={companyWebsite?.(t.company_id)} />
-                        {onToggle && <BulkCheck on={!!selected?.(t.id)} onToggle={(e) => onToggle(t.id, e.shiftKey)} label={`Select ${title}`} />}
-                      </span>
-                      <span className="so-kcard-t">
-                        <b>{title}</b>
-                        <small>{companyName(t.company_id) ? (t.deal_name?.trim() ? companyName(t.company_id) : "Company") : "Contact"}</small>
-                      </span>
-                      <span className="so-kcard-side">
-                        <span className={`so-status is-${t.status}`}>{statusText(t.status)}</span>
-                        {rev > 0 && <span className="so-kcard-rev">{fmtRev(rev)}</span>}
-                      </span>
-                      {cardDetail && <span className="so-x" aria-hidden="true"><span className="so-x-in">{cardDetail(t)}</span></span>}
-                    </div>
+                    <KanbanCard key={t.id} t={t} title={trackTitle(t)} company={cname}
+                      website={companyWebsite?.(t.company_id) ?? null} rev={potentialTotals[t.id!] ?? 0}
+                      order={Math.min(ci, 8) + pi} dragging={dragId === t.id} selected={!!selected?.(t.id)} selecting={selecting}
+                      tickable={!!onToggle} withDetail={!!cardDetail}
+                      onClick={cardClick} onTick={cardTick} detail={cardMore} onDragStart={cardDragStart} onDragEnd={cardDragEnd} fmtRev={fmtRev} />
                   );
                 })}
                 {cards.length > (caps[p.id] ?? COL_STEP) && (

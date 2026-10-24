@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import "./SalesMultiFilter.css";
 
-export interface SmfOption { value: string; label: string }
+export interface SmfOption { value: string; label: string; /** Optional heading the option is listed under. */ group?: string; /** Optional small text after the label. */ hint?: string; /** Optional accent: "status" | "muted". */ tone?: string }
 
 interface Props {
   values: string[];
@@ -61,7 +61,7 @@ export default function SalesMultiFilter({ values, onChange, options, placeholde
   const labelOf = (v: string) => options.find((o) => o.value === v)?.label ?? v;
   const shown = useMemo(() => {
     const n = q.trim().toLowerCase();
-    return n ? options.filter((o) => o.label.toLowerCase().includes(n)) : options;
+    return n ? options.filter((o) => `${o.label} ${o.group ?? ""}`.toLowerCase().includes(n)) : options;
   }, [options, q]);
 
   const place = () => {
@@ -157,15 +157,20 @@ export default function SalesMultiFilter({ values, onChange, options, placeholde
           </div>}
           <div className="smf-list">
             {shown.length === 0 && <div className="smf-empty">No matches</div>}
-            {shown.map((o) => {
+            {shown.map((o, k) => {
               const on = selected.has(o.value);
+              const head = o.group && o.group !== shown[k - 1]?.group ? o.group : null;
               return (
-                <button type="button" key={o.value} className={`smf-opt ${on ? "is-on" : ""} ${single ? "is-radio" : ""}`} onClick={() => toggle(o.value)} role="option" aria-selected={on}>
-                  <span className="smf-box">
-                    {on && <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>}
-                  </span>
-                  <span className="smf-opt-label">{o.label}</span>
-                </button>
+                <div key={o.value} className="smf-row">
+                  {head && <div className="smf-group">{head}</div>}
+                  <button type="button" className={`smf-opt ${on ? "is-on" : ""} ${single ? "is-radio" : ""} ${o.tone ? `is-${o.tone}` : ""}`} onClick={() => toggle(o.value)} role="option" aria-selected={on}>
+                    <span className="smf-box">
+                      {on && <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>}
+                    </span>
+                    <span className="smf-opt-label">{o.label}</span>
+                    {o.hint && <span className="smf-opt-hint">{o.hint}</span>}
+                  </button>
+                </div>
               );
             })}
           </div>

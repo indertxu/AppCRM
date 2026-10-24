@@ -333,7 +333,7 @@ export default function CompaniesPage() {
     if (key === "landline") return <span className="co-lmono">{phoneText(c.landline, c.landline_ext) || "—"}</span>;
     if (key === "sector") return <span className="co-laddr">{c.sector || "—"}</span>;
     if (key === "source") return <span className="co-laddr">{c.source || "—"}</span>;
-    if (key === "group") return <span className="co-laddr">{c.parent_id ? `↳ ${companies.find((x) => x.id === c.parent_id)?.name ?? "—"}` : companies.some((x) => x.parent_id === c.id) ? "Top of a group" : "—"}</span>;
+    if (key === "group") return <span className="co-laddr">{c.parent_id ? `↳ ${coName.get(c.parent_id) ?? "—"}` : kids.has(c.id ?? "") ? "Top of a group" : "—"}</span>;
     if (key === "created_by") return <span className="co-laddr">{employees.find((e) => e.id === c.created_by)?.name ?? "—"}</span>;
     if (key === "contacts") return (
       <span className="co-lright">
@@ -354,58 +354,10 @@ export default function CompaniesPage() {
     return <span className="co-laddr">{String(v)}</span>;
   };
 
-  if (me && !isSalesLead(me) && me.role !== "sales") {
-    return (
-      <div className="co">
-        <header className="co-head">
-          <button className="co-back" onClick={() => navigate("/home")} aria-label="Back">‹</button>
-          <h1 className="co-title">Companies</h1>
-        </header>
-        <p className="cl-hint">This page is only available to the sales team.</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="co">
-      <header className="co-head">
-        <button className="co-back" onClick={() => navigate("/home")} aria-label="Back">‹</button>
-        <h1 className="co-title">Companies</h1>
-        <span className="co-kpi"><b>{shown.length.toLocaleString("en-GB")}</b>{shown.length !== visible.length ? `of ${visible.length.toLocaleString("en-GB")} ` : ""}{visible.length === 1 ? "company" : "companies"}</span>
-        <div className="co-search">
-          <span className="co-search-ico">⌕</span>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, VAT, address…" />
-          {q && <button onClick={() => setQ("")}>×</button>}
-        </div>
-        <FilterBar fields={filterFields} view={view} onView={setView} total={visible.length} shown={shown.length} noun={["company", "companies"]}
-          saved={savedViews} onSaved={setSavedViews} openSignal={filtersOpenTick} />
-        <ActionsMenu items={[
-          { key: "new", group: "Create", label: "New company", hint: "Add one company by hand", icon: AM_ICON.plus, primary: true, tone: "green", shortcut: "N", onSelect: () => setEditing(empty()) },
-          { key: "fields", group: "Setup", label: "Columns", hint: "What the list shows, and in which order", icon: AM_ICON.fields, tone: "amber", shortcut: "F", onSelect: () => setShowFieldSettings(true) },
-          ...(lead ? [{ key: "settings", group: "Setup", label: "Companies settings", hint: "Custom fields, sectors & sources, import, export and clean-up", icon: GEAR, tone: "violet" as const, shortcut: "S", onSelect: () => navigate("/settings", { state: { settingsView: "companiespage" } }) }] : []),
-        ]} />
-      </header>
-
-      <FilterChips fields={filterFields} view={view} onView={setView} onEdit={() => setFiltersOpenTick((x) => x + 1)} shown={shown.length} total={visible.length} noun={["company", "companies"]} />
-
-      {!loaded ? <PageLoader label="Loading companies…" fill={false} /> : shown.length === 0 ? (
-        <p className="cl-hint">{companies.length === 0 ? "No companies yet. Create your first one." : "No companies match your search and filters."}</p>
-      ) : (
-        <div className={`co-scroll is-xscroll ${compact ? "is-compact" : ""}`} style={{ ["--row-min" as string]: `${rowMin}px` } as CSSProperties}
-          onScroll={(e) => {
-            const el = e.currentTarget; el.classList.toggle("is-scrolled-x", el.scrollLeft > 4); el.classList.toggle("is-scrolled-y", el.scrollTop > 2);
-            if (renderN < shown.length && el.scrollTop + el.clientHeight > el.scrollHeight - 1600) setRenderN((n) => Math.min(shown.length, n + 160));
-          }}>
-          {/* the sticky header sits on an opaque band of the page colour: rows never show above or around it */}
-          <div className="co-lhead-wrap">
-          <div className="co-lrow co-lhead" style={{ gridTemplateColumns: rowGrid }}>
-            <span className="co-lid-head"><BulkCheck on={bulk.allOn} partial={bulk.someOn} onToggle={bulk.toggleAll} label="Select every company shown" /><SortHead label="Company" k="name" sort={view.sort} onSort={onSort} /></span>
-            {dataColumns.map((k) => <span key={k} className="co-lhcell"><SortHead label={columnLabel(k)} k={sortKeyOf(k)} sort={view.sort} onSort={onSort} /></span>)}
-            {showContacts && <span className="co-lright co-lcontacts"><SortHead label={columnLabel("contacts")} k="contacts_count" sort={view.sort} onSort={onSort} /></span>}
-          </div>
-          </div>
-          <div className="co-list">
-            {shown.slice(0, renderN).map((c) => {
+  // The rows only change with the list itself — opening, editing or closing a company panel does not
+  // re-render (or re-measure) thousands of rows underneath it.
+  const dataKey = dataColumns.join("|");
+  const listRows = useMemo(() => shown.slice(0, renderN).map((c) => {
               const people = contactsOf(c.id!);
               const isOpen = open === c.id;
               return (
@@ -463,7 +415,62 @@ export default function CompaniesPage() {
                   )}
                 </div>
               );
-            })}
+            }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [shown, renderN, open, bulk.sel, rowGrid, dataKey, showContacts, rel, counts, coName, kids, peopleOf, employees, fields]);
+
+  if (me && !isSalesLead(me) && me.role !== "sales") {
+    return (
+      <div className="co">
+        <header className="co-head">
+          <button className="co-back" onClick={() => navigate("/home")} aria-label="Back">‹</button>
+          <h1 className="co-title">Companies</h1>
+        </header>
+        <p className="cl-hint">This page is only available to the sales team.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="co">
+      <header className="co-head">
+        <button className="co-back" onClick={() => navigate("/home")} aria-label="Back">‹</button>
+        <h1 className="co-title">Companies</h1>
+        <span className="co-kpi"><b>{shown.length.toLocaleString("en-GB")}</b>{shown.length !== visible.length ? `of ${visible.length.toLocaleString("en-GB")} ` : ""}{visible.length === 1 ? "company" : "companies"}</span>
+        <div className="co-search">
+          <span className="co-search-ico">⌕</span>
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, VAT, address…" />
+          {q && <button onClick={() => setQ("")}>×</button>}
+        </div>
+        <FilterBar fields={filterFields} view={view} onView={setView} total={visible.length} shown={shown.length} noun={["company", "companies"]}
+          saved={savedViews} onSaved={setSavedViews} openSignal={filtersOpenTick} />
+        <ActionsMenu items={[
+          { key: "new", group: "Create", label: "New company", hint: "Add one company by hand", icon: AM_ICON.plus, primary: true, tone: "green", shortcut: "N", onSelect: () => setEditing(empty()) },
+          { key: "fields", group: "Setup", label: "Columns", hint: "What the list shows, and in which order", icon: AM_ICON.fields, tone: "amber", shortcut: "F", onSelect: () => setShowFieldSettings(true) },
+          ...(lead ? [{ key: "settings", group: "Setup", label: "Companies settings", hint: "Custom fields, sectors & sources, import, export and clean-up", icon: GEAR, tone: "violet" as const, shortcut: "S", onSelect: () => navigate("/settings", { state: { settingsView: "companiespage" } }) }] : []),
+        ]} />
+      </header>
+
+      <FilterChips fields={filterFields} view={view} onView={setView} onEdit={() => setFiltersOpenTick((x) => x + 1)} shown={shown.length} total={visible.length} noun={["company", "companies"]} />
+
+      {!loaded ? <PageLoader label="Loading companies…" fill={false} /> : shown.length === 0 ? (
+        <p className="cl-hint">{companies.length === 0 ? "No companies yet. Create your first one." : "No companies match your search and filters."}</p>
+      ) : (
+        <div className={`co-scroll is-xscroll ${compact ? "is-compact" : ""}`} style={{ ["--row-min" as string]: `${rowMin}px` } as CSSProperties}
+          onScroll={(e) => {
+            const el = e.currentTarget; el.classList.toggle("is-scrolled-x", el.scrollLeft > 4); el.classList.toggle("is-scrolled-y", el.scrollTop > 2);
+            if (renderN < shown.length && el.scrollTop + el.clientHeight > el.scrollHeight - 1600) setRenderN((n) => Math.min(shown.length, n + 160));
+          }}>
+          {/* the sticky header sits on an opaque band of the page colour: rows never show above or around it */}
+          <div className="co-lhead-wrap">
+          <div className="co-lrow co-lhead" style={{ gridTemplateColumns: rowGrid }}>
+            <span className="co-lid-head"><BulkCheck on={bulk.allOn} partial={bulk.someOn} onToggle={bulk.toggleAll} label="Select every company shown" /><SortHead label="Company" k="name" sort={view.sort} onSort={onSort} /></span>
+            {dataColumns.map((k) => <span key={k} className="co-lhcell"><SortHead label={columnLabel(k)} k={sortKeyOf(k)} sort={view.sort} onSort={onSort} /></span>)}
+            {showContacts && <span className="co-lright co-lcontacts"><SortHead label={columnLabel("contacts")} k="contacts_count" sort={view.sort} onSort={onSort} /></span>}
+          </div>
+          </div>
+          <div className="co-list">
+            {listRows}
           </div>
         </div>
       )}
@@ -528,8 +535,21 @@ function ContactPicker({ contacts, onPick }: { contacts: Contact[]; onPick: (id:
   const name = (ct: Contact) => [ct.first_name, ct.last_name].filter(Boolean).join(" ") || "Unnamed";
   const norm = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
   const nq = norm(q.trim());
-  const results = !nq ? contacts
-    : contacts.filter((ct) => norm(`${name(ct)} ${ct.email ?? ""} ${ct.position ?? ""}`).includes(nq));
+  // A directory can have tens of thousands of people: the search text is built once, and at most
+  // PICK_MAX matches are drawn (type to narrow down).
+  const hay = useMemo(() => (open ? contacts.map((ct) => norm(`${name(ct)} ${ct.email ?? ""} ${ct.position ?? ""}`)) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [contacts, open]);
+  const PICK_MAX = 80;
+  const { results, more } = useMemo(() => {
+    if (!open) return { results: [] as Contact[], more: 0 };
+    const out: Contact[] = []; let n = 0;
+    for (let i = 0; i < contacts.length; i++) {
+      if (nq && !hay[i]?.includes(nq)) continue;
+      n++; if (out.length < PICK_MAX) out.push(contacts[i]);
+    }
+    return { results: out, more: n - out.length };
+  }, [contacts, hay, nq, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -573,6 +593,7 @@ function ContactPicker({ contacts, onPick }: { contacts: Contact[]; onPick: (id:
                 </span>
               </button>
             ))}
+            {more > 0 && <p className="co-pick-empty">{more.toLocaleString("en-GB")} more · type to narrow down</p>}
           </div>
         </div>
       )}
@@ -701,8 +722,9 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
   const [c, setC] = useState<Company>(() => ({ relationship: [], billing: {}, ...company }));
   const [initial] = useState(() => JSON.stringify({ relationship: [], billing: {}, ...company }));
   // Contacts linked to this company, edited live in the drawer.
-  const linkedInitial = company.id ? contacts.filter((ct) => ct.companyIds.includes(company.id!)) : [];
-  const [linked, setLinked] = useState<Contact[]>(linkedInitial);
+  // Lookups over the whole directory built once per load (not on every keystroke): 15k companies / 25k contacts.
+  const coIdx = useMemo(() => companyIndex(companies), [companies]);
+  const [linked, setLinked] = useState<Contact[]>(() => (company.id ? contacts.filter((ct) => ct.companyIds.includes(company.id!)) : []));
   // The people may still be loading when the panel opens (or reload after a save
   // elsewhere): follow the list until you add or take someone off here yourself.
   const [linkTouched, setLinkTouched] = useState(false);
@@ -717,7 +739,7 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
   const [pendingRemoveIds, setPendingRemoveIds] = useState<string[]>([]);
   const [who, setWho] = useState<string[]>(assigned);
   // companies directly below this one in the group (saved with the company)
-  const childInitial = company.id ? companies.filter((x) => x.parent_id === company.id).map((x) => x.id!) : [];
+  const [childInitial] = useState<string[]>(() => (company.id ? [...(coIdx.kidsOf.get(company.id) ?? [])] : []));
   const [children, setChildren] = useState<string[]>(childInitial);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -800,25 +822,53 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
   const billFilled = !!(bill.name || bill.email || bill.phone || bill.notes);
 
   // ---- group ----
-  const below = c.id ? descendantsOf(c.id, companies) : new Set<string>();
-  const parentChoices = companies.filter((x) => x.id && x.id !== c.id && !below.has(x.id));
-  const childChoices = companies.filter((x) => x.id && x.id !== c.id && x.id !== c.parent_id && !children.includes(x.id)
-    && !(c.id && x.id === groupRootOf(c.id, companies)) && !isAbove(x.id, c.parent_id ?? null, companies));
-  const nameOf = (id?: string | null) => companies.find((x) => x.id === id)?.name ?? "—";
-  // the group as it will be once saved (this company's parent and children as edited here)
-  const groupView = companies.filter((x) => x.id !== c.id).map((x) => {
-    if (children.includes(x.id!)) return { ...x, parent_id: c.id ?? "__self" };
-    if (x.parent_id === c.id && c.id && !children.includes(x.id!)) return { ...x, parent_id: null };
-    return x;
-  });
+  // Everything below works on the maps of coIdx, and the pickers' option lists are kept between renders
+  // (they only change when the group does), so typing in the panel never walks the whole directory.
+  const nameOf = (id?: string | null) => (id ? coIdx.byId.get(id)?.name : undefined) ?? "—";
+  const childKey = children.join(",");
+  const parentOptions = useMemo(() => {
+    const below = c.id ? coIdx.descendants(c.id) : new Set<string>();
+    return [{ value: "", label: "None — top of its group" },
+      ...companies.filter((x) => x.id && x.id !== c.id && !below.has(x.id)).map((x) => ({ value: x.id!, label: x.name }))];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companies, coIdx, c.id]);
+  const childOptions = useMemo(() => {
+    const kids = new Set(children);
+    const root = c.id ? coIdx.rootOf(c.id) : null;
+    const above = coIdx.ancestors(c.parent_id ?? null); // c.parent_id and every company above it
+    return companies.filter((x) => x.id && x.id !== c.id && x.id !== c.parent_id && !kids.has(x.id) && x.id !== root && !above.has(x.id))
+      .map((x) => ({ value: x.id!, label: x.parent_id ? `${x.name} (now under ${coIdx.byId.get(x.parent_id)?.name ?? "—"})` : x.name }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companies, coIdx, c.id, c.parent_id, childKey]);
+  // the group as it will be once saved (this company's parent and children as edited here) — only the
+  // companies that can be in it: the chain above, the tree under its top, the children picked here and theirs
+  const groupView = useMemo(() => {
+    const ids = new Set<string>();
+    coIdx.ancestors(c.parent_id ?? null).forEach((id) => ids.add(id));
+    const top = c.parent_id ? coIdx.rootOf(c.parent_id) : null;
+    if (top) { ids.add(top); coIdx.descendants(top).forEach((id) => ids.add(id)); }
+    if (c.id) coIdx.descendants(c.id).forEach((id) => ids.add(id));
+    children.forEach((id) => { ids.add(id); coIdx.descendants(id).forEach((x) => ids.add(x)); });
+    if (c.id) ids.delete(c.id);
+    const kids = new Set(children);
+    return Array.from(ids).map((id) => coIdx.byId.get(id)).filter((x): x is Company => !!x).map((x) => {
+      if (kids.has(x.id!)) return { ...x, parent_id: c.id ?? "__self" };
+      if (x.parent_id === c.id && c.id && !kids.has(x.id!)) return { ...x, parent_id: null };
+      return x;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coIdx, c.id, c.parent_id, childKey]);
   const selfNode: Company = { ...c, id: c.id ?? "__self", name: c.name || "This company" };
   const graphCompanies = [...groupView, selfNode];
   const groupSize = (() => { const root = groupRootOf(selfNode.id!, graphCompanies); return 1 + descendantsOf(root, graphCompanies).size; })();
 
   const contactName = (ct: Contact) => [ct.first_name, ct.last_name].filter(Boolean).join(" ") || "Unnamed";
   // Existing contacts not yet linked here, for the "add existing" picker.
-  const linkedIds = new Set(linked.map((x) => x.id));
-  const attachable = contacts.filter((ct) => ct.id && !linkedIds.has(ct.id) && !pendingRemoveIds.includes(ct.id!));
+  const attachable = useMemo(() => {
+    const out = new Set<string | undefined>(linked.map((x) => x.id));
+    pendingRemoveIds.forEach((id) => out.add(id));
+    return contacts.filter((ct) => ct.id && !out.has(ct.id));
+  }, [contacts, linked, pendingRemoveIds]);
   const attachExisting = (id: string) => {
     const ct = contacts.find((x) => x.id === id); if (!ct) return;
     setLinkTouched(true);
@@ -1179,11 +1229,11 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
               <div className="dw-grid">
                 <div className="dw-f"><label>Parent company</label>
                   <Select value={c.parent_id ?? ""} onChange={(v) => set({ parent_id: v || null })} placeholder="None — top of its group"
-                    options={[{ value: "", label: "None — top of its group" }, ...parentChoices.map((x) => ({ value: x.id!, label: x.name }))]} />
+                    options={parentOptions} />
                 </div>
                 <div className="dw-f"><label>Add a company below this one</label>
                   <Select value="" onChange={(v) => v && setChildren((xs) => [...xs, v])} placeholder="+ Add a subsidiary"
-                    options={childChoices.map((x) => ({ value: x.id!, label: x.parent_id ? `${x.name} (now under ${nameOf(x.parent_id)})` : x.name }))} />
+                    options={childOptions} />
                 </div>
               </div>
               {groupSize > 1 ? (
@@ -1237,15 +1287,22 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
 }
 
 /** Is `id` above `of` in the group (its parent, grandparent…)? */
-function isAbove(id: string, of: string | null, companies: Company[]): boolean {
-  const seen = new Set<string>();
-  let cur = of;
-  while (cur && !seen.has(cur)) {
-    if (cur === id) return true;
-    seen.add(cur);
-    cur = companies.find((x) => x.id === cur)?.parent_id ?? null;
-  }
-  return false;
+/** Lookups over all companies, built once per load: by id, children of each company, and the group walks. */
+function companyIndex(companies: Company[]) {
+  const byId = new Map<string, Company>();
+  const kidsOf = new Map<string, string[]>();
+  companies.forEach((x) => {
+    if (!x.id) return;
+    byId.set(x.id, x);
+    if (x.parent_id) { const a = kidsOf.get(x.parent_id); if (a) a.push(x.id); else kidsOf.set(x.parent_id, [x.id]); }
+  });
+  /** The company at the top of id's group. */
+  const rootOf = (id: string) => { const seen = new Set<string>(); let cur = id; for (;;) { const p = byId.get(cur)?.parent_id; if (!p || seen.has(p)) return cur; seen.add(cur); cur = p; } };
+  /** Every company below id (not id itself). */
+  const descendants = (id: string) => { const out = new Set<string>(); const st = [id]; while (st.length) { const k = kidsOf.get(st.pop()!) ?? []; k.forEach((x) => { if (!out.has(x)) { out.add(x); st.push(x); } }); } return out; };
+  /** `of` and every company above it. */
+  const ancestors = (of: string | null) => { const out = new Set<string>(); let cur = of; while (cur && !out.has(cur)) { out.add(cur); cur = byId.get(cur)?.parent_id ?? null; } return out; };
+  return { byId, kidsOf, rootOf, descendants, ancestors };
 }
 
 /**
@@ -1917,11 +1974,15 @@ export function DealRows({ deals, empty, onOpen, onRemove, onAdd, removeLabel = 
   onAdd?: (d: DealRef) => void;
   removeLabel?: string;
 }) {
+  // A big account can have hundreds of deals: the first ones straight away, the rest on demand.
+  const [all, setAll] = useState(false);
   if (deals === null) return <p className="dw-empty-hint">Loading deals…</p>;
   if (!deals.length) return <p className="dw-empty-hint">{empty}</p>;
+  const DEAL_ROWS = 30;
+  const rows = all ? deals : deals.slice(0, DEAL_ROWS);
   return (
     <div className="dl-list">
-      {deals.map((d) => {
+      {rows.map((d) => {
         const st = d.won ? "won" : d.status === "lost" ? "lost" : d.status === "paused" ? "hold" : "open";
         return (
           <div key={d.id} className={`dl-row is-${st} ${d.pending ? `is-pending-${d.pending}` : ""}`}>
@@ -1937,6 +1998,9 @@ export function DealRows({ deals, empty, onOpen, onRemove, onAdd, removeLabel = 
           </div>
         );
       })}
+      {rows.length < deals.length && (
+        <button type="button" className="dl-more" onClick={() => setAll(true)}>Show all {deals.length.toLocaleString("en-GB")} deals</button>
+      )}
     </div>
   );
 }
@@ -3319,7 +3383,8 @@ export function useBulkSelection(order: string[]) {
   };
   const allOn = order.length > 0 && sel.size >= order.length && order.every((id) => sel.has(id));
   const toggleAll = () => setSel(allOn ? new Set() : new Set(order));
-  const clear = () => setSel(new Set());
+  // an empty selection stays the same object: clearing nothing (Esc anywhere) must not re-render every row
+  const clear = () => setSel((cur) => (cur.size ? new Set() : cur));
   return { sel, ids: [...sel], has: (id: string) => sel.has(id), toggle, toggleAll, allOn, someOn: sel.size > 0 && !allOn, clear, active: sel.size > 0 };
 }
 
