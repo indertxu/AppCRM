@@ -6,8 +6,11 @@
  *   right   team (or your own) performance, then outstanding bills
  * The calendar and the desk come from the shared home pieces (props).
  */
-import { useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
+import Select from "../../../framework/Select";
+import { loadPrefs, savePref } from "../../companies/companiesApi";
 import { supabase } from "../../../api/supabase";
 import { loadRoles } from "../../settings/blueprintsApi";
 import { roleLinesOfRow, resolveRoleKey, legacyRoleMap, roleKeyOf, roleCounts, rateOn, lineRate } from "../../clients/clientsTypes";
@@ -72,6 +75,91 @@ function Ring({ pct, size = 64, stroke = 7, children }: { pct: number; size?: nu
   );
 }
 
+/* ---------------------------------------------------------------------------
+   The four figures on top of the page: each person picks theirs (saved with
+   their profile). Every one is a figure of the Management page, worked out
+   the same way, and opens the tab it comes from.
+   --------------------------------------------------------------------------- */
+type HeroKey =
+  | "booked" | "tickets"
+  | "billed" | "days" | "planned" | "ontarget" | "dayrate" | "bonus"
+  | "backlog_value" | "backlog_days" | "backlog_projects"
+  | "outstanding" | "late_bills"
+  | "incoming";
+const HERO_KPIS: { key: HeroKey; group: string; label: string }[] = [
+  { key: "booked", group: "You", label: "Booked today" },
+  { key: "tickets", group: "You", label: "Open tickets" },
+  { key: "billed", group: "Team", label: "Billed this month" },
+  { key: "days", group: "Team", label: "Days delivered this month" },
+  { key: "planned", group: "Team", label: "Days planned, not confirmed" },
+  { key: "ontarget", group: "Team", label: "Consultants on target" },
+  { key: "dayrate", group: "Team", label: "Average day rate" },
+  { key: "bonus", group: "Bonus", label: "Bonus earned this month" },
+  { key: "backlog_value", group: "Backlog", label: "Unbilled backlog" },
+  { key: "backlog_days", group: "Backlog", label: "Days left to deliver" },
+  { key: "backlog_projects", group: "Backlog", label: "Projects in backlog" },
+  { key: "outstanding", group: "Billing", label: "Waiting to be paid" },
+  { key: "late_bills", group: "Billing", label: "Bills over a month old" },
+  { key: "incoming", group: "Incoming", label: "Won deals to set up" },
+];
+const HERO_DEFAULT: HeroKey[] = ["booked", "tickets", "billed", "outstanding"];
+const HERO_PREF = "homeHeroKpis";
+const isHeroKey = (k: unknown): k is HeroKey => HERO_KPIS.some((x) => x.key === k);
+
+/** "Customize": four slots, each a figure from the catalogue. */
+function HeroPicker({ anchor, slots, onChange, onClose }: { anchor: DOMRect; slots: HeroKey[]; onChange: (s: HeroKey[]) => void; onClose: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const off = (e: MouseEvent) => {
+      const t = e.target as Element;
+      if (ref.current?.contains(t) || t.closest?.(".sel-pop")) return;   // the dropdowns live in their own layer
+      onClose();
+    };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape" && !document.querySelector(".sel-pop")) onClose(); };
+    const id = window.setTimeout(() => document.addEventListener("mousedown", off), 0);
+    window.addEventListener("keydown", key);
+    return () => { window.clearTimeout(id); document.removeEventListener("mousedown", off); window.removeEventListener("keydown", key); };
+  }, [onClose]);
+  const W = 340;
+  const options = HERO_KPIS.map((k) => ({ value: k.key, label: k.label, hint: k.group }));
+  return createPortal(
+    <div ref={ref} className="chx-pick" role="dialog" aria-label="Choose the figures on top"
+      style={{ top: anchor.bottom + 8, left: Math.max(8, Math.min(anchor.right - W, window.innerWidth - W - 8)), width: W }}>
+      <b className="chx-pick-h">Your four figures</b>
+      <p className="chx-pick-sub">Pick any figure from Management. Clicking one opens the tab it comes from.</p>
+      <ol className="chx-pick-list">
+        {slots.map((k, i) => (
+          <li key={i}>
+            <span className="chx-pick-n">{i + 1}</span>
+            <Select value={k} onChange={(v) => { if (!isHeroKey(v)) return; const next = [...slots]; next[i] = v; onChange(next); }}
+              options={options} aria-label={`Figure ${i + 1}`} />
+          </li>
+        ))}
+      </ol>
+      <div className="chx-pick-foot">
+        <button type="button" onClick={() => onChange([...HERO_DEFAULT])} disabled={slots.join() === HERO_DEFAULT.join()}>Back to the default four</button>
+        <button type="button" className="is-done" onClick={onClose}>Done</button>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/** One figure of the top row (a button into the page it comes from). */
+function Fig({ cls = "", onClick, title, children }: { cls?: string; onClick: () => void; title: string; children: ReactNode }) {
+  return <button type="button" className={`chx-fig ${cls}`} onClick={onClick} title={title}>{children}</button>;
+}
+function Txt({ label, value, unit, sub, big, children }: { label: string; value: ReactNode; unit?: ReactNode; sub?: ReactNode; big?: boolean; children?: ReactNode }) {
+  return (
+    <span className="chx-fig-txt">
+      <span className="chx-fig-k">{label}</span>
+      <b className={`chx-fig-v ${big ? "is-big" : ""}`}>{value}{unit && <small>{unit}</small>}</b>
+      {children}
+      {sub && <span className="chx-fig-s">{sub}</span>}
+    </span>
+  );
+}
+
 interface Bill { id: string; client: string; clientId: string | null; period: string; amount: number; status: string; ageMonths: number; }
 interface PersonRow { userId: string; name: string; daysDone: number; daysPlanned: number; daysTarget: number; billed: number; billedPlanned: number; billTarget: number; bonus: number; series: number[]; }
 interface TopProject { id: string; name: string; client: string; clientId: string | null; daysLeft: number; value: number; }
@@ -102,6 +190,24 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar,
   const [teamTotals, setTeamTotals] = useState({ daysDone: 0, daysPlanned: 0, daysTarget: 0, billed: 0, billTarget: 0, bonus: 0 });
   const [cal, setCal] = useState<CalSummary | null>(null);
   const [tix, setTix] = useState<{ open: number; late: number; today: number } | null>(null);
+  const [slots, setSlots] = useState<HeroKey[]>(HERO_DEFAULT);
+  const [picker, setPicker] = useState<DOMRect | null>(null);
+  const [incoming, setIncoming] = useState<number | null>(null);
+  useEffect(() => {
+    loadPrefs().then((p) => {
+      const v = p?.[HERO_PREF];
+      if (Array.isArray(v)) { const ks = v.filter(isHeroKey).slice(0, 4); if (ks.length === 4) setSlots(ks); }
+    }).catch(() => {});
+  }, []);
+  const changeSlots = (next: HeroKey[]) => { setSlots(next); savePref(HERO_PREF, next).catch(() => {}); };
+  // won deals waiting to become projects (Management › Incoming) — only asked when it's on show
+  useEffect(() => {
+    if (!slots.includes("incoming")) return;
+    let alive = true;
+    Promise.resolve(supabase.from("handoffs").select("id", { count: "exact", head: true }).eq("status", "pending") as any)
+      .then((r: any) => { if (alive) setIncoming(r?.error ? null : r?.count ?? 0); }, () => {});
+    return () => { alive = false; };
+  }, [slots]);
 
   // today's load comes from the calendar card once it has its data
   useEffect(() => {
@@ -344,6 +450,13 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar,
   const teamPlanPct = pct(teamTotals.daysDone + teamTotals.daysPlanned, teamTotals.daysTarget);
   const teamBillPct = pct(teamTotals.billed, teamTotals.billTarget);
   const totalDays = backlog.consDays + backlog.connDays;
+  // each backlog figure is a way into Management › Backlog
+  const openBacklog = () => goToSection(nav, "/management", "backlog");
+  const toBacklog = {
+    role: "link" as const, tabIndex: 0, title: "Open Management › Backlog",
+    onClick: openBacklog,
+    onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openBacklog(); } },
+  };
   const coreShare = totalDays > 0 ? (backlog.consDays / totalDays) * 100 : 0;
   const avg = (v: number, d: number) => (d > 0 ? v / d : 0);
   const periodLabel = (p: string) => {
@@ -375,6 +488,121 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar,
   };
   const share = (x: number) => (outstandingTotal > 0 ? (x / outstandingTotal) * 100 : 0);
 
+  // ---- every figure the top row can show ----
+  const me2 = myRow;
+  const teamDays = isLead ? teamTotals.daysDone : me2?.daysDone ?? 0;
+  const teamDaysGoal = isLead ? teamTotals.daysTarget : me2?.daysTarget ?? 0;
+  const teamPlanned = isLead ? teamTotals.daysPlanned : me2?.daysPlanned ?? 0;
+  const bonusNow = isLead ? teamTotals.bonus : me2?.bonus ?? 0;
+  const onTarget = team.filter((r) => r.daysDone >= r.daysTarget && (r.billTarget === 0 || r.billed >= r.billTarget)).length;
+  const lateAmount = bills.filter((b) => b.ageMonths >= 2).reduce((x, b) => x + b.amount, 0);
+  const who = isLead ? "Team" : "You";
+  const heroFig = (k: HeroKey): ReactNode => {
+    const go = (path: string, section?: string) => () => (section ? goToSection(nav, path, section) : nav(path));
+    const meter = (v: number, goal: number) => <span className="chx-meter"><i style={{ width: `${goal > 0 ? Math.min(100, (v / goal) * 100) : 0}%` }} /></span>;
+    const wait = loading ? "…" : null;
+    switch (k) {
+      case "booked": return (
+        <Fig cls="is-today" onClick={go("/calendar")} title="Open your calendar">
+          <Ring pct={todayPct} size={58} stroke={6}><b>{cal ? `${Math.round(Math.min(todayPct, 999))}%` : "…"}</b></Ring>
+          <Txt label="Booked today" value={cal ? hrs(cToday) : "…"} unit={cal ? ` of ${hrs(cal.todayCap)}` : ""}
+            sub={cal?.next ? <>Next: <em>{cal.next.time}</em> {cal.next.title}{cal.next.today ? "" : " (later this week)"}</> : cal ? "Nothing else booked" : "Reading your calendar…"} />
+        </Fig>
+      );
+      case "tickets": return (
+        <Fig cls={`is-tix ${tix && tix.late > 0 ? "has-late" : ""}`} onClick={go("/tickets")} title="Open your tickets">
+          <Txt label="Open tickets" value={tix ? Math.round(cOpen) : "…"} big>
+            <span className="chx-chips">
+              {tix && tix.late > 0 && <span className="chx-chip is-late">{tix.late} late</span>}
+              {tix && tix.today > 0 && <span className="chx-chip is-today">{tix.today} due today</span>}
+              {tix && tix.late === 0 && tix.today === 0 && <span className="chx-chip is-ok">{tix.open ? "All on time" : "Inbox zero"}</span>}
+            </span>
+          </Txt>
+        </Fig>
+      );
+      case "billed": return (
+        <Fig cls="is-billed" onClick={go("/management", "team")} title="Open Management › Team">
+          <Txt label={isLead ? "Team billed this month" : "You billed this month"} value={wait ?? `${eur(cBilled)} €`} unit={billedGoal > 0 ? ` of ${eur(billedGoal)} €` : ""}
+            sub={`${billedGoal > 0 ? `${Math.round(billPctHero)}% of the target` : "No billing target set"}${isLead && teamTotals.bonus > 0 ? ` · ${eur(teamTotals.bonus)} € bonus` : ""}`}>
+            {meter(billedNow, billedGoal)}
+          </Txt>
+        </Fig>
+      );
+      case "days": return (
+        <Fig onClick={go("/management", "team")} title="Open Management › Team">
+          <Txt label={`${who === "Team" ? "Team days" : "Your days"} delivered`} value={wait ?? `${+teamDays.toFixed(1)}d`} unit={teamDaysGoal > 0 ? ` of ${+teamDaysGoal.toFixed(1)}d` : ""}
+            sub={teamDaysGoal > 0 ? `${Math.round((teamDays / teamDaysGoal) * 100)}% of the month's target` : "No day target set"}>
+            {meter(teamDays, teamDaysGoal)}
+          </Txt>
+        </Fig>
+      );
+      case "planned": return (
+        <Fig onClick={go("/management", "team")} title="Open Management › Team">
+          <Txt label="Days planned, not confirmed" value={wait ?? `${+teamPlanned.toFixed(1)}d`}
+            sub={teamDaysGoal > 0 ? `With them: ${Math.round(((teamDays + teamPlanned) / teamDaysGoal) * 100)}% of the target` : "This billing month"} />
+        </Fig>
+      );
+      case "ontarget": return (
+        <Fig onClick={go("/management", "team")} title="Open Management › Team">
+          <Txt label="Consultants on target" value={wait ?? onTarget} unit={` / ${team.length}`} big
+            sub={team.length ? `${team.length - onTarget} still below their minimum` : "Nobody on a project yet"} />
+        </Fig>
+      );
+      case "dayrate": return (
+        <Fig onClick={go("/management", "team")} title="Open Management › Team">
+          <Txt label="Average day rate" value={wait ?? `${eur(teamDays > 0 ? billedNow / teamDays : 0)} €`} unit=" / day"
+            sub={`${eur(billedNow)} € over ${+teamDays.toFixed(1)} days this month`} />
+        </Fig>
+      );
+      case "bonus": return (
+        <Fig onClick={go("/management", "bonus")} title="Open Management › Bonus">
+          <Txt label={isLead ? "Team bonus this month" : "Your bonus this month"} value={wait ?? `${eur(bonusNow)} €`}
+            sub={bonusNow > 0 ? "Minimum met: the bonus applies" : "Earned once the month's minimum is met"} />
+        </Fig>
+      );
+      case "backlog_value": return (
+        <Fig onClick={go("/management", "backlog")} title="Open Management › Backlog">
+          <Txt label="Unbilled backlog" value={wait ?? `${eur(backlog.value)} €`} sub={`${d1(totalDays)} days left in ${backlog.projects} ${backlog.projects === 1 ? "project" : "projects"}`} />
+        </Fig>
+      );
+      case "backlog_days": return (
+        <Fig onClick={go("/management", "backlog")} title="Open Management › Backlog">
+          <Txt label="Days left to deliver" value={wait ?? `${d1(totalDays)}d`} sub={`${d1(backlog.consDays)}d consultancy · ${d1(backlog.connDays)}d ${backlog.otherLabel.toLowerCase()}`} />
+        </Fig>
+      );
+      case "backlog_projects": return (
+        <Fig onClick={go("/management", "backlog")} title="Open Management › Backlog">
+          <Txt label="Projects in backlog" value={wait ?? backlog.projects} big sub="Kicked off, with days still to deliver" />
+        </Fig>
+      );
+      case "outstanding": return (
+        <Fig cls="is-out" onClick={go("/management", "billing/sent")} title="Open Management › Billing › Sent">
+          <Txt label="Waiting to be paid" value={wait ?? `${eur(cOut)} €`} unit={loading ? "" : ` · ${bills.length} ${bills.length === 1 ? "bill" : "bills"}`}>
+            <span className="chx-aging" aria-label="By age">
+              <i className="is-fresh" style={{ width: `${share(aging.fresh)}%` }} />
+              <i className="is-one" style={{ width: `${share(aging.one)}%` }} />
+              <i className="is-old" style={{ width: `${share(aging.old)}%` }} />
+            </span>
+            <span className="chx-fig-s chx-aging-key">
+              <span><em className="is-fresh" />This month</span><span><em className="is-one" />1 month</span><span><em className="is-old" />Older</span>
+            </span>
+          </Txt>
+        </Fig>
+      );
+      case "late_bills": return (
+        <Fig cls={lateBills > 0 ? "has-late" : ""} onClick={go("/management", "billing/sent")} title="Open Management › Billing › Sent">
+          <Txt label="Bills over a month old" value={wait ?? lateBills} big unit={lateBills ? ` · ${eur(lateAmount)} €` : ""}
+            sub={lateBills ? "Worth a reminder to the client" : "Everything is recent"} />
+        </Fig>
+      );
+      case "incoming": return (
+        <Fig cls={incoming ? "has-late" : ""} onClick={go("/management", "incoming")} title="Open Management › Incoming">
+          <Txt label="Won deals to set up" value={incoming == null ? "…" : incoming} big sub={incoming ? "Handoffs waiting to become projects" : "Nothing waiting"} />
+        </Fig>
+      );
+    }
+  };
+
   return (
     <div className="ch-home">
       {/* ============ HERO: greeting and the four figures of the day (search: ⌘K / the rail) ============ */}
@@ -386,65 +614,26 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar,
             <span className="chx-date">{dateLabel}</span>
             <h1 className="chx-greet">{greeting}{firstName ? `, ${firstName}` : ""}</h1>
           </div>
+          <button type="button" className={`chx-edit ${picker ? "is-on" : ""}`} onClick={(e) => setPicker(picker ? null : e.currentTarget.getBoundingClientRect())}
+            aria-haspopup="dialog" aria-expanded={!!picker} title="Choose the four figures below">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg>
+            Customize
+          </button>
         </div>
         <div className="chx-figs">
-          <button type="button" className="chx-fig is-today" onClick={() => nav("/calendar")} title="Open your calendar">
-            <Ring pct={todayPct} size={58} stroke={6}><b>{cal ? `${Math.round(Math.min(todayPct, 999))}%` : "…"}</b></Ring>
-            <span className="chx-fig-txt">
-              <span className="chx-fig-k">Booked today</span>
-              <b className="chx-fig-v">{cal ? hrs(cToday) : "…"}<small>{cal ? ` of ${hrs(cal.todayCap)}` : ""}</small></b>
-              <span className="chx-fig-s">{cal?.next ? <>Next: <em>{cal.next.time}</em> {cal.next.title}{cal.next.today ? "" : " (later this week)"}</> : cal ? "Nothing else booked" : "Reading your calendar…"}</span>
-            </span>
-          </button>
-          <button type="button" className={`chx-fig is-tix ${tix && tix.late > 0 ? "has-late" : ""}`} onClick={() => document.querySelector<HTMLElement>(".tk-quick input")?.focus()} title="Your open tickets">
-            <span className="chx-fig-txt">
-              <span className="chx-fig-k">Open tickets</span>
-              <b className="chx-fig-v is-big">{tix ? Math.round(cOpen) : "…"}</b>
-              <span className="chx-chips">
-                {tix && tix.late > 0 && <span className="chx-chip is-late">{tix.late} late</span>}
-                {tix && tix.today > 0 && <span className="chx-chip is-today">{tix.today} due today</span>}
-                {tix && tix.late === 0 && tix.today === 0 && <span className="chx-chip is-ok">{tix.open ? "All on time" : "Inbox zero"}</span>}
-              </span>
-            </span>
-          </button>
-          <button type="button" className="chx-fig is-billed" onClick={() => goToSection(nav, "/management", "team")} title="Open Management › Team">
-            <span className="chx-fig-txt">
-              <span className="chx-fig-k">{isLead ? "Team billed this month" : "You billed this month"}</span>
-              <b className="chx-fig-v">{loading ? "…" : `${eur(cBilled)} €`}<small>{billedGoal > 0 ? ` of ${eur(billedGoal)} €` : ""}</small></b>
-              <span className="chx-meter"><i style={{ width: `${Math.min(100, billPctHero)}%` }} /></span>
-              <span className="chx-fig-s">{billedGoal > 0 ? `${Math.round(billPctHero)}% of the target` : "No billing target set"}{isLead && teamTotals.bonus > 0 ? ` · ${eur(teamTotals.bonus)} € bonus` : ""}</span>
-            </span>
-          </button>
-          <button type="button" className="chx-fig is-out" onClick={() => goToSection(nav, "/management", "billing/sent")} title="Open Management › Billing › Sent">
-            <span className="chx-fig-txt">
-              <span className="chx-fig-k">Waiting to be paid</span>
-              <b className="chx-fig-v">{loading ? "…" : `${eur(cOut)} €`}<small>{loading ? "" : ` · ${bills.length} ${bills.length === 1 ? "bill" : "bills"}`}</small></b>
-              <span className="chx-aging" aria-label="By age">
-                <i className="is-fresh" style={{ width: `${share(aging.fresh)}%` }} />
-                <i className="is-one" style={{ width: `${share(aging.one)}%` }} />
-                <i className="is-old" style={{ width: `${share(aging.old)}%` }} />
-              </span>
-              <span className="chx-fig-s chx-aging-key">
-                <span><em className="is-fresh" />This month</span><span><em className="is-one" />1 month</span><span><em className="is-old" />Older</span>
-              </span>
-            </span>
-          </button>
+          {slots.map((k, i) => <Fragment key={`${k}-${i}`}>{heroFig(k)}</Fragment>)}
         </div>
       </section>
+      {picker && <HeroPicker anchor={picker} slots={slots} onChange={changeSlots} onClose={() => setPicker(null)} />}
 
       {/* ============ LEFT: calendar + backlog 2×2 ============ */}
       <div className="ch-col ch-col-mid">
         {calendar}
         <section className="cz-card cz-backlog" aria-label="Department backlog">
-          <header className="cz-head">
-            <div className="cz-titles">
-              {/* the value lives in the first card below — not repeated up here */}
-              <span className="cz-eyebrow">Department backlog</span>
-            </div>
-            <button type="button" className="cz-link" onClick={() => goToSection(nav, "/management", "backlog")}>Backlog<i aria-hidden="true">→</i></button>
-          </header>
+          {/* no button: every figure opens Management › Backlog, and they get the card's height */}
+          <span className="cz-eyebrow cz-bl-k">Department backlog</span>
           <div className="cz-kpis">
-            <div className="cz-kpi is-hero" tabIndex={0}>
+            <div className="cz-kpi is-hero" {...toBacklog}>
               <div className="cz-kpi-rest">
                 <span className="cz-kpi-k">Unbilled value</span>
                 <b className="cz-kpi-v">{loading ? "…" : eur(backlog.value)}<i>€</i></b>
@@ -456,7 +645,7 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar,
                 <span className="cz-legend"><span><em className="is-core" />Consultancy <b>{eur(backlog.valueCore)} €</b></span><span><em className="is-alt" />{backlog.otherLabel} <b>{eur(backlog.valueConn)} €</b></span></span>
               </div>
             </div>
-            <div className="cz-kpi" tabIndex={0}>
+            <div className="cz-kpi" {...toBacklog}>
               <div className="cz-kpi-rest">
                 <span className="cz-kpi-k"><em className="is-core" />Consultancy</span>
                 <b className="cz-kpi-v">{d1(backlog.consDays)}<i>d</i></b>
@@ -470,7 +659,7 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar,
                 </span>
               </div>
             </div>
-            <div className="cz-kpi" tabIndex={0}>
+            <div className="cz-kpi" {...toBacklog}>
               <div className="cz-kpi-rest">
                 <span className="cz-kpi-k" title="Roles that don't count for the consultant's target"><em className="is-alt" />{backlog.otherLabel}</span>
                 <b className="cz-kpi-v">{d1(backlog.connDays)}<i>d</i></b>
@@ -484,7 +673,7 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar,
                 </span>
               </div>
             </div>
-            <div className="cz-kpi" tabIndex={0}>
+            <div className="cz-kpi" {...toBacklog}>
               <div className="cz-kpi-rest">
                 <span className="cz-kpi-k">Projects in backlog</span>
                 <b className="cz-kpi-v">{backlog.projects}</b>

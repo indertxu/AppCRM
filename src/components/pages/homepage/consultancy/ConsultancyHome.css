@@ -700,3 +700,34 @@
   .home.is-cons .hs-ev, .cz-bill-sub > span, .home.is-cons .tk-row-acts, .chx-fig, .cz-bill, .cz-kpi { transition: none; }
 }
 
+
+/* Department backlog: the label, then the four figures fill the card; each opens Management › Backlog */
+.cz-backlog { display: flex; flex-direction: column; }
+.cz-bl-k { align-self: flex-start; margin: -2px 0 10px; }
+.cz-backlog .cz-kpis { flex: 1; align-items: stretch; }
+.cz-backlog .cz-kpi { cursor: pointer; display: flex; flex-direction: column; justify-content: center; }
+.cz-backlog .cz-kpi:focus-visible { outline: 2px solid var(--cz-mint); outline-offset: 2px; }
+@media (min-width: 1081px) { .cz-backlog .cz-kpi { min-height: 112px; } }
+@media (min-width: 1081px) and (max-width: 1499px) { .cz-backlog .cz-kpi { min-height: 104px; } }
+@media (min-width: 1081px) and (max-height: 960px) { .cz-backlog .cz-kpi { min-height: 100px; } }
+
+/* ---- the top figures: any four, picked by each person ---- */
+.chx-hero-top { align-items: flex-start; }
+.chx-figs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.chx-edit { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 13px; border-radius: 10px; border: 1px solid rgba(214, 255, 236, 0.16); background: rgba(255, 255, 255, 0.06); color: rgba(234, 255, 245, 0.85); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; transition: background 0.2s, border-color 0.2s, color 0.2s; }
+.chx-edit svg { width: 15px; height: 15px; }
+.chx-edit:hover, .chx-edit.is-on { background: rgba(255, 255, 255, 0.12); border-color: rgba(134, 239, 192, 0.4); color: #fff; }
+.chx-edit:focus-visible { outline: 2px solid var(--cz-mint); outline-offset: 2px; }
+.chx-pick { position: fixed; z-index: 1300; box-sizing: border-box; padding: 16px; border-radius: 16px; background: #fff; color: #0b241a; border: 1px solid rgba(10, 111, 77, 0.12); box-shadow: 0 30px 70px -30px rgba(3, 27, 19, 0.6); font-family: "Inter", system-ui, sans-serif; animation: chx-pick-in 0.18s cubic-bezier(0.16, 1, 0.3, 1); }
+@keyframes chx-pick-in { from { opacity: 0; transform: translateY(-6px); } }
+.chx-pick-h { display: block; font-family: "Space Grotesk", sans-serif; font-size: 15px; font-weight: 650; }
+.chx-pick-sub { margin: 4px 0 12px; font-size: 12.5px; line-height: 1.45; color: #5a7d6d; }
+.chx-pick-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.chx-pick-list li { display: grid; grid-template-columns: 22px minmax(0, 1fr); align-items: center; gap: 8px; }
+.chx-pick-n { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 7px; background: #e9f6ef; color: #0a6f4d; font-size: 12px; font-weight: 700; }
+.chx-pick-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(10, 111, 77, 0.1); }
+.chx-pick-foot button { height: 34px; padding: 0 12px; border-radius: 9px; border: 0; background: none; font: inherit; font-size: 12.5px; font-weight: 600; color: #5a7d6d; cursor: pointer; }
+.chx-pick-foot button:hover:not(:disabled) { color: #0b241a; background: #f1f7f4; }
+.chx-pick-foot button:disabled { opacity: 0.45; cursor: default; }
+.chx-pick-foot .is-done { background: #0a6f4d; color: #fff; padding: 0 16px; }
+.chx-pick-foot .is-done:hover { background: #075a3e !important; color: #fff !important; }

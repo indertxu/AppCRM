@@ -9,7 +9,7 @@ import { setLeaveGuard } from "../../framework/pageAccess";
 import {
   listPipelines, createPipeline, savePipelineOrder, pipelineUsage, deletePipelineSafely,
   loadPipeline, loadPhasesByPipeline, syncPipelineToBlueprint,
-  listFolders, createFolder, renameFolder, moveFolder, deleteFolder, setPipelineFolder,
+  listFolders, createFolder, renameFolder, moveFolder, deleteFolder, setPipelineFolder, duplicatePipeline,
   diffDraft, savePipelineDraft,
   type Pipeline, type PipelineFolder, type PipelineDraft, type Phase, type PipelineLink, type PipelineUsage,
 } from "./pipelineApi";
@@ -90,99 +90,88 @@ const FolderIco = ({ open }: { open?: boolean }) => (
   </svg>
 );
 
-/** A pipeline's phases in order, drawn as a small line of stops (Win and Loss marked). */
-function PhaseTrack({ phases }: { phases: Phase[] }) {
-  if (!phases.length) return <span className="plx-track is-empty">No phases yet</span>;
-  const shown = phases.slice(0, 10);
-  const more = phases.length - shown.length;
+/** A pipeline's phases in order as one slim bar: a segment each, Win green, Loss red. */
+function PhaseBar({ phases }: { phases: Phase[] }) {
+  if (!phases.length) return <span className="plv-bar is-empty" aria-label="No phases yet" />;
   return (
-    <span className="plx-track" role="img" aria-label={`${phases.length} phases: ${phases.map((p) => p.name).join(", ")}`}>
-      {shown.map((p) => (
-        <i key={p.id} className={p.sales_outcome === "win" ? "is-win" : p.sales_outcome === "loss" ? "is-loss" : ""} title={p.name} />
-      ))}
-      {more > 0 && <em>+{more}</em>}
+    <span className="plv-bar" role="img" aria-label={`${phases.length} phases: ${phases.map((p) => p.name).join(", ")}`}>
+      {phases.map((p) => <i key={p.id} className={p.sales_outcome === "win" ? "is-win" : p.sales_outcome === "loss" ? "is-loss" : ""} title={p.name} />)}
     </span>
   );
 }
 
-type MenuItem = { key: string; label: string; onSelect: () => void; danger?: boolean; depth?: number; current?: boolean };
-/** The "⋯" menu of a row: a small list under the button; Esc or a click outside closes it. */
-function RowMenu({ label, items, moveTo }: { label: string; items: MenuItem[]; moveTo?: { label: string; items: MenuItem[] } }) {
-  const [open, setOpen] = useState(false);
-  const [view, setView] = useState<"main" | "move">("main");
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
-  const btn = useRef<HTMLButtonElement>(null);
-  const pop = useRef<HTMLDivElement>(null);
+const Ico = ({ d }: { d: string }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>
+);
+const IC = {
+  plus: "M12 5v14M5 12h14",
+  edit: "M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4",
+  copy: "M9 9h11v11H9zM5 15H4V4h11v1",
+  folder: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
+  folderPlus: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM12 10v6M9 13h6",
+  move: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM10 13h6M13 10l3 3-3 3",
+  trash: "M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3",
+  blank: "M6 3h9l4 4v14H6zM14 3v5h5",
+  search: "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.3-4.3",
+  chev: "M9 6l6 6-6 6",
+  back: "M15 6l-6 6 6 6",
+  check: "M5 12l5 5 9-10",
+};
+
+/** A small menu next to the button that opened it: Esc or a click outside closes it, ↑ ↓ move. */
+function Popover({ anchor, onClose, width = 248, align = "end", children, label }: {
+  anchor: DOMRect; onClose: () => void; width?: number; align?: "start" | "end"; children: ReactNode; label: string;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!open) return;
-    const off = (e: MouseEvent) => { const t = e.target as Node; if (!pop.current?.contains(t) && !btn.current?.contains(t)) setOpen(false); };
-    const key = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setOpen(false); btn.current?.focus(); } };
-    const away = (e: Event) => { if (!pop.current?.contains(e.target as Node)) setOpen(false); };
-    document.addEventListener("mousedown", off);
+    const off = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) onClose(); };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onClose(); } };
+    const away = (e: Event) => { if (!ref.current?.contains(e.target as Node)) onClose(); };
+    const t = window.setTimeout(() => document.addEventListener("mousedown", off), 0);
     window.addEventListener("keydown", key, true);
     window.addEventListener("scroll", away, true);
-    window.setTimeout(() => pop.current?.querySelector<HTMLButtonElement>("button")?.focus(), 0);
-    return () => { document.removeEventListener("mousedown", off); window.removeEventListener("keydown", key, true); window.removeEventListener("scroll", away, true); };
-  }, [open, view]);
-  const toggle = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (open) { setOpen(false); return; }
-    const r = btn.current!.getBoundingClientRect();
-    setPos({ top: r.bottom + 6, left: Math.max(8, Math.min(r.right - 228, window.innerWidth - 236)) });
-    setView("main"); setOpen(true);
-  };
-  const run = (it: MenuItem) => { setOpen(false); it.onSelect(); };
-  const list = view === "move" && moveTo ? moveTo.items : items;
-  return (
-    <>
-      <button ref={btn} type="button" className={`plx-more ${open ? "is-open" : ""}`} onClick={toggle} onDoubleClick={(e) => e.stopPropagation()}
-        aria-label={label} aria-haspopup="menu" aria-expanded={open} draggable={false} onDragStart={(e) => e.preventDefault()}>
-        <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5.5" cy="12" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="18.5" cy="12" r="1.6" /></svg>
-      </button>
-      {open && pos && createPortal(
-        <div ref={pop} className="plx-menu" role="menu" style={{ top: pos.top, left: pos.left }} onClick={(e) => e.stopPropagation()}
-          onKeyDown={(e) => {
-            if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-            e.preventDefault();
-            const bs = Array.from(pop.current?.querySelectorAll<HTMLButtonElement>("button") ?? []);
-            const i = bs.indexOf(document.activeElement as HTMLButtonElement);
-            bs[(i + (e.key === "ArrowDown" ? 1 : bs.length - 1)) % bs.length]?.focus();
-          }}>
-          {view === "move" && moveTo && (
-            <button type="button" className="plx-menu-back" role="menuitem" onClick={() => setView("main")}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 6l-6 6 6 6" /></svg>
-              {moveTo.label}
-            </button>
-          )}
-          {list.map((it) => (
-            <button key={it.key} type="button" role="menuitem" disabled={it.current}
-              className={`${it.danger ? "is-danger" : ""} ${it.current ? "is-current" : ""}`}
-              style={it.depth ? { paddingLeft: 12 + it.depth * 14 } : undefined}
-              onClick={() => run(it)}>
-              {it.label}{it.current && <small>here now</small>}
-            </button>
-          ))}
-          {view === "main" && moveTo && (
-            <button type="button" role="menuitem" className="plx-menu-sub" onClick={() => setView("move")}>
-              {moveTo.label}
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6l6 6-6 6" /></svg>
-            </button>
-          )}
-        </div>,
-        document.body,
-      )}
-    </>
+    window.setTimeout(() => ref.current?.querySelector<HTMLElement>("input, button:not(:disabled)")?.focus(), 0);
+    return () => { window.clearTimeout(t); document.removeEventListener("mousedown", off); window.removeEventListener("keydown", key, true); window.removeEventListener("scroll", away, true); };
+  }, [onClose]);
+  const left = align === "end" ? Math.min(anchor.right - width, window.innerWidth - width - 8) : Math.min(anchor.left, window.innerWidth - width - 8);
+  const below = anchor.bottom + 8 + 360 < window.innerHeight;
+  return createPortal(
+    <div ref={ref} className="plv-pop" role="menu" aria-label={label}
+      style={{ left: Math.max(8, left), width, ...(below ? { top: anchor.bottom + 6 } : { bottom: window.innerHeight - anchor.top + 6 }) }}
+      onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+        e.preventDefault();
+        const bs = Array.from(ref.current?.querySelectorAll<HTMLElement>("button:not(:disabled)") ?? []);
+        const i = bs.indexOf(document.activeElement as HTMLElement);
+        bs[(i + (e.key === "ArrowDown" ? 1 : bs.length - 1)) % bs.length]?.focus();
+      }}>
+      {children}
+    </div>,
+    document.body,
   );
 }
+const MenuItem = ({ icon, label, hint, danger, onClick, disabled, current }: { icon?: string; label: string; hint?: string; danger?: boolean; onClick: () => void; disabled?: boolean; current?: boolean }) => (
+  <button type="button" role="menuitem" className={`plv-mi ${danger ? "is-danger" : ""} ${current ? "is-current" : ""}`} onClick={onClick} disabled={disabled}>
+    {icon ? <Ico d={icon} /> : <span className="plv-mi-pad" />}
+    <span className="plv-mi-txt"><b>{label}</b>{hint && <small>{hint}</small>}</span>
+    {current && <Ico d={IC.check} />}
+  </button>
+);
 
 type Over = { kind: "pipe"; id: string; after: boolean } | { kind: "folder"; id: string } | { kind: "root" } | null;
 const sameOver = (a: Over, b: Over) => JSON.stringify(a) === JSON.stringify(b);
+type Pop =
+  | { kind: "new"; rect: DOMRect; folder: string | null }
+  | { kind: "pipe"; rect: DOMRect; id: string; view?: "move" }
+  | { kind: "folder"; rect: DOMRect; id: string; view?: "move" };
 
 export default function PipelinePage({ onBack }: Props) {
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   /** null: the folders table isn't there yet (56_pipeline_folders.sql). */
   const [folders, setFolders] = useState<PipelineFolder[] | null>([]);
   const [phasesBy, setPhasesBy] = useState<Record<string, Phase[]>>({});
+  const [loaded, setLoaded] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<Pipeline | null>(null);
@@ -190,6 +179,9 @@ export default function PipelinePage({ onBack }: Props) {
   const [collapsed, setCollapsed] = useState<Set<string>>(readCollapsed);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [q, setQ] = useState("");
+  const [pop, setPop] = useState<Pop | null>(null);
+  const [copyQ, setCopyQ] = useState("");
+  const [busy, setBusy] = useState(false);
   // Drag: pipelines reorder (same order for everyone) and go into folders; folders go into folders.
   // Nothing on the page moves while you drag (moving it makes the browser drop the drag).
   const [drag, setDrag] = useState<{ kind: "pipe" | "folder"; id: string } | null>(null);
@@ -204,7 +196,7 @@ export default function PipelinePage({ onBack }: Props) {
       listFolders().catch(() => null),
       loadPhasesByPipeline().catch(() => ({} as Record<string, Phase[]>)),
     ]);
-    setPipelines(ps); setFolders(fs); setPhasesBy(ph);
+    setPipelines(ps); setFolders(fs); setPhasesBy(ph); setLoaded(true);
     setPreviewId((cur) => (cur && ps.some((p) => p.id === cur) ? cur : ps[0]?.id ?? null));
   };
   useEffect(() => { refresh(); }, []);
@@ -240,13 +232,26 @@ export default function PipelinePage({ onBack }: Props) {
     if (previewId === id) setOpenId(id);   // second click on the previewed one → editor
     else setPreviewId(id);                  // first click → preview
   };
-  const newPipeline = async (folderId: string | null) => {
+  const newBlank = async (folderId: string | null) => {
+    setPop(null);
     let p = await createPipeline("Untitled pipeline", folderId);
     if (!p && folderId) p = await createPipeline("Untitled pipeline");
     if (!p) { setMsg("Couldn't create the pipeline: your user isn't allowed to."); return; }
     await refresh(); setOpenId(p.id);
   };
+  /** Start from a copy of another pipeline (its phases, arrows, departments, products). */
+  const newCopy = async (src: Pipeline, folderId?: string | null) => {
+    setPop(null); setCopyQ("");
+    if (busy) return;
+    setBusy(true); setMsg(null);
+    const r = await duplicatePipeline(src.id, `Copy of ${src.name || "pipeline"}`, folderId);
+    setBusy(false);
+    if (typeof r === "string") { setMsg(r); return; }
+    openFolder(r.folder_id ?? null);
+    await refresh(); setOpenId(r.id);
+  };
   const newFolder = async (parentId: string | null) => {
+    setPop(null);
     const f = await createFolder("New folder", parentId);
     if (typeof f === "string") { setMsg(f); return; }
     setMsg(null);
@@ -263,12 +268,14 @@ export default function PipelinePage({ onBack }: Props) {
     if (e) { setMsg(e); refresh(); }
   };
   const movePipe = async (id: string, dest: string | null) => {
+    setPop(null);
     setPipelines((ps) => ps.map((p) => (p.id === id ? { ...p, folder_id: dest } : p)));
     openFolder(dest);
     const e = await setPipelineFolder(id, dest);
     setMsg(e); if (e) refresh();
   };
   const moveFolderTo = async (id: string, dest: string | null) => {
+    setPop(null);
     if (dest && tree.within(dest, id)) return;               // not into itself or its own sub-folders
     setFolders((fs) => (fs ?? []).map((f) => (f.id === id ? { ...f, parent_id: dest } : f)));
     openFolder(dest);
@@ -327,12 +334,14 @@ export default function PipelinePage({ onBack }: Props) {
     },
   });
 
-  const moveItems = (current: string | null, apply: (dest: string | null) => void, exclude?: string): MenuItem[] => [
-    { key: "root", label: "Not in a folder", current: current === null, onSelect: () => apply(null) },
-    ...tree.flat().filter(({ f }) => !exclude || !tree.within(f.id, exclude)).map(({ f, depth }) => ({
-      key: f.id, label: f.name || "Folder", depth: depth + 1, current: current === f.id, onSelect: () => apply(f.id),
-    })),
-  ];
+  const openPop = (e: React.MouseEvent, p: Pop) => { e.stopPropagation(); setCopyQ(""); setPop((cur) => (cur && cur.kind === p.kind && (cur as any).id === (p as any).id ? null : p)); };
+  const moreBtn = (label: string, p: { kind: "pipe" | "folder"; id: string }) => (
+    <button type="button" className={`plv-more ${pop && pop.kind === p.kind && (pop as any).id === p.id ? "is-open" : ""}`} aria-label={label} aria-haspopup="menu"
+      onClick={(e) => openPop(e, { ...p, rect: e.currentTarget.getBoundingClientRect() })}
+      onDoubleClick={(e) => e.stopPropagation()} draggable={false} onDragStart={(e) => e.preventDefault()}>
+      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5.5" cy="12" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="18.5" cy="12" r="1.7" /></svg>
+    </button>
+  );
 
   const pipeRow = (p: Pipeline) => {
     const ph = phasesBy[p.id] ?? [];
@@ -340,7 +349,7 @@ export default function PipelinePage({ onBack }: Props) {
     return (
       <div
         key={p.id}
-        className={`plx-row ${previewId === p.id ? "is-active" : ""} ${drag?.id === p.id ? "is-dragging" : ""} ${isOver ? (over!.kind === "pipe" && over!.after ? "is-after" : "is-before") : ""}`}
+        className={`plv-row ${previewId === p.id ? "is-active" : ""} ${drag?.id === p.id ? "is-dragging" : ""} ${isOver ? (over!.kind === "pipe" && over!.after ? "is-after" : "is-before") : ""}`}
         onClick={() => clickRow(p.id)}
         onDoubleClick={() => setOpenId(p.id)}
         onKeyDown={(e) => { if (e.key === "Enter") setOpenId(p.id); else if (e.key === " ") { e.preventDefault(); setPreviewId(p.id); } }}
@@ -350,20 +359,15 @@ export default function PipelinePage({ onBack }: Props) {
         onDragEnd={endDrag}
         {...dropTarget({ kind: "pipe", id: p.id, after: false })}
       >
-        <span className="plx-row-main">
-          <span className="plx-row-name">{p.name || "Untitled pipeline"}</span>
-          <span className="plx-row-meta">
-            <PhaseTrack phases={ph} />
-            {ph.length > 0 && <span>{ph.length} {ph.length === 1 ? "phase" : "phases"}</span>}
-            {p.is_sales && <span className="plx-tag">Sales</span>}
+        <span className="plv-row-main">
+          <span className="plv-row-top">
+            <span className="plv-row-name">{p.name || "Untitled pipeline"}</span>
+            {p.is_sales && <span className="plv-tag" title="Shown in Sales">Sales</span>}
+            <span className="plv-row-n">{ph.length || "—"}</span>
           </span>
+          <PhaseBar phases={ph} />
         </span>
-        <RowMenu label={`Actions for ${p.name}`}
-          items={[
-            { key: "open", label: "Edit pipeline", onSelect: () => setOpenId(p.id) },
-            { key: "del", label: "Delete pipeline…", danger: true, onSelect: () => setDeleting(p) },
-          ]}
-          moveTo={folders === null || !hasFolders ? undefined : { label: "Move to folder", items: moveItems(folderOf(p), (dest) => movePipe(p.id, dest)) }} />
+        {moreBtn(`Actions for ${p.name}`, { kind: "pipe", id: p.id })}
       </div>
     );
   };
@@ -377,18 +381,17 @@ export default function PipelinePage({ onBack }: Props) {
     const kids = tree.kids(f.id).map(folderBlock).filter(Boolean);
     const pipes = pipelines.filter((p) => folderOf(p) === f.id && matches(p));
     return (
-      <div key={f.id} className={`plx-folder ${open ? "is-open" : ""} ${isOver ? "is-over" : ""} ${drag?.id === f.id ? "is-dragging" : ""}`} role="treeitem" aria-expanded={open}>
-        <div className="plx-folder-head"
+      <div key={f.id} className={`plv-folder ${open ? "is-open" : ""} ${isOver ? "is-over" : ""} ${drag?.id === f.id ? "is-dragging" : ""}`} role="treeitem" aria-expanded={open}>
+        <div className="plv-folder-head"
           onClick={() => { if (renaming !== f.id) toggle(f.id); }}
           draggable={renaming !== f.id}
           onDragStart={(e) => startDrag(e, { kind: "folder", id: f.id })}
           onDragEnd={endDrag}
           {...dropTarget({ kind: "folder", id: f.id }, ok)}>
-          <span className="plx-chev" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6l6 6-6 6" /></svg>
-          </span>
+          <span className="plv-chev" aria-hidden="true"><Ico d={IC.chev} /></span>
+          <span className="plv-folder-ico" aria-hidden="true"><FolderIco open={open} /></span>
           {renaming === f.id ? (
-            <input className="plx-folder-input" autoFocus defaultValue={f.name} aria-label="Folder name"
+            <input className="plv-folder-input" autoFocus defaultValue={f.name} aria-label="Folder name"
               onFocus={(e) => e.currentTarget.select()}
               onClick={(e) => e.stopPropagation()}
               onBlur={(e) => commitRename(f, e.currentTarget.value)}
@@ -397,25 +400,18 @@ export default function PipelinePage({ onBack }: Props) {
                 else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setRenaming(null); }
               }} />
           ) : (
-            <span className="plx-folder-name" onDoubleClick={(e) => { e.stopPropagation(); setRenaming(f.id); }}>{f.name || "Folder"}</span>
+            <span className="plv-folder-name" onDoubleClick={(e) => { e.stopPropagation(); setRenaming(f.id); }}>{f.name || "Folder"}</span>
           )}
-          <span className="plx-count">{n}</span>
-          <RowMenu label={`Actions for folder ${f.name}`}
-            items={[
-              { key: "np", label: "New pipeline here", onSelect: () => newPipeline(f.id) },
-              { key: "nf", label: "New sub-folder", onSelect: () => newFolder(f.id) },
-              { key: "rn", label: "Rename", onSelect: () => setRenaming(f.id) },
-              { key: "del", label: "Delete folder…", danger: true, onSelect: () => setDelFolder(f) },
-            ]}
-            moveTo={{ label: "Move folder to", items: moveItems(tree.has(f.parent_id) ? f.parent_id : null, (dest) => moveFolderTo(f.id, dest), f.id) }} />
+          <span className="plv-count">{n}</span>
+          {moreBtn(`Actions for folder ${f.name}`, { kind: "folder", id: f.id })}
         </div>
         {open && (
-          <div className="plx-folder-body">
+          <div className="plv-folder-body">
             {kids}
             {pipes.map(pipeRow)}
             {!kids.length && !pipes.length && (
-              <div className={`plx-empty-slot ${isOver ? "is-over" : ""}`} {...dropTarget({ kind: "folder", id: f.id }, ok)}>
-                Drag pipelines here, or <button type="button" onClick={() => newPipeline(f.id)}>create one</button>
+              <div className={`plv-empty-slot ${isOver ? "is-over" : ""}`} {...dropTarget({ kind: "folder", id: f.id }, ok)}>
+                Drag pipelines here
               </div>
             )}
           </div>
@@ -432,76 +428,155 @@ export default function PipelinePage({ onBack }: Props) {
   });
   const preview = previewId ? pipelines.find((p) => p.id === previewId) ?? null : null;
   const previewPhases = preview ? phasesBy[preview.id] ?? [] : [];
+  const nFolders = (folders ?? []).length;
+
+  // ---- the menus ----
+  const moveList = (current: string | null, apply: (dest: string | null) => void, exclude?: string) => (
+    <>
+      <MenuItem label="Not in a folder" current={current === null} onClick={() => apply(null)} />
+      {tree.flat().filter(({ f }) => !exclude || !tree.within(f.id, exclude)).map(({ f, depth }) => (
+        <div key={f.id} style={{ paddingLeft: depth * 14 }}>
+          <MenuItem icon={IC.folder} label={f.name || "Folder"} current={current === f.id} onClick={() => apply(f.id)} />
+        </div>
+      ))}
+    </>
+  );
+  const copyChoices = pipelines.filter((p) => !copyQ || fold(p.name || "").includes(fold(copyQ)));
+  let popBody: ReactNode = null;
+  if (pop?.kind === "new") {
+    popBody = (
+      <>
+        <MenuItem icon={IC.blank} label="Blank pipeline" hint="Start from an empty canvas" onClick={() => newBlank(pop.folder)} />
+        {pipelines.length > 0 && (
+          <>
+            <div className="plv-pop-sep" />
+            <span className="plv-pop-k">Start from a copy of</span>
+            <div className="plv-pop-search"><Ico d={IC.search} /><input value={copyQ} onChange={(e) => setCopyQ(e.target.value)} placeholder="Find a pipeline" aria-label="Find a pipeline to copy" /></div>
+            <div className="plv-pop-list">
+              {copyChoices.map((p) => (
+                <MenuItem key={p.id} icon={IC.copy} label={p.name || "Untitled pipeline"}
+                  hint={[folderOf(p) ? tree.path(folderOf(p)) : null, `${(phasesBy[p.id] ?? []).length} phases`].filter(Boolean).join(" · ")}
+                  onClick={() => newCopy(p, pop.folder ?? undefined)} />
+              ))}
+              {!copyChoices.length && <p className="plv-pop-none">No pipeline matches.</p>}
+            </div>
+          </>
+        )}
+      </>
+    );
+  } else if (pop?.kind === "pipe") {
+    const p = pipelines.find((x) => x.id === pop.id);
+    if (p) popBody = pop.view === "move" ? (
+      <>
+        <button type="button" className="plv-pop-back" onClick={() => setPop({ ...pop, view: undefined })}><Ico d={IC.back} />Move to folder</button>
+        {moveList(folderOf(p), (dest) => movePipe(p.id, dest))}
+      </>
+    ) : (
+      <>
+        <MenuItem icon={IC.edit} label="Edit pipeline" onClick={() => { setPop(null); setOpenId(p.id); }} />
+        <MenuItem icon={IC.copy} label="Duplicate" hint="Same phases, under a new name" onClick={() => newCopy(p)} />
+        {folders !== null && hasFolders && <MenuItem icon={IC.move} label="Move to folder…" onClick={() => setPop({ ...pop, view: "move" })} />}
+        <div className="plv-pop-sep" />
+        <MenuItem icon={IC.trash} label="Delete…" danger onClick={() => { setPop(null); setDeleting(p); }} />
+      </>
+    );
+  } else if (pop?.kind === "folder") {
+    const f = (folders ?? []).find((x) => x.id === pop.id);
+    if (f) popBody = pop.view === "move" ? (
+      <>
+        <button type="button" className="plv-pop-back" onClick={() => setPop({ ...pop, view: undefined })}><Ico d={IC.back} />Move folder to</button>
+        {moveList(tree.has(f.parent_id) ? f.parent_id : null, (dest) => moveFolderTo(f.id, dest), f.id)}
+      </>
+    ) : (
+      <>
+        <MenuItem icon={IC.plus} label="New pipeline here…" onClick={() => setPop({ kind: "new", rect: pop.rect, folder: f.id })} />
+        <MenuItem icon={IC.folderPlus} label="New sub-folder" onClick={() => newFolder(f.id)} />
+        <MenuItem icon={IC.edit} label="Rename" onClick={() => { setPop(null); setRenaming(f.id); }} />
+        <MenuItem icon={IC.move} label="Move folder…" onClick={() => setPop({ ...pop, view: "move" })} />
+        <div className="plv-pop-sep" />
+        <MenuItem icon={IC.trash} label="Delete folder…" danger onClick={() => { setPop(null); setDelFolder(f); }} />
+      </>
+    );
+  }
 
   return (
-    <div className="pl">
-      <header className="pl-head">
+    <div className="pl plv">
+      <header className="plv-head">
         <button className="pl-back" onClick={onBack} aria-label="Back">‹</button>
-        <h1 className="pl-title">Client pipelines</h1>
-        <div className="plx-head-acts">
-          {folders !== null && (
-            <button className="plx-btn-quiet" onClick={() => newFolder(null)}><FolderIco /> New folder</button>
-          )}
-          <button className="plx-btn" onClick={() => newPipeline(null)}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
-            New pipeline
-          </button>
+        <div className="plv-titles">
+          <h1 className="pl-title">Client pipelines</h1>
+          <p>{loaded ? `${pipelines.length} ${pipelines.length === 1 ? "pipeline" : "pipelines"}${nFolders ? ` in ${nFolders} ${nFolders === 1 ? "folder" : "folders"}` : ""} · the same order for everyone` : "Loading…"}</p>
         </div>
       </header>
 
-      {pipelines.length === 0 && !hasFolders ? (
-        <p className="pl-empty">No pipelines yet. Create one to design the phases a client goes through.</p>
-      ) : (
-        <div className="pl-overview">
-          <div className="plx-panel">
-            {pipelines.length > 6 && (
-              <div className="plx-search">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" /></svg>
-                <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Find among ${pipelines.length} pipelines`} aria-label="Find a pipeline" />
-                {q && <button type="button" onClick={() => setQ("")} aria-label="Clear search">×</button>}
+      <div className="plv-body">
+        <aside className="plv-side" aria-label="Pipelines">
+          <div className="plv-acts">
+            <button type="button" className={`plv-new ${pop?.kind === "new" && !pop.folder ? "is-open" : ""}`} disabled={busy}
+              onClick={(e) => openPop(e, { kind: "new", rect: e.currentTarget.getBoundingClientRect(), folder: null })} aria-haspopup="menu">
+              <Ico d={IC.plus} />{busy ? "Copying…" : "New pipeline"}
+            </button>
+            {folders !== null && (
+              <button type="button" className="plv-newf" onClick={() => newFolder(null)} title="New folder"><Ico d={IC.folderPlus} />Folder</button>
+            )}
+          </div>
+          {pipelines.length > 5 && (
+            <div className="plv-search">
+              <Ico d={IC.search} />
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a pipeline" aria-label="Find a pipeline" />
+              {q && <button type="button" onClick={() => setQ("")} aria-label="Clear search">×</button>}
+            </div>
+          )}
+          {msg && <p className="plv-msg" role="alert">{msg}<button type="button" onClick={() => setMsg(null)} aria-label="Dismiss">×</button></p>}
+          <div className="plv-tree" role="tree" aria-label="Pipelines"
+            onDragOver={(e) => { if (dragRef.current) { e.preventDefault(); setOver(null); } }}
+            onDrop={(e) => { if (dragRef.current) { e.preventDefault(); endDrag(); } }}>
+            {roots}
+            {hasFolders && (loose.length > 0 || drag || !ql) && (
+              <div className={`plv-loose ${over?.kind === "root" ? "is-over" : ""}`} {...dropTarget({ kind: "root" })}>
+                Not in a folder <span className="plv-count">{loose.length}</span>
               </div>
             )}
-            {msg && <p className="plx-msg" role="alert">{msg}<button type="button" onClick={() => setMsg(null)} aria-label="Dismiss">×</button></p>}
-            <div className="plx-tree" role="tree" aria-label="Pipelines"
-              onDragOver={(e) => { if (dragRef.current) { e.preventDefault(); setOver(null); } }}
-              onDrop={(e) => { if (dragRef.current) { e.preventDefault(); endDrag(); } }}>
-              {roots}
-              {hasFolders && (loose.length > 0 || drag || !ql) && (
-                <div className={`plx-loose-head ${over?.kind === "root" ? "is-over" : ""}`} {...dropTarget({ kind: "root" })}>
-                  Not in a folder <span className="plx-count">{loose.length}</span>
-                </div>
-              )}
-              {loose.map(pipeRow)}
-              {ql && !roots.length && !loose.length && <p className="plx-none">No pipeline matches “{q}”.</p>}
-            </div>
-            <p className="plx-foot">
-              {folders === null
-                ? "Drag to reorder. To group pipelines in folders, run 56_pipeline_folders.sql once."
-                : "Drag a pipeline onto a folder, or between two pipelines to reorder. Everyone sees this order."}
-            </p>
+            {loose.map(pipeRow)}
+            {loaded && !pipelines.length && !hasFolders && <p className="plv-none">No pipelines yet. Create the first one above.</p>}
+            {ql && !roots.length && !loose.length && <p className="plv-none">No pipeline matches “{q}”.</p>}
           </div>
+          <p className="plv-foot">
+            {folders === null
+              ? "Drag to reorder. To group pipelines in folders, run 56_pipeline_folders.sql once."
+              : "Drag onto a folder to file it, or between two pipelines to reorder."}
+          </p>
+        </aside>
 
-          <div className="pl-preview">
-            {preview ? (
-              <div className="plx-pv">
-                <div className="plx-pv-head">
-                  <div className="plx-pv-title">
-                    <h2>{preview.name || "Untitled pipeline"}</h2>
-                    <span>
-                      {folderOf(preview) ? tree.path(folderOf(preview)) : hasFolders ? "Not in a folder" : ""}
-                      {previewPhases.length ? `${folderOf(preview) || hasFolders ? ", " : ""}${previewPhases.length} phases` : ""}
-                      {preview.is_sales ? ", shown in Sales" : ""}
-                    </span>
+        <section className="plv-main" aria-label="Preview">
+          {preview ? (
+            <>
+              <div className="plv-pv-head">
+                <div className="plv-pv-title">
+                  <h2>{preview.name || "Untitled pipeline"}</h2>
+                  <div className="plv-pv-meta">
+                    <span><FolderIco />{folderOf(preview) ? tree.path(folderOf(preview)) : "Not in a folder"}</span>
+                    <span>{previewPhases.length} {previewPhases.length === 1 ? "phase" : "phases"}</span>
+                    {preview.is_sales && <span className="plv-tag">Shown in Sales</span>}
                   </div>
-                  <button className="plx-btn" onClick={() => setOpenId(preview.id)}>Edit pipeline</button>
                 </div>
+                <button type="button" className="plv-btn-ghost" onClick={() => newCopy(preview)} disabled={busy}><Ico d={IC.copy} />Duplicate</button>
+                <button type="button" className="plv-btn" onClick={() => setOpenId(preview.id)}><Ico d={IC.edit} />Edit pipeline</button>
+              </div>
+              <div className="plv-canvas">
                 <PipelinePreview key={preview.id} pipelineId={preview.id} onOpen={() => setOpenId(preview.id)} />
               </div>
-            ) : (
-              <div className="pl-preview-empty">Select a pipeline to preview it</div>
-            )}
-          </div>
-        </div>
+            </>
+          ) : (
+            <div className="plv-pv-empty">{loaded ? "Pick a pipeline on the left to see its phases." : ""}</div>
+          )}
+        </section>
+      </div>
+
+      {pop && popBody && (
+        <Popover anchor={pop.rect} onClose={() => setPop(null)} label="Pipeline actions" width={pop.kind === "new" ? 300 : 248} align={pop.kind === "new" && !(pop as any).folder ? "start" : "end"}>
+          {popBody}
+        </Popover>
       )}
       {deleting && (
         <DeletePipelineModal

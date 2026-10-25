@@ -92,10 +92,11 @@ function useBoot(ready: Record<StepKey, boolean>, settled: boolean): Boot {
   useEffect(() => {
     const still = prefersStill();
     // pacing: the first tick after the cube has settled, then one step at a time
-    const START = still ? 0 : mode === "arrive" ? 520 : 260;
-    const GAP = still ? 0 : mode === "arrive" ? 400 : 270;
-    const HOLD = still ? 0 : mode === "arrive" ? 520 : 320;
-    const OUT = still ? 0 : mode === "arrive" ? 1080 : 560;
+    // coming back to Home ("page"): no show — each step ticks as soon as its data is in
+    const START = still ? 0 : mode === "arrive" ? 520 : 0;
+    const GAP = still ? 0 : mode === "arrive" ? 400 : 60;
+    const HOLD = still ? 0 : mode === "arrive" ? 520 : 120;
+    const OUT = still ? 0 : mode === "arrive" ? 1080 : 420;
     const s = st.current;
     const id = window.setInterval(() => {
       const now = performance.now(), t = now - s.t0;
@@ -268,12 +269,22 @@ export default function HomePage() {
     tickets: n(probe.tickets, "open", "open"),
     team: n(probe.team, "person", "people"),
   };
-  const [bootTop, setBootTop] = useState(90);
+  // the in-page loader sits right under the greeting / hero — measured once the hero is really there
+  // (it appears only after your profile loads; measuring on mount put the loader over the hero)
+  const [bootTop, setBootTop] = useState(0);
   useEffect(() => {
-    const m = () => { const b = barRef.current; if (b) setBootTop(b.offsetTop + b.offsetHeight + 12); };
-    m(); window.addEventListener("resize", m);
-    return () => window.removeEventListener("resize", m);
-  }, []);
+    const m = () => {
+      const b = barRef.current, root = rootRef.current;
+      if (!b || !root) { setBootTop(0); return; }
+      setBootTop(Math.round(b.getBoundingClientRect().bottom - root.getBoundingClientRect().top + 12));
+    };
+    m();
+    const b = barRef.current;
+    const ro = b && typeof ResizeObserver !== "undefined" ? new ResizeObserver(m) : null;
+    if (b) ro?.observe(b);
+    window.addEventListener("resize", m);
+    return () => { ro?.disconnect(); window.removeEventListener("resize", m); };
+  }, [me, area]);
   const booting = boot.phase === "boot" || boot.phase === "done";
   const hello = `${greeting()}${me?.firstName ? `, ${me.firstName}` : ""}`;
 

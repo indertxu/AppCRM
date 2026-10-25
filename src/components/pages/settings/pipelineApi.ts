@@ -142,6 +142,66 @@ export async function createPipeline(name: string, folderId?: string | null): Pr
   return data as Pipeline;
 }
 
+/**
+ * A new pipeline that starts as a copy of another: its phases (same names, places,
+ * colours, win / loss, close %, handovers, departments, products and services) and
+ * its arrows. It lands right after the original, in the same folder unless told
+ * otherwise. Deals are not copied. Returns the new pipeline, or why it failed.
+ */
+export async function duplicatePipeline(srcId: string, name: string, folderId?: string | null): Promise<Pipeline | string> {
+  const { data: src, error: e0 } = await supabase.from("pipelines").select("*").eq("id", srcId).maybeSingle();
+  if (e0 || !src) return e0?.message ?? "That pipeline isn't there any more.";
+  const row: Record<string, unknown> = { name, is_sales: (src as any).is_sales ?? false };
+  if ((src as any).description) row.description = (src as any).description;
+  if ((src as any).source_blueprint_id) row.source_blueprint_id = (src as any).source_blueprint_id;
+  const folder = folderId === undefined ? (src as any).folder_id ?? null : folderId;
+  if (folder) row.folder_id = folder;
+  const { data: created, error: e1 } = await supabase.from("pipelines").insert(row).select().single();
+  if (e1 || !created) return e1?.message ?? "Couldn't create the copy: your user isn't allowed to.";
+  const copy = created as Pipeline;
+  const fail = async (msg: string) => { await supabase.from("pipelines").delete().eq("id", copy.id); return `Couldn't copy the phases: ${msg}`; };
+
+  const { phases, links } = await loadPipeline(srcId);
+  const idOf = new Map(phases.map((p) => [p.id, crypto.randomUUID()]));
+  if (phases.length) {
+    const rows = phases.map((p) => {
+      const r: Record<string, unknown> = { id: idOf.get(p.id), pipeline_id: copy.id, name: p.name, pos_x: Math.round(p.pos_x), pos_y: Math.round(p.pos_y) };
+      if (p.color) r.color = p.color;
+      if (p.handover_to) r.handover_to = p.handover_to;
+      if (p.source_phase_key) r.source_phase_key = p.source_phase_key;
+      if (p.sales_visible === false) r.sales_visible = false;
+      if (p.sales_outcome) r.sales_outcome = p.sales_outcome;
+      if (p.close_probability != null) r.close_probability = p.close_probability;
+      return r;
+    });
+    const e = wrote(await supabase.from("pipeline_phases").insert(rows).select("id"), rows.length);
+    if (e) return fail(e);
+  }
+  const linkRows = links.filter((l) => idOf.has(l.from_phase) && idOf.has(l.to_phase))
+    .map((l) => ({ pipeline_id: copy.id, from_phase: idOf.get(l.from_phase), to_phase: idOf.get(l.to_phase) }));
+  if (linkRows.length) {
+    const e = wrote(await supabase.from("pipeline_links").insert(linkRows).select("id"), linkRows.length);
+    if (e) return fail(e);
+  }
+  const deptRows = phases.flatMap((p) => p.deptKeys.map((k) => ({ phase_id: idOf.get(p.id), dept_key: k })));
+  if (deptRows.length) {
+    const r = await supabase.from("pipeline_phase_departments").insert(deptRows);
+    if (r.error) return fail(r.error.message);
+  }
+  const itemRows = phases.flatMap((p) => p.items.map((it) => ({ phase_id: idOf.get(p.id), item_type: it.type, item_id: it.id })));
+  if (itemRows.length) {
+    const r = await supabase.from("pipeline_phase_items").insert(itemRows);
+    if (r.error) return fail(r.error.message);
+  }
+  // right after the original in the company's order
+  const all = await listPipelines();
+  const ids = all.map((p) => p.id).filter((id) => id !== copy.id);
+  const at = ids.indexOf(srcId);
+  ids.splice(at < 0 ? ids.length : at + 1, 0, copy.id);
+  await savePipelineOrder(ids);
+  return copy;
+}
+
 export async function renamePipeline(id: string, name: string): Promise<string | null> {
   return wrote(await supabase.from("pipelines").update({ name }).eq("id", id).select("id"));
 }
