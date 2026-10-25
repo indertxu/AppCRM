@@ -374,6 +374,22 @@ export function pendingSectionPart(path: string, level: number, parentPart?: str
 }
 export function clearPendingSection() { pendingSection = null; }
 
+/* =====================================================================
+   Leaving a screen with unsaved work (e.g. the pipeline editor).
+   The screen registers a hold while it has changes; the sidebar, the account
+   menu and the search run their navigation through guardedLeave(), so the
+   screen can ask first ("Save / Discard / Keep editing") and then let it go.
+   ===================================================================== */
+type LeaveHold = (go: () => void) => boolean;
+let leaveHold: LeaveHold | null = null;
+/** While set, `hold(go)` returns true when it takes over (it asks, and calls go() if the person leaves). */
+export function setLeaveGuard(hold: LeaveHold | null) { leaveHold = hold; }
+/** Run `go` now — unless a screen with unsaved work wants to ask first. */
+export function guardedLeave(go: () => void) {
+  if (leaveHold && leaveHold(go)) return;
+  go();
+}
+
 /**
  * Switch a page (or a panel inside it) to the requested sub-section.
  *   level 0 = the page's own tabs/views; level 1 = a panel inside the tab given as `parentPart`.

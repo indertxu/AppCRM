@@ -19,6 +19,8 @@ import {
   renameCustomValue, customList,
   listCompanyDeals, type DealRef,
   setFixedRequired, useRequiredFields,
+  companiesList, companiesIds, companiesCount, companiesRows, companiesFacets, companiesLight, companyPeople, searchContacts,
+  type CompanyFacets, type ServerView,
 } from "./companiesApi";
 import { logoCandidates } from "../clients/clientsTypes";
 import { searchPlaces, lookupPostal, postalLooksComplete, provinceFromPostal, countryName, matchCountry, normalizeLinkedIn, isLinkedIn, linkedInHandle, type AddressHit,
@@ -41,6 +43,10 @@ export const GEAR = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" s
 
 // Strip accents/diacritics so "brujula" matches "brújula".
 const norm = (s: string) => (s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+/** Rows asked from the database at a time (server mode). */
+const CO_BLOCK = 100;
+/** What the database sends with each company row (51_companies_server.sql). */
+const coSrv = (c: Company) => c as Company & { __types?: string[]; __status?: string[]; __pipes?: string[]; __parentName?: string | null; __kids?: number; __count?: number; __assignees?: string[] };
 
 export default function CompaniesPage() {
   const navigate = useNavigate();
@@ -68,8 +74,35 @@ export default function CompaniesPage() {
   const [options, setOptions] = useState<CrmOption[]>([]);
   const reloadOptions = async () => setOptions(await listCrmOptions().catch(() => []));
 
+  // ---- Server mode (51_companies_server.sql): the database filters, sorts, counts and pages the list ----
+  /** null until known; true = only the rows on screen come down; false = the old way (everything here). */
+  const [server, setServer] = useState<boolean | null>(null);
+  const [srvRows, setSrvRows] = useState<Company[]>([]);
+  const [srvTotal, setSrvTotal] = useState(0);
+  const [srvAll, setSrvAll] = useState<number | null>(null);
+  const [srvErr, setSrvErr] = useState<string | null>(null);
+  const [srvTick, setSrvTick] = useState(0);
+  const [facets, setFacets] = useState<CompanyFacets | null>(null);
+  const [allIds, setAllIds] = useState<string[] | null>(null);
+  /** id + name + group of every company (pickers, group tree), read when first needed. */
+  const [light, setLight] = useState<Company[] | null>(null);
+  const [peopleCache, setPeopleCache] = useState<Map<string, Contact[]>>(new Map());
+  const [editPeople, setEditPeople] = useState<Contact[]>([]);
+  const srvGen = useRef(0);
+  const srvLoading = useRef(false);
+  const srvKeep = useRef(0);
+  const srvRefresh = () => {
+    srvKeep.current = srvRows.length;
+    setSrvTick((x) => x + 1);
+    setPeopleCache(new Map());
+    companiesCount(emptyView(), "").then((n) => { if (n != null) setSrvAll(n); }).catch(() => {});
+    companiesFacets().then((f) => { if (f) setFacets(f); }).catch(() => {});
+    if (light) companiesLight(true).then(setLight).catch(() => {});
+  };
+
   const reload = async () => {
     void reloadOptions();
+    if (server) { srvRefresh(); return; }
     // companies and their people arrive together: a company opened while its
     // people were still loading used to show none (and "0 contacts")
     const [cos, cts, cnt] = await Promise.all([
@@ -94,27 +127,40 @@ export default function CompaniesPage() {
     myProfile().then(setMe).catch(() => {});
     listEmployees().then(setEmployees).catch(() => {});
     loadPrefs().then((p) => { if (Array.isArray(p.companyColumns)) setColumns(p.companyColumns); if (typeof p.companyCompact === "boolean") setCompact(p.companyCompact); }).catch(() => {});
-    reload();
+    // The database runs the list when 51_companies_server.sql is in; otherwise everything is read here (old way).
+    companiesCount(emptyView(), "").then((n) => {
+      if (n == null) { setServer(false); reload(); return; }
+      setSrvAll(n); setServer(true);
+      void reloadOptions();
+      listCompanyFields().then(setFields).catch(() => {});
+      listContactFields().then(setContactFields).catch(() => {});
+      companiesFacets().then((f) => { if (f) setFacets(f); }).catch(() => {});
+    }).catch(() => { setServer(false); reload(); });
   }, []);
 
   // Opened from a company pill on Contacts: jump straight into that company.
   const location = useLocation();
   useEffect(() => {
     const id = (location.state as any)?.focusCompanyId;
+    if (id && server) {
+      companiesRows([id]).then((r) => { if (r[0]) setEditing(structuredClone(r[0])); }).catch(() => {});
+      navigate(location.pathname, { replace: true, state: null });
+      return;
+    }
     if (!id || companies.length === 0) return;
     const c = companies.find((x) => x.id === id);
     if (c) setEditing(structuredClone(c));
     navigate(location.pathname, { replace: true, state: null });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.state, companies]);
+  }, [location.state, companies, server]);
 
   const lead = isSalesLead(me);
 
   // ---- Every field the list can be filtered and sorted by ----
   const emp = (id?: string | null) => employees.find((e) => e.id === id)?.name ?? "";
   const people = () => employees.map((e) => ({ value: e.id, label: e.name }));
-  const valuesOf = (get: (c: Company) => unknown) => () =>
-    [...new Set(companies.map((c) => String(get(c) ?? "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)).map((v) => ({ value: v, label: v }));
+  const valuesOf = (get: (c: Company) => unknown, facet?: "city" | "province" | "country") => () =>
+    [...new Set(server && facet ? (facets?.[facet] ?? []).map((v) => String(v).trim()).filter(Boolean) : companies.map((c) => String(get(c) ?? "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)).map((v) => ({ value: v, label: v }));
   // built once per load (they were rebuilt on every render, and the people of each row were found by scanning every contact)
   const kids = useMemo(() => { const m = new Map<string, number>(); companies.forEach((c) => { if (c.parent_id) m.set(c.parent_id, (m.get(c.parent_id) ?? 0) + 1); }); return m; }, [companies]);
   const coName = useMemo(() => new Map(companies.map((c) => [c.id as string, c.name])), [companies]);
@@ -125,17 +171,23 @@ export default function CompaniesPage() {
   }, [contacts]);
   const ctOf = useMemo(() => { const m = new Map<string, string[]>(); peopleOf.forEach((l, id) => m.set(id, l.filter((ct) => ct.id).map((ct) => ct.id as string))); return m; }, [peopleOf]);
   const addrOf = (c: Company) => [c.street, c.addr_number, c.postal_code, c.city, c.province, c.country].filter(Boolean).join(", ");
-  const statusTags = (c: Company) => { const s = companyStatus(c, rel); return [...(s.client ? ["client"] : []), ...(s.sales ? ["sales"] : []), ...(!s.client && !s.sales ? ["none"] : [])]; };
+  /** Where a company stands: from its row (server mode) or worked out here. */
+  const stOf = (c: Company): RelStatus => { const s = coSrv(c).__status; return s ? { client: s.includes("client"), sales: s.includes("sales"), pipelines: coSrv(c).__pipes ?? [] } : companyStatus(c, rel); };
+  const cntOf = (c: Company) => coSrv(c).__count ?? counts[c.id as string] ?? 0;
+  const kidsOf = (c: Company) => coSrv(c).__kids ?? kids.get(c.id ?? "") ?? 0;
+  const parentNameOf = (c: Company) => coSrv(c).__parentName ?? (c.parent_id ? coName.get(c.parent_id) : undefined);
+  function asgOf(c: Company): string[] { return coSrv(c).__assignees ?? assignees[c.id ?? ""] ?? []; }
+  const statusTags = (c: Company) => { const s = stOf(c); return [...(s.client ? ["client"] : []), ...(s.sales ? ["sales"] : []), ...(!s.client && !s.sales ? ["none"] : [])]; };
   const typeRank = (c: Company) => typeSortKey(typeTags(c));
-  const typeTags = (c: Company) => { const s = companyStatus(c, rel); return [...new Set(["crm", ...(c.relationship ?? []), ...(s.client ? ["client"] : []), ...(s.sales ? ["sales"] : [])])]; };
-  const allPipes = () => [...new Set(Object.values(rel?.pipesByCompany ?? {}).flat())].sort().map((p) => ({ value: p, label: p }));
+  const typeTags = (c: Company) => { const t = coSrv(c).__types; if (t) return t; const s = stOf(c); return [...new Set(["crm", ...(c.relationship ?? []), ...(s.client ? ["client"] : []), ...(s.sales ? ["sales"] : [])])]; };
+  const allPipes = () => (server ? [...(facets?.pipelines ?? [])] : [...new Set(Object.values(rel?.pipesByCompany ?? {}).flat())]).sort().map((p) => ({ value: p, label: p }));
   const billing = (c: Company) => c.billing ?? {};
   const filterFields: FField<Company>[] = [
     { key: "name", label: "Name", group: "Company", type: "text", get: (c) => c.name },
     { key: "legal_name", label: "Legal name", group: "Company", type: "text", get: (c) => c.legal_name },
     { key: "vat_number", label: "VAT / Tax ID", group: "Company", type: "text", get: (c) => c.vat_number },
-    { key: "sector", label: "Sector", group: "Company", type: "select", get: (c) => c.sector, options: () => [...new Set([...sectorOptions(options), ...companies.map((c) => c.sector ?? "").filter(Boolean)])].map((v) => ({ value: v, label: v })) },
-    { key: "source", label: "Source", group: "Company", type: "select", get: (c) => c.source ?? "", options: () => [...new Set([...sourceOptions(options), ...companies.map((c) => c.source ?? "").filter(Boolean)])].map((v) => ({ value: v, label: v })) },
+    { key: "sector", label: "Sector", group: "Company", type: "select", get: (c) => c.sector, options: () => [...new Set([...sectorOptions(options), ...(server ? facets?.sector ?? [] : companies.map((c) => c.sector ?? "").filter(Boolean))])].map((v) => ({ value: v, label: v })) },
+    { key: "source", label: "Source", group: "Company", type: "select", get: (c) => c.source ?? "", options: () => [...new Set([...sourceOptions(options), ...(server ? facets?.source ?? [] : companies.map((c) => c.source ?? "").filter(Boolean))])].map((v) => ({ value: v, label: v })) },
     { key: "relationship", label: "Type (client, partner…)", group: "Company", type: "multi", get: typeTags, sort: typeRank, options: () => relationshipOptions(options).map((o) => ({ value: o.key, label: o.label })) },
     { key: "website", label: "Website", group: "Contact details", type: "text", get: (c) => c.website },
     { key: "linkedin", label: "LinkedIn", group: "Contact details", type: "text", get: (c) => c.linkedin },
@@ -143,23 +195,23 @@ export default function CompaniesPage() {
     { key: "phone", label: "Mobile", group: "Contact details", type: "text", get: (c) => phoneText(c.phone, c.phone_ext) },
     { key: "landline", label: "Landline", group: "Contact details", type: "text", get: (c) => phoneText(c.landline, c.landline_ext) },
     { key: "status", label: "Sales status", group: "Sales", type: "multi", get: statusTags, options: () => [{ value: "client", label: "Client" }, { value: "sales", label: "In sales" }, { value: "none", label: "Not yet in play" }] },
-    { key: "pipelines", label: "Pipeline", group: "Sales", type: "multi", get: (c) => (c.id ? rel?.pipesByCompany[c.id] ?? [] : []), options: allPipes },
+    { key: "pipelines", label: "Pipeline", group: "Sales", type: "multi", get: (c) => (coSrv(c).__pipes ?? (c.id ? rel?.pipesByCompany[c.id] ?? [] : [])), options: allPipes },
     { key: "address", label: "Full address", group: "Address", type: "text", get: addrOf },
     { key: "street", label: "Street", group: "Address", type: "text", get: (c) => [c.street, c.addr_number].filter(Boolean).join(" ") },
     { key: "postal_code", label: "Postal code", group: "Address", type: "text", get: (c) => c.postal_code },
-    { key: "city", label: "City", group: "Address", type: "select", get: (c) => (c.city ?? "").trim(), options: valuesOf((c) => c.city) },
-    { key: "province", label: "Province / state", group: "Address", type: "select", get: (c) => (c.province ?? "").trim(), options: valuesOf((c) => c.province) },
-    { key: "country", label: "Country", group: "Address", type: "select", get: (c) => (c.country ?? "").trim(), options: valuesOf((c) => c.country) },
+    { key: "city", label: "City", group: "Address", type: "select", get: (c) => (c.city ?? "").trim(), options: valuesOf((c) => c.city, "city") },
+    { key: "province", label: "Province / state", group: "Address", type: "select", get: (c) => (c.province ?? "").trim(), options: valuesOf((c) => c.province, "province") },
+    { key: "country", label: "Country", group: "Address", type: "select", get: (c) => (c.country ?? "").trim(), options: valuesOf((c) => c.country, "country") },
     { key: "addr_complete", label: "Address complete", group: "Address", type: "boolean", get: (c) => !!(c.street && c.postal_code && c.city && c.country) },
-    { key: "parent", label: "Parent company", group: "Group", type: "select", get: (c) => c.parent_id ?? "", options: () => companies.filter((c) => c.id && kids.has(c.id)).map((c) => ({ value: c.id!, label: c.name })).sort((a, b) => a.label.localeCompare(b.label)) },
-    { key: "in_group", label: "Part of a group", group: "Group", type: "boolean", get: (c) => !!c.parent_id || kids.has(c.id ?? "") },
-    { key: "subsidiaries", label: "Number of subsidiaries", group: "Group", type: "number", get: (c) => kids.get(c.id ?? "") ?? 0 },
-    { key: "contacts_count", label: "Number of contacts", group: "People", type: "number", get: (c) => counts[c.id as string] ?? 0 },
-    { key: "contacts", label: "Contacts", group: "People", type: "multi", get: (c) => ctOf.get(c.id ?? "") ?? [], options: () => contacts.filter((ct) => ct.id).map((ct) => ({ value: ct.id!, label: [ct.first_name, ct.last_name].filter(Boolean).join(" ") || ct.email || "Unnamed" })) },
+    { key: "parent", label: "Parent company", group: "Group", type: "select", get: (c) => c.parent_id ?? "", options: () => server ? [...(facets?.parents ?? [])] : companies.filter((c) => c.id && kids.has(c.id)).map((c) => ({ value: c.id!, label: c.name })).sort((a, b) => a.label.localeCompare(b.label)) },
+    { key: "in_group", label: "Part of a group", group: "Group", type: "boolean", get: (c) => !!c.parent_id || kidsOf(c) > 0 },
+    { key: "subsidiaries", label: "Number of subsidiaries", group: "Group", type: "number", get: (c) => kidsOf(c) },
+    { key: "contacts_count", label: "Number of contacts", group: "People", type: "number", get: (c) => cntOf(c) },
+    { key: "contacts", label: "Contacts", group: "People", type: "multi", get: (c) => ctOf.get(c.id ?? "") ?? [], options: () => server ? [...(facets?.contacts ?? [])] : contacts.filter((ct) => ct.id).map((ct) => ({ value: ct.id!, label: [ct.first_name, ct.last_name].filter(Boolean).join(" ") || ct.email || "Unnamed" })) },
     { key: "billing_set", label: "Has billing details", group: "Billing", type: "boolean", get: (c) => !!(billing(c).name || billing(c).email || billing(c).phone) },
     { key: "billing_name", label: "Billing name", group: "Billing", type: "text", get: (c) => billing(c).name },
     { key: "billing_email", label: "Billing email", group: "Billing", type: "text", get: (c) => billing(c).email },
-    { key: "visible_to", label: "Visible to", group: "Record", type: "multi", get: (c) => assignees[c.id ?? ""] ?? [], options: people },
+    { key: "visible_to", label: "Visible to", group: "Record", type: "multi", get: (c) => asgOf(c), options: people },
     { key: "created_by", label: "Created by", group: "Record", type: "select", get: (c) => c.created_by ?? "", options: people, sort: (c) => emp(c.created_by) || null },
     { key: "created_at", label: "Created on", group: "Record", type: "date", get: (c) => c.created_at },
     { key: "imported_by", label: "Imported by", group: "Record", type: "select", get: (c) => (c as any).imported_by ?? "", options: people },
@@ -168,7 +220,7 @@ export default function CompaniesPage() {
     ...fields.map((f): FField<Company> => ({
       key: f.id, label: f.label, group: "Your fields", type: f.type === "multiselect" ? "multi" : f.type,
       get: (c) => (f.type === "multiselect" ? customList((c.custom ?? {})[f.id]) : (c.custom ?? {})[f.id]),
-      ...(isChoiceType(f.type) ? { options: () => [...new Set([...f.options, ...(f.type === "multiselect" ? companies.flatMap((c) => customList((c.custom ?? {})[f.id])) : [])])].map((o) => ({ value: o, label: o })) } : {}),
+      ...(isChoiceType(f.type) ? { options: () => [...new Set([...f.options, ...(f.type === "multiselect" ? (server ? facets?.custom?.[f.id] ?? [] : companies.flatMap((c) => customList((c.custom ?? {})[f.id]))) : [])])].map((o) => ({ value: o, label: o })) } : {}),
     })),
   ];
   // the header of each column sorts by this field
@@ -186,25 +238,84 @@ export default function CompaniesPage() {
   }, [visible, dq, hayOf]);
   const fieldsRef = useRef(filterFields);
   fieldsRef.current = filterFields;
-  const shown = useMemo(
-    () => applyView(searched, fieldsRef.current, view, (a, b) => a.name.localeCompare(b.name)),
+  const localShown = useMemo(
+    () => (server ? [] : applyView(searched, fieldsRef.current, view, (a, b) => a.name.localeCompare(b.name))),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [searched, view, counts, rel, fields, contactFields, options, peopleOf, assignees, employees],
+    [server, searched, view, counts, rel, fields, contactFields, options, peopleOf, assignees, employees],
   );
+  const shown = server ? srvRows : localShown;
+  /** How many companies match (server mode: counted by the database). */
+  const listLen = server ? srvTotal : shown.length;
+  const allLen = server ? srvAll ?? srvTotal : visible.length;
+
+  // ---- Server mode: the view as the database reads it; the first rows, then more as you scroll ----
+  const serverView = useMemo<ServerView>(() => {
+    const byKey = new Map(fieldsRef.current.map((f) => [f.key, f]));
+    return {
+      match: view.match,
+      conds: view.conds.filter((c) => byKey.has(c.field)).map((c) => ({ ...c, type: byKey.get(c.field)!.type })),
+      sort: view.sort.filter((x) => byKey.has(x.key)).map((x) => ({ ...x, type: byKey.get(x.key)!.type })),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, fields]);
+  const srvQuery = useRef({ view: serverView, q: "" });
+  useEffect(() => {
+    if (!server) return;
+    const gen = ++srvGen.current;
+    srvQuery.current = { view: serverView, q: dq };
+    setAllIds(null);
+    // after a save the list keeps as many rows as it had (it doesn't jump back to the first 100)
+    const want = Math.min(500, Math.max(CO_BLOCK, srvKeep.current));
+    srvKeep.current = 0;
+    const t = setTimeout(() => {
+      srvLoading.current = true;
+      companiesList(serverView, dq, 0, want).then((r) => {
+        if (!r || gen !== srvGen.current) return;
+        setSrvRows(r.rows); setSrvTotal(r.total); setSrvErr(null); setLoaded(true);
+      }).catch((e) => { if (gen === srvGen.current) { setSrvErr(String((e as any)?.message ?? e)); setLoaded(true); } })
+        .finally(() => { if (gen === srvGen.current) srvLoading.current = false; });
+    }, gen === 1 ? 0 : 120);
+    return () => clearTimeout(t);
+  }, [server, serverView, dq, srvTick]);
+  const loadMore = () => {
+    if (!server || srvLoading.current || srvRows.length >= srvTotal) return;
+    const gen = srvGen.current, qy = srvQuery.current, from = srvRows.length;
+    srvLoading.current = true;
+    companiesList(qy.view, qy.q, from, CO_BLOCK).then((r) => {
+      if (!r || gen !== srvGen.current) return;
+      setSrvRows((cur) => (cur.length === from ? [...cur, ...r.rows] : cur)); setSrvTotal(r.total);
+    }).catch(() => {}).finally(() => { if (gen === srvGen.current) srvLoading.current = false; });
+  };
+  const loadAllIds = () => {
+    const gen = srvGen.current, qy = srvQuery.current;
+    return companiesIds(qy.view, qy.q).then((ids) => { if (gen === srvGen.current) setAllIds(ids); return ids; });
+  };
+  const needLight = () => { if (server && !light) companiesLight().then(setLight).catch(() => {}); };
   // long lists grow as you scroll (a row can open its people, so rows aren't all the same height)
   const [renderN, setRenderN] = useState(120);
   useEffect(() => { setRenderN(120); }, [dq, view]);
 
   // ---- Multi-select: tag, assign, group, export or delete many companies ----
-  const shownIds = useMemo(() => shown.map((c) => c.id as string), [shown]);
+  const shownIds = useMemo(() => (server && allIds ? allIds : shown.map((c) => c.id as string)), [server, allIds, shown]);
   const bulk = useBulkSelection(shownIds);
+  // selecting in server mode: every id of the list once (select all, shift-click), and the names for "Part of a group"
+  useEffect(() => { if (server && bulk.active) { if (!allIds) loadAllIds().catch(() => {}); needLight(); } }, [server, bulk.active, allIds]); // eslint-disable-line react-hooks/exhaustive-deps
+  const wantAll = useRef(false);
+  const toggleAllRows = () => {
+    if (server && !allIds && !bulk.allOn) { wantAll.current = true; loadAllIds().catch(() => { wantAll.current = false; }); return; }
+    bulk.toggleAll();
+  };
+  useEffect(() => { if (wantAll.current && allIds) { wantAll.current = false; bulk.toggleAll(); } }, [allIds]); // eslint-disable-line react-hooks/exhaustive-deps
   const [exportIds, setExportIds] = useState<string[] | null>(null);
-  const pickedList = useMemo(() => (bulk.sel.size ? companies.filter((c) => bulk.sel.has(c.id as string)) : []), [bulk.sel, companies]);
+  const pickedList = useMemo(() => (bulk.sel.size ? (server ? srvRows : companies).filter((c) => bulk.sel.has(c.id as string)) : []), [bulk.sel, companies, server, srvRows]);
   const pickedCos = () => pickedList;
+  /** The full rows of the selection (server mode: read from the database). */
+  const pickCos = async (): Promise<Company[]> => (server ? companiesRows(bulk.ids) : pickedList);
+  const allCos = server ? light ?? [] : companies;
   const BI = (d: string) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>;
   const saveMany = async (patch: (c: Company) => Partial<Company> | null, label: string) => {
     let n = 0;
-    for (const c of pickedCos()) { const p = patch(c); if (!p) continue; const e = await saveCompany({ ...c, ...p }); if (e) { await reload(); return e; } n++; }
+    for (const c of await pickCos()) { const p = patch(c); if (!p) continue; const e = await saveCompany({ ...c, ...p }); if (e) { await reload(); return e; } n++; }
     await reload(); bulk.clear();
     return { done: `${label} · ${n} ${n === 1 ? "company" : "companies"}` };
   };
@@ -216,7 +327,7 @@ export default function CompaniesPage() {
       run: async (v) => {
         if (!v) return null;
         let n = 0;
-        for (const c of pickedCos()) { const cur = assignees[c.id!] ?? []; if (!cur.includes(v)) { await setCompanyAssignees(c.id!, [...cur, v]); n++; } }
+        for (const c of await pickCos()) { const cur = asgOf(c); if (!cur.includes(v)) { await setCompanyAssignees(c.id!, [...cur, v]); n++; } }
         await reload(); bulk.clear();
         return { done: `${employees.find((e) => e.id === v)?.name ?? "They"} now see ${n} more` };
       },
@@ -233,12 +344,12 @@ export default function CompaniesPage() {
     },
     {
       key: "sector", label: "Set sector", more: true, icon: BI("M3 21h18M5 21V7l7-4 7 4v14M9 9h1M14 9h1M9 13h1M14 13h1M9 17h1M14 17h1"),
-      options: [...new Set([...sectorOptions(options), ...companies.map((c) => c.sector ?? "").filter(Boolean)])].sort().map((v) => ({ value: v, label: v })),
+      options: [...new Set([...sectorOptions(options), ...(server ? facets?.sector ?? [] : companies.map((c) => c.sector ?? "").filter(Boolean))])].sort().map((v) => ({ value: v, label: v })),
       run: (v) => (v ? saveMany((c) => (c.sector === v ? null : { sector: v }), `Sector ${v}`) : null),
     },
     {
       key: "source", label: "Set source", more: true, icon: BI("M12 22s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 15.8 12 22 12 22zM12 13a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z"),
-      options: [...new Set([...sourceOptions(options), ...companies.map((c) => c.source ?? "").filter(Boolean)])].map((v) => ({ value: v, label: v })),
+      options: [...new Set([...sourceOptions(options), ...(server ? facets?.source ?? [] : companies.map((c) => c.source ?? "").filter(Boolean))])].map((v) => ({ value: v, label: v })),
       run: (v) => (v ? saveMany((c) => (c.source === v ? null : { source: v }), `Source ${v}`) : null),
     },
     ...(fields.some((f) => f.type === "multiselect") ? [{
@@ -260,13 +371,13 @@ export default function CompaniesPage() {
     }] as BulkAction[] : []),
     {
       key: "group", label: "Part of a group", more: true, icon: BI("M4 3h8v6H4zM12 15h8v6h-8zM8 9v4a2 2 0 0 0 2 2h2"),
-      options: [{ value: "__none", label: "No group", hint: "Make them standalone" }, ...companies.filter((c) => !bulk.has(c.id as string)).map((c) => ({ value: c.id as string, label: c.name }))],
+      options: [{ value: "__none", label: "No group", hint: "Make them standalone" }, ...allCos.filter((c) => !bulk.has(c.id as string)).map((c) => ({ value: c.id as string, label: c.name }))],
       run: async (v) => {
         if (!v) return null;
         let n = 0;
-        for (const c of pickedCos()) { const e = await setCompanyParent(c.id!, v === "__none" ? null : v); if (e) { await reload(); return e; } n++; }
+        for (const id of bulk.ids) { const e = await setCompanyParent(id, v === "__none" ? null : v); if (e) { await reload(); return e; } n++; }
         await reload(); bulk.clear();
-        return { done: v === "__none" ? `${n} made standalone` : `${n} now part of ${companies.find((c) => c.id === v)?.name}` };
+        return { done: v === "__none" ? `${n} made standalone` : `${n} now part of ${allCos.find((c) => c.id === v)?.name ?? "the group"}` };
       },
     },
     {
@@ -288,7 +399,36 @@ export default function CompaniesPage() {
   const [filtersOpenTick, setFiltersOpenTick] = useState(0);
   const fieldById = (id: string) => fields.find((f) => f.id === id);
 
-  const contactsOf = (companyId: string) => peopleOf.get(companyId) ?? [];
+  const contactsOf = (companyId: string) => (server ? peopleCache.get(companyId) ?? [] : peopleOf.get(companyId) ?? []);
+  // server mode: a company's people are read when you open its row
+  useEffect(() => {
+    if (!server || !open || peopleCache.has(open)) return;
+    const id = open;
+    companyPeople(id).then((list) => setPeopleCache((m) => new Map(m).set(id, list))).catch(() => setPeopleCache((m) => new Map(m).set(id, [])));
+  }, [server, open, peopleCache]);
+  // server mode: the panel gets the company's people and the company names (pickers, group tree)
+  useEffect(() => {
+    if (!server || !editing) return;
+    needLight();
+    setEditPeople([]);
+    if (editing.id) companyPeople(editing.id).then(setEditPeople).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [server, editing?.id]);
+  // Export (server mode): the export needs every company and contact, read only when you export
+  const [exportData, setExportData] = useState<{ companies: Company[]; contacts: Contact[]; shown: string[] } | null>(null);
+  useEffect(() => {
+    if (!exporting || !server || exportData) return;
+    let off = false;
+    Promise.all([
+      listCompanies(), listContacts(), lead ? Promise.resolve(null) : loadCompanyAssignees(),
+      exportIds ? Promise.resolve(exportIds) : allIds ? Promise.resolve(allIds) : loadAllIds(),
+    ]).then(([cos, cts, asg, ids]) => {
+      if (off) return;
+      const mine = asg && me ? cos.filter((c) => (asg[c.id!] ?? []).includes(me.id)) : cos;
+      setExportData({ companies: mine, contacts: cts, shown: ids });
+    }).catch(() => { if (!off) { setExporting(false); setExportIds(null); } });
+    return () => { off = true; };
+  }, [exporting, server]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const addrLine = (c: Company) =>
     [c.street, c.addr_number, c.city, c.country].filter(Boolean).join(", ") || "—";
@@ -323,7 +463,7 @@ export default function CompaniesPage() {
   const setColumnsPersist = (next: string[]) => { setColumns(next); savePref("companyColumns", next).catch(() => {}); };
 
   const renderCell = (c: Company, key: string) => {
-    if (key === "relationship") return <TypeChips tags={typeTags(c).map((tag) => ({ tag }))} pipelines={companyStatus(c, rel).pipelines} />;
+    if (key === "relationship") return <TypeChips tags={typeTags(c).map((tag) => ({ tag }))} pipelines={stOf(c).pipelines} />;
     if (key === "vat_number") return <span className="co-lmono">{c.vat_number || "—"}</span>;
     if (key === "address") return <span className="co-laddr">{addrLine(c)}</span>;
     if (key === "city") return <span className="co-laddr">{c.city || "—"}</span>;
@@ -333,14 +473,14 @@ export default function CompaniesPage() {
     if (key === "landline") return <span className="co-lmono">{phoneText(c.landline, c.landline_ext) || "—"}</span>;
     if (key === "sector") return <span className="co-laddr">{c.sector || "—"}</span>;
     if (key === "source") return <span className="co-laddr">{c.source || "—"}</span>;
-    if (key === "group") return <span className="co-laddr">{c.parent_id ? `↳ ${coName.get(c.parent_id) ?? "—"}` : kids.has(c.id ?? "") ? "Top of a group" : "—"}</span>;
+    if (key === "group") return <span className="co-laddr">{c.parent_id ? `↳ ${parentNameOf(c) ?? "—"}` : kidsOf(c) > 0 ? "Top of a group" : "—"}</span>;
     if (key === "created_by") return <span className="co-laddr">{employees.find((e) => e.id === c.created_by)?.name ?? "—"}</span>;
     if (key === "contacts") return (
       <span className="co-lright">
         <button className={`co-expand ${open === c.id ? "is-on" : ""}`}
           aria-expanded={open === c.id} aria-label="Show contacts"
           onClick={(e) => { e.stopPropagation(); setOpen(open === c.id ? null : c.id!); }}>
-          <b className="co-lbadge">{counts[c.id!] ?? 0}</b>
+          <b className="co-lbadge">{cntOf(c)}</b>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={open === c.id ? "M18 15l-6-6-6 6" : "M6 9l6 6 6-6"} /></svg>
         </button>
       </span>
@@ -357,7 +497,7 @@ export default function CompaniesPage() {
   // The rows only change with the list itself — opening, editing or closing a company panel does not
   // re-render (or re-measure) thousands of rows underneath it.
   const dataKey = dataColumns.join("|");
-  const listRows = useMemo(() => shown.slice(0, renderN).map((c) => {
+  const listRows = useMemo(() => shown.slice(0, server ? shown.length : renderN).map((c) => {
               const people = contactsOf(c.id!);
               const isOpen = open === c.id;
               return (
@@ -374,10 +514,10 @@ export default function CompaniesPage() {
                       <span className="co-lid-text">
                         <span className="co-lname-row">
                           <span className="co-lname">{c.name}</span>
-                          {!dataColumns.includes("relationship") && <StatusPills status={companyStatus(c, rel)} tags={c.relationship} />}
+                          {!dataColumns.includes("relationship") && <StatusPills status={stOf(c)} tags={c.relationship} />}
                         </span>
                         {(c.legal_name || c.parent_id) && (
-                          <span className="co-lsub">{[c.legal_name, c.parent_id ? `part of ${coName.get(c.parent_id) ?? "a group"}` : ""].filter(Boolean).join(" · ")}</span>
+                          <span className="co-lsub">{[c.legal_name, c.parent_id ? `part of ${parentNameOf(c) ?? "a group"}` : ""].filter(Boolean).join(" · ")}</span>
                         )}
                       </span>
                     </span>
@@ -387,7 +527,9 @@ export default function CompaniesPage() {
 
                   {isOpen && (
                     <div className="co-people">
-                      {people.length === 0 ? (
+                      {server && !peopleCache.has(c.id!) ? (
+                        <p className="co-people-empty">Loading their people…</p>
+                      ) : people.length === 0 ? (
                         <p className="co-people-empty">No contacts linked to this company yet.</p>
                       ) : people.map((ct) => (
                         <div className="co-person is-link" key={ct.id} role="button" tabIndex={0} title="Open this contact"
@@ -417,7 +559,7 @@ export default function CompaniesPage() {
               );
             }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [shown, renderN, open, bulk.sel, rowGrid, dataKey, showContacts, rel, counts, coName, kids, peopleOf, employees, fields]);
+    [shown, renderN, open, bulk.sel, rowGrid, dataKey, showContacts, rel, counts, coName, kids, peopleOf, employees, fields, server, peopleCache]);
 
   if (me && !isSalesLead(me) && me.role !== "sales") {
     return (
@@ -436,13 +578,13 @@ export default function CompaniesPage() {
       <header className="co-head">
         <button className="co-back" onClick={() => navigate("/home")} aria-label="Back">‹</button>
         <h1 className="co-title">Companies</h1>
-        <span className="co-kpi"><b>{shown.length.toLocaleString("en-GB")}</b>{shown.length !== visible.length ? `of ${visible.length.toLocaleString("en-GB")} ` : ""}{visible.length === 1 ? "company" : "companies"}</span>
+        <span className="co-kpi"><b>{listLen.toLocaleString("en-GB")}</b>{listLen !== allLen ? `of ${allLen.toLocaleString("en-GB")} ` : ""}{allLen === 1 ? "company" : "companies"}</span>
         <div className="co-search">
           <span className="co-search-ico">⌕</span>
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, VAT, address…" />
           {q && <button onClick={() => setQ("")}>×</button>}
         </div>
-        <FilterBar fields={filterFields} view={view} onView={setView} total={visible.length} shown={shown.length} noun={["company", "companies"]}
+        <FilterBar fields={filterFields} view={view} onView={setView} total={allLen} shown={listLen} noun={["company", "companies"]}
           saved={savedViews} onSaved={setSavedViews} openSignal={filtersOpenTick} />
         <ActionsMenu items={[
           { key: "new", group: "Create", label: "New company", hint: "Add one company by hand", icon: AM_ICON.plus, primary: true, tone: "green", shortcut: "N", onSelect: () => setEditing(empty()) },
@@ -451,26 +593,31 @@ export default function CompaniesPage() {
         ]} />
       </header>
 
-      <FilterChips fields={filterFields} view={view} onView={setView} onEdit={() => setFiltersOpenTick((x) => x + 1)} shown={shown.length} total={visible.length} noun={["company", "companies"]} />
+      <FilterChips fields={filterFields} view={view} onView={setView} onEdit={() => setFiltersOpenTick((x) => x + 1)} shown={listLen} total={allLen} noun={["company", "companies"]} />
 
-      {!loaded ? <PageLoader label="Loading companies…" fill={false} /> : shown.length === 0 ? (
-        <p className="cl-hint">{companies.length === 0 ? "No companies yet. Create your first one." : "No companies match your search and filters."}</p>
+      {server && srvErr && <p className="cl-hint is-error">{srvErr} <button type="button" className="ct-retry" onClick={() => setSrvTick((x) => x + 1)}>Try again</button></p>}
+      {!loaded || server === null ? <PageLoader label="Loading companies…" fill={false} /> : listLen === 0 ? (
+        <p className="cl-hint">{(server ? srvAll === 0 : companies.length === 0) ? "No companies yet. Create your first one." : "No companies match your search and filters."}</p>
       ) : (
         <div className={`co-scroll is-xscroll ${compact ? "is-compact" : ""}`} style={{ ["--row-min" as string]: `${rowMin}px` } as CSSProperties}
           onScroll={(e) => {
             const el = e.currentTarget; el.classList.toggle("is-scrolled-x", el.scrollLeft > 4); el.classList.toggle("is-scrolled-y", el.scrollTop > 2);
-            if (renderN < shown.length && el.scrollTop + el.clientHeight > el.scrollHeight - 1600) setRenderN((n) => Math.min(shown.length, n + 160));
+            if (server) { if (el.scrollTop + el.clientHeight > el.scrollHeight - 1600) loadMore(); }
+            else if (renderN < shown.length && el.scrollTop + el.clientHeight > el.scrollHeight - 1600) setRenderN((n) => Math.min(shown.length, n + 160));
           }}>
           {/* the sticky header sits on an opaque band of the page colour: rows never show above or around it */}
           <div className="co-lhead-wrap">
           <div className="co-lrow co-lhead" style={{ gridTemplateColumns: rowGrid }}>
-            <span className="co-lid-head"><BulkCheck on={bulk.allOn} partial={bulk.someOn} onToggle={bulk.toggleAll} label="Select every company shown" /><SortHead label="Company" k="name" sort={view.sort} onSort={onSort} /></span>
+            <span className="co-lid-head"><BulkCheck on={bulk.allOn} partial={bulk.someOn} onToggle={toggleAllRows} label="Select every company shown" /><SortHead label="Company" k="name" sort={view.sort} onSort={onSort} /></span>
             {dataColumns.map((k) => <span key={k} className="co-lhcell"><SortHead label={columnLabel(k)} k={sortKeyOf(k)} sort={view.sort} onSort={onSort} /></span>)}
             {showContacts && <span className="co-lright co-lcontacts"><SortHead label={columnLabel("contacts")} k="contacts_count" sort={view.sort} onSort={onSort} /></span>}
           </div>
           </div>
           <div className="co-list">
             {listRows}
+            {server && srvRows.length < srvTotal && (
+              <div className="co-more"><button type="button" onClick={loadMore}>Show more · {(srvTotal - srvRows.length).toLocaleString("en-GB")} to go</button></div>
+            )}
           </div>
         </div>
       )}
@@ -479,17 +626,21 @@ export default function CompaniesPage() {
         <CompanyEditor
           key={editing.id ?? "new"}
           company={editing}
-          companies={companies}
+          companies={server ? light ?? [] : companies}
           rel={rel}
           options={options}
           onOptionsChanged={reloadOptions}
-          onOpenCompany={(id) => { const x = companies.find((y) => y.id === id); if (x) setEditing(structuredClone(x)); }}
+          onOpenCompany={(id) => {
+            if (server) { companiesRows([id]).then((r) => { if (r[0]) setEditing(structuredClone(r[0])); }).catch(() => {}); return; }
+            const x = companies.find((y) => y.id === id); if (x) setEditing(structuredClone(x));
+          }}
           employees={employees}
           fields={fields}
-          contacts={contacts}
+          contacts={server ? editPeople : contacts}
+          searchContacts={server ? (q: string) => searchContacts(q) : undefined}
           contactFields={contactFields}
           canAssign={lead}
-          assigned={assignees[editing.id!] ?? []}
+          assigned={asgOf(editing)}
           onClose={() => setEditing(null)}
           onSaved={async () => { setEditing(null); await reload(); }}
           onDeleted={async () => { setEditing(null); await reload(); }}
@@ -497,7 +648,7 @@ export default function CompaniesPage() {
         />
       )}
 
-      {exporting && (
+      {exporting && !server && (
         <ContactExport
           root="company"
           companies={companies.filter((c) => lead || !me || (assignees[c.id!] ?? []).includes(me.id))}
@@ -507,9 +658,19 @@ export default function CompaniesPage() {
           onClose={() => { setExporting(false); setExportIds(null); }}
         />
       )}
+      {exporting && server && (exportData
+        ? <ContactExport
+            root="company"
+            companies={exportData.companies}
+            contacts={exportData.contacts}
+            contactFields={contactFields}
+            shownIds={exportData.shown}
+            onClose={() => { setExporting(false); setExportIds(null); setExportData(null); }}
+          />
+        : <div className="dw-backdrop"><PageLoader label="Getting the companies ready to export…" fill={false} /></div>)}
 
       <BulkBar count={bulk.ids.length} noun={["company", "companies"]} actions={bulkActions} onClear={bulk.clear}
-        onSelectAll={bulk.toggleAll} allOn={bulk.allOn} total={shown.length} />
+        onSelectAll={toggleAllRows} allOn={bulk.allOn} total={listLen} />
 
       {showFieldSettings && (
         <FieldSettings
@@ -525,7 +686,11 @@ export default function CompaniesPage() {
 }
 
 // Searchable dropdown to link an existing contact to the company.
-function ContactPicker({ contacts, onPick }: { contacts: Contact[]; onPick: (id: string) => void }) {
+function ContactPicker({ contacts, onPick, search }: {
+  contacts: Contact[]; onPick: (id: string, ct?: Contact) => void;
+  /** Server mode: people are searched in the database as you type (the directory isn't in the page). */
+  search?: (q: string) => Promise<Contact[]>;
+}) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
@@ -541,15 +706,25 @@ function ContactPicker({ contacts, onPick }: { contacts: Contact[]; onPick: (id:
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [contacts, open]);
   const PICK_MAX = 80;
+  const [found, setFound] = useState<Contact[] | null>(null);
+  const searchRef = useRef(search);
+  searchRef.current = search;
+  useEffect(() => {
+    if (!searchRef.current || !open) return;
+    let off = false;
+    const t = setTimeout(() => { searchRef.current?.(q.trim()).then((r) => { if (!off) setFound(r); }).catch(() => { if (!off) setFound([]); }); }, q ? 220 : 0);
+    return () => { off = true; clearTimeout(t); };
+  }, [!!search, open, q]); // eslint-disable-line react-hooks/exhaustive-deps
   const { results, more } = useMemo(() => {
     if (!open) return { results: [] as Contact[], more: 0 };
+    if (search) return { results: (found ?? []).slice(0, PICK_MAX), more: 0 };
     const out: Contact[] = []; let n = 0;
     for (let i = 0; i < contacts.length; i++) {
       if (nq && !hay[i]?.includes(nq)) continue;
       n++; if (out.length < PICK_MAX) out.push(contacts[i]);
     }
     return { results: out, more: n - out.length };
-  }, [contacts, hay, nq, open]);
+  }, [contacts, hay, nq, open, search, found]);
 
   useEffect(() => {
     if (!open) return;
@@ -560,7 +735,7 @@ function ContactPicker({ contacts, onPick }: { contacts: Contact[]; onPick: (id:
   useEffect(() => { if (open) { setQ(""); setActive(0); setTimeout(() => inputRef.current?.focus(), 0); } }, [open]);
   useEffect(() => { setActive(0); }, [q]);
 
-  const pick = (ct: Contact) => { if (ct?.id) { onPick(ct.id); setOpen(false); } };
+  const pick = (ct: Contact) => { if (ct?.id) { onPick(ct.id, ct); setOpen(false); } };
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === "ArrowDown") { e.preventDefault(); setActive((i) => Math.min(i + 1, results.length - 1)); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setActive((i) => Math.max(i - 1, 0)); }
@@ -581,7 +756,7 @@ function ContactPicker({ contacts, onPick }: { contacts: Contact[]; onPick: (id:
             <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onKey} placeholder="Search contacts…" />
           </div>
           <div className="co-pick-list">
-            {results.length === 0 && <p className="co-pick-empty">No contacts match.</p>}
+            {results.length === 0 && <p className="co-pick-empty">{search && found === null ? "Searching…" : "No contacts match."}</p>}
             {results.map((ct, i) => (
               <button type="button" key={ct.id}
                 className={`co-pick-opt ${i === active ? "is-active" : ""}`}
@@ -707,8 +882,10 @@ function NewContactInline({ fields, onAdd, onCancel }: {
   );
 }
 
-function CompanyEditor({ company, companies, employees, fields, contacts, contactFields, canAssign, assigned, rel, options, onOptionsChanged, onClose, onSaved, onDeleted, onOpenContact, onOpenCompany }: {
+function CompanyEditor({ company, companies, employees, fields, contacts, contactFields, canAssign, assigned, rel, options, onOptionsChanged, onClose, onSaved, onDeleted, onOpenContact, onOpenCompany, searchContacts: findContacts }: {
   company: Company; companies: Company[]; employees: Employee[]; fields: CompanyField[]; contacts: Contact[]; contactFields: ContactField[]; canAssign: boolean; assigned: string[];
+  /** Server mode: "Link existing contact" searches the database. */
+  searchContacts?: (q: string) => Promise<Contact[]>;
   rel: RelationshipSets | null;
   /** Your own sectors and relationship types. */
   options: CrmOption[];
@@ -797,7 +974,9 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
   };
 
   // ---- what the company is to us ----
-  const status = companyStatus(c, rel);
+  const status: RelStatus = coSrv(company).__status
+    ? { client: coSrv(company).__status!.includes("client"), sales: coSrv(company).__status!.includes("sales"), pipelines: coSrv(company).__pipes ?? [] }
+    : companyStatus(c, rel);
   const tags = c.relationship ?? [];
   const relOpts = relationshipOptions(options);
   const isOn = (k: string) => k === "crm" || tags.includes(k) || (k === "client" && status.client) || (k === "sales" && status.sales);
@@ -869,8 +1048,9 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
     pendingRemoveIds.forEach((id) => out.add(id));
     return contacts.filter((ct) => ct.id && !out.has(ct.id));
   }, [contacts, linked, pendingRemoveIds]);
-  const attachExisting = (id: string) => {
-    const ct = contacts.find((x) => x.id === id); if (!ct) return;
+  const attachExisting = (id: string, picked?: Contact) => {
+    const ct = picked ?? contacts.find((x) => x.id === id); if (!ct) return;
+    if (linked.some((x) => x.id === id)) return;
     setLinkTouched(true);
     setLinked((xs) => [...xs, ct]);
     setPendingRemoveIds((xs) => xs.filter((x) => x !== id));
@@ -1211,7 +1391,8 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
               ) : (
                 <div className="co-cc-actions">
                   {attachable.length > 0 && (
-                    <ContactPicker contacts={attachable} onPick={attachExisting} />
+                    <ContactPicker contacts={attachable} onPick={attachExisting}
+                      search={findContacts ? (q) => findContacts(q).then((list) => list.filter((ct) => ct.id && !linked.some((x) => x.id === ct.id))) : undefined} />
                   )}
                   <button type="button" className="co-cc-new-btn" onClick={() => setAddingContact(true)}>+ New contact</button>
                 </div>

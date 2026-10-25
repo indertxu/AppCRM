@@ -25,7 +25,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../../../api/supabase";
 import DatePicker from "../../../framework/DatePicker";
 import TimePicker from "../../../framework/TimePicker";
@@ -37,6 +37,7 @@ import {
   type MyTask, type DelegatedTask, type TaskPriority, type TaskStatus, type TaskKind, type TaskUpdate, type TaskTemplate, type TaskStep,
 } from "../../sales/sales/salesApi";
 import { isoDay } from "./HomeCalendar";
+import { globalSearch, globalSearchReady, type SearchHit } from "../../companies/companiesApi";
 import { outlookMailStatus, syncTicketMail, sendOutlookMail, connectOutlook, fetchMailAttachment, OUTLOOK_CONNECTION_EVENT, type OutlookMailStatus, type MailSyncResult } from "../../../api/outlookSync";
 import { loadPrefs, savePref } from "../../companies/companiesApi";
 import { MentionText, mentionsToPlain } from "../../../framework/MentionInput";
@@ -1244,7 +1245,14 @@ export interface Directory {
   deals: { id: string; name: string; companyId: string | null; status: string | null }[];
   projects: { id: string; name: string; clientId: string | null }[];
   contacts: { id: string; name: string; email: string | null; title: string | null }[];
+  /**
+   * true when contacts, companies and deals stay in the database (52_search_server.sql): the three lists
+   * above then only hold the ones in use (asked for by ensureDirNames) and pickers search as you type.
+   */
+  remote?: boolean;
 }
+/** Fired when names were added to the shared directory: holders re-render. */
+export const DIR_EVENT = "directory-names";
 let dirPromise: Promise<Directory> | null = null;
 export function loadDirectory(fresh = false): Promise<Directory> {
   if (dirPromise && !fresh) return dirPromise;
@@ -1252,13 +1260,17 @@ export function loadDirectory(fresh = false): Promise<Directory> {
     const { data: s } = await supabase.auth.getSession();
     const me = s?.session?.user?.id ?? null;
     const safe = (p: Promise<any[]>) => p.catch(() => [] as any[]);
+    // contacts, companies and deals can be hundreds of thousands: with the search in the database
+    // they are never downloaded whole (only the ones in use, and what you search for)
+    const remote = await globalSearchReady();
+    const none = Promise.resolve([] as any[]);
     const [profs, clients, companies, deals, projects, contacts] = await Promise.all([
       safe(allRows(() => supabase.from("profiles").select("id, first_name, last_name, email, department, role"))),
       safe(allRows(() => supabase.from("clients").select("id, name"))),
-      safe(allRows(() => supabase.from("companies").select("id, name, legal_name"))),
-      safe(allRows(() => supabase.from("trackings").select("id, deal_name, company_id, status"))),
+      remote ? none : safe(allRows(() => supabase.from("companies").select("id, name, legal_name"))),
+      remote ? none : safe(allRows(() => supabase.from("trackings").select("id, deal_name, company_id, status"))),
       safe(allRows(() => supabase.from("projects").select("id, name, client_id"))),
-      safe(allRows(() => supabase.from("contacts").select("id, first_name, last_name, email, job_title"))),
+      remote ? none : safe(allRows(() => supabase.from("contacts").select("id, first_name, last_name, email, job_title"))),
     ]);
     const coName = new Map<string, string>(companies.map((c: any) => [c.id, c.name]));
     const people: DirPerson[] = profs.map((p: any) => ({
@@ -1273,10 +1285,59 @@ export function loadDirectory(fresh = false): Promise<Directory> {
       deals: deals.map((d: any) => ({ id: d.id, name: (d.deal_name ?? "").trim() || coName.get(d.company_id) || "Deal", companyId: d.company_id ?? null, status: d.status ?? null })),
       projects: projects.map((p: any) => ({ id: p.id, name: p.name ?? "Project", clientId: p.client_id ?? null })),
       contacts: contacts.map((c: any) => ({ id: c.id, name: [c.first_name, c.last_name].filter(Boolean).join(" ") || c.email || "Contact", email: c.email ?? null, title: c.job_title ?? null })),
+      remote,
     };
   })();
   dirPromise.catch(() => { dirPromise = null; });
   return dirPromise;
+}
+
+/**
+ * Remote directory: make sure these contacts / companies / deals (by id) and the contacts behind
+ * these e-mail addresses are in it, read in a few small requests. Holders re-render (DIR_EVENT).
+ */
+export async function ensureDirNames(dir: Directory | null, refs: { contacts?: (string | null | undefined)[]; companies?: (string | null | undefined)[]; deals?: (string | null | undefined)[]; emails?: (string | null | undefined)[] }) {
+  if (!dir?.remote) return;
+  const missing = (ids: (string | null | undefined)[] | undefined, have: { id: string }[]) => {
+    const known = new Set(have.map((x) => x.id));
+    return [...new Set((ids ?? []).filter((x): x is string => !!x && !known.has(x)))];
+  };
+  const chunks = <T,>(xs: T[], n = 150) => Array.from({ length: Math.ceil(xs.length / n) }, (_, i) => xs.slice(i * n, i * n + n));
+  const ctIds = missing(refs.contacts, dir.contacts), coIds = missing(refs.companies, dir.companies), dlIds = missing(refs.deals, dir.deals);
+  const knownMail = new Set(dir.contacts.map((c) => (c.email ?? "").toLowerCase()));
+  const mails = [...new Set((refs.emails ?? []).map((e) => (e ?? "").trim().toLowerCase()).filter((e) => e && !knownMail.has(e)))];
+  if (!ctIds.length && !coIds.length && !dlIds.length && !mails.length) return;
+  const toContact = (c: any) => ({ id: c.id, name: [c.first_name, c.last_name].filter(Boolean).join(" ") || c.email || "Contact", email: c.email ?? null, title: c.position ?? null });
+  const add = <T extends { id: string }>(list: T[], rows: T[]) => { const have = new Set(list.map((x) => x.id)); rows.forEach((r) => { if (!have.has(r.id)) { list.push(r); have.add(r.id); } }); };
+  await Promise.all([
+    ...chunks(ctIds).map((ids) => Promise.resolve(supabase.from("contacts").select("id, first_name, last_name, email, position").in("id", ids))
+      .then(({ data }) => add(dir.contacts, ((data ?? []) as any[]).map(toContact)))),
+    ...chunks(mails, 60).map((ms) => Promise.resolve(supabase.from("contacts").select("id, first_name, last_name, email, position").or(ms.map((m) => `email.ilike.${m.replace(/[,()]/g, "")}`).join(",")))
+      .then(({ data }) => add(dir.contacts, ((data ?? []) as any[]).map(toContact)))),
+    ...chunks(coIds).map((ids) => Promise.resolve(supabase.from("companies").select("id, name, legal_name").in("id", ids))
+      .then(({ data }) => add(dir.companies, ((data ?? []) as any[]).map((c) => ({ id: c.id, name: c.name ?? "Company", legal: c.legal_name ?? null }))))),
+    ...chunks(dlIds).map((ids) => Promise.resolve(supabase.from("trackings").select("id, deal_name, company_id, status, company:companies(name)").in("id", ids))
+      .then(({ data }) => add(dir.deals, ((data ?? []) as any[]).map((d) => ({ id: d.id, name: (d.deal_name ?? "").trim() || d.company?.name || "Deal", companyId: d.company_id ?? null, status: d.status ?? null }))))),
+  ]).catch(() => {});
+  window.dispatchEvent(new Event(DIR_EVENT));
+}
+/** A picker's options asked from the database as you type (remote directory); what is found is kept in it. */
+export function dirSearch(dir: Directory, kind: SearchHit["kind"], keep?: (h: SearchHit) => boolean) {
+  return async (q: string) => {
+    const hits = ((await globalSearch(q, [kind], 30)) ?? []).filter((h) => !keep || keep(h));
+    if (kind === "contact") hits.forEach((h) => { if (!dir.contacts.some((x) => x.id === h.id)) dir.contacts.push({ id: h.id, name: h.label, email: h.email ?? null, title: null }); });
+    if (kind === "company") hits.forEach((h) => { if (!dir.companies.some((x) => x.id === h.id)) dir.companies.push({ id: h.id, name: h.label, legal: null }); });
+    if (kind === "deal") hits.forEach((h) => { if (!dir.deals.some((x) => x.id === h.id)) dir.deals.push({ id: h.id, name: h.label, companyId: null, status: h.status ?? null }); });
+    return hits.map((h) => ({ value: h.id, label: h.label, hint: h.sub ?? undefined }));
+  };
+}
+/** Re-render a directory holder when names arrive. */
+export function useDirNames(setDir: (f: (d: Directory | null) => Directory | null) => void) {
+  useEffect(() => {
+    const f = () => setDir((d) => (d ? { ...d } : d));
+    window.addEventListener(DIR_EVENT, f);
+    return () => window.removeEventListener(DIR_EVENT, f);
+  }, [setDir]);
 }
 
 /* ---- tickets: load / write ---- */
@@ -1459,6 +1520,7 @@ export async function ignoreMail(id: string): Promise<string | null> {
 }
 /** A new ticket from an e-mail: subject, text, requester (and their contact / company when known). */
 export async function createTicketFromMail(m: MailMsg, dir: Directory, ready: boolean, extra: Partial<Ticket> = {}): Promise<{ id: string | null; error: string | null }> {
+  if (m.fromEmail) await ensureDirNames(dir, { emails: [m.fromEmail] });
   const contact = m.fromEmail ? dir.contacts.find((c) => (c.email ?? "").toLowerCase() === m.fromEmail!.toLowerCase()) : undefined;
   const res = await createTicket({
     title: (m.subject || "(no subject)").slice(0, 300), description: m.snippet, source: "email",
@@ -1656,6 +1718,7 @@ const TK_ICON: Record<string, string> = {
   reply: "M9 14 4 9l5-5M4 9h11a5 5 0 0 1 5 5v6",
   ban: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM5 5l14 14",
   out: "M7 17 17 7M8 7h9v9",
+  more: "M5 12h.01M12 12h.01M19 12h.01",
 };
 export const TkIco = ({ d, className }: { d: keyof typeof TK_ICON; className?: string }) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={TK_ICON[d]} /></svg>
@@ -1759,10 +1822,23 @@ const cleanSubject = (s: string) => s.replace(/^\s*((re|fw|fwd|aw|sv|rv)\s*:\s*)
  * The ticket desk: the to-do as a ticketing tool. In the home column it is a
  * card; `full` turns it into the full-window view (filters + table).
  */
-export function TicketDesk({ full = false, onClose }: { full?: boolean; onClose?: () => void }) {
+/** The quick filters at the top of the Tickets page. */
+type QuickKey = "" | "reply" | "unassigned" | "today" | "overdue" | "breach";
+
+export function TicketDesk({ full: fullProp = false, page = false, openFirst = null, onClose }: {
+  full?: boolean;
+  /** The Tickets page (/tickets): the whole desk, the ticket opens next to the list. */
+  page?: boolean;
+  /** A ticket to open straight away (the page's ?ticket=…). */
+  openFirst?: string | null;
+  onClose?: () => void;
+}) {
+  const full = fullProp || page;
+  const navTo = useNavigate();
   const today = isoDay(new Date());
   const [data, setData] = useState<{ tickets: Ticket[]; ready: boolean; ownedDeals: string[] } | null>(null);
   const [dir, setDir] = useState<Directory | null>(null);
+  useDirNames(setDir);
   const [types, setTypes] = useState<string[]>(DEFAULT_TYPES);
   const [tab, setTab] = useState<DeskTab>("mine");
   const [view, setView] = useState<DeskView>("active");
@@ -1770,14 +1846,18 @@ export function TicketDesk({ full = false, onClose }: { full?: boolean; onClose?
   const [q, setQ] = useState("");
   const [fPrio, setFPrio] = useState<TaskPriority | "">("");
   const [fType, setFType] = useState("");
-  const [openId, setOpenId] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(openFirst);
+  useEffect(() => { if (openFirst) setOpenId(openFirst); }, [openFirst]);
   const [creating, setCreating] = useState<Partial<Ticket> | null>(null);
+  const [quick, setQuick] = useState<QuickKey>("");
+  // opening a ticket leaves the new-ticket form
+  useEffect(() => { if (openId) setCreating(null); }, [openId]);
+  const [fStage, setFStage] = useState<TicketStage | "">("");
   const [menu, setMenu] = useState<{ id: string; kind: "stage" | "assignee"; rect: DOMRect } | null>(null);
   const [draft, setDraft] = useState("");
   const [draftPrio, setDraftPrio] = useState<TaskPriority>("normal");
   const [adding, setAdding] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState(false);
   const [sortMenu, setSortMenu] = useState<DOMRect | null>(null);
   // e-mail, SLA, bulk, views, shortcuts
   const [pane, setPane] = useState<"tickets" | "inbox">("tickets");
@@ -1825,6 +1905,17 @@ export function TicketDesk({ full = false, onClose }: { full?: boolean; onClose?
     };
   }, [reload, reloadMail, full]);
 
+  // remote directory: the names the tickets and the inbox point at
+  useEffect(() => {
+    if (!dir?.remote) return;
+    const ts = data?.tickets ?? [];
+    void ensureDirNames(dir, {
+      companies: ts.map((t) => t.companyId), deals: ts.map((t) => t.trackingId), contacts: ts.map((t) => t.requesterContactId),
+      emails: (inbox ?? []).map((m) => m.fromEmail),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dir?.remote, data, inbox]);
+
   /** Reads new mail of the desk's mailboxes (rules, threads, Inbox). */
   const syncNow = useCallback(async (quiet = false) => {
     if (deskSyncBusy) return;
@@ -1848,12 +1939,12 @@ export function TicketDesk({ full = false, onClose }: { full?: boolean; onClose?
   const mailOn = !!mailSt?.connected && !!mailSt?.mail;
   const hasBoxes = boxes.some((b) => b.active);
   useEffect(() => {
-    if (full || !mailOn || !hasBoxes) return;
+    if ((full && !page) || !mailOn || !hasBoxes) return;
     const tick = () => { if (!document.hidden && Date.now() - lastDeskSync > AUTO_SYNC_MS - 15000) syncNow(true); };
     tick();
     const iv = window.setInterval(tick, AUTO_SYNC_MS);
     return () => window.clearInterval(iv);
-  }, [full, mailOn, hasBoxes, syncNow]);
+  }, [full, page, mailOn, hasBoxes, syncNow]);
 
   const me = dir?.me ?? null;
   const ready = data?.ready ?? false;
@@ -1868,10 +1959,19 @@ export function TicketDesk({ full = false, onClose }: { full?: boolean; onClose?
     if (!dept) return true;
     return [t.assignee, t.createdBy, ...t.watchers].some((id) => id && deptOf.get(id) === dept);
   }, [me, data, dir, deptOf]);
-  const inView = (t: Ticket) => view === "done" ? !isActive(t.stage) : view === "waiting" ? t.stage === "waiting" : isActive(t.stage);
+  const inView = (t: Ticket) => fStage ? t.stage === fStage : view === "done" ? !isActive(t.stage) : view === "waiting" ? t.stage === "waiting" : isActive(t.stage);
+  const isQuick = (t: Ticket, k: QuickKey) => {
+    if (!k) return true;
+    if (!isActive(t.stage)) return false;
+    if (k === "reply") return !t.firstResponseAt && (t.stage === "new" || t.stage === "open") && (!!t.requesterEmail || t.source === "email");
+    if (k === "unassigned") return !t.assignee;
+    if (k === "today") return groupOf(t, today) === "today";
+    if (k === "overdue") return groupOf(t, today) === "overdue";
+    return !!sla && !!slaOf(t, sla, now)?.breached;
+  };
   const f = fold(q.trim());
   const matches = (t: Ticket) => !f || fold(`${t.title} ${ticketRef(t)} ${t.type ?? ""} ${t.tags.join(" ")} ${t.requesterName ?? ""} ${linkLabel(t, dir)?.text ?? ""}`).includes(f);
-  const shown = all.filter((t) => !t.mergedInto && inTab(t, tab) && inView(t) && matches(t) && (!fPrio || t.priority === fPrio) && (!fType || t.type === fType));
+  const shown = all.filter((t) => !t.mergedInto && inTab(t, tab) && inView(t) && isQuick(t, quick) && matches(t) && (!fPrio || t.priority === fPrio) && (!fType || t.type === fType));
   const rank: Record<TaskPriority, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
   const sorted = [...shown].sort((a, b) => {
     if (sort === "priority") return rank[a.priority] - rank[b.priority] || (a.due ?? "9").localeCompare(b.due ?? "9");
@@ -1960,16 +2060,24 @@ export function TicketDesk({ full = false, onClose }: { full?: boolean; onClose?
   const isView = (v: SavedView) => v.tab === tab && v.view === view && v.sort === sort && v.q === q && v.prio === fPrio && v.type === fType;
 
   /* ---- keyboard ---- */
-  const keyState = useRef({ sorted, cursor, pane, full });
-  keyState.current = { sorted, cursor, pane, full };
-  const blocked = !!(openT || creating || settings || preview || help || addPick || bulk || menu || sortMenu || (!full && expanded));
+  const keyState = useRef({ sorted, cursor, pane, full, open: null as string | null });
+  keyState.current = { sorted, cursor, pane, full, open: page ? openId : null };
+  // on the Tickets page the ticket sits next to the list: j / k keep moving through it
+  const blocked = !!(((openT || creating) && !page) || creating || settings || preview || help || addPick || bulk || menu || sortMenu);
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
       if (blocked || e.metaKey || e.ctrlKey || e.altKey || typingIn(e.target)) return;
       if (!full && document.querySelector(".tk-full, .td-back")) return;
       const st = keyState.current;
       const cur = st.sorted[st.cursor];
-      const go = (d: number) => { const n = st.sorted.length; if (!n) return; const i = Math.max(0, Math.min(n - 1, (st.cursor < 0 ? (d > 0 ? -1 : n) : st.cursor) + d)); setCursor(i); window.setTimeout(() => document.querySelector(`[data-tk="${st.sorted[i].id}"]`)?.scrollIntoView({ block: "nearest" }), 0); };
+      const go = (d: number) => {
+        const n = st.sorted.length; if (!n) return;
+        const from = st.cursor >= 0 ? st.cursor : st.open ? st.sorted.findIndex((x) => x.id === st.open) : -1;
+        const i = Math.max(0, Math.min(n - 1, (from < 0 ? (d > 0 ? -1 : n) : from) + d));
+        setCursor(i);
+        if (st.open) setOpenId(st.sorted[i].id);   // the open ticket follows
+        window.setTimeout(() => document.querySelector(`[data-tk="${st.sorted[i].id}"]`)?.scrollIntoView({ block: "nearest" }), 0);
+      };
       switch (e.key) {
         case "n": e.preventDefault(); setCreating({ assignee: me }); break;
         case "/": e.preventDefault(); setPane("tickets"); window.setTimeout(() => qRef.current?.focus(), 0); break;
@@ -1988,7 +2096,7 @@ export function TicketDesk({ full = false, onClose }: { full?: boolean; onClose?
     document.addEventListener("keydown", k);
     return () => document.removeEventListener("keydown", k);
   });
-  useEffect(() => { setCursor(-1); }, [tab, view, q, fPrio, fType, sort, pane]);
+  useEffect(() => { setCursor(-1); }, [tab, view, q, fPrio, fType, sort, pane, quick, fStage]);
 
   const row = (t: Ticket, i: number) => {
     const link = linkLabel(t, dir);
@@ -2227,16 +2335,132 @@ export function TicketDesk({ full = false, onClose }: { full?: boolean; onClose?
           )}
         </Pop>
       )}
-      {(openT || creating) && dir && (
+      {!page && (openT || creating) && dir && (
         <TicketDrawer ticket={openT} draft={creating} dir={dir} types={types} ready={ready} tickets={all}
           onTypes={setTypes}
           onClose={() => { setOpenId(null); setCreating(null); }}
           onCreated={(id) => { setCreating(null); setOpenId(id); }}
           onLocal={(t) => setData((d) => d && { ...d, tickets: d.tickets.map((x) => (x.id === t.id ? t : x)) })} />
       )}
-      {expanded && createPortal(<div className="tk-full-back"><TicketDesk full onClose={() => setExpanded(false)} /></div>, document.body)}
     </>
   );
+
+  if (page) {
+    // what needs you: each number is also a filter
+    const base = all.filter((t) => !t.mergedInto && inTab(t, tab));
+    const nQ = (k: QuickKey) => base.filter((t) => isQuick(t, k)).length;
+    const QUICK: { k: Exclude<QuickKey, "">; label: string; tone: string }[] = [
+      { k: "reply", label: "Waiting for a first reply", tone: "blue" },
+      { k: "unassigned", label: "Without an owner", tone: "slate" },
+      { k: "today", label: "Due today", tone: "amber" },
+      { k: "overdue", label: "Overdue", tone: "red" },
+      { k: "breach", label: "Past their SLA", tone: "red" },
+    ];
+    const where = tab === "mine" ? "on your desk" : tab === "team" ? "in your team" : tab === "unassigned" ? "without an owner" : "in the company";
+    const open = !!(openT || creating);
+    const filtered = !!(quick || fStage || q || fPrio || fType);
+    const clearAll = () => { setQuick(""); setFStage(""); setQ(""); setFPrio(""); setFType(""); };
+    return (
+      <div className={`tkp ${open ? "has-open" : ""}`}>
+        <header className="tkp-head">
+          <div className="tkp-titles">
+            <h1>Tickets</h1>
+            <p>
+              <b>{counts[tab]}</b> open {where}
+              {breached > 0 && <> · <span className="tkp-warn">{breached} past their SLA</span></>}
+            </p>
+          </div>
+          <div className="tkp-acts">
+            <button type="button" className="tk-icon-btn" onClick={() => setHelp(true)} title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts"><TkIco d="keyboard" /></button>
+            <button type="button" className="tk-icon-btn" onClick={() => setSettings({})} title="Mail rules, mailboxes and SLAs" aria-label="Desk settings"><TkIco d="gear" /></button>
+            <button type="button" className="tk-new" onClick={() => { setOpenId(null); setCreating({ assignee: me }); }} title="New ticket (N)"><TkIco d="plus" />New ticket</button>
+          </div>
+        </header>
+
+        <div className="tkp-quick" role="group" aria-label="Quick filters">
+          {QUICK.map((x) => {
+            const n = nQ(x.k);
+            return (
+              <button key={x.k} type="button" className={`tkp-q is-${x.tone} ${quick === x.k ? "is-on" : ""} ${n === 0 ? "is-zero" : ""}`} aria-pressed={quick === x.k}
+                onClick={() => { setQuick(quick === x.k ? "" : x.k); setPane("tickets"); }}>
+                <b>{n}</b><span>{x.label}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="tkp-body">
+          <nav className="tkp-nav" aria-label="Ticket views">
+            <span className="tkp-nav-k">Views</span>
+            {DESK_TABS.map((x) => (
+              <button key={x.key} type="button" className={pane === "tickets" && tab === x.key ? "is-on" : ""} onClick={() => { setTab(x.key); setPane("tickets"); }}>{x.label}<i>{counts[x.key]}</i></button>
+            ))}
+            <button type="button" className={`tkp-nav-inbox ${pane === "inbox" ? "is-on" : ""}`} onClick={() => setPane("inbox")} title="E-mail no rule picked up (I)"><TkIco d="inbox" />Inbox<i className={inbox?.length ? "is-new" : ""}>{inbox?.length ?? 0}</i></button>
+            <span className="tkp-nav-k">Stage</span>
+            {TICKET_STAGES.map((st) => {
+              const n = all.filter((t) => !t.mergedInto && inTab(t, tab) && t.stage === st.key).length;
+              return (
+                <button key={st.key} type="button" className={`tkp-nav-stage ${fStage === st.key ? "is-on" : ""}`} onClick={() => { setFStage(fStage === st.key ? "" : st.key); setPane("tickets"); }} title={st.hint}>
+                  <span className={`tk-dot is-${st.key}`} />{st.label}<i>{n}</i>
+                </button>
+              );
+            })}
+            <span className="tkp-nav-k">Saved views</span>
+            {views.map((v) => (
+              <div key={v.name} className={`tk-nav-view ${pane === "tickets" && isView(v) ? "is-on" : ""}`}>
+                <button type="button" onClick={() => applyView(v)}><TkIco d="bookmark" />{v.name}</button>
+                <button type="button" className="tk-nav-view-x" onClick={() => storeViews(views.filter((x) => x.name !== v.name))} aria-label={`Delete view ${v.name}`}><TkIco d="x" /></button>
+              </div>
+            ))}
+            {viewName !== null ? (
+              <input className="tk-nav-in" autoFocus value={viewName} placeholder="Name this view…" onChange={(e) => setViewName(e.target.value)} onBlur={saveView}
+                onKeyDown={(e) => { if (e.key === "Enter") saveView(); if (e.key === "Escape") setViewName(null); }} />
+            ) : (
+              <button type="button" className="tk-nav-add" onClick={() => setViewName("")}><TkIco d="plus" />Save this view</button>
+            )}
+          </nav>
+
+          <div className="tkp-list">
+            {filters}
+            {pane === "tickets" && filtered && (
+              <div className="tkp-active">
+                {quick && <span>{QUICK.find((x) => x.k === quick)?.label}<button type="button" onClick={() => setQuick("")} aria-label="Remove filter"><TkIco d="x" /></button></span>}
+                {fStage && <span>Stage: {stageLabel(fStage)}<button type="button" onClick={() => setFStage("")} aria-label="Remove filter"><TkIco d="x" /></button></span>}
+                <button type="button" className="tkp-clear" onClick={clearAll}>Clear all</button>
+                <em>{sorted.length} {sorted.length === 1 ? "ticket" : "tickets"}</em>
+              </div>
+            )}
+            {bulkBar}
+            {err && <p className="tk-err">{err}</p>}
+            {!ready && data && <p className="tk-note">{NEEDS_SQL} Until then your tasks show here with their status.</p>}
+            {pane === "inbox" ? inboxPane : open && data && sorted.length ? (
+              <div className="tk-groups tkp-compact">
+                {groups.map((g) => (
+                  <div key={g.key} className={`tk-group is-${g.key}`}>
+                    {g.label && <span className="tk-group-h">{g.label}<i>{g.items.length}</i></span>}
+                    {g.items.map((t, i) => (
+                      <div key={t.id} className={openId === t.id ? "tkp-row-on" : ""}>{row(t, i)}</div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            ) : list}
+          </div>
+
+          {open && dir && (
+            <div className="tkp-pane">
+              <TicketDrawer key={openT?.id ?? "new"} inline ticket={openT} draft={creating} dir={dir} types={types} ready={ready} tickets={all}
+                onTypes={setTypes}
+                onClose={() => { setOpenId(null); setCreating(null); }}
+                onCreated={(id) => { setCreating(null); setOpenId(id); }}
+                onLocal={(t) => setData((d) => d && { ...d, tickets: d.tickets.map((x) => (x.id === t.id ? t : x)) })} />
+            </div>
+          )}
+        </div>
+        {overlays}
+      </div>
+    );
+  }
 
   if (full) {
     return (
@@ -2301,7 +2525,7 @@ export function TicketDesk({ full = false, onClose }: { full?: boolean; onClose?
         <div className="tk-head-btns">
           <button type="button" className="tk-new is-sm" onClick={() => setCreating({ assignee: me })} title="New ticket with all the details (N)"><TkIco d="plus" />New</button>
           <button type="button" className="tk-icon-btn" onClick={() => setSettings({})} title="Mail rules, mailboxes and SLAs" aria-label="Desk settings"><TkIco d="gear" /></button>
-          <button type="button" className="tk-icon-btn" onClick={() => setExpanded(true)} title="Open the full ticket desk" aria-label="Full view"><TkIco d="expand" /></button>
+          <button type="button" className="tk-icon-btn" onClick={() => navTo("/tickets")} title="Open the Tickets page" aria-label="Open the Tickets page"><TkIco d="expand" /></button>
         </div>
       </header>
       <div className="tk-tabs" role="tablist">
@@ -2360,8 +2584,20 @@ function eventText(e: TicketEvent, dir: Directory): string {
   }
 }
 
-export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, onClose, onCreated, onLocal, onTypes }: {
+/** The next step a ticket usually takes, for the sheet's main button. */
+const NEXT_STEP: Record<TicketStage, { label: string; to: TicketStage } | null> = {
+  new: { label: "Accept", to: "open" },
+  open: { label: "Start work", to: "in_progress" },
+  in_progress: { label: "Resolve", to: "resolved" },
+  waiting: { label: "Resume", to: "in_progress" },
+  resolved: { label: "Close", to: "closed" },
+  closed: { label: "Reopen", to: "open" },
+};
+
+export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline = false, onClose, onCreated, onLocal, onTypes }: {
   ticket: Ticket | null;
+  /** Shown inside the Tickets page, next to the list (no window over the page). */
+  inline?: boolean;
   /** The desk's tickets (to merge into); loaded on demand when missing. */
   tickets?: Ticket[];
   /** Creating: the fields to start from. */
@@ -2393,6 +2629,7 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, onClos
   const [tagDraft, setTagDraft] = useState("");
   const [newType, setNewType] = useState<string | null>(null);
   const [watchAdd, setWatchAdd] = useState<DOMRect | null>(null);
+  const [moreAt, setMoreAt] = useState<DOMRect | null>(null);
   const titleRef = useRef<HTMLTextAreaElement>(null);
   // e-mail, SLA, merging
   const [mails, setMails] = useState<MailMsg[] | null>(null);
@@ -2428,10 +2665,17 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, onClos
   useEffect(() => { if (tickets) setPickList(tickets); }, [tickets]);
   useEffect(() => { grow(titleRef.current); }, [t.title]);
   useEffect(() => {
-    const k = (e: KeyboardEvent) => { if (e.key === "Escape" && !watchAdd && !mergeAt) onClose(); };
+    const k = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || watchAdd || mergeAt || moreAt || e.defaultPrevented) return;
+      // first Esc leaves the field you're typing in; the next one closes the ticket
+      const el = e.target as HTMLInputElement | null;
+      if (el && /input|textarea/i.test(el.tagName) && el.value) { el.blur(); return; }
+      if (document.querySelector(".sel-pop, .dp-pop")) return;
+      onClose();
+    };
     document.addEventListener("keydown", k);
     return () => document.removeEventListener("keydown", k);
-  }, [onClose, watchAdd, mergeAt]);
+  }, [onClose, watchAdd, mergeAt, moreAt]);
 
   const set = async (p: Partial<Ticket>) => {
     const next = { ...t, ...p };
@@ -2561,275 +2805,337 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, onClos
   const allAtt = (mails ?? []).flatMap((m) => m.attachments.map((a) => ({ m, a })));
   const opt = (xs: { id: string; name: string }[], none: string) => [{ value: "", label: none }, ...xs.map((x) => ({ value: x.id, label: x.name }))];
   const deal = t.trackingId ? dir.deals.find((d) => d.id === t.trackingId) : null;
+  // remote directory: the linked records' names, and pickers that search as you type
+  useEffect(() => { void ensureDirNames(dir, { contacts: [t.requesterContactId], companies: [t.companyId], deals: [t.trackingId] }); },
+    [dir.remote, t.requesterContactId, t.companyId, t.trackingId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const findContacts = useMemo(() => (dir.remote ? dirSearch(dir, "contact") : undefined), [dir]);
+  const findCompanies = useMemo(() => (dir.remote ? dirSearch(dir, "company") : undefined), [dir]);
+  const findDeals = useMemo(() => (dir.remote ? dirSearch(dir, "deal") : undefined), [dir]);
   const departments = [...new Set(dir.people.map((p) => p.department).filter(Boolean))] as string[];
 
-  return createPortal(
-    <div className="td-back" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <aside className="td" role="dialog" aria-label={creatingMode ? "New ticket" : `Ticket ${ticketRef(t)}`}>
-        <header className="td-head">
-          <div className="td-head-top">
-            <span className="td-ref">{creatingMode ? "New ticket" : ticketRef(t)}</span>
-            {t.type && <span className="td-chip">{t.type}</span>}
-            <span className="td-chip is-src">{t.source === "email" ? <TkIco d="mail" /> : null}{TICKET_SOURCES[t.source] ?? t.source}</span>
-            {!creatingMode && isActive(t.stage) && dueInfo(t.due, today)?.tone === "late" && <span className="td-chip is-late">Overdue</span>}
-            {!creatingMode && <SlaBadge t={t} sla={sla} now={now} />}
-            <span className="td-spacer" />
-            <button type="button" className="td-x" onClick={onClose} aria-label="Close"><TkIco d="x" /></button>
-          </div>
-          <textarea ref={titleRef} className="td-title" rows={1} value={t.title} placeholder="What needs doing?" autoFocus={creatingMode}
-            onChange={(e) => setT({ ...t, title: e.target.value })}
-            onBlur={() => { if (!creatingMode && ticket && t.title.trim() && t.title !== ticket.title) set({ title: t.title.trim() }); }}
-            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLTextAreaElement).blur(); if (creatingMode) create(); } }} />
-          <div className="td-steps" role="radiogroup" aria-label="Stage">
-            {TICKET_STAGES.map((s, i) => (
-              <button key={s.key} type="button" role="radio" aria-checked={t.stage === s.key}
-                className={`td-step is-${s.key} ${i < stageIdx ? "is-past" : ""} ${t.stage === s.key ? "is-on" : ""}`}
-                onClick={() => set({ stage: s.key })} title={s.hint}>
-                <i />{s.label}
-              </button>
-            ))}
-          </div>
-          {t.mergedInto && (
-            <div className="td-merged"><TkIco d="merge" />Merged into {mergedTarget ? <b>{ticketRef(mergedTarget)} “{plain(mergedTarget.title)}”</b> : "another ticket"}
-              <button type="button" onClick={() => { const id = t.mergedInto; onClose(); window.setTimeout(() => window.dispatchEvent(new CustomEvent("open-ticket", { detail: id })), 50); }}>Open it →</button></div>
+  const next = creatingMode ? null : NEXT_STEP[t.stage];
+  const late = !creatingMode && isActive(t.stage) && dueInfo(t.due, today)?.tone === "late";
+  const sheet = (
+    <aside className={`td ${inline ? "is-inline" : ""} ${creatingMode ? "is-new" : ""}`} role={inline ? "region" : "dialog"} aria-modal={inline ? undefined : true}
+      aria-label={creatingMode ? "New ticket" : `Ticket ${ticketRef(t)}`}>
+      <header className="td-head">
+        <div className="td-head-top">
+          <span className="td-ref">{creatingMode ? "New ticket" : ticketRef(t)}</span>
+          {t.type && <span className="td-chip">{t.type}</span>}
+          <span className="td-chip is-src">{t.source === "email" ? <TkIco d="mail" /> : null}{TICKET_SOURCES[t.source] ?? t.source}</span>
+          {late && <span className="td-chip is-late">Overdue</span>}
+          {!creatingMode && <SlaBadge t={t} sla={sla} now={now} />}
+          <span className="td-spacer" />
+          {!creatingMode && !inline && (
+            <button type="button" className="td-icon" onClick={() => { onClose(); nav(`/tickets?ticket=${t.id}`); }} title="Open on the Tickets page" aria-label="Open on the Tickets page"><TkIco d="expand" /></button>
           )}
-        </header>
-
-        <div className="td-body">
-          <div className="td-main">
-            {!creatingMode && <ProgressPanel t={t} events={thread?.events ?? []} sla={sla} now={now} onChecklist={setChecklist} />}
-            <section className="td-sec">
-              <span className="td-k">Description</span>
-              <textarea className="td-desc" value={t.description} placeholder="Add the details: what's asked, by whom, what done looks like…"
-                onChange={(e) => { setT({ ...t, description: e.target.value }); grow(e.target); }} ref={(el) => grow(el)}
-                onBlur={() => { if (!creatingMode && ticket && t.description !== ticket.description) set({ description: t.description }); }} />
-            </section>
-
-            {creatingMode && t.checklist.length > 0 && (
-              <section className="td-sec">
-                <span className="td-k">Checklist <em>{t.checklist.filter((s) => s.done).length}/{t.checklist.length}</em></span>
-                <div className="td-check">
-                  {t.checklist.map((s) => (
-                    <label key={s.id} className={s.done ? "is-done" : ""}>
-                      <input type="checkbox" checked={s.done} onChange={() => {
-                        const checklist = t.checklist.map((x) => (x.id === s.id ? { ...x, done: !x.done } : x));
-                        const progress = Math.round((checklist.filter((x) => x.done).length / checklist.length) * 100);
-                        set({ checklist, progress });
-                      }} />
-                      <span>{s.text}</span>
-                    </label>
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {!creatingMode && (
-              <section className="td-sec td-conv">
-                <div className="td-conv-h">
-                  <span className="td-k">Conversation &amp; activity</span>
-                  <div className="tk-seg is-xs">
-                    {([["all", "All"], ["mail", `E-mail${mails?.length ? ` ${mails.length}` : ""}`], ["notes", "Notes"]] as const).map(([k, l]) => (
-                      <button key={k} type="button" className={threadFilter === k ? "is-on" : ""} onClick={() => setThreadFilter(k)}>{l}</button>
-                    ))}
-                  </div>
-                </div>
-                <div className={`td-composer is-${mode} ${willMail ? "is-mail" : ""}`}>
-                  <div className="td-composer-tabs">
-                    <button type="button" className={mode === "internal" ? "is-on" : ""} onClick={() => setMode("internal")}><TkIco d="lock" />Internal note</button>
-                    <button type="button" className={mode === "reply" ? "is-on" : ""} onClick={() => setMode("reply")}><TkIco d="reply" />Reply to requester</button>
-                  </div>
-                  {mode === "reply" && mails !== null && (
-                    <div className="td-mailbar">
-                      <label className="td-mail-toggle"><input type="checkbox" checked={byMail} onChange={() => setByMail((v) => !v)} />Send by e-mail</label>
-                      {byMail && (
-                        <>
-                          <span className="td-mail-f"><em>To</em><b>{replyTo || "no address yet"}</b></span>
-                          {fromChoices.length > 1 && <span className="td-mail-f is-from"><em>From</em><Select size="sm" value={fromAddr} onChange={setFromAddr} options={fromChoices} aria-label="From" /></span>}
-                          <span className="td-mail-f is-cc"><em>Cc</em><input value={cc} onChange={(e) => setCc(e.target.value)} placeholder="optional" /></span>
-                          <span className="td-mail-subj" title={mailSubject}><em>Subject</em>{mailSubject}</span>
-                        </>
-                      )}
-                    </div>
-                  )}
-                  <textarea value={reply} onChange={(e) => { setReply(e.target.value); grow(e.target); }} rows={2}
-                    placeholder={mode === "internal" ? "Only your team sees this…" : willMail ? `Write to ${t.requesterName || replyTo || "the requester"} — goes out from Outlook…` : `Note the reply to ${t.requesterName || t.requesterEmail || "the requester"}…`}
-                    onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(); }} />
-                  {(needPerm || (willMail && mailOk && !mailReady)) && (
-                    <div className="td-perm">
-                      <TkIco d="mail" />
-                      <span>{mailOk?.connected ? "Your Outlook connection can't send mail yet — connect again with mail permission." : "Connect Outlook to send replies by e-mail."}</span>
-                      <button type="button" onClick={() => connectOutlook({ withMail: true })}>Connect with mail</button>
-                    </div>
-                  )}
-                  <div className="td-composer-foot">
-                    <span>⌘ Enter to send</span>
-                    <button type="button" className="td-send" onClick={send} disabled={!reply.trim() || busy}>
-                      {busy ? "Sending…" : mode === "internal" ? "Add note" : willMail ? <><TkIco d="send" />Send e-mail</> : "Log reply"}
-                    </button>
-                  </div>
-                </div>
-                {allAtt.length > 0 && (
-                  <div className="td-files">
-                    <span className="td-k"><TkIco d="clip" />Files on this ticket <em>{allAtt.length}</em></span>
-                    <div className="tm-att">{(mails ?? []).filter((m) => m.attachments.length).map((m) => <Attachments key={m.id} m={m} />)}</div>
-                  </div>
-                )}
-                <div className="td-thread">
-                  {!thread ? <div className="hs-skel" /> : !visibleItems.length ? <p className="td-none">{threadFilter === "mail" ? "No e-mail on this ticket yet." : "No notes yet. Updates and changes will show up here."}</p> : [...visibleItems].reverse().map((it) => it.k === "mail" ? (
-                    <MailCard key={it.m.id} m={it.m} open={it.m.id === newestMail} />
-                  ) : it.k === "post" ? (
-                    <div key={it.p.id} className={`td-post is-${it.p.visibility}`}>
-                      <Avatar person={person(it.p.author)} size={30} />
-                      <div className="td-post-body">
-                        <span className="td-post-h"><b>{person(it.p.author)?.name ?? "Someone"}</b>{it.p.visibility === "reply" ? <em className="is-reply">Reply</em> : <em><TkIco d="lock" />Internal</em>}<time>{ago2(it.p.at)}</time></span>
-                        <p><Rich text={it.p.body} /></p>
-                      </div>
-                    </div>
-                  ) : (
-                    <div key={it.e.id} className="td-event">
-                      <span className="td-event-dot" /><b>{person(it.e.author)?.name ?? "Someone"}</b> {eventText(it.e, dir)}<time>{ago2(it.e.at)}</time>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            )}
-          </div>
-
-          <aside className="td-side">
-            <div className="td-f">
-              <span className="td-k">Owner</span>
-              <Select searchable value={t.assignee ?? ""} onChange={(v) => set({ assignee: v || null })} options={opt(dir.people, "Unassigned")} />
-              {t.assignee !== dir.me && dir.me && <button type="button" className="td-mini" onClick={() => set({ assignee: dir.me })}>Assign to me</button>}
+          {!creatingMode && (canDelete || !t.mergedInto) && (
+            <button type="button" className={`td-icon ${moreAt ? "is-on" : ""}`} onClick={(e) => setMoreAt(e.currentTarget.getBoundingClientRect())} title="More" aria-label="More actions" aria-haspopup="menu"><TkIco d="more" className="td-more-ico" /></button>
+          )}
+          <button type="button" className="td-x" onClick={onClose} aria-label="Close"><TkIco d="x" /></button>
+        </div>
+        <textarea ref={titleRef} className="td-title" rows={1} value={t.title} placeholder="What needs doing?" autoFocus={creatingMode} aria-label="Title"
+          onChange={(e) => setT({ ...t, title: e.target.value })}
+          onBlur={() => { if (!creatingMode && ticket && t.title.trim() && t.title !== ticket.title) set({ title: t.title.trim() }); }}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLTextAreaElement).blur(); if (creatingMode) create(); } }} />
+        {!creatingMode && (
+          <div className="td-stagebar">
+            {/* the stages in order: where it is, where it's been; click one to move it there */}
+            <ol className="td-track" aria-label="Stage">
+              {TICKET_STAGES.map((s, i) => (
+                <li key={s.key} className={`is-${s.key} ${i < stageIdx ? "is-past" : ""} ${t.stage === s.key ? "is-on" : ""}`}>
+                  <button type="button" onClick={() => set({ stage: s.key })} title={s.hint} aria-current={t.stage === s.key ? "step" : undefined}>
+                    <i aria-hidden="true" /><span>{s.label}</span>
+                  </button>
+                </li>
+              ))}
+            </ol>
+            <div className="td-next">
+              {isActive(t.stage) && t.stage !== "in_progress" && (
+                <button type="button" className="td-ghost is-sm" onClick={() => set({ stage: "resolved" })}><TkIco d="check" />Resolve</button>
+              )}
+              {next && <button type="button" className="td-primary is-sm" onClick={() => set({ stage: next.to })}>{next.label}<TkIco d="arrow" /></button>}
             </div>
-            <div className="td-f">
-              <span className="td-k">Priority</span>
-              <div className="td-prio">
-                {TASK_PRIORITIES.map((p) => (
-                  <button key={p} type="button" className={`is-${p} ${t.priority === p ? "is-on" : ""}`} onClick={() => set({ priority: p })}><FlagIcon />{PRIORITY_LABEL[p]}</button>
+          </div>
+        )}
+        {t.mergedInto && (
+          <div className="td-merged"><TkIco d="merge" />Merged into {mergedTarget ? <b>{ticketRef(mergedTarget)} “{plain(mergedTarget.title)}”</b> : "another ticket"}
+            <button type="button" onClick={() => { const id = t.mergedInto; onClose(); window.setTimeout(() => window.dispatchEvent(new CustomEvent("open-ticket", { detail: id })), 50); }}>Open it</button></div>
+        )}
+        {delAsk && (
+          <div className="td-confirm is-del">
+            <span>Delete this ticket for good? Its notes and history go with it.</span>
+            <button type="button" className="td-ghost is-sm" onClick={() => setDelAsk(false)}>Keep it</button>
+            <button type="button" className="td-del" onClick={remove}>Delete ticket</button>
+          </div>
+        )}
+        {mergeInto && (
+          <div className="td-confirm">
+            <span>Merge into <b>{ticketRef(mergeInto)}</b>? Notes, e-mails and watchers move there; this one closes.</span>
+            <button type="button" className="td-ghost is-sm" onClick={() => setMergeInto(null)}>Cancel</button>
+            <button type="button" className="td-primary is-sm" onClick={doMerge} disabled={busy}>Merge</button>
+          </div>
+        )}
+      </header>
+
+      <div className="td-body">
+        <div className="td-main">
+          <section className="td-sec">
+            <span className="td-k">Description</span>
+            <textarea className="td-desc" value={t.description} placeholder="What's asked, by whom, and what done looks like…"
+              onChange={(e) => { setT({ ...t, description: e.target.value }); grow(e.target); }} ref={(el) => grow(el)}
+              onBlur={() => { if (!creatingMode && ticket && t.description !== ticket.description) set({ description: t.description }); }} />
+          </section>
+
+          {!creatingMode && <ProgressPanel t={t} events={thread?.events ?? []} now={now} onChecklist={setChecklist} />}
+
+          {creatingMode && t.checklist.length > 0 && (
+            <section className="td-sec">
+              <span className="td-k">Checklist <em>{t.checklist.filter((x) => x.done).length} of {t.checklist.length}</em></span>
+              <div className="td-check">
+                {t.checklist.map((x) => (
+                  <label key={x.id} className={x.done ? "is-done" : ""}>
+                    <input type="checkbox" checked={x.done} onChange={() => {
+                      const checklist = t.checklist.map((y) => (y.id === x.id ? { ...y, done: !y.done } : y));
+                      const progress = Math.round((checklist.filter((y) => y.done).length / checklist.length) * 100);
+                      set({ checklist, progress });
+                    }} />
+                    <span>{x.text}</span>
+                  </label>
                 ))}
               </div>
+            </section>
+          )}
+
+          {!creatingMode && (
+            <section className="td-sec td-conv">
+              <div className="td-conv-h">
+                <span className="td-k">Activity</span>
+                <div className="tk-seg is-xs">
+                  {([["all", "All"], ["mail", `E-mail${mails?.length ? ` ${mails.length}` : ""}`], ["notes", "Notes"]] as const).map(([k, l]) => (
+                    <button key={k} type="button" className={threadFilter === k ? "is-on" : ""} onClick={() => setThreadFilter(k)}>{l}</button>
+                  ))}
+                </div>
+              </div>
+              {allAtt.length > 0 && (
+                <div className="td-files">
+                  <span className="td-k"><TkIco d="clip" />Files <em>{allAtt.length}</em></span>
+                  <div className="tm-att">{(mails ?? []).filter((m) => m.attachments.length).map((m) => <Attachments key={m.id} m={m} />)}</div>
+                </div>
+              )}
+              {/* oldest first, newest right above the box you write in */}
+              <div className="td-thread">
+                {!thread ? <div className="hs-skel" /> : !visibleItems.length ? <p className="td-none">{threadFilter === "mail" ? "No e-mail on this ticket yet." : "Nothing here yet. Notes, replies and every change show up here."}</p> : visibleItems.map((it) => it.k === "mail" ? (
+                  <MailCard key={it.m.id} m={it.m} open={it.m.id === newestMail} />
+                ) : it.k === "post" ? (
+                  <div key={it.p.id} className={`td-post is-${it.p.visibility}`}>
+                    <Avatar person={person(it.p.author)} size={30} />
+                    <div className="td-post-body">
+                      <span className="td-post-h"><b>{person(it.p.author)?.name ?? "Someone"}</b>{it.p.visibility === "reply" ? <em className="is-reply"><TkIco d="reply" />Reply</em> : <em><TkIco d="lock" />Internal</em>}<time>{ago2(it.p.at)}</time></span>
+                      <p><Rich text={it.p.body} /></p>
+                    </div>
+                  </div>
+                ) : (
+                  <div key={it.e.id} className="td-event">
+                    <span className="td-event-dot" /><b>{person(it.e.author)?.name ?? "Someone"}</b>&nbsp;{eventText(it.e, dir)}<time>{ago2(it.e.at)}</time>
+                  </div>
+                ))}
+              </div>
+              <div className={`td-composer is-${mode} ${willMail ? "is-mail" : ""}`}>
+                <div className="td-composer-tabs" role="tablist">
+                  <button type="button" role="tab" aria-selected={mode === "internal"} className={mode === "internal" ? "is-on" : ""} onClick={() => setMode("internal")}><TkIco d="lock" />Internal note</button>
+                  <button type="button" role="tab" aria-selected={mode === "reply"} className={mode === "reply" ? "is-on" : ""} onClick={() => setMode("reply")}><TkIco d="reply" />Reply to requester</button>
+                </div>
+                {mode === "reply" && mails !== null && (
+                  <div className="td-mailbar">
+                    <label className="td-mail-toggle"><input type="checkbox" checked={byMail} onChange={() => setByMail((v) => !v)} />Send by e-mail</label>
+                    {byMail && (
+                      <>
+                        <span className="td-mail-f"><em>To</em><b>{replyTo || "no address yet"}</b></span>
+                        {fromChoices.length > 1 && <span className="td-mail-f is-from"><em>From</em><Select size="sm" value={fromAddr} onChange={setFromAddr} options={fromChoices} aria-label="From" /></span>}
+                        <span className="td-mail-f is-cc"><em>Cc</em><input value={cc} onChange={(e) => setCc(e.target.value)} placeholder="optional" /></span>
+                        <span className="td-mail-subj" title={mailSubject}><em>Subject</em>{mailSubject}</span>
+                      </>
+                    )}
+                  </div>
+                )}
+                <textarea value={reply} onChange={(e) => { setReply(e.target.value); grow(e.target); }} rows={2}
+                  placeholder={mode === "internal" ? "Write a note only your team sees…" : willMail ? `Write to ${t.requesterName || replyTo || "the requester"} — it goes out from Outlook…` : `Log what you told ${t.requesterName || t.requesterEmail || "the requester"}…`}
+                  onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(); }} />
+                {(needPerm || (willMail && mailOk && !mailReady)) && (
+                  <div className="td-perm">
+                    <TkIco d="mail" />
+                    <span>{mailOk?.connected ? "Your Outlook connection can't send mail yet — connect again with mail permission." : "Connect Outlook to send replies by e-mail."}</span>
+                    <button type="button" onClick={() => connectOutlook({ withMail: true })}>Connect with mail</button>
+                  </div>
+                )}
+                <div className="td-composer-foot">
+                  <span>{mode === "internal" ? "Only your team sees notes" : willMail ? "Sent by e-mail and kept here" : "Kept here, not e-mailed"} · ⌘ Enter</span>
+                  <button type="button" className="td-send" onClick={send} disabled={!reply.trim() || busy}>
+                    {busy ? "Sending…" : mode === "internal" ? "Add note" : willMail ? <><TkIco d="send" />Send e-mail</> : "Log reply"}
+                  </button>
+                </div>
+              </div>
+            </section>
+          )}
+        </div>
+
+        <aside className="td-side" aria-label="Details">
+          <div className="td-props">
+            <div className="td-prop">
+              <span className="td-pk">Owner</span>
+              <div className="td-pv">
+                <Select searchable value={t.assignee ?? ""} onChange={(v) => set({ assignee: v || null })} options={opt(dir.people, "Unassigned")} aria-label="Owner" />
+                {t.assignee !== dir.me && dir.me && <button type="button" className="td-mini" onClick={() => set({ assignee: dir.me })}>Assign to me</button>}
+              </div>
             </div>
-            <div className="td-f-row">
-              <div className="td-f">
-                <span className="td-k">Type</span>
+            <div className="td-prop">
+              <span className="td-pk">Priority</span>
+              <div className="td-pv">
+                <div className="td-prio" role="radiogroup" aria-label="Priority">
+                  {TASK_PRIORITIES.map((p) => (
+                    <button key={p} type="button" role="radio" aria-checked={t.priority === p} className={`is-${p} ${t.priority === p ? "is-on" : ""}`} onClick={() => set({ priority: p })} title={PRIORITY_LABEL[p]}><FlagIcon />{PRIORITY_LABEL[p]}</button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="td-prop">
+              <span className="td-pk">Type</span>
+              <div className="td-pv">
                 {newType !== null ? (
                   <input className="td-in" autoFocus value={newType} placeholder="New type…" onChange={(e) => setNewType(e.target.value)} onBlur={saveNewType}
                     onKeyDown={(e) => { if (e.key === "Enter") saveNewType(); if (e.key === "Escape") setNewType(null); }} />
                 ) : (
-                  <Select value={t.type ?? ""} onChange={(v) => (v === "__new" ? setNewType("") : set({ type: v || null }))}
+                  <Select value={t.type ?? ""} onChange={(v) => (v === "__new" ? setNewType("") : set({ type: v || null }))} aria-label="Type"
                     options={[{ value: "", label: "No type" }, ...types.map((x) => ({ value: x, label: x })), { value: "__new", label: "+ New type…" }]} />
                 )}
               </div>
-              <div className="td-f">
-                <span className="td-k">Due</span>
-                <div className="td-due">
-                  <DatePicker value={dayOf(t.due) ?? ""} onChange={(iso) => set({ due: iso ? `${iso}T${timeOf(t.due) ?? "18:00"}:00` : null })} placeholder="No due date" />
-                  {t.due && <button type="button" className="td-clear" onClick={() => set({ due: null })} aria-label="Clear due date"><TkIco d="x" /></button>}
-                </div>
+            </div>
+            <div className="td-prop">
+              <span className="td-pk">Due</span>
+              <div className="td-pv td-due">
+                <DatePicker value={dayOf(t.due) ?? ""} onChange={(iso) => set({ due: iso ? `${iso}T${timeOf(t.due) ?? "18:00"}:00` : null })} placeholder="No due date" />
+                {t.due && <button type="button" className="td-clear" onClick={() => set({ due: null })} aria-label="Clear due date"><TkIco d="x" /></button>}
               </div>
             </div>
-            <div className="td-f">
-              <span className="td-k">Watchers <em>get every update</em></span>
-              <div className="td-watch">
+            <div className="td-prop">
+              <span className="td-pk">Team</span>
+              <div className="td-pv">
+                <Select value={t.team ?? ""} onChange={(v) => set({ team: v || null })} aria-label="Team" options={[{ value: "", label: "Any team" }, ...departments.map((d) => ({ value: d, label: d[0].toUpperCase() + d.slice(1) }))]} />
+              </div>
+            </div>
+            <div className="td-prop">
+              <span className="td-pk">Came in by</span>
+              <div className="td-pv">
+                <Select value={t.source} onChange={(v) => set({ source: v })} aria-label="Source" options={Object.entries(TICKET_SOURCES).map(([value, label]) => ({ value, label }))} />
+              </div>
+            </div>
+            <div className="td-prop is-top">
+              <span className="td-pk">Watchers</span>
+              <div className="td-pv td-watch">
                 {t.watchers.map((w) => (
                   <span key={w} className="td-watcher"><Avatar person={person(w)} size={20} />{person(w)?.name ?? "Someone"}<button type="button" onClick={() => toggleWatch(w)} aria-label="Remove"><TkIco d="x" /></button></span>
                 ))}
                 <button type="button" className="td-add" onClick={(e) => setWatchAdd(e.currentTarget.getBoundingClientRect())}><TkIco d="plus" />Add</button>
               </div>
             </div>
-
-            <div className="td-group">
-              <span className="td-group-h"><TkIco d="mail" />Requester</span>
-              <Select searchable value={t.requesterContactId ?? ""} onChange={(v) => {
-                const c = dir.contacts.find((x) => x.id === v);
-                set({ requesterContactId: v || null, ...(c ? { requesterName: c.name, requesterEmail: c.email } : {}) });
-              }} options={opt(dir.contacts, "Pick a contact…")} />
-              <div className="td-f-row">
-                <input className="td-in" value={t.requesterName ?? ""} placeholder="Name" onChange={(e) => setT({ ...t, requesterName: e.target.value })} onBlur={() => !creatingMode && set({ requesterName: t.requesterName || null })} />
-                <input className="td-in" value={t.requesterEmail ?? ""} placeholder="E-mail" type="email" onChange={(e) => setT({ ...t, requesterEmail: e.target.value })} onBlur={() => !creatingMode && set({ requesterEmail: t.requesterEmail || null })} />
-              </div>
-            </div>
-
-            <div className="td-group">
-              <span className="td-group-h"><TkIco d="link" />Linked to</span>
-              <label className="td-lk"><TkIco d="briefcase" /><Select searchable value={t.clientId ?? ""} onChange={(v) => set({ clientId: v || null })} options={opt(dir.clients, "No client")} /></label>
-              <label className="td-lk"><TkIco d="building" /><Select searchable value={t.companyId ?? ""} onChange={(v) => set({ companyId: v || null })} options={opt(dir.companies, "No company")} /></label>
-              <label className="td-lk"><TkIco d="deal" /><Select searchable value={t.trackingId ?? ""} onChange={(v) => set({ trackingId: v || null })} options={opt(dir.deals, "No deal")} /></label>
-              <label className="td-lk"><TkIco d="folder" /><Select searchable value={t.projectId ?? ""} onChange={(v) => set({ projectId: v || null })} options={opt(dir.projects, "No project")} /></label>
-              {!creatingMode && (t.clientId || deal || t.companyId) && (
-                <div className="td-jump">
-                  {t.clientId && <button type="button" onClick={() => nav(`/clients?client=${t.clientId}`)}>Open client →</button>}
-                  {deal && <button type="button" onClick={() => nav(`/sales?tracking=${deal.id}`)}>Open deal →</button>}
-                  {t.companyId && <button type="button" onClick={() => nav("/companies", { state: { focusCompanyId: t.companyId } })}>Open company →</button>}
-                </div>
-              )}
-            </div>
-
-            <div className="td-f-row">
-              <div className="td-f">
-                <span className="td-k">Team</span>
-                <Select value={t.team ?? ""} onChange={(v) => set({ team: v || null })} options={[{ value: "", label: "Any team" }, ...departments.map((d) => ({ value: d, label: d[0].toUpperCase() + d.slice(1) }))]} />
-              </div>
-              <div className="td-f">
-                <span className="td-k">Source</span>
-                <Select value={t.source} onChange={(v) => set({ source: v })} options={Object.entries(TICKET_SOURCES).map(([value, label]) => ({ value, label }))} />
-              </div>
-            </div>
-            <div className="td-f">
-              <span className="td-k">Tags</span>
-              <div className="td-tags">
+            <div className="td-prop is-top">
+              <span className="td-pk">Tags</span>
+              <div className="td-pv td-tags">
                 {t.tags.map((x) => <span key={x} className="td-tag">#{x}<button type="button" onClick={() => set({ tags: t.tags.filter((y) => y !== x) })} aria-label="Remove tag"><TkIco d="x" /></button></span>)}
-                <input value={tagDraft} placeholder={t.tags.length ? "+ tag" : "Add a tag…"} onChange={(e) => setTagDraft(e.target.value)}
+                <input value={tagDraft} placeholder={t.tags.length ? "+ tag" : "Add a tag…"} onChange={(e) => setTagDraft(e.target.value)} aria-label="Add a tag"
                   onKeyDown={(e) => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addTag(); } }} onBlur={addTag} />
               </div>
             </div>
-            {!creatingMode && (
-              <dl className="td-meta">
-                <div><dt>Opened</dt><dd>{new Date(t.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}{t.createdBy ? ` · ${person(t.createdBy)?.name ?? ""}` : ""}</dd></div>
-                {t.updatedAt && <div><dt>Updated</dt><dd>{ago2(t.updatedAt)}</dd></div>}
-                {t.resolvedAt && !isActive(t.stage) && <div><dt>Resolved</dt><dd>{ago2(t.resolvedAt)}</dd></div>}
-              </dl>
-            )}
-          </aside>
-        </div>
+          </div>
 
-        {err && <p className="td-err">{err}</p>}
-        <footer className="td-foot">
-          {canDelete && (delAsk ? (
-            <span className="td-del-ask">Delete this ticket for good?<button type="button" className="td-del" onClick={remove}>Delete</button><button type="button" className="td-ghost" onClick={() => setDelAsk(false)}>Keep</button></span>
-          ) : <button type="button" className="td-ghost is-del" onClick={() => setDelAsk(true)}><TkIco d="trash" />Delete</button>)}
-          {!creatingMode && !t.mergedInto && (mergeInto ? (
-            <span className="td-del-ask is-merge"><span>Merge into <b>{ticketRef(mergeInto)}</b>? Notes, e-mails and watchers move; this one closes.</span>
-              <button type="button" className="td-primary is-sm" onClick={doMerge} disabled={busy}>Merge</button><button type="button" className="td-ghost" onClick={() => setMergeInto(null)}>Cancel</button></span>
-          ) : <button type="button" className="td-ghost" onClick={(e) => openMerge(e.currentTarget.getBoundingClientRect())}><TkIco d="merge" />Merge into…</button>)}
-          <span className="td-spacer" />
-          {creatingMode ? (
-            <>
-              <button type="button" className="td-ghost" onClick={onClose}>Cancel</button>
-              <button type="button" className="td-primary" onClick={create} disabled={!t.title.trim() || busy}>{busy ? "Creating…" : "Create ticket"}</button>
-            </>
-          ) : isActive(t.stage) ? (
-            <button type="button" className="td-primary" onClick={() => set({ stage: "resolved" })}><TkIco d="check" />Resolve</button>
-          ) : (
-            <>
-              <button type="button" className="td-ghost" onClick={() => set({ stage: "open" })}>Reopen</button>
-              {t.stage !== "closed" && <button type="button" className="td-primary" onClick={() => set({ stage: "closed" })}>Close ticket</button>}
-            </>
+          <div className="td-group">
+            <span className="td-group-h"><TkIco d="mail" />Requester</span>
+            <Select searchable value={t.requesterContactId ?? ""} onChange={(v) => {
+              const c = dir.contacts.find((x) => x.id === v);
+              set({ requesterContactId: v || null, ...(c ? { requesterName: c.name, requesterEmail: c.email } : {}) });
+            }} options={opt(dir.remote ? dir.contacts.filter((x) => x.id === t.requesterContactId) : dir.contacts, "Pick a contact…")} loadOptions={findContacts} aria-label="Requester" />
+            <div className="td-f-row">
+              <input className="td-in" value={t.requesterName ?? ""} placeholder="Name" aria-label="Requester name" onChange={(e) => setT({ ...t, requesterName: e.target.value })} onBlur={() => !creatingMode && set({ requesterName: t.requesterName || null })} />
+              <input className="td-in" value={t.requesterEmail ?? ""} placeholder="E-mail" type="email" aria-label="Requester e-mail" onChange={(e) => setT({ ...t, requesterEmail: e.target.value })} onBlur={() => !creatingMode && set({ requesterEmail: t.requesterEmail || null })} />
+            </div>
+          </div>
+
+          <div className="td-group">
+            <span className="td-group-h"><TkIco d="link" />Linked to</span>
+            <label className="td-lk"><TkIco d="briefcase" /><Select searchable value={t.clientId ?? ""} onChange={(v) => set({ clientId: v || null })} options={opt(dir.clients, "No client")} aria-label="Client" />
+              {!creatingMode && t.clientId && <button type="button" className="td-go" onClick={() => nav(`/clients?client=${t.clientId}`)} title="Open the client" aria-label="Open the client"><TkIco d="out" /></button>}</label>
+            <label className="td-lk"><TkIco d="building" /><Select searchable value={t.companyId ?? ""} onChange={(v) => set({ companyId: v || null })} options={opt(dir.remote ? dir.companies.filter((x) => x.id === t.companyId) : dir.companies, "No company")} loadOptions={findCompanies} aria-label="Company" />
+              {!creatingMode && t.companyId && <button type="button" className="td-go" onClick={() => nav("/companies", { state: { focusCompanyId: t.companyId } })} title="Open the company" aria-label="Open the company"><TkIco d="out" /></button>}</label>
+            <label className="td-lk"><TkIco d="deal" /><Select searchable value={t.trackingId ?? ""} onChange={(v) => set({ trackingId: v || null })} options={opt(dir.remote ? dir.deals.filter((x) => x.id === t.trackingId) : dir.deals, "No deal")} loadOptions={findDeals} aria-label="Deal" />
+              {!creatingMode && deal && <button type="button" className="td-go" onClick={() => nav(`/sales?tracking=${deal.id}`)} title="Open the deal" aria-label="Open the deal"><TkIco d="out" /></button>}</label>
+            <label className="td-lk"><TkIco d="folder" /><Select searchable value={t.projectId ?? ""} onChange={(v) => set({ projectId: v || null })} options={opt(dir.projects, "No project")} aria-label="Project" /></label>
+          </div>
+
+          {!creatingMode && <SlaTimers t={t} sla={sla} now={now} />}
+
+          {!creatingMode && (
+            <dl className="td-meta">
+              <div><dt>Opened</dt><dd>{new Date(t.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}{t.createdBy ? `, by ${person(t.createdBy)?.name ?? "someone"}` : ""}</dd></div>
+              {t.updatedAt && <div><dt>Updated</dt><dd>{ago2(t.updatedAt)}</dd></div>}
+              {t.resolvedAt && !isActive(t.stage) && <div><dt>Resolved</dt><dd>{ago2(t.resolvedAt)}</dd></div>}
+            </dl>
           )}
+        </aside>
+      </div>
+
+      {err && <p className="td-err" role="alert">{err}</p>}
+      {creatingMode && (
+        <footer className="td-foot">
+          <span className="td-foot-hint">It lands on {t.assignee ? (t.assignee === dir.me ? "your desk" : `${person(t.assignee)?.name ?? "their"} desk`) : "the team's desk, unassigned"}.</span>
+          <span className="td-spacer" />
+          <button type="button" className="td-ghost" onClick={onClose}>Cancel</button>
+          <button type="button" className="td-primary" onClick={create} disabled={!t.title.trim() || busy}>{busy ? "Creating…" : "Create ticket"}</button>
         </footer>
-        {mergeAt && (
-          <Pop anchor={mergeAt} onClose={() => setMergeAt(null)} width={340}>
-            {pickList ? <TicketPick tickets={pickList} exclude={t.id} onPick={(x) => { setMergeAt(null); setMergeInto(x); }} placeholder="Merge into which ticket?" /> : <div className="hs-skel" />}
-          </Pop>
-        )}
-        {watchAdd && (
-          <Pop anchor={watchAdd} onClose={() => setWatchAdd(null)} width={250}>
-            <PeopleMenu dir={dir} value={null} allowNone={false} onPick={(id) => { setWatchAdd(null); if (id && !t.watchers.includes(id)) toggleWatch(id); }} />
-          </Pop>
-        )}
-      </aside>
-    </div>,
+      )}
+      {moreAt && (
+        <Pop anchor={moreAt} onClose={() => setMoreAt(null)} width={240}>
+          <div className="tk-pop-list" role="menu">
+            {isActive(t.stage) ? (
+              <button type="button" role="menuitem" className="tk-pop-opt" onClick={() => { setMoreAt(null); set({ stage: "resolved" }); }}><TkIco d="check" /><span>Resolve</span></button>
+            ) : (
+              <button type="button" role="menuitem" className="tk-pop-opt" onClick={() => { setMoreAt(null); set({ stage: "open" }); }}><TkIco d="refresh" /><span>Reopen</span></button>
+            )}
+            {!t.mergedInto && <button type="button" role="menuitem" className="tk-pop-opt" onClick={() => { const r = moreAt; setMoreAt(null); openMerge(r); }}><TkIco d="merge" /><span>Merge into another ticket…</span></button>}
+            {canDelete && <button type="button" role="menuitem" className="tk-pop-opt is-danger" onClick={() => { setMoreAt(null); setDelAsk(true); }}><TkIco d="trash" /><span>Delete ticket…</span></button>}
+          </div>
+        </Pop>
+      )}
+      {mergeAt && (
+        <Pop anchor={mergeAt} onClose={() => setMergeAt(null)} width={340}>
+          {pickList ? <TicketPick tickets={pickList} exclude={t.id} onPick={(x) => { setMergeAt(null); setMergeInto(x); }} placeholder="Merge into which ticket?" /> : <div className="hs-skel" />}
+        </Pop>
+      )}
+      {watchAdd && (
+        <Pop anchor={watchAdd} onClose={() => setWatchAdd(null)} width={250}>
+          <PeopleMenu dir={dir} value={null} allowNone={false} onPick={(id) => { setWatchAdd(null); if (id && !t.watchers.includes(id)) toggleWatch(id); }} />
+        </Pop>
+      )}
+    </aside>
+  );
+  if (inline) return sheet;
+  return createPortal(
+    <div className="td-back" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>{sheet}</div>,
     document.body,
+  );
+}
+
+/**
+ * The Tickets page (/tickets): the whole desk on a page of its own. ?ticket=… opens one;
+ * the search's "Ticket inbox" lands on the e-mail waiting to be sorted.
+ */
+export function TicketsPage() {
+  const loc = useLocation();
+  const first = new URLSearchParams(loc.search).get("ticket");
+  return (
+    <div className="tkp-page">
+      <TicketDesk page openFirst={first} />
+    </div>
   );
 }
 
@@ -2839,7 +3145,9 @@ export function TicketDrawerById({ id, onClose }: { id: string; onClose: () => v
   useEffect(() => {
     let alive = true;
     Promise.all([loadTicket(id), loadDirectory(), loadTicketTypes()]).then(([r, dir, types]) => { if (alive) setState({ t: r.ticket, ready: r.ready, dir, types }); });
-    return () => { alive = false; };
+    const f = () => setState((s) => s && { ...s, dir: { ...s.dir } });
+    window.addEventListener(DIR_EVENT, f);
+    return () => { alive = false; window.removeEventListener(DIR_EVENT, f); };
   }, [id]);
   if (!state?.t) return null;
   return <TicketDrawer ticket={state.t} dir={state.dir} types={state.types} ready={state.ready} onClose={onClose}
@@ -2970,7 +3278,6 @@ export function SlaBadge({ t, sla, now, compact = false }: { t: Ticket; sla: Sla
 }
 
 /* ---- progress: where the ticket stands and where its time went ---- */
-const STAGE_PCT: Record<TicketStage, number> = { new: 0, open: 15, in_progress: 50, waiting: 60, resolved: 100, closed: 100 };
 function stageSegments(t: Ticket, events: TicketEvent[], now: number) {
   const moves = events.filter((e) => e.action === "stage" && e.detail?.to).sort((a, b) => a.at.localeCompare(b.at));
   const first = (moves[0]?.detail?.from as TicketStage) || (moves.length ? "new" : t.stage);
@@ -2985,34 +3292,47 @@ function stageSegments(t: Ticket, events: TicketEvent[], now: number) {
   segs.push({ stage: t.stage, from: at, to: isActive(t.stage) ? now : Math.max(at, new Date(t.resolvedAt ?? t.updatedAt ?? t.createdAt).getTime()), ongoing: isActive(t.stage) });
   return segs.filter((s) => s.to >= s.from);
 }
-function ProgressPanel({ t, events, sla, now, onChecklist }: {
-  t: Ticket; events: TicketEvent[]; sla: SlaMap | null; now: number; onChecklist: (steps: TaskStep[]) => void;
-}) {
-  const [draft, setDraft] = useState("");
-  const done = t.checklist.filter((x) => x.done).length;
-  const pct = t.checklist.length ? Math.round((done / t.checklist.length) * 100) : STAGE_PCT[t.stage];
-  const segs = stageSegments(t, events, now);
-  const total = Math.max(1, segs.reduce((n, s) => n + (s.to - s.from), 0));
+/** The two SLA clocks (first reply, resolution) for the ticket's priority: met, missed, or time left. */
+function SlaTimers({ t, sla, now }: { t: Ticket; sla: SlaMap | null; now: number }) {
   const target = sla?.[t.priority];
   const created = new Date(t.createdAt).getTime();
-  const timer = (label: string, minutes: number | null | undefined, doneAt: string | null) => {
+  const row = (label: string, minutes: number | null | undefined, doneAt: string | null) => {
     if (!minutes) return <div className="tp-sla is-none"><span>{label}</span><b>No target</b></div>;
     const due = created + minutes * 60000;
     if (doneAt) {
       const took = new Date(doneAt).getTime() - created;
       const ok = new Date(doneAt).getTime() <= due;
-      return <div className={`tp-sla ${ok ? "is-met" : "is-breach"}`}><span>{label}</span><b>{ok ? "Met" : "Missed"} · {span(took)}</b><em>target {span(minutes * 60000)}</em></div>;
+      return <div className={`tp-sla ${ok ? "is-met" : "is-breach"}`}><span>{label}</span><b>{ok ? "Met" : "Missed"}, took {span(took)}</b><em>target {span(minutes * 60000)}</em></div>;
     }
     if (!isActive(t.stage)) return <div className="tp-sla is-none"><span>{label}</span><b>—</b><em>target {span(minutes * 60000)}</em></div>;
     const left = due - now;
     const tone = left < 0 ? "is-breach" : left < minutes * 60000 * 0.25 ? "is-soon" : "is-ok";
     return (
       <div className={`tp-sla ${tone}`}>
-        <span>{label}</span><b>{left < 0 ? `Late ${span(left)}` : `${span(left)} left`}</b><em>target {span(minutes * 60000)}</em>
+        <span>{label}</span><b>{left < 0 ? `Late by ${span(left)}` : `${span(left)} left`}</b><em>target {span(minutes * 60000)}</em>
         <i className="tp-sla-bar"><i style={{ width: `${Math.max(0, Math.min(100, 100 - (left / (minutes * 60000)) * 100))}%` }} /></i>
       </div>
     );
   };
+  return (
+    <div className="td-group td-slas">
+      <span className="td-group-h"><TkIco d="bolt" />Service level <em>{PRIORITY_LABEL[t.priority].toLowerCase()} priority</em></span>
+      {row("First reply", target?.firstResponse, t.firstResponseAt)}
+      {row("Resolution", target?.resolution, isActive(t.stage) ? null : t.resolvedAt)}
+    </div>
+  );
+}
+
+/* ---- progress: the steps, and where the ticket's time went ---- */
+function ProgressPanel({ t, events, now, onChecklist }: {
+  t: Ticket; events: TicketEvent[]; now: number; onChecklist: (steps: TaskStep[]) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const done = t.checklist.filter((x) => x.done).length;
+  const pct = t.checklist.length ? Math.round((done / t.checklist.length) * 100) : null;
+  const segs = stageSegments(t, events, now);
+  const total = Math.max(1, segs.reduce((n, s) => n + (s.to - s.from), 0));
+  const created = new Date(t.createdAt).getTime();
   const addStep = () => {
     const v = draft.trim();
     if (!v) return;
@@ -3020,26 +3340,20 @@ function ProgressPanel({ t, events, sla, now, onChecklist }: {
     onChecklist([...t.checklist, { id: newStepId(), text: v, done: false }]);
   };
   return (
-    <section className="tp">
-      <div className="tp-top">
-        <div className="tp-ring" style={{ ["--p" as string]: pct } as React.CSSProperties}>
-          <svg viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="15.5" /><circle cx="18" cy="18" r="15.5" className="tp-ring-v" style={{ strokeDasharray: `${(pct / 100) * 97.4} 97.4` }} /></svg>
-          <b>{pct}<i>%</i></b>
-        </div>
-        <div className="tp-top-txt">
-          <span className="td-k">Progress</span>
-          <b>{t.checklist.length ? `${done} of ${t.checklist.length} steps done` : `${stageLabel(t.stage)} — add steps to track it in detail`}</b>
-          <span className="tp-top-sub">Open {span(now - created)}{t.resolvedAt && !isActive(t.stage) ? ` · resolved in ${span(new Date(t.resolvedAt).getTime() - created)}` : ""}</span>
-        </div>
-        <div className="tp-slas">
-          {timer("First reply", target?.firstResponse, t.firstResponseAt)}
-          {timer("Resolution", target?.resolution, isActive(t.stage) ? null : t.resolvedAt)}
-        </div>
+    <section className="td-sec td-prog">
+      <div className="tdp-head">
+        <span className="td-k">Progress</span>
+        <span className="tdp-sub">
+          {pct !== null ? <><b>{done} of {t.checklist.length}</b> steps done</> : "No steps yet"}
+          <span className="tdp-age">{isActive(t.stage) ? `open ${span(now - created)}` : t.resolvedAt ? `resolved in ${span(new Date(t.resolvedAt).getTime() - created)}` : ""}</span>
+        </span>
       </div>
+      {pct !== null && <span className="tdp-meter" aria-hidden="true"><i style={{ width: `${pct}%` }} /></span>}
+      {/* time in each stage, as one bar */}
       <div className="tp-time" aria-label="Time in each stage">
         <div className="tp-bar">
           {segs.map((sg, i) => (
-            <span key={i} className={`tp-seg is-${sg.stage} ${sg.ongoing ? "is-now" : ""}`} style={{ flexGrow: Math.max(0.04, (sg.to - sg.from) / total) }} title={`${stageLabel(sg.stage)} · ${span(sg.to - sg.from)}`} />
+            <span key={i} className={`tp-seg is-${sg.stage} ${sg.ongoing ? "is-now" : ""}`} style={{ flexGrow: Math.max(0.04, (sg.to - sg.from) / total) }} title={`${stageLabel(sg.stage)}: ${span(sg.to - sg.from)}`} />
           ))}
         </div>
         <ol className="tp-steps">
@@ -3048,7 +3362,6 @@ function ProgressPanel({ t, events, sla, now, onChecklist }: {
               <span className={`tk-dot is-${sg.stage}`} />
               <b>{stageLabel(sg.stage)}</b>
               <em>{span(sg.to - sg.from)}{sg.ongoing ? " so far" : ""}</em>
-              <time>{new Date(sg.from).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</time>
             </li>
           ))}
         </ol>
@@ -3063,7 +3376,7 @@ function ProgressPanel({ t, events, sla, now, onChecklist }: {
         ))}
         <div className="tp-add">
           <TkIco d="plus" />
-          <input value={draft} placeholder={t.checklist.length ? "Add a step…" : "Break it into steps — progress follows them"} onChange={(e) => setDraft(e.target.value)}
+          <input value={draft} placeholder={t.checklist.length ? "Add a step…" : "Break it into steps — progress follows them"} aria-label="Add a step" onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addStep(); } }} onBlur={addStep} />
         </div>
       </div>
@@ -3239,10 +3552,12 @@ function RuleEditor({ rule, dir, types, tickets, boxes, inbox, onSave, onCancel 
               {(c.from_contact_ids ?? []).map((id) => (
                 <span key={id} className="td-tag">{dir.contacts.find((x) => x.id === id)?.name ?? "Contact"}<button type="button" onClick={() => setC({ from_contact_ids: (c.from_contact_ids ?? []).filter((x) => x !== id) })} aria-label="Remove"><TkIco d="x" /></button></span>
               ))}
-              <div className="tr-chip-add"><Select searchable value="" onChange={(v) => v && setC({ from_contact_ids: [...new Set([...(c.from_contact_ids ?? []), v])] })} options={opt(dir.contacts.filter((x) => x.email), "+ contact")} /></div>
+              <div className="tr-chip-add"><Select searchable value="" onChange={(v) => v && setC({ from_contact_ids: [...new Set([...(c.from_contact_ids ?? []), v])] })} options={opt(dir.remote ? [] : dir.contacts.filter((x) => x.email), "+ contact")}
+                loadOptions={dir.remote ? dirSearch(dir, "contact", (h) => !!h.email) : undefined} /></div>
             </div>
           </div>
-          <div className="tr-f"><span>From anyone at</span><Select searchable value={c.from_company_id ?? ""} onChange={(v) => setC({ from_company_id: v || null })} options={opt(dir.companies, "Any company")} /></div>
+          <div className="tr-f"><span>From anyone at</span><Select searchable value={c.from_company_id ?? ""} onChange={(v) => setC({ from_company_id: v || null })} options={opt(dir.remote ? dir.companies.filter((x) => x.id === c.from_company_id) : dir.companies, "Any company")}
+            loadOptions={dir.remote ? dirSearch(dir, "company") : undefined} /></div>
           <div className="tr-f"><span>Sent to mailbox</span><Select value={c.mailbox ?? ""} onChange={(v) => setC({ mailbox: v })} options={[{ value: "", label: "Any mailbox" }, ...boxes.map((b) => ({ value: b.address, label: b.label ? `${b.label} · ${b.address}` : b.address }))]} /></div>
           <label><span>Subject contains</span><input className="td-in" value={c.subject_contains ?? ""} placeholder="Invoice" onChange={(e) => setC({ subject_contains: e.target.value })} /></label>
           <label><span>Subject matches (regex)</span><input className="td-in tr-mono" value={c.subject_regex ?? ""} placeholder="^(RE: )?Ticket #\d+" onChange={(e) => setC({ subject_regex: e.target.value })} /></label>
@@ -3307,6 +3622,8 @@ function DeskSettings({ dir, types, tickets, inbox, start, prefill, mail, onClos
     const [r, b, s] = await Promise.all([loadMailRules(), loadMailboxes(), loadSla()]);
     setMissing(r === null || b === null || !s.ready);
     setRules(r ?? []); setBoxes(b ?? []); setSla(s.sla);
+    void ensureDirNames(dir, { contacts: (r ?? []).flatMap((x) => x.conditions.from_contact_ids ?? []), companies: (r ?? []).map((x) => x.conditions.from_company_id),
+      emails: inbox.map((m) => m.fromEmail) });
   }, []);
   useEffect(() => { reload(); }, [reload]);
   useEffect(() => {

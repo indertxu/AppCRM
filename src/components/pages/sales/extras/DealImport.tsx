@@ -1273,7 +1273,8 @@ export function TargetPicker({ value, options, used, onChange }: { value: string
     if (!open) return;
     const off = (e: MouseEvent) => { const t = e.target as Node; if (!menu.current?.contains(t) && !trig.current?.contains(t)) setOpen(false); };
     const esc = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); setOpen(false); trig.current?.focus(); } };
-    const re = () => place();
+    // scrolling inside the menu itself must not move it (the list jumped back to the top)
+    const re = (e?: Event) => { if (e && menu.current?.contains(e.target as Node)) return; place(); };
     document.addEventListener("mousedown", off, true); window.addEventListener("keydown", esc, true);
     window.addEventListener("resize", re); window.addEventListener("scroll", re, true);
     return () => { document.removeEventListener("mousedown", off, true); window.removeEventListener("keydown", esc, true); window.removeEventListener("resize", re); window.removeEventListener("scroll", re, true); };

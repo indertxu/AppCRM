@@ -31,7 +31,7 @@ interface Props {
   /** The hero: greeting, the global search, where the page measures its top. */
   greeting: string;
   firstName: string | null;
-  search: ReactNode;
+  search?: ReactNode;
   heroRef?: Ref<HTMLElement>;
 }
 
@@ -92,7 +92,7 @@ function Spark({ series, target }: { series: number[]; target: number }) {
   );
 }
 
-export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar, desk, greeting, firstName, search, heroRef }: Props) {
+export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar, desk, greeting, firstName, heroRef }: Props) {
   const nav = useNavigate();
   const [loading, setLoading] = useState(true);
   const [bills, setBills] = useState<Bill[]>([]);
@@ -377,7 +377,7 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar,
 
   return (
     <div className="ch-home">
-      {/* ============ HERO: greeting, search, the four figures of the day ============ */}
+      {/* ============ HERO: greeting and the four figures of the day (search: ⌘K / the rail) ============ */}
       <section className="chx-hero" ref={heroRef} onPointerMove={glow} aria-label="Your day">
         <i className="chx-hero-grid" aria-hidden="true" />
         <i className="chx-hero-glow" aria-hidden="true" />
@@ -386,7 +386,6 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar,
             <span className="chx-date">{dateLabel}</span>
             <h1 className="chx-greet">{greeting}{firstName ? `, ${firstName}` : ""}</h1>
           </div>
-          <div className="chx-search">{search}</div>
         </div>
         <div className="chx-figs">
           <button type="button" className="chx-fig is-today" onClick={() => nav("/calendar")} title="Open your calendar">
@@ -439,8 +438,8 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar,
         <section className="cz-card cz-backlog" aria-label="Department backlog">
           <header className="cz-head">
             <div className="cz-titles">
+              {/* the value lives in the first card below — not repeated up here */}
               <span className="cz-eyebrow">Department backlog</span>
-              <h2 className="cz-title">{loading ? "…" : <>{eur(backlog.value)} €<small>still to deliver</small></>}</h2>
             </div>
             <button type="button" className="cz-link" onClick={() => goToSection(nav, "/management", "backlog")}>Backlog<i aria-hidden="true">→</i></button>
           </header>

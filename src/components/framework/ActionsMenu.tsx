@@ -64,7 +64,8 @@ export default function ActionsMenu({ items, label = "Actions" }: { items: Actio
       const hit = items.find((i) => i.shortcut && i.shortcut.toLowerCase() === e.key.toLowerCase());
       if (hit) { e.preventDefault(); run(hit); }
     };
-    const re = () => place();
+    // scrolling inside the menu itself must not move (or re-measure) it: that threw the list back to the top
+    const re = (e?: Event) => { if (e && menuRef.current?.contains(e.target as Node)) return; place(); };
     window.addEventListener("mousedown", off, true);
     window.addEventListener("keydown", key);
     window.addEventListener("resize", re);

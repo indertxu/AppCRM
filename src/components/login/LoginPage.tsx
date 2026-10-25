@@ -15,6 +15,15 @@ import "./LoginPage.css";
 /** Set right before leaving for the app: the home page plays its arrival sequence once. */
 export const JUST_SIGNED_IN_KEY = "next:just-signed-in";
 
+/**
+ * From "Sign in" until the launch hands over to the app. The moment the session
+ * exists, /login would redirect on its own and cut the launch half-way (a see-through
+ * green screen, and a second navigation 1.5 s later that pulled you back to Home if
+ * you had clicked somewhere). While this is set, /login keeps the sign-in page up.
+ */
+let launchHold = 0;
+export const loginLaunching = () => launchHold > 0 && Date.now() - launchHold < 15000;
+
 interface Ripple { id: number; x: number; y: number }
 
 const reducedMotion = () => {
@@ -383,6 +392,9 @@ export default function LoginPage() {
   const [activeChip, setActiveChip] = useState<number | null>(null);
   const [cubeHot, setCubeHot] = useState(false);
   const [spinKey, setSpinKey] = useState(0);
+  // still on screen (the launch navigates only from here)
+  const onScreen = useRef(true);
+  useEffect(() => { onScreen.current = true; return () => { onScreen.current = false; }; }, []);
 
   useConstellation(canvasRef, pointer, burst);
 
@@ -521,8 +533,10 @@ export default function LoginPage() {
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    if (loading || launching) return;
     setError(null);
     setLoading(true);
+    launchHold = Date.now();
 
     // Persist the session only if "Keep me signed in" is checked
     setRememberMe(remember);
@@ -535,24 +549,20 @@ export default function LoginPage() {
     setLoading(false);
 
     if (error) {
+      launchHold = 0;
       setError("Wrong email or password. Try again.");
       setShaking(true);
       window.setTimeout(() => setShaking(false), 560);
       return;
     }
 
-    // Where to go: superadmins land on the platform panel, everyone else on home.
-    let dest = "/home";
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user) {
-      const { data: prof } = await supabase.from("profiles").select("is_superadmin").eq("id", user.id).maybeSingle();
-      if (prof?.is_superadmin) dest = "/superadmin";
-    }
+    // Home plays its arrival sequence (set now, before anything else can mount it)
+    try { sessionStorage.setItem(JUST_SIGNED_IN_KEY, String(Date.now())); } catch { /* ignore */ }
 
     // Success -> the card folds away, the hero cube bursts apart and re-forms
     // in the middle of a deep green screen; navigate once it has. Home picks up
     // from that exact frame and runs the real loading sequence.
-    try { sessionStorage.setItem(JUST_SIGNED_IN_KEY, String(Date.now())); } catch { /* ignore */ }
+    // It starts straight away; where to go is worked out while it plays.
     setLaunching(true);
     rig.current.launchAt = performance.now();
     if (!reducedMotion()) {
@@ -560,7 +570,20 @@ export default function LoginPage() {
       const pump = () => { burst.current = Math.min(1, (performance.now() - t0) / 700); if (burst.current < 1) requestAnimationFrame(pump); };
       requestAnimationFrame(pump);
     }
-    window.setTimeout(() => navigate(dest), reducedMotion() ? 120 : 1500);
+    // Where to go: superadmins land on the platform panel, everyone else on home.
+    const dest = (async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return "/home";
+        const { data: prof } = await supabase.from("profiles").select("is_superadmin").eq("id", user.id).maybeSingle();
+        return prof?.is_superadmin ? "/superadmin" : "/home";
+      } catch { return "/home"; }
+    })();
+    // one navigation, only once the screen is fully green (the iris closes at ~1.2 s)
+    const minWait = new Promise((r) => window.setTimeout(r, reducedMotion() ? 120 : 1500));
+    const [to] = await Promise.all([dest, minWait]);
+    launchHold = 0;
+    if (onScreen.current) navigate(to, { replace: true });
   };
 
   return (

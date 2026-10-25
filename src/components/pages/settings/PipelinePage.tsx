@@ -1,13 +1,17 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "../../api/supabase";
 import Select from "../../framework/Select";
+import { useBackToClose } from "../../framework/useBackToClose";
+import { setLeaveGuard } from "../../framework/pageAccess";
 import {
-  listPipelines, createPipeline, renamePipeline, savePipelineOrder, pipelineUsage, deletePipelineSafely,
-  loadPipeline, addPhase, updatePhase, deletePhase, addLink, removeLink,
-  setPhaseDepartments, setPhaseItems, setPipelineSource, syncPipelineToBlueprint, setPipelineSales,
-  type Pipeline, type Phase, type PipelineLink, type PipelineUsage,
+  listPipelines, createPipeline, savePipelineOrder, pipelineUsage, deletePipelineSafely,
+  loadPipeline, loadPhasesByPipeline, syncPipelineToBlueprint,
+  listFolders, createFolder, renameFolder, moveFolder, deleteFolder, setPipelineFolder,
+  diffDraft, savePipelineDraft,
+  type Pipeline, type PipelineFolder, type PipelineDraft, type Phase, type PipelineLink, type PipelineUsage,
 } from "./pipelineApi";
 import { loadBlueprintData, type Blueprint } from "./blueprintsApi";
 import "./PipelinePage.css";
@@ -43,100 +47,458 @@ const DeptIcon = ({ k }: { k: string }) => (
 
 const NODE_W = 200;
 const NODE_H = 92;
+const newId = () => (crypto as any).randomUUID?.() ?? "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (c: string) => (Number(c) ^ (Math.random() * 16) >> (Number(c) / 4)).toString(16));
+const fold = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+
+// ---- folders: helpers shared by the list and the editor ----
+const COLLAPSED_KEY = "pl-folders-collapsed";
+const readCollapsed = (): Set<string> => {
+  try { return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY) || "[]")); } catch { return new Set(); }
+};
+function folderTree(folders: PipelineFolder[]) {
+  const ids = new Set(folders.map((f) => f.id));
+  const parentOf = (f: PipelineFolder) => (f.parent_id && ids.has(f.parent_id) && f.parent_id !== f.id ? f.parent_id : null);
+  const byId = new Map(folders.map((f) => [f.id, f]));
+  const kids = (parent: string | null) => folders.filter((f) => parentOf(f) === parent)
+    .sort((a, b) => ((a.sort_order ?? 1e9) - (b.sort_order ?? 1e9)) || a.name.localeCompare(b.name));
+  /** Folder ids from the top down to `id` (guards against a loop in bad data). */
+  const chain = (id: string | null) => {
+    const out: string[] = [];
+    let cur = id ? byId.get(id) : undefined;
+    while (cur && out.length < 64 && !out.includes(cur.id)) { out.unshift(cur.id); const p = parentOf(cur); cur = p ? byId.get(p) : undefined; }
+    return out;
+  };
+  const path = (id: string | null) => chain(id).map((x) => byId.get(x)?.name || "Folder").join(" › ");
+  /** Is `id` the same as, or inside, `ancestor`? */
+  const within = (id: string | null, ancestor: string) => chain(id).includes(ancestor);
+  const has = (id: string | null | undefined) => !!id && ids.has(id);
+  /** Every folder, top down, with its depth — for pickers. */
+  const flat = () => {
+    const out: { f: PipelineFolder; depth: number }[] = [];
+    const walk = (parent: string | null, depth: number) => kids(parent).forEach((f) => { if (depth < 64) { out.push({ f, depth }); walk(f.id, depth + 1); } });
+    walk(null, 0);
+    return out;
+  };
+  return { kids, path, within, has, flat, byId };
+}
+
+const FolderIco = ({ open }: { open?: boolean }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    {open
+      ? <path d="M3 8V6a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v1M3 8h18l-2 10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+      : <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />}
+  </svg>
+);
+
+/** A pipeline's phases in order, drawn as a small line of stops (Win and Loss marked). */
+function PhaseTrack({ phases }: { phases: Phase[] }) {
+  if (!phases.length) return <span className="plx-track is-empty">No phases yet</span>;
+  const shown = phases.slice(0, 10);
+  const more = phases.length - shown.length;
+  return (
+    <span className="plx-track" role="img" aria-label={`${phases.length} phases: ${phases.map((p) => p.name).join(", ")}`}>
+      {shown.map((p) => (
+        <i key={p.id} className={p.sales_outcome === "win" ? "is-win" : p.sales_outcome === "loss" ? "is-loss" : ""} title={p.name} />
+      ))}
+      {more > 0 && <em>+{more}</em>}
+    </span>
+  );
+}
+
+type MenuItem = { key: string; label: string; onSelect: () => void; danger?: boolean; depth?: number; current?: boolean };
+/** The "⋯" menu of a row: a small list under the button; Esc or a click outside closes it. */
+function RowMenu({ label, items, moveTo }: { label: string; items: MenuItem[]; moveTo?: { label: string; items: MenuItem[] } }) {
+  const [open, setOpen] = useState(false);
+  const [view, setView] = useState<"main" | "move">("main");
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const off = (e: MouseEvent) => { const t = e.target as Node; if (!pop.current?.contains(t) && !btn.current?.contains(t)) setOpen(false); };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setOpen(false); btn.current?.focus(); } };
+    const away = (e: Event) => { if (!pop.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", off);
+    window.addEventListener("keydown", key, true);
+    window.addEventListener("scroll", away, true);
+    window.setTimeout(() => pop.current?.querySelector<HTMLButtonElement>("button")?.focus(), 0);
+    return () => { document.removeEventListener("mousedown", off); window.removeEventListener("keydown", key, true); window.removeEventListener("scroll", away, true); };
+  }, [open, view]);
+  const toggle = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (open) { setOpen(false); return; }
+    const r = btn.current!.getBoundingClientRect();
+    setPos({ top: r.bottom + 6, left: Math.max(8, Math.min(r.right - 228, window.innerWidth - 236)) });
+    setView("main"); setOpen(true);
+  };
+  const run = (it: MenuItem) => { setOpen(false); it.onSelect(); };
+  const list = view === "move" && moveTo ? moveTo.items : items;
+  return (
+    <>
+      <button ref={btn} type="button" className={`plx-more ${open ? "is-open" : ""}`} onClick={toggle} onDoubleClick={(e) => e.stopPropagation()}
+        aria-label={label} aria-haspopup="menu" aria-expanded={open} draggable={false} onDragStart={(e) => e.preventDefault()}>
+        <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5.5" cy="12" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="18.5" cy="12" r="1.6" /></svg>
+      </button>
+      {open && pos && createPortal(
+        <div ref={pop} className="plx-menu" role="menu" style={{ top: pos.top, left: pos.left }} onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+            e.preventDefault();
+            const bs = Array.from(pop.current?.querySelectorAll<HTMLButtonElement>("button") ?? []);
+            const i = bs.indexOf(document.activeElement as HTMLButtonElement);
+            bs[(i + (e.key === "ArrowDown" ? 1 : bs.length - 1)) % bs.length]?.focus();
+          }}>
+          {view === "move" && moveTo && (
+            <button type="button" className="plx-menu-back" role="menuitem" onClick={() => setView("main")}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 6l-6 6 6 6" /></svg>
+              {moveTo.label}
+            </button>
+          )}
+          {list.map((it) => (
+            <button key={it.key} type="button" role="menuitem" disabled={it.current}
+              className={`${it.danger ? "is-danger" : ""} ${it.current ? "is-current" : ""}`}
+              style={it.depth ? { paddingLeft: 12 + it.depth * 14 } : undefined}
+              onClick={() => run(it)}>
+              {it.label}{it.current && <small>here now</small>}
+            </button>
+          ))}
+          {view === "main" && moveTo && (
+            <button type="button" role="menuitem" className="plx-menu-sub" onClick={() => setView("move")}>
+              {moveTo.label}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6l6 6-6 6" /></svg>
+            </button>
+          )}
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
+type Over = { kind: "pipe"; id: string; after: boolean } | { kind: "folder"; id: string } | { kind: "root" } | null;
+const sameOver = (a: Over, b: Over) => JSON.stringify(a) === JSON.stringify(b);
 
 export default function PipelinePage({ onBack }: Props) {
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
+  /** null: the folders table isn't there yet (56_pipeline_folders.sql). */
+  const [folders, setFolders] = useState<PipelineFolder[] | null>([]);
+  const [phasesBy, setPhasesBy] = useState<Record<string, Phase[]>>({});
   const [openId, setOpenId] = useState<string | null>(null);
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<Pipeline | null>(null);
-  // Order of the list: dragged here, saved for the whole company.
-  const [dragId, setDragId] = useState<string | null>(null);
-  const [overId, setOverId] = useState<string | null>(null);
-  const [orderMsg, setOrderMsg] = useState<string | null>(null);
-  const dropOn = async (targetId: string, after: boolean) => {
-    if (!dragId || dragId === targetId) return;
-    const ids = pipelines.map((p) => p.id).filter((id) => id !== dragId);
-    const at = ids.indexOf(targetId) + (after ? 1 : 0);
-    ids.splice(at, 0, dragId);
-    setPipelines(ids.map((id) => pipelines.find((p) => p.id === id)!));
-    const err = await savePipelineOrder(ids);
-    setOrderMsg(err);
-  };
+  const [delFolder, setDelFolder] = useState<PipelineFolder | null>(null);
+  const [collapsed, setCollapsed] = useState<Set<string>>(readCollapsed);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [q, setQ] = useState("");
+  // Drag: pipelines reorder (same order for everyone) and go into folders; folders go into folders.
+  // Nothing on the page moves while you drag (moving it makes the browser drop the drag).
+  const [drag, setDrag] = useState<{ kind: "pipe" | "folder"; id: string } | null>(null);
+  const dragRef = useRef<{ kind: "pipe" | "folder"; id: string } | null>(null);
+  const [over, setOverState] = useState<Over>(null);
+  const setOver = (o: Over) => setOverState((cur) => (sameOver(cur, o) ? cur : o));
+  const [msg, setMsg] = useState<string | null>(null);
 
   const refresh = async () => {
-    const ps = await listPipelines().catch(() => []);
-    setPipelines(ps);
+    const [ps, fs, ph] = await Promise.all([
+      listPipelines().catch(() => [] as Pipeline[]),
+      listFolders().catch(() => null),
+      loadPhasesByPipeline().catch(() => ({} as Record<string, Phase[]>)),
+    ]);
+    setPipelines(ps); setFolders(fs); setPhasesBy(ph);
     setPreviewId((cur) => (cur && ps.some((p) => p.id === cur) ? cur : ps[0]?.id ?? null));
   };
   useEffect(() => { refresh(); }, []);
 
+  const tree = useMemo(() => folderTree(folders ?? []), [folders]);
+  const hasFolders = (folders ?? []).length > 0;
+  const folderOf = (p: Pipeline) => (tree.has(p.folder_id) ? p.folder_id! : null);
+  const ql = fold(q.trim());
+  const matches = (p: Pipeline) => !ql || fold(p.name || "").includes(ql);
+  const countIn = (id: string): number => pipelines.filter((p) => matches(p) && tree.within(folderOf(p), id)).length;
+  const saveCollapsed = (n: Set<string>) => { try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...n])); } catch { /* ignore */ } };
+  const toggle = (id: string) => setCollapsed((cur) => {
+    const n = new Set(cur); if (n.has(id)) n.delete(id); else n.add(id);
+    saveCollapsed(n); return n;
+  });
+  /** Unfold a folder and every folder above it. */
+  const openFolder = (id: string | null) => {
+    if (!id) return;
+    setCollapsed((cur) => {
+      const n = new Set(cur); let changed = false;
+      for (const f of (folders ?? [])) if (tree.within(id, f.id) && n.delete(f.id)) changed = true;
+      if (changed) saveCollapsed(n);
+      return changed ? n : cur;
+    });
+  };
+
   if (openId) {
     const pipe = pipelines.find((p) => p.id === openId);
-    return <PipelineEditor pipeline={pipe!} onBack={() => { setOpenId(null); refresh(); }} onRenamed={refresh} />;
+    if (pipe) return <PipelineEditor pipeline={pipe} folders={folders} onBack={() => { setOpenId(null); refresh(); }} onSaved={refresh} />;
   }
 
-  const clickCard = (id: string) => {
-    if (previewId === id) setOpenId(id);   // second click on the previewed one → enter
+  const clickRow = (id: string) => {
+    if (previewId === id) setOpenId(id);   // second click on the previewed one → editor
     else setPreviewId(id);                  // first click → preview
   };
+  const newPipeline = async (folderId: string | null) => {
+    let p = await createPipeline("Untitled pipeline", folderId);
+    if (!p && folderId) p = await createPipeline("Untitled pipeline");
+    if (!p) { setMsg("Couldn't create the pipeline: your user isn't allowed to."); return; }
+    await refresh(); setOpenId(p.id);
+  };
+  const newFolder = async (parentId: string | null) => {
+    const f = await createFolder("New folder", parentId);
+    if (typeof f === "string") { setMsg(f); return; }
+    setMsg(null);
+    setFolders((cur) => [...(cur ?? []), f]);
+    openFolder(parentId);
+    setRenaming(f.id);
+  };
+  const commitRename = async (f: PipelineFolder, name: string) => {
+    setRenaming(null);
+    const v = name.trim();
+    if (!v || v === f.name) return;
+    setFolders((cur) => (cur ?? []).map((x) => (x.id === f.id ? { ...x, name: v } : x)));
+    const e = await renameFolder(f.id, v);
+    if (e) { setMsg(e); refresh(); }
+  };
+  const movePipe = async (id: string, dest: string | null) => {
+    setPipelines((ps) => ps.map((p) => (p.id === id ? { ...p, folder_id: dest } : p)));
+    openFolder(dest);
+    const e = await setPipelineFolder(id, dest);
+    setMsg(e); if (e) refresh();
+  };
+  const moveFolderTo = async (id: string, dest: string | null) => {
+    if (dest && tree.within(dest, id)) return;               // not into itself or its own sub-folders
+    setFolders((fs) => (fs ?? []).map((f) => (f.id === id ? { ...f, parent_id: dest } : f)));
+    openFolder(dest);
+    const e = await moveFolder(id, dest);
+    setMsg(e); if (e) refresh();
+  };
+
+  // ---- drag & drop ----
+  const startDrag = (e: React.DragEvent, d: { kind: "pipe" | "folder"; id: string }) => {
+    e.stopPropagation();
+    e.dataTransfer.effectAllowed = "move";
+    try { e.dataTransfer.setData("text/plain", d.id); } catch { /* ignore */ }
+    dragRef.current = d;
+    // after the browser has picked the drag up: changing the page during dragstart cancels it
+    window.setTimeout(() => setDrag(d), 0);
+  };
+  const endDrag = () => { dragRef.current = null; setDrag(null); setOverState(null); };
+  const canDropOnFolder = (fid: string) => { const d = dragRef.current; return !!d && !(d.kind === "folder" && tree.within(fid, d.id)); };
+  const drop = async (o: Over) => {
+    const d = dragRef.current;
+    endDrag();
+    if (!d || !o) return;
+    if (o.kind === "root") { if (d.kind === "pipe") await movePipe(d.id, null); else await moveFolderTo(d.id, null); return; }
+    if (o.kind === "folder") { if (d.kind === "pipe") await movePipe(d.id, o.id); else await moveFolderTo(d.id, o.id); return; }
+    // on a pipeline: it goes right before / after it, in its folder
+    const target = pipelines.find((p) => p.id === o.id);
+    if (!target) return;
+    const dest = folderOf(target);
+    if (d.kind === "folder") { await moveFolderTo(d.id, dest); return; }
+    if (d.id === target.id) return;
+    const moved = pipelines.find((p) => p.id === d.id);
+    const ids = pipelines.map((p) => p.id).filter((id) => id !== d.id);
+    ids.splice(ids.indexOf(target.id) + (o.after ? 1 : 0), 0, d.id);
+    setPipelines(ids.map((id) => { const p = pipelines.find((x) => x.id === id)!; return id === d.id ? { ...p, folder_id: dest } : p; }));
+    let err: string | null = null;
+    if (moved && folderOf(moved) !== dest) err = await setPipelineFolder(d.id, dest);
+    if (!err) err = await savePipelineOrder(ids);
+    setMsg(err); if (err) refresh();
+  };
+  const dropTarget = (o: Exclude<Over, null>, ok = true) => ({
+    onDragOver: (e: React.DragEvent) => {
+      if (!dragRef.current || !ok) return;
+      e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "move";
+      if (o.kind === "pipe") {
+        const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        setOver({ ...o, after: e.clientY > r.top + r.height / 2 });
+      } else setOver(o);
+    },
+    onDrop: (e: React.DragEvent) => {
+      if (!dragRef.current || !ok) return;
+      e.preventDefault(); e.stopPropagation();
+      if (o.kind === "pipe") {
+        const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        void drop({ ...o, after: e.clientY > r.top + r.height / 2 });
+      } else void drop(o);
+    },
+  });
+
+  const moveItems = (current: string | null, apply: (dest: string | null) => void, exclude?: string): MenuItem[] => [
+    { key: "root", label: "Not in a folder", current: current === null, onSelect: () => apply(null) },
+    ...tree.flat().filter(({ f }) => !exclude || !tree.within(f.id, exclude)).map(({ f, depth }) => ({
+      key: f.id, label: f.name || "Folder", depth: depth + 1, current: current === f.id, onSelect: () => apply(f.id),
+    })),
+  ];
+
+  const pipeRow = (p: Pipeline) => {
+    const ph = phasesBy[p.id] ?? [];
+    const isOver = over?.kind === "pipe" && over.id === p.id && drag?.id !== p.id;
+    return (
+      <div
+        key={p.id}
+        className={`plx-row ${previewId === p.id ? "is-active" : ""} ${drag?.id === p.id ? "is-dragging" : ""} ${isOver ? (over!.kind === "pipe" && over!.after ? "is-after" : "is-before") : ""}`}
+        onClick={() => clickRow(p.id)}
+        onDoubleClick={() => setOpenId(p.id)}
+        onKeyDown={(e) => { if (e.key === "Enter") setOpenId(p.id); else if (e.key === " ") { e.preventDefault(); setPreviewId(p.id); } }}
+        tabIndex={0} role="treeitem" aria-selected={previewId === p.id}
+        draggable
+        onDragStart={(e) => startDrag(e, { kind: "pipe", id: p.id })}
+        onDragEnd={endDrag}
+        {...dropTarget({ kind: "pipe", id: p.id, after: false })}
+      >
+        <span className="plx-row-main">
+          <span className="plx-row-name">{p.name || "Untitled pipeline"}</span>
+          <span className="plx-row-meta">
+            <PhaseTrack phases={ph} />
+            {ph.length > 0 && <span>{ph.length} {ph.length === 1 ? "phase" : "phases"}</span>}
+            {p.is_sales && <span className="plx-tag">Sales</span>}
+          </span>
+        </span>
+        <RowMenu label={`Actions for ${p.name}`}
+          items={[
+            { key: "open", label: "Edit pipeline", onSelect: () => setOpenId(p.id) },
+            { key: "del", label: "Delete pipeline…", danger: true, onSelect: () => setDeleting(p) },
+          ]}
+          moveTo={folders === null || !hasFolders ? undefined : { label: "Move to folder", items: moveItems(folderOf(p), (dest) => movePipe(p.id, dest)) }} />
+      </div>
+    );
+  };
+
+  const folderBlock = (f: PipelineFolder): ReactNode => {
+    const n = countIn(f.id);
+    if (ql && n === 0) return null;                          // searching: only folders with a match
+    const open = !!ql || !collapsed.has(f.id);
+    const ok = canDropOnFolder(f.id);
+    const isOver = over?.kind === "folder" && over.id === f.id;
+    const kids = tree.kids(f.id).map(folderBlock).filter(Boolean);
+    const pipes = pipelines.filter((p) => folderOf(p) === f.id && matches(p));
+    return (
+      <div key={f.id} className={`plx-folder ${open ? "is-open" : ""} ${isOver ? "is-over" : ""} ${drag?.id === f.id ? "is-dragging" : ""}`} role="treeitem" aria-expanded={open}>
+        <div className="plx-folder-head"
+          onClick={() => { if (renaming !== f.id) toggle(f.id); }}
+          draggable={renaming !== f.id}
+          onDragStart={(e) => startDrag(e, { kind: "folder", id: f.id })}
+          onDragEnd={endDrag}
+          {...dropTarget({ kind: "folder", id: f.id }, ok)}>
+          <span className="plx-chev" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6l6 6-6 6" /></svg>
+          </span>
+          {renaming === f.id ? (
+            <input className="plx-folder-input" autoFocus defaultValue={f.name} aria-label="Folder name"
+              onFocus={(e) => e.currentTarget.select()}
+              onClick={(e) => e.stopPropagation()}
+              onBlur={(e) => commitRename(f, e.currentTarget.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+                else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setRenaming(null); }
+              }} />
+          ) : (
+            <span className="plx-folder-name" onDoubleClick={(e) => { e.stopPropagation(); setRenaming(f.id); }}>{f.name || "Folder"}</span>
+          )}
+          <span className="plx-count">{n}</span>
+          <RowMenu label={`Actions for folder ${f.name}`}
+            items={[
+              { key: "np", label: "New pipeline here", onSelect: () => newPipeline(f.id) },
+              { key: "nf", label: "New sub-folder", onSelect: () => newFolder(f.id) },
+              { key: "rn", label: "Rename", onSelect: () => setRenaming(f.id) },
+              { key: "del", label: "Delete folder…", danger: true, onSelect: () => setDelFolder(f) },
+            ]}
+            moveTo={{ label: "Move folder to", items: moveItems(tree.has(f.parent_id) ? f.parent_id : null, (dest) => moveFolderTo(f.id, dest), f.id) }} />
+        </div>
+        {open && (
+          <div className="plx-folder-body">
+            {kids}
+            {pipes.map(pipeRow)}
+            {!kids.length && !pipes.length && (
+              <div className={`plx-empty-slot ${isOver ? "is-over" : ""}`} {...dropTarget({ kind: "folder", id: f.id }, ok)}>
+                Drag pipelines here, or <button type="button" onClick={() => newPipeline(f.id)}>create one</button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const roots = tree.kids(null).map(folderBlock).filter(Boolean);
+  const loose = pipelines.filter((p) => folderOf(p) === null && matches(p));
+  const folderCount = (f: PipelineFolder) => ({
+    subs: (folders ?? []).filter((x) => x.id !== f.id && tree.within(x.id, f.id)).length,
+    pipes: pipelines.filter((p) => tree.within(folderOf(p), f.id)).length,
+  });
+  const preview = previewId ? pipelines.find((p) => p.id === previewId) ?? null : null;
+  const previewPhases = preview ? phasesBy[preview.id] ?? [] : [];
 
   return (
     <div className="pl">
       <header className="pl-head">
         <button className="pl-back" onClick={onBack} aria-label="Back">‹</button>
-        <div><h1 className="pl-title">Client Pipelines</h1></div>
-        <button className="pl-new" onClick={async () => {
-          const p = await createPipeline("Untitled pipeline");
-          if (p) { await refresh(); setOpenId(p.id); }
-        }}>+ New pipeline</button>
+        <h1 className="pl-title">Client pipelines</h1>
+        <div className="plx-head-acts">
+          {folders !== null && (
+            <button className="plx-btn-quiet" onClick={() => newFolder(null)}><FolderIco /> New folder</button>
+          )}
+          <button className="plx-btn" onClick={() => newPipeline(null)}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
+            New pipeline
+          </button>
+        </div>
       </header>
 
-      {pipelines.length === 0 ? (
+      {pipelines.length === 0 && !hasFolders ? (
         <p className="pl-empty">No pipelines yet. Create one to design the phases a client goes through.</p>
       ) : (
         <div className="pl-overview">
-          <div className="pl-list">
-            <p className="pl-list-hint">Drag to reorder · same order for everyone</p>
-            {orderMsg && <p className="pl-list-err">{orderMsg}</p>}
-            {pipelines.map((p) => (
-              <div
-                key={p.id}
-                className={`pl-row ${previewId === p.id ? "is-active" : ""} ${dragId === p.id ? "is-dragging" : ""} ${overId === p.id && dragId !== p.id ? "is-over" : ""}`}
-                onClick={() => clickCard(p.id)}
-                draggable
-                onDragStart={(e) => { setDragId(p.id); e.dataTransfer.effectAllowed = "move"; }}
-                onDragEnd={() => { setDragId(null); setOverId(null); }}
-                onDragOver={(e) => { if (!dragId) return; e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (overId !== p.id) setOverId(p.id); }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  const box = e.currentTarget.getBoundingClientRect();
-                  void dropOn(p.id, e.clientY > box.top + box.height / 2);
-                  setDragId(null); setOverId(null);
-                }}
-              >
-                <span className="pl-row-grip" aria-hidden="true" title="Drag to reorder">⋮⋮</span>
-                <span className="pl-row-icon">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="5" cy="6" r="2.4" /><circle cx="5" cy="18" r="2.4" /><circle cx="19" cy="12" r="2.4" />
-                    <path d="M7.4 6H12a3 3 0 0 1 3 3v.5M7.4 18H12a3 3 0 0 0 3-3v-.5" />
-                  </svg>
-                </span>
-                <span className="pl-row-name">{p.name}</span>
-                <button className="pl-row-del" onClick={(e) => { e.stopPropagation(); setDeleting(p); }} title="Delete pipeline" aria-label={`Delete ${p.name}`}>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" /></svg>
-                </button>
-                <button className="pl-row-open" onClick={(e) => { e.stopPropagation(); setOpenId(p.id); }} title="Open editor" aria-label="Open editor">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-                </button>
+          <div className="plx-panel">
+            {pipelines.length > 6 && (
+              <div className="plx-search">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" /></svg>
+                <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Find among ${pipelines.length} pipelines`} aria-label="Find a pipeline" />
+                {q && <button type="button" onClick={() => setQ("")} aria-label="Clear search">×</button>}
               </div>
-            ))}
+            )}
+            {msg && <p className="plx-msg" role="alert">{msg}<button type="button" onClick={() => setMsg(null)} aria-label="Dismiss">×</button></p>}
+            <div className="plx-tree" role="tree" aria-label="Pipelines"
+              onDragOver={(e) => { if (dragRef.current) { e.preventDefault(); setOver(null); } }}
+              onDrop={(e) => { if (dragRef.current) { e.preventDefault(); endDrag(); } }}>
+              {roots}
+              {hasFolders && (loose.length > 0 || drag || !ql) && (
+                <div className={`plx-loose-head ${over?.kind === "root" ? "is-over" : ""}`} {...dropTarget({ kind: "root" })}>
+                  Not in a folder <span className="plx-count">{loose.length}</span>
+                </div>
+              )}
+              {loose.map(pipeRow)}
+              {ql && !roots.length && !loose.length && <p className="plx-none">No pipeline matches “{q}”.</p>}
+            </div>
+            <p className="plx-foot">
+              {folders === null
+                ? "Drag to reorder. To group pipelines in folders, run 56_pipeline_folders.sql once."
+                : "Drag a pipeline onto a folder, or between two pipelines to reorder. Everyone sees this order."}
+            </p>
           </div>
 
           <div className="pl-preview">
-            {previewId ? (
-              <PipelinePreview key={previewId} pipelineId={previewId} onOpen={() => setOpenId(previewId)} />
+            {preview ? (
+              <div className="plx-pv">
+                <div className="plx-pv-head">
+                  <div className="plx-pv-title">
+                    <h2>{preview.name || "Untitled pipeline"}</h2>
+                    <span>
+                      {folderOf(preview) ? tree.path(folderOf(preview)) : hasFolders ? "Not in a folder" : ""}
+                      {previewPhases.length ? `${folderOf(preview) || hasFolders ? ", " : ""}${previewPhases.length} phases` : ""}
+                      {preview.is_sales ? ", shown in Sales" : ""}
+                    </span>
+                  </div>
+                  <button className="plx-btn" onClick={() => setOpenId(preview.id)}>Edit pipeline</button>
+                </div>
+                <PipelinePreview key={preview.id} pipelineId={preview.id} onOpen={() => setOpenId(preview.id)} />
+              </div>
             ) : (
-              <div className="pl-preview-empty">Select a pipeline to preview</div>
+              <div className="pl-preview-empty">Select a pipeline to preview it</div>
             )}
           </div>
         </div>
@@ -149,7 +511,47 @@ export default function PipelinePage({ onBack }: Props) {
           onDeleted={async () => { setDeleting(null); await refresh(); }}
         />
       )}
+      {delFolder && (
+        <DeleteFolderModal folder={delFolder} {...folderCount(delFolder)}
+          onClose={() => setDelFolder(null)}
+          onConfirm={async () => {
+            const e = await deleteFolder(delFolder.id);
+            setDelFolder(null); setMsg(e); await refresh();
+          }} />
+      )}
     </div>
+  );
+}
+
+// ============================ Delete a folder ============================
+function DeleteFolderModal({ folder, subs, pipes, onClose, onConfirm }: {
+  folder: PipelineFolder; subs: number; pipes: number; onClose: () => void; onConfirm: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, onClose]);
+  return createPortal(
+    <div className="pl-del-backdrop" onMouseDown={() => !busy && onClose()}>
+      <div className="pl-del" onMouseDown={(e) => e.stopPropagation()} role="alertdialog" aria-modal="true" aria-labelledby="pl-delf-title">
+        <span className="pl-del-ico"><FolderIco /></span>
+        <span className="pl-del-eyebrow">Delete folder</span>
+        <h2 id="pl-delf-title" className="pl-del-title">Delete <b>{folder.name || "Folder"}</b>?</h2>
+        <p className="pl-del-sub">
+          {subs > 0 && <>Its {subs} sub-folder{subs === 1 ? "" : "s"} go{subs === 1 ? "es" : ""} too. </>}
+          {pipes > 0
+            ? <>The {pipes} pipeline{pipes === 1 ? "" : "s"} inside move{pipes === 1 ? "s" : ""} to the top level — no pipeline, phase or deal is deleted.</>
+            : <>There are no pipelines inside.</>}
+        </p>
+        <div className="pl-del-actions">
+          <button className="pl-del-cancel" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="pl-del-go" disabled={busy} onClick={async () => { setBusy(true); await onConfirm(); }}>{busy ? "Deleting…" : "Delete folder"}</button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -283,11 +685,16 @@ function PipelinePreview({ pipelineId, onOpen }: { pipelineId: string; onOpen: (
   useEffect(() => {
     loadPipeline(pipelineId).then(({ phases, links }) => {
       setPhases(phases); setLinks(links);
-      // fit content roughly into view
+      // the whole pipeline in view: zoom to fit the pane, centred
       if (phases.length) {
-        const minX = Math.min(...phases.map((p) => p.pos_x));
-        const minY = Math.min(...phases.map((p) => p.pos_y));
-        setViewX(40 - minX * 0.75); setViewY(40 - minY * 0.75); setZoom(0.75);
+        const minX = Math.min(...phases.map((p) => p.pos_x)), maxX = Math.max(...phases.map((p) => p.pos_x)) + NODE_W;
+        const minY = Math.min(...phases.map((p) => p.pos_y)), maxY = Math.max(...phases.map((p) => p.pos_y)) + NODE_H;
+        const box = ref.current?.getBoundingClientRect();
+        const w = box?.width || 800, h = box?.height || 500, pad = 48;
+        const z = Math.max(0.3, Math.min(1, (w - pad * 2) / (maxX - minX), (h - pad * 2) / (maxY - minY)));
+        setZoom(z);
+        setViewX((w - (maxX - minX) * z) / 2 - minX * z);
+        setViewY(Math.min(pad, (h - (maxY - minY) * z) / 2) - minY * z);
       }
     }).catch(() => {});
   }, [pipelineId]);
@@ -343,17 +750,37 @@ function PipelinePreview({ pipelineId, onOpen }: { pipelineId: string; onOpen: (
         ))}
         {phases.length === 0 && <div className="pl-qv-empty">This pipeline has no phases yet.</div>}
       </div>
-      <button className="pl-qv-open" onClick={onOpen}>Open editor →</button>
     </div>
   );
 }
 
 // ============================ Editor ============================
-function PipelineEditor({ pipeline, onBack, onRenamed }: { pipeline: Pipeline; onBack: () => void; onRenamed: () => void; }) {
-  const [phases, setPhases] = useState<Phase[]>([]);
-  const [links, setLinks] = useState<PipelineLink[]>([]);
-  const [name, setName] = useState(pipeline.name);
-  const [isSales, setIsSales] = useState<boolean>(pipeline.is_sales ?? false);
+// Everything you change stays on screen until Save. Leaving with changes —
+// ‹, Esc, the browser's Back, the sidebar, the search, closing the tab — asks
+// first: Save and leave / Discard (confirmed a second time) / Keep editing.
+function PipelineEditor({ pipeline, folders, onBack, onSaved }: {
+  pipeline: Pipeline; folders: PipelineFolder[] | null; onBack: () => void; onSaved: () => void;
+}) {
+  const navigate = useNavigate();
+  const blank: PipelineDraft = {
+    name: pipeline.name, isSales: pipeline.is_sales ?? false, folderId: pipeline.folder_id ?? null,
+    source: pipeline.source_blueprint_id ?? null, phases: [], links: [],
+  };
+  const [base, setBase] = useState<PipelineDraft>(blank);     // as in the database
+  const [draft, setDraft] = useState<PipelineDraft>(blank);   // as on screen
+  const [loaded, setLoaded] = useState(false);
+  const phases = draft.phases, links = draft.links, isSales = draft.isSales;
+  const setPhases = (fn: (ps: Phase[]) => Phase[]) => setDraft((d) => ({ ...d, phases: fn(d.phases) }));
+  const setLinks = (fn: (ls: PipelineLink[]) => PipelineLink[]) => setDraft((d) => ({ ...d, links: fn(d.links) }));
+  const diff = useMemo(() => diffDraft(base, draft), [base, draft]);
+  const dirty = loaded && diff.count > 0;
+
+  const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
+  const [savedOnce, setSavedOnce] = useState(false);
+  const [ask, setAsk] = useState<0 | 1 | 2>(0);              // 1: unsaved changes · 2: confirm discard
+  const leaveTo = useRef<(() => void) | null>(null);
+
   const [selId, setSelId] = useState<string | null>(null);
   const [selLink, setSelLink] = useState<string | null>(null);
   const [products, setProducts] = useState<{ id: string; name: string }[]>([]);
@@ -377,18 +804,28 @@ function PipelineEditor({ pipeline, onBack, onRenamed }: { pipeline: Pipeline; o
   const nodeRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const livePos = useRef<{ x: number; y: number } | null>(null);
 
-  const reload = async () => {
-    // If this pipeline came from a blueprint, sync phases (add/remove) before loading.
-    if (pipeline.source_blueprint_id) {
-      const bpData = await loadBlueprintData().catch(() => null);
-      const bp = bpData?.blueprints.find((b) => b.id === pipeline.source_blueprint_id);
-      if (bp) await syncPipelineToBlueprint(pipeline.id, bp.phases.map((p) => ({ id: p.id, name: p.name })));
-    }
-    const { phases, links } = await loadPipeline(pipeline.id);
-    setPhases(phases); setLinks(links);
+  /** What the database has now for this pipeline. */
+  const readSaved = async (): Promise<PipelineDraft> => {
+    const [{ phases, links }, { data }] = await Promise.all([
+      loadPipeline(pipeline.id),
+      supabase.from("pipelines").select("*").eq("id", pipeline.id).maybeSingle(),
+    ]);
+    const p = ((data as Pipeline | null) ?? pipeline);
+    return { name: p.name ?? "", isSales: p.is_sales ?? false, folderId: p.folder_id ?? null, source: p.source_blueprint_id ?? null, phases, links };
   };
   useEffect(() => {
-    reload();
+    let alive = true;
+    (async () => {
+      // A pipeline made from a blueprint picks up the blueprint's new / removed phases when opened.
+      if (pipeline.source_blueprint_id) {
+        const bpData = await loadBlueprintData().catch(() => null);
+        const bp = bpData?.blueprints.find((b) => b.id === pipeline.source_blueprint_id);
+        if (bp) await syncPipelineToBlueprint(pipeline.id, bp.phases.map((p) => ({ id: p.id, name: p.name }))).catch(() => {});
+      }
+      const b = await readSaved();
+      if (!alive) return;
+      setBase(b); setDraft(b); setLoaded(true);
+    })();
     supabase.from("products").select("id,name").then(({ data }: any) => setProducts(data ?? []));
     supabase.from("services").select("id,name").then(({ data }: any) => setServices(data ?? []));
     // Load the real departments placed on the org chart, keeping the shared icon/color.
@@ -402,8 +839,101 @@ function PipelineEditor({ pipeline, onBack, onRenamed }: { pipeline: Pipeline; o
     });
     loadBlueprintData().then((d) => setBlueprints(d.blueprints)).catch(() => {});
     listPipelines().then((ps) => setAllPipelines(ps.filter((p) => p.id !== pipeline.id))).catch(() => {});
+    return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pipeline.id]);
+
+  // ---- save ----
+  const save = async (): Promise<boolean> => {
+    if (saving) return false;
+    if (!dirty) return true;
+    setSaving(true); setSaveErr(null);
+    const want = draft;
+    const err = await savePipelineDraft(pipeline.id, base, want).catch((e) => String(e?.message ?? e));
+    const fresh = await readSaved().catch(() => null);
+    setSaving(false);
+    if (fresh) setBase(fresh);
+    if (err) { setSaveErr(err); return false; }
+    // Check: what the database has now is what was on screen.
+    const left = fresh ? diffDraft(fresh, want).count : 0;
+    if (left) {
+      setSaveErr(`${left} change${left === 1 ? "" : "s"} didn't stick — the database kept the old value. Your user may not be allowed to edit pipelines.`);
+      return false;
+    }
+    if (fresh) setDraft((cur) => (cur === want ? fresh : cur));   // edits made while saving stay as unsaved
+    setSavedOnce(true);
+    onSaved();
+    return true;
+  };
+
+  // ---- leaving ----
+  const dirtyRef = useRef(dirty); dirtyRef.current = dirty;
+  /** Close, or go elsewhere (`go`): asks first when there are unsaved changes. */
+  const requestLeave = (go?: () => void) => {
+    if (!dirtyRef.current) { (go ?? onBack)(); return; }
+    leaveTo.current = go ?? null;
+    setAsk(1);
+  };
+  const leaveNow = () => {
+    const go = leaveTo.current; leaveTo.current = null;
+    setAsk(0);
+    (go ?? onBack)();
+  };
+  // the sidebar, the account menu and the search ask through this
+  useEffect(() => {
+    setLeaveGuard((go) => { if (!dirtyRef.current) return false; leaveTo.current = go; setAsk(1); return true; });
+    return () => setLeaveGuard(null);
+  }, []);
+  // the browser's Back closes the editor (asks first with changes)
+  useBackToClose("pipeline-editor", onBack, true, () => {
+    if (!dirtyRef.current) return false;
+    leaveTo.current = null; setAsk(1); return true;
+  });
+  // links anywhere else on the page
+  useEffect(() => {
+    if (!dirty) return;
+    const onClick = (e: MouseEvent) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const a = (e.target as Element | null)?.closest?.("a[href]") as HTMLAnchorElement | null;
+      if (!a || a.target === "_blank" || a.hasAttribute("download")) return;
+      const url = new URL(a.href, window.location.href);
+      if (url.origin !== window.location.origin) return;
+      e.preventDefault(); e.stopPropagation();
+      requestLeave(() => navigate(url.pathname + url.search + url.hash));
+    };
+    // closing or reloading the tab: the browser's own "Leave site?" question
+    const onUnload = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
+    document.addEventListener("click", onClick, true);
+    window.addEventListener("beforeunload", onUnload);
+    return () => { document.removeEventListener("click", onClick, true); window.removeEventListener("beforeunload", onUnload); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dirty]);
+
+  // ---- keyboard: Esc steps back one level (menu → connection → phase → close), ⌘S / Ctrl+S saves ----
+  const keyRef = useRef<(e: KeyboardEvent) => void>(() => {});
+  keyRef.current = (e: KeyboardEvent) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); if (!ask) void save(); return; }
+    const t = e.target as HTMLElement | null;
+    const typing = !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+    if (e.key === "Escape") {
+      if (e.defaultPrevented || ask) return;                       // a dropdown, or the question itself, handles it
+      if (typing) { t!.blur(); return; }
+      if (bulkOpen || genOpen) { setBulkOpen(false); setGenOpen(false); return; }
+      if (linking.current) { linking.current = null; setLinkGhost(null); return; }
+      if (selLink) { setSelLink(null); return; }
+      if (selId) { setSelId(null); return; }
+      requestLeave();
+      return;
+    }
+    if ((e.key === "Delete" || e.key === "Backspace") && selLink && !typing) {
+      e.preventDefault(); const id = selLink; setSelLink(null); dropLink(id);
+    }
+  };
+  useEffect(() => {
+    const f = (e: KeyboardEvent) => keyRef.current(e);
+    window.addEventListener("keydown", f);
+    return () => window.removeEventListener("keydown", f);
+  }, []);
 
   const toCanvas = (cx: number, cy: number) => {
     const r = canvasRef.current!.getBoundingClientRect();
@@ -453,13 +983,12 @@ function PipelineEditor({ pipeline, onBack, onRenamed }: { pipeline: Pipeline; o
       setViewY(pan.current.vy + (e.clientY - pan.current.sy));
     }
   };
-  const onCanvasPointerUp = async () => {
+  const onCanvasPointerUp = () => {
     if (drag.current) {
       const d = drag.current;
       if (d.moved && livePos.current) {
         const { x, y } = livePos.current;
         setPhases((ps) => ps.map((ph) => (ph.id === d.id ? { ...ph, pos_x: x, pos_y: y } : ph)));
-        await updatePhase(d.id, { pos_x: x, pos_y: y });
       } else if (!d.moved) { setSelId(d.id); }
       livePos.current = null;
       drag.current = null;
@@ -484,15 +1013,14 @@ function PipelineEditor({ pipeline, onBack, onRenamed }: { pipeline: Pipeline; o
     linking.current = { from: id };
     force((n) => n + 1);
   };
-  const finishLink = async (e: React.PointerEvent, id: string) => {
+  const finishLink = (e: React.PointerEvent, id: string) => {
     if (!linking.current) return;
     e.stopPropagation();
     const from = linking.current.from;
     linking.current = null; setLinkGhost(null);
     if (from === id) return;
     if (links.some((l) => l.from_phase === from && l.to_phase === id)) return;
-    const l = await addLink(pipeline.id, from, id);
-    if (l) setLinks((ls) => [...ls, l]);
+    setLinks((ls) => [...ls, { id: newId(), from_phase: from, to_phase: id }]);
   };
 
   // ---- zoom ----
@@ -515,70 +1043,39 @@ function PipelineEditor({ pipeline, onBack, onRenamed }: { pipeline: Pipeline; o
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
 
-  const addPhaseAt = async () => {
+  const blankPhase = (x: number, y: number, name = "New phase", source: string | null = null): Phase => ({
+    id: newId(), pipeline_id: pipeline.id, name, pos_x: Math.round(x), pos_y: Math.round(y), color: null,
+    handover_to: null, source_phase_key: source, sales_visible: true, sales_outcome: null, close_probability: null,
+    deptKeys: [], items: [],
+  });
+  const addPhaseAt = () => {
     // drop near the center of the current view
     const r = canvasRef.current!.getBoundingClientRect();
     const cx = (r.width / 2 - viewX) / zoom, cy = (r.height / 2 - viewY) / zoom;
-    const ph = await addPhase(pipeline.id, cx - NODE_W / 2, cy - NODE_H / 2);
-    if (ph) { setPhases((p) => [...p, ph]); setSelId(ph.id); }
+    const ph = blankPhase(cx - NODE_W / 2, cy - NODE_H / 2);
+    setPhases((p) => [...p, ph]); setSelId(ph.id);
   };
-  const removePhase = async (id: string) => {
-    await deletePhase(id);
-    setPhases((p) => p.filter((x) => x.id !== id));
-    setLinks((ls) => ls.filter((l) => l.from_phase !== id && l.to_phase !== id));
+  const removePhase = (id: string) => {
+    setDraft((d) => ({ ...d, phases: d.phases.filter((x) => x.id !== id), links: d.links.filter((l) => l.from_phase !== id && l.to_phase !== id) }));
     if (selId === id) setSelId(null);
   };
 
   // Generate phases from a blueprint: one node per phase, in a row, linked in sequence.
-  const generateFromBlueprint = async (bpId: string) => {
+  const generateFromBlueprint = (bpId: string) => {
     const bp = blueprints.find((b) => b.id === bpId);
     if (!bp || !bp.phases.length) return;
     const baseX = 60, baseY = 120, gap = NODE_W + 80;
-    const created: Phase[] = [];
-    for (let i = 0; i < bp.phases.length; i++) {
-      const ph = await addPhase(pipeline.id, baseX + i * gap, baseY, bp.phases[i].id);
-      if (ph) { await updatePhase(ph.id, { name: bp.phases[i].name || `Phase ${i + 1}` }); created.push({ ...ph, name: bp.phases[i].name || `Phase ${i + 1}`, source_phase_key: bp.phases[i].id }); }
-    }
-    const newLinks: PipelineLink[] = [];
-    for (let i = 0; i < created.length - 1; i++) {
-      const l = await addLink(pipeline.id, created[i].id, created[i + 1].id);
-      if (l) newLinks.push(l);
-    }
-    await setPipelineSource(pipeline.id, bpId);  // remember origin for future sync
-    setPhases((p) => [...p, ...created]);
-    setLinks((ls) => [...ls, ...newLinks]);
+    const created = bp.phases.map((p, i) => blankPhase(baseX + i * gap, baseY, p.name || `Phase ${i + 1}`, p.id));
+    const newLinks = created.slice(0, -1).map((p, i) => ({ id: newId(), from_phase: p.id, to_phase: created[i + 1].id }));
+    setDraft((d) => ({ ...d, source: bpId, phases: [...d.phases, ...created], links: [...d.links, ...newLinks] }));
   };
-  const dropLink = async (id: string) => { await removeLink(id); setLinks((ls) => ls.filter((l) => l.id !== id)); };
-  // Selected link: Delete/Backspace removes it, Esc deselects. Ignored while typing.
-  useEffect(() => {
-    if (!selLink) return;
-    const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-      if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); const id = selLink; setSelLink(null); dropLink(id); }
-      else if (e.key === "Escape") setSelLink(null);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [selLink]); // eslint-disable-line react-hooks/exhaustive-deps
+  const dropLink = (id: string) => setLinks((ls) => ls.filter((l) => l.id !== id));
 
   // Apply a department / item to every phase at once.
-  const applyDeptToAll = async (key: string) => {
-    for (const ph of phases) {
-      if (ph.deptKeys.includes(key)) continue;
-      await setPhaseDepartments(ph.id, [...ph.deptKeys, key]);
-    }
+  const applyDeptToAll = (key: string) =>
     setPhases((ps) => ps.map((ph) => ph.deptKeys.includes(key) ? ph : { ...ph, deptKeys: [...ph.deptKeys, key] }));
-  };
-  const applyItemToAll = async (type: "product" | "service", id: string) => {
-    for (const ph of phases) {
-      if (ph.items.some((i) => i.type === type && i.id === id)) continue;
-      await setPhaseItems(ph.id, [...ph.items, { type, id }]);
-    }
+  const applyItemToAll = (type: "product" | "service", id: string) =>
     setPhases((ps) => ps.map((ph) => ph.items.some((i) => i.type === type && i.id === id) ? ph : { ...ph, items: [...ph.items, { type, id }] }));
-  };
-
-  const saveName = async () => { if (name.trim() && name !== pipeline.name) { await renamePipeline(pipeline.id, name.trim()); onRenamed(); } };
 
   const sel = selId ? phases.find((p) => p.id === selId) ?? null : null;
 
@@ -591,14 +1088,25 @@ function PipelineEditor({ pipeline, onBack, onRenamed }: { pipeline: Pipeline; o
     return { id: l.id, x1: ca.x, y1: ca.y, x2: cb.x, y2: cb.y };
   };
 
+  const tree = folderTree(folders ?? []);
+  const folderOptions = [{ value: "", label: "No folder" }, ...tree.flat().map(({ f, depth }) => ({ value: f.id, label: `${" ".repeat(depth)}${f.name || "Folder"}` }))];
+  const stateText = saving ? "Saving…" : saveErr ? "Not saved" : dirty ? `${diff.count} unsaved change${diff.count === 1 ? "" : "s"}` : savedOnce ? "All changes saved" : "No changes";
+
   return (
     <div className={`pl-editor ${sel ? "is-wide" : ""}`}>
       <header className="pl-ed-head">
-        <button className="pl-back" onClick={onBack} aria-label="Back">‹</button>
-        <input className="pl-name-input" value={name} onChange={(e) => setName(e.target.value)} onBlur={saveName} />
+        <button className="pl-back" onClick={() => requestLeave()} aria-label="Back" title={dirty ? "Back (asks about your unsaved changes)" : "Back"}>‹</button>
+        <input className="pl-name-input" value={draft.name} onChange={(e) => { const v = e.target.value; setDraft((d) => ({ ...d, name: v })); }} aria-label="Pipeline name" />
+        {folders !== null && folders.length > 0 && (
+          <div className="pl-ed-folder" title="Folder">
+            <FolderIco />
+            <Select size="sm" value={tree.has(draft.folderId) ? draft.folderId! : ""} onChange={(v) => setDraft((d) => ({ ...d, folderId: v || null }))}
+              options={folderOptions} aria-label="Folder" />
+          </div>
+        )}
         <button
           className={`pl-sales-toggle ${isSales ? "on" : ""}`}
-          onClick={async () => { const v = !isSales; setIsSales(v); await setPipelineSales(pipeline.id, v); onRenamed(); }}
+          onClick={() => setDraft((d) => ({ ...d, isSales: !d.isSales }))}
           title="Show this pipeline in the Sales tracking panel"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18" /><path d="M7 14l3-3 3 2 5-6" /></svg>
@@ -651,12 +1159,25 @@ function PipelineEditor({ pipeline, onBack, onRenamed }: { pipeline: Pipeline; o
               )}
             </div>
           )}
-          <button className="pl-btn-primary" onClick={addPhaseAt}>
+          <button className="pl-btn-ghost" onClick={addPhaseAt}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14" /></svg>
             Add phase
           </button>
+          <div className="pl-save-wrap">
+            <span className={`pl-save-state ${saveErr ? "is-err" : dirty ? "is-dirty" : savedOnce ? "is-ok" : ""}`} aria-live="polite">{stateText}</span>
+            <button className="pl-btn-primary pl-save" onClick={() => void save()} disabled={!dirty || saving || !loaded} title="Save (⌘S / Ctrl+S)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 3h11l3 3v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" /><path d="M7 3v5h8V3M7 21v-7h10v7" /></svg>
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </div>
         </div>
       </header>
+      {saveErr && (
+        <div className="pl-save-err" role="alert">
+          <span>{saveErr}</span>
+          <button type="button" onClick={() => setSaveErr(null)} aria-label="Dismiss">×</button>
+        </div>
+      )}
 
       <div className="pl-body">
         <div
@@ -761,20 +1282,14 @@ function PipelineEditor({ pipeline, onBack, onRenamed }: { pipeline: Pipeline; o
               services={services}
               pipelines={allPipelines}
               isSales={isSales}
-              allPhases={phases}
-              onSetOutcome={async (outcome) => {
+              onSetOutcome={(outcome) => {
                 const targetId = sel.id;
-                // Only one win and one loss per pipeline: clear the previous one holding this outcome.
+                // Only one win and one loss per pipeline: the previous one holding this outcome goes back to Normal.
                 setPhases((ps) => ps.map((p) => {
                   if (p.id === targetId) return { ...p, sales_outcome: outcome };
                   if (outcome && p.sales_outcome === outcome) return { ...p, sales_outcome: null };
                   return p;
                 }));
-                if (outcome) {
-                  const prev = phases.find((p) => p.id !== targetId && p.sales_outcome === outcome);
-                  if (prev) await updatePhase(prev.id, { sales_outcome: null });
-                }
-                await updatePhase(targetId, { sales_outcome: outcome });
               }}
               onClose={() => setSelId(null)}
               onDelete={() => removePhase(sel.id)}
@@ -783,42 +1298,113 @@ function PipelineEditor({ pipeline, onBack, onRenamed }: { pipeline: Pipeline; o
           )}
         </div>
       </div>
+
+      {ask > 0 && (
+        <LeaveAsk
+          step={ask as 1 | 2}
+          count={diff.count}
+          summary={summarize(diff)}
+          saving={saving}
+          onKeep={() => { leaveTo.current = null; setAsk(0); }}
+          onSave={async () => { if (await save()) leaveNow(); else { leaveTo.current = null; setAsk(0); } }}
+          onDiscard={() => setAsk(2)}
+          onBack={() => setAsk(1)}
+          onConfirmDiscard={() => { setDraft(base); dirtyRef.current = false; leaveNow(); }}
+        />
+      )}
     </div>
   );
 }
 
+/** "2 phases added · 1 moved or edited · 3 connections changed · name" */
+function summarize(d: ReturnType<typeof diffDraft>): string[] {
+  const out: string[] = [];
+  const n = (k: number, one: string, many: string) => (k ? `${k} ${k === 1 ? one : many}` : "");
+  if (d.pipe.name !== undefined) out.push("Pipeline name");
+  if (d.pipe.folder_id !== undefined) out.push("Folder");
+  if (d.pipe.is_sales !== undefined) out.push("Sales pipeline on / off");
+  out.push(n(d.added.length, "phase added", "phases added"));
+  out.push(n(d.removed.length, "phase deleted", "phases deleted"));
+  const edited = new Set([...d.changed.map((c) => c.id), ...d.depts, ...d.items].filter((id) => !d.added.some((p) => p.id === id)));
+  out.push(n(edited.size, "phase moved or edited", "phases moved or edited"));
+  out.push(n(d.addLinks.length + d.delLinks.length, "connection changed", "connections changed"));
+  return out.filter(Boolean);
+}
+
+// ============================ Leaving with unsaved changes: two steps ============================
+function LeaveAsk({ step, count, summary, saving, onKeep, onSave, onDiscard, onBack, onConfirmDiscard }: {
+  step: 1 | 2; count: number; summary: string[]; saving: boolean;
+  onKeep: () => void; onSave: () => void; onDiscard: () => void; onBack: () => void; onConfirmDiscard: () => void;
+}) {
+  // Esc: step 2 → step 1 → keep editing. Never reaches the editor behind.
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+      if (saving) return;
+      if (step === 2) onBack(); else onKeep();
+    };
+    window.addEventListener("keydown", k, true);
+    return () => window.removeEventListener("keydown", k, true);
+  }, [step, saving, onBack, onKeep]);
+  const many = `${count} unsaved change${count === 1 ? "" : "s"}`;
+  return createPortal(
+    <div className="pl-del-backdrop pl-ask-backdrop" onMouseDown={() => { if (!saving) (step === 2 ? onBack() : onKeep()); }}>
+      <div className={`pl-del pl-ask ${step === 2 ? "is-step2" : ""}`} onMouseDown={(e) => e.stopPropagation()} role="alertdialog" aria-modal="true" aria-labelledby="pl-ask-title">
+        <div className="pl-del-steps" aria-hidden="true"><i className="is-on" /><i className={step === 2 ? "is-on" : ""} /></div>
+        <span className={`pl-del-ico ${step === 1 ? "is-save" : ""}`}>
+          {step === 1
+            ? <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M5 3h11l3 3v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" /><path d="M7 3v5h8V3M7 21v-7h10v7" /></svg>
+            : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" /></svg>}
+        </span>
+        <span className={`pl-del-eyebrow ${step === 1 ? "is-save" : ""}`}>{step === 1 ? "Leaving the editor · step 1 of 2" : "Discard · step 2 of 2"}</span>
+        <h2 id="pl-ask-title" className="pl-del-title">{step === 1 ? <>You have {many}</> : <>Discard {many}?</>}</h2>
+        {step === 1 ? (
+          <>
+            <p className="pl-del-sub">Save them before leaving, or discard them.</p>
+            {summary.length > 0 && <ul className="pl-del-list pl-ask-list">{summary.map((s) => <li key={s}>{s}</li>)}</ul>}
+            <div className="pl-del-actions pl-ask-actions">
+              <button className="pl-del-cancel" onClick={onKeep} disabled={saving}>Keep editing</button>
+              <button className="pl-del-next" onClick={onDiscard} disabled={saving}>Discard…</button>
+              <button className="pl-ask-save" onClick={onSave} disabled={saving} autoFocus>{saving ? "Saving…" : "Save and leave"}</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="pl-del-sub">Everything you changed since the last save is lost. This can't be undone.</p>
+            <div className="pl-del-actions">
+              <button className="pl-del-cancel" onClick={onBack} autoFocus>Back</button>
+              <button className="pl-del-go" onClick={onConfirmDiscard}>Discard and leave</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 // ============================ Phase panel ============================
-function PhasePanel({ phase, depts, products, services, pipelines, isSales, allPhases, onSetOutcome, onClose, onDelete, onChange }: {
+// Changes go to the editor's draft; Save writes them.
+function PhasePanel({ phase, depts, products, services, pipelines, isSales, onSetOutcome, onClose, onDelete, onChange }: {
   phase: Phase;
   depts: { key: string; label: string; color: string }[];
   products: { id: string; name: string }[];
   services: { id: string; name: string }[];
   pipelines: Pipeline[];
   isSales: boolean;
-  allPhases: Phase[];
   onSetOutcome: (outcome: "win" | "loss" | null) => void;
   onClose: () => void; onDelete: () => void;
   onChange: (patch: Partial<Phase>) => void;
 }) {
-  const [name, setName] = useState(phase.name);
-  const probTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => { if (probTimer.current) clearTimeout(probTimer.current); }, []);
-  const toggleDept = async (key: string) => {
-    const next = phase.deptKeys.includes(key) ? phase.deptKeys.filter((k) => k !== key) : [...phase.deptKeys, key];
-    onChange({ deptKeys: next });
-    await setPhaseDepartments(phase.id, next);
-  };
-  const addItem = async (type: "product" | "service", id: string) => {
+  const toggleDept = (key: string) =>
+    onChange({ deptKeys: phase.deptKeys.includes(key) ? phase.deptKeys.filter((k) => k !== key) : [...phase.deptKeys, key] });
+  const addItem = (type: "product" | "service", id: string) => {
     if (phase.items.some((i) => i.type === type && i.id === id)) return;
-    const next = [...phase.items, { type, id }];
-    onChange({ items: next });
-    await setPhaseItems(phase.id, next);
+    onChange({ items: [...phase.items, { type, id }] });
   };
-  const removeItem = async (type: "product" | "service", id: string) => {
-    const next = phase.items.filter((i) => !(i.type === type && i.id === id));
-    onChange({ items: next });
-    await setPhaseItems(phase.id, next);
-  };
+  const removeItem = (type: "product" | "service", id: string) =>
+    onChange({ items: phase.items.filter((i) => !(i.type === type && i.id === id)) });
   const itemName = (type: "product" | "service", id: string) =>
     (type === "product" ? products : services).find((x) => x.id === id)?.name ?? "—";
 
@@ -826,14 +1412,12 @@ function PhasePanel({ phase, depts, products, services, pipelines, isSales, allP
     <aside className="pl-panel">
       <div className="pl-panel-head">
         <span className="pl-eyebrow">Phase</span>
-        <button className="pl-x" onClick={onClose}>×</button>
+        <button className="pl-x" onClick={onClose} aria-label="Close phase">×</button>
       </div>
 
       <div className="pl-field">
         <label>Phase name</label>
-        <input value={name} onChange={(e) => setName(e.target.value)}
-          onBlur={() => { onChange({ name }); updatePhase(phase.id, { name }); }}
-          placeholder="e.g. Onboarding" />
+        <input value={phase.name} onChange={(e) => onChange({ name: e.target.value })} placeholder="e.g. Onboarding" />
       </div>
 
       <span className="pl-section">Departments</span>
@@ -866,7 +1450,7 @@ function PhasePanel({ phase, depts, products, services, pipelines, isSales, allP
               )}
             </span>
             {itemName(it.type, it.id)}
-            <button onClick={() => removeItem(it.type, it.id)}>×</button>
+            <button onClick={() => removeItem(it.type, it.id)} aria-label="Remove">×</button>
           </span>
         ))}
       </div>
@@ -882,7 +1466,7 @@ function PhasePanel({ phase, depts, products, services, pipelines, isSales, allP
           <button
             type="button" role="switch" aria-checked={phase.sales_visible !== false}
             className={`pl-sales-row ${phase.sales_visible !== false ? "on" : ""}`}
-            onClick={() => { const v = !(phase.sales_visible !== false); onChange({ sales_visible: v }); updatePhase(phase.id, { sales_visible: v }); }}
+            onClick={() => onChange({ sales_visible: !(phase.sales_visible !== false) })}
           >
             <span className="pl-sales-txt">Show this phase in sales tracking</span>
             <span className="pl-sales-sw"><span className="pl-sales-knob" /></span>
@@ -909,18 +1493,7 @@ function PhasePanel({ phase, depts, products, services, pipelines, isSales, allP
                   placeholder="—"
                   onChange={(e) => {
                     const raw = e.target.value;
-                    const v = raw === "" ? null : Math.max(0, Math.min(100, Number(raw)));
-                    onChange({ close_probability: v });
-                    // Persist on every change so switching phases can't lose it.
-                    if (probTimer.current) clearTimeout(probTimer.current);
-                    probTimer.current = setTimeout(() => { updatePhase(phase.id, { close_probability: v }); }, 350);
-                  }}
-                  onBlur={(e) => {
-                    // Flush immediately on blur too, in case the debounce is pending.
-                    if (probTimer.current) clearTimeout(probTimer.current);
-                    const raw = e.target.value;
-                    const v = raw === "" ? null : Math.max(0, Math.min(100, Number(raw)));
-                    updatePhase(phase.id, { close_probability: v });
+                    onChange({ close_probability: raw === "" ? null : Math.max(0, Math.min(100, Math.round(Number(raw)))) });
                   }}
                 />
                 <span className="pl-prob-pct">%</span>
@@ -941,7 +1514,7 @@ function PhasePanel({ phase, depts, products, services, pipelines, isSales, allP
       <span className="pl-section">Handover</span>
       <Select
         value={phase.handover_to ?? ""}
-        onChange={(v) => { onChange({ handover_to: v || null }); updatePhase(phase.id, { handover_to: v || null }); }}
+        onChange={(v) => onChange({ handover_to: v || null })}
         placeholder="— No handover —"
         options={[{ value: "", label: "— No handover —" }, ...pipelines.map((p) => ({ value: p.id, label: `→ ${p.name}` }))]}
       />

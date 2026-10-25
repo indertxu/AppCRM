@@ -9,6 +9,8 @@ export { useAuth } from "./authContext";
 export type { Role } from "./authContext";
 
 interface ProfileState {
+  /** whose profile this is: until it matches the session's user, the role is still loading */
+  uid: string | null;
   role: Role | null;
   isSuperadmin: boolean;
   roleLoading: boolean;
@@ -18,6 +20,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState<ProfileState>({
+    uid: null,
     role: null,
     isSuperadmin: false,
     roleLoading: true,
@@ -44,7 +47,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     if (!uid) {
       queueMicrotask(() => {
-        if (active) setProfile({ role: null, isSuperadmin: false, roleLoading: false });
+        if (active) setProfile({ uid: null, role: null, isSuperadmin: false, roleLoading: false });
       });
       return () => { active = false; };
     }
@@ -57,6 +60,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .then(({ data }) => {
         if (!active) return;
         setProfile({
+          uid,
           role: (data?.role as Role) ?? null,
           isSuperadmin: !!data?.is_superadmin,
           roleLoading: false,
@@ -73,7 +77,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         role: profile.role,
         isSuperadmin: profile.isSuperadmin,
         loading,
-        roleLoading: profile.roleLoading,
+        // a new sign-in: the old (empty) profile doesn't count — the role is loading until this user's arrives
+        roleLoading: profile.roleLoading || profile.uid !== (session?.user?.id ?? null),
       }}
     >
       {children}

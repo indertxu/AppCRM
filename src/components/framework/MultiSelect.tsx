@@ -56,7 +56,8 @@ export default function MultiSelect({ values, onChange, options, placeholder, no
       setOpen(false);
     };
     const esc = (e: KeyboardEvent) => { if (e.key === "Escape") { setOpen(false); trigRef.current?.focus(); } };
-    const re = () => place();
+    // scrolling inside the menu itself must not move (or re-measure) it: that threw the list back to the top
+    const re = (e?: Event) => { if (e && menuRef.current?.contains(e.target as Node)) return; place(); };
     window.addEventListener("mousedown", off, true);
     window.addEventListener("keydown", esc);
     window.addEventListener("resize", re);

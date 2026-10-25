@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { Company, Contact } from "../../companies/companiesApi";
+import { companyPeople, globalSearch, searchContacts, type Company, type Contact } from "../../companies/companiesApi";
 import { loadPipeline, type Pipeline, type Phase } from "../../settings/pipelineApi";
 import type { Product } from "../../settings/catalogApi";
 import { createTracking, setTrackingEmployees, setTrackingOwner } from "./salesApi";
@@ -19,28 +19,43 @@ const norm = (s: string) => (s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/
  * The list is rendered through a portal with position:fixed because the drawer
  * body (.dw-body) scrolls with overflow-y:auto and would clip it otherwise.
  */
-function Combo({ value, onChange, options, placeholder, clearOnSelect = false, emptyText = "No matches" }: {
+type ComboOpt = { value: string; label: string; group?: string; pref?: boolean; hint?: string };
+function Combo({ value, onChange, options, placeholder, clearOnSelect = false, emptyText = "No matches", loadOptions }: {
   value: string;
-  onChange: (v: string) => void;
+  onChange: (v: string, picked?: ComboOpt) => void;
   /** `group` puts a small header above the first option of each group; `pref` highlights the option. */
-  options: { value: string; label: string; group?: string; pref?: boolean; hint?: string }[];
+  options: ComboOpt[];
   placeholder?: string;
   clearOnSelect?: boolean;
   emptyText?: string;
+  /** Long lists kept in the database: more options are asked for as you type (after the local ones). */
+  loadOptions?: (q: string) => Promise<ComboOpt[]>;
 }) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [hi, setHi] = useState(0);
   const [box, setBox] = useState<{ left: number; top: number; width: number; maxH: number; up: boolean } | null>(null);
+  const [remote, setRemote] = useState<ComboOpt[]>([]);
+  const [picked, setPicked] = useState<ComboOpt | null>(null);
+  const loadRef = useRef(loadOptions);
+  loadRef.current = loadOptions;
+  useEffect(() => {
+    if (!open || !loadRef.current || !query.trim()) { setRemote([]); return; }
+    let off = false;
+    const t = setTimeout(() => { loadRef.current?.(query.trim()).then((r) => { if (!off) setRemote(r); }).catch(() => {}); }, 200);
+    return () => { off = true; clearTimeout(t); };
+  }, [open, query, !!loadOptions]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const selected = options.find((o) => o.value === value);
+  const selected = options.find((o) => o.value === value) ?? (picked?.value === value ? picked : undefined);
 
   const filtered = useMemo(() => {
     const n = norm(query.trim());
-    if (!n) return options;
-    return options.filter((o) => norm(o.label).includes(n));
-  }, [options, query]);
+    const local = n ? options.filter((o) => norm(o.label).includes(n)) : options;
+    if (!remote.length) return local;
+    const seen = new Set(local.map((o) => o.value));
+    return [...local, ...remote.filter((o) => !seen.has(o.value))];
+  }, [options, query, remote]);
 
   const place = () => {
     const el = wrapRef.current;
@@ -68,7 +83,7 @@ function Combo({ value, onChange, options, placeholder, clearOnSelect = false, e
   useEffect(() => { setHi(0); }, [query, open]);
 
   const close = () => { setOpen(false); setQuery(""); };
-  const commit = (v: string) => { onChange(v); close(); };
+  const commit = (v: string) => { const o = filtered.find((x) => x.value === v); if (o) setPicked(o); onChange(v, o); close(); };
 
   const onKey = (e: any) => {
     if (e.key === "Escape") {
@@ -134,8 +149,10 @@ function Combo({ value, onChange, options, placeholder, clearOnSelect = false, e
 }
 
 /** "New tracking" drawer: who, pipeline, products, and the company's own deal fields. */
-export default function NewTracking({ companies, contacts, pipelines, products, fields = [], people = [], me = null, roles = [], phaseByPipe = {}, level = "team", onClose, onCreated }: {
+export default function NewTracking({ companies, contacts, pipelines, products, fields = [], people = [], me = null, roles = [], phaseByPipe = {}, level = "team", onClose, onCreated, lean = false }: {
   companies: Company[]; contacts: Contact[]; pipelines: Pipeline[]; products: Product[];
+  /** The directories stay in the database: companies and contacts are searched as you type. */
+  lean?: boolean;
   /** Custom deal fields (Actions → Deal fields), shown under "Details". */
   fields?: TrackingField[];
   /** People who can be put on the deal (active employees). */
@@ -191,13 +208,33 @@ export default function NewTracking({ companies, contacts, pipelines, products, 
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // lean: the picked company's people (read from the database) and the people picked by search
+  const [coPeople, setCoPeople] = useState<Contact[]>([]);
+  const [pickedPeople, setPickedPeople] = useState<Contact[]>([]);
+  const [pickedCo, setPickedCo] = useState<Company | null>(null);
+  useEffect(() => {
+    if (!lean || !companyId) { setCoPeople([]); return; }
+    let off = false;
+    companyPeople(companyId).then((r) => { if (!off) setCoPeople(r); }).catch(() => {});
+    return () => { off = true; };
+  }, [lean, companyId]);
+  const pool = lean ? [...coPeople, ...pickedPeople] : contacts;
   const contactName = (id: string) => {
-    const c = contacts.find((x) => x.id === id);
+    const c = pool.find((x) => x.id === id) ?? contacts.find((x) => x.id === id);
     return c ? [c.first_name, c.last_name].filter(Boolean).join(" ") : "-";
   };
-  const availableContacts = contacts.filter((c) => !contactIds.includes(c.id!));
+  const availableContacts = (lean ? coPeople : contacts).filter((c) => !contactIds.includes(c.id!));
   // With a company picked, its own contacts come first (highlighted), then everyone else.
-  const company = companies.find((c) => c.id === companyId) ?? null;
+  const company = companies.find((c) => c.id === companyId) ?? (pickedCo?.id === companyId ? pickedCo : null);
+  const findCompanies = useMemo(() => (lean
+    ? (q: string) => globalSearch(q, ["company"], 30).then((r) => (r ?? []).map((h) => ({ value: h.id, label: h.label, hint: h.sub ?? undefined })))
+    : undefined), [lean]);
+  const findContacts = useMemo(() => (lean
+    ? (q: string) => searchContacts(q, 30).then((r) => {
+      setPickedPeople((cur) => [...cur, ...r.filter((c) => !cur.some((x) => x.id === c.id))]);
+      return r.filter((c) => !contactIds.includes(c.id!)).map((c) => ({ value: c.id!, label: [c.first_name, c.last_name].filter(Boolean).join(" ") || c.email || "Contact", hint: c.position || c.email || undefined, group: company ? "Other contacts" : undefined }));
+    })
+    : undefined), [lean, contactIds, company]);
   const contactOptions = useMemo(() => {
     const full = (c: Contact) => [c.first_name, c.last_name].filter(Boolean).join(" ");
     const opt = (c: Contact, pref: boolean) => ({
@@ -264,9 +301,9 @@ export default function NewTracking({ companies, contacts, pipelines, products, 
             <p className="dw-sec-title">Who</p>
             <div className="dw-f dw-col2" style={{ marginBottom: 12 }}>
               <label>Company</label>
-              <Combo value={companyId} onChange={setCompanyId} placeholder="Type to search companies…"
-                emptyText="No company matches"
-                options={[{ value: "", label: "- No company -" }, ...companies.map((c) => ({ value: c.id!, label: c.name }))]} />
+              <Combo value={companyId} onChange={(v, o) => { setCompanyId(v); if (lean && v && o) setPickedCo({ id: v, name: o.label } as Company); }} placeholder="Type to search companies…"
+                emptyText={lean ? "Type a name to search" : "No company matches"} loadOptions={findCompanies}
+                options={[{ value: "", label: "- No company -" }, ...(lean ? (company ? [{ value: company.id!, label: company.name }] : []) : companies.map((c) => ({ value: c.id!, label: c.name })))]} />
             </div>
             <div className="dw-f" style={{ marginBottom: 12 }}>
               <label htmlFor="nt-deal-name">Deal name <span className="nt-optional">optional</span></label>
@@ -280,8 +317,8 @@ export default function NewTracking({ companies, contacts, pipelines, products, 
                 <span key={id} className="dw-chip">{contactName(id)}<button onClick={() => setContactIds((xs) => xs.filter((x) => x !== id))}>×</button></span>
               ))}
             </div>
-            {availableContacts.length > 0 && (
-              <Combo value="" clearOnSelect onChange={(v) => v && setContactIds((xs) => [...xs, v])}
+            {(lean || availableContacts.length > 0) && (
+              <Combo value="" clearOnSelect onChange={(v) => v && setContactIds((xs) => [...xs, v])} loadOptions={findContacts}
                 placeholder={company && ownCount ? `Type to search… ${company.name}'s contacts come first` : "Type to search contacts…"} emptyText="No contact matches"
                 options={contactOptions} />
             )}

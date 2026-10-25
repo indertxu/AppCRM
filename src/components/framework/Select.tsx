@@ -22,6 +22,11 @@ interface Props {
   "aria-label"?: string;
   /** Show a search box (on by default from 10 options). */
   searchable?: boolean;
+  /**
+   * Long lists that live in the database (contacts, companies, deals): the options are asked for as
+   * you type. `options` then only needs the fixed ones (e.g. "None") and the current value.
+   */
+  loadOptions?: (q: string) => Promise<SelectOption[]>;
 }
 
 const fold = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
@@ -33,17 +38,31 @@ const fold = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCa
 /** Options drawn at once; the rest are reached by typing. */
 const SELECT_MAX = 300;
 
-export default function Select({ value, onChange, options, placeholder = "Select…", disabled, size = "md", className, searchable, ...rest }: Props) {
+export default function Select({ value, onChange, options, placeholder = "Select…", disabled, size = "md", className, searchable, loadOptions, ...rest }: Props) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [hi, setHi] = useState(0);
+  // database-backed options (loadOptions): asked for a beat after typing; the last picked one keeps its label
+  const [remote, setRemote] = useState<SelectOption[] | null>(null);
+  const [picked, setPicked] = useState<SelectOption | null>(null);
+  const loadRef = useRef(loadOptions);
+  loadRef.current = loadOptions;
+  useEffect(() => {
+    if (!open || !loadRef.current) return;
+    let off = false;
+    const t = setTimeout(() => {
+      loadRef.current?.(q.trim()).then((r) => { if (!off) { setRemote(r); setHi(0); } }).catch(() => { if (!off) setRemote([]); });
+    }, q ? 200 : 0);
+    return () => { off = true; clearTimeout(t); };
+  }, [open, q, !!loadOptions]); // eslint-disable-line react-hooks/exhaustive-deps
   const [pos, setPos] = useState<{ top: number; left: number; minWidth: number; maxWidth: number; maxH: number }>({ top: 0, left: 0, minWidth: 0, maxWidth: 0, maxH: 260 });
   const btnRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const current = options.find((o) => o.value === value);
-  const withSearch = searchable ?? options.length >= 10;
-  const matches = q ? options.filter((o) => fold(`${o.label} ${o.hint ?? ""}`).includes(fold(q))) : options;
+  const current = options.find((o) => o.value === value) ?? (picked?.value === value ? picked : undefined);
+  const withSearch = loadOptions ? true : searchable ?? options.length >= 10;
+  const fixed = q ? options.filter((o) => fold(`${o.label} ${o.hint ?? ""}`).includes(fold(q))) : options;
+  const matches = loadOptions ? [...fixed, ...(remote ?? []).filter((o) => !fixed.some((f) => f.value === o.value))] : fixed;
   // very long lists (thousands of contacts or companies) show the first few hundred; typing narrows them down
   const shown = matches.length > SELECT_MAX ? matches.slice(0, SELECT_MAX) : matches;
 
@@ -66,11 +85,12 @@ export default function Select({ value, onChange, options, placeholder = "Select
   const openMenu = () => {
     if (disabled) return;
     setQ("");
+    if (loadOptions) setRemote(null);
     setHi(Math.max(0, options.findIndex((o) => o.value === value)));
     place();
     setOpen(true);
   };
-  const pick = (o: SelectOption) => { if (o.disabled) return; onChange(o.value); setOpen(false); btnRef.current?.focus(); };
+  const pick = (o: SelectOption) => { if (o.disabled) return; setPicked(o); onChange(o.value); setOpen(false); btnRef.current?.focus(); };
 
   // follow the trigger when the page or a panel scrolls
   useEffect(() => {
@@ -153,7 +173,8 @@ export default function Select({ value, onChange, options, placeholder = "Select
                   )}
                 </button>
               ))}
-              {!shown.length && <p className="sel-none">No matches</p>}
+              {!shown.length && <p className="sel-none">{loadOptions && remote === null ? "Searching…" : "No matches"}</p>}
+              {loadOptions && remote !== null && !q && <p className="sel-none">Type to search</p>}
               {matches.length > shown.length && <p className="sel-none">{(matches.length - shown.length).toLocaleString("en-GB")} more · type to narrow down</p>}
             </div>
           </>,

@@ -4655,7 +4655,12 @@ export default function TrackingDetail({ tracking, companies, contacts, products
           onSend={() => void doHandoff()}
         />
       )}
-      <FlowMorph active={!!flowMode || clientFormOpen || !!contractOpen || targetOpen || confirmOpen || wonPrompt || contractAsk || !!flowDone || clientDone} />
+      <FlowMorph active={!!flowMode || clientFormOpen || !!contractOpen || targetOpen || confirmOpen || wonPrompt || contractAsk || !!flowDone || clientDone}
+        onIdle={() => {
+          // every card of the flow is gone: nothing may stay open (or blurred) behind them
+          setFlowMode(null); setContractAsk(false); setTargetOpen(false); setClientFormOpen(false); setConfirmOpen(false);
+          setContractOpen(null); setWonPrompt(false); setFlowDone(null); setClientDone(false);
+        }} />
       {flowDone && (
         <HxPrompt icon="check" title="Handed off"
           sub={<><b>{company?.name ?? "The client"}</b> went to {flowDone.join(", ")}. It waits in Management, under Incoming.</>}
@@ -5544,7 +5549,11 @@ function PhaseEditor({ services, onClose, onConfirm, onSkip }: {
 const FLOW_CARD = ".hx-prompt, .hc, .dct, .hts, .hx2";
 const flowOrder = (el: Element) => (el.matches(".hx-prompt") ? (/handed off|client ready/i.test(el.textContent ?? "") ? 9 : 0)
   : el.matches(".hc") ? 1 : el.matches(".dct") ? 2 : el.matches(".hts") ? 3 : 4);
-function FlowMorph({ active }: { active: boolean }) {
+function FlowMorph({ active, onIdle }: { active: boolean;
+  /** No step card left on screen (closed half-way, e.g. with ×): the page clears the flow so nothing stays blurred. */
+  onIdle?: () => void }) {
+  const idleRef = useRef(onIdle);
+  idleRef.current = onIdle;
   const [live, setLive] = useState(active);
   // stays on a moment after the last step, so a short gap between two steps doesn't drop the stage
   useEffect(() => {
@@ -5566,7 +5575,15 @@ function FlowMorph({ active }: { active: boolean }) {
       const head = cur.el.querySelector<HTMLElement>(":scope > header, :scope > .hts-head, :scope > .hc-head, :scope > .dct-head, :scope > .hx-head");
       cur.band = head ? head.getBoundingClientRect().height : 0;
     };
-    const tick = window.setInterval(measure, 250);
+    // a flow left without any card (a step closed half-way): give it a moment (steps swap), then let go
+    let emptyFor = 0;
+    const tick = window.setInterval(() => {
+      measure();
+      // anything of the flow still up (a card, its backdrop, a "saving…" screen) keeps it alive
+      if (pick() || document.querySelector(".dss-load, .hc-backdrop, .dct-backdrop, .hts-backdrop, .hx-backdrop")) { emptyFor = 0; return; }
+      emptyFor += 250;
+      if (emptyFor >= 1500) { emptyFor = -1e9; idleRef.current?.(); }
+    }, 250);
     const pick = (): HTMLElement | null => {
       const all = Array.from(document.querySelectorAll<HTMLElement>(FLOW_CARD)).filter((e) => !e.closest(".wfx-layer") && !e.parentElement?.closest(FLOW_CARD));
       return all[all.length - 1] ?? null;

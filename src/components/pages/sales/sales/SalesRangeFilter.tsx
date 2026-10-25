@@ -244,7 +244,8 @@ export default function SalesRangeFilter({ value, onChange, probLabel }: {
       if (e.key !== "Escape" || document.querySelector(".dp-pop")) return; // let the calendar close first
       setOpen(false);
     };
-    const re = () => place();
+    // scrolling inside the panel itself must not move (or re-measure) it
+    const re = (e?: Event) => { if (e && panelRef.current?.contains(e.target as Node)) return; place(); };
     window.addEventListener("mousedown", off, true);
     window.addEventListener("keydown", esc);
     window.addEventListener("resize", re);

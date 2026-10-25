@@ -31,15 +31,28 @@ function SalesPipelineWidget() {
   useEffect(() => {
     let alive = true;
     (async () => {
-      // Every deal (a plain read stops at 1,000 rows): pages fetched in parallel, in a stable order.
-      const trk = await pagedAll<any>((count) => supabase
-        .from("trackings")
-        .select("id, status, current_phase_id, product_price, pipeline_id", count ? { count: "exact" } : undefined)
-        .order("id")).catch(() => [] as any[]);
       const { data: ph } = await supabase.from("pipeline_phases").select("id, name, pos_x, sales_visible");
       if (!alive) return;
       const phaseName: Record<string, { name: string; x: number }> = {};
       (ph ?? []).forEach((p: any) => { if (p.sales_visible !== false) phaseName[p.id] = { name: p.name, x: p.pos_x ?? 0 }; });
+      // Counted by the database (52_search_server.sql): no deal is downloaded for this card.
+      const sum = await supabase.rpc("pipeline_summary").then((r: any) => (r.error ? null : r.data), () => null);
+      if (!alive) return;
+      if (sum) {
+        const st = ((sum.phases ?? []) as any[]).filter((x) => phaseName[x.phase_id])
+          .map((x) => ({ name: phaseName[x.phase_id].name, x: phaseName[x.phase_id].x, count: Number(x.count) || 0, value: Number(x.value) || 0 }))
+          .sort((a, b) => a.x - b.x).slice(0, 6);
+        setStages(st.map((s) => ({ name: s.name, count: s.count, value: s.value })));
+        setTotals({ active: Number(sum.active) || 0, won: Number(sum.won) || 0, value: Number(sum.value) || 0 });
+        setLoading(false);
+        return;
+      }
+      // Without it: every deal (a plain read stops at 1,000 rows), pages fetched in parallel, in a stable order.
+      const trk = await pagedAll<any>((count) => supabase
+        .from("trackings")
+        .select("id, status, current_phase_id, product_price, pipeline_id", count ? { count: "exact" } : undefined)
+        .order("id")).catch(() => [] as any[]);
+      if (!alive) return;
 
       const byStage: Record<string, { name: string; x: number; count: number; value: number }> = {};
       let active = 0, won = 0, value = 0;

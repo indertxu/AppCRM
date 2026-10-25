@@ -1498,3 +1498,12 @@ button.co-cc-main { padding: 0; border: 0; background: none; font: inherit; text
 /* deal list in a panel: the rest of a big account's deals on demand */
 .dl-more { align-self: flex-start; margin-top: 2px; padding: 6px 12px; border: 1px dashed rgba(10, 111, 77, 0.3); border-radius: 999px; background: transparent; color: #0a6f4d; font: 600 12.5px/1.2 "Inter", system-ui, sans-serif; cursor: pointer; transition: background 0.15s, border-color 0.15s; }
 .dl-more:hover { background: rgba(18, 181, 127, 0.08); border-color: rgba(10, 111, 77, 0.5); }
+
+/* Server mode: the next rows of a long list */
+.co-more { display: flex; justify-content: center; padding: 14px 0 28px; }
+.co-more button {
+  border: 1px solid rgba(15, 60, 40, 0.14); background: #fff; color: #145a3c; border-radius: 999px;
+  padding: 8px 18px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.co-more button:hover { background: #f1f8f4; border-color: rgba(20, 90, 60, 0.35); }

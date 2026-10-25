@@ -352,3 +352,15 @@
 /* Long lists render only the rows on screen: rows that scroll in must not replay the entrance animation */
 .ct-scroll.is-scrolled-y .ct-lrow:not(.ct-lhead) { animation: none; }
 .ct-list > .ct-lrow { contain: layout paint; }
+
+/* Rows still on their way from the database (server mode): a quiet shimmer in the row's own shape */
+.ct-lrow.is-ghost { cursor: default; pointer-events: none; }
+.ct-lrow.is-ghost .ct-avatar { background: rgba(15, 60, 40, 0.07); color: transparent; }
+.ct-ghost {
+  display: block; height: 10px; width: 64%; border-radius: 6px;
+  background: linear-gradient(90deg, rgba(15, 60, 40, 0.06) 0%, rgba(15, 60, 40, 0.12) 40%, rgba(15, 60, 40, 0.06) 80%);
+  background-size: 220% 100%; animation: ct-ghost 1.3s ease-in-out infinite;
+}
+@keyframes ct-ghost { from { background-position: 100% 0; } to { background-position: -120% 0; } }
+.cl-hint.is-error { color: #b4232c; display: flex; align-items: center; gap: 10px; }
+.ct-retry { border: 1px solid currentColor; background: transparent; color: inherit; border-radius: 999px; padding: 3px 12px; font: inherit; font-size: 12px; cursor: pointer; }

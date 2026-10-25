@@ -9,6 +9,7 @@ import {
   myProfile, isSalesLead, listEmployees, loadContactAssignees, setContactAssignees,
   listContactFields, addContactField, updateContactField, deleteContactField,
   loadRelationshipSets, type RelationshipSets, contactStatus, contactsPage,
+  contactsList, contactsIds, contactsCount, contactsRows, contactsFacets, type ContactFacets, type ServerView,
   loadPrefs, savePref,
   type Contact, type Company, type Employee, type ContactField,
   renameCustomValue, customList,
@@ -31,7 +32,7 @@ import ContactExport from "./ContactExport";
 import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
 import { LinkedInExtensionModal } from "./LinkedInCapture";
 import {
-  isRequired, isProfileKey, missingProfile, tidyProfile, formatAddress, missingFixed,
+  isRequired, isProfileKey, missingProfile, tidyProfile, formatAddress, missingFixed, PROFILE_FIELDS,
   languageOptions, languageName, countryOptions, countryLabel, withProfileCodes, normalizeLinkedIn, isLinkedIn, linkedInHandle, isReservedLabel,
 } from "./contactProfile";
 import "./ContactsPage.css";
@@ -45,6 +46,10 @@ const fullName = (c: Contact) => [c.first_name, c.last_name].filter(Boolean).joi
 const NAME_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 /** Rows kept in the page around the visible ones (the rest are spacers): 25,000 contacts stay fluid. */
 const ROW_OVERSCAN = 14;
+/** Rows asked from the database at a time (server mode). */
+const SRV_BLOCK = 100;
+/** A contact's facts as the database sends them with each row (50_contacts_server.sql). */
+const srvOf = (c: Contact) => c as Contact & { __types?: string[]; __from?: Record<string, string[]>; __status?: string[]; __pipes?: string[]; __assignees?: string[]; __coNames?: Record<string, string> };
 
 // Strip accents/diacritics so "brujula" matches "brújula".
 const norm = (s: string) => (s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
@@ -76,7 +81,29 @@ export default function ContactsPage() {
   const [filtersOpenTick, setFiltersOpenTick] = useState(0);
   const location = useLocation();
 
+  // ---- Server mode (50_contacts_server.sql): the database filters, sorts, counts and pages the list ----
+  /** null until known; true = the database runs the list (only the rows on screen come down); false = the old way. */
+  const [server, setServer] = useState<boolean | null>(null);
+  /** The rows read so far, by position in the list, for the current filters / search (gen). */
+  const [srv, setSrv] = useState<{ gen: number; total: number; rows: Map<number, Contact> }>({ gen: 0, total: 0, rows: new Map() });
+  /** Every contact you can see (no filters), for "x of y". */
+  const [srvAll, setSrvAll] = useState<number | null>(null);
+  const [srvErr, setSrvErr] = useState<string | null>(null);
+  const [srvTick, setSrvTick] = useState(0);
+  const [facets, setFacets] = useState<ContactFacets | null>(null);
+  /** Every id of the current list, in order — read when you start selecting (select all, shift-click). */
+  const [allIds, setAllIds] = useState<string[] | null>(null);
+  const srvGen = useRef(0);
+  const srvBusy = useRef(new Set<number>());
+  const reqVer = useRequiredFields();
+  const srvRefresh = () => {
+    setSrvTick((x) => x + 1);
+    contactsCount(emptyView(), "", {}).then((n) => { if (n != null) setSrvAll(n); }).catch(() => {});
+    contactsFacets().then((f) => { if (f) setFacets(f); }).catch(() => {});
+  };
+
   const reload = async () => {
+    if (server) { srvRefresh(); return; }
     // everything at once (it used to be five reads one after the other)
     const [cs, cos, asg, fs, rs] = await Promise.all([
       listContacts().catch(() => [] as Contact[]),
@@ -93,32 +120,47 @@ export default function ContactsPage() {
   // While the full list loads: the first page straight from the database (38_contacts_paging.sql), so the page paints at once.
   const [preview, setPreview] = useState<{ rows: Contact[]; total: number } | null>(null);
   useEffect(() => {
-    if (loaded) return;
+    if (loaded || server !== false) return;
     let off = false;
     const t = setTimeout(() => { contactsPage({ search: q, limit: 80 }).then((r) => { if (!off && r) setPreview(r); }).catch(() => {}); }, q ? 250 : 0);
     return () => { off = true; clearTimeout(t); };
-  }, [q, loaded]);
+  }, [q, loaded, server]);
   useEffect(() => {
     myProfile().then(setMe).catch(() => {});
     listEmployees().then(setEmployees).catch(() => {});
     loadPrefs().then((p) => { if (Array.isArray(p.contactColumns)) setColumns(p.contactColumns); if (typeof p.contactCompact === "boolean") setCompact(p.contactCompact); }).catch(() => {});
-    reload();
+    // The database runs the list when 50_contacts_server.sql is in; otherwise everything is read here (old way).
+    contactsCount(emptyView(), "", {}).then((n) => {
+      if (n == null) { setServer(false); reload(); return; }
+      setSrvAll(n); setServer(true);
+      listContactFields().then(setFields).catch(() => {});
+      listCrmOptions().then(setCrmOptions).catch(() => {});
+      listCompanyFields().then(setCompanyFields).catch(() => {});
+      contactsFacets().then((f) => { if (f) setFacets(f); }).catch(() => {});
+    }).catch(() => { setServer(false); reload(); });
   }, []);
 
   // Opened from a company row: jump straight into that contact.
   useEffect(() => {
     const id = (location.state as any)?.focusContactId;
+    if (id && server) {
+      contactsRows([id]).then((r) => { if (r[0]) setEditing(structuredClone(r[0])); }).catch(() => {});
+      navigate(location.pathname, { replace: true, state: null });
+      return;
+    }
     if (!id || contacts.length === 0) return;
     const c = contacts.find((x) => x.id === id);
     if (c) setEditing(structuredClone(c));
     navigate(location.pathname, { replace: true, state: null });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.state, contacts]);
+  }, [location.state, contacts, server]);
 
   const lead = isSalesLead(me);
 
   const coById = useMemo(() => new Map(companies.map((co) => [co.id as string, co])), [companies]);
-  const companyName = (id: string, c?: Contact) => coById.get(id)?.name ?? (c as any)?.__coNames?.[id] ?? "—";
+  const companyName = (id: string, c?: Contact) => coById.get(id)?.name ?? (c as any)?.__coNames?.[id] ?? facetCoName(id) ?? "—";
+  const facetCoNames = useMemo(() => new Map((facets?.companies ?? []).map((o) => [o.value, o.label])), [facets]);
+  const facetCoName = (id: string) => facetCoNames.get(id);
   // Company pill in the list → that company on the Companies page, with its panel open.
   const openCompany = (id: string) => navigate("/companies", { state: { focusCompanyId: id } });
 
@@ -189,8 +231,10 @@ export default function ContactsPage() {
 
   // ---- Every field the list can be filtered and sorted by ----
   const people = () => employees.map((e) => ({ value: e.id, label: e.name }));
-  const valuesOf = (get: (c: Contact) => unknown, label?: (v: string) => string) => () =>
-    [...new Set(contacts.map((c) => String(get(c) ?? "").trim()).filter(Boolean))].map((v) => ({ value: v, label: label ? label(v) : v })).sort((a, b) => a.label.localeCompare(b.label));
+  const valuesOf = (get: (c: Contact) => unknown, label?: (v: string) => string, facet?: keyof ContactFacets) => () =>
+    (server && facet ? ((facets?.[facet] ?? []) as string[]).map((v) => String(v).trim()).filter(Boolean)
+      : [...new Set(contacts.map((c) => String(get(c) ?? "").trim()).filter(Boolean))])
+      .map((v) => ({ value: v, label: label ? label(v) : v })).sort((a, b) => a.label.localeCompare(b.label));
   /**
    * Everything a row needs that is worked out from the links (status, types, where each type comes
    * from, the search text), once per load — not on every render, keystroke and filter for every row.
@@ -215,6 +259,8 @@ export default function ContactsPage() {
   }, [contacts, companies, rel, coById]);
   const previewTypes = (c: Contact) => ((c as any).__types as string[] | undefined) ?? null;
   const statusOf = (c: Contact) => {
+    const sv = srvOf(c).__status;
+    if (sv) return { client: sv.includes("client"), sales: sv.includes("sales"), pipelines: srvOf(c).__pipes ?? [] };
     const d = c.id ? derived.get(c.id) : undefined;
     if (d) return d.status;
     const pt = previewTypes(c);
@@ -223,8 +269,9 @@ export default function ContactsPage() {
   };
   const statusTags = (c: Contact) => { const s = statusOf(c); return [...(s.client ? ["client"] : []), ...(s.sales ? ["sales"] : []), ...(!s.client && !s.sales ? ["none"] : [])]; };
   const coList = (c: Contact) => c.companyIds.map((id) => coById.get(id)).filter((x): x is Company => !!x);
-  const allPipes = () => [...new Set([...Object.values(rel?.pipesByContact ?? {}).flat(), ...Object.values(rel?.pipesByCompany ?? {}).flat()])].sort().map((p) => ({ value: p, label: p }));
-  const coValues = (get: (co: Company) => string[]) => () => [...new Set(companies.flatMap(get).filter(Boolean))].sort().map((v) => ({ value: v, label: v }));
+  const allPipes = () => (server ? [...(facets?.pipelines ?? [])] : [...new Set([...Object.values(rel?.pipesByContact ?? {}).flat(), ...Object.values(rel?.pipesByCompany ?? {}).flat()])]).sort().map((p) => ({ value: p, label: p }));
+  const coValues = (get: (co: Company) => string[], facet?: "co_sector" | "co_city") => () =>
+    (server && facet ? [...new Set((facets?.[facet] ?? []).map((v) => String(v).trim()).filter(Boolean))] : [...new Set(companies.flatMap(get).filter(Boolean))]).sort().map((v) => ({ value: v, label: v }));
   // the types each contact gets from its companies (CRM, Client, In sales, Partner…), worked out once per load
   const inhOf = (c: Contact) => (c.id ? derived.get(c.id)?.inh : undefined) ?? inheritedCompanyTags(c, companies, rel);
   /**
@@ -236,6 +283,8 @@ export default function ContactsPage() {
     const d = c.id ? derived.get(c.id) : undefined;
     if (d) return d.types;
     const pt = previewTypes(c);
+    const sf = srvOf(c).__from;
+    if (pt && sf) return pt.map((tag) => ({ tag, from: sf[tag] }));
     if (pt) return pt.map((tag) => ({ tag }));
     const s = statusOf(c);
     const inh = inhOf(c);
@@ -247,11 +296,11 @@ export default function ContactsPage() {
       ...inh.filter((t) => t.tag !== "crm" && t.tag !== "client" && t.tag !== "sales"),
     ];
   };
-  const fromMap = (c: Contact) => Object.fromEntries(inhOf(c).map((t) => [t.tag, t.from]));
+  const fromMap = (c: Contact) => srvOf(c).__from ?? Object.fromEntries(inhOf(c).map((t) => [t.tag, t.from]));
   const typeOptions = () => {
     const known = relationshipOptions(crmOptions).map((o) => ({ value: o.key, label: o.label }));
     // types written on companies that are no longer on your list still filter
-    const extra = [...new Set(companies.flatMap((co) => co.relationship ?? []))].filter((t) => !known.some((k) => k.value === t)).map((t) => ({ value: t, label: relLabel(t) }));
+    const extra = [...new Set(server ? (facets?.co_types ?? []) : companies.flatMap((co) => co.relationship ?? []))].filter((t) => !known.some((k) => k.value === t)).map((t) => ({ value: t, label: relLabel(t) }));
     return [...known, ...extra];
   };
   // a company field's value(s), for every company the contact works for
@@ -268,17 +317,17 @@ export default function ContactsPage() {
     { key: "phone", label: "Mobile", group: "Contact details", type: "text", get: (c) => phoneText(c.phone, c.phone_ext) },
     { key: "landline", label: "Landline", group: "Contact details", type: "text", get: (c) => phoneText(c.landline, c.landline_ext) },
     { key: "linkedin", label: "LinkedIn", group: "Contact details", type: "text", get: (c) => c.linkedin },
-    { key: "language", label: "Language", group: "Contact details", type: "select", get: (c) => c.language ?? "", options: valuesOf((c) => c.language, (v) => languageName(v)) },
-    { key: "companies", label: "Company", group: "Companies", type: "multi", get: (c) => c.companyIds, options: () => companies.filter((co) => co.id).map((co) => ({ value: co.id!, label: co.name })).sort((a, b) => a.label.localeCompare(b.label)) },
+    { key: "language", label: "Language", group: "Contact details", type: "select", get: (c) => c.language ?? "", options: valuesOf((c) => c.language, (v) => languageName(v), "language") },
+    { key: "companies", label: "Company", group: "Companies", type: "multi", get: (c) => c.companyIds, options: () => server ? [...(facets?.companies ?? [])] : companies.filter((co) => co.id).map((co) => ({ value: co.id!, label: co.name })).sort((a, b) => a.label.localeCompare(b.label)) },
     { key: "companies_count", label: "Number of companies", group: "Companies", type: "number", get: (c) => c.companyIds.length },
-    { key: "co_sector", label: "Company sector", group: "Companies", type: "multi", get: (c) => coList(c).map((co) => co.sector ?? "").filter(Boolean), options: coValues((co) => [co.sector ?? ""]) },
+    { key: "co_sector", label: "Company sector", group: "Companies", type: "multi", get: (c) => coList(c).map((co) => co.sector ?? "").filter(Boolean), options: coValues((co) => [co.sector ?? ""], "co_sector") },
     { key: "co_type", label: "Type (client, partner…)", group: "Person", type: "multi", get: (c) => typesOf(c).map((t) => t.tag), sort: (c) => typeSortKey(typesOf(c).map((t) => t.tag)), options: typeOptions },
-    { key: "co_city", label: "Company city", group: "Companies", type: "multi", get: (c) => coList(c).map((co) => (co.city ?? "").trim()).filter(Boolean), options: coValues((co) => [(co.city ?? "").trim()]) },
+    { key: "co_city", label: "Company city", group: "Companies", type: "multi", get: (c) => coList(c).map((co) => (co.city ?? "").trim()).filter(Boolean), options: coValues((co) => [(co.city ?? "").trim()], "co_city") },
     // the companies' own choice fields (e.g. "Konsolidator Iberia Customer", "Partner Latam") reach their people too
     ...companyFields.filter((f) => isChoiceType(f.type)).map((f): FField<Contact> => ({
       key: `co_field_${f.id}`, label: `Company · ${f.label}`, group: "Companies", type: "multi",
       get: (c) => coFieldValues(c, f),
-      options: () => [...new Set([...f.options, ...companies.flatMap((co) => { const v = (co.custom ?? {})[f.id]; return f.type === "multiselect" ? customList(v) : v ? [String(v)] : []; })])].map((o) => ({ value: o, label: o })),
+      options: () => [...new Set([...f.options, ...(server ? (facets?.co_fields?.[f.id] ?? []) : companies.flatMap((co) => { const v = (co.custom ?? {})[f.id]; return f.type === "multiselect" ? customList(v) : v ? [String(v)] : []; }))])].map((o) => ({ value: o, label: o })),
     })),
     ...companyFields.filter((f) => f.type === "boolean").map((f): FField<Contact> => ({
       key: `co_field_${f.id}`, label: `Company · ${f.label}`, group: "Companies", type: "boolean",
@@ -289,11 +338,11 @@ export default function ContactsPage() {
     { key: "address", label: "Full address", group: "Address", type: "text", get: (c) => formatAddress(c) },
     { key: "street", label: "Street", group: "Address", type: "text", get: (c) => [c.street, c.addr_number].filter(Boolean).join(" ") },
     { key: "postal_code", label: "Postal code", group: "Address", type: "text", get: (c) => c.postal_code },
-    { key: "city", label: "City", group: "Address", type: "select", get: (c) => (c.city ?? "").trim(), options: valuesOf((c) => c.city) },
-    { key: "province", label: "Province / state", group: "Address", type: "select", get: (c) => (c.province ?? "").trim(), options: valuesOf((c) => c.province) },
-    { key: "country", label: "Country", group: "Address", type: "select", get: (c) => c.country ?? "", options: valuesOf((c) => c.country, (v) => countryLabel(v)) },
+    { key: "city", label: "City", group: "Address", type: "select", get: (c) => (c.city ?? "").trim(), options: valuesOf((c) => c.city, undefined, "city") },
+    { key: "province", label: "Province / state", group: "Address", type: "select", get: (c) => (c.province ?? "").trim(), options: valuesOf((c) => c.province, undefined, "province") },
+    { key: "country", label: "Country", group: "Address", type: "select", get: (c) => c.country ?? "", options: valuesOf((c) => c.country, (v) => countryLabel(v), "country") },
     { key: "addr_complete", label: "Address complete", group: "Address", type: "boolean", get: (c) => missingProfile(c).length === 0 },
-    { key: "visible_to", label: "Visible to", group: "Record", type: "multi", get: (c) => assignees[c.id ?? ""] ?? [], options: people },
+    { key: "visible_to", label: "Visible to", group: "Record", type: "multi", get: (c) => assignedOf(c), options: people },
     { key: "created_at", label: "Created on", group: "Record", type: "date", get: (c) => (c as any).created_at },
     { key: "imported_by", label: "Imported by", group: "Record", type: "select", get: (c) => (c as any).imported_by ?? "", options: people },
     { key: "imported_at", label: "Imported on", group: "Record", type: "date", get: (c) => (c as any).imported_at },
@@ -301,10 +350,12 @@ export default function ContactsPage() {
     ...fields.map((f): FField<Contact> => ({
       key: f.id, label: f.label, group: "Your fields", type: f.type === "multiselect" ? "multi" : f.type,
       get: (c) => (f.type === "multiselect" ? customList((c.custom ?? {})[f.id]) : (c.custom ?? {})[f.id]),
-      ...(isChoiceType(f.type) ? { options: () => [...new Set([...f.options, ...(f.type === "multiselect" ? contacts.flatMap((c) => customList((c.custom ?? {})[f.id])) : [])])].map((o) => ({ value: o, label: o })) } : {}),
+      ...(isChoiceType(f.type) ? { options: () => [...new Set([...f.options, ...(f.type === "multiselect" ? (server ? (facets?.custom?.[f.id] ?? []) : contacts.flatMap((c) => customList((c.custom ?? {})[f.id]))) : [])])].map((o) => ({ value: o, label: o })) } : {}),
     })),
   ];
 
+  /** Who a contact is given to (from the row in server mode). */
+  function assignedOf(c: Contact): string[] { return srvOf(c).__assignees ?? assignees[c.id ?? ""] ?? []; }
   // Sales people only see the contacts they have been given access to.
   const visible = useMemo(() => contacts.filter((c) => lead || !me || (assignees[c.id!] ?? []).includes(me.id)), [contacts, lead, me, assignees]);
   // typing stays instant: the list follows the search a beat later, in the background
@@ -324,21 +375,88 @@ export default function ContactsPage() {
   const shown = loaded || !preview ? loadedShown : preview.rows;
   const onSort = (key: string, add: boolean) => setView({ ...view, sort: nextSort(view.sort, key, add) });
 
+  // ---- Server mode: the view as the database reads it, the first page, then the rows that scroll in ----
+  const serverView = useMemo<ServerView>(() => {
+    const byKey = new Map(fieldsRef.current.map((f) => [f.key, f]));
+    return {
+      match: view.match,
+      conds: view.conds.filter((c) => byKey.has(c.field)).map((c) => ({ ...c, type: byKey.get(c.field)!.type })),
+      sort: view.sort.filter((s) => byKey.has(s.key)).map((s) => ({ ...s, type: byKey.get(s.key)!.type })),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, fields, companyFields]);
+  // "Address complete" follows the required fields of Settings
+  const srvCtx = useMemo(() => ({ required: PROFILE_FIELDS.filter((f) => f.required).map((f) => f.key) }), [reqVer]); // eslint-disable-line react-hooks/exhaustive-deps
+  const srvQuery = useRef<{ view: ServerView; q: string; ctx: Record<string, any> }>({ view: serverView, q: "", ctx: srvCtx });
+  useEffect(() => {
+    if (!server) return;
+    const gen = ++srvGen.current;
+    srvQuery.current = { view: serverView, q: dq, ctx: srvCtx };
+    srvBusy.current = new Set();
+    setAllIds(null);
+    const t = setTimeout(() => {
+      contactsList(serverView, dq, 0, SRV_BLOCK, srvCtx).then((r) => {
+        if (!r || gen !== srvGen.current) return;
+        const rows = new Map<number, Contact>();
+        r.rows.forEach((c, i) => rows.set(i, c));
+        setSrv({ gen, total: r.total, rows }); setSrvErr(null); setLoaded(true);
+      }).catch((e) => { if (gen === srvGen.current) { setSrvErr(String((e as any)?.message ?? e)); setLoaded(true); } });
+    }, srvGen.current === 1 ? 0 : 120);
+    return () => clearTimeout(t);
+  }, [server, serverView, dq, srvCtx, srvTick]);
+  const loadAllIds = () => {
+    const gen = srvGen.current, qy = srvQuery.current;
+    return contactsIds(qy.view, qy.q, qy.ctx).then((ids) => { if (gen === srvGen.current) setAllIds(ids); return ids; });
+  };
+  /** The full rows of the selection (server mode: read from the database, 1,000 at a time). */
+  const pickRows = async (): Promise<Contact[]> => (server ? contactsRows(bulk.ids) : pickedList);
+  const listLen = server ? srv.total : shown.length;
+  /** Companies for the contact panel's "Link a company" (id + name, from the database). */
+  const serverCompanies = useMemo(() => (facets?.companies ?? []).map((o) => ({ id: o.value, name: o.label } as Company)), [facets]);
+  // Export (server mode): the export needs every contact and company, read only when you export
+  const [exportData, setExportData] = useState<{ contacts: Contact[]; companies: Company[]; shown: string[] } | null>(null);
+  useEffect(() => {
+    if (!exporting || !server || exportData) return;
+    let off = false;
+    Promise.all([
+      listContacts(), listCompanies(), lead ? Promise.resolve(null) : loadContactAssignees(),
+      exportIds ? Promise.resolve(exportIds) : allIds ? Promise.resolve(allIds) : loadAllIds(),
+    ]).then(([cs, cos, asg, ids]) => {
+      if (off) return;
+      const mine = asg && me ? cs.filter((c) => (asg[c.id!] ?? []).includes(me.id)) : cs;
+      setExportData({ contacts: mine, companies: cos, shown: ids });
+    }).catch(() => { if (!off) { setExporting(false); setExportIds(null); } });
+    return () => { off = true; };
+  }, [exporting, server]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ---- Multi-select: link, assign, export or delete many contacts at once ----
-  const shownIds = useMemo(() => shown.map((c) => c.id as string), [shown]);
+  const shownIds = useMemo(() => (server
+    ? allIds ?? [...srv.rows.entries()].sort((a, b) => a[0] - b[0]).map(([, c]) => c.id as string)
+    : shown.map((c) => c.id as string)), [server, allIds, srv, shown]);
   const bulk = useBulkSelection(shownIds);
+  // selecting in server mode: read every id of the list once, so shift-click and "select all" cover it all
+  useEffect(() => { if (server && bulk.active && !allIds) loadAllIds().catch(() => {}); }, [server, bulk.active, allIds]); // eslint-disable-line react-hooks/exhaustive-deps
+  const wantAll = useRef(false);
+  const toggleAllRows = () => {
+    if (server && !allIds && !bulk.allOn) { wantAll.current = true; loadAllIds().catch(() => { wantAll.current = false; }); return; }
+    bulk.toggleAll();
+  };
+  useEffect(() => { if (wantAll.current && allIds) { wantAll.current = false; bulk.toggleAll(); } }, [allIds]); // eslint-disable-line react-hooks/exhaustive-deps
   const [exportIds, setExportIds] = useState<string[] | null>(null);
   // the picked contacts, worked out once per selection (it ran on every render for every company: 25k × 5k)
-  const pickedList = useMemo(() => (bulk.sel.size ? contacts.filter((c) => bulk.sel.has(c.id as string)) : []), [bulk.sel, contacts]);
+  const pickedList = useMemo(() => (!bulk.sel.size ? []
+    : server ? [...srv.rows.values()].filter((c) => bulk.sel.has(c.id as string))
+    : contacts.filter((c) => bulk.sel.has(c.id as string))), [bulk.sel, contacts, server, srv]);
   const picked = () => pickedList;
+  const coChoices = server ? (facets?.companies ?? []) : companies.map((co) => ({ value: co.id as string, label: co.name }));
   const bulkActions: BulkAction[] = [
     {
       key: "company", label: "Add to company",
       icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="3" width="10" height="18" rx="1.5" /><path d="M14 8h6v13H4M18 2v4M16 4h4" /></svg>,
-      options: companies.map((co) => ({ value: co.id as string, label: co.name })),
+      options: coChoices,
       run: async (v) => {
         if (!v) return null;
-        for (const c of picked()) {
+        for (const c of await pickRows()) {
           if (c.companyIds.includes(v) || !c.id) continue;
           const err = await linkContactToCompany(c.id, v);
           if (err) return err;
@@ -350,18 +468,23 @@ export default function ContactsPage() {
     {
       key: "uncompany", label: "Remove from company", more: true,
       icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="3" width="10" height="18" rx="1.5" /><path d="M14 8h6v13H4M16 4h4" /></svg>,
-      options: (() => { const on = new Set(pickedList.flatMap((c) => c.companyIds)); return on.size ? companies.filter((co) => on.has(co.id as string)).map((co) => ({ value: co.id as string, label: co.name })) : []; })(),
+      options: (() => {
+        const on = new Set(pickedList.flatMap((c) => c.companyIds));
+        if (!on.size) return [];
+        return server ? [...on].map((id) => ({ value: id, label: companyName(id, pickedList.find((c) => c.companyIds.includes(id))) })).sort((a, b) => a.label.localeCompare(b.label))
+          : companies.filter((co) => on.has(co.id as string)).map((co) => ({ value: co.id as string, label: co.name }));
+      })(),
       run: async (v) => {
         if (!v) return null;
         let n = 0;
-        for (const c of picked()) {
+        for (const c of await pickRows()) {
           if (!c.companyIds.includes(v) || !c.id) continue;
           const err = await unlinkContactFromCompany(c.id, v);
           if (err) return err;
           n++;
         }
         await reload(); bulk.clear();
-        return { done: `${n} taken off ${companies.find((co) => co.id === v)?.name ?? "the company"}` };
+        return { done: `${n} taken off ${companyName(v) === "—" ? "the company" : companyName(v)}` };
       },
     },
     {
@@ -371,8 +494,8 @@ export default function ContactsPage() {
       disabledReason: lead ? undefined : "Only boss and sales managers can assign contacts.",
       run: async (v) => {
         if (!v) return null;
-        for (const c of picked()) {
-          const cur = assignees[c.id as string] ?? [];
+        for (const c of await pickRows()) {
+          const cur = assignedOf(c);
           if (!cur.includes(v)) await setContactAssignees(c.id as string, [...cur, v]);
         }
         await reload(); bulk.clear();
@@ -387,7 +510,7 @@ export default function ContactsPage() {
         if (!v) return null;
         const [fid, opt] = v.split("\u0001");
         let n = 0;
-        for (const c of picked()) {
+        for (const c of await pickRows()) {
           const cur = customList((c.custom ?? {})[fid]);
           if (cur.includes(opt)) continue;
           const err = await saveContact({ ...c, custom: { ...(c.custom ?? {}), [fid]: [...cur, opt] } });
@@ -405,7 +528,7 @@ export default function ContactsPage() {
         if (!v) return null;
         const [fid, opt] = v.split("\u0001");
         let n = 0;
-        for (const c of picked()) {
+        for (const c of await pickRows()) {
           const cur = customList((c.custom ?? {})[fid]);
           if (!cur.includes(opt)) continue;
           const err = await saveContact({ ...c, custom: { ...(c.custom ?? {}), [fid]: cur.filter((x) => x !== opt) } });
@@ -461,11 +584,33 @@ export default function ContactsPage() {
   const win = (() => {
     const listTop = listRef.current?.offsetTop ?? 80;
     const first = Math.max(0, Math.floor((view0.top - listTop) / stride) - ROW_OVERSCAN);
-    const last = Math.min(shown.length, Math.ceil((view0.top + view0.h - listTop) / stride) + ROW_OVERSCAN);
-    return { first: Math.min(first, shown.length), last: Math.max(last, Math.min(shown.length, first + 1)) };
+    const last = Math.min(listLen, Math.ceil((view0.top + view0.h - listTop) / stride) + ROW_OVERSCAN);
+    return { first: Math.min(first, listLen), last: Math.max(last, Math.min(listLen, first + 1)) };
   })();
+  // server mode: read the blocks of rows that come into view
+  useEffect(() => {
+    if (!server || !srv.total) return;
+    const gen = srv.gen;
+    const from = Math.floor(win.first / SRV_BLOCK), to = Math.floor(Math.max(win.first, win.last - 1) / SRV_BLOCK);
+    for (let b = from; b <= to; b++) {
+      const i0 = b * SRV_BLOCK, i1 = Math.min(srv.total, i0 + SRV_BLOCK) - 1;
+      if ((srv.rows.has(i0) && srv.rows.has(i1)) || srvBusy.current.has(b)) continue;
+      srvBusy.current.add(b);
+      const busy = srvBusy.current, qy = srvQuery.current;
+      contactsList(qy.view, qy.q, i0, SRV_BLOCK, qy.ctx).then((r) => {
+        if (!r || gen !== srvGen.current) return;
+        setSrv((cur) => {
+          if (cur.gen !== gen) return cur;
+          const rows = new Map(cur.rows);
+          r.rows.forEach((c, k) => rows.set(i0 + k, c));
+          return { ...cur, total: r.total, rows };
+        });
+      }).catch(() => {}).finally(() => busy.delete(b));
+    }
+  }, [server, srv, win.first, win.last]);
   // a row from the first page (before everything loaded) opens once its full record is in
   const openContact = (c: Contact) => {
+    if (server) { setEditing(structuredClone(c)); return; }
     const full = c.id ? contacts.find((x) => x.id === c.id) : undefined;
     if (full) { setEditing(structuredClone(full)); return; }
     if ((c as any).__coNames) { pendingOpen.current = c.id ?? null; return; }
@@ -496,7 +641,9 @@ export default function ContactsPage() {
       <header className="ct-head">
         <button className="ct-back" onClick={() => navigate("/home")} aria-label="Back">‹</button>
         <h1 className="ct-title">Contacts</h1>
-        {!loaded && preview
+        {server
+          ? <span className="ct-kpi"><b>{srv.total.toLocaleString("en-GB")}</b>{srvAll != null && srv.total !== srvAll ? `of ${srvAll.toLocaleString("en-GB")} ` : ""}{(srvAll ?? srv.total) === 1 ? "contact" : "contacts"}</span>
+          : !loaded && preview
           ? <span className="ct-kpi"><b>{preview.total.toLocaleString("en-GB")}</b>{preview.total === 1 ? "contact" : "contacts"}</span>
           : <span className="ct-kpi"><b>{shown.length.toLocaleString("en-GB")}</b>{shown.length !== visible.length ? `of ${visible.length.toLocaleString("en-GB")} ` : ""}{visible.length === 1 ? "contact" : "contacts"}</span>}
         <div className="ct-search">
@@ -504,7 +651,7 @@ export default function ContactsPage() {
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, position, company or city…" />
           {q && <button onClick={() => setQ("")}>×</button>}
         </div>
-        <FilterBar fields={filterFields} view={view} onView={setView} total={visible.length} shown={shown.length} noun={["contact", "contacts"]}
+        <FilterBar fields={filterFields} view={view} onView={setView} total={server ? srvAll ?? srv.total : visible.length} shown={listLen} noun={["contact", "contacts"]}
           saved={savedViews} onSaved={setSavedViews} openSignal={filtersOpenTick} />
         <ActionsMenu items={[
           { key: "new", group: "Create", label: "New contact", hint: "Add one person by hand", icon: AM_ICON.plus, primary: true, tone: "green", shortcut: "N", onSelect: () => setEditing(empty()) },
@@ -514,22 +661,30 @@ export default function ContactsPage() {
         ]} />
       </header>
 
-      <FilterChips fields={filterFields} view={view} onView={setView} onEdit={() => setFiltersOpenTick((x) => x + 1)} shown={shown.length} total={visible.length} noun={["contact", "contacts"]} />
+      <FilterChips fields={filterFields} view={view} onView={setView} onEdit={() => setFiltersOpenTick((x) => x + 1)} shown={listLen} total={server ? srvAll ?? srv.total : visible.length} noun={["contact", "contacts"]} />
 
-      {!loaded && !preview ? <PageLoader label="Loading contacts…" fill={false} /> : shown.length === 0 ? (
-        <p className="cl-hint">{contacts.length === 0 ? "No contacts yet. Add your first one." : "No contacts match your search and filters."}</p>
+      {server && srvErr && <p className="cl-hint is-error">{srvErr} <button type="button" className="ct-retry" onClick={() => setSrvTick((x) => x + 1)}>Try again</button></p>}
+      {(server === null || (!loaded && (server || !preview))) ? <PageLoader label="Loading contacts…" fill={false} /> : listLen === 0 ? (
+        <p className="cl-hint">{(server ? srvAll === 0 : contacts.length === 0) ? "No contacts yet. Add your first one." : "No contacts match your search and filters."}</p>
       ) : (
         <div ref={scrollRef} className={`ct-scroll is-xscroll ${compact ? "is-compact" : ""}`} style={{ ["--row-min" as string]: `${rowMin}px`, position: "relative" } as CSSProperties}
           onScroll={onListScroll}>
           {/* the sticky header sits on an opaque band of the page colour: rows never show above or around it */}
           <div className="ct-lhead-wrap">
           <div className="ct-lrow ct-lhead" style={{ gridTemplateColumns: rowGrid }}>
-            <span className="ct-lid-head"><BulkCheck on={bulk.allOn} partial={bulk.someOn} onToggle={bulk.toggleAll} label="Select every contact shown" /><SortHead label="Name" k="name" sort={view.sort} onSort={onSort} /></span>
+            <span className="ct-lid-head"><BulkCheck on={bulk.allOn} partial={bulk.someOn} onToggle={toggleAllRows} label="Select every contact shown" /><SortHead label="Name" k="name" sort={view.sort} onSort={onSort} /></span>
             {activeColumns.map((k) => <span key={k}><SortHead label={columnLabel(k)} k={k} sort={view.sort} onSort={onSort} /></span>)}
           </div>
           </div>
-          <div ref={listRef} className="ct-list" style={{ paddingTop: win.first * stride, paddingBottom: (shown.length - win.last) * stride + 72 }}>
-            {shown.slice(win.first, win.last).map((c) => (
+          <div ref={listRef} className="ct-list" style={{ paddingTop: win.first * stride, paddingBottom: (listLen - win.last) * stride + 72 }}>
+            {(server
+              ? Array.from({ length: Math.max(0, win.last - win.first) }, (_, k) => srv.rows.get(win.first + k) ?? ({ id: `__ghost${win.first + k}`, first_name: "", companyIds: [] } as Contact))
+              : shown.slice(win.first, win.last)).map((c) => (c.id ?? "").startsWith("__ghost") ? (
+              <div key={c.id} className="ct-lrow is-ghost" style={{ gridTemplateColumns: rowGrid }} aria-hidden="true">
+                <span className="ct-lcell ct-lid"><span className="ct-av-wrap"><span className="ct-avatar" /></span><span className="ct-ghost" style={{ width: "46%" }} /></span>
+                {activeColumns.map((k) => <span key={k} className="ct-lcell"><span className="ct-ghost" /></span>)}
+              </div>
+            ) : (
               <button key={c.id} className={`ct-lrow ${bulk.has(c.id as string) ? "is-sel" : ""} ${bulk.active ? "is-selecting" : ""}`}
                 onClick={(e) => { if (bulk.active || e.shiftKey || e.metaKey || e.ctrlKey) bulk.toggle(c.id as string, e.shiftKey); else openContact(c); }}
                 style={{ gridTemplateColumns: rowGrid }}>
@@ -551,12 +706,12 @@ export default function ContactsPage() {
       {editing && (
         <ContactEditor
           contact={editing}
-          companies={companies}
+          companies={server ? serverCompanies : companies}
           employees={employees}
           fields={fields}
           canAssign={lead}
           rel={rel}
-          assigned={assignees[editing.id!] ?? []}
+          assigned={assignedOf(editing)}
           onClose={() => setEditing(null)}
           onSaved={async () => { setEditing(null); await reload(); }}
           onDeleted={async () => { setEditing(null); await reload(); }}
@@ -564,7 +719,7 @@ export default function ContactsPage() {
         />
       )}
 
-      {exporting && (
+      {exporting && !server && (
         <ContactExport
           contacts={contacts.filter((c) => lead || !me || (assignees[c.id!] ?? []).includes(me.id))}
           companies={companies}
@@ -573,9 +728,18 @@ export default function ContactsPage() {
           onClose={() => { setExporting(false); setExportIds(null); }}
         />
       )}
+      {exporting && server && (exportData
+        ? <ContactExport
+            contacts={exportData.contacts}
+            companies={exportData.companies}
+            contactFields={fields}
+            shownIds={exportData.shown}
+            onClose={() => { setExporting(false); setExportIds(null); setExportData(null); }}
+          />
+        : <div className="dw-backdrop"><PageLoader label="Getting the contacts ready to export…" fill={false} /></div>)}
 
       <BulkBar count={bulk.ids.length} noun={["contact", "contacts"]} actions={bulkActions} onClear={bulk.clear}
-        onSelectAll={bulk.toggleAll} allOn={bulk.allOn} total={shown.length} />
+        onSelectAll={toggleAllRows} allOn={bulk.allOn} total={listLen} />
 
       {linkedInOpen && <LinkedInExtensionModal onClose={() => setLinkedInOpen(false)} />}
 
@@ -619,7 +783,7 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
 
   // lookups over the directory once per load, never per keystroke (15k companies)
   const coNameById = useMemo(() => new Map(companies.map((co) => [co.id as string, co.name])), [companies]);
-  const companyName = (id: string) => coNameById.get(id) ?? "—";
+  const companyName = (id: string) => coNameById.get(id) ?? srvOf(contact).__coNames?.[id] ?? "—";
   const linkedKey = c.companyIds.join(",");
   const companyOptions = useMemo(() => {
     const on = new Set(c.companyIds);
@@ -737,7 +901,9 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
     { k: "history", label: "History", icon: "clock" },
     ...(canAssign ? [{ k: "access", label: "Visibility", icon: "lock", count: who.length }] : []),
   ];
-  const status = contactStatus(c, rel, companies);
+  // where the contact stands: from the database row (server mode), else worked out here
+  const sv = srvOf(contact);
+  const status = sv.__status ? { client: sv.__status.includes("client"), sales: sv.__status.includes("sales"), pipelines: sv.__pipes ?? [] } : contactStatus(c, rel, companies);
   // history: field names and values in words
   const FIELD_NAMES: Record<string, string> = {
     first_name: "First name", last_name: "Last name", position: "Position", email: "Email", phone: "Mobile", phone_ext: "Mobile ext.",
@@ -758,7 +924,7 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
             <p className="dw-hero-sub">{[c.position, c.companyIds.map(companyName).join(", ")].filter(Boolean).join(" · ") || "Fill in the details below"}</p>
             <div className="dw-hero-tags">
               <StatusPills status={status} hero />
-              <InheritedTags tags={inheritedCompanyTags(c, companies, rel)} hero />
+              <InheritedTags tags={sv.__from ? Object.entries(sv.__from).map(([tag, from]) => ({ tag, from })) : inheritedCompanyTags(c, companies, rel)} hero />
               {c.email && <a className="dw-tag" href={`mailto:${c.email}`}><DwIcon name="mail" />{c.email}</a>}
               {c.phone && <a className="dw-tag" href={telHref(c.phone, c.phone_ext)}><DwIcon name="phone" />{phoneText(c.phone, c.phone_ext)}</a>}
               {c.landline && <a className="dw-tag" href={telHref(c.landline, c.landline_ext)}><DwIcon name="phone" />{phoneText(c.landline, c.landline_ext)}</a>}

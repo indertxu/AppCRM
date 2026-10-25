@@ -7,10 +7,11 @@ import SalesRangeFilter, { EMPTY_RANGES, activeRangeCount, HeaderRangePopover, r
 import SalesForecast, { type ForecastKpis } from "./SalesForecast";
 import { supabase } from "../../../api/supabase";
 import { listCompanies, listContacts, myProfile, sessionUserId, loadPrefs, savePref, type Company, type Contact } from "../../companies/companiesApi";
-import { listPipelines, loadPipeline, loadPhasesByPipeline, sortPipelines, moveDealsToPipeline, type Pipeline, type Phase } from "../../settings/pipelineApi";
+import { listPipelines, loadPipeline, loadPhasesByPipeline, sortPipelines, moveDealsToPipeline, listFolders, folderPaths, type Pipeline, type Phase, type PipelineFolder } from "../../settings/pipelineApi";
 import { useBulkSelection, BulkBar, BulkCheck, DataTools, SettingsShell, GEAR, type BulkAction, type SxSection } from "../../companies/CompaniesPage";
 import { PageCover, PageLoader } from "../../../framework/AppLayout";
 import { loadProducts, loadServices, type Product } from "../../settings/catalogApi";
+import { dealContactNames } from "./salesApi";
 import { listTrackings, loadTrackingTeams, loadSalesBoot, type SalesBootRows, setTrackingPhase, setTrackingStatus, deleteTracking, setTrackingOwner, addTrackingEmployee, removeTrackingEmployee, setDealCloseDate, setDealCloseProb, stampPhaseEntry, clearPhaseEventsAfter, trackingPct, loadPotentialTotals, totalsFromLastRows, useRevenueMode, REVENUE_MODES, type RevenueMode, type Tracking,
   clientExistsForCompany, hasClientProductsForTracking, loadTrackingProducts, rowsIncomplete, resetRowsIncomplete } from "./salesApi";
 import TrackingDetail from "../trackings/TrackingDetail";
@@ -51,6 +52,36 @@ const norm = (s: string) => (s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/
    Overview building blocks (presentation only). Same visual language as
    Management's Team tab and the consultant modal.
    =================================================================== */
+/** Two lists by id: the second one's rows win. */
+function mergeById<T extends { id?: string | null }>(a: T[], b: T[]): T[] {
+  if (!b.length) return a;
+  const m = new Map(a.map((x) => [x.id, x]));
+  b.forEach((x) => m.set(x.id, x));
+  return Array.from(m.values());
+}
+/** Lean: what an opened deal needs that the list doesn't carry — its full company and the people around it. */
+async function dealContext(t: Tracking): Promise<{ companies: Company[]; contacts: Contact[] }> {
+  const coP = t.company_id
+    ? Promise.resolve(supabase.from("companies").select("*").eq("id", t.company_id).maybeSingle()).then((r: any) => (r.data ? [r.data as Company] : []))
+    : Promise.resolve([] as Company[]);
+  const peopleIds = t.company_id
+    ? await Promise.resolve(supabase.from("company_contacts").select("contact_id").eq("company_id", t.company_id).range(0, 4999)).then((r: any) => ((r.data ?? []) as any[]).map((x) => x.contact_id as string))
+    : [];
+  const ids = [...new Set([...peopleIds, ...(t.contactIds ?? [])])];
+  const rows: any[] = [], links: any[] = [];
+  for (let i = 0; i < ids.length; i += 150) {
+    const part = ids.slice(i, i + 150);
+    const [c, l] = await Promise.all([
+      Promise.resolve(supabase.from("contacts").select("*").in("id", part)).then((r: any) => (r.data ?? []) as any[]),
+      Promise.resolve(supabase.from("company_contacts").select("contact_id, company_id").in("contact_id", part)).then((r: any) => (r.data ?? []) as any[]),
+    ]);
+    rows.push(...c); links.push(...l);
+  }
+  const by: Record<string, string[]> = {};
+  links.forEach((l) => { (by[l.contact_id] ??= []).push(l.company_id); });
+  return { companies: await coP, contacts: rows.map((r) => ({ ...r, companyIds: by[r.id] ?? [] })) };
+}
+
 /** Status shown to people: "paused" is called "hold" (the stored value stays "paused"). */
 const statusText = (s: string | null | undefined) => (s === "paused" ? "hold" : s ?? "");
 
@@ -549,6 +580,17 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   // (deals, who I am and what I may see, the deals' companies, people, pipelines and phases) —
   // all fetched in one round of parallel requests and applied in one render.
   const [booted, setBooted] = useState(!!snap0);
+  /**
+   * Lean (53_sales_boot_lean.sql): the page never downloads the whole company / contact directories.
+   * The list has the deals' companies (list fields) and the names of the people on deals; an opened
+   * deal reads its full company and people; export and reports read the full lists when opened.
+   */
+  const [lean, setLean] = useState(false);
+  const leanRef = useRef(false);
+  /** The full directories, read only when an export or a report needs them (lean). */
+  const [fullDirs, setFullDirs] = useState<{ companies: Company[]; contacts: Contact[] } | null>(null);
+  /** An opened deal's full company and its people (lean). */
+  const [dealCtx, setDealCtx] = useState<{ id: string; companies: Company[]; contacts: Contact[] } | null>(null);
   /** Loading progress: requests answered / asked (drives the bar over the list). */
   const [bootStep, setBootStep] = useState<{ done: number; total: number }>({ done: 0, total: 1 });
   /** How many deals the database holds for you (an exact count, asked at once): the list must reach it. */
@@ -694,6 +736,8 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
     supabase.from("trackings").select("id", { count: "exact", head: true })
       .then(({ count, error }: any) => { if (!error && typeof count === "number") setDbTotal(count); }, () => {});
     const b = await loadSalesBoot().catch(() => null);
+    // lean: new deals may point at companies the list hasn't got yet
+    if (b?.lean) setCompanies((cur) => { const byId = new Map(cur.map((c) => [c.id, c])); (b.companies as Company[]).forEach((c) => { if (!byId.has(c.id)) byId.set(c.id, c); }); return Array.from(byId.values()); });
     const d = b ? bundleOf(b) : await fetchDeals();
     if (soft) startTransition(() => applyDeals(d)); else applyDeals(d);
   };
@@ -762,8 +806,13 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
       console.groupEnd();
       // Not needed for the first paint: they fill in while you look at the list
       // (asked after it, so they don't queue in front of the first read).
-      if (!fullList) loadFullCompanies().then(takeFull);
-      listContacts().then((cs) => { if (alive) setContacts(cs); }).catch(() => {});
+      if (leanRef.current) {
+        // only the names of the people on deals (the directory stays in the database)
+        dealContactNames().then((cs) => { if (alive) { if (cs) setContacts(cs); else listContacts().then((x) => { if (alive) setContacts(x); }).catch(() => {}); } }).catch(() => {});
+      } else {
+        if (!fullList) loadFullCompanies().then(takeFull);
+        listContacts().then((cs) => { if (alive) setContacts(cs); }).catch(() => {});
+      }
       listTrackingFields().then((fs) => { if (alive) setTrackingFields(fs); }).catch(() => {});
       supabase.functions.invoke("manage-users", { body: { action: "list" } }).then(({ data }: any) => {
         const users = (data?.users ?? []) as any[];
@@ -818,6 +867,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
       if (!alive) return;
       if (!b) { tableByTable(); return; }
       catalogRef.current = { products: Promise.resolve(b.products as Product[]), services: Promise.resolve(b.services) };
+      leanRef.current = b.lean; setLean(b.lean);
       setProducts(b.products as Product[]);
       finish(bundleOf(b), b.me, b.companies as Company[], b.pipelines as Pipeline[], b.phasesByPipeline as Record<string, Phase[]>, b.profiles);
     });
@@ -967,17 +1017,19 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   }, [trackings, me, access, rolesReady]);
   // Export: everything, or only what this person can see (Who sees what → Adjust settings).
   const exportDeals = exportLevel === "all" ? trackings : mine;
+  const allCompanies = lean ? fullDirs?.companies ?? companies : companies;
+  const allContacts = lean ? fullDirs?.contacts ?? contacts : contacts;
   const exportCompanies = useMemo(() => {
-    if (exportLevel === "all") return companies;
+    if (exportLevel === "all") return allCompanies;
     const ids = new Set(mine.map((t) => t.company_id).filter(Boolean));
-    return companies.filter((c) => ids.has(c.id!));
-  }, [exportLevel, companies, mine]);
+    return allCompanies.filter((c) => ids.has(c.id!));
+  }, [exportLevel, allCompanies, mine]);
   const exportContacts = useMemo(() => {
-    if (exportLevel === "all") return contacts;
+    if (exportLevel === "all") return allContacts;
     const cos = new Set(mine.map((t) => t.company_id).filter(Boolean) as string[]);
     const ids = new Set(mine.flatMap((t) => t.contactIds));
-    return contacts.filter((c) => ids.has(c.id!) || c.companyIds.some((x) => cos.has(x)));
-  }, [exportLevel, contacts, mine]);
+    return allContacts.filter((c) => ids.has(c.id!) || c.companyIds.some((x) => cos.has(x)));
+  }, [exportLevel, allContacts, mine]);
   // A view this person can't use isn't shown; land on one they can.
   useEffect(() => {
     if (perms && allowedViews.length && !(allowedViews as readonly string[]).includes(view)) setView(allowedViews[0]);
@@ -1009,7 +1061,8 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   const searchById = useMemo(() => {
     const m = new Map<string, string>();
     if (!searching) return m;
-    mine.forEach((t) => m.set(t.id, norm([titleById.get(t.id) ?? "", companyName(t.company_id) ?? "", pipelineName(t.pipeline_id), productName(t.product_id) ?? "", ...t.contactIds.map(contactName)].join("\n"))));
+    // the pipeline's name isn't searched: "upsell" would match every deal of the Upsell pipeline (that's the Pipeline filter's job)
+    mine.forEach((t) => m.set(t.id, norm([titleById.get(t.id) ?? "", companyName(t.company_id) ?? "", productName(t.product_id) ?? "", ...t.contactIds.map(contactName)].join("\n"))));
     return m;
   }, [searching, mine, titleById, pipeNameById, productNameById]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -1025,7 +1078,8 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
       if (fPipeline.length && !fPipeline.includes(t.pipeline_id ?? "")) return false;
       if (fProduct.length && !fProduct.includes(t.product_id ?? "")) return false;
       if (fCompany.length && !fCompany.includes(t.company_id ?? "")) return false;
-      if (fPhase.length && !fPhase.includes(phaseName(t))) return false;
+      // stages are picked by id: two pipelines can call theirs alike ("Lost" / "Loss") or the same name differently
+      if (fPhase.length && !fPhase.includes(t.current_phase_id ?? "")) return false;
       if (fOwner.length && !fOwner.includes(trackOwners[t.id] ?? "")) return false;
       if (fMember.length && !(trackAssignees[t.id] ?? []).some((u) => fMember.includes(u))) return false;
       // Ranges (an open side is skipped; a deal with no value fails an active range)
@@ -1138,10 +1192,36 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   // Status cards combine: Active + Won shows both; clicking an active card removes it.
   const toggleStatus = (s: string) => setFStatus((cur) => (cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s]));
 
+  // The stages offered: those of the pipelines picked (all visible ones when none), under their pipeline's name.
+  // Pipelines in the filter are grouped by their folder (Settings → Pipelines), in the folders' order.
+  const [pipeFolders, setPipeFolders] = useState<PipelineFolder[]>([]);
+  useEffect(() => { listFolders().then((f) => { if (f) setPipeFolders(f); }).catch(() => {}); }, []);
+  const pipelineOptions = useMemo(() => {
+    const paths = folderPaths(pipeFolders);
+    const rank = new Map(paths.map((f, i) => [f.id, i]));
+    const pathOf = new Map(paths.map((f) => [f.id, f.path]));
+    const rows = visiblePipelines.map((p: any, i: number) => ({ p, i, f: p.folder_id && rank.has(p.folder_id) ? p.folder_id as string : null }));
+    rows.sort((a, b) => ((a.f ? rank.get(a.f)! + 1 : 0) - (b.f ? rank.get(b.f)! + 1 : 0)) || a.i - b.i);
+    const anyFolder = rows.some((r) => r.f);
+    return rows.map(({ p, f }) => ({ value: p.id, label: p.name, group: anyFolder ? (f ? pathOf.get(f) : "No folder") : undefined }));
+  }, [visiblePipelines, pipeFolders]);
+
+  const phaseOptions = useMemo(() => {
+    const pipes = fPipeline.length ? visiblePipelines.filter((p) => fPipeline.includes(p.id)) : visiblePipelines;
+    return pipes.flatMap((p) => (phaseByPipe[p.id] ?? []).map((ph) => ({ value: ph.id, label: ph.name, group: pipes.length > 1 ? p.name : undefined })));
+  }, [fPipeline, visiblePipelines, phaseByPipe]);
+  // a stage of a pipeline no longer picked stops filtering
+  useEffect(() => {
+    if (!fPhase.length) return;
+    const ok = new Set(phaseOptions.map((o) => o.value));
+    if (fPhase.some((id) => !ok.has(id))) setFPhase(fPhase.filter((id) => ok.has(id)));
+  }, [phaseOptions]); // eslint-disable-line react-hooks/exhaustive-deps
   const anyFilterButStatus = !!(q || fPipeline.length || fProduct.length || fCompany.length || fPhase.length || fOwner.length || fMember.length || activeRangeCount(fRanges));
   const anyFilter = q || fStatus.length || fPipeline.length || fProduct.length || fCompany.length || fPhase.length || fOwner.length || fMember.length || activeRangeCount(fRanges) || sort !== "recent";
   const clearAll = () => { setQ(""); setFStatus([]); setFPipeline([]); setFProduct([]); setFCompany([]); setFPhase([]); setFOwner([]); setFMember([]); setFRanges(EMPTY_RANGES); setSort("recent"); setRangeCol(null); setHeadPop(null); };
   const kanbanPipe = fPipeline.length ? (fPipeline.includes(boardPipe) ? boardPipe : fPipeline[0]) : "";
+  // going to the board with several pipelines picked: keep the one it shows
+  useEffect(() => { if (view === "kanban" && fPipeline.length > 1) setFPipeline([kanbanPipe]); }, [view, fPipeline.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ---- filter bar: filters scroll sideways instead of wrapping ---- */
   const ftrackRef = useRef<HTMLDivElement>(null);
@@ -1365,6 +1445,25 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   const boardIds = useMemo(() => (view === "kanban" ? shown.filter((t) => t.pipeline_id === kanbanPipe).map((t) => t.id) : NO_IDS), [view, shown, kanbanPipe]);
   const bulk = useBulkSelection(view === "list" ? shownIds : view === "kanban" ? boardIds : NO_IDS);
   const rowRev = useMemo(() => ({}), [trackOwners, trackAssignees, potentialTotals, trackingFields, companies, pipelines, products, employees, probView]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // lean: an opened deal reads its full company and that company's people (+ the people on the deal)
+  useEffect(() => {
+    if (!lean || !openId || dealCtx?.id === openId) return;
+    const t = trackings.find((x) => x.id === openId);
+    if (!t) return;
+    let off = false;
+    dealContext(t).then((ctx) => { if (!off) setDealCtx({ id: openId, ...ctx }); })
+      .catch(() => { if (!off) setDealCtx({ id: openId, companies: [], contacts: [] }); });
+    return () => { off = true; };
+  }, [lean, openId, trackings]); // eslint-disable-line react-hooks/exhaustive-deps
+  // lean: export and reports need the full directories — read when one of them opens
+  useEffect(() => {
+    if (!lean || fullDirs || !(exporting || reporting)) return;
+    let off = false;
+    Promise.all([listCompanies().catch(() => [] as Company[]), listContacts().catch(() => [] as Contact[])])
+      .then(([cos, cts]) => { if (!off) setFullDirs({ companies: cos, contacts: cts }); });
+    return () => { off = true; };
+  }, [lean, exporting, reporting, fullDirs]);
   const [exportIds, setExportIds] = useState<string[] | null>(null);
   const canAssignDeals = canManage || !!(me && (me.is_superadmin || ["boss", "sales_manager"].includes(me.role)));
   /** Selected deals that can be changed (handed-over ones are a frozen copy). */
@@ -1510,8 +1609,13 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   if (openId) {
     const t = mine.find((x) => x.id === openId);
     const frozen = t ? frozenById.get(t.id) : undefined;
-    if (t && frozen) return <HandedOverView tracking={t} handover={frozen} companies={companies} contacts={contacts} employees={employees} trackingFields={trackingFields} onBack={() => { setOpenId(null); reloadSoon(); }} />;
-    if (t) return <TrackingDetail tracking={t} companies={companies} contacts={contacts} products={products} employees={employees} trackingFields={trackingFields} salesRoles={salesRoles}
+    // lean: the deal's full company and people are read first (a moment), then the deal opens
+    const ctxReady = !lean || dealCtx?.id === openId;
+    const dCos = lean && dealCtx ? mergeById(companies, dealCtx.companies) : companies;
+    const dCts = lean && dealCtx ? mergeById(contacts, dealCtx.contacts) : contacts;
+    if (t && !ctxReady) return <PageCover show label="Opening the deal…" />;
+    if (t && frozen) return <HandedOverView tracking={t} handover={frozen} companies={dCos} contacts={dCts} employees={employees} trackingFields={trackingFields} onBack={() => { setOpenId(null); reloadSoon(); }} />;
+    if (t) return <TrackingDetail tracking={t} companies={dCos} contacts={dCts} products={products} employees={employees} trackingFields={trackingFields} salesRoles={salesRoles}
       startWithClient={clientFor === t.id} onBack={() => { setOpenId(null); setClientFor(null); reloadSoon(); }} />;
   }
 
@@ -1548,7 +1652,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
 
   rowApi.current = { open: (id) => setOpenId(id), toggle: (id, range) => bulk.toggle(id, range), cell: plainCell };
 
-  const exportModal = exporting && (
+  const exportModal = exporting && (lean && !fullDirs ? <PageCover show label="Getting the deals ready to export…" /> :
     <ExportModal
       deals={exportIds ? exportDeals.filter((t) => exportIds.includes(t.id)) : exportDeals}
       contacts={exportContacts}
@@ -1747,8 +1851,9 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
           <div className="so-ftrack" ref={ftrackRef} onScroll={measureTrack}>
           <SalesMultiFilter values={fStatus} onChange={setFStatus} placeholder="Any status" noun="statuses"
             options={[{ value: "active", label: "Active" }, { value: "won", label: "Won" }, { value: "lost", label: "Lost" }, { value: "paused", label: "Hold" }]} />
-          <SalesMultiFilter values={fPipeline} onChange={setFPipeline} placeholder="All pipelines" noun="pipelines"
-            options={visiblePipelines.map((p) => ({ value: p.id, label: p.name }))} />
+          {/* the board shows one pipeline (each has its own phases): there, picking one replaces the other */}
+          <SalesMultiFilter values={fPipeline} onChange={setFPipeline} placeholder="All pipelines" noun="pipelines" single={view === "kanban"}
+            options={pipelineOptions} />
           <SalesMultiFilter values={fProduct} onChange={setFProduct} placeholder="All products" noun="products"
             options={products.map((p) => ({ value: p.id!, label: p.name }))} />
           <SalesMultiFilter single values={[probView]} onChange={(v) => v[0] && setProbView(v[0] as typeof probView)} placeholder="Probability"
@@ -1759,7 +1864,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
               { value: "avg", label: "Average of all" },
             ]} />
           <SalesMultiFilter values={fPhase} onChange={setFPhase} placeholder="Any stage" noun="stages"
-            options={allPhaseNames.map((p) => ({ value: p, label: p }))} />
+            options={phaseOptions} />
           <SalesMultiFilter values={fOwner} onChange={setFOwner} placeholder="Any owner" noun="owners"
             options={salesPeople.map((e) => ({ value: e.id, label: e.name }))} />
           <SalesMultiFilter values={fMember} onChange={setFMember} placeholder="Anyone on deal" noun="people"
@@ -1911,11 +2016,12 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
       )}
 
       {exportModal}
-      {reporting && (
+      {reporting && lean && !fullDirs && <PageCover show label="Getting the report ready…" />}
+      {reporting && (!lean || fullDirs) && (
         <SalesReport
           deals={mine}
-          contacts={contacts}
-          companies={companies}
+          contacts={allContacts}
+          companies={allCompanies}
           employees={employees}
           trackAssignees={trackAssignees}
           trackOwners={trackOwners}
@@ -1934,7 +2040,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
         />
       )}
       {creating && (
-        <NewTracking
+        <NewTracking lean={lean}
           companies={companies} contacts={contacts} pipelines={visiblePipelines} products={products} fields={trackingFields}
           people={employees.filter((e) => !inactive.has(e.id))} me={me ? { id: me.id, lead: createLevel === "anyone" } : null}
           level={createLevel === "none" ? "self" : createLevel}

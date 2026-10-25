@@ -2265,6 +2265,8 @@ export interface SalesBootRows {
   profiles: any[];
   products: any[];
   services: any[];
+  /** 53_sales_boot_lean.sql: the companies are list-only fields and the page must not download the whole directories. */
+  lean: boolean;
 }
 /** null = not known yet, false = the database has no sales_boot() (don't ask again this visit). */
 let salesBootAvailable: boolean | null = null;
@@ -2279,7 +2281,16 @@ export async function loadSalesBoot(): Promise<SalesBootRows | null> {
   }
   salesBootAvailable = true;
   const d: any = data;
-  const arr = (k: string): any[] => (Array.isArray(d[k]) ? d[k] : []);
+  // a list comes as rows, or packed as {c: [field names], r: [[values]…]} (53_sales_boot_lean.sql)
+  const arr = (k: string): any[] => {
+    const v = d[k];
+    if (Array.isArray(v)) return v;
+    if (v && Array.isArray(v.c) && Array.isArray(v.r)) {
+      const cols: string[] = v.c;
+      return (v.r as any[][]).map((row) => { const o: any = {}; for (let i = 0; i < cols.length; i++) o[cols[i]] = row[i]; return o; });
+    }
+    return [];
+  };
   const [{ productsFromRows, servicesFromRows, calculatorsFromRows }, { phasesByPipelineFromRows }, rolesApi, { accessRulesFromRows }, { applyRolePreview }] = await Promise.all([
     import("../../settings/catalogApi"), import("../../settings/pipelineApi"), import("../extras/salesRolesApi"),
     import("../extras/salesAccess"), import("../../../framework/SuperAdmin"),
@@ -2302,5 +2313,13 @@ export async function loadSalesBoot(): Promise<SalesBootRows | null> {
     phasesByPipeline: phasesByPipelineFromRows(arr("pipeline_phases"), arr("pipeline_links"), arr("pipeline_phase_departments"), arr("pipeline_phase_items")),
     profiles: arr("profiles"),
     products, services,
+    lean: d.lean === true,
   };
+}
+
+/** Name, e-mail and position of the people on deals (53): the page doesn't need the whole contact directory. null = not installed. */
+export async function dealContactNames(): Promise<import("../../companies/companiesApi").Contact[] | null> {
+  const { data, error } = await supabase.rpc("deal_contact_names");
+  if (error || !Array.isArray(data)) return null;
+  return (data as any[]).map((r) => ({ id: r[0], first_name: r[1] ?? "", last_name: r[2] ?? null, email: r[3] ?? null, position: r[4] ?? null, companyIds: [] }));
 }

@@ -1140,8 +1140,9 @@ export default function ClientWorkspace({
   const TABS: { v: Tab; label: string; icon: string; hint: string; n?: number; alert?: boolean }[] = [
     { v: "overview", label: "Overview", icon: "overview", hint: "People, tasks & notes", alert: lateTasks.length > 0 },
     { v: "deals", label: "Deals", icon: "deal", hint: "Sales & proposals", n: deals.length || undefined },
-    { v: "projects", label: "Projects", icon: "briefcase", hint: "Services delivered", n: projects.length || undefined },
+    // no contract, no project: what they signed comes first
     { v: "contract", label: "Contracts", icon: "contract", hint: "What they signed", n: lines.length || undefined },
+    { v: "projects", label: "Projects", icon: "briefcase", hint: "Services delivered", n: projects.length || undefined },
     { v: "upsells", label: "Upsells", icon: "spark", hint: "What else they could buy" },
     { v: "folders", label: "Folders", icon: "folder", hint: "Every file of this client" },
   ];

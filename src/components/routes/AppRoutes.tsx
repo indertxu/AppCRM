@@ -1,11 +1,13 @@
 import { Routes, Route, Navigate, Outlet } from "react-router-dom";
 import { useAuth } from "../api/authContext";
 import ProtectedRoute from "./ProtectedRoute";
-import LoginPage from "../login/LoginPage";
+import LoginPage, { loginLaunching, JUST_SIGNED_IN_KEY } from "../login/LoginPage";
+import { PageCube } from "../framework/AppLayout";
 import AppLayout from "../framework/AppLayout";
 import { PageRoute } from "../framework/pageAccess";
 import ManagementPage from "../pages/management/ManagementPage";
 import HomePage from "../pages/homepage/HomePage";
+import { TicketsPage } from "../pages/homepage/shared/HomeTodo";
 import CalendarPage from "../pages/calendar/CalendarPage";
 import SalesCalendar from "../pages/calendar/SalesCalendar";
 import ClientsPage from "../pages/clients/ClientsPage";
@@ -23,6 +25,8 @@ import SuperAdminClient from "../pages/superadmin/SuperAdminClient";
 // If already logged in, /login redirects to the right landing page.
 function LoginRoute() {
   const { session, loading, isSuperadmin, roleLoading } = useAuth();
+  // signing in right now: the sign-in page plays its launch and leaves by itself
+  if (loginLaunching()) return <LoginPage />;
   if (loading || (session && roleLoading)) return null;
   if (session) return <Navigate to={isSuperadmin ? "/superadmin" : "/home"} replace />;
   return <LoginPage />;
@@ -58,9 +62,27 @@ function SuperAdminRoute() {
 // before any app page paints (prevents the home flash).
 function AppGate() {
   const { isSuperadmin, roleLoading } = useAuth();
-  if (roleLoading) return null;
+  if (roleLoading) return <JustSignedInHold />;
   if (isSuperadmin) return <Navigate to="/superadmin" replace />;
   return <Outlet />;
+}
+
+/**
+ * Right after the sign-in, while your profile is still on its way: the same deep
+ * green screen and cube the sign-in ends on, so the hand-over to Home never shows
+ * a blank page. On any other visit: nothing (as before).
+ */
+function JustSignedInHold() {
+  let fresh = false;
+  try { const v = sessionStorage.getItem(JUST_SIGNED_IN_KEY); fresh = !!v && Date.now() - Number(v) < 15000; } catch { /* ignore */ }
+  if (!fresh) return null;
+  return (
+    <div aria-hidden="true" style={{ position: "fixed", inset: 0, zIndex: 500, cursor: "progress", background: "radial-gradient(60% 55% at 50% 46%, #0d3a2a 0%, #062319 45%, #03100b 100%)" }}>
+      <div style={{ position: "absolute", left: "50%", top: "46%", width: 168, height: 170, margin: "-85px 0 0 -84px" }}>
+        <div style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(-50%, -50%)" }}><PageCube size={250} /></div>
+      </div>
+    </div>
+  );
 }
 
 export default function AppRoutes() {
@@ -83,6 +105,8 @@ export default function AppRoutes() {
           <Route element={<AppLayout />}>
             {/* Home and Settings are always open; everything else follows Page access. */}
             <Route path="/home" element={<HomePage />} />
+            {/* everyone has a ticket desk, like Home */}
+            <Route path="/tickets" element={<TicketsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route element={<PageRoute page="calendar" />}><Route path="/calendar" element={<CalendarRoute />} /></Route>
             <Route element={<PageRoute page="management" />}><Route path="/management" element={<ManagementPage />} /></Route>

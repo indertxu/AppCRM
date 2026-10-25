@@ -426,7 +426,8 @@
 .np-scene.is-launching .np-chip { animation: np-chip-out 0.5s cubic-bezier(0.7, 0, 0.84, 0) forwards; }
 .np-scene.is-launching .np-wires, .np-scene.is-launching .np-ring, .np-scene.is-launching .np-halo, .np-scene.is-launching .np-cube-glow { opacity: 0; transition: opacity 0.35s; }
 .np-launch {
-  position: fixed; inset: 0; z-index: 20; pointer-events: none;
+  /* takes every click while it plays: nothing underneath can be pressed half-way through */
+  position: fixed; inset: 0; z-index: 20; pointer-events: auto; cursor: progress;
   display: grid; place-items: center;
 }
 /* the same deep screen the home page opens on: the hand-off is seamless */

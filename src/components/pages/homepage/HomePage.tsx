@@ -26,8 +26,8 @@ import ConsultancyHome from "./consultancy/ConsultancyHome";
 import ManagementHome from "./management/ManagementHome";
 import { applyRolePreview } from "../../framework/SuperAdmin";
 import { PageCube } from "../../framework/AppLayout";
-import { usePageAccess, goToSection, type PageKey } from "../../framework/pageAccess";
-import { isSalesLead } from "../companies/companiesApi";
+import { usePageAccess, goToSection, guardedLeave, type PageKey } from "../../framework/pageAccess";
+import { isSalesLead, globalSearch, type SearchHit } from "../companies/companiesApi";
 import "./HomePage.css";
 
 const greeting = () => {
@@ -288,7 +288,6 @@ export default function HomePage() {
             <span className="home-eyebrow">{areaTitle(area)}</span>
             <h1 className="home-title">{greeting()}{me?.firstName ? <>, <em>{me.firstName}</em></> : ""}</h1>
           </div>
-          <GlobalSearch />
           <span className="home-date">{new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}</span>
         </header>
       )}
@@ -297,7 +296,7 @@ export default function HomePage() {
         <div className="home-wait" aria-hidden="true" />
       ) : area === "consultancy" ? (
         <ConsultancyHome userId={me.id} isLead={isLead} hoursPerDay={hoursPerDay}
-          greeting={greeting()} firstName={me.firstName} search={<GlobalSearch />} heroRef={barRef}
+          greeting={greeting()} firstName={me.firstName} heroRef={barRef}
           calendar={<HomeCalendar userId={uid} hoursPerDay={hoursPerDay} />}
           desk={<TicketDesk />} />
       ) : (
@@ -363,6 +362,7 @@ function Mark({ text, q }: { text: string; q: string }) {
 interface NavTarget { id: string; label: string; crumb: string; path: string; section?: string; page: PageKey; panel?: string; words?: string; crmLead?: boolean }
 const NAV_INDEX: NavTarget[] = [
   { id: "home", label: "Home", crumb: "Your day", path: "/home", page: "home", words: "dashboard start overview tickets to-do" },
+  { id: "tickets", label: "Tickets", crumb: "Tickets", path: "/tickets", page: "home", words: "ticketing ticket desk helpdesk support incidents requests to-do todo tareas inbox sla" },
   { id: "cal", label: "Calendar", crumb: "Calendar", path: "/calendar", page: "calendar", words: "agenda bookings hours" },
   { id: "cal-week", label: "Week view", crumb: "Calendar › Week", path: "/calendar", section: "week", page: "calendar", words: "calendar week semana" },
   { id: "cal-month", label: "Month view", crumb: "Calendar › Month", path: "/calendar", section: "month", page: "calendar", words: "calendar month mes" },
@@ -397,7 +397,7 @@ const NAV_INDEX: NavTarget[] = [
   { id: "st-contract", label: "Contract templates", crumb: "Settings › Proposals & contracts › Contracts", path: "/settings", section: "proposal/contract", page: "settings", panel: "settings.proposal", words: "contracts order form templates" },
   { id: "st-pptx", label: "PowerPoint decks", crumb: "Settings › Proposals & contracts › PowerPoint", path: "/settings", section: "proposal/deck", page: "settings", panel: "settings.proposal", words: "pptx legacy deck" },
   { id: "st-pdf", label: "Order form (PDF)", crumb: "Settings › Proposals & contracts › Order form", path: "/settings", section: "proposal/pdf", page: "settings", panel: "settings.proposal", words: "order form pdf" },
-  { id: "st-tasks", label: "Task settings", crumb: "Settings › Tasks", path: "/settings", section: "tasks", page: "settings", words: "tasks templates tickets types sla" },
+  { id: "st-tasks", label: "Task settings", crumb: "Settings › Tasks", path: "/settings", section: "tasks", page: "settings", words: "tasks templates ticket types sla" },
   { id: "st-ui", label: "Interface", crumb: "Settings › Interface", path: "/settings", section: "interface", page: "settings", words: "sidebar dock labels order outlook" },
   { id: "st-acc", label: "Your account", crumb: "Settings › Your account", path: "/settings", section: "account", page: "settings", words: "profile password email account" },
   { id: "st-deals", label: "Deals settings", crumb: "Settings › Deals page", path: "/settings", section: "salespage", page: "settings", words: "deal fields sales roles potential revenue import export" },
@@ -466,6 +466,15 @@ export function GlobalSearch() {
   }, []);
 
   const fq = fold(q.trim());
+  // contacts, companies and deals are searched in the database (52_search_server.sql): never downloaded whole
+  const [remoteHits, setRemoteHits] = useState<SearchHit[]>([]);
+  useEffect(() => {
+    if (!dir?.remote || !fq) { setRemoteHits([]); return; }
+    let off = false;
+    const t = setTimeout(() => { globalSearch(q.trim(), ["contact", "company", "deal"], 6).then((r) => { if (!off) setRemoteHits(r ?? []); }).catch(() => {}); }, 160);
+    return () => { off = true; clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fq, dir?.remote]);
   const sections = useMemo((): { kind: HitKind; title: string; hits: Hit[] }[] => {
     const me = dir?.me ?? null;
     const coName = new Map((dir?.companies ?? []).map((c) => [c.id, c.name]));
@@ -495,6 +504,9 @@ export function GlobalSearch() {
     (dir?.companies ?? []).forEach((c) => add("company", c.id, c.name, c.legal && c.legal !== c.name ? c.legal : "Company", [c.name, c.legal ?? ""]));
     (dir?.contacts ?? []).forEach((c) => add("contact", c.id, c.name, [c.title, c.email].filter(Boolean).join(" · ") || "Contact", [c.name, c.email ?? ""]));
     (dir?.projects ?? []).forEach((p) => add("project", p.id, p.name, p.clientId ? clName.get(p.clientId) : "Project", [p.name, p.clientId ? clName.get(p.clientId) ?? "" : ""], 0, p));
+    // found by the database: ranked with the same scoring as everything else
+    remoteHits.forEach((h) => add(h.kind, h.id, h.label, h.sub ?? (h.kind === "deal" ? "Deal" : h.kind === "company" ? "Company" : "Contact"),
+      [h.label, h.email ?? "", h.sub ?? ""], h.kind === "deal" && h.status === "active" ? 3 : 0));
     (dir?.people ?? []).forEach((p) => add("person", p.id, p.name, [p.department, p.email].filter(Boolean).join(" · "), [p.name, p.email], -2));
     const best = [...all].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
     const out: { kind: HitKind; title: string; hits: Hit[] }[] = [];
@@ -505,7 +517,7 @@ export function GlobalSearch() {
     });
     out.push({ kind: "action", title: "Actions", hits: [{ kind: "action", id: "new-ticket", label: `Log a ticket: “${q.trim()}”`, sub: "Lands on your desk" }] });
     return out;
-  }, [fq, q, dir, tickets, meetings, recent, navTargets]);
+  }, [fq, q, dir, tickets, meetings, recent, navTargets, remoteHits]);
   const flat = sections.flatMap((s) => s.hits);
   useEffect(() => { setSel(0); }, [fq]);
 
@@ -513,15 +525,17 @@ export function GlobalSearch() {
     pushRecent(h);
     setOpen(false); setQ("");
     inputRef.current?.blur();
+    // leaving the screen: a screen with unsaved work (pipeline editor…) asks first
+    const leave = (f: () => void) => guardedLeave(f);
     switch (h.kind) {
-      case "page": { const t = h.extra as NavTarget; goToSection(nav, t.path, t.section ?? null); break; }
-      case "company": nav("/companies", { state: { focusCompanyId: h.id } }); break;
-      case "contact": nav("/contacts", { state: { focusContactId: h.id } }); break;
-      case "client": nav(`/clients?client=${h.id}`); break;
-      case "deal": nav(`/sales?tracking=${h.id}`); break;
-      case "project": { const p = dir?.projects.find((x) => x.id === h.id); nav(p?.clientId ? `/clients?client=${p.clientId}` : "/projects"); break; }
+      case "page": { const t = h.extra as NavTarget; leave(() => goToSection(nav, t.path, t.section ?? null)); break; }
+      case "company": leave(() => nav("/companies", { state: { focusCompanyId: h.id } })); break;
+      case "contact": leave(() => nav("/contacts", { state: { focusContactId: h.id } })); break;
+      case "client": leave(() => nav(`/clients?client=${h.id}`)); break;
+      case "deal": leave(() => nav(`/sales?tracking=${h.id}`)); break;
+      case "project": { const p = dir?.projects.find((x) => x.id === h.id); leave(() => nav(p?.clientId ? `/clients?client=${p.clientId}` : "/projects")); break; }
       case "ticket": setTicketOpen(h.id); break;
-      case "meeting": nav("/calendar"); break;
+      case "meeting": leave(() => nav("/calendar")); break;
       case "person": { const p = dir?.people.find((x) => x.id === h.id); if (p?.email) window.location.href = `mailto:${p.email}`; break; }
       case "action": setNewTicket(q.trim()); break;
     }

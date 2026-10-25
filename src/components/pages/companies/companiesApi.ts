@@ -383,6 +383,146 @@ export async function contactsPage(opts: { search?: string; sort?: "name" | "cre
   return { rows, total };
 }
 
+// ---- The Contacts list, run by the database (50_contacts_server.sql) ----
+// The page asks only for the rows on screen; filters, sort, search and counts happen in the
+// database, so it stays fast with hundreds of thousands of contacts. Every row comes with what
+// the list shows from other tables: companies (ids + names), types and where each comes from,
+// sales status, pipelines and who can see it.
+/** A filter / sort as the database needs it: each condition carries its field's kind. */
+export interface ServerView { match: "all" | "any"; conds: any[]; sort: any[] }
+let contactsServerMissing = false;
+const isMissingFn = (e: any) => !!e && /42883|PGRST202|could not find the function|does not exist/i.test(`${e.code ?? ""} ${e.message ?? ""}`);
+/** Is the database side installed? (false once a call said it isn't) */
+export const contactsServerReady = () => !contactsServerMissing;
+const contactFromServer = (r: any): Contact => ({ ...r, companyIds: (r.companyIds ?? []).map(String) } as Contact);
+
+/** One page of the list. null = the database side isn't installed (the page then works the old way). */
+export async function contactsList(view: ServerView, search: string, offset: number, limit: number, ctx: Record<string, any> = {}): Promise<{ total: number; rows: Contact[] } | null> {
+  if (contactsServerMissing) return null;
+  for (let a = 0; a < 3; a++) {
+    const { data, error } = await supabase.rpc("contacts_list", { p_view: view, p_search: search.trim() || null, p_offset: offset, p_limit: limit, p_mode: "page", p_ctx: ctx });
+    if (!error && data) return { total: Number((data as any).total ?? 0), rows: (((data as any).rows ?? []) as any[]).map(contactFromServer) };
+    if (isMissingFn(error)) { contactsServerMissing = true; return null; }
+    await new Promise((r) => setTimeout(r, 300 * (a + 1)));
+  }
+  throw new Error("The contacts list could not be read. Try again in a moment.");
+}
+/** Every id matching the view, in list order (select all, shift-select). */
+export async function contactsIds(view: ServerView, search: string, ctx: Record<string, any> = {}): Promise<string[]> {
+  const { data, error } = await supabase.rpc("contacts_list", { p_view: view, p_search: search.trim() || null, p_offset: 0, p_limit: 1, p_mode: "ids", p_ctx: ctx });
+  if (error) throw error;
+  return (((data as any)?.ids ?? []) as any[]).map(String);
+}
+/** How many contacts the view matches (no rows). */
+export async function contactsCount(view: ServerView, search: string, ctx: Record<string, any> = {}): Promise<number | null> {
+  const { data, error } = await supabase.rpc("contacts_list", { p_view: view, p_search: search.trim() || null, p_offset: 0, p_limit: 1, p_mode: "count", p_ctx: ctx });
+  if (error) { if (isMissingFn(error)) contactsServerMissing = true; return null; }
+  contactsServerMissing = false;   // installed since the last "missing" (the SQL was run meanwhile)
+  return Number((data as any)?.total ?? 0);
+}
+/** Given contacts in list format (in the order asked), 1,000 per call. */
+export async function contactsRows(ids: string[]): Promise<Contact[]> {
+  const out: Contact[] = [];
+  for (let i = 0; i < ids.length; i += 1000) {
+    const { data, error } = await supabase.rpc("contacts_rows", { p_ids: ids.slice(i, i + 1000) });
+    if (error) throw error;
+    out.push(...((data ?? []) as any[]).map(contactFromServer));
+  }
+  return out;
+}
+/** What the filters offer (cities, sectors, companies, pipelines, values of your fields…). */
+export interface ContactFacets {
+  language: string[]; country: string[]; city: string[]; province: string[]; co_sector: string[]; co_city: string[];
+  pipelines: string[]; co_types: string[]; companies: { value: string; label: string }[];
+  custom: Record<string, string[]>; co_fields: Record<string, string[]>;
+}
+export async function contactsFacets(): Promise<ContactFacets | null> {
+  const { data, error } = await supabase.rpc("contacts_facets");
+  if (error || !data) return null;
+  return data as ContactFacets;
+}
+/** Contacts matching a search, for pickers (server mode): the first `limit`, by name. */
+export async function searchContacts(q: string, limit = 80): Promise<Contact[]> {
+  const r = await contactsList({ match: "all", conds: [], sort: [{ key: "name", dir: "asc", type: "text" }] }, q, 0, limit).catch(() => null);
+  return r?.rows ?? [];
+}
+/** The people of one company, in list format (server mode). */
+export async function companyPeople(companyId: string): Promise<Contact[]> {
+  const r = await contactsList({ match: "all", conds: [{ id: "co", field: "companies", type: "multi", op: "any", values: [companyId] }], sort: [{ key: "name", dir: "asc", type: "text" }] }, "", 0, 500).catch(() => null);
+  return r?.rows ?? [];
+}
+
+// ---- Search contacts, companies and deals in the database (52_search_server.sql) ----
+export interface SearchHit { kind: "contact" | "company" | "deal"; id: string; label: string; sub?: string | null; email?: string | null; status?: string | null }
+let searchState: Promise<boolean> | null = null;
+/** Is global_search() installed? (asked once per visit; a "no" is asked again after a minute) */
+export function globalSearchReady(): Promise<boolean> {
+  return (searchState ??= Promise.resolve(supabase.rpc("global_search", { p_q: "", p_kinds: ["contact"], p_limit: 1 }))
+    .then(({ error }) => { if (error) setTimeout(() => { searchState = null; }, 60000); return !error; }).catch(() => false));
+}
+/** The best matches per kind; null when the database side isn't installed. */
+export async function globalSearch(q: string, kinds: SearchHit["kind"][] = ["contact", "company", "deal"], limit = 8): Promise<SearchHit[] | null> {
+  if (!(await globalSearchReady())) return null;
+  if (!q.trim()) return [];
+  const { data, error } = await supabase.rpc("global_search", { p_q: q, p_kinds: kinds, p_limit: limit });
+  if (error) return [];
+  return (data ?? []) as SearchHit[];
+}
+
+// ---- The Companies list, run by the database (51_companies_server.sql) ----
+let companiesServerMissing = false;
+const companyFromServer = (r: any): Company => r as Company;
+export async function companiesList(view: ServerView, search: string, offset: number, limit: number): Promise<{ total: number; rows: Company[] } | null> {
+  if (companiesServerMissing) return null;
+  for (let a = 0; a < 3; a++) {
+    const { data, error } = await supabase.rpc("companies_list", { p_view: view, p_search: search.trim() || null, p_offset: offset, p_limit: limit, p_mode: "page", p_ctx: {} });
+    if (!error && data) return { total: Number((data as any).total ?? 0), rows: (((data as any).rows ?? []) as any[]).map(companyFromServer) };
+    if (isMissingFn(error)) { companiesServerMissing = true; return null; }
+    await new Promise((r) => setTimeout(r, 300 * (a + 1)));
+  }
+  throw new Error("The companies list could not be read. Try again in a moment.");
+}
+export async function companiesIds(view: ServerView, search: string): Promise<string[]> {
+  const { data, error } = await supabase.rpc("companies_list", { p_view: view, p_search: search.trim() || null, p_offset: 0, p_limit: 1, p_mode: "ids", p_ctx: {} });
+  if (error) throw error;
+  return (((data as any)?.ids ?? []) as any[]).map(String);
+}
+export async function companiesCount(view: ServerView, search: string): Promise<number | null> {
+  const { data, error } = await supabase.rpc("companies_list", { p_view: view, p_search: search.trim() || null, p_offset: 0, p_limit: 1, p_mode: "count", p_ctx: {} });
+  if (error) { if (isMissingFn(error)) companiesServerMissing = true; return null; }
+  companiesServerMissing = false;
+  return Number((data as any)?.total ?? 0);
+}
+export async function companiesRows(ids: string[]): Promise<Company[]> {
+  const out: Company[] = [];
+  for (let i = 0; i < ids.length; i += 1000) {
+    const { data, error } = await supabase.rpc("companies_rows", { p_ids: ids.slice(i, i + 1000) });
+    if (error) throw error;
+    out.push(...((data ?? []) as any[]).map(companyFromServer));
+  }
+  return out;
+}
+export interface CompanyFacets {
+  sector: string[]; source: string[]; city: string[]; province: string[]; country: string[]; pipelines: string[];
+  parents: { value: string; label: string }[]; contacts: { value: string; label: string }[]; custom: Record<string, string[]>;
+}
+export async function companiesFacets(): Promise<CompanyFacets | null> {
+  const { data, error } = await supabase.rpc("companies_facets");
+  if (error || !data) return null;
+  return data as CompanyFacets;
+}
+/** Every company you can see as id + name + group (pickers, group trees); read once and shared. */
+let lightCache: Promise<Company[]> | null = null;
+export function companiesLight(force = false): Promise<Company[]> {
+  if (!lightCache || force) {
+    lightCache = Promise.resolve(supabase.rpc("companies_light")).then(({ data, error }) => {
+      if (error) throw error;
+      return ((data ?? []) as any[]) as Company[];
+    }).catch((e) => { lightCache = null; throw e; });
+  }
+  return lightCache;
+}
+
 /** Contacts per company, counted by the database (38); null when the function isn't there. */
 export async function companyContactCountsFast(): Promise<Record<string, number> | null> {
   const { data, error } = await supabase.rpc("company_contact_counts");

@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useState, useRef, useCallback, lazy, Suspen
 import { createPortal } from "react-dom";
 import { loadPrefs } from "../pages/companies/companiesApi";
 import { useNavigate, useLocation } from "react-router-dom";
-import { usePageAccess, clearPendingSection, NAV_RESET_EVENT, type PageKey } from "./pageAccess";
+import { usePageAccess, clearPendingSection, guardedLeave, NAV_RESET_EVENT, type PageKey } from "./pageAccess";
 import { supabase } from "../api/supabase";
 import { useAuth } from "../api/AuthProvider";
 
@@ -15,6 +15,8 @@ interface DockItem {
   icon: ReactNode;
   /** Which page this opens — visibility comes from Settings → Organization → Page access. */
   page: PageKey;
+  /** Its own style hook when it shares the page's access (Tickets follows Home). */
+  cls?: string;
 }
 
 // Home is the Next logo (the cube with the N, the chart and the bars), drawn in outline like the other icons.
@@ -84,6 +86,12 @@ const contactsIcon = (
     <path d="M4 7h2M4 12h1.5M4 17h2" />
   </svg>
 );
+const ticketsIcon = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3.5 7.5A1.5 1.5 0 0 1 5 6h14a1.5 1.5 0 0 1 1.5 1.5V10a2 2 0 0 0 0 4v2.5A1.5 1.5 0 0 1 19 18H5a1.5 1.5 0 0 1-1.5-1.5V14a2 2 0 0 0 0-4z" />
+    <path d="M14.5 6v2M14.5 11v2M14.5 16v2" strokeDasharray="0" />
+  </svg>
+);
 const salesIcon = (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
     <path d="M3 3v18h18" />
@@ -111,6 +119,7 @@ export function orderDock<T extends { path: string }>(list: T[], order: string[]
 
 const items: DockItem[] = [
   { label: "Home", path: "/home", icon: homeIcon, page: "home" },
+  { label: "Tickets", path: "/tickets", icon: ticketsIcon, page: "home", cls: "tickets" },
   { label: "Calendar", path: "/calendar", icon: calendarIcon, page: "calendar" },
   { label: "Contacts", path: "/contacts", icon: contactsIcon, page: "contacts" },
   { label: "Companies", path: "/companies", icon: companiesIcon, page: "companies" },
@@ -276,12 +285,14 @@ export default function Dock() {
   };
 
   const item = (it: DockItem) => (
-    <button key={it.path} type="button" className={`rail-item k-${it.page} ${isOn(it.path) ? "is-on" : ""}`} onClick={() => {
+    <button key={it.path} type="button" className={`rail-item k-${it.cls ?? it.page} ${isOn(it.path) ? "is-on" : ""}`} onClick={() => {
         setTip(null);
-        clearPendingSection();
-        // already on this page (maybe deep in a sub-section): back to its overview
-        if (isOn(it.path)) window.dispatchEvent(new CustomEvent(NAV_RESET_EVENT, { detail: it.path }));
-        navigate(it.path);
+        guardedLeave(() => {
+          clearPendingSection();
+          // already on this page (maybe deep in a sub-section): back to its overview
+          if (isOn(it.path)) window.dispatchEvent(new CustomEvent(NAV_RESET_EVENT, { detail: it.path }));
+          navigate(it.path);
+        });
       }}
       aria-label={it.label} aria-current={isOn(it.path) ? "page" : undefined} {...tipOn(it.label)}
       onMouseMove={magnet.onMouseMove} onPointerDown={magnet.onPointerDown}
@@ -326,9 +337,9 @@ export default function Dock() {
             {menu && createPortal(
               <div className="rail-menu" role="menu" ref={menuRef}>
                 <div className="rail-menu-who"><b>{me?.name}</b><span>{me?.email}</span></div>
-                <button type="button" role="menuitem" onClick={() => navigate("/settings", { state: { settingsView: "account" } })}>Account</button>
-                {settings && <button type="button" role="menuitem" onClick={() => navigate("/settings", { state: { settingsView: "interface" } })}>Interface</button>}
-                <button type="button" role="menuitem" className="is-out" onClick={async () => { setMenu(false); await supabase.auth.signOut().catch(() => {}); }}>Sign out</button>
+                <button type="button" role="menuitem" onClick={() => guardedLeave(() => navigate("/settings", { state: { settingsView: "account" } }))}>Account</button>
+                {settings && <button type="button" role="menuitem" onClick={() => guardedLeave(() => navigate("/settings", { state: { settingsView: "interface" } }))}>Interface</button>}
+                <button type="button" role="menuitem" className="is-out" onClick={() => { setMenu(false); guardedLeave(() => { void supabase.auth.signOut().catch(() => {}); }); }}>Sign out</button>
               </div>,
               document.body,
             )}

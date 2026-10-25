@@ -20,7 +20,7 @@ import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
 import { downloadBlob, tableToXlsx, type ExportCell } from "../../framework/exportFile";
 import { ClientImport } from "../contacts/ContactImport";
 import { FilterBar, FilterChips, SortHead, applyView, nextSort, emptyView, useSavedViews, useStoredView, type FField } from "../companies/CompaniesPage";
-import { loadPrefs, savePref, pagedAll } from "../companies/companiesApi";
+import { loadPrefs, savePref } from "../companies/companiesApi";
 import "../companies/CompaniesPage.css";
 import "./ClientsPage.css";
 import { useNavSection } from "../../framework/pageAccess";
@@ -187,13 +187,22 @@ export function ClientList({
       });
       const coOf: Record<string, string> = {};
       ((cl.data ?? []) as any[]).forEach((x) => { if (x.company_id) coOf[x.id] = x.company_id; });
-      // Every company, so a client can also be found by the company's other name
-      // (common or legal) even when the two are not linked.
+      // The clients' companies, plus the companies named like a client (its "twin" when the two
+      // aren't linked), so a client can also be found by the company's other name (common or legal).
+      // Only those are read — never the whole directory (it can be hundreds of thousands).
       const cos: Record<string, any> = {};
       const allCos: any[] = [];
-      const coRows = await pagedAll<any>((count) => supabase.from("companies")
-        .select("id, name, legal_name, vat_number, city, province, country, sector, website", count ? { count: "exact" } : undefined).order("id"));
-      coRows.forEach((x) => { cos[x.id] = x; allCos.push(x); });
+      const COLS = "id, name, legal_name, vat_number, city, province, country, sector, website";
+      const linkedIds = [...new Set(Object.values(coOf))];
+      const firstWord = (n: string) => (n ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Za-z0-9 ]/g, " ").trim().split(/\s+/)[0] ?? "";
+      const stems = [...new Set(clients.map((c) => firstWord(c.name)).filter((w) => w.length >= 3))];
+      const parts = await Promise.all([
+        ...Array.from({ length: Math.ceil(linkedIds.length / 150) }, (_, i) => linkedIds.slice(i * 150, i * 150 + 150))
+          .map((ids) => Promise.resolve(supabase.from("companies").select(COLS).in("id", ids)).then((r: any) => (r.data ?? []) as any[])),
+        ...Array.from({ length: Math.ceil(stems.length / 40) }, (_, i) => stems.slice(i * 40, i * 40 + 40))
+          .map((ws) => Promise.resolve(supabase.from("companies").select(COLS).or(ws.map((w) => `name.ilike.${w}*,legal_name.ilike.${w}*`).join(",")).limit(2000)).then((r: any) => (r.data ?? []) as any[])),
+      ]).catch(() => [] as any[][]);
+      parts.flat().forEach((x) => { if (!cos[x.id]) { cos[x.id] = x; allCos.push(x); } });
       const co: Record<string, any> = {};
       Object.entries(coOf).forEach(([cid, coid]) => { if (cos[coid]) co[cid] = cos[coid]; });
       if (alive) setExtra({ lines: ((cp.data ?? []) as any[]).map((r) => ({ ...r, name: pn[r.product_id] ?? "Product" })), last, tasks, co, cos: allCos });
@@ -1199,13 +1208,17 @@ export function CustomerSuccessPage() {
   useEffect(() => {
     let alive = true;
     (async () => {
-      const [cl, cp, pr, lg, co] = await Promise.all([
+      const [cl, cp, pr, lg] = await Promise.all([
         supabase.from("clients").select("id, name, company_id").order("name"),
         supabase.from("client_products").select("*"),
         supabase.from("products").select("id, name"),
         supabase.from("client_contacts_log").select("client_id, contacted_at, reason, channel, contact_name"),
-        supabase.from("companies").select("id, website"),
       ]);
+      // websites (logos) of the clients' own companies only — not the whole directory
+      const coIds = [...new Set(((cl.data ?? []) as any[]).map((x) => x.company_id).filter(Boolean))] as string[];
+      const coRows = (await Promise.all(Array.from({ length: Math.ceil(coIds.length / 150) }, (_, i) => coIds.slice(i * 150, i * 150 + 150))
+        .map((ids) => Promise.resolve(supabase.from("companies").select("id, website").in("id", ids)).then((r: any) => (r.data ?? []) as any[]))).catch(() => [] as any[][])).flat();
+      const co = { data: coRows };
       const pn: Record<string, string> = {};
       ((pr.data ?? []) as any[]).forEach((x) => { pn[x.id] = x.name; });
       const sites: Record<string, string> = {};

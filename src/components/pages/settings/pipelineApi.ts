@@ -1,9 +1,63 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { supabase } from "../../api/supabase";
 
-export interface Pipeline { id: string; name: string; description?: string | null; source_blueprint_id?: string | null; is_sales?: boolean; sort_order?: number | null; created_at?: string; }
+export interface Pipeline { id: string; name: string; description?: string | null; source_blueprint_id?: string | null; is_sales?: boolean; sort_order?: number | null; folder_id?: string | null; created_at?: string; }
+
+/** A folder of pipelines (Settings → Pipelines); folders can sit inside folders. */
+export interface PipelineFolder { id: string; name: string; parent_id: string | null; sort_order?: number | null; created_at?: string; }
 
 /** The company's order (Settings → Pipelines), then oldest first for any not placed yet. */
+/** Why a save didn't stick: the database said no, or it changed nothing (no permission). */
+const NO_RIGHTS = "Not saved: the database didn't accept the change for your user (no rights to edit pipelines). Ask an admin.";
+function wrote(r: { error: { message: string } | null; data: unknown[] | null }, expect = 1): string | null {
+  if (r.error) return r.error.message;
+  return (r.data ?? []).length < expect ? NO_RIGHTS : null;
+}
+
+// ---- Folders ----
+/** null when the folders table isn't there yet (56_pipeline_folders.sql not run). */
+export async function listFolders(): Promise<PipelineFolder[] | null> {
+  const { data, error } = await supabase.from("pipeline_folders").select("id, name, parent_id, sort_order, created_at").order("created_at");
+  if (error) return null;
+  return (data ?? []) as PipelineFolder[];
+}
+export async function createFolder(name: string, parentId: string | null): Promise<PipelineFolder | string> {
+  const { data, error } = await supabase.from("pipeline_folders").insert({ name, parent_id: parentId }).select().single();
+  if (error) return /pipeline_folders/.test(error.message) ? "Run 56_pipeline_folders.sql in Supabase once to use folders." : error.message;
+  return data as PipelineFolder;
+}
+/** Every folder top-down with its full name ("Sales › Upsell"), for grouping pipelines in lists. */
+export function folderPaths(folders: PipelineFolder[]): { id: string; path: string }[] {
+  const ids = new Set(folders.map((f) => f.id));
+  const parentOf = (f: PipelineFolder) => (f.parent_id && ids.has(f.parent_id) && f.parent_id !== f.id ? f.parent_id : null);
+  const kids = (parent: string | null) => folders.filter((f) => parentOf(f) === parent)
+    .sort((a, b) => ((a.sort_order ?? 1e9) - (b.sort_order ?? 1e9)) || a.name.localeCompare(b.name));
+  const out: { id: string; path: string }[] = [];
+  const walk = (parent: string | null, prefix: string, depth: number) => {
+    if (depth > 64) return;
+    for (const f of kids(parent)) {
+      const path = prefix ? `${prefix} › ${f.name || "Folder"}` : (f.name || "Folder");
+      out.push({ id: f.id, path });
+      walk(f.id, path, depth + 1);
+    }
+  };
+  walk(null, "", 0);
+  return out;
+}
+export async function renameFolder(id: string, name: string): Promise<string | null> {
+  return wrote(await supabase.from("pipeline_folders").update({ name }).eq("id", id).select("id"));
+}
+export async function moveFolder(id: string, parentId: string | null): Promise<string | null> {
+  return wrote(await supabase.from("pipeline_folders").update({ parent_id: parentId }).eq("id", id).select("id"));
+}
+/** Its sub-folders go with it; the pipelines inside move to the top level (the database does both). */
+export async function deleteFolder(id: string): Promise<string | null> {
+  return wrote(await supabase.from("pipeline_folders").delete().eq("id", id).select("id"));
+}
+export async function setPipelineFolder(id: string, folderId: string | null): Promise<string | null> {
+  return wrote(await supabase.from("pipelines").update({ folder_id: folderId }).eq("id", id).select("id"));
+}
+
 export function sortPipelines<T extends { sort_order?: number | null; created_at?: string }>(ps: T[]): T[] {
   return [...ps].sort((a, b) => {
     const x = a.sort_order ?? Number.MAX_SAFE_INTEGER, y = b.sort_order ?? Number.MAX_SAFE_INTEGER;
@@ -18,8 +72,9 @@ export function sortPipelines<T extends { sort_order?: number | null; created_at
  */
 export async function savePipelineOrder(ids: string[]): Promise<string | null> {
   for (let i = 0; i < ids.length; i++) {
-    const { error } = await supabase.from("pipelines").update({ sort_order: i }).eq("id", ids[i]);
-    if (error) return /sort_order/.test(error.message) ? "Run pipelines_order.sql in Supabase once so the order can be saved." : error.message;
+    const r = await supabase.from("pipelines").update({ sort_order: i }).eq("id", ids[i]).select("id");
+    if (r.error) return /sort_order/.test(r.error.message) ? "Run pipelines_order.sql in Supabase once so the order can be saved." : r.error.message;
+    if (!(r.data ?? []).length) return NO_RIGHTS;
   }
   return null;
 }
@@ -81,14 +136,14 @@ export async function listPipelines(): Promise<Pipeline[]> {
   return sortPipelines((data ?? []) as Pipeline[]);
 }
 
-export async function createPipeline(name: string): Promise<Pipeline | null> {
-  const { data, error } = await supabase.from("pipelines").insert({ name }).select().single();
+export async function createPipeline(name: string, folderId?: string | null): Promise<Pipeline | null> {
+  const { data, error } = await supabase.from("pipelines").insert(folderId ? { name, folder_id: folderId } : { name }).select().single();
   if (error) return null;
   return data as Pipeline;
 }
 
-export async function renamePipeline(id: string, name: string) {
-  await supabase.from("pipelines").update({ name }).eq("id", id);
+export async function renamePipeline(id: string, name: string): Promise<string | null> {
+  return wrote(await supabase.from("pipelines").update({ name }).eq("id", id).select("id"));
 }
 export async function setPipelineSales(id: string, isSales: boolean) {
   await supabase.from("pipelines").update({ is_sales: isSales }).eq("id", id);
@@ -368,4 +423,122 @@ export async function syncPipelineToBlueprint(
     x += 280;
   }
   return { added: toAdd.length, removed: toRemove.length };
+}
+
+// ---- The editor's draft: everything is kept on screen until Save ----
+export interface PipelineDraft {
+  name: string; isSales: boolean; folderId: string | null; source: string | null;
+  phases: Phase[]; links: PipelineLink[];
+}
+const PHASE_FIELDS = ["name", "pos_x", "pos_y", "color", "handover_to", "sales_visible", "sales_outcome", "close_probability", "source_phase_key"] as const;
+const same = (a: unknown, b: unknown) => (a ?? null) === (b ?? null);
+const setKey = (xs: string[]) => [...xs].sort().join("|");
+const itemKey = (xs: { type: string; id: string }[]) => xs.map((i) => `${i.type}:${i.id}`).sort().join("|");
+
+/** What Save has to write to turn `base` (as loaded) into `draft` (as on screen). */
+export function diffDraft(base: PipelineDraft, draft: PipelineDraft) {
+  const pipe: Record<string, unknown> = {};
+  if (draft.name.trim() !== base.name) pipe.name = draft.name.trim() || base.name;
+  if (draft.isSales !== base.isSales) pipe.is_sales = draft.isSales;
+  if (!same(draft.folderId, base.folderId)) pipe.folder_id = draft.folderId;
+  if (!same(draft.source, base.source)) pipe.source_blueprint_id = draft.source;
+  const before = new Map(base.phases.map((p) => [p.id, p]));
+  const now = new Map(draft.phases.map((p) => [p.id, p]));
+  const added = draft.phases.filter((p) => !before.has(p.id));
+  const removed = base.phases.filter((p) => !now.has(p.id)).map((p) => p.id);
+  const changed: { id: string; patch: Record<string, unknown> }[] = [];
+  const depts: string[] = [], items: string[] = [];
+  draft.phases.forEach((p) => {
+    const o = before.get(p.id);
+    if (!o) { if (p.deptKeys.length) depts.push(p.id); if (p.items.length) items.push(p.id); return; }
+    const patch: Record<string, unknown> = {};
+    PHASE_FIELDS.forEach((k) => { if (!same((p as any)[k], (o as any)[k])) patch[k] = (p as any)[k] ?? null; });
+    if (Object.keys(patch).length) changed.push({ id: p.id, patch });
+    if (setKey(p.deptKeys) !== setKey(o.deptKeys)) depts.push(p.id);
+    if (itemKey(p.items) !== itemKey(o.items)) items.push(p.id);
+  });
+  const linkKey = (l: PipelineLink) => `${l.from_phase}>${l.to_phase}`;
+  const baseLinks = new Set(base.links.map(linkKey)), draftLinks = new Set(draft.links.map(linkKey));
+  const addLinks = draft.links.filter((l) => !baseLinks.has(linkKey(l)));
+  const delLinks = base.links.filter((l) => !draftLinks.has(linkKey(l))).map((l) => l.id);
+  // a phase moved, renamed and recoloured is one change for the person, not three
+  const touched = new Set([...added.map((p) => p.id), ...removed, ...changed.map((c) => c.id), ...depts, ...items]);
+  const count = Object.keys(pipe).length + touched.size + addLinks.length + delLinks.length;
+  return { pipe, added, removed, changed, depts, items, addLinks, delLinks, count };
+}
+
+/**
+ * Write the draft. Every write is checked: an error, or a write that changed
+ * nothing (your user can't edit pipelines), stops and says why — nothing is
+ * silently lost. Returns null when everything was saved.
+ */
+export async function savePipelineDraft(pipelineId: string, base: PipelineDraft, draft: PipelineDraft): Promise<string | null> {
+  const d = diffDraft(base, draft);
+  let e: string | null;
+  if (Object.keys(d.pipe).length) {
+    e = wrote(await supabase.from("pipelines").update(d.pipe).eq("id", pipelineId).select("id"));
+    if (e) return /folder_id/.test(e) ? "Run 56_pipeline_folders.sql in Supabase once to use folders." : e;
+  }
+  // links first off, so a removed phase doesn't leave its arrows behind
+  if (d.delLinks.length) {
+    e = wrote(await supabase.from("pipeline_links").delete().in("id", d.delLinks).select("id"), d.delLinks.length);
+    if (e) return e;
+  }
+  if (d.removed.length) {
+    const r = await supabase.from("pipeline_phases").delete().in("id", d.removed).select("id");
+    if ((r.error as any)?.code === "23503") {
+      const names = base.phases.filter((p) => d.removed.includes(p.id)).map((p) => `"${p.name}"`).join(", ");
+      return `Can't delete ${names}: deals (or their notes, tasks or meetings) are still in it. Move them to another phase first.`;
+    }
+    e = wrote(r, d.removed.length);
+    if (e) return e;
+  }
+  // a Win / Loss taken off one phase before it's put on another
+  const order = [...d.changed].sort((a, b) => Number(a.patch.sales_outcome !== null) - Number(b.patch.sales_outcome !== null));
+  for (const c of order) {
+    const patch = { ...c.patch };
+    if (patch.pos_x != null) patch.pos_x = Math.round(patch.pos_x as number);
+    if (patch.pos_y != null) patch.pos_y = Math.round(patch.pos_y as number);
+    e = wrote(await supabase.from("pipeline_phases").update(patch).eq("id", c.id).select("id"));
+    if (e) return e;
+  }
+  if (d.added.length) {
+    const rows = d.added.map((p) => {
+      const r: Record<string, unknown> = { id: p.id, pipeline_id: pipelineId, name: p.name || "New phase", pos_x: Math.round(p.pos_x), pos_y: Math.round(p.pos_y) };
+      if (p.source_phase_key) r.source_phase_key = p.source_phase_key;
+      if (p.color) r.color = p.color;
+      if (p.handover_to) r.handover_to = p.handover_to;
+      if (p.sales_visible === false) r.sales_visible = false;
+      if (p.sales_outcome) r.sales_outcome = p.sales_outcome;
+      if (p.close_probability != null) r.close_probability = p.close_probability;
+      return r;
+    });
+    e = wrote(await supabase.from("pipeline_phases").insert(rows).select("id"), rows.length);
+    if (e) return e;
+  }
+  if (d.addLinks.length) {
+    const rows = d.addLinks.map((l) => ({ id: l.id, pipeline_id: pipelineId, from_phase: l.from_phase, to_phase: l.to_phase }));
+    e = wrote(await supabase.from("pipeline_links").insert(rows).select("id"), rows.length);
+    if (e) return e;
+  }
+  const byId = new Map(draft.phases.map((p) => [p.id, p]));
+  for (const id of d.depts) {
+    const p = byId.get(id)!;
+    const del = await supabase.from("pipeline_phase_departments").delete().eq("phase_id", id);
+    if (del.error) return del.error.message;
+    if (p.deptKeys.length) {
+      e = wrote(await supabase.from("pipeline_phase_departments").insert(p.deptKeys.map((k) => ({ phase_id: id, dept_key: k }))).select("phase_id"), p.deptKeys.length);
+      if (e) return e;
+    }
+  }
+  for (const id of d.items) {
+    const p = byId.get(id)!;
+    const del = await supabase.from("pipeline_phase_items").delete().eq("phase_id", id);
+    if (del.error) return del.error.message;
+    if (p.items.length) {
+      e = wrote(await supabase.from("pipeline_phase_items").insert(p.items.map((it) => ({ phase_id: id, item_type: it.type, item_id: it.id }))).select("phase_id"), p.items.length);
+      if (e) return e;
+    }
+  }
+  return null;
 }
