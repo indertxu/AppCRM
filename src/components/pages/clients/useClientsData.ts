@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../../api/supabase";
 import { useAuth } from "../../api/AuthProvider";
@@ -7,7 +7,7 @@ import { markHandoffConverted, createTracking } from "../sales/sales/salesApi";
 import { roleSeesAll, saveCompany, saveContact } from "../companies/companiesApi";
 import {
   emptyAddress, mapClientRole, sortRoles, parseRoleLines, legacyRoleMap, resolveRoleKey, legacyColumnsOf,
-  type Client, type Project, type ProjectType, type Blueprint, type ClientRole, type RoleLine,
+  type Client, type Project, type ProjectType, type Blueprint, type ClientRole, type RoleLine, parseHolds, holdsAfter, projectStatusOf, type HoldPeriod,
 } from "./clientsTypes";
 
 const crmKey = (s: unknown) => String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
@@ -255,6 +255,7 @@ export function useClientsData() {
     team: r.team ?? [],
     status: r.status ?? "open",
     endDate: r.end_date ?? "",
+    holdPeriods: parseHolds(r.hold_periods),
   });
 
   /**
@@ -396,10 +397,55 @@ export function useClientsData() {
     await loadAll();
   };
 
-  const setProjectStatus = async (p: Project, status: string, endDate: string | null) => {
-    const { error } = await supabase.from("projects").update({ status, end_date: endDate }).eq("id", p.id);
-    if (error) { alert(`Could not update project: ${error.message}`); return; }
-    await loadAll();
+  /** Writes status changes; when the database has no hold dates yet (58 not run) it saves the rest and says so once. */
+  const holdsWarned = useRef(false);
+  const writeProject = async (id: string, row: Record<string, unknown>) => {
+    let res = await supabase.from("projects").update(row).eq("id", id).select("id");
+    if (res.error && "hold_periods" in row && /hold_periods|column|schema cache/i.test(res.error.message)) {
+      const { hold_periods: _skip, ...rest } = row; void _skip;
+      res = Object.keys(rest).length ? await supabase.from("projects").update(rest).eq("id", id).select("id") : { data: [{ id }], error: null } as any;
+      if (!res.error && !holdsWarned.current) {
+        holdsWarned.current = true;
+        alert("The hold dates weren't kept: run sql/58_project_hold_dates.sql in Supabase.");
+      }
+    }
+    return res;
+  };
+
+  /** Open / on hold / closed. The list changes at once; the database follows (put back if it refuses).
+   *  Going on hold opens a pause today; leaving it closes the pause (on the end date when closing). */
+  const setProjectStatus = async (p: Project, status: string, endDate: string | null): Promise<boolean> => {
+    const before = projects.find((x) => x.id === p.id);
+    const today = new Date().toISOString().slice(0, 10);
+    const from = projectStatusOf(before?.status ?? p.status), to = projectStatusOf(status);
+    const holds = holdsAfter(before?.holdPeriods ?? p.holdPeriods, from, to, to === "closed" && endDate ? endDate : today);
+    const holdsChanged = JSON.stringify(holds) !== JSON.stringify(before?.holdPeriods ?? p.holdPeriods ?? []);
+    setProjects((cur) => cur.map((x) => (x.id === p.id ? { ...x, status, endDate: endDate ?? "", holdPeriods: holds } : x)));
+    const { data, error } = await writeProject(p.id, { status, end_date: endDate, ...(holdsChanged ? { hold_periods: holds } : {}) });
+    if (error || !data?.length) {
+      if (before) setProjects((cur) => cur.map((x) => (x.id === p.id ? before : x)));
+      const msg = error?.message ?? "you can't change this project";
+      alert(/check constraint|violates/i.test(msg) && status === "on_hold"
+        ? "On hold isn't allowed by the database yet. Run sql/57_project_on_hold.sql in Supabase, then try again."
+        : `Could not update project: ${msg}`);
+      return false;
+    }
+    return true;
+  };
+  /** The pauses as edited by hand in the project panel. */
+  const setProjectHolds = async (p: Project, holds: HoldPeriod[]): Promise<boolean> => {
+    const before = projects.find((x) => x.id === p.id);
+    const clean = parseHolds(holds);
+    setProjects((cur) => cur.map((x) => (x.id === p.id ? { ...x, holdPeriods: clean } : x)));
+    const { data, error } = await supabase.from("projects").update({ hold_periods: clean }).eq("id", p.id).select("id");
+    if (error || !data?.length) {
+      if (before) setProjects((cur) => cur.map((x) => (x.id === p.id ? before : x)));
+      alert(error && /hold_periods|column|schema cache/i.test(error.message)
+        ? "Run sql/58_project_hold_dates.sql in Supabase to keep the hold dates."
+        : `Could not save the hold dates: ${error?.message ?? "you can't change this project"}`);
+      return false;
+    }
+    return true;
   };
 
   const openNewProject = (c: Client) => {
@@ -427,7 +473,7 @@ export function useClientsData() {
 
   return {
     // data
-    clients, projects, projectTypes, blueprints, roles, usage, lineUsage, units, loaded,
+    clients, projects, projectTypes, blueprints, roles, usage, lineUsage, units, loaded, setProjectHolds,
     // ui state
     showForm, setShowForm, detailClient, setDetailClient, editing, setEditing,
     // handoff

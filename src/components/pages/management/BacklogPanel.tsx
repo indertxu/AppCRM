@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import Select from "../../framework/Select";
 import { useInactiveIds } from "../../framework/peopleStatus";
-import { lineRate, roleCounts, roleNameOf, type ClientRole, type RoleLine } from "../clients/clientsTypes";
+import { lineRate, roleCounts, roleNameOf, projectStatusOn, holdDaysIn, type ClientRole, type RoleLine, type HoldPeriod } from "../clients/clientsTypes";
 import "./BacklogPanel.css";
 import { ClientLogo } from "../clients/ClientWorkspace";
 
@@ -24,6 +24,10 @@ export interface BkProj {
   /** The roles sold on the project (days, rate, discount each). */
   lines: RoleLine[];
   status: string;
+  /** When a closed project ended (it counts as open before that day). */
+  endDate?: string;
+  /** Its pauses: time on hold isn't part of the project's length. */
+  holds?: HoldPeriod[];
   team: { userId?: string; role?: string }[];
 }
 
@@ -166,7 +170,7 @@ function BlCard({
   return onClick ? (
     <button type="button" className={cls} data-spot="tilt" style={blVars({ "--i": i })} onClick={onClick} title={title}>{body}</button>
   ) : (
-    <div className={cls} data-spot="tilt" style={blVars({ "--i": i })}>{body}</div>
+    <div className={cls} data-spot="tilt" style={blVars({ "--i": i })} title={title}>{body}</div>
   );
 }
 
@@ -233,6 +237,8 @@ interface ProjRow {
   clientId: string;
   type: string;
   status: string;
+  /** On hold as of the backlog date: kept apart from the active backlog. */
+  hold: boolean;
   kickoff: string;
   sold: Tally;
   billed: Tally;
@@ -260,6 +266,8 @@ export default function BacklogPanel({
   const [open, setOpen] = useState<string | null>(null);
   const [onlyLeft, setOnlyLeft] = useState(true);
   const [onlyUnowned, setOnlyUnowned] = useState(false);
+  /** Active backlog only (default), or active + the projects on hold. Closed projects never count. */
+  const [withHold, setWithHold] = useState(false);
 
   /** Whether time on a role counts for the consultant (a connector, say, doesn't). */
   const counts = (k: string) => roleCounts(k, roles);
@@ -330,13 +338,16 @@ export default function BacklogPanel({
   const rows = useMemo<ProjRow[]>(() => {
     const acc: Record<string, ProjRow> = {};
     Object.values(projects).forEach((p) => {
-      // A project only enters the backlog once it has kicked off.
+      // A project only enters the backlog once it has kicked off, and leaves it once closed.
       if (p.kickoff && p.kickoff > asOf) return;
+      const st = projectStatusOn(p, asOf);
+      if (st === "closed") return;
       acc[p.id] = {
         id: p.id,
         clientId: p.clientId,
         type: typeNames[p.typeId] || "No project type",
         status: p.status,
+        hold: st === "on_hold",
         kickoff: p.kickoff,
         sold: Object.fromEntries(p.lines.map((l) => [l.roleId, l.days])),
         billed: blank(),
@@ -369,6 +380,8 @@ export default function BacklogPanel({
     return Object.values(acc);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entries, projects, typeNames, roles, asOf]);
+  /** The rows that make the backlog shown: active, plus on hold when asked. */
+  const live = useMemo(() => (withHold ? rows : rows.filter((r) => !r.hold)), [rows, withHold]);
 
   /** Still to deliver = sold minus what's already billed, role by role. Scheduled days still count as pending. */
   const availableOf = (r: ProjRow): Tally =>
@@ -400,7 +413,7 @@ export default function BacklogPanel({
   const unownedBacklog = useMemo(() => {
     let days = 0, value = 0;
     const ids = new Set<string>();
-    rows.forEach((r) => {
+    live.forEach((r) => {
       if (sum(r.sold) === 0) return;
       if (onlyLeft && sum(availableOf(r)) <= 0.001) return;
       const p = projects[r.id];
@@ -416,9 +429,9 @@ export default function BacklogPanel({
     });
     return { days, value, projectCount: ids.size, ids };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, projects, onlyLeft, mainRoleByService, roles]);
+  }, [live, projects, onlyLeft, mainRoleByService, roles]);
 
-  const visible = rows
+  const visible = live
     .filter((r) => {
       if (sum(r.sold) === 0) return false;
       if (onlyLeft && sum(availableOf(r)) <= 0.001) return false;
@@ -530,7 +543,7 @@ export default function BacklogPanel({
     if (!consultantFilter) return null;
     let soldDays = 0, billedDays = 0, plannedDays = 0, availDays = 0, availValue = 0;
     let connImplDays = 0, connPendDays = 0, connImplValue = 0, connPendValue = 0;
-    rows.forEach((r) => {
+    live.forEach((r) => {
       if (sum(r.sold) === 0) return;
       const p = projects[r.id];
       if (!p) return;
@@ -565,7 +578,23 @@ export default function BacklogPanel({
       connTotalDays: connImplDays + connPendDays,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [consultantFilter, rows, projects, mainRoleByService, roles]);
+  }, [consultantFilter, live, projects, mainRoleByService, roles]);
+
+  /** The two backlogs side by side — active, and active + on hold — for the switch.
+   *  Same share as the rows: a picked consultant's roles only. Column filters don't apply. */
+  const scopeFig = (() => {
+    const f = { active: { days: 0, value: 0, n: 0 }, hold: { days: 0, value: 0, n: 0 } };
+    rows.forEach((r) => {
+      if (sum(r.sold) === 0) return;
+      if (consultantFilter) { const p = projects[r.id]; if (!p || !responsibleOn(p, consultantFilter)) return; }
+      const a = availForRow(r);
+      const d = inDays(r.id, sum(a));
+      if (d <= 0.001) return;
+      const t = r.hold ? f.hold : f.active;
+      t.days += d; t.value += valueOf(r, a); t.n += 1;
+    });
+    return f;
+  })();
 
   const totalSold = visible.reduce((s, r) => s + inDays(r.id, sum(r.sold)), 0);
   const totalBilled = visible.reduce((s, r) => s + inDays(r.id, sum(r.billed)), 0);
@@ -622,6 +651,8 @@ export default function BacklogPanel({
     return out;
   }, [entries]);
 
+  /** Each project's length: kickoff to the last day logged, minus the days it was on hold. */
+  let holdLeftOut = 0;
   const spans = Object.values(projects)
     .map((p) => {
       const end = lastDay[p.id];
@@ -629,7 +660,10 @@ export default function BacklogPanel({
       const a = new Date(`${p.kickoff}T00:00:00`).getTime();
       const b = new Date(`${end}T00:00:00`).getTime();
       const d = Math.round((b - a) / 86400000);
-      return d >= 0 ? d : null;
+      if (d < 0) return null;
+      const held = Math.min(d, holdDaysIn(p.holds, p.kickoff, end));
+      holdLeftOut += held;
+      return d - held;
     })
     .filter((d): d is number => d !== null);
   const avgSpan = spans.length ? spans.reduce((s, d) => s + d, 0) / spans.length : 0;
@@ -721,6 +755,8 @@ export default function BacklogPanel({
       let value = 0;
       Object.values(projects).forEach((p) => {
         if (p.kickoff && p.kickoff > b.end) return;
+        const st = projectStatusOn(p, b.end);
+        if (st === "closed" || (st === "on_hold" && !withHold)) return;
         const bl = billedSoFar[p.id] ?? blank();
         p.lines.forEach((l) => {
           const left = Math.max(0, l.days - (bl[l.roleId] ?? 0));
@@ -731,7 +767,7 @@ export default function BacklogPanel({
       return { label: b.label, end: b.end, days, value };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bounds, entries, projects]);
+  }, [bounds, entries, projects, withHold]);
 
   const chartKey = chartMode === "days" ? "days" : "value";
   const peak = Math.max(1, ...series.map((p) => p[chartKey]));
@@ -791,7 +827,14 @@ export default function BacklogPanel({
               </span>
               <span className="bl-gauge-txt">
                 <b className="bl-val"><BlCount value={kAvailable} /><em>days left</em></b>
-                <small>of {kSold.toFixed(0)} days sold</small>
+                <small>
+                  of {kSold.toFixed(0)} days sold
+                  {scopeFig.hold.n > 0 && (
+                    <em className={`bl-hold-note ${withHold ? "is-in" : ""}`} title={withHold ? "Projects on hold are included" : "Projects on hold are kept apart"}>
+                      {withHold ? ` · incl. ${scopeFig.hold.days.toFixed(1)}d on hold` : ` · +${scopeFig.hold.days.toFixed(1)}d on hold`}
+                    </em>
+                  )}
+                </small>
               </span>
             </span>
             <span className="bl-facts">
@@ -841,8 +884,9 @@ export default function BacklogPanel({
             )}
           </BlCard>
 
-          <BlCard i={2} icon={BL_ICON.length} label="Avg project length">
-            <b className="bl-val"><BlCount value={avgSpan} /><em>days</em></b>
+          <BlCard i={2} icon={BL_ICON.length} label="Avg project length"
+            title={holdLeftOut > 0 ? `Time on hold left out: ${holdLeftOut} days across the projects` : "From kickoff to the last day logged. Time on hold isn't counted."}>
+            <b className="bl-val"><BlCount value={avgSpan} /><em>{holdLeftOut > 0 ? "days, without holds" : "days"}</em></b>
             <span className="bl-range" aria-hidden="true" title={`${minSpan} to ${maxSpan} days`}>
               <i className="bl-range-band" style={{ left: `${(minSpan / spanMax) * 100}%`, width: `${armed ? ((maxSpan - minSpan) / spanMax) * 100 : 0}%` }} />
               {spans.length > 0 && <i className="bl-range-avg" style={{ left: `${(avgSpan / spanMax) * 100}%` }} />}
@@ -884,10 +928,28 @@ export default function BacklogPanel({
       <section className="bl-sheet">
         {/* ---------- toolbar ---------- */}
         <div className="bl-card bl-toolbar">
+          <div className="bl-scope" role="radiogroup" aria-label="Which backlog">
+            <button type="button" role="radio" aria-checked={!withHold} className={`bl-scope-b ${!withHold ? "is-on" : ""}`} onClick={() => setWithHold(false)}
+              title="Open projects only: what is really there to deliver">
+              <span className="bl-scope-k"><i className="is-active" />Active backlog</span>
+              <b>{scopeFig.active.days.toFixed(1)}<em>d</em></b>
+              <small>{blEur(scopeFig.active.value)} € · {scopeFig.active.n} {scopeFig.active.n === 1 ? "project" : "projects"}</small>
+            </button>
+            <button type="button" role="radio" aria-checked={withHold} className={`bl-scope-b ${withHold ? "is-on" : ""}`} onClick={() => setWithHold(true)}
+              title={scopeFig.hold.n ? "Open projects plus the ones on hold" : "No project is on hold"}>
+              <span className="bl-scope-k"><i className="is-hold" />Backlog + on hold</span>
+              <b>{(scopeFig.active.days + scopeFig.hold.days).toFixed(1)}<em>d</em></b>
+              <small>
+                {blEur(scopeFig.active.value + scopeFig.hold.value)} €
+                {scopeFig.hold.n > 0 ? ` · +${scopeFig.hold.days.toFixed(1)}d in ${scopeFig.hold.n} on hold` : " · none on hold"}
+              </small>
+            </button>
+          </div>
           <p className="bl-note">
             <span className="bl-asof"><BlIcon d={BL_ICON.cal} w={1.9} />As of <b>{asOfLabel}</b></span>
             <span>
               {visible.length} {visible.length === 1 ? "project" : "projects"} across {clientCount} {clientCount === 1 ? "client" : "clients"} kicked off by then
+              {withHold && visible.some((r) => r.hold) ? ` (${visible.filter((r) => r.hold).length} on hold)` : ""}
             </span>
           </p>
           <div className="bl-legend" aria-hidden="true">
@@ -1031,13 +1093,13 @@ export default function BacklogPanel({
               const planW = Math.min(100 - billedW, w(sum(r.planned), sold));
               const teamMax = Math.max(0.0001, ...team.map(([, v]) => v.billed + v.planned));
               return (
-                <div className={`bl-row ${isOpen ? "is-open" : ""} ${unownedBacklog.ids.has(r.id) ? "is-unowned" : ""}`} key={r.id} style={blVars({ "--i": Math.min(ri, 14) })}>
+                <div className={`bl-row ${isOpen ? "is-open" : ""} ${unownedBacklog.ids.has(r.id) ? "is-unowned" : ""} ${r.hold ? "is-hold" : ""}`} key={r.id} style={blVars({ "--i": Math.min(ri, 14) })}>
                   <button type="button" className="bl-row-main" data-spot="" onClick={() => setOpen(isOpen ? null : r.id)} aria-expanded={isOpen}>
                     <span className="bl-who">
                       <ClientLogo className="bl-av mg-logo" name={clientNames[r.clientId] ?? "?"} clientId={r.clientId} />
                       <span className="bl-who-t">
                         <b>{clientNames[r.clientId] ?? "—"}</b>
-                        <small>{r.type}</small>
+                        <small>{r.type}{r.hold && <span className="bl-hold-tag">On hold</span>}</small>
                       </span>
                     </span>
 

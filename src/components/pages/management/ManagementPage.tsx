@@ -7,7 +7,7 @@ import { supabase } from "../../api/supabase";
 import { inBillingMonth, periodOf, billingWindow, type Cutoffs } from "../calendar/billingPeriods";
 import {
   mapClientRole, sortRoles, roleColor, roleLinesOfRow, resolvedLinesOf, legacyRoleMap, resolveRoleKey, roleKeyOf,
-  roleNameOf, roleCounts, rateOn, totalDiscountOf, type ClientRole, type RoleLine,
+  roleNameOf, roleCounts, rateOn, totalDiscountOf, parseHolds, type ClientRole, type RoleLine, type HoldPeriod,
 } from "../clients/clientsTypes";
 import CalendarSettingsModal, { type WorkTypeDef, type Targets, type CapValue } from "../calendar/CalendarSettingsModal";
 import UserTargetModal, { type UserTarget } from "./UserTargetModal";
@@ -57,6 +57,10 @@ interface Proj {
   /** € off the whole project ("total" discount), 0 when none. */
   totalDiscount: number;
   status: string;
+  /** When a closed project ended. */
+  endDate: string;
+  /** Its pauses (on hold): not counted in its length. */
+  holds: HoldPeriod[];
   taxed: boolean;
   taxRate: number;
   legalName: string;
@@ -913,7 +917,12 @@ perDay: 1, minPerDay: 0.5, minPerWeek: 3, minPerMonth: 12, minRevenueWeek: 0, mi
         { data: svcMain },
       ] = await Promise.all([
         supabase.from("work_types").select("id, client_related"),
-        supabase.from("projects").select("id, client_id, service_id, project_type_id, kickoff_date, price_per_day, supervision_price, discount_mode, discount_value, supervision_discount_mode, supervision_discount_value, role_lines, team, consultor_days, connector_days, supervision_days, status, legal_name, vat_number, address, contacts, taxed, tax_rate"),
+        (async () => {
+          // the hold dates come with 58_project_hold_dates.sql; without it the rest still loads
+          const cols = "id, client_id, service_id, project_type_id, kickoff_date, price_per_day, supervision_price, discount_mode, discount_value, supervision_discount_mode, supervision_discount_value, role_lines, team, consultor_days, connector_days, supervision_days, status, end_date, legal_name, vat_number, address, contacts, taxed, tax_rate";
+          const r = await supabase.from("projects").select(`${cols}, hold_periods`);
+          return r.error && /hold_periods|column/i.test(r.error.message) ? await supabase.from("projects").select(cols) : r;
+        })(),
         supabase.from("user_targets").select("*"),
         supabase.from("services").select("id, name"),
         supabase.from("client_roles").select("*"),
@@ -946,6 +955,8 @@ return [r.id, {
           lines: resolvedLinesOf({ roleLines: roleLinesOfRow(r) }, legacy),
           totalDiscount: totalDiscountOf({ discountMode: r.discount_mode, discountValue: Number(r.discount_value) || 0 }),
           status: r.status ?? "open",
+          endDate: r.end_date ?? "",
+          holds: parseHolds(r.hold_periods),
           legalName: r.legal_name ?? "",
           vat: r.vat_number ?? "",
           address: r.address ?? null,

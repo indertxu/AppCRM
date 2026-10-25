@@ -20,7 +20,7 @@ import { useNavigate } from "react-router-dom";
 import { supabase } from "../../api/supabase";
 import { useAuth } from "../../api/AuthProvider";
 import HomeCalendar from "./shared/HomeCalendar";
-import HomeTodo, { TicketDesk, TicketDrawer, TicketDrawerById, TkIco, Avatar, loadDirectory, loadTicketTypes, ticketRef, stageLabel, TICKETS_EVENT, type Directory, type TicketStage } from "./shared/HomeTodo";
+import HomeTodo, { TicketDesk, TicketDrawer, TicketDrawerById, TkIco, Avatar, loadDirectory, loadTicketTypes, ticketRef, stageLabel, TICKETS_EVENT, type Directory, type TicketStage, type ItemCat } from "./shared/HomeTodo";
 import SalesHome from "./sales/SalesHome";
 import ConsultancyHome from "./consultancy/ConsultancyHome";
 import ManagementHome from "./management/ManagementHome";
@@ -336,7 +336,7 @@ export default function HomePage() {
    ===================================================================== */
 type HitKind = "page" | "client" | "company" | "contact" | "deal" | "project" | "ticket" | "person" | "meeting" | "action";
 interface Hit { kind: HitKind; id: string; label: string; sub?: string; score?: number; stage?: TicketStage; extra?: any }
-const KIND_LABEL: Record<HitKind, string> = { page: "Go to", client: "Clients", company: "Companies", contact: "Contacts", deal: "Deals", project: "Projects", ticket: "Tickets", person: "People", meeting: "Up next", action: "Actions" };
+const KIND_LABEL: Record<HitKind, string> = { page: "Go to", client: "Clients", company: "Companies", contact: "Contacts", deal: "Deals", project: "Projects", ticket: "Tickets & tasks", person: "People", meeting: "Up next", action: "Actions" };
 const KIND_ONE: Record<HitKind, string> = { page: "Page", client: "Client", company: "Company", contact: "Contact", deal: "Deal", project: "Project", ticket: "Ticket", person: "Person", meeting: "Meeting", action: "" };
 const KIND_ICON: Record<HitKind, "arrow" | "briefcase" | "building" | "user" | "deal" | "folder" | "inbox" | "clock" | "plus"> = {
   page: "arrow", client: "briefcase", company: "building", contact: "user", deal: "deal", project: "folder", ticket: "inbox", person: "user", meeting: "clock", action: "plus",
@@ -373,7 +373,8 @@ function Mark({ text, q }: { text: string; q: string }) {
 interface NavTarget { id: string; label: string; crumb: string; path: string; section?: string; page: PageKey; panel?: string; words?: string; crmLead?: boolean }
 const NAV_INDEX: NavTarget[] = [
   { id: "home", label: "Home", crumb: "Your day", path: "/home", page: "home", words: "dashboard start overview tickets to-do" },
-  { id: "tickets", label: "Tickets", crumb: "Tickets", path: "/tickets", page: "home", words: "ticketing ticket desk helpdesk support incidents requests to-do todo tareas inbox sla" },
+  { id: "tickets", label: "Tickets", crumb: "Tickets · conversations", path: "/tickets", page: "home", words: "ticketing ticket desk helpdesk support incidents requests inbox sla email e-mail messages calls conversations" },
+  { id: "tasks", label: "Tasks", crumb: "Tasks · the work", path: "/tickets?kind=task", page: "home", words: "tasks task to-do todo tareas work pendientes checklist" },
   { id: "cal", label: "Calendar", crumb: "Calendar", path: "/calendar", page: "calendar", words: "agenda bookings hours" },
   { id: "cal-week", label: "Week view", crumb: "Calendar › Week", path: "/calendar", section: "week", page: "calendar", words: "calendar week semana" },
   { id: "cal-month", label: "Month view", crumb: "Calendar › Month", path: "/calendar", section: "month", page: "calendar", words: "calendar month mes" },
@@ -427,11 +428,12 @@ export function GlobalSearch() {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
   const [dir, setDir] = useState<Directory | null>(null);
-  const [tickets, setTickets] = useState<{ id: string; title: string; no: number | null; stage: TicketStage; due: string | null; assignee: string | null; active: boolean }[]>([]);
+  const [tickets, setTickets] = useState<{ id: string; title: string; no: number | null; stage: TicketStage; due: string | null; assignee: string | null; active: boolean; category: ItemCat }[]>([]);
   const [meetings, setMeetings] = useState<Hit[]>([]);
   const [sel, setSel] = useState(0);
   const [recent, setRecent] = useState<Hit[]>([]);
   const [ticketOpen, setTicketOpen] = useState<string | null>(null);
+  const [newKind, setNewKind] = useState<ItemCat>("task");
   const [newTicket, setNewTicket] = useState<string | null>(null);
   const [types, setTypes] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -443,11 +445,14 @@ export function GlobalSearch() {
     loadDirectory().then(setDir).catch(() => {});
     loadTicketTypes().then(setTypes).catch(() => {});
     (async () => {
-      let r: any = await supabase.from("tracking_tasks").select("id, title, ticket_no, stage, done, status, due_at, assignee_id").order("created_at", { ascending: false }).range(0, 4999);
+      let r: any = await supabase.from("tracking_tasks").select("id, title, ticket_no, stage, done, status, due_at, assignee_id, source, requester_email, requester_name, category").order("created_at", { ascending: false }).range(0, 4999);
+      if (r.error) r = await supabase.from("tracking_tasks").select("id, title, ticket_no, stage, done, status, due_at, assignee_id, source, requester_email, requester_name").order("created_at", { ascending: false }).range(0, 4999);
       if (r.error) r = await supabase.from("tracking_tasks").select("id, title, done, status, due_at").order("created_at", { ascending: false }).range(0, 4999);
       setTickets(((r.data ?? []) as any[]).map((t) => {
         const stage: TicketStage = t.stage ?? (t.done || t.status === "done" ? "resolved" : t.status === "in_progress" ? "in_progress" : t.status === "blocked" ? "waiting" : "open");
-        return { id: t.id, title: t.title ?? "", no: t.ticket_no ?? null, stage, due: t.due_at ?? null, assignee: t.assignee_id ?? null, active: !["resolved", "closed"].includes(stage) };
+        const category: ItemCat = t.category === "ticket" || t.category === "task" ? t.category
+          : ["email", "phone", "portal", "message"].includes(t.source) || t.requester_email || t.requester_name ? "ticket" : "task";
+        return { id: t.id, title: t.title ?? "", no: t.ticket_no ?? null, stage, due: t.due_at ?? null, assignee: t.assignee_id ?? null, active: !["resolved", "closed"].includes(stage), category };
       }));
       const { data: s } = await supabase.auth.getSession();
       const me = s?.session?.user?.id;
@@ -492,10 +497,10 @@ export function GlobalSearch() {
     const clName = new Map((dir?.clients ?? []).map((c) => [c.id, c.name]));
     if (!fq) {
       const mine = tickets.filter((t) => t.active && t.assignee === me).sort((a, b) => (a.due ?? "9").localeCompare(b.due ?? "9")).slice(0, 4)
-        .map((t) => ({ kind: "ticket" as const, id: t.id, label: t.title, sub: `${ticketRef(t)} · ${stageLabel(t.stage)}${t.due ? ` · due ${new Date(t.due).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : ""}`, stage: t.stage }));
+        .map((t) => ({ kind: "ticket" as const, id: t.id, label: t.title, sub: `${t.category === "task" ? "Task" : "Ticket"} ${ticketRef(t)} · ${stageLabel(t.stage, t.category)}${t.due ? ` · due ${new Date(t.due).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : ""}`, stage: t.stage }));
       const out: { kind: HitKind; title: string; hits: Hit[] }[] = [];
       if (recent.length) out.push({ kind: "client", title: "Recent", hits: recent });
-      if (mine.length) out.push({ kind: "ticket", title: "Your open tickets", hits: mine });
+      if (mine.length) out.push({ kind: "ticket", title: "Your open tickets & tasks", hits: mine });
       if (meetings.length) out.push({ kind: "meeting", title: "Up next", hits: meetings });
       return out;
     }
@@ -509,7 +514,7 @@ export function GlobalSearch() {
       const sc = Math.max(scoreOf(t.label, fq), scoreOf(t.crumb.replace(/›/g, " "), fq) - 5, (t.words ? scoreOf(t.words, fq) : 0) - 15);
       if (sc > 0) all.push({ kind: "page", id: t.id, label: t.label, sub: t.crumb, score: sc + 2, extra: t });
     });
-    tickets.forEach((t) => add("ticket", t.id, t.title, `${ticketRef(t)} · ${stageLabel(t.stage)}`, [t.title, ticketRef(t), t.no ? String(t.no) : ""], t.active ? 4 : -10, t));
+    tickets.forEach((t) => add("ticket", t.id, t.title, `${t.category === "task" ? "Task" : "Ticket"} ${ticketRef(t)} · ${stageLabel(t.stage, t.category)}`, [t.title, ticketRef(t), t.no ? String(t.no) : "", t.category], t.active ? 4 : -10, t));
     (dir?.clients ?? []).forEach((c) => add("client", c.id, c.name, "Client", [c.name], 6));
     (dir?.deals ?? []).forEach((d) => add("deal", d.id, d.name, [d.companyId ? coName.get(d.companyId) : null, d.status].filter(Boolean).join(" · ") || "Deal", [d.name, d.companyId ? coName.get(d.companyId) ?? "" : ""], d.status === "active" ? 3 : 0));
     (dir?.companies ?? []).forEach((c) => add("company", c.id, c.name, c.legal && c.legal !== c.name ? c.legal : "Company", [c.name, c.legal ?? ""]));
@@ -526,7 +531,10 @@ export function GlobalSearch() {
       const hits = best.filter((h) => h.kind === k && h !== out[0]?.hits[0]).slice(0, k === "ticket" || k === "page" ? 4 : 3);
       if (hits.length) out.push({ kind: k, title: KIND_LABEL[k], hits });
     });
-    out.push({ kind: "action", title: "Actions", hits: [{ kind: "action", id: "new-ticket", label: `Log a ticket: “${q.trim()}”`, sub: "Lands on your desk" }] });
+    out.push({ kind: "action", title: "Actions", hits: [
+      { kind: "action", id: "new-task", label: `Add a task: “${q.trim()}”`, sub: "Work to do · lands on your list" },
+      { kind: "action", id: "new-ticket", label: `Log a ticket: “${q.trim()}”`, sub: "A message, call or request · lands on your desk" },
+    ] });
     return out;
   }, [fq, q, dir, tickets, meetings, recent, navTargets, remoteHits]);
   const flat = sections.flatMap((s) => s.hits);
@@ -548,7 +556,7 @@ export function GlobalSearch() {
       case "ticket": setTicketOpen(h.id); break;
       case "meeting": leave(() => nav("/calendar")); break;
       case "person": { const p = dir?.people.find((x) => x.id === h.id); if (p?.email) window.location.href = `mailto:${p.email}`; break; }
-      case "action": setNewTicket(q.trim()); break;
+      case "action": setNewKind(h.id === "new-task" ? "task" : "ticket"); setNewTicket(q.trim()); break;
     }
   };
   const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -603,7 +611,7 @@ export function GlobalSearch() {
       )}
       {ticketOpen && <TicketDrawerById id={ticketOpen} onClose={() => setTicketOpen(null)} />}
       {newTicket !== null && dir && (
-        <TicketDrawer ticket={null} draft={{ title: newTicket, assignee: dir.me }} dir={dir} types={types.length ? types : ["Request"]} ready={tickets.length === 0 || tickets.some((t) => t.no != null)}
+        <TicketDrawer ticket={null} draft={{ title: newTicket, assignee: dir.me, category: newKind, ...(newKind === "ticket" ? { source: "message" } : {}) }} dir={dir} types={types.length ? types : ["Request"]} ready={tickets.length === 0 || tickets.some((t) => t.no != null)}
           onClose={() => setNewTicket(null)} onCreated={(id) => { setNewTicket(null); setTicketOpen(id); }} />
       )}
     </div>

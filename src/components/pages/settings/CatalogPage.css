@@ -1390,3 +1390,4 @@ button.pw-rv:hover { border-color: rgba(18, 181, 127, 0.45); transform: translat
   .pw-guide-spot { transition: none; }
   .pw-guide-spot::after, .pw-info.is-nudge::after { animation: none; }
 }
+.cb-var-edit { margin-left: 8px; padding: 1px 8px; border-radius: 999px; background: #fff3e2; color: #b45309; font-style: normal; font-size: 10.5px; font-weight: 700; vertical-align: 1px; }

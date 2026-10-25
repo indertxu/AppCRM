@@ -8,6 +8,7 @@ import { PageLoader } from "../../framework/AppLayout";
 import "../clients/ClientsPage.css";
 import "./ProjectsPage.css";
 import { useNavSection } from "../../framework/pageAccess";
+import { projectStatusOf } from "../clients/clientsTypes";
 
 /**
  * Projects — its own page and sidebar entry, but built on the same data and
@@ -19,7 +20,7 @@ export default function ProjectsPage() {
   const {
     clients, projects, projectTypes, roles, blueprints, lineUsage, loaded,
     editing, setEditing, handoffId, soldSummary,
-    saveClientProject, setProjectStatus,
+    saveClientProject, setProjectStatus, setProjectHolds,
   } = useClientsData();
 
   const [view, setView] = useState<ProjectsViewMode>(() => {
@@ -31,7 +32,8 @@ export default function ProjectsPage() {
   // Same dark floating header as Clients: sized to the title bar + figures, glow follows the pointer.
   const fhRef = useRef<HTMLDivElement>(null);
   useFloatingHero(fhRef, ".cl-bar, .cx-kpis");
-  const open = projects.filter((p) => p.status !== "closed").length;
+  const open = projects.filter((p) => projectStatusOf(p.status) === "open").length;
+  const onHold = projects.filter((p) => projectStatusOf(p.status) === "on_hold").length;
 
   return (
     <div className={`cl cl-ov fh pj-page pj-ov is-${view}`} ref={fhRef} onPointerMove={fhMove} onPointerLeave={fhLeave}>
@@ -39,7 +41,7 @@ export default function ProjectsPage() {
         <div className="cl-bar-left">
           <div>
             <h1 className="cl-title">Projects</h1>
-            <p className="cx-sub">{projects.length} project{projects.length === 1 ? "" : "s"} · {open} open · {clients.length} client{clients.length === 1 ? "" : "s"}</p>
+            <p className="cx-sub">{projects.length} project{projects.length === 1 ? "" : "s"} · {open} open{onHold ? ` · ${onHold} on hold` : ""} · {clients.length} client{clients.length === 1 ? "" : "s"}</p>
           </div>
         </div>
         <div className="pj-views" role="tablist" aria-label="View">
@@ -62,11 +64,8 @@ export default function ProjectsPage() {
         usage={lineUsage}
         roles={roles}
         onOpenProject={(c, p) => setEditing({ client: c, project: p })}
-        onReopen={(p) => setProjectStatus(p, "open", null)}
-        onClose_={(p) => {
-          const d = prompt("End date (YYYY-MM-DD):", new Date().toISOString().slice(0, 10));
-          if (d) setProjectStatus(p, "closed", d);
-        }}
+        onSetStatus={(p, s, end) => setProjectStatus(p, s, s === "closed" ? end : null)}
+        onSetHolds={setProjectHolds}
         view={view}
         blueprints={blueprints}
       />

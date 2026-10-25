@@ -13,7 +13,7 @@ import Select from "../../../framework/Select";
 import { loadPrefs, savePref } from "../../companies/companiesApi";
 import { supabase } from "../../../api/supabase";
 import { loadRoles } from "../../settings/blueprintsApi";
-import { roleLinesOfRow, resolveRoleKey, legacyRoleMap, roleKeyOf, roleCounts, rateOn, lineRate } from "../../clients/clientsTypes";
+import { roleLinesOfRow, resolveRoleKey, legacyRoleMap, roleKeyOf, roleCounts, rateOn, lineRate, projectStatusOn } from "../../clients/clientsTypes";
 import { goToSection } from "../../../framework/pageAccess";
 import { ClientLogo } from "../../clients/ClientWorkspace";
 import { CAL_SUMMARY_EVENT, type CalSummary } from "../shared/HomeCalendar";
@@ -81,14 +81,15 @@ function Ring({ pct, size = 64, stroke = 7, children }: { pct: number; size?: nu
    the same way, and opens the tab it comes from.
    --------------------------------------------------------------------------- */
 type HeroKey =
-  | "booked" | "tickets"
+  | "booked" | "tickets" | "tasks"
   | "billed" | "days" | "planned" | "ontarget" | "dayrate" | "bonus"
-  | "backlog_value" | "backlog_days" | "backlog_projects"
+  | "backlog_value" | "backlog_days" | "backlog_projects" | "backlog_hold"
   | "outstanding" | "late_bills"
   | "incoming";
 const HERO_KPIS: { key: HeroKey; group: string; label: string }[] = [
   { key: "booked", group: "You", label: "Booked today" },
   { key: "tickets", group: "You", label: "Open tickets" },
+  { key: "tasks", group: "You", label: "Open tasks" },
   { key: "billed", group: "Team", label: "Billed this month" },
   { key: "days", group: "Team", label: "Days delivered this month" },
   { key: "planned", group: "Team", label: "Days planned, not confirmed" },
@@ -98,6 +99,7 @@ const HERO_KPIS: { key: HeroKey; group: string; label: string }[] = [
   { key: "backlog_value", group: "Backlog", label: "Unbilled backlog" },
   { key: "backlog_days", group: "Backlog", label: "Days left to deliver" },
   { key: "backlog_projects", group: "Backlog", label: "Projects in backlog" },
+  { key: "backlog_hold", group: "Backlog", label: "Backlog + on hold" },
   { key: "outstanding", group: "Billing", label: "Waiting to be paid" },
   { key: "late_bills", group: "Billing", label: "Bills over a month old" },
   { key: "incoming", group: "Incoming", label: "Won deals to set up" },
@@ -184,12 +186,14 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar,
   const nav = useNavigate();
   const [loading, setLoading] = useState(true);
   const [bills, setBills] = useState<Bill[]>([]);
-  const [backlog, setBacklog] = useState({ consDays: 0, connDays: 0, valueCore: 0, valueConn: 0, value: 0, projects: 0, otherLabel: "Other roles" });
+  const [backlog, setBacklog] = useState({ consDays: 0, connDays: 0, valueCore: 0, valueConn: 0, value: 0, projects: 0, holdDays: 0, holdValue: 0, holdProjects: 0, otherLabel: "Other roles" });
   const [topProjects, setTopProjects] = useState<TopProject[]>([]);
   const [team, setTeam] = useState<PersonRow[]>([]);
   const [teamTotals, setTeamTotals] = useState({ daysDone: 0, daysPlanned: 0, daysTarget: 0, billed: 0, billTarget: 0, bonus: 0 });
   const [cal, setCal] = useState<CalSummary | null>(null);
-  const [tix, setTix] = useState<{ open: number; late: number; today: number } | null>(null);
+  type Tix = { open: number; late: number; today: number };
+  const [tix, setTix] = useState<Tix | null>(null);
+  const [tasks, setTasks] = useState<Tix | null>(null);
   const [slots, setSlots] = useState<HeroKey[]>(HERO_DEFAULT);
   const [picker, setPicker] = useState<DOMRect | null>(null);
   const [incoming, setIncoming] = useState<number | null>(null);
@@ -219,17 +223,22 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar,
   useEffect(() => {
     let alive = true;
     const load = async () => {
-      let r: any = await supabase.from("tracking_tasks").select("id, done, status, stage, due_at").eq("assignee_id", userId).range(0, 4999);
+      let r: any = await supabase.from("tracking_tasks").select("id, done, status, stage, due_at, source, requester_email, requester_name, category").eq("assignee_id", userId).range(0, 4999);
+      if (r.error) r = await supabase.from("tracking_tasks").select("id, done, status, stage, due_at, source, requester_email, requester_name").eq("assignee_id", userId).range(0, 4999);
       if (r.error) r = await supabase.from("tracking_tasks").select("id, done, status, due_at").eq("assignee_id", userId).range(0, 4999);
       if (!alive || r.error) return;
       const now = Date.now();
       const end = new Date(); end.setHours(23, 59, 59, 999);
       const open = ((r.data ?? []) as any[]).filter((t) => !(t.done || t.status === "done" || ["resolved", "closed"].includes(t.stage)));
-      setTix({
-        open: open.length,
-        late: open.filter((t) => t.due_at && new Date(t.due_at).getTime() < now).length,
-        today: open.filter((t) => t.due_at && new Date(t.due_at).getTime() >= now && new Date(t.due_at).getTime() <= end.getTime()).length,
+      // tickets are conversations (e-mail, messages, calls); tasks are the work
+      const isTicket = (t: any) => (t.category ? t.category === "ticket" : ["email", "phone", "portal", "message"].includes(t.source) || !!t.requester_email || !!t.requester_name);
+      const tally = (xs: any[]): Tix => ({
+        open: xs.length,
+        late: xs.filter((t) => t.due_at && new Date(t.due_at).getTime() < now).length,
+        today: xs.filter((t) => t.due_at && new Date(t.due_at).getTime() >= now && new Date(t.due_at).getTime() <= end.getTime()).length,
       });
+      setTix(tally(open.filter(isTicket)));
+      setTasks(tally(open.filter((t) => !isTicket(t))));
     };
     load().catch(() => {});
     const again = () => { load().catch(() => {}); };
@@ -280,13 +289,23 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar,
       }
 
       let consDays = 0, connDays = 0, valueCore = 0, valueConn = 0, projCount = 0;
+      let holdDays = 0, holdValue = 0, holdProjects = 0;
       const tops: TopProject[] = [];
       (projs ?? []).forEach((p: any) => {
-        // only kicked-off projects enter the backlog
+        // only kicked-off projects enter the backlog; closed ones leave it
         if (p.kickoff_date && p.kickoff_date > todayISO) return;
+        const st = projectStatusOn({ status: p.status, endDate: p.end_date }, todayISO);
+        if (st === "closed") return;
         const lines = linesOf(p);
         if (lines.reduce((s, l) => s + l.days, 0) === 0) return;
         const b = billedByProjRole[p.id] || {};
+        // on hold: kept apart from the active backlog (shown as "+ on hold")
+        if (st === "on_hold") {
+          let left = 0, val = 0;
+          for (const l of lines) { const a = Math.max(0, l.days - (b[l.roleId] || 0)); if (a > 0.001) { left += a; val += a * lineRate(l); } }
+          if (left > 0.001) { holdDays += left; holdValue += val; holdProjects += 1; }
+          return;
+        }
         let any = false, left = 0, val = 0;
         for (const l of lines) {
           const avail = Math.max(0, l.days - (b[l.roleId] || 0));
@@ -307,6 +326,7 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar,
           consDays, connDays, valueCore, valueConn,
           value: valueCore + valueConn,
           projects: projCount,
+          holdDays, holdValue, holdProjects,
           otherLabel: others.length ? others.join(", ") : "Other roles",
         });
         setTopProjects(tops.sort((a, b) => b.value - a.value).slice(0, 3));
@@ -479,6 +499,7 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar,
   const cBilled = useCount(loading ? 0 : billedNow);
   const cOut = useCount(loading ? 0 : outstandingTotal);
   const cOpen = useCount(tix?.open ?? 0, 600);
+  const cTasks = useCount(tasks?.open ?? 0, 600);
   const cToday = useCount(cal?.todayMin ?? 0, 700);
   const dateLabel = new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
   const glow = (e: React.PointerEvent<HTMLElement>) => {
@@ -516,6 +537,17 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar,
               {tix && tix.late > 0 && <span className="chx-chip is-late">{tix.late} late</span>}
               {tix && tix.today > 0 && <span className="chx-chip is-today">{tix.today} due today</span>}
               {tix && tix.late === 0 && tix.today === 0 && <span className="chx-chip is-ok">{tix.open ? "All on time" : "Inbox zero"}</span>}
+            </span>
+          </Txt>
+        </Fig>
+      );
+      case "tasks": return (
+        <Fig cls={`is-tix ${tasks && tasks.late > 0 ? "has-late" : ""}`} onClick={go("/tickets?kind=task")} title="Open your tasks">
+          <Txt label="Open tasks" value={tasks ? Math.round(cTasks) : "…"} big>
+            <span className="chx-chips">
+              {tasks && tasks.late > 0 && <span className="chx-chip is-late">{tasks.late} late</span>}
+              {tasks && tasks.today > 0 && <span className="chx-chip is-today">{tasks.today} due today</span>}
+              {tasks && tasks.late === 0 && tasks.today === 0 && <span className="chx-chip is-ok">{tasks.open ? "All on time" : "Nothing pending"}</span>}
             </span>
           </Txt>
         </Fig>
@@ -572,7 +604,13 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar,
       );
       case "backlog_projects": return (
         <Fig onClick={go("/management", "backlog")} title="Open Management › Backlog">
-          <Txt label="Projects in backlog" value={wait ?? backlog.projects} big sub="Kicked off, with days still to deliver" />
+          <Txt label="Projects in backlog" value={wait ?? backlog.projects} big sub={backlog.holdProjects ? `Open, with days to deliver · +${backlog.holdProjects} on hold` : "Open, with days still to deliver"} />
+        </Fig>
+      );
+      case "backlog_hold": return (
+        <Fig onClick={go("/management", "backlog")} title="Open Management › Backlog">
+          <Txt label="Backlog + on hold" value={wait ?? `${eur(backlog.value + backlog.holdValue)} €`}
+            sub={backlog.holdProjects ? `${eur(backlog.holdValue)} € of it on hold · ${backlog.holdProjects} ${backlog.holdProjects === 1 ? "project" : "projects"}` : "Nothing on hold"} />
         </Fig>
       );
       case "outstanding": return (
@@ -638,6 +676,11 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar,
                 <span className="cz-kpi-k">Unbilled value</span>
                 <b className="cz-kpi-v">{loading ? "…" : eur(backlog.value)}<i>€</i></b>
                 <span className="cz-kpi-s">{d1(totalDays)} days left to deliver</span>
+                {backlog.holdProjects > 0 && (
+                  <span className="cz-kpi-s cz-hold" title={`${d1(backlog.holdDays)} days in ${backlog.holdProjects} ${backlog.holdProjects === 1 ? "project" : "projects"} on hold, not in the figure above`}>
+                    +{eur(backlog.holdValue)} € on hold
+                  </span>
+                )}
               </div>
               <div className="cz-kpi-more">
                 <span className="cz-kpi-k">Where it sits</span>
@@ -677,7 +720,7 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar,
               <div className="cz-kpi-rest">
                 <span className="cz-kpi-k">Projects in backlog</span>
                 <b className="cz-kpi-v">{backlog.projects}</b>
-                <span className="cz-kpi-s">kicked off, days to deliver</span>
+                <span className="cz-kpi-s">{backlog.holdProjects ? `open · +${backlog.holdProjects} on hold` : "kicked off, days to deliver"}</span>
               </div>
               <div className="cz-kpi-more">
                 <span className="cz-kpi-k">Biggest</span>

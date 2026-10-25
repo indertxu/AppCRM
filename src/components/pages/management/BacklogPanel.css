@@ -1358,3 +1358,23 @@ svg.bl-hcaret { width: 13px !important; height: 13px !important; }
 .bl-gauge-txt { gap: 2px; }
 .bl-gauge-txt small { font-size: 11.5px; }
 @media (max-width: 860px) { .bl-hero { padding: 0 16px 14px; } }
+
+/* ===== Active backlog vs backlog + on hold ===== */
+.bl-scope { display: inline-flex; gap: 4px; padding: 4px; border-radius: 14px; background: #eef4f1; }
+.bl-scope-b { display: grid; grid-template-columns: auto auto; grid-template-areas: "k k" "v s"; align-items: baseline; gap: 1px 10px;
+  min-width: 190px; padding: 7px 13px 8px; border: 0; border-radius: 11px; background: transparent; font: inherit; text-align: left; color: var(--mute); cursor: pointer;
+  transition: background 0.2s, box-shadow 0.25s, color 0.2s; }
+.bl-scope-b:hover { background: rgba(255, 255, 255, 0.6); }
+.bl-scope-b.is-on { background: #fff; color: var(--bl-ink); box-shadow: 0 1px 2px rgba(14, 26, 21, 0.06), 0 10px 22px -16px rgba(10, 60, 40, 0.5); }
+.bl-scope-b:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(31, 185, 138, 0.25); }
+.bl-scope-k { grid-area: k; display: inline-flex; align-items: center; gap: 7px; font-size: 11.5px; font-weight: 700; letter-spacing: 0.02em; }
+.bl-scope-k i { width: 8px; height: 8px; border-radius: 50%; background: #12b57f; }
+.bl-scope-k i.is-hold { background: linear-gradient(90deg, #12b57f 50%, #e39b35 50%); }
+.bl-scope-b b { grid-area: v; font: 700 19px "Space Grotesk", "Inter", sans-serif; letter-spacing: -0.01em; color: inherit; }
+.bl-scope-b b em { margin-left: 2px; font-size: 12px; font-style: normal; font-weight: 600; color: var(--mute); }
+.bl-scope-b small { grid-area: s; font-size: 11.5px; color: var(--mute); white-space: nowrap; }
+.bl-hold-note { font-style: normal; font-weight: 600; color: #f5c27a; white-space: nowrap; }
+.bl-hold-note.is-in { color: var(--on2); }
+.bl-hold-tag { display: inline-flex; align-items: center; height: 18px; margin-left: 7px; padding: 0 7px; border-radius: 999px; background: rgba(227, 155, 53, 0.14); color: #a8661a; font-size: 10.5px; font-weight: 700; vertical-align: 1px; }
+.bl-row.is-hold { background: #fffcf6; border-color: rgba(227, 155, 53, 0.3); }
+@media (max-width: 760px) { .bl-scope { width: 100%; } .bl-scope-b { flex: 1; min-width: 0; } .bl-scope-b small { white-space: normal; } }

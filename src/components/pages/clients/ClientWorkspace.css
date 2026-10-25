@@ -1050,3 +1050,4 @@
 .cw-line-facts i { font-style: normal; font-size: 9.5px; font-weight: 750; letter-spacing: 0.07em; text-transform: uppercase; color: #6a7a73; }
 .cw-line-facts:empty { display: none; }
 .cw-eng-row.is-static { cursor: default; }
+.cw-status.is-on_hold { background: rgba(217, 131, 36, 0.13); color: #b46a17; }

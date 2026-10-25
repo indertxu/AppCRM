@@ -15,7 +15,7 @@ import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { listEmployees, type Employee } from "../companies/companiesApi";
 import { loadProducts, loadServices, type Product as CatProduct, type Service as CatService } from "../settings/catalogApi";
-import { projectValue, signedOf, legacyRoleMap, resolvedLinesOf, roleCounts, roleNameOf, lineRate, type Client, type Project, type ProjectType } from "./clientsTypes";
+import { projectValue, signedOf, legacyRoleMap, resolvedLinesOf, roleCounts, roleNameOf, lineRate, projectStatusOf, PROJECT_STATUS_LABEL, type Client, type Project, type ProjectType } from "./clientsTypes";
 import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
 import { downloadBlob, tableToXlsx, type ExportCell } from "../../framework/exportFile";
 import { ClientImport } from "../contacts/ContactImport";
@@ -715,7 +715,7 @@ export default function ClientsPage() {
           c.name, p.legalName || null, p.vatNumber || null,
           p.address?.street || null, p.address?.number || null, p.address?.postalCode || null, p.address?.city || null, p.address?.country || null,
           ct?.name || null, ct?.email || null, ct?.phone || null, ct?.position || null,
-          svc(p.projectTypeId) || null, p.status === "closed" ? "Closed" : "Open",
+          svc(p.projectTypeId) || null, PROJECT_STATUS_LABEL[projectStatusOf(p.status)],
           date(p.signingDate), date(p.kickoffDate), date(p.endDate),
           days(cons), days(conn), rate, days(sup), sup.length ? avg(sup) : null,
           null, p.discountMode === "total" ? p.discountValue : null,
@@ -765,7 +765,7 @@ export default function ClientsPage() {
         <div className="cl-bar-left">
           <div>
             <h1 className="cl-title">Clients</h1>
-            <p className="cx-sub">{clients.length} client{clients.length === 1 ? "" : "s"} · {projects.filter((p) => p.status !== "closed").length} open project{projects.filter((p) => p.status !== "closed").length === 1 ? "" : "s"}</p>
+            <p className="cx-sub">{clients.length} client{clients.length === 1 ? "" : "s"} · {projects.filter((p) => projectStatusOf(p.status) === "open").length} open project{projects.filter((p) => projectStatusOf(p.status) === "open").length === 1 ? "" : "s"}</p>
           </div>
         </div>
         <div className="cl-actions">

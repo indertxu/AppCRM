@@ -1084,7 +1084,7 @@ function CalcStep({ p, set }: { p: Product; set: (patch: Partial<Product>) => vo
                       <button type="button" className="cb-var-toggle" onClick={() => setOpenVar(open ? null : i)} aria-expanded={open}>
                         <span className="cb-var-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={kind.icon} /></svg></span>
                         <span className="cb-var-sum">
-                          <b>{v.name.trim() || "Unnamed input"}</b>
+                          <b>{v.name.trim() || "Unnamed input"}{v.price_editable && <em className="cb-var-edit" title="Sales can change its price in the deal's calculator">Editable on deals</em>}</b>
                           <small>{kind.label} · {varSentence(v)}</small>
                         </span>
                         <svg className="cb-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6" /></svg>
@@ -1124,6 +1124,12 @@ function CalcStep({ p, set }: { p: Product; set: (patch: Partial<Product>) => vo
                               {v.var_type === "percent" ? <em>%</em> : perSuffixOf(p) ? <em>{perSuffixOf(p)}</em> : null}
                             </div>
                           </label>
+                          <div className="cb-f"><span>On the deal</span>
+                            <div className="cat-calc-switch" title="Can sales change this price in the deal's calculator?">
+                              <button type="button" className={!v.price_editable ? "on" : ""} onClick={() => setVar(i, { price_editable: false })}>Fixed</button>
+                              <button type="button" className={v.price_editable ? "on" : ""} onClick={() => setVar(i, { price_editable: true })}>Editable</button>
+                            </div>
+                          </div>
                           {isBlock && (
                             <label className="cb-f"><span>Block of</span>
                               <div className="cat-price-input">
@@ -1164,7 +1170,7 @@ function CalcStep({ p, set }: { p: Product; set: (patch: Partial<Product>) => vo
                             </label>
                           )}
                         </div>
-                        <p className="cb-sentence">{varSentence(v)}</p>
+                        <p className="cb-sentence">{varSentence(v)}{v.price_editable ? ` Sales can change the ${v.var_type === "percent" ? "%" : v.var_type === "fixed" ? "amount" : v.var_type === "per_block" ? "price per block" : "price per unit"} for a deal in its calculator.` : ""}</p>
                       </div>
                     )}
                   </div>
@@ -1619,6 +1625,14 @@ function CalculatorEditor({ calc, onChange, ownerType, basePrice, unit, currency
                   {v.var_type === "percent" ? <em>%</em> : amountUnit ? <em>{amountUnit}</em> : null}
                 </div>
               </label>
+
+              <div className="cat-calc-f">
+                <span>On the deal</span>
+                <div className="cat-calc-switch" title="Can sales change this in the deal's calculator?">
+                  <button type="button" className={!v.price_editable ? "on" : ""} onClick={() => setVar(i, { price_editable: false })}>Fixed</button>
+                  <button type="button" className={v.price_editable ? "on" : ""} onClick={() => setVar(i, { price_editable: true })}>Editable</button>
+                </div>
+              </div>
 
               {isBlock && (
                 <label className="cat-calc-f">

@@ -76,7 +76,19 @@ export interface CalcVariable {
   role_rate?: number | null;
   /** Services: rate per day/hour for this variable's time (empty = the line's rate). */
   rate?: number | null;
+  /** Sales can change this input's price (per unit / block, the amount or the %) in the deal's calculator. */
+  price_editable?: boolean | null;
 }
+/** A price changed on the deal is kept with the calculator's values as "<key>@price". */
+export const PRICE_SUFFIX = "@price";
+/** The price an input counts at: the deal's own one when the input allows it, else the catalogue's. */
+export function varAmount(v: CalcVariable, values: Record<string, number>, key = v.id ?? String(v.sort)): number {
+  const o = values[`${key}${PRICE_SUFFIX}`];
+  return v.price_editable && o != null && Number.isFinite(Number(o)) ? Math.max(0, Number(o)) : Number(v.amount) || 0;
+}
+/** The values without the prices changed on the deal: what the catalogue would charge. */
+export const withoutPriceOverrides = (values: Record<string, number>) =>
+  Object.fromEntries(Object.entries(values).filter(([k]) => !k.endsWith(PRICE_SUFFIX)));
 export interface Calculator {
   id?: string;
   owner_type: "product" | "service";
@@ -124,7 +136,7 @@ export function calcBreakdown(
     const key = v.id ?? String(v.sort);
     const raw = values[key];
     const val = raw == null ? Number(v.default_value) || 0 : Number(raw) || 0;
-    const amt = Number(v.amount) || 0;
+    const amt = varAmount(v, values, key);
     const unit = v.unit_label || "units";
     let add = 0;
     let detail = "";
@@ -169,18 +181,19 @@ export function calcTotal(calc: Calculator, values: Record<string, number>, base
     const key = v.id ?? String(v.sort);
     const raw = values[key];
     const val = raw == null ? Number(v.default_value) || 0 : Number(raw) || 0;
+    const amt = varAmount(v, values, key);
     if (v.var_type === "fixed") {
-      if (val) total += Number(v.amount) || 0;
+      if (val) total += amt;
     } else if (v.var_type === "percent") {
-      total += basePrice * ((Number(v.amount) || 0) / 100);
+      total += basePrice * (amt / 100);
     } else {
       const billable = Math.max(0, val - (Number(v.included) || 0));
       if (v.var_type === "per_unit") {
-        total += billable * (Number(v.amount) || 0);
+        total += billable * amt;
       } else {
         const size = Number(v.block_size) || 1;
         const blocks = v.round_mode === "down" ? Math.floor(billable / size) : Math.ceil(billable / size);
-        total += blocks * (Number(v.amount) || 0);
+        total += blocks * amt;
       }
     }
   }
@@ -251,7 +264,10 @@ async function saveCalculatorFor(ownerType: "product" | "service", ownerId: stri
   }
   await supabase.from("calculator_variables").delete().eq("calculator_id", calcId);
   if (calc.variables.length) {
+    // Each input keeps its id, so what deals typed into it (and a price changed there) stays with it.
     const rows = calc.variables.map((v, i) => ({
+      ...(v.id && /^[0-9a-f-]{36}$/i.test(v.id) ? { id: v.id } : {}),
+      price_editable: !!v.price_editable,
       calculator_id: calcId, name: v.name || "", unit_label: v.unit_label || null,
       var_type: v.var_type, amount: v.amount || 0, block_size: v.block_size || 1,
       included: v.included || 0, default_value: v.default_value || 0,
@@ -259,13 +275,27 @@ async function saveCalculatorFor(ownerType: "product" | "service", ownerId: stri
       is_supervision: v.role_id ? false : !!v.is_supervision, role_id: v.role_id || null,
       rate: v.rate == null || (v.rate as any) === "" ? null : Number(v.rate),
     }));
-    let { error } = await supabase.from("calculator_variables").insert(rows);
+    let tryRows: Record<string, unknown>[] = rows;
+    let { error } = await supabase.from("calculator_variables").insert(tryRows);
+    // an id already used by another calculator (a copied one): those inputs get new ids
+    if (error && /duplicate key|already exists/i.test(error.message)) {
+      tryRows = tryRows.map(({ id: _i, ...r }) => r);
+      ({ error } = await supabase.from("calculator_variables").insert(tryRows));
+    }
+    let note: string | null = null;
+    // Before 60_calc_price_editable.sql: save the rest, and say what wasn't kept.
+    if (error && /price_editable/i.test(error.message)) {
+      tryRows = tryRows.map(({ price_editable: _p, ...r }) => r);
+      ({ error } = await supabase.from("calculator_variables").insert(tryRows));
+      if (!error && calc.variables.some((v) => v.price_editable)) note = "Saved, but “price editable on the deal” needs 60_calc_price_editable.sql in Supabase.";
+    }
     // Before 09_roles_migration.sql the role column doesn't exist: save the rest.
     if (error && /role_id/i.test(error.message)) {
-      ({ error } = await supabase.from("calculator_variables").insert(rows.map(({ role_id: _r, ...r }) => r)));
+      ({ error } = await supabase.from("calculator_variables").insert(tryRows.map(({ role_id: _r, ...r }) => r)));
       if (!error && calc.variables.some((v) => v.role_id)) return "Saved, but the role of each row needs 09_roles_migration.sql in Supabase.";
     }
     if (error) return error.message;
+    if (note) return note;
   }
   return null;
 }

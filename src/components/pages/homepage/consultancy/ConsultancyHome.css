@@ -731,3 +731,6 @@
 .chx-pick-foot button:disabled { opacity: 0.45; cursor: default; }
 .chx-pick-foot .is-done { background: #0a6f4d; color: #fff; padding: 0 16px; }
 .chx-pick-foot .is-done:hover { background: #075a3e !important; color: #fff !important; }
+
+/* backlog kept apart: projects on hold */
+.cz-kpi-s.cz-hold { display: block; margin-top: 2px; color: #f5c27a; font-weight: 600; white-space: normal; line-height: 1.3; }

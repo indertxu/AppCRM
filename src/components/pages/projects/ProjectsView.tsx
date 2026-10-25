@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNod
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import type { Client, Project, ProjectType, ClientRole, Blueprint } from "../clients/clientsTypes";
-import { projectValue, legacyRoleMap, resolvedLinesOf, roleNameOf, roleColor, roleCounts } from "../clients/clientsTypes";
+import { projectValue, legacyRoleMap, resolvedLinesOf, roleNameOf, roleColor, roleCounts, projectStatusOf, PROJECT_STATUS_LABEL, daysBetweenIso, holdDaysIn, type ProjectStatus, type HoldPeriod } from "../clients/clientsTypes";
 import Select from "../../framework/Select";
+import DatePicker from "../../framework/DatePicker";
 import { supabase } from "../../api/supabase";
 import { ClientLogo } from "../clients/ClientWorkspace";
 
@@ -18,8 +19,10 @@ interface Props {
   /** Every role, to name and colour each project's role lines. */
   roles: ClientRole[];
   onOpenProject: (c: Client, p: Project) => void;
-  onReopen: (p: Project) => void;
-  onClose_: (p: Project) => void;
+  /** Open / on hold / closed (closed carries its end date). Resolves false when it wasn't saved. */
+  onSetStatus: (p: Project, status: ProjectStatus, endDate: string | null) => Promise<boolean> | void;
+  /** The project's pauses, edited by hand. */
+  onSetHolds?: (p: Project, holds: HoldPeriod[]) => Promise<boolean> | void;
   /** List of cards or the phase canvas (blueprints). */
   view?: ProjectsViewMode;
   /** The services' phase blueprints (order of the canvas columns). */
@@ -36,7 +39,7 @@ const kSpot = (e: { clientX: number; clientY: number; currentTarget: HTMLElement
 };
 
 export default function ProjectsView({
-  clients, projects, projectTypes, usage, roles, onOpenProject, onReopen, onClose_, view = "list", blueprints = [],
+  clients, projects, projectTypes, usage, roles, onOpenProject, onSetStatus, onSetHolds, view = "list", blueprints = [],
 }: Props) {
   const [openId, setOpenId] = useState<string | null>(null);
   const activity = useProjectActivity(projects);
@@ -121,8 +124,7 @@ export default function ProjectsView({
     const list = projects.filter((p) => {
       if (fClient && p.clientId !== fClient) return false;
       if (fType && p.projectTypeId !== fType) return false;
-      if (fStatus === "open" && p.status === "closed") return false;
-      if (fStatus === "closed" && p.status !== "closed") return false;
+      if ((fStatus === "open" || fStatus === "on_hold" || fStatus === "closed") && projectStatusOf(p.status) !== fStatus) return false;
       if (fStatus === "over" && leftOf(p) >= 0) return false;
       if (fStatus === "complete" && progressOf(p) < 100) return false;
       if (fConsultant && !(p.team ?? []).some((m) => m.userId === fConsultant)) return false;
@@ -140,7 +142,8 @@ export default function ProjectsView({
       if (sort === "days") return totalSigned(b) - totalSigned(a);
       if (sort === "progress") return progressOf(b) - progressOf(a);
       if (sort === "left") return leftOf(a) - leftOf(b);
-      const s = (a.status === "closed" ? 1 : 0) - (b.status === "closed" ? 1 : 0);
+      const rank = { open: 0, on_hold: 1, closed: 2 } as const;
+      const s = rank[projectStatusOf(a.status)] - rank[projectStatusOf(b.status)];
       if (s !== 0) return s;
       return (b.kickoffDate || "").localeCompare(a.kickoffDate || "");
     });
@@ -169,7 +172,10 @@ export default function ProjectsView({
         <div className="cx-kpi tone-mint" style={{ ["--i" as any]: 0 }} onPointerMove={kSpot}>
           <span className="cx-kpi-top"><span className="cx-kpi-ico">{kIco("M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z")}</span><span className="cx-kpi-k">Projects</span></span>
           <b className="cx-kpi-v">{shown.length}</b>
-          <span className="cx-kpi-sub">{shown.filter((p) => p.status !== "closed").length} still open</span>
+          <span className="cx-kpi-sub">
+            {shown.filter((p) => projectStatusOf(p.status) === "open").length} open
+            {(() => { const h = shown.filter((p) => projectStatusOf(p.status) === "on_hold").length; return h ? ` · ${h} on hold` : ""; })()}
+          </span>
         </div>
         <div className="cx-kpi tone-teal" style={{ ["--i" as any]: 1 }} onPointerMove={kSpot}>
           <span className="cx-kpi-top"><span className="cx-kpi-ico">{kIco("M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11")}</span><span className="cx-kpi-k">Signed</span></span>
@@ -222,7 +228,8 @@ export default function ProjectsView({
             options={[
               { value: "", label: "Any status" },
               { value: "open", label: "Open" },
-              { value: "closed", label: "Finalized" },
+              { value: "on_hold", label: "On hold" },
+              { value: "closed", label: "Closed" },
               { value: "complete", label: "Fully delivered" },
               { value: "over", label: "Over budget" },
             ]}
@@ -268,13 +275,13 @@ export default function ProjectsView({
             <span>Dates</span>
             <span>Roles · done / sold</span>
             <span className="pv-right">Value</span>
-            <span />
+            <span className="pv-right">Status</span>
           </div>
 
           {shown.map((p) => {
-            const closed = p.status === "closed";
+            const st = projectStatusOf(p.status);
             return (
-              <div className={`pv-row is-clickable ${closed ? "is-closed" : ""}`} key={p.id} role="button" tabIndex={0}
+              <div className={`pv-row is-clickable ${st === "closed" ? "is-closed" : st === "on_hold" ? "is-hold" : ""}`} key={p.id} role="button" tabIndex={0}
                 style={{ ["--i" as any]: Math.min(shown.indexOf(p), 14) } as CSSProperties}
                 onClick={(e) => { if ((e.target as HTMLElement).closest("button, a, input")) return; setOpenId(p.id); }}
                 onKeyDown={(e) => { if (e.key === "Enter" && e.target === e.currentTarget) setOpenId(p.id); }}>
@@ -284,8 +291,7 @@ export default function ProjectsView({
                     <span className="pv-client">{clientName(p.clientId)}</span>
                     <span className="pv-type">
                       {typeName(p.projectTypeId)}
-                      <i className={`pv-dot-status ${closed ? "is-closed" : ""}`} />
-                      {closed ? "closed" : "open"}
+                      {st === "on_hold" && (() => { const h = (p.holdPeriods ?? []).find((x) => !x.to); return h ? <em className="pv-hold-since">· on hold since {fmtShort(h.from)}</em> : null; })()}
                     </span>
                   </span>
                 </div>
@@ -329,19 +335,7 @@ export default function ProjectsView({
                 </div>
 
                 <div className="pv-cell pv-cell-act">
-                  <button
-                    className="pv-act"
-                    title="Edit project"
-                    onClick={() => {
-                      const c = clients.find((x) => x.id === p.clientId);
-                      if (c) onOpenProject(c, p);
-                    }}
-                  >Edit</button>
-                  {closed ? (
-                    <button className="pv-act is-primary" onClick={() => onReopen(p)}>Reopen</button>
-                  ) : (
-                    <button className="pv-act" onClick={() => onClose_(p)}>Close</button>
-                  )}
+                  <StatusPicker status={p.status} endDate={p.endDate} onChange={(s, end) => onSetStatus(p, s, end)} />
                 </div>
               </div>
             );
@@ -361,12 +355,238 @@ export default function ProjectsView({
             roleRows={roleRowsOf(p)} roles={roles} activity={activity} personName={personName}
             onClose={() => setOpenId(null)}
             onEdit={c ? () => { setOpenId(null); onOpenProject(c, p); } : undefined}
-            onReopen={() => onReopen(p)} onCloseProject={() => onClose_(p)} />
+            onSetStatus={(s, end) => onSetStatus(p, s, end)}
+            onSetHolds={onSetHolds ? (h) => onSetHolds(p, h) : undefined} />
         );
       })()}
     </>
   );
 }
+/* ===================================================================== */
+/*  Status: open / on hold / closed, picked from the list or the popup   */
+/* ===================================================================== */
+const ST_ORDER: ProjectStatus[] = ["open", "on_hold", "closed"];
+const ST_HINT: Record<ProjectStatus, string> = {
+  open: "Work goes on. Counts in the backlog.",
+  on_hold: "Paused. Kept apart from the active backlog.",
+  closed: "Finished. Leaves the backlog.",
+};
+const ST_ICON: Record<ProjectStatus, ReactNode> = {
+  open: <path d="M8 5.5v13l10.5-6.5z" />,
+  on_hold: <path d="M9 5.5v13M15 5.5v13" />,
+  closed: <path d="M5 12.5l4.5 4.5L19 7.5" />,
+};
+const fmtShort = (iso: string) => {
+  const d = new Date(`${iso}T12:00:00`);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+};
+const POP_W = 272;
+
+export function StatusPicker({ status, endDate, onChange, tone = "light" }: {
+  status?: string; endDate?: string; tone?: "light" | "dark";
+  onChange: (s: ProjectStatus, end: string | null) => Promise<boolean> | boolean | void;
+}) {
+  const cur = projectStatusOf(status);
+  const [open, setOpen] = useState(false);
+  const [step, setStep] = useState<"pick" | "close">("pick");
+  const [end, setEnd] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [pos, setPos] = useState<{ top?: number; bottom?: number; left: number }>({ left: 0 });
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+
+  const place = () => {
+    const r = btnRef.current?.getBoundingClientRect(); if (!r) return;
+    const below = window.innerHeight - r.bottom;
+    const up = below < 330 && r.top > below;
+    const left = Math.max(8, Math.min(tone === "dark" ? r.left : r.right - POP_W, window.innerWidth - POP_W - 8));
+    setPos(up ? { bottom: window.innerHeight - r.top + 6, left } : { top: r.bottom + 6, left });
+  };
+  const show = () => { place(); setStep("pick"); setOpen(true); };
+  const hide = () => { setOpen(false); setStep("pick"); btnRef.current?.focus(); };
+
+  useEffect(() => {
+    if (!open) return;
+    // the date picker opens above this menu: its clicks and Esc are its own
+    const inDate = (t: EventTarget | null) => t instanceof Element && !!t.closest(".dp-pop, .dp-layer");
+    const down = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (popRef.current?.contains(t) || btnRef.current?.contains(t) || inDate(e.target)) return;
+      setOpen(false); setStep("pick");
+    };
+    const key = (e: KeyboardEvent) => {
+      if (document.querySelector(".dp-pop")) return;
+      if (e.key === "Escape") {
+        e.stopPropagation(); e.preventDefault();
+        if (step === "close") setStep("pick"); else hide();
+        return;
+      }
+      if (step === "pick" && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+        const opts = Array.from(popRef.current?.querySelectorAll<HTMLButtonElement>(".pjst-opt") ?? []);
+        if (!opts.length) return;
+        e.preventDefault();
+        const i = opts.indexOf(document.activeElement as HTMLButtonElement);
+        opts[(i + (e.key === "ArrowDown" ? 1 : -1) + opts.length) % opts.length].focus();
+      }
+    };
+    const away = (e: Event) => { if (popRef.current?.contains(e.target as Node) || document.querySelector(".dp-pop")) return; setOpen(false); setStep("pick"); };
+    window.addEventListener("mousedown", down, true);
+    window.addEventListener("keydown", key, true);
+    window.addEventListener("scroll", away, true);
+    window.addEventListener("resize", away);
+    return () => {
+      window.removeEventListener("mousedown", down, true);
+      window.removeEventListener("keydown", key, true);
+      window.removeEventListener("scroll", away, true);
+      window.removeEventListener("resize", away);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, step]);
+  // focus the current choice when the menu opens
+  useEffect(() => {
+    if (open && step === "pick") popRef.current?.querySelector<HTMLButtonElement>(".pjst-opt.is-on")?.focus();
+  }, [open, step]);
+
+  const apply = async (s: ProjectStatus, d: string | null) => {
+    setOpen(false); setStep("pick");
+    setBusy(true);
+    try { await onChange(s, d); } finally { setBusy(false); }
+  };
+  const choose = (s: ProjectStatus) => {
+    if (s === "closed") { setEnd(endDate || todayIso()); setStep("close"); return; }
+    if (s === cur) { hide(); return; }
+    void apply(s, null);
+  };
+
+  return (
+    <>
+      <button ref={btnRef} type="button" className={`pjst pjst-${tone} is-${cur} ${open ? "is-menu" : ""} ${busy ? "is-busy" : ""}`}
+        aria-haspopup="menu" aria-expanded={open}
+        title={cur === "closed" && endDate ? `Closed on ${fmtShort(endDate)} · change status` : "Change status"}
+        onClick={(e) => { e.stopPropagation(); if (open) hide(); else show(); }}>
+        <i className="pjst-dot" />
+        <span>{PROJECT_STATUS_LABEL[cur]}</span>
+        <svg className="pjst-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M7 10l5 5 5-5" /></svg>
+      </button>
+      {open && createPortal(
+        <div ref={popRef} className={`pjst-pop ${pos.bottom !== undefined ? "is-up" : ""}`} role="menu" aria-label="Project status"
+          style={{ top: pos.top, bottom: pos.bottom, left: pos.left, width: POP_W }}
+          onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
+          {step === "pick" ? (
+            <>
+              <span className="pjst-k">Project status</span>
+              {ST_ORDER.map((s) => (
+                <button key={s} type="button" role="menuitemradio" aria-checked={s === cur}
+                  className={`pjst-opt is-${s} ${s === cur ? "is-on" : ""}`} onClick={() => choose(s)}>
+                  <span className="pjst-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">{ST_ICON[s]}</svg></span>
+                  <span className="pjst-t">
+                    <b>{PROJECT_STATUS_LABEL[s]}</b>
+                    <small>{s === "closed" && cur === "closed" && endDate ? `Ended ${fmtShort(endDate)} · change the date` : ST_HINT[s]}</small>
+                  </span>
+                  {s === cur && <svg className="pjst-tick" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>}
+                </button>
+              ))}
+            </>
+          ) : (
+            <div className="pjst-close">
+              <span className="pjst-k">{cur === "closed" ? "Change the end date" : "Close the project"}</span>
+              <label className="pjst-lbl">End date</label>
+              <DatePicker value={end} onChange={setEnd} />
+              <p className="pjst-note">{cur === "closed" ? "The project stays closed." : "It leaves the backlog. Days not delivered stay unbilled. You can reopen it any time."}</p>
+              <div className="pjst-acts">
+                <button type="button" className="pjst-btn" onClick={() => setStep("pick")}>Back</button>
+                <button type="button" className="pjst-btn is-go" disabled={!end} onClick={() => void apply("closed", end)}>
+                  {cur === "closed" ? "Save date" : "Close project"}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
+/** The project's pauses: when it went on hold and when it came back. Recorded when the status changes,
+ *  editable here. Time on hold doesn't count in the project's duration (Management › Backlog). */
+function HoldPanel({ project: p, status, onSave }: {
+  project: Project; status: ProjectStatus; onSave?: (h: HoldPeriod[]) => Promise<boolean> | void;
+}) {
+  const holds = p.holdPeriods ?? [];
+  const today = todayIso();
+  const [busy, setBusy] = useState(false);
+  if (!holds.length && status !== "on_hold") return null;
+  const save = async (next: HoldPeriod[]) => {
+    if (!onSave) return;
+    setBusy(true);
+    try { await onSave(next.map((h) => ({ from: h.from, to: h.to && h.to < h.from ? h.from : h.to }))); } finally { setBusy(false); }
+  };
+  const put = (i: number, h: HoldPeriod) => save(holds.map((x, k) => (k === i ? h : x)));
+  const openOne = holds.find((h) => !h.to) ?? null;
+  const total = holds.reduce((n, h) => n + Math.max(0, daysBetweenIso(h.from, h.to ?? today)), 0);
+  const end = status === "closed" && p.endDate ? p.endDate : today;
+  const running = p.kickoffDate && p.kickoffDate <= end ? daysBetweenIso(p.kickoffDate, end) : null;
+  const held = p.kickoffDate ? holdDaysIn(holds, p.kickoffDate, end) : 0;
+  const editable = !!onSave;
+  const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
+  return (
+    <div className={`pjd-hold ${status === "on_hold" ? "is-now" : ""} ${busy ? "is-busy" : ""}`}>
+      <div className="pjd-hold-top">
+        <span className="pjd-hold-ico"><Ico d={<path d="M9 5.5v13M15 5.5v13" />} /></span>
+        <div className="pjd-hold-t">
+          <b>
+            {status === "on_hold"
+              ? openOne ? `On hold since ${fmtShort(openOne.from)} · ${plural(Math.max(0, daysBetweenIso(openOne.from, today)), "day")}` : "On hold — since when?"
+              : `Paused ${holds.length === 1 ? "once" : `${holds.length} times`} · ${plural(total, "day")} on hold`}
+          </b>
+          <small>
+            {running != null
+              ? <>{plural(running, "day")} since kickoff · <em>{plural(held, "day")} on hold</em> · <strong>{plural(Math.max(0, running - held), "day")} of work</strong>. Time on hold doesn't count in the average project length.</>
+              : "Time on hold doesn't count in the average project length."}
+          </small>
+        </div>
+      </div>
+      {(holds.length > 0 || (status === "on_hold" && editable)) && (
+        <div className="pjd-hold-list">
+          {holds.map((h, i) => {
+            const live = !h.to && status === "on_hold";
+            return (
+              <div key={`${i}-${h.from}`} className={`pjd-hold-row ${live ? "is-live" : ""}`}>
+                <span className="pjd-hold-k">On hold</span>
+                {editable ? <DatePicker value={h.from} maxDate={h.to ?? today} onChange={(v) => put(i, { ...h, from: v })} /> : <b>{fmtShort(h.from)}</b>}
+                <span className="pjd-hold-k">Back</span>
+                {live ? <span className="pjd-hold-still"><i />Still on hold</span>
+                  : editable ? <DatePicker value={h.to ?? ""} placeholder="Pick the day" onChange={(v) => put(i, { ...h, to: v })} />
+                  : <b>{h.to ? fmtShort(h.to) : "—"}</b>}
+                <span className="pjd-hold-n">{Math.max(0, daysBetweenIso(h.from, h.to ?? today))}<i>d</i></span>
+                {editable && <button type="button" className="pjd-hold-x" title="Remove this pause" aria-label="Remove this pause" onClick={() => save(holds.filter((_, k) => k !== i))}><Ico d={<path d="M6 6l12 12M18 6L6 18" />} /></button>}
+              </div>
+            );
+          })}
+          {editable && status === "on_hold" && !openOne && (
+            <div className="pjd-hold-row is-live">
+              <span className="pjd-hold-k">On hold</span>
+              <DatePicker value="" placeholder="Since when?" maxDate={today} onChange={(v) => save([...holds, { from: v, to: null }])} />
+              <span className="pjd-hold-k">Back</span>
+              <span className="pjd-hold-still"><i />Still on hold</span>
+              <span className="pjd-hold-n" />
+              <span />
+            </div>
+          )}
+          {editable && (
+            <button type="button" className="pjd-hold-add" onClick={() => {
+              const d = new Date(); d.setDate(d.getDate() - 7);
+              const from = d.toISOString().slice(0, 10);
+              save([...holds, { from, to: today }]);
+            }}><Ico d={<path d="M12 5v14M5 12h14" />} />Add an earlier pause</button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ===================================================================== */
 /*  Activity: the time logged on every project (phases, people, dates)   */
 /* ===================================================================== */
@@ -542,15 +762,17 @@ function ProjectCanvas({ projects, activity, blueprints, projectTypes, clientNam
       const cols: { key: string; name: string; items: { p: Project; st: ReturnType<typeof phaseState> }[] }[] =
         names.map((n) => ({ key: n, name: n, items: [] }));
       const none = { key: "__none", name: "No phases yet", items: [] as { p: Project; st: ReturnType<typeof phaseState> }[] };
+      const hold = { key: "__hold", name: "On hold", items: [] as { p: Project; st: ReturnType<typeof phaseState> }[] };
       const done = { key: "__done", name: "Finished", items: [] as { p: Project; st: ReturnType<typeof phaseState> }[] };
       list.forEach((p) => {
         const st = phaseState(p, activity.byProject.get(p.id) ?? []);
-        if (p.status === "closed") { done.items.push({ p, st }); return; }
+        if (projectStatusOf(p.status) === "closed") { done.items.push({ p, st }); return; }
+        if (projectStatusOf(p.status) === "on_hold") { hold.items.push({ p, st }); return; }
         const cur = st.phases[st.current];
         const col = cur ? cols.find((c) => c.name === cur.name) : undefined;
         (col ?? none).items.push({ p, st });
       });
-      const all = [...cols, ...(none.items.length ? [none] : []), done];
+      const all = [...cols, ...(none.items.length ? [none] : []), ...(hold.items.length ? [hold] : []), done];
       return { svc, name: svc === "-" ? "No service" : typeName(svc), blueprint: bp?.name ?? null, count: list.length, cols: all };
     }).sort((a, b) => b.count - a.count);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -588,9 +810,9 @@ function ProjectCanvas({ projects, activity, blueprints, projectTypes, clientNam
           </header>
           <div className="pjc-cols">
             {lane.cols.map((col, ci) => (
-              <div key={col.key} className={`pjc-col ${col.key === "__done" ? "is-done" : col.key === "__none" ? "is-none" : ""}`}>
+              <div key={col.key} className={`pjc-col ${col.key === "__done" ? "is-done" : col.key === "__hold" ? "is-hold" : col.key === "__none" ? "is-none" : ""}`}>
                 <div className="pjc-col-h">
-                  {col.key.startsWith("__") ? <span className="pjc-step is-flag">{col.key === "__done" ? "✓" : "–"}</span> : <span className="pjc-step">{ci + 1}</span>}
+                  {col.key.startsWith("__") ? <span className="pjc-step is-flag">{col.key === "__done" ? "✓" : col.key === "__hold" ? "❚❚" : "–"}</span> : <span className="pjc-step">{ci + 1}</span>}
                   <span className="pjc-col-nm" title={col.name}>{col.name}</span>
                   <span className="pjc-col-n">{col.items.length}</span>
                 </div>
@@ -600,19 +822,20 @@ function ProjectCanvas({ projects, activity, blueprints, projectTypes, clientNam
                     const ph = st.phases[st.current];
                     const phPct = ph && ph.planned > 0 ? Math.min(100, (ph.done / ph.planned) * 100) : 0;
                     const ago = daysAgo(st.lastDate);
-                    const stale = p.status !== "closed" && st.started && ago != null && ago > STALE_DAYS;
+                    const live = projectStatusOf(p.status) === "open";
+                    const stale = live && st.started && ago != null && ago > STALE_DAYS;
                     const spark = weeklySpark(activity.byProject.get(p.id) ?? []);
                     const max = Math.max(...spark, 0.01);
                     const team = Array.from(new Set((p.team ?? []).map((m) => m.userId).filter(Boolean)));
                     return (
-                      <button type="button" key={p.id} className={`pjc-card ${stale ? "is-stale" : ""} ${!st.started && p.status !== "closed" ? "is-new" : ""}`}
+                      <button type="button" key={p.id} className={`pjc-card ${stale ? "is-stale" : ""} ${!st.started && live ? "is-new" : ""}`}
                         style={{ ["--k" as any]: k } as CSSProperties} onClick={() => onOpen(p)}>
                         <span className="pjc-card-top">
                           <ClientLogo className="pjc-logo" name={clientName(p.clientId)} clientId={p.clientId} />
                           <b title={clientName(p.clientId)}>{clientName(p.clientId)}</b>
                           <i className="pjc-pct">{Math.round(progressOf(p))}%</i>
                         </span>
-                        {ph && col.key !== "__done" && (
+                        {ph && col.key !== "__done" && col.key !== "__hold" && (
                           <span className="pjc-ph">
                             <span className="pjc-ph-bar"><i style={{ width: `${phPct}%` }} /></span>
                             <span className="pjc-ph-t">{num(+ph.done.toFixed(2))}/{num(ph.planned)}d in this phase</span>
@@ -623,7 +846,7 @@ function ProjectCanvas({ projects, activity, blueprints, projectTypes, clientNam
                         </span>
                         <span className="pjc-card-foot">
                           <span className={`pjc-ago ${stale ? "is-stale" : ""}`}>
-                            {!st.started && p.status !== "closed" ? "Not started" : stale ? `Quiet for ${ago} days` : agoText(st.lastDate)}
+                            {!st.started && live ? "Not started" : stale ? `Quiet for ${ago} days` : agoText(st.lastDate)}
                           </span>
                           <span className="pjc-avs">
                             {team.slice(0, 3).map((u) => <i key={u} title={personName(u)}>{initialsOf(personName(u))}</i>)}
@@ -675,16 +898,18 @@ function ActivityList({ title, total, upcoming, children }: { title: string; tot
   );
 }
 
-function ProjectDrawer({ project: p, client, serviceName, blueprintName, unit, roleRows, roles, activity, personName, onClose, onEdit, onReopen, onCloseProject }: {
+function ProjectDrawer({ project: p, client, serviceName, blueprintName, unit, roleRows, roles, activity, personName, onClose, onEdit, onSetStatus, onSetHolds }: {
   project: Project; client?: Client; serviceName: string; blueprintName?: string; unit: string; roleRows: RoleRow[]; roles: ClientRole[];
   activity: ProjectActivity; personName: (id: string, fb?: string) => string;
-  onClose: () => void; onEdit?: () => void; onReopen: () => void; onCloseProject: () => void;
+  onClose: () => void; onEdit?: () => void; onSetStatus: (s: ProjectStatus, end: string | null) => Promise<boolean> | void;
+  onSetHolds?: (h: HoldPeriod[]) => Promise<boolean> | void;
 }) {
   const navigate = useNavigate();
   const entries = activity.byProject.get(p.id) ?? [];
   const st = phaseState(p, entries);
   const bills = activity.bills.get(p.id) ?? [];
-  const closed = p.status === "closed";
+  const status = projectStatusOf(p.status);
+  const closed = status === "closed";
   const sold = roleRows.reduce((s, r) => s + r.signed, 0);
   const done = roleRows.reduce((s, r) => s + r.done, 0);
   const booked = roleRows.reduce((s, r) => s + r.booked, 0);
@@ -693,7 +918,6 @@ function ProjectDrawer({ project: p, client, serviceName, blueprintName, unit, r
   const value = projectValue(p);
   const doneValue = sold > 0 ? (value * done) / sold : 0;
   const [sec, setSec] = useState("overview");
-  const [askClose, setAskClose] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
   const SECS = [
     { id: "overview", label: "Overview" },
@@ -768,7 +992,7 @@ function ProjectDrawer({ project: p, client, serviceName, blueprintName, unit, r
   const eur = (n: number) => `${Math.round(n).toLocaleString()} €`;
   const time = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
   const ago = daysAgo(st.lastDate);
-  const stale = !closed && st.started && ago != null && ago > STALE_DAYS;
+  const stale = status === "open" && st.started && ago != null && ago > STALE_DAYS;
 
   return createPortal(
     <div className="pjd-back" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -780,7 +1004,7 @@ function ProjectDrawer({ project: p, client, serviceName, blueprintName, unit, r
               <span className="pjd-eyebrow">Implementation · {serviceName}</span>
               <h2>{client?.name ?? "Project"}</h2>
               <div className="pjd-chips">
-                <span className={`pjd-chip ${closed ? "is-closed" : "is-open"}`}><i />{closed ? "Finished" : "In progress"}</span>
+                <StatusPicker tone="dark" status={p.status} endDate={p.endDate} onChange={onSetStatus} />
                 {st.phases[st.current] && !closed && <span className="pjd-chip">Phase {st.current + 1}/{st.phases.length} · {st.phases[st.current].name}</span>}
                 <span className={`pjd-chip ${stale ? "is-warn" : ""}`}>{stale ? `Quiet for ${ago} days` : agoText(st.lastDate)}</span>
                 {client && <button type="button" className="pjd-chip is-link" onClick={() => { onClose(); navigate(`/clients?client=${client.id}`); }}>Open client →</button>}
@@ -805,19 +1029,13 @@ function ProjectDrawer({ project: p, client, serviceName, blueprintName, unit, r
             ))}
             <div className="pjd-nav-foot">
               {onEdit && <button type="button" className="pjd-btn" onClick={onEdit}><Ico d={<path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />} />Edit project</button>}
-              {closed ? (
-                <button type="button" className="pjd-btn is-primary" onClick={onReopen}>Reopen</button>
-              ) : askClose ? (
-                <span className="pjd-ask">Close it? <button type="button" className="is-yes" onClick={() => { setAskClose(false); onCloseProject(); }}>Yes</button><button type="button" onClick={() => setAskClose(false)}>No</button></span>
-              ) : (
-                <button type="button" className="pjd-btn" onClick={() => setAskClose(true)}>Close project</button>
-              )}
             </div>
           </nav>
 
           <div className="pjd-body" ref={bodyRef}>
             {/* ---- Overview ---- */}
             <section className="pjd-sec" data-sec="overview">
+              <HoldPanel project={p} status={status} onSave={onSetHolds} />
               <div className="pjd-kpis">
                 <div className="pjd-kpi"><span>Sold</span><b>{num(sold)}<i>{unit}</i></b><em>{Math.round(value).toLocaleString()} €</em></div>
                 <div className="pjd-kpi is-done"><span>Done</span><b>{num(+done.toFixed(2))}<i>{unit}</i></b><em>{Math.round(doneValue).toLocaleString()} € delivered</em></div>

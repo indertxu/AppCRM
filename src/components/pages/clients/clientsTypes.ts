@@ -75,6 +75,8 @@ export interface Project {
   team: TeamMember[];
   status: string;
   endDate: string;
+  /** The times the project was on hold (projects.hold_periods, 58_project_hold_dates.sql). */
+  holdPeriods?: HoldPeriod[];
   /** The roles sold on this project (projects.role_lines). Empty only on rows
    *  not migrated yet — then the legacy columns above stand in, see roleLinesOf. */
   roleLines: RoleLine[];
@@ -104,6 +106,58 @@ export interface ClientRole {
   countsForTarget: boolean;
   color?: string | null;
   sort?: number;
+}
+
+/** A project is open (work goes on, counts in the backlog), on hold (paused:
+ *  kept apart from the active backlog) or closed (finished: out of the backlog). */
+export type ProjectStatus = "open" | "on_hold" | "closed";
+export const projectStatusOf = (s?: string | null): ProjectStatus =>
+  s === "closed" ? "closed" : s === "on_hold" || s === "hold" || s === "paused" ? "on_hold" : "open";
+export const PROJECT_STATUS_LABEL: Record<ProjectStatus, string> = { open: "Open", on_hold: "On hold", closed: "Closed" };
+/** Where a project stood on a given day: closed only from its end date on (still open before it).
+ *  On hold carries no date, so it counts as on hold on any day. */
+export const projectStatusOn = (p: { status?: string | null; endDate?: string | null }, day: string): ProjectStatus => {
+  const s = projectStatusOf(p.status);
+  if (s === "closed" && p.endDate && p.endDate > day) return "open";
+  return s;
+};
+
+/** A time the project was paused: from the day it went on hold to the day it came back (null: still on hold). */
+export interface HoldPeriod { from: string; to: string | null }
+export const parseHolds = (v: unknown): HoldPeriod[] =>
+  (Array.isArray(v) ? v : [])
+    .filter((x: any) => x && typeof x.from === "string" && /^\d{4}-\d{2}-\d{2}/.test(x.from))
+    .map((x: any) => ({ from: String(x.from).slice(0, 10), to: typeof x.to === "string" && x.to ? String(x.to).slice(0, 10) : null }))
+    .sort((a, b) => a.from.localeCompare(b.from));
+const dayMs = (iso: string) => new Date(`${iso}T00:00:00Z`).getTime();
+/** Days between two ISO dates (b − a). */
+export const daysBetweenIso = (a: string, b: string) => Math.round((dayMs(b) - dayMs(a)) / 86400000);
+/** Days on hold that fall between `a` and `b` (an open pause runs to `b`). Overlapping pauses count once. */
+export function holdDaysIn(holds: HoldPeriod[] | undefined, a: string, b: string): number {
+  if (!holds?.length || !a || !b || b <= a) return 0;
+  let total = 0, reach = a;
+  for (const h of [...holds].sort((x, y) => x.from.localeCompare(y.from))) {
+    const s = h.from > reach ? h.from : reach;
+    const e = !h.to || h.to > b ? b : h.to;
+    if (e > s) { total += daysBetweenIso(s, e); reach = e; }
+  }
+  return total;
+}
+/** The pauses after a status change: going on hold opens one today, leaving it closes the open one. */
+export function holdsAfter(holds: HoldPeriod[] | undefined, from: ProjectStatus, to: ProjectStatus, day: string): HoldPeriod[] {
+  const list = [...(holds ?? [])];
+  if (to === "on_hold" && from !== "on_hold") {
+    if (!list.some((h) => !h.to)) {
+      // back on hold the same day it came back: the same pause goes on
+      const last = list.length ? list[list.length - 1] : null;
+      if (last && last.to === day) list[list.length - 1] = { ...last, to: null };
+      else list.push({ from: day, to: null });
+    }
+  } else if (from === "on_hold" && to !== "on_hold") {
+    const i = list.findIndex((h) => !h.to);
+    if (i >= 0) list[i] = { ...list[i], to: day < list[i].from ? list[i].from : day };
+  }
+  return list;
 }
 
 /** Colours offered for roles, and the one used when a role has none. */

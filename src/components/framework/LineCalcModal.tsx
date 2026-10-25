@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { calcBreakdown, discountOf, BASE_KEY, type Calculator, type CalcDiscount, type CalcVariable, type TierDuration } from "../pages/settings/catalogApi";
+import { calcBreakdown, discountOf, BASE_KEY, PRICE_SUFFIX, varAmount, withoutPriceOverrides, type Calculator, type CalcDiscount, type CalcVariable, type TierDuration } from "../pages/settings/catalogApi";
 import { lineBreakdown, yearAmounts, hasIncrements, type LineIncrements, type RevenueLineFields, type TermPatch } from "../pages/sales/sales/salesApi";
 import Select from "./Select";
 import { listCompanies, listPartnerRates, partnerCompanies, partnerDefault, partnerCut, type PartnerRate } from "../pages/companies/companiesApi";
@@ -388,7 +388,7 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
   // What the same line would cost at list price: the tier's own price, no
   // commitment, no override, no discounts. The difference is what the deal saves.
   const listBase = tierRaw ?? rolePrice ?? basePrice;
-  const listBd = lineBreakdown({ ...draft, price: listBase, calc_discounts: {}, increments: line.recurring ? inc : null }, calculator, listBase, minUnit);
+  const listBd = lineBreakdown({ ...draft, price: listBase, calc_values: withoutPriceOverrides(values), calc_discounts: {}, increments: line.recurring ? inc : null }, calculator, listBase, minUnit);
   const listTotal = isQtyCalc ? listBd.total + roundExtraDays * listBase : listBd.total;
   const saving = Math.max(0, listTotal - totalShown);
   const savingPct = listTotal > 0 ? (saving / listTotal) * 100 : 0;
@@ -495,16 +495,34 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
     const numeric = v.var_type === "per_unit" || v.var_type === "per_block";
     const hasDisc = (discounts[k]?.mode ?? "none") !== "none";
     const isOpen = openRow === k;
-    const canOpen = numeric || counts || hasDisc || !!qtyCalc;
+    // the input's price, changeable here when the catalogue allows it
+    const editable = !!v.price_editable;
+    const pk = `${k}${PRICE_SUFFIX}`;
+    const listAmt = Number(v.amount) || 0;
+    const amtNow = varAmount(v, values, k);
+    const customPrice = editable && values[pk] != null && Math.abs(Number(values[pk]) - listAmt) > 0.0001;
+    const vNow = customPrice ? { ...v, amount: amtNow } : v;
+    const uWord = v.unit_label || "units";
+    const priceLabel = v.var_type === "percent" ? (isQtyCalc ? "% of the base time" : "% of the base price")
+      : isQtyCalc ? (v.var_type === "per_block" ? `${unitWord} per block` : v.var_type === "fixed" ? unitWord[0].toUpperCase() + unitWord.slice(1) : `${unitWord[0].toUpperCase() + unitWord.slice(1)} per ${singular(uWord)}`)
+      : v.var_type === "per_block" ? "Price per block" : v.var_type === "fixed" ? "Price" : `Price per ${singular(uWord)}`;
+    const priceUnit = v.var_type === "percent" ? "%" : isQtyCalc ? unitWord : v.var_type === "per_block" ? "/ block" : v.var_type === "fixed" ? "" : `/ ${singular(uWord)}`;
+    const setPrice = (n: number) => setValues((x) => ({ ...x, [pk]: Math.max(0, n) }));
+    const listPriceText = v.var_type === "percent" ? `${listAmt}%` : isQtyCalc ? `${listAmt} ${unitWord}` : money(listAmt);
+    const canOpen = numeric || counts || hasDisc || !!qtyCalc || editable;
     return (
       <div key={k} className={`lcx-in ${counts ? "is-on" : ""} ${hot === k ? "is-hot" : ""} ${isOpen ? "is-open" : ""}`} style={{ ["--c" as any]: rowColor(k) }}
         onMouseEnter={() => setHot(k)} onMouseLeave={() => setHot(null)}>
         <div className="lcx-in-top">
-          <button type="button" className="lcx-in-name" onClick={() => canOpen && setOpenRow(isOpen ? null : k)} aria-expanded={isOpen} title={ruleOf(v, isQtyCalc, unitWord, money)}>
+          <button type="button" className="lcx-in-name" onClick={() => canOpen && setOpenRow(isOpen ? null : k)} aria-expanded={isOpen} title={ruleOf(vNow, isQtyCalc, unitWord, money)}>
             <span className="lcx-in-dot" aria-hidden="true" />
             <span className="lcx-in-txt">
               <b>{v.name || "Input"}</b>
-              <small>{ruleOf(v, isQtyCalc, unitWord, money)}</small>
+              <small>
+                {ruleOf(vNow, isQtyCalc, unitWord, money)}
+                {customPrice ? <em className="lcx-in-deal" title={`List: ${listPriceText}`}>deal price</em>
+                  : editable ? <em className="lcx-in-editable" title="You can change this price for this deal">editable</em> : null}
+              </small>
             </span>
           </button>
           <span className={`lcx-in-amt ${rowAmount > 0 || (out ?? 0) > 0 ? "" : "is-zero"}`}>
@@ -516,7 +534,7 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
               <i />
             </button>
           ) : v.var_type === "percent" ? (
-            <span className="lcx-in-pct">+{Number(v.amount) || 0}%</span>
+            <span className="lcx-in-pct">+{amtNow}%</span>
           ) : (
             <Step value={val} onChange={setVal} suffix={plural(v.unit_label || "")} label={v.name} />
           )}
@@ -537,6 +555,21 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
                   <i />{v.included} incl.
                 </span>
               )}
+            </div>
+          )}
+          {editable && (
+            <div className={`lcx-vp ${customPrice ? "is-custom" : ""}`}>
+              <span className="lcx-vp-k">{priceLabel}<small>for this deal</small></span>
+              <label className="lcx-vp-in">
+                {!isQtyCalc && v.var_type !== "percent" && <i>€</i>}
+                <input type="number" min="0" step={v.var_type === "percent" ? 0.5 : isQtyCalc ? 0.25 : 1} value={+amtNow.toFixed(2)} tabIndex={isOpen ? 0 : -1}
+                  onFocus={(e) => e.target.select()} onChange={(e) => setPrice(parseFloat(e.target.value) || 0)} aria-label={`${v.name} — ${priceLabel}`} />
+                {priceUnit && <em>{priceUnit}</em>}
+              </label>
+              {customPrice ? (
+                <button type="button" className="lcx-chipbtn" tabIndex={isOpen ? 0 : -1} title="Back to the catalogue price"
+                  onClick={() => setValues((x) => { const y = { ...x }; delete y[pk]; return y; })}>List {listPriceText}</button>
+              ) : <span className="lcx-vp-list">catalogue price</span>}
             </div>
           )}
           <div className="lcx-in-sub">

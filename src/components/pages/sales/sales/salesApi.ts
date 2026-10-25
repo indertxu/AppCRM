@@ -963,7 +963,9 @@ export async function loadMyTasks(): Promise<MyTask[]> {
   const taggedSet = new Set(taggedIds);
   const others = onMyDeals.filter((t: any) => !taggedSet.has(t.id));
   const mineOnly = (personal as any[]).filter((t) => !t.tracking_id && !taggedSet.has(t.id));
-  let all = [...tagged, ...others, ...mineOnly];
+  // tickets (conversations: e-mail, messages, calls) aren't to-dos — they live in the Tickets list
+  let all = [...tagged, ...others, ...mineOnly].filter((t: any) =>
+    t.category ? t.category !== "ticket" : !["email", "phone", "portal", "message"].includes(t.source));
   if (!all.length) return [];
   all = await autoPromote(all);
   const byId = new Map(all.map((t: any) => [t.id, t]));

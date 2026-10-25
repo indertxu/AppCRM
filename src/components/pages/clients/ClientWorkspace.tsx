@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import type { Client, Project, ProjectType, ClientRole } from "./clientsTypes";
-import { projectValue, signedOf, legacyRoleMap, resolvedLinesOf, lineRate, roleNameOf, roleCounts, totalDiscountOf, domainOf, logoCandidates } from "./clientsTypes";
+import { projectValue, signedOf, legacyRoleMap, resolvedLinesOf, lineRate, roleNameOf, roleCounts, totalDiscountOf, domainOf, logoCandidates, projectStatusOf, PROJECT_STATUS_LABEL } from "./clientsTypes";
 import { supabase } from "../../api/supabase";
 import ClientDirectory, { copyIntoClientFolders } from "./ClientDirectory";
 import { ClientUpsells } from "./ClientsPage";
@@ -791,7 +791,7 @@ export default function ClientWorkspace({
   const [logDate, setLogDate] = useState(todayISO());
   const [logBusy, setLogBusy] = useState(false);
   const [logErr, setLogErr] = useState<string | null>(null);
-  const [projFilter, setProjFilter] = useState<"all" | "open" | "closed">("all");
+  const [projFilter, setProjFilter] = useState<"all" | "open" | "on_hold" | "closed">("all");
   const [confirmDel, setConfirmDel] = useState<string | null>(null);
   const [taskFilter, setTaskFilter] = useState<"open" | "late" | "done" | "all">("open");
   /** Tasks from the sales (before it was a client) or the client's own (after). */
@@ -1070,7 +1070,7 @@ export default function ClientWorkspace({
   /** What the sale signed: recurring lines for their whole term (1 year when none), one-offs and set-up fees. */
   const lineContract = lineContractValue;
   const contractValue = activeLines.reduce((s, l) => s + lineContract(l), 0);
-  const openProjects = projects.filter((p) => p.status !== "closed");
+  const openProjects = projects.filter((p) => projectStatusOf(p.status) === "open");
   const openValue = openProjects.reduce((s, p) => s + projectValue(p), 0);
   const nextRenewal = activeLines.map(termOf).filter((t): t is NonNullable<ReturnType<typeof termOf>> => !!t && t.left >= 0)
     .sort((a, b) => a.end.getTime() - b.end.getTime())[0] ?? null;
@@ -1392,14 +1392,14 @@ export default function ClientWorkspace({
   const engagement = [
     { k: "Client since", v: firstSigned ? fmt(firstSigned) : "" },
     { k: "First kick-off", v: firstKick ? fmt(firstKick) : "" },
-    { k: "Projects", v: `${projects.length} · ${projects.filter((p) => p.status !== "closed").length} open` },
+    { k: "Projects", v: `${projects.length} · ${projects.filter((p) => projectStatusOf(p.status) === "open").length} open` },
     { k: "Sales deals", v: deals.length ? String(deals.length) : "" },
   ];
   const custom = coFields.map((f) => ({ k: f.label, v: customValue(co.custom?.[f.id], f.type) }));
   const filled = [...identity, ...reach, ...place, ...engagement, ...custom].filter((x) => x.v).length;
   const totalFacts = identity.length + reach.length + place.length + engagement.length + custom.length;
 
-  const filteredProjects = projects.filter((p) => projFilter === "all" || (projFilter === "closed" ? p.status === "closed" : p.status !== "closed"));
+  const filteredProjects = projects.filter((p) => projFilter === "all" || projectStatusOf(p.status) === projFilter);
 
   /* ---- hover cards ---- */
   const [tip, setTip] = useState<TipState | null>(null);
@@ -1589,7 +1589,7 @@ export default function ClientWorkspace({
               <div className="cw-ov">
                 <div className="cw-snap" data-sec="glance">
                   <button className="cw-tile" data-tone="green" style={cssVars({ "--i": 0 })} onClick={() => go("projects")}
-                    {...tipOn(<TipCard title="Projects" rows={projRows((p) => `${p.status || "open"} · ${eur(projectValue(p))}`)} />)}>
+                    {...tipOn(<TipCard title="Projects" rows={projRows((p) => `${PROJECT_STATUS_LABEL[projectStatusOf(p.status)]} · ${eur(projectValue(p))}`)} />)}>
                     <span className="cw-tile-top"><span className="cw-tile-ico"><Ico n="briefcase" s={15} /></span><span className="cw-tile-k">Projects</span></span>
                     <b className="cw-tile-v"><Num v={openValue} /><small> €</small></b>
                     <span className="cw-tile-sub">{openProjects.length} open of {projects.length}{projects.length > openProjects.length ? ` · ${eur(totals.value)} in all` : ""}</span>
@@ -2026,8 +2026,9 @@ export default function ClientWorkspace({
                 <div className="cw-toolbar">
                   <Seg value={projFilter} onChange={setProjFilter} options={[
                     { v: "all", label: "All", n: projects.length },
-                    { v: "open", label: "Open", n: projects.filter((p) => p.status !== "closed").length },
-                    { v: "closed", label: "Closed", n: projects.filter((p) => p.status === "closed").length },
+                    { v: "open", label: "Open", n: projects.filter((p) => projectStatusOf(p.status) === "open").length },
+                    ...(projects.some((p) => projectStatusOf(p.status) === "on_hold") ? [{ v: "on_hold" as const, label: "On hold", n: projects.filter((p) => projectStatusOf(p.status) === "on_hold").length }] : []),
+                    { v: "closed", label: "Closed", n: projects.filter((p) => projectStatusOf(p.status) === "closed").length },
                   ]} />
                   <button className="cw-btn-primary" onClick={() => { hideTip(); onNewProject(); }}><Ico n="plus" s={15} />New project</button>
                 </div>
@@ -2051,7 +2052,7 @@ export default function ClientWorkspace({
                         <article key={p.id} className={`cw-proj ${closed ? "is-closed" : ""} ${pl < 0 ? "is-over" : ""}`} style={cssVars({ "--i": i })}
                           role="button" tabIndex={0} onClick={() => { hideTip(); onOpenProject(p); }}
                           onKeyDown={(e) => { if (e.key === "Enter") onOpenProject(p); }}
-                          {...tipOn(<TipCard title={typeName(p.projectTypeId)} sub={`${p.status || "open"} · click to edit`} rows={[
+                          {...tipOn(<TipCard title={typeName(p.projectTypeId)} sub={`${PROJECT_STATUS_LABEL[projectStatusOf(p.status)]} · click to edit`} rows={[
                             ["Used", `${d2(u.done)}${un}`], ["Booked", `${d2(u.planned)}${un}`], ["Left", `${d2(pl)}${un}`], ["Signed", `${d2(days)}${un}`],
                             ["Kick-off", p.kickoffDate ? fmt(p.kickoffDate) : ""], ["End", p.endDate ? fmt(p.endDate) : ""],
                             ["Time elapsed", elapsed != null ? `${Math.round(elapsed * 100)}%` : ""],
@@ -2067,7 +2068,7 @@ export default function ClientWorkspace({
                             </div>
                             <div className="cw-proj-id">
                               <h4>{typeName(p.projectTypeId)}</h4>
-                              <span className={`cw-status ${closed ? "is-closed" : "is-open"}`}><i />{p.status || "open"}</span>
+                              <span className={`cw-status is-${projectStatusOf(p.status)}`}><i />{PROJECT_STATUS_LABEL[projectStatusOf(p.status)]}</span>
                             </div>
                             <b className="cw-proj-val">{eur(projectValue(p))}</b>
                           </header>
