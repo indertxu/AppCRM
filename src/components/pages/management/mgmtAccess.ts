@@ -17,7 +17,7 @@ import { defaultPanelLevel, useDataScope, usePageAccess, type DataScope } from "
 export type Level = "none" | "own" | "all";
 export type Area =
   | "team" | "backlog" | "billing" | "bonus"
-  | "incoming" | "saved_days" | "settings" | "security";
+  | "incoming" | "department" | "saved_days" | "settings" | "security";
 
 export interface AreaDef {
   key: Area;
@@ -34,6 +34,7 @@ export const AREAS: AreaDef[] = [
   { key: "billing", label: "Billing", hint: "Bills and invoices per project", levels: ["none", "own", "all"], group: "tab" },
   { key: "bonus", label: "Bonus", hint: "Bonus per consultant", levels: ["none", "own", "all"], group: "tab" },
   { key: "incoming", label: "Incoming", hint: "Handoffs from sales", levels: ["none", "all"], group: "tab" },
+  { key: "department", label: "Department", hint: "The department's folders, files, links and notes", levels: ["none", "all"], group: "tab" },
   { key: "saved_days", label: "Saved days bank", hint: "Days banked from billing trims", levels: ["none", "own", "all"], group: "tool" },
   { key: "settings", label: "Targets & settings", hint: "The gear: targets, capacity, bonus rules", levels: ["none", "all"], group: "tool" },
   { key: "security", label: "Security", hint: "Edit these access rules", levels: ["none", "all"], group: "tool" },
@@ -93,7 +94,7 @@ export async function loadRules(): Promise<Rule[]> {
 }
 
 /** Panels that can be hidden from Settings › Management › Security. */
-export const HIDEABLE: Area[] = ["team", "backlog", "billing", "bonus", "incoming", "saved_days", "settings"];
+export const HIDEABLE: Area[] = ["team", "backlog", "billing", "bonus", "incoming", "department", "saved_days", "settings"];
 
 /**
  * Current user's access across every Management area.

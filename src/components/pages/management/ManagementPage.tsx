@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode, MouseEvent as ReactMouseEvent, DragEvent as ReactDragEvent } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { PageCover, PageLoader } from "../../framework/AppLayout";
 import { supabase } from "../../api/supabase";
@@ -12,6 +13,7 @@ import {
 import CalendarSettingsModal, { type WorkTypeDef, type Targets, type CapValue } from "../calendar/CalendarSettingsModal";
 import UserTargetModal, { type UserTarget } from "./UserTargetModal";
 import DatePicker from "../../framework/DatePicker";
+import Select from "../../framework/Select";
 import BacklogPanel from "./BacklogPanel";
 import SavedDaysModal from "./SavedDaysModal";
 import BonusPanel from "./BonusPanel";
@@ -23,7 +25,7 @@ import { useMgmtAccess, type Level } from "./mgmtAccess";
 import { useInactiveIds } from "../../framework/peopleStatus";
 import { ClientLogo } from "../clients/ClientWorkspace";
 import "./ManagementPage.css";
-import { useNavSection } from "../../framework/pageAccess";
+import { useNavSection, useDepartments, usePageAccess } from "../../framework/pageAccess";
 
 const MONTHS_FULL = [
   "January", "February", "March", "April", "May", "June",
@@ -712,19 +714,20 @@ export default function ManagementPage() {
   // Which of the top KPI gauges (by key: "days" / "money") is showing the
   // planned+realized breakdown instead of its single headline figure.
   const [kpiBreakdown, setKpiBreakdown] = useState<Record<string, boolean>>({});
-  const [tab, setTab] = useState<"team" | "backlog" | "billing" | "bonus" | "incoming">("team");
+  const [tab, setTab] = useState<"team" | "backlog" | "billing" | "bonus" | "incoming" | "department">("team");
   // Global search → Management › a tab (deep link "management/<tab>[/<billing phase>]").
   useNavSection("/management", 0, (part) => {
-    if (["team", "backlog", "billing", "bonus", "incoming"].includes(part)) { setTab(part as typeof tab); if (part === "billing") setScope("month"); }
+    if (["team", "backlog", "billing", "bonus", "incoming", "department"].includes(part)) { setTab(part as typeof tab); if (part === "billing") setScope("month"); }
   });
 
   /* ---- access control (Security settings, stored in mgmt_access) ---- */
   const access = useMgmtAccess();
+  const myDeptKey = usePageAccess().department;
   const lv = (a: Parameters<typeof access.level>[0]): Level => access.level(a);
   const lvTeam = lv("team"), lvBacklog = lv("backlog"), lvBilling = lv("billing"), lvBonus = lv("bonus");
   const TAB_DEFS = [
     { key: "team", label: "Team" }, { key: "backlog", label: "Backlog" }, { key: "billing", label: "Billing" },
-    { key: "bonus", label: "Bonus" }, { key: "incoming", label: "Incoming" },
+    { key: "bonus", label: "Bonus" }, { key: "incoming", label: "Incoming" }, { key: "department", label: "Department" },
   ] as const;
   const visibleTabs = TAB_DEFS.filter((t) => lv(t.key) !== "none");
   // Whether the page itself opens is decided in Settings → Organization → Page access;
@@ -1727,8 +1730,8 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
 
   return (
     <div ref={fhSet} onPointerMove={fhMove} onPointerLeave={fhLeave}
-      className={`mg mg-tab-${tab} ${tab === "team" || tab === "backlog" || tab === "billing" || tab === "bonus" || tab === "incoming" ? "mg-dark fh" : ""}`}>
-      <LoadingOverlay show={loading} />
+      className={`mg mg-tab-${tab} ${tab === "team" || tab === "backlog" || tab === "billing" || tab === "bonus" || tab === "incoming" || tab === "department" ? "mg-dark fh" : ""}`}>
+      <LoadingOverlay show={loading && tab !== "department"} />
       <header className="mg-bar">
         <div className="mg-bar-left">
           <button className="mg-home" onClick={() => navigate("/home")} aria-label="Back to home">‹</button>
@@ -1748,7 +1751,7 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
         </div>
 
         <div className="mg-nav">
-          {tab !== "billing" && tab !== "backlog" && tab !== "bonus" && (
+          {tab !== "billing" && tab !== "backlog" && tab !== "bonus" && tab !== "department" && (
           <div className="mg-seg" data-scope={scope}>
             <span className="mg-seg-slider" />
             {(
@@ -1777,7 +1780,7 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
             </div>
           )}
 
-          {tab !== "backlog" && tab !== "bonus" && (scope === "custom" ? (
+          {tab !== "backlog" && tab !== "bonus" && tab !== "department" && (scope === "custom" ? (
             <div className="mg-range">
               <span className="mg-range-field">
                 <DatePicker value={rangeFrom} onChange={setRangeFrom} placeholder="From" />
@@ -1814,11 +1817,11 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
       </header>
 
       {/* Same-size placeholders while a tab has no headline cards yet (loading). */}
-      <div className="mg-hero-skel" aria-hidden="true">
+      {tab !== "department" && <div className="mg-hero-skel" aria-hidden="true">
         {Array.from({ length: tab === "billing" ? 5 : tab === "incoming" ? 3 : 4 }, (_, i) => (
           <span key={i} style={tmVars({ "--i": i })}><i /><b /><em /></span>
         ))}
-      </div>
+      </div>}
 
       {targetFor && (
         <UserTargetModal
@@ -2299,9 +2302,821 @@ minPerMonth: targets.minPerMonth,
           canPay={lvBonus === "all"}
           legacy={{ general: genBonus, perPerson: capacity, lag: bonusLag }}
         />
+      ) : tab === "department" ? (
+        <DeptDrive people={people} myId={access.userId} myDept={myDeptKey} isAdmin={access.isAdmin} />
       ) : (
         <IncomingPanel />
       )}
     </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Management › Department — the department's shared directory
+   (65_department_drive.sql). Folders of any depth, uploaded files, links and
+   notes; personal pins; a search that looks at everything as you type.
+   ═══════════════════════════════════════════════════════════════════════ */
+interface DdFolder { id: string; dept_key: string; parent_id: string | null; name: string; color: string | null; sort: number; created_by: string | null; created_at: string; updated_at: string }
+interface DdItem {
+  id: string; dept_key: string; folder_id: string | null; kind: "file" | "link" | "note"; name: string;
+  storage_path: string | null; mime: string | null; size_bytes: number | null; url: string | null; body: string | null; tags: string[];
+  created_by: string | null; updated_by: string | null; created_at: string; updated_at: string;
+}
+interface DdPin { id: string; folder_id: string | null; item_id: string | null; sort: number }
+type DdRef = { t: "folder" | "item"; id: string };
+const DD_BUCKET = "dept-files";
+const DD_MISSING = /relation|does not exist|schema cache|Could not find the table/i;
+const DD_COLORS = ["#12b57f", "#3c8fd6", "#8b5cf6", "#e0a13c", "#e0798c", "#0ea5a4", "#64748b", "#d64545"];
+const ddNorm = (s: unknown) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+const ddSize = (b: number | null) => (!b ? "" : b < 1024 ? `${b} B` : b < 1048576 ? `${Math.round(b / 1024)} KB` : `${(b / 1048576).toFixed(1)} MB`);
+const ddWhen = (iso: string) => {
+  const d = new Date(iso); const diff = (Date.now() - d.getTime()) / 864e5;
+  if (diff < 1 && d.getDate() === new Date().getDate()) return `Today ${d.toTimeString().slice(0, 5)}`;
+  if (diff < 2) return "Yesterday";
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: d.getFullYear() === new Date().getFullYear() ? undefined : "numeric" });
+};
+/** What a file is, as a short label and a colour. */
+function ddKind(it: Pick<DdItem, "kind" | "name" | "mime">): { label: string; color: string } {
+  if (it.kind === "link") return { label: "LINK", color: "#3c8fd6" };
+  if (it.kind === "note") return { label: "NOTE", color: "#e0a13c" };
+  const ext = it.name.split(".").pop()?.toLowerCase() ?? "";
+  if (ext === "pdf" || it.mime === "application/pdf") return { label: "PDF", color: "#d64545" };
+  if (["doc", "docx", "odt", "rtf", "txt", "md"].includes(ext)) return { label: ext === "txt" || ext === "md" ? "TXT" : "DOC", color: "#2b6cd9" };
+  if (["xls", "xlsx", "csv", "ods"].includes(ext)) return { label: ext === "csv" ? "CSV" : "XLS", color: "#12915f" };
+  if (["ppt", "pptx", "key", "odp"].includes(ext)) return { label: "PPT", color: "#e0662b" };
+  if (["png", "jpg", "jpeg", "gif", "webp", "svg", "heic", "avif"].includes(ext) || it.mime?.startsWith("image/")) return { label: "IMG", color: "#8b5cf6" };
+  if (["mp4", "mov", "webm", "avi"].includes(ext) || it.mime?.startsWith("video/")) return { label: "VID", color: "#db2777" };
+  if (["zip", "rar", "7z", "gz"].includes(ext)) return { label: "ZIP", color: "#64748b" };
+  return { label: ext ? ext.slice(0, 4).toUpperCase() : "FILE", color: "#64748b" };
+}
+const isImg = (it: DdItem) => ddKind(it).label === "IMG";
+const isPdf = (it: DdItem) => ddKind(it).label === "PDF";
+
+const DdIco = {
+  folder: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 6.5A2.5 2.5 0 0 1 5.5 4h4.1c.7 0 1.3.3 1.8.8L12.6 6H18.5A2.5 2.5 0 0 1 21 8.5v9A2.5 2.5 0 0 1 18.5 20h-13A2.5 2.5 0 0 1 3 17.5z" /></svg>,
+  search: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg>,
+  pin: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M9 4h6l-1 5 3 3v2H7v-2l3-3z" /><path d="M12 14v6" /></svg>,
+  pinOn: <svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M9 4h6l-1 5 3 3v2H7v-2l3-3z" /><path d="M12 14v6" fill="none" /></svg>,
+  plus: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>,
+  up: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 16V4M7 9l5-5 5 5M5 20h14" /></svg>,
+  link: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1" /><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1" /></svg>,
+  note: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M6 3h9l4 4v14H6z" /><path d="M14 3v5h5M9 13h7M9 17h5" /></svg>,
+  newFolder: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><path d="M12 11v5M9.5 13.5h5" /></svg>,
+  grid: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><rect x="4" y="4" width="7" height="7" rx="1.6" /><rect x="13" y="4" width="7" height="7" rx="1.6" /><rect x="4" y="13" width="7" height="7" rx="1.6" /><rect x="13" y="13" width="7" height="7" rx="1.6" /></svg>,
+  list: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" /></svg>,
+  more: <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg>,
+  chev: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6l6 6-6 6" /></svg>,
+  x: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M6 6l12 12M18 6 6 18" /></svg>,
+  dl: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4v11M7 10l5 5 5-5M5 20h14" /></svg>,
+  ext: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" /></svg>,
+  home: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 10.5 12 3l9 7.5" /><path d="M5 9.5V20h14V9.5" /></svg>,
+  clock: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round"><circle cx="12" cy="12" r="8.5" /><path d="M12 7.5V12l3 2" /></svg>,
+};
+
+/** Highlights the words of the search in a text. */
+function DdMark({ text, words }: { text: string; words: string[] }) {
+  if (!words.length || !text) return <>{text}</>;
+  const n = ddNorm(text);
+  const hits: [number, number][] = [];
+  words.forEach((w) => { let i = n.indexOf(w); while (w && i >= 0) { hits.push([i, i + w.length]); i = n.indexOf(w, i + w.length); } });
+  if (!hits.length) return <>{text}</>;
+  hits.sort((a, b) => a[0] - b[0]);
+  const merged: [number, number][] = [];
+  hits.forEach((h) => { const l = merged[merged.length - 1]; if (l && h[0] <= l[1]) l[1] = Math.max(l[1], h[1]); else merged.push([...h]); });
+  const out: ReactNode[] = []; let at = 0;
+  merged.forEach(([a, b], i) => { if (a > at) out.push(text.slice(at, a)); out.push(<mark key={i}>{text.slice(a, b)}</mark>); at = b; });
+  if (at < text.length) out.push(text.slice(at));
+  return <>{out}</>;
+}
+
+function FolderGlyph({ c, size = 18 }: { c: string | null; size?: number }) {
+  return <i className="dd-fg" style={{ ["--c" as string]: c || "#12b57f", width: size, height: size } as CSSProperties}>{DdIco.folder}</i>;
+}
+function KindBadge({ it }: { it: DdItem }) {
+  const k = ddKind(it);
+  return <i className="dd-kb" style={{ ["--c" as string]: k.color } as CSSProperties}>{it.kind === "link" ? DdIco.link : it.kind === "note" ? DdIco.note : k.label}</i>;
+}
+
+function DeptDrive({ people, myId, myDept, isAdmin }: { people: Record<string, string>; myId: string | null; myDept: string | null; isAdmin: boolean }) {
+  const depts = useDepartments() ?? [];
+  const spaces = isAdmin ? depts : depts.filter((d) => d.key === myDept);
+  const [space, setSpace] = useState<string | null>(null);
+  useEffect(() => {
+    if (space && spaces.some((d) => d.key === space)) return;
+    let saved: string | null = null;
+    try { saved = localStorage.getItem("dd-space"); } catch { /* storage blocked */ }
+    const pick = spaces.find((d) => d.key === saved) ?? spaces.find((d) => d.key === myDept) ?? spaces[0];
+    if (pick) setSpace(pick.key);
+  }, [spaces.map((d) => d.key).join(","), myDept]); // eslint-disable-line react-hooks/exhaustive-deps
+  const dept = depts.find((d) => d.key === space) ?? null;
+
+  const [folders, setFolders] = useState<DdFolder[]>([]);
+  const [items, setItems] = useState<DdItem[]>([]);
+  const [pins, setPins] = useState<DdPin[]>([]);
+  const [tenant, setTenant] = useState<string | null>(null);
+  const [ready, setReady] = useState(false);
+  const [missing, setMissing] = useState(false);
+  const [cwd, setCwd] = useState<string | null>(null);
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const [view, setView] = useState<"grid" | "list">(() => { try { return (localStorage.getItem("dd-view") as "grid" | "list") || "grid"; } catch { return "grid"; } });
+  const [sort, setSort] = useState<"name" | "recent" | "size">("name");
+  const [q, setQ] = useState("");
+  const [hi, setHi] = useState(0);
+  const [sel, setSel] = useState<string | null>(null);
+  const [menu, setMenu] = useState<{ ref: DdRef; x: number; y: number } | null>(null);
+  const [newOpen, setNewOpen] = useState(false);
+  const [dlg, setDlg] = useState<null | { k: "folder"; parent: string | null } | { k: "link"; item?: DdItem } | { k: "note"; item?: DdItem } | { k: "rename"; ref: DdRef } | { k: "move"; ref: DdRef } | { k: "delete"; ref: DdRef }>(null);
+  const [drag, setDrag] = useState<DdRef | null>(null);
+  const [dropOn, setDropOn] = useState<string | null>(null);   // folder id, or "root"
+  const [osDrag, setOsDrag] = useState(false);
+  const [ups, setUps] = useState<{ name: string; done: boolean; err?: string }[]>([]);
+  const [toast, setToast] = useState<string | null>(null);
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const uploadTo = useRef<string | null>(null);
+
+  useEffect(() => { try { localStorage.setItem("dd-view", view); } catch { /* storage blocked */ } }, [view]);
+  useEffect(() => { if (space) { try { localStorage.setItem("dd-space", space); } catch { /* storage blocked */ } } }, [space]);
+  useEffect(() => { if (!toast) return; const t = window.setTimeout(() => setToast(null), 2600); return () => window.clearTimeout(t); }, [toast]);
+  useEffect(() => {
+    if (!myId) return;
+    void supabase.from("profiles").select("tenant_id").eq("id", myId).maybeSingle().then(({ data }: any) => setTenant(data?.tenant_id ?? null));
+  }, [myId]);
+
+  const load = useCallback(async () => {
+    if (!space) return;
+    const [f, i, p] = await Promise.all([
+      supabase.from("dept_folders").select("*").eq("dept_key", space).order("sort").order("name").range(0, 9999),
+      supabase.from("dept_items").select("*").eq("dept_key", space).order("created_at", { ascending: false }).range(0, 19999),
+      supabase.from("dept_pins").select("id, folder_id, item_id, sort").eq("dept_key", space).eq("user_id", myId ?? "").order("sort").order("created_at"),
+    ]);
+    const miss = [f, i].some((r: any) => r.error && DD_MISSING.test(r.error.message));
+    setMissing(miss);
+    setFolders(((f as any).data ?? []) as DdFolder[]);
+    setItems((((i as any).data ?? []) as DdItem[]).map((x) => ({ ...x, tags: x.tags ?? [] })));
+    setPins(((p as any).error ? [] : (p as any).data ?? []) as DdPin[]);
+    setReady(true);
+  }, [space, myId]);
+  useEffect(() => { setReady(false); setCwd(null); setSel(null); setQ(""); void load(); }, [load]);
+
+  /* ---------- tree helpers ---------- */
+  const byId = useMemo(() => new Map(folders.map((f) => [f.id, f])), [folders]);
+  const kids = useMemo(() => {
+    const m = new Map<string | null, DdFolder[]>();
+    folders.forEach((f) => { const a = m.get(f.parent_id) ?? []; a.push(f); m.set(f.parent_id, a); });
+    m.forEach((a) => a.sort((x, y) => x.sort - y.sort || x.name.localeCompare(y.name, undefined, { numeric: true })));
+    return m;
+  }, [folders]);
+  const pathOf = useCallback((id: string | null): DdFolder[] => {
+    const out: DdFolder[] = []; let cur = id ? byId.get(id) : undefined; let guard = 0;
+    while (cur && guard++ < 64) { out.unshift(cur); cur = cur.parent_id ? byId.get(cur.parent_id) : undefined; }
+    return out;
+  }, [byId]);
+  const descendants = useCallback((id: string): Set<string> => {
+    const out = new Set<string>([id]); const stack = [id];
+    while (stack.length) { const c = stack.pop()!; (kids.get(c) ?? []).forEach((k) => { if (!out.has(k.id)) { out.add(k.id); stack.push(k.id); } }); }
+    return out;
+  }, [kids]);
+  const counts = useMemo(() => {
+    const m = new Map<string, { f: number; i: number }>();
+    folders.forEach((f) => m.set(f.id, { f: (kids.get(f.id) ?? []).length, i: 0 }));
+    items.forEach((it) => { if (it.folder_id) { const c = m.get(it.folder_id); if (c) c.i++; } });
+    return m;
+  }, [folders, items, kids]);
+  // open the path to the current folder in the tree
+  useEffect(() => { if (cwd) setOpen((o) => { const n = new Set(o); pathOf(cwd).forEach((f) => n.add(f.id)); return n; }); }, [cwd, pathOf]);
+
+  const here = useMemo(() => {
+    const fs = (kids.get(cwd) ?? []).slice();
+    const is = items.filter((i) => (i.folder_id ?? null) === cwd);
+    const cmp = (a: DdItem, b: DdItem) => sort === "recent" ? b.updated_at.localeCompare(a.updated_at) : sort === "size" ? (b.size_bytes ?? 0) - (a.size_bytes ?? 0) : a.name.localeCompare(b.name, undefined, { numeric: true });
+    if (sort === "recent") fs.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+    return { folders: fs, items: is.sort(cmp) };
+  }, [kids, items, cwd, sort]);
+
+  /* ---------- search: every folder, file, link and note, as you type ---------- */
+  const words = useMemo(() => ddNorm(q).split(/\s+/).filter(Boolean), [q]);
+  const results = useMemo(() => {
+    if (!words.length) return [] as { ref: DdRef; score: number; name: string; path: string; snippet: string; f?: DdFolder; it?: DdItem }[];
+    const pathStr = (fid: string | null) => pathOf(fid).map((p) => p.name).join(" / ");
+    const scoreOf = (name: string, extra: string, path: string) => {
+      const n = ddNorm(name), e = ddNorm(extra), p = ddNorm(path);
+      let s = 0;
+      for (const w of words) {
+        if (n === w) s += 120;
+        else if (n.startsWith(w)) s += 80;
+        else if (new RegExp(`(^|[\\s_\\-.()/])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`).test(n)) s += 60;
+        else if (n.includes(w)) s += 40;
+        else if (e.includes(w)) s += 15;
+        else if (p.includes(w)) s += 8;
+        else return 0;
+      }
+      return s;
+    };
+    const out: { ref: DdRef; score: number; name: string; path: string; snippet: string; f?: DdFolder; it?: DdItem }[] = [];
+    folders.forEach((f) => { const path = pathStr(f.parent_id); const s = scoreOf(f.name, "", path); if (s) out.push({ ref: { t: "folder", id: f.id }, score: s + 5, name: f.name, path, snippet: "", f }); });
+    items.forEach((it) => {
+      const path = pathStr(it.folder_id);
+      const extra = [it.body ?? "", it.url ?? "", (it.tags ?? []).join(" "), people[it.created_by ?? ""] ?? ""].join(" ");
+      const s = scoreOf(it.name, extra, path);
+      if (!s) return;
+      let snippet = "";
+      const body = it.body ?? it.url ?? "";
+      if (body) { const nb = ddNorm(body); const at = Math.max(0, ...words.map((w) => nb.indexOf(w))); snippet = (at > 40 ? "…" : "") + body.slice(Math.max(0, at - 40), at + 90).replace(/\s+/g, " "); }
+      out.push({ ref: { t: "item", id: it.id }, score: s + (Date.parse(it.updated_at) / 1e13), name: it.name, path, snippet, it });
+    });
+    return out.sort((a, b) => b.score - a.score).slice(0, 60);
+  }, [words, folders, items, pathOf, people]);
+  useEffect(() => setHi(0), [q]);
+  // "/" jumps to the search
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      // "/" (Ctrl/⌘K is the app-wide search)
+      if (e.key === "/" && !e.metaKey && !e.ctrlKey && tag !== "INPUT" && tag !== "TEXTAREA" && tag !== "SELECT" && !(e.target as HTMLElement)?.isContentEditable) {
+        e.preventDefault(); searchRef.current?.focus(); searchRef.current?.select();
+      }
+    };
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, []);
+
+  /* ---------- actions ---------- */
+  const say = (e: { message: string } | null | undefined, ok?: string) => { if (e) setToast(DD_MISSING.test(e.message) ? "Run 65_department_drive.sql in Supabase first." : e.message); else if (ok) setToast(ok); };
+  const goFolder = (id: string | null) => { setCwd(id); setSel(null); setQ(""); };
+  const openItem = async (it: DdItem, download = false) => {
+    if (it.kind === "link") { if (it.url) window.open(/^https?:\/\//i.test(it.url) ? it.url : `https://${it.url}`, "_blank", "noopener"); return; }
+    if (it.kind === "note") { setDlg({ k: "note", item: it }); return; }
+    if (!it.storage_path) return;
+    const { data, error } = await supabase.storage.from(DD_BUCKET).createSignedUrl(it.storage_path, 300, download ? { download: it.name } : undefined);
+    if (error || !data?.signedUrl) { say(error ?? { message: "Couldn't open the file." }); return; }
+    window.open(data.signedUrl, "_blank", "noopener");
+  };
+  const pick = (r: { ref: DdRef; it?: DdItem }) => {
+    if (r.ref.t === "folder") goFolder(r.ref.id);
+    else if (r.it) { setCwd(r.it.folder_id); setQ(""); setSel(r.it.id); if (r.it.kind !== "file") void openItem(r.it); }
+  };
+  const createFolder = async (name: string, parent: string | null, color: string) => {
+    const row = { dept_key: space, parent_id: parent, name: name.trim(), color, sort: (kids.get(parent) ?? []).length };
+    const { data, error } = await supabase.from("dept_folders").insert(row).select("*").single();
+    if (error) { say(error); return false; }
+    setFolders((f) => [...f, data as DdFolder]);
+    if (parent) setOpen((o) => new Set(o).add(parent));
+    return true;
+  };
+  const rename = async (ref: DdRef, name: string) => {
+    const clean = name.trim(); if (!clean) return;
+    const tbl = ref.t === "folder" ? "dept_folders" : "dept_items";
+    const { error } = await supabase.from(tbl).update({ name: clean, updated_at: new Date().toISOString() }).eq("id", ref.id);
+    if (error) { say(error); return; }
+    if (ref.t === "folder") setFolders((f) => f.map((x) => (x.id === ref.id ? { ...x, name: clean } : x)));
+    else setItems((xs) => xs.map((x) => (x.id === ref.id ? { ...x, name: clean } : x)));
+  };
+  const recolor = async (id: string, color: string) => {
+    setFolders((f) => f.map((x) => (x.id === id ? { ...x, color } : x)));
+    const { error } = await supabase.from("dept_folders").update({ color }).eq("id", id);
+    if (error) say(error);
+  };
+  const move = async (ref: DdRef, to: string | null) => {
+    if (ref.t === "folder") {
+      if (ref.id === to || (to && descendants(ref.id).has(to))) { setToast("A folder can't go inside itself."); return; }
+      const f = byId.get(ref.id); if (!f || f.parent_id === to) return;
+      setFolders((xs) => xs.map((x) => (x.id === ref.id ? { ...x, parent_id: to } : x)));
+      const { error } = await supabase.from("dept_folders").update({ parent_id: to, updated_at: new Date().toISOString() }).eq("id", ref.id);
+      say(error, `Moved to ${to ? byId.get(to)?.name : dept?.name ?? "the top"}`);
+    } else {
+      const it = items.find((x) => x.id === ref.id); if (!it || (it.folder_id ?? null) === to) return;
+      setItems((xs) => xs.map((x) => (x.id === ref.id ? { ...x, folder_id: to } : x)));
+      const { error } = await supabase.from("dept_items").update({ folder_id: to, updated_at: new Date().toISOString(), updated_by: myId }).eq("id", ref.id);
+      say(error, `Moved to ${to ? byId.get(to)?.name : dept?.name ?? "the top"}`);
+    }
+  };
+  const remove = async (ref: DdRef) => {
+    if (ref.t === "folder") {
+      const ids = descendants(ref.id);
+      const paths = items.filter((i) => i.folder_id && ids.has(i.folder_id) && i.storage_path).map((i) => i.storage_path!) ;
+      for (let k = 0; k < paths.length; k += 100) await supabase.storage.from(DD_BUCKET).remove(paths.slice(k, k + 100));
+      const { error } = await supabase.from("dept_folders").delete().eq("id", ref.id);
+      if (error) { say(error); return; }
+      setFolders((f) => f.filter((x) => !ids.has(x.id)));
+      setItems((xs) => xs.filter((x) => !(x.folder_id && ids.has(x.folder_id))));
+      if (cwd && ids.has(cwd)) setCwd(byId.get(ref.id)?.parent_id ?? null);
+    } else {
+      const it = items.find((x) => x.id === ref.id);
+      if (it?.storage_path) await supabase.storage.from(DD_BUCKET).remove([it.storage_path]);
+      const { error } = await supabase.from("dept_items").delete().eq("id", ref.id);
+      if (error) { say(error); return; }
+      setItems((xs) => xs.filter((x) => x.id !== ref.id));
+      if (sel === ref.id) setSel(null);
+    }
+    setPins((p) => p.filter((x) => (ref.t === "folder" ? x.folder_id !== ref.id : x.item_id !== ref.id)));
+    setToast("Deleted");
+  };
+  const pinOf = (ref: DdRef) => pins.find((p) => (ref.t === "folder" ? p.folder_id === ref.id : p.item_id === ref.id));
+  const togglePin = async (ref: DdRef) => {
+    const cur = pinOf(ref);
+    if (cur) {
+      setPins((p) => p.filter((x) => x.id !== cur.id));
+      const { error } = await supabase.from("dept_pins").delete().eq("id", cur.id);
+      if (error) say(error);
+      return;
+    }
+    const row = { dept_key: space, folder_id: ref.t === "folder" ? ref.id : null, item_id: ref.t === "item" ? ref.id : null, sort: pins.length };
+    const { data, error } = await supabase.from("dept_pins").insert(row).select("id, folder_id, item_id, sort").single();
+    if (error) { say(error); return; }
+    setPins((p) => [...p, data as DdPin]);
+    setToast("Pinned");
+  };
+  const upload = async (list: File[], folder: string | null) => {
+    if (!list.length || !space) return;
+    if (!tenant) { setToast("Still loading — try again in a moment."); return; }
+    setUps(list.map((f) => ({ name: f.name, done: false })));
+    for (let k = 0; k < list.length; k++) {
+      const f = list[k];
+      const path = `${tenant}/${space}/${crypto.randomUUID()}_${f.name.replace(/[^\w.\-]+/g, "_")}`;
+      const up = await supabase.storage.from(DD_BUCKET).upload(path, f, { contentType: f.type || undefined });
+      if (up.error) {
+        const msg = /bucket|not found/i.test(up.error.message) ? "Run 65_department_drive.sql (storage bucket missing)" : up.error.message;
+        setUps((u) => u.map((x, j) => (j === k ? { ...x, done: true, err: msg } : x))); continue;
+      }
+      const { data, error } = await supabase.from("dept_items").insert({ dept_key: space, folder_id: folder, kind: "file", name: f.name, storage_path: path, mime: f.type || null, size_bytes: f.size }).select("*").single();
+      if (error) { await supabase.storage.from(DD_BUCKET).remove([path]); setUps((u) => u.map((x, j) => (j === k ? { ...x, done: true, err: error.message } : x))); continue; }
+      setItems((xs) => [{ ...(data as DdItem), tags: [] }, ...xs]);
+      setUps((u) => u.map((x, j) => (j === k ? { ...x, done: true } : x)));
+    }
+    window.setTimeout(() => setUps((u) => (u.every((x) => x.done && !x.err) ? [] : u)), 1800);
+  };
+  const saveLinkOrNote = async (kind: "link" | "note", v: { name: string; url?: string; body?: string }, item?: DdItem) => {
+    const row: Record<string, unknown> = { name: v.name.trim() || (kind === "link" ? (v.url ?? "").replace(/^https?:\/\/(www\.)?/, "").split("/")[0] : "Untitled note"), url: kind === "link" ? v.url?.trim() || null : null, body: v.body ?? null, updated_at: new Date().toISOString(), updated_by: myId };
+    if (item) {
+      const { error } = await supabase.from("dept_items").update(row).eq("id", item.id);
+      if (error) { say(error); return false; }
+      setItems((xs) => xs.map((x) => (x.id === item.id ? { ...x, ...(row as Partial<DdItem>) } : x)));
+    } else {
+      const { data, error } = await supabase.from("dept_items").insert({ ...row, dept_key: space, folder_id: cwd, kind }).select("*").single();
+      if (error) { say(error); return false; }
+      setItems((xs) => [{ ...(data as DdItem), tags: [] }, ...xs]);
+    }
+    return true;
+  };
+
+  /* ---------- drag & drop: files from the computer, and moving things around ---------- */
+  const onDragOverTarget = (e: ReactDragEvent<HTMLElement>, target: string) => {
+    const hasFiles = Array.from(e.dataTransfer.types).includes("Files");
+    if (!drag && !hasFiles) return;
+    if (drag && drag.t === "folder" && target !== "root" && (drag.id === target || descendants(drag.id).has(target))) return;
+    e.preventDefault(); e.stopPropagation();
+    e.dataTransfer.dropEffect = drag ? "move" : "copy";
+    setDropOn(target);
+  };
+  const onDropTarget = (e: ReactDragEvent<HTMLElement>, target: string) => {
+    e.preventDefault(); e.stopPropagation();
+    const to = target === "root" ? null : target;
+    setDropOn(null); setOsDrag(false);
+    if (drag) { const d = drag; setDrag(null); void move(d, to); return; }
+    const fs = Array.from(e.dataTransfer.files ?? []);
+    if (fs.length) void upload(fs, to);
+  };
+  const dragProps = (ref: DdRef) => ({
+    draggable: true,
+    onDragStart: (e: ReactDragEvent<HTMLElement>) => { setDrag(ref); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", ref.id); },
+    onDragEnd: () => { setDrag(null); setDropOn(null); },
+  });
+
+  /* ---------- pieces ---------- */
+  const openMenu = (e: ReactMouseEvent, ref: DdRef) => { e.preventDefault(); e.stopPropagation(); setMenu({ ref, x: Math.min(e.clientX, window.innerWidth - 230), y: Math.min(e.clientY, window.innerHeight - 300) }); };
+
+  const renderTree = (parent: string | null, depth: number): ReactNode => (
+    <>
+      {(kids.get(parent) ?? []).map((f) => {
+        const has = (kids.get(f.id) ?? []).length > 0;
+        const isOpen = open.has(f.id);
+        return (
+          <Fragment key={f.id}>
+            <div className={`dd-node ${cwd === f.id ? "is-on" : ""} ${dropOn === f.id ? "is-drop" : ""}`} style={{ paddingLeft: 8 + depth * 14 }}
+              onDragOver={(e) => onDragOverTarget(e, f.id)} onDragLeave={() => setDropOn((d) => (d === f.id ? null : d))} onDrop={(e) => onDropTarget(e, f.id)}
+              onContextMenu={(e) => openMenu(e, { t: "folder", id: f.id })} {...dragProps({ t: "folder", id: f.id })}>
+              <button className={`dd-twist ${has ? "" : "is-leaf"} ${isOpen ? "is-open" : ""}`} onClick={() => setOpen((o) => { const n = new Set(o); if (n.has(f.id)) n.delete(f.id); else n.add(f.id); return n; })} tabIndex={has ? 0 : -1} aria-label={isOpen ? "Collapse" : "Expand"}>{has ? DdIco.chev : null}</button>
+              <button className="dd-node-btn" onClick={() => goFolder(f.id)} title={f.name}><FolderGlyph c={f.color} size={16} /><span>{f.name}</span></button>
+            </div>
+            {has && isOpen && renderTree(f.id, depth + 1)}
+          </Fragment>
+        );
+      })}
+    </>
+  );
+
+  const selected = sel ? items.find((i) => i.id === sel) ?? null : null;
+  const [pv, setPv] = useState<string | null>(null);
+  useEffect(() => {
+    setPv(null);
+    if (!selected || selected.kind !== "file" || !selected.storage_path || !(isImg(selected) || isPdf(selected))) return;
+    let alive = true;
+    void supabase.storage.from(DD_BUCKET).createSignedUrl(selected.storage_path, 300).then(({ data }: any) => { if (alive) setPv(data?.signedUrl ?? null); });
+    return () => { alive = false; };
+  }, [selected?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const recent = useMemo(() => items.slice().sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, 5), [items]);
+  const crumbs = pathOf(cwd);
+  const searching = words.length > 0;
+  const totalFiles = items.filter((i) => i.kind === "file").length;
+
+  if (!spaces.length && depts.length) {
+    return <div className="dd-empty-page"><b>No department to show</b><p>You aren't in a department yet. Ask an administrator to place you in one in Settings → Organization.</p></div>;
+  }
+
+  return (
+    <div className="dd" onDragEnter={(e) => { if (Array.from(e.dataTransfer.types).includes("Files")) setOsDrag(true); }}
+      onDragLeave={(e) => { if (e.currentTarget === e.target) setOsDrag(false); }} onDrop={() => setOsDrag(false)}>
+      {/* ---------- rail ---------- */}
+      <aside className="dd-rail">
+        <div className="dd-space">
+          <span className="dd-space-dot" style={{ background: dept?.color ?? "#12b57f" }} />
+          {spaces.length > 1 ? (
+            <div className="dd-space-pick"><Select value={space ?? ""} onChange={(v) => v && setSpace(v)} options={spaces.map((d) => ({ value: d.key, label: d.name }))} /></div>
+          ) : <b>{dept?.name ?? "Department"}</b>}
+        </div>
+        <label className="dd-search">
+          {DdIco.search}
+          <input ref={searchRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search everything"
+            onKeyDown={(e) => {
+              if (e.key === "Escape") { setQ(""); (e.target as HTMLInputElement).blur(); }
+              else if (e.key === "ArrowDown") { e.preventDefault(); setHi((h) => Math.min(h + 1, results.length - 1)); }
+              else if (e.key === "ArrowUp") { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
+              else if (e.key === "Enter" && results[hi]) { e.preventDefault(); pick(results[hi]); }
+            }} />
+          {q ? <button className="dd-search-x" onClick={() => setQ("")} aria-label="Clear">{DdIco.x}</button> : <kbd title="Press / to search">/</kbd>}
+        </label>
+
+        <nav className="dd-nav">
+          <div className="dd-sec">
+            <span className="dd-sec-h">Pinned</span>
+            {pins.length === 0 && <p className="dd-hint">Pin the folders you use most — they stay here.</p>}
+            {pins.map((p) => {
+              const f = p.folder_id ? byId.get(p.folder_id) : null;
+              const it = p.item_id ? items.find((i) => i.id === p.item_id) : null;
+              if (!f && !it) return null;
+              return (
+                <div key={p.id} className={`dd-pin ${f && cwd === f.id ? "is-on" : ""} ${f && dropOn === `pin:${f.id}` ? "is-drop" : ""}`}
+                  onDragOver={(e) => f && onDragOverTarget(e, f.id)} onDrop={(e) => f && onDropTarget(e, f.id)}>
+                  <button className="dd-pin-btn" onClick={() => (f ? goFolder(f.id) : it && (setCwd(it.folder_id), setSel(it.id), it.kind !== "file" && void openItem(it)))}>
+                    {f ? <FolderGlyph c={f.color} size={16} /> : it ? <KindBadge it={it} /> : null}
+                    <span>{f?.name ?? it?.name}</span>
+                  </button>
+                  <button className="dd-pin-x" onClick={() => void togglePin(f ? { t: "folder", id: f.id } : { t: "item", id: it!.id })} aria-label="Unpin">{DdIco.x}</button>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="dd-sec">
+            <span className="dd-sec-h">Folders</span>
+            <div className={`dd-node is-root ${cwd === null && !searching ? "is-on" : ""} ${dropOn === "root" ? "is-drop" : ""}`}
+              onDragOver={(e) => onDragOverTarget(e, "root")} onDragLeave={() => setDropOn((d) => (d === "root" ? null : d))} onDrop={(e) => onDropTarget(e, "root")}>
+              <span className="dd-twist is-leaf" />
+              <button className="dd-node-btn" onClick={() => goFolder(null)}><i className="dd-home">{DdIco.home}</i><span>All of {dept?.name ?? "the department"}</span></button>
+            </div>
+            {renderTree(null, 0)}
+            <button className="dd-addf" onClick={() => setDlg({ k: "folder", parent: cwd })}>{DdIco.plus}New folder</button>
+          </div>
+
+          {recent.length > 0 && (
+            <div className="dd-sec">
+              <span className="dd-sec-h">Recently changed</span>
+              {recent.map((it) => (
+                <button key={it.id} className="dd-recent" onClick={() => { setCwd(it.folder_id); setQ(""); setSel(it.id); }}>
+                  <KindBadge it={it} /><span><b>{it.name}</b><em>{ddWhen(it.updated_at)}</em></span>
+                </button>
+              ))}
+            </div>
+          )}
+        </nav>
+      </aside>
+
+      {/* ---------- main ---------- */}
+      <section className={`dd-main ${osDrag && !drag ? "is-os-drag" : ""}`}
+        onDragOver={(e) => { if (!searching) onDragOverTarget(e, cwd ?? "root"); }} onDrop={(e) => { if (!searching) onDropTarget(e, cwd ?? "root"); }}
+        onClick={() => setSel(null)}>
+        <header className="dd-bar" onClick={(e) => e.stopPropagation()}>
+          {searching ? (
+            <div className="dd-crumbs"><b className="dd-crumb-now">{results.length ? `${results.length}${results.length === 60 ? "+" : ""} result${results.length === 1 ? "" : "s"} for “${q.trim()}”` : `Nothing found for “${q.trim()}”`}</b></div>
+          ) : (
+            <div className="dd-crumbs">
+              <button className={`dd-crumb ${dropOn === "root" ? "is-drop" : ""}`} onClick={() => goFolder(null)} onDragOver={(e) => onDragOverTarget(e, "root")} onDrop={(e) => onDropTarget(e, "root")}>{dept?.name ?? "Department"}</button>
+              {crumbs.map((f, i) => (
+                <Fragment key={f.id}>
+                  <i className="dd-sep">{DdIco.chev}</i>
+                  {i === crumbs.length - 1 ? <b className="dd-crumb-now">{f.name}</b>
+                    : <button className={`dd-crumb ${dropOn === f.id ? "is-drop" : ""}`} onClick={() => goFolder(f.id)} onDragOver={(e) => onDragOverTarget(e, f.id)} onDrop={(e) => onDropTarget(e, f.id)}>{f.name}</button>}
+                </Fragment>
+              ))}
+              {cwd && (
+                <button className={`dd-pinbtn ${pinOf({ t: "folder", id: cwd }) ? "is-on" : ""}`} onClick={() => void togglePin({ t: "folder", id: cwd })} title={pinOf({ t: "folder", id: cwd }) ? "Unpin this folder" : "Pin this folder"}>
+                  {pinOf({ t: "folder", id: cwd }) ? DdIco.pinOn : DdIco.pin}
+                </button>
+              )}
+            </div>
+          )}
+          <span className="dd-grow" />
+          {!searching && (
+            <>
+              <div className="dd-sort"><Select size="sm" value={sort} onChange={(v) => v && setSort(v as typeof sort)}
+                options={[{ value: "name", label: "Name" }, { value: "recent", label: "Last changed" }, { value: "size", label: "Size" }]} /></div>
+              <div className="dd-view" role="group" aria-label="View">
+                <button className={view === "grid" ? "is-on" : ""} onClick={() => setView("grid")} aria-label="Tiles">{DdIco.grid}</button>
+                <button className={view === "list" ? "is-on" : ""} onClick={() => setView("list")} aria-label="List">{DdIco.list}</button>
+              </div>
+            </>
+          )}
+          <div className="dd-new">
+            <button className="dd-new-btn" onClick={() => setNewOpen((v) => !v)} aria-expanded={newOpen}>{DdIco.plus}New</button>
+            {newOpen && (
+              <>
+                <div className="dd-scrim" onClick={() => setNewOpen(false)} />
+                <div className="dd-menu is-new" role="menu">
+                  <button onClick={() => { setNewOpen(false); setDlg({ k: "folder", parent: cwd }); }}>{DdIco.newFolder}<span><b>Folder</b><em>Inside {crumbs[crumbs.length - 1]?.name ?? dept?.name ?? "the top"}</em></span></button>
+                  <button onClick={() => { setNewOpen(false); uploadTo.current = cwd; fileRef.current?.click(); }}>{DdIco.up}<span><b>Upload files</b><em>Or drop them anywhere here</em></span></button>
+                  <button onClick={() => { setNewOpen(false); setDlg({ k: "link" }); }}>{DdIco.link}<span><b>Link</b><em>A web page, a shared drive, a tool…</em></span></button>
+                  <button onClick={() => { setNewOpen(false); setDlg({ k: "note" }); }}>{DdIco.note}<span><b>Note</b><em>A procedure, a checklist, contacts…</em></span></button>
+                </div>
+              </>
+            )}
+            <input ref={fileRef} type="file" multiple hidden onChange={(e) => { void upload(Array.from(e.target.files ?? []), uploadTo.current); e.target.value = ""; }} />
+          </div>
+        </header>
+
+        {missing && <div className="dd-setup"><b>One step to switch the directory on</b><p>Run <code>65_department_drive.sql</code> in Supabase (SQL editor). It creates the folders, the files list and a private storage space per company.</p></div>}
+
+        {!ready ? <div className="dd-loading"><i className="dd-spin" />Opening the directory…</div> : searching ? (
+          <div className="dd-results" role="listbox" aria-label="Search results">
+            {results.map((r, i) => (
+              <button key={`${r.ref.t}${r.ref.id}`} role="option" aria-selected={i === hi} className={`dd-res ${i === hi ? "is-hi" : ""}`} onMouseEnter={() => setHi(i)} onClick={(e) => { e.stopPropagation(); pick(r); }}>
+                {r.f ? <FolderGlyph c={r.f.color} size={22} /> : r.it ? <KindBadge it={r.it} /> : null}
+                <span className="dd-res-t">
+                  <b><DdMark text={r.name} words={words} /></b>
+                  <em>{r.path ? <DdMark text={r.path} words={words} /> : dept?.name}{r.it?.kind === "file" && r.it.size_bytes ? ` · ${ddSize(r.it.size_bytes)}` : ""}{r.it ? ` · ${ddWhen(r.it.updated_at)}` : ""}</em>
+                  {r.snippet && <small><DdMark text={r.snippet} words={words} /></small>}
+                </span>
+                <span className="dd-res-k">{r.f ? "Folder" : r.it?.kind === "file" ? ddKind(r.it).label : r.it?.kind === "link" ? "Link" : "Note"}</span>
+              </button>
+            ))}
+            {!results.length && <div className="dd-none"><p>Try fewer or other words. The search looks at names, folder paths, notes, links and who added things.</p></div>}
+          </div>
+        ) : (
+          <div className="dd-body">
+            {here.folders.length === 0 && here.items.length === 0 ? (
+              <div className="dd-blank">
+                <i className="dd-blank-art"><FolderGlyph c={crumbs[crumbs.length - 1]?.color ?? dept?.color ?? null} size={44} /></i>
+                <b>{cwd ? "This folder is empty" : folders.length || items.length ? "Nothing at the top yet" : `Start ${dept?.name ?? "the department"}'s directory`}</b>
+                <p>Drop files here, or create the first folders — procedures, templates, contracts, onboarding…</p>
+                <div className="dd-blank-acts">
+                  <button className="dd-btn is-primary" onClick={() => setDlg({ k: "folder", parent: cwd })}>{DdIco.newFolder}New folder</button>
+                  <button className="dd-btn" onClick={() => { uploadTo.current = cwd; fileRef.current?.click(); }}>{DdIco.up}Upload files</button>
+                </div>
+              </div>
+            ) : (
+              <>
+                {here.folders.length > 0 && (
+                  <div className="dd-folders">
+                    {here.folders.map((f) => {
+                      const c = counts.get(f.id) ?? { f: 0, i: 0 };
+                      const pinned = !!pinOf({ t: "folder", id: f.id });
+                      return (
+                        <div key={f.id} className={`dd-ftile ${dropOn === f.id ? "is-drop" : ""} ${drag?.id === f.id ? "is-dragging" : ""}`} style={{ ["--c" as string]: f.color || "#12b57f" } as CSSProperties}
+                          onDragOver={(e) => onDragOverTarget(e, f.id)} onDragLeave={() => setDropOn((d) => (d === f.id ? null : d))} onDrop={(e) => onDropTarget(e, f.id)}
+                          onContextMenu={(e) => openMenu(e, { t: "folder", id: f.id })} {...dragProps({ t: "folder", id: f.id })}>
+                          <button className="dd-ftile-main" onClick={(e) => { e.stopPropagation(); goFolder(f.id); }}>
+                            <FolderGlyph c={f.color} size={30} />
+                            <span><b>{f.name}</b><em>{c.f ? `${c.f} folder${c.f === 1 ? "" : "s"}` : ""}{c.f && c.i ? " · " : ""}{c.i ? `${c.i} item${c.i === 1 ? "" : "s"}` : ""}{!c.f && !c.i ? "Empty" : ""}</em></span>
+                          </button>
+                          <button className={`dd-ftile-pin ${pinned ? "is-on" : ""}`} onClick={(e) => { e.stopPropagation(); void togglePin({ t: "folder", id: f.id }); }} aria-label={pinned ? "Unpin" : "Pin"} title={pinned ? "Unpin" : "Pin"}>{pinned ? DdIco.pinOn : DdIco.pin}</button>
+                          <button className="dd-ftile-more" onClick={(e) => openMenu(e, { t: "folder", id: f.id })} aria-label="More">{DdIco.more}</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                {here.items.length > 0 && (view === "grid" ? (
+                  <div className="dd-grid">
+                    {here.items.map((it) => {
+                      const k = ddKind(it);
+                      return (
+                        <div key={it.id} className={`dd-card ${sel === it.id ? "is-sel" : ""}`} style={{ ["--c" as string]: k.color } as CSSProperties}
+                          onClick={(e) => { e.stopPropagation(); setSel(it.id); }} onDoubleClick={() => void openItem(it)}
+                          onContextMenu={(e) => openMenu(e, { t: "item", id: it.id })} {...dragProps({ t: "item", id: it.id })}>
+                          <div className="dd-card-face">
+                            {it.kind === "note" ? <p className="dd-card-note">{(it.body ?? "").slice(0, 220) || "Empty note"}</p>
+                              : it.kind === "link" ? <span className="dd-card-link">{DdIco.link}<em>{(it.url ?? "").replace(/^https?:\/\/(www\.)?/, "").split("/")[0]}</em></span>
+                              : <span className="dd-card-ext">{k.label}</span>}
+                          </div>
+                          <div className="dd-card-meta">
+                            <b title={it.name}>{it.name}</b>
+                            <em>{it.kind === "file" ? ddSize(it.size_bytes) : it.kind === "link" ? "Link" : "Note"} · {ddWhen(it.updated_at)}</em>
+                          </div>
+                          <button className="dd-card-more" onClick={(e) => openMenu(e, { t: "item", id: it.id })} aria-label="More">{DdIco.more}</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="dd-list">
+                    <div className="dd-lrow is-head"><span>Name</span><span>Added by</span><span>Last changed</span><span className="is-r">Size</span><span /></div>
+                    {here.items.map((it) => (
+                      <div key={it.id} className={`dd-lrow ${sel === it.id ? "is-sel" : ""}`} onClick={(e) => { e.stopPropagation(); setSel(it.id); }} onDoubleClick={() => void openItem(it)}
+                        onContextMenu={(e) => openMenu(e, { t: "item", id: it.id })} {...dragProps({ t: "item", id: it.id })}>
+                        <span className="dd-lname"><KindBadge it={it} /><b title={it.name}>{it.name}</b>{pinOf({ t: "item", id: it.id }) && <i className="dd-lpin">{DdIco.pinOn}</i>}</span>
+                        <span>{people[it.created_by ?? ""] ?? "—"}</span>
+                        <span>{ddWhen(it.updated_at)}</span>
+                        <span className="is-r">{it.kind === "file" ? ddSize(it.size_bytes) : "—"}</span>
+                        <button className="dd-lmore" onClick={(e) => openMenu(e, { t: "item", id: it.id })} aria-label="More">{DdIco.more}</button>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </>
+            )}
+            <p className="dd-foot">{folders.length} folder{folders.length === 1 ? "" : "s"} · {totalFiles} file{totalFiles === 1 ? "" : "s"} · {items.length - totalFiles} links &amp; notes — drag anything onto a folder to move it.</p>
+          </div>
+        )}
+
+        {osDrag && !drag && !searching && <div className="dd-dropzone"><span>{DdIco.up}Drop to upload into <b>{crumbs[crumbs.length - 1]?.name ?? dept?.name}</b></span></div>}
+      </section>
+
+      {/* ---------- details ---------- */}
+      {selected && !searching && (
+        <aside className="dd-detail" onClick={(e) => e.stopPropagation()}>
+          <header><KindBadge it={selected} /><b title={selected.name}>{selected.name}</b><button className="dd-x" onClick={() => setSel(null)} aria-label="Close">{DdIco.x}</button></header>
+          {pv && isImg(selected) && <img className="dd-pv-img" src={pv} alt={selected.name} />}
+          {pv && isPdf(selected) && <iframe className="dd-pv-pdf" title={selected.name} src={pv} />}
+          {selected.kind === "note" && <p className="dd-pv-note">{selected.body || "Empty note"}</p>}
+          {selected.kind === "link" && <a className="dd-pv-link" href={/^https?:\/\//i.test(selected.url ?? "") ? selected.url! : `https://${selected.url}`} target="_blank" rel="noreferrer">{selected.url}</a>}
+          <dl className="dd-facts">
+            <dt>Where</dt><dd>{[dept?.name, ...pathOf(selected.folder_id).map((f) => f.name)].join(" / ")}</dd>
+            {selected.kind === "file" && <><dt>Size</dt><dd>{ddSize(selected.size_bytes) || "—"}</dd></>}
+            <dt>Added</dt><dd>{ddWhen(selected.created_at)}{people[selected.created_by ?? ""] ? ` by ${people[selected.created_by ?? ""]}` : ""}</dd>
+            {selected.updated_at !== selected.created_at && <><dt>Changed</dt><dd>{ddWhen(selected.updated_at)}{people[selected.updated_by ?? ""] ? ` by ${people[selected.updated_by ?? ""]}` : ""}</dd></>}
+          </dl>
+          <div className="dd-detail-acts">
+            {selected.kind === "file" && <button className="dd-btn is-primary" onClick={() => void openItem(selected)}>{DdIco.ext}Open</button>}
+            {selected.kind === "file" && <button className="dd-btn" onClick={() => void openItem(selected, true)}>{DdIco.dl}Download</button>}
+            {selected.kind === "link" && <button className="dd-btn is-primary" onClick={() => void openItem(selected)}>{DdIco.ext}Open link</button>}
+            {selected.kind !== "file" && <button className="dd-btn" onClick={() => setDlg(selected.kind === "link" ? { k: "link", item: selected } : { k: "note", item: selected })}>Edit</button>}
+            <button className={`dd-btn ${pinOf({ t: "item", id: selected.id }) ? "is-on" : ""}`} onClick={() => void togglePin({ t: "item", id: selected.id })}>{pinOf({ t: "item", id: selected.id }) ? <>{DdIco.pinOn}Pinned</> : <>{DdIco.pin}Pin</>}</button>
+          </div>
+        </aside>
+      )}
+
+      {/* ---------- context menu ---------- */}
+      {menu && (() => {
+        const ref = menu.ref;
+        const f = ref.t === "folder" ? byId.get(ref.id) : null;
+        const it = ref.t === "item" ? items.find((x) => x.id === ref.id) : null;
+        const pinned = !!pinOf(ref);
+        const close = () => setMenu(null);
+        return createPortal(
+          <>
+            <div className="dd-scrim" onMouseDown={close} onContextMenu={(e) => { e.preventDefault(); close(); }} />
+            <div className="dd-menu" style={{ left: menu.x, top: menu.y }} role="menu">
+              {f && <button onClick={() => { close(); goFolder(f.id); }}>Open</button>}
+              {it && it.kind === "file" && <button onClick={() => { close(); void openItem(it); }}>Open</button>}
+              {it && it.kind === "file" && <button onClick={() => { close(); void openItem(it, true); }}>Download</button>}
+              {it && it.kind !== "file" && <button onClick={() => { close(); if (it.kind === "link") void openItem(it); else setDlg({ k: "note", item: it }); }}>Open</button>}
+              {it && it.kind !== "file" && <button onClick={() => { close(); setDlg(it.kind === "link" ? { k: "link", item: it } : { k: "note", item: it }); }}>Edit</button>}
+              <button onClick={() => { close(); void togglePin(ref); }}>{pinned ? "Unpin" : "Pin to the side"}</button>
+              <button onClick={() => { close(); setDlg({ k: "rename", ref }); }}>Rename</button>
+              <button onClick={() => { close(); setDlg({ k: "move", ref }); }}>Move to…</button>
+              {f && <button onClick={() => { close(); setDlg({ k: "folder", parent: f.id }); }}>New folder inside</button>}
+              {f && (
+                <div className="dd-menu-colors">
+                  {DD_COLORS.map((c) => <button key={c} style={{ background: c }} className={f.color === c ? "is-on" : ""} onClick={() => { close(); void recolor(f.id, c); }} aria-label="Colour" />)}
+                </div>
+              )}
+              <hr />
+              <button className="is-danger" onClick={() => { close(); setDlg({ k: "delete", ref }); }}>Delete</button>
+            </div>
+          </>,
+          document.body,
+        );
+      })()}
+
+      {/* ---------- dialogs ---------- */}
+      {dlg?.k === "folder" && <DdFolderDialog parentName={dlg.parent ? byId.get(dlg.parent)?.name ?? "" : dept?.name ?? "the top"} onClose={() => setDlg(null)} onSave={async (n, c) => { if (await createFolder(n, dlg.parent, c)) setDlg(null); }} />}
+      {dlg?.k === "rename" && (
+        <DdPrompt title="Rename" value={dlg.ref.t === "folder" ? byId.get(dlg.ref.id)?.name ?? "" : items.find((x) => x.id === dlg.ref.id)?.name ?? ""} ok="Rename"
+          onClose={() => setDlg(null)} onSave={async (v) => { await rename(dlg.ref, v); setDlg(null); }} />
+      )}
+      {dlg?.k === "move" && (
+        <DdMoveDialog folders={folders} kids={kids} deptName={dept?.name ?? "Department"} moving={dlg.ref} blocked={dlg.ref.t === "folder" ? descendants(dlg.ref.id) : new Set()}
+          onClose={() => setDlg(null)} onMove={async (to) => { await move(dlg.ref, to); setDlg(null); }} />
+      )}
+      {dlg?.k === "delete" && (() => {
+        const ref = dlg.ref;
+        const f = ref.t === "folder" ? byId.get(ref.id) : null;
+        const inside = f ? { f: descendants(f.id).size - 1, i: items.filter((i) => i.folder_id && descendants(f.id).has(i.folder_id)).length } : null;
+        return (
+          <DdModal title={`Delete ${f ? "folder" : "item"}?`} onClose={() => setDlg(null)}
+            foot={<><button className="dd-btn" onClick={() => setDlg(null)}>Keep it</button><button className="dd-btn is-danger" onClick={() => { setDlg(null); void remove(ref); }}>Delete</button></>}>
+            <p className="dd-p">“{f?.name ?? items.find((x) => x.id === ref.id)?.name}” {inside && (inside.f || inside.i) ? `and everything in it (${inside.f} folder${inside.f === 1 ? "" : "s"}, ${inside.i} item${inside.i === 1 ? "" : "s"}) ` : ""}will be deleted for everyone in the department. This can't be undone.</p>
+          </DdModal>
+        );
+      })()}
+      {dlg?.k === "link" && <DdLinkDialog item={dlg.item} onClose={() => setDlg(null)} onSave={async (v) => { if (await saveLinkOrNote("link", v, dlg.item)) setDlg(null); }} />}
+      {dlg?.k === "note" && <DdNoteDialog item={dlg.item} onClose={() => setDlg(null)} onSave={async (v) => { if (await saveLinkOrNote("note", v, dlg.item)) setDlg(null); }} />}
+
+      {ups.length > 0 && (
+        <div className="dd-ups">
+          <b>{ups.every((u) => u.done) ? "Uploaded" : `Uploading ${ups.filter((u) => u.done).length + 1} of ${ups.length}`}</b>
+          {ups.slice(-5).map((u, i) => <span key={i} className={u.err ? "is-err" : u.done ? "is-ok" : ""}>{u.done ? (u.err ? "!" : "✓") : <i className="dd-spin" />}{u.name}{u.err ? ` — ${u.err}` : ""}</span>)}
+          {ups.some((u) => u.err) && <button className="dd-linkbtn" onClick={() => setUps([])}>Close</button>}
+        </div>
+      )}
+      {toast && <div className="dd-toast" role="status">{toast}</div>}
+    </div>
+  );
+}
+
+function DdModal({ title, children, foot, onClose }: { title: string; children: ReactNode; foot?: ReactNode; onClose: () => void }) {
+  useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, [onClose]);
+  return createPortal(
+    <div className="dd-modal-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="dd-modal" role="dialog" aria-modal="true" aria-label={title}>
+        <header><h3>{title}</h3><button className="dd-x" onClick={onClose} aria-label="Close">{DdIco.x}</button></header>
+        <div className="dd-modal-body">{children}</div>
+        {foot && <footer>{foot}</footer>}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+function DdPrompt({ title, value, ok, onSave, onClose }: { title: string; value: string; ok: string; onSave: (v: string) => void | Promise<void>; onClose: () => void }) {
+  const [v, setV] = useState(value);
+  return (
+    <DdModal title={title} onClose={onClose} foot={<><button className="dd-btn" onClick={onClose}>Cancel</button><button className="dd-btn is-primary" disabled={!v.trim()} onClick={() => void onSave(v)}>{ok}</button></>}>
+      <input className="dd-input" autoFocus value={v} onChange={(e) => setV(e.target.value)} onFocus={(e) => { const dot = e.target.value.lastIndexOf("."); e.target.setSelectionRange(0, dot > 0 ? dot : e.target.value.length); }}
+        onKeyDown={(e) => { if (e.key === "Enter" && v.trim()) void onSave(v); }} />
+    </DdModal>
+  );
+}
+function DdFolderDialog({ parentName, onSave, onClose }: { parentName: string; onSave: (name: string, color: string) => void | Promise<void>; onClose: () => void }) {
+  const [n, setN] = useState("");
+  const [c, setC] = useState(DD_COLORS[0]);
+  return (
+    <DdModal title="New folder" onClose={onClose} foot={<><button className="dd-btn" onClick={onClose}>Cancel</button><button className="dd-btn is-primary" disabled={!n.trim()} onClick={() => void onSave(n, c)}>Create folder</button></>}>
+      <p className="dd-p">Inside <b>{parentName}</b></p>
+      <div className="dd-newf">
+        <i className="dd-fg is-big" style={{ ["--c" as string]: c } as CSSProperties}>{DdIco.folder}</i>
+        <input className="dd-input" autoFocus value={n} onChange={(e) => setN(e.target.value)} placeholder="e.g. Procedures" onKeyDown={(e) => { if (e.key === "Enter" && n.trim()) void onSave(n, c); }} />
+      </div>
+      <div className="dd-colors">{DD_COLORS.map((x) => <button key={x} style={{ background: x }} className={x === c ? "is-on" : ""} onClick={() => setC(x)} aria-label="Colour" />)}</div>
+    </DdModal>
+  );
+}
+function DdLinkDialog({ item, onSave, onClose }: { item?: DdItem; onSave: (v: { name: string; url: string; body: string }) => void | Promise<void>; onClose: () => void }) {
+  const [url, setUrl] = useState(item?.url ?? "");
+  const [name, setName] = useState(item?.name ?? "");
+  const [body, setBody] = useState(item?.body ?? "");
+  const ok = /^(https?:\/\/)?[^\s.]+\.[^\s]{2,}/i.test(url.trim());
+  return (
+    <DdModal title={item ? "Edit link" : "New link"} onClose={onClose} foot={<><button className="dd-btn" onClick={onClose}>Cancel</button><button className="dd-btn is-primary" disabled={!ok} onClick={() => void onSave({ name, url: url.trim(), body })}>{item ? "Save" : "Add link"}</button></>}>
+      <label className="dd-fld"><span>Address</span><input className="dd-input" autoFocus value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…" /></label>
+      <label className="dd-fld"><span>Name</span><input className="dd-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Holiday calendar (optional)" /></label>
+      <label className="dd-fld"><span>Description</span><textarea className="dd-input" rows={3} value={body} onChange={(e) => setBody(e.target.value)} placeholder="What it is, when to use it (optional) — the search finds it" /></label>
+    </DdModal>
+  );
+}
+function DdNoteDialog({ item, onSave, onClose }: { item?: DdItem; onSave: (v: { name: string; body: string }) => void | Promise<void>; onClose: () => void }) {
+  const [name, setName] = useState(item?.name ?? "");
+  const [body, setBody] = useState(item?.body ?? "");
+  return (
+    <DdModal title={item ? "Note" : "New note"} onClose={onClose} foot={<><button className="dd-btn" onClick={onClose}>Close</button><button className="dd-btn is-primary" disabled={!name.trim() && !body.trim()} onClick={() => void onSave({ name, body })}>Save note</button></>}>
+      <input className="dd-input dd-note-title" autoFocus={!item} value={name} onChange={(e) => setName(e.target.value)} placeholder="Title" />
+      <textarea className="dd-input dd-note-body" rows={14} autoFocus={!!item} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Write the procedure, the checklist, the contacts…" />
+    </DdModal>
+  );
+}
+function DdMoveDialog({ folders, kids, deptName, moving, blocked, onMove, onClose }: {
+  folders: DdFolder[]; kids: Map<string | null, DdFolder[]>; deptName: string; moving: DdRef; blocked: Set<string>; onMove: (to: string | null) => void | Promise<void>; onClose: () => void;
+}) {
+  const [to, setTo] = useState<string | null | undefined>(undefined);
+  const [f, setF] = useState("");
+  const nf = ddNorm(f);
+  const pathName = (x: DdFolder) => { const out: string[] = []; let c: DdFolder | undefined = x; let g = 0; while (c && g++ < 64) { out.unshift(c.name); c = c.parent_id ? folders.find((y) => y.id === c!.parent_id) : undefined; } return out.join(" / "); };
+  const rows: { f: DdFolder; depth: number }[] = [];
+  const walk = (p: string | null, d: number) => (kids.get(p) ?? []).forEach((x) => { rows.push({ f: x, depth: d }); walk(x.id, d + 1); });
+  walk(null, 0);
+  const shown = nf ? rows.filter((r) => ddNorm(pathName(r.f)).includes(nf)) : rows;
+  void moving;
+  return (
+    <DdModal title="Move to…" onClose={onClose} foot={<><button className="dd-btn" onClick={onClose}>Cancel</button><button className="dd-btn is-primary" disabled={to === undefined} onClick={() => void onMove(to ?? null)}>Move here</button></>}>
+      <input className="dd-input" autoFocus value={f} onChange={(e) => setF(e.target.value)} placeholder="Find a folder" />
+      <div className="dd-movelist">
+        {!nf && <button className={`dd-moverow ${to === null ? "is-on" : ""}`} onClick={() => setTo(null)}><i className="dd-home">{DdIco.home}</i>{deptName} (top)</button>}
+        {shown.map((r) => (
+          <button key={r.f.id} className={`dd-moverow ${to === r.f.id ? "is-on" : ""}`} disabled={blocked.has(r.f.id)} style={{ paddingLeft: 12 + (nf ? 0 : r.depth * 16) }} onClick={() => setTo(r.f.id)}>
+            <i className="dd-fg" style={{ ["--c" as string]: r.f.color || "#12b57f", width: 16, height: 16 } as CSSProperties}>{DdIco.folder}</i>{nf ? pathName(r.f) : r.f.name}
+          </button>
+        ))}
+      </div>
+    </DdModal>
   );
 }

@@ -305,6 +305,7 @@ export const PANELS: PanelDef[] = [
   panel("management", "billing", "Billing", "Bills and invoices per project", ["none", "own", "all"]),
   panel("management", "bonus", "Bonus", "Bonus per consultant", ["none", "own", "all"]),
   panel("management", "incoming", "Incoming", "Handoffs from sales"),
+  panel("management", "department", "Department", "The department's folders, files, links and notes"),
   panel("management", "saved_days", "Saved days bank", "Days banked from billing trims", ["none", "own", "all"]),
   panel("management", "settings", "Targets & settings", "The gear: targets, capacity, bonus rules"),
   panel("management", "security", "Security", "Can change who sees Management's panels"),
