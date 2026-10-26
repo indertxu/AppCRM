@@ -46,6 +46,8 @@ interface Props {
   hoursPerDay?: number;
   /** Access "only own": show just this user's bonus. */
   onlyUser?: string;
+  /** Access "their department": show just these people's bonus. */
+  onlyUsers?: string[];
   /** May create and edit plans. */
   canEdit?: boolean;
   /** May mark bonuses as paid. */
@@ -130,7 +132,7 @@ interface PayItem { key: string; userId: string; name: string; plan: Plan; perio
 
 export default function BonusPanel({
   entries, projects, people, clientNames, clientTypeIds, clientRoles, cutoffs, defaultCutoffDay, asOf,
-  hourProjects = new Set(), hoursPerDay = 8, onlyUser, canEdit = false, canPay = false, legacy,
+  hourProjects = new Set(), hoursPerDay = 8, onlyUser, onlyUsers, canEdit = false, canPay = false, legacy,
 }: Props) {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [payouts, setPayouts] = useState<any[]>([]);
@@ -191,7 +193,7 @@ export default function BonusPanel({
   const view = useMemo(() => {
     const ids = new Set<string>([...profiles.map((p) => p.id), ...Object.keys(idx)]);
     const persons: Person[] = [...ids]
-      .filter((id) => !onlyUser || id === onlyUser)
+      .filter((id) => (!onlyUser || id === onlyUser) && (!onlyUsers || onlyUsers.includes(id)))
       .map((id) => { const pr = profiles.find((p) => p.id === id); return { id, name: people[id] ?? pr?.name ?? "Unknown", role: pr?.role ?? null, department: pr?.department ?? null }; });
     const paidKey = new Set(payouts.map((p) => `${p.plan_id}|${p.user_id}|${p.period_key}`));
     const isPaid = (pl: Plan, uid: string, first: string) => {
@@ -235,10 +237,10 @@ export default function BonusPanel({
     upcoming.sort((a, b) => a.payMonth.localeCompare(b.payMonth) || b.amount - a.amount);
     running.sort((a, b) => b.amount - a.amount || a.name.localeCompare(b.name));
     const paid = payouts
-      .filter((p) => !onlyUser || p.user_id === onlyUser)
+      .filter((p) => (!onlyUser || p.user_id === onlyUser) && (!onlyUsers || onlyUsers.includes(p.user_id)))
       .map((p) => ({ ...p, plan: plans.find((x) => x.id === p.plan_id), name: people[p.user_id] ?? profiles.find((x) => x.id === p.user_id)?.name ?? "Unknown" }));
     return { due, upcoming, running, uncovered, paid };
-  }, [profiles, idx, plans, payouts, people, onlyUser, asOfYm, asOfBp, inactive]);
+  }, [profiles, idx, plans, payouts, people, onlyUser, onlyUsers, asOfYm, asOfBp, inactive]);
 
   const totals = {
     due: view.due.reduce((s, r) => s + r.amount, 0),
@@ -380,7 +382,7 @@ export default function BonusPanel({
         {missing && (
           <div className="bx-setup"><b>One step left</b><span>Run <code>empower_bonus_plans.sql</code> in Supabase to start using bonus plans.</span></div>
         )}
-        {!missing && plans.length === 0 && !onlyUser && (
+        {!missing && plans.length === 0 && !onlyUser && !onlyUsers && (
           <div className="bk-empty">
             <b>No bonus plans yet</b>
             <span>Create a plan and every consultant on it shows up here with their progress.</span>

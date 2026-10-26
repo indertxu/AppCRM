@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { PageLoader } from "../../framework/AppLayout";
 import { supabase } from "../../api/supabase";
 import { useAuth } from "../../api/authContext";
@@ -9,10 +9,10 @@ import Organization from "./Organization";
 import CatalogPage from "./CatalogPage";
 import PipelinePage from "./PipelinePage";
 import { ProposalSettings } from "./ProposalTemplateEditor";
-import PageAccessModal from "./PageAccessModal";
+import PageAccessModal, { useSecuritySection } from "./PageAccessModal";
 import Select from "../../framework/Select";
 import TaskSettings from "./TaskSettings";
-import { usePageAccess, useNavSection } from "../../framework/pageAccess";
+import { usePageAccess, useNavSection, type PageKey } from "../../framework/pageAccess";
 import { SuperAdminSwitch } from "../../framework/SuperAdmin";
 import { connectOutlook, completeOutlookConnect, outlookStatus, disconnectOutlook, outlookConnectError, OUTLOOK_CONNECTION_EVENT } from "../../api/outlookSync";
 import { DOCK_ITEMS, DOCK_ORDER_KEY, DOCK_ORDER_EVENT, orderDock } from "../../framework/Dock";
@@ -25,7 +25,8 @@ import "./SettingsPage.css";
 
 const levelLabel = (id: string | null) => LEVELS.find((l) => l.id === id)?.label ?? id ?? "—";
 
-type View = "home" | "users" | "organization" | "account" | "interface" | "catalog" | "pipeline" | "proposal" | "tasks" | "salespage" | "mgmtpage" | "clientpage" | "companiespage" | "contactspage";
+type View = "home" | "users" | "organization" | "account" | "interface" | "catalog" | "pipeline" | "proposal" | "tasks" | "salespage" | "mgmtpage" | "clientpage" | "companiespage" | "contactspage"
+  | "ticketspage" | "calendarpage" | "projectspage" | "successpage" | "marketingpage";
 /** Which Page-access panel opens each view (Settings → Organization → Page access → Settings). */
 const VIEW_PANEL: Partial<Record<View, string>> = {
   organization: "settings.organization",
@@ -33,6 +34,31 @@ const VIEW_PANEL: Partial<Record<View, string>> = {
   pipeline: "settings.pipelines",
   proposal: "settings.proposal",
 };
+/** The page a settings section belongs to: someone who can't open that page doesn't get its settings either
+ *  (no Deals settings without Sales). Any one of the pages listed is enough. */
+const VIEW_PAGES: Partial<Record<View, PageKey[]>> = {
+  salespage: ["sales"],
+  proposal: ["sales"],
+  pipeline: ["sales"],
+  catalog: ["sales", "clients", "projects"],
+  mgmtpage: ["management"],
+  companiespage: ["companies"],
+  contactspage: ["contacts"],
+  clientpage: ["clients"],
+  ticketspage: ["tickets"],
+  calendarpage: ["calendar"],
+  projectspage: ["projects"],
+  successpage: ["success"],
+  marketingpage: ["marketing"],
+};
+/** Pages whose settings are only their Security section for now (Bosses and superadmins). */
+const SECURITY_ONLY: { view: View; page: PageKey; icon: string; title: string; sub: string; accent: string; svg: string }[] = [
+  { view: "ticketspage", page: "tickets", icon: "ticket", title: "Tickets page", sub: "Who sees which tickets and tasks", accent: "#e0a13c", svg: "M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4zM14 5v12" },
+  { view: "calendarpage", page: "calendar", icon: "calendar", title: "Calendar page", sub: "Whose calendars and logged time people see", accent: "#3c9ae0", svg: "M3 9h18M8 3v4M16 3v4M5 5h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z" },
+  { view: "projectspage", page: "projects", icon: "folder", title: "Projects page", sub: "Which projects people see", accent: "#0a6f4d", svg: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM8 13h8" },
+  { view: "successpage", page: "success", icon: "heart", title: "Customer success page", sub: "Which clients people follow up", accent: "#e0798c", svg: "M12 20.5s-7.5-4.4-7.5-10.2A4.3 4.3 0 0 1 12 7.6a4.3 4.3 0 0 1 7.5 2.7c0 5.8-7.5 10.2-7.5 10.2z" },
+  { view: "marketingpage", page: "marketing", icon: "megaphone", title: "Marketing page", sub: "Which lists and campaigns people see", accent: "#9b6fd0", svg: "M4 10v4a1 1 0 0 0 1 1h2l5 4V5L7 9H5a1 1 0 0 0-1 1zM16 9.5a3.5 3.5 0 0 1 0 5M18.5 7a7 7 0 0 1 0 10" },
+];
 
 export const DOCK_PINNED_KEY = "next.dockPinned";
 export const DOCK_PINNED_EVENT = "next:dock-pinned";
@@ -78,13 +104,22 @@ export default function SettingsPage() {
   }, [location.state]);
   // Global search → Settings › a section (deep link "settings/<view>[/<tab>]").
   useNavSection("/settings", 0, (part) => {
-    const views: View[] = ["home", "organization", "account", "interface", "catalog", "pipeline", "proposal", "tasks", "salespage", "mgmtpage", "clientpage", "companiespage", "contactspage"];
+    const views: View[] = ["home", "organization", "account", "interface", "catalog", "pipeline", "proposal", "tasks", "salespage", "mgmtpage", "clientpage", "companiespage", "contactspage", "ticketspage", "calendarpage", "projectspage", "successpage", "marketingpage"];
     if ((views as string[]).includes(part)) setView(part as View);
   });
   // A panel switched off in Page access can't be opened (also not while it's open).
-  const view: View = VIEW_PANEL[viewRaw] && !(accessReady && canPanel(VIEW_PANEL[viewRaw]!)) ? "home" : viewRaw;
-  const seesCompanyCards = ["settings.organization", "settings.catalog", "settings.pipelines", "settings.proposal"].some((k) => canPanel(k));
+  /** May this person open a settings section: its panel isn't switched off and they can open its page. */
+  const viewOpen = (v: View) => {
+    const panel = VIEW_PANEL[v], pages = VIEW_PAGES[v];
+    if (panel && !(accessReady && canPanel(panel))) return false;
+    if (pages && !(accessReady && pages.some((pg) => canSeePage(pg)))) return false;
+    if (SECURITY_ONLY.some((x) => x.view === v) && !canEditAccess) return false;
+    return true;
+  };
+  const view: View = viewOpen(viewRaw) ? viewRaw : "home";
+  const seesCompanyCards = (["organization", "catalog", "pipeline", "proposal"] as View[]).some((v) => viewOpen(v));
   const [showPageAccess, setShowPageAccess] = useState(false);
+  const [homeQ, setHomeQ] = useState("");
 
   // Quick insights shown on the landing cards (loaded lazily).
   const [stats, setStats] = useState<{
@@ -276,203 +311,78 @@ export default function SettingsPage() {
 
   // ---- Landing ----
   if (view === "home") {
-    const fmt = (n: number | undefined) => (n === undefined ? "—" : String(n));
+    const fmt = (n: number | undefined) => (n === undefined ? "—" : n.toLocaleString("en-GB"));
+    const I = (...d: string[]) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{d.map((x, i) => <path key={i} d={x} />)}</svg>;
+    type Tile = { v: View; title: string; sub: string; accent: string; icon: ReactNode; stats?: [string, string][]; keys?: string };
+    const workspace: Tile[] = [
+      { v: "organization", title: "Organization", sub: "People, departments & who can open each page", accent: "#12b57f", keys: "people users departments structure access security",
+        icon: I("M9 3h6v5H9zM3 16h6v5H3zM15 16h6v5h-6zM12 8v4M6 16v-2h12v2"), stats: [[fmt(stats?.employees), "people"], [fmt(stats?.departments), "departments"]] },
+      { v: "catalog", title: "Products & Services", sub: "Catalog, pricing, calculators & blueprints", accent: "#3c9ae0", keys: "catalog price products services blueprints",
+        icon: I("M3 7l9-4 9 4-9 4-9-4z", "M3 7v10l9 4 9-4V7", "M12 11v10"), stats: [[fmt(stats?.products), "products"], [fmt(stats?.services), "services"]] },
+      { v: "pipeline", title: "Client Pipelines", sub: "The phases a client goes through", accent: "#9b6fd0", keys: "pipelines phases deals",
+        icon: I("M5 3.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8zM5 15.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8zM19 9.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8z", "M7.4 6H12a3 3 0 0 1 3 3v.5M7.4 18H12a3 3 0 0 0 3-3v-.5"), stats: [[fmt(stats?.pipelines), "pipelines"]] },
+      { v: "proposal", title: "Proposal template", sub: "Your PowerPoint deck & order form", accent: "#d1685f", keys: "proposal deck powerpoint order form",
+        icon: I("M4 4h11l5 5v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z", "M14 4v5h5M8 13h8M8 17h8M8 9h2") },
+      { v: "tasks", title: "Tasks", sub: "Predefined tasks & processes", accent: "#5b6ee1", keys: "tasks processes templates",
+        icon: I("M9 6h11M9 12h11M9 18h11", "M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2") },
+    ];
+    const pageTiles: Tile[] = [
+      { v: "salespage", title: "Deals", sub: "Import, export, deal fields & sales roles", accent: "#3c9ae0", keys: "sales deals import export fields roles", icon: I("M4 19V9M10 19V5M16 19v-7M22 19H2") },
+      { v: "companiespage", title: "Companies", sub: "Fields, sectors, sources, import & clean-up", accent: "#d98324", keys: "companies fields sectors sources import", icon: I("M3 21h18M5 21V7l7-4 7 4v14M9 21v-4h6v4M9 9h.01M15 9h.01M9 13h.01M15 13h.01") },
+      { v: "contactspage", title: "Contacts", sub: "Fields, import, export & clean-up", accent: "#e0574b", keys: "contacts people fields import", icon: I("M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8") },
+      { v: "clientpage", title: "Clients", sub: "API access to client documents & folders", accent: "#12b57f", keys: "clients api documents folders", icon: I("M7 8l-4 4 4 4M17 8l4 4-4 4M14 5l-4 14") },
+      ...SECURITY_ONLY.map((x) => ({ v: x.view, title: x.title.replace(/ page$/, ""), sub: x.sub, accent: x.accent, keys: `${x.page} security`, icon: I(...x.svg.split(/(?=M)/)) })),
+      { v: "mgmtpage", title: "Management", sub: "Incoming, billing & bonuses", accent: "#9b6fd0", keys: "management billing bonus backlog", icon: I("M3 4h18v16H3z", "M3 10h18M9 10v10") },
+    ];
+    const you: Tile[] = [
+      { v: "interface", title: "Interface", sub: "Sidebar, labels & Outlook", accent: "#e0a13c", keys: "interface sidebar menu labels outlook",
+        icon: I("M5.5 4h13A2.5 2.5 0 0 1 21 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5v-11A2.5 2.5 0 0 1 5.5 4z", "M8 4v16"),
+        stats: [[dockLabels ? "On" : "Off", "menu labels"], [outlookConnected ? "Synced" : "Off", "Outlook"]] },
+      { v: "account", title: "Your account", sub: "Password & details", accent: "#5a7d6d", keys: "account password profile",
+        icon: I("M12 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8z", "M4 21a8 8 0 0 1 16 0"), stats: [[levelLabel(role), "your role"]] },
+    ];
+    const needle = homeQ.trim().toLowerCase();
+    const visible = (t: Tile) => viewOpen(t.v) && (crmLead || (t.v !== "companiespage" && t.v !== "contactspage"))
+      && (!needle || `${t.title} ${t.sub} ${t.keys ?? ""}`.toLowerCase().includes(needle));
+    const groups = [
+      { k: "workspace", title: "Your company", sub: "Who works here, what you sell and how a client moves through", items: workspace.filter(visible) },
+      { k: "pages", title: "Pages", sub: "What each page of the menu carries and who sees what in it", items: pageTiles.filter(visible) },
+      { k: "you", title: "Just you", sub: "Your own account and how the app looks for you", items: you.filter(visible) },
+    ].filter((g) => g.items.length);
+    let n = 0;
     return (
-      <div className="st st-landing">
-        <header className="st-bar">
-          <h1 className="st-title">Settings</h1>
-          <p className="st-sub">Manage your workspace</p>
+      <div className="sty">
+        <header className="sty-hero">
+          <div className="sty-hero-txt">
+            <h1>Settings</h1>
+            <p>Everything you can set up, in one place.</p>
+          </div>
+          <label className="sty-search">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
+            <input value={homeQ} onChange={(e) => setHomeQ(e.target.value)} placeholder="Find a setting" aria-label="Find a setting" />
+            {homeQ && <button onClick={() => setHomeQ("")} aria-label="Clear the search">×</button>}
+          </label>
         </header>
-
-        <div className="nav-rows">
-        <div className="nav-cards">
-          {canPanel("settings.organization") && (
-            <button className="nav-card" style={{ ["--accent" as any]: "#12b57f" }} onClick={() => setView("organization")}>
-              <span className="nav-card-icon">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="9" y="3" width="6" height="5" rx="1.2" /><rect x="3" y="16" width="6" height="5" rx="1.2" />
-                  <rect x="15" y="16" width="6" height="5" rx="1.2" /><path d="M12 8v4M6 16v-2h12v2" />
-                </svg>
-              </span>
-              <span className="nav-card-title">Organization</span>
-              <span className="nav-card-sub">People, departments &amp; structure</span>
-              <span className="nav-card-spacer" />
-              <div className="nav-insights">
-                <div className="nav-stat"><b>{fmt(stats?.employees)}</b><span>people</span></div>
-                <div className="nav-stat"><b>{fmt(stats?.departments)}</b><span>departments</span></div>
+        <div className="sty-body">
+          {groups.length === 0 && <p className="sty-none">Nothing matches “{homeQ}”. Try “security”, “fields” or “import”.</p>}
+          {groups.map((g) => (
+            <section key={g.k} className="sty-group">
+              <div className="sty-group-h"><h2>{g.title}</h2><p>{g.sub}</p></div>
+              <div className={`sty-grid is-${g.k}`}>
+                {g.items.map((t) => (
+                  <button key={t.v} className="sty-card" style={{ ["--accent" as any]: t.accent, ["--i" as any]: n++ }} onClick={() => setView(t.v)}>
+                    <span className="sty-card-top">
+                      <span className="sty-ico">{t.icon}</span>
+                      <svg className="sty-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7 17L17 7M9 7h8v8" /></svg>
+                    </span>
+                    <b>{t.title}</b>
+                    <small>{t.sub}</small>
+                    {t.stats && <span className="sty-stats">{t.stats.map(([v, l]) => <i key={l}><b>{v}</b> {v === "1" ? l.replace(/s$/, "") : l}</i>)}</span>}
+                  </button>
+                ))}
               </div>
-              <span className="nav-card-go">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-              </span>
-            </button>
-          )}
-
-          {canPanel("settings.catalog") && (
-            <button className="nav-card" style={{ ["--accent" as any]: "#3c9ae0" }} onClick={() => setView("catalog")}>
-              <span className="nav-card-icon">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M3 7l9-4 9 4-9 4-9-4z" /><path d="M3 7v10l9 4 9-4V7" /><path d="M12 11v10" />
-                </svg>
-              </span>
-              <span className="nav-card-title">Products &amp; Services</span>
-              <span className="nav-card-sub">Catalog, pricing &amp; blueprints</span>
-              <span className="nav-card-spacer" />
-              <div className="nav-insights">
-                <div className="nav-stat"><b>{fmt(stats?.products)}</b><span>products</span></div>
-                <div className="nav-stat"><b>{fmt(stats?.services)}</b><span>services</span></div>
-              </div>
-              <span className="nav-card-go">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-              </span>
-            </button>
-          )}
-
-          {canPanel("settings.pipelines") && (
-            <button className="nav-card" style={{ ["--accent" as any]: "#9b6fd0" }} onClick={() => setView("pipeline")}>
-              <span className="nav-card-icon">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="5" cy="6" r="2.4" /><circle cx="5" cy="18" r="2.4" /><circle cx="19" cy="12" r="2.4" />
-                  <path d="M7.4 6H12a3 3 0 0 1 3 3v.5M7.4 18H12a3 3 0 0 0 3-3v-.5" />
-                </svg>
-              </span>
-              <span className="nav-card-title">Client Pipelines</span>
-              <span className="nav-card-sub">Design the phases a client goes through</span>
-              <span className="nav-card-spacer" />
-              <div className="nav-insights">
-                <div className="nav-stat"><b>{fmt(stats?.pipelines)}</b><span>pipelines</span></div>
-              </div>
-              <span className="nav-card-go">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-              </span>
-            </button>
-          )}
-
-          {canPanel("settings.proposal") && (
-            <button className="nav-card" style={{ ["--accent" as any]: "#d1685f" }} onClick={() => setView("proposal")}>
-              <span className="nav-card-icon">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h11l5 5v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" /><path d="M14 4v5h5M8 13h8M8 17h8M8 9h2" /></svg>
-              </span>
-              <span className="nav-card-title">Proposal template</span>
-              <span className="nav-card-sub">Your PowerPoint deck &amp; order form</span>
-              <span className="nav-card-spacer" />
-              <span className="nav-card-go">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-              </span>
-            </button>
-          )}
-
-          <button className="nav-card" style={{ ["--accent" as any]: "#5b6ee1" }} onClick={() => setView("tasks")}>
-            <span className="nav-card-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M9 6h11M9 12h11M9 18h11" /><path d="M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2" />
-              </svg>
-            </span>
-            <span className="nav-card-title">Tasks</span>
-            <span className="nav-card-sub">Predefined tasks &amp; processes, and when a task becomes a process</span>
-            <span className="nav-card-spacer" />
-            <span className="nav-card-go">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-            </span>
-          </button>
-
-          <button className="nav-card" style={{ ["--accent" as any]: "#e0a13c" }} onClick={() => setView("interface")}>
-            <span className="nav-card-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="4" width="18" height="16" rx="2.5" /><path d="M8 4v16" />
-              </svg>
-            </span>
-            <span className="nav-card-title">Interface</span>
-            <span className="nav-card-sub">Sidebar &amp; layout</span>
-            <span className="nav-card-spacer" />
-            <div className="nav-insights">
-              <div className="nav-stat"><b>{dockLabels ? "On" : "Off"}</b><span>menu labels</span></div>
-              <div className="nav-stat"><b>{outlookConnected ? "Yes" : "No"}</b><span>outlook synced</span></div>
-            </div>
-            <span className="nav-card-go">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-            </span>
-          </button>
-
-          <button className="nav-card" style={{ ["--accent" as any]: "#5a7d6d" }} onClick={() => setView("account")}>
-            <span className="nav-card-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" />
-              </svg>
-            </span>
-            <span className="nav-card-title">Your account</span>
-            <span className="nav-card-sub">Password &amp; details</span>
-            <span className="nav-card-spacer" />
-            <div className="nav-insights">
-              <div className="nav-stat nav-stat-wide"><b>{levelLabel(role)}</b><span>your role</span></div>
-            </div>
-            <span className="nav-card-go">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-            </span>
-          </button>
-        </div>
-
-        <h2 className="nav-row-k">Pages</h2>
-        <div className="nav-cards is-pages">
-          <button className="nav-card" style={{ ["--accent" as any]: "#3c9ae0" }} onClick={() => setView("salespage")}>
-            <span className="nav-card-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2" /></svg>
-            </span>
-            <span className="nav-card-title">Deals page</span>
-            <span className="nav-card-sub">Import, export, deal fields &amp; sales roles</span>
-            <span className="nav-card-spacer" />
-            <span className="nav-card-go">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-              </span>
-          </button>
-          <button className="nav-card" style={{ ["--accent" as any]: "#9b6fd0" }} onClick={() => setView("mgmtpage")}>
-            <span className="nav-card-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5" /><path d="M3 10h18M9 10v10" /></svg>
-            </span>
-            <span className="nav-card-title">Management page</span>
-            <span className="nav-card-sub">Settings for incoming, billing &amp; bonuses</span>
-            <span className="nav-card-spacer" />
-            <span className="nav-card-go">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-              </span>
-          </button>
-          {crmLead && (
-            <button className="nav-card" style={{ ["--accent" as any]: "#d98324" }} onClick={() => setView("companiespage")}>
-              <span className="nav-card-icon">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 21h18M5 21V7l7-4 7 4v14M9 21v-4h6v4M9 9h.01M15 9h.01M9 13h.01M15 13h.01" /></svg>
-              </span>
-              <span className="nav-card-title">Companies page</span>
-              <span className="nav-card-sub">Custom fields, sectors &amp; sources, import, export &amp; clean-up</span>
-              <span className="nav-card-spacer" />
-              <span className="nav-card-go">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-              </span>
-            </button>
-          )}
-          {crmLead && (
-            <button className="nav-card" style={{ ["--accent" as any]: "#e0574b" }} onClick={() => setView("contactspage")}>
-              <span className="nav-card-icon">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8" /></svg>
-              </span>
-              <span className="nav-card-title">Contacts page</span>
-              <span className="nav-card-sub">Fields, import, export &amp; clean-up</span>
-              <span className="nav-card-spacer" />
-              <span className="nav-card-go">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-              </span>
-            </button>
-          )}
-          <button className="nav-card" style={{ ["--accent" as any]: "#12b57f" }} onClick={() => setView("clientpage")}>
-            <span className="nav-card-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M7 8l-4 4 4 4M17 8l4 4-4 4M14 5l-4 14" /></svg>
-            </span>
-            <span className="nav-card-title">Client page</span>
-            <span className="nav-card-sub">API access to client documents &amp; folders</span>
-            <span className="nav-card-spacer" />
-            <span className="nav-card-go">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-              </span>
-          </button>
-        </div>
+            </section>
+          ))}
         </div>
       </div>
     );
@@ -483,19 +393,10 @@ export default function SettingsPage() {
   if (view === "contactspage" && crmLead) return <ContactSettings onBack={() => setView("home")} />;
   if (view === "clientpage") return <ClientPageSettings onBack={() => setView("home")} canManage={canManage || isSuperadmin === true} />;
   if (view === "salespage") return <SalesPage settings={{ onBack: () => setView("home") }} />;
-  if (view === "mgmtpage") {
-    return (
-      <div className="st">
-        <header className="st-bar st-bar-back">
-          <button className="uv-back" onClick={() => setView("home")}>‹ Settings</button>
-          <h1 className="st-title">Management page</h1>
-          <p className="st-sub">Settings for this page</p>
-        </header>
-        <section className="st-section cps-empty">
-          <p className="st-note">Nothing to set up here yet.</p>
-        </section>
-      </div>
-    );
+  if (view === "mgmtpage") return <PageOnlySettings page="management" icon="grid" title="Management page" sub="Settings for incoming, billing & bonuses — and who sees whose figures" onBack={() => setView("home")} />;
+  {
+    const so = SECURITY_ONLY.find((x) => x.view === view);
+    if (so) return <PageOnlySettings page={so.page} icon={so.icon} title={so.title} sub={so.sub} onBack={() => setView("home")} />;
   }
 
   // ---- Organization ----
@@ -512,7 +413,7 @@ export default function SettingsPage() {
             className="st-pa-btn"
             onClick={() => canEditAccess && setShowPageAccess(true)}
             disabled={!canEditAccess}
-            title={canEditAccess ? "Which pages and panels each person can open" : `Only the Boss security level can change page access (your security level: ${secLevel ?? "none"})`}
+            title={canEditAccess ? "Which departments can open each page" : `Only the Boss security level can change page access (your security level: ${secLevel ?? "none"})`}
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z" /><path d="M9 12l2 2 4-4" /></svg>
             Page access
@@ -729,7 +630,17 @@ const hashKey = async (t: string) =>
   Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t))))
     .map((b) => b.toString(16).padStart(2, "0")).join("");
 
+/** A page's settings that, for now, hold only its Security section. */
+function PageOnlySettings({ page, icon, title, sub, onBack }: { page: PageKey; icon: string; title: string; sub: string; onBack: () => void }) {
+  const sec = useSecuritySection(page);
+  return (
+    <SettingsShell icon={icon} title={title} sub={sub} onBack={onBack}
+      sections={sec ? [sec] : [{ k: "none", label: title, icon: "lock", tone: "slate", title: "Nothing to set up yet", hint: "Settings for this page will appear here", body: <p className="st-note">Nothing to set up here yet.</p> }]} />
+  );
+}
+
 export function ClientPageSettings({ onBack, canManage }: { onBack: () => void; canManage: boolean }) {
+  const secSection = useSecuritySection("clients");
   const [keys, setKeys] = useState<ApiKeyRow[] | null>(null);
   const [clients, setClients] = useState<{ id: string; name: string }[]>([]);
   const [err, setErr] = useState<string | null>(null);
@@ -921,6 +832,7 @@ export function ClientPageSettings({ onBack, canManage }: { onBack: () => void; 
         { k: "clients", label: "Clients", icon: "building", tone: "violet", count: API_ENDPOINTS.filter(([, p]) => !/\/(files|folders)/.test(p)).length, title: "Clients & tree", hint: "The clients a key reaches, and everything in one client at once", body: eps((p) => !/\/(files|folders)/.test(p)) },
         { k: "files", label: "Files", icon: "note", tone: "amber", count: API_ENDPOINTS.filter(([, p]) => /\/files/.test(p)).length, title: "Files", hint: "List, download, upload, replace, rename, move and delete files", body: eps((p) => /\/files/.test(p)) },
         { k: "folders", label: "Folders", icon: "tree", tone: "indigo", count: API_ENDPOINTS.filter(([, p]) => /\/folders/.test(p)).length, title: "Folders", hint: "Create, rename, move and delete folders", body: eps((p) => /\/folders/.test(p)) },
+        ...(secSection ? [secSection] : []),
       ]} />
   );
 }

@@ -316,13 +316,48 @@ function pickNew(obj: any, keys: string[]): Record<string, any> {
   return out;
 }
 export const missingColumn = (m: string) => /column .* does not exist|could not find the .* column|schema cache/i.test(m);
-const friendlyDbError = (m: string) =>
+export const friendlyDbError = (m: string) =>
   /above itself in the group|own parent company/i.test(m) ? "That company is already below this one in the group — it can't also be above it." : m;
 
 /** Put a company under another one in its group (null = top of its own group). */
 export async function setCompanyParent(id: string, parentId: string | null): Promise<string | null> {
   const { error } = await supabase.from("companies").update({ parent_id: parentId }).eq("id", id);
   return error ? friendlyDbError(error.message) : null;
+}
+
+/* ---- Many rows at once (multi-select): a few requests, never a URL too long to send ---- */
+const BATCH = 80;
+export const inChunks = <T,>(xs: T[], n = BATCH): T[][] => Array.from({ length: Math.ceil(xs.length / n) }, (_, i) => xs.slice(i * n, (i + 1) * n));
+/** Same change on many rows. */
+export async function updateMany(table: string, ids: string[], patch: Record<string, unknown>): Promise<string | null> {
+  for (const c of inChunks(ids)) {
+    const { error } = await supabase.from(table).update(patch).in("id", c);
+    if (error) return friendlyDbError(error.message);
+  }
+  return null;
+}
+/** Delete many rows by id (or by `col`, with an extra equality filter). */
+export async function deleteMany(table: string, ids: string[], col = "id", also?: [string, string]): Promise<string | null> {
+  for (const c of inChunks(ids)) {
+    let q = supabase.from(table).delete().in(col, c);
+    if (also) q = q.eq(also[0], also[1]);
+    const { error } = await q;
+    if (error) return error.message;
+  }
+  return null;
+}
+/** Insert many rows (sent in the body, 500 at a time). Rows already there are skipped one by one if a batch hits them. */
+export async function insertMany(table: string, rows: Record<string, unknown>[]): Promise<string | null> {
+  for (const c of inChunks(rows, 500)) {
+    const { error } = await supabase.from(table).insert(c);
+    if (!error) continue;
+    if (!/duplicate|unique/i.test(error.message)) return error.message;
+    for (const r of c) {
+      const { error: e1 } = await supabase.from(table).insert(r);
+      if (e1 && !/duplicate|unique/i.test(e1.message)) return e1.message;
+    }
+  }
+  return null;
 }
 
 export async function deleteCompany(id: string): Promise<string | null> {

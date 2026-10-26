@@ -57,7 +57,19 @@ export interface CatalogInput {
   imports?: Record<string, string>;
   /** What each row is: a contact (default) or a company. */
   root?: Root;
+  /** When we were last in touch (meetings, e-mails, logged contacts…), by contact id and company id. */
+  lastTouch?: LastTouch;
 }
+export interface LastTouch {
+  contact: Record<string, string>;
+  company: Record<string, string>;
+  /** The last campaign e-mail each contact got. */
+  campaign?: Record<string, string>;
+  /** How each was last reached: "meeting", "e-mail", "call"… */
+  contactHow?: Record<string, string>;
+  companyHow?: Record<string, string>;
+}
+const daysSince = (iso: string | null | undefined) => (iso ? Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 864e5)) : null);
 
 // reg_number: no longer shown anywhere (the column stays in the database)
 const SKIP = new Set(["id", "tenant_id", "companyIds", "contactIds", "custom", "reg_number"]);
@@ -150,6 +162,20 @@ export function buildCatalog(inp: CatalogInput): XF[] {
       { key: "contact:@has", src: "contact", label: "Has a contact", kind: "bool", perEntity: false, get: (x) => [(x.cts ?? []).length > 0], noColumn: true },
       mk("company", "@ncontacts", "Number of contacts", "number", (_co, x) => (x.cts ?? []).length),
       mk("company", "@ndeals", "Number of deals", "number", (_co, x) => x.deals.length),
+    );
+  }
+  if (inp.lastTouch) {
+    const lt = inp.lastTouch;
+    const hows = (m?: Record<string, string>) => sortOpts([...new Set(Object.values(m ?? {}))].map((v) => ({ value: v, label: v.charAt(0).toUpperCase() + v.slice(1) })));
+    out.push(
+      mk("contact", "@lastcontact", "Last contacted", "date", (c) => lt.contact[c.id] ?? null),
+      mk("contact", "@sincecontact", "Days since contacted", "number", (c) => daysSince(lt.contact[c.id])),
+      mk("contact", "@lasthow", "Last contacted by", "enum", (c) => lt.contactHow?.[c.id] ?? null, { options: hows(lt.contactHow) }),
+      mk("contact", "@lastcampaign", "Last campaign e-mail", "date", (c) => lt.campaign?.[c.id] ?? null),
+      mk("contact", "@sincecampaign", "Days since last campaign", "number", (c) => daysSince(lt.campaign?.[c.id])),
+      mk("company", "@lastcontact", "Last contacted", "date", (co) => lt.company[co.id] ?? null),
+      mk("company", "@sincecontact", "Days since contacted", "number", (co) => daysSince(lt.company[co.id])),
+      mk("company", "@lasthow", "Last contacted by", "enum", (co) => lt.companyHow?.[co.id] ?? null, { options: hows(lt.companyHow) }),
     );
   }
   out.push(

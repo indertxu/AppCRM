@@ -470,3 +470,6 @@
   .plv-main { min-height: 420px; }
 }
 @media (prefers-reduced-motion: reduce) { .plv-chev, .plv-row, .plv-folder-head, .plv-pop { transition: none; animation: none; } }
+.pl-dept-mark { font-size: 11px; line-height: 1; color: #fff; }
+.pl-dept-badge:empty { width: 12px; height: 12px; border-radius: 50%; box-shadow: 0 0 0 2px #fff; }
+.pl-dept-swatch:empty { width: 14px; height: 14px; border-radius: 50%; }

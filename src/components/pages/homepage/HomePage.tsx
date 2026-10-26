@@ -26,7 +26,7 @@ import ConsultancyHome from "./consultancy/ConsultancyHome";
 import ManagementHome from "./management/ManagementHome";
 import { applyRolePreview } from "../../framework/SuperAdmin";
 import { PageCube } from "../../framework/AppLayout";
-import { usePageAccess, goToSection, guardedLeave, type PageKey } from "../../framework/pageAccess";
+import { usePageAccess, goToSection, guardedLeave, deptName, type PageKey } from "../../framework/pageAccess";
 import { isSalesLead, globalSearch, type SearchHit } from "../companies/companiesApi";
 import "./HomePage.css";
 
@@ -523,7 +523,7 @@ export function GlobalSearch() {
     // found by the database: ranked with the same scoring as everything else
     remoteHits.forEach((h) => add(h.kind, h.id, h.label, h.sub ?? (h.kind === "deal" ? "Deal" : h.kind === "company" ? "Company" : "Contact"),
       [h.label, h.email ?? "", h.sub ?? ""], h.kind === "deal" && h.status === "active" ? 3 : 0));
-    (dir?.people ?? []).forEach((p) => add("person", p.id, p.name, [p.department, p.email].filter(Boolean).join(" · "), [p.name, p.email], -2));
+    (dir?.people ?? []).forEach((p) => add("person", p.id, p.name, [p.department ? deptName(p.department) : "", p.email].filter(Boolean).join(" · "), [p.name, p.email], -2));
     const best = [...all].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
     const out: { kind: HitKind; title: string; hits: Hit[] }[] = [];
     if (best[0] && (best[0].score ?? 0) >= 60) out.push({ kind: best[0].kind, title: "Top hit", hits: [best[0]] });

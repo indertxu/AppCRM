@@ -1051,3 +1051,16 @@
 .cw-line-facts:empty { display: none; }
 .cw-eng-row.is-static { cursor: default; }
 .cw-status.is-on_hold { background: rgba(217, 131, 36, 0.13); color: #b46a17; }
+
+/* ---------- Signed products: delete one (e.g. written twice), duplicates flagged ---------- */
+.cw-status.is-dup { background: rgba(217, 131, 36, 0.13); color: #b46a17; text-transform: none; }
+.cw-line-del { display: inline-flex; align-items: center; gap: 6px; flex: none; opacity: 0; transition: opacity 0.2s; }
+.cw-line:hover .cw-line-del, .cw-line-del:focus-within, .cw-line-del.is-asking { opacity: 1; }
+@media (hover: none) { .cw-line-del { opacity: 1; } }
+.cw-line-del.is-asking { padding: 3px 3px 3px 10px; border-radius: 10px; background: #fff; box-shadow: 0 6px 18px -8px rgba(15, 32, 26, 0.35), 0 0 0 1px var(--line); animation: cw-in 0.25s var(--ease) both; }
+.cw-line-del span { font-size: 12px; font-weight: 600; color: var(--red); white-space: nowrap; }
+.cw-line-del button { height: 26px; padding: 0 9px; border: 0; border-radius: 7px; background: var(--soft); color: var(--muted); font-size: 11.5px; font-weight: 650; cursor: pointer; font-family: inherit; }
+.cw-line-del button:disabled { opacity: 0.6; cursor: default; }
+.cw-line-del button.is-yes { background: var(--red); color: #fff; }
+.cw-line-del button.is-x { display: grid; place-items: center; width: 28px; padding: 0; background: #fff; box-shadow: 0 0 0 1px var(--line); }
+.cw-line-del button.is-x:hover { background: var(--red-soft); color: var(--red); }

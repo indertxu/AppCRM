@@ -15,6 +15,7 @@ import { supabase } from "../../../api/supabase";
 import { loadRoles } from "../../settings/blueprintsApi";
 import { roleLinesOfRow, resolveRoleKey, legacyRoleMap, roleKeyOf, roleCounts, rateOn, lineRate, projectStatusOn } from "../../clients/clientsTypes";
 import { goToSection } from "../../../framework/pageAccess";
+import { useMgmtAccess } from "../../management/mgmtAccess";
 import { ClientLogo } from "../../clients/ClientWorkspace";
 import { CAL_SUMMARY_EVENT, type CalSummary } from "../shared/HomeCalendar";
 import { TICKETS_EVENT } from "../shared/HomeTodo";
@@ -182,8 +183,19 @@ function Spark({ series, target }: { series: number[]; target: number }) {
   );
 }
 
-export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar, desk, greeting, firstName, heroRef }: Props) {
+export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDay, calendar, desk, greeting, firstName, heroRef }: Props) {
   const nav = useNavigate();
+  /* Whose figures show here: the same reach as Management › Team (Settings › Management › Security).
+     A lead sees everyone, or only their department, or only themselves; anyone else only themselves.
+     undefined = still reading the rules. null = everyone. */
+  const macc = useMgmtAccess();
+  const teamLv = macc.ready ? macc.level("team") : null;
+  const whoList: string[] | null | undefined = !macc.ready ? undefined
+    : isLeadRole && teamLv === "all" ? null
+    : isLeadRole && teamLv === "own" && macc.scope === "department" ? macc.team
+    : [userId];
+  const isLead = whoList === null || (whoList?.length ?? 0) > 1;
+  const whoKey = whoList === undefined ? "" : whoList === null ? "*" : whoList.join(",");
   const [loading, setLoading] = useState(true);
   const [bills, setBills] = useState<Bill[]>([]);
   const [backlog, setBacklog] = useState({ consDays: 0, connDays: 0, valueCore: 0, valueConn: 0, value: 0, projects: 0, holdDays: 0, holdValue: 0, holdProjects: 0, otherLabel: "Other roles" });
@@ -247,6 +259,8 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar,
   }, [userId]);
 
   useEffect(() => {
+    if (whoList === undefined) return;
+    const whoSet = whoList ? new Set(whoList) : null;
     let alive = true;
     (async () => {
       const todayISO = new Date().toISOString().slice(0, 10);
@@ -296,7 +310,14 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar,
         if (p.kickoff_date && p.kickoff_date > todayISO) return;
         const st = projectStatusOn({ status: p.status, endDate: p.end_date }, todayISO);
         if (st === "closed") return;
-        const lines = linesOf(p);
+        let lines = linesOf(p);
+        // limited view: only the roles the person (or their department) holds on the project
+        if (whoSet) {
+          const held = new Set((Array.isArray(p.team) ? p.team : [])
+            .filter((m: any) => m?.role && whoSet.has(m.userId || m.user_id))
+            .map((m: any) => resolveRoleKey(m.role, legacy)));
+          lines = lines.filter((l) => held.has(l.roleId) && roleCounts(l.roleId, roles));
+        }
         if (lines.reduce((s, l) => s + l.days, 0) === 0) return;
         const b = billedByProjRole[p.id] || {};
         // on hold: kept apart from the active backlog (shown as "+ on hold")
@@ -429,25 +450,26 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar,
         return { userId: uid, name: nameById[uid] || "Unknown", daysDone, daysPlanned, daysTarget, billed, billedPlanned, billTarget, bonus, series: seriesOf(uid) };
       }).sort((a, b) => (b.daysDone + b.daysPlanned) - (a.daysDone + a.daysPlanned));
 
-      const shown = isLead ? rows : rows.filter((r) => r.userId === userId);
+      const shown = whoSet ? rows.filter((r) => whoSet.has(r.userId)) : rows;
       if (alive) {
         setTeam(shown);
         setTeamTotals({
-          daysDone: rows.reduce((s, r) => s + r.daysDone, 0),
-          daysPlanned: rows.reduce((s, r) => s + r.daysPlanned, 0),
-          daysTarget: rows.reduce((s, r) => s + r.daysTarget, 0),
-          billed: rows.reduce((s, r) => s + r.billed, 0),
-          billTarget: rows.reduce((s, r) => s + r.billTarget, 0),
-          bonus: rows.reduce((s, r) => s + r.bonus, 0),
+          daysDone: shown.reduce((s, r) => s + r.daysDone, 0),
+          daysPlanned: shown.reduce((s, r) => s + r.daysPlanned, 0),
+          daysTarget: shown.reduce((s, r) => s + r.daysTarget, 0),
+          billed: shown.reduce((s, r) => s + r.billed, 0),
+          billTarget: shown.reduce((s, r) => s + r.billTarget, 0),
+          bonus: shown.reduce((s, r) => s + r.bonus, 0),
         });
       }
 
       // ---- outstanding bills of MY projects (unpaid) ----
       // My projects = projects I've delivered on this scope.
-      const myProjectIds = new Set((allCe ?? []).filter((e: any) => e.user_id === userId).map((e: any) => e.project_id));
+      const myProjectIds = new Set((allCe ?? []).filter((e: any) => whoSet ? whoSet.has(e.user_id) : true).map((e: any) => e.project_id));
+      (projs ?? []).forEach((p: any) => { if (whoSet && (Array.isArray(p.team) ? p.team : []).some((m: any) => whoSet.has(m?.userId || m?.user_id))) myProjectIds.add(p.id); });
       const nowMonths = nowP.getFullYear() * 12 + nowP.getMonth();
       const unpaid = (inv ?? [])
-        .filter((i: any) => i.status !== "paid" && (isLead || myProjectIds.has(i.project_id)))
+        .filter((i: any) => i.status !== "paid" && (!whoSet || myProjectIds.has(i.project_id)))
         .map((i: any) => {
           const cid = projClient[i.project_id] ?? null;
           const [py, pm] = String(i.period ?? "").split("-").map(Number);
@@ -461,7 +483,7 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar,
       if (alive) setLoading(false);
     })();
     return () => { alive = false; };
-  }, [userId, isLead, hoursPerDay]);
+  }, [userId, whoKey, hoursPerDay]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const outstandingTotal = useMemo(() => bills.reduce((s, b) => s + b.amount, 0), [bills]);
   const lateBills = bills.filter((b) => b.ageMonths >= 2).length;
@@ -667,9 +689,9 @@ export default function ConsultancyHome({ userId, isLead, hoursPerDay, calendar,
       {/* ============ LEFT: calendar + backlog 2×2 ============ */}
       <div className="ch-col ch-col-mid">
         {calendar}
-        <section className="cz-card cz-backlog" aria-label="Department backlog">
+        <section className="cz-card cz-backlog" aria-label={whoList === null ? "Department backlog" : isLead ? "Your department's backlog" : "Your backlog"}>
           {/* no button: every figure opens Management › Backlog, and they get the card's height */}
-          <span className="cz-eyebrow cz-bl-k">Department backlog</span>
+          <span className="cz-eyebrow cz-bl-k">{whoList === null ? "Department backlog" : isLead ? "Your department's backlog" : "Your backlog"}</span>
           <div className="cz-kpis">
             <div className="cz-kpi is-hero" {...toBacklog}>
               <div className="cz-kpi-rest">

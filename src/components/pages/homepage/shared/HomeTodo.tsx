@@ -24,6 +24,7 @@
  * Tasks) are offered from the ✦ button when adding one.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { deptName } from "../../../framework/pageAccess";
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../../../api/supabase";
@@ -1802,7 +1803,7 @@ function PeopleMenu({ dir, value, onPick, allowNone = true }: { dir: Directory; 
         {allowNone && !q && value && <button type="button" className="tk-pop-opt" onClick={() => onPick(null)}><Avatar person={null} size={22} /><span>Unassigned</span></button>}
         {list.slice(0, 40).map((p) => (
           <button type="button" key={p.id} className={`tk-pop-opt ${p.id === value ? "is-on" : ""}`} onClick={() => onPick(p.id)}>
-            <Avatar person={p} size={22} /><span>{p.name}<em>{p.department ?? p.role ?? ""}</em></span>{p.id === value && <TkIco d="check" className="tk-pop-tick" />}
+            <Avatar person={p} size={22} /><span>{p.name}<em>{p.department ? deptName(p.department) : p.role ?? ""}</em></span>{p.id === value && <TkIco d="check" className="tk-pop-tick" />}
           </button>
         ))}
         {!list.length && <p className="tk-pop-empty">Nobody called that.</p>}
@@ -3166,7 +3167,7 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
             <div className="td-prop">
               <span className="td-pk">Team</span>
               <div className="td-pv">
-                <Select value={t.team ?? ""} onChange={(v) => set({ team: v || null })} aria-label="Team" options={[{ value: "", label: "Any team" }, ...departments.map((d) => ({ value: d, label: d[0].toUpperCase() + d.slice(1) }))]} />
+                <Select value={t.team ?? ""} onChange={(v) => set({ team: v || null })} aria-label="Team" options={[{ value: "", label: "Any team" }, ...departments.map((d) => ({ value: d, label: deptName(d) }))]} />
               </div>
             </div>
             {!isTask && (
@@ -3728,7 +3729,7 @@ function RuleEditor({ rule, dir, types, tickets, boxes, inbox, onSave, onCancel 
             <div className="tr-f"><span>Type</span><Select value={r.set.type ?? ""} onChange={(v) => setS({ type: v || null })} options={[{ value: "", label: "No type" }, ...types.map((x) => ({ value: x, label: x }))]} /></div>
             <div className="tr-f"><span>Priority</span><Select value={r.set.priority ?? ""} onChange={(v) => setS({ priority: (v || null) as TaskPriority | null })} options={[{ value: "", label: "Normal" }, ...TASK_PRIORITIES.map((p) => ({ value: p, label: PRIORITY_LABEL[p] }))]} /></div>
             <div className="tr-f"><span>Owner</span><Select searchable value={r.set.assignee_id ?? ""} onChange={(v) => setS({ assignee_id: v || null })} options={opt(dir.people, "Unassigned")} /></div>
-            <div className="tr-f"><span>Team</span><Select value={r.set.team ?? ""} onChange={(v) => setS({ team: v || null })} options={[{ value: "", label: "Any team" }, ...departments.map((d) => ({ value: d, label: d[0].toUpperCase() + d.slice(1) }))]} /></div>
+            <div className="tr-f"><span>Team</span><Select value={r.set.team ?? ""} onChange={(v) => setS({ team: v || null })} options={[{ value: "", label: "Any team" }, ...departments.map((d) => ({ value: d, label: deptName(d) }))]} /></div>
             <div className="tr-f"><span>Client</span><Select searchable value={r.set.client_id ?? ""} onChange={(v) => setS({ client_id: v || null })} options={opt(dir.clients, "From the sender")} /></div>
             <label><span>Tags</span><input className="td-in" value={(r.set.tags ?? []).join(", ")} placeholder="support, acme" onChange={(e) => setS({ tags: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} /></label>
           </div>

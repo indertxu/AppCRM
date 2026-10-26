@@ -3444,3 +3444,40 @@
   .csx-hero.is-compact .csx-seg.is-dark button { padding: 0 9px; }
   .cs3-hero-auto { flex: none; }
 }
+
+/* =====================================================================
+   Clients — compact header (title, figures, toolbar) so the list gets the room,
+   and column headers that are never cut and line up with their figures.
+   ===================================================================== */
+.cl.cl-ov:not(.pj-page) > .cl-bar { padding: 14px 30px 10px; }
+.cl.cl-ov:not(.pj-page) .cl-bar-left > div { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+.cl.cl-ov:not(.pj-page) .cl-title { font-size: 24px; line-height: 1.15; }
+.cl.cl-ov:not(.pj-page) .cl-bar-left .cx-sub { margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cl.cl-ov:not(.pj-page) .cx-kpis { padding: 0 30px 32px; gap: 10px; }
+.cl.cl-ov:not(.pj-page) .cx-kpi { padding: 10px 14px 11px; border-radius: 16px; }
+.cl.cl-ov:not(.pj-page) .cx-kpi-top { gap: 8px; }
+.cl.cl-ov:not(.pj-page) .cx-kpi-ico { width: 24px; height: 24px; border-radius: 8px; }
+.cl.cl-ov:not(.pj-page) .cx-kpi-ico svg { width: 13px; height: 13px; }
+.cl.cl-ov:not(.pj-page) .cx-kpi-k { font-size: 12.5px; }
+.cl.cl-ov:not(.pj-page) .cx-kpi-v { margin-top: 6px; font-size: clamp(22px, 1.75vw, 27px); }
+.cl.cl-ov:not(.pj-page) .cx-kpi-sub { margin-top: 3px; font-size: 11.5px; }
+.cl.cl-ov:not(.pj-page) .cx-kpi-bar { margin-top: 7px; height: 3px; }
+.cl.cl-ov:not(.pj-page) .cx-kpi-edit > button { border-radius: 16px; }
+.cl.cl-ov:not(.pj-page) .cx-sheet { padding-top: 10px; }
+.cl.cl-ov:not(.pj-page) .cx-sheet .cx-tools { margin-bottom: 8px; padding: 5px; border-radius: 15px; }
+
+/* list: wider gutters between columns, headers at full width (right-aligned ones end where their figures end) */
+.cl.cl-ov:not(.pj-page) .cx-tr { column-gap: clamp(12px, 1.3vw, 26px); padding: 9px 16px; }
+.cl.cl-ov:not(.pj-page) .cx-tr.is-head { padding: 4px 16px 6px; }
+.cx-tr.is-head > span { display: flex; align-items: center; overflow: visible; }
+.cx-tr.is-head > span.is-num { justify-self: stretch; justify-content: flex-end; }
+.cx-tr.is-head > span .fx-sort { margin: -2px -4px; }
+.cx-tr.is-head > span.is-num .fx-sort { flex-direction: row-reverse; }
+.cx-tr.is-head .fx-sort > span { overflow: hidden; text-overflow: ellipsis; }
+/* narrow list: the short names, so a header is never cut */
+.cx-table-wrap { container-type: inline-size; container-name: cxlist; }
+.cx-h-short { display: none; }
+@container cxlist (max-width: 1260px) {
+  .cx-h-full.has-short { display: none; }
+  .cx-h-short { display: inline; }
+}

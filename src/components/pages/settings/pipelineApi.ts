@@ -85,36 +85,57 @@ export async function savePipelineOrder(ids: string[]): Promise<string | null> {
  * anything else starts at its first phase. Notes, tasks and meetings filed
  * under the old phase follow the deal.
  */
-export async function moveDealsToPipeline(dealIds: string[], toPipelineId: string): Promise<string | null> {
+/**
+ * Moves deals to another pipeline, into `phaseId` (or, with "__match" / null,
+ * each into the phase with the same name it had, else won/lost to the win/loss
+ * phase, else the first phase). Notes, tasks and meetings tied to the old
+ * phases follow. Works in batches: a whole selection is a handful of requests,
+ * never one URL too long to send.
+ */
+export async function moveDealsToPipeline(dealIds: string[], toPipelineId: string, phaseId: string | null = null): Promise<string | null> {
   if (!dealIds.length) return null;
-  const { data: deals, error: dErr } = await supabase.from("trackings").select("id, status, current_phase_id, pipeline_id").in("id", dealIds);
-  if (dErr) return dErr.message;
+  const CHUNK = 60;
+  const chunks = <T,>(xs: T[]) => Array.from({ length: Math.ceil(xs.length / CHUNK) }, (_, i) => xs.slice(i * CHUNK, (i + 1) * CHUNK));
+  const reads = await Promise.all(chunks(dealIds).map((c) => supabase.from("trackings").select("id, status, current_phase_id, pipeline_id").in("id", c)));
+  const bad = reads.find((r) => r.error);
+  if (bad?.error) return bad.error.message;
+  const deals = reads.flatMap((r) => (r.data ?? []) as any[]).filter((d) => d.pipeline_id !== toPipelineId);
+  if (!deals.length) return null;
   const { phases } = await loadPipeline(toPipelineId);
   const visible = phases.filter((p) => p.sales_visible !== false);
   const first = visible.find((p) => !p.sales_outcome) ?? visible[0] ?? phases[0] ?? null;
   const win = visible.find((p) => p.sales_outcome === "win"), loss = visible.find((p) => p.sales_outcome === "loss");
-  const fromPipes = Array.from(new Set(((deals ?? []) as any[]).map((d) => d.pipeline_id).filter(Boolean)));
+  const fromPipes = Array.from(new Set(deals.map((d) => d.pipeline_id).filter(Boolean)));
   const { data: oldPhases } = fromPipes.length
     ? await supabase.from("pipeline_phases").select("id, name, pipeline_id").in("pipeline_id", fromPipes)
     : { data: [] as any[] };
   const oldName = new Map(((oldPhases ?? []) as any[]).map((p) => [p.id, p.name as string]));
+  const oldIds = ((oldPhases ?? []) as any[]).map((p) => p.id as string);
   const norm = (x: string) => x.trim().toLowerCase();
-  for (const d of (deals ?? []) as any[]) {
-    if (d.pipeline_id === toPipelineId) continue;
+  const chosen = phaseId && phaseId !== "__match" ? phases.find((p) => p.id === phaseId) ?? null : null;
+  const targetOf = (d: any) => {
+    if (chosen) return chosen;
     const was = d.current_phase_id ? oldName.get(d.current_phase_id) : undefined;
-    const target = (was && phases.find((p) => norm(p.name) === norm(was)))
-      || (d.status === "won" ? win : d.status === "lost" ? loss : undefined) || first;
-    const { error } = await supabase.from("trackings").update({ pipeline_id: toPipelineId, current_phase_id: target?.id ?? null }).eq("id", d.id);
-    if (error) return `Couldn't move a deal: ${error.message}`;
-    const oldIds = ((oldPhases ?? []) as any[]).filter((p) => p.pipeline_id === d.pipeline_id).map((p) => p.id);
-    if (oldIds.length) {
-      const to = target?.id ?? null;
-      await supabase.from("tracking_notes").update({ phase_id: to }).eq("tracking_id", d.id).in("phase_id", oldIds);
-      await supabase.from("tracking_tasks").update({ phase_id: to }).eq("tracking_id", d.id).in("phase_id", oldIds);
-      await supabase.from("calendar_entries").update({ phase_id_ref: to }).eq("tracking_id", d.id).in("phase_id_ref", oldIds);
-      await supabase.from("tracking_phase_events").delete().eq("tracking_id", d.id).in("phase_id", oldIds);
+    return (was && phases.find((p) => norm(p.name) === norm(was))) || (d.status === "won" ? win : d.status === "lost" ? loss : undefined) || first;
+  };
+  // deals that land in the same phase move together
+  const groups = new Map<string, string[]>();
+  deals.forEach((d) => { const k = targetOf(d)?.id ?? ""; groups.set(k, [...(groups.get(k) ?? []), d.id]); });
+  for (const [target, ids] of groups) {
+    const to = target || null;
+    for (const c of chunks(ids)) {
+      const { error } = await supabase.from("trackings").update({ pipeline_id: toPipelineId, current_phase_id: to }).in("id", c);
+      if (error) return `Couldn't move the deals: ${error.message}`;
+      if (oldIds.length) {
+        await Promise.all([
+          supabase.from("tracking_notes").update({ phase_id: to }).in("tracking_id", c).in("phase_id", oldIds),
+          supabase.from("tracking_tasks").update({ phase_id: to }).in("tracking_id", c).in("phase_id", oldIds),
+          supabase.from("calendar_entries").update({ phase_id_ref: to }).in("tracking_id", c).in("phase_id_ref", oldIds),
+          supabase.from("tracking_phase_events").delete().in("tracking_id", c).in("phase_id", oldIds),
+        ]);
+      }
+      if (to) await supabase.from("tracking_phase_events").insert(c.map((id) => ({ tracking_id: id, phase_id: to })));
     }
-    if (target) await supabase.from("tracking_phase_events").insert({ tracking_id: d.id, phase_id: target.id });
   }
   return null;
 }

@@ -55,6 +55,8 @@ interface Props {
   asOf: string;
   /** Access "only own": pin the consultant view to this user and hide the picker. */
   lockUser?: string;
+  /** Access "their department": only these people's projects, and only them in the picker. */
+  onlyUsers?: string[];
 }
 
 const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -253,7 +255,7 @@ interface ProjRow {
 export default function BacklogPanel({
   entries, projects, clientNames, typeNames, people, roles,
   hourProjects, hoursPerDay,
-  scope, anchor, rangeFrom, rangeTo, mainRoleByService, asOf: asOfProp, lockUser,
+  scope, anchor, rangeFrom, rangeTo, mainRoleByService, asOf: asOfProp, lockUser, onlyUsers,
 }: Props) {
   const [chartMode, setChartMode] = useState<"days" | "value">("days");
   /** Cards read in days by default; three of them flip to the h + d split. */
@@ -299,6 +301,8 @@ export default function BacklogPanel({
 
   const [consultantPick, setConsultantFilter] = useState<string>("");
   const consultantFilter = lockUser ?? consultantPick;
+  /** With no one picked, a department-limited view still only shows its people's projects. */
+  const inGroup = (p: BkProj | undefined) => !onlyUsers || (!!p && onlyUsers.some((u) => responsibleOn(p, u) || ownerOf(p) === u));
 
   // ── Column sort + filters (opened from the list headers) ───────────────────
   type SortKey = "client" | "progress" | "days" | "value" | "team" | "kickoff";
@@ -436,6 +440,7 @@ export default function BacklogPanel({
       if (sum(r.sold) === 0) return false;
       if (onlyLeft && sum(availableOf(r)) <= 0.001) return false;
       if (onlyUnowned && !unownedBacklog.ids.has(r.id)) return false;
+      if (!consultantFilter && !inGroup(projects[r.id])) return false;
       if (consultantFilter) {
         const p = projects[r.id];
         if (!p) return false;
@@ -527,7 +532,7 @@ export default function BacklogPanel({
       (p.team ?? []).forEach((m) => { if (m.userId && m.role && counts(m.role) && p.lines.some((l) => l.roleId === m.role)) ids.add(m.userId); });
     });
     return Array.from(ids)
-      .filter((id) => !inactive.has(id))
+      .filter((id) => !inactive.has(id) && (!onlyUsers || onlyUsers.includes(id)))
       .map((id) => ({ id, name: people[id] || "Unknown" }))
       .sort((a, b) => a.name.localeCompare(b.name));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -587,6 +592,7 @@ export default function BacklogPanel({
     rows.forEach((r) => {
       if (sum(r.sold) === 0) return;
       if (consultantFilter) { const p = projects[r.id]; if (!p || !responsibleOn(p, consultantFilter)) return; }
+      else if (!inGroup(projects[r.id])) return;
       const a = availForRow(r);
       const d = inDays(r.id, sum(a));
       if (d <= 0.001) return;
@@ -977,7 +983,7 @@ export default function BacklogPanel({
         </div>
 
         {/* ---------- backlog nobody owns yet ---------- */}
-        {unownedBacklog.days > 0.05 && (
+        {!lockUser && !onlyUsers && unownedBacklog.days > 0.05 && (
           <div className={`bl-unowned ${onlyUnowned ? "is-active" : ""}`}>
             <span className="bl-unowned-ico"><BlIcon d={BL_ICON.warn} w={1.9} /></span>
             <span>

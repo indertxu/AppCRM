@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { deptName } from "../../framework/pageAccess";
 import { createPortal } from "react-dom";
 import SalesMultiFilter from "../sales/sales/SalesMultiFilter";
 import {
@@ -200,7 +201,7 @@ export default function BonusPlanModal({ plan: initial, people, roles, departmen
                 {!p.who.everyone && (
                   <div className="bxm-who">
                     <label>Roles<SalesMultiFilter values={p.who.roles} onChange={(v) => setWho({ roles: v })} placeholder="Any role" noun="roles" options={roles.map((r) => ({ value: r, label: prettify(r) }))} /></label>
-                    <label>Departments<SalesMultiFilter values={p.who.departments} onChange={(v) => setWho({ departments: v })} placeholder="Any department" noun="departments" options={departments.map((d) => ({ value: d, label: prettify(d) }))} /></label>
+                    <label>Departments<SalesMultiFilter values={p.who.departments} onChange={(v) => setWho({ departments: v })} placeholder="Any department" noun="departments" options={departments.map((d) => ({ value: d, label: deptName(d) }))} /></label>
                     <label>People<SalesMultiFilter values={p.who.people} onChange={(v) => setWho({ people: v })} placeholder="Nobody named" noun="people" options={people.map((x) => ({ value: x.id, label: x.name }))} /></label>
                   </div>
                 )}
@@ -341,7 +342,7 @@ export default function BonusPlanModal({ plan: initial, people, roles, departmen
                       {p.who.everyone ? <b>Everyone</b> : (
                         <span className="bxw-tags">
                           {people.filter((x) => p.who.people.includes(x.id)).map((x) => <i key={x.id} className="is-person">{x.name}</i>)}
-                          {p.who.departments.map((d) => <i key={d} className="is-dept">{prettify(d)} dept.</i>)}
+                          {p.who.departments.map((d) => <i key={d} className="is-dept">{deptName(d)} dept.</i>)}
                           {p.who.roles.map((r) => <i key={r} className="is-role">{prettify(r)} role</i>)}
                         </span>
                       )}

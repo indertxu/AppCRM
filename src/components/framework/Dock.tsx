@@ -119,7 +119,7 @@ export function orderDock<T extends { path: string }>(list: T[], order: string[]
 
 const items: DockItem[] = [
   { label: "Home", path: "/home", icon: homeIcon, page: "home" },
-  { label: "Tickets", path: "/tickets", icon: ticketsIcon, page: "home", cls: "tickets" },
+  { label: "Tickets", path: "/tickets", icon: ticketsIcon, page: "tickets", cls: "tickets" },
   { label: "Calendar", path: "/calendar", icon: calendarIcon, page: "calendar" },
   { label: "Contacts", path: "/contacts", icon: contactsIcon, page: "contacts" },
   { label: "Companies", path: "/companies", icon: companiesIcon, page: "companies" },

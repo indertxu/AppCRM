@@ -1,22 +1,30 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
-import { PageLoader } from "../../framework/AppLayout";
+/**
+ * Settings → Organization → Page access.
+ *
+ * One line per page: the departments that can open it, and — next to it — the
+ * people from other departments who may open it too. Bosses and superadmins
+ * always open every page; Home and Settings are open to everyone.
+ */
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { supabase } from "../../api/supabase";
-import { LEVELS } from "./NewUserModal";
-import { DEPARTMENTS } from "./Organization";
+import { PageLoader } from "../../framework/AppLayout";
 import {
-  PAGES, PANELS, panelsOf, panelDef, isPanelKey, loadPageRules, savePageRules, resolvePage, resolveAny, resolveAllPages,
-  isFullAccess, pageRuleKey, usePageAccess, SECURITY_LEVEL_EVENT,
-  type PageKey, type PageMap, type PageRules, type PageSubject, type PageSourceKind, type AccessPerson, type Level, type PanelDef,
+  PAGES, EVERYONE, loadDepartments, loadPageDepartments, savePageDepartments, deptListOpens, usePageAccess, SECURITY_LEVEL_EVENT,
+  PAGE_SCOPES, loadScopeRules, saveScopeRules, type DataScope, type ScopeRules,
+  type Department, type PageKey,
 } from "../../framework/pageAccess";
-import "./PageAccessModal.css";
 import Select from "../../framework/Select";
+import { LEVELS } from "./NewUserModal";
+import { AREAS, HIDEABLE } from "../management/mgmtAccess";
+import "./PageAccessModal.css";
 
-/* ─────────────── page icons (same as the side menu) ─────────────── */
 const svg = (children: ReactNode, w = 1.9) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={w} strokeLinecap="round" strokeLinejoin="round">{children}</svg>;
+/* ─────────────── page icons (same as the side menu) ─────────────── */
 const PAGE_ICON: Record<PageKey, ReactNode> = {
   home: svg(<><path d="M3 10.5 12 3l9 7.5" /><path d="M5 9.5V20a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V9.5" /></>),
+  tickets: svg(<><path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4z" /><path d="M14 5v12" strokeDasharray="2 2" /></>),
   calendar: svg(<><rect x="3" y="4.5" width="18" height="16" rx="3" /><path d="M3 9h18M8 2.5v4M16 2.5v4" /></>),
   contacts: svg(<><rect x="4" y="3" width="16" height="18" rx="2" /><circle cx="12" cy="10" r="2.6" /><path d="M8 17a4 4 0 0 1 8 0M4 7h2M4 12h1.5M4 17h2" /></>),
   companies: svg(<><rect x="4" y="3" width="10" height="18" rx="1.5" /><path d="M14 8h6v13H4M7.5 7h3M7.5 11h3M7.5 15h3" /></>),
@@ -30,573 +38,490 @@ const PAGE_ICON: Record<PageKey, ReactNode> = {
 };
 const LOCK = svg(<><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></>);
 const CHECK = svg(<path d="M5 12.5l4.5 4.5L19 7.5" />, 2.6);
-const DASH = svg(<path d="M7 12h10" />, 2.6);
+const GLOBE = svg(<><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" /></>);
+const WARN = svg(<><path d="M12 3 2 20h20z" /><path d="M12 10v4M12 17h.01" /></>, 2);
+const CARET = <svg className="pa4-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>;
 
-const levelLabel = (id: string | null | undefined) => LEVELS.find((l: any) => l.id === id)?.label ?? (id ? id.split("_").map((w, i) => (i ? w : w[0].toUpperCase() + w.slice(1))).join(" ") : "No security role");
-const deptLabel = (k: string | null | undefined) => (DEPARTMENTS as readonly any[]).find((d) => d.key === k)?.label ?? k ?? "No department";
-const deptColor = (k: string | null | undefined) => (DEPARTMENTS as readonly any[]).find((d) => d.key === k)?.color ?? "#9fb5ab";
+interface Person { id: string; name: string; department: string | null; full: boolean }
+/** null = not set up yet (the current rules apply). */
+type Rule = { depts: string[]; users: string[] } | null;
+type Draft = Partial<Record<PageKey, Rule>>;
+const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
+const sameRule = (a: Rule | undefined, b: Rule | undefined) => (a == null || b == null ? (a ?? null) === (b ?? null) : sameSet(a.depts, b.depts) && sameSet(a.users, b.users));
 const initials = (s: string) => s.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "?";
-const SOURCE_LABEL: Record<PageSourceKind, string> = { boss: "Full access", locked: "Always open", user: "Person", role: "Security role", dept: "Department", everyone: "Everyone", default: "Default" };
-/** Words for a level: hidden / open for pages and two-way panels; hidden / own / all for the rest. */
-const isGraded = (key: string) => (panelDef(key)?.levels.length ?? 2) > 2;
-const levelText = (key: string, l: Level) => (l === "none" ? "Hidden" : isGraded(key) ? (l === "own" ? "Own data" : "All data") : "Open");
-/** What's stored for a choice: pages keep true/false, panels a level. */
-const stored = (key: string, l: Level): boolean | Level => (isPanelKey(key) ? l : l !== "none");
-const asLv = (v: boolean | Level | undefined): Level | undefined => (v === undefined ? undefined : v === true ? "all" : v === false ? "none" : v);
-const ALL_KEYS = [...PAGES.map((p) => p.key as string), ...PANELS.filter((p) => !p.locked).map((p) => p.key)];
+const fold = (x: string) => x.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 
-const CHEVRON = svg(<path d="M9 6l6 6-6 6" />, 2.2);
-const GROUPS_KEY = "next.pageAccess.groups";
-const TOUR_KEY = "next.pageAccess.tourSeen";
-const readLS = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
-const writeLS = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } };
-
-/* ─────────────── quick tutorial ─────────────── */
-const miniChoice = (opts: string[], on: number, inherit?: string) => (
-  <div className={`pas-choice ${opts.length > 2 ? "is-4" : ""} pas-tour-choice`} aria-hidden="true">
-    <button className={`is-inherit ${on === 0 ? "is-on" : ""}`} tabIndex={-1}><span>Inherit</span><small>{inherit ?? "Open"}</small></button>
-    {opts.map((o, i) => <button key={o} tabIndex={-1} className={`${o === "Hidden" ? "is-neg" : o === "Own" ? "is-own" : ""} ${on === i + 1 ? "is-on" : ""}`}><span>{o}</span></button>)}
-  </div>
-);
-const TOUR: { title: string; body: ReactNode; art: ReactNode }[] = [
-  {
-    title: "Pick who you're setting it for",
-    body: <>On the left, choose <b>Everyone</b>, a <b>security role</b>, a <b>department</b> or one <b>person</b>. Everything you change in the middle applies to what you picked. Lists can be folded away with the arrow next to their name, and the search box finds anyone.</>,
-    art: (
-      <div className="pas-tour-list">
-        {[["∗", "Everyone", "The starting point for all", "is-everyone"], ["S", "Sales", "Security role · 4 people", "is-role"], ["", "Marketing", "Department · 3 people", "is-dept"], ["AG", "Ana García", "Person", "is-user"]].map(([i, n, sub, c], x) => (
-          <span key={n} className={`pas-tour-row ${x === 1 ? "is-on" : ""}`}><i className={`pas-subj-ico ${c}`} style={{ ["--c" as string]: "#e0a13c" } as CSSProperties}>{i}</i><span><b>{n}</b><small>{sub}</small></span></span>
-        ))}
-      </div>
-    ),
-  },
-  {
-    title: "Open or hide each page",
-    body: <>Each page of the side menu has three choices. <b>Open</b> and <b>Hidden</b> are a decision for whoever you picked. <b>Inherit</b> means “leave it to the level below” — the small word under it tells you what they get right now.</>,
-    art: (
-      <div className="pas-tour-card">
-        <span className="pas-tour-pg"><span className="pas-card-ico">{PAGE_ICON.clients}</span><span><b>Clients</b><small>Clients and contracts</small></span></span>
-        {miniChoice(["Hidden", "Open"], 2, "Hidden")}
-      </div>
-    ),
-  },
-  {
-    title: "Who wins when settings disagree",
-    body: <>The most specific setting wins: <b>Person</b> beats <b>Security role</b>, which beats <b>Department</b>, which beats <b>Everyone</b>. If nobody set anything, the built-in default applies. So you set the general rule once on Everyone, and only the exceptions further up.</>,
-    art: (
-      <div className="pas-tour-ladder">
-        {[["Everyone", "Clients: Hidden", "is-everyone"], ["Sales role", "Clients: Open", "is-role"], ["Ana (person)", "Clients: Hidden", "is-user"]].map(([w, v, c], i) => (
-          <span key={w} className={`pas-tour-step ${c}`} style={{ ["--i" as string]: i } as CSSProperties}><b>{w}</b><small>{v}</small></span>
-        ))}
-        <p>Ana is in Sales, but her own setting wins → <b>she doesn't see Clients</b>. Her Sales colleagues do.</p>
-      </div>
-    ),
-  },
-  {
-    title: "Panels inside Settings and Management",
-    body: <>Under <b>Inside the pages</b> you choose which parts of Settings and Management someone gets. Management panels have a third level: <b>Own</b> shows only their own data, <b>All</b> shows everyone's. The same “who wins” order applies.</>,
-    art: (
-      <div className="pas-tour-card">
-        <span className="pas-tour-pg"><span className="pas-card-ico">{PAGE_ICON.management}</span><span><b>Billing</b><small>Bills and invoices per project</small></span></span>
-        {miniChoice(["Hidden", "Own", "All"], 2, "All data")}
-      </div>
-    ),
-  },
-  {
-    title: "Check the result before saving",
-    body: <>On the right, <b>Their side menu</b> shows exactly what the selected person will see, and where each answer comes from. <b>Who sees what</b> (top) shows everyone at once — click a name there to jump straight to their settings.</>,
-    art: (
-      <div className="pas-tour-dock">
-        {(["home", "calendar", "sales", "clients", "management"] as PageKey[]).map((k, i) => (
-          <span key={k} className={i === 3 ? "is-off" : ""}><i>{PAGE_ICON[k]}</i>{PAGES.find((p) => p.key === k)!.label}</span>
-        ))}
-      </div>
-    ),
-  },
-  {
-    title: "Save — and what never changes",
-    body: <><b>Save changes</b> updates everyone's menu straight away; a hidden page can't be opened by its link either. To keep anyone from being locked out, <b>Bosses</b> and superadmins always get everything, and <b>Home</b>, <b>Settings</b>, <b>Interface</b> and <b>Your account</b> are always open.</>,
-    art: (
-      <div className="pas-tour-final">
-        <span className="pas-tour-save">Save changes</span>
-        <span className="pas-tour-lock">{LOCK}Boss · Home · Settings · Interface · Your account</span>
-      </div>
-    ),
-  },
-];
-
-function Tour({ onClose }: { onClose: () => void }) {
-  const [i, setI] = useState(0);
-  const step = TOUR[i];
-  const last = i === TOUR.length - 1;
-  return (
-    <div className="pas-tour-backdrop" onMouseDown={onClose}>
-      <div className="pas-tour" role="dialog" aria-modal="true" aria-label="How page access works" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="pas-tour-art" key={`a${i}`}>{step.art}</div>
-        <div className="pas-tour-body" key={`b${i}`}>
-          <span className="pas-eyebrow">How it works · step {i + 1} of {TOUR.length}</span>
-          <h3>{step.title}</h3>
-          <p>{step.body}</p>
-        </div>
-        <footer className="pas-tour-foot">
-          <div className="pas-tour-dots">{TOUR.map((_, j) => <button key={j} className={j === i ? "is-on" : ""} onClick={() => setI(j)} aria-label={`Step ${j + 1}`} />)}</div>
-          <button className="pas-btn is-ghost is-sm" onClick={() => (i ? setI(i - 1) : onClose())}>{i ? "Back" : "Skip"}</button>
-          <button className="pas-btn is-primary is-sm" onClick={() => (last ? onClose() : setI(i + 1))} autoFocus>{last ? "Got it" : "Next"}</button>
-        </footer>
-      </div>
-    </div>
-  );
-}
-
-interface Person extends AccessPerson { name: string; email: string | null; ownRole: string | null }
-interface Subject { type: PageSubject; id: string; name: string; sub: string; color?: string; locked?: boolean; people: Person[] }
-type OvCols = "pages" | "settings" | "management";
-
-/**
- * Settings → Organization → Page access. Which pages of the side menu each
- * person can open, and which panels they get inside Settings and Management —
- * set for everyone, a department, a security role or one person, and
- * previewed as that person's own side menu.
- *
- * scope="management": only Management's panels can be changed (opened from
- * Management → ⚙ → Security by someone who isn't a Boss).
- */
-export default function PageAccessModal({ onClose, scope = "all", focus }: { onClose: () => void; scope?: "all" | "management"; focus?: PageKey }) {
+export default function PageAccessModal({ onClose }: { onClose: () => void }) {
   const { reload } = usePageAccess();
-  const onlyMgmt = scope === "management";
   const [loading, setLoading] = useState(true);
+  const [depts, setDepts] = useState<Department[]>([]);
   const [people, setPeople] = useState<Person[]>([]);
-  const [base, setBase] = useState<PageRules>({});
-  const [draft, setDraft] = useState<PageRules>({});
+  const [base, setBase] = useState<Draft>({});
+  const [draft, setDraft] = useState<Draft>({});
   const [missing, setMissing] = useState(false);
-  const [mode, setMode] = useState<"edit" | "overview">("edit");
-  const [sel, setSel] = useState("everyone:*");
-  const [q, setQ] = useState("");
-  const [previewId, setPreviewId] = useState<string | null>(null);
+  const [usersMissing, setUsersMissing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
-  const [ovFilter, setOvFilter] = useState("");
-  const [tour, setTour] = useState(() => readLS(TOUR_KEY) !== "1");
-  const closeTour = () => { setTour(false); writeLS(TOUR_KEY, "1"); };
-  // folded lists in the left column (remembered on this device)
-  const [grp, setGrp] = useState<Record<string, boolean>>(() => { try { return JSON.parse(readLS(GROUPS_KEY) || "{}"); } catch { return {}; } });
-  const [ovCols, setOvCols] = useState<OvCols>(onlyMgmt || focus === "management" ? "management" : focus === "settings" ? "settings" : "pages");
+  const pages = PAGES.filter((p) => !p.locked);
+  const locked = PAGES.filter((p) => p.locked);
 
   useEffect(() => {
+    let alive = true;
     (async () => {
-      const [{ rules, missing: m }, profs, depts] = await Promise.all([
-        loadPageRules(),
+      const [ds, pd, profs] = await Promise.all([
+        loadDepartments(true),
+        loadPageDepartments(),
         supabase.from("profiles").select("*").range(0, 99999),
-        supabase.from("org_departments").select("dept_key, security_role"),
       ]);
-      const deptRole = new Map(((depts.data ?? []) as any[]).map((d) => [d.dept_key, (d.security_role ?? "").toLowerCase() || null]));
-      setPeople(((profs.data ?? []) as any[]).filter((p) => p.active !== false).map((p) => {
-        const own = (p.role ?? "").toString().toLowerCase() || null;
-        return {
-          id: p.id, name: [p.first_name, p.last_name].filter(Boolean).join(" ") || p.full_name || p.email || "—", email: p.email ?? null,
-          ownRole: own, level: own ?? (p.department ? deptRole.get(p.department) ?? null : null), department: p.department ?? null, isSuper: p.is_superadmin === true,
-        };
-      }).sort((a, b) => a.name.localeCompare(b.name)));
-      setBase(rules); setDraft(rules); setMissing(m); setLoading(false);
+      if (!alive) return;
+      setDepts(ds);
+      const d: Draft = {};
+      (Object.keys(pd.map) as PageKey[]).forEach((k) => { d[k] = { depts: pd.map[k] ?? [], users: pd.users[k] ?? [] }; });
+      setBase(d); setDraft(d); setMissing(pd.missing); setUsersMissing(pd.usersMissing);
+      setPeople(((profs.data ?? []) as any[]).filter((p) => p.active !== false).map((p) => ({
+        id: p.id, name: [p.first_name, p.last_name].filter(Boolean).join(" ") || p.full_name || p.email || "—",
+        department: p.department ?? null, full: p.is_superadmin === true || String(p.role ?? "").toLowerCase() === "boss",
+      })).sort((a, b) => a.name.localeCompare(b.name)));
+      setLoading(false);
     })();
+    return () => { alive = false; };
   }, []);
-
-  // Open on the card that was asked for.
   useEffect(() => {
-    if (loading || !focus || onlyMgmt) return;
-    const t = setTimeout(() => document.getElementById(`pas-card-${focus}`)?.scrollIntoView({ block: "start", behavior: "smooth" }), 250);
-    return () => clearTimeout(t);
-  }, [loading, focus, sel, onlyMgmt]);
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape" && !e.defaultPrevented) onClose(); };
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [onClose]);
 
-  /* ─────────────── subjects ─────────────── */
-  const subjects = useMemo(() => {
-    const levels: Subject[] = (LEVELS as any[]).map((l) => {
-      const ppl = people.filter((p) => p.level === l.id);
-      return { type: "role" as const, id: l.id, name: l.label, sub: `${ppl.length} ${ppl.length === 1 ? "person" : "people"}`, locked: l.id === "boss", people: ppl };
-    });
-    const depts: Subject[] = (DEPARTMENTS as readonly any[]).map((d) => {
-      const ppl = people.filter((p) => p.department === d.key);
-      return { type: "dept" as const, id: d.key, name: d.label, sub: `${ppl.length} ${ppl.length === 1 ? "person" : "people"}`, color: d.color, people: ppl };
-    });
-    const ppl: Subject[] = people.map((p) => ({ type: "user" as const, id: p.id, name: p.name, sub: `${levelLabel(p.level)}${p.department ? ` · ${deptLabel(p.department)}` : ""}`, locked: isFullAccess(p), people: [p] }));
-    return { everyone: { type: "everyone" as const, id: "*", name: "Everyone", sub: "The starting point for all", people } as Subject, levels, depts, ppl };
+  const ruleOf = (k: PageKey): Rule => draft[k] ?? null;
+  const setRule = (k: PageKey, r: Rule) => {
+    setSaved(false); setErr(null);
+    setDraft((d) => { const n = { ...d }; if (r == null) delete n[k]; else n[k] = r; return n; });
+  };
+  const changed = pages.filter((p) => !sameRule(ruleOf(p.key), base[p.key] ?? null));
+  const deptCount = useMemo(() => {
+    const m = new Map<string, number>();
+    people.forEach((p) => { if (p.department) m.set(p.department, (m.get(p.department) ?? 0) + 1); });
+    return m;
   }, [people]);
-  const all = [subjects.everyone, ...subjects.levels, ...subjects.depts, ...subjects.ppl];
-  const subject = all.find((s) => pageRuleKey(s.type, s.id) === sel) ?? subjects.everyone;
-  const key = pageRuleKey(subject.type, subject.id);
-  const own: PageMap = draft[key] ?? {};
-  const countKeys = (m: PageMap | undefined) => Object.keys(m ?? {}).filter((k) => !onlyMgmt || k.startsWith("management.")).length;
-  const setsOf = (s: Subject) => countKeys(draft[pageRuleKey(s.type, s.id)]);
-  const diffKeys = (k: string) => { const a = draft[k] ?? {}, b = base[k] ?? {}; return ALL_KEYS.filter((x) => a[x] !== b[x]); };
-  const changedKeys = Array.from(new Set([...Object.keys(draft), ...Object.keys(base)])).filter((k) => diffKeys(k).length > 0);
-  // how many single settings differ from what's saved
-  const dirty = changedKeys.reduce((n, k) => n + diffKeys(k).length, 0);
+  const deptOf = (k: string | null) => depts.find((d) => d.key === k);
+  const others = people.filter((p) => !p.full);
 
-  /* ─────────────── edits ─────────────── */
-  const setKey = (k: string, v: boolean | Level | undefined) => {
-    setSaved(false);
-    setDraft((d) => {
-      const m = { ...(d[key] ?? {}) };
-      if (v === undefined) delete m[k]; else m[k] = v;
-      const out = { ...d };
-      if (Object.keys(m).length) out[key] = m; else delete out[key];
-      return out;
-    });
-  };
-  const resetSubject = () => {
-    setSaved(false);
-    setDraft((d) => {
-      const o = { ...d };
-      if (!onlyMgmt) { delete o[key]; return o; }
-      const m = Object.fromEntries(Object.entries(o[key] ?? {}).filter(([k]) => !k.startsWith("management.")));
-      if (Object.keys(m).length) o[key] = m; else delete o[key];
-      return o;
-    });
-  };
-
-  /* what a page / panel falls back to for this subject */
-  const probes = (s: Subject): AccessPerson[] => {
-    if (s.type === "user") return s.people;
-    if (s.type === "role") return [{ id: "__probe", level: s.id, department: null }];
-    if (s.type === "dept") return s.people.length ? s.people : [{ id: "__probe", level: null, department: s.id }];
-    return (LEVELS as any[]).filter((l) => l.id !== "boss").map((l) => ({ id: "__probe", level: l.id, department: null }));
-  };
-  const inherited = (k: string): { text: string; level: Level | null; source?: PageSourceKind } => {
-    const without = { ...draft, [key]: (() => { const m = { ...own }; delete m[k]; return m; })() };
-    const vals = probes(subject).filter((p) => !isFullAccess(p)).map((p) => resolveAny(k, p, without));
-    if (!vals.length) return { text: "—", level: null };
-    const distinct = Array.from(new Set(vals.map((v) => v.level)));
-    if (distinct.length === 1) return { text: levelText(k, distinct[0]), level: distinct[0], source: vals[0].source };
-    return { text: "Depends", level: null };
-  };
-
-  /* ─────────────── preview ─────────────── */
-  const previewPool = subject.type === "everyone" ? people : subject.people;
-  const previewPerson = previewPool.find((p) => p.id === previewId) ?? previewPool.find((p) => !isFullAccess(p)) ?? previewPool[0] ?? null;
-  const previewPages = previewPerson ? resolveAllPages(previewPerson, draft) : null;
-
-  /* ─────────────── save ─────────────── */
   const save = async () => {
+    if (!changed.length || busy) return;
     setBusy(true); setErr(null);
-    const e = await savePageRules(draft, base);
+    // a person whose department is now on the list doesn't need to be named any more
+    const out = Object.fromEntries(changed.map((p) => {
+      const r = ruleOf(p.key);
+      if (!r) return [p.key, null];
+      const users = r.depts.includes(EVERYONE) ? [] : r.users.filter((id) => !deptListOpens(r.depts, people.find((x) => x.id === id)?.department));
+      return [p.key, { depts: r.depts, users }];
+    })) as Partial<Record<PageKey, Rule>>;
+    const e = await savePageDepartments(out);
     setBusy(false);
-    if (e) {
-      setErr(/page_access_rules|does not exist|schema cache/.test(e) ? "Run empower_page_access_v3.sql in Supabase first, then save again."
-        : /row-level security|Only the Boss/.test(e) ? (onlyMgmt ? "You can only change Management's panels." : "Only the Boss security level can change page access.") : e);
-      return;
-    }
-    setBase(draft); setSaved(true);
+    if (e) { setErr(e); return; }
+    const next = { ...draft };
+    (Object.keys(out) as PageKey[]).forEach((k) => { if (out[k]) next[k] = out[k]; });
+    setDraft(next); setBase(next); setSaved(true);
+    window.dispatchEvent(new CustomEvent(SECURITY_LEVEL_EVENT));
     await reload();
-    window.dispatchEvent(new Event(SECURITY_LEVEL_EVENT));
   };
-  const close = () => { if (dirty && !window.confirm("Close without saving your changes?")) return; onClose(); };
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key !== "Escape") return; if (tour) closeTour(); else close(); };
-    window.addEventListener("keydown", onKey);
-    document.body.style.overflow = "hidden";
-    return () => { window.removeEventListener("keydown", onKey); document.body.style.overflow = ""; };
-  }); // eslint-disable-line react-hooks/exhaustive-deps
-
-  /* ─────────────── bits ─────────────── */
-  const filtered = (list: Subject[]) => { const n = q.trim().toLowerCase(); return n ? list.filter((s) => s.name.toLowerCase().includes(n) || s.sub.toLowerCase().includes(n)) : list; };
-  const SubjectBtn = ({ s, i }: { s: Subject; i: number }) => {
-    const k = pageRuleKey(s.type, s.id);
-    const n = setsOf(s);
-    return (
-      <button className={`pas-subj ${k === sel ? "is-on" : ""}`} onClick={() => { setSel(k); setPreviewId(null); setMode("edit"); }} style={{ ["--c" as string]: s.color ?? "#9fb5ab", ["--i" as string]: Math.min(i, 16) } as CSSProperties}>
-        <span className={`pas-subj-ico is-${s.type}`}>{s.type === "everyone" ? "∗" : s.type === "dept" ? "" : initials(s.name)}</span>
-        <span className="pas-subj-txt"><b>{s.name}</b><small>{s.locked ? "Everything, always" : s.sub}</small></span>
-        {changedKeys.includes(k) ? <em className="pas-dot" title="Unsaved changes" /> : n > 0 ? <em className="pas-count" title={`${n} settings here`}>{n}</em> : null}
-      </button>
-    );
-  };
-  const GROUP_DEFAULT: Record<string, boolean> = { roles: true, depts: true, people: people.length <= 8, order: true };
-  const groupOpen = (g: string) => grp[g] ?? GROUP_DEFAULT[g];
-  const setGroups = (next: Record<string, boolean>) => { setGrp(next); writeLS(GROUPS_KEY, JSON.stringify(next)); };
-  const toggleGroup = (g: string) => setGroups({ ...grp, [g]: !groupOpen(g) });
-  const setAllGroups = (open: boolean) => setGroups({ roles: open, depts: open, people: open, order: grp.order ?? true });
-  const searching = q.trim().length > 0;
-  const navGroup = (g: string, label: string, list: Subject[], offset: number) => {
-    const items = filtered(list);
-    if (!items.length) return null;
-    const open = searching || groupOpen(g);
-    const withSettings = list.filter((s) => setsOf(s) > 0).length;
-    const changed = list.some((s) => changedKeys.includes(pageRuleKey(s.type, s.id)));
-    const selectedHere = list.find((s) => pageRuleKey(s.type, s.id) === sel);
-    return (
-      <section className={`pas-grp ${open ? "is-open" : ""}`}>
-        <button className="pas-grp-h" onClick={() => toggleGroup(g)} aria-expanded={open} disabled={searching} title={searching ? undefined : open ? "Hide this list" : "Show this list"}>
-          <span className="pas-grp-chev">{CHEVRON}</span>
-          <span className="pas-grp-lbl">{label}</span>
-          <em className="pas-grp-n">{searching ? `${items.length}/${list.length}` : list.length}</em>
-          {changed ? <i className="pas-dot" title="Unsaved changes in this list" /> : withSettings > 0 && <small>{withSettings} set</small>}
-        </button>
-        {open
-          ? <div className="pas-grp-items">{items.map((s, i) => <SubjectBtn key={s.id} s={s} i={i + offset} />)}</div>
-          : selectedHere && <div className="pas-grp-items is-peek"><SubjectBtn s={selectedHere} i={0} /></div>}
-      </section>
-    );
-  };
-  const typeLabel = { everyone: "Everyone", role: "Security role", dept: "Department", user: "Person" }[subject.type];
-  const visibleCount = (p: Person) => PAGES.filter((x) => resolvePage(x.key, p, draft).allowed).length;
-
-  /** Inherit · Hidden · (Own) · Open/All for one page or panel. */
-  const choice = (k: string, levels: Level[], label: string) => {
-    const v = asLv(own[k]);
-    const inh = inherited(k);
-    return (
-      <div className={`pas-choice ${levels.length > 2 ? "is-4" : ""}`} role="radiogroup" aria-label={label}>
-        <button role="radio" aria-checked={v === undefined} className={`is-inherit ${v === undefined ? "is-on" : ""}`} onClick={() => setKey(k, undefined)} title={inh.source ? `From ${SOURCE_LABEL[inh.source]}` : undefined}>
-          <span>{subject.type === "everyone" ? "Default" : "Inherit"}</span><small>{inh.text}</small>
-        </button>
-        {levels.map((l) => (
-          <button key={l} role="radio" aria-checked={v === l} className={`${l === "none" ? "is-neg" : l === "own" ? "is-own" : ""} ${v === l ? "is-on" : ""}`} onClick={() => setKey(k, stored(k, l))}>
-            <span>{l === "none" ? "Hidden" : levels.length > 2 ? (l === "own" ? "Own" : "All") : "Open"}</span>
-          </button>
-        ))}
-      </div>
-    );
-  };
-  /** The level in effect for a page/panel on this subject (own setting, else what it inherits). */
-  const effective = (k: string): Level | null => asLv(own[k]) ?? inherited(k).level;
-
-  const panelRow = (p: PanelDef, i: number) => {
-    const eff = effective(p.key);
-    return (
-      <div key={p.key} className={`pas-panel ${p.locked ? "is-locked" : eff === "none" ? "is-hidden" : eff ? "is-open" : ""} ${own[p.key] !== undefined ? "is-set" : ""}`} style={{ ["--i" as string]: i } as CSSProperties}>
-        <span className="pas-panel-txt"><b>{p.label}</b><small>{p.hint}</small></span>
-        {p.locked ? <span className="pas-always is-sm">{LOCK}Always open</span> : choice(p.key, p.levels, p.label)}
-      </div>
-    );
-  };
-
-  const pageCard = (p: (typeof PAGES)[number], i: number) => {
-    const panels = panelsOf(p.key);
-    const eff = p.locked ? "all" : effective(p.key);
-    const wide = panels.length > 0;
-    const cls = `pas-card ${wide ? "is-wide" : ""} ${p.locked ? "is-locked" : eff === "all" ? "is-open" : eff === "none" ? "is-hidden" : ""} ${own[p.key] !== undefined ? "is-set" : ""}`;
-    const pageCtl = p.locked
-      ? <span className="pas-always">{LOCK}Always open</span>
-      : onlyMgmt ? <span className={`pas-always is-ro ${eff === "none" ? "is-off" : ""}`}>{eff === "none" ? "Page hidden" : eff === "all" ? "Page open" : "Page: depends"} · set by the Boss</span>
-      : choice(p.key, ["none", "all"], p.label);
-    return (
-      <article key={p.key} id={`pas-card-${p.key}`} className={cls} style={{ ["--i" as string]: i } as CSSProperties}>
-        <header>
-          <span className="pas-card-ico">{PAGE_ICON[p.key]}</span>
-          <span className="pas-card-txt"><b>{p.label}</b><small>{p.hint}</small></span>
-          {wide && <div className="pas-card-ctl">{pageCtl}</div>}
-        </header>
-        {!wide && pageCtl}
-        {p.inside && !p.locked && <small className="pas-inside">What they can do inside: {p.inside}</small>}
-        {wide && (
-          <div className="pas-panels">
-            <p className="pas-panels-h">
-              <span>Panels inside {p.label}</span>
-              {p.key === "management" && <em>Own = only their own data · All = everyone's</em>}
-              {eff === "none" && <em className="is-warn">The page is hidden, so these only apply once it's opened</em>}
-            </p>
-            {panels.map((x, j) => panelRow(x, j))}
-          </div>
-        )}
-      </article>
-    );
-  };
-
-  const ovKeys: { key: string; label: string; icon?: ReactNode }[] =
-    ovCols === "pages" ? PAGES.map((p) => ({ key: p.key, label: p.label, icon: PAGE_ICON[p.key] }))
-      : panelsOf(ovCols).filter((p) => !p.locked).map((p) => ({ key: p.key, label: p.label }));
 
   return createPortal(
-    <div className="pas-backdrop" onMouseDown={close}>
-      <div className="pas" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Page access">
-        <header className="pas-head">
-          <span className="pas-head-ico">{svg(<><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z" /><path d="M9 12l2 2 4-4" /></>)}</span>
-          <div className="pas-head-txt">
-            <span className="pas-eyebrow">{onlyMgmt ? "Management" : "Organization"}</span>
-            <h2>{onlyMgmt ? "Management access" : "Page access"}</h2>
+    <div className="pa2-backdrop" onMouseDown={onClose}>
+      <div className="pa2 pa4" role="dialog" aria-modal="true" aria-label="Page access" onMouseDown={(e) => e.stopPropagation()}>
+        <header className="pa2-head">
+          <span className="pa2-head-ico">{svg(<><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z" /><path d="M9 12l2 2 4-4" /></>)}</span>
+          <div>
+            <h2>Page access</h2>
+            <p>For each page: the departments that can open it, and anyone else you want to let in.</p>
           </div>
-          <div className="pas-mode" role="tablist">
-            <button role="tab" aria-selected={mode === "edit"} className={mode === "edit" ? "is-on" : ""} onClick={() => setMode("edit")}>Edit</button>
-            <button role="tab" aria-selected={mode === "overview"} className={mode === "overview" ? "is-on" : ""} onClick={() => setMode("overview")}>Who sees what</button>
-          </div>
-          <div className="pas-head-actions">
-            <button className="pas-help" onClick={() => setTour(true)} title="A quick step-by-step on how this works">
-              {svg(<><circle cx="12" cy="12" r="9" /><path d="M9.6 9.3a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.2-2.4 3.6M12 17.2h.01" /></>, 2)}
-              <span>How it works</span>
-            </button>
-            {saved && !dirty && <span className="pas-saved">Saved · menus updated</span>}
-            {dirty > 0 && <span className="pas-dirty">{dirty} unsaved {dirty === 1 ? "change" : "changes"}</span>}
-            <button className="pas-btn is-ghost" onClick={() => { setDraft(base); setErr(null); }} disabled={!dirty || busy}>Discard</button>
-            <button className="pas-btn is-primary" onClick={save} disabled={!dirty || busy}>{busy ? "Saving…" : "Save changes"}</button>
-            <button className="pas-x" onClick={close} aria-label="Close">×</button>
-          </div>
+          <button className="pa2-x" onClick={onClose} aria-label="Close">×</button>
         </header>
-        {(missing || err || onlyMgmt) && (
-          <div className="pas-banners">
-            {missing && <p className="pas-banner">Run <code>empower_page_access_v3.sql</code> in Supabase once — until then only security-role page settings can be read, and nothing can be saved.</p>}
-            {onlyMgmt && !missing && <p className="pas-banner is-soft">You can change who sees each panel of Management. Which pages people open, and the panels in Settings, are set by the Boss in Settings → Organization → Page access.</p>}
-            {err && <p className="pas-banner is-err">{err}</p>}
-          </div>
-        )}
+        <div className="pa4-notes">
+          <span>{LOCK}<b>Bosses</b> and superadmins always open every page.</span>
+          <span>{LOCK}<b>{locked.map((p) => p.label).join(" and ")}</b> are open to everyone.</span>
+        </div>
+        {missing && <p className="pa2-warn">{WARN}<span>Run <b>61_custom_departments.sql</b> in Supabase to save page access.</span></p>}
+        {!missing && usersMissing && <p className="pa2-warn">{WARN}<span>Run <b>62_page_access_people.sql</b> in Supabase to let people in by name.</span></p>}
 
-        {loading ? <div className="pas-loading"><PageLoader fill={false} size={88} label="Loading access rules" /></div> : mode === "overview" ? (
-          /* ─────────── overview: every person × every page / panel ─────────── */
-          <div className="pas-ov">
-            <div className="pas-ov-top">
-              {!onlyMgmt && (
-                <div className="pas-seg" role="tablist" aria-label="Columns">
-                  {(["pages", "settings", "management"] as OvCols[]).map((c) => (
-                    <button key={c} role="tab" aria-selected={ovCols === c} className={ovCols === c ? "is-on" : ""} onClick={() => setOvCols(c)}>
-                      {c === "pages" ? "Side menu" : c === "settings" ? "Settings panels" : "Management panels"}
-                    </button>
-                  ))}
-                </div>
-              )}
-              <p>{ovCols === "pages" ? "What each person's side menu shows" : `What each person gets inside ${ovCols === "settings" ? "Settings" : "Management"}`}{dirty ? " (with your unsaved changes)" : ""}. Click a name to change it.</p>
-              <input className="pas-search" value={ovFilter} onChange={(e) => setOvFilter(e.target.value)} placeholder="Filter people, roles or departments…" aria-label="Filter" />
-            </div>
-            <div className="pas-ov-scroll">
-              <table className="pas-ov-table">
-                <thead>
-                  <tr>
-                    <th className="pas-ov-who">Person</th>
-                    {ovKeys.map((c) => <th key={c.key} title={c.label}>{c.icon && <span className="pas-ov-ico">{c.icon}</span>}<span className={c.icon ? "" : "pas-ov-lbl"}>{c.label}</span></th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {people.filter((p) => { const n = ovFilter.trim().toLowerCase(); return !n || `${p.name} ${levelLabel(p.level)} ${deptLabel(p.department)}`.toLowerCase().includes(n); }).map((p) => {
-                    const pageOff = ovCols !== "pages" && !resolvePage(ovCols, p, draft).allowed;
-                    return (
-                      <tr key={p.id} className={pageOff ? "is-pageoff" : ""}>
-                        <th className="pas-ov-who">
-                          <button onClick={() => { setSel(pageRuleKey("user", p.id)); setMode("edit"); }}>
-                            <span className="pas-av">{initials(p.name)}</span>
-                            <span><b>{p.name}</b><small>{pageOff ? `${ovCols === "settings" ? "Settings" : "Management"} page hidden` : `${levelLabel(p.level)} · ${deptLabel(p.department)}`}</small></span>
-                          </button>
-                        </th>
-                        {ovKeys.map((c) => {
-                          const r = resolveAny(c.key, p, draft);
-                          return (
-                            <td key={c.key}>
-                              <span className={`pas-ov-cell ${r.level !== "none" ? "is-on" : ""} lv-${r.level} is-${r.source}`} title={`${c.label}: ${levelText(c.key, r.level)} · ${SOURCE_LABEL[r.source]}`}>
-                                {r.level === "own" ? <b>Own</b> : r.level === "all" ? CHECK : DASH}
-                              </span>
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            <div className="pas-legend">
-              <span><i className="is-user" />Set for the person</span><span><i className="is-role" />Security role</span><span><i className="is-dept" />Department</span>
-              <span><i className="is-everyone" />Everyone</span><span><i className="is-default" />Default</span><span><i className="is-boss" />Always open · full access</span>
-              {ovCols === "management" && <span><i className="is-own" />Own = only their own data</span>}
-            </div>
-          </div>
+        {loading ? <div className="pa2-loading"><PageLoader fill={false} size={86} label="Loading page access" /></div> : !depts.length ? (
+          <div className="pa2-empty"><b>No departments yet</b><span>Create your departments in Organization first, then come back to choose who opens each page.</span></div>
         ) : (
-          <div className="pas-body">
-            {/* ─────────── who ─────────── */}
-            <nav className="pas-nav">
-              <input className="pas-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search people, roles, departments…" aria-label="Search" />
-              {!searching && (
-                <div className="pas-nav-tools">
-                  <button onClick={() => setAllGroups(true)}>Expand all</button>
-                  <span aria-hidden="true">·</span>
-                  <button onClick={() => setAllGroups(false)}>Collapse all</button>
-                </div>
-              )}
-              <div className="pas-nav-scroll">
-                {!searching && <SubjectBtn s={subjects.everyone} i={0} />}
-                {navGroup("roles", "Security roles", subjects.levels, 1)}
-                {navGroup("depts", "Departments", subjects.depts, 3)}
-                {navGroup("people", "People", subjects.ppl, 5)}
-                {searching && !filtered([...subjects.levels, ...subjects.depts, ...subjects.ppl]).length && <p className="pas-nav-empty">Nobody matches “{q.trim()}”.</p>}
-              </div>
-              <div className={`pas-order ${groupOpen("order") ? "is-open" : ""}`}>
-                <button className="pas-order-h" onClick={() => toggleGroup("order")} aria-expanded={groupOpen("order")}>
-                  <span className="pas-grp-chev">{CHEVRON}</span>Who wins
-                  <span className="pas-order-q" role="link" tabIndex={0} onClick={(e) => { e.stopPropagation(); setTour(true); }} onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); setTour(true); } }}>What's this?</span>
-                </button>
-                {groupOpen("order") && <ol aria-label="Order of priority"><li>Person</li><li>Security role</li><li>Department</li><li>Everyone</li></ol>}
-              </div>
-            </nav>
-
-            {/* ─────────── pages ─────────── */}
-            <main className="pas-main" key={sel}>
-              <section className="pas-hero" style={{ ["--c" as string]: subject.color ?? "#12b57f" } as CSSProperties}>
-                <span className={`pas-hero-ico is-${subject.type}`}>{subject.type === "everyone" ? "∗" : initials(subject.name)}</span>
-                <div>
-                  <span className="pas-hero-type">{typeLabel}</span>
-                  <h3>{subject.name}</h3>
-                  <p>
-                    {subject.locked ? "Always gets every page and panel — this can't be limited, so nobody gets locked out."
-                      : subject.type === "everyone" ? "What everyone gets, unless their department, security role or own settings say otherwise."
-                      : subject.type === "user" ? "Just for this person. Anything on “Inherit” comes from their security role, department or Everyone."
-                      : `Applies to ${subject.people.length} ${subject.people.length === 1 ? "person" : "people"}. Anything on “Inherit” comes from ${subject.type === "role" ? "their department or Everyone" : "Everyone"}.`}
-                  </p>
-                  {subject.type === "user" && subject.people[0] && (
-                    <span className="pas-hero-meta"><i>{levelLabel(subject.people[0].level)}{subject.people[0].ownRole ? "" : " (from department)"}</i><i style={{ ["--c" as string]: deptColor(subject.people[0].department) } as CSSProperties} className="is-dept">{deptLabel(subject.people[0].department)}</i></span>
-                  )}
-                </div>
-                {!subject.locked && setsOf(subject) > 0 && <button className="pas-reset" onClick={resetSubject}>Reset to inherit</button>}
-              </section>
-
-              {subject.locked ? (
-                <div className="pas-locked">{LOCK}<p>Bosses and superadmins see every page and panel. To limit someone, give them another security role.</p></div>
-              ) : onlyMgmt ? (
-                <div className="pas-grid">{PAGES.filter((p) => p.key === "management").map((p, i) => pageCard(p, i))}</div>
-              ) : (
-                <>
-                  <h4 className="pas-sec-h">Side menu</h4>
-                  <div className="pas-grid">{PAGES.filter((p) => !panelsOf(p.key).length).map((p, i) => pageCard(p, i))}</div>
-                  <h4 className="pas-sec-h">Inside the pages</h4>
-                  <div className="pas-grid">{PAGES.filter((p) => panelsOf(p.key).length).map((p, i) => pageCard(p, i))}</div>
-                </>
-              )}
-            </main>
-
-            {/* ─────────── their side menu ─────────── */}
-            <aside className="pas-preview">
-              <h4>Their side menu</h4>
-              {!previewPerson || !previewPages ? <p className="pas-note">Nobody here yet.</p> : (
-                <>
-                  <div className="pas-select"><Select size="sm" aria-label="Preview as" value={previewPerson.id} onChange={setPreviewId} options={previewPool.map((p) => ({ value: p.id, label: p.name }))} /></div>
-                  <div className="pas-dock">
-                    {PAGES.map((p) => {
-                      const r = previewPages[p.key];
-                      const subs = panelsOf(p.key).filter((x) => !x.locked);
-                      return (
-                        <div key={p.key} className={`pas-dock-row ${r.allowed ? "is-on" : "is-off"}`}>
-                          <div className={`pas-dock-item ${r.allowed ? "is-on" : "is-off"}`} title={`${SOURCE_LABEL[r.source]}`}>
-                            <span className="pas-dock-ico">{PAGE_ICON[p.key]}</span>
-                            <span className="pas-dock-lbl">{p.label}</span>
-                            <i className={`pas-src is-${r.source}`}>{r.allowed ? SOURCE_LABEL[r.source] : `Hidden · ${SOURCE_LABEL[r.source]}`}</i>
-                          </div>
-                          {r.allowed && subs.length > 0 && (
-                            <div className="pas-dock-sub">
-                              {subs.map((x) => {
-                                const l = resolveAny(x.key, previewPerson, draft).level;
-                                return <span key={x.key} className={`lv-${l}`} title={`${x.label}: ${levelText(x.key, l)}`}>{x.label}{l === "own" ? " · own" : ""}</span>;
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
+          <div className="pa4-body">
+            <div className="pa4-cols" aria-hidden="true"><span>Page</span><span>Departments that can open it</span><span>Also let in</span></div>
+            {pages.map((pg, i) => {
+              const r = ruleOf(pg.key);
+              const all = !!r?.depts.includes(EVERYONE);
+              const dirty = changed.some((x) => x.key === pg.key);
+              const n = r ? people.filter((p) => p.full || deptListOpens(r.depts, p.department) || r.users.includes(p.id)).length : null;
+              const status = r == null ? "Not set yet — the current rules apply"
+                : all ? `Everyone · ${n} people`
+                : n === people.filter((p) => p.full).length ? "Only bosses and superadmins"
+                : `${n} ${n === 1 ? "person" : "people"} can open it`;
+              const exceptions = others.filter((p) => !r || !deptListOpens(r.depts, p.department) || r.users.includes(p.id));
+              return (
+                <section key={pg.key} className={`pa4-row ${dirty ? "is-dirty" : ""} ${r == null ? "is-unset" : ""}`} style={{ "--i": i } as CSSProperties}>
+                  <div className="pa4-page">
+                    <span className="pa4-page-ico">{PAGE_ICON[pg.key]}</span>
+                    <span className="pa4-page-id">
+                      <b>{pg.label}{dirty && <i className="pa4-dirty" title="Changed — not saved yet" />}</b>
+                      <small>{status}</small>
+                    </span>
                   </div>
-                  <p className="pas-note">{previewPerson.name.split(" ")[0]} sees <b>{visibleCount(previewPerson)}</b> of {PAGES.length} pages. A hidden page or panel also can't be opened by its link.</p>
-                </>
-              )}
-            </aside>
+                  <Multi
+                    label={`Departments that can open ${pg.label}`}
+                    everyone={{ on: all, label: "Everyone", sub: "every signed-in person" }}
+                    options={depts.map((d) => ({ value: d.key, label: d.name, color: d.color, sub: `${deptCount.get(d.key) ?? 0}` }))}
+                    value={all ? [] : (r?.depts ?? [])}
+                    placeholder={r == null ? "Not set yet" : "No department"}
+                    search="Search departments…"
+                    onChange={(v, everyone) => setRule(pg.key, { depts: everyone ? [EVERYONE] : v, users: everyone ? [] : r?.users ?? [] })}
+                    onClear={() => setRule(pg.key, r && r.users.length ? { depts: [], users: r.users } : null)}
+                    clearLabel={r && r.users.length ? "No department" : "Not set"}
+                  />
+                  <Multi
+                    label={`People also let into ${pg.label}`}
+                    people
+                    disabled={all}
+                    options={exceptions.map((p) => ({ value: p.id, label: p.name, color: deptOf(p.department)?.color ?? "#9fb5ab", sub: deptOf(p.department)?.name ?? "No department" }))}
+                    value={r?.users ?? []}
+                    placeholder={all ? "Everyone is already in" : "Nobody else"}
+                    search="Search people…"
+                    onChange={(v) => setRule(pg.key, { depts: r?.depts ?? [], users: v })}
+                    onClear={() => setRule(pg.key, r && (r.depts.length || !r.users.length) ? { depts: r.depts, users: [] } : null)}
+                    clearLabel="Nobody"
+                  />
+                </section>
+              );
+            })}
           </div>
         )}
-        {tour && !loading && <Tour onClose={closeTour} />}
+
+        <footer className="pa2-foot">
+          <span className={`pa2-foot-msg ${err ? "is-err" : saved ? "is-ok" : ""}`}>
+            {err ?? (saved ? "Saved — everyone's side menu is updated." : changed.length ? `${changed.length} page${changed.length === 1 ? "" : "s"} changed — not saved yet` : "No changes")}
+          </span>
+          <button className="pa2-btn is-ghost" onClick={() => { setDraft(base); setErr(null); setSaved(false); }} disabled={!changed.length || busy}>Undo changes</button>
+          <button className="pa2-btn is-primary" onClick={() => void save()} disabled={!changed.length || busy || missing}>{busy ? "Saving…" : "Save"}</button>
+        </footer>
       </div>
     </div>,
     document.body,
   );
+}
+
+/* ─────────────── a searchable multi-select dropdown ─────────────── */
+interface Opt { value: string; label: string; color?: string; sub?: string; group?: string }
+function Multi({ label, options, value, onChange, onClear, clearLabel, placeholder, search, everyone, people = false, disabled = false }: {
+  label: string; options: Opt[]; value: string[]; onChange: (v: string[], everyone: boolean) => void; onClear: () => void; clearLabel: string;
+  placeholder: string; search: string; everyone?: { on: boolean; label: string; sub: string }; people?: boolean; disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const trigger = useRef<HTMLButtonElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; top: number; width: number; up: boolean } | null>(null);
+  useLayoutEffect(() => {
+    if (!open) { setPos(null); setQ(""); return; }
+    const place = () => {
+      const r = trigger.current?.getBoundingClientRect();
+      if (!r) return;
+      const width = Math.max(320, r.width);
+      const below = window.innerHeight - r.bottom, up = below < 400 && r.top > below;
+      setPos({ left: Math.max(12, Math.min(r.left, window.innerWidth - width - 12)), top: up ? r.top - 8 : r.bottom + 8, width, up });
+    };
+    place();
+    // capture phase: the dialog stops clicks from bubbling, so listen before it does
+    const onDown = (e: MouseEvent) => { if (!pop.current?.contains(e.target as Node) && !trigger.current?.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); setOpen(false); trigger.current?.focus(); } };
+    document.addEventListener("mousedown", onDown, true);
+    document.addEventListener("keydown", onKey, true);
+    window.addEventListener("resize", place); window.addEventListener("scroll", place, true);
+    return () => {
+      document.removeEventListener("mousedown", onDown, true); document.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true);
+    };
+  }, [open]);
+  const all = !!everyone?.on;
+  const chosen = value.map((v) => options.find((o) => o.value === v)).filter(Boolean) as Opt[];
+  const shown = options.filter((o) => !q.trim() || fold(`${o.label} ${o.sub ?? ""}`).includes(fold(q.trim())));
+  const toggle = (v: string) => {
+    if (all) { onChange(options.map((o) => o.value).filter((x) => x !== v), false); return; }
+    onChange(value.includes(v) ? value.filter((x) => x !== v) : [...value, v], false);
+  };
+  return (
+    <>
+      <button ref={trigger} type="button" className={`pa4-dd ${open ? "is-open" : ""} ${disabled ? "is-off" : ""}`} aria-label={label} aria-haspopup="listbox" aria-expanded={open}
+        disabled={disabled} onClick={() => setOpen((v) => !v)}>
+        <span className="pa4-dd-val">
+          {all ? <span className="pa4-pill is-all"><i>{GLOBE}</i>{everyone!.label}</span>
+            : chosen.length ? <>
+              {chosen.slice(0, 2).map((o) => {
+                const person = people || o.group === "People";
+                return (
+                  <span key={o.value} className={`pa4-pill ${person ? "is-person" : ""}`} style={{ "--c": o.color ?? "#0a6f4d" } as CSSProperties}>
+                    {person ? <i className="pa4-av">{initials(o.label)}</i> : <i />}{person ? o.label.split(" ")[0] : o.label}
+                  </span>
+                );
+              })}
+              {chosen.length > 2 && <span className="pa4-more">+{chosen.length - 2}</span>}
+            </> : <span className="pa4-ph">{placeholder}</span>}
+        </span>
+        {CARET}
+      </button>
+      {open && pos && createPortal(
+        <div ref={pop} className={`pa4-pop ${pos.up ? "is-up" : ""}`} role="listbox" aria-multiselectable="true" aria-label={label}
+          style={{ left: pos.left, top: pos.top, width: pos.width }} onMouseDown={(e) => e.stopPropagation()}>
+          <label className="pa4-pop-search">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
+            <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder={search} />
+          </label>
+          {everyone && !q.trim() && (
+            <button type="button" role="option" aria-selected={all} className={`pa4-opt is-all ${all ? "is-on" : ""}`} onClick={() => onChange([], !all)}>
+              <span className="pa4-box">{CHECK}</span><span className="pa4-opt-ico">{GLOBE}</span><b>{everyone.label}</b><em>{everyone.sub}</em>
+            </button>
+          )}
+          <div className="pa4-opts">
+            {shown.length === 0 ? <p className="pa4-empty">{q.trim() ? `Nothing matches “${q}”.` : people ? "Everyone else is already in through their department." : "Nothing to choose."}</p> : shown.map((o, i) => {
+              const on = all || value.includes(o.value);
+              const person = people || o.group === "People";
+              const head = o.group && o.group !== shown[i - 1]?.group ? <span key={`g-${o.group}`} className="pa4-group">{o.group}</span> : null;
+              return [head,
+                <button type="button" key={o.value} role="option" aria-selected={on} className={`pa4-opt ${on ? "is-on" : ""} ${all ? "is-implied" : ""}`}
+                  style={{ "--c": o.color ?? "#0a6f4d", "--i": Math.min(i, 20) } as CSSProperties} onClick={() => toggle(o.value)}>
+                  <span className="pa4-box">{CHECK}</span>
+                  {person ? <span className="pa4-av">{initials(o.label)}</span> : <span className="pa4-dot" />}
+                  <b>{o.label}</b><em>{o.sub}</em>
+                </button>];
+            })}
+          </div>
+          <div className="pa4-pop-foot">
+            <span>{all ? "Everyone" : `${value.length} selected`}</span>
+            <button type="button" onClick={() => { onClear(); }}>{clearLabel}</button>
+            <button type="button" className="is-done" onClick={() => setOpen(false)}>Done</button>
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
+/* =====================================================================
+   Settings › <page> › Security: how much of the page's data people see.
+   A default for everyone who can open the page, then by department and by
+   person. Bosses and superadmins always see everything.
+   ===================================================================== */
+export function PageSecurity({ page }: { page: PageKey }) {
+  const def = PAGE_SCOPES[page];
+  const { level, isSuper } = usePageAccess();
+  const canEdit = isSuper || level === "boss";
+  const [depts, setDepts] = useState<Department[]>([]);
+  const [people, setPeople] = useState<Person[]>([]);
+  const [access, setAccess] = useState<{ depts: string[]; users: string[] } | null>(null);
+  const [rules, setRules] = useState<ScopeRules | null>(null);
+  const [missing, setMissing] = useState(false);
+  /** Each person's security role: their own, else their department's. */
+  const [roleOf, setRoleOf] = useState<Record<string, string | null>>({});
+  const [state, setState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [err, setErr] = useState<string | null>(null);
+  const savedT = useRef(0);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const [ds, pd, sc, profs, od] = await Promise.all([
+        loadDepartments(true), loadPageDepartments(), loadScopeRules(page), supabase.from("profiles").select("*").range(0, 99999),
+        supabase.from("org_departments").select("dept_key, security_role"),
+      ]);
+      if (!alive) return;
+      const deptRole = new Map(((od.data ?? []) as any[]).map((d) => [d.dept_key, String(d.security_role ?? "").toLowerCase() || null]));
+      setRoleOf(Object.fromEntries(((profs.data ?? []) as any[]).map((p) => [p.id, String(p.role ?? "").toLowerCase() || (p.department ? deptRole.get(p.department) ?? null : null)])));
+      setDepts(ds);
+      setAccess(page in pd.map ? { depts: pd.map[page] ?? [], users: pd.users[page] ?? [] } : null);
+      setRules(sc.rules); setMissing(sc.missing);
+      setPeople(((profs.data ?? []) as any[]).filter((p) => p.active !== false).map((p) => ({
+        id: p.id, name: [p.first_name, p.last_name].filter(Boolean).join(" ") || p.full_name || p.email || "—",
+        department: p.department ?? null, full: p.is_superadmin === true || String(p.role ?? "").toLowerCase() === "boss",
+      })).sort((a, b) => a.name.localeCompare(b.name)));
+    })();
+    return () => { alive = false; };
+  }, [page]);
+
+  if (!def) return null;
+  if (!rules) return <p className="psec-loading">Loading…</p>;
+  const label = (v: DataScope) => def.label[v] ?? v;
+  const opts = (withDefault: string | null) => [
+    ...(withDefault ? [{ value: "", label: withDefault }] : []),
+    ...def.levels.map((v) => ({ value: v, label: label(v), hint: def.hint[v] })),
+  ];
+  const commit = async (next: ScopeRules) => {
+    setRules(next); setState("saving"); setErr(null);
+    const e = await saveScopeRules(page, next);
+    if (e) { setState("error"); setErr(e); return; }
+    setState("saved");
+    window.clearTimeout(savedT.current);
+    savedT.current = window.setTimeout(() => setState("idle"), 1800);
+  };
+  const setDept = (k: string, v: DataScope | "") => { const depts2 = { ...rules.depts }; if (v) depts2[k] = v; else delete depts2[k]; void commit({ ...rules, depts: depts2 }); };
+  const setRole = (k: string, v: DataScope | "") => { const roles = { ...(rules.roles ?? {}) }; if (v) roles[k] = v; else delete roles[k]; void commit({ ...rules, roles }); };
+  const setUser = (id: string, v: DataScope | "" | null) => { const users = { ...rules.users }; if (v) users[id] = v; else delete users[id]; void commit({ ...rules, users }); };
+  const opens = (d: Department) => !access || deptListOpens(access.depts, d.key);
+  const count = (k: string) => people.filter((p) => p.department === k && !p.full).length;
+  const named = Object.keys(rules.users).map((id) => people.find((p) => p.id === id)).filter(Boolean) as Person[];
+  const addable = people.filter((p) => !p.full && !(p.id in rules.users));
+  const deptOf = (k: string | null) => depts.find((d) => d.key === k);
+  const effective = (p: Person): DataScope => (rules.users[p.id] ?? (roleOf[p.id] && rules.roles?.[roleOf[p.id]!]) ?? (p.department && rules.depts[p.department]) ?? rules.default) as DataScope;
+  /** People who can open the page (bosses and superadmins aside). */
+  const inPage = people.filter((p) => !p.full && (!access || deptListOpens(access.depts, p.department) || access.users.includes(p.id)));
+  const roleCount = (k: string) => inPage.filter((p) => roleOf[p.id] === k).length;
+  // the roles worth listing: the ones someone who can open the page has, plus any already set
+  const roleRows = LEVELS.filter((l) => l.id !== "boss" && (roleCount(l.id) > 0 || !!rules.roles?.[l.id]));
+  const pageLabel = PAGES.find((x) => x.key === page)?.label ?? page;
+
+  /* panels inside the page, hidden from departments / security roles / people */
+  const panelDefs = PAGE_PANELS[page] ?? [];
+  const hideOpts: Opt[] = [
+    ...depts.filter(opens).map((d) => ({ value: `d:${d.key}`, label: d.name, color: d.color, sub: `${count(d.key)} ${count(d.key) === 1 ? "person" : "people"}`, group: "Departments" })),
+    ...LEVELS.filter((l) => l.id !== "boss" && roleCount(l.id) > 0).map((l) => ({ value: `r:${l.id}`, label: l.label, color: "#0a6f4d", sub: `${roleCount(l.id)} with this role`, group: "Security roles" })),
+    ...inPage.map((p) => ({ value: `u:${p.id}`, label: p.name, color: deptOf(p.department)?.color ?? "#9fb5ab", sub: deptOf(p.department)?.name ?? "No department", group: "People" })),
+  ];
+  const hiddenOf = (k: string) => {
+    const h = rules.panels?.[k] ?? {};
+    return [...(h.depts ?? []).map((x) => `d:${x}`), ...(h.roles ?? []).map((x) => `r:${x}`), ...(h.users ?? []).map((x) => `u:${x}`)];
+  };
+  const setHidden = (k: string, v: string[]) => {
+    const pick = (pre: string) => v.filter((x) => x.startsWith(pre)).map((x) => x.slice(2));
+    const h = { depts: pick("d:"), roles: pick("r:"), users: pick("u:") };
+    const panels = { ...(rules.panels ?? {}) };
+    if (h.depts.length || h.roles.length || h.users.length) panels[k] = h; else delete panels[k];
+    void commit({ ...rules, panels });
+  };
+  /** How many people who open the page don't get this panel. */
+  const hiddenCount = (k: string) => {
+    const h = rules.panels?.[k];
+    if (!h) return 0;
+    return inPage.filter((p) => h.users?.includes(p.id) || (!!roleOf[p.id] && h.roles?.includes(roleOf[p.id]!)) || (!!p.department && h.depts?.includes(p.department))).length;
+  };
+
+  return (
+    <div className={`psec ${canEdit ? "" : "is-ro"}`}>
+      <div className="psec-lead">
+        <span className="psec-shield">{svg(<><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z" /><path d="M9 12l2 2 4-4" /></>)}</span>
+        <p>Choose how much of <b>{pageLabel}</b> people see once they can open it. <b>Bosses</b> and superadmins always see everything. The most specific setting wins: a person, then their security role, then their department, then the default.</p>
+        <span className={`psec-state is-${state}`} aria-live="polite">{state === "saving" ? "Saving…" : state === "saved" ? <>{CHECK}Saved</> : state === "error" ? "Not saved" : ""}</span>
+      </div>
+      {missing && <p className="pa2-warn">{WARN}<span>Run <b>63_page_data_scopes.sql</b> in Supabase to save these settings.</span></p>}
+      {err && !missing && <p className="pa2-warn">{WARN}<span>{err}</span></p>}
+      {!canEdit && <p className="psec-note">Only a Boss or a superadmin can change this.</p>}
+
+      <div className="psec-default">
+        <div>
+          <b>Everyone who can open {pageLabel}</b>
+          <small>{def.hint[rules.default] ?? ""}</small>
+        </div>
+        <div className="psec-pick"><Select value={rules.default} disabled={!canEdit} onChange={(v) => v && void commit({ ...rules, default: v as DataScope })} options={opts(null)} /></div>
+      </div>
+
+      <div className="psec-group">
+        <div className="psec-group-h"><b>By department</b><small>Overrides the default</small></div>
+        {depts.length === 0 ? <p className="psec-empty">No departments yet — create them in Organization.</p> : depts.filter(opens).map((d, i) => {
+          const can = opens(d);
+          const v = rules.depts[d.key] ?? "";
+          return (
+            <div key={d.key} className={`psec-row ${can ? "" : "is-off"} ${v ? "is-set" : ""}`} style={{ "--c": d.color, "--i": Math.min(i, 20) } as CSSProperties}>
+              <span className="psec-dot" />
+              <span className="psec-row-id"><b>{d.name}</b><small>{can ? `${count(d.key)} ${count(d.key) === 1 ? "person" : "people"}` : "Can't open this page"}</small></span>
+              <div className="psec-pick"><Select value={v} disabled={!canEdit || !can} onChange={(x) => setDept(d.key, (x ?? "") as DataScope | "")} options={opts("Same as default")} /></div>
+            </div>
+          );
+        })}
+      </div>
+
+      {depts.some((d) => !opens(d)) && (
+        <p className="psec-closed">{LOCK}<span><b>Can't open {pageLabel}:</b> {depts.filter((d) => !opens(d)).map((d) => d.name).join(", ")} — change it in Page access.</span></p>
+      )}
+
+      <div className="psec-group">
+        <div className="psec-group-h"><b>By security role</b><small>Overrides the department — e.g. a Sales manager sees everything while the rest of Sales sees only their own</small></div>
+        {roleRows.length === 0 ? <p className="psec-empty">Nobody who can open {pageLabel} has a security role yet.</p> : roleRows.map((l, i) => {
+          const v = rules.roles?.[l.id] ?? "";
+          const n = roleCount(l.id);
+          const where = Array.from(new Set(inPage.filter((p) => roleOf[p.id] === l.id).map((p) => deptOf(p.department)?.name).filter(Boolean))) as string[];
+          return (
+            <div key={l.id} className={`psec-row is-role ${v ? "is-set" : ""}`} style={{ "--c": "#0a6f4d", "--i": i } as CSSProperties}>
+              <span className="psec-role">{svg(<><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z" /></>)}</span>
+              <span className="psec-row-id"><b>{l.label}</b><small>{n ? `${n} ${n === 1 ? "person" : "people"}${where.length ? ` in ${where.join(", ")}` : ""}` : "Nobody with this role can open the page"}</small></span>
+              <div className="psec-pick"><Select value={v} disabled={!canEdit} onChange={(x) => setRole(l.id, (x ?? "") as DataScope | "")} options={opts("Same as their department")} /></div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="psec-group">
+        <div className="psec-group-h"><b>People</b><small>Override everything above</small></div>
+        {named.length === 0 && <p className="psec-empty">Nobody has their own setting.</p>}
+        {named.map((p, i) => {
+          const d = deptOf(p.department);
+          return (
+            <div key={p.id} className="psec-row is-set" style={{ "--c": d?.color ?? "#9fb5ab", "--i": i } as CSSProperties}>
+              <span className="psec-av">{initials(p.name)}</span>
+              <span className="psec-row-id"><b>{p.name}</b><small>{d?.name ?? "No department"}</small></span>
+              <div className="psec-pick"><Select value={rules.users[p.id]} disabled={!canEdit} onChange={(x) => x && setUser(p.id, x as DataScope)} options={opts(null)} /></div>
+              {canEdit && <button className="psec-x" onClick={() => setUser(p.id, null)} aria-label={`Remove ${p.name}'s own setting`} title="Remove — they follow their department again">×</button>}
+            </div>
+          );
+        })}
+        {canEdit && addable.length > 0 && (
+          <div className="psec-add">
+            <Select value="" placeholder="+ Give someone their own setting" onChange={(id) => { if (!id) return; const p = people.find((x) => x.id === id); setUser(id, p ? (effective(p) === "all" ? def.levels[def.levels.length - 1] : "all") : "all"); }}
+              options={addable.map((p) => ({ value: p.id, label: p.name, hint: deptOf(p.department)?.name ?? "No department" }))} />
+          </div>
+        )}
+      </div>
+
+      {panelDefs.length > 0 && (
+        <div className="psec-panels">
+          <div className="psec-panels-h">
+            <span className="psec-panels-ico">{svg(<><rect x="3" y="3" width="8" height="7" rx="1.6" /><rect x="13" y="3" width="8" height="4.5" rx="1.6" /><rect x="13" y="10.5" width="8" height="10.5" rx="1.6" /><rect x="3" y="13" width="8" height="8" rx="1.6" /></>)}</span>
+            <div><b>Panels</b><small>Everyone who opens {pageLabel} sees every panel. Hide one from a department, a security role or a person.</small></div>
+          </div>
+          {panelDefs.map((d, i) => {
+            const n = hiddenCount(d.key);
+            const v = hiddenOf(d.key);
+            return (
+              <div key={d.key} className={`psec-prow ${v.length ? "is-hidden" : ""}`} style={{ "--i": i } as CSSProperties}>
+                <span className={`psec-eye ${v.length ? "is-off" : ""}`}>{v.length
+                  ? svg(<><path d="M3 3l18 18" /><path d="M10.6 6.1A9.8 9.8 0 0 1 12 6c5 0 9 6 9 6a17 17 0 0 1-2.7 3.2M6.5 7.6C4.3 9.1 3 12 3 12s4 6 9 6a8.6 8.6 0 0 0 4-1" /><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" /></>)
+                  : svg(<><path d="M3 12s4-6 9-6 9 6 9 6-4 6-9 6-9-6-9-6z" /><circle cx="12" cy="12" r="2.6" /></>)}</span>
+                <span className="psec-row-id"><b>{d.label}</b><small>{v.length ? `Hidden from ${n} ${n === 1 ? "person" : "people"}` : d.hint}</small></span>
+                <div className="psec-hide">
+                  <Multi label={`Hide ${d.label} from`} options={hideOpts} value={v} disabled={!canEdit}
+                    onChange={(next) => setHidden(d.key, next)} onClear={() => setHidden(d.key, [])} clearLabel="Show to everyone"
+                    placeholder="Everyone sees it" search="Find a department, role or person…" />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Panels inside a page that Security can hide (keys match each page's own access areas). */
+const PAGE_PANELS: Partial<Record<PageKey, { key: string; label: string; hint: string }[]>> = {
+  management: AREAS.filter((a) => HIDEABLE.includes(a.key)).map((a) => ({ key: a.key, label: a.label, hint: a.hint })),
+};
+
+/** The "Security" section of a page's settings (Bosses and superadmins only), shaped for SettingsShell. */
+export function useSecuritySection(page: PageKey) {
+  const { level, isSuper, ready } = usePageAccess();
+  if (!ready || !(isSuper || level === "boss") || !PAGE_SCOPES[page]) return null;
+  return {
+    k: "security", label: "Security", icon: "shield", tone: "slate" as const, title: "Security",
+    hint: `How much of ${PAGES.find((x) => x.key === page)?.label ?? "this page"} people see: everything, their department's, or only their own`,
+    body: <PageSecurity page={page} />,
+  };
 }

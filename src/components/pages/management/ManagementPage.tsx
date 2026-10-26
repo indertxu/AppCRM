@@ -18,7 +18,7 @@ import BonusPanel from "./BonusPanel";
 import ConsultantModal from "./ConsultantModal";
 import BillingPanel from "./BillingPanel";
 import IncomingPanel from "./IncomingPanel";
-import MgmtSecurityModal from "./MgmtSecurityModal";
+import { PageSecurity } from "../settings/PageAccessModal";
 import { useMgmtAccess, type Level } from "./mgmtAccess";
 import { useInactiveIds } from "../../framework/peopleStatus";
 import { ClientLogo } from "../clients/ClientWorkspace";
@@ -1348,20 +1348,20 @@ if (noCount(e.line)) return;
     // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [entries, projects, people, roles, excluded, anchor, scope, rangeFrom, rangeTo, cutoffs, defaultCutoffDay, inactive]);
   // Team access "own": only the signed-in consultant's card, KPIs and figures.
-  const rows = lvTeam === "own" ? allRows.filter((r) => r.userId === access.userId) : allRows;
+  const rows = lvTeam === "own" ? allRows.filter((r) => access.sees(lvTeam, r.userId)) : allRows;
 
   // Billing access "own": only bills for projects the user works on.
   const billingScope = useMemo(() => {
-    if (lvBilling !== "own" || !access.userId) return { projects, entries };
-    const me = access.userId;
+    if (lvBilling !== "own") return { projects, entries };
+    const who = new Set(access.team);
     const mine = new Set<string>();
-    Object.values(projects).forEach((p: any) => { if ((p.team ?? []).some((t: any) => t.userId === me)) mine.add(p.id); });
-    entries.forEach((e) => { if (e.userId === me) mine.add(e.projectId); });
+    Object.values(projects).forEach((p: any) => { if ((p.team ?? []).some((t: any) => who.has(t.userId))) mine.add(p.id); });
+    entries.forEach((e) => { if (who.has(e.userId)) mine.add(e.projectId); });
     return {
       projects: Object.fromEntries(Object.entries(projects).filter(([id]) => mine.has(id))) as typeof projects,
       entries: entries.filter((e) => mine.has(e.projectId)),
     };
-  }, [lvBilling, access.userId, projects, entries]);
+  }, [lvBilling, access.team, projects, entries]);
 
   // Team consultant search: live-filter the list, and a suggestions dropdown.
   const searchNorm = (s: string) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
@@ -1440,7 +1440,7 @@ const moneyGoal =
     const m = new Map<string, { days: number; value: number; count: number }>();
     for (const e of entries) {
       if (!noCount(e.line) || e.status === "cancelled" || !inScope(e.date)) continue;
-      if (lvTeam === "own" && e.userId !== access.userId) continue;
+      if (!access.sees(lvTeam, e.userId)) continue;
       const p = projects[e.projectId];
       const rate = p ? rateFor(p, e.line, e.userId).rate : 0;
       const key = e.date.slice(0, 7);
@@ -1468,7 +1468,7 @@ const moneyGoal =
   })();
   const nameByUser: Record<string, string> = Object.fromEntries(rows.map((r) => [r.userId, r.name]));
   const connectorEntries = entries
-    .filter((e) => noCount(e.line) && e.status !== "cancelled" && inScope(e.date) && (lvTeam !== "own" || e.userId === access.userId))
+    .filter((e) => noCount(e.line) && e.status !== "cancelled" && inScope(e.date) && access.sees(lvTeam, e.userId))
     .map((e) => {
       const p = projects[e.projectId];
       const rate = p ? rateFor(p, e.line, e.userId).rate : 0;
@@ -1742,7 +1742,9 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
               </button>
             ))}
           </div>
-          {lv(tab) === "own" && <span className="mg-own-chip" title="Your access to this tab is limited to your own data">Only your data</span>}
+          {lv(tab) === "own" && (access.scope === "department" && access.team.length > 1
+            ? <span className="mg-own-chip" title="Your access to this tab is limited to your department">Your department</span>
+            : <span className="mg-own-chip" title="Your access to this tab is limited to your own data">Only your data</span>)}
         </div>
 
         <div className="mg-nav">
@@ -1863,9 +1865,7 @@ minPerMonth: targets.minPerMonth,
           hoursPerDay={hoursPerDay}
           setHoursPerDay={setHoursPerDay}
           managementMode
-          securityPanel={lv("security") === "all"
-            ? <MgmtSecurityModal embedded people={people} onClose={() => {}} onSaved={() => access.reload()} />
-            : undefined}
+          securityPanel={access.isAdmin ? <div className="mg-sec-embed"><PageSecurity page="management" /></div> : undefined}
           securityOnly={lv("settings") !== "all"}
           consultants={allRows.filter((r) => !inactive.has(r.userId)).map((r) => ({ userId: r.userId, name: r.name }))}
           capacity={capacity}
@@ -2258,7 +2258,8 @@ minPerMonth: targets.minPerMonth,
             rangeTo={rangeTo}
             mainRoleByService={mainRoleByService}
             asOf={backlogAsOf}
-            lockUser={lvBacklog === "own" ? access.userId ?? "__nobody" : undefined}
+            lockUser={lvBacklog === "own" && access.team.length <= 1 ? access.team[0] ?? "__nobody" : undefined}
+            onlyUsers={lvBacklog === "own" && access.team.length > 1 ? access.team : undefined}
           />
           {loadingAll && <LoadingOverlay subtle />}
         </div>
@@ -2292,7 +2293,8 @@ minPerMonth: targets.minPerMonth,
           asOf={bonusAsOf}
           hourProjects={hourProjects}
           hoursPerDay={hoursPerDay}
-          onlyUser={lvBonus === "own" ? access.userId ?? "__nobody" : undefined}
+          onlyUser={lvBonus === "own" && access.team.length <= 1 ? access.team[0] ?? "__nobody" : undefined}
+          onlyUsers={lvBonus === "own" && access.team.length > 1 ? access.team : undefined}
           canEdit={lv("settings") === "all" && lvBonus === "all"}
           canPay={lvBonus === "all"}
           legacy={{ general: genBonus, perPerson: capacity, lag: bonusLag }}

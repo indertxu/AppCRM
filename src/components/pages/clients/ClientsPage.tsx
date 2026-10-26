@@ -80,11 +80,18 @@ const KPIS: Kpi[] = [
 const KPI_DEFAULT = ["clients", "openValue", "recurring", "contract"];
 const COL_DEFAULT = ["services", "projectsValue", "openProjects", "delivered", "recurring", "contract", "lastContact"];
 const MONEY_COLS = new Set(["projectsValue", "openValue", "recurring", "contract", "oneTime"]);
+/** Column names short enough for a narrow list (the full name stays in the header's tooltip). */
+const HEAD_SHORT: Record<string, string> = {
+  projectsValue: "Projects €", openValue: "Open €", openProjects: "Open", contract: "Contract", lastContact: "Contacted",
+  oneTime: "One-time", activeProducts: "Products", nextRenewal: "Renewal", firstSigned: "Since", openTasks: "Tasks", lateTasks: "Late",
+};
 const HEALTH: Record<string, string> = { ok: "Healthy", warn: "Getting quiet", bad: "Neglected", none: "No contact yet" };
 
 export function ClientList({
-  clients, projects, projectTypes, onNew, onOpen, onDelete, usage, units, loaded = true, colsSignal = 0,
+  clients, projects, projectTypes, onNew, onOpen, onDelete, usage, units, loaded = true, colsSignal = 0, linesRev = 0,
 }: {
+  /** Changes when a client's signed products change (one deleted in its popup): the figures are read again. */
+  linesRev?: number;
   /** Changes when the Actions menu asks for the columns editor. */
   colsSignal?: number;
   /** False while the page's first load runs: the loading scene shows instead. */
@@ -208,7 +215,7 @@ export function ClientList({
       if (alive) setExtra({ lines: ((cp.data ?? []) as any[]).map((r) => ({ ...r, name: pn[r.product_id] ?? "Product" })), last, tasks, co, cos: allCos });
     })().catch(() => setExtra({ lines: [], last: {}, tasks: {}, co: {}, cos: [] }));
     return () => { alive = false; };
-  }, [loaded, clients.length]);
+  }, [loaded, clients.length, linesRev]);
 
   const typeName = (id: string) => projectTypes.find((t) => t.id === id)?.name ?? "No service";
   /** Clients that look like the same one (same CRM company, or the same name once accents / legal form are dropped). */
@@ -503,10 +510,18 @@ export function ClientList({
           ) : (
             layout === "list" ? (
               <div className="cx-table-wrap">
-                <div className="cx-table" style={{ ["--cols" as any]: `minmax(230px, 1.7fr) ${colFields.map((f) => (f.type === "multi" ? "minmax(170px, 1.4fr)" : "minmax(118px, 1fr)")).join(" ")} 64px`, minWidth: 300 + colFields.length * 130 }}>
+                <div className="cx-table" style={{ ["--cols" as any]: `minmax(200px, 1.8fr) ${colFields.map((f) => (f.type === "multi" ? "minmax(150px, 1.3fr)" : "minmax(96px, 1fr)")).join(" ")} 56px`, minWidth: 300 + colFields.length * 115 }}>
                   <div className="cx-tr is-head">
                     <span><SortHead label="Client" k="name" sort={view.sort} onSort={onSortHead} /></span>
-                    {colFields.map((f) => <span key={f.key} className={f.type === "number" ? "is-num" : ""}><SortHead label={f.label.replace(/ \(.*\)$/, "")} k={f.key} sort={view.sort} onSort={onSortHead} /></span>)}
+                    {colFields.map((f) => {
+                      const full = f.label.replace(/ \(.*\)$/, "");
+                      const short = HEAD_SHORT[f.key];
+                      return (
+                        <span key={f.key} className={f.type === "number" ? "is-num" : ""} title={full}>
+                          <SortHead label={<><span className={`cx-h-full ${short ? "has-short" : ""}`}>{full}</span>{short && <span className="cx-h-short">{short}</span>}</>} k={f.key} sort={view.sort} onSort={onSortHead} />
+                        </span>
+                      );
+                    })}
                     <span />
                   </div>
                   {shown.map((r, i) => (
@@ -514,7 +529,7 @@ export function ClientList({
                       onClick={() => onOpen(r.c)} onKeyDown={(e) => { if (e.key === "Enter") onOpen(r.c); }}>
                       <span className="cx-td-name">
                         <CompanyLogo className="cx-av is-sm" name={r.name} website={r.website} />
-                        <span className="cx-id"><b>{r.name}</b><small>{r.dupOf && <i className="cx-dup" title={`Looks like the same client as: ${r.dupOf}`}>Duplicate?</i>}{[r.city, r.sector].filter(Boolean).join(" · ") || (r.dupOf ? "" : "—")}</small></span>
+                        <span className="cx-id"><b title={r.name}>{r.name}</b>{(r.dupOf || r.city || r.sector) && <small>{r.dupOf && <i className="cx-dup" title={`Looks like the same client as: ${r.dupOf}`}>Duplicate?</i>}{[r.city, r.sector].filter(Boolean).join(" · ")}</small>}</span>
                       </span>
                       {colFields.map((f) => <span key={f.key} className={f.type === "number" ? "is-num" : ""}>{cell(f, r)}</span>)}
                       <span className="cx-td-go">
@@ -667,6 +682,8 @@ export default function ClientsPage() {
   const fhRef = useRef<HTMLDivElement>(null);
   useFloatingHero(fhRef, ".cl-bar, .cx-kpis");
   const d = useClientsData();
+  /** Bumped when a client's signed products change in its popup, so the list's figures follow. */
+  const [linesRev, setLinesRev] = useState(0);
   const {
     clients, projects, projectTypes, roles, blueprints, usage, units, loaded,
     showForm, setShowForm, detailClient, setDetailClient, editing, setEditing,
@@ -779,6 +796,7 @@ export default function ClientsPage() {
       </header>
 
       <ClientList
+        linesRev={linesRev}
         clients={clients}
         projects={projects}
         projectTypes={projectTypes}
@@ -801,6 +819,7 @@ export default function ClientsPage() {
           onOpenProject={(p) => setEditing({ client: detailClient, project: p })}
           onNewProject={() => openNewProject(detailClient)}
           onDeleteProject={deleteProject}
+          onLinesChanged={() => setLinesRev((n) => n + 1)}
           onClose={() => setDetailClient(null)}
         />
       )}

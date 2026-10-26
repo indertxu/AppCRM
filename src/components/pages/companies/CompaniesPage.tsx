@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useSecuritySection } from "../settings/PageAccessModal";
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 import Select from "../../framework/Select";
@@ -20,12 +21,14 @@ import {
   listCompanyDeals, type DealRef,
   setFixedRequired, useRequiredFields,
   companiesList, companiesIds, companiesCount, companiesRows, companiesFacets, companiesLight, companyPeople, searchContacts,
-  type CompanyFacets, type ServerView,
+  type CompanyFacets, type ServerView, insertMany, deleteMany, updateMany, friendlyDbError,
 } from "./companiesApi";
+import { supabase } from "../../api/supabase";
 import { logoCandidates } from "../clients/clientsTypes";
 import { searchPlaces, lookupPostal, postalLooksComplete, provinceFromPostal, countryName, matchCountry, normalizeLinkedIn, isLinkedIn, linkedInHandle, type AddressHit,
   fixedFieldsOf, isFixedRequired, missingFixed, type ReqScope, languageOptions, countryOptions } from "../contacts/contactProfile";
 import "../clients/ClientsPage.css";
+import "../sales/extras/TrackingFields.css";
 import CompanyImport from "./CompanyImport";
 import { PageLoader } from "../../framework/AppLayout";
 import ContactExport from "../contacts/ContactExport";
@@ -139,20 +142,33 @@ export default function CompaniesPage() {
   }, []);
 
   // Opened from a company pill on Contacts: jump straight into that company.
+  // panelCompanyId: the panel that was open when you went to one of its contacts — coming back reopens it.
+  // backTo: opened from a contact's panel — closing this one takes you back there.
   const location = useLocation();
+  const [backTo, setBackTo] = useState(false);
   useEffect(() => {
-    const id = (location.state as any)?.focusCompanyId;
-    if (id && server) {
+    const st = (location.state as any) ?? {};
+    const id = st.focusCompanyId ?? st.panelCompanyId;
+    if (!id) return;
+    const keep = !st.focusCompanyId;   // panelCompanyId stays on this history entry, for the next Back
+    setBackTo(!!st.backTo);
+    if (server) {
       companiesRows([id]).then((r) => { if (r[0]) setEditing(structuredClone(r[0])); }).catch(() => {});
-      navigate(location.pathname, { replace: true, state: null });
+      if (!keep) navigate(location.pathname, { replace: true, state: null });
       return;
     }
-    if (!id || companies.length === 0) return;
+    if (companies.length === 0) return;
     const c = companies.find((x) => x.id === id);
     if (c) setEditing(structuredClone(c));
-    navigate(location.pathname, { replace: true, state: null });
+    if (!keep) navigate(location.pathname, { replace: true, state: null });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state, companies, server]);
+  /** The panel closes: back to the contact it was opened from, else just closed (and not reopened by Back). */
+  const closePanel = () => {
+    setEditing(null);
+    if (backTo) { setBackTo(false); navigate(-1); return; }
+    if ((location.state as any)?.panelCompanyId) navigate(location.pathname, { replace: true, state: null });
+  };
 
   const lead = isSalesLead(me);
 
@@ -313,11 +329,18 @@ export default function CompaniesPage() {
   const pickCos = async (): Promise<Company[]> => (server ? companiesRows(bulk.ids) : pickedList);
   const allCos = server ? light ?? [] : companies;
   const BI = (d: string) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>;
+  /** Changes only the fields asked for (nothing else on the company is rewritten), a few at a time;
+   *  the same change on every company goes as one request per 80. */
   const saveMany = async (patch: (c: Company) => Partial<Company> | null, label: string) => {
-    let n = 0;
-    for (const c of await pickCos()) { const p = patch(c); if (!p) continue; const e = await saveCompany({ ...c, ...p }); if (e) { await reload(); return e; } n++; }
-    await reload(); bulk.clear();
-    return { done: `${label} · ${n} ${n === 1 ? "company" : "companies"}` };
+    const todo = (await pickCos()).map((c) => ({ c, p: patch(c) })).filter((x): x is { c: Company; p: Partial<Company> } => !!x.p && !!x.c.id);
+    const same = todo.length > 0 && todo.every((x) => JSON.stringify(x.p) === JSON.stringify(todo[0].p));
+    const r = same
+      ? await updateMany("companies", todo.map((x) => x.c.id as string), todo[0].p as Record<string, unknown>).then((e) => ({ ok: e ? 0 : todo.length, error: e }))
+      : await inPool(todo, async ({ c, p }) => { const { error } = await supabase.from("companies").update(p).eq("id", c.id as string); return error ? friendlyDbError(error.message) : null; });
+    await reload();
+    if (r.error) return r.error;
+    bulk.clear();
+    return { done: `${label} · ${r.ok} ${r.ok === 1 ? "company" : "companies"}` };
   };
   const bulkActions: BulkAction[] = [
     {
@@ -326,10 +349,12 @@ export default function CompaniesPage() {
       disabledReason: lead ? undefined : "Only boss and sales managers can assign companies.",
       run: async (v) => {
         if (!v) return null;
-        let n = 0;
-        for (const c of await pickCos()) { const cur = asgOf(c); if (!cur.includes(v)) { await setCompanyAssignees(c.id!, [...cur, v]); n++; } }
-        await reload(); bulk.clear();
-        return { done: `${employees.find((e) => e.id === v)?.name ?? "They"} now see ${n} more` };
+        const rows = (await pickCos()).filter((c) => c.id && !asgOf(c).includes(v)).map((c) => ({ company_id: c.id, profile_id: v }));
+        const err = await insertMany("company_assignees", rows);
+        await reload();
+        if (err) return err;
+        bulk.clear();
+        return { done: `${employees.find((e) => e.id === v)?.name ?? "They"} now see ${rows.length} more` };
       },
     },
     {
@@ -374,9 +399,11 @@ export default function CompaniesPage() {
       options: [{ value: "__none", label: "No group", hint: "Make them standalone" }, ...allCos.filter((c) => !bulk.has(c.id as string)).map((c) => ({ value: c.id as string, label: c.name }))],
       run: async (v) => {
         if (!v) return null;
-        let n = 0;
-        for (const id of bulk.ids) { const e = await setCompanyParent(id, v === "__none" ? null : v); if (e) { await reload(); return e; } n++; }
-        await reload(); bulk.clear();
+        const n = bulk.ids.length;
+        const e = await updateMany("companies", bulk.ids, { parent_id: v === "__none" ? null : v });
+        await reload();
+        if (e) return e;
+        bulk.clear();
         return { done: v === "__none" ? `${n} made standalone` : `${n} now part of ${allCos.find((c) => c.id === v)?.name ?? "the group"}` };
       },
     },
@@ -388,9 +415,11 @@ export default function CompaniesPage() {
       key: "delete", label: "Delete", danger: true, more: true, icon: BI("M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"),
       disabledReason: lead ? undefined : "Only boss and sales managers can delete companies.",
       run: async () => {
-        let n = 0;
-        for (const id of bulk.ids) { const e = await deleteCompany(id); if (e) { await reload(); return e; } n++; }
-        bulk.clear(); await reload();
+        const n = bulk.ids.length;
+        const e = await deleteMany("companies", bulk.ids);
+        await reload();
+        if (e) return e;
+        bulk.clear();
         return { done: `${n} deleted` };
       },
     },
@@ -641,10 +670,14 @@ export default function CompaniesPage() {
           contactFields={contactFields}
           canAssign={lead}
           assigned={asgOf(editing)}
-          onClose={() => setEditing(null)}
-          onSaved={async () => { setEditing(null); await reload(); }}
-          onDeleted={async () => { setEditing(null); await reload(); }}
-          onOpenContact={(id) => navigate("/contacts", { state: { focusContactId: id } })}
+          onClose={closePanel}
+          onSaved={async () => { const back = backTo; closePanel(); if (!back) await reload(); }}
+          onDeleted={async () => { const back = backTo; closePanel(); if (!back) await reload(); }}
+          onOpenContact={(id) => {
+            // this panel comes back when you return from the contact (its button, or the browser's Back)
+            if (editing.id) navigate(location.pathname, { replace: true, state: { panelCompanyId: editing.id, backTo } });
+            navigate("/contacts", { state: { focusContactId: id, backTo: true } });
+          }}
         />
       )}
 
@@ -1620,9 +1653,10 @@ type CustomFieldLike = { id: string; label: string; type: "text" | "number" | "d
 const FIELD_TYPE_LABEL: Record<CustomFieldLike["type"], string> = { text: "Text", number: "Number", date: "Date", boolean: "Yes / No", select: "Dropdown", multiselect: "Multiple choice" };
 /** Fields with a list of options: a dropdown (one) or multiple choice (several, like tags). */
 export const isChoiceType = (t: string) => t === "select" || t === "multiselect";
+// the same icons as the Deal fields (Settings › Deals page)
 const FIELD_TYPE_ICON: Record<CustomFieldLike["type"], string> = {
-  text: "M4 7V5h16v2M9 19h6M12 5v14", number: "M4 9h16M4 15h16M10 3 8 21M16 3l-2 18", date: "M4 5h16v16H4zM4 10h16M8 3v4M16 3v4",
-  boolean: "M7 7h10a5 5 0 0 1 0 10H7A5 5 0 0 1 7 7zM16 12h.01", select: "M4 6h16M4 12h16M4 18h10M17 16l2 2 2-2",
+  text: "M4 6h16M4 12h10M4 18h7", number: "M9 4 7 20M17 4l-2 16M4 9h16M3 15h16", date: "M4 6h16v14H4zM4 10h16M8 3v4M16 3v4",
+  boolean: "M9 12l2 2 4-4M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z", select: "M4 7h16M4 12h16M4 17h10M18 15l2 2-2 2",
   multiselect: "M3 7l2 2 4-4M3 15l2 2 4-4M13 7h8M13 15h8",
 };
 /* ---------- Multiple-choice custom fields (several options at once, like tags) ---------- */
@@ -1720,11 +1754,29 @@ export function CustomChips({ value, max = 2 }: { value: unknown; max?: number }
   );
 }
 
+/* ---------- Custom fields of companies and contacts — the same editor as Deal fields (Settings › Deals page) ---------- */
+const CF_TYPES: CustomFieldLike["type"][] = ["text", "number", "date", "boolean", "select", "multiselect"];
+const CF_TYPE_HINT: Record<CustomFieldLike["type"], string> = {
+  text: "Free text, e.g. a reference or a nickname",
+  number: "A figure, e.g. employees or licences",
+  date: "A date, e.g. a birthday or renewal",
+  boolean: "Yes or no, e.g. NDA signed",
+  select: "One choice from your own list",
+  multiselect: "Several choices at once, like tags",
+};
+const CfIco = ({ d }: { d: string }) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>;
+const CfUp = () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 15l6-6 6 6" /></svg>;
+const CfDown = () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>;
+const CfX = () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>;
+const cfNorm = (x: string) => x.trim().toLowerCase();
+
 /**
- * Custom fields of companies or contacts: the list (required on/off, delete)
- * and a form to add one. `api` says where they are stored.
+ * Custom fields of companies or contacts — built like the Deal fields editor:
+ * the list (drag or arrows to reorder, required on/off, edit name / type / each
+ * option, delete) and below it "Add a field" with the type cards. `api` says
+ * where they are stored; `noun` is what they're on ("contact", "company").
  */
-export function CustomFieldsEditor({ fields, api, examples, isReserved, onChanged }: {
+export function CustomFieldsEditor({ fields, api, examples, isReserved, onChanged, noun = "record" }: {
   fields: CustomFieldLike[];
   api: {
     add: (f: { label: string; type: CustomFieldLike["type"]; required: boolean; options: string[]; sort: number }) => Promise<unknown>;
@@ -1738,168 +1790,224 @@ export function CustomFieldsEditor({ fields, api, examples, isReserved, onChange
   /** A label that is already a built-in field (refused). */
   isReserved?: (label: string) => boolean;
   onChanged: () => Promise<void> | void;
+  /** What the fields are on, for the texts ("contact", "company"). */
+  noun?: string;
 }) {
+  const nouns = noun === "company" ? "companies" : `${noun}s`;
+  const [items, setItems] = useState<CustomFieldLike[]>(fields);
+  useEffect(() => { setItems(fields); }, [fields]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [askDel, setAskDel] = useState<string | null>(null);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
+  // new field
   const [label, setLabel] = useState("");
   const [type, setType] = useState<CustomFieldLike["type"]>("text");
   const [required, setRequired] = useState(false);
-  // the new field's options, one by one (typing a comma or pasting a list splits them)
   const [newOpts, setNewOpts] = useState<string[]>([]);
   const [optDraft, setOptDraft] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [askDel, setAskDel] = useState<string | null>(null);
-  const [editing, setEditing] = useState<string | null>(null);
-  const pushOpts = (raw: string) => {
-    const parts = raw.split(/[,\n;]/).map((x) => x.trim()).filter(Boolean);
-    if (!parts.length) return;
-    setNewOpts((xs) => {
-      const out = [...xs];
-      parts.forEach((p) => { if (!out.some((o) => o.toLowerCase() === p.toLowerCase())) out.push(p); });
-      return out;
-    });
-    setOptDraft(""); setErr(null);
-  };
-  const moveNewOpt = (i: number, d: number) => setNewOpts((xs) => {
-    const j = i + d; if (j < 0 || j >= xs.length) return xs;
-    const c = [...xs]; [c[i], c[j]] = [c[j], c[i]]; return c;
-  });
-  const move = async (i: number, d: number) => {
-    const j = i + d;
-    if (j < 0 || j >= fields.length) return;
-    const order = [...fields];
-    [order[i], order[j]] = [order[j], order[i]];
-    await Promise.all(order.map((f, k) => api.update(f.id, { sort: k })));
-    await onChanged();
-  };
-  const add = async () => {
-    const l = label.trim();
-    if (!l) return;
-    if (isReserved?.(l)) { setErr(`“${l}” is already a built-in field.`); return; }
-    if (fields.some((f) => f.label.trim().toLowerCase() === l.toLowerCase())) { setErr(`There is already a field called “${l}”.`); return; }
-    const draft = optDraft.split(/[,\n;]/).map((x) => x.trim()).filter(Boolean);
-    const options = isChoiceType(type) ? [...newOpts, ...draft.filter((d) => !newOpts.some((o) => o.toLowerCase() === d.toLowerCase()))] : [];
-    if (isChoiceType(type) && !options.length) { setErr("Add at least one option."); return; }
+  const nameRef = useRef<HTMLInputElement>(null);
+
+  /** Runs a change, then reloads the list; errors show under it. */
+  const run = async (fn: () => Promise<unknown>) => {
     setBusy(true); setErr(null);
-    await api.add({ label: l, type, required, options, sort: fields.length });
-    setLabel(""); setType("text"); setRequired(false); setNewOpts([]); setOptDraft("");
+    try {
+      const r = await fn();
+      if (typeof r === "string" && r) setErr(r);
+      else if (r && typeof r === "object" && "error" in (r as any) && (r as any).error) setErr(String((r as any).error?.message ?? (r as any).error));
+    } catch (e: any) { setErr(e?.message ?? String(e)); }
     await onChanged();
     setBusy(false);
   };
+  const choice = isChoiceType(type);
+  const dup = !!label.trim() && items.some((f) => cfNorm(f.label) === cfNorm(label));
+  const reserved = !!label.trim() && !!isReserved?.(label.trim());
+  const canAdd = !!label.trim() && !dup && !reserved && (!choice || newOpts.length > 0 || !!optDraft.trim());
+  // typing a comma or pasting a list splits it into options
+  const pushOpts = (raw: string) => {
+    const parts = raw.split(/[,\n;]/).map((x) => x.trim()).filter(Boolean);
+    setOptDraft("");
+    if (!parts.length) return;
+    setNewOpts((xs) => { const out = [...xs]; parts.forEach((p) => { if (!out.some((o) => cfNorm(o) === cfNorm(p))) out.push(p); }); return out; });
+  };
+  const add = () => {
+    if (!canAdd) return;
+    const options = choice ? [...newOpts, ...optDraft.split(/[,\n;]/).map((x) => x.trim()).filter((x) => x && !newOpts.some((o) => cfNorm(o) === cfNorm(x)))] : [];
+    void run(async () => {
+      const r = await api.add({ label: label.trim(), type, required, options, sort: items.length });
+      setLabel(""); setType("text"); setRequired(false); setNewOpts([]); setOptDraft(""); nameRef.current?.focus();
+      return r && typeof r === "object" && "error" in (r as any) ? r : null;
+    });
+  };
+  const reorder = (ids: string[]) => {
+    const next = ids.map((id) => items.find((f) => f.id === id)!).filter(Boolean);
+    setItems(next);
+    void run(() => Promise.all(next.map((f, k) => api.update(f.id, { sort: k }))));
+  };
+  const move = (i: number, d: number) => {
+    const j = i + d;
+    if (j < 0 || j >= items.length) return;
+    const ids = items.map((f) => f.id);
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    reorder(ids);
+  };
+  const drop = (target: string) => {
+    const from = dragId; setDragId(null); setOverId(null);
+    if (!from || from === target) return;
+    const ids = items.map((f) => f.id).filter((id) => id !== from);
+    ids.splice(ids.indexOf(target), 0, from);
+    reorder(ids);
+  };
+
   return (
-    <div className="cfe">
-      {fields.length === 0 ? (
-        <p className="cfe-empty">No custom fields yet. Add the first one below.</p>
-      ) : (
-        <ul className="cfe-list">
-          {fields.map((f, i) => editing === f.id ? (
-            <FieldEditRow key={f.id} field={f} others={fields.filter((x) => x.id !== f.id)} isReserved={isReserved}
-              onCancel={() => setEditing(null)}
-              onSave={async (patch, renames) => {
-                await api.update(f.id, patch);
-                if (api.renameValue) for (const [from, to] of renames) await api.renameValue(f.id, from, to);
-                setEditing(null); await onChanged();
-              }} />
-          ) : (
-            <li key={f.id} className="cfe-row" style={{ ["--i" as string]: i } as CSSProperties}>
-              <span className="cfe-move">
-                <button type="button" disabled={i === 0} onClick={() => void move(i, -1)} aria-label="Move up" title="Move up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 15l6-6 6 6" /></svg></button>
-                <button type="button" disabled={i === fields.length - 1} onClick={() => void move(i, 1)} aria-label="Move down" title="Move down"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg></button>
-              </span>
-              <span className="cfe-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={FIELD_TYPE_ICON[f.type]} /></svg></span>
-              <span className="cfe-main">
-                <b>{f.label}</b>
-                <small>{FIELD_TYPE_LABEL[f.type]}{isChoiceType(f.type) && f.options.length ? ` · ${f.options.length} option${f.options.length === 1 ? "" : "s"}` : ""}</small>
-                {isChoiceType(f.type) && f.options.length > 0 && (
-                  <span className="cfe-chips" title={f.options.join("\n")}>
-                    {f.options.slice(0, 4).map((o, k) => <i key={k}>{o}</i>)}
-                    {f.options.length > 4 && <i className="is-more">+{f.options.length - 4}</i>}
-                  </span>
-                )}
-              </span>
-              <button type="button" role="switch" aria-checked={f.required} className={`cfe-req ${f.required ? "is-on" : ""}`}
-                onClick={async () => { await api.update(f.id, { required: !f.required }); await onChanged(); }}>
-                <i />Required
-              </button>
-              <button type="button" className="cfe-edit" onClick={() => { setEditing(f.id); setAskDel(null); }} aria-label={`Edit ${f.label}`} title="Edit name, type and options">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" /></svg>
-              </button>
-              {askDel === f.id ? (
-                <span className="cfe-ask">
-                  Delete?
-                  <button type="button" className="is-yes" onClick={async () => { setAskDel(null); await api.remove(f.id); await onChanged(); }}>Yes</button>
-                  <button type="button" onClick={() => setAskDel(null)}>No</button>
+    <div className="dw dw-narrow tfm is-inline cfx">
+      <div className="dw-body">
+      <p className="tfm-where">
+        Extra information every {noun} can carry. Fields show up when you <b>open a {noun}</b>, as <b>columns and filters</b> in the list, and in <b>Import</b> and <b>Export</b>.
+      </p>
+
+      <div className="dw-sec">
+        <p className="dw-sec-title">Your fields{items.length > 0 && <span className="tfm-count">{items.length}</span>}</p>
+        {items.length === 0 ? (
+          <p className="tfe-empty">No {noun} fields yet. Add the first one below.</p>
+        ) : (
+          <ul className="tfe-list">
+            {items.map((f, i) => editing === f.id ? (
+              <CfFieldEditor key={f.id} field={f} others={items.filter((x) => x.id !== f.id)} isReserved={isReserved} nouns={nouns}
+                onCancel={() => setEditing(null)}
+                onSave={async (patch, renames) => {
+                  await run(async () => {
+                    await api.update(f.id, patch);
+                    if (api.renameValue) for (const [from, to] of renames) await api.renameValue(f.id, from, to);
+                  });
+                  setEditing(null);
+                }} />
+            ) : (
+              <li key={f.id} style={{ ["--i" as string]: i } as CSSProperties}
+                className={`tfe-row ${dragId === f.id ? "is-dragging" : ""} ${overId === f.id && dragId !== f.id ? "is-over" : ""}`}
+                draggable={!editing}
+                onDragStart={(e) => { setDragId(f.id); e.dataTransfer.effectAllowed = "move"; }}
+                onDragEnd={() => { setDragId(null); setOverId(null); }}
+                onDragOver={(e) => { if (!dragId) return; e.preventDefault(); if (overId !== f.id) setOverId(f.id); }}
+                onDrop={(e) => { e.preventDefault(); drop(f.id); }}>
+                <span className="tfe-move">
+                  <button type="button" disabled={i === 0 || busy} onClick={() => move(i, -1)} aria-label="Move up" title="Move up"><CfUp /></button>
+                  <button type="button" disabled={i === items.length - 1 || busy} onClick={() => move(i, 1)} aria-label="Move down" title="Move down"><CfDown /></button>
                 </span>
-              ) : (
-                <button type="button" className="cfe-del" onClick={() => setAskDel(f.id)} aria-label={`Delete ${f.label}`} title="Delete — stored values are kept but no longer shown">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" /></svg>
+                <span className={`tfe-ico is-${f.type}`}><CfIco d={FIELD_TYPE_ICON[f.type]} /></span>
+                <span className="tfe-main">
+                  <b>{f.label}</b>
+                  <small>{FIELD_TYPE_LABEL[f.type]}{isChoiceType(f.type) ? ` · ${f.options.length} option${f.options.length === 1 ? "" : "s"}` : ""}</small>
+                  {isChoiceType(f.type) && f.options.length > 0 && (
+                    <span className="tfe-chips" title={f.options.join("\n")}>
+                      {f.options.slice(0, 5).map((o, k) => <i key={k}>{o}</i>)}
+                      {f.options.length > 5 && <i className="is-more">+{f.options.length - 5}</i>}
+                    </span>
+                  )}
+                </span>
+                <button type="button" role="switch" aria-checked={f.required} disabled={busy}
+                  className={`tfe-req ${f.required ? "is-on" : ""}`} onClick={() => void run(() => api.update(f.id, { required: !f.required }))}>
+                  <i />Required
                 </button>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-      <div className="cfe-add">
-        <span className="cfe-add-k">Add a field</span>
-        <div className="cfe-add-row">
-          <input value={label} onChange={(e) => { setLabel(e.target.value); setErr(null); }} placeholder={examples.name}
-            onKeyDown={(e) => { if (e.key === "Enter" && !isChoiceType(type)) { e.preventDefault(); void add(); } }} />
-          <div className="cfe-type">
-            <Select value={type} onChange={(v) => setType(v as CustomFieldLike["type"])}
-              options={(Object.keys(FIELD_TYPE_LABEL) as CustomFieldLike["type"][]).map((t) => ({ value: t, label: FIELD_TYPE_LABEL[t] }))} />
+                <button type="button" className="tfe-btn" onClick={() => { setEditing(f.id); setAskDel(null); }} aria-label={`Edit ${f.label}`} title="Edit name, type and options">
+                  <CfIco d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+                </button>
+                {askDel === f.id ? (
+                  <span className="tfe-ask">
+                    Delete?
+                    <button type="button" className="is-yes" disabled={busy} onClick={() => { setAskDel(null); void run(() => api.remove(f.id)); }}>Yes</button>
+                    <button type="button" onClick={() => setAskDel(null)}>No</button>
+                  </span>
+                ) : (
+                  <button type="button" className="tfe-btn is-del" onClick={() => setAskDel(f.id)} disabled={busy} aria-label={`Delete ${f.label}`}
+                    title={`Delete — ${nouns} keep the value already stored, but it won't show anymore`}>
+                    <CfIco d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" />
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        {items.length > 1 && <p className="tfm-hint">Use the arrows or drag a row to change the order. The pencil edits a field's name, type and each of its options.</p>}
+      </div>
+
+      <div className="dw-sec">
+        <p className="dw-sec-title">Add a field</p>
+        <div className="dw-grid">
+          <div className="dw-f dw-col2"><label>Field name</label>
+            <input ref={nameRef} value={label} onChange={(e) => { setLabel(e.target.value); setErr(null); }} placeholder={examples.name}
+              onKeyDown={(e) => { if (e.key === "Enter") add(); }} />
           </div>
-          <button type="button" role="switch" aria-checked={required} className={`cfe-req ${required ? "is-on" : ""}`} onClick={() => setRequired((v) => !v)}>
-            <i />Required
-          </button>
-          <button type="button" className="dw-save" onClick={() => void add()} disabled={busy || !label.trim()}>{busy ? "Adding…" : "+ Add"}</button>
-        </div>
-        <div className={`cfe-opts ${isChoiceType(type) ? "is-on" : ""}`}>
-          <div className="cfe-opts-in">
-            <div className="cfe-ed-opts is-new">
-              <span className="cfe-ed-k">Options <em>{newOpts.length}</em></span>
+          <div className="dw-f dw-col2"><label>Type</label>
+            <div className="tfm-types" role="radiogroup" aria-label="Type">
+              {CF_TYPES.map((t) => (
+                <button key={t} type="button" role="radio" aria-checked={type === t} className={type === t ? "is-on" : ""} onClick={() => setType(t)}>
+                  <b><CfIco d={FIELD_TYPE_ICON[t]} />{FIELD_TYPE_LABEL[t]}</b><span>{CF_TYPE_HINT[t]}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className={`tfe-newopts dw-col2 ${choice ? "is-on" : ""}`}>
+            <div className="tfe-newopts-in">
+              <label className="tfe-k">Options <em>{newOpts.length}</em></label>
               {newOpts.length > 0 && (
-                <ul>
-                  {newOpts.map((o, i) => (
-                    <li key={i}>
-                      <span className="cfe-ed-mv">
-                        <button type="button" disabled={i === 0} onClick={() => moveNewOpt(i, -1)} aria-label="Move up" tabIndex={isChoiceType(type) ? 0 : -1}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 15l6-6 6 6" /></svg></button>
-                        <button type="button" disabled={i === newOpts.length - 1} onClick={() => moveNewOpt(i, 1)} aria-label="Move down" tabIndex={isChoiceType(type) ? 0 : -1}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg></button>
+                <ul className="tfe-optlist">
+                  {newOpts.map((o, k) => (
+                    <li key={`${k}-${o}`}>
+                      <span className="tfe-mv">
+                        <button type="button" disabled={k === 0} tabIndex={choice ? 0 : -1} onClick={() => setNewOpts((xs) => { const c = [...xs]; [c[k - 1], c[k]] = [c[k], c[k - 1]]; return c; })} aria-label="Move up"><CfUp /></button>
+                        <button type="button" disabled={k === newOpts.length - 1} tabIndex={choice ? 0 : -1} onClick={() => setNewOpts((xs) => { const c = [...xs]; [c[k + 1], c[k]] = [c[k], c[k + 1]]; return c; })} aria-label="Move down"><CfDown /></button>
                       </span>
-                      <input value={o} tabIndex={isChoiceType(type) ? 0 : -1}
-                        onChange={(e) => { const v = e.target.value; setNewOpts((xs) => xs.map((x, k) => (k === i ? v : x))); }}
+                      <input value={o} tabIndex={choice ? 0 : -1}
+                        onChange={(e) => { const v = e.target.value; setNewOpts((xs) => xs.map((x, j) => (j === k ? v : x))); }}
                         onBlur={() => setNewOpts((xs) => xs.map((x) => x.trim()).filter(Boolean))} />
-                      <button type="button" className="cfe-ed-x" onClick={() => setNewOpts((xs) => xs.filter((_, k) => k !== i))} aria-label={`Remove ${o}`} title="Remove" tabIndex={isChoiceType(type) ? 0 : -1}>
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
-                      </button>
+                      <button type="button" className="tfe-x" tabIndex={choice ? 0 : -1} onClick={() => setNewOpts((xs) => xs.filter((_, j) => j !== k))} aria-label={`Remove ${o}`}><CfX /></button>
                     </li>
                   ))}
                 </ul>
               )}
-              <div className="cfe-ed-add">
-                <input value={optDraft} tabIndex={isChoiceType(type) ? 0 : -1} placeholder={newOpts.length ? "Add another option…" : `Add an option — e.g. ${examples.options.split(",")[0]?.trim() || "Gold"}`}
-                  onChange={(e) => { const v = e.target.value; if (/[,\n;]/.test(v)) pushOpts(v); else { setOptDraft(v); setErr(null); } }}
+              <div className="tfe-optadd">
+                <input value={optDraft} tabIndex={choice ? 0 : -1}
+                  placeholder={newOpts.length ? "Add another option…" : `Type an option and press Enter — e.g. ${examples.options.split(",")[0]?.trim() || "Gold"}`}
+                  onChange={(e) => { const v = e.target.value; if (/[,\n;]/.test(v)) pushOpts(v); else setOptDraft(v); }}
                   onPaste={(e) => { const t = e.clipboardData.getData("text"); if (/[,\n;]/.test(t)) { e.preventDefault(); pushOpts(optDraft + t); } }}
                   onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); pushOpts(optDraft); } }} />
-                <button type="button" onClick={() => pushOpts(optDraft)} disabled={!optDraft.trim()} tabIndex={isChoiceType(type) ? 0 : -1}>+ Add</button>
+                <button type="button" onClick={() => pushOpts(optDraft)} disabled={!optDraft.trim()} tabIndex={choice ? 0 : -1}>+ Add option</button>
               </div>
             </div>
           </div>
+          <div className="dw-f dw-col2 tfm-reqline">
+            <button type="button" role="switch" aria-checked={required}
+              className={`dw-switch ${required ? "on" : ""}`} onClick={() => setRequired((v) => !v)}>
+              <span className="dw-switch-knob" />
+            </button>
+            <span><b>Required</b> · a {noun} can't be saved without it</span>
+          </div>
         </div>
-        {err && <p className="dw-err">{err}</p>}
+        {dup && <p className="dw-err">There's already a field called “{label.trim()}”.</p>}
+        {reserved && <p className="dw-err">“{label.trim()}” is already a built-in field.</p>}
+        {choice && label.trim() && !newOpts.length && !optDraft.trim() && <p className="tfm-hint">Add at least one option.</p>}
+        <button type="button" className="dw-save cf-add" onClick={add} disabled={busy || !canAdd}>{busy ? "Saving…" : "+ Add field"}</button>
+      </div>
+      {err && <p className="dw-err">{err}</p>}
       </div>
     </div>
   );
 }
 
-/** One custom field opened for editing: name, type, and (for dropdowns) its options — rename, reorder, add, remove. */
-function FieldEditRow({ field, others, isReserved, onCancel, onSave }: {
+/** One custom field opened for editing: name, type and — for dropdowns — each option on its own line. */
+function CfFieldEditor({ field, others, isReserved, nouns, onCancel, onSave }: {
   field: CustomFieldLike; others: CustomFieldLike[];
   isReserved?: (label: string) => boolean;
+  nouns: string;
   onCancel: () => void;
   onSave: (patch: { label: string; type: CustomFieldLike["type"]; options: string[] }, renames: [string, string][]) => Promise<void>;
 }) {
   const [label, setLabel] = useState(field.label);
   const [type, setType] = useState<CustomFieldLike["type"]>(field.type);
-  // each option remembers what it was called when the editor opened (to move stored values on a rename)
+  // each option remembers its name when the editor opened, so a rename moves the stored values
   const [opts, setOpts] = useState<{ k: number; was: string | null; v: string }[]>(() => field.options.map((o, k) => ({ k, was: o, v: o })));
   const [newOpt, setNewOpt] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1908,76 +2016,82 @@ function FieldEditRow({ field, others, isReserved, onCancel, onSave }: {
   const addOpt = () => {
     const v = newOpt.trim();
     if (!v) return;
-    if (opts.some((o) => o.v.trim().toLowerCase() === v.toLowerCase())) { setErr(`“${v}” is already an option.`); return; }
+    if (opts.some((o) => cfNorm(o.v) === cfNorm(v))) { setErr(`“${v}” is already an option.`); return; }
     setOpts((xs) => [...xs, { k: nextK.current++, was: null, v }]); setNewOpt(""); setErr(null);
   };
   const moveOpt = (i: number, d: number) => setOpts((xs) => {
     const j = i + d; if (j < 0 || j >= xs.length) return xs;
     const c = [...xs]; [c[i], c[j]] = [c[j], c[i]]; return c;
   });
-  const typeChanged = type !== field.type;
   const save = async () => {
     const l = label.trim();
     if (!l) { setErr("The field needs a name."); return; }
-    if (l.toLowerCase() !== field.label.trim().toLowerCase()) {
+    if (cfNorm(l) !== cfNorm(field.label)) {
       if (isReserved?.(l)) { setErr(`“${l}” is already a built-in field.`); return; }
-      if (others.some((f) => f.label.trim().toLowerCase() === l.toLowerCase())) { setErr(`There is already a field called “${l}”.`); return; }
+      if (others.some((f) => cfNorm(f.label) === cfNorm(l))) { setErr(`There is already a field called “${l}”.`); return; }
     }
     const clean = opts.map((o) => ({ ...o, v: o.v.trim() })).filter((o) => o.v);
     const seen = new Set<string>();
-    for (const o of clean) { const k = o.v.toLowerCase(); if (seen.has(k)) { setErr(`“${o.v}” is in the list twice.`); return; } seen.add(k); }
+    for (const o of clean) { if (seen.has(cfNorm(o.v))) { setErr(`“${o.v}” is in the list twice.`); return; } seen.add(cfNorm(o.v)); }
     if (isChoiceType(type) && !clean.length) { setErr("Add at least one option."); return; }
     setBusy(true); setErr(null);
     const renames: [string, string][] = isChoiceType(type) ? clean.filter((o) => o.was && o.was !== o.v).map((o) => [o.was!, o.v]) : [];
     await onSave({ label: l, type, options: isChoiceType(type) ? clean.map((o) => o.v) : [] }, renames);
     setBusy(false);
   };
+  const renamed = opts.filter((o) => o.was && o.v.trim() && o.was !== o.v.trim()).length;
   return (
-    <li className="cfe-row is-editing">
-      <div className="cfe-ed">
-        <div className="cfe-ed-top">
-          <label className="cfe-ed-f is-name">
-            <span>Name</span>
-            <input value={label} autoFocus onChange={(e) => { setLabel(e.target.value); setErr(null); }}
-              onKeyDown={(e) => { if (e.key === "Enter") void save(); if (e.key === "Escape") onCancel(); }} />
-          </label>
-          <div className="cfe-ed-f is-type">
-            <span>Type</span>
-            <Select value={type} onChange={(v) => { setType(v as CustomFieldLike["type"]); setErr(null); }}
-              options={(Object.keys(FIELD_TYPE_LABEL) as CustomFieldLike["type"][]).map((t) => ({ value: t, label: FIELD_TYPE_LABEL[t] }))} />
+    <li className="tfe-row is-editing">
+      <div className="tfe-ed">
+        <label className="tfe-f">
+          <span className="tfe-k">Name</span>
+          <input value={label} autoFocus onChange={(e) => { setLabel(e.target.value); setErr(null); }}
+            onKeyDown={(e) => { if (e.key === "Enter") void save(); if (e.key === "Escape") { e.stopPropagation(); onCancel(); } }} />
+        </label>
+        <div className="tfe-f">
+          <span className="tfe-k">Type</span>
+          <div className="tfe-typeseg" role="radiogroup" aria-label="Type">
+            {CF_TYPES.map((t) => (
+              <button key={t} type="button" role="radio" aria-checked={type === t} className={type === t ? "is-on" : ""} onClick={() => { setType(t); setErr(null); }}>
+                <CfIco d={FIELD_TYPE_ICON[t]} />{FIELD_TYPE_LABEL[t]}
+              </button>
+            ))}
           </div>
         </div>
-        {typeChanged && <p className="cfe-ed-warn">{field.type === "select" && type === "multiselect"
-          ? "Each record keeps its current choice and can now take more."
-          : "Values already saved stay as they are; ones that don't fit the new type may show empty."}</p>}
+        {type !== field.type && <p className="tfe-warn">{field.type === "select" && type === "multiselect"
+          ? `Each of the ${nouns} keeps its current choice and can now take more.`
+          : `Values already saved on ${nouns} stay as they are; ones that don't fit the new type may show empty.`}</p>}
         {isChoiceType(type) && (
-          <div className="cfe-ed-opts">
-            <span className="cfe-ed-k">Options <em>{opts.length}</em></span>
-            <ul>
+          <div className="tfe-f">
+            <span className="tfe-k">Options <em>{opts.length}</em></span>
+            <ul className="tfe-optlist">
               {opts.map((o, i) => (
                 <li key={o.k}>
-                  <span className="cfe-ed-mv">
-                    <button type="button" disabled={i === 0} onClick={() => moveOpt(i, -1)} aria-label="Move up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 15l6-6 6 6" /></svg></button>
-                    <button type="button" disabled={i === opts.length - 1} onClick={() => moveOpt(i, 1)} aria-label="Move down"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg></button>
+                  <span className="tfe-mv">
+                    <button type="button" disabled={i === 0} onClick={() => moveOpt(i, -1)} aria-label="Move up"><CfUp /></button>
+                    <button type="button" disabled={i === opts.length - 1} onClick={() => moveOpt(i, 1)} aria-label="Move down"><CfDown /></button>
                   </span>
-                  <input value={o.v} onChange={(e) => { const v = e.target.value; setOpts((xs) => xs.map((x) => x.k === o.k ? { ...x, v } : x)); setErr(null); }} />
-                  {o.was && o.was !== o.v.trim() && o.v.trim() && <small className="cfe-ed-was" title="Records with the old value get the new one">was “{o.was}”</small>}
-                  <button type="button" className="cfe-ed-x" onClick={() => setOpts((xs) => xs.filter((x) => x.k !== o.k))} aria-label={`Remove ${o.v}`} title="Remove — records keep the old value">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                  <input value={o.v} onChange={(e) => { const v = e.target.value; setOpts((xs) => xs.map((x) => (x.k === o.k ? { ...x, v } : x))); setErr(null); }}
+                    onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); onCancel(); } }} />
+                  {o.was && o.was !== o.v.trim() && o.v.trim() && <small className="tfe-was" title={`${nouns[0].toUpperCase()}${nouns.slice(1)} with the old value get the new one`}>was “{o.was}”</small>}
+                  {!o.was && <small className="tfe-was is-new">new</small>}
+                  <button type="button" className="tfe-x" onClick={() => setOpts((xs) => xs.filter((x) => x.k !== o.k))} aria-label={`Remove ${o.v}`} title={`Remove — ${nouns} keep the old value`}>
+                    <CfX />
                   </button>
                 </li>
               ))}
             </ul>
-            <div className="cfe-ed-add">
+            <div className="tfe-optadd">
               <input value={newOpt} placeholder="Add an option…" onChange={(e) => { setNewOpt(e.target.value); setErr(null); }}
                 onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addOpt(); } }} />
-              <button type="button" onClick={addOpt} disabled={!newOpt.trim()}>+ Add</button>
+              <button type="button" onClick={addOpt} disabled={!newOpt.trim()}>+ Add option</button>
             </div>
           </div>
         )}
         {err && <p className="dw-err">{err}</p>}
-        <div className="cfe-ed-foot">
-          <button type="button" className="cfe-ed-cancel" onClick={onCancel}>Cancel</button>
+        <div className="tfe-foot">
+          {renamed > 0 && <span className="tfe-foot-note">{renamed} renamed option{renamed === 1 ? "" : "s"} will be updated on every {nouns === "companies" ? "company" : nouns.replace(/s$/, "")}.</span>}
+          <button type="button" className="tfe-cancel" onClick={onCancel}>Cancel</button>
           <button type="button" className="dw-save" onClick={() => void save()} disabled={busy}>{busy ? "Saving…" : "Save field"}</button>
         </div>
       </div>
@@ -2091,6 +2205,13 @@ function OptionList({ kind, title, hint, options, builtIn, placeholder, onChange
 // ============================ Side panel building blocks ============================
 // (Same look on Contacts and Companies — the styles are in CompaniesPage.css, "Drawer editor".)
 const DW_ICON: Record<string, string> = {
+  shield: "M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6zM9 12l2 2 4-4",
+  calendar: "M3 9h18M8 3v4M16 3v4M5 5h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z",
+  ticket: "M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4zM14 5v12",
+  folder: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM8 13h8",
+  heart: "M12 20.5s-7.5-4.4-7.5-10.2A4.3 4.3 0 0 1 12 7.6a4.3 4.3 0 0 1 7.5 2.7c0 5.8-7.5 10.2-7.5 10.2z",
+  megaphone: "M4 10v4a1 1 0 0 0 1 1h2l5 4V5L7 9H5a1 1 0 0 0-1 1zM16 9.5a3.5 3.5 0 0 1 0 5M18.5 7a7 7 0 0 1 0 10",
+  grid: "M3 3h8v7H3zM13 3h8v4.5h-8zM13 10.5h8V21h-8zM3 13h8v8H3z",
   person: "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
   users: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8",
   mail: "M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM3 7l9 6 9-6",
@@ -3533,8 +3654,26 @@ export interface BulkAction {
   disabledReason?: string;
   /** Tucked under "More" so the bar stays short. */
   more?: boolean;
-  /** Returns an error text, or { done } with what happened. */
-  run: (value?: string) => Promise<string | null | void | { done: string }> | string | null | void | { done: string };
+  /** A second question once an option is picked (e.g. which phase of the chosen pipeline). */
+  next?: (value: string) => { title: string; options: { value: string; label: string; hint?: string; group?: string }[] } | null;
+  /** Returns an error text, or { done } with what happened. `sub` is the answer to `next`. */
+  run: (value?: string, sub?: string) => Promise<string | null | void | { done: string }> | string | null | void | { done: string };
+}
+
+/** Runs `fn` over the items a few at a time (fast without flooding the connection); returns how many went fine and the first error. */
+export async function inPool<T>(items: T[], fn: (x: T) => Promise<unknown>, size = 6): Promise<{ ok: number; error: string | null }> {
+  let ok = 0, error: string | null = null, i = 0;
+  const worker = async () => {
+    while (i < items.length) {
+      const x = items[i++];
+      try {
+        const r = await fn(x);
+        if (typeof r === "string" && r) { error ??= r; } else ok++;
+      } catch (e: any) { error ??= e?.message ?? String(e); }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(size, items.length) }, worker));
+  return { ok, error };
 }
 
 export function useBulkSelection(order: string[]) {
@@ -3588,26 +3727,30 @@ export function BulkBar({ count, noun, actions, onClear, onSelectAll, allOn, tot
 }) {
   const [open, setOpen] = useState<string | null>(null);   // an action's picker, or "__more"
   const [armed, setArmed] = useState<{ key: string; value?: string } | null>(null);
+  // the second question of an action (e.g. the phase, once the pipeline is picked)
+  const [step2, setStep2] = useState<{ key: string; value: string } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [q, setQ] = useState("");
   const [val, setVal] = useState("");
   const ref = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    const onDown = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) { setOpen(null); setArmed(null); } };
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { if (open || armed) { setOpen(null); setArmed(null); } else onClear(); } };
+    const onDown = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) { setOpen(null); setArmed(null); setStep2(null); } };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { if (step2) setStep2(null); else if (open || armed) { setOpen(null); setArmed(null); } else onClear(); } };
     document.addEventListener("mousedown", onDown); document.addEventListener("keydown", onKey);
     return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
-  }, [open, armed, onClear]);
+  }, [open, armed, step2, onClear]);
   useEffect(() => { if (!msg) return; const t = window.setTimeout(() => setMsg(null), 4000); return () => window.clearTimeout(t); }, [msg]);
   if (count === 0 && !msg) return null;
 
-  const go = async (a: BulkAction, value?: string) => {
+  const go = async (a: BulkAction, value?: string, sub?: string) => {
     if (a.disabledReason) { setMsg({ ok: false, text: a.disabledReason }); setOpen(null); return; }
+    // an action with a second question asks it first
+    if (a.next && value != null && sub == null && a.next(value)) { setStep2({ key: a.key, value }); setQ(""); return; }
     if (a.danger && (!armed || armed.key !== a.key || armed.value !== value)) { setArmed({ key: a.key, value }); setOpen(null); return; }
-    setArmed(null); setOpen(null); setBusy(a.key);
+    setArmed(null); setOpen(null); setStep2(null); setBusy(a.key);
     try {
-      const r = await a.run(value);
+      const r = await a.run(value, sub);
       if (r && typeof r === "object") setMsg({ ok: true, text: r.done });
       else if (r) setMsg({ ok: false, text: r });
       else setMsg({ ok: true, text: "Done" });
@@ -3616,12 +3759,38 @@ export function BulkBar({ count, noun, actions, onClear, onSelectAll, allOn, tot
   };
   const openPicker = (a: BulkAction) => {
     if (a.disabledReason) { setMsg({ ok: false, text: a.disabledReason }); setOpen(null); return; }
-    if (a.options || a.input) { setOpen(open === a.key ? null : a.key); setQ(""); setVal(""); } else void go(a);
+    if (a.options || a.input) { setOpen(open === a.key ? null : a.key); setQ(""); setVal(""); setStep2(null); } else void go(a);
   };
   const main = actions.filter((a) => !a.more), extra = actions.filter((a) => a.more);
   const current = actions.find((a) => a.key === open);
 
-  const picker = (a: BulkAction) => (
+  const picker = (a: BulkAction) => {
+    const second = step2?.key === a.key && a.next ? a.next(step2.value) : null;
+    if (second) {
+      const first = a.options?.find((o) => o.value === step2!.value);
+      return (
+        <div className="bk-pop is-step2" role="dialog" aria-label={second.title}>
+          <p className="bk-pop-title">
+            <button type="button" className="bk-pop-back" onClick={() => setStep2(null)} aria-label="Back">‹</button>
+            {second.title}
+          </p>
+          {first && <p className="bk-pop-crumb">{a.label}: <b>{first.label}</b> · {count} {count === 1 ? noun[0] : noun[1]}</p>}
+          {second.options.length > 7 && <input className="bk-pop-q" autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" />}
+          <div className="bk-pop-list">
+            {second.options.filter((o) => !q || `${o.label} ${o.hint ?? ""}`.toLowerCase().includes(q.toLowerCase())).map((o, i, arr) => (
+              <div key={o.value} className="bk-pop-row">
+                {o.group && o.group !== arr[i - 1]?.group && <span className="bk-pop-group">{o.group}</span>}
+                <button type="button" role="option" className="bk-pop-opt" onClick={() => void go(a, step2!.value, o.value)}>
+                  <span>{o.label}</span>{o.hint && <small>{o.hint}</small>}
+                </button>
+              </div>
+            ))}
+            {second.options.length === 0 && <p className="bk-pop-empty">Nothing to pick</p>}
+          </div>
+        </div>
+      );
+    }
+    return (
     <div className="bk-pop" role="dialog" aria-label={a.label}>
       <p className="bk-pop-title">{a.label} · {count} {count === 1 ? noun[0] : noun[1]}</p>
       {a.input ? (
@@ -3649,7 +3818,8 @@ export function BulkBar({ count, noun, actions, onClear, onSelectAll, allOn, tot
         </>
       )}
     </div>
-  );
+    );
+  };
 
   return createPortal(
     <div className="bk-bar" ref={ref} role="toolbar" aria-label="Selected items">
@@ -4202,6 +4372,7 @@ function PartnerRatesEditor({ partners, rates, items, onChanged }: {
 }
 
 export function CompanySettings({ onBack }: { onBack: () => void }) {
+  const secSection = useSecuritySection("companies");
   const [fields, setFields] = useState<CompanyField[]>([]);
   const [options, setOptions] = useState<CrmOption[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -4261,13 +4432,14 @@ export function CompanySettings({ onBack }: { onBack: () => void }) {
             body: <PartnerRatesEditor partners={partners} rates={rates} items={items} onChanged={reloadRates} /> },
           { k: "fields", label: "Custom fields", icon: "sliders", tone: "indigo", count: fields.length,
             title: "Custom fields", hint: "Extra fields on every company, in its panel under Additional details",
-            body: <CustomFieldsEditor fields={fields} onChanged={reloadFields}
+            body: <CustomFieldsEditor noun="company" fields={fields} onChanged={reloadFields}
               api={{ add: (f) => addCompanyField(f), update: (id, patch) => updateCompanyField(id, patch), remove: (id) => deleteCompanyField(id), renameValue: (id, from, to) => renameCustomValue("companies", id, from, to) }}
               examples={{ name: "Field name, e.g. Founded, Key account", options: "SME, Mid-market, Enterprise" }} /> },
           { k: "required", label: "Required fields", icon: "asterisk", tone: "amber",
             title: "Required fields", hint: "What must be filled in before a company can be saved — built-in fields and your own",
             body: <RequiredFieldsEditor scope="company" custom={fields}
               onCustomToggle={async (id, on) => { await updateCompanyField(id, { required: on }); await reloadFields(); }} /> },
+          ...(secSection ? [secSection] : []),
         ]} />
       {tool === "import" && <CompanyImport fields={fields} onClose={() => setTool(null)} onDone={async () => { await load(); }} />}
       {tool === "export" && (

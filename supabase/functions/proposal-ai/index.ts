@@ -6,6 +6,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
    Returns { plan: { replacements[], sections[], notes }, model }.
    POST { action: "extract_contract", text, model? }
    Returns { fields: {...order form fields}, model } — reads a signed contract.
+   POST { action: "marketing_write", kind: "email" | "posts", brief, … }
+   Returns { email | posts, model } — writes campaign e-mails and social posts.
    Only text goes to the model (no pictures, no files).
    Secrets: ANTHROPIC_API_KEY (required), PROPOSAL_AI_MODEL (optional).
    ===================================================================== */
@@ -26,7 +28,7 @@ const json = (o: unknown, status = 200) =>
 interface Item { id: string; page: number; text: string; size?: number; role?: string }
 interface Page { page: number; title?: string }
 interface Body {
-  action?: "plan" | "extract_contract"; text?: string;
+  action?: "plan" | "extract_contract" | "marketing_write"; text?: string;
   kind?: "proposal" | "contract"; lang?: "es" | "en"; provider?: string; model?: string;
   items?: Item[]; pages?: Page[]; vars?: { key: string; label: string; example?: string }[];
   catalog?: { products?: string[]; services?: string[] };
@@ -201,6 +203,100 @@ async function callModel(b: Body, model: string): Promise<{ plan: unknown; model
   throw new Error(last || "The model did not answer.");
 }
 
+/* ───────────── Marketing: e-mails and social posts ───────────── */
+interface MkBody {
+  kind?: "email" | "posts"; brief?: string; tone?: string; lang?: string; company?: string; audience?: string;
+  goal?: string; cta?: string; link?: string; networks?: string[]; count?: number; from?: string; to?: string;
+  fields?: string[]; current?: string; model?: string;
+}
+const MK_EMAIL_TOOL = {
+  name: "email_draft",
+  description: "A marketing e-mail ready to send.",
+  input_schema: {
+    type: "object",
+    properties: {
+      subject: { type: "string", description: "Short, specific, no clickbait, no ALL CAPS. May use merge fields like {{first_name}}." },
+      subjects_alt: { type: "array", items: { type: "string" }, description: "Three other subject lines to A/B test." },
+      preheader: { type: "string", description: "The preview line shown after the subject in the inbox (40-90 characters)." },
+      body_html: { type: "string", description: "The body as simple HTML: <p>, <h2>, <ul><li>, <strong>, <a href>. No <html>/<body>, no styles, no images, no unsubscribe line (added automatically). Start with a greeting using {{first_name}}." },
+    },
+    required: ["subject", "preheader", "body_html"],
+  },
+};
+const MK_POSTS_TOOL = {
+  name: "social_posts",
+  description: "A series of social media posts.",
+  input_schema: {
+    type: "object",
+    properties: {
+      posts: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            title: { type: "string", description: "Internal name of the post, 2-6 words." },
+            body: { type: "string", description: "The main text (LinkedIn style when LinkedIn is one of the networks)." },
+            variants: { type: "object", description: "Text adapted to each requested network (key = network id). X: max 270 characters. Instagram: hook first line, hashtags at the end.", additionalProperties: { type: "string" } },
+            hashtags: { type: "array", items: { type: "string" } },
+            date: { type: "string", description: "YYYY-MM-DD within the requested period, spread out sensibly (weekdays, not two on the same day)." },
+            time: { type: "string", description: "HH:MM local time, a good hour for B2B (08:00-10:00 or 12:00-14:00)." },
+            image_idea: { type: "string", description: "One sentence describing a picture or carousel that would go with it." },
+          },
+          required: ["title", "body", "variants", "date", "time"],
+        },
+      },
+    },
+    required: ["posts"],
+  },
+};
+const LIMITS: Record<string, string> = { linkedin: "LinkedIn (max 3000 chars, best 600-1300, line breaks, 3-5 hashtags)", instagram: "Instagram (max 2200 chars, hook in first line, emojis ok, up to 10 hashtags at the end)", facebook: "Facebook (best under 500 chars)", x: "X / Twitter (max 270 chars, 1-2 hashtags)", tiktok: "TikTok caption (max 2200, short)", threads: "Threads (max 500 chars)", youtube: "YouTube community post", other: "Other network" };
+async function marketingWrite(b: MkBody, model: string): Promise<unknown> {
+  const lang = b.lang === "en" ? "English" : b.lang === "ca" ? "Catalan" : "Spanish (Spain)";
+  const isEmail = b.kind !== "posts";
+  const nets = (b.networks ?? []).filter((n) => LIMITS[n]);
+  const content = isEmail
+    ? `Write a B2B marketing e-mail for ${b.company || "our company"}.
+Language: ${lang}. Tone: ${b.tone || "professional and warm"}.
+Audience: ${b.audience || "our contacts"}.
+Goal: ${b.goal || "inform and start a conversation"}.
+${b.cta ? `Call to action: ${b.cta}${b.link ? ` — link: ${b.link}` : ""}.` : b.link ? `Link to include: ${b.link}.` : ""}
+Merge fields you may use (exactly like this): ${(b.fields ?? ["first_name", "company"]).map((f) => `{{${f}}}`).join(", ")}.
+Keep it short (120-220 words), scannable, one clear call to action, no spammy words, no invented facts or figures.
+${b.current ? `Improve this current draft instead of starting over:\n${String(b.current).slice(0, 8000)}\n` : ""}
+Brief from the marketer:
+${String(b.brief ?? "").slice(0, 6000)}`
+    : `Plan and write ${Math.max(1, Math.min(30, Number(b.count) || 5))} social media posts for ${b.company || "our company"}.
+Language: ${lang}. Tone: ${b.tone || "professional, human, insightful"}.
+Networks: ${nets.map((n) => `${n} = ${LIMITS[n]}`).join("; ") || "linkedin = " + LIMITS.linkedin}.
+Period: from ${b.from || "next Monday"} to ${b.to || "four weeks later"}.
+Audience: ${b.audience || "B2B decision makers"}.
+${b.link ? `Link to promote when it fits: ${b.link}.` : ""}
+Vary the formats (insight, tip, question, case, behind the scenes, announcement). No invented facts, clients or figures.
+Write a variant for EVERY requested network, keyed by its id.
+Brief from the marketer:
+${String(b.brief ?? "").slice(0, 6000)}`;
+  const tool = isEmail ? MK_EMAIL_TOOL : MK_POSTS_TOOL;
+  let last = "";
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": KEY, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({ model, max_tokens: isEmail ? 3000 : 8000, tools: [tool], tool_choice: { type: "tool", name: tool.name }, messages: [{ role: "user", content }] }),
+    });
+    if (r.status === 429 || r.status >= 500) {
+      last = `${r.status} ${await r.text().catch(() => "")}`.slice(0, 300);
+      await new Promise((ok) => setTimeout(ok, Math.min(Number(r.headers.get("retry-after")) * 1000 || 1500 * 2 ** attempt, 12000)));
+      continue;
+    }
+    const out = await r.json().catch(() => null);
+    if (!r.ok) throw new Error(out?.error?.message ?? `Anthropic API ${r.status}`);
+    const use = (out?.content ?? []).find((c: any) => c.type === "tool_use" && c.name === tool.name);
+    if (use?.input && typeof use.input === "object") return isEmail ? { email: use.input, model: out?.model ?? model } : { posts: (use.input as any).posts ?? [], model: out?.model ?? model };
+    last = "The model gave no answer.";
+  }
+  throw new Error(last || "The model did not answer.");
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return json({ error: "POST only" }, 405);
@@ -211,6 +307,11 @@ Deno.serve(async (req) => {
     if (!KEY) return json({ error: "no_key", message: "Set the ANTHROPIC_API_KEY secret to use AI suggestions." }, 501);
     const b = (await req.json()) as Body;
     const model0 = (typeof b.model === "string" && /^claude-[\w.-]+$/.test(b.model)) ? b.model : DEFAULT_MODEL;
+    if (b.action === "marketing_write") {
+      const mb = b as unknown as MkBody;
+      if (!String(mb.brief ?? "").trim() && !String(mb.current ?? "").trim()) return json({ error: "Write a short brief first." }, 400);
+      return json(await marketingWrite(mb, model0));
+    }
     if (b.action === "extract_contract") {
       if (typeof b.text !== "string" || !b.text.trim()) return json({ error: "No text to read." }, 400);
       return json(await extractContract(b.text, model0));

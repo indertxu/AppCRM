@@ -2463,3 +2463,6 @@
   animation: mg-veil-in 0.3s ease backwards;
 }
 @keyframes mg-veil-in { from { opacity: 0; } }
+
+/* Settings gear › Security: the same panel as Settings › Management page › Security */
+.mg-sec-embed { padding: 20px 28px 28px; background: #f6faf8; min-height: 100%; }

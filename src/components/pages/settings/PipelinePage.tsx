@@ -5,7 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { supabase } from "../../api/supabase";
 import Select from "../../framework/Select";
 import { useBackToClose } from "../../framework/useBackToClose";
-import { setLeaveGuard } from "../../framework/pageAccess";
+import { setLeaveGuard, loadDepartments, deptName, deptInfo, DEFAULT_DEPARTMENTS } from "../../framework/pageAccess";
 import {
   listPipelines, createPipeline, savePipelineOrder, pipelineUsage, deletePipelineSafely,
   loadPipeline, loadPhasesByPipeline, syncPipelineToBlueprint,
@@ -19,31 +19,11 @@ import "./PipelinePage.css";
 interface Props { onBack: () => void; }
 
 // Fixed departments — SVG icons (centre perfectly, unlike unicode glyphs)
-const DI = {
-  consultancy: <path d="M12 3l9 5v8l-9 5-9-5V8z" />,
-  human_resources: <><circle cx="12" cy="8" r="3.2" /><path d="M6 20a6 6 0 0 1 12 0" /></>,
-  marketing: <path d="M4 9v6h3l7 4V5L7 9z M17 8a4 4 0 0 1 0 8" />,
-  sales: <path d="M4 18l5-5 3 3 7-8" />,
-  customer_success: <path d="M12 4l2.3 4.7 5.2.8-3.8 3.7.9 5.1-4.6-2.4-4.6 2.4.9-5.1L4.5 9.5l5.2-.8z" />,
-  it: <><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" /></>,
-  management: <><rect x="4" y="4" width="7" height="7" rx="1" /><rect x="13" y="4" width="7" height="7" rx="1" /><rect x="4" y="13" width="7" height="7" rx="1" /><rect x="13" y="13" width="7" height="7" rx="1" /></>,
-} as const;
-const DEPARTMENTS = [
-  { key: "consultancy", label: "Consultancy", color: "#12b57f" },
-  { key: "human_resources", label: "Human Resources", color: "#e0798c" },
-  { key: "marketing", label: "Marketing", color: "#e0a13c" },
-  { key: "sales", label: "Sales", color: "#3c9ae0" },
-  { key: "customer_success", label: "Customer Success", color: "#9b6fd0" },
-  { key: "it", label: "IT", color: "#4a5568" },
-  { key: "management", label: "Management", color: "#0a6f4d" },
-];
-const deptLabel = (k: string) => DEPARTMENTS.find((d) => d.key === k)?.label ?? k;
-const deptColor = (k: string) => DEPARTMENTS.find((d) => d.key === k)?.color ?? "#5a7d6d";
-const DeptIcon = ({ k }: { k: string }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-    {DI[k as keyof typeof DI] ?? <circle cx="12" cy="12" r="4" />}
-  </svg>
-);
+/** The company's departments (Settings → Organization): name and colour from there. */
+const deptLabel = (k: string) => deptName(k) || k;
+const deptColor = (k: string) => deptInfo(k)?.color ?? DEFAULT_DEPARTMENTS.find((d) => d.key === k)?.color ?? "#5a7d6d";
+/** Departments carry a colour only (the badge is a coloured dot). */
+const DeptIcon = (_: { k: string }) => null;
 
 const NODE_W = 200;
 const NODE_H = 92;
@@ -904,14 +884,9 @@ function PipelineEditor({ pipeline, folders, onBack, onSaved }: {
     supabase.from("products").select("id,name").then(({ data }: any) => setProducts(data ?? []));
     supabase.from("services").select("id,name").then(({ data }: any) => setServices(data ?? []));
     // Load the real departments placed on the org chart, keeping the shared icon/color.
-    supabase.from("org_departments").select("dept_key").then(({ data }: any) => {
-      const keys: string[] = (data ?? []).map((d: any) => d.dept_key);
-      const list = (keys.length ? keys : DEPARTMENTS.map((d) => d.key)).map((k) => {
-        const meta = DEPARTMENTS.find((d) => d.key === k);
-        return { key: k, label: meta?.label ?? k, color: meta?.color ?? "#5a7d6d" };
-      });
-      setDepts(list);
-    });
+    loadDepartments(true).then((ds) => {
+      setDepts((ds.length ? ds.map((d) => ({ key: d.key, label: d.name, color: d.color })) : DEFAULT_DEPARTMENTS.map((d) => ({ key: d.key, label: d.label, color: d.color }))));
+    }).catch(() => {});
     loadBlueprintData().then((d) => setBlueprints(d.blueprints)).catch(() => {});
     listPipelines().then((ps) => setAllPipelines(ps.filter((p) => p.id !== pipeline.id))).catch(() => {});
     return () => { alive = false; };

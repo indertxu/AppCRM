@@ -236,7 +236,69 @@ async function handleApi(req: Request, route: string): Promise<Response> {
   return json({ error: "Unknown endpoint. See Settings → Client page → API." }, 404);
 }
 
+/* =====================================================================
+   Marketing tracking — public links inside campaign e-mails (no login):
+     GET ?mk=o&s=<send id>              the open pixel (1×1 gif)
+     GET ?mk=c&s=<send id>&u=<url>      a tracked link → records, then redirects
+     GET ?mk=u&s=<send id>              the unsubscribe page
+     GET ?mk=ping                       lets the app check tracking is deployed
+   Writes through public.mk_track() (64_marketing_hub.sql). A click only
+   redirects to an address that is really in that campaign's e-mail.
+   ===================================================================== */
+const GIF = Uint8Array.from(atob("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"), (c) => c.charCodeAt(0));
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const page = (title: string, text: string) => new Response(
+  `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f3f7f5;font-family:-apple-system,Segoe UI,Arial,sans-serif;color:#0b241a}
+.c{max-width:440px;margin:24px;padding:36px 32px;border-radius:22px;background:#fff;box-shadow:0 20px 60px -30px rgba(10,111,77,.45);text-align:center}
+.i{width:56px;height:56px;margin:0 auto 16px;border-radius:18px;display:grid;place-items:center;background:linear-gradient(140deg,#19c48a,#0a6f4d);color:#fff;font-size:26px}
+h1{margin:0 0 8px;font-size:22px}p{margin:0;color:#5a7d6d;line-height:1.55;font-size:15px}</style></head>
+<body><div class="c"><div class="i">✓</div><h1>${title}</h1><p>${text}</p></div></body></html>`,
+  { status: 200, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
+async function handleTracking(req: Request, u: globalThis.URL): Promise<Response> {
+  const mk = u.searchParams.get("mk");
+  if (mk === "ping") return json({ mk: true });
+  const send = u.searchParams.get("s") ?? "";
+  const ua = req.headers.get("user-agent") ?? "";
+  const admin = createClient(URL, SERVICE);
+  const ok = UUID_RE.test(send);
+  if (mk === "o") {
+    if (ok) await admin.rpc("mk_track", { p_send: send, p_kind: "open", p_url: null, p_ua: ua }).then(() => {}, () => {});
+    return new Response(GIF, { headers: { "Content-Type": "image/gif", "Cache-Control": "no-store, no-cache, must-revalidate, private", Pragma: "no-cache" } });
+  }
+  if (mk === "c") {
+    const target = u.searchParams.get("u") ?? "";
+    if (ok && /^https?:\/\//i.test(target)) {
+      const { data } = await admin.rpc("mk_track", { p_send: send, p_kind: "click", p_url: target, p_ua: ua });
+      if ((data as any)?.ok) return new Response(null, { status: 302, headers: { Location: target, "Cache-Control": "no-store" } });
+    }
+    return page("Link not available", "This link is no longer available.");
+  }
+  if (mk === "u") {
+    // the confirmation button posts back here, so link scanners in mail servers don't unsubscribe people by themselves
+    if (req.method === "POST" && ok) {
+      await admin.rpc("mk_track", { p_send: send, p_kind: "unsubscribe", p_url: null, p_ua: ua });
+      return page("Te has dado de baja", "No recibirás más comunicaciones de este tipo. Si ha sido un error, responde a cualquiera de nuestros correos.");
+    }
+    if (!ok) return page("Enlace no válido", "Este enlace de baja no es válido.");
+    return new Response(`<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Darse de baja</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f3f7f5;font-family:-apple-system,Segoe UI,Arial,sans-serif;color:#0b241a}
+.c{max-width:440px;margin:24px;padding:36px 32px;border-radius:22px;background:#fff;box-shadow:0 20px 60px -30px rgba(10,111,77,.45);text-align:center}
+h1{margin:0 0 8px;font-size:22px}p{margin:0 0 22px;color:#5a7d6d;line-height:1.55;font-size:15px}
+button{border:0;border-radius:12px;padding:13px 22px;font-size:15px;font-weight:600;color:#fff;background:#0a6f4d;cursor:pointer}</style></head>
+<body><form class="c" method="post"><h1>¿Darte de baja?</h1><p>Dejarás de recibir nuestras comunicaciones comerciales por correo.</p><button type="submit">Sí, darme de baja</button></form></body></html>`,
+      { status: 200, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
+  }
+  return json({ error: "Unknown" }, 404);
+}
+
 Deno.serve(async (req) => {
+  {
+    const u0 = new globalThis.URL(req.url);
+    if (u0.searchParams.has("mk") && (req.method === "GET" || req.method === "POST")) {
+      try { return await handleTracking(req, u0); } catch { return req.method === "GET" && u0.searchParams.get("mk") === "o" ? new Response(GIF, { headers: { "Content-Type": "image/gif" } }) : json({ error: "tracking failed" }, 500); }
+    }
+  }
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   const apiMatch = new globalThis.URL(req.url).pathname.match(/\/api(\/.*)?$/);
   if (apiMatch) {

@@ -27,6 +27,8 @@ interface Props {
   onOpenProject: (p: Project) => void;
   onNewProject: () => void;
   onDeleteProject: (id: string) => void;
+  /** A signed product was deleted here: the list behind refreshes its figures. */
+  onLinesChanged?: () => void;
   onClose: () => void;
 }
 
@@ -265,19 +267,53 @@ const lineTotal = (l: Line) => {
   if (l.discount_mode === "total" || l.discount_mode === "amount") return Math.max(0, p * q - v);
   return p * q;
 };
-const lineAnnual = (l: Line) => (l.recurring ? lineTotal(l) * perYear(l.period) : 0);
 /** The payment terms of a line (null = paid as one block, no increases). */
 const scheduleOf = (l: Line): PaymentSchedule | null => {
   const sc = l.schedule;
   if (!sc || typeof sc !== "object" || !(Number(sc.count) > 0)) return null;
   return { count: Math.round(Number(sc.count)), increases: Array.isArray(sc.increases) ? sc.increases.map((x: unknown) => Number(x) || 0) : [] };
 };
+/** A recurring line's first contract year, as signed: the year-1 amount the deal worked out (breakdown.years[0]),
+ *  else its price per period × periods a year. Year 1 only: the increases of later years come on top. */
+const firstYearOf = (l: Line) => {
+  const y0 = Number(Array.isArray(l.breakdown?.years) ? l.breakdown.years[0] : NaN);
+  const term = Number(l.term_years) || 1;
+  // a contract shorter than a year keeps only part of year 1 in the breakdown: not a year's rate
+  if (Number.isFinite(y0) && y0 > 0 && term >= 1) return y0;
+  return lineTotal(l) * perYear(l.period);
+};
+/** Which contract year a line is in on `at` (0 = the first; after the term it stays on the last one). */
+const contractYearOf = (l: Line, at = Date.now()) => {
+  const s0 = str(l.start_date) || str(l.signing_date);
+  if (!s0) return 0;
+  const el = (at - toDate(s0).getTime()) / (365.25 * DAY);
+  return Number.isFinite(el) && el > 0 ? Math.floor(el + 1e-9) : 0;
+};
+/** How much a recurring line's price has gone up by contract year `y`: its payment terms' increases
+ *  (one term per year, or longer terms), else the yearly % — never past the contract's last year. */
+const increaseBy = (l: Line, y: number) => {
+  const term = Number(l.term_years) || 1;
+  const sc = scheduleOf(l);
+  if (sc && sc.count > 1) {
+    const len = term / sc.count;
+    const k = Math.min(sc.count - 1, Math.floor(y / len + 1e-9));
+    let m = 1;
+    for (let i = 0; i <= k; i++) m *= 1 + (sc.increases[i] ?? 0) / 100;
+    return m;
+  }
+  const pct = Number(l.annual_increase_pct) || 0;
+  if (!sc && pct && term > 1) return Math.pow(1 + pct / 100, Math.min(y, Math.ceil(term - 1e-9) - 1));
+  return 1;
+};
+/** What a recurring line is billing a year right now: year 1 at the signed price, year 2 with its increase,
+ *  and so on (the last year's price once the term is over). One-offs and set-up fees aren't recurring. */
+const lineAnnual = (l: Line, at = Date.now()) => (l.recurring ? firstYearOf(l) * increaseBy(l, contractYearOf(l, at)) : 0);
 /** Each term of a recurring line: its length, its price per period (with the increases so far) and what it adds up to. */
 const termsOf = (l: Line, sc: PaymentSchedule | null = scheduleOf(l)) => {
   const years = Number(l.term_years) || 1;
   const count = sc?.count ?? 1;
   const len = years / count;
-  const unit = lineTotal(l);
+  const unit = firstYearOf(l) / perYear(l.period);
   let mult = 1;
   return Array.from({ length: count }, (_, i) => {
     mult *= 1 + (sc?.increases[i] ?? 0) / 100;
@@ -732,7 +768,7 @@ function AddLineForm({ clientId, persons, onCancel, onSaved }: {
 /* ============================== workspace ============================== */
 
 export default function ClientWorkspace({
-  client, projects, projectTypes, usage, roles = [], onOpenProject, onNewProject, onDeleteProject, onClose,
+  client, projects, projectTypes, usage, roles = [], onOpenProject, onNewProject, onDeleteProject, onLinesChanged, onClose,
 }: Props) {
   const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>("overview");
@@ -1278,6 +1314,29 @@ export default function ClientWorkspace({
     if (pids.length) ((await supabase.from("products").select("id,name").in("id", pids)).data ?? []).forEach((x: any) => { pn[x.id] = x.name; });
     setLines(raw.map((r) => ({ ...r, name: pn[r.product_id] ?? "Product" })).sort((a, b) => str(b.signing_date).localeCompare(str(a.signing_date))));
   };
+  /** The signed product asked to be deleted (asks once), and why it couldn't be. */
+  const [delLine, setDelLine] = useState<string | null>(null);
+  const [delLineBusy, setDelLineBusy] = useState(false);
+  const [delLineErr, setDelLineErr] = useState<{ id: string; msg: string } | null>(null);
+  /** Delete a signed product (e.g. the same deal's product written twice). Only that row goes; the deal stays. */
+  const deleteLine = async (id: string) => {
+    setDelLineBusy(true); setDelLineErr(null);
+    const { data, error } = await supabase.from("client_products").delete().eq("id", id).select("id");
+    setDelLineBusy(false);
+    if (error || !(data ?? []).length) {
+      setDelLineErr({ id, msg: error ? `Not deleted: ${error.message}` : "Not deleted: you don't have permission to delete signed products." });
+      return;
+    }
+    setDelLine(null);
+    setLines((xs) => xs.filter((x) => x.id !== id));
+    onLinesChanged?.();
+  };
+  /** Signed products that appear more than once for the same product and deal. */
+  const dupLines = useMemo(() => {
+    const by = new Map<string, string[]>();
+    lines.forEach((l) => { const k = `${l.product_id ?? l.name}|${l.tracking_id ?? ""}`; by.set(k, [...(by.get(k) ?? []), l.id]); });
+    return new Set(Array.from(by.values()).filter((ids) => ids.length > 1).flat());
+  }, [lines]);
   const togglePerson = (k: string) => setOpenPeople((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
   const startLog = (who = "") => {
     setLogWho(who); setLogErr(null); setLogDate(todayISO()); setLogOpen(true);
@@ -2236,7 +2295,7 @@ export default function ClientWorkspace({
                             {...tipOn(<TipCard title={l.name} sub={`${l.status || "active"}${str(l.contract_ref) ? ` · Ref ${l.contract_ref}` : ""}`} rows={[
                               ["Price", `${Number(l.quantity) || 1} × ${eur(Number(l.price) || 0)}${l.recurring ? ` / ${per}` : ""}`],
                               ["Discount", l.discount_mode && l.discount_mode !== "none" && Number(l.discount_value) ? (l.discount_mode === "percent" ? `${l.discount_value}%` : eur(Number(l.discount_value))) : ""],
-                              ["Yearly", l.recurring ? eur(lineAnnual(l)) : ""], ["Set-up fee", Number(l.one_time_fee) ? eur(Number(l.one_time_fee)) : ""],
+                              [l.recurring && (Number(l.term_years) || 0) > 1 ? `Yearly · year ${Math.min(contractYearOf(l), Math.ceil(Number(l.term_years)) - 1) + 1}` : "Yearly", l.recurring ? eur(lineAnnual(l)) : ""], ["Set-up fee", Number(l.one_time_fee) ? eur(Number(l.one_time_fee)) : ""],
                               ["Signed", l.signing_date ? fmt(l.signing_date) : ""], ["Start", l.start_date ? fmt(l.start_date) : ""],
                               ["Term", l.term_years ? `${l.term_years}y${term ? ` · until ${fmtD(term.end)}` : ""}` : ""],
                               ["Auto-renew", l.auto_renew ? `Yes${l.renew_years ? `, every ${l.renew_years}y` : ""}` : ""],
@@ -2253,8 +2312,21 @@ export default function ClientWorkspace({
                                 <small>{l.recurring ? <><Ico n="repeat" s={12} />Every {per}</> : "One-off"}</small>
                               </span>
                               <span className="cw-line-price"><b>{eur(lineTotal(l))}{l.recurring && <em> / {per}</em>}</b></span>
+                              {dupLines.has(l.id) && <span className="cw-status is-dup" title="The same product from the same deal is here more than once">Duplicate</span>}
                               <span className={`cw-status ${isActive(l) ? "is-open" : "is-closed"}`}><i />{l.status || "active"}</span>
+                              <span className={`cw-line-del ${delLine === l.id ? "is-asking" : ""}`} onMouseEnter={hideTip}>
+                                {delLine === l.id ? (
+                                  <>
+                                    <span>Delete this signed product?</span>
+                                    <button className="is-yes" disabled={delLineBusy} onClick={() => void deleteLine(l.id)}>{delLineBusy ? "Deleting…" : "Delete"}</button>
+                                    <button disabled={delLineBusy} onClick={() => { setDelLine(null); setDelLineErr(null); }}>Keep</button>
+                                  </>
+                                ) : (
+                                  <button className="is-x" onClick={() => { setDelLineErr(null); setDelLine(l.id); }} aria-label={`Delete ${l.name}`} title="Delete this signed product"><Ico n="trash" s={13} /></button>
+                                )}
+                              </span>
                             </div>
+                            {delLineErr?.id === l.id && <p className="cw-err">{delLineErr.msg}</p>}
                             <div className="cw-line-facts">
                               {[
                                 ["Signed", l.signing_date ? fmt(l.signing_date) : ""],
@@ -2266,6 +2338,7 @@ export default function ClientWorkspace({
                                 ["Payment", l.payment_terms_days ? `Net ${l.payment_terms_days}` : ""],
                                 ["Contract no.", str(l.contract_ref)],
                                 ["Bill to", str(l.billing_contact_name)],
+                                ["From", l.tracking_id ? dealName(l.tracking_id) : "Added by hand"],
                               ].filter(([, v]) => v).map(([k, v]) => <span key={k}><i>{k}</i>{v}</span>)}
                             </div>
                             {Array.isArray(l.breakdown?.rows) && l.breakdown.rows.length > 0 && (

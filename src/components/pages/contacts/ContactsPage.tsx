@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type UIEvent } from "react";
+import { useSecuritySection } from "../settings/PageAccessModal";
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 import Select from "../../framework/Select";
@@ -15,13 +16,14 @@ import {
   renameCustomValue, customList,
   listContactDeals, listAllDeals, setContactDeals, CONTACT_LANGUAGES, type DealRef,
   useRequiredFields,
-  inheritedCompanyTags, listCrmOptions, relationshipOptions, relLabel, listCompanyFields, linkContactToCompany, unlinkContactFromCompany,
-  type CrmOption, type CompanyField,
+  inheritedCompanyTags, listCrmOptions, relationshipOptions, relLabel, listCompanyFields,
+  type CrmOption, type CompanyField, insertMany, deleteMany,
 } from "../companies/companiesApi";
+import { supabase } from "../../api/supabase";
 import {
   AddressFields, PhoneField, StatusPills, HistorySection, phoneText, telHref,
   FilterBar, FilterChips, SortHead, applyView, nextSort, emptyView, useSavedViews, useStoredView, type FField,
-  useBulkSelection, BulkBar, BulkCheck, type BulkAction, DataCleanup, DataTools, GEAR, SettingsShell, ColumnsEditor, CustomFieldsEditor,
+  useBulkSelection, BulkBar, BulkCheck, inPool, type BulkAction, DataCleanup, DataTools, GEAR, SettingsShell, ColumnsEditor, CustomFieldsEditor,
   ConfirmX, DealRows, MultiChoice, CustomChips, isChoiceType, RequiredFieldsEditor, InheritedTags, TypeChips, typeSortKey,
 } from "../companies/CompaniesPage";
 import "../clients/ClientsPage.css";
@@ -141,19 +143,32 @@ export default function ContactsPage() {
   }, []);
 
   // Opened from a company row: jump straight into that contact.
+  // backTo: opened from a company's panel — closing the contact takes you back to that panel.
+  // panelContactId: the contact that was open when you went to one of its companies — Back reopens it.
+  const [backTo, setBackTo] = useState(false);
   useEffect(() => {
-    const id = (location.state as any)?.focusContactId;
-    if (id && server) {
+    const st = (location.state as any) ?? {};
+    const id = st.focusContactId ?? st.panelContactId;
+    if (!id) return;
+    const keep = !st.focusContactId;
+    setBackTo(!!st.backTo);
+    if (server) {
       contactsRows([id]).then((r) => { if (r[0]) setEditing(structuredClone(r[0])); }).catch(() => {});
-      navigate(location.pathname, { replace: true, state: null });
+      if (!keep) navigate(location.pathname, { replace: true, state: null });
       return;
     }
-    if (!id || contacts.length === 0) return;
+    if (contacts.length === 0) return;
     const c = contacts.find((x) => x.id === id);
     if (c) setEditing(structuredClone(c));
-    navigate(location.pathname, { replace: true, state: null });
+    if (!keep) navigate(location.pathname, { replace: true, state: null });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state, contacts, server]);
+  /** The contact closes: back to the company panel it was opened from, else just closed. */
+  const closeEditor = () => {
+    setEditing(null);
+    if (backTo) { setBackTo(false); navigate(-1); return; }
+    if ((location.state as any)?.panelContactId) navigate(location.pathname, { replace: true, state: null });
+  };
 
   const lead = isSalesLead(me);
 
@@ -448,6 +463,15 @@ export default function ContactsPage() {
     : server ? [...srv.rows.values()].filter((c) => bulk.sel.has(c.id as string))
     : contacts.filter((c) => bulk.sel.has(c.id as string))), [bulk.sel, contacts, server, srv]);
   const picked = () => pickedList;
+  // the companies the picked contacts are on (for "Remove from company"), worked out once per selection
+  const uncompanyOpts = useMemo(() => {
+    const firstOn = new Map<string, Contact>();
+    pickedList.forEach((c) => c.companyIds.forEach((id) => { if (!firstOn.has(id)) firstOn.set(id, c); }));
+    if (!firstOn.size) return [];
+    return server ? [...firstOn].map(([id, c]) => ({ value: id, label: companyName(id, c) })).sort((a, b) => a.label.localeCompare(b.label))
+      : companies.filter((co) => firstOn.has(co.id as string)).map((co) => ({ value: co.id as string, label: co.name }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickedList, server, companies, facets]);
   const coChoices = server ? (facets?.companies ?? []) : companies.map((co) => ({ value: co.id as string, label: co.name }));
   const bulkActions: BulkAction[] = [
     {
@@ -456,34 +480,26 @@ export default function ContactsPage() {
       options: coChoices,
       run: async (v) => {
         if (!v) return null;
-        for (const c of await pickRows()) {
-          if (c.companyIds.includes(v) || !c.id) continue;
-          const err = await linkContactToCompany(c.id, v);
-          if (err) return err;
-        }
-        await reload(); bulk.clear();
-        return null;
+        const rows = (await pickRows()).filter((c) => c.id && !c.companyIds.includes(v)).map((c) => ({ company_id: v, contact_id: c.id }));
+        const err = await insertMany("company_contacts", rows);
+        await reload();
+        if (err) return err;
+        bulk.clear();
+        return { done: `${rows.length} added to ${companyName(v) === "—" ? "the company" : companyName(v)}` };
       },
     },
     {
       key: "uncompany", label: "Remove from company", more: true,
       icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="3" width="10" height="18" rx="1.5" /><path d="M14 8h6v13H4M16 4h4" /></svg>,
-      options: (() => {
-        const on = new Set(pickedList.flatMap((c) => c.companyIds));
-        if (!on.size) return [];
-        return server ? [...on].map((id) => ({ value: id, label: companyName(id, pickedList.find((c) => c.companyIds.includes(id))) })).sort((a, b) => a.label.localeCompare(b.label))
-          : companies.filter((co) => on.has(co.id as string)).map((co) => ({ value: co.id as string, label: co.name }));
-      })(),
+      options: uncompanyOpts,
       run: async (v) => {
         if (!v) return null;
-        let n = 0;
-        for (const c of await pickRows()) {
-          if (!c.companyIds.includes(v) || !c.id) continue;
-          const err = await unlinkContactFromCompany(c.id, v);
-          if (err) return err;
-          n++;
-        }
-        await reload(); bulk.clear();
+        const ids = (await pickRows()).filter((c) => c.id && c.companyIds.includes(v)).map((c) => c.id as string);
+        const err = await deleteMany("company_contacts", ids, "contact_id", ["company_id", v]);
+        await reload();
+        if (err) return err;
+        const n = ids.length;
+        bulk.clear();
         return { done: `${n} taken off ${companyName(v) === "—" ? "the company" : companyName(v)}` };
       },
     },
@@ -494,12 +510,12 @@ export default function ContactsPage() {
       disabledReason: lead ? undefined : "Only boss and sales managers can assign contacts.",
       run: async (v) => {
         if (!v) return null;
-        for (const c of await pickRows()) {
-          const cur = assignedOf(c);
-          if (!cur.includes(v)) await setContactAssignees(c.id as string, [...cur, v]);
-        }
-        await reload(); bulk.clear();
-        return null;
+        const rows = (await pickRows()).filter((c) => c.id && !assignedOf(c).includes(v)).map((c) => ({ contact_id: c.id, profile_id: v }));
+        const err = await insertMany("contact_assignees", rows);
+        await reload();
+        if (err) return err;
+        bulk.clear();
+        return { done: `${employees.find((e) => e.id === v)?.name ?? "They"} now see ${rows.length} more` };
       },
     },
     ...(fields.some((f) => f.type === "multiselect") ? [{
@@ -509,15 +525,13 @@ export default function ContactsPage() {
       run: async (v?: string) => {
         if (!v) return null;
         const [fid, opt] = v.split("\u0001");
-        let n = 0;
-        for (const c of await pickRows()) {
-          const cur = customList((c.custom ?? {})[fid]);
-          if (cur.includes(opt)) continue;
-          const err = await saveContact({ ...c, custom: { ...(c.custom ?? {}), [fid]: [...cur, opt] } });
-          if (err) { await reload(); return err; }
-          n++;
-        }
-        await reload(); bulk.clear();
+        const todo = (await pickRows()).filter((c) => c.id && !customList((c.custom ?? {})[fid]).includes(opt));
+        // only the custom values change (nothing else on the contact is rewritten)
+        const r = await inPool(todo, async (c) => (await supabase.from("contacts").update({ custom: { ...(c.custom ?? {}), [fid]: [...customList((c.custom ?? {})[fid]), opt] } }).eq("id", c.id as string)).error?.message ?? null);
+        await reload();
+        if (r.error) return r.error;
+        const n = r.ok;
+        bulk.clear();
         return { done: `${opt} added to ${n} contact${n === 1 ? "" : "s"}` };
       },
     }, {
@@ -527,15 +541,12 @@ export default function ContactsPage() {
       run: async (v?: string) => {
         if (!v) return null;
         const [fid, opt] = v.split("\u0001");
-        let n = 0;
-        for (const c of await pickRows()) {
-          const cur = customList((c.custom ?? {})[fid]);
-          if (!cur.includes(opt)) continue;
-          const err = await saveContact({ ...c, custom: { ...(c.custom ?? {}), [fid]: cur.filter((x) => x !== opt) } });
-          if (err) { await reload(); return err; }
-          n++;
-        }
-        await reload(); bulk.clear();
+        const todo = (await pickRows()).filter((c) => c.id && customList((c.custom ?? {})[fid]).includes(opt));
+        const r = await inPool(todo, async (c) => (await supabase.from("contacts").update({ custom: { ...(c.custom ?? {}), [fid]: customList((c.custom ?? {})[fid]).filter((x) => x !== opt) } }).eq("id", c.id as string)).error?.message ?? null);
+        await reload();
+        if (r.error) return r.error;
+        const n = r.ok;
+        bulk.clear();
         return { done: `${opt} removed from ${n} contact${n === 1 ? "" : "s"}` };
       },
     }] as BulkAction[] : []),
@@ -549,9 +560,12 @@ export default function ContactsPage() {
       icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" /></svg>,
       disabledReason: lead ? undefined : "Only boss and sales managers can delete contacts.",
       run: async () => {
-        for (const id of bulk.ids) { const err = await deleteContact(id); if (err) { await reload(); return err; } }
-        bulk.clear(); await reload();
-        return null;
+        const n = bulk.ids.length;
+        const err = await deleteMany("contacts", bulk.ids);
+        await reload();
+        if (err) return err;
+        bulk.clear();
+        return { done: `${n} deleted` };
       },
     },
   ];
@@ -712,10 +726,13 @@ export default function ContactsPage() {
           canAssign={lead}
           rel={rel}
           assigned={assignedOf(editing)}
-          onClose={() => setEditing(null)}
-          onSaved={async () => { setEditing(null); await reload(); }}
-          onDeleted={async () => { setEditing(null); await reload(); }}
-          onOpenCompany={openCompany}
+          onClose={closeEditor}
+          onSaved={async () => { const back = backTo; closeEditor(); if (!back) await reload(); }}
+          onDeleted={async () => { const back = backTo; closeEditor(); if (!back) await reload(); }}
+          onOpenCompany={(id) => {
+            if (editing.id) navigate(location.pathname, { replace: true, state: { panelContactId: editing.id, backTo } });
+            navigate("/companies", { state: { focusCompanyId: id, backTo: true } });
+          }}
         />
       )}
 
@@ -1172,6 +1189,7 @@ function FieldSettings({ availableColumns, columns, onColumns, compact, onCompac
  * data tools (import, export, clean-up, LinkedIn). The Contacts page only links here.
  */
 export function ContactSettings({ onBack }: { onBack: () => void }) {
+  const secSection = useSecuritySection("contacts");
   const [fields, setFields] = useState<ContactField[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -1200,7 +1218,7 @@ export function ContactSettings({ onBack }: { onBack: () => void }) {
             ]} /> },
           { k: "fields", label: "Custom fields", icon: "sliders", tone: "indigo", count: fields.length,
             title: "Custom fields", hint: "Extra fields on every contact, in its panel",
-            body: <CustomFieldsEditor fields={fields} onChanged={async () => setFields(await listContactFields().catch(() => []))}
+            body: <CustomFieldsEditor noun="contact" fields={fields} onChanged={async () => setFields(await listContactFields().catch(() => []))}
               api={{ add: (f) => addContactField(f), update: (id, patch) => updateContactField(id, patch), remove: (id) => deleteContactField(id), renameValue: (id, from, to) => renameCustomValue("contacts", id, from, to) }}
               isReserved={isReservedLabel}
               examples={{ name: "Field name, e.g. Birthday, VIP", options: "Low, Medium, High" }} /> },
@@ -1208,6 +1226,7 @@ export function ContactSettings({ onBack }: { onBack: () => void }) {
             title: "Required fields", hint: "What must be filled in before a contact can be saved — built-in fields and your own",
             body: <RequiredFieldsEditor scope="contact" custom={fields}
               onCustomToggle={async (id, on) => { await updateContactField(id, { required: on }); setFields(await listContactFields().catch(() => [])); }} /> },
+          ...(secSection ? [secSection] : []),
         ]} />
       {tool === "import" && <ContactImport fields={fields} onClose={() => setTool(null)} onDone={async () => { await load(); }} />}
       {tool === "export" && (

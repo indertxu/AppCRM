@@ -106,7 +106,7 @@ export default function AppRoutes() {
             {/* Home and Settings are always open; everything else follows Page access. */}
             <Route path="/home" element={<HomePage />} />
             {/* everyone has a ticket desk, like Home */}
-            <Route path="/tickets" element={<TicketsPage />} />
+            <Route element={<PageRoute page="tickets" />}><Route path="/tickets" element={<TicketsPage />} /></Route>
             <Route path="/settings" element={<SettingsPage />} />
             <Route element={<PageRoute page="calendar" />}><Route path="/calendar" element={<CalendarRoute />} /></Route>
             <Route element={<PageRoute page="management" />}><Route path="/management" element={<ManagementPage />} /></Route>

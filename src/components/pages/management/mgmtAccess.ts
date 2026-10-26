@@ -10,9 +10,9 @@
  *
  * The API is the same as before, so ManagementPage doesn't change.
  */
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "../../api/supabase";
-import { defaultPanelLevel, usePageAccess } from "../../framework/pageAccess";
+import { defaultPanelLevel, useDataScope, usePageAccess, type DataScope } from "../../framework/pageAccess";
 
 export type Level = "none" | "own" | "all";
 export type Area =
@@ -92,21 +92,65 @@ export async function loadRules(): Promise<Rule[]> {
   return (data ?? []) as Rule[];
 }
 
-/** Current user's access across every Management area (from Page access). */
+/** Panels that can be hidden from Settings › Management › Security. */
+export const HIDEABLE: Area[] = ["team", "backlog", "billing", "bonus", "incoming", "saved_days", "settings"];
+
+/**
+ * Current user's access across every Management area.
+ * Three layers, the strictest wins:
+ *   1. the panel level from Page access (none / own / all),
+ *   2. panels hidden in Settings › Management › Security,
+ *   3. the data scope there ("Only their own" / "Their department").
+ * `team` = the people whose figures this person may see (null = everyone).
+ */
 export function useMgmtAccess() {
   const pa = usePageAccess();
+  const ds = useDataScope("management");
+  const scope: DataScope = ds.ready ? ds.scope : "all";
+  const [deptIds, setDeptIds] = useState<string[] | null>(null);
+  useEffect(() => {
+    if (scope !== "department" || !pa.department) { setDeptIds(null); return; }
+    let alive = true;
+    supabase.from("profiles").select("id").eq("department", pa.department).range(0, 9999)
+      .then(({ data }) => { if (alive) setDeptIds(((data ?? []) as any[]).map((r) => String(r.id))); });
+    return () => { alive = false; };
+  }, [scope, pa.department]);
+
+  const limited = scope === "mine" || scope === "department";
+  const team = useMemo<string[] | null>(() => {
+    if (!limited) return null;
+    const me = pa.userId ? [pa.userId] : [];
+    if (scope === "department" && pa.department) return Array.from(new Set([...me, ...(deptIds ?? [])]));
+    return me;
+  }, [limited, scope, pa.userId, pa.department, deptIds]);
+
   const level = useCallback(
-    (area: Area): Level => (pa.ready ? clampLevel(area, pa.panel(`management.${area}`)) : "none"),
-    [pa],
+    (area: Area): Level => {
+      if (!pa.ready || !ds.ready) return "none";
+      let l = clampLevel(area, pa.panel(`management.${area}`));
+      if (l !== "none" && HIDEABLE.includes(area) && ds.hidden(area)) l = "none";
+      if (l === "all" && limited && areaDef(area).levels.includes("own")) l = "own";
+      // the gear (targets, capacity, bonus rules) is team-wide: not for someone limited to their own figures
+      if (limited && area === "settings") l = "none";
+      return l;
+    },
+    [pa, ds, limited],
   );
+  const deptWaiting = scope === "department" && !!pa.department && deptIds === null;
   return useMemo(() => ({
-    ready: pa.ready,
+    ready: pa.ready && ds.ready && !deptWaiting,
     userId: pa.userId,
     role: pa.level ?? "",
     isSuper: pa.isSuper,
     rules: [] as Rule[],
     level,
+    /** "mine" | "department" | "all" — what an "own" panel is limited to. */
+    scope,
+    /** People whose figures an "own" panel shows (just me unless scoped to the department). */
+    team: team ?? (pa.userId ? [pa.userId] : []),
+    /** Whether a person's figures are visible in a panel at this level. */
+    sees: (lv: Level, uid: string) => lv === "all" || (team ?? (pa.userId ? [pa.userId] : [])).includes(uid),
     isAdmin: isAdminRole(pa.level, pa.isSuper),
     reload: pa.reload,
-  }), [pa, level]);
+  }), [pa, ds.ready, deptWaiting, level, scope, team]);
 }

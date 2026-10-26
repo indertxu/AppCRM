@@ -8,27 +8,27 @@ import DatePicker from "../../framework/DatePicker";
 import { recordChanges, loadHistoryUpTo, loadWeekNotes, loadChangeWeeks, reconstruct, todayISO, mondayOf, type HistoryEvent } from "./orgHistory";
 import { LEVELS, type NewUserPayload } from "./NewUserModal";
 import NewUserModal from "./NewUserModal";
+import { DEFAULT_DEPARTMENTS, DEPT_COLORS, deptFromRow, departmentsChanged, newDeptKey, deptName, type Department } from "../../framework/pageAccess";
 import "./Organization.css";
 
-// The 7 fixed departments, each with its own colour + glyph.
-export const DEPARTMENTS = [
-  { key: "consultancy", label: "Consultancy", color: "#12b57f", icon: "◆" },
-  { key: "human_resources", label: "Human Resources", color: "#e0798c", icon: "♥" },
-  { key: "marketing", label: "Marketing", color: "#e0a13c", icon: "◈" },
-  { key: "sales", label: "Sales", color: "#3c9ae0", icon: "▲" },
-  { key: "customer_success", label: "Customer Success", color: "#9b6fd0", icon: "★" },
-  { key: "it", label: "IT", color: "#4a5568", icon: "❖" },
-  { key: "management", label: "Management", color: "#0a6f4d", icon: "◉" },
-] as const;
-const deptOf = (k: string | null) => DEPARTMENTS.find((d) => d.key === k);
-const deptLabel = (k: string | null) => deptOf(k)?.label ?? k ?? "—";
+/** The departments a company starts with (it can rename, add and remove them here). */
+export const DEPARTMENTS = DEFAULT_DEPARTMENTS;
+/** The loaded departments by key: name, colour and mark (kept in step with `depts`). */
+let META = new Map<string, Department>();
+const deptOf = (k: string | null) => (k ? META.get(k) : undefined);
+const deptLabel = (k: string | null) => deptOf(k)?.name ?? (k ? deptName(k) : "—");
 const deptColor = (k: string | null) => deptOf(k)?.color ?? "#5a7d6d";
-const deptIcon = (k: string | null) => deptOf(k)?.icon ?? "•";
+const metaOf = (rows: Dept[]) => rows.map((r, i) => deptFromRow(r, i));
 const roleLabel = (id: string | null) => LEVELS.find((l) => l.id === id)?.label ?? id ?? "—";
 
 interface Dept {
   id: string;
   dept_key: string;
+  /** Name, colour, mark and order (61_custom_departments.sql). */
+  name?: string | null;
+  color?: string | null;
+  icon?: string | null;
+  sort?: number | null;
   parent_id: string | null;
   security_role: string | null;
   pos_x: number;
@@ -61,8 +61,32 @@ interface OrgUser {
 }
 
 const NODE_W = 180;
-const DEPT_H = 64;
+const DEPT_H = 80;
 const USER_H = 58;
+const cssv = (o: Record<string, string | number>) => o as React.CSSProperties;
+/** A number that counts up to its value (and glides when it changes). */
+function useCount(target: number, ms = 700) {
+  const [v, setV] = useState(target);
+  const from = useRef(target);
+  useEffect(() => {
+    const a = from.current, b = target;
+    if (a === b) return;
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) { from.current = b; setV(b); return; }
+    const t0 = performance.now(); let raf = 0;
+    const step = (t: number) => { const k = Math.min(1, (t - t0) / ms); const x = a + (b - a) * (1 - Math.pow(1 - k, 3)); from.current = x; setV(x); if (k < 1) raf = requestAnimationFrame(step); };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [target, ms]);
+  return Math.round(v);
+}
+function Count({ n }: { n: number }) { return <>{useCount(n)}</>; }
+/** A soft curve from a leader's box to a member's box (bottom → top, or top → bottom when the member sits above). */
+function curve(ax: number, ay: number, ah: number, bx: number, by: number, bh: number) {
+  const down = by >= ay;
+  const y1 = down ? ay + ah : ay, y2 = down ? by : by + bh;
+  const my = (y1 + y2) / 2;
+  return `M ${ax} ${y1} C ${ax} ${my}, ${bx} ${my}, ${bx} ${y2}`;
+}
 
 type Drag =
   | { kind: "dept" | "user"; id: string; dx: number; dy: number; startX: number; startY: number; moved: boolean; canMove: boolean }
@@ -77,6 +101,14 @@ interface Props {
 
 export default function Organization({ canManage, canSeeSensitive = false, backRef, toolbarRef }: Props) {
   const [depts, setDepts] = useState<Dept[]>([]);
+  /** Departments in their order, with the name / colour / mark lookups kept in step. */
+  const setDeptRows = (rows: Dept[]) => {
+    const meta = metaOf(rows);
+    META = new Map(meta.map((m) => [m.key, m]));
+    const order = new Map(meta.map((m) => [m.key, m.sort]));
+    setDepts(rows.slice().sort((a, b) => (order.get(a.dept_key) ?? 0) - (order.get(b.dept_key) ?? 0) || deptLabel(a.dept_key).localeCompare(deptLabel(b.dept_key))));
+    departmentsChanged(meta);
+  };
   const [users, setUsers] = useState<OrgUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
@@ -121,16 +153,18 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
   // ---- Load ----
   const load = useCallback(async () => {
     setLoading(true);
-    const { data: existing } = await supabase.from("org_departments").select("*");
+    const { data: existing, error: deptErr } = await supabase.from("org_departments").select("*");
     let deptRows = (existing ?? []) as Dept[];
-    const haveKeys = new Set(deptRows.map((d) => d.dept_key));
-    const missing = DEPARTMENTS.filter((d) => !haveKeys.has(d.key));
-    if (missing.length) {
-      await supabase.from("org_departments").insert(missing.map((d) => ({ dept_key: d.key })));
+    // A brand-new company starts with the usual departments; after that they're the company's own
+    // (a department removed here stays removed).
+    if (!deptErr && !deptRows.length) {
+      const seed = DEFAULT_DEPARTMENTS.map((d, i) => ({ dept_key: d.key, name: d.label, color: d.color, sort: i }));
+      let ins = await supabase.from("org_departments").insert(seed);
+      if (ins.error) ins = await supabase.from("org_departments").insert(seed.map((d) => ({ dept_key: d.dept_key })));
       const { data: refetched } = await supabase.from("org_departments").select("*");
       deptRows = (refetched ?? []) as Dept[];
     }
-    setDepts(deptRows);
+    setDeptRows(deptRows);
 
     const COLS = "id, first_name, last_name, email, role, department, manager_id, org_x, org_y, org_placed, phone, national_id, social_security, address, start_date, bank_iban, salary";
     let { data: profs, error: profErr } = await supabase.from("profiles").select(`${COLS}, active, deactivated_at, deactivation_reason`);
@@ -190,13 +224,59 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
       return;
     }
     // Present edit: update the live row + record history at today.
-    setDepts((ds) => ds.map((d) => (d.id === id ? { ...d, ...patch } : d)));
+    const looks = "name" in patch || "color" in patch || "sort" in patch;
+    const prevName = deptLabel(row?.dept_key ?? null);
+    if (looks) setDeptRows(depts.map((d) => (d.id === id ? { ...d, ...patch } : d)));
+    else setDepts((ds) => ds.map((d) => (d.id === id ? { ...d, ...patch } : d)));
     const { error } = await supabase.from("org_departments").update(patch).eq("id", id);
-    if (error) { console.error("[org] saveDept failed:", error.message, patch); return; }
+    if (error) {
+      console.error("[org] saveDept failed:", error.message, patch);
+      if (looks && row) setDeptRows(depts.map((d) => (d.id === id ? row : d)));
+      setSaveError(/name|color|sort|schema cache/i.test(error.message) && looks
+        ? "Run 61_custom_departments.sql in Supabase to name and colour departments." : `Could not save: ${error.message}`);
+      window.setTimeout(() => setSaveError(null), 6000);
+      return;
+    }
+    if ("name" in patch) { await recordChanges("dept", id, { name: patch.name } as any, todayISO(), prevName, resolveNote); refreshChangeWeeks(); return; }
+    if (looks) return;
     await recordChanges("dept", id, patch as any, todayISO(), deptLabel(row?.dept_key ?? null), resolveNote);
     refreshChangeWeeks();
   };
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  /** Add a department: its key comes from the name and never changes (renaming keeps every link). */
+  const createDept = async (name: string): Promise<string | null> => {
+    const clean = name.trim();
+    if (!clean) return "Give the department a name.";
+    if (depts.some((d) => deptLabel(d.dept_key).toLowerCase() === clean.toLowerCase())) return "There is already a department with that name.";
+    const key = newDeptKey(clean, depts.map((d) => d.dept_key));
+    const used = new Set(depts.map((d) => deptColor(d.dept_key)));
+    const color = DEPT_COLORS.find((c) => !used.has(c)) ?? DEPT_COLORS[depts.length % DEPT_COLORS.length];
+    const sort = Math.max(-1, ...metaOf(depts).map((m) => m.sort)) + 1;
+    const { data, error } = await supabase.from("org_departments").insert({ dept_key: key, name: clean, color, sort }).select("*").single();
+    if (error) return /name|color|sort|schema cache/i.test(error.message) ? "Run 61_custom_departments.sql in Supabase first, then try again." : error.message;
+    setDeptRows([...depts, data as Dept]);
+    return null;
+  };
+  /** Remove a department: its people are left without one, the departments it led go to the top level. */
+  const deleteDept = async (d: Dept): Promise<string | null> => {
+    const members = users.filter((u) => u.department === d.dept_key);
+    if (members.length) {
+      const { error } = await supabase.from("profiles").update({ department: null }).eq("department", d.dept_key);
+      if (error) return `Could not move its people out: ${error.message}`;
+      for (const u of members) await recordChanges("user", u.id, { department: null } as any, todayISO(), nameOf(u), resolveNote).catch(() => {});
+    }
+    const kids = depts.filter((x) => x.parent_id === d.id);
+    if (kids.length) await supabase.from("org_departments").update({ parent_id: null }).in("id", kids.map((k) => k.id));
+    const { data, error } = await supabase.from("org_departments").delete().eq("id", d.id).select("id");
+    if (error || !(data ?? []).length) return error ? error.message : "You don't have permission to remove departments.";
+    setUsers((us) => us.map((u) => (u.department === d.dept_key ? { ...u, department: null } : u)));
+    setDeptRows(depts.filter((x) => x.id !== d.id).map((x) => (x.parent_id === d.id ? { ...x, parent_id: null } : x)));
+    if (openDept === d.dept_key) setOpenDept(null);
+    setSelDeptId(null);
+    refreshChangeWeeks();
+    return null;
+  };
 
   const saveUser = async (id: string, patch: Partial<OrgUser>) => {
     const row = users.find((u) => u.id === id);
@@ -433,11 +513,18 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
   // ---- Drop from palette. Native listeners in capture phase so the drop fires
   // no matter which child element (svg, nodes, trash) is under the cursor. ----
   const onCanvasDropRef = useRef<(e: DragEvent) => void>(() => {});
+  const onCanvasOverRef = useRef<(e: DragEvent) => void>(() => {});
+  /** What's being dragged in from the side panel ("dept" / "user"), and the department it would land on. */
+  const dragKind = useRef<"dept" | "user" | null>(null);
+  const [dropDeptId, setDropDeptId] = useState<string | null>(null);
+  const [dropping, setDropping] = useState(false);
   useEffect(() => {
     const el = canvasRef.current;
     if (!el) return;
-    const over = (e: DragEvent) => { e.preventDefault(); };
-    const drop = (e: DragEvent) => { onCanvasDropRef.current(e); };
+    const over = (e: DragEvent) => { e.preventDefault(); onCanvasOverRef.current(e); };
+    const drop = (e: DragEvent) => { setDropDeptId(null); setDropping(false); onCanvasDropRef.current(e); };
+    const leave = (e: DragEvent) => { if (!el.contains(e.relatedTarget as Node)) { setDropDeptId(null); setDropping(false); } };
+    el.addEventListener("dragleave", leave);
     el.addEventListener("dragover", over);
     el.addEventListener("drop", drop);
     return () => { el.removeEventListener("dragover", over); el.removeEventListener("drop", drop); };
@@ -469,6 +556,14 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
   };
   // keep the ref pointing at the latest closure (so it sees current openDept/placedDepts)
   onCanvasDropRef.current = onCanvasDrop as unknown as (e: DragEvent) => void;
+  onCanvasOverRef.current = (e: DragEvent) => {
+    if (!dropping) setDropping(true);
+    if (openDept || dragKind.current !== "user") { if (dropDeptId) setDropDeptId(null); return; }
+    const rect = canvasRef.current!.getBoundingClientRect();
+    const px = (e.clientX - rect.left - viewX) / zoom, py = (e.clientY - rect.top - viewY) / zoom;
+    const t = placedDepts.find((o) => px >= o.pos_x - 10 && px <= o.pos_x + NODE_W + 10 && py >= o.pos_y - 10 && py <= o.pos_y + DEPT_H + 10);
+    if ((t?.id ?? null) !== dropDeptId) setDropDeptId(t?.id ?? null);
+  };
 
   // ---- Derived ----
   // When time-traveling, overlay reconstructed past values onto the rows.
@@ -486,7 +581,6 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
   const formerUsers = users.filter((u) => !u.active).sort((a, b) => (b.deactivated_at ?? "").localeCompare(a.deactivated_at ?? ""));
 
   const placedDepts = viewDepts.filter((d) => d.placed);
-  const paletteDepts = viewDepts.filter((d) => !d.placed);
   const unassignedUsers = viewUsers.filter((u) => !u.department);
   const peopleFiltered = viewUsers.filter((u) => {
     if (!showAllPeople && u.department) return false; // only unassigned unless "show all"
@@ -499,28 +593,69 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
   const selDept = selDeptId ? viewDepts.find((d) => d.id === selDeptId) ?? null : null;
   const selUser = selUserId ? viewUsersAll.find((u) => u.id === selUserId) ?? null : null;
 
-  // ---- Lines ----
-  const centerDept = (d: Dept) => ({ x: d.pos_x + NODE_W / 2, y: d.pos_y + DEPT_H / 2 });
-  const centerUser = (u: OrgUser) => ({ x: u.org_x + NODE_W / 2, y: u.org_y + USER_H / 2 });
-  const lines: { x1: number; y1: number; x2: number; y2: number; kind: string }[] = [];
+  // ---- Links: who leads whom, as soft curves in the leader's colour ----
+  const links: { key: string; d: string; c: string }[] = [];
   if (!openDept) {
     placedDepts.forEach((d) => {
-      if (d.parent_id) {
-        const parent = placedDepts.find((p) => p.id === d.parent_id);
-        if (parent) { const a = centerDept(parent), b = centerDept(d); lines.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, kind: "dept" }); }
-      }
+      const p = d.parent_id ? placedDepts.find((x) => x.id === d.parent_id) : null;
+      if (p) links.push({ key: d.id, c: deptColor(p.dept_key), d: curve(p.pos_x + NODE_W / 2, p.pos_y, DEPT_H, d.pos_x + NODE_W / 2, d.pos_y, DEPT_H) });
     });
   } else {
     deptUsers.forEach((u) => {
-      if (u.manager_id) {
-        const m = deptUsers.find((x) => x.id === u.manager_id);
-        if (m) { const a = centerUser(m), b = centerUser(u); lines.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, kind: "user" }); }
-      }
+      const m = u.manager_id ? deptUsers.find((x) => x.id === u.manager_id) : null;
+      if (m) links.push({ key: u.id, c: deptColor(openDept), d: curve(m.org_x + NODE_W / 2, m.org_y, USER_H, u.org_x + NODE_W / 2, u.org_y, USER_H) });
     });
   }
+  const membersOf = (key: string) => viewUsers.filter((u) => u.department === key);
+  const reportsOf = (id: string) => viewUsers.filter((u) => u.manager_id === id).length;
 
   const openDeptRow = openDept ? depts.find((d) => d.dept_key === openDept) ?? null : null;
   const railWide = !!(selUser || (openDept && !selDept));
+  const railColor = selUser ? deptColor(selUser.department) : openDept ? deptColor(openDept) : "#12b57f";
+
+  // ---- Camera: glide to a view, fit everything on screen ----
+  const [glide, setGlide] = useState(false);
+  const glideT = useRef(0);
+  const glideTo = (z: number, x: number, y: number) => {
+    setGlide(true); setZoom(z); setViewX(x); setViewY(y);
+    window.clearTimeout(glideT.current);
+    glideT.current = window.setTimeout(() => setGlide(false), 520);
+  };
+  const zoomBy = (f: number) => {
+    const r = canvasRef.current?.getBoundingClientRect();
+    if (!r) return;
+    const nz = Math.min(2, Math.max(0.4, zoom * f));
+    const cx = r.width / 2, cy = r.height / 2;
+    glideTo(nz, cx - ((cx - viewX) / zoom) * nz, cy - ((cy - viewY) / zoom) * nz);
+  };
+  const fitView = () => {
+    const r = canvasRef.current?.getBoundingClientRect();
+    const boxes = openDept ? deptUsers.map((u) => [u.org_x, u.org_y, NODE_W, USER_H]) : placedDepts.map((d) => [d.pos_x, d.pos_y, NODE_W, DEPT_H]);
+    if (!r || !boxes.length) { glideTo(1, 0, 0); return; }
+    const x0 = Math.min(...boxes.map((b) => b[0])), y0 = Math.min(...boxes.map((b) => b[1]));
+    const x1 = Math.max(...boxes.map((b) => b[0] + b[2])), y1 = Math.max(...boxes.map((b) => b[1] + b[3]));
+    const padX = 80, padTop = 90, padBottom = 110;
+    const z = Math.min(1.1, Math.max(0.4, Math.min((r.width - padX * 2) / Math.max(1, x1 - x0), (r.height - padTop - padBottom) / Math.max(1, y1 - y0))));
+    glideTo(z, (r.width - (x1 - x0) * z) / 2 - x0 * z, padTop + (r.height - padTop - padBottom - (y1 - y0) * z) / 2 - y0 * z);
+  };
+  // Opening a department (or the first load) frames what's on the map.
+  const fitKey = `${openDept ?? "company"}|${loading ? 0 : 1}`;
+  const lastFit = useRef("");
+  useEffect(() => {
+    if (loading || lastFit.current === fitKey) return;
+    lastFit.current = fitKey;
+    const id = requestAnimationFrame(() => fitView());
+    return () => cancelAnimationFrame(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fitKey]);
+  const goCompany = () => { setOpenDept(null); setSelUserId(null); setSelDeptId(null); };
+  const openDepartment = (key: string, tab: "people" | "settings" = "people") => { setOpenDept(key); setDeptTab(tab); setSelDeptId(null); setSelUserId(null); };
+  const stack = (people: OrgUser[], max = 3) => (
+    <span className="org-avstack">
+      {people.slice(0, max).map((u, i) => <i key={u.id} style={cssv({ "--j": i })} title={nameOf(u)}>{initials(u)}</i>)}
+      {people.length > max && <i className="is-more">+{people.length - max}</i>}
+    </span>
+  );
 
   const timebar = (
     <div className="org-timebar">
@@ -584,12 +719,13 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
     </div>
   );
 
+  const unassignedCount = viewUsers.filter((u) => !u.department).length;
   return (
     <div className={`org ${railWide ? "is-wide" : ""}`}>
       {saveError && <div className="org-save-err" role="alert">{saveError}</div>}
       {/* time bar lives in the page header (in line with the title) via portal */}
       {toolbarReady && toolbarRef?.current ? createPortal(timebar, toolbarRef.current) : null}
-      <div className="org-canvas-wrap">
+      <div className={`org-canvas-wrap ${openDept ? "is-dept" : ""} ${dropping ? "is-dropping" : ""}`} style={cssv({ "--c": openDept ? deptColor(openDept) : "#12b57f" })}>
         {isPast && (
           <div className="org-past-pill">
             <span className="org-past-dot" />
@@ -597,108 +733,149 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
           </div>
         )}
 
-        {/* breadcrumb when inside a department */}
-        {openDept && (
-          <div className="org-crumb">
-            <button onClick={() => { setOpenDept(null); setSelUserId(null); setSelDeptId(null); }}>‹ All departments</button>
-            <span className="org-crumb-here" style={{ color: deptColor(openDept) }}>
-              {deptIcon(openDept)} {deptLabel(openDept)}
-            </span>
-          </div>
-        )}
+        {/* where you are */}
+        <div className="org-crumb" key={openDept ?? "company"}>
+          {openDept ? (
+            <>
+              <button className="org-crumb-back" onClick={goCompany} aria-label="All departments">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 6l-6 6 6 6" /></svg>
+                Company
+              </button>
+              <span className="org-crumb-sep">/</span>
+              <span className="org-crumb-here"><i style={cssv({ "--c": deptColor(openDept) })} />{deptLabel(openDept)}<em>{countIn(openDept)} {countIn(openDept) === 1 ? "person" : "people"}</em></span>
+            </>
+          ) : (
+            <span className="org-crumb-here"><i className="is-company" />Company map<em>{placedDepts.length} department{placedDepts.length === 1 ? "" : "s"}</em></span>
+          )}
+        </div>
 
         <div
-          className="org-canvas"
+          className={`org-canvas ${drag.current?.moved ? "is-dragging" : ""}`}
           ref={canvasRef}
           onPointerDown={startPan}
           onPointerMove={movePan}
           onPointerUp={endPan}
           onClick={(e) => { if (e.target === e.currentTarget && downOnEmpty.current) { setSelDeptId(null); setSelUserId(null); } }}
         >
+          <div className="org-grid" aria-hidden="true" style={cssv({ backgroundPosition: `${viewX}px ${viewY}px`, backgroundSize: `${26 * zoom}px ${26 * zoom}px` })} />
+          <div className="org-aurora" aria-hidden="true" />
           {loading && <div className="org-loading"><PageLoader fill={false} size={96} tone="dark" label="Loading the organization" /></div>}
 
           <div
             ref={trashRef}
-            className={`org-trash ${drag.current ? "is-visible" : ""} ${overTrash ? "is-over" : ""}`}
+            className={`org-trash ${drag.current?.moved ? "is-visible" : ""} ${overTrash ? "is-over" : ""}`}
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
               <path d="M4 7h16M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13" />
             </svg>
-            <span>Drop to remove</span>
+            <span>{openDept ? "Drop to take off the map" : "Drop to take off the map"}</span>
           </div>
 
-          {/* zoom controls */}
-          <div className="org-zoom">
-            <button onClick={() => setZoom((z) => Math.min(2, z * 1.15))} aria-label="Zoom in">+</button>
-            <span>{Math.round(zoom * 100)}%</span>
-            <button onClick={() => setZoom((z) => Math.max(0.4, z * 0.87))} aria-label="Zoom out">−</button>
-            <button className="org-zoom-reset" onClick={() => { setZoom(1); setViewX(0); setViewY(0); }} aria-label="Reset view">⤢</button>
-          </div>
-
-          {/* summary legend, fills the empty lower-left */}
-          {!openDept && (
-            <div className="org-legend">
-              <div className="org-legend-row">
-                <span className="org-legend-num">{placedDepts.length}</span>
-                <span className="org-legend-lbl">departments<br/>on the map</span>
-              </div>
-              <div className="org-legend-div" />
-              <div className="org-legend-row">
-                <span className="org-legend-num">{viewUsers.filter((u) => u.department).length}</span>
-                <span className="org-legend-lbl">people<br/>assigned</span>
-              </div>
+          {/* nothing on the map yet */}
+          {!loading && (openDept ? deptUsers.length === 0 : placedDepts.length === 0) && (
+            <div className="org-empty">
+              <span className="org-empty-ring"><i /><i /></span>
+              <b>{openDept ? `Build ${deptLabel(openDept)}'s team` : "Start your company map"}</b>
+              <span>{openDept
+                ? (countIn(openDept) ? "Drag its people here from the panel on the right. Drop one on another to set who they report to." : "Nobody is in this department yet — add people from the panel on the right.")
+                : "Drag departments here from the panel on the right. Drop one on another to show who leads it."}</span>
             </div>
           )}
 
+          {/* camera */}
+          <div className="org-zoom">
+            <button onClick={() => zoomBy(1 / 1.2)} aria-label="Zoom out" title="Zoom out">−</button>
+            <span>{Math.round(zoom * 100)}%</span>
+            <button onClick={() => zoomBy(1.2)} aria-label="Zoom in" title="Zoom in">+</button>
+            <i />
+            <button className="org-zoom-fit" onClick={fitView} aria-label="Fit to screen" title="Fit everything on screen">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4" /></svg>
+            </button>
+          </div>
+
+          {/* figures */}
+          {!openDept ? (
+            <div className="org-legend">
+              <span><b><Count n={placedDepts.length} /></b><small>on the map</small></span>
+              <span><b><Count n={viewUsers.length - unassignedCount} /></b><small>in a department</small></span>
+              <span className={unassignedCount ? "is-warn" : ""}><b><Count n={unassignedCount} /></b><small>without a department</small></span>
+            </div>
+          ) : (
+            <div className="org-legend">
+              <span><b><Count n={countIn(openDept)} /></b><small>people</small></span>
+              <span><b><Count n={deptUsers.length} /></b><small>on the map</small></span>
+              <span><b><Count n={deptUsers.filter((u) => u.manager_id && deptUsers.some((m) => m.id === u.manager_id)).length} /></b><small>reporting lines</small></span>
+            </div>
+          )}
+          {!isPast && <div className="org-hint" aria-hidden="true">Drag to move · drop on another to link · Ctrl + scroll to zoom</div>}
+
           {/* transformed world: everything pans and zooms together */}
           <div
-            className="org-world"
+            key={openDept ?? "company"}
+            className={`org-world ${glide ? "is-glide" : ""}`}
             style={{ transform: `translate(${viewX}px, ${viewY}px) scale(${zoom})` }}
           >
             <svg className="org-lines">
-              {lines.map((l, i) => (
-                <line key={i} x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} className={`org-line is-${l.kind}`} />
+              {links.map((l) => (
+                <g key={l.key} style={cssv({ "--c": l.c })}>
+                  <path d={l.d} className="org-link" />
+                  <path d={l.d} className="org-link-flow" />
+                </g>
               ))}
             </svg>
 
-            {/* COMPANY VIEW — departments only. Short click = enter, drag = move. */}
-            {!openDept && placedDepts.map((d) => (
-              <div
-                key={d.id}
-                className={`org-node org-dept ${selDeptId === d.id ? "is-sel" : ""}`}
-                style={{ left: d.pos_x, top: d.pos_y, width: NODE_W, background: `linear-gradient(150deg, ${deptColor(d.dept_key)}, ${deptColor(d.dept_key)}cc)` }}
-                onPointerDown={(e) => startDrag("dept", d.id, e)}
-              >
-                <span className="org-dept-top">
-                  <span className="org-dept-icon">{deptIcon(d.dept_key)}</span>
-                  <span className="org-dept-badge">Dept</span>
-                  <span className="org-dept-count">{countIn(d.dept_key)}</span>
-                </span>
-                <span className="org-dept-name">{deptLabel(d.dept_key)}</span>
-              </div>
-            ))}
+            {/* COMPANY VIEW — departments. Short click = open, drag = move, drop on another = led by it. */}
+            {!openDept && placedDepts.map((d, i) => {
+              const ms = membersOf(d.dept_key);
+              const lead = d.parent_id ? placedDepts.find((x) => x.id === d.parent_id) : null;
+              return (
+                <div
+                  key={d.id}
+                  className={`org-node org-dept ${selDeptId === d.id ? "is-sel" : ""} ${dropDeptId === d.id ? "is-drop" : ""} ${drag.current?.id === d.id && drag.current?.moved ? "is-lifted" : ""}`}
+                  style={{ left: d.pos_x, top: d.pos_y, width: NODE_W, height: DEPT_H, ...cssv({ "--c": deptColor(d.dept_key), "--i": i }) }}
+                  onPointerDown={(e) => startDrag("dept", d.id, e)}
+                >
+                  <span className="org-dept-top">
+                    <span className="org-dept-name">{deptLabel(d.dept_key)}</span>
+                    <span className="org-dept-go" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6l6 6-6 6" /></svg>
+                    </span>
+                  </span>
+                  <span className="org-dept-foot">
+                    {ms.length ? stack(ms) : <span className="org-dept-none">No one yet</span>}
+                    <span className="org-dept-count">{ms.length}<small>{ms.length === 1 ? " person" : " people"}</small></span>
+                  </span>
+                  {lead && <span className="org-dept-lead" style={cssv({ "--lc": deptColor(lead.dept_key) })}>under {deptLabel(lead.dept_key)}</span>}
+                  {dropDeptId === d.id && <span className="org-dept-dropnote">Drop to add here</span>}
+                </div>
+              );
+            })}
 
-            {/* DEPARTMENT VIEW — users of this department */}
-            {openDept && deptUsers.map((u) => (
-              <div
-                key={u.id}
-                className={`org-node org-user ${selUserId === u.id ? "is-sel" : ""}`}
-                style={{ left: u.org_x, top: u.org_y, width: NODE_W }}
-                onPointerDown={(e) => startDrag("user", u.id, e)}
-              >
-                <span className="org-user-av">{initials(u)}</span>
-                <span className="org-user-main">
-                  <span className="org-user-name">{nameOf(u)}</span>
-                  <span className="org-user-sub">{roleLabel(effectiveRole(u))}</span>
-                </span>
-              </div>
-            ))}
+            {/* DEPARTMENT VIEW — its people */}
+            {openDept && deptUsers.map((u, i) => {
+              const n = reportsOf(u.id);
+              return (
+                <div
+                  key={u.id}
+                  className={`org-node org-user ${selUserId === u.id ? "is-sel" : ""} ${drag.current?.id === u.id && drag.current?.moved ? "is-lifted" : ""}`}
+                  style={{ left: u.org_x, top: u.org_y, width: NODE_W, height: USER_H, ...cssv({ "--c": deptColor(openDept), "--i": i }) }}
+                  onPointerDown={(e) => startDrag("user", u.id, e)}
+                >
+                  <span className="org-user-av">{initials(u)}</span>
+                  <span className="org-user-main">
+                    <span className="org-user-name">{nameOf(u)}</span>
+                    <span className="org-user-sub">{roleLabel(effectiveRole(u))}</span>
+                  </span>
+                  {n > 0 && <span className="org-user-rep" title={`${n} report${n === 1 ? "s" : ""} to them`}>{n}</span>}
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
 
       {/* RIGHT RAIL */}
-      <aside className="org-rail">
+      <aside className="org-rail" style={cssv({ "--c": railColor })}>
         {selUser ? (
           <UserPanel
             key={selUser.id}
@@ -718,15 +895,13 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
             reportsCount={users.filter((u) => u.manager_id === selUser.id && u.active).length}
           />
         ) : selDept ? (
-          <div className="org-info">
+          <div className="org-info" style={cssv({ "--c": deptColor(selDept.dept_key) })}>
             <div className="org-info-head">
               <span className="org-eyebrow">Department</span>
               <button className="org-info-close" onClick={() => setSelDeptId(null)}>×</button>
             </div>
-            <h3 className="org-info-title" style={{ color: deptColor(selDept.dept_key) }}>
-              {deptIcon(selDept.dept_key)} {deptLabel(selDept.dept_key)}
-            </h3>
-            <button className="org-enter-btn" onClick={() => { setOpenDept(selDept.dept_key); setSelDeptId(null); }}>
+            <h3 className="org-info-title">{deptLabel(selDept.dept_key)}</h3>
+            <button className="org-enter-btn" onClick={() => openDepartment(selDept.dept_key)}>
               Open team ({countIn(selDept.dept_key)}) →
             </button>
             <div className="org-field">
@@ -753,25 +928,42 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
             </div>
             {canManage && selDept.placed && (
               <button className="org-remove" onClick={() => { saveDept(selDept.id, { placed: false, parent_id: null }); setSelDeptId(null); }}>
-                Remove from chart
+                Take off the map
               </button>
             )}
           </div>
         ) : openDept && openDeptRow ? (
-          <div className="org-info">
-            <div className="org-info-head">
-              <span className="org-eyebrow" style={{ color: deptColor(openDept) }}>{deptIcon(openDept)} {deptLabel(openDept)}</span>
-              {canManage && <button className="org-add-user" onClick={() => setShowCreate(true)}>+ New user</button>}
+          <div className="org-info org-dinfo" key={`d-${openDept}`}>
+            <div className="org-dhero">
+              <div className="org-dhero-top">
+                <button className="org-dhero-back" onClick={goCompany}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 6l-6 6 6 6" /></svg>
+                  All departments
+                </button>
+                {canManage && <button className="org-dhero-add" onClick={() => setShowCreate(true)}>+ New user</button>}
+              </div>
+              <span className="org-eyebrow">Department</span>
+              <h3>{deptLabel(openDept)}</h3>
+              <div className="org-dhero-stats">
+                <span><b><Count n={countIn(openDept)} /></b>people</span>
+                <span><b><Count n={deptUsers.length} /></b>on the map</span>
+                <span><b>{(() => { const p = openDeptRow.parent_id ? depts.find((x) => x.id === openDeptRow.parent_id) : null; return p ? deptLabel(p.dept_key) : "Top level"; })()}</b>reports to</span>
+              </div>
             </div>
-            <div className="org-dept-tabs">
-              <button className={deptTab === "settings" ? "is-on" : ""} onClick={() => setDeptTab("settings")}>Settings</button>
+            <div className="org-seg" style={cssv({ "--k": deptTab === "people" ? 0 : 1 })}>
+              <span className="org-seg-pill" aria-hidden="true" />
               <button className={deptTab === "people" ? "is-on" : ""} onClick={() => setDeptTab("people")}>People <i>{countIn(openDept)}</i></button>
+              <button className={deptTab === "settings" ? "is-on" : ""} onClick={() => setDeptTab("settings")}>Settings</button>
             </div>
 
             {deptTab === "settings" ? (
-              <>
+              <div className="org-pane" key="settings">
+                <DeptLook key={openDeptRow.id} canManage={canManage && !isPast}
+                  name={deptLabel(openDeptRow.dept_key)} color={deptColor(openDeptRow.dept_key)}
+                  taken={depts.filter((d) => d.id !== openDeptRow.id).map((d) => deptLabel(d.dept_key).toLowerCase())}
+                  onSave={(patch) => saveDept(openDeptRow.id, patch)} />
                 <div className="org-field">
-                  <label>Led by department</label>
+                  <label>Reports to department</label>
                   <Select
                     value={openDeptRow.parent_id ?? ""}
                     disabled={!canManage}
@@ -792,108 +984,130 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
                   />
                   <span className="org-field-note">Members inherit this role unless they have their own.</span>
                 </div>
-              </>
+                {canManage && openDeptRow.placed && !isPast && (
+                  <button className="org-remove" onClick={() => { saveDept(openDeptRow.id, { placed: false, parent_id: null }); goCompany(); }}>Take off the company map</button>
+                )}
+                {canManage && !isPast && (
+                  <DeptDelete key={`del-${openDeptRow.id}`} name={deptLabel(openDeptRow.dept_key)} members={countIn(openDeptRow.dept_key)}
+                    onDelete={() => deleteDept(openDeptRow)} />
+                )}
+              </div>
             ) : (
-              <>
+              <div className="org-pane" key="people">
                 <p className="org-palette-subhint">Drag people onto the map. Drop one on another to set who they report to.</p>
                 <div className="org-palette-list">
-                  {viewUsers.filter((u) => u.department === openDept).length === 0
-                    ? <p className="org-empty-note">No one in this department yet.</p>
-                    : viewUsers.filter((u) => u.department === openDept).map((u) => (
+                  {membersOf(openDept).length === 0
+                    ? <p className="org-empty-note">No one in this department yet. Open a person from <b>Company › People</b> and choose this department, or create a new user.</p>
+                    : membersOf(openDept).map((u, i) => (
                       <div key={u.id}
-                        className={`org-chip org-chip-user ${u.org_placed ? "is-placed" : ""}`}
+                        className={`org-prow ${u.org_placed ? "is-placed" : "is-loose"} ${selUserId === u.id ? "is-sel" : ""}`}
+                        style={cssv({ "--c": deptColor(openDept), "--i": i })}
                         draggable={canManage && !u.org_placed}
-                        onDragStart={(e) => e.dataTransfer.setData("text/plain", `user:${u.id}`)}
+                        onDragStart={(e) => { dragKind.current = "user"; e.dataTransfer.setData("text/plain", `user:${u.id}`); }}
+                        onDragEnd={() => { dragKind.current = null; }}
                         onClick={() => { setSelUserId(u.id); }}>
-                        <span className="org-chip-av">{initials(u)}</span>
-                        <span className="org-chip-user-main">
-                          <span>{nameOf(u)}</span>
-                          <span className="org-chip-sub">{u.org_placed ? "On the map" : "Drag onto the map"}</span>
+                        <span className="org-av">{initials(u)}</span>
+                        <span className="org-prow-main">
+                          <b>{nameOf(u)}</b>
+                          <small>{roleLabel(effectiveRole(u))}</small>
                         </span>
+                        <span className={`org-prow-state ${u.org_placed ? "is-on" : ""}`}>{u.org_placed ? "On the map" : "Drag in"}</span>
                       </div>
                     ))}
                 </div>
-              </>
+              </div>
             )}
           </div>
         ) : (
-          <div className="org-palette">
-            <div className="org-palette-head">
-              <span className="org-eyebrow">Organization</span>
+          <div className="org-palette" key="company">
+            <div className="org-rail-head">
+              <div>
+                <span className="org-eyebrow">Organization</span>
+                <h3>Your company</h3>
+              </div>
               {canManage && <button className="org-add-user" onClick={() => setShowCreate(true)}>+ New user</button>}
             </div>
-                <div className="org-toggle">
-                  <button className={companyTab === "depts" ? "is-on" : ""} onClick={() => setCompanyTab("depts")}>
-                    Departments <i>{paletteDepts.length}</i>
-                  </button>
-                  <button className={companyTab === "people" ? "is-on" : ""} onClick={() => setCompanyTab("people")}>
-                    People <i>{viewUsers.length}</i>
-                  </button>
-                </div>
+            <div className="org-seg" style={cssv({ "--k": companyTab === "depts" ? 0 : 1 })}>
+              <span className="org-seg-pill" aria-hidden="true" />
+              <button className={companyTab === "depts" ? "is-on" : ""} onClick={() => setCompanyTab("depts")}>Departments <i>{viewDepts.length}</i></button>
+              <button className={companyTab === "people" ? "is-on" : ""} onClick={() => setCompanyTab("people")}>People <i>{viewUsers.length}</i></button>
+            </div>
 
-                {companyTab === "depts" ? (
-                  <>
-                    <p className="org-palette-subhint">Drag departments onto the map. Click one to open its team.</p>
-                    <div className="org-palette-list">
-                      {paletteDepts.length === 0 ? <p className="org-empty-note">All departments placed.</p> : paletteDepts.map((d) => (
-                        <div key={d.id} className="org-chip org-chip-dept"
-                          style={{ borderLeft: `4px solid ${deptColor(d.dept_key)}` }}
-                          draggable={canManage}
-                          onDragStart={(e) => e.dataTransfer.setData("text/plain", `dept:${d.id}`)}>
-                          <span className="org-chip-ico" style={{ background: deptColor(d.dept_key) }}>{deptIcon(d.dept_key)}</span>
-                          {deptLabel(d.dept_key)}
-                          <span className="org-chip-count">{countIn(d.dept_key)}</span>
-                        </div>
-                      ))}
+            {companyTab === "depts" ? (
+              <div className="org-pane" key="depts">
+                {canManage && !isPast && <NewDept onCreate={createDept} />}
+                <div className="org-palette-list">
+                  {viewDepts.length === 0 ? <p className="org-empty-note">No departments yet — add the first one above.</p> : viewDepts.map((d, i) => {
+                    const ms = membersOf(d.dept_key);
+                    return (
+                      <div key={d.id} className={`org-dcard ${d.placed ? "is-placed" : "is-loose"}`}
+                        style={cssv({ "--c": deptColor(d.dept_key), "--i": i })}
+                        draggable={canManage && !d.placed && !isPast}
+                        onDragStart={(e) => { dragKind.current = "dept"; e.dataTransfer.setData("text/plain", `dept:${d.id}`); }}
+                        onDragEnd={() => { dragKind.current = null; }}
+                        onClick={() => openDepartment(d.dept_key)}>
+                        <span className="org-dcard-main">
+                          <b>{deptLabel(d.dept_key)}</b>
+                          <small>{d.placed ? "On the map" : canManage ? "Drag onto the map" : "Not on the map"}</small>
+                        </span>
+                        {ms.length > 0 && stack(ms, 3)}
+                        <span className="org-dcard-n">{ms.length}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              <div className="org-pane" key="people">
+                <div className="org-search">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                    <circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" />
+                  </svg>
+                  <input placeholder="Search people…" value={search} onChange={(e) => setSearch(e.target.value)} />
+                  {search && <button onClick={() => setSearch("")} aria-label="Clear">×</button>}
+                </div>
+                <div className="org-filter" style={cssv({ "--k": showAllPeople ? 1 : 0 })}>
+                  <span className="org-seg-pill" aria-hidden="true" />
+                  <button className={!showAllPeople ? "is-on" : ""} onClick={() => setShowAllPeople(false)}>No department <i>{unassignedCount}</i></button>
+                  <button className={showAllPeople ? "is-on" : ""} onClick={() => setShowAllPeople(true)}>Everyone</button>
+                </div>
+                <p className="org-palette-subhint">Click someone for their details. Drag them onto a department on the map to move them there.</p>
+                <div className="org-palette-list">
+                  {peopleFiltered.length === 0 ? <p className="org-empty-note">{showAllPeople || search ? "No matches." : "Everyone has a department."}</p> : peopleFiltered.map((u, i) => (
+                    <div key={u.id} className={`org-prow ${selUserId === u.id ? "is-sel" : ""}`}
+                      style={cssv({ "--c": u.department ? deptColor(u.department) : "#9fb5ab", "--i": Math.min(i, 20) })}
+                      draggable={canManage && !isPast}
+                      onDragStart={(e) => { dragKind.current = "user"; e.dataTransfer.setData("text/plain", `user:${u.id}`); }}
+                      onDragEnd={() => { dragKind.current = null; setDropDeptId(null); }}
+                      onClick={() => { setSelUserId(u.id); setSelDeptId(null); }}>
+                      <span className="org-av">{initials(u)}</span>
+                      <span className="org-prow-main">
+                        <b>{nameOf(u)}</b>
+                        <small>{roleLabel(effectiveRole(u))}</small>
+                      </span>
+                      <span className={`org-dpill ${u.department ? "" : "is-none"}`}>{u.department ? deptLabel(u.department) : "No department"}</span>
                     </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="org-search">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                        <circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" />
-                      </svg>
-                      <input placeholder="Search people…" value={search} onChange={(e) => setSearch(e.target.value)} />
-                      {search && <button onClick={() => setSearch("")} aria-label="Clear">×</button>}
-                    </div>
-                    <label className="org-showall">
-                      <input type="checkbox" checked={showAllPeople} onChange={(e) => setShowAllPeople(e.target.checked)} />
-                      <span>Show people already assigned</span>
-                    </label>
-                    <p className="org-palette-subhint">Click a person to see their details. Drag one onto a department to assign them.</p>
+                  ))}
+                </div>
+                {formerUsers.length > 0 && (
+                  <details className="org-former-list">
+                    <summary>Former employees <i>{formerUsers.length}</i></summary>
                     <div className="org-palette-list">
-                      {peopleFiltered.length === 0 ? <p className="org-empty-note">No matches.</p> : peopleFiltered.map((u) => (
-                        <div key={u.id} className="org-chip org-chip-user"
-                          draggable={canManage}
-                          onDragStart={(e) => e.dataTransfer.setData("text/plain", `user:${u.id}`)}
+                      {formerUsers.filter((u) => !search.trim() || nameOf(u).toLowerCase().includes(search.trim().toLowerCase())).map((u) => (
+                        <div key={u.id} className={`org-prow is-former ${selUserId === u.id ? "is-sel" : ""}`}
                           onClick={() => { setSelUserId(u.id); setSelDeptId(null); }}>
-                          <span className="org-chip-av">{initials(u)}</span>
-                          <span className="org-chip-user-main">
-                            <span>{nameOf(u)}</span>
-                            <span className="org-chip-sub">{u.department ? deptLabel(u.department) : "Unassigned"}</span>
+                          <span className="org-av">{initials(u)}</span>
+                          <span className="org-prow-main">
+                            <b>{nameOf(u)}</b>
+                            <small>Left {u.deactivated_at ? new Date(`${u.deactivated_at}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : ""}</small>
                           </span>
                         </div>
                       ))}
                     </div>
-                    {formerUsers.length > 0 && (
-                      <details className="org-former-list">
-                        <summary>Former employees <i>{formerUsers.length}</i></summary>
-                        <div className="org-palette-list">
-                          {formerUsers.filter((u) => !search.trim() || nameOf(u).toLowerCase().includes(search.trim().toLowerCase())).map((u) => (
-                            <div key={u.id} className={`org-chip org-chip-user is-former ${selUserId === u.id ? "is-sel" : ""}`}
-                              onClick={() => { setSelUserId(u.id); setSelDeptId(null); }}>
-                              <span className="org-chip-av">{initials(u)}</span>
-                              <span className="org-chip-user-main">
-                                <span>{nameOf(u)}</span>
-                                <span className="org-chip-sub">Left {u.deactivated_at ? new Date(`${u.deactivated_at}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : ""}</span>
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </details>
-                    )}
-                  </>
+                  </details>
                 )}
+              </div>
+            )}
           </div>
         )}
       </aside>
@@ -1117,7 +1331,7 @@ function UserPanel({
         <Select value={form.department ?? ""} disabled={!canManage}
           onChange={(v) => commit({ department: v || null })}
           placeholder="— None —"
-          options={[{ value: "", label: "— None —" }, ...DEPARTMENTS.map((d) => ({ value: d.key, label: d.label }))]} />
+          options={[{ value: "", label: "— None —" }, ...depts.map((d) => ({ value: d.dept_key, label: deptLabel(d.dept_key) }))]} />
       </div>
       <div className="org-field">
         <label>Reports to</label>
@@ -1230,6 +1444,92 @@ function UserPanel({
           Delete this user permanently
         </button>
       )}
+    </div>
+  );
+}
+/* ---- Departments: a new one, its name / colour / mark, removing it ---- */
+function NewDept({ onCreate }: { onCreate: (name: string) => Promise<string | null> }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const go = async () => {
+    if (busy) return;
+    setBusy(true); setErr(null);
+    const e = await onCreate(name);
+    setBusy(false);
+    if (e) { setErr(e); return; }
+    setName(""); setOpen(false);
+  };
+  if (!open) return <button className="org-newdept-btn" onClick={() => setOpen(true)}><span>+</span>New department</button>;
+  return (
+    <div className="org-newdept">
+      <input autoFocus value={name} placeholder="Department name, e.g. Finance" maxLength={60}
+        onChange={(e) => { setName(e.target.value); setErr(null); }}
+        onKeyDown={(e) => { if (e.key === "Enter") void go(); if (e.key === "Escape") { setOpen(false); setName(""); setErr(null); } }} />
+      <div className="org-newdept-act">
+        <button className="org-ghost" onClick={() => { setOpen(false); setName(""); setErr(null); }}>Cancel</button>
+        <button className="org-add-user" disabled={busy || !name.trim()} onClick={() => void go()}>{busy ? "Adding…" : "Add"}</button>
+      </div>
+      {err && <p className="org-newdept-err">{err}</p>}
+    </div>
+  );
+}
+
+function DeptLook({ name, color, taken, canManage, onSave }: {
+  name: string; color: string; taken: string[]; canManage: boolean;
+  onSave: (patch: Partial<Dept>) => void;
+}) {
+  const [draft, setDraft] = useState(name);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { setDraft(name); }, [name]);
+  const commit = () => {
+    const v = draft.trim();
+    if (!v) { setDraft(name); setErr(null); return; }
+    if (v === name) { setErr(null); return; }
+    if (taken.includes(v.toLowerCase())) { setErr("Another department already has that name."); return; }
+    setErr(null);
+    onSave({ name: v });
+  };
+  return (
+    <div className="org-look">
+      <div className="org-field">
+        <label>Name</label>
+        <div className="org-look-name" style={cssv({ "--c": color })}>
+          <i />
+          <input value={draft} disabled={!canManage} maxLength={60}
+            onChange={(e) => { setDraft(e.target.value); setErr(null); }}
+            onBlur={commit} onKeyDown={(e) => { if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur(); if (e.key === "Escape") { setDraft(name); setErr(null); } }} />
+        </div>
+        {err && <span className="org-newdept-err">{err}</span>}
+      </div>
+      <div className="org-field">
+        <label>Colour</label>
+        <div className="org-swatches">
+          {DEPT_COLORS.map((c, i) => (
+            <button key={c} className={c.toLowerCase() === color.toLowerCase() ? "is-on" : ""} style={cssv({ background: c, "--i": i })} disabled={!canManage}
+              aria-label={`Colour ${c}`} onClick={() => onSave({ color: c })} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeptDelete({ name, members, onDelete }: { name: string; members: number; onDelete: () => Promise<string | null> }) {
+  const [ask, setAsk] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  if (!ask) return <button className="org-remove is-danger" onClick={() => { setAsk(true); setErr(null); }}>Delete department</button>;
+  return (
+    <div className="org-del-ask" role="alertdialog" aria-label={`Delete ${name}`}>
+      <b>Delete {name}?</b>
+      <span>{members ? `Its ${members} ${members === 1 ? "person stays" : "people stay"} in the company without a department — you can move them to another one.` : "Nobody is in it."} Pages it could open won't list it any more.</span>
+      {err && <span className="org-newdept-err">{err}</span>}
+      <div className="org-newdept-act">
+        <button className="org-ghost" disabled={busy} onClick={() => setAsk(false)}>Keep it</button>
+        <button className="org-del-yes" disabled={busy} onClick={async () => { setBusy(true); const e = await onDelete(); setBusy(false); if (e) setErr(e); }}>{busy ? "Deleting…" : "Delete"}</button>
+      </div>
     </div>
   );
 }

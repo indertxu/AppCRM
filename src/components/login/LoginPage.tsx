@@ -8,7 +8,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { useNavigate } from "react-router-dom";
-import { supabase, setRememberMe } from "../api/supabase";
+import { supabase, setRememberMe, takeReturnTo } from "../api/supabase";
 import { PageCube } from "../framework/AppLayout";
 import "./LoginPage.css";
 
@@ -573,10 +573,12 @@ export default function LoginPage() {
     // Where to go: superadmins land on the platform panel, everyone else on home.
     const dest = (async () => {
       try {
+        const back = takeReturnTo();
         const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return "/home";
+        if (!user) return back ?? "/home";
         const { data: prof } = await supabase.from("profiles").select("is_superadmin").eq("id", user.id).maybeSingle();
-        return prof?.is_superadmin ? "/superadmin" : "/home";
+        // back to the page you were on before signing in (a superadmin: only to their own panel)
+        return prof?.is_superadmin ? (back?.startsWith("/superadmin") ? back : "/superadmin") : back && !back.startsWith("/superadmin") ? back : "/home";
       } catch { return "/home"; }
     })();
     // one navigation, only once the screen is fully green (the iris closes at ~1.2 s)

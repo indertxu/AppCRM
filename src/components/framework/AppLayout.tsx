@@ -90,6 +90,15 @@ const pcStill = () => { try { return window.matchMedia("(prefers-reduced-motion:
 const PC_BARS = [{ x: 6.3, y: 24, h: 11 }, { x: 16.8, y: 16, h: 19 }, { x: 27.4, y: 8, h: 27 }];
 const PC_R = 50; // half the edge in viewBox units (viewBox is 240 wide)
 
+/**
+ * One clock for every cube on screen. A cube that takes over from another one
+ * a moment ago (sign-in → the green hold → Home's loader, or one loader to the
+ * next) carries on from where that one was, instead of assembling itself again —
+ * so the hand-over looks like one cube, never two.
+ */
+let pcClock: { t0: number; seen: number } | null = null;
+const PC_HANDOFF_MS = 700;
+
 /** The Next cube, crisp at any size, assembling and breathing. */
 export function PageCube({ size = 132, loop = true }: { size?: number; loop?: boolean }) {
   const faceRefs = useRef<Partial<Record<PFace, SVGGElement | null>>>({});
@@ -101,7 +110,9 @@ export function PageCube({ size = 132, loop = true }: { size?: number; loop?: bo
 
   useEffect(() => {
     const still = pcStill();
-    const t0 = performance.now();
+    const now0 = performance.now();
+    const t0 = pcClock && now0 - pcClock.seen < PC_HANDOFF_MS ? pcClock.t0 : now0;
+    pcClock = { t0, seen: now0 };
     let raf = 0, alive = true;
     const CYCLE = 3200; // after the intro, one "breath" every cycle: faces part a little, the chart redraws, the bars rise again
     const draw = (now: number) => {
@@ -156,7 +167,12 @@ export function PageCube({ size = 132, loop = true }: { size?: number; loop?: bo
     raf = requestAnimationFrame(draw);
     const onVis = () => { cancelAnimationFrame(raf); if (!document.hidden && alive) raf = requestAnimationFrame(draw); };
     document.addEventListener("visibilitychange", onVis);
-    return () => { alive = false; cancelAnimationFrame(raf); document.removeEventListener("visibilitychange", onVis); };
+    // while it's on screen the clock stays fresh, so the next cube can pick it up
+    const keep = window.setInterval(() => { if (!document.hidden) pcClock = { t0, seen: performance.now() }; }, 150);
+    return () => {
+      alive = false; cancelAnimationFrame(raf); window.clearInterval(keep); document.removeEventListener("visibilitychange", onVis);
+      pcClock = { t0, seen: performance.now() };
+    };
   }, [loop]);
 
   const face = (f: PFace, fill: string, art: React.ReactNode) => (

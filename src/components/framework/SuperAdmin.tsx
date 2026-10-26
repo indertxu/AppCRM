@@ -23,6 +23,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../api/supabase";
+import { deptName } from "./pageAccess";
 import "./SuperAdmin.css";
 
 /* ───────────────────────── storage ───────────────────────── */
@@ -63,19 +64,21 @@ interface ActAs {
 }
 /*
  * Where the "acting as" note (with your own session to come back to) is kept
- * follows the app's "Keep me signed in": ticked → this browser (survives F5,
- * like your session does); not ticked → only in memory, so an F5 signs you out
- * exactly as it always does, and nothing of yours is left behind.
+ * follows the app's "Keep me signed in", like the session itself: ticked → this
+ * browser (survives restarts); not ticked → this tab (survives F5, gone when the
+ * tab closes, so nothing of yours is left behind).
  */
 const REMEMBER_KEY = "np-remember";
 const remembers = () => ls.get(REMEMBER_KEY) === "true";
 let memAct: string | null = null;
+const tabGet = (): string | null => { try { return sessionStorage.getItem(ACT_KEY) ?? memAct; } catch { return memAct; } };
+const tabSet = (v: string) => { memAct = v; try { sessionStorage.setItem(ACT_KEY, v); } catch { /* memory only */ } };
 export const getActAs = (): ActAs | null => {
-  const raw = remembers() ? ls.get(ACT_KEY) : memAct;
+  const raw = remembers() ? ls.get(ACT_KEY) : tabGet();
   try { return raw ? (JSON.parse(raw) as ActAs) : null; } catch { return null; }
 };
-const saveActAs = (a: ActAs) => { if (remembers()) ls.set(ACT_KEY, JSON.stringify(a)); else memAct = JSON.stringify(a); };
-const clearActAs = () => { memAct = null; ls.del(ACT_KEY); };
+const saveActAs = (a: ActAs) => { if (remembers()) ls.set(ACT_KEY, JSON.stringify(a)); else tabSet(JSON.stringify(a)); };
+const clearActAs = () => { memAct = null; ls.del(ACT_KEY); try { sessionStorage.removeItem(ACT_KEY); } catch { /* ignore */ } };
 export const ACT_AS_EVENT = "next:act-as-changed";
 
 export const isBubbleOn = () => ls.get(BUBBLE_KEY) === "1";
@@ -274,7 +277,7 @@ async function returnToMe() {
 const KNOWN_ROLES = ["boss", "consultancy_manager", "sales_manager", "customer_success", "it_manager", "marketing_manager", "hr_manager", "sales", "consultant"];
 const roleLabel = (r: string | null | undefined) =>
   r ? r.split("_").map((w, i) => (i === 0 ? w.charAt(0).toUpperCase() + w.slice(1) : w)).join(" ") : "No role";
-const deptLabel = (d: string | null | undefined) => (d ? d.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase()) : "");
+const deptLabel = (d: string | null | undefined) => deptName(d);
 const initials = (n: string) => n.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join("") || "?";
 const hue = (s: string) => { let h = 11; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360; return h; };
 
