@@ -37,6 +37,9 @@ interface Props {
   firstName: string | null;
   search?: ReactNode;
   heroRef?: Ref<HTMLElement>;
+  /** The alerts strip, right under the greeting, and the bell next to Customize. */
+  alerts?: ReactNode;
+  alertsBell?: ReactNode;
 }
 
 const prefersStill = () => { try { return window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { return false; } };
@@ -183,7 +186,7 @@ function Spark({ series, target }: { series: number[]; target: number }) {
   );
 }
 
-export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDay, calendar, desk, greeting, firstName, heroRef }: Props) {
+export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDay, calendar, desk, greeting, firstName, heroRef, alerts, alertsBell }: Props) {
   const nav = useNavigate();
   /* Whose figures show here: the same reach as Management › Team (Settings › Management › Security).
      A lead sees everyone, or only their department, or only themselves; anyone else only themselves.
@@ -671,15 +674,18 @@ export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDa
         <i className="chx-hero-glow" aria-hidden="true" />
         <div className="chx-hero-top">
           <div className="chx-hello">
-            <span className="chx-date">{dateLabel}</span>
             <h1 className="chx-greet">{greeting}{firstName ? `, ${firstName}` : ""}</h1>
+            <span className="chx-date">{dateLabel}</span>
           </div>
+          <span className="chx-grow" />
+          {alertsBell}
           <button type="button" className={`chx-edit ${picker ? "is-on" : ""}`} onClick={(e) => setPicker(picker ? null : e.currentTarget.getBoundingClientRect())}
             aria-haspopup="dialog" aria-expanded={!!picker} title="Choose the four figures below">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg>
             Customize
           </button>
         </div>
+        {alerts}
         <div className="chx-figs">
           {slots.map((k, i) => <Fragment key={`${k}-${i}`}>{heroFig(k)}</Fragment>)}
         </div>

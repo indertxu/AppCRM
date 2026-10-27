@@ -34,7 +34,8 @@ const TOKEN_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
 const GRAPH = "https://graph.microsoft.com/v1.0";
 /** What every connection has; mail is added when the user connects "with mail". */
 const BASE_SCOPE = "Calendars.ReadWrite offline_access User.Read";
-const MAIL_SCOPES = ["Mail.ReadWrite", "Mail.Send", "Mail.ReadWrite.Shared", "Mail.Send.Shared"];
+/** Least privilege: read and send only (no changing or deleting mail). Older connections may hold ReadWrite. */
+const MAIL_SCOPES = ["Mail.Read", "Mail.Send", "Mail.Read.Shared", "Mail.Send.Shared"];
 /** "https://graph.microsoft.com/Mail.Send offline_access …" → "Mail.Send offline_access …" */
 const normScopes = (s: unknown) => String(s ?? "").split(/\s+/).filter(Boolean)
   .map((x) => x.replace(/^https:\/\/graph\.microsoft\.com\//i, "")).join(" ");
@@ -405,9 +406,11 @@ async function sendMail(userId: string, p: any, db: Db): Promise<Response> {
   if (p.replyTo) message.replyTo = list([p.replyTo]);
   if (shared) message.from = { emailAddress: { address: from } };
 
-  // Draft then send, so the message id is known (the thread stays linked).
+  // Draft then send, so the message id is known (the thread stays linked) — only with write access;
+  // with read + send only, a plain send (kept in Sent Items).
   const base = shared ? `/users/${encodeURIComponent(from)}` : "/me";
-  let draft = await graph(token, `${base}/messages`, "POST", message);
+  const canDraft = /(^|\s)Mail\.ReadWrite/i.test((tokRow as any).scopes ?? "");
+  const draft = canDraft ? await graph(token, `${base}/messages`, "POST", message) : new Response(null, { status: 403 });
   let info: any = null;
   if (draft.ok) {
     info = await draft.json();

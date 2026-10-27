@@ -38,6 +38,7 @@ export default function ClientDirectory({ clientId, tenantId }: Props) {
   const [dropFolder, setDropFolder] = useState<string | null>(null); // folder being hovered while dragging a file
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const [newFolder, setNewFolder] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);   // folder or file id
   const [noteFor, setNoteFor] = useState<string | null>(null);
@@ -187,6 +188,8 @@ export default function ClientDirectory({ clientId, tenantId }: Props) {
           ))}
         </nav>
         <div className="cdir-actions">
+          <ApplyTemplateMenu clientId={clientId} parentId={cwd} parentName={cwd ? folders.find((f) => f.id === cwd)?.name ?? null : null} folders={folders}
+            onApplied={(all, msg) => { setFolders(all as Folder[]); setNote(msg); window.setTimeout(() => setNote((m) => (m === msg ? null : m)), 5000); }} />
           <button className="cdir-btn" onClick={() => setNewFolder(true)}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /><path d="M12 11v6M9 14h6" /></svg>
             New folder
@@ -200,6 +203,7 @@ export default function ClientDirectory({ clientId, tenantId }: Props) {
       </div>
 
       {err && <p className="cdir-err">{err}</p>}
+      {note && <p className="cdir-ok">{note}</p>}
 
       {/* the drop surface for the current folder */}
       <div
@@ -320,7 +324,7 @@ export default function ClientDirectory({ clientId, tenantId }: Props) {
           <div className="cdir-empty">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8z" /></svg>
             <p>{cwd === null ? "Build this client's directory" : "This folder is empty"}</p>
-            <span>Drop files here, or create a folder to organise them.</span>
+            <span>Drop files here, create a folder, or add a standard structure with <b>Templates</b> above.</span>
           </div>
         )}
         {busy && <div className="cdir-uploading">Uploading…</div>}
@@ -548,4 +552,270 @@ export async function copyIntoClientFolders(clientId: string, items: {
     done[it.key] = path;
   }
   return { done, errors };
+}
+
+// ============================ Folder templates ============================
+/**
+ * Folder templates ("skeletons"): standard folder structures set up once in
+ * Settings › Client page and dropped into any client's Directory in one click.
+ * Applying one only adds what's missing: a folder with the same name in the
+ * same place is reused, nothing is renamed, moved or deleted (69_client_folder_templates.sql).
+ */
+export interface FolderNode { id: string; name: string; children: FolderNode[] }
+export interface FolderTemplate { id: string; name: string; tree: FolderNode[]; is_default: boolean; sort: number }
+export const FOLDER_TEMPLATES_SQL = "Run 69_client_folder_templates.sql in Supabase to save folder templates.";
+const nodeId = () => Math.random().toString(36).slice(2, 10);
+const cleanTree = (xs: any): FolderNode[] => (Array.isArray(xs) ? xs : [])
+  .filter((x) => x && typeof x.name === "string")
+  .map((x) => ({ id: String(x.id ?? nodeId()), name: x.name, children: cleanTree(x.children) }));
+export const countNodes = (xs: FolderNode[]): number => xs.reduce((n, x) => n + 1 + countNodes(x.children), 0);
+export async function loadFolderTemplates(): Promise<{ list: FolderTemplate[]; missing: boolean }> {
+  const { data, error } = await supabase.from("client_folder_templates").select("*").order("sort").order("name");
+  if (error) return { list: [], missing: /client_folder_templates|relation|schema cache/i.test(error.message) };
+  return { list: ((data ?? []) as any[]).map((r) => ({ id: r.id, name: r.name ?? "", tree: cleanTree(r.tree), is_default: !!r.is_default, sort: r.sort ?? 0 })), missing: false };
+}
+/** Adds the template's folders under `parentId` (null = the top), reusing folders that already have the name. */
+export async function applyFolderTemplate(clientId: string, tree: FolderNode[], parentId: string | null, existing: { id: string; parent_id: string | null; name: string; sort: number }[]) {
+  const all = [...existing];
+  let added = 0, reused = 0;
+  const norm = (s: string) => s.trim().toLocaleLowerCase();
+  const walk = async (nodes: FolderNode[], parent: string | null): Promise<string | null> => {
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      const name = n.name.trim();
+      if (!name) continue;
+      let f = all.find((x) => (x.parent_id ?? null) === parent && norm(x.name) === norm(name));
+      if (f) reused++;
+      else {
+        const sibs = all.filter((x) => (x.parent_id ?? null) === parent).length;
+        const { data, error } = await supabase.from("client_folders").insert({ client_id: clientId, parent_id: parent, name, sort: sibs }).select("*").single();
+        if (error || !data) return error?.message ?? "A folder could not be created.";
+        f = data as any;
+        all.push(f!); added++;
+      }
+      if (n.children.length) { const e = await walk(n.children, f!.id); if (e) return e; }
+    }
+    return null;
+  };
+  const error = await walk(tree, parentId);
+  return { added, reused, error, folders: all };
+}
+const EXAMPLE_TREE = (): FolderNode[] => [
+  { id: nodeId(), name: "01 Contract", children: [{ id: nodeId(), name: "Signed", children: [] }, { id: nodeId(), name: "Amendments", children: [] }] },
+  { id: nodeId(), name: "02 Proposals", children: [] },
+  { id: nodeId(), name: "03 Project", children: [{ id: nodeId(), name: "Kick-off", children: [] }, { id: nodeId(), name: "Meetings", children: [] }, { id: nodeId(), name: "Deliverables", children: [] }] },
+  { id: nodeId(), name: "04 Data & access", children: [] },
+  { id: nodeId(), name: "05 Billing", children: [{ id: nodeId(), name: "Invoices", children: [] }] },
+];
+const FolderGlyph = () => <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8z" /></svg>;
+const Ic = ({ d }: { d: string }) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>;
+
+/** Settings › Client page › Folder templates. */
+export function FolderTemplatesEditor({ canEdit = true }: { canEdit?: boolean }) {
+  const [list, setList] = useState<FolderTemplate[] | null>(null);
+  const [missing, setMissing] = useState(false);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [state, setState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [err, setErr] = useState<string | null>(null);
+  const [focus, setFocus] = useState<string | null>(null);
+  const [askDel, setAskDel] = useState(false);
+  const dirty = useRef<Set<string>>(new Set());
+  useEffect(() => { loadFolderTemplates().then((r) => { setList(r.list); setMissing(r.missing); setOpenId(r.list[0]?.id ?? null); }); }, []);
+  const cur = (list ?? []).find((t) => t.id === openId) ?? null;
+  // each change is saved a moment later
+  useEffect(() => {
+    if (!list || !dirty.current.size) return;
+    const t = window.setTimeout(async () => {
+      const ids = [...dirty.current]; dirty.current.clear();
+      setState("saving");
+      for (const id of ids) {
+        const tpl = list.find((x) => x.id === id);
+        if (!tpl) continue;
+        const { error } = await supabase.from("client_folder_templates").update({ name: tpl.name.trim() || "Untitled", tree: tpl.tree, is_default: tpl.is_default, updated_at: new Date().toISOString() }).eq("id", id);
+        if (error) { setState("error"); setErr(error.message); return; }
+      }
+      setErr(null); setState("saved");
+      window.setTimeout(() => setState((s) => (s === "saved" ? "idle" : s)), 1500);
+    }, 700);
+    return () => window.clearTimeout(t);
+  }, [list]);
+  const patch = (id: string, p: Partial<FolderTemplate>) => {
+    dirty.current.add(id);
+    setList((xs) => (xs ?? []).map((t) => (t.id === id ? { ...t, ...p } : p.is_default ? { ...t, is_default: false } : t)));
+    if (p.is_default) (list ?? []).forEach((t) => { if (t.id !== id && t.is_default) dirty.current.add(t.id); });
+  };
+  const create = async (example: boolean) => {
+    const row = { name: example ? "Standard client" : "New template", tree: example ? EXAMPLE_TREE() : [], is_default: !(list ?? []).length, sort: (list ?? []).length };
+    const { data, error } = await supabase.from("client_folder_templates").insert(row).select("*").single();
+    if (error || !data) { setErr(/client_folder_templates|relation|schema cache/i.test(error?.message ?? "") ? FOLDER_TEMPLATES_SQL : error?.message ?? "Not saved."); return; }
+    const t: FolderTemplate = { id: (data as any).id, name: row.name, tree: cleanTree(row.tree), is_default: row.is_default, sort: row.sort };
+    setList((xs) => [...(xs ?? []), t]); setOpenId(t.id); setErr(null);
+  };
+  const remove = async (id: string) => {
+    setAskDel(false);
+    const { error } = await supabase.from("client_folder_templates").delete().eq("id", id);
+    if (error) { setErr(error.message); return; }
+    const rest = (list ?? []).filter((t) => t.id !== id);
+    setList(rest); setOpenId(rest[0]?.id ?? null);
+  };
+  // the tree, edited in place
+  const mapTree = (xs: FolderNode[], fn: (xs: FolderNode[]) => FolderNode[], parent: string | null, at: string | null): FolderNode[] =>
+    parent === at ? fn(xs) : xs.map((x) => ({ ...x, children: mapTree(x.children, fn, parent, x.id) }));
+  const editTree = (parent: string | null, fn: (xs: FolderNode[]) => FolderNode[]) => { if (cur) patch(cur.id, { tree: mapTree(cur.tree, fn, parent, null) }); };
+  const addTo = (parent: string | null) => { const n = { id: nodeId(), name: "", children: [] }; editTree(parent, (xs) => [...xs, n]); setFocus(n.id); };
+  const rename = (parent: string | null, id: string, name: string) => editTree(parent, (xs) => xs.map((x) => (x.id === id ? { ...x, name } : x)));
+  const drop = (parent: string | null, id: string) => editTree(parent, (xs) => xs.filter((x) => x.id !== id));
+  const move = (parent: string | null, id: string, by: number) => editTree(parent, (xs) => {
+    const i = xs.findIndex((x) => x.id === id), j = i + by;
+    if (i < 0 || j < 0 || j >= xs.length) return xs;
+    const n = [...xs]; [n[i], n[j]] = [n[j], n[i]]; return n;
+  });
+  const level = (xs: FolderNode[], parent: string | null, depth: number): React.ReactNode => (
+    <div className={`fte-level ${depth ? "is-sub" : ""}`}>
+      {xs.map((x, i) => (
+        <div key={x.id} className="fte-node">
+          <div className="fte-row" style={{ ["--d" as string]: depth } as CSSProperties}>
+            <span className="fte-ico"><FolderGlyph /></span>
+            <input className="fte-name" value={x.name} placeholder="Folder name" disabled={!canEdit} autoFocus={focus === x.id}
+              onChange={(e) => rename(parent, x.id, e.target.value)} onFocus={() => setFocus(null)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTo(parent); } if (e.key === "Tab" && !e.shiftKey && x.name.trim()) { e.preventDefault(); addTo(x.id); } if (e.key === "Backspace" && !x.name) { e.preventDefault(); drop(parent, x.id); } }} />
+            {canEdit && (
+              <span className="fte-acts">
+                <button type="button" onClick={() => addTo(x.id)} title="Add a folder inside" aria-label="Add a folder inside"><Ic d="M12 5v14M5 12h14" /></button>
+                <button type="button" onClick={() => move(parent, x.id, -1)} disabled={i === 0} title="Move up" aria-label="Move up"><Ic d="M12 19V5M5 12l7-7 7 7" /></button>
+                <button type="button" onClick={() => move(parent, x.id, 1)} disabled={i === xs.length - 1} title="Move down" aria-label="Move down"><Ic d="M12 5v14M19 12l-7 7-7-7" /></button>
+                <button type="button" className="is-del" onClick={() => drop(parent, x.id)} title={x.children.length ? `Remove it and the ${countNodes(x.children)} inside` : "Remove"} aria-label="Remove"><Ic d="M18 6 6 18M6 6l12 12" /></button>
+              </span>
+            )}
+          </div>
+          {x.children.length > 0 && level(x.children, x.id, depth + 1)}
+        </div>
+      ))}
+      {canEdit && (
+        <button type="button" className="fte-add" style={{ ["--d" as string]: depth } as CSSProperties} onClick={() => addTo(parent)}>
+          <Ic d="M12 5v14M5 12h14" />{depth ? "Add a subfolder" : "Add a folder"}
+        </button>
+      )}
+    </div>
+  );
+  if (!list) return <div className="fte-skel" />;
+  return (
+    <div className="fte">
+      {missing && <p className="fte-note">{FOLDER_TEMPLATES_SQL}</p>}
+      {err && !missing && <p className="fte-err">{err}</p>}
+      {!list.length ? (
+        <div className="fte-start">
+          <span className="fte-start-ico"><FolderGlyph /></span>
+          <b>No folder templates yet</b>
+          <span>Build the folders every client should have once — then add them to any client from its Folders tab in one click.</span>
+          {canEdit && (
+            <div className="fte-start-btns">
+              <button type="button" className="fte-btn is-primary" onClick={() => void create(true)} disabled={missing}>Start from an example</button>
+              <button type="button" className="fte-btn" onClick={() => void create(false)} disabled={missing}>Start empty</button>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="fte-grid">
+          <nav className="fte-list" aria-label="Templates">
+            {list.map((t) => (
+              <button key={t.id} type="button" className={`fte-item ${t.id === openId ? "is-on" : ""}`} onClick={() => { setOpenId(t.id); setAskDel(false); }}>
+                <span className="fte-item-ico"><FolderGlyph /></span>
+                <span className="fte-item-txt"><b>{t.name || "Untitled"}</b><em>{countNodes(t.tree)} folders{t.is_default ? " · default" : ""}</em></span>
+              </button>
+            ))}
+            {canEdit && <button type="button" className="fte-item is-new" onClick={() => void create(false)}><Ic d="M12 5v14M5 12h14" />New template</button>}
+          </nav>
+          {cur && (
+            <div className="fte-ed">
+              <div className="fte-head">
+                <input className="fte-title" value={cur.name} placeholder="Template name" disabled={!canEdit} onChange={(e) => patch(cur.id, { name: e.target.value })} />
+                <span className={`fte-state is-${state}`}>{state === "saving" ? "Saving…" : state === "saved" ? "Saved" : state === "error" ? "Not saved" : ""}</span>
+                {canEdit && (
+                  <label className="fte-def" title="Shown first when you add folders to a client">
+                    <input type="checkbox" checked={cur.is_default} onChange={() => patch(cur.id, { is_default: !cur.is_default })} />Default
+                  </label>
+                )}
+                {canEdit && (askDel ? (
+                  <span className="fte-ask">Delete it? Clients keep their folders.
+                    <button type="button" className="fte-btn" onClick={() => setAskDel(false)}>Keep</button>
+                    <button type="button" className="fte-btn is-danger" onClick={() => void remove(cur.id)}>Delete</button>
+                  </span>
+                ) : <button type="button" className="fte-icon" onClick={() => setAskDel(true)} title="Delete template" aria-label="Delete template"><Ic d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" /></button>)}
+              </div>
+              <p className="fte-hint">Enter adds the next folder · Tab puts a new one inside · applying it to a client only adds the folders it's missing.</p>
+              <div className="fte-tree">
+                <div className="fte-root"><Ic d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />Client directory</div>
+                {level(cur.tree, null, 0)}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The Folders tab's "Templates" button: drops a template into the open folder. */
+export function ApplyTemplateMenu({ clientId, parentId, parentName, folders, onApplied }: {
+  clientId: string; parentId: string | null; parentName: string | null;
+  folders: { id: string; parent_id: string | null; name: string; sort: number }[];
+  onApplied: (folders: any[], msg: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [list, setList] = useState<FolderTemplate[] | null>(null);
+  const [missing, setMissing] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [hover, setHover] = useState<string | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    if (!list) loadFolderTemplates().then((r) => { setList([...r.list].sort((a, b) => Number(b.is_default) - Number(a.is_default))); setMissing(r.missing); });
+    const down = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", down); document.addEventListener("keydown", key);
+    return () => { document.removeEventListener("mousedown", down); document.removeEventListener("keydown", key); };
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  const apply = async (t: FolderTemplate) => {
+    setBusy(t.id);
+    const r = await applyFolderTemplate(clientId, t.tree, parentId, folders);
+    setBusy(null); setOpen(false);
+    onApplied(r.folders, r.error ? `Stopped: ${r.error}` : r.added ? `${r.added} folder${r.added === 1 ? "" : "s"} added from “${t.name}”${r.reused ? ` · ${r.reused} were already there` : ""}` : `Nothing to add — “${t.name}” is already all here`);
+  };
+  const shown = (list ?? []).find((t) => t.id === hover) ?? (list ?? [])[0];
+  const preview = (xs: FolderNode[], d: number): React.ReactNode => xs.map((x) => (
+    <div key={x.id}>
+      <span className="cdt-pv-row" style={{ ["--d" as string]: d } as CSSProperties}><FolderGlyph />{x.name || "—"}</span>
+      {preview(x.children, d + 1)}
+    </div>
+  ));
+  return (
+    <div className="cdt" ref={ref}>
+      <button className={`cdir-btn ${open ? "is-on" : ""}`} onClick={() => setOpen((v) => !v)} aria-haspopup="menu" aria-expanded={open} title="Add a standard folder structure">
+        <Ic d="M12 3 2 8l10 5 10-5zM2 13l10 5 10-5M2 17.5l10 5 10-5" />Templates
+      </button>
+      {open && (
+        <div className="cdt-pop" role="menu">
+          <div className="cdt-head"><b>Add a folder template</b><span>Into {parentName ? `“${parentName}”` : "the top of the directory"} · only missing folders are added</span></div>
+          {!list ? <div className="cdt-skel" /> : !list.length ? (
+            <p className="cdt-empty">{missing ? FOLDER_TEMPLATES_SQL : "No templates yet. Create them in Settings › Client page › Folder templates."}</p>
+          ) : (
+            <div className="cdt-body">
+              <div className="cdt-list">
+                {list.map((t) => (
+                  <button key={t.id} type="button" role="menuitem" className={`cdt-opt ${shown?.id === t.id ? "is-on" : ""}`} onMouseEnter={() => setHover(t.id)} onFocus={() => setHover(t.id)}
+                    onClick={() => void apply(t)} disabled={!!busy}>
+                    <span className="cdt-opt-ico"><FolderGlyph /></span>
+                    <span><b>{t.name || "Untitled"}</b><em>{countNodes(t.tree)} folders{t.is_default ? " · default" : ""}</em></span>
+                    <i>{busy === t.id ? "Adding…" : "Add"}</i>
+                  </button>
+                ))}
+              </div>
+              {shown && <div className="cdt-pv" aria-label="Preview">{preview(shown.tree, 0)}</div>}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }

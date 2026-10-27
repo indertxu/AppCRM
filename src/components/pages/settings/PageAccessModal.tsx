@@ -13,10 +13,10 @@ import { PageLoader } from "../../framework/AppLayout";
 import {
   PAGES, EVERYONE, loadDepartments, loadPageDepartments, savePageDepartments, deptListOpens, usePageAccess, SECURITY_LEVEL_EVENT,
   PAGE_SCOPES, loadScopeRules, saveScopeRules, type DataScope, type ScopeRules,
-  type Department, type PageKey,
+  loadPageRules, savePageRules, pageRuleKey, type PageRules,
+  type Department, type PageKey, useSecurityLevels, levelBase,
 } from "../../framework/pageAccess";
 import Select from "../../framework/Select";
-import { LEVELS } from "./NewUserModal";
 import { AREAS, HIDEABLE } from "../management/mgmtAccess";
 import "./PageAccessModal.css";
 
@@ -316,7 +316,9 @@ function Multi({ label, options, value, onChange, onClear, clearLabel, placehold
 export function PageSecurity({ page }: { page: PageKey }) {
   const def = PAGE_SCOPES[page];
   const { level, isSuper } = usePageAccess();
-  const canEdit = isSuper || level === "boss";
+  const canEdit = isSuper || levelBase(level) === "boss";
+  // the company's security levels (a level that works like Boss can't be limited)
+  const LEVELS = useSecurityLevels().filter((l) => l.base !== "boss").map((l) => ({ id: l.key, label: l.name }));
   const [depts, setDepts] = useState<Department[]>([]);
   const [people, setPeople] = useState<Person[]>([]);
   const [access, setAccess] = useState<{ depts: string[]; users: string[] } | null>(null);
@@ -337,7 +339,7 @@ export function PageSecurity({ page }: { page: PageKey }) {
       ]);
       if (!alive) return;
       const deptRole = new Map(((od.data ?? []) as any[]).map((d) => [d.dept_key, String(d.security_role ?? "").toLowerCase() || null]));
-      setRoleOf(Object.fromEntries(((profs.data ?? []) as any[]).map((p) => [p.id, String(p.role ?? "").toLowerCase() || (p.department ? deptRole.get(p.department) ?? null : null)])));
+      setRoleOf(Object.fromEntries(((profs.data ?? []) as any[]).map((p) => [p.id, String(p.security_level ?? p.role ?? "").toLowerCase() || (p.department ? deptRole.get(p.department) ?? null : null)])));
       setDepts(ds);
       setAccess(page in pd.map ? { depts: pd.map[page] ?? [], users: pd.users[page] ?? [] } : null);
       setRules(sc.rules); setMissing(sc.missing);
@@ -524,4 +526,107 @@ export function useSecuritySection(page: PageKey) {
     hint: `How much of ${PAGES.find((x) => x.key === page)?.label ?? "this page"} people see: everything, their department's, or only their own`,
     body: <PageSecurity page={page} />,
   };
+}
+
+/* =====================================================================
+   Who can open one settings panel (e.g. Settings › Calendar), edited where
+   it lives: by security role, by department, and people by name.
+   Stored as panel rules (page_access_rules). Bosses and superadmins always can.
+   ===================================================================== */
+const DEFAULT_MANAGERS = ["consultancy_manager", "customer_success", "sales_manager", "it_manager", "marketing_manager", "hr_manager"];
+export function PanelAccess({ panelKey, what }: { panelKey: string; what: string }) {
+  const { reload, level, isSuper } = usePageAccess();
+  const canEdit = isSuper || levelBase(level) === "boss";
+  const LEVELS = useSecurityLevels().filter((l) => l.base !== "boss").map((l) => ({ id: l.key, label: l.name }));
+  const [rules, setRules] = useState<PageRules | null>(null);
+  const [missing, setMissing] = useState(false);
+  const [depts, setDepts] = useState<Department[]>([]);
+  const [people, setPeople] = useState<{ id: string; name: string; role: string; department: string | null; full: boolean }[]>([]);
+  const [draft, setDraft] = useState<{ everyone: boolean; roles: string[]; depts: string[]; users: string[] } | null>(null);
+  const [base, setBase] = useState<typeof draft>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  useEffect(() => {
+    (async () => {
+      const [r, ds, profs] = await Promise.all([loadPageRules(), loadDepartments(true), supabase.from("profiles").select("*").range(0, 99999)]);
+      setRules(r.rules); setMissing(r.missing); setDepts(ds);
+      setPeople(((profs.data ?? []) as any[]).filter((p) => p.active !== false).map((p) => ({
+        id: p.id, name: [p.first_name, p.last_name].filter(Boolean).join(" ") || p.full_name || p.email || "—",
+        role: String(p.role ?? "").toLowerCase(), department: p.department ?? null, full: p.is_superadmin === true || String(p.role ?? "").toLowerCase() === "boss",
+      })).sort((a, b) => a.name.localeCompare(b.name)));
+      const set = Object.values(r.rules).some((m) => m && panelKey in m);
+      const pick = (type: string) => Object.entries(r.rules).filter(([k, m]) => k.startsWith(`${type}:`) && (m?.[panelKey] === "all" || m?.[panelKey] === true)).map(([k]) => k.slice(type.length + 1));
+      const d = set
+        ? { everyone: pick("everyone").length > 0, roles: pick("role"), depts: pick("dept"), users: pick("user") }
+        : { everyone: false, roles: DEFAULT_MANAGERS, depts: [], users: [] };
+      setDraft(d); setBase(d);
+    })().catch(() => setRules({}));
+  }, [panelKey]);
+  const isSet = !!rules && Object.values(rules).some((m) => m && panelKey in m);
+  const dirty = !!draft && !!base && JSON.stringify(draft) !== JSON.stringify(base);
+  const opens = (p: { id: string; role: string; department: string | null; full: boolean }) =>
+    !!draft && (p.full || draft.everyone || draft.users.includes(p.id) || draft.roles.includes(p.role) || (!!p.department && draft.depts.includes(p.department)));
+  const inside = people.filter(opens);
+  const save = async () => {
+    if (!draft || !rules || busy) return;
+    setBusy(true); setMsg(null);
+    const next: PageRules = {};
+    Object.entries(rules).forEach(([k, m]) => { const c = { ...(m ?? {}) }; delete c[panelKey]; next[k] = c; });
+    const put = (k: string, v: "all" | "none") => { next[k] = { ...(next[k] ?? {}), [panelKey]: v }; };
+    put(pageRuleKey("everyone", "*"), draft.everyone ? "all" : "none");
+    if (!draft.everyone) {
+      draft.roles.forEach((r) => put(pageRuleKey("role", r), "all"));
+      draft.depts.forEach((d) => put(pageRuleKey("dept", d), "all"));
+      draft.users.forEach((u) => put(pageRuleKey("user", u), "all"));
+    }
+    const e = await savePageRules(next, rules);
+    setBusy(false);
+    if (e) { setMsg({ ok: false, text: e }); return; }
+    setRules(next); setBase(draft); setMsg({ ok: true, text: "Saved" });
+    window.dispatchEvent(new CustomEvent(SECURITY_LEVEL_EVENT));
+    await reload();
+  };
+  if (!draft) return <div className="pxa-skel" />;
+  const deptName = (k: string | null) => depts.find((d) => d.key === k)?.name ?? "No department";
+  return (
+    <div className="pxa">
+      <p className="pxa-lead">{LOCK}<span>Who can open <b>{what}</b>. <b>Bosses</b> and superadmins always can.{!isSet && " Not set yet: Boss and the managers can, as until now."}</span></p>
+      {missing && <p className="pa2-warn">{WARN}<span>Run <b>62_page_access_people.sql</b> in Supabase to save who can open it.</span></p>}
+      <div className="pxa-rows">
+        <div className="pxa-row">
+          <span className="pxa-k"><b>Security roles</b><em>Everyone with one of these roles</em></span>
+          <Multi label="Security roles" options={LEVELS.filter((l) => l.id !== "boss").map((l) => ({ value: l.id, label: l.label }))}
+            everyone={{ on: draft.everyone, label: "Everyone", sub: "every signed-in person" }}
+            value={draft.everyone ? [] : draft.roles} placeholder="No role" search="Search roles…" disabled={!canEdit}
+            onChange={(v, all) => setDraft({ ...draft, everyone: all, roles: all ? [] : v })}
+            onClear={() => setDraft({ ...draft, everyone: false, roles: [] })} clearLabel="None" />
+        </div>
+        <div className="pxa-row">
+          <span className="pxa-k"><b>Departments</b><em>Everyone in these departments</em></span>
+          <Multi label="Departments" options={depts.map((d) => ({ value: d.key, label: d.name, color: d.color, sub: `${people.filter((p) => p.department === d.key).length}` }))}
+            value={draft.depts} placeholder={draft.everyone ? "Everyone is in" : "No department"} search="Search departments…" disabled={!canEdit || draft.everyone}
+            onChange={(v) => setDraft({ ...draft, depts: v })} onClear={() => setDraft({ ...draft, depts: [] })} clearLabel="None" />
+        </div>
+        <div className="pxa-row">
+          <span className="pxa-k"><b>People</b><em>Also these people, by name</em></span>
+          <Multi label="People" people options={people.filter((p) => !p.full).map((p) => ({ value: p.id, label: p.name, color: depts.find((d) => d.key === p.department)?.color ?? "#9fb5ab", sub: deptName(p.department) }))}
+            value={draft.users} placeholder={draft.everyone ? "Everyone is in" : "Nobody else"} search="Search people…" disabled={!canEdit || draft.everyone}
+            onChange={(v) => setDraft({ ...draft, users: v })} onClear={() => setDraft({ ...draft, users: [] })} clearLabel="Nobody" />
+        </div>
+      </div>
+      <div className="pxa-foot">
+        <span className="pxa-who">
+          <span className="pxa-avs">{inside.slice(0, 6).map((p) => <i key={p.id} title={p.name}>{initials(p.name)}</i>)}{inside.length > 6 && <em>+{inside.length - 6}</em>}</span>
+          <span><b>{inside.length}</b> {inside.length === 1 ? "person" : "people"} can open it</span>
+        </span>
+        {msg && <span className={`pxa-msg ${msg.ok ? "is-ok" : "is-err"}`}>{msg.text}</span>}
+        {canEdit ? (
+          <>
+            <button type="button" className="pa2-btn is-ghost" disabled={!dirty || busy} onClick={() => { setDraft(base); setMsg(null); }}>Undo</button>
+            <button type="button" className="pa2-btn is-primary" disabled={!dirty || busy || missing} onClick={() => void save()}>{busy ? "Saving…" : "Save"}</button>
+          </>
+        ) : <span className="pxa-msg">Only the Boss level can change this.</span>}
+      </div>
+    </div>
+  );
 }

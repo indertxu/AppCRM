@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import DatePicker from "../../framework/DatePicker";
+import { supabase } from "../../api/supabase";
 import { billingWindow, cutoffOf, periodOf, type Cutoffs } from "./billingPeriods";
 import HoursEditor from "./HoursEditor";
 import TimeOffRequestPanel from "./TimeOffRequest";
@@ -86,6 +87,10 @@ targets: Targets;
   vacationAllowance?: number;
   setVacationAllowance?: (n: number) => void;
   canEditTimeOff?: boolean;                               // only boss edits allowance/holidays
+  /** Calendar page: only "My time off" (time off, holidays, hours and cutoffs are set up in Settings › Calendar). */
+  requestOnly?: boolean;
+  /** Opens Settings › Calendar (shown to the people who may set it up). */
+  onOpenSetup?: () => void;
   onClose: () => void;
 }
 
@@ -111,7 +116,7 @@ export default function CalendarSettingsModal({
   initialCapOpen = null,
   holidays = [], onAddHoliday = () => {}, onRemoveHoliday = () => {},
   vacationAllowance = 22, setVacationAllowance = () => {}, canEditTimeOff = false,
-  securityPanel, securityOnly = false,
+  securityPanel, securityOnly = false, requestOnly = false, onOpenSetup,
   onClose,
 }: Props) {
   const [openId, setOpenId] = useState<string | null>(null);
@@ -133,28 +138,6 @@ export default function CalendarSettingsModal({
   const [newHolidayName, setNewHolidayName] = useState("");
   const [holidayUntil, setHolidayUntil] = useState("");
   const [revText, setRevText] = useState(String(targets.minRevenueMonth));
-  const [cutoffYear, setCutoffYear] = useState(new Date().getFullYear());
-
-  /** The twelve months of the selected year. */
-  const cutoffMonths = Array.from({ length: 12 }, (_, m) => periodOf(new Date(cutoffYear, m, 1)));
-  const monthLabel = (p: string) => {
-    const [y, m] = p.split("-").map(Number);
-    return new Date(y, m - 1, 1).toLocaleString("en", { month: "long", year: "numeric" });
-  };
-  const setCutoff = (period: string, iso: string) =>
-    setCutoffs((c) => ({ ...c, [period]: iso }));
-  /** Back to the default day (removes the month's own date). */
-  const resetCutoff = (period: string) =>
-    setCutoffs((c) => { const n = { ...c }; delete n[period]; return n; });
-  const isoShift = (iso: string, days: number) => {
-    const [y, m, d] = iso.split("-").map(Number);
-    const t = new Date(y, m - 1, d + days);
-    return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
-  };
-  const isoDays = (a: string, b: string) => Math.round((new Date(`${b}T00:00:00`).getTime() - new Date(`${a}T00:00:00`).getTime()) / 864e5);
-  const dayMonth = (iso: string) => new Date(`${iso}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
-  const weekday = (iso: string) => new Date(`${iso}T00:00:00`).toLocaleDateString("en-GB", { weekday: "long" });
-  const thisPeriod = periodOf(new Date());
 
 
   useEffect(() => {
@@ -190,13 +173,13 @@ export default function CalendarSettingsModal({
       <div className={`cws-card ${managementMode ? "" : "is-cal"}`} onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
         <div className="cws-head">
           <div>
-            <span className="cws-eyebrow">{managementMode ? "Management settings" : "Calendar settings"}</span>
+            <span className="cws-eyebrow">{managementMode ? "Management settings" : requestOnly ? "Calendar" : "Calendar settings"}</span>
             <h2 className="cws-title">{tab === "security" ? "Security" : tab === "targets" ? "Billable targets" : tab === "capacity" ? "Targets & bonus" : tab === "timeoff" ? "Time off" : tab === "request" ? "My time off" : tab === "hours" ? "Working hours" : "Billing cutoffs"}</h2>
           </div>
           <button className="cws-x" onClick={onClose} aria-label="Close">×</button>
         </div>
 
-       <div className="cws-tabs" style={targetsOnly && !managementMode ? { display: "none" } : undefined}>
+       <div className="cws-tabs" style={(targetsOnly && !managementMode) || requestOnly ? { display: "none" } : undefined}>
         <div className="cws-tabs-in" ref={tabsRef} style={inkStyle}>
           <span className="cws-tab-ink" aria-hidden="true" />
           {!managementMode && !hideTargets && <button className={`cws-tab ${tab === "targets" ? "is-on" : ""}`} onClick={() => setTab("targets")}>Targets</button>}
@@ -211,7 +194,15 @@ export default function CalendarSettingsModal({
         {tab === "security" && securityPanel ? (
           <div key={tab} className="cws-body cws-body-wide cws-sec-body">{securityPanel}</div>
         ) : tab === "request" ? (
-          <div key={tab} className="cws-body"><TimeOffRequestPanel allowance={vacationAllowance} /></div>
+          <div key={tab} className="cws-body">
+            <TimeOffRequestPanel allowance={vacationAllowance} />
+            {requestOnly && canSetup && onOpenSetup && (
+              <button type="button" className="cws-setup-link" onClick={onOpenSetup}>
+                <span><b>Allowances, approvals, public holidays, working hours and cutoffs</b> are set up in Settings › Calendar.</span>
+                <em>Open →</em>
+              </button>
+            )}
+          </div>
         ) : tab === "hours" ? (
           <div key={tab} className="cws-body cws-body-wide"><HoursEditor /></div>
         ) : tab === "targets" ? (
@@ -344,83 +335,7 @@ export default function CalendarSettingsModal({
           </div>
         ) : tab === "billing" ? (
           <div key={tab} className="cws-body cx">
-            <p className="cws-hint cws-intro">
-              Each billing month closes on its cutoff day. It covers everything from the day after the
-              previous month’s cutoff up to and including its own.
-            </p>
-
-            {/* default cutoff + a ruler of the month showing where it falls */}
-            <section className="cx-default">
-              <div className="cx-default-txt">
-                <span className="cx-eyebrow">Default cutoff</span>
-                <b>{defaultCutoffDay === 0 ? "Last day of every month" : `Day ${defaultCutoffDay} of every month`}</b>
-                <em>Used for every month that doesn’t have its own date.</em>
-              </div>
-              <div className="cx-stepper">
-                <button type="button" onClick={() => setDefaultCutoffDay((d) => Math.max(0, d - 1))} aria-label="Earlier">−</button>
-                <span className="cx-stepper-val" key={defaultCutoffDay}>
-                  <b>{defaultCutoffDay === 0 ? "Last" : defaultCutoffDay}</b>
-                  <i>{defaultCutoffDay === 0 ? "day" : "of month"}</i>
-                </span>
-                <button type="button" onClick={() => setDefaultCutoffDay((d) => Math.min(28, d + 1))} aria-label="Later">+</button>
-              </div>
-              <div className="cx-ruler" aria-hidden="true">
-                {Array.from({ length: 31 }, (_, i) => {
-                  const day = i + 1;
-                  const cut = defaultCutoffDay === 0 ? 31 : defaultCutoffDay;
-                  return <i key={day} className={day === cut ? "is-cut" : day < cut ? "is-in" : "is-next"} title={day === cut ? "Closes" : undefined} />;
-                })}
-                <span className="cx-ruler-l"><em>1</em><em>{defaultCutoffDay === 0 ? "last day" : `closes on day ${defaultCutoffDay}`}</em><em>31</em></span>
-              </div>
-            </section>
-
-            <div className="cx-yearbar">
-              <div className="cx-year">
-                <button type="button" onClick={() => setCutoffYear((y) => y - 1)} aria-label="Previous year">‹</button>
-                <span key={cutoffYear}>{cutoffYear}</span>
-                <button type="button" onClick={() => setCutoffYear((y) => y + 1)} aria-label="Next year">›</button>
-              </div>
-              {cutoffYear !== new Date().getFullYear() && (
-                <button type="button" className="cx-today" onClick={() => setCutoffYear(new Date().getFullYear())}>This year</button>
-              )}
-              <span className="cx-legend"><i className="is-default" />Default <i className="is-custom" />Own date</span>
-            </div>
-
-            <div className="cws-cut-grid cx-grid" key={`y${cutoffYear}`}>
-              {cutoffMonths.map((period, i) => {
-                const cut = cutoffOf(period, cutoffs, defaultCutoffDay);
-                const start = isoShift(billingWindow(period, cutoffs, defaultCutoffDay).from, 1);
-                const days = isoDays(start, cut) + 1;
-                const isCustom = !!cutoffs[period];
-                const now = period === thisPeriod;
-                const past = period < thisPeriod;
-                const [, mm] = period.split("-").map(Number);
-                return (
-                  <div className={`cx-month ${isCustom ? "is-custom" : ""} ${now ? "is-now" : ""} ${past ? "is-past" : ""}`} key={period} style={{ ["--i" as string]: i } as CSSProperties}>
-                    <div className="cx-m-top">
-                      <span className="cx-m-name">{new Date(cutoffYear, mm - 1, 1).toLocaleDateString("en-GB", { month: "long" })}</span>
-                      {now && <span className="cx-now">This month</span>}
-                      <span className={`cx-tag ${isCustom ? "is-custom" : ""}`}>{isCustom ? "Own date" : "Default"}</span>
-                    </div>
-                    <div className="cx-m-cut">
-                      <b>{Number(cut.slice(8, 10))}</b>
-                      <span><em>{dayMonth(cut).split(" ")[1]}</em>closes · {weekday(cut)}</span>
-                    </div>
-                    <div className="cx-m-range">
-                      <span>{dayMonth(start)} → {dayMonth(cut)}</span>
-                      <em>{days} days</em>
-                    </div>
-                    <div className="cx-m-bar" aria-hidden="true"><i style={{ width: `${Math.min(100, (days / 35) * 100)}%` }} /></div>
-                    <div className="cx-m-actions">
-                      <DatePicker value={cut} onChange={(iso) => setCutoff(period, iso)} />
-                      {isCustom && managementMode && (
-                        <button type="button" className="cx-reset" onClick={() => resetCutoff(period)} title="Use the default cutoff for this month">Use default</button>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+            <CutoffsBody cutoffs={cutoffs} setCutoffs={setCutoffs} defaultCutoffDay={defaultCutoffDay} setDefaultCutoffDay={setDefaultCutoffDay} allowReset={managementMode} />
           </div>
         ) : tab === "capacity" ? (
           <div key={tab} className="cws-body">
@@ -536,6 +451,170 @@ export default function CalendarSettingsModal({
           </div>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Billing cutoffs: the default day and each month's own date, a year at a time.
+ * Used by the Management settings and, on its own (CutoffsEditor), by Settings › Calendar.
+ */
+export function CutoffsBody({ cutoffs, setCutoffs, defaultCutoffDay, setDefaultCutoffDay, allowReset = true }: {
+  cutoffs: Cutoffs; setCutoffs: React.Dispatch<React.SetStateAction<Cutoffs>>;
+  defaultCutoffDay: number; setDefaultCutoffDay: React.Dispatch<React.SetStateAction<number>>;
+  allowReset?: boolean;
+}) {
+  const [cutoffYear, setCutoffYear] = useState(new Date().getFullYear());
+
+  /** The twelve months of the selected year. */
+  const cutoffMonths = Array.from({ length: 12 }, (_, m) => periodOf(new Date(cutoffYear, m, 1)));
+  const monthLabel = (p: string) => {
+    const [y, m] = p.split("-").map(Number);
+    return new Date(y, m - 1, 1).toLocaleString("en", { month: "long", year: "numeric" });
+  };
+  const setCutoff = (period: string, iso: string) =>
+    setCutoffs((c) => ({ ...c, [period]: iso }));
+  /** Back to the default day (removes the month's own date). */
+  const resetCutoff = (period: string) =>
+    setCutoffs((c) => { const n = { ...c }; delete n[period]; return n; });
+  const isoShift = (iso: string, days: number) => {
+    const [y, m, d] = iso.split("-").map(Number);
+    const t = new Date(y, m - 1, d + days);
+    return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+  };
+  const isoDays = (a: string, b: string) => Math.round((new Date(`${b}T00:00:00`).getTime() - new Date(`${a}T00:00:00`).getTime()) / 864e5);
+  const dayMonth = (iso: string) => new Date(`${iso}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  const weekday = (iso: string) => new Date(`${iso}T00:00:00`).toLocaleDateString("en-GB", { weekday: "long" });
+  const thisPeriod = periodOf(new Date());
+  return (
+    <>
+            <p className="cws-hint cws-intro">
+              Each billing month closes on its cutoff day. It covers everything from the day after the
+              previous month’s cutoff up to and including its own.
+            </p>
+
+            {/* default cutoff + a ruler of the month showing where it falls */}
+            <section className="cx-default">
+              <div className="cx-default-txt">
+                <span className="cx-eyebrow">Default cutoff</span>
+                <b>{defaultCutoffDay === 0 ? "Last day of every month" : `Day ${defaultCutoffDay} of every month`}</b>
+                <em>Used for every month that doesn’t have its own date.</em>
+              </div>
+              <div className="cx-stepper">
+                <button type="button" onClick={() => setDefaultCutoffDay((d) => Math.max(0, d - 1))} aria-label="Earlier">−</button>
+                <span className="cx-stepper-val" key={defaultCutoffDay}>
+                  <b>{defaultCutoffDay === 0 ? "Last" : defaultCutoffDay}</b>
+                  <i>{defaultCutoffDay === 0 ? "day" : "of month"}</i>
+                </span>
+                <button type="button" onClick={() => setDefaultCutoffDay((d) => Math.min(28, d + 1))} aria-label="Later">+</button>
+              </div>
+              <div className="cx-ruler" aria-hidden="true">
+                {Array.from({ length: 31 }, (_, i) => {
+                  const day = i + 1;
+                  const cut = defaultCutoffDay === 0 ? 31 : defaultCutoffDay;
+                  return <i key={day} className={day === cut ? "is-cut" : day < cut ? "is-in" : "is-next"} title={day === cut ? "Closes" : undefined} />;
+                })}
+                <span className="cx-ruler-l"><em>1</em><em>{defaultCutoffDay === 0 ? "last day" : `closes on day ${defaultCutoffDay}`}</em><em>31</em></span>
+              </div>
+            </section>
+
+            <div className="cx-yearbar">
+              <div className="cx-year">
+                <button type="button" onClick={() => setCutoffYear((y) => y - 1)} aria-label="Previous year">‹</button>
+                <span key={cutoffYear}>{cutoffYear}</span>
+                <button type="button" onClick={() => setCutoffYear((y) => y + 1)} aria-label="Next year">›</button>
+              </div>
+              {cutoffYear !== new Date().getFullYear() && (
+                <button type="button" className="cx-today" onClick={() => setCutoffYear(new Date().getFullYear())}>This year</button>
+              )}
+              <span className="cx-legend"><i className="is-default" />Default <i className="is-custom" />Own date</span>
+            </div>
+
+            <div className="cws-cut-grid cx-grid" key={`y${cutoffYear}`}>
+              {cutoffMonths.map((period, i) => {
+                const cut = cutoffOf(period, cutoffs, defaultCutoffDay);
+                const start = isoShift(billingWindow(period, cutoffs, defaultCutoffDay).from, 1);
+                const days = isoDays(start, cut) + 1;
+                const isCustom = !!cutoffs[period];
+                const now = period === thisPeriod;
+                const past = period < thisPeriod;
+                const [, mm] = period.split("-").map(Number);
+                return (
+                  <div className={`cx-month ${isCustom ? "is-custom" : ""} ${now ? "is-now" : ""} ${past ? "is-past" : ""}`} key={period} style={{ ["--i" as string]: i } as CSSProperties}>
+                    <div className="cx-m-top">
+                      <span className="cx-m-name">{new Date(cutoffYear, mm - 1, 1).toLocaleDateString("en-GB", { month: "long" })}</span>
+                      {now && <span className="cx-now">This month</span>}
+                      <span className={`cx-tag ${isCustom ? "is-custom" : ""}`}>{isCustom ? "Own date" : "Default"}</span>
+                    </div>
+                    <div className="cx-m-cut">
+                      <b>{Number(cut.slice(8, 10))}</b>
+                      <span><em>{dayMonth(cut).split(" ")[1]}</em>closes · {weekday(cut)}</span>
+                    </div>
+                    <div className="cx-m-range">
+                      <span>{dayMonth(start)} → {dayMonth(cut)}</span>
+                      <em>{days} days</em>
+                    </div>
+                    <div className="cx-m-bar" aria-hidden="true"><i style={{ width: `${Math.min(100, (days / 35) * 100)}%` }} /></div>
+                    <div className="cx-m-actions">
+                      <DatePicker value={cut} onChange={(iso) => setCutoff(period, iso)} />
+                      {isCustom && allowReset && (
+                        <button type="button" className="cx-reset" onClick={() => resetCutoff(period)} title="Use the default cutoff for this month">Use default</button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+    </>
+  );
+}
+
+/** Settings › Calendar › Cutoffs: loads the cutoffs and saves each change by itself. */
+export function CutoffsEditor() {
+  const [cutoffs, setCutoffs] = useState<Cutoffs>({});
+  const [def, setDef] = useState(0);
+  const [ready, setReady] = useState(false);
+  const [state, setState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const saved = useRef<{ cutoffs: Cutoffs; def: number }>({ cutoffs: {}, def: 0 });
+  useEffect(() => {
+    (async () => {
+      const [bp, bs] = await Promise.all([
+        supabase.from("billing_periods").select("period, cutoff_date"),
+        supabase.from("billing_settings").select("default_cutoff_day").eq("id", "default").maybeSingle(),
+      ]);
+      const c = Object.fromEntries(((bp.data ?? []) as { period: string; cutoff_date: string }[]).map((r) => [r.period, r.cutoff_date]));
+      const d = Number((bs.data as any)?.default_cutoff_day) || 0;
+      saved.current = { cutoffs: c, def: d };
+      setCutoffs(c); setDef(d); setReady(true);
+    })().catch(() => setReady(true));
+  }, []);
+  // each change is saved a moment later
+  useEffect(() => {
+    if (!ready) return;
+    const t = window.setTimeout(async () => {
+      const prev = saved.current;
+      const changed = Object.entries(cutoffs).filter(([k, v]) => prev.cutoffs[k] !== v).map(([period, cutoff_date]) => ({ period, cutoff_date }));
+      const gone = Object.keys(prev.cutoffs).filter((k) => !(k in cutoffs));
+      if (!changed.length && !gone.length && prev.def === def) return;
+      setState("saving");
+      const res = await Promise.all([
+        prev.def !== def ? supabase.from("billing_settings").upsert({ id: "default", default_cutoff_day: def }) : null,
+        changed.length ? supabase.from("billing_periods").upsert(changed) : null,
+        gone.length ? supabase.from("billing_periods").delete().in("period", gone) : null,
+      ]);
+      const bad = res.find((r: any) => r?.error);
+      if (bad) { setState("error"); return; }
+      saved.current = { cutoffs, def };
+      setState("saved");
+      window.setTimeout(() => setState((s) => (s === "saved" ? "idle" : s)), 1600);
+    }, 600);
+    return () => window.clearTimeout(t);
+  }, [cutoffs, def, ready]);
+  if (!ready) return <div className="cws-embed-skel" />;
+  return (
+    <div className="cws-embed cx">
+      <span className={`cws-embed-state is-${state}`}>{state === "saving" ? "Saving…" : state === "saved" ? "Saved" : state === "error" ? "Not saved — try again" : ""}</span>
+      <CutoffsBody cutoffs={cutoffs} setCutoffs={setCutoffs} defaultCutoffDay={def} setDefaultCutoffDay={setDef} />
     </div>
   );
 }

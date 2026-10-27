@@ -17,7 +17,7 @@ import { loadRoles } from "../settings/blueprintsApi";
 import ActualModal, { type ActualValue } from "./ActualModal";
 import { supabase } from "../../api/supabase";
 import { deleteEntryFromOutlook, syncCalendarEntry } from "../../api/outlookSync";
-import HomeTodo from "../homepage/shared/HomeTodo";
+import { TicketDesk } from "../homepage/shared/HomeTodo";
 import { PageCover } from "../../framework/AppLayout";
 import "./CalendarPage.css";
 import { useNavSection } from "../../framework/pageAccess";
@@ -748,11 +748,7 @@ const { data: ea } = await supabase.from("entry_actuals").select("*");
       await supabase.from("work_types").upsert(workTypes
         .filter((t) => t.name.trim().length > 0)
         .map((t) => ({ id: t.id, name: t.name, client_related: t.clientRelated, color: t.color })));
-    // Targets are managed in Management now, not here.
-    // Billing cutoffs: replace the whole set + default day.
-    await supabase.from("billing_settings").upsert({ id: "default", default_cutoff_day: defaultCutoffDay, vacation_days_per_year: vacationAllowance });
-    const rows = Object.entries(cutoffs).map(([period, cutoff_date]) => ({ period, cutoff_date }));
-    if (rows.length) await supabase.from("billing_periods").upsert(rows);
+    // Targets live in Management; time off, holidays, hours and cutoffs in Settings › Calendar.
     setShowSettings(false);
   };
 
@@ -1393,7 +1389,7 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
               onClose={() => { setTrayOpen(false); setUnseenReplies(0); }} />
           )}
         </div>
-          <button className="cal-btn cal-gear" onClick={() => setShowSettings(true)} aria-label="Calendar settings" title="Calendar settings">
+          <button className="cal-btn cal-gear" onClick={() => setShowSettings(true)} aria-label="My time off" title="My time off — ask for holidays">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           </button>
           </div>
@@ -1737,7 +1733,7 @@ onClick={(ev) => { ev.stopPropagation(); if (!opaque(e.userId) && e.merged === 1
       )}
       </section>
       <aside className="cv-todo" aria-label="Your to-do" aria-hidden={!todoOpen}>
-        <div className="cv-todo-in">{(todoOpen || todoSeen) && <HomeTodo />}</div>
+        <div className="cv-todo-in">{(todoOpen || todoSeen) && <TicketDesk startKind="task" />}</div>
       </aside>
       </div>
 
@@ -1758,7 +1754,7 @@ onClick={(ev) => { ev.stopPropagation(); if (!opaque(e.userId) && e.merged === 1
       )}
 
       {showSettings && (
-        <CalendarSettingsModal types={workTypes} setTypes={setWorkTypes} targets={targets} setTargets={setTargets} hideTargets cutoffs={cutoffs} setCutoffs={setCutoffs} defaultCutoffDay={defaultCutoffDay} setDefaultCutoffDay={setDefaultCutoffDay} holidays={holidays.map((h) => h.date)} onAddHoliday={addHoliday} onRemoveHoliday={removeHoliday} vacationAllowance={vacationAllowance} setVacationAllowance={setVacationAllowance} canEditTimeOff={role === "boss"} onClose={closeSettings} />
+        <CalendarSettingsModal types={workTypes} setTypes={setWorkTypes} targets={targets} setTargets={setTargets} hideTargets cutoffs={cutoffs} setCutoffs={setCutoffs} defaultCutoffDay={defaultCutoffDay} setDefaultCutoffDay={setDefaultCutoffDay} holidays={holidays.map((h) => h.date)} onAddHoliday={addHoliday} onRemoveHoliday={removeHoliday} vacationAllowance={vacationAllowance} setVacationAllowance={setVacationAllowance} canEditTimeOff={role === "boss"} requestOnly onOpenSetup={() => { setShowSettings(false); navigate("/settings", { state: { settingsView: "calendarpage" } }); }} onClose={closeSettings} />
       )}
 
       {modal && (

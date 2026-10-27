@@ -161,7 +161,8 @@ export interface TrackTask {
   /** When the "quick → process" rule turned it into a process. */
   promoted_at?: string | null;
 }
-export interface TaskStep { id: string; text: string; done: boolean }
+/** A step of a task; `who` is the person it's given to (a profile id). */
+export interface TaskStep { id: string; text: string; done: boolean; who?: string | null; /** Who ticked it off, and when. */ doneBy?: string | null; doneAt?: string | null }
 export const newStepId = () => Math.random().toString(36).slice(2, 10);
 export type MeetingKind = "teams" | "phone" | "in_person";
 export interface TrackMeeting {
@@ -852,7 +853,7 @@ const normTask = (t: any) => ({
   progress: Math.max(0, Math.min(100, Number(t.progress) || (t.done ? 100 : 0))),
   checklist: (Array.isArray(t.checklist) ? t.checklist : [])
     .filter((x: any) => x && typeof x.text === "string")
-    .map((x: any) => ({ id: String(x.id ?? newStepId()), text: x.text, done: !!x.done })) as TaskStep[],
+    .map((x: any) => ({ id: String(x.id ?? newStepId()), text: x.text, done: !!x.done, ...(x.who ? { who: String(x.who) } : {}), ...(x.done && x.doneBy ? { doneBy: String(x.doneBy), doneAt: x.doneAt ?? null } : {}) })) as TaskStep[],
 });
 
 /* ============================ Task settings & predefined tasks ============================ */

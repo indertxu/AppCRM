@@ -6,7 +6,7 @@ const AUTH_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize
 const SCOPES = "Calendars.ReadWrite offline_access User.Read";
 /** Asked when connecting "with mail" (ticket desk e-mail, campaigns). Users of tenants that block
  *  user consent need an admin to grant these once (Azure › API permissions › Grant admin consent). */
-const MAIL_SCOPES = "Mail.ReadWrite Mail.Send Mail.ReadWrite.Shared Mail.Send.Shared";
+const MAIL_SCOPES = "Mail.Read Mail.Send Mail.Read.Shared Mail.Send.Shared"; // read + send only (least privilege)
 const REDIRECT_URI = `${window.location.origin}/settings`; // must match Azure redirect URIs
 
 // --- PKCE helpers (required for SPA registrations) ---

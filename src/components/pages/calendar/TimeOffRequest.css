@@ -129,4 +129,94 @@
 @media (max-width: 760px) {
   .to-sums { grid-template-columns: repeat(2, 1fr); }
   .to-row { grid-template-columns: 1fr auto; row-gap: 6px; }
+}.to-row-status.is-cancelled { background: rgba(107, 127, 120, 0.13); color: #5a6f68; }
+
+/* ===== Settings › Calendar: approvals, allowances, holidays ===== */
+.toa { display: flex; flex-direction: column; gap: 12px; font-family: "Inter", system-ui, sans-serif; color: #0b241a; }
+.toa-note { margin: 0; padding: 9px 12px; border-radius: 11px; background: #fbf6ea; border: 1px dashed rgba(154, 106, 18, 0.3); font-size: 12.5px; color: #6f4f12; }
+.toa-err { margin: 0; padding: 8px 11px; border-radius: 10px; background: #fdebe8; font-size: 12.5px; color: #a33a26; }
+.toa-empty { margin: 4px 0; padding: 18px; border-radius: 12px; background: #f6faf8; text-align: center; font-size: 13px; color: #6f8a7f; }
+.toa-tabs { display: flex; gap: 4px; padding: 3px; border-radius: 12px; background: #eef4f1; align-self: flex-start; }
+.toa-tabs button { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border: 0; border-radius: 9px; background: none; font: 600 12.5px "Inter", sans-serif; color: #5a7d6d; cursor: pointer; }
+.toa-tabs button.is-on { background: #fff; color: #0b241a; box-shadow: 0 1px 2px rgba(5, 42, 30, 0.08), 0 6px 14px -9px rgba(5, 42, 30, 0.4); }
+.toa-tabs i { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: rgba(10, 111, 77, 0.09); font-style: normal; font-size: 10.5px; font-weight: 700; line-height: 18px; text-align: center; }
+.toa-tabs i.is-hot { background: #d98324; color: #fff; }
+.toa-list { display: flex; flex-direction: column; gap: 8px; }
+.toa-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 12px 14px; border-radius: 14px; background: #fff; border: 1px solid rgba(10, 111, 77, 0.1); }
+.toa-row.is-pending { border-color: rgba(217, 131, 36, 0.3); background: #fffdf8; }
+.toa-av { display: inline-grid; place-items: center; flex-shrink: 0; border-radius: 50%; color: #fff; font-weight: 700; }
+.toa-main { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.toa-who { display: flex; align-items: baseline; gap: 8px; font-size: 13.5px; }
+.toa-who em, .toa-person em { font-style: normal; font-size: 11.5px; color: #8aa298; text-transform: capitalize; }
+.toa-what { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 12.5px; color: #5a7d6d; }
+.toa-what b { color: #0b241a; font-weight: 650; }
+.toa-kind { height: 20px; padding: 0 8px; border-radius: 999px; background: #e6f5ee; color: #0a6f4d; font-size: 11px; font-weight: 700; line-height: 20px; }
+.toa-kind.is-sick { background: #fdebe8; color: #b8452f; }
+.toa-kind.is-personal { background: #eef0fd; color: #4f46c8; }
+.toa-ago { color: #a1b5ac; }
+.toa-note-q { font-size: 12.5px; color: #3d5a4f; font-style: italic; }
+.toa-dec { font-size: 12px; color: #6f8a7f; }
+.toa-acts { display: flex; align-items: center; gap: 6px; }
+.toa-btn { height: 32px; padding: 0 14px; border: 1px solid rgba(10, 111, 77, 0.16); border-radius: 10px; background: #fff; font: 650 12.5px "Inter", sans-serif; color: #3d5a4f; cursor: pointer; white-space: nowrap; }
+.toa-btn:hover { background: #f2f7f4; }
+.toa-btn.is-ok { border-color: #0a6f4d; background: #0a6f4d; color: #fff; }
+.toa-btn.is-ok:hover { background: #075a3e; }
+.toa-btn.is-bad { border-color: #c2412d; background: #c2412d; color: #fff; }
+.toa-btn:disabled { opacity: 0.5; cursor: default; }
+.toa-ask { display: flex; gap: 6px; margin-top: 8px; }
+.toa-ask input, .toa-q { flex: 1; min-width: 0; height: 34px; padding: 0 11px; border: 1px solid rgba(10, 111, 77, 0.16); border-radius: 10px; background: #fff; font: 13px "Inter", sans-serif; color: #0b241a; outline: none; }
+.toa-ask input:focus, .toa-q:focus { border-color: #12b57f; box-shadow: 0 0 0 3px rgba(18, 181, 127, 0.12); }
+.toa-def { display: flex; align-items: center; gap: 16px; padding: 14px 16px; border-radius: 14px; background: #f6faf8; border: 1px solid rgba(10, 111, 77, 0.08); }
+.toa-def > div:first-child { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.toa-def b { font-size: 13.5px; }
+.toa-def span { font-size: 12.5px; color: #6f8a7f; }
+.toa-step { display: flex; align-items: center; gap: 4px; }
+.toa-step button, .toa-year button { display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid rgba(10, 111, 77, 0.16); border-radius: 10px; background: #fff; font-size: 16px; color: #0a6f4d; cursor: pointer; }
+.toa-step button:hover, .toa-year button:hover { background: #eef7f2; }
+.toa-step > span { display: flex; flex-direction: column; align-items: center; min-width: 54px; }
+.toa-step > span b { font-family: "Space Grotesk", sans-serif; font-size: 22px; line-height: 1; color: #0b241a; }
+.toa-step > span i { font-style: normal; font-size: 10.5px; color: #8aa298; }
+.toa-bar { display: flex; align-items: center; gap: 12px; }
+.toa-year { display: flex; align-items: center; gap: 8px; }
+.toa-year b { min-width: 46px; text-align: center; font-family: "Space Grotesk", sans-serif; font-size: 16px; }
+.toa-sub { font-size: 12.5px; color: #6f8a7f; }
+.toa-table { display: flex; flex-direction: column; border-radius: 14px; border: 1px solid rgba(10, 111, 77, 0.1); overflow: hidden; background: #fff; }
+.toa-th, .toa-tr { display: grid; grid-template-columns: minmax(180px, 1.6fr) 150px 70px 70px 70px; align-items: center; gap: 10px; padding: 0 14px; }
+.toa-th { height: 36px; background: #f6faf8; font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #8aa298; }
+.toa-tr { min-height: 50px; border-top: 1px solid rgba(10, 111, 77, 0.07); }
+.toa-tr:hover { background: #fbfdfc; }
+.toa-person { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.toa-person > span { display: flex; flex-direction: column; min-width: 0; }
+.toa-person b { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.toa-days { display: flex; align-items: center; gap: 8px; }
+.toa-days input { width: 64px; height: 32px; padding: 0 9px; border: 1px solid rgba(10, 111, 77, 0.16); border-radius: 9px; font: 650 13px "Inter", sans-serif; color: #0b241a; text-align: center; outline: none; }
+.toa-days input::placeholder { color: #a1b5ac; font-weight: 500; }
+.toa-days input:focus { border-color: #12b57f; box-shadow: 0 0 0 3px rgba(18, 181, 127, 0.12); }
+.toa-days em { font-style: normal; font-size: 11px; color: #a1b5ac; }
+.toa-days em.is-saved { color: #0a8a5c; font-weight: 650; }
+.toa-num { font-size: 13px; font-variant-numeric: tabular-nums; color: #3d5a4f; }
+.toa-left { font-weight: 700; color: #0a7a52; }
+.toa-left.is-low { color: #b5671a; }
+.toa-left.is-over { color: #c2412d; }
+.toa-hadd { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.toa-pick { width: 170px; }
+.toa-pick .dp-trigger { height: 36px; padding: 0 11px; font-size: 13px; }
+.toa-arrow { color: #a1b5ac; }
+.toa-hlist { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; }
+.toa-hol { position: relative; display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 12px; background: #fff; border: 1px solid rgba(10, 111, 77, 0.1); }
+.toa-hol.is-weekend { opacity: 0.6; }
+.toa-hol-d { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 42px; height: 42px; border-radius: 11px; background: #fdf1e1; color: #b5671a; }
+.toa-hol-d b { font-family: "Space Grotesk", sans-serif; font-size: 17px; line-height: 1; }
+.toa-hol-d em { font-style: normal; font-size: 10px; font-weight: 700; text-transform: uppercase; }
+.toa-hol-n { display: flex; flex-direction: column; min-width: 0; }
+.toa-hol-n b { font-size: 13px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.toa-hol-n em { font-style: normal; font-size: 11.5px; color: #8aa298; }
+.toa-x { position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; border: 0; border-radius: 7px; background: none; color: #a1b5ac; font-size: 15px; cursor: pointer; opacity: 0; }
+.toa-hol:hover .toa-x { opacity: 1; }
+.toa-x:hover { background: #fdebe8; color: #b8452f; }
+@media (max-width: 760px) {
+  .toa-th, .toa-tr { grid-template-columns: minmax(0, 1fr) 110px 50px; }
+  .toa-th span:nth-child(4), .toa-th span:nth-child(5), .toa-tr > :nth-child(4), .toa-tr > :nth-child(5) { display: none; }
+  .toa-row { grid-template-columns: auto minmax(0, 1fr); }
+  .toa-acts { grid-column: 1 / -1; justify-content: flex-end; }
 }

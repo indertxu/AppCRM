@@ -136,6 +136,124 @@ export function newDeptKey(name: string, taken: string[]): string {
   return k;
 }
 
+/* ─────────────── security levels (Settings → Organization, 71_security_levels.sql) ───────────────
+   A company's security levels, like its departments, are its own: rename them,
+   add new ones (one per department, several inside a department), remove them.
+   Every level "works like" one of the built-in roles below (its base): that is
+   what the rest of the app and the database check (profiles.role), while page
+   access, panels and data scopes can be set per level (profiles.security_level). */
+export interface SecurityLevel { id: string; key: string; name: string; dept: string | null; base: string; color: string | null; sort: number; builtIn: boolean }
+/** The built-in roles, the levels a company starts with (key = what profiles.role accepts). */
+export const BUILTIN_LEVELS: { key: string; name: string; dept: string | null }[] = [
+  { key: "consultant", name: "Consultant", dept: "consultancy" },
+  { key: "consultancy_manager", name: "Consultancy manager", dept: "consultancy" },
+  { key: "customer_success", name: "Customer success", dept: "customer_success" },
+  { key: "sales", name: "Sales", dept: "sales" },
+  { key: "sales_manager", name: "Sales manager", dept: "sales" },
+  { key: "it", name: "IT", dept: "it" },
+  { key: "it_manager", name: "IT manager", dept: "it" },
+  { key: "marketing", name: "Marketing", dept: "marketing" },
+  { key: "marketing_manager", name: "Marketing manager", dept: "marketing" },
+  { key: "hr", name: "Human resources", dept: "human_resources" },
+  { key: "hr_manager", name: "HR manager", dept: "human_resources" },
+  { key: "boss", name: "Boss", dept: "management" },
+];
+export const BUILTIN_KEYS = BUILTIN_LEVELS.map((l) => l.key);
+/** What each built-in role can do, in a line (shown when choosing what a level works like). */
+export const BASE_HINT: Record<string, string> = {
+  consultant: "Own calendar, tasks and projects",
+  consultancy_manager: "Management of the consultancy team",
+  customer_success: "Customer success and Management",
+  sales: "Contacts, companies and the sales pipeline",
+  sales_manager: "Sales, marketing and Management",
+  it: "A team member, no management",
+  it_manager: "Management of the IT team",
+  marketing: "A team member, no management",
+  marketing_manager: "Marketing, sales and Management",
+  hr: "A team member, no management",
+  hr_manager: "Management of the HR team",
+  boss: "Everything, can't be limited",
+};
+const builtinRows = (): SecurityLevel[] => BUILTIN_LEVELS.map((l, i) => ({ id: l.key, key: l.key, name: l.name, dept: l.dept, base: l.key, color: null, sort: i, builtIn: true }));
+export const levelFromRow = (r: any, i = 0): SecurityLevel => {
+  const key = String(r.level_key ?? "");
+  const def = BUILTIN_LEVELS.find((l) => l.key === key);
+  return {
+    id: String(r.id ?? key), key, name: String(r.name ?? "").trim() || def?.name || prettyKey(key),
+    dept: r.dept_key ?? null, base: BUILTIN_KEYS.includes(String(r.base_role)) ? String(r.base_role) : def?.key ?? "consultant",
+    color: r.color ?? null, sort: Number.isFinite(Number(r.sort)) && r.sort != null ? Number(r.sort) : 100 + i, builtIn: r.built_in === true || (!!def && key === def.key && !r.id),
+  };
+};
+let levelCache: SecurityLevel[] | null = null;
+let levelLoading: Promise<SecurityLevel[]> | null = null;
+let levelsMissing = false;
+/** Fire after levels are added, renamed or removed: every list re-reads them. */
+export const LEVELS_EVENT = "next:security-levels-changed";
+/** Is 71_security_levels.sql installed? (false until the first read says so) */
+export const securityLevelsMissing = () => levelsMissing;
+/** The company's security levels, in their order (the built-in roles until 71_security_levels.sql runs). */
+export async function loadSecurityLevels(force = false): Promise<SecurityLevel[]> {
+  if (levelCache && !force) return levelCache;
+  if (levelLoading && !force) return levelLoading;
+  levelLoading = (async () => {
+    let { data, error } = await supabase.from("security_levels").select("*");
+    levelsMissing = !!error && /security_levels|schema cache|does not exist/i.test(error.message);
+    // a company's first visit: it starts with the built-in roles (only someone who may change them can save that)
+    if (!error && !(data ?? []).length) {
+      const seed = BUILTIN_LEVELS.map((l, i) => ({ level_key: l.key, name: l.name, dept_key: l.dept, base_role: l.key, sort: i, built_in: true }));
+      const ins = await supabase.from("security_levels").insert(seed).select("*");
+      if (!ins.error) data = ins.data;
+    }
+    const rows = error || !(data ?? []).length ? builtinRows() : ((data ?? []) as any[]).map((r, i) => levelFromRow(r, i));
+    // a built-in role nobody wrote down yet still has a name
+    BUILTIN_LEVELS.forEach((b) => { if (!rows.some((r) => r.key === b.key)) rows.push({ ...builtinRows().find((x) => x.key === b.key)!, id: `builtin:${b.key}`, sort: 900 }); });
+    levelCache = rows.sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name));
+    levelLoading = null;
+    return levelCache;
+  })();
+  return levelLoading;
+}
+/** Tell the app the levels changed (pass the new list when you have it). */
+export function securityLevelsChanged(list?: SecurityLevel[]) {
+  if (list) levelCache = list.slice().sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name));
+  else levelCache = null;
+  window.dispatchEvent(new CustomEvent(LEVELS_EVENT));
+}
+/** The security levels, kept up to date (the built-in roles while the first read runs). */
+export function useSecurityLevels(): SecurityLevel[] {
+  const [list, setList] = useState<SecurityLevel[]>(levelCache ?? builtinRows());
+  useEffect(() => {
+    let alive = true;
+    const read = (force: boolean) => { loadSecurityLevels(force).then((l) => { if (alive) setList(l); }).catch(() => {}); };
+    read(false);
+    const on = () => read(!levelCache);
+    window.addEventListener(LEVELS_EVENT, on);
+    return () => { alive = false; window.removeEventListener(LEVELS_EVENT, on); };
+  }, []);
+  return list;
+}
+/** A level's name from its key ("—" for none). */
+export function levelName(key: string | null | undefined): string {
+  if (!key) return "—";
+  const k = key.toLowerCase();
+  return (levelCache ?? builtinRows()).find((l) => l.key === k)?.name ?? prettyKey(k);
+}
+/** The built-in role a level works like (a built-in role is its own base). */
+export function levelBase(key: string | null | undefined): string | null {
+  if (!key) return null;
+  const k = key.toLowerCase();
+  if (BUILTIN_KEYS.includes(k)) return levelCache?.find((l) => l.key === k)?.base ?? k;
+  return levelCache?.find((l) => l.key === k)?.base ?? null;
+}
+/** A key for a new level, from its name ("Finance lead" → "finance_lead"), never a built-in one or one already taken. */
+export function newLevelKey(name: string, taken: string[]): string {
+  const base = name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40) || "level";
+  const used = new Set([...taken, ...BUILTIN_KEYS]);
+  let k = base, n = 2;
+  while (used.has(k)) k = `${base}_${n++}`;
+  return k;
+}
+
 /* ─────────────── which departments open each page (61_custom_departments.sql) ───────────────
    A page with a list opens to the people of those departments only ("*" = everyone).
    A page without one keeps the earlier rules (security role defaults, people, roles).
@@ -272,7 +390,7 @@ export function useDataScope(page: PageKey): { scope: DataScope; ready: boolean;
     return () => { alive = false; window.removeEventListener(SCOPES_EVENT, on); };
   }, [page]);
   if (!ready || !rules) return { scope: "all", ready: false, hidden: () => false };
-  const me = { userId, department, role: level, isFull: isSuper || level === "boss" };
+  const me = { userId, department, role: level, isFull: isSuper || levelBase(level) === "boss" };
   return { scope: scopeFor(rules, me, PAGE_SCOPES[page]), ready: true, hidden: (panel: string) => panelHiddenFor(rules, panel, me) };
 }
 
@@ -298,6 +416,7 @@ export const PANELS: PanelDef[] = [
   panel("settings", "catalog", "Products & Services", "Catalog, pricing & blueprints"),
   panel("settings", "pipelines", "Client Pipelines", "The phases a client goes through"),
   panel("settings", "proposal", "Proposal template", "Brand, copy & terms for proposals"),
+  panel("settings", "calendar", "Calendar settings", "Time off approvals, vacation days, holidays, hours & cutoffs"),
   panel("settings", "interface", "Interface", "Toolbar & layout", ["all"], true),
   panel("settings", "account", "Your account", "Password & details", ["all"], true),
   panel("management", "team", "Team", "Consultant cards, KPIs, connectors", ["none", "own", "all"]),
@@ -327,11 +446,12 @@ const DEFAULTS: Record<PageKey, "all" | string[]> = {
 };
 export const defaultAllowed = (page: PageKey, level: string | null | undefined) => {
   const d = DEFAULTS[page];
-  return d === "all" || (!!level && d.includes(level.toLowerCase()));
+  const base = levelBase(level);
+  return d === "all" || (!!base && d.includes(base));
 };
 /** Keep in sync with access_default() in empower_page_access_v3.sql. */
 export function defaultPanelLevel(key: string, level: string | null | undefined): Level {
-  const lvl = (level ?? "").toLowerCase();
+  const lvl = levelBase(level) ?? "";
   const def = panelDef(key);
   if (!def) return "none";
   if (def.locked) return "all";
@@ -395,7 +515,7 @@ export interface PageResult { allowed: boolean; source: PageSourceKind }
 export interface PanelResult { level: Level; source: PageSourceKind }
 
 /** Is the person's own role a "can't be limited" one? */
-export const isFullAccess = (p: Pick<AccessPerson, "level" | "isSuper">) => !!p.isSuper || (p.level ?? "").toLowerCase() === "boss";
+export const isFullAccess = (p: Pick<AccessPerson, "level" | "isSuper">) => !!p.isSuper || levelBase(p.level) === "boss";
 
 const steps = (p: AccessPerson, rules: PageRules): [PageSourceKind, PageMap | undefined][] => {
   const level = (p.level ?? "").toLowerCase();
@@ -449,8 +569,9 @@ export async function loadMySecurityLevel(): Promise<{ id: string | null; level:
   const { data: auth } = await supabase.auth.getSession();
   const uid = auth?.session?.user?.id;
   if (!uid) return { id: null, level: null, department: null, isSuper: false };
-  const { data: p } = await supabase.from("profiles").select("role, department, is_superadmin").eq("id", uid).maybeSingle();
-  let level = ((p as any)?.role ?? "").toString().toLowerCase() || null;
+  const [{ data: p }] = await Promise.all([supabase.from("profiles").select("*").eq("id", uid).maybeSingle(), loadSecurityLevels().catch(() => [])]);
+  // their own level (71_security_levels.sql), else their built-in role, else their department's
+  let level = ((p as any)?.security_level ?? (p as any)?.role ?? "").toString().toLowerCase() || null;
   const department = (p as any)?.department ?? null;
   if (!level && department) {
     const { data: d } = await supabase.from("org_departments").select("security_role").eq("dept_key", department).maybeSingle();
@@ -499,12 +620,14 @@ export function PageAccessProvider({ children }: { children: ReactNode }) {
 
   const reload = useCallback(async () => {
     // Preferred: the database works it out for the signed-in user.
-    const { data, error } = await supabase.rpc("my_pages");
+    const [{ data, error }, mine] = await Promise.all([supabase.rpc("my_pages"), loadMySecurityLevel()]);
     const rows = (!error && Array.isArray(data) ? data : []) as { page: string; allowed: boolean; level?: Level | null; source: PageSourceKind; security_level: string | null; is_superadmin: boolean }[];
     // A superadmin previewing another security level: resolve that level here instead.
     const { data: sess } = await supabase.auth.getSession();
     const previewing = !!getRolePreview(sess?.session?.user?.id ?? "-");
-    if (!previewing && rows.length && rows.some((r) => isPanelKey(r.page))) {
+    // my_pages() reads the built-in role: someone on a level of the company's own is resolved here
+    const sameLevel = !mine.level || (rows[0]?.security_level ?? "").toLowerCase() === mine.level;
+    if (!previewing && sameLevel && rows.length && rows.some((r) => isPanelKey(r.page))) {
       const pages = Object.fromEntries(PAGES.map((p) => {
         const r = rows.find((x) => x.page === p.key);
         // a page the database doesn't know yet (added after its rules were installed): the built-in default
@@ -514,15 +637,17 @@ export function PageAccessProvider({ children }: { children: ReactNode }) {
         const r = rows.find((x) => x.page === p.key);
         return [p.key, r ? { level: (r.level ?? (r.allowed ? "all" : "none")) as Level, source: r.source } : { level: p.locked ? "all" as const : "none" as const, source: "default" as const }];
       }));
-      const [{ data: auth }, me, pd] = await Promise.all([supabase.auth.getSession(), loadMySecurityLevel(), loadPageDepartments()]);
+      const [{ data: auth }, pd] = await Promise.all([supabase.auth.getSession(), loadPageDepartments()]);
+      const me = mine;
       const lvl = (rows[0].security_level ?? "").toLowerCase() || null;
-      const full = !!rows[0].is_superadmin || lvl === "boss";
+      const full = !!rows[0].is_superadmin || levelBase(lvl) === "boss";
       setState({ userId: auth?.session?.user?.id ?? null, department: me.department, level: lvl, isSuper: !!rows[0].is_superadmin, pages: applyPageDepartments(pages, pd.map, { department: me.department, isFull: full, userId: me.id }, pd.users), panels });
       return;
     }
     // Not installed (or an older version): resolve the same rules here.
     if (error) console.warn("[page-access] my_pages() unavailable, resolving in the browser:", error.message);
-    const [{ rules }, real, pd] = await Promise.all([loadPageRules(), loadMySecurityLevel(), loadPageDepartments()]);
+    const [{ rules }, pd] = await Promise.all([loadPageRules(), loadPageDepartments()]);
+    const real = mine;
     if (!real.id) { setState(null); return; }
     const pv = getRolePreview(real.id);
     const me = pv ? { ...real, level: pv.role, department: pv.department ?? real.department, isSuper: false } : real;
@@ -530,12 +655,13 @@ export function PageAccessProvider({ children }: { children: ReactNode }) {
     setState({ userId: real.id, department: me.department, level: me.level, isSuper: me.isSuper, pages: applyPageDepartments(resolveAllPages(person, rules), pd.map, { department: me.department, isFull: isFullAccess(person), userId: real.id }, pd.users), panels: resolveAllPanels(person, rules) });
   }, []);
 
-  useEffect(() => { reload(); loadDepartments().catch(() => {}); }, [reload]);
+  useEffect(() => { reload(); loadDepartments().catch(() => {}); loadSecurityLevels().catch(() => {}); }, [reload]);
   // Pick up changes made elsewhere (Organization, Page access, another tab) and sign-in changes.
   useEffect(() => {
     const again = () => { reload(); };
     const onVis = () => { if (document.visibilityState === "visible") reload(); };
     window.addEventListener(SECURITY_LEVEL_EVENT, again);
+    window.addEventListener(LEVELS_EVENT, again);
     window.addEventListener("focus", again);
     document.addEventListener("visibilitychange", onVis);
     // Not on INITIAL_SESSION (the mount already loads) nor on hourly token refreshes;
@@ -546,6 +672,7 @@ export function PageAccessProvider({ children }: { children: ReactNode }) {
     });
     return () => {
       window.removeEventListener(SECURITY_LEVEL_EVENT, again);
+      window.removeEventListener(LEVELS_EVENT, again);
       window.removeEventListener("focus", again);
       document.removeEventListener("visibilitychange", onVis);
       sub?.data?.subscription?.unsubscribe?.();

@@ -269,3 +269,28 @@
 .psec-hide { flex: none; width: 320px; }
 .psec-hide .pa4-dd { width: 100%; }
 @media (max-width: 720px) { .psec-prow { flex-wrap: wrap; } .psec-hide { width: 100%; } }
+
+/* ===== who can open one settings panel (Settings › Calendar › Access) ===== */
+.pxa { display: flex; flex-direction: column; gap: 14px; }
+.pxa-lead { display: flex; align-items: center; gap: 10px; margin: 0; padding: 11px 14px; border-radius: 12px; background: #f4f9f6; font-size: 13px; color: #3d5a4f; }
+.pxa-lead > svg { flex-shrink: 0; width: 16px; height: 16px; color: #0a6f4d; }
+.pxa-lead b { color: #0b241a; font-weight: 650; }
+.pxa-rows { display: flex; flex-direction: column; border: 1px solid rgba(10, 111, 77, 0.1); border-radius: 14px; overflow: hidden; background: #fff; }
+.pxa-row { display: grid; grid-template-columns: minmax(180px, 260px) minmax(0, 1fr); align-items: center; gap: 16px; padding: 12px 14px; }
+.pxa-row + .pxa-row { border-top: 1px solid rgba(10, 111, 77, 0.07); }
+.pxa-k { display: flex; flex-direction: column; gap: 2px; }
+.pxa-k b { font-size: 13.5px; font-weight: 650; color: #0b241a; }
+.pxa-k em { font-style: normal; font-size: 12px; color: #8aa298; }
+.pxa-row .pa4-dd { width: 100%; }
+.pxa-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pxa-who { display: flex; align-items: center; gap: 10px; margin-right: auto; font-size: 12.5px; color: #5a7d6d; }
+.pxa-who b { color: #0b241a; }
+.pxa-avs { display: inline-flex; }
+.pxa-avs i { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: #dff3e9; color: #0a6f4d; font-style: normal; font-size: 10px; font-weight: 700; box-shadow: 0 0 0 2px #fff; }
+.pxa-avs i + i { margin-left: -7px; }
+.pxa-avs em { margin-left: 6px; font-style: normal; font-size: 11.5px; font-weight: 700; color: #5a7d6d; align-self: center; }
+.pxa-msg { font-size: 12.5px; font-weight: 600; color: #8aa298; }
+.pxa-msg.is-ok { color: #0a8a5c; }
+.pxa-msg.is-err { color: #b8452f; }
+.pxa-skel { height: 200px; border-radius: 14px; background: #f1f6f3; }
+@media (max-width: 760px) { .pxa-row { grid-template-columns: minmax(0, 1fr); gap: 8px; } }

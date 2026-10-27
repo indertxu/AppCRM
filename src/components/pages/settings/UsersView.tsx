@@ -1,4 +1,5 @@
-import { LEVELS, TITLES } from "./NewUserModal";
+import { TITLES } from "./NewUserModal";
+import { levelName } from "../../framework/pageAccess";
 import { PageLoader } from "../../framework/AppLayout";
 
 export interface UserRow {
@@ -16,7 +17,7 @@ export interface UserRow {
   yearly_wage?: number | null;
 }
 
-const levelLabel = (id: string | null) => LEVELS.find((l) => l.id === id)?.label ?? id ?? "—";
+const levelLabel = (id: string | null) => (id ? levelName(id) : "—");
 const titleLabel = (id: string | null) => TITLES.find((t) => t.id === id)?.label ?? id ?? "—";
 
 export function initials(u: UserRow): string {

@@ -9,10 +9,15 @@ import Organization from "./Organization";
 import CatalogPage from "./CatalogPage";
 import PipelinePage from "./PipelinePage";
 import { ProposalSettings } from "./ProposalTemplateEditor";
-import PageAccessModal, { useSecuritySection } from "./PageAccessModal";
+import PageAccessModal, { useSecuritySection, PanelAccess } from "./PageAccessModal";
 import Select from "../../framework/Select";
 import TaskSettings from "./TaskSettings";
-import { usePageAccess, useNavSection, type PageKey } from "../../framework/pageAccess";
+import { FolderTemplatesEditor } from "../clients/ClientDirectory";
+import HoursEditor from "../calendar/HoursEditor";
+import { CutoffsEditor } from "../calendar/CalendarSettingsModal";
+import { TimeOffApprovals, TimeOffAllowances, PublicHolidays } from "../calendar/TimeOffRequest";
+import "../calendar/CalendarSettingsModal.css";
+import { usePageAccess, useNavSection, levelName, levelBase, type PageKey } from "../../framework/pageAccess";
 import { SuperAdminSwitch } from "../../framework/SuperAdmin";
 import { connectOutlook, completeOutlookConnect, outlookStatus, disconnectOutlook, outlookConnectError, OUTLOOK_CONNECTION_EVENT } from "../../api/outlookSync";
 import { DOCK_ITEMS, DOCK_ORDER_KEY, DOCK_ORDER_EVENT, orderDock } from "../../framework/Dock";
@@ -23,7 +28,7 @@ import SalesPage from "../sales/sales/SalesPage";
 import { useLocation, useNavigate } from "react-router-dom";
 import "./SettingsPage.css";
 
-const levelLabel = (id: string | null) => LEVELS.find((l) => l.id === id)?.label ?? id ?? "—";
+const levelLabel = (id: string | null) => (id ? levelName(id) : "—");
 
 type View = "home" | "users" | "organization" | "account" | "interface" | "catalog" | "pipeline" | "proposal" | "tasks" | "salespage" | "mgmtpage" | "clientpage" | "companiespage" | "contactspage"
   | "ticketspage" | "calendarpage" | "projectspage" | "successpage" | "marketingpage";
@@ -33,6 +38,7 @@ const VIEW_PANEL: Partial<Record<View, string>> = {
   catalog: "settings.catalog",
   pipeline: "settings.pipelines",
   proposal: "settings.proposal",
+  calendarpage: "settings.calendar",
 };
 /** The page a settings section belongs to: someone who can't open that page doesn't get its settings either
  *  (no Deals settings without Sales). Any one of the pages listed is enough. */
@@ -54,7 +60,6 @@ const VIEW_PAGES: Partial<Record<View, PageKey[]>> = {
 /** Pages whose settings are only their Security section for now (Bosses and superadmins). */
 const SECURITY_ONLY: { view: View; page: PageKey; icon: string; title: string; sub: string; accent: string; svg: string }[] = [
   { view: "ticketspage", page: "tickets", icon: "ticket", title: "Tickets page", sub: "Who sees which tickets and tasks", accent: "#e0a13c", svg: "M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4zM14 5v12" },
-  { view: "calendarpage", page: "calendar", icon: "calendar", title: "Calendar page", sub: "Whose calendars and logged time people see", accent: "#3c9ae0", svg: "M3 9h18M8 3v4M16 3v4M5 5h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z" },
   { view: "projectspage", page: "projects", icon: "folder", title: "Projects page", sub: "Which projects people see", accent: "#0a6f4d", svg: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM8 13h8" },
   { view: "successpage", page: "success", icon: "heart", title: "Customer success page", sub: "Which clients people follow up", accent: "#e0798c", svg: "M12 20.5s-7.5-4.4-7.5-10.2A4.3 4.3 0 0 1 12 7.6a4.3 4.3 0 0 1 7.5 2.7c0 5.8-7.5 10.2-7.5 10.2z" },
   { view: "marketingpage", page: "marketing", icon: "megaphone", title: "Marketing page", sub: "Which lists and campaigns people see", accent: "#9b6fd0", svg: "M4 10v4a1 1 0 0 0 1 1h2l5 4V5L7 9H5a1 1 0 0 0-1 1zM16 9.5a3.5 3.5 0 0 1 0 5M18.5 7a7 7 0 0 1 0 10" },
@@ -71,7 +76,7 @@ export default function SettingsPage() {
   const isBoss = (role ?? "").toString().toLowerCase() === "boss";
   /** Who may edit Page access: by SECURITY LEVEL (read live, as Organization shows it). */
   const { level: secLevel, isSuper: secSuper, canPanel, ready: accessReady, canSee: canSeePage } = usePageAccess();
-  const canEditAccess = secLevel === "boss" || secSuper || isSuperadmin === true;
+  const canEditAccess = levelBase(secLevel) === "boss" || secSuper || isSuperadmin === true;
   console.log("[page-access] security level (live) →", secLevel, "| can edit:", canEditAccess);
   const isManager = role === "consultancy_manager" || role === "sales_manager"
     || role === "customer_success" || role === "it_manager"
@@ -330,7 +335,9 @@ export default function SettingsPage() {
       { v: "salespage", title: "Deals", sub: "Import, export, deal fields & sales roles", accent: "#3c9ae0", keys: "sales deals import export fields roles", icon: I("M4 19V9M10 19V5M16 19v-7M22 19H2") },
       { v: "companiespage", title: "Companies", sub: "Fields, sectors, sources, import & clean-up", accent: "#d98324", keys: "companies fields sectors sources import", icon: I("M3 21h18M5 21V7l7-4 7 4v14M9 21v-4h6v4M9 9h.01M15 9h.01M9 13h.01M15 13h.01") },
       { v: "contactspage", title: "Contacts", sub: "Fields, import, export & clean-up", accent: "#e0574b", keys: "contacts people fields import", icon: I("M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8") },
-      { v: "clientpage", title: "Clients", sub: "API access to client documents & folders", accent: "#12b57f", keys: "clients api documents folders", icon: I("M7 8l-4 4 4 4M17 8l4 4-4 4M14 5l-4 14") },
+      { v: "clientpage", title: "Clients", sub: "Folder templates & API access to client documents", accent: "#12b57f", keys: "clients api documents folders", icon: I("M7 8l-4 4 4 4M17 8l4 4-4 4M14 5l-4 14") },
+      { v: "calendarpage", title: "Calendar", sub: "Time off & approvals, public holidays, working hours and cutoffs", accent: "#3c9ae0", keys: "calendar time off vacation holidays approvals allowance hours cutoffs billing security",
+        icon: I("M3 9h18M8 3v4M16 3v4", "M5 5h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z") },
       ...SECURITY_ONLY.map((x) => ({ v: x.view, title: x.title.replace(/ page$/, ""), sub: x.sub, accent: x.accent, keys: `${x.page} security`, icon: I(...x.svg.split(/(?=M)/)) })),
       { v: "mgmtpage", title: "Management", sub: "Incoming, billing & bonuses", accent: "#9b6fd0", keys: "management billing bonus backlog", icon: I("M3 4h18v16H3z", "M3 10h18M9 10v10") },
     ];
@@ -339,7 +346,7 @@ export default function SettingsPage() {
         icon: I("M5.5 4h13A2.5 2.5 0 0 1 21 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5v-11A2.5 2.5 0 0 1 5.5 4z", "M8 4v16"),
         stats: [[dockLabels ? "On" : "Off", "menu labels"], [outlookConnected ? "Synced" : "Off", "Outlook"]] },
       { v: "account", title: "Your account", sub: "Password & details", accent: "#5a7d6d", keys: "account password profile",
-        icon: I("M12 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8z", "M4 21a8 8 0 0 1 16 0"), stats: [[levelLabel(role), "your role"]] },
+        icon: I("M12 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8z", "M4 21a8 8 0 0 1 16 0"), stats: [[levelLabel(secLevel ?? role), "your level"]] },
     ];
     const needle = homeQ.trim().toLowerCase();
     const visible = (t: Tile) => viewOpen(t.v) && (crmLead || (t.v !== "companiespage" && t.v !== "contactspage"))
@@ -393,6 +400,7 @@ export default function SettingsPage() {
   if (view === "contactspage" && crmLead) return <ContactSettings onBack={() => setView("home")} />;
   if (view === "clientpage") return <ClientPageSettings onBack={() => setView("home")} canManage={canManage || isSuperadmin === true} />;
   if (view === "salespage") return <SalesPage settings={{ onBack: () => setView("home") }} />;
+  if (view === "calendarpage") return <CalendarPageSettings onBack={() => setView("home")} />;
   if (view === "mgmtpage") return <PageOnlySettings page="management" icon="grid" title="Management page" sub="Settings for incoming, billing & bonuses — and who sees whose figures" onBack={() => setView("home")} />;
   {
     const so = SECURITY_ONLY.find((x) => x.view === view);
@@ -568,7 +576,7 @@ export default function SettingsPage() {
       <header className="st-bar st-bar-back">
         <button className="uv-back" onClick={() => setView("home")}>‹ Settings</button>
         <h1 className="st-title">Your account</h1>
-        <p className="st-sub">Signed in as {myEmail} · {levelLabel(role)}</p>
+        <p className="st-sub">Signed in as {myEmail} · {levelLabel(secLevel ?? role)}</p>
       </header>
 
       <section className="st-section" style={{ maxWidth: 640 }}>
@@ -631,6 +639,22 @@ const hashKey = async (t: string) =>
     .map((b) => b.toString(16).padStart(2, "0")).join("");
 
 /** A page's settings that, for now, hold only its Security section. */
+/** Settings › Calendar: what the calendar runs on. People ask for their own time off from the calendar. */
+function CalendarPageSettings({ onBack }: { onBack: () => void }) {
+  const sec = useSecuritySection("calendar");
+  const sections = [
+    { k: "approvals", label: "Approvals", icon: "flag", tone: "amber" as const, title: "Time off requests", hint: "Approve, decline or cancel what people ask for — approved holidays go straight into their calendar", body: <TimeOffApprovals /> },
+    { k: "allowances", label: "Vacation days", icon: "users", tone: "green" as const, title: "Vacation days per person", hint: "The company default, and each person's own days for the year when they differ", body: <TimeOffAllowances /> },
+    { k: "holidays", label: "Public holidays", icon: "star", tone: "rose" as const, title: "Public holidays", hint: "Days off for everyone: nobody is expected to work them", body: <PublicHolidays /> },
+    { k: "hours", label: "Working hours", icon: "clock", tone: "blue" as const, title: "Working hours", hint: "The company's week, and where a department or a person differs", body: <div className="cws-hours-embed"><HoursEditor /></div> },
+    { k: "cutoffs", label: "Billing cutoffs", icon: "euro", tone: "violet" as const, title: "Billing cutoffs", hint: "The day each billing month closes", body: <CutoffsEditor /> },
+    ...(sec ? [{ ...sec, hint: "Whose calendars and logged time people see" }] : []),
+    ...(sec ? [{ k: "access", label: "Who can set it up", icon: "lock", tone: "slate" as const, title: "Who can open these settings", hint: "The people who approve time off and set holidays, hours and cutoffs",
+      body: <PanelAccess panelKey="settings.calendar" what="Settings › Calendar" /> }] : []),
+  ];
+  return <SettingsShell icon="calendar" title="Calendar" sub="Time off, public holidays, working hours and cutoffs" onBack={onBack} sections={sections} />;
+}
+
 function PageOnlySettings({ page, icon, title, sub, onBack }: { page: PageKey; icon: string; title: string; sub: string; onBack: () => void }) {
   const sec = useSecuritySection(page);
   return (
@@ -806,13 +830,15 @@ export function ClientPageSettings({ onBack, canManage }: { onBack: () => void; 
   );
   const active = (keys ?? []).filter((k) => statusOf(k) === "active").length;
   return (
-    <SettingsShell icon="lock" title="Client page" sub="Let other apps read and manage client documents and folders" onBack={onBack}
+    <SettingsShell icon="lock" title="Client page" sub="Standard folders for every client, and access for other apps" onBack={onBack}
       tags={<>
         <span className="sx-tag is-ok">{active} active key{active === 1 ? "" : "s"}</span>
         <span className="sx-tag">{clients.length} clients</span>
         <span className="sx-tag">{API_ENDPOINTS.length} endpoints</span>
       </>}
       sections={[
+        { k: "skeletons", label: "Folder templates", icon: "folder", tone: "amber", title: "Folder templates", hint: "Standard folder structures you add to any client from its Folders tab, in one click",
+          body: <FolderTemplatesEditor canEdit={canManage} /> },
         { k: "keys", label: "API keys", icon: "lock", tone: "green", count: (keys ?? []).length, title: "API keys", hint: "Who can reach client documents from outside, and how much they can do", body: keysBody },
         { k: "connect", label: "Connecting", icon: "link", tone: "blue", title: "Connecting", hint: "Where to call and how to send the key",
           body: (

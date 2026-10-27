@@ -34,22 +34,30 @@ function makePill(p: MentionPerson): HTMLSpanElement {
 }
 
 // Serialize the editor's DOM into plain text with mentions as "@[name](id)".
+// Lines the browser wraps in <div>/<p> (pasted text, older edits) become line breaks too.
 function serialize(root: HTMLElement): string {
   let out = "";
-  root.childNodes.forEach((node) => {
-    if (node.nodeType === Node.TEXT_NODE) {
-      out += node.textContent ?? "";
-    } else if (node instanceof HTMLElement) {
-      if (node.classList.contains("mi-pill")) {
-        out += `@[${node.dataset.name}](${node.dataset.mid})`;
-      } else if (node.tagName === "BR") {
-        out += "\n";
-      } else {
+  const walk = (parent: Node) => {
+    parent.childNodes.forEach((node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
         out += node.textContent ?? "";
+      } else if (node instanceof HTMLElement) {
+        if (node.classList.contains("mi-pill")) {
+          out += `@[${node.dataset.name}](${node.dataset.mid})`;
+        } else if (node.tagName === "BR") {
+          out += "\n";
+        } else if (node.tagName === "DIV" || node.tagName === "P") {
+          if (out && !out.endsWith("\n")) out += "\n";
+          walk(node);
+        } else {
+          walk(node);
+        }
       }
-    }
-  });
-  return out;
+    });
+  };
+  walk(root);
+  // a lone trailing <br> only keeps the caret on the new line
+  return out.endsWith("\n") && root.lastChild?.nodeName === "BR" ? out.slice(0, -1) : out;
 }
 
 // Turn "@[name](id)" text back into pills so an existing value can be edited.
@@ -175,6 +183,9 @@ export default function MentionInput({ value, onChange, people, onMention, place
     }
     if (e.key === "Enter") {
       if (!multiline) { e.preventDefault(); onEnter?.(); return; }
+      // ⌘ / Ctrl + Enter sends; Enter is a plain line break (not a <div> per line)
+      if (e.metaKey || e.ctrlKey) { if (onEnter) { e.preventDefault(); onEnter(); } return; }
+      e.preventDefault(); document.execCommand("insertLineBreak"); emit(); return;
     }
   };
 

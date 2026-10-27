@@ -6,9 +6,11 @@ import { supabase } from "../../api/supabase";
 import Select from "../../framework/Select";
 import DatePicker from "../../framework/DatePicker";
 import { recordChanges, loadHistoryUpTo, loadWeekNotes, loadChangeWeeks, reconstruct, todayISO, mondayOf, type HistoryEvent } from "./orgHistory";
-import { LEVELS, type NewUserPayload } from "./NewUserModal";
+import { type NewUserPayload } from "./NewUserModal";
 import NewUserModal from "./NewUserModal";
-import { DEFAULT_DEPARTMENTS, DEPT_COLORS, deptFromRow, departmentsChanged, newDeptKey, deptName, type Department } from "../../framework/pageAccess";
+import { DEFAULT_DEPARTMENTS, DEPT_COLORS, deptFromRow, departmentsChanged, newDeptKey, deptName, type Department,
+  useSecurityLevels, levelName, levelBase, newLevelKey, levelFromRow, securityLevelsChanged, securityLevelsMissing,
+  BUILTIN_LEVELS, BASE_HINT, SECURITY_LEVEL_EVENT, type SecurityLevel } from "../../framework/pageAccess";
 import "./Organization.css";
 
 /** The departments a company starts with (it can rename, add and remove them here). */
@@ -19,7 +21,13 @@ const deptOf = (k: string | null) => (k ? META.get(k) : undefined);
 const deptLabel = (k: string | null) => deptOf(k)?.name ?? (k ? deptName(k) : "—");
 const deptColor = (k: string | null) => deptOf(k)?.color ?? "#5a7d6d";
 const metaOf = (rows: Dept[]) => rows.map((r, i) => deptFromRow(r, i));
-const roleLabel = (id: string | null) => LEVELS.find((l) => l.id === id)?.label ?? id ?? "—";
+const roleLabel = (id: string | null) => (id ? levelName(id) : "—");
+/** The levels as choices: the department's own first, then the rest of the company's. */
+const levelChoices = (levels: SecurityLevel[], dept: string | null) => {
+  const mine = levels.filter((l) => dept && l.dept === dept);
+  const rest = levels.filter((l) => !(dept && l.dept === dept));
+  return [...mine, ...rest].map((l) => ({ value: l.key, label: l.name, hint: l.dept && l.dept !== dept ? deptLabel(l.dept) : l.dept ? undefined : "Whole company" }));
+};
 
 interface Dept {
   id: string;
@@ -41,6 +49,8 @@ interface OrgUser {
   last_name: string | null;
   email: string | null;
   role: string | null;
+  /** Their own security level (71_security_levels.sql); role is that level's base. */
+  security_level?: string | null;
   department: string | null;
   manager_id: string | null;
   org_x: number;
@@ -101,6 +111,7 @@ interface Props {
 
 export default function Organization({ canManage, canSeeSensitive = false, backRef, toolbarRef }: Props) {
   const [depts, setDepts] = useState<Dept[]>([]);
+  const levels = useSecurityLevels();
   /** Departments in their order, with the name / colour / mark lookups kept in step. */
   const setDeptRows = (rows: Dept[]) => {
     const meta = metaOf(rows);
@@ -112,7 +123,7 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
   const [users, setUsers] = useState<OrgUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
-  const [companyTab, setCompanyTab] = useState<"depts" | "people">("depts");
+  const [companyTab, setCompanyTab] = useState<"depts" | "people" | "levels">("depts");
   const [search, setSearch] = useState("");
   const [showAllPeople, setShowAllPeople] = useState(false);
   const [deptTab, setDeptTab] = useState<"settings" | "people">("people");
@@ -178,6 +189,12 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
       start_date: p.start_date, bank_iban: p.bank_iban, salary: p.salary,
       active: p.active !== false, deactivated_at: p.deactivated_at ?? null, deactivation_reason: p.deactivation_reason ?? null,
     })));
+    // each person's own level (71_security_levels.sql)
+    const lv = await supabase.from("profiles").select("id, security_level");
+    if (!lv.error) {
+      const m = new Map(((lv.data ?? []) as any[]).map((r) => [r.id, r.security_level ?? null]));
+      setUsers((us) => us.map((u) => ({ ...u, security_level: m.get(u.id) ?? null })));
+    }
     setLoading(false);
   }, []);
   useEffect(() => { load(); }, [load]);
@@ -207,6 +224,7 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
       case "manager_id": { const m = users.find((u) => u.id === value); return m ? nameOf(m) : "someone"; }
       case "parent_id": { const d = depts.find((x) => x.id === value); return d ? deptLabel(d.dept_key) : "another department"; }
       case "role":
+      case "security_level":
       case "security_role": return roleLabel(String(value));
       case "salary": return `€${Number(value).toLocaleString("es-ES")}`;
       case "placed": return value ? "added" : "removed";
@@ -245,7 +263,7 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
   const [saveError, setSaveError] = useState<string | null>(null);
 
   /** Add a department: its key comes from the name and never changes (renaming keeps every link). */
-  const createDept = async (name: string): Promise<string | null> => {
+  const createDept = async (name: string, withLevel = false): Promise<string | null> => {
     const clean = name.trim();
     if (!clean) return "Give the department a name.";
     if (depts.some((d) => deptLabel(d.dept_key).toLowerCase() === clean.toLowerCase())) return "There is already a department with that name.";
@@ -255,7 +273,60 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
     const sort = Math.max(-1, ...metaOf(depts).map((m) => m.sort)) + 1;
     const { data, error } = await supabase.from("org_departments").insert({ dept_key: key, name: clean, color, sort }).select("*").single();
     if (error) return /name|color|sort|schema cache/i.test(error.message) ? "Run 61_custom_departments.sql in Supabase first, then try again." : error.message;
-    setDeptRows([...depts, data as Dept]);
+    let row = data as Dept;
+    // its own security level, with the same name, as the department's default
+    if (withLevel) {
+      const made = await createLevel({ name: clean, dept: key, base: "consultant" });
+      if (typeof made !== "string") {
+        const up = await supabase.from("org_departments").update({ security_role: made.key }).eq("id", row.id);
+        if (!up.error) row = { ...row, security_role: made.key };
+      } else { setSaveError(`The department was added, but not its level: ${made}`); window.setTimeout(() => setSaveError(null), 6000); }
+    }
+    setDeptRows([...depts, row]);
+    return null;
+  };
+
+  /* ---------- security levels: add, change, remove ---------- */
+  const levelsNow = useRef(levels); levelsNow.current = levels;
+  const createLevel = async (v: { name: string; dept: string | null; base: string }): Promise<SecurityLevel | string> => {
+    const clean = v.name.trim();
+    if (!clean) return "Give the level a name.";
+    const all = levelsNow.current;
+    if (all.some((l) => l.name.toLowerCase() === clean.toLowerCase() && l.dept === v.dept)) return "There is already a level with that name here.";
+    const key = newLevelKey(clean, all.map((l) => l.key));
+    const sort = Math.max(-1, ...all.filter((l) => l.sort < 900).map((l) => l.sort)) + 1;
+    const { data, error } = await supabase.from("security_levels").insert({ level_key: key, name: clean, dept_key: v.dept, base_role: v.base, sort }).select("*").single();
+    if (error) return /security_levels|schema cache|does not exist/i.test(error.message) ? "Run 71_security_levels.sql in Supabase first, then try again." : error.message;
+    const made = levelFromRow(data);
+    securityLevelsChanged([...all, made]);
+    return made;
+  };
+  const saveLevel = async (l: SecurityLevel, patch: { name?: string; dept_key?: string | null; base_role?: string }): Promise<string | null> => {
+    const all = levelsNow.current;
+    const next: SecurityLevel = { ...l, ...(patch.name !== undefined ? { name: patch.name } : {}), ...(patch.dept_key !== undefined ? { dept: patch.dept_key } : {}), ...(patch.base_role !== undefined ? { base: patch.base_role } : {}) };
+    securityLevelsChanged(all.map((x) => (x.key === l.key ? next : x)));
+    // a built-in role the company never wrote down: write it now
+    const res = l.id.startsWith("builtin:")
+      ? await supabase.from("security_levels").insert({ level_key: l.key, name: next.name, dept_key: next.dept, base_role: next.base, sort: l.sort, built_in: true }).select("*").single()
+      : await supabase.from("security_levels").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", l.id).select("*").single();
+    if (res.error) {
+      securityLevelsChanged(all);
+      return /security_levels|schema cache|does not exist/i.test(res.error.message) ? "Run 71_security_levels.sql in Supabase first." : res.error.message;
+    }
+    if (l.id.startsWith("builtin:")) securityLevelsChanged(levelsNow.current.map((x) => (x.key === l.key ? levelFromRow(res.data) : x)));
+    if (patch.base_role) {
+      setUsers((us) => us.map((u) => (u.security_level === l.key ? { ...u, role: patch.base_role! } : u)));
+      window.dispatchEvent(new CustomEvent(SECURITY_LEVEL_EVENT));
+    }
+    return null;
+  };
+  const deleteLevel = async (l: SecurityLevel): Promise<string | null> => {
+    const { data, error } = await supabase.from("security_levels").delete().eq("id", l.id).select("id");
+    if (error || !(data ?? []).length) return error ? error.message : "You don't have permission to remove levels.";
+    securityLevelsChanged(levelsNow.current.filter((x) => x.key !== l.key));
+    setUsers((us) => us.map((u) => (u.security_level === l.key ? { ...u, security_level: null, role: l.base } : u)));
+    setDepts((ds) => ds.map((d) => (d.security_role === l.key ? { ...d, security_role: l.base } : d)));
+    window.dispatchEvent(new CustomEvent(SECURITY_LEVEL_EVENT));
     return null;
   };
   /** Remove a department: its people are left without one, the departments it led go to the top level. */
@@ -293,7 +364,20 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
     ) as Partial<OrgUser> : null;
 
     setUsers((us) => us.map((u) => (u.id === id ? { ...u, ...patch } : u)));
-    const { error } = await supabase.from("profiles").update(patch).eq("id", id);
+    let { error } = await supabase.from("profiles").update(patch).eq("id", id);
+    // before 71_security_levels.sql: a built-in level is still just the role
+    if (error && "security_level" in patch && /security_level/i.test(error.message)) {
+      const lv = patch.security_level ?? null;
+      if (lv && !BUILTIN_LEVELS.some((b) => b.key === lv)) {
+        if (before) setUsers((us) => us.map((u) => (u.id === id ? { ...u, ...before } : u)));
+        setSaveError("Run 71_security_levels.sql in Supabase to give people the company's own levels.");
+        window.setTimeout(() => setSaveError(null), 6000);
+        return;
+      }
+      const rest = { ...patch }; delete rest.security_level;
+      ({ error } = await supabase.from("profiles").update(rest).eq("id", id));
+    }
+    if ("security_level" in patch || "role" in patch) window.dispatchEvent(new CustomEvent(SECURITY_LEVEL_EVENT));
     if (error) {
       console.error("[org] saveUser failed:", error.message, patch);
       if (before) setUsers((us) => us.map((u) => (u.id === id ? { ...u, ...before } : u)));
@@ -378,6 +462,7 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
   const initials = (u: OrgUser) =>
     ((u.first_name?.[0] ?? u.email?.[0] ?? "?") + (u.last_name?.[0] ?? "")).toUpperCase();
   const effectiveRole = (u: OrgUser) => {
+    if (u.security_level) return u.security_level;
     if (u.role) return u.role;
     const d = viewDepts.find((x) => x.dept_key === u.department);
     return d?.security_role ?? null;
@@ -882,6 +967,7 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
             user={selUser}
             depts={depts}
             users={users}
+            levels={levels}
             canManage={canManage}
             canSeeSensitive={canSeeSensitive}
             nameOf={nameOf}
@@ -916,15 +1002,15 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
               />
             </div>
             <div className="org-field">
-              <label>Default security role</label>
+              <label>Default security level</label>
               <Select
                 value={selDept.security_role ?? ""}
                 disabled={!canManage}
                 onChange={(v) => saveDept(selDept.id, { security_role: v || null })}
                 placeholder="— None —"
-                options={[{ value: "", label: "— None —" }, ...LEVELS.map((l) => ({ value: l.id, label: l.label }))]}
+                options={[{ value: "", label: "— None —" }, ...levelChoices(levels, selDept.dept_key)]}
               />
-              <span className="org-field-note">Members inherit this role unless they have their own.</span>
+              <span className="org-field-note">Members get this level unless they have their own.</span>
             </div>
             {canManage && selDept.placed && (
               <button className="org-remove" onClick={() => { saveDept(selDept.id, { placed: false, parent_id: null }); setSelDeptId(null); }}>
@@ -974,16 +1060,22 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
                   />
                 </div>
                 <div className="org-field">
-                  <label>Default security role</label>
+                  <label>Default security level</label>
                   <Select
                     value={openDeptRow.security_role ?? ""}
                     disabled={!canManage}
                     onChange={(v) => saveDept(openDeptRow.id, { security_role: v || null })}
                     placeholder="— None —"
-                    options={[{ value: "", label: "— None —" }, ...LEVELS.map((l) => ({ value: l.id, label: l.label }))]}
+                    options={[{ value: "", label: "— None —" }, ...levelChoices(levels, openDeptRow.dept_key)]}
                   />
-                  <span className="org-field-note">Members inherit this role unless they have their own.</span>
+                  <span className="org-field-note">Members get this level unless they have their own.</span>
                 </div>
+                <LevelsEditor levels={levels} dept={openDeptRow.dept_key} deptDefault={openDeptRow.security_role}
+                  depts={depts.map((d) => ({ key: d.dept_key, name: deptLabel(d.dept_key), color: deptColor(d.dept_key) }))}
+                  countOf={(k) => users.filter((u) => u.active && effectiveRole(u) === k).length}
+                  canManage={canManage && !isPast}
+                  onCreate={createLevel} onSave={saveLevel} onDelete={deleteLevel}
+                  onMakeDefault={(k) => saveDept(openDeptRow.id, { security_role: k })} />
                 {canManage && openDeptRow.placed && !isPast && (
                   <button className="org-remove" onClick={() => { saveDept(openDeptRow.id, { placed: false, parent_id: null }); goCompany(); }}>Take off the company map</button>
                 )}
@@ -1027,13 +1119,23 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
               </div>
               {canManage && <button className="org-add-user" onClick={() => setShowCreate(true)}>+ New user</button>}
             </div>
-            <div className="org-seg" style={cssv({ "--k": companyTab === "depts" ? 0 : 1 })}>
+            <div className="org-seg is-3" style={cssv({ "--k": companyTab === "depts" ? 0 : companyTab === "people" ? 1 : 2 })}>
               <span className="org-seg-pill" aria-hidden="true" />
               <button className={companyTab === "depts" ? "is-on" : ""} onClick={() => setCompanyTab("depts")}>Departments <i>{viewDepts.length}</i></button>
               <button className={companyTab === "people" ? "is-on" : ""} onClick={() => setCompanyTab("people")}>People <i>{viewUsers.length}</i></button>
+              <button className={companyTab === "levels" ? "is-on" : ""} onClick={() => setCompanyTab("levels")}>Levels <i>{levels.length}</i></button>
             </div>
 
-            {companyTab === "depts" ? (
+            {companyTab === "levels" ? (
+              <div className="org-pane" key="levels">
+                <p className="org-palette-subhint">What each person can do. Every level works like one of the built-in roles; open a page's access to fine-tune a level.</p>
+                <LevelsEditor levels={levels} dept={null} deptDefault={null}
+                  depts={depts.map((d) => ({ key: d.dept_key, name: deptLabel(d.dept_key), color: deptColor(d.dept_key) }))}
+                  countOf={(k) => users.filter((u) => u.active && effectiveRole(u) === k).length}
+                  canManage={canManage && !isPast}
+                  onCreate={createLevel} onSave={saveLevel} onDelete={deleteLevel} />
+              </div>
+            ) : companyTab === "depts" ? (
               <div className="org-pane" key="depts">
                 {canManage && !isPast && <NewDept onCreate={createDept} />}
                 <div className="org-palette-list">
@@ -1114,7 +1216,7 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
 
       {showCreate && (
         <NewUserModal
-          allowedLevels={LEVELS.map((l) => l.id)}
+          allowedLevels={levels.map((l) => l.key)}
           onCreate={async (payload: NewUserPayload) => {
             const { data, error } = await supabase.functions.invoke("manage-users", { body: { action: "create", user: payload } });
             if (error) {
@@ -1139,10 +1241,10 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
 
 // ---- User info / edit panel ----
 function UserPanel({
-  user, depts, users, canManage, canSeeSensitive, nameOf, initials, effectiveRole, onSave, onClose, onDelete,
+  user, depts, users, levels, canManage, canSeeSensitive, nameOf, initials, effectiveRole, onSave, onClose, onDelete,
   onLayOff, onReactivate, reportsCount,
 }: {
-  user: OrgUser; depts: Dept[]; users: OrgUser[];
+  user: OrgUser; depts: Dept[]; users: OrgUser[]; levels: SecurityLevel[];
   canManage: boolean; canSeeSensitive: boolean;
   nameOf: (u: OrgUser) => string; initials: (u: OrgUser) => string;
   effectiveRole: (u: OrgUser) => string | null;
@@ -1342,13 +1444,13 @@ function UserPanel({
             ...users.filter((u) => u.id !== user.id && (u.active || u.id === user.manager_id)).map((u) => ({ value: u.id, label: nameOf(u) + (u.active ? "" : " (former)") }))]} />
       </div>
       <div className="org-field">
-        <label>Security role</label>
-        <Select value={form.role ?? ""} disabled={!canManage}
-          onChange={(v) => commit({ role: v || null })}
+        <label>Security level</label>
+        <Select value={form.security_level ?? form.role ?? ""} disabled={!canManage}
+          onChange={(v) => commit(v ? { security_level: v, role: levelBase(v) ?? "consultant" } : { security_level: null, role: null })}
           placeholder={`— Inherit (${roleLabel(deptRoleDefault)}) —`}
           options={[{ value: "", label: `— Inherit from department (${roleLabel(deptRoleDefault)}) —` },
-            ...LEVELS.map((l) => ({ value: l.id, label: l.label }))]} />
-        <span className="org-field-note">Effective role: <b>{roleLabel(effectiveRole(user))}</b></span>
+            ...levelChoices(levels, user.department)]} />
+        <span className="org-field-note">Effective level: <b>{roleLabel(effectiveRole(user))}</b>{(() => { const b = levelBase(effectiveRole(user)); return b && b !== effectiveRole(user) ? <> · works like {roleLabel(b)}</> : null; })()}</span>
       </div>
 
       {canSeeSensitive && (
@@ -1448,15 +1550,16 @@ function UserPanel({
   );
 }
 /* ---- Departments: a new one, its name / colour / mark, removing it ---- */
-function NewDept({ onCreate }: { onCreate: (name: string) => Promise<string | null> }) {
+function NewDept({ onCreate }: { onCreate: (name: string, withLevel: boolean) => Promise<string | null> }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
+  const [withLevel, setWithLevel] = useState(true);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const go = async () => {
     if (busy) return;
     setBusy(true); setErr(null);
-    const e = await onCreate(name);
+    const e = await onCreate(name, withLevel);
     setBusy(false);
     if (e) { setErr(e); return; }
     setName(""); setOpen(false);
@@ -1467,6 +1570,10 @@ function NewDept({ onCreate }: { onCreate: (name: string) => Promise<string | nu
       <input autoFocus value={name} placeholder="Department name, e.g. Finance" maxLength={60}
         onChange={(e) => { setName(e.target.value); setErr(null); }}
         onKeyDown={(e) => { if (e.key === "Enter") void go(); if (e.key === "Escape") { setOpen(false); setName(""); setErr(null); } }} />
+      <label className="org-check">
+        <input type="checkbox" checked={withLevel} onChange={(e) => setWithLevel(e.target.checked)} />
+        <span><b>Add a security level {name.trim() ? <>“{name.trim()}”</> : "with the same name"}</b><em>Its people get it by default — set what it can do in Levels.</em></span>
+      </label>
       <div className="org-newdept-act">
         <button className="org-ghost" onClick={() => { setOpen(false); setName(""); setErr(null); }}>Cancel</button>
         <button className="org-add-user" disabled={busy || !name.trim()} onClick={() => void go()}>{busy ? "Adding…" : "Add"}</button>
@@ -1530,6 +1637,169 @@ function DeptDelete({ name, members, onDelete }: { name: string; members: number
         <button className="org-ghost" disabled={busy} onClick={() => setAsk(false)}>Keep it</button>
         <button className="org-del-yes" disabled={busy} onClick={async () => { setBusy(true); const e = await onDelete(); setBusy(false); if (e) setErr(e); }}>{busy ? "Deleting…" : "Delete"}</button>
       </div>
+    </div>
+  );
+}
+
+/* ---------- security levels: the list, a level's details, a new one ---------- */
+const LV_ICON = "M12 3l7 3v6c0 4.5-3 7.6-7 9-4-1.4-7-4.5-7-9V6l7-3z";
+function LevelsEditor({ levels, dept, deptDefault, depts, countOf, canManage, onCreate, onSave, onDelete, onMakeDefault }: {
+  levels: SecurityLevel[];
+  /** Inside a department: its levels only (null = the whole company, grouped by department). */
+  dept: string | null;
+  deptDefault: string | null;
+  depts: { key: string; name: string; color: string }[];
+  countOf: (key: string) => number;
+  canManage: boolean;
+  onCreate: (v: { name: string; dept: string | null; base: string }) => Promise<SecurityLevel | string>;
+  onSave: (l: SecurityLevel, patch: { name?: string; dept_key?: string | null; base_role?: string }) => Promise<string | null>;
+  onDelete: (l: SecurityLevel) => Promise<string | null>;
+  onMakeDefault?: (key: string) => void;
+}) {
+  const [open, setOpen] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const missing = securityLevelsMissing();
+  const boxRef = useRef<HTMLDivElement>(null);
+  // the level just opened (or just made) comes into view
+  useEffect(() => {
+    if (!open) return;
+    const t = window.setTimeout(() => boxRef.current?.querySelector(`[data-lv="${open}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" }), 60);
+    return () => window.clearTimeout(t);
+  }, [open]);
+  const colorOf = (k: string | null) => depts.find((d) => d.key === k)?.color ?? "#7a8b99";
+  const groups: { key: string | null; name: string; color: string; items: SecurityLevel[] }[] = dept
+    ? [{ key: dept, name: depts.find((d) => d.key === dept)?.name ?? deptLabel(dept), color: colorOf(dept), items: levels.filter((l) => l.dept === dept) }]
+    : [...depts.map((d) => ({ key: d.key as string | null, name: d.name, color: d.color, items: levels.filter((l) => l.dept === d.key) })),
+       { key: null, name: "Whole company", color: "#7a8b99", items: levels.filter((l) => !l.dept || !depts.some((d) => d.key === l.dept)) }].filter((g) => g.items.length);
+  return (
+    <div className="org-lv" ref={boxRef}>
+      {dept && <span className="org-section-label">Security levels in this department</span>}
+      {missing && <p className="org-lv-warn">Run <b>71_security_levels.sql</b> in Supabase to add, rename and remove levels. Until then these are the built-in roles.</p>}
+      {canManage && !missing && (adding
+        ? <LevelNew dept={dept} depts={depts} onCancel={() => setAdding(false)} onCreate={async (v) => { const r = await onCreate(v); if (typeof r === "string") return r; setAdding(false); setOpen(r.key); return null; }} />
+        : <button className="org-newdept-btn" onClick={() => setAdding(true)}><span>+</span>New security level</button>)}
+      {groups.map((g) => (
+        <div className="org-lv-group" key={g.key ?? "_"} style={cssv({ "--c": g.color })}>
+          {!dept && <span className="org-lv-gname"><i />{g.name}<em>{g.items.length}</em></span>}
+          {g.items.length === 0 && <p className="org-empty-note">No levels of its own yet — add one above.</p>}
+          {g.items.map((l, i) => {
+            const n = countOf(l.key);
+            const isOpen = open === l.key;
+            return (
+              <div key={l.key} data-lv={l.key} className={`org-lv-row ${isOpen ? "is-open" : ""}`} style={cssv({ "--i": i })}>
+                <button className="org-lv-head" onClick={() => setOpen(isOpen ? null : l.key)} aria-expanded={isOpen}>
+                  <span className="org-lv-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={LV_ICON} /></svg></span>
+                  <span className="org-lv-main">
+                    <b>{l.name}{deptDefault === l.key && <i className="org-lv-def">Default</i>}</b>
+                    <small>{l.base === "boss" ? "Full access" : l.base === l.key ? BASE_HINT[l.base] ?? "Built-in" : `Works like ${levelName(l.base)}`}</small>
+                  </span>
+                  <span className="org-lv-n" title={`${n} ${n === 1 ? "person has" : "people have"} it`}>{n}</span>
+                  <svg className="org-lv-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+                </button>
+                {isOpen && <LevelDetails key={l.key} level={l} dept={dept} depts={depts} people={n} isDefault={deptDefault === l.key} canManage={canManage && !missing}
+                  onSave={(p) => onSave(l, p)} onDelete={async () => { const e = await onDelete(l); if (!e) setOpen(null); return e; }}
+                  onMakeDefault={onMakeDefault ? () => onMakeDefault(l.key) : undefined} />}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const baseChoices = () => BUILTIN_LEVELS.map((b) => ({ value: b.key, label: b.name, hint: BASE_HINT[b.key] }));
+
+function LevelDetails({ level, dept, depts, people, isDefault, canManage, onSave, onDelete, onMakeDefault }: {
+  level: SecurityLevel; dept: string | null; depts: { key: string; name: string }[]; people: number; isDefault: boolean; canManage: boolean;
+  onSave: (patch: { name?: string; dept_key?: string | null; base_role?: string }) => Promise<string | null>;
+  onDelete: () => Promise<string | null>;
+  onMakeDefault?: () => void;
+}) {
+  const [name, setName] = useState(level.name);
+  const [err, setErr] = useState<string | null>(null);
+  const [ask, setAsk] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setName(level.name); }, [level.name]);
+  const save = async (p: { name?: string; dept_key?: string | null; base_role?: string }) => { setErr(null); const e = await onSave(p); if (e) setErr(e); };
+  const commitName = () => { const v = name.trim(); if (!v) { setName(level.name); return; } if (v !== level.name) void save({ name: v }); };
+  const builtIn = BUILTIN_LEVELS.some((b) => b.key === level.key);
+  return (
+    <div className="org-lv-body">
+      <div className="org-field">
+        <label>Name</label>
+        <input className="org-lv-input" value={name} disabled={!canManage} maxLength={60}
+          onChange={(e) => setName(e.target.value)} onBlur={commitName}
+          onKeyDown={(e) => { if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur(); if (e.key === "Escape") setName(level.name); }} />
+      </div>
+      <div className="org-field">
+        <label>Department</label>
+        <Select value={level.dept ?? ""} disabled={!canManage} onChange={(v) => void save({ dept_key: v || null })}
+          options={[{ value: "", label: "Whole company" }, ...depts.map((d) => ({ value: d.key, label: d.name }))]} />
+      </div>
+      <div className="org-field">
+        <label>Works like</label>
+        {builtIn
+          ? <span className="org-lv-fixed">{BASE_HINT[level.key] ?? "Built-in role"}<em>Built-in — what the app was made around</em></span>
+          : <Select value={level.base} disabled={!canManage} onChange={(v) => void save({ base_role: v })} options={baseChoices()} />}
+        {!builtIn && <span className="org-field-note">What the rest of the app lets them do. Pages and panels can be fine-tuned for this level in each page's access settings.</span>}
+      </div>
+      {err && <span className="org-newdept-err">{err}</span>}
+      <div className="org-lv-acts">
+        {dept && onMakeDefault && !isDefault && canManage && <button className="org-ghost" onClick={onMakeDefault}>Make it the department's default</button>}
+        {!builtIn && canManage && !ask && <button className="org-lv-del" onClick={() => setAsk(true)}>Delete level</button>}
+      </div>
+      {ask && (
+        <div className="org-del-ask" role="alertdialog" aria-label={`Delete ${level.name}`}>
+          <b>Delete {level.name}?</b>
+          <span>{people ? `Its ${people} ${people === 1 ? "person keeps" : "people keep"} what ${levelName(level.base)} can do.` : "Nobody has it."}{isDefault ? " The department falls back to that role too." : ""}</span>
+          <div className="org-newdept-act">
+            <button className="org-ghost" disabled={busy} onClick={() => setAsk(false)}>Keep it</button>
+            <button className="org-del-yes" disabled={busy} onClick={async () => { setBusy(true); const e = await onDelete(); setBusy(false); if (e) { setErr(e); setAsk(false); } }}>{busy ? "Deleting…" : "Delete"}</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LevelNew({ dept, depts, onCreate, onCancel }: {
+  dept: string | null; depts: { key: string; name: string }[];
+  onCreate: (v: { name: string; dept: string | null; base: string }) => Promise<string | null>;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [inDept, setInDept] = useState<string>(dept ?? "");
+  const [base, setBase] = useState("consultant");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const go = async () => {
+    if (busy || !name.trim()) return;
+    setBusy(true); setErr(null);
+    const e = await onCreate({ name, dept: inDept || null, base });
+    setBusy(false);
+    if (e) setErr(e);
+  };
+  return (
+    <div className="org-newdept org-lv-new">
+      <input autoFocus value={name} placeholder="Level name, e.g. Finance lead" maxLength={60}
+        onChange={(e) => { setName(e.target.value); setErr(null); }}
+        onKeyDown={(e) => { if (e.key === "Enter") void go(); if (e.key === "Escape") onCancel(); }} />
+      {!dept && (
+        <div className="org-field">
+          <label>Department</label>
+          <Select value={inDept} onChange={setInDept} options={[{ value: "", label: "Whole company" }, ...depts.map((d) => ({ value: d.key, label: d.name }))]} />
+        </div>
+      )}
+      <div className="org-field">
+        <label>Works like</label>
+        <Select value={base} onChange={setBase} options={baseChoices()} />
+      </div>
+      <div className="org-newdept-act">
+        <button className="org-ghost" onClick={onCancel}>Cancel</button>
+        <button className="org-add-user" disabled={busy || !name.trim()} onClick={() => void go()}>{busy ? "Adding…" : "Add level"}</button>
+      </div>
+      {err && <p className="org-newdept-err">{err}</p>}
     </div>
   );
 }

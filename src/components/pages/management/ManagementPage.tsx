@@ -2318,7 +2318,7 @@ minPerMonth: targets.minPerMonth,
    ═══════════════════════════════════════════════════════════════════════ */
 interface DdFolder { id: string; dept_key: string; parent_id: string | null; name: string; color: string | null; sort: number; created_by: string | null; created_at: string; updated_at: string }
 interface DdItem {
-  id: string; dept_key: string; folder_id: string | null; kind: "file" | "link" | "note"; name: string;
+  id: string; dept_key: string; folder_id: string | null; kind: "file" | "link" | "note" | "table"; name: string;
   storage_path: string | null; mime: string | null; size_bytes: number | null; url: string | null; body: string | null; tags: string[];
   created_by: string | null; updated_by: string | null; created_at: string; updated_at: string;
 }
@@ -2339,6 +2339,7 @@ const ddWhen = (iso: string) => {
 function ddKind(it: Pick<DdItem, "kind" | "name" | "mime">): { label: string; color: string } {
   if (it.kind === "link") return { label: "LINK", color: "#3c8fd6" };
   if (it.kind === "note") return { label: "NOTE", color: "#e0a13c" };
+  if (it.kind === "table") return { label: "TABLE", color: "#12915f" };
   const ext = it.name.split(".").pop()?.toLowerCase() ?? "";
   if (ext === "pdf" || it.mime === "application/pdf") return { label: "PDF", color: "#d64545" };
   if (["doc", "docx", "odt", "rtf", "txt", "md"].includes(ext)) return { label: ext === "txt" || ext === "md" ? "TXT" : "DOC", color: "#2b6cd9" };
@@ -2361,6 +2362,7 @@ const DdIco = {
   up: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 16V4M7 9l5-5 5 5M5 20h14" /></svg>,
   link: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1" /><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1" /></svg>,
   note: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M6 3h9l4 4v14H6z" /><path d="M14 3v5h5M9 13h7M9 17h5" /></svg>,
+  table: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9.5h18M3 15h18M9 4v16" /></svg>,
   newFolder: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><path d="M12 11v5M9.5 13.5h5" /></svg>,
   grid: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><rect x="4" y="4" width="7" height="7" rx="1.6" /><rect x="13" y="4" width="7" height="7" rx="1.6" /><rect x="4" y="13" width="7" height="7" rx="1.6" /><rect x="13" y="13" width="7" height="7" rx="1.6" /></svg>,
   list: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" /></svg>,
@@ -2394,12 +2396,14 @@ function FolderGlyph({ c, size = 18 }: { c: string | null; size?: number }) {
 }
 function KindBadge({ it }: { it: DdItem }) {
   const k = ddKind(it);
-  return <i className="dd-kb" style={{ ["--c" as string]: k.color } as CSSProperties}>{it.kind === "link" ? DdIco.link : it.kind === "note" ? DdIco.note : k.label}</i>;
+  return <i className="dd-kb" style={{ ["--c" as string]: k.color } as CSSProperties}>{it.kind === "link" ? DdIco.link : it.kind === "note" ? DdIco.note : it.kind === "table" ? DdIco.table : k.label}</i>;
 }
 
 function DeptDrive({ people, myId, myDept, isAdmin }: { people: Record<string, string>; myId: string | null; myDept: string | null; isAdmin: boolean }) {
-  const depts = useDepartments() ?? [];
+  const deptList = useDepartments();
+  const depts = deptList ?? [];
   const spaces = isAdmin ? depts : depts.filter((d) => d.key === myDept);
+  const noSpace = deptList !== null && spaces.length === 0;
   const [space, setSpace] = useState<string | null>(null);
   useEffect(() => {
     if (space && spaces.some((d) => d.key === space)) return;
@@ -2425,7 +2429,7 @@ function DeptDrive({ people, myId, myDept, isAdmin }: { people: Record<string, s
   const [sel, setSel] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ ref: DdRef; x: number; y: number } | null>(null);
   const [newOpen, setNewOpen] = useState(false);
-  const [dlg, setDlg] = useState<null | { k: "folder"; parent: string | null } | { k: "link"; item?: DdItem } | { k: "note"; item?: DdItem } | { k: "rename"; ref: DdRef } | { k: "move"; ref: DdRef } | { k: "delete"; ref: DdRef }>(null);
+  const [dlg, setDlg] = useState<null | { k: "folder"; parent: string | null } | { k: "link"; item?: DdItem } | { k: "note"; item?: DdItem } | { k: "table"; item: DdItem } | { k: "rename"; ref: DdRef } | { k: "move"; ref: DdRef } | { k: "delete"; ref: DdRef }>(null);
   const [drag, setDrag] = useState<DdRef | null>(null);
   const [dropOn, setDropOn] = useState<string | null>(null);   // folder id, or "root"
   const [osDrag, setOsDrag] = useState(false);
@@ -2517,11 +2521,11 @@ function DeptDrive({ people, myId, myDept, isAdmin }: { people: Record<string, s
     folders.forEach((f) => { const path = pathStr(f.parent_id); const s = scoreOf(f.name, "", path); if (s) out.push({ ref: { t: "folder", id: f.id }, score: s + 5, name: f.name, path, snippet: "", f }); });
     items.forEach((it) => {
       const path = pathStr(it.folder_id);
-      const extra = [it.body ?? "", it.url ?? "", (it.tags ?? []).join(" "), people[it.created_by ?? ""] ?? ""].join(" ");
+      const extra = [it.kind === "table" ? dtSearchText(it.body) : it.body ?? "", it.url ?? "", (it.tags ?? []).join(" "), people[it.created_by ?? ""] ?? ""].join(" ");
       const s = scoreOf(it.name, extra, path);
       if (!s) return;
       let snippet = "";
-      const body = it.body ?? it.url ?? "";
+      const body = it.kind === "table" ? dtSearchText(it.body) : it.body ?? it.url ?? "";
       if (body) { const nb = ddNorm(body); const at = Math.max(0, ...words.map((w) => nb.indexOf(w))); snippet = (at > 40 ? "…" : "") + body.slice(Math.max(0, at - 40), at + 90).replace(/\s+/g, " "); }
       out.push({ ref: { t: "item", id: it.id }, score: s + (Date.parse(it.updated_at) / 1e13), name: it.name, path, snippet, it });
     });
@@ -2547,6 +2551,7 @@ function DeptDrive({ people, myId, myDept, isAdmin }: { people: Record<string, s
   const openItem = async (it: DdItem, download = false) => {
     if (it.kind === "link") { if (it.url) window.open(/^https?:\/\//i.test(it.url) ? it.url : `https://${it.url}`, "_blank", "noopener"); return; }
     if (it.kind === "note") { setDlg({ k: "note", item: it }); return; }
+    if (it.kind === "table") { setDlg({ k: "table", item: it }); return; }
     if (!it.storage_path) return;
     const { data, error } = await supabase.storage.from(DD_BUCKET).createSignedUrl(it.storage_path, 300, download ? { download: it.name } : undefined);
     if (error || !data?.signedUrl) { say(error ?? { message: "Couldn't open the file." }); return; }
@@ -2645,6 +2650,13 @@ function DeptDrive({ people, myId, myDept, isAdmin }: { people: Record<string, s
       setUps((u) => u.map((x, j) => (j === k ? { ...x, done: true } : x)));
     }
     window.setTimeout(() => setUps((u) => (u.every((x) => x.done && !x.err) ? [] : u)), 1800);
+  };
+  const createTable = async () => {
+    const row = { dept_key: space, folder_id: cwd, kind: "table", name: DT_PRESETS.blank.name, body: JSON.stringify({ v: 1, cols: DT_PRESETS.blank.cols, rows: [] }), updated_by: myId, updated_at: new Date().toISOString() };
+    const { data, error } = await supabase.from("dept_items").insert(row).select("*").single();
+    if (error) { say(/check|kind/i.test(error.message) ? { message: "Run 70_dept_tables.sql in Supabase to add tables." } : error); return; }
+    const now = new Date().toISOString(); const d0 = data as DdItem; const it = { ...d0, created_at: d0.created_at ?? now, updated_at: d0.updated_at ?? now, tags: [] };
+    setItems((xs) => [it, ...xs]); setSel(it.id); setDlg({ k: "table", item: it });
   };
   const saveLinkOrNote = async (kind: "link" | "note", v: { name: string; url?: string; body?: string }, item?: DdItem) => {
     const row: Record<string, unknown> = { name: v.name.trim() || (kind === "link" ? (v.url ?? "").replace(/^https?:\/\/(www\.)?/, "").split("/")[0] : "Untitled note"), url: kind === "link" ? v.url?.trim() || null : null, body: v.body ?? null, updated_at: new Date().toISOString(), updated_by: myId };
@@ -2838,6 +2850,7 @@ function DeptDrive({ people, myId, myDept, isAdmin }: { people: Record<string, s
                   <button onClick={() => { setNewOpen(false); uploadTo.current = cwd; fileRef.current?.click(); }}>{DdIco.up}<span><b>Upload files</b><em>Or drop them anywhere here</em></span></button>
                   <button onClick={() => { setNewOpen(false); setDlg({ k: "link" }); }}>{DdIco.link}<span><b>Link</b><em>A web page, a shared drive, a tool…</em></span></button>
                   <button onClick={() => { setNewOpen(false); setDlg({ k: "note" }); }}>{DdIco.note}<span><b>Note</b><em>A procedure, a checklist, contacts…</em></span></button>
+                  <button onClick={() => { setNewOpen(false); void createTable(); }}>{DdIco.table}<span><b>Table</b><em>Rows and columns: users & access, links to clients…</em></span></button>
                 </div>
               </>
             )}
@@ -2847,7 +2860,7 @@ function DeptDrive({ people, myId, myDept, isAdmin }: { people: Record<string, s
 
         {missing && <div className="dd-setup"><b>One step to switch the directory on</b><p>Run <code>65_department_drive.sql</code> in Supabase (SQL editor). It creates the folders, the files list and a private storage space per company.</p></div>}
 
-        {!ready ? <div className="dd-loading"><i className="dd-spin" />Opening the directory…</div> : searching ? (
+        {noSpace ? <div className="dd-loading">You aren't in a department yet — ask an admin to add you to one.</div> : !ready ? <div className="dd-loading"><i className="dd-spin" />Opening the directory…</div> : searching ? (
           <div className="dd-results" role="listbox" aria-label="Search results">
             {results.map((r, i) => (
               <button key={`${r.ref.t}${r.ref.id}`} role="option" aria-selected={i === hi} className={`dd-res ${i === hi ? "is-hi" : ""}`} onMouseEnter={() => setHi(i)} onClick={(e) => { e.stopPropagation(); pick(r); }}>
@@ -2857,7 +2870,7 @@ function DeptDrive({ people, myId, myDept, isAdmin }: { people: Record<string, s
                   <em>{r.path ? <DdMark text={r.path} words={words} /> : dept?.name}{r.it?.kind === "file" && r.it.size_bytes ? ` · ${ddSize(r.it.size_bytes)}` : ""}{r.it ? ` · ${ddWhen(r.it.updated_at)}` : ""}</em>
                   {r.snippet && <small><DdMark text={r.snippet} words={words} /></small>}
                 </span>
-                <span className="dd-res-k">{r.f ? "Folder" : r.it?.kind === "file" ? ddKind(r.it).label : r.it?.kind === "link" ? "Link" : "Note"}</span>
+                <span className="dd-res-k">{r.f ? "Folder" : r.it?.kind === "file" ? ddKind(r.it).label : r.it?.kind === "link" ? "Link" : r.it?.kind === "table" ? "Table" : "Note"}</span>
               </button>
             ))}
             {!results.length && <div className="dd-none"><p>Try fewer or other words. The search looks at names, folder paths, notes, links and who added things.</p></div>}
@@ -2905,13 +2918,16 @@ function DeptDrive({ people, myId, myDept, isAdmin }: { people: Record<string, s
                           onClick={(e) => { e.stopPropagation(); setSel(it.id); }} onDoubleClick={() => void openItem(it)}
                           onContextMenu={(e) => openMenu(e, { t: "item", id: it.id })} {...dragProps({ t: "item", id: it.id })}>
                           <div className="dd-card-face">
-                            {it.kind === "note" ? <p className="dd-card-note">{(it.body ?? "").slice(0, 220) || "Empty note"}</p>
+                            {it.kind === "table" ? (() => { const d = dtParse(it.body); return (
+                              <span className="dd-card-table">{d.cols.slice(0, 4).map((c) => <i key={c.id}>{c.name}</i>)}{Array.from({ length: Math.min(3, Math.max(1, d.rows.length)) }, (_, j) => <em key={j} style={{ ["--n" as string]: Math.min(4, d.cols.length) } as CSSProperties} />)}</span>
+                            ); })()
+                              : it.kind === "note" ? <p className="dd-card-note">{(it.body ?? "").slice(0, 220) || "Empty note"}</p>
                               : it.kind === "link" ? <span className="dd-card-link">{DdIco.link}<em>{(it.url ?? "").replace(/^https?:\/\/(www\.)?/, "").split("/")[0]}</em></span>
                               : <span className="dd-card-ext">{k.label}</span>}
                           </div>
                           <div className="dd-card-meta">
                             <b title={it.name}>{it.name}</b>
-                            <em>{it.kind === "file" ? ddSize(it.size_bytes) : it.kind === "link" ? "Link" : "Note"} · {ddWhen(it.updated_at)}</em>
+                            <em>{it.kind === "file" ? ddSize(it.size_bytes) : it.kind === "link" ? "Link" : it.kind === "table" ? `${dtParse(it.body).rows.length} rows` : "Note"} · {ddWhen(it.updated_at)}</em>
                           </div>
                           <button className="dd-card-more" onClick={(e) => openMenu(e, { t: "item", id: it.id })} aria-label="More">{DdIco.more}</button>
                         </div>
@@ -2935,7 +2951,7 @@ function DeptDrive({ people, myId, myDept, isAdmin }: { people: Record<string, s
                 ))}
               </>
             )}
-            <p className="dd-foot">{folders.length} folder{folders.length === 1 ? "" : "s"} · {totalFiles} file{totalFiles === 1 ? "" : "s"} · {items.length - totalFiles} links &amp; notes — drag anything onto a folder to move it.</p>
+            <p className="dd-foot">{folders.length} folder{folders.length === 1 ? "" : "s"} · {totalFiles} file{totalFiles === 1 ? "" : "s"} · {items.length - totalFiles} links, notes &amp; tables — drag anything onto a folder to move it.</p>
           </div>
         )}
 
@@ -2949,6 +2965,7 @@ function DeptDrive({ people, myId, myDept, isAdmin }: { people: Record<string, s
           {pv && isImg(selected) && <img className="dd-pv-img" src={pv} alt={selected.name} />}
           {pv && isPdf(selected) && <iframe className="dd-pv-pdf" title={selected.name} src={pv} />}
           {selected.kind === "note" && <p className="dd-pv-note">{selected.body || "Empty note"}</p>}
+          {selected.kind === "table" && (() => { const d = dtParse(selected.body); return <p className="dd-pv-note">{d.rows.length} row{d.rows.length === 1 ? "" : "s"} · {d.cols.map((c) => c.name).join(", ") || "no columns yet"}</p>; })()}
           {selected.kind === "link" && <a className="dd-pv-link" href={/^https?:\/\//i.test(selected.url ?? "") ? selected.url! : `https://${selected.url}`} target="_blank" rel="noreferrer">{selected.url}</a>}
           <dl className="dd-facts">
             <dt>Where</dt><dd>{[dept?.name, ...pathOf(selected.folder_id).map((f) => f.name)].join(" / ")}</dd>
@@ -2960,7 +2977,8 @@ function DeptDrive({ people, myId, myDept, isAdmin }: { people: Record<string, s
             {selected.kind === "file" && <button className="dd-btn is-primary" onClick={() => void openItem(selected)}>{DdIco.ext}Open</button>}
             {selected.kind === "file" && <button className="dd-btn" onClick={() => void openItem(selected, true)}>{DdIco.dl}Download</button>}
             {selected.kind === "link" && <button className="dd-btn is-primary" onClick={() => void openItem(selected)}>{DdIco.ext}Open link</button>}
-            {selected.kind !== "file" && <button className="dd-btn" onClick={() => setDlg(selected.kind === "link" ? { k: "link", item: selected } : { k: "note", item: selected })}>Edit</button>}
+            {selected.kind === "table" && <button className="dd-btn is-primary" onClick={() => setDlg({ k: "table", item: selected })}>{DdIco.table}Open table</button>}
+            {selected.kind !== "file" && selected.kind !== "table" && <button className="dd-btn" onClick={() => setDlg(selected.kind === "link" ? { k: "link", item: selected } : { k: "note", item: selected })}>Edit</button>}
             <button className={`dd-btn ${pinOf({ t: "item", id: selected.id }) ? "is-on" : ""}`} onClick={() => void togglePin({ t: "item", id: selected.id })}>{pinOf({ t: "item", id: selected.id }) ? <>{DdIco.pinOn}Pinned</> : <>{DdIco.pin}Pin</>}</button>
           </div>
         </aside>
@@ -2980,8 +2998,8 @@ function DeptDrive({ people, myId, myDept, isAdmin }: { people: Record<string, s
               {f && <button onClick={() => { close(); goFolder(f.id); }}>Open</button>}
               {it && it.kind === "file" && <button onClick={() => { close(); void openItem(it); }}>Open</button>}
               {it && it.kind === "file" && <button onClick={() => { close(); void openItem(it, true); }}>Download</button>}
-              {it && it.kind !== "file" && <button onClick={() => { close(); if (it.kind === "link") void openItem(it); else setDlg({ k: "note", item: it }); }}>Open</button>}
-              {it && it.kind !== "file" && <button onClick={() => { close(); setDlg(it.kind === "link" ? { k: "link", item: it } : { k: "note", item: it }); }}>Edit</button>}
+              {it && it.kind !== "file" && <button onClick={() => { close(); void openItem(it); }}>Open</button>}
+              {it && (it.kind === "link" || it.kind === "note") && <button onClick={() => { close(); setDlg(it.kind === "link" ? { k: "link", item: it } : { k: "note", item: it }); }}>Edit</button>}
               <button onClick={() => { close(); void togglePin(ref); }}>{pinned ? "Unpin" : "Pin to the side"}</button>
               <button onClick={() => { close(); setDlg({ k: "rename", ref }); }}>Rename</button>
               <button onClick={() => { close(); setDlg({ k: "move", ref }); }}>Move to…</button>
@@ -3021,6 +3039,8 @@ function DeptDrive({ people, myId, myDept, isAdmin }: { people: Record<string, s
         );
       })()}
       {dlg?.k === "link" && <DdLinkDialog item={dlg.item} onClose={() => setDlg(null)} onSave={async (v) => { if (await saveLinkOrNote("link", v, dlg.item)) setDlg(null); }} />}
+      {dlg?.k === "table" && <DdTableEditor item={dlg.item} people={people} onClose={() => setDlg(null)}
+        onSaved={(it) => setItems((xs) => xs.map((x) => (x.id === it.id ? { ...x, name: it.name, body: it.body, updated_at: it.updated_at } : x)))} />}
       {dlg?.k === "note" && <DdNoteDialog item={dlg.item} onClose={() => setDlg(null)} onSave={async (v) => { if (await saveLinkOrNote("note", v, dlg.item)) setDlg(null); }} />}
 
       {ups.length > 0 && (
@@ -3118,5 +3138,369 @@ function DdMoveDialog({ folders, kids, deptName, moving, blocked, onMove, onClos
         ))}
       </div>
     </DdModal>
+  );
+}
+
+/* =====================================================================
+   Department › Tables: a sheet of rows and columns kept in the directory
+   (users and access, contacts, inventories…). Each column has a type:
+   text, a client / company / team member (a link to them), a web address,
+   an e-mail, a hidden value (passwords), a number, a date or a tick.
+   Stored in dept_items (kind "table", the sheet as JSON in body).
+   ===================================================================== */
+type DtType = "text" | "client" | "company" | "person" | "url" | "email" | "secret" | "number" | "date" | "check";
+interface DtCol { id: string; name: string; type: DtType; width?: number }
+interface DtRow { id: string; c: Record<string, string> }
+interface DtData { v: 1; cols: DtCol[]; rows: DtRow[] }
+const dtId = () => Math.random().toString(36).slice(2, 10);
+const DT_TYPES: { t: DtType; label: string; hint: string; icon: string }[] = [
+  { t: "text", label: "Text", hint: "Anything", icon: "M5 6h14M12 6v12M9 18h6" },
+  { t: "client", label: "Client", hint: "Links to the client", icon: "M3 8h18v12H3zM8 8V5a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v3" },
+  { t: "company", label: "Company", hint: "Links to the company", icon: "M3 21h18M5 21V5l7-3v19M19 21V9l-7-3" },
+  { t: "person", label: "Team member", hint: "Someone in the team", icon: "M20 21a8 8 0 0 0-16 0M12 13a5 5 0 1 0 0-10 5 5 0 0 0 0 10z" },
+  { t: "url", label: "Web address", hint: "Opens in a new tab", icon: "M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1" },
+  { t: "email", label: "E-mail", hint: "Click to write", icon: "M4 5h16v14H4zM4 6l8 7 8-7" },
+  { t: "secret", label: "Hidden", hint: "Passwords, keys: shown as •••• until revealed", icon: "M5 11h14v10H5zM8 11V7a4 4 0 0 1 8 0v4" },
+  { t: "number", label: "Number", hint: "Sorted as a number", icon: "M4 9h16M4 15h16M10 3 8 21M16 3l-2 18" },
+  { t: "date", label: "Date", hint: "A day", icon: "M3 9h18M8 3v4M16 3v4M5 5h14v16H5z" },
+  { t: "check", label: "Tick", hint: "Yes / no", icon: "M5 12l5 5 9-10" },
+];
+const dtTypeOf = (t: DtType) => DT_TYPES.find((x) => x.t === t) ?? DT_TYPES[0];
+const DtI = ({ d, className }: { d: string; className?: string }) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>;
+/** A link cell keeps the id and the name it had: "id|Name". */
+const dtSplit = (v: string | undefined) => { const s = v ?? ""; const i = s.indexOf("|"); return i < 0 ? { id: s, label: s } : { id: s.slice(0, i), label: s.slice(i + 1) }; };
+export function dtParse(body: string | null | undefined): DtData {
+  try {
+    const d = JSON.parse(body || "{}");
+    const cols: DtCol[] = Array.isArray(d.cols) ? d.cols.filter((c: any) => c && c.id).map((c: any) => ({ id: String(c.id), name: String(c.name ?? ""), type: (DT_TYPES.some((t) => t.t === c.type) ? c.type : "text") as DtType, width: c.width ? Number(c.width) : undefined })) : [];
+    const rows: DtRow[] = Array.isArray(d.rows) ? d.rows.filter((r: any) => r && r.id).map((r: any) => ({ id: String(r.id), c: typeof r.c === "object" && r.c ? r.c : {} })) : [];
+    return { v: 1, cols, rows };
+  } catch { return { v: 1, cols: [], rows: [] }; }
+}
+/** What search reads in a table: everything but the hidden columns. */
+export function dtSearchText(body: string | null | undefined): string {
+  const d = dtParse(body);
+  const vis = d.cols.filter((c) => c.type !== "secret");
+  return [vis.map((c) => c.name).join(" "), ...d.rows.map((r) => vis.map((c) => (["client", "company", "person"].includes(c.type) ? dtSplit(r.c[c.id]).label : r.c[c.id] ?? "")).join(" "))].join(" ");
+}
+export const DT_PRESETS: Record<string, { name: string; cols: DtCol[] }> = {
+  blank: { name: "Untitled table", cols: [{ id: dtId(), name: "Name", type: "text", width: 220 }, { id: dtId(), name: "Notes", type: "text", width: 320 }] },
+  access: { name: "Environments & access", cols: [
+    { id: dtId(), name: "Client", type: "client", width: 190 }, { id: dtId(), name: "Environment", type: "text", width: 170 },
+    { id: dtId(), name: "URL", type: "url", width: 220 }, { id: dtId(), name: "User", type: "text", width: 170 },
+    { id: dtId(), name: "Password", type: "secret", width: 170 }, { id: dtId(), name: "Notes", type: "text", width: 240 },
+  ] },
+};
+
+function DtPick({ type, anchor, people, onPick, onClose }: { type: "client" | "company" | "person"; anchor: DOMRect; people: Record<string, string>; onPick: (v: string | null) => void; onClose: () => void }) {
+  const [q, setQ] = useState("");
+  const [res, setRes] = useState<{ id: string; name: string }[]>([]);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    let alive = true;
+    const t = window.setTimeout(async () => {
+      if (type === "person") {
+        const f = ddNorm(q);
+        setRes(Object.entries(people).filter(([, n]) => !f || ddNorm(n).includes(f)).slice(0, 30).map(([id, name]) => ({ id, name })));
+        return;
+      }
+      let qy = supabase.from(type === "client" ? "clients" : "companies").select("id, name").order("name").limit(25);
+      if (q.trim()) qy = qy.ilike("name", `%${q.trim()}%`);
+      const { data } = await qy;
+      if (alive) setRes(((data ?? []) as any[]).map((r) => ({ id: String(r.id), name: r.name ?? "" })));
+    }, q ? 180 : 0);
+    return () => { alive = false; window.clearTimeout(t); };
+  }, [q, type]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const down = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) onClose(); };
+    const tm = window.setTimeout(() => document.addEventListener("mousedown", down), 0);
+    return () => { window.clearTimeout(tm); document.removeEventListener("mousedown", down); };
+  }, [onClose]);
+  const top = anchor.bottom + 320 < window.innerHeight ? anchor.bottom + 4 : Math.max(8, anchor.top - 324);
+  return createPortal(
+    <div ref={ref} className="dt-pick" style={{ left: Math.min(anchor.left, window.innerWidth - 290), top }}>
+      <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder={type === "client" ? "Find a client…" : type === "company" ? "Find a company…" : "Find someone…"}
+        onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } if (e.key === "Enter" && res[0]) onPick(`${res[0].id}|${res[0].name}`); }} />
+      <div className="dt-pick-list">
+        {res.map((r) => <button key={r.id} type="button" onClick={() => onPick(`${r.id}|${r.name}`)}>{r.name}</button>)}
+        {!res.length && <p>Nothing found.</p>}
+      </div>
+      <button type="button" className="dt-pick-clear" onClick={() => onPick(null)}>Clear</button>
+    </div>,
+    document.body,
+  );
+}
+
+/** The sheet, full screen: edit the cells in place; saves by itself. */
+function DdTableEditor({ item, people, onSaved, onClose }: { item: DdItem; people: Record<string, string>; onSaved: (it: DdItem) => void; onClose: () => void }) {
+  const navigate = useNavigate();
+  const [name, setName] = useState(item.name);
+  const [data, setData] = useState<DtData>(() => dtParse(item.body));
+  const [edit, setEdit] = useState<{ r: string; c: string } | null>(null);
+  const [draft, setDraft] = useState("");
+  const [pick, setPick] = useState<{ r: string; c: string; rect: DOMRect } | null>(null);
+  const [colMenu, setColMenu] = useState<{ c: string; rect: DOMRect } | null>(null);
+  const [shown, setShown] = useState<Set<string>>(new Set());
+  const [copied, setCopied] = useState<string | null>(null);
+  const [q, setQ] = useState("");
+  const [sort, setSort] = useState<{ c: string; dir: 1 | -1 } | null>(null);
+  // drag & drop: a column by its header, a row by its handle (the number)
+  const [dragC, setDragC] = useState<string | null>(null);
+  const [dropC, setDropC] = useState<{ id: string; after: boolean } | null>(null);
+  const [dragR, setDragR] = useState<string | null>(null);
+  const [dropR, setDropR] = useState<{ id: string; after: boolean } | null>(null);
+  const [state, setState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const first = useRef(true);
+  // saves a moment after each change
+  useEffect(() => {
+    if (first.current) { first.current = false; return; }
+    const t = window.setTimeout(async () => {
+      setState("saving");
+      const row = { name: name.trim() || "Untitled table", body: JSON.stringify(data), updated_at: new Date().toISOString() };
+      const { error } = await supabase.from("dept_items").update(row).eq("id", item.id);
+      if (error) { setState("error"); return; }
+      onSaved({ ...item, ...row });
+      setState("saved"); window.setTimeout(() => setState((s) => (s === "saved" ? "idle" : s)), 1400);
+    }, 700);
+    return () => window.clearTimeout(t);
+  }, [data, name]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if (colMenu) { setColMenu(null); return; }
+      if (pick) { setPick(null); return; }
+      if (!edit) onClose();
+    };
+    window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k);
+  }, [edit, pick, colMenu, onClose]);
+
+  const setCell = (r: string, c: string, v: string | null) => setData((d) => ({ ...d, rows: d.rows.map((x) => (x.id === r ? { ...x, c: { ...x.c, [c]: v ?? "" } } : x)) }));
+  const addRow = () => { const r = { id: dtId(), c: {} }; setData((d) => ({ ...d, rows: [...d.rows, r] })); const c0 = data.cols[0]; if (c0) window.setTimeout(() => startEdit(r.id, c0.id, ""), 30); };
+  const delRow = (r: string) => setData((d) => ({ ...d, rows: d.rows.filter((x) => x.id !== r) }));
+  const addCol = (type: DtType = "text") => { const c: DtCol = { id: dtId(), name: dtTypeOf(type).label, type, width: 180 }; setData((d) => ({ ...d, cols: [...d.cols, c] })); };
+  const patchCol = (id: string, p: Partial<DtCol>) => setData((d) => ({ ...d, cols: d.cols.map((c) => (c.id === id ? { ...c, ...p } : c)) }));
+  const moveCol = (id: string, by: number) => setData((d) => { const i = d.cols.findIndex((c) => c.id === id), j = i + by; if (j < 0 || j >= d.cols.length) return d; const cols = [...d.cols]; [cols[i], cols[j]] = [cols[j], cols[i]]; return { ...d, cols }; });
+  const delCol = (id: string) => setData((d) => ({ ...d, cols: d.cols.filter((c) => c.id !== id), rows: d.rows.map((r) => { const c = { ...r.c }; delete c[id]; return { ...r, c }; }) }));
+  const usePreset = (k: keyof typeof DT_PRESETS) => { setData({ v: 1, cols: DT_PRESETS[k].cols.map((c) => ({ ...c, id: dtId() })), rows: [] }); if (!name.trim() || name === "Untitled table") setName(DT_PRESETS[k].name); };
+  const startEdit = (r: string, c: string, v: string) => { setEdit({ r, c }); setDraft(v); };
+  const commit = (next?: "down" | "right") => {
+    if (!edit) return;
+    setCell(edit.r, edit.c, draft);
+    const ri = rowsShown.findIndex((x) => x.id === edit.r), ci = data.cols.findIndex((x) => x.id === edit.c);
+    setEdit(null);
+    if (next === "down" && ri >= 0) {
+      if (ri === rowsShown.length - 1) addRow();
+      else { const rr = rowsShown[ri + 1]; startEdit(rr.id, edit.c, rr.c[edit.c] ?? ""); }
+    }
+    if (next === "right" && ci >= 0 && ci < data.cols.length - 1) {
+      const cc = data.cols[ci + 1];
+      if (["text", "url", "email", "secret", "number", "date"].includes(cc.type)) startEdit(edit.r, cc.id, data.rows.find((x) => x.id === edit.r)?.c[cc.id] ?? "");
+    }
+  };
+  const copy = (k: string, v: string) => { void navigator.clipboard?.writeText(v).then(() => { setCopied(k); window.setTimeout(() => setCopied((x) => (x === k ? null : x)), 1300); }); };
+  // resize a column by dragging the edge of its header
+  const resize = (e: ReactPointerEvent<HTMLSpanElement>, c: DtCol) => {
+    e.preventDefault(); e.stopPropagation();
+    const x0 = e.clientX, w0 = c.width ?? 180;
+    const mv = (ev: PointerEvent) => patchCol(c.id, { width: Math.max(80, Math.min(640, w0 + ev.clientX - x0)) });
+    const up = () => { window.removeEventListener("pointermove", mv); window.removeEventListener("pointerup", up); };
+    window.addEventListener("pointermove", mv); window.addEventListener("pointerup", up);
+  };
+  const textOf = (c: DtCol, v: string | undefined) => (["client", "company", "person"].includes(c.type) ? dtSplit(v).label : v ?? "");
+  const f = ddNorm(q.trim());
+  let rowsShown = data.rows.filter((r) => !f || ddNorm(data.cols.filter((c) => c.type !== "secret").map((c) => textOf(c, r.c[c.id])).join(" ")).includes(f));
+  const sortCol = sort ? data.cols.find((x) => x.id === sort.c) : undefined;
+  const sorted = (list: DtRow[]) => (!sort || !sortCol ? list : [...list].sort((a, b) => {
+    const x = textOf(sortCol, a.c[sortCol.id]), y = textOf(sortCol, b.c[sortCol.id]);
+    if (!x && y) return 1; if (x && !y) return -1;
+    return (sortCol.type === "number" ? (Number(x) || 0) - (Number(y) || 0) : x.localeCompare(y, undefined, { numeric: true })) * sort.dir;
+  }));
+  rowsShown = sorted(rowsShown);
+  const moveColTo = (from: string, to: string, after: boolean) => {
+    if (from === to) return;
+    setData((d) => {
+      const moving = d.cols.find((c) => c.id === from); if (!moving) return d;
+      const cols = d.cols.filter((c) => c.id !== from);
+      const i = cols.findIndex((c) => c.id === to); if (i < 0) return d;
+      cols.splice(i + (after ? 1 : 0), 0, moving);
+      return { ...d, cols };
+    });
+  };
+  // a row dropped keeps the order on screen (a sorted view becomes the table's own order)
+  const moveRowTo = (from: string, to: string, after: boolean) => {
+    if (from === to) return;
+    const base = sorted(data.rows);
+    const moving = base.find((r) => r.id === from); if (!moving) return;
+    const rows = base.filter((r) => r.id !== from);
+    const i = rows.findIndex((r) => r.id === to); if (i < 0) return;
+    rows.splice(i + (after ? 1 : 0), 0, moving);
+    setData((d) => ({ ...d, rows }));
+    setSort(null);
+  };
+  const endDrag = () => { setDragC(null); setDropC(null); setDragR(null); setDropR(null); };
+  const colDrop = (c: string) => (dropC?.id === c && dragC && dragC !== c ? (dropC.after ? " is-drop-r" : " is-drop-l") : "") + (dragC === c ? " is-dragging" : "");
+  const cellView = (r: DtRow, c: DtCol) => {
+    const v = r.c[c.id] ?? "";
+    const key = `${r.id}:${c.id}`;
+    if (c.type === "check") return <button type="button" className={`dt-check ${v === "1" ? "is-on" : ""}`} onClick={() => setCell(r.id, c.id, v === "1" ? "" : "1")} aria-label={v === "1" ? "Yes" : "No"}><DtI d="M5 12l5 5 9-10" /></button>;
+    if (["client", "company", "person"].includes(c.type)) {
+      const { id, label } = dtSplit(v);
+      return (
+        <div className="dt-linkcell" onClick={(e) => setPick({ r: r.id, c: c.id, rect: e.currentTarget.getBoundingClientRect() })}>
+          {id ? (
+            <button type="button" className={`dt-chip is-${c.type}`} title={c.type === "person" ? label : `Open ${label}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (c.type === "client") { onClose(); navigate(`/clients?client=${id}`); }
+                else if (c.type === "company") { onClose(); navigate("/companies", { state: { focusCompanyId: id } }); }
+                else setPick({ r: r.id, c: c.id, rect: (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect() });
+              }}>
+              <DtI d={dtTypeOf(c.type).icon} />{label}{c.type !== "person" && <DtI d="M7 17 17 7M8 7h9v9" className="dt-go" />}
+            </button>
+          ) : <span className="dt-ph">Pick…</span>}
+        </div>
+      );
+    }
+    const show = c.type !== "secret" || shown.has(key);
+    const display = !v ? <span className="dt-ph"> </span>
+      : c.type === "secret" && !show ? <span className="dt-dots">••••••••</span>
+      : c.type === "url" ? <a href={/^https?:\/\//i.test(v) ? v : `https://${v}`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>{v.replace(/^https?:\/\/(www\.)?/, "")}</a>
+      : c.type === "email" ? <a href={`mailto:${v}`} onClick={(e) => e.stopPropagation()}>{v}</a>
+      : c.type === "date" ? new Date(`${v}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })
+      : v;
+    return (
+      <div className={`dt-val is-${c.type}`} onClick={() => startEdit(r.id, c.id, v)}>
+        <span className="dt-txt">{display}</span>
+        {v && (c.type === "secret" || c.type === "text" || c.type === "url" || c.type === "email") && (
+          <span className="dt-tools" onClick={(e) => e.stopPropagation()}>
+            {c.type === "secret" && <button type="button" onClick={() => setShown((s) => { const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n; })} title={show ? "Hide" : "Show"} aria-label={show ? "Hide" : "Show"}>
+              <DtI d={show ? "M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 5.1A10 10 0 0 1 12 5c6 0 10 7 10 7a17 17 0 0 1-3.2 3.9M6.6 6.6A17 17 0 0 0 2 12s4 7 10 7a9.6 9.6 0 0 0 5.4-1.6" : "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"} /></button>}
+            <button type="button" onClick={() => copy(key, v)} title="Copy" aria-label="Copy">{copied === key ? <DtI d="M5 12l5 5 9-10" /> : <DtI d="M9 9h11v11H9zM5 15H4V4h11v1" />}</button>
+          </span>
+        )}
+      </div>
+    );
+  };
+  const cm = colMenu ? data.cols.find((c) => c.id === colMenu.c) : null;
+  const total = data.cols.reduce((n, c) => n + (c.width ?? 180), 0) + 44 + 48;
+  return createPortal(
+    <div className="dt-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="dt" role="dialog" aria-modal="true" aria-label={name}>
+        <header className="dt-head">
+          <span className="dt-badge"><DtI d="M3 5h18v14H3zM3 10h18M3 15h18M9 5v14" /></span>
+          <input className="dt-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Table name" />
+          <span className={`dt-state is-${state}`}>{state === "saving" ? "Saving…" : state === "saved" ? "Saved" : state === "error" ? "Not saved" : `${data.rows.length} row${data.rows.length === 1 ? "" : "s"}`}</span>
+          <span className="dt-grow" />
+          <label className="dt-search"><DtI d="M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.3-4.3" /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find in the table…" /></label>
+          <button type="button" className="dt-btn" onClick={(e) => setColMenu({ c: "__new", rect: e.currentTarget.getBoundingClientRect() })}><DtI d="M12 5v14M5 12h14" />Column</button>
+          <button type="button" className="dt-btn is-primary" onClick={addRow}><DtI d="M12 5v14M5 12h14" />Row</button>
+          <button type="button" className="dt-x" onClick={onClose} aria-label="Close"><DtI d="M18 6 6 18M6 6l12 12" /></button>
+        </header>
+        {data.cols.some((c) => c.type === "secret") && (
+          <p className="dt-warn"><DtI d="M5 11h14v10H5zM8 11V7a4 4 0 0 1 8 0v4" />Hidden values show as •••• and are only revealed on request — but anyone who can open this department can reveal them. Keep only what the team needs here.</p>
+        )}
+        <div className="dt-scroll">
+          {!data.rows.length && data.cols.length <= 2 && (
+            <div className="dt-start">
+              <b>Start from a layout</b>
+              <div>
+                <button type="button" onClick={() => usePreset("access")}><DtI d="M5 11h14v10H5zM8 11V7a4 4 0 0 1 8 0v4" /><span><b>Environments & access</b><em>Client · environment · URL · user · password · notes</em></span></button>
+                <button type="button" onClick={addRow}><DtI d="M3 5h18v14H3zM3 10h18M9 5v14" /><span><b>Keep these columns</b><em>Add your first row, change the columns any time</em></span></button>
+              </div>
+            </div>
+          )}
+          <table className="dt-table" style={{ minWidth: total }}>
+            <colgroup><col style={{ width: 44 }} />{data.cols.map((c) => <col key={c.id} style={{ width: c.width ?? 180 }} />)}<col /></colgroup>
+            <thead>
+              <tr>
+                <th className="dt-num">#</th>
+                {data.cols.map((c) => (
+                  <th key={c.id} className={colDrop(c.id).trim()}
+                    onDragOver={(e) => { if (!dragC) return; e.preventDefault(); e.dataTransfer.dropEffect = "move"; const b = e.currentTarget.getBoundingClientRect(); const after = e.clientX > b.left + b.width / 2; if (dropC?.id !== c.id || dropC.after !== after) setDropC({ id: c.id, after }); }}
+                    onDrop={(e) => { e.preventDefault(); if (dragC && dropC) moveColTo(dragC, dropC.id, dropC.after); endDrag(); }}>
+                    <button type="button" className="dt-th" draggable title="Drag to move · click for options"
+                      onDragStart={(e) => { setDragC(c.id); setColMenu(null); setEdit(null); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", c.name); }}
+                      onDragEnd={endDrag}
+                      onClick={(e) => setColMenu({ c: c.id, rect: e.currentTarget.getBoundingClientRect() })}>
+                      <DtI d={dtTypeOf(c.type).icon} /><span>{c.name || "Untitled"}</span>
+                      {sort?.c === c.id && <em>{sort.dir === 1 ? "↑" : "↓"}</em>}
+                    </button>
+                    <span className="dt-resize" draggable={false} onDragStart={(e) => e.preventDefault()} onPointerDown={(e) => resize(e, c)} />
+                  </th>
+                ))}
+                <th className="dt-addc"><button type="button" onClick={(e) => setColMenu({ c: "__new", rect: e.currentTarget.getBoundingClientRect() })} aria-label="Add a column"><DtI d="M12 5v14M5 12h14" /></button></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rowsShown.map((r, i) => (
+                <tr key={r.id} className={(dragR === r.id ? "is-dragging" : "") + (dropR?.id === r.id && dragR && dragR !== r.id ? (dropR.after ? " is-drop-b" : " is-drop-t") : "")}
+                  onDragOver={(e) => { if (!dragR) return; e.preventDefault(); e.dataTransfer.dropEffect = "move"; const b = e.currentTarget.getBoundingClientRect(); const after = e.clientY > b.top + b.height / 2; if (dropR?.id !== r.id || dropR.after !== after) setDropR({ id: r.id, after }); }}
+                  onDrop={(e) => { e.preventDefault(); if (dragR && dropR) moveRowTo(dragR, dropR.id, dropR.after); endDrag(); }}>
+                  <td className="dt-num">
+                    <span className="dt-grip" draggable title="Drag to move the row"
+                      onDragStart={(e) => { setDragR(r.id); setEdit(null); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", r.id); const tr = e.currentTarget.closest("tr"); if (tr) e.dataTransfer.setDragImage(tr, 20, 20); }}
+                      onDragEnd={endDrag}>
+                      <b>{i + 1}</b><DtI d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01" />
+                    </span>
+                  </td>
+                  {data.cols.map((c) => (
+                    <td key={c.id} className={(edit?.r === r.id && edit.c === c.id ? "is-edit" : "") + colDrop(c.id)}>
+                      {edit?.r === r.id && edit.c === c.id ? (
+                        <input className="dt-in" autoFocus type={c.type === "number" ? "number" : c.type === "date" ? "date" : "text"} value={draft}
+                          onChange={(e) => setDraft(e.target.value)} onBlur={() => commit()}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") { e.preventDefault(); commit("down"); }
+                            if (e.key === "Tab") { e.preventDefault(); commit("right"); }
+                            if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setEdit(null); }
+                          }} />
+                      ) : cellView(r, c)}
+                    </td>
+                  ))}
+                  <td className="dt-rowx"><button type="button" onClick={() => delRow(r.id)} title="Delete row" aria-label="Delete row"><DtI d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" /></button></td>
+                </tr>
+              ))}
+              <tr className="dt-addrow"><td colSpan={data.cols.length + 2}><button type="button" onClick={addRow}><DtI d="M12 5v14M5 12h14" />Add a row</button>{q && rowsShown.length !== data.rows.length && <em>{data.rows.length - rowsShown.length} hidden by the search</em>}</td></tr>
+            </tbody>
+          </table>
+        </div>
+        {pick && (() => {
+          const c = data.cols.find((x) => x.id === pick.c);
+          if (!c || !["client", "company", "person"].includes(c.type)) return null;
+          return <DtPick type={c.type as "client" | "company" | "person"} anchor={pick.rect} people={people} onClose={() => setPick(null)}
+            onPick={(v) => { setCell(pick.r, pick.c, v); setPick(null); }} />;
+        })()}
+        {colMenu && createPortal(
+          <>
+            <div className="dt-scrim" onMouseDown={() => setColMenu(null)} />
+            <div className="dt-cm" style={{ left: Math.min(colMenu.rect.left, window.innerWidth - 300), top: Math.min(colMenu.rect.bottom + 6, window.innerHeight - 420) }}>
+              {cm ? (
+                <>
+                  <input className="dt-cm-name" autoFocus value={cm.name} onChange={(e) => patchCol(cm.id, { name: e.target.value })} placeholder="Column name" onKeyDown={(e) => { if (e.key === "Enter") setColMenu(null); }} />
+                  <span className="dt-cm-k">Type</span>
+                  <div className="dt-cm-types">
+                    {DT_TYPES.map((t) => <button key={t.t} type="button" className={cm.type === t.t ? "is-on" : ""} onClick={() => patchCol(cm.id, { type: t.t })} title={t.hint}><DtI d={t.icon} />{t.label}</button>)}
+                  </div>
+                  <div className="dt-cm-row">
+                    <button type="button" onClick={() => { setSort(sort?.c === cm.id && sort.dir === 1 ? { c: cm.id, dir: -1 } : { c: cm.id, dir: 1 }); setColMenu(null); }}>Sort {sort?.c === cm.id && sort.dir === 1 ? "Z → A" : "A → Z"}</button>
+                    <button type="button" onClick={() => moveCol(cm.id, -1)} aria-label="Move left">←</button>
+                    <button type="button" onClick={() => moveCol(cm.id, 1)} aria-label="Move right">→</button>
+                  </div>
+                  <button type="button" className="dt-cm-del" onClick={() => { delCol(cm.id); setColMenu(null); }}>Delete column</button>
+                </>
+              ) : (
+                <>
+                  <span className="dt-cm-k">New column</span>
+                  <div className="dt-cm-types is-list">
+                    {DT_TYPES.map((t) => <button key={t.t} type="button" onClick={() => { addCol(t.t); setColMenu(null); }}><DtI d={t.icon} /><span><b>{t.label}</b><em>{t.hint}</em></span></button>)}
+                  </div>
+                </>
+              )}
+            </div>
+          </>,
+          document.body,
+        )}
+      </div>
+    </div>,
+    document.body,
   );
 }

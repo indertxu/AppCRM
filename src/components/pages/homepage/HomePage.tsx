@@ -15,8 +15,10 @@
  * consultancy sees consultancy), then by role. Anyone else gets the shared
  * column on its own, spread across the page.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useNavigate } from "react-router-dom";
+import { createPortal } from "react-dom";
+import { MentionText, mentionsToPlain } from "../../framework/MentionInput";
 import { supabase } from "../../api/supabase";
 import { useAuth } from "../../api/AuthProvider";
 import HomeCalendar from "./shared/HomeCalendar";
@@ -28,6 +30,7 @@ import { applyRolePreview } from "../../framework/SuperAdmin";
 import { PageCube } from "../../framework/AppLayout";
 import { usePageAccess, goToSection, guardedLeave, deptName, type PageKey } from "../../framework/pageAccess";
 import { isSalesLead, globalSearch, type SearchHit } from "../companies/companiesApi";
+import { loadMyInvites, loadMyReplies, markRepliesSeen, acceptInvite, declineInvite, type InviteCard } from "../calendar/invitesApi";
 import "./HomePage.css";
 
 const greeting = () => {
@@ -287,6 +290,7 @@ export default function HomePage() {
   }, [me, area]);
   const booting = boot.phase === "boot" || boot.phase === "done";
   const hello = `${greeting()}${me?.firstName ? `, ${me.firstName}` : ""}`;
+  const alerts = useHomeAlerts(uid && me ? uid : null);
 
   return (
     <div ref={rootRef} className={`home ${area === "consultancy" ? "is-cons" : ""} ${booting ? (boot.mode === "arrive" ? "is-held" : "is-held-grid") : ""} ${boot.phase === "out" ? `is-revealing is-revealing-${boot.mode}` : ""}`}>
@@ -295,11 +299,10 @@ export default function HomePage() {
       {area !== "consultancy" && (
         <header className="home-bar" ref={barRef}>
           <span className="home-logo-mini" aria-hidden="true"><NextLogo /></span>
-          <div className="home-hello">
-            <span className="home-eyebrow">{areaTitle(area)}</span>
-            <h1 className="home-title">{greeting()}{me?.firstName ? <>, <em>{me.firstName}</em></> : ""}</h1>
-          </div>
+          <h1 className="home-title">{greeting()}{me?.firstName ? <>, <em>{me.firstName}</em></> : ""}</h1>
           <span className="home-date">{new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}</span>
+          {area && <span className="home-area">{areaTitle(area)}</span>}
+          {uid && me && <HomeAlertsBell h={alerts} />}
         </header>
       )}
 
@@ -308,6 +311,7 @@ export default function HomePage() {
       ) : area === "consultancy" ? (
         <ConsultancyHome userId={me.id} isLead={isLead} hoursPerDay={hoursPerDay}
           greeting={greeting()} firstName={me.firstName} heroRef={barRef}
+          alertsBell={<HomeAlertsBell h={alerts} tone="dark" />}
           calendar={<HomeCalendar userId={uid} hoursPerDay={hoursPerDay} />}
           desk={<TicketDesk />} />
       ) : (
@@ -497,7 +501,7 @@ export function GlobalSearch() {
     const clName = new Map((dir?.clients ?? []).map((c) => [c.id, c.name]));
     if (!fq) {
       const mine = tickets.filter((t) => t.active && t.assignee === me).sort((a, b) => (a.due ?? "9").localeCompare(b.due ?? "9")).slice(0, 4)
-        .map((t) => ({ kind: "ticket" as const, id: t.id, label: t.title, sub: `${t.category === "task" ? "Task" : "Ticket"} ${ticketRef(t)} · ${stageLabel(t.stage, t.category)}${t.due ? ` · due ${new Date(t.due).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : ""}`, stage: t.stage }));
+        .map((t) => ({ kind: "ticket" as const, id: t.id, label: mentionsToPlain(t.title), sub: `${t.category === "task" ? "Task" : "Ticket"} ${ticketRef(t)} · ${stageLabel(t.stage, t.category)}${t.due ? ` · due ${new Date(t.due).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : ""}`, stage: t.stage }));
       const out: { kind: HitKind; title: string; hits: Hit[] }[] = [];
       if (recent.length) out.push({ kind: "client", title: "Recent", hits: recent });
       if (mine.length) out.push({ kind: "ticket", title: "Your open tickets & tasks", hits: mine });
@@ -514,7 +518,7 @@ export function GlobalSearch() {
       const sc = Math.max(scoreOf(t.label, fq), scoreOf(t.crumb.replace(/›/g, " "), fq) - 5, (t.words ? scoreOf(t.words, fq) : 0) - 15);
       if (sc > 0) all.push({ kind: "page", id: t.id, label: t.label, sub: t.crumb, score: sc + 2, extra: t });
     });
-    tickets.forEach((t) => add("ticket", t.id, t.title, `${t.category === "task" ? "Task" : "Ticket"} ${ticketRef(t)} · ${stageLabel(t.stage, t.category)}`, [t.title, ticketRef(t), t.no ? String(t.no) : "", t.category], t.active ? 4 : -10, t));
+    tickets.forEach((t) => add("ticket", t.id, mentionsToPlain(t.title), `${t.category === "task" ? "Task" : "Ticket"} ${ticketRef(t)} · ${stageLabel(t.stage, t.category)}`, [mentionsToPlain(t.title), ticketRef(t), t.no ? String(t.no) : "", t.category], t.active ? 4 : -10, t));
     (dir?.clients ?? []).forEach((c) => add("client", c.id, c.name, "Client", [c.name], 6));
     (dir?.deals ?? []).forEach((d) => add("deal", d.id, d.name, [d.companyId ? coName.get(d.companyId) : null, d.status].filter(Boolean).join(" · ") || "Deal", [d.name, d.companyId ? coName.get(d.companyId) ?? "" : ""], d.status === "active" ? 3 : 0));
     (dir?.companies ?? []).forEach((c) => add("company", c.id, c.name, c.legal && c.legal !== c.name ? c.legal : "Company", [c.name, c.legal ?? ""]));
@@ -615,5 +619,325 @@ export function GlobalSearch() {
           onClose={() => setNewTicket(null)} onCreated={(id) => { setNewTicket(null); setTicketOpen(id); }} />
       )}
     </div>
+  );
+}
+
+/* =====================================================================
+   ALERTS — always at the top of Home: what happened to you since you
+   last looked. Written by the database (66_home_alerts.sql): tasks and
+   tickets assigned to you, replies on them, notes that mention you,
+   meeting invitations and what became of them, answers to yours.
+   Before that SQL runs, the same is pieced together from invites and tasks.
+   ===================================================================== */
+interface HomeAlert {
+  id: string; kind: string; title: string; body: string | null; ref_type: string | null; ref_id: string | null;
+  actor_id: string | null; at: string | null; created_at: string; seen_at: string | null; local?: boolean;
+}
+const HA_VERB: Record<string, string> = {
+  task_assigned: "assigned you", task_added: "added you to", task_step: "gave you a step on", message: "replied on", mention: "mentioned you on", invite: "invited you to",
+  invite_moved: "moved", invite_cancelled: "cancelled", invite_removed: "took you off", invite_accepted: "accepted", invite_declined: "declined",
+};
+const HA_TONE: Record<string, string> = {
+  task_assigned: "task", task_added: "task", task_step: "task", message: "msg", mention: "msg", invite: "invite", invite_moved: "warn", invite_cancelled: "bad", invite_removed: "bad", invite_accepted: "ok", invite_declined: "bad",
+};
+const haIcon = (kind: string) => {
+  const p = kind === "task_assigned" || kind === "task_added" || kind === "task_step" ? <><rect x="4" y="4" width="16" height="16" rx="4" /><path d="M8.5 12.5l2.5 2.5 4.5-5" /></>
+    : kind === "message" ? <path d="M5 5h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H10l-4 3.5V16H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z" />
+    : kind === "mention" ? <><circle cx="12" cy="12" r="3.6" /><path d="M15.6 12v1.4a2.4 2.4 0 0 0 4.8 0V12a8.4 8.4 0 1 0-3.3 6.7" /></>
+    : kind === "invite_accepted" ? <><circle cx="12" cy="12" r="8.5" /><path d="M8.5 12.5l2.5 2.5 4.5-5" /></>
+    : kind === "invite_declined" || kind === "invite_cancelled" || kind === "invite_removed" ? <><circle cx="12" cy="12" r="8.5" /><path d="M9 9l6 6M15 9l-6 6" /></>
+    : kind === "invite_moved" ? <><rect x="3" y="5" width="18" height="15" rx="3" /><path d="M3 10h18M8 3v4M16 3v4M10 15h5M13 13l2 2-2 2" /></>
+    : <><rect x="3" y="5" width="18" height="15" rx="3" /><path d="M3 10h18M8 3v4M16 3v4" /></>;
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">{p}</svg>;
+};
+const haAgo = (iso: string) => {
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (s < 60) return "now"; if (s < 3600) return `${Math.floor(s / 60)} min`; if (s < 86400) return `${Math.floor(s / 3600)} h`;
+  if (s < 7 * 86400) return `${Math.floor(s / 86400)} d`;
+  return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+};
+const haWhen = (iso: string | null) => {
+  if (!iso) return "";
+  const d = new Date(iso); const t = new Date(); t.setHours(0, 0, 0, 0);
+  const diff = Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() - t.getTime()) / 864e5);
+  const day = diff === 0 ? "Today" : diff === 1 ? "Tomorrow" : diff === -1 ? "Yesterday" : d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+  return `${day} · ${d.toTimeString().slice(0, 5)}`;
+};
+
+/** The alerts of one person: read, kept live, and the actions on them. Home shows them in two places (bell + strip). */
+function useHomeAlerts(userId: string | null) {
+  const nav = useNavigate();
+  const [rows, setRows] = useState<HomeAlert[] | null>(null);
+  const [names, setNames] = useState<Record<string, string>>({});
+  const [inviteState, setInviteState] = useState<Record<string, string>>({});
+  /** task id → "ticket" | "task" */
+  const [cats, setCats] = useState<Record<string, string>>({});
+  const [missing, setMissing] = useState(false);
+  const [all, setAll] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [ticket, setTicket] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = async () => {
+    if (!userId) return;
+    const since = new Date(Date.now() - 30 * 864e5).toISOString();
+    const r = await supabase.from("user_alerts").select("id, kind, title, body, ref_type, ref_id, actor_id, at, created_at, seen_at")
+      .eq("user_id", userId).is("done_at", null).gte("created_at", since).order("created_at", { ascending: false }).limit(60);
+    let list: HomeAlert[] = [];
+    if (r.error) {
+      // before 66_home_alerts.sql: what can be read directly
+      setMissing(/relation|does not exist|schema cache|Could not find/i.test(r.error.message));
+      const [inv, rep, tk] = await Promise.all([
+        loadMyInvites(userId).catch(() => [] as InviteCard[]),
+        loadMyReplies(userId).catch(() => []),
+        supabase.from("tracking_tasks").select("id, title, created_by, created_at, done").eq("assignee_id", userId).gte("created_at", new Date(Date.now() - 7 * 864e5).toISOString()).limit(20),
+      ]);
+      // tasks you were added to as a watcher lately
+      const watch = await Promise.resolve(supabase.from("tracking_assignees").select("item_id, created_at").eq("item_type", "task").eq("kind", "employee").eq("employee_id", userId)
+        .gte("created_at", new Date(Date.now() - 7 * 864e5).toISOString()).limit(20)).then((r: any) => (r?.error ? [] : r?.data ?? []) as any[]).catch(() => [] as any[]);
+      const own = new Set((((tk as any).data ?? []) as any[]).map((t) => t.id));
+      const watchIds = [...new Set(watch.map((w) => w.item_id as string))].filter((id) => !own.has(id));
+      const wt = watchIds.length ? (((await supabase.from("tracking_tasks").select("id, title, created_by, created_at, done").in("id", watchIds)).data ?? []) as any[]) : [];
+      const addedAt = new Map(watch.map((w) => [w.item_id, w.created_at]));
+      list = [
+        ...inv.map((i) => ({ id: `inv:${i.id}`, kind: "invite", title: i.title || "A meeting", body: i.message, ref_type: "invite", ref_id: i.id, actor_id: i.organiser_id, at: `${i.entry_date}T${String(Math.floor(i.start_min / 60)).padStart(2, "0")}:${String(i.start_min % 60).padStart(2, "0")}:00`, created_at: i.created_at, seen_at: null, local: true })),
+        ...rep.filter((x) => !x.seen).map((x) => ({ id: `rep:${x.id}`, kind: `invite_${x.status}`, title: x.entry_title || "Your meeting", body: null, ref_type: "reply", ref_id: x.id, actor_id: null, at: `${x.entry_date}T${String(Math.floor(x.start_min / 60)).padStart(2, "0")}:${String(x.start_min % 60).padStart(2, "0")}:00`, created_at: x.responded_at, seen_at: null, local: true, actorName: x.invitee_name } as HomeAlert & { actorName: string })),
+        ...(((tk as any).data ?? []) as any[]).filter((t) => t.created_by !== userId && !t.done).map((t) => ({ id: `tk:${t.id}`, kind: "task_assigned", title: t.title || "A task", body: null, ref_type: "task", ref_id: t.id, actor_id: t.created_by, at: null, created_at: t.created_at, seen_at: null, local: true })),
+        ...wt.filter((t) => t.created_by !== userId && !t.done).map((t) => ({ id: `tw:${t.id}`, kind: "task_added", title: t.title || "A task", body: null, ref_type: "task", ref_id: t.id, actor_id: t.created_by, at: null, created_at: addedAt.get(t.id) ?? t.created_at, seen_at: null, local: true })),
+      ].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+      const fromReplies: Record<string, string> = {};
+      list.forEach((a: any) => { if (a.actorName) fromReplies[a.id] = a.actorName; });
+      setNames((n) => ({ ...n, ...Object.fromEntries(Object.entries(fromReplies).map(([k, v]) => [`@${k}`, v])) }));
+    } else {
+      setMissing(false);
+      list = (r.data ?? []) as HomeAlert[];
+    }
+    const actors = [...new Set(list.map((a) => a.actor_id).filter(Boolean))] as string[];
+    if (actors.length) {
+      const { data } = await supabase.from("profiles").select("id, first_name, last_name, email").in("id", actors);
+      setNames((n) => ({ ...n, ...Object.fromEntries(((data ?? []) as any[]).map((p) => [p.id, [p.first_name, p.last_name].filter(Boolean).join(" ") || p.email || "Someone"])) }));
+    }
+    // a task alert is about a ticket (a conversation) or a task (work): the popup files them apart
+    const taskIds = [...new Set(list.filter((a) => a.ref_type === "task" && a.ref_id).map((a) => a.ref_id!))] as string[];
+    if (taskIds.length) {
+      let tr: any = await supabase.from("tracking_tasks").select("id, category, source, requester_email, requester_name").in("id", taskIds);
+      if (tr.error) tr = await supabase.from("tracking_tasks").select("id, source, requester_email, requester_name").in("id", taskIds);
+      const CH = ["email", "phone", "portal", "message"];
+      setCats(Object.fromEntries(((tr.data ?? []) as any[]).map((r) => [r.id,
+        r.category === "ticket" || r.category === "task" ? r.category : CH.includes(r.source) || r.requester_email || r.requester_name ? "ticket" : "task"])));
+    }
+    const invIds = list.filter((a) => a.kind === "invite" && a.ref_id).map((a) => a.ref_id!) as string[];
+    if (invIds.length) {
+      const { data } = await supabase.from("entry_invites").select("id, status").in("id", invIds);
+      setInviteState(Object.fromEntries(((data ?? []) as any[]).map((i) => [i.id, i.status])));
+    } else setInviteState({});
+    setRows(list);
+  };
+  useEffect(() => {
+    if (!userId) return;
+    void load();
+    const again = () => { void load(); };
+    window.addEventListener(TICKETS_EVENT, again);
+    window.addEventListener("focus", again);
+    const t = window.setInterval(again, 90_000);
+    let ch: any = null;
+    try {
+      ch = supabase.channel(`alerts-${userId}`)
+        .on("postgres_changes", { event: "INSERT", schema: "public", table: "user_alerts", filter: `user_id=eq.${userId}` }, again)
+        .subscribe();
+    } catch { /* realtime off */ }
+    return () => { window.removeEventListener(TICKETS_EVENT, again); window.removeEventListener("focus", again); window.clearInterval(t); try { if (ch) supabase.removeChannel(ch); } catch { /* */ } };
+  }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const nowIso = () => new Date().toISOString();
+  const markSeen = async (ids: string[]) => {
+    const real = ids.filter((id) => !id.includes(":"));
+    setRows((rs) => rs?.map((a) => (ids.includes(a.id) ? { ...a, seen_at: a.seen_at ?? nowIso() } : a)) ?? rs);
+    if (real.length) await supabase.from("user_alerts").update({ seen_at: nowIso() }).in("id", real).is("seen_at", null);
+    const replies = ids.filter((id) => id.startsWith("rep:")).map((id) => id.slice(4));
+    if (replies.length) await markRepliesSeen(replies);
+  };
+  const clear = async (ids: string[]) => {
+    setRows((rs) => rs?.filter((a) => !ids.includes(a.id)) ?? rs);
+    const real = ids.filter((id) => !id.includes(":"));
+    if (real.length) await supabase.from("user_alerts").update({ done_at: nowIso(), seen_at: nowIso() }).in("id", real);
+    const replies = ids.filter((id) => id.startsWith("rep:")).map((id) => id.slice(4));
+    if (replies.length) await markRepliesSeen(replies);
+  };
+  const answer = async (a: HomeAlert, yes: boolean) => {
+    if (!a.ref_id) return;
+    setBusy(a.id); setErr(null);
+    let e: string | null = null;
+    if (!userId) return;
+    if (yes) {
+      const card = (await loadMyInvites(userId).catch(() => [] as InviteCard[])).find((i) => i.id === a.ref_id);
+      e = card ? await acceptInvite(card, userId) : "This invitation isn't open any more.";
+    } else e = await declineInvite(a.ref_id);
+    setBusy(null);
+    if (e) { setErr(e); return; }
+    setInviteState((s) => ({ ...s, [a.ref_id!]: yes ? "accepted" : "declined" }));
+    await markSeen([a.id]);
+  };
+  const open = (a: HomeAlert) => {
+    void markSeen([a.id]);
+    if (a.ref_type === "task" && a.ref_id) { setTicket(a.ref_id); return; }
+    if (a.ref_type === "client") { nav("/clients"); return; }
+    nav("/calendar");
+  };
+
+  const unseen = (rows ?? []).filter((a) => !a.seen_at).length;
+  return { rows, names, inviteState, cats, missing, all, setAll, busy, ticket, setTicket, err, markSeen, clear, answer, open, unseen };
+}
+type HomeAlertsState = ReturnType<typeof useHomeAlerts>;
+
+/** What an alert is about, for the tabs of the notifications window. */
+type HaCat = "invites" | "meetings" | "tasks" | "tickets" | "mentions";
+const HA_CATS: { key: HaCat | "all"; label: string }[] = [
+  { key: "all", label: "All" }, { key: "invites", label: "Invitations" }, { key: "meetings", label: "Meetings" },
+  { key: "tasks", label: "Tasks" }, { key: "tickets", label: "Tickets" }, { key: "mentions", label: "Mentions" },
+];
+const haCatsOf = (a: HomeAlert, cats: Record<string, string>): HaCat[] => {
+  if (a.kind === "invite") return ["invites"];
+  if (a.kind.startsWith("invite_")) return ["meetings"];
+  const out: HaCat[] = [];
+  if (a.ref_type === "task") out.push(a.ref_id && cats[a.ref_id] === "ticket" ? "tickets" : "tasks");
+  if (a.kind === "mention") out.push("mentions");
+  return out.length ? out : ["mentions"];
+};
+const haDay = (iso: string) => {
+  const d = new Date(iso); const t = new Date(); t.setHours(0, 0, 0, 0);
+  const diff = Math.round((t.getTime() - new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()) / 864e5);
+  return diff <= 0 ? "Today" : diff === 1 ? "Yesterday" : diff < 7 ? "This week" : "Earlier";
+};
+
+/**
+ * The bell next to Customize: how many new notifications (or a check when there's none).
+ * It opens a window over the page — nothing on Home moves — with every notification,
+ * all together or by kind: invitations, meetings, tasks, tickets, mentions.
+ */
+function HomeAlertsBell({ h, tone = "light" }: { h: HomeAlertsState; tone?: "light" | "dark" }) {
+  const btn = useRef<HTMLButtonElement>(null);
+  const [at, setAt] = useState<DOMRect | null>(null);
+  if (!h.rows) return null;
+  const n = h.rows.length;
+  const calm = n === 0;
+  return (
+    <>
+      <button ref={btn} type="button" className={`ha-bell is-${tone} ${calm ? "is-calm" : ""} ${h.unseen ? "has-new" : ""} ${at ? "is-on" : ""}`}
+        onClick={() => setAt(at ? null : btn.current?.getBoundingClientRect() ?? null)} aria-expanded={!!at} aria-haspopup="dialog"
+        title={calm ? `Notifications — you're all caught up${h.missing ? " (run 66_home_alerts.sql for every kind)" : ""}` : `Notifications · ${h.unseen ? `${h.unseen} new` : `${n}`}`}
+        aria-label={calm ? "Notifications — none" : `Notifications, ${h.unseen} new`}>
+        {calm
+          ? <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z" /><path d="M10 21h4" /><path d="M9.5 11.5l1.8 1.8 3.2-3.4" /></svg>
+          : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z" /><path d="M10 21h4" /></svg>}
+        {!calm && h.unseen > 0 && <em>{h.unseen}</em>}
+      </button>
+      {at && <HomeAlertsPop h={h} anchor={at} onClose={() => setAt(null)} />}
+      {h.ticket && <TicketDrawerById id={h.ticket} onClose={() => h.setTicket(null)} />}
+    </>
+  );
+}
+
+function HomeAlertsPop({ h, anchor, onClose }: { h: HomeAlertsState; anchor: DOMRect; onClose: () => void }) {
+  const { rows, names, inviteState, cats, busy, err, markSeen, clear, answer, open, unseen } = h;
+  const [tab, setTab] = useState<HaCat | "all">("all");
+  const [onlyNew, setOnlyNew] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const list = rows ?? [];
+  // what you saw counts as read once you close it
+  const seenRef = useRef<string[]>([]);
+  seenRef.current = list.filter((a) => !a.seen_at).map((a) => a.id);
+  useEffect(() => {
+    const down = (e: MouseEvent) => {
+      const t = e.target as HTMLElement;
+      if (ref.current?.contains(t) || t.closest?.(".ha-bell")) return;
+      onClose();
+    };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const tm = window.setTimeout(() => document.addEventListener("mousedown", down), 0);
+    document.addEventListener("keydown", key);
+    return () => {
+      window.clearTimeout(tm); document.removeEventListener("mousedown", down); document.removeEventListener("keydown", key);
+      if (seenRef.current.length) void markSeen(seenRef.current);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const counts = Object.fromEntries(HA_CATS.map((c) => [c.key, c.key === "all" ? list.length : list.filter((a) => haCatsOf(a, cats).includes(c.key as HaCat)).length])) as Record<string, number>;
+  const newIn = (k: string) => list.filter((a) => !a.seen_at && (k === "all" || haCatsOf(a, cats).includes(k as HaCat))).length;
+  const shown = list.filter((a) => (tab === "all" || haCatsOf(a, cats).includes(tab)) && (!onlyNew || !a.seen_at));
+  const who = (a: HomeAlert) => names[`@${a.id}`] ?? (a.actor_id ? names[a.actor_id] : "") ?? "";
+  const width = Math.min(440, window.innerWidth - 16);
+  const left = Math.max(8, Math.min(anchor.right - width, window.innerWidth - width - 8));
+  let lastDay = "";
+
+  return createPortal(
+    <div ref={ref} className="hn" role="dialog" aria-label="Notifications" style={{ top: anchor.bottom + 10, left, width }}>
+      <header className="hn-h">
+        <b>Notifications</b>
+        {unseen > 0 && <em className="hn-n">{unseen} new</em>}
+        <span className="hn-grow" />
+        {list.length > 0 && (
+          <>
+            <button type="button" className={`hn-link ${onlyNew ? "is-on" : ""}`} onClick={() => setOnlyNew((v) => !v)} aria-pressed={onlyNew}>Unread only</button>
+            {unseen > 0 && <button type="button" className="hn-link" onClick={() => void markSeen(list.filter((a) => !a.seen_at).map((a) => a.id))}>Mark all read</button>}
+          </>
+        )}
+      </header>
+      <nav className="hn-tabs" role="tablist">
+        {HA_CATS.filter((c) => c.key === "all" || counts[c.key] > 0).map((c) => (
+          <button key={c.key} type="button" role="tab" aria-selected={tab === c.key} className={tab === c.key ? "is-on" : ""} onClick={() => setTab(c.key)}>
+            {c.label}<i className={newIn(c.key) ? "is-new" : ""}>{counts[c.key]}</i>
+          </button>
+        ))}
+      </nav>
+      {err && <p className="hn-err">{err}</p>}
+      <div className="hn-list">
+        {!shown.length ? (
+          <div className="hn-empty">
+            <span className="hn-empty-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z" /><path d="M10 21h4" /><path d="M9.5 11.5l1.8 1.8 3.2-3.4" /></svg></span>
+            <b>{list.length ? "Nothing here" : "You're all caught up"}</b>
+            <span>{list.length ? "No notifications of this kind." : "Invitations, meetings, tasks and tickets for you show up here."}</span>
+          </div>
+        ) : shown.map((a, i) => {
+          const st = a.kind === "invite" && a.ref_id ? inviteState[a.ref_id] ?? "pending" : null;
+          const meta = a.at ? haWhen(a.at) : a.body ? a.body : "";
+          const day = haDay(a.created_at);
+          const head = day !== lastDay ? (lastDay = day) : null;
+          const cat = haCatsOf(a, cats)[0];
+          return (
+            <div key={a.id}>
+              {head && <span className="hn-day">{head}</span>}
+              <article className={`hn-item is-${HA_TONE[a.kind] ?? "msg"} ${a.seen_at ? "" : "is-new"}`} style={{ ["--i" as string]: Math.min(i, 10) } as CSSProperties}
+                onClick={() => { open(a); if (a.ref_type !== "task") onClose(); }} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter") open(a); }}>
+                <i className="hn-ico">{haIcon(a.kind)}</i>
+                <div className="hn-txt">
+                  <span className="hn-line"><b>{who(a) || (a.kind.startsWith("invite_") && a.kind !== "invite_moved" ? "Someone" : "")}</b> {HA_VERB[a.kind] ?? "updated"}{a.kind === "task_assigned" ? (cat === "tickets" ? " a ticket" : " a task") : ""}</span>
+                  <strong className="hn-title" title={mentionsToPlain(a.title)}><MentionText text={a.title} /></strong>
+                  {meta && <span className="hn-meta" title={a.body ?? ""}>{meta}{a.at && a.body ? ` — ${a.body}` : ""}</span>}
+                  {st && (
+                    <div className="hn-acts" onClick={(e) => e.stopPropagation()}>
+                      {st === "pending" ? (
+                        <>
+                          <button type="button" className="is-yes" disabled={busy === a.id} onClick={() => void answer(a, true)}>Accept</button>
+                          <button type="button" disabled={busy === a.id} onClick={() => void answer(a, false)}>Decline</button>
+                        </>
+                      ) : <span className={`hn-done is-${st}`}>{st === "accepted" ? "You accepted" : st === "declined" ? "You declined" : st}</span>}
+                    </div>
+                  )}
+                </div>
+                <span className="hn-ago">{haAgo(a.created_at)}</span>
+                <button type="button" className="hn-x" onClick={(e) => { e.stopPropagation(); void clear([a.id]); }} aria-label="Clear" title="Clear">×</button>
+              </article>
+            </div>
+          );
+        })}
+      </div>
+      {shown.length > 0 && (
+        <footer className="hn-f">
+          <button type="button" className="hn-link" onClick={() => void clear(shown.map((a) => a.id))}>Clear {tab === "all" && !onlyNew ? "all" : "these"}</button>
+        </footer>
+      )}
+    </div>,
+    document.body,
   );
 }

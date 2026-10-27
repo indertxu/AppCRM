@@ -41,7 +41,7 @@ import { isoDay } from "./HomeCalendar";
 import { globalSearch, globalSearchReady, type SearchHit } from "../../companies/companiesApi";
 import { outlookMailStatus, syncTicketMail, sendOutlookMail, connectOutlook, fetchMailAttachment, OUTLOOK_CONNECTION_EVENT, type OutlookMailStatus, type MailSyncResult } from "../../../api/outlookSync";
 import { loadPrefs, savePref } from "../../companies/companiesApi";
-import { MentionText, mentionsToPlain } from "../../../framework/MentionInput";
+import MentionInput, { MentionText, mentionsToPlain, type MentionPerson } from "../../../framework/MentionInput";
 import { ClientLogo } from "../../clients/ClientWorkspace";
 import "./HomeShared.css";
 
@@ -75,6 +75,17 @@ const ago = (iso: string) => {
 /** "@[Name](employee:id)" → a name pill. */
 function Rich({ text }: { text: string }) { return <MentionText text={text} />; }
 const plain = (t: string) => mentionsToPlain(t);
+/** Who is signed in (cached from the session), for "ticked off by". */
+let signedInId: string | null = null;
+void supabase.auth.getSession().then(({ data }) => { signedInId = data?.session?.user?.id ?? null; }).catch(() => {});
+/** A step ticked or unticked: done ones remember who did it and when. */
+const tickStep = (s: TaskStep, by: string | null = signedInId): TaskStep => {
+  if (s.done) { const { doneBy: _a, doneAt: _b, ...rest } = s; void _a; void _b; return { ...rest, done: false }; }
+  return { ...s, done: true, doneBy: by, doneAt: new Date().toISOString() };
+};
+/** The people @mentioned in a text ("@[Name](employee:<id>)"). */
+const MENTION_ID_RE = /@\[[^\]]*\]\(employee:([^)\s]+)\)/g;
+export const mentionIds = (text: string | null | undefined) => [...new Set([...(text ?? "").matchAll(MENTION_ID_RE)].map((m) => m[1]))];
 const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase()).join("") || "?";
 
 /**
@@ -647,7 +658,7 @@ function TaskDetail({ task, layout, onClose, onChange, onOpenDeal, onDelete, onE
     setProgress(pct); setStatus(st);
     void meta({ checklist: list, progress: pct, status: st, done: st === "done" });
   };
-  const toggleStep = (id: string) => saveSteps(steps.map((s) => (s.id === id ? { ...s, done: !s.done } : s)));
+  const toggleStep = (id: string) => saveSteps(steps.map((s) => (s.id === id ? tickStep(s) : s)));
   const removeStep = (id: string) => saveSteps(steps.filter((s) => s.id !== id));
   const addStep = () => {
     const t = newStep.trim();
@@ -1253,7 +1264,7 @@ function toTicket(r: any, watchers: string[]): Ticket {
     resolvedAt: r.resolved_at ?? r.completed_at ?? null,
     kind: r.kind === "process" ? "process" : "quick", progress: Math.max(0, Math.min(100, Number(r.progress) || 0)),
     checklist: (Array.isArray(r.checklist) ? r.checklist : []).filter((x: any) => x && typeof x.text === "string")
-      .map((x: any) => ({ id: String(x.id ?? newStepId()), text: x.text, done: !!x.done })),
+      .map((x: any) => ({ id: String(x.id ?? newStepId()), text: x.text, done: !!x.done, ...(x.who ? { who: String(x.who) } : {}), ...(x.done && x.doneBy ? { doneBy: String(x.doneBy), doneAt: x.doneAt ?? null } : {}) })),
     firstResponseAt: r.first_response_at ?? null, mergedInto: r.merged_into ?? null,
     category: categoryOf(r),
   };
@@ -1754,6 +1765,10 @@ const TK_ICON: Record<string, string> = {
   ban: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM5 5l14 14",
   out: "M7 17 17 7M8 7h9v9",
   more: "M5 12h.01M12 12h.01M19 12h.01",
+  users: "M16 21a6 6 0 0 0-12 0M10 13a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 21a5 5 0 0 0-4-4.9M16 5.2a4 4 0 0 1 0 7.6",
+  nobody: "M14 21a6.5 6.5 0 0 0-11 0M8.5 13a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM16 11l5 5M21 11l-5 5",
+  layers: "M12 3 2 8l10 5 10-5zM2 13l10 5 10-5M2 17.5l10 5 10-5",
+  board: "M4 4h4v16H4zM10 4h4v10h-4zM16 4h4v13h-4z",
 };
 export const TkIco = ({ d, className }: { d: keyof typeof TK_ICON; className?: string }) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={TK_ICON[d]} /></svg>
@@ -1788,24 +1803,38 @@ function Pop({ anchor, onClose, children, width = 220 }: { anchor: DOMRect; onCl
     document.body,
   );
 }
-function PeopleMenu({ dir, value, onPick, allowNone = true }: { dir: Directory; value: string | null; onPick: (id: string | null) => void; allowNone?: boolean }) {
+function PeopleMenu({ dir, value, onPick, allowNone = true, first, firstLabel = "On this task", picked, noneLabel = "Unassigned" }: {
+  dir: Directory; value: string | null; onPick: (id: string | null) => void; allowNone?: boolean;
+  /** People listed first, under their own heading (the people on the task). */
+  first?: string[]; firstLabel?: string;
+  /** Several can be picked: these show ticked and a click toggles. */
+  picked?: string[]; noneLabel?: string;
+}) {
   const [q, setQ] = useState("");
   const f = fold(q);
   const list = dir.people.filter((p) => !f || fold(p.name).includes(f) || fold(p.email).includes(f));
   const mine = dir.people.find((p) => p.id === dir.me);
+  const firstSet = new Set(first ?? []);
+  const top = first?.length ? list.filter((p) => firstSet.has(p.id)) : [];
+  const rest = top.length ? list.filter((p) => !firstSet.has(p.id)) : list;
+  const isOn = (id: string) => (picked ? picked.includes(id) : id === value);
+  const opt = (p: DirPerson) => (
+    <button type="button" key={p.id} className={`tk-pop-opt ${isOn(p.id) ? "is-on" : ""}`} onClick={() => onPick(p.id)}>
+      <Avatar person={p} size={22} /><span>{p.name}{p.id === dir.me ? " (you)" : ""}<em>{p.department ? deptName(p.department) : p.role ?? ""}</em></span>{isOn(p.id) && <TkIco d="check" className="tk-pop-tick" />}
+    </button>
+  );
   return (
     <div className="tk-people">
       <input className="tk-pop-q" autoFocus placeholder="Find someone…" value={q} onChange={(e) => setQ(e.target.value)} />
       <div className="tk-pop-list">
-        {!q && mine && value !== mine.id && (
-          <button type="button" className="tk-pop-opt is-me" onClick={() => onPick(mine.id)}><Avatar person={mine} size={22} /><span>Assign to me</span></button>
+        {!picked && !q && mine && value !== mine.id && !firstSet.has(mine.id) && (
+          <button type="button" className="tk-pop-opt is-me" onClick={() => onPick(mine.id)}><Avatar person={mine} size={22} /><span>Me</span></button>
         )}
-        {allowNone && !q && value && <button type="button" className="tk-pop-opt" onClick={() => onPick(null)}><Avatar person={null} size={22} /><span>Unassigned</span></button>}
-        {list.slice(0, 40).map((p) => (
-          <button type="button" key={p.id} className={`tk-pop-opt ${p.id === value ? "is-on" : ""}`} onClick={() => onPick(p.id)}>
-            <Avatar person={p} size={22} /><span>{p.name}<em>{p.department ? deptName(p.department) : p.role ?? ""}</em></span>{p.id === value && <TkIco d="check" className="tk-pop-tick" />}
-          </button>
-        ))}
+        {allowNone && !q && value && <button type="button" className="tk-pop-opt" onClick={() => onPick(null)}><Avatar person={null} size={22} /><span>{noneLabel}</span></button>}
+        {top.length > 0 && <span className="tk-pop-k">{firstLabel}</span>}
+        {top.map(opt)}
+        {top.length > 0 && rest.length > 0 && <span className="tk-pop-k">Everyone</span>}
+        {rest.slice(0, 40).map(opt)}
         {!list.length && <p className="tk-pop-empty">Nobody called that.</p>}
       </div>
     </div>
@@ -1820,8 +1849,11 @@ type DeskSort = "due" | "priority" | "updated" | "number";
 const SORTS: { key: DeskSort; label: string }[] = [
   { key: "due", label: "By due date" }, { key: "priority", label: "By priority" }, { key: "updated", label: "Recently updated" }, { key: "number", label: "Newest first" },
 ];
-const DESK_TABS: { key: DeskTab; label: string }[] = [
-  { key: "mine", label: "Mine" }, { key: "team", label: "Team" }, { key: "unassigned", label: "Unassigned" }, { key: "all", label: "All" },
+const DESK_TABS: { key: DeskTab; label: string; icon: keyof typeof TK_ICON; hint: string }[] = [
+  { key: "mine", label: "Mine", icon: "user", hint: "Yours: you own it, watch it or have a step" },
+  { key: "team", label: "Team", icon: "users", hint: "Your department's" },
+  { key: "unassigned", label: "Unassigned", icon: "nobody", hint: "Nobody owns it yet" },
+  { key: "all", label: "All", icon: "layers", hint: "Everything in the company" },
 ];
 const groupOf = (t: Ticket, today: string): Group => {
   const d = dayOf(t.due);
@@ -1923,6 +1955,12 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
   const [viewName, setViewName] = useState<string | null>(null);
   const [help, setHelp] = useState(false);
   const [cursor, setCursor] = useState(-1);
+  /** The page: a list, or a board with a column per stage (drag a card to move it). */
+  const [layout, setLayoutState] = useState<"list" | "board">(() => { try { return localStorage.getItem("tkp.layout") === "board" ? "board" : "list"; } catch { return "list"; } });
+  const setLayout = (v: "list" | "board") => { setLayoutState(v); try { localStorage.setItem("tkp.layout", v); } catch { /* private mode */ } };
+  const [viewsAt, setViewsAt] = useState<DOMRect | null>(null);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dropOn, setDropOn] = useState<TicketStage | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const qRef = useRef<HTMLInputElement>(null);
 
@@ -2042,15 +2080,47 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
     const e = await saveTicket(t.id, p, ready);
     if (e) { setErr(e); reload(); } else setErr(null);
   };
+  /* ---- the add box: it opens up into the whole new task (who, when, how urgent, steps) ---- */
+  const [composing, setComposing] = useState(false);
+  const blankCompose = () => ({ description: "", due: null as string | null, assignee: (tab === "unassigned" ? null : me) as string | null, watchers: [] as string[], checklist: [] as TaskStep[] });
+  const [cd, setCd] = useState(blankCompose);
+  const [cPop, setCPop] = useState<{ k: "owner" | "people"; rect: DOMRect } | null>(null);
+  const composeRef = useRef<HTMLDivElement>(null);
+  const mentionPeople: MentionPerson[] = useMemo(() => (dir?.people ?? []).map((p) => ({ id: `employee:${p.id}`, name: p.name, kind: "employee" as const })), [dir]);
+  const openCompose = () => { if (composing) return; setCd(blankCompose()); setComposing(true); };
+  const closeCompose = () => { setComposing(false); setCPop(null); setDraft(""); setDraftPrio("normal"); setCd(blankCompose()); };
   const quickAdd = async () => {
     const title = draft.trim();
     if (!title || adding) return;
     setAdding(true);
-    const res = await createTicket({ title, priority: draftPrio, assignee: me, ...(tab === "unassigned" ? { assignee: null } : {}), ...kindFields() }, ready);
+    const assignee = composing ? cd.assignee : tab === "unassigned" ? null : me;
+    // whoever is @mentioned or given a step comes along as a watcher
+    const tagged = [...mentionIds(title), ...mentionIds(cd.description), ...cd.checklist.map((x) => x.who ?? "")];
+    const watchers = [...new Set([...cd.watchers, ...tagged])].filter((id) => id && id !== assignee && (dir?.people ?? []).some((p) => p.id === id));
+    const res = await createTicket({
+      title, priority: draftPrio, assignee, watchers, ...kindFields(),
+      ...(cd.description.trim() ? { description: cd.description } : {}), ...(cd.due ? { due: cd.due } : {}), ...(cd.checklist.length ? { checklist: cd.checklist } : {}),
+    }, ready);
     setAdding(false);
     if (res.error) { setErr(res.error); return; }
-    setErr(null); setDraft(""); setDraftPrio("normal");
+    setErr(null);
+    closeCompose();
+    (document.activeElement as HTMLElement | null)?.blur();
   };
+  /** The full window, with what's been filled in so far. */
+  const moreOptions = () => {
+    const t: Partial<Ticket> = { ...newDraft(), title: draft, description: cd.description, priority: draftPrio, due: cd.due, assignee: cd.assignee, watchers: cd.watchers, checklist: cd.checklist };
+    closeCompose();
+    setCreating(t);
+  };
+  /** Typing @name in the title or the details brings that person along as a watcher, right away. */
+  const tagFrom = (text: string) => setCd((c) => {
+    const add = mentionIds(text).filter((id) => id !== c.assignee && !c.watchers.includes(id) && (dir?.people ?? []).some((p) => p.id === id));
+    return add.length ? { ...c, watchers: [...c.watchers, ...add] } : c;
+  });
+  const setDue = (iso: string | null) => setCd((c) => ({ ...c, due: iso ? `${iso}T${timeOf(c.due) ?? "18:00"}:00` : null }));
+  const dayFrom = (n: number) => { const d = new Date(); d.setDate(d.getDate() + n); return isoDay(d); };
+  const nextMonday = () => { const d = new Date(); d.setDate(d.getDate() + (((8 - d.getDay()) % 7) || 7)); return isoDay(d); };
   /** What a new item of the list in view starts with: a ticket is a message unless said otherwise. */
   function kindFields(): Partial<Ticket> {
     return isT ? { category: "ticket", source: "message" } : { category: "task" };
@@ -2139,7 +2209,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
       if (blocked || e.metaKey || e.ctrlKey || e.altKey || typingIn(e.target)) return;
-      if (!full && document.querySelector(".tk-full, .td-back")) return;
+      if (document.querySelector(".td-back") || (!full && document.querySelector(".tk-full"))) return;
       const st = keyState.current;
       const cur = st.sorted[st.cursor];
       const go = (d: number) => {
@@ -2179,40 +2249,54 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
 
   const row = (t: Ticket, i: number) => {
     const link = linkLabel(t, dir);
-    const late = isActive(t.stage) && groupOf(t, today) === "overdue";
+    const active = isActive(t.stage);
+    const late = active && groupOf(t, today) === "overdue";
+    const stepsDone = t.checklist.filter((x) => x.done).length;
+    const mySteps = me ? t.checklist.filter((x) => !x.done && x.who === me).length : 0;
+    const crew = [t.assignee, ...t.watchers.filter((w) => w !== t.assignee)].filter(Boolean) as string[];
+    const when = dueInfo(t.due, today);
     return (
-      <div key={t.id} data-tk={t.id} className={`tk-row is-p-${t.priority} ${late ? "is-late" : ""} ${isActive(t.stage) ? "" : "is-done"} ${sorted[cursor]?.id === t.id ? "is-cur" : ""} ${sel.has(t.id) ? "is-picked" : ""}`} style={{ ["--i" as string]: Math.min(i, 12) } as React.CSSProperties}
+      <div key={t.id} data-tk={t.id} className={`tk-row is-p-${t.priority} ${late ? "is-late" : ""} ${active ? "" : "is-done"} ${sorted[cursor]?.id === t.id ? "is-cur" : ""} ${sel.has(t.id) ? "is-picked" : ""}`} style={{ ["--i" as string]: Math.min(i, 12) } as React.CSSProperties}
         onClick={() => setOpenId(t.id)} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter") setOpenId(t.id); }}>
-        <span className="tk-row-bar" aria-hidden="true" />
+        {/* the round box: tick it off (its ring is the priority) */}
+        <button type="button" className={`tk-tick is-p-${t.priority}`} onClick={(e) => { e.stopPropagation(); patch(t, { stage: active ? "resolved" : "open" }); }}
+          title={active ? (isT ? "Resolve" : "Mark done") : "Reopen"} aria-label={active ? (isT ? "Resolve" : "Mark done") : "Reopen"}>
+          <TkIco d="check" />
+        </button>
         <div className="tk-row-main">
-          <div className="tk-row-top">
-            <span className="tk-row-cb" onClick={(e) => e.stopPropagation()}>
-              <input type="checkbox" checked={sel.has(t.id)} onChange={() => toggleSel(t.id)} aria-label={`Select ${ticketRef(t)}`} />
-            </span>
-            <span className="tk-ref">{ticketRef(t)}</span>
-            {t.type && <span className="tk-type">{t.type}</span>}
-            {t.priority === "urgent" || t.priority === "high" ? <span className={`tk-prio is-${t.priority}`}><FlagIcon />{PRIORITY_LABEL[t.priority]}</span> : null}
-            {t.source === "email" && <span className="tk-src" title="Came in by e-mail"><TkIco d="mail" /></span>}
-          </div>
           <span className="tk-row-title"><Rich text={t.title} /></span>
-          <div className="tk-row-meta">
-            {link && <span className={`tk-link ${t.clientId && link.icon === "briefcase" ? "has-logo" : ""}`}>{t.clientId && link.icon === "briefcase" ? <ClientLogo name={link.text} clientId={t.clientId} className="tk-link-logo" /> : <TkIco d={link.icon} />}{link.text}</span>}
-            <DueChip dueAt={t.due} todayIso={today} done={!isActive(t.stage)} />
-            {isT && <SlaBadge t={t} sla={sla} now={now} compact />}
-            {(t.checklist.length > 0 || (t.kind === "process" && t.progress > 0)) && <span className="tk-pct"><i style={{ ["--w" as string]: `${t.checklist.length ? Math.round((t.checklist.filter((x) => x.done).length / t.checklist.length) * 100) : t.progress}%` } as React.CSSProperties} />{t.checklist.length ? `${t.checklist.filter((x) => x.done).length}/${t.checklist.length}` : `${t.progress}%`}</span>}
-          </div>
+          {/* the rest shows when the card opens up (hover / focus) */}
+          <div className="tk-row-more"><div>
+            <div className="tk-row-meta">
+              <StagePill stage={t.stage} cat={t.category} onClick={(e) => { e.stopPropagation(); setMenu({ id: t.id, kind: "stage", rect: e.currentTarget.getBoundingClientRect() }); }} />
+              {(t.priority === "urgent" || t.priority === "high") && <span className={`tk-prio is-${t.priority}`}><FlagIcon />{PRIORITY_LABEL[t.priority]}</span>}
+              <DueChip dueAt={t.due} todayIso={today} done={!active} />
+              {isT && <SlaBadge t={t} sla={sla} now={now} compact />}
+              {t.checklist.length > 0 ? (
+                <span className={`tk-steps ${stepsDone === t.checklist.length ? "is-all" : ""}`} title={`${stepsDone} of ${t.checklist.length} steps done`}>
+                  <i style={{ ["--w" as string]: `${Math.round((stepsDone / t.checklist.length) * 100)}%` } as React.CSSProperties} />{stepsDone}/{t.checklist.length}
+                </span>
+              ) : t.kind === "process" && t.progress > 0 ? <span className="tk-steps"><i style={{ ["--w" as string]: `${t.progress}%` } as React.CSSProperties} />{t.progress}%</span> : null}
+              {mySteps > 0 && <span className="tk-mine" title="Steps given to you">{mySteps === 1 ? "1 step for you" : `${mySteps} steps for you`}</span>}
+              {link && <span className={`tk-link ${t.clientId && link.icon === "briefcase" ? "has-logo" : ""}`}>{t.clientId && link.icon === "briefcase" ? <ClientLogo name={link.text} clientId={t.clientId} className="tk-link-logo" /> : <TkIco d={link.icon} />}{link.text}</span>}
+              {t.source === "email" && <span className="tk-src" title="Came in by e-mail"><TkIco d="mail" /></span>}
+              <span className="tk-ref">{ticketRef(t)}</span>
+            </div>
+          </div></div>
         </div>
         <div className="tk-row-side" onClick={(e) => e.stopPropagation()}>
-          {/* quick actions: shown when the row is hovered or focused */}
           <span className="tk-row-acts">
-            {isActive(t.stage) && <button type="button" className="tk-act" title={isT ? "Resolve (E)" : "Done (E)"} aria-label={isT ? "Resolve" : "Mark done"} onClick={() => patch(t, { stage: "resolved" })}><TkIco d="check" /></button>}
-            {me && t.assignee !== me && isActive(t.stage) && <button type="button" className="tk-act" title="Take it (A)" aria-label="Assign to me" onClick={() => patch(t, { assignee: me })}><TkIco d="user" /></button>}
-            <button type="button" className="tk-act" title="Open" aria-label="Open" onClick={() => setOpenId(t.id)}><TkIco d="arrow" /></button>
+            <span className="tk-row-cb" title="Select (X)">
+              <input type="checkbox" checked={sel.has(t.id)} onChange={() => toggleSel(t.id)} aria-label={`Select ${ticketRef(t)}`} />
+            </span>
+            {me && t.assignee !== me && active && <button type="button" className="tk-act" title="Take it (A)" aria-label="Assign to me" onClick={() => patch(t, { assignee: me })}><TkIco d="user" /></button>}
           </span>
-          <StagePill stage={t.stage} cat={t.category} onClick={(e) => setMenu({ id: t.id, kind: "stage", rect: e.currentTarget.getBoundingClientRect() })} />
-          <button type="button" className="tk-av-btn" onClick={(e) => setMenu({ id: t.id, kind: "assignee", rect: e.currentTarget.getBoundingClientRect() })} title={person(t.assignee)?.name ?? "Unassigned — click to assign"}>
-            <Avatar person={person(t.assignee)} size={26} />
-            {t.watchers.filter((w) => w !== t.assignee).length > 0 && <em className="tk-av-more">+{t.watchers.filter((w) => w !== t.assignee).length}</em>}
+          {when && <span className={`tk-when is-${active ? when.tone : "done"}`} title={`Due ${when.day}${when.time ? ` at ${when.time}` : ""}`}>{when.tone === "late" && active ? when.rel : when.tone === "today" ? (when.time ?? "Today") : when.day.replace(/^\w+, /, "")}</span>}
+          {mySteps > 0 && <span className="tk-mine-dot" title={mySteps === 1 ? "1 step for you" : `${mySteps} steps for you`} />}
+          <button type="button" className="tk-crew" onClick={(e) => setMenu({ id: t.id, kind: "assignee", rect: e.currentTarget.getBoundingClientRect() })}
+            title={crew.length ? crew.map((id) => person(id)?.name ?? "Someone").join(", ") : "Nobody yet — click to give it to someone"}>
+            {crew.length ? crew.slice(0, 2).map((id) => <Avatar key={id} person={person(id)} size={24} />) : <Avatar person={null} size={24} />}
+            {crew.length > 2 && <em>+{crew.length - 2}</em>}
           </button>
         </div>
       </div>
@@ -2461,120 +2545,212 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
     const base = all.filter((t) => !t.mergedInto && inTab(t, tab));
     const nQ = (k: QuickKey) => base.filter((t) => isQuick(t, k)).length;
     const QUICK: { k: Exclude<QuickKey, "">; label: string; tone: string }[] = isT ? [
+      { k: "overdue", label: "Overdue", tone: "red" },
+      { k: "today", label: "Due today", tone: "amber" },
       { k: "reply", label: "Waiting for a first reply", tone: "blue" },
-      { k: "unassigned", label: "Without an owner", tone: "slate" },
-      { k: "today", label: "Due today", tone: "amber" },
-      { k: "overdue", label: "Overdue", tone: "red" },
       { k: "breach", label: "Past their SLA", tone: "red" },
+      { k: "unassigned", label: "No owner", tone: "slate" },
     ] : [
-      { k: "unassigned", label: "Without an owner", tone: "slate" },
-      { k: "today", label: "Due today", tone: "amber" },
       { k: "overdue", label: "Overdue", tone: "red" },
+      { k: "today", label: "Due today", tone: "amber" },
       { k: "blocked", label: "Blocked", tone: "violet" },
+      { k: "unassigned", label: "No owner", tone: "slate" },
     ];
     const where = tab === "mine" ? "on your desk" : tab === "team" ? "in your team" : tab === "unassigned" ? "without an owner" : "in the company";
     const open = !!(openT || creating);
+    const board = layout === "board" && pane === "tickets";
     const filtered = !!(quick || fStage || q || fPrio || fType);
     const clearAll = () => { setQuick(""); setFStage(""); setQ(""); setFPrio(""); setFType(""); };
+    const drawerProps = {
+      dir: dir!, types, ready, tickets: all, onTypes: setTypes,
+      onClose: () => { setOpenId(null); setCreating(null); },
+      onCreated: (id: string) => { setCreating(null); setOpenId(id); },
+      onLocal: (t: Ticket) => setData((d) => d && { ...d, tickets: d.tickets.map((x) => (x.id === t.id ? t : x)) }),
+    };
+    // the board: one column per stage, the same filters as the list (not the Open / Done switch)
+    const COLS: TicketStage[] = ["new", "open", "in_progress", "waiting", "resolved"];
+    const boardItems = all.filter((t) => !t.mergedInto && inTab(t, tab) && isQuick(t, quick) && matches(t) && (!fPrio || t.priority === fPrio) && (!fType || t.type === fType));
+    const colItems = (st: TicketStage) => boardItems.filter((t) => (st === "resolved" ? !isActive(t.stage) : t.stage === st))
+      .sort((x, y) => st === "resolved" ? (y.resolvedAt ?? y.updatedAt ?? "").localeCompare(x.resolvedAt ?? x.updatedAt ?? "") : (x.due ?? "9999").localeCompare(y.due ?? "9999") || rank[x.priority] - rank[y.priority]);
+    const card = (t: Ticket, i: number) => {
+      const link = linkLabel(t, dir);
+      const stepsDone = t.checklist.filter((x) => x.done).length;
+      const crew = [t.assignee, ...t.watchers.filter((w) => w !== t.assignee)].filter(Boolean) as string[];
+      const mine = me ? t.checklist.filter((x) => !x.done && x.who === me).length : 0;
+      return (
+        <div key={t.id} className={`tkb-card is-p-${t.priority} ${openId === t.id ? "is-open" : ""} ${dragId === t.id ? "is-drag" : ""}`} style={{ ["--i" as string]: Math.min(i, 10) } as React.CSSProperties}
+          draggable onDragStart={(e) => { setDragId(t.id); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", t.id); }}
+          onDragEnd={() => { setDragId(null); setDropOn(null); }}
+          onClick={() => setOpenId(t.id)} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter") setOpenId(t.id); }}>
+          <div className="tkb-top">
+            <span className="tk-ref">{ticketRef(t)}</span>
+            {(t.priority === "urgent" || t.priority === "high") && <span className={`tk-prio is-${t.priority}`}><FlagIcon />{PRIORITY_LABEL[t.priority]}</span>}
+            {t.type && <span className="tkb-type">{t.type}</span>}
+          </div>
+          <b className="tkb-title"><Rich text={t.title} /></b>
+          {(t.due || t.checklist.length > 0 || link) && (
+            <div className="tkb-meta">
+              <DueChip dueAt={t.due} todayIso={today} done={!isActive(t.stage)} />
+              {t.checklist.length > 0 && <span className={`tk-steps ${stepsDone === t.checklist.length ? "is-all" : ""}`}><i style={{ ["--w" as string]: `${Math.round((stepsDone / t.checklist.length) * 100)}%` } as React.CSSProperties} />{stepsDone}/{t.checklist.length}</span>}
+              {link && <span className="tk-link"><TkIco d={link.icon} />{link.text}</span>}
+            </div>
+          )}
+          <div className="tkb-foot">
+            {mine > 0 ? <span className="tk-mine">{mine === 1 ? "1 step for you" : `${mine} steps for you`}</span> : <span />}
+            <span className="tkb-crew" title={crew.map((id) => person(id)?.name ?? "Someone").join(", ") || "Nobody yet"}>
+              {crew.length ? crew.slice(0, 3).map((id) => <Avatar key={id} person={person(id)} size={22} />) : <Avatar person={null} size={22} />}
+              {crew.length > 3 && <em>+{crew.length - 3}</em>}
+            </span>
+          </div>
+        </div>
+      );
+    };
+    const boardView = (
+      <div className="tkb">
+        {COLS.map((st) => {
+          const items = colItems(st);
+          const shown = st === "resolved" ? items.slice(0, 25) : items;
+          return (
+            <section key={st} className={`tkb-col is-${st} ${dropOn === st ? "is-drop" : ""}`}
+              onDragOver={(e) => { if (!dragId) return; e.preventDefault(); if (dropOn !== st) setDropOn(st); }}
+              onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropOn((d) => (d === st ? null : d)); }}
+              onDrop={(e) => { e.preventDefault(); const t = all.find((x) => x.id === (dragId ?? e.dataTransfer.getData("text/plain"))); setDragId(null); setDropOn(null); if (t && t.stage !== st) void patch(t, { stage: st }); }}>
+              <header className="tkb-h">
+                <span className={`tk-dot is-${st}`} /><b>{stageLabel(st, kind)}</b><i>{items.length}</i>
+                {st === "new" && <button type="button" className="tkb-add" onClick={() => { setOpenId(null); setCreating(newDraft()); }} title={`New ${noun}`} aria-label={`New ${noun}`}><TkIco d="plus" /></button>}
+              </header>
+              <div className="tkb-list">
+                {shown.map(card)}
+                {!items.length && <p className="tkb-empty">{dragId ? "Drop it here" : st === "resolved" ? "Nothing done lately" : "Nothing here"}</p>}
+                {items.length > shown.length && <p className="tkb-empty">+{items.length - shown.length} older</p>}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+    );
+    const listView = !data ? <div className="hs-skel tk-skel" /> : !sorted.length ? (
+      <div className="tk-empty">
+        <span className="tk-empty-ico"><TkIco d={view === "done" ? "check" : "inbox"} /></span>
+        <b>{filtered ? `No ${noun} matches` : view === "done" ? (isT ? "Nothing resolved lately" : "Nothing done lately") : tab === "mine" ? (isT ? "No conversations waiting on you" : "Nothing on your plate") : `No open ${noun}s here`}</b>
+        <span>{filtered ? <button type="button" className="tkp2-link" onClick={clearAll}>Clear the filters</button> : `New ${noun}s you create or get given show up here.`}</span>
+      </div>
+    ) : (
+      <div className="tk-groups tkp2-rows">
+        {groups.map((g) => (
+          <div key={g.key} className={`tk-group is-${g.key}`}>
+            {g.label && <span className="tk-group-h">{g.label}<i>{g.items.length}</i></span>}
+            {g.items.map((t, i) => <div key={t.id} className={openId === t.id ? "tkp-row-on" : ""}>{row(t, i)}</div>)}
+          </div>
+        ))}
+      </div>
+    );
     return (
-      <div className={`tkp is-${kind} ${open ? "has-open" : ""} ${sel.size ? "has-sel" : ""}`}>
-        <header className="tkp-head">
-          <div className="tkp-titles">
+      <div className={`tkp2 is-${kind} ${open && !board ? "has-open" : ""} ${sel.size ? "has-sel" : ""}`}>
+        <header className="tkp2-head">
+          <div className="tkp2-title">
             <h1>{isT ? "Tickets" : "Tasks"}</h1>
-            <p>
-              <b>{counts[tab]}</b> open {where}
-              {isT && breached > 0 && <> · <span className="tkp-warn">{breached} past their SLA</span></>}
-              <span className="tkp-what">{isT ? " · e-mails, messages and calls, with clients or the team" : " · the work to get done"}</span>
-            </p>
+            <p><b>{counts[tab]}</b> open {where}{lateCount > 0 && <> · <span className="tkp2-late">{lateCount} overdue</span></>}{isT && breached > 0 && <> · <span className="tkp2-late">{breached} past SLA</span></>}</p>
           </div>
-          {kindSwitch}
-          <div className="tkp-acts">
-            <button type="button" className="tk-icon-btn" onClick={() => setHelp(true)} title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts"><TkIco d="keyboard" /></button>
-            <button type="button" className="tk-icon-btn" onClick={() => setSettings({})} title="Mail rules, mailboxes and SLAs" aria-label="Desk settings"><TkIco d="gear" /></button>
-            <button type="button" className="tk-new" onClick={() => { setOpenId(null); setCreating(newDraft()); }} title={`New ${noun} (N)`}><TkIco d="plus" />New {noun}</button>
-          </div>
+          <div className="tkp2-kind">{kindSwitch}</div>
+          <span className="td-spacer" />
+          <label className="tkp2-search">
+            <TkIco d="search" />
+            <input ref={qRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder={pane === "inbox" ? "Search e-mail…" : `Search ${noun}s…`}
+              onKeyDown={(e) => { if (e.key === "Escape") { setQ(""); (e.target as HTMLInputElement).blur(); } }} />
+            {q ? <button type="button" onClick={() => setQ("")} aria-label="Clear"><TkIco d="x" /></button> : <kbd>/</kbd>}
+          </label>
+          <button type="button" className="tkp2-icon" onClick={() => setHelp(true)} title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts"><TkIco d="keyboard" /></button>
+          <button type="button" className="tkp2-icon" onClick={() => setSettings({})} title="Mail rules, mailboxes and SLAs" aria-label="Desk settings"><TkIco d="gear" /></button>
+          <button type="button" className="tkp2-new" onClick={() => { setOpenId(null); setCreating(newDraft()); }} title={`New ${noun} (N)`}><TkIco d="plus" />New {noun}</button>
         </header>
 
-        <div className="tkp-quick" role="group" aria-label="Quick filters" style={{ ["--n" as string]: QUICK.length } as React.CSSProperties}>
-          {QUICK.map((x) => {
-            const n = nQ(x.k);
-            return (
-              <button key={x.k} type="button" className={`tkp-q is-${x.tone} ${quick === x.k ? "is-on" : ""} ${n === 0 ? "is-zero" : ""}`} aria-pressed={quick === x.k}
-                onClick={() => { setQuick(quick === x.k ? "" : x.k); setPane("tickets"); }}>
-                <b>{n}</b><span>{x.label}</span>
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="tkp-body">
-          <nav className="tkp-nav" aria-label={`${isT ? "Ticket" : "Task"} views`}>
-            <span className="tkp-nav-k">Views</span>
+        <div className="tkp2-bar">
+          <div className="tkp2-scope" role="tablist" aria-label="Whose">
             {DESK_TABS.map((x) => (
-              <button key={x.key} type="button" className={pane === "tickets" && tab === x.key ? "is-on" : ""} onClick={() => { setTab(x.key); setPane("tickets"); }}>{x.label}<i>{counts[x.key]}</i></button>
+              <button key={x.key} type="button" role="tab" aria-selected={pane === "tickets" && tab === x.key} className={pane === "tickets" && tab === x.key ? "is-on" : ""} title={x.hint}
+                onClick={() => { setTab(x.key); setPane("tickets"); }}>
+                <TkIco d={x.icon} />{x.label}<i>{counts[x.key]}</i>
+              </button>
             ))}
-            {isT && <button type="button" className={`tkp-nav-inbox ${pane === "inbox" ? "is-on" : ""}`} onClick={() => setPane("inbox")} title="E-mail no rule picked up (I)"><TkIco d="inbox" />Inbox<i className={inbox?.length ? "is-new" : ""}>{inbox?.length ?? 0}</i></button>}
-            <span className="tkp-nav-k">Stage</span>
-            {TICKET_STAGES.map((st) => {
-              const n = all.filter((t) => !t.mergedInto && inTab(t, tab) && t.stage === st.key).length;
-              return (
-                <button key={st.key} type="button" className={`tkp-nav-stage ${fStage === st.key ? "is-on" : ""}`} onClick={() => { setFStage(fStage === st.key ? "" : st.key); setPane("tickets"); }} title={stageText(st.key, kind).hint}>
-                  <span className={`tk-dot is-${st.key}`} />{stageLabel(st.key, kind)}<i>{n}</i>
-                </button>
-              );
-            })}
-            <span className="tkp-nav-k">Saved views</span>
-            {views.map((v) => (
-              <div key={v.name} className={`tk-nav-view ${pane === "tickets" && isView(v) ? "is-on" : ""}`}>
-                <button type="button" onClick={() => applyView(v)}><TkIco d="bookmark" />{v.name}</button>
-                <button type="button" className="tk-nav-view-x" onClick={() => storeViews(views.filter((x) => x.name !== v.name))} aria-label={`Delete view ${v.name}`}><TkIco d="x" /></button>
-              </div>
-            ))}
-            {viewName !== null ? (
-              <input className="tk-nav-in" autoFocus value={viewName} placeholder="Name this view…" onChange={(e) => setViewName(e.target.value)} onBlur={saveView}
-                onKeyDown={(e) => { if (e.key === "Enter") saveView(); if (e.key === "Escape") setViewName(null); }} />
-            ) : (
-              <button type="button" className="tk-nav-add" onClick={() => setViewName("")}><TkIco d="plus" />Save this view</button>
-            )}
-          </nav>
-
-          <div className="tkp-list">
-            {filters}
-            {pane === "tickets" && filtered && (
-              <div className="tkp-active">
-                {quick && <span>{QUICK.find((x) => x.k === quick)?.label}<button type="button" onClick={() => setQuick("")} aria-label="Remove filter"><TkIco d="x" /></button></span>}
-                {fStage && <span>Stage: {stageLabel(fStage, kind)}<button type="button" onClick={() => setFStage("")} aria-label="Remove filter"><TkIco d="x" /></button></span>}
-                <button type="button" className="tkp-clear" onClick={clearAll}>Clear all</button>
-                <em>{sorted.length} {sorted.length === 1 ? noun : `${noun}s`}</em>
-              </div>
-            )}
-            {bulkBar}
-            {err && <p className="tk-err">{err}</p>}
-            {!ready && data && <p className="tk-note">{NEEDS_SQL} Until then your tasks show here with their status.</p>}
-            {pane === "inbox" ? inboxPane : open && data && sorted.length ? (
-              <div className="tk-groups tkp-compact">
-                {groups.map((g) => (
-                  <div key={g.key} className={`tk-group is-${g.key}`}>
-                    {g.label && <span className="tk-group-h">{g.label}<i>{g.items.length}</i></span>}
-                    {g.items.map((t, i) => (
-                      <div key={t.id} className={openId === t.id ? "tkp-row-on" : ""}>{row(t, i)}</div>
-                    ))}
-                  </div>
+            {isT && <button type="button" className={`tkp2-inbox ${pane === "inbox" ? "is-on" : ""}`} onClick={() => setPane(pane === "inbox" ? "tickets" : "inbox")} title="E-mail no rule picked up (I)"><TkIco d="inbox" />Inbox<i className={inbox?.length ? "is-new" : ""}>{inbox?.length ?? 0}</i></button>}
+          </div>
+          {pane === "tickets" && (
+            <div className="tkp2-chips" role="group" aria-label="Quick filters">
+              {QUICK.map((x) => {
+                const n = nQ(x.k);
+                if (!n && quick !== x.k) return null;
+                return (
+                  <button key={x.k} type="button" className={`tkp2-chip is-${x.tone} ${quick === x.k ? "is-on" : ""}`} aria-pressed={quick === x.k} onClick={() => setQuick(quick === x.k ? "" : x.k)}>
+                    <i />{x.label}<b>{n}</b>{quick === x.k && <TkIco d="x" />}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <span className="td-spacer" />
+          {pane === "tickets" && <>
+            {!board && (
+              <div className="tk-seg tkp2-seg" role="tablist">
+                {(["active", "waiting", "done"] as DeskView[]).map((v) => (
+                  <button key={v} type="button" className={view === v ? "is-on" : ""} onClick={() => setView(v)}>{v === "active" ? "Open" : v === "waiting" ? (isT ? "Waiting" : "Blocked") : "Done"}</button>
                 ))}
               </div>
-            ) : list}
+            )}
+            <div className="tkp2-sel"><Select size="sm" value={fPrio} onChange={(v) => setFPrio(v as TaskPriority | "")} aria-label="Priority"
+              options={[{ value: "", label: "Any priority" }, ...TASK_PRIORITIES.map((p) => ({ value: p, label: PRIORITY_LABEL[p] }))]} /></div>
+            <div className="tkp2-sel"><Select size="sm" value={fType} onChange={setFType} aria-label="Type" options={[{ value: "", label: "Any type" }, ...types.map((t) => ({ value: t, label: t }))]} /></div>
+            {!board && <div className="tkp2-sel"><Select size="sm" value={sort} onChange={(v) => setSort(v as DeskSort)} aria-label="Sort" options={SORTS.map((x) => ({ value: x.key, label: x.label }))} /></div>}
+            <button type="button" className={`tkp2-icon is-sm ${views.some(isView) ? "is-on" : ""}`} onClick={(e) => setViewsAt(e.currentTarget.getBoundingClientRect())} title="Saved views" aria-label="Saved views"><TkIco d="bookmark" /></button>
+            <div className="tkp2-layout" role="tablist" aria-label="Layout">
+              <button type="button" className={layout === "list" ? "is-on" : ""} onClick={() => setLayout("list")} title="List" aria-label="List"><TkIco d="sort" /></button>
+              <button type="button" className={layout === "board" ? "is-on" : ""} onClick={() => setLayout("board")} title="Board: a column per stage" aria-label="Board"><TkIco d="board" /></button>
+            </div>
+          </>}
+        </div>
+        {pane === "tickets" && filtered && (
+          <div className="tkp2-active">
+            {quick && <span>{QUICK.find((x) => x.k === quick)?.label}<button type="button" onClick={() => setQuick("")} aria-label="Remove filter"><TkIco d="x" /></button></span>}
+            {fPrio && <span>{PRIORITY_LABEL[fPrio]}<button type="button" onClick={() => setFPrio("")} aria-label="Remove filter"><TkIco d="x" /></button></span>}
+            {fType && <span>{fType}<button type="button" onClick={() => setFType("")} aria-label="Remove filter"><TkIco d="x" /></button></span>}
+            {q && <span>“{q}”<button type="button" onClick={() => setQ("")} aria-label="Remove filter"><TkIco d="x" /></button></span>}
+            <button type="button" className="tkp2-link" onClick={clearAll}>Clear all</button>
+            <em>{board ? boardItems.length : sorted.length} {noun}s</em>
           </div>
+        )}
+        {bulkBar}
+        {err && <p className="tk-err">{err}</p>}
+        {!ready && data && <p className="tk-note">{NEEDS_SQL} Until then your tasks show here with their status.</p>}
 
-          {open && dir && (
-            <div className="tkp-pane">
-              <TicketDrawer key={openT?.id ?? "new"} inline ticket={openT} draft={creating} dir={dir} types={types} ready={ready} tickets={all}
-                onTypes={setTypes}
-                onClose={() => { setOpenId(null); setCreating(null); }}
-                onCreated={(id) => { setCreating(null); setOpenId(id); }}
-                onLocal={(t) => setData((d) => d && { ...d, tickets: d.tickets.map((x) => (x.id === t.id ? t : x)) })} />
+        <div className="tkp2-body">
+          <div className="tkp2-main">{pane === "inbox" ? inboxPane : board ? boardView : listView}</div>
+          {open && dir && !board && (
+            <div className="tkp2-pane">
+              <TicketDrawer key={openT?.id ?? "new"} inline ticket={openT} draft={creating} {...drawerProps} />
             </div>
           )}
         </div>
+        {open && dir && board && <TicketDrawer ticket={openT} draft={creating} {...drawerProps} />}
+        {viewsAt && (
+          <Pop anchor={viewsAt} onClose={() => { setViewsAt(null); setViewName(null); }} width={260}>
+            <div className="tk-pop-list">
+              <span className="tk-pop-k">Saved views</span>
+              {views.map((v) => (
+                <div key={v.name} className={`tkp2-view ${isView(v) ? "is-on" : ""}`}>
+                  <button type="button" className="tk-pop-opt" onClick={() => { applyView(v); setViewsAt(null); }}><TkIco d="bookmark" /><span>{v.name}</span>{isView(v) && <TkIco d="check" className="tk-pop-tick" />}</button>
+                  <button type="button" className="tkp2-view-x" onClick={() => storeViews(views.filter((x) => x.name !== v.name))} aria-label={`Delete view ${v.name}`}><TkIco d="x" /></button>
+                </div>
+              ))}
+              {!views.length && <p className="tk-pop-empty">No saved views yet. Filter the list, then save it here.</p>}
+              {viewName !== null ? (
+                <input className="tk-pop-q" autoFocus value={viewName} placeholder="Name this view…" onChange={(e) => setViewName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { saveView(); setViewsAt(null); } if (e.key === "Escape") setViewName(null); }} />
+              ) : (
+                <button type="button" className="tk-pop-opt" onClick={() => setViewName("")}><TkIco d="plus" /><span>Save this view</span></button>
+              )}
+            </div>
+          </Pop>
+        )}
         {overlays}
       </div>
     );
@@ -2634,28 +2810,25 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
   }
 
   return (
-    <section className={`hs-card tk-desk is-${kind} ${sel.size ? "has-sel" : ""}`} aria-label={isT ? "Tickets" : "Tasks"}>
-      <header className="hs-head tk-head">
-        <div className="hs-titles">
-          <span className="hs-eyebrow">{isT ? "Tickets · conversations" : "Tasks · the work"}</span>
-          <h2 className="hs-title"><span className="hs-count">{counts[tab]}</span> open{lateCount > 0 && <span className="hs-late-pill">{lateCount} late</span>}{isT && breached > 0 && <span className="tk-breach-pill is-sm" title="Past their SLA"><TkIco d="bolt" />{breached}</span>}</h2>
-        </div>
-        <div className="tk-head-btns">
-          <button type="button" className="tk-new is-sm" onClick={() => setCreating(newDraft())} title={`New ${noun} with all the details (N)`}><TkIco d="plus" />New</button>
-          <button type="button" className="tk-icon-btn" onClick={() => setSettings({})} title="Mail rules, mailboxes and SLAs" aria-label="Desk settings"><TkIco d="gear" /></button>
-          <button type="button" className="tk-icon-btn" onClick={() => navTo(isT ? "/tickets" : "/tickets?kind=task")} title={`Open the ${isT ? "Tickets" : "Tasks"} page`} aria-label={`Open the ${isT ? "Tickets" : "Tasks"} page`}><TkIco d="expand" /></button>
-        </div>
+    <section className={`hs-card tk-desk is-${kind} ${sel.size ? "has-sel" : ""} ${composing ? "is-composing" : ""}`} aria-label={isT ? "Tickets" : "Tasks"}>
+      {/* one line on top: tickets | tasks, how many are late, settings and the full page */}
+      <header className="tk-top">
+        {kindSwitch}
+        {lateCount > 0 && <button type="button" className="tk-late" onClick={() => { setPane("tickets"); setView("active"); setSort("due"); }} title={`${lateCount} past their due date`}>{lateCount}<span> late</span></button>}
+        {isT && breached > 0 && <span className="tk-breach-pill is-sm" title="Past their SLA"><TkIco d="bolt" />{breached}</span>}
+        <span className="td-spacer" />
+        <button type="button" className="tk-icon-btn" onClick={() => setSettings({})} title="Mail rules, mailboxes and SLAs" aria-label="Desk settings"><TkIco d="gear" /></button>
+        <button type="button" className="tk-icon-btn" onClick={() => navTo(isT ? "/tickets" : "/tickets?kind=task")} title={`Open the ${isT ? "Tickets" : "Tasks"} page`} aria-label={`Open the ${isT ? "Tickets" : "Tasks"} page`}><TkIco d="expand" /></button>
       </header>
-      {kindSwitch}
-      <div className="tk-tabs" role="tablist">
+      <div className="tk-tabs is-icons" role="tablist">
         {DESK_TABS.map((x) => (
-          <button key={x.key} type="button" role="tab" aria-selected={pane === "tickets" && tab === x.key} className={pane === "tickets" && tab === x.key ? "is-on" : ""} onClick={() => { setTab(x.key); setPane("tickets"); }}>
-            {x.label}{counts[x.key] > 0 && <i>{counts[x.key]}</i>}
+          <button key={x.key} type="button" role="tab" aria-selected={pane === "tickets" && tab === x.key} aria-label={x.label} title={x.hint} className={pane === "tickets" && tab === x.key ? "is-on" : ""} onClick={() => { setTab(x.key); setPane("tickets"); }}>
+            <TkIco d={x.icon} /><span className="tk-tab-l">{x.label}</span>{counts[x.key] > 0 && <i>{counts[x.key]}</i>}
           </button>
         ))}
         {isT && (
           <button type="button" role="tab" aria-selected={pane === "inbox"} className={`tk-tab-inbox ${pane === "inbox" ? "is-on" : ""}`} onClick={() => setPane("inbox")} title="E-mail waiting to be sorted (I)">
-            <TkIco d="inbox" />Inbox{(inbox?.length ?? 0) > 0 && <i className="is-new">{inbox!.length}</i>}
+            <TkIco d="inbox" /><span className="tk-tab-l">Inbox</span>{(inbox?.length ?? 0) > 0 && <i className="is-new">{inbox!.length}</i>}
           </button>
         )}
       </div>
@@ -2673,16 +2846,90 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
           {overlays}
         </>
       ) : <>
-      <div className="tk-quick">
-        <button type="button" className={`tk-quick-prio is-${draftPrio}`} onClick={cyclePrio} title={`Priority: ${PRIORITY_LABEL[draftPrio]} (click to change)`}><FlagIcon /></button>
-        <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={isT ? (tab === "unassigned" ? "Log a message or call for the team…" : "Log a message, call or request…") : tab === "unassigned" ? "Add a task for the team…" : "Add a task…"}
-          onKeyDown={(e) => { if (e.key === "Enter") quickAdd(); }} disabled={adding} />
-        <button type="button" className="tk-quick-go" onClick={quickAdd} disabled={!draft.trim() || adding} aria-label="Add"><TkIco d="plus" /></button>
+      {/* the add box: typing in it turns the card into the new task (the list steps aside) */}
+      <div ref={composeRef} className={`tk-cw ${composing ? "is-on" : ""}`}
+        onFocus={openCompose}
+        onBlur={(e) => {
+          const to = e.relatedTarget as HTMLElement | null;
+          if (to && (composeRef.current?.contains(to) || to.closest?.(".tk-pop, .dp-pop, .dp-layer, .mi-pop, .sel-pop"))) return;
+          if (!draft.trim() && !cd.description.trim() && !cd.checklist.length && !cd.watchers.length && !cd.due) closeCompose();
+        }}
+        onKeyDown={(e) => { if (e.key === "Escape" && !e.defaultPrevented && composing) { e.preventDefault(); closeCompose(); (document.activeElement as HTMLElement | null)?.blur(); } }}>
+        <div className="tk-quick">
+          <button type="button" className={`tk-quick-prio is-${draftPrio}`} onClick={cyclePrio} title={`Priority: ${PRIORITY_LABEL[draftPrio]} (click to change)`} tabIndex={-1}><FlagIcon /></button>
+          <MentionInput value={draft} onChange={(v) => { setDraft(v); if (v.includes("@[")) tagFrom(v); }} people={mentionPeople} onEnter={quickAdd} className="tk-quick-ed"
+            placeholder={isT ? (tab === "unassigned" ? "Log a message or call for the team…" : "Log a message, call or request…") : composing ? "What needs doing? @name to tag someone" : tab === "unassigned" ? "Add a task for the team…" : "Add a task…"} />
+          <button type="button" className="tk-quick-go" onClick={quickAdd} disabled={!draft.trim() || adding} aria-label="Add"><TkIco d="plus" /></button>
+        </div>
+        <div className="tk-compose" inert={!composing ? true : undefined}><div className="tk-compose-in tdx">
+          <div className="tkc-f" style={{ ["--i" as string]: 0 } as React.CSSProperties}>
+            <MentionInput multiline value={cd.description} onChange={(v) => { setCd((c) => ({ ...c, description: v })); if (v.includes("@[")) tagFrom(v); }} people={mentionPeople} className="tkc-desc"
+              placeholder={isT ? "What was asked or said… @mention a colleague" : "Details: what done looks like… @mention someone"} />
+          </div>
+          <div className="tkc-row" style={{ ["--i" as string]: 1 } as React.CSSProperties}>
+            <span className="tkc-k">Priority</span>
+            <div className="tkc-prio" role="radiogroup" aria-label="Priority">
+              {[...TASK_PRIORITIES].reverse().map((p) => (
+                <button key={p} type="button" role="radio" aria-checked={draftPrio === p} className={`is-${p} ${draftPrio === p ? "is-on" : ""}`} onClick={() => setDraftPrio(p)}><FlagIcon />{PRIORITY_LABEL[p]}</button>
+              ))}
+            </div>
+          </div>
+          <div className="tkc-row" style={{ ["--i" as string]: 2 } as React.CSSProperties}>
+            <span className="tkc-k">Due</span>
+            <div className="tkc-due">
+              {([["Today", dayFrom(0)], ["Tomorrow", dayFrom(1)], ["Next week", nextMonday()]] as const).map(([l, iso]) => (
+                <button key={l} type="button" className={dayOf(cd.due) === iso ? "is-on" : ""} onClick={() => setDue(dayOf(cd.due) === iso ? null : iso)}>{l}</button>
+              ))}
+              <span className={`tkc-dp ${cd.due ? "is-set" : ""}`}><DatePicker value={dayOf(cd.due) ?? ""} onChange={(iso) => setDue(iso || null)} placeholder="Pick a day" /></span>
+            </div>
+          </div>
+          <div className="tkc-row" style={{ ["--i" as string]: 3 } as React.CSSProperties}>
+            <span className="tkc-k">Owner</span>
+            <button type="button" className={`tkc-person ${cd.assignee ? "" : "is-empty"}`} onClick={(e) => setCPop({ k: "owner", rect: e.currentTarget.getBoundingClientRect() })}>
+              <Avatar person={person(cd.assignee)} size={22} /><span>{cd.assignee ? (cd.assignee === me ? "Me" : person(cd.assignee)?.name ?? "Someone") : "Nobody yet"}</span><TkIco d="chev" className="tkc-chev" />
+            </button>
+          </div>
+          <div className="tkc-row is-top" style={{ ["--i" as string]: 4 } as React.CSSProperties}>
+            <span className="tkc-k">Watchers</span>
+            <div className="tkc-people">
+              {cd.watchers.map((w) => (
+                <span key={w} className="tkc-chip"><Avatar person={person(w)} size={20} />{person(w)?.name.split(/\s+/)[0] ?? "Someone"}
+                  <button type="button" onClick={() => setCd((c) => ({ ...c, watchers: c.watchers.filter((x) => x !== w) }))} aria-label="Remove"><TkIco d="x" /></button></span>
+              ))}
+              <button type="button" className="tkc-add" onClick={(e) => setCPop({ k: "people", rect: e.currentTarget.getBoundingClientRect() })}><TkIco d="plus" />{cd.watchers.length ? "" : "Add people"}</button>
+            </div>
+          </div>
+          {dir && (
+            <div className="tkc-steps" style={{ ["--i" as string]: 5 } as React.CSSProperties}>
+              <StepsPanel t={{ checklist: cd.checklist } as Ticket} dir={dir} people={mentionPeople} onTask={[cd.assignee, ...cd.watchers].filter(Boolean) as string[]}
+                onChecklist={(list) => setCd((c) => ({ ...c, checklist: list }))}
+                onInvolve={(ids) => setCd((c) => ({ ...c, watchers: [...new Set([...c.watchers, ...ids.filter((id) => id && id !== c.assignee)])] }))} />
+            </div>
+          )}
+          <div className="tkc-foot" style={{ ["--i" as string]: 6 } as React.CSSProperties}>
+            <button type="button" className="tkc-more" onClick={moreOptions} title="Open it in the full window: links, type, team…"><TkIco d="expand" />More options</button>
+            <span className="td-spacer" />
+            <button type="button" className="td-ghost is-sm" onClick={closeCompose}>Cancel</button>
+            <button type="button" className="td-primary is-sm" onClick={quickAdd} disabled={!draft.trim() || adding}>{adding ? "Creating…" : `Create ${noun}`}</button>
+          </div>
+        </div></div>
+        {cPop && dir && (
+          <Pop anchor={cPop.rect} onClose={() => setCPop(null)} width={260}>
+            {cPop.k === "owner" ? (
+              <PeopleMenu dir={dir} value={cd.assignee} noneLabel="Nobody" onPick={(id) => { setCPop(null); setCd((c) => ({ ...c, assignee: id, watchers: c.watchers.filter((w) => w !== id) })); }} />
+            ) : (
+              <PeopleMenu dir={dir} value={null} allowNone={false} picked={cd.watchers}
+                onPick={(id) => { if (id) setCd((c) => ({ ...c, watchers: c.watchers.includes(id) ? c.watchers.filter((x) => x !== id) : [...c.watchers, id] })); }} />
+            )}
+          </Pop>
+        )}
       </div>
-      {filters}
-      {bulkBar}
-      {err && <p className="tk-err">{err}</p>}
-      {list}
+      <div className="tk-body">
+        {filters}
+        {bulkBar}
+        {err && <p className="tk-err">{err}</p>}
+        {list}
+      </div>
       {overlays}
       </>}
     </section>
@@ -2748,8 +2995,11 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
     firstResponseAt: null, mergedInto: null, category: "ticket",
     ...(draft ?? {}),
   };
-  const [t, setT] = useState<Ticket>(ticket ?? blank);
-  useEffect(() => { if (ticket) setT(ticket); }, [ticket]);
+  const [t, setT0] = useState<Ticket>(ticket ?? blank);
+  /** The latest ticket, also between a change and the next render (several changes in a row). */
+  const tRef = useRef<Ticket>(t);
+  const setT = (next: Ticket) => { tRef.current = next; setT0(next); };
+  useEffect(() => { if (ticket) setT(ticket); }, [ticket]); // eslint-disable-line react-hooks/exhaustive-deps
   /** A task is work: no requester, no SLA, no replies by e-mail — notes and progress only. */
   const isTask = t.category === "task";
   const noun = isTask ? "task" : "ticket";
@@ -2763,7 +3013,9 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
   const [newType, setNewType] = useState<string | null>(null);
   const [watchAdd, setWatchAdd] = useState<DOMRect | null>(null);
   const [moreAt, setMoreAt] = useState<DOMRect | null>(null);
-  const titleRef = useRef<HTMLTextAreaElement>(null);
+  /** The header's pickers: stage, priority, owner, watchers. */
+  const [propAt, setPropAt] = useState<{ k: "stage" | "prio" | "owner" | "people"; rect: DOMRect } | null>(null);
+  const titleRef = useRef<HTMLDivElement>(null);
   // e-mail, SLA, merging
   const [mails, setMails] = useState<MailMsg[] | null>(null);
   const [mailOk, setMailOk] = useState<OutlookMailStatus | null>(null);
@@ -2796,28 +3048,54 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
     return () => { window.clearInterval(iv); window.removeEventListener(TICKETS_EVENT, on); };
   }, [reloadMail]);
   useEffect(() => { if (tickets) setPickList(tickets); }, [tickets]);
-  useEffect(() => { grow(titleRef.current); }, [t.title]);
+  // a new one starts with the title in focus
+  useEffect(() => { if (creatingMode) window.setTimeout(() => titleRef.current?.querySelector<HTMLElement>(".mi-editor")?.focus(), 60); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || watchAdd || mergeAt || moreAt || e.defaultPrevented) return;
+      if (e.key !== "Escape" || watchAdd || mergeAt || moreAt || propAt || e.defaultPrevented) return;
       // first Esc leaves the field you're typing in; the next one closes the ticket
       const el = e.target as HTMLInputElement | null;
       if (el && /input|textarea/i.test(el.tagName) && el.value) { el.blur(); return; }
-      if (document.querySelector(".sel-pop, .dp-pop")) return;
+      if (el && el.isContentEditable) { el.blur(); return; }
+      if (document.querySelector(".sel-pop, .dp-pop, .tk-pop, .mi-pop")) return;
       onClose();
     };
     document.addEventListener("keydown", k);
     return () => document.removeEventListener("keydown", k);
-  }, [onClose, watchAdd, mergeAt, moreAt]);
+  }, [onClose, watchAdd, mergeAt, moreAt, propAt]);
 
   const set = async (p: Partial<Ticket>) => {
-    const next = { ...t, ...p };
+    const next = { ...tRef.current, ...p };
     setT(next);
     if (creatingMode) return;
     onLocal?.(next);
     const e = await saveTicket(t.id, p, ready);
     setErr(e);
     if (!e) loadTicketThread(t.id).then(setThread).catch(() => {});
+  };
+  /** People @mentioned or given a step join the watchers: it shows on their list and they hear about it. */
+  const involve = async (ids: string[]) => {
+    const cur = tRef.current;
+    const add = [...new Set(ids)].filter((id) => id && id !== cur.assignee && !cur.watchers.includes(id) && dir.people.some((p) => p.id === id));
+    if (!add.length) return;
+    const next = { ...cur, watchers: [...cur.watchers, ...add] };
+    setT(next);
+    if (creatingMode) return;
+    onLocal?.(next);
+    await Promise.all(add.map((id) => setWatcher(cur.id, id, true)));
+  };
+  /** Who can be @mentioned: the people on it first, then everyone. */
+  const onTask = [t.assignee, ...t.watchers].filter(Boolean) as string[];
+  const mentionPeople: MentionPerson[] = useMemo(() => {
+    const order = [...new Set([...onTask, ...dir.people.map((p) => p.id)])];
+    return order.map((id) => dir.people.find((p) => p.id === id)).filter((p): p is DirPerson => !!p)
+      .map((p) => ({ id: `employee:${p.id}`, name: p.name, kind: "employee" as const }));
+  }, [dir, onTask.join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
+  const setDesc = (v: string) => setT({ ...tRef.current, description: v });
+  const saveDesc = async () => {
+    const cur = tRef.current;
+    if (!creatingMode && ticket && cur.description !== ticket.description) await set({ description: cur.description });
+    await involve(mentionIds(cur.description));
   };
   const create = async () => {
     if (!t.title.trim() || busy) return;
@@ -2868,10 +3146,12 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
       loadTicketThread(t.id).then(setThread).catch(() => {});
       return;
     }
-    const res = await postToTicket(t, reply, mode, ready);
+    const body = reply;
+    const res = await postToTicket(t, body, mode, ready);
     setBusy(false);
     if (res.error || !res.post) { setErr(res.error); return; }
     setReply(""); setErr(null);
+    if (mode === "internal" || isTask) void involve(mentionIds(body));
     if (mode === "reply" && !t.firstResponseAt) { const next = { ...t, firstResponseAt: new Date().toISOString() }; setT(next); onLocal?.(next); }
     loadTicketThread(t.id).then(setThread).catch(() => {});
   };
@@ -2890,8 +3170,8 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
     if (!pickList) loadTickets().then((d) => setPickList(d.tickets)).catch(() => setPickList([]));
   };
   const setChecklist = (checklist: TaskStep[]) => {
-    const progress = checklist.length ? Math.round((checklist.filter((x) => x.done).length / checklist.length) * 100) : t.progress;
-    set({ checklist, progress });
+    const progress = checklist.length ? Math.round((checklist.filter((x) => x.done).length / checklist.length) * 100) : tRef.current.progress;
+    return set({ checklist, progress });
   };
   const mergedTarget = t.mergedInto ? (pickList ?? []).find((x) => x.id === t.mergedInto) ?? null : null;
   const remove = async () => {
@@ -2900,8 +3180,9 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
     onClose();
   };
   const toggleWatch = async (id: string) => {
-    const on = !t.watchers.includes(id);
-    const next = { ...t, watchers: on ? [...t.watchers, id] : t.watchers.filter((w) => w !== id) };
+    const cur = tRef.current;
+    const on = !cur.watchers.includes(id);
+    const next = { ...cur, watchers: on ? [...cur.watchers, id] : cur.watchers.filter((w) => w !== id) };
     setT(next);
     if (creatingMode) return;
     onLocal?.(next);
@@ -2925,7 +3206,6 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
     set({ type: v });
   };
   const person = (id: string | null) => (id ? dir.people.find((p) => p.id === id) ?? null : null);
-  const stageIdx = TICKET_STAGES.findIndex((s) => s.key === t.stage);
   const canDelete = !creatingMode && canDeleteTask({ created_by: t.createdBy }, dir.me);
   const items = [
     ...(thread?.posts ?? []).map((p) => ({ at: p.at, k: "post" as const, p })),
@@ -2933,8 +3213,9 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
     ...(mails ?? []).map((m) => ({ at: m.at, k: "mail" as const, m })),
   ].sort((a, b) => a.at.localeCompare(b.at));
   const newestMail = (mails ?? []).length ? (mails ?? [])[(mails ?? []).length - 1].id : null;
-  const [threadFilter, setThreadFilter] = useState<"all" | "mail" | "notes">("all");
-  const visibleItems = items.filter((it) => threadFilter === "all" || (threadFilter === "mail" ? it.k === "mail" : it.k === "post"));
+  /** The conversation (notes / comments and e-mail), only the e-mail, or the history of changes. */
+  const [threadFilter, setThreadFilter] = useState<"talk" | "mail" | "history">("talk");
+  const visibleItems = items.filter((it) => (threadFilter === "talk" ? it.k !== "event" : threadFilter === "mail" ? it.k === "mail" : it.k === "event"));
   const allAtt = (mails ?? []).flatMap((m) => m.attachments.map((a) => ({ m, a })));
   const opt = (xs: { id: string; name: string }[], none: string) => [{ value: "", label: none }, ...xs.map((x) => ({ value: x.id, label: x.name }))];
   const deal = t.trackingId ? dir.deals.find((d) => d.id === t.trackingId) : null;
@@ -2957,17 +3238,21 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
     setT(nextT); onLocal?.(nextT); setErr(null);
   };
   const late = !creatingMode && isActive(t.stage) && dueInfo(t.due, today)?.tone === "late";
+  const owner = person(t.assignee);
+  const crew = t.watchers.filter((w) => w !== t.assignee);
+  const talkCount = (thread?.posts.length ?? 0) + (mails?.length ?? 0);
+  const histCount = thread?.events.length ?? 0;
+  const useMention = isTask || mode === "internal";
   const sheet = (
-    <aside className={`td ${inline ? "is-inline" : ""} ${creatingMode ? "is-new" : ""}`} role={inline ? "region" : "dialog"} aria-modal={inline ? undefined : true}
+    <aside className={`td tdx ${inline ? "is-inline" : ""} ${creatingMode ? "is-new" : ""}`} role={inline ? "region" : "dialog"} aria-modal={inline ? undefined : true}
       aria-label={creatingMode ? `New ${noun}` : `${isTask ? "Task" : "Ticket"} ${ticketRef(t)}`}>
-      <header className="td-head">
+      <header className="td-head tdx-head">
         <div className="td-head-top">
           <span className={`td-kind is-${t.category}`}><TkIco d={isTask ? "check" : "mail"} />{isTask ? "Task" : "Ticket"}</span>
           <span className="td-ref">{creatingMode ? `New ${noun}` : ticketRef(t)}</span>
           {t.type && <span className="td-chip">{t.type}</span>}
           {!isTask && <span className="td-chip is-src">{t.source === "email" ? <TkIco d="mail" /> : null}{TICKET_CHANNELS[t.source] ?? TICKET_SOURCES[t.source] ?? t.source}</span>}
           {isTask && t.source === "sales" && <span className="td-chip is-src"><TkIco d="deal" />From a deal</span>}
-          {late && <span className="td-chip is-late">Overdue</span>}
           {!creatingMode && !isTask && <SlaBadge t={t} sla={sla} now={now} />}
           <span className="td-spacer" />
           {!creatingMode && !inline && (
@@ -2978,30 +3263,70 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
           )}
           <button type="button" className="td-x" onClick={onClose} aria-label="Close"><TkIco d="x" /></button>
         </div>
-        <textarea ref={titleRef} className="td-title" rows={1} value={t.title} placeholder={isTask ? "What needs doing?" : "What is it about?"} autoFocus={creatingMode} aria-label="Title"
-          onChange={(e) => setT({ ...t, title: e.target.value })}
-          onBlur={() => { if (!creatingMode && ticket && t.title.trim() && t.title !== ticket.title) set({ title: t.title.trim() }); }}
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLTextAreaElement).blur(); if (creatingMode) create(); } }} />
-        {!creatingMode && (
-          <div className="td-stagebar">
-            {/* the stages in order: where it is, where it's been; click one to move it there */}
-            <ol className="td-track" aria-label="Stage">
-              {TICKET_STAGES.map((s, i) => (
-                <li key={s.key} className={`is-${s.key} ${i < stageIdx ? "is-past" : ""} ${t.stage === s.key ? "is-on" : ""}`}>
-                  <button type="button" onClick={() => set({ stage: s.key })} title={stageText(s.key, t.category).hint} aria-current={t.stage === s.key ? "step" : undefined}>
-                    <i aria-hidden="true" /><span>{stageLabel(s.key, t.category)}</span>
-                  </button>
-                </li>
-              ))}
-            </ol>
-            <div className="td-next">
+        {/* the title: @name shows as the person's name (it's stored as a mention) */}
+        <div className="td-title-wrap" ref={titleRef}
+          onKeyDownCapture={(e) => {
+            if (e.key !== "Enter" || e.shiftKey || document.querySelector(".mi-pop")) return;
+            e.preventDefault(); e.stopPropagation();
+            (document.activeElement as HTMLElement | null)?.blur();
+            if (creatingMode) void create();
+          }}
+          onBlur={(e) => {
+            if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+            const cur = tRef.current;
+            if (!creatingMode && ticket && cur.title.trim() && cur.title !== ticket.title) void set({ title: cur.title.trim() }).then(() => involve(mentionIds(cur.title)));
+          }}>
+          <MentionInput multiline value={t.title} onChange={(v) => setT({ ...tRef.current, title: v.replace(/\n+/g, " ") })} people={mentionPeople} className="td-title"
+            placeholder={isTask ? "What needs doing?" : "What is it about?"} />
+        </div>
+
+        {/* the facts that matter, each one a click away */}
+        <div className="tdx-props">
+          {!creatingMode && (
+            <div className="tdx-prop">
+              <span className="tdx-k">Status</span>
+              <button type="button" className={`tdx-v tdx-stage is-${t.stage}`} onClick={(e) => setPropAt({ k: "stage", rect: e.currentTarget.getBoundingClientRect() })} title={stageText(t.stage, t.category).hint}>
+                <i />{stageLabel(t.stage, t.category)}<TkIco d="chev" className="tdx-chev" />
+              </button>
+            </div>
+          )}
+          <div className="tdx-prop">
+            <span className="tdx-k">Priority</span>
+            <button type="button" className={`tdx-v tdx-prio is-${t.priority}`} onClick={(e) => setPropAt({ k: "prio", rect: e.currentTarget.getBoundingClientRect() })}>
+              <FlagIcon />{PRIORITY_LABEL[t.priority]}<TkIco d="chev" className="tdx-chev" />
+            </button>
+          </div>
+          <div className="tdx-prop">
+            <span className="tdx-k">Owner</span>
+            <button type="button" className={`tdx-v ${owner ? "" : "is-empty"}`} onClick={(e) => setPropAt({ k: "owner", rect: e.currentTarget.getBoundingClientRect() })}>
+              <Avatar person={owner} size={20} /><span>{owner ? (owner.id === dir.me ? `${owner.name} (you)` : owner.name) : "Nobody yet"}</span><TkIco d="chev" className="tdx-chev" />
+            </button>
+          </div>
+          <div className="tdx-prop">
+            <span className="tdx-k">Due</span>
+            <div className={`tdx-v tdx-due ${late ? "is-late" : ""} ${t.due ? "" : "is-empty"}`}>
+              <DatePicker value={dayOf(t.due) ?? ""} onChange={(iso) => set({ due: iso ? `${iso}T${timeOf(t.due) ?? "18:00"}:00` : null })} placeholder="Add a date" />
+              {t.due && <button type="button" className="tdx-clear" onClick={() => set({ due: null })} aria-label="Clear due date"><TkIco d="x" /></button>}
+            </div>
+          </div>
+          <div className="tdx-prop">
+            <span className="tdx-k">Watchers</span>
+            <button type="button" className={`tdx-v tdx-crew ${crew.length ? "" : "is-empty"}`} onClick={(e) => setPropAt({ k: "people", rect: e.currentTarget.getBoundingClientRect() })}
+              title={crew.length ? crew.map((w) => person(w)?.name ?? "Someone").join(", ") : "Add the people who work on it or need to follow it"}>
+              {crew.length > 0 && <span className="tdx-avs">{crew.slice(0, 4).map((w) => <Avatar key={w} person={person(w)} size={22} />)}{crew.length > 4 && <em>+{crew.length - 4}</em>}</span>}
+              <span className="tdx-plus"><TkIco d="plus" />{crew.length ? "" : "Add people"}</span>
+            </button>
+          </div>
+          <span className="td-spacer" />
+          {next && (
+            <div className="tdx-next">
               {isActive(t.stage) && t.stage !== "in_progress" && (
                 <button type="button" className="td-ghost is-sm" onClick={() => set({ stage: "resolved" })}><TkIco d="check" />{isTask ? "Done" : "Resolve"}</button>
               )}
-              {next && <button type="button" className="td-primary is-sm" onClick={() => set({ stage: next.to })}>{next.label}<TkIco d="arrow" /></button>}
+              <button type="button" className="td-primary is-sm" onClick={() => set({ stage: next.to })}>{next.label}<TkIco d="arrow" /></button>
             </div>
-          </div>
-        )}
+          )}
+        </div>
         {t.mergedInto && (
           <div className="td-merged"><TkIco d="merge" />Merged into {mergedTarget ? <b>{ticketRef(mergedTarget)} “{plain(mergedTarget.title)}”</b> : "another ticket"}
             <button type="button" onClick={() => { const id = t.mergedInto; onClose(); window.setTimeout(() => window.dispatchEvent(new CustomEvent("open-ticket", { detail: id })), 50); }}>Open it</button></div>
@@ -3024,175 +3349,144 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
 
       <div className="td-body">
         <div className="td-main">
-          <section className="td-sec">
-            <span className="td-k">Description</span>
-            <textarea className="td-desc" value={t.description} placeholder={isTask ? "What has to be done, and what done looks like…" : "What was asked or said, by whom…"}
-              onChange={(e) => { setT({ ...t, description: e.target.value }); grow(e.target); }} ref={(el) => grow(el)}
-              onBlur={() => { if (!creatingMode && ticket && t.description !== ticket.description) set({ description: t.description }); }} />
+          <section className="td-sec tdx-sec">
+            <div className="tdx-h"><h3>Description</h3><span className="tdx-hint">Type <b>@</b> to mention someone</span></div>
+            <div className="tdx-desc" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) void saveDesc(); }}>
+              <MentionInput multiline value={t.description} onChange={setDesc} people={mentionPeople} className="tdx-desc-ed"
+                placeholder={isTask ? "What has to be done, and what done looks like…" : "What was asked or said, by whom…"} />
+            </div>
           </section>
 
-          {!creatingMode && <ProgressPanel t={t} events={thread?.events ?? []} now={now} onChecklist={setChecklist} />}
-
-          {creatingMode && t.checklist.length > 0 && (
-            <section className="td-sec">
-              <span className="td-k">Checklist <em>{t.checklist.filter((x) => x.done).length} of {t.checklist.length}</em></span>
-              <div className="td-check">
-                {t.checklist.map((x) => (
-                  <label key={x.id} className={x.done ? "is-done" : ""}>
-                    <input type="checkbox" checked={x.done} onChange={() => {
-                      const checklist = t.checklist.map((y) => (y.id === x.id ? { ...y, done: !y.done } : y));
-                      const progress = Math.round((checklist.filter((y) => y.done).length / checklist.length) * 100);
-                      set({ checklist, progress });
-                    }} />
-                    <span>{x.text}</span>
-                  </label>
-                ))}
-              </div>
-            </section>
-          )}
+          <StepsPanel t={t} dir={dir} people={mentionPeople} onTask={onTask} onChecklist={setChecklist} onInvolve={(ids) => void involve(ids)} />
 
           {!creatingMode && (
-            <section className="td-sec td-conv">
-              <div className="td-conv-h">
-                <span className="td-k">Activity</span>
-                <div className="tk-seg is-xs">
-                  {(isTask && !mails?.length ? ([["all", "All"], ["notes", "Updates"]] as const) : ([["all", "All"], ["mail", `E-mail${mails?.length ? ` ${mails.length}` : ""}`], ["notes", "Notes"]] as const)).map(([k, l]) => (
-                    <button key={k} type="button" className={threadFilter === k ? "is-on" : ""} onClick={() => setThreadFilter(k)}>{l}</button>
-                  ))}
+            <section className="td-sec tdx-sec td-conv">
+              <div className="tdx-h">
+                <h3>{isTask ? "Comments" : "Conversation"}{talkCount > 0 && <em>{talkCount}</em>}</h3>
+                <div className="tk-seg is-xs" role="tablist">
+                  <button type="button" className={threadFilter === "talk" ? "is-on" : ""} onClick={() => setThreadFilter("talk")}>{isTask ? "Comments" : "All"}</button>
+                  {!isTask && (mails?.length ?? 0) > 0 && <button type="button" className={threadFilter === "mail" ? "is-on" : ""} onClick={() => setThreadFilter("mail")}>E-mail {mails!.length}</button>}
+                  <button type="button" className={threadFilter === "history" ? "is-on" : ""} onClick={() => setThreadFilter("history")}>History{histCount > 0 ? ` ${histCount}` : ""}</button>
                 </div>
               </div>
-              {allAtt.length > 0 && (
+              {allAtt.length > 0 && threadFilter !== "history" && (
                 <div className="td-files">
                   <span className="td-k"><TkIco d="clip" />Files <em>{allAtt.length}</em></span>
                   <div className="tm-att">{(mails ?? []).filter((m) => m.attachments.length).map((m) => <Attachments key={m.id} m={m} />)}</div>
                 </div>
               )}
               {/* oldest first, newest right above the box you write in */}
-              <div className="td-thread">
-                {!thread ? <div className="hs-skel" /> : !visibleItems.length ? <p className="td-none">{threadFilter === "mail" ? "No e-mail on this ticket yet." : isTask ? "Nothing here yet. Updates and every change show up here." : "Nothing here yet. Notes, replies and every change show up here."}</p> : visibleItems.map((it) => it.k === "mail" ? (
+              <div className={`td-thread ${threadFilter === "history" ? "is-history" : ""}`}>
+                {!thread ? <div className="hs-skel" /> : !visibleItems.length ? (
+                  <div className="tdx-empty">
+                    <span className="tdx-empty-ico"><TkIco d={threadFilter === "history" ? "clock" : threadFilter === "mail" ? "mail" : "reply"} /></span>
+                    <b>{threadFilter === "history" ? "No changes yet" : threadFilter === "mail" ? "No e-mail on this ticket yet" : isTask ? "No comments yet" : "Nothing said yet"}</b>
+                    <span>{threadFilter === "history" ? "Every change to it is logged here." : isTask ? "Ask a question, say where it's at, or @mention someone — they get a notification." : "Notes and replies show up here."}</span>
+                  </div>
+                ) : visibleItems.map((it) => it.k === "mail" ? (
                   <MailCard key={it.m.id} m={it.m} open={it.m.id === newestMail} />
                 ) : it.k === "post" ? (
-                  <div key={it.p.id} className={`td-post is-${it.p.visibility}`}>
+                  <div key={it.p.id} className={`td-post is-${it.p.visibility} ${isTask ? "is-comment" : ""}`}>
                     <Avatar person={person(it.p.author)} size={30} />
                     <div className="td-post-body">
-                      <span className="td-post-h"><b>{person(it.p.author)?.name ?? "Someone"}</b>{it.p.visibility === "reply" ? <em className="is-reply"><TkIco d="reply" />Reply</em> : <em><TkIco d="lock" />Internal</em>}<time>{ago2(it.p.at)}</time></span>
+                      <span className="td-post-h"><b>{person(it.p.author)?.name ?? "Someone"}</b>{isTask ? null : it.p.visibility === "reply" ? <em className="is-reply"><TkIco d="reply" />Reply</em> : <em><TkIco d="lock" />Internal</em>}<time title={fullDate(it.p.at)}>{ago2(it.p.at)}</time></span>
                       <p><Rich text={it.p.body} /></p>
                     </div>
                   </div>
                 ) : (
                   <div key={it.e.id} className="td-event">
-                    <span className="td-event-dot" /><b>{person(it.e.author)?.name ?? "Someone"}</b>&nbsp;{eventText(it.e, dir, t.category)}<time>{ago2(it.e.at)}</time>
+                    <span className="td-event-dot" /><b>{person(it.e.author)?.name ?? "Someone"}</b>&nbsp;{eventText(it.e, dir, t.category)}<time title={fullDate(it.e.at)}>{ago2(it.e.at)}</time>
                   </div>
                 ))}
               </div>
-              <div className={`td-composer is-${mode} ${willMail ? "is-mail" : ""}`}>
-                {!isTask && (
-                  <div className="td-composer-tabs" role="tablist">
-                    <button type="button" role="tab" aria-selected={mode === "internal"} className={mode === "internal" ? "is-on" : ""} onClick={() => setMode("internal")}><TkIco d="lock" />Internal note</button>
-                    <button type="button" role="tab" aria-selected={mode === "reply"} className={mode === "reply" ? "is-on" : ""} onClick={() => setMode("reply")}><TkIco d="reply" />Reply to requester</button>
-                  </div>
-                )}
-                {mode === "reply" && mails !== null && (
-                  <div className="td-mailbar">
-                    <label className="td-mail-toggle"><input type="checkbox" checked={byMail} onChange={() => setByMail((v) => !v)} />Send by e-mail</label>
-                    {byMail && (
-                      <>
-                        <span className="td-mail-f"><em>To</em><b>{replyTo || "no address yet"}</b></span>
-                        {fromChoices.length > 1 && <span className="td-mail-f is-from"><em>From</em><Select size="sm" value={fromAddr} onChange={setFromAddr} options={fromChoices} aria-label="From" /></span>}
-                        <span className="td-mail-f is-cc"><em>Cc</em><input value={cc} onChange={(e) => setCc(e.target.value)} placeholder="optional" /></span>
-                        <span className="td-mail-subj" title={mailSubject}><em>Subject</em>{mailSubject}</span>
-                      </>
+              {threadFilter !== "history" && (
+                <div className={`td-composer tdx-composer is-${isTask ? "task" : mode} ${willMail ? "is-mail" : ""}`}>
+                  {!isTask && (
+                    <div className="td-composer-tabs" role="tablist">
+                      <button type="button" role="tab" aria-selected={mode === "internal"} className={mode === "internal" ? "is-on" : ""} onClick={() => setMode("internal")}><TkIco d="lock" />Internal note</button>
+                      <button type="button" role="tab" aria-selected={mode === "reply"} className={mode === "reply" ? "is-on" : ""} onClick={() => setMode("reply")}><TkIco d="reply" />Reply to requester</button>
+                    </div>
+                  )}
+                  {mode === "reply" && !isTask && mails !== null && (
+                    <div className="td-mailbar">
+                      <label className="td-mail-toggle"><input type="checkbox" checked={byMail} onChange={() => setByMail((v) => !v)} />Send by e-mail</label>
+                      {byMail && (
+                        <>
+                          <span className="td-mail-f"><em>To</em><b>{replyTo || "no address yet"}</b></span>
+                          {fromChoices.length > 1 && <span className="td-mail-f is-from"><em>From</em><Select size="sm" value={fromAddr} onChange={setFromAddr} options={fromChoices} aria-label="From" /></span>}
+                          <span className="td-mail-f is-cc"><em>Cc</em><input value={cc} onChange={(e) => setCc(e.target.value)} placeholder="optional" /></span>
+                          <span className="td-mail-subj" title={mailSubject}><em>Subject</em>{mailSubject}</span>
+                        </>
+                      )}
+                    </div>
+                  )}
+                  <div className="tdx-write">
+                    <Avatar person={person(dir.me)} size={28} />
+                    {useMention ? (
+                      <MentionInput multiline value={reply} onChange={setReply} people={mentionPeople} onEnter={send} className="tdx-write-ed"
+                        placeholder={isTask ? "Write a comment… type @ to mention someone" : "Write a note only your team sees… type @ to mention someone"} />
+                    ) : (
+                      <textarea value={reply} onChange={(e) => { setReply(e.target.value); grow(e.target); }} rows={2}
+                        placeholder={willMail ? `Write to ${t.requesterName || replyTo || "the requester"} — it goes out from Outlook…` : `Log what you told ${t.requesterName || t.requesterEmail || "the requester"}…`}
+                        onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(); }} />
                     )}
                   </div>
-                )}
-                <textarea value={reply} onChange={(e) => { setReply(e.target.value); grow(e.target); }} rows={2}
-                  placeholder={isTask ? "Post an update: where it's at, what's next…" : mode === "internal" ? "Write a note only your team sees…" : willMail ? `Write to ${t.requesterName || replyTo || "the requester"} — it goes out from Outlook…` : `Log what you told ${t.requesterName || t.requesterEmail || "the requester"}…`}
-                  onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(); }} />
-                {(needPerm || (willMail && mailOk && !mailReady)) && (
-                  <div className="td-perm">
-                    <TkIco d="mail" />
-                    <span>{mailOk?.connected ? "Your Outlook connection can't send mail yet — connect again with mail permission." : "Connect Outlook to send replies by e-mail."}</span>
-                    <button type="button" onClick={() => connectOutlook({ withMail: true })}>Connect with mail</button>
+                  {(needPerm || (willMail && mailOk && !mailReady)) && (
+                    <div className="td-perm">
+                      <TkIco d="mail" />
+                      <span>{mailOk?.connected ? "Your Outlook connection can't send mail yet — connect again with mail permission." : "Connect Outlook to send replies by e-mail."}</span>
+                      <button type="button" onClick={() => connectOutlook({ withMail: true })}>Connect with mail</button>
+                    </div>
+                  )}
+                  <div className="td-composer-foot">
+                    <span>{isTask ? "Everyone on this task sees it · @mentions are notified" : mode === "internal" ? "Only your team sees notes · @mentions are notified" : willMail ? "Sent by e-mail and kept here" : "Kept here, not e-mailed"} · ⌘ Enter</span>
+                    <button type="button" className="td-send" onClick={send} disabled={!reply.trim() || busy}>
+                      {busy ? "Sending…" : isTask ? "Comment" : mode === "internal" ? "Add note" : willMail ? <><TkIco d="send" />Send e-mail</> : "Log reply"}
+                    </button>
                   </div>
-                )}
-                <div className="td-composer-foot">
-                  <span>{isTask ? "Your team sees updates" : mode === "internal" ? "Only your team sees notes" : willMail ? "Sent by e-mail and kept here" : "Kept here, not e-mailed"} · ⌘ Enter</span>
-                  <button type="button" className="td-send" onClick={send} disabled={!reply.trim() || busy}>
-                    {busy ? "Sending…" : isTask ? "Post update" : mode === "internal" ? "Add note" : willMail ? <><TkIco d="send" />Send e-mail</> : "Log reply"}
-                  </button>
                 </div>
-              </div>
+              )}
             </section>
           )}
         </div>
 
         <aside className="td-side" aria-label="Details">
-          <div className="td-props">
-            <div className="td-prop">
-              <span className="td-pk">Owner</span>
-              <div className="td-pv">
-                <Select searchable value={t.assignee ?? ""} onChange={(v) => set({ assignee: v || null })} options={opt(dir.people, "Unassigned")} aria-label="Owner" />
-                {t.assignee !== dir.me && dir.me && <button type="button" className="td-mini" onClick={() => set({ assignee: dir.me })}>Assign to me</button>}
-              </div>
-            </div>
-            <div className="td-prop">
-              <span className="td-pk">Priority</span>
-              <div className="td-pv">
-                <div className="td-prio" role="radiogroup" aria-label="Priority">
-                  {TASK_PRIORITIES.map((p) => (
-                    <button key={p} type="button" role="radio" aria-checked={t.priority === p} className={`is-${p} ${t.priority === p ? "is-on" : ""}`} onClick={() => set({ priority: p })} title={PRIORITY_LABEL[p]}><FlagIcon />{PRIORITY_LABEL[p]}</button>
-                  ))}
-                </div>
-              </div>
-            </div>
-            <div className="td-prop">
-              <span className="td-pk">Type</span>
-              <div className="td-pv">
-                {newType !== null ? (
-                  <input className="td-in" autoFocus value={newType} placeholder="New type…" onChange={(e) => setNewType(e.target.value)} onBlur={saveNewType}
-                    onKeyDown={(e) => { if (e.key === "Enter") saveNewType(); if (e.key === "Escape") setNewType(null); }} />
-                ) : (
-                  <Select value={t.type ?? ""} onChange={(v) => (v === "__new" ? setNewType("") : set({ type: v || null }))} aria-label="Type"
-                    options={[{ value: "", label: "No type" }, ...types.map((x) => ({ value: x, label: x })), { value: "__new", label: "+ New type…" }]} />
-                )}
-              </div>
-            </div>
-            <div className="td-prop">
-              <span className="td-pk">Due</span>
-              <div className="td-pv td-due">
-                <DatePicker value={dayOf(t.due) ?? ""} onChange={(iso) => set({ due: iso ? `${iso}T${timeOf(t.due) ?? "18:00"}:00` : null })} placeholder="No due date" />
-                {t.due && <button type="button" className="td-clear" onClick={() => set({ due: null })} aria-label="Clear due date"><TkIco d="x" /></button>}
-              </div>
-            </div>
-            <div className="td-prop">
-              <span className="td-pk">Team</span>
-              <div className="td-pv">
-                <Select value={t.team ?? ""} onChange={(v) => set({ team: v || null })} aria-label="Team" options={[{ value: "", label: "Any team" }, ...departments.map((d) => ({ value: d, label: deptName(d) }))]} />
-              </div>
-            </div>
-            {!isTask && (
+          <div className="td-group">
+            <span className="td-group-h"><TkIco d="tag" />Details</span>
+            <div className="td-props">
               <div className="td-prop">
-                <span className="td-pk">Came in by</span>
+                <span className="td-pk">Type</span>
                 <div className="td-pv">
-                  <Select value={t.source} onChange={(v) => set({ source: v })} aria-label="Channel" options={Object.entries(TICKET_CHANNELS).map(([value, label]) => ({ value, label }))} />
+                  {newType !== null ? (
+                    <input className="td-in" autoFocus value={newType} placeholder="New type…" onChange={(e) => setNewType(e.target.value)} onBlur={saveNewType}
+                      onKeyDown={(e) => { if (e.key === "Enter") saveNewType(); if (e.key === "Escape") setNewType(null); }} />
+                  ) : (
+                    <Select value={t.type ?? ""} onChange={(v) => (v === "__new" ? setNewType("") : set({ type: v || null }))} aria-label="Type"
+                      options={[{ value: "", label: "No type" }, ...types.map((x) => ({ value: x, label: x })), { value: "__new", label: "+ New type…" }]} />
+                  )}
                 </div>
               </div>
-            )}
-            <div className="td-prop is-top">
-              <span className="td-pk">Watchers</span>
-              <div className="td-pv td-watch">
-                {t.watchers.map((w) => (
-                  <span key={w} className="td-watcher"><Avatar person={person(w)} size={20} />{person(w)?.name ?? "Someone"}<button type="button" onClick={() => toggleWatch(w)} aria-label="Remove"><TkIco d="x" /></button></span>
-                ))}
-                <button type="button" className="td-add" onClick={(e) => setWatchAdd(e.currentTarget.getBoundingClientRect())}><TkIco d="plus" />Add</button>
+              <div className="td-prop">
+                <span className="td-pk">Team</span>
+                <div className="td-pv">
+                  <Select value={t.team ?? ""} onChange={(v) => set({ team: v || null })} aria-label="Team" options={[{ value: "", label: "Any team" }, ...departments.map((d) => ({ value: d, label: deptName(d) }))]} />
+                </div>
               </div>
-            </div>
-            <div className="td-prop is-top">
-              <span className="td-pk">Tags</span>
-              <div className="td-pv td-tags">
-                {t.tags.map((x) => <span key={x} className="td-tag">#{x}<button type="button" onClick={() => set({ tags: t.tags.filter((y) => y !== x) })} aria-label="Remove tag"><TkIco d="x" /></button></span>)}
-                <input value={tagDraft} placeholder={t.tags.length ? "+ tag" : "Add a tag…"} onChange={(e) => setTagDraft(e.target.value)} aria-label="Add a tag"
-                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addTag(); } }} onBlur={addTag} />
+              {!isTask && (
+                <div className="td-prop">
+                  <span className="td-pk">Came in by</span>
+                  <div className="td-pv">
+                    <Select value={t.source} onChange={(v) => set({ source: v })} aria-label="Channel" options={Object.entries(TICKET_CHANNELS).map(([value, label]) => ({ value, label }))} />
+                  </div>
+                </div>
+              )}
+              <div className="td-prop is-top">
+                <span className="td-pk">Tags</span>
+                <div className="td-pv td-tags">
+                  {t.tags.map((x) => <span key={x} className="td-tag">#{x}<button type="button" onClick={() => set({ tags: t.tags.filter((y) => y !== x) })} aria-label="Remove tag"><TkIco d="x" /></button></span>)}
+                  <input value={tagDraft} placeholder={t.tags.length ? "+ tag" : "Add a tag…"} onChange={(e) => setTagDraft(e.target.value)} aria-label="Add a tag"
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addTag(); } }} onBlur={addTag} />
+                </div>
               </div>
             </div>
           </div>
@@ -3221,6 +3515,7 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
           </div>
 
           {!creatingMode && !isTask && <SlaTimers t={t} sla={sla} now={now} />}
+          {!creatingMode && <TimeInStage t={t} events={thread?.events ?? []} now={now} />}
 
           {!creatingMode && (
             <dl className="td-meta">
@@ -3235,11 +3530,42 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
       {err && <p className="td-err" role="alert">{err}</p>}
       {creatingMode && (
         <footer className="td-foot">
-          <span className="td-foot-hint">It lands on {t.assignee ? (t.assignee === dir.me ? "your desk" : `${person(t.assignee)?.name ?? "their"} desk`) : "the team's desk, unassigned"}.</span>
+          <span className="td-foot-hint">
+            It lands on {t.assignee ? (t.assignee === dir.me ? "your list" : `${person(t.assignee)?.name ?? "their"}'s list`) : "the team's list, with no owner"}
+            {crew.length > 0 && <> · {crew.length === 1 ? `${person(crew[0])?.name ?? "1 watcher"} is notified` : `${crew.length} watchers are notified`}</>}.
+          </span>
           <span className="td-spacer" />
           <button type="button" className="td-ghost" onClick={onClose}>Cancel</button>
           <button type="button" className="td-primary" onClick={create} disabled={!t.title.trim() || busy}>{busy ? "Creating…" : `Create ${noun}`}</button>
         </footer>
+      )}
+      {propAt && (
+        <Pop anchor={propAt.rect} onClose={() => setPropAt(null)} width={propAt.k === "stage" ? 250 : propAt.k === "prio" ? 190 : 270}>
+          {propAt.k === "stage" ? (
+            <div className="tk-pop-list">
+              {TICKET_STAGES.map((s) => (
+                <button key={s.key} type="button" className={`tk-pop-opt ${t.stage === s.key ? "is-on" : ""}`} onClick={() => { setPropAt(null); set({ stage: s.key }); }}>
+                  <span className={`tk-dot is-${s.key}`} /><span>{stageLabel(s.key, t.category)}<em>{stageText(s.key, t.category).hint}</em></span>{t.stage === s.key && <TkIco d="check" className="tk-pop-tick" />}
+                </button>
+              ))}
+            </div>
+          ) : propAt.k === "prio" ? (
+            <div className="tk-pop-list">
+              {TASK_PRIORITIES.map((p) => (
+                <button key={p} type="button" className={`tk-pop-opt ${t.priority === p ? "is-on" : ""}`} onClick={() => { setPropAt(null); set({ priority: p }); }}>
+                  <span className={`tk-prio is-${p}`}><FlagIcon /></span><span>{PRIORITY_LABEL[p]}</span>{t.priority === p && <TkIco d="check" className="tk-pop-tick" />}
+                </button>
+              ))}
+            </div>
+          ) : propAt.k === "owner" ? (
+            <PeopleMenu dir={dir} value={t.assignee} first={crew} firstLabel="Watching it" noneLabel="Nobody" onPick={(id) => { setPropAt(null); set({ assignee: id }); }} />
+          ) : (
+            <div className="tdx-crew-pop">
+              <p className="tdx-crew-lead">Watchers get a notification, see it on their list and can be given steps.</p>
+              <PeopleMenu dir={dir} value={null} allowNone={false} picked={t.watchers} onPick={(id) => { if (id) void toggleWatch(id); }} />
+            </div>
+          )}
+        </Pop>
       )}
       {moreAt && (
         <Pop anchor={moreAt} onClose={() => setMoreAt(null)} width={240}>
@@ -3476,64 +3802,115 @@ function SlaTimers({ t, sla, now }: { t: Ticket; sla: SlaMap | null; now: number
   );
 }
 
-/* ---- progress: the steps, and where the ticket's time went ---- */
-function ProgressPanel({ t, events, now, onChecklist }: {
-  t: Ticket; events: TicketEvent[]; now: number; onChecklist: (steps: TaskStep[]) => void;
+/* ---- steps: tick them off, give each one to someone ---- */
+function StepsPanel({ t, dir, people, onTask, onChecklist, onInvolve }: {
+  t: Ticket; dir: Directory; people: MentionPerson[]; onTask: string[];
+  onChecklist: (steps: TaskStep[]) => Promise<unknown> | void; onInvolve: (ids: string[]) => void;
 }) {
   const [draft, setDraft] = useState("");
-  const done = t.checklist.filter((x) => x.done).length;
-  const pct = t.checklist.length ? Math.round((done / t.checklist.length) * 100) : null;
+  const [pick, setPick] = useState<{ id: string; rect: DOMRect } | null>(null);
+  const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
+  const steps = t.checklist;
+  const done = steps.filter((x) => x.done).length;
+  const pct = steps.length ? Math.round((done / steps.length) * 100) : 0;
+  const person = (id?: string | null) => (id ? dir.people.find((p) => p.id === id) ?? null : null);
+  const commit = async (list: TaskStep[], who?: string | null) => { await onChecklist(list); if (who) onInvolve([who]); };
+  /** "Send the draft @Ana": the step, given to Ana (a name at the end is who; one in the middle stays in the text). */
+  const add = () => {
+    const raw = draft.trim();
+    if (!raw) return;
+    const who = mentionIds(raw)[0] ?? null;
+    const text = raw.replace(/(\s*@\[[^\]]*\]\([^)]*\))+\s*$/, "").trim();
+    if (!text) return;
+    setDraft("");
+    void commit([...steps, { id: newStepId(), text, done: false, ...(who ? { who } : {}) }], who);
+  };
+  const saveEdit = () => {
+    if (!editing) return;
+    const v = editing.text.trim();
+    const id = editing.id;
+    setEditing(null);
+    const cur = steps.find((x) => x.id === id);
+    if (!cur || !v || v === cur.text) return;
+    void commit(steps.map((x) => (x.id === id ? { ...x, text: v } : x)));
+  };
+  return (
+    <section className="td-sec tdx-sec tdx-steps">
+      <div className="tdx-h">
+        <h3>Steps{steps.length > 0 && <em>{done}/{steps.length}</em>}</h3>
+        {steps.length > 0 && <span className={`tdx-meter ${pct === 100 ? "is-all" : ""}`} aria-hidden="true"><i style={{ width: `${pct}%` }} /></span>}
+        {steps.length > 0 && <span className="tdx-pct">{pct}%</span>}
+      </div>
+      <div className="tdx-step-list">
+        {steps.map((x) => {
+          const w = person(x.who);
+          return (
+            <div key={x.id} className={`tdx-step ${x.done ? "is-done" : ""} ${x.who && x.who === dir.me && !x.done ? "is-mine" : ""}`}>
+              <button type="button" className="tdx-step-tick" onClick={() => void commit(steps.map((y) => (y.id === x.id ? tickStep(y, dir.me) : y)))}
+                aria-label={x.done ? "Mark as not done" : "Mark as done"} title={x.done ? "Not done yet" : "Done"}><TkIco d="check" /></button>
+              {editing?.id === x.id ? (
+                <div className="tdx-step-edit" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) saveEdit(); }}>
+                  <MentionInput value={editing.text} onChange={(v) => setEditing((ed) => (ed ? { ...ed, text: v } : ed))} people={people} onEnter={saveEdit} className="tdx-step-ed" />
+                </div>
+              ) : (
+                <span className="tdx-step-txt" onClick={() => setEditing({ id: x.id, text: x.text })} title="Click to edit">
+                  <span className="tdx-step-t"><Rich text={x.text} /></span>
+                  {x.done && x.doneBy && (
+                    <em className="tdx-step-by" title={x.doneAt ? new Date(x.doneAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : undefined}>
+                      <TkIco d="check" />Done by {x.doneBy === dir.me ? "you" : person(x.doneBy)?.name ?? "someone"}{x.doneAt ? ` · ${ago(x.doneAt)}` : ""}
+                    </em>
+                  )}
+                </span>
+              )}
+              <button type="button" className={`tdx-step-who ${w ? "is-set" : ""}`} onClick={(e) => setPick({ id: x.id, rect: e.currentTarget.getBoundingClientRect() })}
+                title={w ? `${w.name} does this step — click to change` : "Give this step to someone"}>
+                {w ? <><Avatar person={w} size={20} /><span>{w.id === dir.me ? "You" : w.name.split(/\s+/)[0]}</span></> : <><TkIco d="user" /><span>Assign</span></>}
+              </button>
+              <button type="button" className="tdx-step-x" onClick={() => void commit(steps.filter((y) => y.id !== x.id))} aria-label="Remove step" title="Remove step"><TkIco d="x" /></button>
+            </div>
+          );
+        })}
+        <div className="tdx-step-add">
+          <TkIco d="plus" />
+          <MentionInput value={draft} onChange={setDraft} people={people} onEnter={add} className="tdx-step-ed"
+            placeholder={steps.length ? "Add a step… end with @name to give it to someone" : "Break it into steps… end with @name to give one to someone"} />
+          {draft.trim() && <button type="button" className="tdx-step-go" onMouseDown={(e) => e.preventDefault()} onClick={add}>Add</button>}
+        </div>
+      </div>
+      {pick && (
+        <Pop anchor={pick.rect} onClose={() => setPick(null)} width={270}>
+          <PeopleMenu dir={dir} value={steps.find((y) => y.id === pick.id)?.who ?? null} first={onTask} noneLabel="Nobody"
+            onPick={(id) => { const sid = pick.id; setPick(null); void commit(steps.map((y) => (y.id === sid ? { ...y, who: id } : y)), id); }} />
+        </Pop>
+      )}
+    </section>
+  );
+}
+
+/* ---- where the time went: each stage, as one bar ---- */
+function TimeInStage({ t, events, now }: { t: Ticket; events: TicketEvent[]; now: number }) {
   const segs = stageSegments(t, events, now);
   const total = Math.max(1, segs.reduce((n, s) => n + (s.to - s.from), 0));
   const created = new Date(t.createdAt).getTime();
-  const addStep = () => {
-    const v = draft.trim();
-    if (!v) return;
-    setDraft("");
-    onChecklist([...t.checklist, { id: newStepId(), text: v, done: false }]);
-  };
   return (
-    <section className="td-sec td-prog">
-      <div className="tdp-head">
-        <span className="td-k">Progress</span>
-        <span className="tdp-sub">
-          {pct !== null ? <><b>{done} of {t.checklist.length}</b> steps done</> : "No steps yet"}
-          <span className="tdp-age">{isActive(t.stage) ? `open ${span(now - created)}` : t.resolvedAt ? `resolved in ${span(new Date(t.resolvedAt).getTime() - created)}` : ""}</span>
-        </span>
-      </div>
-      {pct !== null && <span className="tdp-meter" aria-hidden="true"><i style={{ width: `${pct}%` }} /></span>}
-      {/* time in each stage, as one bar */}
-      <div className="tp-time" aria-label="Time in each stage">
-        <div className="tp-bar">
-          {segs.map((sg, i) => (
-            <span key={i} className={`tp-seg is-${sg.stage} ${sg.ongoing ? "is-now" : ""}`} style={{ flexGrow: Math.max(0.04, (sg.to - sg.from) / total) }} title={`${stageLabel(sg.stage, t.category)}: ${span(sg.to - sg.from)}`} />
-          ))}
-        </div>
-        <ol className="tp-steps">
-          {segs.map((sg, i) => (
-            <li key={i} className={`is-${sg.stage} ${sg.ongoing ? "is-now" : ""}`}>
-              <span className={`tk-dot is-${sg.stage}`} />
-              <b>{stageLabel(sg.stage, t.category)}</b>
-              <em>{span(sg.to - sg.from)}{sg.ongoing ? " so far" : ""}</em>
-            </li>
-          ))}
-        </ol>
-      </div>
-      <div className="tp-check">
-        {t.checklist.map((x) => (
-          <label key={x.id} className={x.done ? "is-done" : ""}>
-            <input type="checkbox" checked={x.done} onChange={() => onChecklist(t.checklist.map((y) => (y.id === x.id ? { ...y, done: !y.done } : y)))} />
-            <span>{x.text}</span>
-            <button type="button" className="tp-check-x" onClick={(e) => { e.preventDefault(); onChecklist(t.checklist.filter((y) => y.id !== x.id)); }} aria-label="Remove step"><TkIco d="x" /></button>
-          </label>
+    <div className="td-group tdx-time" aria-label="Time in each stage">
+      <span className="td-group-h"><TkIco d="clock" />Time in each stage
+        <em>{isActive(t.stage) ? `open ${span(now - created)}` : t.resolvedAt ? `done in ${span(new Date(t.resolvedAt).getTime() - created)}` : ""}</em></span>
+      <div className="tp-bar">
+        {segs.map((sg, i) => (
+          <span key={i} className={`tp-seg is-${sg.stage} ${sg.ongoing ? "is-now" : ""}`} style={{ flexGrow: Math.max(0.04, (sg.to - sg.from) / total) }} title={`${stageLabel(sg.stage, t.category)}: ${span(sg.to - sg.from)}`} />
         ))}
-        <div className="tp-add">
-          <TkIco d="plus" />
-          <input value={draft} placeholder={t.checklist.length ? "Add a step…" : "Break it into steps — progress follows them"} aria-label="Add a step" onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addStep(); } }} onBlur={addStep} />
-        </div>
       </div>
-    </section>
+      <ol className="tp-steps">
+        {segs.map((sg, i) => (
+          <li key={i} className={`is-${sg.stage} ${sg.ongoing ? "is-now" : ""}`}>
+            <span className={`tk-dot is-${sg.stage}`} />
+            <b>{stageLabel(sg.stage, t.category)}</b>
+            <em>{span(sg.to - sg.from)}{sg.ongoing ? " so far" : ""}</em>
+          </li>
+        ))}
+      </ol>
+    </div>
   );
 }
 

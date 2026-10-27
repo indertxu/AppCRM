@@ -928,3 +928,21 @@
 .cws-body { animation: cws-swap 0.28s ease-out; }
 @keyframes cws-swap { from { opacity: 0; } }
 .cws-head, .cws-tabs { flex-shrink: 0; }
+
+/* Calendar → My time off: where the rest is set up */
+.cws-setup-link { display: flex; align-items: center; gap: 14px; width: 100%; margin-top: 18px; padding: 12px 14px; border: 1px dashed rgba(10, 111, 77, 0.25); border-radius: 12px; background: #f6faf8; font: inherit; font-size: 12.5px; color: #3d5a4f; text-align: left; cursor: pointer; }
+.cws-setup-link span { flex: 1; line-height: 1.45; }
+.cws-setup-link b { font-weight: 650; color: #0b241a; }
+.cws-setup-link em { flex-shrink: 0; font-style: normal; font-weight: 700; color: #0a6f4d; }
+.cws-setup-link:hover { border-style: solid; background: #eef7f2; }
+
+/* the editors embedded in Settings › Calendar */
+.cws-embed { position: relative; overflow: visible; padding: 0 !important; animation: none; }
+.cws-embed-state { position: absolute; top: -2px; right: 0; font-size: 11.5px; font-weight: 650; color: #8aa298; }
+.cws-embed-state.is-saved { color: #0a8a5c; }
+.cws-embed-state.is-error { color: #b8452f; }
+.cws-embed-skel { height: 240px; border-radius: 14px; background: linear-gradient(90deg, #f1f6f3, #f8fbf9, #f1f6f3); background-size: 200% 100%; animation: cws-skel 1.2s linear infinite; }
+@keyframes cws-skel { to { background-position: -200% 0; } }
+.cws-hours-embed { display: flex; flex-direction: column; height: min(600px, 72vh); min-height: 460px; }
+.cws-embed.cx { display: block !important; height: auto !important; max-height: none !important; overflow: visible !important; }
+.cws-embed.cx > * { flex-shrink: 0; }

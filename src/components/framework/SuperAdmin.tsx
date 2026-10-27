@@ -23,7 +23,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../api/supabase";
-import { deptName } from "./pageAccess";
+import { deptName, levelName } from "./pageAccess";
 import "./SuperAdmin.css";
 
 /* ───────────────────────── storage ───────────────────────── */
@@ -275,8 +275,7 @@ async function returnToMe() {
 
 /* ───────────────────────── UI ───────────────────────── */
 const KNOWN_ROLES = ["boss", "consultancy_manager", "sales_manager", "customer_success", "it_manager", "marketing_manager", "hr_manager", "sales", "consultant"];
-const roleLabel = (r: string | null | undefined) =>
-  r ? r.split("_").map((w, i) => (i === 0 ? w.charAt(0).toUpperCase() + w.slice(1) : w)).join(" ") : "No role";
+const roleLabel = (r: string | null | undefined) => (r ? levelName(r) : "No role");
 const deptLabel = (d: string | null | undefined) => deptName(d);
 const initials = (n: string) => n.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join("") || "?";
 const hue = (s: string) => { let h = 11; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360; return h; };

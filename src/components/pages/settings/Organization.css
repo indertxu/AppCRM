@@ -624,3 +624,50 @@
 /* Organization header (Settings) */
 .st-org .st-bar { margin-bottom: 14px; }
 .st-org .st-title { font-size: 30px; letter-spacing: -0.02em; }
+
+/* =====================================================================
+   Security levels (Company › Levels, and inside a department)
+   ===================================================================== */
+.org-seg.is-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.org-seg.is-3 .org-seg-pill { width: calc((100% - 8px) / 3); }
+.org-seg.is-3 button { padding: 8px 4px; gap: 4px; font-size: 12px; white-space: nowrap; }
+.org-seg.is-3 button i { padding: 1px 5px; }
+
+.org-check { display: flex; align-items: flex-start; gap: 9px; padding: 8px 10px; border-radius: 10px; background: rgba(18, 181, 127, 0.06); cursor: pointer; }
+.org-newdept .org-check input, .org-check input { flex: none; width: 16px; height: 16px; margin: 1px 0 0; padding: 0; accent-color: var(--emerald); cursor: pointer; }
+.org-check span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.org-check b { font-size: 12.5px; font-weight: 650; color: var(--ink); }
+.org-check em { font-style: normal; font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+
+.org-lv { display: flex; flex-direction: column; gap: 6px; }
+.org-lv .org-section-label { margin-top: 22px; }
+.org-lv-warn { margin: 0 0 4px; padding: 9px 11px; border-radius: 11px; background: #fbf6ea; font-size: 12px; line-height: 1.45; color: #6f4f12; }
+.org-lv-group { display: flex; flex-direction: column; gap: 5px; margin-bottom: 8px; }
+.org-lv-gname { display: flex; align-items: center; gap: 7px; margin: 8px 2px 2px; font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+.org-lv-gname i { width: 8px; height: 8px; border-radius: 3px; background: var(--c); }
+.org-lv-gname em { margin-left: auto; font-style: normal; font-weight: 600; letter-spacing: 0; color: #9fb5ab; }
+.org-lv-row { border-radius: 13px; background: #fff; box-shadow: 0 0 0 1px var(--line); overflow: hidden; transition: box-shadow 0.2s; animation: org-fade 0.35s var(--ease) both; animation-delay: calc(var(--i, 0) * 25ms); }
+.org-lv-row:hover { box-shadow: 0 0 0 1px rgba(18, 181, 127, 0.35); }
+.org-lv-row.is-open { box-shadow: 0 0 0 1.5px var(--c, var(--emerald)), 0 14px 30px -20px rgba(10, 60, 40, 0.5); }
+.org-lv-head { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px; border: 0; background: none; font: inherit; text-align: left; cursor: pointer; }
+.org-lv-ico { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; background: color-mix(in srgb, var(--c, #12b57f) 14%, #fff); color: var(--c, var(--forest)); }
+.org-lv-ico svg { width: 15px; height: 15px; }
+.org-lv-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.org-lv-main b { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 650; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.org-lv-main small { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.org-lv-def { flex: none; padding: 1px 7px; border-radius: 999px; background: rgba(18, 181, 127, 0.14); font-style: normal; font-size: 10px; font-weight: 700; color: var(--forest); }
+.org-lv-n { flex: none; min-width: 22px; padding: 2px 7px; border-radius: 999px; background: rgba(10, 111, 77, 0.07); text-align: center; font-size: 11.5px; font-weight: 700; color: var(--forest); }
+.org-lv-chev { flex: none; width: 15px; height: 15px; color: #9fb5ab; transition: transform 0.25s var(--ease); }
+.org-lv-row.is-open .org-lv-chev { transform: rotate(180deg); color: var(--forest); }
+.org-lv-body { padding: 4px 12px 12px; border-top: 1px solid var(--line); animation: org-fade 0.3s var(--ease) both; }
+.org-lv-body .org-field { margin: 10px 0 0; }
+.org-lv-input { width: 100%; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: #fff; font: 600 13.5px "Inter", sans-serif; color: var(--ink); outline: none; }
+.org-lv-input:focus { border-color: var(--emerald); box-shadow: 0 0 0 3px rgba(18, 181, 127, 0.12); }
+.org-lv-fixed { display: flex; flex-direction: column; gap: 2px; padding: 9px 11px; border-radius: 10px; background: rgba(10, 111, 77, 0.05); font-size: 13px; font-weight: 600; color: var(--ink); }
+.org-lv-fixed em { font-style: normal; font-size: 11px; font-weight: 500; color: var(--muted); }
+.org-lv-acts { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px; margin-top: 12px; }
+.org-lv-acts:empty { display: none; }
+.org-lv-del { margin-left: auto; border: 0; border-radius: 10px; padding: 7px 12px; background: rgba(214, 69, 69, 0.08); color: #b8452f; font: 600 12.5px "Inter", sans-serif; cursor: pointer; }
+.org-lv-del:hover { background: rgba(214, 69, 69, 0.14); }
+.org-lv-new .org-field { margin: 0; }
+@media (prefers-reduced-motion: reduce) { .org-lv-row, .org-lv-body { animation: none; } }
