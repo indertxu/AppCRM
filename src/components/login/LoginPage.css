@@ -537,3 +537,7 @@
 /* Launch: the shared vector cube (same size and spot as the home page's arrival loader, so the hand-off is seamless). */
 .np-launch-cube.is-vec { height: 170px; margin: -85px 0 0 -84px; }
 .np-launch-cube.is-vec > svg { position: absolute; left: 50%; top: 50%; width: 250px; height: 250px; transform: translate(-50%, -50%); }
+
+/* signed in: the hero cube itself flies to the middle and lands as the loader */
+.np-fly { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; shape-rendering: geometricPrecision; }
+.np-launch-cube.is-landed::before { animation: np-fade 0.6s ease both; }

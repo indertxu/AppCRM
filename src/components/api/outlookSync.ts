@@ -1,4 +1,5 @@
 // Frontend helper for one-way Outlook sync. Lives in src/api/ alongside supabase.ts.
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "./supabase";
 
 const CLIENT_ID = import.meta.env.VITE_MS_CLIENT_ID as string;
@@ -371,6 +372,8 @@ export async function syncCalendarEntry(entryId: string): Promise<OutlookSyncRes
     const e = row as any;
     const me = auth?.user;
     if (!e || !me) return { ok: false, eventId: null, error: "Entry not found" };
+    // Logged from an Outlook event (73_outlook_events.sql): that event stays as it is in Outlook.
+    if (e.outlook_source_id) return { ok: true, skipped: true, eventId: null };
     // The function writes to the signed-in user's own calendar.
     if (e.user_id !== me.id) return { ok: false, skipped: true, eventId: e.outlook_event_id ?? null };
 
@@ -551,4 +554,114 @@ export async function fetchMailAttachment(messageId: string, attachmentId: strin
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     return { blob: new Blob([bytes], { type: r.contentType || "application/octet-stream" }), name: r.name || "attachment" };
   } catch (e: any) { return { error: e?.message ?? "Could not download." }; }
+}
+
+
+/* ===========================================================================
+   Reading the user's own Outlook calendar (outlook-sync › events)
+   ---------------------------------------------------------------------------
+   Shown read-only on the calendars (grey blocks) and on the home page; one
+   click logs an event as an entry (calendar_entries.outlook_source_id points
+   back at it, so it isn't shown twice). Events the CRM put in Outlook itself
+   are left out by the function.
+   =========================================================================== */
+export interface OutlookEvent {
+  id: string; subject: string;
+  /** UTC ISO instants */
+  start: string; end: string;
+  allDay: boolean;
+  showAs: "free" | "tentative" | "busy" | "oof" | "workingElsewhere" | "unknown" | string;
+  location: string | null; organizer: string | null; isOrganizer: boolean;
+  online: boolean; joinUrl: string | null; webLink: string | null;
+  preview: string; attendees: number; private: boolean; recurring: boolean;
+}
+export interface OutlookEventsResult { connected: boolean; events: OutlookEvent[]; error?: string }
+/** Fired when someone logs an Outlook event (or wants the calendars re-read). */
+export const OUTLOOK_EVENTS_EVENT = "next:outlook-events";
+export const OUTLOOK_EVENTS_SQL = "Run 73_outlook_events.sql in Supabase to link entries to Outlook events.";
+const olCache = new Map<string, { at: number; p: Promise<OutlookEventsResult> }>();
+const OL_TTL = 3 * 60000;
+/** The user's Outlook events from `from` to `to` (cached for a few minutes). */
+export function fetchOutlookEvents(from: Date, to: Date, fresh = false): Promise<OutlookEventsResult> {
+  const key = `${from.toISOString()}|${to.toISOString()}`;
+  const hit = olCache.get(key);
+  if (hit && !fresh && Date.now() - hit.at < OL_TTL) return hit.p;
+  const p = (async (): Promise<OutlookEventsResult> => {
+    try {
+      const r = await call("events", { from: from.toISOString(), to: to.toISOString() });
+      if (r?.httpStatus === 404) return { connected: true, events: [], error: "The outlook-sync function isn't deployed yet." };
+      if (r?.error === "Unknown action") return { connected: true, events: [], error: "Deploy the latest outlook-sync function to read Outlook events." };
+      if (r?.error && !Array.isArray(r?.events)) return { connected: r?.connected !== false, events: [], error: errText(r.error) };
+      return { connected: r?.connected !== false, events: Array.isArray(r?.events) ? (r.events as OutlookEvent[]).filter((e) => e?.id && e.start && e.end) : [], error: r?.error ? errText(r.error) : undefined };
+    } catch (e) {
+      return { connected: true, events: [], error: errText(e) };
+    }
+  })();
+  olCache.set(key, { at: Date.now(), p });
+  p.then((r) => { if (r.error) olCache.delete(key); }).catch(() => olCache.delete(key));
+  return p;
+}
+/** Outlook events of a window, re-read when asked (OUTLOOK_EVENTS_EVENT) or when the connection changes. */
+export function useOutlookEvents(from: Date, to: Date, enabled = true): OutlookEventsResult & { loading: boolean; reload: () => void } {
+  const [st, setSt] = useState<OutlookEventsResult & { loading: boolean }>({ connected: true, events: [], loading: enabled });
+  const [tick, setTick] = useState(0);
+  const fromKey = from.getTime(), toKey = to.getTime();
+  const reload = useCallback(() => { olCache.clear(); setTick((t) => t + 1); }, []);
+  useEffect(() => {
+    if (!enabled) { setSt((s) => ({ ...s, loading: false })); return; }
+    let alive = true;
+    setSt((s) => ({ ...s, loading: true }));
+    fetchOutlookEvents(new Date(fromKey), new Date(toKey), tick > 0).then((r) => { if (alive) setSt({ ...r, loading: false }); });
+    return () => { alive = false; };
+  }, [fromKey, toKey, enabled, tick]);
+  useEffect(() => {
+    const f = () => reload();
+    window.addEventListener(OUTLOOK_EVENTS_EVENT, f);
+    window.addEventListener(OUTLOOK_CONNECTION_EVENT, f);
+    return () => { window.removeEventListener(OUTLOOK_EVENTS_EVENT, f); window.removeEventListener(OUTLOOK_CONNECTION_EVENT, f); };
+  }, [reload]);
+  return { ...st, reload };
+}
+const localMidnight = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+/** An all-day event's day boundary: Outlook gives midnight in the event's zone, read back in UTC — round to the nearest day. */
+const allDayEdge = (iso: string) => {
+  const d = new Date(iso);
+  const utcDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  if (d.getUTCHours() >= 12) utcDay.setUTCDate(utcDay.getUTCDate() + 1);
+  return new Date(utcDay.getUTCFullYear(), utcDay.getUTCMonth(), utcDay.getUTCDate());
+};
+/**
+ * Where an event falls on one local day: "allday", minutes after midnight (start / end,
+ * clipped to that day), or null when it isn't on that day.
+ */
+export function outlookOnDay(e: OutlookEvent, day: Date): "allday" | { startMin: number; endMin: number } | null {
+  const d0 = localMidnight(day), d1 = new Date(d0); d1.setDate(d1.getDate() + 1);
+  if (e.allDay) {
+    const s = allDayEdge(e.start), en = allDayEdge(e.end);
+    return d0 >= s && d0 < (en > s ? en : new Date(s.getTime() + 86400000)) ? "allday" : null;
+  }
+  const s = new Date(e.start), en = new Date(e.end);
+  if (!(en > d0) || !(s < d1)) return null;
+  const a = s < d0 ? d0 : s, b = en > d1 ? d1 : en;
+  const startMin = Math.round((a.getTime() - d0.getTime()) / 60000);
+  const endMin = Math.max(startMin + 15, Math.round((b.getTime() - d0.getTime()) / 60000));
+  return { startMin, endMin: Math.min(1440, endMin) };
+}
+/** "09:30" in local time. */
+export const outlookTime = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+/**
+ * The events still to show: not logged already (an entry points at them) and not the same slot as
+ * one of your entries (the CRM's own events, or something you logged by hand).
+ */
+export function outlookNotLogged(events: OutlookEvent[], entries: { date: Date; startMin: number; endMin: number; outlookEventId?: string | null; outlookSourceId?: string | null }[]): OutlookEvent[] {
+  const linked = new Set(entries.flatMap((x) => [x.outlookEventId, x.outlookSourceId]).filter(Boolean) as string[]);
+  return events.filter((ev) => {
+    if (linked.has(ev.id)) return false;
+    if (ev.allDay) return true;
+    const s = new Date(ev.start);
+    const on = outlookOnDay(ev, s);
+    if (!on || on === "allday") return true;
+    return !entries.some((x) => localMidnight(x.date).getTime() === localMidnight(s).getTime()
+      && Math.abs(x.startMin - on.startMin) <= 5 && Math.abs(x.endMin - on.endMin) <= 5);
+  });
 }

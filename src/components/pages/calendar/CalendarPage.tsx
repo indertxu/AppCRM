@@ -16,7 +16,8 @@ import {
 import { loadRoles } from "../settings/blueprintsApi";
 import ActualModal, { type ActualValue } from "./ActualModal";
 import { supabase } from "../../api/supabase";
-import { deleteEntryFromOutlook, syncCalendarEntry } from "../../api/outlookSync";
+import { deleteEntryFromOutlook, syncCalendarEntry, useOutlookEvents, outlookOnDay, outlookNotLogged, outlookTime, OUTLOOK_EVENTS_SQL, type OutlookEvent } from "../../api/outlookSync";
+import { createPortal } from "react-dom";
 import { TicketDesk } from "../homepage/shared/HomeTodo";
 import { PageCover } from "../../framework/AppLayout";
 import "./CalendarPage.css";
@@ -61,7 +62,121 @@ attendees: string;
   meetKind: string;
   userId: string;
   outlookEventId?: string | null;
+  /** Logged from this Outlook event (73_outlook_events.sql). */
+  outlookSourceId?: string | null;
 }
+/** An Outlook event drawn on the week grid next to the entries. */
+interface OlCell { id: string; startMin: number; endMin: number; userId: string; dateKey: string; ol: OutlookEvent }
+const OL_KEY = "cal.outlook";
+const OL_ICON = "M8 2v3M16 2v3M3.5 9h17M5 4.5h14A1.5 1.5 0 0 1 20.5 6v13A1.5 1.5 0 0 1 19 20.5H5A1.5 1.5 0 0 1 3.5 19V6A1.5 1.5 0 0 1 5 4.5zM12 17.2a2.7 2.7 0 1 0 0-5.4 2.7 2.7 0 0 0 0 5.4z";
+const OlGlyph = ({ s = 13 }: { s?: number }) => (
+  <svg viewBox="0 0 24 24" width={s} height={s} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={OL_ICON} /></svg>
+);
+const SHOW_AS: Record<string, string> = { free: "Free", tentative: "Tentative", busy: "Busy", oof: "Out of office", workingElsewhere: "Working elsewhere" };
+
+/**
+ * An Outlook event, read only: when, where, who — and one button to log it as an entry
+ * (the entry then stands in for it; the event itself stays untouched in Outlook).
+ */
+export function OutlookCard({ ev, anchor, logLabel, onLog, onClose }: {
+  ev: OutlookEvent; anchor: DOMRect | null; logLabel: string; onLog: () => void; onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const w = el.offsetWidth, h = el.offsetHeight, vw = window.innerWidth, vh = window.innerHeight;
+    if (!anchor) { setPos({ top: Math.max(16, (vh - h) / 2), left: Math.max(16, (vw - w) / 2) }); return; }
+    let left = anchor.right + 10;
+    if (left + w > vw - 12) left = anchor.left - w - 10;
+    if (left < 12) left = Math.min(vw - w - 12, Math.max(12, anchor.left + anchor.width / 2 - w / 2));
+    const top = Math.min(vh - h - 12, Math.max(12, anchor.top));
+    setPos({ top, left });
+  }, [anchor, ev.id]);
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
+    const down = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) onClose(); };
+    document.addEventListener("keydown", k, true);
+    const t = window.setTimeout(() => document.addEventListener("mousedown", down), 0);
+    return () => { document.removeEventListener("keydown", k, true); window.clearTimeout(t); document.removeEventListener("mousedown", down); };
+  }, [onClose]);
+  const s = new Date(ev.start), e = new Date(ev.end);
+  const sameDayEv = s.toDateString() === new Date(e.getTime() - 1).toDateString();
+  const day = s.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" });
+  const when = ev.allDay ? (sameDayEv || e.getTime() - s.getTime() <= 86400000 ? "All day" : `All day · until ${new Date(e.getTime() - 1).toLocaleDateString(undefined, { day: "numeric", month: "short" })}`)
+    : sameDayEv ? `${outlookTime(ev.start)} – ${outlookTime(ev.end)}` : `${outlookTime(ev.start)} → ${new Date(ev.end).toLocaleDateString(undefined, { day: "numeric", month: "short" })} ${outlookTime(ev.end)}`;
+  return createPortal(
+    <div ref={ref} className={`olc ${pos ? "is-in" : ""}`} role="dialog" aria-label={ev.subject} style={pos ? { top: pos.top, left: pos.left } : { top: -9999, left: -9999 }}>
+      <div className="olc-top">
+        <span className="olc-src"><OlGlyph s={12} />Outlook{ev.recurring ? " · repeats" : ""}</span>
+        {ev.showAs && ev.showAs !== "busy" && SHOW_AS[ev.showAs] && <span className={`olc-show is-${ev.showAs}`}>{SHOW_AS[ev.showAs]}</span>}
+        <button type="button" className="olc-x" onClick={onClose} aria-label="Close">×</button>
+      </div>
+      <h4 className="olc-title">{ev.subject}</h4>
+      <p className="olc-when"><b>{day}</b><span>{when}</span></p>
+      <div className="olc-facts">
+        {ev.location && <span><i>Where</i>{ev.location}</span>}
+        {(ev.organizer || ev.isOrganizer) && <span><i>Organiser</i>{ev.isOrganizer ? "You" : ev.organizer}</span>}
+        {ev.attendees > 0 && <span><i>People</i>{ev.attendees} invited</span>}
+      </div>
+      {ev.preview && <p className="olc-prev">{ev.preview}</p>}
+      <div className="olc-acts">
+        <button type="button" className="olc-log" onClick={onLog}>
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>{logLabel}
+        </button>
+        {ev.joinUrl && <a className="olc-link" href={ev.joinUrl} target="_blank" rel="noopener noreferrer">Join</a>}
+        {ev.webLink && <a className="olc-link" href={ev.webLink} target="_blank" rel="noopener noreferrer">Open in Outlook</a>}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+/**
+ * Why the Outlook button is orange, in words, with what to do about it (instead of a tooltip
+ * nobody hovers): not connected, the function not deployed yet, or Microsoft's error.
+ */
+export function OutlookStatusCard({ anchor, connected, error, onRetry, onConnect, onHide, onClose }: {
+  anchor: DOMRect; connected: boolean; error?: string; onRetry: () => void; onConnect: () => void; onHide: () => void; onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
+    const down = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) onClose(); };
+    document.addEventListener("keydown", k, true);
+    const t = window.setTimeout(() => document.addEventListener("mousedown", down), 0);
+    return () => { document.removeEventListener("keydown", k, true); window.clearTimeout(t); document.removeEventListener("mousedown", down); };
+  }, [onClose]);
+  const notDeployed = !!error && /deploy|isn't deployed|Unknown action/i.test(error);
+  const noPermission = !!error && /403|Forbidden|Authorization_RequestDenied|AccessDenied|insufficient/i.test(error);
+  const title = !connected ? "Outlook isn't connected" : notDeployed ? "Outlook reading isn't switched on yet" : noPermission ? "Outlook said no" : "Couldn't read your Outlook";
+  const text = !connected
+    ? "Connect your Outlook (Settings › Interface) to see your Outlook events here."
+    : notDeployed
+      ? "The outlook-sync function in Supabase is still the old version. Deploy it again (supabase functions deploy outlook-sync) and press Try again."
+      : noPermission
+        ? "Your Outlook connection can't read the calendar. Connect Outlook again from Settings › Interface."
+        : "Microsoft didn't answer as expected. Try again in a minute.";
+  const left = Math.max(12, Math.min(window.innerWidth - 332, anchor.right - 320));
+  return createPortal(
+    <div ref={ref} className="olc olc-status is-in" role="dialog" aria-label={title} style={{ top: anchor.bottom + 10, left, width: 320 }}>
+      <div className="olc-top"><span className="olc-src is-warn"><OlGlyph s={12} />Outlook</span>
+        <button type="button" className="olc-x" onClick={onClose} aria-label="Close">×</button></div>
+      <h4 className="olc-title">{title}</h4>
+      <p className="olc-when"><span>{text}</span></p>
+      {error && !notDeployed && <p className="olc-prev olc-err">{error}</p>}
+      <div className="olc-acts">
+        {!connected || noPermission
+          ? <button type="button" className="olc-log" onClick={onConnect}>Connect Outlook</button>
+          : <button type="button" className="olc-log" onClick={onRetry}>Try again</button>}
+        <button type="button" className="olc-link is-btn" onClick={onHide}>Hide them</button>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+/** Entries' days as dates ("Y-M-D" with a zero-based month). */
+const keyDate = (k: string) => { const [y, m, d] = k.split("-").map(Number); return new Date(y, m, d); };
 
 function startOfWeek(input: Date): Date {
   const d = new Date(input);
@@ -309,6 +424,8 @@ attendees: string;
   line: string;
   roleId: string;
   meetKind?: string;
+  /** Logging an Outlook event: the entry keeps its id. */
+  outlookSourceId?: string;
 }
 export default function CalendarPage() {
   const navigate = useNavigate();
@@ -618,6 +735,7 @@ status: (r.status as string) || "planned",
         meetKind: (r.meeting_kind as string) ?? "in_person",
         userId: (r.user_id as string) ?? "",
         outlookEventId: (r.outlook_event_id as string) ?? null,
+        outlookSourceId: (r.outlook_source_id as string) ?? null,
         inviteId: (r.invite_id as string) ?? null,
       })));
 
@@ -758,6 +876,50 @@ const { data: ea } = await supabase.from("entry_actuals").select("*");
     [weekStart]
   );
 
+  /* ---- your Outlook, read only (grey blocks), on or off from the header ---- */
+  const [olOn, setOlOn] = useState<boolean>(() => { try { return !!new URLSearchParams(window.location.search).get("outlook") || localStorage.getItem(OL_KEY) !== "0"; } catch { return true; } });
+  const [olPick, setOlPick] = useState<{ ev: OutlookEvent; anchor: DOMRect | null } | null>(null);
+  const olRange = useMemo(() => {
+    if (view === "month") {
+      const m = monthMatrix(monthAnchor).flat();
+      return { from: m[0], to: addDays(m[m.length - 1], 3) };
+    }
+    return { from: weekStart, to: addDays(weekStart, 7) };
+  }, [view, monthAnchor, weekStart]);
+  const ol = useOutlookEvents(olRange.from, olRange.to, olOn && !!myId);
+  const olShown = useMemo(() => (olOn ? outlookNotLogged(ol.events, entries.filter((e) => e.userId === myId)
+    .map((e) => ({ date: keyDate(e.dateKey), startMin: e.startMin, endMin: e.endMin, outlookEventId: e.outlookEventId, outlookSourceId: e.outlookSourceId }))) : []),
+  [olOn, ol.events, entries, myId]);
+  const [olInfo, setOlInfo] = useState<DOMRect | null>(null);
+  const setOlShown = (on: boolean) => { setOlOn(on); try { localStorage.setItem(OL_KEY, on ? "1" : "0"); } catch { /* ignore */ } };
+  const toggleOl = (rect?: DOMRect) => {
+    // orange: say why, instead of hiding them
+    if (olOn && (!ol.connected || ol.error) && rect) { setOlInfo(rect); return; }
+    setOlShown(!olOn);
+  };
+  // Home › an Outlook event: /calendar?outlook=<id>&d=<YYYY-MM-DD> opens its week and its card.
+  const [olWanted, setOlWanted] = useState<{ id: string; day: Date } | null>(() => {
+    try {
+      const q = new URLSearchParams(window.location.search);
+      const id = q.get("outlook"), d = q.get("d");
+      if (!id || !d || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return null;
+      const [y, m, dd] = d.split("-").map(Number);
+      return { id, day: new Date(y, m - 1, dd) };
+    } catch { return null; }
+  });
+  useEffect(() => {
+    if (!olWanted) return;
+    if (view !== "week") setView("week");
+    const wk = startOfWeek(olWanted.day);
+    if (wk.getTime() !== weekStart.getTime()) { setWeekStart(wk); return; }
+    if (ol.loading || olRange.from.getTime() !== wk.getTime()) return;
+    const ev = ol.events.find((x) => x.id === olWanted.id);
+    if (ev) setOlPick({ ev, anchor: null });
+    setOlWanted(null);
+    navigate("/calendar", { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [olWanted, weekStart, view, ol.loading, ol.events, olRange]);
+
   const jumpTo = (d: Date) => {
     const t = startOfWeek(d);
     setDir(t.getTime() < weekStart.getTime() ? -1 : 1);
@@ -826,6 +988,20 @@ const goToday = () => {
     // entry is yours, since your own week is always one of the ones on screen.
     const billable = Math.max(0.25, Math.round((endMin - startMin) / 60 / 0.25) * 0.25);
 setModal({ day, startMin, endMin, type: workTypes[0]?.id ?? "", billable, clientId: "", projectId: "", phaseId: "", taskId: "", attendees: "", notes: "", line: "", roleId: "" });
+  };
+  /** Log an Outlook event: a new entry at its time, its title as the note, linked back to it. */
+  const logOutlook = (ev: OutlookEvent) => {
+    const s = new Date(ev.start);
+    const day = new Date(s.getFullYear(), s.getMonth(), s.getDate());
+    const on = outlookOnDay(ev, day);
+    const hd = hoursByDay[day.getDay()];
+    const [startMin, endMin] = !on || on === "allday"
+      ? [hd?.work_from ?? 9 * 60, hd?.work_to ?? 17 * 60]
+      : [Math.round(on.startMin / 15) * 15, Math.max(Math.round(on.startMin / 15) * 15 + 15, Math.round(on.endMin / 15) * 15)];
+    const billable = Math.max(0.25, Math.round((endMin - startMin) / 60 / 0.25) * 0.25);
+    setOlPick(null);
+    setModal({ day, startMin, endMin, type: workTypes[0]?.id ?? "", billable, clientId: "", projectId: "", phaseId: "", taskId: "", attendees: "", notes: ev.subject, line: "", roleId: "",
+      meetKind: ev.online ? "teams" : "in_person", outlookSourceId: ev.id });
   };
   const openEdit = (day: Date, e: Entry) => {
     if (e.userId !== myId) return;
@@ -921,7 +1097,8 @@ if (!modal) return;
         alert("This booking's type of work no longer exists. Pick a type again in the booking, then save.");
         return;
       }
-      const { error } = await supabase.from("calendar_entries").upsert({
+      const fromOl = !modal.editingId && modal.outlookSourceId ? modal.outlookSourceId : null;
+      const row: Record<string, unknown> = {
         id,
         user_id: u.user.id,
         date_key: key,
@@ -941,7 +1118,17 @@ notes: v.notes || null,
         kind: "delivery",
         meeting_kind: v.meetKind || "in_person",
         status: entries.find((e) => e.id === id)?.status ?? "planned",
-      });
+      };
+      if (fromOl) row.outlook_source_id = fromOl;
+      let { error } = await supabase.from("calendar_entries").upsert(row);
+      let linked = !!fromOl;
+      if (error && fromOl && /outlook_source_id/i.test(error.message)) {
+        // 73_outlook_events.sql not run yet: keep the entry, without the link
+        delete row.outlook_source_id;
+        ({ error } = await supabase.from("calendar_entries").upsert(row));
+        linked = false;
+        if (!error) alert(OUTLOOK_EVENTS_SQL);
+      }
       if (error) { alert(`Could not save entry: ${error.message}`); return; }
 
       // Invitations follow whoever is on the entry now: dropped people lose
@@ -960,10 +1147,12 @@ notes: v.notes || null,
       setEntries((list) =>
         modal.editingId
           ? list.map((e) => (e.id === id ? { ...e, ...v, dateKey: key } : e))
-        : [...list, { id, dateKey: key, ...v, status: "planned" }]
+        : [...list, { id, dateKey: key, ...v, status: "planned", outlookSourceId: fromOl } as Entry]
       );
       setModal(null);
 
+      // Logged from an Outlook event: it's already in Outlook, leave it as it is.
+      if (fromOl && linked) return;
       // Into the booker's Outlook with everything on it, colleagues invited
       // (no-op if Outlook isn't connected).
       void syncCalendarEntry(id).then((r) => {
@@ -1368,6 +1557,11 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
             </div>
           )}
           <div className="cv-icons">
+          <button type="button" className={`cal-gear cal-olbtn ${olOn ? "is-on" : ""} ${olOn && !ol.loading && (ol.error || !ol.connected) ? "is-warn" : ""}`} onClick={(x) => toggleOl(x.currentTarget.getBoundingClientRect())} aria-pressed={olOn}
+            title={!olOn ? "Show your Outlook events" : !ol.connected ? "Outlook isn't connected — connect it in Settings" : ol.error ? `Outlook: ${ol.error}` : `Showing ${olShown.length} Outlook event${olShown.length === 1 ? "" : "s"} · click to hide`}>
+            <OlGlyph s={16} />
+            {olOn && ol.connected && !ol.error && olShown.length > 0 && <span className="cal-olbtn-n">{olShown.length}</span>}
+          </button>
           <div className="cal-bell-wrap" ref={bellRef}>
           <button className="cal-bell" onClick={() => setTrayOpen((v) => !v)}
             aria-label={`${invites.length} invitations`} title="Invitations">
@@ -1463,6 +1657,13 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
                               </button>
                             );
                           })}
+                        {olShown.map((ev) => ({ ev, on: outlookOnDay(ev, d) })).filter((x) => x.on).map(({ ev, on }) => (
+                          <button key={`ol-${ev.id}`} className="cal-mchip is-ol" title={`${ev.subject} · Outlook`} style={{ ["--ec" as string]: "#8796a1" }}
+                            onClick={(x) => { x.stopPropagation(); setOlPick({ ev, anchor: x.currentTarget.getBoundingClientRect() }); }}>
+                            <span className="cal-mchip-time">{on === "allday" ? <OlGlyph s={10} /> : fmtTime((on as { startMin: number }).startMin).replace(":00", "")}</span>
+                            <span className="cal-mchip-name">{ev.subject}</span>
+                          </button>
+                        ))}
                       </div>
                     </div>
                   );
@@ -1537,7 +1738,16 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
             const iso = isoOf(d);
             const holidayName = holidaySet.get(iso);
             const isVacation = vacationSet.has(iso);
-            const dayEntries = laidOut(entries.filter((e) => e.dateKey === key), seenIds);
+            // Outlook events of the day: timed ones inside the window share the lanes with your entries
+            // (their own column when colleagues are laid over); all-day and out-of-hours ones become tags.
+            const olToday = olShown.map((ev) => ({ ev, on: outlookOnDay(ev, d) })).filter((x) => x.on);
+            const olTags = olToday.filter((x) => x.on === "allday" || (x.on as { endMin: number }).endMin <= DAY_START || (x.on as { startMin: number }).startMin >= DAY_END);
+            const olCells: OlCell[] = olToday.filter((x) => !olTags.includes(x)).map(({ ev, on }) => {
+              const o = on as { startMin: number; endMin: number };
+              const st = Math.max(DAY_START, o.startMin);
+              return { id: `ol:${ev.id}`, startMin: st, endMin: Math.max(st + 15, Math.min(DAY_END, o.endMin)), userId: viewingOther ? "__outlook" : myId, dateKey: key, ol: ev };
+            });
+            const dayEntries = laidOut<Entry | OlCell>([...entries.filter((e) => e.dateKey === key), ...olCells], viewingOther ? [...seenIds, "__outlook"] : seenIds);
             return (
              <div
                 className={`cal-col ${isToday ? "is-today" : ""} ${dragging ? "is-drop" : ""} ${holidayName != null ? "is-holiday" : ""} ${isVacation ? "is-vacation" : ""} ${hoursByDay[d.getDay()]?.remote ? "is-remote" : ""}`}
@@ -1565,14 +1775,14 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
                   if (!ghost || ghost.key !== key || ghost.cur !== m) setGhost({ key, anchor: m, cur: m, drag: false, len });
                 }}
                 onMouseDown={(ev) => {
-                  if (ev.button !== 0 || dragging || (ev.target as HTMLElement).closest(".cal-event, .cal-daytag")) return;
+                  if (ev.button !== 0 || dragging || (ev.target as HTMLElement).closest(".cal-event, .cal-daytag, .cal-ol, .cal-oltags")) return;
                   ev.preventDefault();
                   const m = minAt(ev.currentTarget, ev.clientY);
                   setGhost({ key, anchor: m, cur: m, drag: true });
                 }}
                 onMouseMove={(ev) => {
                   if (dragging) return;
-                  if ((ev.target as HTMLElement).closest(".cal-event")) { if (ghost && !ghost.drag) setGhost(null); return; }
+                  if ((ev.target as HTMLElement).closest(".cal-event, .cal-ol, .cal-oltags")) { if (ghost && !ghost.drag) setGhost(null); return; }
                   const m = minAt(ev.currentTarget, ev.clientY);
                   if (ghost?.drag) { if (ghost.key === key && ghost.cur !== m) setGhost({ ...ghost, cur: m }); return; }
                   if (!ghost || ghost.key !== key || ghost.cur !== m) setGhost({ key, anchor: m, cur: m, drag: false });
@@ -1589,6 +1799,17 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
                 {(holidayName != null || isVacation) && (
                   <span className={`cal-daytag ${isVacation ? "is-vac" : "is-hol"}`}>
                     {isVacation ? "Vacation" : (holidayName || "Holiday")}
+                  </span>
+                )}
+                {olTags.length > 0 && (
+                  <span className={`cal-oltags ${holidayName != null || isVacation ? "is-low" : ""}`}>
+                    {olTags.slice(0, 3).map(({ ev, on }) => (
+                      <button type="button" key={ev.id} className="cal-oltag" title={`${ev.subject} · ${on === "allday" ? "All day" : `${outlookTime(ev.start)} – ${outlookTime(ev.end)}`} · Outlook`}
+                        onClick={(x) => { x.stopPropagation(); setOlPick({ ev, anchor: x.currentTarget.getBoundingClientRect() }); }}>
+                        <OlGlyph s={10} />{on === "allday" ? "" : <b>{outlookTime(ev.start)}</b>}<span>{ev.subject}</span>
+                      </button>
+                    ))}
+                    {olTags.length > 3 && <em>+{olTags.length - 3}</em>}
                   </span>
                 )}
                 {/* Shading straight from the configured hours: outside the
@@ -1642,6 +1863,22 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
                 })()}
 
                 {dayEntries.map((e, ei) => {
+                  if ("ol" in e) {
+                    const top = ((e.startMin - DAY_START) / SPAN) * 100;
+                    const height = ((e.endMin - e.startMin) / SPAN) * 100;
+                    const ev = e.ol;
+                    return (
+                      <div key={e.id} className={`cal-ol ${e.endMin - e.startMin <= 45 ? "is-short" : ""} ${e.merged > 1 ? "is-merged" : ""} is-${ev.showAs}`}
+                        style={{ top: `${top}%`, height: `${height}%`, left: `calc(${e.left}% + 2px)`, width: `calc(${e.width}% - 4px)`, zIndex: 2 + e.lane, ["--i" as string]: ei }}
+                        role="button" tabIndex={0} title={`${ev.subject} · Outlook`}
+                        onMouseDown={(x) => x.stopPropagation()}
+                        onClick={(x) => { x.stopPropagation(); setOlPick({ ev, anchor: x.currentTarget.getBoundingClientRect() }); }}
+                        onKeyDown={(x) => { if (x.key === "Enter") setOlPick({ ev, anchor: x.currentTarget.getBoundingClientRect() }); }}>
+                        <span className="cal-ol-title"><OlGlyph s={11} />{e.merged > 1 ? `${e.merged} in Outlook` : ev.subject}</span>
+                        <span className="cal-ol-time">{fmtTime(e.startMin)} – {fmtTime(e.endMin)}{e.merged === 1 && ev.location ? ` · ${ev.location}` : ""}</span>
+                      </div>
+                    );
+                  }
                   const top = ((e.startMin - DAY_START) / SPAN) * 100;
 const height = ((e.endMin - e.startMin) / SPAN) * 100;
 const wt = workTypes.find((t) => t.id === e.type);
@@ -1736,6 +1973,15 @@ onClick={(ev) => { ev.stopPropagation(); if (!opaque(e.userId) && e.merged === 1
         <div className="cv-todo-in">{(todoOpen || todoSeen) && <TicketDesk startKind="task" />}</div>
       </aside>
       </div>
+
+{olInfo && (
+        <OutlookStatusCard anchor={olInfo} connected={ol.connected} error={ol.error}
+          onRetry={() => { setOlInfo(null); ol.reload(); }} onConnect={() => { setOlInfo(null); navigate("/settings"); }}
+          onHide={() => { setOlInfo(null); setOlShown(false); }} onClose={() => setOlInfo(null)} />
+      )}
+{olPick && (
+        <OutlookCard ev={olPick.ev} anchor={olPick.anchor} logLabel="Log it as work" onLog={() => logOutlook(olPick.ev)} onClose={() => setOlPick(null)} />
+      )}
 
 {actualFor && (
         <ActualModal

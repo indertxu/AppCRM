@@ -99,6 +99,15 @@ const PC_R = 50; // half the edge in viewBox units (viewBox is 240 wide)
 let pcClock: { t0: number; seen: number } | null = null;
 const PC_HANDOFF_MS = 700;
 
+/** A moment of the cube's loop where it rests exactly on its base pose (no sway, no breath,
+ *  everything drawn): a cube that flies in from elsewhere (the sign-in hero cube) lands on
+ *  this pose, and the loader takes over from this moment — one cube, never rebuilt. */
+export const PC_LAND_T = (8 * Math.PI / 1.1) * 1000; // sway sin(t·1.1) = 0, mid-loop: built, still, the next breath ~1.5 s away
+/** The cube's pose at a moment of its clock (for a cube that has to match it). */
+export const pcPoseAt = (t: number) => ({ yaw: PC_YAW + Math.sin((t / 1000) * 1.1) * 9, pitch: PC_PITCH + Math.sin((t / 1000) * 0.8 + 1) * 3 });
+/** The next loader cube carries on from moment `t` of its clock (already built). */
+export function pcAdopt(t: number) { const now = performance.now(); pcClock = { t0: now - t, seen: now }; }
+
 /** The Next cube, crisp at any size, assembling and breathing. */
 export function PageCube({ size = 132, loop = true }: { size?: number; loop?: boolean }) {
   const faceRefs = useRef<Partial<Record<PFace, SVGGElement | null>>>({});

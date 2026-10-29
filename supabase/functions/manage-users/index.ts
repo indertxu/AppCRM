@@ -34,7 +34,14 @@ async function handleApi(req: Request, route: string): Promise<Response> {
   if (key.expires_at && new Date(key.expires_at).getTime() < Date.now()) return json({ error: "This API key has expired." }, 401);
   admin.from("client_api_keys").update({ last_used_at: new Date().toISOString() }).eq("id", key.id).then(() => {});
 
-  const tenant = key.tenant_id as string;
+  // the key's workspace; keys made before the tenant trigger was on take their maker's
+  let tenant = (key.tenant_id as string | null) ?? null;
+  if (!tenant && key.created_by) {
+    const { data: maker } = await admin.from("profiles").select("tenant_id").eq("id", key.created_by).maybeSingle();
+    tenant = (maker as any)?.tenant_id ?? null;
+    if (tenant) admin.from("client_api_keys").update({ tenant_id: tenant }).eq("id", key.id).then(() => {});
+  }
+  if (!tenant) return json({ error: "This API key isn't tied to a workspace. Run 74_client_api_keys.sql in Supabase, or make a new key in Settings › Client page." }, 409);
   const canWrite = key.access === "write";
   const allowed: string[] | null = Array.isArray(key.client_ids) && key.client_ids.length ? key.client_ids.map(String) : null;
   const m = req.method.toUpperCase();

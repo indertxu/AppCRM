@@ -9,7 +9,7 @@ import {
 } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase, setRememberMe, takeReturnTo } from "../api/supabase";
-import { PageCube } from "../framework/AppLayout";
+import { PageCube, PC_LAND_T, pcPoseAt, pcAdopt } from "../framework/AppLayout";
 import "./LoginPage.css";
 
 /** Set right before leaving for the app: the home page plays its arrival sequence once. */
@@ -102,7 +102,11 @@ interface CubeRig {
   hx: number; hy: number;     // pointer relative to the cube centre (-1..1 roughly)
   spinAt: number;             // performance.now() of the last click
   focus: CubeFocus;           // a chip is hovered: light up its face
-  launchAt: number;           // signed in: the cube bursts apart
+  launchAt: number;           // signed in: the cube flies to the middle and becomes the loader
+  /** the hero cube's pose this frame (the flying cube starts from exactly here) */
+  pose?: { yaw: number; pitch: number; scale: number; lift: number; hov: number };
+  /** the flying cube has taken over: the hero one steps aside */
+  flying?: boolean;
 }
 
 const R = 66; // half the edge, in viewBox units (the viewBox is drawn 1:1 in CSS px at the default size)
@@ -151,13 +155,13 @@ function HeroCube({ rig, pointer }: { rig: React.MutableRefObject<CubeRig>; poin
         const t = (now - r.spinAt) / 1100;
         if (t < 1) { spin = easeInOut(t) * 360; pop = Math.sin(t * Math.PI) * 0.12; } else r.spinAt = 0;
       }
-      // signed in: the faces burst apart and fade
-      let burst = 0;
-      if (r.launchAt) burst = clamp((now - r.launchAt) / 650, 0, 1);
-
       const yaw = cur.yaw + spin, pitch = cur.pitch;
       const scale = 1 + cur.hov * 0.1 + pop;
       const lift = -cur.hov * 12 + (still ? 0 : Math.sin(now / 950) * 4 * (1 - cur.hov));
+      r.pose = { yaw, pitch, scale, lift, hov: cur.hov };
+      // signed in: this same cube flies on (FlyCube carries it), so the one in the hero steps aside
+      rootRef.current?.setAttribute("display", r.flying ? "none" : "inline");
+      if (r.flying) { if (alive && !document.hidden) raf = requestAnimationFrame(draw); return; }
       rootRef.current?.setAttribute("transform", `translate(0 ${lift.toFixed(2)}) scale(${scale.toFixed(4)})`);
       if (host) host.style.setProperty("--hov", cur.hov.toFixed(3));
 
@@ -172,9 +176,9 @@ function HeroCube({ rig, pointer }: { rig: React.MutableRefObject<CubeRig>; poin
         if (!still && d !== undefined) intro = clamp((now - t0 - d) / 900, 0, 1);
         else if (!still) intro = clamp((now - t0 - 600) / 600, 0, 1);
         const introEx = (1 - easeOutBack(intro)) * 2.6;
-        const ex = cur.hov * 0.24 + cur.foc[f] + introEx + burst * 2.2;
+        const ex = cur.hov * 0.24 + cur.foc[f] + introEx;
         const facing = n[2];
-        const op = clamp(facing * 9, 0, 1) * clamp(intro * 2.4, 0, 1) * (1 - burst);
+        const op = clamp(facing * 9, 0, 1) * clamp(intro * 2.4, 0, 1);
         if (op <= 0.001) { g.setAttribute("visibility", "hidden"); continue; }
         g.setAttribute("visibility", "visible");
         g.setAttribute("opacity", op.toFixed(3));
@@ -239,6 +243,110 @@ function HeroCube({ rig, pointer }: { rig: React.MutableRefObject<CubeRig>; poin
           <rect className="nx-bar nx-bar-1" x="6.3" y="24" width="6.3" height="11" rx="1.6" fill="#ffffff" />
           <rect className="nx-bar nx-bar-2" x="16.8" y="16" width="6.3" height="19" rx="1.6" fill="#ffffff" />
           <rect className="nx-bar nx-bar-3" x="27.4" y="8" width="6.3" height="27" rx="1.6" fill="#ffffff" />
+        </>)}
+      </g>
+    </svg>
+  );
+}
+
+/* ---------------------------------------------------------------------------
+   Signed in: the hero cube itself flies to the middle of the screen and lands
+   on the loader's exact pose and size; the loader takes over from that moment
+   (same clock), so from the sign-in to Home it is one cube, never rebuilt.
+   It starts from the hero's pose of this very frame, on top of the green iris.
+   --------------------------------------------------------------------------- */
+const FLY_MS = 1150;
+const LOADER_PX = 250 / 240; // PageCube at 250 px: px per unit
+const LOADER_HALF = 50 * LOADER_PX; // its half edge, px
+function FlyCube({ rig, onLand }: { rig: React.MutableRefObject<CubeRig>; onLand: () => void }) {
+  const svgRef = useRef<SVGSVGElement>(null);
+  const rootRef = useRef<SVGGElement>(null);
+  const faceRefs = useRef<Partial<Record<FaceKey, SVGGElement | null>>>({});
+  const shadeRefs = useRef<Partial<Record<FaceKey, SVGRectElement | null>>>({});
+  const landRef = useRef(onLand);
+  landRef.current = onLand;
+
+  useEffect(() => {
+    const hero = document.querySelector<SVGSVGElement>(".np-cube-hit .np3-cube");
+    const box = hero?.getBoundingClientRect();
+    const pose = rig.current.pose ?? { yaw: BASE_YAW, pitch: BASE_PITCH, scale: 1, lift: 0, hov: 0 };
+    if (!box || !box.width) { landRef.current(); return; }
+    const pxu0 = box.width / 340;
+    const from = { x: box.left + box.width / 2, y: box.top + box.height / 2 + pose.lift * pxu0, half: R * pxu0 * pose.scale };
+    const to = pcPoseAt(PC_LAND_T);
+    const t0 = performance.now();
+    let raf = 0, alive = true, landed = false;
+    const lerp = (a: number, b: number, e: number) => a + (b - a) * e;
+    const draw = (now: number) => {
+      const p = clamp((now - t0) / FLY_MS, 0, 1), e = easeInOut(p);
+      const W = window.innerWidth, H = window.innerHeight;
+      // the path: to the loader's spot (50%, 46%), a little arc on the way, growing or shrinking to its size
+      const half = lerp(from.half, LOADER_HALF, e);
+      const pxu = half / R, size = 340 * pxu;
+      const cx = lerp(from.x, W / 2, e), cy = lerp(from.y, H * 0.46, e) - Math.sin(p * Math.PI) * 34;
+      const el = svgRef.current;
+      if (el) { el.style.left = `${(cx - size / 2).toFixed(2)}px`; el.style.top = `${(cy - size / 2).toFixed(2)}px`; el.style.width = el.style.height = `${size.toFixed(2)}px`; }
+      // the pose eases into the loader's; in flight the faces part a touch and come back together
+      const yaw = lerp(pose.yaw, to.yaw, e), pitch = lerp(pose.pitch, to.pitch, e);
+      const ex = pose.hov * 0.24 * (1 - e) + Math.sin(p * Math.PI) * 0.12;
+      for (const f of ["top", "left", "right"] as FaceKey[]) {
+        const g = faceRefs.current[f];
+        if (!g) continue;
+        const geo = FACE_GEO[f];
+        const n = rotate(geo.n, yaw, pitch), u = rotate(geo.u, yaw, pitch), v = rotate(geo.v, yaw, pitch);
+        const c: V3 = [n[0] * (1 + ex), n[1] * (1 + ex), n[2] * (1 + ex)];
+        const ox = (c[0] - u[0] - v[0]) * R, oy = -(c[1] - u[1] - v[1]) * R;
+        g.setAttribute("transform", `matrix(${((u[0] * R) / 20).toFixed(4)} ${((-u[1] * R) / 20).toFixed(4)} ${((v[0] * R) / 20).toFixed(4)} ${((-v[1] * R) / 20).toFixed(4)} ${ox.toFixed(3)} ${oy.toFixed(3)})`);
+        g.setAttribute("opacity", clamp(n[2] * 9, 0, 1).toFixed(3));
+        const sh = shadeRefs.current[f];
+        if (sh) {
+          const lum = (dot(n, LIGHT) - REST_LIGHT[f]) * 0.5;
+          sh.setAttribute("fill", lum >= 0 ? "#ffffff" : "#021a10");
+          sh.setAttribute("opacity", Math.min(lum >= 0 ? 0.22 : 0.5, Math.abs(lum)).toFixed(3));
+        }
+      }
+      rootRef.current?.setAttribute("visibility", "visible");
+      rig.current.flying = true;
+      if (p >= 1 && !landed) { landed = true; landRef.current(); }
+      if (alive && p < 1) raf = requestAnimationFrame(draw);
+    };
+    raf = requestAnimationFrame(draw);
+    return () => { alive = false; cancelAnimationFrame(raf); };
+  }, [rig]);
+
+  const face = (f: FaceKey, fill: string, art: React.ReactNode) => (
+    <g key={f} ref={(el) => { faceRefs.current[f] = el; }}>
+      <rect width="40" height="40" rx="2.4" fill={fill} />
+      <rect width="40" height="40" rx="2.4" fill={`url(#np3f-gloss-${f === "top" ? "top" : "side"})`} />
+      {art}
+      <rect ref={(el) => { shadeRefs.current[f] = el; }} width="40" height="40" rx="2.4" fill="#ffffff" opacity="0" />
+      <rect x="0.4" y="0.4" width="39.2" height="39.2" rx="2.1" fill="none" stroke="rgba(255,255,255,0.32)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+    </g>
+  );
+  return (
+    <svg ref={svgRef} className="np-fly" viewBox="-170 -170 340 340" shapeRendering="geometricPrecision" aria-hidden="true">
+      <defs>
+        <linearGradient id="np3f-gloss-top" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#ffffff" stopOpacity="0.38" />
+          <stop offset="0.55" stopColor="#ffffff" stopOpacity="0" />
+          <stop offset="1" stopColor="#0a6f4d" stopOpacity="0.12" />
+        </linearGradient>
+        <linearGradient id="np3f-gloss-side" x1="0" y1="0" x2="0.4" y2="1">
+          <stop offset="0" stopColor="#ffffff" stopOpacity="0.2" />
+          <stop offset="0.5" stopColor="#ffffff" stopOpacity="0" />
+          <stop offset="1" stopColor="#000000" stopOpacity="0.16" />
+        </linearGradient>
+      </defs>
+      <g ref={rootRef} visibility="hidden">
+        {face("top", "#86efc0", <>
+          <polyline points="7.4,31.6 15.8,20 23.2,25.3 33.4,10.6" fill="none" stroke="#0a6f4d" strokeWidth="3.7" strokeLinecap="round" strokeLinejoin="round" />
+          <polygon points="37.9,4.2 36.9,13.2 29.7,8.1" fill="#0a6f4d" />
+        </>)}
+        {face("left", "#12b57f", <path d="M11 31V9h5.6l6.8 12.8V9H29v22h-5.6l-6.8-12.8V31z" fill="#ffffff" />)}
+        {face("right", "#0a6f4d", <>
+          <rect x="6.3" y="24" width="6.3" height="11" rx="1.6" fill="#ffffff" />
+          <rect x="16.8" y="16" width="6.3" height="19" rx="1.6" fill="#ffffff" />
+          <rect x="27.4" y="8" width="6.3" height="27" rx="1.6" fill="#ffffff" />
         </>)}
       </g>
     </svg>
@@ -387,6 +495,14 @@ export default function LoginPage() {
   const [shaking, setShaking] = useState(false);
   const [loading, setLoading] = useState(false);
   const [launching, setLaunching] = useState(false);
+  /** the flying cube has landed: the loader cube carries on from it */
+  const [landed, setLanded] = useState(false);
+  const [flyGone, setFlyGone] = useState(false);
+  const onLand = useCallback(() => {
+    pcAdopt(PC_LAND_T);
+    setLanded(true);
+    window.setTimeout(() => setFlyGone(true), 160);
+  }, []);
   const [remember, setRemember] = useState(false);
   const [caps, setCaps] = useState(false);
   const [activeChip, setActiveChip] = useState<number | null>(null);
@@ -794,7 +910,9 @@ export default function LoginPage() {
       {launching && (
         <div className="np-launch" aria-hidden="true">
           <div className="np-launch-bg" />
-          <div className="np-launch-cube is-vec"><PageCube size={250} /></div>
+          {/* the hero cube flies here and lands as the loader (reduced motion: the loader, still) */}
+          {!reducedMotion() && !flyGone && <FlyCube rig={rig} onLand={onLand} />}
+          {(landed || reducedMotion()) && <div className="np-launch-cube is-vec is-landed"><PageCube size={250} /></div>}
         </div>
       )}
     </div>

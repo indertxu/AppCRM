@@ -44,7 +44,7 @@ interface Props {
 
 const prefersStill = () => { try { return window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { return false; } };
 /** Counts up to a figure the first time it's known, then eases between values. */
-function useCount(target: number, ms = 900): number {
+export function useCount(target: number, ms = 900): number {
   const [v, setV] = useState(0);
   const from = useRef(0);
   useEffect(() => {
@@ -64,7 +64,7 @@ function useCount(target: number, ms = 900): number {
 }
 
 /** A ring that fills to `pct` (0–100+); over 100 it turns warm. */
-function Ring({ pct, size = 64, stroke = 7, children }: { pct: number; size?: number; stroke?: number; children?: ReactNode }) {
+export function Ring({ pct, size = 64, stroke = 7, children }: { pct: number; size?: number; stroke?: number; children?: ReactNode }) {
   const r = (size - stroke) / 2, c = 2 * Math.PI * r;
   const p = Math.max(0, Math.min(100, pct));
   return (
@@ -113,7 +113,11 @@ const HERO_PREF = "homeHeroKpis";
 const isHeroKey = (k: unknown): k is HeroKey => HERO_KPIS.some((x) => x.key === k);
 
 /** "Customize": four slots, each a figure from the catalogue. */
-function HeroPicker({ anchor, slots, onChange, onClose }: { anchor: DOMRect; slots: HeroKey[]; onChange: (s: HeroKey[]) => void; onClose: () => void }) {
+/** Shared by the homes: `kpis` is the catalogue to pick from (the consultancy one by default). */
+export function HeroPicker({ anchor, slots, onChange, onClose, kpis = HERO_KPIS, defaults = HERO_DEFAULT, sub = "Pick any figure from Management. Clicking one opens the tab it comes from." }: {
+  anchor: DOMRect; slots: string[]; onChange: (s: string[]) => void; onClose: () => void;
+  kpis?: { key: string; group: string; label: string }[]; defaults?: string[]; sub?: string;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const off = (e: MouseEvent) => {
@@ -127,23 +131,23 @@ function HeroPicker({ anchor, slots, onChange, onClose }: { anchor: DOMRect; slo
     return () => { window.clearTimeout(id); document.removeEventListener("mousedown", off); window.removeEventListener("keydown", key); };
   }, [onClose]);
   const W = 340;
-  const options = HERO_KPIS.map((k) => ({ value: k.key, label: k.label, hint: k.group }));
+  const options = kpis.map((k) => ({ value: k.key, label: k.label, hint: k.group }));
   return createPortal(
     <div ref={ref} className="chx-pick" role="dialog" aria-label="Choose the figures on top"
       style={{ top: anchor.bottom + 8, left: Math.max(8, Math.min(anchor.right - W, window.innerWidth - W - 8)), width: W }}>
       <b className="chx-pick-h">Your four figures</b>
-      <p className="chx-pick-sub">Pick any figure from Management. Clicking one opens the tab it comes from.</p>
+      <p className="chx-pick-sub">{sub}</p>
       <ol className="chx-pick-list">
         {slots.map((k, i) => (
           <li key={i}>
             <span className="chx-pick-n">{i + 1}</span>
-            <Select value={k} onChange={(v) => { if (!isHeroKey(v)) return; const next = [...slots]; next[i] = v; onChange(next); }}
+            <Select value={k} onChange={(v) => { if (!kpis.some((x) => x.key === v)) return; const next = [...slots]; next[i] = v; onChange(next); }}
               options={options} aria-label={`Figure ${i + 1}`} />
           </li>
         ))}
       </ol>
       <div className="chx-pick-foot">
-        <button type="button" onClick={() => onChange([...HERO_DEFAULT])} disabled={slots.join() === HERO_DEFAULT.join()}>Back to the default four</button>
+        <button type="button" onClick={() => onChange([...defaults])} disabled={slots.join() === defaults.join()}>Back to the default four</button>
         <button type="button" className="is-done" onClick={onClose}>Done</button>
       </div>
     </div>,
@@ -152,10 +156,10 @@ function HeroPicker({ anchor, slots, onChange, onClose }: { anchor: DOMRect; slo
 }
 
 /** One figure of the top row (a button into the page it comes from). */
-function Fig({ cls = "", onClick, title, children }: { cls?: string; onClick: () => void; title: string; children: ReactNode }) {
+export function Fig({ cls = "", onClick, title, children }: { cls?: string; onClick: () => void; title: string; children: ReactNode }) {
   return <button type="button" className={`chx-fig ${cls}`} onClick={onClick} title={title}>{children}</button>;
 }
-function Txt({ label, value, unit, sub, big, children }: { label: string; value: ReactNode; unit?: ReactNode; sub?: ReactNode; big?: boolean; children?: ReactNode }) {
+export function Txt({ label, value, unit, sub, big, children }: { label: string; value: ReactNode; unit?: ReactNode; sub?: ReactNode; big?: boolean; children?: ReactNode }) {
   return (
     <span className="chx-fig-txt">
       <span className="chx-fig-k">{label}</span>
@@ -690,7 +694,7 @@ export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDa
           {slots.map((k, i) => <Fragment key={`${k}-${i}`}>{heroFig(k)}</Fragment>)}
         </div>
       </section>
-      {picker && <HeroPicker anchor={picker} slots={slots} onChange={changeSlots} onClose={() => setPicker(null)} />}
+      {picker && <HeroPicker anchor={picker} slots={slots} onChange={(s) => changeSlots(s.filter(isHeroKey))} onClose={() => setPicker(null)} />}
 
       {/* ============ LEFT: calendar + backlog 2×2 ============ */}
       <div className="ch-col ch-col-mid">

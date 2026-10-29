@@ -13,6 +13,7 @@ import PageAccessModal, { useSecuritySection, PanelAccess } from "./PageAccessMo
 import Select from "../../framework/Select";
 import TaskSettings from "./TaskSettings";
 import { FolderTemplatesEditor } from "../clients/ClientDirectory";
+import { ClientMailRulesEditor } from "../clients/ClientWorkspace";
 import HoursEditor from "../calendar/HoursEditor";
 import { CutoffsEditor } from "../calendar/CalendarSettingsModal";
 import { TimeOffApprovals, TimeOffAllowances, PublicHolidays } from "../calendar/TimeOffRequest";
@@ -335,7 +336,7 @@ export default function SettingsPage() {
       { v: "salespage", title: "Deals", sub: "Import, export, deal fields & sales roles", accent: "#3c9ae0", keys: "sales deals import export fields roles", icon: I("M4 19V9M10 19V5M16 19v-7M22 19H2") },
       { v: "companiespage", title: "Companies", sub: "Fields, sectors, sources, import & clean-up", accent: "#d98324", keys: "companies fields sectors sources import", icon: I("M3 21h18M5 21V7l7-4 7 4v14M9 21v-4h6v4M9 9h.01M15 9h.01M9 13h.01M15 13h.01") },
       { v: "contactspage", title: "Contacts", sub: "Fields, import, export & clean-up", accent: "#e0574b", keys: "contacts people fields import", icon: I("M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8") },
-      { v: "clientpage", title: "Clients", sub: "Folder templates & API access to client documents", accent: "#12b57f", keys: "clients api documents folders", icon: I("M7 8l-4 4 4 4M17 8l4 4-4 4M14 5l-4 14") },
+      { v: "clientpage", title: "Clients", sub: "Folder templates, mail rules & API access to client documents", accent: "#12b57f", keys: "clients api documents folders mail email rules domain", icon: I("M7 8l-4 4 4 4M17 8l4 4-4 4M14 5l-4 14") },
       { v: "calendarpage", title: "Calendar", sub: "Time off & approvals, public holidays, working hours and cutoffs", accent: "#3c9ae0", keys: "calendar time off vacation holidays approvals allowance hours cutoffs billing security",
         icon: I("M3 9h18M8 3v4M16 3v4", "M5 5h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z") },
       ...SECURITY_ONLY.map((x) => ({ v: x.view, title: x.title.replace(/ page$/, ""), sub: x.sub, accent: x.accent, keys: `${x.page} security`, icon: I(...x.svg.split(/(?=M)/)) })),
@@ -830,7 +831,7 @@ export function ClientPageSettings({ onBack, canManage }: { onBack: () => void; 
   );
   const active = (keys ?? []).filter((k) => statusOf(k) === "active").length;
   return (
-    <SettingsShell icon="lock" title="Client page" sub="Standard folders for every client, and access for other apps" onBack={onBack}
+    <SettingsShell icon="lock" title="Client page" sub="Standard folders, mail rules for every client, and access for other apps" onBack={onBack}
       tags={<>
         <span className="sx-tag is-ok">{active} active key{active === 1 ? "" : "s"}</span>
         <span className="sx-tag">{clients.length} clients</span>
@@ -839,6 +840,8 @@ export function ClientPageSettings({ onBack, canManage }: { onBack: () => void; 
       sections={[
         { k: "skeletons", label: "Folder templates", icon: "folder", tone: "amber", title: "Folder templates", hint: "Standard folder structures you add to any client from its Folders tab, in one click",
           body: <FolderTemplatesEditor canEdit={canManage} /> },
+        { k: "mail", label: "Mail rules", icon: "mail", tone: "indigo", title: "Mail rules", hint: "Which e-mail lands in each client's Emails tab, by address or @domain",
+          body: <ClientMailRulesEditor canEdit={canManage} /> },
         { k: "keys", label: "API keys", icon: "lock", tone: "green", count: (keys ?? []).length, title: "API keys", hint: "Who can reach client documents from outside, and how much they can do", body: keysBody },
         { k: "connect", label: "Connecting", icon: "link", tone: "blue", title: "Connecting", hint: "Where to call and how to send the key",
           body: (

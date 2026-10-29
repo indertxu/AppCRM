@@ -14,9 +14,9 @@ import {
 import InvitesTray from "./InvitesTray";
 import CalendarSettingsModal from "./CalendarSettingsModal";
 import { loadMyInvites, inviteToEntry, busyAt, type InviteCard } from "./invitesApi";
-import { syncCalendarEntry } from "../../api/outlookSync";
+import { syncCalendarEntry, useOutlookEvents, outlookOnDay, outlookNotLogged, outlookTime, OUTLOOK_EVENTS_SQL, type OutlookEvent } from "../../api/outlookSync";
 import HomeTodo from "../homepage/shared/HomeTodo";
-import { JumpPicker } from "./CalendarPage";
+import { JumpPicker, OutlookCard, OutlookStatusCard } from "./CalendarPage";
 import "./CalendarPage.css";
 import "./SalesCalendar.css";
 
@@ -539,6 +539,62 @@ export default function SalesCalendar() {
   const days = useMemo(() => Array.from({ length: 5 }, (_, i) => addDays(weekStart, i)), [weekStart]);
   const today = new Date();
 
+  /* ---- your Outlook, read only (grey blocks); "Make it a meeting" turns one into a meeting ---- */
+  const [olOn, setOlOn] = useState<boolean>(() => { try { return !!new URLSearchParams(window.location.search).get("outlook") || localStorage.getItem("cal.outlook") !== "0"; } catch { return true; } });
+  const [olPick, setOlPick] = useState<{ ev: OutlookEvent; anchor: DOMRect | null } | null>(null);
+  const [fromOl, setFromOl] = useState<OutlookEvent | null>(null);
+  const olTo = useMemo(() => addDays(weekStart, 7), [weekStart]);
+  const ol = useOutlookEvents(weekStart, olTo, olOn && !!myId);
+  /** Outlook ids your entries of the week already stand for. */
+  const [olLinked, setOlLinked] = useState<{ ids: Set<string>; slots: { date: Date; startMin: number; endMin: number }[] }>({ ids: new Set(), slots: [] });
+  useEffect(() => {
+    if (!myId || !olOn) return;
+    let alive = true;
+    supabase.from("calendar_entries").select("*").eq("user_id", myId).gte("entry_date", isoOf(weekStart)).lte("entry_date", isoOf(addDays(weekStart, 6)))
+      .then(({ data }) => {
+        if (!alive) return;
+        const rows = (data ?? []) as any[];
+        setOlLinked({
+          ids: new Set(rows.flatMap((r) => [r.outlook_event_id, r.outlook_source_id]).filter(Boolean)),
+          slots: rows.map((r) => { const [y, m, dd] = String(r.entry_date).slice(0, 10).split("-").map(Number); return { date: new Date(y, m - 1, dd), startMin: Number(r.start_min) || 0, endMin: Number(r.end_min) || 0 }; }),
+        });
+      });
+    return () => { alive = false; };
+  }, [myId, olOn, weekStart, meetings, blocks]);
+  const olShown = useMemo(() => (olOn ? outlookNotLogged(ol.events.filter((e) => !olLinked.ids.has(e.id)), olLinked.slots) : []), [olOn, ol.events, olLinked]);
+  const [olInfo, setOlInfo] = useState<DOMRect | null>(null);
+  const setOlShown = (on: boolean) => { setOlOn(on); try { localStorage.setItem("cal.outlook", on ? "1" : "0"); } catch { /* ignore */ } };
+  const toggleOl = (rect?: DOMRect) => {
+    if (olOn && (!ol.connected || ol.error) && rect) { setOlInfo(rect); return; }
+    setOlShown(!olOn);
+  };
+  const olOf = (d: Date) => {
+    const all = olShown.map((ev) => ({ ev, on: outlookOnDay(ev, d) })).filter((x) => x.on);
+    const tags = all.filter((x) => x.on === "allday" || (x.on as { endMin: number }).endMin <= DAY_START || (x.on as { startMin: number }).startMin >= DAY_END);
+    return { tags, timed: all.filter((x) => !tags.includes(x)) };
+  };
+  // Home › an Outlook event: /calendar?outlook=<id>&d=<YYYY-MM-DD>
+  const [olWanted, setOlWanted] = useState<{ id: string; day: Date } | null>(() => {
+    try {
+      const q = new URLSearchParams(window.location.search);
+      const id = q.get("outlook"), d = q.get("d");
+      if (!id || !d || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return null;
+      const [y, m, dd] = d.split("-").map(Number);
+      return { id, day: new Date(y, m - 1, dd) };
+    } catch { return null; }
+  });
+  useEffect(() => {
+    if (!olWanted) return;
+    const wk = startOfWeek(olWanted.day);
+    if (wk.getTime() !== weekStart.getTime()) { setWeekStart(wk); return; }
+    if (ol.loading) return;
+    const ev = ol.events.find((x) => x.id === olWanted.id);
+    if (ev) setOlPick({ ev, anchor: null });
+    setOlWanted(null);
+    navigate("/calendar", { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [olWanted, weekStart, ol.loading, ol.events]);
+
   const load = async () => {
     if (!myId) return;
     setLoading(true);
@@ -569,16 +625,21 @@ export default function SalesCalendar() {
       ...meetings.filter((m) => sameDay(new Date(m.meet_at), d)).map((m) => {
         const at = new Date(m.meet_at);
         const from = at.getHours() * 60 + at.getMinutes();
-        return { id: m.id, uid: m.assignee_id ?? myId, from, to: from + durOf(m), m, b: null as any };
+        return { id: m.id, uid: m.assignee_id ?? myId, from, to: from + durOf(m), m, b: null as any, o: null as OutlookEvent | null };
       }),
       ...blocks.filter((b) => b.entry_date === isoOf(d))
-        .map((b) => ({ id: b.id, uid: b.user_id ?? myId, from: b.start_min, to: b.end_min, m: null as any, b })),
+        .map((b) => ({ id: b.id, uid: b.user_id ?? myId, from: b.start_min, to: b.end_min, m: null as any, b, o: null as OutlookEvent | null })),
+      ...olOf(d).timed.map(({ ev, on }) => {
+        const o = on as { startMin: number; endMin: number };
+        const from = Math.max(DAY_START, o.startMin);
+        return { id: `ol:${ev.id}`, uid: many ? "__outlook" : myId, from, to: Math.max(from + 15, Math.min(DAY_END, o.endMin)), m: null as any, b: null as any, o: ev as OutlookEvent | null };
+      }),
     ].sort((a, b2) => a.from - b2.from || a.to - b2.to);
 
     if (many) {
       // One column per person who has something today, and their own clashes
       // merged into a single Busy block.
-      const present = seenIds.filter((uid) => raw.some((x) => x.uid === uid));
+      const present = [...seenIds, "__outlook"].filter((uid) => raw.some((x) => x.uid === uid));
       const slice = 100 / Math.max(1, present.length);
       const out: any[] = [];
       present.forEach((uid, col) => {
@@ -756,6 +817,11 @@ export default function SalesCalendar() {
             </div>
           )}
           <div className="cv-icons">
+          <button type="button" className={`cal-gear cal-olbtn ${olOn ? "is-on" : ""} ${olOn && !ol.loading && (ol.error || !ol.connected) ? "is-warn" : ""}`} onClick={(x) => toggleOl(x.currentTarget.getBoundingClientRect())} aria-pressed={olOn}
+            title={!olOn ? "Show your Outlook events" : !ol.connected ? "Outlook isn't connected — connect it in Settings" : ol.error ? `Outlook: ${ol.error}` : `Showing ${olShown.length} Outlook event${olShown.length === 1 ? "" : "s"} · click to hide`}>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M8 2v3M16 2v3M3.5 9h17M5 4.5h14A1.5 1.5 0 0 1 20.5 6v13A1.5 1.5 0 0 1 19 20.5H5A1.5 1.5 0 0 1 3.5 19V6A1.5 1.5 0 0 1 5 4.5zM12 17.2a2.7 2.7 0 1 0 0-5.4 2.7 2.7 0 0 0 0 5.4z" /></svg>
+            {olOn && ol.connected && !ol.error && olShown.length > 0 && <span className="cal-olbtn-n">{olShown.length}</span>}
+          </button>
           <div className="cal-bell-wrap" ref={bellRef}>
           <button className="cal-bell" onClick={() => setTrayOpen((v) => !v)}
             aria-label={`${invites.length} invitations`} title="Invitations">
@@ -875,6 +941,32 @@ export default function SalesCalendar() {
                   aria-label={`Book a meeting at ${fmtHour(h)}`} />
               ))}
 
+              {(() => {
+                const tags = olOf(d).tags;
+                if (!tags.length) return null;
+                return (
+                  <span className="cal-oltags">
+                    {tags.slice(0, 3).map(({ ev, on }) => (
+                      <button type="button" key={ev.id} className="cal-oltag" title={`${ev.subject} · ${on === "allday" ? "All day" : `${outlookTime(ev.start)} – ${outlookTime(ev.end)}`} · Outlook`}
+                        onClick={(x) => { x.stopPropagation(); setOlPick({ ev, anchor: x.currentTarget.getBoundingClientRect() }); }}>
+                        {on === "allday" ? null : <b>{outlookTime(ev.start)}</b>}<span>{ev.subject}</span>
+                      </button>
+                    ))}
+                    {tags.length > 3 && <em>+{tags.length - 3}</em>}
+                  </span>
+                );
+              })()}
+              {dayLanes(d).filter((x: any) => x.o).map(({ o, from, to, left, width, merged, lane }: any, oi: number) => (
+                <div key={`ol-${o.id}`} className={`cal-ol ${to - from <= 45 ? "is-short" : ""} is-${o.showAs}`}
+                  style={{ top: `${((from - DAY_START) / SPAN) * 100}%`, height: `${((to - from) / SPAN) * 100}%`, left: `calc(${left}% + 3px)`, width: `calc(${width}% - 6px)`, zIndex: 1 + (lane ?? 0), ["--i" as string]: oi }}
+                  role="button" tabIndex={0} title={`${o.subject} · Outlook`}
+                  onMouseDown={(x) => x.stopPropagation()}
+                  onClick={(x) => { x.stopPropagation(); setOlPick({ ev: o, anchor: x.currentTarget.getBoundingClientRect() }); }}
+                  onKeyDown={(x) => { if (x.key === "Enter") setOlPick({ ev: o, anchor: x.currentTarget.getBoundingClientRect() }); }}>
+                  <span className="cal-ol-title">{merged > 1 ? `${merged} in Outlook` : o.subject}</span>
+                  <span className="cal-ol-time">{hhmm(new Date(2000, 0, 1, Math.floor(from / 60), from % 60))} – {hhmm(new Date(2000, 0, 1, Math.floor(to / 60), to % 60))}{merged === 1 && o.location ? ` · ${o.location}` : ""}</span>
+                </div>
+              ))}
               {dayBlocks(d).map(({ b, left, width, merged }: any, bi: number) => {
                 const top = ((b.start_min - DAY_START) / SPAN) * 100;
                 const h = ((b.end_min - b.start_min) / SPAN) * 100;
@@ -1036,25 +1128,39 @@ export default function SalesCalendar() {
         />
       )}
 
+      {olInfo && (
+        <OutlookStatusCard anchor={olInfo} connected={ol.connected} error={ol.error}
+          onRetry={() => { setOlInfo(null); ol.reload(); }} onConnect={() => { setOlInfo(null); navigate("/settings"); }}
+          onHide={() => { setOlInfo(null); setOlShown(false); }} onClose={() => setOlInfo(null)} />
+      )}
+      {olPick && (
+        <OutlookCard ev={olPick.ev} anchor={olPick.anchor} logLabel="Make it a meeting"
+          onLog={() => { const ev = olPick.ev; const s = new Date(ev.start); setOlPick(null); setFromOl(ev); setDraft({ day: new Date(s.getFullYear(), s.getMonth(), s.getDate()), hour: s.getHours() }); }}
+          onClose={() => setOlPick(null)} />
+      )}
+
       {(draft || editing) && (
         <NewMeeting
           edit={editing}
+          fromOutlook={editing ? null : fromOl}
           day={editing ? new Date(`${editing.meet_at.slice(0, 10)}T00:00:00`) : draft!.day}
           hour={editing ? Math.floor(new Date(editing.meet_at).getHours()) : draft!.hour}
           deals={deals}
           userId={myId}
           hours={HOURS}
           links={links}
-          onClose={() => { setDraft(null); setEditing(null); }}
-          onSaved={() => { setDraft(null); setEditing(null); load(); }}
+          onClose={() => { setDraft(null); setEditing(null); setFromOl(null); }}
+          onSaved={() => { setDraft(null); setEditing(null); setFromOl(null); load(); }}
         />
       )}
     </div>
   );
 }
 
-function NewMeeting({ day, hour, deals, userId, hours, links, edit, onClose, onSaved }: {
+function NewMeeting({ day, hour, deals, userId, hours, links, edit, fromOutlook, onClose, onSaved }: {
   day: Date; hour: number; hours: number[];
+  /** Made from an Outlook event: its title and time, and the new entry points back at it. */
+  fromOutlook?: OutlookEvent | null;
   /** When set, the modal edits that meeting instead of creating one. */
   edit?: SalesMeeting | null;
   deals: { id: string; label: string; phase_id: string | null }[];
@@ -1087,10 +1193,18 @@ function NewMeeting({ day, hour, deals, userId, hours, links, edit, onClose, onS
       setPeople([]);
     })();
   }, [companyId]);
-  const [title, setTitle] = useState("");
-  const [kind, setKind] = useState<MeetingKind>("teams");
-  const [startMin, setStartMin] = useState(hour * 60);
-  const [endMin, setEndMin] = useState(hour * 60 + 60);
+  const olSlot = useMemo(() => {
+    if (!fromOutlook) return null;
+    const on = outlookOnDay(fromOutlook, day);
+    if (!on || on === "allday") return null;
+    const s = Math.round(on.startMin / 15) * 15;
+    return { s, e: Math.max(s + 15, Math.round(on.endMin / 15) * 15) };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const [title, setTitle] = useState(fromOutlook?.subject ?? "");
+  const [kind, setKind] = useState<MeetingKind>(fromOutlook ? (fromOutlook.online ? "teams" : fromOutlook.location ? "in_person" : "teams") : "teams");
+  const [startMin, setStartMin] = useState(olSlot?.s ?? hour * 60);
+  const [endMin, setEndMin] = useState(olSlot?.e ?? hour * 60 + 60);
   const [note, setNote] = useState("");
   /** Colleagues summoned to this, on either kind of event. */
   const [summon, setSummon] = useState<string[]>([]);
@@ -1158,6 +1272,14 @@ function NewMeeting({ day, hour, deals, userId, hours, links, edit, onClose, onS
     setEndMin(v + Math.max(15, span));
   };
 
+  /** Made from an Outlook event: point the new entry at it, and leave Outlook alone (true = linked). */
+  const linkOutlook = async (entryId: string): Promise<boolean> => {
+    if (!fromOutlook) return false;
+    const { error } = await supabase.from("calendar_entries").update({ outlook_source_id: fromOutlook.id }).eq("id", entryId);
+    if (error && /outlook_source_id/i.test(error.message)) window.alert(OUTLOOK_EVENTS_SQL);
+    return true;
+  };
+
   /** Invite whoever was summoned to the event just created. */
   const sendInvites = async (entryId: string) => {
     if (!summon.length) return null;
@@ -1206,7 +1328,7 @@ function NewMeeting({ day, hour, deals, userId, hours, links, edit, onClose, onS
       if (res.error) { setErr(res.error); return; }
       if (res.id) {
         const iErr = await sendInvites(res.id);
-        void syncCalendarEntry(res.id);
+        if (!(await linkOutlook(res.id))) void syncCalendarEntry(res.id);
         if (iErr) { setErr(`Meeting saved, but the invitations failed: ${iErr}`); return; }
       }
     } else {
@@ -1222,7 +1344,7 @@ function NewMeeting({ day, hour, deals, userId, hours, links, edit, onClose, onS
       if (res.error) { setErr(res.error); return; }
       if (res.id) {
         const iErr = await sendInvites(res.id);
-        void syncCalendarEntry(res.id);
+        if (!(await linkOutlook(res.id))) void syncCalendarEntry(res.id);
         if (iErr) { setErr(`Block saved, but the invitations failed: ${iErr}`); return; }
       }
     }
@@ -1244,7 +1366,7 @@ function NewMeeting({ day, hour, deals, userId, hours, links, edit, onClose, onS
       <div className="sc-modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
         <div className="sc-modal-head">
           <div>
-            <span className="sc-eyebrow">{edit ? "Edit meeting" : mode === "meeting" ? "New meeting" : "Block time"}</span>
+            <span className="sc-eyebrow">{edit ? "Edit meeting" : fromOutlook ? "From Outlook" : mode === "meeting" ? "New meeting" : "Block time"}</span>
             <h2 className="sc-modal-title">
               {day.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}
             </h2>

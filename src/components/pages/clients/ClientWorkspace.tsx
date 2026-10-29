@@ -13,6 +13,7 @@ import { loadProducts, type Product as CatalogProduct } from "../settings/catalo
 import { listCompanyFields, listContactFields, sessionUserId, saveContact, useRequiredFields, type CompanyField, type ContactField } from "../companies/companiesApi";
 import { countryLabel, formatAddress, languageName, linkedInHandle, isFixedRequired, missingFixed } from "../contacts/contactProfile";
 import Select from "../../framework/Select";
+import { loadClientMail, setMailClient, fileMailFrom, loadMailRules, saveMailRule, deleteMailRule, createTicketFromMail, loadDirectory, MailFrame, TicketDrawerById, MAIL_ROUTING_SQL, type MailMsg, type MailRule } from "../homepage/shared/HomeTodo";
 import DatePicker from "../../framework/DatePicker";
 import "../../framework/MentionInput.css";
 import "./ClientWorkspace.css";
@@ -32,7 +33,7 @@ interface Props {
   onClose: () => void;
 }
 
-type Tab = "overview" | "deals" | "projects" | "contract" | "upsells" | "folders";
+type Tab = "overview" | "deals" | "projects" | "contract" | "upsells" | "emails" | "folders";
 
 interface Note { id: string; body: string; mentions: string[]; author_id: string | null; created_at: string; src: "client" | "sale"; deal?: string | null; dealId?: string | null }
 interface ContactLog { id: string; contacted_at: string; channel: string | null; contact_name: string | null; reason: string | null; logged_by: string | null; }
@@ -412,6 +413,8 @@ const IC: Record<string, string> = {
   download: "M12 3v12M7 10l5 5 5-5M5 21h14",
   star: "M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z",
   copy: "M20 9h-9a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2zM5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1",
+  filter: "M22 3H2l8 9.46V19l4 2v-8.54z",
+  user: "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
 };
 const Ico = ({ n, s = 16 }: { n: string; s?: number }) => (
   <svg viewBox="0 0 24 24" width={s} height={s} fill="none" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -1180,6 +1183,7 @@ export default function ClientWorkspace({
     { v: "contract", label: "Contracts", icon: "contract", hint: "What they signed", n: lines.length || undefined },
     { v: "projects", label: "Projects", icon: "briefcase", hint: "Services delivered", n: projects.length || undefined },
     { v: "upsells", label: "Upsells", icon: "spark", hint: "What else they could buy" },
+    { v: "emails", label: "Emails", icon: "mail", hint: "What their people wrote" },
     { v: "folders", label: "Folders", icon: "folder", hint: "Every file of this client" },
   ];
   const SUBS: Record<Tab, { k: string; label: string; n?: number }[]> = {
@@ -1194,6 +1198,7 @@ export default function ClientWorkspace({
       { k: "products", label: "Signed products", n: lines.length || undefined }, { k: "services", label: "Service engagements", n: projects.length || undefined },
     ],
     upsells: [],
+    emails: [],
     folders: [],
   };
   const subs = SUBS[tab];
@@ -1624,9 +1629,9 @@ export default function ClientWorkspace({
           </aside>
 
         {/* ---------- body ---------- */}
-        <div className={`cw-body ${tab === "folders" ? "is-fixed" : ""}`} ref={bodyRef} onScroll={() => { hideTip(); spyNow(); }}>
+        <div className={`cw-body ${tab === "folders" || tab === "emails" ? "is-fixed" : ""}`} ref={bodyRef} onScroll={() => { hideTip(); spyNow(); }}>
           <div className={`cw-panel is-${tab} ${!loaded && (tab === "overview" || tab === "deals") ? "is-loading" : ""}`} key={tab}>
-            {tab !== "folders" && (() => {
+            {tab !== "folders" && tab !== "emails" && (() => {
               const t = TABS.find((x) => x.v === tab);
               return t ? (
                 <header className="cw-tabhead">
@@ -2461,6 +2466,9 @@ export default function ClientWorkspace({
               </div>
             )}
 
+            {/* ===== EMAILS ===== */}
+            {tab === "emails" && <ClientMail client={client} persons={persons} />}
+
             {/* ===== FOLDERS ===== */}
             {tab === "folders" && (
               <div className="cw-folders">
@@ -2487,6 +2495,456 @@ export default function ClientWorkspace({
         </div>
         <TipLayer tip={tip} />
       </div>
+    </div>
+  );
+}
+
+/* ============================== Emails ============================== */
+
+/** Domains anyone can have: never offered as "all mail from @…". */
+const FREE_MAIL = /^(gmail|googlemail|outlook|hotmail|live|msn|yahoo|ymail|icloud|me|mac|aol|proton|protonmail|pm|gmx|web|mail|yandex|zoho)\./i;
+const lcm = (s: unknown) => String(s ?? "").trim().toLowerCase();
+/** "ana@acme.es" or "@acme.es" (a bare "acme.es" becomes "@acme.es"); null when it isn't either. */
+const routeAddr = (raw: string): string | null => {
+  let v = lcm(raw).replace(/^mailto:/, "").replace(/[<>,;\s]/g, "");
+  if (!v) return null;
+  if (!v.includes("@")) v = `@${v}`;
+  return /^[^@\s]*@[^@\s.]+(\.[^@\s.]+)+$/.test(v) ? v : null;
+};
+const mailWhen = (iso: string) => {
+  const d = new Date(iso), now = new Date();
+  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleDateString(undefined, d.getFullYear() === now.getFullYear() ? { day: "numeric", month: "short" } : { day: "numeric", month: "short", year: "numeric" });
+};
+const mailFull = (iso: string) => new Date(iso).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+const escHtml = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
+/** The client's own mail rule (Clients › Emails): who it catches and what happens. */
+const clientRuleOf = (rules: MailRule[], clientId: string) => rules.filter((r) => r.scope === "client" && r.set.client_id === clientId);
+
+/** Saves the routing of one client: the addresses / @domains that bring mail here, and whether it also opens a ticket. */
+async function saveClientRoute(clientId: string, clientName: string, rule: MailRule | null, addrs: string[], action: "file" | "create"): Promise<string | null> {
+  if (!addrs.length) return rule ? deleteMailRule(rule.id) : null;
+  return saveMailRule({
+    ...(rule ?? {}), id: rule?.id, name: rule?.name || `${clientName} · e-mail`, sort: rule?.sort ?? 0, active: rule?.active ?? true,
+    conditions: { ...(rule?.conditions ?? {}), match: "any", from_emails: addrs }, action, targetTicketId: null,
+    set: { ...(rule?.set ?? {}), client_id: clientId }, scope: "client", ownerId: null,
+  });
+}
+
+/** Address chips with an input to add more (and a few suggestions). */
+interface RoutePerson { email: string; name: string; sub?: string }
+/**
+ * The addresses of a mail rule: a whole domain ("@acme.es", everyone at the company) or one person.
+ * Chips, an input for anything typed, the company's domains as one-click suggestions and a picker of its people.
+ */
+function RouteChips({ addrs, suggest = [], people = [], busy, onChange, placeholder }: {
+  addrs: string[]; suggest?: string[]; people?: RoutePerson[]; busy?: boolean; placeholder: string; onChange: (next: string[], added: string[]) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const [bad, setBad] = useState(false);
+  const add = (raw: string) => {
+    const parts = raw.split(/[,;\s]+/).map(routeAddr);
+    if (parts.some((x) => x === null) && raw.trim()) { setBad(true); return; }
+    const fresh = [...new Set(parts.filter((x): x is string => !!x))].filter((x) => !addrs.includes(x));
+    setDraft(""); setBad(false);
+    if (fresh.length) onChange([...addrs, ...fresh], fresh);
+  };
+  const byMail = new Map(people.map((p) => [lcm(p.email), p]));
+  const domains = suggest.filter((d) => !addrs.includes(d)).slice(0, 3);
+  const left = people.filter((p) => p.email && !addrs.includes(lcm(p.email)));
+  return (
+    <div className="cw-mr-field">
+      <div className={`cw-mr-chips ${bad ? "is-bad" : ""}`}>
+        {addrs.map((a) => {
+          const p = a.startsWith("@") ? null : byMail.get(a);
+          return (
+            <span className={`cw-mr-chip ${a.startsWith("@") ? "is-domain" : p ? "is-person" : ""}`} key={a} title={a.startsWith("@") ? `Everyone at ${a.slice(1)}` : a}>
+              <Ico n={a.startsWith("@") ? "globe" : p ? "user" : "mail"} s={12} />
+              {a.startsWith("@") ? <>{a}<em>everyone</em></> : p ? <>{p.name}<em>{a}</em></> : a}
+              <button type="button" disabled={busy} onClick={() => onChange(addrs.filter((x) => x !== a), [])} aria-label={`Remove ${a}`}><Ico n="x" s={11} /></button>
+            </span>
+          );
+        })}
+        <input value={draft} placeholder={placeholder} disabled={busy} aria-label="Add an address or @domain"
+          onChange={(e) => { setDraft(e.target.value); setBad(false); }}
+          onKeyDown={(e) => {
+            if ((e.key === "Enter" || e.key === ",") && draft.trim()) { e.preventDefault(); add(draft); }
+            else if (e.key === "Backspace" && !draft && addrs.length) onChange(addrs.slice(0, -1), []);
+          }}
+          onBlur={() => { if (draft.trim()) add(draft); }} />
+      </div>
+      {(domains.length > 0 || left.length > 0) && (
+        <div className="cw-mr-adds">
+          {domains.map((d) => (
+            <button type="button" key={d} className="cw-mr-sug" disabled={busy} onClick={() => onChange([...addrs, d], [d])} title={`Everyone who writes from ${d}`}>
+              <Ico n="globe" s={11} />Everyone at {d}
+            </button>
+          ))}
+          {left.length > 0 && (
+            <div className="cw-mr-pick">
+              <Select searchable size="sm" value="" disabled={busy} placeholder="+ One person…" onChange={(v) => v && onChange([...addrs, v], [v])}
+                options={left.map((p) => ({ value: lcm(p.email), label: p.name, hint: [p.sub, lcm(p.email)].filter(Boolean).join(" · ") }))} />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+type MailWho = "all" | "out" | string;   // a sender's address (lower case)
+/** Clients › Emails: what this client's people wrote (and what we answered), by person, with the rule that files it here. */
+function ClientMail({ client, persons }: { client: Client; persons: Person[] }) {
+  const [msgs, setMsgs] = useState<MailMsg[] | null>(null);
+  const [missing, setMissing] = useState(false);
+  const [rules, setRules] = useState<MailRule[]>([]);
+  const [who, setWho] = useState<MailWho>("all");
+  const [q, setQ] = useState("");
+  const [sel, setSel] = useState<string | null>(null);
+  const [ticket, setTicket] = useState<string | null>(null);
+  const [routing, setRouting] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [showQuiet, setShowQuiet] = useState(false);
+  /** Senders who aren't this client's people but are in Contacts (any company). */
+  const [found, setFound] = useState<Map<string, { name: string; sub: string }>>(new Map());
+
+  const load = useCallback(async () => {
+    const { data: tks } = await supabase.from("tracking_tasks").select("id").eq("client_id", client.id).not("ticket_no", "is", null).limit(150);
+    const [m, r] = await Promise.all([loadClientMail(client.id, ((tks ?? []) as any[]).map((t) => String(t.id))), loadMailRules()]);
+    setMissing(m === null);
+    setMsgs((m ?? []).slice().sort((a, b) => b.at.localeCompare(a.at)));
+    setRules(clientRuleOf(r ?? [], client.id));
+  }, [client.id]);
+  useEffect(() => { void load(); }, [load]);
+
+  const byEmail = useMemo(() => {
+    const m = new Map<string, Person>();
+    persons.forEach((p) => { const e = lcm(p.email); if (e) m.set(e, p); });
+    return m;
+  }, [persons]);
+  // senders we don't know from this client: look them up in Contacts
+  useEffect(() => {
+    const miss = [...new Set((msgs ?? []).filter((m) => m.direction === "in").map((m) => lcm(m.fromEmail)))]
+      .filter((e) => e && !byEmail.has(e) && /^[^,()\s]+@[^,()\s]+$/.test(e)).slice(0, 80);
+    if (!miss.length) return;
+    let alive = true;
+    void supabase.from("contacts").select("id, first_name, last_name, email, position").or(miss.map((e) => `email.ilike.${e}`).join(",")).limit(200)
+      .then(({ data }) => {
+        if (!alive) return;
+        const m = new Map<string, { name: string; sub: string }>();
+        ((data ?? []) as any[]).forEach((c) => {
+          const e = lcm(c.email);
+          if (e && miss.includes(e)) m.set(e, { name: [c.first_name, c.last_name].filter(Boolean).join(" ").trim() || e, sub: str(c.position) || "In Contacts" });
+        });
+        setFound(m);
+      });
+    return () => { alive = false; };
+  }, [msgs, byEmail]);
+  /** Where we know a person from: the client's contacts (Companies / Contacts) or the contract / project sheet. */
+  const personSub = (p: Person) => p.position || (p.crm ? "Contact" : "On the contract");
+  const senders = useMemo(() => {
+    const map = new Map<string, { email: string; name: string; sub: string; n: number; last: string; kind: "client" | "crm" | "other" }>();
+    (msgs ?? []).forEach((m) => {
+      if (m.direction !== "in") return;
+      const e = lcm(m.fromEmail);
+      if (!e) return;
+      const p = byEmail.get(e) ?? null, f = found.get(e) ?? null;
+      const cur = map.get(e) ?? {
+        email: e, name: p?.name || f?.name || m.fromName || e, sub: p ? personSub(p) : f ? f.sub : e, n: 0, last: m.at,
+        kind: p ? "client" as const : f ? "crm" as const : "other" as const,
+      };
+      cur.n += 1;
+      if (m.at > cur.last) cur.last = m.at;
+      map.set(e, cur);
+    });
+    const all = [...map.values()].sort((a, b) => b.n - a.n || b.last.localeCompare(a.last));
+    return { known: all.filter((s) => s.kind !== "other"), others: all.filter((s) => s.kind === "other") };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [msgs, byEmail, found]);
+  const sent = (msgs ?? []).filter((m) => m.direction === "out").length;
+  const quietList = persons.filter((p) => lcm(p.email) && !senders.known.some((s) => s.email === lcm(p.email)));
+  const quiet = quietList.length;
+  /** Everyone a rule can name: the client's people, then the other senders. */
+  const people = useMemo<RoutePerson[]>(() => {
+    const seen = new Set<string>(), out: RoutePerson[] = [];
+    persons.forEach((p) => { const e = lcm(p.email); if (e && !seen.has(e)) { seen.add(e); out.push({ email: e, name: p.name, sub: personSub(p) }); } });
+    [...senders.known, ...senders.others].forEach((x) => { if (!seen.has(x.email)) { seen.add(x.email); out.push({ email: x.email, name: x.name, sub: x.kind === "other" ? "Wrote to us" : x.sub }); } });
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [persons, senders]);
+  const nameOf = (a: string) => (a.startsWith("@") ? a : people.find((p) => p.email === a)?.name ?? a);
+
+  const shown = useMemo(() => {
+    const t = lcm(q);
+    return (msgs ?? []).filter((m) => {
+      if (who === "out" && m.direction !== "out") return false;
+      if (who !== "all" && who !== "out") {
+        const hit = m.direction === "in" ? lcm(m.fromEmail) === who : [...m.to, ...m.cc].some((x) => lcm(x.email) === who);
+        if (!hit) return false;
+      }
+      return !t || `${m.subject} ${m.fromName ?? ""} ${m.fromEmail ?? ""} ${m.snippet}`.toLowerCase().includes(t);
+    });
+  }, [msgs, who, q]);
+  const cur = shown.find((m) => m.id === sel) ?? shown[0] ?? null;
+
+  /* ---- routing: this client's rule ---- */
+  const rule = rules[0] ?? null;
+  const addrs = rule?.conditions.from_emails ?? [];
+  const action: "file" | "create" = rule?.action === "create" ? "create" : "file";
+  const suggest = useMemo(() => {
+    const ds = new Map<string, number>();
+    [...persons.map((p) => p.email), ...senders.others.map((s) => s.email)].forEach((e) => {
+      const d = lcm(e).split("@")[1];
+      if (d && !FREE_MAIL.test(d)) ds.set(`@${d}`, (ds.get(`@${d}`) ?? 0) + 1);
+    });
+    return [...ds.entries()].sort((a, b) => b[1] - a[1]).map(([d]) => d);
+  }, [persons, senders.others]);
+  const route = async (next: string[], act: "file" | "create", added: string[] = []) => {
+    setBusy("route"); setErr(null);
+    let e = await saveClientRoute(client.id, client.name, rule, next, act);
+    if (!e && added.length) e = await fileMailFrom(client.id, added, act === "file");
+    if (!e && act !== action && next.length && act === "file") e = await fileMailFrom(client.id, next, true);
+    setBusy(null); setErr(e);
+    await load();
+  };
+
+  const makeTicket = async (m: MailMsg) => {
+    setBusy(m.id); setErr(null);
+    const dir = await loadDirectory();
+    const res = await createTicketFromMail(m, dir, true, { clientId: client.id });
+    setBusy(null);
+    if (res.error) { setErr(res.error); return; }
+    await load();
+    if (res.id) setTicket(res.id);
+  };
+  const unfile = async (m: MailMsg) => {
+    setBusy(m.id); setErr(null);
+    const e = await setMailClient(m, null);
+    setBusy(null);
+    if (e) setErr(e); else { setSel(null); await load(); }
+  };
+
+  const whoOpts = [
+    { value: "all", label: `Everyone (${msgs?.length ?? 0})` },
+    ...(sent ? [{ value: "out", label: `Sent by us (${sent})` }] : []),
+    ...[...senders.known, ...senders.others].map((s) => ({ value: s.email, label: `${s.name} (${s.n})` })),
+    ...quietList.map((p) => ({ value: lcm(p.email), label: `${p.name} (0)` })),
+  ];
+  const whoBtn = (k: MailWho, av: React.ReactNode, title: string, sub: string | null, n: number, i: number, tone = "") => (
+    <button type="button" key={k} className={`cw-mail-p ${who === k ? "is-on" : ""} ${tone}`} style={cssVars({ "--i": i })}
+      onClick={() => { setWho(k); setSel(null); }} title={sub ? `${title} · ${sub}` : title}>
+      <span className="cw-mail-av">{av}</span>
+      <span className="cw-mail-p-t"><b>{title}</b>{sub && <small>{sub}</small>}</span>
+      <em>{n}</em>
+    </button>
+  );
+  const routeLine = addrs.length
+    ? <>Mail from <b>{addrs.slice(0, 2).map(nameOf).join(", ")}</b>{addrs.length > 2 ? ` and ${addrs.length - 2} more` : ""} lands here{action === "create" ? " and opens a ticket" : ""}, along with mail from this client's contacts.</>
+    : <>Mail from this client's contacts lands here. Add their domain so new addresses are caught too.</>;
+
+  return (
+    <div className="cw-mail">
+      <header className="cw-folders-h cw-mail-h">
+        <span className="cw-zone-ico"><Ico n="mail" s={18} /></span>
+        <div className="cw-folders-t">
+          <h3>Emails</h3>
+          <small>{routeLine}</small>
+        </div>
+        <button type="button" className={`cw-mail-route ${routing ? "is-on" : ""} ${addrs.length ? "" : "is-new"}`} onClick={() => setRouting(!routing)} aria-expanded={routing}>
+          <Ico n="filter" s={14} />{addrs.length ? <>Mail rule<i>{addrs.length}</i></> : "Add a mail rule"}<span className="cw-mail-route-chev"><Ico n="chev" s={13} /></span>
+        </button>
+      </header>
+
+      {routing && (
+        <div className="cw-mr">
+          <div className="cw-mr-row">
+            <span className="cw-mr-k">When mail comes from</span>
+            <RouteChips addrs={addrs} suggest={suggest} people={people} busy={busy === "route"} placeholder={addrs.length ? "Type an address or @domain" : "@acme.com or ana@acme.com"}
+              onChange={(next, added) => void route(next, action, added)} />
+          </div>
+          <div className="cw-mr-row">
+            <span className="cw-mr-k">Then</span>
+            <div className="cw-mr-seg" role="radiogroup">
+              {([["file", "Keep it here", "Out of the desk's Inbox"], ["create", "Keep it here and open a ticket", "Each new conversation becomes a ticket"]] as const).map(([k, l, h]) => (
+                <button type="button" key={k} role="radio" aria-checked={action === k} className={action === k ? "is-on" : ""} disabled={!addrs.length || busy === "route"}
+                  onClick={() => action !== k && void route(addrs, k)}><b>{l}</b><small>{h}</small></button>
+              ))}
+            </div>
+          </div>
+          <p className="cw-mr-note"><Ico n="clock" s={12} />Runs on new mail the desk reads (shared mailboxes and the inboxes people turned on). Mail already in the desk from these addresses moves here when you add them.{rules.length > 1 ? ` ${rules.length - 1} more rule${rules.length === 2 ? "" : "s"} for this client in Settings › Clients.` : ""}</p>
+        </div>
+      )}
+      {missing && <p className="cw-err">{MAIL_ROUTING_SQL}</p>}
+      {err && <p className="cw-err">{err}</p>}
+
+      <div className="cw-mail-box">
+        <nav className="cw-mail-who" aria-label="Who wrote">
+          {whoBtn("all", <Ico n="mail" s={13} />, "Everyone", null, msgs?.length ?? 0, 0, "is-all")}
+          {sent > 0 && whoBtn("out", <Ico n="send" s={12} />, "Sent by us", null, sent, 1, "is-out")}
+          {senders.known.length > 0 && <span className="cw-mail-k">People</span>}
+          {senders.known.map((s, i) => whoBtn(s.email, initials(s.name), s.name, s.sub, s.n, i + 2, s.kind === "crm" ? "is-crm" : ""))}
+          {senders.others.length > 0 && <span className="cw-mail-k">Other senders</span>}
+          {senders.others.map((s, i) => whoBtn(s.email, initials(s.name), s.name, s.name === s.email ? null : s.email, s.n, i + 2 + senders.known.length, "is-other"))}
+          {quiet > 0 && msgs && (
+            <button type="button" className={`cw-mail-quiet ${showQuiet ? "is-open" : ""}`} onClick={() => setShowQuiet(!showQuiet)} aria-expanded={showQuiet}>
+              {quiet} {quiet === 1 ? "person hasn't" : "people haven't"} written yet<Ico n="chev" s={12} />
+            </button>
+          )}
+          {showQuiet && quietList.map((p, i) => whoBtn(lcm(p.email), initials(p.name), p.name, personSub(p), 0, i, "is-quiet"))}
+        </nav>
+
+        <div className="cw-mail-list">
+          <div className="cw-mail-bar">
+            <label className="cw-mail-search"><Ico n="search" s={14} />
+              <input value={q} placeholder="Search subject, sender, text" onChange={(e) => { setQ(e.target.value); setSel(null); }} />
+              {q && <button type="button" onClick={() => setQ("")} aria-label="Clear"><Ico n="x" s={12} /></button>}
+            </label>
+            <div className="cw-mail-whopick"><Select value={who} onChange={(v) => { setWho(v || "all"); setSel(null); }} options={whoOpts} /></div>
+          </div>
+          <div className="cw-mail-items">
+            {!msgs ? [0, 1, 2, 3].map((k) => <span key={k} className="cw-mail-skel" />)
+              : !shown.length ? (
+                <div className="cw-mail-empty">
+                  <span className="cw-empty-plus"><Ico n="mail" s={18} /></span>
+                  <b>{!msgs.length ? "No e-mails yet" : who !== "all" && who !== "out" && !q ? `Nothing from ${nameOf(who)} yet` : "Nothing matches"}</b>
+                  <small>{msgs.length ? (who !== "all" && who !== "out" && !q ? "Mail they send, or that we send them, shows up here." : "Try another person or search.") : addrs.length ? "New mail from their addresses will show up here." : "Add a mail rule above, or wait for their contacts to write."}</small>
+                </div>
+              ) : shown.map((m, i) => {
+                const out = m.direction === "out";
+                const name = out ? (m.to[0]?.name || m.to[0]?.email || "—") : (byEmail.get(lcm(m.fromEmail))?.name || m.fromName || m.fromEmail || "Unknown");
+                return (
+                  <button type="button" key={m.id} className={`cw-mail-it ${cur?.id === m.id ? "is-on" : ""} ${out ? "is-out" : ""}`} style={cssVars({ "--i": Math.min(i, 12) })} onClick={() => setSel(m.id)}>
+                    <span className="cw-mail-av">{out ? <Ico n="send" s={12} /> : initials(name)}</span>
+                    <span className="cw-mail-it-m">
+                      <span className="cw-mail-it-top"><b>{out ? `To ${name}` : name}</b><time>{mailWhen(m.at)}</time></span>
+                      <span className="cw-mail-it-s">{m.subject || "(no subject)"}</span>
+                      <span className="cw-mail-it-x">{m.snippet}</span>
+                      {(m.ticketId || (m.status === "new" && !m.ticketId) || m.attachments.length > 0) && (
+                        <span className="cw-mail-tags">
+                          {m.ticketId && <i className="is-ticket">Ticket</i>}
+                          {m.status === "new" && !m.ticketId && !out && <i className="is-inbox">In the desk Inbox</i>}
+                          {m.attachments.length > 0 && <i><Ico n="file" s={10} />{m.attachments.length}</i>}
+                        </span>
+                      )}
+                    </span>
+                  </button>
+                );
+              })}
+          </div>
+        </div>
+
+        <div className="cw-mail-read">
+          {cur ? (
+            <>
+              <header className="cw-mail-rh">
+                <h4>{cur.subject || "(no subject)"}</h4>
+                <div className="cw-mail-rmeta">
+                  <span className="cw-mail-av is-lg">{cur.direction === "out" ? <Ico n="send" s={14} /> : initials(byEmail.get(lcm(cur.fromEmail))?.name || cur.fromName || cur.fromEmail || "?")}</span>
+                  <div className="cw-mail-rwho">
+                    <span className="cw-mail-rwho-top"><b>{cur.direction === "out" ? "Sent by us" : byEmail.get(lcm(cur.fromEmail))?.name || cur.fromName || cur.fromEmail}</b><time>{mailFull(cur.at)}</time></span>
+                    <small title={[cur.fromEmail, ...cur.to.map((x) => x.email), ...cur.cc.map((x) => x.email)].filter(Boolean).join(", ")}>{cur.fromEmail}{cur.to.length ? ` → ${cur.to.map((x) => x.email).join(", ")}` : ""}{cur.cc.length ? ` · cc ${cur.cc.map((x) => x.email).join(", ")}` : ""}</small>
+                  </div>
+                </div>
+                <div className="cw-mail-ract">
+                  {cur.ticketId ? (
+                    <button type="button" className="cw-btn-primary is-sm" onClick={() => setTicket(cur.ticketId)}><Ico n="tasks" s={14} />Open ticket</button>
+                  ) : cur.direction === "in" && (
+                    <button type="button" className="cw-btn-primary is-sm" disabled={busy === cur.id} onClick={() => void makeTicket(cur)}><Ico n="plus" s={14} />{busy === cur.id ? "Opening…" : "Make a ticket"}</button>
+                  )}
+                  {cur.clientId === client.id && !cur.ticketId && (
+                    <button type="button" className="cw-mail-ghost" disabled={busy === cur.id} onClick={() => void unfile(cur)}
+                      {...{ title: cur.status === "filed" ? "Take it off this client; it goes back to the desk's Inbox" : "Take it off this client" }}><Ico n="x" s={13} />Not this client</button>
+                  )}
+                </div>
+              </header>
+              <div className="cw-mail-body" key={cur.id}>
+                <MailFrame html={cur.html || `<p>${escHtml(cur.snippet || "")}</p>`} maxHeight={20000} />
+                {cur.attachments.length > 0 && (
+                  <p className="cw-mail-att"><Ico n="file" s={13} />{cur.attachments.map((a) => a.name).join(" · ")}{cur.ticketId ? " — open the ticket to download" : ""}</p>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="cw-mail-none"><Ico n="mail" s={26} /><span>{msgs === null ? "Loading…" : "Pick an e-mail to read it"}</span></div>
+          )}
+        </div>
+      </div>
+      {ticket && <TicketDrawerById id={ticket} onClose={() => { setTicket(null); void load(); }} />}
+    </div>
+  );
+}
+
+/** Settings › Clients: every client's mail rule in one list. */
+export function ClientMailRulesEditor({ canEdit }: { canEdit: boolean }) {
+  const [rules, setRules] = useState<MailRule[] | null>(null);
+  const [clients, setClients] = useState<{ id: string; name: string }[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [adding, setAdding] = useState<string>("");
+  const load = useCallback(async () => {
+    const [r, c] = await Promise.all([loadMailRules(), supabase.from("clients").select("id, name").order("name")]);
+    setRules((r ?? []).filter((x) => x.scope === "client"));
+    if (r === null) setErr(MAIL_ROUTING_SQL);
+    setClients(((c.data ?? []) as any[]).map((x) => ({ id: String(x.id), name: x.name ?? "" })));
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+  const nameOf = (id?: string | null) => clients.find((c) => c.id === id)?.name ?? "Unknown client";
+  const run = async (key: string, p: Promise<string | null>) => { setBusy(key); setErr(null); const e = await p; setBusy(null); setErr(e); await load(); return e; };
+  const list = (rules ?? []).slice().sort((a, b) => nameOf(a.set.client_id).localeCompare(nameOf(b.set.client_id)));
+  const taken = new Set(list.map((r) => r.set.client_id));
+  return (
+    <div className="cmr">
+      <p className="st-note">Mail from these addresses or domains is filed in the client's <b>Emails</b> tab — and, if you choose, opens a ticket. Mail from a client's own contacts is filed there anyway; a domain catches everyone else at the company.</p>
+      {err && <p className="cmr-err">{err}</p>}
+      {!rules ? <div className="cmr-skel" /> : (
+        <div className="cmr-list">
+          {!list.length && <p className="cmr-empty">No client has a mail rule yet. Add one here, or from a client's Emails tab.</p>}
+          {list.map((r) => {
+            const a = r.conditions.from_emails ?? [];
+            const act: "file" | "create" = r.action === "create" ? "create" : "file";
+            return (
+              <div className={`cmr-row ${r.active ? "" : "is-off"}`} key={r.id}>
+                <div className="cmr-client"><b>{nameOf(r.set.client_id)}</b><small>{r.hits ? `Used ${r.hits} time${r.hits === 1 ? "" : "s"}` : "Not used yet"}</small></div>
+                <div className="cmr-addrs">
+                  {canEdit ? (
+                    <RouteChips addrs={a} busy={busy === r.id} placeholder="Add an address or @domain"
+                      onChange={(next, added) => void run(r.id, (async () => {
+                        const e = await saveClientRoute(r.set.client_id!, nameOf(r.set.client_id), r, next, act);
+                        return e ?? (added.length ? fileMailFrom(r.set.client_id!, added, act === "file") : null);
+                      })())} />
+                  ) : <span className="cmr-ro">{a.join(", ")}</span>}
+                </div>
+                <div className="cmr-act">
+                  <Select value={act} disabled={!canEdit || busy === r.id} onChange={(v) => v !== act && void run(r.id, saveClientRoute(r.set.client_id!, nameOf(r.set.client_id), r, a, v === "create" ? "create" : "file"))}
+                    options={[{ value: "file", label: "Keep in Emails" }, { value: "create", label: "Keep + open a ticket" }]} />
+                </div>
+                {canEdit && (
+                  <div className="cmr-side">
+                    <button type="button" role="switch" aria-checked={r.active} className={`cmr-switch ${r.active ? "is-on" : ""}`} title={r.active ? "On" : "Off"}
+                      onClick={() => void run(r.id, saveMailRule({ ...r, active: !r.active }))}><i /></button>
+                    <button type="button" className="cmr-del" onClick={() => void run(r.id, deleteMailRule(r.id))} aria-label="Delete rule"><Ico n="trash" s={14} /></button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {canEdit && rules && (
+        <div className="cmr-new">
+          <Select searchable value={adding} onChange={(v) => setAdding(v)} placeholder="Add a rule for a client…"
+            options={clients.filter((c) => !taken.has(c.id)).map((c) => ({ value: c.id, label: c.name }))} />
+          {adding && (
+            <RouteChips addrs={[]} busy={busy === "new"} placeholder="@domain.com or ana@domain.com, then Enter"
+              onChange={(next) => void run("new", (async () => {
+                const e = await saveClientRoute(adding, nameOf(adding), null, next, "file");
+                if (!e) { await fileMailFrom(adding, next, true); setAdding(""); }
+                return e;
+              })())} />
+          )}
+        </div>
+      )}
     </div>
   );
 }

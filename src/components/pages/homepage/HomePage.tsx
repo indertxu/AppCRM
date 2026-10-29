@@ -293,10 +293,10 @@ export default function HomePage() {
   const alerts = useHomeAlerts(uid && me ? uid : null);
 
   return (
-    <div ref={rootRef} className={`home ${area === "consultancy" ? "is-cons" : ""} ${booting ? (boot.mode === "arrive" ? "is-held" : "is-held-grid") : ""} ${boot.phase === "out" ? `is-revealing is-revealing-${boot.mode}` : ""}`}>
+    <div ref={rootRef} className={`home ${area === "consultancy" || area === "sales" ? "is-cons" : ""} ${area === "sales" ? "is-sales" : ""} ${booting ? (boot.mode === "arrive" ? "is-held" : "is-held-grid") : ""} ${boot.phase === "out" ? `is-revealing is-revealing-${boot.mode}` : ""}`}>
       {boot.phase !== "none" && <HomeBoot boot={boot} details={details} hello={hello} top={bootTop} />}
 
-      {area !== "consultancy" && (
+      {area !== "consultancy" && area !== "sales" && (
         <header className="home-bar" ref={barRef}>
           <span className="home-logo-mini" aria-hidden="true"><NextLogo /></span>
           <h1 className="home-title">{greeting()}{me?.firstName ? <>, <em>{me.firstName}</em></> : ""}</h1>
@@ -314,6 +314,12 @@ export default function HomePage() {
           alertsBell={<HomeAlertsBell h={alerts} tone="dark" />}
           calendar={<HomeCalendar userId={uid} hoursPerDay={hoursPerDay} />}
           desk={<TicketDesk />} />
+      ) : area === "sales" ? (
+        <SalesHome userId={me.id} seesTeam={seesSalesTeam}
+          greeting={greeting()} firstName={me.firstName} heroRef={barRef}
+          alertsBell={<HomeAlertsBell h={alerts} tone="dark" />}
+          calendar={<HomeCalendar userId={uid} hoursPerDay={hoursPerDay} />}
+          desk={<TicketDesk />} />
       ) : (
         <div className={`home-grid ${me && !area ? "is-solo" : ""}`}>
           <aside className="home-side">
@@ -322,7 +328,6 @@ export default function HomePage() {
           </aside>
           {area && (
             <main className="home-main">
-              {area === "sales" && <SalesHome userId={me.id} seesTeam={seesSalesTeam} />}
               {area === "management" && <ManagementHome />}
             </main>
           )}

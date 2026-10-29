@@ -20,6 +20,7 @@ import { useNavigate } from "react-router-dom";
 import { supabase } from "../../../api/supabase";
 import "./HomeShared.css";
 import { mentionsToPlain } from "../../../framework/MentionInput";
+import { useOutlookEvents, outlookOnDay, outlookNotLogged } from "../../../api/outlookSync";
 
 type View = "days" | "month";
 interface Item {
@@ -27,13 +28,17 @@ interface Item {
   date: string;          // YYYY-MM-DD
   start: number;         // minutes after midnight
   end: number;
-  kind: "meeting" | "work";
+  kind: "meeting" | "work" | "outlook";
   meetingKind: "teams" | "phone" | "in_person" | null;
   title: string;
   sub: string | null;
   color: string;
   href: string;
+  allDay?: boolean;
+  /** entries: the Outlook event they came from / were put in (not shown twice) */
+  olIds?: (string | null)[];
 }
+const OUTLOOK_COLOR = "#8796a1";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 /** Local YYYY-MM-DD (toISOString would shift the day near midnight). */
@@ -168,7 +173,7 @@ export default function HomeCalendar({ userId, hoursPerDay }: { userId: string; 
     (async () => {
       const [{ data }, hol, vac] = await Promise.all([
         supabase.from("calendar_entries")
-          .select("id, entry_date, start_min, end_min, kind, meeting_kind, title, client_id, company_id, tracking_id, work_type_id, status")
+          .select("*")
           .eq("user_id", userId).gte("entry_date", from).lte("entry_date", to)
           .neq("status", "cancelled").order("entry_date").order("start_min").range(0, 4999),
         supabase.from("holidays").select("holiday_date, name").gte("holiday_date", from).lte("holiday_date", to),
@@ -198,6 +203,7 @@ export default function HomeCalendar({ userId, hoursPerDay }: { userId: string; 
             sub: companies.get(r.company_id)?.name ?? clients.get(r.client_id)?.name ?? null,
             color: MEETING_COLOR[mk] ?? MEETING_COLOR.in_person,
             href: r.tracking_id ? `/sales?tracking=${r.tracking_id}` : "/calendar",
+            olIds: [r.outlook_event_id ?? null, r.outlook_source_id ?? null],
           } as Item;
         }
         const client = clients.get(r.client_id)?.name ?? null;
@@ -208,6 +214,7 @@ export default function HomeCalendar({ userId, hoursPerDay }: { userId: string; 
           sub: plain(r.title) ? client ?? type?.name ?? null : client ? type?.name ?? null : null,
           color: type?.color || "#0a6f4d",
           href: "/calendar",
+          olIds: [r.outlook_event_id ?? null, r.outlook_source_id ?? null],
         } as Item;
       }));
       setLoading(false);
@@ -215,12 +222,35 @@ export default function HomeCalendar({ userId, hoursPerDay }: { userId: string; 
     return () => { alive = false; };
   }, [userId, grid, today, todayIso]);
 
+  // your Outlook (read only): shown in the list and on hover, not counted as booked time
+  const olFrom = useMemo(() => fromIso([isoDay(grid[0]), todayIso].sort()[0]), [grid, todayIso]);
+  const olTo = useMemo(() => addDays(fromIso([isoDay(grid[grid.length - 1]), isoDay(addDays(today, 40))].sort()[1]), 1), [grid, today]);
+  const ol = useOutlookEvents(olFrom, olTo, !!userId);
+  const olItems = useMemo<Item[]>(() => {
+    const shown = outlookNotLogged(ol.events, items.map((it) => ({ date: fromIso(it.date), startMin: it.start, endMin: it.end, outlookEventId: it.olIds?.[0], outlookSourceId: it.olIds?.[1] })));
+    const out: Item[] = [];
+    shown.forEach((ev) => {
+      const first = new Date(ev.start);
+      for (let d = new Date(first.getFullYear(), first.getMonth(), first.getDate()), k = 0; k < 14 && d < olTo; d = addDays(d, 1), k++) {
+        const on = outlookOnDay(ev, d);
+        if (!on) { if (k > 0) break; continue; }
+        const date = isoDay(d);
+        out.push({
+          id: `ol:${ev.id}:${date}`, date, start: on === "allday" ? -1 : on.startMin, end: on === "allday" ? -1 : on.endMin,
+          kind: "outlook", meetingKind: null, title: ev.subject, sub: ["Outlook", ev.location, ev.isOrganizer ? null : ev.organizer].filter(Boolean).join(" · "),
+          color: OUTLOOK_COLOR, href: `/calendar?outlook=${encodeURIComponent(ev.id)}&d=${date}`, allDay: on === "allday",
+        });
+      }
+    });
+    return out;
+  }, [ol.events, items, olTo]);
+  const allItems = useMemo(() => [...items, ...olItems].sort((a, b) => a.date.localeCompare(b.date) || a.start - b.start), [items, olItems]);
   const byDay = useMemo(() => {
     const m = new Map<string, Item[]>();
-    items.forEach((it) => { const l = m.get(it.date); if (l) l.push(it); else m.set(it.date, [it]); });
+    allItems.forEach((it) => { const l = m.get(it.date); if (l) l.push(it); else m.set(it.date, [it]); });
     return m;
-  }, [items]);
-  const bookedMin = (iso: string) => (byDay.get(iso) ?? []).reduce((s, it) => s + Math.max(0, it.end - it.start), 0);
+  }, [allItems]);
+  const bookedMin = (iso: string) => (byDay.get(iso) ?? []).reduce((s, it) => s + (it.kind === "outlook" ? 0 : Math.max(0, it.end - it.start)), 0);
 
   // Five-day summary: booked against the time this person really has.
   const fiveBooked = days.reduce((s, d) => s + bookedMin(isoDay(d)), 0);
@@ -236,24 +266,24 @@ export default function HomeCalendar({ userId, hoursPerDay }: { userId: string; 
     if (!ready) return;
     const now = new Date();
     const nowM = now.getHours() * 60 + now.getMinutes();
-    const nextIt = items.find((it) => it.date > todayIso || (it.date === todayIso && it.end > nowM)) ?? null;
+    const nextIt = allItems.find((it) => !it.allDay && (it.date > todayIso || (it.date === todayIso && it.end > nowM))) ?? null;
     try {
       window.dispatchEvent(new CustomEvent(CAL_SUMMARY_EVENT, { detail: {
         todayMin: todayMinV, todayCap: todayCapV, fiveBooked, fiveCap,
         next: nextIt ? { date: nextIt.date, time: hhmm(nextIt.start), title: nextIt.title, today: nextIt.date === todayIso } : null,
       } as CalSummary }));
     } catch { /* old browsers */ }
-  }, [ready, todayMinV, todayCapV, fiveBooked, fiveCap, items, todayIso]);
+  }, [ready, todayMinV, todayCapV, fiveBooked, fiveCap, allItems, todayIso]);
 
   // What the list shows: the clicked day, or what's coming up from now on.
   const nowMin = today.getHours() * 60 + today.getMinutes();
   const list = useMemo(() => {
     if (sel) return [{ date: sel, items: byDay.get(sel) ?? [] }];
-    const upcoming = items.filter((it) => it.date > todayIso || (it.date === todayIso && it.end > nowMin)).slice(0, 6);
+    const upcoming = allItems.filter((it) => it.date > todayIso || (it.date === todayIso && (it.allDay || it.end > nowMin))).slice(0, 6);
     const groups: { date: string; items: Item[] }[] = [];
     upcoming.forEach((it) => { const g = groups.find((x) => x.date === it.date); if (g) g.items.push(it); else groups.push({ date: it.date, items: [it] }); });
     return groups;
-  }, [sel, byDay, items, todayIso, nowMin]);
+  }, [sel, byDay, allItems, todayIso, nowMin]);
 
   const dayName = (iso: string) => {
     const diff = Math.round((fromIso(iso).getTime() - fromIso(todayIso).getTime()) / 86400000);
@@ -291,10 +321,11 @@ export default function HomeCalendar({ userId, hoursPerDay }: { userId: string; 
             const off = ready ? offOn(iso) : null;
             const pct = cap > 0 ? Math.min(100, (min / cap) * 100) : min > 0 ? 100 : 0;
             const n = (byDay.get(iso) ?? []).length;
+            const nOl = (byDay.get(iso) ?? []).filter((it) => it.kind === "outlook").length;
             const free = cap - min;
-            const tip = off
+            const tip = (off
               ? `${off.label}${min ? ` · ${hours(min)} booked anyway` : ""}`
-              : `${hours(min)} booked of ${hours(cap)} available · ${n} ${n === 1 ? "item" : "items"}`;
+              : `${hours(min)} booked of ${hours(cap)} available · ${n - nOl} ${n - nOl === 1 ? "item" : "items"}`) + (nOl ? ` · ${nOl} in Outlook` : "");
             return (
               <button key={iso} className={`hs-day ${loadClass(min, cap)} ${off ? `is-off is-${off.kind}` : ""} ${iso === todayIso ? "is-today" : ""} ${sel === iso ? "is-sel" : ""} ${n ? "has-items" : ""}`}
                 style={{ ["--i" as string]: i, ["--p" as string]: ready ? pct : 0 } as React.CSSProperties}
@@ -318,8 +349,8 @@ export default function HomeCalendar({ userId, hoursPerDay }: { userId: string; 
                 {/* what's booked that day — revealed on hover (consultancy home) */}
                 <span className="hs-day-peek" aria-hidden="true">
                   {n === 0 ? <em className="hs-peek-none">{off ? off.label : "Nothing booked"}</em> : (byDay.get(iso) ?? []).slice(0, 3).map((it) => (
-                    <span key={it.id} className="hs-peek-it" style={{ ["--c" as string]: it.color } as React.CSSProperties}>
-                      <b>{hhmm(it.start)}</b><span>{it.title}</span>
+                    <span key={it.id} className={`hs-peek-it ${it.kind === "outlook" ? "is-ol" : ""}`} style={{ ["--c" as string]: it.color } as React.CSSProperties}>
+                      <b>{it.allDay ? "All day" : hhmm(it.start)}</b><span>{it.title}</span>
                     </span>
                   ))}
                   {n > 3 && <em className="hs-peek-more">+{n - 3} more</em>}
@@ -390,12 +421,12 @@ export default function HomeCalendar({ userId, hoursPerDay }: { userId: string; 
                 {g.items.map((it, i) => (
                   <button key={it.id} className={`hs-ev is-${it.kind}`} style={{ ["--c" as string]: it.color, ["--i" as string]: i } as React.CSSProperties}
                     onClick={() => nav(it.href)}>
-                    <span className="hs-ev-time"><b>{hhmm(it.start)}</b><small>{hhmm(it.end)}</small></span>
+                    <span className="hs-ev-time">{it.allDay ? <><b>All</b><small>day</small></> : <><b>{hhmm(it.start)}</b><small>{hhmm(it.end)}</small></>}</span>
                     <span className="hs-ev-body">
                       <b>{it.title}</b>
                       {it.sub && <small>{it.sub}</small>}
                     </span>
-                    <span className="hs-ev-tag">{it.meetingKind ? MEETING_LABEL[it.meetingKind] : "Work"}</span>
+                    <span className="hs-ev-tag">{it.kind === "outlook" ? "Outlook" : it.meetingKind ? MEETING_LABEL[it.meetingKind] : "Work"}</span>
                   </button>
                 ))}
               </div>

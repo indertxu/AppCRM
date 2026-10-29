@@ -214,7 +214,12 @@ const addr = (r: any) => ({ name: r?.emailAddress?.name ?? "", email: lc(r?.emai
 const stripHtml = (h: string) => h.replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
 const REF_RE = /\[T-(\d{3,})\]/i;
 
-interface Rule { id: string; name: string; sort: number; active: boolean; conditions: any; action: "create" | "append" | "ignore"; target_ticket_id: string | null; set_fields: any; hits: number }
+interface Rule {
+  id: string; name: string; sort: number; active: boolean; conditions: any; action: "create" | "append" | "ignore" | "file";
+  target_ticket_id: string | null; set_fields: any; hits: number;
+  scope?: "desk" | "client" | null;   // client: the mail belongs in that client's Emails (72_mail_routing.sql)
+  owner_id?: string | null;           // someone's own rule: runs first, on their own inbox only
+}
 
 /** Does an incoming message match a rule? */
 function ruleMatches(rule: Rule, m: any, ctx: { contactIds: string[]; companyIds: string[]; mailbox: string }): boolean {
@@ -257,7 +262,7 @@ async function syncMailFor(userId: string, db: Db | null): Promise<Record<string
 
   const { data: ruleRows } = await admin.from("ticket_mail_rules").select("*").eq("tenant_id", tenant).eq("active", true).order("sort");
   const rules = (ruleRows ?? []) as Rule[];
-  const stats = { read: 0, stored: 0, threaded: 0, created: 0, ignored: 0, inbox: 0, errors: [] as string[] };
+  const stats = { read: 0, stored: 0, threaded: 0, created: 0, ignored: 0, filed: 0, inbox: 0, errors: [] as string[] };
 
   for (const box of mine) {
     const base = box.kind === "personal" ? "/me" : `/users/${encodeURIComponent(box.address)}`;
@@ -327,12 +332,37 @@ async function handleIncoming(g: any, box: any, base: string, token: string, ten
     if (prev) ticketId = (prev as any).ticket_id;
   }
 
-  // 2) the rules
+  // 2) the rules: the owner's own rules first (on their own inbox), then the desk's, and the client rules apart
+  const ctx = { contactIds, companyIds, mailbox: box.address };
+  const own = box.kind === "personal" && box.owner_id
+    ? rules.filter((r) => r.owner_id === box.owner_id && (r.scope ?? "desk") === "desk") : [];
+  const team = rules.filter((r) => !r.owner_id && (r.scope ?? "desk") === "desk");
+  const clientRule = rules.find((r) => !r.owner_id && r.scope === "client" && ruleMatches(r, m, ctx)) ?? null;
   let rule: Rule | null = null;
-  if (!ticketId) rule = rules.find((r) => ruleMatches(r, m, { contactIds, companyIds, mailbox: box.address })) ?? null;
-  let status: "new" | "assigned" | "ignored" = "new";
+  if (!ticketId) rule = own.find((r) => ruleMatches(r, m, ctx)) ?? team.find((r) => ruleMatches(r, m, ctx)) ?? null;
+  // a client rule set to "open a ticket" works as a desk rule when no desk rule took the mail
+  if (!ticketId && !rule && clientRule?.action === "create") rule = clientRule;
+
+  // which client it belongs to
+  let ticketClient: string | null = null;
+  if (ticketId) {
+    const { data: tc } = await admin.from("tracking_tasks").select("client_id").eq("id", ticketId).maybeSingle();
+    ticketClient = (tc as any)?.client_id ?? null;
+  }
+  let clientId: string | null = clientRule?.set_fields?.client_id || rule?.set_fields?.client_id || ticketClient || null;
+  if (!clientId && companyIds.length) {
+    const { data: cl } = await admin.from("clients").select("id").eq("tenant_id", tenant).in("company_id", companyIds).limit(1).maybeSingle();
+    clientId = (cl as any)?.id ?? null;
+  }
+  if (rule && rule.action === "create" && clientId && !rule.set_fields?.client_id) rule = { ...rule, set_fields: { ...(rule.set_fields ?? {}), client_id: clientId } };
+
+  let status: "new" | "assigned" | "ignored" | "filed" = "new";
   if (ticketId) { status = "assigned"; stats.threaded += 1; }
-  else if (rule?.action === "ignore") { status = "ignored"; stats.ignored += 1; }
+  else if (rule?.action === "ignore" && !clientRule) { status = "ignored"; stats.ignored += 1; }
+  else if (!rule || rule.action === "ignore" || rule.action === "file") {
+    if (clientRule && clientId) { status = "filed"; stats.filed = (stats.filed ?? 0) + 1; }
+    else if (rule?.action === "ignore") { status = "ignored"; stats.ignored += 1; }
+  }
   else if (rule?.action === "append" && rule.target_ticket_id) { ticketId = rule.target_ticket_id; status = "assigned"; stats.threaded += 1; }
   else if (rule?.action === "create") {
     const f = rule.set_fields ?? {};
@@ -340,7 +370,7 @@ async function handleIncoming(g: any, box: any, base: string, token: string, ten
       title: (m.subject || "(no subject)").slice(0, 300), description: m.text.slice(0, 4000),
       kind: "quick", priority: ["low", "normal", "high", "urgent"].includes(f.priority) ? f.priority : "normal",
       status: "todo", progress: 0, stage: "new", source: "email",
-      ticket_type: f.type || null, assignee_id: f.assignee_id || null, team: f.team || null,
+      ticket_type: f.type || null, assignee_id: f.assignee_id || (rule.owner_id ?? null), team: f.team || null,
       tags: Array.isArray(f.tags) ? f.tags : [],
       requester_name: m.from.name || null, requester_email: m.from.email || null, requester_contact_id: contactIds[0] ?? null,
       company_id: f.company_id || companyIds[0] || null, client_id: f.client_id || null,
@@ -350,9 +380,11 @@ async function handleIncoming(g: any, box: any, base: string, token: string, ten
     if (error) stats.errors.push(`ticket from "${m.subject}": ${error.message}`);
     else { ticketId = (t as any).id; status = "assigned"; stats.created += 1; }
   }
-  if (rule) await admin.from("ticket_mail_rules").update({ hits: (rule.hits ?? 0) + 1, last_hit_at: new Date().toISOString() }).eq("id", rule.id);
+  const hit = (r: Rule) => admin.from("ticket_mail_rules").update({ hits: (r.hits ?? 0) + 1, last_hit_at: new Date().toISOString() }).eq("id", r.id);
+  if (rule) await hit(rule);
+  if (clientRule && clientRule.id !== rule?.id) await hit(clientRule);
 
-  // a personal inbox only keeps what concerns the desk (unless told to keep everything)
+  // a personal inbox only keeps what concerns the desk or a client rule (unless told to keep everything)
   if (status === "new" && box.kind === "personal" && !box.store_all) return;
   if (status === "new") stats.inbox += 1;
 
@@ -364,13 +396,20 @@ async function handleIncoming(g: any, box: any, base: string, token: string, ten
       if (ar.ok) attachments = (((await ar.json()).value ?? []) as any[]).filter((a) => !a.isInline).map((a) => ({ id: a.id, name: a.name, size: a.size, contentType: a.contentType }));
     } catch { /* names are a nicety */ }
   }
-  const { error: insErr } = await db.from("ticket_mail_messages").insert(withTenant({
+  const msgRow: Record<string, unknown> = {
     mailbox_id: box.id, direction: "in", graph_id: g.id, internet_message_id: msgId, conversation_id: g.conversationId ?? null,
     from_name: m.from.name || null, from_email: m.from.email || null, to_recipients: m.to, cc_recipients: m.cc,
     subject: m.subject, snippet: (g.bodyPreview ?? m.text).slice(0, 400), body_html: html,
     received_at: g.receivedDateTime ?? new Date().toISOString(), has_attachments: !!g.hasAttachments, attachments,
-    ticket_id: ticketId, rule_id: rule?.id ?? null, status,
-  }));
+    ticket_id: ticketId, rule_id: rule?.id ?? clientRule?.id ?? null, status,
+    client_id: clientId, contact_id: contactIds[0] ?? null,
+  };
+  let { error: insErr } = await db.from("ticket_mail_messages").insert(withTenant(msgRow));
+  if (insErr && /client_id|contact_id|status_check|check constraint/i.test(insErr.message)) {
+    // 72_mail_routing.sql not run yet: store it the old way
+    const { client_id: _c, contact_id: _k, ...old } = msgRow;
+    ({ error: insErr } = await db.from("ticket_mail_messages").insert(withTenant({ ...old, status: status === "filed" ? "new" : status })));
+  }
   if (insErr && !/duplicate|unique/i.test(insErr.message)) { stats.errors.push(`store "${m.subject}": ${insErr.message}`); return; }
   stats.stored += 1;
 
@@ -432,7 +471,8 @@ async function sendMail(userId: string, p: any, db: Db): Promise<Response> {
   if (ref.startsWith("ticket:")) {
     const ticketId = ref.slice(7);
     const { data: box } = from ? await admin.from("ticket_mailboxes").select("id").ilike("address", from).limit(1).maybeSingle() : { data: null };
-    await db.from("ticket_mail_messages").insert({
+    const { data: tk } = await admin.from("tracking_tasks").select("client_id").eq("id", ticketId).maybeSingle();
+    const outRow: Record<string, unknown> = {
       mailbox_id: (box as any)?.id ?? null, direction: "out", graph_id: info?.id ?? null,
       internet_message_id: info?.internetMessageId ?? null, conversation_id: info?.conversationId ?? null,
       from_name: null, from_email: from || own || null,
@@ -440,7 +480,10 @@ async function sendMail(userId: string, p: any, db: Db): Promise<Response> {
       cc_recipients: list(p.cc).map((x) => ({ name: "", email: x.emailAddress.address })),
       subject: message.subject, snippet: stripHtml(String(p.html ?? "")).slice(0, 400), body_html: String(p.html ?? "").slice(0, 200_000),
       received_at: new Date().toISOString(), ticket_id: ticketId, status: "assigned", sent_by: userId,
-    });
+      client_id: (tk as any)?.client_id ?? null,
+    };
+    const { error: outErr } = await db.from("ticket_mail_messages").insert(outRow);
+    if (outErr && /client_id/i.test(outErr.message)) { const { client_id: _c, ...old } = outRow; await db.from("ticket_mail_messages").insert(old); }
   }
   return json({ ok: true, messageId: info?.internetMessageId ?? info?.id ?? null });
 }
@@ -564,6 +607,42 @@ Deno.serve(async (req) => {
         joinUrl: ev.onlineMeeting?.joinUrl ?? null,
         teamsSkipped,
       });
+    }
+
+    // What's in the user's own Outlook calendar between two moments (read only). Events the CRM put
+    // there itself are left out (the page already shows those entries); cancelled and declined ones too.
+    if (action === "events") {
+      const token = await accessTokenFor(userId);
+      if (!token) return json({ connected: false, events: [] });
+      const from = new Date(String(p.from ?? "")), to = new Date(String(p.to ?? ""));
+      if (isNaN(from.getTime()) || isNaN(to.getTime()) || to <= from) return json({ error: "Bad range" }, 400);
+      if (to.getTime() - from.getTime() > 120 * 86400000) return json({ error: "Range too long (120 days max)" }, 400);
+      const sel = "id,subject,start,end,isAllDay,showAs,location,organizer,isOrganizer,isOnlineMeeting,onlineMeeting,webLink,isCancelled,bodyPreview,attendees,responseStatus,sensitivity,type";
+      let url: string | null = `${GRAPH}/me/calendarView?startDateTime=${encodeURIComponent(from.toISOString())}&endDateTime=${encodeURIComponent(to.toISOString())}&$select=${sel}&$orderby=start/dateTime&$top=250`;
+      const events: Record<string, unknown>[] = [];
+      for (let page = 0; url && page < 6; page++) {
+        const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Prefer: 'outlook.timezone="UTC", outlook.body-content-type="text"' } });
+        if (res.status === 429) return json({ error: "throttled", retryAfter: Number(res.headers.get("Retry-After") ?? 30), events }, 429);
+        if (!res.ok) return json({ error: `Graph error: ${(await res.text()).slice(0, 300)}` }, 502);
+        const j = await res.json();
+        for (const e of (j.value ?? []) as any[]) {
+          if (e.isCancelled) continue;
+          if (e.responseStatus?.response === "declined") continue;
+          if (/Synced from the CRM calendar/i.test(e.bodyPreview ?? "")) continue;
+          const utc = (x: any) => (x?.dateTime ? `${String(x.dateTime).replace(/\.\d+$/, "").replace(/Z$/, "")}Z` : null);
+          events.push({
+            id: e.id, subject: e.subject || "(no title)", start: utc(e.start), end: utc(e.end), allDay: !!e.isAllDay,
+            showAs: e.showAs ?? "busy", location: e.location?.displayName || null,
+            organizer: e.organizer?.emailAddress?.name || e.organizer?.emailAddress?.address || null, isOrganizer: !!e.isOrganizer,
+            online: !!e.isOnlineMeeting, joinUrl: e.onlineMeeting?.joinUrl ?? null, webLink: e.webLink ?? null,
+            preview: String(e.bodyPreview ?? "").replace(/\s+/g, " ").trim().slice(0, 280),
+            attendees: Array.isArray(e.attendees) ? e.attendees.length : 0,
+            private: e.sensitivity && e.sensitivity !== "normal", recurring: e.type === "occurrence" || e.type === "exception",
+          });
+        }
+        url = j["@odata.nextLink"] ?? null;
+      }
+      return json({ connected: true, events });
     }
 
     if (action === "delete") {

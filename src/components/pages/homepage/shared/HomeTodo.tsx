@@ -1474,7 +1474,7 @@ export async function loadTicketThread(id: string): Promise<{ posts: TicketPost[
     Promise.resolve(supabase.from("ticket_events").select("*").eq("task_id", id).order("created_at", { ascending: true })).then((r: any) => (r?.error ? [] : r?.data ?? [])).catch(() => [] as any[]),
   ]);
   return {
-    posts: ((up ?? []) as any[]).filter((u) => (u.body ?? "").trim()).map((u) => ({ id: u.id, author: u.author_id ?? null, body: u.body, visibility: u.visibility === "reply" ? "reply" : "internal", at: u.created_at })),
+    posts: ((up ?? []) as any[]).filter((u) => (u.body ?? "").trim()).map((u) => ({ id: u.id, author: u.author_id ?? null, body: u.body, visibility: u.visibility === "reply" ? "reply" : "internal", at: u.created_at ?? new Date().toISOString() })),
     events: (ev as any[]).map((e) => ({ id: e.id, author: e.author_id ?? null, action: e.action, detail: e.detail ?? {}, at: e.created_at })),
   };
 }
@@ -1521,6 +1521,7 @@ export async function loadTicket(id: string): Promise<{ ticket: Ticket | null; r
    E-MAIL, SLA, RULES, MERGING (19_ticket_mail.sql + the outlook-sync function)
    ===================================================================== */
 export const MAIL_SQL = "Run 19_ticket_mail.sql in Supabase to bring e-mail into the desk.";
+export const MAIL_ROUTING_SQL = "Run 72_mail_routing.sql in Supabase for client and personal mail rules.";
 const missingTable = (m?: string | null) => /relation|does not exist|schema cache|column/i.test(m ?? "");
 
 export interface MailPerson { name: string; email: string }
@@ -1529,7 +1530,8 @@ export interface MailMsg {
   id: string; ticketId: string | null; mailboxId: string | null; ruleId: string | null; direction: "in" | "out";
   fromName: string | null; fromEmail: string | null; to: MailPerson[]; cc: MailPerson[];
   subject: string; snippet: string; html: string; at: string; conversationId: string | null;
-  attachments: MailAttachment[]; status: "new" | "assigned" | "ignored"; sentBy: string | null;
+  attachments: MailAttachment[]; status: "new" | "assigned" | "ignored" | "filed"; sentBy: string | null;
+  clientId: string | null; contactId: string | null;
 }
 const toMail = (r: any): MailMsg => ({
   id: r.id, ticketId: r.ticket_id ?? null, mailboxId: r.mailbox_id ?? null, ruleId: r.rule_id ?? null, direction: r.direction === "out" ? "out" : "in",
@@ -1537,8 +1539,40 @@ const toMail = (r: any): MailMsg => ({
   to: Array.isArray(r.to_recipients) ? r.to_recipients : [], cc: Array.isArray(r.cc_recipients) ? r.cc_recipients : [],
   subject: r.subject ?? "", snippet: r.snippet ?? "", html: r.body_html ?? "", at: r.received_at ?? r.created_at,
   conversationId: r.conversation_id ?? null, attachments: Array.isArray(r.attachments) ? r.attachments : [],
-  status: r.status === "assigned" || r.status === "ignored" ? r.status : "new", sentBy: r.sent_by ?? null,
+  status: r.status === "assigned" || r.status === "ignored" || r.status === "filed" ? r.status : "new", sentBy: r.sent_by ?? null,
+  clientId: r.client_id ?? null, contactId: r.contact_id ?? null,
 });
+/** A client's e-mails (in and out), newest first. null = 72_mail_routing.sql hasn't been run. */
+export async function loadClientMail(clientId: string, ticketIds: string[] = []): Promise<MailMsg[] | null> {
+  const ids = ticketIds.filter(Boolean).slice(0, 150);
+  let q = supabase.from("ticket_mail_messages").select("*");
+  q = ids.length ? q.or(`client_id.eq.${clientId},ticket_id.in.(${ids.join(",")})`) : q.eq("client_id", clientId);
+  const { data, error } = await q.order("received_at", { ascending: false }).limit(500);
+  if (error) return missingTable(error.message) ? null : [];
+  return ((data ?? []) as any[]).map(toMail);
+}
+/** Files an e-mail under a client, or takes it off (null: if it was only filed, it goes back to the desk's Inbox). */
+export async function setMailClient(m: Pick<MailMsg, "id" | "status">, clientId: string | null): Promise<string | null> {
+  const patch: Record<string, unknown> = { client_id: clientId };
+  if (!clientId && m.status === "filed") patch.status = "new";
+  const { error } = await supabase.from("ticket_mail_messages").update(patch).eq("id", m.id);
+  return error ? (missingTable(error.message) ? MAIL_ROUTING_SQL : error.message) : null;
+}
+/**
+ * Mail already in the desk from these addresses / @domains goes to the client too; with `moveOut`
+ * the ones still waiting in the Inbox (no ticket) leave it.
+ */
+export async function fileMailFrom(clientId: string, addrs: string[], moveOut: boolean): Promise<string | null> {
+  for (const a of addrs) {
+    const esc = a.trim().toLowerCase().replace(/[%_\\]/g, (c) => "\\" + c);
+    if (!esc) continue;
+    const pat = esc.startsWith("@") ? `%${esc}` : esc;
+    const { error } = await supabase.from("ticket_mail_messages").update({ client_id: clientId }).is("client_id", null).ilike("from_email", pat);
+    if (error) return missingTable(error.message) ? MAIL_ROUTING_SQL : error.message;
+    if (moveOut) await supabase.from("ticket_mail_messages").update({ status: "filed" }).eq("client_id", clientId).eq("status", "new").is("ticket_id", null).ilike("from_email", pat);
+  }
+  return null;
+}
 /** The e-mails of a ticket (in and out), oldest first. null = the table is missing. */
 export async function loadTicketMail(ticketId: string): Promise<MailMsg[] | null> {
   const { data, error } = await supabase.from("ticket_mail_messages").select("*").eq("ticket_id", ticketId).order("received_at");
@@ -1662,13 +1696,20 @@ export interface RuleConditions {
 export interface RuleSet { type?: string | null; priority?: TaskPriority | null; assignee_id?: string | null; team?: string | null; tags?: string[]; client_id?: string | null; company_id?: string | null }
 export interface MailRule {
   id: string; name: string; sort: number; active: boolean; conditions: RuleConditions;
-  action: "create" | "append" | "ignore"; targetTicketId: string | null; set: RuleSet; hits: number; lastHitAt: string | null;
+  action: "create" | "append" | "ignore" | "file"; targetTicketId: string | null; set: RuleSet; hits: number; lastHitAt: string | null;
+  /** desk = the ticket desk; client = mail that belongs in a client's Emails (72_mail_routing.sql) */
+  scope?: "desk" | "client";
+  /** someone's own rule (runs first, on their own inbox); null = the team's */
+  ownerId?: string | null;
 }
 const toRule = (r: any): MailRule => ({
   id: r.id, name: r.name ?? "Rule", sort: r.sort ?? 0, active: r.active !== false,
-  conditions: { match: "all", ...(r.conditions ?? {}) }, action: ["create", "append", "ignore"].includes(r.action) ? r.action : "create",
+  conditions: { match: "all", ...(r.conditions ?? {}) }, action: ["create", "append", "ignore", "file"].includes(r.action) ? r.action : "create",
   targetTicketId: r.target_ticket_id ?? null, set: r.set_fields ?? {}, hits: r.hits ?? 0, lastHitAt: r.last_hit_at ?? null,
+  scope: r.scope === "client" ? "client" : "desk", ownerId: r.owner_id ?? null,
 });
+/** The desk's rules for everyone (not someone's own, not a client's). */
+export const isTeamRule = (r: MailRule) => (r.scope ?? "desk") === "desk" && !r.ownerId;
 export async function loadMailRules(): Promise<MailRule[] | null> {
   const { data, error } = await supabase.from("ticket_mail_rules").select("*").order("sort").order("created_at");
   if (error) return missingTable(error.message) ? null : [];
@@ -1679,8 +1720,13 @@ export async function saveMailRule(r: Partial<MailRule> & { name: string }): Pro
     name: r.name.trim() || "Rule", sort: r.sort ?? 0, active: r.active ?? true, conditions: r.conditions ?? { match: "all" },
     action: r.action ?? "create", target_ticket_id: r.action === "append" ? r.targetTicketId ?? null : null, set_fields: r.set ?? {},
   };
+  // the new columns only go out when used, so the team's rules keep working before 72_mail_routing.sql
+  const routed = r.scope === "client" || !!r.ownerId || r.action === "file";
+  if (routed) { row.scope = r.scope ?? "desk"; row.owner_id = r.ownerId ?? null; }
   const { error } = r.id ? await supabase.from("ticket_mail_rules").update(row).eq("id", r.id) : await supabase.from("ticket_mail_rules").insert(row);
-  return error ? (missingTable(error.message) ? MAIL_SQL : error.message) : null;
+  if (!error) return null;
+  if (routed && /scope|owner_id|check constraint|action_check/i.test(error.message)) return MAIL_ROUTING_SQL;
+  return missingTable(error.message) ? MAIL_SQL : error.message;
 }
 export async function deleteMailRule(id: string): Promise<string | null> {
   const { error } = await supabase.from("ticket_mail_rules").delete().eq("id", id);
@@ -1945,6 +1991,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
   const [sla, setSla] = useState<SlaMap | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncNote, setSyncNote] = useState<{ text: string; bad?: boolean } | null>(null);
+  const [syncTip, setSyncTip] = useState<DOMRect | null>(null);
   const [settings, setSettings] = useState<{ start?: SettingsTab; prefill?: Partial<MailRule> | null } | null>(null);
   const [preview, setPreview] = useState<MailMsg | null>(null);
   const [addPick, setAddPick] = useState<{ m: MailMsg; rect: DOMRect } | null>(null);
@@ -2007,9 +2054,10 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
     deskSyncBusy = true; setSyncing(true);
     const r: MailSyncResult = await syncTicketMail().catch((e) => ({ error: String(e?.message ?? e) }));
     deskSyncBusy = false; setSyncing(false);
-    lastDeskSync = Date.now();
+    if (!r.error) lastDeskSync = Date.now();
     if (r.error) {
-      if (!quiet) setSyncNote({ text: r.error === "mail_scope_missing" || /scope|permission/i.test(r.error) ? "Outlook needs mail permission — connect again with mail." : r.error === "not_connected" ? "Connect Outlook to read mail." : r.error, bad: true });
+      void quiet;   // the red dot on the refresh button says it; the note is in its tooltip
+      setSyncNote({ text: r.error === "mail_scope_missing" || /scope|permission/i.test(r.error) ? "Outlook needs mail permission — connect again with mail." : r.error === "not_connected" ? "Connect Outlook to read mail." : r.error, bad: true });
     } else {
       const bits: string[] = [];
       if (r.stored) bits.push(`${r.stored} new e-mail${r.stored === 1 ? "" : "s"}`);
@@ -2385,18 +2433,29 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
     </div>
   );
 
-  const syncBar = (
-    <div className="tm-sync">
-      <span className={`tm-sync-dot ${mailOn && hasBoxes ? "is-on" : ""} ${syncing ? "is-busy" : ""}`} />
-      <span className="tm-sync-txt">
-        {syncing ? "Reading mail…" : syncNote ? <span className={syncNote.bad ? "is-bad" : ""}>{syncNote.text}</span>
-          : lastSync > 0 ? <>Read {ago(new Date(lastSync).toISOString())}{mailOn && hasBoxes && !full ? " · every 5 min" : ""}</> : hasBoxes ? "Not read yet" : "No mailbox yet"}
-      </span>
-      <button type="button" className="tm-sync-btn" onClick={() => syncNow()} disabled={syncing || !mailOn} title={mailOn ? "Read new mail now (S)" : "Connect Outlook with mail first"}>
-        <TkIco d="refresh" className={syncing ? "is-spin" : ""} />Sync now
-      </button>
-    </div>
-  );
+  /* mail freshness: a small refresh button by the settings gear, green when mail was read lately, red when not */
+  const syncState: "off" | "busy" | "ok" | "stale" = !mailOn || !hasBoxes ? "off" : syncing ? "busy"
+    : syncNote?.bad || !lastSync || now - lastSync > AUTO_SYNC_MS * 3 ? "stale" : "ok";
+  const syncBtn = isT && inbox !== null ? (
+    <button type="button" className={`tm-rs is-${syncState}`} aria-label={syncState === "off" ? "Set up mail" : "Read new mail now"}
+      onClick={() => { setSyncTip(null); if (syncState === "off") setSettings({ start: "mailboxes" }); else syncNow(); }} disabled={syncing}
+      onMouseEnter={(e) => setSyncTip(e.currentTarget.getBoundingClientRect())} onMouseLeave={() => setSyncTip(null)}
+      onFocus={(e) => setSyncTip(e.currentTarget.getBoundingClientRect())} onBlur={() => setSyncTip(null)}>
+      <TkIco d="refresh" className={syncing ? "is-spin" : ""} /><i className="tm-rs-dot" />
+    </button>
+  ) : null;
+  const syncTipEl = syncTip && syncBtn ? createPortal(
+    <div className={`tm-rs-tip is-${syncState}`} role="tooltip"
+      style={{ top: syncTip.bottom + 8, left: Math.max(8, Math.min(window.innerWidth - 268, syncTip.left + syncTip.width / 2 - 130)) }}>
+      <b><i className="tm-rs-dot" />{syncState === "off" ? (mailOn ? "No mailbox is read yet" : "Mail isn't connected")
+        : syncState === "busy" ? "Reading mail…" : syncNote?.bad ? "The last read failed"
+          : syncState === "ok" ? "Mail is up to date" : lastSync ? `Mail not read for ${ago(new Date(lastSync).toISOString()).replace(/ ago$/, "")}` : "Mail not read yet"}</b>
+      {syncState !== "off" && <span>{lastSync > 0 ? <>Last read {ago(new Date(lastSync).toISOString())} · {new Date(lastSync).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</> : "Never read"}</span>}
+      {syncNote && syncState !== "off" && <span className={syncNote.bad ? "is-bad" : ""}>{syncNote.text}</span>}
+      <small>{syncState === "off" ? "Click to set up mailboxes" : `Reads every ${AUTO_SYNC_MS / 60000} min while the desk is open · click or press S to read now`}</small>
+    </div>,
+    document.body,
+  ) : null;
   const mailBanner = inbox === null ? <p className="tk-note">{MAIL_SQL}</p>
     : mailSt && !mailOn ? (
       <div className="tm-banner">
@@ -2415,7 +2474,6 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
   const inboxPane = (
     <div className="tm-pane">
       {mailBanner}
-      {inbox !== null && syncBar}
       {inbox === undefined ? <div className="hs-skel tk-skel" /> : inbox === null ? null : !inboxShown.length ? (
         <div className="tk-empty">
           <span className="tk-empty-ico"><TkIco d="inbox" /></span>
@@ -2504,6 +2562,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
           onConnect={() => connectOutlook({ withMail: true })} />
       )}
       {help && <ShortcutHelp onClose={() => setHelp(false)} />}
+      {syncTipEl}
       {sortMenu && (
         <Pop anchor={sortMenu} onClose={() => setSortMenu(null)} width={190}>
           <div className="tk-pop-list">
@@ -2661,6 +2720,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
             {q ? <button type="button" onClick={() => setQ("")} aria-label="Clear"><TkIco d="x" /></button> : <kbd>/</kbd>}
           </label>
           <button type="button" className="tkp2-icon" onClick={() => setHelp(true)} title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts"><TkIco d="keyboard" /></button>
+          {syncBtn}
           <button type="button" className="tkp2-icon" onClick={() => setSettings({})} title="Mail rules, mailboxes and SLAs" aria-label="Desk settings"><TkIco d="gear" /></button>
           <button type="button" className="tkp2-new" onClick={() => { setOpenId(null); setCreating(newDraft()); }} title={`New ${noun} (N)`}><TkIco d="plus" />New {noun}</button>
         </header>
@@ -2766,6 +2826,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
           </div>
           {breached > 0 && <span className="tk-breach-pill"><TkIco d="bolt" />{breached} past SLA</span>}
           <button type="button" className="tk-icon-btn" onClick={() => setHelp(true)} title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts"><TkIco d="keyboard" /></button>
+          {syncBtn}
           <button type="button" className="tk-icon-btn" onClick={() => setSettings({})} title="Mail rules, mailboxes and SLAs" aria-label="Desk settings"><TkIco d="gear" /></button>
           <button type="button" className="tk-new" onClick={() => setCreating(newDraft())}><TkIco d="plus" />New {noun}</button>
           <button type="button" className="tk-icon-btn" onClick={onClose} aria-label="Close"><TkIco d="x" /></button>
@@ -2817,6 +2878,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
         {lateCount > 0 && <button type="button" className="tk-late" onClick={() => { setPane("tickets"); setView("active"); setSort("due"); }} title={`${lateCount} past their due date`}>{lateCount}<span> late</span></button>}
         {isT && breached > 0 && <span className="tk-breach-pill is-sm" title="Past their SLA"><TkIco d="bolt" />{breached}</span>}
         <span className="td-spacer" />
+        {syncBtn}
         <button type="button" className="tk-icon-btn" onClick={() => setSettings({})} title="Mail rules, mailboxes and SLAs" aria-label="Desk settings"><TkIco d="gear" /></button>
         <button type="button" className="tk-icon-btn" onClick={() => navTo(isT ? "/tickets" : "/tickets?kind=task")} title={`Open the ${isT ? "Tickets" : "Tasks"} page`} aria-label={`Open the ${isT ? "Tickets" : "Tasks"} page`}><TkIco d="expand" /></button>
       </header>
@@ -2942,13 +3004,26 @@ function eventText(e: TicketEvent, dir: Directory, cat: ItemCat = "ticket"): str
   const d = e.detail ?? {};
   const who = (id: any) => (id ? dir.people.find((p) => p.id === id)?.name ?? "someone" : "nobody");
   switch (e.action) {
-    case "created": return d.source === "email" ? "opened it from an e-mail" : "opened the ticket";
+    case "created": return d.source === "email" ? "opened it from an e-mail" : cat === "task" ? "created the task" : "opened the ticket";
     case "stage": return `moved it to ${stageLabel(d.to, cat)}`;
     case "priority": return `set priority to ${PRIORITY_LABEL[d.to as TaskPriority] ?? d.to}`;
     case "assignee": return d.to ? `gave it to ${who(d.to)}` : "left it unassigned";
     case "due": return d.to ? `set the due date to ${new Date(d.to).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : "removed the due date";
     case "type": return `changed the type to ${d.to ?? "none"}`;
-    case "title": return "renamed it";
+    case "title": return d.to ? `renamed it “${plain(String(d.to))}”` : "renamed it";
+    case "description": return "edited the description";
+    case "category": return d.to === "task" ? "turned it into a task" : "turned it into a ticket";
+    case "client": case "company": case "deal": case "project": {
+      const list = e.action === "client" ? dir.clients : e.action === "company" ? dir.companies : e.action === "deal" ? dir.deals : dir.projects;
+      const name = (id: any) => (id ? list.find((x) => x.id === id)?.name ?? `a ${e.action}` : null);
+      return d.to ? `linked it to ${name(d.to)}` : `took off the ${e.action}${d.from && name(d.from) !== `a ${e.action}` ? ` ${name(d.from)}` : ""}`;
+    }
+    case "step_add": return `added the step “${plain(String(d.text ?? ""))}”`;
+    case "step_done": return `${d.done ? "ticked" : "unticked"} “${plain(String(d.text ?? ""))}”`;
+    case "step_who": return d.to ? `gave “${plain(String(d.text ?? ""))}” to ${who(d.to)}` : `took “${plain(String(d.text ?? ""))}” off its person`;
+    case "step_remove": return `removed the step “${plain(String(d.text ?? ""))}”`;
+    case "watcher_add": return `added ${who(d.who)} as a watcher`;
+    case "watcher_remove": return `took ${who(d.who)} off the watchers`;
     default: return e.action;
   }
 }
@@ -2970,6 +3045,68 @@ const NEXT_TASK_STEP: Record<TicketStage, { label: string; to: TicketStage } | n
   resolved: { label: "Archive", to: "closed" },
   closed: { label: "Reopen", to: "open" },
 };
+
+/* ---- "Linked to" suggestions: client / company / deal / project names written in the title or the steps ---- */
+type LinkKind = "client" | "company" | "deal" | "project";
+interface LinkSuggestion { kind: LinkKind; id: string; name: string }
+const LINK_FIELD: Record<LinkKind, "clientId" | "companyId" | "trackingId" | "projectId"> = { client: "clientId", company: "companyId", deal: "trackingId", project: "projectId" };
+const foldTxt = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+const wordsOf = (s: string) => foldTxt(s).replace(/[^a-z0-9]+/g, " ").split(" ").filter(Boolean);
+/** Words that say nothing about which company it is (legal forms, "group", articles…). */
+const NAME_NOISE = new Set(["grupo", "group", "groupe", "gruppo", "holding", "holdings", "sl", "slu", "sa", "sau", "sc", "scoop", "coop", "sll", "sociedad", "limitada", "anonima",
+  "inc", "ltd", "llc", "gmbh", "ag", "bv", "nv", "spa", "srl", "sas", "sarl", "plc", "co", "cia", "corp", "corporation", "company", "compania", "the", "de", "del", "la", "las", "los", "el", "y", "and", "e", "s", "l", "u", "a"]);
+/** Words of a task that aren't names: what you do, not who for. */
+const TASK_NOISE = new Set(["mandar", "enviar", "envio", "propuesta", "propuestas", "oferta", "presupuesto", "reunion", "llamar", "llamada", "preparar", "cerrar", "detalles", "tecnicos", "tecnico",
+  "revisar", "hablar", "seguimiento", "contrato", "factura", "facturas", "con", "para", "sobre", "desde", "hacia", "entre", "pedir", "confirmar", "enviarle", "mandarle", "economica", "economico",
+  "send", "proposal", "meeting", "call", "follow", "review", "prepare", "close", "with", "about", "from", "invoice", "contract", "check", "update", "demo", "kickoff", "workshop", "this", "that", "next", "week"]);
+/** A name's distinctive words: "Grupo Mundomovil, S.L." → ["mundomovil"]. */
+const coreOf = (name: string) => wordsOf(name).filter((w) => !NAME_NOISE.has(w));
+/** Is this name written in the text (all its distinctive words, or them run together)? */
+function nameIn(name: string, textWords: Set<string>, textJoined: string): boolean {
+  const core = coreOf(name);
+  const joined = core.join("");
+  if (!core.length || joined.length < 4) return false;
+  if (core.every((w) => textWords.has(w))) return true;
+  return joined.length >= 6 && textJoined.includes(joined);
+}
+/** Suggested links for a ticket: names from the title, description and steps, found among clients, companies, deals and projects. */
+function useLinkSuggestions(t: Ticket, dir: Directory, enabled: boolean): LinkSuggestion[] {
+  const text = useMemo(() => plain([t.title, t.description, ...(t.checklist ?? []).map((s) => s.text)].join(" \n ")), [t.title, t.description, t.checklist]);
+  const [found, setFound] = useState<LinkSuggestion[]>([]);
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!enabled) { setFound([]); return; }
+    const tw = new Set(wordsOf(text));
+    const tj = wordsOf(text).join("");
+    const local = () => {
+      const out: LinkSuggestion[] = [];
+      const scan = (kind: LinkKind, list: { id: string; name: string; legal?: string | null }[]) =>
+        list.forEach((x) => { if (nameIn(x.name, tw, tj) || (x.legal && nameIn(x.legal, tw, tj))) out.push({ kind, id: x.id, name: x.name }); });
+      scan("client", dir.clients); scan("company", dir.companies); scan("deal", dir.deals); scan("project", dir.projects);
+      // a company found: its deals too
+      out.filter((x) => x.kind === "company").forEach((c) => dir.deals.filter((d) => d.companyId === c.id && d.status !== "lost").forEach((d) => {
+        if (!out.some((y) => y.kind === "deal" && y.id === d.id)) out.push({ kind: "deal", id: d.id, name: d.name });
+      }));
+      return out;
+    };
+    setFound(local());
+    if (!dir.remote) return;
+    // companies and deals live in the database: ask for the words that look like names
+    let alive = true;
+    const terms = [...new Set(wordsOf(text).filter((w) => w.length >= 4 && !TASK_NOISE.has(w) && !NAME_NOISE.has(w)))].slice(0, 5);
+    if (!terms.length) return;
+    const h = window.setTimeout(async () => {
+      await Promise.all(terms.flatMap((w) => [dirSearch(dir, "company")(w).catch(() => []), dirSearch(dir, "deal")(w).catch(() => [])]));
+      if (alive) setFound(local());
+    }, 500);
+    return () => { alive = false; window.clearTimeout(h); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [text, enabled, dir, tick]);
+  useEffect(() => { const f = () => setTick((x) => x + 1); window.addEventListener(DIR_EVENT, f); return () => window.removeEventListener(DIR_EVENT, f); }, []);
+  // only for what isn't linked yet, best first, a handful
+  const order: LinkKind[] = ["client", "company", "deal", "project"];
+  return found.filter((x) => !t[LINK_FIELD[x.kind]]).sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind)).slice(0, 4);
+}
 
 export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline = false, onClose, onCreated, onLocal, onTypes }: {
   ticket: Ticket | null;
@@ -3016,6 +3153,9 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
   /** The header's pickers: stage, priority, owner, watchers. */
   const [propAt, setPropAt] = useState<{ k: "stage" | "prio" | "owner" | "people"; rect: DOMRect } | null>(null);
   const titleRef = useRef<HTMLDivElement>(null);
+  /** The left pane's scroll: after you post, it goes to the newest message. */
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const toBottom = () => window.setTimeout(() => { const el = scrollRef.current; if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" }); }, 80);
   // e-mail, SLA, merging
   const [mails, setMails] = useState<MailMsg[] | null>(null);
   const [mailOk, setMailOk] = useState<OutlookMailStatus | null>(null);
@@ -3140,7 +3280,7 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
         if (t.stage === "new") await saveTicket(t.id, { stage: "open" }, ready);
         else window.dispatchEvent(new Event(TICKETS_EVENT));
       }
-      setBusy(false); setReply(""); setCc(""); setErr(null);
+      setBusy(false); setReply(""); setCc(""); setErr(null); toBottom();
       if (!t.firstResponseAt) { const next = { ...t, firstResponseAt: new Date().toISOString(), stage: t.stage === "new" ? "open" as TicketStage : t.stage }; setT(next); onLocal?.(next); }
       reloadMail();
       loadTicketThread(t.id).then(setThread).catch(() => {});
@@ -3150,7 +3290,7 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
     const res = await postToTicket(t, body, mode, ready);
     setBusy(false);
     if (res.error || !res.post) { setErr(res.error); return; }
-    setReply(""); setErr(null);
+    setReply(""); setErr(null); toBottom();
     if (mode === "internal" || isTask) void involve(mentionIds(body));
     if (mode === "reply" && !t.firstResponseAt) { const next = { ...t, firstResponseAt: new Date().toISOString() }; setT(next); onLocal?.(next); }
     loadTicketThread(t.id).then(setThread).catch(() => {});
@@ -3187,6 +3327,7 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
     if (creatingMode) return;
     onLocal?.(next);
     await setWatcher(t.id, id, on);
+    loadTicketThread(t.id).then(setThread).catch(() => {});
   };
   const addTag = () => {
     const v = tagDraft.trim().replace(/^#/, "");
@@ -3209,9 +3350,12 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
   const canDelete = !creatingMode && canDeleteTask({ created_by: t.createdBy }, dir.me);
   const items = [
     ...(thread?.posts ?? []).map((p) => ({ at: p.at, k: "post" as const, p })),
-    ...(thread?.events ?? []).filter((e) => e.action !== "title").map((e) => ({ at: e.at, k: "event" as const, e })),
+    ...(thread?.events ?? []).map((e) => ({ at: e.at, k: "event" as const, e })),
+    // older tasks have no "created" line in their log: show when and by whom it was made anyway
+    ...(thread && !creatingMode && !thread.events.some((e) => e.action === "created")
+      ? [{ at: t.createdAt, k: "event" as const, e: { id: "created", author: t.createdBy, action: "created", detail: { source: t.source }, at: t.createdAt } as TicketEvent }] : []),
     ...(mails ?? []).map((m) => ({ at: m.at, k: "mail" as const, m })),
-  ].sort((a, b) => a.at.localeCompare(b.at));
+  ].sort((a, b) => String(a.at ?? "").localeCompare(String(b.at ?? "")));
   const newestMail = (mails ?? []).length ? (mails ?? [])[(mails ?? []).length - 1].id : null;
   /** The conversation (notes / comments and e-mail), only the e-mail, or the history of changes. */
   const [threadFilter, setThreadFilter] = useState<"talk" | "mail" | "history">("talk");
@@ -3226,6 +3370,22 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
   const findCompanies = useMemo(() => (dir.remote ? dirSearch(dir, "company") : undefined), [dir]);
   const findDeals = useMemo(() => (dir.remote ? dirSearch(dir, "deal") : undefined), [dir]);
   const departments = [...new Set(dir.people.map((p) => p.department).filter(Boolean))] as string[];
+  const suggestions = useLinkSuggestions(t, dir, true);
+  /** In an empty "Linked to" row: the name found in the title or steps, one click to link it. */
+  const suggestPill = (kind: LinkKind) => {
+    const x = suggestions.find((y) => y.kind === kind);
+    return x ? (
+      <button type="button" className="tdx-pill" onClick={() => linkSuggestion(x)} title={`Found in the ${isTask ? "task" : "ticket"}: link ${x.name}`}>
+        <TkIco d="bolt" /><span>{x.name}</span><TkIco d="plus" />
+      </button>
+    ) : null;
+  };
+  const linkSuggestion = (x: LinkSuggestion) => {
+    const p: Partial<Ticket> = { [LINK_FIELD[x.kind]]: x.id };
+    // a deal brings its company along when that's still empty
+    if (x.kind === "deal" && !t.companyId) { const d = dir.deals.find((y) => y.id === x.id); if (d?.companyId) p.companyId = d.companyId; }
+    void set(p);
+  };
 
   const next = creatingMode ? null : (isTask ? NEXT_TASK_STEP : NEXT_STEP)[t.stage];
   /** Ticket ⇄ task: the same record, moved to the other list. */
@@ -3241,7 +3401,7 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
   const owner = person(t.assignee);
   const crew = t.watchers.filter((w) => w !== t.assignee);
   const talkCount = (thread?.posts.length ?? 0) + (mails?.length ?? 0);
-  const histCount = thread?.events.length ?? 0;
+  const histCount = items.filter((it) => it.k === "event").length;
   const useMention = isTask || mode === "internal";
   const sheet = (
     <aside className={`td tdx ${inline ? "is-inline" : ""} ${creatingMode ? "is-new" : ""}`} role={inline ? "region" : "dialog"} aria-modal={inline ? undefined : true}
@@ -3349,6 +3509,7 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
 
       <div className="td-body">
         <div className="td-main">
+          <div className="tdx-scroll" ref={scrollRef}>
           <section className="td-sec tdx-sec">
             <div className="tdx-h"><h3>Description</h3><span className="tdx-hint">Type <b>@</b> to mention someone</span></div>
             <div className="tdx-desc" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) void saveDesc(); }}>
@@ -3399,7 +3560,13 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
                   </div>
                 ))}
               </div>
-              {threadFilter !== "history" && (
+            </section>
+          )}
+          </div>
+          {/* the box you write in stays at the bottom; the conversation scrolls above it */}
+          {!creatingMode && threadFilter !== "history" && (
+            <div className="tdx-dock">
+              {(
                 <div className={`td-composer tdx-composer is-${isTask ? "task" : mode} ${willMail ? "is-mail" : ""}`}>
                   {!isTask && (
                     <div className="td-composer-tabs" role="tablist">
@@ -3446,7 +3613,7 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
                   </div>
                 </div>
               )}
-            </section>
+            </div>
           )}
         </div>
 
@@ -3462,14 +3629,14 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
                       onKeyDown={(e) => { if (e.key === "Enter") saveNewType(); if (e.key === "Escape") setNewType(null); }} />
                   ) : (
                     <Select value={t.type ?? ""} onChange={(v) => (v === "__new" ? setNewType("") : set({ type: v || null }))} aria-label="Type"
-                      options={[{ value: "", label: "No type" }, ...types.map((x) => ({ value: x, label: x })), { value: "__new", label: "+ New type…" }]} />
+                      options={[{ value: "", label: "No type" }, ...types.map((x) => ({ value: x, label: x })), { value: "__new", label: "+ New type…" }]} className={t.type ? "" : "is-none"} />
                   )}
                 </div>
               </div>
               <div className="td-prop">
                 <span className="td-pk">Team</span>
                 <div className="td-pv">
-                  <Select value={t.team ?? ""} onChange={(v) => set({ team: v || null })} aria-label="Team" options={[{ value: "", label: "Any team" }, ...departments.map((d) => ({ value: d, label: deptName(d) }))]} />
+                  <Select value={t.team ?? ""} onChange={(v) => set({ team: v || null })} aria-label="Team" options={[{ value: "", label: "Any team" }, ...departments.map((d) => ({ value: d, label: deptName(d) }))]} className={t.team ? "" : "is-none"} />
                 </div>
               </div>
               {!isTask && (
@@ -3503,15 +3670,41 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
             </div>
           </div>}
 
-          <div className="td-group">
-            <span className="td-group-h"><TkIco d="link" />Linked to</span>
-            <label className="td-lk"><TkIco d="briefcase" /><Select searchable value={t.clientId ?? ""} onChange={(v) => set({ clientId: v || null })} options={opt(dir.clients, "No client")} aria-label="Client" />
-              {!creatingMode && t.clientId && <button type="button" className="td-go" onClick={() => nav(`/clients?client=${t.clientId}`)} title="Open the client" aria-label="Open the client"><TkIco d="out" /></button>}</label>
-            <label className="td-lk"><TkIco d="building" /><Select searchable value={t.companyId ?? ""} onChange={(v) => set({ companyId: v || null })} options={opt(dir.remote ? dir.companies.filter((x) => x.id === t.companyId) : dir.companies, "No company")} loadOptions={findCompanies} aria-label="Company" />
-              {!creatingMode && t.companyId && <button type="button" className="td-go" onClick={() => nav("/companies", { state: { focusCompanyId: t.companyId } })} title="Open the company" aria-label="Open the company"><TkIco d="out" /></button>}</label>
-            <label className="td-lk"><TkIco d="deal" /><Select searchable value={t.trackingId ?? ""} onChange={(v) => set({ trackingId: v || null })} options={opt(dir.remote ? dir.deals.filter((x) => x.id === t.trackingId) : dir.deals, "No deal")} loadOptions={findDeals} aria-label="Deal" />
-              {!creatingMode && deal && <button type="button" className="td-go" onClick={() => nav(`/sales?tracking=${deal.id}`)} title="Open the deal" aria-label="Open the deal"><TkIco d="out" /></button>}</label>
-            <label className="td-lk"><TkIco d="folder" /><Select searchable value={t.projectId ?? ""} onChange={(v) => set({ projectId: v || null })} options={opt(dir.projects, "No project")} aria-label="Project" /></label>
+          <div className="td-group tdx-links">
+            <span className="td-group-h"><TkIco d="link" />Linked to
+              {suggestions.length > 1 && (
+                <button type="button" className="tdx-sugg-all" title="Link everything found in the title and steps" onClick={() => {
+                  const p: Partial<Ticket> = {};
+                  suggestions.forEach((x) => { if (!p[LINK_FIELD[x.kind]]) (p as any)[LINK_FIELD[x.kind]] = x.id; });
+                  void set(p);
+                }}><TkIco d="bolt" />Link all {suggestions.length}</button>
+              )}
+            </span>
+            <div className="td-props">
+              <div className="td-prop">
+                <span className="td-pk">Client</span>
+                <div className="td-pv tdx-lv"><Select searchable value={t.clientId ?? ""} onChange={(v) => set({ clientId: v || null })} options={opt(dir.clients, "No client")} aria-label="Client" className={t.clientId ? "" : "is-none"} />
+                  {!t.clientId && suggestPill("client")}
+                  {!creatingMode && t.clientId && <button type="button" className="td-go" onClick={() => nav(`/clients?client=${t.clientId}`)} title="Open the client" aria-label="Open the client"><TkIco d="out" /></button>}</div>
+              </div>
+              <div className="td-prop">
+                <span className="td-pk">Company</span>
+                <div className="td-pv tdx-lv"><Select searchable value={t.companyId ?? ""} onChange={(v) => set({ companyId: v || null })} options={opt(dir.remote ? dir.companies.filter((x) => x.id === t.companyId) : dir.companies, "No company")} loadOptions={findCompanies} aria-label="Company" className={t.companyId ? "" : "is-none"} />
+                  {!t.companyId && suggestPill("company")}
+                  {!creatingMode && t.companyId && <button type="button" className="td-go" onClick={() => nav("/companies", { state: { focusCompanyId: t.companyId } })} title="Open the company" aria-label="Open the company"><TkIco d="out" /></button>}</div>
+              </div>
+              <div className="td-prop">
+                <span className="td-pk">Deal</span>
+                <div className="td-pv tdx-lv"><Select searchable value={t.trackingId ?? ""} onChange={(v) => set({ trackingId: v || null })} options={opt(dir.remote ? dir.deals.filter((x) => x.id === t.trackingId) : dir.deals, "No deal")} loadOptions={findDeals} aria-label="Deal" className={t.trackingId ? "" : "is-none"} />
+                  {!t.trackingId && suggestPill("deal")}
+                  {!creatingMode && deal && <button type="button" className="td-go" onClick={() => nav(`/sales?tracking=${deal.id}`)} title="Open the deal" aria-label="Open the deal"><TkIco d="out" /></button>}</div>
+              </div>
+              <div className="td-prop">
+                <span className="td-pk">Project</span>
+                <div className="td-pv tdx-lv"><Select searchable value={t.projectId ?? ""} onChange={(v) => set({ projectId: v || null })} options={opt(dir.projects, "No project")} aria-label="Project" className={t.projectId ? "" : "is-none"} />
+                  {!t.projectId && suggestPill("project")}</div>
+              </div>
+            </div>
           </div>
 
           {!creatingMode && !isTask && <SlaTimers t={t} sla={sla} now={now} />}
@@ -3665,7 +3858,7 @@ export function sanitizeMail(html: string, blockImages: boolean): { html: string
   } catch { return { html: "", blocked: 0 }; }
 }
 /** The e-mail, in a sandboxed frame (no scripts) sized to its content. */
-function MailFrame({ html, maxHeight = 560 }: { html: string; maxHeight?: number }) {
+export function MailFrame({ html, maxHeight = 560 }: { html: string; maxHeight?: number }) {
   const ref = useRef<HTMLIFrameElement>(null);
   const [h, setH] = useState(90);
   const [images, setImages] = useState(false);
@@ -4027,7 +4220,7 @@ function ShortcutHelp({ onClose }: { onClose: () => void }) {
 }
 
 /* ---- desk settings: mail rules, mailboxes, SLA ---- */
-type SettingsTab = "rules" | "mailboxes" | "sla";
+type SettingsTab = "rules" | "mine" | "mailboxes" | "sla";
 const blankRule = (sort: number, from?: Partial<MailRule>): MailRule => ({
   id: "", name: "", sort, active: true, conditions: { match: "all" }, action: "create", targetTicketId: null, set: {}, hits: 0, lastHitAt: null, ...(from ?? {}),
 });
@@ -4044,12 +4237,13 @@ function ruleSummary(r: MailRule, dir: Directory | null, tickets: Ticket[]): { w
   const when = parts.length ? parts.join(c.match === "any" ? " or " : " and ") : "no conditions yet (never runs)";
   const tgt = r.targetTicketId ? tickets.find((t) => t.id === r.targetTicketId) : null;
   const then = r.action === "ignore" ? "ignore it"
+    : r.action === "file" ? `file it under ${dir?.clients.find((x) => x.id === r.set.client_id)?.name ?? "the client"}`
     : r.action === "append" ? `add it to ${tgt ? `${ticketRef(tgt)} “${plain(tgt.title)}”` : "a ticket"}`
-    : `open a ticket${r.set.type ? ` (${r.set.type})` : ""}${r.set.priority ? `, ${PRIORITY_LABEL[r.set.priority].toLowerCase()} priority` : ""}${r.set.assignee_id ? ` for ${dir?.people.find((p) => p.id === r.set.assignee_id)?.name ?? "someone"}` : ""}`;
+    : `open a ticket${r.set.type ? ` (${r.set.type})` : ""}${r.set.priority ? `, ${PRIORITY_LABEL[r.set.priority].toLowerCase()} priority` : ""}${r.set.assignee_id ? ` for ${r.set.assignee_id === dir?.me ? "me" : dir?.people.find((p) => p.id === r.set.assignee_id)?.name ?? "someone"}` : r.ownerId ? " for me" : ""}`;
   return { when, then };
 }
-function RuleEditor({ rule, dir, types, tickets, boxes, inbox, onSave, onCancel }: {
-  rule: MailRule; dir: Directory; types: string[]; tickets: Ticket[]; boxes: Mailbox[]; inbox: MailMsg[];
+function RuleEditor({ rule, dir, types, tickets, boxes, inbox, onSave, onCancel, personal }: {
+  rule: MailRule; dir: Directory; types: string[]; tickets: Ticket[]; boxes: Mailbox[]; inbox: MailMsg[]; personal?: boolean;
   onSave: (r: MailRule) => Promise<void>; onCancel: () => void;
 }) {
   const [r, setR] = useState<MailRule>(rule);
@@ -4066,7 +4260,7 @@ function RuleEditor({ rule, dir, types, tickets, boxes, inbox, onSave, onCancel 
   const opt = (xs: { id: string; name: string }[], none: string) => [{ value: "", label: none }, ...xs.map((x) => ({ value: x.id, label: x.name }))];
   return (
     <div className="tr-ed">
-      <input className="tr-name" value={r.name} autoFocus placeholder="Name this rule, e.g. “Acme support requests”" onChange={(e) => setR({ ...r, name: e.target.value })} />
+      <input className="tr-name" value={r.name} autoFocus placeholder={personal ? "Name this rule, e.g. “My Acme requests”" : "Name this rule, e.g. “Acme support requests”"} onChange={(e) => setR({ ...r, name: e.target.value })} />
       <div className="tr-block">
         <div className="tr-block-h"><span className="tr-step">1</span><b>When an e-mail arrives</b>
           <div className="tk-seg">
@@ -4105,7 +4299,7 @@ function RuleEditor({ rule, dir, types, tickets, boxes, inbox, onSave, onCancel 
           <div className="tr-grid">
             <div className="tr-f"><span>Type</span><Select value={r.set.type ?? ""} onChange={(v) => setS({ type: v || null })} options={[{ value: "", label: "No type" }, ...types.map((x) => ({ value: x, label: x }))]} /></div>
             <div className="tr-f"><span>Priority</span><Select value={r.set.priority ?? ""} onChange={(v) => setS({ priority: (v || null) as TaskPriority | null })} options={[{ value: "", label: "Normal" }, ...TASK_PRIORITIES.map((p) => ({ value: p, label: PRIORITY_LABEL[p] }))]} /></div>
-            <div className="tr-f"><span>Owner</span><Select searchable value={r.set.assignee_id ?? ""} onChange={(v) => setS({ assignee_id: v || null })} options={opt(dir.people, "Unassigned")} /></div>
+            <div className="tr-f"><span>Owner</span><Select searchable value={r.set.assignee_id ?? ""} onChange={(v) => setS({ assignee_id: v || null })} options={opt(dir.people, personal ? "Me" : "Unassigned")} /></div>
             <div className="tr-f"><span>Team</span><Select value={r.set.team ?? ""} onChange={(v) => setS({ team: v || null })} options={[{ value: "", label: "Any team" }, ...departments.map((d) => ({ value: d, label: deptName(d) }))]} /></div>
             <div className="tr-f"><span>Client</span><Select searchable value={r.set.client_id ?? ""} onChange={(v) => setS({ client_id: v || null })} options={opt(dir.clients, "From the sender")} /></div>
             <label><span>Tags</span><input className="td-in" value={(r.set.tags ?? []).join(", ")} placeholder="support, acme" onChange={(e) => setS({ tags: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} /></label>
@@ -4163,11 +4357,16 @@ function DeskSettings({ dir, types, tickets, inbox, start, prefill, mail, onClos
   }, [onClose, editing]);
   const run = async (p: Promise<string | null>) => { const e = await p; setErr(e); if (!e) await reload(); return e; };
   const myInbox = (boxes ?? []).find((b) => b.kind === "personal" && b.ownerId === dir.me);
+  const team = (rules ?? []).filter(isTeamRule);
+  const mine = (rules ?? []).filter((r) => r.ownerId === dir.me && (r.scope ?? "desk") === "desk");
+  const clientRuleCount = (rules ?? []).filter((r) => r.scope === "client").length;
+  const shown = tab === "mine" ? mine : team;
   const move = async (i: number, d: number) => {
-    const list = [...(rules ?? [])]; const j = i + d;
+    const list = [...shown]; const j = i + d;
     if (j < 0 || j >= list.length) return;
     [list[i], list[j]] = [list[j], list[i]];
-    setRules(list);
+    const ids = new Set(list.map((x) => x.id));
+    setRules([...(rules ?? []).filter((x) => !ids.has(x.id)), ...list]);
     await Promise.all(list.map((x, k) => saveMailRule({ ...x, sort: k })));
     reload();
   };
@@ -4181,9 +4380,9 @@ function DeskSettings({ dir, types, tickets, inbox, start, prefill, mail, onClos
           <button type="button" className="td-x" onClick={onClose} aria-label="Close"><TkIco d="x" /></button>
         </header>
         <nav className="ts-tabs">
-          {([["rules", "Mail rules", "filter"], ["mailboxes", "Mailboxes", "inbox"], ["sla", "Service levels", "bolt"]] as const).map(([k, l, ic]) => (
+          {([["rules", "Team rules", "filter"], ["mine", "My rules", "user"], ["mailboxes", "Mailboxes", "inbox"], ["sla", "Service levels", "bolt"]] as const).map(([k, l, ic]) => (
             <button key={k} type="button" className={tab === k ? "is-on" : ""} onClick={() => { setTab(k); setEditing(null); }}><TkIco d={ic} />{l}
-              {k === "rules" && rules ? <i>{rules.length}</i> : k === "mailboxes" && boxes ? <i>{boxes.length}</i> : null}</button>
+              {k === "rules" && rules ? <i>{team.length}</i> : k === "mine" && rules ? <i>{mine.length}</i> : k === "mailboxes" && boxes ? <i>{boxes.length}</i> : null}</button>
           ))}
         </nav>
         <div className="ts-body">
@@ -4198,17 +4397,36 @@ function DeskSettings({ dir, types, tickets, inbox, start, prefill, mail, onClos
           )}
           {err && <p className="tk-err">{err}</p>}
 
-          {tab === "rules" && (editing ? (
-            <RuleEditor rule={editing} dir={dir} types={types} tickets={tickets} boxes={boxes ?? []} inbox={inbox}
+          {(tab === "rules" || tab === "mine") && (editing ? (
+            <RuleEditor rule={editing} dir={dir} types={types} tickets={tickets} boxes={boxes ?? []} inbox={inbox} personal={tab === "mine"}
               onCancel={() => setEditing(null)}
-              onSave={async (r) => { const e = await run(saveMailRule({ ...r, sort: r.id ? r.sort : (rules?.length ?? 0) })); if (!e) setEditing(null); }} />
+              onSave={async (r) => {
+                const e = await run(saveMailRule({ ...r, sort: r.id ? r.sort : shown.length, ...(tab === "mine" ? { ownerId: dir.me, scope: "desk" as const } : {}) }));
+                if (!e) setEditing(null);
+              }} />
           ) : (
             <>
-              <p className="ts-lead">New mail runs through these rules from top to bottom; the first one that matches decides. Replies to a ticket (its <code>[T-1042]</code> in the subject, or the same Outlook conversation) always go back to that ticket.</p>
+              {tab === "rules" ? (
+                <p className="ts-lead">New mail runs through these rules from top to bottom; the first one that matches decides. Replies to a ticket (its <code>[T-1042]</code> in the subject, or the same Outlook conversation) always go back to that ticket.
+                  {clientRuleCount > 0 && <> Mail from a client's domains is also filed in that client's <b>Emails</b> ({clientRuleCount} client rule{clientRuleCount === 1 ? "" : "s"}, set in Clients).</>}</p>
+              ) : (
+                <>
+                  <p className="ts-lead">Your own rules sort the mail that reaches <b>your inbox</b>, before the team's rules — only you see and change them. Tickets they open are yours unless the rule says otherwise.</p>
+                  {!myInbox && (
+                    <div className="ts-mine">
+                      <TkIco d="inbox" />
+                      <div><b>Your inbox isn't read by the desk</b><span>Your rules start working once your own inbox is on.</span></div>
+                      <button type="button" className="td-primary" onClick={() => setTab("mailboxes")}>Turn it on</button>
+                    </div>
+                  )}
+                </>
+              )}
               <div className="ts-list">
-                {!rules ? <div className="hs-skel" /> : !rules.length ? (
-                  <div className="tk-empty"><span className="tk-empty-ico"><TkIco d="filter" /></span><b>No rules yet</b><span>E-mail that matches nothing waits in the Inbox for someone to sort it.</span></div>
-                ) : rules.map((r, i) => {
+                {!rules ? <div className="hs-skel" /> : !shown.length ? (
+                  tab === "mine"
+                    ? <div className="tk-empty"><span className="tk-empty-ico"><TkIco d="user" /></span><b>No rules of your own yet</b><span>For example: mail from @acme.es → a ticket for me, high priority.</span></div>
+                    : <div className="tk-empty"><span className="tk-empty-ico"><TkIco d="filter" /></span><b>No rules yet</b><span>E-mail that matches nothing waits in the Inbox for someone to sort it.</span></div>
+                ) : shown.map((r, i) => {
                   const sm = ruleSummary(r, dir, tickets);
                   return (
                     <div key={r.id} className={`ts-rule ${r.active ? "" : "is-off"}`} style={{ ["--i" as string]: i } as React.CSSProperties}>
@@ -4222,14 +4440,14 @@ function DeskSettings({ dir, types, tickets, inbox, start, prefill, mail, onClos
                       <div className="ts-rule-side">
                         <button type="button" role="switch" aria-checked={r.active} className={`ts-switch ${r.active ? "is-on" : ""}`} onClick={() => run(saveMailRule({ ...r, active: !r.active }))} title={r.active ? "On" : "Off"}><i /></button>
                         <button type="button" className="tk-icon-btn" disabled={i === 0} onClick={() => move(i, -1)} aria-label="Move up"><TkIco d="up" /></button>
-                        <button type="button" className="tk-icon-btn" disabled={i === rules.length - 1} onClick={() => move(i, 1)} aria-label="Move down"><TkIco d="down" /></button>
+                        <button type="button" className="tk-icon-btn" disabled={i === shown.length - 1} onClick={() => move(i, 1)} aria-label="Move down"><TkIco d="down" /></button>
                         <button type="button" className="tk-icon-btn is-del" onClick={() => run(deleteMailRule(r.id))} aria-label="Delete rule"><TkIco d="trash" /></button>
                       </div>
                     </div>
                   );
                 })}
               </div>
-              <button type="button" className="tk-new ts-add" onClick={() => setEditing(blankRule(rules?.length ?? 0))}><TkIco d="plus" />New rule</button>
+              <button type="button" className="tk-new ts-add" onClick={() => setEditing(blankRule(shown.length, tab === "mine" ? { ownerId: dir.me } : undefined))}><TkIco d="plus" />{tab === "mine" ? "New rule of my own" : "New rule"}</button>
             </>
           ))}
 

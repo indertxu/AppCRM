@@ -1,161 +1,190 @@
 /* =====================================================================
-   Home · Sales — four figures, deals by stage, deals that need you
+   Home · Sales — the consultancy home's look (hero + three columns),
+   with the sales cards: pipeline by stage, about to close / team, needs attention.
+   The shared pieces (hero, cards, calendar, desk) come from ConsultancyHome.css;
+   the page sits in .home.is-cons like the consultancy one.
    ===================================================================== */
-.sh {
-  --emerald: #12b57f;
-  --forest: #0a6f4d;
-  --pine: #0b3a2b;
-  --ink: #0b241a;
-  --muted: #5a7d6d;
-  --mute2: #8aa298;
-  --line: rgba(10, 111, 77, 0.11);
-  --late: #b8452f;
-  --ease: cubic-bezier(0.16, 1, 0.3, 1);
-  display: flex; flex-direction: column; gap: 18px; min-width: 0; color: var(--ink);
-}
 
-/* ---------- KPIs ---------- */
-.sh-kpis { display: grid; grid-template-columns: 1.35fr 1fr 1fr 1fr; gap: 14px; }
-.sh-kpi {
-  position: relative; isolation: isolate; overflow: hidden; display: flex; flex-direction: column; gap: 6px; min-width: 0;
-  padding: 18px 18px 16px; border-radius: 20px; background: #fff; border: 1px solid rgba(18, 181, 127, 0.14);
-  box-shadow: 0 1px 2px rgba(11, 36, 26, 0.04), 0 22px 44px -34px rgba(10, 111, 77, 0.5);
-  animation: sh-in 0.6s var(--ease) backwards; animation-delay: calc(var(--i) * 70ms + 0.05s);
+/* ---------------- small segmented switch (pipelines, Closing / Team) ---------------- */
+.sx-seg {
+  display: inline-flex; flex-shrink: 1; min-width: 0; max-width: 62%; gap: 2px; padding: 3px; border-radius: 11px;
+  background: var(--cz-soft); overflow-x: auto; scrollbar-width: none;
 }
-@keyframes sh-in { from { opacity: 0; transform: translateY(14px); } }
-.sh-kpi-k { font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
-.sh-kpi-v {
-  font-family: "Space Grotesk", sans-serif; font-size: 30px; font-weight: 700; line-height: 1.05; letter-spacing: -0.03em;
-  font-variant-numeric: tabular-nums; color: var(--ink); white-space: nowrap;
+.sx-seg::-webkit-scrollbar { display: none; }
+.sx-seg button {
+  flex-shrink: 0; height: 26px; padding: 0 10px; border: 0; border-radius: 8px; background: none;
+  font: 600 12px "Inter", sans-serif; color: var(--cz-mute); cursor: pointer; white-space: nowrap; transition: background 0.2s, color 0.2s;
 }
-.sh-kpi-v.is-warn { color: var(--late); }
-.sh-kpi-s { font-size: 12px; color: var(--muted); min-height: 16px; }
-.sh-kpi-bar { height: 6px; margin-top: auto; border-radius: 999px; background: rgba(18, 181, 127, 0.1); overflow: hidden; }
-.sh-kpi-bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #86efc0, #12b57f); transition: width 1s var(--ease) 0.3s; }
-.sh-kpi.is-hero {
-  background: linear-gradient(155deg, #0f4a35 0%, #072419 100%); border-color: transparent; color: #fff;
-  box-shadow: 0 24px 50px -28px rgba(7, 36, 25, 0.85);
-}
-.sh-kpi.is-hero .sh-kpi-k { color: rgba(201, 242, 221, 0.75); }
-.sh-kpi.is-hero .sh-kpi-v { color: #fff; font-size: 34px; }
-.sh-kpi.is-hero .sh-kpi-s { color: rgba(214, 240, 228, 0.7); }
-.sh-kpi-glow {
-  position: absolute; z-index: -1; top: -60%; right: -30%; width: 260px; height: 260px; border-radius: 50%;
-  background: radial-gradient(circle, rgba(46, 203, 146, 0.45), transparent 65%);
-  animation: sh-drift 9s ease-in-out infinite alternate;
-}
-@keyframes sh-drift { to { transform: translate(-30px, 20px) scale(1.1); } }
+.sx-seg button:hover { color: var(--cz-ink); }
+.sx-seg button.is-on { background: var(--cz-ink); color: #fff; box-shadow: 0 6px 14px -8px rgba(5, 42, 30, 0.8); }
 
-/* ---------- cards ---------- */
-.sh-row { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 18px; align-items: start; }
-.sh-card {
-  position: relative; min-width: 0; padding: 18px 20px; border-radius: 22px; background: #fff; border: 1px solid rgba(18, 181, 127, 0.14);
-  box-shadow: 0 1px 2px rgba(11, 36, 26, 0.04), 0 24px 50px -36px rgba(10, 111, 77, 0.5);
-  animation: sh-in 0.6s var(--ease) backwards 0.25s;
+/* ---------------- pipeline by stage ---------------- */
+.sx-stages { --dot: var(--cz-accent); }
+.sx-funnel { list-style: none; margin: 0 -8px; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.sx-funnel li { animation: cz-in 0.5s var(--cz-ease) backwards; animation-delay: calc(0.3s + var(--i, 0) * 0.04s); }
+.sx-funnel button {
+  position: relative; display: grid; grid-template-columns: minmax(84px, 0.9fr) minmax(60px, 1.4fr) 34px 64px; align-items: center; gap: 10px;
+  width: 100%; padding: 7px 8px; border: 0; border-radius: 12px; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer;
+  transition: background 0.2s;
 }
-.sh-card + .sh-card { animation-delay: 0.32s; }
-.sh-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
-.sh-eyebrow {
-  position: relative; padding-left: 13px; font-size: 10px; font-weight: 700; letter-spacing: 0.15em; text-transform: uppercase; color: var(--forest);
+.sx-funnel button:hover, .sx-funnel button:focus-visible { background: var(--cz-soft); outline: none; }
+.sx-st-name { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; font-weight: 600; color: var(--cz-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sx-st-name i { flex: none; width: 8px; height: 8px; border-radius: 3px; background: var(--c); }
+.sx-st-bar { position: relative; height: 10px; border-radius: 6px; background: var(--cz-soft); overflow: hidden; }
+.sx-st-bar i {
+  position: absolute; inset: 0 auto 0 0; border-radius: 6px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--c) 55%, #fff), var(--c));
+  animation: cz-grow 0.9s var(--cz-ease) backwards; animation-delay: calc(0.35s + var(--i, 0) * 0.05s);
 }
-.sh-eyebrow::before {
-  content: ""; position: absolute; left: 0; top: 50%; width: 7px; height: 7px; margin-top: -3.5px; border-radius: 50%;
-  background: linear-gradient(135deg, #86efc0, #12b57f); box-shadow: 0 0 8px rgba(18, 181, 127, 0.6);
-}
-.sh-title { margin: 3px 0 0; font-family: "Space Grotesk", sans-serif; font-size: 18px; font-weight: 650; letter-spacing: -0.015em; }
-.sh-link { border: 0; background: none; padding: 4px 6px; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 650; color: var(--emerald); }
-.sh-link:hover { color: var(--forest); background: rgba(18, 181, 127, 0.08); }
-.sh-pipes { display: flex; flex-wrap: wrap; gap: 4px; padding: 3px; border-radius: 12px; background: #eef4f1; }
-.sh-pipes button {
-  height: 28px; padding: 0 11px; border: 0; border-radius: 9px; background: none; cursor: pointer;
-  font-size: 12px; font-weight: 650; color: var(--muted); transition: background 0.2s, color 0.2s, box-shadow 0.2s;
-}
-.sh-pipes button.is-on { background: #fff; color: var(--forest); box-shadow: 0 4px 12px -6px rgba(10, 60, 40, 0.45), inset 0 0 0 1px rgba(18, 181, 127, 0.25); }
+.sx-st-bar.is-zero { opacity: 0.6; }
+.sx-st-n { font-family: "Space Grotesk", sans-serif; font-size: 15px; font-weight: 600; color: var(--cz-ink); text-align: right; font-variant-numeric: tabular-nums; }
+.sx-st-v { font-size: 12.5px; font-weight: 600; color: var(--cz-ink2); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
-/* deals by stage */
-.sh-funnel { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
-.sh-funnel li {
-  display: grid; grid-template-columns: minmax(90px, 0.9fr) minmax(0, 2fr) 70px; gap: 12px; align-items: center; cursor: pointer;
-  animation: sh-slide 0.45s var(--ease) backwards; animation-delay: calc(var(--i) * 55ms + 0.2s);
-}
-@keyframes sh-slide { from { opacity: 0; transform: translateX(-10px); } }
-.sh-funnel-name { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sh-funnel-name i { width: 8px; height: 8px; flex-shrink: 0; border-radius: 3px; background: var(--emerald); }
-.sh-funnel-bar { position: relative; display: flex; align-items: center; height: 30px; border-radius: 10px; background: rgba(18, 181, 127, 0.07); overflow: hidden; }
-.sh-funnel-bar i {
-  position: absolute; left: 0; top: 0; bottom: 0; min-width: 4px; border-radius: 10px;
-  background: linear-gradient(90deg, #2ecb92, #0a6f4d); box-shadow: 0 6px 16px -8px rgba(10, 111, 77, 0.8);
-  animation: sh-grow 0.9s var(--ease) backwards; animation-delay: calc(var(--i) * 60ms + 0.3s); transform-origin: left center;
-}
-@keyframes sh-grow { from { transform: scaleX(0); } }
-.sh-funnel-bar b { position: relative; z-index: 1; padding-left: 11px; font-family: "Space Grotesk", sans-serif; font-size: 13px; font-weight: 700; color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2); }
-.sh-funnel-bar.is-zero b { color: var(--mute2); text-shadow: none; }
-.sh-funnel li:hover .sh-funnel-bar { background: rgba(18, 181, 127, 0.12); }
-.sh-funnel-val { justify-self: end; font-family: "Space Grotesk", sans-serif; font-size: 12.5px; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
 
-/* needs you */
-.sh-attn-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
-.sh-attn-list li { animation: sh-slide 0.45s var(--ease) backwards; animation-delay: calc(var(--i) * 55ms + 0.25s); }
-.sh-attn-list button {
-  display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 11px; align-items: center; width: 100%;
-  padding: 9px 10px; border-radius: 14px; border: 1px solid transparent; background: #f5faf7; cursor: pointer; text-align: left; color: var(--ink);
-  transition: background 0.2s, border-color 0.2s, transform 0.2s var(--ease), box-shadow 0.2s;
+/* ---------------- lists on the right ---------------- */
+.sx-close { --dot: #5b6ee1; }
+.sx-attn { --dot: var(--cz-warn); }
+.sx-list { display: flex; flex-direction: column; gap: 3px; margin: 0 -8px; padding: 0 8px; }
+.sx-deal {
+  position: relative; display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: center; gap: 12px; width: 100%;
+  padding: 8px 10px; border: 1px solid transparent; border-radius: 15px; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer;
+  animation: cz-in 0.5s var(--cz-ease) backwards; animation-delay: calc(0.32s + var(--i, 0) * 0.035s);
+  transition: background 0.25s var(--cz-ease), box-shadow 0.3s var(--cz-ease), border-color 0.25s, transform 0.3s var(--cz-ease);
 }
-.sh-attn-list button:hover { background: #fff; border-color: var(--line); transform: translateX(2px); box-shadow: 0 12px 24px -20px rgba(11, 36, 26, 0.6); }
-.sh-attn-av {
-  display: grid; place-items: center; width: 34px; height: 34px; border-radius: 11px;
-  background: linear-gradient(150deg, #c9f2dd, #86efc0); color: var(--pine);
-  font-family: "Space Grotesk", sans-serif; font-size: 14px; font-weight: 700;
+.sx-deal:hover, .sx-deal:focus-visible { background: var(--cz-card); border-color: var(--cz-line); box-shadow: var(--cz-shadow-up); transform: translateX(2px); outline: none; }
+.sx-deal-main { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.sx-deal-main b { font-size: 13.5px; font-weight: 600; color: var(--cz-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sx-deal-main small { font-size: 11.5px; color: var(--cz-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sx-deal-side { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+.sx-deal-side b { font-family: "Space Grotesk", sans-serif; font-size: 14.5px; font-weight: 600; letter-spacing: -0.02em; color: var(--cz-ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sx-deal-side small { font-size: 11px; color: var(--cz-mute); white-space: nowrap; max-width: 110px; overflow: hidden; text-overflow: ellipsis; }
+.sx-when { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; color: var(--cz-mute); white-space: nowrap; }
+.sx-deal.is-near .sx-when { color: var(--cz-accent-ink); }
+/* the close chance as a small pie */
+.sx-prob {
+  width: 12px; height: 12px; border-radius: 50%; flex: none;
+  background: conic-gradient(var(--pc, var(--cz-mute2)) calc(var(--p) * 1%), var(--cz-soft2) 0);
 }
-.sh-attn-body { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.sh-attn-body b { font-size: 13px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sh-attn-body small { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sh-attn-why { padding: 4px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; white-space: nowrap; }
-.sh-attn-why.is-late { background: #fdebe8; color: var(--late); }
-.sh-attn-why.is-soon { background: #fbf1dc; color: #93640f; }
-.sh-attn-why.is-idle { background: #eef2f0; color: var(--muted); }
+.sx-prob.is-mid { --pc: var(--cz-amber); }
+.sx-prob.is-hi { --pc: var(--cz-accent); }
 
-.sh-ok { display: flex; align-items: center; gap: 12px; padding: 14px; border-radius: 14px; background: rgba(18, 181, 127, 0.08); }
-.sh-ok span { display: grid; place-items: center; width: 34px; height: 34px; flex-shrink: 0; border-radius: 50%; background: linear-gradient(140deg, #2ecb92, #0a8f60); }
-.sh-ok svg { width: 18px; height: 18px; fill: none; stroke: #fff; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
-.sh-ok b { font-size: 13px; font-weight: 600; color: var(--forest); }
-.sh-empty { margin: 6px 0; font-size: 12.5px; color: var(--muted); }
-.sh-skel {
-  height: 160px; border-radius: 12px;
-  background: linear-gradient(90deg, rgba(18, 181, 127, 0.05), rgba(18, 181, 127, 0.12), rgba(18, 181, 127, 0.05)) 0 0 / 200% 100%;
-  animation: sh-shim 1.3s linear infinite;
+/* why a deal needs attention */
+.sx-why { display: flex; flex-wrap: wrap; gap: 5px; margin: -6px 0 10px; }
+.sx-why button {
+  display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border: 1px solid var(--cz-line); border-radius: 999px; background: var(--cz-card);
+  font: 600 11.5px "Inter", sans-serif; color: var(--cz-ink2); cursor: pointer; transition: background 0.2s, color 0.2s, border-color 0.2s;
 }
-@keyframes sh-shim { to { background-position: -200% 0; } }
+.sx-why button i { font-style: normal; font-size: 10.5px; padding: 0 6px; border-radius: 999px; background: var(--cz-soft); color: var(--cz-mute); }
+.sx-why button.is-warn i { background: var(--cz-warn-soft); color: var(--cz-warn); }
+.sx-why button.is-amber i { background: var(--cz-amber-soft); color: #b86b12; }
+.sx-why button:hover { border-color: rgba(10, 29, 21, 0.2); }
+.sx-why button.is-on { background: var(--cz-ink); border-color: var(--cz-ink); color: #fff; }
+.sx-why button.is-on i { background: rgba(255, 255, 255, 0.16); color: #fff; }
+.sx-flags { display: flex; gap: 4px; min-width: 0; overflow: hidden; }
+.sx-flag { flex-shrink: 0; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; background: var(--cz-soft); color: var(--cz-mute); }
+.sx-flag:first-child { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sx-flag.is-warn { background: var(--cz-warn-soft); color: var(--cz-warn); }
+.sx-flag.is-amber { background: var(--cz-amber-soft); color: #b86b12; }
 
-@media (max-width: 1380px) {
-  .sh-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* the team */
+.sx-rep {
+  display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 8px 10px; border-radius: 15px;
+  animation: cz-in 0.5s var(--cz-ease) backwards; animation-delay: calc(0.32s + var(--i, 0) * 0.035s); transition: background 0.2s;
 }
-@media (max-width: 1240px) {
-  .sh-row { grid-template-columns: minmax(0, 1fr); }
-}
-@media (max-width: 520px) {
-  .sh-kpis { gap: 10px; }
-  .sh-kpi.is-hero { grid-column: 1 / -1; }
-  .sh-kpi { padding: 14px; }
-  .sh-kpi-v { font-size: 24px; }
-  .sh-funnel li { grid-template-columns: minmax(70px, 0.8fr) minmax(0, 2fr) 56px; gap: 8px; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .sh-kpi, .sh-card, .sh-funnel li, .sh-funnel-bar i, .sh-attn-list li, .sh-kpi-glow { animation: none; }
-}
+.sx-rep:hover { background: var(--cz-soft); }
+.sx-rep-av { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; background: var(--cz-ink); color: #fff; font-size: 12px; font-weight: 700; }
+.sx-rep-main { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.sx-rep-main b { font-size: 13.5px; font-weight: 600; color: var(--cz-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sx-rep-main small { font-size: 11.5px; color: var(--cz-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sx-rep-bar { height: 6px; border-radius: 4px; background: var(--cz-soft2); overflow: hidden; }
+.sx-rep-bar i { display: block; height: 100%; border-radius: 4px; background: linear-gradient(90deg, #5b6ee1, #8b7cf6); animation: cz-grow 0.9s var(--cz-ease) backwards; }
+.sx-rep-won { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.sx-rep-won b { font-family: "Space Grotesk", sans-serif; font-size: 15px; font-weight: 600; color: var(--cz-mute2); }
+.sx-rep-won.is-on b { color: var(--cz-accent-ink); }
+.sx-rep-won small { font-size: 11px; color: var(--cz-mute); }
 
-/* ---------- full-screen dashboard (see HomePage.css) ---------- */
+/* ---------------- full screen: the lists scroll, the page doesn't ---------------- */
 @media (min-width: 1081px) and (min-height: 700px) {
-  .sh { min-height: 0; height: 100%; }
-  .sh-kpis { flex-shrink: 0; }
-  .sh-row { flex: 1 1 auto; min-height: 0; align-items: stretch; }
-  .sh-card { display: flex; flex-direction: column; min-height: 0; }
-  .sh-head { flex-shrink: 0; }
-  /* stages share the height: bars grow, but never past a comfortable size */
-  .sh-funnel { flex: 1 1 auto; min-height: 0; justify-content: flex-start; overflow-y: auto; }
-  .sh-funnel li { flex: 1 1 0; min-height: 36px; max-height: 64px; }
-  .sh-funnel-bar { height: 100%; max-height: 44px; }
-  .sh-attn-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; margin-right: -6px; padding-right: 6px; }
-  .sh-attn-list button { padding: 11px 12px; }
-  .sh-ok { flex: 1; justify-content: center; flex-direction: column; text-align: center; }
+  .sx-home .ch-col-mid > .sx-stages { flex: 0 0 auto; }
+  .sx-home .ch-col-right > .sx-close { flex: 1 1 0; min-height: 200px; }
+  .sx-home .ch-col-right > .sx-attn { flex: 1.15 1 0; min-height: 200px; }
+  .sx-home .ch-col-right > .cz-card { display: flex; flex-direction: column; }
+  .sx-home .ch-col-right > .cz-card > * { flex-shrink: 0; }
+  .sx-home .ch-col-right > .cz-card > .sx-list {
+    flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-bottom: 24px; scrollbar-width: thin; scrollbar-color: rgba(10, 29, 21, 0.15) transparent;
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+  }
+}
+@media (min-width: 1081px) and (max-height: 960px) {
+  .sx-funnel button { padding: 5px 8px; }
+  .sx-deal, .sx-rep { padding-top: 6px; padding-bottom: 6px; }
+}
+@media (max-width: 1499px) {
+  .sx-funnel button { grid-template-columns: minmax(74px, 0.9fr) minmax(40px, 1fr) 26px 56px; gap: 8px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sx-funnel li, .sx-st-bar i, .sx-deal, .sx-rep, .sx-rep-bar i { animation: none; }
+  .sx-deal { transition: none; }
+}
+/* Closing / Team always fits whole; the title gives way */
+.sx-close .cz-titles { flex: 1 1 auto; }
+.sx-close .sx-seg { flex-shrink: 0; max-width: none; }
+.sx-close .cz-title small, .sx-stages .cz-title small { white-space: nowrap; }
+/* when the page scrolls (narrow screens), the long lists keep a sensible height */
+@media (max-width: 1280px) {
+  .sx-home .ch-col-right .sx-list { max-height: 460px; overflow-y: auto; scrollbar-width: thin; }
+}
+
+/* ===================== v2: fits real pipelines (many stages, long names, thousands of deals) ===================== */
+/* the pipeline is picked from a compact dropdown (names can be long) */
+.sx-stages .cz-head { align-items: center; }
+.sx-stages .cz-titles { flex: 1 1 auto; }
+.sx-pipe-pick { flex: 0 1 210px; min-width: 120px; }
+.sx-pipe-pick .sel-trigger, .sx-pipe-pick button { width: 100%; }
+/* compact rows; the bar's track is drawn inside a taller cell so the hover text has room */
+.sx-funnel button { padding: 4px 8px; grid-template-columns: minmax(84px, 0.8fr) minmax(70px, 1.5fr) 44px 62px; }
+.sx-st-bar { height: 20px; background: none; overflow: visible; }
+.sx-st-bar::before { content: ""; position: absolute; left: 0; right: 0; top: 5px; height: 10px; border-radius: 6px; background: var(--cz-soft); }
+.sx-st-bar i { top: 5px; bottom: auto; height: 10px; transition: opacity 0.18s; }
+.sx-st-n { font-size: 14.5px; }
+/* hover: the bar steps back and the stage's close chance / time / stuck deals show in its place — no reflow */
+.sx-st-more {
+  position: absolute; inset: 0; display: flex; align-items: center; gap: 8px; padding: 0 2px;
+  font-size: 11.5px; font-weight: 600; color: var(--cz-ink2); white-space: nowrap; overflow: hidden;
+  opacity: 0; transition: opacity 0.18s; pointer-events: none;
+}
+.sx-st-more em { font-style: normal; color: #b86b12; }
+.sx-st-more > * + *::before { content: "·"; margin-right: 8px; color: var(--cz-mute2); }
+.sx-funnel button:hover .sx-st-bar i, .sx-funnel button:focus-visible .sx-st-bar i { opacity: 0.18; }
+.sx-funnel button:hover .sx-st-bar::before, .sx-funnel button:focus-visible .sx-st-bar::before { opacity: 0.4; }
+.sx-funnel button:hover .sx-st-more, .sx-funnel button:focus-visible .sx-st-more { opacity: 1; }
+.sx-funnel button { transition: background 0.15s; }
+/* "the most urgent N of M" under a capped list */
+.sx-more { margin: 6px 2px 0; padding: 8px 10px; border: 0; border-radius: 10px; background: var(--cz-soft); font: 600 12px "Inter", sans-serif; color: var(--cz-ink2); text-align: center; cursor: pointer; }
+.sx-more:hover { background: var(--cz-ink); color: #fff; }
+/* full screen: the calendar keeps its agenda; the stages card takes what it needs and scrolls past that */
+@media (min-width: 1081px) and (min-height: 700px) {
+  .sx-home .ch-col-mid > .hs-cal { min-height: 340px; }
+  .sx-home .ch-col-mid > .sx-stages { flex: 0 1 auto; min-height: 150px; display: flex; flex-direction: column; overflow: hidden; }
+  .sx-home .ch-col-mid > .sx-stages > * { flex-shrink: 0; }
+  .sx-home .ch-col-mid > .sx-stages > .sx-funnel { flex: 0 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(10, 29, 21, 0.15) transparent; }
+  .sx-home .ch-col-right > .sx-close { flex: 1 1 0; }
+  .sx-home .ch-col-right > .sx-attn { flex: 1.25 1 0; }
+}
+@media (min-width: 1081px) and (max-height: 960px) {
+  .sx-funnel button { padding: 2px 8px; }
+  .sx-st-name { font-size: 12.5px; }
+  .sx-why { margin-bottom: 8px; }
+  .sx-why button { height: 24px; }
+}
+@media (max-width: 1499px) {
+  .sx-funnel button { grid-template-columns: minmax(70px, 0.9fr) minmax(50px, 1.2fr) 38px 54px; gap: 8px; }
+}
+/* short screens: the calendar gives a little back */
+@media (min-width: 1081px) and (min-height: 700px) and (max-height: 860px) {
+  /* no room for the agenda under the days: the calendar shows the days (its page is one click away) */
+  .sx-home .ch-col-mid > .hs-cal { flex: 0 0 auto; min-height: 0; }
+  .sx-home .ch-col-mid > .hs-cal .hs-agenda { display: none; }
+  .sx-home .ch-col-mid > .sx-stages { flex: 1 1 0; }
 }
