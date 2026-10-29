@@ -12,7 +12,7 @@ const TYPE_HINT: Record<TrackingFieldType, string> = {
   number: "A figure, e.g. licences or employees",
   date: "A date, e.g. tender deadline",
   boolean: "Yes or no, e.g. NDA signed",
-  select: "One choice from your own list",
+  select: "One or more choices from your own list",
 };
 const TYPE_ICON: Record<TrackingFieldType, string> = {
   text: "M4 6h16M4 12h10M4 18h7",

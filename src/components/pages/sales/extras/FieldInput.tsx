@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import DatePicker from "../../../framework/DatePicker";
-import Select from "../../../framework/Select";
-import type { TrackingField } from "./trackingFieldsApi";
+import MultiSelect from "../../../framework/MultiSelect";
+import { selectValues, type TrackingField } from "./trackingFieldsApi";
 
 /**
  * The control for one custom field, by type. Fully controlled: the caller
@@ -37,10 +37,12 @@ export default function FieldInput({ field: f, value, onChange, onBlur, disabled
     );
   }
   if (f.type === "select") {
-    const opts = f.options.includes(value) || value == null || value === "" ? f.options : [...f.options, String(value)];
+    // A dropdown takes several options at once (a value saved before as one option still reads).
+    const picked = selectValues(value);
+    const opts = [...f.options, ...picked.filter((v) => !f.options.includes(v))];
     return (
-      <Select value={value ?? ""} onChange={(v) => onChange(v)} placeholder="Choose…"
-        options={[{ value: "", label: "—" }, ...opts.map((o) => ({ value: o, label: o }))]} />
+      <MultiSelect values={picked} onChange={(vs) => onChange(vs.length ? vs : "")} placeholder="Choose…"
+        options={opts.map((o) => ({ value: o, label: o }))} />
     );
   }
   return (

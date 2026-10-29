@@ -401,7 +401,7 @@ export function dealCustomFields(defs: TrackingField[]): Field[] {
     const raw = (r: Row) => (r.deal as any).custom?.[d.id];
     if ((d.type as string) === "multiselect") return { ...customDefField("deal", { id: d.id, label: d.label, type: "multiselect", options: d.options, sort: d.sort }, (r) => r.deal), key: `deal.custom.${d.id}` };
     if (d.type === "boolean") return { key: `deal.custom.${d.id}`, group: "deal", label: d.label, kind: "enum", options: ["Yes", "No"], get: (r) => { const v = raw(r); return v === true ? "Yes" : v === false ? "No" : null; } };
-    if (d.type === "select") return { key: `deal.custom.${d.id}`, group: "deal", label: d.label, kind: "enum", options: d.options, get: (r) => { const v = raw(r); return v == null || v === "" ? null : String(v); } };
+    if (d.type === "select") return { key: `deal.custom.${d.id}`, group: "deal", label: d.label, kind: "enum", options: d.options, get: (r) => { const v = raw(r); return v == null || v === "" || (Array.isArray(v) && !v.length) ? null : Array.isArray(v) ? v.join(", ") : String(v); } };
     if (d.type === "number") return { key: `deal.custom.${d.id}`, group: "deal", label: d.label, kind: "number", get: (r) => { const v = raw(r); const n = Number(v); return v == null || v === "" || !Number.isFinite(n) ? null : n; } };
     if (d.type === "date") return { key: `deal.custom.${d.id}`, group: "deal", label: d.label, kind: "date", get: (r) => isoDay(raw(r)) };
     return { key: `deal.custom.${d.id}`, group: "deal", label: d.label, kind: "text", get: (r) => { const v = raw(r); return v == null || v === "" ? null : String(v); } };

@@ -358,7 +358,7 @@ export function proposalFigures(lines: ProposalLine[], groups: PropGroup[]) {
   return { gross, partner, total: net, picked };
 }
 
-function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onGenerate, onStudio, onMain, onWon, dealWon, phaseId, onContractFile }: {
+function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onStudio, onMain, onWon, dealWon, phaseId, onContractFile }: {
   trackingId: string;
   /** The line groups a proposal can use (products / services available in proposals). */
   groups: PropGroup[];
@@ -369,7 +369,7 @@ function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onGe
   busy: string | null;
   reloadKey: number;
   /** The built-in generator (order form PDF; PPT when there is no deck). */
-  onGenerate: (p: DealProposal, kind: "pptx" | "pdf") => void;
+  onGenerate?: (p: DealProposal, kind: "pptx" | "pdf") => void;
   /** Opens the proposal (web page / PDF) or its contract in the document studio. */
   onStudio: (p: DealProposal, kind?: "proposal" | "contract") => void;
   /** After a proposal became the main one: its versions are now the active ones. */
@@ -663,7 +663,6 @@ function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onGe
                   title="Build the contract from your contract template and the deal's contract terms">
                   {busy === `${p.id}:contract` ? <span className="sl-prop-spin" /> : <PIco d="file" />}Contract
                 </button>
-                <button type="button" className="sl-rv-tool is-calc" disabled={!!busy || !f.picked.length} onClick={() => onGenerate(p, "pdf")} title="Order form (PDF)">{busy === `${p.id}:pdf` ? <span className="sl-prop-spin" /> : <PIco d="file" />}PDF</button>
                 <button type="button" className="sl-rv-tool is-sign" disabled={attachBusy === p.id}
                   onClick={() => { pickFor.current = p.id; pickRef.current?.click(); }}
                   title="Attach the signed contract (PDF): it is saved in Documents and linked to this proposal. You can also drop the file on the proposal.">
@@ -2388,7 +2387,24 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     if (wasWon && next !== "won") { setWonProposalId(null); setPropsReload((n) => n + 1); }
     if (next === "lost") setLossModal(true);
     // Just won: the guided flow — the client (if it isn't set up), its contract, then the handoff.
-    if (next === "won" && !wasWon) void startWonFlow();
+    if (next === "won" && !wasWon) { await autoWonProposal(); void startWonFlow(); }
+  };
+  /**
+   * Won without picking a proposal: the deal is won with the main one (the one at the top of the list,
+   * or the only one), kept as signed like "Won" on a proposal does — the client, contract and handoff read from it.
+   */
+  const autoWonProposal = async () => {
+    try {
+      const props = (await listDealProposals(tracking.id).catch(() => null)) ?? [];
+      if (!props.length || props.some((p) => !!p.doc?.wonAt)) return;
+      const pick = props.find((p) => p.is_main) ?? props[0];
+      if (!pick.is_main) { await setMainProposal(tracking.id, pick); applyMainLocally(pick); }
+      const doc = { ...(pick.doc ?? {}), wonAt: new Date().toISOString() };
+      await saveProposalDoc(pick.id, pick.deck_id ?? null, doc);
+      setWonProposalId(pick.id);
+      if (pick.doc?.contractFileId) { setSignedFileId(pick.doc.contractFileId); void proposalContractFile({ ...pick, doc }, pick.doc.contractFileId, null); }
+      setPropsReload((n) => n + 1);
+    } catch { /* the flow still asks */ }
   };
 
   /** "Won" on a proposal: it is already the main one; the deal moves to Won and the guided flow starts. */
@@ -3208,7 +3224,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
       return {
         key: tp.id, kind: "product", name: productName(tp.product_id), line: tp,
         calculator: prod?.calculator as Calculator | null, catalogBase: prod?.tiers?.find((x) => x.id === tp.tier_id)?.price,
-        tiers: prod?.tiers, partnerItem: { type: "product", id: tp.product_id }, defaultIncrements: catalogIncrements(prod),
+        tiers: prod?.tiers, partnerItem: { type: "product", id: tp.product_id, broughtBy: company?.partner_id ?? null }, defaultIncrements: catalogIncrements(prod),
       };
     }),
     ...activePotentials.map((p): ContractPanelLine => {
@@ -3217,7 +3233,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
         key: p.id, kind: "service", name: p.label || serviceName(p.service_id), line: p,
         calculator: svc?.calculator as Calculator | null, minUnit: serviceMin(p.service_id),
         roles: svc?.roles, roleName: (id: string) => roleNameOf(id, clientRoles), unit: (svc?.rate_unit ?? "day") as "hour" | "day",
-        partnerItem: { type: "service", id: p.service_id },
+        partnerItem: { type: "service", id: p.service_id, broughtBy: company?.partner_id ?? null },
       };
     }),
   ];
@@ -4325,7 +4341,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
               tiers={prod?.tiers}
               calculator={prod?.calculator as Calculator | null}
               money={money}
-              partnerItem={{ type: "product", id: tp.product_id }}
+              partnerItem={{ type: "product", id: tp.product_id, broughtBy: company?.partner_id ?? null }}
               defaultIncrements={catalogIncrements(prod)}
               onApply={(patch) => patchProduct(tp.id, patch)}
               onClose={() => setCalcFor(null)}
@@ -4345,7 +4361,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
             unit={svc?.rate_unit ?? "day"}
             minUnit={serviceMin(ps.service_id)}
             money={money}
-            partnerItem={{ type: "service", id: ps.service_id }}
+            partnerItem={{ type: "service", id: ps.service_id, broughtBy: company?.partner_id ?? null }}
             onApply={(patch) => patchPotential(ps.id, patch)}
             onClose={() => setCalcFor(null)}
           />

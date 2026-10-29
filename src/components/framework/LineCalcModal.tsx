@@ -4,13 +4,13 @@ import { createPortal } from "react-dom";
 import { calcBreakdown, discountOf, BASE_KEY, PRICE_SUFFIX, varAmount, withoutPriceOverrides, type Calculator, type CalcDiscount, type CalcVariable, type TierDuration } from "../pages/settings/catalogApi";
 import { lineBreakdown, yearAmounts, hasIncrements, type LineIncrements, type RevenueLineFields, type TermPatch } from "../pages/sales/sales/salesApi";
 import Select from "./Select";
-import { listCompanies, listPartnerRates, partnerCompanies, partnerDefault, partnerCut, type PartnerRate } from "../pages/companies/companiesApi";
+import { listPartnerRates, partnerList, partnerDefault, partnerCut, type PartnerRate } from "../pages/companies/companiesApi";
 import "./LineCalcModal.css";
 
 /** Partners and their default cuts, read once per visit. */
-let partnerCache: Promise<{ partners: { id: string; name: string }[]; rates: PartnerRate[] }> | null = null;
-const loadPartners = () => (partnerCache ??= Promise.all([listCompanies().catch(() => []), listPartnerRates().catch(() => [])])
-  .then(([cos, rates]) => ({ partners: partnerCompanies(cos as any).map((c: any) => ({ id: c.id, name: c.name })), rates })));
+// The partners are the companies with a partner type (Settings › Companies page); read again on each opening.
+const loadPartners = (): Promise<{ partners: { id: string; name: string }[]; rates: PartnerRate[] }> =>
+  Promise.all([partnerList(true).catch(() => []), listPartnerRates().catch(() => [])]).then(([partners, rates]) => ({ partners, rates }));
 
 /**
  * The commitment picked on the deal (months), kept with the calculator values.
@@ -265,7 +265,7 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
   money: (n: number) => string;
   variant?: "modern";
   /** Shows the partner section: which catalogue item this line is (for the partner's default cut). */
-  partnerItem?: { type: "product" | "service"; id: string | null };
+  partnerItem?: { type: "product" | "service"; id: string | null; /** The partner that brought the deal's company: offered first. */ broughtBy?: string | null };
   /** The catalogue product's yearly increase, used when the line has none of its own yet. */
   defaultIncrements?: LineIncrements | null;
 }) {
@@ -834,7 +834,13 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
                   )}
                 </div>
                 {partnerData && partnerData.partners.length === 0 && !partnerId && (
-                  <p className="lcx-note">No partners yet: tag a company with the relationship type “Partner”.</p>
+                  <p className="lcx-note">No partners yet: in Settings › Companies page, switch a company type on as a partner type and give it to the company.</p>
+                )}
+                {!partnerId && partnerItem?.broughtBy && partnerData?.partners.some((x) => x.id === partnerItem.broughtBy) && (
+                  <p className="lcx-note">
+                    {partnerData.partners.find((x) => x.id === partnerItem.broughtBy)?.name} brought this company ·{" "}
+                    <button type="button" className="lcx-link" onClick={() => pickPartner(partnerItem.broughtBy!)}>Add them as the partner</button>
+                  </p>
                 )}
                 {partnerDef && (partnerDef.mode !== partnerMode || partnerDef.value !== partnerValue) && (
                   <p className="lcx-note">

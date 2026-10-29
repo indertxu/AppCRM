@@ -1073,6 +1073,14 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
     return () => window.clearTimeout(t);
   }, [q]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /** The stages picked, by the pipeline they belong to. */
+  const phasePick = useMemo(() => {
+    const pipeOf = new Map<string, string>();
+    Object.entries(phaseByPipe).forEach(([pid, phs]) => (phs ?? []).forEach((ph) => pipeOf.set(ph.id, pid)));
+    const m = new Map<string, Set<string>>();
+    fPhase.forEach((id) => { const pid = pipeOf.get(id) ?? ""; if (!m.has(pid)) m.set(pid, new Set()); m.get(pid)!.add(id); });
+    return m;
+  }, [fPhase, phaseByPipe]);
   /** Every filter except status: what the KPI cards count (the cards themselves pick the status). */
   const filteredBase = useMemo(() => {
     const n = norm(qList.trim());
@@ -1080,8 +1088,12 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
       if (fPipeline.length && !fPipeline.includes(t.pipeline_id ?? "")) return false;
       if (fProduct.length && !fProduct.includes(t.product_id ?? "")) return false;
       if (fCompany.length && !fCompany.includes(t.company_id ?? "")) return false;
-      // stages are picked by id: two pipelines can call theirs alike ("Lost" / "Loss") or the same name differently
-      if (fPhase.length && !fPhase.includes(t.current_phase_id ?? "")) return false;
+      // Stages are picked by id and count per pipeline: two pipelines picked with a stage of the first
+      // show that stage of the first and all of the second. With no pipeline picked, only the stages picked show.
+      if (fPhase.length) {
+        const own = phasePick.get(t.pipeline_id ?? "");
+        if (own ? !own.has(t.current_phase_id ?? "") : !fPipeline.length) return false;
+      }
       if (fOwner.length && !fOwner.includes(trackOwners[t.id] ?? "")) return false;
       if (fMember.length && !(trackAssignees[t.id] ?? []).some((u) => fMember.includes(u))) return false;
       // Ranges (an open side is skipped; a deal with no value fails an active range)
@@ -1118,7 +1130,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
       if (!n) return true;
       return (searchById.get(t.id) ?? "").includes(n);
     });
-  }, [mine, qList, searchById, fPipeline, fProduct, fCompany, fPhase, fOwner, fMember, fRanges, probView, phaseByKey, potentialTotals, trackAssignees, trackOwners, me]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mine, qList, searchById, fPipeline, fProduct, fCompany, fPhase, phasePick, fOwner, fMember, fRanges, probView, phaseByKey, potentialTotals, trackAssignees, trackOwners, me]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** The KPI cards follow every filter — owner, pipeline, ranges, search… and the status (won / lost / on hold…) too. */
   const metrics = useMemo(() => {
@@ -1192,6 +1204,8 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
 
   // Clicking the KPI card that is already active clears the filter again.
   // Status cards combine: Active + Won shows both; clicking an active card removes it.
+  /** The Won card only shows where won deals can be: not when the status picked leaves them out, nor on stages with none won. */
+  const wonMatters = !(fStatus.length && !fStatus.includes("won")) && !(fPhase.length && metrics.won === 0);
   const toggleStatus = (s: string) => setFStatus((cur) => (cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s]));
 
   // The stages offered: those of the pipelines picked (all visible ones when none), under their pipeline's name.
@@ -1222,8 +1236,6 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   const anyFilter = q || fStatus.length || fPipeline.length || fProduct.length || fCompany.length || fPhase.length || fOwner.length || fMember.length || activeRangeCount(fRanges) || sort !== "recent";
   const clearAll = () => { setQ(""); setFStatus([]); setFPipeline([]); setFProduct([]); setFCompany([]); setFPhase([]); setFOwner([]); setFMember([]); setFRanges(EMPTY_RANGES); setSort("recent"); setRangeCol(null); setHeadPop(null); };
   const kanbanPipe = fPipeline.length ? (fPipeline.includes(boardPipe) ? boardPipe : fPipeline[0]) : "";
-  // going to the board with several pipelines picked: keep the one it shows
-  useEffect(() => { if (view === "kanban" && fPipeline.length > 1) setFPipeline([kanbanPipe]); }, [view, fPipeline.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ---- filter bar: filters scroll sideways instead of wrapping ---- */
   const ftrackRef = useRef<HTMLDivElement>(null);
@@ -1655,7 +1667,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
       case "owner": return trackOwners[t.id] ? employeeById.get(trackOwners[t.id])?.name ?? "" : "";
       case "team": return (trackAssignees[t.id] ?? []).map((id) => employeeById.get(id)?.name).filter(Boolean).join(", ");
       case "productName": return productName(t.product_id) ?? "";
-      case "revenue": { const v = potentialTotals[t.id] ?? 0; return v > 0 ? `${v.toLocaleString("de-DE")} €` : ""; }
+      case "revenue": { const v = potentialTotals[t.id] ?? 0; return v > 0 ? fmtEur0(v) : ""; }
       case "expected": return fmtDay(closeDateOf(t));
       case "closed": return t.status === "won" || t.status === "lost" ? fmtDay(t.close_date) : "";
       case "started": return fmtDay(t.created_at);
@@ -1832,12 +1844,12 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
         </div>
       ) : (
       /* Status cards: each one filters the list, clicking it again clears it. */
-      <div className={`so-kpis is-stats ${ready ? "" : "is-loading"}`} key="status-kpis" aria-busy={!ready}>
+      <div className={`so-kpis is-stats ${ready ? "" : "is-loading"} ${wonMatters ? "" : "is-one"}`} key="status-kpis" aria-busy={!ready}>
         <SoStatTotal label={anyFilterButStatus || fStatus.length ? "Deals in this selection" : "Total deals"} loading={!ready}
           total={metrics.total} value={metrics.totalValue} open={metrics.open} openValue={metrics.openValue} won={metrics.won} lost={metrics.lost}
           on={fStatus.length === 0} onClick={() => setFStatus([])} />
-        <SoStatWon won={metrics.won} value={metrics.wonValue} total={metrics.total} totalValue={metrics.totalValue} loading={!ready}
-          on={fStatus.includes("won")} onClick={() => toggleStatus("won")} />
+        {wonMatters && <SoStatWon won={metrics.won} value={metrics.wonValue} total={metrics.total} totalValue={metrics.totalValue} loading={!ready}
+          on={fStatus.includes("won")} onClick={() => toggleStatus("won")} />}
       </div>
       )}
 
@@ -1870,8 +1882,8 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
           <div className="so-ftrack" ref={ftrackRef} onScroll={measureTrack}>
           <SalesMultiFilter values={fStatus} onChange={setFStatus} placeholder="Any status" noun="statuses"
             options={[{ value: "active", label: "Active" }, { value: "won", label: "Won" }, { value: "lost", label: "Lost" }, { value: "paused", label: "Hold" }]} />
-          {/* the board shows one pipeline (each has its own phases): there, picking one replaces the other */}
-          <SalesMultiFilter values={fPipeline} onChange={setFPipeline} placeholder="All pipelines" noun="pipelines" single={view === "kanban"}
+          {/* several pipelines can be picked everywhere; the board shows one of them at a time (tabs under the bar) */}
+          <SalesMultiFilter values={fPipeline} onChange={(v) => { setFPipeline(v); if (v.length && !v.includes(boardPipe)) setBoardPipe(v[v.length - 1]); }} placeholder="All pipelines" noun="pipelines"
             options={pipelineOptions} />
           <SalesMultiFilter values={fProduct} onChange={setFProduct} placeholder="All products" noun="products"
             options={products.map((p) => ({ value: p.id!, label: p.name }))} />
@@ -1948,21 +1960,6 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
               void moveTrackingToPhase(id, phaseId, phs);
             }}
             selected={bulk.has} selecting={bulk.active} onToggle={(id, range) => bulk.toggle(id, range)}
-            cardDetail={(t) => {
-              const owner = trackOwners[t.id] ? employeeById.get(trackOwners[t.id])?.name ?? null : null;
-              const close = closeDateOf(t);
-              const prob = shownProbOf(t);
-              const prod = productName(t.product_id);
-              return (
-                <>
-                  {prod && <span className="so-kx"><b>{prod}</b></span>}
-                  {owner && <span className="so-kx"><SoIcon d={SO_ICON.star} fill />{owner}</span>}
-                  <span className="so-kx">{close ? `Close ${new Date(close).toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "2-digit" })}` : "No close date"}</span>
-                  {prob != null && <span className="so-kx"><b>{prob}%</b> chance</span>}
-                  {t.contactIds.length > 0 && <span className="so-kx">{t.contactIds.length} contact{t.contactIds.length === 1 ? "" : "s"}</span>}
-                </>
-              );
-            }}
           />
         ) : shown.length === 0 && ready ? (
           <div className="so-empty">
@@ -2117,21 +2114,8 @@ type RowProps = {
 };
 const dlDay = (iso: string) => new Date(iso).toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "2-digit" });
 const dlIni = (n: string) => n.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
-/** "in 12 days", "3 weeks ago", "today"… (calendar days, local time). */
-function dlRel(iso: string): { text: string; past: boolean } {
-  const d = new Date(iso); const t = new Date();
-  const day = (x: Date) => Date.UTC(x.getFullYear(), x.getMonth(), x.getDate());
-  const n = Math.round((day(d) - day(t)) / 86400000);
-  if (n === 0) return { text: "today", past: false };
-  if (n === 1) return { text: "tomorrow", past: false };
-  if (n === -1) return { text: "yesterday", past: true };
-  const a = Math.abs(n);
-  const span = a < 14 ? `${a} days` : a < 60 ? `${Math.round(a / 7)} weeks` : a < 730 ? `${Math.round(a / 30.4)} months` : `${Math.round(a / 365)} years`;
-  return n > 0 ? { text: `in ${span}`, past: false } : { text: `${span} ago`, past: true };
-}
-
 /** One deal in the list. Memoised: hovering, scrolling or ticking a box re-renders only the rows that changed. */
-const TrackingRow = memo(function TrackingRow({ tracking, title, company, website, contactCount, pipeline, phases, product, revenue, ownerName, closeDate, closeProbOverride, probLabel, onOpen, handedOver = false, selected = false, selecting = false, onToggle, cols, cell }: RowProps) {
+const TrackingRow = memo(function TrackingRow({ tracking, title, company, website, phases, product, revenue, ownerName, closeDate, closeProbOverride, probLabel, onOpen, handedOver = false, selected = false, selecting = false, onToggle, cols, cell }: RowProps) {
   const curIdx = phases.findIndex((p) => p.id === tracking.current_phase_id);
   const pct = trackingPct(phases, tracking.current_phase_id);
   const stage = curIdx >= 0 ? phases[curIdx]?.name ?? "-" : "Not started";
@@ -2144,7 +2128,6 @@ const TrackingRow = memo(function TrackingRow({ tracking, title, company, websit
     curPhase?.close_probability != null ? curPhase.close_probability : null;
   const closeProb: number | null = closeProbOverride !== undefined ? closeProbOverride : phaseProb;
   const probTone = closeProb == null ? "none" : closeProb >= 70 ? "hi" : closeProb >= 40 ? "mid" : "lo";
-  const teamCount = Object.keys(tracking.deal_roles ?? {}).length;
   const closed = (tracking.status === "won" || tracking.status === "lost") && tracking.close_date;
   const id = tracking.id;
 
@@ -2175,7 +2158,6 @@ const TrackingRow = memo(function TrackingRow({ tracking, title, company, websit
           case "stage": return (
             <span key="stage" className="dz-stage" title={`${stage} · ${pct}% through the pipeline${curIdx >= 0 && phases.length ? ` (step ${curIdx + 1} of ${phases.length})` : ""}`}>
               <span className="dz-stage-t"><i className="dz-dot" aria-hidden="true" /><b>{stage}</b>{tracking.status !== "active" && <em>{statusText(tracking.status)}</em>}</span>
-              <span className="dz-bar" aria-hidden="true"><i /></span>
             </span>
           );
           case "product": return (
@@ -2186,7 +2168,7 @@ const TrackingRow = memo(function TrackingRow({ tracking, title, company, websit
           );
           case "value": return (
             <span key="value" className="dz-value">
-              <b className={revenue && revenue > 0 ? "" : "is-none"}>{revenue && revenue > 0 ? `${revenue.toLocaleString("de-DE")} €` : "—"}</b>
+              <b className={revenue && revenue > 0 ? "" : "is-none"}>{revenue && revenue > 0 ? fmtEur0(revenue) : "—"}</b>
               {closed ? (
                 <small className={`is-${tracking.status}`} title="Close date">{`${tracking.status === "won" ? "Won" : "Lost"} ${dlDay(tracking.close_date!)}`}</small>
               ) : (
@@ -2208,81 +2190,6 @@ const TrackingRow = memo(function TrackingRow({ tracking, title, company, websit
 
       <span className="dz-go" aria-hidden="true"><SoIcon d={SO_ICON.arrow} w={2.2} /></span>
 
-      {/* More about the deal: a quiet panel that unfolds when the pointer rests on the row (not while sweeping past). */}
-      <span className="dz-x" aria-hidden="true">
-        <span className="dz-x-in">
-          <span className="dz-xp">
-            {/* 1 · where it is in the pipeline */}
-            <span className="dz-xs dz-xs-pipe">
-              <span className="dz-xh">{pipeline && pipeline !== "—" ? pipeline : "Pipeline"}</span>
-              <span className="dz-tl" style={{ ["--n" as string]: Math.max(phases.length, 1) } as CSSProperties}>
-                {phases.length > 0 ? phases.map((p, i) => (
-                  <i key={p.id} title={p.name}
-                    className={i < curIdx || tracking.status === "won" ? "is-done" : i === curIdx ? "is-cur" : ""} />
-                )) : <i />}
-              </span>
-              <span className="dz-tl-t">
-                <b>{stage}</b>
-                <small>
-                  {tracking.status === "won" ? "Won" : tracking.status === "lost" ? "Lost" : tracking.status === "paused" ? "On hold" :
-                    curIdx >= 0 && phases.length ? `Step ${curIdx + 1} of ${phases.length}${phases[curIdx + 1] ? ` · next: ${phases[curIdx + 1].name}` : " · last step"}` : "Not started yet"}
-                </small>
-              </span>
-            </span>
-
-            {/* 2 · when */}
-            <span className="dz-xs dz-xs-when">
-              <span className="dz-xh">{closed ? (tracking.status === "won" ? "Won on" : "Lost on") : "Expected close"}</span>
-              {(() => {
-                const iso = closed ? tracking.close_date! : closeDate;
-                if (!iso) return <span className="dz-big is-none">No date yet</span>;
-                const rel = dlRel(iso);
-                return (
-                  <>
-                    <span className="dz-big">{dlDay(iso)}</span>
-                    <span className={`dz-rel ${!closed && rel.past ? "is-late" : ""}`}>{!closed && rel.past ? `${rel.text === "yesterday" ? "1 day" : rel.text.replace(/ ago$/, "")} overdue` : rel.text}</span>
-                  </>
-                );
-              })()}
-              <span className="dz-meta">Started {tracking.created_at ? `${dlDay(tracking.created_at)} · ${dlRel(tracking.created_at).text}` : "—"}</span>
-            </span>
-
-            {/* 3 · who */}
-            <span className="dz-xs dz-xs-who">
-              <span className="dz-xh">People</span>
-              <span className="dz-person">
-                <span className={`dz-av ${ownerName ? "" : "is-none"}`}>{ownerName ? dlIni(ownerName) : "?"}</span>
-                <span className="dz-person-t"><b className={ownerName ? "" : "is-none"}>{ownerName ?? "No owner"}</b><small>Owner</small></span>
-              </span>
-              <span className="dz-pills">
-                <span className="dz-pill"><SoIcon d={SO_ICON.users} w={2} />{contactCount} contact{contactCount === 1 ? "" : "s"}</span>
-                {teamCount > 0 && <span className="dz-pill">{teamCount} on the team</span>}
-              </span>
-            </span>
-
-            {/* 4 · how likely */}
-            <span className="dz-xs dz-xs-odds">
-              <span className="dz-xh">Confidence</span>
-              {([
-                ["Pipeline", phaseProb],
-                ["Sales", tracking.rep_close_prob ?? null],
-                ["Management", tracking.mgr_close_prob ?? null],
-              ] as [string, number | null][]).map(([k, v]) => (
-                <span key={k} className={`dz-odd ${v == null ? "is-none" : v >= 70 ? "is-hi" : v >= 40 ? "is-mid" : "is-lo"}`}>
-                  <i>{k}</i>
-                  <span className="dz-odd-bar"><em style={{ ["--v" as string]: (v ?? 0) / 100 } as CSSProperties} /></span>
-                  <b>{v == null ? "—" : `${v}%`}</b>
-                </span>
-              ))}
-            </span>
-
-            <span className="dz-xs dz-xs-go">
-              <span className="dz-open">Open deal <SoIcon d={SO_ICON.arrow} w={2.2} /></span>
-              {product && <span className="dz-xprod" title={product}>{product}</span>}
-            </span>
-          </span>
-        </span>
-      </span>
     </button>
   );
 }, (a, b) => {
@@ -2295,7 +2202,8 @@ const TrackingRow = memo(function TrackingRow({ tracking, title, company, websit
 });
 
 // ============================ Kanban view ============================
-const fmtKRev = (n: number) => n >= 1000 ? `${(n / 1000).toLocaleString("de-DE", { maximumFractionDigits: n >= 10000 ? 0 : 1 })}k €` : `${Math.round(n)} €`;
+/** Deal values without decimals: whole euros. */
+const fmtKRev = (n: number) => fmtEur0(n);
 
 /** One board card. Memoised; its hover detail is only built once the pointer reaches it. */
 const KanbanCard = memo(function KanbanCard({ t, title, company, website, rev, order, dragging, selected, selecting, tickable, withDetail, onClick, onTick, detail, onDragStart, onDragEnd, fmtRev }: {

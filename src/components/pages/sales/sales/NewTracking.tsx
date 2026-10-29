@@ -8,7 +8,32 @@ import FieldInput from "../extras/FieldInput";
 import { cleanCustom, isEmptyValue, missingRequired, type TrackingField } from "../extras/trackingFieldsApi";
 import DealRolePicker from "../extras/DealRolePicker";
 import { rolesFor, resolveDealRole, orderPhases, type SalesRole } from "../extras/salesRolesApi";
+import { supabase } from "../../../api/supabase";
 import "../extras/TrackingFields.css";
+
+const fullName = (c: Contact) => [c.first_name, c.last_name].filter(Boolean).join(" ") || c.email || "Contact";
+/** A few companies to pick from before typing: the newest ones. */
+async function startCompanies(): Promise<{ id: string; name: string }[]> {
+  const { data } = await supabase.from("companies").select("id, name").order("created_at", { ascending: false }).limit(30);
+  return ((data ?? []) as { id: string; name: string }[]).filter((c) => c.name);
+}
+/** A few contacts to pick from before typing (the list the Contacts page shows first, else the newest). */
+async function startContacts(): Promise<Contact[]> {
+  const viaList = await searchContacts("", 30).catch(() => [] as Contact[]);
+  if (viaList.length) return viaList;
+  const { data } = await supabase.from("contacts").select("id, first_name, last_name, email, position").order("created_at", { ascending: false }).limit(30);
+  return (data ?? []) as Contact[];
+}
+/** The people of a company: from the contacts list, else straight from the links. */
+async function peopleOf(companyId: string): Promise<Contact[]> {
+  const viaList = await companyPeople(companyId).catch(() => [] as Contact[]);
+  if (viaList.length) return viaList;
+  const { data: links } = await supabase.from("company_contacts").select("contact_id").eq("company_id", companyId);
+  const ids = ((links ?? []) as { contact_id: string }[]).map((l) => l.contact_id);
+  if (!ids.length) return [];
+  const { data } = await supabase.from("contacts").select("id, first_name, last_name, email, position").in("id", ids.slice(0, 500));
+  return ((data ?? []) as Contact[]).map((c) => ({ ...c, companyIds: [companyId] }));
+}
 
 const norm = (s: string) => (s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
@@ -215,38 +240,51 @@ export default function NewTracking({ companies, contacts, pipelines, products, 
   useEffect(() => {
     if (!lean || !companyId) { setCoPeople([]); return; }
     let off = false;
-    companyPeople(companyId).then((r) => { if (!off) setCoPeople(r); }).catch(() => {});
+    peopleOf(companyId).then((r) => { if (!off) setCoPeople(r); }).catch(() => {});
     return () => { off = true; };
   }, [lean, companyId]);
-  const pool = lean ? [...coPeople, ...pickedPeople] : contacts;
+  // lean: something to pick from before typing — the newest companies and contacts.
+  const [startCos, setStartCos] = useState<{ id: string; name: string }[]>([]);
+  const [startPeople, setStartPeople] = useState<Contact[]>([]);
+  useEffect(() => {
+    if (!lean) return;
+    let off = false;
+    startCompanies().then((r) => { if (!off) setStartCos(r); }).catch(() => {});
+    startContacts().then((r) => { if (!off) setStartPeople(r); }).catch(() => {});
+    return () => { off = true; };
+  }, [lean]);
+  const pool = lean ? [...coPeople, ...pickedPeople, ...startPeople] : contacts;
   const contactName = (id: string) => {
     const c = pool.find((x) => x.id === id) ?? contacts.find((x) => x.id === id);
     return c ? [c.first_name, c.last_name].filter(Boolean).join(" ") : "-";
   };
-  const availableContacts = (lean ? coPeople : contacts).filter((c) => !contactIds.includes(c.id!));
+  const availableContacts = (lean
+    ? [...coPeople, ...startPeople.filter((c) => !coPeople.some((x) => x.id === c.id))]
+    : contacts).filter((c) => !contactIds.includes(c.id!));
   // With a company picked, its own contacts come first (highlighted), then everyone else.
   const company = companies.find((c) => c.id === companyId) ?? (pickedCo?.id === companyId ? pickedCo : null);
   const findCompanies = useMemo(() => (lean
-    ? (q: string) => globalSearch(q, ["company"], 30).then((r) => (r ?? []).map((h) => ({ value: h.id, label: h.label, hint: h.sub ?? undefined })))
+    ? (q: string) => globalSearch(q, ["company"], 30).then((r) => (r ?? []).map((h) => ({ value: h.id, label: h.label, hint: h.sub ?? undefined, group: "All companies" })))
     : undefined), [lean]);
   const findContacts = useMemo(() => (lean
     ? (q: string) => searchContacts(q, 30).then((r) => {
       setPickedPeople((cur) => [...cur, ...r.filter((c) => !cur.some((x) => x.id === c.id))]);
-      return r.filter((c) => !contactIds.includes(c.id!)).map((c) => ({ value: c.id!, label: [c.first_name, c.last_name].filter(Boolean).join(" ") || c.email || "Contact", hint: c.position || c.email || undefined, group: company ? "Other contacts" : undefined }));
+      return r.filter((c) => !contactIds.includes(c.id!)).map((c) => ({ value: c.id!, label: fullName(c), hint: c.position || c.email || undefined, group: company ? "Other contacts" : undefined }));
     })
     : undefined), [lean, contactIds, company]);
   const contactOptions = useMemo(() => {
-    const full = (c: Contact) => [c.first_name, c.last_name].filter(Boolean).join(" ");
     const opt = (c: Contact, pref: boolean) => ({
-      value: c.id!, label: full(c), pref,
+      value: c.id!, label: fullName(c), pref,
       group: company ? (pref ? `From ${company.name}` : "Other contacts") : undefined,
-      hint: pref ? c.position || undefined : undefined,
+      hint: pref ? c.position || undefined : lean ? c.position || c.email || undefined : undefined,
     });
     if (!company) return availableContacts.map((c) => opt(c, false));
-    const own = availableContacts.filter((c) => (c.companyIds ?? []).includes(company.id!));
-    const rest = availableContacts.filter((c) => !(c.companyIds ?? []).includes(company.id!));
+    // the company's own people: what was read for it (lean), or its links
+    const isOwn = (c: Contact) => (c.companyIds ?? []).includes(company.id!) || (lean && coPeople.some((x) => x.id === c.id));
+    const own = availableContacts.filter(isOwn);
+    const rest = availableContacts.filter((c) => !isOwn(c));
     return [...own.map((c) => opt(c, true)), ...rest.map((c) => opt(c, false))];
-  }, [contacts, contactIds, company]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [contacts, contactIds, company, coPeople, startPeople, lean]); // eslint-disable-line react-hooks/exhaustive-deps
   const ownCount = contactOptions.filter((o) => o.pref).length;
   const productName = (id: string) => products.find((p) => p.id === id)?.name ?? "-";
   const availableProducts = products.filter((p) => !productIds.includes(p.id!));
@@ -303,7 +341,9 @@ export default function NewTracking({ companies, contacts, pipelines, products, 
               <label>Company</label>
               <Combo value={companyId} onChange={(v, o) => { setCompanyId(v); if (lean && v && o) setPickedCo({ id: v, name: o.label } as Company); }} placeholder="Type to search companies…"
                 emptyText={lean ? "Type a name to search" : "No company matches"} loadOptions={findCompanies}
-                options={[{ value: "", label: "- No company -" }, ...(lean ? (company ? [{ value: company.id!, label: company.name }] : []) : companies.map((c) => ({ value: c.id!, label: c.name })))]} />
+                options={[{ value: "", label: "- No company -" }, ...(lean
+                  ? [...(company ? [{ value: company.id!, label: company.name }] : []), ...startCos.filter((c) => c.id !== company?.id).map((c) => ({ value: c.id, label: c.name, group: "Recently added" }))]
+                  : companies.map((c) => ({ value: c.id!, label: c.name })))]} />
             </div>
             <div className="dw-f" style={{ marginBottom: 12 }}>
               <label htmlFor="nt-deal-name">Deal name <span className="nt-optional">optional</span></label>
@@ -318,7 +358,12 @@ export default function NewTracking({ companies, contacts, pipelines, products, 
               ))}
             </div>
             {(lean || availableContacts.length > 0) && (
-              <Combo value="" clearOnSelect onChange={(v) => v && setContactIds((xs) => [...xs, v])} loadOptions={findContacts}
+              <Combo value="" clearOnSelect onChange={(v, o) => {
+                if (!v) return;
+                setContactIds((xs) => [...xs, v]);
+                // keep the name of someone picked from the list read for this deal
+                if (lean && o && !pool.some((c) => c.id === v)) setPickedPeople((cur) => [...cur, { id: v, first_name: o.label, last_name: "" } as Contact]);
+              }} loadOptions={findContacts}
                 placeholder={company && ownCount ? `Type to search… ${company.name}'s contacts come first` : "Type to search contacts…"} emptyText="No contact matches"
                 options={contactOptions} />
             )}

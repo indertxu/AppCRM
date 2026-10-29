@@ -34,6 +34,8 @@ export interface Company {
   source?: string | null;
   /** What the company is to us: system keys ("sales", "client") plus your own labels ("Partner"…). CRM is implied. */
   relationship?: string[];
+  /** The partner that brought this company (77_partner_tag.sql). */
+  partner_id?: string | null;
   /** Who to send invoices to — free: a name, an email, a phone… */
   billing?: Billing;
   /** The company above this one in its group. */
@@ -288,7 +290,7 @@ export function companyRow(c: Company): { row: Record<string, any>; extra: Recor
     custom: c.custom ?? {},
   };
   // added by the CRM upgrade (crm_upgrade.sql) — only sent when the object carries them
-  const extra = pickNew(c, ["phone_ext", "landline", "landline_ext", "sector", "source", "relationship", "billing", "parent_id", "linkedin"]);
+  const extra = pickNew(c, ["phone_ext", "landline", "landline_ext", "sector", "source", "relationship", "billing", "parent_id", "linkedin", "partner_id"]);
   return { row, extra };
 }
 
@@ -302,6 +304,8 @@ export async function saveCompany(c: Company): Promise<string | null> {
     return { error, id: data?.id as string | undefined };
   };
   let res = await write({ ...row, ...extra });
+  // 77_partner_tag.sql not run yet: everything but "brought by"
+  if (res.error && "partner_id" in extra && /partner_id/i.test(res.error.message)) { const { partner_id: _p, ...rest } = extra; res = await write({ ...row, ...rest }); }
   // the database hasn't been upgraded yet: save what it knows
   if (res.error && Object.keys(extra).length && missingColumn(res.error.message)) res = await write(row);
   if (res.error) return friendlyDbError(res.error.message);
@@ -992,11 +996,23 @@ export function matchSector(raw: unknown, options: string[]): string {
 }
 
 // ---- Your own option lists (sectors, relationship types) ----
-export interface CrmOption { id: string; kind: "sector" | "relationship" | "source" | "product_kind"; label: string; sort: number }
+export interface CrmOption { id: string; kind: "sector" | "relationship" | "source" | "product_kind"; label: string; sort: number;
+  /** A company type that makes its companies partners (77_partner_tag.sql; undefined before it). */
+  is_partner?: boolean }
 export async function listCrmOptions(): Promise<CrmOption[]> {
-  const { data, error } = await supabase.from("crm_options").select("id, kind, label, sort").order("sort").order("label");
+  let { data, error }: { data: any[] | null; error: { message: string } | null } = await supabase.from("crm_options").select("id, kind, label, sort, is_partner").order("sort").order("label");
+  // 77_partner_tag.sql not run yet: read without the partner switch
+  if (error && /is_partner/i.test(error.message)) ({ data, error } = await supabase.from("crm_options").select("id, kind, label, sort").order("sort").order("label"));
   if (error) return [];
-  return (data ?? []) as CrmOption[];
+  const list = (data ?? []) as CrmOption[];
+  rememberPartnerTypes(list);
+  return list;
+}
+/** Switch a company type on / off as a partner type. */
+export async function setPartnerType(opt: CrmOption, on: boolean): Promise<string | null> {
+  const { error } = await supabase.from("crm_options").update({ is_partner: on }).eq("id", opt.id);
+  if (error) return /is_partner/i.test(error.message) ? "Run 77_partner_tag.sql in Supabase to choose the partner types." : error.message;
+  return null;
 }
 export async function addCrmOption(kind: CrmOption["kind"], label: string, sort = 0): Promise<string | null> {
   const { error } = await supabase.from("crm_options").insert({ kind, label: label.trim(), sort });
@@ -1116,10 +1132,27 @@ export const productKindOptions = (opts: CrmOption[]) => {
   return own.length ? own : ["SaaS", "Physical"];
 };
 
-// ---- Partners: companies whose relationship type is "Partner" ----
-export const isPartnerTag = (tag: string) => /partner/i.test(tag);
+// ---- Partners: companies with a type switched on as a partner type (Settings › Companies page) ----
+/** The partner types, lower case; null until known (or before 77_partner_tag.sql): then any type called "…partner…". */
+let partnerTypes: Set<string> | null = null;
+export function rememberPartnerTypes(opts: CrmOption[]) {
+  const rel = opts.filter((o) => o.kind === "relationship");
+  if (!rel.length || rel.some((o) => o.is_partner === undefined)) return;
+  partnerTypes = new Set(rel.filter((o) => o.is_partner).map((o) => o.label.trim().toLowerCase()));
+}
+export const isPartnerTag = (tag: string) => (partnerTypes ? partnerTypes.has(String(tag).trim().toLowerCase()) : /partner/i.test(tag));
 export const isPartner = (c: { relationship?: string[] }) => (c.relationship ?? []).some(isPartnerTag);
 export const partnerCompanies = (companies: Company[]) => companies.filter(isPartner).sort((a, b) => a.name.localeCompare(b.name));
+/** Every partner (id and name), read once per visit; `fresh` reads again (after a type was switched on / off). */
+let partnersCache: Promise<{ id: string; name: string }[]> | null = null;
+export function partnerList(fresh = false): Promise<{ id: string; name: string }[]> {
+  if (fresh || !partnersCache) {
+    partnersCache = Promise.all([listCrmOptions(), readAll<any>("companies", "id, name, relationship", ["name", "id"])])
+      .then(([, cos]) => (cos as Company[]).filter(isPartner).map((c) => ({ id: c.id!, name: c.name })).sort((a, b) => a.name.localeCompare(b.name)))
+      .catch(() => { partnersCache = null; return []; });
+  }
+  return partnersCache;
+}
 
 /** A partner's cut: a % of the line or a fixed amount. item null = any product / service of that partner. */
 export interface PartnerRate { id: string; partner_id: string; item_type: "product" | "service" | null; item_id: string | null; mode: "percent" | "amount"; value: number }
@@ -1137,12 +1170,21 @@ export async function deletePartnerRate(id: string): Promise<string | null> {
   const { error } = await supabase.from("partner_rates").delete().eq("id", id);
   return error?.message ?? null;
 }
-/** The default cut of a partner on a product / service: its own rate, else the partner's general one, else none. */
-export function partnerDefault(rates: PartnerRate[], partnerId: string, itemType: "product" | "service", itemId: string | null): { mode: "percent" | "amount"; value: number } | null {
-  const own = itemId ? rates.find((r) => r.partner_id === partnerId && r.item_type === itemType && r.item_id === itemId) : undefined;
-  const gen = rates.find((r) => r.partner_id === partnerId && !r.item_type && !r.item_id);
-  const r = own ?? gen;
+/** What a partner always takes (set in its company panel): its general rate. */
+export const partnerRateOf = (rates: PartnerRate[], partnerId: string) => rates.find((r) => r.partner_id === partnerId && !r.item_type && !r.item_id) ?? null;
+/** The default cut of a partner on a deal line: what it always takes, or none. */
+export function partnerDefault(rates: PartnerRate[], partnerId: string, _itemType?: "product" | "service", _itemId?: string | null): { mode: "percent" | "amount"; value: number } | null {
+  const r = partnerRateOf(rates, partnerId);
   return r ? { mode: r.mode, value: r.value } : null;
+}
+/** Set (or clear, with null) what a partner always takes. */
+export async function setPartnerRate(partnerId: string, next: { mode: "percent" | "amount"; value: number } | null): Promise<string | null> {
+  const { data } = await supabase.from("partner_rates").select("id").eq("partner_id", partnerId).is("item_type", null).is("item_id", null).limit(1);
+  const id = (data?.[0] as any)?.id as string | undefined;
+  const e = next && next.value > 0
+    ? await savePartnerRate({ id, partner_id: partnerId, item_type: null, item_id: null, mode: next.mode, value: next.value })
+    : id ? await deletePartnerRate(id) : null;
+  return e && /partner_rates|relation|schema/i.test(e) ? "Run 12_proposals_partners.sql in Supabase to save what partners take." : e;
 }
 /** What the partner takes from a line worth `gross`. */
 export function partnerCut(gross: number, mode: string | null | undefined, value: number | null | undefined): number {

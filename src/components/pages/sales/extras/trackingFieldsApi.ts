@@ -96,12 +96,16 @@ export async function saveTrackingCustom(trackingId: string, custom: Record<stri
 /* ─────────────── helpers shared by the form, the panel, reports and exports ─────────────── */
 
 export const isEmptyValue = (f: Pick<TrackingField, "type">, v: any) =>
-  v == null || v === "" || (f.type === "boolean" && v !== true && v !== false);
+  v == null || v === "" || (Array.isArray(v) && v.length === 0) || (f.type === "boolean" && v !== true && v !== false);
+
+/** The options picked in a dropdown field: several now, one (a plain text) in values saved before. */
+export const selectValues = (v: any): string[] =>
+  Array.isArray(v) ? v.map(String).filter(Boolean) : v == null || v === "" ? [] : [String(v)];
 
 /** Drop empty values so the stored jsonb stays tidy. */
 export function cleanCustom(custom: Record<string, any>): Record<string, any> {
   const out: Record<string, any> = {};
-  Object.entries(custom ?? {}).forEach(([k, v]) => { if (v != null && v !== "") out[k] = v; });
+  Object.entries(custom ?? {}).forEach(([k, v]) => { if (v != null && v !== "" && !(Array.isArray(v) && !v.length)) out[k] = v; });
   return out;
 }
 
@@ -120,5 +124,6 @@ export function displayValue(f: TrackingField, v: any): string {
     return y && m && d ? new Date(y, m - 1, d).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : s;
   }
   if (f.type === "number") { const n = Number(v); return Number.isFinite(n) ? n.toLocaleString("es-ES") : String(v); }
+  if (Array.isArray(v)) return v.join(", ");
   return String(v);
 }

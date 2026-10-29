@@ -4713,3 +4713,10 @@ button.sl-ppl-co:hover { background: #f1f7f4; color: var(--forest); }
   background: #8a4b06; color: #fff; font: 700 12px/1 "Inter", system-ui, sans-serif;
 }
 .so-readnote button:hover { background: #6d3a03; }
+/* Won card hidden (it isn't relevant to the selection): the total keeps its size and place */
+.so-kpis.is-stats.is-one { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* whole-euro totals (millions) stay readable at laptop widths: the side column gives way first */
+@media (max-width: 1680px) and (min-width: 1101px) {
+  .so-kpi.so-stat { grid-template-columns: auto minmax(0, 1fr) minmax(160px, 196px); column-gap: 14px; }
+  .so-stat-money { font-size: clamp(20px, 1.6vw, 24px); }
+}

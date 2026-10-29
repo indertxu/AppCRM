@@ -1519,3 +1519,30 @@ button.co-cc-main { padding: 0; border: 0; background: none; font: inherit; text
 .cfx { --mint: #86efc0; --emerald: #12b57f; --forest: #0a6f4d; --ink: #0b241a; --muted: #5a7d6d; --line: rgba(10, 111, 77, 0.14); }
 .cfx .tfe-ico.is-multiselect { background: #fdeaf3; color: #b03a72; }
 .cfx .cf-add { margin-top: 12px; }
+
+/* ===== Partner types (Settings › Companies page › What a company can be) ===== */
+.cf-opt.is-partner { background: #fde8f2; color: #b02a6c; }
+.cf-opt .cf-opt-partner {
+  width: auto; min-width: 20px; height: 20px; padding: 0 3px; gap: 4px; display: inline-flex; align-items: center; margin-left: -6px; margin-right: 2px;
+  background: transparent; color: color-mix(in srgb, currentColor 55%, transparent); transition: background 0.18s, color 0.18s;
+}
+.cf-opt .cf-opt-partner svg { width: 14px; height: 14px; flex: none; }
+.cf-opt .cf-opt-partner:hover { background: rgba(217, 70, 143, 0.14); color: #b02a6c; }
+.cf-opt .cf-opt-partner.is-on { width: 22px; padding: 0; justify-content: center; background: #d9468f; color: #fff; }
+.cf-opt .cf-opt-partner.is-on:hover { background: #b8306f; color: #fff; }
+.cf-opt .cf-opt-partner em { font-style: normal; font-size: 10.5px; font-weight: 700; letter-spacing: 0.02em; }
+.cf-partner-note { display: flex; align-items: flex-start; gap: 9px; margin: 14px 0 0; padding: 11px 13px; border-radius: 12px; background: #fdf2f8; color: #7a2a52; font-size: 12.5px; line-height: 1.45; }
+.cf-partner-note > svg { flex: none; width: 15px; height: 15px; margin-top: 1px; color: #d9468f; }
+.cf-partner-note b { color: #b02a6c; }
+
+/* ===== A company's partner block (its panel) ===== */
+.dw-partner { display: grid; gap: 12px; margin-top: 16px; padding: 14px; border-radius: 14px; background: #fbf8fa; border: 1px solid rgba(217, 70, 143, 0.12); }
+.dw-partner.is-partner { background: linear-gradient(160deg, #fdf0f7, #fbf8fa 70%); border-color: rgba(217, 70, 143, 0.22); }
+.dw-pt-take { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.dw-pt-badge { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px 0 8px; border-radius: 999px; background: #d9468f; color: #fff; font-size: 11.5px; font-weight: 700; }
+.dw-pt-badge svg { width: 14px; height: 14px; }
+.dw-pt-txt { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.dw-pt-txt b { font-size: 13px; color: var(--dw-ink, #0b241a); }
+.dw-pt-txt small { font-size: 11.5px; color: var(--dw-mute, #5a7d6d); line-height: 1.4; }
+.dw-pt-by { margin: 0; }
+.dw-partner .dw-err { margin: 0; }

@@ -14,7 +14,7 @@ import {
   loadPrefs, savePref, setCompanyParent,
   companyStatus, type RelStatus, REL_SYSTEM, relLabel, relationshipOptions, sectorOptions, sourceOptions, guessSector, DEFAULT_SECTORS,
   listCrmOptions, addCrmOption, removeCrmOption, crmOptionUses, type CrmOption,
-  partnerCompanies, listPartnerRates, savePartnerRate, deletePartnerRate, type PartnerRate,
+  partnerCompanies, partnerList, isPartner, setPartnerType, listPartnerRates, partnerRateOf, setPartnerRate,
   loadHistory, type HistoryEntry, descendantsOf, groupRootOf,
   type Company, type Contact, type Employee, type CompanyField, type ContactField, type Billing,
   renameCustomValue, customList,
@@ -33,7 +33,6 @@ import CompanyImport from "./CompanyImport";
 import { PageLoader } from "../../framework/AppLayout";
 import ContactExport from "../contacts/ContactExport";
 import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
-import { loadProducts, loadServices } from "../settings/catalogApi";
 import "./CompaniesPage.css";
 
 const empty = (): Company => ({
@@ -1028,6 +1027,20 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
     setNewType(null);
   };
 
+  // ---- partners: a company with a partner type is one; any company can say which partner brought it ----
+  const isPartnerCo = isPartner({ relationship: tags });
+  const [partnerOpts, setPartnerOpts] = useState<{ id: string; name: string }[]>([]);
+  const [ptRate, setPtRate] = useState<{ mode: "percent" | "amount"; value: number } | null>(null);
+  const [ptErr, setPtErr] = useState<string | null>(null);
+  useEffect(() => { let off = false; partnerList().then((r) => { if (!off) setPartnerOpts(r); }); return () => { off = true; }; }, [options]);
+  useEffect(() => {
+    if (!c.id || !isPartnerCo) { setPtRate(null); return; }
+    let off = false;
+    listPartnerRates().then((rs) => { if (off) return; const r = partnerRateOf(rs, c.id!); setPtRate(r ? { mode: r.mode, value: r.value } : null); }).catch(() => {});
+    return () => { off = true; };
+  }, [c.id, isPartnerCo]);
+  const broughtBy = partnerOpts.filter((x) => x.id !== c.id);
+
   // ---- billing ----
   const bill = c.billing ?? {};
   const setBill = (patch: Partial<Billing>) => set({ billing: { ...bill, ...patch } });
@@ -1311,6 +1324,30 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
                   )}
                 </div>
               </div>
+              {(isPartnerCo || broughtBy.length > 0 || c.partner_id) && (
+                <div className={`dw-partner ${isPartnerCo ? "is-partner" : ""}`}>
+                  {isPartnerCo && (
+                    <div className="dw-pt-take">
+                      <span className="dw-pt-badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={PARTNER_ICON} /></svg>Partner</span>
+                      <div className="dw-pt-txt">
+                        <b>What they take from each deal line</b>
+                        <small>{c.id ? "Filled in when they are put on a deal line in the calculator — you can still change it there." : "Save the company first, then set what it takes."}</small>
+                      </div>
+                      {c.id && <RateInput rate={ptRate} placeholder="e.g. 10"
+                        onSave={async (r) => { const e = await setPartnerRate(c.id!, r); setPtErr(e); if (!e) setPtRate(r); }} />}
+                    </div>
+                  )}
+                  {(broughtBy.length > 0 || c.partner_id) && (
+                    <div className="dw-f dw-pt-by"><label>Brought by partner</label>
+                      <Select value={c.partner_id ?? ""} placeholder="No partner"
+                        onChange={(v) => set({ partner_id: v || null })}
+                        options={[{ value: "", label: "— No partner" }, ...broughtBy.map((x) => ({ value: x.id, label: x.name })),
+                          ...(c.partner_id && !broughtBy.some((x) => x.id === c.partner_id) ? [{ value: c.partner_id, label: "A company that is no longer a partner" }] : [])]} />
+                    </div>
+                  )}
+                  {ptErr && <p className="dw-err">{ptErr}</p>}
+                </div>
+              )}
               <div className="dw-subh"><DwIcon name="euro" />Billing{billFilled && <span className="dw-pill is-ok">Set</span>}</div>
               <div className="dw-grid">
                 <div className={`dw-f ${mc("billing_name")}`}><label>Name{rq("billing_name")}</label>
@@ -2100,12 +2137,22 @@ function CfFieldEditor({ field, others, isReserved, nouns, onCancel, onSave }: {
 }
 
 /** A list you can add to (sectors, sources, relationship types): the built-in ones, then yours with a remove button. */
-function OptionList({ kind, title, hint, options, builtIn, placeholder, onChanged, bare = false }: {
+function OptionList({ kind, title, hint, options, builtIn, placeholder, onChanged, bare = false, partnerSwitch = false }: {
   kind: CrmOption["kind"]; title?: string; hint?: string; options: CrmOption[]; builtIn: string[]; placeholder: string;
   onChanged: () => Promise<void> | void;
   /** Without its own card and title (inside a settings section). */
   bare?: boolean;
+  /** Each of your types can be switched on as a partner type (company types). */
+  partnerSwitch?: boolean;
 }) {
+  const [partnerBusy, setPartnerBusy] = useState<string | null>(null);
+  const togglePartner = async (o: CrmOption, on: boolean) => {
+    setPartnerBusy(o.id);
+    const e = await setPartnerType(o, on);
+    setPartnerBusy(null);
+    if (e) { setErr(e); return; }
+    setErr(null); await onChanged();
+  };
   const [label, setLabel] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [askDel, setAskDelRaw] = useState<string | null>(null);
@@ -2162,7 +2209,18 @@ function OptionList({ kind, title, hint, options, builtIn, placeholder, onChange
             <button type="button" onClick={() => setEdit(null)} disabled={savingEdit}>cancel</button>
           </span>
         ) : (
-          <span key={o.id} className={`cf-opt ${askDel === o.id ? "is-asking" : ""}`}>{o.label}
+          <span key={o.id} className={`cf-opt ${askDel === o.id ? "is-asking" : ""} ${partnerSwitch && (o.is_partner ?? /partner/i.test(o.label)) ? "is-partner" : ""}`}>
+            {partnerSwitch && askDel !== o.id && (() => {
+              const on = o.is_partner ?? /partner/i.test(o.label);
+              return (
+                <button type="button" className={`cf-opt-partner ${on ? "is-on" : ""}`} aria-pressed={on} disabled={partnerBusy === o.id}
+                  title={on ? `Partner type: companies typed “${o.label}” are partners. Press to stop.` : `Make “${o.label}” a partner type: its companies become partners`}
+                  onClick={() => void togglePartner(o, !on)}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={PARTNER_ICON} /></svg>
+                </button>
+              );
+            })()}
+            {o.label}
             {askDel !== o.id && (
               <button type="button" className="cf-opt-edit" aria-label={`Rename ${o.label}`} title="Rename — every record with it follows"
                 onClick={() => { setAskDel(null); setErr(null); setEdit({ id: o.id, label: o.label }); }}>
@@ -4241,11 +4299,9 @@ export function SettingsShell({ icon, title, sub, tags, sections, onBack }: {
  * fields, the sector / source / type lists — and its data tools (import,
  * export, clean-up). The Companies page only links here.
  */
-// ---- Partners: their default cut, in general and per product / service ----
-interface PartnerItem { type: "product" | "service"; id: string; name: string }
-const rateText = (r: { mode: string; value: number } | null | undefined) =>
-  !r ? "" : r.mode === "amount" ? `€${(Number(r.value) || 0).toLocaleString("en-GB", { maximumFractionDigits: 2 })}` : `${(Number(r.value) || 0).toLocaleString("en-GB", { maximumFractionDigits: 2 })}%`;
-
+// ---- Partners: what a partner always takes (its panel) ----
+/** A handshake: partner types and partners. */
+const PARTNER_ICON = "M11 17l2 2a1 1 0 1 0 3-3M14 14l2.5 2.5a1 1 0 1 0 3-3l-3.88-3.88a3 3 0 0 0-4.24 0l-.88.88a1 1 0 1 1-3-3l2.81-2.81a5.79 5.79 0 0 1 7.06-.87l.47.28a2 2 0 0 0 1.42.25L21 4M21 3l1 11h-2M3 3L2 14l6.5 6.5a1 1 0 1 0 3-3M3 4h8";
 /** A % / € switch and a number; saves when you leave the field or flip the switch. */
 function RateInput({ rate, onSave, placeholder }: {
   rate: { mode: "percent" | "amount"; value: number } | null;
@@ -4279,98 +4335,6 @@ function RateInput({ rate, onSave, placeholder }: {
   );
 }
 
-function PartnerRatesEditor({ partners, rates, items, onChanged }: {
-  partners: Company[]; rates: PartnerRate[]; items: PartnerItem[]; onChanged: () => Promise<void> | void;
-}) {
-  const [open, setOpen] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [askDel, setAskDel] = useState<string | null>(null);
-  const itemName = (r: PartnerRate) => items.find((i) => i.type === r.item_type && i.id === r.item_id)?.name ?? (r.item_type === "product" ? "Removed product" : "Removed service");
-  const saveRate = async (partnerId: string, existing: PartnerRate | undefined, itemType: "product" | "service" | null, itemId: string | null, next: { mode: "percent" | "amount"; value: number } | null) => {
-    setErr(null);
-    const e = next
-      ? await savePartnerRate({ id: existing?.id, partner_id: partnerId, item_type: itemType, item_id: itemId, mode: next.mode, value: next.value })
-      : existing ? await deletePartnerRate(existing.id) : null;
-    if (e) setErr(/partner_rates|relation|schema/i.test(e) ? "Run 12_proposals_partners.sql in Supabase to save partner rates." : e);
-    await onChanged();
-  };
-  if (partners.length === 0) {
-    return <p className="cfe-empty">Mark a company as Partner (relationship type) to set its rates.</p>;
-  }
-  return (
-    <div className="prt">
-      {err && <p className="prt-err">{err}</p>}
-      <ul className="cfe-list">
-        {partners.map((p, i) => {
-          const pid = p.id as string;
-          const mine = rates.filter((r) => r.partner_id === pid);
-          const general = mine.find((r) => !r.item_type && !r.item_id);
-          const overrides = mine.filter((r) => r.item_type && r.item_id).sort((a, b) => itemName(a).localeCompare(itemName(b)));
-          const free = items.filter((it) => !overrides.some((r) => r.item_type === it.type && r.item_id === it.id));
-          const isOpen = open === pid;
-          return (
-            <li key={pid} className={`prt-card ${isOpen ? "is-open" : ""}`} style={{ ["--i" as any]: i }}>
-              <button type="button" className="prt-head" onClick={() => setOpen(isOpen ? null : pid)} aria-expanded={isOpen}>
-                <span className="prt-av">{(p.name || "?").slice(0, 1).toUpperCase()}</span>
-                <span className="cfe-main">
-                  <b>{p.name}</b>
-                  <small>
-                    {general ? `${rateText(general)} on everything` : "No general rate"}
-                    {overrides.length > 0 && ` · ${overrides.length} product${overrides.length === 1 ? "" : "s"} / service${overrides.length === 1 ? "" : "s"} with their own`}
-                  </small>
-                </span>
-                {general && <span className="prt-badge">{rateText(general)}</span>}
-                <svg className="prt-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
-              </button>
-              <div className="prt-fold"><div className="prt-fold-in">
-                <div className="prt-row is-general">
-                  <span className="prt-row-k"><DwIcon name="star" />General</span>
-                  <span className="prt-row-hint">Any product or service sold with this partner</span>
-                  <RateInput rate={general ? { mode: general.mode, value: general.value } : null} placeholder="None"
-                    onSave={(r) => saveRate(pid, general, null, null, r)} />
-                </div>
-                {overrides.map((r) => (
-                  <div key={r.id} className="prt-row">
-                    <span className={`prt-kind is-${r.item_type}`}>{r.item_type === "product" ? "Product" : "Service"}</span>
-                    <span className="prt-row-name">{itemName(r)}</span>
-                    <RateInput rate={{ mode: r.mode, value: r.value }} onSave={(n) => saveRate(pid, r, r.item_type, r.item_id, n)} />
-                    {askDel === r.id ? (
-                      <span className="cfe-ask">Remove?
-                        <button type="button" onClick={() => setAskDel(null)}>No</button>
-                        <button type="button" className="is-yes" onClick={() => { setAskDel(null); void saveRate(pid, r, r.item_type, r.item_id, null); }}>Yes</button>
-                      </span>
-                    ) : (
-                      <button type="button" className="cfe-del" aria-label="Remove" onClick={() => setAskDel(r.id)}>
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
-                      </button>
-                    )}
-                  </div>
-                ))}
-                {free.length > 0 ? (
-                  <div className="prt-add">
-                    <Select value="" placeholder="+ Own rate for a product or service"
-                      options={[
-                        ...free.filter((f) => f.type === "product").map((f) => ({ value: `product:${f.id}`, label: `Product · ${f.name}` })),
-                        ...free.filter((f) => f.type === "service").map((f) => ({ value: `service:${f.id}`, label: `Service · ${f.name}` })),
-                      ]}
-                      onChange={(v) => {
-                        if (!v) return;
-                        const [t, id] = v.split(":") as ["product" | "service", string];
-                        void saveRate(pid, undefined, t, id, general ? { mode: general.mode, value: general.value } : { mode: "percent", value: 0 });
-                      }} />
-                  </div>
-                ) : items.length === 0 ? (
-                  <p className="prt-note">Add products and services in Settings › Products &amp; Services to give them their own rate.</p>
-                ) : null}
-              </div></div>
-            </li>
-          );
-        })}
-      </ul>
-    </div>
-  );
-}
-
 export function CompanySettings({ onBack }: { onBack: () => void }) {
   const secSection = useSecuritySection("companies");
   const [fields, setFields] = useState<CompanyField[]>([]);
@@ -4379,10 +4343,7 @@ export function CompanySettings({ onBack }: { onBack: () => void }) {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [contactFields, setContactFields] = useState<ContactField[]>([]);
   const [tool, setTool] = useState<"import" | "export" | "cleanup" | null>(null);
-  const [rates, setRates] = useState<PartnerRate[]>([]);
-  const [items, setItems] = useState<PartnerItem[]>([]);
-  const reloadRates = async () => setRates(await listPartnerRates().catch(() => []));
-  const reloadOptions = async () => setOptions(await listCrmOptions().catch(() => []));
+  const reloadOptions = async () => { setOptions(await listCrmOptions().catch(() => [])); void partnerList(true); };
   const reloadFields = async () => setFields(await listCompanyFields().catch(() => []));
   const load = async () => {
     const [f, o, co, ct, cf] = await Promise.all([
@@ -4390,15 +4351,10 @@ export function CompanySettings({ onBack }: { onBack: () => void }) {
       listContacts().catch(() => []), listContactFields().catch(() => []),
     ]);
     setFields(f); setOptions(o); setCompanies(co); setContacts(ct); setContactFields(cf);
-    void reloadRates();
-    const [pr, sv] = await Promise.all([loadProducts().catch(() => []), loadServices().catch(() => [])]);
-    setItems([
-      ...pr.filter((x) => x.id).map((x) => ({ type: "product" as const, id: x.id as string, name: x.name || "Untitled product" })),
-      ...sv.filter((x) => x.id).map((x) => ({ type: "service" as const, id: x.id as string, name: x.name || "Untitled service" })),
-    ]);
   };
   useEffect(() => { void load(); }, []);
   const partners = partnerCompanies(companies);
+  const partnerTypes = options.filter((o) => o.kind === "relationship" && (o.is_partner ?? /partner/i.test(o.label)));
   const I = (d: string) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>;
   const n = (kind: CrmOption["kind"]) => options.filter((o) => o.kind === kind).length;
   const used = (get: (c: Company) => string | null | undefined) => new Set(companies.map(get).filter(Boolean)).size;
@@ -4425,11 +4381,16 @@ export function CompanySettings({ onBack }: { onBack: () => void }) {
             title: "Sources", hint: `Where a company came from; imports match what the file says · ${used((c) => c.source)} in use`,
             body: <OptionList bare kind="source" options={options} onChanged={reloadOptions} builtIn={[]} placeholder="Add a source, e.g. Website, Event, Partner" /> },
           { k: "types", label: "Types", icon: "star", tone: "violet", count: REL_SYSTEM.length + n("relationship"),
-            title: "What a company can be", hint: "CRM, In sales and Client switch on by themselves; add your own (Partner, Supplier…) to pick by hand",
-            body: <OptionList bare kind="relationship" options={options} onChanged={reloadOptions} builtIn={REL_SYSTEM.map((r) => r.label)} placeholder="Add a type, e.g. Partner, Supplier" /> },
-          { k: "partners", label: "Partners", icon: "users", tone: "rose", count: partners.length,
-            title: "Partners", hint: "What each partner takes from a deal line, as a % or a fixed amount; you can always change it in the deal",
-            body: <PartnerRatesEditor partners={partners} rates={rates} items={items} onChanged={reloadRates} /> },
+            title: "What a company can be", hint: "CRM, In sales and Client switch on by themselves; add your own (Partner, Supplier…) to pick by hand. Switch one on as a partner type: its companies are your partners.",
+            body: <>
+              <OptionList bare kind="relationship" options={options} onChanged={reloadOptions} builtIn={REL_SYSTEM.map((r) => r.label)} placeholder="Add a type, e.g. Partner, Supplier" partnerSwitch />
+              <p className="cf-partner-note">
+                <DwIcon name="users" />
+                {partnerTypes.length
+                  ? <span><b>{partners.length.toLocaleString("en-GB")} partner{partners.length === 1 ? "" : "s"}</b> — companies typed {partnerTypes.map((o) => `“${o.label}”`).join(" or ")}. They are offered as the partner of a deal line and as “Brought by” on a company; what each one takes is set in its own panel.</span>
+                  : <span>No partner type yet: press the handshake on a type (e.g. Partner) and the companies with it become your partners.</span>}
+              </p>
+            </> },
           { k: "fields", label: "Custom fields", icon: "sliders", tone: "indigo", count: fields.length,
             title: "Custom fields", hint: "Extra fields on every company, in its panel under Additional details",
             body: <CustomFieldsEditor noun="company" fields={fields} onChanged={reloadFields}

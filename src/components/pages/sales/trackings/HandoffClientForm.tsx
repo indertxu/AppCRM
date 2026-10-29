@@ -530,7 +530,7 @@ export interface ContractPanelLine {
   /** "From deal" / "Added" etc. */
   tag?: string;
   /** The catalogue item (for the partner section of the calculator). */
-  partnerItem?: { type: "product" | "service"; id: string | null };
+  partnerItem?: { type: "product" | "service"; id: string | null; broughtBy?: string | null };
   /** The catalogue product's yearly increase (default when the line has none). */
   defaultIncrements?: LineIncrements | null;
 }
