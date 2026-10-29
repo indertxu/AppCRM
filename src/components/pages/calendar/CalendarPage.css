@@ -2691,3 +2691,5 @@
 .olc-src.is-warn { background: #fdf1e1; color: #a5600f; }
 .olc-err { background: #fdf3f2; color: #a33a2c; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
 .olc-link.is-btn { border: 0; background: transparent; font: inherit; font-size: 12.5px; font-weight: 650; cursor: pointer; }
+/* one date of a repeating entry */
+.cal-ov .cal-event-time .cal-event-rep { width: 11px; height: 11px; margin-left: 2px; opacity: 0.75; }

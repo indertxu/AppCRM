@@ -47,7 +47,65 @@ clientId: string;
   meetKind?: string;
   /** The day it happens, when moved from the one the modal opened on. */
   date?: Date;
+  /** Repeats on these weekdays (76_calendar_series.sql); null = just once. */
+  repeat?: RepeatRule | null;
+  /** On an entry of a series: change only this one, or this and the ones after it. */
+  scope?: "one" | "following";
+  summoned?: { id: string; billable: number }[];
+  summonNote?: string;
 }
+
+/** "Every Monday", "every 2 weeks on Tue and Thu", "every weekday"… until a date or with no end. */
+export interface RepeatRule {
+  /** 1 = every week, 2 = every other week. */
+  every: number;
+  /** 0 = Sunday … 6 = Saturday. */
+  weekdays: number[];
+  /** Last day it may happen (YYYY-MM-DD), or null for no end. */
+  until: string | null;
+  /** Leave out holidays and days off. */
+  skipOff: boolean;
+}
+const DOW_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0];
+const isoDay = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const dayOfIso = (s: string) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, (m || 1) - 1, d || 1); };
+export const sameRule = (a?: RepeatRule | null, b?: RepeatRule | null) =>
+  (!a && !b) || (!!a && !!b && a.every === b.every && a.until === b.until && a.skipOff === b.skipOff
+    && [...a.weekdays].sort().join() === [...b.weekdays].sort().join());
+const isWeekdays = (r: RepeatRule) => r.every === 1 && [...r.weekdays].sort().join() === "1,2,3,4,5";
+/** How a rule reads: "Every Monday", "Every 2 weeks on Tue, Thu", "Every weekday". */
+export function repeatLabel(r: RepeatRule): string {
+  const days = WEEK_ORDER.filter((d) => r.weekdays.includes(d));
+  const base = isWeekdays(r) ? "Every weekday"
+    : days.length === 7 && r.every === 1 ? "Every day"
+    : r.every === 1 && days.length === 1 ? `Every ${DOW_LONG[days[0]]}`
+    : `Every ${r.every > 1 ? `${r.every} weeks` : "week"} on ${days.map((d) => DOW_SHORT[d]).join(", ")}`;
+  if (!r.until) return base;
+  const u = dayOfIso(r.until);
+  return `${base} until ${MONTHS_LONG[u.getMonth()].slice(0, 3)} ${u.getDate()}`;
+}
+/**
+ * The days a rule lands on, from the first one (always included) up to `to`.
+ * Weeks count from the Monday of the first day, so "every 2 weeks" keeps its rhythm.
+ */
+export function repeatDates(first: string, r: RepeatRule, to: string, max = 400): string[] {
+  const start = dayOfIso(first);
+  const monday = new Date(start); monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+  const end = r.until && r.until < to ? r.until : to;
+  const out: string[] = [first];
+  const d = new Date(start); d.setDate(d.getDate() + 1);
+  while (out.length < max) {
+    const iso = isoDay(d);
+    if (iso > end) break;
+    const week = Math.floor(Math.round((d.getTime() - monday.getTime()) / 86400000) / 7);
+    if (r.weekdays.includes(d.getDay()) && week % Math.max(1, r.every) === 0) out.push(iso);
+    d.setDate(d.getDate() + 1);
+  }
+  return out;
+}
+/** How far ahead entries are made for a series with no end (more are added as time goes by). */
+export const REPEAT_AHEAD_DAYS = 91;
 
 interface BookingModalProps {
   day: Date;
@@ -56,8 +114,10 @@ interface BookingModalProps {
   entryId?: string | null;
   types: WorkTypeDef[];
   initial: BookingValue;
+  /** The entry being edited belongs to a series: saving and deleting ask how far it goes. */
+  inSeries?: boolean;
   onSave: (v: BookingValue) => void;
-  onDelete?: () => void;
+  onDelete?: (scope?: "one" | "following") => void;
   onClose: () => void;
 }
 
@@ -142,8 +202,13 @@ function TimeField({ hour, minute, onHour, onMinute }: {
 }
 
 export default function BookingModal({
-  day, editing, entryId, types, initial, onSave, onDelete, onClose,
+  day, editing, entryId, types, initial, inSeries, onSave, onDelete, onClose,
 }: BookingModalProps) {
+  /** Repeats (null = once), and the scope question when changing an entry of a series. */
+  const [rep, setRep] = useState<RepeatRule | null>(initial.repeat ?? null);
+  const [scopeAsk, setScopeAsk] = useState(false);
+  const [untilOpen, setUntilOpen] = useState(false);
+  const untilRef = useRef<HTMLButtonElement>(null);
   const [startH, setStartH] = useState(Math.floor(initial.startMin / 60));
   const [startM, setStartM] = useState(initial.startMin % 60);
   const [endH, setEndH] = useState(Math.floor(initial.endMin / 60));
@@ -156,6 +221,37 @@ export default function BookingModal({
   const dayBtnRef = useRef<HTMLButtonElement>(null);
   const isoOf = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   const moved = isoOf(when) !== isoOf(day);
+  // "Every Monday" follows the day: moving the first one to a Tuesday makes it every Tuesday.
+  const prevDow = useRef(when.getDay());
+  useEffect(() => {
+    const was = prevDow.current, now = when.getDay();
+    prevDow.current = now;
+    if (was === now) return;
+    setRep((r) => (r && r.weekdays.length === 1 && r.weekdays[0] === was ? { ...r, weekdays: [now] } : r));
+  }, [when]);
+  /** Picks a repeat: once, every week, every 2 weeks or every weekday. */
+  const repMode = !rep ? "once" : isWeekdays(rep) ? "weekdays" : rep.every === 2 ? "2w" : "1w";
+  const pickRep = (m: string) => setRep((r) => {
+    if (m === "once") return null;
+    const keep = { until: r?.until ?? null, skipOff: r?.skipOff ?? true };
+    const ownDays = r && !isWeekdays(r) ? r.weekdays : [when.getDay()];
+    if (m === "weekdays") return { every: 1, weekdays: [1, 2, 3, 4, 5], ...keep };
+    return { every: m === "2w" ? 2 : 1, weekdays: ownDays, ...keep };
+  });
+  const toggleRepDay = (d: number) => setRep((r) => {
+    if (!r) return r;
+    const has = r.weekdays.includes(d);
+    if (has && r.weekdays.length === 1) return r;
+    return { ...r, weekdays: has ? r.weekdays.filter((x) => x !== d) : [...r.weekdays, d] };
+  });
+  /** What the rule gives, for the line under it: how many dates and until when. */
+  const repCount = (() => {
+    if (!rep) return null;
+    const first = isoOf(when);
+    const ahead = new Date(when); ahead.setDate(ahead.getDate() + REPEAT_AHEAD_DAYS);
+    const list = repeatDates(first, rep, rep.until ?? isoOf(ahead));
+    return { n: list.length, last: list[list.length - 1] };
+  })();
 
 const { session, role } = useAuth();
   const [clients, setClients] = useState<Client[]>([]);
@@ -472,6 +568,7 @@ let error: string | null = null;
   else if (!type) error = "Pick a type of work.";
 else if (isClientWork && !clientId) error = "Pick a client.";
   else if (isClientWork && !projectId) error = "Pick a project.";
+  else if (rep?.until && rep.until < isoOf(when)) error = "The repeat ends before the first day.";
 
   const durLabel = (() => {
     if (endMin <= startMin) return "—";
@@ -504,9 +601,14 @@ else if (isClientWork && !clientId) error = "Pick a client.";
   });
   const incBill = () => setBillable((b) => snap(b + step));
 
-  const save = () => {
+  const ruleChanged = !sameRule(rep, initial.repeat ?? null);
+  /** On an entry of a series, saving first asks how far the change goes. */
+  const askOrSave = () => { if (error) return; if (inSeries) { setConfirmDel(false); setScopeAsk(true); } else save(); };
+  const save = (scope?: "one" | "following") => {
     if (error) return;
     onSave({
+      repeat: rep,
+      scope: inSeries ? (ruleChanged ? "following" : scope ?? "one") : undefined,
 startMin, endMin, type, billable, clientId, projectId,
       phaseId: openPhaseId,
       taskId: taskIds.join(","),
@@ -672,7 +774,7 @@ if (!pickedLine) {
   const stepDone = (id: StepId) => seen.has(id) && id !== wizStep && stepReady(id);
   const stepReady = (id: StepId) =>
     id === "work" ? !!type
-    : id === "when" ? timeOk
+    : id === "when" ? timeOk && !(rep?.until && rep.until < isoOf(when))
     : id === "client" ? !!clientId && !!projectId
     : id === "tasks" ? true
     : id === "people" ? true
@@ -681,7 +783,7 @@ if (!pickedLine) {
   const canReach = (i: number) => editing || steps.slice(0, i).every((s) => stepReady(s.id));
   const blocker =
     cur.id === "work" ? (!type ? "Pick a type of work" : "")
-    : cur.id === "when" ? (!timeOk ? (endMin <= startMin ? "Finish must be after the start" : "Between 5 AM and 9 PM") : "")
+    : cur.id === "when" ? (!timeOk ? (endMin <= startMin ? "Finish must be after the start" : "Between 5 AM and 9 PM") : rep?.until && rep.until < isoOf(when) ? "The repeat ends before the first day" : "")
     : cur.id === "client" ? (!clientId ? "Pick a client" : !projectId ? "Pick a project" : "")
     : "";
   const fmt = (m: number) => `${hourLabel(Math.floor(m / 60)).replace(" ", ":" + String(m % 60).padStart(2, "0") + " ")}`;
@@ -690,12 +792,14 @@ if (!pickedLine) {
   const later = (fn: () => void) => window.setTimeout(fn, 220);
   /** The role the time will be saved on (on a project, always one it was sold with). */
   const curRole = project ? roleFor(project.id) : roleId;
+  /** A new repeating entry books its time on every date. */
+  const repTimes = !editing && rep && repCount ? repCount.n : 1;
   const budget = (() => {
     if (!project) return null;
     const signed = signedDays[`${project.id}|${curRole}`] ?? 0;
     const u = used[`${project.id}|${curRole}`] ?? { done: 0, booked: 0 };
     // The entry being edited is left out of `used`, so its time is added here as on screen.
-    const left = +(signed - u.done - u.booked - billable).toFixed(2);
+    const left = +(signed - u.done - u.booked - billable * repTimes).toFixed(2);
     const pct = (n: number) => (signed > 0 ? Math.min(100, (n / signed) * 100) : 0);
     return { signed, u, left, pct };
   })();
@@ -709,7 +813,7 @@ if (!pickedLine) {
 
   const preview: Record<StepId, string> = {
     work: selectedType?.name ?? "",
-    when: timeOk ? `${fmt(startMin)} – ${fmt(endMin)} · ${durLabel}${howOf ? ` · ${howOf.label}` : ""}` : "",
+    when: timeOk ? `${fmt(startMin)} – ${fmt(endMin)} · ${durLabel}${howOf ? ` · ${howOf.label}` : ""}${rep ? ` · ${repeatLabel(rep)}` : ""}` : "",
     client: client ? [client.name, project ? projectLabel(project) : ""].filter(Boolean).join(" · ") : "",
     tasks: taskIds.length || billable ? [taskIds.length ? `${taskIds.length} task${taskIds.length > 1 ? "s" : ""}` : "", `${billable.toFixed(decimals)}${unitShort}`].filter(Boolean).join(" · ") : "",
     people: [summonedList.length ? `${summonedList.length} colleague${summonedList.length > 1 ? "s" : ""}` : "", contactList.length ? `${contactList.length} from ${client?.name ?? "client"}` : ""].filter(Boolean).join(" · "),
@@ -785,6 +889,56 @@ if (!pickedLine) {
                 <TimeField hour={endH} minute={endM} onHour={setEndH} onMinute={setEndM} />
               </div>
               <div className="bm-range-dur"><span>Duration</span><b key={durLabel} className="bm6-pop">{durLabel}</b></div>
+            </div>
+            <label className="bm6-label">Repeat {rep && repCount && <small>{repCount.n} date{repCount.n > 1 ? "s" : ""}{rep.until ? "" : ` in the next ${Math.round(REPEAT_AHEAD_DAYS / 30)} months · keeps going`}</small>}</label>
+            <div className={`bm-rep ${rep ? "is-on" : ""}`}>
+              <div className="bm-rep-modes" role="radiogroup" aria-label="Repeat">
+                {[
+                  { id: "once", label: "Doesn't repeat" },
+                  { id: "1w", label: "Every week" },
+                  { id: "2w", label: "Every 2 weeks" },
+                  { id: "weekdays", label: "Every weekday" },
+                ].map((m) => (
+                  <button key={m.id} type="button" role="radio" aria-checked={repMode === m.id}
+                    className={`bm-rep-mode ${repMode === m.id ? "is-on" : ""}`} onClick={() => pickRep(m.id)}>
+                    {m.id !== "once" && <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M17 2l4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3" /></svg>}
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+              {rep && (
+                <div className="bm-rep-more">
+                  <div className="bm-rep-days" role="group" aria-label="On these days">
+                    {WEEK_ORDER.map((d) => (
+                      <button key={d} type="button" aria-pressed={rep.weekdays.includes(d)} title={DOW_LONG[d]}
+                        className={`bm-rep-day ${rep.weekdays.includes(d) ? "is-on" : ""} ${d === when.getDay() ? "is-first" : ""}`}
+                        onClick={() => toggleRepDay(d)}>
+                        {DOW_SHORT[d].slice(0, 2)}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="bm-rep-end">
+                    <span className="bm-rep-k">Ends</span>
+                    <div className="bm-rep-seg">
+                      <button type="button" className={!rep.until ? "is-on" : ""} onClick={() => setRep({ ...rep, until: null })}>Never</button>
+                      <button type="button" ref={untilRef} className={rep.until ? "is-on" : ""}
+                        onClick={() => {
+                          if (!rep.until) { const u = new Date(when); u.setMonth(u.getMonth() + 3); setRep({ ...rep, until: isoOf(u) }); }
+                          setUntilOpen(true);
+                        }}>
+                        {rep.until ? (() => { const u = dayOfIso(rep.until); return `${MONTHS_LONG[u.getMonth()].slice(0, 3)} ${u.getDate()}, ${u.getFullYear()}`; })() : "On a date"}
+                      </button>
+                    </div>
+                    <DatePicker hideTrigger open={untilOpen} onOpenChange={setUntilOpen} anchorRef={untilRef}
+                      value={rep.until ?? isoOf(when)}
+                      onChange={(iso) => setRep((r) => (r ? { ...r, until: iso } : r))} />
+                  </div>
+                  <button type="button" role="switch" aria-checked={rep.skipOff}
+                    className={`bm-rep-skip ${rep.skipOff ? "is-on" : ""}`} onClick={() => setRep({ ...rep, skipOff: !rep.skipOff })}>
+                    <i aria-hidden="true" />Skip holidays &amp; days off
+                  </button>
+                </div>
+              )}
             </div>
             <label className="bm6-label">How</label>
             <div className="bm6-hows">
@@ -1062,10 +1216,13 @@ if (!pickedLine) {
               <span>Billable</span>
               <b key={billable}>{isClientWork ? `${billable.toFixed(decimals)} ${unitLabel}` : "Not billed"}</b>
             </div>
+            {isClientWork && repTimes > 1 && billable > 0 && (
+              <div className="bm6-sum-rep">× {repTimes} dates{rep && !rep.until ? ` in ${Math.round(REPEAT_AHEAD_DAYS / 30)} months` : ""} · {(billable * repTimes).toFixed(decimals)}{unitShort} in all</div>
+            )}
             {budget && budget.signed > 0 && (
               <div className="bm6-budget">
                 <div className="bm6-budget-track">
-                  <i className="is-booked" style={{ width: `${budget.pct(budget.u.done + budget.u.booked + billable)}%` }} />
+                  <i className="is-booked" style={{ width: `${budget.pct(budget.u.done + budget.u.booked + billable * repTimes)}%` }} />
                   <i className="is-done" style={{ width: `${budget.pct(budget.u.done)}%` }} />
                 </div>
                 <span className={budget.left < 0 ? "is-over" : ""}>
@@ -1097,24 +1254,37 @@ if (!pickedLine) {
           {/* Always in view on the tasks step, however many phases there are. */}
           {cur.id === "tasks" && <div className="bm6-pinned">{stepper}</div>}
           <footer className="bm6-foot">
-            {editing && onDelete ? (
+            {scopeAsk ? (
+              <div className="bm6-confirm bm6-scope">
+                <span className="bm6-scope-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 2l4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3" /></svg></span>
+                <span>{ruleChanged ? (rep ? "The repeat changed — it applies from this one on." : "Stop repeating after this one?") : "This entry repeats. Save the change for…"}</span>
+                <button type="button" className="bm6-keep" onClick={() => setScopeAsk(false)}>Back</button>
+                {!ruleChanged && <button type="button" className="bm6-keep is-alt" onClick={() => save("one")}>Only this one</button>}
+                <button type="button" className="bm6-go-all" onClick={() => save("following")}>{ruleChanged ? "Save from here" : "This and the ones after"}</button>
+              </div>
+            ) : editing && onDelete ? (
               confirmDel ? (
                 <div className="bm6-confirm">
-                  <span>Delete this entry{entryId ? " (and its Outlook event)" : ""}?</span>
+                  <span>{inSeries ? "Delete just this one, or this and the ones after it?" : `Delete this entry${entryId ? " (and its Outlook event)" : ""}?`}</span>
                   <button type="button" className="bm6-keep" onClick={() => setConfirmDel(false)}>Keep it</button>
-                  <button type="button" className="bm6-kill" onClick={onDelete}>Yes, delete</button>
+                  {inSeries ? (
+                    <>
+                      <button type="button" className="bm6-kill is-soft" onClick={() => onDelete("one")}>Only this one</button>
+                      <button type="button" className="bm6-kill" onClick={() => onDelete("following")}>This and after</button>
+                    </>
+                  ) : <button type="button" className="bm6-kill" onClick={() => onDelete()}>Yes, delete</button>}
                 </div>
               ) : (
                 <button className="bm-delete" onClick={() => setConfirmDel(true)}>Delete</button>
               )
             ) : <span />}
-            {!confirmDel && (
+            {!confirmDel && !scopeAsk && (
               <div className="bm6-foot-r">
                 {blocker && <span className="bm6-hint">{blocker}</span>}
                 {stepIdx > 0 ? <button className="bm-cancel" onClick={back}>Back</button> : <button className="bm-cancel" onClick={onClose}>Cancel</button>}
-                {editing && cur.id !== "notes" && <button className="bm-cancel bm6-save-now" onClick={save} disabled={!!error}>Save</button>}
+                {editing && cur.id !== "notes" && <button className="bm-cancel bm6-save-now" onClick={askOrSave} disabled={!!error}>Save</button>}
                 {cur.id === "notes" ? (
-                  <button className="bm-save" onClick={save} disabled={!!error} title={error ?? undefined}>{editing ? "Save changes" : "Add entry"}</button>
+                  <button className="bm-save" onClick={askOrSave} disabled={!!error} title={error ?? undefined}>{editing ? "Save changes" : rep && repCount && repCount.n > 1 ? `Add ${repCount.n} entries` : "Add entry"}</button>
                 ) : (
                   <button className="bm-save" onClick={next} disabled={!!blocker}>Continue</button>
                 )}

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import BookingModal from "./BookingModal";
+import BookingModal, { repeatDates, repeatLabel, sameRule, REPEAT_AHEAD_DAYS, type RepeatRule, type BookingValue } from "./BookingModal";
 import CalendarSettingsModal, { type WorkTypeDef, type Targets } from "./CalendarSettingsModal";
 import { useAuth } from "../../api/AuthProvider";
 import InvitesTray from "./InvitesTray";
@@ -64,7 +64,50 @@ attendees: string;
   outlookEventId?: string | null;
   /** Logged from this Outlook event (73_outlook_events.sql). */
   outlookSourceId?: string | null;
+  /** One of the dates of a repeating entry (76_calendar_series.sql). */
+  seriesId?: string | null;
+  /** Came from a colleague's invitation. */
+  inviteId?: string | null;
 }
+/** A repeating entry: its rule and what every date of it carries. */
+interface SeriesRow {
+  id: string; user_id: string; every_weeks: number; weekdays: number[]; start_date: string; until_date: string | null;
+  filled_until: string | null; start_min: number; end_min: number; skip_off: boolean; template: Record<string, any>;
+}
+const ruleOfSeries = (s: SeriesRow): RepeatRule => ({ every: Number(s.every_weeks) || 1, weekdays: (s.weekdays ?? []).map(Number), until: s.until_date ? String(s.until_date).slice(0, 10) : null, skipOff: s.skip_off !== false });
+const REP_ICON = "M17 2l4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3";
+const SERIES_SQL = "Repeating entries need 76_calendar_series.sql — run it in Supabase (SQL editor), then try again. The entry was saved once.";
+const addDaysIso = (iso: string, n: number) => { const [y, m, d] = iso.split("-").map(Number); const t = new Date(y, m - 1, d + n); return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`; };
+const todayIsoStr = () => { const t = new Date(); return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`; };
+/** What every date of a series carries, taken from the entry row. */
+const templateOf = (r: Record<string, unknown>) => {
+  const keys = ["start_min", "end_min", "work_type_id", "billable", "client_id", "project_id", "phase_id", "task_ids", "attendees", "notes", "billing_line", "role_id", "kind", "meeting_kind"];
+  return Object.fromEntries(keys.map((k) => [k, r[k] ?? null]));
+};
+/** An entry row as the page keeps it. */
+const toEntry = (r: Record<string, unknown>): Entry => ({
+  id: r.id as string,
+  dateKey: r.date_key as string,
+  startMin: Number(r.start_min) || 0,
+  endMin: Number(r.end_min) || 0,
+  type: (r.work_type_id as string) ?? "",
+  billable: Number(r.billable) || 0,
+  clientId: (r.client_id as string) ?? "",
+  projectId: (r.project_id as string) ?? "",
+  phaseId: (r.phase_id as string) ?? "",
+  taskId: (r.task_ids as string) ?? "",
+  attendees: (r.attendees as string) ?? "",
+  notes: (r.notes as string) ?? "",
+  status: (r.status as string) || "planned",
+  line: (r.billing_line as string) || "consultor",
+  roleId: (r.role_id as string) ?? "",
+  meetKind: (r.meeting_kind as string) ?? "in_person",
+  userId: (r.user_id as string) ?? "",
+  outlookEventId: (r.outlook_event_id as string) ?? null,
+  outlookSourceId: (r.outlook_source_id as string) ?? null,
+  seriesId: (r.series_id as string) ?? null,
+  inviteId: (r.invite_id as string) ?? null,
+} as Entry);
 /** An Outlook event drawn on the week grid next to the entries. */
 interface OlCell { id: string; startMin: number; endMin: number; userId: string; dateKey: string; ol: OutlookEvent }
 const OL_KEY = "cal.outlook";
@@ -411,6 +454,9 @@ function isoFromKey(key: string): string {
 interface ModalState {
   day: Date;
   editingId?: string;
+  /** Editing one date of a repeating entry: its series and rule. */
+  seriesId?: string | null;
+  repeat?: RepeatRule | null;
 startMin: number;
   endMin: number;
 type: string;
@@ -432,6 +478,8 @@ export default function CalendarPage() {
   const [weekStart, setWeekStart] = useState<Date>(() => startOfWeek(new Date()));
   const [dir, setDir] = useState<1 | -1>(1);
   const [entries, setEntries] = useState<Entry[]>([]);
+  /** My repeating entries, by id. */
+  const [series, setSeries] = useState<Record<string, SeriesRow>>({});
 const [modal, setModal] = useState<ModalState | null>(null);
 const [showSettings, setShowSettings] = useState(false);
 const [dragging, setDragging] = useState<{ id: string; grabMin: number } | null>(null);
@@ -716,28 +764,7 @@ useEffect(() => {
         if (!rows || rows.length < 1000) break;
       }
       setFirstLoad(false);
-      setEntries((ce ?? []).map((r: Record<string, unknown>) => ({
-        id: r.id as string,
-        dateKey: r.date_key as string,
-        startMin: Number(r.start_min) || 0,
-        endMin: Number(r.end_min) || 0,
-        type: (r.work_type_id as string) ?? "",
-        billable: Number(r.billable) || 0,
-        clientId: (r.client_id as string) ?? "",
-        projectId: (r.project_id as string) ?? "",
-        phaseId: (r.phase_id as string) ?? "",
-        taskId: (r.task_ids as string) ?? "",
-        attendees: (r.attendees as string) ?? "",
-notes: (r.notes as string) ?? "",
-status: (r.status as string) || "planned",
-        line: (r.billing_line as string) || "consultor",
-        roleId: (r.role_id as string) ?? "",
-        meetKind: (r.meeting_kind as string) ?? "in_person",
-        userId: (r.user_id as string) ?? "",
-        outlookEventId: (r.outlook_event_id as string) ?? null,
-        outlookSourceId: (r.outlook_source_id as string) ?? null,
-        inviteId: (r.invite_id as string) ?? null,
-      })));
+      setEntries((ce ?? []).map((r: Record<string, unknown>) => toEntry(r)));
 
 const { data: ea } = await supabase.from("entry_actuals").select("*");
       setActuals(Object.fromEntries(((ea ?? []) as Record<string, unknown>[]).map((r) => [
@@ -806,6 +833,12 @@ const { data: ea } = await supabase.from("entry_actuals").select("*");
       const { data: vac } = await supabase.from("vacations").select("id, vacation_date").in("user_id", seenIds);
       setVacations(((vac ?? []) as any[]).map((v) => ({ id: v.id, date: v.vacation_date })));
       if (bs) setDefaultCutoffDay(Number(bs.default_cutoff_day) || 0);
+
+      // Repeating entries of mine (76_calendar_series.sql; nothing if it isn't run yet).
+      if (myId) {
+        const { data: srs, error: sErr } = await supabase.from("calendar_series").select("*").eq("user_id", myId);
+        if (!sErr) setSeries(Object.fromEntries(((srs ?? []) as SeriesRow[]).map((r) => [r.id, r])));
+      }
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1003,6 +1036,90 @@ setModal({ day, startMin, endMin, type: workTypes[0]?.id ?? "", billable, client
     setModal({ day, startMin, endMin, type: workTypes[0]?.id ?? "", billable, clientId: "", projectId: "", phaseId: "", taskId: "", attendees: "", notes: ev.subject, line: "", roleId: "",
       meetKind: ev.online ? "teams" : "in_person", outlookSourceId: ev.id });
   };
+  /* ---------- repeating entries ---------- */
+  /** Public holidays and my own days off, for series that skip them. */
+  const offDaysOf = async (uid: string) => {
+    const set = new Set(holidays.map((h) => String(h.date).slice(0, 10)));
+    const { data } = await supabase.from("vacations").select("vacation_date").eq("user_id", uid);
+    ((data ?? []) as any[]).forEach((v) => set.add(String(v.vacation_date).slice(0, 10)));
+    return set;
+  };
+  /** Billable time can't land in a period that is over or already invoiced. */
+  const closedOn = (iso: string, projectId: unknown, billable: unknown) => {
+    if (!projectId || !(Number(billable) > 0)) return false;
+    const period = periodForDate(iso, cutoffs, defaultCutoffDay);
+    return cutoffOf(period, cutoffs, defaultCutoffDay) < todayIsoStr() || lockedBills.has(`${projectId}|${period}`);
+  };
+  /** How far ahead a series with no end is turned into entries: three months past today or the week on screen. */
+  const seriesHorizon = () => {
+    const t = todayIsoStr(), w = isoOf(weekStart);
+    return addDaysIso(w > t ? w : t, REPEAT_AHEAD_DAYS);
+  };
+  /**
+   * Adds the dates of a series as entries (in batches), then — in the background,
+   * one by one — invites the colleagues on it and puts each one in Outlook.
+   */
+  const addSeriesDates = async (s: { id: string; template: Record<string, any>; skipOff: boolean }, uid: string, dates: string[]) => {
+    const off = s.skipOff ? await offDaysOf(uid) : new Set<string>();
+    const t = s.template;
+    const keep = dates.filter((d) => !off.has(d) && !closedOn(d, t.project_id, t.billable));
+    const { summoned, summon_note, ...cols } = t;
+    const rows = keep.map((d) => {
+      const [y, m, dd] = d.split("-").map(Number);
+      return { ...cols, id: crypto.randomUUID(), user_id: uid, date_key: dateKey(new Date(y, m - 1, dd)), entry_date: d, status: "planned", series_id: s.id };
+    });
+    for (let i = 0; i < rows.length; i += 200) {
+      const { error } = await supabase.from("calendar_entries").insert(rows.slice(i, i + 200));
+      if (error) { alert(`Could not add the repeating dates: ${error.message}`); return 0; }
+    }
+    setEntries((list) => [...list, ...rows.map((r) => toEntry(r))]);
+    const who = (summoned ?? []) as { id: string; billable: number }[];
+    void (async () => {
+      for (const r of rows) {
+        if (who.length) await syncInvites(r.id, uid, who, (cols.billing_line as string) || "consultor", summon_note ?? undefined, (cols.role_id as string) || null).catch(() => {});
+        const res = await syncCalendarEntry(r.id).catch(() => null);
+        if (res?.ok && res.eventId) setEntries((list) => list.map((e) => (e.id === r.id ? { ...e, outlookEventId: res.eventId } : e)));
+      }
+    })();
+    return rows.length;
+  };
+  /** Takes these entries out, and their Outlook events after them. */
+  const dropEntries = async (rows: { id: string; outlook_event_id?: string | null }[]) => {
+    if (!rows.length) return;
+    const ids = rows.map((r) => r.id);
+    for (let i = 0; i < ids.length; i += 200) await supabase.from("calendar_entries").delete().in("id", ids.slice(i, i + 200));
+    setEntries((list) => list.filter((e) => !ids.includes(e.id)));
+    void (async () => { for (const r of rows) if (r.outlook_event_id) await deleteEntryFromOutlook(r.outlook_event_id, r.id).catch(() => {}); })();
+  };
+  // Series with no end (or a far one) get their next dates as time goes by, or as you browse ahead.
+  const topping = useRef(false);
+  useEffect(() => {
+    if (!myId || topping.current) return;
+    const horizon = seriesHorizon();
+    const due = Object.values(series).filter((s) => {
+      const limit = s.until_date && String(s.until_date).slice(0, 10) < horizon ? String(s.until_date).slice(0, 10) : horizon;
+      return String(s.filled_until ?? s.start_date).slice(0, 10) < limit;
+    });
+    if (!due.length) return;
+    topping.current = true;
+    (async () => {
+      for (const s of due) {
+        const rule = ruleOfSeries(s);
+        const start = String(s.start_date).slice(0, 10);
+        const from = String(s.filled_until ?? s.start_date).slice(0, 10);
+        const limit = rule.until && rule.until < horizon ? rule.until : horizon;
+        const dates = repeatDates(start, rule, limit, 5000).filter((d) => d > from);
+        // Marked first, so two open tabs don't both add the same dates.
+        const { error } = await supabase.from("calendar_series").update({ filled_until: limit }).eq("id", s.id);
+        if (error) continue;
+        setSeries((m) => ({ ...m, [s.id]: { ...s, filled_until: limit } }));
+        if (dates.length) await addSeriesDates({ id: s.id, template: s.template ?? {}, skipOff: rule.skipOff }, myId, dates);
+      }
+      topping.current = false;
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [series, weekStart.getTime(), myId]);
+
   const openEdit = (day: Date, e: Entry) => {
     if (e.userId !== myId) return;
     // Came from an invitation, so it belongs to whoever sent it.
@@ -1024,33 +1141,23 @@ attendees: e.attendees ?? "",
       line: e.line ?? "consultor",
       roleId: e.roleId ?? "",
       meetKind: e.meetKind ?? "in_person",
+      seriesId: e.seriesId ?? null,
+      repeat: e.seriesId && series[e.seriesId] ? ruleOfSeries(series[e.seriesId]) : null,
     });
   };
-const saveModal = (vIn: {
-    startMin: number;
-    endMin: number;
-    type: string;
-    billable: number;
-clientId: string;
-    projectId: string;
-    phaseId: string;
-    taskId: string;
-attendees: string;
-    notes: string;
-    line: string;
-    roleId: string;
-    meetKind?: string;
-    summoned?: { id: string; billable: number }[];
-    summonNote?: string;
-    /** Set when the entry was moved to another day in the modal. */
-    date?: Date;
-  }) => {
+const saveModal = (vIn: BookingValue) => {
 if (!modal) return;
-    const { date: movedTo, ...v } = vIn;
+    const { date: movedTo, repeat: ruleIn, scope, ...v } = vIn;
     const d = movedTo ?? modal.day;
     const key = dateKey(d);
     const id = modal.editingId ?? crypto.randomUUID();
     const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const rule = ruleIn ?? null;
+    const oldSeries = modal.editingId ? modal.seriesId ?? null : null;
+    const was = entries.find((e) => e.id === id);
+    /** The day the entry was on before this change: "the ones after" count from it. */
+    const origIso = was ? isoFromKey(was.dateKey) : iso;
+    const ruleChanged = !!oldSeries && !sameRule(rule, modal.repeat ?? null);
 
     (async () => {
       const { data: u } = await supabase.auth.getUser();
@@ -1120,6 +1227,22 @@ notes: v.notes || null,
         status: entries.find((e) => e.id === id)?.status ?? "planned",
       };
       if (fromOl) row.outlook_source_id = fromOl;
+
+      // Repeats: a new series starts on this entry (a new entry, an entry that
+      // starts repeating, or a series whose rule changed from this date on).
+      const tpl = { ...templateOf(row), summoned: v.summoned ?? [], summon_note: v.summonNote ?? null };
+      let newSeries: SeriesRow | null = null;
+      if (rule && (!oldSeries || ruleChanged)) {
+        const limit = rule.until ? (rule.until < addDaysIso(iso, 366) ? rule.until : addDaysIso(iso, 366)) : seriesHorizon();
+        const s: SeriesRow = {
+          id: crypto.randomUUID(), user_id: u.user.id, every_weeks: rule.every, weekdays: rule.weekdays, start_date: iso,
+          until_date: rule.until, filled_until: limit, start_min: v.startMin, end_min: v.endMin, skip_off: rule.skipOff, template: tpl,
+        };
+        const { error: se } = await supabase.from("calendar_series").insert(s);
+        if (se) alert(SERIES_SQL);
+        else { newSeries = s; row.series_id = s.id; }
+      }
+
       let { error } = await supabase.from("calendar_entries").upsert(row);
       let linked = !!fromOl;
       if (error && fromOl && /outlook_source_id/i.test(error.message)) {
@@ -1144,12 +1267,50 @@ notes: v.notes || null,
         ).catch(() => {});
       }
 
+      const fields = { ...v, seriesId: (row.series_id as string) ?? (oldSeries || null) };
+      delete (fields as any).summoned; delete (fields as any).summonNote;
       setEntries((list) =>
         modal.editingId
-          ? list.map((e) => (e.id === id ? { ...e, ...v, dateKey: key } : e))
-        : [...list, { id, dateKey: key, ...v, status: "planned", outlookSourceId: fromOl } as Entry]
+          ? list.map((e) => (e.id === id ? { ...e, ...fields, dateKey: key } : e))
+        : [...list, { id, dateKey: key, ...fields, status: "planned", outlookSourceId: fromOl } as Entry]
       );
       setModal(null);
+
+      // An entry of a series, changed for "this and the ones after".
+      if (oldSeries && scope === "following") {
+        const { data: later } = await supabase.from("calendar_entries")
+          .select("id, outlook_event_id").eq("series_id", oldSeries).gt("entry_date", origIso);
+        const rest = ((later ?? []) as { id: string; outlook_event_id: string | null }[]).filter((r) => r.id !== id);
+        if (ruleChanged) {
+          // New rule (or no repeat any more): the old dates after this one go, the old series ends here.
+          await dropEntries(rest);
+          const end = newSeries ? addDaysIso(origIso, -1) : origIso;
+          await supabase.from("calendar_series").update({ until_date: end, filled_until: end }).eq("id", oldSeries);
+          setSeries((m) => (m[oldSeries] ? { ...m, [oldSeries]: { ...m[oldSeries], until_date: end, filled_until: end } } : m));
+        } else if (rest.length) {
+          // Same rule: the dates after this one take the new times and details (their status stays).
+          const { id: _i, user_id: _u, date_key: _k, entry_date: _d, status: _s, ...upd } = row;
+          delete upd.outlook_source_id; delete upd.series_id;
+          const ids = rest.map((r) => r.id);
+          for (let i = 0; i < ids.length; i += 200) await supabase.from("calendar_entries").update(upd).in("id", ids.slice(i, i + 200));
+          await supabase.from("calendar_series").update({ start_min: v.startMin, end_min: v.endMin, template: tpl }).eq("id", oldSeries);
+          setSeries((m) => (m[oldSeries] ? { ...m, [oldSeries]: { ...m[oldSeries], start_min: v.startMin, end_min: v.endMin, template: tpl } } : m));
+          const { seriesId: _sid, ...same } = fields;
+          setEntries((list) => list.map((e) => (ids.includes(e.id) ? { ...e, ...same } : e)));
+          void (async () => {
+            for (const r of rest) {
+              if (v.summoned) await syncInvites(r.id, u.user.id, v.summoned, v.line || "consultor", v.summonNote, v.roleId || null).catch(() => {});
+              await syncCalendarEntry(r.id).catch(() => null);
+            }
+          })();
+        }
+      }
+      // The new series' other dates.
+      if (newSeries) {
+        setSeries((m) => ({ ...m, [newSeries!.id]: newSeries! }));
+        const dates = repeatDates(iso, rule!, newSeries.filled_until!, 400).slice(1);
+        if (dates.length) void addSeriesDates({ id: newSeries.id, template: tpl, skipOff: rule!.skipOff }, u.user.id, dates);
+      }
 
       // Logged from an Outlook event: it's already in Outlook, leave it as it is.
       if (fromOl && linked) return;
@@ -1214,9 +1375,25 @@ const saveActual = async (entryId: string, v: ActualValue) => {
     else void syncCalendarEntry(id);
   };
 
-  const deleteModal = async () => {
+  const deleteModal = async (scope?: "one" | "following") => {
     if (!modal?.editingId) return;
     const entry = entries.find((e) => e.id === modal.editingId) as any;
+    const sid = modal.seriesId ?? null;
+    if (sid && scope === "following" && entry) {
+      // This date and every one after it; the series ends the day before.
+      const from = isoFromKey(entry.dateKey);
+      const { data: later, error: le } = await supabase.from("calendar_entries")
+        .select("id, outlook_event_id").eq("series_id", sid).gte("entry_date", from);
+      if (le) { alert(`Could not delete: ${le.message}`); return; }
+      const rows = ((later ?? []) as { id: string; outlook_event_id: string | null }[]);
+      if (!rows.some((r) => r.id === entry.id)) rows.push({ id: entry.id, outlook_event_id: entry.outlookEventId ?? null });
+      const end = addDaysIso(from, -1);
+      await supabase.from("calendar_series").update({ until_date: end, filled_until: end }).eq("id", sid);
+      setSeries((m) => (m[sid] ? { ...m, [sid]: { ...m[sid], until_date: end, filled_until: end } } : m));
+      setModal(null);
+      await dropEntries(rows);
+      return;
+    }
     const { error } = await supabase.from("calendar_entries").delete().eq("id", modal.editingId);
     if (error) { alert(`Could not delete: ${error.message}`); return; }
     setEntries((list) => list.filter((e) => e.id !== modal.editingId));
@@ -1939,6 +2116,9 @@ onClick={(ev) => { ev.stopPropagation(); if (!opaque(e.userId) && e.merged === 1
                           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={MEET_ICON[e.meetKind ?? ""]} /></svg>
                         )}
                         {fmtTime(e.startMin)} – {fmtTime(e.endMin)}
+                        {e.seriesId && !opaque(e.userId) && e.merged === 1 && (
+                          <svg className="cal-event-rep" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-label="Repeats"><title>{series[e.seriesId] ? `Repeats · ${repeatLabel(ruleOfSeries(series[e.seriesId]))}` : "Repeats"}</title><path d={REP_ICON} /></svg>
+                        )}
                       </span>
                       {!opaque(e.userId) && e.merged === 1 && (e.clientId && wt?.name || e.notes) && (
                         <span className="cal-event-meta">{[e.clientId ? wt?.name : "", e.notes].filter(Boolean).join(" · ")}</span>
@@ -2023,7 +2203,9 @@ attendees: modal.attendees,
             line: modal.line,
             roleId: modal.roleId,
             meetKind: modal.meetKind,
+            repeat: modal.repeat ?? null,
           }}
+          inSeries={!!modal.editingId && !!modal.seriesId}
           onSave={saveModal}
           onDelete={modal.editingId ? deleteModal : undefined}
           onClose={() => setModal(null)}

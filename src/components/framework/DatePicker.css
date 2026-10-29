@@ -22,10 +22,10 @@
 .dp-trigger.is-open { border-color: #12b57f; box-shadow: 0 0 0 3px rgba(18, 181, 127, 0.16); }
 
 /* ===== the popover ===== */
-.dp-layer { position: fixed; inset: 0; z-index: 300; }
+.dp-layer { position: fixed; inset: 0; z-index: 4200; }
 .dp-pop {
   --pine: #072419; --jade: #1fb98a; --mint: #c9f2dd; --ink: #0b241a; --muted: #5a7d6d; --paper: #f3f7f5;
-  position: fixed; z-index: 301; width: 312px; box-sizing: border-box; padding: 0 12px 12px; overflow: hidden;
+  position: fixed; z-index: 4201; width: 312px; box-sizing: border-box; padding: 0 12px 12px; overflow: hidden;
   border-radius: 20px; background: #fff; color: var(--ink); font-family: "Inter", system-ui, sans-serif;
   box-shadow: 0 34px 70px -24px rgba(4, 18, 13, 0.55), 0 0 0 1px rgba(7, 36, 25, 0.06);
   transform-origin: top left; animation: dp-in 0.26s cubic-bezier(0.16, 1, 0.3, 1);
@@ -118,9 +118,9 @@
 .tp-trigger.is-empty { color: #5a7d6d; }
 .tp-trigger svg { width: 17px; height: 17px; color: #12b57f; flex-shrink: 0; }
 
-.tp-layer { position: fixed; inset: 0; z-index: 300; }
+.tp-layer { position: fixed; inset: 0; z-index: 4200; }
 .tp-pop {
-  position: fixed; z-index: 301; width: 248px; box-sizing: border-box; padding: 12px; border-radius: 16px;
+  position: fixed; z-index: 4201; width: 248px; box-sizing: border-box; padding: 12px; border-radius: 16px;
   background: #fff; border: 1px solid rgba(10, 111, 77, 0.1); box-shadow: 0 30px 70px -24px rgba(6, 40, 28, 0.5);
   font-family: inherit; color: #0b241a; animation: tp-in 0.16s ease;
 }
