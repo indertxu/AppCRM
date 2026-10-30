@@ -473,3 +473,8 @@
 .pl-dept-mark { font-size: 11px; line-height: 1; color: #fff; }
 .pl-dept-badge:empty { width: 12px; height: 12px; border-radius: 50%; box-shadow: 0 0 0 2px #fff; }
 .pl-dept-swatch:empty { width: 14px; height: 14px; border-radius: 50%; }
+
+/* the pipeline ended client contracts come back to, as renewal deals */
+.plv-tag.is-renew { background: rgba(116, 88, 198, 0.12); color: #5b43b0; }
+.plv-renew.is-on { border-color: rgba(116, 88, 198, 0.45); background: #f3effc; color: #5b43b0; }
+.plv-renew.is-on:hover { background: #ebe4fb; }

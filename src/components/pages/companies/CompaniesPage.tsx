@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { isPartnerField, usePartnerNames } from "../sales/extras/FieldInput";
 import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useSecuritySection } from "../settings/PageAccessModal";
 import { createPortal } from "react-dom";
@@ -11,10 +12,10 @@ import {
   listCompanyFields, addCompanyField, updateCompanyField, deleteCompanyField,
   listContactFields, saveContact,
   loadRelationshipSets, type RelationshipSets,
-  loadPrefs, savePref, setCompanyParent,
+  loadPrefs, savePref, setCompanyParent, syncCompanyBilling,
   companyStatus, type RelStatus, REL_SYSTEM, relLabel, relationshipOptions, sectorOptions, sourceOptions, guessSector, DEFAULT_SECTORS,
   listCrmOptions, addCrmOption, removeCrmOption, crmOptionUses, type CrmOption,
-  partnerCompanies, partnerList, isPartner, setPartnerType, listPartnerRates, partnerRateOf, setPartnerRate,
+  partnerCompanies, partnerList, setPartnerType,
   loadHistory, type HistoryEntry, descendantsOf, groupRootOf,
   type Company, type Contact, type Employee, type CompanyField, type ContactField, type Billing,
   renameCustomValue, customList,
@@ -26,7 +27,7 @@ import {
 import { supabase } from "../../api/supabase";
 import { logoCandidates } from "../clients/clientsTypes";
 import { searchPlaces, lookupPostal, postalLooksComplete, provinceFromPostal, countryName, matchCountry, normalizeLinkedIn, isLinkedIn, linkedInHandle, type AddressHit,
-  fixedFieldsOf, isFixedRequired, missingFixed, type ReqScope, languageOptions, countryOptions } from "../contacts/contactProfile";
+  fixedFieldsOf, isFixedRequired, missingFixed, type ReqScope, languageOptions, countryList, countryLabel } from "../contacts/contactProfile";
 import "../clients/ClientsPage.css";
 import "../sales/extras/TrackingFields.css";
 import CompanyImport from "./CompanyImport";
@@ -102,6 +103,24 @@ export default function CompaniesPage() {
     if (light) companiesLight(true).then(setLight).catch(() => {});
   };
 
+  /** After a save in the panel: just that row is read again and put back where it is (the list keeps its place). */
+  const refreshRow = (saved: Company, isNew: boolean) => {
+    if (!saved.id) return;
+    if (server) {
+      if (isNew) { srvRefresh(); return; }
+      companiesRows([saved.id]).then((r) => {
+        const row = r[0]; if (!row) return;
+        setSrvRows((rows) => rows.map((x) => (x.id === row.id ? row : x)));
+        setPeopleCache((m) => { const n = new Map(m); n.delete(row.id!); return n; });
+      }).catch(() => {});
+      companiesFacets().then((f) => { if (f) setFacets(f); }).catch(() => {});
+      if (light) companiesLight(true).then(setLight).catch(() => {});
+      return;
+    }
+    setCompanies((cs) => (cs.some((x) => x.id === saved.id) ? cs.map((x) => (x.id === saved.id ? { ...x, ...saved } : x)) : [...cs, saved]));
+    Promise.all([listContacts(), companyContactCounts(), loadCompanyAssignees()])
+      .then(([cts, cnt, asg]) => { setContacts(cts); setCounts(cnt); setAssignees(asg); }).catch(() => {});
+  };
   const reload = async () => {
     void reloadOptions();
     if (server) { srvRefresh(); return; }
@@ -175,7 +194,7 @@ export default function CompaniesPage() {
   const emp = (id?: string | null) => employees.find((e) => e.id === id)?.name ?? "";
   const people = () => employees.map((e) => ({ value: e.id, label: e.name }));
   const valuesOf = (get: (c: Company) => unknown, facet?: "city" | "province" | "country") => () =>
-    [...new Set(server && facet ? (facets?.[facet] ?? []).map((v) => String(v).trim()).filter(Boolean) : companies.map((c) => String(get(c) ?? "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)).map((v) => ({ value: v, label: v }));
+    [...new Set(server && facet ? (facets?.[facet] ?? []).map((v) => String(v).trim()).filter(Boolean) : companies.map((c) => String(get(c) ?? "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)).map((v) => ({ value: v, label: facet === "country" ? countryLabel(v) : v }));
   // built once per load (they were rebuilt on every render, and the people of each row were found by scanning every contact)
   const kids = useMemo(() => { const m = new Map<string, number>(); companies.forEach((c) => { if (c.parent_id) m.set(c.parent_id, (m.get(c.parent_id) ?? 0) + 1); }); return m; }, [companies]);
   const coName = useMemo(() => new Map(companies.map((c) => [c.id as string, c.name])), [companies]);
@@ -423,6 +442,28 @@ export default function CompaniesPage() {
       },
     },
   ];
+  // Merge: exactly two picked → one company (79_merge_records.sql)
+  const [merging, setMerging] = useState<[Company, Company] | null>(null);
+  bulkActions.unshift({
+    key: "merge", label: "Merge", icon: BI("M6 3v6a6 6 0 0 0 6 6h0a6 6 0 0 1 6 6M18 3v6a6 6 0 0 1-6 6M12 15v6"),
+    disabledReason: !lead ? "Only boss and sales managers can merge companies." : bulk.ids.length !== 2 ? "Pick exactly two companies to merge them." : undefined,
+    run: async () => {
+      const rows = await pickCos();
+      if (rows.length !== 2) return "Pick exactly two companies to merge them.";
+      setMerging([structuredClone(rows[0]), structuredClone(rows[1])]);
+      return null;
+    },
+  });
+  const mergeFields: MergeField[] = [
+    { key: "name", label: "Common name" }, { key: "legal_name", label: "Legal name" }, { key: "vat_number", label: "VAT / Tax ID" },
+    { key: "reg_number", label: "Registration nº" }, { key: "website", label: "Website" }, { key: "linkedin", label: "LinkedIn" },
+    { key: "email", label: "Email" }, { key: "phone", label: "Mobile" }, { key: "landline", label: "Telephone" },
+    { key: "street", label: "Street" }, { key: "addr_number", label: "Number" }, { key: "addr_details", label: "Address details" },
+    { key: "postal_code", label: "Postal code" }, { key: "city", label: "City" }, { key: "province", label: "Province" },
+    { key: "country", label: "Country", text: (v) => countryLabel(v) }, { key: "sector", label: "Sector" }, { key: "source", label: "Source" },
+    { key: "billing", label: "Billing" }, { key: "notes", label: "Notes" },
+    ...fields.map((f) => ({ key: `custom.${f.id}`, label: f.label })),
+  ];
   const onSort = (key: string, add: boolean) => setView({ ...view, sort: nextSort(view.sort, key, add) });
   const [filtersOpenTick, setFiltersOpenTick] = useState(0);
   const fieldById = (id: string) => fields.find((f) => f.id === id);
@@ -495,7 +536,7 @@ export default function CompaniesPage() {
     if (key === "vat_number") return <span className="co-lmono">{c.vat_number || "—"}</span>;
     if (key === "address") return <span className="co-laddr">{addrLine(c)}</span>;
     if (key === "city") return <span className="co-laddr">{c.city || "—"}</span>;
-    if (key === "country") return <span className="co-laddr">{c.country || "—"}</span>;
+    if (key === "country") return <span className="co-laddr">{c.country ? countryLabel(c.country) : "—"}</span>;
     if (key === "email") return <span className="co-laddr">{c.email || "—"}</span>;
     if (key === "phone") return <span className="co-lmono">{phoneText(c.phone, c.phone_ext) || "—"}</span>;
     if (key === "landline") return <span className="co-lmono">{phoneText(c.landline, c.landline_ext) || "—"}</span>;
@@ -617,7 +658,6 @@ export default function CompaniesPage() {
         <ActionsMenu items={[
           { key: "new", group: "Create", label: "New company", hint: "Add one company by hand", icon: AM_ICON.plus, primary: true, tone: "green", shortcut: "N", onSelect: () => setEditing(empty()) },
           { key: "fields", group: "Setup", label: "Columns", hint: "What the list shows, and in which order", icon: AM_ICON.fields, tone: "amber", shortcut: "F", onSelect: () => setShowFieldSettings(true) },
-          ...(lead ? [{ key: "settings", group: "Setup", label: "Companies settings", hint: "Custom fields, sectors & sources, import, export and clean-up", icon: GEAR, tone: "violet" as const, shortcut: "S", onSelect: () => navigate("/settings", { state: { settingsView: "companiespage" } }) }] : []),
         ]} />
       </header>
 
@@ -650,6 +690,14 @@ export default function CompaniesPage() {
         </div>
       )}
 
+      {merging && (
+        <MergeModal kind="company" noun="companies" records={merging} fields={mergeFields} nameOf={(c) => c.name}
+          join={(keep, other) => ({ relationship: [...new Set([...(keep.relationship ?? []), ...(other.relationship ?? [])])], parent_id: keep.parent_id ?? (other.parent_id !== keep.id ? other.parent_id : null) ?? null })}
+          save={(m) => saveCompany(m)}
+          onClose={() => setMerging(null)}
+          onDone={() => { setMerging(null); bulk.clear(); void reload(); }} />
+      )}
+
       {editing && (
         <CompanyEditor
           key={editing.id ?? "new"}
@@ -670,7 +718,7 @@ export default function CompaniesPage() {
           canAssign={lead}
           assigned={asgOf(editing)}
           onClose={closePanel}
-          onSaved={async () => { const back = backTo; closePanel(); if (!back) await reload(); }}
+          onSaved={(saved, isNew) => refreshRow(saved, isNew)}
           onDeleted={async () => { const back = backTo; closePanel(); if (!back) await reload(); }}
           onOpenContact={(id) => {
             // this panel comes back when you return from the contact (its button, or the browser's Back)
@@ -833,7 +881,6 @@ function NewContactInline({ fields, onAdd, onCancel }: {
   const ADDR = ["street", "addr_number", "postal_code", "city", "province", "country"];
   const needAddr = ADDR.some(isReq);
   const [langs] = useState(() => [{ value: "", label: "— Not set" }, ...languageOptions()]);
-  const [countries] = useState(() => countryOptions());
 
   const add = () => {
     if (!c.first_name.trim()) { setTried(true); setErr("A first name is required."); return; }
@@ -902,7 +949,7 @@ function NewContactInline({ fields, onAdd, onCancel }: {
         <>
           <div className="dw-subh"><DwIcon name="pin" />Address</div>
           <AddressFields value={c} onChange={(p) => set(p as Partial<Contact>)} countryAs="code" req={(k) => rq(k)} missing={(k) => miss(k)}
-            renderCountry={() => <Select value={c.country ?? ""} onChange={(v) => set({ country: v })} options={countries} placeholder="Choose a country…" />} />
+            renderCountry={() => <CountryPicker value={c.country} as="code" onChange={(v) => set({ country: v })} />} />
         </>
       )}
       {err && <p className="dw-err" style={{ marginTop: 10 }}>{err}</p>}
@@ -922,14 +969,18 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
   /** Your own sectors and relationship types. */
   options: CrmOption[];
   onOptionsChanged: () => Promise<void> | void;
-  onClose: () => void; onSaved: () => void; onDeleted: () => void;
+  /** Saved: the panel stays open on the saved company (the list updates that row). */
+  onClose: () => void; onSaved: (saved: Company, isNew: boolean) => void; onDeleted: () => void;
   /** Open a contact on the Contacts page. */
   onOpenContact: (id: string) => void;
   /** Open another company (from the group). */
   onOpenCompany: (id: string) => void;
 }) {
   const [c, setC] = useState<Company>(() => ({ relationship: [], billing: {}, ...company }));
-  const [initial] = useState(() => JSON.stringify({ relationship: [], billing: {}, ...company }));
+  const [initial, setInitial] = useState(() => JSON.stringify({ relationship: [], billing: {}, ...company }));
+  /** A moment of "Saved" in the footer after a save (the panel stays open). */
+  const [savedAt, setSavedAt] = useState(0);
+  useEffect(() => { if (!savedAt) return; const t = window.setTimeout(() => setSavedAt(0), 2600); return () => window.clearTimeout(t); }, [savedAt]);
   // Contacts linked to this company, edited live in the drawer.
   // Lookups over the whole directory built once per load (not on every keystroke): 15k companies / 25k contacts.
   const coIdx = useMemo(() => companyIndex(companies), [companies]);
@@ -948,7 +999,7 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
   const [pendingRemoveIds, setPendingRemoveIds] = useState<string[]>([]);
   const [who, setWho] = useState<string[]>(assigned);
   // companies directly below this one in the group (saved with the company)
-  const [childInitial] = useState<string[]>(() => (company.id ? [...(coIdx.kidsOf.get(company.id) ?? [])] : []));
+  const [childInitial, setChildInitial] = useState<string[]>(() => (company.id ? [...(coIdx.kidsOf.get(company.id) ?? [])] : []));
   const [children, setChildren] = useState<string[]>(childInitial);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -973,11 +1024,11 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
   const navigate = useNavigate();
   const [deals, setDeals] = useState<DealRef[] | null>(company.id ? null : []);
   useEffect(() => {
-    if (!company.id) return;
+    if (!c.id) return;
     let alive = true;
-    listCompanyDeals(company.id).then((d) => { if (alive) setDeals(d); }).catch(() => { if (alive) setDeals([]); });
+    listCompanyDeals(c.id).then((d) => { if (alive) setDeals(d); }).catch(() => { if (alive) setDeals([]); });
     return () => { alive = false; };
-  }, [company.id]);
+  }, [c.id]);
 
   const setCustom = (fieldId: string, value: any) =>
     setC((x) => ({ ...x, custom: { ...(x.custom ?? {}), [fieldId]: value } }));
@@ -1027,20 +1078,13 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
     setNewType(null);
   };
 
-  // ---- partners: a company with a partner type is one; any company can say which partner brought it ----
-  const isPartnerCo = isPartner({ relationship: tags });
-  const [partnerOpts, setPartnerOpts] = useState<{ id: string; name: string }[]>([]);
-  const [ptRate, setPtRate] = useState<{ mode: "percent" | "amount"; value: number } | null>(null);
-  const [ptErr, setPtErr] = useState<string | null>(null);
-  useEffect(() => { let off = false; partnerList().then((r) => { if (!off) setPartnerOpts(r); }); return () => { off = true; }; }, [options]);
-  useEffect(() => {
-    if (!c.id || !isPartnerCo) { setPtRate(null); return; }
-    let off = false;
-    listPartnerRates().then((rs) => { if (off) return; const r = partnerRateOf(rs, c.id!); setPtRate(r ? { mode: r.mode, value: r.value } : null); }).catch(() => {});
-    return () => { off = true; };
-  }, [c.id, isPartnerCo]);
-  const broughtBy = partnerOpts.filter((x) => x.id !== c.id);
-
+  // a dropdown called "…partner…" lists the partners (companies with a partner type), plus what it already holds
+  const partnerNames = usePartnerNames(fields.some(isPartnerField));
+  const optsOf = (f: CompanyField): string[] => {
+    if (!isPartnerField(f) || !partnerNames) return f.options;
+    const held = ([] as unknown[]).concat(customVal(f.id) ?? []).map(String).filter((v) => v && !partnerNames.includes(v));
+    return [...partnerNames, ...held];
+  };
   // ---- billing ----
   const bill = c.billing ?? {};
   const setBill = (patch: Partial<Billing>) => set({ billing: { ...bill, ...patch } });
@@ -1133,6 +1177,9 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
     const companyId = c.id;
     if (companyId) {
       await setCompanyAssignees(companyId, who).catch(() => {});
+      // billing changed: the clients' products and projects follow
+      const billBefore: Billing = (JSON.parse(initial) as Company).billing ?? {};
+      if (company.id) await syncCompanyBilling(companyId, billBefore, c.billing ?? {}).catch(() => {});
       // the group: companies added below this one, and ones taken out
       for (const id of children.filter((x) => !childInitial.includes(x))) {
         const ge = await setCompanyParent(id, companyId);
@@ -1140,10 +1187,14 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
       }
       for (const id of childInitial.filter((x) => !children.includes(x))) await setCompanyParent(id, null);
       // Newly created contacts: save each, linked to this company.
+      const made: Contact[] = [];
       for (const nc of newContacts) {
-        const err = await saveContact({ ...nc, companyIds: [companyId] });
+        const row = { ...nc, companyIds: [companyId] };
+        const err = await saveContact(row);
         if (err) { setBusy(false); setErr(`Contact "${contactName(nc)}": ${err}`); return; }
+        made.push(row);
       }
+      if (made.length) { setLinked((xs) => [...xs, ...made]); setNewContacts([]); }
       // Existing contacts newly attached here: add just this link (the rest of the contact,
       // and its other companies, are left exactly as they are in the database).
       for (const ct of linked) {
@@ -1163,7 +1214,13 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
       }
     }
     setBusy(false);
-    close(onSaved);
+    // the panel stays open where you were: what was saved is the new starting point
+    const isNew = !company.id;
+    const saved: Company = { ...c };
+    setC(saved); setInitial(JSON.stringify(saved)); setTried(false);
+    setPendingRemoveIds([]); setChildInitial(children); setLinkTouched(true);
+    setSavedAt(Date.now());
+    onSaved(saved, isNew);
   };
   const remove = async () => {
     if (!c.id) return close();
@@ -1227,7 +1284,7 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
               {c.email && <a className="dw-tag" href={`mailto:${c.email}`}><DwIcon name="mail" />{c.email}</a>}
               {c.phone && <a className="dw-tag" href={telHref(c.phone, c.phone_ext)}><DwIcon name="phone" />{phoneText(c.phone, c.phone_ext)}</a>}
               {c.landline && <a className="dw-tag" href={telHref(c.landline, c.landline_ext)}><DwIcon name="phone" />{phoneText(c.landline, c.landline_ext)}</a>}
-              {(c.city || c.country) && <span className="dw-tag"><DwIcon name="pin" />{[c.city, c.country].filter(Boolean).join(", ")}</span>}
+              {(c.city || c.country) && <span className="dw-tag"><DwIcon name="pin" />{[c.city, c.country ? countryLabel(c.country) : ""].filter(Boolean).join(", ")}</span>}
               <button type="button" className="dw-tag" onClick={() => goTo("people")}><DwIcon name="users" />{peopleCount} {peopleCount === 1 ? "contact" : "contacts"}</button>
             </div>
           </div>
@@ -1324,30 +1381,6 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
                   )}
                 </div>
               </div>
-              {(isPartnerCo || broughtBy.length > 0 || c.partner_id) && (
-                <div className={`dw-partner ${isPartnerCo ? "is-partner" : ""}`}>
-                  {isPartnerCo && (
-                    <div className="dw-pt-take">
-                      <span className="dw-pt-badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={PARTNER_ICON} /></svg>Partner</span>
-                      <div className="dw-pt-txt">
-                        <b>What they take from each deal line</b>
-                        <small>{c.id ? "Filled in when they are put on a deal line in the calculator — you can still change it there." : "Save the company first, then set what it takes."}</small>
-                      </div>
-                      {c.id && <RateInput rate={ptRate} placeholder="e.g. 10"
-                        onSave={async (r) => { const e = await setPartnerRate(c.id!, r); setPtErr(e); if (!e) setPtRate(r); }} />}
-                    </div>
-                  )}
-                  {(broughtBy.length > 0 || c.partner_id) && (
-                    <div className="dw-f dw-pt-by"><label>Brought by partner</label>
-                      <Select value={c.partner_id ?? ""} placeholder="No partner"
-                        onChange={(v) => set({ partner_id: v || null })}
-                        options={[{ value: "", label: "— No partner" }, ...broughtBy.map((x) => ({ value: x.id, label: x.name })),
-                          ...(c.partner_id && !broughtBy.some((x) => x.id === c.partner_id) ? [{ value: c.partner_id, label: "A company that is no longer a partner" }] : [])]} />
-                    </div>
-                  )}
-                  {ptErr && <p className="dw-err">{ptErr}</p>}
-                </div>
-              )}
               <div className="dw-subh"><DwIcon name="euro" />Billing{billFilled && <span className="dw-pill is-ok">Set</span>}</div>
               <div className="dw-grid">
                 <div className={`dw-f ${mc("billing_name")}`}><label>Name{rq("billing_name")}</label>
@@ -1400,12 +1433,12 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
                       )}
                       {f.type === "select" && (
                         <Select value={customVal(f.id) ?? ""} onChange={(v) => setCustom(f.id, v)}
-                          placeholder="Select…"
-                          options={[{ value: "", label: "—" }, ...f.options.map((o) => ({ value: o, label: o }))]} />
+                          placeholder="Select…" searchable={isPartnerField(f)}
+                          options={[{ value: "", label: "—" }, ...optsOf(f).map((o) => ({ value: o, label: o }))]} />
                       )}
                       {f.type === "multiselect" && (
-                        <MultiChoice value={customVal(f.id)} options={f.options} onChange={(v) => setCustom(f.id, v)}
-                          onCreate={canAssign ? (_label, next) => updateCompanyField(f.id, { options: next }) : undefined} />
+                        <MultiChoice value={customVal(f.id)} options={optsOf(f)} onChange={(v) => setCustom(f.id, v)}
+                          onCreate={canAssign && !isPartnerField(f) ? (_label, next) => updateCompanyField(f.id, { options: next }) : undefined} />
                       )}
                     </div>
                   ))}
@@ -1414,8 +1447,9 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
             )}
 
             <section className="dw-sec" data-sec="deals" data-tone="blue">
-              <DwSecHead icon="trend" title="Deals" hint="Every opportunity with this company — click one to open it"
-                aside={deals && deals.length ? <span className="dw-pill">{deals.length}</span> : undefined} />
+              <DwSecHead icon="trend" title="Deals" hint="Every opportunity with this company — click one to open it, or start a new one"
+                aside={<span className="dw-sec-acts">{deals && deals.length ? <span className="dw-pill">{deals.length}</span> : null}
+                  {c.id && <NewDealButton onClick={() => leaveFor(() => navigate(newDealUrl({ company: { id: c.id!, name: c.name } })))} />}</span>} />
               {!c.id ? <p className="dw-empty-hint">Save the company first; its deals show here.</p>
                 : <DealRows deals={deals} empty="No deals with this company yet." onOpen={(id) => leaveFor(() => navigate(`/sales?tracking=${id}`))} />}
             </section>
@@ -1523,8 +1557,8 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
 
         <footer className="dw-foot">
           {c.id && <button className="dw-del" onClick={remove}>Delete</button>}
-          <span className={`dw-foot-note ${err ? "is-err" : !c.name.trim() || missingFixed("company", c).length ? "is-warn" : ""}`}>
-            {err ?? (!c.name.trim() ? "Give the company a name to save it."
+          <span className={`dw-foot-note ${err ? "is-err" : savedAt ? "is-ok" : !c.name.trim() || missingFixed("company", c).length ? "is-warn" : ""}`}>
+            {err ?? (savedAt ? "Saved ✓" : !c.name.trim() ? "Give the company a name to save it."
               : missingFixed("company", c).length ? `Still missing: ${missingFixed("company", c).join(", ")}` : "Nothing is saved until you click Save.")}
           </span>
           <div className="dw-foot-right">
@@ -2365,6 +2399,125 @@ export function DealRows({ deals, empty, onOpen, onRemove, onAdd, removeLabel = 
   );
 }
 
+// ============================ Merge two records ============================
+export interface MergeField { key: string; label: string; text?: (v: any) => string; group?: string }
+const mgEmpty = (v: unknown) => v == null || (typeof v === "string" && !v.trim()) || (Array.isArray(v) && v.length === 0)
+  || (typeof v === "object" && !Array.isArray(v) && Object.values(v as object).every(mgEmpty));
+const mgGet = (rec: any, key: string) => (key.startsWith("custom.") ? (rec.custom ?? {})[key.slice(7)] : rec[key]);
+const mgText = (f: MergeField, v: any) => (mgEmpty(v) ? "—" : f.text ? f.text(v) : Array.isArray(v) ? v.join(", ") : typeof v === "boolean" ? (v ? "Yes" : "No") : typeof v === "object" ? Object.values(v).filter((x) => !mgEmpty(x)).join(" · ") : String(v));
+/**
+ * Two contacts or two companies become one: pick the one that stays, then for each field that differs
+ * which value it keeps (its own by default, the other's where it has none). Lists (types, emails,
+ * companies) are joined. Everything that pointed to the other one moves over (79_merge_records.sql)
+ * and the other one is deleted.
+ */
+export function MergeModal<T extends { id?: string | null }>({ kind, noun, records, fields, nameOf, join, save, onClose, onDone }: {
+  kind: "company" | "contact"; /** "companies", "contacts" */ noun: string; records: [T, T]; fields: MergeField[];
+  nameOf: (r: T) => string;
+  /** The lists both have, joined (types, extra emails, companies…). */
+  join?: (keep: T, other: T) => Partial<T>;
+  save: (merged: T) => Promise<string | null>;
+  onClose: () => void; onDone: (kept: T) => void;
+}) {
+  const [keepIx, setKeepIx] = useState<0 | 1>(0);
+  const keep = records[keepIx], other = records[keepIx === 0 ? 1 : 0];
+  /** For each field: the record whose value is kept (0 / 1). */
+  const [pick, setPick] = useState<Record<string, 0 | 1>>({});
+  const differs = fields.filter((f) => JSON.stringify(mgGet(records[0], f.key) ?? null) !== JSON.stringify(mgGet(records[1], f.key) ?? null)
+    && !(mgEmpty(mgGet(records[0], f.key)) && mgEmpty(mgGet(records[1], f.key))));
+  const same = fields.length - differs.length;
+  const chosen = (f: MergeField): 0 | 1 => {
+    if (pick[f.key] !== undefined) return pick[f.key];
+    return mgEmpty(mgGet(keep, f.key)) ? (keepIx === 0 ? 1 : 0) : keepIx;
+  };
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, onClose]);
+  const run = async () => {
+    setBusy(true); setErr(null);
+    const merged: any = structuredClone(keep);
+    differs.forEach((f) => {
+      const v = mgGet(records[chosen(f)], f.key);
+      if (f.key.startsWith("custom.")) merged.custom = { ...(merged.custom ?? {}), [f.key.slice(7)]: v };
+      else merged[f.key] = v;
+    });
+    Object.assign(merged, join?.(merged, other) ?? {});
+    const e = await save(merged);
+    if (e) { setBusy(false); setErr(e); return; }
+    const { error } = await supabase.rpc("merge_records", { p_kind: kind, p_keep: keep.id, p_drop: other.id });
+    setBusy(false);
+    if (error) {
+      setErr(/merge_records/i.test(error.message) && /function|schema cache/i.test(error.message)
+        ? "Run 79_merge_records.sql in Supabase to merge records." : error.message);
+      return;
+    }
+    onDone(merged);
+  };
+  return createPortal(
+    <div className="mrg-backdrop" onMouseDown={() => !busy && onClose()}>
+      <div className="mrg" role="dialog" aria-modal="true" aria-label={`Merge two ${noun}`} onMouseDown={(e) => e.stopPropagation()}>
+        <header className="mrg-head">
+          <span className="mrg-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 3v6a6 6 0 0 0 6 6h0a6 6 0 0 1 6 6M18 3v6a6 6 0 0 1-6 6M12 15v6" /></svg></span>
+          <div className="mrg-head-txt"><h2>Merge two {noun}</h2><p>Pick the one that stays and what it keeps. The other one is deleted.</p></div>
+          <button type="button" className="mrg-x" onClick={onClose} disabled={busy} aria-label="Close">×</button>
+        </header>
+        <div className="mrg-body">
+          <div className="mrg-row is-head">
+            <span className="mrg-label">Keep</span>
+            {records.map((r, i) => (
+              <button type="button" key={r.id ?? i} className={`mrg-rec ${keepIx === i ? "is-keep" : ""}`} onClick={() => { setKeepIx(i as 0 | 1); setPick({}); }} aria-pressed={keepIx === i}>
+                <i aria-hidden="true">{keepIx === i ? "✓" : ""}</i>
+                <span><b>{nameOf(r) || "—"}</b><em>{keepIx === i ? "Stays" : "Merged into the other, then deleted"}</em></span>
+              </button>
+            ))}
+          </div>
+          {differs.length === 0 && <p className="mrg-same">Every field is the same — only the links (deals, people, history…) move over.</p>}
+          {differs.map((f) => {
+            const c = chosen(f);
+            return (
+              <div className="mrg-row" key={f.key}>
+                <span className="mrg-label">{f.label}</span>
+                {records.map((r, i) => {
+                  const v = mgGet(r, f.key);
+                  return (
+                    <button type="button" key={i} className={`mrg-val ${c === i ? "is-on" : ""} ${mgEmpty(v) ? "is-empty" : ""}`} disabled={mgEmpty(v) && c !== i}
+                      onClick={() => setPick((p) => ({ ...p, [f.key]: i as 0 | 1 }))} title={mgText(f, v)}>
+                      <i aria-hidden="true" />{mgText(f, v)}
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })}
+          {same > 0 && differs.length > 0 && <p className="mrg-same">{same} other field{same === 1 ? " is" : "s are"} the same (or empty) in both.</p>}
+        </div>
+        <footer className="mrg-foot">
+          <span className={`mrg-note ${err ? "is-err" : ""}`}>{err ?? `Deals, ${kind === "company" ? "contacts, clients" : "companies"}, notes and history of “${nameOf(other) || "the other"}” move to “${nameOf(keep) || "this one"}”.`}</span>
+          <button type="button" className="dw-cancel" onClick={onClose} disabled={busy}>Cancel</button>
+          <button type="button" className="dw-save" onClick={() => void run()} disabled={busy}>{busy ? "Merging…" : `Merge into ${nameOf(keep) || "this one"}`}</button>
+        </footer>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/** A new deal in Sales with this company and / or this person already picked. */
+export function newDealUrl(p: { company?: { id: string; name: string } | null; contact?: { id: string; name: string } | null }) {
+  const q = new URLSearchParams({ new: "1" });
+  if (p.company) { q.set("company", p.company.id); q.set("coname", p.company.name); }
+  if (p.contact) { q.set("contact", p.contact.id); q.set("ctname", p.contact.name); }
+  return `/sales?${q.toString()}`;
+}
+/** "+ New deal" on a panel's Deals section. */
+export function NewDealButton({ onClick }: { onClick: () => void }) {
+  return <button type="button" className="dl-new" onClick={onClick} title="Start a new deal in Sales with this already picked"><span aria-hidden="true">+</span>New deal</button>;
+}
+
 /** A company's logo from its website (first candidate that loads with a real size), else its initial. */
 export function CompanyLogo({ name, website, className = "" }: { name: string; website?: string | null; className?: string }) {
   const cands = logoCandidates(website);
@@ -2939,6 +3092,22 @@ function AddressGlobe({ value, anchor, open, host }: { value: AddrValue; anchor:
  * you get its province and country. Only empty fields (or ones it filled before)
  * are filled on their own; what you typed is never overwritten.
  */
+/** The one country picker of the app (contacts, companies, clients, projects): full country names, searchable in
+ *  English or Spanish. Saves the ISO code ("ES") or the name ("Spain"), as the record keeps it. */
+export function CountryPicker({ value, onChange, as, placeholder = "Choose a country…", size }: {
+  value: string | null | undefined; onChange: (v: string) => void; as: "code" | "name"; placeholder?: string; size?: "sm" | "md";
+}) {
+  const base = useMemo(() => countryList().map((x) => ({ value: x.code, label: x.en, hint: x.es !== x.en ? x.es : undefined })), []);
+  const raw = String(value ?? "").trim();
+  const code = matchCountry(raw) ?? "";
+  // something typed in by an import that isn't a country still shows (and can be replaced)
+  const opts = [{ value: "", label: "— Not set" }, ...(raw && !code ? [{ value: `raw:${raw}`, label: `${raw} (as imported)` }] : []), ...base];
+  return (
+    <Select value={code || (raw ? `raw:${raw}` : "")} options={opts} searchable placeholder={placeholder} size={size} aria-label="Country"
+      onChange={(v) => { if (v.startsWith("raw:")) return; onChange(!v ? "" : as === "code" ? v : countryName(v)); }} />
+  );
+}
+
 export function AddressFields({ value, onChange, countryAs, req, missing, renderCountry, withDetails, globeHost }: {
   value: AddrValue;
   /** Show the map over this panel instead of beside the editor drawer. */
@@ -3085,7 +3254,7 @@ export function AddressFields({ value, onChange, countryAs, req, missing, render
           <input value={v("province")} onChange={(e) => typed("province", e.target.value)} placeholder="e.g. Madrid" />
         </div>
         <div className={`dw-f ${withDetails ? "dw-col2" : ""} ${renderCountry ? "" : mark("country")} ${miss("country")}`}><label>Country{req?.("country")}</label>
-          {renderCountry ? renderCountry() : <input value={v("country")} onChange={(e) => typed("country", e.target.value)} placeholder="e.g. Spain" />}
+          {renderCountry ? renderCountry() : <CountryPicker value={v("country")} as={countryAs} onChange={(x) => typed("country", x)} />}
         </div>
       </div>
       {(cityChoices.length > 0 || hint) && (
@@ -4302,39 +4471,6 @@ export function SettingsShell({ icon, title, sub, tags, sections, onBack }: {
 // ---- Partners: what a partner always takes (its panel) ----
 /** A handshake: partner types and partners. */
 const PARTNER_ICON = "M11 17l2 2a1 1 0 1 0 3-3M14 14l2.5 2.5a1 1 0 1 0 3-3l-3.88-3.88a3 3 0 0 0-4.24 0l-.88.88a1 1 0 1 1-3-3l2.81-2.81a5.79 5.79 0 0 1 7.06-.87l.47.28a2 2 0 0 0 1.42.25L21 4M21 3l1 11h-2M3 3L2 14l6.5 6.5a1 1 0 1 0 3-3M3 4h8";
-/** A % / € switch and a number; saves when you leave the field or flip the switch. */
-function RateInput({ rate, onSave, placeholder }: {
-  rate: { mode: "percent" | "amount"; value: number } | null;
-  onSave: (r: { mode: "percent" | "amount"; value: number } | null) => Promise<void>;
-  placeholder?: string;
-}) {
-  const [mode, setMode] = useState<"percent" | "amount">(rate?.mode ?? "percent");
-  const [val, setVal] = useState(rate ? String(rate.value) : "");
-  const [busy, setBusy] = useState(false);
-  useEffect(() => { setMode(rate?.mode ?? "percent"); setVal(rate ? String(rate.value) : ""); }, [rate?.mode, rate?.value]);
-  const commit = async (m = mode, v = val) => {
-    const n = v.trim() === "" ? null : Number(v.replace(",", "."));
-    if (n != null && (!isFinite(n) || n < 0)) { setVal(rate ? String(rate.value) : ""); return; }
-    const next = n == null ? null : { mode: m, value: m === "percent" ? Math.min(n, 100) : n };
-    if ((next?.mode ?? null) === (rate?.mode ?? null) && (next?.value ?? null) === (rate?.value ?? null)) return;
-    if (!next && !rate) return;
-    setBusy(true);
-    try { await onSave(next); } finally { setBusy(false); }
-  };
-  return (
-    <span className={`prt-rate ${busy ? "is-busy" : ""}`}>
-      <span className="prt-mode" role="group" aria-label="Percent or fixed amount">
-        <button type="button" className={mode === "percent" ? "is-on" : ""} onClick={() => { setMode("percent"); void commit("percent"); }}>%</button>
-        <button type="button" className={mode === "amount" ? "is-on" : ""} onClick={() => { setMode("amount"); void commit("amount"); }}>€</button>
-        <i style={{ transform: mode === "amount" ? "translateX(100%)" : undefined }} />
-      </span>
-      <input inputMode="decimal" value={val} placeholder={placeholder ?? "—"} onChange={(e) => setVal(e.target.value)}
-        onBlur={() => void commit()} onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
-      <em>{mode === "percent" ? "%" : "€"}</em>
-    </span>
-  );
-}
-
 export function CompanySettings({ onBack }: { onBack: () => void }) {
   const secSection = useSecuritySection("companies");
   const [fields, setFields] = useState<CompanyField[]>([]);
@@ -4387,7 +4523,7 @@ export function CompanySettings({ onBack }: { onBack: () => void }) {
               <p className="cf-partner-note">
                 <DwIcon name="users" />
                 {partnerTypes.length
-                  ? <span><b>{partners.length.toLocaleString("en-GB")} partner{partners.length === 1 ? "" : "s"}</b> — companies typed {partnerTypes.map((o) => `“${o.label}”`).join(" or ")}. They are offered as the partner of a deal line and as “Brought by” on a company; what each one takes is set in its own panel.</span>
+                  ? <span><b>{partners.length.toLocaleString("en-GB")} partner{partners.length === 1 ? "" : "s"}</b> — companies typed {partnerTypes.map((o) => `“${o.label}”`).join(" or ")}. They are the partners offered on a deal line in the calculator, where what each one takes is set.</span>
                   : <span>No partner type yet: press the handshake on a type (e.g. Partner) and the companies with it become your partners.</span>}
               </p>
             </> },

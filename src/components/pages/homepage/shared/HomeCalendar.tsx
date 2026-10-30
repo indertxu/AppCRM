@@ -399,7 +399,8 @@ export default function HomeCalendar({ userId, hoursPerDay }: { userId: string; 
         </div>
       )}
 
-      <div className="hs-agenda">
+      {/* the month view has no "Coming up": only the day you click shows below it */}
+      {(view === "days" || sel) && <div className="hs-agenda">
         <div className="hs-agenda-head">
           <span>{sel ? dayName(sel) : "Coming up"}</span>
           {sel
@@ -433,7 +434,7 @@ export default function HomeCalendar({ userId, hoursPerDay }: { userId: string; 
             ))}
           </div>
         )}
-      </div>
+      </div>}
     </section>
   );
 }

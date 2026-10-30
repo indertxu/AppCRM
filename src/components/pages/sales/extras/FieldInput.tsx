@@ -1,7 +1,23 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import DatePicker from "../../../framework/DatePicker";
 import MultiSelect from "../../../framework/MultiSelect";
+import { useEffect, useState } from "react";
 import { selectValues, type TrackingField } from "./trackingFieldsApi";
+import { partnerList } from "../../companies/companiesApi";
+
+/** A dropdown field called "…partner…" lists the partners (companies with a partner type), not its own options. */
+export const isPartnerField = (f: { label: string; type: string }) => /partner/i.test(f.label) && (f.type === "select" || f.type === "multiselect");
+/** The partners' names, for such a field (read once per visit). */
+export function usePartnerNames(on: boolean): string[] | null {
+  const [names, setNames] = useState<string[] | null>(null);
+  useEffect(() => {
+    if (!on) return;
+    let off = false;
+    partnerList().then((r) => { if (!off) setNames(r.map((x) => x.name)); }).catch(() => {});
+    return () => { off = true; };
+  }, [on]);
+  return on ? names : null;
+}
 
 /**
  * The control for one custom field, by type. Fully controlled: the caller
@@ -15,6 +31,7 @@ export default function FieldInput({ field: f, value, onChange, onBlur, disabled
   onBlur?: () => void;
   disabled?: boolean;
 }) {
+  const partners = usePartnerNames(isPartnerField(f));
   if (f.type === "number") {
     return (
       <input type="number" inputMode="decimal" className="tfi-in" value={value ?? ""} disabled={disabled}
@@ -39,7 +56,8 @@ export default function FieldInput({ field: f, value, onChange, onBlur, disabled
   if (f.type === "select") {
     // A dropdown takes several options at once (a value saved before as one option still reads).
     const picked = selectValues(value);
-    const opts = [...f.options, ...picked.filter((v) => !f.options.includes(v))];
+    const base = partners ?? f.options;
+    const opts = [...base, ...picked.filter((v) => !base.includes(v))];
     return (
       <MultiSelect values={picked} onChange={(vs) => onChange(vs.length ? vs : "")} placeholder="Choose…"
         options={opts.map((o) => ({ value: o, label: o }))} />

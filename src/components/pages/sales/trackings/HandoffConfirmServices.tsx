@@ -56,7 +56,7 @@ export interface HandoffDoc {
   id: string; name: string; mime: string | null; size: number | null; note?: string | null; created_at?: string;
   bucket: string; path: string;
   group: "revenue" | "deal";
-  /** Revenue documents: the line and version they belong to. */
+  /** Service documents: the line and version they belong to. */
   lineLabel?: string; kind?: "product" | "service"; version?: string; active?: boolean;
   /** Filled in the package. */
   dest?: DocDest; destLabel?: string;
@@ -103,20 +103,19 @@ export const destFolder = (d: DocDest): string | null =>
   d === "skip" ? null : SLOT_LABEL[d] ?? (d.startsWith("folder:") ? d.slice(7) : null);
 export const destLabel = (d: DocDest): string =>
   d === "skip" ? "Not sent" : SLOT_LABEL[d] ? `Contracts · ${SLOT_LABEL[d]}` : d.startsWith("folder:") ? `Directory · ${d.slice(7)}` : d;
-/** Sensible first guess: the live version's proposal is the contract; older versions are proposals. */
-export const defaultDest = (d: HandoffDoc): DocDest =>
-  // proposals generated in the deal (their note starts "Proposal · ") go to the Proposals folder
-  d.group === "deal" ? (/^proposal\s*·/i.test(d.note ?? "") ? "proposal" : "folder:Sales documents")
-    : d.active === false ? "proposal"
-    : d.kind === "product" ? "license" : "service";
+/** The client folder that gathers everything a handoff brings from sales. */
+export const HANDOFF_FOLDER = "Handoff";
+/** First guess: everything from sales together in the client's Handoff folder (a contract slot can still be picked). */
+export const defaultDest = (_d: HandoffDoc): DocDest => `folder:${HANDOFF_FOLDER}`;
 
 export const destOptions = (folders: string[]) => {
   const own = folders.filter((f) => !Object.values(SLOT_LABEL).some((s) => s.toLowerCase() === f.toLowerCase()));
   return [
+    { value: `folder:${HANDOFF_FOLDER}`, label: HANDOFF_FOLDER, hint: "Everything from sales together" },
     { value: "license", label: "License contracts", hint: "Contract slot" },
     { value: "service", label: "Service contracts", hint: "Contract slot" },
     { value: "proposal", label: "Proposals", hint: "Contract slot" },
-    ...own.map((f) => ({ value: `folder:${f}`, label: f, hint: "Directory folder" })),
+    ...own.filter((f) => f.toLowerCase() !== HANDOFF_FOLDER.toLowerCase()).map((f) => ({ value: `folder:${f}`, label: f, hint: "Directory folder" })),
     ...(own.some((f) => f.toLowerCase() === "sales documents") ? [] : [{ value: "folder:Sales documents", label: "Sales documents", hint: "New directory folder" }]),
     { value: "skip", label: "Don't send", hint: "Stays in sales" },
   ];
@@ -127,7 +126,7 @@ const BLOCKS: { key: BlockKey; title: string; sub: string; icon: string }[] = [
   { key: "services", title: "Services & contract", sub: "What management builds the project from", icon: "M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94z" },
   { key: "deal", title: "Deal details", sub: "Owner, team, dates and custom fields", icon: "M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" },
   { key: "revenue", title: "Potential revenue", sub: "The calculator lines as sold, with their version", icon: "M4 19V9M10 19V5M16 19v-7M22 19H2" },
-  { key: "revdocs", title: "Revenue documents", sub: "Contract proposals attached to each version", icon: "M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M8 13h8M8 17h5" },
+  { key: "revdocs", title: "Service documents", sub: "Contract proposals attached to each version", icon: "M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M8 13h8M8 17h5" },
   { key: "dealdocs", title: "Deal documents", sub: "Everything else filed on the deal", icon: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" },
   { key: "notes", title: "Notes", sub: "What the team wrote along the way", icon: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" },
   { key: "tasks", title: "Tasks", sub: "Open and finished to-dos on the deal", icon: "M9 6h11M9 12h11M9 18h11M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2" },
@@ -368,7 +367,7 @@ function DocRow({ d, right, out }: { d: HandoffDoc; right: ReactNode; out?: bool
     </div>
   );
 }
-/** Revenue documents grouped by the line they belong to. */
+/** Service documents grouped by the line they belong to. */
 function groupDocs(docs: HandoffDoc[]) {
   const m = new Map<string, HandoffDoc[]>();
   docs.forEach((d) => { const k = d.lineLabel ?? ""; m.set(k, [...(m.get(k) ?? []), d]); });
@@ -489,7 +488,7 @@ export function HandoffInfo({ pkg, fallbackServices = [], title, route, money, o
     { key: "revenue", on: !!p.revenue, count: p.revenue ? String(p.revenue.length) : undefined, body: p.revenue ? <RevenueView lines={p.revenue} money={money} /> : empty("Not included.") },
     { key: "revdocs", on: rev.length > 0, count: rev.length ? String(rev.length) : undefined, body: rev.length ? groupDocs(rev).map(([g, ds]) => (
       <div className="hx2-docgroup" key={g}><span className="hx2-docgroup-t">{g || "Revenue line"}</span>{ds.map((d) => <DocRow key={d.id} d={d} right={docRight(d)} />)}</div>
-    )) : empty("No revenue documents.") },
+    )) : empty("No service documents.") },
     { key: "dealdocs", on: deal.length > 0, count: deal.length ? String(deal.length) : undefined, body: deal.length ? deal.map((d) => <DocRow key={d.id} d={d} right={docRight(d)} />) : empty("No deal documents.") },
     { key: "notes", on: !!p.notes?.length, count: p.notes?.length ? String(p.notes.length) : undefined, body: p.notes?.length ? <NotesView notes={p.notes} /> : empty("No notes included.") },
     { key: "tasks", on: !!p.tasks?.length, count: p.tasks?.length ? String(p.tasks.length) : undefined, body: p.tasks?.length ? <TasksView tasks={p.tasks} /> : empty("No tasks included.") },
@@ -734,7 +733,7 @@ export default function HandoffConfirmServices({ clientName, skipPrompt = false,
           <DatePicker value={signAll} onChange={setSigningAll} placeholder="Required" />
         </span>
       ),
-      body: services.length === 0 && products.length === 0 ? <p className="hx2-empty">No services to hand off on this deal.</p> : (
+      body: services.length === 0 && products.length === 0 ? <p className="hx2-empty">No services sold on this deal. It still goes to management with the client and the contract — the services team sets up the work there.</p> : (
         <>
         {services.length > 0 && <div className="hx-cards">
           {services.map((s) => {
@@ -897,7 +896,7 @@ export default function HandoffConfirmServices({ clientName, skipPrompt = false,
           onClose={onClose}
           action={
             <span className="hx2-send">
-              <button className="hx-btn-primary hx2-sendbtn" disabled={saving || services.length === 0 || unsigned > 0} onClick={() => { if (!unsigned) setAskSend(true); }}
+              <button className="hx-btn-primary hx2-sendbtn" disabled={saving || unsigned > 0} onClick={() => { if (!unsigned) setAskSend(true); }}
                 title={unsigned ? "Set the signing date first" : undefined}>
                 {unsigned > 0 && <i className="hx2-warn" aria-label="Set the signing date first"><Ico d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" w={2.4} /></i>}
                 {saving ? "Sending…" : "Send to management"}
@@ -911,8 +910,9 @@ export default function HandoffConfirmServices({ clientName, skipPrompt = false,
       {askSend && (
         <HxPrompt icon="send" title="Send to management?"
           sub={<>
-            <b>{services.length} service{services.length === 1 ? "" : "s"}</b> for <b>{clientName}</b>, {money(total)}.
-            {" "}Management builds the project from what you send, so check the data before it goes.
+            {services.length
+              ? <><b>{services.length} service{services.length === 1 ? "" : "s"}</b> for <b>{clientName}</b>, {money(total)}.{" "}Management builds the project from what you send, so check the data before it goes.</>
+              : <><b>{clientName}</b> goes to management as a client, with its contract and no services yet. The services team decides there what to set up.</>}
           </>}
           ghost="Back to review" primary="Yes, send it"
           onGhost={() => setAskSend(false)} onClose={() => setAskSend(false)}

@@ -14,7 +14,7 @@ import {
 import InvitesTray from "./InvitesTray";
 import CalendarSettingsModal from "./CalendarSettingsModal";
 import { loadMyInvites, inviteToEntry, busyAt, type InviteCard } from "./invitesApi";
-import { syncCalendarEntry, useOutlookEvents, outlookOnDay, outlookNotLogged, outlookTime, OUTLOOK_EVENTS_SQL, type OutlookEvent } from "../../api/outlookSync";
+import { connectOutlook, syncCalendarEntry, useOutlookEvents, outlookOnDay, outlookNotLogged, outlookTime, OUTLOOK_EVENTS_SQL, type OutlookEvent } from "../../api/outlookSync";
 import HomeTodo from "../homepage/shared/HomeTodo";
 import { JumpPicker, OutlookCard, OutlookStatusCard } from "./CalendarPage";
 import "./CalendarPage.css";
@@ -1130,7 +1130,7 @@ export default function SalesCalendar() {
 
       {olInfo && (
         <OutlookStatusCard anchor={olInfo} connected={ol.connected} error={ol.error}
-          onRetry={() => { setOlInfo(null); ol.reload(); }} onConnect={() => { setOlInfo(null); navigate("/settings"); }}
+          onRetry={() => { setOlInfo(null); ol.reload(); }} onConnect={() => { setOlInfo(null); void connectOutlook(); }}
           onHide={() => { setOlInfo(null); setOlShown(false); }} onClose={() => setOlInfo(null)} />
       )}
       {olPick && (

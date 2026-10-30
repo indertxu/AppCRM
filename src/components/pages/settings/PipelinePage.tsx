@@ -7,7 +7,7 @@ import Select from "../../framework/Select";
 import { useBackToClose } from "../../framework/useBackToClose";
 import { setLeaveGuard, loadDepartments, deptName, deptInfo, DEFAULT_DEPARTMENTS } from "../../framework/pageAccess";
 import {
-  listPipelines, createPipeline, savePipelineOrder, pipelineUsage, deletePipelineSafely,
+  listPipelines, createPipeline, savePipelineOrder, pipelineUsage, deletePipelineSafely, renewalPipelineOf, setRenewalPipeline,
   loadPipeline, loadPhasesByPipeline, syncPipelineToBlueprint,
   listFolders, createFolder, renameFolder, moveFolder, deleteFolder, setPipelineFolder, duplicatePipeline,
   diffDraft, savePipelineDraft,
@@ -96,6 +96,7 @@ const IC = {
   chev: "M9 6l6 6-6 6",
   back: "M15 6l-6 6 6 6",
   check: "M5 12l5 5 9-10",
+  renew: "M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5",
 };
 
 /** A small menu next to the button that opened it: Esc or a click outside closes it, ↑ ↓ move. */
@@ -538,8 +539,19 @@ export default function PipelinePage({ onBack }: Props) {
                     <span><FolderIco />{folderOf(preview) ? tree.path(folderOf(preview)) : "Not in a folder"}</span>
                     <span>{previewPhases.length} {previewPhases.length === 1 ? "phase" : "phases"}</span>
                     {preview.is_sales && <span className="plv-tag">Shown in Sales</span>}
+                    {renewalPipelineOf(pipelines)?.id === preview.id && <span className="plv-tag is-renew">Renewals come here</span>}
                   </div>
                 </div>
+                {(() => {
+                  const on = renewalPipelineOf(pipelines)?.id === preview.id;
+                  return (
+                    <button type="button" className={`plv-btn-ghost plv-renew ${on ? "is-on" : ""}`} disabled={busy}
+                      title={on ? "Ended client contracts come back to Sales in this pipeline, as renewal deals. Press to stop." : "Send ended client contracts here, as renewal deals"}
+                      onClick={async () => { const e = await setRenewalPipeline(on ? null : preview.id); setMsg(e); await refresh(); }}>
+                      <Ico d={on ? IC.check : IC.renew} />{on ? "Renewal pipeline" : "Use for renewals"}
+                    </button>
+                  );
+                })()}
                 <button type="button" className="plv-btn-ghost" onClick={() => newCopy(preview)} disabled={busy}><Ico d={IC.copy} />Duplicate</button>
                 <button type="button" className="plv-btn" onClick={() => setOpenId(preview.id)}><Ico d={IC.edit} />Edit pipeline</button>
               </div>

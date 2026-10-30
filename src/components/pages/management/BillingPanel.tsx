@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useMemo, useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { PageLoader } from "../../framework/AppLayout";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { supabase } from "../../api/supabase";
@@ -7,6 +8,7 @@ import { periodForDate, cutoffOf, type Cutoffs } from "../calendar/billingPeriod
 import DatePicker from "../../framework/DatePicker";
 import Select from "../../framework/Select";
 import { downloadBlob, sheetToXlsx, type XCell, type XStyle } from "../../framework/exportFile";
+import { countryLabel } from "../contacts/contactProfile";
 import BillingAdjustModal, { type SavePayload } from "./BillingAdjustModal";
 import { lineRate, roleNameOf, roleColor, roleCounts, type ClientRole, type RoleLine } from "../clients/clientsTypes";
 import { ClientLogo } from "../clients/ClientWorkspace";
@@ -179,6 +181,8 @@ interface Invoice {
   net: number; amount: number; days: number;
   sentDate: string; dueDate: string; paidDate: string;
   status: string;
+  /** The number it went out with, and its date (83_invoice_numbers.sql). */
+  number?: string; issueDate?: string;
 }
 interface Bill {
   key: string;
@@ -199,6 +203,353 @@ interface Bill {
   taxRate: number;
   lines: Lines;
   rows: { id: string; date: string; userId: string; days: number; line: Line; status: string; moved?: boolean }[];
+}
+
+/* =====================================================================
+   Invoices: a PDF for the client, built from a bill (or a sent invoice).
+   What we put on it (our legal details, IBAN, the model invoice) lives with
+   the company's document branding (proposal template › brand.invoice).
+   ===================================================================== */
+interface InvoiceSetup {
+  issuer: string; vat: string; address: string; email: string; phone: string;
+  iban: string; bank: string; payment: string; footer: string;
+  lang: "es" | "en"; color: string; logo?: string;
+  /** The model invoice uploaded here (its name, a picture of page 1, and its text). */
+  modelName?: string; modelThumb?: string;
+}
+interface InvoiceDoc {
+  number: string; issueDate: string; dueDate: string;
+  client: { name: string; vat: string; address: string; email: string };
+  lines: { desc: string; qty: number; unit: string; price: number; amount: number }[];
+  vatPct: number; notes: string;
+}
+const INV_EMPTY: InvoiceSetup = { issuer: "", vat: "", address: "", email: "", phone: "", iban: "", bank: "", payment: "", footer: "", lang: "es", color: "0b3a2b" };
+const INV_T = {
+  es: { title: "FACTURA", no: "Nº factura", date: "Fecha", due: "Vencimiento", to: "Facturar a", vat: "CIF/NIF", desc: "Concepto", qty: "Cantidad", price: "Precio", amount: "Importe", sub: "Base imponible", tax: "IVA", total: "Total", pay: "Forma de pago", iban: "IBAN", bank: "Banco", days: "días", hours: "horas", day: "día", hour: "hora" },
+  en: { title: "INVOICE", no: "Invoice no.", date: "Date", due: "Due date", to: "Bill to", vat: "VAT no.", desc: "Description", qty: "Qty", price: "Unit price", amount: "Amount", sub: "Subtotal", tax: "VAT", total: "Total", pay: "Payment", iban: "IBAN", bank: "Bank", days: "days", hours: "hours", day: "day", hour: "hour" },
+};
+const invMoney = (n: number, lang: "es" | "en") => `${n.toLocaleString(lang === "es" ? "es-ES" : "en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €`;
+const invDate = (iso: string, lang: "es" | "en") => {
+  const d = new Date(`${iso}T00:00:00`);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString(lang === "es" ? "es-ES" : "en-GB", { day: "2-digit", month: "2-digit", year: "numeric" });
+};
+const invUnit = (l: { qty: number; unit: string }, T: (typeof INV_T)["es"]) => (l.unit === "h" ? (l.qty === 1 ? T.hour : T.hours) : (l.qty === 1 ? T.day : T.days));
+const invTotals = (d: InvoiceDoc) => {
+  const net = d.lines.reduce((s, l) => s + l.amount, 0);
+  const vat = net * (d.vatPct / 100);
+  return { net, vat, total: net + vat };
+};
+/** The next number after the highest one already used ("2026-0041" → "2026-0042"); the person can change it. */
+function nextInvoiceNumber(used: string[]): string {
+  let best: { pre: string; n: number; w: number; post: string } | null = null;
+  used.forEach((u) => {
+    const m = /^(.*?)(\d+)(\D*)$/.exec(u.trim());
+    if (m && (!best || Number(m[2]) > best.n)) best = { pre: m[1], n: Number(m[2]), w: m[2].length, post: m[3] };
+  });
+  const b = best as { pre: string; n: number; w: number; post: string } | null;
+  return b ? `${b.pre}${String(b.n + 1).padStart(b.w, "0")}${b.post}` : `${new Date().getFullYear()}-0001`;
+}
+/** Our company's details for invoices: what was set here, else the proposal branding. */
+async function loadInvoiceSetup(): Promise<{ setup: InvoiceSetup; rowId: string | null; brand: any }> {
+  const { data } = await supabase.from("proposal_templates").select("id, brand").eq("is_default", true).limit(1).maybeSingle();
+  const brand = (data as any)?.brand ?? {};
+  const own = brand.invoice ?? {};
+  const setup: InvoiceSetup = {
+    ...INV_EMPTY,
+    issuer: brand.legalName || brand.company || "", vat: brand.vat ?? "", address: brand.address ?? "",
+    email: brand.contact?.email ?? "", phone: brand.contact?.phone ?? "",
+    color: String(brand.colors?.primary ?? INV_EMPTY.color).replace(/^#/, ""),
+    logo: brand.assets?.logoLight || brand.assets?.logoDark || undefined,
+    ...own,
+  };
+  return { setup, rowId: (data as any)?.id ?? null, brand };
+}
+async function saveInvoiceSetup(rowId: string | null, brand: any, setup: InvoiceSetup): Promise<string | null> {
+  const { logo: _logo, ...keep } = setup;
+  const next = { ...brand, invoice: keep };
+  const r = rowId
+    ? await supabase.from("proposal_templates").update({ brand: next, updated_at: new Date().toISOString() }).eq("id", rowId)
+    : await supabase.from("proposal_templates").insert({ brand: next, is_default: true, name: "Default" });
+  return r.error?.message ?? null;
+}
+/** A model invoice (PDF): a picture of its first page, and the details we can read off it (CIF, IBAN, e-mail). */
+async function readModelInvoice(file: File): Promise<{ thumb: string; text: string }> {
+  const pdfjs: any = await import("pdfjs-dist");
+  if (!pdfjs.GlobalWorkerOptions.workerSrc) {
+    const w: any = await import("pdfjs-dist/build/pdf.worker.min.mjs?url");
+    pdfjs.GlobalWorkerOptions.workerSrc = w.default ?? w;
+  }
+  const doc = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()), isEvalSupported: false, useSystemFonts: true }).promise;
+  const page = await doc.getPage(1);
+  const vp = page.getViewport({ scale: 1.1 });
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(vp.width); canvas.height = Math.round(vp.height);
+  await page.render({ canvasContext: canvas.getContext("2d")!, viewport: vp }).promise;
+  const tc = await page.getTextContent();
+  const text = (tc.items as any[]).map((i) => i.str).join(" ");
+  try { await doc.destroy(); } catch { /* ignore */ }
+  return { thumb: canvas.toDataURL("image/jpeg", 0.72), text };
+}
+/** The invoice as a PDF (A4). */
+async function buildInvoicePdf(d: InvoiceDoc, s: InvoiceSetup): Promise<Blob> {
+  const { jsPDF } = await import("jspdf");
+  const pdf = new jsPDF({ unit: "mm", format: "a4" });
+  const T = INV_T[s.lang];
+  const hex = /^[0-9a-f]{6}$/i.test(s.color) ? s.color : INV_EMPTY.color;
+  const C = [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)] as const;
+  const W = 210, M = 18;
+  const ink = () => pdf.setTextColor(20, 30, 26);
+  const mute = () => pdf.setTextColor(110, 122, 117);
+  // header band
+  pdf.setFillColor(C[0], C[1], C[2]); pdf.rect(0, 0, W, 4, "F");
+  let y = 18;
+  if (s.logo) {
+    try {
+      const img = await new Promise<HTMLImageElement>((ok, ko) => { const i = new Image(); i.onload = () => ok(i); i.onerror = ko; i.src = s.logo!; });
+      const h = 14, w = Math.min(60, (img.width / Math.max(1, img.height)) * h);
+      pdf.addImage(s.logo, M, y - 6, w, h);
+    } catch { /* no logo */ }
+  } else { pdf.setFont("helvetica", "bold"); pdf.setFontSize(15); ink(); pdf.text(s.issuer || "—", M, y + 2); }
+  pdf.setFont("helvetica", "bold"); pdf.setFontSize(22); pdf.setTextColor(C[0], C[1], C[2]);
+  pdf.text(T.title, W - M, y + 2, { align: "right" });
+  pdf.setFontSize(9); pdf.setFont("helvetica", "normal");
+  const meta: [string, string][] = [[T.no, d.number || "—"], [T.date, invDate(d.issueDate, s.lang)], [T.due, invDate(d.dueDate, s.lang)]];
+  meta.forEach(([k, v], i) => { mute(); pdf.text(k, W - M - 38, y + 10 + i * 5); ink(); pdf.setFont("helvetica", "bold"); pdf.text(v, W - M, y + 10 + i * 5, { align: "right" }); pdf.setFont("helvetica", "normal"); });
+  // issuer
+  y = 46;
+  pdf.setFontSize(9.5); pdf.setFont("helvetica", "bold"); ink(); pdf.text(s.issuer || "", M, y);
+  pdf.setFont("helvetica", "normal"); mute();
+  const iss = [s.vat ? `${T.vat} ${s.vat}` : "", ...pdf.splitTextToSize(s.address || "", 80), [s.email, s.phone].filter(Boolean).join(" · ")].filter(Boolean);
+  iss.forEach((l: string, i: number) => pdf.text(l, M, y + 5 + i * 4.3));
+  // client box
+  const bx = 112, bw = W - M - bx;
+  pdf.setDrawColor(225, 232, 228); pdf.setFillColor(246, 249, 247); pdf.roundedRect(bx, y - 6, bw, 34, 2.5, 2.5, "FD");
+  pdf.setFontSize(7.5); pdf.setTextColor(C[0], C[1], C[2]); pdf.setFont("helvetica", "bold"); pdf.text(T.to.toUpperCase(), bx + 5, y);
+  pdf.setFontSize(10); ink(); pdf.text(pdf.splitTextToSize(d.client.name || "—", bw - 10)[0] ?? "", bx + 5, y + 5.5);
+  pdf.setFont("helvetica", "normal"); pdf.setFontSize(8.8); mute();
+  const cl = [d.client.vat ? `${T.vat} ${d.client.vat}` : "", ...pdf.splitTextToSize(d.client.address || "", bw - 10), d.client.email].filter(Boolean).slice(0, 5);
+  cl.forEach((l: string, i: number) => pdf.text(l, bx + 5, y + 10.5 + i * 4.2));
+  // lines
+  y = 92;
+  const cols = [M, 128, 152, W - M];
+  pdf.setFillColor(C[0], C[1], C[2]); pdf.rect(M, y - 5.5, W - 2 * M, 8, "F");
+  pdf.setTextColor(255, 255, 255); pdf.setFont("helvetica", "bold"); pdf.setFontSize(8.5);
+  pdf.text(T.desc, cols[0] + 3, y); pdf.text(T.qty, cols[1] + 14, y, { align: "right" }); pdf.text(T.price, cols[2] + 18, y, { align: "right" }); pdf.text(T.amount, cols[3] - 3, y, { align: "right" });
+  y += 8; pdf.setFont("helvetica", "normal"); pdf.setFontSize(9);
+  d.lines.forEach((l, i) => {
+    const desc = pdf.splitTextToSize(l.desc, cols[1] - cols[0] - 6) as string[];
+    const h = Math.max(7, desc.length * 4.3 + 3);
+    if (i % 2 === 1) { pdf.setFillColor(248, 250, 249); pdf.rect(M, y - 4.6, W - 2 * M, h, "F"); }
+    ink(); pdf.text(desc, cols[0] + 3, y);
+    mute(); pdf.text(`${(+l.qty.toFixed(2)).toLocaleString(s.lang === "es" ? "es-ES" : "en-GB")} ${invUnit(l, T)}`, cols[1] + 14, y, { align: "right" });
+    pdf.text(invMoney(l.price, s.lang), cols[2] + 18, y, { align: "right" });
+    ink(); pdf.text(invMoney(l.amount, s.lang), cols[3] - 3, y, { align: "right" });
+    y += h;
+  });
+  pdf.setDrawColor(225, 232, 228); pdf.line(M, y - 2, W - M, y - 2);
+  // totals
+  const t = invTotals(d);
+  y += 6;
+  const tx = 128;
+  ([[T.sub, invMoney(t.net, s.lang)], [`${T.tax} ${d.vatPct}%`, invMoney(t.vat, s.lang)]] as [string, string][]).forEach(([k, v]) => {
+    mute(); pdf.text(k, tx, y); ink(); pdf.text(v, W - M - 3, y, { align: "right" }); y += 6;
+  });
+  pdf.setFillColor(C[0], C[1], C[2]); pdf.roundedRect(tx - 4, y - 5, W - M - tx + 4, 10, 2, 2, "F");
+  pdf.setTextColor(255, 255, 255); pdf.setFont("helvetica", "bold"); pdf.setFontSize(11);
+  pdf.text(T.total, tx, y + 1.6); pdf.text(invMoney(t.total, s.lang), W - M - 3, y + 1.6, { align: "right" });
+  // payment & notes
+  y += 18; pdf.setFontSize(8.5);
+  const pay = [s.payment, s.iban ? `${T.iban}: ${s.iban}` : "", s.bank ? `${T.bank}: ${s.bank}` : ""].filter(Boolean);
+  if (pay.length) {
+    pdf.setFont("helvetica", "bold"); pdf.setTextColor(C[0], C[1], C[2]); pdf.text(T.pay.toUpperCase(), M, y);
+    pdf.setFont("helvetica", "normal"); ink(); pay.forEach((l, i) => pdf.text(pdf.splitTextToSize(l, 120), M, y + 5 + i * 4.5));
+    y += 5 + pay.length * 4.5 + 4;
+  }
+  if (d.notes.trim()) { mute(); pdf.text(pdf.splitTextToSize(d.notes.trim(), W - 2 * M), M, y + 2); }
+  if (s.footer.trim()) { pdf.setFontSize(7.5); mute(); pdf.text(pdf.splitTextToSize(s.footer.trim(), W - 2 * M), W / 2, 285, { align: "center" }); }
+  return pdf.output("blob");
+}
+
+/** The invoice editor: the number, dates, the client and its lines, a live preview, and the PDF. */
+function InvoiceModal({ doc0, used, title, onClose, onDone }: {
+  doc0: InvoiceDoc; used: string[]; title: string;
+  onClose: () => void;
+  /** After the PDF is downloaded: the number and date it went out with. */
+  onDone?: (d: { number: string; issueDate: string }) => void;
+}) {
+  const [d, setD] = useState<InvoiceDoc>(() => ({ ...doc0, number: doc0.number || nextInvoiceNumber(used) }));
+  const [setup, setSetup] = useState<InvoiceSetup | null>(null);
+  const [row, setRow] = useState<{ id: string | null; brand: any }>({ id: null, brand: {} });
+  const [tab, setTab] = useState<"invoice" | "setup">("invoice");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { loadInvoiceSetup().then((r) => { setSetup(r.setup); setRow({ id: r.rowId, brand: r.brand }); if (!r.setup.issuer) setTab("setup"); }).catch(() => setSetup(INV_EMPTY)); }, []);
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) onClose(); };
+    window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k);
+  }, [busy, onClose]);
+  const set = (p: Partial<InvoiceDoc>) => setD((x) => ({ ...x, ...p }));
+  const setC = (p: Partial<InvoiceDoc["client"]>) => setD((x) => ({ ...x, client: { ...x.client, ...p } }));
+  const setL = (i: number, p: Partial<InvoiceDoc["lines"][number]>) => setD((x) => ({ ...x, lines: x.lines.map((l, j) => {
+    if (j !== i) return l;
+    const n = { ...l, ...p };
+    if (p.qty !== undefined || p.price !== undefined) n.amount = +(n.qty * n.price).toFixed(2);
+    return n;
+  }) }));
+  const S = (p: Partial<InvoiceSetup>) => setSetup((x) => ({ ...(x ?? INV_EMPTY), ...p }));
+  const s = setup ?? INV_EMPTY;
+  const T = INV_T[s.lang];
+  const t = invTotals(d);
+  /** The number this invoice already went out with here (it isn't "used" by another one). */
+  const [mine, setMine] = useState(doc0.number);
+  const dup = !!d.number.trim() && used.includes(d.number.trim()) && d.number.trim() !== mine;
+
+  const saveSetup = async () => {
+    setBusy("setup"); setMsg(null);
+    const e = await saveInvoiceSetup(row.id, row.brand, s);
+    setBusy(null);
+    setMsg(e ? { ok: false, text: e } : { ok: true, text: "Saved — every invoice uses these details." });
+    if (!e) { const r = await loadInvoiceSetup().catch(() => null); if (r) setRow({ id: r.rowId, brand: r.brand }); }
+  };
+  const uploadModel = async (f: File) => {
+    if (!/pdf$/i.test(f.type) && !/\.pdf$/i.test(f.name)) { setMsg({ ok: false, text: "Upload the model invoice as a PDF." }); return; }
+    setBusy("model"); setMsg(null);
+    try {
+      const { thumb, text } = await readModelInvoice(f);
+      const iban = /\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]{4}){4,7}(?:[ ]?[A-Z0-9]{1,3})?\b/.exec(text)?.[0];
+      const ids = [...text.matchAll(/\b(?:ES)?([A-HJ-NP-SUVW]\d{7}[0-9A-J]|\d{8}[A-Z])\b/g)].map((m) => m[0]);
+      const mail = /[\w.+-]+@[\w-]+\.[\w.]+/.exec(text)?.[0];
+      S({ modelName: f.name, modelThumb: thumb, iban: s.iban || iban || "", vat: s.vat || ids[0] || "", email: s.email || mail || "" });
+      setMsg({ ok: true, text: `Model read${iban || ids[0] || mail ? " — its IBAN, tax ID and e-mail filled the blanks" : ""}. Check the details and save.` });
+    } catch (e: any) { setMsg({ ok: false, text: `Couldn't read that PDF: ${e?.message ?? e}` }); }
+    setBusy(null);
+  };
+  const download = async () => {
+    if (!d.number.trim()) { setMsg({ ok: false, text: "Give the invoice a number." }); return; }
+    setBusy("pdf"); setMsg(null);
+    try {
+      const blob = await buildInvoicePdf(d, s);
+      downloadBlob(blob, `${s.lang === "es" ? "Factura" : "Invoice"} ${d.number.replace(/[\\/:*?"<>|]/g, "-")} ${d.client.name}.pdf`.replace(/\s+/g, " "));
+      onDone?.({ number: d.number.trim(), issueDate: d.issueDate });
+      setMine(d.number.trim());
+      setMsg({ ok: true, text: `Invoice ${d.number} downloaded.` });
+    } catch (e: any) { setMsg({ ok: false, text: `Couldn't build the PDF: ${e?.message ?? e}` }); }
+    setBusy(null);
+  };
+
+  // over the whole app (the Management header sits above the panel's own layer)
+  return createPortal(
+    <div className="bn ivm-host"><div className="bn-pop-backdrop" onMouseDown={() => !busy && onClose()}>
+      <div className="bn-pop ivm" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Invoice">
+        <header className="bn-pop-head">
+          <span className="bn-pop-ico"><BnIcon d={BN_ICON.out} w={2} /></span>
+          <div><h3>Invoice · {title}</h3><small>{tab === "invoice" ? "Check it, then download the PDF to send to the client" : "Your company's details on every invoice"}</small></div>
+          <div className="ivm-tabs" role="tablist">
+            {(["invoice", "setup"] as const).map((k) => (
+              <button type="button" key={k} role="tab" aria-selected={tab === k} className={tab === k ? "is-on" : ""} onClick={() => setTab(k)}>{k === "invoice" ? "Invoice" : "Our details & model"}</button>
+            ))}
+          </div>
+          <button type="button" className="bn-pop-x" onClick={onClose} aria-label="Close"><BnIcon d={BN_ICON.x} w={2.4} /></button>
+        </header>
+        <div className="ivm-body">
+          <div className="ivm-form">
+            {tab === "invoice" ? (
+              <>
+                <div className="ivm-grid">
+                  <label className={`ivm-f ${dup ? "is-warn" : ""}`}><span>Invoice no.</span><input value={d.number} onChange={(e) => set({ number: e.target.value })} placeholder="2026-0001" />{dup && <em>Already used</em>}</label>
+                  <label className="ivm-f"><span>Date</span><DatePicker value={d.issueDate} onChange={(v) => v && set({ issueDate: v })} /></label>
+                  <label className="ivm-f"><span>Due</span><DatePicker value={d.dueDate} onChange={(v) => v && set({ dueDate: v })} /></label>
+                  <label className="ivm-f"><span>VAT %</span><input type="number" min={0} step={0.5} value={d.vatPct} onChange={(e) => set({ vatPct: Math.max(0, Number(e.target.value) || 0) })} /></label>
+                </div>
+                <p className="ivm-sub">Bill to</p>
+                <div className="ivm-grid">
+                  <label className="ivm-f is-wide"><span>Legal name</span><input value={d.client.name} onChange={(e) => setC({ name: e.target.value })} /></label>
+                  <label className="ivm-f"><span>Tax ID</span><input value={d.client.vat} onChange={(e) => setC({ vat: e.target.value })} /></label>
+                  <label className="ivm-f"><span>Invoice e-mail</span><input value={d.client.email} onChange={(e) => setC({ email: e.target.value })} /></label>
+                  <label className="ivm-f is-wide"><span>Address</span><input value={d.client.address} onChange={(e) => setC({ address: e.target.value })} /></label>
+                </div>
+                <p className="ivm-sub">Lines</p>
+                <div className="ivm-lines">
+                  {d.lines.map((l, i) => (
+                    <div className="ivm-line" key={i}>
+                      <input className="ivm-desc" value={l.desc} onChange={(e) => setL(i, { desc: e.target.value })} aria-label="Description" />
+                      <input type="number" step={0.25} value={l.qty} onChange={(e) => setL(i, { qty: Number(e.target.value) || 0 })} aria-label="Quantity" />
+                      <input type="number" step={10} value={l.price} onChange={(e) => setL(i, { price: Number(e.target.value) || 0 })} aria-label="Unit price" />
+                      <b>{invMoney(l.amount, s.lang)}</b>
+                    </div>
+                  ))}
+                </div>
+                <label className="ivm-f is-wide"><span>Note on the invoice <i>optional</i></span><input value={d.notes} onChange={(e) => set({ notes: e.target.value })} placeholder="e.g. PO 4500123 · Project Data platform" /></label>
+              </>
+            ) : (
+              <>
+                <div className="ivm-model">
+                  {s.modelThumb ? <img src={s.modelThumb} alt="Model invoice" /> : <span className="ivm-model-empty"><BnIcon d={BN_ICON.out} w={1.8} /></span>}
+                  <div>
+                    <b>{s.modelName || "Your model invoice"}</b>
+                    <small>Upload an invoice of yours (PDF): its IBAN, tax ID and e-mail are read into the details below, and it stays here as the reference.</small>
+                    <button type="button" className="bn-act is-ghost" disabled={busy === "model"} onClick={() => fileRef.current?.click()}>{busy === "model" ? "Reading…" : s.modelName ? "Replace PDF" : "Upload PDF"}</button>
+                    <input ref={fileRef} type="file" accept="application/pdf,.pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void uploadModel(f); }} />
+                  </div>
+                </div>
+                <div className="ivm-grid">
+                  <label className="ivm-f is-wide"><span>Legal name</span><input value={s.issuer} onChange={(e) => S({ issuer: e.target.value })} placeholder="Konsolidator Spain, S.L." /></label>
+                  <label className="ivm-f"><span>Tax ID</span><input value={s.vat} onChange={(e) => S({ vat: e.target.value })} placeholder="B12345678" /></label>
+                  <label className="ivm-f"><span>Language</span>
+                    <Select value={s.lang} onChange={(v) => S({ lang: v as "es" | "en" })} options={[{ value: "es", label: "Spanish (Factura)" }, { value: "en", label: "English (Invoice)" }]} /></label>
+                  <label className="ivm-f is-wide"><span>Address</span><input value={s.address} onChange={(e) => S({ address: e.target.value })} placeholder="Calle Serrano 1, 28001 Madrid" /></label>
+                  <label className="ivm-f"><span>E-mail</span><input value={s.email} onChange={(e) => S({ email: e.target.value })} /></label>
+                  <label className="ivm-f"><span>Phone</span><input value={s.phone} onChange={(e) => S({ phone: e.target.value })} /></label>
+                  <label className="ivm-f is-wide"><span>IBAN</span><input value={s.iban} onChange={(e) => S({ iban: e.target.value })} placeholder="ES00 0000 0000 0000 0000 0000" /></label>
+                  <label className="ivm-f"><span>Bank</span><input value={s.bank} onChange={(e) => S({ bank: e.target.value })} /></label>
+                  <label className="ivm-f"><span>Colour</span><input value={`#${s.color}`} onChange={(e) => S({ color: e.target.value.replace(/^#/, "").slice(0, 6) })} /></label>
+                  <label className="ivm-f is-wide"><span>Payment line</span><input value={s.payment} onChange={(e) => S({ payment: e.target.value })} placeholder="Transferencia bancaria a 30 días fecha factura" /></label>
+                  <label className="ivm-f is-wide"><span>Footer</span><input value={s.footer} onChange={(e) => S({ footer: e.target.value })} placeholder="Inscrita en el Registro Mercantil de Madrid…" /></label>
+                </div>
+              </>
+            )}
+          </div>
+          {/* the page as it will come out */}
+          <div className="ivm-prev" aria-label="Preview">
+            <div className="ivm-page" style={bnVars({ "--ic": `#${/^[0-9a-f]{6}$/i.test(s.color) ? s.color : INV_EMPTY.color}` })}>
+              <div className="ivm-p-top">
+                {s.logo ? <img src={s.logo} alt="" /> : <b className="ivm-p-co">{s.issuer || "Your company"}</b>}
+                <div className="ivm-p-meta"><strong>{T.title}</strong>
+                  <span><i>{T.no}</i>{d.number || "—"}</span><span><i>{T.date}</i>{invDate(d.issueDate, s.lang)}</span><span><i>{T.due}</i>{invDate(d.dueDate, s.lang)}</span></div>
+              </div>
+              <div className="ivm-p-parties">
+                <div><b>{s.issuer || "—"}</b>{s.vat && <span>{T.vat} {s.vat}</span>}<span>{s.address}</span><span>{[s.email, s.phone].filter(Boolean).join(" · ")}</span></div>
+                <div className="ivm-p-to"><i>{T.to}</i><b>{d.client.name || "—"}</b>{d.client.vat && <span>{T.vat} {d.client.vat}</span>}<span>{d.client.address}</span><span>{d.client.email}</span></div>
+              </div>
+              <div className="ivm-p-table">
+                <div className="is-head"><span>{T.desc}</span><span>{T.qty}</span><span>{T.price}</span><span>{T.amount}</span></div>
+                {d.lines.map((l, i) => (
+                  <div key={i}><span>{l.desc}</span><span>{+l.qty.toFixed(2)} {invUnit(l, T)}</span><span>{invMoney(l.price, s.lang)}</span><span>{invMoney(l.amount, s.lang)}</span></div>
+                ))}
+              </div>
+              <div className="ivm-p-tot">
+                <span><i>{T.sub}</i>{invMoney(t.net, s.lang)}</span>
+                <span><i>{T.tax} {d.vatPct}%</i>{invMoney(t.vat, s.lang)}</span>
+                <strong><i>{T.total}</i>{invMoney(t.total, s.lang)}</strong>
+              </div>
+              {(s.payment || s.iban) && <div className="ivm-p-pay"><i>{T.pay}</i>{s.payment && <span>{s.payment}</span>}{s.iban && <span>{T.iban}: {s.iban}</span>}{s.bank && <span>{T.bank}: {s.bank}</span>}</div>}
+              {d.notes && <p className="ivm-p-note">{d.notes}</p>}
+              {s.footer && <p className="ivm-p-foot">{s.footer}</p>}
+            </div>
+          </div>
+        </div>
+        <footer className="bn-pop-foot ivm-foot">
+          {msg && <span className={`ivm-msg ${msg.ok ? "is-ok" : "is-err"}`}>{msg.text}</span>}
+          <button type="button" className="bn-act is-ghost" onClick={onClose} disabled={!!busy}>Close</button>
+          {tab === "setup"
+            ? <button type="button" className="bn-act is-pay" onClick={() => void saveSetup()} disabled={busy === "setup"}>{busy === "setup" ? "Saving…" : "Save details"}</button>
+            : <button type="button" className="bn-act is-pay" onClick={() => void download()} disabled={busy === "pdf" || !setup}>{busy === "pdf" ? "Building…" : "Download PDF"}</button>}
+        </footer>
+      </div>
+    </div></div>,
+    document.body,
+  );
 }
 
 export default function BillingPanel({
@@ -303,6 +654,10 @@ export default function BillingPanel({
   const [exporting, setExporting] = useState(false);
   /** "Did you download the report?" check shown before marking a bill as sent. */
   const [sendAsk, setSendAsk] = useState<{ bill: Bill; downloaded: boolean } | null>(null);
+  /** The invoice being prepared (a bill to send, or one already sent). */
+  const [invoicing, setInvoicing] = useState<{ doc: InvoiceDoc; title: string; billKey?: string; invoiceId?: string } | null>(null);
+  /** Numbers given to bills not marked as sent yet (they go with the invoice once it is). */
+  const [invMeta, setInvMeta] = useState<Record<string, { number: string; issueDate: string }>>({});
   useEffect(() => {
     if (!sendAsk) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setSendAsk(null); };
@@ -395,7 +750,7 @@ export default function BillingPanel({
         id: r.id, projectId: r.project_id, period: r.period,
         net: Number(r.net) || 0, amount: Number(r.amount) || 0, days: Number(r.days) || 0,
         sentDate: r.sent_date ?? "", dueDate: r.due_date ?? "", paidDate: r.paid_date ?? "",
-        status: r.status ?? "sent",
+        status: r.status ?? "sent", number: r.number ?? "", issueDate: r.issue_date ?? "",
       })));
       const { data: cfg } = await supabase.from("billing_settings").select("*").eq("id", "default").maybeSingle();
       if (cfg) setPaymentDays(Number(cfg.payment_days) || 30);
@@ -535,6 +890,44 @@ export default function BillingPanel({
     } catch (e) { console.error("Could not log status change:", e); }
   };
 
+  /** The invoice of a bill: one line per role (days × its rate), or what a sent invoice froze. */
+  const docFromBill = (b: Bill | null, inv?: Invoice): InvoiceDoc => {
+    const pid = b?.projectId ?? inv?.projectId ?? "";
+    const p = projects[pid];
+    const per = periodLabel(b?.period ?? inv?.period ?? "");
+    const u = unitOf(pid);
+    const a: any = p?.address ?? {};
+    const addr = typeof a === "string" ? a : [[a.street, a.number].filter(Boolean).join(" "), a.details, [postalOf(a), a.city].filter(Boolean).join(" "), a.country ? countryLabel(a.country) : ""].filter(Boolean).join(", ");
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const due = new Date(today); due.setDate(due.getDate() + paymentDays);
+    const type = b?.type ?? typeNames[p?.typeId ?? ""] ?? "";
+    let lines: InvoiceDoc["lines"] = b ? Object.entries(b.lines).filter(([, dd]) => dd > 0).map(([ln, dd]) => ({
+      desc: [type, Object.keys(b.lines).length > 1 ? roleNameOf(ln, roles) : "", per].filter(Boolean).join(" · "),
+      qty: +dd.toFixed(2), unit: u, price: +rateOf(b, ln).toFixed(2), amount: +(dd * rateOf(b, ln)).toFixed(2),
+    })) : [];
+    // a sent invoice keeps what it was sent with
+    if (inv && (!lines.length || Math.abs(lines.reduce((x, l) => x + l.amount, 0) - netOf(inv)) > 0.01)) {
+      const days = inv.days || 1;
+      lines = [{ desc: [type, per].filter(Boolean).join(" · "), qty: +days.toFixed(2), unit: u, price: +(netOf(inv) / days).toFixed(2), amount: +netOf(inv).toFixed(2) }];
+    }
+    const taxed = b ? b.taxed : !!p?.taxed;
+    const rate = b ? b.taxRate : p?.taxRate ?? 0;
+    const vatPct = taxed ? rate : inv && netOf(inv) > 0 ? +(((inv.amount / netOf(inv)) - 1) * 100).toFixed(2) : 0;
+    return {
+      number: inv?.number ?? (b ? invMeta[b.key]?.number : "") ?? "",
+      issueDate: inv?.issueDate || inv?.sentDate || isoDate(today),
+      dueDate: inv?.dueDate || isoDate(due),
+      client: { name: p?.legalName || clientNames[p?.clientId ?? ""] || "", vat: p?.vat ?? "", address: addr, email: billingContact(p?.contacts ?? [])?.email ?? "" },
+      lines, vatPct, notes: "",
+    };
+  };
+  const usedNumbers = [...invoices.map((i) => i.number ?? ""), ...Object.values(invMeta).map((m) => m.number)].filter(Boolean);
+  /** The number a sent invoice went out with is kept on it. */
+  const keepNumber = async (invoiceId: string, m: { number: string; issueDate: string }) => {
+    setInvoices((prev) => prev.map((i) => (i.id === invoiceId ? { ...i, number: m.number, issueDate: m.issueDate } : i)));
+    await supabase.from("invoices").update({ number: m.number, issue_date: m.issueDate }).eq("id", invoiceId);
+  };
+
   const markSent = async (b: Bill) => {
     setBusy(b.key);
     // Sent date is the day it is actually marked as sent (today), not the
@@ -547,12 +940,16 @@ export default function BillingPanel({
       net: +net(b).toFixed(2), amount: +gross(b).toFixed(2), days: rowDays,
       sent_date: isoDate(sent), due_date: isoDate(due), status: "sent", paid_date: null,
     };
-    const { data } = await supabase.from("invoices").upsert(payload, { onConflict: "project_id,period" }).select().maybeSingle();
+    // the invoice number given in the PDF goes with it
+    const meta = invMeta[b.key];
+    let { data, error } = await supabase.from("invoices").upsert((meta ? { ...payload, number: meta.number, issue_date: meta.issueDate } : payload) as Record<string, unknown>, { onConflict: "project_id,period" }).select().maybeSingle();
+    if (error && meta && /number|issue_date/i.test(error.message)) ({ data, error } = await supabase.from("invoices").upsert(payload, { onConflict: "project_id,period" }).select().maybeSingle());
     if (data) {
       const inv: Invoice = {
         id: data.id, projectId: data.project_id, period: data.period,
         net: Number(data.net), amount: Number(data.amount), days: Number(data.days),
         sentDate: data.sent_date ?? "", dueDate: data.due_date ?? "", paidDate: "", status: data.status,
+        number: data.number ?? meta?.number ?? "", issueDate: data.issue_date ?? meta?.issueDate ?? "",
       };
       setInvoices((prev) => [...prev.filter((i) => !(i.projectId === inv.projectId && i.period === inv.period)), inv]);
       await logStatus({ invoiceId: inv.id, projectId: inv.projectId, period: inv.period, from: "tobill", to: "sent", amount: inv.amount });
@@ -1384,6 +1781,10 @@ export default function BillingPanel({
                         </span>
 
                         <span className="bn-actions">
+                          <button type="button" className="bn-act is-ghost bn-act-pdf" title={inv.number ? `Invoice ${inv.number} as a PDF` : "Make the PDF invoice"}
+                            onClick={(e) => { e.stopPropagation(); setInvoicing({ doc: docFromBill(comp ?? null, inv), title: projName(inv.projectId), invoiceId: inv.id }); }}>
+                            <BnIcon d={BN_ICON.out} w={2.1} />{inv.number || "PDF"}
+                          </button>
                           {phase === "sent" && (
                             <button type="button" className="bn-act is-ghost" disabled={busy === invKey}
                               onClick={(e) => { e.stopPropagation(); unsend(inv); }} title="Move back to To bill">
@@ -1585,6 +1986,14 @@ export default function BillingPanel({
                     <small>{group.length > 1 ? `Excel with the ${group.length} selected bills` : "Excel for this bill"}</small>
                   </span>
                 </button>
+                <button type="button" className={`bn-ask-dl is-inv${invMeta[b.key] ? " is-done" : ""}`}
+                  onClick={() => setInvoicing({ doc: docFromBill(b), title: b.legalName || clientNames[b.clientId] || "Client", billKey: b.key })}>
+                  <span className="bn-ask-dl-ico"><BnIcon d={invMeta[b.key] ? BN_ICON.paid : BN_ICON.out} w={2.2} /></span>
+                  <span className="bn-ask-dl-txt">
+                    <b>{invMeta[b.key] ? `Invoice ${invMeta[b.key].number} ready` : "Invoice for the client"}</b>
+                    <small>{invMeta[b.key] ? "PDF downloaded — open it again to change it" : "Build the PDF invoice, with its number, to send"}</small>
+                  </span>
+                </button>
               </div>
               <footer className="bn-pop-foot">
                 <button type="button" className="bn-act is-ghost" onClick={close}>Cancel</button>
@@ -1597,6 +2006,14 @@ export default function BillingPanel({
           </div>
         );
       })()}
+
+      {invoicing && (
+        <InvoiceModal doc0={invoicing.doc} used={usedNumbers} title={invoicing.title} onClose={() => setInvoicing(null)}
+          onDone={(m) => {
+            if (invoicing.invoiceId) void keepNumber(invoicing.invoiceId, m);
+            else if (invoicing.billKey) setInvMeta((x) => ({ ...x, [invoicing.billKey!]: m }));
+          }} />
+      )}
 
       {adjusting && (
         <BillingAdjustModal

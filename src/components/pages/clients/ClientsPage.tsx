@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo, useRef, type PointerEvent as RPointerEvent, type KeyboardEvent as RKeyboardEvent, type ReactNode } from "react";
 import { supabase } from "../../api/supabase";
 import NewClientForm from "./NewClientForm";
-import ClientWorkspace, { CompanyLogo, isActive, termOf, lineAnnual, lineTotal, lineContractValue, type Line } from "./ClientWorkspace";
+import ClientWorkspace, { CompanyLogo, isActive, termOf, lineAnnual, lineContractValue, lineOneTime, type Line } from "./ClientWorkspace";
 import Select from "../../framework/Select";
 import { PageLoader } from "../../framework/AppLayout";
 import {
@@ -21,6 +21,8 @@ import { downloadBlob, tableToXlsx, type ExportCell } from "../../framework/expo
 import { ClientImport } from "../contacts/ContactImport";
 import { FilterBar, FilterChips, SortHead, applyView, nextSort, emptyView, useSavedViews, useStoredView, type FField } from "../companies/CompaniesPage";
 import { loadPrefs, savePref } from "../companies/companiesApi";
+import { countryLabel } from "../contacts/contactProfile";
+import { ensureRenewalDeals } from "../sales/sales/salesApi";
 import "../companies/CompaniesPage.css";
 import "./ClientsPage.css";
 import { useNavSection } from "../../framework/pageAccess";
@@ -212,7 +214,10 @@ export function ClientList({
       parts.flat().forEach((x) => { if (!cos[x.id]) { cos[x.id] = x; allCos.push(x); } });
       const co: Record<string, any> = {};
       Object.entries(coOf).forEach(([cid, coid]) => { if (cos[coid]) co[cid] = cos[coid]; });
-      if (alive) setExtra({ lines: ((cp.data ?? []) as any[]).map((r) => ({ ...r, name: pn[r.product_id] ?? "Product" })), last, tasks, co, cos: allCos });
+      const allLines = ((cp.data ?? []) as any[]).map((r) => ({ ...r, name: pn[r.product_id] ?? "Product" }));
+      if (alive) setExtra({ lines: allLines, last, tasks, co, cos: allCos });
+      // subscriptions that have ended go back to Sales, as a deal in the renewal pipeline
+      void ensureRenewalDeals(allLines, coOf, Object.fromEntries(clients.map((c) => [c.id, c.name])));
     })().catch(() => setExtra({ lines: [], last: {}, tasks: {}, co: {}, cos: [] }));
     return () => { alive = false; };
   }, [loaded, clients.length, linesRev]);
@@ -247,12 +252,12 @@ export function ClientList({
       c, name: c.name, website: co.website || twinSite || "", dupOf: dupOf.get(c.id) ?? null,
       services: [...new Set(mine.map((p) => typeName(p.projectTypeId)))],
       consultants: [...new Set(mine.flatMap((p) => (p.team ?? []).map((m) => m.userId).filter(Boolean)))] as string[],
-      city: co.city || lastP?.address?.city || "", country: co.country || lastP?.address?.country || "", sector: co.sector || "",
+      city: co.city || lastP?.address?.city || "", country: countryLabel(co.country || lastP?.address?.country || ""), sector: co.sector || "",
       projects: mine.length, openProjects: open.length,
       projectsValue: mine.reduce((t, p) => t + projectValue(p), 0), openValue: open.reduce((t, p) => t + projectValue(p), 0),
       signed, used, delivered: signed > 0 ? Math.min(100, Math.round((used / signed) * 100)) : 0,
       recurring: act.reduce((t, l) => t + lineAnnual(l), 0), contract: act.reduce((t, l) => t + lineContractValue(l), 0),
-      oneTime: ls.reduce((t, l) => t + (l.recurring ? 0 : lineTotal(l)) + (Number(l.one_time_fee) || 0), 0),
+      oneTime: ls.reduce((t, l) => t + lineOneTime(l), 0),
       products: [...new Set(act.map((l) => l.name))], activeProducts: act.length,
       nextRenewal: renew ? renew.end.toISOString().slice(0, 10) : null, firstSigned: signedAt,
       lastContact: last, daysSince: days, health: days == null ? "none" : days > 60 ? "bad" : days > 30 ? "warn" : "ok",

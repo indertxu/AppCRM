@@ -1,7 +1,21 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { supabase } from "../../api/supabase";
 
-export interface Pipeline { id: string; name: string; description?: string | null; source_blueprint_id?: string | null; is_sales?: boolean; sort_order?: number | null; folder_id?: string | null; created_at?: string; }
+export interface Pipeline { id: string; name: string; description?: string | null; source_blueprint_id?: string | null; is_sales?: boolean; sort_order?: number | null; folder_id?: string | null; created_at?: string;
+  /** Ended client contracts come back to Sales here, as renewal deals (82_renewal_pipeline.sql). */
+  is_renewal?: boolean; }
+
+/** Where renewals go: the pipeline marked for them, else one called "…renew…". */
+export const renewalPipelineOf = <T extends Pipeline>(ps: T[]): T | null =>
+  ps.find((p) => p.is_renewal) ?? ps.find((p) => /renew/i.test(p.name ?? "")) ?? null;
+/** Make `id` the renewal pipeline (null: none marked — then the one called "…renew…"). */
+export async function setRenewalPipeline(id: string | null): Promise<string | null> {
+  const off = await supabase.from("pipelines").update({ is_renewal: false }).eq("is_renewal", true);
+  if (off.error) return /is_renewal/i.test(off.error.message) ? "Run 82_renewal_pipeline.sql in Supabase to choose the renewal pipeline." : off.error.message;
+  if (!id) return null;
+  const on = await supabase.from("pipelines").update({ is_renewal: true }).eq("id", id).select("id");
+  return wrote(on as any);
+}
 
 /** A folder of pipelines (Settings → Pipelines); folders can sit inside folders. */
 export interface PipelineFolder { id: string; name: string; parent_id: string | null; sort_order?: number | null; created_at?: string; }

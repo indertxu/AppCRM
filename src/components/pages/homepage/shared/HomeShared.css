@@ -2808,3 +2808,16 @@
 .tdx-lv:has(.tdx-pill) > .sel-trigger { order: 1; flex: 0 0 34px; padding: 0; justify-content: center; margin-left: auto; }
 .tdx-lv:has(.tdx-pill) > .sel-trigger > span { display: none; }
 .tdx .td-side .tdx-lv:has(.tdx-pill) > .sel-trigger svg { opacity: 0.8; }
+
+/* ---------- month view in a full-screen dashboard: the weeks fit the card (never spill out of it) ---------- */
+@media (min-width: 1081px) and (min-height: 700px) {
+  .home .home-side > .hs-cal .hs-month, .home .ch-col-mid > .hs-cal .hs-month { flex: 3 1 auto; min-height: 0; display: flex; flex-direction: column; }
+  .home .home-side > .hs-cal .hs-month-nav, .home .ch-col-mid > .hs-cal .hs-month-nav,
+  .home .home-side > .hs-cal .hs-month-key, .home .ch-col-mid > .hs-cal .hs-month-key { flex-shrink: 0; }
+  .home .home-side > .hs-cal .hs-month-grid, .home .ch-col-mid > .hs-cal .hs-month-grid {
+    flex: 1 1 auto; min-height: 0; max-height: 600px; grid-template-rows: auto; grid-auto-rows: minmax(28px, 1fr);
+  }
+  /* month view: a clicked day shows its bookings below the month (scrolls when long) */
+  .home .home-side > .hs-cal:has(.hs-month) .hs-agenda, .home .ch-col-mid > .hs-cal:has(.hs-month) .hs-agenda { flex: 1 1 0; min-height: 128px; }
+  .home .home-side > .hs-cal .hs-mday, .home .ch-col-mid > .hs-cal .hs-mday { aspect-ratio: auto; min-height: 0; }
+}

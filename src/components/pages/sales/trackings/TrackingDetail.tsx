@@ -56,7 +56,7 @@ import {
   loadTrackingProducts, addTrackingProduct, updateTrackingProduct, removeTrackingProduct,
   setLineVersionActive, addProductVersion, addServiceVersion,
   lineTotal, lineBreakdown, unitBreakdown,
-  createHandoffs, loadTrackingHandoffs, clientExistsForCompany, buildClientPrefill, buildAttachPrefill, hasClientProductsForTracking, listCatalogProducts, saveClientProducts, syncNewContactsToCompany, loadClientIndex, matchClient, adoptClient, loadTrackingContactIds, setTrackingContacts, type Handoff,
+  createHandoffs, loadTrackingHandoffs, clientExistsForCompany, loadOurPeople, buildClientPrefill, buildAttachPrefill, hasClientProductsForTracking, listCatalogProducts, saveClientProducts, syncNewContactsToCompany, loadClientIndex, matchClient, adoptClient, loadTrackingContactIds, setTrackingContacts, type Handoff,
   loadAssignees, addAssignee, removeAssignee,
   trackingPct,
   TASK_PRIORITIES, loadTaskTemplates, fromTemplate, type TaskPriority, type TaskKind, type MyTask, type TaskTemplate, type TaskStep,
@@ -2111,6 +2111,9 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   const [closedOn, setClosedOn] = useState<string>(tracking.close_date ?? "");
   /** Which figure "potential revenue" shows (team setting; anyone can switch their own view). */
   const [revMode, setRevMode] = useRevenueMode();
+  /** The calculator's figure before the partners' cut (remembered in this browser). */
+  const [revGross, setRevGrossRaw] = useState<boolean>(() => { try { return localStorage.getItem("sl-rev-gross") === "1"; } catch { return false; } });
+  const setRevGross = (v: boolean) => { setRevGrossRaw(v); try { localStorage.setItem("sl-rev-gross", v ? "1" : "0"); } catch { /* storage off */ } };
   const prevStatus = useRef(tracking.status);
   useEffect(() => {
     const was = prevStatus.current; prevStatus.current = status;
@@ -3203,20 +3206,23 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   const servicesTotal = activePotentials.reduce(
     (s, p) => s + lineTotal(p, serviceOf(p.service_id)?.calculator as Calculator | null, undefined, serviceMin(p.service_id)), 0);
   const totalPotential = productsTotal + servicesTotal;
-  /** Potential revenue in the chosen view: products' first year or every year, services counted or not. */
+  /** What the services come to before the partners' cut. */
+  const servicesGross = activePotentials.reduce(
+    (s, p) => s + lineBreakdown(p, serviceOf(p.service_id)?.calculator as Calculator | null, undefined, serviceMin(p.service_id)).total, 0);
+  /** Potential revenue in the chosen view: products' first year or every year, services counted or not, after the partners or before. */
   const productsShown = activeTprods.reduce((s, p) => {
     const prod = productOf(p.product_id);
-    return s + lineRevenue("product", lineBreakdown(p, prod?.calculator as Calculator | null, prod?.tiers?.find((x) => x.id === p.tier_id)?.price), revMode);
+    return s + lineRevenue("product", lineBreakdown(p, prod?.calculator as Calculator | null, prod?.tiers?.find((x) => x.id === p.tier_id)?.price), revMode, revGross);
   }, 0);
   const servicesCounted = revMode === "all_year1" || revMode === "all_term";
-  const servicesShown = servicesCounted ? servicesTotal : 0;
+  const servicesShown = servicesCounted ? (revGross ? servicesGross : servicesTotal) : 0;
   const potentialShown = productsShown + servicesShown;
   const productsYearWord = revMode === "product_term" || revMode === "all_term" ? "all years" : "year 1";
-  /** The same figure in each of the four views (for the figure's menu). */
-  const modeAmount = (m: RevenueMode) => activeTprods.reduce((s, p) => {
+  /** The same figure in each view (for the figure's menu), after the partners' cut or before it. */
+  const modeAmount = (m: RevenueMode, gross = false) => activeTprods.reduce((s, p) => {
     const prod = productOf(p.product_id);
-    return s + lineRevenue("product", lineBreakdown(p, prod?.calculator as Calculator | null, prod?.tiers?.find((x) => x.id === p.tier_id)?.price), m);
-  }, 0) + (m === "all_year1" || m === "all_term" ? servicesTotal : 0);
+    return s + lineRevenue("product", lineBreakdown(p, prod?.calculator as Calculator | null, prod?.tiers?.find((x) => x.id === p.tier_id)?.price), m, gross);
+  }, 0) + (m === "all_year1" || m === "all_term" ? (gross ? servicesGross : servicesTotal) : 0);
   /** The contract panel's lines: the deal's active products and services. */
   const dealContractLines = (): ContractPanelLine[] => [
     ...activeTprods.map((tp): ContractPanelLine => {
@@ -3260,7 +3266,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
             schedule: tp.recurring ? incrementsToSchedule(bd.years[0] ?? 0, years, tp.increments) : null,
             annualIncreasePct: tp.increments?.mode === "pct" ? Number(tp.increments.value) || 0 : null,
             price: Math.round(bd.unitPrice * 100) / 100, quantity: tp.recurring ? 1 : bd.qty,
-            breakdown: { version: null, multiplier: bd.multiplierLabel, gross: bd.gross, discount: bd.discount, total: bd.total, years: bd.years,
+            breakdown: { version: null, multiplier: bd.multiplierLabel, gross: bd.gross, discount: bd.discount, total: bd.total, years: bd.years, partnerYears: bd.partnerYears,
               rows: bd.rows.map((r) => ({ label: r.label, detail: r.detail, amount: r.amount, discount: r.discount })) },
           };
         });
@@ -3543,7 +3549,10 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   /* ---------------- The guided won flow ---------------- */
   /** What the order form starts from: the company's legal details, its people and the seller. */
   const loadContractDefaults = async (): Promise<ContractDefaults> => {
-    const pre = tracking.company_id ? await buildClientPrefill(tracking.company_id, tracking.id).catch(() => null) : null;
+    const [pre, ours] = await Promise.all([
+      tracking.company_id ? buildClientPrefill(tracking.company_id, tracking.id).catch(() => null) : Promise.resolve(null),
+      loadOurPeople(),
+    ]);
     const a = pre?.address;
     const address = a ? [[a.street, a.number].filter(Boolean).join(" "), a.details, [a.postalCode, a.city].filter(Boolean).join(" ")].filter((x) => (x || "").trim()).join(", ") : "";
     const people = (pre?.contacts ?? []).filter((c) => (c.name || "").trim()).map((c) => ({ name: c.name, email: c.email || null, phone: c.phone || null, role: c.position || null }));
@@ -3558,6 +3567,11 @@ export default function TrackingDetail({ tracking, companies, contacts, products
       ],
       people: [...people, ...(seller.name ? [{ name: seller.name, email: seller.email ?? null, phone: seller.phone ?? null, role: null }] : [])],
       currency: "EUR", billingFrequency: "annually", termsUrl: "https://konsolidator.com/legal/",
+      // the address as the company keeps it, field by field (not one line in "Street")
+      addressParts: a && (a.street || a.city || a.postalCode)
+        ? { street: a.street || null, addr_number: a.number || null, addr_details: a.details || null, postal_code: a.postalCode || null, city: a.city || null, country: a.country || null }
+        : null,
+      ours,
     };
     setContractDefaults(d);
     return d;
@@ -4228,9 +4242,12 @@ export default function TrackingDetail({ tracking, companies, contacts, products
                 </h3>
                 <div className="sl-fold-aside sl-calc-aside">
                   <FigurePick className="sl-rvh-fig" value={potentialShown} money={money}
-                    title={`Potential revenue · ${REVENUE_MODES.find((m) => m.value === revMode)?.label ?? ""}. Click to choose what it counts.`}
-                    options={REVENUE_MODES.map((m) => ({ key: m.value, label: m.label, hint: REV_HINT[m.value], amount: modeAmount(m.value), on: revMode === m.value }))}
-                    onPick={(k) => setRevMode(k as RevenueMode)} />
+                    title={`Potential revenue · ${REVENUE_MODES.find((m) => m.value === revMode)?.label ?? ""}${partnersTotal > 0 ? (revGross ? " · before partners" : " · for us") : ""}. Click to choose what it counts.`}
+                    options={[
+                      ...REVENUE_MODES.map((m) => ({ key: m.value, label: m.label, hint: partnersTotal > 0 ? `${REV_HINT[m.value]} · for us` : REV_HINT[m.value], amount: modeAmount(m.value), on: revMode === m.value && (!revGross || partnersTotal <= 0) })),
+                      ...(partnersTotal > 0 ? REVENUE_MODES.map((m) => ({ key: `${m.value}|gross`, label: `${m.label} · before partners`, hint: `${REV_HINT[m.value]} · partners' cut not taken off`, amount: modeAmount(m.value, true), on: revMode === m.value && revGross })) : []),
+                    ]}
+                    onPick={(k) => { const [m, g] = k.split("|"); setRevMode(m as RevenueMode); setRevGross(g === "gross"); }} />
                 </div>
               </div>
               <div className="sl-calc-fold"><div className="sl-calc-fold-in">
@@ -4241,7 +4258,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
               <div className="sl-rvh-legend">
                 <span className="is-product"><i />Products <em>{productsYearWord}</em><b>{money(productsShown)}</b></span>
                 <span className={`is-service ${servicesCounted ? "" : "is-out"}`} title={servicesCounted ? "A one-off fee, counted once" : "Not counted in this view"}><i />Services<b>{servicesCounted ? money(servicesShown) : <s>{money(servicesTotal)}</s>}</b></span>
-                {partnersTotal > 0 && <span className="is-partner" title="Already taken out of the figures above"><i />Partners<b>−{money(partnersTotal)}</b></span>}
+                {partnersTotal > 0 && <span className={`is-partner ${revGross ? "is-out" : ""}`} title={revGross ? "Not taken off: the figure shows what the client pays" : "Already taken out of the figures above"}><i />Partners<b>{revGross ? <s>−{money(partnersTotal)}</s> : `−${money(partnersTotal)}`}</b></span>}
               </div>
               </div></div>
             </div>
@@ -4460,7 +4477,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
                   breakdown: {
                     version: pr.versionLabel, multiplier: bd.multiplierLabel, gross: bd.gross, discount: bd.discount, total: bd.total,
                     rows: bd.rows.map((r) => ({ label: r.label, detail: r.detail, amount: r.amount, discount: r.discount })),
-                    years: bd.years,
+                    years: bd.years, partnerYears: bd.partnerYears,
                   },
                 };
                 // Yearly increases travel as the contract's payment terms (one term per year).

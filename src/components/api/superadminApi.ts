@@ -49,6 +49,8 @@ export interface TenantUser {
   email: string;
   role: string;
   job_title: string;
+  first_name?: string | null;
+  last_name?: string | null;
 }
 
 export const listTenants = () => call("list_tenants").then((r) => (r.tenants ?? []) as Tenant[]);
@@ -56,7 +58,29 @@ export const createTenant = (name: string, maxUsers: number) => call("create_ten
 export const toggleTenant = (tenantId: string, active: boolean) => call("toggle_tenant", { tenantId, active });
 export const updateTenant = (tenantId: string, patch: { name?: string; maxUsers?: number }) =>
   call("update_tenant", { tenantId, ...patch });
-export const listUsers = (tenantId: string) => call("list_users", { tenantId }).then((r) => (r.users ?? []) as TenantUser[]);
+/** A company's users, with their names and e-mails: from the function, else 81_superadmin_user_names.sql,
+ *  else straight from the profiles (what the superadmin's own access lets it read). */
+export async function listUsers(tenantId: string): Promise<TenantUser[]> {
+  const r = await call("list_users", { tenantId });
+  const users = (r.users ?? []) as TenantUser[];
+  if (!users.length || users.every((u) => (u.first_name || u.last_name) && u.email)) return users;
+  type Row = { id: string; first_name?: string | null; last_name?: string | null; email?: string | null };
+  let rows: Row[] = [];
+  const { data, error } = await supabase.rpc("superadmin_user_names", { p_tenant: tenantId });
+  if (!error && Array.isArray(data)) rows = data as Row[];
+  else {
+    const ids = users.map((u) => u.id);
+    let res: any = await supabase.from("profiles").select("id, first_name, last_name, email").in("id", ids);
+    if (res.error) res = await supabase.from("profiles").select("id, first_name, last_name").in("id", ids);
+    rows = (res.data ?? []) as Row[];
+  }
+  const by = new Map(rows.map((n) => [n.id, n]));
+  return users.map((u) => {
+    const n = by.get(u.id);
+    return { ...u, email: u.email || n?.email || "", first_name: u.first_name || n?.first_name || null, last_name: u.last_name || n?.last_name || null };
+  });
+}
+
 export const createUser = (tenantId: string, email: string, password: string, role: string, jobTitle: string) =>
   call("create_user", { tenantId, email, password, role, jobTitle });
 export const deleteUser = (userId: string) => call("delete_user", { userId });

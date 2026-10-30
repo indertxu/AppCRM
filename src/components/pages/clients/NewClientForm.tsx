@@ -4,6 +4,7 @@ import type { Client, Project, Contact, Phase, TeamMember, ClientRole, ProjectTy
 import { lineRate, roleCounts, roleColor, roleNameOf, sortRoles, legacyRoleMap, resolvedLinesOf, legacyColumnsOf } from "./clientsTypes";
 import DatePicker from "../../framework/DatePicker";
 import Select from "../../framework/Select";
+import { CountryPicker } from "../companies/CompaniesPage";
 import { supabase } from "../../api/supabase";
 import "./ClientsPage.css";
 
@@ -640,7 +641,7 @@ export default function NewClientForm({ onSave, onClose, roles = [], projectType
                       <Field label="Details"><input className="pf-input" value={addr.details} onChange={(e) => setAddrField("details", e.target.value)} placeholder="Floor, door…" /></Field>
                       <Field label="Postal code"><input className="pf-input" value={addr.postalCode} onChange={(e) => setAddrField("postalCode", e.target.value)} /></Field>
                       <Field label="City"><input className="pf-input" value={addr.city} onChange={(e) => setAddrField("city", e.target.value)} /></Field>
-                      <Field label="Country" wide><input className="pf-input" value={addr.country} onChange={(e) => setAddrField("country", e.target.value)} /></Field>
+                      <Field label="Country" wide><CountryPicker value={addr.country} as="name" onChange={(v) => setAddrField("country", v)} /></Field>
                     </div>
                   </Card>
                 </div>

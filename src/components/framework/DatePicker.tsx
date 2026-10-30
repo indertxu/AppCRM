@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
 import "./DatePicker.css";
 
@@ -44,7 +44,7 @@ function mondayOf(d: Date): Date {
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const POP_W = 312;
-const POP_H = 404;
+const POP_H = 448;
 
 export default function DatePicker({ value, onChange, placeholder = "Select date", weekMode = false, maxDate, hideTrigger = false, open: openProp, onOpenChange, anchorRef }: Props) {
   const selected = parseISO(value);
@@ -57,21 +57,35 @@ export default function DatePicker({ value, onChange, placeholder = "Select date
   const [dir, setDir] = useState<1 | -1>(1);
   const [pos, setPos] = useState<{ top?: number; bottom?: number; left: number }>({ top: 0, left: 0 });
   const btnRef = useRef<HTMLButtonElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
 
   const positionFrom = (el: HTMLElement | null) => {
     const r = el?.getBoundingClientRect();
     if (r) {
-      const spaceBelow = window.innerHeight - r.bottom;
-      const openUp = spaceBelow < POP_H + 12 && r.top > spaceBelow; // not enough room below → open upward
+      const vh = window.innerHeight;
+      const below = vh - r.bottom - 8, above = r.top - 8;
       const left = Math.max(8, Math.min(r.left, window.innerWidth - POP_W - 8));
-      if (openUp) setPos({ bottom: window.innerHeight - r.top + 8, left });
-      else setPos({ top: r.bottom + 8, left });
+      // under the trigger when it fits, else above it, else as low as it can go and still be whole on screen
+      if (below >= POP_H + 4) setPos({ top: r.bottom + 8, left });
+      else if (above >= POP_H + 4) setPos({ bottom: vh - r.top + 8, left });
+      else setPos({ top: Math.max(8, vh - POP_H - 8), left });
     }
     setView(selected ?? new Date());
     setMode("days");
   };
   const openPicker = () => { positionFrom(btnRef.current); setOpen(true); };
 
+  // Once on screen, its real height decides: never past the bottom or the top of the window.
+  useLayoutEffect(() => {
+    if (!open) return;
+    const el = popRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect(), vh = window.innerHeight;
+    if (r.bottom > vh - 8 || r.top < 8) {
+      const top = Math.max(8, Math.min(r.top, vh - r.height - 8));
+      if (Math.abs(top - r.top) > 0.5) setPos((p) => ({ top, left: p.left }));
+    }
+  });
   // When controlled-open becomes true, position from the external anchor.
   useEffect(() => {
     if (openProp && anchorRef?.current) positionFrom(anchorRef.current);
@@ -147,7 +161,7 @@ export default function DatePicker({ value, onChange, placeholder = "Select date
         createPortal(
           <>
             <div className="dp-layer" onMouseDown={() => setOpen(false)} />
-            <div className={`dp-pop ${pos.bottom !== undefined ? "is-up" : ""}`} style={{ top: pos.top, bottom: pos.bottom, left: pos.left }} onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-label="Pick a date">
+            <div ref={popRef} className={`dp-pop ${pos.bottom !== undefined ? "is-up" : ""}`} style={{ top: pos.top, bottom: pos.bottom, left: pos.left }} onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-label="Pick a date">
               <div className="dp-top">
                 <span className="dp-top-k">{weekMode ? "Week of" : selected ? "Selected" : "Pick a date"}</span>
                 <b className="dp-top-v" key={value}>

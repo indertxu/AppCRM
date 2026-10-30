@@ -23,8 +23,9 @@ import { supabase } from "../../api/supabase";
 import {
   AddressFields, PhoneField, StatusPills, HistorySection, phoneText, telHref,
   FilterBar, FilterChips, SortHead, applyView, nextSort, emptyView, useSavedViews, useStoredView, type FField,
-  useBulkSelection, BulkBar, BulkCheck, inPool, type BulkAction, DataCleanup, DataTools, GEAR, SettingsShell, ColumnsEditor, CustomFieldsEditor,
-  ConfirmX, DealRows, MultiChoice, CustomChips, isChoiceType, RequiredFieldsEditor, InheritedTags, TypeChips, typeSortKey,
+  useBulkSelection, BulkBar, BulkCheck, inPool, type BulkAction, DataCleanup, DataTools, SettingsShell, ColumnsEditor, CustomFieldsEditor,
+  ConfirmX, DealRows, MultiChoice, CustomChips, isChoiceType, RequiredFieldsEditor, InheritedTags, TypeChips, typeSortKey, NewDealButton, newDealUrl,
+  MergeModal, type MergeField,
 } from "../companies/CompaniesPage";
 import "../clients/ClientsPage.css";
 import "../companies/CompaniesPage.css";
@@ -35,7 +36,7 @@ import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
 import { LinkedInExtensionModal } from "./LinkedInCapture";
 import {
   isRequired, isProfileKey, missingProfile, tidyProfile, formatAddress, missingFixed, PROFILE_FIELDS,
-  languageOptions, languageName, countryOptions, countryLabel, withProfileCodes, normalizeLinkedIn, isLinkedIn, linkedInHandle, isReservedLabel,
+  languageOptions, languageName, countryLabel, withProfileCodes, normalizeLinkedIn, isLinkedIn, linkedInHandle, isReservedLabel,
 } from "./contactProfile";
 import "./ContactsPage.css";
 
@@ -569,6 +570,28 @@ export default function ContactsPage() {
       },
     },
   ];
+  // Merge: exactly two picked → one contact (79_merge_records.sql)
+  const [merging, setMerging] = useState<[Contact, Contact] | null>(null);
+  bulkActions.unshift({
+    key: "merge", label: "Merge",
+    icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 3v6a6 6 0 0 0 6 6h0a6 6 0 0 1 6 6M18 3v6a6 6 0 0 1-6 6M12 15v6" /></svg>,
+    disabledReason: !lead ? "Only boss and sales managers can merge contacts." : bulk.ids.length !== 2 ? "Pick exactly two contacts to merge them." : undefined,
+    run: async () => {
+      const rows = await pickRows();
+      if (rows.length !== 2) return "Pick exactly two contacts to merge them.";
+      setMerging([withProfileCodes(structuredClone(rows[0])), withProfileCodes(structuredClone(rows[1]))]);
+      return null;
+    },
+  });
+  const mergeFields: MergeField[] = [
+    { key: "first_name", label: "Name" }, { key: "last_name", label: "Surname" }, { key: "position", label: "Position" },
+    { key: "email", label: "Main email" }, { key: "phone", label: "Mobile" }, { key: "landline", label: "Telephone" },
+    { key: "linkedin", label: "LinkedIn" }, { key: "language", label: "Language", text: (v) => languageName(String(v)) },
+    { key: "street", label: "Street" }, { key: "addr_number", label: "Number" }, { key: "postal_code", label: "Postal code" },
+    { key: "city", label: "City" }, { key: "province", label: "Province" }, { key: "country", label: "Country", text: (v) => countryLabel(v) },
+    { key: "notes", label: "Notes" },
+    ...fields.map((f) => ({ key: `custom.${f.id}`, label: f.label })),
+  ];
 
   // ---- Only the rows on screen are in the page (plus a margin); the others are spacers ----
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -622,6 +645,27 @@ export default function ContactsPage() {
       }).catch(() => {}).finally(() => busy.delete(b));
     }
   }, [server, srv, win.first, win.last]);
+  /** After a save in the panel: just that row is read again and put back where it is (the list keeps its place). */
+  const refreshRow = (saved: Contact, isNew: boolean) => {
+    if (!saved.id) return;
+    if (server) {
+      if (isNew) { srvRefresh(); return; }
+      contactsRows([saved.id]).then((r) => {
+        const row = r[0]; if (!row) return;
+        setSrv((cur) => {
+          let hit = -1;
+          cur.rows.forEach((x, i) => { if (x.id === row.id) hit = i; });
+          if (hit < 0) return cur;
+          const rows = new Map(cur.rows); rows.set(hit, row);
+          return { ...cur, rows };
+        });
+      }).catch(() => {});
+      contactsFacets().then((f) => { if (f) setFacets(f); }).catch(() => {});
+      return;
+    }
+    setContacts((cs) => (cs.some((x) => x.id === saved.id) ? cs.map((x) => (x.id === saved.id ? { ...x, ...saved } : x)) : [...cs, saved]));
+    loadContactAssignees().then(setAssignees).catch(() => {});
+  };
   // a row from the first page (before everything loaded) opens once its full record is in
   const openContact = (c: Contact) => {
     if (server) { setEditing(structuredClone(c)); return; }
@@ -671,7 +715,6 @@ export default function ContactsPage() {
           { key: "new", group: "Create", label: "New contact", hint: "Add one person by hand", icon: AM_ICON.plus, primary: true, tone: "green", shortcut: "N", onSelect: () => setEditing(empty()) },
           { key: "linkedin", group: "Data", label: "Save from LinkedIn", hint: "Browser extension: add people & companies from LinkedIn", icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-4 0v7h-4v-7a6 6 0 0 1 6-6zM2 9h4v12H2zM4 6a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" /></svg>, tone: "blue", shortcut: "L", onSelect: () => setLinkedInOpen(true) },
           { key: "fields", group: "Setup", label: "Columns", hint: "What the list shows, and in which order", icon: AM_ICON.fields, tone: "amber", shortcut: "F", onSelect: () => setShowFieldSettings(true) },
-          ...(lead ? [{ key: "settings", group: "Setup", label: "Contacts settings", hint: "Custom fields, import, export and clean-up", icon: GEAR, tone: "violet" as const, shortcut: "S", onSelect: () => navigate("/settings", { state: { settingsView: "contactspage" } }) }] : []),
         ]} />
       </header>
 
@@ -717,6 +760,19 @@ export default function ContactsPage() {
         </div>
       )}
 
+      {merging && (
+        <MergeModal kind="contact" noun="contacts" records={merging} fields={mergeFields} nameOf={(c) => fullName(c)}
+          join={(keep, other) => {
+            // every email of both (the main one stays main), and the companies of both
+            const all = [keep.email, ...(keep.emails ?? []), other.email, ...(other.emails ?? [])].map((x) => (x ?? "").trim()).filter(Boolean);
+            const uniq = all.filter((x, i) => all.findIndex((y) => y.toLowerCase() === x.toLowerCase()) === i);
+            return { emails: uniq.filter((x) => x.toLowerCase() !== (keep.email ?? "").trim().toLowerCase()), companyIds: [...new Set([...(keep.companyIds ?? []), ...(other.companyIds ?? [])])] };
+          }}
+          save={(m) => saveContact({ ...m, ...tidyProfile(m) })}
+          onClose={() => setMerging(null)}
+          onDone={() => { setMerging(null); bulk.clear(); void reload(); }} />
+      )}
+
       {editing && (
         <ContactEditor
           contact={editing}
@@ -727,7 +783,7 @@ export default function ContactsPage() {
           rel={rel}
           assigned={assignedOf(editing)}
           onClose={closeEditor}
-          onSaved={async () => { const back = backTo; closeEditor(); if (!back) await reload(); }}
+          onSaved={(saved, isNew) => refreshRow(saved, isNew)}
           onDeleted={async () => { const back = backTo; closeEditor(); if (!back) await reload(); }}
           onOpenCompany={(id) => {
             if (editing.id) navigate(location.pathname, { replace: true, state: { panelContactId: editing.id, backTo } });
@@ -779,13 +835,17 @@ const INFO_KEYS = ["last_name", "position", "email", "landline", "phone", "linke
 function ContactEditor({ contact, companies, employees, fields, canAssign, assigned, rel, onClose, onSaved, onDeleted, onOpenCompany }: {
   contact: Contact; companies: Company[]; employees: Employee[]; fields: ContactField[]; canAssign: boolean; assigned: string[];
   rel: RelationshipSets | null;
-  onClose: () => void; onSaved: () => void; onDeleted: () => void;
+  /** Saved: the panel stays open on the saved contact (the list updates that row). */
+  onClose: () => void; onSaved: (saved: Contact, isNew: boolean) => void; onDeleted: () => void;
   /** Open a company on the Companies page. */
   onOpenCompany: (id: string) => void;
 }) {
   // old free-text values ("España", "Español") become codes as soon as the contact is opened
   const [c, setC] = useState<Contact>(() => withProfileCodes(contact));
-  const [initial] = useState(() => JSON.stringify(withProfileCodes(contact)));
+  const [initial, setInitial] = useState(() => JSON.stringify(withProfileCodes(contact)));
+  /** A moment of "Saved" in the footer after a save (the panel stays open). */
+  const [savedAt, setSavedAt] = useState(0);
+  useEffect(() => { if (!savedAt) return; const t = window.setTimeout(() => setSavedAt(0), 2600); return () => window.clearTimeout(t); }, [savedAt]);
   const [who, setWho] = useState<string[]>(assigned);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -814,15 +874,16 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
   const [allDeals, setAllDeals] = useState<DealRef[]>([]);
   const [dealAdd, setDealAdd] = useState<string[]>([]);
   const [dealRemove, setDealRemove] = useState<string[]>([]);
+  const [dealsTick, setDealsTick] = useState(0);
   useEffect(() => {
-    if (!contact.id) return;
+    if (!c.id) return;
     let alive = true;
-    listContactDeals(contact.id, contact.companyIds).then((d) => { if (alive) setDeals(d); }).catch(() => { if (alive) setDeals([]); });
+    listContactDeals(c.id, c.companyIds).then((d) => { if (alive) setDeals(d); }).catch(() => { if (alive) setDeals([]); });
     // every deal is only needed for the "put on another deal" picker: fetched once the panel is up and idle
     const later = window.setTimeout(() => { listAllDeals().then((d) => { if (alive) setAllDeals(d); }).catch(() => {}); }, 700);
     return () => { alive = false; window.clearTimeout(later); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contact.id]);
+  }, [c.id, dealsTick]);
   const dealById = (id: string) => deals?.find((d) => d.id === id) ?? allDeals.find((d) => d.id === id);
   const onDeals: (DealRef & { pending?: "add" | "remove" })[] = [
     ...(deals ?? []).filter((d) => d.via === "direct" && !dealRemove.includes(d.id)),
@@ -856,10 +917,6 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
     const main = CONTACT_LANGUAGES.map((l) => all.find((o) => o.value === l.code)).filter((o): o is { value: string; label: string } => !!o);
     return [{ value: "__none", label: "— Not set" }, ...main, ...all.filter((o) => !main.includes(o))];
   });
-  const [countryOpts] = useState(() => countryOptions());
-  // A country typed in by an import that isn't in the list still shows (and can be replaced).
-  const countryChoices = c.country && !countryOpts.some((o) => o.value === c.country)
-    ? [{ value: c.country, label: `${c.country} (as imported)` }, ...countryOpts] : countryOpts;
   const langChoices = c.language && !langOpts.some((o) => o.value === c.language)
     ? [langOpts[0], { value: c.language, label: `${c.language} (as imported)` }, ...langOpts.slice(1)] : langOpts;
 
@@ -892,7 +949,13 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
       if (de) { setBusy(false); setErr(`Deals: ${de}`); return; }
     }
     setBusy(false);
-    if (e) setErr(e); else close(onSaved);
+    if (e) { setErr(e); return; }
+    // the panel stays open where you were: what was saved is the new starting point
+    const isNew = !c.id;
+    setC(toSave); setInitial(JSON.stringify(toSave)); setTried(false);
+    if (dealsDirty) { setDealAdd([]); setDealRemove([]); setDealsTick((x) => x + 1); }
+    setSavedAt(Date.now());
+    onSaved(toSave, isNew);
   };
   const remove = async () => {
     if (!c.id) return close();
@@ -1046,11 +1109,7 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
             <section className="dw-sec" data-sec="address" data-tone="amber">
               <DwSecHead icon="pin" title="Contact address" hint="Where they are — start typing the street or the postal code"
                 aside={missing.length ? <span className="dw-pill is-warn">{missing.length} missing</span> : <span className="dw-pill is-ok">Complete</span>} />
-              <AddressFields value={c} onChange={(p) => set(p as Partial<Contact>)} countryAs="code" req={(k) => req(k)} missing={(k) => miss(k)}
-                renderCountry={() => (
-                  <ProfilePicker value={c.country ?? ""} options={countryChoices} placeholder="Choose a country…"
-                    onChange={(v) => set({ country: v })} />
-                )} />
+              <AddressFields value={c} onChange={(p) => set(p as Partial<Contact>)} countryAs="code" req={(k) => req(k)} missing={(k) => miss(k)} />
             </section>
 
             <section className="dw-sec" data-sec="companies" data-tone="indigo">
@@ -1076,8 +1135,13 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
             </section>
 
             <section className="dw-sec" data-sec="deals" data-tone="blue">
-              <DwSecHead icon="trend" title="Deals" hint="The deals this person is on — and their companies' other deals, to add them"
-                aside={onDeals.length ? <span className="dw-pill">{onDeals.length}</span> : undefined} />
+              <DwSecHead icon="trend" title="Deals" hint="The deals this person is on — put them on another one, or start a new deal"
+                aside={<span className="dw-sec-acts">{onDeals.length ? <span className="dw-pill">{onDeals.length}</span> : null}
+                  {c.id && <NewDealButton onClick={() => leaveFor(() => {
+                    // their company comes along when they have just one
+                    const co = c.companyIds.length === 1 ? { id: c.companyIds[0], name: companyName(c.companyIds[0]) } : null;
+                    navigate(newDealUrl({ company: co, contact: { id: c.id!, name: displayName || "Contact" } }));
+                  })} />}</span>} />
               {!c.id ? <p className="dw-empty-hint">Save the contact first to put them on deals.</p> : (
                 <>
                   <DealRows deals={deals === null ? null : onDeals} empty="Not on any deal yet."
@@ -1132,8 +1196,8 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
 
         <footer className="dw-foot">
           {c.id && <button className="dw-del" onClick={remove}>Delete</button>}
-          <span className={`dw-foot-note ${err ? "is-err" : missingAll.length ? "is-warn" : ""}`}>
-            {err ?? (missingAll.length ? `Still missing: ${missingAll.join(", ")}` : c.id ? "Everything required is filled in." : "Nothing is saved until you click Save.")}
+          <span className={`dw-foot-note ${err ? "is-err" : savedAt ? "is-ok" : missingAll.length ? "is-warn" : ""}`}>
+            {err ?? (savedAt ? "Saved ✓" : missingAll.length ? `Still missing: ${missingAll.join(", ")}` : c.id ? "Everything required is filled in." : "Nothing is saved until you click Save.")}
           </span>
           <div className="dw-foot-right">
             <button className="dw-cancel" onClick={() => close()}>Cancel</button>

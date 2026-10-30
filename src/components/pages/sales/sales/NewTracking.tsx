@@ -174,7 +174,9 @@ function Combo({ value, onChange, options, placeholder, clearOnSelect = false, e
 }
 
 /** "New tracking" drawer: who, pipeline, products, and the company's own deal fields. */
-export default function NewTracking({ companies, contacts, pipelines, products, fields = [], people = [], me = null, roles = [], phaseByPipe = {}, level = "team", onClose, onCreated, lean = false }: {
+export default function NewTracking({ companies, contacts, pipelines, products, fields = [], people = [], me = null, roles = [], phaseByPipe = {}, level = "team", onClose, onCreated, lean = false, preset }: {
+  /** Opened from a company or a contact panel: that company and those people are already picked. */
+  preset?: { company?: { id: string; name: string } | null; contacts?: { id: string; name: string }[] };
   companies: Company[]; contacts: Contact[]; pipelines: Pipeline[]; products: Product[];
   /** The directories stay in the database: companies and contacts are searched as you type. */
   lean?: boolean;
@@ -203,9 +205,9 @@ export default function NewTracking({ companies, contacts, pipelines, products, 
   const locked = (id: string) => !!me && (level === "self" || (!me.lead && level !== "anyone")) && id === me.id;
   const solo = level === "self";
   const removePerson = (id: string) => { setTeam((t) => t.filter((x) => x !== id)); setOwner((o) => (o === id ? null : o)); };
-  const [companyId, setCompanyId] = useState("");
+  const [companyId, setCompanyId] = useState(preset?.company?.id ?? "");
   const [dealName, setDealName] = useState("");
-  const [contactIds, setContactIds] = useState<string[]>([]);
+  const [contactIds, setContactIds] = useState<string[]>(() => (preset?.contacts ?? []).map((x) => x.id));
   const [pipelineId, setPipelineId] = useState("");
   const [productIds, setProductIds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
@@ -235,8 +237,8 @@ export default function NewTracking({ companies, contacts, pipelines, products, 
 
   // lean: the picked company's people (read from the database) and the people picked by search
   const [coPeople, setCoPeople] = useState<Contact[]>([]);
-  const [pickedPeople, setPickedPeople] = useState<Contact[]>([]);
-  const [pickedCo, setPickedCo] = useState<Company | null>(null);
+  const [pickedPeople, setPickedPeople] = useState<Contact[]>(() => (preset?.contacts ?? []).map((x) => ({ id: x.id, first_name: x.name, last_name: "", companyIds: [] }) as unknown as Contact));
+  const [pickedCo, setPickedCo] = useState<Company | null>(() => (preset?.company ? ({ id: preset.company.id, name: preset.company.name, relationship: [] } as unknown as Company) : null));
   useEffect(() => {
     if (!lean || !companyId) { setCoPeople([]); return; }
     let off = false;

@@ -8,7 +8,7 @@ import SalesForecast, { type ForecastKpis } from "./SalesForecast";
 import { supabase } from "../../../api/supabase";
 import { listCompanies, listContacts, myProfile, sessionUserId, loadPrefs, savePref, type Company, type Contact } from "../../companies/companiesApi";
 import { listPipelines, loadPipeline, loadPhasesByPipeline, sortPipelines, moveDealsToPipeline, listFolders, folderPaths, type Pipeline, type Phase, type PipelineFolder } from "../../settings/pipelineApi";
-import { useBulkSelection, BulkBar, BulkCheck, DataTools, SettingsShell, GEAR, inPool, type BulkAction, type SxSection } from "../../companies/CompaniesPage";
+import { useBulkSelection, BulkBar, BulkCheck, DataTools, SettingsShell, inPool, type BulkAction, type SxSection } from "../../companies/CompaniesPage";
 import { PageCover, PageLoader } from "../../../framework/AppLayout";
 import { loadProducts, loadServices, type Product } from "../../settings/catalogApi";
 import { dealContactNames } from "./salesApi";
@@ -18,7 +18,6 @@ import TrackingDetail from "../trackings/TrackingDetail";
 import { RevenueModeSetting } from "../trackings/HandoffClientForm";
 import { HxPrompt } from "../trackings/HandoffConfirmServices";
 import ExportModal from "../extras/ExportModal";
-import SalesReport from "../extras/SalesReport";
 import NewTracking from "./NewTracking";
 import TrackingFieldsModal from "../extras/TrackingFieldsModal";
 import { listTrackingFields, type TrackingField } from "../extras/trackingFieldsApi";
@@ -627,12 +626,20 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
 
   /** Arriving from the sales calendar with ?tracking=… opens that deal. */
   useEffect(() => {
-    const id = new URLSearchParams(window.location.search).get("tracking");
+    const q = new URLSearchParams(window.location.search);
+    const id = q.get("tracking");
     if (id) setOpenId(id);
+    // …and from a company or a contact panel with ?new=1, a new deal with them already picked
+    if (q.get("new") === "1") {
+      const co = q.get("company"), ct = q.get("contact");
+      setNewPreset({ company: co ? { id: co, name: q.get("coname") ?? "" } : null, contacts: ct ? [{ id: ct, name: q.get("ctname") ?? "" }] : [] });
+      setCreating(true);
+      window.history.replaceState(null, "", window.location.pathname + window.location.hash);
+    }
   }, []);
   const [creating, setCreating] = useState(false);
+  const [newPreset, setNewPreset] = useState<{ company: { id: string; name: string } | null; contacts: { id: string; name: string }[] } | undefined>(undefined);
   const [exporting, setExporting] = useState(false);
-  const [reporting, setReporting] = useState(false);
   const [importing, setImporting] = useState(false);
   /** Sales roles (who sees which pipelines, up to which phase) and the handovers they caused. */
   const [salesRoles, setSalesRoles] = useState<SalesRole[]>(() => snap0?.deals[3].roles ?? []);
@@ -990,7 +997,6 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   const canFields = !!perms?.fields.value;
   const canManage = !!perms?.manage.value;
   const canImport = !!perms?.import.value;
-  const canReports = !!perms?.reports.value;
   const exportLevel = perms?.export.value ?? "none";
   const createLevel = perms?.create.value ?? "none";
   const allowedViews = (["list", "kanban", "forecast"] as const).filter((v) => !perms || perms.views[v === "kanban" ? "board" : v].value);
@@ -1470,14 +1476,14 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
       .catch(() => { if (!off) setDealCtx({ id: openId, companies: [], contacts: [] }); });
     return () => { off = true; };
   }, [lean, openId, trackings]); // eslint-disable-line react-hooks/exhaustive-deps
-  // lean: export and reports need the full directories — read when one of them opens
+  // lean: the export needs the full directories — read when it opens
   useEffect(() => {
-    if (!lean || fullDirs || !(exporting || reporting)) return;
+    if (!lean || fullDirs || !exporting) return;
     let off = false;
     Promise.all([listCompanies().catch(() => [] as Company[]), listContacts().catch(() => [] as Contact[])])
       .then(([cos, cts]) => { if (!off) setFullDirs({ companies: cos, contacts: cts }); });
     return () => { off = true; };
-  }, [lean, exporting, reporting, fullDirs]);
+  }, [lean, exporting, fullDirs]);
   const [exportIds, setExportIds] = useState<string[] | null>(null);
   const canAssignDeals = canManage || !!(me && (me.is_superadmin || ["boss", "sales_manager"].includes(me.role)));
   /** Selected deals that can be changed (handed-over ones are a frozen copy). Worked out once per selection, not per row. */
@@ -1814,8 +1820,6 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
         )}
         {(() => { const items: ActionItem[] = [
           ...(createLevel !== "none" ? [{ key: "new", group: "Create", label: "New deal", hint: "Open a deal with a company or contact", icon: AM_ICON.plus, primary: true, tone: "green" as const, shortcut: "N", onSelect: () => setCreating(true) }] : []),
-          ...(canReports ? [{ key: "reports", group: "Analyse", label: "Reports", hint: "Lists, boards, forecasts and charts", icon: <SoIcon d={SO_ICON.report} w={1.9} />, tone: "blue" as const, shortcut: "R", onSelect: () => setReporting(true) }] : []),
-          ...(exportLevel !== "none" || canImport || canFields || canManage ? [{ key: "settings", group: "Setup", label: "Deals settings", hint: "Import, export, deal fields and sales roles", icon: GEAR, tone: "slate" as const, shortcut: "S", onSelect: () => navigate("/settings", { state: { settingsView: "salespage" } }) }] : []),
         ]; return items.length ? <ActionsMenu items={items} /> : null; })()}
       </header>
 
@@ -2032,37 +2036,14 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
       )}
 
       {exportModal}
-      {reporting && lean && !fullDirs && <PageCover show label="Getting the report ready…" />}
-      {reporting && (!lean || fullDirs) && (
-        <SalesReport
-          deals={mine}
-          contacts={allContacts}
-          companies={allCompanies}
-          employees={employees}
-          trackAssignees={trackAssignees}
-          trackOwners={trackOwners}
-          potentialTotals={potentialTotals}
-          pipelineNames={pipelines.map((p) => p.name)}
-          productNames={products.map((p) => p.name)}
-          phaseNames={allPhaseNames}
-          me={me?.id ?? null}
-          trackingFields={trackingFields}
-          helpers={{
-            pipelineName, productName, phaseName, phaseProbOf, closeDateOf, trackTitle,
-            progressOf: (t) => trackingPct(phaseByPipe[t.pipeline_id ?? ""] ?? [], t.current_phase_id),
-          }}
-          onOpenDeal={(id) => { setReporting(false); window.setTimeout(() => setOpenId(id), 60); }}
-          onClose={() => setReporting(false)}
-        />
-      )}
       {creating && (
-        <NewTracking lean={lean}
+        <NewTracking lean={lean} preset={newPreset}
           companies={companies} contacts={contacts} pipelines={visiblePipelines} products={products} fields={trackingFields}
           people={employees.filter((e) => !inactive.has(e.id))} me={me ? { id: me.id, lead: createLevel === "anyone" } : null}
           level={createLevel === "none" ? "self" : createLevel}
           roles={salesRoles} phaseByPipe={phaseByPipe}
-          onClose={() => setCreating(false)}
-          onCreated={async (id) => { setCreating(false); await reload(); setOpenId(id); }}
+          onClose={() => { setCreating(false); setNewPreset(undefined); }}
+          onCreated={async (id) => { setCreating(false); setNewPreset(undefined); await reload(); setOpenId(id); }}
         />
       )}
       {handoverModal}

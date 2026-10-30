@@ -23,7 +23,7 @@ import SuperAdminBubble, { getRolePreview } from "./SuperAdmin";
 
 export type PageKey =
   | "home" | "tickets" | "calendar" | "contacts" | "companies" | "clients"
-  | "projects" | "sales" | "management" | "settings" | "marketing" | "success";
+  | "projects" | "sales" | "management" | "settings" | "marketing" | "success" | "reports";
 
 export interface PageDef {
   key: PageKey;
@@ -48,6 +48,7 @@ export const PAGES: PageDef[] = [
   { key: "management", path: "/management", label: "Management", hint: "Team, backlog, billing, bonus" },
   { key: "marketing", path: "/marketing", label: "Marketing", hint: "Lists and e-mail campaigns" },
   { key: "success", path: "/success", label: "Customer success", hint: "Retention, health, renewals and upsells" },
+  { key: "reports", path: "/reports", label: "Reports", hint: "Reports on any part of the CRM" },
   { key: "settings", path: "/settings", label: "Settings", hint: "Personal and company settings", locked: true },
 ];
 export const PAGE_KEYS = PAGES.map((p) => p.key);
@@ -443,6 +444,7 @@ const DEFAULTS: Record<PageKey, "all" | string[]> = {
   management: MANAGER_ROLES,
   marketing: ["boss", "marketing_manager", "sales_manager"],
   success: ["boss", "customer_success", "consultancy_manager", "sales_manager"],
+  reports: [...new Set([...SALES_TEAM, ...MANAGER_ROLES])],
 };
 export const defaultAllowed = (page: PageKey, level: string | null | undefined) => {
   const d = DEFAULTS[page];

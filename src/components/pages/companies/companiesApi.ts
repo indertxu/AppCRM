@@ -294,6 +294,34 @@ export function companyRow(c: Company): { row: Record<string, any>; extra: Recor
   return { row, extra };
 }
 
+/**
+ * The company's billing details changed: the same change everywhere they were copied — the bill-to of the
+ * client's signed products, and the billing contact of its projects (the one that was the old billing person).
+ */
+export async function syncCompanyBilling(companyId: string, before: Billing, after: Billing): Promise<void> {
+  const low = (x?: string | null) => (x ?? "").trim().toLowerCase();
+  if (low(before.name) === low(after.name) && low(before.email) === low(after.email) && low(before.phone) === low(after.phone)) return;
+  const { data: cls } = await supabase.from("clients").select("id").eq("company_id", companyId);
+  const ids = ((cls ?? []) as any[]).map((x) => x.id as string);
+  if (!ids.length) return;
+  // signed products: their bill-to follows the company
+  await supabase.from("client_products").update({ billing_contact_name: after.name?.trim() || null, billing_contact_email: after.email?.trim() || null }).in("client_id", ids);
+  // projects: the billing contact that was the old one (by e-mail or name) becomes the new one
+  const { data: ps } = await supabase.from("projects").select("id, contacts").in("client_id", ids);
+  for (const p of (ps ?? []) as any[]) {
+    const cs: any[] = Array.isArray(p.contacts) ? p.contacts : [];
+    let hit = false;
+    const next = cs.map((c) => {
+      if (!c?.billing) return c;
+      const same = (low(before.email) && low(c.email) === low(before.email)) || (low(before.name) && low(c.name) === low(before.name)) || (!low(before.email) && !low(before.name));
+      if (!same) return c;
+      hit = true;
+      return { ...c, name: after.name?.trim() || c.name, email: after.email?.trim() ?? c.email, phone: after.phone?.trim() || c.phone };
+    });
+    if (hit) await supabase.from("projects").update({ contacts: next }).eq("id", p.id);
+  }
+}
+
 export async function saveCompany(c: Company): Promise<string | null> {
   const { row, extra } = companyRow(c);
   const write = async (r: Record<string, any>) => {

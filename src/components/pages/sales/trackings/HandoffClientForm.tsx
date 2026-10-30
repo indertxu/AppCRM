@@ -6,8 +6,8 @@ import Select from "../../../framework/Select";
 import LineCalcModal, { IncrementsEditor } from "../../../framework/LineCalcModal";
 import {
   lineBreakdown, yearAmounts, hasIncrements, contractFigures, incrementsToSchedule, EMPTY_INCREMENTS,
-  catalogYears, catalogIncrements, REVENUE_MODES, loadRevenueMode, saveRevenueMode, teamRevenueModeNow, localRevenueMode, setLocalRevenueMode,
-  type RevenueLineFields, type TermPatch, type LineIncrements, type ContractTerms, type PaymentSchedule, type RevenueMode,
+  catalogYears, catalogIncrements, REVENUE_MODES, PAY_FREQUENCIES, payFrequencyLabel, isOurPerson, loadRevenueMode, saveRevenueMode, teamRevenueModeNow, localRevenueMode, setLocalRevenueMode,
+  type RevenueLineFields, type TermPatch, type LineIncrements, type ContractTerms, type PaymentSchedule, type RevenueMode, type OurPeople,
 } from "../sales/salesApi";
 import type { Calculator, Product } from "../../settings/catalogApi";
 import { AddressFields, type AddrValue } from "../../companies/CompaniesPage";
@@ -240,7 +240,7 @@ export default function HandoffClientForm({ prefill, catalog, mode = "create", s
           breakdown: {
             version: null, multiplier: bd.multiplierLabel, gross: bd.gross, discount: bd.discount, total: bd.total,
             rows: bd.rows.map((r) => ({ label: r.label, detail: r.detail, amount: r.amount, discount: r.discount })),
-            years: bd.years,
+            years: bd.years, partnerYears: bd.partnerYears,
           },
           signingDate: terms.signDate || p.signingDate || today,
           startDate: terms.contractStart || p.startDate || terms.signDate || p.signingDate,
@@ -548,6 +548,49 @@ export interface ContractDefaults {
   billingFrequency?: string | null;
   currency?: string | null;
   termsUrl?: string | null;
+  /** Our own team: never taken as the client's people from a PDF. */
+  ours?: OurPeople | null;
+}
+
+/** One line of the address, as the order form writes it. */
+const addrLine = (n: AddrValue) => [[n.street, n.addr_number].filter((x) => (x ?? "").trim()).join(" "), n.addr_details, [n.postal_code, n.city].filter((x) => (x ?? "").trim()).join(" "), n.province]
+  .filter((x) => (x ?? "").trim()).join(", ");
+const flat = (x?: string | null) => (x ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[\s,.]+/g, " ").trim();
+/**
+ * An address written in one line ("Calle de Alcalá 42, 3º B, 28014 Madrid, Spain"),
+ * back into its fields: street and number, details, postal code and town, province, country.
+ */
+export function parseAddress(line: string, country?: string | null): AddrValue {
+  const parts = line.split(/\s*[,\n]\s*/).map((x) => x.trim()).filter(Boolean);
+  const out: AddrValue = { country: country ?? null };
+  if (!parts.length) return out;
+  // a trailing country name
+  if (parts.length > 1 && country && flat(parts[parts.length - 1]) === flat(country)) parts.pop();
+  else if (parts.length > 2 && !/\d/.test(parts[parts.length - 1]) && !country) out.country = parts.pop()!;
+  const first = parts[0];
+  const m = /^(.*?)[\s,]+(n[ºo°.]?\s*\d+[a-zA-Z]?(?:[-/]\d+)?|\d+[a-zA-Z]?(?:[-/]\d+)?|s\/n)$/i.exec(first);
+  out.street = m ? m[1].trim() : first;
+  out.addr_number = m ? m[2].replace(/^n[ºo°.]?\s*/i, "").trim() : null;
+  // "Avda. Diagonal, 640, …": the number in a part of its own
+  if (!out.addr_number && parts.length > 1 && /^(?:n[ºo°.]?\s*)?(\d+[a-zA-Z]?(?:[-/]\d+)?|s\/n)$/i.test(parts[1])) {
+    out.addr_number = parts[1].replace(/^n[ºo°.]?\s*/i, "");
+    parts.splice(1, 1);
+  }
+  const pc = parts.findIndex((x, i) => i > 0 && /^(?:[A-Z]{1,2}-?)?\d{4,5}\b/.test(x));
+  if (pc > 0) {
+    const pm = /^((?:[A-Z]{1,2}-?)?\d{4,5})\s*(.*)$/.exec(parts[pc])!;
+    out.postal_code = pm[1]; out.city = pm[2] || null;
+    const mid = parts.slice(1, pc);
+    out.addr_details = mid.length ? mid.join(", ") : null;
+    const after = parts.slice(pc + 1);
+    if (!out.city && after.length) out.city = after.shift()!;
+    if (after.length && flat(after.join(" ")) !== flat(out.city)) out.province = after.join(", ");
+  } else if (parts.length > 1) {
+    out.city = parts[parts.length - 1];
+    const mid = parts.slice(1, -1);
+    out.addr_details = mid.length ? mid.join(", ") : null;
+  }
+  return out;
 }
 
 const IconPen = () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>;
@@ -596,7 +639,7 @@ function PersonFields({ value, people, onChange, withRole, withPhone }: {
       )}
       <input value={value.name ?? ""} placeholder="Name" onChange={(e) => onChange({ ...value, name: e.target.value })} />
       {withRole && <input value={value.role ?? ""} placeholder="Role, e.g. CFO" onChange={(e) => onChange({ ...value, role: e.target.value })} />}
-      <input value={value.email ?? ""} placeholder="E-mail" type="email" onChange={(e) => onChange({ ...value, email: e.target.value })} />
+      <input className={withRole && !withPhone ? "is-row" : ""} value={value.email ?? ""} placeholder="E-mail" type="email" onChange={(e) => onChange({ ...value, email: e.target.value })} />
       {withPhone && <input value={value.phone ?? ""} placeholder="Phone" onChange={(e) => onChange({ ...value, phone: e.target.value })} />}
     </div>
   );
@@ -665,22 +708,31 @@ export function ContractPanel({
   const d0 = defaults ?? {};
   const [customer, setCustomer] = useState<NonNullable<ContractTerms["customer"]>>(() => ({ ...(d0.customer ?? {}), ...(initial?.customer ?? {}) }));
   // the customer address in parts, for the address finder (map over the summary while typing)
-  const sumRef = useRef<HTMLElement>(null);
+  const sumRef = useRef<HTMLDivElement>(null);
   const [caddr, setCaddr] = useState<AddrValue>(() => {
-    const parts = initial?.customer?.address ? null : d0.addressParts;
-    if (parts) return { ...parts, country: parts.country ? countryLabel(parts.country) || parts.country : parts.country };
-    return { street: (initial?.customer?.address ?? d0.customer?.address) || "", country: (initial?.customer?.country ?? d0.customer?.country) || "" };
+    const withCountry = (p: AddrValue) => ({ ...p, country: p.country ? countryLabel(p.country) || p.country : p.country });
+    const saved = initial?.customer?.address ?? "";
+    const parts = d0.addressParts;
+    // the company's own fields, when the contract has no address of its own or it is the same one
+    if (parts && (!saved.trim() || flat(saved) === flat(addrLine(parts)) || (parts.street && flat(saved).includes(flat(parts.street)))))
+      return withCountry(parts);
+    const line = saved || d0.customer?.address || "";
+    if (line.trim()) return withCountry(parseAddress(line, initial?.customer?.country ?? d0.customer?.country ?? null));
+    return { street: "", country: (initial?.customer?.country ?? d0.customer?.country) || "" };
   });
   const patchCaddr = (p: Partial<AddrValue>) => setCaddr((a) => {
     const n = { ...a, ...p };
-    const line = [[n.street, n.addr_number].filter((x) => (x ?? "").trim()).join(" "), n.addr_details, [n.postal_code, n.city].filter((x) => (x ?? "").trim()).join(" "), n.province]
-      .filter((x) => (x ?? "").trim()).join(", ");
+    const line = addrLine(n);
     setCustomer((c) => ({ ...c, address: line || null, country: n.country || null }));
     return n;
   });
   const [contactPerson, setContactPerson] = useState<NonNullable<ContractTerms["contactPerson"]>>(() => ({ ...(d0.contactPerson ?? {}), ...(initial?.contactPerson ?? {}) }));
   const [adminUser, setAdminUser] = useState<NonNullable<ContractTerms["adminUser"]>>(() => ({ ...(d0.adminUser ?? {}), ...(initial?.adminUser ?? {}) }));
-  const [billingFrequency, setBillingFrequency] = useState<string>(initial?.billingFrequency ?? d0.billingFrequency ?? "annually");
+  // How each kind is paid: the contract's own choice, else what the deal's lines say (set in the calculator), else the default.
+  const lineFreq = (kind: "product" | "service") => lines.find((l) => l.kind === kind && l.line.billing_frequency)?.line.billing_frequency ?? null;
+  const [billingFrequency, setBillingFrequency] = useState<string>(initial?.billingFrequency ?? lineFreq("product") ?? d0.billingFrequency ?? "annually");
+  const [svcFrequency, setSvcFrequency] = useState<string>(initial?.servicesFrequency ?? lineFreq("service") ?? "monthly");
+  const [svcPayDays, setSvcPayDays] = useState<number | null>(initial?.servicesPaymentTermsDays ?? initial?.paymentTermsDays ?? null);
   const [currency, setCurrency] = useState<string>(initial?.currency ?? d0.currency ?? "EUR");
   const [termsUrl, setTermsUrl] = useState<string>(initial?.termsUrl ?? d0.termsUrl ?? "https://konsolidator.com/legal/");
   const [newsletter, setNewsletter] = useState<boolean>(initial?.newsletter ?? true);
@@ -757,7 +809,8 @@ export function ContractPanel({
   const readKeys = useRef<Set<string>>(new Set());
   const markPdf = (k: string) => setFromPdf((s0) => { const n = new Set(s0); n.add(k); return n; });
   const PdfTag = ({ k }: { k: string }) => (fromPdf.has(k) ? <i className="dct-pdf-tag" title="Read from the signed PDF">from PDF</i> : null);
-  const applyPdf = (d: OrderFormData, fileName: string) => {
+  const applyPdf = (d0pdf: OrderFormData, fileName: string) => {
+    let d = d0pdf;
     const c = now.current;
     const saved = (k: keyof ContractTerms) => initial?.[k] != null && initial?.[k] !== "";
     const norm = (v: unknown) => String(v ?? "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -777,10 +830,32 @@ export function ContractPanel({
     field("customer.regNo", "Company reg. no.", cu.regNo, c.customer.regNo, () => setCustomer((x) => ({ ...x, regNo: cu.regNo! })));
     field("customer.vat", "VAT / tax no.", cu.vat, c.customer.vat, () => setCustomer((x) => ({ ...x, vat: cu.vat! })));
     field("customer.address", "Address", cu.address, c.customer.address, () => {
-      setCaddr({ street: cu.address!, country: cu.country || c.customer.country || "" });
-      setCustomer((x) => ({ ...x, address: cu.address!, country: cu.country || x.country || null }));
+      const p = parseAddress(cu.address!, cu.country || c.customer.country || null);
+      setCaddr({ ...p, country: p.country ? countryLabel(p.country) || p.country : p.country });
+      setCustomer((x) => ({ ...x, address: addrLine(p) || cu.address!, country: p.country || x.country || null }));
     });
     if (cu.country && !cu.address) field("customer.country", "Country", cu.country, c.customer.country, () => setCustomer((x) => ({ ...x, country: cu.country! })));
+    // People read from the PDF: our own team is never the client's contact, and someone the
+    // company already has is taken as the database knows them (e-mail, phone, role).
+    const ours = d0.ours ?? null;
+    const known = (p: { name?: string | null; email?: string | null }) => (d0.people ?? []).find((x) =>
+      (p.email && x.email && x.email.toLowerCase() === p.email.toLowerCase()) || (p.name && flat(x.name) === flat(p.name)));
+    const fromDb = <T extends { name?: string | null; email?: string | null; phone?: string | null; role?: string | null }>(p: T): T => {
+      const k = known(p);
+      return k ? { ...p, name: k.name || p.name, email: k.email || p.email || null, phone: k.phone || p.phone || null, role: k.role || p.role || null } : p;
+    };
+    if (d.contactPerson && isOurPerson(d.contactPerson, ours)) d = { ...d, contactPerson: undefined };
+    else if (d.contactPerson?.name) d = { ...d, contactPerson: fromDb(d.contactPerson) };
+    if (d.adminUser && isOurPerson(d.adminUser, ours)) d = { ...d, adminUser: undefined };
+    else if (d.adminUser?.name || d.adminUser?.email) d = { ...d, adminUser: fromDb(d.adminUser as any) };
+    if (d.signatories?.length) {
+      d = { ...d, signatories: d.signatories.map((x) => {
+        const us = isOurPerson(x, ours);
+        // one of ours read as the customer's: they sign for us
+        const side = us ? "supplier" : x.side;
+        return side === "customer" ? { ...fromDb(x), side } : { ...x, side };
+      }) };
+    }
     else if (cu.country) found.add("customer.country");
     if (d.contactPerson?.name) field("contactPerson", "Contact person", d.contactPerson.name, c.contactPerson?.name, () => setContactPerson((x) => ({ ...x, ...Object.fromEntries(Object.entries(d.contactPerson!).filter(([, v]) => v)) })));
     if (d.contactPerson?.name && norm(d.contactPerson.name) === norm(c.contactPerson?.name)) setContactPerson((x) => ({ ...Object.fromEntries(Object.entries(d.contactPerson!).filter(([, v]) => v)), ...Object.fromEntries(Object.entries(x).filter(([, v]) => v)) }));
@@ -863,6 +938,7 @@ export function ContractPanel({
       customer, contactPerson, adminUser, billingFrequency, currency, pricesExclVat: true, termsUrl: termsUrl.trim() || null,
       newsletter, marketingConsent: marketing,
       servicesBilling: services.length ? svcBilling : null, servicesTolerancePct: services.length ? svcTol : null, servicesNote: svcNote.trim() || null,
+      servicesFrequency: services.length ? svcFrequency : null, servicesPaymentTermsDays: services.length ? svcPayDays : null,
       signatories: signers.filter((x) => x.name.trim()), esignId: esignId.trim() || null, esignProvider: esignId.trim() ? esignProv : null,
       signedScope: pdfScope ?? null, servicesRoles: svcRoles ?? null,
       ...fig,
@@ -1018,7 +1094,7 @@ export function ContractPanel({
                   </div>
                 </div>
                 <div className="dct-terms">
-                  <label className="dct-mini"><span>Payment <PdfTag k="paymentTermsDays" /></span><input type="number" min={0} value={payDays ?? ""} placeholder="30" onChange={(e) => setPayDays(e.target.value === "" ? null : Number(e.target.value))} /><em>days</em></label>
+                  <label className="dct-mini"><span>Licence payment <PdfTag k="paymentTermsDays" /></span><input type="number" min={0} value={payDays ?? ""} placeholder="30" onChange={(e) => setPayDays(e.target.value === "" ? null : Number(e.target.value))} /><em>days</em></label>
                   <label className="dct-mini"><span>Non-terminable <PdfTag k="nonTerminableYears" /></span><input type="number" min={0} value={nonTerm ?? ""} placeholder="0" onChange={(e) => setNonTerm(e.target.value === "" ? null : Number(e.target.value))} /><em>years</em></label>
                   <div className="dct-mini is-toggle">
                     <span>Auto-renew <PdfTag k="autoRenew" /></span>
@@ -1031,8 +1107,8 @@ export function ContractPanel({
 
               <section className="dct-sec">
                 <h3 className="dct-sec-t"><span className="dct-ico"><IconCompany /></span>Customer on the order form</h3>
-                <div className="dct-of-grid">
-                  <label className="dct-of is-wide"><span>Legal name <PdfTag k="customer.legalName" /></span><input value={customer.legalName ?? ""} placeholder="As registered" onChange={(e) => setCustomer({ ...customer, legalName: e.target.value })} /></label>
+                <div className="dct-of-grid is-two">
+                  <label className="dct-of is-full"><span>Legal name <PdfTag k="customer.legalName" /></span><input value={customer.legalName ?? ""} placeholder="As registered" onChange={(e) => setCustomer({ ...customer, legalName: e.target.value })} /></label>
                   <label className="dct-of"><span>Company reg. no. <PdfTag k="customer.regNo" /></span><input value={customer.regNo ?? ""} placeholder="—" onChange={(e) => setCustomer({ ...customer, regNo: e.target.value })} /></label>
                   <label className="dct-of"><span>VAT / tax no. <PdfTag k="customer.vat" /></span><input value={customer.vat ?? ""} placeholder="—" onChange={(e) => setCustomer({ ...customer, vat: e.target.value })} /></label>
                 </div>
@@ -1054,16 +1130,16 @@ export function ContractPanel({
 
               <section className="dct-sec">
                 <h3 className="dct-sec-t"><span className="dct-ico"><IconBill /></span>Billing & terms</h3>
-                <div className="dct-of-grid">
-                  <div className="dct-of is-wide"><span>Billing <PdfTag k="billingFrequency" /></span>
+                <div className="dct-of-grid is-bill">
+                  <div className="dct-of is-full"><span>Licences paid <PdfTag k="billingFrequency" /></span>
                     <div className="dct-seg">
-                      {[["annually", "Annually"], ["quarterly", "Quarterly"], ["monthly", "Monthly"], ["upfront", "Upfront"]].map(([k, l]) => (
-                        <button key={k} type="button" className={billingFrequency === k ? "is-on" : ""} onClick={() => setBillingFrequency(k)}>{l}</button>
+                      {PAY_FREQUENCIES.map((f) => (
+                        <button key={f.k} type="button" className={billingFrequency === f.k ? "is-on" : ""} onClick={() => setBillingFrequency(f.k)}>{f.label}</button>
                       ))}
                     </div>
                   </div>
+                  <label className="dct-of"><span>General terms, DPA & SLA <PdfTag k="termsUrl" /></span><input value={termsUrl} placeholder="https://…" onChange={(e) => setTermsUrl(e.target.value)} /></label>
                   <label className="dct-of"><span>Currency <PdfTag k="currency" /></span><input value={currency} maxLength={3} onChange={(e) => setCurrency(e.target.value.toUpperCase())} /></label>
-                  <label className="dct-of is-wide"><span>General terms, DPA & SLA <PdfTag k="termsUrl" /></span><input value={termsUrl} placeholder="https://…" onChange={(e) => setTermsUrl(e.target.value)} /></label>
                 </div>
                 <div className="dct-of-flags">
                   <button type="button" className={`dct-flag ${newsletter ? "is-on" : ""}`} onClick={() => setNewsletter((v) => !v)} aria-pressed={newsletter}><span className="hc-toggle-knob" />Newsletter</button>
@@ -1093,21 +1169,29 @@ export function ContractPanel({
                   <h3 className="dct-sec-t"><span className="dct-ico"><IconService /></span>Services <i className="hc-count">{services.length}</i></h3>
                   <div className="dct-lines">{services.map(lineCard)}</div>
                   <div className="dct-of-grid is-svc">
+                    <div className="dct-of is-full"><span>Services paid</span>
+                      <div className="dct-seg">
+                        {[...PAY_FREQUENCIES, { k: "on_delivery", label: "As delivered", short: "As delivered" }].map((f) => (
+                          <button key={f.k} type="button" className={svcFrequency === f.k ? "is-on" : ""} onClick={() => setSvcFrequency(f.k)}>{f.label}</button>
+                        ))}
+                      </div>
+                    </div>
                     <div className="dct-of"><span>Billed <PdfTag k="servicesBilling" /></span>
                       <div className="dct-seg">
                         <button type="button" className={svcBilling === "per_day" ? "is-on" : ""} onClick={() => setSvcBilling("per_day")}>Per day performed</button>
                         <button type="button" className={svcBilling === "fixed" ? "is-on" : ""} onClick={() => setSvcBilling("fixed")}>Fixed fee</button>
                       </div>
                     </div>
+                    <label className="dct-of"><span>Services payment</span><div className="dct-of-num"><input type="number" min={0} value={svcPayDays ?? ""} placeholder={payDays != null ? String(payDays) : "30"} onChange={(e) => setSvcPayDays(e.target.value === "" ? null : Number(e.target.value))} /><em>days</em></div></label>
                     {svcBilling === "per_day" && <label className="dct-of"><span>Days may vary <PdfTag k="servicesTolerancePct" /></span><div className="dct-of-num"><em>±</em><input type="number" min={0} value={svcTol ?? ""} placeholder="0" onChange={(e) => setSvcTol(e.target.value === "" ? null : Number(e.target.value))} /><em>%</em></div></label>}
-                    <label className="dct-of is-wide"><span>Scope note <PdfTag k="servicesNote" /></span><input value={svcNote} placeholder="e.g. Detailed scope agreed at the kick-off" onChange={(e) => setSvcNote(e.target.value)} /></label>
+                    <label className="dct-of is-full"><span>Scope note <PdfTag k="servicesNote" /></span><input value={svcNote} placeholder="e.g. Detailed scope agreed at the kick-off" onChange={(e) => setSvcNote(e.target.value)} /></label>
                   </div>
                 </section>
               )}
 
               {(pdfScope?.lines?.length || svcRoles?.length) ? (
                 <section className="dct-sec dct-scope">
-                  <h3 className="dct-sec-t"><span className="dct-ico"><IconDoc /></span>On the signed PDF <PdfTag k="lines" />
+                  <h3 className="dct-sec-t"><span className="dct-ico"><IconDoc /></span>Line items on the signed PDF <PdfTag k="lines" />
                     {pdfScope?.fileName && <i className="dct-note">{pdfScope.fileName}</i>}
                   </h3>
                   {!!pdfScope?.lines?.length && (
@@ -1115,7 +1199,7 @@ export function ContractPanel({
                       <div className="dct-scope-h"><span>Scope</span><span>Qty</span><span>List</span><span>Discount</span><span>Final</span><span>Total</span></div>
                       {pdfScope.lines.map((ln, i) => (
                         <div key={i} className="dct-scope-r">
-                          <span><b>{ln.name}</b><small>{ln.oneTime ? "One-time" : billingFrequency === "monthly" ? "Monthly" : "Yearly"}</small></span>
+                          <span><b>{ln.name}</b><small>{ln.oneTime ? "One-time" : payFrequencyLabel(billingFrequency) || "Yearly"}</small></span>
                           <span>{ln.qty}</span>
                           <span>{money(ln.list)}</span>
                           <span>{ln.discountPct != null ? `−${ln.discountPct}%` : "—"}</span>
@@ -1123,16 +1207,6 @@ export function ContractPanel({
                           <span><b>{money(ln.final * (ln.qty || 1))}</b></span>
                         </div>
                       ))}
-                      {pdfScope.totals?.annualFinal != null && (() => {
-                        const pdfY1 = pdfScope.totals!.annualFinal!;
-                        const same = Math.abs(pdfY1 - fig.license.firstYear) < 1;
-                        return (
-                          <div className={`dct-scope-f ${same ? "is-ok" : "is-diff"}`}>
-                            <span>Yearly on the PDF <b>{money(pdfY1)}</b>{pdfScope.totals?.annualList != null && pdfScope.totals.annualList !== pdfY1 && <> · list <s>{money(pdfScope.totals.annualList)}</s></>}</span>
-                            <span>{same ? "✓ Same as this contract's year 1" : <>This contract's year 1 is <b>{money(fig.license.firstYear)}</b> — check the licence lines</>}</span>
-                          </div>
-                        );
-                      })()}
                     </div>
                   )}
                   {!!svcRoles?.length && (
@@ -1173,22 +1247,25 @@ export function ContractPanel({
               </section>
             </div>
 
-            <aside className="dct-sum" ref={sumRef}>
+            <aside className="dct-sum">
+              <div className="dct-sum-figs" ref={sumRef}>
               <div className="dct-final is-lic">
-                <span className="dct-final-k">Final licence price</span>
+                <span className="dct-final-k">Licences{recurring.length ? ` · ${term} ${term === 1 ? "year" : "years"}` : ""}</span>
                 <b><Tween v={fig.license.final} fmt={money} /></b>
                 <div className="dct-final-sub">
-                  <span>Year 1 <b>{money(fig.license.firstYear)}</b></span>
+                  {recurring.length > 0 && <span>Year 1 <b>{money(fig.license.firstYear)}</b></span>}
                   {fig.license.discount > 0 && <span>List <s>{money(fig.license.list)}</s> <em>−{money(fig.license.discount)}</em></span>}
                 </div>
+                <div className="dct-final-pay"><span>Paid {payFrequencyLabel(billingFrequency).toLowerCase() || "—"}</span><span>{payDays != null ? `${payDays} days` : "30 days"}</span></div>
               </div>
               <div className="dct-final is-svc">
-                <span className="dct-final-k">Final services price</span>
+                <span className="dct-final-k">Services</span>
                 <b><Tween v={fig.services.final} fmt={money} /></b>
                 <div className="dct-final-sub">
-                  <span>Fixed fee, billed once</span>
+                  <span>{services.length ? (svcBilling === "fixed" ? "Fixed fee" : `Per day performed${svcTol ? ` · ±${svcTol}%` : ""}`) : "No services on this contract"}</span>
                   {fig.services.discount > 0 && <span>List <s>{money(fig.services.list)}</s> <em>−{money(fig.services.discount)}</em></span>}
                 </div>
+                {services.length > 0 && <div className="dct-final-pay"><span>Paid {payFrequencyLabel(svcFrequency).toLowerCase()}</span><span>{svcPayDays ?? payDays ?? 30} days</span></div>}
               </div>
 
               <div className="dct-years">
@@ -1211,6 +1288,7 @@ export function ContractPanel({
                 <small>{recurring.length ? `${term} ${term === 1 ? "year" : "years"}` : "One-off"}{signDate ? ` · signed ${new Date(`${signDate}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}` : ""}</small>
               </div>
 
+              </div>
               {missingOrder.length > 0 && <p className="dct-miss"><b>Still missing on the order form:</b> {missingOrder.join(", ")}.</p>}
               {(onGenerateDoc || docFile) && (
                 <div className="dct-doc">

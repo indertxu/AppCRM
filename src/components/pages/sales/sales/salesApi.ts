@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../../api/supabase";
 import { syncEntryToOutlookDetailed, deleteEntryFromOutlook, meetingsGoneFromOutlook } from "../../../api/outlookSync";
-import type { Phase } from "../../settings/pipelineApi";
+import { listPipelines, loadPipeline, renewalPipelineOf, type Phase } from "../../settings/pipelineApi";
 import { calcBreakdown, discountOf, BASE_KEY, yearlySchedule, type Calculator, type CalcRow, type CalcDiscount } from "../../settings/catalogApi";
 import type { DeckEditOp } from "../trackings/proposalGen";
 
@@ -195,9 +195,28 @@ export interface RevenueLineFields {
   partner_id?: string | null;
   partner_mode?: "percent" | "amount" | string | null;
   partner_value?: number | null;
+  /** Which periods (contract years) the partner's cut applies to (78_partner_periods.sql). */
+  partner_periods?: PartnerPeriods | null;
+  /** How the client pays this line: upfront, annually, semiannually, quarterly, monthly (78_partner_periods.sql). */
+  billing_frequency?: string | null;
   /** Yearly price increases of a multi-year recurring line (27_deal_contracts.sql). */
   increments?: LineIncrements | null;
 }
+/**
+ * The periods a partner's cut covers: only the first ("once"), or every period
+ * ("recurring") except the ones switched off (`skip`, 0 = year 1).
+ * Not set: a % covers every year and a fixed amount is taken once (as before).
+ */
+export interface PartnerPeriods { mode: "once" | "recurring"; skip?: number[] }
+/** How a contract line can be paid. */
+export const PAY_FREQUENCIES: { k: string; label: string; short: string }[] = [
+  { k: "upfront", label: "Upfront", short: "Upfront" },
+  { k: "annually", label: "Annually", short: "Yearly" },
+  { k: "semiannually", label: "Semi-annually", short: "6-monthly" },
+  { k: "quarterly", label: "Quarterly", short: "Quarterly" },
+  { k: "monthly", label: "Monthly", short: "Monthly" },
+];
+export const payFrequencyLabel = (k?: string | null) => PAY_FREQUENCIES.find((f) => f.k === k)?.label ?? (k === "on_delivery" ? "As delivered" : k ?? "");
 
 /**
  * How a multi-year recurring line goes up each contract year.
@@ -434,6 +453,7 @@ export type TermPatch = {
   calc_rates?: Record<string, number>;
   discount_mode?: "none" | "percent" | "amount"; discount_value?: number;
   partner_id?: string | null; partner_mode?: "percent" | "amount" | null; partner_value?: number | null;
+  partner_periods?: PartnerPeriods | null; billing_frequency?: string | null;
   increments?: LineIncrements | null;
   billing_contact_name?: string | null; billing_contact_email?: string | null;
   contact_ids?: string[];
@@ -470,15 +490,35 @@ export interface LineBreakdown {
   partner: number;
   /** What is left for us: total − partner. This is what counts as deal value. */
   net: number;
+  /** What the partner takes in each contract year (one entry for a one-off line). */
+  partnerYears: number[];
   /** What the client pays in each contract year (recurring lines); one entry with the total otherwise. */
   years: number[];
 }
 
-/** What the partner on a line takes from `total`. */
-export function partnerCutOf(l: RevenueLineFields, total: number): number {
+/** Which of the line's periods the partner's cut covers (true = covered). */
+export function partnerPeriodsOn(l: RevenueLineFields, count: number): boolean[] {
+  const pp = l.partner_periods;
+  const n = Math.max(1, count);
+  if (!pp) return Array.from({ length: n }, (_, i) => (l.partner_mode === "amount" ? i === 0 : true));
+  const skip = new Set(pp.skip ?? []);
+  return Array.from({ length: n }, (_, i) => (pp.mode === "once" ? i === 0 : !skip.has(i)));
+}
+/** What the partner takes in each period (contract year) of the line. */
+export function partnerByPeriod(l: RevenueLineFields, total: number, years?: number[]): number[] {
   const v = Number(l.partner_value) || 0;
-  if (!l.partner_id || !v || !total) return 0;
-  return l.partner_mode === "amount" ? Math.min(v, total) : Math.round(total * Math.min(v, 100)) / 100;
+  const per = years && years.length ? years : [total];
+  if (!l.partner_id || !v || !total) return per.map(() => 0);
+  const on = partnerPeriodsOn(l, per.length);
+  // Before periods were chosen a fixed amount was one cut over the whole line.
+  if (!l.partner_periods && l.partner_mode === "amount") return per.map((_, i) => (i === 0 ? Math.min(v, total) : 0));
+  return per.map((amt, i) => !on[i] ? 0
+    : l.partner_mode === "amount" ? Math.min(v, amt)
+    : Math.round(amt * Math.min(v, 100)) / 100);
+}
+/** What the partner on a line takes from `total` (spread over `years`, the line's contract years). */
+export function partnerCutOf(l: RevenueLineFields, total: number, years?: number[]): number {
+  return partnerByPeriod(l, total, years).reduce((a, b) => a + b, 0);
 }
 
 /**
@@ -578,11 +618,12 @@ export function lineBreakdown(l: RevenueLineFields, calculator?: Calculator | nu
   // Yearly increases are added on top of the list price (the discount stays what it was).
   const total = sched ? sched.reduce((a, b) => a + b, 0) : flat;
   const extra = total - flat;
-  const partner = partnerCutOf(l, total);
+  const partnerYears = partnerByPeriod(l, total, sched ?? undefined);
+  const partner = partnerYears.reduce((a, b) => a + b, 0);
   return {
     rows: u.rows, rawQty, qty, unitGross: u.gross, unitDiscount: u.discount, unitPrice,
     multiplierLabel, gross: u.gross * mult + extra, discount: u.discount * mult, total,
-    partner, net: total - partner,
+    partner, net: total - partner, partnerYears,
     years: sched ?? [total],
   };
 }
@@ -602,12 +643,19 @@ const SHARED_COLS = [
   "calc_values", "calc_discounts", "calc_rates", "discount_mode", "discount_value",
 ] as const;
 const PARTNER_COLS = ["partner_id", "partner_mode", "partner_value"] as const;
-const PRODUCT_COLS = [...SHARED_COLS, ...PARTNER_COLS, "tier_id", "increments"] as const;
-const SERVICE_COLS = [...SHARED_COLS, ...PARTNER_COLS, "role_id", "billing_contact_name", "billing_contact_email", "contact_ids"] as const;
+/** Added by 78_partner_periods.sql. */
+const PERIOD_COLS = ["partner_periods", "billing_frequency"] as const;
+const PRODUCT_COLS = [...SHARED_COLS, ...PARTNER_COLS, ...PERIOD_COLS, "tier_id", "increments"] as const;
+const SERVICE_COLS = [...SHARED_COLS, ...PARTNER_COLS, ...PERIOD_COLS, "role_id", "billing_contact_name", "billing_contact_email", "contact_ids"] as const;
 
 /** Update a revenue line; if the partner columns aren't there yet (SQL 12 not run), save the rest anyway. */
 async function updateLine(table: "tracking_products" | "tracking_potential_services", id: string, row: Record<string, unknown>) {
   let { error } = await supabase.from(table).update(row).eq("id", id);
+  if (error && /partner_periods|billing_frequency/i.test(error.message) && PERIOD_COLS.some((k) => k in row)) {
+    const rest = { ...row }; PERIOD_COLS.forEach((k) => delete rest[k]);
+    ({ error } = Object.keys(rest).length ? await supabase.from(table).update(rest).eq("id", id) : { error: null } as any);
+    if (!error) return "Partner periods and payment frequency not saved: run 78_partner_periods.sql in Supabase.";
+  }
   if (error && /increments/i.test(error.message) && "increments" in row) {
     const rest = { ...row }; delete rest.increments;
     ({ error } = Object.keys(rest).length ? await supabase.from(table).update(rest).eq("id", id) : { error: null } as any);
@@ -1434,6 +1482,32 @@ export interface Handoff {
   package?: any;
 }
 
+/* ---- Our own people: never a client's contact ---- */
+/** The team's e-mails, names and company e-mail domains (free mail like gmail.com left out). */
+export interface OurPeople { emails: string[]; domains: string[]; names: string[] }
+const FREE_MAIL = /^(gmail|googlemail|hotmail|outlook|live|msn|yahoo|ymail|icloud|me|mac|aol|gmx|proton|protonmail|zoho|yandex|mail|telefonica|movistar)\./i;
+const normName = (s?: string | null) => (s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+let oursCache: Promise<OurPeople> | null = null;
+export function loadOurPeople(): Promise<OurPeople> {
+  return (oursCache ??= Promise.resolve(supabase.from("profiles").select("email, first_name, last_name"))
+    .then(({ data }) => {
+      const rows = (data ?? []) as { email?: string | null; first_name?: string | null; last_name?: string | null }[];
+      const emails = rows.map((r) => (r.email ?? "").trim().toLowerCase()).filter(Boolean);
+      const domains = Array.from(new Set(emails.map((e) => e.split("@")[1] ?? "").filter((d) => d && !FREE_MAIL.test(d))));
+      const names = rows.map((r) => normName([r.first_name, r.last_name].filter(Boolean).join(" "))).filter((n) => n.includes(" "));
+      return { emails, domains, names };
+    })
+    .catch(() => { oursCache = null; return { emails: [], domains: [], names: [] }; }));
+}
+/** Someone of our own team (by e-mail, our e-mail domain, or full name)? */
+export function isOurPerson(p: { name?: string | null; email?: string | null } | null | undefined, ours: OurPeople | null | undefined): boolean {
+  if (!p || !ours) return false;
+  const e = (p.email ?? "").trim().toLowerCase();
+  if (e && (ours.emails.includes(e) || ours.domains.includes(e.split("@")[1] ?? ""))) return true;
+  const n = normName(p.name);
+  return !!n && n.includes(" ") && ours.names.includes(n);
+}
+
 // Does management already have a client for this sales company?
 // Management stores clients keyed by company_id; if none exists, sales must
 // create it (with legal info) before the handoff can build a project.
@@ -1493,13 +1567,13 @@ export async function buildClientPrefill(companyId: string, trackingId?: string)
   const { data: co } = await supabase.from("companies").select("*").eq("id", companyId).maybeSingle();
   if (!co) return null;
   const c: any = co;
-  // contacts linked to this company
+  // contacts linked to this company — never someone of our own team linked to it
   const { data: links } = await supabase.from("company_contacts").select("contact_id").eq("company_id", companyId);
   const ids = (links ?? []).map((l: any) => l.contact_id);
   let contacts: any[] = [];
   if (ids.length) {
-    const { data: rows } = await supabase.from("contacts").select("*").in("id", ids);
-    contacts = rows ?? [];
+    const [{ data: rows }, ours] = await Promise.all([supabase.from("contacts").select("*").in("id", ids), loadOurPeople()]);
+    contacts = (rows ?? []).filter((ct: any) => !isOurPerson({ name: [ct.first_name, ct.last_name].filter(Boolean).join(" "), email: ct.email }, ours));
   }
   const uid = () => (globalThis.crypto?.randomUUID?.() ?? String(Math.random()));
   const today = new Date().toISOString().slice(0, 10);
@@ -1750,6 +1824,69 @@ export async function saveClientProducts(clientId: string, trackingId: string | 
   return error?.message ?? null;
 }
 
+/* ============================ Renewals: an ended contract goes back to Sales ============================ */
+const DAY_MS = 86400000;
+const lineStart = (l: any) => { const s = String(l.start_date || l.signing_date || ""); const t = s ? new Date(s.slice(0, 10) + "T00:00:00").getTime() : NaN; return Number.isFinite(t) ? t : null; };
+/** When a signed recurring product ends (start + its term); null when it has no term. */
+export function lineEnd(l: any): number | null {
+  const s = lineStart(l), y = Number(l.term_years) || 0;
+  if (s == null || !y) return null;
+  const d = new Date(s); d.setMonth(d.getMonth() + Math.round(y * 12));
+  return d.getTime();
+}
+let renewalRun: Promise<number> | null = null;
+/**
+ * A client's subscription that has ended (not auto-renewed, and no newer one of the same product signed)
+ * becomes a deal in the renewal pipeline (the one chosen in Settings › Client pipelines, else one called "…renew…"), with the same people as the deal that
+ * sold it, so Sales takes it from there. Each line goes once (80_renewal_deals.sql marks it); run once per visit.
+ */
+export function ensureRenewalDeals(lines: any[], companyOf: Record<string, string>, clientName: Record<string, string>): Promise<number> {
+  renewalRun ??= (async () => {
+    const now = Date.now();
+    const live = (l: any) => !l.status || /active|signed|live/i.test(String(l.status));
+    const renewedBy = (l: any) => lines.some((x) => x !== l && x.client_id === l.client_id && x.product_id === l.product_id
+      && (lineStart(x) ?? 0) >= (lineEnd(l) ?? Infinity) - 60 * DAY_MS);
+    const todo = lines.filter((l) => l.recurring && !l.auto_renew && live(l) && !l.renewal_tracking_id && !l.renewal_claimed_at
+      && companyOf[l.client_id] && (lineEnd(l) ?? Infinity) < now && !renewedBy(l));
+    if (!todo.length || !("renewal_claimed_at" in (lines[0] ?? {}))) return 0;
+    const pipe = renewalPipelineOf(await listPipelines().catch(() => []));
+    if (!pipe) return 0;
+    const { phases } = await loadPipeline(pipe.id).catch(() => ({ phases: [] as Phase[] }));
+    const first = phases.filter((p) => p.sales_visible !== false)[0]?.id ?? phases[0]?.id ?? null;
+    const byClient = new Map<string, any[]>();
+    todo.forEach((l) => byClient.set(l.client_id, [...(byClient.get(l.client_id) ?? []), l]));
+    let made = 0;
+    for (const [clientId, ls] of byClient) {
+      // claim the lines first: only the ones nobody else took in the meantime
+      const { data: got, error } = await supabase.from("client_products").update({ renewal_claimed_at: new Date().toISOString() })
+        .in("id", ls.map((l) => l.id)).is("renewal_claimed_at", null).select("id");
+      if (error) return made;
+      const mine = ls.filter((l) => (got ?? []).some((g: any) => g.id === l.id));
+      if (!mine.length) continue;
+      const year = new Date(lineEnd(mine[0]) ?? now).getFullYear();
+      const id = await createTracking({
+        company_id: companyOf[clientId], pipeline_id: pipe.id, current_phase_id: first, contactIds: [],
+        products: mine.filter((l) => l.product_id).map((l) => ({ id: l.product_id, price: Number(l.price) || 0 })),
+        deal_name: `${clientName[clientId] ?? "Client"} — renewal ${year}`,
+      });
+      if (!id) { await supabase.from("client_products").update({ renewal_claimed_at: null }).in("id", mine.map((l) => l.id)); continue; }
+      await supabase.from("client_products").update({ renewal_tracking_id: id }).in("id", mine.map((l) => l.id));
+      // the people of the deal that sold it, with the same owner
+      const src = [...new Set(mine.map((l) => l.tracking_id).filter(Boolean))] as string[];
+      if (src.length) {
+        const { data: team } = await supabase.from("tracking_employees").select("profile_id, is_owner").in("tracking_id", src);
+        const ids = [...new Set(((team ?? []) as any[]).map((t) => t.profile_id).filter(Boolean))] as string[];
+        if (ids.length) await setTrackingEmployees(id, ids).catch(() => {});
+        const owner = ((team ?? []) as any[]).find((t) => t.is_owner)?.profile_id;
+        if (owner) await setTrackingOwner(id, owner).catch(() => {});
+      }
+      made++;
+    }
+    return made;
+  })().catch(() => 0);
+  return renewalRun;
+}
+
 /** Payment terms of a signed product: the contract is paid in `count` equal terms; `increases[i]` is term i's % over the previous term (term 1 is usually 0). */
 export interface PaymentSchedule { count: number; increases: number[] }
 
@@ -1794,8 +1931,11 @@ export interface ContractTerms {
   contactPerson?: { name?: string | null; email?: string | null; phone?: string | null; role?: string | null } | null;
   /** The customer's admin user on the platform. */
   adminUser?: { name?: string | null; email?: string | null } | null;
-  /** How the subscription is billed: "annually" | "quarterly" | "monthly" | "upfront". */
+  /** How the licences are paid: "upfront" | "annually" | "semiannually" | "quarterly" | "monthly". */
   billingFrequency?: string | null;
+  /** How the services are paid (same choices, plus "on_delivery"), and in how many days. */
+  servicesFrequency?: string | null;
+  servicesPaymentTermsDays?: number | null;
   currency?: string | null;
   /** Prices on the order form exclude VAT. */
   pricesExclVat?: boolean;
@@ -2014,12 +2154,12 @@ export const DEFAULT_REVENUE_MODE: RevenueMode = "product_year1";
 const isMode = (v: any): v is RevenueMode => REVENUE_MODES.some((m) => m.value === v);
 export const revenueModeLabel = (m: RevenueMode) => REVENUE_MODES.find((x) => x.value === m)?.label ?? m;
 
-/** What one line adds to the deal's potential revenue in a view (after the partner's cut). */
-export function lineRevenue(kind: "product" | "service", bd: LineBreakdown, mode: RevenueMode): number {
-  if (kind === "service") return mode === "all_year1" || mode === "all_term" ? bd.net : 0;
-  if (mode === "product_term" || mode === "all_term") return bd.net;
-  const share = bd.total ? bd.net / bd.total : 1;
-  return (bd.years[0] ?? bd.total) * share;
+/** What one line adds to the deal's potential revenue in a view (after the partner's cut, unless `gross`). */
+export function lineRevenue(kind: "product" | "service", bd: LineBreakdown, mode: RevenueMode, gross = false): number {
+  if (kind === "service") return mode === "all_year1" || mode === "all_term" ? (gross ? bd.total : bd.net) : 0;
+  if (mode === "product_term" || mode === "all_term") return gross ? bd.total : bd.net;
+  // the first contract year, less what the partner takes in that year
+  return (bd.years[0] ?? bd.total) - (gross ? 0 : bd.partnerYears?.[0] ?? 0);
 }
 
 let teamRevenueMode: RevenueMode = DEFAULT_REVENUE_MODE;

@@ -13,6 +13,7 @@ import { loadProducts, type Product as CatalogProduct } from "../settings/catalo
 import { listCompanyFields, listContactFields, sessionUserId, saveContact, useRequiredFields, type CompanyField, type ContactField } from "../companies/companiesApi";
 import { countryLabel, formatAddress, languageName, linkedInHandle, isFixedRequired, missingFixed } from "../contacts/contactProfile";
 import Select from "../../framework/Select";
+import { loadClientTickets, createTicket, stageLabel, ticketRef, PRIORITY_LABEL, type Ticket, type TicketStage } from "../homepage/shared/HomeTodo";
 import { loadClientMail, setMailClient, fileMailFrom, loadMailRules, saveMailRule, deleteMailRule, createTicketFromMail, loadDirectory, MailFrame, TicketDrawerById, MAIL_ROUTING_SQL, type MailMsg, type MailRule } from "../homepage/shared/HomeTodo";
 import DatePicker from "../../framework/DatePicker";
 import "../../framework/MentionInput.css";
@@ -33,7 +34,7 @@ interface Props {
   onClose: () => void;
 }
 
-type Tab = "overview" | "deals" | "projects" | "contract" | "upsells" | "emails" | "folders";
+type Tab = "overview" | "deals" | "projects" | "contract" | "upsells" | "tickets" | "emails" | "folders";
 
 interface Note { id: string; body: string; mentions: string[]; author_id: string | null; created_at: string; src: "client" | "sale"; deal?: string | null; dealId?: string | null }
 interface ContactLog { id: string; contacted_at: string; channel: string | null; contact_name: string | null; reason: string | null; logged_by: string | null; }
@@ -306,9 +307,28 @@ const increaseBy = (l: Line, y: number) => {
   if (!sc && pct && term > 1) return Math.pow(1 + pct / 100, Math.min(y, Math.ceil(term - 1e-9) - 1));
   return 1;
 };
-/** What a recurring line is billing a year right now: year 1 at the signed price, year 2 with its increase,
- *  and so on (the last year's price once the term is over). One-offs and set-up fees aren't recurring. */
-const lineAnnual = (l: Line, at = Date.now()) => (l.recurring ? firstYearOf(l) * increaseBy(l, contractYearOf(l, at)) : 0);
+/** What the partner takes from a line in contract year `y` (0 = the first): once, or year by year, as set in the
+ *  deal's calculator (breakdown.partnerYears); nothing for lines signed before that was kept. */
+const partnerCut = (l: Line, y: number) => {
+  const py = l.breakdown?.partnerYears;
+  return Array.isArray(py) ? Math.max(0, Number(py[y]) || 0) : 0;
+};
+const partnerTotal = (l: Line) => (Array.isArray(l.breakdown?.partnerYears) ? (l.breakdown.partnerYears as unknown[]).reduce((t: number, x) => t + Math.max(0, Number(x) || 0), 0) : 0);
+/** Is a line running on `at`: started, and its term not over (an auto-renewing one rolls on). */
+const runsAt = (l: Line, at = Date.now()) => {
+  const s0 = str(l.start_date) || str(l.signing_date);
+  if (s0 && toDate(s0).getTime() > at) return false;
+  const t = termOf(l);
+  return !t || t.end.getTime() >= at;
+};
+/** What a recurring line is billing a year right now — always as of today: year 1 at the signed price, year 2 with
+ *  its increase…, less what the partner takes that year. Nothing before it starts or once its term is over (a renewal
+ *  signed as a new line takes over then, so the two never add up). One-offs and set-up fees aren't recurring. */
+const lineAnnual = (l: Line, at = Date.now()) => {
+  if (!l.recurring || !runsAt(l, at)) return 0;
+  const y = contractYearOf(l, at);
+  return Math.max(0, firstYearOf(l) * increaseBy(l, y) - partnerCut(l, y));
+};
 /** Each term of a recurring line: its length, its price per period (with the increases so far) and what it adds up to. */
 const termsOf = (l: Line, sc: PaymentSchedule | null = scheduleOf(l)) => {
   const years = Number(l.term_years) || 1;
@@ -323,7 +343,9 @@ const termsOf = (l: Line, sc: PaymentSchedule | null = scheduleOf(l)) => {
   });
 };
 /** What a signed product is worth over its contract: every term of a recurring line (1 year when no term), or the one-off price, plus the set-up fee. */
-export const lineContractValue = (l: Line) => (l.recurring ? termsOf(l).reduce((t, x) => t + x.amount, 0) : lineTotal(l)) + (Number(l.one_time_fee) || 0);
+export const lineContractValue = (l: Line) => Math.max(0, (l.recurring ? termsOf(l).reduce((t, x) => t + x.amount, 0) : lineTotal(l)) - partnerTotal(l)) + (Number(l.one_time_fee) || 0);
+/** What a line bills once: a one-off's price (less the partner's cut) and any set-up fee. */
+export const lineOneTime = (l: Line) => (l.recurring ? 0 : Math.max(0, lineTotal(l) - partnerTotal(l))) + (Number(l.one_time_fee) || 0);
 export { lineAnnual, lineTotal };
 export const isActive = (l: Line) => !l.status || /active|signed|live/i.test(String(l.status));
 const addYears = (d0: Date, y: number) => {
@@ -1105,7 +1127,7 @@ export default function ClientWorkspace({
   // contract
   const activeLines = lines.filter(isActive);
   const recurringYear = activeLines.reduce((s, l) => s + lineAnnual(l), 0);
-  const oneTime = lines.reduce((s, l) => s + (l.recurring ? 0 : lineTotal(l)) + (Number(l.one_time_fee) || 0), 0);
+  const oneTime = lines.reduce((s, l) => s + lineOneTime(l), 0);
   /** What the sale signed: recurring lines for their whole term (1 year when none), one-offs and set-up fees. */
   const lineContract = lineContractValue;
   const contractValue = activeLines.reduce((s, l) => s + lineContract(l), 0);
@@ -1183,6 +1205,7 @@ export default function ClientWorkspace({
     { v: "contract", label: "Contracts", icon: "contract", hint: "What they signed", n: lines.length || undefined },
     { v: "projects", label: "Projects", icon: "briefcase", hint: "Services delivered", n: projects.length || undefined },
     { v: "upsells", label: "Upsells", icon: "spark", hint: "What else they could buy" },
+    { v: "tickets", label: "Tickets", icon: "tasks", hint: "Their requests and incidents" },
     { v: "emails", label: "Emails", icon: "mail", hint: "What their people wrote" },
     { v: "folders", label: "Folders", icon: "folder", hint: "Every file of this client" },
   ];
@@ -1198,6 +1221,7 @@ export default function ClientWorkspace({
       { k: "products", label: "Signed products", n: lines.length || undefined }, { k: "services", label: "Service engagements", n: projects.length || undefined },
     ],
     upsells: [],
+    tickets: [],
     emails: [],
     folders: [],
   };
@@ -1631,7 +1655,7 @@ export default function ClientWorkspace({
         {/* ---------- body ---------- */}
         <div className={`cw-body ${tab === "folders" || tab === "emails" ? "is-fixed" : ""}`} ref={bodyRef} onScroll={() => { hideTip(); spyNow(); }}>
           <div className={`cw-panel is-${tab} ${!loaded && (tab === "overview" || tab === "deals") ? "is-loading" : ""}`} key={tab}>
-            {tab !== "folders" && tab !== "emails" && (() => {
+            {tab !== "folders" && tab !== "emails" && tab !== "tickets" && (() => {
               const t = TABS.find((x) => x.v === tab);
               return t ? (
                 <header className="cw-tabhead">
@@ -2173,7 +2197,7 @@ export default function ClientWorkspace({
                   {[
                     { k: "Engagement", v: totals.value, sub: "€ in projects", icon: "briefcase", tone: "green", rows: projRows((p) => eur(projectValue(p))) },
                     { k: "Recurring", v: recurringYear, sub: "€ per year", icon: "repeat", tone: "violet", rows: activeLines.filter((l) => l.recurring).map((l) => [l.name, eur(lineAnnual(l))] as [string, React.ReactNode]) },
-                    { k: "One-time", v: oneTime, sub: "€ fees & one-offs", icon: "euro", tone: "blue", rows: lines.filter((l) => !l.recurring || Number(l.one_time_fee)).map((l) => [l.name, eur((l.recurring ? 0 : lineTotal(l)) + (Number(l.one_time_fee) || 0))] as [string, React.ReactNode]) },
+                    { k: "One-time", v: oneTime, sub: "€ fees & one-offs", icon: "euro", tone: "blue", rows: lines.filter((l) => !l.recurring || Number(l.one_time_fee)).map((l) => [l.name, eur(lineOneTime(l))] as [string, React.ReactNode]) },
                   ].map((x, i) => (
                     <div className="cw-ckpi" data-tone={x.tone} key={x.k} style={cssVars({ "--i": i })} {...tipOn(x.rows.length ? <TipCard title={x.k} rows={x.rows} /> : null)}>
                       <span className="cw-ckpi-top"><span className="cw-ckpi-ico"><Ico n={x.icon} s={15} /></span><span className="cw-ckpi-k">{x.k}</span></span>
@@ -2211,7 +2235,7 @@ export default function ClientWorkspace({
                           {ct.customer && (
                             <div><small>Customer</small><b>{ct.customer.legalName || ct.customer.name || "—"}</b>
                               <em>{[ct.customer.vat && `VAT ${ct.customer.vat}`, ct.customer.regNo && `Reg. ${ct.customer.regNo}`].filter(Boolean).join(" · ") || "—"}</em>
-                              {(ct.customer.address || ct.customer.country) && <em>{[ct.customer.address, ct.customer.country].filter(Boolean).join(", ")}</em>}
+                              {(ct.customer.address || ct.customer.country) && <em>{[ct.customer.address, ct.customer.country ? countryLabel(ct.customer.country) : ""].filter(Boolean).join(", ")}</em>}
                             </div>
                           )}
                           {ct.contactPerson?.name && <div><small>Contact person</small><b>{ct.contactPerson.name}</b><em>{[ct.contactPerson.role, ct.contactPerson.email, ct.contactPerson.phone].filter(Boolean).join(" · ") || "—"}</em></div>}
@@ -2467,6 +2491,7 @@ export default function ClientWorkspace({
             )}
 
             {/* ===== EMAILS ===== */}
+            {tab === "tickets" && <ClientTickets client={client} companyId={str(co.id) || null} />}
             {tab === "emails" && <ClientMail client={client} persons={persons} />}
 
             {/* ===== FOLDERS ===== */}
@@ -2495,6 +2520,76 @@ export default function ClientWorkspace({
         </div>
         <TipLayer tip={tip} />
       </div>
+    </div>
+  );
+}
+
+/* ============================== Tickets ============================== */
+const TK_OPEN: TicketStage[] = ["new", "open", "in_progress", "waiting"];
+/** Clients › Tickets: the client's requests and incidents (the desk's tickets — not its e-mails, not tasks). */
+function ClientTickets({ client, companyId }: { client: Client; companyId: string | null }) {
+  const [list, setList] = useState<Ticket[] | null>(null);
+  const [ready, setReady] = useState(true);
+  const [view, setView] = useState<"open" | "done" | "all">("open");
+  const [open, setOpen] = useState<string | null>(null);
+  const [title, setTitle] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    const r = await loadClientTickets(client.id, companyId);
+    setList(r.tickets); setReady(r.ready);
+  }, [client.id, companyId]);
+  useEffect(() => { void load(); }, [load]);
+  const isOpen = (t: Ticket) => TK_OPEN.includes(t.stage);
+  const shown = (list ?? []).filter((t) => view === "all" || (view === "open" ? isOpen(t) : !isOpen(t)));
+  const nOpen = (list ?? []).filter(isOpen).length;
+  const add = async () => {
+    const t = title.trim(); if (!t) return;
+    setBusy(true); setErr(null);
+    const r = await createTicket({ title: t, clientId: client.id, companyId, category: "ticket", source: "manual" }, ready);
+    setBusy(false);
+    if (r.error) { setErr(r.error); return; }
+    setTitle(""); await load();
+    if (r.id) setOpen(r.id);
+  };
+  return (
+    <div className="cw-tk">
+      <header className="cw-folders-h cw-tk-h">
+        <span className="cw-zone-ico"><Ico n="tasks" s={18} /></span>
+        <div className="cw-folders-t">
+          <h3>Tickets</h3>
+          <small>{list === null ? "Loading…" : `${nOpen} open · ${list.length} in all — their requests and incidents, apart from their e-mails`}</small>
+        </div>
+        <div className="cw-tk-seg" role="tablist">
+          {([["open", "Open", nOpen], ["done", "Resolved", (list ?? []).length - nOpen], ["all", "All", (list ?? []).length]] as const).map(([k, l, n]) => (
+            <button type="button" key={k} role="tab" aria-selected={view === k} className={view === k ? "is-on" : ""} onClick={() => setView(k)}>{l}<i>{n}</i></button>
+          ))}
+        </div>
+      </header>
+      <form className="cw-tk-new" onSubmit={(e) => { e.preventDefault(); void add(); }}>
+        <Ico n="plus" s={15} />
+        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="New ticket for this client — what do they need?" maxLength={200} />
+        <button type="submit" className="cw-btn-primary is-sm" disabled={!title.trim() || busy}>{busy ? "Opening…" : "Open ticket"}</button>
+      </form>
+      {err && <p className="cw-tk-err">{err}</p>}
+      {list !== null && shown.length === 0 && (
+        <div className="cw-empty"><Ico n="tasks" s={20} /><p>{view === "open" ? "No open tickets." : view === "done" ? "Nothing resolved yet." : "No tickets for this client yet."}</p></div>
+      )}
+      <div className="cw-tk-list">
+        {shown.map((t, i) => (
+          <button type="button" key={t.id} className={`cw-tk-row is-${t.stage}`} style={cssVars({ "--i": Math.min(i, 12) })} onClick={() => setOpen(t.id)}>
+            <span className="cw-tk-ref">{ticketRef(t)}</span>
+            <span className="cw-tk-main">
+              <b>{t.title || "Untitled"}</b>
+              <em>{[t.requesterName || t.requesterEmail, t.type, `opened ${ago(t.createdAt)}`].filter(Boolean).join(" · ")}</em>
+            </span>
+            {t.priority !== "normal" && <span className={`cw-tk-pri is-${t.priority}`}>{PRIORITY_LABEL[t.priority]}</span>}
+            <span className={`cw-tk-st is-${t.stage}`}>{stageLabel(t.stage)}</span>
+            <span className="cw-tk-go"><Ico n="chev" s={14} /></span>
+          </button>
+        ))}
+      </div>
+      {open && <TicketDrawerById id={open} onClose={() => { setOpen(null); void load(); }} />}
     </div>
   );
 }

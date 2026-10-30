@@ -2,9 +2,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { calcBreakdown, discountOf, BASE_KEY, PRICE_SUFFIX, varAmount, withoutPriceOverrides, type Calculator, type CalcDiscount, type CalcVariable, type TierDuration } from "../pages/settings/catalogApi";
-import { lineBreakdown, yearAmounts, hasIncrements, type LineIncrements, type RevenueLineFields, type TermPatch } from "../pages/sales/sales/salesApi";
+import { lineBreakdown, yearAmounts, hasIncrements, partnerByPeriod, PAY_FREQUENCIES, type LineIncrements, type PartnerPeriods, type RevenueLineFields, type TermPatch } from "../pages/sales/sales/salesApi";
 import Select from "./Select";
-import { listPartnerRates, partnerList, partnerDefault, partnerCut, type PartnerRate } from "../pages/companies/companiesApi";
+import { listPartnerRates, partnerList, partnerDefault, type PartnerRate } from "../pages/companies/companiesApi";
 import "./LineCalcModal.css";
 
 /** Partners and their default cuts, read once per visit. */
@@ -210,10 +210,25 @@ function ruleOf(v: CalcVariable, isQty: boolean, unitWord: string, money: (n: nu
   if (v.var_type === "per_block") return `${what} for every ${Number(v.block_size) || 1} ${plural(u)}${above}${v.round_mode === "down" ? " (full blocks)" : ""}`;
   return `${what} per ${singular(u)}${above}`;
 }
-const sliderMax = (v: CalcVariable, val: number) => {
-  const base = Math.ceil(((Number(v.default_value) || 0) * 3 + (Number(v.included) || 0) + (v.var_type === "per_block" ? (Number(v.block_size) || 1) * 4 : 10)) / 5) * 5;
-  return Math.max(10, base, Math.ceil((val * 1.25) / 5) * 5);
-};
+/**
+ * The sum an input makes, in one plain line: "12 − 5 incl. = 7 × €450 = €3.150"
+ * (null when there is nothing to work out: the rule says it all).
+ */
+function mathOf(v: CalcVariable, val: number, amt: number, isQty: boolean, unitWord: string, money: (n: number) => string, result: number): string | null {
+  if (!val || v.var_type === "fixed" || v.var_type === "percent") return null;
+  const n = (x: number) => (+x.toFixed(2)).toLocaleString("de-DE");
+  const each = isQty ? `${n(amt)} ${unitWord}` : money(amt);
+  const total = isQty ? `${n(result)} ${unitWord}` : money(result);
+  const inc = Number(v.included) || 0;
+  const billable = Math.max(0, val - inc);
+  const start = inc ? `${n(val)} − ${n(inc)} incl. = ${n(billable)}` : n(val);
+  if (v.var_type === "per_block") {
+    const size = Number(v.block_size) || 1;
+    const blocks = v.round_mode === "down" ? Math.floor(billable / size) : Math.ceil(billable / size);
+    return `${start} → ${n(blocks)} block${blocks === 1 ? "" : "s"} of ${n(size)} × ${each} = ${total}`;
+  }
+  return `${start} × ${each} = ${total}`;
+}
 
 /**
  * A collapsible section: a calm header (accent marker, icon, title) that shows
@@ -308,6 +323,13 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
   const [partnerMode, setPartnerMode] = useState<"percent" | "amount">(line.partner_mode === "amount" ? "amount" : "percent");
   const [partnerValue, setPartnerValue] = useState<number>(Number(line.partner_value) || 0);
   const [partnerData, setPartnerData] = useState<{ partners: { id: string; name: string }[]; rates: PartnerRate[] } | null>(null);
+  /** Which periods the partner's cut covers: once, or every period but the ones switched off. */
+  const [partnerPeriods, setPartnerPeriods] = useState<PartnerPeriods | null>(line.partner_periods ?? null);
+  /** How the client pays this line (the contract takes it from here). */
+  const [payFreq, setPayFreq] = useState<string>(line.billing_frequency ?? "");
+  /** What the total at the bottom shows: the first year or every year, after the partner's cut or before it. */
+  const [totYears, setTotYears] = useState<"y1" | "all">("all");
+  const [totNet, setTotNet] = useState(true);
   const [hot, setHot] = useState<string | null>(null);
   // Which sections are open: the price and the calculator (or, without one, the term).
   const [openZ, setOpenZ] = useState<Record<string, boolean>>(() => {
@@ -331,6 +353,7 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
     if (!id || !partnerItem || !partnerData) return;
     const d = partnerDefault(partnerData.rates, id, partnerItem.type, partnerItem.id);
     if (d) { setPartnerMode(d.mode); setPartnerValue(d.value); }
+    if (!partnerPeriods) setPartnerPeriods({ mode: "recurring", skip: [] });
   };
   const partnerDef = partnerId && partnerItem && partnerData ? partnerDefault(partnerData.rates, partnerId, partnerItem.type, partnerItem.id) : null;
 
@@ -382,7 +405,21 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
   const roundExtra = billableTotal - bd.total;
   const rounds = roundExtraDays > 0 && roundExtra > 0.5;
   const totalShown = rounds ? billableTotal : bd.total;
-  const partnerOff = partnerId ? partnerCut(totalShown, partnerMode, partnerValue) : 0;
+  // The partner's cut, period by period (contract years; one period for a one-off line).
+  const ptLine: RevenueLineFields = { price: 0, partner_id: partnerId || null, partner_mode: partnerMode, partner_value: partnerValue, partner_periods: partnerPeriods };
+  const ptYears = line.recurring && bd.years.length > 1 ? bd.years : [totalShown];
+  const ptByYear = partnerId ? partnerByPeriod(ptLine, totalShown, ptYears) : ptYears.map(() => 0);
+  const partnerOff = ptByYear.reduce((a, b) => a + b, 0);
+  const ptMode: "once" | "recurring" = partnerPeriods?.mode ?? (partnerMode === "amount" ? "once" : "recurring");
+  const ptSkip = new Set(partnerPeriods?.skip ?? []);
+  const setPtMode = (m: "once" | "recurring") => setPartnerPeriods({ mode: m, skip: m === "recurring" ? [...ptSkip] : [] });
+  const togglePtYear = (i: number) => {
+    const next = new Set(ptSkip);
+    if (next.has(i)) next.delete(i); else next.add(i);
+    // at least one period stays covered
+    if (next.size >= ptYears.length) return;
+    setPartnerPeriods({ mode: "recurring", skip: [...next].sort((a, b) => a - b) });
+  };
   const partnerName = partnerData?.partners.find((x) => x.id === partnerId)?.name ?? "Partner";
 
   // What the same line would cost at list price: the tier's own price, no
@@ -415,7 +452,9 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
       discount_mode: "none",
       discount_value: 0,
       ...(line.recurring ? { increments: hasIncrements(inc) ? inc : null } : {}),
-      ...(partnerItem ? { partner_id: partnerId || null, partner_mode: partnerId ? partnerMode : null, partner_value: partnerId ? partnerValue : null } : {}),
+      ...(partnerItem ? { partner_id: partnerId || null, partner_mode: partnerId ? partnerMode : null, partner_value: partnerId ? partnerValue : null,
+        partner_periods: partnerId ? (partnerPeriods ?? { mode: ptMode, skip: [] }) : null } : {}),
+      billing_frequency: payFreq || null,
     });
     onClose();
   };
@@ -491,8 +530,6 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
     const ownRole = v.role_id ? (roleName ? roleName(v.role_id) : "Own role") : v.is_supervision ? "Supervision" : "";
     const dk = `${k}@days`;
     const setVal = (n: number) => setValues((x) => ({ ...x, [k]: n }));
-    const max = sliderMax(v, val);
-    const numeric = v.var_type === "per_unit" || v.var_type === "per_block";
     const hasDisc = (discounts[k]?.mode ?? "none") !== "none";
     const isOpen = openRow === k;
     // the input's price, changeable here when the catalogue allows it
@@ -509,7 +546,9 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
     const priceUnit = v.var_type === "percent" ? "%" : isQtyCalc ? unitWord : v.var_type === "per_block" ? "/ block" : v.var_type === "fixed" ? "" : `/ ${singular(uWord)}`;
     const setPrice = (n: number) => setValues((x) => ({ ...x, [pk]: Math.max(0, n) }));
     const listPriceText = v.var_type === "percent" ? `${listAmt}%` : isQtyCalc ? `${listAmt} ${unitWord}` : money(listAmt);
-    const canOpen = numeric || counts || hasDisc || !!qtyCalc || editable;
+    // The input's sum, always in view (the row's rule is its tooltip).
+    const math = mathOf(v, val, amtNow, isQtyCalc, unitWord, money, out != null ? out : rowAmount);
+    const canOpen = (counts && rowAmount > 0) || hasDisc || !!qtyCalc || editable;
     return (
       <div key={k} className={`lcx-in ${counts ? "is-on" : ""} ${hot === k ? "is-hot" : ""} ${isOpen ? "is-open" : ""}`} style={{ ["--c" as any]: rowColor(k) }}
         onMouseEnter={() => setHot(k)} onMouseLeave={() => setHot(null)}>
@@ -518,8 +557,8 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
             <span className="lcx-in-dot" aria-hidden="true" />
             <span className="lcx-in-txt">
               <b>{v.name || "Input"}</b>
-              <small>
-                {ruleOf(vNow, isQtyCalc, unitWord, money)}
+              <small className={math ? "is-math" : ""}>
+                {math ?? ruleOf(vNow, isQtyCalc, unitWord, money)}
                 {customPrice ? <em className="lcx-in-deal" title={`List: ${listPriceText}`}>deal price</em>
                   : editable ? <em className="lcx-in-editable" title="You can change this price for this deal">editable</em> : null}
               </small>
@@ -545,18 +584,6 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
           ) : <span className="lcx-in-more is-blank" />}
         </div>
         <div className="lcx-in-x"><div className="lcx-in-xin">
-          {numeric && (
-            <div className="lcx-slide">
-              <input type="range" min={0} max={max} step={1} value={Math.min(val, max)} aria-label={`${v.name} slider`} tabIndex={isOpen ? 0 : -1}
-                style={{ ["--p" as any]: `${Math.min(100, (val / max) * 100)}%` }}
-                onChange={(e) => setVal(Number(e.target.value) || 0)} />
-              {Number(v.included) > 0 && (
-                <span className="lcx-slide-inc" style={{ ["--p" as any]: `${Math.min(100, ((Number(v.included) || 0) / max) * 100)}%` }} title={`${v.included} included`}>
-                  <i />{v.included} incl.
-                </span>
-              )}
-            </div>
-          )}
           {editable && (
             <div className={`lcx-vp ${customPrice ? "is-custom" : ""}`}>
               <span className="lcx-vp-k">{priceLabel}<small>for this deal</small></span>
@@ -637,7 +664,10 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
     : varBits.length ? `${varBits.slice(0, 2).join(" · ")}${varBits.length > 2 ? ` +${varBits.length - 2}` : ""} · +${money(addOns)}${perSuffix}` : "Nothing added";
   const incTxt = hasIncrements(inc) ? (inc.mode === "pct" ? `+${Number(inc.value) || 0}%/yr` : inc.mode === "fixed" ? `+${money(Number(inc.value) || 0)}/yr` : "set per year") : "flat";
   const sumTerm = line.recurring ? `${years} ${years === 1 ? "year" : "years"}${years > 1 ? ` · ${incTxt}` : ""}` : `${+quantity.toFixed(2)} ${isService ? unitWord : "units"}`;
-  const sumPartner = partnerId ? `${partnerName} · ${partnerMode === "percent" ? `${partnerValue}%` : money(partnerValue)}` : "No partner";
+  const payLabel = [...PAY_FREQUENCIES, { k: "on_delivery", label: "As delivered", short: "As delivered" }].find((f) => f.k === payFreq)?.label ?? "";
+  const sumTermPaid = payFreq ? `${sumTerm} · paid ${payLabel.toLowerCase()}` : sumTerm;
+  const ptYearsOn = ptByYear.filter((x, i) => x > 0 || (ptMode === "once" ? i === 0 : !ptSkip.has(i))).length;
+  const sumPartner = partnerId ? `${partnerName} · ${partnerMode === "percent" ? `${partnerValue}%` : money(partnerValue)}${ptYears.length > 1 ? ` · ${ptMode === "once" ? "year 1" : ptYearsOn === ptYears.length ? "every year" : `${ptYearsOn} of ${ptYears.length} years`}` : ""}` : "No partner";
 
   // The guide opens the section it points at.
   const zoneOf: Record<string, string> = { ".lcx-z-tier": "tier", ".lcx-z-commit": "commit", ".lcx-z-calc": "calc", ".lcx-z-term": "term", ".lcx-z-partner": "partner" };
@@ -648,6 +678,11 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gStep?.sel]);
 
+  // The total at the bottom: first year or every year, after the partner's cut or before it.
+  const totGross = multiYear && totYears === "y1" ? (yearsArr[0] ?? totalShown) : totalShown;
+  const totCut = partnerOff > 0 && totNet ? (multiYear && totYears === "y1" ? (ptByYear[0] ?? 0) : partnerOff) : 0;
+  const totValue = totGross - totCut;
+  const totLabel = `${partnerOff > 0 ? (totNet ? "Deal value for us" : "Before the partner") : multiYear ? "Deal value" : "Line total"}${multiYear ? (totYears === "y1" ? " · year 1" : ` · ${years} years`) : ""}`;
   const yearsNote = multiYear ? (hasIncrements(inc) ? (inc.mode === "pct" ? `+${Number(inc.value) || 0}% a year` : inc.mode === "fixed" ? `+${money(Number(inc.value) || 0)} a year` : "set year by year") : "flat") : perYear === 12 ? "12 months" : "one year";
 
   return createPortal(
@@ -768,40 +803,7 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
               </Zone>
             )}
 
-            {/* 4 · Term & increase / Quantity */}
-            <Zone cls="lcx-z-term" accent="#e08a1e" icon={line.recurring ? I.term : I.qty}
-              title={line.recurring ? "Term & yearly increase" : isService ? `How many ${unitWord}` : "Quantity"}
-              sub={line.recurring ? "How long the client signs for and how the price moves" : qtyBd ? "Set by the calculator above" : "How many are sold"}
-              summary={sumTerm} open={!!openZ.term} onToggle={() => toggleZ("term")}>
-              <div className="lcx-term">
-                {line.recurring ? (
-                  <>
-                    <div className="lcx-term-row">
-                      <span className="lcx-k">Contract term</span>
-                      <div className="lcx-yquick">
-                        {[1, 2, 3, 5].map((n) => (
-                          <button type="button" key={n} className={years === n ? "is-on" : ""} onClick={() => setYears(n)}>{n} yr</button>
-                        ))}
-                      </div>
-                      <Step value={years} onChange={(n) => setYears(Math.max(1, n))} min={1} max={20} step={1} suffix={years === 1 ? "year" : "years"} label="Years" />
-                    </div>
-                    <div className="lcx-term-inc">
-                      <span className="lcx-k">Yearly increase</span>
-                      <IncrementsEditor value={inc} onChange={setInc} firstYear={bd.unitPrice * perYear} years={years} money={money} />
-                    </div>
-                  </>
-                ) : (
-                  <div className="lcx-term-row">
-                    <span className="lcx-k">{isService ? `${unitWord[0].toUpperCase()}${unitWord.slice(1)}` : "Units"}</span>
-                    <span className="lcx-gap" />
-                    {rounds && <span className="lcx-badge" title={`Billable minimum in steps of ${minUnit}`}>Billed as {bdBill.qty} {isService ? unitWord : "units"}</span>}
-                    <Step value={+quantity.toFixed(2)} onChange={setQty} step={1} disabled={!!qtyBd} suffix={isService ? unitWord : "units"} label="Quantity" />
-                  </div>
-                )}
-              </div>
-            </Zone>
-
-            {/* 5 · Partner */}
+            {/* 4 · Partner (before the terms) */}
             {partnerItem && (
               <Zone cls="lcx-z-partner" accent="#d9468f" icon={I.partner} title="Partner" sub="A partner's cut, if one brought the deal"
                 summary={sumPartner} open={!!openZ.partner} onToggle={() => toggleZ("partner")}>
@@ -833,6 +835,33 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
                     </>
                   )}
                 </div>
+                {partnerId && (
+                  <div className="lcx-pt-periods">
+                    <span className="lcx-k">Takes it on</span>
+                    {ptYears.length > 1 ? (
+                      <>
+                        <div className="lcx-seg">
+                          <button type="button" className={ptMode === "once" ? "is-on" : ""} onClick={() => setPtMode("once")}>Year 1 only</button>
+                          <button type="button" className={ptMode === "recurring" ? "is-on" : ""} onClick={() => setPtMode("recurring")}>Every year</button>
+                        </div>
+                        <div className="lcx-pt-years" role="group" aria-label="Years the partner's cut covers">
+                          {ptYears.map((_, i) => {
+                            const on = ptMode === "once" ? i === 0 : !ptSkip.has(i);
+                            return (
+                              <button type="button" key={i} className={`lcx-pt-yr ${on ? "is-on" : ""}`} aria-pressed={on} disabled={ptMode === "once"}
+                                title={ptMode === "once" ? "Switch to every year to choose the years" : on ? "Leave this year out" : "Take the cut this year too"}
+                                onClick={() => togglePtYear(i)}>
+                                <b>Year {i + 1}</b><em>{on ? `−${money(ptByYear[i])}` : "not taken"}</em>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </>
+                    ) : (
+                      <span className="lcx-pt-once">{line.recurring ? "One contract year — the cut is taken on it" : "A one-off line — the cut is taken once"}</span>
+                    )}
+                  </div>
+                )}
                 {partnerData && partnerData.partners.length === 0 && !partnerId && (
                   <p className="lcx-note">No partners yet: in Settings › Companies page, switch a company type on as a partner type and give it to the company.</p>
                 )}
@@ -850,6 +879,48 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
                 )}
               </Zone>
             )}
+            {/* 5 · Term & increase / Quantity, and how it is paid */}
+            <Zone cls="lcx-z-term" accent="#e08a1e" icon={line.recurring ? I.term : I.qty}
+              title={line.recurring ? "Term & yearly increase" : isService ? `How many ${unitWord}` : "Quantity"}
+              sub={line.recurring ? "How long the client signs for, how the price moves and how it is paid" : qtyBd ? "Set by the calculator above · how it is paid" : "How many are sold and how they are paid"}
+              summary={sumTermPaid} open={!!openZ.term} onToggle={() => toggleZ("term")}>
+              <div className="lcx-term">
+                {line.recurring ? (
+                  <>
+                    <div className="lcx-term-row">
+                      <span className="lcx-k">Contract term</span>
+                      <div className="lcx-yquick">
+                        {[1, 2, 3, 5].map((n) => (
+                          <button type="button" key={n} className={years === n ? "is-on" : ""} onClick={() => setYears(n)}>{n} yr</button>
+                        ))}
+                      </div>
+                      <Step value={years} onChange={(n) => setYears(Math.max(1, n))} min={1} max={20} step={1} suffix={years === 1 ? "year" : "years"} label="Years" />
+                    </div>
+                    <div className="lcx-term-inc">
+                      <span className="lcx-k">Yearly increase</span>
+                      <IncrementsEditor value={inc} onChange={setInc} firstYear={bd.unitPrice * perYear} years={years} money={money} />
+                    </div>
+                  </>
+                ) : (
+                  <div className="lcx-term-row">
+                    <span className="lcx-k">{isService ? `${unitWord[0].toUpperCase()}${unitWord.slice(1)}` : "Units"}</span>
+                    <span className="lcx-gap" />
+                    {rounds && <span className="lcx-badge" title={`Billable minimum in steps of ${minUnit}`}>Billed as {bdBill.qty} {isService ? unitWord : "units"}</span>}
+                    <Step value={+quantity.toFixed(2)} onChange={setQty} step={1} disabled={!!qtyBd} suffix={isService ? unitWord : "units"} label="Quantity" />
+                  </div>
+                )}
+                <div className="lcx-term-pay">
+                  <span className="lcx-k">Paid</span>
+                  <div className="lcx-seg lcx-pay-seg">
+                    {[...PAY_FREQUENCIES, ...(isService ? [{ k: "on_delivery", label: "As delivered", short: "As delivered" }] : [])].map((f) => (
+                      <button type="button" key={f.k} className={payFreq === f.k ? "is-on" : ""} onClick={() => setPayFreq(payFreq === f.k ? "" : f.k)}>{f.label}</button>
+                    ))}
+                  </div>
+                  <small className="lcx-pay-note">{payFreq ? `The contract's ${isService ? "services" : "licences"} are paid ${payLabel.toLowerCase()} — you can still change it there.` : `Not set: the contract asks for it.`}</small>
+                </div>
+              </div>
+            </Zone>
+
           </div>
         </section>
 
@@ -951,8 +1022,24 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
 
           <div className="lcx-actions">
             <div className="lcx-actions-total">
-              <span>{partnerOff > 0 ? "Deal value (for us)" : line.recurring && multiYear ? "Whole contract" : "Line total"}</span>
-              <b><Tween value={totalShown - partnerOff} fmt={money} /></b>
+              <span>{totLabel}</span>
+              <b><Tween value={totValue} fmt={money} /></b>
+              {(multiYear || partnerOff > 0) && (
+                <span className="lcx-tot-pick" role="group" aria-label="What the total shows">
+                  {multiYear && (
+                    <span className="lcx-seg is-xs">
+                      <button type="button" className={totYears === "y1" ? "is-on" : ""} onClick={() => setTotYears("y1")}>Year 1</button>
+                      <button type="button" className={totYears === "all" ? "is-on" : ""} onClick={() => setTotYears("all")}>{years} years</button>
+                    </span>
+                  )}
+                  {partnerOff > 0 && (
+                    <span className="lcx-seg is-xs">
+                      <button type="button" className={totNet ? "is-on" : ""} onClick={() => setTotNet(true)} title="After the partner's cut">For us</button>
+                      <button type="button" className={!totNet ? "is-on" : ""} onClick={() => setTotNet(false)} title="What the client pays, before the partner's cut">Before partner</button>
+                    </span>
+                  )}
+                </span>
+              )}
             </div>
             <div className="lcx-actions-btns">
               <button type="button" className="lcx-cancel" onClick={onClose}>Cancel</button>

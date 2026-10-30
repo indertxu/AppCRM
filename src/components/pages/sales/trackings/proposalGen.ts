@@ -2599,6 +2599,7 @@ export interface ContractTerms {
   contactPerson?: { name?: string | null; email?: string | null; phone?: string | null; role?: string | null } | null;
   adminUser?: { name?: string | null; email?: string | null } | null;
   billingFrequency?: string | null; currency?: string | null; termsUrl?: string | null;
+  servicesFrequency?: string | null; servicesPaymentTermsDays?: number | null;
   newsletter?: boolean | null; marketingConsent?: boolean | null;
   servicesBilling?: "per_day" | "fixed" | null; servicesTolerancePct?: number | null; servicesNote?: string | null;
   signatories?: { side: "supplier" | "customer"; name: string; role?: string | null; email?: string | null; phone?: string | null }[] | null;
@@ -2730,7 +2731,7 @@ export const DOC_EXTRA_TOKENS: DeckTokenDef[] = [
   { key: "contract.contact.role", label: "Contract: contact person role", group: "General", example: "CFO" },
   { key: "contract.admin.name", label: "Contract: customer admin user (name)", group: "General", example: "Raul Puche" },
   { key: "contract.admin.email", label: "Contract: customer admin user (e-mail)", group: "General", example: "rpuche@cliente.com" },
-  { key: "contract.billing", label: "Contract: billing frequency", group: "General", example: "Annually" },
+  { key: "contract.billing", label: "Contract: how the licences are paid", group: "General", example: "Annually" },
   { key: "contract.currency", label: "Contract: currency", group: "General", example: "EUR" },
   { key: "contract.payment_days", label: "Contract: payment term (net days)", group: "General", example: "Net 30 days" },
   { key: "contract.one_time", label: "Contract: one-time fees", group: "General", example: "0,00 €" },
@@ -2741,6 +2742,8 @@ export const DOC_EXTRA_TOKENS: DeckTokenDef[] = [
   { key: "contract.renew_years", label: "Contract: renewal years", group: "General", example: "3" },
   { key: "contract.services.billing", label: "Contract: how services are billed", group: "General", example: "Billed per day performed (±25%)" },
   { key: "contract.services.days", label: "Contract: services days", group: "General", example: "23" },
+  { key: "contract.services.frequency", label: "Contract: how the services are paid", group: "General", example: "Monthly" },
+  { key: "contract.services.payment_days", label: "Contract: services payment term (net days)", group: "General", example: "Net 30 days" },
   { key: "contract.services.tolerance", label: "Contract: services days tolerance %", group: "General", example: "25%" },
   { key: "contract.services.note", label: "Contract: services scope note", group: "General", example: "Scope agreed at the kick-off" },
   { key: "contract.terms_url", label: "Contract: general terms URL", group: "General", example: "https://konsolidator.com/legal/" },
@@ -2944,7 +2947,7 @@ export function docValues(ctx: DocContext, scope: DeckScope = {}): Record<string
   if (c) {
     const es = lang === "es";
     const yn = (b: boolean | null | undefined) => (b == null ? "" : b ? (es ? "Sí" : "Yes") : "No");
-    const freq: Record<string, [string, string]> = { annually: ["Anual", "Annually"], quarterly: ["Trimestral", "Quarterly"], monthly: ["Mensual", "Monthly"], upfront: ["Por adelantado", "Upfront"] };
+    const freq: Record<string, [string, string]> = { annually: ["Anual", "Annually"], semiannually: ["Semestral", "Semi-annually"], quarterly: ["Trimestral", "Quarterly"], monthly: ["Mensual", "Monthly"], upfront: ["Por adelantado", "Upfront"], on_delivery: ["Según se presten", "As delivered"] };
     const signers = c.signatories ?? [];
     const cl = signers.filter((x) => x.side === "customer"), us = signers.filter((x) => x.side === "supplier");
     const lines = c.lines ?? [];
@@ -2969,6 +2972,8 @@ export function docValues(ctx: DocContext, scope: DeckScope = {}): Record<string
       "contract.services.billing": c.servicesBilling === "fixed" ? (es ? "Precio cerrado" : "Fixed fee")
         : c.servicesBilling === "per_day" ? (es ? `Se factura por día realizado${c.servicesTolerancePct ? ` (±${c.servicesTolerancePct}%)` : ""}` : `Billed per day performed${c.servicesTolerancePct ? ` (±${c.servicesTolerancePct}%)` : ""}`) : "",
       "contract.services.days": svcDays ? String(svcDays) : "",
+      "contract.services.frequency": c.servicesFrequency ? (freq[c.servicesFrequency]?.[es ? 0 : 1] ?? c.servicesFrequency) : "",
+      "contract.services.payment_days": c.servicesPaymentTermsDays != null ? (es ? `${c.servicesPaymentTermsDays} días` : `Net ${c.servicesPaymentTermsDays} days`) : "",
       "contract.services.tolerance": c.servicesTolerancePct != null ? `${c.servicesTolerancePct}%` : "",
       "contract.services.note": c.servicesNote || "",
       "contract.terms_url": c.termsUrl || "", "contract.newsletter": yn(c.newsletter), "contract.marketing": yn(c.marketingConsent),

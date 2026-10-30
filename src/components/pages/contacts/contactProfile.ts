@@ -259,6 +259,8 @@ function countries() {
 }
 /** "ES" → "Spain" */
 export const countryName = (code: string) => countries().by.get(code)?.en ?? code;
+/** Every country: ISO code, English and Spanish name (the English one is what is shown everywhere). */
+export const countryList = (): { code: string; en: string; es: string }[] => countries().list;
 /** value = ISO code (what is saved); label shows the English and Spanish names so "España" finds it. */
 export const countryOptions = () => countries().list.map((c) => ({ value: c.code, label: norm(c.es) === norm(c.en) ? c.en : `${c.en} · ${c.es}` }));
 

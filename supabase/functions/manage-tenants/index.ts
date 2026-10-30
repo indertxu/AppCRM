@@ -84,7 +84,7 @@ Deno.serve(async (req) => {
 
     if (action === "list_users") {
       const { tenantId } = p;
-      const { data } = await admin.from("profiles").select("id, role, job_title, is_superadmin").eq("tenant_id", tenantId);
+      const { data } = await admin.from("profiles").select("id, role, job_title, is_superadmin, first_name, last_name").eq("tenant_id", tenantId);
       const profs = (data ?? []) as any[];
       const emailById: Record<string, string> = {};
       let page = 1;

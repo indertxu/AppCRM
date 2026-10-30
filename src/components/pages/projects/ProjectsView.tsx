@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type MouseEvent as RMouseEvent } from "react";
+import { countryLabel } from "../contacts/contactProfile";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import type { Client, Project, ProjectType, ClientRole, Blueprint } from "../clients/clientsTypes";
@@ -1193,7 +1194,7 @@ function ProjectDrawer({ project: p, client, serviceName, blueprintName, unit, r
                   <dl className="pjd-det-dl">
                     <div><dt>Legal name</dt><dd>{p.legalName || client?.name || "—"}</dd></div>
                     <div><dt>VAT</dt><dd>{p.vatNumber || "—"}</dd></div>
-                    <div><dt>Address</dt><dd>{[p.address?.street, p.address?.number, p.address?.postalCode, p.address?.city].filter(Boolean).join(" ") || "—"}</dd></div>
+                    <div><dt>Address</dt><dd>{[[p.address?.street, p.address?.number].filter(Boolean).join(" "), [p.address?.postalCode, p.address?.city].filter(Boolean).join(" "), p.address?.country ? countryLabel(p.address.country) : ""].filter(Boolean).join(", ") || "—"}</dd></div>
                     <div><dt>Tax</dt><dd>{p.taxed ? `${p.taxRate}% VAT` : "Not taxed"}</dd></div>
                     <div><dt>Payment terms</dt><dd>{p.paymentDays ? `${p.paymentDays} days` : "—"}</dd></div>
                   </dl>

@@ -1406,6 +1406,16 @@ export async function loadTickets(): Promise<{ tickets: Ticket[]; ready: boolean
   return { tickets, ready, catReady, ownedDeals: owned.map((o: any) => o.tracking_id) };
 }
 
+/** One client's tickets (conversations with them — not their e-mails, not tasks): by the client, or by its company. */
+export async function loadClientTickets(clientId: string, companyId?: string | null): Promise<{ tickets: Ticket[]; ready: boolean }> {
+  const or = [`client_id.eq.${clientId}`, ...(companyId ? [`company_id.eq.${companyId}`] : [])].join(",");
+  const { data, error } = await supabase.from("tracking_tasks").select("*").or(or).order("created_at", { ascending: false }).limit(500);
+  if (error) return { tickets: [], ready: false };
+  const rows = (data ?? []) as any[];
+  const ready = rows.length ? "ticket_no" in rows[0] : true;
+  return { tickets: rows.map((r) => toTicket(r, [])).filter((t) => t.category === "ticket" && !t.mergedInto), ready };
+}
+
 const TICKET_COLS: Record<string, string> = {
   title: "title", description: "description", priority: "priority", due: "due_at", kind: "kind", progress: "progress", checklist: "checklist",
   type: "ticket_type", assignee: "assignee_id", team: "team", requesterName: "requester_name", requesterEmail: "requester_email",

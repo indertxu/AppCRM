@@ -16,6 +16,9 @@ const ROLES = [
   { value: "consultant", label: "Consultant" },
 ];
 
+/** "Ana López", from the profile (empty until they or their company fill it in). */
+const nameOf = (u: TenantUser) => [u.first_name, u.last_name].map((x) => (x ?? "").trim()).filter(Boolean).join(" ");
+
 export default function SuperAdminClient() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -165,9 +168,10 @@ export default function SuperAdminClient() {
           <div className="sa-userlist">
             {users.map((u) => (
               <div className="sa-userrow" key={u.id}>
-                <span className="sa-user-av">{(u.email || "?").slice(0, 2).toUpperCase()}</span>
+                <span className="sa-user-av">{nameOf(u) ? nameOf(u).split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase() : (u.email || "?").slice(0, 2).toUpperCase()}</span>
                 <span className="sa-user-main">
-                  <span className="sa-user-email">{u.email}</span>
+                  <span className="sa-user-name">{nameOf(u) || u.email || <i>No name yet</i>}</span>
+                  {nameOf(u) && u.email && <span className="sa-user-email">{u.email}</span>}
                   <span className="sa-user-role">{u.role ? (ROLES.find((r) => r.value === u.role)?.label ?? u.role) : "Role not set"}{u.job_title ? ` · ${u.job_title}` : ""}</span>
                 </span>
                 <button className="sa-user-key" onClick={() => openPw(u)} aria-label="Change password" title="Change password">

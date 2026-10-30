@@ -20,7 +20,9 @@ const fmtShort = (m: Measure, v: number) => {
   return Math.round(v).toLocaleString("es-ES");
 };
 /** A "nice" axis maximum and its 4 grid steps. */
-function niceScale(max: number) {
+function niceScale(max: number, whole = false) {
+  // counts go up in whole steps (never 0 · 0 · 1 · 1 for a handful of rows)
+  if (whole && max <= 4) return { top: 4, ticks: [0, 1, 2, 3, 4] };
   if (max <= 0) return { top: 1, ticks: [0, 0.25, 0.5, 0.75, 1] };
   const raw = max / 4, pow = Math.pow(10, Math.floor(Math.log10(raw))), n = raw / pow;
   const step = (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * pow;
@@ -50,7 +52,7 @@ function Bars({ agg, horizontal, stacked }: { agg: Agg; horizontal?: boolean; st
   const [host, setHost] = useState<HTMLDivElement | null>(null);
   const totals = agg.labels.map((_, i) => agg.series.reduce((a, s) => a + (s.values[i] || 0), 0));
   const max = stacked ? Math.max(0, ...totals) : Math.max(0, ...agg.series.flatMap((s) => s.values));
-  const { top, ticks } = niceScale(max);
+  const { top, ticks } = niceScale(max, agg.measure === "count");
   const multi = agg.series.length > 1;
   const color = (si: number, li: number) => (multi ? PALETTE[si % PALETTE.length] : PALETTE[li % 2 === 0 ? 0 : 1]);
   const show = (e: RMouseEvent, i: number) => {
@@ -140,7 +142,7 @@ function Line({ agg, area }: { agg: Agg; area?: boolean }) {
   const [hi, setHi] = useState<number | null>(null);
   const W = 600, H = 210, P = 8;
   const max = Math.max(0, ...agg.series.flatMap((s) => s.values));
-  const { top, ticks } = niceScale(max);
+  const { top, ticks } = niceScale(max, agg.measure === "count");
   const n = agg.labels.length;
   const x = (i: number) => (n <= 1 ? W / 2 : P + (i * (W - P * 2)) / (n - 1));
   const y = (v: number) => H - (v / top) * (H - 12) - 2;

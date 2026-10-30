@@ -830,3 +830,38 @@
 .lcx-vp-in em { font-style: normal; font-size: 11.5px; font-weight: 600; color: var(--faint); white-space: nowrap; }
 .lcx-vp-list { font-size: 11.5px; color: var(--faint); }
 .lcx-vp .lcx-chipbtn { background: #fff; box-shadow: inset 0 0 0 1px rgba(180, 83, 9, 0.25); color: #b45309; }
+
+/* ---- an input's sum, always in view (replaces the slider) ---- */
+.lcx-in-txt small.is-math { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* ---- partner: the periods its cut covers ---- */
+.lcx-pt-periods { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 12px; margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--line); }
+.lcx-pt-periods > .lcx-k { min-width: 110px; }
+.lcx-pt-years { display: flex; flex-wrap: wrap; gap: 6px; flex-basis: 100%; }
+.lcx-pt-yr {
+  display: inline-flex; flex-direction: column; align-items: flex-start; gap: 1px; min-width: 92px; padding: 7px 11px; border-radius: 11px;
+  border: 1px solid var(--line); background: #fff; color: var(--muted); font: inherit; cursor: pointer; text-align: left;
+  transition: border-color 0.15s, background 0.15s, color 0.15s, opacity 0.15s;
+}
+.lcx-pt-yr b { font-size: 12px; font-weight: 750; color: inherit; }
+.lcx-pt-yr em { font-style: normal; font-size: 12px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.lcx-pt-yr:hover:not(:disabled) { border-color: #d9468f; }
+.lcx-pt-yr.is-on { border-color: rgba(217, 70, 143, 0.45); background: #fdf0f7; color: #b02a6c; }
+.lcx-pt-yr:not(.is-on) em { color: var(--faint); font-weight: 600; }
+.lcx-pt-yr:disabled { cursor: default; }
+.lcx-pt-yr:disabled:not(.is-on) { opacity: 0.55; }
+.lcx-pt-once { font-size: 12.5px; color: var(--muted); }
+
+/* ---- how the line is paid ---- */
+.lcx-term-pay { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 12px; padding-top: 16px; border-top: 1px solid var(--line); }
+.lcx-term-pay > .lcx-k { min-width: 110px; }
+.lcx-pay-seg { flex-wrap: wrap; }
+.lcx-pay-note { flex-basis: 100%; font-size: 12px; color: var(--faint); }
+
+/* ---- what the total shows (dark result panel) ---- */
+.lcx-actions-total { flex-wrap: wrap; row-gap: 8px; }
+.lcx-tot-pick { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 8px; }
+.lcx-tot-pick .lcx-seg { background: rgba(255, 255, 255, 0.08); }
+.lcx-tot-pick .lcx-seg button { color: rgba(233, 246, 240, 0.65); }
+.lcx-tot-pick .lcx-seg button:hover { color: #fff; }
+.lcx-tot-pick .lcx-seg button.is-on { background: rgba(255, 255, 255, 0.92); color: #0b3a2a; }
