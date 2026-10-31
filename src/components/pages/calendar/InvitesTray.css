@@ -209,3 +209,17 @@
 .iv-card:hover { transform: translateY(-1px); box-shadow: 0 14px 26px -18px rgba(7, 36, 25, 0.6); }
 @keyframes iv-in5 { from { opacity: 0; transform: translateY(-8px) scale(0.95); } }
 @keyframes iv-card5 { from { opacity: 0; transform: translateY(6px); } }
+
+/* A repeating booking: one invitation for all of its dates */
+.iv-card.is-series { border-color: rgba(18, 181, 127, 0.28); }
+.iv-when b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iv-when span { flex-shrink: 0; }
+.iv-series {
+  display: flex; gap: 8px; margin: 0 0 9px; padding: 8px 10px; border-radius: 11px;
+  background: rgba(18, 181, 127, 0.08); border: 1px solid rgba(18, 181, 127, 0.18);
+}
+.iv-series svg { width: 14px; height: 14px; flex-shrink: 0; margin-top: 1px; color: var(--emerald); }
+.iv-series span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.iv-series b { font-size: 11.5px; font-weight: 700; color: var(--forest); font-variant-numeric: tabular-nums; }
+.iv-series em { font-style: normal; font-size: 11px; line-height: 1.4; color: var(--muted); }
+.iv-series em.iv-series-range { font-weight: 650; color: var(--forest); font-variant-numeric: tabular-nums; }

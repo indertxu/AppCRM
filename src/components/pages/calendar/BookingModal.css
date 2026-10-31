@@ -1566,3 +1566,6 @@
 .bm-rep-days { gap: 3px; }
 .bm-rep-day { width: 31px; height: 31px; font-size: 11.5px; }
 .bm6-sum-rep { margin-top: 4px; text-align: right; font-size: 11.5px; font-weight: 600; color: rgba(201, 242, 221, 0.75); animation: bm6-val 0.35s cubic-bezier(0.16, 1, 0.3, 1); }
+
+/* internal work: colleagues come along without billing */
+.bm-summon-free { margin: 8px 2px 0; font-size: 12px; font-weight: 600; color: var(--muted, #5a7d6d); }

@@ -90,8 +90,10 @@ const HEAD_SHORT: Record<string, string> = {
 const HEALTH: Record<string, string> = { ok: "Healthy", warn: "Getting quiet", bad: "Neglected", none: "No contact yet" };
 
 export function ClientList({
-  clients, projects, projectTypes, onNew, onOpen, onDelete, usage, units, loaded = true, colsSignal = 0, linesRev = 0,
+  clients, projects, projectTypes, onNew, onOpen, onDelete, usage, units, loaded = true, colsSignal = 0, linesRev = 0, toolsSlot = null,
 }: {
+  /** Where the search, filters, sort and layout switch go (the page's dark header); in the list itself when not given. */
+  toolsSlot?: HTMLElement | null;
   /** Changes when a client's signed products change (one deleted in its popup): the figures are read again. */
   linesRev?: number;
   /** Changes when the Actions menu asks for the columns editor. */
@@ -399,6 +401,34 @@ export function ClientList({
   const kpiOpts = KPIS.map((k) => ({ value: k.key, label: k.label }));
   const sortable = fields.filter((f) => f.type !== "multi");
 
+  const tools = (
+    <div className="cx-tools">
+      <label className="cx-search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search a client, city, service or product…" />
+        {q && <button onClick={() => setQ("")} aria-label="Clear">×</button>}
+      </label>
+      <FilterBar fields={fields} view={view} onView={setView} total={rows.length} shown={shown.length} noun={["client", "clients"]}
+        saved={savedViews} onSaved={setSavedViews} openSignal={filtersOpenTick} />
+      <div className="cx-sort">
+        <Select size="sm" value={sortKey} onChange={(k) => setSort(k, k && fields.find((f) => f.key === k)?.type === "text" ? "asc" : "desc")} placeholder="Sort"
+          options={[{ value: "", label: "Most recent" }, ...sortable.map((f) => ({ value: f.key, label: f.label, hint: f.group }))]} />
+        {sortKey && (
+          <button className="cx-dir" onClick={() => setSort(sortKey, sortDir === "asc" ? "desc" : "asc")} title={sortDir === "asc" ? "Ascending" : "Descending"} aria-label="Sort direction">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ transform: sortDir === "asc" ? "scaleY(-1)" : undefined }}><path d="M12 5v14M6 13l6 6 6-6" /></svg>
+          </button>
+        )}
+      </div>
+      <div className="cx-view" role="group" aria-label="View">
+        <button className={layout === "grid" ? "is-on" : ""} onClick={() => setLayoutP("grid")} aria-label="Cards" title="Cards">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7" rx="2" /><rect x="14" y="3" width="7" height="7" rx="2" /><rect x="3" y="14" width="7" height="7" rx="2" /><rect x="14" y="14" width="7" height="7" rx="2" /></svg>
+        </button>
+        <button className={layout === "list" ? "is-on" : ""} onClick={() => setLayoutP("list")} aria-label="List" title="List">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></svg>
+        </button>
+      </div>
+    </div>
+  );
   return (
     <>
       <div className="cx-kpis" style={{ ["--n" as any]: slots.length }}>
@@ -478,32 +508,7 @@ export function ClientList({
       )}
 
       <section className="cx-sheet">
-        <div className="cx-tools">
-          <label className="cx-search">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search a client, city, service or product…" />
-            {q && <button onClick={() => setQ("")} aria-label="Clear">×</button>}
-          </label>
-          <FilterBar fields={fields} view={view} onView={setView} total={rows.length} shown={shown.length} noun={["client", "clients"]}
-            saved={savedViews} onSaved={setSavedViews} openSignal={filtersOpenTick} />
-          <div className="cx-sort">
-            <Select size="sm" value={sortKey} onChange={(k) => setSort(k, k && fields.find((f) => f.key === k)?.type === "text" ? "asc" : "desc")} placeholder="Sort"
-              options={[{ value: "", label: "Most recent" }, ...sortable.map((f) => ({ value: f.key, label: f.label, hint: f.group }))]} />
-            {sortKey && (
-              <button className="cx-dir" onClick={() => setSort(sortKey, sortDir === "asc" ? "desc" : "asc")} title={sortDir === "asc" ? "Ascending" : "Descending"} aria-label="Sort direction">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ transform: sortDir === "asc" ? "scaleY(-1)" : undefined }}><path d="M12 5v14M6 13l6 6 6-6" /></svg>
-              </button>
-            )}
-          </div>
-          <div className="cx-view" role="group" aria-label="View">
-            <button className={layout === "grid" ? "is-on" : ""} onClick={() => setLayoutP("grid")} aria-label="Cards" title="Cards">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7" rx="2" /><rect x="14" y="3" width="7" height="7" rx="2" /><rect x="3" y="14" width="7" height="7" rx="2" /><rect x="14" y="14" width="7" height="7" rx="2" /></svg>
-            </button>
-            <button className={layout === "list" ? "is-on" : ""} onClick={() => setLayoutP("list")} aria-label="List" title="List">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></svg>
-            </button>
-          </div>
-        </div>
+        {toolsSlot ? createPortal(tools, toolsSlot) : tools}
         <FilterChips fields={fields} view={view} onView={setView} onEdit={() => setFiltersOpenTick((x) => x + 1)} shown={shown.length} total={rows.length} noun={["client", "clients"]} />
         {q.trim() && searchInfo.by === "other" && shown.length > 0 && (
           <p className="cx-search-note">No client is called “{q.trim()}” — showing clients where it appears in their service, products, city or contacts.</p>
@@ -686,6 +691,7 @@ export const fhLeave = (e: { currentTarget: HTMLElement }) => e.currentTarget.st
 export default function ClientsPage() {
   const fhRef = useRef<HTMLDivElement>(null);
   useFloatingHero(fhRef, ".cl-bar, .cx-kpis");
+  const [toolsSlot, setToolsSlot] = useState<HTMLDivElement | null>(null);
   const d = useClientsData();
   /** Bumped when a client's signed products change in its popup, so the list's figures follow. */
   const [linesRev, setLinesRev] = useState(0);
@@ -790,6 +796,7 @@ export default function ClientsPage() {
             <p className="cx-sub">{clients.length} client{clients.length === 1 ? "" : "s"} · {projects.filter((p) => projectStatusOf(p.status) === "open").length} open project{projects.filter((p) => projectStatusOf(p.status) === "open").length === 1 ? "" : "s"}</p>
           </div>
         </div>
+        <div className="cl-bar-tools" ref={setToolsSlot} />
         <div className="cl-actions">
           <ActionsMenu items={[
             { key: "new", group: "Create", label: "New client", hint: "Add one client and its first project", icon: AM_ICON.plus, primary: true, tone: "green", shortcut: "N", onSelect: () => setShowForm(true) },
@@ -812,6 +819,7 @@ export default function ClientsPage() {
         units={units}
         loaded={loaded}
         colsSignal={colsTick}
+        toolsSlot={toolsSlot}
       />
 
       {detailClient && (
@@ -2014,6 +2022,7 @@ export function CustomerSuccessPage() {
                   </div>
                 </div>, document.body)}
             </span>
+            <ActionsMenu items={[]} />
           </div>
         </div>
         <div className="csx-kpis">

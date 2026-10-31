@@ -24,6 +24,7 @@ import { TICKETS_EVENT } from "../shared/HomeTodo";
 import { useCount, Ring, HeroPicker, Fig, Txt } from "../consultancy/ConsultancyHome";
 import "../consultancy/ConsultancyHome.css";
 import "./SalesHome.css";
+import ActionsMenu from "../../../framework/ActionsMenu";
 
 const eur = (n: number) => Math.round(n).toLocaleString("en-US");
 const short = (n: number) => (n >= 1_000_000 ? `${+(n / 1_000_000).toFixed(1)}M` : n >= 10_000 ? `${Math.round(n / 1000)}k` : eur(n));
@@ -432,6 +433,7 @@ export default function SalesHome({ userId, seesTeam, calendar, desk, greeting, 
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg>
             Customize
           </button>
+          <ActionsMenu items={[]} />
         </div>
         <div className="chx-figs">
           {slots.map((k, i) => <Fragment key={`${k}-${i}`}>{heroFig(k)}</Fragment>)}

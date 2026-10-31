@@ -21,6 +21,7 @@ import { buildCatalog, contactMatches, condReady, cellOf, formatOf, OPS, DEFAULT
 import { listImportBatches, batchLabel } from "./importBatches";
 import Select from "../../framework/Select";
 import { sendOutlookMail, type OutlookMail, type OutlookMailResult } from "../../api/outlookSync";
+import ActionsMenu, { type ActionItem } from "../../framework/ActionsMenu";
 import "./ContactExport.css";
 
 type RowMode = "contact" | "company" | "deal";
@@ -1058,7 +1059,6 @@ export function MarketingPage() {
   const [camp, setCamp] = useState<{ id: string | "new"; brief?: string } | null>(null);
   const [post, setPost] = useState<MkPost | null>(null);
   const [dialog, setDialog] = useState<null | { k: "ai"; brief?: string } | { k: "import" } | { k: "publish"; p: MkPost }>(null);
-  const [createOpen, setCreateOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const tracking = useTrackingReady();
 
@@ -1125,27 +1125,13 @@ export function MarketingPage() {
         <span className="mk-grow" />
         {runner.running && <button className="mkh-live" onClick={() => { const c = campaigns.find((x) => x.id === runner.running); if (c) ctx.openCampaign(c.id); }}><i className="mk-pulse" />Sending</button>}
         {due.length > 0 && <button className="mkh-due" onClick={() => go("social")}>{MhIco.bell}{due.length} ready to publish</button>}
-        <div className="mkh-create">
-          <button className="mkh-create-btn" aria-haspopup="menu" aria-expanded={createOpen} onClick={() => setCreateOpen((v) => !v)}>{MkIco.plus}Create</button>
-          {createOpen && (
-            <>
-              <div className="mkh-scrim" onClick={() => setCreateOpen(false)} />
-              <div className="mkh-menu" role="menu">
-                {([
-                  [MkIco.mail, "E-mail campaign", "Write it, pick a list, track who opens", () => ctx.openCampaign("new")],
-                  [MhIco.social, "Social post", "LinkedIn, Instagram, X… with previews", () => newPostAt()],
-                  [MhIco.spark, "Plan posts with AI", "A series of posts from one brief", () => ctx.openAi()],
-                  [MhIco.upload, "Import posts", "A CSV with dates, networks and texts", () => ctx.openImport()],
-                  [MkIco.list, "Audience list", "Who to reach, by any field", () => go("audiences")],
-                ] as [React.ReactNode, string, string, () => void][]).map(([ico, t, s, fn]) => (
-                  <button key={t} role="menuitem" onClick={() => { setCreateOpen(false); fn(); }}>
-                    <span className="mkh-menu-ico">{ico}</span><span><b>{t}</b><em>{s}</em></span>
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
+        <ActionsMenu items={([
+          ["mail", MkIco.mail, "E-mail campaign", "Write it, pick a list, track who opens", "green", "M", () => ctx.openCampaign("new")],
+          ["post", MhIco.social, "Social post", "LinkedIn, Instagram, X… with previews", "blue", "S", () => newPostAt()],
+          ["ai", MhIco.spark, "Plan posts with AI", "A series of posts from one brief", "violet", "A", () => ctx.openAi()],
+          ["import", MhIco.upload, "Import posts", "A CSV with dates, networks and texts", "amber", "I", () => ctx.openImport()],
+          ["list", MkIco.list, "Audience list", "Who to reach, by any field", "slate", "L", () => go("audiences")],
+        ] as [string, React.ReactNode, string, string, ActionItem["tone"], string, () => void][]).map(([key, icon, label, hint, tone, shortcut, onSelect]) => ({ key, group: "Marketing", icon, label, hint, tone, shortcut, onSelect }))} />
       </header>
 
       {(missing || hubMissing) && <MhSetup missing={missing} hubMissing={hubMissing} />}

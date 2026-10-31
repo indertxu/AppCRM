@@ -1403,6 +1403,8 @@ const saveActual = async (entryId: string, v: ActualValue) => {
   };
 
 const clientTypeIds = new Set(workTypes.filter((t) => t.clientRelated).map((t) => t.id));
+  /** Client work (or anything on a project) shows what it bills; internal work bills nothing, so shows no figure. */
+  const isBilled = (e: Entry) => !!e.projectId || clientTypeIds.has(e.type);
 const effBillable = (e: Entry) =>
     Number(actuals[e.id]?.billable ?? e.billable) || 0;
   /**
@@ -2109,7 +2111,7 @@ onClick={(ev) => { ev.stopPropagation(); if (!opaque(e.userId) && e.merged === 1
                               ? "Busy"
                               : e.clientId ? clientNames[e.clientId] ?? "—" : wt?.name ?? "Meeting"}
                         </span>
-                        {!opaque(e.userId) && e.merged === 1 && <span className="cal-event-bill">{num2(e.billable)}{unitOf(e)}</span>}
+                        {!opaque(e.userId) && e.merged === 1 && isBilled(e) && <span className="cal-event-bill">{num2(e.billable)}{unitOf(e)}</span>}
                       </span>
                       <span className="cal-event-time" data-role={noCount(e) ? (roleOf(e)?.name ?? "Not on target").toUpperCase() : undefined}>
                         {MEET_ICON[e.meetKind ?? ""] && !opaque(e.userId) && e.merged === 1 && (
@@ -2170,6 +2172,7 @@ onClick={(ev) => { ev.stopPropagation(); if (!opaque(e.userId) && e.merged === 1
           onSave={(v) => saveActual(actualFor.id, v)}
           onClear={actuals[actualFor.id] ? () => clearActual(actualFor.id) : undefined}
           onClose={() => setActualFor(null)}
+          internal={!isBilled(actualFor)}
         />
       )}
 

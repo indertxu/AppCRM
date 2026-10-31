@@ -3481,3 +3481,36 @@
   .cx-h-full.has-short { display: none; }
   .cx-h-short { display: inline; }
 }
+
+/* ===== Search, filters, sort and layout in the dark header, over the figures (the list keeps the room) ===== */
+.cl-ov > .cl-bar { flex-wrap: nowrap; gap: 18px; padding-bottom: 18px; }
+.cl-bar-tools { flex: 1 1 auto; min-width: 0; display: flex; }
+.cl-bar .cx-tools { flex: 1 1 auto; min-width: 0; margin: 0; padding: 0; gap: 8px; flex-wrap: nowrap; background: none; border: 0; box-shadow: none; }
+.cl-bar .cx-search {
+  flex: 1 1 260px; min-width: 150px; max-width: 400px; height: 40px; box-sizing: border-box; padding: 0 8px 0 13px; border-radius: 12px;
+  border: 1px solid var(--glass-line); background: var(--glass); box-shadow: none; transition: background 0.2s, border-color 0.2s, box-shadow 0.25s;
+}
+.cl-bar .cx-search:hover { background: rgba(255, 255, 255, 0.1); }
+.cl-bar .cx-search:focus-within { background: rgba(255, 255, 255, 0.13); border-color: rgba(111, 227, 180, 0.55); box-shadow: 0 0 0 3px rgba(111, 227, 180, 0.14); }
+.cl-bar .cx-search svg { color: var(--on2); }
+.cl-bar .cx-search:focus-within svg { color: #6fe3b4; }
+.cl-bar .cx-search input { color: #fff; }
+.cl-bar .cx-search input::placeholder { color: var(--on2); }
+.cl-bar .cx-search button { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.cl-bar .cx-sort > :first-child { width: 170px; }
+.cl-bar .cx-sort .sel-trigger { min-height: 40px; background: var(--glass) !important; border: 1px solid var(--glass-line) !important; color: #fff !important; }
+.cl-bar .cx-sort .sel-trigger * { color: inherit; }
+.cl-bar .cx-sort .sel-trigger:hover { background: rgba(255, 255, 255, 0.12) !important; }
+.cl-bar .cx-dir { background: var(--glass) !important; border-color: var(--glass-line) !important; color: #fff !important; }
+.cl-bar .cx-view { margin-left: auto; background: var(--glass); border-color: var(--glass-line); }
+.cl-bar .cx-view button { color: var(--on2); }
+.cl-bar .cx-view button:hover { color: #fff; }
+.cl-bar .cx-view button.is-on { background: #fff; color: #072419; }
+.cl.cl-ov.fh .cx-sheet { background: transparent; padding-top: 4px; }
+@media (max-width: 1280px) { .cl-bar .cx-search { flex-basis: 190px; } .cl-bar .cx-sort > :first-child { width: 140px; } .cl-bar .fx-btn { padding: 0 11px; } }
+@media (max-width: 1100px) { .cl-ov > .cl-bar { flex-wrap: wrap; } .cl-bar-tools { order: 5; flex-basis: 100%; } }
+
+/* The dark card floats OVER the list: its shadow falls on what scrolls under it (no hard rectangle). */
+.cl.cl-ov.fh::before, .cl.cl-ov.fh::after { z-index: 1; }
+.cl.cl-ov.fh > .cx-sheet { z-index: 0; }
+.cx-sheet .cl-scroll { overscroll-behavior: contain; }

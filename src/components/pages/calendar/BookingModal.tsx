@@ -331,7 +331,7 @@ const closeDate = `${when.getFullYear()}-${String(when.getMonth() + 1).padStart(
   const toggleMate = (id: string) =>
     setSummoned((m) => {
       if (id in m) { const { [id]: _drop, ...rest } = m; return rest; }
-      return { ...m, [id]: billable };
+      return { ...m, [id]: isClientWork ? billable : 0 };
     });
 
   const [attendeeIds, setAttendeeIds] = useState<string[]>(
@@ -609,11 +609,14 @@ else if (isClientWork && !clientId) error = "Pick a client.";
     onSave({
       repeat: rep,
       scope: inSeries ? (ruleChanged ? "following" : scope ?? "one") : undefined,
-startMin, endMin, type, billable, clientId, projectId,
+startMin, endMin, type,
+      // internal work (a type that isn't client work) never bills — for you or for whoever you bring along
+      billable: isClientWork ? billable : 0,
+      clientId, projectId,
       phaseId: openPhaseId,
       taskId: taskIds.join(","),
      attendees: attendeeIds.join(","),
-      summoned: Object.entries(summoned).map(([id, b]) => ({ id, billable: Number(b) || 0 })),
+      summoned: Object.entries(summoned).map(([id, b]) => ({ id, billable: isClientWork ? Number(b) || 0 : 0 })),
       summonNote: summonNote.trim() || undefined,
       notes,
       // Project work is one line now; the role says what it bills as.
@@ -806,7 +809,7 @@ if (!pickedLine) {
   const summonedList = mates.filter((m) => m.id in summoned);
   const contactList = contacts.filter((c) => attendeeIds.includes(c.id));
   const everyone = [
-    ...summonedList.map((m) => ({ key: `m${m.id}`, name: m.name, kind: "is-mate", note: `${(summoned[m.id] ?? 0)}${unitShort}` })),
+    ...summonedList.map((m) => ({ key: `m${m.id}`, name: m.name, kind: "is-mate", note: isClientWork ? `${(summoned[m.id] ?? 0)}${unitShort}` : "" })),
     ...contactList.map((c) => ({ key: `c${c.id}`, name: c.name || c.email || "Contact", kind: "is-client", note: "" })),
   ];
   const roleName = curRole ? roleNameOf(curRole, allRoles) : "Project work";
@@ -1092,7 +1095,7 @@ if (!pickedLine) {
                           <span className={`bm-free ${busyMates.has(m.id) ? "is-busy" : ""}`}>{busyMates.has(m.id) ? "Busy" : "Free"}</span>
                           {on && <span className="bm-person-check">✓</span>}
                         </button>
-                        {on && (
+                        {on && isClientWork && (
                           <div className="bm-summon-bill">
                             <span>bills</span>
                             <input type="number" min="0" step={step} className="cat-nospin" value={summoned[m.id]}
@@ -1105,6 +1108,7 @@ if (!pickedLine) {
                     );
                   })}
                 </div>
+                {summonedList.length > 0 && !isClientWork && <p className="bm-summon-free">Internal work — they join without billing anything.</p>}
                 {summonedList.length > 0 && (
                   <input className="bm-summon-note" value={summonNote} onChange={(e) => setSummonNote(e.target.value)} placeholder="Add a line for them (optional)" />
                 )}

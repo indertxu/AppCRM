@@ -1,17 +1,16 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../api/supabase";
 import Select from "../../framework/Select";
-import { useBackToClose } from "../../framework/useBackToClose";
 import { setLeaveGuard, loadDepartments, deptName, deptInfo, DEFAULT_DEPARTMENTS } from "../../framework/pageAccess";
 import {
   listPipelines, createPipeline, savePipelineOrder, pipelineUsage, deletePipelineSafely, renewalPipelineOf, setRenewalPipeline,
-  loadPipeline, loadPhasesByPipeline, syncPipelineToBlueprint,
+  loadPipeline, loadPhasesByPipeline, syncPipelineToBlueprint, orderPhases,
   listFolders, createFolder, renameFolder, moveFolder, deleteFolder, setPipelineFolder, duplicatePipeline,
   diffDraft, savePipelineDraft,
-  type Pipeline, type PipelineFolder, type PipelineDraft, type Phase, type PipelineLink, type PipelineUsage,
+  type Pipeline, type PipelineFolder, type PipelineDraft, type Phase, type PipelineUsage,
 } from "./pipelineApi";
 import { loadBlueprintData, type Blueprint } from "./blueprintsApi";
 import "./PipelinePage.css";
@@ -25,8 +24,8 @@ const deptColor = (k: string) => deptInfo(k)?.color ?? DEFAULT_DEPARTMENTS.find(
 /** Departments carry a colour only (the badge is a coloured dot). */
 const DeptIcon = (_: { k: string }) => null;
 
-const NODE_W = 200;
-const NODE_H = 92;
+/** Room between two steps of the line (stored as the phase's position, so every other screen reads the same order). */
+const STEP_Y = 140;
 const newId = () => (crypto as any).randomUUID?.() ?? "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (c: string) => (Number(c) ^ (Math.random() * 16) >> (Number(c) / 4)).toString(16));
 const fold = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 
@@ -69,16 +68,6 @@ const FolderIco = ({ open }: { open?: boolean }) => (
       : <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />}
   </svg>
 );
-
-/** A pipeline's phases in order as one slim bar: a segment each, Win green, Loss red. */
-function PhaseBar({ phases }: { phases: Phase[] }) {
-  if (!phases.length) return <span className="plv-bar is-empty" aria-label="No phases yet" />;
-  return (
-    <span className="plv-bar" role="img" aria-label={`${phases.length} phases: ${phases.map((p) => p.name).join(", ")}`}>
-      {phases.map((p) => <i key={p.id} className={p.sales_outcome === "win" ? "is-win" : p.sales_outcome === "loss" ? "is-loss" : ""} title={p.name} />)}
-    </span>
-  );
-}
 
 const Ico = ({ d }: { d: string }) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>
@@ -153,8 +142,11 @@ export default function PipelinePage({ onBack }: Props) {
   const [folders, setFolders] = useState<PipelineFolder[] | null>([]);
   const [phasesBy, setPhasesBy] = useState<Record<string, Phase[]>>({});
   const [loaded, setLoaded] = useState(false);
-  const [openId, setOpenId] = useState<string | null>(null);
   const [previewId, setPreviewId] = useState<string | null>(null);
+  /** The open pipeline's editor answers here: "may I leave?" (it asks first when there are unsaved changes). */
+  const guard = useRef<((go: () => void) => boolean) | null>(null);
+  /** Go somewhere else, past the editor's unsaved-changes question. */
+  const leave = (go: () => void) => { if (guard.current?.(go)) return; go(); };
   const [deleting, setDeleting] = useState<Pipeline | null>(null);
   const [delFolder, setDelFolder] = useState<PipelineFolder | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(readCollapsed);
@@ -204,21 +196,13 @@ export default function PipelinePage({ onBack }: Props) {
     });
   };
 
-  if (openId) {
-    const pipe = pipelines.find((p) => p.id === openId);
-    if (pipe) return <PipelineEditor pipeline={pipe} folders={folders} onBack={() => { setOpenId(null); refresh(); }} onSaved={refresh} />;
-  }
-
-  const clickRow = (id: string) => {
-    if (previewId === id) setOpenId(id);   // second click on the previewed one → editor
-    else setPreviewId(id);                  // first click → preview
-  };
+  const clickRow = (id: string) => { if (previewId !== id) leave(() => setPreviewId(id)); };
   const newBlank = async (folderId: string | null) => {
     setPop(null);
     let p = await createPipeline("Untitled pipeline", folderId);
     if (!p && folderId) p = await createPipeline("Untitled pipeline");
     if (!p) { setMsg("Couldn't create the pipeline: your user isn't allowed to."); return; }
-    await refresh(); setOpenId(p.id);
+    await refresh(); setPreviewId(p.id);
   };
   /** Start from a copy of another pipeline (its phases, arrows, departments, products). */
   const newCopy = async (src: Pipeline, folderId?: string | null) => {
@@ -229,7 +213,7 @@ export default function PipelinePage({ onBack }: Props) {
     setBusy(false);
     if (typeof r === "string") { setMsg(r); return; }
     openFolder(r.folder_id ?? null);
-    await refresh(); setOpenId(r.id);
+    await refresh(); setPreviewId(r.id);
   };
   const newFolder = async (parentId: string | null) => {
     setPop(null);
@@ -324,16 +308,28 @@ export default function PipelinePage({ onBack }: Props) {
     </button>
   );
 
+  /** A name too long for its row slides left on hover, so the end of it shows too. */
+  const slideName = (row: HTMLElement, on: boolean) => {
+    const box = row.querySelector<HTMLElement>(".plv-row-name"), txt = row.querySelector<HTMLElement>(".plv-row-txt");
+    if (!box || !txt) return;
+    const over = txt.scrollWidth - box.clientWidth;
+    const shift = on && over > 0 ? over + 14 : 0;   // + room past the soft edge, so the last letter is clear
+    txt.style.transitionDuration = `${on ? Math.max(0.35, shift / 90) : 0.3}s`;
+    txt.style.transitionDelay = on && shift ? "0.25s" : "0s";
+    txt.style.transform = shift ? `translateX(-${shift}px)` : "";
+    box.classList.toggle("is-sliding", on && shift > 0);
+  };
   const pipeRow = (p: Pipeline) => {
-    const ph = phasesBy[p.id] ?? [];
     const isOver = over?.kind === "pipe" && over.id === p.id && drag?.id !== p.id;
     return (
       <div
         key={p.id}
         className={`plv-row ${previewId === p.id ? "is-active" : ""} ${drag?.id === p.id ? "is-dragging" : ""} ${isOver ? (over!.kind === "pipe" && over!.after ? "is-after" : "is-before") : ""}`}
         onClick={() => clickRow(p.id)}
-        onDoubleClick={() => setOpenId(p.id)}
-        onKeyDown={(e) => { if (e.key === "Enter") setOpenId(p.id); else if (e.key === " ") { e.preventDefault(); setPreviewId(p.id); } }}
+        onMouseEnter={(e) => slideName(e.currentTarget, true)}
+        onMouseLeave={(e) => slideName(e.currentTarget, false)}
+        title={p.name || "Untitled pipeline"}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); clickRow(p.id); } }}
         tabIndex={0} role="treeitem" aria-selected={previewId === p.id}
         draggable
         onDragStart={(e) => startDrag(e, { kind: "pipe", id: p.id })}
@@ -342,11 +338,13 @@ export default function PipelinePage({ onBack }: Props) {
       >
         <span className="plv-row-main">
           <span className="plv-row-top">
-            <span className="plv-row-name">{p.name || "Untitled pipeline"}</span>
-            {p.is_sales && <span className="plv-tag" title="Shown in Sales">Sales</span>}
-            <span className="plv-row-n">{ph.length || "—"}</span>
+            <span className="plv-row-name"><span className="plv-row-txt">{p.name || "Untitled pipeline"}</span></span>
+            {p.is_sales && (
+              <span className="plv-sales" title="Sales pipeline — shown in the deals tracker" aria-label="Sales pipeline">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8M15 7h6v6" /></svg>
+              </span>
+            )}
           </span>
-          <PhaseBar phases={ph} />
         </span>
         {moreBtn(`Actions for ${p.name}`, { kind: "pipe", id: p.id })}
       </div>
@@ -408,7 +406,6 @@ export default function PipelinePage({ onBack }: Props) {
     pipes: pipelines.filter((p) => tree.within(folderOf(p), f.id)).length,
   });
   const preview = previewId ? pipelines.find((p) => p.id === previewId) ?? null : null;
-  const previewPhases = preview ? phasesBy[preview.id] ?? [] : [];
   const nFolders = (folders ?? []).length;
 
   // ---- the menus ----
@@ -427,7 +424,7 @@ export default function PipelinePage({ onBack }: Props) {
   if (pop?.kind === "new") {
     popBody = (
       <>
-        <MenuItem icon={IC.blank} label="Blank pipeline" hint="Start from an empty canvas" onClick={() => newBlank(pop.folder)} />
+        <MenuItem icon={IC.blank} label="Blank pipeline" hint="Start with no phases" onClick={() => leave(() => newBlank(pop.folder))} />
         {pipelines.length > 0 && (
           <>
             <div className="plv-pop-sep" />
@@ -437,7 +434,7 @@ export default function PipelinePage({ onBack }: Props) {
               {copyChoices.map((p) => (
                 <MenuItem key={p.id} icon={IC.copy} label={p.name || "Untitled pipeline"}
                   hint={[folderOf(p) ? tree.path(folderOf(p)) : null, `${(phasesBy[p.id] ?? []).length} phases`].filter(Boolean).join(" · ")}
-                  onClick={() => newCopy(p, pop.folder ?? undefined)} />
+                  onClick={() => leave(() => newCopy(p, pop.folder ?? undefined))} />
               ))}
               {!copyChoices.length && <p className="plv-pop-none">No pipeline matches.</p>}
             </div>
@@ -454,8 +451,7 @@ export default function PipelinePage({ onBack }: Props) {
       </>
     ) : (
       <>
-        <MenuItem icon={IC.edit} label="Edit pipeline" onClick={() => { setPop(null); setOpenId(p.id); }} />
-        <MenuItem icon={IC.copy} label="Duplicate" hint="Same phases, under a new name" onClick={() => newCopy(p)} />
+        <MenuItem icon={IC.copy} label="Duplicate" hint="Same phases, under a new name" onClick={() => leave(() => newCopy(p))} />
         {folders !== null && hasFolders && <MenuItem icon={IC.move} label="Move to folder…" onClick={() => setPop({ ...pop, view: "move" })} />}
         <div className="plv-pop-sep" />
         <MenuItem icon={IC.trash} label="Delete…" danger onClick={() => { setPop(null); setDeleting(p); }} />
@@ -480,26 +476,21 @@ export default function PipelinePage({ onBack }: Props) {
     );
   }
 
+  const isRenewal = !!preview && renewalPipelineOf(pipelines)?.id === preview.id;
   return (
     <div className="pl plv">
-      <header className="plv-head">
-        <button className="pl-back" onClick={onBack} aria-label="Back">‹</button>
-        <div className="plv-titles">
-          <h1 className="pl-title">Client pipelines</h1>
-          <p>{loaded ? `${pipelines.length} ${pipelines.length === 1 ? "pipeline" : "pipelines"}${nFolders ? ` in ${nFolders} ${nFolders === 1 ? "folder" : "folders"}` : ""} · the same order for everyone` : "Loading…"}</p>
-        </div>
-      </header>
-
       <div className="plv-body">
         <aside className="plv-side" aria-label="Pipelines">
           <div className="plv-acts">
-            <button type="button" className={`plv-new ${pop?.kind === "new" && !pop.folder ? "is-open" : ""}`} disabled={busy}
-              onClick={(e) => openPop(e, { kind: "new", rect: e.currentTarget.getBoundingClientRect(), folder: null })} aria-haspopup="menu">
-              <Ico d={IC.plus} />{busy ? "Copying…" : "New pipeline"}
-            </button>
+            <button type="button" className="plv-back" onClick={() => leave(onBack)} aria-label="Back to Settings" title="Back to Settings"><Ico d={IC.back} /></button>
+            <span className="plv-side-t" title={loaded ? `${pipelines.length} pipelines${nFolders ? ` in ${nFolders} folders` : ""} · the same order for everyone` : undefined}>Pipelines</span>
             {folders !== null && (
-              <button type="button" className="plv-newf" onClick={() => newFolder(null)} title="New folder"><Ico d={IC.folderPlus} />Folder</button>
+              <button type="button" className="plv-icon" onClick={() => newFolder(null)} title="New folder" aria-label="New folder"><Ico d={IC.folderPlus} /></button>
             )}
+            <button type="button" className={`plv-new ${pop?.kind === "new" && !pop.folder ? "is-open" : ""}`} disabled={busy} title="New pipeline"
+              onClick={(e) => openPop(e, { kind: "new", rect: e.currentTarget.getBoundingClientRect(), folder: null })} aria-haspopup="menu">
+              <Ico d={IC.plus} />{busy ? "Copying…" : "New"}
+            </button>
           </div>
           {pipelines.length > 5 && (
             <div className="plv-search">
@@ -529,40 +520,15 @@ export default function PipelinePage({ onBack }: Props) {
           </p>
         </aside>
 
-        <section className="plv-main" aria-label="Preview">
-          {preview ? (
-            <>
-              <div className="plv-pv-head">
-                <div className="plv-pv-title">
-                  <h2>{preview.name || "Untitled pipeline"}</h2>
-                  <div className="plv-pv-meta">
-                    <span><FolderIco />{folderOf(preview) ? tree.path(folderOf(preview)) : "Not in a folder"}</span>
-                    <span>{previewPhases.length} {previewPhases.length === 1 ? "phase" : "phases"}</span>
-                    {preview.is_sales && <span className="plv-tag">Shown in Sales</span>}
-                    {renewalPipelineOf(pipelines)?.id === preview.id && <span className="plv-tag is-renew">Renewals come here</span>}
-                  </div>
-                </div>
-                {(() => {
-                  const on = renewalPipelineOf(pipelines)?.id === preview.id;
-                  return (
-                    <button type="button" className={`plv-btn-ghost plv-renew ${on ? "is-on" : ""}`} disabled={busy}
-                      title={on ? "Ended client contracts come back to Sales in this pipeline, as renewal deals. Press to stop." : "Send ended client contracts here, as renewal deals"}
-                      onClick={async () => { const e = await setRenewalPipeline(on ? null : preview.id); setMsg(e); await refresh(); }}>
-                      <Ico d={on ? IC.check : IC.renew} />{on ? "Renewal pipeline" : "Use for renewals"}
-                    </button>
-                  );
-                })()}
-                <button type="button" className="plv-btn-ghost" onClick={() => newCopy(preview)} disabled={busy}><Ico d={IC.copy} />Duplicate</button>
-                <button type="button" className="plv-btn" onClick={() => setOpenId(preview.id)}><Ico d={IC.edit} />Edit pipeline</button>
-              </div>
-              <div className="plv-canvas">
-                <PipelinePreview key={preview.id} pipelineId={preview.id} onOpen={() => setOpenId(preview.id)} />
-              </div>
-            </>
-          ) : (
-            <div className="plv-pv-empty">{loaded ? "Pick a pipeline on the left to see its phases." : ""}</div>
-          )}
-        </section>
+        {preview ? (
+          <PipelineEditor key={preview.id} pipeline={preview} folders={folders} pipelines={pipelines} guard={guard}
+            isRenewal={isRenewal} busy={busy}
+            onRenewal={async () => { const e = await setRenewalPipeline(isRenewal ? null : preview.id); setMsg(e); await refresh(); }}
+            onDuplicate={() => leave(() => newCopy(preview))}
+            onBack={onBack} onSaved={refresh} />
+        ) : (
+          <section className="plv-main"><div className="plv-pv-empty">{loaded ? "Pick a pipeline on the left, or create one." : ""}</div></section>
+        )}
       </div>
 
       {pop && popBody && (
@@ -739,94 +705,17 @@ function DeletePipelineModal({ pipeline, others, onClose, onDeleted }: {
   );
 }
 
-// ============================ Read-only quick view (pan + zoom) ============================
-function PipelinePreview({ pipelineId, onOpen }: { pipelineId: string; onOpen: () => void }) {
-  const [phases, setPhases] = useState<Phase[]>([]);
-  const [links, setLinks] = useState<PipelineLink[]>([]);
-  const [viewX, setViewX] = useState(30);
-  const [viewY, setViewY] = useState(30);
-  const [zoom, setZoom] = useState(0.75);
-  const ref = useRef<HTMLDivElement>(null);
-  const pan = useRef<{ sx: number; sy: number; vx: number; vy: number } | null>(null);
-
-  useEffect(() => {
-    loadPipeline(pipelineId).then(({ phases, links }) => {
-      setPhases(phases); setLinks(links);
-      // the whole pipeline in view: zoom to fit the pane, centred
-      if (phases.length) {
-        const minX = Math.min(...phases.map((p) => p.pos_x)), maxX = Math.max(...phases.map((p) => p.pos_x)) + NODE_W;
-        const minY = Math.min(...phases.map((p) => p.pos_y)), maxY = Math.max(...phases.map((p) => p.pos_y)) + NODE_H;
-        const box = ref.current?.getBoundingClientRect();
-        const w = box?.width || 800, h = box?.height || 500, pad = 48;
-        const z = Math.max(0.3, Math.min(1, (w - pad * 2) / (maxX - minX), (h - pad * 2) / (maxY - minY)));
-        setZoom(z);
-        setViewX((w - (maxX - minX) * z) / 2 - minX * z);
-        setViewY(Math.min(pad, (h - (maxY - minY) * z) / 2) - minY * z);
-      }
-    }).catch(() => {});
-  }, [pipelineId]);
-
-  useEffect(() => {
-    const el = ref.current; if (!el) return;
-    const onWheel = (e: WheelEvent) => {
-      if (!e.ctrlKey && !e.metaKey) return;
-      e.preventDefault();
-      setZoom((z) => Math.min(1.6, Math.max(0.3, z * (e.deltaY < 0 ? 1.1 : 0.9))));
-    };
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
-  }, []);
-
-  const center = (p: Phase) => ({ x: p.pos_x + NODE_W / 2, y: p.pos_y + NODE_H / 2 });
-
-  return (
-    <div
-      className="pl-qv"
-      ref={ref}
-      onPointerDown={(e) => { pan.current = { sx: e.clientX, sy: e.clientY, vx: viewX, vy: viewY }; ref.current?.setPointerCapture(e.pointerId); }}
-      onPointerMove={(e) => { if (pan.current) { setViewX(pan.current.vx + (e.clientX - pan.current.sx)); setViewY(pan.current.vy + (e.clientY - pan.current.sy)); } }}
-      onPointerUp={() => { pan.current = null; }}
-      onDoubleClick={onOpen}
-    >
-      <div className="pl-qv-world" style={{ transform: `translate(${viewX}px, ${viewY}px) scale(${zoom})` }}>
-        <svg className="pl-lines">
-          <defs>
-            <marker id="pl-qv-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-              <path d="M0 0L10 5L0 10z" fill="rgba(134,239,192,0.8)" />
-            </marker>
-          </defs>
-          {links.map((l) => {
-            const a = phases.find((p) => p.id === l.from_phase);
-            const b = phases.find((p) => p.id === l.to_phase);
-            if (!a || !b) return null;
-            const ca = center(a), cb = center(b);
-            return <line key={l.id} x1={ca.x} y1={ca.y} x2={cb.x} y2={cb.y} className="pl-link-line" markerEnd="url(#pl-qv-arrow)" />;
-          })}
-        </svg>
-        {phases.map((p) => (
-          <div key={p.id} className="pl-node pl-node-ro"
-            style={{ left: p.pos_x, top: p.pos_y, width: NODE_W, minHeight: NODE_H, ...(p.deptKeys[0] ? { borderColor: `${deptColor(p.deptKeys[0])}66` } : {}) }}>
-            <div className="pl-node-name">{p.name || "Untitled phase"}</div>
-            <div className="pl-node-depts">
-              {p.deptKeys.map((k) => (
-                <span key={k} className="pl-dept-badge" style={{ background: deptColor(k) }}><DeptIcon k={k} /></span>
-              ))}
-            </div>
-            {p.items.length > 0 && <div className="pl-node-items">{p.items.length} item{p.items.length !== 1 ? "s" : ""}</div>}
-          </div>
-        ))}
-        {phases.length === 0 && <div className="pl-qv-empty">This pipeline has no phases yet.</div>}
-      </div>
-    </div>
-  );
-}
-
 // ============================ Editor ============================
-// Everything you change stays on screen until Save. Leaving with changes —
-// ‹, Esc, the browser's Back, the sidebar, the search, closing the tab — asks
-// first: Save and leave / Discard (confirmed a second time) / Keep editing.
-function PipelineEditor({ pipeline, folders, onBack, onSaved }: {
-  pipeline: Pipeline; folders: PipelineFolder[] | null; onBack: () => void; onSaved: () => void;
+// The pipeline as a line of steps, top to bottom: add, insert, drag to
+// reorder; the line can end in a fork — Won / Lost. Click a step and it opens
+// on the right. Everything stays on screen until Save; going elsewhere with
+// changes (another pipeline, ‹, the sidebar, closing the tab) asks first:
+// Save and leave / Discard (confirmed a second time) / Keep editing.
+function PipelineEditor({ pipeline, folders, pipelines, guard, isRenewal, busy, onRenewal, onDuplicate, onBack, onSaved }: {
+  pipeline: Pipeline; folders: PipelineFolder[] | null; pipelines: Pipeline[];
+  guard: MutableRefObject<((go: () => void) => boolean) | null>;
+  isRenewal: boolean; busy: boolean; onRenewal: () => void; onDuplicate: () => void;
+  onBack: () => void; onSaved: () => void;
 }) {
   const navigate = useNavigate();
   const blank: PipelineDraft = {
@@ -836,9 +725,8 @@ function PipelineEditor({ pipeline, folders, onBack, onSaved }: {
   const [base, setBase] = useState<PipelineDraft>(blank);     // as in the database
   const [draft, setDraft] = useState<PipelineDraft>(blank);   // as on screen
   const [loaded, setLoaded] = useState(false);
-  const phases = draft.phases, links = draft.links, isSales = draft.isSales;
+  const phases = draft.phases, isSales = draft.isSales;
   const setPhases = (fn: (ps: Phase[]) => Phase[]) => setDraft((d) => ({ ...d, phases: fn(d.phases) }));
-  const setLinks = (fn: (ls: PipelineLink[]) => PipelineLink[]) => setDraft((d) => ({ ...d, links: fn(d.links) }));
   const diff = useMemo(() => diffDraft(base, draft), [base, draft]);
   const dirty = loaded && diff.count > 0;
 
@@ -849,27 +737,18 @@ function PipelineEditor({ pipeline, folders, onBack, onSaved }: {
   const leaveTo = useRef<(() => void) | null>(null);
 
   const [selId, setSelId] = useState<string | null>(null);
-  const [selLink, setSelLink] = useState<string | null>(null);
   const [products, setProducts] = useState<{ id: string; name: string }[]>([]);
   const [services, setServices] = useState<{ id: string; name: string }[]>([]);
   const [depts, setDepts] = useState<{ key: string; label: string; color: string }[]>([]);
   const [blueprints, setBlueprints] = useState<Blueprint[]>([]);
-  const [allPipelines, setAllPipelines] = useState<Pipeline[]>([]);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [genOpen, setGenOpen] = useState(false);
-
-  // pan + zoom
-  const [viewX, setViewX] = useState(40);
-  const [viewY, setViewY] = useState(40);
-  const [zoom, setZoom] = useState(1);
-  const canvasRef = useRef<HTMLDivElement>(null);
-  const pan = useRef<{ sx: number; sy: number; vx: number; vy: number } | null>(null);
-  const drag = useRef<{ id: string; dx: number; dy: number; moved: boolean; sx: number; sy: number } | null>(null);
-  const linking = useRef<{ from: string } | null>(null);
-  const [linkGhost, setLinkGhost] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
-  const [, force] = useState(0);
-  const nodeRefs = useRef<Record<string, HTMLDivElement | null>>({});
-  const livePos = useRef<{ x: number; y: number } | null>(null);
+  const [nextName, setNextName] = useState("");
+  /** The step just added: it pops in, and the name field takes the focus. */
+  const [fresh, setFresh] = useState<string | null>(null);
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+  const [overIdx, setOverIdx] = useState<number | null>(null);
+  const others = pipelines.filter((p) => p.id !== pipeline.id);
 
   /** What the database has now for this pipeline. */
   const readSaved = async (): Promise<PipelineDraft> => {
@@ -895,12 +774,10 @@ function PipelineEditor({ pipeline, folders, onBack, onSaved }: {
     })();
     supabase.from("products").select("id,name").then(({ data }: any) => setProducts(data ?? []));
     supabase.from("services").select("id,name").then(({ data }: any) => setServices(data ?? []));
-    // Load the real departments placed on the org chart, keeping the shared icon/color.
     loadDepartments(true).then((ds) => {
       setDepts((ds.length ? ds.map((d) => ({ key: d.key, label: d.name, color: d.color })) : DEFAULT_DEPARTMENTS.map((d) => ({ key: d.key, label: d.label, color: d.color }))));
     }).catch(() => {});
     loadBlueprintData().then((d) => setBlueprints(d.blueprints)).catch(() => {});
-    listPipelines().then((ps) => setAllPipelines(ps.filter((p) => p.id !== pipeline.id))).catch(() => {});
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pipeline.id]);
@@ -930,7 +807,6 @@ function PipelineEditor({ pipeline, folders, onBack, onSaved }: {
 
   // ---- leaving ----
   const dirtyRef = useRef(dirty); dirtyRef.current = dirty;
-  /** Close, or go elsewhere (`go`): asks first when there are unsaved changes. */
   const requestLeave = (go?: () => void) => {
     if (!dirtyRef.current) { (go ?? onBack)(); return; }
     leaveTo.current = go ?? null;
@@ -941,17 +817,15 @@ function PipelineEditor({ pipeline, folders, onBack, onSaved }: {
     setAsk(0);
     (go ?? onBack)();
   };
-  // the sidebar, the account menu and the search ask through this
+  // another pipeline, ‹, a new one: the page asks through `guard`; the sidebar and the search through the leave guard
   useEffect(() => {
-    setLeaveGuard((go) => { if (!dirtyRef.current) return false; leaveTo.current = go; setAsk(1); return true; });
-    return () => setLeaveGuard(null);
+    const ask1 = (go: () => void) => { if (!dirtyRef.current) return false; leaveTo.current = go; setAsk(1); return true; };
+    guard.current = ask1;
+    setLeaveGuard(ask1);
+    return () => { if (guard.current === ask1) guard.current = null; setLeaveGuard(null); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  // the browser's Back closes the editor (asks first with changes)
-  useBackToClose("pipeline-editor", onBack, true, () => {
-    if (!dirtyRef.current) return false;
-    leaveTo.current = null; setAsk(1); return true;
-  });
-  // links anywhere else on the page
+  // links anywhere else on the page, and closing the tab
   useEffect(() => {
     if (!dirty) return;
     const onClick = (e: MouseEvent) => {
@@ -963,7 +837,6 @@ function PipelineEditor({ pipeline, folders, onBack, onSaved }: {
       e.preventDefault(); e.stopPropagation();
       requestLeave(() => navigate(url.pathname + url.search + url.hash));
     };
-    // closing or reloading the tab: the browser's own "Leave site?" question
     const onUnload = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
     document.addEventListener("click", onClick, true);
     window.addEventListener("beforeunload", onUnload);
@@ -971,24 +844,17 @@ function PipelineEditor({ pipeline, folders, onBack, onSaved }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dirty]);
 
-  // ---- keyboard: Esc steps back one level (menu → connection → phase → close), ⌘S / Ctrl+S saves ----
+  // ---- keyboard: Esc closes a menu, then the step on the right; ⌘S / Ctrl+S saves ----
   const keyRef = useRef<(e: KeyboardEvent) => void>(() => {});
   keyRef.current = (e: KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); if (!ask) void save(); return; }
     const t = e.target as HTMLElement | null;
     const typing = !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
     if (e.key === "Escape") {
-      if (e.defaultPrevented || ask) return;                       // a dropdown, or the question itself, handles it
+      if (e.defaultPrevented || ask) return;
       if (typing) { t!.blur(); return; }
       if (bulkOpen || genOpen) { setBulkOpen(false); setGenOpen(false); return; }
-      if (linking.current) { linking.current = null; setLinkGhost(null); return; }
-      if (selLink) { setSelLink(null); return; }
-      if (selId) { setSelId(null); return; }
-      requestLeave();
-      return;
-    }
-    if ((e.key === "Delete" || e.key === "Backspace") && selLink && !typing) {
-      e.preventDefault(); const id = selLink; setSelLink(null); dropLink(id);
+      if (selId) setSelId(null);
     }
   };
   useEffect(() => {
@@ -997,141 +863,84 @@ function PipelineEditor({ pipeline, folders, onBack, onSaved }: {
     return () => window.removeEventListener("keydown", f);
   }, []);
 
-  const toCanvas = (cx: number, cy: number) => {
-    const r = canvasRef.current!.getBoundingClientRect();
-    return { x: (cx - r.left - viewX) / zoom, y: (cy - r.top - viewY) / zoom };
-  };
+  // ---- the line ----
+  const ordered = useMemo(() => orderPhases(draft.phases, draft.links), [draft.phases, draft.links]);
+  const win = ordered.find((p) => p.sales_outcome === "win") ?? null;
+  const loss = ordered.find((p) => p.sales_outcome === "loss") ?? null;
+  const steps = ordered.filter((p) => p !== win && p !== loss);
 
-  // ---- pan ----
-  const onCanvasPointerDown = (e: React.PointerEvent) => {
-    if ((e.target as Element).closest?.(".pl-node")) return;
-    if ((e.target as Element).closest?.("[data-link], .pl-link-del")) return; // a link handles itself
-    setSelLink(null);
-    if (linking.current) { linking.current = null; setLinkGhost(null); return; }
-    pan.current = { sx: e.clientX, sy: e.clientY, vx: viewX, vy: viewY };
-    canvasRef.current?.setPointerCapture(e.pointerId);
-    setSelId(null);
-  };
-  const onCanvasPointerMove = (e: React.PointerEvent) => {
-    if (linking.current) {
-      const from = phases.find((p) => p.id === linking.current!.from);
-      if (from) {
-        const p = toCanvas(e.clientX, e.clientY);
-        setLinkGhost({ x1: from.pos_x + NODE_W / 2, y1: from.pos_y + NODE_H / 2, x2: p.x, y2: p.y });
-      }
-    }
-    if (drag.current) {
-      const d = drag.current;
-      if (Math.abs(e.clientX - d.sx) > 3 || Math.abs(e.clientY - d.sy) > 3) d.moved = true;
-      const p = toCanvas(e.clientX, e.clientY);
-      const x = Math.round(p.x - d.dx), y = Math.round(p.y - d.dy);
-      livePos.current = { x, y };
-      // Move the node directly in the DOM — no React re-render, so it tracks the cursor 1:1.
-      const el = nodeRefs.current[d.id];
-      if (el) { el.style.left = `${x}px`; el.style.top = `${y}px`; }
-      // Update any connected link lines live.
-      const cx = x + NODE_W / 2, cy = y + NODE_H / 2;
-      links.forEach((l) => {
-        if (l.from_phase === d.id) {
-          document.querySelectorAll<SVGLineElement>(`[data-link="${l.id}"]`).forEach((ln) => { ln.setAttribute("x1", String(cx)); ln.setAttribute("y1", String(cy)); });
-        }
-        if (l.to_phase === d.id) {
-          document.querySelectorAll<SVGLineElement>(`[data-link="${l.id}"]`).forEach((ln) => { ln.setAttribute("x2", String(cx)); ln.setAttribute("y2", String(cy)); });
-        }
-      });
-    }
-    if (pan.current) {
-      setViewX(pan.current.vx + (e.clientX - pan.current.sx));
-      setViewY(pan.current.vy + (e.clientY - pan.current.sy));
-    }
-  };
-  const onCanvasPointerUp = () => {
-    if (drag.current) {
-      const d = drag.current;
-      if (d.moved && livePos.current) {
-        const { x, y } = livePos.current;
-        setPhases((ps) => ps.map((ph) => (ph.id === d.id ? { ...ph, pos_x: x, pos_y: y } : ph)));
-      } else if (!d.moved) { setSelId(d.id); }
-      livePos.current = null;
-      drag.current = null;
-    }
-    pan.current = null;
-  };
-
-  // ---- node drag ----
-  const onNodePointerDown = (e: React.PointerEvent, id: string) => {
-    e.stopPropagation();
-    if (linking.current) return;
-    const ph = phases.find((p) => p.id === id)!;
-    const p = toCanvas(e.clientX, e.clientY);
-    drag.current = { id, dx: p.x - ph.pos_x, dy: p.y - ph.pos_y, moved: false, sx: e.clientX, sy: e.clientY };
-    canvasRef.current?.setPointerCapture(e.pointerId);
-    force((n) => n + 1);
-  };
-
-  // ---- linking (branch) ----
-  const startLink = (e: React.PointerEvent, id: string) => {
-    e.stopPropagation();
-    linking.current = { from: id };
-    force((n) => n + 1);
-  };
-  const finishLink = (e: React.PointerEvent, id: string) => {
-    if (!linking.current) return;
-    e.stopPropagation();
-    const from = linking.current.from;
-    linking.current = null; setLinkGhost(null);
-    if (from === id) return;
-    if (links.some((l) => l.from_phase === from && l.to_phase === id)) return;
-    setLinks((ls) => [...ls, { id: newId(), from_phase: from, to_phase: id }]);
-  };
-
-  // ---- zoom ----
-  useEffect(() => {
-    const el = canvasRef.current;
-    if (!el) return;
-    const onWheel = (e: WheelEvent) => {
-      if (!e.ctrlKey && !e.metaKey) return;
-      e.preventDefault();
-      const r = el.getBoundingClientRect();
-      const mx = e.clientX - r.left, my = e.clientY - r.top;
-      setZoom((z) => {
-        const nz = Math.min(1.8, Math.max(0.4, z * (e.deltaY < 0 ? 1.1 : 0.9)));
-        setViewX((vx) => mx - ((mx - vx) / z) * nz);
-        setViewY((vy) => my - ((my - vy) / z) * nz);
-        return nz;
-      });
-    };
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
-  }, []);
-
-  const blankPhase = (x: number, y: number, name = "New phase", source: string | null = null): Phase => ({
-    id: newId(), pipeline_id: pipeline.id, name, pos_x: Math.round(x), pos_y: Math.round(y), color: null,
-    handover_to: null, source_phase_key: source, sales_visible: true, sales_outcome: null, close_probability: null,
+  /**
+   * Put the line in place: each step one under the other, an arrow from each to
+   * the next, and from the last into Won and into Lost. Arrows that already
+   * exist keep their id, so only what really changed is saved.
+   */
+  const relink = (list: Phase[], w: Phase | null = win, l: Phase | null = loss, extra?: (d: PipelineDraft) => Partial<PipelineDraft>) =>
+    setDraft((d) => {
+      const placed = [
+        ...list.map((p, i) => ({ ...p, pos_x: 0, pos_y: i * STEP_Y })),
+        ...(w ? [{ ...w, pos_x: 0, pos_y: list.length * STEP_Y }] : []),
+        ...(l ? [{ ...l, pos_x: 260, pos_y: list.length * STEP_Y }] : []),
+      ];
+      const pairs: [string, string][] = list.slice(1).map((p, i) => [list[i].id, p.id]);
+      const last = list[list.length - 1];
+      if (last) { if (w) pairs.push([last.id, w.id]); if (l) pairs.push([last.id, l.id]); }
+      const links = pairs.map(([a, b]) => d.links.find((x) => x.from_phase === a && x.to_phase === b) ?? { id: newId(), from_phase: a, to_phase: b });
+      return { ...d, ...(extra ? extra(d) : {}), phases: placed, links };
+    });
+  const blankPhase = (name = "New phase", source: string | null = null, outcome: "win" | "loss" | null = null): Phase => ({
+    id: newId(), pipeline_id: pipeline.id, name, pos_x: 0, pos_y: 0, color: null,
+    handover_to: null, source_phase_key: source, sales_visible: true, sales_outcome: outcome, close_probability: null,
     deptKeys: [], items: [],
   });
-  const addPhaseAt = () => {
-    // drop near the center of the current view
-    const r = canvasRef.current!.getBoundingClientRect();
-    const cx = (r.width / 2 - viewX) / zoom, cy = (r.height / 2 - viewY) / zoom;
-    const ph = blankPhase(cx - NODE_W / 2, cy - NODE_H / 2);
-    setPhases((p) => [...p, ph]); setSelId(ph.id);
+  const insertAt = (index: number, name = "New phase", open = true) => {
+    const ph = blankPhase(name);
+    const list = [...steps]; list.splice(index, 0, ph);
+    relink(list);
+    setFresh(ph.id);
+    if (open) setSelId(ph.id);
+    return ph;
+  };
+  const addNext = () => {
+    const n = nextName.trim();
+    if (!n) return;
+    insertAt(steps.length, n, false);
+    setNextName("");
+  };
+  const move = (from: number, to: number) => {
+    if (from === to || from < 0 || to < 0 || from >= steps.length || to > steps.length) return;
+    const list = [...steps]; const [m] = list.splice(from, 1);
+    list.splice(to > from ? to - 1 : to, 0, m);
+    relink(list);
   };
   const removePhase = (id: string) => {
-    setDraft((d) => ({ ...d, phases: d.phases.filter((x) => x.id !== id), links: d.links.filter((l) => l.from_phase !== id && l.to_phase !== id) }));
     if (selId === id) setSelId(null);
+    if (win?.id === id) { takenEnding.current.win = win; relink(steps, null, loss); return; }
+    if (loss?.id === id) { takenEnding.current.loss = loss; relink(steps, win, null); return; }
+    relink(steps.filter((p) => p.id !== id));
+  };
+  /** The fork at the end: Won / Lost, one step that ends the line two ways. */
+  // taken away and put back before saving: the same Won / Lost come back (with their deals), not new ones
+  const takenEnding = useRef<{ win: Phase | null; loss: Phase | null }>({ win: null, loss: null });
+  const addEnding = (which: "both" | "win" | "loss" = "both") => {
+    const t = takenEnding.current;
+    const w = win ?? (which !== "loss" ? t.win ?? blankPhase("Won", null, "win") : null);
+    const l = loss ?? (which !== "win" ? t.loss ?? blankPhase("Lost", null, "loss") : null);
+    if (w && w !== win) setFresh(w.id);
+    relink(steps, w, l);
+  };
+  const removeEnding = () => {
+    if (selId && (selId === win?.id || selId === loss?.id)) setSelId(null);
+    takenEnding.current = { win: win ?? takenEnding.current.win, loss: loss ?? takenEnding.current.loss };
+    relink(steps, null, null);
   };
 
-  // Generate phases from a blueprint: one node per phase, in a row, linked in sequence.
+  // Generate phases from a blueprint: one step per phase, after the ones there.
   const generateFromBlueprint = (bpId: string) => {
     const bp = blueprints.find((b) => b.id === bpId);
     if (!bp || !bp.phases.length) return;
-    const baseX = 60, baseY = 120, gap = NODE_W + 80;
-    const created = bp.phases.map((p, i) => blankPhase(baseX + i * gap, baseY, p.name || `Phase ${i + 1}`, p.id));
-    const newLinks = created.slice(0, -1).map((p, i) => ({ id: newId(), from_phase: p.id, to_phase: created[i + 1].id }));
-    setDraft((d) => ({ ...d, source: bpId, phases: [...d.phases, ...created], links: [...d.links, ...newLinks] }));
+    const created = bp.phases.map((p, i) => blankPhase(p.name || `Phase ${i + 1}`, p.id));
+    relink([...steps, ...created], win, loss, () => ({ source: bpId }));
   };
-  const dropLink = (id: string) => setLinks((ls) => ls.filter((l) => l.id !== id));
 
   // Apply a department / item to every phase at once.
   const applyDeptToAll = (key: string) =>
@@ -1140,225 +949,283 @@ function PipelineEditor({ pipeline, folders, onBack, onSaved }: {
     setPhases((ps) => ps.map((ph) => ph.items.some((i) => i.type === type && i.id === id) ? ph : { ...ph, items: [...ph.items, { type, id }] }));
 
   const sel = selId ? phases.find((p) => p.id === selId) ?? null : null;
-
-  const center = (p: Phase) => ({ x: p.pos_x + NODE_W / 2, y: p.pos_y + NODE_H / 2 });
-  const lineFor = (l: PipelineLink) => {
-    const a = phases.find((p) => p.id === l.from_phase);
-    const b = phases.find((p) => p.id === l.to_phase);
-    if (!a || !b) return null;
-    const ca = center(a), cb = center(b);
-    return { id: l.id, x1: ca.x, y1: ca.y, x2: cb.x, y2: cb.y };
-  };
-
   const tree = folderTree(folders ?? []);
-  const folderOptions = [{ value: "", label: "No folder" }, ...tree.flat().map(({ f, depth }) => ({ value: f.id, label: `${" ".repeat(depth)}${f.name || "Folder"}` }))];
-  const stateText = saving ? "Saving…" : saveErr ? "Not saved" : dirty ? `${diff.count} unsaved change${diff.count === 1 ? "" : "s"}` : savedOnce ? "All changes saved" : "No changes";
+  const folderOptions = [{ value: "", label: "No folder" }, ...tree.flat().map(({ f, depth }) => ({ value: f.id, label: `${" ".repeat(depth)}${f.name || "Folder"}` }))];
+  const pipeName = (id: string | null | undefined) => (id ? pipelines.find((x) => x.id === id)?.name ?? "Handover" : null);
+
+  // ---- what the line shows besides names: department colours, runs, items, figures ----
+  const NO_DEPT = "#9fb4aa";
+  const tone = (p: Phase) => (p.deptKeys[0] ? deptColor(p.deptKeys[0]) : NO_DEPT);
+  const itemName = (it: { type: "product" | "service"; id: string }) =>
+    (it.type === "product" ? products : services).find((x) => x.id === it.id)?.name ?? (it.type === "product" ? "Product" : "Service");
+  /** Where a department's run of phases starts: its name and how many phases in a row it owns. */
+  const runs = new Map<number, { key: string | null; count: number }>();
+  steps.forEach((p, i) => {
+    const k = p.deptKeys[0] ?? null;
+    if (i > 0 && (steps[i - 1].deptKeys[0] ?? null) === k) return;
+    let n = 0; while (i + n < steps.length && (steps[i + n].deptKeys[0] ?? null) === k) n++;
+    runs.set(i, { key: k, count: n });
+  });
+  const focusStep = (id: string) => { setSelId(id); window.setTimeout(() => document.getElementById(`pls-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 30); };
+  const ItemIco = ({ type }: { type: "product" | "service" }) => type === "product"
+    ? <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 7l9-4 9 4-9 4-9-4z" /><path d="M3 7v10l9 4 9-4V7" /></svg>
+    : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="7" width="18" height="13" rx="2" /><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>;
+
+  /** One step of the line. */
+  const step = (p: Phase, i: number) => {
+    const on = selId === p.id;
+    const hidden = isSales && p.sales_visible === false;
+    const prob = p.close_probability;
+    return (
+      <div key={p.id} id={`pls-${p.id}`}
+        className={`pls-step ${on ? "is-sel" : ""} ${fresh === p.id ? "is-fresh" : ""} ${dragIdx === i ? "is-dragging" : ""} ${overIdx === i && dragIdx !== null && dragIdx !== i && dragIdx !== i - 1 ? "is-over" : ""} ${hidden ? "is-hidden" : ""} ${p.sales_outcome ? `is-${p.sales_outcome}` : ""}`}
+        style={{ ["--i" as string]: Math.min(i, 14), ["--c" as string]: tone(p) }}
+        onDragOver={(e) => { if (dragIdx === null) return; e.preventDefault(); const r = e.currentTarget.getBoundingClientRect(); setOverIdx(e.clientY > r.top + r.height / 2 ? i + 1 : i); }}
+        onDrop={(e) => { if (dragIdx === null) return; e.preventDefault(); if (overIdx !== null) move(dragIdx, overIdx); setDragIdx(null); setOverIdx(null); }}>
+        <span className="pls-dot" aria-hidden="true">{i + 1}</span>
+        <div className="pls-card" role="button" tabIndex={0} aria-pressed={on}
+          onClick={() => setSelId(on ? null : p.id)}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelId(on ? null : p.id); } }}>
+          <span className="pls-grip" title="Drag to move" draggable
+            onDragStart={(e) => { e.stopPropagation(); e.dataTransfer.effectAllowed = "move"; try { e.dataTransfer.setData("text/plain", p.id); } catch { /* */ } window.setTimeout(() => setDragIdx(i), 0); }}
+            onDragEnd={() => { setDragIdx(null); setOverIdx(null); }}
+            onClick={(e) => e.stopPropagation()}>
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="9" cy="6" r="1.6" /><circle cx="15" cy="6" r="1.6" /><circle cx="9" cy="12" r="1.6" /><circle cx="15" cy="12" r="1.6" /><circle cx="9" cy="18" r="1.6" /><circle cx="15" cy="18" r="1.6" /></svg>
+          </span>
+          <span className="pls-main">
+            <b>{p.name || "Untitled phase"}</b>
+            {p.sales_outcome && <span className={`pls-chip is-${p.sales_outcome}`}>{p.sales_outcome === "win" ? "Won" : "Lost"}</span>}
+          </span>
+          {/* the details stay quiet: a small sign each, the whole of it on hover */}
+          <span className="pls-badges" onClick={(e) => e.stopPropagation()}>
+            {p.deptKeys.length > 1 && (
+              <span className="pls-badge" tabIndex={0} aria-label={`${p.deptKeys.length} departments`}>
+                <span className="pls-dots">{p.deptKeys.slice(0, 3).map((k) => <i key={k} style={{ background: deptColor(k) }} />)}</span>
+                <span className="pls-pop"><b>Departments</b>{p.deptKeys.map((k) => <span key={k}><i style={{ background: deptColor(k) }} />{deptLabel(k)}</span>)}</span>
+              </span>
+            )}
+            {p.items.length > 0 && (
+              <span className="pls-badge" tabIndex={0} aria-label={`${p.items.length} products and services`}>
+                <ItemIco type={p.items.some((it) => it.type === "product") ? "product" : "service"} />{p.items.length}
+                <span className="pls-pop"><b>Products &amp; services</b>{p.items.map((it) => <span key={`${it.type}:${it.id}`} className={`is-${it.type}`}><ItemIco type={it.type} />{itemName(it)}</span>)}</span>
+              </span>
+            )}
+            {p.handover_to && (
+              <span className="pls-badge is-hand" tabIndex={0} aria-label="Hands the client over">
+                <Ico d="M5 12h14M13 6l6 6-6 6" />
+                <span className="pls-pop"><b>When it ends</b><span>Hands the client over to <u>{pipeName(p.handover_to)}</u></span></span>
+              </span>
+            )}
+            {hidden && (
+              <span className="pls-badge is-off" tabIndex={0} aria-label="Hidden in Sales">
+                <Ico d="M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 5.2A9.8 9.8 0 0 1 12 5c5 0 9 4.5 10 7-0.4 1-1.3 2.4-2.6 3.7M6.3 6.3C4.2 7.7 2.7 9.8 2 12c1 2.5 5 7 10 7 1.7 0 3.3-.5 4.6-1.3" />
+                <span className="pls-pop"><b>Hidden in Sales</b><span>Not shown in the deals tracker</span></span>
+              </span>
+            )}
+          </span>
+          {isSales && !p.sales_outcome && (
+            <span className={`pls-ring ${prob == null ? "is-none" : ""}`} style={{ ["--p" as string]: prob ?? 0 }} title={prob == null ? "No close probability yet" : `Close probability ${prob}%`}>
+              <b>{prob == null ? "—" : `${prob}%`}</b>
+            </span>
+          )}
+          <span className="pls-acts" onClick={(e) => e.stopPropagation()}>
+            <button type="button" onClick={() => move(i, i - 1)} disabled={i === 0} aria-label="Move up" title="Move up"><Ico d="M12 19V5M6 11l6-6 6 6" /></button>
+            <button type="button" onClick={() => move(i, i + 2)} disabled={i === steps.length - 1} aria-label="Move down" title="Move down"><Ico d="M12 5v14M6 13l6 6 6-6" /></button>
+            <button type="button" className="is-del" onClick={() => removePhase(p.id)} aria-label="Delete phase" title="Delete phase"><Ico d={IC.trash} /></button>
+          </span>
+        </div>
+      </div>
+    );
+  };
+  /** Between two steps: a + that slots a new one in. */
+  const gap = (index: number) => {
+    const run = runs.get(index);
+    const c = index < steps.length ? tone(steps[index]) : NO_DEPT;
+    return (
+    <div className={`pls-gap ${run ? "has-band" : ""} ${overIdx === index && dragIdx !== null && dragIdx !== index && dragIdx !== index - 1 ? "is-over" : ""}`}
+      style={{ ["--c" as string]: c, ["--i" as string]: Math.min(index, 14) }}
+      onDragOver={(e) => { if (dragIdx === null) return; e.preventDefault(); setOverIdx(index); }}
+      onDrop={(e) => { if (dragIdx === null) return; e.preventDefault(); move(dragIdx, index); setDragIdx(null); setOverIdx(null); }}>
+      <button type="button" className="pls-ins" onClick={() => insertAt(index)} aria-label="Insert a phase here" title="Insert a phase here"><Ico d={IC.plus} /></button>
+      {run && (
+        <span className="pls-band" title={`${run.count} phase${run.count === 1 ? "" : "s"} in a row`}><i />{run.key ? deptLabel(run.key) : "No department"}</span>
+      )}
+    </div>
+    );
+  };
+  /** One side of the fork. */
+  const outcome = (p: Phase | null, kind: "win" | "loss") => p ? (
+    <button type="button" className={`pls-out is-${kind} ${selId === p.id ? "is-sel" : ""} ${fresh === p.id ? "is-fresh" : ""}`} onClick={() => setSelId(selId === p.id ? null : p.id)}>
+      <span className="pls-out-ico" aria-hidden="true">{kind === "win" ? <Ico d="M5 12l5 5 9-10" /> : <Ico d="M6 6l12 12M18 6L6 18" />}</span>
+      <span className="pls-out-txt"><b>{p.name || (kind === "win" ? "Won" : "Lost")}</b><em>{kind === "win" ? "Deals that close" : "Deals that don't"}</em></span>
+      {p.deptKeys.length > 0 && <span className="pls-out-depts">{p.deptKeys.map((k) => <i key={k} style={{ background: deptColor(k) }} title={deptLabel(k)} />)}</span>}
+    </button>
+  ) : (
+    <button type="button" className={`pls-out is-${kind} is-empty`} onClick={() => addEnding(kind)}>
+      <span className="pls-out-ico" aria-hidden="true"><Ico d={IC.plus} /></span>
+      <span className="pls-out-txt"><b>Add {kind === "win" ? "Won" : "Lost"}</b><em>{kind === "win" ? "Where closed deals land" : "Where lost deals land"}</em></span>
+    </button>
+  );
 
   return (
-    <div className={`pl-editor ${sel ? "is-wide" : ""}`}>
-      <header className="pl-ed-head">
-        <button className="pl-back" onClick={() => requestLeave()} aria-label="Back" title={dirty ? "Back (asks about your unsaved changes)" : "Back"}>‹</button>
-        <input className="pl-name-input" value={draft.name} onChange={(e) => { const v = e.target.value; setDraft((d) => ({ ...d, name: v })); }} aria-label="Pipeline name" />
-        {folders !== null && folders.length > 0 && (
-          <div className="pl-ed-folder" title="Folder">
-            <FolderIco />
-            <Select size="sm" value={tree.has(draft.folderId) ? draft.folderId! : ""} onChange={(v) => setDraft((d) => ({ ...d, folderId: v || null }))}
-              options={folderOptions} aria-label="Folder" />
-          </div>
-        )}
-        <button
-          className={`pl-sales-toggle ${isSales ? "on" : ""}`}
-          onClick={() => setDraft((d) => ({ ...d, isSales: !d.isSales }))}
-          title="Show this pipeline in the Sales tracking panel"
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18" /><path d="M7 14l3-3 3 2 5-6" /></svg>
-          Sales pipeline
-        </button>
-        <div className="pl-ed-actions">
-          {phases.length > 0 && (
-            <div className="pl-menu-wrap">
-              <button className="pl-btn-ghost" onClick={() => { setBulkOpen((v) => !v); setGenOpen(false); }}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
-                Apply to all
-              </button>
-              {bulkOpen && (
-                <>
-                  <div className="pl-menu-layer" onClick={() => setBulkOpen(false)} />
-                  <div className="pl-menu-pop">
-                    <span className="pl-menu-title">Add to every phase</span>
-                    <label className="pl-menu-lbl">Department</label>
-                    <Select value="" onChange={(v) => v && applyDeptToAll(v)} placeholder="Pick department"
-                      options={depts.map((d) => ({ value: d.key, label: d.label }))} />
-                    <label className="pl-menu-lbl">Product</label>
-                    <Select value="" onChange={(v) => v && applyItemToAll("product", v)} placeholder="Pick product"
-                      options={products.map((p) => ({ value: p.id, label: p.name }))} />
-                    <label className="pl-menu-lbl">Service</label>
-                    <Select value="" onChange={(v) => v && applyItemToAll("service", v)} placeholder="Pick service"
-                      options={services.map((s) => ({ value: s.id, label: s.name }))} />
-                  </div>
-                </>
+    <>
+      <section className="plv-main pls" aria-label={`Pipeline ${draft.name}`}>
+        <div className={`pls-head ${bulkOpen || genOpen ? "is-open" : ""}`}>
+          <div className="pls-bar">
+            <input className="pls-name" value={draft.name} onChange={(e) => { const v = e.target.value; setDraft((d) => ({ ...d, name: v })); }} aria-label="Pipeline name" placeholder="Pipeline name" />
+            {isSales && <span className="pls-pill">Sales</span>}
+            {isRenewal && <span className="pls-pill is-renew">Renewals</span>}
+            <div className="pls-journey-bar" role="list" aria-label="The phases, in order">
+              {loaded && steps.map((p, i) => (
+                <button type="button" role="listitem" key={p.id} className={selId === p.id ? "is-on" : ""} style={{ ["--c" as string]: tone(p), ["--i" as string]: i }}
+                  onClick={() => focusStep(p.id)} title={`${i + 1}. ${p.name || "Untitled phase"}${p.deptKeys[0] ? ` · ${deptLabel(p.deptKeys[0])}` : ""}`} />
+              ))}
+              {(win || loss) && (
+                <span className="pls-journey-end">
+                  {win && <button type="button" className={`is-win ${selId === win.id ? "is-on" : ""}`} onClick={() => focusStep(win.id)} title={win.name || "Won"} />}
+                  {loss && <button type="button" className={`is-loss ${selId === loss.id ? "is-on" : ""}`} onClick={() => focusStep(loss.id)} title={loss.name || "Lost"} />}
+                </span>
               )}
             </div>
-          )}
-          {blueprints.length > 0 && (
-            <div className="pl-menu-wrap">
-              <button className="pl-btn-ghost" onClick={() => { setGenOpen((v) => !v); setBulkOpen(false); }}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L4.5 13H11l-1 9 8.5-11H12z" /></svg>
-                From blueprint
-              </button>
-              {genOpen && (
-                <>
-                  <div className="pl-menu-layer" onClick={() => setGenOpen(false)} />
-                  <div className="pl-menu-pop">
-                    <span className="pl-menu-title">Generate phases from</span>
-                    {blueprints.map((b) => (
-                      <button key={b.id} className="pl-menu-item" onClick={() => { generateFromBlueprint(b.id); setGenOpen(false); }}>
-                        {b.name || "Untitled blueprint"}
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-          <button className="pl-btn-ghost" onClick={addPhaseAt}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14" /></svg>
-            Add phase
-          </button>
-          <div className="pl-save-wrap">
-            <span className={`pl-save-state ${saveErr ? "is-err" : dirty ? "is-dirty" : savedOnce ? "is-ok" : ""}`} aria-live="polite">{stateText}</span>
-            <button className="pl-btn-primary pl-save" onClick={() => void save()} disabled={!dirty || saving || !loaded} title="Save (⌘S / Ctrl+S)">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 3h11l3 3v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" /><path d="M7 3v5h8V3M7 21v-7h10v7" /></svg>
+            {saveErr ? <span className="pls-state is-err">Not saved</span>
+              : dirty ? <span className="pls-state is-dirty" title={summarize(diff).join(" · ")}>{diff.count} unsaved</span>
+              : savedOnce ? <span className="pls-state is-ok"><Ico d={IC.check} />Saved</span> : null}
+            <button type="button" className="pls-save" onClick={() => void save()} disabled={!dirty || saving || !loaded} title="Save (⌘S / Ctrl+S)">
               {saving ? "Saving…" : "Save"}
             </button>
-          </div>
-        </div>
-      </header>
-      {saveErr && (
-        <div className="pl-save-err" role="alert">
-          <span>{saveErr}</span>
-          <button type="button" onClick={() => setSaveErr(null)} aria-label="Dismiss">×</button>
-        </div>
-      )}
-
-      <div className="pl-body">
-        <div
-          className="pl-canvas"
-          ref={canvasRef}
-          onPointerDown={onCanvasPointerDown}
-          onPointerMove={onCanvasPointerMove}
-          onPointerUp={onCanvasPointerUp}
-        >
-          <div className="pl-zoom">
-            <button onClick={() => setZoom((z) => Math.min(1.8, z * 1.15))}>+</button>
-            <span>{Math.round(zoom * 100)}%</span>
-            <button onClick={() => setZoom((z) => Math.max(0.4, z * 0.87))}>−</button>
-            <button onClick={() => { setZoom(1); setViewX(40); setViewY(40); }}>⤢</button>
+            <span className="pls-more" aria-hidden="true"><Ico d="M6 9l6 6 6-6" /></span>
           </div>
 
-          <div className="pl-world" style={{ transform: `translate(${viewX}px, ${viewY}px) scale(${zoom})` }}>
-            <svg className="pl-lines">
-              <defs>
-                <marker id="pl-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-                  <path d="M0 0L10 5L0 10z" fill="rgba(134,239,192,0.8)" />
-                </marker>
-              </defs>
-              {links.map((l) => {
-                const ln = lineFor(l);
-                if (!ln) return null;
-                return (
-                  <g key={l.id} className={`pl-link ${selLink === l.id ? "is-sel" : ""}`}>
-                    <line data-link={l.id} x1={ln.x1} y1={ln.y1} x2={ln.x2} y2={ln.y2} className="pl-link-line" markerEnd="url(#pl-arrow)" />
-                    <line data-link={l.id} x1={ln.x1} y1={ln.y1} x2={ln.x2} y2={ln.y2} className="pl-link-hit"
-                      onPointerDown={(e) => { e.stopPropagation(); setSelId(null); setSelLink(l.id); }}>
-                      <title>Click to select · Delete to remove</title>
-                    </line>
-                  </g>
-                );
-              })}
-              {linkGhost && <line x1={linkGhost.x1} y1={linkGhost.y1} x2={linkGhost.x2} y2={linkGhost.y2} className="pl-link-ghost" />}
-            </svg>
-
-            {(() => {
-              const l = selLink ? links.find((x) => x.id === selLink) : null;
-              const ln = l ? lineFor(l) : null;
-              if (!l || !ln) return null;
-              return (
-                <button
-                  className="pl-link-del"
-                  style={{ left: (ln.x1 + ln.x2) / 2, top: (ln.y1 + ln.y2) / 2, transform: `translate(-50%, -50%) scale(${1 / zoom})` }}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onClick={() => { setSelLink(null); dropLink(l.id); }}
-                  title="Remove this connection (Delete)"
-                  aria-label="Remove connection"
-                >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
-                </button>
-              );
-            })()}
-
-            {phases.map((p) => (
-              <div
-                key={p.id}
-                ref={(el) => { nodeRefs.current[p.id] = el; }}
-                className={`pl-node ${selId === p.id ? "is-sel" : ""} ${linking.current ? "is-target" : ""}`}
-                style={{ left: p.pos_x, top: p.pos_y, width: NODE_W, minHeight: NODE_H, ...(p.deptKeys[0] ? { borderColor: `${deptColor(p.deptKeys[0])}66` } : {}) }}
-                onPointerDown={(e) => { setSelLink(null); onNodePointerDown(e, p.id); }}
-                onPointerUp={(e) => finishLink(e, p.id)}
-              >
-                <div className="pl-node-name">{p.name || "Untitled phase"}</div>
-                <div className="pl-node-depts">
-                  {p.deptKeys.length === 0 ? <span className="pl-node-none">No department</span> :
-                    p.deptKeys.map((k) => (
-                      <span key={k} className="pl-dept-badge" style={{ background: deptColor(k) }} title={deptLabel(k)}><DeptIcon k={k} /></span>
-                    ))}
+          <div className="pls-drawer">
+            <div className="pls-group">
+              {folders !== null && folders.length > 0 && (
+                <label className="pls-field" title="Folder">
+                  <Ico d={IC.folder} />
+                  <Select size="sm" value={tree.has(draft.folderId) ? draft.folderId! : ""} onChange={(v) => setDraft((d) => ({ ...d, folderId: v || null }))}
+                    options={folderOptions} aria-label="Folder" />
+                </label>
+              )}
+              <button type="button" className={`pls-sw ${isSales ? "is-on" : ""}`} role="switch" aria-checked={isSales}
+                onClick={() => setDraft((d) => ({ ...d, isSales: !d.isSales }))} title="Show this pipeline in Sales (the deals tracker)">
+                <span className="pls-sw-k" aria-hidden="true"><i /></span>Sales
+              </button>
+              <button type="button" className={`pls-sw is-violet ${isRenewal ? "is-on" : ""}`} role="switch" aria-checked={isRenewal} disabled={busy} onClick={onRenewal}
+                title={isRenewal ? "Ended client contracts come back to Sales here, as renewal deals" : "Send ended client contracts here, as renewal deals"}>
+                <span className="pls-sw-k" aria-hidden="true"><i /></span>Renewals
+              </button>
+            </div>
+            <div className="pls-group">
+              {phases.length > 0 && (
+                <div className="pl-menu-wrap">
+                  <button type="button" className={`pls-act ${bulkOpen ? "is-on" : ""}`} onClick={() => { setBulkOpen((v) => !v); setGenOpen(false); }} title="Add a department, product or service to every phase">
+                    <Ico d="M4 6h16M4 12h16M4 18h10" />To every phase
+                  </button>
+                  {bulkOpen && (
+                    <>
+                      <div className="pl-menu-layer" onClick={() => setBulkOpen(false)} />
+                      <div className="pl-menu-pop">
+                        <span className="pl-menu-title">Add to every phase</span>
+                        <label className="pl-menu-lbl">Department</label>
+                        <Select value="" onChange={(v) => v && applyDeptToAll(v)} placeholder="Pick department" options={depts.map((d) => ({ value: d.key, label: d.label }))} />
+                        <label className="pl-menu-lbl">Product</label>
+                        <Select value="" onChange={(v) => v && applyItemToAll("product", v)} placeholder="Pick product" options={products.map((p) => ({ value: p.id, label: p.name }))} />
+                        <label className="pl-menu-lbl">Service</label>
+                        <Select value="" onChange={(v) => v && applyItemToAll("service", v)} placeholder="Pick service" options={services.map((s) => ({ value: s.id, label: s.name }))} />
+                      </div>
+                    </>
+                  )}
                 </div>
-                {p.items.length > 0 && <div className="pl-node-items">{p.items.length} item{p.items.length !== 1 ? "s" : ""}</div>}
-                {p.handover_to && (
-                  <div className="pl-node-handover">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-                    {allPipelines.find((x) => x.id === p.handover_to)?.name ?? "Handover"}
-                  </div>
-                )}
-                {p.sales_outcome && (
-                  <div className={`pl-node-oc pl-node-oc-${p.sales_outcome}`}>
-                    {p.sales_outcome === "win" ? "★ Win" : "✕ Loss"}
-                  </div>
-                )}
-                {isSales && !p.sales_outcome && p.close_probability != null && (
-                  <div className="pl-node-prob">{p.close_probability}%</div>
-                )}
-                <button className="pl-node-handle" onPointerDown={(e) => startLink(e, p.id)} title="Drag to link">→</button>
-              </div>
-            ))}
+              )}
+              {blueprints.length > 0 && (
+                <div className="pl-menu-wrap">
+                  <button type="button" className={`pls-act ${genOpen ? "is-on" : ""}`} onClick={() => { setGenOpen((v) => !v); setBulkOpen(false); }} title="Add the phases of a blueprint">
+                    <Ico d="M13 2L4.5 13H11l-1 9 8.5-11H12z" />Blueprint
+                  </button>
+                  {genOpen && (
+                    <>
+                      <div className="pl-menu-layer" onClick={() => setGenOpen(false)} />
+                      <div className="pl-menu-pop">
+                        <span className="pl-menu-title">Add the phases of</span>
+                        {blueprints.map((b) => (
+                          <button key={b.id} className="pl-menu-item" onClick={() => { generateFromBlueprint(b.id); setGenOpen(false); }}>{b.name || "Untitled blueprint"}</button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+              <button type="button" className="pls-act" onClick={onDuplicate} disabled={busy} title="Duplicate this pipeline"><Ico d={IC.copy} />Duplicate</button>
+            </div>
           </div>
         </div>
+        {saveErr && (
+          <div className="pl-save-err pls-err" role="alert">
+            <span>{saveErr}</span>
+            <button type="button" onClick={() => setSaveErr(null)} aria-label="Dismiss">×</button>
+          </div>
+        )}
 
-        <div className={`pl-panel-wrap ${sel ? "open" : ""}`}>
-          {sel && (
-            <PhasePanel
-              key={sel.id}
-              phase={sel}
-              depts={depts}
-              products={products}
-              services={services}
-              pipelines={allPipelines}
-              isSales={isSales}
-              onSetOutcome={(outcome) => {
-                const targetId = sel.id;
-                // Only one win and one loss per pipeline: the previous one holding this outcome goes back to Normal.
-                setPhases((ps) => ps.map((p) => {
-                  if (p.id === targetId) return { ...p, sales_outcome: outcome };
-                  if (outcome && p.sales_outcome === outcome) return { ...p, sales_outcome: null };
-                  return p;
-                }));
-              }}
-              onClose={() => setSelId(null)}
-              onDelete={() => removePhase(sel.id)}
-              onChange={(patch) => setPhases((ps) => ps.map((p) => (p.id === sel.id ? { ...p, ...patch } : p)))}
-            />
+        <div className="pls-scroll" onClick={(e) => { if (e.target === e.currentTarget) setSelId(null); }}>
+          {!loaded ? <div className="pls-loading"><span /><span /><span /></div> : (
+            <div className="pls-canvas">
+            <div className={`pls-flow ${dragIdx !== null ? "is-dragging" : ""}`}>
+              <div className="pls-cap"><span className="pls-cap-dot" aria-hidden="true" /><b>Start</b></div>
+              {steps.map((p, i) => (
+                <Fragment key={p.id}>
+                  {gap(i)}
+                  {step(p, i)}
+                </Fragment>
+              ))}
+              {steps.length > 0 && gap(steps.length)}
+              <div className="pls-add">
+                <span className="pls-dot is-add" aria-hidden="true"><Ico d={IC.plus} /></span>
+                <input value={nextName} onChange={(e) => setNextName(e.target.value)} placeholder={steps.length ? "Add a phase…" : "Name the first phase…"}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addNext(); } }} aria-label="Name of the next phase" />
+                <button type="button" onClick={addNext} disabled={!nextName.trim()}>Add</button>
+              </div>
+
+              {win || loss ? (
+                <div className="pls-fork">
+                  <svg className="pls-fork-lines" viewBox="0 0 400 64" preserveAspectRatio="none" aria-hidden="true">
+                    <path className="is-win" d="M17 0 C17 34, 100 30, 100 64" />
+                    <path className="is-loss" d="M17 0 C17 34, 300 30, 300 64" />
+                  </svg>
+                  <div className="pls-fork-label">
+                    <button type="button" onClick={removeEnding} title="Take the Won / Lost ending away" aria-label="Remove the Won / Lost ending"><Ico d="M6 6l12 12M18 6L6 18" /></button>
+                  </div>
+                  <div className="pls-fork-outs">
+                    {outcome(win, "win")}
+                    {outcome(loss, "loss")}
+                  </div>
+                </div>
+              ) : (
+                <button type="button" className="pls-fork-add" onClick={() => addEnding()}>
+                  <span className="pls-fork-add-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M6 3v6a6 6 0 0 0 6 6h0a6 6 0 0 1 6 6M6 9a6 6 0 0 0 6 6M18 3v6" /></svg></span>
+                  <span><b>End it with Won / Lost</b><em>One step that splits in two — the deals tracker shows both.</em></span>
+                </button>
+              )}
+            </div>
+            </div>
           )}
         </div>
+      </section>
+
+      <div className={`pls-side ${sel ? "is-open" : ""}`} style={sel ? { ["--c" as string]: sel.sales_outcome === "win" ? "#12b57f" : sel.sales_outcome === "loss" ? "#d64545" : tone(sel) } : undefined}>
+        {sel && (
+          <PhasePanel
+            key={sel.id}
+            phase={sel}
+            focusName={fresh === sel.id}
+            depts={depts}
+            products={products}
+            services={services}
+            pipelines={others}
+            isSales={isSales}
+            onClose={() => setSelId(null)}
+            onDelete={() => removePhase(sel.id)}
+            onChange={(patch) => setPhases((ps) => ps.map((p) => (p.id === sel.id ? { ...p, ...patch } : p)))}
+          />
+        )}
       </div>
 
       {ask > 0 && (
@@ -1374,7 +1241,7 @@ function PipelineEditor({ pipeline, folders, onBack, onSaved }: {
           onConfirmDiscard={() => { setDraft(base); dirtyRef.current = false; leaveNow(); }}
         />
       )}
-    </div>
+    </>
   );
 }
 
@@ -1389,7 +1256,7 @@ function summarize(d: ReturnType<typeof diffDraft>): string[] {
   out.push(n(d.removed.length, "phase deleted", "phases deleted"));
   const edited = new Set([...d.changed.map((c) => c.id), ...d.depts, ...d.items].filter((id) => !d.added.some((p) => p.id === id)));
   out.push(n(edited.size, "phase moved or edited", "phases moved or edited"));
-  out.push(n(d.addLinks.length + d.delLinks.length, "connection changed", "connections changed"));
+  if (d.addLinks.length + d.delLinks.length) out.push("Order of the phases");
   return out.filter(Boolean);
 }
 
@@ -1448,14 +1315,15 @@ function LeaveAsk({ step, count, summary, saving, onKeep, onSave, onDiscard, onB
 
 // ============================ Phase panel ============================
 // Changes go to the editor's draft; Save writes them.
-function PhasePanel({ phase, depts, products, services, pipelines, isSales, onSetOutcome, onClose, onDelete, onChange }: {
+function PhasePanel({ phase, focusName, depts, products, services, pipelines, isSales, onClose, onDelete, onChange }: {
   phase: Phase;
+  /** A step just added: its name is ready to type over. */
+  focusName?: boolean;
   depts: { key: string; label: string; color: string }[];
   products: { id: string; name: string }[];
   services: { id: string; name: string }[];
   pipelines: Pipeline[];
   isSales: boolean;
-  onSetOutcome: (outcome: "win" | "loss" | null) => void;
   onClose: () => void; onDelete: () => void;
   onChange: (patch: Partial<Phase>) => void;
 }) {
@@ -1473,13 +1341,14 @@ function PhasePanel({ phase, depts, products, services, pipelines, isSales, onSe
   return (
     <aside className="pl-panel">
       <div className="pl-panel-head">
-        <span className="pl-eyebrow">Phase</span>
+        <span className={`pl-eyebrow ${phase.sales_outcome ? `is-${phase.sales_outcome}` : ""}`}>{phase.sales_outcome === "win" ? "End · Won" : phase.sales_outcome === "loss" ? "End · Lost" : "Phase"}</span>
         <button className="pl-x" onClick={onClose} aria-label="Close phase">×</button>
       </div>
 
       <div className="pl-field">
         <label>Phase name</label>
-        <input value={phase.name} onChange={(e) => onChange({ name: e.target.value })} placeholder="e.g. Onboarding" />
+        <input value={phase.name} onChange={(e) => onChange({ name: e.target.value })} placeholder="e.g. Onboarding"
+          autoFocus={focusName} onFocus={(e) => { if (focusName) e.currentTarget.select(); }} />
       </div>
 
       <span className="pl-section">Departments</span>
@@ -1533,13 +1402,7 @@ function PhasePanel({ phase, depts, products, services, pipelines, isSales, onSe
             <span className="pl-sales-txt">Show this phase in sales tracking</span>
             <span className="pl-sales-sw"><span className="pl-sales-knob" /></span>
           </button>
-          <span className="pl-outcome-label">Outcome when reached</span>
-          <div className="pl-outcome">
-            <button className={`pl-oc pl-oc-none ${!phase.sales_outcome ? "on" : ""}`} onClick={() => onSetOutcome(null)}>Normal</button>
-            <button className={`pl-oc pl-oc-win ${phase.sales_outcome === "win" ? "on" : ""}`} onClick={() => onSetOutcome("win")}>Win</button>
-            <button className={`pl-oc pl-oc-loss ${phase.sales_outcome === "loss" ? "on" : ""}`} onClick={() => onSetOutcome("loss")}>Loss</button>
-          </div>
-          {phase.sales_outcome && <span className="pl-outcome-hint">Reaching this phase marks the tracking as <b>{phase.sales_outcome === "win" ? "won" : "lost"}</b>.</span>}
+          {phase.sales_outcome && <span className="pl-outcome-hint">Reaching this end marks the deal as <b>{phase.sales_outcome === "win" ? "won" : "lost"}</b>.</span>}
 
           {/* Close probability — the % chance a deal in this phase will close.
               Win phases are 100% and Loss 0% by definition, so the field only

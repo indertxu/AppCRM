@@ -7,7 +7,7 @@ import DatePicker from "../../../framework/DatePicker";
 import { ReportChart, CHART_LABEL, PALETTE, type ChartType } from "./ReportCharts";
 import {
   ENTITIES, entityOf, GROUP_LABEL, OPS, DEFAULT_OP, NO_VALUE, PERIODS, FN_LABEL,
-  loadCrmData, buildCrmRows, buildCrmFields, aggregateCrm, testTree, countRules, isGroup, emptyTree, forgetCrmData,
+  loadCrmData, buildCrmRows, buildCrmFields, aggregateCrm, partsOf, isListLink, ROW_CAP, testTree, countRules, isGroup, emptyTree, forgetCrmData,
   condComplete, toCell, showCell, sortValue, uid, norm,
   type Cond, type CondGroup, type Field, type EntityKey, type CrmFn, type CrmRow, type CrmData, type Kind,
 } from "./salesReportEngine";
@@ -23,6 +23,8 @@ import "./SalesReport.css";
 interface CrmChart { id: string; title: string; type: ChartType; dim: string; fn: CrmFn; value: string | null; split: string | null; cumulative?: boolean }
 export interface CrmReport {
   v: 2; name: string; source: EntityKey; filter: CondGroup;
+  /** More parts of the CRM in the same report, linked to each row (a deal's signed products, a client's invoices…). */
+  with?: EntityKey[];
   cols: string[]; labels: Record<string, string>;
   sort: { key: string; dir: "asc" | "desc" } | null; groupBy: string | null; totals: boolean;
   charts: CrmChart[]; openInView?: boolean;
@@ -118,10 +120,12 @@ function RuleRow({ c, fields, fieldByKey, values, onChange, onRemove }: {
 }) {
   const f = fieldByKey.get(c.field);
   const ops = f ? OPS[f.kind] : [];
+  // a text with a known set of values (country, city, owner…) is picked from its values; free text is searched
+  const firstOp = (nf: Field) => (nf.kind === "text" ? (values(nf).length <= 400 ? "in" : "contains") : DEFAULT_OP[nf.kind]);
   const set = (p: Partial<Cond>) => onChange({ ...c, ...p });
   return (
     <div className={`rp-rule ${f && condComplete(c, f) ? "is-ok" : ""}`}>
-      <div className="rp-rule-f"><FieldPick fields={fields} value={c.field || null} placeholder="Pick a field…" onChange={(k) => { const nf = fieldByKey.get(k); set({ field: k, op: nf ? DEFAULT_OP[nf.kind] : "contains", a: "", b: "", vals: [] }); }} /></div>
+      <div className="rp-rule-f"><FieldPick fields={fields} value={c.field || null} placeholder="Pick a field…" onChange={(k) => { const nf = fieldByKey.get(k); set({ field: k, op: nf ? firstOp(nf) : "contains", a: "", b: "", vals: [] }); }} /></div>
       {f && (
         <div className="rp-rule-op">
           <SalesMultiFilter single values={[c.op]} onChange={(v) => v[0] && set({ op: v[0] })} options={ops.map((o) => ({ value: o.value, label: o.label }))} placeholder="How" />
@@ -129,7 +133,7 @@ function RuleRow({ c, fields, fieldByKey, values, onChange, onRemove }: {
       )}
       {f && !NO_VALUE.has(c.op) && (
         <div className="rp-rule-v">
-          {f.kind === "enum" ? (
+          {f.kind === "enum" || (f.kind === "text" && (c.op === "in" || c.op === "not_in")) ? (
             <SalesMultiFilter values={c.vals} onChange={(v) => set({ vals: v })} options={values(f).map((v) => ({ value: v, label: v }))} placeholder="Pick values…" noun="values" searchFrom={8} />
           ) : f.kind === "date" ? (
             c.op === "in_period" ? (
@@ -217,6 +221,7 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState<string | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [shown, setShown] = useState(200);
+  const [dataFor, setDataFor] = useState("");
 
   useEffect(() => { if (note) { const t = setTimeout(() => setNote(null), 2800); return () => clearTimeout(t); } }, [note]);
   useEffect(() => { supabase.auth.getSession().then(({ data: s }) => setMe(s?.session?.user?.id ?? null)); void loadSaved(); }, []);
@@ -227,20 +232,25 @@ export default function ReportsPage() {
     setSaved((rows ?? []) as SavedReport[]);
   }
   const source = cfg?.source ?? null;
+  const withKey = (cfg?.with ?? []).join(",");
+  const extra = useMemo(() => (withKey ? withKey.split(",") as EntityKey[] : []), [withKey]);
   // read what the subject needs (once per visit; "Refresh data" reads again)
   const [dataTick, setDataTick] = useState(0);
   useEffect(() => {
     if (!source) return;
     let off = false;
     setLoading("Reading the CRM…"); setLoadErr(null);
-    loadCrmData(source, (w) => { if (!off) setLoading(`Reading ${w}…`); })
-      .then(async (d) => { const fs = await buildCrmFields(source, d); if (!off) { setData(d); setFields(fs); setLoading(null); } })
+    const key = `${source}|${extra.join(",")}`;
+    loadCrmData(source, (w) => { if (!off) setLoading(`Reading ${w}…`); }, extra)
+      .then(async (d) => { const fs = await buildCrmFields(source, d, extra); if (!off) { setData(d); setFields(fs); setDataFor(key); setLoading(null); } })
       .catch((e) => { if (!off) { setLoadErr(String(e?.message ?? e)); setLoading(null); } });
     return () => { off = true; };
-  }, [source, dataTick]);
+  }, [source, extra, dataTick]);
 
   const fieldByKey = useMemo(() => new Map(fields.map((f) => [f.key, f])), [fields]);
-  const allRows: CrmRow[] = useMemo(() => (data && source ? buildCrmRows(source, data) : []), [data, source]);
+  // the rows are built only from data read for this subject and these parts (never a half-read mix)
+  const ready = dataFor === `${source}|${withKey}`;
+  const allRows: CrmRow[] = useMemo(() => (data && source && ready ? buildCrmRows(source, data, extra) : []), [data, source, extra, ready]);
   const filter = cfg?.filter;
   const rows = useMemo(() => (filter ? allRows.filter((r) => testTree(filter, r, fieldByKey)) : []), [allRows, filter, fieldByKey]);
   // the values a category field takes (its list, plus what is in the data)
@@ -288,6 +298,8 @@ export default function ReportsPage() {
     void loadSaved();
   };
 
+  /** A column's title: what it was renamed to, or its name — with its part when it isn't the rows' own ("Company · Name"). */
+  const colTitle = (f: Field) => cfg?.labels[f.key] || (cfg && f.group !== cfg.source && !norm(f.label).includes(norm(glabel(f.group))) ? `${glabel(f.group)} · ${f.label}` : f.label);
   /* ---- the table ---- */
   const colFields = (cfg?.cols ?? []).map((k) => fieldByKey.get(k)).filter((f): f is Field => !!f);
   const sortCfg = cfg?.sort ?? null, groupKey = cfg?.groupBy ?? null;
@@ -313,7 +325,7 @@ export default function ReportsPage() {
   };
   const exportAs = (kind: "xlsx" | "csv") => {
     if (!cfg) return;
-    const columns: ExportColumn[] = colFields.map((f) => ({ label: cfg.labels[f.key] || f.label, format: f.kind === "money" ? "money" : f.kind === "number" ? "number" : f.kind === "percent" ? "percent" : f.kind === "date" ? "date" : "text" }));
+    const columns: ExportColumn[] = colFields.map((f) => ({ label: colTitle(f), format: f.kind === "money" ? "money" : f.kind === "number" ? "number" : f.kind === "percent" ? "percent" : f.kind === "date" ? "date" : "text" }));
     const t = { columns, rows: sorted.map((r) => colFields.map((f) => toCell(f, f.get(r as any)))) };
     const file = `${cfg.name || "Report"} ${new Date().toISOString().slice(0, 10)}`;
     downloadBlob(kind === "xlsx" ? tableToXlsx(t, (cfg.name || "Report").slice(0, 28)) : tableToCsv(t), `${file}.${kind}`);
@@ -330,9 +342,41 @@ export default function ReportsPage() {
   const numFields = fields.filter(numeric);
   const nRules = cfg ? countRules(cfg.filter) : 0;
   const ent = cfg ? entityOf(cfg.source) : null;
+  const withList = cfg?.with ?? [];
+  const parts = cfg ? partsOf(cfg.source, withList) : [];
+  const many = withList.length > 0;
+  // what a row is, in words
+  const rowWord = (n: number) => (many ? (n === 1 ? "row" : "rows") : ent ? (n === 1 ? ent.label.toLowerCase() : ent.plural.toLowerCase()) : "");
+  const listParts = cfg ? withList.filter((k) => isListLink(cfg.source, k)) : [];
+  const rowsHint = !ent ? "" : listParts.length
+    ? `One line for each ${ent.label.toLowerCase()} and each of its ${listParts.map((k) => entityOf(k).plural.toLowerCase()).join(" and ")}${listParts.length > 1 ? " together" : ""}.`
+    : `One line for each ${ent.label.toLowerCase()}, with its ${withList.map((k) => entityOf(k).label.toLowerCase()).join(" and ")}.`;
+  /** Rules, columns and charts on a part that left the report go with it. */
+  const pruneTo = (c: CrmReport): CrmReport => {
+    const alive = new Set(partsOf(c.source, c.with ?? []));
+    const ok = (key: string | null | undefined) => { if (!key) return true; const k = key.startsWith("time:") ? key.split(":").slice(2).join(":") : key; return alive.has(k.split(".")[0] as EntityKey); };
+    const tree = (g: CondGroup): CondGroup => ({ ...g, items: g.items.filter((it) => isGroup(it) || !it.field || ok(it.field)).map((it) => (isGroup(it) ? tree(it) : it)) });
+    const cols = c.cols.filter(ok);
+    return { ...c, filter: tree(c.filter), cols: cols.length ? cols : DEFAULT_COLS[c.source], sort: c.sort && ok(c.sort.key) ? c.sort : null, groupBy: ok(c.groupBy) ? c.groupBy : null, charts: c.charts.filter((ch) => ok(ch.dim) && ok(ch.value) && ok(ch.split)) };
+  };
+  /** The rows changed: their own columns come first (a few of them if there were none). */
+  const leadCols = (c: CrmReport): CrmReport => {
+    const own = c.cols.filter((k) => k.startsWith(`${c.source}.`)), rest = c.cols.filter((k) => !k.startsWith(`${c.source}.`));
+    return { ...c, cols: [...(own.length ? own : DEFAULT_COLS[c.source].slice(0, 3)), ...rest] };
+  };
+  const togglePart = (k: EntityKey) => {
+    if (!cfg) return;
+    const w = cfg.with ?? [];
+    if (k === cfg.source) { if (!w.length) return; setCfg(leadCols(pruneTo({ ...cfg, source: w[0], with: w.slice(1) }))); return; }
+    if (w.includes(k)) { setCfg(pruneTo({ ...cfg, with: w.filter((x) => x !== k) })); return; }
+    // a new part: in, with a few of its columns
+    setCfg({ ...cfg, with: [...w, k], cols: [...cfg.cols, ...DEFAULT_COLS[k].slice(0, 3).filter((c) => !cfg.cols.includes(c))] });
+  };
+  const makeMain = (k: EntityKey) => { if (!cfg || k === cfg.source) return; setCfg(leadCols(pruneTo({ ...cfg, source: k, with: [cfg.source, ...(cfg.with ?? []).filter((x) => x !== k)] }))); };
   const canNext = !!cfg && (step !== 2 || cfg.cols.length > 0);
   const list = saved.filter((s) => !q || norm(s.name).includes(norm(q)));
   const sourceOf = (s: SavedReport) => (s.config?.v === 2 ? s.config.source : "deal") as EntityKey;
+  const partsLabel = (s: SavedReport) => [sourceOf(s), ...((s.config?.v === 2 && Array.isArray(s.config.with) ? s.config.with : []) as EntityKey[])].map((k) => entityOf(k)?.plural ?? k).join(" + ");
 
   /* ---- render pieces ---- */
   const table = (limit: number): ReactNode => {
@@ -367,7 +411,7 @@ export default function ReportsPage() {
                   <th key={f.key} className={numeric(f) ? "is-num" : ""}>
                     <button type="button" className={on ? "is-on" : ""} title="Sort"
                       onClick={() => set({ sort: on && cfg.sort!.dir === "desc" ? { key: f.key, dir: "asc" } : on ? null : { key: f.key, dir: "desc" } })}>
-                      <span>{cfg.labels[f.key] || f.label}</span>{on && <Ico d={cfg.sort!.dir === "asc" ? I.up : I.dn} w={2.4} />}
+                      <span>{colTitle(f)}</span>{on && <Ico d={cfg.sort!.dir === "asc" ? I.up : I.dn} w={2.4} />}
                     </button>
                   </th>
                 );
@@ -411,7 +455,7 @@ export default function ReportsPage() {
     const money = colFields.filter((f) => f.kind === "money").slice(0, 3);
     return (
       <div className="rp-kpis">
-        <div className="rp-kpi" style={vars({ "--c": ent?.tone ?? "#1fb98a", "--i": 0 })}><span>{ent?.plural}</span><b>{rows.length.toLocaleString("en-GB")}</b><em>of {allRows.length.toLocaleString("en-GB")} · {nRules ? `${nRules} rule${nRules === 1 ? "" : "s"}` : "no rules"}</em></div>
+        <div className="rp-kpi" style={vars({ "--c": ent?.tone ?? "#1fb98a", "--i": 0 })}><span>{many ? "Rows" : ent?.plural}</span><b>{rows.length.toLocaleString("en-GB")}</b><em>of {allRows.length.toLocaleString("en-GB")} · {nRules ? `${nRules} rule${nRules === 1 ? "" : "s"}` : "no rules"}</em></div>
         {money.map((f, i) => (
           <div className="rp-kpi" key={f.key} style={vars({ "--c": PALETTE[(i + 1) % PALETTE.length], "--i": i + 1 })}><span>{cfg.labels[f.key] || f.label}</span><b>{showCell(f, totalOf(f, rows)) || "0 €"}</b><em>{glabel(f.group)} · total</em></div>
         ))}
@@ -429,7 +473,7 @@ export default function ReportsPage() {
         </div>
         <div className="rp-hero-acts">
           {cfg && <button type="button" className="rp-btn is-glass" onClick={() => { forgetCrmData(); setDataTick((x) => x + 1); }} title="Read the CRM again"><Ico d={I.refresh} />Refresh data</button>}
-          <button type="button" className="rp-btn is-mint" onClick={() => { if (!leaveOk()) return; setCfg(null); setReportId(null); }}><Ico d={I.plus} w={2.4} />New report</button>
+          <button type="button" className="rp-btn is-mint" onClick={() => { if (!leaveOk()) return; start(newReport("deal")); }}><Ico d={I.plus} w={2.4} />New report</button>
         </div>
       </header>
 
@@ -452,7 +496,7 @@ export default function ReportsPage() {
                 <div className={`rp-sv ${s.id === reportId ? "is-on" : ""}`} key={s.id} style={vars({ "--c": e.tone })}>
                   <button type="button" className="rp-sv-main" onClick={() => open(s)}>
                     <span className="rp-sv-ico"><Ico d={e.icon} /></span>
-                    <span className="rp-sv-t"><b>{s.name}</b><em>{e.plural}{s.shared ? " · shared" : ""}{s.owner_id && me && s.owner_id !== me ? " · someone else's" : ""}</em></span>
+                    <span className="rp-sv-t"><b>{s.name}</b><em>{partsLabel(s)}{s.shared ? " · shared" : ""}{s.owner_id && me && s.owner_id !== me ? " · someone else's" : ""}</em></span>
                   </button>
                   {(!s.owner_id || s.owner_id === me) && <button type="button" className="rp-x" onClick={() => void remove(s)} aria-label={`Delete ${s.name}`}><Ico d={I.trash} /></button>}
                 </div>
@@ -518,9 +562,11 @@ export default function ReportsPage() {
           ) : (
             <>
               <div className="rp-bar">
+                <button type="button" className="rp-x rp-back" onClick={() => { if (!leaveOk()) return; setCfg(null); setReportId(null); }} aria-label="All reports and templates" title="All reports and templates"><Ico d={I.left} w={2.4} /></button>
                 <span className="rp-bar-ico" style={vars({ "--c": ent!.tone })}><Ico d={ent!.icon} /></span>
                 <input className="rp-name" value={cfg.name} onChange={(e) => set({ name: e.target.value })} aria-label="Report name" />
-                <span className="rp-chip">{rows.length.toLocaleString("en-GB")} {ent!.plural.toLowerCase()}</span>
+                {loading ? <span className="rp-chip is-busy" role="status"><span className="rp-spin" />{loading}</span>
+                  : <span className="rp-chip">{rows.length.toLocaleString("en-GB")} {rowWord(rows.length)}{allRows.length >= ROW_CAP ? " (first 200,000)" : ""}</span>}
                 <div className="rp-modes" role="tablist">
                   <button type="button" role="tab" aria-selected={mode === "build"} className={mode === "build" ? "is-on" : ""} onClick={() => setMode("build")}><Ico d={I.edit} />Build</button>
                   <button type="button" role="tab" aria-selected={mode === "view"} className={mode === "view" ? "is-on" : ""} onClick={() => setMode("view")}><Ico d={I.chart} />View</button>
@@ -530,7 +576,6 @@ export default function ReportsPage() {
                 <button type="button" className="rp-btn is-main" onClick={() => void save()} disabled={busy || (!!reportId && !dirty)}><Ico d={I.check} w={2.4} />{busy ? "Saving…" : reportId && !dirty ? "Saved" : "Save"}</button>
               </div>
 
-              {loading && <div className="rp-loading"><span className="rp-spin" />{loading}</div>}
               {loadErr && <div className="rp-err">Couldn't read the data: {loadErr}</div>}
 
               {mode === "build" ? (
@@ -540,7 +585,7 @@ export default function ReportsPage() {
                       <li key={s.k} className={`${i === step ? "is-on" : ""} ${i < step ? "is-done" : ""}`}>
                         <button type="button" onClick={() => setStep(i)}>
                           <i>{i < step ? <Ico d={I.check} w={3} /> : i + 1}</i>
-                          <span><b>{s.t}</b><em>{i === 0 ? ent!.plural : i === 1 && nRules ? `${nRules} rule${nRules === 1 ? "" : "s"}` : i === 2 ? `${cfg.cols.length} column${cfg.cols.length === 1 ? "" : "s"}` : i === 3 && cfg.charts.length ? `${cfg.charts.length} chart${cfg.charts.length === 1 ? "" : "s"}` : s.s}</em></span>
+                          <span><b>{s.t}</b><em>{i === 0 ? [ent!.plural, ...withList.map((k) => entityOf(k).plural)].join(" + ") : i === 1 && nRules ? `${nRules} rule${nRules === 1 ? "" : "s"}` : i === 2 ? `${cfg.cols.length} column${cfg.cols.length === 1 ? "" : "s"}` : i === 3 && cfg.charts.length ? `${cfg.charts.length} chart${cfg.charts.length === 1 ? "" : "s"}` : s.s}</em></span>
                         </button>
                       </li>
                     ))}
@@ -550,22 +595,44 @@ export default function ReportsPage() {
                     {step === 0 && (
                       <section className="rp-card">
                         <h3>What is this report about?</h3>
-                        <p className="rp-help">Each row of the report is one of these. What is linked to it comes along, so you can also use its fields — a deal's company, a project's client, an invoice's project.</p>
-                        <div className="rp-ents">
-                          {ENTITIES.map((e, i) => (
-                            <button type="button" key={e.key} className={`rp-ent ${cfg.source === e.key ? "is-on" : ""}`} style={vars({ "--c": e.tone, "--i": i })}
-                              onClick={() => { if (e.key === cfg.source) return; if (countRules(cfg.filter) && !window.confirm("Changing what it's about starts the rules and columns again. Go on?")) return; setCfg({ ...newReport(e.key), name: cfg.name }); }}>
-                              <span className="rp-ent-ico"><Ico d={e.icon} /></span><b>{e.plural}</b><em>{e.hint}</em>
-                              {e.related.length > 0 && <i>+ {e.related.map((r) => entityOf(r).plural.toLowerCase()).join(", ")}</i>}
-                            </button>
-                          ))}
+                        <p className="rp-help">Pick one or more. Each row is the first one; the others are linked to it — and when a row has several of them (a company's deals), it gets a line for each.</p>
+                        <div className="rp-ents is-multi">
+                          {ENTITIES.map((e, i) => {
+                            const main = e.key === cfg.source, on = main || withList.includes(e.key), along = !on && parts.includes(e.key);
+                            return (
+                              <button type="button" key={e.key} aria-pressed={on} className={`rp-ent ${on ? "is-on" : ""} ${main ? "is-main" : ""}`} style={vars({ "--c": e.tone, "--i": i })} onClick={() => togglePart(e.key)}
+                                title={main ? (withList.length ? "Take it out (the next one becomes the rows)" : "Each row is one of these") : on ? "Take it out of the report" : "Add it to the report"}>
+                                <span className="rp-ent-top">
+                                  <span className="rp-ent-ico"><Ico d={e.icon} /></span>
+                                  <span className="rp-ent-tick" aria-hidden="true">{on && <Ico d={I.check} w={3} />}</span>
+                                </span>
+                                <b>{e.plural}</b><em>{e.hint}</em>
+                                <span className="rp-ent-tags">
+                                  {main ? <i className="rp-ent-tag is-main">Each row</i>
+                                    : on ? <i className="rp-ent-tag">{isListLink(cfg.source, e.key) ? "Linked · a line each" : "Linked"}</i>
+                                    : along ? <i className="rp-ent-tag is-along">Comes along</i> : null}
+                                </span>
+                              </button>
+                            );
+                          })}
                         </div>
+                        {withList.length > 0 && (
+                          <div className="rp-rowis">
+                            <span>Each row is</span>
+                            <div className="rp-seg" role="radiogroup" aria-label="Each row is">
+                              {[cfg.source, ...withList].map((k) => (
+                                <button type="button" key={k} role="radio" aria-checked={k === cfg.source} className={k === cfg.source ? "is-on" : ""} onClick={() => makeMain(k)}>{entityOf(k).label.toLowerCase()}</button>
+                              ))}
+                            </div>
+                            <em>{rowsHint}</em>
+                          </div>
+                        )}
                       </section>
                     )}
 
                     {step === 1 && (
                       <section className="rp-card">
-                        <h3>Which {ent!.plural.toLowerCase()}?</h3>
+                        <h3>Which {many ? "rows" : ent!.plural.toLowerCase()}?</h3>
                         <p className="rp-help">As many rules as you need, on any field of {ent!.plural.toLowerCase()} or of what is linked to them — custom fields included. Put rules in a group to mix “and” and “or”; groups can hold more groups.</p>
                         <RuleGroup g={cfg.filter} depth={0} fields={fields} fieldByKey={fieldByKey} values={valuesOf} onChange={(g) => set({ filter: g })} />
                       </section>
@@ -593,7 +660,7 @@ export default function ReportsPage() {
                         </div>
                         <div className="rp-addcol">
                           <div className="rp-addcol-pick"><FieldPick fields={fields} value={null} filter={(f) => !cfg.cols.includes(f.key)} placeholder="+ Add a column" onChange={(k) => set({ cols: [...cfg.cols, k] })} /></div>
-                          {[cfg.source, ...ent!.related].map((g) => (
+                          {parts.map((g) => (
                             <button type="button" key={g} className="rp-add is-ghost" onClick={() => set({ cols: [...cfg.cols, ...fields.filter((f) => f.group === g && !cfg.cols.includes(f.key) && !f.key.endsWith(".__count")).slice(0, 6).map((f) => f.key)] })}>
                               + {entityOf(g).label} basics
                             </button>
@@ -634,7 +701,7 @@ export default function ReportsPage() {
                           <label className="rp-chk is-big"><input type="checkbox" checked={shared} onChange={(e) => setShared(e.target.checked)} /><span><b>Share with the team</b><em>Everyone who can open Reports sees it — each with the records they are allowed to see.</em></span></label>
                         </div>
                         <div className="rp-summary">
-                          <span><Ico d={ent!.icon} />{ent!.plural}</span>
+                          <span><Ico d={ent!.icon} />{[ent!.plural, ...withList.map((k) => entityOf(k).plural)].join(" + ")}</span>
                           <span><Ico d={I.group} />{nRules ? `${nRules} rule${nRules === 1 ? "" : "s"}` : "No rules — all of them"}</span>
                           <span><Ico d={I.edit} />{cfg.cols.length} column{cfg.cols.length === 1 ? "" : "s"}</span>
                           <span><Ico d={I.chart} />{cfg.charts.length} chart{cfg.charts.length === 1 ? "" : "s"}</span>
@@ -648,7 +715,7 @@ export default function ReportsPage() {
 
                     {step > 0 && step < 4 && (
                       <section className="rp-card is-preview">
-                        <div className="rp-prev-h"><b>Preview</b><em>{rows.length.toLocaleString("en-GB")} of {allRows.length.toLocaleString("en-GB")} {ent!.plural.toLowerCase()} · first 8 rows</em></div>
+                        <div className="rp-prev-h"><b>Preview</b><em>{rows.length.toLocaleString("en-GB")} of {allRows.length.toLocaleString("en-GB")} {rowWord(allRows.length)} · first 8 rows</em></div>
                         {table(8)}
                       </section>
                     )}

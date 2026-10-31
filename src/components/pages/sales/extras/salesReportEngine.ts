@@ -31,7 +31,8 @@ export const STATUS_LABEL: Record<string, string> = { active: "Active", won: "Wo
 
 export const norm = (s: string) => (s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 export const uid = () => Math.random().toString(36).slice(2, 10);
-export const isoDay = (v: any): string | null => (v ? String(v).slice(0, 10) : null);
+/** The day of a date / timestamp ("2026-03-04…"); anything else is no date. */
+export const isoDay = (v: any): string | null => (v && /^\d{4}-\d{2}-\d{2}/.test(String(v)) ? String(v).slice(0, 10) : null);
 const todayIso = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 const daysBetween = (a: string, b: string) => Math.round((new Date(`${b}T00:00:00`).getTime() - new Date(`${a}T00:00:00`).getTime()) / 864e5);
 
@@ -119,7 +120,7 @@ export function parseNum(raw: string): number | null {
 }
 
 export const OPS: Record<Kind, { value: string; label: string }[]> = {
-  text: [{ value: "contains", label: "contains" }, { value: "not_contains", label: "doesn't contain" }, { value: "is_set", label: "is filled" }, { value: "is_empty", label: "is empty" }],
+  text: [{ value: "in", label: "is any of" }, { value: "not_in", label: "is none of" }, { value: "contains", label: "contains" }, { value: "not_contains", label: "doesn't contain" }, { value: "is_set", label: "is filled" }, { value: "is_empty", label: "is empty" }],
   enum: [{ value: "in", label: "is any of" }, { value: "not_in", label: "is none of" }, { value: "is_set", label: "is filled" }, { value: "is_empty", label: "is empty" }],
   number: [], money: [], percent: [],
   date: [{ value: "in_period", label: "is in period" }, { value: "before", label: "before" }, { value: "on_or_before", label: "on or before" }, { value: "after", label: "after" }, { value: "on_or_after", label: "on or after" }, { value: "between", label: "between" }, { value: "is_set", label: "is filled" }, { value: "is_empty", label: "is empty" }],
@@ -134,7 +135,7 @@ export const NO_VALUE = new Set(["is_set", "is_empty"]);
 export function condComplete(c: Cond, f: Field | undefined): boolean {
   if (!f) return false;
   if (NO_VALUE.has(c.op)) return true;
-  if (f.kind === "enum") return c.vals.length > 0;
+  if (f.kind === "enum" || (f.kind === "text" && (c.op === "in" || c.op === "not_in"))) return c.vals.length > 0;
   if (f.kind === "date") return c.op === "in_period" ? !!c.a && c.a !== "all" : c.op === "between" ? !!c.a && !!c.b : !!c.a;
   if (f.kind === "text") return c.a.trim() !== "";
   return c.op === "between" ? parseNum(c.a) != null && parseNum(c.b) != null : parseNum(c.a) != null;
@@ -146,7 +147,7 @@ export function condTest(c: Cond, f: Field, r: Row): boolean {
   if (c.op === "is_empty") return empty;
   if (c.op === "is_set") return !empty;
   if (f.kind === "enum" && f.list) { const hit = f.list(r).some((x) => c.vals.includes(x)); return c.op === "in" ? hit : !hit; }
-  if (f.kind === "enum") { const s = empty ? "" : String(v); return c.op === "in" ? c.vals.includes(s) : !c.vals.includes(s); }
+  if (f.kind === "enum" || (f.kind === "text" && (c.op === "in" || c.op === "not_in"))) { const s = empty ? "" : String(v); return c.op === "in" ? c.vals.includes(s) : !c.vals.includes(s); }
   if (f.kind === "text") { const has = !empty && norm(String(v)).includes(norm(c.a.trim())); return c.op === "contains" ? has : !has; }
   if (empty) return false;
   if (f.kind === "date") {
@@ -242,7 +243,11 @@ export function customDefField(group: Group, d: CustomDef, pick: (r: Row) => any
   const raw = (r: Row) => pick(r)?.custom?.[d.id];
   switch (d.type) {
     case "boolean": return { key, group, label: d.label, kind: "enum", options: ["Yes", "No"], get: (r) => { const v = raw(r); return v === true || v === "true" ? "Yes" : v === false || v === "false" ? "No" : null; } };
-    case "select": return { key, group, label: d.label, kind: "enum", options: d.options, get: (r) => { const v = raw(r); return v == null || v === "" ? null : Array.isArray(v) ? v.join(", ") : String(v); } };
+    // one choice — but some old records hold a list: each of its values counts (options can contain commas, so a text isn't split)
+    case "select": {
+      const vals = (r: Row): string[] => { const v = raw(r); return Array.isArray(v) ? v.filter((x) => x != null && x !== "" && typeof x !== "object").map(String) : v == null || v === "" || typeof v === "object" ? [] : [String(v)]; };
+      return { key, group, label: d.label, kind: "enum", options: d.options, get: (r) => { const l = vals(r); return l.length ? l.join(", ") : null; }, list: vals };
+    }
     case "multiselect": return {
       key, group, label: d.label, kind: "enum", options: d.options,
       get: (r) => { const l = asList(raw(r)); return l.length ? l.join(", ") : null; },
@@ -250,7 +255,7 @@ export function customDefField(group: Group, d: CustomDef, pick: (r: Row) => any
     };
     case "number": return { key, group, label: d.label, kind: "number", get: (r) => { const v = raw(r); const n = Number(v); return v == null || v === "" || !Number.isFinite(n) ? null : n; } };
     case "date": return { key, group, label: d.label, kind: "date", get: (r) => isoDay(raw(r)) };
-    default: return { key, group, label: d.label, kind: "text", get: (r) => { const v = raw(r); return v == null || v === "" ? null : Array.isArray(v) ? v.join(", ") : String(v); } };
+    default: return { key, group, label: d.label, kind: "text", get: (r) => { const v = raw(r); return v == null || v === "" ? null : Array.isArray(v) ? v.join(", ") : typeof v === "object" ? null : String(v); } };
   }
 }
 
@@ -261,11 +266,13 @@ export function customDefField(group: Group, d: CustomDef, pick: (r: Row) => any
  */
 export function withCustomDefs<F extends Field>(fields: F[], group: Group, pick: (r: Row) => any): F[] {
   const defs = [...customDefs(group)].sort((a, b) => a.sort - b.sort);
-  if (!defs.length) return fields;
+  // a key that is only a code (a field deleted in Settings) means nothing to anyone: left out
+  const gone = (f: F) => f.key.startsWith(`${group}.custom.`) && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(f.key.slice(group.length + 8));
+  if (!defs.length) return fields.filter((f) => !gone(f));
   const defined = new Set(defs.map((d) => `${group}.custom.${d.id}`));
   const pre = `${group}.custom.`;
   const plain = fields.filter((f) => !f.key.startsWith(pre));
-  const leftovers = fields.filter((f) => f.key.startsWith(pre) && !defined.has(f.key));
+  const leftovers = fields.filter((f) => f.key.startsWith(pre) && !defined.has(f.key) && !gone(f));
   return [...plain, ...(defs.map((d) => customDefField(group, d, pick)) as F[]), ...leftovers];
 }
 
@@ -397,15 +404,8 @@ export function buildFields(ctx: EngineCtx): Field[] {
  * report keeps working after the field is renamed.
  */
 export function dealCustomFields(defs: TrackingField[]): (Field & { group: "deal" })[] {
-  return defs.map((d): Field & { group: "deal" } => {
-    const raw = (r: Row) => (r.deal as any).custom?.[d.id];
-    if ((d.type as string) === "multiselect") return { ...customDefField("deal", { id: d.id, label: d.label, type: "multiselect", options: d.options, sort: d.sort }, (r) => r.deal), key: `deal.custom.${d.id}`, group: "deal" };
-    if (d.type === "boolean") return { key: `deal.custom.${d.id}`, group: "deal", label: d.label, kind: "enum", options: ["Yes", "No"], get: (r) => { const v = raw(r); return v === true ? "Yes" : v === false ? "No" : null; } };
-    if (d.type === "select") return { key: `deal.custom.${d.id}`, group: "deal", label: d.label, kind: "enum", options: d.options, get: (r) => { const v = raw(r); return v == null || v === "" || (Array.isArray(v) && !v.length) ? null : Array.isArray(v) ? v.join(", ") : String(v); } };
-    if (d.type === "number") return { key: `deal.custom.${d.id}`, group: "deal", label: d.label, kind: "number", get: (r) => { const v = raw(r); const n = Number(v); return v == null || v === "" || !Number.isFinite(n) ? null : n; } };
-    if (d.type === "date") return { key: `deal.custom.${d.id}`, group: "deal", label: d.label, kind: "date", get: (r) => isoDay(raw(r)) };
-    return { key: `deal.custom.${d.id}`, group: "deal", label: d.label, kind: "text", get: (r) => { const v = raw(r); return v == null || v === "" ? null : String(v); } };
-  });
+  // the same typing as the other custom fields (a stray list, "true" as text, an object… never break a report)
+  return defs.map((d): Field & { group: "deal" } => ({ ...customDefField("deal", { id: d.id, label: d.label, type: d.type as string, options: d.options ?? [], sort: d.sort }, (r) => r.deal), key: `deal.custom.${d.id}`, group: "deal" }));
 }
 
 /* ─────────────── rows ─────────────── */
@@ -643,8 +643,8 @@ const once = <T,>(k: string, f: () => Promise<T>): Promise<T> => (cache[k] ??= f
 export const forgetCrmData = () => { Object.keys(cache).forEach((k) => delete cache[k]); };
 
 /** Everything a report on `source` needs: the source, the records linked to it, and the custom field definitions. */
-export async function loadCrmData(source: EntityKey, onStep?: (what: string) => void): Promise<CrmData> {
-  const need = new Set<EntityKey>([source, ...entityOf(source).related]);
+export async function loadCrmData(source: EntityKey, onStep?: (what: string) => void, extra: EntityKey[] = []): Promise<CrmData> {
+  const need = new Set<EntityKey>(partsOf(source, extra));
   // links need their own targets to resolve (a project's company goes through its client…)
   if (need.has("company") && source !== "company") need.add("client");
   const api = await import("../../companies/companiesApi");
@@ -707,22 +707,99 @@ async function loadDealBundle(employees: { id: string; name: string }[]): Promis
 }
 
 /* ---- rows: the subject and what it links to ---- */
-export function buildCrmRows(source: EntityKey, d: CrmData): CrmRow[] {
-  const by = <T extends { id?: any }>(xs?: T[]) => new Map((xs ?? []).map((x) => [String(x.id), x]));
-  const company = by(d.company), contact = by(d.contact), client = by(d.client), project = by(d.project), deal = by(d.deal);
-  const clientByCompany = new Map((d.client ?? []).filter((c) => c.company_id).map((c) => [String(c.company_id), c]));
-  const coOfClient = (c: any) => (c?.company_id ? company.get(String(c.company_id)) ?? null : null);
-  switch (source) {
-    case "deal": return (d.deal ?? []).map((t) => ({ deal: t, company: t.company_id ? company.get(t.company_id) ?? null : null, contact: t.contactIds?.[0] ? contact.get(t.contactIds[0]) ?? null : null, client: t.company_id ? clientByCompany.get(t.company_id) ?? null : null }));
-    case "company": return (d.company ?? []).map((c) => ({ company: c, client: clientByCompany.get(String(c.id)) ?? null }));
-    case "contact": return (d.contact ?? []).map((c: any) => ({ contact: c, company: c.companyIds?.[0] ? company.get(c.companyIds[0]) ?? null : null }));
-    case "client": return (d.client ?? []).map((c) => ({ client: c, company: coOfClient(c) }));
-    case "project": return (d.project ?? []).map((p) => { const cl = client.get(String(p.client_id)) ?? null; return { project: p, client: cl, company: coOfClient(cl) }; });
-    case "contract": return (d.contract ?? []).map((l) => { const cl = client.get(String(l.client_id)) ?? null; return { contract: l, client: cl, company: coOfClient(cl), deal: l.tracking_id ? deal.get(String(l.tracking_id)) ?? null : null }; });
-    case "invoice": return (d.invoice ?? []).map((i) => { const pr = project.get(String(i.project_id)) ?? null; const cl = pr ? client.get(String(pr.client_id)) ?? null : null; return { invoice: i, project: pr, client: cl, company: coOfClient(cl) }; });
-    case "ticket": return (d.ticket ?? []).map((t) => { const cl = t.client_id ? client.get(String(t.client_id)) ?? null : null; return { ticket: t, client: cl, company: t.company_id ? company.get(String(t.company_id)) ?? coOfClient(cl) : coOfClient(cl), deal: t.tracking_id ? deal.get(String(t.tracking_id)) ?? null : null, contact: t.requester_contact_id ? contact.get(String(t.requester_contact_id)) ?? null : null }; });
+/**
+ * How the parts of the CRM link to each other. `many` = one record has several of the other
+ * (a company's deals); otherwise it has at most one (a deal's company).
+ */
+interface Link { from: EntityKey; to: EntityKey; many: boolean; get: (rec: any, ix: Index) => any; all?: true }
+interface Index { [k: string]: Map<string, any> }
+const LINKS: Link[] = [
+  { from: "deal", to: "company", many: false, get: (t, ix) => (t.company_id ? ix.company.get(String(t.company_id)) : null) },
+  { from: "deal", to: "contact", many: false, get: (t, ix) => (t.contactIds?.[0] ? ix.contact.get(String(t.contactIds[0])) : null) },
+  { from: "deal", to: "client", many: false, get: (t, ix) => (t.company_id ? ix.clientByCompany.get(String(t.company_id)) : null) },
+  { from: "deal", to: "contract", many: true, get: (t, ix) => ix.contractsByDeal.get(String(t.id)) },
+  { from: "deal", to: "ticket", many: true, get: (t, ix) => ix.ticketsByDeal.get(String(t.id)) },
+  { from: "company", to: "client", many: false, get: (c, ix) => ix.clientByCompany.get(String(c.id)) },
+  { from: "company", to: "deal", many: true, get: (c, ix) => ix.dealsByCompany.get(String(c.id)) },
+  { from: "company", to: "contact", many: true, get: (c, ix) => ix.contactsByCompany.get(String(c.id)) },
+  { from: "company", to: "ticket", many: true, get: (c, ix) => ix.ticketsByCompany.get(String(c.id)) },
+  { from: "contact", to: "company", many: false, get: (c, ix) => (c.companyIds?.[0] ? ix.company.get(String(c.companyIds[0])) : null) },
+  { from: "contact", to: "deal", many: true, get: (c, ix) => ix.dealsByContact.get(String(c.id)) },
+  { from: "contact", to: "ticket", many: true, get: (c, ix) => ix.ticketsByContact.get(String(c.id)) },
+  { from: "client", to: "company", many: false, get: (c, ix) => (c.company_id ? ix.company.get(String(c.company_id)) : null) },
+  { from: "client", to: "project", many: true, get: (c, ix) => ix.projectsByClient.get(String(c.id)) },
+  { from: "client", to: "contract", many: true, get: (c, ix) => ix.contractsByClient.get(String(c.id)) },
+  { from: "client", to: "ticket", many: true, get: (c, ix) => ix.ticketsByClient.get(String(c.id)) },
+  { from: "project", to: "client", many: false, get: (p, ix) => ix.client.get(String(p.client_id)) },
+  { from: "project", to: "invoice", many: true, get: (p, ix) => ix.invoicesByProject.get(String(p.id)) },
+  { from: "contract", to: "client", many: false, get: (l, ix) => ix.client.get(String(l.client_id)) },
+  { from: "contract", to: "deal", many: false, get: (l, ix) => (l.tracking_id ? ix.deal.get(String(l.tracking_id)) : null) },
+  { from: "invoice", to: "project", many: false, get: (i, ix) => ix.project.get(String(i.project_id)) },
+  { from: "ticket", to: "client", many: false, get: (t, ix) => (t.client_id ? ix.client.get(String(t.client_id)) : null) },
+  { from: "ticket", to: "company", many: false, get: (t, ix) => (t.company_id ? ix.company.get(String(t.company_id)) : t.client_id ? (() => { const c = ix.client.get(String(t.client_id)); return c?.company_id ? ix.company.get(String(c.company_id)) : null; })() : null) },
+  { from: "ticket", to: "deal", many: false, get: (t, ix) => (t.tracking_id ? ix.deal.get(String(t.tracking_id)) : null) },
+  // picked on purpose, a deal's contacts are all of them (and a contact's companies) — not only the first that comes along
+  { from: "deal", to: "contact", many: true, all: true, get: (t, ix) => (t.contactIds ?? []).map((id: any) => ix.contact.get(String(id))).filter(Boolean) },
+  { from: "contact", to: "company", many: true, all: true, get: (c, ix) => (c.companyIds ?? []).map((id: any) => ix.company.get(String(id))).filter(Boolean) },
+  { from: "ticket", to: "contact", many: false, get: (t, ix) => (t.requester_contact_id ? ix.contact.get(String(t.requester_contact_id)) : null) },
+];
+/**
+ * How each part reaches the report's subject: the shortest way, going through single links
+ * first (a project's company is its client's company) and only then through lists.
+ */
+export function linkPlan(source: EntityKey, extra: EntityKey[] = []): { to: EntityKey; via: Link }[] {
+  const want = new Set<EntityKey>([...entityOf(source).related, ...extra].filter((k) => k !== source));
+  const cost = new Map<EntityKey, number>([[source, 0]]), via = new Map<EntityKey, Link>();
+  const todo: EntityKey[] = [source];
+  while (todo.length) {
+    todo.sort((a, b) => cost.get(a)! - cost.get(b)!);
+    const at = todo.shift()!;
+    for (const l of LINKS.filter((x) => x.from === at && !x.all)) {
+      const c = cost.get(at)! + (l.many ? 100 : 1);
+      if (c < (cost.get(l.to) ?? Infinity)) { cost.set(l.to, c); via.set(l.to, l); todo.push(l.to); }
+    }
   }
-  return [];
+  extra.forEach((k) => { const all = LINKS.find((l) => l.all && l.from === source && l.to === k); if (all && via.get(k)?.from === source) { via.set(k, all); cost.set(k, 100); } });
+  // every part on the way to a wanted one comes along
+  const keep = new Set<EntityKey>();
+  want.forEach((k) => { let at: EntityKey | undefined = k; while (at && at !== source && !keep.has(at)) { keep.add(at); at = via.get(at)?.from; } });
+  // a part comes after the one it is reached through
+  const depth = (k: EntityKey) => { let n = 0, at: EntityKey | undefined = k; while (at && at !== source && n < 20) { at = via.get(at)?.from; n++; } return n; };
+  return [...keep].filter((k) => via.has(k)).sort((a, b) => depth(a) - depth(b) || cost.get(a)! - cost.get(b)!).map((k) => ({ to: k, via: via.get(k)! }));
+}
+/** Every part a report reads: its subject, what comes along, what was added and what links them. */
+export const partsOf = (source: EntityKey, extra: EntityKey[] = []): EntityKey[] => [source, ...linkPlan(source, extra).map((p) => p.to)];
+/** Does adding `k` give a row per linked record (a company's deals) rather than one? */
+export const isListLink = (source: EntityKey, k: EntityKey) => linkPlan(source, [k]).some((p) => p.via.many);
+/** The most rows a report builds (lists inside lists can multiply fast). */
+export const ROW_CAP = 200000;
+export function buildCrmRows(source: EntityKey, d: CrmData, extra: EntityKey[] = []): CrmRow[] {
+  const by = (xs?: any[]) => new Map((xs ?? []).map((x) => [String(x.id), x]));
+  const multi = (xs: any[] | undefined, keys: (x: any) => any[]) => { const m = new Map<string, any[]>(); (xs ?? []).forEach((x) => keys(x).forEach((k) => { if (k == null || k === "") return; const id = String(k); const l = m.get(id); if (l) l.push(x); else m.set(id, [x]); })); return m; };
+  const ix: Index = {
+    company: by(d.company), contact: by(d.contact), client: by(d.client), project: by(d.project), deal: by(d.deal),
+    clientByCompany: new Map((d.client ?? []).filter((c) => c.company_id).map((c) => [String(c.company_id), c])),
+    dealsByCompany: multi(d.deal, (t) => [t.company_id]), dealsByContact: multi(d.deal, (t) => t.contactIds ?? []),
+    contactsByCompany: multi(d.contact, (c) => c.companyIds ?? []),
+    projectsByClient: multi(d.project, (p) => [p.client_id]), invoicesByProject: multi(d.invoice, (i) => [i.project_id]),
+    contractsByClient: multi(d.contract, (l) => [l.client_id]), contractsByDeal: multi(d.contract, (l) => [l.tracking_id]),
+    ticketsByClient: multi(d.ticket, (t) => [t.client_id]), ticketsByCompany: multi(d.ticket, (t) => [t.company_id]),
+    ticketsByDeal: multi(d.ticket, (t) => [t.tracking_id]), ticketsByContact: multi(d.ticket, (t) => [t.requester_contact_id]),
+  };
+  let rows: CrmRow[] = ((d as any)[source] ?? []).map((x: any) => ({ [source]: x }));
+  for (const { to, via } of linkPlan(source, extra)) {
+    if (!via.many) { rows.forEach((r) => { const from = r[via.from]; r[to] = from ? via.get(from, ix) ?? null : null; }); continue; }
+    const next: CrmRow[] = [];
+    for (const r of rows) {
+      const from = r[via.from];
+      const list: any[] = from ? via.get(from, ix) ?? [] : [];
+      if (!list.length) next.push({ ...r, [to]: null });
+      else for (const x of list) { next.push({ ...r, [to]: x }); if (next.length >= ROW_CAP) break; }
+      if (next.length >= ROW_CAP) break;
+    }
+    rows = next;
+  }
+  return rows;
 }
 
 /* ---- fields of every part of the CRM ---- */
@@ -740,7 +817,7 @@ const guard = (fs: Field[], g: EntityKey): Field[] => fs.map((f) => ({ ...f, get
 const ymd = (v: any) => isoDay(v);
 const yn = (b: boolean | null | undefined) => (b == null ? null : b ? "Yes" : "No");
 
-export async function buildCrmFields(source: EntityKey, d: CrmData): Promise<Field[]> {
+export async function buildCrmFields(source: EntityKey, d: CrmData, extra: EntityKey[] = []): Promise<Field[]> {
   const cw = await import("../../clients/ClientWorkspace");
   const ct = await import("../../clients/clientsTypes");
   const sales = await import("../sales/salesApi");
@@ -748,7 +825,7 @@ export async function buildCrmFields(source: EntityKey, d: CrmData): Promise<Fie
   const svcName = new Map(d.services.map((p) => [String(p.id), p.name]));
   const empName = new Map(d.employees.map((e) => [e.id, e.name]));
   const today = todayIso();
-  const groups = [source, ...entityOf(source).related];
+  const groups = partsOf(source, extra);
   const out: Field[] = [];
   const count = (g: EntityKey): Field => ({ key: `${g}.__count`, group: g, label: `Number of ${entityOf(g).plural.toLowerCase()}`, kind: "number", sum: true, get: () => 1 });
   // client figures, from its signed products and projects
@@ -774,16 +851,16 @@ export async function buildCrmFields(source: EntityKey, d: CrmData): Promise<Fie
       fs = [
         { key: "company.name", group: g, label: "Name", kind: "text", get: (r: any) => r.company?.name ?? null },
         { key: "company.types", group: g, label: "Type", kind: "enum", options: ["crm", "sales", "client", ...d.relTags], get: (r: any) => (r.company?.relationship ?? []).join(", ") || null, list: (r: any) => r.company?.relationship ?? [] },
-        { key: "company.country_name", group: g, label: "Country (full name)", kind: "enum", get: (r: any) => (r.company?.country ? countryName(r.company.country) : null) },
+        { key: "company.country_name", group: g, label: "Country", kind: "enum", get: (r: any) => (r.company?.country ? countryName(r.company.country) : null) },
         { key: "company.is_client", group: g, label: "Is a client", kind: "enum", options: ["Yes", "No"], get: (r: any) => yn(!!r.client) },
-        ...withCustomDefs(discovered(d.company ?? [], "company", /^company\.(name|relationship)$/), "company", (r) => (r as any).company),
+        ...withCustomDefs(discovered(d.company ?? [], "company", /^company\.(name|relationship|country)$/), "company", (r) => (r as any).company),
       ];
     } else if (g === "contact") {
       fs = [
         { key: "contact.name", group: g, label: "Full name", kind: "text", get: (r: any) => (r.contact ? [r.contact.first_name, r.contact.last_name].filter(Boolean).join(" ") || null : null) },
-        { key: "contact.country_name", group: g, label: "Country (full name)", kind: "enum", get: (r: any) => (r.contact?.country ? countryName(r.contact.country) : null) },
+        { key: "contact.country_name", group: g, label: "Country", kind: "enum", get: (r: any) => (r.contact?.country ? countryName(r.contact.country) : null) },
         { key: "contact.companies", group: g, label: "Number of companies", kind: "number", get: (r: any) => r.contact?.companyIds?.length ?? 0 },
-        ...withCustomDefs(discovered(d.contact ?? [], "contact", /compan/i), "contact", (r) => (r as any).contact),
+        ...withCustomDefs(discovered(d.contact ?? [], "contact", /compan|^contact\.country$/i), "contact", (r) => (r as any).contact),
       ];
     } else if (g === "client") {
       fs = [
@@ -803,7 +880,7 @@ export async function buildCrmFields(source: EntityKey, d: CrmData): Promise<Fie
         { key: "project.status_label", group: g, label: "Status", kind: "enum", options: Object.values(ct.PROJECT_STATUS_LABEL), get: (r: any) => (r.project ? ct.PROJECT_STATUS_LABEL[ct.projectStatusOf(r.project.status)] : null) },
         { key: "project.value", group: g, label: "Project value", kind: "money", sum: true, get: (r: any) => (r.project ? pv(r.project) : null) },
         { key: "project.team_size", group: g, label: "People on it", kind: "number", get: (r: any) => (Array.isArray(r.project?.team) ? r.project.team.length : null) },
-        { key: "project.country_name", group: g, label: "Country (full name)", kind: "enum", get: (r: any) => (r.project?.address?.country ? countryName(r.project.address.country) : null) },
+        { key: "project.country_name", group: g, label: "Country", kind: "enum", get: (r: any) => (r.project?.address?.country ? countryName(r.project.address.country) : null) },
         ...discovered(d.project ?? [], "project", /^project\.(name|status)$/),
       ];
     } else if (g === "contract") {

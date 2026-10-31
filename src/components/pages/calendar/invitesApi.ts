@@ -41,6 +41,8 @@ export interface InviteCard extends EntryInvite {
   tracking_id: string | null;
   meeting_kind: string | null;
   notes: string | null;
+  /** The repeating booking the date belongs to: one answer covers all of its dates. */
+  series_id?: string | null;
   /** Shown on the card so the invitee knows what they are being pulled into. */
   company_name?: string;
 }
@@ -82,7 +84,7 @@ export async function loadMyInvites(userId: string): Promise<InviteCard[]> {
 
   const { data: ents } = await supabase
     .from("calendar_entries")
-    .select("id, kind, title, date_key, entry_date, start_min, end_min, work_type_id, project_id, client_id, company_id, tracking_id, meeting_kind, notes, role_id")
+    .select("id, kind, title, date_key, entry_date, start_min, end_min, work_type_id, project_id, client_id, company_id, tracking_id, meeting_kind, notes, role_id, series_id")
     .in("id", rows.map((r) => r.entry_id));
   const byId: Record<string, any> = {};
   ((ents ?? []) as any[]).forEach((e) => { byId[e.id] = e; });
@@ -122,6 +124,7 @@ export async function loadMyInvites(userId: string): Promise<InviteCard[]> {
       tracking_id: e.tracking_id,
       meeting_kind: e.meeting_kind,
       notes: e.notes,
+      series_id: e.series_id ?? null,
       company_name: e.company_id ? coName[e.company_id] : undefined,
     };
   });
@@ -143,6 +146,31 @@ const todayIso = () => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 
+/** The invitee's own entry for an invite: the organiser's booking, on their calendar. */
+const entryFor = (inv: InviteCard, userId: string, workTypeId?: string | null) => ({
+  user_id: userId,
+  kind: inv.kind ?? "work",
+  title: inv.title,
+  date_key: inv.date_key,
+  entry_date: inv.entry_date,
+  start_min: inv.start_min,
+  end_min: inv.end_min,
+  work_type_id: workTypeId ?? inv.work_type_id,
+  project_id: inv.project_id,
+  client_id: inv.client_id,
+  company_id: inv.company_id,
+  tracking_id: inv.tracking_id,
+  meeting_kind: inv.meeting_kind,
+  billable: inv.billable,
+  billing_line: inv.billing_line,
+  // Same role as the organiser booked it on, so it bills on that project role.
+  ...(inv.role_id ? { role_id: inv.role_id } : {}),
+  // Confirmed means the work happened; something still ahead is planned.
+  status: inv.entry_date <= todayIso() ? "confirmed" : "planned",
+  notes: inv.notes,
+  invite_id: inv.id,
+});
+
 export async function acceptInvite(
   inv: InviteCard,
   userId: string,
@@ -152,29 +180,7 @@ export async function acceptInvite(
 ): Promise<string | null> {
   // The accepted entry mirrors the organiser's: same kind, same deal, same
   // company, so it reads the same on both calendars.
-  const { data: created, error } = await supabase.from("calendar_entries").insert({
-    user_id: userId,
-    kind: inv.kind ?? "work",
-    title: inv.title,
-    date_key: inv.date_key,
-    entry_date: inv.entry_date,
-    start_min: inv.start_min,
-    end_min: inv.end_min,
-    work_type_id: workTypeId ?? inv.work_type_id,
-    project_id: inv.project_id,
-    client_id: inv.client_id,
-    company_id: inv.company_id,
-    tracking_id: inv.tracking_id,
-    meeting_kind: inv.meeting_kind,
-    billable: inv.billable,
-    billing_line: inv.billing_line,
-    // Same role as the organiser booked it on, so it bills on that project role.
-    ...(inv.role_id ? { role_id: inv.role_id } : {}),
-    // Confirmed means the work happened; something still ahead is planned.
-    status: inv.entry_date <= todayIso() ? "confirmed" : "planned",
-    notes: inv.notes,
-    invite_id: inv.id,
-  }).select("id").single();
+  const { data: created, error } = await supabase.from("calendar_entries").insert(entryFor(inv, userId, workTypeId)).select("id").single();
   if (error) return error.message;
 
   const { error: uErr } = await supabase.from("entry_invites")
@@ -184,6 +190,46 @@ export async function acceptInvite(
     // Roll the entry back rather than leave a booking with no invite behind it.
     await supabase.from("calendar_entries").delete().eq("id", created.id);
     return uErr.message;
+  }
+  return null;
+}
+
+/** The open invitations one answer covers: this one, or every open date of the same repeating booking. */
+export async function coveredBy(inv: InviteCard, userId: string): Promise<InviteCard[]> {
+  if (!inv.series_id) return [inv];
+  const all = await loadMyInvites(userId).catch(() => [] as InviteCard[]);
+  const same = all.filter((i) => i.series_id === inv.series_id);
+  return same.some((i) => i.id === inv.id) ? same : [inv, ...same];
+}
+
+/**
+ * Answer an invitation. On a repeating booking the answer covers every date:
+ * accept once and all of them land on your calendar (and the dates the series
+ * adds later follow the same answer — the database does that).
+ */
+export async function answerInvite(inv: InviteCard, userId: string, accept: boolean, workTypeId?: string | null): Promise<string | null> {
+  const list = await coveredBy(inv, userId);
+  const ids = list.map((i) => i.id);
+  const now = new Date().toISOString();
+  if (!accept) {
+    for (let k = 0; k < ids.length; k += 200) await supabase.from("calendar_entries").delete().in("invite_id", ids.slice(k, k + 200));
+    for (let k = 0; k < ids.length; k += 200) {
+      const { error } = await supabase.from("entry_invites").update({ status: "declined", responded_at: now, seen_by_organiser: false }).in("id", ids.slice(k, k + 200));
+      if (error) return error.message;
+    }
+    return null;
+  }
+  if (list.length === 1) return acceptInvite(list[0], userId, workTypeId);
+  const rows = list.map((i) => entryFor(i, userId, workTypeId));
+  const made: string[] = [];
+  for (let k = 0; k < rows.length; k += 200) {
+    const { data, error } = await supabase.from("calendar_entries").insert(rows.slice(k, k + 200)).select("id");
+    if (error) { if (made.length) await supabase.from("calendar_entries").delete().in("id", made); return error.message; }
+    made.push(...((data ?? []) as any[]).map((r) => r.id as string));
+  }
+  for (let k = 0; k < ids.length; k += 200) {
+    const { error } = await supabase.from("entry_invites").update({ status: "accepted", responded_at: now, seen_by_organiser: false }).in("id", ids.slice(k, k + 200));
+    if (error) { await supabase.from("calendar_entries").delete().in("id", made); return error.message; }
   }
   return null;
 }

@@ -700,3 +700,29 @@
   .rp-flow em { display: none; }
 }
 @media (max-width: 760px) { .rp-tpls, .rp-ents.is-start { grid-template-columns: 1fr; } }
+
+/* back to the start screen (templates, from scratch) */
+.rp-bar .rp-back { width: 32px; height: 36px; margin-right: -2px; color: var(--ink, #1c2b24); }
+.rp-bar .rp-back:hover { background: rgba(14, 107, 76, 0.08); }
+
+/* ---------- what it's about: one or more parts of the CRM ---------- */
+.rp-ents.is-multi .rp-ent { position: relative; }
+.rp-ent-top { width: 100%; display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.rp-ent-tick { width: 22px; height: 22px; flex-shrink: 0; display: grid; place-items: center; border-radius: 50%; border: 1.5px solid var(--line); background: #fff; color: #fff; transition: background 0.18s, border-color 0.18s, transform 0.25s var(--spring, ease); }
+.rp-ent-tick svg { width: 12px; height: 12px; }
+.rp-ent.is-on .rp-ent-tick { background: var(--c); border-color: var(--c); transform: scale(1.04); }
+.rp-ent:not(.is-on):hover .rp-ent-tick { border-color: color-mix(in srgb, var(--c) 60%, transparent); }
+.rp-ent-tags { min-height: 20px; display: flex; align-items: center; gap: 6px; margin-top: auto; }
+.rp-ent-tag { font-style: normal; display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 700; color: var(--c); background: color-mix(in srgb, var(--c) 12%, #fff); white-space: nowrap; }
+.rp-ent-tag.is-main { color: #fff; background: var(--c); }
+.rp-ent-tag.is-along { color: var(--mute); background: var(--field); font-weight: 650; }
+.rp-ent.is-on:not(.is-main) { background: color-mix(in srgb, var(--c) 4%, #fff); box-shadow: none; }
+.rp-rowis { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 14px; padding: 12px 14px; border-radius: 14px; background: var(--field); font-size: 13px; font-weight: 650; color: var(--ink2); }
+.rp-rowis .rp-seg { --g: var(--forest); background: #fff; }
+.rp-rowis em { flex: 1 1 260px; min-width: 0; font-style: normal; font-size: 12.5px; font-weight: 550; color: var(--mute); }
+/* reading the data: in the bar, so nothing below moves */
+.rp-chip.is-busy { display: inline-flex; align-items: center; gap: 7px; color: var(--forest); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rp-chip.is-busy .rp-spin { width: 12px; height: 12px; border-width: 2px; flex-shrink: 0; }
+.rp-card .rp-ents.is-multi { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 1100px) { .rp-card .rp-ents.is-multi { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .rp-card .rp-ents.is-multi { grid-template-columns: 1fr; } }

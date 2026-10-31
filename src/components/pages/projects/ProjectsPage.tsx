@@ -9,6 +9,7 @@ import "../clients/ClientsPage.css";
 import "./ProjectsPage.css";
 import { useNavSection } from "../../framework/pageAccess";
 import { projectStatusOf } from "../clients/clientsTypes";
+import ActionsMenu from "../../framework/ActionsMenu";
 
 /**
  * Projects — its own page and sidebar entry, but built on the same data and
@@ -53,6 +54,7 @@ export default function ProjectsPage() {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="5" height="16" rx="1.5" /><rect x="9.5" y="4" width="5" height="10" rx="1.5" /><rect x="16" y="4" width="5" height="13" rx="1.5" /></svg>Canvas
           </button>
         </div>
+        <ActionsMenu items={[]} />
       </header>
 
       {!loaded ? <section className="cx-sheet pj-sheet"><PageLoader label="Loading projects…" /></section> : (

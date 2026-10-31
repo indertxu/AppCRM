@@ -32,9 +32,11 @@ interface Props {
   onSave: (v: ActualValue) => void;
   onClear?: () => void;
   onClose: () => void;
+  /** Internal work (not client work): only the time is logged, nothing is billed. */
+  internal?: boolean;
 }
 
-export default function ActualModal({ planned, existing, onSave, onClear, onClose }: Props) {
+export default function ActualModal({ planned, existing, onSave, onClear, onClose, internal }: Props) {
   const base = existing ?? planned;
   const [startH, setStartH] = useState(Math.floor(base.startMin / 60));
   const [startM, setStartM] = useState(base.startMin % 60);
@@ -60,7 +62,7 @@ export default function ActualModal({ planned, existing, onSave, onClear, onClos
 
   const save = () => {
     if (error) return;
-    onSave({ startMin, endMin, billable, reason });
+    onSave({ startMin, endMin, billable: internal ? 0 : billable, reason });
   };
 
   return (
@@ -115,7 +117,7 @@ export default function ActualModal({ planned, existing, onSave, onClear, onClos
           </div>
         </div>
 
-        <div className="am-field am-block">
+        {!internal && <div className="am-field am-block">
           <label>Actually billed</label>
           <div className="am-stepper">
             <button type="button" onClick={() => setBillable((b) => Math.max(0, +(b - 0.25).toFixed(2)))}>−</button>
@@ -130,7 +132,7 @@ export default function ActualModal({ planned, existing, onSave, onClear, onClos
               ? `Same as booked (${planned.billable.toFixed(2)}d)`
               : `${billDelta > 0 ? "+" : ""}${billDelta.toFixed(2)}d vs booked ${planned.billable.toFixed(2)}d`}
           </span>
-        </div>
+        </div>}
 
         <div className="am-field am-block">
           <label>Reason for the difference <i>(optional)</i></label>

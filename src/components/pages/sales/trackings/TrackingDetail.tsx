@@ -2906,13 +2906,62 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     if (k === "tasks") resetTaskDraft();
     if (k === "meetings") { setMeetTitle(""); setMeetDate(""); setMeetTime("10:00"); setMeetEnd("11:00"); }
   };
-  const panelState = (k: Composer) => (composing ? (composing === k ? " is-composing" : " is-folded") : "");
   const composeCancel = (k: Composer) => composing === k && (
     <button type="button" className="sl-compose-x" onClick={() => cancelComposer(k)} title="Discard and show everything again">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
       Cancel
     </button>
   );
+  /** The activity card: which composer shows (Note / Task / Meeting) and how the history is filtered. */
+  const [composeTab, setComposeTab] = useState<Composer>("notes");
+  useEffect(() => { if (composing) setComposeTab(composing); }, [composing]);
+  const [histFilter, setHistFilter] = useState<"all" | "notes" | "tasks" | "meetings">("all");
+  const [histShown, setHistShown] = useState(HIST_STEP);
+  type ActItem = { k: "note" | "task" | "meeting"; at: string; item: TrackNote | TrackTask | TrackMeeting };
+  const meetEnds = (m: TrackMeeting) => new Date(m.end_at || m.meet_at || 0).getTime();
+  /** Coming up: open tasks (late first, then by deadline) and meetings still ahead, in date order. */
+  const upAll = useMemo<ActItem[]>(() => {
+    const now = Date.now();
+    const open = tasks.filter((t) => !t.done).map((t) => ({ k: "task" as const, at: t.due_at || "9999", item: t }));
+    const ahead = meetings.filter((m) => m.meet_at && meetEnds(m) >= now).map((m) => ({ k: "meeting" as const, at: m.meet_at!, item: m }));
+    return [...open, ...ahead].sort((a, b) => a.at.localeCompare(b.at));
+  }, [tasks, meetings]); // eslint-disable-line react-hooks/exhaustive-deps
+  const upNext = upAll.slice(0, 4);
+  const upNextMore = upAll.length - upNext.length;
+  /** What already happened, newest first: notes, finished tasks, meetings that took place. */
+  const histAll = useMemo<ActItem[]>(() => {
+    const now = Date.now();
+    return [
+      ...notes.map((n) => ({ k: "note" as const, at: n.created_at || "", item: n })),
+      ...tasks.filter((t) => t.done).map((t) => ({ k: "task" as const, at: t.due_at || t.created_at || "", item: t })),
+      ...meetings.filter((m) => !m.meet_at || meetEnds(m) < now).map((m) => ({ k: "meeting" as const, at: m.meet_at || "", item: m })),
+    ].sort((a, b) => b.at.localeCompare(a.at));
+  }, [notes, tasks, meetings]); // eslint-disable-line react-hooks/exhaustive-deps
+  const histCount = {
+    all: histAll.length,
+    notes: histAll.filter((x) => x.k === "note").length,
+    tasks: histAll.filter((x) => x.k === "task").length,
+    meetings: histAll.filter((x) => x.k === "meeting").length,
+  };
+  const hist = histFilter === "all" ? histAll : histAll.filter((x) => x.k === (histFilter === "notes" ? "note" : histFilter === "tasks" ? "task" : "meeting"));
+  /** "Today", "Yesterday", "Tomorrow", or "Mon 26 Oct" (with the year when it isn't this one). */
+  const dayLabel = (iso: string) => {
+    if (!iso) return "No date";
+    const d = new Date(iso); d.setHours(0, 0, 0, 0);
+    const t = new Date(); t.setHours(0, 0, 0, 0);
+    const diff = Math.round((t.getTime() - d.getTime()) / 864e5);
+    if (diff === 0) return "Today";
+    if (diff === 1) return "Yesterday";
+    if (diff === -1) return "Tomorrow";
+    return d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", ...(d.getFullYear() !== t.getFullYear() ? { year: "numeric" } : {}) });
+  };
+  const nextMeet = upAll.find((x) => x.k === "meeting")?.item as TrackMeeting | undefined;
+  const openTaskCount = tasks.filter((t) => !t.done).length;
+  const actSummary = [
+    notes.length ? `${notes.length} ${notes.length === 1 ? "note" : "notes"}` : "",
+    openTaskCount ? `${openTaskCount} open ${openTaskCount === 1 ? "task" : "tasks"}` : "",
+    nextMeet?.meet_at ? `next meeting ${dayLabel(nextMeet.meet_at).replace(/^(Today|Tomorrow)$/, (x) => x.toLowerCase())}` : "",
+  ].filter(Boolean).join(" · ") || "Nothing logged yet";
   const [meetKind, setMeetKind] = useState<MeetingKind>("in_person");
   // Outlook: what happened to the meeting just booked (shown under Schedule).
   const [meetSync, setMeetSync] = useState<{ id: string; state: "syncing" | "ok" | "err" | "gone"; msg?: string; invited?: number; teams?: "yes" | "skipped" | null; count?: number } | null>(null);
@@ -4006,137 +4055,218 @@ export default function TrackingDetail({ tracking, companies, contacts, products
           </div>
         </div>
 
-        {/* Four columns */}
-        <div className="sl-work">
-          <div className={`sl-col-left${composing ? " has-composer" : ""}`}>
-          <section className={`sl-panel sl-panel-compact sl-panel-notes${panelState("notes")}`} aria-hidden={composing && composing !== "notes" ? true : undefined}>
-            <div className="sl-note-head">
-              <h3 className="sl-panel-title">Notes{notes.length > 0 && <span>{notes.length}</span>}</h3>
-              {composeCancel("notes") || notes.length > 0 && (
-                <button className="sl-see-icon" onClick={() => setItemsModal("notes")} title={`See all ${notes.length} notes`} aria-label="See all notes">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></svg>
-                </button>
-              )}
-            </div>
-            <div className={`sl-note-add sl-note-add-fluid ${cleanMentions(newNote).trim() ? "is-writing" : ""}`}>
-              <MentionInput multiline value={newNote} onChange={setNewNote} people={mentionPeople}
-                onMention={() => {}} placeholder="Write a note... use @ to mention" />
-              <button className="sl-add-btn sl-add-btn-inline" onClick={submitNote} disabled={!cleanMentions(newNote).trim()}>Add</button>
-            </div>
-          </section>
-
-          <section className={`sl-panel sl-panel-compact sl-panel-notes${panelState("tasks")}`} aria-hidden={composing && composing !== "tasks" ? true : undefined}>
-            <div className="sl-note-head">
-              <h3 className="sl-panel-title sl-tasks-title">Tasks
-                {/* Only counts that say something: no "0" and no "0 ✓" on an empty list. */}
-                {tasks.some((t) => !t.done) && <span className="sl-tcount sl-tcount-todo" title="To do">{tasks.filter((t) => !t.done).length}</span>}
-                {tasks.some((t) => t.done) && <span className="sl-tcount sl-tcount-done" title="Completed">{tasks.filter((t) => t.done).length} ✓</span>}
-                {overdueCount > 0 && <span className="sl-tcount sl-tcount-late" title="Overdue">{overdueCount} late</span>}
-                {urgentCount > 0 && <span className="sl-tcount sl-tcount-urgent" title="Urgent">{urgentCount} urgent</span>}
-              </h3>
-              {composeCancel("tasks") || tasks.length > 0 && (
-                <button className="sl-see-icon" onClick={() => setItemsModal("tasks")} title={`See all ${tasks.length} tasks`} aria-label="See all tasks">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></svg>
-                </button>
-              )}
-            </div>
-            <div className="sl-task-add">
-              <div className="sl-task-name-row">
-                <MentionInput value={newTask} onChange={setNewTask} people={mentionPeople}
-                  onMention={() => {}} placeholder="Task name... use @ to mention" />
-                {!cleanMentions(newTask).trim() && <TemplatePicker templates={taskTemplates} kind="quick" onPick={pickTaskTemplate} compact />}
+        {/* The deal's work, three columns: who and how likely · what happens (the activity) · what it's worth */}
+        <div className="sl-work is-hub">
+          <div className="sl-col-act">
+          <section className={`sl-panel ah ${composing ? "is-writing" : ""}`} data-tab={composeTab}>
+            <header className="ah-head">
+              <span className="ah-ico" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>
+              </span>
+              <div className="ah-title">
+                <h3>Activity</h3>
+                <small>{actSummary}</small>
               </div>
-              <div className={`sl-meet-reveal ${cleanMentions(newTask).trim() ? "is-writing" : ""}`}>
-                <MentionInput multiline value={newTaskDesc} onChange={setNewTaskDesc} people={mentionPeople} className="sl-task-desc-input"
-                  onMention={() => {}} placeholder="Description (optional) — the details, what done looks like…" />
-                {taskFrom && (
-                  <div className="hs-add-from">
-                    <span>✦ From a template{taskFrom.checklist.length ? ` · ${taskFrom.checklist.length} steps` : ""}</span>
-                    <button type="button" onClick={() => setTaskFrom(null)} aria-label="Don't use the template">×</button>
+              <div className="ah-tabs" role="tablist" aria-label="Add to this deal" style={{ "--i": COMPOSERS.indexOf(composeTab) } as CSSProperties}>
+                <span className="ah-tabs-pill" aria-hidden="true" />
+                {COMPOSERS.map((k) => (
+                  <button key={k} type="button" role="tab" aria-selected={composeTab === k} className={composeTab === k ? "is-on" : ""} onClick={() => setComposeTab(k)}
+                    title={k === "notes" ? "Write down what happened" : k === "tasks" ? "Plan the next step" : "Book a meeting (goes to Outlook)"}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={AH_ICON[k]} /></svg>
+                    {k === "notes" ? "Note" : k === "tasks" ? "Task" : "Meeting"}
+                    {drafts[k] && composeTab !== k && <i className="ah-dot" title="Unsaved draft" />}
+                  </button>
+                ))}
+              </div>
+            </header>
+
+            <div className="ah-compose" key={composeTab}>
+              {composeTab === "notes" && (
+                <div className={`sl-note-add sl-note-add-fluid ${cleanMentions(newNote).trim() ? "is-writing" : ""}`}>
+                  <MentionInput multiline value={newNote} onChange={setNewNote} people={mentionPeople}
+                    onMention={() => {}} placeholder="Write a note... use @ to mention" />
+                  <button className="sl-add-btn sl-add-btn-inline" onClick={submitNote} disabled={!cleanMentions(newNote).trim()}>Add</button>
+                </div>
+              )}
+              {composeTab === "tasks" && (
+                <div className="sl-task-add">
+                  <div className="sl-task-name-row">
+                    <MentionInput value={newTask} onChange={setNewTask} people={mentionPeople}
+                      onMention={() => {}} placeholder="Task name... use @ to mention" />
+                    {!cleanMentions(newTask).trim() && <TemplatePicker templates={taskTemplates} kind="quick" onPick={pickTaskTemplate} compact />}
                   </div>
-                )}
-                <div className="sl-task-opts">
-                  <div className="sl-task-prios" role="radiogroup" aria-label="Priority">
-                    {TASK_PRIORITIES.map((p) => (
-                      <button key={p} type="button" role="radio" aria-checked={taskPrio === p}
-                        className={`hs-prio is-${p} ${taskPrio === p ? "is-on" : ""}`} onClick={() => setTaskPrio(p)}>
-                        <FlagIcon /><span>{PRIORITY_LABEL[p]}</span>
-                      </button>
-                    ))}
-                  </div>
-                  <div className="sl-task-kind" role="radiogroup" aria-label="Kind of task">
-                    {(["quick", "process"] as TaskKind[]).map((k) => (
-                      <button key={k} type="button" role="radio" aria-checked={taskKind === k} className={taskKind === k ? "is-on" : ""}
-                        onClick={() => setTaskKind(k)} title={k === "quick" ? "Tick it off and forget it" : "Longer work: status, % and progress notes"}>
-                        {k === "quick" ? "Quick" : "Process"}
-                      </button>
-                    ))}
+                  <div className={`sl-meet-reveal ${cleanMentions(newTask).trim() ? "is-writing" : ""}`}>
+                    <MentionInput multiline value={newTaskDesc} onChange={setNewTaskDesc} people={mentionPeople} className="sl-task-desc-input"
+                      onMention={() => {}} placeholder="Description (optional) — the details, what done looks like…" />
+                    {taskFrom && (
+                      <div className="hs-add-from">
+                        <span>✦ From a template{taskFrom.checklist.length ? ` · ${taskFrom.checklist.length} steps` : ""}</span>
+                        <button type="button" onClick={() => setTaskFrom(null)} aria-label="Don't use the template">×</button>
+                      </div>
+                    )}
+                    <div className="sl-task-opts">
+                      <div className="sl-task-prios" role="radiogroup" aria-label="Priority">
+                        {TASK_PRIORITIES.map((p) => (
+                          <button key={p} type="button" role="radio" aria-checked={taskPrio === p}
+                            className={`hs-prio is-${p} ${taskPrio === p ? "is-on" : ""}`} onClick={() => setTaskPrio(p)}>
+                            <FlagIcon /><span>{PRIORITY_LABEL[p]}</span>
+                          </button>
+                        ))}
+                      </div>
+                      <div className="sl-task-kind" role="radiogroup" aria-label="Kind of task">
+                        {(["quick", "process"] as TaskKind[]).map((k) => (
+                          <button key={k} type="button" role="radio" aria-checked={taskKind === k} className={taskKind === k ? "is-on" : ""}
+                            onClick={() => setTaskKind(k)} title={k === "quick" ? "Tick it off and forget it" : "Longer work: status, % and progress notes"}>
+                            {k === "quick" ? "Quick" : "Process"}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="sl-task-due">
+                      <span className="sl-task-due-lbl">Due</span>
+                      <DatePicker value={taskDue} onChange={setTaskDue} placeholder="Date" />
+                      <TimePicker value={taskDueTime} onChange={setTaskDueTime} ariaLabel="Due time" />
+                    </div>
+                    <button className="sl-add-btn sl-meet-schedule" onClick={submitTask} disabled={!cleanMentions(newTask).trim() || !taskDue}>Add task</button>
                   </div>
                 </div>
-                <div className="sl-task-due">
-                  <span className="sl-task-due-lbl">Due</span>
-                  <DatePicker value={taskDue} onChange={setTaskDue} placeholder="Date" />
-                  <TimePicker value={taskDueTime} onChange={setTaskDueTime} ariaLabel="Due time" />
-                </div>
-                <button className="sl-add-btn sl-meet-schedule" onClick={submitTask} disabled={!cleanMentions(newTask).trim() || !taskDue}>Add task</button>
-              </div>
-            </div>
-          </section>
-
-          <section className={`sl-panel sl-panel-compact sl-panel-notes${panelState("meetings")}`} aria-hidden={composing && composing !== "meetings" ? true : undefined}>
-            <div className="sl-note-head">
-              <h3 className="sl-panel-title">Meetings{meetings.length > 0 && <span>{meetings.length}</span>}</h3>
-              {composeCancel("meetings") || meetings.length > 0 && (
-                <button className="sl-see-icon" onClick={() => setItemsModal("meetings")} title={`See all ${meetings.length} meetings`} aria-label="See all meetings">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></svg>
-                </button>
               )}
+              {composeTab === "meetings" && (
+                <>
+                  <div className="sl-meet-add">
+                    <MentionInput multiline value={meetTitle} onChange={setMeetTitle} people={mentionPeople}
+                      onMention={() => {}} placeholder="Meeting title... use @ to mention" />
+                    <div className={`sl-meet-reveal ${cleanMentions(meetTitle).trim() ? "is-writing" : ""}`}>
+                      <MeetingWhen date={meetDate} start={meetTime} end={meetEnd}
+                        onDate={setMeetDate} onStart={setMeetTime} onEnd={setMeetEnd} />
+                      <div className="mf-kinds" role="radiogroup" aria-label="Type of meeting">
+                        {MEETING_KINDS.map((k) => (
+                          <button key={k.value} type="button" role="radio" aria-checked={meetKind === k.value}
+                            className={meetKind === k.value ? "is-on" : ""} onClick={() => setMeetKind(k.value)}>
+                            {k.icon}<span>{k.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                      <button className="sl-add-btn sl-meet-schedule" onClick={submitMeeting} disabled={!cleanMentions(meetTitle).trim() || !meetDate || !spanOk(meetTime, meetEnd)}>Schedule</button>
+                    </div>
+                  </div>
+                  {meetSync && (
+                    <div className={`sl-ol-status is-${meetSync.state}`} role="status">
+                      <span className="sl-ol-ico">{OUTLOOK_ICON}</span>
+                      <span className="sl-ol-txt">
+                        {meetSync.state === "syncing" ? "Adding to your Outlook…"
+                          : meetSync.state === "ok" ? <>Added to your Outlook calendar
+                              {meetSync.invited ? ` · ${meetSync.invited} ${meetSync.invited === 1 ? "person" : "people"} invited` : ""}
+                              {meetSync.teams === "yes" ? " · Teams link created" : meetSync.teams === "skipped" ? " · no Teams link (not available on this account)" : ""}.</>
+                          : meetSync.state === "gone" ? <><b>{meetSync.count && meetSync.count > 1 ? `${meetSync.count} meetings were` : "A meeting was"} deleted in Outlook</b> — removed here too.</>
+                          : <><b>Not added to Outlook.</b> {meetSync.msg}</>}
+                      </span>
+                      {meetSync.state === "err" && <button className="sl-ol-retry" onClick={() => retryOutlook(meetSync.id)}>Try again</button>}
+                      {meetSync.state !== "syncing" && <button className="sl-ol-x" onClick={() => setMeetSync(null)} aria-label="Dismiss">×</button>}
+                    </div>
+                  )}
+                </>
+              )}
+              {composing === composeTab && <div className="ah-compose-x">{composeCancel(composeTab)}</div>}
             </div>
-            <div className="sl-meet-add">
-              <MentionInput multiline value={meetTitle} onChange={setMeetTitle} people={mentionPeople}
-                onMention={() => {}} placeholder="Meeting title... use @ to mention" />
-              <div className={`sl-meet-reveal ${cleanMentions(meetTitle).trim() ? "is-writing" : ""}`}>
-                <MeetingWhen date={meetDate} start={meetTime} end={meetEnd}
-                  onDate={setMeetDate} onStart={setMeetTime} onEnd={setMeetEnd} />
-                <div className="mf-kinds" role="radiogroup" aria-label="Type of meeting">
-                  {MEETING_KINDS.map((k) => (
-                    <button key={k.value} type="button" role="radio" aria-checked={meetKind === k.value}
-                      className={meetKind === k.value ? "is-on" : ""} onClick={() => setMeetKind(k.value)}>
-                      {k.icon}<span>{k.label}</span>
+
+            {upNext.length > 0 && (
+              <div className="ah-sec ah-next">
+                <div className="ah-sec-h">
+                  <b>Up next</b>
+                  {overdueCount > 0 && <em className="is-late">{overdueCount} overdue</em>}
+                  {urgentCount > 0 && <em className="is-urgent">{urgentCount} urgent</em>}
+                  {upNextMore > 0 && <button type="button" className="ah-link" onClick={() => setItemsModal("tasks")}>+{upNextMore} more</button>}
+                </div>
+                <div className="ah-list">
+                  {upNext.map((it, i) => (
+                    <div key={it.item.id} className={`ah-it is-${it.k}`} style={{ "--i": i } as CSSProperties}>
+                      {it.k === "task" ? (
+                        <TaskItem task={it.item as TrackTask} people={mentionPeople} overdue={isOverdue(it.item as TrackTask)} onToggle={flipTask} onEdit={editTask} onDelete={removeTask} onOpen={setOpenTaskId}
+                          canDelete={canDelete(it.item as TrackTask)} tagged={<MiniAssignees itemId={it.item.id} compact />} />
+                      ) : (
+                        <MeetingItem meeting={it.item as TrackMeeting} people={mentionPeople} fmtMeet={fmtMeet} onEdit={editMeeting} onKind={setMeetingKind} onDelete={removeMeeting} onOutlook={retryOutlook}
+                          tagged={<MiniAssignees itemId={it.item.id} compact />} />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="ah-sec ah-hist">
+              <div className="ah-sec-h">
+                <b>History</b>
+                <div className="ah-chips" role="tablist" aria-label="Show">
+                  {(["all", "notes", "tasks", "meetings"] as const).map((f) => (
+                    <button key={f} type="button" role="tab" aria-selected={histFilter === f} className={histFilter === f ? "is-on" : ""}
+                      onClick={() => { setHistFilter(f); setHistShown(HIST_STEP); }} disabled={f !== "all" && !histCount[f]}>
+                      {f === "all" ? "All" : f === "notes" ? "Notes" : f === "tasks" ? "Done tasks" : "Past meetings"}
+                      {histCount[f] > 0 && <em>{histCount[f]}</em>}
                     </button>
                   ))}
                 </div>
-                <button className="sl-add-btn sl-meet-schedule" onClick={submitMeeting} disabled={!cleanMentions(meetTitle).trim() || !meetDate || !spanOk(meetTime, meetEnd)}>Schedule</button>
+                {(notes.length + tasks.length + meetings.length) > 0 && (
+                  <button type="button" className="ah-open" onClick={() => setItemsModal(histFilter === "all" ? (notes.length ? "notes" : tasks.length ? "tasks" : "meetings") : histFilter)}
+                    title="Search, sort and filter everything" aria-label="Open the full list">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" /></svg>
+                  </button>
+                )}
               </div>
+              {hist.length === 0 ? (
+                <div className="ah-empty">
+                  <span className="ah-empty-art" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M12 8v4l3 2M3.05 11a9 9 0 1 1 .5 4M3 4v7h7" /></svg>
+                  </span>
+                  <b>{notes.length + tasks.length + meetings.length ? "Nothing here yet" : "The story of this deal starts here"}</b>
+                  <span>Notes, finished tasks and past meetings line up here, newest first.</span>
+                </div>
+              ) : (
+                <div className="ah-feed">
+                  {hist.slice(0, histShown).map((it, i, arr) => {
+                    const day = it.at.slice(0, 10);
+                    const showDay = i === 0 || arr[i - 1].at.slice(0, 10) !== day;
+                    return (
+                      <div key={`${it.k}-${it.item.id}`} className="ah-feed-row">
+                        {showDay && <div className="ah-day"><span>{dayLabel(it.at)}</span></div>}
+                        <div className={`ah-it is-${it.k}`} style={{ "--i": Math.min(i, 8) } as CSSProperties}>
+                          <span className="ah-it-dot" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d={AH_ICON[it.k === "note" ? "notes" : it.k === "task" ? "done" : "meetings"]} /></svg></span>
+                          {it.k === "note" ? (
+                            <NoteItem note={it.item as TrackNote} people={mentionPeople} onEdit={editNote} onDelete={removeNote}
+                              author={(it.item as TrackNote).created_by ? empName((it.item as TrackNote).created_by!) : null}
+                              phase={(it.item as TrackNote).phase_id ? phases.find((p) => p.id === (it.item as TrackNote).phase_id)?.name ?? null : null}
+                              tagged={<MiniAssignees itemId={it.item.id} compact />}>
+                              <AssigneeArea itemId={it.item.id} />
+                            </NoteItem>
+                          ) : it.k === "task" ? (
+                            <TaskItem task={it.item as TrackTask} people={mentionPeople} onToggle={flipTask} onEdit={editTask} onDelete={removeTask} onOpen={setOpenTaskId}
+                              canDelete={canDelete(it.item as TrackTask)} tagged={<MiniAssignees itemId={it.item.id} compact />} />
+                          ) : (
+                            <MeetingItem meeting={it.item as TrackMeeting} people={mentionPeople} fmtMeet={fmtMeet} onEdit={editMeeting} onKind={setMeetingKind} onDelete={removeMeeting} onOutlook={retryOutlook}
+                              tagged={<MiniAssignees itemId={it.item.id} compact />} />
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {hist.length > histShown && (
+                    <button type="button" className="ah-more" onClick={() => setHistShown((n) => n + HIST_STEP)}>
+                      Show {Math.min(HIST_STEP, hist.length - histShown)} more <span>· {hist.length - histShown} left</span>
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
-            {meetSync && (
-              <div className={`sl-ol-status is-${meetSync.state}`} role="status">
-                <span className="sl-ol-ico">{OUTLOOK_ICON}</span>
-                <span className="sl-ol-txt">
-                  {meetSync.state === "syncing" ? "Adding to your Outlook…"
-                    : meetSync.state === "ok" ? <>Added to your Outlook calendar
-                        {meetSync.invited ? ` · ${meetSync.invited} ${meetSync.invited === 1 ? "person" : "people"} invited` : ""}
-                        {meetSync.teams === "yes" ? " · Teams link created" : meetSync.teams === "skipped" ? " · no Teams link (not available on this account)" : ""}.</>
-                    : meetSync.state === "gone" ? <><b>{meetSync.count && meetSync.count > 1 ? `${meetSync.count} meetings were` : "A meeting was"} deleted in Outlook</b> — removed here too.</>
-                    : <><b>Not added to Outlook.</b> {meetSync.msg}</>}
-                </span>
-                {meetSync.state === "err" && <button className="sl-ol-retry" onClick={() => retryOutlook(meetSync.id)}>Try again</button>}
-                {meetSync.state !== "syncing" && <button className="sl-ol-x" onClick={() => setMeetSync(null)} aria-label="Dismiss">×</button>}
-              </div>
-            )}
           </section>
+          </div>
+
+          <div className="sl-col-ctx">
           <DealPeople company={company} contacts={contacts} companyContactIds={companyContactIds}
             dealIds={Array.from(new Set([...trackingContactIds, ...tracking.contactIds]))}
             onChange={async (ids) => {
               setTrackingContactIds(ids); tracking.contactIds = ids;
               await setTrackingContacts(tracking.id, ids).catch(() => {});
             }} />
-          </div>
-
-          <div className="sl-col-right">
-          <section className="sl-panel sl-panel-docs">
-            <TrackingFiles trackingId={tracking.id} phaseId={curPhase} phases={phases} />
-          </section>
 
           <FoldPanel className="sl-prob-panel" title="Close probability" icon={FOLD_ICON.probability} tone="#0a6f4d"
             summary={[
@@ -4220,9 +4350,6 @@ export default function TrackingDetail({ tracking, companies, contacts, products
           </div>
 
           <div className="sl-col-calc">
-          <DealProposals trackingId={tracking.id} groups={proposalGroups} decks={decks} money={money}
-            busy={propBusyId} reloadKey={propsReload} onGenerate={generateProposalFor} onStudio={openStudio} onMain={applyMainLocally} onWon={wonWithProposal} dealWon={status === "won"}
-            phaseId={curPhase} onContractFile={proposalContractFile} />
           <section className={`sl-panel sl-panel-calc sl-fold has-ico ${calcFolded ? "is-folded" : "is-open is-settled"}`}
             style={{ "--fold-tone": "#0a6f4d" } as CSSProperties}>
             <div className="sl-rvh">
@@ -4341,7 +4468,12 @@ export default function TrackingDetail({ tracking, companies, contacts, products
             </div></div>
             {propErr && <p className="sl-rev-err">{propErr}</p>}
           </section>
-
+          <DealProposals trackingId={tracking.id} groups={proposalGroups} decks={decks} money={money}
+            busy={propBusyId} reloadKey={propsReload} onGenerate={generateProposalFor} onStudio={openStudio} onMain={applyMainLocally} onWon={wonWithProposal} dealWon={status === "won"}
+            phaseId={curPhase} onContractFile={proposalContractFile} />
+          <section className="sl-panel sl-panel-docs">
+            <TrackingFiles trackingId={tracking.id} phaseId={curPhase} phases={phases} />
+          </section>
           </div>
         </div>
       </div>
@@ -4771,6 +4903,16 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     </div>
   );
 }
+/* ---- The activity card ---- */
+const COMPOSERS = ["notes", "tasks", "meetings"] as const;
+const HIST_STEP = 8;
+const AH_ICON: Record<string, string> = {
+  notes: "M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z",
+  tasks: "M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11",
+  meetings: "M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z",
+  done: "M20 6 9 17l-5-5",
+};
+
 // ============================ Note item (expand/collapse + inline edit) ============================
 /**
  * While a note / task is being edited: put the cursor in its first field, and

@@ -58,6 +58,14 @@ export default function CompaniesPage() {
   const [loaded, setLoaded] = useState(false);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [editing, setEditing] = useState<Company | null>(null);
+
+  /** From any Actions menu: …?new=1 opens the form for a new one straight away. */
+  useEffect(() => {
+    const q = new URLSearchParams(location.search || window.location.search);
+    if (q.get("new") !== "1") return;
+    setEditing(empty());
+    window.history.replaceState(window.history.state, "", window.location.pathname + window.location.hash);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [q, setQ] = useState("");
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -634,7 +642,6 @@ export default function CompaniesPage() {
     return (
       <div className="co">
         <header className="co-head">
-          <button className="co-back" onClick={() => navigate("/home")} aria-label="Back">‹</button>
           <h1 className="co-title">Companies</h1>
         </header>
         <p className="cl-hint">This page is only available to the sales team.</p>
@@ -645,18 +652,17 @@ export default function CompaniesPage() {
   return (
     <div className="co">
       <header className="co-head">
-        <button className="co-back" onClick={() => navigate("/home")} aria-label="Back">‹</button>
         <h1 className="co-title">Companies</h1>
-        <span className="co-kpi"><b>{listLen.toLocaleString("en-GB")}</b>{listLen !== allLen ? `of ${allLen.toLocaleString("en-GB")} ` : ""}{allLen === 1 ? "company" : "companies"}</span>
         <div className="co-search">
-          <span className="co-search-ico">⌕</span>
+          <span className="co-search-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg></span>
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, VAT, address…" />
-          {q && <button onClick={() => setQ("")}>×</button>}
+          {q && <button onClick={() => setQ("")} aria-label="Clear search">×</button>}
         </div>
         <FilterBar fields={filterFields} view={view} onView={setView} total={allLen} shown={listLen} noun={["company", "companies"]}
           saved={savedViews} onSaved={setSavedViews} openSignal={filtersOpenTick} />
+        <span className="co-kpi"><b>{listLen.toLocaleString("en-GB")}</b>{listLen !== allLen ? `of ${allLen.toLocaleString("en-GB")} ` : ""}{allLen === 1 ? "company" : "companies"}</span>
         <ActionsMenu items={[
-          { key: "new", group: "Create", label: "New company", hint: "Add one company by hand", icon: AM_ICON.plus, primary: true, tone: "green", shortcut: "N", onSelect: () => setEditing(empty()) },
+          { key: "new", group: "Create", label: "New company", hint: "Add one company by hand", icon: AM_ICON.plus, primary: true, tone: "violet", shortcut: "N", quick: "company", onSelect: () => setEditing(empty()) },
           { key: "fields", group: "Setup", label: "Columns", hint: "What the list shows, and in which order", icon: AM_ICON.fields, tone: "amber", shortcut: "F", onSelect: () => setShowFieldSettings(true) },
         ]} />
       </header>

@@ -30,7 +30,7 @@ import { applyRolePreview } from "../../framework/SuperAdmin";
 import { PageCube } from "../../framework/AppLayout";
 import { usePageAccess, goToSection, guardedLeave, deptName, type PageKey } from "../../framework/pageAccess";
 import { isSalesLead, globalSearch, type SearchHit } from "../companies/companiesApi";
-import { loadMyInvites, loadMyReplies, markRepliesSeen, acceptInvite, declineInvite, type InviteCard } from "../calendar/invitesApi";
+import { loadMyInvites, loadMyReplies, markRepliesSeen, answerInvite, declineInvite, type InviteCard } from "../calendar/invitesApi";
 import "./HomePage.css";
 
 const greeting = () => {
@@ -705,7 +705,7 @@ function useHomeAlerts(userId: string | null) {
       const wt = watchIds.length ? (((await supabase.from("tracking_tasks").select("id, title, created_by, created_at, done").in("id", watchIds)).data ?? []) as any[]) : [];
       const addedAt = new Map(watch.map((w) => [w.item_id, w.created_at]));
       list = [
-        ...inv.map((i) => ({ id: `inv:${i.id}`, kind: "invite", title: i.title || "A meeting", body: i.message, ref_type: "invite", ref_id: i.id, actor_id: i.organiser_id, at: `${i.entry_date}T${String(Math.floor(i.start_min / 60)).padStart(2, "0")}:${String(i.start_min % 60).padStart(2, "0")}:00`, created_at: i.created_at, seen_at: null, local: true })),
+        ...inv.filter((i, k, all) => !i.series_id || all.findIndex((x) => x.series_id === i.series_id) === k).map((i) => ({ id: `inv:${i.id}`, kind: "invite", title: i.title || "A meeting", body: i.series_id ? [i.message, "Repeats — one answer covers every date"].filter(Boolean).join(" · ") : i.message, ref_type: "invite", ref_id: i.id, actor_id: i.organiser_id, at: `${i.entry_date}T${String(Math.floor(i.start_min / 60)).padStart(2, "0")}:${String(i.start_min % 60).padStart(2, "0")}:00`, created_at: i.created_at, seen_at: null, local: true })),
         ...rep.filter((x) => !x.seen).map((x) => ({ id: `rep:${x.id}`, kind: `invite_${x.status}`, title: x.entry_title || "Your meeting", body: null, ref_type: "reply", ref_id: x.id, actor_id: null, at: `${x.entry_date}T${String(Math.floor(x.start_min / 60)).padStart(2, "0")}:${String(x.start_min % 60).padStart(2, "0")}:00`, created_at: x.responded_at, seen_at: null, local: true, actorName: x.invitee_name } as HomeAlert & { actorName: string })),
         ...(((tk as any).data ?? []) as any[]).filter((t) => t.created_by !== userId && !t.done).map((t) => ({ id: `tk:${t.id}`, kind: "task_assigned", title: t.title || "A task", body: null, ref_type: "task", ref_id: t.id, actor_id: t.created_by, at: null, created_at: t.created_at, seen_at: null, local: true })),
         ...wt.filter((t) => t.created_by !== userId && !t.done).map((t) => ({ id: `tw:${t.id}`, kind: "task_added", title: t.title || "A task", body: null, ref_type: "task", ref_id: t.id, actor_id: t.created_by, at: null, created_at: addedAt.get(t.id) ?? t.created_at, seen_at: null, local: true })),
@@ -774,14 +774,15 @@ function useHomeAlerts(userId: string | null) {
     setBusy(a.id); setErr(null);
     let e: string | null = null;
     if (!userId) return;
-    if (yes) {
-      const card = (await loadMyInvites(userId).catch(() => [] as InviteCard[])).find((i) => i.id === a.ref_id);
-      e = card ? await acceptInvite(card, userId) : "This invitation isn't open any more.";
-    } else e = await declineInvite(a.ref_id);
+    // on a repeating booking, one answer covers every date
+    const card = (await loadMyInvites(userId).catch(() => [] as InviteCard[])).find((i) => i.id === a.ref_id);
+    if (card) e = await answerInvite(card, userId, yes);
+    else e = yes ? "This invitation isn't open any more." : await declineInvite(a.ref_id);
     setBusy(null);
     if (e) { setErr(e); return; }
     setInviteState((s) => ({ ...s, [a.ref_id!]: yes ? "accepted" : "declined" }));
     await markSeen([a.id]);
+    if (card?.series_id) void load();
   };
   const open = (a: HomeAlert) => {
     void markSeen([a.id]);

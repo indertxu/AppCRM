@@ -1598,3 +1598,78 @@ button.co-cc-main { padding: 0; border: 0; background: none; font: inherit; text
 .mrg-note { flex: 1; min-width: 0; font-size: 12.5px; line-height: 1.4; color: #5f7f71; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .mrg-note.is-err { color: #c43d3d; font-weight: 600; white-space: normal; }
 @media (max-width: 640px) { .mrg-row { grid-template-columns: 1fr 1fr; } .mrg-label { grid-column: 1 / -1; } .mrg-note { display: none; } }
+
+/* ===================================================================
+   Companies & Contacts: a slim dark-green header card, like Deals —
+   title · search · filters & views on the left, count + Actions right.
+   =================================================================== */
+.co, .ct { padding-top: 14px !important; }
+:is(.co-head, .ct-head) {
+  --on2: rgba(238, 248, 242, 0.66); --glass: rgba(255, 255, 255, 0.07); --glass-line: rgba(255, 255, 255, 0.12);
+  position: relative; isolation: isolate; overflow: visible; gap: 10px; margin: 0 0 16px; padding: 10px 12px 10px 22px; min-height: 62px; box-sizing: border-box;
+  border-radius: 20px; color: #eef8f2;
+  background:
+    radial-gradient(40% 120% at 8% 0%, rgba(18, 148, 102, 0.55), transparent 70%),
+    radial-gradient(36% 120% at 92% 0%, rgba(26, 143, 134, 0.42), transparent 70%),
+    linear-gradient(105deg, #0e4a36 0%, #0a3527 45%, #072419 100%);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05) inset, 0 1px 0 rgba(255, 255, 255, 0.08) inset, 0 22px 44px -30px rgba(4, 30, 20, 0.85), 0 8px 18px -12px rgba(4, 30, 20, 0.35);
+  animation: hd-in 0.6s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+:is(.co-head, .ct-head)::after {
+  content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none;
+  background: radial-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1.2px) 0 0 / 22px 22px,
+    linear-gradient(100deg, transparent 42%, rgba(201, 242, 221, 0.07) 50%, transparent 58%) 100% 0 / 260% 100%;
+  animation: hd-sheen 9s ease-in-out infinite;
+}
+@keyframes hd-in { from { opacity: 0; transform: translateY(-8px) scale(0.99); } }
+@keyframes hd-sheen { 50% { background-position: 0 0, 0% 0; } }
+:is(.co-head, .ct-head) :is(.co-title, .ct-title) {
+  margin: 0 6px 0 0; font-family: "Inter", system-ui, sans-serif; font-size: 22px; font-weight: 750; letter-spacing: -0.02em; white-space: nowrap;
+  background: linear-gradient(90deg, #fff 0%, #fff 40%, #c9f2dd 50%, #fff 60%, #fff 100%) 0 0 / 300% 100%;
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: hd-title 7s ease-in-out infinite;
+}
+@keyframes hd-title { 0%, 100% { background-position: 100% 0; } 50% { background-position: 0% 0; } }
+/* search: glass, flexible */
+:is(.co-head, .ct-head) :is(.co-search, .ct-search) { margin-left: 0; flex: 1 1 260px; min-width: 150px; max-width: 400px; }
+:is(.co-head, .ct-head) :is(.co-search-ico, .ct-search-ico) { left: 13px; display: grid; place-items: center; color: var(--on2); transition: color 0.2s; }
+:is(.co-head, .ct-head) :is(.co-search-ico, .ct-search-ico) svg { width: 15px; height: 15px; }
+:is(.co-head, .ct-head) :is(.co-search, .ct-search) input {
+  width: 100%; height: 40px; box-sizing: border-box; padding: 0 34px 0 38px; border-radius: 12px;
+  border: 1px solid var(--glass-line); background: var(--glass); color: #fff; font: 500 13.5px "Inter", system-ui, sans-serif;
+  transition: background 0.2s, border-color 0.2s, box-shadow 0.25s;
+}
+:is(.co-head, .ct-head) :is(.co-search, .ct-search) input::placeholder { color: var(--on2); }
+:is(.co-head, .ct-head) :is(.co-search, .ct-search) input:hover { background: rgba(255, 255, 255, 0.1); }
+:is(.co-head, .ct-head) :is(.co-search, .ct-search) input:focus { background: rgba(255, 255, 255, 0.13); border-color: rgba(111, 227, 180, 0.55); box-shadow: 0 0 0 3px rgba(111, 227, 180, 0.14); }
+:is(.co-head, .ct-head) :is(.co-search, .ct-search):focus-within :is(.co-search-ico, .ct-search-ico) { color: #6fe3b4; }
+:is(.co-head, .ct-head) :is(.co-search, .ct-search) button {
+  right: 7px; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border-radius: 7px;
+  background: rgba(255, 255, 255, 0.1); color: #fff; font-size: 15px; line-height: 1;
+}
+:is(.co-head, .ct-head) :is(.co-search, .ct-search) button:hover { background: rgba(255, 255, 255, 0.2); }
+/* filters & views: glass buttons */
+:is(.co-head, .ct-head, .cl-bar) .fx-btn { height: 40px; border-radius: 12px; border-color: var(--glass-line); background: var(--glass); color: #fff; }
+:is(.co-head, .ct-head, .cl-bar) .fx-btn svg { color: #6fe3b4; }
+:is(.co-head, .ct-head, .cl-bar) .fx-btn:hover { background: rgba(255, 255, 255, 0.12); border-color: rgba(111, 227, 180, 0.4); box-shadow: 0 12px 26px -16px rgba(0, 0, 0, 0.6); }
+:is(.co-head, .ct-head, .cl-bar) .fx-btn.is-open { border-color: rgba(111, 227, 180, 0.7); box-shadow: 0 0 0 3px rgba(111, 227, 180, 0.16); }
+:is(.co-head, .ct-head, .cl-bar) .fx-btn.is-active { background: linear-gradient(140deg, #1fb98a, #12936b); border-color: transparent; color: #fff; box-shadow: 0 10px 24px -14px rgba(31, 185, 138, 0.9); }
+:is(.co-head, .ct-head, .cl-bar) .fx-btn.is-active svg { color: #eafff5; }
+:is(.co-head, .ct-head, .cl-bar) .fx-btn b { background: #fff; color: #0a6f4d; }
+:is(.co-head, .ct-head, .cl-bar) .fx-btn em { background: rgba(255, 255, 255, 0.14); color: #fff; }
+/* the count: a glass pill pushed right */
+:is(.co-head, .ct-head) :is(.co-kpi, .ct-kpi) {
+  margin-left: auto; white-space: nowrap; padding: 7px 13px; background: rgba(255, 255, 255, 0.06); border-color: var(--glass-line); color: var(--on2);
+}
+:is(.co-head, .ct-head) :is(.co-kpi, .ct-kpi) b { color: #fff; }
+/* Actions: the mint button of Deals */
+:is(.co-head, .ct-head, .cl-bar) .am-btn {
+  height: 40px; padding: 0 14px; border-radius: 12px; border: 0;
+  background: linear-gradient(120deg, #c9f2dd, #1fb98a); color: #072419;
+  box-shadow: 0 12px 28px -12px rgba(31, 185, 138, 0.9), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+:is(.co-head, .ct-head, .cl-bar) .am-btn:hover { box-shadow: 0 16px 32px -12px rgba(31, 185, 138, 1), inset 0 1px 0 rgba(255, 255, 255, 0.55); }
+@media (max-width: 1280px) { :is(.co-head, .ct-head) :is(.co-search, .ct-search) { flex-basis: 200px; } :is(.co-head, .ct-head) .fx-btn { padding: 0 11px; } }
+@media (max-width: 1100px) { :is(.co-head, .ct-head) :is(.co-kpi, .ct-kpi) { display: none; } :is(.co-head, .ct-head) .am-btn { margin-left: auto; } }
+@media (prefers-reduced-motion: reduce) { :is(.co-head, .ct-head), :is(.co-head, .ct-head)::after, :is(.co-head, .ct-head) :is(.co-title, .ct-title) { animation: none; } }
+.co-scroll, .ct-scroll { overscroll-behavior: contain; }

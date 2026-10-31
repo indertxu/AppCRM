@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useNavigate } from "react-router-dom";
 import "./ActionsMenu.css";
 
 export interface ActionItem {
@@ -16,7 +17,20 @@ export interface ActionItem {
   shortcut?: string;
   /** Colour of the icon tile. */
   tone?: "green" | "blue" | "amber" | "violet" | "slate";
+  /** This page's own way to make a deal / contact / company: it takes that slot in "Quick create". */
+  quick?: QuickKind;
 }
+export type QuickKind = "deal" | "contact" | "company";
+
+/** Every Actions menu starts with these: a new deal, contact or company from anywhere. */
+const QUICK: { kind: QuickKind; label: string; hint: string; shortcut: string; tone: ActionItem["tone"]; path: string; icon: ReactNode }[] = [
+  { kind: "deal", label: "New deal", hint: "Open a deal with a company or contact", shortcut: "D", tone: "green", path: "/sales?new=1",
+    icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 17l6-6 4 4 8-8M15 7h6v6" /></svg> },
+  { kind: "contact", label: "New contact", hint: "Add a person", shortcut: "P", tone: "blue", path: "/contacts?new=1",
+    icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M15 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M8.5 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M19 8v6M22 11h-6" /></svg> },
+  { kind: "company", label: "New company", hint: "Add an account or a prospect", shortcut: "O", tone: "violet", path: "/companies?new=1",
+    icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 21h18M5 21V5a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v16M16 9h3a2 2 0 0 1 2 2v10M9 7h3M9 11h3M9 15h3" /></svg> },
+];
 
 /**
  * One header button that holds the page's actions (new record, import, export,
@@ -24,7 +38,20 @@ export interface ActionItem {
  * follows the arrow keys and each item's shortcut key, and a highlight slides
  * to whichever item you point at.
  */
-export default function ActionsMenu({ items, label = "Actions" }: { items: ActionItem[]; label?: string }) {
+export default function ActionsMenu({ items: pageItems, label = "Actions", quick = true }: {
+  items: ActionItem[]; label?: string;
+  /** Show the "Quick create" group (new deal / contact / company) on top. On by default everywhere. */
+  quick?: boolean;
+}) {
+  const navigate = useNavigate();
+  // "Quick create" first (the page's own creator takes its slot), then the page's own actions as they were
+  const items: ActionItem[] = quick ? [
+    ...QUICK.map((q) => {
+      const own = pageItems.find((i) => i.quick === q.kind);
+      return own ? { ...own, group: "Quick create" } : { key: `q-${q.kind}`, group: "Quick create", label: q.label, hint: q.hint, icon: q.icon, tone: q.tone, shortcut: q.shortcut, onSelect: () => navigate(q.path) };
+    }),
+    ...pageItems.filter((i) => !i.quick),
+  ] : pageItems;
   const [open, setOpen] = useState(false);
   const [closing, setClosing] = useState(false);
   const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
@@ -88,11 +115,13 @@ export default function ActionsMenu({ items, label = "Actions" }: { items: Actio
 
   return (
     <>
-      <button ref={btnRef} type="button" className={`am-btn ${open ? "is-open" : ""}`} onClick={() => (open ? close() : setOpen(true))} aria-haspopup="menu" aria-expanded={open}>
-        <span className="am-btn-grid" aria-hidden="true"><i /><i /><i /><i /></span>
-        {label}
-        <svg className="am-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
-      </button>
+      {/* compact: just the icon; pointing at it (or opening it) slides the label out to the left, over its neighbours */}
+      <span className={`am-wrap ${open ? "is-open" : ""}`}>
+        <button ref={btnRef} type="button" className={`am-btn ${open ? "is-open" : ""}`} onClick={() => (open ? close() : setOpen(true))} aria-haspopup="menu" aria-expanded={open} aria-label={label} title={label}>
+          <span className="am-btn-grid" aria-hidden="true"><i /><i /><i /><i /></span>
+          <span className="am-btn-l" aria-hidden="true">{label}</span>
+        </button>
+      </span>
       {open && pos && createPortal(
         <div ref={menuRef} className={`am-menu ${closing ? "is-closing" : ""}`} role="menu" style={{ top: pos.top, right: pos.right }} onMouseDown={(e) => e.stopPropagation()}>
           {hi && <span className="am-hi" style={{ transform: `translateY(${hi.top}px)`, height: hi.height }} aria-hidden="true" />}

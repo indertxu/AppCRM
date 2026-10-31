@@ -64,6 +64,14 @@ export default function ContactsPage() {
   const [loaded, setLoaded] = useState(false);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [editing, setEditing] = useState<Contact | null>(null);
+
+  /** From any Actions menu: …?new=1 opens the form for a new one straight away. */
+  useEffect(() => {
+    const q = new URLSearchParams(location.search || window.location.search);
+    if (q.get("new") !== "1") return;
+    setEditing(empty());
+    window.history.replaceState(window.history.state, "", window.location.pathname + window.location.hash);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [q, setQ] = useState("");
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [assignees, setAssignees] = useState<Record<string, string[]>>({});
@@ -686,7 +694,6 @@ export default function ContactsPage() {
     return (
       <div className="ct">
         <header className="ct-head">
-          <button className="ct-back" onClick={() => navigate("/home")} aria-label="Back">‹</button>
           <h1 className="ct-title">Contacts</h1>
         </header>
         <p className="cl-hint">This page is only available to the sales team.</p>
@@ -697,22 +704,21 @@ export default function ContactsPage() {
   return (
     <div className="ct">
       <header className="ct-head">
-        <button className="ct-back" onClick={() => navigate("/home")} aria-label="Back">‹</button>
         <h1 className="ct-title">Contacts</h1>
+        <div className="ct-search">
+          <span className="ct-search-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg></span>
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, position, company or city…" />
+          {q && <button onClick={() => setQ("")} aria-label="Clear search">×</button>}
+        </div>
+        <FilterBar fields={filterFields} view={view} onView={setView} total={server ? srvAll ?? srv.total : visible.length} shown={listLen} noun={["contact", "contacts"]}
+          saved={savedViews} onSaved={setSavedViews} openSignal={filtersOpenTick} />
         {server
           ? <span className="ct-kpi"><b>{srv.total.toLocaleString("en-GB")}</b>{srvAll != null && srv.total !== srvAll ? `of ${srvAll.toLocaleString("en-GB")} ` : ""}{(srvAll ?? srv.total) === 1 ? "contact" : "contacts"}</span>
           : !loaded && preview
           ? <span className="ct-kpi"><b>{preview.total.toLocaleString("en-GB")}</b>{preview.total === 1 ? "contact" : "contacts"}</span>
           : <span className="ct-kpi"><b>{shown.length.toLocaleString("en-GB")}</b>{shown.length !== visible.length ? `of ${visible.length.toLocaleString("en-GB")} ` : ""}{visible.length === 1 ? "contact" : "contacts"}</span>}
-        <div className="ct-search">
-          <span className="ct-search-ico">⌕</span>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, position, company or city…" />
-          {q && <button onClick={() => setQ("")}>×</button>}
-        </div>
-        <FilterBar fields={filterFields} view={view} onView={setView} total={server ? srvAll ?? srv.total : visible.length} shown={listLen} noun={["contact", "contacts"]}
-          saved={savedViews} onSaved={setSavedViews} openSignal={filtersOpenTick} />
         <ActionsMenu items={[
-          { key: "new", group: "Create", label: "New contact", hint: "Add one person by hand", icon: AM_ICON.plus, primary: true, tone: "green", shortcut: "N", onSelect: () => setEditing(empty()) },
+          { key: "new", group: "Create", label: "New contact", hint: "Add one person by hand", icon: AM_ICON.plus, primary: true, tone: "blue", shortcut: "N", quick: "contact", onSelect: () => setEditing(empty()) },
           { key: "linkedin", group: "Data", label: "Save from LinkedIn", hint: "Browser extension: add people & companies from LinkedIn", icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-4 0v7h-4v-7a6 6 0 0 1 6-6zM2 9h4v12H2zM4 6a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" /></svg>, tone: "blue", shortcut: "L", onSelect: () => setLinkedInOpen(true) },
           { key: "fields", group: "Setup", label: "Columns", hint: "What the list shows, and in which order", icon: AM_ICON.fields, tone: "amber", shortcut: "F", onSelect: () => setShowFieldSettings(true) },
         ]} />
