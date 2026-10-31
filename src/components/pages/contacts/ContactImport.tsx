@@ -268,7 +268,7 @@ interface Ctx { companies: Company[]; contacts: Contact[]; coFields: CompanyFiel
 
 /** "Ana, pedro@acme.es; Luis" → the team members it names, and what it couldn't place. */
 function peopleFrom(ctx: Ctx, values: string[]): { ids: string[]; unknown: string[] } {
-  const team = ctx.employees ?? [];
+  const team = (ctx.employees ?? []).filter((e) => !e.former);
   const ids: string[] = [], unknown: string[] = [];
   values.flatMap((v) => v.split(/[,;|/\n]|\s+y\s+|\s+and\s+/i)).map((x) => x.trim()).filter(Boolean).forEach((x) => {
     const n = normHeader(x), mail = x.toLowerCase();
@@ -1825,7 +1825,7 @@ export default function ContactImport({ fields: initialFields, onClose, onDone, 
                       <div className="rv-opt is-people">
                         <div><b>Who can see what this import brings</b><span>{[...Object.values(st.maps.contact), ...Object.values(st.maps.company)].some((x) => x === "contact.visible_to" || x === "company.visible_to") ? "On top of the people the “who can see it” column names." : "Everyone you pick here gets access to every contact and company it creates or updates. Map a column to “Who can see it” to set it row by row."}</span></div>
                         <SalesMultiFilter values={st.visibleAll} onChange={(v) => patch({ visibleAll: v })} placeholder="Only boss & sales managers" noun="people" searchFrom={7}
-                          options={employees.map((e) => ({ value: e.id, label: e.name }))} />
+                          options={employees.filter((e) => !e.former).map((e) => ({ value: e.id, label: e.name }))} />
                       </div>
                     </div>
                   )}

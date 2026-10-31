@@ -4,6 +4,7 @@ import type { Client, Project, ProjectType } from "../clients/ClientsPage";
 import Select from "../../framework/Select";
 import DatePicker from "../../framework/DatePicker";
 import { supabase } from "../../api/supabase";
+import { loadInactiveIds } from "../../framework/peopleStatus";
 import { busyAt } from "./invitesApi";
 import { useAuth } from "../../api/AuthProvider";
 import { loadRoles } from "../settings/blueprintsApi";
@@ -315,10 +316,10 @@ const closeDate = `${when.getFullYear()}-${String(when.getMonth() + 1).padStart(
   useEffect(() => {
     supabase.auth.getUser().then(({ data: u }) => {
       const me = u?.user?.id ?? "";
-      supabase.from("profiles").select("id, first_name, last_name, username, email, role")
-        .then(({ data }) => {
+      Promise.all([supabase.from("profiles").select("id, first_name, last_name, username, email, role"), loadInactiveIds().catch(() => new Set<string>())])
+        .then(([{ data }, former]) => {
           setMates((data ?? [])
-            .filter((x: any) => x.id !== me)
+            .filter((x: any) => x.id !== me && !former.has(x.id))
             .map((x: any) => ({
               id: x.id,
               name: [x.first_name, x.last_name].filter(Boolean).join(" ") || x.username || x.email || "Unnamed",

@@ -200,7 +200,7 @@ export default function CompaniesPage() {
 
   // ---- Every field the list can be filtered and sorted by ----
   const emp = (id?: string | null) => employees.find((e) => e.id === id)?.name ?? "";
-  const people = () => employees.map((e) => ({ value: e.id, label: e.name }));
+  const people = () => employees.filter((e) => !e.former).map((e) => ({ value: e.id, label: e.name }));
   const valuesOf = (get: (c: Company) => unknown, facet?: "city" | "province" | "country") => () =>
     [...new Set(server && facet ? (facets?.[facet] ?? []).map((v) => String(v).trim()).filter(Boolean) : companies.map((c) => String(get(c) ?? "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)).map((v) => ({ value: v, label: facet === "country" ? countryLabel(v) : v }));
   // built once per load (they were rebuilt on every render, and the people of each row were found by scanning every contact)
@@ -371,7 +371,7 @@ export default function CompaniesPage() {
   const bulkActions: BulkAction[] = [
     {
       key: "assign", label: "Assign to", icon: BI("M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2 21a7 7 0 0 1 14 0M19 8v6M16 11h6"),
-      options: employees.map((e) => ({ value: e.id, label: e.name, hint: e.role?.replace(/_/g, " ") })),
+      options: employees.filter((e) => !e.former).map((e) => ({ value: e.id, label: e.name, hint: e.role?.replace(/_/g, " ") })),
       disabledReason: lead ? undefined : "Only boss and sales managers can assign companies.",
       run: async (v) => {
         if (!v) return null;
@@ -1551,9 +1551,9 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
                 {who.length === 0 && (
                   <p className="dw-empty-hint">Only boss and sales managers can see it. Add people to widen access.</p>
                 )}
-                {employees.filter((e) => !who.includes(e.id)).length > 0 && (
+                {employees.filter((e) => !e.former && !who.includes(e.id)).length > 0 && (
                   <Select value="" onChange={(v) => v && setWho((xs) => [...xs, v])} placeholder="+ Give access to"
-                    options={employees.filter((e) => !who.includes(e.id)).map((e) => ({ value: e.id, label: e.name }))} />
+                    options={employees.filter((e) => !e.former && !who.includes(e.id)).map((e) => ({ value: e.id, label: e.name }))} />
                 )}
               </section>
             )}
@@ -2337,6 +2337,7 @@ const DW_ICON: Record<string, string> = {
   spark: "M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5L18 18M18 6l-2.5 2.5M8.5 15.5L6 18",
   asterisk: "M12 4v16M5.1 8l13.8 8M5.1 16l13.8-8",
   dot: "M12 12h.01",
+  eye: "M3 12s4-6 9-6 9 6 9 6-4 6-9 6-9-6-9-6zM12 14.6a2.6 2.6 0 1 0 0-5.2 2.6 2.6 0 0 0 0 5.2z",
 };
 function DwIcon({ name }: { name: string }) {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={DW_ICON[name] ?? ""} /></svg>;

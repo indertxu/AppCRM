@@ -9,7 +9,7 @@ import Organization from "./Organization";
 import CatalogPage from "./CatalogPage";
 import PipelinePage from "./PipelinePage";
 import { ProposalSettings } from "./ProposalTemplateEditor";
-import PageAccessModal, { useSecuritySection, PanelAccess } from "./PageAccessModal";
+import PageAccessModal, { useSecuritySection, PanelAccess, CalendarVisibility } from "./PageAccessModal";
 import Select from "../../framework/Select";
 import TaskSettings from "./TaskSettings";
 import { FolderTemplatesEditor } from "../clients/ClientDirectory";
@@ -649,7 +649,8 @@ function CalendarPageSettings({ onBack }: { onBack: () => void }) {
     { k: "holidays", label: "Public holidays", icon: "star", tone: "rose" as const, title: "Public holidays", hint: "Days off for everyone: nobody is expected to work them", body: <PublicHolidays /> },
     { k: "hours", label: "Working hours", icon: "clock", tone: "blue" as const, title: "Working hours", hint: "The company's week, and where a department or a person differs", body: <div className="cws-hours-embed"><HoursEditor /></div> },
     { k: "cutoffs", label: "Billing cutoffs", icon: "euro", tone: "violet" as const, title: "Billing cutoffs", hint: "The day each billing month closes", body: <CutoffsEditor /> },
-    ...(sec ? [{ ...sec, hint: "Whose calendars and logged time people see" }] : []),
+    ...(sec ? [{ k: "visibility", label: "Who sees whom", icon: "eye", tone: "blue" as const, title: "Who sees whose calendar", hint: "Whose calendars people can open, and whether they read the entries or only see busy times",
+      body: <CalendarVisibility /> }] : []),
     ...(sec ? [{ k: "access", label: "Who can set it up", icon: "lock", tone: "slate" as const, title: "Who can open these settings", hint: "The people who approve time off and set holidays, hours and cutoffs",
       body: <PanelAccess panelKey="settings.calendar" what="Settings › Calendar" /> }] : []),
   ];

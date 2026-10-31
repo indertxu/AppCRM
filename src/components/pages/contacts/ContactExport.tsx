@@ -36,7 +36,7 @@ const fmtN = (n: number) => n.toLocaleString("es-ES");
 /** Everything around contacts and companies that conditions can look at (deals, owners, fields…). Used by the exports and Marketing. */
 export type ExportExtra = {
   pipelines: Record<string, string>; phases: Record<string, { name: string; pipeline: string }>; products: Record<string, string>;
-  companyFields: CompanyField[]; dealFields: TrackingField[]; rel: RelationshipSets | null; people: Record<string, string>;
+  companyFields: CompanyField[]; dealFields: TrackingField[]; rel: RelationshipSets | null; people: Record<string, string>; former?: string[];
   contactAssignees: Record<string, string[]>; companyAssignees: Record<string, string[]>;
   owners: Record<string, string>; team: Record<string, string[]>; dealProducts: Record<string, string[]>;
   dealTotals: Record<string, number>; phaseHistory: Record<string, string[]>;
@@ -73,6 +73,7 @@ export async function loadExportWorld(): Promise<{ trackings: Tracking[]; extra:
       products: Object.fromEntries((pr as any[]).map((p) => [p.id, p.name])),
       companyFields: cf as CompanyField[], dealFields: df as TrackingField[], rel: rs,
       people,
+      former: (emp as any[]).filter((e) => e.former).map((e) => e.id),
       imports: Object.fromEntries((ib as any[]).map((b) => [b.id, batchLabel(b, people)])),
       contactAssignees: ca as Record<string, string[]>, companyAssignees: coa as Record<string, string[]>,
       owners: own as Record<string, string>, team: tm as Record<string, string[]>,
@@ -178,7 +179,7 @@ export default function ContactExport({ contacts, companies, contactFields, show
   /* ---- the catalogue: every column, custom field and relationship, discovered from the data ---- */
   const fields = useMemo<XF[]>(() => (extra ? buildCatalog({
     contacts, companies, deals: trackings, contactFields: contactFields as any, companyFields: extra.companyFields as any, dealFields: extra.dealFields as any,
-    people: extra.people, pipelines: extra.pipelines, phases: extra.phases, products: extra.products,
+    people: extra.people, former: extra.former, pipelines: extra.pipelines, phases: extra.phases, products: extra.products,
     clientCompanyIds: extra.rel?.clientCompanyIds ?? new Set(), clientContactIds: extra.rel?.clientContactIds ?? new Set(),
     contactAssignees: extra.contactAssignees, companyAssignees: extra.companyAssignees, owners: extra.owners, team: extra.team,
     dealProducts: extra.dealProducts, dealTotals: extra.dealTotals, phaseHistory: extra.phaseHistory, dealsByCompany, shownIds, imports: extra.imports, root,
@@ -871,7 +872,7 @@ function useMkEngine(w: MkWorld | null) {
     const x = w.extra;
     const catalog = (root: Root) => buildCatalog({
       contacts: w.contacts, companies: w.companies, deals: w.trackings, contactFields: w.contactFields as any, companyFields: x.companyFields as any, dealFields: x.dealFields as any,
-      people: x.people, pipelines: x.pipelines, phases: x.phases, products: x.products,
+      people: x.people, former: x.former, pipelines: x.pipelines, phases: x.phases, products: x.products,
       clientCompanyIds: x.rel?.clientCompanyIds ?? new Set(), clientContactIds: x.rel?.clientContactIds ?? new Set(),
       contactAssignees: x.contactAssignees, companyAssignees: x.companyAssignees, owners: x.owners, team: x.team,
       dealProducts: x.dealProducts, dealTotals: x.dealTotals, phaseHistory: x.phaseHistory, dealsByCompany, imports: x.imports, root,

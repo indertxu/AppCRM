@@ -43,6 +43,7 @@ import { outlookMailStatus, syncTicketMail, sendOutlookMail, connectOutlook, fet
 import { loadPrefs, savePref } from "../../companies/companiesApi";
 import MentionInput, { MentionText, mentionsToPlain, type MentionPerson } from "../../../framework/MentionInput";
 import { ClientLogo } from "../../clients/ClientWorkspace";
+import { loadInactiveIds } from "../../../framework/peopleStatus";
 import "./HomeShared.css";
 
 type Tab = "quick" | "process" | "delegated" | "done";
@@ -1271,7 +1272,7 @@ function toTicket(r: any, watchers: string[]): Ticket {
 }
 
 /* ---- who / what everything links to (shared with the global search) ---- */
-export interface DirPerson { id: string; name: string; email: string; department: string | null; role: string | null }
+export interface DirPerson { id: string; name: string; email: string; department: string | null; role: string | null; /** Laid off: keeps their name on old work, never offered. */ former?: boolean }
 export interface Directory {
   me: string | null; myDept: string | null;
   people: DirPerson[];
@@ -1299,18 +1300,19 @@ export function loadDirectory(fresh = false): Promise<Directory> {
     // they are never downloaded whole (only the ones in use, and what you search for)
     const remote = await globalSearchReady();
     const none = Promise.resolve([] as any[]);
-    const [profs, clients, companies, deals, projects, contacts] = await Promise.all([
+    const [profs, clients, companies, deals, projects, contacts, former] = await Promise.all([
       safe(allRows(() => supabase.from("profiles").select("id, first_name, last_name, email, department, role"))),
       safe(allRows(() => supabase.from("clients").select("id, name"))),
       remote ? none : safe(allRows(() => supabase.from("companies").select("id, name, legal_name"))),
       remote ? none : safe(allRows(() => supabase.from("trackings").select("id, deal_name, company_id, status"))),
       safe(allRows(() => supabase.from("projects").select("id, name, client_id"))),
       remote ? none : safe(allRows(() => supabase.from("contacts").select("id, first_name, last_name, email, job_title"))),
+      loadInactiveIds().catch(() => new Set<string>()),
     ]);
     const coName = new Map<string, string>(companies.map((c: any) => [c.id, c.name]));
     const people: DirPerson[] = profs.map((p: any) => ({
       id: p.id, name: [p.first_name, p.last_name].filter(Boolean).join(" ") || (p.email ?? "").split("@")[0] || "Someone",
-      email: p.email ?? "", department: p.department ?? null, role: p.role ?? null,
+      email: p.email ?? "", department: p.department ?? null, role: p.role ?? null, former: former.has(p.id),
     }));
     return {
       me, myDept: people.find((p) => p.id === me)?.department ?? null,
@@ -1868,7 +1870,7 @@ function PeopleMenu({ dir, value, onPick, allowNone = true, first, firstLabel = 
 }) {
   const [q, setQ] = useState("");
   const f = fold(q);
-  const list = dir.people.filter((p) => !f || fold(p.name).includes(f) || fold(p.email).includes(f));
+  const list = dir.people.filter((p) => !p.former && (!f || fold(p.name).includes(f) || fold(p.email).includes(f)));
   const mine = dir.people.find((p) => p.id === dir.me);
   const firstSet = new Set(first ?? []);
   const top = first?.length ? list.filter((p) => firstSet.has(p.id)) : [];
@@ -2144,7 +2146,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
   const [cd, setCd] = useState(blankCompose);
   const [cPop, setCPop] = useState<{ k: "owner" | "people"; rect: DOMRect } | null>(null);
   const composeRef = useRef<HTMLDivElement>(null);
-  const mentionPeople: MentionPerson[] = useMemo(() => (dir?.people ?? []).map((p) => ({ id: `employee:${p.id}`, name: p.name, kind: "employee" as const })), [dir]);
+  const mentionPeople: MentionPerson[] = useMemo(() => (dir?.people ?? []).filter((p) => !p.former).map((p) => ({ id: `employee:${p.id}`, name: p.name, kind: "employee" as const })), [dir]);
   const openCompose = () => { if (composing) return; setCd(blankCompose()); setComposing(true); };
   const closeCompose = () => { setComposing(false); setCPop(null); setDraft(""); setDraftPrio("normal"); setCd(blankCompose()); };
   const quickAdd = async () => {
@@ -3237,7 +3239,7 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
   /** Who can be @mentioned: the people on it first, then everyone. */
   const onTask = [t.assignee, ...t.watchers].filter(Boolean) as string[];
   const mentionPeople: MentionPerson[] = useMemo(() => {
-    const order = [...new Set([...onTask, ...dir.people.map((p) => p.id)])];
+    const order = [...new Set([...onTask, ...dir.people.filter((p) => !p.former).map((p) => p.id)])];
     return order.map((id) => dir.people.find((p) => p.id === id)).filter((p): p is DirPerson => !!p)
       .map((p) => ({ id: `employee:${p.id}`, name: p.name, kind: "employee" as const }));
   }, [dir, onTask.join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -4309,7 +4311,7 @@ function RuleEditor({ rule, dir, types, tickets, boxes, inbox, onSave, onCancel,
           <div className="tr-grid">
             <div className="tr-f"><span>Type</span><Select value={r.set.type ?? ""} onChange={(v) => setS({ type: v || null })} options={[{ value: "", label: "No type" }, ...types.map((x) => ({ value: x, label: x }))]} /></div>
             <div className="tr-f"><span>Priority</span><Select value={r.set.priority ?? ""} onChange={(v) => setS({ priority: (v || null) as TaskPriority | null })} options={[{ value: "", label: "Normal" }, ...TASK_PRIORITIES.map((p) => ({ value: p, label: PRIORITY_LABEL[p] }))]} /></div>
-            <div className="tr-f"><span>Owner</span><Select searchable value={r.set.assignee_id ?? ""} onChange={(v) => setS({ assignee_id: v || null })} options={opt(dir.people, personal ? "Me" : "Unassigned")} /></div>
+            <div className="tr-f"><span>Owner</span><Select searchable value={r.set.assignee_id ?? ""} onChange={(v) => setS({ assignee_id: v || null })} options={opt(dir.people.filter((p) => !p.former), personal ? "Me" : "Unassigned")} /></div>
             <div className="tr-f"><span>Team</span><Select value={r.set.team ?? ""} onChange={(v) => setS({ team: v || null })} options={[{ value: "", label: "Any team" }, ...departments.map((d) => ({ value: d, label: deptName(d) }))]} /></div>
             <div className="tr-f"><span>Client</span><Select searchable value={r.set.client_id ?? ""} onChange={(v) => setS({ client_id: v || null })} options={opt(dir.clients, "From the sender")} /></div>
             <label><span>Tags</span><input className="td-in" value={(r.set.tags ?? []).join(", ")} placeholder="support, acme" onChange={(e) => setS({ tags: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} /></label>

@@ -14,6 +14,7 @@ import { pagedAll } from "../../companies/companiesApi";
 import { periodForDate, periodOf, type Cutoffs } from "../../calendar/billingPeriods";
 import { loadRoles } from "../../settings/blueprintsApi";
 import { roleLinesOfRow, resolveRoleKey, legacyRoleMap, roleKeyOf, roleCounts, rateOn, lineRate } from "../../clients/clientsTypes";
+import { loadInactiveIds } from "../../../framework/peopleStatus";
 import "./ManagementHome.css";
 
 const eur = (n: number) => Math.round(n).toLocaleString("en-US");
@@ -216,7 +217,8 @@ function TeamBonusWidget() {
 
       // sum invoiced this bonus-month, then apply the average min pct as a proxy
       const invoiced = (inv ?? []).reduce((s: number, r: any) => s + (Number(r.amount) || 0), 0);
-      const consultants = (prof ?? []).filter((p: any) => p.role === "consultant");
+      const former = await loadInactiveIds().catch(() => new Set<string>());
+      const consultants = (prof ?? []).filter((p: any) => p.role === "consultant" && !former.has(p.id));
       const avgPct = consultants.length
         ? consultants.reduce((s: number, p: any) => s + (Number(capById[p.id]?.bonus_pct_1) || 3), 0) / consultants.length
         : 3;

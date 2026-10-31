@@ -294,3 +294,43 @@
 .pxa-msg.is-err { color: #b8452f; }
 .pxa-skel { height: 200px; border-radius: 14px; background: #f1f6f3; }
 @media (max-width: 760px) { .pxa-row { grid-template-columns: minmax(0, 1fr); gap: 8px; } }
+
+/* ===== Settings › Calendar › Who sees whose calendar ===== */
+.cvv { --pa-ink: #0b241a; --pa-muted: #5a7d6d; --pa-line: rgba(10, 111, 77, 0.12); --pa-forest: #0a6f4d; --pa-jade: #12b57f; display: flex; flex-direction: column; gap: 14px; font-family: "Inter", system-ui, sans-serif; }
+.cvv .pa2-warn { margin: 0; }
+.cvv-cols { display: grid; grid-template-columns: minmax(0, 1fr) 236px 236px 28px; gap: 10px; padding: 0 12px 0 14px; margin-bottom: -8px; font-size: 10.5px; font-weight: 750; letter-spacing: 0.1em; text-transform: uppercase; color: var(--pa-muted); }
+.cvv-cols span:first-child { grid-column: 1; }
+.cvv-row {
+  --c: #0a6f4d;
+  position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) 236px 236px 28px; align-items: center; gap: 10px;
+  padding: 9px 12px 9px 14px; border-radius: 14px; background: #fff; border: 1px solid var(--pa-line);
+  animation: psec-rise 0.35s cubic-bezier(0.16, 1, 0.3, 1) both; animation-delay: calc(var(--i, 0) * 25ms); transition: border-color 0.2s;
+}
+.cvv-row:hover { border-color: color-mix(in srgb, var(--c) 40%, transparent); }
+.cvv-row.is-set { border-color: color-mix(in srgb, var(--c) 45%, transparent); background: linear-gradient(90deg, color-mix(in srgb, var(--c) 7%, #fff), #fff 50%); }
+.cvv-row.is-all { border: 1.5px solid rgba(18, 181, 127, 0.45); box-shadow: 0 0 0 4px rgba(18, 181, 127, 0.08); }
+.cvv-row:not(:has(.psec-x)) { grid-template-columns: auto minmax(0, 1fr) 236px 236px 28px; }
+.cvv-row > .psec-x { grid-column: 5; }
+.cvv-pick { min-width: 0; }
+.cvv-ico { flex: none; width: 30px; height: 30px; display: grid; place-items: center; border-radius: 10px; background: #e8f3ee; color: var(--pa-forest); }
+.cvv-ico svg { width: 15px; height: 15px; }
+.cvv-ico.is-mgr { background: #fdf1dc; color: #8a5a10; }
+.cvv-row .psec-dot { margin: 0 9px; }
+.cvv-probe { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border-radius: 16px; background: linear-gradient(150deg, #f3f9f6, #eef6f2); border: 1px dashed rgba(10, 111, 77, 0.22); }
+.cvv-probe-h { display: flex; align-items: center; gap: 12px; }
+.cvv-probe-h b { font-size: 11px; font-weight: 750; letter-spacing: 0.1em; text-transform: uppercase; color: var(--pa-muted); }
+.cvv-probe-pick { width: 280px; }
+.cvv-probe-r p { margin: 0 0 8px; font-size: 13px; color: var(--pa-ink); }
+.cvv-avs { display: flex; flex-wrap: wrap; gap: 5px; }
+.cvv-avs i {
+  font-style: normal; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; font: 700 10px "Space Grotesk", sans-serif; color: #04120d;
+  background: #fff; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--c) 60%, #fff);
+}
+.cvv-avs i.is-reads { background: linear-gradient(150deg, color-mix(in srgb, var(--c) 30%, #fff), color-mix(in srgb, var(--c) 75%, #fff)); box-shadow: none; }
+.cvv-avs em { font-style: normal; align-self: center; font-size: 12px; font-weight: 700; color: var(--pa-muted); }
+@media (max-width: 1180px) {
+  .cvv-cols { display: none; }
+  .cvv-row { grid-template-columns: auto minmax(0, 1fr) 28px; }
+  .cvv-row .cvv-pick { grid-column: 1 / -1; }
+  .cvv-row > .psec-x { grid-column: 3; grid-row: 1; }
+}

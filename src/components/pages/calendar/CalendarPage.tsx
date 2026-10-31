@@ -21,7 +21,7 @@ import { createPortal } from "react-dom";
 import { TicketDesk } from "../homepage/shared/HomeTodo";
 import { PageCover } from "../../framework/AppLayout";
 import "./CalendarPage.css";
-import { useNavSection } from "../../framework/pageAccess";
+import { useNavSection, loadCalendarView, calendarViewFor, canSeeCalendar, levelBase, EMPTY_CAL_VIEW } from "../../framework/pageAccess";
 
 /** Fallback window, used until the configured hours arrive. */
 const DEFAULT_START = 8 * 60;
@@ -517,6 +517,9 @@ const [targets, setTargets] = useState<Targets>({ perDay: 1, minPerDay: 0.5, min
    *  week never carries more than four sets of bars. */
   const [alsoView, setAlsoView] = useState<string[]>([]);
   const [people, setPeople] = useState<{ id: string; name: string; role: string; department: string }[]>([]);
+  /** The calendars I may lay over mine (Settings › Calendar › Who sees whom); `people` keeps everyone, for names. */
+  const [openable, setOpenable] = useState<Set<string>>(new Set());
+  const pickable = useMemo(() => people.filter((p) => p.id === myId || openable.has(p.id)), [people, openable, myId]);
   /** Whether this person reads other calendars in full or only as busy blocks. */
   const [canSeeDetail, setCanSeeDetail] = useState(false);
   const [detailDept, setDetailDept] = useState<string | null>(null);
@@ -711,22 +714,23 @@ const [targets, setTargets] = useState<Targets>({ perDay: 1, minPerDay: 0.5, min
   useEffect(() => {
     if (!myId) return;
     (async () => {
-      const { data: me } = await supabase.from("profiles")
-        .select("role, department, is_superadmin").eq("id", myId).maybeSingle();
-      const r = (me as any)?.role ?? role;
-      const boss = (me as any)?.is_superadmin === true || r === "boss";
-      const manager = ["consultancy_manager", "sales_manager", "customer_success_manager"].includes(r);
-      // Everyone can look someone up; what changes is how much they see. A
-      // manager or boss reads the entries, everyone else just gets the busy
-      // blocks, which is enough to find a free slot.
-      setCanSeeDetail(boss || manager);
+      const [{ data: me }, view] = await Promise.all([
+        supabase.from("profiles").select("*").eq("id", myId).maybeSingle(),
+        loadCalendarView().catch(() => ({ rules: { ...EMPTY_CAL_VIEW }, missing: true })),
+      ]);
+      const r = String((me as any)?.security_level ?? (me as any)?.role ?? role ?? "").toLowerCase();
+      const boss = (me as any)?.is_superadmin === true || (me as any)?.role === "boss" || levelBase(r) === "boss";
+      const myDept = (me as any)?.department ?? null;
+      // Settings › Calendar › Who sees whom: whose calendars I can lay over mine, and whether I read
+      // their entries or only see when they're busy (not set: anyone's, busy times; managers read their department).
+      const rule = calendarViewFor(view.rules, { userId: myId, department: myDept, role: r, isFull: boss });
+      setCanSeeDetail(rule.detail !== "busy");
+      setDetailDept(rule.detail === "department" ? myDept : null);
 
-      const { data } = await supabase.from("profiles")
-        .select("id, first_name, last_name, username, email, role, department");
-      let rows = (data ?? []) as any[];
-      // A manager reads their own department in full; anyone can see the rest
-      // as busy blocks, so the list is never cut.
-      if (manager && !boss) setDetailDept((me as any)?.department ?? null);
+      const { data } = await supabase.from("profiles").select("*");
+      const rows = (data ?? []) as any[];
+      setOpenable(new Set(rows.filter((x) => x.active !== false && canSeeCalendar(rule, { userId: myId, department: myDept },
+        { id: x.id, department: x.department ?? null, role: String(x.security_level ?? x.role ?? "").toLowerCase() })).map((x) => x.id)));
       setPeople(rows.map((x) => ({
         id: x.id,
         name: [x.first_name, x.last_name].filter(Boolean).join(" ") || x.username || x.email || "Unnamed",
@@ -1687,7 +1691,7 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
         </div>
 
         <div className="cv-r">
-          {people.length > 1 && (
+          {pickable.length > 1 && (
             <div className="cal-who" ref={whoRef}>
               <button type="button" className={`cal-who-btn ${whoOpen ? "is-open" : ""}`}
                 onClick={() => setWhoOpen((v) => !v)} aria-expanded={whoOpen}>
@@ -1708,7 +1712,7 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
               {whoOpen && (
                 <div className="cal-who-pop" role="listbox" aria-multiselectable="true">
                   <p className="cal-who-hint">Lay up to three colleagues over your week</p>
-                  {people.map((pp, i) => {
+                  {pickable.map((pp, i) => {
                     const on = seenIds.includes(pp.id);
                     const full = !on && alsoView.length >= 3 && pp.id !== myId;
                     return (

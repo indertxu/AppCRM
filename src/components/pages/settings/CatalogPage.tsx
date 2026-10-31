@@ -18,6 +18,7 @@ import { listCrmOptions, addCrmOption, deleteCrmOption, productKindOptions, type
 import "../clients/ClientsPage.css";
 import "./CatalogPage.css";
 import { useNavSection } from "../../framework/pageAccess";
+import { useInactiveIds } from "../../framework/peopleStatus";
 
 interface Props { onBack: () => void; }
 
@@ -2098,6 +2099,7 @@ function BlueprintsTab({ onChanged }: { onChanged: () => void }) {
   const [blueprints, setBlueprints] = useState<Blueprint[]>([]);
   const [roles, setRoles] = useState<ClientRole[]>([]);
   const [users, setUsers] = useState<{ id: string; name: string }[]>([]);
+  const inactive = useInactiveIds(); // laid-off people aren't offered for a role
   const [sub, setSub] = useState<"blueprints" | "roles" | "worktypes">("blueprints");
 
   /**
@@ -2229,7 +2231,7 @@ function BlueprintsTab({ onChanged }: { onChanged: () => void }) {
                 </button>
               );
             }
-            const unassigned = users.filter((u) => !role.userIds.includes(u.id));
+            const unassigned = users.filter((u) => !role.userIds.includes(u.id) && !inactive.has(u.id));
             return (
               <div className="cs-bp" key={role.id}>
                 <button className="cs-bp-bar" onClick={() => setOpenRoleId(null)}><span>{role.name || "Untitled role"}</span><Chevron dir="up" /></button>

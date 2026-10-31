@@ -7,6 +7,7 @@ import Select from "../../framework/Select";
 import { CountryPicker } from "../companies/CompaniesPage";
 import { supabase } from "../../api/supabase";
 import "./ClientsPage.css";
+import { useInactiveIds } from "../../framework/peopleStatus";
 
 const uid = () => crypto.randomUUID();
 const emptyAddr = { street: "", number: "", details: "", postalCode: "", city: "", country: "" };
@@ -259,6 +260,8 @@ export default function NewClientForm({ onSave, onClose, roles = [], projectType
   const [team, setTeam] = useState<TeamMember[]>(project?.team ?? []);
   const [editMember, setEditMember] = useState<string | null>(null);
   const [people, setPeople] = useState<{ id: string; name: string }[]>([]);
+  /** Laid-off people (Settings → Organization) aren't offered for a team. */
+  const inactive = useInactiveIds();
 
   useEffect(() => {
     supabase.functions.invoke("manage-users", { body: { action: "list" } }).then(({ data }) => {
@@ -805,6 +808,7 @@ export default function NewClientForm({ onSave, onClose, roles = [], projectType
                           }
                           const role = roles.find((r) => r.id === m.role);
                           const opts = (role?.userIds ?? [])
+                            .filter((id) => !inactive.has(id) || id === m.userId)
                             .map((id) => people.find((p) => p.id === id))
                             .filter((p): p is { id: string; name: string } => Boolean(p))
                             .map((p) => ({ value: p.id, label: p.name }));

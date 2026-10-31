@@ -3,9 +3,12 @@ import {
   useState,
   useEffect,
   useCallback,
+  useLayoutEffect,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
 } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase, setRememberMe, takeReturnTo } from "../api/supabase";
@@ -23,6 +26,56 @@ export const JUST_SIGNED_IN_KEY = "next:just-signed-in";
  */
 let launchHold = 0;
 export const loginLaunching = () => launchHold > 0 && Date.now() - launchHold < 15000;
+
+/**
+ * Forgot password.
+ * The email link (Supabase "Reset password" template) lands on RESET_PATH with the
+ * recovery tokens in the URL; supabase-js turns them into a session a moment later
+ * and wipes them, so the address the app was opened at is kept here.
+ */
+export const RESET_PATH = "/reset-password";
+const BOOT_PARAMS = (() => {
+  try {
+    const u = new URL(window.location.href);
+    const p = new URLSearchParams(u.hash.replace(/^#/, ""));
+    u.searchParams.forEach((v, k) => { if (!p.has(k)) p.set(k, v); });
+    return p;
+  } catch { return new URLSearchParams(); }
+})();
+/**
+ * The email template links to our own domain (RESET_PATH?token_hash=…&type=recovery), not to
+ * supabase.co: spam filters trust it, and a mail scanner that opens the link can't burn the
+ * one-time token (it's only spent when the page runs). Verified once, even under StrictMode.
+ */
+let otpOnce: Promise<boolean> | null = null;
+const verifyRecoveryToken = () => {
+  const token_hash = BOOT_PARAMS.get("token_hash");
+  if (!token_hash || BOOT_PARAMS.get("type") !== "recovery") return null;
+  otpOnce ??= supabase.auth.verifyOtp({ token_hash, type: "recovery" }).then(({ error }) => {
+    try { window.history.replaceState(window.history.state, "", RESET_PATH); } catch { /* ignore */ }
+    return !error;
+  }, () => false);
+  return otpOnce;
+};
+/** an expired, already used or broken email link */
+const bootLinkBroken = () => BOOT_PARAMS.get("error_code") === "otp_expired" || /email link/i.test(BOOT_PARAMS.get("error_description") ?? "");
+/** the app was opened from a reset email (good or expired link): it belongs on the reset page */
+export const openedFromRecovery = () => BOOT_PARAMS.get("type") === "recovery" || bootLinkBroken();
+/** set by the auth provider when a deactivated (laid-off) account gets signed out */
+export const DEACTIVATED_KEY = "np-deactivated";
+export const DEACTIVATED_EVENT = "np:deactivated";
+const DEACTIVATED_MSG = "This account has been deactivated. Ask your administrator.";
+const MIN_PW = 8;
+const emailOk = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim());
+type View = "signin" | "forgot" | "sent" | "checking" | "reset" | "expired" | "blocked";
+
+const IC_SEND = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M21 3 10.5 13.5" /><path d="M21 3 14.5 21l-4-7.5L3 9.5z" /></svg>;
+const IC_ARROW = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>;
+const IC_MAIL = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path pathLength={1} d="M20 12.5V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h7.5" /><path pathLength={1} d="m3.5 7 8.5 6 8.5-6" /><path pathLength={1} d="m15.5 18 2.2 2.2L22 16" /></svg>;
+const IC_CLOCK = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="8.5" /><path d="M12 7.5V12l3 2" /></svg>;
+const IC_LOCK = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="4.5" y="10" width="15" height="10.5" rx="2.5" /><path d="M8 10V7.5a4 4 0 0 1 8 0V10" /><path d="M12 14v2.5" /></svg>;
+const IC_KEY = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="15" r="4" /><path d="m10.8 12.2 8.7-8.7M16.5 6.5l2.5 2.5M14.5 8.5l2 2" /></svg>;
+const IC_AGAIN = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7" /><path d="M20 4.5V11h-6.5" /></svg>;
 
 interface Ripple { id: number; x: number; y: number }
 
@@ -471,7 +524,7 @@ function Letters({ text, from = 0 }: { text: string; from?: number }) {
   );
 }
 
-export default function LoginPage() {
+export default function LoginPage({ mode = "signin" }: { mode?: "signin" | "reset" }) {
   const navigate = useNavigate();
   const sceneRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLElement>(null);
@@ -508,6 +561,14 @@ export default function LoginPage() {
   const [activeChip, setActiveChip] = useState<number | null>(null);
   const [cubeHot, setCubeHot] = useState(false);
   const [spinKey, setSpinKey] = useState(0);
+  // which face of the card: sign in, the forgot-password steps, or the new-password form
+  const [view, setView] = useState<View>(mode === "reset" ? "checking" : "signin");
+  const [swapped, setSwapped] = useState(false);
+  const [password2, setPassword2] = useState("");
+  const [cooldown, setCooldown] = useState(0);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const bodyIn = useRef<HTMLDivElement>(null);
+  const swapFrom = useRef<number | null>(null);
   // still on screen (the launch navigates only from here)
   const onScreen = useRef(true);
   useEffect(() => { onScreen.current = true; return () => { onScreen.current = false; }; }, []);
@@ -647,31 +708,81 @@ export default function LoginPage() {
     try { setCaps(e.getModifierState("CapsLock")); } catch { /* ignore */ }
   };
 
-  const onSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (loading || launching) return;
+  const fail = (msg: string) => {
+    setError(msg);
+    setShaking(true);
+    window.setTimeout(() => setShaking(false), 560);
+  };
+
+  /** switch the card to another step: the content fades up and the card eases to its new height */
+  const go = (v: View) => {
+    try { sessionStorage.removeItem(DEACTIVATED_KEY); } catch { /* ignore */ }
+    swapFrom.current = bodyIn.current?.offsetHeight ?? null;
+    setSwapped(true);
     setError(null);
-    setLoading(true);
-    launchHold = Date.now();
+    setShaking(false);
+    setView(v);
+  };
+  useLayoutEffect(() => {
+    const wrap = bodyRef.current, inner = bodyIn.current, from = swapFrom.current;
+    swapFrom.current = null;
+    if (!wrap || !inner || from == null || reducedMotion()) return;
+    const to = inner.offsetHeight;
+    if (Math.abs(to - from) < 2) return;
+    wrap.style.height = `${from}px`;
+    wrap.style.overflow = "hidden";
+    void wrap.offsetHeight;
+    wrap.style.transition = "height 0.44s cubic-bezier(0.22, 1, 0.36, 1)";
+    wrap.style.height = `${to}px`;
+    const t = window.setTimeout(() => { wrap.style.height = ""; wrap.style.overflow = ""; wrap.style.transition = ""; }, 460);
+    return () => { window.clearTimeout(t); wrap.style.height = ""; wrap.style.overflow = ""; wrap.style.transition = ""; };
+  }, [view]);
 
-    // Persist the session only if "Keep me signed in" is checked
-    setRememberMe(remember);
+  // "Send again" waits a minute (Supabase allows one email a minute per address)
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const t = window.setTimeout(() => setCooldown((c) => c - 1), 1000);
+    return () => window.clearTimeout(t);
+  }, [cooldown]);
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email: username, // using the username field as email for now
-      password,
-    });
+  // a deactivated account that got signed out: say why
+  useEffect(() => {
+    // the note stays until the next attempt: if it arrives mid-launch, the sign-in page you land back on still shows it
+    const show = () => setError(DEACTIVATED_MSG);
+    let pending = false;
+    try { pending = !!sessionStorage.getItem(DEACTIVATED_KEY); } catch { /* ignore */ }
+    if (pending) queueMicrotask(show);
+    window.addEventListener(DEACTIVATED_EVENT, show);
+    return () => window.removeEventListener(DEACTIVATED_EVENT, show);
+  }, []);
 
-    setLoading(false);
+  // the reset page: is the email link good (a recovery session), expired, or for a deactivated account?
+  useEffect(() => {
+    if (mode !== "reset") return;
+    let alive = true;
+    const to = (v: View) => { if (alive) go(v); };
+    (async () => {
+      if (bootLinkBroken()) return to("expired");
+      const viaToken = verifyRecoveryToken();
+      if (viaToken && !(await viaToken)) return to("expired");
+      const { data: { session } } = await supabase.auth.getSession();
+      const user = session?.user;
+      if (!user) return to("expired");
+      const { data: prof } = await supabase.from("profiles").select("active").eq("id", user.id).maybeSingle();
+      if (!alive) return;
+      if ((prof as { active?: boolean | null } | null)?.active === false) {
+        await supabase.auth.signOut();
+        return to("blocked");
+      }
+      setUsername(user.email ?? "");
+      to("reset");
+    })();
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
 
-    if (error) {
-      launchHold = 0;
-      setError("Wrong email or password. Try again.");
-      setShaking(true);
-      window.setTimeout(() => setShaking(false), 560);
-      return;
-    }
-
+  /** Signed in (or a new password saved): fold the card, fly the cube, go to the app. */
+  const launch = async () => {
     // Home plays its arrival sequence (set now, before anything else can mount it)
     try { sessionStorage.setItem(JUST_SIGNED_IN_KEY, String(Date.now())); } catch { /* ignore */ }
 
@@ -703,6 +814,202 @@ export default function LoginPage() {
     launchHold = 0;
     if (onScreen.current) navigate(to, { replace: true });
   };
+
+  const onSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (loading || launching) return;
+    setError(null);
+    try { sessionStorage.removeItem(DEACTIVATED_KEY); } catch { /* ignore */ }
+    setLoading(true);
+    launchHold = Date.now();
+
+    // Persist the session only if "Keep me signed in" is checked
+    setRememberMe(remember);
+
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: username, // using the username field as email for now
+      password,
+    });
+
+    if (error) {
+      setLoading(false);
+      launchHold = 0;
+      fail("Wrong email or password. Try again.");
+      return;
+    }
+
+    // laid off: the account still exists (their name stays on past work) but can't sign in
+    const uid = data?.user?.id ?? data?.session?.user?.id;
+    if (uid) {
+      const { data: prof } = await supabase.from("profiles").select("active").eq("id", uid).maybeSingle();
+      if ((prof as { active?: boolean | null } | null)?.active === false) {
+        await supabase.auth.signOut();
+        setLoading(false);
+        launchHold = 0;
+        fail(DEACTIVATED_MSG);
+        return;
+      }
+    }
+    setLoading(false);
+    await launch();
+  };
+
+  /** Forgot password: email a link that opens RESET_PATH. Says the same whether the address exists or not. */
+  const sendReset = async (e?: FormEvent) => {
+    e?.preventDefault();
+    if (loading || cooldown > 0) return;
+    setError(null);
+    const email = username.trim();
+    if (!emailOk(email)) { fail("Enter the email you sign in with."); return; }
+    setLoading(true);
+    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${window.location.origin}${RESET_PATH}` });
+    setLoading(false);
+    if (error) {
+      const busy = error.status === 429 || /rate limit|security purposes|seconds/i.test(error.message ?? "");
+      fail(busy ? "Too many requests. Wait a minute and try again." : "We couldn't send the email right now. Try again in a moment.");
+      return;
+    }
+    setUsername(email);
+    setCooldown(60);
+    if (view !== "sent") go("sent");
+  };
+
+  /** the reset page: save the new password, then straight into the app */
+  const saveNewPassword = async (e: FormEvent) => {
+    e.preventDefault();
+    if (loading || launching) return;
+    setError(null);
+    if (password.length < MIN_PW) { fail(`Use at least ${MIN_PW} characters.`); return; }
+    if (password !== password2) { fail("The two passwords don't match."); return; }
+    setLoading(true);
+    launchHold = Date.now();
+    const { error } = await supabase.auth.updateUser({ password });
+    setLoading(false);
+    if (error) {
+      launchHold = 0;
+      const code = (error as { code?: string }).code;
+      fail(
+        code === "same_password" ? "That's your current password. Choose a different one."
+          : code === "weak_password" ? (error.message || "That password is too weak. Try a longer one.")
+            : /session|expired|jwt/i.test(error.message ?? "") ? "This link has expired. Request a new one."
+              : "Couldn't save the password. Try again.",
+      );
+      return;
+    }
+    await launch();
+  };
+
+  /** back to the sign-in card (from the reset page: drop the link's session first) */
+  const backToSignIn = (e: ReactMouseEvent) => {
+    e.preventDefault();
+    if (mode === "reset") {
+      setPassword(""); setPassword2("");
+      void supabase.auth.signOut().finally(() => navigate("/login", { replace: true }));
+      return;
+    }
+    setPassword("");
+    go("signin");
+  };
+
+  const pwLong = password.length >= MIN_PW;
+  const pwMatch = password2.length > 0 && password === password2;
+
+  const emailField = (
+    <div className="np-field">
+      <span className="np-field-ico" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="18" height="14" rx="3" /><path d="m4 7 8 6 8-6" /></svg>
+      </span>
+      <input
+        id="np-username"
+        className="np-input"
+        type={view === "forgot" ? "email" : "text"}
+        autoComplete="username"
+        placeholder=" "
+        value={username}
+        onChange={(e) => setUsername(e.target.value)}
+        autoFocus={swapped && view === "forgot"}
+        required
+      />
+      <label htmlFor="np-username" className="np-label">Email</label>
+      <span className="np-field-line" aria-hidden="true" />
+    </div>
+  );
+
+  const passwordField = (id: string, label: string, value: string, set: (v: string) => void, auto: string, reveal: boolean, focus = false) => (
+    <div className="np-field">
+      <span className="np-field-ico" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="4.5" y="10" width="15" height="10.5" rx="2.5" /><path d="M8 10V7.5a4 4 0 0 1 8 0V10" /></svg>
+      </span>
+      <input
+        id={id}
+        className="np-input"
+        type={showPassword ? "text" : "password"}
+        autoComplete={auto}
+        placeholder=" "
+        value={value}
+        onChange={(e) => set(e.target.value)}
+        onKeyDown={watchCaps}
+        onKeyUp={watchCaps}
+        onBlur={() => setCaps(false)}
+        autoFocus={focus}
+        required
+      />
+      <label htmlFor={id} className="np-label">{label}</label>
+      {reveal && (
+        <button
+          type="button"
+          className={`np-reveal ${showPassword ? "is-on" : ""}`}
+          onClick={() => setShowPassword((s) => !s)}
+          aria-label={showPassword ? "Hide password" : "Show password"}
+          aria-pressed={showPassword}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" />
+            <circle cx="12" cy="12" r="3" />
+            <path className="np-reveal-slash" d="M4 4l16 16" />
+          </svg>
+        </button>
+      )}
+      <span className="np-field-line" aria-hidden="true" />
+    </div>
+  );
+
+  const capsNote = (
+    <p className={`np-caps ${caps ? "is-on" : ""}`} role="status" aria-live="polite">
+      {caps && (
+        <><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4 4 12h4v5h8v-5h4z" /><path d="M8 20h8" /></svg>Caps Lock is on</>
+      )}
+    </p>
+  );
+
+  const errorBox = (
+    <div className={`np-error-wrap ${error ? "is-on" : ""}`} aria-live="assertive">
+      <div className="np-error-in">
+        {error && (
+          <p className="np-error" role="alert">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="9" /><path d="M12 7.5v5.5M12 16.5h.01" /></svg>
+            {error}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+
+  const submit = (label: string, busy: string, done: string, icon: ReactNode, type: "submit" | "button" = "submit", onClick?: () => void) => (
+    <button type={type} onClick={onClick} className={`np-submit ${loading ? "is-loading" : ""} ${launching ? "is-done" : ""}`} disabled={loading || launching}>
+      <span className="np-submit-label">{loading ? busy : launching ? done : label}</span>
+      <span className="np-submit-ico" aria-hidden="true">
+        {launching ? (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path className="np-check-draw" d="M5 12.5l4.5 4.5L19 7.5" pathLength={1} /></svg>
+        ) : loading ? <span className="np-spin" /> : icon}
+      </span>
+      <span className="np-submit-sheen" aria-hidden="true" />
+    </button>
+  );
+
+  const backFoot = (lead: string) => (
+    <p className="np-foot">{lead} <a className="np-link" href="#signin" onClick={backToSignIn}>Back to sign in</a></p>
+  );
 
   return (
     <div className={`np-scene ${launching ? "is-launching" : ""}`} ref={sceneRef} onPointerDown={spawnRipple}>
@@ -805,104 +1112,116 @@ export default function LoginPage() {
               </div>
             </div>
 
-            <p className="np-lede">Welcome back. Sign in to your workspace.</p>
-
-            <form className="np-form" onSubmit={onSubmit}>
-              <div className="np-field">
-                <span className="np-field-ico" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="18" height="14" rx="3" /><path d="m4 7 8 6 8-6" /></svg>
-                </span>
-                <input
-                  id="np-username"
-                  className="np-input"
-                  type="text"
-                  autoComplete="username"
-                  placeholder=" "
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  required
-                />
-                <label htmlFor="np-username" className="np-label">Email</label>
-                <span className="np-field-line" aria-hidden="true" />
-              </div>
-
-              <div className="np-field">
-                <span className="np-field-ico" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="4.5" y="10" width="15" height="10.5" rx="2.5" /><path d="M8 10V7.5a4 4 0 0 1 8 0V10" /></svg>
-                </span>
-                <input
-                  id="np-password"
-                  className="np-input"
-                  type={showPassword ? "text" : "password"}
-                  autoComplete="current-password"
-                  placeholder=" "
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  onKeyDown={watchCaps}
-                  onKeyUp={watchCaps}
-                  onBlur={() => setCaps(false)}
-                  required
-                />
-                <label htmlFor="np-password" className="np-label">Password</label>
-                <button
-                  type="button"
-                  className={`np-reveal ${showPassword ? "is-on" : ""}`}
-                  onClick={() => setShowPassword((s) => !s)}
-                  aria-label={showPassword ? "Hide password" : "Show password"}
-                  aria-pressed={showPassword}
-                >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" />
-                    <circle cx="12" cy="12" r="3" />
-                    <path className="np-reveal-slash" d="M4 4l16 16" />
-                  </svg>
-                </button>
-                <span className="np-field-line" aria-hidden="true" />
-              </div>
-              <p className={`np-caps ${caps ? "is-on" : ""}`} role="status" aria-live="polite">
-                {caps && (
-                  <><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4 4 12h4v5h8v-5h4z" /><path d="M8 20h8" /></svg>Caps Lock is on</>
-                )}
-              </p>
-
-              <div className="np-row">
-                <label className="np-check">
-                  <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
-                  <span className="np-toggle" aria-hidden="true"><i /></span>
-                  <span>Keep me signed in</span>
-                </label>
-                <a className="np-link" href="#forgot">Forgot password?</a>
-              </div>
-
-              <div className={`np-error-wrap ${error ? "is-on" : ""}`} aria-live="assertive">
-                <div className="np-error-in">
-                  {error && (
-                    <p className="np-error" role="alert">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="9" /><path d="M12 7.5v5.5M12 16.5h.01" /></svg>
-                      {error}
+            <div className="np-body" ref={bodyRef}>
+              <div key={view} ref={bodyIn} className={`np-body-in ${swapped ? "is-swapped" : ""}`}>
+                {view === "signin" && (
+                  <>
+                    <p className="np-lede">Welcome back. Sign in to your workspace.</p>
+                    <form className="np-form" onSubmit={onSubmit}>
+                      {emailField}
+                      {passwordField("np-password", "Password", password, setPassword, "current-password", true)}
+                      {capsNote}
+                      <div className="np-row">
+                        <label className="np-check">
+                          <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+                          <span className="np-toggle" aria-hidden="true"><i /></span>
+                          <span>Keep me signed in</span>
+                        </label>
+                        <a className="np-link" href="#forgot" onClick={(e) => { e.preventDefault(); go("forgot"); }}>Forgot password?</a>
+                      </div>
+                      {errorBox}
+                      {submit("Sign in", "Signing in…", "Welcome", IC_ARROW)}
+                    </form>
+                    <p className="np-foot">
+                      New here? <a className="np-link" href="#signup">Create an account</a>
                     </p>
-                  )}
-                </div>
+                  </>
+                )}
+
+                {view === "forgot" && (
+                  <>
+                    <p className="np-lede">Forgot your password? Enter the email you sign in with and we'll send you a link to choose a new one.</p>
+                    <form className="np-form" onSubmit={sendReset} noValidate>
+                      {emailField}
+                      {errorBox}
+                      {submit("Send reset link", "Sending…", "Sent", IC_SEND)}
+                    </form>
+                    {backFoot("Remembered it?")}
+                  </>
+                )}
+
+                {view === "sent" && (
+                  <>
+                    <div className="np-notice">
+                      <span className="np-notice-ico is-ok is-draw" aria-hidden="true">{IC_MAIL}</span>
+                      <h2 className="np-notice-title">Check your inbox</h2>
+                      <p className="np-notice-txt">If <b>{username.trim()}</b> has an account, a link to set a new password is on its way. It works once and expires in an hour.</p>
+                    </div>
+                    <div className="np-form">
+                      <p className="np-hint">Nothing yet? Check your spam folder, or send it again.</p>
+                      {errorBox}
+                      <button type="button" className="np-ghost" onClick={() => void sendReset()} disabled={loading || cooldown > 0}>
+                        {loading ? <span className="np-spin is-light" /> : IC_AGAIN}
+                        <span>{loading ? "Sending…" : cooldown > 0 ? `Send again in ${cooldown}s` : "Send again"}</span>
+                      </button>
+                    </div>
+                    {backFoot("")}
+                  </>
+                )}
+
+                {view === "checking" && (
+                  <div className="np-notice is-tall" role="status">
+                    <span className="np-notice-ico" aria-hidden="true"><span className="np-spin is-light is-big" /></span>
+                    <h2 className="np-notice-title">Checking your link…</h2>
+                    <p className="np-notice-txt">One moment.</p>
+                  </div>
+                )}
+
+                {view === "reset" && (
+                  <>
+                    <p className="np-lede">Choose a new password{username ? <> for <b>{username}</b></> : null}.</p>
+                    <form className="np-form" onSubmit={saveNewPassword}>
+                      <input type="text" autoComplete="username" value={username} readOnly hidden />
+                      {passwordField("np-password", "New password", password, setPassword, "new-password", true, true)}
+                      {passwordField("np-password2", "Repeat new password", password2, setPassword2, "new-password", false)}
+                      {capsNote}
+                      <ul className="np-rules" aria-label="Password rules">
+                        <li className={pwLong ? "is-ok" : ""}><i aria-hidden="true" />At least {MIN_PW} characters</li>
+                        <li className={pwMatch ? "is-ok" : ""}><i aria-hidden="true" />Both match</li>
+                      </ul>
+                      {errorBox}
+                      {submit("Save and sign in", "Saving…", "Welcome", IC_KEY)}
+                    </form>
+                    {backFoot("Not you?")}
+                  </>
+                )}
+
+                {view === "expired" && (
+                  <>
+                    <div className="np-notice">
+                      <span className="np-notice-ico is-warn" aria-hidden="true">{IC_CLOCK}</span>
+                      <h2 className="np-notice-title">This link has expired</h2>
+                      <p className="np-notice-txt">Reset links work once and only for an hour. Send yourself a new one.</p>
+                    </div>
+                    <div className="np-form">
+                      {submit("Send a new link", "Sending…", "Sent", IC_ARROW, "button", () => go("forgot"))}
+                    </div>
+                    {backFoot("")}
+                  </>
+                )}
+
+                {view === "blocked" && (
+                  <>
+                    <div className="np-notice">
+                      <span className="np-notice-ico is-warn" aria-hidden="true">{IC_LOCK}</span>
+                      <h2 className="np-notice-title">Account deactivated</h2>
+                      <p className="np-notice-txt">This account has been deactivated, so its password can't be changed. Ask your administrator if this is a mistake.</p>
+                    </div>
+                    {backFoot("")}
+                  </>
+                )}
               </div>
-
-              <button type="submit" className={`np-submit ${loading ? "is-loading" : ""} ${launching ? "is-done" : ""}`} disabled={loading || launching}>
-                <span className="np-submit-label">{loading ? "Signing in…" : launching ? "Welcome" : "Sign in"}</span>
-                <span className="np-submit-ico" aria-hidden="true">
-                  {launching ? (
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path className="np-check-draw" d="M5 12.5l4.5 4.5L19 7.5" pathLength={1} /></svg>
-                  ) : loading ? (
-                    <span className="np-spin" />
-                  ) : (
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-                  )}
-                </span>
-                <span className="np-submit-sheen" aria-hidden="true" />
-              </button>
-            </form>
-
-            <p className="np-foot">
-              New here? <a className="np-link" href="#signup">Create an account</a>
-            </p>
+            </div>
           </main>
         </div>
       </div>

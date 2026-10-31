@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import Select from "../../framework/Select";
 import { supabase } from "../../api/supabase";
+import { useInactiveIds } from "../../framework/peopleStatus";
 import type {
   ProjectType, Blueprint, BlueprintPhase, ClientRole,
 } from "./ClientsPage";
@@ -30,6 +31,7 @@ export default function ClientSettingsModal({
   const [openId, setOpenId] = useState<string | null>(null);
   const [openRoleId, setOpenRoleId] = useState<string | null>(null);
   const [users, setUsers] = useState<{ id: string; name: string }[]>([]);
+  const inactive = useInactiveIds(); // laid-off people aren't offered for a role
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -167,7 +169,7 @@ export default function ClientSettingsModal({
                     </button>
                   );
                 }
-                const unassigned = users.filter((u) => !role.userIds.includes(u.id));
+                const unassigned = users.filter((u) => !role.userIds.includes(u.id) && !inactive.has(u.id));
                 return (
                   <div className="cs-bp" key={role.id}>
                     <button className="cs-bp-bar" onClick={() => setOpenRoleId(null)}>

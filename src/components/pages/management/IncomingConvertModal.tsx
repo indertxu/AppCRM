@@ -12,6 +12,7 @@ import { destFolder, destOptions, type HandoffDoc, type HandoffPackage } from ".
 import { FileIcon, kindOf, prettySize, openTrackingFile } from "../sales/trackings/TrackingFiles";
 import { copyIntoClientFolders } from "../clients/ClientDirectory";
 import "./IncomingConvertModal.css";
+import { useInactiveIds } from "../../framework/peopleStatus";
 
 const uid = () => (globalThis.crypto?.randomUUID?.() ?? String(Math.random()));
 const eur = (n: number) => Math.round(n).toLocaleString("en-US");
@@ -63,6 +64,8 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
   const [blueprints, setBlueprints] = useState<Blueprint[]>([]);
   const [roles, setRoles] = useState<ClientRole[]>([]);
   const [people, setPeople] = useState<{ id: string; name: string }[]>([]);
+  /** Laid-off people (Settings → Organization) aren't offered for a team. */
+  const inactive = useInactiveIds();
   const [clientId, setClientId] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -667,7 +670,7 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
                   <ul className="icm-team">
                     {team.map((m) => {
                       const role = roles.find((r) => r.id === m.role);
-                      const opts = (role?.userIds ?? []).map((uidv) => ({ value: uidv, label: people.find((p) => p.id === uidv)?.name ?? "—" }));
+                      const opts = (role?.userIds ?? []).filter((uidv) => !inactive.has(uidv) || uidv === m.userId).map((uidv) => ({ value: uidv, label: people.find((p) => p.id === uidv)?.name ?? "—" }));
                       const isEditing = editMember === m.id || !m.userId;
                       return (
                         <li className="icm-member" key={m.id}>

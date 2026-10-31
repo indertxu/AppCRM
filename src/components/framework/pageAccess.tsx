@@ -345,6 +345,59 @@ export const PAGE_SCOPES: Partial<Record<PageKey, ScopeDef>> = {
     { all: "Backlog, billing and bonus of everyone", department: "The figures of their department", mine: "Only their own figures" }),
 };
 export const DEFAULT_SCOPE_RULES: ScopeRules = { default: "all", depts: {}, roles: {}, users: {} };
+
+/* ─────────────── Calendar: who sees whose calendar ───────────────
+   Stored with the page scopes (page "calendar_view"). Most specific wins: a person, their security role,
+   their department, then everyone. Bosses and superadmins see every calendar in full. */
+/** all = every calendar · department = their department's · team = their department's except the managers' · own = only theirs */
+export type CalSee = "all" | "department" | "team" | "own";
+/** full = every detail · department = details for their department, busy times for the rest · busy = only busy times */
+export type CalDetail = "full" | "department" | "busy";
+export interface CalViewRule { see: CalSee; detail: CalDetail }
+export interface CalViewRules { everyone: CalViewRule | null; roles: Record<string, CalViewRule>; depts: Record<string, CalViewRule>; users: Record<string, CalViewRule> }
+export const CAL_VIEW_PAGE = "calendar_view";
+export const EMPTY_CAL_VIEW: CalViewRules = { everyone: null, roles: {}, depts: {}, users: {} };
+/** A manager (any security role built on a manager, or named like one) or a boss. */
+export const isManagerLevel = (key: string | null | undefined) => {
+  const k = (key ?? "").toLowerCase();
+  if (!k) return false;
+  const b = (levelBase(k) ?? k).toLowerCase();
+  return b === "boss" || /manager/.test(b) || /manager/.test(k);
+};
+/** What applies when nothing is set: as it always was — everyone finds anyone's free slots, managers read their department. */
+export const calViewFallback = (role: string | null | undefined): CalViewRule => (isManagerLevel(role) ? { see: "all", detail: "department" } : { see: "all", detail: "busy" });
+export async function loadCalendarView(): Promise<{ rules: CalViewRules; missing: boolean }> {
+  const { data, error } = await supabase.from("page_data_scopes").select("rules").eq("page", CAL_VIEW_PAGE).maybeSingle();
+  if (error) return { rules: { ...EMPTY_CAL_VIEW }, missing: true };
+  const r = ((data as any)?.rules ?? {}) as Partial<CalViewRules>;
+  return { rules: { everyone: r.everyone ?? null, roles: r.roles ?? {}, depts: r.depts ?? {}, users: r.users ?? {} }, missing: false };
+}
+export async function saveCalendarView(rules: CalViewRules): Promise<string | null> {
+  const { error } = await supabase.from("page_data_scopes").upsert({ page: CAL_VIEW_PAGE, rules, updated_at: new Date().toISOString() }, { onConflict: "tenant_id,page" });
+  if (error) return /page_data_scopes|schema cache|does not exist/i.test(error.message) ? "Run 63_page_data_scopes.sql in Supabase to save this." : error.message;
+  return null;
+}
+export function calendarViewFor(rules: CalViewRules, p: { userId: string | null; department: string | null; role?: string | null; isFull: boolean }): CalViewRule {
+  if (p.isFull) return { see: "all", detail: "full" };
+  const role = (p.role ?? "").toLowerCase();
+  return (p.userId && rules.users[p.userId]) || (role && rules.roles[role]) || (p.department && rules.depts[p.department]) || rules.everyone || calViewFallback(role);
+}
+/** Can this person lay `other`'s calendar over theirs? */
+export function canSeeCalendar(rule: CalViewRule, me: { userId: string | null; department: string | null }, other: { id: string; department: string | null; role?: string | null }): boolean {
+  if (other.id === me.userId) return true;
+  if (rule.see === "all") return true;
+  if (rule.see === "own") return false;
+  const same = !!me.department && other.department === me.department;
+  if (rule.see === "department") return same;
+  return same && !isManagerLevel(other.role);
+}
+/** Does this person read `other`'s entries, or only see when they're busy? */
+export function seesCalendarDetail(rule: CalViewRule, me: { userId: string | null; department: string | null }, other: { id: string; department: string | null }): boolean {
+  if (other.id === me.userId) return true;
+  if (rule.detail === "full") return true;
+  if (rule.detail === "busy") return false;
+  return !!me.department && other.department === me.department;
+}
 export async function loadScopeRules(page: PageKey): Promise<{ rules: ScopeRules; missing: boolean }> {
   const { data, error } = await supabase.from("page_data_scopes").select("rules").eq("page", page).maybeSingle();
   if (error) return { rules: { ...DEFAULT_SCOPE_RULES }, missing: true };

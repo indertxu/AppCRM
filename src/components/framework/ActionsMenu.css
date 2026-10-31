@@ -70,22 +70,20 @@
 .am-foot { display: flex; align-items: center; justify-content: center; gap: 4px; margin-top: 6px; padding: 8px 6px 4px; border-top: 1px solid rgba(10, 111, 77, 0.07); font-size: 11px; color: #97a39e; }
 .am-foot kbd { min-width: 18px; height: 18px; padding: 0 4px; font-size: 10px; }
 @media (prefers-reduced-motion: reduce) { .am-menu, .am-item, .am-hi { animation: none; transition: none; } }
-/* ===== Compact button: the icon alone; on hover / focus / open it widens leftwards and shows "Actions" =====
-   The slot keeps the compact width, so nothing around it moves: the wider button floats over its neighbours. */
-.am-wrap { position: relative; display: inline-block; flex: none; width: 42px; height: 40px; vertical-align: middle; }
+/* ===== Compact button: a 40px square with the icon centred; on hover / focus / open it widens and shows
+   "Actions" to the left of the icon. It stays in the flow, so whatever sits to its left slides over. ===== */
+.am-wrap { display: inline-flex; flex: none; vertical-align: middle; }
 .am-wrap .am-btn {
-  position: absolute; top: 0; right: 0; z-index: 5; height: 40px; min-width: 42px; gap: 0; padding: 0 12px !important; justify-content: flex-end;
-  transition: box-shadow 0.25s, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), padding 0.3s;
+  position: relative; height: 40px; min-width: 40px; gap: 0; padding: 0 13.5px !important; justify-content: center; box-sizing: border-box;
+  transition: box-shadow 0.25s, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 .am-wrap .am-btn-grid { flex: none; order: 2; }
 .am-btn-l {
-  order: 1; display: inline-flex; align-items: center; gap: 6px; max-width: 0; opacity: 0; overflow: hidden; white-space: nowrap;
-  transition: max-width 0.36s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.22s ease, margin 0.36s cubic-bezier(0.16, 1, 0.3, 1);
+  order: 1; display: inline-block; max-width: 0; margin-right: 0; opacity: 0; overflow: hidden; white-space: nowrap;
+  transition: max-width 0.34s cubic-bezier(0.16, 1, 0.3, 1), margin 0.34s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s ease;
 }
-.am-wrap:hover .am-btn-l, .am-btn:focus-visible .am-btn-l, .am-wrap.is-open .am-btn-l { max-width: 110px; opacity: 1; margin-right: 9px; }
-.am-wrap:hover .am-btn, .am-wrap.is-open .am-btn { z-index: 30; }
-.am-btn-l .am-chev { width: 14px; height: 14px; }
-@media (hover: none) { .am-btn-l { max-width: 110px; opacity: 1; margin-right: 9px; } .am-wrap { width: auto; } .am-wrap .am-btn { position: relative; } }
+.am-wrap:hover .am-btn-l, .am-btn:focus-visible .am-btn-l, .am-wrap.is-open .am-btn-l { max-width: 90px; margin-right: 9px; opacity: 1; }
+@media (hover: none) { .am-btn-l { max-width: 90px; margin-right: 9px; opacity: 1; } }
 /* one look on every page: the mint button of the dark headers */
 .am-wrap .am-btn {
   border: 0; background: linear-gradient(120deg, #c9f2dd, #1fb98a); color: #072419;

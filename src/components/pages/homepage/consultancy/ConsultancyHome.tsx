@@ -19,6 +19,7 @@ import { useMgmtAccess } from "../../management/mgmtAccess";
 import { ClientLogo } from "../../clients/ClientWorkspace";
 import { CAL_SUMMARY_EVENT, type CalSummary } from "../shared/HomeCalendar";
 import { TICKETS_EVENT } from "../shared/HomeTodo";
+import { loadInactiveIds } from "../../../framework/peopleStatus";
 import "./ConsultancyHome.css";
 
 const eur = (n: number) => Math.round(n).toLocaleString("en-US");
@@ -440,10 +441,12 @@ export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDa
         return periodDays.map((d) => (acc += m[d] || 0));
       };
 
+      // laid-off people (Settings → Organization) aren't on the team any more
+      const former = await loadInactiveIds().catch(() => new Set<string>());
       const teamIds = new Set<string>([
         ...Object.keys(doneByUser), ...Object.keys(plannedByUser),
         ...inTeam,
-      ]);
+      ].filter((id) => !former.has(id)));
       const rows: PersonRow[] = [...teamIds].map((uid) => {
         const cap = capById[uid] || {};
         const daysDone = doneByUser[uid] || 0;

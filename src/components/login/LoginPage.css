@@ -417,6 +417,60 @@
 
 .np-foot { margin: 20px 0 0; text-align: center; font-size: 13px; color: var(--muted); animation: np-up 0.7s 1.2s var(--ease) both; }
 
+/* ---------------- forgot password / new password ---------------- */
+.np-body-in { display: flow-root; }
+.np-lede b, .np-notice-txt b { color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
+.np-notice { display: flex; flex-direction: column; align-items: center; gap: 9px; margin: 24px 0 20px; text-align: center; animation: np-up 0.7s 0.8s var(--ease) both; }
+.np-notice.is-tall { margin: 34px 0 30px; }
+.np-notice-ico {
+  display: grid; place-items: center; width: 62px; height: 62px; margin-bottom: 5px; border-radius: 20px; color: var(--mint);
+  background: radial-gradient(circle at 30% 20%, rgba(134, 239, 192, 0.24), rgba(134, 239, 192, 0.05));
+  border: 1px solid rgba(134, 239, 192, 0.22);
+  box-shadow: 0 16px 36px -16px rgba(18, 181, 127, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+.np-notice-ico svg { width: 28px; height: 28px; }
+.np-notice-ico.is-warn {
+  color: #ffd38a; border-color: rgba(255, 211, 138, 0.26);
+  background: radial-gradient(circle at 30% 20%, rgba(255, 211, 138, 0.2), rgba(255, 211, 138, 0.04));
+  box-shadow: 0 16px 36px -16px rgba(255, 170, 60, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+.np-notice-ico.is-draw path { stroke-dasharray: 1; stroke-dashoffset: 1; animation: np-draw 0.6s var(--ease) forwards; }
+.np-notice-ico.is-draw path:nth-child(1) { animation-delay: 0.25s; }
+.np-notice-ico.is-draw path:nth-child(2) { animation-delay: 0.5s; }
+.np-notice-ico.is-draw path:nth-child(3) { animation-delay: 0.75s; }
+.np-notice-title { margin: 0; font-family: "Space Grotesk", sans-serif; font-size: 21px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.2; color: var(--ink); }
+.np-notice-txt { margin: 0; max-width: 340px; font-size: 14px; line-height: 1.55; color: var(--soft); }
+.np-hint { margin: 0; text-align: center; font-size: 12.5px; color: var(--muted); animation: np-up 0.7s 0.9s var(--ease) both; }
+
+.np-ghost {
+  display: flex; align-items: center; justify-content: center; gap: 9px; width: 100%; height: 52px; border-radius: 16px; cursor: pointer;
+  border: 1px solid rgba(134, 239, 192, 0.24); background: rgba(134, 239, 192, 0.07); color: var(--mint);
+  font: inherit; font-family: "Space Grotesk", sans-serif; font-size: 15px; font-weight: 600; letter-spacing: -0.01em;
+  transition: background 0.25s, border-color 0.25s, color 0.25s, transform 0.35s var(--spring);
+  animation: np-up 0.7s 1.04s var(--ease) both;
+}
+.np-ghost svg { width: 17px; height: 17px; flex-shrink: 0; }
+.np-ghost:hover:not(:disabled) { background: rgba(134, 239, 192, 0.13); border-color: rgba(134, 239, 192, 0.42); transform: translateY(-1px); }
+.np-ghost:focus-visible { outline: 2px solid var(--mint); outline-offset: 3px; }
+.np-ghost:disabled { cursor: default; color: var(--muted); background: transparent; border-color: rgba(134, 239, 192, 0.12); }
+.np-spin.is-light { border-color: rgba(134, 239, 192, 0.22); border-top-color: var(--mint); }
+.np-spin.is-big { width: 26px; height: 26px; border-width: 3px; }
+
+.np-rules { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: -4px 0 0 4px; padding: 0; list-style: none; font-size: 12.5px; color: var(--muted); animation: np-up 0.7s 1.04s var(--ease) both; }
+.np-rules li { display: flex; align-items: center; gap: 7px; transition: color 0.25s; }
+.np-rules i { position: relative; width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0; border: 1.5px solid rgba(134, 239, 192, 0.3); transition: background 0.25s, border-color 0.25s, transform 0.35s var(--spring); }
+.np-rules li.is-ok { color: var(--mint); }
+.np-rules li.is-ok i { background: var(--emerald); border-color: var(--emerald); transform: scale(1.08); }
+.np-rules li.is-ok i::after { content: ""; position: absolute; left: 3.6px; top: 1.2px; width: 3px; height: 6.5px; border: solid #fff; border-width: 0 1.6px 1.6px 0; transform: rotate(45deg); }
+
+/* switching step: the new content comes up quickly (the first load keeps the slow entrance) */
+.np-body-in.is-swapped .np-lede, .np-body-in.is-swapped .np-notice { animation-duration: 0.5s; animation-delay: 0s; }
+.np-body-in.is-swapped .np-field:nth-of-type(1) { animation-duration: 0.5s; animation-delay: 0.05s; }
+.np-body-in.is-swapped .np-field:nth-of-type(2) { animation-duration: 0.5s; animation-delay: 0.1s; }
+.np-body-in.is-swapped .np-row, .np-body-in.is-swapped .np-rules, .np-body-in.is-swapped .np-hint { animation-duration: 0.5s; animation-delay: 0.13s; }
+.np-body-in.is-swapped .np-submit, .np-body-in.is-swapped .np-ghost { animation-duration: 0.5s; animation-delay: 0.17s; }
+.np-body-in.is-swapped .np-foot { animation-duration: 0.5s; animation-delay: 0.22s; }
+
 /* wrong password: a short shake */
 .np-card.is-shaking { animation: np-shake 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97) both; }
 

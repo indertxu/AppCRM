@@ -25,6 +25,7 @@ import { useCount, Ring, HeroPicker, Fig, Txt } from "../consultancy/Consultancy
 import "../consultancy/ConsultancyHome.css";
 import "./SalesHome.css";
 import ActionsMenu from "../../../framework/ActionsMenu";
+import { useInactiveIds } from "../../../framework/peopleStatus";
 
 const eur = (n: number) => Math.round(n).toLocaleString("en-US");
 const short = (n: number) => (n >= 1_000_000 ? `${+(n / 1_000_000).toFixed(1)}M` : n >= 10_000 ? `${Math.round(n / 1000)}k` : eur(n));
@@ -258,7 +259,8 @@ export default function SalesHome({ userId, seesTeam, calendar, desk, greeting, 
     .filter((x): x is { t: Tracking; d: string } => !!x.d && daysBetween(today, x.d) >= 0 && daysBetween(today, x.d) <= CLOSE_WINDOW)
     .sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : valueOf(b.t) - valueOf(a.t))), [active, today, totals]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* ---- the team (who owns what) ---- */
+  /* ---- the team (who owns what; laid-off people aren't listed) ---- */
+  const inactive = useInactiveIds();
   const teamRows = useMemo(() => {
     if (!seesTeam) return [];
     const by = new Map<string, { id: string; name: string; pipe: number; deals: number; won: number; wonCount: number }>();
@@ -269,8 +271,8 @@ export default function SalesHome({ userId, seesTeam, calendar, desk, greeting, 
       if (t.status === "active") { const r = row(o); r.pipe += valueOf(t); r.deals += 1; }
       if (t.status === "won" && (t.close_date ?? "").slice(0, 7) === ym) { const r = row(o); r.won += valueOf(t); r.wonCount += 1; }
     });
-    return [...by.values()].sort((a, b) => b.won - a.won || b.pipe - a.pipe);
-  }, [seesTeam, deals, owners, people, totals, ym]); // eslint-disable-line react-hooks/exhaustive-deps
+    return [...by.values()].filter((r) => !inactive.has(r.id)).sort((a, b) => b.won - a.won || b.pipe - a.pipe);
+  }, [seesTeam, deals, owners, people, totals, ym, inactive]); // eslint-disable-line react-hooks/exhaustive-deps
   const teamMax = Math.max(1, ...teamRows.map((r) => r.pipe));
 
   /* ---- what needs attention ----

@@ -54,11 +54,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     supabase
       .from("profiles")
-      .select("role, is_superadmin")
+      .select("role, is_superadmin, active")
       .eq("id", uid)
       .single()
       .then(({ data }) => {
         if (!active) return;
+        // laid off (profiles.active = false): the account stays for the records, but can't be used
+        if ((data as { active?: boolean | null } | null)?.active === false && !data?.is_superadmin) {
+          try { sessionStorage.setItem("np-deactivated", "1"); } catch { /* ignore */ }
+          window.dispatchEvent(new Event("np:deactivated"));
+          void supabase.auth.signOut();
+          return;
+        }
         setProfile({
           uid,
           role: (data?.role as Role) ?? null,

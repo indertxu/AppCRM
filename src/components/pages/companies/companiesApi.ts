@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { supabase } from "../../api/supabase";
+import { loadInactiveIds } from "../../framework/peopleStatus";
 import { applyRolePreview } from "../../framework/SuperAdmin";
 import { useEffect, useSyncExternalStore } from "react";
 import { setRequiredKeys, requiredKeys, subscribeRequired, requiredVersion, type ReqScope } from "../contacts/contactProfile";
@@ -94,7 +95,7 @@ export interface ContactField {
   sort: number;
 }
 
-export interface Employee { id: string; name: string; email: string; role: string }
+export interface Employee { id: string; name: string; email: string; role: string; /** Laid off (Settings → Organization): keeps their name on what they did, never offered as an option. */ former?: boolean }
 
 /**
  * The signed-in user's id, read from the local session. (auth.getUser() asks
@@ -128,12 +129,16 @@ export const roleSeesAll = (role?: string | null, isSuperadmin = false): boolean
   isSuperadmin || SEES_ALL_ROLES.includes((role ?? "") as (typeof SEES_ALL_ROLES)[number]);
 
 export async function listEmployees(): Promise<Employee[]> {
-  const { data } = await supabase.from("profiles").select("id, first_name, last_name, username, email, role");
+  const [{ data }, former] = await Promise.all([
+    supabase.from("profiles").select("id, first_name, last_name, username, email, role"),
+    loadInactiveIds().catch(() => new Set<string>()),
+  ]);
   return (data ?? []).map((r: any) => ({
     id: r.id,
     name: [r.first_name, r.last_name].filter(Boolean).join(" ") || r.username || r.email || "Unnamed",
     email: r.email ?? "",
     role: r.role ?? "",
+    former: former.has(r.id),
   })).sort((a, b) => a.name.localeCompare(b.name));
 }
 

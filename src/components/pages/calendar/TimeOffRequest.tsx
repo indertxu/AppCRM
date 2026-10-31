@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useState } from "react";
 import { supabase } from "../../api/supabase";
+import { loadInactiveIds } from "../../framework/peopleStatus";
 import DatePicker from "../../framework/DatePicker";
 import "./TimeOffRequest.css";
 
@@ -319,6 +320,8 @@ export function TimeOffApprovals() {
 
 /** How many vacation days each person has, per year (and the company's default). */
 export function TimeOffAllowances() {
+  const [former, setFormer] = useState<Set<string>>(new Set());
+  useEffect(() => { loadInactiveIds().then(setFormer).catch(() => {}); }, []);
   const [year, setYear] = useState(new Date().getFullYear());
   const [def, setDef] = useState<number | null>(null);
   const [people, setPeople] = useState<Person[]>([]);
@@ -372,7 +375,8 @@ export function TimeOffAllowances() {
   const used = (uid: string, status: string) => reqs.filter((r) => r.user_id === uid && r.kind === "vacation" && r.status === status && r.from_date.slice(0, 4) === String(year))
     .reduce((s, r) => s + Number(r.days || 0), 0);
   const f = q.trim().toLowerCase();
-  const shown = people.filter((p) => !f || `${p.name} ${p.dept ?? ""}`.toLowerCase().includes(f));
+  // laid-off people (Settings → Organization) have no days to plan any more
+  const shown = people.filter((p) => !former.has(p.id) && (!f || `${p.name} ${p.dept ?? ""}`.toLowerCase().includes(f)));
   return (
     <div className="toa">
       {missing && <p className="toa-note">{TIMEOFF_SQL}</p>}

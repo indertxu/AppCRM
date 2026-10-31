@@ -1,7 +1,9 @@
-import { Routes, Route, Navigate, Outlet } from "react-router-dom";
+import { useEffect, useRef } from "react";
+import { Routes, Route, Navigate, Outlet, useNavigate, useLocation } from "react-router-dom";
+import { supabase } from "../api/supabase";
 import { useAuth } from "../api/authContext";
 import ProtectedRoute from "./ProtectedRoute";
-import LoginPage, { loginLaunching, JUST_SIGNED_IN_KEY } from "../login/LoginPage";
+import LoginPage, { loginLaunching, JUST_SIGNED_IN_KEY, RESET_PATH, openedFromRecovery } from "../login/LoginPage";
 import { PageCube } from "../framework/AppLayout";
 import AppLayout from "../framework/AppLayout";
 import { PageRoute } from "../framework/pageAccess";
@@ -86,10 +88,40 @@ function JustSignedInHold() {
   );
 }
 
+/**
+ * A password-reset email always ends on the reset page, even when Supabase sent the
+ * link to the Site URL (redirect URL not allow-listed) or the link has expired.
+ */
+let bootRecoveryDone = false;
+/** true while the app, opened from a reset email somewhere else, still has to go to the reset page */
+function useRecoveryLanding() {
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const nav = useRef(navigate);
+  nav.current = navigate;
+  // decided on the first render, before any other route can redirect (to /home, /login…)
+  const landing = useRef<boolean | null>(null);
+  if (landing.current === null) {
+    landing.current = !bootRecoveryDone && openedFromRecovery() && window.location.pathname !== RESET_PATH;
+    bootRecoveryDone = true;
+  }
+  if (landing.current && pathname === RESET_PATH) landing.current = false;
+  useEffect(() => {
+    const { data } = supabase.auth.onAuthStateChange((ev) => {
+      if (ev === "PASSWORD_RECOVERY" && window.location.pathname !== RESET_PATH) nav.current(RESET_PATH, { replace: true });
+    });
+    return () => data.subscription.unsubscribe();
+  }, []);
+  return landing.current;
+}
+
 export default function AppRoutes() {
+  if (useRecoveryLanding()) return <Navigate to={RESET_PATH} replace />;
   return (
     <Routes>
       <Route path="/login" element={<LoginRoute />} />
+      {/* forgot password: the email link opens this (signed in by the link, not by the app) */}
+      <Route path={RESET_PATH} element={<LoginPage mode="reset" />} />
       {/* the window the LinkedIn extension opens (signs in by itself) */}
       <Route path="/linkedin" element={<LinkedInCapturePage />} />
 

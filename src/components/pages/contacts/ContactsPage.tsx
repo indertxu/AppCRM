@@ -254,7 +254,7 @@ export default function ContactsPage() {
   };
 
   // ---- Every field the list can be filtered and sorted by ----
-  const people = () => employees.map((e) => ({ value: e.id, label: e.name }));
+  const people = () => employees.filter((e) => !e.former).map((e) => ({ value: e.id, label: e.name }));
   const valuesOf = (get: (c: Contact) => unknown, label?: (v: string) => string, facet?: keyof ContactFacets) => () =>
     (server && facet ? ((facets?.[facet] ?? []) as string[]).map((v) => String(v).trim()).filter(Boolean)
       : [...new Set(contacts.map((c) => String(get(c) ?? "").trim()).filter(Boolean))])
@@ -515,7 +515,7 @@ export default function ContactsPage() {
     {
       key: "assign", label: "Assign to",
       icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="8" r="3.5" /><path d="M2.5 20a6.5 6.5 0 0 1 13 0M19 8v6M16 11h6" /></svg>,
-      options: employees.map((e) => ({ value: e.id, label: e.name, hint: e.role?.replace(/_/g, " ") })),
+      options: employees.filter((e) => !e.former).map((e) => ({ value: e.id, label: e.name, hint: e.role?.replace(/_/g, " ") })),
       disabledReason: lead ? undefined : "Only boss and sales managers can assign contacts.",
       run: async (v) => {
         if (!v) return null;
@@ -1190,9 +1190,9 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
                 {who.length === 0 && (
                   <p className="dw-empty-hint">Only boss and sales managers can see it. Add people to widen access.</p>
                 )}
-                {employees.filter((e) => !who.includes(e.id)).length > 0 && (
+                {employees.filter((e) => !e.former && !who.includes(e.id)).length > 0 && (
                   <Select value="" onChange={(v) => v && setWho((xs) => [...xs, v])} placeholder="+ Give access to"
-                    options={employees.filter((e) => !who.includes(e.id)).map((e) => ({ value: e.id, label: e.name }))} />
+                    options={employees.filter((e) => !e.former && !who.includes(e.id)).map((e) => ({ value: e.id, label: e.name }))} />
                 )}
               </section>
             )}

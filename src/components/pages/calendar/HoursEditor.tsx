@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "../../api/supabase";
+import { loadInactiveIds } from "../../framework/peopleStatus";
 import "./HoursEditor.css";
 
 export interface DayHours {
@@ -77,9 +78,9 @@ export default function HoursEditor() {
   }, [pickOpen]);
 
   useEffect(() => {
-    supabase.from("profiles").select("id, first_name, last_name, username, email, department")
-      .then(({ data }) => {
-        const rs = (data ?? []) as any[];
+    Promise.all([supabase.from("profiles").select("id, first_name, last_name, username, email, department"), loadInactiveIds().catch(() => new Set<string>())])
+      .then(([{ data }, former]) => {
+        const rs = ((data ?? []) as any[]).filter((r) => !former.has(r.id)); // laid-off people work no hours any more
         setPeople(rs.map((r) => ({
           id: r.id,
           name: [r.first_name, r.last_name].filter(Boolean).join(" ") || r.username || r.email || "Unnamed",

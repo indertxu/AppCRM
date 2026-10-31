@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { PageCover } from "../../framework/AppLayout";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../api/supabase";
+import { loadInactiveIds } from "../../framework/peopleStatus";
 import { useAuth } from "../../api/AuthProvider";
 import {
   loadSalesMeetings, loadMyDeals, createSalesMeeting, deleteSalesMeeting, updateSalesMeeting,
@@ -414,9 +415,11 @@ export default function SalesCalendar() {
       setCanSeeDetail(boss || manager);
       if (manager && !boss) setDetailDept((me as any)?.department ?? null);
 
-      const { data } = await supabase.from("profiles")
-        .select("id, first_name, last_name, username, email, role, department");
-      setPeople(((data ?? []) as any[]).map((x) => ({
+      const [{ data }, former] = await Promise.all([
+        supabase.from("profiles").select("id, first_name, last_name, username, email, role, department"),
+        loadInactiveIds().catch(() => new Set<string>()),
+      ]);
+      setPeople(((data ?? []) as any[]).filter((x) => !former.has(x.id)).map((x) => ({
         id: x.id,
         name: [x.first_name, x.last_name].filter(Boolean).join(" ") || x.username || x.email || "Unnamed",
         role: x.role ?? "", department: x.department ?? "",
@@ -1211,10 +1214,10 @@ function NewMeeting({ day, hour, deals, userId, hours, links, edit, fromOutlook,
   const [mateQ, setMateQ] = useState("");
   const [mates, setMates] = useState<{ id: string; label: string }[]>([]);
   useEffect(() => {
-    supabase.from("profiles").select("id, first_name, last_name, username, email")
-      .then(({ data }) => {
+    Promise.all([supabase.from("profiles").select("id, first_name, last_name, username, email"), loadInactiveIds().catch(() => new Set<string>())])
+      .then(([{ data }, former]) => {
         setMates(((data ?? []) as any[])
-          .filter((p) => p.id !== userId)
+          .filter((p) => p.id !== userId && !former.has(p.id))
           .map((p) => ({
             id: p.id,
             label: [p.first_name, p.last_name].filter(Boolean).join(" ") || p.username || p.email || "Unnamed",

@@ -45,6 +45,8 @@ export interface CatalogInput {
   /** Custom deal fields (Sales → Deal fields). Without them deal custom values still show, with a generic name. */
   dealFields?: Def[];
   people: Record<string, string>; pipelines: Record<string, string>;
+  /** Laid-off people: their names stay on the data, but they aren't offered in the filters. */
+  former?: string[];
   phases: Record<string, { name: string; pipeline: string }>; products: Record<string, string>;
   clientCompanyIds: Set<string>; clientContactIds: Set<string>;
   contactAssignees: Record<string, string[]>; companyAssignees: Record<string, string[]>;
@@ -138,7 +140,7 @@ export function buildCatalog(inp: CatalogInput): XF[] {
     { name: "phases", map: phaseNames }, { name: "pipelines", map: inp.pipelines }, { name: "products", map: inp.products },
     { name: "companies", map: companyNames }, { name: "people", map: inp.people }, { name: "contacts", map: contactNames },
   ];
-  const peopleOpts = sortOpts(Object.entries(inp.people).map(([value, label]) => ({ value, label })));
+  const peopleOpts = sortOpts(Object.entries(inp.people).filter(([value]) => !inp.former?.includes(value)).map(([value, label]) => ({ value, label })));
   const root: Root = inp.root ?? "contact";
   const entities = (src: Src, x: Ctx) => entitiesOf(root, src, x);
   const mk = (src: Src, key: string, label: string, kind: Kind, value: (e: any, x: Ctx) => any, extra: Partial<XF> = {}): XF => ({

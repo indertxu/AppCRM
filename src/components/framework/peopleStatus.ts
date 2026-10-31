@@ -24,6 +24,11 @@ export function loadInactiveIds(force = false): Promise<Set<string>> {
   return cache;
 }
 
+/** Only the people still working here (the ones to offer in a picker or a filter). */
+export const stillHere = <T extends { id: string }>(xs: T[], inactive: Set<string>): T[] => (inactive.size ? xs.filter((x) => !inactive.has(x.id)) : xs);
+/** The same, read straight away (for code outside components). */
+export async function withoutFormer<T extends { id: string }>(xs: T[]): Promise<T[]> { return stillHere(xs, await loadInactiveIds()); }
+
 /** Call after laying someone off / reactivating, so every open page updates. */
 export const refreshInactiveIds = () => loadInactiveIds(true);
 

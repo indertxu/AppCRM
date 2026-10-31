@@ -26,6 +26,7 @@ import { ensureRenewalDeals } from "../sales/sales/salesApi";
 import "../companies/CompaniesPage.css";
 import "./ClientsPage.css";
 import { useNavSection } from "../../framework/pageAccess";
+import { useInactiveIds } from "../../framework/peopleStatus";
 
 // Re-export shared types & helpers from their new home so existing imports
 // elsewhere (e.g. ./ClientsPage) keep working unchanged.
@@ -159,7 +160,8 @@ export function ClientList({
   };
 
 
-  // Resolve team member ids → names for the consultant filter.
+  // Resolve team member ids → names for the consultant filter (laid-off people aren't offered).
+  const inactive = useInactiveIds();
   const [people, setPeople] = useState<Record<string, string>>({});
   useEffect(() => {
     supabase.functions.invoke("manage-users", { body: { action: "list" } }).then(({ data }: any) => {
@@ -277,7 +279,7 @@ export function ClientList({
     { key: "firstSigned", label: "Client since", group: "Client", type: "date", get: (r) => r.firstSigned },
     { key: "services", label: "Services", group: "Projects", type: "multi", get: (r) => r.services, options: opts(rows.flatMap((r) => r.services)) },
     { key: "consultants", label: "Consultants", group: "Projects", type: "multi", get: (r) => r.consultants,
-      options: () => [...new Set(rows.flatMap((r) => r.consultants))].map((id) => ({ value: id, label: personName(id) })).sort((a, b) => a.label.localeCompare(b.label)) },
+      options: () => [...new Set(rows.flatMap((r) => r.consultants))].filter((id) => !inactive.has(id)).map((id) => ({ value: id, label: personName(id) })).sort((a, b) => a.label.localeCompare(b.label)) },
     { key: "projects", label: "Projects", group: "Projects", type: "number", get: (r) => r.projects },
     { key: "openProjects", label: "Open projects", group: "Projects", type: "number", get: (r) => r.openProjects },
     { key: "projectsValue", label: "Projects value (€)", group: "Projects", type: "number", get: (r) => Math.round(r.projectsValue) },
@@ -954,7 +956,9 @@ function useCsCatalog() {
     listEmployees().then(setPeople).catch(() => {});
     supabase.auth.getUser().then(({ data }) => setMe(data.user?.id ?? null));
   }, []);
-  return { products, services, people, me };
+  /** The people to offer as owners (laid-off ones keep their name on old records only). */
+  const pickable = people.filter((p) => !p.former);
+  return { products, services, people, pickable, me };
 }
 type CsCatalog = ReturnType<typeof useCsCatalog>;
 
@@ -1042,7 +1046,7 @@ function UpsellEditor({ initial, clientName, cat, onClose, onSaved, onDeleted }:
             </label>
             <label className="csx-f"><span>Owner</span>
               <Select value={u.owner_id ?? ""} onChange={(v) => set({ owner_id: v || null })} placeholder="Nobody yet" searchable
-                options={[{ value: "", label: "Nobody yet" }, ...cat.people.map((p) => ({ value: p.id, label: p.name }))]} />
+                options={[{ value: "", label: "Nobody yet" }, ...cat.pickable.map((p) => ({ value: p.id, label: p.name }))]} />
             </label>
           </div>
           <label className="csx-f"><span>Notes</span><textarea rows={3} value={u.notes ?? ""} onChange={(e) => set({ notes: e.target.value })} placeholder="Why now, who to talk to, what they said…" /></label>
@@ -1578,7 +1582,7 @@ export function CustomerSuccessPage() {
                 {ownPick ? (
                   <span className="csx-own-pick">
                     <Select size="sm" value="" onChange={(v) => { if (v) { toggleOwner(c, v); setOwnPick(false); } }} placeholder="Pick someone…" searchable
-                      options={cat.people.filter((p) => !c.owners.includes(p.id)).map((p) => ({ value: p.id, label: p.name }))} />
+                      options={cat.pickable.filter((p) => !c.owners.includes(p.id)).map((p) => ({ value: p.id, label: p.name }))} />
                   </span>
                 ) : <button type="button" className="csx-own-add" onClick={() => setOwnPick(true)}><CsIco n="plus" s={11} />{c.owners.length ? "Owner" : "Assign an owner"}</button>}
               </div>
@@ -1748,7 +1752,7 @@ export function CustomerSuccessPage() {
         {sel.size > 0 && (
           <div className="cs3-bulk">
             <b>{sel.size} selected</b>
-            <span className="cs3-bulk-sel"><Select size="sm" value={bulkOwner} onChange={setBulkOwner} placeholder="Add owner…" searchable options={cat.people.map((p) => ({ value: p.id, label: p.name }))} /></span>
+            <span className="cs3-bulk-sel"><Select size="sm" value={bulkOwner} onChange={setBulkOwner} placeholder="Add owner…" searchable options={cat.pickable.map((p) => ({ value: p.id, label: p.name }))} /></span>
             <button type="button" className="csx-primary is-sm" disabled={!bulkOwner || !ready} onClick={assignBulk}>Assign owner</button>
             <button type="button" className="csx-x is-sm" onClick={() => setSel(new Set())} aria-label="Clear the selection"><CsIco n="x" s={13} /></button>
           </div>
@@ -2000,7 +2004,7 @@ export function CustomerSuccessPage() {
             </div>
             <div className="csx-hero-sel">
               <Select size="sm" value={owner} onChange={setOwner} placeholder="Any owner" searchable
-                options={[{ value: "", label: "Any owner" }, ...cat.people.map((p) => ({ value: p.id, label: p.name }))]} />
+                options={[{ value: "", label: "Any owner" }, ...cat.pickable.map((p) => ({ value: p.id, label: p.name }))]} />
             </div>
             <span className="cs3-hero-auto">
               <button type="button" className={`csx-hero-btn ${autoAt ? "is-on" : ""}`} onClick={(e) => toggleAutoPop(e.currentTarget)} aria-expanded={!!autoAt} aria-haspopup="dialog" title="Automatic follow-ups">

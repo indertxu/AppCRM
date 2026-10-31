@@ -465,6 +465,9 @@ export function CutoffsBody({ cutoffs, setCutoffs, defaultCutoffDay, setDefaultC
   allowReset?: boolean;
 }) {
   const [cutoffYear, setCutoffYear] = useState(new Date().getFullYear());
+  /** The month whose date is being picked (its tile anchors the calendar). */
+  const [picking, setPicking] = useState<string | null>(null);
+  const pickAnchor = useRef<HTMLElement | null>(null);
 
   /** The twelve months of the selected year. */
   const cutoffMonths = Array.from({ length: 12 }, (_, m) => periodOf(new Date(cutoffYear, m, 1)));
@@ -530,7 +533,8 @@ export function CutoffsBody({ cutoffs, setCutoffs, defaultCutoffDay, setDefaultC
               <span className="cx-legend"><i className="is-default" />Default <i className="is-custom" />Own date</span>
             </div>
 
-            <div className="cws-cut-grid cx-grid" key={`y${cutoffYear}`}>
+            {/* the twelve months as small tiles: click one to move its date, ↺ goes back to the default */}
+            <div className="cx-tiles" key={`y${cutoffYear}`}>
               {cutoffMonths.map((period, i) => {
                 const cut = cutoffOf(period, cutoffs, defaultCutoffDay);
                 const start = isoShift(billingWindow(period, cutoffs, defaultCutoffDay).from, 1);
@@ -540,31 +544,32 @@ export function CutoffsBody({ cutoffs, setCutoffs, defaultCutoffDay, setDefaultC
                 const past = period < thisPeriod;
                 const [, mm] = period.split("-").map(Number);
                 return (
-                  <div className={`cx-month ${isCustom ? "is-custom" : ""} ${now ? "is-now" : ""} ${past ? "is-past" : ""}`} key={period} style={{ ["--i" as string]: i } as CSSProperties}>
-                    <div className="cx-m-top">
-                      <span className="cx-m-name">{new Date(cutoffYear, mm - 1, 1).toLocaleDateString("en-GB", { month: "long" })}</span>
-                      {now && <span className="cx-now">This month</span>}
-                      <span className={`cx-tag ${isCustom ? "is-custom" : ""}`}>{isCustom ? "Own date" : "Default"}</span>
-                    </div>
-                    <div className="cx-m-cut">
-                      <b>{Number(cut.slice(8, 10))}</b>
-                      <span><em>{dayMonth(cut).split(" ")[1]}</em>closes · {weekday(cut)}</span>
-                    </div>
-                    <div className="cx-m-range">
-                      <span>{dayMonth(start)} → {dayMonth(cut)}</span>
-                      <em>{days} days</em>
-                    </div>
-                    <div className="cx-m-bar" aria-hidden="true"><i style={{ width: `${Math.min(100, (days / 35) * 100)}%` }} /></div>
-                    <div className="cx-m-actions">
-                      <DatePicker value={cut} onChange={(iso) => setCutoff(period, iso)} />
-                      {isCustom && allowReset && (
-                        <button type="button" className="cx-reset" onClick={() => resetCutoff(period)} title="Use the default cutoff for this month">Use default</button>
-                      )}
-                    </div>
+                  <div className={`cx-tile ${isCustom ? "is-custom" : ""} ${now ? "is-now" : ""} ${past ? "is-past" : ""} ${picking === period ? "is-picking" : ""}`} key={period}
+                    style={{ ["--i" as string]: i } as CSSProperties}>
+                    <button type="button" className="cx-tile-btn" title={`${isCustom ? "Own date" : "Default"} · click to change`}
+                      onClick={(e) => { pickAnchor.current = e.currentTarget; setPicking(period); }}>
+                      <span className="cx-tile-top">
+                        <b>{new Date(cutoffYear, mm - 1, 1).toLocaleDateString("en-GB", { month: "short" })}</b>
+                        {now && <i className="cx-tile-now">Now</i>}
+                        {isCustom && <i className="cx-tile-own" title="Own date">Own</i>}
+                      </span>
+                      <span className="cx-tile-cut"><b>{Number(cut.slice(8, 10))}</b><em>{weekday(cut).slice(0, 3)}{Number(cut.slice(5, 7)) !== mm ? ` · ${dayMonth(cut).split(" ")[1]}` : ""}</em></span>
+                      <span className="cx-tile-range" title={`${dayMonth(start)} → ${dayMonth(cut)}`}>from {dayMonth(start)} · {days}d</span>
+                    </button>
+                    {isCustom && allowReset && (
+                      <button type="button" className="cx-tile-reset" onClick={() => resetCutoff(period)} title="Use the default cutoff for this month" aria-label="Use the default cutoff">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5" /></svg>
+                      </button>
+                    )}
                   </div>
                 );
               })}
             </div>
+            {picking && (
+              <DatePicker hideTrigger open anchorRef={pickAnchor} value={cutoffOf(picking, cutoffs, defaultCutoffDay)}
+                onOpenChange={(o) => { if (!o) setPicking(null); }}
+                onChange={(iso) => { const p = picking; setPicking(null); if (p && iso) setCutoff(p, iso); }} />
+            )}
     </>
   );
 }

@@ -15,6 +15,8 @@ import {
   PAGE_SCOPES, loadScopeRules, saveScopeRules, type DataScope, type ScopeRules,
   loadPageRules, savePageRules, pageRuleKey, type PageRules,
   type Department, type PageKey, useSecurityLevels, levelBase,
+  loadCalendarView, saveCalendarView, calendarViewFor, canSeeCalendar, seesCalendarDetail, calViewFallback, isManagerLevel,
+  type CalViewRules, type CalViewRule, type CalSee, type CalDetail,
 } from "../../framework/pageAccess";
 import Select from "../../framework/Select";
 import { AREAS, HIDEABLE } from "../management/mgmtAccess";
@@ -627,6 +629,191 @@ export function PanelAccess({ panelKey, what }: { panelKey: string; what: string
             <button type="button" className="pa2-btn is-primary" disabled={!dirty || busy || missing} onClick={() => void save()}>{busy ? "Saving…" : "Save"}</button>
           </>
         ) : <span className="pxa-msg">Only the Boss level can change this.</span>}
+      </div>
+    </div>
+  );
+}
+
+
+/* =====================================================================
+   Settings › Calendar › Who sees whose calendar: for everyone, then by security
+   role, by department and by person — which calendars they can lay over theirs,
+   and whether they read the entries or only see when people are busy.
+   ===================================================================== */
+const CAL_SEE: { value: CalSee; label: string; hint: string }[] = [
+  { value: "all", label: "Everyone's calendar", hint: "Anyone in the company" },
+  { value: "department", label: "Their department", hint: "Everyone in their department, managers included" },
+  { value: "team", label: "Their department, not the managers", hint: "Colleagues of their department; not the managers' calendars" },
+  { value: "own", label: "Only their own", hint: "Nobody else's calendar" },
+];
+const CAL_DETAIL: { value: CalDetail; label: string; hint: string }[] = [
+  { value: "full", label: "Every detail", hint: "What each entry is, the client, the project and the notes" },
+  { value: "department", label: "Details for their department", hint: "Their department in full; only busy times for everyone else" },
+  { value: "busy", label: "Only busy times", hint: "When people are busy — enough to find a free slot" },
+];
+export function CalendarVisibility() {
+  const { level, isSuper } = usePageAccess();
+  const canEdit = isSuper || levelBase(level) === "boss";
+  const LEVELS = useSecurityLevels().filter((l) => l.base !== "boss");
+  const [rules, setRules] = useState<CalViewRules | null>(null);
+  const [missing, setMissing] = useState(false);
+  const [depts, setDepts] = useState<Department[]>([]);
+  const [people, setPeople] = useState<{ id: string; name: string; role: string; department: string | null; full: boolean }[]>([]);
+  const [state, setState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [err, setErr] = useState<string | null>(null);
+  const [probe, setProbe] = useState("");
+  const savedT = useRef(0);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const [r, ds, profs] = await Promise.all([loadCalendarView(), loadDepartments(true), supabase.from("profiles").select("*").range(0, 99999)]);
+      if (!alive) return;
+      setRules(r.rules); setMissing(r.missing); setDepts(ds);
+      setPeople(((profs.data ?? []) as any[]).filter((p) => p.active !== false).map((p) => ({
+        id: p.id, name: [p.first_name, p.last_name].filter(Boolean).join(" ") || p.full_name || p.email || "—",
+        role: String(p.security_level ?? p.role ?? "").toLowerCase(), department: p.department ?? null,
+        full: p.is_superadmin === true || String(p.role ?? "").toLowerCase() === "boss",
+      })).sort((a, b) => a.name.localeCompare(b.name)));
+    })();
+    return () => { alive = false; };
+  }, []);
+  if (!rules) return <div className="pxa-skel" />;
+
+  const commit = async (next: CalViewRules) => {
+    setRules(next); setState("saving"); setErr(null);
+    const e = await saveCalendarView(next);
+    if (e) { setState("error"); setErr(e); return; }
+    setState("saved");
+    window.clearTimeout(savedT.current);
+    savedT.current = window.setTimeout(() => setState("idle"), 1800);
+  };
+  type Bucket = "roles" | "depts" | "users";
+  const setIn = (bucket: Bucket, key: string, v: CalViewRule | null) => {
+    const m = { ...rules[bucket] };
+    if (v) m[key] = v; else delete m[key];
+    void commit({ ...rules, [bucket]: m });
+  };
+  const deptOf = (k: string | null) => depts.find((d) => d.key === k);
+  const others = people.filter((p) => !p.full);
+  const roleCount = (k: string) => others.filter((p) => p.role === k).length;
+  const roleRows = LEVELS.filter((l) => roleCount(l.key) > 0 || !!rules.roles[l.key]);
+  const deptRows = depts.filter((d) => others.some((p) => p.department === d.key) || !!rules.depts[d.key]);
+  const named = Object.keys(rules.users).map((id) => people.find((p) => p.id === id)).filter(Boolean) as typeof people;
+  const addable = others.filter((p) => !(p.id in rules.users));
+  const everyone = rules.everyone;
+  const ruleOf = (p: (typeof people)[number]) => calendarViewFor(rules, { userId: p.id, department: p.department, role: p.role, isFull: p.full });
+
+  /** The two pickers of a row; `inherit` is what it falls back to when left on "Same as …". */
+  const pickers = ({ value, inherit, inheritLabel, onChange }: { value: CalViewRule | null; inherit: CalViewRule; inheritLabel: string | null; onChange: (v: CalViewRule | null) => void }) => {
+    const v = value ?? inherit;
+    const seeOpts = [...(inheritLabel ? [{ value: "", label: inheritLabel, hint: CAL_SEE.find((o) => o.value === inherit.see)?.label }] : []), ...CAL_SEE];
+    const detOpts = [...(inheritLabel ? [{ value: "", label: inheritLabel, hint: CAL_DETAIL.find((o) => o.value === inherit.detail)?.label }] : []), ...CAL_DETAIL];
+    return (
+      <>
+        <div className="cvv-pick"><Select value={value ? value.see : inheritLabel ? "" : v.see} disabled={!canEdit} options={seeOpts}
+          onChange={(x) => onChange(!x && inheritLabel ? (value && value.detail !== inherit.detail ? { see: inherit.see, detail: value.detail } : null) : { see: (x || v.see) as CalSee, detail: v.detail })} /></div>
+        <div className="cvv-pick"><Select value={value ? value.detail : inheritLabel ? "" : v.detail} disabled={!canEdit} options={detOpts}
+          onChange={(x) => onChange(!x && inheritLabel ? (value && value.see !== inherit.see ? { see: value.see, detail: inherit.detail } : null) : { see: v.see, detail: (x || v.detail) as CalDetail })} /></div>
+      </>
+    );
+  };
+  const base = everyone ?? { see: "all" as CalSee, detail: "busy" as CalDetail };
+  const roleInherit = (key: string) => everyone ?? calViewFallback(key);
+
+  // "Check someone": whose calendars they can open, and how much they read
+  const who = people.find((p) => p.id === probe) ?? null;
+  const whoRule = who ? ruleOf(who) : null;
+  const whoSees = who && whoRule ? people.filter((o) => o.id !== who.id && canSeeCalendar(whoRule, { userId: who.id, department: who.department }, o)) : [];
+  const whoReads = who && whoRule ? whoSees.filter((o) => seesCalendarDetail(whoRule, { userId: who.id, department: who.department }, o)).length : 0;
+
+  return (
+    <div className={`cvv ${canEdit ? "" : "is-ro"}`}>
+      <div className="psec-lead">
+        <span className="psec-shield">{svg(<><path d="M3 12s4-6 9-6 9 6 9 6-4 6-9 6-9-6-9-6z" /><circle cx="12" cy="12" r="2.6" /></>)}</span>
+        <p>Whose calendars people can lay over their own in <b>Calendar</b>, and whether they read the entries or only see when others are busy. <b>Bosses</b> and superadmins see everything. The most specific setting wins: a person, then their security role, then their department, then everyone.</p>
+        <span className={`psec-state is-${state}`} aria-live="polite">{state === "saving" ? "Saving…" : state === "saved" ? <>{CHECK}Saved</> : state === "error" ? "Not saved" : ""}</span>
+      </div>
+      {missing && <p className="pa2-warn">{WARN}<span>Run <b>63_page_data_scopes.sql</b> in Supabase to save these settings.</span></p>}
+      {err && !missing && <p className="pa2-warn">{WARN}<span>{err}</span></p>}
+      {!canEdit && <p className="psec-note">Only a Boss or a superadmin can change this.</p>}
+
+      <div className="cvv-cols" aria-hidden="true"><span /><span>Can open</span><span>Reads</span></div>
+      <div className="cvv-row is-all">
+        <span className="cvv-ico">{GLOBE}</span>
+        <span className="psec-row-id"><b>Everyone</b><small>{everyone ? "Unless a role, a department or a person says otherwise" : "Not set: everyone finds anyone's free slots; managers read their department"}</small></span>
+        {pickers({ value: everyone, inherit: base, inheritLabel: null, onChange: (v) => void commit({ ...rules, everyone: v }) })}
+      </div>
+
+      <div className="psec-group">
+        <div className="psec-group-h"><b>By security role</b><small>E.g. the Consultancy manager sees the department in full; consultants see each other but not the manager</small></div>
+        {roleRows.length === 0 ? <p className="psec-empty">Nobody has a security role yet.</p> : roleRows.map((l, i) => {
+          const n = roleCount(l.key);
+          return (
+            <div key={l.key} className={`cvv-row ${rules.roles[l.key] ? "is-set" : ""}`} style={{ "--i": i } as CSSProperties}>
+              <span className={`cvv-ico ${isManagerLevel(l.key) ? "is-mgr" : ""}`}>{svg(<path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z" />)}</span>
+              <span className="psec-row-id"><b>{l.name}</b><small>{n} {n === 1 ? "person" : "people"}{isManagerLevel(l.key) ? " · counts as a manager" : ""}</small></span>
+              {pickers({ value: rules.roles[l.key] ?? null, inherit: roleInherit(l.key), inheritLabel: "Same as everyone", onChange: (v) => setIn("roles", l.key, v) })}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="psec-group">
+        <div className="psec-group-h"><b>By department</b><small>For people whose security role has no setting</small></div>
+        {deptRows.length === 0 ? <p className="psec-empty">No departments yet — create them in Organization.</p> : deptRows.map((d, i) => (
+          <div key={d.key} className={`cvv-row ${rules.depts[d.key] ? "is-set" : ""}`} style={{ "--c": d.color, "--i": i } as CSSProperties}>
+            <span className="psec-dot" />
+            <span className="psec-row-id"><b>{d.name}</b><small>{others.filter((p) => p.department === d.key).length} people</small></span>
+            {pickers({ value: rules.depts[d.key] ?? null, inherit: everyone ?? { see: "all", detail: "busy" }, inheritLabel: "Same as everyone", onChange: (v) => setIn("depts", d.key, v) })}
+          </div>
+        ))}
+      </div>
+
+      <div className="psec-group">
+        <div className="psec-group-h"><b>People</b><small>Override everything above</small></div>
+        {named.length === 0 && <p className="psec-empty">Nobody has their own setting.</p>}
+        {named.map((p, i) => {
+          const d = deptOf(p.department);
+          const { users: _drop, ...rest } = rules; void _drop;
+          const inherit = calendarViewFor({ ...rest, users: {} }, { userId: p.id, department: p.department, role: p.role, isFull: false });
+          return (
+            <div key={p.id} className="cvv-row is-set" style={{ "--c": d?.color ?? "#9fb5ab", "--i": i } as CSSProperties}>
+              <span className="psec-av">{initials(p.name)}</span>
+              <span className="psec-row-id"><b>{p.name}</b><small>{d?.name ?? "No department"}</small></span>
+              {pickers({ value: rules.users[p.id] ?? null, inherit: inherit, inheritLabel: "Same as their role", onChange: (v) => setIn("users", p.id, v) })}
+              {canEdit && <button className="psec-x" onClick={() => setIn("users", p.id, null)} aria-label={`Remove ${p.name}'s own setting`} title="Remove — they follow their role again">×</button>}
+            </div>
+          );
+        })}
+        {canEdit && addable.length > 0 && (
+          <div className="psec-add">
+            <Select value="" placeholder="+ Give someone their own setting" searchable
+              onChange={(id) => { const p = people.find((x) => x.id === id); if (p) setIn("users", p.id, ruleOf(p)); }}
+              options={addable.map((p) => ({ value: p.id, label: p.name, hint: deptOf(p.department)?.name ?? "No department" }))} />
+          </div>
+        )}
+      </div>
+
+      <div className="cvv-probe">
+        <div className="cvv-probe-h">
+          <b>Check someone</b>
+          <div className="cvv-probe-pick"><Select value={probe} placeholder="Pick a person…" searchable onChange={setProbe}
+            options={people.map((p) => ({ value: p.id, label: p.name, hint: deptOf(p.department)?.name ?? "No department" }))} /></div>
+        </div>
+        {who && whoRule && (
+          <div className="cvv-probe-r">
+            <p><b>{who.name.split(" ")[0]}</b> {who.full ? "sees every calendar in full (Boss / superadmin)." : whoSees.length === 0 ? "only sees their own calendar." : <>can open <b>{whoSees.length}</b> {whoSees.length === 1 ? "calendar" : "calendars"} and reads <b>{whoReads === whoSees.length ? "all of them" : whoReads === 0 ? "none" : `${whoReads}`}</b>{whoReads > 0 && whoReads < whoSees.length ? " in full" : ""}{whoReads === 0 ? " in full — only busy times" : ""}.</>}</p>
+            {whoSees.length > 0 && (
+              <div className="cvv-avs">
+                {whoSees.slice(0, 18).map((o) => {
+                  const reads = seesCalendarDetail(whoRule, { userId: who.id, department: who.department }, o);
+                  return <i key={o.id} className={reads ? "is-reads" : ""} title={`${o.name}${reads ? " · reads it" : " · busy times"}`} style={{ "--c": deptOf(o.department)?.color ?? "#9fb5ab" } as CSSProperties}>{initials(o.name)}</i>;
+                })}
+                {whoSees.length > 18 && <em>+{whoSees.length - 18}</em>}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

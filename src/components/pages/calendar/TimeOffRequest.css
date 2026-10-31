@@ -186,7 +186,7 @@
 .toa-tr { min-height: 50px; border-top: 1px solid rgba(10, 111, 77, 0.07); }
 .toa-tr:hover { background: #fbfdfc; }
 .toa-person { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.toa-person > span { display: flex; flex-direction: column; min-width: 0; }
+.toa-person > span:not(.toa-av) { display: flex; flex-direction: column; min-width: 0; }
 .toa-person b { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .toa-days { display: flex; align-items: center; gap: 8px; }
 .toa-days input { width: 64px; height: 32px; padding: 0 9px; border: 1px solid rgba(10, 111, 77, 0.16); border-radius: 9px; font: 650 13px "Inter", sans-serif; color: #0b241a; text-align: center; outline: none; }
@@ -220,3 +220,6 @@
   .toa-row { grid-template-columns: auto minmax(0, 1fr); }
   .toa-acts { grid-column: 1 / -1; justify-content: flex-end; }
 }
+
+/* the avatar: a perfect circle with the initials centred (it used to pick up the name column's layout) */
+.toa-av { display: inline-grid !important; place-items: center; line-height: 1; letter-spacing: 0.02em; text-align: center; flex: none; }
