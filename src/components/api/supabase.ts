@@ -74,6 +74,24 @@ const whatOf = (url: string, method: string) => {
   } catch { return "talking to the server"; }
 };
 export const netFailures: { at: string; method: string; url: string }[] = [];
+
+/**
+ * Usage meter: requests and bytes this tab exchanged with Supabase. The app layout
+ * reads it per page visit and writes it to platform_page_visits (the superadmin's
+ * cost panel). Bytes: the response size (Content-Length, or the body itself) plus
+ * what was sent.
+ */
+export const usageMeter = { requests: 0, bytes: 0 };
+const METER_SKIP = /\/rest\/v1\/platform_page_visits/;
+function meter(url: string, init: RequestInit | undefined, res: Response) {
+  if (METER_SKIP.test(url)) return;
+  usageMeter.requests++;
+  if (typeof init?.body === "string") usageMeter.bytes += init.body.length;
+  const len = Number(res.headers.get("content-length"));
+  if (len > 0) { usageMeter.bytes += len; return; }
+  if (!res.body || res.status === 204 || res.status === 304) return;
+  try { res.clone().blob().then((b) => { usageMeter.bytes += b.size; }, () => { /* ignore */ }); } catch { /* ignore */ }
+}
 async function sturdyFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
@@ -82,7 +100,9 @@ async function sturdyFetch(input: RequestInfo | URL, init?: RequestInit): Promis
   const safe = method === "PATCH" || method === "PUT" || method === "DELETE" || (!rest && (method === "GET" || method === "HEAD"));
   for (let i = 0; ; i++) {
     try {
-      return await fetch(input, init);
+      const res = await fetch(input, init);
+      meter(url, init, res);
+      return res;
     } catch (e) {
       const aborted = (e as any)?.name === "AbortError" || init?.signal?.aborted;
       if (aborted) throw e;

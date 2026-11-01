@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent as RDragEvent, type ReactNode } from "react";
 import { supabase } from "../../../api/supabase";
 import { downloadBlob, tableToCsv, tableToXlsx, type ExportColumn } from "../../../framework/exportFile";
 import SalesMultiFilter, { type SmfOption } from "../sales/SalesMultiFilter";
@@ -20,7 +20,18 @@ import "./SalesReport.css";
    adds up · save.
    ===================================================================== */
 
-interface CrmChart { id: string; title: string; type: ChartType; dim: string; fn: CrmFn; value: string | null; split: string | null; cumulative?: boolean }
+/** A chart's width on the report: a third, a half, or the whole width. */
+type ChartSize = "s" | "m" | "l";
+type ChartOrder = "auto" | "high" | "low" | "az";
+interface CrmChart {
+  id: string; title: string; type: ChartType; dim: string; fn: CrmFn; value: string | null; split: string | null; cumulative?: boolean;
+  size?: ChartSize;
+  /** How many bars (the rest add up as "Other"); 0 = every one. Unset: 14. */
+  top?: number;
+  order?: ChartOrder;
+}
+/** A figure on top of the report (a count, or a total / average / lowest / highest of any number). */
+interface CrmFigure { id: string; fn: CrmFn; value: string | null; label?: string }
 export interface CrmReport {
   v: 2; name: string; source: EntityKey; filter: CondGroup;
   /** More parts of the CRM in the same report, linked to each row (a deal's signed products, a client's invoices…). */
@@ -28,6 +39,8 @@ export interface CrmReport {
   cols: string[]; labels: Record<string, string>;
   sort: { key: string; dir: "asc" | "desc" } | null; groupBy: string | null; totals: boolean;
   charts: CrmChart[]; openInView?: boolean;
+  /** The figures on top; unset = the count and the money columns' totals. */
+  figures?: CrmFigure[];
 }
 interface SavedReport { id: string; name: string; owner_id: string | null; shared: boolean; updated_at: string; config: any }
 
@@ -77,7 +90,7 @@ function fromSaved(c: any, name: string): CrmReport {
   r.labels = c?.list?.labels ?? {};
   r.sort = c?.list?.sort ?? null; r.groupBy = c?.list?.groupBy ?? null;
   r.charts = (c?.charts ?? []).map((ch: any) => ({
-    id: uid(), title: ch.title, type: ch.type, split: ch.split ?? null, cumulative: ch.cumulative,
+    id: uid(), title: ch.title, type: ch.type, split: ch.split ?? null, cumulative: ch.cumulative, size: ch.wide ? "l" : undefined,
     dim: String(ch.dim ?? "deal.phase").startsWith("time:") ? `time:${String(ch.dim).slice(5)}:deal.close` : String(ch.dim ?? "").startsWith("created:") ? `time:${String(ch.dim).slice(8)}:deal.created` : ch.dim,
     fn: ch.measure === "count" ? "count" : ch.measure === "avgprob" ? "avg" : "sum",
     value: ch.measure === "revenue" ? "deal.revenue" : ch.measure === "weighted" ? "deal.weighted" : ch.measure === "avgprob" ? "deal.prob" : null,
@@ -89,7 +102,8 @@ const STEPS = [
   { k: "data", t: "What it's about", s: "Pick the part of the CRM" },
   { k: "filter", t: "Which ones", s: "Rules and groups of rules" },
   { k: "cols", t: "What it shows", s: "The columns, in your order" },
-  { k: "sum", t: "How it adds up", s: "Groups, totals and charts" },
+  { k: "charts", t: "Charts", s: "Figures and charts" },
+  { k: "sum", t: "Groups & totals", s: "Group, sort, add up" },
   { k: "save", t: "Save", s: "Name it and share it" },
 ] as const;
 
@@ -102,9 +116,28 @@ const I = {
   down: "M12 4v11M7 10l5 5 5-5M5 20h14", chart: "M4 20V10M10 20V4M16 20v-7M22 20H2", trash: "M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13",
   copy: "M9 9h11v11H9zM5 15H4V4h11v1", search: "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.3-4.3", refresh: "M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5",
   group: "M4 6h16M8 12h12M12 18h8M4 6v12", spark: "M12 3l1.8 4.6L18 9l-4.2 1.4L12 15l-1.8-4.6L6 9l4.2-1.4z",
+  sliders: "M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1M15 4v4M9 10v4M17 16v4",
+
 };
 const KIND_ICON: Record<Kind, string> = { text: "Aa", number: "#", money: "€", percent: "%", date: "◷", enum: "≡" };
 const vars = (o: Record<string, string | number>) => o as CSSProperties;
+/** Six dots: drag me. */
+const Grip = () => (
+  <svg className="rp-grip-ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="9" cy="6" r="1.6" /><circle cx="15" cy="6" r="1.6" /><circle cx="9" cy="12" r="1.6" /><circle cx="15" cy="12" r="1.6" /><circle cx="9" cy="18" r="1.6" /><circle cx="15" cy="18" r="1.6" /></svg>
+);
+const SIZE_LABEL: Record<ChartSize, string> = { s: "A third of the width", m: "Half the width", l: "The whole width" };
+const sizeOf = (c: CrmChart): ChartSize => c.size ?? (c.type === "line" || c.type === "area" ? "l" : "m");
+const TOPS: { v: number | null; label: string }[] = [{ v: null, label: "Auto" }, { v: 5, label: "5" }, { v: 10, label: "10" }, { v: 20, label: "20" }, { v: 0, label: "All" }];
+const ORDER_LABEL: Record<ChartOrder, string> = { auto: "As listed", high: "Biggest first", low: "Smallest first", az: "A → Z" };
+/** Moves the item with id `from` before / after the one with id `to`. */
+function moveBy<T extends { id: string }>(xs: T[], from: string, to: string, after: boolean): T[] {
+  const it = xs.find((x) => x.id === from);
+  if (!it || from === to) return xs;
+  const rest = xs.filter((x) => x.id !== from);
+  const j = rest.findIndex((x) => x.id === to);
+  rest.splice(j < 0 ? rest.length : j + (after ? 1 : 0), 0, it);
+  return rest;
+}
 const glabel = (g: string) => GROUP_LABEL[g as EntityKey] ?? g;
 
 /** A field picker: every field, grouped by the part of the CRM it belongs to. */
@@ -222,6 +255,21 @@ export default function ReportsPage() {
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [shown, setShown] = useState(200);
   const [dataFor, setDataFor] = useState("");
+  /** The chart whose settings are open (one at a time). */
+  const [openChart, setOpenChart] = useState<string | null>(null);
+  /** Dragging: a chart / a column, armed from its grip, and where it would land. */
+  const [dragArm, setDragArm] = useState<string | null>(null);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState<{ id: string; after: boolean } | null>(null);
+  const [colQ, setColQ] = useState("");
+  const [figDraft, setFigDraft] = useState<{ fn: CrmFn; value: string | null } | null>(null);
+  const scrollToChart = useRef<string | null>(null);
+  useEffect(() => {
+    const id = scrollToChart.current;
+    if (!id) return;
+    scrollToChart.current = null;
+    window.requestAnimationFrame(() => document.querySelector(`[data-chart="${id}"]`)?.scrollIntoView({ block: "start", behavior: "smooth" }));
+  });
 
   useEffect(() => { if (note) { const t = setTimeout(() => setNote(null), 2800); return () => clearTimeout(t); } }, [note]);
   useEffect(() => { supabase.auth.getSession().then(({ data: s }) => setMe(s?.session?.user?.id ?? null)); void loadSaved(); }, []);
@@ -333,8 +381,23 @@ export default function ReportsPage() {
 
   /* ---- helpers for the steps ---- */
   const moveCol = (i: number, d: -1 | 1) => { if (!cfg) return; const xs = [...cfg.cols]; const j = i + d; if (j < 0 || j >= xs.length) return; [xs[i], xs[j]] = [xs[j], xs[i]]; set({ cols: xs }); };
-  const addChart = () => cfg && set({ charts: [...cfg.charts, { id: uid(), title: "New chart", type: "bar", dim: cfg.groupBy ?? cfg.cols.find((k) => fieldByKey.get(k)?.kind === "enum") ?? cfg.cols[0] ?? "", fn: "count", value: null, split: null }] });
+  const addChart = (pr?: Omit<CrmChart, "id">) => {
+    if (!cfg) return;
+    const id = uid();
+    const blank: Omit<CrmChart, "id"> = { title: "New chart", type: "bar", dim: cfg.groupBy ?? cfg.cols.find((k) => fieldByKey.get(k)?.kind === "enum") ?? cfg.cols[0] ?? "", fn: "count", value: null, split: null };
+    set({ charts: [...cfg.charts, { ...(pr ?? blank), id }] });
+    if (!pr) setOpenChart(id);
+    scrollToChart.current = id;
+  };
   const setChart = (id: string, p: Partial<CrmChart>) => cfg && set({ charts: cfg.charts.map((c) => (c.id === id ? { ...c, ...p } : c)) });
+  const dupChart = (ch: CrmChart) => {
+    if (!cfg) return;
+    const id = uid(); const i = cfg.charts.findIndex((c) => c.id === ch.id);
+    const xs = [...cfg.charts]; xs.splice(i + 1, 0, { ...ch, id, title: `${ch.title} (copy)` });
+    set({ charts: xs }); scrollToChart.current = id;
+  };
+  /** From the result (or the preview): straight to that chart's settings. */
+  const editChart = (id: string) => { setMode("build"); setStep(3); setOpenChart(id); scrollToChart.current = id; };
   const dimOptions: SmfOption[] = [
     ...fields.filter((f) => f.kind !== "date").map((f) => ({ value: f.key, label: f.label, group: glabel(f.group), hint: KIND_ICON[f.kind] })),
     ...fields.filter((f) => f.kind === "date").flatMap((f) => (["month", "quarter", "year", "week"] as const).map((g) => ({ value: `time:${g}:${f.key}`, label: `${f.label} · by ${g}`, group: `Over time · ${glabel(f.group)}` }))),
@@ -357,7 +420,7 @@ export default function ReportsPage() {
     const ok = (key: string | null | undefined) => { if (!key) return true; const k = key.startsWith("time:") ? key.split(":").slice(2).join(":") : key; return alive.has(k.split(".")[0] as EntityKey); };
     const tree = (g: CondGroup): CondGroup => ({ ...g, items: g.items.filter((it) => isGroup(it) || !it.field || ok(it.field)).map((it) => (isGroup(it) ? tree(it) : it)) });
     const cols = c.cols.filter(ok);
-    return { ...c, filter: tree(c.filter), cols: cols.length ? cols : DEFAULT_COLS[c.source], sort: c.sort && ok(c.sort.key) ? c.sort : null, groupBy: ok(c.groupBy) ? c.groupBy : null, charts: c.charts.filter((ch) => ok(ch.dim) && ok(ch.value) && ok(ch.split)) };
+    return { ...c, filter: tree(c.filter), cols: cols.length ? cols : DEFAULT_COLS[c.source], sort: c.sort && ok(c.sort.key) ? c.sort : null, groupBy: ok(c.groupBy) ? c.groupBy : null, charts: c.charts.filter((ch) => ok(ch.dim) && ok(ch.value) && ok(ch.split)), figures: c.figures?.filter((fg) => ok(fg.value)) };
   };
   /** The rows changed: their own columns come first (a few of them if there were none). */
   const leadCols = (c: CrmReport): CrmReport => {
@@ -428,36 +491,178 @@ export default function ReportsPage() {
       </div>
     );
   };
-  const chartCard = (ch: CrmChart, i: number, editable: boolean): ReactNode => {
-    const agg = aggregateCrm({ rows, dim: ch.dim, fn: ch.fn, value: ch.value, split: ch.split, fieldByKey, cumulative: ch.cumulative });
+  /* ---- dragging (charts and columns): armed from a grip, so inputs inside still select text ---- */
+  const dragProps = (id: string, onMove: (from: string, to: string, after: boolean) => void, vertical = false) => ({
+    draggable: dragArm === id,
+    onDragStart: (e: RDragEvent) => { e.dataTransfer.effectAllowed = "move"; try { e.dataTransfer.setData("text/plain", id); } catch { /* */ } setDragId(id); },
+    onDragOver: (e: RDragEvent<HTMLElement>) => {
+      if (!dragId || dragId === id) return;
+      e.preventDefault(); e.dataTransfer.dropEffect = "move";
+      const r = e.currentTarget.getBoundingClientRect();
+      const after = vertical ? e.clientY > r.top + r.height / 2 : e.clientX > r.left + r.width / 2;
+      if (dragOver?.id !== id || dragOver.after !== after) setDragOver({ id, after });
+    },
+    onDrop: (e: RDragEvent) => { e.preventDefault(); if (dragId && dragOver) onMove(dragId, dragOver.id, dragOver.after); setDragId(null); setDragOver(null); setDragArm(null); },
+    onDragEnd: () => { setDragId(null); setDragOver(null); setDragArm(null); },
+  });
+  const dragCls = (id: string) => `${dragId === id ? "is-dragging" : ""} ${dragOver?.id === id ? (dragOver.after ? "is-drop-after" : "is-drop-before") : ""}`;
+  const gripProps = (id: string) => ({
+    onPointerDown: () => setDragArm(id), onPointerUp: () => { if (!dragId) setDragArm(null); },
+    title: "Drag to move", "aria-hidden": true as const,
+  });
+
+  /* ---- charts ---- */
+  const isTimeDim = (dim: string) => dim.startsWith("time:");
+  const dimLabel = (dim: string) => {
+    const f = fieldByKey.get(dim.startsWith("time:") ? dim.split(":").slice(2).join(":") : dim);
+    const l = dimOptions.find((o) => o.value === dim)?.label ?? f?.label ?? "—";
+    return f && cfg && f.group !== cfg.source && !norm(l).includes(norm(glabel(f.group))) ? `${glabel(f.group)} ${l}` : l;
+  };
+  const chartSub = (ch: CrmChart) => {
+    const vf = ch.value ? fieldByKey.get(ch.value) : null;
+    const what = ch.fn === "count" || !vf ? "How many" : `${FN_LABEL[ch.fn]} of ${vf.label.toLowerCase()}`;
+    const sp = ch.split ? fieldByKey.get(ch.split) : null;
+    return [what, `by ${dimLabel(ch.dim).toLowerCase()}`, sp ? `split by ${sp.label.toLowerCase()}` : "", ch.top ? `top ${ch.top}` : "", ch.cumulative ? "running total" : ""].filter(Boolean).join(" · ");
+  };
+  const splitOptions: SmfOption[] = [{ value: "__none", label: "No split" }, ...fields.filter((f) => f.kind === "enum" || f.kind === "text").map((f) => ({ value: f.key, label: f.label, group: glabel(f.group), hint: KIND_ICON[f.kind] }))];
+  /** Charts that fit this report, one click each (built from its own fields). */
+  const suggestions = useMemo((): Omit<CrmChart, "id">[] => {
+    if (!cfg || !fields.length) return [];
+    const e = entityOf(cfg.source);
+    const lc = (x: string) => x.toLowerCase();
+    const own = fields.filter((f) => f.group === cfg.source && !f.key.endsWith(".__count"));
+    const fit = (f: Field) => f.kind === "enum" && !/name|email|phone|website|url/i.test(f.key) && (() => { const n = valuesOf(f).length; return n >= 2 && n <= 40; })();
+    // its own categories first, then those of what comes along (a contact's company country…)
+    const enums = [...own.filter(fit), ...fields.filter((f) => f.group !== cfg.source && fit(f))].slice(0, 4);
+    const money = own.filter((f) => f.kind === "money");
+    const dates = own.filter((f) => f.kind === "date");
+    const name = own.find((f) => /\.(name|title)$/.test(f.key));
+    const out: Omit<CrmChart, "id">[] = [];
+    const nm = (f: Field) => (f.group === cfg.source ? lc(f.label) : `${lc(glabel(f.group))} ${lc(f.label)}`);
+    const stage = enums.find((f) => /phase|stage/i.test(f.key));
+    if (stage) out.push({ title: `Funnel by ${nm(stage)}`, type: "funnel", dim: stage.key, fn: "count", value: null, split: null });
+    enums.slice(0, 3).forEach((f, i) => out.push({ title: `${e.plural} by ${nm(f)}`, type: i % 2 ? "donut" : "bar", dim: f.key, fn: "count", value: null, split: null }));
+    if (money[0] && enums[0]) out.push({ title: `${money[0].label} by ${nm(enums[0])}`, type: "bar", dim: enums[0].key, fn: "sum", value: money[0].key, split: null });
+    if (money[0] && name) out.push({ title: `Top 10 by ${lc(money[0].label)}`, type: "hbar", dim: name.key, fn: "sum", value: money[0].key, split: null, top: 10, order: "high" });
+    if (dates[0]) out.push({ title: `${money[0] ? money[0].label : e.plural} by month · ${lc(dates[0].label)}`, type: "area", dim: `time:month:${dates[0].key}`, fn: money[0] ? "sum" : "count", value: money[0]?.key ?? null, split: null, size: "l" });
+    if (dates[0] && money[0]) out.push({ title: `${money[0].label} · running total`, type: "line", dim: `time:month:${dates[0].key}`, fn: "sum", value: money[0].key, split: null, cumulative: true, size: "l" });
+    if (enums.length >= 2) out.push({ title: `${enums[1].group === cfg.source ? enums[1].label : `${glabel(enums[1].group)} ${lc(enums[1].label)}`} by ${nm(enums[0])}`, type: "stacked", dim: enums[1].key, fn: "count", value: null, split: enums[0].key });
+    const seen = new Set<string>();
+    return out.filter((c) => { const k = `${c.type}|${c.dim}|${c.fn}|${c.value}|${c.split}|${c.cumulative}`; if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 8);
+  }, [cfg?.source, fields, valuesOf]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const chartCard = (ch: CrmChart, i: number, mode: "edit" | "view"): ReactNode => {
+    const agg = aggregateCrm({ rows, dim: ch.dim, fn: ch.fn, value: ch.value, split: ch.split, fieldByKey, cumulative: ch.cumulative, limit: ch.top === 0 ? 60 : ch.top ?? undefined, order: ch.order, other: ch.top ? false : undefined });
+    const editable = mode === "edit";
+    const open = editable && openChart === ch.id;
+    const sz = sizeOf(ch);
+    const move = (from: string, to: string, after: boolean) => cfg && set({ charts: moveBy(cfg.charts, from, to, after) });
     return (
-      <div className={`rp-chart ${editable ? "is-edit" : ""}`} key={ch.id} style={vars({ "--i": i, "--c": PALETTE[i % PALETTE.length] })}>
+      <div className={`rp-chart sz-${sz} ${editable ? "is-edit" : ""} ${open ? "is-open" : ""} ${editable ? dragCls(ch.id) : ""}`} key={ch.id} data-chart={ch.id}
+        style={vars({ "--i": i, "--c": PALETTE[i % PALETTE.length] })} {...(editable ? dragProps(ch.id, move) : {})}>
         <div className="rp-chart-h">
-          {editable ? <input className="rp-chart-t" value={ch.title} onChange={(e) => setChart(ch.id, { title: e.target.value })} aria-label="Chart title" /> : <b>{ch.title}</b>}
-          {editable && <button type="button" className="rp-x" onClick={() => set({ charts: cfg!.charts.filter((c) => c.id !== ch.id) })} aria-label="Remove chart"><Ico d={I.trash} /></button>}
+          {editable && <span className="rp-grip" {...gripProps(ch.id)}><Grip /></span>}
+          <div className="rp-chart-ht">
+            {editable ? <input className="rp-chart-t" value={ch.title} onChange={(e) => setChart(ch.id, { title: e.target.value })} aria-label="Chart title" /> : <b>{ch.title}</b>}
+            <em>{chartSub(ch)}</em>
+          </div>
+          {editable ? (
+            <div className="rp-chart-tools">
+              <div className="rp-size" role="radiogroup" aria-label="Width">
+                {(["s", "m", "l"] as ChartSize[]).map((z) => (
+                  <button type="button" key={z} role="radio" aria-checked={sz === z} className={sz === z ? "is-on" : ""} title={SIZE_LABEL[z]} onClick={() => setChart(ch.id, { size: z })}>
+                    <span className={`rp-size-ico is-${z}`}><i /><i /><i /></span>
+                  </button>
+                ))}
+              </div>
+              <button type="button" className={`rp-tool ${open ? "is-on" : ""}`} onClick={() => setOpenChart(open ? null : ch.id)} aria-pressed={open} title="Chart settings"><Ico d={I.sliders} /></button>
+              <button type="button" className="rp-tool" onClick={() => dupChart(ch)} title="Duplicate"><Ico d={I.copy} /></button>
+              <button type="button" className="rp-tool is-del" onClick={() => { set({ charts: cfg!.charts.filter((c) => c.id !== ch.id) }); if (open) setOpenChart(null); }} title="Remove"><Ico d={I.trash} /></button>
+            </div>
+          ) : (
+            <button type="button" className="rp-tool is-ghost" onClick={() => editChart(ch.id)} title="Change this chart"><Ico d={I.edit} /></button>
+          )}
         </div>
-        {editable && (
-          <div className="rp-chart-cfg">
-            <label><span>Chart</span><SalesMultiFilter single values={[ch.type]} onChange={(v) => v[0] && setChart(ch.id, { type: v[0] as ChartType })} options={(Object.keys(CHART_LABEL) as ChartType[]).map((t) => ({ value: t, label: CHART_LABEL[t] }))} placeholder="Type" /></label>
-            <label><span>By</span><SalesMultiFilter single values={ch.dim ? [ch.dim] : []} onChange={(v) => v[0] && setChart(ch.id, { dim: v[0] })} options={dimOptions} placeholder="Pick…" searchFrom={8} /></label>
-            <label><span>Figure</span><SalesMultiFilter single values={[ch.fn]} onChange={(v) => v[0] && setChart(ch.id, { fn: v[0] as CrmFn, value: v[0] === "count" ? null : ch.value ?? numFields[0]?.key ?? null })} options={(Object.keys(FN_LABEL) as CrmFn[]).map((f) => ({ value: f, label: f === "count" ? "How many" : `${FN_LABEL[f]} of…` }))} placeholder="Figure" /></label>
-            {ch.fn !== "count" && <label><span>Of</span><FieldPick fields={numFields} value={ch.value} onChange={(k) => setChart(ch.id, { value: k })} placeholder="A number…" /></label>}
-            <label><span>Split by</span><SalesMultiFilter single values={[ch.split ?? "__none"]} onChange={(v) => setChart(ch.id, { split: v[0] && v[0] !== "__none" ? v[0] : null })} options={[{ value: "__none", label: "No split" }, ...fields.filter((f) => f.kind === "enum").map((f) => ({ value: f.key, label: f.label, group: glabel(f.group) }))]} placeholder="No split" searchFrom={8} /></label>
-            <label className="rp-chk"><input type="checkbox" checked={!!ch.cumulative} onChange={(e) => setChart(ch.id, { cumulative: e.target.checked })} /><span>Running total</span></label>
+        {open && (
+          <div className="rp-chart-set">
+            <div className="rp-types" role="radiogroup" aria-label="Chart type">
+              {(Object.keys(CHART_LABEL) as ChartType[]).map((t) => (
+                <button type="button" key={t} role="radio" aria-checked={ch.type === t} className={`rp-type ${ch.type === t ? "is-on" : ""}`} onClick={() => setChart(ch.id, { type: t })}>
+                  <span className={`rb-preset-ico is-${t}`}><i /><i /><i /></span>{CHART_LABEL[t]}
+                </button>
+              ))}
+            </div>
+            <div className="rp-chart-cfg">
+              <label><span>By</span><SalesMultiFilter single values={ch.dim ? [ch.dim] : []} onChange={(v) => v[0] && setChart(ch.id, { dim: v[0] })} options={dimOptions} placeholder="Pick…" searchFrom={8} /></label>
+              <label><span>Figure</span><SalesMultiFilter single values={[ch.fn]} onChange={(v) => v[0] && setChart(ch.id, { fn: v[0] as CrmFn, value: v[0] === "count" ? null : ch.value ?? numFields[0]?.key ?? null })} options={(Object.keys(FN_LABEL) as CrmFn[]).map((f) => ({ value: f, label: f === "count" ? "How many" : `${FN_LABEL[f]} of…` }))} placeholder="Figure" /></label>
+              {ch.fn !== "count" && <label><span>Of</span><FieldPick fields={numFields} value={ch.value} onChange={(k) => setChart(ch.id, { value: k })} placeholder="A number…" /></label>}
+              <label><span>Split by</span><SalesMultiFilter single values={[ch.split ?? "__none"]} onChange={(v) => setChart(ch.id, { split: v[0] && v[0] !== "__none" ? v[0] : null })} options={splitOptions} placeholder="No split" searchFrom={8} /></label>
+            </div>
+            <div className="rp-chart-opts">
+              {!isTimeDim(ch.dim) && (
+                <div className="rp-opt"><span>Show</span>
+                  <div className="rp-seg is-light">
+                    {TOPS.map((t) => <button type="button" key={t.label} className={(ch.top ?? null) === t.v ? "is-on" : ""} onClick={() => setChart(ch.id, { top: t.v ?? undefined })}>{t.v ? `Top ${t.label}` : t.label}</button>)}
+                  </div>
+                </div>
+              )}
+              {!isTimeDim(ch.dim) && (
+                <div className="rp-opt"><span>Order</span>
+                  <div className="rp-seg is-light">
+                    {(Object.keys(ORDER_LABEL) as ChartOrder[]).map((o) => <button type="button" key={o} className={(ch.order ?? "auto") === o ? "is-on" : ""} onClick={() => setChart(ch.id, { order: o })}>{ORDER_LABEL[o]}</button>)}
+                  </div>
+                </div>
+              )}
+              <label className="rp-chk"><input type="checkbox" checked={!!ch.cumulative} onChange={(e) => setChart(ch.id, { cumulative: e.target.checked })} /><span>Running total</span></label>
+            </div>
           </div>
         )}
         <div className="rp-chart-body">{agg.keys.length ? <ReportChart type={ch.type} agg={agg} /> : <p className="rp-none">No data for this chart yet.</p>}</div>
       </div>
     );
   };
-  const kpis = (): ReactNode => {
+  const chartGrid = (mode: "edit" | "view"): ReactNode => cfg && cfg.charts.length > 0 && (
+    <div className={`rp-charts is-grid ${mode === "edit" ? "is-edit" : ""} ${dragId ? "is-dragging" : ""}`}>{cfg.charts.map((c, i) => chartCard(c, i, mode))}</div>
+  );
+
+  /* ---- figures on top ---- */
+  const autoFigures = (): CrmFigure[] => [{ id: "count", fn: "count", value: null }, ...colFields.filter((f) => f.kind === "money").slice(0, 3).map((f) => ({ id: f.key, fn: "sum" as CrmFn, value: f.key }))];
+  const figures = cfg ? cfg.figures ?? autoFigures() : [];
+  const figValue = (fg: CrmFigure): { label: string; value: string; sub: string } => {
+    const f = fg.value ? fieldByKey.get(fg.value) : undefined;
+    if (fg.fn === "count" || !f) return { label: fg.label || (many ? "Rows" : ent?.plural ?? "Rows"), value: rows.length.toLocaleString("en-GB"), sub: `of ${allRows.length.toLocaleString("en-GB")} · ${nRules ? `${nRules} rule${nRules === 1 ? "" : "s"}` : "no rules"}` };
+    const ns = rows.map((r) => Number(f.get(r as any))).filter((n) => Number.isFinite(n));
+    const v = !ns.length ? 0 : fg.fn === "sum" ? ns.reduce((a, b) => a + b, 0) : fg.fn === "avg" ? ns.reduce((a, b) => a + b, 0) / ns.length : fg.fn === "min" ? Math.min(...ns) : Math.max(...ns);
+    const word = { sum: "total", avg: "average", min: "lowest", max: "highest", count: "" }[fg.fn];
+    return { label: fg.label || cfg?.labels[f.key] || f.label, value: showCell(f, v) || "0", sub: `${glabel(f.group)} · ${word}` };
+  };
+  const setFigures = (xs: CrmFigure[]) => set({ figures: xs });
+  const kpis = (editable = false): ReactNode => {
     if (!cfg) return null;
-    const money = colFields.filter((f) => f.kind === "money").slice(0, 3);
+    const move = (from: string, to: string, after: boolean) => setFigures(moveBy(figures, from, to, after));
     return (
-      <div className="rp-kpis">
-        <div className="rp-kpi" style={vars({ "--c": ent?.tone ?? "#1fb98a", "--i": 0 })}><span>{many ? "Rows" : ent?.plural}</span><b>{rows.length.toLocaleString("en-GB")}</b><em>of {allRows.length.toLocaleString("en-GB")} · {nRules ? `${nRules} rule${nRules === 1 ? "" : "s"}` : "no rules"}</em></div>
-        {money.map((f, i) => (
-          <div className="rp-kpi" key={f.key} style={vars({ "--c": PALETTE[(i + 1) % PALETTE.length], "--i": i + 1 })}><span>{cfg.labels[f.key] || f.label}</span><b>{showCell(f, totalOf(f, rows)) || "0 €"}</b><em>{glabel(f.group)} · total</em></div>
+      <div className={`rp-kpis ${editable ? "is-edit" : ""}`}>
+        {figures.map((fg, i) => {
+          const x = figValue(fg);
+          return (
+            <div className={`rp-kpi ${editable ? dragCls(fg.id) : ""}`} key={fg.id} style={vars({ "--c": i === 0 ? ent?.tone ?? "#1fb98a" : PALETTE[i % PALETTE.length], "--i": i })} {...(editable ? dragProps(fg.id, move) : {})}>
+              {editable && <span className="rp-grip is-kpi" {...gripProps(fg.id)}><Grip /></span>}
+              <span>{x.label}</span><b>{x.value}</b><em>{x.sub}</em>
+              {editable && <button type="button" className="rp-x rp-kpi-x" onClick={() => setFigures(figures.filter((y) => y.id !== fg.id))} aria-label={`Remove ${x.label}`}><Ico d={I.x} w={2.4} /></button>}
+            </div>
+          );
+        })}
+        {editable && (figDraft ? (
+          <div className="rp-kpi is-add is-open">
+            <SalesMultiFilter single values={[figDraft.fn]} onChange={(v) => v[0] && setFigDraft({ fn: v[0] as CrmFn, value: v[0] === "count" ? null : figDraft.value ?? numFields[0]?.key ?? null })} options={(Object.keys(FN_LABEL) as CrmFn[]).map((f) => ({ value: f, label: f === "count" ? "How many" : f === "sum" ? "Total of…" : `${FN_LABEL[f]} of…` }))} placeholder="Figure" />
+            {figDraft.fn !== "count" && <FieldPick fields={numFields} value={figDraft.value} onChange={(k) => setFigDraft({ ...figDraft, value: k })} placeholder="A number…" />}
+            <div className="rp-kpi-acts">
+              <button type="button" className="rp-btn is-ghost" onClick={() => setFigDraft(null)}>Cancel</button>
+              <button type="button" className="rp-btn is-main" disabled={figDraft.fn !== "count" && !figDraft.value} onClick={() => { setFigures([...figures, { id: uid(), fn: figDraft.fn, value: figDraft.fn === "count" ? null : figDraft.value }]); setFigDraft(null); }}>Add</button>
+            </div>
+          </div>
+        ) : (
+          <button type="button" className="rp-kpi is-add" onClick={() => setFigDraft({ fn: "sum", value: (numFields.find((f) => !figures.some((x) => x.value === f.key)) ?? numFields[0])?.key ?? null })}><Ico d={I.plus} w={2.4} /><b>Add a figure</b><em>A count, total, average, lowest or highest</em></button>
         ))}
       </div>
     );
@@ -585,7 +790,7 @@ export default function ReportsPage() {
                       <li key={s.k} className={`${i === step ? "is-on" : ""} ${i < step ? "is-done" : ""}`}>
                         <button type="button" onClick={() => setStep(i)}>
                           <i>{i < step ? <Ico d={I.check} w={3} /> : i + 1}</i>
-                          <span><b>{s.t}</b><em>{i === 0 ? [ent!.plural, ...withList.map((k) => entityOf(k).plural)].join(" + ") : i === 1 && nRules ? `${nRules} rule${nRules === 1 ? "" : "s"}` : i === 2 ? `${cfg.cols.length} column${cfg.cols.length === 1 ? "" : "s"}` : i === 3 && cfg.charts.length ? `${cfg.charts.length} chart${cfg.charts.length === 1 ? "" : "s"}` : s.s}</em></span>
+                          <span><b>{s.t}</b><em>{i === 0 ? [ent!.plural, ...withList.map((k) => entityOf(k).plural)].join(" + ") : i === 1 && nRules ? `${nRules} rule${nRules === 1 ? "" : "s"}` : i === 2 ? `${cfg.cols.length} column${cfg.cols.length === 1 ? "" : "s"}` : i === 3 && cfg.charts.length ? `${cfg.charts.length} chart${cfg.charts.length === 1 ? "" : "s"}` : i === 4 && cfg.groupBy ? `By ${(fieldByKey.get(cfg.groupBy)?.label ?? "").toLowerCase()}` : s.s}</em></span>
                         </button>
                       </li>
                     ))}
@@ -641,12 +846,14 @@ export default function ReportsPage() {
                     {step === 2 && (
                       <section className="rp-card">
                         <h3>What does each row show?</h3>
-                        <p className="rp-help">The columns, in the order you want. Rename any of them for this report. In the result, click a column title to sort.</p>
-                        <div className="rp-cols">
+                        <p className="rp-help">Tick any field below to add it. Drag the columns by their handle to put them in your order, and rename any of them for this report. In the result, click a column title to sort.</p>
+                        <div className={`rp-cols ${dragId ? "is-dragging" : ""}`}>
                           {cfg.cols.map((k, i) => {
                             const f = fieldByKey.get(k);
+                            const move = (from: string, to: string, after: boolean) => set({ cols: moveBy(cfg.cols.map((x) => ({ id: x })), from, to, after).map((x) => x.id) });
                             return (
-                              <div className="rp-col" key={k}>
+                              <div className={`rp-col ${dragCls(k)}`} key={k} {...dragProps(k, move, true)}>
+                                <span className="rp-grip" {...gripProps(k)}><Grip /></span>
                                 <span className="rp-col-k">{f ? KIND_ICON[f.kind] : "?"}</span>
                                 <span className="rp-col-g" style={vars({ "--c": entityOf((f?.group ?? cfg.source) as EntityKey)?.tone ?? "#999" })}>{f ? glabel(f.group) : "—"}</span>
                                 <input value={cfg.labels[k] ?? (f?.label ?? k)} onChange={(e) => set({ labels: { ...cfg.labels, [k]: e.target.value } })} aria-label="Column name" />
@@ -658,20 +865,72 @@ export default function ReportsPage() {
                             );
                           })}
                         </div>
-                        <div className="rp-addcol">
-                          <div className="rp-addcol-pick"><FieldPick fields={fields} value={null} filter={(f) => !cfg.cols.includes(f.key)} placeholder="+ Add a column" onChange={(k) => set({ cols: [...cfg.cols, k] })} /></div>
-                          {parts.map((g) => (
-                            <button type="button" key={g} className="rp-add is-ghost" onClick={() => set({ cols: [...cfg.cols, ...fields.filter((f) => f.group === g && !cfg.cols.includes(f.key) && !f.key.endsWith(".__count")).slice(0, 6).map((f) => f.key)] })}>
-                              + {entityOf(g).label} basics
-                            </button>
-                          ))}
+                        <div className="rp-catalog">
+                          <div className="rp-catalog-h">
+                            <b>Every field</b>
+                            <label className="rp-search is-light"><Ico d={I.search} /><input value={colQ} onChange={(e) => setColQ(e.target.value)} placeholder="Find a field…" /></label>
+                            {parts.map((g) => (
+                              <button type="button" key={g} className="rp-add is-ghost" onClick={() => set({ cols: [...cfg.cols, ...fields.filter((f) => f.group === g && !cfg.cols.includes(f.key) && !f.key.endsWith(".__count")).slice(0, 6).map((f) => f.key)] })}>
+                                + {entityOf(g).label} basics
+                              </button>
+                            ))}
+                          </div>
+                          <div className="rp-catalog-b">
+                            {[...new Set(fields.map((f) => f.group))].map((g) => {
+                              const fs = fields.filter((f) => f.group === g && (!colQ.trim() || norm(f.label).includes(norm(colQ.trim()))));
+                              if (!fs.length) return null;
+                              return (
+                                <div className="rp-cat-g" key={g} style={vars({ "--c": entityOf(g as EntityKey)?.tone ?? "#1fb98a" })}>
+                                  <span className="rp-cat-gl">{glabel(g)}</span>
+                                  <div className="rp-cat-chips">
+                                    {fs.map((f) => {
+                                      const on = cfg.cols.includes(f.key);
+                                      return (
+                                        <button type="button" key={f.key} aria-pressed={on} className={`rp-cat-chip ${on ? "is-on" : ""}`} onClick={() => set({ cols: on ? cfg.cols.filter((x) => x !== f.key) : [...cfg.cols, f.key] })}>
+                                          <i>{on ? <Ico d={I.check} w={3} /> : KIND_ICON[f.kind]}</i>{f.label}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
                         </div>
                       </section>
                     )}
 
                     {step === 3 && (
+                      <>
+                        <section className="rp-card">
+                          <div className="rp-charts-top">
+                            <div>
+                              <h3>Figures and charts</h3>
+                              <p className="rp-help">The figures on top, then your charts — on any field, or by week, month, quarter or year of any date. Drag them by their handle into your order and pick how wide each one is.</p>
+                            </div>
+                          </div>
+                          <div className="rp-sub-h"><h4>Figures on top</h4><span>{cfg.figures ? <button type="button" className="rp-link" onClick={() => set({ figures: undefined })}>Back to the automatic ones</button> : "Automatic: the count and the money columns"}</span></div>
+                          {kpis(true)}
+                          <div className="rp-sub-h is-charts"><h4>Add a chart</h4><span>Made for this report — one click each, then change anything</span></div>
+                          <div className="rp-gallery">
+                            {suggestions.map((pr) => (
+                              <button type="button" key={pr.title} className="rb-preset rp-preset" onClick={() => addChart(pr)} title={`Add “${pr.title}”`}>
+                                <span className={`rb-preset-ico is-${pr.type}`}><i /><i /><i /></span><span className="rp-preset-t">{pr.title}</span>
+                              </button>
+                            ))}
+                            <button type="button" className="rb-preset is-custom rp-preset" onClick={() => addChart()}><Ico d={I.plus} />Your own chart</button>
+                          </div>
+                        </section>
+                        {cfg.charts.length ? chartGrid("edit") : (
+                          <div className="rp-chart-empty"><span><Ico d={I.chart} /></span><b>No charts yet</b><em>Pick one above, or build your own. They show up here, live, as you change them.</em></div>
+                        )}
+                      </>
+                    )}
+
+                    {step === 4 && (
                       <section className="rp-card">
-                        <h3>How does it add up?</h3>
+                        <h3>Groups and totals</h3>
+                        <p className="rp-help">Group the rows under a heading for each value (with a subtotal), pick the order, and add a totals row for the numbers.</p>
                         <div className="rp-sumrow">
                           <label><span>Group the rows by</span>
                             <SalesMultiFilter single values={[cfg.groupBy ?? "__none"]} onChange={(v) => set({ groupBy: v[0] && v[0] !== "__none" ? v[0] : null })}
@@ -687,13 +946,10 @@ export default function ReportsPage() {
                           )}
                           <label className="rp-chk"><input type="checkbox" checked={cfg.totals} onChange={(e) => set({ totals: e.target.checked })} /><span>Totals for the numbers</span></label>
                         </div>
-                        <div className="rp-charts-h"><h4>Charts</h4><button type="button" className="rp-add" onClick={addChart}><Ico d={I.plus} w={2.4} />Add a chart</button></div>
-                        {!cfg.charts.length && <p className="rp-none">No charts yet. A chart counts or adds up the rows by any field — or by week, month, quarter or year of any date.</p>}
-                        <div className="rp-charts">{cfg.charts.map((c, i) => chartCard(c, i, true))}</div>
                       </section>
                     )}
 
-                    {step === 4 && (
+                    {step === 5 && (
                       <section className="rp-card">
                         <h3>Save it</h3>
                         <div className="rp-savegrid">
@@ -713,9 +969,11 @@ export default function ReportsPage() {
                       </section>
                     )}
 
-                    {step > 0 && step < 4 && (
+                    {step > 0 && step < 5 && (
                       <section className="rp-card is-preview">
-                        <div className="rp-prev-h"><b>Preview</b><em>{rows.length.toLocaleString("en-GB")} of {allRows.length.toLocaleString("en-GB")} {rowWord(allRows.length)} · first 8 rows</em></div>
+                        <div className="rp-prev-h"><span className="rp-live" aria-hidden="true" /><b>Live preview</b><em>{rows.length.toLocaleString("en-GB")} of {allRows.length.toLocaleString("en-GB")} {rowWord(allRows.length)}{step !== 3 && cfg.charts.length ? ` · ${cfg.charts.length} chart${cfg.charts.length === 1 ? "" : "s"}` : ""} · first 8 rows</em></div>
+                        {step !== 3 && kpis()}
+                        {step !== 3 && chartGrid("view")}
                         {table(8)}
                       </section>
                     )}
@@ -732,7 +990,7 @@ export default function ReportsPage() {
               ) : (
                 <div className="rp-view">
                   {kpis()}
-                  {cfg.charts.length > 0 && <div className="rp-charts is-view">{cfg.charts.map((c, i) => chartCard(c, i, false))}</div>}
+                  {chartGrid("view")}
                   <section className="rp-card is-table">{table(shown)}</section>
                 </div>
               )}

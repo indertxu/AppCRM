@@ -3,6 +3,7 @@ import DatePicker from "../../framework/DatePicker";
 import { LEVELS, TITLES } from "./NewUserModal";
 import { initials, type UserRow } from "./UsersView";
 import Select from "../../framework/Select";
+import { passwordProblem, PASSWORD_HINT } from "../../login/LoginPage";
 
 interface Props {
   user: UserRow;
@@ -53,7 +54,8 @@ export default function UserDetailModal({ user, canEditRole, allowedLevels, onSa
 
   const reset = async () => {
     setPwMsg(null);
-    if (newPw.length < 6) return setPwMsg({ ok: false, text: "At least 6 characters." });
+    const weak = passwordProblem(newPw);
+    if (weak) return setPwMsg({ ok: false, text: weak });
     setPwBusy(true);
     const err = await onReset(user.id, newPw);
     setPwBusy(false);
@@ -98,10 +100,10 @@ export default function UserDetailModal({ user, canEditRole, allowedLevels, onSa
           <div className="ud-reset">
             <span className="ud-reset-label">Reset password</span>
             <div className="ud-reset-row">
-              <input type="text" className="cl-input" placeholder="New password (min 6)" value={newPw} onChange={(e) => setNewPw(e.target.value)} />
+              <input type="text" className="cl-input" placeholder="New password" title={PASSWORD_HINT} value={newPw} onChange={(e) => setNewPw(e.target.value)} />
               <button className="cl-cancel" onClick={reset} disabled={pwBusy}>{pwBusy ? "…" : "Reset"}</button>
             </div>
-            {pwMsg && <p className={pwMsg.ok ? "st-ok" : "su-error"}>{pwMsg.text}</p>}
+            {pwMsg ? <p className={pwMsg.ok ? "st-ok" : "su-error"}>{pwMsg.text}</p> : <p className="st-sub">{PASSWORD_HINT}</p>}
           </div>
         </div>
 

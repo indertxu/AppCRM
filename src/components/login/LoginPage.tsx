@@ -66,6 +66,23 @@ export const DEACTIVATED_KEY = "np-deactivated";
 export const DEACTIVATED_EVENT = "np:deactivated";
 const DEACTIVATED_MSG = "This account has been deactivated. Ask your administrator.";
 const MIN_PW = 8;
+/**
+ * The password rule everywhere a password is set (reset, Settings, new users, superadmin):
+ * at least 8 characters, with letters, numbers and a symbol (. - _ ! @ …).
+ */
+export const PASSWORD_RULES: { label: string; ok: (p: string) => boolean }[] = [
+  { label: `At least ${MIN_PW} characters`, ok: (p) => p.length >= MIN_PW },
+  { label: "Letters and numbers", ok: (p) => /\p{L}/u.test(p) && /\d/.test(p) },
+  { label: "A symbol (. - _ ! @)", ok: (p) => /[^\p{L}\d\s]/u.test(p) },
+];
+export const PASSWORD_HINT = `At least ${MIN_PW} characters, with letters, numbers and a symbol (. - _ ! @ …).`;
+/** what's wrong with this password, or null when it meets the rule */
+export function passwordProblem(p: string): string | null {
+  if (p.length < MIN_PW) return `Use at least ${MIN_PW} characters.`;
+  if (!PASSWORD_RULES[1].ok(p)) return "Use both letters and numbers.";
+  if (!PASSWORD_RULES[2].ok(p)) return "Add a symbol, like . - _ or !";
+  return null;
+}
 const emailOk = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim());
 type View = "signin" | "forgot" | "sent" | "checking" | "reset" | "expired" | "blocked";
 
@@ -879,7 +896,8 @@ export default function LoginPage({ mode = "signin" }: { mode?: "signin" | "rese
     e.preventDefault();
     if (loading || launching) return;
     setError(null);
-    if (password.length < MIN_PW) { fail(`Use at least ${MIN_PW} characters.`); return; }
+    const weak = passwordProblem(password);
+    if (weak) { fail(weak); return; }
     if (password !== password2) { fail("The two passwords don't match."); return; }
     setLoading(true);
     launchHold = Date.now();
@@ -911,7 +929,6 @@ export default function LoginPage({ mode = "signin" }: { mode?: "signin" | "rese
     go("signin");
   };
 
-  const pwLong = password.length >= MIN_PW;
   const pwMatch = password2.length > 0 && password === password2;
 
   const emailField = (
@@ -947,7 +964,7 @@ export default function LoginPage({ mode = "signin" }: { mode?: "signin" | "rese
         autoComplete={auto}
         placeholder=" "
         value={value}
-        onChange={(e) => set(e.target.value)}
+        onChange={(e) => { set(e.target.value); if (error && view === "reset") setError(null); }}
         onKeyDown={watchCaps}
         onKeyUp={watchCaps}
         onBlur={() => setCaps(false)}
@@ -1186,7 +1203,9 @@ export default function LoginPage({ mode = "signin" }: { mode?: "signin" | "rese
                       {passwordField("np-password2", "Repeat new password", password2, setPassword2, "new-password", false)}
                       {capsNote}
                       <ul className="np-rules" aria-label="Password rules">
-                        <li className={pwLong ? "is-ok" : ""}><i aria-hidden="true" />At least {MIN_PW} characters</li>
+                        {PASSWORD_RULES.map((r) => (
+                          <li key={r.label} className={r.ok(password) ? "is-ok" : ""}><i aria-hidden="true" />{r.label}</li>
+                        ))}
                         <li className={pwMatch ? "is-ok" : ""}><i aria-hidden="true" />Both match</li>
                       </ul>
                       {errorBox}

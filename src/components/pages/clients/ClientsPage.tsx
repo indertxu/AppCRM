@@ -9,8 +9,13 @@ import {
   useClientsData, loadCsData, setClientOwners, saveClientHealth, saveUpsell, deleteUpsell, saveQbr, deleteQbr, freezeArr,
   addRevenueEvent, deleteRevenueEvent, saveCsSettings, setClientCadence, logClientContact, createClientFollowUp, generateContactTasks,
   convertUpsellToDeal, CS_REASONS, UPSELL_STATUSES, SPICED, NEEDS_CS,
+  cadenceOf, setClientPriority, CS_PRIORITIES, loadCsAuto, saveCsTemplate, deleteCsTemplate, saveCsSequence, deleteCsSequence, setCsRun,
+  uploadCsFile, removeCsFile, runCsSequences, testCsTemplate, CS_TAGS, fillCsTags, renderCsEmail, cleanCsBody, NEEDS_AUTO,
+  scanCsMail, loadCsMailSync, type CsMailSync, csVariantFor, inspectCsFile, previewCsAttachment, type CsAttachment, type CsVariant, type CsVariantAudience,
   type CsData, type CsUpsell, type CsHealthStatus, type CsQbr, type RevenueEvent,
+  type CsPriority, type CsAuto, type CsTemplate, type CsSequence, type CsRun, type CsStep,
 } from "./useClientsData";
+import SalesMultiFilter from "../sales/sales/SalesMultiFilter";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { listEmployees, type Employee } from "../companies/companiesApi";
@@ -932,6 +937,12 @@ const CSI: Record<string, string> = {
   edit: "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z",
   mail: "M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM22 6l-10 7L2 6",
   pin: "M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21zM12 12a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z",
+  up: "M12 19V5M6 11l6-6 6 6",
+  dn: "M12 5v14M6 13l6 6 6-6",
+  clip: "M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5",
+  eye: "M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
+  din: "M17 7L7 17M7 17h9M7 17V8",
+  dout: "M7 17L17 7M17 7H8M17 7v9",
 };
 const CsIco = ({ n, s = 16 }: { n: keyof typeof CSI; s?: number }) => (
   <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={CSI[n]} /></svg>
@@ -1142,22 +1153,72 @@ export function ClientUpsells({ clientId, clientName }: { clientId: string; clie
 }
 
 /* ---------- the page ---------- */
-interface CsLog { client_id: string; contacted_at: string; reason: string | null; channel: string | null; contact_name?: string | null }
+interface CsLog { client_id: string; contacted_at: string; reason: string | null; channel: string | null; contact_name?: string | null; direction?: "in" | "out" | null; source?: string | null; logged_by?: string | null }
 interface CsClient {
   id: string; name: string; website: string;
   arr: number; lines: Line[];
   last: string | null; lastWhy: string | null; days: number | null;
+  /** days since they last reached us / we last reached them, and which way the last contact went */
+  daysIn: number | null; daysOut: number | null; lastDir: "in" | "out" | null;
+  /** who it was: on our side (our team) and on theirs, for the last contact and the last one each way */
+  lastUs: string; lastThem: string; inUs: string; inThem: string; outUs: string; outThem: string;
   owners: string[]; primary: string | null;
   /** days since the last contact / the client's cadence (Infinity when never contacted) */
   ratio: number; cadence: number;
   health: CsHealthStatus | null;
-  ren: { end: Date; left: number; value: number; auto: boolean } | null;
+  ren: { end: Date; left: number; value: number; auto: boolean; kind: CsTermKind } | null;
   ups: number; upsValue: number;
+  /** how often we should be in touch (its own cadence, else its priority's, else the default) */
+  priority: CsPriority | null;
+  typeId: string | null;
+  contacts: { name?: string; email?: string; billing?: boolean }[];
   /** what needs doing first, highest first */
   score: number;
 }
-type CsTab = "accounts" | "upsells" | "qbr" | "revenue";
-type CsFilter = "all" | "contact" | "risk" | "renew" | "orphan" | "upsell";
+type CsTab = "accounts" | "followups" | "upsells" | "qbr" | "revenue";
+type CsFilter = "all" | "contact" | "risk" | "renew" | "orphan" | "upsell" | "high";
+/** Where a renewal date comes from: the product's own term, its deal's contract, or (no term on file) its yearly anniversary. */
+type CsTermKind = "term" | "deal" | "anniversary";
+const CS_DAY = 864e5;
+const csAddYears = (d0: Date, y: number) => { const d = new Date(d0); d.setFullYear(d.getFullYear() + Math.floor(y)); d.setMonth(d.getMonth() + Math.round((y % 1) * 12)); return d; };
+/** A signed product's next renewal — the same rule the automatic e-mails use. */
+function csRenewalOf(l: Line, ct: any): { end: Date; left: number; kind: CsTermKind } | null {
+  if (!isActive(l)) return null;
+  const t = termOf(l);
+  if (t) return t.left >= 0 ? { end: t.end, left: t.left, kind: "term" } : null;
+  const startS = l.start_date || l.signing_date || ct?.contractStart || ct?.signDate;
+  if (!startS) return null;
+  const deal = Number(ct?.termYears) || 0;
+  const y = deal || (l.recurring ? 1 : 0);
+  if (!y) return null;
+  const auto = deal ? !!ct?.autoRenew : true;
+  const step = Number(ct?.renewYears) || y;
+  let end = csAddYears(new Date(startS), y);
+  for (let n = 0; auto && end.getTime() < Date.now() && n < 80; n++) end = csAddYears(end, step);
+  const left = Math.ceil((end.getTime() - Date.now()) / CS_DAY);
+  return left >= 0 ? { end, left, kind: deal ? "deal" : "anniversary" } : null;
+}
+const PRI_TONE: Record<CsPriority, string> = { high: "coral", medium: "gold", low: "slate" };
+/** Does a sequence apply to a client (the same test the sender makes)? */
+function csFits(q: CsSequence, c: CsClient, _cs?: CsData | null): boolean {
+  const a = q.audience ?? {};
+  if (a.exclude?.includes(c.id)) return false;
+  if (q.start_mode === "before_renewal" && !c.ren) return false;
+  if (a.clients?.length) return a.clients.includes(c.id);
+  if (a.priorities?.length && !a.priorities.includes(c.priority ?? "none")) return false;
+  if (a.types?.length && !a.types.includes(c.typeId ?? "")) return false;
+  if (a.health?.length && !a.health.includes(c.health ?? "none")) return false;
+  return true;
+}
+/** Who a sequence's e-mail goes to for a client. */
+function csTo(q: CsSequence, c: CsClient, run: CsRun | null): string[] {
+  if (run?.to_emails?.length) return run.to_emails;
+  const cts = c.contacts.filter((x) => x.email && /@/.test(x.email));
+  const main = cts.find((x) => !x.billing) ?? cts[0];
+  if (q.recipients === "all") return [...new Set(cts.map((x) => x.email!.trim()))];
+  if (q.recipients === "billing") { const b = cts.filter((x) => x.billing); return (b.length ? b : main ? [main] : []).map((x) => x.email!.trim()); }
+  return main ? [main.email!.trim()] : [];
+}
 type CsSort = "priority" | "contact" | "arr" | "renewal" | "name";
 const CH_ICON: Record<string, keyof typeof CSI> = { call: "phone", email: "mail", meeting: "users", visit: "pin" };
 const csAgo = (days: number | null) => (days == null ? "Never" : days === 0 ? "Today" : days === 1 ? "Yesterday" : days < 90 ? `${days} days ago` : days < 365 ? `${Math.round(days / 30)} months ago` : `${(days / 365).toFixed(1).replace(".", ",")} yr ago`);
@@ -1199,14 +1260,953 @@ function CsBlock({ icon, title, right, children, tone = "jade" }: { icon: keyof 
 }
 
 /** Contact bar: how much of the cadence has gone by since the last contact. */
+/** "Antonio ↔ Laura Gil": our person (first name) and theirs, in the order the contact went. */
+const csWho = (us: string, them: string, dir: "in" | "out" | null) => {
+  const u = us.split(" ")[0];
+  if (u && them) return dir === "in" ? `${them} → ${u}` : `${u} → ${them}`;
+  return u || them;
+};
 function CsCadence({ c, wide = false }: { c: CsClient; wide?: boolean }) {
   const late = c.days == null || c.days > c.cadence;
   const soon = !late && (c.days ?? 0) > c.cadence * 0.75;
   return (
     <span className={`cs3-cad ${late ? "is-late" : soon ? "is-soon" : ""} ${wide ? "is-wide" : ""}`} title={`Cadence: every ${c.cadence} days`}>
-      <span className="cs3-cad-t"><b>{csAgo(c.days)}</b>{c.lastWhy && wide ? <i>{c.lastWhy}</i> : null}</span>
+      <span className="cs3-cad-t">{c.lastDir && <em className={`cs4-dir-ico is-${c.lastDir}`} title={c.lastDir === "in" ? "They reached us" : "We reached them"}><CsIco n={c.lastDir === "in" ? "din" : "dout"} s={10} /></em>}<b>{csAgo(c.days)}</b>{c.lastWhy && wide ? <i>{c.lastWhy}</i> : null}</span>
       <span className="cs3-cad-bar"><span style={{ width: `${Math.min(100, ((c.days ?? c.cadence * 2) / c.cadence) * 100)}%` }} /></span>
+      {!wide && (c.lastUs || c.lastThem) && <span className="cs3-cad-who" title={`${c.lastDir === "in" ? `${c.lastThem || "Them"} → ${c.lastUs || "us"}` : `${c.lastUs || "Us"} → ${c.lastThem || "them"}`}`}>{csWho(c.lastUs, c.lastThem, c.lastDir)}</span>}
     </span>
+  );
+}
+
+/* ---------- contact priority: a pill that opens a small menu (over the list, never clipped) ---------- */
+function CsPriPick({ value, onPick, disabled, days }: { value: CsPriority | null; onPick: (p: CsPriority | null) => void; disabled?: boolean; days?: Record<CsPriority, number> }) {
+  const [at, setAt] = useState<{ top: number; left: number } | null>(null);
+  useEffect(() => {
+    if (!at) return;
+    const close = () => setAt(null);
+    window.addEventListener("resize", close); window.addEventListener("scroll", close, true);
+    return () => { window.removeEventListener("resize", close); window.removeEventListener("scroll", close, true); };
+  }, [at]);
+  const lbl = value ? CS_PRIORITIES.find((x) => x.key === value)!.label : "Set";
+  return (
+    <>
+      <button type="button" className={`cs4-pri-pill ${value ? `is-${PRI_TONE[value]}` : "is-none"}`} disabled={disabled} aria-haspopup="menu" aria-expanded={!!at}
+        onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setAt(at ? null : { top: r.bottom + 6, left: Math.min(r.left, window.innerWidth - 220) }); }}>
+        <i />{lbl}
+      </button>
+      {at && createPortal(
+        <div className="cs4-pop-layer" onMouseDown={(e) => { if (e.target === e.currentTarget) setAt(null); }}>
+          <div className="cs4-pop" role="menu" style={{ top: at.top, left: at.left }} onKeyDown={(e) => { if (e.key === "Escape") setAt(null); }}>
+            {CS_PRIORITIES.map((p) => (
+              <button key={p.key} type="button" role="menuitemradio" aria-checked={value === p.key} className={`is-${PRI_TONE[p.key]} ${value === p.key ? "is-on" : ""}`} onClick={() => { onPick(p.key); setAt(null); }}>
+                <i /><b>{p.label}</b><em>every {days?.[p.key] ?? p.days} days</em>
+              </button>
+            ))}
+            <button type="button" role="menuitemradio" aria-checked={!value} className={`is-none ${!value ? "is-on" : ""}`} onClick={() => { onPick(null); setAt(null); }}><i /><b>No priority</b><em>the default cadence</em></button>
+          </div>
+        </div>, document.body)}
+    </>
+  );
+}
+
+/* =====================================================================
+   Automatic e-mails — blueprints (styled e-mails with the client's name filled in)
+   and sequences (which blueprint, after how many days, to which clients).
+   ===================================================================== */
+const ACCENTS = ["#0a6f4d", "#12b57f", "#0f766e", "#2563eb", "#7c3aed", "#c2410c", "#b45309", "#334155"];
+const HEALTH_KEYS: { key: string; label: string }[] = [{ key: "green", label: "Healthy" }, { key: "amber", label: "Watch" }, { key: "red", label: "At risk" }, { key: "none", label: "Not tracked" }];
+/** Names always start with a capital letter ("laura gil" → "Laura Gil"). */
+const capName = (x: string) => String(x ?? "").trim().replace(/(^|[\s\-'’])(\p{L})/gu, (_, a, b) => a + b.toLocaleUpperCase());
+const csVarsFor = (c: CsClient | null, ownerName0: string, ownerEmail: string): Record<string, string> => {
+  const ownerName = capName(ownerName0);
+  const sample = Object.fromEntries(CS_TAGS.map((t) => [t.key, t.sample]));
+  if (!c) return { ...sample, owner_name: ownerName || sample.owner_name, owner_first_name: (ownerName || sample.owner_name).split(" ")[0], owner_email: ownerEmail || sample.owner_email };
+  const cts = c.contacts.filter((x) => x.email);
+  const main = cts.find((x) => !x.billing) ?? cts[0];
+  return {
+    ...sample, client: c.name, legal_name: c.name, contact_name: capName(main?.name ?? ""), first_name: capName(String(main?.name ?? "").trim().split(/\s+/)[0]) || "there",
+    owner_name: ownerName, owner_first_name: ownerName.split(" ")[0] ?? "", owner_email: ownerEmail,
+    renewal_date: c.ren ? c.ren.end.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) : "",
+    days_to_renewal: c.ren ? String(c.ren.left) : "",
+  };
+};
+const plainOf = (h: string) => String(h ?? "").replace(/<br\s*\/?>/gi, " ").replace(/<\/(p|div|li)>/gi, " ").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
+const fmtSize = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1000))} KB`);
+const newStep = (template_id = "", wait_days = 0): CsStep => ({ id: Math.random().toString(36).slice(2, 9), template_id, wait_days });
+const audienceText = (q: CsSequence, types: { id: string; name: string }[], accounts: CsClient[]) => {
+  const a = q.audience ?? {};
+  if (a.clients?.length) return a.clients.length === 1 ? accounts.find((c) => c.id === a.clients![0])?.name ?? "1 client" : `${a.clients.length} picked clients`;
+  const bits = [
+    a.priorities?.length ? a.priorities.map((p) => (p === "none" ? "no priority" : `${p} priority`)).join(" or ") : "",
+    a.types?.length ? a.types.map((t) => types.find((x) => x.id === t)?.name ?? "type").join(" or ") : "",
+    a.health?.length ? a.health.map((h) => HEALTH_KEYS.find((x) => x.key === h)?.label.toLowerCase() ?? h).join(" or ") : "",
+  ].filter(Boolean);
+  return bits.length ? `Clients with ${bits.join(" · ")}` : "Every client";
+};
+
+function CsFollowUps({ auto, setAuto, accounts, cs, setCs, types, people, me, say, cmd, onOpenClient, onSendDue, onRunTasks }: {
+  auto: CsAuto | null; setAuto: (f: (a: CsAuto | null) => CsAuto | null) => void;
+  accounts: CsClient[]; cs: CsData | null; setCs: (f: (d: CsData | null) => CsData | null) => void;
+  types: { id: string; name: string }[]; people: Employee[]; me: string | null;
+  say: (m: string) => void; cmd: { k: "seq" | "tpl"; n: number } | null;
+  onOpenClient: (id: string) => void; onSendDue: () => void; onRunTasks: () => void;
+}) {
+  const [view, setView] = useState<"sequences" | "blueprints" | "activity" | "cadence">("sequences");
+  const [tpl, setTpl] = useState<Partial<CsTemplate> | null>(null);
+  const [seq, setSeq] = useState<Partial<CsSequence> | null>(null);
+  const [logF, setLogF] = useState<"all" | "sent" | "failed" | "skipped" | "test">("all");
+  const [mail, setMail] = useState<{ connected: boolean; mail: boolean; email: string | null } | null>(null);
+  const lastCmd = useRef(0);
+  useEffect(() => {
+    supabase.functions.invoke("outlook-sync", { body: { action: "mail_status" } })
+      .then(({ data }: any) => setMail(data && typeof data.connected === "boolean" ? data : null)).catch(() => setMail(null));
+  }, []);
+  const ready = !!auto?.ready;
+  const templates = auto?.templates ?? [], sequences = auto?.sequences ?? [], runs = auto?.runs ?? [], log = auto?.log ?? [];
+  const tplName = (id: string | null) => templates.find((t) => t.id === id)?.name ?? "—";
+  const pName = (id: string | null | undefined) => (id ? people.find((p) => p.id === id)?.name ?? "Someone" : "—");
+  const newSeq = (): Partial<CsSequence> => ({ name: "", active: false, audience: {}, steps: [newStep(templates[0]?.id ?? "", 0)], start_mode: "now", start_days: 30, repeat: false, recipients: "all", sender: "owner", log_contact: true });
+  const newTpl = (): Partial<CsTemplate> => ({ name: "", subject: "", body_html: "<p>Hi {{first_name}},</p><p><br></p><p><br></p>", design: { accent: "#0a6f4d", title: "", brand: "", signoff: "Best regards,\n{{owner_name}}" }, attachments: [] });
+  useEffect(() => {
+    if (!cmd || cmd.n === lastCmd.current) return;
+    lastCmd.current = cmd.n;
+    if (cmd.k === "seq") { setView("sequences"); setSeq(newSeq()); } else { setView("blueprints"); setTpl(newTpl()); }
+  }, [cmd]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const upTpl = (t: CsTemplate) => setAuto((a) => a ? { ...a, templates: a.templates.some((x) => x.id === t.id) ? a.templates.map((x) => (x.id === t.id ? t : x)) : [...a.templates, t] } : a);
+  const upSeq = (q: CsSequence) => setAuto((a) => a ? { ...a, sequences: a.sequences.some((x) => x.id === q.id) ? a.sequences.map((x) => (x.id === q.id ? q : x)) : [...a.sequences, q] } : a);
+  const toggleSeq = async (q: CsSequence) => {
+    if (!q.active && !q.steps.some((s) => s.template_id)) { say("Give it at least one e-mail first."); setSeq(q); return; }
+    const r = await saveCsSequence({ ...q, active: !q.active });
+    if (r.error || !r.row) { say(r.error ?? "Not saved"); return; }
+    upSeq({ ...r.row, audience: r.row.audience ?? {}, steps: r.row.steps ?? [] });
+    say(r.row.active ? `${r.row.name} is on — e-mails go out every hour` : `${r.row.name} is off`);
+  };
+  const dupSeq = async (q: CsSequence) => { const r = await saveCsSequence({ ...q, id: undefined, name: `${q.name} (copy)`, active: false }); if (r.row) { upSeq(r.row); say("Copied — it starts switched off"); } else say(r.error ?? "Not saved"); };
+  const dupTpl = async (t: CsTemplate) => { const r = await saveCsTemplate({ ...t, id: undefined, name: `${t.name} (copy)`, attachments: [] }); if (r.row) { upTpl(r.row); say("Copied (without its attachments)"); } else say(r.error ?? "Not saved"); };
+  const dropSeq = async (q: CsSequence) => { if (!window.confirm(`Delete “${q.name}”? Clients stop getting its e-mails.`)) return; const e = await deleteCsSequence(q.id); if (e) { say(e); return; } setAuto((a) => a ? { ...a, sequences: a.sequences.filter((x) => x.id !== q.id), runs: a.runs.filter((r) => r.sequence_id !== q.id) } : a); };
+  const dropTpl = async (t: CsTemplate) => {
+    const used = sequences.filter((q) => q.steps.some((s) => s.template_id === t.id));
+    if (!window.confirm(used.length ? `“${t.name}” is used by ${used.map((q) => q.name).join(", ")}. Delete it anyway? Those steps will be skipped.` : `Delete “${t.name}”?`)) return;
+    const e = await deleteCsTemplate(t.id); if (e) { say(e); return; }
+    for (const a of t.attachments) await removeCsFile(a.path);
+    setAuto((a) => a ? { ...a, templates: a.templates.filter((x) => x.id !== t.id) } : a);
+  };
+  const since30 = Date.now() - 30 * CS_DAY;
+
+  /* ---- cadence settings (moved here from the header) ---- */
+  const setts = cs?.settings;
+  const saveSettings = async (next: NonNullable<CsData["settings"]>) => {
+    setCs((d) => (d ? { ...d, settings: next } : d));
+    const e = await saveCsSettings(next);
+    if (e) say(e);
+  };
+  const priCount = (p: CsPriority | null) => accounts.filter((c) => (c.priority ?? null) === p).length;
+
+  const sub = [
+    { key: "sequences" as const, label: "Sequences", n: sequences.length },
+    { key: "blueprints" as const, label: "E-mail blueprints", n: templates.length },
+    { key: "activity" as const, label: "Activity", n: log.filter((l) => new Date(l.sent_at).getTime() > since30).length },
+    { key: "cadence" as const, label: "Priorities & cadence" },
+  ];
+  return (
+    <div className="cs4-fu">
+      <div className="cs4-fu-top">
+        <div className="cs4-seg is-light" role="tablist">
+          {sub.map((x) => <button key={x.key} type="button" role="tab" aria-selected={view === x.key} className={view === x.key ? "is-on" : ""} onClick={() => setView(x.key)}>{x.label}{x.n != null && <em>{x.n}</em>}</button>)}
+        </div>
+        <span className={`cs4-mailst ${mail?.mail ? "is-ok" : mail ? "is-warn" : ""}`} title="E-mails go out from each client's owner's Outlook (or yours, as the sequence says)">
+          <i />{mail == null ? "Sent from your team's Outlook" : mail.mail ? `Your Outlook: ${mail.email ?? "connected"}` : mail.connected ? "Your Outlook has no mail permission — reconnect it with mail" : "Connect your Outlook (Settings › Interface)"}
+        </span>
+        <span className="csx-sp" />
+        {view === "sequences" && <button type="button" className="csx-ghost is-sm" disabled={!ready} onClick={onSendDue}><CsIco n="play" s={12} />Send what's due now</button>}
+        {view === "sequences" && <button type="button" className="csx-primary is-sm" disabled={!ready} onClick={() => setSeq(newSeq())}><CsIco n="plus" s={13} />New sequence</button>}
+        {view === "blueprints" && <button type="button" className="csx-primary is-sm" disabled={!ready} onClick={() => setTpl(newTpl())}><CsIco n="plus" s={13} />New blueprint</button>}
+      </div>
+
+      {!auto ? <PageLoader label="Reading the automations" /> : !ready ? <div className="cs4-fu-scroll"><CsLocked what="Automatic e-mails" /><p className="cs3-empty">Run <code>88_cs_followups.sql</code> in Supabase.</p></div> : (
+        <div className="cs4-fu-scroll">
+          {view === "sequences" && (sequences.length ? (
+            <div className="cs4-seqs">
+              {sequences.map((q, i) => {
+                const mine = runs.filter((r) => r.sequence_id === q.id);
+                const inIt = mine.filter((r) => r.status === "active").length;
+                const fits = accounts.filter((c) => csFits(q, c)).length;
+                const sent = log.filter((l) => l.sequence_id === q.id && l.status === "sent" && new Date(l.sent_at).getTime() > since30).length;
+                const failed = log.filter((l) => l.sequence_id === q.id && l.status === "failed" && new Date(l.sent_at).getTime() > since30).length;
+                const next = mine.filter((r) => r.status === "active" && r.next_at).sort((a, b) => a.next_at!.localeCompare(b.next_at!))[0];
+                return (
+                  <article key={q.id} className={`cs4-seq ${q.active ? "is-on" : ""}`} style={{ ["--i" as any]: i }}>
+                    <header>
+                      <span className="cs4-seq-ico"><CsIco n="mail" s={16} /></span>
+                      <div className="cs4-seq-t"><b>{q.name}</b><i>{audienceText(q, types, accounts)} · {q.start_mode === "before_renewal" ? `starts ${q.start_days} days before each renewal` : q.repeat ? `starts right away · again every ${q.start_days} days` : "starts right away"}</i></div>
+                      <button type="button" role="switch" aria-checked={q.active} className={`csx-switch ${q.active ? "is-on" : ""}`} onClick={() => toggleSeq(q)}><i />{q.active ? "On" : "Off"}</button>
+                    </header>
+                    <ol className="cs4-seq-steps">
+                      {q.steps.map((st, k) => (
+                        <li key={st.id}>
+                          <span className="cs4-seq-wait">{k === 0 ? (q.start_mode === "before_renewal" ? "Start" : st.wait_days ? `+${st.wait_days} d` : "Day 0") : `+${st.wait_days} d`}</span>
+                          <span className="cs4-seq-dot" />
+                          <span className="cs4-seq-name">{tplName(st.template_id)}</span>
+                        </li>
+                      ))}
+                      {q.repeat && <li className="is-loop"><span className="cs4-seq-wait"><CsIco n="repeat" s={11} />{q.start_mode === "before_renewal" ? "" : ` +${q.start_days} d`}</span><span className="cs4-seq-dot" /><span className="cs4-seq-name">and again</span></li>}
+                    </ol>
+                    <div className="cs4-seq-stats">
+                      <span title={`${fits} client${fits === 1 ? "" : "s"} match it`}><b>{q.active ? inIt : fits}</b><i>{q.active ? "in it" : "would get it"}</i></span>
+                      <span title="In the last 30 days"><b>{sent}</b><i>sent (30 d)</i></span>
+                      {failed > 0 && <span className="is-bad" title="In the last 30 days — see Activity"><b>{failed}</b><i>failed</i></span>}
+                      <span title={next?.next_at ? csDate(next.next_at) : undefined}><b>{next?.next_at ? new Date(next.next_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "—"}</b><i>next e-mail</i></span>
+                    </div>
+                    <footer>
+                      <span className="cs4-seq-from" title={`To ${q.recipients === "all" ? "every contact, one e-mail each" : q.recipients === "billing" ? "the billing contact" : "the main contact"}, from ${q.sender === "owner" ? "each client's owner" : pName(q.created_by)}`}>To {q.recipients === "all" ? "every contact" : q.recipients === "billing" ? "billing" : "main contact"} · from {q.sender === "owner" ? "owner" : pName(q.created_by).split(" ")[0]}</span>
+                      <span className="csx-sp" />
+                      <button type="button" className="csx-ghost is-sm is-ico" title="Copy" onClick={() => dupSeq(q)}><CsIco n="repeat" s={12} /></button>
+                      <button type="button" className="csx-ghost is-sm is-ico" title="Delete" onClick={() => dropSeq(q)}><CsIco n="trash" s={12} /></button>
+                      <button type="button" className="csx-ghost is-sm" onClick={() => setSeq(q)}><CsIco n="edit" s={12} />Edit</button>
+                    </footer>
+                  </article>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="cs4-fu-empty">
+              <span className="csx-empty-ico"><CsIco n="mail" s={22} /></span>
+              <b>No automatic e-mails yet</b>
+              <i>A sequence sends your e-mail blueprints to the clients you pick — say, a check-in every 30 days to high-priority clients, or a run-up 60 days before each renewal — from each client's owner's Outlook, with the client's name filled in.</i>
+              <div className="cs4-fu-starts">
+                <button type="button" className="csx-ghost" onClick={() => setSeq({ ...newSeq(), name: "Keep in touch · high priority", audience: { priorities: ["high"] }, repeat: true, steps: [newStep(templates[0]?.id ?? "", 0), newStep(templates[1]?.id ?? templates[0]?.id ?? "", 30)] })}><CsIco n="star" s={13} />Keep in touch with high priority</button>
+                <button type="button" className="csx-ghost" onClick={() => setSeq({ ...newSeq(), name: "Renewal run-up", start_mode: "before_renewal", start_days: 60, steps: [newStep(templates[0]?.id ?? "", 0), newStep(templates[0]?.id ?? "", 30)] })}><CsIco n="repeat" s={13} />Renewal run-up</button>
+                {!templates.length && <button type="button" className="csx-primary" onClick={() => { setView("blueprints"); setTpl(newTpl()); }}><CsIco n="plus" s={13} />First, an e-mail blueprint</button>}
+              </div>
+            </div>
+          ))}
+
+          {view === "blueprints" && (templates.length ? (
+            <div className="cs4-tpls">
+              {templates.map((t, i) => {
+                const used = sequences.filter((q) => q.steps.some((s) => s.template_id === t.id));
+                const accent = t.design?.accent || "#0a6f4d";
+                return (
+                  <article key={t.id} className="cs4-tpl" style={{ ["--i" as any]: i, ["--ac" as any]: accent }}>
+                    <button type="button" className="cs4-tpl-prev" onClick={() => setTpl(t)} title="Edit">
+                      <span className="cs4-tpl-band">{t.design?.brand && <small>{fillCsTags(t.design.brand, csVarsFor(null, "", ""), false)}</small>}<b>{fillCsTags(t.design?.title || t.subject || t.name, csVarsFor(null, "", ""), false)}</b></span>
+                      <span className="cs4-tpl-body">{fillCsTags(plainOf(t.body_html), csVarsFor(null, "", ""), false).slice(0, 220)}</span>
+                      {t.design?.button_label && <span className="cs4-tpl-btn">{t.design.button_label}</span>}
+                    </button>
+                    <div className="cs4-tpl-m">
+                      <b>{t.name}</b>
+                      <i>{t.subject ? fillCsTags(t.subject, csVarsFor(null, "", ""), false) : "No subject"}</i>
+                      <span>
+                        {(t.variants ?? []).length > 0 && <em className="is-ver" title={(t.variants ?? []).map((v) => v.name).join(" · ")}>{(t.variants ?? []).length + 1} versions</em>}
+                        {t.attachments.length > 0 && <em><CsIco n="clip" s={10} />{t.attachments.length} file{t.attachments.length === 1 ? "" : "s"}</em>}
+                        <em className={used.length ? "is-used" : ""}>{used.length ? `In ${used.length} sequence${used.length === 1 ? "" : "s"}` : "Not used yet"}</em>
+                      </span>
+                    </div>
+                    <footer>
+                      <button type="button" className="csx-ghost is-sm is-ico" title="Copy" onClick={() => dupTpl(t)}><CsIco n="repeat" s={12} /></button>
+                      <button type="button" className="csx-ghost is-sm is-ico" title="Delete" onClick={() => dropTpl(t)}><CsIco n="trash" s={12} /></button>
+                      <span className="csx-sp" />
+                      <button type="button" className="csx-ghost is-sm" onClick={() => setTpl(t)}><CsIco n="edit" s={12} />Edit</button>
+                    </footer>
+                  </article>
+                );
+              })}
+              <button type="button" className="cs4-tpl is-new" onClick={() => setTpl(newTpl())}><CsIco n="plus" s={20} /><b>New blueprint</b><i>A styled e-mail — the client's and contact's names filled in for each one</i></button>
+            </div>
+          ) : (
+            <div className="cs4-fu-empty">
+              <span className="csx-empty-ico"><CsIco n="edit" s={22} /></span>
+              <b>No e-mail blueprints yet</b>
+              <i>Write the e-mail once — subject, a styled body, a button, files — with fields like {"{{first_name}}"} and {"{{client}}"} filled in for each client.</i>
+              <div className="cs4-fu-starts"><button type="button" className="csx-primary" onClick={() => setTpl(newTpl())}><CsIco n="plus" s={13} />New blueprint</button></div>
+            </div>
+          ))}
+
+          {view === "activity" && (
+            <div className="cs4-log">
+              <div className="cs4-log-f">
+                {(["all", "sent", "failed", "skipped", "test"] as const).map((f) => (
+                  <button key={f} type="button" className={`${logF === f ? "is-on" : ""} is-${f}`} onClick={() => setLogF(f)}>
+                    {f === "all" ? "Everything" : f[0].toUpperCase() + f.slice(1)}<em>{f === "all" ? log.length : log.filter((l) => l.status === f).length}</em>
+                  </button>
+                ))}
+              </div>
+              <div className="cs4-log-t">
+                <div className="cs4-log-r is-head"><span>When</span><span>Client</span><span>E-mail</span><span>To</span><span>Status</span></div>
+                {log.filter((l) => logF === "all" || l.status === logF).map((l) => (
+                  <div className={`cs4-log-r is-${l.status}`} key={l.id}>
+                    <span className="cs4-log-d"><b>{csDate(l.sent_at)}</b><i>{new Date(l.sent_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</i></span>
+                    <span>{l.client_id ? <button type="button" className="cs3-name" onClick={() => onOpenClient(l.client_id!)}>{accounts.find((c) => c.id === l.client_id)?.name ?? "—"}</button> : "—"}</span>
+                    <span className="cs4-log-s"><b>{l.subject || tplName(l.template_id)}</b><i>{tplName(l.template_id)}{l.sequence_id ? ` · ${sequences.find((q) => q.id === l.sequence_id)?.name ?? "deleted sequence"}` : ""} · from {pName(l.sent_by)}</i></span>
+                    <span className="cs4-log-to" title={(l.to_emails ?? []).join(", ")}>{(l.to_emails ?? []).join(", ") || "—"}</span>
+                    <span><em className={`cs4-st is-${l.status}`}>{l.status}</em>{l.error && <i className="cs4-log-err" title={l.error}>{l.error}</i>}</span>
+                  </div>
+                ))}
+                {!log.filter((l) => logF === "all" || l.status === logF).length && <p className="cs3-empty">Nothing here yet. Sent e-mails, and the ones that couldn't go out (and why), show here.</p>}
+              </div>
+            </div>
+          )}
+
+          {view === "cadence" && setts && (
+            <div className="cs4-cad">
+              <section className="cs4-card">
+                <h3>How often each priority hears from us</h3>
+                <p className="cs4-help">Give each client a priority (in the list or its panel). An account is “to contact” once this many days pass without a logged contact — a client's own cadence, set in its panel, goes first.</p>
+                <div className="cs4-cad-grid">
+                  {CS_PRIORITIES.map((p) => (
+                    <label key={p.key} className={`cs4-cad-c is-${PRI_TONE[p.key]}`}>
+                      <span className="cs4-cad-h"><i />{p.label}<em>{priCount(p.key)} client{priCount(p.key) === 1 ? "" : "s"}</em></span>
+                      <span className="cs4-cad-in">every <input type="number" min={1} value={setts.priority_cadence[p.key]}
+                        onChange={(e) => setCs((d) => d ? { ...d, settings: { ...d.settings, priority_cadence: { ...d.settings.priority_cadence, [p.key]: Number(e.target.value) || 1 } } } : d)}
+                        onBlur={() => cs && saveSettings(cs.settings)} onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} /> days</span>
+                    </label>
+                  ))}
+                  <label className="cs4-cad-c is-none">
+                    <span className="cs4-cad-h"><i />No priority<em>{priCount(null)} client{priCount(null) === 1 ? "" : "s"}</em></span>
+                    <span className="cs4-cad-in">every <input type="number" min={1} value={setts.default_cadence_days}
+                      onChange={(e) => setCs((d) => d ? { ...d, settings: { ...d.settings, default_cadence_days: Number(e.target.value) || 30 } } : d)}
+                      onBlur={() => cs && saveSettings(cs.settings)} onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} /> days</span>
+                  </label>
+                </div>
+              </section>
+              <section className="cs4-card">
+                <div className="cs4-card-h">
+                  <div><h3>Follow-up tasks</h3><p className="cs4-help">When an account passes its cadence, a “get in touch” task lands on its starred owner's desk (once a day, never twice).</p></div>
+                  <button type="button" role="switch" aria-checked={setts.auto_tasks} className={`csx-switch ${setts.auto_tasks ? "is-on" : ""}`} onClick={() => saveSettings({ ...setts, auto_tasks: !setts.auto_tasks })}><i />{setts.auto_tasks ? "On" : "Off"}</button>
+                </div>
+                <button type="button" className="csx-ghost is-sm" onClick={onRunTasks}><CsIco n="play" s={11} />Create them now</button>
+              </section>
+            </div>
+          )}
+        </div>
+      )}
+
+      {tpl && <CsTemplateEditor initial={tpl} accounts={accounts} people={people} me={me} say={say} onClose={() => setTpl(null)} onSaved={(t) => { upTpl(t); }}
+        onDelete={tpl.id ? () => { const t = templates.find((x) => x.id === tpl.id); setTpl(null); if (t) dropTpl(t); } : undefined} />}
+      {seq && <CsSequenceEditor initial={seq} templates={templates} accounts={accounts} runs={runs} types={types} me={me} people={people}
+        onClose={() => setSeq(null)} onSaved={(q) => { upSeq(q); say(q.active ? `${q.name} saved — it's on` : `${q.name} saved`); }} onNewTemplate={() => { setSeq(null); setView("blueprints"); setTpl(newTpl()); }} />}
+    </div>
+  );
+}
+
+/* ---------- the blueprint editor: a form on the left, the real e-mail on the right ---------- */
+/* fields show as cards in the editor and are stored as {{key}} */
+const FIELD_CHIP: Record<string, string> = {
+  first_name: "First name", contact_name: "Full name", client: "Client", legal_name: "Legal name",
+  owner_name: "Sender", owner_first_name: "Sender's first name", owner_email: "Sender's e-mail",
+  renewal_date: "Renewal date", days_to_renewal: "Days to renewal", today: "Today", year: "Year",
+};
+const FIELD_GROUPS: { label: string; keys: string[] }[] = [
+  { label: "The person it goes to", keys: ["first_name", "contact_name"] },
+  { label: "Their company", keys: ["client", "legal_name", "renewal_date", "days_to_renewal"] },
+  { label: "You, the sender", keys: ["owner_name", "owner_first_name", "owner_email"] },
+  { label: "Dates", keys: ["today", "year"] },
+];
+const chipHtml = (k: string) => `<span class="cs4-fld" contenteditable="false" data-f="${k}">${FIELD_CHIP[k] ?? k}</span>`;
+const toChips = (h: string) => String(h ?? "").replace(/\{\{\s*([a-z_]+)\s*\}\}/gi, (m, k) => (FIELD_CHIP[String(k).toLowerCase()] ? chipHtml(String(k).toLowerCase()) : m));
+const fromChips = (h: string) => String(h ?? "").replace(/<span[^>]*data-f="([a-z_]+)"[^>]*>[\s\S]*?<\/span>/gi, "{{$1}}").replace(/\u200b/g, "");
+const escT = (x: string) => x.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const multiOfChips = (h: string) => fromChips(h).replace(/<br\s*\/?>/gi, "\n").replace(/<\/(div|p)>/gi, "\n").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/\n{3,}/g, "\n\n").replace(/\s+$/, "");
+const toMultiChips = (x: string) => toChips(escT(x ?? "").replace(/\n/g, "<br>"));
+const textOfChips = (h: string) => fromChips(h).replace(/<br\s*\/?>/gi, " ").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
+
+function CsTemplateEditor({ initial, accounts, people, me, say, onClose, onSaved, onDelete }: {
+  initial: Partial<CsTemplate>; accounts: CsClient[]; people: Employee[]; me: string | null; say: (m: string) => void;
+  onClose: () => void; onSaved: (t: CsTemplate) => void; onDelete?: () => void;
+}) {
+  const [t, setT] = useState<Partial<CsTemplate>>({ ...initial, design: { ...(initial.design ?? {}) }, attachments: [...(initial.attachments ?? [])], variants: (initial.variants ?? []).map((v) => ({ ...v, audience: { ...(v.audience ?? {}) } })) });
+  /** the version being edited: -1 the main one (everyone else), else one of t.variants */
+  const [ver, setVer] = useState(-1);
+  const vars_ = t.variants ?? [];
+  const curV: CsVariant | null = ver >= 0 ? vars_[ver] ?? null : null;
+  const cur = curV ? { subject: curV.subject, body_html: curV.body_html } : { subject: t.subject ?? "", body_html: t.body_html ?? "" };
+  const patchCur = (p: { subject?: string; body_html?: string }) => setT((x) => (ver < 0 ? { ...x, ...p } : { ...x, variants: (x.variants ?? []).map((v, i) => (i === ver ? { ...v, ...p } : v)) }));
+  const patchVer = (i: number, p: Partial<CsVariant>) => setT((x) => ({ ...x, variants: (x.variants ?? []).map((v, j) => (j === i ? { ...v, ...p } : v)) }));
+  const setAud = (i: number, p: Partial<CsVariantAudience>) => setT((x) => ({ ...x, variants: (x.variants ?? []).map((v, j) => (j === i ? { ...v, audience: { ...(v.audience ?? {}), ...p } } : v)) }));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [view, setView] = useState<"write" | "preview">("write");
+  const [asClient, setAsClient] = useState<string>(accounts.find((a) => a.contacts.some((x) => x.email))?.id ?? accounts[0]?.id ?? "");
+  const [asContact, setAsContact] = useState(0);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const subjRef = useRef<HTMLDivElement | null>(null);
+  const signRef = useRef<HTMLDivElement | null>(null);
+  const footRef = useRef<HTMLDivElement | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const range = useRef<Range | null>(null);
+  type Box = "subject" | "body" | "signoff" | "footer";
+  const last = useRef<Box>("body");
+  const boxOf = (w: Box) => (w === "subject" ? subjRef.current : w === "body" ? bodyRef.current : w === "signoff" ? signRef.current : footRef.current);
+  const d = t.design ?? {};
+  const setD = (p: Partial<NonNullable<CsTemplate["design"]>>) => setT((x) => ({ ...x, design: { ...(x.design ?? {}), ...p } }));
+  const fillEditors = () => {
+    if (bodyRef.current) bodyRef.current.innerHTML = toChips(cur.body_html ?? "");
+    if (subjRef.current) subjRef.current.innerHTML = toChips(escT(cur.subject ?? ""));
+  };
+  useEffect(() => {
+    if (signRef.current) signRef.current.innerHTML = toMultiChips(d.signoff ?? "");
+    if (footRef.current) footRef.current.innerHTML = toMultiChips(d.footer ?? "");
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (view === "write") fillEditors(); }, [view, ver]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, [onClose]);
+  const syncBody = () => { if (bodyRef.current) patchCur({ body_html: fromChips(bodyRef.current.innerHTML) }); };
+  const syncSubj = () => { if (subjRef.current) patchCur({ subject: textOfChips(subjRef.current.innerHTML) }); };
+  /** another version: starts as a copy of the main one */
+  const addVersion = () => {
+    if (view === "write") { syncBody(); syncSubj(); }
+    setT((x) => ({ ...x, variants: [...(x.variants ?? []), { id: Math.random().toString(36).slice(2, 10), name: `Version ${(x.variants ?? []).length + 2}`, subject: x.subject ?? "", body_html: x.body_html ?? "", html: "", audience: {} }] }));
+    setVer(vars_.length);
+  };
+  const dropVersion = (i: number) => { setT((x) => ({ ...x, variants: (x.variants ?? []).filter((_, j) => j !== i) })); setVer(-1); };
+  const goVer = (i: number) => { if (i === ver) return; if (view === "write") { syncBody(); syncSubj(); } setVer(i); };
+  /** who gets which version */
+  const fitsV = (i: number, c: CsClient) => csVariantFor({ variants: vars_.slice(0, i + 1) }, c)?.id === vars_[i]?.id;
+  const countOf = (i: number) => (i < 0 ? accounts.filter((c) => !csVariantFor(t, c)).length : accounts.filter((c) => fitsV(i, c)).length);
+  const syncMulti = (w: "signoff" | "footer") => setD({ [w]: multiOfChips(boxOf(w)?.innerHTML ?? "") });
+  const syncBox = (w: Box) => (w === "subject" ? syncSubj() : w === "body" ? syncBody() : syncMulti(w));
+  const keepRange = (where: Box) => {
+    last.current = where;
+    const box = boxOf(where);
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount && box?.contains(sel.anchorNode)) range.current = sel.getRangeAt(0).cloneRange();
+  };
+  const restore = (box: HTMLElement | null) => {
+    box?.focus();
+    const sel = window.getSelection();
+    if (range.current && box?.contains(range.current.startContainer)) { sel?.removeAllRanges(); sel?.addRange(range.current); }
+    else if (box) { const r = document.createRange(); r.selectNodeContents(box); r.collapse(false); sel?.removeAllRanges(); sel?.addRange(r); }
+  };
+  const cmd = (c: string, v?: string) => { restore(bodyRef.current); document.execCommand(c, false, v); syncBody(); keepRange("body"); };
+  const addField = (key: string) => {
+    const go = () => {
+      const w = last.current, box = boxOf(w);
+      restore(box);
+      // put the card exactly at the caret (execCommand would push it out of the paragraph at a line's end)
+      const sel = window.getSelection();
+      if (box && sel && sel.rangeCount) {
+        const r = sel.getRangeAt(0);
+        r.deleteContents();
+        const tmp = document.createElement("span"); tmp.innerHTML = chipHtml(key);
+        const chip = tmp.firstChild as Node; const after = document.createTextNode("\u200b");
+        r.insertNode(after); r.insertNode(chip);
+        const c2 = document.createRange(); c2.setStartAfter(after); c2.collapse(true);
+        sel.removeAllRanges(); sel.addRange(c2);
+      }
+      syncBox(w); keepRange(w);
+    };
+    if (view !== "write" && (last.current === "subject" || last.current === "body")) { setView("write"); window.setTimeout(go, 30); } else go();
+  };
+  const owner = people.find((p) => p.id === me);
+  const c = accounts.find((x) => x.id === asClient) ?? null;
+  const cts = (c?.contacts ?? []).filter((x) => x.email);
+  const who = cts[Math.min(asContact, Math.max(0, cts.length - 1))] ?? null;
+  const base = csVarsFor(c, owner?.name ?? "", owner?.email ?? "");
+  const vars = who ? { ...base, contact_name: capName(who.name ?? ""), first_name: capName(String(who.name ?? "").trim().split(/\s+/)[0]) || "there" } : base;
+  const html = renderCsEmail({ body_html: cur.body_html ?? "", design: d });
+  const preview = fillCsTags(html, vars, true);
+  const clientGets = c ? csVariantFor(t, c) : null;
+  const upload = async (files: FileList | null) => {
+    if (!files?.length) return;
+    setBusy(true);
+    for (const f of Array.from(files)) {
+      const r = await uploadCsFile(f);
+      if (r.error || !r.file) { setErr(r.error); continue; }
+      setT((x) => ({ ...x, attachments: [...(x.attachments ?? []), r.file!] }));
+    }
+    setBusy(false);
+  };
+  const total = (t.attachments ?? []).reduce((sum, a) => sum + a.size, 0);
+  const setAtt = (path: string, p: Partial<CsAttachment>) => setT((x) => ({ ...x, attachments: (x.attachments ?? []).map((y) => (y.path === path ? { ...y, ...p } : y)) }));
+  // files attached before fields could be read: read them now
+  useEffect(() => {
+    (t.attachments ?? []).filter((a) => !a.kind).forEach(async (a) => {
+      const { data } = await supabase.storage.from("cs-files").download(a.path);
+      if (data) setAtt(a.path, await inspectCsFile(data, a.name, a.type));
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const [peek, setPeek] = useState<string | null>(null);
+  /** the attachment as the client in the preview gets it */
+  const seeAtt = async (a: CsAttachment) => {
+    setPeek(a.path);
+    const w = window.open("", "_blank");
+    const r = await previewCsAttachment(a, c?.id ?? null);
+    setPeek(null);
+    if (!r.blob) { w?.close(); setErr(r.error ?? "Couldn't open it."); return; }
+    const url = URL.createObjectURL(r.blob);
+    if (w) w.location.href = url; else window.open(url, "_blank");
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  };
+  const [dragging, setDragging] = useState(false);
+  const dragDepth = useRef(0);
+  const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes("Files");
+  const dnd = {
+    onDragEnter: (e: React.DragEvent) => { if (!hasFiles(e)) return; e.preventDefault(); dragDepth.current += 1; setDragging(true); },
+    onDragOver: (e: React.DragEvent) => { if (!hasFiles(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = "copy"; },
+    onDragLeave: (e: React.DragEvent) => { if (!hasFiles(e)) return; dragDepth.current = Math.max(0, dragDepth.current - 1); if (!dragDepth.current) setDragging(false); },
+    onDrop: (e: React.DragEvent) => { if (!hasFiles(e)) return; e.preventDefault(); dragDepth.current = 0; setDragging(false); upload(e.dataTransfer.files); },
+  };
+  const save = async (andTest = false) => {
+    // what is in the editors belongs to the version on screen
+    const eSubj = view === "write" && subjRef.current ? textOfChips(subjRef.current.innerHTML) : cur.subject;
+    const eBody = view === "write" && bodyRef.current ? fromChips(bodyRef.current.innerHTML) : cur.body_html;
+    const subject = ver < 0 ? eSubj : (t.subject ?? "");
+    const body = cleanCsBody(ver < 0 ? eBody : (t.body_html ?? ""));
+    const variants = vars_.map((v, i) => {
+      const vs = i === ver ? eSubj : v.subject, vb = cleanCsBody(i === ver ? eBody : v.body_html);
+      return { ...v, name: v.name.trim() || `Version ${i + 2}`, subject: vs, body_html: vb, html: renderCsEmail({ body_html: vb, design: d }) };
+    });
+    if (!t.name?.trim()) { setErr("Give it a name."); return null; }
+    if (!subject.trim()) { setErr("Give the main version a subject."); setVer(-1); return null; }
+    const noSubj = variants.findIndex((v) => !v.subject.trim());
+    if (noSubj >= 0) { setErr(`Give “${variants[noSubj].name}” a subject.`); setVer(noSubj); return null; }
+    const noWho = variants.findIndex((v) => !(v.audience?.clients?.length || v.audience?.owners?.length || v.audience?.priorities?.length || v.audience?.health?.length));
+    if (noWho >= 0) { setErr(`Say who gets “${variants[noWho].name}”.`); setVer(noWho); return null; }
+    if (total > 3_000_000) { setErr("The files add up to more than 3 MB — e-mails can't carry that."); return null; }
+    setBusy(true); setErr(null);
+    const r = await saveCsTemplate({ ...t, subject, body_html: body, html: renderCsEmail({ body_html: body, design: d }), variants });
+    setBusy(false);
+    if (r.error || !r.row) { setErr(r.error ?? "Not saved."); return null; }
+    setT(r.row); onSaved(r.row);
+    if (!andTest) { say(`${r.row.name} saved`); onClose(); }
+    return r.row;
+  };
+  const test = async () => {
+    const row = await save(true);
+    if (!row) return;
+    setBusy(true);
+    const r = await testCsTemplate(row.id, c?.id ?? null);
+    setBusy(false);
+    if (r.error) setErr(/unknown action/i.test(r.error) ? "The e-mail sender isn't installed yet (outlook-sync)." : r.error);
+    else say(`Test sent to ${r.to ?? "you"} — filled in for ${c?.name ?? "a client"}`);
+  };
+  /** The card right before (or after) the caret, skipping the invisible spacer that follows each card. */
+  const chipNear = (box: HTMLElement, back: boolean): HTMLElement | null => {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || !sel.isCollapsed) return null;
+    let node: Node | null = sel.anchorNode; let off = sel.anchorOffset;
+    if (!node || !box.contains(node)) return null;
+    const isZ = (n: Node | null) => !!n && n.nodeType === 3 && /^[\u200b]*$/.test(n.textContent ?? "");
+    const isChip = (n: Node | null): n is HTMLElement => !!n && n.nodeType === 1 && (n as HTMLElement).classList.contains("cs4-fld");
+    if (node.nodeType === 3) {
+      const txt = node.textContent ?? "";
+      const rest = back ? txt.slice(0, off) : txt.slice(off);
+      if (rest.replace(/\u200b/g, "").length) return null;
+      let sib: Node | null = back ? node.previousSibling : node.nextSibling;
+      while (isZ(sib)) sib = back ? sib!.previousSibling : sib!.nextSibling;
+      return isChip(sib) ? sib : null;
+    }
+    let sib: Node | null = back ? node.childNodes[off - 1] ?? null : node.childNodes[off] ?? null;
+    while (isZ(sib)) sib = back ? sib!.previousSibling : sib!.nextSibling;
+    return isChip(sib) ? sib : null;
+  };
+  const dropChip = (chip: HTMLElement, w: Box) => {
+    const z = chip.nextSibling;
+    if (z && z.nodeType === 3 && /^\u200b/.test(z.textContent ?? "")) z.textContent = (z.textContent ?? "").replace(/^\u200b/, "");
+    const sel = window.getSelection(); const r = document.createRange();
+    r.setStartBefore(chip); r.collapse(true);
+    chip.remove(); sel?.removeAllRanges(); sel?.addRange(r);
+    syncBox(w); keepRange(w);
+  };
+  const chipKeys = (e: React.KeyboardEvent<HTMLElement>, w: Box) => {
+    const box = e.currentTarget;
+    if (e.key !== "Backspace" && e.key !== "Delete") { box.querySelectorAll(".cs4-fld.is-picked").forEach((x) => x.classList.remove("is-picked")); return false; }
+    const picked = box.querySelector(".cs4-fld.is-picked") as HTMLElement | null;
+    const chip = picked ?? chipNear(box, e.key === "Backspace");
+    if (!chip) return false;
+    e.preventDefault(); dropChip(chip, w); return true;
+  };
+  const chipClick = (e: React.MouseEvent<HTMLElement>, w: Box) => {
+    const box = e.currentTarget;
+    box.querySelectorAll(".cs4-fld.is-picked").forEach((x) => x.classList.remove("is-picked"));
+    const chip = (e.target as HTMLElement).closest?.(".cs4-fld") as HTMLElement | null;
+    if (!chip || !box.contains(chip)) return;
+    const rc = chip.getBoundingClientRect();
+    if (e.clientX >= rc.right - 18) { e.preventDefault(); dropChip(chip, w); return; }   // the × on its right
+    chip.classList.add("is-picked");   // picked: Backspace / Delete removes it
+  };
+  const plainPaste = (e: React.ClipboardEvent, single: boolean) => {
+    e.preventDefault();
+    const txt = e.clipboardData.getData("text/plain");
+    document.execCommand("insertText", false, single ? txt.replace(/\s+/g, " ") : txt);
+  };
+  return createPortal(
+    <div className="csx-modal-bg cs4-ed-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className={`cs4-ed is-bp ${dragging ? "is-drop" : ""}`} role="dialog" aria-modal="true" aria-label="E-mail blueprint" {...dnd}>
+        {dragging && <div className="cs4-bp-drop" aria-hidden="true"><span><CsIco n="clip" s={22} /><b>Drop to attach</b><i>Up to 3 MB in all</i></span></div>}
+        <header className="cs4-ed-h">
+          <span className="csx-modal-ico"><CsIco n="mail" s={18} /></span>
+          <div className="cs4-ed-ht"><span className="csx-eyebrow">{t.id ? "E-mail blueprint" : "New e-mail blueprint"}</span>
+            <input className="cs4-ed-name" value={t.name ?? ""} onChange={(e) => setT((x) => ({ ...x, name: e.target.value }))} placeholder="Name it — e.g. Quarterly check-in" aria-label="Blueprint name" autoFocus={!t.id} /></div>
+          <button type="button" className="csx-x" onClick={onClose} aria-label="Close"><CsIco n="x" /></button>
+        </header>
+        <div className="cs4-bp">
+          <div className="cs4-bp-main">
+            <div className="cs4-bp-vers" role="tablist" aria-label="Versions">
+              <button type="button" role="tab" aria-selected={ver < 0} className={`cs4-bp-ver ${ver < 0 ? "is-on" : ""}`} onClick={() => goVer(-1)}>
+                <b>Main version</b><i>{vars_.length ? `everyone else · ${countOf(-1)}` : `all clients · ${accounts.length}`}</i>
+              </button>
+              {vars_.map((v, i) => (
+                <button key={v.id} type="button" role="tab" aria-selected={ver === i} className={`cs4-bp-ver ${ver === i ? "is-on" : ""}`} onClick={() => goVer(i)}>
+                  <b>{v.name || `Version ${i + 2}`}</b><i>{countOf(i)} client{countOf(i) === 1 ? "" : "s"}</i>
+                </button>
+              ))}
+              <button type="button" className="cs4-bp-ver is-add" onClick={addVersion} title="The same e-mail in other words, for some of the clients"><CsIco n="plus" s={13} />Add a version</button>
+            </div>
+            <div className="cs4-bp-top">
+              <div className="cs4-seg is-light" role="tablist" aria-label="Write or preview">
+                <button type="button" role="tab" aria-selected={view === "write"} className={view === "write" ? "is-on" : ""} onClick={() => setView("write")}><CsIco n="edit" s={13} />Write</button>
+                <button type="button" role="tab" aria-selected={view === "preview"} className={view === "preview" ? "is-on" : ""} onClick={() => { syncBody(); syncSubj(); setView("preview"); }}><CsIco n="eye" s={13} />Preview</button>
+              </div>
+              {view === "preview" && (
+                <div className="cs4-bp-as">
+                  <span>As sent to</span>
+                  <span className="cs4-bp-as-c"><Select size="sm" value={asClient} onChange={(v) => { setAsClient(v); setAsContact(0); }} searchable placeholder="A sample client" options={[{ value: "", label: "A sample client" }, ...accounts.map((x) => ({ value: x.id, label: x.name }))]} /></span>
+                  {clientGets?.id !== curV?.id && <em className="cs4-bp-gets">gets {clientGets ? `“${clientGets.name}”` : "the main version"}</em>}
+                  {cts.length > 1 && <span className="cs4-bp-as-p"><Select size="sm" value={String(asContact)} onChange={(v) => setAsContact(Number(v))} options={cts.map((x, i) => ({ value: String(i), label: x.name || x.email || "Contact" }))} /></span>}
+                </div>
+              )}
+            </div>
+            {view === "write" ? (
+              <>
+                <div className="cs4-bp-subj">
+                  <span>Subject</span>
+                  <div ref={subjRef} className="cs4-bp-line" contentEditable suppressContentEditableWarning role="textbox" aria-label="Subject" data-ph="How is everything going?"
+                    onInput={syncSubj} onKeyDown={(e) => { if (e.key === "Enter") e.preventDefault(); else chipKeys(e, "subject"); }} onMouseDown={(e) => chipClick(e, "subject")} onPaste={(e) => { plainPaste(e, true); syncSubj(); }}
+                    onKeyUp={() => keepRange("subject")} onMouseUp={() => keepRange("subject")} onFocus={() => { last.current = "subject"; }} onBlur={() => { keepRange("subject"); syncSubj(); }} />
+                </div>
+                <div className="cs4-rte cs4-bp-rte">
+                  <div className="cs4-rte-bar" onMouseDown={(e) => e.preventDefault()}>
+                    <button type="button" onClick={() => cmd("bold")} title="Bold"><b>B</b></button>
+                    <button type="button" onClick={() => cmd("italic")} title="Italic"><i>I</i></button>
+                    <button type="button" onClick={() => cmd("underline")} title="Underline"><u>U</u></button>
+                    <span />
+                    <button type="button" onClick={() => cmd("insertUnorderedList")} title="Bullets">• List</button>
+                    <button type="button" onClick={() => cmd("insertOrderedList")} title="Numbered">1. List</button>
+                    <button type="button" onClick={() => { const u = window.prompt("Link to (https://…)"); if (u) cmd("createLink", u); }} title="Link">Link</button>
+                    <button type="button" onClick={() => cmd("removeFormat")} title="Plain text">Clear</button>
+                  </div>
+                  <div ref={bodyRef} className="cs4-rte-body" contentEditable suppressContentEditableWarning role="textbox" aria-multiline="true" aria-label="Message"
+                    onInput={syncBody} onKeyDown={(e) => chipKeys(e, "body")} onMouseDown={(e) => chipClick(e, "body")} onKeyUp={() => keepRange("body")} onMouseUp={() => keepRange("body")} onFocus={() => { last.current = "body"; }} onBlur={() => { keepRange("body"); syncBody(); }} />
+                </div>
+              </>
+            ) : (
+              <div className="cs4-ed-mail cs4-bp-mail">
+                <div className="cs4-ed-env">
+                  <span><i>From</i>{owner?.name ?? "You"} {owner?.email ? `<${owner.email}>` : ""}</span>
+                  <span><i>To</i>{who ? `${who.name ? `${who.name} ` : ""}<${who.email}>` : c ? "no e-mail on file" : "laura@client.com"}{cts.length > 1 ? ` · each of the ${cts.length} contacts gets their own` : ""}</span>
+                  <span><i>Subject</i><b>{fillCsTags(cur.subject ?? "", vars, false) || "—"}</b></span>
+                  {(t.attachments ?? []).length > 0 && <span><i>Files</i>{(t.attachments ?? []).map((a) => a.name).join(", ")}</span>}
+                </div>
+                <iframe title="E-mail preview" className="cs4-ed-frame" srcDoc={preview} sandbox="" />
+              </div>
+            )}
+          </div>
+
+          <aside className="cs4-bp-side">
+            {curV && (
+              <section className="cs4-bp-sec cs4-bp-who">
+                <div className="cs4-bp-who-h">
+                  <input value={curV.name} onChange={(e) => patchVer(ver, { name: e.target.value })} aria-label="Version name" placeholder="Name this version" />
+                  <button type="button" className="csx-ghost is-sm is-danger" onClick={() => dropVersion(ver)} title="Delete this version"><CsIco n="trash" s={12} /></button>
+                </div>
+                <h4>Who gets this version</h4>
+                <div className="csx-f"><span>Clients looked after by</span>
+                  <SalesMultiFilter values={curV.audience?.owners ?? []} onChange={(v) => setAud(ver, { owners: v })} options={people.map((p) => ({ value: p.id, label: p.name }))} placeholder="Anyone" noun="people" searchFrom={6} />
+                </div>
+                <div className="cs4-chiprow"><span>Priority</span>
+                  {[...CS_PRIORITIES.map((p) => ({ k: p.key as string, l: p.label, tone: PRI_TONE[p.key] })), { k: "none", l: "None", tone: "none" }].map((x) => (
+                    <button key={x.k} type="button" className={`cs4-chip is-${x.tone} ${(curV.audience?.priorities ?? []).includes(x.k) ? "is-on" : ""}`}
+                      onClick={() => { const xs = curV.audience?.priorities ?? []; setAud(ver, { priorities: xs.includes(x.k) ? xs.filter((y) => y !== x.k) : [...xs, x.k] }); }}><i />{x.l}</button>
+                  ))}
+                </div>
+                <div className="cs4-chiprow"><span>Health</span>
+                  {HEALTH_KEYS.map((h) => (
+                    <button key={h.key} type="button" className={`cs4-chip is-h-${h.key} ${(curV.audience?.health ?? []).includes(h.key) ? "is-on" : ""}`}
+                      onClick={() => { const xs = curV.audience?.health ?? []; setAud(ver, { health: xs.includes(h.key) ? xs.filter((y) => y !== h.key) : [...xs, h.key] }); }}><i />{h.label}</button>
+                  ))}
+                </div>
+                <div className="csx-f"><span>Or exactly these clients</span>
+                  <SalesMultiFilter values={curV.audience?.clients ?? []} onChange={(v) => setAud(ver, { clients: v })} options={accounts.map((x) => ({ value: x.id, label: x.name }))} placeholder="Pick clients…" noun="clients" searchFrom={6} />
+                </div>
+                <p className="cs4-help">{curV.audience?.clients?.length ? "Only the clients picked get it (the rules above are left aside)." : "Every rule filled in must hold. "}A client gets the first version that applies to it; everyone else, the main one.</p>
+                {(() => {
+                  const fit = accounts.filter((x) => fitsV(ver, x));
+                  return (
+                    <div className="cs4-bp-fit">
+                      <b>{fit.length} client{fit.length === 1 ? "" : "s"} get this version</b>
+                      {fit.length > 0 && <span>{fit.slice(0, 8).map((x) => x.name).join(", ")}{fit.length > 8 ? ` and ${fit.length - 8} more` : ""}</span>}
+                    </div>
+                  );
+                })()}
+              </section>
+            )}
+            <section className="cs4-bp-sec">
+              <h4>Look{vars_.length ? <em className="cs4-bp-shared"> · the same for every version</em> : null}</h4>
+              <div className="csx-f-row">
+                <label className="csx-f"><span>Small line on top</span><input value={d.brand ?? ""} onChange={(e) => setD({ brand: e.target.value })} placeholder="Your company" /></label>
+                <label className="csx-f"><span>Headline</span><input value={d.title ?? ""} onChange={(e) => setD({ title: e.target.value })} placeholder="Quarterly check-in" /></label>
+              </div>
+              <div className="csx-f"><span>Colour</span>
+                <span className="cs4-ed-acc">
+                  {ACCENTS.map((a) => <button key={a} type="button" className={(d.accent ?? "#0a6f4d") === a ? "is-on" : ""} style={{ background: a }} onClick={() => setD({ accent: a })} aria-label={`Colour ${a}`} />)}
+                  <label className="cs4-ed-acc-c" title="Any colour"><input type="color" value={d.accent ?? "#0a6f4d"} onChange={(e) => setD({ accent: e.target.value })} /></label>
+                </span>
+              </div>
+              <div className="csx-f-row">
+                <label className="csx-f"><span>Button text</span><input value={d.button_label ?? ""} onChange={(e) => setD({ button_label: e.target.value })} placeholder="Book a call" /></label>
+                <label className="csx-f"><span>Button link</span><input value={d.button_url ?? ""} onChange={(e) => setD({ button_url: e.target.value })} placeholder="https://…" /></label>
+              </div>
+              <div className="csx-f-row">
+                {(["signoff", "footer"] as const).map((w) => (
+                  <div key={w} className="csx-f"><span>{w === "signoff" ? "Sign-off" : "Footer (small print)"}</span>
+                    <div ref={w === "signoff" ? signRef : footRef} className="cs4-bp-box" contentEditable suppressContentEditableWarning role="textbox" aria-multiline="true" aria-label={w === "signoff" ? "Sign-off" : "Footer"}
+                      data-ph={w === "signoff" ? "Best regards," : "Address, unsubscribe line…"}
+                      onInput={() => syncMulti(w)} onPaste={(e) => { plainPaste(e, false); syncMulti(w); }}
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); document.execCommand("insertLineBreak"); syncMulti(w); } else chipKeys(e, w); }} onMouseDown={(e) => chipClick(e, w)}
+                      onKeyUp={() => keepRange(w)} onMouseUp={() => keepRange(w)} onFocus={() => { last.current = w; }} onBlur={() => { keepRange(w); syncMulti(w); }} />
+                  </div>
+                ))}
+              </div>
+              <div className="csx-f"><span>Files attached <em className={total > 3_000_000 ? "is-bad" : ""}>{fmtSize(total)} of 3 MB</em></span>
+                <div className="cs4-files is-rich">
+                  {(t.attachments ?? []).map((a) => {
+                    const fieldNames = Object.keys(a.fields ?? {});
+                    const fills = [...new Set([...(a.tags ?? []), ...Object.values(a.fields ?? {}).filter(Boolean)])];
+                    return (
+                      <div key={a.path} className="cs4-att">
+                        <div className="cs4-att-h">
+                          <span className="cs4-att-ico"><CsIco n="clip" s={12} /></span>
+                          <span className="cs4-att-n"><b title={a.name}>{a.name}</b><i>{fmtSize(a.size)}{a.kind === "pdf" ? " · PDF" : a.kind === "text" ? " · text" : ""}</i></span>
+                          <button type="button" className="csx-ghost is-sm is-ico" disabled={!!peek} title={`See it as ${c?.name ?? "a client"} gets it`} onClick={() => seeAtt(a)}><CsIco n="eye" s={12} /></button>
+                          <button type="button" className="csx-ghost is-sm is-ico" onClick={async () => { setT((x) => ({ ...x, attachments: (x.attachments ?? []).filter((y) => y.path !== a.path) })); if (!initial.attachments?.some((y) => y.path === a.path)) await removeCsFile(a.path); }} aria-label={`Remove ${a.name}`} title="Remove"><CsIco n="x" s={11} /></button>
+                        </div>
+                        {fieldNames.length > 0 && (
+                          <div className="cs4-att-map">
+                            <em>Form fields in it</em>
+                            {fieldNames.map((fn) => (
+                              <label key={fn} className="cs4-att-row">
+                                <code title={fn}>{fn}</code><CsIco n="arrow" s={11} />
+                                <select value={a.fields?.[fn] ?? ""} onChange={(e) => setAtt(a.path, { fields: { ...(a.fields ?? {}), [fn]: e.target.value } })}>
+                                  <option value="">Leave as it is</option>
+                                  {Object.entries(FIELD_CHIP).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                                </select>
+                              </label>
+                            ))}
+                          </div>
+                        )}
+                        {fills.length > 0
+                          ? <div className="cs4-att-fills"><em>Filled in for each client:</em>{fills.map((k) => <i key={k} className="cs4-fld">{FIELD_CHIP[k] ?? k}</i>)}</div>
+                          : (a.kind === "pdf" || a.kind === "text") && <p className="cs4-att-note">Nothing to fill in yet: write <code>{"{{client}}"}</code> (or another field) in the file{a.kind === "pdf" ? ", or give the PDF form fields" : ""}, and attach it again.</p>}
+                      </div>
+                    );
+                  })}
+                  <button type="button" className="cs4-file is-add" disabled={busy} onClick={() => fileRef.current?.click()}><CsIco n="plus" s={12} />Attach or drop files</button>
+                  <input ref={fileRef} type="file" multiple hidden onChange={(e) => { upload(e.target.files); e.target.value = ""; }} />
+                </div>
+              </div>
+            </section>
+            <section className="cs4-bp-sec">
+              <h4>Insert a field</h4>
+              <p className="cs4-bp-hint">Click where it goes, then pick one. Each contact gets their own e-mail: “Hi <i className="cs4-fld">First name</i> and the <i className="cs4-fld">Client</i> team”.</p>
+              {FIELD_GROUPS.map((g) => (
+                <div key={g.label} className="cs4-bp-grp">
+                  <b>{g.label}</b>
+                  <div className="cs4-bp-flds">
+                    {g.keys.map((k) => (
+                      <button key={k} type="button" className="cs4-bp-fld" onMouseDown={(e) => e.preventDefault()} onClick={() => addField(k)} title={`Insert “${FIELD_CHIP[k]}” — e.g. ${vars[k] || "—"}`}>
+                        <CsIco n="plus" s={11} />{FIELD_CHIP[k]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </section>
+          </aside>
+        </div>
+        {err && <p className="csx-err cs4-ed-err">{err}</p>}
+        <footer className="csx-modal-f">
+          {onDelete && <button type="button" className="csx-ghost is-danger" onClick={onDelete}><CsIco n="trash" s={14} />Delete</button>}
+          <span className="csx-sp" />
+          <button type="button" className="csx-ghost" disabled={busy} onClick={test} title="Saves it and sends it to you, filled in for the client in the preview (the version that client gets)"><CsIco n="mail" s={14} />Send me a test</button>
+          <button type="button" className="csx-ghost" onClick={onClose}>Cancel</button>
+          <button type="button" className="csx-primary" disabled={busy} onClick={() => save(false)}>{busy ? "Saving…" : "Save blueprint"}</button>
+        </footer>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/* ---------- the sequence editor: who, when, which e-mails ---------- */
+function CsSequenceEditor({ initial, templates, accounts, runs, types, me, people, onClose, onSaved, onNewTemplate }: {
+  initial: Partial<CsSequence>; templates: CsTemplate[]; accounts: CsClient[]; runs: CsRun[]; types: { id: string; name: string }[];
+  me: string | null; people: Employee[];
+  onClose: () => void; onSaved: (q: CsSequence) => void; onNewTemplate: () => void;
+}) {
+  const [q, setQ] = useState<Partial<CsSequence>>({ ...initial, audience: { ...(initial.audience ?? {}) }, steps: [...(initial.steps ?? [])] });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [who, setWho] = useState<"filters" | "picked">((initial.audience?.clients?.length ?? 0) > 0 ? "picked" : "filters");
+  useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === "Escape" && !document.querySelector(".smf-menu, .sel-menu")) onClose(); }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, [onClose]);
+  const a = q.audience ?? {};
+  const setA = (p: Partial<NonNullable<CsSequence["audience"]>>) => setQ((x) => ({ ...x, audience: { ...(x.audience ?? {}), ...p } }));
+  const tog = (k: "priorities" | "types" | "health", v: string) => { const cur = a[k] ?? []; setA({ [k]: cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v] }); };
+  const steps = q.steps ?? [];
+  const setStep = (i: number, p: Partial<CsStep>) => setQ((x) => ({ ...x, steps: (x.steps ?? []).map((s, j) => (j === i ? { ...s, ...p } : s)) }));
+  const moveStep = (i: number, dir: -1 | 1) => setQ((x) => { const xs = [...(x.steps ?? [])]; const j = i + dir; if (j < 0 || j >= xs.length) return x; [xs[i], xs[j]] = [xs[j], xs[i]]; return { ...x, steps: xs }; });
+  const full = { ...q, audience: who === "picked" ? { clients: a.clients ?? [], exclude: a.exclude ?? [] } : { ...a, clients: [] } } as CsSequence;
+  const fits = accounts.filter((c) => csFits(full, c));
+  const people_n = fits.reduce((n, c) => n + csTo(full, c, runs.find((r) => r.sequence_id === q.id && r.client_id === c.id) ?? null).length, 0);
+  const totalDays = steps.reduce((t, s, i) => t + (i === 0 && q.start_mode === "before_renewal" ? 0 : Number(s.wait_days) || 0), 0);
+  const save = async (activate?: boolean) => {
+    if (!q.name?.trim()) { setErr("Give it a name."); return; }
+    const st = steps.filter((s) => s.template_id);
+    if (!st.length) { setErr("Pick the e-mail of at least one step."); return; }
+    if (who === "picked" && !(a.clients ?? []).length) { setErr("Pick the clients it goes to."); return; }
+    setBusy(true); setErr(null);
+    const r = await saveCsSequence({ ...full, steps: st, active: activate ?? q.active });
+    setBusy(false);
+    if (r.error || !r.row) { setErr(r.error ?? "Not saved."); return; }
+    onSaved({ ...r.row, audience: r.row.audience ?? {}, steps: r.row.steps ?? [] }); onClose();
+  };
+  const inNow = q.id ? runs.filter((r) => r.sequence_id === q.id && r.status === "active").length : 0;
+  const clientOpts = accounts.map((c) => ({ value: c.id, label: c.name }));
+  return createPortal(
+    <div className="csx-modal-bg cs4-ed-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="cs4-ed is-seq" role="dialog" aria-modal="true" aria-label="Follow-up sequence">
+        <header className="cs4-ed-h">
+          <span className="csx-modal-ico"><CsIco n="repeat" s={18} /></span>
+          <div className="cs4-ed-ht"><span className="csx-eyebrow">{q.id ? "Follow-up sequence" : "New follow-up sequence"}</span>
+            <input className="cs4-ed-name" value={q.name ?? ""} onChange={(e) => setQ((x) => ({ ...x, name: e.target.value }))} placeholder="Name it — e.g. Keep in touch · high priority" aria-label="Sequence name" autoFocus={!q.id} /></div>
+          <button type="button" role="switch" aria-checked={!!q.active} className={`csx-switch ${q.active ? "is-on" : ""}`} onClick={() => setQ((x) => ({ ...x, active: !x.active }))}><i />{q.active ? "On" : "Off"}</button>
+          <button type="button" className="csx-x" onClick={onClose} aria-label="Close"><CsIco n="x" /></button>
+        </header>
+        <div className="cs4-ed-b">
+          <div className="cs4-ed-form">
+            <section className="cs4-ed-sec">
+              <h4><span>1</span>Who gets it</h4>
+              <div className="cs4-seg is-light is-sm">
+                <button type="button" className={who === "filters" ? "is-on" : ""} onClick={() => setWho("filters")}>Clients that match</button>
+                <button type="button" className={who === "picked" ? "is-on" : ""} onClick={() => setWho("picked")}>Only the clients I pick</button>
+              </div>
+              {who === "filters" ? <>
+                <div className="cs4-chiprow"><span>Priority</span>
+                  {[...CS_PRIORITIES.map((p) => ({ k: p.key as string, l: p.label, tone: PRI_TONE[p.key] })), { k: "none", l: "No priority", tone: "none" }].map((x) => (
+                    <button key={x.k} type="button" className={`cs4-chip is-${x.tone} ${(a.priorities ?? []).includes(x.k) ? "is-on" : ""}`} onClick={() => tog("priorities", x.k)}><i />{x.l}</button>
+                  ))}
+                </div>
+                {types.length > 0 && <div className="cs4-chiprow"><span>Type</span>
+                  {types.map((t) => <button key={t.id} type="button" className={`cs4-chip ${(a.types ?? []).includes(t.id) ? "is-on" : ""}`} onClick={() => tog("types", t.id)}>{t.name}</button>)}
+                </div>}
+                <div className="cs4-chiprow"><span>Health</span>
+                  {HEALTH_KEYS.map((h) => <button key={h.key} type="button" className={`cs4-chip is-h-${h.key} ${(a.health ?? []).includes(h.key) ? "is-on" : ""}`} onClick={() => tog("health", h.key)}><i />{h.label}</button>)}
+                </div>
+                <p className="cs4-help">Nothing ticked in a row means any. Clients join and leave as they start or stop matching.</p>
+              </> : (
+                <div className="csx-f"><span>Clients</span>
+                  <SalesMultiFilter values={a.clients ?? []} onChange={(v) => setA({ clients: v })} options={clientOpts} placeholder="Pick clients…" noun="clients" searchFrom={6} />
+                </div>
+              )}
+              <div className="csx-f"><span>Never to</span>
+                <SalesMultiFilter values={a.exclude ?? []} onChange={(v) => setA({ exclude: v })} options={clientOpts} placeholder="Nobody left out" noun="clients" searchFrom={6} />
+              </div>
+            </section>
+
+            <section className="cs4-ed-sec">
+              <h4><span>2</span>When it starts</h4>
+              <div className="cs4-opts">
+                <button type="button" className={q.start_mode !== "before_renewal" ? "is-on" : ""} onClick={() => setQ((x) => ({ ...x, start_mode: "now" }))}><b>Right away</b><i>As soon as a client is in</i></button>
+                <button type="button" className={q.start_mode === "before_renewal" ? "is-on" : ""} onClick={() => setQ((x) => ({ ...x, start_mode: "before_renewal" }))}><b>Before each renewal</b><i>From each client's next renewal date</i></button>
+              </div>
+              {q.start_mode === "before_renewal" && (
+                <div className="cs4-inline"><input type="number" min={0} value={q.start_days ?? 60} onChange={(e) => setQ((x) => ({ ...x, start_days: Math.max(0, Number(e.target.value) || 0) }))} /><span>days before the renewal (signed products' terms, their deals' contracts, else the yearly anniversary)</span></div>
+              )}
+            </section>
+
+            <section className="cs4-ed-sec">
+              <h4><span>3</span>The e-mails</h4>
+              <ol className="cs4-steps">
+                {steps.map((st, i) => (
+                  <li key={st.id}>
+                    <div className="cs4-step-wait">
+                      {i === 0 && q.start_mode === "before_renewal" ? <span>On the start date</span> : <>
+                        <span>{i === 0 ? "Wait" : "Then wait"}</span>
+                        <input type="number" min={0} value={st.wait_days} onChange={(e) => setStep(i, { wait_days: Math.max(0, Number(e.target.value) || 0) })} aria-label="Days to wait" />
+                        <span>day{st.wait_days === 1 ? "" : "s"}{i === 0 && !st.wait_days ? " (send at once)" : ""}</span>
+                      </>}
+                    </div>
+                    <div className="cs4-step-card">
+                      <span className="cs4-step-n">{i + 1}</span>
+                      <span className="cs4-step-sel"><Select size="sm" value={st.template_id} onChange={(v) => v === "__new" ? onNewTemplate() : setStep(i, { template_id: v })} placeholder="Pick an e-mail blueprint…" searchable
+                        options={[...templates.map((t) => ({ value: t.id, label: t.name, hint: t.attachments.length ? `${t.attachments.length} file${t.attachments.length === 1 ? "" : "s"}` : undefined })), { value: "__new", label: "+ New blueprint…" }]} /></span>
+                      <button type="button" className="csx-ghost is-sm is-ico" disabled={i === 0} onClick={() => moveStep(i, -1)} title="Earlier"><CsIco n="up" s={12} /></button>
+                      <button type="button" className="csx-ghost is-sm is-ico" disabled={i === steps.length - 1} onClick={() => moveStep(i, 1)} title="Later"><CsIco n="dn" s={12} /></button>
+                      <button type="button" className="csx-ghost is-sm is-ico" disabled={steps.length === 1} onClick={() => setQ((x) => ({ ...x, steps: (x.steps ?? []).filter((_, j) => j !== i) }))} title="Remove"><CsIco n="trash" s={11} /></button>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+              <button type="button" className="csx-ghost is-sm" onClick={() => setQ((x) => ({ ...x, steps: [...(x.steps ?? []), newStep(templates[0]?.id ?? "", 14)] }))}><CsIco n="plus" s={12} />Add an e-mail</button>
+              <div className="cs4-opts is-sm">
+                <button type="button" className={!q.repeat ? "is-on" : ""} onClick={() => setQ((x) => ({ ...x, repeat: false }))}><b>Then stop</b><i>After the last e-mail</i></button>
+                <button type="button" className={q.repeat ? "is-on" : ""} onClick={() => setQ((x) => ({ ...x, repeat: true }))}><b>Then start again</b><i>{q.start_mode === "before_renewal" ? "Before the next renewal" : "From the first e-mail, after a pause"}</i></button>
+              </div>
+              {q.repeat && q.start_mode !== "before_renewal" && (
+                <div className="cs4-inline"><span>Start again</span><input type="number" min={1} value={q.start_days ?? 30} onChange={(e) => setQ((x) => ({ ...x, start_days: Math.max(1, Number(e.target.value) || 1) }))} /><span>days after the last e-mail{steps[0]?.wait_days ? ` (then the first one's own ${steps[0].wait_days}-day wait)` : ""}</span></div>
+              )}
+            </section>
+
+            <section className="cs4-ed-sec">
+              <h4><span>4</span>Sent to and from</h4>
+              <div className="cs4-chiprow"><span>To</span>
+                {([["all", "Every contact"], ["main", "Main contact only"], ["billing", "Billing contact"]] as const).map(([k, l]) => <button key={k} type="button" className={`cs4-chip ${q.recipients === k ? "is-on" : ""}`} onClick={() => setQ((x) => ({ ...x, recipients: k }))}>{l}</button>)}
+              </div>
+              <div className="cs4-chiprow"><span>From</span>
+                <button type="button" className={`cs4-chip ${q.sender === "owner" ? "is-on" : ""}`} onClick={() => setQ((x) => ({ ...x, sender: "owner" }))}>Each client's starred owner</button>
+                <button type="button" className={`cs4-chip ${q.sender === "me" ? "is-on" : ""}`} onClick={() => setQ((x) => ({ ...x, sender: "me" }))}>{q.created_by && q.created_by !== me ? people.find((p) => p.id === q.created_by)?.name ?? "Its creator" : "Me"}</button>
+              </div>
+              <p className="cs4-help">Each person gets their own e-mail, with their own name in it.</p>
+              <label className="csx-check-row"><input type="checkbox" checked={q.log_contact !== false} onChange={(e) => setQ((x) => ({ ...x, log_contact: e.target.checked }))} /><span>Each e-mail counts as a contact (it resets the client's cadence)</span></label>
+              <p className="cs4-help">A client without an owner (or whose owner hasn't connected Outlook with mail) is sent from the sequence's creator. Per client, you can pause it, leave the client out or send it to other addresses — in the client's panel.</p>
+            </section>
+          </div>
+
+          <aside className="cs4-ed-side">
+            <div className="cs4-ed-sum">
+              <b>{fits.length}</b><span>client{fits.length === 1 ? "" : "s"} match{fits.length === 1 ? "es" : ""}{q.id ? ` · ${inNow} in it now` : ""}</span>
+              <span className="cs4-ed-sum-p">{people_n} {people_n === 1 ? "person" : "people"} · one e-mail each</span>
+              <i>{steps.length === 1 ? "1 e-mail" : `${steps.length} e-mails over ${totalDays} days`}{q.repeat ? (q.start_mode === "before_renewal" ? ", again before each renewal" : `, again ${q.start_days ?? 30} days later`) : ""}</i>
+            </div>
+            <ul className="cs4-ed-who">
+              {fits.slice(0, 200).map((c) => {
+                const to = csTo(full, c, runs.find((r) => r.sequence_id === q.id && r.client_id === c.id) ?? null);
+                // which version of each e-mail this client gets (only the ones that differ from the main one)
+                const vs = [...new Set(steps.map((st) => csVariantFor(templates.find((tp) => tp.id === st.template_id), c)?.name).filter(Boolean))] as string[];
+                return (
+                  <li key={c.id} className={to.length ? "" : "is-bad"}>
+                    <CompanyLogo name={c.name} website={c.website} className="cx-av csx-logo is-xs" />
+                    <span><b>{c.name}{vs.length > 0 && <em className="cs4-ed-ver" title={`Gets: ${vs.join(", ")}`}>{vs.join(" · ")}</em>}</b><i>{to.length ? `${to.length > 1 ? `${to.length} people · ` : ""}${to.join(", ")}` : "No e-mail on file — it'll be skipped"}{q.start_mode === "before_renewal" && c.ren ? ` · renews ${c.ren.end.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "2-digit" })}` : ""}</i></span>
+                    {c.priority && <em className={`cs4-pri-dot is-${PRI_TONE[c.priority]}`} title={`${c.priority} priority`} />}
+                  </li>
+                );
+              })}
+              {!fits.length && <li className="cs3-empty">No client matches yet.</li>}
+              {fits.length > 200 && <li className="cs3-empty">…and {fits.length - 200} more</li>}
+            </ul>
+          </aside>
+        </div>
+        {err && <p className="csx-err cs4-ed-err">{err}</p>}
+        <footer className="csx-modal-f">
+          <span className="cs4-foot-note">{q.active ? "On: due e-mails go out every hour." : "Off: nothing is sent until you switch it on."}</span>
+          <span className="csx-sp" />
+          <button type="button" className="csx-ghost" onClick={onClose}>Cancel</button>
+          {!q.active && <button type="button" className="csx-ghost" disabled={busy} onClick={() => save(false)}>Save, keep it off</button>}
+          <button type="button" className="csx-primary" disabled={busy} onClick={() => save(true)}>{busy ? "Saving…" : q.active ? "Save" : "Save and switch on"}</button>
+        </footer>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -1214,11 +2214,15 @@ export function CustomerSuccessPage() {
   const cat = useCsCatalog();
   const nav = useNavigate();
   const [cs, setCs] = useState<CsData | null>(null);
-  const [base, setBase] = useState<{ clients: any[]; lines: Line[]; logs: CsLog[]; sites: Record<string, string> } | null>(null);
+  const [base, setBase] = useState<{ clients: any[]; lines: Line[]; logs: CsLog[]; sites: Record<string, string>; terms: Record<string, any> } | null>(null);
+  const [auto, setAuto] = useState<CsAuto | null>(null);
+  const [projTypes, setProjTypes] = useState<{ id: string; name: string }[]>([]);
+  const fhRef = useRef<HTMLDivElement>(null);
+  useFloatingHero(fhRef, ".cl-bar, .cx-kpis");
   const [scope, setScope] = useState<"mine" | "all">("all");
   const [owner, setOwner] = useState("");
   const [tab, setTab] = useState<CsTab>("accounts");
-  useNavSection("/success", 0, (part) => { if (["accounts", "upsells", "qbr", "revenue"].includes(part)) setTab(part as CsTab); });
+  useNavSection("/success", 0, (part) => { if (["accounts", "followups", "upsells", "qbr", "revenue"].includes(part)) setTab(part as CsTab); });
   const [filter, setFilter] = useState<CsFilter>("all");
   const [sort, setSort] = useState<CsSort>("priority");
   const [q, setQ] = useState("");
@@ -1227,14 +2231,21 @@ export function CustomerSuccessPage() {
   const [upView, setUpView] = useState<"pipeline" | "matrix">("pipeline");
   const [edit, setEdit] = useState<(Partial<CsUpsell> & { client_id: string }) | null>(null);
   const [logCh, setLogCh] = useState("call");
+  const [recEdit, setRecEdit] = useState<{ seq: string; value: string } | null>(null);
+  /** The page's Actions menu asks the follow-ups tab for a new sequence / blueprint. */
+  const [fuCmd, setFuCmd] = useState<{ k: "seq" | "tpl"; n: number } | null>(null);
   const [logWhy, setLogWhy] = useState("");
+  const [logDir, setLogDir] = useState<"out" | "in">("out");
+  const [mailSync, setMailSync] = useState<CsMailSync[]>([]);
+  const [mailBusy, setMailBusy] = useState(false);
+  const [mailCover, setMailCover] = useState<{ read: string[]; unread: string[] } | null>(null);
+  useEffect(() => { loadCsMailSync().then(setMailSync).catch(() => {}); }, []);
   const [qbrNew, setQbrNew] = useState<{ client: string; date: string }>({ client: "", date: "" });
   const [qbrDate, setQbrDate] = useState("");
   const [evNew, setEvNew] = useState<{ client: string; kind: RevenueEvent["kind"]; amount: number; date: string; reason: string } | null>(null);
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [bulkOwner, setBulkOwner] = useState("");
   const [ownPick, setOwnPick] = useState(false);
-  const [autoAt, setAutoAt] = useState<{ top: number; left: number } | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const year = new Date().getFullYear();
@@ -1245,10 +2256,10 @@ export function CustomerSuccessPage() {
     let alive = true;
     (async () => {
       const [cl, cp, pr, lg] = await Promise.all([
-        supabase.from("clients").select("id, name, company_id").order("name"),
+        supabase.from("clients").select("id, name, company_id, project_type_id, contacts").order("name"),
         supabase.from("client_products").select("*"),
         supabase.from("products").select("id, name"),
-        supabase.from("client_contacts_log").select("client_id, contacted_at, reason, channel, contact_name"),
+        supabase.from("client_contacts_log").select("client_id, contacted_at, reason, channel, contact_name, direction, source, logged_by"),
       ]);
       // websites (logos) of the clients' own companies only — not the whole directory
       const coIds = [...new Set(((cl.data ?? []) as any[]).map((x) => x.company_id).filter(Boolean))] as string[];
@@ -1261,8 +2272,17 @@ export function CustomerSuccessPage() {
       ((co.data ?? []) as any[]).forEach((x) => { if (x.website) sites[x.id] = x.website; });
       // an older log table without contact_name: read it again without that column
       let logs = (lg.data ?? []) as CsLog[];
-      if (lg.error) { const r2 = await supabase.from("client_contacts_log").select("client_id, contacted_at, reason, channel"); logs = (r2.data ?? []) as CsLog[]; }
-      if (alive) setBase({ clients: (cl.data ?? []) as any[], lines: ((cp.data ?? []) as any[]).map((r) => ({ ...r, name: pn[r.product_id] ?? "Product" })), logs, sites });
+      if (lg.error) { const r2 = await supabase.from("client_contacts_log").select("client_id, contacted_at, reason, channel, contact_name"); logs = (r2.data ?? []) as CsLog[]; }
+      if (!logs.length && lg.error) { const r3 = await supabase.from("client_contacts_log").select("client_id, contacted_at, reason, channel"); logs = (r3.data ?? []) as CsLog[]; }
+      // renewal dates: a product without its own term follows its deal's contract
+      const tids = [...new Set(((cp.data ?? []) as any[]).map((r) => r.tracking_id).filter(Boolean))] as string[];
+      const terms: Record<string, any> = {};
+      (await Promise.all(Array.from({ length: Math.ceil(tids.length / 150) }, (_, i) => tids.slice(i * 150, i * 150 + 150))
+        .map((ids) => Promise.resolve(supabase.from("trackings").select("id, contract_terms").in("id", ids)).then((r: any) => (r.data ?? []) as any[]))).catch(() => [] as any[][]))
+        .flat().forEach((t: any) => { if (t.contract_terms) terms[t.id] = t.contract_terms; });
+      if (alive) setBase({ clients: (cl.data ?? []) as any[], lines: ((cp.data ?? []) as any[]).map((r) => ({ ...r, name: pn[r.product_id] ?? "Product" })), logs, sites, terms });
+      loadCsAuto().then((a) => { if (alive) setAuto(a); }).catch(() => {});
+      supabase.from("project_types").select("id, name").then(({ data }: any) => { if (alive) setProjTypes((data ?? []) as any[]); });
       const d = await loadCsData();
       if (!alive) return;
       setCs(d);
@@ -1276,7 +2296,7 @@ export function CustomerSuccessPage() {
           if (alive && n) say(`${n} follow-up${n === 1 ? "" : "s"} created for clients past their contact cadence`);
         }
       }
-    })().catch(() => setBase({ clients: [], lines: [], logs: [], sites: {} }));
+    })().catch(() => setBase({ clients: [], lines: [], logs: [], sites: {}, terms: {} }));
     return () => { alive = false; };
   }, []);
 
@@ -1293,26 +2313,36 @@ export function CustomerSuccessPage() {
       const last = logs[0]?.contacted_at ?? null;
       const own = (cs?.owners ?? []).filter((o) => o.client_id === c.id).sort((a, b) => Number(b.is_primary) - Number(a.is_primary));
       const days = last ? Math.max(0, Math.floor((now - new Date(last).getTime()) / 864e5)) : null;
-      const cad = cs?.cadence[c.id] ?? cs?.settings.default_cadence_days ?? 30;
+      const ago = (x?: CsLog) => (x ? Math.max(0, Math.floor((now - new Date(x.contacted_at).getTime()) / 864e5)) : null);
+      const inL = logs.find((l) => l.direction === "in"), outL = logs.find((l) => l.direction !== "in");
+      const daysIn = ago(inL);
+      const daysOut = ago(outL);
+      const us = (l?: CsLog) => (l?.logged_by ? pName(l.logged_by) : "");
+      const them = (l?: CsLog) => String(l?.contact_name ?? "").trim();
+      const cad = cadenceOf(cs, c.id);
+      const priority = cs?.priority[c.id] ?? null;
       const ratio = days == null ? Infinity : days / cad;
       const health = cs?.health.find((h) => h.client_id === c.id)?.status ?? null;
-      const rens = ls.filter(isActive).map((l) => ({ l, t: termOf(l) })).filter((x) => x.t && x.t.end.getTime() >= now).sort((a, b) => a.t!.end.getTime() - b.t!.end.getTime());
+      const rens = ls.map((l) => ({ l, t: csRenewalOf(l, l.tracking_id ? base.terms[l.tracking_id] : null) })).filter((x) => !!x.t).sort((a, b) => a.t!.end.getTime() - b.t!.end.getTime());
       const r0 = rens[0];
       const ups = (cs?.upsells ?? []).filter((u) => u.client_id === c.id && !["won", "lost"].includes(u.status));
       const arr = ls.filter(isActive).reduce((t, l) => t + (l.recurring ? lineAnnual(l) : 0), 0);
-      const ren = r0 ? { end: r0.t!.end, left: r0.t!.left, value: lineAnnual(r0.l), auto: !!r0.l.auto_renew } : null;
-      const score = (ratio === Infinity ? 3 : Math.min(3, ratio)) * 10
+      const ren = r0 ? { end: r0.t!.end, left: r0.t!.left, value: lineAnnual(r0.l), auto: !!r0.l.auto_renew || r0.t!.kind === "anniversary", kind: r0.t!.kind } : null;
+      const score = (priority === "high" ? 12 : priority === "medium" ? 5 : 0) + (ratio === Infinity ? 3 : Math.min(3, ratio)) * 10
         + (health === "red" ? 30 : health === "amber" ? 14 : 0)
         + (ren && ren.left <= 90 ? 18 - ren.left / 6 : 0)
         + Math.min(8, arr / 10000);
       return {
         id: c.id, name: c.name, website: c.company_id ? base.sites[c.company_id] ?? "" : "",
         lines: ls, arr, last, lastWhy: logs[0]?.reason || logs[0]?.channel || null, days,
+        daysIn, daysOut, lastDir: logs[0] ? (logs[0].direction === "in" ? "in" : "out") : null,
+        lastUs: us(logs[0]), lastThem: them(logs[0]), inUs: us(inL), inThem: them(inL), outUs: us(outL), outThem: them(outL),
         owners: own.map((o) => o.profile_id), primary: own.find((o) => o.is_primary)?.profile_id ?? own[0]?.profile_id ?? null,
-        ratio, cadence: cad, health, ren, ups: ups.length, upsValue: ups.reduce((t, u) => t + u.est_value, 0), score,
+        ratio, cadence: cad, health, ren, ups: ups.length, upsValue: ups.reduce((t, u) => t + u.est_value, 0), score, priority,
+        typeId: c.project_type_id ?? null, contacts: Array.isArray(c.contacts) ? c.contacts : [],
       };
     });
-  }, [base, cs]);
+  }, [base, cs, cat.people]); // eslint-disable-line react-hooks/exhaustive-deps
   const clients = useMemo(() => all.filter((c) => {
     if (scope === "mine" && cat.me && !c.owners.includes(cat.me)) return false;
     if (owner && !c.owners.includes(owner)) return false;
@@ -1341,14 +2371,8 @@ export function CustomerSuccessPage() {
     say(`ARR frozen as the ${year} base`); reload();
   };
 
-  // ---- hero pointer glow ----
-  const glow = (e: RPointerEvent<HTMLElement>) => {
-    const r = e.currentTarget.getBoundingClientRect();
-    e.currentTarget.style.setProperty("--gx", `${e.clientX - r.left}px`);
-    e.currentTarget.style.setProperty("--gy", `${e.clientY - r.top}px`);
-  };
-
   // ---- the account list ----
+  const ready = !!cs?.ready;
   const needsContact = (c: CsClient) => c.days == null || c.days > c.cadence;
   const atRisk = (c: CsClient) => c.health === "red" || c.health === "amber";
   const renewing = (c: CsClient) => !!c.ren && c.ren.left <= 90;
@@ -1358,9 +2382,12 @@ export function CustomerSuccessPage() {
     { key: "risk", label: "At risk", test: atRisk, tone: "gold" },
     { key: "renew", label: "Renewing in 90 d", test: renewing, tone: "teal" },
     { key: "upsell", label: "Open upsell", test: (c) => c.ups > 0, tone: "violet" },
+    { key: "high", label: "High priority", test: (c) => c.priority === "high", tone: "coral" },
     { key: "orphan", label: "No owner", test: (c) => ready && !c.owners.length, tone: "slate" },
   ];
   const fTest = FILTERS.find((f) => f.key === filter)?.test ?? (() => true);
+  const VIEW_SORT: Partial<Record<CsFilter, CsSort>> = { all: "priority", contact: "contact", risk: "priority", renew: "renewal", upsell: "arr", high: "contact", orphan: "arr" };
+  const pickView = (k: CsFilter) => { setFilter(k); const so = VIEW_SORT[k]; if (so) setSort(so); };
   const list = useMemo(() => {
     const s = q.trim().toLowerCase();
     const xs = clients.filter((c) => fTest(c) && (!s || c.name.toLowerCase().includes(s)));
@@ -1375,21 +2402,25 @@ export function CustomerSuccessPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clients, filter, sort, q]);
   const open = byId(openId);
-  const overdue = clients.filter(needsContact);
-
-  // the automation popover floats over the page (the hero clips its content); it closes on scroll / resize
+  // the panel is drawn first, then it glides in (the heavy render never lands mid-animation);
+  // on close it glides out and is removed afterwards
+  // (the open / closed classes are set straight on the elements: no re-render of the page mid-animation)
+  const [panelId, setPanelId] = useState<string | null>(null);
+  const wsRef = useRef<HTMLDivElement | null>(null);
+  const sideRef = useRef<HTMLElement | null>(null);
+  const setPanelIn = (on: boolean) => { wsRef.current?.classList.toggle("has-open", on); sideRef.current?.classList.toggle("is-in", on); };
   useEffect(() => {
-    if (!autoAt) return;
-    const close = () => setAutoAt(null);
-    window.addEventListener("resize", close);
-    window.addEventListener("scroll", close, true);
-    return () => { window.removeEventListener("resize", close); window.removeEventListener("scroll", close, true); };
-  }, [autoAt]);
-  const toggleAutoPop = (el: HTMLElement) => {
-    if (autoAt) { setAutoAt(null); return; }
-    const r = el.getBoundingClientRect();
-    setAutoAt({ top: r.bottom + 8, left: Math.max(8, Math.min(r.right - 300, window.innerWidth - 308)) });
-  };
+    if (openId) {
+      setPanelId(openId);
+      let r2 = 0;
+      const r1 = window.requestAnimationFrame(() => { r2 = window.requestAnimationFrame(() => setPanelIn(true)); });
+      return () => { window.cancelAnimationFrame(r1); window.cancelAnimationFrame(r2); };
+    }
+    setPanelIn(false);
+    const t = window.setTimeout(() => setPanelId(null), 480);
+    return () => window.clearTimeout(t);
+  }, [openId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const shown = byId(panelId);
 
   // keyboard: "/" finds, Esc closes the account
   useEffect(() => {
@@ -1411,20 +2442,50 @@ export function CustomerSuccessPage() {
       rows[Math.max(0, Math.min(rows.length - 1, i + (e.key === "ArrowDown" ? 1 : -1)))]?.focus();
     }
   };
-  const openAccount = (id: string) => { setOpenId(id); setLogWhy(""); setLogCh("call"); setOwnPick(false); setQbrDate(""); };
+  /** Reads the Outlook mailboxes (again and again while there is more: the first time goes a year back). */
+  const readMail = async () => {
+    if (mailBusy) return;
+    setMailBusy(true);
+    let scanned = 0, logged = 0, rounds = 0, err: string | null = null, more = true, unread: string[] = [], read: string[] = [];
+    while (more && rounds < 30) {
+      rounds += 1;
+      say(rounds === 1 ? "Reading Outlook…" : `Reading Outlook… ${scanned.toLocaleString("en-GB")} e-mails read, ${logged} with clients so far`);
+      const r = await scanCsMail();
+      if (r.error) { err = r.error; break; }
+      scanned += r.scanned; logged += r.logged; more = r.more;
+      if (r.unread) unread = r.unread;
+      if (r.read) read = r.read;
+      if (!r.mailboxes) { err = "No mailbox can be read yet: connect Outlook with mail (Settings › Interface), or have a Microsoft admin allow the whole team."; break; }
+      if (r.errors?.length && !r.scanned) { err = r.errors[0]; break; }
+    }
+    const { data } = await supabase.from("client_contacts_log").select("client_id, contacted_at, reason, channel, contact_name, direction, source, logged_by");
+    if (data) setBase((b) => b ? { ...b, logs: data as CsLog[] } : b);
+    loadCsMailSync().then(setMailSync).catch(() => {});
+    setMailBusy(false);
+    setMailCover({ read, unread });
+    const gap = unread.length ? ` · not read yet: ${unread.slice(0, 4).join(", ")}${unread.length > 4 ? ` and ${unread.length - 4} more` : ""}` : "";
+    say(err ? (/unknown action/i.test(err) ? "The mail reader isn't installed yet (outlook-sync)." : err) : `${logged ? `${logged} e-mail${logged === 1 ? "" : "s"} with clients added as contacts` : "Up to date: no new e-mails with clients"} · ${read.length} mailbox${read.length === 1 ? "" : "es"} read${gap}`);
+  };
+  const mailHint = (() => {
+    const last = mailSync.map((x) => x.last_run_at).filter(Boolean).sort().pop();
+    if (!mailSync.length) return "Everyone's e-mails with clients become team contacts (a year back the first time)";
+    const n = mailCover ? mailCover.read.length : mailSync.length, of = mailCover ? mailCover.read.length + mailCover.unread.length : 0;
+    return `Last read ${csDate(last!)} · ${of ? `${n} of ${of}` : n} team mailbox${n === 1 && !of ? "" : "es"} · ${mailSync.reduce((t, x) => t + (x.logged || 0), 0)} e-mails found`;
+  })();
+  const openAccount = (id: string) => { setOpenId(id); setLogWhy(""); setLogCh("call"); setLogDir("out"); setOwnPick(false); setQbrDate(""); setRecEdit(null); };
 
   // ---- actions ----
   const doLog = async (id: string) => {
-    const e = await logClientContact(id, { channel: logCh, reason: logWhy });
+    const e = await logClientContact(id, { channel: logCh, reason: logWhy, direction: logDir });
     if (e) { say(e); return; }
     const at = new Date().toISOString();
-    setBase((b) => b ? { ...b, logs: [...b.logs, { client_id: id, contacted_at: at, reason: logWhy || null, channel: logCh }] } : b);
+    setBase((b) => b ? { ...b, logs: [...b.logs, { client_id: id, contacted_at: at, reason: logWhy || null, channel: logCh, direction: logDir, source: "manual", logged_by: cat.me }] } : b);
     setLogWhy(""); say(`Contact logged for ${nameOf(id)}`);
   };
   const quickLog = async (c: CsClient) => {
-    const e = await logClientContact(c.id, { channel: "call", reason: null });
+    const e = await logClientContact(c.id, { channel: "call", reason: null, direction: "out" });
     if (e) { say(e); return; }
-    setBase((b) => b ? { ...b, logs: [...b.logs, { client_id: c.id, contacted_at: new Date().toISOString(), reason: null, channel: "call" }] } : b);
+    setBase((b) => b ? { ...b, logs: [...b.logs, { client_id: c.id, contacted_at: new Date().toISOString(), reason: null, channel: "call", direction: "out", source: "manual", logged_by: cat.me }] } : b);
     say(`Call logged for ${c.name}`);
   };
   const doTask = async (c: CsClient) => {
@@ -1447,9 +2508,10 @@ export function CustomerSuccessPage() {
   };
   const dropQbr = async (id: string) => { const e = await deleteQbr(id); if (e) say(e); else setCs((d) => d ? { ...d, qbrs: d.qbrs.filter((x) => x.id !== id) } : d); };
   const in12 = Date.now() + 365 * 864e5;
-  const renewals = clients.flatMap((c) => c.lines.filter(isActive).map((l) => ({ c, l, t: termOf(l) })))
-    .filter((x) => x.t && x.t.end.getTime() >= Date.now() && x.t.end.getTime() <= in12)
+  const renewals = clients.flatMap((c) => c.lines.map((l) => ({ c, l, t: csRenewalOf(l, l.tracking_id ? base?.terms[l.tracking_id] : null) })))
+    .filter((x) => x.t && x.t.end.getTime() <= in12)
     .sort((a, b) => a.t!.end.getTime() - b.t!.end.getTime());
+  const ren90 = renewals.filter((x) => x.t!.left <= 90);
   const upsells = (cs?.upsells ?? []).filter((u) => ids.has(u.client_id));
   const openUps = upsells.filter((u) => !["won", "lost"].includes(u.status));
   const upsert = (u: CsUpsell) => setCs((d) => d ? { ...d, upsells: d.upsells.some((x) => x.id === u.id) ? d.upsells.map((x) => x.id === u.id ? u : x) : [u, ...d.upsells] } : d);
@@ -1483,18 +2545,37 @@ export function CustomerSuccessPage() {
     reload();
   };
   const makePrimary = async (c: CsClient, pid: string) => { const e = await setClientOwners(c.id, c.owners, pid); if (e) say(e); else reload(); };
-  const saveDefaultCadence = async () => { if (!cs) return; const e = await saveCsSettings(cs.settings); if (e) say(e); else { say("Default cadence saved"); reload(); } };
-  const toggleAuto = async () => { if (!cs) return; const s2 = { ...cs.settings, auto_tasks: !cs.settings.auto_tasks }; setCs({ ...cs, settings: s2 }); const e = await saveCsSettings(s2); if (e) say(e); else reload(); };
+  /** The contact priority of one or more clients (it sets how often they should hear from us). */
+  const setPri = async (ids: string[], p: CsPriority | null) => {
+    setCs((d) => { if (!d) return d; const pr = { ...d.priority }; ids.forEach((id) => { if (p) pr[id] = p; else delete pr[id]; }); return { ...d, priority: pr }; });
+    for (const id of ids) { const e = await setClientPriority(id, p); if (e) { say(e); reload(); return; } }
+    const lbl = p ? `${CS_PRIORITIES.find((x) => x.key === p)!.label} priority` : "no priority";
+    say(ids.length === 1 ? `${nameOf(ids[0])}: ${lbl}` : `${ids.length} clients set to ${lbl}`);
+  };
+  /** The automatic e-mails: one client in one sequence. */
+  const putRun = async (seqId: string, clientId: string, patch: Partial<CsRun>, msg?: string) => {
+    const r = await setCsRun(seqId, clientId, patch);
+    if (r.error || !r.row) { say(r.error ?? NEEDS_AUTO); return; }
+    setAuto((a) => a ? { ...a, runs: [...a.runs.filter((x) => x.id !== r.row!.id), r.row!] } : a);
+    if (msg) say(msg);
+  };
+  const sendDue = async () => {
+    say("Sending what's due…");
+    const r = await runCsSequences();
+    if (r.error) { say(/not found|unknown action/i.test(r.error) ? "The e-mail sender isn't installed yet (outlook-sync)." : r.error); return; }
+    say(r.sent ? `${r.sent} e-mail${r.sent === 1 ? "" : "s"} sent${r.failed ? ` · ${r.failed} failed` : ""}` : r.failed ? `${r.failed} couldn't be sent — see the activity` : "Nothing is due right now");
+    loadCsAuto().then(setAuto).catch(() => {});
+  };
   const runNow = async () => { const n = await generateContactTasks(); say(n == null ? NEEDS_CS : n ? `${n} follow-up${n === 1 ? "" : "s"} created` : "Nobody needs a follow-up right now"); };
 
   const loading = !base || !cs;
   const notReady = !!cs && !cs.ready;
-  const ready = !!cs?.ready;
   const TABS: { key: CsTab; label: string; icon: keyof typeof CSI; n?: number | string }[] = [
     { key: "accounts", label: "Accounts", icon: "users", n: clients.length },
+    { key: "followups", label: "Automatic e-mails", icon: "mail", n: (auto?.sequences ?? []).filter((q) => q.active).length },
     { key: "upsells", label: "Upsells", icon: "trend", n: openUps.length },
     { key: "qbr", label: "QBRs", icon: "cal", n: qbrs.filter((x) => x.status === "planned").length },
-    { key: "revenue", label: `Revenue · ${year}`, icon: "euro", n: evs.length },
+    { key: "revenue", label: `Revenue ${year}`, icon: "euro", n: evs.length },
   ];
 
   /* ---------- the side panel: one account, everything about it ---------- */
@@ -1512,11 +2593,16 @@ export function CustomerSuccessPage() {
           <CompanyLogo name={c.name} website={c.website} className="cx-av csx-logo is-lg" />
           <div className="cs3-acc-t">
             <h3>{c.name}</h3>
-            <span>{c.arr ? <><b>{csMoney(c.arr)}</b>/yr recurring</> : "No recurring products"}{c.ren ? ` · renews ${c.ren.end.toLocaleDateString("en-GB", { month: "short", year: "numeric" })}` : ""}</span>
+            <span>{[c.priority ? `${c.priority[0].toUpperCase()}${c.priority.slice(1)} priority` : "No priority", c.health ? HEALTH_TONE[c.health] : null, `${c.contacts.filter((x) => x.email).length || "no"} contact${c.contacts.filter((x) => x.email).length === 1 ? "" : "s"}`].filter(Boolean).join(" · ")}</span>
           </div>
-          <button type="button" className="csx-ghost is-sm" onClick={() => nav(`/clients?client=${c.id}`)} title="Open the client"><CsIco n="arrow" s={13} />Client</button>
+          <button type="button" className="csx-ghost is-sm cs4-acc-open" onClick={() => nav(`/clients?client=${c.id}`)} title="Open the client"><CsIco n="arrow" s={13} /><span>Client</span></button>
           <button type="button" className="csx-x is-sm" onClick={() => setOpenId(null)} aria-label="Close (Esc)" title="Close (Esc)"><CsIco n="x" s={14} /></button>
         </header>
+        <div className="cs4-acc-figs">
+          <span><i>Recurring</i><b>{c.arr ? csShort(c.arr) : "—"}</b><em>per year</em></span>
+          <span className={c.ren && c.ren.left <= 90 ? "is-hot" : ""}><i>Renewal</i><b>{c.ren ? c.ren.end.toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "—"}</b><em>{c.ren ? `in ${c.ren.left} days` : "no date"}</em></span>
+          <span className={late ? "is-hot" : ""}><i>Last contact</i><b>{c.days == null ? "Never" : c.days === 0 ? "Today" : `${c.days} d ago`}</b><em title={c.lastUs || c.lastThem ? `${c.lastThem || "Their team"} · ${c.lastUs || "our team"}` : undefined}>{c.lastUs || c.lastThem ? csWho(c.lastUs, c.lastThem, c.lastDir) : c.lastDir === "in" ? "they reached us" : c.lastDir === "out" ? "we reached out" : `every ${c.cadence} days`}</em></span>
+        </div>
 
         <div className="cs3-acc-b">
           {/* health */}
@@ -1540,16 +2626,37 @@ export function CustomerSuccessPage() {
             </>}
           </CsBlock>
 
+          {/* priority: how often they should hear from us */}
+          <CsBlock icon="star" title="Priority" tone={c.priority ? PRI_TONE[c.priority] : "jade"}
+            right={<span className="cs3-muted">{cs?.cadence[c.id] ? `own cadence: every ${cs.cadence[c.id]} d` : `every ${c.cadence} days`}</span>}>
+            <div className="cs4-pri" role="radiogroup" aria-label="Priority">
+              {CS_PRIORITIES.map((pp) => (
+                <button key={pp.key} type="button" role="radio" aria-checked={c.priority === pp.key} className={`is-${PRI_TONE[pp.key]} ${c.priority === pp.key ? "is-on" : ""}`} disabled={!ready}
+                  onClick={() => setPri([c.id], c.priority === pp.key ? null : pp.key)}>
+                  <b>{pp.label}</b><i>every {cs?.settings.priority_cadence[pp.key] ?? pp.days} d</i>
+                </button>
+              ))}
+            </div>
+          </CsBlock>
+
           {/* contact */}
           <CsBlock icon="phone" title="Contact" tone={late ? "coral" : "jade"}
             right={<span className="cs3-cadin" title="Get in touch every … days (this client)">every
               <input type="number" min={1} key={`cad-${c.id}-${cs?.cadence[c.id] ?? ""}`} placeholder={String(cs?.settings.default_cadence_days ?? 30)} defaultValue={cs?.cadence[c.id] ?? ""} disabled={!ready}
                 onBlur={async (e) => { const v = Number(e.target.value) || null; if (v === (cs?.cadence[c.id] ?? null)) return; const er = await setClientCadence(c.id, v); if (er) say(er); else { say(v ? `${c.name}: every ${v} days` : `${c.name} follows the default cadence`); reload(); } }} />days</span>}>
             <CsCadence c={c} wide />
+            <div className="cs4-dirs">
+              <span className={`is-in ${c.daysIn == null ? "is-none" : ""}`}><em><CsIco n="din" s={12} /></em><span><i>From them</i><b>{c.daysIn == null ? "Not yet" : c.daysIn === 0 ? "Today" : `${c.daysIn} d ago`}</b>{c.daysIn != null && (c.inThem || c.inUs) && <small title={`${c.inThem || "Their team"} wrote to ${c.inUs || "us"}`}>{c.inThem || "Their team"}{c.inUs ? ` → ${c.inUs.split(" ")[0]}` : ""}</small>}</span></span>
+              <span className={`is-out ${c.daysOut == null ? "is-none" : ""}`}><em><CsIco n="dout" s={12} /></em><span><i>From us</i><b>{c.daysOut == null ? "Not yet" : c.daysOut === 0 ? "Today" : `${c.daysOut} d ago`}</b>{c.daysOut != null && (c.outUs || c.outThem) && <small title={`${c.outUs || "We"} reached ${c.outThem || "them"}`}>{c.outUs ? c.outUs.split(" ")[0] : "Us"}{c.outThem ? ` → ${c.outThem}` : ""}</small>}</span></span>
+            </div>
             <div className="cs3-log">
+              <span className="cs4-dir-pick" role="radiogroup" aria-label="Who reached whom">
+                <button type="button" role="radio" aria-checked={logDir === "out"} className={logDir === "out" ? "is-on" : ""} onClick={() => setLogDir("out")}><CsIco n="dout" s={11} />We reached out</button>
+                <button type="button" role="radio" aria-checked={logDir === "in"} className={logDir === "in" ? "is-on is-in" : ""} onClick={() => setLogDir("in")}><CsIco n="din" s={11} />They reached us</button>
+              </span>
               <span className="csx-chips">{["call", "email", "meeting", "visit"].map((ch) => <button key={ch} type="button" className={logCh === ch ? "is-on" : ""} onClick={() => setLogCh(ch)}><CsIco n={CH_ICON[ch]} s={11} />{ch}</button>)}</span>
               <div className="cs3-log-r">
-                <input placeholder="What about? (optional)" value={logWhy} onChange={(e) => setLogWhy(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") doLog(c.id); }} />
+                <input placeholder="What about?" value={logWhy} onChange={(e) => setLogWhy(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") doLog(c.id); }} />
                 <button type="button" className="csx-primary is-sm" onClick={() => doLog(c.id)}><CsIco n="check" s={12} />Log</button>
                 <button type="button" className="csx-ghost is-sm" onClick={() => doTask(c)} title={`Add a follow-up to ${c.primary ? pName(c.primary) : "your"} desk`}><CsIco n="task" s={12} />Follow-up</button>
               </div>
@@ -1557,9 +2664,14 @@ export function CustomerSuccessPage() {
             {logs.length ? (
               <ol className="cs3-tl">
                 {logs.slice(0, 6).map((l, i) => (
-                  <li key={`${l.contacted_at}-${i}`}>
-                    <span className="cs3-tl-ico"><CsIco n={CH_ICON[l.channel ?? ""] ?? "phone"} s={11} /></span>
-                    <span className="cs3-tl-m"><b>{l.reason || (l.channel ? `${l.channel[0].toUpperCase()}${l.channel.slice(1)}` : "Contact")}</b>{l.contact_name ? <i>with {l.contact_name}</i> : null}</span>
+                  <li key={`${l.contacted_at}-${i}`} className={`is-${l.direction === "in" ? "in" : "out"}`}>
+                    <span className="cs3-tl-ico"><CsIco n={CH_ICON[l.channel ?? ""] ?? "phone"} s={11} /><em><CsIco n={l.direction === "in" ? "din" : "dout"} s={8} /></em></span>
+                    <span className="cs3-tl-m"><b>{l.reason || (l.channel ? `${l.channel[0].toUpperCase()}${l.channel.slice(1)}` : "Contact")}</b>
+                      <i>{(() => {
+                        const u = l.logged_by ? pName(l.logged_by) : "", t = l.contact_name || "their team";
+                        const what = l.channel === "email" ? (l.source === "auto" ? "Automatic e-mail" : "E-mail") : l.channel ? `${l.channel[0].toUpperCase()}${l.channel.slice(1)}` : "Contact";
+                        return l.direction === "in" ? `${what} from ${t}${u ? ` to ${u}` : ""}` : `${what}${u ? ` from ${u}` : ""} to ${t}`;
+                      })()}{l.source === "email" ? " · Outlook" : ""}</i></span>
                     <time>{csDate(l.contacted_at)}</time>
                   </li>
                 ))}
@@ -1589,13 +2701,63 @@ export function CustomerSuccessPage() {
             )}
           </CsBlock>
 
+          {/* automatic e-mails */}
+          <CsBlock icon="mail" title="Automatic e-mails" tone="blue"
+            right={<button type="button" className="csx-link" onClick={() => setTab("followups")}>Set up</button>}>
+            {!auto ? <p className="cs3-empty">Reading…</p> : !auto.ready ? <CsLocked what="Automatic e-mails" /> : (() => {
+              const rows = auto.sequences.map((q) => ({ q, run: auto.runs.find((r) => r.sequence_id === q.id && r.client_id === c.id) ?? null, fits: csFits(q, c, cs) }))
+                .filter((x) => x.run || (x.q.active && x.fits));
+              const others = auto.sequences.filter((q) => !rows.some((x) => x.q.id === q.id));
+              return <>
+                {rows.length ? <ul className="cs4-runs">{rows.map(({ q, run, fits }) => {
+                  const st = run?.status ?? (fits ? "waiting" : "out");
+                  const step = q.steps[Math.min(run?.step ?? 0, Math.max(0, q.steps.length - 1))];
+                  const tpl = auto.templates.find((t) => t.id === step?.template_id);
+                  return (
+                    <li key={q.id} className={`is-${st}`}>
+                      <span className="cs4-runs-m">
+                        <b>{q.name}{!q.active && <em className="cs3-tag is-slate">off</em>}</b>
+                        <i>{st === "active" ? `Next: ${tpl?.name ?? "—"} · ${run?.next_at ? csDate(run.next_at) : "soon"}` : st === "paused" ? "Paused for this client" : st === "excluded" ? "Left out for this client" : st === "done" ? `Done${run?.last_sent_at ? ` · last ${csDate(run.last_sent_at)}` : ""}` : "Starts with the next run"}
+                          {run?.to_emails?.length ? ` · to ${run.to_emails.join(", ")}` : ""}</i>
+                      </span>
+                      {st === "active" && <button type="button" className="csx-ghost is-sm" onClick={() => putRun(q.id, c.id, { status: "paused" }, `${q.name} paused for ${c.name}`)}>Pause</button>}
+                      {(st === "paused" || st === "excluded" || st === "done") && <button type="button" className="csx-ghost is-sm" onClick={() => putRun(q.id, c.id, { status: "active", manual: true, ...(st === "done" ? { step: 0, next_at: new Date().toISOString() } : {}) }, `${q.name} running for ${c.name}`)}>{st === "done" ? "Start again" : "Resume"}</button>}
+                      {(st === "active" || st === "waiting") && <button type="button" className="csx-ghost is-sm is-ico" title="Leave this client out" onClick={() => putRun(q.id, c.id, { status: "excluded" }, `${c.name} left out of ${q.name}`)}><CsIco n="x" s={12} /></button>}
+                      <button type="button" className={`csx-ghost is-sm is-ico ${recEdit?.seq === q.id ? "is-on" : ""}`} title="Who it goes to (this client)"
+                        onClick={() => setRecEdit(recEdit?.seq === q.id ? null : { seq: q.id, value: run?.to_emails?.join(", ") ?? "" })}><CsIco n="users" s={12} /></button>
+                      {recEdit?.seq === q.id && (
+                        <div className="cs4-rec">
+                          <input autoFocus value={recEdit.value} onChange={(e) => setRecEdit({ seq: q.id, value: e.target.value })}
+                            placeholder={`Default: ${q.recipients === "all" ? "all contacts" : q.recipients === "billing" ? "the billing contact" : "the main contact"}`}
+                            onKeyDown={(e) => { if (e.key === "Escape") setRecEdit(null); if (e.key === "Enter") (e.currentTarget.nextElementSibling as HTMLButtonElement)?.click(); }} />
+                          <button type="button" className="csx-primary is-sm" onClick={() => {
+                            const list = recEdit.value.split(/[,;\s]+/).map((x) => x.trim()).filter((x) => /@/.test(x));
+                            putRun(q.id, c.id, { to_emails: list.length ? list : null, ...(run ? {} : { status: "active", manual: !fits }) }, list.length ? `${c.name}: ${q.name} goes to ${list.join(", ")}` : `${c.name}: ${q.name} goes to the usual contacts`);
+                            setRecEdit(null);
+                          }}>Save</button>
+                          <em>E-mails, separated by commas — empty: {q.recipients === "all" ? "all its contacts" : q.recipients === "billing" ? "its billing contact" : "its main contact"}</em>
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}</ul> : <p className="cs3-empty">No automatic e-mails for {c.name} yet.</p>}
+                {others.length > 0 && (
+                  <div className="cs3-inline-add">
+                    <Select size="sm" value="" onChange={(v) => v && putRun(v, c.id, { status: "active", manual: true, step: 0, next_at: new Date().toISOString() }, `${c.name} added to ${others.find((q) => q.id === v)?.name}`)}
+                      placeholder="Add to a sequence…" options={others.map((q) => ({ value: q.id, label: q.name, hint: q.active ? undefined : "off" }))} />
+                  </div>
+                )}
+              </>;
+            })()}
+          </CsBlock>
+
           {/* products & renewals */}
           <CsBlock icon="repeat" title="Products & renewals" right={<span className="cs3-muted">{lines.length} active</span>}>
             {lines.length ? (
               <ul className="cs3-prods">
-                {lines.map((l) => { const t = termOf(l); return (
+                {lines.map((l) => { const t = csRenewalOf(l, l.tracking_id ? base?.terms[l.tracking_id] : null); return (
                   <li key={l.id} className={t && t.left < 90 ? "is-soon" : ""}>
-                    <span className="cs3-prods-m"><b>{l.name}</b><i>{l.recurring ? "recurring" : "one-off"}{t ? ` · ${l.auto_renew ? "renews" : "ends"} ${t.end.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}` : ""}</i></span>
+                    <span className="cs3-prods-m"><b>{l.name}</b><i>{l.recurring ? "recurring" : "one-off"}{t ? ` · ${t.kind === "anniversary" ? "anniversary" : l.auto_renew || t.kind === "deal" ? "renews" : "ends"} ${t.end.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}` : ""}{t?.kind === "deal" ? " · from the deal's contract" : ""}</i></span>
                     {t && <em>{t.left} d</em>}
                     <b className="cs3-prods-v">{csMoney(l.recurring ? lineAnnual(l) : Number(l.price) || 0)}{l.recurring ? <small>/yr</small> : null}</b>
                   </li>
@@ -1646,85 +2808,9 @@ export function CustomerSuccessPage() {
     );
   };
 
-  /* ---------- the side panel when no account is open: what to do today ---------- */
-  const todayPanel = () => {
-    const due = [...overdue].sort((a, b) => b.ratio - a.ratio).slice(0, 5);
-    const soon = renewals.filter((x) => x.t!.left <= 120).slice(0, 4);
-    const nextQ = qbrs.filter((x) => x.status === "planned").slice(0, 3);
-    const risky = clients.filter((c) => c.health === "red").slice(0, 4);
-    return (
-      <div className="cs3-today">
-        <header className="cs3-today-h">
-          <span className="csx-eyebrow"><CsIco n="bolt" s={12} />Today</span>
-          <h3>{!clients.length ? "No accounts yet" : due.length ? `${overdue.length} account${overdue.length === 1 ? "" : "s"} to call` : "Everyone is in touch"}</h3>
-          <p>{clients.length ? "Pick an account to see everything about it." : "Accounts show here once you have clients."}</p>
-        </header>
-
-        <CsBlock icon="play" title="Automatic follow-ups" tone="jade"
-          right={ready ? <button type="button" role="switch" aria-checked={!!cs?.settings.auto_tasks} className={`csx-switch ${cs?.settings.auto_tasks ? "is-on" : ""}`} onClick={toggleAuto}><i />{cs?.settings.auto_tasks ? "On" : "Off"}</button> : undefined}>
-          {notReady ? <CsLocked what="Automatic follow-ups" /> : <>
-            <p className="cs3-auto-p">When an account passes its cadence, a follow-up lands on its starred owner's desk.</p>
-            <div className="cs3-auto">
-              <span>Default: every</span>
-              <input type="number" min={1} value={cs?.settings.default_cadence_days ?? 30}
-                onChange={(e) => setCs((d) => d ? { ...d, settings: { ...d.settings, default_cadence_days: Number(e.target.value) || 30 } } : d)}
-                onBlur={saveDefaultCadence} onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
-              <span>days</span>
-              <button type="button" className="csx-ghost is-sm" onClick={runNow}><CsIco n="play" s={11} />Run now</button>
-            </div>
-          </>}
-        </CsBlock>
-
-        <CsBlock icon="phone" title="Call next" tone="coral" right={overdue.length > 5 ? <button type="button" className="csx-link" onClick={() => { setFilter("contact"); setSort("contact"); }}>All {overdue.length}</button> : undefined}>
-          {due.length ? <ul className="cs3-mini">{due.map((c) => (
-            <li key={c.id}>
-              <button type="button" className="cs3-mini-m" onClick={() => openAccount(c.id)}>
-                <CompanyLogo name={c.name} website={c.website} className="cx-av csx-logo is-xs" />
-                <span><b>{c.name}</b><i>{c.days == null ? "never contacted" : `${c.days} days · every ${c.cadence}`}</i></span>
-              </button>
-              <button type="button" className="csx-ghost is-sm is-ico" title="Log a call" onClick={() => quickLog(c)}><CsIco n="phone" s={12} /></button>
-              <button type="button" className="csx-ghost is-sm is-ico" title="Add a follow-up task" onClick={() => doTask(c)}><CsIco n="task" s={12} /></button>
-            </li>
-          ))}</ul> : <p className="cs3-empty">Nobody is past their cadence.</p>}
-        </CsBlock>
-
-        {risky.length > 0 && (
-          <CsBlock icon="alert" title="At risk" tone="gold">
-            <ul className="cs3-mini">{risky.map((c) => (
-              <li key={c.id}><button type="button" className="cs3-mini-m" onClick={() => openAccount(c.id)}>
-                <span className="cs3-dot is-red" /><span><b>{c.name}</b><i>{CS_REASONS.find((r) => r.key === healthOf(c.id)?.reason)?.label ?? healthOf(c.id)?.note ?? "No reason given"}</i></span>
-              </button></li>
-            ))}</ul>
-          </CsBlock>
-        )}
-
-        <CsBlock icon="repeat" title="Renewals coming up" tone="teal" right={<span className="cs3-muted">{csShort(renewals.reduce((t, x) => t + lineAnnual(x.l), 0))}/yr in 12 mo</span>}>
-          {soon.length ? <ul className="cs3-mini">{soon.map(({ c, l, t }) => (
-            <li key={l.id}><button type="button" className="cs3-mini-m" onClick={() => openAccount(c.id)}>
-              <span className={`cs3-days ${t!.left < 60 ? "is-hot" : ""}`}><b>{t!.left}</b><i>days</i></span>
-              <span><b>{c.name}</b><i>{l.name} · {l.auto_renew ? "renews" : "ends"} {t!.end.toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</i></span>
-              <em>{csShort(lineAnnual(l))}</em>
-            </button></li>
-          ))}</ul> : <p className="cs3-empty">Nothing renews in the next 4 months.</p>}
-        </CsBlock>
-
-        {nextQ.length > 0 && (
-          <CsBlock icon="cal" title="Next QBRs" tone="teal" right={<button type="button" className="csx-link" onClick={() => setTab("qbr")}>All</button>}>
-            <ul className="cs3-mini">{nextQ.map((x) => (
-              <li key={x.id}><button type="button" className="cs3-mini-m" onClick={() => openAccount(x.client_id)}>
-                <span className="csx-qbr-date is-sm"><b>{new Date(x.meeting_date).getDate()}</b><i>{new Date(x.meeting_date).toLocaleDateString("en-GB", { month: "short" })}</i></span>
-                <span><b>{nameOf(x.client_id)}</b><i>SPICED {SPICED.filter((s) => x.spiced[s.key]).length}/6</i></span>
-              </button></li>
-            ))}</ul>
-          </CsBlock>
-        )}
-      </div>
-    );
-  };
-
   /* ---------- tabs ---------- */
   const accountsTab = () => (
-    <div className={`cs3-ws ${open ? "has-open" : ""}`}>
+    <div className="cs3-ws" ref={wsRef}>
       <section className="cs3-list" aria-label="Accounts">
         <div className="cs3-tools">
           <span className="csx-search cs3-search">
@@ -1742,7 +2828,7 @@ export function CustomerSuccessPage() {
             const n = clients.filter(f.test).length;
             if (f.key !== "all" && !n && filter !== f.key) return null;
             return (
-              <button key={f.key} type="button" role="tab" aria-selected={filter === f.key} className={`is-${f.tone} ${filter === f.key ? "is-on" : ""}`} onClick={() => setFilter(f.key)}>
+              <button key={f.key} type="button" role="tab" aria-selected={filter === f.key} className={`is-${f.tone} ${filter === f.key ? "is-on" : ""}`} onClick={() => pickView(f.key)}>
                 {f.label}<em>{n}</em>
               </button>
             );
@@ -1754,6 +2840,9 @@ export function CustomerSuccessPage() {
             <b>{sel.size} selected</b>
             <span className="cs3-bulk-sel"><Select size="sm" value={bulkOwner} onChange={setBulkOwner} placeholder="Add owner…" searchable options={cat.pickable.map((p) => ({ value: p.id, label: p.name }))} /></span>
             <button type="button" className="csx-primary is-sm" disabled={!bulkOwner || !ready} onClick={assignBulk}>Assign owner</button>
+            <span className="cs3-bulk-sep" />
+            <span className="cs3-bulk-l">Priority</span>
+            {CS_PRIORITIES.map((pp) => <button key={pp.key} type="button" className={`csx-ghost is-sm cs4-pri-chip is-${PRI_TONE[pp.key]}`} disabled={!ready} onClick={() => setPri([...sel], pp.key)}><i />{pp.label}</button>)}
             <button type="button" className="csx-x is-sm" onClick={() => setSel(new Set())} aria-label="Clear the selection"><CsIco n="x" s={13} /></button>
           </div>
         )}
@@ -1762,6 +2851,7 @@ export function CustomerSuccessPage() {
           <div className="cs3-tr is-head" role="row">
             <span role="columnheader" />
             <span role="columnheader">Account</span>
+            <span role="columnheader">Priority</span>
             <span role="columnheader">Health</span>
             <span role="columnheader">Last contact</span>
             <span role="columnheader" className="is-num">Renewal</span>
@@ -1782,9 +2872,13 @@ export function CustomerSuccessPage() {
                   <b>{c.name}</b>
                   <span className="cs3-td-sub">
                     {c.owners.length ? <span className="csx-owners">{c.owners.slice(0, 3).map((o) => <CsAvatar key={o} name={pName(o)} tone={pTone(o)} size={18} />)}</span> : ready ? <em className="cs3-tag is-gold">No owner</em> : null}
+                    {filter === "risk" && c.health && <em className={`cs3-tag is-${c.health === "red" ? "coral" : "gold"}`}>{CS_REASONS.find((r) => r.key === healthOf(c.id)?.reason)?.label ?? healthOf(c.id)?.note ?? "No reason given"}</em>}
                     {c.ups > 0 && <em className="cs3-tag is-violet" title={`${c.ups} open upsell${c.ups === 1 ? "" : "s"}`}><CsIco n="trend" s={10} />{csShort(c.upsValue)}</em>}
                   </span>
                 </span>
+              </span>
+              <span className="cs3-td-p" onClick={(e) => e.stopPropagation()}>
+                <CsPriPick value={c.priority} disabled={!ready} days={cs?.settings.priority_cadence} onPick={(p) => setPri([c.id], p)} />
               </span>
               <span className="cs3-td-h">
                 {c.health ? <span className={`cs3-hpill is-${c.health}`}><i />{HEALTH_TONE[c.health]}</span> : <span className="cs3-hpill is-none">—</span>}
@@ -1802,14 +2896,14 @@ export function CustomerSuccessPage() {
             <div className="cs3-none">
               <span className="csx-empty-ico"><CsIco n={clients.length ? "check" : "users"} s={20} /></span>
               <b>{!clients.length ? (scope === "mine" ? "You don't look after any account yet" : "No clients yet") : q ? `Nothing matches “${q}”` : "Nothing here — nice"}</b>
-              <i>{!clients.length ? (scope === "mine" ? "Switch to Everyone, select some accounts and assign yourself." : "Clients show here once you have some.") : "Try another filter."}</i>
+              <i>{!clients.length ? (scope === "mine" ? "Pick Everyone's accounts in the owner menu, select some and assign yourself." : "Clients show here once you have some.") : "Try another filter."}</i>
               {(filter !== "all" || q) && <button type="button" className="csx-ghost is-sm" onClick={() => { setFilter("all"); setQ(""); }}>Show all accounts</button>}
             </div>
           )}
         </div>
       </section>
-      <aside className={`cs3-side ${open ? "is-acc" : ""}`} aria-label={open ? `Account: ${open.name}` : "Today"}>
-        {open ? accountPanel(open) : todayPanel()}
+      <aside className="cs3-side is-acc" ref={sideRef} aria-label={shown ? `Account: ${shown.name}` : "Account"} aria-hidden={!open}>
+        {shown && <div className="cs4-acc-w">{accountPanel(shown)}</div>}
       </aside>
       {open && <div className="cs3-scrim" onClick={() => setOpenId(null)} aria-hidden="true" />}
     </div>
@@ -1988,95 +3082,78 @@ export function CustomerSuccessPage() {
     );
   };
 
+  const ren90Value = ren90.reduce((t, x) => t + lineAnnual(x.l), 0);
   return (
-    <div className="csx cs3">
-      <header className="csx-hero is-compact" onPointerMove={glow}>
-        <div className="csx-hero-top">
-          <div className="csx-hero-t">
-            <span className="csx-eyebrow is-light"><CsIco n="heart" s={12} />Customer success</span>
-            <h1>Retention &amp; expansion</h1>
-          </div>
-          <p className="csx-hero-sub">{clients.length} account{clients.length === 1 ? "" : "s"} · <b>{overdue.length}</b> to contact · <b>{clients.filter(atRisk).length}</b> at risk · <b>{openUps.length}</b> open upsell{openUps.length === 1 ? "" : "s"}</p>
-          <div className="csx-hero-ctl">
-            <div className="csx-seg is-dark">
-              <button type="button" className={scope === "mine" ? "is-on" : ""} onClick={() => setScope("mine")}>My portfolio</button>
-              <button type="button" className={scope === "all" ? "is-on" : ""} onClick={() => setScope("all")}>Everyone</button>
-            </div>
-            <div className="csx-hero-sel">
-              <Select size="sm" value={owner} onChange={setOwner} placeholder="Any owner" searchable
-                options={[{ value: "", label: "Any owner" }, ...cat.pickable.map((p) => ({ value: p.id, label: p.name }))]} />
-            </div>
-            <span className="cs3-hero-auto">
-              <button type="button" className={`csx-hero-btn ${autoAt ? "is-on" : ""}`} onClick={(e) => toggleAutoPop(e.currentTarget)} aria-expanded={!!autoAt} aria-haspopup="dialog" title="Automatic follow-ups">
-                <CsIco n="bolt" s={14} /><span>Auto follow-ups</span><i className={cs?.settings.auto_tasks && ready ? "is-on" : ""} />
+    <div className="csx cs3 cs4 cl cl-ov fh" ref={fhRef} onPointerMove={fhMove} onPointerLeave={fhLeave}>
+      <header className="cl-bar cs4-bar">
+        <div className="cl-bar-left">
+          <h1 className="cl-title">Customer success</h1>
+          <nav className="cs4-itabs" role="tablist" aria-label="Customer success">
+            {TABS.map((t) => (
+              <button key={t.key} type="button" role="tab" aria-selected={tab === t.key} aria-label={t.label}
+                className={`cs4-itab ${tab === t.key ? "is-on" : ""}`} onClick={() => setTab(t.key)}>
+                <CsIco n={t.icon} s={17} /><span className="cs4-itab-l" aria-hidden="true"><span>{t.label}</span></span>
               </button>
-              {autoAt && createPortal(
-                <div className="cs3-pop-layer" onMouseDown={(e) => { if (e.target === e.currentTarget) setAutoAt(null); }}>
-                  <div className="cs3-pop" role="dialog" aria-label="Automatic follow-ups" style={{ top: autoAt.top, left: autoAt.left }} onKeyDown={(e) => { if (e.key === "Escape") setAutoAt(null); }}>
-                    <b>Automatic follow-ups</b>
-                    <i>When an account passes its contact cadence, a follow-up lands on its starred owner's desk (once a day).</i>
-                    {notReady ? <span className="cs3-pop-lock">Needs <code>17_customer_success.sql</code></span> : <>
-                      <span className="cs3-pop-r"><button type="button" role="switch" aria-checked={!!cs?.settings.auto_tasks} className={`csx-switch ${cs?.settings.auto_tasks ? "is-on" : ""}`} onClick={toggleAuto} autoFocus><i />{cs?.settings.auto_tasks ? "On" : "Off"}</button>
-                        <button type="button" className="csx-ghost is-sm" onClick={runNow}><CsIco n="play" s={11} />Run now</button></span>
-                      <span className="cs3-pop-r">Default cadence
-                        <input type="number" min={1} value={cs?.settings.default_cadence_days ?? 30}
-                          onChange={(e) => setCs((d) => d ? { ...d, settings: { ...d.settings, default_cadence_days: Number(e.target.value) || 30 } } : d)}
-                          onBlur={saveDefaultCadence} />days</span>
-                    </>}
-                  </div>
-                </div>, document.body)}
-            </span>
-            <ActionsMenu items={[]} />
+            ))}
+          </nav>
+        </div>
+        <div className="cs4-tools">
+          <div className="cs4-sel">
+            <Select size="sm" value={scope === "mine" ? "__me" : owner} searchable
+              onChange={(v) => { if (v === "__me") { setScope("mine"); setOwner(""); } else { setScope("all"); setOwner(v); } }}
+              options={[{ value: "", label: "Everyone's accounts" }, ...(cat.me ? [{ value: "__me", label: "My portfolio" }] : []), ...cat.pickable.filter((p) => p.id !== cat.me).map((p) => ({ value: p.id, label: p.name }))]} />
           </div>
         </div>
-        <div className="csx-kpis">
-          <div className="csx-kpi is-lead" style={{ ["--i" as any]: 0 }}>
-            <span className="csx-kpi-k">ARR signed</span>
-            <span className="csx-kpi-v"><b>{loading ? "…" : csMoney(arrNow)}</b>{growth != null && <em className={growth >= 0 ? "is-up" : "is-down"} title="vs. the initial ARR"><CsIco n={growth >= 0 ? "trend" : "down"} s={11} />{csPct(growth)}</em>}</span>
-          </div>
-          <div className="csx-kpi" style={{ ["--i" as any]: 1 }}>
-            <span className="csx-kpi-k">Initial ARR · {year}</span>
-            <span className="csx-kpi-v">{snap ? <><b>{csMoney(initial)}</b><em className="is-flat" title={`Frozen ${csDate(snap.taken_at)}`}><CsIco n="lock" s={10} />fixed</em></> :
-              <button type="button" className="csx-kpi-btn" disabled={!ready || loading} onClick={freeze}><CsIco n="lock" s={11} />Freeze today's ARR</button>}</span>
-          </div>
-          <div className="csx-kpi" style={{ ["--i" as any]: 2 }} title="(initial ARR + expansion − contraction − churn) / initial ARR">
-            <span className="csx-kpi-k">NRR</span>
-            <span className="csx-kpi-v"><b className={nrr == null ? "is-muted" : nrr >= 100 ? "is-good" : "is-warn"}>{nrr == null ? "—" : csPct(nrr)}</b>{nrr != null && <em className={nrr >= 100 ? "is-good" : "is-warn"}>{nrr >= 100 ? "Healthy" : "Watch"}</em>}</span>
-          </div>
-          <div className="csx-kpi" style={{ ["--i" as any]: 3 }} title="Won upsells and other expansion this year">
-            <span className="csx-kpi-k">Expansion</span>
-            <span className="csx-kpi-v"><b>{csMoney(expansion)}</b>{initial > 0 && expansion > 0 && <em className="is-up"><CsIco n="trend" s={11} />{csPct((expansion / initial) * 100)}</em>}</span>
-          </div>
-          <div className={`csx-kpi ${churnRate != null && churnRate > 5 ? "is-alarm" : ""}`} style={{ ["--i" as any]: 4 }} title={`${csMoney(churn)} lost${contraction ? ` · ${csMoney(contraction)} contraction` : ""}`}>
-            <span className="csx-kpi-k">Churn rate</span>
-            <span className="csx-kpi-v"><b className={churnRate == null ? "is-muted" : churnRate > 5 ? "is-bad" : churnRate > 2 ? "is-warn" : "is-good"}>{churnRate == null ? "—" : csPct(churnRate)}</b>{churn > 0 && <em className="is-down">−{csShort(churn)}</em>}</span>
-          </div>
+        <div className="cl-actions">
+          <ActionsMenu items={[
+            { key: "seq", group: "Automatic e-mails", label: "New follow-up sequence", hint: "Blueprints sent every few days to the clients you pick", icon: AM_ICON.plus, primary: true, tone: "green", onSelect: () => { setTab("followups"); setFuCmd({ k: "seq", n: Date.now() }); } },
+            { key: "tpl", group: "Automatic e-mails", label: "New e-mail blueprint", hint: "A styled e-mail with the client's name filled in", icon: AM_ICON.plus, tone: "blue", onSelect: () => { setTab("followups"); setFuCmd({ k: "tpl", n: Date.now() }); } },
+            { key: "send", group: "Automatic e-mails", label: "Send what's due now", hint: "Otherwise they go out on their own every hour", icon: AM_ICON.import, tone: "violet", onSelect: sendDue },
+            { key: "mail", group: "Contacts", label: mailBusy ? "Reading Outlook…" : "Read e-mails from Outlook now", hint: mailHint, icon: AM_ICON.import, tone: "blue", onSelect: readMail },
+            { key: "tasks", group: "Follow-up tasks", label: "Create follow-up tasks now", hint: "For accounts past their contact cadence", icon: AM_ICON.fields, tone: "amber", onSelect: runNow },
+            ...(snap ? [] : [{ key: "freeze", group: "Revenue", label: `Freeze today's ARR as the ${year} base`, hint: "NRR and churn are measured against it", icon: AM_ICON.export, tone: "blue" as const, onSelect: freeze }]),
+          ]} />
         </div>
       </header>
 
-      {notReady && (
-        <div className="csx-banner" role="note">
-          <span className="csx-banner-ico"><CsIco n="lock" s={16} /></span>
-          <div><b>Customer success isn't switched on yet</b><span>Run <code>17_customer_success.sql</code> in Supabase. Contact tracking and renewals already work from your clients; owners, health, QBRs, upsells and revenue movements need the new tables.</span></div>
-        </div>
-      )}
-      {flash && <div className="csx-toast" role="status"><CsIco n="check" s={14} />{flash}</div>}
-
-      <nav className="cs3-tabs" role="tablist" aria-label="Customer success">
-        {TABS.map((t) => (
-          <button key={t.key} type="button" role="tab" aria-selected={tab === t.key} className={tab === t.key ? "is-on" : ""} onClick={() => setTab(t.key)}>
-            <CsIco n={t.icon} s={14} />{t.label}{t.n != null && <em>{t.n}</em>}
-          </button>
+      <div className="cx-kpis cs4-kpis" style={{ ["--n" as any]: 5 }}>
+        {[
+          { k: "ARR signed", icon: "euro" as const, tone: "jade", v: loading ? "…" : csShort(arrNow), sub: growth != null ? `${growth >= 0 ? "+" : ""}${csPct(growth)} vs. the start of ${year}` : `${clients.filter((c) => c.arr > 0).length} recurring accounts`, bar: initial > 0 ? Math.min(100, (arrNow / Math.max(initial, arrNow)) * 100) : null },
+          { k: "NRR", icon: "repeat" as const, tone: nrr == null ? "mint" : nrr >= 100 ? "jade" : "gold", v: nrr == null ? "—" : csPct(nrr), sub: snap ? `Base ${csShort(initial)} · fixed ${csDate(snap.taken_at)}` : null, bar: nrr == null ? null : Math.min(100, nrr), freeze: !snap },
+          { k: "Expansion", icon: "trend" as const, tone: "teal", v: csShort(expansion), sub: initial > 0 && expansion > 0 ? `+${csPct((expansion / initial) * 100)} of the base` : `${openUps.length} open upsell${openUps.length === 1 ? "" : "s"} · ${csShort(openUps.reduce((t, u) => t + u.est_value, 0))}`, bar: null },
+          { k: "Churn rate", icon: "down" as const, tone: churnRate != null && churnRate > 5 ? "coral" : churnRate != null && churnRate > 2 ? "gold" : "mint", v: churnRate == null ? "—" : csPct(churnRate), sub: churn > 0 ? `${csShort(churn)} lost${contraction ? ` · ${csShort(contraction)} smaller` : ""}` : "Nothing lost this year", bar: null },
+          { k: "Renewals · 90 days", icon: "cal" as const, tone: ren90.length ? "gold" : "mint", v: csShort(ren90Value), sub: ren90.length ? `${ren90.length} product${ren90.length === 1 ? "" : "s"} · next ${ren90[0].t!.end.toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : "Nothing renews soon", bar: null },
+        ].map((x, i) => (
+          <div className={`cx-kpi tone-${x.tone}`} key={x.k} style={{ ["--i" as any]: i }}>
+            <span className="cx-kpi-top"><span className="cx-kpi-ico"><CsIco n={x.icon} s={15} /></span><span className="cx-kpi-k">{x.k}</span></span>
+            <b className="cx-kpi-v">{x.v}</b>
+            {x.sub && <span className="cx-kpi-sub">{x.sub}</span>}
+            {"freeze" in x && x.freeze && <button type="button" className="cs4-kpi-btn" disabled={!ready || loading} onClick={freeze}><CsIco n="lock" s={11} />Freeze today's ARR</button>}
+            {x.bar != null && <span className="cx-kpi-bar"><i style={{ width: `${Math.max(0, Math.min(100, x.bar))}%` }} /></span>}
+          </div>
         ))}
-      </nav>
+      </div>
 
-      {loading ? (
-        <PageLoader label="Reading your portfolio" />
-      ) : (
-        <div className="cs3-body" key={tab}>
-          {tab === "accounts" ? accountsTab() : tab === "upsells" ? upsellsTab() : tab === "qbr" ? qbrTab() : revenueTab()}
-        </div>
-      )}
+      <section className="cs4-sheet">
+        {notReady && (
+          <div className="csx-banner" role="note">
+            <span className="csx-banner-ico"><CsIco n="lock" s={16} /></span>
+            <div><b>Customer success isn't switched on yet</b><span>Run <code>17_customer_success.sql</code> in Supabase. Contact tracking and renewals already work from your clients; owners, health, QBRs, upsells and revenue movements need the new tables.</span></div>
+          </div>
+        )}
+        {flash && <div className="csx-toast" role="status"><CsIco n="check" s={14} />{flash}</div>}
+
+        {loading ? (
+          <PageLoader label="Reading your portfolio" />
+        ) : (
+          <div className={`cs3-body cs4-body is-${tab}`} key={tab}>
+            {tab === "accounts" ? accountsTab() : tab === "followups" ? (
+              <CsFollowUps auto={auto} setAuto={setAuto} accounts={all} cs={cs} setCs={setCs} types={projTypes} people={cat.people} me={cat.me}
+                say={say} cmd={fuCmd} onOpenClient={(id) => { setTab("accounts"); openAccount(id); }} onSendDue={sendDue} onRunTasks={runNow} />
+            ) : tab === "upsells" ? upsellsTab() : tab === "qbr" ? qbrTab() : revenueTab()}
+          </div>
+        )}
+      </section>
       {edit && <UpsellEditor initial={edit} clientName={nameOf(edit.client_id)} cat={cat} onClose={() => setEdit(null)} onSaved={upsert}
         onDeleted={(id) => setCs((d) => d ? { ...d, upsells: d.upsells.filter((x) => x.id !== id) } : d)} />}
     </div>

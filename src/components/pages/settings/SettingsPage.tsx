@@ -11,6 +11,7 @@ import PipelinePage from "./PipelinePage";
 import { ProposalSettings } from "./ProposalTemplateEditor";
 import PageAccessModal, { useSecuritySection, PanelAccess, CalendarVisibility } from "./PageAccessModal";
 import Select from "../../framework/Select";
+import { passwordProblem, PASSWORD_HINT } from "../../login/LoginPage";
 import TaskSettings from "./TaskSettings";
 import { FolderTemplatesEditor } from "../clients/ClientDirectory";
 import { ClientMailRulesEditor } from "../clients/ClientWorkspace";
@@ -305,7 +306,8 @@ export default function SettingsPage() {
 
   const changeOwnPassword = async () => {
     setPwMsg(null);
-    if (pw.length < 6) return setPwMsg({ ok: false, text: "Password must be at least 6 characters." });
+    const weak = passwordProblem(pw);
+    if (weak) return setPwMsg({ ok: false, text: weak });
     if (pw !== pw2) return setPwMsg({ ok: false, text: "Passwords do not match." });
     const { error } = await supabase.auth.updateUser({ password: pw });
     if (error) return setPwMsg({ ok: false, text: error.message });
@@ -591,7 +593,7 @@ export default function SettingsPage() {
           </div>
           <button className="cl-primary" onClick={changeOwnPassword}>Update</button>
         </div>
-        {pwMsg && <p className={pwMsg.ok ? "st-ok" : "su-error"}>{pwMsg.text}</p>}
+        {pwMsg ? <p className={pwMsg.ok ? "st-ok" : "su-error"}>{pwMsg.text}</p> : <p className="st-sub">{PASSWORD_HINT}</p>}
       </section>
 
       <section className="st-section st-signout" style={{ maxWidth: 640 }}>

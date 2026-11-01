@@ -5068,3 +5068,27 @@ button.sl-ppl-co:hover { background: #f1f7f4; color: var(--forest); }
 .ah-compose .sl-meet-add, .ah-compose .sl-task-add, .ah-compose .sl-note-add { margin-bottom: 0; }
 .ah-compose .sl-meet-add { gap: 0; }
 .ah-compose .sl-meet-add > .sl-meet-reveal.is-writing { margin-top: 10px; }
+
+/* ---------- Opening a deal ----------
+   The deal's page is laid out off screen, its entrance held, while it reads what it shows; then it
+   comes in once, filled. The list stays put meanwhile, with a quiet sweep along its top. */
+.sl-dstage { display: contents; }
+.sl-dstage.is-pending {
+  display: block; position: fixed; top: 0; z-index: -1; height: 100vh; overflow: hidden;
+  visibility: hidden; pointer-events: none; contain: layout paint;
+}
+.sl-dstage.is-pending *, .sl-dstage.is-pending *::before, .sl-dstage.is-pending *::after { animation-play-state: paused !important; }
+.sl.sl-ov[aria-busy="true"] { cursor: progress; }
+.so-opening {
+  position: absolute; z-index: 30; top: 0; left: 0; right: 0; height: 3px; overflow: hidden; pointer-events: none;
+  opacity: 0; animation: so-opening-in 0.2s ease 0.15s forwards;
+}
+.so-opening i {
+  position: absolute; top: 0; bottom: 0; width: 34%;
+  background: linear-gradient(90deg, transparent, #86efc0, #1fb98a, transparent);
+  box-shadow: 0 0 12px rgba(31, 185, 138, 0.6);
+  animation: so-opening-sweep 0.9s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+@keyframes so-opening-in { to { opacity: 1; } }
+@keyframes so-opening-sweep { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
+@media (prefers-reduced-motion: reduce) { .so-opening i { animation: none; width: 100%; opacity: 0.6; } }

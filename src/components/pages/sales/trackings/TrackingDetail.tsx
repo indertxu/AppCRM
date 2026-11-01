@@ -1799,7 +1799,7 @@ function DealPeople({ company, contacts, companyContactIds, dealIds, onChange }:
   );
 }
 
-export default function TrackingDetail({ tracking, companies, contacts, products, employees, trackingFields = [], salesRoles = [], startWithClient = false, onBack }: {
+export default function TrackingDetail({ tracking, companies, contacts, products, employees, trackingFields = [], salesRoles = [], startWithClient = false, onReady, onBack }: {
   tracking: Tracking; companies: Company[]; contacts: Contact[]; products: Product[]; employees: Employee[];
   /** Custom deal fields, shown in the Details card. */
   trackingFields?: TrackingField[];
@@ -1807,6 +1807,8 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   salesRoles?: SalesRole[];
   /** Just dropped on Won from the board and the user chose to create the client: open its form. */
   startWithClient?: boolean;
+  /** Called once the page has read what it shows (its notes, tasks, phases, products, people…): the deals page brings it in then, filled. */
+  onReady?: () => void;
   onBack: () => void;
 }) {
   const navigate = useNavigate();
@@ -1860,7 +1862,17 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   /** Deal details, revenue, documents, notes and tasks shown in the handoff panel. */
   const [confirmExtras, setConfirmExtras] = useState<HandoffExtras | null>(null);
   const [trackingContactIds, setTrackingContactIds] = useState<string[]>([]);
-  useEffect(() => { loadTrackingContactIds(tracking.id).then(setTrackingContactIds).catch(() => {}); }, [tracking.id]);
+  // What the page needs before it comes in (see onReady): its own reads, who you are, the deal's people.
+  const readyRef = useRef(onReady);
+  readyRef.current = onReady;
+  const readyParts = useRef(new Set<string>());
+  const partDone = (k: string) => {
+    const s = readyParts.current;
+    if (s.has("sent")) return;
+    s.add(k);
+    if (s.has("main") && s.has("me") && s.has("people")) { s.add("sent"); window.setTimeout(() => readyRef.current?.(), 0); }
+  };
+  useEffect(() => { loadTrackingContactIds(tracking.id).then(setTrackingContactIds).catch(() => {}).finally(() => partDone("people")); }, [tracking.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const [clientCatalog, setClientCatalog] = useState<Product[]>([]);
   const [clientFormMode, setClientFormMode] = useState<"create" | "attach">("create"); // "attach" = scenario C
   /** The deal was just won and its client isn't set up: offer to create it now. */
@@ -2056,33 +2068,35 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   };
 
   useEffect(() => {
-    if (tracking.pipeline_id) loadPipeline(tracking.pipeline_id).then(({ phases }) => {
+    const ps: Promise<unknown>[] = [];
+    if (tracking.pipeline_id) ps.push(loadPipeline(tracking.pipeline_id).then(({ phases }) => {
       // Display order: normal phases first (as configured), then Won, then Lost.
       const rank = (p: any) => p.sales_outcome === "loss" ? 2 : p.sales_outcome === "win" ? 1 : 0;
       const ordered = [...phases].sort((a, b) => rank(a) - rank(b));
       setAllPhases(ordered);
       setPhases(ordered.filter((p) => p.sales_visible !== false));
-    }).catch(() => {});
-    Promise.all([loadNotes(tracking.id), loadTasks(tracking.id), loadMeetings(tracking.id)]).then(([n, t, m]) => {
+    }).catch(() => {}));
+    ps.push(Promise.all([loadNotes(tracking.id), loadTasks(tracking.id), loadMeetings(tracking.id)]).then(([n, t, m]) => {
       setNotes(n); setTasks(t); setMeetings(m);
       const ids = [...n, ...t, ...m].map((x: any) => x.id);
       loadAssignees(tracking.id, ids).then(setAssignees).catch(() => {});
       // Meetings deleted or cancelled in Outlook disappear here too.
       syncDeletedMeetingsFromOutlook(tracking.id, m).then(dropGoneMeetings).catch(() => {});
-    }).catch(() => {});
-    loadPhaseEvents(tracking.id).then(setEvents).catch(() => {});
-    loadServices().then(setServices).catch(() => {});
-    listPipelines().then(setAllPipelines).catch(() => {});
-    loadPotentialServices(tracking.id).then(setPotentials).catch(() => {});
-    loadTrackingProducts(tracking.id).then(setTProds).catch(() => {});
-    loadTrackingEmployees(tracking.id).then(setTeam).catch(() => {});
-    loadTrackingOwner(tracking.id).then(setOwner).catch(() => {});
-    loadTrackingHandoffs(tracking.id).then(setHandoffs).catch(() => {});
+    }).catch(() => {}));
+    ps.push(loadPhaseEvents(tracking.id).then(setEvents).catch(() => {}));
+    ps.push(loadServices().then(setServices).catch(() => {}));
+    ps.push(listPipelines().then(setAllPipelines).catch(() => {}));
+    ps.push(loadPotentialServices(tracking.id).then(setPotentials).catch(() => {}));
+    ps.push(loadTrackingProducts(tracking.id).then(setTProds).catch(() => {}));
+    ps.push(loadTrackingEmployees(tracking.id).then(setTeam).catch(() => {}));
+    ps.push(loadTrackingOwner(tracking.id).then(setOwner).catch(() => {}));
+    ps.push(loadTrackingHandoffs(tracking.id).then(setHandoffs).catch(() => {}));
     // contacts already linked to this tracking's company
     if (tracking.company_id) {
-      supabase.from("company_contacts").select("contact_id").eq("company_id", tracking.company_id)
-        .then(({ data }: any) => setCompanyContactIds((data ?? []).map((r: any) => r.contact_id)));
+      ps.push(Promise.resolve(supabase.from("company_contacts").select("contact_id").eq("company_id", tracking.company_id))
+        .then(({ data }: any) => setCompanyContactIds((data ?? []).map((r: any) => r.contact_id)), () => {}));
     }
+    void Promise.all(ps).then(() => partDone("main"));
   }, [tracking.id, tracking.pipeline_id, tracking.company_id]);
 
   useEffect(() => {
@@ -2100,7 +2114,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   };
   const empName = (id: string) => employees.find((e) => e.id === id)?.name ?? "Employee";
 
-  useEffect(() => { myProfile().then(setMe).catch(() => {}); }, []);
+  useEffect(() => { myProfile().then(setMe).catch(() => {}).finally(() => partDone("me")); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const canAssign = isSalesLead(me);
   // Two deal-level close estimates: the rep's own, and the manager/boss override.
   const [repProb, setRepProb] = useState<number | null>(tracking.rep_close_prob ?? null);

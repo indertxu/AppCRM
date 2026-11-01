@@ -20,6 +20,13 @@
 //                   when ref is "ticket:<id>" it is kept on that ticket's thread
 //   mail_attachment — the bytes of one attachment of a received e-mail
 //
+//   Customer success follow-ups (88_cs_followups.sql):
+//   cs_run   — enrol clients in the active sequences and send what is due (your company)
+//   cs_test  — one blueprint, filled in for a client, sent to yourself
+//   cs_attachment_preview — an attachment as one client gets it (its fields filled in)
+//   cs_mail_scan — read the company's Outlook mailboxes: e-mails from / to clients become contacts
+//   (hourly, with the x-cs-cron header: every company, both of the above)
+//
 // Secrets required (supabase secrets set ...):
 //   MS_CLIENT_ID, MS_CLIENT_SECRET
 //   CRON_SECRET (only for the scheduled mail_sync_all)
@@ -27,6 +34,7 @@
 // Uses the caller's Supabase JWT to identify the user; never trusts a user_id from the body.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { PDFDocument, StandardFonts, rgb } from "https://esm.sh/pdf-lib@1.17.1";
 
 const MS_CLIENT_ID = Deno.env.get("MS_CLIENT_ID")!;
 const MS_CLIENT_SECRET = Deno.env.get("MS_CLIENT_SECRET")!;
@@ -488,9 +496,526 @@ async function sendMail(userId: string, p: any, db: Db): Promise<Response> {
   return json({ ok: true, messageId: info?.internetMessageId ?? info?.id ?? null });
 }
 
+/* =====================================================================
+   Customer success: automatic e-mail follow-ups (88_cs_followups.sql)
+   Sequences send e-mail blueprints to the clients they apply to, step by
+   step, from each client's owner's Outlook (or whoever set them up).
+   ===================================================================== */
+const CS_DAY = 86400000;
+const csAddYears = (d0: Date, y: number) => { const d = new Date(d0); d.setFullYear(d.getFullYear() + Math.floor(y)); d.setMonth(d.getMonth() + Math.round((y % 1) * 12)); return d; };
+/** A signed product's next renewal after `after`: its own term, else its deal's contract, else (recurring) its yearly anniversary. */
+function csRenewal(l: any, ct: any, after = Date.now()): Date | null {
+  if (!l || (l.status && !/active|signed|live/i.test(String(l.status)))) return null;
+  const start = l.start_date || l.signing_date || ct?.contractStart || ct?.signDate;
+  if (!start) return null;
+  const own = Number(l.term_years) || 0, deal = Number(ct?.termYears) || 0;
+  const y = own || deal || (l.recurring ? 1 : 0);
+  if (!y) return null;
+  const auto = own ? !!l.auto_renew : deal ? !!ct?.autoRenew : true;   // an anniversary rolls on
+  const step = Number(l.renew_years) || Number(ct?.renewYears) || y;
+  let end = csAddYears(new Date(start), y);
+  for (let n = 0; auto && end.getTime() < after && n < 80; n++) end = csAddYears(end, step);
+  return end.getTime() >= after ? end : null;
+}
+const csEsc = (s: unknown) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
+const csFill = (text: string, vars: Record<string, string>, html: boolean) =>
+  String(text ?? "").replace(/\{\{\s*([a-z_]+)\s*\}\}/gi, (_, k) => { const v = vars[String(k).toLowerCase()] ?? ""; return html ? csEsc(v).replace(/\n/g, "<br>") : v; });
+const csFmtDate = (d: Date | null) => (d ? d.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) : "");
+
+/** Who a client's e-mail goes to: the run's own list, else the sequence's choice among the client's contacts. */
+function csRecipients(c: any, mode: string, override: string[] | null): string[] {
+  if (override?.length) return override.filter(Boolean);
+  const cts = (Array.isArray(c.contacts) ? c.contacts : []).filter((x: any) => x?.email && /@/.test(String(x.email)));
+  const main = cts.find((x: any) => !x.billing) ?? cts[0];
+  if (mode === "all") return [...new Set(cts.map((x: any) => String(x.email).trim()))] as string[];
+  if (mode === "billing") { const b = cts.filter((x: any) => x.billing); return (b.length ? b : main ? [main] : []).map((x: any) => String(x.email).trim()); }
+  return main ? [String(main.email).trim()] : [];
+}
+function csMatches(aud: any, c: any, health: Record<string, string>): boolean {
+  const a = aud ?? {};
+  if (Array.isArray(a.exclude) && a.exclude.includes(c.id)) return false;
+  if (Array.isArray(a.clients) && a.clients.length) return a.clients.includes(c.id);
+  if (Array.isArray(a.priorities) && a.priorities.length && !a.priorities.includes(c.cs_priority ?? "none")) return false;
+  if (Array.isArray(a.types) && a.types.length && !a.types.includes(c.project_type_id)) return false;
+  if (Array.isArray(a.health) && a.health.length && !a.health.includes(health[c.id] ?? "none")) return false;
+  return true;
+}
+const csB64 = (buf: ArrayBuffer) => { const b = new Uint8Array(buf); let s = ""; for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.subarray(i, i + 0x8000)); return btoa(s); };
+
+/** An attachment made for one client: {{fields}} filled in a text file (HTML, TXT…), a PDF's form fields
+ *  filled and its written {{fields}} replaced; the file name too. */
+const CS_TEXT = /\.(html?|txt|csv|md|xml|json|svg)$/i;
+async function csPersonalize(a: any, buf: ArrayBuffer, vars: Record<string, string>): Promise<{ name: string; type: string; bytes: Uint8Array }> {
+  const name = csFill(String(a?.name ?? "file"), vars, false).replace(/[\\/:*?"<>|]+/g, "-");
+  const type = String(a?.type || "application/octet-stream");
+  const raw = new Uint8Array(buf);
+  const isPdf = /pdf/i.test(type) || /\.pdf$/i.test(String(a?.name));
+  if (!isPdf && (/^text\//i.test(type) || CS_TEXT.test(String(a?.name)))) {
+    const txt = new TextDecoder().decode(raw);
+    if (!/\{\{\s*[a-z_]+\s*\}\}/i.test(txt)) return { name, type, bytes: raw };
+    const html = /html|xml|svg/i.test(type) || /\.(html?|xml|svg)$/i.test(String(a?.name));
+    return { name, type, bytes: new TextEncoder().encode(csFill(txt, vars, html)) };
+  }
+  const fields = Object.entries((a?.fields ?? {}) as Record<string, string>).filter(([, k]) => !!k);
+  const spots = (Array.isArray(a?.spots) ? a.spots : []) as any[];
+  if (!isPdf || (!fields.length && !spots.length)) return { name, type, bytes: raw };
+  try {
+    const doc = await PDFDocument.load(raw, { ignoreEncryption: true });
+    const latin = (v: string) => v.replace(/[^\x20-\x7e\u00a0-\u00ff]/g, "");
+    if (fields.length) {
+      const form = doc.getForm();
+      let any = false;
+      for (const [fname, key] of fields) {
+        try { form.getTextField(fname).setText(latin(vars[key] ?? "")); any = true; } catch { /* not a text field */ }
+      }
+      if (any) { try { form.flatten(); } catch { /* keep it fillable */ } }
+    }
+    if (spots.length) {
+      const font = await doc.embedFont(StandardFonts.Helvetica);
+      // one line of text at a time: from its first field to its end, the line is written again with the fields filled in
+      const lines = new Map<string, any[]>();
+      for (const sp of spots) { const k = `${sp.page}|${sp.x}|${sp.y}|${sp.text ?? sp.key}`; lines.set(k, [...(lines.get(k) ?? []), sp]); }
+      for (const group of lines.values()) {
+        const sp = group.sort((p1, p2) => (Number(p1.at) || 0) - (Number(p2.at) || 0))[0];
+        const page = doc.getPages()[Number(sp.page) || 0];
+        if (!page) continue;
+        const size = Math.max(4, Number(sp.size) || 10), y = Number(sp.y) || 0;
+        let x = Number(sp.x) || 0, w = Number(sp.w) || size * 4, out = latin(vars[sp.key] ?? "");
+        if (typeof sp.text === "string" && sp.text) {
+          // where the first field starts (Helvetica's widths, scaled to the line's real width) and the rest of the line, filled in
+          const lineW = Number(sp.w) || font.widthOfTextAtSize(latin(sp.text), size);
+          const k = lineW / Math.max(1, font.widthOfTextAtSize(latin(sp.text), size));
+          const at = Number(sp.at) || 0;
+          x = (Number(sp.x) || 0) + font.widthOfTextAtSize(latin(sp.text.slice(0, at)), size) * k;
+          w = (Number(sp.x) || 0) + lineW - x;
+          out = latin(csFill(sp.text.slice(at), vars, false));
+        }
+        page.drawRectangle({ x: x - 1, y: y - size * 0.28, width: w + 2, height: size * 1.2, color: rgb(1, 1, 1) });
+        page.drawText(out, { x, y, size, font, color: rgb(0.08, 0.1, 0.09) });
+      }
+    }
+    return { name, type: "application/pdf", bytes: await doc.save() };
+  } catch {
+    return { name, type, bytes: raw };   // a PDF we can't open goes as it is
+  }
+}
+
+/** Sends one message from a user's Outlook (with attachments from the cs-files bucket, made for the client when vars are given). */
+async function csSend(userId: string, to: string[], subject: string, html: string, attachments: any[], vars?: Record<string, string>): Promise<string | null> {
+  const { data: tokRow } = await admin.from("outlook_tokens").select("scopes").eq("user_id", userId).maybeSingle();
+  if (!tokRow) return "Their Outlook isn't connected (Settings › Interface).";
+  if (!hasMail((tokRow as any).scopes)) return "Their Outlook is connected without mail — connect it again with mail.";
+  const token = await accessTokenFor(userId).catch(() => null);
+  if (!token) return "Their Outlook connection expired — connect it again.";
+  const files: any[] = [];
+  let total = 0;
+  for (const a of attachments ?? []) {
+    if (!a?.path) continue;
+    const { data, error } = await admin.storage.from("cs-files").download(a.path);
+    if (error || !data) return `Attachment "${a.name}" is missing.`;
+    const buf = await data.arrayBuffer();
+    const f = vars ? await csPersonalize(a, buf, vars) : { name: a.name ?? "file", type: a.type || "application/octet-stream", bytes: new Uint8Array(buf) };
+    total += f.bytes.byteLength;
+    if (total > 3_000_000) return "The attachments add up to more than 3 MB.";
+    files.push({ "@odata.type": "#microsoft.graph.fileAttachment", name: f.name, contentType: f.type, contentBytes: csB64(f.bytes.buffer.slice(f.bytes.byteOffset, f.bytes.byteOffset + f.bytes.byteLength) as ArrayBuffer) });
+  }
+  const message = { subject, body: { contentType: "HTML", content: html }, toRecipients: to.map((e) => ({ emailAddress: { address: e } })), attachments: files };
+  const res = await graph(token, "/me/sendMail", "POST", { message, saveToSentItems: true });
+  if (res.status === 429) return "throttled";
+  if (!res.ok) return `Outlook said: ${(await res.text()).slice(0, 300)}`;
+  return null;
+}
+
+/** Everything a tenant's sequences need, read once. */
+async function csTenantData(tenant: string) {
+  const [cl, ow, he, tp, pr] = await Promise.all([
+    admin.from("clients").select("id, name, legal_name, contacts, cs_priority, project_type_id, tenant_id").eq("tenant_id", tenant),
+    admin.from("client_cs_owners").select("client_id, profile_id, is_primary").eq("tenant_id", tenant),
+    admin.from("client_health").select("client_id, status").eq("tenant_id", tenant),
+    admin.from("cs_email_templates").select("*").eq("tenant_id", tenant),
+    admin.from("profiles").select("id, first_name, last_name, email").eq("tenant_id", tenant),
+  ]);
+  const clients = (cl.data ?? []) as any[];
+  const ids = clients.map((c) => c.id);
+  const lines: any[] = [];
+  for (let i = 0; i < ids.length; i += 150) {
+    const { data } = await admin.from("client_products").select("client_id, tracking_id, status, recurring, start_date, signing_date, term_years, auto_renew, renew_years").in("client_id", ids.slice(i, i + 150));
+    lines.push(...((data ?? []) as any[]));
+  }
+  const tids = [...new Set(lines.map((l) => l.tracking_id).filter(Boolean))];
+  const terms: Record<string, any> = {};
+  for (let i = 0; i < tids.length; i += 150) {
+    const { data } = await admin.from("trackings").select("id, contract_terms").in("id", tids.slice(i, i + 150));
+    ((data ?? []) as any[]).forEach((t) => { if (t.contract_terms) terms[t.id] = t.contract_terms; });
+  }
+  const owner: Record<string, string> = {};
+  const owners: Record<string, string[]> = {};
+  ((ow.data ?? []) as any[]).sort((a, b) => Number(a.is_primary) - Number(b.is_primary)).forEach((o) => { owner[o.client_id] = o.profile_id; owners[o.client_id] = [...(owners[o.client_id] ?? []), o.profile_id]; });
+  const health: Record<string, string> = {};
+  ((he.data ?? []) as any[]).forEach((h) => { health[h.client_id] = h.status; });
+  const people: Record<string, any> = {};
+  ((pr.data ?? []) as any[]).forEach((p) => { people[p.id] = p; });
+  const templates: Record<string, any> = {};
+  ((tp.data ?? []) as any[]).forEach((t) => { templates[t.id] = t; });
+  const renewalOf = (clientId: string, after = Date.now()) => lines.filter((l) => l.client_id === clientId)
+    .map((l) => csRenewal(l, l.tracking_id ? terms[l.tracking_id] : null, after)).filter(Boolean)
+    .sort((a, b) => a!.getTime() - b!.getTime())[0] ?? null;
+  return { clients, owner, owners, health, people, templates, renewalOf };
+}
+type CsTenant = Awaited<ReturnType<typeof csTenantData>>;
+
+/** The version of a blueprint a client gets (90_cs_blueprint_versions.sql): the first one that applies, else the main one. */
+function csVerFits(a: any, c: any, d: CsTenant): boolean {
+  const x = a ?? {};
+  if (Array.isArray(x.clients) && x.clients.length) return x.clients.includes(c.id);
+  const has = (r: unknown) => Array.isArray(r) && r.length > 0;
+  if (!has(x.owners) && !has(x.priorities) && !has(x.health)) return false;
+  if (has(x.owners) && !(d.owners[c.id] ?? []).some((o: string) => x.owners.includes(o))) return false;
+  if (has(x.priorities) && !x.priorities.includes(c.cs_priority ?? "none")) return false;
+  if (has(x.health) && !x.health.includes(d.health[c.id] ?? "none")) return false;
+  return true;
+}
+function csVersionOf(t: any, c: any, d: CsTenant): any {
+  const v = (Array.isArray(t?.variants) ? t.variants : []).find((x: any) => csVerFits(x?.audience, c, d));
+  return v ? { ...t, subject: v.subject || t.subject, body_html: v.body_html ?? t.body_html, html: v.html || "", _variant: v.name || "Version" } : t;
+}
+
+/** Names always start with a capital letter ("laura gil" → "Laura Gil"). */
+const csCap = (x: unknown) => String(x ?? "").trim().replace(/(^|[\s\-'’])(\p{L})/gu, (_, a, b) => a + b.toLocaleUpperCase());
+function csVars(c: any, d: CsTenant, senderId: string | null, person?: { name?: string; email?: string } | null): Record<string, string> {
+  const cts = (Array.isArray(c.contacts) ? c.contacts : []).filter((x: any) => x?.email);
+  const main = person ?? cts.find((x: any) => !x.billing) ?? cts[0];
+  const p = senderId ? d.people[senderId] : null;
+  const ren = d.renewalOf(c.id);
+  return {
+    client: c.name ?? "", legal_name: c.legal_name || c.name || "",
+    contact_name: csCap(main?.name), first_name: csCap(String(main?.name ?? "").trim().split(/\s+/)[0]) || "there",
+    owner_name: p ? csCap([p.first_name, p.last_name].filter(Boolean).join(" ")) : "", owner_first_name: csCap(p?.first_name), owner_email: p?.email ?? "",
+    renewal_date: csFmtDate(ren), days_to_renewal: ren ? String(Math.max(0, Math.ceil((ren.getTime() - Date.now()) / CS_DAY))) : "",
+    today: csFmtDate(new Date()), year: String(new Date().getFullYear()),
+  };
+}
+const csHtmlOf = (t: any) => String(t.html || "") || `<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.6;color:#0e1a15">${t.body_html ?? ""}</div>`;
+
+/** Enrols the clients each active sequence applies to and sends what is due. One tenant, or all (the scheduler). */
+async function csRun(tenantOnly: string | null, budget = 60): Promise<Record<string, unknown>> {
+  const stats = { enrolled: 0, sent: 0, failed: 0, skipped: 0, finished: 0, errors: [] as string[] };
+  let q = admin.from("cs_sequences").select("*").eq("active", true);
+  if (tenantOnly) q = q.eq("tenant_id", tenantOnly);
+  const { data: seqs, error } = await q;
+  if (error) return { error: /relation|does not exist/i.test(error.message) ? "Run 88_cs_followups.sql" : error.message };
+  const tenants = [...new Set(((seqs ?? []) as any[]).map((s) => s.tenant_id).filter(Boolean))] as string[];
+  const now = Date.now();
+  for (const tenant of tenants) {
+    const d = await csTenantData(tenant);
+    for (const seq of ((seqs ?? []) as any[]).filter((s) => s.tenant_id === tenant)) {
+      const steps = (Array.isArray(seq.steps) ? seq.steps : []).filter((x: any) => x?.template_id);
+      if (!steps.length) continue;
+      const { data: runRows } = await admin.from("cs_sequence_runs").select("*").eq("sequence_id", seq.id);
+      const runs = (runRows ?? []) as any[];
+      const has = new Set(runs.map((r) => r.client_id));
+      const waitOf = (i: number) => Math.max(0, Number(steps[i]?.wait_days) || 0) * CS_DAY;
+      const firstAt = (c: any): number | null => {
+        if (seq.start_mode !== "before_renewal") return now + waitOf(0);
+        const ren = d.renewalOf(c.id);
+        if (!ren) return null;
+        return Math.max(now, ren.getTime() - (Number(seq.start_days) || 0) * CS_DAY) + waitOf(0);
+      };
+      // who comes in
+      for (const c of d.clients) {
+        if (has.has(c.id) || !csMatches(seq.audience, c, d.health)) continue;
+        const at = firstAt(c);
+        if (at == null) continue;
+        const { data: row, error: e } = await admin.from("cs_sequence_runs").insert({ tenant_id: tenant, sequence_id: seq.id, client_id: c.id, step: 0, status: "active", next_at: new Date(at).toISOString() }).select("*").single();
+        if (!e && row) { stats.enrolled += 1; runs.push(row); }
+      }
+      // who no longer fits leaves (unless someone put them in by hand)
+      for (const r of runs) {
+        const c = d.clients.find((x) => x.id === r.client_id);
+        if (r.id && r.status === "active" && !r.manual && c && !csMatches(seq.audience, c, d.health)) {
+          await admin.from("cs_sequence_runs").update({ status: "done" }).eq("id", r.id); r.status = "done"; stats.finished += 1;
+        }
+      }
+      // what is due
+      const due = runs.filter((r) => r.id && r.status === "active" && r.next_at && new Date(r.next_at).getTime() <= now);
+      for (const r of due) {
+        if (budget <= 0) break;
+        const c = d.clients.find((x) => x.id === r.client_id);
+        if (!c) continue;
+        const stepIx = Math.min(Math.max(0, Number(r.step) || 0), steps.length - 1);
+        const t0 = d.templates[steps[stepIx].template_id];
+        const t = t0 ? csVersionOf(t0, c, d) : t0;
+        const sender = seq.sender === "owner" ? (d.owner[c.id] ?? seq.created_by) : seq.created_by;
+        const to = csRecipients(c, seq.recipients, r.to_emails);
+        const base: Record<string, unknown> = { tenant_id: tenant, sequence_id: seq.id, run_id: r.id, client_id: c.id, template_id: t?.id ?? null, step: stepIx, sent_by: sender, variant: t?._variant ?? null };
+        let skip: string | null = null;
+        if (!t) skip = "The e-mail blueprint of this step was deleted.";
+        else if (!to.length) skip = "No e-mail address for this client (add a contact with an e-mail).";
+        else if (!sender) skip = "Nobody to send it from (no owner).";
+        let sentNow = 0, failedNow = 0, throttled = false;
+        if (skip) {
+          await admin.from("cs_email_log").insert({ ...base, to_emails: to, subject: t?.subject ?? null, status: "skipped", error: skip });
+          stats.skipped += 1;
+        } else {
+          // each person gets their own e-mail, with their own name; whoever already got this step (an earlier, interrupted run) is not sent it again
+          const { data: done } = await admin.from("cs_email_log").select("to_emails").eq("run_id", r.id).eq("step", stepIx).eq("status", "sent").gte("sent_at", r.next_at);
+          const already = new Set(((done ?? []) as any[]).flatMap((x) => (x.to_emails ?? []).map((e: string) => lc(e))));
+          const cts = (Array.isArray(c.contacts) ? c.contacts : []) as any[];
+          for (const email of to) {
+            if (already.has(lc(email))) { sentNow += 1; continue; }
+            if (budget <= 0) { throttled = true; break; }
+            const person = cts.find((x) => lc(x?.email) === lc(email)) ?? { email, name: "" };
+            const vars = csVars(c, d, sender, person);
+            const subject = csFill(t.subject, vars, false);
+            budget -= 1;
+            const err = await csSend(sender, [email], subject, csFill(csHtmlOf(t), vars, true), t.attachments ?? [], vars);
+            if (err === "throttled") { throttled = true; break; }
+            await admin.from("cs_email_log").insert({ ...base, to_emails: [email], subject, status: err ? "failed" : "sent", error: err });
+            if (err) { failedNow += 1; stats.failed += 1; stats.errors.push(`${c.name} · ${email}: ${err}`); } else { sentNow += 1; stats.sent += 1; }
+          }
+        }
+        // Outlook busy (or out of time this round): left as it is, the rest go out on the next hourly run
+        // (next_at stays put, so the people who already got it are recognised and skipped)
+        if (throttled) continue;
+        // nobody got it: try again tomorrow
+        if (!skip && !sentNow && failedNow) { await admin.from("cs_sequence_runs").update({ next_at: new Date(now + CS_DAY).toISOString() }).eq("id", r.id); continue; }
+        if (!skip && sentNow && seq.log_contact) await admin.from("client_contacts_log").insert({ tenant_id: tenant, client_id: c.id, contacted_at: new Date().toISOString(), channel: "email", direction: "out", source: "auto", reason: `Automatic e-mail · ${t.name}${to.length > 1 ? ` (${to.length} people)` : ""}`, logged_by: sender });
+        // on to the next step (or round again, or done)
+        const nextIx = stepIx + 1;
+        const patch: Record<string, unknown> = { last_sent_at: skip ? r.last_sent_at ?? null : new Date().toISOString() };
+        if (nextIx < steps.length) Object.assign(patch, { step: nextIx, next_at: new Date(now + Math.max(waitOf(nextIx), 3600_000)).toISOString() });
+        else if (seq.repeat) {
+          // round again: after the gap the sequence sets (start_days), then step 1's own wait
+          let at = now + Math.max(1, Number(seq.start_days) || 30) * CS_DAY + waitOf(0);
+          if (seq.start_mode === "before_renewal") { const ren = d.renewalOf(c.id, now + ((Number(seq.start_days) || 0) + 1) * CS_DAY); at = ren ? ren.getTime() - (Number(seq.start_days) || 0) * CS_DAY + waitOf(0) : now + 365 * CS_DAY; }
+          Object.assign(patch, { step: 0, cycle: (Number(r.cycle) || 0) + 1, next_at: new Date(at).toISOString() });
+        } else { Object.assign(patch, { status: "done", next_at: null }); stats.finished += 1; }
+        await admin.from("cs_sequence_runs").update(patch).eq("id", r.id);
+      }
+    }
+  }
+  return stats;
+}
+
+/* =====================================================================
+   Customer success: contacts read from Outlook (89_contact_direction.sql)
+   Every e-mail from someone at a client is a contact from them ("in"); every
+   e-mail we send them, a contact from us ("out"). People are matched on the
+   client's contacts' addresses, or on the client's own e-mail domain (only when
+   that domain belongs to one client, never a public one, never ours).
+   ===================================================================== */
+const CS_PUBLIC = /^(gmail|googlemail|hotmail|outlook|live|msn|yahoo|ymail|icloud|me|mac|aol|proton|protonmail|pm|gmx|mail|web|zoho|yandex|telefonica|movistar|orange|vodafone|terra|ono|t-online|libero|free|laposte|wanadoo|qq|163)\./i;
+const CS_ROBOT = /^(no-?reply|do-?not-?reply|mailer-daemon|postmaster|bounces?|notifications?|alerts?|automated|system)([+._-]|@)/i;
+const csDom = (e: unknown) => lc(e).split("@")[1] ?? "";
+const CS_BACKFILL_DAYS = 365;
+
+/** Every address we know at each client (its own list and its company's contacts), and our own domains. */
+async function csAddressBook(tenant: string) {
+  const [cl, pr, tk] = await Promise.all([
+    admin.from("clients").select("id, company_id, contacts").eq("tenant_id", tenant),
+    admin.from("profiles").select("id, email").eq("tenant_id", tenant),
+    admin.from("outlook_tokens").select("user_id, account_email"),
+  ]);
+  const clients = (cl.data ?? []) as any[];
+  const byEmail = new Map<string, { client: string; name: string }[]>();
+  const add = (email: unknown, client: string, name: string) => {
+    const e = lc(email);
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) return;
+    const xs = byEmail.get(e) ?? [];
+    if (!xs.some((x) => x.client === client)) xs.push({ client, name });
+    byEmail.set(e, xs);
+  };
+  clients.forEach((c) => (Array.isArray(c.contacts) ? c.contacts : []).forEach((x: any) => add(x?.email, c.id, String(x?.name ?? ""))));
+  const clientsOfCo = new Map<string, string[]>();
+  clients.forEach((c) => { if (c.company_id) clientsOfCo.set(c.company_id, [...(clientsOfCo.get(c.company_id) ?? []), c.id]); });
+  const coIds = [...clientsOfCo.keys()];
+  for (let i = 0; i < coIds.length; i += 100) {
+    const { data: links } = await admin.from("company_contacts").select("company_id, contact_id").in("company_id", coIds.slice(i, i + 100));
+    const ls = (links ?? []) as any[];
+    const ids = [...new Set(ls.map((l) => l.contact_id))];
+    const people = new Map<string, any>();
+    for (let j = 0; j < ids.length; j += 200) {
+      const { data: cts } = await admin.from("contacts").select("id, first_name, last_name, email").in("id", ids.slice(j, j + 200)).not("email", "is", null);
+      ((cts ?? []) as any[]).forEach((k) => people.set(k.id, k));
+    }
+    ls.forEach((l) => { const k = people.get(l.contact_id); if (k) (clientsOfCo.get(l.company_id) ?? []).forEach((cid) => add(k.email, cid, [k.first_name, k.last_name].filter(Boolean).join(" "))); });
+  }
+  const mine = new Set(((pr.data ?? []) as any[]).map((p) => p.id));
+  const own = new Set([...((pr.data ?? []) as any[]).map((p) => csDom(p.email)), ...((tk.data ?? []) as any[]).filter((t) => mine.has(t.user_id)).map((t) => csDom(t.account_email))].filter(Boolean));
+  const domClients = new Map<string, Set<string>>();
+  byEmail.forEach((xs, e) => {
+    const d = csDom(e);
+    if (!d || CS_PUBLIC.test(d) || own.has(d)) return;
+    const set = domClients.get(d) ?? new Set<string>();
+    xs.forEach((x) => set.add(x.client));
+    domClients.set(d, set);
+  });
+  const match = (email: unknown): { client: string; name: string }[] => {
+    const e = lc(email), d = csDom(e);
+    if (!d || own.has(d) || CS_ROBOT.test(e)) return [];
+    const exact = byEmail.get(e);
+    if (exact?.length) return exact;
+    const set = domClients.get(d);
+    return set && set.size === 1 ? [{ client: [...set][0], name: "" }] : [];
+  };
+  return { match, own, people: mine };
+}
+type CsBook = Awaited<ReturnType<typeof csAddressBook>>;
+
+/** An app-only Graph token for a whole Microsoft organisation: works once an admin there has given the app
+ *  the "Mail.Read" application permission (admin consent). Then everyone's mailbox counts, connected or not. */
+const csAppTokens = new Map<string, string | null>();
+async function csAppToken(domain: string): Promise<string | null> {
+  if (!domain) return null;
+  if (csAppTokens.has(domain)) return csAppTokens.get(domain)!;
+  let tok: string | null = null;
+  try {
+    const res = await fetch(`https://login.microsoftonline.com/${encodeURIComponent(domain)}/oauth2/v2.0/token`, {
+      method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ client_id: MS_CLIENT_ID, client_secret: MS_CLIENT_SECRET, grant_type: "client_credentials", scope: "https://graph.microsoft.com/.default" }),
+    });
+    if (res.ok) {
+      const j = await res.json();
+      // only useful when the organisation granted mail reading to the app
+      const roles: string[] = (() => { try { return JSON.parse(atob(String(j.access_token).split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))).roles ?? []; } catch { return []; } })();
+      if (roles.some((r) => /^Mail\.(Read|ReadBasic|ReadWrite)(\.All)?$/i.test(r))) tok = j.access_token;
+    }
+  } catch { /* no organisation access */ }
+  csAppTokens.set(domain, tok);
+  return tok;
+}
+
+/** Reads one person's mailbox from where it was left (a year back the first time) and logs the client e-mails.
+ *  Their own Outlook connection (with mail) if they made one, else the organisation's access. */
+async function csMailScan(who: { id: string; email: string | null }, tenant: string, book: CsBook, maxPages: number, deadline: number): Promise<{ scanned: number; logged: number; more: boolean; error: string | null; skipped?: string; via?: string }> {
+  const out = { scanned: 0, logged: 0, more: false, error: null as string | null };
+  const userId = who.id;
+  const { data: tokRow } = await admin.from("outlook_tokens").select("scopes, account_email").eq("user_id", userId).maybeSingle();
+  let token: string | null = null, base = "/me", via = "own";
+  let me = lc((tokRow as any)?.account_email || who.email);
+  if (tokRow && hasMail((tokRow as any).scopes)) token = await accessTokenFor(userId).catch(() => null);
+  if (!token && who.email) {
+    const app = await csAppToken(csDom(who.email));
+    if (app) { token = app; base = `/users/${encodeURIComponent(lc(who.email))}`; via = "team"; me = lc(who.email); }
+  }
+  if (!token) return { ...out, skipped: "no_mail" };
+  const { data: st } = await admin.from("cs_mail_sync").select("*").eq("user_id", userId).maybeSingle();
+  const after: string = new Date((st as any)?.read_after ?? Date.now() - CS_BACKFILL_DAYS * CS_DAY).toISOString();
+  const sel = "from,toRecipients,ccRecipients,subject,receivedDateTime,sentDateTime,internetMessageId,isDraft";
+  let url: string | null = `${GRAPH}${base}/messages?$select=${sel}&$filter=${encodeURIComponent(`receivedDateTime ge ${after}`)}&$orderby=receivedDateTime%20asc&$top=200`;
+  let newest = after;
+  const found = new Map<string, Record<string, unknown>>();
+  for (let p = 0; url && p < maxPages && Date.now() < deadline; p++) {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Prefer: 'outlook.timezone="UTC"' } });
+    if (res.status === 429) { out.error = "Outlook is busy, it carries on later"; break; }
+    if (res.status === 404 && via === "team") return { ...out, skipped: "no_mailbox", via };   // no mailbox at this address
+    if (!res.ok) { out.error = `Outlook said: ${(await res.text()).slice(0, 200)}`; break; }
+    const j = await res.json();
+    for (const m of (j.value ?? []) as any[]) {
+      out.scanned += 1;
+      if (m.receivedDateTime) { const t = new Date(m.receivedDateTime).toISOString(); if (t > newest) newest = t; }
+      if (m.isDraft || !m.internetMessageId) continue;
+      const from = lc(m.from?.emailAddress?.address);
+      const ours = from === me || book.own.has(csDom(from));
+      const at = (ours ? m.sentDateTime : m.receivedDateTime) || m.receivedDateTime;
+      const subject = String(m.subject ?? "").trim().slice(0, 300) || "(no subject)";
+      const put = (client: string, direction: "in" | "out", email: string, name: string) => {
+        const k = `${client}|${m.internetMessageId}`;
+        if (!found.has(k)) found.set(k, { tenant_id: tenant, client_id: client, contacted_at: at, channel: "email", direction, source: "email", reason: subject, contact_name: csCap(name) || null, contact_email: email || null, external_id: m.internetMessageId, logged_by: userId });
+      };
+      if (!ours) book.match(from).forEach((x) => put(x.client, "in", from, m.from?.emailAddress?.name || x.name));
+      else {
+        for (const r of [...(m.toRecipients ?? []), ...(m.ccRecipients ?? [])]) {
+          const e = lc(r?.emailAddress?.address);
+          book.match(e).forEach((x) => put(x.client, "out", e, r?.emailAddress?.name || x.name));
+        }
+      }
+    }
+    url = j["@odata.nextLink"] ?? null;
+  }
+  out.more = !!url && !out.error;
+  // an automatic follow-up is already logged when it goes out: its copy in Sent Items is not logged again
+  let rows = [...found.values()];
+  if (rows.some((r) => r.direction === "out")) {
+    const { data: autos } = await admin.from("client_contacts_log").select("client_id, contacted_at").eq("tenant_id", tenant).eq("source", "auto").gte("contacted_at", after);
+    const near = ((autos ?? []) as any[]).map((a) => [a.client_id, new Date(a.contacted_at).getTime()] as const);
+    rows = rows.filter((r) => r.direction !== "out" || !near.some(([cid, t]) => cid === r.client_id && Math.abs(t - new Date(String(r.contacted_at)).getTime()) < 15 * 60_000));
+  }
+  let saved = true;
+  for (let i = 0; i < rows.length; i += 200) {
+    const { data, error } = await admin.from("client_contacts_log").upsert(rows.slice(i, i + 200), { onConflict: "client_id,external_id", ignoreDuplicates: true }).select("id");
+    if (error) { out.error = /direction|source|external_id|contact_email/i.test(error.message) ? "Run 89_contact_direction.sql" : error.message; saved = false; break; }
+    out.logged += (data ?? []).length;
+  }
+  await admin.from("cs_mail_sync").upsert({
+    user_id: userId, tenant_id: tenant, read_after: saved ? newest : after,
+    scanned: (Number((st as any)?.scanned) || 0) + out.scanned, logged: (Number((st as any)?.logged) || 0) + out.logged,
+    done_backfill: !!(st as any)?.done_backfill || (!out.more && saved), last_run_at: new Date().toISOString(), last_error: out.error,
+  });
+  return { ...out, via };
+}
+
+/** The whole team of one company (or of every company using Outlook: the scheduler), until the time runs out.
+ *  Each person's mailbox is read through their own connection, or the organisation's when an admin allowed it. */
+async function csMailScanAll(tenantOnly: string | null, maxPages: number, deadline: number) {
+  const total = { scanned: 0, logged: 0, more: false, mailboxes: 0, errors: [] as string[], read: [] as string[], unread: [] as string[], team: false };
+  const { data: toks } = await admin.from("outlook_tokens").select("user_id");
+  const linked = new Set(((toks ?? []) as any[]).map((t) => t.user_id));
+  let q = admin.from("profiles").select("id, tenant_id, first_name, last_name, email, active");
+  if (tenantOnly) q = q.eq("tenant_id", tenantOnly);
+  const { data: profs } = await q;
+  const byTenant = new Map<string, any[]>();
+  ((profs ?? []) as any[]).forEach((p) => { if (p.tenant_id && p.active !== false) byTenant.set(p.tenant_id, [...(byTenant.get(p.tenant_id) ?? []), p]); });
+  for (const [tenant, ps] of byTenant) {
+    if (!ps.some((p) => linked.has(p.id))) continue;   // a company that doesn't use Outlook here
+    if (Date.now() > deadline) { total.more = true; break; }
+    const book = await csAddressBook(tenant);
+    for (const p of ps) {
+      const name = [p.first_name, p.last_name].filter(Boolean).join(" ") || p.email || "Someone";
+      if (Date.now() > deadline) { total.more = true; break; }
+      const r = await csMailScan({ id: p.id, email: p.email ?? null }, tenant, book, maxPages, deadline).catch((e) => ({ scanned: 0, logged: 0, more: true, error: String(e), skipped: undefined, via: undefined }));
+      if (r.skipped) { total.unread.push(name); continue; }
+      total.mailboxes += 1; total.read.push(name); total.scanned += r.scanned; total.logged += r.logged; total.more = total.more || r.more;
+      if (r.via === "team") total.team = true;
+      if (r.error) total.errors.push(`${p.first_name ?? "Someone"}: ${r.error}`);
+    }
+  }
+  return total;
+}
+
+/** A blueprint, filled in for one client, to your own inbox. */
+async function csTest(userId: string, p: any): Promise<Response> {
+  const { data: prof } = await admin.from("profiles").select("tenant_id, email").eq("id", userId).maybeSingle();
+  const tenant = (prof as any)?.tenant_id;
+  if (!tenant) return json({ error: "No company." }, 400);
+  const { data: t } = await admin.from("cs_email_templates").select("*").eq("id", p.templateId).eq("tenant_id", tenant).maybeSingle();
+  if (!t) return json({ error: "Save the blueprint first." }, 400);
+  const d = await csTenantData(tenant);
+  const c = d.clients.find((x) => x.id === p.clientId) ?? d.clients[0] ?? { id: "", name: "Your client", contacts: [] };
+  const { data: tok } = await admin.from("outlook_tokens").select("account_email").eq("user_id", userId).maybeSingle();
+  const to = String((tok as any)?.account_email || (prof as any)?.email || "");
+  if (!to) return json({ error: "No address of yours to send it to." }, 400);
+  const vars = csVars(c, d, userId);
+  const tv = c.id ? csVersionOf(t, c, d) : t;
+  const subject = `[Test] ${csFill(tv.subject, vars, false)}`;
+  const err = await csSend(userId, [to], subject, csFill(csHtmlOf(tv), vars, true), (t as any).attachments ?? [], vars);
+  await admin.from("cs_email_log").insert({ tenant_id: tenant, client_id: c.id || null, template_id: (t as any).id, to_emails: [to], subject, status: err ? "failed" : "test", error: err, sent_by: userId, variant: tv._variant ?? null });
+  return err ? json({ error: err === "throttled" ? "Outlook is busy — try again in a minute." : err }, 400) : json({ ok: true, to });
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   try {
+    // Customer-success follow-ups, hourly (pg_cron + pg_net): the key only the database and this function know
+    const csKey = req.headers.get("x-cs-cron");
+    if (csKey) {
+      const { data: k } = await admin.from("cs_cron_key").select("key").eq("id", 1).maybeSingle();
+      if (!k || (k as any).key !== csKey) return json({ error: "Forbidden" }, 403);
+      const t0 = Date.now();
+      const sent = await csRun(null, 120);
+      const mail = await csMailScanAll(null, 20, t0 + 100_000).catch((e) => ({ error: String(e) }));
+      return json({ ...sent, mail });
+    }
     // Scheduled run (pg_cron + pg_net): every connected mailbox, no user session.
     const cron = req.headers.get("x-cron-secret");
     if (cron) {
@@ -548,6 +1073,32 @@ Deno.serve(async (req) => {
 
     if (action === "mail_send") {
       return await sendMail(userId, p, userClient(req));
+    }
+
+    // Customer success: send what is due now for your company / a blueprint to yourself
+    if (action === "cs_run") {
+      const { data: prof } = await admin.from("profiles").select("tenant_id").eq("id", userId).maybeSingle();
+      if (!(prof as any)?.tenant_id) return json({ error: "No company." }, 400);
+      return json(await csRun((prof as any).tenant_id, 60));
+    }
+    if (action === "cs_test") return await csTest(userId, p);
+    if (action === "cs_attachment_preview") {
+      const { data: prof } = await admin.from("profiles").select("tenant_id").eq("id", userId).maybeSingle();
+      const tenant = (prof as any)?.tenant_id;
+      const a = p.attachment ?? {};
+      if (!tenant || !String(a.path ?? "").startsWith(`${tenant}/`)) return json({ error: "Not your file." }, 403);
+      const { data: file, error: fe } = await admin.storage.from("cs-files").download(a.path);
+      if (fe || !file) return json({ error: "The file is missing." }, 404);
+      const d = await csTenantData(tenant);
+      const c = d.clients.find((x) => x.id === p.clientId) ?? d.clients[0] ?? { id: "", name: "Your client", contacts: [] };
+      const f = await csPersonalize(a, await file.arrayBuffer(), csVars(c, d, userId));
+      return json({ name: f.name, contentType: f.type, contentBytes: csB64(f.bytes.buffer.slice(f.bytes.byteOffset, f.bytes.byteOffset + f.bytes.byteLength) as ArrayBuffer) });
+    }
+    // Customer success: read the company's Outlook mailboxes now (the e-mails with clients become contacts)
+    if (action === "cs_mail_scan") {
+      const { data: prof } = await admin.from("profiles").select("tenant_id").eq("id", userId).maybeSingle();
+      if (!(prof as any)?.tenant_id) return json({ error: "No company." }, 400);
+      return json(await csMailScanAll((prof as any).tenant_id, 12, Date.now() + 45_000));
     }
 
     if (action === "mail_attachment") {

@@ -37,11 +37,11 @@ interface Props {
 type Tab = "overview" | "deals" | "projects" | "contract" | "upsells" | "tickets" | "emails" | "folders";
 
 interface Note { id: string; body: string; mentions: string[]; author_id: string | null; created_at: string; src: "client" | "sale"; deal?: string | null; dealId?: string | null }
-interface ContactLog { id: string; contacted_at: string; channel: string | null; contact_name: string | null; reason: string | null; logged_by: string | null; }
+interface ContactLog { id: string; contacted_at: string; channel: string | null; contact_name: string | null; reason: string | null; logged_by: string | null; direction?: "in" | "out" | null; source?: string | null }
 interface TrackFile { id: string; tracking_id: string; name: string; note: string | null; mime: string | null; storage_path: string; created_at: string; size_bytes?: number | null; line_id?: string | null }
 /** A proposal sales generated on a deal (deal_proposals): a named scenario with its value and document. */
 interface DealProposal { id: string; tracking_id: string; name: string; is_main: boolean; total: number | null; file_id: string | null; created_at: string }
-interface Touch { at: string; kind: string; who: string; why: string }
+interface Touch { at: string; kind: string; who: string; why: string; dir?: "in" | "out"; source?: string | null; us?: string }
 interface Person { key: string; id: string | null; name: string; position: string; email: string; phone: string; billing: boolean; crm: boolean; c: any | null }
 interface Deal {
   id: string; name: string; status: string | null;
@@ -414,6 +414,8 @@ const IC: Record<string, string> = {
   globe: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z",
   out: "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3",
   arrow: "M5 12h14M13 6l6 6-6 6",
+  din: "M17 7L7 17M7 17h9M7 17V8",
+  dout: "M7 17L17 7M17 7H8M17 7v9",
   chev: "m6 9 6 6 6-6",
   plus: "M12 5v14M5 12h14",
   x: "M18 6 6 18M6 6l12 12",
@@ -848,6 +850,7 @@ export default function ClientWorkspace({
   const [logOpen, setLogOpen] = useState(false);
   const [logChannel, setLogChannel] = useState("call");
   const [logWho, setLogWho] = useState("");
+  const [logDir, setLogDir] = useState<"out" | "in">("out");
   const [logWhy, setLogWhy] = useState("");
   const [logDate, setLogDate] = useState(todayISO());
   const [logBusy, setLogBusy] = useState(false);
@@ -1079,7 +1082,8 @@ export default function ClientWorkspace({
     const xs: Touch[] = [];
     contactLog.forEach((l) => xs.push({
       at: l.contacted_at, kind: str(l.channel).toLowerCase() || "log",
-      who: l.contact_name || (l.logged_by ? people[l.logged_by] : "") || "—", why: l.reason || "Contact logged",
+      who: l.contact_name || (l.logged_by ? "Their team" : "—"), why: l.reason || "Contact logged",
+      dir: l.direction === "in" ? "in" : "out", source: l.source ?? null, us: l.logged_by ? people[l.logged_by] ?? "" : "",
     }));
     meetings.forEach((m) => xs.push({ at: m.at, kind: "meeting", who: "Sales", why: m.title || "Meeting" }));
     calendar.forEach((c) => xs.push(c));
@@ -1378,14 +1382,15 @@ export default function ClientWorkspace({
     const at = logDate === todayISO() ? new Date().toISOString() : `${logDate}T12:00:00`;
     const row: Record<string, unknown> = {
       client_id: client.id, contacted_at: at, channel: logChannel,
-      contact_name: logWho.trim() || null, reason: logWhy.trim() || null, logged_by: me,
+      contact_name: logWho.trim() || null, reason: logWhy.trim() || null, logged_by: me, direction: logDir,
     };
     let res = await supabase.from("client_contacts_log").insert(tenantId ? { ...row, tenant_id: tenantId } : row).select().single();
+    if (res.error && /direction/i.test(res.error.message)) { delete row.direction; res = await supabase.from("client_contacts_log").insert(tenantId ? { ...row, tenant_id: tenantId } : row).select().single(); }
     if (res.error && tenantId && /tenant_id/i.test(res.error.message)) res = await supabase.from("client_contacts_log").insert(row).select().single();
     setLogBusy(false);
     if (res.error) { setLogErr(res.error.message); return; }
     setContactLog((xs) => [res.data as ContactLog, ...xs]);
-    setLogOpen(false); setLogWhy(""); setLogWho("");
+    setLogOpen(false); setLogWhy(""); setLogWho(""); setLogDir("out");
   };
 
   const addNote = async () => {
@@ -1789,7 +1794,7 @@ export default function ClientWorkspace({
                         <div className="cw-pulse-info">
                           <span className={`cw-health is-${health}`}><i />{healthLabel}</span>
                           {last ? (
-                            <p className="cw-pulse-last"><b>{last.who}</b> · <span className="cw-kind-t">{last.kind}</span></p>
+                            <p className="cw-pulse-last"><b>{last.who}</b>{last.us && <> · <span className="cw-pulse-us">{last.dir === "in" ? "to" : "by"} <b>{last.us}</b></span></>} · <span className="cw-kind-t">{last.kind}</span>{last.dir && <span className={`cw-pulse-dir is-${last.dir}`}><Ico n={last.dir === "in" ? "din" : "dout"} s={11} />{last.dir === "in" ? "they reached us" : "we reached out"}</span>}</p>
                           ) : <p className="cw-hint">Log the first call, email or meeting.</p>}
                           {nextMeeting && <p className="cw-pulse-next"><Ico n="cal" s={13} />Next: {nextMeeting.title || "Meeting"} · {fmt(nextMeeting.at)}</p>}
                         </div>
@@ -1798,6 +1803,10 @@ export default function ClientWorkspace({
                       <div className={`cw-reveal ${logOpen ? "is-on" : ""}`} aria-hidden={!logOpen}>
                         <div className="cw-reveal-in">
                           <div className="cw-logform">
+                            <div className="cw-dirpick" role="radiogroup" aria-label="Who reached whom">
+                              <button role="radio" aria-checked={logDir === "out"} className={logDir === "out" ? "is-on" : ""} onClick={() => setLogDir("out")}><Ico n="dout" s={13} />We reached out</button>
+                              <button role="radio" aria-checked={logDir === "in"} className={logDir === "in" ? "is-on is-in" : ""} onClick={() => setLogDir("in")}><Ico n="din" s={13} />They reached us</button>
+                            </div>
                             <div className="cw-chans">
                               {CHANNELS.map((ch) => (
                                 <button key={ch} className={logChannel === ch ? "is-on" : ""} onClick={() => setLogChannel(ch)}><Ico n={kindIcon(ch)} s={13} />{ch}</button>
@@ -1818,10 +1827,10 @@ export default function ClientWorkspace({
                       {touches.length > 0 && (
                         <ol className={`cw-timeline ${historyAll ? "is-all" : ""}`}>
                           {(historyAll ? touches : touches.slice(0, 4)).map((t, i) => (
-                            <li key={`${t.at}-${i}`} data-kind={t.kind} style={cssVars({ "--i": i })}
-                              {...tipOn(<TipCard title={t.who} sub={`${t.kind} · ${fmt(t.at)} · ${ago(t.at)}`}>{t.why}</TipCard>)}>
-                              <span className="cw-tl-dot"><Ico n={kindIcon(t.kind)} s={12} /></span>
-                              <span className="cw-tl-who">{t.who}</span>
+                            <li key={`${t.at}-${i}`} data-kind={t.kind} data-dir={t.dir ?? ""} style={cssVars({ "--i": i })}
+                              {...tipOn(<TipCard title={t.us ? (t.dir === "in" ? `${t.who} → ${t.us}` : `${t.us} → ${t.who}`) : t.who} sub={`${t.dir === "in" ? "From them" : t.dir === "out" ? "From us" : t.kind} · ${t.kind}${t.source === "email" ? " (Outlook)" : ""} · ${fmt(t.at)} · ${ago(t.at)}`}>{t.why}</TipCard>)}>
+                              <span className="cw-tl-dot"><Ico n={kindIcon(t.kind)} s={12} />{t.dir && <em className={`cw-tl-dir is-${t.dir}`}><Ico n={t.dir === "in" ? "din" : "dout"} s={9} /></em>}</span>
+                              <span className="cw-tl-who">{t.who}{t.us && <small className="cw-tl-us">{t.dir === "in" ? "to" : "by"} {t.us}</small>}</span>
                               <span className="cw-tl-why">{t.why}</span>
                               <time>{shortAgo(t.at)}</time>
                             </li>

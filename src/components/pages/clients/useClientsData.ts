@@ -527,18 +527,25 @@ export interface CsUpsell {
 export interface CsQbr { id: string; client_id: string; meeting_date: string; spiced: Record<string, boolean>; status: "planned" | "done" | "cancelled"; notes: string | null; owner_id: string | null }
 export interface ArrSnapshot { id: string; year: number; initial_arr: number; by_client: Record<string, number>; taken_at: string }
 export interface RevenueEvent { id: string; client_id: string | null; event_date: string; kind: "expansion" | "contraction" | "churn"; amount: number; reason: string | null; upsell_id: string | null }
-export interface CsSettings { id: string | null; default_cadence_days: number; auto_tasks: boolean }
+export type CsPriority = "high" | "medium" | "low";
+export const CS_PRIORITIES: { key: CsPriority; label: string; days: number }[] = [
+  { key: "high", label: "High", days: 14 }, { key: "medium", label: "Medium", days: 30 }, { key: "low", label: "Low", days: 60 },
+];
+export interface CsSettings { id: string | null; default_cadence_days: number; auto_tasks: boolean; priority_cadence: Record<CsPriority, number> }
 export interface CsData {
   ready: boolean;
   owners: CsOwner[]; health: CsHealth[]; upsells: CsUpsell[]; qbrs: CsQbr[];
   snapshots: ArrSnapshot[]; events: RevenueEvent[]; settings: CsSettings;
   /** Each client's own cadence (days), when it has one. */
   cadence: Record<string, number>;
+  /** Each client's contact priority, when it has one. */
+  priority: Record<string, CsPriority>;
 }
 const num = (v: unknown) => Number(v) || 0;
+const defaultPriCadence = (): Record<CsPriority, number> => ({ high: 14, medium: 30, low: 60 });
 
 export async function loadCsData(): Promise<CsData> {
-  const empty: CsData = { ready: false, owners: [], health: [], upsells: [], qbrs: [], snapshots: [], events: [], settings: { id: null, default_cadence_days: 30, auto_tasks: true }, cadence: {} };
+  const empty: CsData = { ready: false, owners: [], health: [], upsells: [], qbrs: [], snapshots: [], events: [], settings: { id: null, default_cadence_days: 30, auto_tasks: true, priority_cadence: defaultPriCadence() }, cadence: {}, priority: {} };
   const [ow, he, up, qb, sn, ev, st, cl] = await Promise.all([
     supabase.from("client_cs_owners").select("id, client_id, profile_id, is_primary"),
     supabase.from("client_health").select("client_id, status, reason, note, updated_at, updated_by"),
@@ -547,11 +554,14 @@ export async function loadCsData(): Promise<CsData> {
     supabase.from("arr_snapshots").select("*").order("year"),
     supabase.from("cs_revenue_events").select("*").order("event_date", { ascending: false }),
     supabase.from("cs_settings").select("*").limit(1).maybeSingle(),
-    supabase.from("clients").select("id, contact_cadence_days"),
+    supabase.from("clients").select("id, contact_cadence_days, cs_priority"),
   ]);
   if (ow.error && csMissing(ow.error)) return empty;
   const cadence: Record<string, number> = {};
-  ((cl.error ? [] : cl.data ?? []) as any[]).forEach((r) => { if (r.contact_cadence_days) cadence[r.id] = Number(r.contact_cadence_days); });
+  const priority: Record<string, CsPriority> = {};
+  // before 88_cs_followups.sql there is no priority column: read the cadences alone
+  const clRows = cl.error ? (((await supabase.from("clients").select("id, contact_cadence_days")).data ?? []) as any[]) : ((cl.data ?? []) as any[]);
+  clRows.forEach((r) => { if (r.contact_cadence_days) cadence[r.id] = Number(r.contact_cadence_days); if (r.cs_priority) priority[r.id] = r.cs_priority; });
   const s: any = st.data;
   return {
     ready: true,
@@ -561,8 +571,8 @@ export async function loadCsData(): Promise<CsData> {
     qbrs: ((qb.data ?? []) as any[]).map((q) => ({ ...q, spiced: q.spiced ?? {} })) as CsQbr[],
     snapshots: ((sn.data ?? []) as any[]).map((x) => ({ ...x, initial_arr: num(x.initial_arr), by_client: x.by_client ?? {} })) as ArrSnapshot[],
     events: ((ev.data ?? []) as any[]).map((x) => ({ ...x, amount: num(x.amount) })) as RevenueEvent[],
-    settings: s ? { id: s.id, default_cadence_days: Number(s.default_cadence_days) || 30, auto_tasks: s.auto_tasks !== false } : empty.settings,
-    cadence,
+    settings: s ? { id: s.id, default_cadence_days: Number(s.default_cadence_days) || 30, auto_tasks: s.auto_tasks !== false, priority_cadence: { ...defaultPriCadence(), ...(s.priority_cadence ?? {}) } } : empty.settings,
+    cadence, priority,
   };
 }
 
@@ -649,9 +659,273 @@ export async function deleteRevenueEvent(id: string): Promise<string | null> {
 }
 
 export async function saveCsSettings(s: CsSettings): Promise<string | null> {
-  const row = { default_cadence_days: Math.max(1, Math.round(s.default_cadence_days)), auto_tasks: s.auto_tasks, updated_at: new Date().toISOString() };
-  const { error } = s.id ? await supabase.from("cs_settings").update(row).eq("id", s.id) : await supabase.from("cs_settings").insert(row);
+  const pc = Object.fromEntries(Object.entries(s.priority_cadence ?? {}).map(([k, v]) => [k, Math.max(1, Math.round(Number(v) || 1))]));
+  const row: any = { default_cadence_days: Math.max(1, Math.round(s.default_cadence_days)), auto_tasks: s.auto_tasks, priority_cadence: pc, updated_at: new Date().toISOString() };
+  let { error } = s.id ? await supabase.from("cs_settings").update(row).eq("id", s.id) : await supabase.from("cs_settings").insert(row);
+  if (error && /priority_cadence/i.test(error.message)) {   // before 88_cs_followups.sql
+    delete row.priority_cadence;
+    ({ error } = s.id ? await supabase.from("cs_settings").update(row).eq("id", s.id) : await supabase.from("cs_settings").insert(row));
+  }
   return csErr(error);
+}
+/** How often a client should hear from us: its own cadence, else its priority's, else the default. */
+export const cadenceOf = (cs: CsData | null, clientId: string) =>
+  cs?.cadence[clientId] ?? (cs?.priority[clientId] ? cs.settings.priority_cadence[cs.priority[clientId]] : undefined) ?? cs?.settings.default_cadence_days ?? 30;
+export async function setClientPriority(clientId: string, p: CsPriority | null): Promise<string | null> {
+  const { error } = await supabase.from("clients").update({ cs_priority: p }).eq("id", clientId);
+  return error ? (/cs_priority/i.test(error.message) ? NEEDS_AUTO : error.message) : null;
+}
+
+/* ---------- automatic e-mail follow-ups (88_cs_followups.sql) ---------- */
+export const NEEDS_AUTO = "Automatic e-mails need 88_cs_followups.sql in Supabase.";
+export interface CsAttachment {
+  path: string; name: string; size: number; type: string;
+  /** filled in for each client when it goes out: "text" (HTML, TXT… with {{fields}} in it) or "pdf" */
+  kind?: "pdf" | "text" | "other";
+  /** a PDF's form fields → the field that fills each ("" leaves it as it is) */
+  fields?: Record<string, string>;
+  /** {{fields}} written in a PDF's text: where each one is (points, from the bottom left of its page) */
+  spots?: CsSpot[];
+  /** the {{fields}} found in the file */
+  tags?: string[];
+}
+/** where a {{field}} is written in a PDF: the line of text it is in (its start, width and text) and its place in it */
+export interface CsSpot { page: number; x: number; y: number; w: number; size: number; key: string; text?: string; at?: number; len?: number }
+const TEXT_EXT = /\.(html?|txt|csv|md|xml|json|svg)$/i;
+/** Plain names a PDF form field may have for a field of ours (client, nombre_cliente, Company…). */
+const FIELD_ALIAS: [RegExp, string][] = [
+  [/^(client|clientname|cliente|nombrecliente|company|companyname|empresa|nombreempresa|customer|account)$/, "client"],
+  [/^(legalname|razonsocial|legal)$/, "legal_name"],
+  [/^(firstname|nombre|name|contactfirstname)$/, "first_name"],
+  [/^(contactname|fullname|contact|contacto|nombrecompleto)$/, "contact_name"],
+  [/^(owner|ownername|sender|sendername|comercial|consultor)$/, "owner_name"],
+  [/^(owneremail|senderemail)$/, "owner_email"],
+  [/^(renewaldate|renewal|fecharenovacion|renovacion)$/, "renewal_date"],
+  [/^(today|date|fecha|hoy)$/, "today"],
+  [/^(year|ano|anio)$/, "year"],
+];
+const fieldFor = (name: string): string => {
+  const raw = String(name ?? "").toLowerCase();
+  const tag = /\{\{\s*([a-z_]+)\s*\}\}/.exec(raw)?.[1];
+  if (tag && CS_TAGS.some((t) => t.key === tag)) return tag;
+  const n = raw.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z]/g, "");
+  if (CS_TAGS.some((t) => t.key.replace(/_/g, "") === n)) return CS_TAGS.find((t) => t.key.replace(/_/g, "") === n)!.key;
+  return FIELD_ALIAS.find(([re]) => re.test(n))?.[1] ?? "";
+};
+/** What in a file can be filled in for each client: {{fields}} in a text file, a PDF's form fields and the {{fields}} written in it. */
+export async function inspectCsFile(f: Blob, name: string, type: string): Promise<Pick<CsAttachment, "kind" | "fields" | "spots" | "tags">> {
+  const isPdf = /pdf/i.test(type) || /\.pdf$/i.test(name);
+  const isText = !isPdf && (/^text\//i.test(type) || TEXT_EXT.test(name));
+  const found = (txt: string) => [...new Set([...txt.matchAll(/\{\{\s*([a-z_]+)\s*\}\}/gi)].map((m) => m[1].toLowerCase()))];
+  try {
+    if (isText) return { kind: "text", tags: found(await f.text()) };
+    if (!isPdf) return { kind: "other" };
+    const pdfjs: any = await import("pdfjs-dist");
+    if (!pdfjs.GlobalWorkerOptions.workerSrc) {
+      const w: any = await import("pdfjs-dist/build/pdf.worker.min.mjs?url");
+      pdfjs.GlobalWorkerOptions.workerSrc = w.default ?? w;
+    }
+    const doc = await pdfjs.getDocument({ data: new Uint8Array(await f.arrayBuffer()), isEvalSupported: false }).promise;
+    const fields: Record<string, string> = {};
+    try {
+      const objs = (await doc.getFieldObjects()) ?? {};
+      Object.entries(objs).forEach(([nm, xs]: [string, any]) => { if ((xs as any[]).some((o) => o?.type === "text" || o?.type === "textfield" || o?.fieldType === "Tx" || !o?.type)) fields[nm] = fieldFor(nm); });
+    } catch { /* no form */ }
+    const spots: CsSpot[] = [];
+    for (let p = 1; p <= Math.min(doc.numPages, 30); p++) {
+      const page = await doc.getPage(p);
+      const tc = await page.getTextContent();
+      for (const it of tc.items as any[]) {
+        const str = String(it.str ?? "");
+        if (!str.includes("{{")) continue;
+        const [, , c, d, e, fy] = it.transform as number[];
+        const size = Math.hypot(c, d) || Number(it.height) || 10;
+        for (const m of str.matchAll(/\{\{\s*([a-z_]+)\s*\}\}/gi)) {
+          const k = m[1].toLowerCase();
+          if (!CS_TAGS.some((t) => t.key === k)) continue;
+          spots.push({ page: p - 1, x: e, y: fy, w: Number(it.width) || 0, size, key: k, text: str, at: m.index ?? 0, len: m[0].length });
+        }
+      }
+    }
+    try { await doc.destroy(); } catch { /* ignore */ }
+    return { kind: "pdf", fields, spots, tags: [...new Set([...Object.values(fields).filter(Boolean), ...spots.map((x) => x.key)])] };
+  } catch {
+    return { kind: isPdf ? "pdf" : "other" };
+  }
+}
+/** The file as one client gets it (fields filled in), to open and check. */
+export async function previewCsAttachment(a: CsAttachment, clientId: string | null): Promise<{ blob: Blob | null; name?: string; error?: string }> {
+  const { data, error } = await supabase.functions.invoke("outlook-sync", { body: { action: "cs_attachment_preview", attachment: a, clientId } });
+  if (error) {
+    let msg = error.message;
+    try { const j = await (error as any).context?.json?.(); if (j?.error) msg = j.error; } catch { /* keep the message */ }
+    return { blob: null, error: /unknown action/i.test(msg) ? "The e-mail sender needs updating (outlook-sync)." : msg };
+  }
+  const bin = atob(String((data as any)?.contentBytes ?? ""));
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return { blob: new Blob([bytes], { type: (data as any)?.contentType || a.type || "application/octet-stream" }), name: (data as any)?.name };
+}
+export interface CsDesign { accent?: string; brand?: string; title?: string; button_label?: string; button_url?: string; signoff?: string; footer?: string }
+export interface CsTemplate { id: string; name: string; subject: string; body_html: string; html: string; design: CsDesign; attachments: CsAttachment[]; variants?: CsVariant[]; created_by?: string | null; created_at?: string; updated_at?: string }
+/** Another version of a blueprint (its own subject and text, same look and files) for the clients it names. */
+export interface CsVariant { id: string; name: string; subject: string; body_html: string; html: string; audience: CsVariantAudience }
+export interface CsVariantAudience { clients?: string[]; owners?: string[]; priorities?: string[]; health?: string[] }
+/** Does a version apply to a client? Picked clients, else every rule set must hold (a version with no rule applies to nobody). */
+export function csVariantFits(a: CsVariantAudience | undefined, c: { id: string; owners: string[]; priority: string | null; health: string | null }): boolean {
+  const x = a ?? {};
+  if (x.clients?.length) return x.clients.includes(c.id);
+  const rules = [x.owners, x.priorities, x.health].filter((r) => r?.length);
+  if (!rules.length) return false;
+  if (x.owners?.length && !c.owners.some((o) => x.owners!.includes(o))) return false;
+  if (x.priorities?.length && !x.priorities.includes(c.priority ?? "none")) return false;
+  if (x.health?.length && !x.health.includes(c.health ?? "none")) return false;
+  return true;
+}
+/** The version of a blueprint a client gets (null: the main one). */
+export function csVariantFor(t: Pick<CsTemplate, "variants"> | null | undefined, c: { id: string; owners: string[]; priority: string | null; health: string | null }): CsVariant | null {
+  return (t?.variants ?? []).find((v) => csVariantFits(v.audience, c)) ?? null;
+}
+export interface CsStep { id: string; template_id: string; wait_days: number }
+export interface CsAudience { priorities?: string[]; types?: string[]; health?: string[]; clients?: string[]; exclude?: string[] }
+export interface CsSequence {
+  id: string; name: string; active: boolean; audience: CsAudience; steps: CsStep[];
+  start_mode: "now" | "before_renewal"; start_days: number; repeat: boolean;
+  recipients: "main" | "all" | "billing"; sender: "owner" | "me"; log_contact: boolean;
+  created_by?: string | null; created_at?: string;
+}
+export interface CsRun { id: string; sequence_id: string; client_id: string; step: number; status: "active" | "paused" | "done" | "excluded"; next_at: string | null; cycle: number; last_sent_at: string | null; to_emails: string[] | null; manual: boolean }
+export interface CsMailLog { id: string; sequence_id: string | null; run_id: string | null; client_id: string | null; template_id: string | null; step: number | null; to_emails: string[] | null; subject: string | null; status: "sent" | "failed" | "skipped" | "test"; error: string | null; sent_by: string | null; sent_at: string }
+export interface CsAuto { ready: boolean; templates: CsTemplate[]; sequences: CsSequence[]; runs: CsRun[]; log: CsMailLog[] }
+
+export async function loadCsAuto(): Promise<CsAuto> {
+  const [t, s, r, l] = await Promise.all([
+    supabase.from("cs_email_templates").select("*").order("created_at"),
+    supabase.from("cs_sequences").select("*").order("created_at"),
+    supabase.from("cs_sequence_runs").select("*"),
+    supabase.from("cs_email_log").select("*").order("sent_at", { ascending: false }).limit(300),
+  ]);
+  if (t.error) return { ready: false, templates: [], sequences: [], runs: [], log: [] };
+  return {
+    ready: true,
+    templates: ((t.data ?? []) as any[]).map((x) => ({ ...x, design: x.design ?? {}, attachments: Array.isArray(x.attachments) ? x.attachments : [] })),
+    sequences: ((s.data ?? []) as any[]).map((x) => ({ ...x, audience: x.audience ?? {}, steps: Array.isArray(x.steps) ? x.steps : [] })),
+    runs: (r.data ?? []) as CsRun[],
+    log: (l.data ?? []) as CsMailLog[],
+  };
+}
+export async function saveCsTemplate(t: Partial<CsTemplate>): Promise<{ row: CsTemplate | null; error: string | null }> {
+  const row: Record<string, unknown> = { name: t.name?.trim() || "Untitled e-mail", subject: t.subject ?? "", body_html: t.body_html ?? "", html: t.html ?? "", design: t.design ?? {}, attachments: t.attachments ?? [], variants: t.variants ?? [], updated_at: new Date().toISOString() };
+  const go = () => (t.id ? supabase.from("cs_email_templates").update(row).eq("id", t.id).select("*").single() : supabase.from("cs_email_templates").insert(row).select("*").single());
+  let res = await go();
+  if (res.error && /variants/i.test(res.error.message)) {   // before 90_cs_blueprint_versions.sql
+    if ((t.variants ?? []).length) return { row: null, error: "Run 90_cs_blueprint_versions.sql to keep versions." };
+    delete row.variants; res = await go();
+  }
+  return { row: (res.data as any) ?? null, error: res.error ? (csMissing(res.error) ? NEEDS_AUTO : res.error.message) : null };
+}
+export async function deleteCsTemplate(id: string): Promise<string | null> {
+  const { error } = await supabase.from("cs_email_templates").delete().eq("id", id);
+  return error?.message ?? null;
+}
+export async function saveCsSequence(q: Partial<CsSequence>): Promise<{ row: CsSequence | null; error: string | null }> {
+  const row = {
+    name: q.name?.trim() || "Untitled follow-up", active: !!q.active, audience: q.audience ?? {}, steps: q.steps ?? [],
+    start_mode: q.start_mode ?? "now", start_days: Math.max(0, Math.round(Number(q.start_days) || 0)), repeat: !!q.repeat,
+    recipients: q.recipients ?? "main", sender: q.sender ?? "owner", log_contact: q.log_contact !== false, updated_at: new Date().toISOString(),
+  };
+  const res = q.id ? await supabase.from("cs_sequences").update(row).eq("id", q.id).select("*").single() : await supabase.from("cs_sequences").insert(row).select("*").single();
+  return { row: (res.data as any) ?? null, error: res.error ? (csMissing(res.error) ? NEEDS_AUTO : res.error.message) : null };
+}
+export async function deleteCsSequence(id: string): Promise<string | null> {
+  const { error } = await supabase.from("cs_sequences").delete().eq("id", id);
+  return error?.message ?? null;
+}
+/** One client in one sequence: pause, resume, leave out, put in by hand, its own recipients, send it now. */
+export async function setCsRun(sequenceId: string, clientId: string, patch: Partial<CsRun>): Promise<{ row: CsRun | null; error: string | null }> {
+  const { data: cur } = await supabase.from("cs_sequence_runs").select("*").eq("sequence_id", sequenceId).eq("client_id", clientId).maybeSingle();
+  const res = cur
+    ? await supabase.from("cs_sequence_runs").update(patch).eq("id", (cur as any).id).select("*").single()
+    : await supabase.from("cs_sequence_runs").insert({ sequence_id: sequenceId, client_id: clientId, step: 0, status: "active", next_at: new Date().toISOString(), ...patch }).select("*").single();
+  return { row: (res.data as any) ?? null, error: res.error?.message ?? null };
+}
+/** The company's folder in the attachments bucket. */
+async function csTenantId(): Promise<string | null> {
+  const { data: auth } = await supabase.auth.getUser();
+  if (!auth.user) return null;
+  const { data } = await supabase.from("profiles").select("tenant_id").eq("id", auth.user.id).maybeSingle();
+  return (data as any)?.tenant_id ?? null;
+}
+export async function uploadCsFile(f: File): Promise<{ file: CsAttachment | null; error: string | null }> {
+  if (f.size > 3_000_000) return { file: null, error: `${f.name} is over 3 MB — e-mails can't carry it.` };
+  const tenant = await csTenantId();
+  if (!tenant) return { file: null, error: "No company to file it under." };
+  const path = `${tenant}/${Date.now().toString(36)}-${f.name.replace(/[^\w.\- ]+/g, "_")}`;
+  const { error } = await supabase.storage.from("cs-files").upload(path, f, { contentType: f.type || undefined });
+  if (error) return { file: null, error: /bucket|not found/i.test(error.message) ? NEEDS_AUTO : error.message };
+  const info = await inspectCsFile(f, f.name, f.type || "");
+  return { file: { path, name: f.name, size: f.size, type: f.type || "application/octet-stream", ...info }, error: null };
+}
+export async function removeCsFile(path: string) { await supabase.storage.from("cs-files").remove([path]); }
+/** Sends what is due now (your company) — the same as the hourly run. */
+export async function runCsSequences(): Promise<{ sent?: number; enrolled?: number; failed?: number; skipped?: number; error?: string }> {
+  const { data, error } = await supabase.functions.invoke("outlook-sync", { body: { action: "cs_run" } });
+  if (error) return { error: error.message };
+  return (data ?? {}) as any;
+}
+/** A blueprint filled in for a client, to your own inbox. */
+export async function testCsTemplate(templateId: string, clientId: string | null): Promise<{ to?: string; error?: string }> {
+  const { data, error } = await supabase.functions.invoke("outlook-sync", { body: { action: "cs_test", templateId, clientId } });
+  if (error) {
+    let msg = error.message;
+    try { const j = await (error as any).context?.json?.(); if (j?.error) msg = j.error; } catch { /* the plain message */ }
+    return { error: msg };
+  }
+  return (data ?? {}) as any;
+}
+
+/* ---------- the e-mail itself: a styled, table-based layout every mail client shows the same ---------- */
+export const CS_TAGS: { key: string; label: string; sample: string }[] = [
+  { key: "first_name", label: "Contact's first name", sample: "Laura" },
+  { key: "contact_name", label: "Contact's full name", sample: "Laura Gil" },
+  { key: "client", label: "Client", sample: "Acme Iberia" },
+  { key: "legal_name", label: "Legal name", sample: "Acme Iberia, S.L." },
+  { key: "owner_name", label: "Sender's name", sample: "Inder Boedhoe" },
+  { key: "owner_first_name", label: "Sender's first name", sample: "Inder" },
+  { key: "owner_email", label: "Sender's e-mail", sample: "inder@company.com" },
+  { key: "renewal_date", label: "Next renewal date", sample: "15 March 2027" },
+  { key: "days_to_renewal", label: "Days to renewal", sample: "120" },
+  { key: "today", label: "Today", sample: "1 November 2026" },
+  { key: "year", label: "This year", sample: "2026" },
+];
+const escH = (s: unknown) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
+/** Fills {{tags}} (values escaped in HTML). */
+export const fillCsTags = (text: string, vars: Record<string, string>, html: boolean) =>
+  String(text ?? "").replace(/\{\{\s*([a-z_]+)\s*\}\}/gi, (_, k) => { const v = vars[String(k).toLowerCase()] ?? ""; return html ? escH(v).replace(/\n/g, "<br>") : v; });
+/** Keeps the body to plain formatting (no scripts, styles or event handlers). */
+export const cleanCsBody = (h: string) => String(h ?? "")
+  .replace(/<(script|style|iframe|object|embed)[\s\S]*?<\/\1>/gi, "")
+  .replace(/\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+  .replace(/javascript:/gi, "");
+export function renderCsEmail(t: { body_html: string; design: CsDesign }): string {
+  const d = t.design ?? {};
+  const accent = /^#[0-9a-f]{3,8}$/i.test(d.accent ?? "") ? d.accent! : "#0a6f4d";
+  const font = "font-family:'Segoe UI',Helvetica,Arial,sans-serif";
+  const btn = d.button_label && d.button_url
+    ? `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:22px 0 4px"><tr><td style="background:${accent};border-radius:10px"><a href="${escH(d.button_url)}" style="display:inline-block;padding:13px 24px;${font};font-size:15px;font-weight:700;color:#ffffff;text-decoration:none;border-radius:10px">${escH(d.button_label)}</a></td></tr></table>`
+    : "";
+  const sign = d.signoff ? `<p style="margin:22px 0 0;${font};font-size:15px;line-height:1.6;color:#1d2b25">${escH(d.signoff).replace(/\n/g, "<br>")}</p>` : "";
+  const head = d.title || d.brand
+    ? `<tr><td style="background:${accent};padding:30px 36px 28px">${d.brand ? `<div style="${font};font-size:12px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#ffffff;opacity:.82">${escH(d.brand)}</div>` : ""}${d.title ? `<div style="${font};font-size:25px;line-height:1.25;font-weight:800;color:#ffffff;margin-top:${d.brand ? 8 : 0}px">${escH(d.title)}</div>` : ""}</td></tr>`
+    : `<tr><td style="background:${accent};height:6px;line-height:6px;font-size:0">&nbsp;</td></tr>`;
+  const foot = d.footer ? `<tr><td style="padding:16px 36px 20px;background:#f6f9f7;border-top:1px solid #e6eeea;${font};font-size:12px;line-height:1.5;color:#7b8a84">${escH(d.footer).replace(/\n/g, "<br>")}</td></tr>` : "";
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;padding:0;background:#eef3f0">`
+    + `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef3f0"><tr><td align="center" style="padding:30px 12px">`
+    + `<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:100%;max-width:600px;background:#ffffff;border-radius:18px;overflow:hidden;border:1px solid #e1e9e5">`
+    + head
+    + `<tr><td style="padding:30px 36px 32px;${font};font-size:15px;line-height:1.65;color:#1d2b25">${cleanCsBody(t.body_html)}${btn}${sign}</td></tr>`
+    + foot
+    + `</table></td></tr></table></body></html>`;
 }
 export async function setClientCadence(clientId: string, days: number | null): Promise<string | null> {
   const { error } = await supabase.from("clients").update({ contact_cadence_days: days && days > 0 ? Math.round(days) : null }).eq("id", clientId);
@@ -659,11 +933,29 @@ export async function setClientCadence(clientId: string, days: number | null): P
 }
 
 /** Logs a contact with a client (the same log the client popup keeps). */
-export async function logClientContact(clientId: string, l: { channel: string; reason?: string | null; who?: string | null }): Promise<string | null> {
+export async function logClientContact(clientId: string, l: { channel: string; reason?: string | null; who?: string | null; direction?: "in" | "out" }): Promise<string | null> {
   const { data: auth } = await supabase.auth.getUser();
-  const row = { client_id: clientId, contacted_at: new Date().toISOString(), channel: l.channel, contact_name: l.who?.trim() || null, reason: l.reason?.trim() || null, logged_by: auth.user?.id ?? null };
-  const { error } = await supabase.from("client_contacts_log").insert(row);
+  const row: Record<string, unknown> = { client_id: clientId, contacted_at: new Date().toISOString(), channel: l.channel, contact_name: l.who?.trim() || null, reason: l.reason?.trim() || null, logged_by: auth.user?.id ?? null, direction: l.direction ?? "out" };
+  let { error } = await supabase.from("client_contacts_log").insert(row);
+  if (error && /direction/i.test(error.message)) { delete row.direction; ({ error } = await supabase.from("client_contacts_log").insert(row)); }   // before 89_contact_direction.sql
   return error?.message ?? null;
+}
+
+/* ---------- contacts read from Outlook (89_contact_direction.sql) ---------- */
+export interface CsMailSync { user_id: string; read_after: string | null; scanned: number; logged: number; done_backfill: boolean; last_run_at: string | null; last_error: string | null }
+export async function loadCsMailSync(): Promise<CsMailSync[]> {
+  const { data, error } = await supabase.from("cs_mail_sync").select("*");
+  return error ? [] : ((data ?? []) as CsMailSync[]);
+}
+/** Reads the company's Outlook mailboxes once (as far as it gets in about 45 seconds). */
+export async function scanCsMail(): Promise<{ scanned: number; logged: number; more: boolean; mailboxes: number; errors: string[]; read?: string[]; unread?: string[]; team?: boolean; error?: string }> {
+  const { data, error } = await supabase.functions.invoke("outlook-sync", { body: { action: "cs_mail_scan" } });
+  if (error) {
+    let msg = error.message;
+    try { const j = await (error as any).context?.json?.(); if (j?.error) msg = j.error; } catch { /* keep the message */ }
+    return { scanned: 0, logged: 0, more: false, mailboxes: 0, errors: [], error: msg };
+  }
+  return { scanned: 0, logged: 0, more: false, mailboxes: 0, errors: [], ...(data ?? {}) };
 }
 
 /** A follow-up for a client, as a ticket on someone's desk (falls back to the client's own tasks before 14_tickets.sql). */

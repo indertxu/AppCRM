@@ -931,6 +931,10 @@ export const FN_LABEL: Record<CrmFn, string> = { count: "Count", sum: "Sum", avg
  */
 export function aggregateCrm(opts: {
   rows: any[]; dim: string; fn: CrmFn; value?: string | null; split?: string | null; fieldByKey: Map<string, Field>; cumulative?: boolean; limit?: number;
+  /** How the bars are ordered: auto (a list's own order, else biggest first), biggest / smallest first, or A → Z. Time always runs in order. */
+  order?: "auto" | "high" | "low" | "az";
+  /** Past the limit, the rest add up as "Other" (default); false: they are left out (a "top 10"). */
+  other?: boolean;
 }): Agg {
   const { rows, dim, fn, value, split, fieldByKey } = opts;
   const tm = /^time:(week|month|quarter|year):(.+)$/.exec(dim);
@@ -962,9 +966,19 @@ export function aggregateCrm(opts: {
   if (tm) keys.sort();
   else {
     const known = dimF?.options;
-    keys.sort((a, b) => { if (a === "—") return 1; if (b === "—") return -1; if (known?.length) { const ia = known.indexOf(a), ib = known.indexOf(b); if (ia >= 0 && ib >= 0) return ia - ib; } return total(b) - total(a); });
+    const order = opts.order ?? "auto";
+    const tot = new Map(keys.map((k) => [k, total(k)]));
+    keys.sort((a, b) => {
+      if (a === "—") return 1; if (b === "—") return -1;
+      if (order === "high") return tot.get(b)! - tot.get(a)!;
+      if (order === "low") return tot.get(a)! - tot.get(b)!;
+      if (order === "az") return a.localeCompare(b, undefined, { numeric: true });
+      if (known?.length) { const ia = known.indexOf(a), ib = known.indexOf(b); if (ia >= 0 && ib >= 0) return ia - ib; }
+      return tot.get(b)! - tot.get(a)!;
+    });
     const limit = opts.limit ?? 14;
-    if (keys.length > limit) {
+    if (keys.length > limit && opts.other === false) keys = keys.filter((k) => k !== "—").slice(0, limit);
+    else if (keys.length > limit) {
       const keep = keys.slice(0, limit - 1), rest = keys.slice(limit - 1);
       const other = new Map<string, any[]>();
       rest.forEach((k) => buckets.get(k)!.forEach((rs, s) => { if (!other.has(s)) other.set(s, []); other.get(s)!.push(...rs); }));

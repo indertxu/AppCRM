@@ -1,16 +1,91 @@
-import { useEffect, useRef, useState } from "react";
-import { Outlet } from "react-router-dom";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Outlet, useLocation } from "react-router-dom";
 import Dock from "./Dock";
-import { supabase } from "../api/supabase";
+import { supabase, usageMeter } from "../api/supabase";
+import { getActAs } from "./SuperAdmin";
 import { useAuth } from "../api/AuthProvider";
 import { DOCK_LABELS_KEY, DOCK_LABELS_EVENT } from "../pages/settings/SettingsPage";
 import { PageAccessProvider, NAV_RESET_EVENT } from "./pageAccess";
 import "./AppLayout.css";
 
+/**
+ * Page meter (for the superadmin's usage & cost panel): one row per page visit in
+ * platform_page_visits — the page, the seconds you were actually using it (tab in
+ * front and some input in the last 2 minutes), and the requests / bytes it moved.
+ * Written when you leave the page, hide the tab, or every 10 minutes on a long stay.
+ * Not while a superadmin is acting as someone.
+ */
+const METER_TICK = 5;
+const METER_IDLE_MS = 2 * 60 * 1000;
+const METER_FLUSH_MS = 10 * 60 * 1000;
+function usePageMeter(uid: string | null, token: string | null) {
+  const { pathname } = useLocation();
+  const page = (pathname.split("/")[1] || "home").toLowerCase();
+  const tok = useRef(token);
+  tok.current = token;
+  const who = useRef(uid);
+  who.current = uid;
+  const st = useRef({ page: "", started: 0, active: 0, req0: 0, bytes0: 0, lastInput: Date.now(), lastFlush: Date.now() });
+
+  const flush = useRef((beacon: boolean) => {
+    const s = st.current;
+    const uidNow = who.current;
+    if (!uidNow || !s.page) return;
+    const row = {
+      user_id: uidNow, page: s.page, started_at: new Date(s.started).toISOString(),
+      active_seconds: Math.min(Math.round(s.active), 86400),
+      requests: Math.max(0, usageMeter.requests - s.req0), bytes: Math.max(0, usageMeter.bytes - s.bytes0),
+    };
+    s.started = Date.now(); s.active = 0; s.req0 = usageMeter.requests; s.bytes0 = usageMeter.bytes; s.lastFlush = Date.now();
+    if (row.active_seconds < 2 && row.requests === 0) return;
+    if (getActAs()) return;
+    if (beacon && tok.current) {
+      try {
+        void fetch(`${import.meta.env.VITE_SUPABASE_URL}/rest/v1/platform_page_visits`, {
+          method: "POST", keepalive: true, body: JSON.stringify(row),
+          headers: { apikey: import.meta.env.VITE_SUPABASE_ANON_KEY as string, Authorization: `Bearer ${tok.current}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+        }).catch(() => { /* ignore */ });
+      } catch { /* ignore */ }
+      return;
+    }
+    void supabase.from("platform_page_visits").insert(row).then(() => { /* ignore */ }, () => { /* ignore */ });
+  });
+
+  // a new page: close the last one first (layout effect: before the new page's own requests start)
+  useLayoutEffect(() => {
+    flush.current(false);
+    const s = st.current;
+    s.page = page; s.started = Date.now(); s.active = 0; s.req0 = usageMeter.requests; s.bytes0 = usageMeter.bytes;
+  }, [page]);
+
+  useEffect(() => {
+    const onInput = () => { st.current.lastInput = Date.now(); };
+    const evs = ["pointerdown", "pointermove", "keydown", "wheel", "touchstart"] as const;
+    evs.forEach((e) => window.addEventListener(e, onInput, { passive: true }));
+    const tick = window.setInterval(() => {
+      const s = st.current;
+      if (document.visibilityState === "visible" && Date.now() - s.lastInput < METER_IDLE_MS) s.active += METER_TICK;
+      if (Date.now() - s.lastFlush > METER_FLUSH_MS) flush.current(false);
+    }, METER_TICK * 1000);
+    const onVis = () => { if (document.visibilityState === "hidden") flush.current(true); else st.current.lastInput = Date.now(); };
+    const onHide = () => flush.current(true);
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("pagehide", onHide);
+    return () => {
+      evs.forEach((e) => window.removeEventListener(e, onInput));
+      window.clearInterval(tick);
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("pagehide", onHide);
+      flush.current(false);
+    };
+  }, []);
+}
+
 /** The app: a fixed sidebar rail on the left, always there, and the page to its right. */
 export default function AppLayout() {
   const { session } = useAuth();
   const uid = session?.user?.id ?? null;
+  usePageMeter(uid, session?.access_token ?? null);
 
   // "Always show menu labels" (Settings › Interface): a slightly wider rail with names under the icons.
   // localStorage is a fast cache to avoid a flash; the profile is the source of truth.

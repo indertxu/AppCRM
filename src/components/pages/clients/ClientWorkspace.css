@@ -1307,3 +1307,21 @@
 .cw-tk-st { flex: none; font-size: 11.5px; font-weight: 700; padding: 4px 10px; border-radius: 999px; background: color-mix(in srgb, var(--c) 12%, #fff); color: var(--c); }
 .cw-tk-go { flex: none; color: var(--muted); opacity: 0.6; transform: rotate(-90deg); display: grid; }
 @media (max-width: 720px) { .cw-tk-h { flex-wrap: wrap; } .cw-tk-pri { display: none; } }
+
+/* contacts both ways: they reached us (in, blue) / we reached them (out, green) */
+.cw-dirpick { display: inline-flex; gap: 4px; padding: 3px; border-radius: 12px; background: #fff; box-shadow: inset 0 0 0 1px var(--line); align-self: flex-start; }
+.cw-dirpick button { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border: 0; border-radius: 9px; background: transparent; color: var(--muted); font-size: 12.5px; font-weight: 600; cursor: pointer; transition: background 0.18s, color 0.18s; white-space: nowrap; }
+.cw-dirpick button:hover { color: var(--ink); background: var(--soft); }
+.cw-dirpick button.is-on { background: #0a6f4d; color: #fff; }
+.cw-dirpick button.is-on.is-in { background: #2f6fd6; }
+.cw-tl-dot { position: relative; }
+.cw-tl-dir { position: absolute; right: -3px; bottom: -3px; display: grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; font-style: normal; color: #fff; box-shadow: 0 0 0 2px #fff; }
+.cw-tl-dir.is-in { background: #2f6fd6; }
+.cw-tl-dir.is-out { background: #0a6f4d; }
+.cw-pulse-dir { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; padding: 2px 8px 2px 6px; border-radius: 999px; font-size: 11.5px; font-weight: 650; vertical-align: 1px; }
+.cw-pulse-dir.is-in { background: #e9f1ff; color: #2f6fd6; }
+.cw-pulse-dir.is-out { background: #e3f4ec; color: #0a6f4d; }
+.cw-tl-who { display: flex; flex-direction: column; gap: 1px; line-height: 1.25; }
+.cw-tl-us { font-size: 11.5px; font-weight: 500; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cw-pulse-us { color: var(--muted); }
+.cw-pulse-us b { color: var(--ink2); font-weight: 600; }

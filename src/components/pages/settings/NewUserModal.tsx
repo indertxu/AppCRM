@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import DatePicker from "../../framework/DatePicker";
 import "./SettingsPage.css";
 import Select from "../../framework/Select";
+import { passwordProblem, PASSWORD_HINT } from "../../login/LoginPage";
 export const LEVELS = [
   { id: "consultant", label: "Consultant" },
   { id: "consultancy_manager", label: "Consultancy manager" },
@@ -70,7 +71,7 @@ const [birthday, setBirthday] = useState("");
   }, [onClose]);
 
   const canSave =
-    first.trim() && email.trim() && username.trim() && password.length >= 6;
+    first.trim() && email.trim() && username.trim() && !passwordProblem(password);
 
   const submit = async () => {
     if (!canSave || busy) return;
@@ -114,7 +115,7 @@ role: "",
             <div className="cl-field"><label>Phone</label><input className="cl-input" value={phone} onChange={(e) => setPhone(e.target.value)} /></div>
             <div className="cl-field"><label>Email</label><input type="email" className="cl-input" value={email} onChange={(e) => setEmail(e.target.value)} /></div>
             <div className="cl-field"><label>Username</label><input className="cl-input" value={username} onChange={(e) => setUsername(e.target.value)} /></div>
-            <div className="cl-field"><label>Password (min 6)</label><input type="text" className="cl-input" value={password} onChange={(e) => setPassword(e.target.value)} /></div>
+            <div className="cl-field"><label>Password</label><input type="text" className="cl-input" value={password} title={PASSWORD_HINT} placeholder="e.g. Next-2026!" onChange={(e) => setPassword(e.target.value)} />{password && passwordProblem(password) && <small className="su-error" style={{ margin: "4px 0 0", fontSize: 11.5 }}>{passwordProblem(password)}</small>}</div>
             <div className="cl-field"><label>Yearly wage</label><input type="number" min="0" className="cl-input" value={wage} onChange={(e) => setWage(Number(e.target.value) || 0)} /></div>
             <div className="cl-field"><label>Start date</label><DatePicker value={startDate} onChange={setStartDate} /></div>
         <div className="cl-field"><label>Birthday</label><DatePicker value={birthday} onChange={setBirthday} /></div>

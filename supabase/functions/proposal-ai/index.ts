@@ -10,6 +10,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
    Returns { email | posts, model } — writes campaign e-mails and social posts.
    Only text goes to the model (no pictures, no files).
    Secrets: ANTHROPIC_API_KEY (required), PROPOSAL_AI_MODEL (optional).
+   Every call's tokens are written to platform_ai_usage (the superadmin cost panel).
    ===================================================================== */
 
 const URL = Deno.env.get("SUPABASE_URL")!;
@@ -21,6 +22,17 @@ const cors = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, content-type, apikey, x-client-info",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+/** tokens spent by one request (every attempt counts: retries are paid too) */
+interface Spend { model: string; input: number; output: number }
+const spend = (meter: Spend[], out: any, model: string) => {
+  const u = out?.usage;
+  if (!u) return;
+  meter.push({
+    model: String(out?.model ?? model),
+    input: (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0),
+    output: u.output_tokens ?? 0,
+  });
 };
 const json = (o: unknown, status = 200) =>
   new Response(JSON.stringify(o), { status, headers: { ...cors, "Content-Type": "application/json" } });
@@ -142,7 +154,7 @@ const EXTRACT_TOOL = {
   },
 };
 
-async function extractContract(text: string, model: string): Promise<{ fields: unknown; model: string }> {
+async function extractContract(text: string, model: string, meter: Spend[]): Promise<{ fields: unknown; model: string }> {
   const body = text.length > 60000 ? text.slice(0, 60000) + "\n…(truncated)" : text;
   const content = `This is the text of a signed contract / order form (columns separated by spaces). The supplier is the company selling the software subscription; the customer is the other party.
 Return only what is written. Amounts as plain numbers. Dates as YYYY-MM-DD.
@@ -161,6 +173,7 @@ ${body}`;
       continue;
     }
     const out = await r.json().catch(() => null);
+    spend(meter, out, model);
     if (!r.ok) throw new Error(out?.error?.message ?? `Anthropic API ${r.status}`);
     const use = (out?.content ?? []).find((c: any) => c.type === "tool_use" && c.name === EXTRACT_TOOL.name);
     if (use?.input && typeof use.input === "object") return { fields: use.input, model: out?.model ?? model };
@@ -169,7 +182,7 @@ ${body}`;
   throw new Error(last || "The model did not answer.");
 }
 
-async function callModel(b: Body, model: string): Promise<{ plan: unknown; model: string }> {
+async function callModel(b: Body, model: string, meter: Spend[]): Promise<{ plan: unknown; model: string }> {
   let last = "";
   for (let attempt = 0; attempt < 4; attempt++) {
     const r = await fetch("https://api.anthropic.com/v1/messages", {
@@ -188,6 +201,7 @@ async function callModel(b: Body, model: string): Promise<{ plan: unknown; model
       continue;
     }
     const out = await r.json().catch(() => null);
+    spend(meter, out, model);
     if (!r.ok) throw new Error(out?.error?.message ?? `Anthropic API ${r.status}`);
     const use = (out?.content ?? []).find((c: any) => c.type === "tool_use" && c.name === TOOL.name);
     let plan = use?.input;
@@ -250,7 +264,7 @@ const MK_POSTS_TOOL = {
   },
 };
 const LIMITS: Record<string, string> = { linkedin: "LinkedIn (max 3000 chars, best 600-1300, line breaks, 3-5 hashtags)", instagram: "Instagram (max 2200 chars, hook in first line, emojis ok, up to 10 hashtags at the end)", facebook: "Facebook (best under 500 chars)", x: "X / Twitter (max 270 chars, 1-2 hashtags)", tiktok: "TikTok caption (max 2200, short)", threads: "Threads (max 500 chars)", youtube: "YouTube community post", other: "Other network" };
-async function marketingWrite(b: MkBody, model: string): Promise<unknown> {
+async function marketingWrite(b: MkBody, model: string, meter: Spend[]): Promise<unknown> {
   const lang = b.lang === "en" ? "English" : b.lang === "ca" ? "Catalan" : "Spanish (Spain)";
   const isEmail = b.kind !== "posts";
   const nets = (b.networks ?? []).filter((n) => LIMITS[n]);
@@ -289,6 +303,7 @@ ${String(b.brief ?? "").slice(0, 6000)}`;
       continue;
     }
     const out = await r.json().catch(() => null);
+    spend(meter, out, model);
     if (!r.ok) throw new Error(out?.error?.message ?? `Anthropic API ${r.status}`);
     const use = (out?.content ?? []).find((c: any) => c.type === "tool_use" && c.name === tool.name);
     if (use?.input && typeof use.input === "object") return isEmail ? { email: use.input, model: out?.model ?? model } : { posts: (use.input as any).posts ?? [], model: out?.model ?? model };
@@ -300,27 +315,42 @@ ${String(b.brief ?? "").slice(0, 6000)}`;
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return json({ error: "POST only" }, 405);
+  const meter: Spend[] = [];
+  let feature = "proposal_template";
+  let asUser: any = null;
+  let uid = "";
   try {
-    const asUser = createClient(URL, ANON, { global: { headers: { Authorization: req.headers.get("Authorization") ?? "" } } });
+    asUser = createClient(URL, ANON, { global: { headers: { Authorization: req.headers.get("Authorization") ?? "" } } });
     const { data: u } = await asUser.auth.getUser();
     if (!u?.user) return json({ error: "Unauthorized" }, 401);
+    uid = u.user.id;
     if (!KEY) return json({ error: "no_key", message: "Set the ANTHROPIC_API_KEY secret to use AI suggestions." }, 501);
     const b = (await req.json()) as Body;
     const model0 = (typeof b.model === "string" && /^claude-[\w.-]+$/.test(b.model)) ? b.model : DEFAULT_MODEL;
     if (b.action === "marketing_write") {
+      feature = "marketing_write";
       const mb = b as unknown as MkBody;
       if (!String(mb.brief ?? "").trim() && !String(mb.current ?? "").trim()) return json({ error: "Write a short brief first." }, 400);
-      return json(await marketingWrite(mb, model0));
+      return json(await marketingWrite(mb, model0, meter));
     }
     if (b.action === "extract_contract") {
+      feature = "contract_extract";
       if (typeof b.text !== "string" || !b.text.trim()) return json({ error: "No text to read." }, 400);
-      return json(await extractContract(b.text, model0));
+      return json(await extractContract(b.text, model0, meter));
     }
     if (!Array.isArray(b.items) || !b.items.length) return json({ error: "No texts to read." }, 400);
-    const model = (typeof b.model === "string" && /^claude-[\w.-]+$/.test(b.model)) ? b.model : DEFAULT_MODEL;
-    const r = await callModel(b, model);
+    const r = await callModel(b, model0, meter);
     return json(r);
   } catch (e) {
     return json({ error: String((e as Error)?.message ?? e) }, 502);
+  } finally {
+    // book what was spent to this user (and their company), even when the answer failed
+    if (asUser && uid && meter.length) {
+      try {
+        await asUser.from("platform_ai_usage").insert(meter.map((m) => ({
+          user_id: uid, feature, model: m.model, input_tokens: m.input, output_tokens: m.output,
+        })));
+      } catch { /* never let metering break the answer */ }
+    }
   }
 });

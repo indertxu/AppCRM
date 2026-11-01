@@ -744,6 +744,37 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   const [me, setMe] = useState<{ id: string; role: string; is_superadmin: boolean } | null>(() => snap0?.me ?? null);
   const [phaseByPipe, setPhaseByPipe] = useState<Record<string, Phase[]>>(() => snap0?.phaseByPipe ?? {});
   const [openId, setOpenId] = useState<string | null>(null);
+  /**
+   * Opening a deal: its page is laid out off screen (still, its entrance held) while it reads what it
+   * shows, and comes in once, filled — not an empty sheet followed by a second wave. Meanwhile the list
+   * stays where it was; it stays mounted (just hidden) under the deal, so Back finds it where you left it.
+   */
+  const [dealLive, setDealLive] = useState(false);
+  const [dealReady, setDealReady] = useState<string | null>(null);
+  const listScroll = useRef<{ els: [Element, number, number][]; box: { left: number; width: number }; anchor: { id: string; top: number } | null } | null>(null);
+  const openDeal = useCallback((id: string) => {
+    const root = fhRef.current;
+    if (root) {
+      const els: [Element, number, number][] = [];
+      root.querySelectorAll("*").forEach((el) => { if (el.scrollTop > 0 || el.scrollLeft > 0) els.push([el, el.scrollTop, el.scrollLeft]); });
+      const r = root.getBoundingClientRect();
+      // the list's first row on screen: Back puts that same row at the same height, even if rows were redrawn
+      let anchor: { id: string; top: number } | null = null;
+      const list = listRef.current;
+      if (list && list.offsetParent) {
+        const sc = scrollerOf(list);
+        const top0 = (sc ? sc.getBoundingClientRect().top : 0) + 50;
+        for (const el of Array.from(list.querySelectorAll<HTMLElement>(":scope > .dz-row"))) {
+          const b = el.getBoundingClientRect();
+          if (b.bottom > top0 && el.dataset.id) { anchor = { id: el.dataset.id, top: b.top }; break; }
+        }
+      }
+      listScroll.current = { els, box: { left: r.left, width: r.width }, anchor };
+    }
+    setDealLive(false); setDealReady(null);
+    setOpenId(id);
+  }, []);
+  const closeDeal = useCallback(() => { setOpenId(null); setDealLive(false); setDealReady(null); }, []);
   const secSection = useSecuritySection("sales");
 
   /** Arriving from the sales calendar with ?tracking=… opens that deal. */
@@ -751,7 +782,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   useEffect(() => {
     const q = new URLSearchParams(routeLoc.search || window.location.search);
     const id = q.get("tracking");
-    if (id) setOpenId(id);
+    if (id) openDeal(id);
     // …and from a company or a contact panel with ?new=1, a new deal with them already picked
     if (q.get("new") === "1") {
       const co = q.get("company"), ct = q.get("contact");
@@ -1536,7 +1567,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
       sub={<>Set up <b>{trackTitle(wonAsk)}</b> now with its legal details, contacts and the products signed. Signing dates start on the day it was won. The handoff to management stays for later.</>}
       ghost="Later" primary="Create client"
       onGhost={() => setWonAsk(null)} onClose={() => setWonAsk(null)}
-      onPrimary={() => { setClientFor(wonAsk.id); setOpenId(wonAsk.id); setWonAsk(null); }} />
+      onPrimary={() => { setClientFor(wonAsk.id); openDeal(wonAsk.id); setWonAsk(null); }} />
   );
 
   const confirmHandover = async () => {
@@ -1667,6 +1698,53 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
       .catch(() => { if (!off) setDealCtx({ id: openId, companies: [], contacts: [] }); });
     return () => { off = true; };
   }, [lean, openId, trackings]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The deal comes in when its page has read what it shows (and, lean, its company and people are here);
+  // a slow read doesn't hold it back for long — after 1.6 s it comes in and fills in.
+  const dealAt = useRef<{ id: string; at: number } | null>(null);
+  useEffect(() => {
+    if (!openId || dealLive) return;
+    if (dealAt.current?.id !== openId) dealAt.current = { id: openId, at: performance.now() };
+    if (dealReady === openId && (!lean || dealCtx?.id === openId)) { setDealLive(true); return; }
+    const t = window.setTimeout(() => setDealLive(true), Math.max(0, 1600 - (performance.now() - dealAt.current.at)));
+    return () => window.clearTimeout(t);
+  }, [openId, dealLive, dealReady, lean, dealCtx]);
+  // the deal starts at its top
+  useLayoutEffect(() => { if (dealLive) { try { window.scrollTo(0, 0); } catch { /* */ } } }, [dealLive]);
+  const anchorFix = useRef<{ id: string; top: number; until: number } | null>(null);
+  const fitAnchor = () => {
+    const a = anchorFix.current;
+    const list = listRef.current;
+    const sc = list ? scrollerOf(list) : null;
+    if (!a || !list || !sc) return;
+    const el = list.querySelector<HTMLElement>(`:scope > .dz-row[data-id="${CSS.escape(a.id)}"]`);
+    if (el) { const d = el.getBoundingClientRect().top - a.top; if (Math.abs(d) > 1) sc.scrollTop += d; return; }
+    const i = shown.findIndex((t) => t.id === a.id);
+    if (i < 0) return;
+    const scTop = sc.getBoundingClientRect().top;
+    sc.scrollTop = list.getBoundingClientRect().top - scTop + sc.scrollTop + i * rowH - (a.top - scTop);
+  };
+  // every redraw while the list settles after Back, before it paints (no jump on screen)
+  useLayoutEffect(() => { if (anchorFix.current && !openId && performance.now() < anchorFix.current.until) fitAnchor(); });
+  // Back: the list is shown again exactly where it was (each scrolled box: rows, board, columns)
+  useLayoutEffect(() => {
+    if (openId) return;
+    const snap = listScroll.current;
+    if (!snap) return;
+    listScroll.current = null;
+    snap.els.forEach(([el, top, left]) => { if (el.isConnected) { el.scrollTop = top; el.scrollLeft = left; } });
+    // the list: its anchor row back at the same height, and kept there while the list settles (the window
+    // redraws, the refresh after Back re-measures the rows) — until you scroll yourself
+    if (!snap.anchor) return;
+    anchorFix.current = { ...snap.anchor, until: performance.now() + 1800 };
+    fitAnchor();
+    let raf = 0;
+    const evs = ["wheel", "touchstart", "keydown", "pointerdown"];
+    const stop = () => { anchorFix.current = null; cancelAnimationFrame(raf); evs.forEach((e) => window.removeEventListener(e, stop, true)); };
+    evs.forEach((e) => window.addEventListener(e, stop, { capture: true, passive: true }));
+    const again = () => { if (!anchorFix.current || performance.now() > anchorFix.current.until) { stop(); return; } fitAnchor(); raf = requestAnimationFrame(again); };
+    raf = requestAnimationFrame(again);
+    return stop;
+  }, [openId]); // eslint-disable-line react-hooks/exhaustive-deps
   // lean: the export needs the full directories — read when it opens
   useEffect(() => {
     if (!lean || fullDirs || !exporting) return;
@@ -1832,18 +1910,24 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
     },
   ];
 
+  // The opened deal (see dealLive): built here, shown over the list in the page's return below.
+  let dealView: ReactNode = null;
+  let dealShown = false;
   if (openId) {
     const t = mine.find((x) => x.id === openId);
     const frozen = t ? frozenById.get(t.id) : undefined;
-    // lean: the deal opens at once (its own entrance is the loading); its full company and people
-    // arrive a moment later and fill in. Only the client form (just won) waits for them, as it prefills from them.
+    // lean: the deal's full company and people are read when it opens; it comes in once they are here
+    // (and its own reads are done). The client form (just won) waits for them behind a cover, as it prefills from them.
     const ctxReady = !lean || dealCtx?.id === openId;
     const dCos = lean && dealCtx ? mergeById(companies, dealCtx.companies) : companies;
     const dCts = lean && dealCtx ? mergeById(contacts, dealCtx.contacts) : contacts;
-    if (t && !ctxReady && clientFor === t.id) return <PageCover show label="Opening the deal…" />;
-    if (t && frozen) return <HandedOverView tracking={t} handover={frozen} companies={dCos} contacts={dCts} employees={employees} trackingFields={trackingFields} onBack={() => { setOpenId(null); reloadSoon(); }} />;
-    if (t) return <TrackingDetail tracking={t} companies={dCos} contacts={dCts} products={products} employees={employees} trackingFields={trackingFields} salesRoles={salesRoles}
-      startWithClient={clientFor === t.id} onBack={() => { setOpenId(null); setClientFor(null); reloadSoon(); }} />;
+    if (t && !ctxReady && clientFor === t.id) { dealView = <PageCover show label="Opening the deal…" />; dealShown = true; }
+    else if (t && frozen) { dealView = <HandedOverView key={t.id} tracking={t} handover={frozen} companies={dCos} contacts={dCts} employees={employees} trackingFields={trackingFields} onBack={() => { closeDeal(); reloadSoon(); }} />; dealShown = true; }
+    else if (t) {
+      dealShown = dealLive || clientFor === t.id;
+      dealView = <TrackingDetail key={t.id} tracking={t} companies={dCos} contacts={dCts} products={products} employees={employees} trackingFields={trackingFields} salesRoles={salesRoles}
+        startWithClient={clientFor === t.id} onReady={() => setDealReady(t.id)} onBack={() => { closeDeal(); setClientFor(null); reloadSoon(); }} />;
+    }
   }
 
 
@@ -1907,7 +1991,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
     return "";
   };
 
-  rowApi.current = { open: (id) => setOpenId(id), toggle: (id, range) => bulk.toggle(id, range), cell: plainCell };
+  rowApi.current = { open: openDeal, toggle: (id, range) => bulk.toggle(id, range), cell: plainCell };
 
   const exportModal = exporting && (lean && !fullDirs ? <PageCover show label="Getting the deals ready to export…" /> :
     <ExportModal
@@ -2014,7 +2098,9 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   }
 
   return (
-    <div className="sl sl-ov fh" ref={fhRef} onPointerMove={soPointer} onPointerLeave={fhLeave}>
+    <>
+    <div className="sl sl-ov fh" ref={fhRef} onPointerMove={soPointer} onPointerLeave={fhLeave} style={dealShown ? { display: "none" } : undefined}
+      aria-busy={!!dealView && !dealShown || undefined}>
       <header className="sl-head">
         <h1 className="sl-title">Deals</h1>
         <div className="so-hsearch">
@@ -2130,7 +2216,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
               phaseName={phaseName}
               ownerName={(t) => (trackOwners[t.id] ? employeeById.get(trackOwners[t.id])?.name ?? null : null)}
               productName={(t) => productName(t.product_id)}
-              onOpen={(id) => setOpenId(id)}
+              onOpen={openDeal}
             />
           </div>
         ) : view === "kanban" ? (
@@ -2142,7 +2228,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
             trackTitle={trackTitle}
             companyName={companyName}
             companyWebsite={(id) => (id ? companyById.get(id)?.website ?? null : null)}
-            onOpen={(id) => setOpenId(id)}
+            onOpen={openDeal}
             onMove={(id, phaseId, phs) => {
               // dragging one of several ticked cards moves all of them
               if (bulk.has(id) && bulk.ids.length > 1) { const a = bulkActions.find((x) => x.key === "phase"); void a?.run(phaseId); return; }
@@ -2241,14 +2327,22 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
           level={createLevel === "none" ? "self" : createLevel}
           roles={salesRoles} phaseByPipe={phaseByPipe}
           onClose={() => { setCreating(false); setNewPreset(undefined); }}
-          onCreated={async (id) => { setCreating(false); setNewPreset(undefined); await reload(); setOpenId(id); }}
+          onCreated={async (id) => { setCreating(false); setNewPreset(undefined); await reload(); openDeal(id); }}
         />
       )}
       {handoverModal}
       {wonAskModal}
       {importModal}
       <PageCover show={!ready && !coverGaveUp} label="Loading deals…" />
+      {dealView && !dealShown && <div className="so-opening" aria-hidden="true"><i /></div>}
     </div>
+    {dealView && (
+      <div className={`sl-dstage ${dealShown ? "" : "is-pending"}`}
+        style={dealShown ? undefined : { left: listScroll.current?.box.left ?? 0, width: listScroll.current?.box.width ?? "100%" }}>
+        {dealView}
+      </div>
+    )}
+    </>
   );
 }
 
@@ -2314,6 +2408,7 @@ const TrackingRow = memo(function TrackingRow({ tracking, title, company, websit
     <button
       type="button"
       className={`dz-row is-${tracking.status} prob-${probTone} ${selected ? "is-sel" : ""} ${selecting ? "is-selecting" : ""}`}
+      data-id={tracking.id}
       style={{ ["--pct-n" as string]: Math.max(0, Math.min(1, pct / 100)) } as CSSProperties}
       // While picking, a click picks; shift-click picks a run of rows.
       onClick={(e) => { if (onToggle && (selecting || e.shiftKey || e.metaKey || e.ctrlKey)) onToggle(id, e.shiftKey); else onOpen(id); }}
