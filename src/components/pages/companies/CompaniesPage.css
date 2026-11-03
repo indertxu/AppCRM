@@ -1673,3 +1673,42 @@ button.co-cc-main { padding: 0; border: 0; background: none; font: inherit; text
 @media (max-width: 1100px) { :is(.co-head, .ct-head) :is(.co-kpi, .ct-kpi) { display: none; } :is(.co-head, .ct-head) .am-btn { margin-left: auto; } }
 @media (prefers-reduced-motion: reduce) { :is(.co-head, .ct-head), :is(.co-head, .ct-head)::after, :is(.co-head, .ct-head) :is(.co-title, .ct-title) { animation: none; } }
 .co-scroll, .ct-scroll { overscroll-behavior: contain; }
+
+/* ---- a company's contacts: the same card as on a deal (phone written out, call, e-mail, LinkedIn) ---- */
+.co-cc-list:has(.co-ppl) { gap: 6px; }
+.co-ppl {
+  position: relative; display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: flex-start; gap: 12px;
+  padding: 10px 10px 10px 10px; border-radius: 14px; background: #f5f8f6; border: 1px solid transparent;
+  animation: co-ppl-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) backwards; animation-delay: calc(var(--i, 0) * 40ms);
+  transition: background 0.18s, border-color 0.18s, box-shadow 0.2s;
+}
+@keyframes co-ppl-in { from { opacity: 0; transform: translateY(6px); } }
+.co-ppl:hover { background: #fff; border-color: rgba(18, 181, 127, 0.3); box-shadow: 0 10px 22px -18px rgba(10, 111, 77, 0.6); }
+.co-ppl-av {
+  display: grid; place-items: center; width: 38px; height: 38px; padding: 0; border: 0; border-radius: 12px; cursor: pointer;
+  background: linear-gradient(150deg, #c9f2dd, #7fd9b4); color: #0b3a2b; font: 800 12.5px "Inter", system-ui, sans-serif; transition: transform 0.2s;
+}
+.co-ppl-av:hover { transform: scale(1.06); }
+.co-ppl-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.co-ppl-name {
+  display: flex; align-items: center; gap: 6px; max-width: 100%; padding: 0; border: 0; background: none; cursor: pointer; text-align: left;
+  font: inherit; font-size: 13.5px; font-weight: 650; color: var(--ink, #0b241a); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.co-ppl-name:hover { color: var(--forest, #0a6f4d); text-decoration: underline; text-underline-offset: 3px; }
+.co-ppl-name em { flex-shrink: 0; font-style: normal; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 999px; background: rgba(224, 164, 60, 0.15); color: #8a5a10; }
+.co-ppl-main small { font-size: 12px; color: var(--muted, #5a7d6d); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.co-ppl-main small.co-ppl-none { margin-top: 4px; font-style: italic; color: #93a69d; }
+.co-ppl-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 7px; }
+.co-ppl-act {
+  display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 8px; text-decoration: none; white-space: nowrap;
+  background: #fff; border: 1px solid rgba(10, 111, 77, 0.12); color: var(--forest, #0a6f4d); font-size: 12px; font-weight: 650; font-variant-numeric: tabular-nums;
+  transition: background 0.15s, border-color 0.15s, transform 0.15s;
+}
+.co-ppl-act.is-icon { width: 26px; padding: 0; justify-content: center; }
+.co-ppl-act.is-li { color: #0a66c2; }
+.co-ppl-act:hover { background: #effaf4; border-color: rgba(18, 181, 127, 0.45); transform: translateY(-1px); }
+.co-ppl .co-ppl-x { display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 9px; background: none; color: #9fb5ab; font-size: 17px; cursor: pointer; opacity: 0; transition: opacity 0.15s, background 0.15s, color 0.15s; }
+.co-ppl:hover .co-ppl-x, .co-ppl .co-ppl-x:focus-visible { opacity: 1; }
+.co-ppl .cx-ask { align-self: center; }
+@media (hover: none) { .co-ppl .co-ppl-x { opacity: 1; } }
+.co-ppl .co-ppl-x:hover { background: rgba(214, 69, 69, 0.1); color: #c24040; }

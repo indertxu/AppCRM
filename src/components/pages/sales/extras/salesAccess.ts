@@ -143,8 +143,10 @@ export function builtInDefault(job: string | null | undefined, inSalesRole: bool
   const j = (job ?? "").toLowerCase();
   const lead = LEADS.has(j), salesy = isSalesyJob(j) || inSalesRole, config = CONFIG.has(j);
   return {
-    scope: lead || inSalesRole ? "all" : "own",
-    views: { list: salesy, board: salesy, forecast: salesy },
+    // who may open Sales at all is set in Settings › Who sees what (the page's own gate): whoever it lets in
+    // can look at the deals. Sales people see their own by default; anyone else let in (marketing…) sees them all.
+    scope: lead || inSalesRole || !salesy ? "all" : "own",
+    views: { list: true, board: true, forecast: true },
     create: lead ? "anyone" : salesy ? "team" : "none",
     reports: salesy,
     export: lead ? "all" : salesy ? "visible" : "none",

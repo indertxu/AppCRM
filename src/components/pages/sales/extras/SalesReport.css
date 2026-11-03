@@ -937,3 +937,109 @@
 .rp-left.is-grp { display: inline-block; margin: 6px 0 0 4px; }
 .rp-nothing.is-inline { margin-top: 12px; padding: 14px 16px; border-radius: 13px; background: #fff7f4; border: 1px solid #f6d6cc; }
 @media (max-width: 1100px) { .rp-rule { grid-template-columns: minmax(140px, 1fr) minmax(110px, 0.8fr) minmax(140px, 1.2fr) 96px 28px; } }
+
+/* =====================================================================
+   One page: toolbar · open panel · filter chips · figures · charts · table
+   ===================================================================== */
+.rp-canvas { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.rp-tools {
+  position: sticky; top: 64px; z-index: 2; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 6px;
+  border-radius: 18px; background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(10px); border: 1px solid var(--line);
+  box-shadow: 0 10px 30px -26px rgba(4, 30, 20, 0.6);
+}
+.rp-tb {
+  --c: var(--forest);
+  display: inline-flex; align-items: center; gap: 9px; min-width: 0; height: 46px; padding: 0 12px 0 6px; border: 1px solid transparent; border-radius: 13px;
+  background: none; cursor: pointer; text-align: left; font: inherit; color: var(--ink); transition: background 0.15s, border-color 0.15s;
+}
+.rp-tb:hover { background: var(--field); }
+.rp-tb.is-on { background: #fff; border-color: color-mix(in srgb, var(--c) 40%, transparent); box-shadow: 0 8px 20px -14px rgba(4, 30, 20, 0.5); }
+.rp-tb > svg { width: 13px; height: 13px; color: var(--mute2); transition: transform 0.25s var(--ease); }
+.rp-tb.is-on > svg { transform: rotate(180deg); color: var(--c); }
+.rp-tb-ico { flex: none; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: color-mix(in srgb, var(--c) 12%, #fff); color: var(--c); }
+.rp-tb-ico svg { width: 17px; height: 17px; }
+.rp-tb-t { display: flex; flex-direction: column; min-width: 0; line-height: 1.15; }
+.rp-tb-t em { font-style: normal; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mute2); }
+.rp-tb-t b { font-size: 13.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px; }
+.rp-tb.has-n .rp-tb-t b { color: var(--forest); }
+.rp-tb-sep { flex: 1 1 auto; }
+.rp-tb-sel { display: inline-flex; align-items: center; gap: 7px; height: 46px; padding: 0 4px 0 8px; font-size: 12px; font-weight: 650; color: var(--mute); }
+.rp-tb-sel > span { white-space: nowrap; }
+.rp-tb-sel .smf { min-width: 150px; max-width: 220px; }
+.rp-tb-dir { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink2); font: 600 12px "Inter", sans-serif; cursor: pointer; white-space: nowrap; }
+.rp-tb-dir svg { width: 13px; height: 13px; }
+.rp-tb-chk { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 12px 0 8px; border-radius: 10px; font-size: 12.5px; font-weight: 650; color: var(--ink2); cursor: pointer; }
+.rp-tb-chk:hover { background: var(--field); }
+.rp-tb-chk input { width: 15px; height: 15px; accent-color: var(--forest); }
+
+/* the open panel: right under the toolbar, the report keeps showing below */
+.rp-panel {
+  position: relative; border-radius: 20px; background: #fff; border: 1px solid color-mix(in srgb, var(--forest) 22%, transparent);
+  box-shadow: 0 30px 60px -40px rgba(4, 30, 20, 0.55); animation: rp-panel-in 0.28s var(--ease);
+}
+@keyframes rp-panel-in { from { opacity: 0; transform: translateY(-6px); } }
+.rp-panel > .rp-card { border: 0; background: none; padding: 20px 22px 22px; }
+.rp-panel > .rp-card h3 { padding-right: 44px; }
+.rp-panel-x { position: absolute; top: 14px; right: 14px; z-index: 1; }
+.rp-panel.is-cols .rp-catalog-b { max-height: min(420px, 50vh); overflow-y: auto; scrollbar-width: thin; }
+
+/* filters as chips, always in sight */
+.rp-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 34px; }
+.rp-chips-k { font-size: 11px; font-weight: 750; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mute2); margin-right: 2px; }
+.rp-fchip { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; height: 32px; padding: 0 4px 0 2px; border-radius: 999px; background: #fff; border: 1px solid color-mix(in srgb, var(--forest) 25%, transparent); font-size: 12.5px; }
+.rp-fchip > button:first-child { min-width: 0; max-width: 420px; padding: 0 6px 0 10px; border: 0; background: none; font: 650 12.5px "Inter", sans-serif; color: var(--ink); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rp-fchip > em { flex: none; padding: 2px 7px; border-radius: 999px; background: var(--field); color: var(--ink2); font-size: 11px; font-weight: 700; font-style: normal; font-variant-numeric: tabular-nums; }
+.rp-fchip > em.is-zero { background: #fde9e4; color: #c43d25; }
+.rp-fchip-x { flex: none; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--mute2); cursor: pointer; }
+.rp-fchip-x svg { width: 11px; height: 11px; }
+.rp-fchip-x:hover { background: #fde9e4; color: #c43d25; }
+.rp-fchip.is-add { gap: 6px; padding: 0 12px; border-style: dashed; color: var(--forest); font: 700 12.5px "Inter", sans-serif; cursor: pointer; background: transparent; }
+.rp-fchip.is-add svg { width: 12px; height: 12px; }
+.rp-fchip.is-add:hover { background: #effaf4; }
+.rp-chips-clear { margin-left: 4px; font-size: 12px; }
+
+/* the table's own header line */
+.rp-card.is-table { padding: 0; overflow: hidden; }
+.rp-thead { display: flex; align-items: center; gap: 10px; padding: 12px 14px 12px 18px; border-bottom: 1px solid var(--line); }
+.rp-thead b { font-size: 14px; font-weight: 750; }
+.rp-thead em { flex: 1 1 auto; font-style: normal; font-size: 12.5px; color: var(--mute); }
+.rp-btn.is-sm { height: 32px; padding: 0 11px; font-size: 12.5px; border-radius: 9px; }
+.rp-card.is-table .rp-twrap { border-radius: 0; }
+.rp-table th { position: sticky; }
+.rp-table th { white-space: nowrap; }
+.rp-table th > button:first-child { padding-right: 26px; }
+.rp-th-x {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%); display: grid; place-items: center; width: 20px; height: 20px; padding: 0 !important;
+  border: 0; border-radius: 6px; background: none !important; color: var(--mute2) !important; cursor: pointer; opacity: 0; transition: opacity 0.15s;
+}
+.rp-th-x svg { width: 10px !important; height: 10px !important; }
+.rp-table th:hover .rp-th-x, .rp-th-x:focus-visible { opacity: 1; }
+.rp-th-x:hover { background: #fde9e4 !important; color: #c43d25 !important; }
+
+/* share */
+.rp-share { display: inline-flex; align-items: center; gap: 6px; height: 38px; padding: 0 12px; border: 1px solid var(--line); border-radius: 11px; background: #fff; color: var(--ink2); font: 650 12.5px "Inter", sans-serif; cursor: pointer; white-space: nowrap; }
+.rp-share svg { width: 15px; height: 15px; }
+.rp-share.is-on { background: #e7f6ee; border-color: rgba(18, 181, 127, 0.4); color: #0a6f4d; }
+
+/* charts on the page: their tools show when you point at them */
+.rp-canvas .rp-chart.is-edit:not(.is-open) .rp-chart-tools, .rp-canvas .rp-chart.is-edit:not(.is-open) > .rp-chart-h > .rp-grip { opacity: 0; transition: opacity 0.15s; }
+.rp-canvas .rp-chart.is-edit:hover .rp-chart-tools, .rp-canvas .rp-chart.is-edit:hover > .rp-chart-h > .rp-grip, .rp-canvas .rp-chart.is-edit:focus-within .rp-chart-tools { opacity: 1; }
+.rp-canvas .rp-kpis.is-edit .rp-kpi:not(:hover) .rp-kpi-x, .rp-canvas .rp-kpis.is-edit .rp-kpi:not(:hover) .rp-grip { opacity: 0; }
+@media (max-width: 1360px) { .rp-tb-t b { max-width: 150px; } .rp-tb-sel .smf { min-width: 130px; } }
+@media (max-width: 1180px) { .rp-tb-sep { display: none; } }
+/* the toolbar scrolls with the page; how the table reads (group, sort, totals) sits on the table */
+.rp-tools { position: relative; top: auto; }
+.rp-thead { flex-wrap: wrap; row-gap: 8px; }
+.rp-thead em { flex: 1 1 auto; min-width: 80px; }
+.rp-thead-ctl { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.rp-thead-ctl .rp-tb-sel { height: 36px; padding: 0 2px 0 6px; }
+.rp-thead-ctl .rp-tb-sel .smf { min-width: 140px; max-width: 200px; }
+.rp-thead-ctl .rp-tb-dir { height: 32px; }
+/* a figure never wraps its unit: it gets smaller with its card */
+.rp-canvas .rp-kpi { container-type: inline-size; }
+.rp-canvas .rp-kpi:not(.is-add) b { white-space: nowrap; font-size: clamp(18px, 14cqi, 26px); overflow: hidden; text-overflow: ellipsis; }
+/* a chart's title has the whole line; its tools float over it when you point at the chart */
+.rp-canvas .rp-chart.is-edit:not(.is-open) .rp-chart-h { position: relative; }
+.rp-canvas .rp-chart.is-edit:not(.is-open) .rp-chart-tools {
+  position: absolute; top: -4px; right: -4px; z-index: 2; padding: 3px; border-radius: 11px; background: #fff; box-shadow: 0 8px 20px -10px rgba(4, 30, 20, 0.45), 0 0 0 1px var(--line);
+}

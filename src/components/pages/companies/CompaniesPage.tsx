@@ -51,6 +51,17 @@ const CO_BLOCK = 100;
 /** What the database sends with each company row (51_companies_server.sql). */
 const coSrv = (c: Company) => c as Company & { __types?: string[]; __status?: string[]; __pipes?: string[]; __parentName?: string | null; __kids?: number; __count?: number; __assignees?: string[] };
 
+/* the little icons of a contact's card (phone, landline, e-mail, LinkedIn) */
+const PPL_ICO = {
+  phone: "M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z",
+  landline: "M3 10.5C3 7 7 4.5 12 4.5S21 7 21 10.5v1.2a1.3 1.3 0 0 1-1.3 1.3h-2.4a1.3 1.3 0 0 1-1.3-1.3V10c-1-.6-2.5-1-4-1s-3 .4-4 1v1.7A1.3 1.3 0 0 1 6.7 13H4.3A1.3 1.3 0 0 1 3 11.7zM7 15h10l1.5 4.5H5.5z",
+  mail: "M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM22 6l-10 7L2 6",
+  linkedin: "M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-4 0v7h-4v-7a6 6 0 0 1 6-6zM2 9h4v12H2zM4 6a2 2 0 1 0 0-4 2 2 0 0 0 0 4z",
+};
+const PplIco = ({ d, fill = false }: { d: string; fill?: boolean }) => (
+  <svg viewBox="0 0 24 24" width={13} height={13} fill={fill ? "currentColor" : "none"} stroke={fill ? "none" : "currentColor"} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>
+);
+
 export default function CompaniesPage() {
   const navigate = useNavigate();
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -638,16 +649,7 @@ export default function CompaniesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [shown, renderN, open, bulk.sel, rowGrid, dataKey, showContacts, rel, counts, coName, kids, peopleOf, employees, fields, server, peopleCache]);
 
-  if (me && !isSalesLead(me) && me.role !== "sales") {
-    return (
-      <div className="co">
-        <header className="co-head">
-          <h1 className="co-title">Companies</h1>
-        </header>
-        <p className="cl-hint">This page is only available to the sales team.</p>
-      </div>
-    );
-  }
+  // who may open this page is set in Settings › Who sees what (the route checks it): no second, hard-coded gate here
 
   return (
     <div className="co">
@@ -1469,17 +1471,30 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
               )}
 
               <div className="co-cc-list">
-                {linked.map((ct) => (
-                  <div className="co-cc-row is-link" key={ct.id}>
-                    <span className="co-cc-avatar">{(ct.first_name?.[0] ?? "?").toUpperCase()}</span>
-                    <button type="button" className="co-cc-main" title="Open this contact"
-                      onClick={() => leaveFor(() => onOpenContact(ct.id!))}>
-                      <span className="co-cc-name">{contactName(ct)}<span className="co-cc-go"><DwIcon name="arrow" /></span></span>
-                      <span className="co-cc-meta">{[ct.position, ct.email].filter(Boolean).join(" · ") || "—"}</span>
-                    </button>
-                    <ConfirmX className="co-cc-x" label="Unlink contact" question="Unlink?" onConfirm={() => detachExisting(ct.id!)} />
-                  </div>
-                ))}
+                {linked.map((ct, i) => {
+                  // the same card as on a deal: the phone written out, one tap to call, e-mail (your mail app: Outlook) and LinkedIn
+                  const open = () => leaveFor(() => onOpenContact(ct.id!));
+                  const ini = contactName(ct).split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "?";
+                  const tel = (n?: string | null) => `tel:${String(n ?? "").replace(/[^\d+]/g, "")}`;
+                  return (
+                    <div className="co-ppl" key={ct.id} style={{ ["--i" as string]: Math.min(i, 10) } as React.CSSProperties}>
+                      <button type="button" className="co-ppl-av" onClick={open} title="Open this contact">{ini}</button>
+                      <span className="co-ppl-main">
+                        <button type="button" className="co-ppl-name" onClick={open} title="Open this contact">{contactName(ct)}{ct.is_billing && <em>Billing</em>}</button>
+                        {ct.position && <small>{ct.position}</small>}
+                        {(ct.phone || ct.landline || ct.email || ct.linkedin) ? (
+                          <span className="co-ppl-acts">
+                            {ct.phone && <a className="co-ppl-act" href={tel(ct.phone)} title={`Call ${phoneText(ct.phone, ct.phone_ext)}`}><PplIco d={PPL_ICO.phone} />{phoneText(ct.phone, ct.phone_ext)}</a>}
+                            {ct.landline && <a className="co-ppl-act" href={tel(ct.landline)} title={`Call the landline ${phoneText(ct.landline, ct.landline_ext)}`}><PplIco d={PPL_ICO.landline} />{phoneText(ct.landline, ct.landline_ext)}</a>}
+                            {ct.email && <a className="co-ppl-act is-icon" href={`mailto:${ct.email}`} title={`E-mail ${ct.email} (opens Outlook)`} aria-label={`E-mail ${ct.email}`}><PplIco d={PPL_ICO.mail} /></a>}
+                            {ct.linkedin && <a className="co-ppl-act is-icon is-li" href={ct.linkedin} target="_blank" rel="noreferrer" title="LinkedIn" aria-label="LinkedIn"><PplIco d={PPL_ICO.linkedin} fill /></a>}
+                          </span>
+                        ) : <small className="co-ppl-none">No phone or e-mail yet</small>}
+                      </span>
+                      <ConfirmX className="co-ppl-x" label="Unlink contact" question="Unlink?" onConfirm={() => detachExisting(ct.id!)} />
+                    </div>
+                  );
+                })}
                 {newContacts.map((ct, i) => (
                   <div className="co-cc-row" key={`new-${i}`}>
                     <span className="co-cc-avatar co-cc-avatar-new">{(ct.first_name?.[0] ?? "+").toUpperCase()}</span>

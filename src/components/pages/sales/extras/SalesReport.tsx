@@ -16,8 +16,8 @@ import "./SalesReport.css";
 /* =====================================================================
    Reports — its own page. Any part of the CRM, every field (fixed, custom
    and computed), rules nested as deep as you like, and charts on any field.
-   Built step by step: what it's about · which ones · what it shows · how it
-   adds up · save.
+   One page: a toolbar (what each row is, filters, columns, charts, group,
+   sort, totals) and the report right under it, changing as you go.
    ===================================================================== */
 
 /** A chart's width on the report: a third, a half, or the whole width. */
@@ -53,6 +53,7 @@ const DEFAULT_COLS: Record<EntityKey, string[]> = {
   contact: ["contact.name", "contact.email", "contact.position", "company.name"],
   client: ["client.name", "client.projects", "client.projects_value", "client.recurring", "client.next_renewal"],
   project: ["project.name", "client.name", "project.type", "project.status_label", "project.value"],
+  agreement: ["agreement.deal", "agreement.customer", "agreement.signed", "agreement.start", "agreement.end", "agreement.total", "agreement.per_year"],
   contract: ["client.name", "contract.product", "contract.kind", "contract.annual_now", "contract.value", "contract.end"],
   invoice: ["client.name", "invoice.period", "invoice.net", "invoice.amount", "invoice.status_label", "invoice.due_date", "invoice.days_late"],
   ticket: ["ticket.title", "ticket.what", "client.name", "ticket.stage_label", "ticket.priority_label", "ticket.assignee", "ticket.created_at"],
@@ -70,6 +71,8 @@ const TEMPLATES: { title: string; hint: string; make: () => CrmReport }[] = [
   { title: "Recurring by client", hint: "What each client bills a year today", make: () => ({ ...newReport("client"), name: "Recurring by client",
     filter: { id: uid(), match: "all", items: [rule("client.recurring", "gt", { a: "0" })] },
     sort: { key: "client.recurring", dir: "desc" }, charts: [{ id: uid(), title: "Top clients by recurring", type: "hbar", dim: "client.name", fn: "sum", value: "client.recurring", split: null }] }) },
+  { title: "Signed contracts", hint: "Every signed contract: dates, term, value — by year signed", make: () => ({ ...newReport("agreement"), name: "Signed contracts",
+    sort: { key: "agreement.signed", dir: "desc" }, charts: [{ id: uid(), title: "Contract value by year signed", type: "bar", dim: "time:year:agreement.signed", fn: "sum", value: "agreement.total", split: null }, { id: uid(), title: "Contracts by product", type: "donut", dim: "agreement.products", fn: "count", value: null, split: null }] }) },
   { title: "Contracts ending soon", hint: "Signed products ending in the next 90 days", make: () => ({ ...newReport("contract"), name: "Contracts ending in 90 days",
     filter: { id: uid(), match: "all", items: [rule("contract.end", "in_period", { a: "next_90" })] },
     sort: { key: "contract.end", dir: "asc" }, charts: [{ id: uid(), title: "Yearly value ending, by month", type: "bar", dim: "time:month:contract.end", fn: "sum", value: "contract.annual_now", split: null }] }) },
@@ -101,14 +104,6 @@ function fromSaved(c: any, name: string): CrmReport {
   return r;
 }
 
-const STEPS = [
-  { k: "data", t: "What it's about", s: "Pick the part of the CRM" },
-  { k: "filter", t: "Which ones", s: "Rules and groups of rules" },
-  { k: "cols", t: "What it shows", s: "The columns, in your order" },
-  { k: "charts", t: "Charts", s: "Figures and charts" },
-  { k: "sum", t: "Groups & totals", s: "Group, sort, add up" },
-  { k: "save", t: "Save", s: "Name it and share it" },
-] as const;
 
 const Ico = ({ d, w = 2 }: { d: string; w?: number }) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={w} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>
@@ -280,8 +275,16 @@ export default function ReportsPage() {
   /** Who the open report belongs to (null: a new one, yours). */
   const [owner, setOwner] = useState<string | null>(null);
   const [snap, setSnap] = useState("");
-  const [mode, setMode] = useState<"build" | "view">("build");
-  const [step, setStep] = useState(0);
+  /** The toolbar's open panel (one at a time): what the rows are, the filters, the columns, the charts. */
+  const [panel, setPanel] = useState<"data" | "filter" | "cols" | "charts" | null>(null);
+  const togglePanel = (p: "data" | "filter" | "cols" | "charts") => setPanel((cur) => (cur === p ? null : p));
+  const [sharedSnap, setSharedSnap] = useState(false);
+  useEffect(() => {
+    if (!panel) return;
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape" && !document.querySelector(".smf-menu, .dp-pop")) setPanel(null); };
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [panel]);
   const [q, setQ] = useState("");
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -483,7 +486,7 @@ export default function ReportsPage() {
   const dirty = !!cfg && JSON.stringify(cfg) !== snap;
   const mine = !owner || !me || owner === me;
   const start = (r: CrmReport, id: string | null = null, sh = false, view = false, by: string | null = null) => {
-    setCfg(r); setReportId(id); setShared(sh); setOwner(by); setSnap(JSON.stringify(r)); setMode(view ? "view" : "build"); setStep(id || view ? 1 : 0); setShown(200);
+    setCfg(r); setReportId(id); setShared(sh); setSharedSnap(sh); setOwner(by); setSnap(JSON.stringify(r)); setPanel(null); setShown(200); void view;
   };
   const leaveOk = () => !dirty || window.confirm("Leave this report without saving your changes?");
   const open = (s: SavedReport) => { if (!leaveOk()) return; start(fromSaved(s.config, s.name), s.id, !!s.shared, true, s.owner_id); };
@@ -502,7 +505,7 @@ export default function ReportsPage() {
     setBusy(false);
     if (res.error) { setNote(`Couldn't save: ${res.error.message}`); return false; }
     const c = { ...cfg, name };
-    setCfg(c); setReportId((res.data as any).id); setOwner(me); setSnap(JSON.stringify(c)); setNote(theirs ? "Saved as your own copy (the shared one stays as it was)" : copy ? "Saved as a copy" : "Report saved");
+    setCfg(c); setReportId((res.data as any).id); setOwner(me); setSnap(JSON.stringify(c)); setSharedSnap(shared); setNote(theirs ? "Saved as your own copy (the shared one stays as it was)" : copy ? "Saved as a copy" : "Report saved");
     void loadSaved();
     return true;
   };
@@ -565,7 +568,9 @@ export default function ReportsPage() {
     set({ charts: xs }); scrollToChart.current = id;
   };
   /** From the result (or the preview): straight to that chart's settings. */
-  const editChart = (id: string) => { setMode("build"); setStep(3); setOpenChart(id); scrollToChart.current = id; };
+  const editChart = (id: string) => { setOpenChart(id); scrollToChart.current = id; };
+  /** "Add a filter": an empty rule, ready to pick its field. */
+  const addFilter = () => { if (!cfg) return; set({ filter: { ...cfg.filter, items: [...cfg.filter.items, rule("", "")] } }); setPanel("filter"); };
   /** A field's name in a picker: a field of another part says whose it is ("Company · Country"). */
   const fl = (f: Field) => (cfg && f.group !== cfg.source && !norm(f.label).includes(norm(glabel(f.group))) ? `${glabel(f.group)} · ${f.label}` : f.label);
   const dimOptions: SmfOption[] = [
@@ -606,7 +611,6 @@ export default function ReportsPage() {
     setCfg({ ...cfg, with: [...w, k], cols: [...cfg.cols, ...DEFAULT_COLS[k].slice(0, 3).filter((c) => !cfg.cols.includes(c))] });
   };
   const makeMain = (k: EntityKey) => { if (!cfg || k === cfg.source) return; setCfg(leadCols(pruneTo({ ...cfg, source: k, with: [cfg.source, ...(cfg.with ?? []).filter((x) => x !== k)] }))); };
-  const canNext = !!cfg && (step !== 2 || cfg.cols.length > 0);
   const list = saved.filter((s) => !q || norm(s.name).includes(norm(q)));
   const sourceOf = (s: SavedReport) => (s.config?.v === 2 ? s.config.source : "deal") as EntityKey;
   const partsLabel = (s: SavedReport) => [sourceOf(s), ...((s.config?.v === 2 && Array.isArray(s.config.with) ? s.config.with : []) as EntityKey[])].map((k) => entityOf(k)?.plural ?? k).join(" + ");
@@ -646,6 +650,7 @@ export default function ReportsPage() {
                       onClick={() => set({ sort: on && cfg.sort!.dir === "desc" ? { key: f.key, dir: "asc" } : on ? null : { key: f.key, dir: "desc" } })}>
                       <span>{colTitle(f)}</span>{on && <Ico d={cfg.sort!.dir === "asc" ? I.up : I.dn} w={2.4} />}
                     </button>
+                    <button type="button" className="rp-th-x" onClick={() => set({ cols: cfg.cols.filter((x) => x !== f.key) })} title="Take this column out" aria-label={`Take out ${colTitle(f)}`}><Ico d={I.x} w={2.6} /></button>
                   </th>
                 );
               })}
@@ -981,13 +986,8 @@ export default function ReportsPage() {
                 <div className="rp-intro-t">
                   <span className="rp-eyebrow"><Ico d={I.spark} />Report builder</span>
                   <h2>What do you want to know?</h2>
-                  <p>Pick a ready-made report, or build your own on any part of the CRM. You go step by step — nothing to get lost in.</p>
+                  <p>Pick a ready-made report, or what yours is about. The table shows up at once — then filter it, add columns, group it and add charts, right there.</p>
                 </div>
-                <ol className="rp-flow" aria-label="The steps">
-                  {STEPS.map((x, i) => (
-                    <li key={x.k} style={vars({ "--i": i })}><i>{i + 1}</i><span><b>{x.t}</b><em>{x.s}</em></span></li>
-                  ))}
-                </ol>
               </section>
 
               <section className="rp-block">
@@ -1019,7 +1019,7 @@ export default function ReportsPage() {
                 <div className="rp-block-h"><h3>From scratch</h3><span>What is the report about? Each row is one of these</span></div>
                 <div className="rp-ents is-start">
                   {ENTITIES.map((e, i) => (
-                    <button type="button" key={e.key} className="rp-ent" style={vars({ "--c": e.tone, "--i": i })} onClick={() => { start(newReport(e.key)); setStep(1); }}>
+                    <button type="button" key={e.key} className="rp-ent" style={vars({ "--c": e.tone, "--i": i })} onClick={() => start(newReport(e.key))}>
                       <span className="rp-ent-ico"><Ico d={e.icon} /></span>
                       <span className="rp-ent-t"><b>{e.plural}</b><em>{e.hint}</em></span>
                       <span className="rp-ent-go"><Ico d={I.plus} w={2.4} /></span>
@@ -1036,236 +1036,213 @@ export default function ReportsPage() {
                 <input className="rp-name" value={cfg.name} onChange={(e) => set({ name: e.target.value })} aria-label="Report name" />
                 {loading ? <span className="rp-chip is-busy" role="status"><span className="rp-spin" />{loading}</span>
                   : <span className="rp-chip">{rows.length.toLocaleString("en-GB")} {rowWord(rows.length)}{allRows.length >= ROW_CAP ? " (first 200,000)" : ""}</span>}
-                <div className="rp-modes" role="tablist">
-                  <button type="button" role="tab" aria-selected={mode === "build"} className={mode === "build" ? "is-on" : ""} onClick={() => setMode("build")}><Ico d={I.edit} />Build</button>
-                  <button type="button" role="tab" aria-selected={mode === "view"} className={mode === "view" ? "is-on" : ""} onClick={() => setMode("view")}><Ico d={I.chart} />View</button>
-                </div>
+                <button type="button" className={`rp-share ${shared ? "is-on" : ""}`} onClick={() => setShared((v) => !v)} aria-pressed={shared}
+                  title={shared ? "The whole team sees it (each with the records they may see). Click: only you." : "Only you see it. Click to share it with the team."}>
+                  <Ico d={shared ? "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" : "M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"} />{shared ? "Team" : "Only me"}
+                </button>
                 <button type="button" className="rp-btn is-ghost" onClick={() => exportAs("xlsx")} disabled={!rows.length}><Ico d={I.down} />Excel</button>
                 <button type="button" className="rp-btn is-ghost" onClick={() => exportAs("csv")} disabled={!rows.length}>CSV</button>
-                <button type="button" className="rp-btn is-main" onClick={() => void save()} disabled={busy || (!!reportId && !dirty)}><Ico d={I.check} w={2.4} />{busy ? "Saving…" : reportId && !dirty ? "Saved" : reportId && !mine ? "Save a copy" : "Save"}</button>
+                {reportId && mine && <button type="button" className="rp-btn is-ghost" onClick={() => void save(true)} disabled={busy} title="Keep this one as it is and save your changes as a new report"><Ico d={I.copy} />Copy</button>}
+                <button type="button" className="rp-btn is-main" onClick={() => void save()} disabled={busy || (!!reportId && !dirty && shared === sharedSnap)}><Ico d={I.check} w={2.4} />{busy ? "Saving…" : reportId && !dirty && shared === sharedSnap ? "Saved" : reportId && !mine ? "Save a copy" : "Save"}</button>
               </div>
 
               {loadErr && <div className="rp-err">Couldn't read the data: {loadErr}</div>}
 
-              {mode === "build" ? (
-                <div className="rp-build">
-                  <ol className="rp-steps">
-                    {STEPS.map((s, i) => (
-                      <li key={s.k} className={`${i === step ? "is-on" : ""} ${i < step ? "is-done" : ""}`}>
-                        <button type="button" onClick={() => setStep(i)}>
-                          <i>{i < step ? <Ico d={I.check} w={3} /> : i + 1}</i>
-                          <span><b>{s.t}</b><em>{i === 0 ? [ent!.plural, ...withList.map((k) => entityOf(k).plural)].join(" + ") : i === 1 && nRules ? `${nRules} rule${nRules === 1 ? "" : "s"}` : i === 2 ? `${cfg.cols.length} column${cfg.cols.length === 1 ? "" : "s"}` : i === 3 && cfg.charts.length ? `${cfg.charts.length} chart${cfg.charts.length === 1 ? "" : "s"}` : i === 4 && cfg.groupBy ? `By ${(fieldByKey.get(cfg.groupBy)?.label ?? "").toLowerCase()}` : s.s}</em></span>
+              {/* One page: the toolbar on top, the report under it — every change shows at once */}
+              <div className="rp-canvas">
+                <div className="rp-tools" role="toolbar" aria-label="Build the report">
+                  <button type="button" className={`rp-tb ${panel === "data" ? "is-on" : ""}`} onClick={() => togglePanel("data")} aria-expanded={panel === "data"} style={vars({ "--c": ent!.tone })}>
+                    <span className="rp-tb-ico"><Ico d={ent!.icon} /></span>
+                    <span className="rp-tb-t"><em>Each row is</em><b>{[ent!.label, ...withList.map((k) => entityOf(k).plural)].join(" + ")}</b></span>
+                    <Ico d={I.dn} w={2.4} />
+                  </button>
+                  <button type="button" className={`rp-tb ${panel === "filter" ? "is-on" : ""} ${nRules ? "has-n" : ""}`} onClick={() => togglePanel("filter")} aria-expanded={panel === "filter"}>
+                    <span className="rp-tb-ico"><Ico d={I.group} /></span>
+                    <span className="rp-tb-t"><em>Filter</em><b>{nRules ? `${nRules} rule${nRules === 1 ? "" : "s"}` : "All of them"}</b></span>
+                    <Ico d={I.dn} w={2.4} />
+                  </button>
+                  <button type="button" className={`rp-tb ${panel === "cols" ? "is-on" : ""}`} onClick={() => togglePanel("cols")} aria-expanded={panel === "cols"}>
+                    <span className="rp-tb-ico"><Ico d={I.edit} /></span>
+                    <span className="rp-tb-t"><em>Columns</em><b>{cfg.cols.length} shown</b></span>
+                    <Ico d={I.dn} w={2.4} />
+                  </button>
+                  <button type="button" className={`rp-tb ${panel === "charts" ? "is-on" : ""}`} onClick={() => togglePanel("charts")} aria-expanded={panel === "charts"}>
+                    <span className="rp-tb-ico"><Ico d={I.chart} /></span>
+                    <span className="rp-tb-t"><em>Charts</em><b>{cfg.charts.length ? `${cfg.charts.length} on the report` : "Add one"}</b></span>
+                    <Ico d={I.dn} w={2.4} />
+                  </button>
+                </div>
+
+                {panel && (
+                  <section className={`rp-panel is-${panel}`} key={panel}>
+                    <button type="button" className="rp-x rp-panel-x" onClick={() => setPanel(null)} aria-label="Close" title="Close (Esc)"><Ico d={I.x} w={2.4} /></button>
+                    {panel === "data" && (
+                <section className="rp-card">
+                  <h3>What is this report about?</h3>
+                  <p className="rp-help">Pick one or more. Each row is the first one; the others are linked to it — and when a row has several of them (a company's deals), it gets a line for each.</p>
+                  <div className="rp-ents is-multi">
+                    {ENTITIES.map((e, i) => {
+                      const main = e.key === cfg.source, on = main || withList.includes(e.key), along = !on && parts.includes(e.key);
+                      return (
+                        <button type="button" key={e.key} aria-pressed={on} className={`rp-ent ${on ? "is-on" : ""} ${main ? "is-main" : ""}`} style={vars({ "--c": e.tone, "--i": i })} onClick={() => togglePart(e.key)}
+                          title={main ? (withList.length ? "Take it out (the next one becomes the rows)" : "Each row is one of these") : on ? "Take it out of the report" : "Add it to the report"}>
+                          <span className="rp-ent-top">
+                            <span className="rp-ent-ico"><Ico d={e.icon} /></span>
+                            <span className="rp-ent-tick" aria-hidden="true">{on && <Ico d={I.check} w={3} />}</span>
+                          </span>
+                          <b>{e.plural}</b><em>{e.hint}</em>
+                          <span className="rp-ent-tags">
+                            {main ? <i className="rp-ent-tag is-main">Each row</i>
+                              : on ? <i className="rp-ent-tag">{isListLink(cfg.source, e.key) ? "Linked · a line each" : "Linked"}</i>
+                              : along ? <i className="rp-ent-tag is-along">Comes along</i> : null}
+                          </span>
                         </button>
-                      </li>
-                    ))}
-                  </ol>
-
-                  <div className="rp-stage" key={step}>
-                    {step === 0 && (
-                      <section className="rp-card">
-                        <h3>What is this report about?</h3>
-                        <p className="rp-help">Pick one or more. Each row is the first one; the others are linked to it — and when a row has several of them (a company's deals), it gets a line for each.</p>
-                        <div className="rp-ents is-multi">
-                          {ENTITIES.map((e, i) => {
-                            const main = e.key === cfg.source, on = main || withList.includes(e.key), along = !on && parts.includes(e.key);
-                            return (
-                              <button type="button" key={e.key} aria-pressed={on} className={`rp-ent ${on ? "is-on" : ""} ${main ? "is-main" : ""}`} style={vars({ "--c": e.tone, "--i": i })} onClick={() => togglePart(e.key)}
-                                title={main ? (withList.length ? "Take it out (the next one becomes the rows)" : "Each row is one of these") : on ? "Take it out of the report" : "Add it to the report"}>
-                                <span className="rp-ent-top">
-                                  <span className="rp-ent-ico"><Ico d={e.icon} /></span>
-                                  <span className="rp-ent-tick" aria-hidden="true">{on && <Ico d={I.check} w={3} />}</span>
-                                </span>
-                                <b>{e.plural}</b><em>{e.hint}</em>
-                                <span className="rp-ent-tags">
-                                  {main ? <i className="rp-ent-tag is-main">Each row</i>
-                                    : on ? <i className="rp-ent-tag">{isListLink(cfg.source, e.key) ? "Linked · a line each" : "Linked"}</i>
-                                    : along ? <i className="rp-ent-tag is-along">Comes along</i> : null}
-                                </span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                        {withList.length > 0 && (
-                          <div className="rp-rowis">
-                            <span>Each row is</span>
-                            <div className="rp-seg" role="radiogroup" aria-label="Each row is">
-                              {[cfg.source, ...withList].map((k) => (
-                                <button type="button" key={k} role="radio" aria-checked={k === cfg.source} className={k === cfg.source ? "is-on" : ""} onClick={() => makeMain(k)}>{entityOf(k).label.toLowerCase()}</button>
-                              ))}
-                            </div>
-                            <em>{rowsHint}</em>
-                          </div>
-                        )}
-                      </section>
-                    )}
-
-                    {step === 1 && (
-                      <section className="rp-card">
-                        <h3>Which {many ? "rows" : ent!.plural.toLowerCase()}?</h3>
-                        <p className="rp-help">As many rules as you need, on any field of {ent!.plural.toLowerCase()} or of what is linked to them — custom fields included. Put rules in a group to mix “and” and “or”; groups can hold more groups.</p>
-                        <RuleGroup g={cfg.filter} depth={0} fields={fields} fieldByKey={fieldByKey} values={valuesOf} opts={valueOpts} main={cfg.source} left={leftAfter} noun={rowWord} onChange={(g) => set({ filter: g })} />
-                        {rows.length === 0 && nRules > 0 && !loading && (
-                          <div className="rp-nothing is-inline">
-                            <b>Nothing matches all these rules together.</b>
-                            {blocker
-                              ? <span>Without <em>“{ruleText(blocker.rule)}”</em> there would be {blocker.n.toLocaleString("en-GB")} {rowWord(blocker.n)}.<button type="button" className="rp-link" onClick={() => set({ filter: withoutRule(cfg.filter, blocker.rule.id) })}>Take that rule out</button></span>
-                              : <span>Each value shows how many it keeps — pick ones that aren't 0.</span>}
-                          </div>
-                        )}
-                      </section>
-                    )}
-
-                    {step === 2 && (
-                      <section className="rp-card">
-                        <h3>What does each row show?</h3>
-                        <p className="rp-help">Tick any field below to add it. Drag the columns by their handle to put them in your order, and rename any of them for this report. In the result, click a column title to sort.</p>
-                        <div className={`rp-cols ${dragId ? "is-dragging" : ""}`}>
-                          {cfg.cols.map((k, i) => {
-                            const f = fieldByKey.get(k);
-                            const move = (from: string, to: string, after: boolean) => set({ cols: moveBy(cfg.cols.map((x) => ({ id: x })), from, to, after).map((x) => x.id) });
-                            return (
-                              <div className={`rp-col ${dragCls(k)}`} key={k} {...dragProps(k, move, true)}>
-                                <span className="rp-grip" {...gripProps(k)}><Grip /></span>
-                                <span className="rp-col-k">{f ? KIND_ICON[f.kind] : "?"}</span>
-                                <span className="rp-col-g" style={vars({ "--c": entityOf((f?.group ?? cfg.source) as EntityKey)?.tone ?? "#999" })}>{f ? glabel(f.group) : "—"}</span>
-                                <input value={cfg.labels[k] ?? (f?.label ?? k)} onChange={(e) => set({ labels: { ...cfg.labels, [k]: e.target.value } })} aria-label="Column name" />
-                                {!f && !loading && <em className="rp-warn">Not in the data</em>}
-                                <button type="button" className="rp-x" onClick={() => moveCol(i, -1)} disabled={i === 0} aria-label="Move up"><Ico d={I.up} /></button>
-                                <button type="button" className="rp-x" onClick={() => moveCol(i, 1)} disabled={i === cfg.cols.length - 1} aria-label="Move down"><Ico d={I.dn} /></button>
-                                <button type="button" className="rp-x" onClick={() => set({ cols: cfg.cols.filter((x) => x !== k) })} aria-label="Remove column"><Ico d={I.x} w={2.4} /></button>
-                              </div>
-                            );
-                          })}
-                        </div>
-                        <div className="rp-catalog">
-                          <div className="rp-catalog-h">
-                            <b>Every field</b>
-                            <label className="rp-search is-light"><Ico d={I.search} /><input value={colQ} onChange={(e) => setColQ(e.target.value)} placeholder="Find a field…" /></label>
-                            {parts.map((g) => (
-                              <button type="button" key={g} className="rp-add is-ghost" onClick={() => set({ cols: [...cfg.cols, ...fields.filter((f) => f.group === g && !cfg.cols.includes(f.key) && !f.key.endsWith(".__count")).slice(0, 6).map((f) => f.key)] })}>
-                                + {entityOf(g).label} basics
-                              </button>
-                            ))}
-                          </div>
-                          <div className="rp-catalog-b">
-                            {[...new Set(fields.map((f) => f.group))].map((g) => {
-                              const fs = fields.filter((f) => f.group === g && (!colQ.trim() || norm(f.label).includes(norm(colQ.trim()))));
-                              if (!fs.length) return null;
-                              return (
-                                <div className="rp-cat-g" key={g} style={vars({ "--c": entityOf(g as EntityKey)?.tone ?? "#1fb98a" })}>
-                                  <span className="rp-cat-gl">{glabel(g)}</span>
-                                  <div className="rp-cat-chips">
-                                    {fs.map((f) => {
-                                      const on = cfg.cols.includes(f.key);
-                                      return (
-                                        <button type="button" key={f.key} aria-pressed={on} className={`rp-cat-chip ${on ? "is-on" : ""}`} onClick={() => set({ cols: on ? cfg.cols.filter((x) => x !== f.key) : [...cfg.cols, f.key] })}>
-                                          <i>{on ? <Ico d={I.check} w={3} /> : KIND_ICON[f.kind]}</i>{f.label}
-                                        </button>
-                                      );
-                                    })}
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      </section>
-                    )}
-
-                    {step === 3 && (
-                      <>
-                        <section className="rp-card">
-                          <div className="rp-charts-top">
-                            <div>
-                              <h3>Figures and charts</h3>
-                              <p className="rp-help">The figures on top, then your charts — on any field, or by week, month, quarter or year of any date. Drag them by their handle into your order and pick how wide each one is.</p>
-                            </div>
-                          </div>
-                          <div className="rp-sub-h"><h4>Figures on top</h4><span>{cfg.figures ? <button type="button" className="rp-link" onClick={() => set({ figures: undefined })}>Back to the automatic ones</button> : "Automatic: the count and the money columns"}</span></div>
-                          {kpis(true)}
-                          <div className="rp-sub-h is-charts"><h4>Add a chart</h4><span>Made for this report — one click each, then change anything</span></div>
-                          <div className="rp-gallery">
-                            {suggestions.map((pr) => (
-                              <button type="button" key={pr.title} className="rb-preset rp-preset" onClick={() => addChart(pr)} title={`Add “${pr.title}”`}>
-                                <span className={`rb-preset-ico is-${pr.type}`}><i /><i /><i /></span><span className="rp-preset-t">{pr.title}</span>
-                              </button>
-                            ))}
-                            <button type="button" className="rb-preset is-custom rp-preset" onClick={() => addChart()}><Ico d={I.plus} />Your own chart</button>
-                          </div>
-                        </section>
-                        {cfg.charts.length ? chartGrid("edit") : (
-                          <div className="rp-chart-empty"><span><Ico d={I.chart} /></span><b>No charts yet</b><em>Pick one above, or build your own. They show up here, live, as you change them.</em></div>
-                        )}
-                      </>
-                    )}
-
-                    {step === 4 && (
-                      <section className="rp-card">
-                        <h3>Groups and totals</h3>
-                        <p className="rp-help">Group the rows under a heading for each value (with a subtotal), pick the order, and add a totals row for the numbers.</p>
-                        <div className="rp-sumrow">
-                          <label><span>Group the rows by</span>
-                            <SalesMultiFilter single values={[cfg.groupBy ?? "__none"]} onChange={(v) => set({ groupBy: v[0] && v[0] !== "__none" ? v[0] : null })}
-                              options={[{ value: "__none", label: "No groups" }, ...fields.filter((f) => f.kind === "enum" || f.kind === "text").map((f) => ({ value: f.key, label: fl(f), group: glabel(f.group) }))]} placeholder="No groups" searchFrom={8} /></label>
-                          <label><span>Sort by</span>
-                            <SalesMultiFilter single values={[cfg.sort?.key ?? "__none"]} onChange={(v) => set({ sort: v[0] && v[0] !== "__none" ? { key: v[0], dir: cfg.sort?.dir ?? "desc" } : null })}
-                              options={[{ value: "__none", label: "As they come" }, ...cfg.cols.map((k) => ({ value: k, label: cfg.labels[k] || fieldByKey.get(k)?.label || k }))]} placeholder="As they come" /></label>
-                          {cfg.sort && (
-                            <div className="rp-seg is-light" role="radiogroup">
-                              <button type="button" className={cfg.sort.dir === "desc" ? "is-on" : ""} onClick={() => set({ sort: { ...cfg.sort!, dir: "desc" } })}>High → low</button>
-                              <button type="button" className={cfg.sort.dir === "asc" ? "is-on" : ""} onClick={() => set({ sort: { ...cfg.sort!, dir: "asc" } })}>Low → high</button>
-                            </div>
-                          )}
-                          <label className="rp-chk"><input type="checkbox" checked={cfg.totals} onChange={(e) => set({ totals: e.target.checked })} /><span>Totals for the numbers</span></label>
-                        </div>
-                      </section>
-                    )}
-
-                    {step === 5 && (
-                      <section className="rp-card">
-                        <h3>Save it</h3>
-                        <div className="rp-savegrid">
-                          <label className="rp-lab"><span>Name</span><input className="rp-in is-big" value={cfg.name} onChange={(e) => set({ name: e.target.value })} /></label>
-                          <label className="rp-chk is-big"><input type="checkbox" checked={shared} onChange={(e) => setShared(e.target.checked)} /><span><b>Share with the team</b><em>Everyone who can open Reports sees it — each with the records they are allowed to see.</em></span></label>
-                        </div>
-                        <div className="rp-summary">
-                          <span><Ico d={ent!.icon} />{[ent!.plural, ...withList.map((k) => entityOf(k).plural)].join(" + ")}</span>
-                          <span><Ico d={I.group} />{nRules ? `${nRules} rule${nRules === 1 ? "" : "s"}` : "No rules — all of them"}</span>
-                          <span><Ico d={I.edit} />{cfg.cols.length} column{cfg.cols.length === 1 ? "" : "s"}</span>
-                          <span><Ico d={I.chart} />{cfg.charts.length} chart{cfg.charts.length === 1 ? "" : "s"}</span>
-                        </div>
-                        <div className="rp-saveacts">
-                          <button type="button" className="rp-btn is-main is-big" onClick={async () => { if (await save()) setMode("view"); }} disabled={busy}><Ico d={I.check} w={2.4} />Save and view</button>
-                          {reportId && <button type="button" className="rp-btn is-ghost is-big" onClick={() => void save(true)} disabled={busy}><Ico d={I.copy} />Save as a copy</button>}
-                        </div>
-                      </section>
-                    )}
-
-                    {step > 0 && step < 5 && (
-                      <section className="rp-card is-preview">
-                        <div className="rp-prev-h"><span className="rp-live" aria-hidden="true" /><b>Live preview</b><em>{rows.length.toLocaleString("en-GB")} of {allRows.length.toLocaleString("en-GB")} {rowWord(allRows.length)}{step !== 3 && cfg.charts.length ? ` · ${cfg.charts.length} chart${cfg.charts.length === 1 ? "" : "s"}` : ""} · first 8 rows</em></div>
-                        {step !== 3 && kpis()}
-                        {step !== 3 && chartGrid("view")}
-                        {table(8)}
-                      </section>
-                    )}
+                      );
+                    })}
                   </div>
-
-                  <div className="rp-nav">
-                    <button type="button" className="rp-btn is-ghost" onClick={() => setStep((s) => Math.max(0, s - 1))} disabled={step === 0}><Ico d={I.left} />Back</button>
-                    <span>Step {step + 1} of {STEPS.length}</span>
-                    {step < STEPS.length - 1
-                      ? <button type="button" className="rp-btn is-main" onClick={() => setStep((s) => s + 1)} disabled={!canNext}>Next<Ico d={I.right} /></button>
-                      : <button type="button" className="rp-btn is-main" onClick={() => setMode("view")}>See the report<Ico d={I.right} /></button>}
+                  {withList.length > 0 && (
+                    <div className="rp-rowis">
+                      <span>Each row is</span>
+                      <div className="rp-seg" role="radiogroup" aria-label="Each row is">
+                        {[cfg.source, ...withList].map((k) => (
+                          <button type="button" key={k} role="radio" aria-checked={k === cfg.source} className={k === cfg.source ? "is-on" : ""} onClick={() => makeMain(k)}>{entityOf(k).label.toLowerCase()}</button>
+                        ))}
+                      </div>
+                      <em>{rowsHint}</em>
+                    </div>
+                  )}
+                </section>
+                    )}
+                    {panel === "filter" && (
+                <section className="rp-card">
+                  <h3>Which {many ? "rows" : ent!.plural.toLowerCase()}?</h3>
+                  <p className="rp-help">As many rules as you need, on any field of {ent!.plural.toLowerCase()} or of what is linked to them — custom fields included. Put rules in a group to mix “and” and “or”; groups can hold more groups.</p>
+                  <RuleGroup g={cfg.filter} depth={0} fields={fields} fieldByKey={fieldByKey} values={valuesOf} opts={valueOpts} main={cfg.source} left={leftAfter} noun={rowWord} onChange={(g) => set({ filter: g })} />
+                </section>
+                    )}
+                    {panel === "cols" && (
+                <section className="rp-card">
+                  <h3>What does each row show?</h3>
+                  <p className="rp-help">Tick any field below to add it. Drag the columns by their handle to put them in your order, and rename any of them for this report. In the result, click a column title to sort.</p>
+                  <div className={`rp-cols ${dragId ? "is-dragging" : ""}`}>
+                    {cfg.cols.map((k, i) => {
+                      const f = fieldByKey.get(k);
+                      const move = (from: string, to: string, after: boolean) => set({ cols: moveBy(cfg.cols.map((x) => ({ id: x })), from, to, after).map((x) => x.id) });
+                      return (
+                        <div className={`rp-col ${dragCls(k)}`} key={k} {...dragProps(k, move, true)}>
+                          <span className="rp-grip" {...gripProps(k)}><Grip /></span>
+                          <span className="rp-col-k">{f ? KIND_ICON[f.kind] : "?"}</span>
+                          <span className="rp-col-g" style={vars({ "--c": entityOf((f?.group ?? cfg.source) as EntityKey)?.tone ?? "#999" })}>{f ? glabel(f.group) : "—"}</span>
+                          <input value={cfg.labels[k] ?? (f?.label ?? k)} onChange={(e) => set({ labels: { ...cfg.labels, [k]: e.target.value } })} aria-label="Column name" />
+                          {!f && !loading && <em className="rp-warn">Not in the data</em>}
+                          <button type="button" className="rp-x" onClick={() => moveCol(i, -1)} disabled={i === 0} aria-label="Move up"><Ico d={I.up} /></button>
+                          <button type="button" className="rp-x" onClick={() => moveCol(i, 1)} disabled={i === cfg.cols.length - 1} aria-label="Move down"><Ico d={I.dn} /></button>
+                          <button type="button" className="rp-x" onClick={() => set({ cols: cfg.cols.filter((x) => x !== k) })} aria-label="Remove column"><Ico d={I.x} w={2.4} /></button>
+                        </div>
+                      );
+                    })}
                   </div>
+                  <div className="rp-catalog">
+                    <div className="rp-catalog-h">
+                      <b>Every field</b>
+                      <label className="rp-search is-light"><Ico d={I.search} /><input value={colQ} onChange={(e) => setColQ(e.target.value)} placeholder="Find a field…" /></label>
+                      {parts.map((g) => (
+                        <button type="button" key={g} className="rp-add is-ghost" onClick={() => set({ cols: [...cfg.cols, ...fields.filter((f) => f.group === g && !cfg.cols.includes(f.key) && !f.key.endsWith(".__count")).slice(0, 6).map((f) => f.key)] })}>
+                          + {entityOf(g).label} basics
+                        </button>
+                      ))}
+                    </div>
+                    <div className="rp-catalog-b">
+                      {[...new Set(fields.map((f) => f.group))].map((g) => {
+                        const fs = fields.filter((f) => f.group === g && (!colQ.trim() || norm(f.label).includes(norm(colQ.trim()))));
+                        if (!fs.length) return null;
+                        return (
+                          <div className="rp-cat-g" key={g} style={vars({ "--c": entityOf(g as EntityKey)?.tone ?? "#1fb98a" })}>
+                            <span className="rp-cat-gl">{glabel(g)}</span>
+                            <div className="rp-cat-chips">
+                              {fs.map((f) => {
+                                const on = cfg.cols.includes(f.key);
+                                return (
+                                  <button type="button" key={f.key} aria-pressed={on} className={`rp-cat-chip ${on ? "is-on" : ""}`} onClick={() => set({ cols: on ? cfg.cols.filter((x) => x !== f.key) : [...cfg.cols, f.key] })}>
+                                    <i>{on ? <Ico d={I.check} w={3} /> : KIND_ICON[f.kind]}</i>{f.label}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </section>
+                    )}
+                    {panel === "charts" && (
+                      <section className="rp-card">
+                        <h3>Add a chart</h3>
+                        <p className="rp-help">Made for this report — one click each. It lands on the report below, where you change it (type, what it counts, split, size), drag it into place or remove it.</p>
+                        <div className="rp-gallery">
+                          {suggestions.map((pr) => (
+                            <button type="button" key={pr.title} className="rb-preset rp-preset" onClick={() => addChart(pr)} title={`Add “${pr.title}”`}>
+                              <span className={`rb-preset-ico is-${pr.type}`}><i /><i /><i /></span><span className="rp-preset-t">{pr.title}</span>
+                            </button>
+                          ))}
+                          <button type="button" className="rb-preset is-custom rp-preset" onClick={() => addChart()}><Ico d={I.plus} />Your own chart</button>
+                        </div>
+                      </section>
+                    )}
+                  </section>
+                )}
+
+                {/* the rules, always in sight: one chip each */}
+                <div className="rp-chips" aria-label="Filters">
+                  {cfg.filter.match !== "all" && rulesOf(cfg.filter, fieldByKey).length > 1 && <span className="rp-chips-k">{cfg.filter.match === "any" ? "Any of" : "None of"}</span>}
+                  {rulesOf(cfg.filter, fieldByKey).map((c) => (
+                    <span className="rp-fchip" key={c.id}>
+                      <button type="button" onClick={() => setPanel("filter")} title="Change it">{ruleText(c)}</button>
+                      {leftAfter.has(c.id) && <em className={leftAfter.get(c.id) === 0 ? "is-zero" : ""}>{leftAfter.get(c.id)!.toLocaleString("en-GB")}</em>}
+                      <button type="button" className="rp-fchip-x" onClick={() => set({ filter: withoutRule(cfg.filter, c.id) })} aria-label="Remove this filter"><Ico d={I.x} w={2.6} /></button>
+                    </span>
+                  ))}
+                  <button type="button" className="rp-fchip is-add" onClick={addFilter}><Ico d={I.plus} w={2.6} />{nRules ? "Add a filter" : "Filter the rows"}</button>
+                  {nRules > 0 && <button type="button" className="rp-link rp-chips-clear" onClick={() => set({ filter: emptyTree() })}>Clear all</button>}
                 </div>
-              ) : (
-                <div className="rp-view">
-                  {kpis()}
-                  {chartGrid("view")}
-                  <section className="rp-card is-table">{table(shown)}</section>
-                </div>
-              )}
+
+                {rows.length === 0 && nRules > 0 && !loading && (
+                  <div className="rp-nothing is-inline">
+                    <b>Nothing matches all these filters together.</b>
+                    {blocker
+                      ? <span>Without <em>“{ruleText(blocker.rule)}”</em> there would be {blocker.n.toLocaleString("en-GB")} {rowWord(blocker.n)}.<button type="button" className="rp-link" onClick={() => set({ filter: withoutRule(cfg.filter, blocker.rule.id) })}>Take that one out</button></span>
+                      : <span>Each value in a filter shows how many it keeps — pick ones that aren't 0.</span>}
+                  </div>
+                )}
+
+                {kpis(true)}
+                {chartGrid("edit")}
+                <section className="rp-card is-table">
+                  <div className="rp-thead">
+                    <b>{rows.length.toLocaleString("en-GB")} {rowWord(rows.length)}</b>
+                    <em>{allRows.length !== rows.length ? `of ${allRows.length.toLocaleString("en-GB")}` : "all of them"}{cfg.groupBy ? ` · grouped by ${(fieldByKey.get(cfg.groupBy)?.label ?? "").toLowerCase()}` : ""}</em>
+                    <div className="rp-thead-ctl">
+                    <label className="rp-tb-sel"><span>Group by</span>
+                      <SalesMultiFilter single values={[cfg.groupBy ?? "__none"]} onChange={(v) => set({ groupBy: v[0] && v[0] !== "__none" ? v[0] : null })}
+                        options={[{ value: "__none", label: "Nothing" }, ...fields.filter((f) => f.kind === "enum" || f.kind === "text").map((f) => ({ value: f.key, label: fl(f), group: glabel(f.group) }))]} placeholder="Nothing" searchFrom={8} />
+                    </label>
+                    <label className="rp-tb-sel"><span>Sort by</span>
+                      <SalesMultiFilter single values={[cfg.sort?.key ?? "__none"]} onChange={(v) => set({ sort: v[0] && v[0] !== "__none" ? { key: v[0], dir: cfg.sort?.dir ?? "desc" } : null })}
+                        options={[{ value: "__none", label: "As they come" }, ...colFields.map((f) => ({ value: f.key, label: colTitle(f) }))]} placeholder="As they come" />
+                    </label>
+                    {cfg.sort && (
+                      <button type="button" className="rp-tb-dir" onClick={() => set({ sort: { ...cfg.sort!, dir: cfg.sort!.dir === "desc" ? "asc" : "desc" } })} title="Change the order">
+                        <Ico d={cfg.sort.dir === "desc" ? I.dn : I.up} w={2.4} />{cfg.sort.dir === "desc" ? "High → low" : "Low → high"}
+                      </button>
+                    )}
+                    <label className="rp-tb-chk"><input type="checkbox" checked={cfg.totals} onChange={(e) => set({ totals: e.target.checked })} /><span>Totals</span></label>
+                    </div>
+                    <button type="button" className="rp-btn is-ghost is-sm" onClick={() => setPanel("cols")}><Ico d={I.plus} w={2.4} />Column</button>
+                  </div>
+                  {table(shown)}
+                </section>
+              </div>
             </>
           )}
         </main>

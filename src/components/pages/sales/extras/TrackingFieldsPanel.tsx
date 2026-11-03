@@ -77,6 +77,11 @@ export function FoldPanel({ className = "", title, count, summary, aside, defaul
           </button>
         </h3>
         {aside && <div className="sl-fold-aside">{aside}</div>}
+        {ctl?.toggle && (
+          <button type="button" className="dk-fold" aria-expanded={open} onClick={ctl.toggle} title={open ? "Collapse" : "Expand"} aria-label={open ? "Collapse" : "Expand"}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6" /></svg>
+          </button>
+        )}
       </div>
       <div className="sl-fold-body" inert={!open}
         onTransitionEnd={(e) => { if (e.target === e.currentTarget && open) setSettled(true); }}>

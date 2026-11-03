@@ -660,6 +660,8 @@ function TaskDetail({ task, layout, onClose, onChange, onOpenDeal, onDelete, onE
     void meta({ checklist: list, progress: pct, status: st, done: st === "done" });
   };
   const toggleStep = (id: string) => saveSteps(steps.map((s) => (s.id === id ? tickStep(s) : s)));
+  const stepsRef = useRef<HTMLOListElement>(null);
+  const stepSort = useDragSort((from, to) => void meta({ checklist: moveItem(steps, from, to) }));
   const removeStep = (id: string) => saveSteps(steps.filter((s) => s.id !== id));
   const addStep = () => {
     const t = newStep.trim();
@@ -781,9 +783,13 @@ function TaskDetail({ task, layout, onClose, onChange, onOpenDeal, onDelete, onE
         {byStep && <span className="htp-checklist-count"><b>{stepsDone}</b>/{steps.length}</span>}
       </div>
       {byStep && (
-        <ol>
+        <ol ref={stepsRef} className={stepSort.sorting ? "is-sorting" : ""}>
           {steps.map((s, i) => (
-            <li key={s.id} className={s.done ? "is-done" : ""} style={{ ["--i" as string]: i } as React.CSSProperties}>
+            <li key={s.id} className={`${s.done ? "is-done" : ""} ${steps.length > 1 ? "has-grip" : ""} ${stepSort.held === i ? "is-held" : ""}`} style={{ ["--i" as string]: i, ...stepSort.styleOf(i) } as React.CSSProperties}>
+              {steps.length > 1 && (
+                <span className="dsort-grip" role="button" tabIndex={0} onPointerDown={stepSort.grab(i, stepsRef, "li")} onKeyDown={stepSort.key(i, steps.length)}
+                  title="Drag to change the order (or ↑ / ↓)" aria-label={`Move step ${i + 1}`}><GripIcon /></span>
+              )}
               <button className="htp-step-check" role="checkbox" aria-checked={s.done} onClick={() => toggleStep(s.id)} aria-label={s.done ? "Not done" : "Done"}>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path pathLength={1} d="M6 12.5l4 4 8-9" /></svg>
               </button>
@@ -4008,6 +4014,72 @@ function SlaTimers({ t, sla, now }: { t: Ticket; sla: SlaMap | null; now: number
 }
 
 /* ---- steps: tick them off, give each one to someone ---- */
+/* ---------------------------------------------------------------------
+   Reordering a list by dragging its grip (steps of a task, of a template).
+   The row follows the pointer, the others slide out of the way; on release
+   onMove(from, to). The grip also takes ↑ / ↓ from the keyboard.
+   --------------------------------------------------------------------- */
+export function useDragSort(onMove: (from: number, to: number) => void) {
+  const [st, setSt] = useState<{ from: number; over: number; dy: number; size: number } | null>(null);
+  const moveRef = useRef(onMove);
+  moveRef.current = onMove;
+  /** rowSel: the rows, inside `list` (direct children). */
+  const grab = (index: number, ref: { current: HTMLElement | null }, rowSel: string) => (e: React.PointerEvent) => {
+    const list = ref.current;
+    if (!list || e.button !== 0) return;
+    e.preventDefault(); e.stopPropagation();
+    const rows = Array.from(list.querySelectorAll<HTMLElement>(`:scope > ${rowSel}`));
+    const rects = rows.map((r) => r.getBoundingClientRect());
+    if (!rects[index]) return;
+    const gap = rects.length > 1 ? Math.max(0, rects[1].top - rects[0].bottom) : 0;
+    const size = rects[index].height + gap;
+    const y0 = e.clientY;
+    const mid = (r: DOMRect) => r.top + r.height / 2;
+    let cur = { from: index, over: index, dy: 0, size };
+    setSt(cur);
+    document.body.classList.add("is-dragsorting");
+    const move = (ev: PointerEvent) => {
+      const dy = ev.clientY - y0;
+      const c = mid(rects[index]) + dy;
+      let over = index;
+      rects.forEach((r, i) => { if (i < index && c < mid(r)) over = Math.min(over, i); if (i > index && c > mid(r)) over = Math.max(over, i); });
+      cur = { from: index, over, dy, size };
+      setSt(cur);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      document.body.classList.remove("is-dragsorting");
+      setSt(null);
+      if (cur.over !== cur.from) moveRef.current(cur.from, cur.over);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  };
+  /** ↑ / ↓ on the grip */
+  const key = (index: number, count: number) => (e: React.KeyboardEvent) => {
+    const to = e.key === "ArrowUp" ? index - 1 : e.key === "ArrowDown" ? index + 1 : -1;
+    if (to < 0 || to >= count) return;
+    e.preventDefault();
+    moveRef.current(index, to);
+  };
+  /** where each row is drawn while one is held */
+  const styleOf = (i: number): React.CSSProperties | undefined => {
+    if (!st) return undefined;
+    if (i === st.from) return { transform: `translateY(${st.dy}px)`, position: "relative", zIndex: 5, transition: "none" };
+    if (st.from < st.over && i > st.from && i <= st.over) return { transform: `translateY(${-st.size}px)` };
+    if (st.from > st.over && i >= st.over && i < st.from) return { transform: `translateY(${st.size}px)` };
+    return { transform: "translateY(0)" };
+  };
+  return { grab, key, styleOf, held: st?.from ?? null, sorting: st !== null };
+}
+export const moveItem = <T,>(list: T[], from: number, to: number): T[] => { const out = [...list]; const [x] = out.splice(from, 1); out.splice(to, 0, x); return out; };
+export const GripIcon = () => (
+  <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1.6" /><circle cx="15" cy="6" r="1.6" /><circle cx="9" cy="12" r="1.6" /><circle cx="15" cy="12" r="1.6" /><circle cx="9" cy="18" r="1.6" /><circle cx="15" cy="18" r="1.6" /></svg>
+);
+
 function StepsPanel({ t, dir, people, onTask, onChecklist, onInvolve }: {
   t: Ticket; dir: Directory; people: MentionPerson[]; onTask: string[];
   onChecklist: (steps: TaskStep[]) => Promise<unknown> | void; onInvolve: (ids: string[]) => void;
@@ -4016,6 +4088,8 @@ function StepsPanel({ t, dir, people, onTask, onChecklist, onInvolve }: {
   const [pick, setPick] = useState<{ id: string; rect: DOMRect } | null>(null);
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
   const steps = t.checklist;
+  const listRef = useRef<HTMLDivElement>(null);
+  const sort = useDragSort((from, to) => void onChecklist(moveItem(steps, from, to)));
   const done = steps.filter((x) => x.done).length;
   const pct = steps.length ? Math.round((done / steps.length) * 100) : 0;
   const person = (id?: string | null) => (id ? dir.people.find((p) => p.id === id) ?? null : null);
@@ -4046,11 +4120,15 @@ function StepsPanel({ t, dir, people, onTask, onChecklist, onInvolve }: {
         {steps.length > 0 && <span className={`tdx-meter ${pct === 100 ? "is-all" : ""}`} aria-hidden="true"><i style={{ width: `${pct}%` }} /></span>}
         {steps.length > 0 && <span className="tdx-pct">{pct}%</span>}
       </div>
-      <div className="tdx-step-list">
-        {steps.map((x) => {
+      <div className={`tdx-step-list ${sort.sorting ? "is-sorting" : ""}`} ref={listRef}>
+        {steps.map((x, i) => {
           const w = person(x.who);
           return (
-            <div key={x.id} className={`tdx-step ${x.done ? "is-done" : ""} ${x.who && x.who === dir.me && !x.done ? "is-mine" : ""}`}>
+            <div key={x.id} className={`tdx-step ${x.done ? "is-done" : ""} ${x.who && x.who === dir.me && !x.done ? "is-mine" : ""} ${sort.held === i ? "is-held" : ""}`} style={sort.styleOf(i)}>
+              {steps.length > 1 && (
+                <span className="dsort-grip" role="button" tabIndex={0} onPointerDown={sort.grab(i, listRef, ".tdx-step")} onKeyDown={sort.key(i, steps.length)}
+                  title="Drag to change the order (or ↑ / ↓)" aria-label={`Move step ${i + 1}`}><GripIcon /></span>
+              )}
               <button type="button" className="tdx-step-tick" onClick={() => void commit(steps.map((y) => (y.id === x.id ? tickStep(y, dir.me) : y)))}
                 aria-label={x.done ? "Mark as not done" : "Mark as done"} title={x.done ? "Not done yet" : "Done"}><TkIco d="check" /></button>
               {editing?.id === x.id ? (

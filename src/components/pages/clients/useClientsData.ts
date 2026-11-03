@@ -271,7 +271,8 @@ export function useClientsData() {
       supabase.from("phase_blueprints").select("*"),
       supabase.from("client_roles").select("*"),
       supabase.from("projects").select("*").order("created_at"),
-      supabase.from("clients").select("*").order("name"),
+      // a client is called what its CRM company is called (the company is the one source of the name)
+      supabase.from("clients").select("*, company:companies(name)").order("name"),
       supabase.from("project_role_usage").select("project_id, role_key, done, booked"),
       supabase.from("service_roles").select("service_id, role_id, price, is_main, sort"),
     ]);
@@ -315,7 +316,8 @@ export function useClientsData() {
     setRoles(roleList);
     setProjects(visibleProjects);
     setClients((cls ?? [])
-      .map((r: any) => ({ id: r.id, name: r.name ?? "" }))
+      .map((r: any) => ({ id: r.id, name: (r.company?.name ?? "").trim() || r.name || "" }))
+      .sort((a: any, b: any) => a.name.localeCompare(b.name))
       .filter((c: any) => seesAll || allowedClients.has(c.id)));
     setUsage(agg);
     setLineUsage(byLine);

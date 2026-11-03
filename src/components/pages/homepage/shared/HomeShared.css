@@ -2821,3 +2821,18 @@
   .home .home-side > .hs-cal:has(.hs-month) .hs-agenda, .home .ch-col-mid > .hs-cal:has(.hs-month) .hs-agenda { flex: 1 1 0; min-height: 128px; }
   .home .home-side > .hs-cal .hs-mday, .home .ch-col-mid > .hs-cal .hs-mday { aspect-ratio: auto; min-height: 0; }
 }
+
+/* ---- reordering steps by dragging their grip ---- */
+.dsort-grip {
+  display: grid; place-items: center; width: 18px; height: 26px; margin: 0 -4px 0 -4px; border-radius: 6px; color: #b3c3bc; cursor: grab; touch-action: none;
+  opacity: 0; transition: opacity 0.15s, color 0.15s, background 0.15s;
+}
+.dsort-grip svg { width: 14px; height: 14px; fill: currentColor; }
+.dsort-grip:hover, .dsort-grip:focus-visible { color: #0a6f4d; background: rgba(18, 181, 127, 0.1); outline: none; }
+:is(.tdx-step, .htp-checklist li, .tse-steps li):hover .dsort-grip, .dsort-grip:focus-visible, .is-sorting .dsort-grip { opacity: 1; }
+body.is-dragsorting, body.is-dragsorting * { cursor: grabbing !important; user-select: none; }
+.is-sorting > * { transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1); animation: none !important; }
+.is-sorting > .is-held { background: #fff; box-shadow: 0 16px 34px -14px rgba(3, 27, 19, 0.45), 0 0 0 1px rgba(18, 181, 127, 0.35); border-radius: 12px; }
+.tdx-step:has(> .dsort-grip) { grid-template-columns: 14px 22px minmax(0, 1fr) auto 24px; }
+.htp-checklist li.has-grip { grid-template-columns: 14px 24px 20px minmax(0, 1fr) 26px; }
+.tse-steps li.has-grip { grid-template-columns: 14px 24px minmax(0, 1fr) auto; }

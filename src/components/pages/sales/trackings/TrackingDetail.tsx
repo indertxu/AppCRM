@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type DragEvent as RDragEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type DragEvent as RDragEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { createPortal } from "react-dom";
 import DatePicker from "../../../framework/DatePicker";
@@ -26,7 +26,7 @@ import HandoffConfirmServices, { HxPrompt, destFolder, type ConfirmService, type
 import TrackingFiles, { LineDocs, loadAllTrackingFiles, uploadTrackingFile, openTrackingFile, readTrackingFileBytes, FileIcon, kindOf } from "./TrackingFiles";
 import { DocStudio } from "./TrackingFiles";
 import TrackingFieldsPanel, { FoldPanel, FoldOpen, FOLD_ICON } from "../extras/TrackingFieldsPanel";
-import { HomeBoard, compactAll, firstFit, newId, COLS, type BoardItem, type BoardKit } from "../../homepage/HomePage";
+import { HomeBoard, compactAll, firstFit, newId, COLS, GAP, type BoardItem, type BoardKit } from "../../homepage/HomePage";
 import ActionsMenu, { type ActionItem } from "../../../framework/ActionsMenu";
 import HandoverConfirm from "./HandoverConfirm";
 import { planHandover, performHandover, rolesFor, resolveDealRole, saveDealRoles, orderPhases, type SalesRole, type HandoverPlan } from "../extras/salesRolesApi";
@@ -1828,7 +1828,9 @@ const DK: Record<DkKey, { title: string; hint: string; icon: string; color: stri
 const DK_MIN: [number, number] = [4, 3];
 const dkKey = (k: string) => (k.endsWith(".mini") ? k.slice(0, -5) : k) as DkKey;
 /** Smaller than its "full" size: the card shows its headline figure. */
-const dkMini = (it: BoardItem) => { const d = DK[it.key as DkKey]; return !!d && (it.w < d.full[0] || (!it.folded && it.h < d.full[1])); };
+const dkMini = (it: BoardItem) => { const d = DK[it.key as DkKey]; return !!d && (it.w < d.full[0] || (!it.folded && !it.fitted && it.h < d.full[1])); };
+/** A collapsed card: just its header (px). */
+const DK_FOLD_PX = 60;
 /** The card opens collapsed / expanded (chosen while adjusting). */
 const withFold = (i: BoardItem, closed: boolean): BoardItem => { const { fold: _f, ...rest } = i; void _f; return closed ? { ...rest, fold: "closed" } : rest; };
 const FOLD_PIC = {
@@ -2006,14 +2008,58 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     return () => window.removeEventListener("resize", m);
   }, []);
   // the slots the cards are drawn into
-  // a collapsed card shrinks to its header; the cards under it move up
-  const dkFoldRows = Math.max(2, Math.ceil(84 / dkStep));
+  /* A card is as tall as what it holds, up to the size it was given (its contents scroll past that);
+     a collapsed one is just its header. The cards under it move up. While adjusting: the full sizes. */
+  const [dkNat, setDkNat] = useState<Record<string, number>>({});
   const dkShown = useMemo(() => (dkEditing ? dkItems : compactAll(dkItems.map((i) => {
     const d = DK[i.key as DkKey];
-    return dkFolded[i.key] && d && i.w >= d.full[0] && i.h > dkFoldRows ? { ...i, h: dkFoldRows, folded: true } : i;
-  }))), [dkEditing, dkItems, dkFolded, dkFoldRows]);
+    if (!d || i.w < d.full[0] || i.h < d.full[1]) return i; // headline cards keep their size
+    const rows = (px: number) => (px + GAP) / dkStep;
+    if (dkFolded[i.key]) return { ...i, h: Math.min(i.h, rows(DK_FOLD_PX)), folded: true };
+    const nat = dkNat[i.key];
+    return nat && rows(nat) < i.h ? { ...i, h: Math.max(rows(DK_FOLD_PX), rows(nat)), fitted: true } : i;
+  }))), [dkEditing, dkItems, dkFolded, dkNat, dkStep]);
   const [dkEls, setDkEls] = useState<Record<string, HTMLElement>>({});
   const dkRefs = useRef(new Map<string, (el: HTMLElement | null) => void>());
+  /** How tall each card's contents are (px), so the card can be no taller than that. */
+  const dkMeasure = useRef<() => void>(() => {});
+  dkMeasure.current = () => {
+    const next: Record<string, number> = {};
+    for (const it of dkItems) {
+      const panel = dkEls[it.id]?.firstElementChild as HTMLElement | null;
+      if (!panel || !panel.classList.contains("sl-panel")) continue;
+      const region = panel.querySelector<HTMLElement>(":scope > .sl-fold-body, :scope > .ah-body, :scope > .sl-calc-fold, :scope > .tf");
+      if (!region || getComputedStyle(region).display === "none") continue;
+      const top = region.getBoundingClientRect().top;
+      let inner = 0;
+      for (const ch of Array.from(region.children) as HTMLElement[]) {
+        const cs = getComputedStyle(ch);
+        if (cs.display === "none" || cs.position === "fixed" || cs.position === "absolute" || ch.getAttribute("type") === "file") continue;
+        const r = ch.getBoundingClientRect();
+        const deep = ch.scrollHeight > ch.clientHeight + 1 && /auto|scroll/.test(cs.overflowY) ? ch.scrollHeight - ch.clientHeight : 0;
+        inner = Math.max(inner, r.bottom + deep - top + region.scrollTop);
+      }
+      const pad = parseFloat(getComputedStyle(region).paddingBottom) || 0;
+      next[it.key] = Math.ceil(panel.offsetHeight - region.clientHeight + inner + pad);
+    }
+    setDkNat((m) => {
+      const keys = new Set([...Object.keys(m), ...Object.keys(next)]);
+      for (const k of keys) if (Math.abs((m[k] ?? 0) - (next[k] ?? 0)) > 2) return next;
+      return m;
+    });
+  };
+  // after every render, and whenever something inside a card changes (lists loading, a line added…)
+  useLayoutEffect(() => { if (!dkEditing) dkMeasure.current(); });
+  useEffect(() => {
+    if (dkEditing) return;
+    let raf = 0;
+    const run = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; dkMeasure.current(); }); };
+    const mo = new MutationObserver(run);
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(run) : null;
+    Object.values(dkEls).forEach((el) => { mo.observe(el, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["class", "style"] }); ro?.observe(el); });
+    window.addEventListener("resize", run);
+    return () => { mo.disconnect(); ro?.disconnect(); window.removeEventListener("resize", run); if (raf) cancelAnimationFrame(raf); };
+  }, [dkEls, dkEditing]);
   const dkSlotRef = useCallback((id: string) => {
     let f = dkRefs.current.get(id);
     if (!f) {
@@ -4458,6 +4504,10 @@ export default function TrackingDetail({ tracking, companies, contacts, products
                 ]}
                 onPick={(k) => { const [m, g] = k.split("|"); setRevMode(m as RevenueMode); setRevGross(g === "gross"); }} />
             </div>
+            <button type="button" className="dk-fold" aria-expanded={!dkFoldNow("calculator")} onClick={() => dkToggle("calculator")}
+              title={dkFoldNow("calculator") ? "Expand" : "Collapse"} aria-label={dkFoldNow("calculator") ? "Expand the calculator" : "Collapse the calculator"}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6" /></svg>
+            </button>
           </div>
           <div className="sl-calc-fold"><div className="sl-calc-fold-in">
           <div className="sl-rvh-bar" aria-hidden="true">
@@ -4842,7 +4892,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
         <div className="hb-dock dk-dock" role="toolbar" aria-label="Adjust the deal page">
           <span className="hb-dock-t">
             <b>Adjusting the deal page</b>
-            <small>Drag a card to move it · pull its edge to resize · the same on every deal</small>
+            <small>Drag a card to move it · pull its edge to resize · a card is never taller than what it holds</small>
           </span>
           {dkHidden.length > 0 && (
             <span className="dk-add-wrap">

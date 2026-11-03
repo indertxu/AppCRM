@@ -21,7 +21,7 @@ import {
   TASK_PRIORITIES, DEFAULT_TASK_SETTINGS,
   type TaskSettings as Settings, type TaskTemplate, type TaskPriority, type TaskKind,
 } from "../sales/sales/salesApi";
-import { FlagIcon, PRIORITY_LABEL } from "../homepage/shared/HomeTodo";
+import { FlagIcon, PRIORITY_LABEL, useDragSort, moveItem, GripIcon } from "../homepage/shared/HomeTodo";
 import "../homepage/shared/HomeShared.css";
 
 type Filter = "all" | TaskKind;
@@ -216,6 +216,8 @@ function TemplateEditor({ draft, canManage, onClose, onSaved, onDeleted }: {
   }, [onClose]);
 
   const addStep = () => { const t = newStep.trim(); if (!t) return; set({ checklist: [...d.checklist, t] }); setNewStep(""); };
+  const stepsRef = useRef<HTMLOListElement>(null);
+  const stepSort = useDragSort((from, to) => set({ checklist: moveItem(d.checklist, from, to) }));
   const moveStep = (i: number, by: number) => {
     const j = i + by;
     if (j < 0 || j >= d.checklist.length) return;
@@ -304,9 +306,13 @@ function TemplateEditor({ draft, canManage, onClose, onSaved, onDeleted }: {
           {(d.kind === "process" || d.checklist.length > 0) && (
             <div className="tse-field">
               <span>Steps {d.checklist.length > 0 && <em className="tse-count">{d.checklist.length}</em>}</span>
-              <ol className="tse-steps">
+              <ol className={`tse-steps ${stepSort.sorting ? "is-sorting" : ""}`} ref={stepsRef}>
                 {d.checklist.map((s, i) => (
-                  <li key={i} style={{ ["--i" as string]: i } as React.CSSProperties}>
+                  <li key={i} className={`${!ro && d.checklist.length > 1 ? "has-grip" : ""} ${stepSort.held === i ? "is-held" : ""}`} style={{ ["--i" as string]: i, ...stepSort.styleOf(i) } as React.CSSProperties}>
+                    {!ro && d.checklist.length > 1 && (
+                      <span className="dsort-grip" role="button" tabIndex={0} onPointerDown={stepSort.grab(i, stepsRef, "li")} onKeyDown={stepSort.key(i, d.checklist.length)}
+                        title="Drag to change the order (or ↑ / ↓)" aria-label={`Move step ${i + 1}`}><GripIcon /></span>
+                    )}
                     <i>{i + 1}</i>
                     <input value={s} readOnly={ro} onChange={(e) => set({ checklist: d.checklist.map((x, j) => (j === i ? e.target.value : x)) })} />
                     {!ro && (

@@ -5150,8 +5150,8 @@ button.sl-ppl-co:hover { background: #f1f7f4; color: var(--forest); }
 /* documents */
 .dk .hb-slot > .sl-panel-docs { padding-bottom: 0; }
 .dk .hb-slot > .sl-panel-docs > .tf { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
-.dk .hb-slot > .sl-panel-docs > .tf > .tf-grid { display: grid; align-content: start; padding-bottom: 22px; }
-.dk .hb-slot > .sl-panel-docs > .tf > .tf-drop { flex: 1 1 auto; min-height: 56px; }
+.dk .hb-slot > .sl-panel-docs > .tf > .tf-grid { display: grid; align-content: start; padding-bottom: 22px; flex: 0 1 auto; }
+.dk .hb-slot > .sl-panel-docs > .tf > .tf-drop { flex: none; min-height: 72px; margin-bottom: 18px; }
 
 /* ---- looks by size ---- */
 /* slim (under ~430px): tighter, the small print goes */
@@ -5357,3 +5357,29 @@ button.sl-ppl-co:hover { background: #f1f7f4; color: var(--forest); }
 .dk .hb-bar-btn.dk-bar-fold svg { width: 15px; height: 15px; }
 .dk .hb-bar-btn.dk-bar-fold.is-on { background: var(--cz-amber-soft); color: #b86b12; }
 .dk .dk-slim .ah-tabs { order: 2; }
+
+/* the fold arrow always sits at the far right of the header; quiet scrollbars and focus */
+.dk .sl-fold-chevw { display: none !important; }
+.dk .sl-fold-head, .dk .sl-rvh-top { align-items: center; }
+.dk .sl-fold-head > .dk-fold, .dk .sl-rvh-top > .dk-fold { margin-left: 8px; }
+.dk :is(.sl-fold-body, .ah-body, .sl-calc-fold, .tf-grid) { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+.dk .hb-card:hover :is(.sl-fold-body, .ah-body, .sl-calc-fold, .tf-grid) { scrollbar-color: rgba(10, 111, 77, 0.22) transparent; }
+.dk :is(.sl-fold-body, .ah-body, .sl-calc-fold, .tf-grid)::-webkit-scrollbar { width: 6px; }
+.dk :is(.sl-fold-body, .ah-body, .sl-calc-fold, .tf-grid)::-webkit-scrollbar-thumb { border-radius: 6px; background: transparent; }
+.dk .hb-card:hover :is(.sl-fold-body, .ah-body, .sl-calc-fold, .tf-grid)::-webkit-scrollbar-thumb { background: rgba(10, 111, 77, 0.22); }
+.sl.sl-detail .dk .hb-slot > .sl-panel:focus-within { border-color: var(--td-line); box-shadow: 0 1px 2px rgba(14, 26, 21, 0.04), 0 18px 40px -32px rgba(10, 60, 40, 0.4); }
+.sl.sl-detail .dk .hb-slot > .sl-panel:has(:is(input:not([type="file"]), textarea, select, [contenteditable="true"]):focus) { border-color: rgba(31, 185, 138, 0.35); }
+/* a collapsed card: one tidy line */
+.dk .hb-card.is-folded .hb-slot > .sl-panel { padding-left: 16px; padding-right: 12px; border-radius: 18px; }
+.dk .hb-card.is-folded .sl-fold-ico, .dk .hb-card.is-folded .ah-ico { width: 32px; height: 32px; border-radius: 10px; }
+.dk .hb-card.is-folded .ah-title small { display: none; }
+.dk .hb-card.is-folded .sl-rvh-fig .sl-fig-v { font-size: 22px; }
+.dk .hb-card.is-folded .dk-fold { width: 30px; height: 30px; }
+
+/* documents collapsed: centred like the others, with the same soft icon chip */
+.dk .hb-card.is-folded .hb-slot > .sl-panel-docs > .tf { flex: none; }
+.dk .hb-card.is-folded .sl-panel-docs .tf-header .sl-panel-title::before {
+  width: 32px; height: 32px; border-radius: 10px; box-shadow: inset 0 0 0 1px rgba(91, 108, 196, 0.14);
+  background: color-mix(in srgb, #5b6cc4 11%, #fff) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%235b6cc4' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M9 13h6M9 17h4'/%3E%3C/svg%3E") center / 16px no-repeat;
+}
+.dk .hb-card.is-folded .sl-panel-docs .tf-header .sl-panel-title { font-size: 15.5px; }

@@ -2090,7 +2090,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
         <section className="so-sheet">
           <div className="so-empty">
             <span className="so-empty-art"><SoIcon d={SO_ICON.empty} w={1.6} /></span>
-            <p>Deals are only available to the sales team.</p>
+            <p>Your deal settings turn off every view of Deals for you (list, board and forecast). A manager can change it in Sales → Actions → Sales roles → Adjust settings.</p>
           </div>
         </section>
       </div>

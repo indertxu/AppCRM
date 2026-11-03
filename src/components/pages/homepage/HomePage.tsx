@@ -304,6 +304,8 @@ export interface BoardItem {
   fold?: "closed";
   /** drawn collapsed right now (only its header shows) */
   folded?: boolean;
+  /** drawn shorter than its size: it holds less than fills it */
+  fitted?: boolean;
 }
 interface BoardState { v: 1; hero: "full" | "compact"; figs: string[]; items: BoardItem[] }
 let idSeq = 0;
@@ -349,6 +351,9 @@ function settle(list: BoardItem[], order: (a: BoardItem, b: BoardItem) => number
     const n = { ...it, y: Math.max(0, it.y) };
     while (n.y > 0 && !out.some((o) => hit({ ...n, y: n.y - 1 }, o))) n.y--;
     for (let c = out.find((o) => hit(n, o)); c; c = out.find((o) => hit(n, o))) n.y = c.y + c.h;
+    // cards of a fractional height (the deal page's, fitted to what they hold): no gap under the card above
+    const floor = out.reduce((m, o) => (o.x < n.x + n.w && n.x < o.x + o.w && o.y + o.h <= n.y + 1e-6 ? Math.max(m, o.y + o.h) : m), 0);
+    if (floor < n.y) n.y = floor;
     out.push(n);
   }
   return out;

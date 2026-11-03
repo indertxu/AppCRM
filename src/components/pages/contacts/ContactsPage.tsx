@@ -690,16 +690,7 @@ export default function ContactsPage() {
     if (c) setEditing(structuredClone(c));
   }, [loaded, contacts]);
 
-  if (me && !isSalesLead(me) && me.role !== "sales") {
-    return (
-      <div className="ct">
-        <header className="ct-head">
-          <h1 className="ct-title">Contacts</h1>
-        </header>
-        <p className="cl-hint">This page is only available to the sales team.</p>
-      </div>
-    );
-  }
+  // who may open this page is set in Settings › Who sees what (the route checks it): no second, hard-coded gate here
 
   return (
     <div className="ct">
