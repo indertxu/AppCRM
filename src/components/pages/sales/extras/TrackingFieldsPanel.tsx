@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import FieldInput from "./FieldInput";
 import { saveTrackingCustom, isEmptyValue, type TrackingField } from "./trackingFieldsApi";
 import "./TrackingFields.css";
@@ -20,6 +20,10 @@ export const FOLD_ICON = {
   calculator: "M6 2h12a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zM8 6h8M8 11h.01M12 11h.01M16 11h.01M8 15h.01M12 15h.01M16 15h.01M8 19h4",
 };
 
+/** On the deal page's board the card itself folds (it shrinks to its header and the cards under it move up):
+    the board says whether it is open and how to fold it. No toggle: it stays open (while adjusting the page). */
+export const FoldOpen = createContext<{ open: boolean; toggle?: () => void } | null>(null);
+
 export function FoldPanel({ className = "", title, count, summary, aside, defaultOpen = false, icon, tone, openSignal, children }: {
   className?: string;
   /** Bump it to open the card from outside (e.g. "New" in the header of a folded card). */
@@ -37,10 +41,19 @@ export function FoldPanel({ className = "", title, count, summary, aside, defaul
   defaultOpen?: boolean;
   children: ReactNode;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
-  useEffect(() => { if (openSignal) setOpen(true); }, [openSignal]);
+  const ctl = useContext(FoldOpen);
+  const locked = !!ctl && !ctl.toggle;
+  const [openState, setOpen] = useState(defaultOpen);
+  const open = ctl ? ctl.open : openState;
+  const ctlRef = useRef(ctl);
+  ctlRef.current = ctl;
+  useEffect(() => {
+    if (!openSignal) return;
+    const c = ctlRef.current;
+    if (c) { if (!c.open) c.toggle?.(); } else setOpen(true);
+  }, [openSignal]);
   /** Fully open: menus and pickers inside may overflow the card. */
-  const [settled, setSettled] = useState(defaultOpen);
+  const [settled, setSettled] = useState(defaultOpen || !!ctl?.open);
   useEffect(() => {
     if (!open) { setSettled(false); return; }
     if (reducedMotion()) { setSettled(true); return; }
@@ -48,11 +61,11 @@ export function FoldPanel({ className = "", title, count, summary, aside, defaul
     return () => window.clearTimeout(t);
   }, [open]);
   return (
-    <section className={`sl-panel sl-fold ${icon ? "has-ico" : ""} ${open ? "is-open" : ""} ${settled ? "is-settled" : ""} ${className}`}
+    <section className={`sl-panel sl-fold ${icon ? "has-ico" : ""} ${open ? "is-open" : ""} ${settled ? "is-settled" : ""} ${locked ? "is-locked" : ""} ${className}`}
       style={tone ? ({ "--fold-tone": tone } as CSSProperties) : undefined}>
       <div className="sl-fold-head">
         <h3 className="sl-fold-h">
-          <button type="button" className="sl-fold-btn" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+          <button type="button" className="sl-fold-btn" aria-expanded={open} tabIndex={locked ? -1 : undefined} onClick={() => { if (ctl) ctl.toggle?.(); else setOpen((v) => !v); }}>
             {icon && (
               <span className="sl-fold-ico" aria-hidden="true">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={icon} /></svg>

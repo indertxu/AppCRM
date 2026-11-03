@@ -1,7 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { createPortal } from "react-dom";
 import { supabase } from "../../../api/supabase";
+import { FoldOpen } from "../extras/TrackingFieldsPanel";
 import Select from "../../../framework/Select";
 import { listDocTemplates, saveDocTemplate, pickDocTemplate, docThemeSeed, uploadDocImage, printDocHtml, docToPdfBlob, downloadBlob, loadDocVariables, type DocTemplateRow } from "./proposalApi";
 import { defaultDocTemplate, DEFAULT_DOC_THEME, setDocCustomVars, type DocKind, type DocTemplate, type DocInstance, type ProposalData, type ContractTerms, type DocTheme, type DocBlock } from "./proposalGen";
@@ -72,8 +73,12 @@ export function FileIcon({ kind }: { kind: string }) {
   );
 }
 
-export default function TrackingFiles({ trackingId, phaseId, phases = [] }: Props) {
+export default function TrackingFiles({ trackingId, phaseId, phases = [], onFiles }: Props & { onFiles?: (list: { name: string; created_at: string }[]) => void }) {
   const [files, setFiles] = useState<TFile[]>([]);
+  const fold = useContext(FoldOpen);
+  const onFilesRef = useRef(onFiles);
+  onFilesRef.current = onFiles;
+  useEffect(() => { onFilesRef.current?.(files.map((f) => ({ name: f.name, created_at: f.created_at }))); }, [files]);
   const [dragOver, setDragOver] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -247,6 +252,11 @@ export default function TrackingFiles({ trackingId, phaseId, phases = [] }: Prop
         {files.length > 0 && (
           <button className="tf-manage-icon" onClick={() => setAllOpen(true)} title="Manage files" aria-label="Manage files">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></svg>
+          </button>
+        )}
+        {fold?.toggle && (
+          <button type="button" className="dk-fold" aria-expanded={fold.open} onClick={fold.toggle} title={fold.open ? "Collapse" : "Expand"} aria-label={fold.open ? "Collapse" : "Expand"}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6" /></svg>
           </button>
         )}
       </div>

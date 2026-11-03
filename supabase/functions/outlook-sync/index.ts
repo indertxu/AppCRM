@@ -557,11 +557,32 @@ async function csPersonalize(a: any, buf: ArrayBuffer, vars: Record<string, stri
     return { name, type, bytes: new TextEncoder().encode(csFill(txt, vars, html)) };
   }
   const fields = Object.entries((a?.fields ?? {}) as Record<string, string>).filter(([, k]) => !!k);
-  const spots = (Array.isArray(a?.spots) ? a.spots : []) as any[];
-  if (!isPdf || (!fields.length && !spots.length)) return { name, type, bytes: raw };
+  const edits = (Array.isArray(a?.edits) ? a.edits : []) as any[];
+  // a {{field}} on a line changed in the editor is filled in with that line
+  const under = (s: any) => edits.some((e) => e?.orig != null && Number(e.page) === Number(s.page) && Math.abs(Number(e.y) - Number(s.y)) < 0.6 && Number(s.x) >= Number(e.x) - 0.6 && Number(s.x) <= Number(e.x) + Math.max(1, Number(e.w) || 0));
+  const spots = ((Array.isArray(a?.spots) ? a.spots : []) as any[]).filter((s) => !under(s));
+  if (!isPdf || (!fields.length && !spots.length && !edits.length)) return { name, type, bytes: raw };
   try {
     const doc = await PDFDocument.load(raw, { ignoreEncryption: true });
-    const latin = (v: string) => v.replace(/[^\x20-\x7e\u00a0-\u00ff]/g, "");
+    const latin = (v: string) => v.replace(/[^\x20-\x7e\xa0-\xff]/g, "");
+    // a line written again goes over its own background (an image of it with the text taken out, made in the editor),
+    // in the colour it had; without one, over a white patch, in near-black
+    const ink = (c: any) => (Array.isArray(c) && c.length === 3 ? rgb(...(c.map((v: any) => Math.min(1, Math.max(0, Number(v) || 0))) as [number, number, number])) : rgb(0.08, 0.1, 0.09));
+    const patches = new Map<string, any>();
+    const drawPatch = async (page: any, pt: any): Promise<boolean> => {
+      const src = String(pt?.img ?? "");
+      if (!src.startsWith("data:image/")) return false;
+      try {
+        if (!patches.has(src)) {
+          const bin = atob(src.slice(src.indexOf(",") + 1));
+          const u = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+          patches.set(src, /^data:image\/jpe?g/i.test(src) ? await doc.embedJpg(u) : await doc.embedPng(u));
+        }
+        page.drawImage(patches.get(src), { x: Number(pt.x) || 0, y: Number(pt.y) || 0, width: Number(pt.w) || 0, height: Number(pt.h) || 0 });
+        return true;
+      } catch { return false; }
+    };
     if (fields.length) {
       const form = doc.getForm();
       let any = false;
@@ -581,6 +602,11 @@ async function csPersonalize(a: any, buf: ArrayBuffer, vars: Record<string, stri
         if (!page) continue;
         const size = Math.max(4, Number(sp.size) || 10), y = Number(sp.y) || 0;
         let x = Number(sp.x) || 0, w = Number(sp.w) || size * 4, out = latin(vars[sp.key] ?? "");
+        if (typeof sp.text === "string" && sp.text && sp.patch && await drawPatch(page, sp.patch)) {
+          // the whole line goes over its own background, in its own colour
+          page.drawText(latin(csFill(sp.text, vars, false)), { x, y, size, font, color: ink(sp.color) });
+          continue;
+        }
         if (typeof sp.text === "string" && sp.text) {
           // where the first field starts (Helvetica's widths, scaled to the line's real width) and the rest of the line, filled in
           const lineW = Number(sp.w) || font.widthOfTextAtSize(latin(sp.text), size);
@@ -592,6 +618,34 @@ async function csPersonalize(a: any, buf: ArrayBuffer, vars: Record<string, stri
         }
         page.drawRectangle({ x: x - 1, y: y - size * 0.28, width: w + 2, height: size * 1.2, color: rgb(1, 1, 1) });
         page.drawText(out, { x, y, size, font, color: rgb(0.08, 0.1, 0.09) });
+      }
+    }
+    if (edits.length) {
+      // the text changed in the editor: a line written again over a white patch, or new text on the page
+      const fonts = new Map<string, any>();
+      const fontOf = async (fam: string, bold: boolean) => {
+        const k = `${fam}|${bold}`;
+        if (!fonts.has(k)) {
+          const f = fam === "serif" ? (bold ? StandardFonts.TimesRomanBold : StandardFonts.TimesRoman)
+            : fam === "mono" ? (bold ? StandardFonts.CourierBold : StandardFonts.Courier)
+            : (bold ? StandardFonts.HelveticaBold : StandardFonts.Helvetica);
+          fonts.set(k, await doc.embedFont(f));
+        }
+        return fonts.get(k);
+      };
+      const pages = doc.getPages();
+      for (const e of edits) {
+        const page = pages[Number(e?.page) || 0];
+        if (!page) continue;
+        const size = Math.max(4, Number(e.size) || 11), x = Number(e.x) || 0, y = Number(e.y) || 0;
+        const font = await fontOf(String(e.font ?? "sans"), !!e.bold);
+        const lines = csFill(String(e.text ?? ""), vars, false).split(/\r?\n/).map(latin);
+        const step = size * 1.25;
+        if (e.orig != null && !(await drawPatch(page, e.patch))) {
+          const wide = Math.max(Number(e.w) || 0, ...lines.map((l) => font.widthOfTextAtSize(l, size)));
+          page.drawRectangle({ x: x - 1, y: y - size * 0.28 - (lines.length - 1) * step, width: wide + 2, height: size * 1.2 + (lines.length - 1) * step, color: rgb(1, 1, 1) });
+        }
+        lines.forEach((l, i) => { if (l) page.drawText(l, { x, y: y - i * step, size, font, color: ink(e.color) }); });
       }
     }
     return { name, type: "application/pdf", bytes: await doc.save() };
@@ -708,9 +762,25 @@ async function csRun(tenantOnly: string | null, budget = 60): Promise<Record<str
   const now = Date.now();
   for (const tenant of tenants) {
     const d = await csTenantData(tenant);
+    // each client's last contact (91_cs_quiet_rule.sql), for the sequences that wait until a client goes quiet
+    let lastOf: Map<string, { all: number; human: number }> | null = null;
+    const lastContacts = async () => {
+      if (lastOf) return lastOf;
+      lastOf = new Map();
+      const { data: lc, error: le } = await admin.rpc("cs_last_contacts", { p_tenant: tenant });
+      if (le) { stats.errors.push(/function|does not exist/i.test(le.message) ? "Run 91_cs_quiet_rule.sql" : le.message); return null; }
+      ((lc ?? []) as any[]).forEach((x) => lastOf!.set(x.client_id, { all: x.last_at ? new Date(x.last_at).getTime() : 0, human: x.last_human_at ? new Date(x.last_human_at).getTime() : 0 }));
+      return lastOf;
+    };
     for (const seq of ((seqs ?? []) as any[]).filter((s) => s.tenant_id === tenant)) {
       const steps = (Array.isArray(seq.steps) ? seq.steps : []).filter((x: any) => x?.template_id);
       if (!steps.length) continue;
+      // "only once a client has gone N days without contact" (none: no such rule)
+      const quietDays = Math.max(0, Number(seq.audience?.quiet_days) || 0);
+      const quietStop = quietDays > 0 && seq.audience?.quiet_stop !== false;
+      const last = quietDays ? await lastContacts() : null;
+      if (quietDays && !last) continue;   // can't tell who's quiet: nobody starts
+      const quiet = (c: any) => !quietDays || (now - (last!.get(c.id)?.all ?? 0)) >= quietDays * CS_DAY;
       const { data: runRows } = await admin.from("cs_sequence_runs").select("*").eq("sequence_id", seq.id);
       const runs = (runRows ?? []) as any[];
       const has = new Set(runs.map((r) => r.client_id));
@@ -721,13 +791,34 @@ async function csRun(tenantOnly: string | null, budget = 60): Promise<Record<str
         if (!ren) return null;
         return Math.max(now, ren.getTime() - (Number(seq.start_days) || 0) * CS_DAY) + waitOf(0);
       };
-      // who comes in
+      // who comes in (with the quiet rule: only once their last contact is old enough)
       for (const c of d.clients) {
-        if (has.has(c.id) || !csMatches(seq.audience, c, d.health)) continue;
+        if (has.has(c.id) || !csMatches(seq.audience, c, d.health) || !quiet(c)) continue;
         const at = firstAt(c);
         if (at == null) continue;
         const { data: row, error: e } = await admin.from("cs_sequence_runs").insert({ tenant_id: tenant, sequence_id: seq.id, client_id: c.id, step: 0, status: "active", next_at: new Date(at).toISOString() }).select("*").single();
         if (!e && row) { stats.enrolled += 1; runs.push(row); }
+      }
+      if (quietDays) {
+        for (const r of runs) {
+          const c = d.clients.find((x) => x.id === r.client_id);
+          if (!r.id || !c) continue;
+          // someone got in touch (a call, a meeting, an e-mail either way — not these automatic ones): this round stops
+          const began = new Date(r.started_at ?? r.created_at ?? 0).getTime();
+          if (quietStop && r.status === "active" && (last!.get(c.id)?.human ?? 0) > began) {
+            await admin.from("cs_sequence_runs").update({ status: "done", next_at: null }).eq("id", r.id); r.status = "done"; stats.finished += 1;
+            continue;
+          }
+          // "again the next time it goes quiet": a finished round starts over once the client is quiet again
+          const lastSent = r.last_sent_at ? new Date(r.last_sent_at).getTime() : 0;
+          if (seq.repeat && r.status === "done" && csMatches(seq.audience, c, d.health) && quiet(c) && now - lastSent >= quietDays * CS_DAY) {
+            const at = firstAt(c);
+            if (at == null) continue;
+            const patch = { status: "active", step: 0, cycle: (Number(r.cycle) || 0) + 1, started_at: new Date(now).toISOString(), next_at: new Date(at).toISOString() };
+            const { error: ue } = await admin.from("cs_sequence_runs").update(patch).eq("id", r.id);
+            if (!ue) { Object.assign(r, patch); stats.enrolled += 1; }
+          }
+        }
       }
       // who no longer fits leaves (unless someone put them in by hand)
       for (const r of runs) {
@@ -784,6 +875,7 @@ async function csRun(tenantOnly: string | null, budget = 60): Promise<Record<str
         const nextIx = stepIx + 1;
         const patch: Record<string, unknown> = { last_sent_at: skip ? r.last_sent_at ?? null : new Date().toISOString() };
         if (nextIx < steps.length) Object.assign(patch, { step: nextIx, next_at: new Date(now + Math.max(waitOf(nextIx), 3600_000)).toISOString() });
+        else if (seq.repeat && quietDays) { Object.assign(patch, { status: "done", next_at: null }); stats.finished += 1; }   // starts over the next time it goes quiet
         else if (seq.repeat) {
           // round again: after the gap the sequence sets (start_days), then step 1's own wait
           let at = now + Math.max(1, Number(seq.start_days) || 30) * CS_DAY + waitOf(0);

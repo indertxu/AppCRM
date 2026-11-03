@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useState, useEffect, useMemo, useRef, type PointerEvent as RPointerEvent, type KeyboardEvent as RKeyboardEvent, type ReactNode } from "react";
+import { Fragment, useState, useEffect, useMemo, useRef, type PointerEvent as RPointerEvent, type KeyboardEvent as RKeyboardEvent, type ReactNode } from "react";
 import { supabase } from "../../api/supabase";
 import NewClientForm from "./NewClientForm";
 import ClientWorkspace, { CompanyLogo, isActive, termOf, lineAnnual, lineContractValue, lineOneTime, type Line } from "./ClientWorkspace";
@@ -11,7 +11,7 @@ import {
   convertUpsellToDeal, CS_REASONS, UPSELL_STATUSES, SPICED, NEEDS_CS,
   cadenceOf, setClientPriority, CS_PRIORITIES, loadCsAuto, saveCsTemplate, deleteCsTemplate, saveCsSequence, deleteCsSequence, setCsRun,
   uploadCsFile, removeCsFile, runCsSequences, testCsTemplate, CS_TAGS, fillCsTags, renderCsEmail, cleanCsBody, NEEDS_AUTO,
-  scanCsMail, loadCsMailSync, type CsMailSync, csVariantFor, inspectCsFile, previewCsAttachment, type CsAttachment, type CsVariant, type CsVariantAudience,
+  scanCsMail, loadCsMailSync, type CsMailSync, csVariantFor, inspectCsFile, previewCsAttachment, saveCsFolder, deleteCsFolder, moveCsTemplate, setClientsCadence, type CsFolder, loadPdfjs, csFileBlob, csUnderEdit, csPatchOf, csLineBox, type CsEdit, type CsRgb, type CsPatch, type CsAttachment, type CsVariant, type CsVariantAudience,
   type CsData, type CsUpsell, type CsHealthStatus, type CsQbr, type RevenueEvent,
   type CsPriority, type CsAuto, type CsTemplate, type CsSequence, type CsRun, type CsStep,
 } from "./useClientsData";
@@ -943,7 +943,21 @@ const CSI: Record<string, string> = {
   eye: "M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
   din: "M17 7L7 17M7 17h9M7 17V8",
   dout: "M7 17L17 7M17 7H8M17 7v9",
+  text: "M4 7V5h16v2M9 19h6M12 5v14",
+  code: "M16 18l6-6-6-6M8 6l-6 6 6 6",
+  page: "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h4",
+  move: "M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20",
+  undo: "M3 7v6h6M3.5 13a9 9 0 1 0 2.1-9.4L3 7",
+  bold: "M6 4h8a4 4 0 0 1 0 8H6zM6 12h9a4 4 0 0 1 0 8H6z",
+  info: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 16v-4M12 8h.01",
+  clock: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 6v6l4 2",
+  flag: "M5 21V4M5 4h11l-2 4 2 4H5",
+  stop: "M7 7h10v10H7z",
+  folder: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
+  more: "M5 11.2a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6zM12 11.2a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6zM19 11.2a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6z",
 };
+/** colours a blueprint folder can have */
+const FOLDER_COLORS = ["#0a6f4d", "#2f6fd6", "#7c3aed", "#c2410c", "#b7791f", "#0f766e", "#be185d", "#475569"];
 const CsIco = ({ n, s = 16 }: { n: keyof typeof CSI; s?: number }) => (
   <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={CSI[n]} /></svg>
 );
@@ -1200,9 +1214,16 @@ function csRenewalOf(l: Line, ct: any): { end: Date; left: number; kind: CsTermK
 }
 const PRI_TONE: Record<CsPriority, string> = { high: "coral", medium: "gold", low: "slate" };
 /** Does a sequence apply to a client (the same test the sender makes)? */
-function csFits(q: CsSequence, c: CsClient, _cs?: CsData | null): boolean {
+/** Days a client still has to go without contact before a "quiet" sequence starts for it (0: it's quiet enough; null: no such rule). */
+function csQuietLeft(q: CsSequence, c: CsClient): number | null {
+  const n = Number(q.audience?.quiet_days) || 0;
+  if (!n) return null;
+  return c.days == null ? 0 : Math.max(0, n - c.days);
+}
+function csFits(q: CsSequence, c: CsClient, _cs?: CsData | null, anyQuiet = false): boolean {
   const a = q.audience ?? {};
   if (a.exclude?.includes(c.id)) return false;
+  if (!anyQuiet && (csQuietLeft(q, c) ?? 0) > 0) return false;
   if (q.start_mode === "before_renewal" && !c.ren) return false;
   if (a.clients?.length) return a.clients.includes(c.id);
   if (a.priorities?.length && !a.priorities.includes(c.priority ?? "none")) return false;
@@ -1357,16 +1378,38 @@ function CsFollowUps({ auto, setAuto, accounts, cs, setCs, types, people, me, sa
   const [logF, setLogF] = useState<"all" | "sent" | "failed" | "skipped" | "test">("all");
   const [mail, setMail] = useState<{ connected: boolean; mail: boolean; email: string | null } | null>(null);
   const lastCmd = useRef(0);
+  /* ---- blueprint folders ---- */
+  const [folder, setFolderRaw] = useState<string>(() => { try { return localStorage.getItem("cs-tpl-folder") || "all"; } catch { return "all"; } });
+  const setFolder = (k: string) => { setFolderRaw(k); try { localStorage.setItem("cs-tpl-folder", k); } catch { /* private mode */ } };
+  const [fNew, setFNew] = useState<string | null>(null);
+  const [fEdit, setFEdit] = useState<{ id: string; name: string } | null>(null);
+  const [fMenu, setFMenu] = useState<string | null>(null);
+  const [moveOpen, setMoveOpen] = useState<string | null>(null);
+  const [dragTpl, setDragTpl] = useState<string | null>(null);
+  const [dropOn, setDropOn] = useState<string | null>(null);
+  useEffect(() => {
+    if (!fMenu && !moveOpen) return;
+    const k = (e: MouseEvent) => { if (!(e.target as Element)?.closest?.(".cs4-fold-menu, .cs4-move-menu, .cs4-fold-more, .cs4-move-b")) { setFMenu(null); setMoveOpen(null); } };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") { setFMenu(null); setMoveOpen(null); } };
+    document.addEventListener("mousedown", k); window.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", k); window.removeEventListener("keydown", esc); };
+  }, [fMenu, moveOpen]);
   useEffect(() => {
     supabase.functions.invoke("outlook-sync", { body: { action: "mail_status" } })
       .then(({ data }: any) => setMail(data && typeof data.connected === "boolean" ? data : null)).catch(() => setMail(null));
   }, []);
   const ready = !!auto?.ready;
   const templates = auto?.templates ?? [], sequences = auto?.sequences ?? [], runs = auto?.runs ?? [], log = auto?.log ?? [];
+  const folders = [...(auto?.folders ?? [])].sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name));
+  const folderOf = (t: CsTemplate) => (t.folder_id ? folders.find((f) => f.id === t.folder_id) ?? null : null);
+  // a folder that's gone (or was never here): back to all
+  const fKey = folder === "all" || folder === "none" || folders.some((f) => f.id === folder) ? folder : "all";
+  const inFolder = (t: CsTemplate) => (fKey === "all" ? true : fKey === "none" ? !folderOf(t) : t.folder_id === fKey);
+  const shownTpls = templates.filter(inFolder);
   const tplName = (id: string | null) => templates.find((t) => t.id === id)?.name ?? "—";
   const pName = (id: string | null | undefined) => (id ? people.find((p) => p.id === id)?.name ?? "Someone" : "—");
   const newSeq = (): Partial<CsSequence> => ({ name: "", active: false, audience: {}, steps: [newStep(templates[0]?.id ?? "", 0)], start_mode: "now", start_days: 30, repeat: false, recipients: "all", sender: "owner", log_contact: true });
-  const newTpl = (): Partial<CsTemplate> => ({ name: "", subject: "", body_html: "<p>Hi {{first_name}},</p><p><br></p><p><br></p>", design: { accent: "#0a6f4d", title: "", brand: "", signoff: "Best regards,\n{{owner_name}}" }, attachments: [] });
+  const newTpl = (): Partial<CsTemplate> => ({ folder_id: fKey !== "all" && fKey !== "none" ? fKey : null, name: "", subject: "", body_html: "<p>Hi {{first_name}},</p><p><br></p><p><br></p>", design: { accent: "#0a6f4d", title: "", brand: "", signoff: "Best regards,\n{{owner_name}}" }, attachments: [] });
   useEffect(() => {
     if (!cmd || cmd.n === lastCmd.current) return;
     lastCmd.current = cmd.n;
@@ -1393,6 +1436,41 @@ function CsFollowUps({ auto, setAuto, accounts, cs, setCs, types, people, me, sa
     setAuto((a) => a ? { ...a, templates: a.templates.filter((x) => x.id !== t.id) } : a);
   };
   const since30 = Date.now() - 30 * CS_DAY;
+  const setFolders = (f: (xs: CsFolder[]) => CsFolder[]) => setAuto((a) => (a ? { ...a, folders: f(a.folders ?? []) } : a));
+  const addFolder = async (name: string) => {
+    setFNew(null);
+    if (!name.trim()) return;
+    const r = await saveCsFolder({ name, color: FOLDER_COLORS.find((c) => !folders.some((f) => f.color === c)) ?? FOLDER_COLORS[folders.length % FOLDER_COLORS.length], sort: (folders[folders.length - 1]?.sort ?? 0) + 1 });
+    if (r.error || !r.row) { say(r.error ?? "Not saved"); return; }
+    setFolders((xs) => [...xs, r.row!]); setFolder(r.row.id);
+  };
+  const editFolder = async (f: CsFolder, p: Partial<CsFolder>) => {
+    const next = { ...f, ...p };
+    setFolders((xs) => xs.map((x) => (x.id === f.id ? next : x)));
+    const r = await saveCsFolder(next);
+    if (r.error) { say(r.error); setFolders((xs) => xs.map((x) => (x.id === f.id ? f : x))); }
+  };
+  const dropFolder = async (f: CsFolder) => {
+    const n = templates.filter((t) => t.folder_id === f.id).length;
+    if (!window.confirm(n ? `Delete the folder “${f.name}”? Its ${n} blueprint${n === 1 ? "" : "s"} stay, just not in a folder.` : `Delete the folder “${f.name}”?`)) return;
+    const e = await deleteCsFolder(f.id); if (e) { say(e); return; }
+    setAuto((a) => (a ? { ...a, folders: (a.folders ?? []).filter((x) => x.id !== f.id), templates: a.templates.map((t) => (t.folder_id === f.id ? { ...t, folder_id: null } : t)) } : a));
+    if (fKey === f.id) setFolder("all");
+  };
+  /** a blueprint into a folder (null: out of every folder) */
+  const moveTo = async (id: string, to: string | null) => {
+    const t = templates.find((x) => x.id === id);
+    if (!t || (t.folder_id ?? null) === to) return;
+    setAuto((a) => (a ? { ...a, templates: a.templates.map((x) => (x.id === id ? { ...x, folder_id: to } : x)) } : a));
+    const e = await moveCsTemplate(id, to);
+    if (e) { say(e); setAuto((a) => (a ? { ...a, templates: a.templates.map((x) => (x.id === id ? { ...x, folder_id: t.folder_id ?? null } : x)) } : a)); return; }
+    say(to ? `${t.name} → ${folders.find((f) => f.id === to)?.name ?? "folder"}` : `${t.name} is out of its folder`);
+  };
+  const foldTarget = (key: string) => ({
+    onDragOver: (e: React.DragEvent) => { if (!dragTpl) return; e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (dropOn !== key) setDropOn(key); },
+    onDragLeave: (e: React.DragEvent) => { if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) setDropOn((x) => (x === key ? null : x)); },
+    onDrop: (e: React.DragEvent) => { e.preventDefault(); const id = dragTpl; setDropOn(null); setDragTpl(null); if (id) moveTo(id, key === "none" ? null : key); },
+  });
 
   /* ---- cadence settings (moved here from the header) ---- */
   const setts = cs?.settings;
@@ -1402,6 +1480,34 @@ function CsFollowUps({ auto, setAuto, accounts, cs, setCs, types, people, me, sa
     if (e) say(e);
   };
   const priCount = (p: CsPriority | null) => accounts.filter((c) => (c.priority ?? null) === p).length;
+  /* ---- one "contact now" rule for every client (each client's own cadence, set all at once) ---- */
+  const own = accounts.filter((c) => cs?.cadence[c.id]);
+  const ownCommon = (() => { const m = new Map<number, number>(); own.forEach((c) => { const v = cs!.cadence[c.id]; m.set(v, (m.get(v) ?? 0) + 1); }); return [...m.entries()].sort((a, b) => b[1] - a[1])[0] ?? null; })();
+  const [allDays, setAllDays] = useState<number>(() => ownCommon?.[0] ?? 30);
+  const [allBusy, setAllBusy] = useState(false);
+  const applyAll = async (onlyNew: boolean) => {
+    const n = Math.max(1, Math.round(allDays) || 1);
+    const ids = (onlyNew ? accounts.filter((c) => !cs?.cadence[c.id]) : accounts).map((c) => c.id);
+    if (!ids.length) return;
+    const replaced = onlyNew ? 0 : own.filter((c) => cs!.cadence[c.id] !== n).length;
+    if (replaced && !window.confirm(`${replaced} client${replaced === 1 ? " has" : "s have"} a cadence of their own. Set every client to ${n} days anyway?`)) return;
+    setAllBusy(true);
+    const e = await setClientsCadence(ids, n);
+    setAllBusy(false);
+    if (e) { say(e); return; }
+    setCs((d) => (d ? { ...d, cadence: { ...d.cadence, ...Object.fromEntries(ids.map((id) => [id, n])) } } : d));
+    say(`${ids.length} client${ids.length === 1 ? "" : "s"}: “Contact now” after ${n} days without contact`);
+  };
+  const clearAll = async () => {
+    const ids = own.map((c) => c.id);
+    if (!ids.length || !window.confirm(`Clear the own cadence of ${ids.length} client${ids.length === 1 ? "" : "s"}? They'll follow their priority's again.`)) return;
+    setAllBusy(true);
+    const e = await setClientsCadence(ids, null);
+    setAllBusy(false);
+    if (e) { say(e); return; }
+    setCs((d) => (d ? { ...d, cadence: Object.fromEntries(Object.entries(d.cadence).filter(([k]) => !ids.includes(k))) } : d));
+    say("Back to the priorities' cadence");
+  };
 
   const sub = [
     { key: "sequences" as const, label: "Sequences", n: sequences.length },
@@ -1439,7 +1545,7 @@ function CsFollowUps({ auto, setAuto, accounts, cs, setCs, types, people, me, sa
                   <article key={q.id} className={`cs4-seq ${q.active ? "is-on" : ""}`} style={{ ["--i" as any]: i }}>
                     <header>
                       <span className="cs4-seq-ico"><CsIco n="mail" s={16} /></span>
-                      <div className="cs4-seq-t"><b>{q.name}</b><i>{audienceText(q, types, accounts)} · {q.start_mode === "before_renewal" ? `starts ${q.start_days} days before each renewal` : q.repeat ? `starts right away · again every ${q.start_days} days` : "starts right away"}</i></div>
+                      <div className="cs4-seq-t"><b>{q.name}</b><i>{audienceText(q, types, accounts)} · {q.audience?.quiet_days ? `starts once ${q.audience.quiet_days} days without contact${q.repeat ? " · again each time" : ""}` : q.start_mode === "before_renewal" ? `starts ${q.start_days} days before each renewal` : q.repeat ? `starts right away · again every ${q.start_days} days` : "starts right away"}</i></div>
                       <button type="button" role="switch" aria-checked={q.active} className={`csx-switch ${q.active ? "is-on" : ""}`} onClick={() => toggleSeq(q)}><i />{q.active ? "On" : "Off"}</button>
                     </header>
                     <ol className="cs4-seq-steps">
@@ -1482,13 +1588,76 @@ function CsFollowUps({ auto, setAuto, accounts, cs, setCs, types, people, me, sa
             </div>
           ))}
 
-          {view === "blueprints" && (templates.length ? (
-            <div className="cs4-tpls">
-              {templates.map((t, i) => {
+          {view === "blueprints" && (templates.length || folders.length ? (
+            <div className="cs4-bpl">
+              <nav className="cs4-fold" aria-label="Blueprint folders">
+                <span className="cs4-fold-h">Folders</span>
+                <div className={`cs4-fold-row ${fKey === "all" ? "is-on" : ""}`}>
+                  <button type="button" className="cs4-fold-i" onClick={() => setFolder("all")}>
+                    <span className="cs4-fold-ico is-all"><CsIco n="grid" s={13} /></span><span className="cs4-fold-n">All blueprints</span><em>{templates.length}</em>
+                  </button>
+                </div>
+                {folders.map((f) => {
+                  const n = templates.filter((t) => t.folder_id === f.id).length;
+                  return (
+                    <div key={f.id} className={`cs4-fold-row ${fKey === f.id ? "is-on" : ""} ${dropOn === f.id ? "is-drop" : ""}`} {...foldTarget(f.id)}>
+                      {fEdit?.id === f.id ? (
+                        <input className="cs4-fold-in" autoFocus value={fEdit.name} aria-label="Folder name"
+                          onChange={(e) => setFEdit({ id: f.id, name: e.target.value })}
+                          onBlur={() => { if (fEdit.name.trim() && fEdit.name.trim() !== f.name) editFolder(f, { name: fEdit.name.trim() }); setFEdit(null); }}
+                          onKeyDown={(e) => { if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur(); if (e.key === "Escape") setFEdit(null); }} />
+                      ) : (
+                        <button type="button" className="cs4-fold-i" onClick={() => setFolder(f.id)} onDoubleClick={() => setFEdit({ id: f.id, name: f.name })} title={`${f.name} — double-click to rename`}>
+                          <span className="cs4-fold-ico" style={{ ["--fc" as any]: f.color || "#0a6f4d" }}><CsIco n="folder" s={13} /></span><span className="cs4-fold-n">{f.name}</span><em>{n}</em>
+                        </button>
+                      )}
+                      <button type="button" className={`cs4-fold-more ${fMenu === f.id ? "is-on" : ""}`} aria-label={`${f.name}: options`} aria-expanded={fMenu === f.id} onClick={() => setFMenu(fMenu === f.id ? null : f.id)}><CsIco n="more" s={14} /></button>
+                      {fMenu === f.id && (
+                        <div className="cs4-fold-menu" role="menu">
+                          <button type="button" role="menuitem" onClick={() => { setFMenu(null); setFEdit({ id: f.id, name: f.name }); }}><CsIco n="edit" s={12} />Rename</button>
+                          <div className="cs4-fold-cols" role="group" aria-label="Colour">
+                            {FOLDER_COLORS.map((c) => <button key={c} type="button" className={(f.color || "#0a6f4d") === c ? "is-on" : ""} style={{ background: c }} aria-label={`Colour ${c}`} onClick={() => editFolder(f, { color: c })} />)}
+                          </div>
+                          <button type="button" role="menuitem" className="is-danger" onClick={() => { setFMenu(null); dropFolder(f); }}><CsIco n="trash" s={12} />Delete folder</button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                {folders.length > 0 && (
+                  <div className={`cs4-fold-row ${fKey === "none" ? "is-on" : ""} ${dropOn === "none" ? "is-drop" : ""}`} {...foldTarget("none")}>
+                    <button type="button" className="cs4-fold-i" onClick={() => setFolder("none")}>
+                      <span className="cs4-fold-ico is-none"><CsIco n="mail" s={12} /></span><span className="cs4-fold-n">Not in a folder</span><em>{templates.filter((t) => !folderOf(t)).length}</em>
+                    </button>
+                  </div>
+                )}
+                {fNew != null ? (
+                  <input className="cs4-fold-in is-new" autoFocus value={fNew} placeholder="Folder name — e.g. Updates" aria-label="New folder name"
+                    onChange={(e) => setFNew(e.target.value)} onBlur={() => addFolder(fNew)}
+                    onKeyDown={(e) => { if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur(); if (e.key === "Escape") setFNew(null); }} />
+                ) : (
+                  <button type="button" className="cs4-fold-add" disabled={auto?.foldersReady === false} title={auto?.foldersReady === false ? "Run 92_cs_template_folders.sql in Supabase" : undefined} onClick={() => setFNew("")}><CsIco n="plus" s={12} />New folder</button>
+                )}
+                {folders.length > 0 && templates.length > 0 && <p className="cs4-fold-tip">Drag a blueprint onto a folder to move it.</p>}
+              </nav>
+              <div className="cs4-bpl-main">
+                <div className="cs4-bpl-h">
+                  {(() => {
+                    const f = folders.find((x) => x.id === fKey);
+                    return <>
+                      <span className="cs4-fold-ico is-big" style={f ? { ["--fc" as any]: f.color || "#0a6f4d" } : undefined}><CsIco n={f ? "folder" : fKey === "none" ? "mail" : "grid"} s={16} /></span>
+                      <div><b>{f ? f.name : fKey === "none" ? "Not in a folder" : "All blueprints"}</b><i>{shownTpls.length} blueprint{shownTpls.length === 1 ? "" : "s"}</i></div>
+                    </>;
+                  })()}
+                </div>
+                <div className="cs4-tpls">
+              {shownTpls.map((t, i) => {
                 const used = sequences.filter((q) => q.steps.some((s) => s.template_id === t.id));
                 const accent = t.design?.accent || "#0a6f4d";
+                const fo = folderOf(t);
                 return (
-                  <article key={t.id} className="cs4-tpl" style={{ ["--i" as any]: i, ["--ac" as any]: accent }}>
+                  <article key={t.id} className={`cs4-tpl ${dragTpl === t.id ? "is-drag" : ""}`} style={{ ["--i" as any]: i, ["--ac" as any]: accent }}
+                    draggable={folders.length > 0} onDragStart={(e) => { setDragTpl(t.id); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", t.name); }} onDragEnd={() => { setDragTpl(null); setDropOn(null); }}>
                     <button type="button" className="cs4-tpl-prev" onClick={() => setTpl(t)} title="Edit">
                       <span className="cs4-tpl-band">{t.design?.brand && <small>{fillCsTags(t.design.brand, csVarsFor(null, "", ""), false)}</small>}<b>{fillCsTags(t.design?.title || t.subject || t.name, csVarsFor(null, "", ""), false)}</b></span>
                       <span className="cs4-tpl-body">{fillCsTags(plainOf(t.body_html), csVarsFor(null, "", ""), false).slice(0, 220)}</span>
@@ -1498,6 +1667,7 @@ function CsFollowUps({ auto, setAuto, accounts, cs, setCs, types, people, me, sa
                       <b>{t.name}</b>
                       <i>{t.subject ? fillCsTags(t.subject, csVarsFor(null, "", ""), false) : "No subject"}</i>
                       <span>
+                        {fKey === "all" && fo && <em className="is-fold" style={{ ["--fc" as any]: fo.color || "#0a6f4d" }}><CsIco n="folder" s={10} />{fo.name}</em>}
                         {(t.variants ?? []).length > 0 && <em className="is-ver" title={(t.variants ?? []).map((v) => v.name).join(" · ")}>{(t.variants ?? []).length + 1} versions</em>}
                         {t.attachments.length > 0 && <em><CsIco n="clip" s={10} />{t.attachments.length} file{t.attachments.length === 1 ? "" : "s"}</em>}
                         <em className={used.length ? "is-used" : ""}>{used.length ? `In ${used.length} sequence${used.length === 1 ? "" : "s"}` : "Not used yet"}</em>
@@ -1506,15 +1676,33 @@ function CsFollowUps({ auto, setAuto, accounts, cs, setCs, types, people, me, sa
                     <footer>
                       <button type="button" className="csx-ghost is-sm is-ico" title="Copy" onClick={() => dupTpl(t)}><CsIco n="repeat" s={12} /></button>
                       <button type="button" className="csx-ghost is-sm is-ico" title="Delete" onClick={() => dropTpl(t)}><CsIco n="trash" s={12} /></button>
+                      <span className="cs4-move">
+                        <button type="button" className={`csx-ghost is-sm is-ico cs4-move-b ${moveOpen === t.id ? "is-on" : ""}`} title="Move to a folder" aria-label="Move to a folder" aria-expanded={moveOpen === t.id} onClick={() => setMoveOpen(moveOpen === t.id ? null : t.id)}><CsIco n="folder" s={12} /></button>
+                        {moveOpen === t.id && (
+                          <div className="cs4-move-menu" role="menu">
+                            <b>Move to</b>
+                            {folders.map((f) => (
+                              <button key={f.id} type="button" role="menuitemradio" aria-checked={t.folder_id === f.id} className={t.folder_id === f.id ? "is-on" : ""} onClick={() => { setMoveOpen(null); moveTo(t.id, f.id); }}>
+                                <i style={{ background: f.color || "#0a6f4d" }} /><span>{f.name}</span>{t.folder_id === f.id && <CsIco n="check" s={12} />}
+                              </button>
+                            ))}
+                            {folders.length > 0 && <button type="button" role="menuitemradio" aria-checked={!fo} className={!fo ? "is-on" : ""} onClick={() => { setMoveOpen(null); moveTo(t.id, null); }}><i className="is-none" /><span>Not in a folder</span>{!fo && <CsIco n="check" s={12} />}</button>}
+                            <button type="button" className="is-add" onClick={() => { setMoveOpen(null); setFNew(""); }}><CsIco n="plus" s={12} /><span>New folder…</span></button>
+                          </div>
+                        )}
+                      </span>
                       <span className="csx-sp" />
                       <button type="button" className="csx-ghost is-sm" onClick={() => setTpl(t)}><CsIco n="edit" s={12} />Edit</button>
                     </footer>
                   </article>
                 );
               })}
-              <button type="button" className="cs4-tpl is-new" onClick={() => setTpl(newTpl())}><CsIco n="plus" s={20} /><b>New blueprint</b><i>A styled e-mail — the client's and contact's names filled in for each one</i></button>
+                  <button type="button" className="cs4-tpl is-new" onClick={() => setTpl(newTpl())}><CsIco n="plus" s={20} /><b>New blueprint</b><i>{fKey !== "all" && fKey !== "none" ? `In ${folders.find((f) => f.id === fKey)?.name ?? "this folder"} — ` : ""}A styled e-mail — the client's and contact's names filled in for each one</i></button>
+                </div>
+              </div>
             </div>
           ) : (
+
             <div className="cs4-fu-empty">
               <span className="csx-empty-ico"><CsIco n="edit" s={22} /></span>
               <b>No e-mail blueprints yet</b>
@@ -1550,6 +1738,29 @@ function CsFollowUps({ auto, setAuto, accounts, cs, setCs, types, people, me, sa
 
           {view === "cadence" && setts && (
             <div className="cs4-cad">
+              <section className="cs4-card cs4-cad-all">
+                <div className="cs4-cad-all-t">
+                  <span className="cs4-cad-all-ico"><CsIco n="users" s={18} /></span>
+                  <div><h3>One rule for every client</h3>
+                    <p className="cs4-help">After how many days without contact a client turns <b>Contact now</b>. Apply it to every client at once — then change any client on its own, in its panel.</p></div>
+                </div>
+                <div className="cs4-cad-all-row">
+                  <span className="cs4-cad-in"><span>Contact now after</span>
+                    <input type="number" min={1} value={allDays} onChange={(e) => setAllDays(Math.max(1, Number(e.target.value) || 1))} onKeyDown={(e) => { if (e.key === "Enter") applyAll(false); }} aria-label="Days without contact" />
+                    <span>days without contact</span></span>
+                  <span className="csx-sp" />
+                  {own.length > 0 && own.length < accounts.length && <button type="button" className="csx-ghost is-sm" disabled={allBusy} onClick={() => applyAll(true)}>Only the {accounts.length - own.length} without their own</button>}
+                  <button type="button" className="csx-primary is-sm" disabled={allBusy || !accounts.length} onClick={() => applyAll(false)}>{allBusy ? "Applying…" : `Apply to all ${accounts.length} clients`}</button>
+                </div>
+                <p className="cs4-cad-all-st">
+                  {own.length
+                    ? <>{own.length === accounts.length
+                        ? `Every client has its own number${ownCommon ? (ownCommon[1] === own.length ? ` (all at ${ownCommon[0]} days)` : ` (${ownCommon[1]} at ${ownCommon[0]} days)`) : ""} — so the priorities below don't apply until you clear them.`
+                        : `${own.length} of ${accounts.length} clients ${own.length === 1 ? "has its" : "have their"} own number${ownCommon && ownCommon[1] > 1 ? ` (${ownCommon[1]} at ${ownCommon[0]} days)` : ""} — it goes before their priority's.`}
+                      {" "}<button type="button" className="csx-link" disabled={allBusy} onClick={clearAll}>Clear them all</button></>
+                    : "No client has its own number yet: each follows its priority below."}
+                </p>
+              </section>
               <section className="cs4-card">
                 <h3>How often each priority hears from us</h3>
                 <p className="cs4-help">Give each client a priority (in the list or its panel). An account is “to contact” once this many days pass without a logged contact — a client's own cadence, set in its panel, goes first.</p>
@@ -1582,9 +1793,9 @@ function CsFollowUps({ auto, setAuto, accounts, cs, setCs, types, people, me, sa
         </div>
       )}
 
-      {tpl && <CsTemplateEditor initial={tpl} accounts={accounts} people={people} me={me} say={say} onClose={() => setTpl(null)} onSaved={(t) => { upTpl(t); }}
+      {tpl && <CsTemplateEditor initial={tpl} folders={folders} accounts={accounts} people={people} me={me} say={say} onClose={() => setTpl(null)} onSaved={(t) => { upTpl(t); }}
         onDelete={tpl.id ? () => { const t = templates.find((x) => x.id === tpl.id); setTpl(null); if (t) dropTpl(t); } : undefined} />}
-      {seq && <CsSequenceEditor initial={seq} templates={templates} accounts={accounts} runs={runs} types={types} me={me} people={people}
+      {seq && <CsSequenceEditor initial={seq} templates={templates} folders={folders} accounts={accounts} runs={runs} types={types} me={me} people={people}
         onClose={() => setSeq(null)} onSaved={(q) => { upSeq(q); say(q.active ? `${q.name} saved — it's on` : `${q.name} saved`); }} onNewTemplate={() => { setSeq(null); setView("blueprints"); setTpl(newTpl()); }} />}
     </div>
   );
@@ -1611,8 +1822,8 @@ const multiOfChips = (h: string) => fromChips(h).replace(/<br\s*\/?>/gi, "\n").r
 const toMultiChips = (x: string) => toChips(escT(x ?? "").replace(/\n/g, "<br>"));
 const textOfChips = (h: string) => fromChips(h).replace(/<br\s*\/?>/gi, " ").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
 
-function CsTemplateEditor({ initial, accounts, people, me, say, onClose, onSaved, onDelete }: {
-  initial: Partial<CsTemplate>; accounts: CsClient[]; people: Employee[]; me: string | null; say: (m: string) => void;
+function CsTemplateEditor({ initial, folders, accounts, people, me, say, onClose, onSaved, onDelete }: {
+  initial: Partial<CsTemplate>; folders: CsFolder[]; accounts: CsClient[]; people: Employee[]; me: string | null; say: (m: string) => void;
   onClose: () => void; onSaved: (t: CsTemplate) => void; onDelete?: () => void;
 }) {
   const [t, setT] = useState<Partial<CsTemplate>>({ ...initial, design: { ...(initial.design ?? {}) }, attachments: [...(initial.attachments ?? [])], variants: (initial.variants ?? []).map((v) => ({ ...v, audience: { ...(v.audience ?? {}) } })) });
@@ -1649,7 +1860,7 @@ function CsTemplateEditor({ initial, accounts, people, me, say, onClose, onSaved
     if (footRef.current) footRef.current.innerHTML = toMultiChips(d.footer ?? "");
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (view === "write") fillEditors(); }, [view, ver]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, [onClose]);
+  useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === "Escape" && !document.querySelector(".cs4-fe")) onClose(); }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, [onClose]);
   const syncBody = () => { if (bodyRef.current) patchCur({ body_html: fromChips(bodyRef.current.innerHTML) }); };
   const syncSubj = () => { if (subjRef.current) patchCur({ subject: textOfChips(subjRef.current.innerHTML) }); };
   /** another version: starts as a copy of the main one */
@@ -1724,8 +1935,26 @@ function CsTemplateEditor({ initial, accounts, people, me, say, onClose, onSaved
       const { data } = await supabase.storage.from("cs-files").download(a.path);
       if (data) setAtt(a.path, await inspectCsFile(data, a.name, a.type));
     });
+    // PDFs read before their {{field}} lines kept their own background: read those lines again (the field choices stay)
+    (t.attachments ?? []).filter((a) => a.kind === "pdf" && (a.spots ?? []).some((x) => !x.patch)).forEach(async (a) => {
+      const { data } = await supabase.storage.from("cs-files").download(a.path);
+      if (!data) return;
+      const info = await inspectCsFile(data, a.name, a.type);
+      if (info.spots?.length) setAtt(a.path, { spots: info.spots });
+    });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [peek, setPeek] = useState<string | null>(null);
+  /** the attachment open in the file editor */
+  const [fileEd, setFileEd] = useState<string | null>(null);
+  /** what the file editor saved: a PDF's changes (kept with it, made when it goes out), or a text file's new content (stored again) */
+  const saveFile = async (a: CsAttachment, patch: Partial<CsAttachment>, content?: Blob): Promise<string | null> => {
+    if (!content) { setAtt(a.path, patch); return null; }
+    const r = await uploadCsFile(new File([content], patch.name || a.name, { type: a.type || "text/html" }));
+    if (r.error || !r.file) return r.error ?? "Not saved.";
+    setT((x) => ({ ...x, attachments: (x.attachments ?? []).map((y) => (y.path === a.path ? r.file! : y)) }));
+    if (!initial.attachments?.some((y) => y.path === a.path)) await removeCsFile(a.path);
+    return null;
+  };
   /** the attachment as the client in the preview gets it */
   const seeAtt = async (a: CsAttachment) => {
     setPeek(a.path);
@@ -1768,6 +1997,8 @@ function CsTemplateEditor({ initial, accounts, people, me, say, onClose, onSaved
     setBusy(false);
     if (r.error || !r.row) { setErr(r.error ?? "Not saved."); return null; }
     setT(r.row); onSaved(r.row);
+    const kept = new Set((r.row.attachments ?? []).map((a) => a.path));
+    (initial.attachments ?? []).filter((a) => !kept.has(a.path)).forEach((a) => { void removeCsFile(a.path); });
     if (!andTest) { say(`${r.row.name} saved`); onClose(); }
     return r.row;
   };
@@ -1838,6 +2069,13 @@ function CsTemplateEditor({ initial, accounts, people, me, say, onClose, onSaved
           <span className="csx-modal-ico"><CsIco n="mail" s={18} /></span>
           <div className="cs4-ed-ht"><span className="csx-eyebrow">{t.id ? "E-mail blueprint" : "New e-mail blueprint"}</span>
             <input className="cs4-ed-name" value={t.name ?? ""} onChange={(e) => setT((x) => ({ ...x, name: e.target.value }))} placeholder="Name it — e.g. Quarterly check-in" aria-label="Blueprint name" autoFocus={!t.id} /></div>
+          {folders.length > 0 && (
+            <span className="cs4-ed-fold" title="The folder it's kept in">
+              <CsIco n="folder" s={13} />
+              <Select size="sm" value={t.folder_id ?? ""} onChange={(v) => setT((x) => ({ ...x, folder_id: v || null }))} aria-label="Folder"
+                options={[{ value: "", label: "Not in a folder" }, ...folders.map((f) => ({ value: f.id, label: f.name }))]} />
+            </span>
+          )}
           <button type="button" className="csx-x" onClick={onClose} aria-label="Close"><CsIco n="x" /></button>
         </header>
         <div className="cs4-bp">
@@ -1977,7 +2215,10 @@ function CsTemplateEditor({ initial, accounts, people, me, say, onClose, onSaved
                       <div key={a.path} className="cs4-att">
                         <div className="cs4-att-h">
                           <span className="cs4-att-ico"><CsIco n="clip" s={12} /></span>
-                          <span className="cs4-att-n"><b title={a.name}>{a.name}</b><i>{fmtSize(a.size)}{a.kind === "pdf" ? " · PDF" : a.kind === "text" ? " · text" : ""}</i></span>
+                          {(a.kind === "pdf" || a.kind === "text")
+                            ? <button type="button" className="cs4-att-n is-btn" onClick={() => setFileEd(a.path)} title="Open it and change it here"><b title={a.name}>{a.name}</b><i>{fmtSize(a.size)}{a.kind === "pdf" ? " · PDF" : " · text"}{a.edits?.length ? ` · ${a.edits.length} change${a.edits.length === 1 ? "" : "s"}` : ""}</i></button>
+                            : <span className="cs4-att-n"><b title={a.name}>{a.name}</b><i>{fmtSize(a.size)}</i></span>}
+                          {(a.kind === "pdf" || a.kind === "text") && <button type="button" className="csx-ghost is-sm is-ico" title="Open it and change it here" aria-label={`Edit ${a.name}`} onClick={() => setFileEd(a.path)}><CsIco n="edit" s={12} /></button>}
                           <button type="button" className="csx-ghost is-sm is-ico" disabled={!!peek} title={`See it as ${c?.name ?? "a client"} gets it`} onClick={() => seeAtt(a)}><CsIco n="eye" s={12} /></button>
                           <button type="button" className="csx-ghost is-sm is-ico" onClick={async () => { setT((x) => ({ ...x, attachments: (x.attachments ?? []).filter((y) => y.path !== a.path) })); if (!initial.attachments?.some((y) => y.path === a.path)) await removeCsFile(a.path); }} aria-label={`Remove ${a.name}`} title="Remove"><CsIco n="x" s={11} /></button>
                         </div>
@@ -1997,7 +2238,7 @@ function CsTemplateEditor({ initial, accounts, people, me, say, onClose, onSaved
                         )}
                         {fills.length > 0
                           ? <div className="cs4-att-fills"><em>Filled in for each client:</em>{fills.map((k) => <i key={k} className="cs4-fld">{FIELD_CHIP[k] ?? k}</i>)}</div>
-                          : (a.kind === "pdf" || a.kind === "text") && <p className="cs4-att-note">Nothing to fill in yet: write <code>{"{{client}}"}</code> (or another field) in the file{a.kind === "pdf" ? ", or give the PDF form fields" : ""}, and attach it again.</p>}
+                          : (a.kind === "pdf" || a.kind === "text") && <p className="cs4-att-note">Nothing to fill in yet. <button type="button" onClick={() => setFileEd(a.path)}>Open it</button> and put the client's name, the contact's… where they go.</p>}
                       </div>
                     );
                   })}
@@ -2025,6 +2266,10 @@ function CsTemplateEditor({ initial, accounts, people, me, say, onClose, onSaved
           </aside>
         </div>
         {err && <p className="csx-err cs4-ed-err">{err}</p>}
+        {(() => {
+          const a = fileEd ? (t.attachments ?? []).find((x) => x.path === fileEd) : null;
+          return a ? <CsFileEditor key={a.path} att={a} vars={vars} who={c?.name ?? "a client"} onClose={() => setFileEd(null)} onSave={(p, content) => saveFile(a, p, content)} /> : null;
+        })()}
         <footer className="csx-modal-f">
           {onDelete && <button type="button" className="csx-ghost is-danger" onClick={onDelete}><CsIco n="trash" s={14} />Delete</button>}
           <span className="csx-sp" />
@@ -2038,9 +2283,567 @@ function CsTemplateEditor({ initial, accounts, people, me, say, onClose, onSaved
   );
 }
 
+/* ---------- an attached file, opened and changed here: a web page or text file (the page itself, or its code), a PDF (its text) ---------- */
+type FeLine = { str: string; x: number; y: number; w: number; size: number; font: "sans" | "serif" | "mono"; bold: boolean };
+type FePage = { w: number; h: number; scale: number; url: string; lines: FeLine[]; widgets: { name: string; r: number[] }[]; vp: any; cv: HTMLCanvasElement; dpr: number };
+const feCss = (c: CsRgb | undefined) => (c ? `rgb(${c.map((v) => Math.round(v * 255)).join(",")})` : "#141a17");
+const feHex = (c: CsRgb | undefined) => `#${(c ?? [0.08, 0.1, 0.09]).map((v) => Math.round(v * 255).toString(16).padStart(2, "0")).join("")}`;
+const feRgb = (h: string): CsRgb => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255) as CsRgb;
+/** what the changed text is written in when the file goes out (and so, here) */
+const FE_FONT: Record<string, string> = { sans: "Helvetica, Arial, sans-serif", serif: '"Times New Roman", Times, serif', mono: '"Courier New", Courier, monospace' };
+/** where the baseline sits in a line 1.25 high, per font (em) */
+const FE_BASE: Record<string, number> = { sans: 0.97, serif: 0.96, mono: 0.89 };
+const FE_TAG = /\{\{\s*([a-z_]+)\s*\}\}/gi;
+const FE_HAS = /\{\{\s*[a-z_]+\s*\}\}/i;
+const FE_STYLE = ".__csf{display:inline-block;padding:0 7px;margin:0 1px;border-radius:6px;background:#e3f4ec;color:#0a6f4d;box-shadow:inset 0 0 0 1px rgba(10,111,77,.25);font:700 .86em/1.55 Inter,system-ui,sans-serif;white-space:nowrap;vertical-align:baseline;cursor:default;user-select:all}html{cursor:text}*:focus{outline:none}";
+const feId = () => Math.random().toString(36).slice(2, 10);
+function feChip(doc: Document, k: string) {
+  const s = doc.createElement("span");
+  s.className = "__csf"; s.setAttribute("data-csf", k); s.setAttribute("contenteditable", "false"); s.textContent = FIELD_CHIP[k] ?? k;
+  return s;
+}
+/** a text with its {{fields}} as cards, or filled in for a client */
+function FeText({ text, vars }: { text: string; vars: Record<string, string> | null }) {
+  if (vars) return <>{fillCsTags(text, vars, false)}</>;
+  const out: ReactNode[] = [];
+  let last = 0;
+  for (const m of text.matchAll(FE_TAG)) {
+    const k = m[1].toLowerCase();
+    out.push(text.slice(last, m.index));
+    out.push(FIELD_CHIP[k] ? <i key={m.index} className="cs4-fld">{FIELD_CHIP[k]}</i> : m[0]);
+    last = (m.index ?? 0) + m[0].length;
+  }
+  out.push(text.slice(last));
+  return <>{out}</>;
+}
+function CsFileEditor({ att, vars, who, onClose, onSave }: {
+  att: CsAttachment; vars: Record<string, string>; who: string;
+  onClose: () => void; onSave: (patch: Partial<CsAttachment>, content?: Blob) => Promise<string | null>;
+}) {
+  const isPdf = att.kind === "pdf" || /\.pdf$/i.test(att.name);
+  const isHtml = !isPdf && (/html/i.test(att.type) || /\.html?$/i.test(att.name));
+  const [name, setName] = useState(att.name);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [asClient, setAsClient] = useState(false);
+  // a web page / text file
+  const [orig, setOrig] = useState("");
+  const [code, setCode] = useState("");
+  const [mode, setMode] = useState<"page" | "code">(isHtml ? "page" : "code");
+  const [touched, setTouched] = useState(false);
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const codeRef = useRef<HTMLTextAreaElement>(null);
+  // a PDF
+  const [pages, setPages] = useState<FePage[]>([]);
+  const [edits, setEdits] = useState<CsEdit[]>(att.edits ?? []);
+  const [fields, setFields] = useState<Record<string, string>>(att.fields ?? {});
+  const [editing, setEditing] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const inRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const urls = useRef<string[]>([]);
+
+  useEffect(() => {
+    let dead = false;
+    (async () => {
+      const blob = await csFileBlob(att.path);
+      if (dead) return;
+      if (!blob) { setErr("The file couldn't be opened."); setLoading(false); return; }
+      if (!isPdf) { const txt = await blob.text(); if (dead) return; setOrig(txt); setCode(txt); setLoading(false); return; }
+      try {
+        const pdfjs = await loadPdfjs();
+        const doc = await pdfjs.getDocument({ data: new Uint8Array(await blob.arrayBuffer()), isEvalSupported: false }).promise;
+        const room = Math.max(320, (scrollRef.current?.clientWidth ?? 900) - 64);
+        const out: FePage[] = [];
+        for (let p = 1; p <= Math.min(doc.numPages, 30) && !dead; p++) {
+          const page = await doc.getPage(p);
+          const scale = Math.min(1.6, room / page.getViewport({ scale: 1 }).width);
+          const vp = page.getViewport({ scale });
+          const dpr = Math.min(2, window.devicePixelRatio || 1);
+          const cv = document.createElement("canvas");
+          cv.width = Math.ceil(vp.width * dpr); cv.height = Math.ceil(vp.height * dpr);
+          await page.render({ canvasContext: cv.getContext("2d")!, viewport: page.getViewport({ scale: scale * dpr }), annotationMode: pdfjs.AnnotationMode?.ENABLE ?? 1 }).promise;
+          const url = await new Promise<string>((res) => cv.toBlob((b) => res(b ? URL.createObjectURL(b) : cv.toDataURL()), "image/png"));
+          urls.current.push(url);
+          const tc = await page.getTextContent();
+          const styles: Record<string, any> = tc.styles ?? {};
+          const look = (fn: string): { font: FeLine["font"]; bold: boolean } => {
+            let f: any = null;
+            try { if (page.commonObjs.has(fn)) f = page.commonObjs.get(fn); } catch { /* not loaded */ }
+            const nm = `${f?.name ?? ""} ${styles[fn]?.fontFamily ?? ""}`;
+            const font = f?.isMonospace || /courier|mono|consol/i.test(nm) ? "mono"
+              : f?.isSerifFont || (/times|serif|georgia|garamond|cambria|minion|palatino|book/i.test(nm) && !/sans/i.test(nm)) ? "serif" : "sans";
+            return { font, bold: !!(f?.bold || f?.black) || /bold|black|heavy|semibold|demi/i.test(String(f?.name ?? "")) };
+          };
+          // the runs of text, put together into lines (the way they read)
+          const lines: FeLine[] = [];
+          for (const it of tc.items as any[]) {
+            if (typeof it?.str !== "string" || !it.str.trim() || !Array.isArray(it.transform)) continue;
+            const [a, b, c2, d2, e, f] = it.transform as number[];
+            if (Math.abs(b) > 0.01 || Math.abs(c2) > 0.01 || a <= 0) continue;   // turned text stays as it is
+            const size = Math.abs(d2) || Math.hypot(c2, d2) || 10;
+            const lk = look(it.fontName);
+            const prev = lines[lines.length - 1];
+            const gap = prev ? e - (prev.x + prev.w) : 0;
+            if (prev && Math.abs(prev.y - f) < 0.6 && Math.abs(prev.size - size) < 0.3 && prev.font === lk.font && prev.bold === lk.bold && gap > -prev.size * 0.3 && gap < prev.size * 0.9) {
+              prev.str += (gap > prev.size * 0.12 && !/\s$/.test(prev.str) && !/^\s/.test(it.str) ? " " : "") + it.str;
+              prev.w = e + (Number(it.width) || 0) - prev.x;
+            } else lines.push({ str: it.str, x: e, y: f, w: Number(it.width) || 0, size, ...lk });
+          }
+          lines.forEach((l) => { l.str = l.str.replace(/\s+$/, ""); l.size = Math.round(l.size * 100) / 100; });
+          let widgets: FePage["widgets"] = [];
+          try {
+            widgets = ((await page.getAnnotations()) as any[]).filter((x) => x?.subtype === "Widget" && x.fieldType === "Tx" && x.fieldName && Array.isArray(x.rect)).map((x) => ({ name: String(x.fieldName), r: x.rect as number[] }));
+          } catch { /* no form */ }
+          out.push({ w: vp.width, h: vp.height, scale, url, lines, widgets, vp, cv, dpr });
+          if (!dead) setPages([...out]);   // each page shows as soon as it's ready
+        }
+        try { await doc.destroy(); } catch { /* ignore */ }
+      } catch {
+        if (!dead) setErr("This PDF couldn't be read here.");
+      }
+      if (!dead) setLoading(false);
+    })();
+    return () => { dead = true; urls.current.forEach((u) => URL.revokeObjectURL(u)); urls.current = []; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // lines changed before they got their own background: give them one now (saved with the next Save)
+  useEffect(() => {
+    if (loading || !pages.length) return;
+    setEdits((xs) => (xs.some((x) => x.orig != null && !x.patch && pages[x.page])
+      ? xs.map((x) => (x.orig != null && !x.patch && pages[x.page] ? { ...x, ...(patchFor(pages[x.page], x.x, x.y, x.w, x.size) ?? {}) } : x))
+      : xs));
+  }, [loading]); // eslint-disable-line react-hooks/exhaustive-deps
+  const dirty = name !== att.name || (isPdf
+    ? JSON.stringify(edits) !== JSON.stringify(att.edits ?? []) || JSON.stringify(fields) !== JSON.stringify(att.fields ?? {})
+    : touched || code !== orig);
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape" && !editing && !dirty) onClose(); };
+    window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k);
+  }, [editing, dirty, onClose]);
+  useEffect(() => { if (!hint) return; const h = window.setTimeout(() => setHint(null), 4200); return () => window.clearTimeout(h); }, [hint]);
+
+  /* ---- a web page: edited as it looks (fields as cards), or its code ---- */
+  const onFrame = () => {
+    const doc = frameRef.current?.contentDocument;
+    if (!doc?.body) return;
+    doc.designMode = "on";
+    const st = doc.createElement("style"); st.id = "__csfe"; st.textContent = FE_STYLE; (doc.head ?? doc.documentElement).appendChild(st);
+    const walk = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+    const hits: Text[] = [];
+    while (walk.nextNode()) { const n = walk.currentNode as Text; if (FE_HAS.test(n.data) && !n.parentElement?.closest("script,style,title,textarea")) hits.push(n); }
+    for (const n of hits) {
+      const frag = doc.createDocumentFragment();
+      let last = 0;
+      for (const m of n.data.matchAll(FE_TAG)) {
+        const k = m[1].toLowerCase();
+        frag.append(n.data.slice(last, m.index));
+        frag.append(FIELD_CHIP[k] ? feChip(doc, k) : m[0]);
+        last = (m.index ?? 0) + m[0].length;
+      }
+      frag.append(n.data.slice(last));
+      n.replaceWith(frag);
+    }
+    doc.addEventListener("input", () => setTouched(true));
+    doc.addEventListener("click", (e) => { if ((e.target as Element)?.closest?.("a")) e.preventDefault(); }, true);
+  };
+  /** the page as it is now, back to HTML (cards back to {{fields}}) */
+  const pageHtml = (): string => {
+    const doc = frameRef.current?.contentDocument;
+    if (!doc?.body) return code;
+    const root = doc.documentElement.cloneNode(true) as HTMLElement;
+    root.querySelector("#__csfe")?.remove();
+    root.querySelectorAll("span[data-csf]").forEach((x) => x.replaceWith(doc.createTextNode(`{{${x.getAttribute("data-csf")}}}`)));
+    const clean = (h: string) => h.replace(/​/g, "");
+    if (!/<html[\s>]/i.test(orig) && !/<body[\s>]/i.test(orig)) {
+      // a piece of a page stays a piece
+      return clean(`${root.querySelector("head")?.innerHTML ?? ""}${root.querySelector("body")?.innerHTML ?? ""}`);
+    }
+    const dt = /^\s*(<!doctype[^>]*>)/i.exec(orig)?.[1];
+    return clean(`${dt ? `${dt}\n` : ""}${root.outerHTML}`);
+  };
+  const goMode = (m: "page" | "code") => { if (m === mode) return; if (mode === "page") setCode(pageHtml()); setMode(m); };
+  const goClient = (on: boolean) => {
+    if (on && !isPdf && mode === "page" && !asClient) setCode(pageHtml());
+    if (on && editing) inRef.current?.blur();
+    setAdding(false); setAsClient(on);
+  };
+
+  /* ---- a PDF: its lines written again, new text, its form fields ---- */
+  const at = (pg: FePage, x: number, y: number) => pg.vp.convertToViewportPoint(x, y) as [number, number];
+  /** the line's own background with its text taken out, and the colour it's written in (from the page as drawn) */
+  const patchFor = (pg: FePage, x: number, y: number, w: number, size: number): { patch: CsPatch; color: CsRgb } | null => {
+    const b = csLineBox(x, y, w, size);
+    const [ax, ay] = at(pg, b.x, b.y + b.h); const [bx, by] = at(pg, b.x + b.w, b.y);
+    const got = csPatchOf(pg.cv, { x: Math.min(ax, bx) * pg.dpr, y: Math.min(ay, by) * pg.dpr, w: Math.abs(bx - ax) * pg.dpr, h: Math.abs(by - ay) * pg.dpr });
+    const r2 = (v: number) => Math.round(v * 100) / 100;
+    return got ? { patch: { x: r2(b.x), y: r2(b.y), w: r2(b.w), h: r2(b.h), img: got.img }, color: got.color.map((v) => Math.round(v * 1000) / 1000) as CsRgb } : null;
+  };
+  /** where a patch goes on the page, in pixels */
+  const boxOf = (pg: FePage, b: { x: number; y: number; w: number; h: number }) => {
+    const [ax, ay] = at(pg, b.x, b.y + b.h); const [bx, by] = at(pg, b.x + b.w, b.y);
+    return { left: Math.min(ax, bx), top: Math.min(ay, by), width: Math.abs(bx - ax), height: Math.abs(by - ay) };
+  };
+  /** patches for the lines with {{fields}} written in them, as a client gets them (made once) */
+  const spotPatch = useRef(new Map<string, { patch: CsPatch; color: CsRgb } | null>());
+  const lineEdit = (pi: number, l: FeLine) => edits.find((e) => e.orig != null && e.page === pi && Math.abs(e.y - l.y) < 0.6 && Math.abs(e.x - l.x) < 0.6);
+  const editLine = (pi: number, l: FeLine) => {
+    if (asClient) return;
+    const ex = lineEdit(pi, l);
+    if (ex) { setEditing(ex.id); return; }
+    const id = feId();
+    const pp = patchFor(pages[pi], l.x, l.y, l.w, l.size);
+    setEdits((xs) => [...xs, { id, page: pi, x: l.x, y: l.y, w: l.w, size: l.size, text: l.str, orig: l.str, font: l.font, bold: l.bold, ...(pp ?? {}) }]);
+    setEditing(id);
+  };
+  const addAt = (e: React.MouseEvent<HTMLDivElement>, pi: number) => {
+    if (!adding || asClient) return;
+    e.preventDefault();
+    const pg = pages[pi]; const r = e.currentTarget.getBoundingClientRect();
+    const size = 11, fs = size * pg.scale;
+    const [x, y] = pg.vp.convertToPdfPoint(e.clientX - r.left, e.clientY - r.top + fs * (FE_BASE.sans - 0.62)) as [number, number];
+    // new text reads on what's under it: light on a dark background, dark on a light one
+    let color: CsRgb = [0.08, 0.1, 0.09];
+    try {
+      const d = pg.cv.getContext("2d")!.getImageData(Math.round((e.clientX - r.left) * pg.dpr), Math.round((e.clientY - r.top) * pg.dpr), 1, 1).data;
+      if (d[0] * 0.3 + d[1] * 0.59 + d[2] * 0.11 < 128) color = [1, 1, 1];
+    } catch { /* keep dark */ }
+    const id = feId();
+    setEdits((xs) => [...xs, { id, page: pi, x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10, w: 0, size, text: "", orig: null, font: "sans", bold: false, color }]);
+    setEditing(id); setAdding(false);
+  };
+  const readIn = (el: HTMLElement) => el.innerText.replace(/​/g, "").replace(/\n+$/, "");
+  const startIn = (e: CsEdit) => (el: HTMLDivElement | null) => {
+    if (!el || inRef.current === el) return;
+    inRef.current = el; el.innerText = e.text;
+    el.focus();
+    const r = document.createRange(); r.selectNodeContents(el); r.collapse(false);
+    const sel = window.getSelection(); sel?.removeAllRanges(); sel?.addRange(r);
+  };
+  const setEdit = (id: string, p: Partial<CsEdit>) => setEdits((xs) => xs.map((x) => (x.id === id ? { ...x, ...p } : x)));
+  /** done with a text: a line left as it was is no change, empty new text is no text */
+  const endEdit = (id: string) => {
+    setEditing((cur) => (cur === id ? null : cur));
+    setEdits((xs) => xs.filter((x) => x.id !== id || (x.orig != null ? x.text !== x.orig : x.text.trim() !== "")));
+  };
+  const drag = (e: CsEdit, pg: FePage) => (ev: RPointerEvent) => {
+    ev.preventDefault(); ev.stopPropagation();
+    const sx = ev.clientX, sy = ev.clientY, x0 = e.x, y0 = e.y;
+    const mv = (m: PointerEvent) => setEdit(e.id, { x: Math.round((x0 + (m.clientX - sx) / pg.scale) * 10) / 10, y: Math.round((y0 - (m.clientY - sy) / pg.scale) * 10) / 10 });
+    const up = () => { window.removeEventListener("pointermove", mv); window.removeEventListener("pointerup", up); };
+    window.addEventListener("pointermove", mv); window.addEventListener("pointerup", up);
+  };
+  const cur = edits.find((x) => x.id === editing) ?? null;
+
+  /** a field where the cursor is: in the PDF text being written, the page, or the code */
+  const put = (k: string) => {
+    if (asClient) { setHint(`Back to “Fields” to change the file.`); return; }
+    const tag = `{{${k}}}`;
+    if (isPdf) {
+      if (editing && inRef.current && document.activeElement === inRef.current) { document.execCommand("insertText", false, tag); return; }
+      setHint("Click a line of text in the PDF (or Add text), then pick the field.");
+      return;
+    }
+    if (mode === "code") {
+      const ta = codeRef.current; if (!ta) return;
+      const s0 = ta.selectionStart ?? code.length, s1 = ta.selectionEnd ?? s0;
+      setCode(code.slice(0, s0) + tag + code.slice(s1)); setTouched(true);
+      requestAnimationFrame(() => { ta.focus(); ta.setSelectionRange(s0 + tag.length, s0 + tag.length); });
+      return;
+    }
+    const doc = frameRef.current?.contentDocument; const sel = doc?.getSelection();
+    if (!doc?.body || !sel || !sel.rangeCount || !doc.body.contains(sel.getRangeAt(0).startContainer)) { setHint("Click in the page where it goes, then pick the field."); return; }
+    const r = sel.getRangeAt(0); r.deleteContents();
+    const chip = feChip(doc, k); const after = doc.createTextNode("​");
+    r.insertNode(after); r.insertNode(chip);
+    const c2 = doc.createRange(); c2.setStartAfter(after); c2.collapse(true);
+    sel.removeAllRanges(); sel.addRange(c2);
+    frameRef.current?.contentWindow?.focus(); setTouched(true);
+  };
+
+  const save = async () => {
+    if (editing) inRef.current?.blur();
+    setBusy(true); setErr(null);
+    let r: string | null;
+    if (isPdf) {
+      const ed = edits.filter((x) => (x.orig != null ? x.text !== x.orig : x.text.trim() !== ""));
+      const tags = [...new Set([
+        ...Object.values(fields).filter(Boolean),
+        ...(att.spots ?? []).filter((x) => !csUnderEdit(x, ed)).map((x) => x.key),
+        ...ed.flatMap((x) => [...x.text.matchAll(FE_TAG)].map((m) => m[1].toLowerCase())),
+      ])];
+      r = await onSave({ name: name.trim() || att.name, edits: ed, fields, tags });
+    } else {
+      const content = !asClient && mode === "page" ? pageHtml() : code;
+      r = await onSave({ name: name.trim() || att.name }, content !== orig ? new Blob([content], { type: att.type || (isHtml ? "text/html" : "text/plain") }) : undefined);
+    }
+    setBusy(false);
+    if (r) setErr(r); else onClose();
+  };
+  const stop = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "none"; };
+  const changes = edits.filter((x) => (x.orig != null ? x.text !== x.orig : x.text.trim() !== "")).length;
+
+  return createPortal(
+    <div className="csx-modal-bg cs4-ed-bg cs4-fe-bg" onDragEnter={stop} onDragOver={stop} onDrop={stop}>
+      <div className="cs4-ed cs4-fe" role="dialog" aria-modal="true" aria-label={`Edit ${att.name}`}>
+        <header className="cs4-ed-h">
+          <span className="csx-modal-ico"><CsIco n={isPdf ? "page" : isHtml ? "code" : "text"} s={18} /></span>
+          <div className="cs4-ed-ht"><span className="csx-eyebrow">Attachment · {isPdf ? "PDF" : isHtml ? "web page" : "text"}</span>
+            <input className="cs4-ed-name" value={name} onChange={(e) => setName(e.target.value)} aria-label="File name" title="The file's name — it can hold fields too, like {{client}}" /></div>
+          <button type="button" className="csx-x" onClick={onClose} aria-label="Close"><CsIco n="x" /></button>
+        </header>
+        <div className="cs4-fe-bar">
+          {isPdf ? (
+            <div className="cs4-seg is-light is-sm" role="group" aria-label="Tool">
+              <button type="button" className={!adding && !asClient ? "is-on" : ""} disabled={asClient} onClick={() => setAdding(false)} title="Click a line of text to write it again"><CsIco n="edit" s={13} />Change text</button>
+              <button type="button" className={adding && !asClient ? "is-on" : ""} disabled={asClient} onClick={() => setAdding((x) => !x)} title="Click anywhere on a page to put new text there"><CsIco n="plus" s={13} />Add text</button>
+            </div>
+          ) : isHtml ? (
+            <div className="cs4-seg is-light is-sm" role="tablist" aria-label="Page or code">
+              <button type="button" role="tab" aria-selected={mode === "page"} className={mode === "page" && !asClient ? "is-on" : ""} disabled={asClient} onClick={() => goMode("page")}><CsIco n="page" s={13} />Page</button>
+              <button type="button" role="tab" aria-selected={mode === "code"} className={mode === "code" && !asClient ? "is-on" : ""} disabled={asClient} onClick={() => goMode("code")}><CsIco n="code" s={13} />Code</button>
+            </div>
+          ) : <span className="cs4-fe-kind"><CsIco n="text" s={13} />Plain text</span>}
+          {isPdf && cur && !asClient && (
+            <div className="cs4-fe-fmt" onMouseDown={(e) => e.preventDefault()}>
+              <button type="button" onClick={() => setEdit(cur.id, { size: Math.max(5, Math.round((cur.size - 1) * 2) / 2) })} aria-label="Smaller">−</button>
+              <b title="Text size">{cur.size}</b>
+              <button type="button" onClick={() => setEdit(cur.id, { size: Math.min(72, Math.round((cur.size + 1) * 2) / 2) })} aria-label="Bigger">+</button>
+              <button type="button" className={cur.bold ? "is-on" : ""} onClick={() => setEdit(cur.id, { bold: !cur.bold })} aria-label="Bold" title="Bold"><CsIco n="bold" s={12} /></button>
+              <label className="cs4-fe-col" title="Text colour"><input type="color" value={feHex(cur.color)} onChange={(e) => setEdit(cur.id, { color: feRgb(e.target.value) })} aria-label="Text colour" /><i style={{ background: feCss(cur.color) }} /></label>
+              <select value={cur.font ?? "sans"} onChange={(e) => setEdit(cur.id, { font: e.target.value as CsEdit["font"] })} aria-label="Font">
+                <option value="sans">Helvetica</option><option value="serif">Times</option><option value="mono">Courier</option>
+              </select>
+            </div>
+          )}
+          <span className="csx-sp" />
+          {isPdf && changes > 0 && !asClient && <button type="button" className="csx-ghost is-sm" onClick={() => { setEditing(null); setEdits([]); }} title="Put every text back as it was"><CsIco n="undo" s={12} />Undo {changes} change{changes === 1 ? "" : "s"}</button>}
+          <div className="cs4-seg is-light is-sm" role="tablist" aria-label="Fields or filled in">
+            <button type="button" role="tab" aria-selected={!asClient} className={!asClient ? "is-on" : ""} onClick={() => goClient(false)}><CsIco n="edit" s={13} />Fields</button>
+            <button type="button" role="tab" aria-selected={asClient} className={asClient ? "is-on" : ""} onClick={() => goClient(true)} title={`Filled in as ${who} gets it`}><CsIco n="eye" s={13} /><span className="cs4-fe-who">As {who} gets it</span></button>
+          </div>
+        </div>
+        <div className="cs4-fe-b">
+          <div ref={scrollRef} className={`cs4-fe-main ${isPdf ? "is-pdf" : ""} ${adding ? "is-adding" : ""}`}>
+            {loading && !pages.length && <div className="cs4-fe-load"><span className="cs4-spin" />Opening {att.name}…</div>}
+            {isPdf ? (
+              <div className="cs4-fe-pages">
+                {pages.map((pg, pi) => (
+                  <div key={pi} className="cs4-fe-page" style={{ width: pg.w, height: pg.h }} onMouseDown={(e) => addAt(e, pi)}>
+                    <img src={pg.url} alt={`Page ${pi + 1}`} draggable={false} />
+                    {pg.lines.map((l, li) => {
+                      if (lineEdit(pi, l)) return null;
+                      const [vx, vy] = at(pg, l.x, l.y); const fs = l.size * pg.scale;
+                      const has = FE_HAS.test(l.str);
+                      return (
+                        <button key={li} type="button" className={`cs4-fe-ln ${has ? "has-f" : ""} ${asClient && has ? "is-fill" : ""}`} disabled={asClient && !has}
+                          style={{ left: vx - 2, top: vy - fs * 0.92, width: Math.max(6, l.w * pg.scale) + 4, height: fs * 1.2 }}
+                          onMouseDown={(e) => { if (!adding) e.stopPropagation(); }} onClick={() => { if (!adding) editLine(pi, l); }} title={asClient ? undefined : "Change this text"}>
+                          {asClient && has && (() => {
+                            const key = `${pi}|${li}`;
+                            if (!spotPatch.current.has(key)) spotPatch.current.set(key, patchFor(pg, l.x, l.y, l.w, l.size));
+                            const sp = spotPatch.current.get(key);
+                            const bx = sp ? boxOf(pg, sp.patch) : null;
+                            return (<>
+                              {sp && bx && <img className="cs4-fe-patch" src={sp.patch.img} alt="" style={{ left: bx.left - (vx - 2), top: bx.top - (vy - fs * 0.92), width: bx.width, height: bx.height }} />}
+                              <span className={sp ? "is-on-bg" : ""} style={{ fontSize: fs, fontFamily: FE_FONT[l.font], fontWeight: l.bold ? 700 : 400, top: fs * (0.92 - FE_BASE[l.font]), color: sp ? feCss(sp.color) : undefined }}>{fillCsTags(l.str, vars, false)}</span>
+                            </>);
+                          })()}
+                        </button>
+                      );
+                    })}
+                    {pg.widgets.map((wd, wi) => {
+                      const [x1, y1] = at(pg, wd.r[0], wd.r[3]); const [x2, y2] = at(pg, wd.r[2], wd.r[1]);
+                      const k = fields[wd.name] ?? "";
+                      const h = Math.abs(y2 - y1);
+                      return (
+                        <label key={`w${wi}`} className={`cs4-fe-wd ${k ? "is-set" : ""} ${asClient ? "is-client" : ""}`} style={{ left: Math.min(x1, x2), top: Math.min(y1, y2), width: Math.abs(x2 - x1), height: h, fontSize: Math.max(9, Math.min(13, h * 0.62)) }} title={`Form field “${wd.name}”`} onMouseDown={(e) => e.stopPropagation()}>
+                          {asClient ? <span>{k ? vars[k] : ""}</span> : (
+                            <select value={k} onChange={(e) => setFields((f) => ({ ...f, [wd.name]: e.target.value }))} aria-label={`Form field ${wd.name}`}>
+                              <option value="">{wd.name} · as it is</option>
+                              {Object.entries(FIELD_CHIP).map(([kk, lb]) => <option key={kk} value={kk}>{lb}</option>)}
+                            </select>
+                          )}
+                        </label>
+                      );
+                    })}
+                    {edits.filter((x) => x.page === pi).map((x) => {
+                      const [vx, vy] = at(pg, x.x, x.y); const fs = x.size * pg.scale; const f = x.font ?? "sans";
+                      const on = editing === x.id;
+                      const bx = x.orig != null && x.patch ? boxOf(pg, x.patch) : null;
+                      return (
+                        <Fragment key={x.id}>
+                        {bx && <img className="cs4-fe-patch" src={x.patch!.img} alt="" style={bx} />}
+                        <div className={`cs4-fe-ed ${x.orig != null ? (bx ? "is-over is-bg" : "is-over") : "is-new"} ${on ? "is-on" : ""} ${asClient ? "is-client" : ""}`}
+                          style={{ left: vx, top: vy - fs * FE_BASE[f], fontSize: fs, fontFamily: FE_FONT[f], fontWeight: x.bold ? 700 : 400, color: feCss(x.color), minWidth: x.orig != null ? x.w * pg.scale : undefined }}
+                          onMouseDown={(e) => e.stopPropagation()}>
+                          {on && !asClient ? (
+                            <div key="in" className="cs4-fe-in" contentEditable suppressContentEditableWarning ref={startIn(x)} role="textbox" aria-label="Text" aria-multiline="true"
+                              onInput={(e) => setEdit(x.id, { text: readIn(e.currentTarget) })}
+                              onBlur={() => endEdit(x.id)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") { e.preventDefault(); document.execCommand("insertLineBreak"); }
+                                else if (e.key === "Escape") { e.preventDefault(); e.currentTarget.blur(); }
+                              }}
+                              onPaste={(e) => { e.preventDefault(); document.execCommand("insertText", false, e.clipboardData.getData("text/plain")); }} />
+                          ) : (
+                            <div key="tx" className="cs4-fe-tx" onClick={() => { if (!asClient) setEditing(x.id); }}><FeText text={x.text} vars={asClient ? vars : null} /></div>
+                          )}
+                          {!asClient && (
+                            <span className="cs4-fe-tools" onMouseDown={(e) => e.preventDefault()}>
+                              {x.orig == null && <button type="button" className="is-grip" onPointerDown={drag(x, pg)} title="Drag to move" aria-label="Move"><CsIco n="move" s={11} /></button>}
+                              <button type="button" onClick={() => { setEditing(null); setEdits((xs) => xs.filter((y) => y.id !== x.id)); }} title={x.orig != null ? "Put the text back as it was" : "Remove this text"} aria-label={x.orig != null ? "Undo" : "Remove"}><CsIco n={x.orig != null ? "undo" : "x"} s={11} /></button>
+                            </span>
+                          )}
+                        </div>
+                        </Fragment>
+                      );
+                    })}
+                  </div>
+                ))}
+                {!loading && pages.length > 0 && <p className="cs4-fe-foot">{pages.length} page{pages.length === 1 ? "" : "s"}{pages.length === 30 ? " (the first 30)" : ""}</p>}
+              </div>
+            ) : !loading && (asClient ? (
+              isHtml ? <iframe className="cs4-fe-frame" title={`${att.name} for ${who}`} sandbox="" srcDoc={fillCsTags(code, vars, true)} />
+                : <pre className="cs4-fe-pre">{fillCsTags(code, vars, false)}</pre>
+            ) : mode === "page" ? (
+              <iframe ref={frameRef} className="cs4-fe-frame is-edit" title={att.name} sandbox="allow-same-origin" srcDoc={code} onLoad={onFrame} />
+            ) : (
+              <textarea ref={codeRef} className="cs4-fe-code" value={code} spellCheck={false} onChange={(e) => { setCode(e.target.value); setTouched(true); }} aria-label="The file's code" />
+            ))}
+          </div>
+          <aside className="cs4-bp-side cs4-fe-side">
+            <section className="cs4-bp-sec">
+              <h4>Insert a field</h4>
+              <p className="cs4-bp-hint">{isPdf ? "Click a line of text in the PDF (or Add text), put the cursor where it goes, then pick one." : mode === "page" ? "Click in the page where it goes, then pick one." : "Put the cursor where it goes, then pick one."} Each client gets the file filled in with their own details.</p>
+              {FIELD_GROUPS.map((g) => (
+                <div key={g.label} className="cs4-bp-grp">
+                  <b>{g.label}</b>
+                  <div className="cs4-bp-flds">
+                    {g.keys.map((k) => (
+                      <button key={k} type="button" className="cs4-bp-fld" onMouseDown={(e) => e.preventDefault()} onClick={() => put(k)} title={`Insert “${FIELD_CHIP[k]}” — e.g. ${vars[k] || "—"}`}>
+                        <CsIco n="plus" s={11} />{FIELD_CHIP[k]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </section>
+            {isPdf && (
+              <section className="cs4-bp-sec">
+                <h4>How it works</h4>
+                <ul className="cs4-fe-tips">
+                  <li><b>Change text</b> — click any line to write it again; the original goes under a white patch.</li>
+                  <li><b>Add text</b> — click anywhere on a page, then drag it by its handle.</li>
+                  {pages.some((pg) => pg.widgets.length > 0) && <li><b>Form fields</b> — the boxes drawn over the PDF's fields: pick what fills each one.</li>}
+                  <li>The file itself isn't touched: the changes are made, filled in, for each client as it goes out.</li>
+                </ul>
+              </section>
+            )}
+          </aside>
+        </div>
+        {(err || hint) && <p className={`${err ? "csx-err" : "cs4-fe-hint"} cs4-ed-err`}>{err ?? hint}</p>}
+        <footer className="csx-modal-f">
+          <span className="cs4-fe-note">{isPdf ? "Changed text is written in Helvetica, Times or Courier." : dirty ? "Not saved yet" : "No changes"}</span>
+          <span className="csx-sp" />
+          <button type="button" className="csx-ghost" onClick={onClose}>{dirty ? "Discard" : "Close"}</button>
+          <button type="button" className="csx-primary" disabled={busy || !dirty || loading} onClick={save}>{busy ? "Saving…" : "Save changes"}</button>
+        </footer>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/* the follow-up sequence editor's step-by-step guide: each step lights up the part it explains */
+type SeqTourStep = { at: string; title: string; lead?: string; place?: "right" | "left"; items?: [string, string][]; note?: string; flow?: { kind: string; text: string }[] };
+const SEQ_TOUR: SeqTourStep[] = [
+  {
+    at: "", title: "How a follow-up sequence works",
+    lead: "A sequence sends a series of e-mails to a group of clients by itself, from Outlook. Every hour it lets in the clients that match, and sends whatever is due.",
+    flow: [
+      { kind: "is-node", text: "Client joins" }, { kind: "is-wait", text: "wait" }, { kind: "is-mail", text: "E-mail 1" },
+      { kind: "is-wait", text: "wait" }, { kind: "is-mail", text: "E-mail 2" }, { kind: "is-node", text: "Stop or again" },
+    ],
+    note: "You set four things: who gets it, when each client's clock starts, the e-mails with the days between them, and who sends them to whom.",
+  },
+  {
+    at: "head", title: "Name and the On / Off switch",
+    items: [
+      ["Name", "Only for you and your team — clients never see it."],
+      ["Off", "Nothing is sent and nobody joins. Safe to set up and check first."],
+      ["On", "Every hour the matching clients join, and the e-mails that are due go out."],
+      ["The line under the name", "A summary of what the sequence will do, as you change it."],
+    ],
+  },
+  {
+    at: "who", title: "1 · Who gets it",
+    lead: "This only chooses the clients. Nothing here sets a date or a delay.",
+    items: [
+      ["Clients that match", "Every client that fits the ticks — now and later. A client joins the day it starts matching, and leaves when it stops."],
+      ["Priority", "The contact priority set on each account (High, Medium, Low). Here it's just a filter. Its rhythm in days is for the “Needs contact” reminders on the Accounts tab — not for this sequence."],
+      ["Type · Health", "The client's project type, and the account's health (Healthy, Watch, At risk)."],
+      ["How ticks combine", "Nothing ticked in a row means any. Ticks in different rows must all hold: High priority and At risk = high-priority clients at risk."],
+      ["Only the clients I pick", "A fixed list instead of filters."],
+      ["Never to", "Clients that are always left out."],
+    ],
+  },
+  {
+    at: "start", title: "2 · When it starts",
+    lead: "Each client has its own clock. This is the day it starts — day 0.",
+    items: [
+      ["Right away", "Day 0 is the day the client joins: the day you switch the sequence on, or the day the client starts matching later."],
+      ["Before each renewal", "Day 0 is a number of days before the client's next renewal date. Clients without a renewal date never start."],
+      ["Only once a client has gone quiet", "Optional, on top of either one: a client only starts when its last contact is at least that many days old — day 0 is that day. Any contact counts, logged by hand or read from Outlook."],
+      ["Stop as soon as someone is in touch", "With the quiet rule: if anyone calls, meets or e-mails the client (or they write to you) during the round, the rest of its e-mails aren't sent. The sequence's own e-mails don't count."],
+    ],
+    note: "Example: quiet after 80 days, then e-mail 1 waits 0 and e-mail 2 waits 14 — a client last contacted 80 days ago gets e-mail 1 that day and e-mail 2 two weeks later, unless someone gets in touch first.",
+  },
+  {
+    at: "mails", title: "3 · The e-mails",
+    lead: "Each e-mail waits its days after the one before it. The waits add up — each card shows the day it goes out.",
+    flow: [
+      { kind: "is-node", text: "Day 0" }, { kind: "is-wait", text: "wait 0" }, { kind: "is-mail", text: "E-mail 1 · day 0" },
+      { kind: "is-wait", text: "wait 14" }, { kind: "is-mail", text: "E-mail 2 · day 14" }, { kind: "is-wait", text: "wait 30" }, { kind: "is-mail", text: "E-mail 3 · day 44" },
+    ],
+    items: [
+      ["Wait … days", "Days after the previous e-mail (the first one: after day 0). 0 sends it at once."],
+      ["The blueprint", "Which e-mail goes out at that step — or + New blueprint to write one."],
+      ["↑ ↓ and the bin", "Change the order, or take an e-mail out."],
+      ["After the last e-mail", "Stop: the client is done. Start again: back to e-mail 1 after the pause you set, before the next renewal — or, with the quiet rule, the next time the client goes quiet."],
+    ],
+  },
+  {
+    at: "send", title: "4 · Sent to and from",
+    items: [
+      ["To", "Every contact of the client (each gets their own e-mail with their own name), only the main contact, or the billing contact."],
+      ["From", "Each client's starred owner's Outlook, or yours. If the owner hasn't connected Outlook with mail, it goes from the sequence's creator."],
+      ["Counts as a contact", "The e-mail is logged in the client's history, so it resets the client's “needs contact” clock."],
+    ],
+  },
+  {
+    at: "side", title: "Who's in it right now", place: "left",
+    items: [
+      ["The number", "How many clients match today, and how many people will get e-mails."],
+      ["The list", "Each client, the addresses it goes to, and the version of an e-mail it gets when there's more than one."],
+      ["In amber", "Clients without an e-mail address — they're skipped until one is added."],
+    ],
+  },
+  {
+    at: "save", title: "Saving",
+    items: [
+      ["Save and switch on", "Saves it and starts it: the first e-mails go out within the hour."],
+      ["Save, keep it off", "Saves it without sending anything."],
+      ["One client at a time", "In a client's panel you can pause the sequence for it, leave it out, or send it to other addresses."],
+    ],
+  },
+];
+
 /* ---------- the sequence editor: who, when, which e-mails ---------- */
-function CsSequenceEditor({ initial, templates, accounts, runs, types, me, people, onClose, onSaved, onNewTemplate }: {
-  initial: Partial<CsSequence>; templates: CsTemplate[]; accounts: CsClient[]; runs: CsRun[]; types: { id: string; name: string }[];
+function CsSequenceEditor({ initial, templates, folders, accounts, runs, types, me, people, onClose, onSaved, onNewTemplate }: {
+  initial: Partial<CsSequence>; templates: CsTemplate[]; folders: CsFolder[]; accounts: CsClient[]; runs: CsRun[]; types: { id: string; name: string }[];
   me: string | null; people: Employee[];
   onClose: () => void; onSaved: (q: CsSequence) => void; onNewTemplate: () => void;
 }) {
@@ -2048,7 +2851,7 @@ function CsSequenceEditor({ initial, templates, accounts, runs, types, me, peopl
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [who, setWho] = useState<"filters" | "picked">((initial.audience?.clients?.length ?? 0) > 0 ? "picked" : "filters");
-  useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === "Escape" && !document.querySelector(".smf-menu, .sel-menu")) onClose(); }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, [onClose]);
+  useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === "Escape" && !document.querySelector(".smf-menu, .sel-menu, .cs4-tour")) onClose(); }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, [onClose]);
   const a = q.audience ?? {};
   const setA = (p: Partial<NonNullable<CsSequence["audience"]>>) => setQ((x) => ({ ...x, audience: { ...(x.audience ?? {}), ...p } }));
   const tog = (k: "priorities" | "types" | "health", v: string) => { const cur = a[k] ?? []; setA({ [k]: cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v] }); };
@@ -2072,37 +2875,75 @@ function CsSequenceEditor({ initial, templates, accounts, runs, types, me, peopl
   };
   const inNow = q.id ? runs.filter((r) => r.sequence_id === q.id && r.status === "active").length : 0;
   const clientOpts = accounts.map((c) => ({ value: c.id, label: c.name }));
+  const before = q.start_mode === "before_renewal";
+  /** the day each e-mail goes out, counted from the client's start */
+  const dayOf = steps.map((_, i) => steps.slice(0, i + 1).reduce((t, st, j) => t + (j === 0 && before ? 0 : Number(st.wait_days) || 0), 0));
+  const tplName = (id: string) => templates.find((t) => t.id === id)?.name ?? "";
+  const folderName = (t: CsTemplate) => (t.folder_id ? folders.find((f) => f.id === t.folder_id)?.name ?? "" : "");
+  // the step-by-step guide: each step lights up the part of the editor it explains
+  const [tour, setTour] = useState<number | null>(null);
+  useEffect(() => {
+    let seen = true;
+    try { seen = localStorage.getItem("cs-seq-tour") === "1"; } catch { /* private mode */ }
+    if (!seen) { setTour(0); try { localStorage.setItem("cs-seq-tour", "1"); } catch { /* ignore */ } }
+  }, []);
+  const tourStep = tour != null ? SEQ_TOUR[tour] : null;
+  const tourOn = (k: string) => (tourStep?.at === k ? "is-tour-on" : "");
+  useEffect(() => {
+    if (!tourStep?.at) return;
+    const el = document.querySelector<HTMLElement>(`.cs4-ed.is-seq [data-tour="${tourStep.at}"]`);
+    el?.scrollIntoView({ behavior: "smooth", block: tourStep.at === "head" || tourStep.at === "save" ? "nearest" : "center" });
+  }, [tour]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (tour == null) return;
+    const k = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.stopImmediatePropagation(); setTour(null); }
+      else if (e.key === "ArrowRight") setTour((t) => (t == null ? t : Math.min(SEQ_TOUR.length - 1, t + 1)));
+      else if (e.key === "ArrowLeft") setTour((t) => (t == null ? t : Math.max(0, t - 1)));
+    };
+    window.addEventListener("keydown", k, true); return () => window.removeEventListener("keydown", k, true);
+  }, [tour]);
+  const ask = (k: string) => setTour(Math.max(0, SEQ_TOUR.findIndex((x) => x.at === k)));
+  const quietN = Math.max(0, Number(a.quiet_days) || 0);
+  const setQuiet = (n: number | null) => setA({ quiet_days: n && n > 0 ? n : null });
+  const waitingN = quietN ? accounts.filter((c) => csFits(full, c, null, true) && (csQuietLeft(full, c) ?? 0) > 0).length : 0;
+  const sentence = `${steps.length} e-mail${steps.length === 1 ? "" : "s"} to ${fits.length} client${fits.length === 1 ? "" : "s"} · ${quietN ? `starts once a client has gone ${quietN} days without contact` : before ? `starts ${q.start_days ?? 60} days before each renewal` : "starts as each client joins"} · ${q.repeat ? (quietN ? "again each time it goes quiet" : "then again") : "then stops"}`;
   return createPortal(
-    <div className="csx-modal-bg cs4-ed-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="cs4-ed is-seq" role="dialog" aria-modal="true" aria-label="Follow-up sequence">
-        <header className="cs4-ed-h">
-          <span className="csx-modal-ico"><CsIco n="repeat" s={18} /></span>
-          <div className="cs4-ed-ht"><span className="csx-eyebrow">{q.id ? "Follow-up sequence" : "New follow-up sequence"}</span>
-            <input className="cs4-ed-name" value={q.name ?? ""} onChange={(e) => setQ((x) => ({ ...x, name: e.target.value }))} placeholder="Name it — e.g. Keep in touch · high priority" aria-label="Sequence name" autoFocus={!q.id} /></div>
-          <button type="button" role="switch" aria-checked={!!q.active} className={`csx-switch ${q.active ? "is-on" : ""}`} onClick={() => setQ((x) => ({ ...x, active: !x.active }))}><i />{q.active ? "On" : "Off"}</button>
-          <button type="button" className="csx-x" onClick={onClose} aria-label="Close"><CsIco n="x" /></button>
+    <div className="csx-modal-bg cs4-ed-bg" onMouseDown={(e) => { if (e.target === e.currentTarget && tour == null) onClose(); }}>
+      <div className={`cs4-ed is-seq ${tourStep?.at ? "is-touring" : ""}`} role="dialog" aria-modal="true" aria-label="Follow-up sequence">
+        <header className={`cs4-ed-h cs4-sq-h ${tourOn("head")}`} data-tour="head">
+          <span className="cs4-sq-ico"><CsIco n="repeat" s={20} /></span>
+          <div className="cs4-ed-ht"><span className="cs4-sq-eye">{q.id ? "Follow-up sequence" : "New follow-up sequence"}</span>
+            <input className="cs4-ed-name" value={q.name ?? ""} onChange={(e) => setQ((x) => ({ ...x, name: e.target.value }))} placeholder="Name it — e.g. Keep in touch · high priority" aria-label="Sequence name" autoFocus={!q.id && tour == null} />
+            <span className="cs4-sq-sum">{sentence}</span></div>
+          <button type="button" className="cs4-sq-help" onClick={() => setTour(0)}><CsIco n="info" s={15} /><span>How it works</span></button>
+          <button type="button" role="switch" aria-checked={!!q.active} className={`csx-switch cs4-sq-switch ${q.active ? "is-on" : ""}`} onClick={() => setQ((x) => ({ ...x, active: !x.active }))}><i />{q.active ? "On" : "Off"}</button>
+          <button type="button" className="csx-x cs4-sq-x" onClick={onClose} aria-label="Close"><CsIco n="x" /></button>
         </header>
         <div className="cs4-ed-b">
-          <div className="cs4-ed-form">
-            <section className="cs4-ed-sec">
-              <h4><span>1</span>Who gets it</h4>
+          <div className="cs4-ed-form cs4-sq-form">
+            <section className={`cs4-ed-sec cs4-sq-sec ${tourOn("who")}`} data-tour="who">
+              <div className="cs4-sq-sh"><span className="cs4-sq-n">1</span><div><h4>Who gets it</h4><p>Which clients are in it. Priority, type and health only choose clients — they don't set any dates.</p></div>
+                <button type="button" className="cs4-sq-q" onClick={() => ask("who")} aria-label="Explain who gets it" title="Explain this"><CsIco n="info" s={14} /></button></div>
               <div className="cs4-seg is-light is-sm">
                 <button type="button" className={who === "filters" ? "is-on" : ""} onClick={() => setWho("filters")}>Clients that match</button>
                 <button type="button" className={who === "picked" ? "is-on" : ""} onClick={() => setWho("picked")}>Only the clients I pick</button>
               </div>
               {who === "filters" ? <>
-                <div className="cs4-chiprow"><span>Priority</span>
-                  {[...CS_PRIORITIES.map((p) => ({ k: p.key as string, l: p.label, tone: PRI_TONE[p.key] })), { k: "none", l: "No priority", tone: "none" }].map((x) => (
-                    <button key={x.k} type="button" className={`cs4-chip is-${x.tone} ${(a.priorities ?? []).includes(x.k) ? "is-on" : ""}`} onClick={() => tog("priorities", x.k)}><i />{x.l}</button>
-                  ))}
+                <div className="cs4-sq-rows">
+                  <div className="cs4-chiprow"><span>Priority</span>
+                    {[...CS_PRIORITIES.map((p) => ({ k: p.key as string, l: p.label, tone: PRI_TONE[p.key] })), { k: "none", l: "No priority", tone: "none" }].map((x) => (
+                      <button key={x.k} type="button" className={`cs4-chip is-${x.tone} ${(a.priorities ?? []).includes(x.k) ? "is-on" : ""}`} onClick={() => tog("priorities", x.k)}><i />{x.l}</button>
+                    ))}
+                  </div>
+                  {types.length > 0 && <div className="cs4-chiprow"><span>Type</span>
+                    {types.map((t) => <button key={t.id} type="button" className={`cs4-chip ${(a.types ?? []).includes(t.id) ? "is-on" : ""}`} onClick={() => tog("types", t.id)}>{t.name}</button>)}
+                  </div>}
+                  <div className="cs4-chiprow"><span>Health</span>
+                    {HEALTH_KEYS.map((h) => <button key={h.key} type="button" className={`cs4-chip is-h-${h.key} ${(a.health ?? []).includes(h.key) ? "is-on" : ""}`} onClick={() => tog("health", h.key)}><i />{h.label}</button>)}
+                  </div>
                 </div>
-                {types.length > 0 && <div className="cs4-chiprow"><span>Type</span>
-                  {types.map((t) => <button key={t.id} type="button" className={`cs4-chip ${(a.types ?? []).includes(t.id) ? "is-on" : ""}`} onClick={() => tog("types", t.id)}>{t.name}</button>)}
-                </div>}
-                <div className="cs4-chiprow"><span>Health</span>
-                  {HEALTH_KEYS.map((h) => <button key={h.key} type="button" className={`cs4-chip is-h-${h.key} ${(a.health ?? []).includes(h.key) ? "is-on" : ""}`} onClick={() => tog("health", h.key)}><i />{h.label}</button>)}
-                </div>
-                <p className="cs4-help">Nothing ticked in a row means any. Clients join and leave as they start or stop matching.</p>
+                <p className="cs4-help">Nothing ticked in a row means any. Clients join and leave by themselves as they start or stop matching.</p>
               </> : (
                 <div className="csx-f"><span>Clients</span>
                   <SalesMultiFilter values={a.clients ?? []} onChange={(v) => setA({ clients: v })} options={clientOpts} placeholder="Pick clients…" noun="clients" searchFrom={6} />
@@ -2113,70 +2954,105 @@ function CsSequenceEditor({ initial, templates, accounts, runs, types, me, peopl
               </div>
             </section>
 
-            <section className="cs4-ed-sec">
-              <h4><span>2</span>When it starts</h4>
-              <div className="cs4-opts">
-                <button type="button" className={q.start_mode !== "before_renewal" ? "is-on" : ""} onClick={() => setQ((x) => ({ ...x, start_mode: "now" }))}><b>Right away</b><i>As soon as a client is in</i></button>
-                <button type="button" className={q.start_mode === "before_renewal" ? "is-on" : ""} onClick={() => setQ((x) => ({ ...x, start_mode: "before_renewal" }))}><b>Before each renewal</b><i>From each client's next renewal date</i></button>
+            <section className={`cs4-ed-sec cs4-sq-sec ${tourOn("start")}`} data-tour="start">
+              <div className="cs4-sq-sh"><span className="cs4-sq-n">2</span><div><h4>When it starts</h4><p>The day each client's clock starts — the e-mails' waits count from it.</p></div>
+                <button type="button" className="cs4-sq-q" onClick={() => ask("start")} aria-label="Explain when it starts" title="Explain this"><CsIco n="info" s={14} /></button></div>
+              <div className="cs4-opts cs4-sq-opts">
+                <button type="button" className={!before ? "is-on" : ""} onClick={() => setQ((x) => ({ ...x, start_mode: "now" }))}><span className="cs4-sq-oi"><CsIco n="bolt" s={15} /></span><b>Right away</b><i>The day a client joins the sequence</i></button>
+                <button type="button" className={before ? "is-on" : ""} onClick={() => setQ((x) => ({ ...x, start_mode: "before_renewal" }))}><span className="cs4-sq-oi"><CsIco n="cal" s={15} /></span><b>Before each renewal</b><i>A set number of days before the client's renewal date</i></button>
               </div>
-              {q.start_mode === "before_renewal" && (
-                <div className="cs4-inline"><input type="number" min={0} value={q.start_days ?? 60} onChange={(e) => setQ((x) => ({ ...x, start_days: Math.max(0, Number(e.target.value) || 0) }))} /><span>days before the renewal (signed products' terms, their deals' contracts, else the yearly anniversary)</span></div>
+              {before && (
+                <div className="cs4-inline cs4-sq-inline"><input type="number" min={0} value={q.start_days ?? 60} onChange={(e) => setQ((x) => ({ ...x, start_days: Math.max(0, Number(e.target.value) || 0) }))} aria-label="Days before the renewal" /><span>days before the renewal <em>(signed products' terms, their deals' contracts, else the yearly anniversary)</em></span></div>
               )}
+              <div className={`cs4-sq-quiet ${quietN ? "is-on" : ""}`}>
+                <button type="button" role="switch" aria-checked={!!quietN} className="cs4-sq-quiet-h" onClick={() => setQuiet(quietN ? null : 60)}>
+                  <span className="cs4-sq-oi"><CsIco n="clock" s={15} /></span>
+                  <span className="cs4-sq-quiet-t"><b>Only once a client has gone quiet</b><i>Waits until the client's last contact is a number of days old</i></span>
+                  <span className={`csx-switch ${quietN ? "is-on" : ""}`} aria-hidden="true"><i /></span>
+                </button>
+                {quietN > 0 && (
+                  <div className="cs4-sq-quiet-b">
+                    <div className="cs4-inline"><span>Starts when the last contact is</span><input type="number" min={1} value={quietN} onChange={(e) => setQuiet(Math.max(1, Number(e.target.value) || 1))} aria-label="Days without contact" /><span>days old or more</span></div>
+                    <label className="csx-check-row"><input type="checkbox" checked={a.quiet_stop !== false} onChange={(e) => setA({ quiet_stop: e.target.checked })} /><span>Stop for that client as soon as someone is in touch — a call, a meeting, an e-mail either way</span></label>
+                    <p className="cs4-help">{fits.length} client{fits.length === 1 ? " is" : "s are"} quiet enough now{waitingN ? ` · ${waitingN} more start as they reach ${quietN} days` : ""}. Any contact counts: logged by hand, or read from Outlook.</p>
+                  </div>
+                )}
+              </div>
             </section>
 
-            <section className="cs4-ed-sec">
-              <h4><span>3</span>The e-mails</h4>
-              <ol className="cs4-steps">
+            <section className={`cs4-ed-sec cs4-sq-sec is-wide ${tourOn("mails")}`} data-tour="mails">
+              <div className="cs4-sq-sh"><span className="cs4-sq-n">3</span><div><h4>The e-mails</h4><p>Each e-mail waits its days after the one before it; the first one waits from the start.</p></div>
+                <button type="button" className="cs4-sq-q" onClick={() => ask("mails")} aria-label="Explain the e-mails" title="Explain this"><CsIco n="info" s={14} /></button></div>
+              <ol className="cs4-tl">
+                <li className="cs4-tl-edge">
+                  <span className="cs4-tl-dot is-start"><CsIco n="flag" s={12} /></span>
+                  <div><b>Start</b><i>{quietN ? `Day 0 · the day the client has gone ${quietN} days without contact${before ? ` (from ${q.start_days ?? 60} days before its renewal)` : ""}` : before ? `Day 0 · ${q.start_days ?? 60} days before the client's renewal` : "Day 0 · the day the client joins"}</i></div>
+                </li>
                 {steps.map((st, i) => (
-                  <li key={st.id}>
-                    <div className="cs4-step-wait">
-                      {i === 0 && q.start_mode === "before_renewal" ? <span>On the start date</span> : <>
-                        <span>{i === 0 ? "Wait" : "Then wait"}</span>
-                        <input type="number" min={0} value={st.wait_days} onChange={(e) => setStep(i, { wait_days: Math.max(0, Number(e.target.value) || 0) })} aria-label="Days to wait" />
-                        <span>day{st.wait_days === 1 ? "" : "s"}{i === 0 && !st.wait_days ? " (send at once)" : ""}</span>
-                      </>}
+                  <li key={st.id} className="cs4-tl-step">
+                    <div className="cs4-tl-wait">
+                      {i === 0 && before ? <span className="cs4-tl-pill"><CsIco n="clock" s={12} />Sent on the start day</span> : (
+                        <span className="cs4-tl-pill"><CsIco n="clock" s={12} />{i === 0 ? "Wait" : "Then wait"}
+                          <input type="number" min={0} value={st.wait_days} onChange={(e) => setStep(i, { wait_days: Math.max(0, Number(e.target.value) || 0) })} aria-label={`Days to wait before e-mail ${i + 1}`} />
+                          day{st.wait_days === 1 ? "" : "s"}{i === 0 && !st.wait_days ? " · sent at once" : ""}</span>
+                      )}
                     </div>
-                    <div className="cs4-step-card">
-                      <span className="cs4-step-n">{i + 1}</span>
-                      <span className="cs4-step-sel"><Select size="sm" value={st.template_id} onChange={(v) => v === "__new" ? onNewTemplate() : setStep(i, { template_id: v })} placeholder="Pick an e-mail blueprint…" searchable
-                        options={[...templates.map((t) => ({ value: t.id, label: t.name, hint: t.attachments.length ? `${t.attachments.length} file${t.attachments.length === 1 ? "" : "s"}` : undefined })), { value: "__new", label: "+ New blueprint…" }]} /></span>
-                      <button type="button" className="csx-ghost is-sm is-ico" disabled={i === 0} onClick={() => moveStep(i, -1)} title="Earlier"><CsIco n="up" s={12} /></button>
-                      <button type="button" className="csx-ghost is-sm is-ico" disabled={i === steps.length - 1} onClick={() => moveStep(i, 1)} title="Later"><CsIco n="dn" s={12} /></button>
-                      <button type="button" className="csx-ghost is-sm is-ico" disabled={steps.length === 1} onClick={() => setQ((x) => ({ ...x, steps: (x.steps ?? []).filter((_, j) => j !== i) }))} title="Remove"><CsIco n="trash" s={11} /></button>
+                    <div className="cs4-tl-card">
+                      <span className="cs4-tl-n">{i + 1}</span>
+                      <div className="cs4-tl-main">
+                        <em>E-mail {i + 1} · <b>day {dayOf[i]}</b>{tplName(st.template_id) ? "" : " · pick its blueprint"}</em>
+                        <Select size="sm" value={st.template_id} onChange={(v) => v === "__new" ? onNewTemplate() : setStep(i, { template_id: v })} placeholder="Pick an e-mail blueprint…" searchable
+                          options={[...[...templates].sort((x, y) => (folderName(x) || "\uffff").localeCompare(folderName(y) || "\uffff") || x.name.localeCompare(y.name)).map((t) => ({ value: t.id, label: t.name, hint: [folderName(t), t.attachments.length ? `${t.attachments.length} file${t.attachments.length === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ") || undefined })), { value: "__new", label: "+ New blueprint…" }]} />
+                      </div>
+                      <div className="cs4-tl-tools">
+                        <button type="button" className="csx-ghost is-sm is-ico" disabled={i === 0} onClick={() => moveStep(i, -1)} title="Earlier" aria-label="Move earlier"><CsIco n="up" s={12} /></button>
+                        <button type="button" className="csx-ghost is-sm is-ico" disabled={i === steps.length - 1} onClick={() => moveStep(i, 1)} title="Later" aria-label="Move later"><CsIco n="dn" s={12} /></button>
+                        <button type="button" className="csx-ghost is-sm is-ico" disabled={steps.length === 1} onClick={() => setQ((x) => ({ ...x, steps: (x.steps ?? []).filter((_, j) => j !== i) }))} title="Remove" aria-label="Remove this e-mail"><CsIco n="trash" s={11} /></button>
+                      </div>
                     </div>
                   </li>
                 ))}
+                <li className="cs4-tl-add">
+                  <button type="button" className="cs4-tl-addb" onClick={() => setQ((x) => ({ ...x, steps: [...(x.steps ?? []), newStep(templates[0]?.id ?? "", 14)] }))}><CsIco n="plus" s={12} />Add an e-mail</button>
+                </li>
+                <li className="cs4-tl-edge is-end">
+                  <span className={`cs4-tl-dot ${q.repeat ? "is-again" : "is-stop"}`}><CsIco n={q.repeat ? "repeat" : "stop"} s={12} /></span>
+                  <div className="cs4-tl-endb">
+                    <b>After the last e-mail</b>
+                    <div className="cs4-opts is-sm">
+                      <button type="button" className={!q.repeat ? "is-on" : ""} onClick={() => setQ((x) => ({ ...x, repeat: false }))}><b>Stop</b><i>{quietN ? "Once per client, for good" : "The client is done"}</i></button>
+                      <button type="button" className={q.repeat ? "is-on" : ""} onClick={() => setQ((x) => ({ ...x, repeat: true }))}><b>Start again</b><i>{quietN ? `The next time it goes ${quietN} days without contact` : before ? "Before the next renewal" : "From e-mail 1, after a pause"}</i></button>
+                    </div>
+                    {q.repeat && !before && !quietN && (
+                      <div className="cs4-inline cs4-sq-inline"><span>Start again</span><input type="number" min={1} value={q.start_days ?? 30} onChange={(e) => setQ((x) => ({ ...x, start_days: Math.max(1, Number(e.target.value) || 1) }))} aria-label="Days before starting again" /><span>days after the last e-mail{steps[0]?.wait_days ? ` (then e-mail 1's own ${steps[0].wait_days}-day wait)` : ""}</span></div>
+                    )}
+                  </div>
+                </li>
               </ol>
-              <button type="button" className="csx-ghost is-sm" onClick={() => setQ((x) => ({ ...x, steps: [...(x.steps ?? []), newStep(templates[0]?.id ?? "", 14)] }))}><CsIco n="plus" s={12} />Add an e-mail</button>
-              <div className="cs4-opts is-sm">
-                <button type="button" className={!q.repeat ? "is-on" : ""} onClick={() => setQ((x) => ({ ...x, repeat: false }))}><b>Then stop</b><i>After the last e-mail</i></button>
-                <button type="button" className={q.repeat ? "is-on" : ""} onClick={() => setQ((x) => ({ ...x, repeat: true }))}><b>Then start again</b><i>{q.start_mode === "before_renewal" ? "Before the next renewal" : "From the first e-mail, after a pause"}</i></button>
-              </div>
-              {q.repeat && q.start_mode !== "before_renewal" && (
-                <div className="cs4-inline"><span>Start again</span><input type="number" min={1} value={q.start_days ?? 30} onChange={(e) => setQ((x) => ({ ...x, start_days: Math.max(1, Number(e.target.value) || 1) }))} /><span>days after the last e-mail{steps[0]?.wait_days ? ` (then the first one's own ${steps[0].wait_days}-day wait)` : ""}</span></div>
-              )}
             </section>
 
-            <section className="cs4-ed-sec">
-              <h4><span>4</span>Sent to and from</h4>
-              <div className="cs4-chiprow"><span>To</span>
-                {([["all", "Every contact"], ["main", "Main contact only"], ["billing", "Billing contact"]] as const).map(([k, l]) => <button key={k} type="button" className={`cs4-chip ${q.recipients === k ? "is-on" : ""}`} onClick={() => setQ((x) => ({ ...x, recipients: k }))}>{l}</button>)}
+            <section className={`cs4-ed-sec cs4-sq-sec is-wide ${tourOn("send")}`} data-tour="send">
+              <div className="cs4-sq-sh"><span className="cs4-sq-n">4</span><div><h4>Sent to and from</h4><p>Who at the client gets it, and whose Outlook sends it.</p></div>
+                <button type="button" className="cs4-sq-q" onClick={() => ask("send")} aria-label="Explain sent to and from" title="Explain this"><CsIco n="info" s={14} /></button></div>
+              <div className="cs4-sq-rows">
+                <div className="cs4-chiprow"><span>To</span>
+                  {([["all", "Every contact"], ["main", "Main contact only"], ["billing", "Billing contact"]] as const).map(([k, l]) => <button key={k} type="button" className={`cs4-chip ${q.recipients === k ? "is-on" : ""}`} onClick={() => setQ((x) => ({ ...x, recipients: k }))}>{l}</button>)}
+                </div>
+                <div className="cs4-chiprow"><span>From</span>
+                  <button type="button" className={`cs4-chip ${q.sender === "owner" ? "is-on" : ""}`} onClick={() => setQ((x) => ({ ...x, sender: "owner" }))}>Each client's starred owner</button>
+                  <button type="button" className={`cs4-chip ${q.sender === "me" ? "is-on" : ""}`} onClick={() => setQ((x) => ({ ...x, sender: "me" }))}>{q.created_by && q.created_by !== me ? people.find((p) => p.id === q.created_by)?.name ?? "Its creator" : "Me"}</button>
+                </div>
               </div>
-              <div className="cs4-chiprow"><span>From</span>
-                <button type="button" className={`cs4-chip ${q.sender === "owner" ? "is-on" : ""}`} onClick={() => setQ((x) => ({ ...x, sender: "owner" }))}>Each client's starred owner</button>
-                <button type="button" className={`cs4-chip ${q.sender === "me" ? "is-on" : ""}`} onClick={() => setQ((x) => ({ ...x, sender: "me" }))}>{q.created_by && q.created_by !== me ? people.find((p) => p.id === q.created_by)?.name ?? "Its creator" : "Me"}</button>
-              </div>
-              <p className="cs4-help">Each person gets their own e-mail, with their own name in it.</p>
-              <label className="csx-check-row"><input type="checkbox" checked={q.log_contact !== false} onChange={(e) => setQ((x) => ({ ...x, log_contact: e.target.checked }))} /><span>Each e-mail counts as a contact (it resets the client's cadence)</span></label>
-              <p className="cs4-help">A client without an owner (or whose owner hasn't connected Outlook with mail) is sent from the sequence's creator. Per client, you can pause it, leave the client out or send it to other addresses — in the client's panel.</p>
+              <label className="csx-check-row cs4-sq-check"><input type="checkbox" checked={q.log_contact !== false} onChange={(e) => setQ((x) => ({ ...x, log_contact: e.target.checked }))} /><span><b>Each e-mail counts as a contact</b><i>It goes in the client's history and resets its "needs contact" clock.</i></span></label>
+              <p className="cs4-help">Each person gets their own e-mail, with their own name. A client without an owner (or whose owner hasn't connected Outlook with mail) is sent from the sequence's creator.</p>
             </section>
           </div>
 
-          <aside className="cs4-ed-side">
-            <div className="cs4-ed-sum">
+          <aside className={`cs4-ed-side cs4-sq-side ${tourOn("side")}`} data-tour="side">
+            <div className="cs4-ed-sum cs4-sq-card">
               <b>{fits.length}</b><span>client{fits.length === 1 ? "" : "s"} match{fits.length === 1 ? "es" : ""}{q.id ? ` · ${inNow} in it now` : ""}</span>
               <span className="cs4-ed-sum-p">{people_n} {people_n === 1 ? "person" : "people"} · one e-mail each</span>
-              <i>{steps.length === 1 ? "1 e-mail" : `${steps.length} e-mails over ${totalDays} days`}{q.repeat ? (q.start_mode === "before_renewal" ? ", again before each renewal" : `, again ${q.start_days ?? 30} days later`) : ""}</i>
+              <i>{quietN ? `Once ${quietN} days without contact · ` : ""}{steps.length === 1 ? "1 e-mail" : `${steps.length} e-mails over ${totalDays} days`}{q.repeat ? (quietN ? ", again each time it goes quiet" : before ? ", again before each renewal" : `, again ${q.start_days ?? 30} days later`) : ""}</i>
             </div>
             <ul className="cs4-ed-who">
               {fits.slice(0, 200).map((c) => {
@@ -2186,7 +3062,7 @@ function CsSequenceEditor({ initial, templates, accounts, runs, types, me, peopl
                 return (
                   <li key={c.id} className={to.length ? "" : "is-bad"}>
                     <CompanyLogo name={c.name} website={c.website} className="cx-av csx-logo is-xs" />
-                    <span><b>{c.name}{vs.length > 0 && <em className="cs4-ed-ver" title={`Gets: ${vs.join(", ")}`}>{vs.join(" · ")}</em>}</b><i>{to.length ? `${to.length > 1 ? `${to.length} people · ` : ""}${to.join(", ")}` : "No e-mail on file — it'll be skipped"}{q.start_mode === "before_renewal" && c.ren ? ` · renews ${c.ren.end.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "2-digit" })}` : ""}</i></span>
+                    <span><b>{c.name}{vs.length > 0 && <em className="cs4-ed-ver" title={`Gets: ${vs.join(", ")}`}>{vs.join(" · ")}</em>}</b><i>{to.length ? `${to.length > 1 ? `${to.length} people · ` : ""}${to.join(", ")}` : "No e-mail on file — it'll be skipped"}{before && c.ren ? ` · renews ${c.ren.end.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "2-digit" })}` : ""}</i></span>
                     {c.priority && <em className={`cs4-pri-dot is-${PRI_TONE[c.priority]}`} title={`${c.priority} priority`} />}
                   </li>
                 );
@@ -2197,13 +3073,42 @@ function CsSequenceEditor({ initial, templates, accounts, runs, types, me, peopl
           </aside>
         </div>
         {err && <p className="csx-err cs4-ed-err">{err}</p>}
-        <footer className="csx-modal-f">
+        <footer className={`csx-modal-f ${tourOn("save")}`} data-tour="save">
           <span className="cs4-foot-note">{q.active ? "On: due e-mails go out every hour." : "Off: nothing is sent until you switch it on."}</span>
           <span className="csx-sp" />
           <button type="button" className="csx-ghost" onClick={onClose}>Cancel</button>
           {!q.active && <button type="button" className="csx-ghost" disabled={busy} onClick={() => save(false)}>Save, keep it off</button>}
           <button type="button" className="csx-primary" disabled={busy} onClick={() => save(true)}>{busy ? "Saving…" : q.active ? "Save" : "Save and switch on"}</button>
         </footer>
+        {tourStep && tour != null && (
+          <div className={`cs4-tour is-${tourStep.place ?? "right"}`} role="dialog" aria-label="How a follow-up sequence works">
+            <div className="cs4-tour-h">
+              <span className="cs4-tour-k">{tour + 1} / {SEQ_TOUR.length}</span>
+              <button type="button" className="cs4-tour-x" onClick={() => setTour(null)} aria-label="Close the guide"><CsIco n="x" s={13} /></button>
+            </div>
+            <h5>{tourStep.title}</h5>
+            {tourStep.lead && <p className="cs4-tour-lead">{tourStep.lead}</p>}
+            {tourStep.flow && (
+              <div className="cs4-tour-flow" aria-hidden="true">
+                {tourStep.flow.map((f, i) => <span key={i} className={f.kind}>{f.text}</span>)}
+              </div>
+            )}
+            {tourStep.items && (
+              <dl className="cs4-tour-items">
+                {tourStep.items.map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}
+              </dl>
+            )}
+            {tourStep.note && <p className="cs4-tour-note">{tourStep.note}</p>}
+            <div className="cs4-tour-f">
+              <div className="cs4-tour-dots">{SEQ_TOUR.map((_, i) => <button key={i} type="button" className={i === tour ? "is-on" : ""} onClick={() => setTour(i)} aria-label={`Step ${i + 1}`} />)}</div>
+              <span className="csx-sp" />
+              {tour > 0 && <button type="button" className="csx-ghost is-sm" onClick={() => setTour(tour - 1)}>Back</button>}
+              {tour < SEQ_TOUR.length - 1
+                ? <button type="button" className="csx-primary is-sm" onClick={() => setTour(tour + 1)}>Next</button>
+                : <button type="button" className="csx-primary is-sm" onClick={() => setTour(null)}>Got it</button>}
+            </div>
+          </div>
+        )}
       </div>
     </div>,
     document.body,
@@ -2705,11 +3610,11 @@ export function CustomerSuccessPage() {
           <CsBlock icon="mail" title="Automatic e-mails" tone="blue"
             right={<button type="button" className="csx-link" onClick={() => setTab("followups")}>Set up</button>}>
             {!auto ? <p className="cs3-empty">Reading…</p> : !auto.ready ? <CsLocked what="Automatic e-mails" /> : (() => {
-              const rows = auto.sequences.map((q) => ({ q, run: auto.runs.find((r) => r.sequence_id === q.id && r.client_id === c.id) ?? null, fits: csFits(q, c, cs) }))
+              const rows = auto.sequences.map((q) => ({ q, run: auto.runs.find((r) => r.sequence_id === q.id && r.client_id === c.id) ?? null, fits: csFits(q, c, cs, true), left: csQuietLeft(q, c) }))
                 .filter((x) => x.run || (x.q.active && x.fits));
               const others = auto.sequences.filter((q) => !rows.some((x) => x.q.id === q.id));
               return <>
-                {rows.length ? <ul className="cs4-runs">{rows.map(({ q, run, fits }) => {
+                {rows.length ? <ul className="cs4-runs">{rows.map(({ q, run, fits, left }) => {
                   const st = run?.status ?? (fits ? "waiting" : "out");
                   const step = q.steps[Math.min(run?.step ?? 0, Math.max(0, q.steps.length - 1))];
                   const tpl = auto.templates.find((t) => t.id === step?.template_id);
@@ -2717,11 +3622,11 @@ export function CustomerSuccessPage() {
                     <li key={q.id} className={`is-${st}`}>
                       <span className="cs4-runs-m">
                         <b>{q.name}{!q.active && <em className="cs3-tag is-slate">off</em>}</b>
-                        <i>{st === "active" ? `Next: ${tpl?.name ?? "—"} · ${run?.next_at ? csDate(run.next_at) : "soon"}` : st === "paused" ? "Paused for this client" : st === "excluded" ? "Left out for this client" : st === "done" ? `Done${run?.last_sent_at ? ` · last ${csDate(run.last_sent_at)}` : ""}` : "Starts with the next run"}
+                        <i>{st === "active" ? `Next: ${tpl?.name ?? "—"} · ${run?.next_at ? csDate(run.next_at) : "soon"}` : st === "paused" ? "Paused for this client" : st === "excluded" ? "Left out for this client" : st === "done" ? `Done${run?.last_sent_at ? ` · last ${csDate(run.last_sent_at)}` : ""}${q.repeat && left != null ? ` · again after ${q.audience?.quiet_days} days without contact` : ""}` : left ? `Starts after ${q.audience?.quiet_days} days without contact — in ${left} day${left === 1 ? "" : "s"}` : "Starts with the next run"}
                           {run?.to_emails?.length ? ` · to ${run.to_emails.join(", ")}` : ""}</i>
                       </span>
                       {st === "active" && <button type="button" className="csx-ghost is-sm" onClick={() => putRun(q.id, c.id, { status: "paused" }, `${q.name} paused for ${c.name}`)}>Pause</button>}
-                      {(st === "paused" || st === "excluded" || st === "done") && <button type="button" className="csx-ghost is-sm" onClick={() => putRun(q.id, c.id, { status: "active", manual: true, ...(st === "done" ? { step: 0, next_at: new Date().toISOString() } : {}) }, `${q.name} running for ${c.name}`)}>{st === "done" ? "Start again" : "Resume"}</button>}
+                      {(st === "paused" || st === "excluded" || st === "done") && <button type="button" className="csx-ghost is-sm" onClick={() => putRun(q.id, c.id, { status: "active", manual: true, ...(st === "done" ? { step: 0, next_at: new Date().toISOString(), started_at: new Date().toISOString() } : {}) }, `${q.name} running for ${c.name}`)}>{st === "done" ? "Start again" : "Resume"}</button>}
                       {(st === "active" || st === "waiting") && <button type="button" className="csx-ghost is-sm is-ico" title="Leave this client out" onClick={() => putRun(q.id, c.id, { status: "excluded" }, `${c.name} left out of ${q.name}`)}><CsIco n="x" s={12} /></button>}
                       <button type="button" className={`csx-ghost is-sm is-ico ${recEdit?.seq === q.id ? "is-on" : ""}`} title="Who it goes to (this client)"
                         onClick={() => setRecEdit(recEdit?.seq === q.id ? null : { seq: q.id, value: run?.to_emails?.join(", ") ?? "" })}><CsIco n="users" s={12} /></button>

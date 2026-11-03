@@ -19,6 +19,10 @@ export interface ActionItem {
   tone?: "green" | "blue" | "amber" | "violet" | "slate";
   /** This page's own way to make a deal / contact / company: it takes that slot in "Quick create". */
   quick?: QuickKind;
+  /** The current choice of a set (a status, a view): shown ticked. */
+  on?: boolean;
+  /** Can't be used right now (the hint says why). */
+  disabled?: boolean;
 }
 export type QuickKind = "deal" | "contact" | "company";
 
@@ -66,7 +70,7 @@ export default function ActionsMenu({ items: pageItems, label = "Actions", quick
     if (r) setPos({ top: r.bottom + 10, right: Math.max(8, window.innerWidth - r.right) });
   };
   const close = () => { setClosing(true); window.setTimeout(() => { setOpen(false); setClosing(false); }, 160); };
-  const run = (it: ActionItem) => { setOpen(false); setClosing(false); it.onSelect(); };
+  const run = (it: ActionItem) => { if (it.disabled) return; setOpen(false); setClosing(false); it.onSelect(); };
 
   useLayoutEffect(() => { if (open) { place(); setActive(Math.max(0, items.findIndex((i) => i.primary))); } }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
   // move the sliding highlight to the active item
@@ -130,12 +134,14 @@ export default function ActionsMenu({ items: pageItems, label = "Actions", quick
               {sec.title && <span className="am-sec-t">{sec.title}</span>}
               {sec.list.map(({ it, idx }) => (
                 <button key={it.key} ref={(el) => { itemRefs.current[idx] = el; }} type="button" role="menuitem"
-                  className={`am-item tone-${it.tone ?? (it.primary ? "green" : "slate")} ${idx === active ? "is-active" : ""}`}
+                  className={`am-item tone-${it.tone ?? (it.primary ? "green" : "slate")} ${idx === active ? "is-active" : ""} ${it.on ? "is-on" : ""} ${it.disabled ? "is-off" : ""}`}
+                  aria-disabled={it.disabled || undefined} aria-checked={it.on != null ? it.on : undefined}
                   style={{ ["--i" as string]: idx } as CSSProperties}
                   onMouseEnter={() => setActive(idx)} onFocus={() => setActive(idx)}
                   onClick={() => run(it)}>
                   <span className="am-ico">{it.icon}</span>
                   <span className="am-txt"><b>{it.label}</b>{it.hint && <em>{it.hint}</em>}</span>
+                  {it.on && <span className="am-on" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12l5 5L20 7" /></svg></span>}
                   {it.shortcut && <kbd className="am-kbd">{it.shortcut.toUpperCase()}</kbd>}
                 </button>
               ))}

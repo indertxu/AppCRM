@@ -23,10 +23,12 @@ export interface Field {
   key: string; group: Group; label: string; kind: Kind; options?: string[]; sum?: boolean; get: (r: Row) => any;
   /** Multiple-choice fields: the picked values, so "is any of" matches any of them. */
   list?: (r: Row) => string[];
+  /** Values that mean "dropped out" (a lost phase): a funnel shows them apart, not as a step. */
+  lost?: string[];
 }
 export interface Cond { id: string; field: string; op: string; a: string; b: string; vals: string[] }
 
-export const GROUP_LABEL: Record<Group, string> = { deal: "Deal", contact: "Contact", company: "Company", client: "Client", project: "Project", contract: "Signed product", invoice: "Invoice", ticket: "Ticket" };
+export const GROUP_LABEL: Record<Group, string> = { deal: "Deal", contact: "Contact", company: "Company", client: "Client", project: "Project", contract: "Signed product", invoice: "Invoice", ticket: "Ticket / task" };
 export const STATUS_LABEL: Record<string, string> = { active: "Active", won: "Won", lost: "Lost", paused: "Hold" };
 
 export const norm = (s: string) => (s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
@@ -237,6 +239,25 @@ export const customDefs = (group: Group): CustomDef[] => DEFS[DEF_TABLE[group] ?
 const asList = (v: any): string[] =>
   Array.isArray(v) ? v.map(String).filter(Boolean) : v == null || v === "" ? [] : String(v).split(/\s*[,;|]\s*/).filter(Boolean);
 
+/**
+ * Imports often keep several picks of a one-choice field in one text ("Gestión, Segmentos",
+ * "0. Potential Client,1. Konsolidator Iberia Customer") — and those combinations even end up
+ * in the field's options. A value is split into its parts when every part is a value of the
+ * field on its own (an option, or a part of one), so "is any of Segmentos" finds it and a
+ * chart counts it under each part. A real option with a comma ("Sage Spain, S.L.") stays whole.
+ */
+function splitter(options: string[]): (v: string) => string[] {
+  const parts = (x: string) => x.split(/\s*,\s*/).map((y) => y.trim()).filter(Boolean);
+  const suffix = /^(s\.?\s?l\.?|s\.?\s?a\.?|s\.?\s?l\.?\s?u\.?|inc\.?|ltd\.?|llc|gmbh|lda\.?|plc|bv|ag)$/i;
+  const known = new Set<string>();
+  options.forEach((o) => { known.add(norm(o)); parts(o).forEach((x) => known.add(norm(x))); });
+  return (v: string) => {
+    if (!v.includes(",")) return [v];
+    const ps = parts(v);
+    return ps.length > 1 && ps.every((x) => x.length >= 2 && !suffix.test(x) && known.has(norm(x))) ? ps : [v];
+  };
+}
+
 /** One report / export field for a custom field definition, typed by its definition. */
 export function customDefField(group: Group, d: CustomDef, pick: (r: Row) => any): Field {
   const key = `${group}.custom.${d.id}`;
@@ -245,8 +266,9 @@ export function customDefField(group: Group, d: CustomDef, pick: (r: Row) => any
     case "boolean": return { key, group, label: d.label, kind: "enum", options: ["Yes", "No"], get: (r) => { const v = raw(r); return v === true || v === "true" ? "Yes" : v === false || v === "false" ? "No" : null; } };
     // one choice — but some old records hold a list: each of its values counts (options can contain commas, so a text isn't split)
     case "select": {
-      const vals = (r: Row): string[] => { const v = raw(r); return Array.isArray(v) ? v.filter((x) => x != null && x !== "" && typeof x !== "object").map(String) : v == null || v === "" || typeof v === "object" ? [] : [String(v)]; };
-      return { key, group, label: d.label, kind: "enum", options: d.options, get: (r) => { const l = vals(r); return l.length ? l.join(", ") : null; }, list: vals };
+      const split = splitter(d.options);
+      const vals = (r: Row): string[] => { const v = raw(r); const l = Array.isArray(v) ? v.filter((x) => x != null && x !== "" && typeof x !== "object").map(String) : v == null || v === "" || typeof v === "object" ? [] : [String(v)]; return [...new Set(l.flatMap(split))]; };
+      return { key, group, label: d.label, kind: "enum", options: [...new Set(d.options.flatMap(split))], get: (r) => { const l = vals(r); return l.length ? l.join(", ") : null; }, list: vals };
     }
     case "multiselect": return {
       key, group, label: d.label, kind: "enum", options: d.options,
@@ -305,6 +327,8 @@ export interface EngineCtx {
   pipelineNames: string[];
   productNames: string[];
   phaseNames: string[];
+  /** Names of the phases where a deal is lost. */
+  lostPhases?: string[];
   contactLabels: Record<string, string>;
   companyLabels: Record<string, string>;
   /** Custom deal fields (Sales → Actions → Deal fields). */
@@ -365,7 +389,7 @@ export function buildFields(ctx: EngineCtx): Field[] {
     { key: "deal.company", group: "deal", label: "Company", kind: "text", get: (r) => (r.deal.company_id ? (companyById.get(r.deal.company_id) as any)?.name ?? null : null) },
     { key: "deal.status", group: "deal", label: "Status", kind: "enum", options: Object.values(STATUS_LABEL), get: (r) => STATUS_LABEL[r.deal.status as string] ?? r.deal.status },
     { key: "deal.pipeline", group: "deal", label: "Pipeline", kind: "enum", options: ctx.pipelineNames, get: (r) => ctx.pipelineName(r.deal.pipeline_id) },
-    { key: "deal.phase", group: "deal", label: "Phase", kind: "enum", options: ctx.phaseNames, get: (r) => { const n = ctx.phaseName(r.deal); return n === "—" ? null : n; } },
+    { key: "deal.phase", group: "deal", label: "Phase", kind: "enum", options: ctx.phaseNames, lost: ctx.lostPhases, get: (r) => { const n = ctx.phaseName(r.deal); return n === "—" ? null : n; } },
     { key: "deal.product", group: "deal", label: "Product", kind: "enum", options: ctx.productNames, get: (r) => ctx.productName(r.deal.product_id) },
     { key: "deal.owner", group: "deal", label: "Owner", kind: "enum", options: ctx.employees.map((e) => e.name), get: (r) => empName.get(ctx.trackOwners[r.deal.id as string] ?? "") ?? null },
     { key: "deal.revenue", group: "deal", label: "Potential revenue", kind: "money", sum: true, get: (r) => rev(r.deal) },
@@ -448,12 +472,12 @@ export function toCell(f: Field, v: any): Cell {
   if (f.kind === "money" || f.kind === "number" || f.kind === "percent") { const n = Number(v); return Number.isFinite(n) ? n : String(v); }
   return String(v);
 }
-export const fmtMoney = (n: number) => `${Math.round(n).toLocaleString("es-ES")} €`;
+export const fmtMoney = (n: number) => `${Math.round(n).toLocaleString("en-US")} €`;
 export const fmtDate = (iso: string) => { const [y, m, d] = iso.split("-").map(Number); return new Date(y, m - 1, d).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }); };
 export function showCell(f: Field, c: Cell): string {
   if (c == null) return "";
   if (typeof c === "object") return fmtDate(c.date);
-  if (typeof c === "number") return f.kind === "money" ? fmtMoney(c) : f.kind === "percent" ? `${Math.round(c)}%` : c.toLocaleString("es-ES");
+  if (typeof c === "number") return f.kind === "money" ? fmtMoney(c) : f.kind === "percent" ? `${Math.round(c)}%` : c.toLocaleString("en-US", { maximumFractionDigits: 2 });
   return c;
 }
 export function sortValue(c: Cell): string | number | null {
@@ -497,7 +521,7 @@ export const MEASURE_LABEL: Record<Measure, string> = { count: "Number of deals"
 export type TimeGrain = "week" | "month" | "quarter";
 
 export interface Series { name: string; values: number[] }
-export interface Agg { labels: string[]; keys: string[]; series: Series[]; measure: Measure }
+export interface Agg { labels: string[]; keys: string[]; series: Series[]; measure: Measure; lost?: string[] }
 
 const monthKey = (iso: string) => iso.slice(0, 7);
 const quarterKey = (iso: string) => `${iso.slice(0, 4)}-Q${Math.floor((Number(iso.slice(5, 7)) - 1) / 3) + 1}`;
@@ -595,7 +619,7 @@ export const ENTITIES: Entity[] = [
   { key: "project", label: "Project", plural: "Projects", hint: "Service projects: value, days, status and dates", icon: "M3 7h18v13H3zM8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2", tone: "#c98a22", related: ["client", "company"] },
   { key: "contract", label: "Signed product", plural: "Signed products", hint: "Subscriptions and one-offs: terms, renewals, yearly value", icon: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 13h8M8 17h5", tone: "#12928e", related: ["client", "company", "deal"] },
   { key: "invoice", label: "Invoice", plural: "Invoices", hint: "What was billed, sent, paid and late", icon: "M4 2h16v20l-3-2-3 2-3-2-3 2-3-2-1 .7zM8 7h8M8 11h8M8 15h5", tone: "#e0574b", related: ["project", "client", "company"] },
-  { key: "ticket", label: "Ticket", plural: "Tickets", hint: "Requests and incidents: stage, priority, response", icon: "M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11", tone: "#d4a017", related: ["client", "company", "deal", "contact"] },
+  { key: "ticket", label: "Ticket or task", plural: "Tickets & tasks", hint: "Tickets and tasks: stage, priority, who has them, response", icon: "M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11", tone: "#d4a017", related: ["client", "company", "deal", "contact"] },
 ];
 export const entityOf = (k: EntityKey) => ENTITIES.find((e) => e.key === k)!;
 
@@ -621,7 +645,8 @@ export const countRules = (g: CondGroup): number => g.items.reduce((n, it) => n 
 async function readAllRows(table: string, cols = "*"): Promise<any[]> {
   const out: any[] = [];
   for (let from = 0; from < 500000; from += 1000) {
-    const { data, error } = await supabase.from(table).select(cols).range(from, from + 999);
+    // a steady order, or the pages overlap and rows go missing past the first thousand
+    const { data, error } = await supabase.from(table).select(cols).order("id").range(from, from + 999);
     if (error) { if (!out.length) throw error; break; }
     out.push(...(data ?? []));
     if ((data ?? []).length < 1000) break;
@@ -664,7 +689,8 @@ export async function loadCrmData(source: EntityKey, onStep?: (what: string) => 
   if (need.has("project")) jobs.push(step("projects", once("project", () => readAllRows("projects"))).then((r) => { data.project = r; }));
   if (need.has("contract")) jobs.push(step("signed products", once("contract", () => readAllRows("client_products"))).then((r) => { data.contract = r; }));
   if (need.has("invoice")) jobs.push(step("invoices", once("invoice", () => readAllRows("invoices"))).then((r) => { data.invoice = r; }));
-  if (need.has("ticket")) jobs.push(step("tickets", once("ticket", () => readAllRows("tracking_tasks"))).then((r) => { data.ticket = r.filter((t: any) => t.category === "ticket" || (!t.category && (t.requester_email || t.requester_name || ["email", "phone", "portal", "message"].includes(t.source)))); }));
+  // tickets (conversations) and tasks (work) both: "Ticket or task" tells them apart
+  if (need.has("ticket")) jobs.push(step("tickets and tasks", once("ticket", () => readAllRows("tracking_tasks"))).then((r) => { data.ticket = r.filter((t: any) => !t.merged_into); }));
   if (need.has("deal")) jobs.push(step("deals", once("deal", () => loadDealBundle(employees))).then((b) => { data.deal = b.deals; data.dealCtx = b.ctx; }));
   await Promise.all(jobs);
   // the deal fields also need the contacts and companies they link to
@@ -691,9 +717,10 @@ async function loadDealBundle(employees: { id: string; name: string }[]): Promis
   const prodName = new Map((prods as any[]).map((p) => [p.id, p.name]));
   const phase = (t: Tracking) => (phaseBy[t.pipeline_id ?? ""] ?? []).find((ph: any) => ph.id === t.current_phase_id);
   const phaseNames = [...new Set(Object.values(phaseBy).flat().map((ph: any) => ph.name as string))];
+  const lostPhases = [...new Set(Object.values(phaseBy).flat().filter((ph: any) => ph.sales_outcome === "loss").map((ph: any) => ph.name as string))];
   const ctx: EngineCtx = {
     contacts: [], companies: [], employees, trackAssignees: team.members, trackOwners: team.owners, potentialTotals: totals,
-    pipelineNames: pipelines.map((p) => p.name), productNames: (prods as any[]).map((p) => p.name), phaseNames,
+    pipelineNames: pipelines.map((p) => p.name), productNames: (prods as any[]).map((p) => p.name), phaseNames, lostPhases,
     contactLabels: {}, companyLabels: {}, dealFields: fields,
     pipelineName: (id) => (id ? pipeName.get(id) : undefined) ?? "—",
     productName: (id) => (id ? prodName.get(id) ?? null : null),
@@ -815,6 +842,9 @@ function discovered(rows: any[], g: EntityKey, skip: RegExp | null = null): Fiel
 /** A field reads nothing when its record isn't linked to the row. */
 const guard = (fs: Field[], g: EntityKey): Field[] => fs.map((f) => ({ ...f, get: (r: any) => (r?.[g] ? f.get(r) : null), list: f.list ? (r: any) => (r?.[g] ? f.list!(r) : []) : undefined }));
 const ymd = (v: any) => isoDay(v);
+/** The built-in company types by their names (as Companies shows them). */
+const REL_NAMES: [string, string][] = [["crm", "CRM"], ["sales", "In sales"], ["client", "Client"]];
+const relName = (k: any) => REL_NAMES.find((x) => x[0] === String(k).toLowerCase())?.[1] ?? String(k);
 const yn = (b: boolean | null | undefined) => (b == null ? null : b ? "Yes" : "No");
 
 export async function buildCrmFields(source: EntityKey, d: CrmData, extra: EntityKey[] = []): Promise<Field[]> {
@@ -850,7 +880,7 @@ export async function buildCrmFields(source: EntityKey, d: CrmData, extra: Entit
     } else if (g === "company") {
       fs = [
         { key: "company.name", group: g, label: "Name", kind: "text", get: (r: any) => r.company?.name ?? null },
-        { key: "company.types", group: g, label: "Type", kind: "enum", options: ["crm", "sales", "client", ...d.relTags], get: (r: any) => (r.company?.relationship ?? []).join(", ") || null, list: (r: any) => r.company?.relationship ?? [] },
+        { key: "company.types", group: g, label: "Type", kind: "enum", options: [...REL_NAMES.map((x) => x[1]), ...d.relTags], get: (r: any) => (r.company?.relationship ?? []).map(relName).join(", ") || null, list: (r: any) => (r.company?.relationship ?? []).map(relName) },
         { key: "company.country_name", group: g, label: "Country", kind: "enum", get: (r: any) => (r.company?.country ? countryName(r.company.country) : null) },
         { key: "company.is_client", group: g, label: "Is a client", kind: "enum", options: ["Yes", "No"], get: (r: any) => yn(!!r.client) },
         ...withCustomDefs(discovered(d.company ?? [], "company", /^company\.(name|relationship|country)$/), "company", (r) => (r as any).company),
@@ -859,7 +889,7 @@ export async function buildCrmFields(source: EntityKey, d: CrmData, extra: Entit
       fs = [
         { key: "contact.name", group: g, label: "Full name", kind: "text", get: (r: any) => (r.contact ? [r.contact.first_name, r.contact.last_name].filter(Boolean).join(" ") || null : null) },
         { key: "contact.country_name", group: g, label: "Country", kind: "enum", get: (r: any) => (r.contact?.country ? countryName(r.contact.country) : null) },
-        { key: "contact.companies", group: g, label: "Number of companies", kind: "number", get: (r: any) => r.contact?.companyIds?.length ?? 0 },
+        { key: "contact.companies", group: g, label: "Companies they're at", kind: "number", get: (r: any) => r.contact?.companyIds?.length ?? 0 },
         ...withCustomDefs(discovered(d.contact ?? [], "contact", /compan|^contact\.country$/i), "contact", (r) => (r as any).contact),
       ];
     } else if (g === "client") {
@@ -906,16 +936,19 @@ export async function buildCrmFields(source: EntityKey, d: CrmData, extra: Entit
       const STAGE: Record<string, string> = { new: "New", open: "Open", in_progress: "In progress", waiting: "Waiting", resolved: "Resolved", closed: "Closed" };
       fs = [
         { key: "ticket.title", group: g, label: "Title", kind: "text", get: (r: any) => r.ticket?.title ?? null },
+        { key: "ticket.what", group: g, label: "Ticket or task", kind: "enum", options: ["Ticket", "Task"], get: (r: any) => { const t = r.ticket; if (!t) return null; const isTicket = t.category ? t.category === "ticket" : !!(t.requester_email || t.requester_name || ["email", "phone", "portal", "message"].includes(t.source)); return isTicket ? "Ticket" : "Task"; } },
+        { key: "ticket.deal", group: g, label: "On a deal", kind: "enum", options: ["Yes", "No"], get: (r: any) => (r.ticket ? yn(!!r.ticket.tracking_id) : null) },
         { key: "ticket.stage_label", group: g, label: "Stage", kind: "enum", options: Object.values(STAGE), get: (r: any) => (r.ticket ? STAGE[r.ticket.stage] ?? (r.ticket.done ? "Resolved" : "Open") : null) },
         { key: "ticket.priority_label", group: g, label: "Priority", kind: "enum", options: ["Urgent", "High", "Normal", "Low"], get: (r: any) => (r.ticket?.priority ? String(r.ticket.priority).replace(/^\w/, (c: string) => c.toUpperCase()) : null) },
         { key: "ticket.assignee", group: g, label: "Assignee", kind: "enum", options: d.employees.map((e) => e.name), get: (r: any) => empName.get(r.ticket?.assignee_id ?? "") ?? null },
         { key: "ticket.open", group: g, label: "Open", kind: "enum", options: ["Yes", "No"], get: (r: any) => (r.ticket ? yn(!["resolved", "closed"].includes(r.ticket.stage) && !r.ticket.done) : null) },
         { key: "ticket.age", group: g, label: "Age (days)", kind: "number", get: (r: any) => { const c = ymd(r.ticket?.created_at); return c ? daysBetween(c, ymd(r.ticket.resolved_at ?? r.ticket.completed_at) ?? today) : null; } },
         { key: "ticket.first_response_h", group: g, label: "First response (hours)", kind: "number", get: (r: any) => { const t = r.ticket; if (!t?.first_response_at || !t.created_at) return null; return Math.round((new Date(t.first_response_at).getTime() - new Date(t.created_at).getTime()) / 36e5 * 10) / 10; } },
-        ...discovered(d.ticket ?? [], "ticket", /^ticket\.(title|stage|priority|checklist|description)$/),
+        ...discovered(d.ticket ?? [], "ticket", /^ticket\.(title|stage|priority|checklist|description|category|merged_into|external_ref|share_client|template_id|promoted_at)$/),
       ];
     }
-    fs.push(count(g));
+    // deals already have theirs ("Number of deals")
+    if (g !== "deal") fs.push(count(g));
     out.push(...guard(fs.filter((f, i, all) => all.findIndex((x) => x.key === f.key) === i), g));
   }
   return out;
@@ -936,7 +969,7 @@ export function aggregateCrm(opts: {
   /** Past the limit, the rest add up as "Other" (default); false: they are left out (a "top 10"). */
   other?: boolean;
 }): Agg {
-  const { rows, dim, fn, value, split, fieldByKey } = opts;
+  const { rows, dim, value, split, fieldByKey } = opts;
   const tm = /^time:(week|month|quarter|year):(.+)$/.exec(dim);
   const dimF = tm ? fieldByKey.get(tm[2]) : fieldByKey.get(dim);
   const valF = value ? fieldByKey.get(value) : undefined;
@@ -953,6 +986,8 @@ export function aggregateCrm(opts: {
     sv.add(s);
     keyOf(r).forEach((k) => { if (!buckets.has(k)) buckets.set(k, new Map()); const m = buckets.get(k)!; if (!m.has(s)) m.set(s, []); m.get(s)!.push(r); });
   });
+  // percentages don't add up: their "sum" is their average
+  const fn = opts.fn === "sum" && valF?.kind === "percent" ? "avg" : opts.fn;
   const calc = (rs: any[]) => {
     if (fn === "count" || !valF) return rs.length;
     const ns = rs.map((r) => Number(valF.get(r))).filter((n) => Number.isFinite(n));
@@ -990,5 +1025,5 @@ export function aggregateCrm(opts: {
   const measure: Measure = fn === "count" || !valF ? "count" : valF.kind === "money" ? "revenue" : valF.kind === "percent" ? "avgprob" : "count";
   const series: Series[] = names.map((s) => { let run = 0; return { name: s === "_" ? (fn === "count" || !valF ? "Count" : `${FN_LABEL[fn]} of ${valF.label}`) : s, values: keys.map((k) => { const v = calc(buckets.get(k)!.get(s) ?? []); if (opts.cumulative) { run += v; return run; } return v; }) }; });
   const g = (tm?.[1] ?? "month") as TimeGrain | "year";
-  return { labels: keys.map((k) => (tm ? (g === "year" ? k : timeLabel(k, g as TimeGrain)) : k)), keys, series, measure };
+  return { labels: keys.map((k) => (tm ? (g === "year" ? k : timeLabel(k, g as TimeGrain)) : k)), keys, series, measure, lost: tm ? undefined : dimF?.lost };
 }

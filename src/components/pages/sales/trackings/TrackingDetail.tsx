@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type DragEvent as RDragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type DragEvent as RDragEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { createPortal } from "react-dom";
 import DatePicker from "../../../framework/DatePicker";
@@ -25,7 +25,9 @@ import HandoffClientForm, { ContractPanel, type ContractPanelLine, type Contract
 import HandoffConfirmServices, { HxPrompt, destFolder, type ConfirmService, type ConfirmProduct, type ConfirmClient, type HandoffExtras, type HandoffDoc, type HandoffPackage } from "./HandoffConfirmServices";
 import TrackingFiles, { LineDocs, loadAllTrackingFiles, uploadTrackingFile, openTrackingFile, readTrackingFileBytes, FileIcon, kindOf } from "./TrackingFiles";
 import { DocStudio } from "./TrackingFiles";
-import TrackingFieldsPanel, { FoldPanel, FOLD_ICON } from "../extras/TrackingFieldsPanel";
+import TrackingFieldsPanel, { FoldPanel, FoldOpen, FOLD_ICON } from "../extras/TrackingFieldsPanel";
+import { HomeBoard, compactAll, firstFit, newId, COLS, type BoardItem, type BoardKit } from "../../homepage/HomePage";
+import ActionsMenu, { type ActionItem } from "../../../framework/ActionsMenu";
 import HandoverConfirm from "./HandoverConfirm";
 import { planHandover, performHandover, rolesFor, resolveDealRole, saveDealRoles, orderPhases, type SalesRole, type HandoverPlan } from "../extras/salesRolesApi";
 import DealRolePicker from "../extras/DealRolePicker";
@@ -35,7 +37,7 @@ import { loadRoles } from "../../settings/blueprintsApi";
 import { roleNameOf, type ClientRole } from "../../clients/clientsTypes";
 import { useBackToClose } from "../../../framework/useBackToClose";
 import { loadPipeline, listPipelines, type Phase, type Pipeline } from "../../settings/pipelineApi";
-import { myProfile, isSalesLead } from "../../companies/companiesApi";
+import { myProfile, isSalesLead, loadPrefs, savePref } from "../../companies/companiesApi";
 import { loadServices, calcBreakdown, discountOf, BASE_KEY, type Service, type Calculator, type CalcDiscount } from "../../settings/catalogApi";
 import type { Company, Contact } from "../../companies/companiesApi";
 import type { Product } from "../../settings/catalogApi";
@@ -358,8 +360,10 @@ export function proposalFigures(lines: ProposalLine[], groups: PropGroup[]) {
   return { gross, partner, total: net, picked };
 }
 
-function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onStudio, onMain, onWon, dealWon, phaseId, onContractFile }: {
+function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onStudio, onMain, onWon, dealWon, phaseId, onContractFile, onSummary }: {
   trackingId: string;
+  /** How many there are and which is the main one (for the card's headline look). */
+  onSummary?: (s: { count: number; main: string | null; total: number | null }) => void;
   /** The line groups a proposal can use (products / services available in proposals). */
   groups: PropGroup[];
   /** The company's proposal decks (Settings › Proposal template); empty / null = none yet. */
@@ -560,6 +564,9 @@ function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onSt
 
   const main = (list ?? []).find((p) => p.is_main);
   const mainFig = main ? proposalFigures(main.lines, groups) : null;
+  const sumRef = useRef(onSummary);
+  sumRef.current = onSummary;
+  useEffect(() => { sumRef.current?.({ count: list?.length ?? 0, main: main?.name ?? null, total: mainFig?.total ?? null }); }, [list?.length, main?.name, mainFig?.total]);
 
   return (
     <FoldPanel className="sl-props-panel" title="Proposals" count={list?.length ?? 0} icon={FOLD_ICON.proposals} tone="#b07514" openSignal={openSig}
@@ -1799,6 +1806,102 @@ function DealPeople({ company, contacts, companyContactIds, dealIds, onChange }:
   );
 }
 
+/* =====================================================================
+   The deal page as a board: every card can be moved and resized, on the
+   same grid as the home page, and each card has its own look at each
+   size. Saved with the person (prefs.dealBoard): one layout for every deal.
+   ===================================================================== */
+type DkKey = "activity" | "contacts" | "probability" | "fields" | "calculator" | "proposals" | "files";
+type HeroSize = "slim" | "std" | "tall";
+interface DealBoard { v: 1; hero: HeroSize; items: BoardItem[] }
+const DK_PREF = "dealBoard";
+const HERO_SIZES: { k: HeroSize; label: string }[] = [{ k: "slim", label: "Slim" }, { k: "std", label: "Standard" }, { k: "tall", label: "Tall" }];
+const DK: Record<DkKey, { title: string; hint: string; icon: string; color: string; def: [number, number]; full: [number, number] }> = {
+  activity: { title: "Activity", hint: "Notes, tasks and meetings", icon: "M22 12h-4l-3 9L9 3l-3 9H2", color: "#0a8a5c", def: [14, 17], full: [7, 8] },
+  contacts: { title: "Contacts", hint: "The people at the client", icon: FOLD_ICON.contacts, color: "#2b6ea3", def: [10, 6], full: [6, 4] },
+  probability: { title: "Close probability", hint: "Sales and management estimates, close date", icon: FOLD_ICON.probability, color: "#0a6f4d", def: [10, 9], full: [6, 6] },
+  calculator: { title: "Calculator", hint: "Products, services and what the deal is worth", icon: FOLD_ICON.calculator, color: "#0a6f4d", def: [10, 12], full: [6, 6] },
+  proposals: { title: "Proposals", hint: "Scenarios to send the client", icon: FOLD_ICON.proposals, color: "#b07514", def: [14, 7], full: [6, 4] },
+  files: { title: "Documents", hint: "The files on this deal", icon: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M9 13h6M9 17h4", color: "#5b6cc4", def: [14, 6], full: [6, 4] },
+  fields: { title: "Details", hint: "This deal's own fields", icon: FOLD_ICON.details, color: "#4a6b5e", def: [10, 6], full: [6, 4] },
+};
+const DK_MIN: [number, number] = [4, 3];
+const dkKey = (k: string) => (k.endsWith(".mini") ? k.slice(0, -5) : k) as DkKey;
+/** Smaller than its "full" size: the card shows its headline figure. */
+const dkMini = (it: BoardItem) => { const d = DK[it.key as DkKey]; return !!d && (it.w < d.full[0] || (!it.folded && it.h < d.full[1])); };
+/** The card opens collapsed / expanded (chosen while adjusting). */
+const withFold = (i: BoardItem, closed: boolean): BoardItem => { const { fold: _f, ...rest } = i; void _f; return closed ? { ...rest, fold: "closed" } : rest; };
+const FOLD_PIC = {
+  open: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="4" y="3.5" width="16" height="17" rx="3" /><path d="M4 8.5h16M8 12.5h8M8 16h5" /></svg>,
+  closed: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="4" y="8" width="16" height="8" rx="3" /><path d="M9 12h6" /></svg>,
+};
+function dkDefault(hasFields: boolean): DealBoard {
+  const it = (key: DkKey, x: number, y: number, w: number, h: number): BoardItem => ({ id: newId(), key, x, y, w, h });
+  const items = [it("activity", 0, 0, 14, 17), it("contacts", 14, 0, 10, 6), it("probability", 14, 6, 10, 9), it("calculator", 14, 15, 10, 12),
+    it("proposals", 0, 17, 14, 7), it("files", 0, 24, 14, 6)];
+  if (hasFields) items.push(it("fields", 14, 26, 10, 6));
+  return { v: 1, hero: "std", items: compactAll(items) };
+}
+/** A saved layout, checked: unknown cards dropped, sizes kept inside the grid. */
+function readDealBoard(v: any, hasFields: boolean): DealBoard | null {
+  if (!v || v.v !== 1 || !Array.isArray(v.items)) return null;
+  const items: BoardItem[] = v.items
+    .filter((i: any, n: number, all: any[]) => i && DK[i.key as DkKey] && (hasFields || i.key !== "fields") && all.findIndex((x: any) => x?.key === i.key) === n)
+    .map((i: any) => {
+      const d = DK[i.key as DkKey];
+      const w = Math.max(DK_MIN[0], Math.min(COLS, Math.round(Number(i.w) || d.def[0])));
+      const h = Math.max(DK_MIN[1], Math.min(60, Math.round(Number(i.h) || d.def[1])));
+      return { id: typeof i.id === "string" ? i.id : newId(), key: i.key, x: Math.max(0, Math.min(COLS - w, Math.round(Number(i.x) || 0))), y: Math.max(0, Math.round(Number(i.y) || 0)), w, h, ...(i.fold === "closed" ? { fold: "closed" as const } : {}) };
+    });
+  return { v: 1, hero: v.hero === "slim" || v.hero === "tall" ? v.hero : "std", items: compactAll(items) };
+}
+const dkIcon = (d: string) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>;
+const DEAL_KIT: BoardKit = {
+  min: () => DK_MIN,
+  title: (k) => DK[dkKey(k)]?.title ?? k,
+  icon: (k) => dkIcon(DK[dkKey(k)]?.icon ?? ""),
+  color: (k) => DK[dkKey(k)]?.color,
+  shown: (it) => (dkMini(it) ? `${it.key}.mini` : it.key),
+  fig: () => false,
+  link: () => false,
+  look: (it, pxW) => (dkMini(it) ? "Headline" : pxW < 430 ? "Slim" : pxW >= 1100 ? "Extra wide" : pxW >= 760 ? "Wide" : "Standard"),
+  lookTip: (it) => (dkMini(it) ? "Small: it shows the key figures. Make it bigger to work in it." : "How the card looks at this size"),
+  cls: (it, pxW, pxH) => ["dk-card", dkMini(it) ? "is-mini" : "", it.folded ? "is-folded" : "", pxW >= 760 ? "dk-wide" : "", pxW >= 1100 ? "dk-xwide" : "", pxW < 430 ? "dk-slim" : "", pxH >= 600 ? "dk-tall" : "", pxH < 300 ? "dk-short" : ""].filter(Boolean).join(" "),
+  snug: () => false,
+  bar: (it, _pxW, ctx) => (dkMini(it) || ctx.stack ? null : (
+    <button type="button" className={`hb-bar-btn dk-bar-fold ${it.fold === "closed" ? "is-on" : ""}`} onPointerDown={(e) => e.stopPropagation()}
+      title={it.fold === "closed" ? "Opens collapsed: only its header shows until you open it. Click to open it expanded." : "Opens expanded. Click to make it open collapsed."}
+      aria-label={it.fold === "closed" ? "Opens collapsed" : "Opens expanded"} aria-pressed={it.fold === "closed"}
+      onClick={() => ctx.onChange(ctx.items.map((i) => (i.id === it.id ? withFold(i, it.fold !== "closed") : i)))}>
+      {it.fold === "closed" ? FOLD_PIC.closed : FOLD_PIC.open}<span>{it.fold === "closed" ? "Collapsed" : "Expanded"}</span>
+    </button>
+  )),
+  menu: (it, ctx) => (dkMini(it) ? null : (
+    <>
+      <b className="hb-sizes-h">When a deal opens</b>
+      <div className="hb-sizes-lay" role="radiogroup" aria-label="When a deal opens">
+        {(["open", "closed"] as const).map((f) => {
+          const on = (it.fold === "closed") === (f === "closed");
+          return (
+            <button key={f} type="button" role="radio" aria-checked={on} className={on ? "is-on" : ""}
+              onClick={() => { ctx.onChange(ctx.items.map((i) => (i.id === it.id ? withFold(i, f === "closed") : i))); ctx.close(); }}>
+              {FOLD_PIC[f]}<span>{f === "closed" ? "Collapsed" : "Expanded"}</span>
+            </button>
+          );
+        })}
+      </div>
+    </>
+  )),
+  presets: (k) => {
+    const d = DK[dkKey(k)];
+    return [
+      { label: "Headline", w: 6, h: 3 }, { label: "Small", w: d.full[0], h: d.full[1] }, { label: "Medium", w: d.def[0], h: d.def[1] },
+      { label: "Large", w: Math.min(COLS, d.def[0] + 6), h: d.def[1] + 6 }, { label: "Full width", w: COLS, h: d.def[1] },
+    ].filter((p, i, all) => all.findIndex((q) => q.w === p.w && q.h === p.h) === i);
+  },
+  stackH: (it) => (dkMini(it) ? 124 : Math.max(320, Math.min(720, it.h * 34))),
+};
+
 export default function TrackingDetail({ tracking, companies, contacts, products, employees, trackingFields = [], salesRoles = [], startWithClient = false, onReady, onBack }: {
   tracking: Tracking; companies: Company[]; contacts: Contact[]; products: Product[]; employees: Employee[];
   /** Custom deal fields, shown in the Details card. */
@@ -1843,6 +1946,100 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   const [me, setMe] = useState<{ id: string; role: string; is_superadmin: boolean } | null>(null);
   const [handoffMenu, setHandoffMenu] = useState(false);
   const [teamMenu, setTeamMenu] = useState(false);
+  /* ---- the board: saved with the person; while adjusting, a draft ---- */
+  const hasFields = trackingFields.length > 0;
+  const [dkBoard, setDkBoard] = useState<DealBoard | null>(null);
+  const [dkDraft, setDkDraft] = useState<DealBoard | null>(null);
+  const [dkAdd, setDkAdd] = useState(false);
+  const [dkFlash, setDkFlash] = useState<string | null>(null);
+  const [dkPreview, setDkPreview] = useState<BoardItem[] | null>(null);
+  const [dkFiles, setDkFiles] = useState<{ name: string; created_at: string }[]>([]);
+  const [dkProps, setDkProps] = useState<{ count: number; main: string | null; total: number | null }>({ count: 0, main: null, total: null });
+  const [dkCustom, setDkCustom] = useState<Record<string, any> | null | undefined>(tracking.custom);
+  useEffect(() => {
+    let alive = true;
+    loadPrefs().catch(() => ({} as Record<string, any>)).then((p) => {
+      if (alive) setDkBoard(readDealBoard(p?.[DK_PREF], hasFields) ?? dkDefault(hasFields));
+    });
+    return () => { alive = false; };
+  }, [hasFields]);
+  /** Collapsed right now (each card can be opened / folded; it starts as chosen while adjusting). */
+  const [dkFolded, setDkFolded] = useState<Record<string, boolean>>({});
+  useEffect(() => { if (dkBoard) setDkFolded(Object.fromEntries(dkBoard.items.filter((i) => i.fold === "closed").map((i) => [i.key, true]))); }, [dkBoard]);
+  const dkToggle = (k: string) => setDkFolded((m) => ({ ...m, [k]: !m[k] }));
+  const dkEditing = dkDraft !== null;
+  const dkLive = dkDraft ?? dkBoard;
+  const dkItems = useMemo(() => (dkLive ? compactAll(dkLive.items.filter((i) => hasFields || i.key !== "fields")) : []), [dkLive, hasFields]);
+  const heroSize: HeroSize = dkLive?.hero ?? "std";
+  /** Folded right now (never while adjusting: then every card shows its full size). */
+  const dkFoldNow = (k: string) => !dkEditing && !!dkFolded[k];
+  const dkStart = () => { if (dkBoard) { setDkDraft({ ...dkBoard, items: compactAll(dkBoard.items) }); setTeamMenu(false); } };
+  const dkFinish = (save: boolean) => {
+    if (save && dkDraft) { setDkBoard(dkDraft); savePref(DK_PREF, dkDraft).catch(() => {}); }
+    setDkDraft(null); setDkAdd(false); setDkPreview(null);
+  };
+  const dkChangeItems = (items: BoardItem[]) => setDkDraft((d) => (d ? { ...d, items } : d));
+  const dkSetHero = (hero: HeroSize) => setDkDraft((d) => (d ? { ...d, hero } : d));
+  const dkRemove = (id: string) => setDkDraft((d) => (d ? { ...d, items: compactAll(d.items.filter((i) => i.id !== id)) } : d));
+  const dkAddCard = (key: DkKey) => {
+    if (!dkDraft) return;
+    const [w, h] = DK[key].def;
+    const at = firstFit(dkItems, w, h);
+    const it: BoardItem = { id: newId(), key, x: at.x, y: at.y, w, h };
+    setDkDraft({ ...dkDraft, items: compactAll([...dkItems, it]) });
+    setDkFlash(it.id); setDkAdd(false);
+    window.setTimeout(() => setDkFlash((f) => (f === it.id ? null : f)), 1600);
+    window.setTimeout(() => document.querySelector(`.dk-board .hb-card[data-id="${it.id}"]`)?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 60);
+  };
+  const dkHidden = (Object.keys(DK) as DkKey[]).filter((k) => (hasFields || k !== "fields") && !dkItems.some((i) => i.key === k));
+  useEffect(() => {
+    if (!dkEditing) return;
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape" && !document.querySelector(".hb-sizes")) { if (dkAdd) setDkAdd(false); else dkFinish(false); } };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [dkEditing, dkAdd]); // eslint-disable-line react-hooks/exhaustive-deps
+  // row height: about 24 rows to a screen
+  const [dkStep, setDkStep] = useState(() => Math.max(32, Math.min(46, Math.round(window.innerHeight / 24))));
+  useEffect(() => {
+    const m = () => setDkStep(Math.max(32, Math.min(46, Math.round(window.innerHeight / 24))));
+    window.addEventListener("resize", m);
+    return () => window.removeEventListener("resize", m);
+  }, []);
+  // the slots the cards are drawn into
+  // a collapsed card shrinks to its header; the cards under it move up
+  const dkFoldRows = Math.max(2, Math.ceil(84 / dkStep));
+  const dkShown = useMemo(() => (dkEditing ? dkItems : compactAll(dkItems.map((i) => {
+    const d = DK[i.key as DkKey];
+    return dkFolded[i.key] && d && i.w >= d.full[0] && i.h > dkFoldRows ? { ...i, h: dkFoldRows, folded: true } : i;
+  }))), [dkEditing, dkItems, dkFolded, dkFoldRows]);
+  const [dkEls, setDkEls] = useState<Record<string, HTMLElement>>({});
+  const dkRefs = useRef(new Map<string, (el: HTMLElement | null) => void>());
+  const dkSlotRef = useCallback((id: string) => {
+    let f = dkRefs.current.get(id);
+    if (!f) {
+      f = (el: HTMLElement | null) => setDkEls((m) => {
+        if (el) return m[id] === el ? m : { ...m, [id]: el };
+        if (!(id in m)) return m;
+        const next = { ...m }; delete next[id]; return next;
+      });
+      dkRefs.current.set(id, f);
+    }
+    return f;
+  }, []);
+  // the top bar's height: pull its bottom edge while adjusting
+  const heroDrag = (e: React.PointerEvent) => {
+    if (!dkEditing || e.button !== 0) return;
+    e.preventDefault();
+    const y0 = e.clientY, i0 = HERO_SIZES.findIndex((h) => h.k === heroSize);
+    const move = (ev: PointerEvent) => {
+      const i = Math.max(0, Math.min(HERO_SIZES.length - 1, i0 + Math.round((ev.clientY - y0) / 46)));
+      dkSetHero(HERO_SIZES[i].k);
+    };
+    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", up); };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  };
   const [lossModal, setLossModal] = useState(false);
   const [lossReasons, setLossReasons] = useState<LossReason[]>([]);
   const [lossReason, setLossReasonState] = useState<string>(tracking.loss_reason ?? "");
@@ -2426,15 +2623,6 @@ export default function TrackingDetail({ tracking, companies, contacts, products
 
   /** "Won" on a proposal: it is already the main one; the deal moves to Won and the guided flow starts. */
   const [wonProposalId, setWonProposalId] = useState<string | null>(null);
-  /** The calculator folded to its summary (remembered per person, in this browser). */
-  const calcFoldKey = `sl-calc-folded:${me?.id ?? "me"}`;
-  const [calcFolded, setCalcFolded] = useState<boolean>(() => { try { return localStorage.getItem("sl-calc-folded:last") === "1"; } catch { return false; } });
-  useEffect(() => { try { const v = localStorage.getItem(calcFoldKey); if (v != null) setCalcFolded(v === "1"); } catch { /* storage off */ } }, [calcFoldKey]);
-  const toggleCalcFold = () => setCalcFolded((v) => {
-    const n = !v;
-    try { localStorage.setItem(calcFoldKey, n ? "1" : "0"); localStorage.setItem("sl-calc-folded:last", n ? "1" : "0"); } catch { /* storage off */ }
-    return n;
-  });
   /** A signed contract was dropped on / taken off a proposal: the won one's file is the deal contract's document too. */
   const proposalContractFile = async (p: DealProposal, fileId: string | null, prevFileId: string | null) => {
     const r = await loadDealContract(tracking.id).catch(() => ({ terms: null as ContractTerms | null, missing: false }));
@@ -3827,6 +4015,554 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     );
   };
 
+  /* ---- each card's headline look (when it is made small) ---- */
+  const dkMiniView = (k: DkKey): ReactNode => {
+    const d = DK[k];
+    const shell = (big: ReactNode, sub: ReactNode, art?: ReactNode, extra = "") => (
+      <div className={`dk-mini is-${k} ${extra}`} style={{ ["--c" as string]: d.color } as CSSProperties}>
+        <span className="dk-mini-ico">{dkIcon(d.icon)}</span>
+        <span className="dk-mini-txt"><small>{d.title}</small><b>{big}</b>{sub ? <em>{sub}</em> : null}</span>
+        {art ? <span className="dk-mini-art" aria-hidden="true">{art}</span> : null}
+      </div>
+    );
+    const plain = (t: string) => mentionsToPlain(t || "").trim();
+    switch (k) {
+      case "activity": {
+        const nxt = upNext[0];
+        const what = nxt ? (nxt.k === "task" ? plain((nxt.item as TrackTask).title) : plain((nxt.item as TrackMeeting).title)) : "";
+        const when = nxt ? (nxt.k === "task" ? ((nxt.item as TrackTask).due_at ? dayLabel((nxt.item as TrackTask).due_at!) : "No date") : dayLabel((nxt.item as TrackMeeting).meet_at || "")) : "";
+        return shell(
+          <>{openTaskCount}<i>open {openTaskCount === 1 ? "task" : "tasks"}</i></>,
+          nxt ? <>Next: <strong>{what}</strong> · {when}</> : notes.length ? `${notes.length} ${notes.length === 1 ? "note" : "notes"} · nothing planned` : "Nothing logged yet",
+          (overdueCount > 0 || urgentCount > 0 || nextMeet) ? (
+            <span className="dk-chips">
+              {overdueCount > 0 && <i className="is-late">{overdueCount} late</i>}
+              {urgentCount > 0 && <i className="is-urgent">{urgentCount} urgent</i>}
+              {nextMeet?.meet_at && <i className="is-meet">{dayLabel(nextMeet.meet_at)}</i>}
+            </span>
+          ) : undefined,
+          overdueCount > 0 ? "is-warn" : "",
+        );
+      }
+      case "contacts": {
+        const ids = Array.from(new Set([...trackingContactIds, ...tracking.contactIds]));
+        const names = ids.map(contactName);
+        return shell(
+          <>{ids.length}<i>{ids.length === 1 ? "person" : "people"}</i></>,
+          names.length ? names.slice(0, 2).join(", ") + (names.length > 2 ? ` +${names.length - 2}` : "") : company ? `None yet · at ${company.name}` : "None on this deal yet",
+          ids.length ? (
+            <span className="dk-faces">
+              {names.slice(0, 4).map((n, i) => <i key={i} style={{ ["--i" as string]: i } as CSSProperties}>{n.split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase()}</i>)}
+              {names.length > 4 && <i className="is-more">+{names.length - 4}</i>}
+            </span>
+          ) : undefined,
+        );
+      }
+      case "probability": {
+        const v = repProb ?? closeProb;
+        const r = 17, c = 2 * Math.PI * r;
+        return shell(
+          v == null ? "—" : <>{v}<i>%</i></>,
+          [repProb != null ? "Sales estimate" : closeProb != null ? "From the phase" : "No estimate yet", mgrProb != null ? `Mgmt ${mgrProb}%` : "", repDate ? `expected ${new Date(`${repDate.slice(0, 10)}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : ""].filter(Boolean).join(" · "),
+          <svg className="dk-ring" viewBox="0 0 44 44"><circle cx="22" cy="22" r={r} /><circle cx="22" cy="22" r={r} className="is-fill" strokeDasharray={`${(c * (v ?? 0)) / 100} ${c}`} /></svg>,
+        );
+      }
+      case "calculator": {
+        const tot = productsShown + servicesShown;
+        return shell(
+          money(totalPotential),
+          `${activeTprods.length} product${activeTprods.length === 1 ? "" : "s"} · ${activePotentials.length} service${activePotentials.length === 1 ? "" : "s"}`,
+          <span className="dk-split"><i className="is-product" style={{ flexGrow: tot ? productsShown : 1 }} /><i className="is-service" style={{ flexGrow: tot ? servicesShown : 1 }} /></span>,
+        );
+      }
+      case "proposals":
+        return shell(
+          dkProps.main && dkProps.total != null ? money(dkProps.total) : <>{dkProps.count}<i>{dkProps.count === 1 ? "scenario" : "scenarios"}</i></>,
+          dkProps.main ? <>Main: <strong>{dkProps.main}</strong>{dkProps.count > 1 ? ` · ${dkProps.count} in all` : ""}</> : dkProps.count ? "None is the main one yet" : "Scenarios to send the client",
+        );
+      case "files": {
+        const last = dkFiles[0];
+        return shell(
+          <>{dkFiles.length}<i>{dkFiles.length === 1 ? "file" : "files"}</i></>,
+          last ? <>Latest: <strong>{last.name}</strong></> : "Drop files on the bigger card",
+          dkFiles.length ? <span className="dk-docs"><i /><i /><i /></span> : undefined,
+        );
+      }
+      case "fields": {
+        const filled = trackingFields.filter((f) => { const v = (dkCustom ?? {})[f.id]; return v != null && v !== "" && !(Array.isArray(v) && !v.length); }).length;
+        return shell(
+          <>{filled}<i>of {trackingFields.length} filled</i></>,
+          trackingFields.slice(0, 3).map((f) => f.label).filter(Boolean).join(" · "),
+          <span className="dk-meter"><i style={{ width: `${trackingFields.length ? (filled / trackingFields.length) * 100 : 0}%` }} /></span>,
+        );
+      }
+    }
+    return null;
+  };
+
+  /* ---- the Actions button: the deal's status, who is on it, and the page's layout ---- */
+  const ST_ICON: Record<string, string> = {
+    active: "M5 12h3l3-8 4 16 3-8h1",
+    won: "M8 4h8v5a4 4 0 0 1-8 0zM8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4M12 13v4M8.5 20h7",
+    lost: "M6 6l12 12M18 6L6 18",
+    paused: "M9 5v14M15 5v14",
+  };
+  const ST_LABEL: Record<string, string> = { active: "Active", won: "Won", lost: "Lost", paused: "On hold" };
+  const ST_HINT: Record<string, string> = { active: "Still being worked on", won: "Signed: the client said yes", lost: "It didn't happen (you'll be asked why)", paused: "Parked for now" };
+  const teamNames = team.map(empName);
+  const dealActions: ActionItem[] = [
+    ...(["active", "won", "lost", "paused"] as const).map((st): ActionItem => {
+      const off = (st === "won" && !winPhase) || (st === "lost" && !lossPhase);
+      return {
+        key: `st-${st}`, group: "Status", label: ST_LABEL[st], icon: dkIcon(ST_ICON[st]),
+        hint: off ? "Set a win / loss phase in the pipeline first" : status === st ? "This is where the deal is" : ST_HINT[st],
+        tone: st === "won" ? "amber" : st === "lost" ? "slate" : st === "paused" ? "slate" : "green",
+        on: status === st, disabled: off, onSelect: () => { if (status !== st) void applyStatus(st); },
+      };
+    }),
+    {
+      key: "people", group: "People", label: "Who is on this deal", tone: "blue", shortcut: "T", icon: dkIcon(FOLD_ICON.contacts),
+      hint: teamNames.length ? `${teamNames.slice(0, 3).join(", ")}${teamNames.length > 3 ? ` +${teamNames.length - 3}` : ""}${owner ? ` · owner ${empName(owner)}` : ""}` : "Nobody yet: pick the team and the owner",
+      onSelect: () => setTeamMenu(true),
+    },
+    {
+      key: "adjust", group: "This page", label: "Adjust this page", tone: "green", shortcut: "A",
+      hint: "Move and resize the cards, make the top bar taller or slimmer",
+      icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="9" rx="2" /><rect x="13.5" y="3.5" width="7" height="5" rx="2" /><rect x="13.5" y="11.5" width="7" height="9" rx="2" /><rect x="3.5" y="15.5" width="7" height="5" rx="2" /></svg>,
+      onSelect: () => { if (!dkEditing) dkStart(); },
+    },
+  ];
+
+  /* ---- the cards of the deal page (drawn into the board's slots) ---- */
+  const dkFull: Record<DkKey, ReactNode> = {
+    activity: (
+      <section className={`sl-panel ah ${composing ? "is-writing" : ""}`} data-tab={composeTab}>
+        <header className="ah-head">
+          <span className="ah-ico" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>
+          </span>
+          <div className="ah-title">
+            <h3>Activity</h3>
+            <small>{actSummary}</small>
+          </div>
+          <div className="ah-tabs" role="tablist" aria-label="Add to this deal" style={{ "--i": COMPOSERS.indexOf(composeTab) } as CSSProperties}>
+            <span className="ah-tabs-pill" aria-hidden="true" />
+            {COMPOSERS.map((k) => (
+              <button key={k} type="button" role="tab" aria-selected={composeTab === k} className={composeTab === k ? "is-on" : ""} onClick={() => setComposeTab(k)}
+                title={k === "notes" ? "Write down what happened" : k === "tasks" ? "Plan the next step" : "Book a meeting (goes to Outlook)"}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={AH_ICON[k]} /></svg>
+                {k === "notes" ? "Note" : k === "tasks" ? "Task" : "Meeting"}
+                {drafts[k] && composeTab !== k && <i className="ah-dot" title="Unsaved draft" />}
+              </button>
+            ))}
+          </div>
+          <button type="button" className="dk-fold" aria-expanded={!dkFoldNow("activity")} onClick={() => dkToggle("activity")}
+            title={dkFoldNow("activity") ? "Expand" : "Collapse"} aria-label={dkFoldNow("activity") ? "Expand the activity" : "Collapse the activity"}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6" /></svg>
+          </button>
+        </header>
+
+        <div className="ah-body">
+        <div className="ah-compose" key={composeTab}>
+          {composeTab === "notes" && (
+            <div className={`sl-note-add sl-note-add-fluid ${cleanMentions(newNote).trim() ? "is-writing" : ""}`}>
+              <MentionInput multiline value={newNote} onChange={setNewNote} people={mentionPeople}
+                onMention={() => {}} placeholder="Write a note... use @ to mention" />
+              <button className="sl-add-btn sl-add-btn-inline" onClick={submitNote} disabled={!cleanMentions(newNote).trim()}>Add</button>
+            </div>
+          )}
+          {composeTab === "tasks" && (
+            <div className="sl-task-add">
+              <div className="sl-task-name-row">
+                <MentionInput value={newTask} onChange={setNewTask} people={mentionPeople}
+                  onMention={() => {}} placeholder="Task name... use @ to mention" />
+                {!cleanMentions(newTask).trim() && <TemplatePicker templates={taskTemplates} kind="quick" onPick={pickTaskTemplate} compact />}
+              </div>
+              <div className={`sl-meet-reveal ${cleanMentions(newTask).trim() ? "is-writing" : ""}`}>
+                <MentionInput multiline value={newTaskDesc} onChange={setNewTaskDesc} people={mentionPeople} className="sl-task-desc-input"
+                  onMention={() => {}} placeholder="Description (optional) — the details, what done looks like…" />
+                {taskFrom && (
+                  <div className="hs-add-from">
+                    <span>✦ From a template{taskFrom.checklist.length ? ` · ${taskFrom.checklist.length} steps` : ""}</span>
+                    <button type="button" onClick={() => setTaskFrom(null)} aria-label="Don't use the template">×</button>
+                  </div>
+                )}
+                <div className="sl-task-opts">
+                  <div className="sl-task-prios" role="radiogroup" aria-label="Priority">
+                    {TASK_PRIORITIES.map((p) => (
+                      <button key={p} type="button" role="radio" aria-checked={taskPrio === p}
+                        className={`hs-prio is-${p} ${taskPrio === p ? "is-on" : ""}`} onClick={() => setTaskPrio(p)}>
+                        <FlagIcon /><span>{PRIORITY_LABEL[p]}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="sl-task-kind" role="radiogroup" aria-label="Kind of task">
+                    {(["quick", "process"] as TaskKind[]).map((k) => (
+                      <button key={k} type="button" role="radio" aria-checked={taskKind === k} className={taskKind === k ? "is-on" : ""}
+                        onClick={() => setTaskKind(k)} title={k === "quick" ? "Tick it off and forget it" : "Longer work: status, % and progress notes"}>
+                        {k === "quick" ? "Quick" : "Process"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="sl-task-due">
+                  <span className="sl-task-due-lbl">Due</span>
+                  <DatePicker value={taskDue} onChange={setTaskDue} placeholder="Date" />
+                  <TimePicker value={taskDueTime} onChange={setTaskDueTime} ariaLabel="Due time" />
+                </div>
+                <button className="sl-add-btn sl-meet-schedule" onClick={submitTask} disabled={!cleanMentions(newTask).trim() || !taskDue}>Add task</button>
+              </div>
+            </div>
+          )}
+          {composeTab === "meetings" && (
+            <>
+              <div className="sl-meet-add">
+                <MentionInput multiline value={meetTitle} onChange={setMeetTitle} people={mentionPeople}
+                  onMention={() => {}} placeholder="Meeting title... use @ to mention" />
+                <div className={`sl-meet-reveal ${cleanMentions(meetTitle).trim() ? "is-writing" : ""}`}>
+                  <MeetingWhen date={meetDate} start={meetTime} end={meetEnd}
+                    onDate={setMeetDate} onStart={setMeetTime} onEnd={setMeetEnd} />
+                  <div className="mf-kinds" role="radiogroup" aria-label="Type of meeting">
+                    {MEETING_KINDS.map((k) => (
+                      <button key={k.value} type="button" role="radio" aria-checked={meetKind === k.value}
+                        className={meetKind === k.value ? "is-on" : ""} onClick={() => setMeetKind(k.value)}>
+                        {k.icon}<span>{k.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <button className="sl-add-btn sl-meet-schedule" onClick={submitMeeting} disabled={!cleanMentions(meetTitle).trim() || !meetDate || !spanOk(meetTime, meetEnd)}>Schedule</button>
+                </div>
+              </div>
+              {meetSync && (
+                <div className={`sl-ol-status is-${meetSync.state}`} role="status">
+                  <span className="sl-ol-ico">{OUTLOOK_ICON}</span>
+                  <span className="sl-ol-txt">
+                    {meetSync.state === "syncing" ? "Adding to your Outlook…"
+                      : meetSync.state === "ok" ? <>Added to your Outlook calendar
+                          {meetSync.invited ? ` · ${meetSync.invited} ${meetSync.invited === 1 ? "person" : "people"} invited` : ""}
+                          {meetSync.teams === "yes" ? " · Teams link created" : meetSync.teams === "skipped" ? " · no Teams link (not available on this account)" : ""}.</>
+                      : meetSync.state === "gone" ? <><b>{meetSync.count && meetSync.count > 1 ? `${meetSync.count} meetings were` : "A meeting was"} deleted in Outlook</b> — removed here too.</>
+                      : <><b>Not added to Outlook.</b> {meetSync.msg}</>}
+                  </span>
+                  {meetSync.state === "err" && <button className="sl-ol-retry" onClick={() => retryOutlook(meetSync.id)}>Try again</button>}
+                  {meetSync.state !== "syncing" && <button className="sl-ol-x" onClick={() => setMeetSync(null)} aria-label="Dismiss">×</button>}
+                </div>
+              )}
+            </>
+          )}
+          {composing === composeTab && <div className="ah-compose-x">{composeCancel(composeTab)}</div>}
+        </div>
+
+        {upNext.length > 0 && (
+          <div className="ah-sec ah-next">
+            <div className="ah-sec-h">
+              <b>Up next</b>
+              {overdueCount > 0 && <em className="is-late">{overdueCount} overdue</em>}
+              {urgentCount > 0 && <em className="is-urgent">{urgentCount} urgent</em>}
+              {upNextMore > 0 && <button type="button" className="ah-link" onClick={() => setItemsModal("tasks")}>+{upNextMore} more</button>}
+            </div>
+            <div className="ah-list">
+              {upNext.map((it, i) => (
+                <div key={it.item.id} className={`ah-it is-${it.k}`} style={{ "--i": i } as CSSProperties}>
+                  {it.k === "task" ? (
+                    <TaskItem task={it.item as TrackTask} people={mentionPeople} overdue={isOverdue(it.item as TrackTask)} onToggle={flipTask} onEdit={editTask} onDelete={removeTask} onOpen={setOpenTaskId}
+                      canDelete={canDelete(it.item as TrackTask)} tagged={<MiniAssignees itemId={it.item.id} compact />} />
+                  ) : (
+                    <MeetingItem meeting={it.item as TrackMeeting} people={mentionPeople} fmtMeet={fmtMeet} onEdit={editMeeting} onKind={setMeetingKind} onDelete={removeMeeting} onOutlook={retryOutlook}
+                      tagged={<MiniAssignees itemId={it.item.id} compact />} />
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="ah-sec ah-hist">
+          <div className="ah-sec-h">
+            <b>History</b>
+            <div className="ah-chips" role="tablist" aria-label="Show">
+              {(["all", "notes", "tasks", "meetings"] as const).map((f) => (
+                <button key={f} type="button" role="tab" aria-selected={histFilter === f} className={histFilter === f ? "is-on" : ""}
+                  onClick={() => { setHistFilter(f); setHistShown(HIST_STEP); }} disabled={f !== "all" && !histCount[f]}>
+                  {f === "all" ? "All" : f === "notes" ? "Notes" : f === "tasks" ? "Done tasks" : "Past meetings"}
+                  {histCount[f] > 0 && <em>{histCount[f]}</em>}
+                </button>
+              ))}
+            </div>
+            {(notes.length + tasks.length + meetings.length) > 0 && (
+              <button type="button" className="ah-open" onClick={() => setItemsModal(histFilter === "all" ? (notes.length ? "notes" : tasks.length ? "tasks" : "meetings") : histFilter)}
+                title="Search, sort and filter everything" aria-label="Open the full list">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" /></svg>
+              </button>
+            )}
+          </div>
+          {hist.length === 0 ? (
+            <div className="ah-empty">
+              <span className="ah-empty-art" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M12 8v4l3 2M3.05 11a9 9 0 1 1 .5 4M3 4v7h7" /></svg>
+              </span>
+              <b>{notes.length + tasks.length + meetings.length ? "Nothing here yet" : "The story of this deal starts here"}</b>
+              <span>Notes, finished tasks and past meetings line up here, newest first.</span>
+            </div>
+          ) : (
+            <div className="ah-feed">
+              {hist.slice(0, histShown).map((it, i, arr) => {
+                const day = it.at.slice(0, 10);
+                const showDay = i === 0 || arr[i - 1].at.slice(0, 10) !== day;
+                return (
+                  <div key={`${it.k}-${it.item.id}`} className="ah-feed-row">
+                    {showDay && <div className="ah-day"><span>{dayLabel(it.at)}</span></div>}
+                    <div className={`ah-it is-${it.k}`} style={{ "--i": Math.min(i, 8) } as CSSProperties}>
+                      <span className="ah-it-dot" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d={AH_ICON[it.k === "note" ? "notes" : it.k === "task" ? "done" : "meetings"]} /></svg></span>
+                      {it.k === "note" ? (
+                        <NoteItem note={it.item as TrackNote} people={mentionPeople} onEdit={editNote} onDelete={removeNote}
+                          author={(it.item as TrackNote).created_by ? empName((it.item as TrackNote).created_by!) : null}
+                          phase={(it.item as TrackNote).phase_id ? phases.find((p) => p.id === (it.item as TrackNote).phase_id)?.name ?? null : null}
+                          tagged={<MiniAssignees itemId={it.item.id} compact />}>
+                          <AssigneeArea itemId={it.item.id} />
+                        </NoteItem>
+                      ) : it.k === "task" ? (
+                        <TaskItem task={it.item as TrackTask} people={mentionPeople} onToggle={flipTask} onEdit={editTask} onDelete={removeTask} onOpen={setOpenTaskId}
+                          canDelete={canDelete(it.item as TrackTask)} tagged={<MiniAssignees itemId={it.item.id} compact />} />
+                      ) : (
+                        <MeetingItem meeting={it.item as TrackMeeting} people={mentionPeople} fmtMeet={fmtMeet} onEdit={editMeeting} onKind={setMeetingKind} onDelete={removeMeeting} onOutlook={retryOutlook}
+                          tagged={<MiniAssignees itemId={it.item.id} compact />} />
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+              {hist.length > histShown && (
+                <button type="button" className="ah-more" onClick={() => setHistShown((n) => n + HIST_STEP)}>
+                  Show {Math.min(HIST_STEP, hist.length - histShown)} more <span>· {hist.length - histShown} left</span>
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+        </div>
+      </section>
+    ),
+    contacts: (
+      <DealPeople company={company} contacts={contacts} companyContactIds={companyContactIds}
+        dealIds={Array.from(new Set([...trackingContactIds, ...tracking.contactIds]))}
+        onChange={async (ids) => {
+          setTrackingContactIds(ids); tracking.contactIds = ids;
+          await setTrackingContacts(tracking.id, ids).catch(() => {});
+        }} />
+    ),
+    probability: (
+      <FoldPanel className="sl-prob-panel" title="Close probability" icon={FOLD_ICON.probability} tone="#0a6f4d"
+        summary={[
+          `Sales ${repProb == null ? "—" : `${repProb}%`}`,
+          `Mgmt ${mgrProb == null ? "—" : `${mgrProb}%`}`,
+          closedOn && (status === "won" || status === "lost") ? `${status === "won" ? "Won" : "Lost"} ${new Date(`${closedOn}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : "",
+        ].filter(Boolean).join(" · ")}>
+
+        <div className="sl-probfield">
+          <span className="sl-probfield-k">Sales estimate</span>
+          <div className="sl-probfield-row">
+            <input
+              className="sl-probfield-range"
+              type="range" min={0} max={100} step={5}
+              value={repProb ?? 0}
+              onChange={(e) => { const v = Number(e.target.value); setRepProb(v); saveProb("rep", v); }}
+            />
+            <span className="sl-probfield-v">{repProb == null ? "—" : `${repProb}%`}</span>
+            <span className="sl-probfield-datewrap">
+              <DatePicker value={repDate} placeholder="+ expected"
+                onChange={(v) => { setRepDate(v); setDealCloseDate(tracking.id, "rep", v || null).catch(() => {}); }} />
+            </span>
+          </div>
+        </div>
+
+        <div className={`sl-probfield sl-probfield-mgr ${canAssign ? "" : "is-locked"}`}>
+          <span className="sl-probfield-k">
+            Management estimate
+            {!canAssign && (
+              <svg className="sl-probfield-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
+            )}
+          </span>
+          <div className="sl-probfield-row">
+            {canAssign ? (
+              <input
+                className="sl-probfield-range"
+                type="range" min={0} max={100} step={5}
+                value={mgrProb ?? 0}
+                onChange={(e) => { const v = Number(e.target.value); setMgrProb(v); saveProb("mgr", v); }}
+              />
+            ) : (
+              <div className="sl-probfield-track">
+                <span className="sl-probfield-fill" style={{ width: `${mgrProb ?? 0}%` }} />
+              </div>
+            )}
+            <span className="sl-probfield-v">{mgrProb == null ? "—" : `${mgrProb}%`}</span>
+            <span className="sl-probfield-datewrap">
+              {canAssign ? (
+                <DatePicker value={mgrDate} placeholder="+ expected"
+                  onChange={(v) => { setMgrDate(v); setDealCloseDate(tracking.id, "mgr", v || null).catch(() => {}); }} />
+              ) : (
+                <span className="sl-probfield-date-ro">{mgrDate ? new Date(mgrDate).toLocaleDateString() : "—"}</span>
+              )}
+            </span>
+          </div>
+        </div>
+        <p className="sl-probfield-note">The dates above are the <b>expected</b> close dates.</p>
+
+        <div className={`sl-probfield sl-closedon ${status === "won" ? "is-won" : status === "lost" ? "is-lost" : ""}`}>
+          <span className="sl-probfield-k">
+            Close date
+            <em>{status === "won" ? "Won" : status === "lost" ? "Lost" : "Not closed yet"}</em>
+          </span>
+          <div className="sl-probfield-row">
+            <span className="sl-closedon-txt">
+              {closedOn
+                ? `${status === "lost" ? "Lost" : status === "won" ? "Won" : "Closed"} on ${new Date(`${closedOn}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}`
+                : status === "won" || status === "lost" ? "No date recorded" : "Filled in when the deal is won or lost"}
+            </span>
+            <span className="sl-probfield-datewrap">
+              <DatePicker value={closedOn} placeholder="+ date" onChange={changeClosedOn} />
+            </span>
+          </div>
+        </div>
+      </FoldPanel>
+    ),
+    fields: trackingFields.length > 0 ? (
+      <TrackingFieldsPanel trackingId={tracking.id} fields={trackingFields} initial={tracking.custom}
+        onSaved={(c) => { tracking.custom = c; setDkCustom(c); }} />
+    ) : null,
+    calculator: (
+      <section className={`sl-panel sl-panel-calc sl-fold has-ico ${dkFoldNow("calculator") ? "is-folded" : "is-open is-settled"}`}
+        style={{ "--fold-tone": "#0a6f4d" } as CSSProperties}>
+        <div className="sl-rvh">
+          <div className="sl-rvh-top sl-fold-head">
+            <h3 className="sl-fold-h">
+              <button type="button" className="sl-fold-btn sl-calc-fbtn" aria-expanded={!dkFoldNow("calculator")} onClick={() => dkToggle("calculator")}
+                title={dkFoldNow("calculator") ? "Show the products and services" : "Fold the calculator to its header"}>
+                <span className="sl-fold-ico" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={FOLD_ICON.calculator} /></svg>
+                </span>
+                <span className="sl-panel-title">Calculator</span>
+                <span className="sl-fold-sum" aria-hidden={!dkFoldNow("calculator")}>
+                  {activeTprods.length} product{activeTprods.length === 1 ? "" : "s"} · {activePotentials.length} service{activePotentials.length === 1 ? "" : "s"}
+                </span>
+                <span className="sl-fold-chevw" aria-hidden="true"><svg className="sl-fold-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6" /></svg></span>
+              </button>
+            </h3>
+            <div className="sl-fold-aside sl-calc-aside">
+              <FigurePick className="sl-rvh-fig" value={potentialShown} money={money}
+                title={`Potential revenue · ${REVENUE_MODES.find((m) => m.value === revMode)?.label ?? ""}${partnersTotal > 0 ? (revGross ? " · before partners" : " · for us") : ""}. Click to choose what it counts.`}
+                options={[
+                  ...REVENUE_MODES.map((m) => ({ key: m.value, label: m.label, hint: partnersTotal > 0 ? `${REV_HINT[m.value]} · for us` : REV_HINT[m.value], amount: modeAmount(m.value), on: revMode === m.value && (!revGross || partnersTotal <= 0) })),
+                  ...(partnersTotal > 0 ? REVENUE_MODES.map((m) => ({ key: `${m.value}|gross`, label: `${m.label} · before partners`, hint: `${REV_HINT[m.value]} · partners' cut not taken off`, amount: modeAmount(m.value, true), on: revMode === m.value && revGross })) : []),
+                ]}
+                onPick={(k) => { const [m, g] = k.split("|"); setRevMode(m as RevenueMode); setRevGross(g === "gross"); }} />
+            </div>
+          </div>
+          <div className="sl-calc-fold"><div className="sl-calc-fold-in">
+          <div className="sl-rvh-bar" aria-hidden="true">
+            <i className="is-product" style={{ flexGrow: Math.max(0.0001, productsShown) }} />
+            <i className="is-service" style={{ flexGrow: Math.max(0.0001, servicesShown) }} />
+          </div>
+          <div className="sl-rvh-legend">
+            <span className="is-product"><i />Products <em>{productsYearWord}</em><b>{money(productsShown)}</b></span>
+            <span className={`is-service ${servicesCounted ? "" : "is-out"}`} title={servicesCounted ? "A one-off fee, counted once" : "Not counted in this view"}><i />Services<b>{servicesCounted ? money(servicesShown) : <s>{money(servicesTotal)}</s>}</b></span>
+            {partnersTotal > 0 && <span className={`is-partner ${revGross ? "is-out" : ""}`} title={revGross ? "Not taken off: the figure shows what the client pays" : "Already taken out of the figures above"}><i />Partners<b>{revGross ? <s>−{money(partnersTotal)}</s> : `−${money(partnersTotal)}`}</b></span>}
+          </div>
+          </div></div>
+        </div>
+
+        <div className="sl-calc-fold"><div className="sl-calc-fold-in">
+        <div className="sl-rvg is-product">
+          <div className="sl-rvg-head">
+            <span className="sl-rvg-t"><i />Products<em>{activeTprods.length}</em></span>
+            <b>{money(productsTotal)}</b>
+          </div>
+          {activeTprods.length === 0 && !leftOutGroups(tprods).length && <p className="sl-rvg-empty">No products yet.</p>}
+          <div className="sl-calc-cards">
+          {activeTprods.map((tp) => {
+            const vg = tp.version_group ?? tp.id;
+            const grp = groupOf(tprods, vg);
+            const idx = grp.findIndex((x) => x.id === tp.id);
+            return (
+              <RevLine key={vg} name={productName(tp.product_id)} tag="Product" line={tp} money={money}
+                onRemove={() => removeProduct(tp.id)}
+                calculator={productOf(tp.product_id)?.calculator as Calculator | null}
+                catalogBase={productOf(tp.product_id)?.tiers?.find((x) => x.id === tp.tier_id)?.price}
+                onOpenCalc={() => setCalcFor({ kind: "product", id: tp.id })}
+                versionIdx={idx} versionCount={grp.length}
+                onPrev={idx > 0 ? () => switchProdVersion(vg, grp[idx - 1].id) : undefined}
+                onNext={idx < grp.length - 1 ? () => switchProdVersion(vg, grp[idx + 1].id) : undefined}
+                onNewVersion={(copy) => newProdVersion(tp.id, copy)}
+                footer={<LineDocs key={tp.id} trackingId={tracking.id} lineId={tp.id} lineKind="product" phaseId={curPhase} versionLabel={`v${idx + 1}`} />} />
+            );
+          })}
+          </div>
+          {leftOutRows("product", tprods)}
+          {availableProducts.length > 0 && (
+            <div className="sl-rvg-add">
+              <Select value="" onChange={(v) => v && addProduct(v)} placeholder="+ Add product" options={availableProducts.map((p) => ({ value: p.id!, label: p.name }))} />
+            </div>
+          )}
+        </div>
+
+        <div className="sl-rvg is-service">
+          <div className="sl-rvg-head">
+            <span className="sl-rvg-t"><i />Services<em>{activePotentials.length}</em></span>
+            <b>{money(servicesTotal)}</b>
+          </div>
+          {activePotentials.length === 0 && !leftOutGroups(potentials).length && <p className="sl-rvg-empty">No services yet.</p>}
+          <div className="sl-calc-cards">
+          {activePotentials.map((p) => {
+            const vg = p.version_group ?? p.id;
+            const grp = groupOf(potentials, vg);
+            const idx = grp.findIndex((x) => x.id === p.id);
+            return (
+              <RevLine key={vg} name={p.label || serviceName(p.service_id)} tag="Service" tagClass="sl-rev-tag-svc"
+                line={p} money={money} unit={serviceUnit(p.service_id)} minUnit={serviceMin(p.service_id)}
+                onRemove={() => removePotential(p.id)}
+                calculator={serviceOf(p.service_id)?.calculator as Calculator | null}
+                onOpenCalc={() => setCalcFor({ kind: "service", id: p.id })}
+                versionIdx={idx} versionCount={grp.length}
+                onPrev={idx > 0 ? () => switchSvcVersion(vg, grp[idx - 1].id) : undefined}
+                onNext={idx < grp.length - 1 ? () => switchSvcVersion(vg, grp[idx + 1].id) : undefined}
+                onNewVersion={(copy) => newSvcVersion(p.id, copy)}
+                footer={<LineDocs key={p.id} trackingId={tracking.id} lineId={p.id} lineKind="service" phaseId={curPhase} versionLabel={`v${idx + 1}`} />} />
+            );
+          })}
+          </div>
+          {leftOutRows("service", potentials)}
+          {services.length > 0 && (
+            <div className="sl-rvg-add">
+              <Select value="" onChange={(v) => v && addPotential(v)} placeholder="+ Add service" options={services.map((s) => ({ value: s.id!, label: s.name }))} />
+            </div>
+          )}
+        </div>
+
+        {revErr && <p className="sl-rev-err">Could not save: {revErr}</p>}
+        <div className="sl-calc-foot sl-calc-foot-actions">
+          <span className="sl-rv-foot-k">
+            Total if won
+            <em>whole contract{propBusy ? " · generating document…" : ""}</em>
+          </span>
+          <b>{money(totalPotential)}</b>
+        </div>
+        </div></div>
+        {propErr && <p className="sl-rev-err">{propErr}</p>}
+      </section>
+    ),
+    proposals: (
+      <DealProposals trackingId={tracking.id} groups={proposalGroups} decks={decks} money={money}
+        busy={propBusyId} reloadKey={propsReload} onGenerate={generateProposalFor} onStudio={openStudio} onMain={applyMainLocally} onWon={wonWithProposal} dealWon={status === "won"}
+        phaseId={curPhase} onContractFile={proposalContractFile} onSummary={setDkProps} />
+    ),
+    files: (
+      <section className="sl-panel sl-panel-docs">
+        <TrackingFiles trackingId={tracking.id} phaseId={curPhase} phases={phases} onFiles={setDkFiles} />
+      </section>
+    ),
+  };
+
   return (
     <div className="sl sl-detail">
       {pendingHandover && (
@@ -3957,20 +4693,8 @@ export default function TrackingDetail({ tracking, companies, contacts, products
               )}
             </div>
           )}
-          <div className="sl-seg">
-            {["active", "won", "lost", "paused"].map((s) => {
-              const disabled = (s === "won" && !winPhase) || (s === "lost" && !lossPhase);
-              return (
-                <button key={s} className={`sl-seg-btn ${status === s ? "is-on" : ""} sl-seg-${s}`} disabled={disabled}
-                  onClick={() => applyStatus(s)} title={disabled ? "Define a win/loss phase in the pipeline first" : ""}>{statusText(s)}</button>
-              );
-            })}
-          </div>
-          <div className="sl-team-wrap">
-            <button className={`sl-team-btn ${team.length ? "has-people" : ""}`} onClick={() => setTeamMenu((v) => !v)} title="Who is on this deal">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></svg>
-              {team.length > 0 && <span className="sl-team-btn-n">{team.length}</span>}
-            </button>
+          <ActionsMenu items={dealActions} />
+          <div className="sl-team-wrap is-anchor">
             {teamMenu && (
               <>
                 <div className="sl-handoff-layer" onMouseDown={() => setTeamMenu(false)} />
@@ -4018,7 +4742,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
               </>
             )}
           </div>
-          <button className="sl-d-del" onClick={remove}>
+          <button className="sl-d-del" onClick={remove} title="Delete this deal" aria-label="Delete this deal">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
           </button>
         </div>
@@ -4026,7 +4750,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
 
       <div className="sl-scroll">
         {/* Pipeline flow — hero */}
-        <div className={`sl-pipe sl-pipe-${status}`}>
+        <div className={`sl-pipe sl-pipe-${status} is-h-${heroSize} ${dkEditing ? "is-adjusting" : ""}`}>
           <div className="sl-pipe-body">
             <div className="sl-pipe-stat">
               <span className="sl-pipe-pct">{pct}<i>%</i></span>
@@ -4067,430 +4791,95 @@ export default function TrackingDetail({ tracking, companies, contacts, products
                 onChange={(d) => { const id = dateEdit; setDateEdit(null); void changePhaseDate(id, d); }} />
             )}
           </div>
+          {heroSize === "tall" && phases.length > 0 && (() => {
+            const since = curPhase ? phaseEnteredAt(curPhase) : null;
+            const days = since ? Math.max(0, Math.floor((Date.now() - new Date(since).getTime()) / 864e5)) : null;
+            return (
+              <div className="sl-pipe-more">
+                <span className="sl-pipe-meter"><i style={{ width: `${Math.max(2, pct)}%` }} /></span>
+                <span className="sl-pipe-more-t">
+                  {curIdx >= 0 ? <>Phase <b>{curIdx + 1}</b> of {phases.length} · <b>{phases[curIdx].name}</b></> : `${phases.length} phases`}
+                  {days != null && <> · {days === 0 ? "reached today" : `${days} ${days === 1 ? "day" : "days"} in it`}</>}
+                  {closeProb != null && <> · {closeProb}% chance to close</>}
+                </span>
+              </div>
+            );
+          })()}
         </div>
-
-        {/* The deal's work, three columns: who and how likely · what happens (the activity) · what it's worth */}
-        <div className="sl-work is-hub">
-          <div className="sl-col-act">
-          <section className={`sl-panel ah ${composing ? "is-writing" : ""}`} data-tab={composeTab}>
-            <header className="ah-head">
-              <span className="ah-ico" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>
-              </span>
-              <div className="ah-title">
-                <h3>Activity</h3>
-                <small>{actSummary}</small>
-              </div>
-              <div className="ah-tabs" role="tablist" aria-label="Add to this deal" style={{ "--i": COMPOSERS.indexOf(composeTab) } as CSSProperties}>
-                <span className="ah-tabs-pill" aria-hidden="true" />
-                {COMPOSERS.map((k) => (
-                  <button key={k} type="button" role="tab" aria-selected={composeTab === k} className={composeTab === k ? "is-on" : ""} onClick={() => setComposeTab(k)}
-                    title={k === "notes" ? "Write down what happened" : k === "tasks" ? "Plan the next step" : "Book a meeting (goes to Outlook)"}>
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={AH_ICON[k]} /></svg>
-                    {k === "notes" ? "Note" : k === "tasks" ? "Task" : "Meeting"}
-                    {drafts[k] && composeTab !== k && <i className="ah-dot" title="Unsaved draft" />}
-                  </button>
-                ))}
-              </div>
-            </header>
-
-            <div className="ah-compose" key={composeTab}>
-              {composeTab === "notes" && (
-                <div className={`sl-note-add sl-note-add-fluid ${cleanMentions(newNote).trim() ? "is-writing" : ""}`}>
-                  <MentionInput multiline value={newNote} onChange={setNewNote} people={mentionPeople}
-                    onMention={() => {}} placeholder="Write a note... use @ to mention" />
-                  <button className="sl-add-btn sl-add-btn-inline" onClick={submitNote} disabled={!cleanMentions(newNote).trim()}>Add</button>
-                </div>
-              )}
-              {composeTab === "tasks" && (
-                <div className="sl-task-add">
-                  <div className="sl-task-name-row">
-                    <MentionInput value={newTask} onChange={setNewTask} people={mentionPeople}
-                      onMention={() => {}} placeholder="Task name... use @ to mention" />
-                    {!cleanMentions(newTask).trim() && <TemplatePicker templates={taskTemplates} kind="quick" onPick={pickTaskTemplate} compact />}
-                  </div>
-                  <div className={`sl-meet-reveal ${cleanMentions(newTask).trim() ? "is-writing" : ""}`}>
-                    <MentionInput multiline value={newTaskDesc} onChange={setNewTaskDesc} people={mentionPeople} className="sl-task-desc-input"
-                      onMention={() => {}} placeholder="Description (optional) — the details, what done looks like…" />
-                    {taskFrom && (
-                      <div className="hs-add-from">
-                        <span>✦ From a template{taskFrom.checklist.length ? ` · ${taskFrom.checklist.length} steps` : ""}</span>
-                        <button type="button" onClick={() => setTaskFrom(null)} aria-label="Don't use the template">×</button>
-                      </div>
-                    )}
-                    <div className="sl-task-opts">
-                      <div className="sl-task-prios" role="radiogroup" aria-label="Priority">
-                        {TASK_PRIORITIES.map((p) => (
-                          <button key={p} type="button" role="radio" aria-checked={taskPrio === p}
-                            className={`hs-prio is-${p} ${taskPrio === p ? "is-on" : ""}`} onClick={() => setTaskPrio(p)}>
-                            <FlagIcon /><span>{PRIORITY_LABEL[p]}</span>
-                          </button>
-                        ))}
-                      </div>
-                      <div className="sl-task-kind" role="radiogroup" aria-label="Kind of task">
-                        {(["quick", "process"] as TaskKind[]).map((k) => (
-                          <button key={k} type="button" role="radio" aria-checked={taskKind === k} className={taskKind === k ? "is-on" : ""}
-                            onClick={() => setTaskKind(k)} title={k === "quick" ? "Tick it off and forget it" : "Longer work: status, % and progress notes"}>
-                            {k === "quick" ? "Quick" : "Process"}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="sl-task-due">
-                      <span className="sl-task-due-lbl">Due</span>
-                      <DatePicker value={taskDue} onChange={setTaskDue} placeholder="Date" />
-                      <TimePicker value={taskDueTime} onChange={setTaskDueTime} ariaLabel="Due time" />
-                    </div>
-                    <button className="sl-add-btn sl-meet-schedule" onClick={submitTask} disabled={!cleanMentions(newTask).trim() || !taskDue}>Add task</button>
-                  </div>
-                </div>
-              )}
-              {composeTab === "meetings" && (
-                <>
-                  <div className="sl-meet-add">
-                    <MentionInput multiline value={meetTitle} onChange={setMeetTitle} people={mentionPeople}
-                      onMention={() => {}} placeholder="Meeting title... use @ to mention" />
-                    <div className={`sl-meet-reveal ${cleanMentions(meetTitle).trim() ? "is-writing" : ""}`}>
-                      <MeetingWhen date={meetDate} start={meetTime} end={meetEnd}
-                        onDate={setMeetDate} onStart={setMeetTime} onEnd={setMeetEnd} />
-                      <div className="mf-kinds" role="radiogroup" aria-label="Type of meeting">
-                        {MEETING_KINDS.map((k) => (
-                          <button key={k.value} type="button" role="radio" aria-checked={meetKind === k.value}
-                            className={meetKind === k.value ? "is-on" : ""} onClick={() => setMeetKind(k.value)}>
-                            {k.icon}<span>{k.label}</span>
-                          </button>
-                        ))}
-                      </div>
-                      <button className="sl-add-btn sl-meet-schedule" onClick={submitMeeting} disabled={!cleanMentions(meetTitle).trim() || !meetDate || !spanOk(meetTime, meetEnd)}>Schedule</button>
-                    </div>
-                  </div>
-                  {meetSync && (
-                    <div className={`sl-ol-status is-${meetSync.state}`} role="status">
-                      <span className="sl-ol-ico">{OUTLOOK_ICON}</span>
-                      <span className="sl-ol-txt">
-                        {meetSync.state === "syncing" ? "Adding to your Outlook…"
-                          : meetSync.state === "ok" ? <>Added to your Outlook calendar
-                              {meetSync.invited ? ` · ${meetSync.invited} ${meetSync.invited === 1 ? "person" : "people"} invited` : ""}
-                              {meetSync.teams === "yes" ? " · Teams link created" : meetSync.teams === "skipped" ? " · no Teams link (not available on this account)" : ""}.</>
-                          : meetSync.state === "gone" ? <><b>{meetSync.count && meetSync.count > 1 ? `${meetSync.count} meetings were` : "A meeting was"} deleted in Outlook</b> — removed here too.</>
-                          : <><b>Not added to Outlook.</b> {meetSync.msg}</>}
-                      </span>
-                      {meetSync.state === "err" && <button className="sl-ol-retry" onClick={() => retryOutlook(meetSync.id)}>Try again</button>}
-                      {meetSync.state !== "syncing" && <button className="sl-ol-x" onClick={() => setMeetSync(null)} aria-label="Dismiss">×</button>}
-                    </div>
-                  )}
-                </>
-              )}
-              {composing === composeTab && <div className="ah-compose-x">{composeCancel(composeTab)}</div>}
-            </div>
-
-            {upNext.length > 0 && (
-              <div className="ah-sec ah-next">
-                <div className="ah-sec-h">
-                  <b>Up next</b>
-                  {overdueCount > 0 && <em className="is-late">{overdueCount} overdue</em>}
-                  {urgentCount > 0 && <em className="is-urgent">{urgentCount} urgent</em>}
-                  {upNextMore > 0 && <button type="button" className="ah-link" onClick={() => setItemsModal("tasks")}>+{upNextMore} more</button>}
-                </div>
-                <div className="ah-list">
-                  {upNext.map((it, i) => (
-                    <div key={it.item.id} className={`ah-it is-${it.k}`} style={{ "--i": i } as CSSProperties}>
-                      {it.k === "task" ? (
-                        <TaskItem task={it.item as TrackTask} people={mentionPeople} overdue={isOverdue(it.item as TrackTask)} onToggle={flipTask} onEdit={editTask} onDelete={removeTask} onOpen={setOpenTaskId}
-                          canDelete={canDelete(it.item as TrackTask)} tagged={<MiniAssignees itemId={it.item.id} compact />} />
-                      ) : (
-                        <MeetingItem meeting={it.item as TrackMeeting} people={mentionPeople} fmtMeet={fmtMeet} onEdit={editMeeting} onKind={setMeetingKind} onDelete={removeMeeting} onOutlook={retryOutlook}
-                          tagged={<MiniAssignees itemId={it.item.id} compact />} />
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div className="ah-sec ah-hist">
-              <div className="ah-sec-h">
-                <b>History</b>
-                <div className="ah-chips" role="tablist" aria-label="Show">
-                  {(["all", "notes", "tasks", "meetings"] as const).map((f) => (
-                    <button key={f} type="button" role="tab" aria-selected={histFilter === f} className={histFilter === f ? "is-on" : ""}
-                      onClick={() => { setHistFilter(f); setHistShown(HIST_STEP); }} disabled={f !== "all" && !histCount[f]}>
-                      {f === "all" ? "All" : f === "notes" ? "Notes" : f === "tasks" ? "Done tasks" : "Past meetings"}
-                      {histCount[f] > 0 && <em>{histCount[f]}</em>}
-                    </button>
-                  ))}
-                </div>
-                {(notes.length + tasks.length + meetings.length) > 0 && (
-                  <button type="button" className="ah-open" onClick={() => setItemsModal(histFilter === "all" ? (notes.length ? "notes" : tasks.length ? "tasks" : "meetings") : histFilter)}
-                    title="Search, sort and filter everything" aria-label="Open the full list">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" /></svg>
-                  </button>
-                )}
-              </div>
-              {hist.length === 0 ? (
-                <div className="ah-empty">
-                  <span className="ah-empty-art" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M12 8v4l3 2M3.05 11a9 9 0 1 1 .5 4M3 4v7h7" /></svg>
-                  </span>
-                  <b>{notes.length + tasks.length + meetings.length ? "Nothing here yet" : "The story of this deal starts here"}</b>
-                  <span>Notes, finished tasks and past meetings line up here, newest first.</span>
-                </div>
-              ) : (
-                <div className="ah-feed">
-                  {hist.slice(0, histShown).map((it, i, arr) => {
-                    const day = it.at.slice(0, 10);
-                    const showDay = i === 0 || arr[i - 1].at.slice(0, 10) !== day;
-                    return (
-                      <div key={`${it.k}-${it.item.id}`} className="ah-feed-row">
-                        {showDay && <div className="ah-day"><span>{dayLabel(it.at)}</span></div>}
-                        <div className={`ah-it is-${it.k}`} style={{ "--i": Math.min(i, 8) } as CSSProperties}>
-                          <span className="ah-it-dot" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d={AH_ICON[it.k === "note" ? "notes" : it.k === "task" ? "done" : "meetings"]} /></svg></span>
-                          {it.k === "note" ? (
-                            <NoteItem note={it.item as TrackNote} people={mentionPeople} onEdit={editNote} onDelete={removeNote}
-                              author={(it.item as TrackNote).created_by ? empName((it.item as TrackNote).created_by!) : null}
-                              phase={(it.item as TrackNote).phase_id ? phases.find((p) => p.id === (it.item as TrackNote).phase_id)?.name ?? null : null}
-                              tagged={<MiniAssignees itemId={it.item.id} compact />}>
-                              <AssigneeArea itemId={it.item.id} />
-                            </NoteItem>
-                          ) : it.k === "task" ? (
-                            <TaskItem task={it.item as TrackTask} people={mentionPeople} onToggle={flipTask} onEdit={editTask} onDelete={removeTask} onOpen={setOpenTaskId}
-                              canDelete={canDelete(it.item as TrackTask)} tagged={<MiniAssignees itemId={it.item.id} compact />} />
-                          ) : (
-                            <MeetingItem meeting={it.item as TrackMeeting} people={mentionPeople} fmtMeet={fmtMeet} onEdit={editMeeting} onKind={setMeetingKind} onDelete={removeMeeting} onOutlook={retryOutlook}
-                              tagged={<MiniAssignees itemId={it.item.id} compact />} />
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {hist.length > histShown && (
-                    <button type="button" className="ah-more" onClick={() => setHistShown((n) => n + HIST_STEP)}>
-                      Show {Math.min(HIST_STEP, hist.length - histShown)} more <span>· {hist.length - histShown} left</span>
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-          </section>
+        {dkEditing && (
+          <div className="sl-pipe-adj">
+            <span className="sl-pipe-rz" onPointerDown={heroDrag} title="Pull up or down to make the top bar slimmer or taller" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 9l4-4 4 4M8 15l4 4 4-4" /></svg>
+            </span>
+            <span className="sl-pipe-adj-k">Top bar</span>
+            <span className="sl-pipe-adj-seg" role="radiogroup" aria-label="Top bar height">
+              {HERO_SIZES.map((h) => (
+                <button key={h.k} type="button" role="radio" aria-checked={heroSize === h.k} className={heroSize === h.k ? "is-on" : ""} onClick={() => dkSetHero(h.k)}>{h.label}</button>
+              ))}
+            </span>
           </div>
+        )}
 
-          <div className="sl-col-ctx">
-          <DealPeople company={company} contacts={contacts} companyContactIds={companyContactIds}
-            dealIds={Array.from(new Set([...trackingContactIds, ...tracking.contactIds]))}
-            onChange={async (ids) => {
-              setTrackingContactIds(ids); tracking.contactIds = ids;
-              await setTrackingContacts(tracking.id, ids).catch(() => {});
-            }} />
-
-          <FoldPanel className="sl-prob-panel" title="Close probability" icon={FOLD_ICON.probability} tone="#0a6f4d"
-            summary={[
-              `Sales ${repProb == null ? "—" : `${repProb}%`}`,
-              `Mgmt ${mgrProb == null ? "—" : `${mgrProb}%`}`,
-              closedOn && (status === "won" || status === "lost") ? `${status === "won" ? "Won" : "Lost"} ${new Date(`${closedOn}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : "",
-            ].filter(Boolean).join(" · ")}>
-
-            <div className="sl-probfield">
-              <span className="sl-probfield-k">Sales estimate</span>
-              <div className="sl-probfield-row">
-                <input
-                  className="sl-probfield-range"
-                  type="range" min={0} max={100} step={5}
-                  value={repProb ?? 0}
-                  onChange={(e) => { const v = Number(e.target.value); setRepProb(v); saveProb("rep", v); }}
-                />
-                <span className="sl-probfield-v">{repProb == null ? "—" : `${repProb}%`}</span>
-                <span className="sl-probfield-datewrap">
-                  <DatePicker value={repDate} placeholder="+ expected"
-                    onChange={(v) => { setRepDate(v); setDealCloseDate(tracking.id, "rep", v || null).catch(() => {}); }} />
-                </span>
-              </div>
-            </div>
-
-            <div className={`sl-probfield sl-probfield-mgr ${canAssign ? "" : "is-locked"}`}>
-              <span className="sl-probfield-k">
-                Management estimate
-                {!canAssign && (
-                  <svg className="sl-probfield-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
-                )}
-              </span>
-              <div className="sl-probfield-row">
-                {canAssign ? (
-                  <input
-                    className="sl-probfield-range"
-                    type="range" min={0} max={100} step={5}
-                    value={mgrProb ?? 0}
-                    onChange={(e) => { const v = Number(e.target.value); setMgrProb(v); saveProb("mgr", v); }}
-                  />
-                ) : (
-                  <div className="sl-probfield-track">
-                    <span className="sl-probfield-fill" style={{ width: `${mgrProb ?? 0}%` }} />
-                  </div>
-                )}
-                <span className="sl-probfield-v">{mgrProb == null ? "—" : `${mgrProb}%`}</span>
-                <span className="sl-probfield-datewrap">
-                  {canAssign ? (
-                    <DatePicker value={mgrDate} placeholder="+ expected"
-                      onChange={(v) => { setMgrDate(v); setDealCloseDate(tracking.id, "mgr", v || null).catch(() => {}); }} />
-                  ) : (
-                    <span className="sl-probfield-date-ro">{mgrDate ? new Date(mgrDate).toLocaleDateString() : "—"}</span>
-                  )}
-                </span>
-              </div>
-            </div>
-            <p className="sl-probfield-note">The dates above are the <b>expected</b> close dates.</p>
-
-            <div className={`sl-probfield sl-closedon ${status === "won" ? "is-won" : status === "lost" ? "is-lost" : ""}`}>
-              <span className="sl-probfield-k">
-                Close date
-                <em>{status === "won" ? "Won" : status === "lost" ? "Lost" : "Not closed yet"}</em>
-              </span>
-              <div className="sl-probfield-row">
-                <span className="sl-closedon-txt">
-                  {closedOn
-                    ? `${status === "lost" ? "Lost" : status === "won" ? "Won" : "Closed"} on ${new Date(`${closedOn}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}`
-                    : status === "won" || status === "lost" ? "No date recorded" : "Filled in when the deal is won or lost"}
-                </span>
-                <span className="sl-probfield-datewrap">
-                  <DatePicker value={closedOn} placeholder="+ date" onChange={changeClosedOn} />
-                </span>
-              </div>
-            </div>
-          </FoldPanel>
-
-          {trackingFields.length > 0 && (
-            <TrackingFieldsPanel trackingId={tracking.id} fields={trackingFields} initial={tracking.custom}
-              onSaved={(c) => { tracking.custom = c; }} />
+        {/* The deal's work: cards on a board you can arrange (same grid as the home page) */}
+        <div className={`sl-work dk ${dkEditing ? "is-adjusting" : ""}`}>
+          {dkLive && (
+            <HomeBoard kit={DEAL_KIT} className="dk-board" items={dkShown} editing={dkEditing} step={dkStep} slotRef={dkSlotRef} flash={dkFlash}
+              onOpen={() => {}} onPreview={setDkPreview} onChange={(next) => dkChangeItems(next)} onRemove={dkRemove} />
           )}
-          </div>
-
-          <div className="sl-col-calc">
-          <section className={`sl-panel sl-panel-calc sl-fold has-ico ${calcFolded ? "is-folded" : "is-open is-settled"}`}
-            style={{ "--fold-tone": "#0a6f4d" } as CSSProperties}>
-            <div className="sl-rvh">
-              <div className="sl-rvh-top sl-fold-head">
-                <h3 className="sl-fold-h">
-                  <button type="button" className="sl-fold-btn sl-calc-fbtn" onClick={toggleCalcFold} aria-expanded={!calcFolded}
-                    title={calcFolded ? "Show the products and services" : "Fold the calculator to a summary"}>
-                    <span className="sl-fold-ico" aria-hidden="true">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={FOLD_ICON.calculator} /></svg>
-                    </span>
-                    <span className="sl-panel-title">Calculator</span>
-                    <span className="sl-fold-sum" aria-hidden={!calcFolded}>
-                      {activeTprods.length} product{activeTprods.length === 1 ? "" : "s"} · {activePotentials.length} service{activePotentials.length === 1 ? "" : "s"}
-                    </span>
-                    <span className="sl-fold-chevw" aria-hidden="true"><svg className="sl-fold-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6" /></svg></span>
-                  </button>
-                </h3>
-                <div className="sl-fold-aside sl-calc-aside">
-                  <FigurePick className="sl-rvh-fig" value={potentialShown} money={money}
-                    title={`Potential revenue · ${REVENUE_MODES.find((m) => m.value === revMode)?.label ?? ""}${partnersTotal > 0 ? (revGross ? " · before partners" : " · for us") : ""}. Click to choose what it counts.`}
-                    options={[
-                      ...REVENUE_MODES.map((m) => ({ key: m.value, label: m.label, hint: partnersTotal > 0 ? `${REV_HINT[m.value]} · for us` : REV_HINT[m.value], amount: modeAmount(m.value), on: revMode === m.value && (!revGross || partnersTotal <= 0) })),
-                      ...(partnersTotal > 0 ? REVENUE_MODES.map((m) => ({ key: `${m.value}|gross`, label: `${m.label} · before partners`, hint: `${REV_HINT[m.value]} · partners' cut not taken off`, amount: modeAmount(m.value, true), on: revMode === m.value && revGross })) : []),
-                    ]}
-                    onPick={(k) => { const [m, g] = k.split("|"); setRevMode(m as RevenueMode); setRevGross(g === "gross"); }} />
-                </div>
-              </div>
-              <div className="sl-calc-fold"><div className="sl-calc-fold-in">
-              <div className="sl-rvh-bar" aria-hidden="true">
-                <i className="is-product" style={{ flexGrow: Math.max(0.0001, productsShown) }} />
-                <i className="is-service" style={{ flexGrow: Math.max(0.0001, servicesShown) }} />
-              </div>
-              <div className="sl-rvh-legend">
-                <span className="is-product"><i />Products <em>{productsYearWord}</em><b>{money(productsShown)}</b></span>
-                <span className={`is-service ${servicesCounted ? "" : "is-out"}`} title={servicesCounted ? "A one-off fee, counted once" : "Not counted in this view"}><i />Services<b>{servicesCounted ? money(servicesShown) : <s>{money(servicesTotal)}</s>}</b></span>
-                {partnersTotal > 0 && <span className={`is-partner ${revGross ? "is-out" : ""}`} title={revGross ? "Not taken off: the figure shows what the client pays" : "Already taken out of the figures above"}><i />Partners<b>{revGross ? <s>−{money(partnersTotal)}</s> : `−${money(partnersTotal)}`}</b></span>}
-              </div>
-              </div></div>
-            </div>
-
-            <div className="sl-calc-fold"><div className="sl-calc-fold-in">
-            <div className="sl-rvg is-product">
-              <div className="sl-rvg-head">
-                <span className="sl-rvg-t"><i />Products<em>{activeTprods.length}</em></span>
-                <b>{money(productsTotal)}</b>
-              </div>
-              {activeTprods.length === 0 && !leftOutGroups(tprods).length && <p className="sl-rvg-empty">No products yet.</p>}
-              <div className="sl-calc-cards">
-              {activeTprods.map((tp) => {
-                const vg = tp.version_group ?? tp.id;
-                const grp = groupOf(tprods, vg);
-                const idx = grp.findIndex((x) => x.id === tp.id);
-                return (
-                  <RevLine key={vg} name={productName(tp.product_id)} tag="Product" line={tp} money={money}
-                    onRemove={() => removeProduct(tp.id)}
-                    calculator={productOf(tp.product_id)?.calculator as Calculator | null}
-                    catalogBase={productOf(tp.product_id)?.tiers?.find((x) => x.id === tp.tier_id)?.price}
-                    onOpenCalc={() => setCalcFor({ kind: "product", id: tp.id })}
-                    versionIdx={idx} versionCount={grp.length}
-                    onPrev={idx > 0 ? () => switchProdVersion(vg, grp[idx - 1].id) : undefined}
-                    onNext={idx < grp.length - 1 ? () => switchProdVersion(vg, grp[idx + 1].id) : undefined}
-                    onNewVersion={(copy) => newProdVersion(tp.id, copy)}
-                    footer={<LineDocs key={tp.id} trackingId={tracking.id} lineId={tp.id} lineKind="product" phaseId={curPhase} versionLabel={`v${idx + 1}`} />} />
-                );
-              })}
-              </div>
-              {leftOutRows("product", tprods)}
-              {availableProducts.length > 0 && (
-                <div className="sl-rvg-add">
-                  <Select value="" onChange={(v) => v && addProduct(v)} placeholder="+ Add product" options={availableProducts.map((p) => ({ value: p.id!, label: p.name }))} />
-                </div>
-              )}
-            </div>
-
-            <div className="sl-rvg is-service">
-              <div className="sl-rvg-head">
-                <span className="sl-rvg-t"><i />Services<em>{activePotentials.length}</em></span>
-                <b>{money(servicesTotal)}</b>
-              </div>
-              {activePotentials.length === 0 && !leftOutGroups(potentials).length && <p className="sl-rvg-empty">No services yet.</p>}
-              <div className="sl-calc-cards">
-              {activePotentials.map((p) => {
-                const vg = p.version_group ?? p.id;
-                const grp = groupOf(potentials, vg);
-                const idx = grp.findIndex((x) => x.id === p.id);
-                return (
-                  <RevLine key={vg} name={p.label || serviceName(p.service_id)} tag="Service" tagClass="sl-rev-tag-svc"
-                    line={p} money={money} unit={serviceUnit(p.service_id)} minUnit={serviceMin(p.service_id)}
-                    onRemove={() => removePotential(p.id)}
-                    calculator={serviceOf(p.service_id)?.calculator as Calculator | null}
-                    onOpenCalc={() => setCalcFor({ kind: "service", id: p.id })}
-                    versionIdx={idx} versionCount={grp.length}
-                    onPrev={idx > 0 ? () => switchSvcVersion(vg, grp[idx - 1].id) : undefined}
-                    onNext={idx < grp.length - 1 ? () => switchSvcVersion(vg, grp[idx + 1].id) : undefined}
-                    onNewVersion={(copy) => newSvcVersion(p.id, copy)}
-                    footer={<LineDocs key={p.id} trackingId={tracking.id} lineId={p.id} lineKind="service" phaseId={curPhase} versionLabel={`v${idx + 1}`} />} />
-                );
-              })}
-              </div>
-              {leftOutRows("service", potentials)}
-              {services.length > 0 && (
-                <div className="sl-rvg-add">
-                  <Select value="" onChange={(v) => v && addPotential(v)} placeholder="+ Add service" options={services.map((s) => ({ value: s.id!, label: s.name }))} />
-                </div>
-              )}
-            </div>
-
-            {revErr && <p className="sl-rev-err">Could not save: {revErr}</p>}
-            <div className="sl-calc-foot sl-calc-foot-actions">
-              <span className="sl-rv-foot-k">
-                Total if won
-                <em>whole contract{propBusy ? " · generating document…" : ""}</em>
-              </span>
-              <b>{money(totalPotential)}</b>
-            </div>
-            </div></div>
-            {propErr && <p className="sl-rev-err">{propErr}</p>}
-          </section>
-          <DealProposals trackingId={tracking.id} groups={proposalGroups} decks={decks} money={money}
-            busy={propBusyId} reloadKey={propsReload} onGenerate={generateProposalFor} onStudio={openStudio} onMain={applyMainLocally} onWon={wonWithProposal} dealWon={status === "won"}
-            phaseId={curPhase} onContractFile={proposalContractFile} />
-          <section className="sl-panel sl-panel-docs">
-            <TrackingFiles trackingId={tracking.id} phaseId={curPhase} phases={phases} />
-          </section>
-          </div>
+          {(dkPreview ?? dkShown).map((it) => {
+            const el = dkEls[it.id];
+            if (!el) return null;
+            const sk = DEAL_KIT.shown(it);
+            const k = dkKey(sk);
+            const body = sk.endsWith(".mini") ? dkMiniView(k) : dkFull[k];
+            const ctl = dkEditing ? { open: true } : { open: !it.folded, toggle: () => dkToggle(it.key) };
+            return body ? createPortal(<FoldOpen.Provider value={ctl}>{body}</FoldOpen.Provider>, el, it.id) : null;
+          })}
         </div>
       </div>
+
+      {dkEditing && (
+        <div className="hb-dock dk-dock" role="toolbar" aria-label="Adjust the deal page">
+          <span className="hb-dock-t">
+            <b>Adjusting the deal page</b>
+            <small>Drag a card to move it · pull its edge to resize · the same on every deal</small>
+          </span>
+          {dkHidden.length > 0 && (
+            <span className="dk-add-wrap">
+              <button type="button" className="hb-dock-add" onClick={() => setDkAdd((v) => !v)} aria-expanded={dkAdd}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
+                Add cards<em>{dkHidden.length}</em>
+              </button>
+              {dkAdd && (
+                <span className="dk-add" role="menu">
+                  <b className="dk-add-h">Cards you took off</b>
+                  {dkHidden.map((k) => (
+                    <button key={k} type="button" role="menuitem" onClick={() => dkAddCard(k)} style={{ ["--c" as string]: DK[k].color } as CSSProperties}>
+                      <span className="dk-add-ico">{dkIcon(DK[k].icon)}</span>
+                      <span className="dk-add-t"><b>{DK[k].title}</b><small>{DK[k].hint}</small></span>
+                      <em>+ Add</em>
+                    </button>
+                  ))}
+                </span>
+              )}
+            </span>
+          )}
+          <span className="hb-dock-seg" role="radiogroup" aria-label="Top bar">
+            <span className="hb-dock-k">Top bar</span>
+            {HERO_SIZES.map((h) => (
+              <button key={h.k} type="button" role="radio" aria-checked={heroSize === h.k} className={heroSize === h.k ? "is-on" : ""} onClick={() => dkSetHero(h.k)}>{h.label}</button>
+            ))}
+          </span>
+          <span className="hb-dock-sep" />
+          <button type="button" className="hb-dock-btn" onClick={() => setDkDraft(dkDefault(hasFields))} title="Back to the layout everyone starts with">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5" /></svg>Reset
+          </button>
+          <button type="button" className="hb-dock-btn" onClick={() => dkFinish(false)}>Cancel</button>
+          <button type="button" className="hb-dock-done" onClick={() => dkFinish(true)}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12l5 5L20 7" /></svg>Done
+          </button>
+        </div>
+      )}
 
       {calcFor && (() => {
         if (calcFor.kind === "product") {

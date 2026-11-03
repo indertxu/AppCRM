@@ -1,46 +1,41 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /**
- * Home · CONSULTANCY — the whole page, in three columns:
- *   left    your calendar (tall) and, under it, the department backlog as a 2×2
- *   middle  the ticket desk (to-do + tickets), full height
- *   right   team (or your own) performance, then outstanding bills
- * The calendar and the desk come from the shared home pieces (props).
+ * Home · CONSULTANCY — a source of cards for the home board (HomePage.tsx):
+ *   cons.backlog  the department backlog, four figures
+ *   cons.team     team (or your own) performance
+ *   cons.bills    outstanding bills
+ * plus every consultancy figure (CONS_KPIS). The board decides where each one
+ * sits and how big it is; this works the numbers out once and draws each card
+ * into the board's slot for it (a portal), only while some slot asks for it.
  */
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
-import Select from "../../../framework/Select";
-import { loadPrefs, savePref } from "../../companies/companiesApi";
 import { supabase } from "../../../api/supabase";
 import { loadRoles } from "../../settings/blueprintsApi";
 import { roleLinesOfRow, resolveRoleKey, legacyRoleMap, roleKeyOf, roleCounts, rateOn, lineRate, projectStatusOn } from "../../clients/clientsTypes";
 import { goToSection } from "../../../framework/pageAccess";
 import { useMgmtAccess } from "../../management/mgmtAccess";
 import { ClientLogo } from "../../clients/ClientWorkspace";
-import { CAL_SUMMARY_EVENT, type CalSummary } from "../shared/HomeCalendar";
-import { TICKETS_EVENT } from "../shared/HomeTodo";
 import { loadInactiveIds } from "../../../framework/peopleStatus";
 import "./ConsultancyHome.css";
 
 const eur = (n: number) => Math.round(n).toLocaleString("en-US");
 const d1 = (n: number) => (+n.toFixed(1)).toLocaleString();
 
+/** A place on the home board a source draws one card (or one figure) into. */
+export interface HomeSlot { id: string; key: string; el: HTMLElement }
+/** Draws each slot's card into its place on the board. */
+export function renderSlots(slots: HomeSlot[], render: (key: string) => ReactNode): ReactNode {
+  return <>{slots.map((s) => createPortal(<Fragment>{render(s.key)}</Fragment>, s.el, s.id))}</>;
+}
+
 interface Props {
   userId: string;
   isLead: boolean;   // boss / consultancy_manager sees the whole team; consultant sees self
   hoursPerDay: number;
-  /** The shared calendar card (left column, on top). */
-  calendar: ReactNode;
-  /** The ticket desk (middle column). */
-  desk: ReactNode;
-  /** The hero: greeting, the global search, where the page measures its top. */
-  greeting: string;
-  firstName: string | null;
-  search?: ReactNode;
-  heroRef?: Ref<HTMLElement>;
-  /** The alerts strip, right under the greeting, and the bell next to Customize. */
-  alerts?: ReactNode;
-  alertsBell?: ReactNode;
+  /** Where the board wants consultancy cards / figures. */
+  slots: HomeSlot[];
 }
 
 const prefersStill = () => { try { return window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { return false; } };
@@ -86,15 +81,11 @@ export function Ring({ pct, size = 64, stroke = 7, children }: { pct: number; si
    the same way, and opens the tab it comes from.
    --------------------------------------------------------------------------- */
 type HeroKey =
-  | "booked" | "tickets" | "tasks"
   | "billed" | "days" | "planned" | "ontarget" | "dayrate" | "bonus"
   | "backlog_value" | "backlog_days" | "backlog_projects" | "backlog_hold"
   | "outstanding" | "late_bills"
   | "incoming";
-const HERO_KPIS: { key: HeroKey; group: string; label: string }[] = [
-  { key: "booked", group: "You", label: "Booked today" },
-  { key: "tickets", group: "You", label: "Open tickets" },
-  { key: "tasks", group: "You", label: "Open tasks" },
+export const HERO_KPIS: { key: HeroKey; group: string; label: string }[] = [
   { key: "billed", group: "Team", label: "Billed this month" },
   { key: "days", group: "Team", label: "Days delivered this month" },
   { key: "planned", group: "Team", label: "Days planned, not confirmed" },
@@ -109,52 +100,9 @@ const HERO_KPIS: { key: HeroKey; group: string; label: string }[] = [
   { key: "late_bills", group: "Billing", label: "Bills over a month old" },
   { key: "incoming", group: "Incoming", label: "Won deals to set up" },
 ];
-const HERO_DEFAULT: HeroKey[] = ["booked", "tickets", "billed", "outstanding"];
-const HERO_PREF = "homeHeroKpis";
+/** The four figures people picked before the board (still read once, to start the board from them). */
+export const HERO_PREF = "homeHeroKpis";
 const isHeroKey = (k: unknown): k is HeroKey => HERO_KPIS.some((x) => x.key === k);
-
-/** "Customize": four slots, each a figure from the catalogue. */
-/** Shared by the homes: `kpis` is the catalogue to pick from (the consultancy one by default). */
-export function HeroPicker({ anchor, slots, onChange, onClose, kpis = HERO_KPIS, defaults = HERO_DEFAULT, sub = "Pick any figure from Management. Clicking one opens the tab it comes from." }: {
-  anchor: DOMRect; slots: string[]; onChange: (s: string[]) => void; onClose: () => void;
-  kpis?: { key: string; group: string; label: string }[]; defaults?: string[]; sub?: string;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const off = (e: MouseEvent) => {
-      const t = e.target as Element;
-      if (ref.current?.contains(t) || t.closest?.(".sel-pop")) return;   // the dropdowns live in their own layer
-      onClose();
-    };
-    const key = (e: KeyboardEvent) => { if (e.key === "Escape" && !document.querySelector(".sel-pop")) onClose(); };
-    const id = window.setTimeout(() => document.addEventListener("mousedown", off), 0);
-    window.addEventListener("keydown", key);
-    return () => { window.clearTimeout(id); document.removeEventListener("mousedown", off); window.removeEventListener("keydown", key); };
-  }, [onClose]);
-  const W = 340;
-  const options = kpis.map((k) => ({ value: k.key, label: k.label, hint: k.group }));
-  return createPortal(
-    <div ref={ref} className="chx-pick" role="dialog" aria-label="Choose the figures on top"
-      style={{ top: anchor.bottom + 8, left: Math.max(8, Math.min(anchor.right - W, window.innerWidth - W - 8)), width: W }}>
-      <b className="chx-pick-h">Your four figures</b>
-      <p className="chx-pick-sub">{sub}</p>
-      <ol className="chx-pick-list">
-        {slots.map((k, i) => (
-          <li key={i}>
-            <span className="chx-pick-n">{i + 1}</span>
-            <Select value={k} onChange={(v) => { if (!kpis.some((x) => x.key === v)) return; const next = [...slots]; next[i] = v; onChange(next); }}
-              options={options} aria-label={`Figure ${i + 1}`} />
-          </li>
-        ))}
-      </ol>
-      <div className="chx-pick-foot">
-        <button type="button" onClick={() => onChange([...defaults])} disabled={slots.join() === defaults.join()}>Back to the default four</button>
-        <button type="button" className="is-done" onClick={onClose}>Done</button>
-      </div>
-    </div>,
-    document.body,
-  );
-}
 
 /** One figure of the top row (a button into the page it comes from). */
 export function Fig({ cls = "", onClick, title, children }: { cls?: string; onClick: () => void; title: string; children: ReactNode }) {
@@ -191,7 +139,7 @@ function Spark({ series, target }: { series: number[]; target: number }) {
   );
 }
 
-export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDay, calendar, desk, greeting, firstName, heroRef, alerts, alertsBell }: Props) {
+export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDay, slots }: Props) {
   const nav = useNavigate();
   /* Whose figures show here: the same reach as Management › Team (Settings › Management › Security).
      A lead sees everyone, or only their department, or only themselves; anyone else only themselves.
@@ -210,61 +158,16 @@ export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDa
   const [topProjects, setTopProjects] = useState<TopProject[]>([]);
   const [team, setTeam] = useState<PersonRow[]>([]);
   const [teamTotals, setTeamTotals] = useState({ daysDone: 0, daysPlanned: 0, daysTarget: 0, billed: 0, billTarget: 0, bonus: 0 });
-  const [cal, setCal] = useState<CalSummary | null>(null);
-  type Tix = { open: number; late: number; today: number };
-  const [tix, setTix] = useState<Tix | null>(null);
-  const [tasks, setTasks] = useState<Tix | null>(null);
-  const [slots, setSlots] = useState<HeroKey[]>(HERO_DEFAULT);
-  const [picker, setPicker] = useState<DOMRect | null>(null);
   const [incoming, setIncoming] = useState<number | null>(null);
-  useEffect(() => {
-    loadPrefs().then((p) => {
-      const v = p?.[HERO_PREF];
-      if (Array.isArray(v)) { const ks = v.filter(isHeroKey).slice(0, 4); if (ks.length === 4) setSlots(ks); }
-    }).catch(() => {});
-  }, []);
-  const changeSlots = (next: HeroKey[]) => { setSlots(next); savePref(HERO_PREF, next).catch(() => {}); };
+  const wantsIncoming = slots.some((x) => x.key === "incoming");
   // won deals waiting to become projects (Management › Incoming) — only asked when it's on show
   useEffect(() => {
-    if (!slots.includes("incoming")) return;
+    if (!wantsIncoming) return;
     let alive = true;
     Promise.resolve(supabase.from("handoffs").select("id", { count: "exact", head: true }).eq("status", "pending") as any)
       .then((r: any) => { if (alive) setIncoming(r?.error ? null : r?.count ?? 0); }, () => {});
     return () => { alive = false; };
-  }, [slots]);
-
-  // today's load comes from the calendar card once it has its data
-  useEffect(() => {
-    const on = (e: Event) => setCal((e as CustomEvent<CalSummary>).detail);
-    window.addEventListener(CAL_SUMMARY_EVENT, on);
-    return () => window.removeEventListener(CAL_SUMMARY_EVENT, on);
-  }, []);
-  // my open tickets (refreshed whenever the desk changes something)
-  useEffect(() => {
-    let alive = true;
-    const load = async () => {
-      let r: any = await supabase.from("tracking_tasks").select("id, done, status, stage, due_at, source, requester_email, requester_name, category").eq("assignee_id", userId).range(0, 4999);
-      if (r.error) r = await supabase.from("tracking_tasks").select("id, done, status, stage, due_at, source, requester_email, requester_name").eq("assignee_id", userId).range(0, 4999);
-      if (r.error) r = await supabase.from("tracking_tasks").select("id, done, status, due_at").eq("assignee_id", userId).range(0, 4999);
-      if (!alive || r.error) return;
-      const now = Date.now();
-      const end = new Date(); end.setHours(23, 59, 59, 999);
-      const open = ((r.data ?? []) as any[]).filter((t) => !(t.done || t.status === "done" || ["resolved", "closed"].includes(t.stage)));
-      // tickets are conversations (e-mail, messages, calls); tasks are the work
-      const isTicket = (t: any) => (t.category ? t.category === "ticket" : ["email", "phone", "portal", "message"].includes(t.source) || !!t.requester_email || !!t.requester_name);
-      const tally = (xs: any[]): Tix => ({
-        open: xs.length,
-        late: xs.filter((t) => t.due_at && new Date(t.due_at).getTime() < now).length,
-        today: xs.filter((t) => t.due_at && new Date(t.due_at).getTime() >= now && new Date(t.due_at).getTime() <= end.getTime()).length,
-      });
-      setTix(tally(open.filter(isTicket)));
-      setTasks(tally(open.filter((t) => !isTicket(t))));
-    };
-    load().catch(() => {});
-    const again = () => { load().catch(() => {}); };
-    window.addEventListener(TICKETS_EVENT, again);
-    return () => { alive = false; window.removeEventListener(TICKETS_EVENT, again); };
-  }, [userId]);
+  }, [wantsIncoming]);
 
   useEffect(() => {
     if (whoList === undefined) return;
@@ -517,8 +420,6 @@ export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDa
   };
 
   // ---- hero figures ----
-  const hrs = (m: number) => { const h = m / 60; return `${+h.toFixed(1)}h`; };
-  const todayPct = cal ? (cal.todayCap > 0 ? (cal.todayMin / cal.todayCap) * 100 : cal.todayMin > 0 ? 101 : 0) : 0;
   const myRow = team.find((r) => r.userId === userId);
   const billedNow = isLead ? teamTotals.billed : myRow?.billed ?? 0;
   const billedGoal = isLead ? teamTotals.billTarget : myRow?.billTarget ?? 0;
@@ -530,15 +431,6 @@ export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDa
   }, [bills]);
   const cBilled = useCount(loading ? 0 : billedNow);
   const cOut = useCount(loading ? 0 : outstandingTotal);
-  const cOpen = useCount(tix?.open ?? 0, 600);
-  const cTasks = useCount(tasks?.open ?? 0, 600);
-  const cToday = useCount(cal?.todayMin ?? 0, 700);
-  const dateLabel = new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
-  const glow = (e: React.PointerEvent<HTMLElement>) => {
-    const r = e.currentTarget.getBoundingClientRect();
-    e.currentTarget.style.setProperty("--mx", `${e.clientX - r.left}px`);
-    e.currentTarget.style.setProperty("--my", `${e.clientY - r.top}px`);
-  };
   const share = (x: number) => (outstandingTotal > 0 ? (x / outstandingTotal) * 100 : 0);
 
   // ---- every figure the top row can show ----
@@ -555,35 +447,6 @@ export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDa
     const meter = (v: number, goal: number) => <span className="chx-meter"><i style={{ width: `${goal > 0 ? Math.min(100, (v / goal) * 100) : 0}%` }} /></span>;
     const wait = loading ? "…" : null;
     switch (k) {
-      case "booked": return (
-        <Fig cls="is-today" onClick={go("/calendar")} title="Open your calendar">
-          <Ring pct={todayPct} size={58} stroke={6}><b>{cal ? `${Math.round(Math.min(todayPct, 999))}%` : "…"}</b></Ring>
-          <Txt label="Booked today" value={cal ? hrs(cToday) : "…"} unit={cal ? ` of ${hrs(cal.todayCap)}` : ""}
-            sub={cal?.next ? <>Next: <em>{cal.next.time}</em> {cal.next.title}{cal.next.today ? "" : " (later this week)"}</> : cal ? "Nothing else booked" : "Reading your calendar…"} />
-        </Fig>
-      );
-      case "tickets": return (
-        <Fig cls={`is-tix ${tix && tix.late > 0 ? "has-late" : ""}`} onClick={go("/tickets")} title="Open your tickets">
-          <Txt label="Open tickets" value={tix ? Math.round(cOpen) : "…"} big>
-            <span className="chx-chips">
-              {tix && tix.late > 0 && <span className="chx-chip is-late">{tix.late} late</span>}
-              {tix && tix.today > 0 && <span className="chx-chip is-today">{tix.today} due today</span>}
-              {tix && tix.late === 0 && tix.today === 0 && <span className="chx-chip is-ok">{tix.open ? "All on time" : "Inbox zero"}</span>}
-            </span>
-          </Txt>
-        </Fig>
-      );
-      case "tasks": return (
-        <Fig cls={`is-tix ${tasks && tasks.late > 0 ? "has-late" : ""}`} onClick={go("/tickets?kind=task")} title="Open your tasks">
-          <Txt label="Open tasks" value={tasks ? Math.round(cTasks) : "…"} big>
-            <span className="chx-chips">
-              {tasks && tasks.late > 0 && <span className="chx-chip is-late">{tasks.late} late</span>}
-              {tasks && tasks.today > 0 && <span className="chx-chip is-today">{tasks.today} due today</span>}
-              {tasks && tasks.late === 0 && tasks.today === 0 && <span className="chx-chip is-ok">{tasks.open ? "All on time" : "Nothing pending"}</span>}
-            </span>
-          </Txt>
-        </Fig>
-      );
       case "billed": return (
         <Fig cls="is-billed" onClick={go("/management", "team")} title="Open Management › Team">
           <Txt label={isLead ? "Team billed this month" : "You billed this month"} value={wait ?? `${eur(cBilled)} €`} unit={billedGoal > 0 ? ` of ${eur(billedGoal)} €` : ""}
@@ -673,35 +536,10 @@ export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDa
     }
   };
 
-  return (
-    <div className="ch-home">
-      {/* ============ HERO: greeting and the four figures of the day (search: ⌘K / the rail) ============ */}
-      <section className="chx-hero" ref={heroRef} onPointerMove={glow} aria-label="Your day">
-        <i className="chx-hero-grid" aria-hidden="true" />
-        <i className="chx-hero-glow" aria-hidden="true" />
-        <div className="chx-hero-top">
-          <div className="chx-hello">
-            <h1 className="chx-greet">{greeting}{firstName ? `, ${firstName}` : ""}</h1>
-            <span className="chx-date">{dateLabel}</span>
-          </div>
-          <span className="chx-grow" />
-          {alertsBell}
-          <button type="button" className={`chx-edit ${picker ? "is-on" : ""}`} onClick={(e) => setPicker(picker ? null : e.currentTarget.getBoundingClientRect())}
-            aria-haspopup="dialog" aria-expanded={!!picker} title="Choose the four figures below">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg>
-            Customize
-          </button>
-        </div>
-        {alerts}
-        <div className="chx-figs">
-          {slots.map((k, i) => <Fragment key={`${k}-${i}`}>{heroFig(k)}</Fragment>)}
-        </div>
-      </section>
-      {picker && <HeroPicker anchor={picker} slots={slots} onChange={(s) => changeSlots(s.filter(isHeroKey))} onClose={() => setPicker(null)} />}
-
-      {/* ============ LEFT: calendar + backlog 2×2 ============ */}
-      <div className="ch-col ch-col-mid">
-        {calendar}
+  const card = (key: string): ReactNode => {
+    if (isHeroKey(key)) return heroFig(key);
+    switch (key) {
+      case "cons.backlog": return (
         <section className="cz-card cz-backlog" aria-label={whoList === null ? "Department backlog" : isLead ? "Your department's backlog" : "Your backlog"}>
           {/* no button: every figure opens Management › Backlog, and they get the card's height */}
           <span className="cz-eyebrow cz-bl-k">{whoList === null ? "Department backlog" : isLead ? "Your department's backlog" : "Your backlog"}</span>
@@ -774,13 +612,8 @@ export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDa
             </div>
           </div>
         </section>
-      </div>
-
-      {/* ============ MIDDLE: to-do & tickets ============ */}
-      <div className="ch-col ch-col-desk">{desk}</div>
-
-      {/* ============ RIGHT: team + bills ============ */}
-      <div className="ch-col ch-col-right">
+      );
+      case "cons.team": return (
         <section className="cz-card cz-team" aria-label={isLead ? "Team performance" : "Your performance"}>
           <header className="cz-head">
             <div className="cz-titles">
@@ -833,7 +666,8 @@ export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDa
             })}
           </div>
         </section>
-
+      );
+      case "cons.bills": return (
         <section className="cz-card cz-bills" aria-label="Outstanding bills">
           <header className="cz-head">
             <div className="cz-titles">
@@ -865,7 +699,9 @@ export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDa
             </div>
           )}
         </section>
-      </div>
-    </div>
-  );
+      );
+      default: return null;
+    }
+  };
+  return renderSlots(slots, card);
 }

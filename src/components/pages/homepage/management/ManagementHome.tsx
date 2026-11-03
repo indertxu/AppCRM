@@ -23,7 +23,7 @@ const daysSince = (iso: string) => Math.floor((Date.now() - new Date(iso).getTim
 /* =====================================================================
    SALES PIPELINE — trackings by stage, with an animated funnel
    ===================================================================== */
-function SalesPipelineWidget() {
+export function SalesPipelineWidget() {
   const nav = useNavigate();
   const [stages, setStages] = useState<{ name: string; count: number; value: number }[]>([]);
   const [totals, setTotals] = useState({ active: 0, won: 0, value: 0 });
@@ -118,7 +118,7 @@ function SalesPipelineWidget() {
 /* =====================================================================
    NEGLECTED CLIENTS — who hasn't been contacted, most stale first
    ===================================================================== */
-function NeglectedClientsWidget() {
+export function NeglectedClientsWidget() {
   const nav = useNavigate();
   const [rows, setRows] = useState<{ id: string; name: string; days: number }[]>([]);
   const [loading, setLoading] = useState(true);
@@ -185,7 +185,7 @@ function NeglectedClientsWidget() {
 /* =====================================================================
    TEAM BONUS — total to pay + top earners, animated bars
    ===================================================================== */
-function TeamBonusWidget() {
+export function TeamBonusWidget() {
   const nav = useNavigate();
   const [total, setTotal] = useState(0);
   const [rows, setRows] = useState<{ name: string; amount: number }[]>([]);
@@ -282,7 +282,7 @@ interface Summary {
   loading: boolean;
 }
 
-function ManagementSummary() {
+export function ManagementSummary() {
   const navigate = useNavigate();
   const [s, setS] = useState<Summary>({
     outstanding: 0, overdue: 0, invoicedThisMonth: 0,

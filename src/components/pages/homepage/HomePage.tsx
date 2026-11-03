@@ -11,25 +11,27 @@
  *     consultancy/ConsultancyHome ← right side for consultancy
  *     management/ManagementHome   ← right side for the boss / managers
  *
- * Which right side you get goes by DEPARTMENT first (a boss inside
- * consultancy sees consultancy), then by role. Anyone else gets the shared
- * column on its own, spread across the page.
+ * Everything under the header is a board of cards each person arranges
+ * (Adjust, top right — see THE HOME BOARD). The board a person starts with
+ * goes by DEPARTMENT first (a boss inside consultancy starts with
+ * consultancy), then by role.
  */
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { createPortal } from "react-dom";
 import { MentionText, mentionsToPlain } from "../../framework/MentionInput";
 import { supabase } from "../../api/supabase";
 import { useAuth } from "../../api/AuthProvider";
-import HomeCalendar from "./shared/HomeCalendar";
-import HomeTodo, { TicketDesk, TicketDrawer, TicketDrawerById, TkIco, Avatar, loadDirectory, loadTicketTypes, ticketRef, stageLabel, TICKETS_EVENT, type Directory, type TicketStage, type ItemCat } from "./shared/HomeTodo";
-import SalesHome from "./sales/SalesHome";
-import ConsultancyHome from "./consultancy/ConsultancyHome";
-import ManagementHome from "./management/ManagementHome";
+import HomeCalendar, { CAL_SUMMARY_EVENT, type CalSummary } from "./shared/HomeCalendar";
+import { TicketDesk, TicketDrawer, TicketDrawerById, TkIco, Avatar, loadDirectory, loadTicketTypes, ticketRef, stageLabel, TICKETS_EVENT, type Directory, type TicketStage, type ItemCat } from "./shared/HomeTodo";
+import SalesHome, { SALES_KPIS, SALES_PREF } from "./sales/SalesHome";
+import ConsultancyHome, { HERO_KPIS, HERO_PREF, renderSlots, useCount, Ring, Fig, Txt, type HomeSlot } from "./consultancy/ConsultancyHome";
+import { ManagementSummary, SalesPipelineWidget, NeglectedClientsWidget, TeamBonusWidget } from "./management/ManagementHome";
+import ActionsMenu from "../../framework/ActionsMenu";
 import { applyRolePreview } from "../../framework/SuperAdmin";
 import { PageCube } from "../../framework/AppLayout";
-import { usePageAccess, goToSection, guardedLeave, deptName, type PageKey } from "../../framework/pageAccess";
-import { isSalesLead, globalSearch, type SearchHit } from "../companies/companiesApi";
+import { usePageAccess, goToSection, guardedLeave, deptName, levelBase, type PageKey } from "../../framework/pageAccess";
+import { isSalesLead, globalSearch, loadPrefs, savePref, type SearchHit } from "../companies/companiesApi";
 import { loadMyInvites, loadMyReplies, markRepliesSeen, answerInvite, declineInvite, type InviteCard } from "../calendar/invitesApi";
 import "./HomePage.css";
 
@@ -40,18 +42,6 @@ const greeting = () => {
   if (h < 19) return "Good afternoon";
   return "Good evening";
 };
-
-const NextLogo = () => (
-  <svg viewBox="14 15 92 93" role="img" aria-label="Next">
-    <g transform="matrix(1,0.5,-1,0.5,60,17)">
-      <rect width="38" height="38" rx="2" fill="#86efc0" />
-      <polyline points="7,30 15,19 22,24 31.7,10.1" fill="none" stroke="#0a6f4d" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
-      <polygon points="36,4 35.1,12.5 28.2,7.7" fill="#0a6f4d" />
-    </g>
-    <g transform="translate(16,47) skewY(26.565)"><rect width="38" height="40" rx="2" fill="#12b57f" /><path d="M10.5 31V10h5.1l6.8 12.6V10h5.1v21h-5.1l-6.8-12.6V31z" fill="#fff" /></g>
-    <g transform="translate(66,66) skewY(-26.565)"><rect width="38" height="40" rx="2" fill="#0a6f4d" /><rect x="6" y="24" width="6" height="11" rx="1.5" fill="#fff" /><rect x="16" y="16" width="6" height="19" rx="1.5" fill="#fff" /><rect x="26" y="8" width="6" height="27" rx="1.5" fill="#fff" /></g>
-  </svg>
-);
 
 /* ---------------------------------------------------------------------------
    Booting the home page — a paced sequence tied to what is really loading.
@@ -199,12 +189,13 @@ function HomeBoot({ boot, details, hello, top }: { boot: Boot; details: Partial<
   );
 }
 
-const areaTitle = (a: Area) => a === "consultancy" ? "Consultancy" : a === "sales" ? "Sales" : a === "management" ? "Management" : "Next Management";
+const areaTitle = (a: Area) => a === "consultancy" ? "Consultancy" : a === "sales" ? "Sales" : a === "marketing" ? "Marketing" : a === "management" ? "Management" : "Next Management";
 
 type Me = { id: string; department: string | null; role: string | null; firstName: string | null; isSuper: boolean };
-type Area = "sales" | "consultancy" | "management" | null;
+type Area = "sales" | "consultancy" | "marketing" | "management" | null;
 
 const SALES_ROLES = ["sales", "sales_manager"];
+const MARKETING_ROLES = ["marketing", "marketing_manager"];
 const MANAGER_ROLES = ["boss", "consultancy_manager", "sales_manager"];
 
 function areaFor(me: Me | null, authRole: string | null): Area {
@@ -212,12 +203,993 @@ function areaFor(me: Me | null, authRole: string | null): Area {
   const role = (me.role ?? authRole ?? "").toLowerCase();
   if (me.department === "consultancy") return "consultancy";
   if (me.department === "sales" || SALES_ROLES.includes(role)) return "sales";
+  if (me.department === "marketing" || MARKETING_ROLES.includes(role)) return "marketing";
   if (MANAGER_ROLES.includes(role) || me.isSuper) return "management";
   return null;
 }
 
+/* =====================================================================
+   THE HOME BOARD — every card on Home is a piece you can move, resize,
+   swap or take away (Adjust, top right). The page is a grid of 24 columns;
+   rows are sized so that 22 of them fill one screen under the header, on
+   any screen. Cards fall upwards (no holes). Each person's layout is saved
+   with their profile (prefs.homeBoard); what they can add is what their
+   access lets them open (page access + Management panels).
+   The numbers come from "sources" — the sales, consultancy, marketing and
+   management code — mounted only while one of their cards is on show; each
+   draws its cards into the board's slots (portals), so moving a card never
+   reloads it.
+   ===================================================================== */
+export const COLS = 24;
+export const GAP = 16;
+const SCREEN_ROWS = 22;
+const BOARD_PREF = "homeBoard";
+const MAX_FIGS = 6;
+
+type Dept = "general" | "sales" | "consultancy" | "marketing" | "management";
+const DEPTS: { key: Dept; label: string; color: string }[] = [
+  { key: "general", label: "Everyone", color: "#12b57f" },
+  { key: "sales", label: "Sales", color: "#3c9ae0" },
+  { key: "consultancy", label: "Consultancy", color: "#0a8a5c" },
+  { key: "marketing", label: "Marketing", color: "#e0a13c" },
+  { key: "management", label: "Management", color: "#7a5cd6" },
+];
+interface Access { canSee: (p: PageKey) => boolean; canPanel: (k: string) => boolean; dept: string | null; full: boolean }
+type Glyph = "cal" | "desk" | "stages" | "clock" | "alert" | "team" | "bill" | "stack" | "mail" | "share" | "users" | "coins" | "quiet" | "trophy" | "num" | "ring" | "pipe";
+interface CardDef {
+  key: string;
+  dept: Dept;
+  /** which code draws it */
+  src: Dept;
+  /** a single figure (fits the header too) */
+  fig: boolean;
+  title: string;
+  hint: string;
+  glyph: Glyph;
+  /** default and smallest size, in columns × rows */
+  def: [number, number];
+  min: [number, number];
+  /** below this size a card shows its headline figure instead (summary) */
+  full?: [number, number];
+  summary?: string;
+  /** where a click on the card goes */
+  go?: [string, string?];
+  allow: (a: Access) => boolean;
+}
+const consOk = (panel: string) => (a: Access) => a.full || a.dept === "consultancy" || (a.canSee("management") && a.canPanel(`management.${panel}`));
+const CONS_PANEL: Record<string, string> = { Team: "team", Bonus: "bonus", Backlog: "backlog", Billing: "billing", Incoming: "incoming" };
+const CONS_GLYPH: Record<string, Glyph> = { Team: "team", Bonus: "trophy", Backlog: "stack", Billing: "bill", Incoming: "pipe" };
+const SALES_GLYPH: Record<string, Glyph> = { pipeline: "stages", weighted: "ring", closing: "clock", attention: "alert", new_month: "num", won_month: "trophy", winrate: "ring", avg_won: "coins" };
+const figDef = (key: string, dept: Dept, title: string, hint: string, glyph: Glyph, allow: (a: Access) => boolean, go?: [string, string?]): CardDef =>
+  ({ key, dept, src: dept, fig: true, title, hint, glyph, def: [6, 4], min: [4, 3], allow, go });
+const CARD_DEFS: CardDef[] = [
+  // ---- everyone ----
+  { key: "calendar", dept: "general", src: "general", fig: false, title: "Your calendar", hint: "The next 5 working days, the month and what's coming up", glyph: "cal", def: [9, 14], min: [4, 3], full: [7, 8], summary: "booked", go: ["/calendar"], allow: (a) => a.canSee("calendar") },
+  { key: "desk", dept: "general", src: "general", fig: false, title: "To-do & tickets", hint: "Your tasks and tickets, with the inbox", glyph: "desk", def: [8, 22], min: [4, 3], full: [7, 10], summary: "tickets", go: ["/tickets"], allow: () => true },
+  figDef("booked", "general", "Booked today", "How full today is, and what's next", "ring", (a) => a.canSee("calendar"), ["/calendar"]),
+  figDef("tickets", "general", "Open tickets", "Your open tickets, late and due today", "desk", () => true, ["/tickets"]),
+  figDef("tasks", "general", "Open tasks", "Your open tasks, late and due today", "desk", () => true, ["/tickets?kind=task"]),
+  // ---- sales ----
+  { key: "sales.stages", dept: "sales", src: "sales", fig: false, title: "Pipeline by stage", hint: "Open deals and value in each stage", glyph: "stages", def: [9, 8], min: [4, 3], full: [6, 5], summary: "pipeline", go: ["/sales"], allow: (a) => a.canSee("sales") },
+  { key: "sales.closing", dept: "sales", src: "sales", fig: false, title: "About to close", hint: "Deals with a close date in the next 45 days (and the team)", glyph: "clock", def: [7, 10], min: [4, 3], full: [5, 6], summary: "closing", go: ["/sales"], allow: (a) => a.canSee("sales") },
+  { key: "sales.attention", dept: "sales", src: "sales", fig: false, title: "Deals that need attention", hint: "Overdue, stuck, quiet or without a date", glyph: "alert", def: [7, 12], min: [4, 3], full: [5, 6], summary: "attention", go: ["/sales"], allow: (a) => a.canSee("sales") },
+  ...SALES_KPIS.map((k) => figDef(k.key, "sales", k.label, `Sales · ${k.group}`, SALES_GLYPH[k.key] ?? "num", (a) => a.canSee("sales"), ["/sales"])),
+  // ---- consultancy ----
+  { key: "cons.backlog", dept: "consultancy", src: "consultancy", fig: false, title: "Backlog", hint: "Unbilled value and days left, by role", glyph: "stack", def: [9, 8], min: [4, 3], full: [8, 5], summary: "backlog_value", go: ["/management", "backlog"], allow: consOk("backlog") },
+  { key: "cons.team", dept: "consultancy", src: "consultancy", fig: false, title: "Team performance", hint: "Days and billing against each consultant's target", glyph: "team", def: [7, 12], min: [4, 3], full: [6, 8], summary: "days", go: ["/management", "team"], allow: consOk("team") },
+  { key: "cons.bills", dept: "consultancy", src: "consultancy", fig: false, title: "Outstanding bills", hint: "Bills waiting to be paid, oldest flagged", glyph: "bill", def: [7, 10], min: [4, 3], full: [5, 5], summary: "outstanding", go: ["/management", "billing/sent"], allow: consOk("billing") },
+  ...HERO_KPIS.map((k) => figDef(k.key, "consultancy", k.label, `Consultancy · ${k.group}`, CONS_GLYPH[k.group] ?? "num", consOk(CONS_PANEL[k.group] ?? "team"))),
+  // ---- marketing ----
+  { key: "mk.campaigns", dept: "marketing", src: "marketing", fig: false, title: "E-mail campaigns", hint: "The latest campaigns: sent, opened, clicked", glyph: "mail", def: [8, 11], min: [4, 3], full: [6, 6], summary: "mk_open", go: ["/marketing"], allow: (a) => a.canSee("marketing") },
+  { key: "mk.posts", dept: "marketing", src: "marketing", fig: false, title: "Social posts", hint: "What's scheduled next, on every network", glyph: "share", def: [8, 11], min: [4, 3], full: [6, 6], summary: "mk_planned", go: ["/marketing"], allow: (a) => a.canSee("marketing") },
+  { key: "mk.lists", dept: "marketing", src: "marketing", fig: false, title: "Audiences", hint: "Your lists and how many people are in each", glyph: "users", def: [7, 9], min: [4, 3], full: [6, 5], summary: "mk_audience", go: ["/marketing"], allow: (a) => a.canSee("marketing") },
+  figDef("mk_sent", "marketing", "E-mails sent this month", "Marketing · E-mail", "mail", (a) => a.canSee("marketing"), ["/marketing"]),
+  figDef("mk_open", "marketing", "Open rate, 30 days", "Marketing · E-mail", "ring", (a) => a.canSee("marketing"), ["/marketing"]),
+  figDef("mk_planned", "marketing", "Scheduled, next 14 days", "Marketing · Campaigns and posts", "clock", (a) => a.canSee("marketing"), ["/marketing"]),
+  figDef("mk_audience", "marketing", "People in your lists", "Marketing · Audiences", "users", (a) => a.canSee("marketing"), ["/marketing"]),
+  figDef("mk_unsub", "marketing", "Unsubscribes, 30 days", "Marketing · E-mail", "alert", (a) => a.canSee("marketing"), ["/marketing"]),
+  // ---- management ----
+  { key: "mgmt.summary", dept: "management", src: "management", fig: false, title: "Money at a glance", hint: "Outstanding, invoiced, backlog and bonus to pay", glyph: "coins", def: [7, 11], min: [4, 3], full: [6, 9], summary: "outstanding", go: ["/management"], allow: (a) => a.full || (a.canSee("management") && a.canPanel("management.billing")) },
+  { key: "mgmt.pipeline", dept: "management", src: "management", fig: false, title: "Company pipeline", hint: "Every active deal, by stage", glyph: "pipe", def: [7, 11], min: [4, 3], full: [5, 7], summary: "pipeline", go: ["/sales"], allow: (a) => a.canSee("sales") },
+  { key: "mgmt.quiet", dept: "management", src: "management", fig: false, title: "Clients gone quiet", hint: "Clients nobody has talked to in over a month", glyph: "quiet", def: [7, 9], min: [5, 6], go: ["/clients"], allow: (a) => a.canSee("clients") },
+  { key: "mgmt.bonus", dept: "management", src: "management", fig: false, title: "Team bonus", hint: "The bonus to pay this cycle, per person", glyph: "trophy", def: [7, 9], min: [4, 3], full: [5, 6], summary: "bonus", go: ["/management", "bonus"], allow: (a) => a.full || (a.canSee("management") && a.canPanel("management.bonus")) },
+];
+const DEF: Record<string, CardDef> = Object.fromEntries(CARD_DEFS.map((d) => [d.key, d]));
+
+/** `lay`: the calendar's layout — "stack" (week on top, coming up below) or "side" (side by side). */
+type CalLay = "stack" | "side";
+export interface BoardItem {
+  id: string; key: string; x: number; y: number; w: number; h: number; lay?: CalLay;
+  /** the deal page: the card opens collapsed (set while adjusting) */
+  fold?: "closed";
+  /** drawn collapsed right now (only its header shows) */
+  folded?: boolean;
+}
+interface BoardState { v: 1; hero: "full" | "compact"; figs: string[]; items: BoardItem[] }
+let idSeq = 0;
+export const newId = () => `c${Date.now().toString(36)}${(idSeq++).toString(36)}`;
+const item = (key: string, x: number, y: number, w: number, h: number): BoardItem => ({ id: newId(), key, x, y, w, h });
+
+function defaultBoard(area: Area, prefs: Record<string, any>): BoardState {
+  const keep = (v: unknown, fallback: string[]) => (Array.isArray(v) && v.length === 4 && v.every((k) => typeof k === "string" && DEF[k]) ? v as string[] : fallback);
+  switch (area) {
+    case "consultancy": return { v: 1, hero: "full", figs: keep(prefs[HERO_PREF], ["booked", "tickets", "billed", "outstanding"]), items: [
+      item("calendar", 0, 0, 9, 15), item("cons.backlog", 0, 15, 9, 7), item("desk", 9, 0, 8, 22), item("cons.team", 17, 0, 7, 12), item("cons.bills", 17, 12, 7, 10)] };
+    case "sales": return { v: 1, hero: "full", figs: keep(prefs[SALES_PREF], ["pipeline", "weighted", "won_month", "closing"]), items: [
+      item("calendar", 0, 0, 9, 16), item("sales.stages", 0, 16, 9, 6), item("desk", 9, 0, 8, 22), item("sales.closing", 17, 0, 7, 10), item("sales.attention", 17, 10, 7, 12)] };
+    case "marketing": return { v: 1, hero: "full", figs: ["booked", "tickets", "mk_sent", "mk_open"], items: [
+      item("calendar", 0, 0, 9, 14), item("mk.lists", 0, 14, 9, 8), item("desk", 9, 0, 8, 22), item("mk.campaigns", 17, 0, 7, 11), item("mk.posts", 17, 11, 7, 11)] };
+    case "management": return { v: 1, hero: "full", figs: ["booked", "tickets", "outstanding", "pipeline"], items: [
+      item("calendar", 0, 0, 9, 14), item("mgmt.quiet", 0, 14, 9, 8), item("desk", 9, 0, 8, 22), item("mgmt.summary", 17, 0, 7, 11), item("mgmt.pipeline", 17, 11, 7, 11)] };
+    default: return { v: 1, hero: "full", figs: ["booked", "tickets", "tasks"], items: [item("calendar", 0, 0, 12, 22), item("desk", 12, 0, 12, 22)] };
+  }
+}
+/** A saved board, checked: unknown cards dropped, sizes kept inside the grid, no overlaps. */
+function readBoard(v: any): BoardState | null {
+  if (!v || v.v !== 1 || !Array.isArray(v.items)) return null;
+  const items: BoardItem[] = v.items
+    .filter((i: any) => i && typeof i.key === "string" && DEF[i.key])
+    .map((i: any) => {
+      const d = DEF[i.key];
+      const w = Math.max(d.min[0], Math.min(COLS, Math.round(Number(i.w) || d.def[0])));
+      const h = Math.max(d.min[1], Math.min(60, Math.round(Number(i.h) || d.def[1])));
+      const lay: CalLay | undefined = i.key === "calendar" && (i.lay === "side" || i.lay === "stack") ? i.lay : undefined;
+      return { id: typeof i.id === "string" ? i.id : newId(), key: i.key, x: Math.max(0, Math.min(COLS - w, Math.round(Number(i.x) || 0))), y: Math.max(0, Math.round(Number(i.y) || 0)), w, h, ...(lay ? { lay } : {}) };
+    });
+  const figs = (Array.isArray(v.figs) ? v.figs : []).filter((k: any, i: number, all: any[]) => typeof k === "string" && DEF[k]?.fig && all.indexOf(k) === i).slice(0, MAX_FIGS);
+  return { v: 1, hero: v.hero === "compact" ? "compact" : "full", figs, items: compactAll(items) };
+}
+
+/* ---- the grid's rules: no overlaps, everything falls up ---- */
+const hit = (a: BoardItem, b: BoardItem) => a.id !== b.id && a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+/** Each card, in order, goes as high as it can without touching the ones already placed. `fixed` stays exactly where it is. */
+function settle(list: BoardItem[], order: (a: BoardItem, b: BoardItem) => number, fixed?: BoardItem): BoardItem[] {
+  const out: BoardItem[] = fixed ? [{ ...fixed }] : [];
+  for (const it of list.filter((i) => i.id !== fixed?.id).sort(order)) {
+    const n = { ...it, y: Math.max(0, it.y) };
+    while (n.y > 0 && !out.some((o) => hit({ ...n, y: n.y - 1 }, o))) n.y--;
+    for (let c = out.find((o) => hit(n, o)); c; c = out.find((o) => hit(n, o))) n.y = c.y + c.h;
+    out.push(n);
+  }
+  return out;
+}
+const byTop = (a: BoardItem, b: BoardItem) => a.y - b.y || a.x - b.x;
+export function compactAll(list: BoardItem[]): BoardItem[] { return settle(list, byTop); }
+/** A card dropped at (x, y): it goes before a neighbour once it passes the neighbour's middle (like a sortable list). */
+function moveTo(list: BoardItem[], id: string, x: number, y: number): BoardItem[] {
+  const d = list.find((i) => i.id === id);
+  if (!d) return list;
+  const dir = Math.sign(y - d.y);
+  const keyOf = (i: BoardItem) => (i.id === id ? (dir > 0 ? y + d.h - 0.01 : dir < 0 ? y - 0.01 : y + d.h / 2 - 0.01) : i.y + i.h / 2);
+  return settle(list.map((i) => (i.id === id ? { ...i, x, y } : i)), (a, b) => keyOf(a) - keyOf(b) || a.x - b.x);
+}
+/** A card given a new size where it stands: what's in the way moves down, then everything falls up. */
+export function resizeTo(list: BoardItem[], id: string, w: number, h: number): BoardItem[] {
+  const d = list.find((i) => i.id === id);
+  if (!d) return list;
+  const x = Math.min(d.x, COLS - w);
+  return compactAll(settle(list, byTop, { ...d, x, w, h }));
+}
+/** The highest free spot for a new card (left to right, top to bottom). */
+export function firstFit(list: BoardItem[], w: number, h: number): { x: number; y: number } {
+  const bottom = list.reduce((m, i) => Math.max(m, i.y + i.h), 0);
+  for (let y = 0; y <= bottom; y++) for (let x = 0; x + w <= COLS; x++) {
+    const probe = { id: "_", key: "", x, y, w, h };
+    if (!list.some((o) => hit(probe, o))) return { x, y };
+  }
+  return { x: 0, y: bottom };
+}
+/** What a card shows at its size: itself, or (too small) its headline figure. */
+const shownKey = (it: BoardItem) => {
+  const d = DEF[it.key];
+  return d?.full && d.summary && (it.w < d.full[0] || it.h < d.full[1]) ? d.summary : it.key;
+};
+/** Width / height steps (px) every card is styled by: each step has its own look. */
+const tierW = (px: number) => (px < 300 ? 1 : px < 430 ? 2 : px < 620 ? 3 : px < 900 ? 4 : 5);
+const tierH = (px: number) => (px < 150 ? 1 : px < 300 ? 2 : px < 500 ? 3 : 4);
+/** Side by side needs this much width; below it the calendar is always top and bottom. */
+const SIDE_MIN_PX = 620;
+/** The calendar goes side by side only when that is chosen (top and bottom unless) and the card is wide enough. */
+const isSplitCal = (it: BoardItem, pxW: number) => it.key === "calendar" && it.lay === "side" && pxW >= SIDE_MIN_PX;
+/** The name of the look a card takes at a size (shown while adjusting). */
+function lookOf(it: BoardItem, pxW: number, pxH: number): string {
+  const d = DEF[it.key];
+  if (shownKey(it) !== it.key) return "Headline";
+  if (d.fig) return pxH < 90 || pxW < 230 ? "Mini" : pxW >= 560 && pxH < 150 ? "Strip" : pxW >= 480 && pxH >= 240 ? "Spotlight" : pxH >= 220 && pxW < 420 ? "Tower" : "Standard";
+  if (it.key === "calendar") return isSplitCal(it, pxW) ? "Side by side" : pxW >= SIDE_MIN_PX ? "Top and bottom" : ["", "Slim", "Compact", "Standard"][tierW(pxW)];
+  return ["", "Slim", "Compact", "Standard", "Wide", "Extra wide"][tierW(pxW)];
+}
+/** Ready-made sizes for the size menu. */
+function presetsOf(d: CardDef): { label: string; w: number; h: number }[] {
+  if (d.fig) return [{ label: "Small", w: 4, h: 3 }, { label: "Medium", w: 6, h: 4 }, { label: "Large", w: 8, h: 6 }, { label: "Wide", w: 12, h: 4 }];
+  const out: { label: string; w: number; h: number }[] = [];
+  if (d.summary && d.full) out.push({ label: "Headline figure", w: 6, h: 4 });
+  const s = d.full ?? d.min;
+  out.push({ label: "Small", w: s[0], h: s[1] });
+  out.push({ label: "Medium", w: d.def[0], h: d.def[1] });
+  out.push({ label: "Large", w: Math.min(COLS, d.def[0] + 4), h: d.def[1] + 6 });
+  out.push({ label: "Full width", w: COLS, h: d.def[1] });
+  return out.filter((p, i, all) => all.findIndex((q) => q.w === p.w && q.h === p.h) === i);
+}
+
+const GLYPHS: Record<Glyph, ReactNode> = {
+  cal: <><rect x="3.5" y="5" width="17" height="15" rx="3" /><path d="M3.5 10h17M8 3v4M16 3v4" /></>,
+  desk: <><path d="M4 13l2.4-7.2A2 2 0 0 1 8.3 4.5h7.4a2 2 0 0 1 1.9 1.3L20 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" /><path d="M4 13h4.5l1.5 2.5h4l1.5-2.5H20" /></>,
+  stages: <path d="M4 6h16M6 11h12M8.5 16h7M11 20.5h2" />,
+  clock: <><circle cx="12" cy="12.5" r="8" /><path d="M12 8.5v4.2l2.8 1.8" /></>,
+  alert: <><path d="M12 4l9 15.5H3z" /><path d="M12 10v4.2M12 17.2v.1" /></>,
+  team: <><circle cx="9" cy="9" r="3.2" /><path d="M3.5 19c.6-3 2.8-4.6 5.5-4.6s4.9 1.6 5.5 4.6" /><circle cx="17" cy="9.5" r="2.5" /><path d="M16 14.6c2.3-.2 4 1.2 4.5 3.9" /></>,
+  bill: <><path d="M6 3.5h12v17l-3-2-3 2-3-2-3 2z" /><path d="M9 8.5h6M9 12h6" /></>,
+  stack: <><path d="M12 4l8.5 4.3L12 12.6 3.5 8.3z" /><path d="M3.5 12.2L12 16.5l8.5-4.3M3.5 16L12 20.3 20.5 16" /></>,
+  mail: <><rect x="3.5" y="5.5" width="17" height="13" rx="2.5" /><path d="M4 7l8 6 8-6" /></>,
+  share: <><circle cx="17.5" cy="6" r="2.5" /><circle cx="6.5" cy="12" r="2.5" /><circle cx="17.5" cy="18" r="2.5" /><path d="M8.7 10.8l6.6-3.6M8.7 13.2l6.6 3.6" /></>,
+  users: <><circle cx="12" cy="8.5" r="3.5" /><path d="M5 20c.8-3.6 3.6-5.6 7-5.6s6.2 2 7 5.6" /></>,
+  coins: <><ellipse cx="10" cy="7" rx="6" ry="2.6" /><path d="M4 7v4.5c0 1.4 2.7 2.6 6 2.6M16 7v2" /><ellipse cx="15" cy="14" rx="5.5" ry="2.4" /><path d="M9.5 14v3.6c0 1.3 2.5 2.4 5.5 2.4s5.5-1.1 5.5-2.4V14" /></>,
+  quiet: <><path d="M5 5h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H10l-4 3.5V16H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z" /><path d="M9 10.5h6" /></>,
+  trophy: <><path d="M8 4h8v5a4 4 0 0 1-8 0z" /><path d="M8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4M12 13v4M8.5 20h7" /></>,
+  num: <path d="M9 4L7 20M17 4l-2 16M4.5 9h15M3.5 15h15" />,
+  ring: <><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 1 8 8" strokeWidth="3" /></>,
+  pipe: <path d="M3 17l6-6 4 4 8-8M15 7h6v6" />,
+};
+const Glyph = ({ g }: { g: Glyph }) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{GLYPHS[g]}</svg>;
+
+/** The nearest box that scrolls the page (for moving cards past the bottom of the screen). */
+function scrollerOf(el: HTMLElement | null): HTMLElement {
+  for (let p = el?.parentElement; p; p = p.parentElement) {
+    const o = getComputedStyle(p).overflowY;
+    if ((o === "auto" || o === "scroll") && p.scrollHeight > p.clientHeight + 2) return p;
+  }
+  return (document.scrollingElement as HTMLElement) ?? document.documentElement;
+}
+
+/* ---------------------------------------------------------------------
+   The board can carry any set of cards: a kit says what each card is
+   called, how small it may go, how it looks at a size and what extra
+   controls it has. The home brings its own (HOME_KIT); the deal page
+   brings another.
+   --------------------------------------------------------------------- */
+export interface KitCtx { items: BoardItem[]; sx: number; stack: boolean; onChange: (next: BoardItem[]) => void; close: () => void }
+export interface BoardKit {
+  min: (key: string) => [number, number];
+  title: (key: string) => string;
+  icon: (key: string) => ReactNode;
+  color: (key: string) => string | undefined;
+  /** what the card draws at its size (the home's cards show their headline figure when too small) */
+  shown: (it: BoardItem) => string;
+  /** a single figure (its bar only shows on hover) */
+  fig: (key: string) => boolean;
+  /** a click on the card opens something */
+  link: (it: BoardItem) => boolean;
+  /** the name of the look at a size, and a tip for it */
+  look: (it: BoardItem, pxW: number, pxH: number) => string;
+  lookTip?: (it: BoardItem, pxW: number, pxH: number) => string;
+  /** extra classes for a card at a size */
+  cls?: (it: BoardItem, pxW: number, pxH: number) => string;
+  snug?: (it: BoardItem, pxW: number, pxH: number) => boolean;
+  presets: (key: string) => { label: string; w: number; h: number }[];
+  bar?: (it: BoardItem, pxW: number, ctx: KitCtx) => ReactNode;
+  menu?: (it: BoardItem, ctx: KitCtx) => ReactNode;
+  /** height on a phone (cards one under the other) */
+  stackH: (it: BoardItem) => number;
+  /** rows that fill the screen (draws "End of your screen" while adjusting) */
+  screenRows?: number;
+}
+
+const LAYS_K: { k: CalLay; label: string }[] = [{ k: "stack", label: "Top and bottom" }, { k: "side", label: "Side by side" }];
+/** The calendar's layout; side by side widens the card first if it's too narrow for it. */
+function setCalLay(it: BoardItem, lay: CalLay, ctx: KitCtx) {
+  let next = ctx.items.map((i) => (i.id === it.id ? { ...i, lay } : i));
+  const need = Math.min(COLS, Math.ceil((SIDE_MIN_PX + GAP) / Math.max(1, ctx.sx)));
+  if (lay === "side" && it.w < need) next = resizeTo(next, it.id, need, it.h);
+  ctx.onChange(next);
+}
+const HOME_KIT: BoardKit = {
+  min: (k) => DEF[k]?.min ?? [4, 3],
+  title: (k) => DEF[k]?.title ?? k,
+  icon: (k) => <Glyph g={DEF[k]?.glyph ?? "num"} />,
+  color: (k) => DEPTS.find((x) => x.key === DEF[k]?.dept)?.color,
+  shown: shownKey,
+  fig: (k) => DEF[k]?.fig ?? false,
+  link: (it) => !!DEF[it.key]?.go && it.key !== "desk" && it.key !== "calendar",
+  look: lookOf,
+  lookTip: (it) => (shownKey(it) !== it.key ? "Too small for the whole card: it shows its headline figure. Make it bigger to see everything." : "How the card looks at this size"),
+  cls: (it, pxW) => (isSplitCal(it, pxW) ? "is-split" : ""),
+  snug: (it, pxW, pxH) => pxH < 560 && !(isSplitCal(it, pxW) && pxH >= 300),
+  presets: (k) => presetsOf(DEF[k]),
+  bar: (it, pxW, ctx) => it.key === "calendar" && shownKey(it) === it.key && !ctx.stack && pxW >= 460 ? (
+    <span className="hb-lay" role="radiogroup" aria-label="Layout" onPointerDown={(e) => e.stopPropagation()}>
+      {LAYS_K.map((l) => (
+        <button key={l.k} type="button" role="radio" aria-checked={(it.lay ?? "stack") === l.k} className={(it.lay ?? "stack") === l.k ? "is-on" : ""} title={l.label} aria-label={l.label} onClick={() => setCalLay(it, l.k, ctx)}>
+          <LayPic k={l.k} />
+        </button>
+      ))}
+    </span>
+  ) : null,
+  menu: (it, ctx) => it.key === "calendar" ? (
+    <>
+      <b className="hb-sizes-h">Layout</b>
+      <div className="hb-sizes-lay" role="radiogroup" aria-label="Layout">
+        {LAYS_K.map((l) => (
+          <button key={l.k} type="button" role="radio" aria-checked={(it.lay ?? "stack") === l.k} className={(it.lay ?? "stack") === l.k ? "is-on" : ""} onClick={() => { setCalLay(it, l.k, ctx); ctx.close(); }}>
+            <LayPic k={l.k} /><span>{l.label}</span>
+          </button>
+        ))}
+      </div>
+    </>
+  ) : null,
+  stackH: (it) => (DEF[it.key]?.fig || shownKey(it) !== it.key ? 132 : Math.max(260, Math.min(640, it.h * 30))),
+  screenRows: SCREEN_ROWS,
+};
+
+type Drag = { id: string; mode: "move" | "e" | "s" | "se"; x0: number; y0: number; sc0: number; orig: BoardItem; dx: number; dy: number; prev: BoardItem[] };
+
+export function HomeBoard({ items, editing, step, onChange, onPreview, slotRef, onRemove, flash, onOpen, kit = HOME_KIT, className = "" }: {
+  kit?: BoardKit;
+  className?: string;
+  items: BoardItem[];
+  editing: boolean;
+  /** one row + gap, px */
+  step: number;
+  onChange: (next: BoardItem[]) => void;
+  /** while a card is being resized: the grid as it would be (so the cards change their look live) */
+  onPreview: (list: BoardItem[] | null) => void;
+  slotRef: (id: string) => (el: HTMLElement | null) => void;
+  onRemove: (id: string) => void;
+  flash: string | null;
+  onOpen: (it: BoardItem) => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const m = () => setWidth(el.clientWidth);
+    m();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(m) : null;
+    ro?.observe(el);
+    return () => ro?.disconnect();
+  }, []);
+  const stack = width > 0 && width < 760;
+  const colW = (width - GAP * (COLS - 1)) / COLS;
+  const sx = colW + GAP;
+  const [drag, setDrag] = useState<Drag | null>(null);
+  const [menu, setMenu] = useState<{ id: string; at: DOMRect } | null>(null);
+  const dragRef = useRef<Drag | null>(null);
+  dragRef.current = drag;
+
+  const ctx: KitCtx = { items, sx, stack, onChange, close: () => setMenu(null) };
+
+  /* ---- what the grid looks like while a card is held ---- */
+  const preview = useMemo(() => {
+    if (!drag) return items;
+    const o = drag.orig;
+    if (drag.mode === "move") {
+      const x = Math.max(0, Math.min(COLS - o.w, Math.round((o.x * sx + drag.dx) / sx)));
+      const y = Math.max(0, Math.round((o.y * step + drag.dy) / step));
+      return moveTo(drag.prev, o.id, x, y);
+    }
+    const mn = kit.min(o.key);
+    const w = drag.mode === "s" ? o.w : Math.max(mn[0], Math.min(COLS - o.x, Math.round(o.w + drag.dx / sx)));
+    const h = drag.mode === "e" ? o.h : Math.max(mn[1], Math.min(60, Math.round(o.h + drag.dy / step)));
+    return resizeTo(drag.prev, o.id, w, h);
+  }, [drag, items, sx, step]);
+
+  // tell the page only when what a card shows changes (headline ↔ whole card), not on every pixel
+  const sig = preview === items ? "" : preview.map((i) => `${i.id}:${kit.shown(i)}`).join("|");
+  const base = items.map((i) => `${i.id}:${kit.shown(i)}`).join("|");
+  const previewRef = useRef(preview);
+  previewRef.current = preview;
+  useEffect(() => { onPreview(sig && sig !== base ? previewRef.current : null); }, [sig, base]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const start = (it: BoardItem, mode: Drag["mode"]) => (e: React.PointerEvent) => {
+    if (!editing || stack || e.button !== 0) return;
+    e.preventDefault(); e.stopPropagation();
+    setMenu(null);
+    const sc = scrollerOf(ref.current);
+    const d: Drag = { id: it.id, mode, x0: e.clientX, y0: e.clientY, sc0: sc.scrollTop, orig: it, dx: 0, dy: 0, prev: items };
+    setDrag(d);
+    let px = e.clientX, py = e.clientY, raf = 0, auto = 0;
+    const apply = () => {
+      raf = 0;
+      const cur = dragRef.current;
+      if (!cur) return;
+      setDrag({ ...cur, dx: px - cur.x0, dy: py - cur.y0 + (sc.scrollTop - cur.sc0) });
+    };
+    // past the top / bottom edge of the screen: the page scrolls along
+    const edge = () => {
+      const H = window.innerHeight;
+      const v = py > H - 70 ? Math.min(18, (py - (H - 70)) / 3) : py < 70 ? -Math.min(18, (70 - py) / 3) : 0;
+      if (v) { sc.scrollTop += v; if (!raf) raf = requestAnimationFrame(apply); }
+      auto = requestAnimationFrame(edge);
+    };
+    auto = requestAnimationFrame(edge);
+    const move = (ev: PointerEvent) => { px = ev.clientX; py = ev.clientY; if (!raf) raf = requestAnimationFrame(apply); };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      cancelAnimationFrame(auto); if (raf) cancelAnimationFrame(raf);
+      apply();
+      const cur = dragRef.current;
+      setDrag(null);
+      if (!cur) return;
+      // the final grid, worked out from where it was let go
+      const o = cur.orig, def = { min: kit.min(o.key) };
+      let next: BoardItem[];
+      if (cur.mode === "move") {
+        const x = Math.max(0, Math.min(COLS - o.w, Math.round((o.x * sx + cur.dx) / sx)));
+        const y = Math.max(0, Math.round((o.y * step + cur.dy) / step));
+        next = moveTo(cur.prev, o.id, x, y);
+      } else {
+        const w = cur.mode === "s" ? o.w : Math.max(def.min[0], Math.min(COLS - o.x, Math.round(o.w + cur.dx / sx)));
+        const h = cur.mode === "e" ? o.h : Math.max(def.min[1], Math.min(60, Math.round(o.h + cur.dy / step)));
+        next = resizeTo(cur.prev, o.id, w, h);
+      }
+      if (JSON.stringify(next) !== JSON.stringify(cur.prev)) onChange(next);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  };
+
+  /* ---- keyboard: arrows move, shift + arrows resize, delete takes it away ---- */
+  const onKey = (it: BoardItem) => (e: React.KeyboardEvent) => {
+    if (!editing || e.target !== e.currentTarget) return;
+    const d = { min: kit.min(it.key) };
+    const k = e.key;
+    if (k === "Delete" || k === "Backspace") { e.preventDefault(); onRemove(it.id); return; }
+    const dx = k === "ArrowLeft" ? -1 : k === "ArrowRight" ? 1 : 0, dy = k === "ArrowUp" ? -1 : k === "ArrowDown" ? 1 : 0;
+    if (!dx && !dy) return;
+    e.preventDefault();
+    if (e.shiftKey) onChange(resizeTo(items, it.id, Math.max(d.min[0], Math.min(COLS - it.x, it.w + dx)), Math.max(d.min[1], Math.min(60, it.h + dy))));
+    else onChange(moveTo(items, it.id, Math.max(0, Math.min(COLS - it.w, it.x + dx)), Math.max(0, it.y + (dy > 0 ? it.h : dy))));
+  };
+
+  /* ---- a click on a card (not on one of its buttons) opens its page.
+     Native: the cards' content is drawn through portals, so React's own click
+     never passes through the card. The calendar and the desk are workspaces: only their own links. ---- */
+  const live = useRef({ editing, items, onOpen });
+  live.current = { editing, items, onOpen };
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const click = (e: MouseEvent) => {
+      const { editing: ed, items: list, onOpen: open } = live.current;
+      if (ed || e.defaultPrevented || e.button !== 0) return;
+      const t = e.target as Element;
+      const card = t.closest?.(".hb-card.is-link") as HTMLElement | null;
+      if (!card || !el.contains(card)) return;
+      const inner = t.closest("button, a, input, select, textarea, label, [role], [tabindex], [contenteditable]");
+      if (inner && card.contains(inner) && inner !== card) return;
+      if (window.getSelection()?.toString()) return;
+      const it = list.find((i) => i.id === card.dataset.id);
+      if (it) open(it);
+    };
+    el.addEventListener("click", click);
+    return () => el.removeEventListener("click", click);
+  }, []);
+
+  // a card follows the pointer; the others make room
+  const rect = (it: BoardItem) => ({ left: it.x * sx, top: it.y * step, width: it.w * sx - GAP, height: it.h * step - GAP });
+  const shown = preview;
+  const rows = shown.reduce((m, i) => Math.max(m, i.y + i.h), 0);
+  const height = Math.max(0, (rows + (editing ? 5 : 0)) * step - GAP);
+  const held = drag ? shown.find((i) => i.id === drag.id) ?? null : null;
+  // the cards keep their place in the page (no moving nodes around); only the stagger follows the grid
+  const rank = new Map([...items].sort(byTop).map((i, k) => [i.id, k]));
+
+  return (
+    <div ref={ref} className={`hb ${className} ${editing ? "is-editing" : ""} ${drag ? "is-dragging" : ""} ${stack ? "is-stack" : ""}`}
+      style={stack ? undefined : { height, ["--sx" as string]: `${sx}px`, ["--sy" as string]: `${step}px`, ["--cw" as string]: `${colW}px` } as CSSProperties}>
+      {editing && !stack && width > 0 && (
+        <>
+          <i className="hb-guides" aria-hidden="true" />
+          {kit.screenRows && kit.screenRows * step - GAP < height && <i className="hb-fold" style={{ top: kit.screenRows * step - GAP / 2 }} aria-hidden="true"><span>End of your screen</span></i>}
+        </>
+      )}
+      {held && <i className="hb-ph" style={rect(held)} aria-hidden="true" />}
+      {width > 0 && items.map((o) => {
+        const idx = rank.get(o.id) ?? 0;
+        const it = shown.find((i) => i.id === o.id) ?? o;
+        const isHeld = drag?.id === it.id;
+        const r = rect(isHeld ? drag!.orig : it);
+        const style: CSSProperties = stack
+          ? { order: idx, height: kit.stackH(it) }
+          : isHeld
+            ? drag!.mode === "move"
+              ? { left: r.left + drag!.dx, top: r.top + drag!.dy, width: r.width, height: r.height }
+              : { left: r.left, top: r.top, width: Math.max(colW, r.width + (drag!.mode === "s" ? 0 : drag!.dx)), height: Math.max(step - GAP, r.height + (drag!.mode === "e" ? 0 : drag!.dy)) }
+            : r;
+        const sk = kit.shown(it);
+        const fig = kit.fig(sk);
+        const pxH = stack ? Number(style.height) || 260 : it.h * step - GAP, pxW = stack ? width : it.w * sx - GAP;
+        const cls = [
+          "hb-card", fig ? "is-fig" : `is-panel k-${it.key.replace(/\./g, "-")}`,
+          isHeld ? `is-held is-${drag!.mode}` : "", flash === it.id ? "is-new" : "",
+          !fig && (kit.snug ? kit.snug(it, pxW, pxH) : pxH < 560) ? "is-snug" : "", !fig && pxH < 330 ? "is-tiny" : "", !fig && pxW < 350 ? "is-narrow" : "", !fig && pxW < 460 ? "is-mid" : "", !fig && pxW > 760 ? "is-wide" : "",
+          !fig && kit.link(it) ? "is-link" : "",
+          !fig ? `sw-${tierW(pxW)} sh-${tierH(pxH)}` : "", !fig && kit.cls ? kit.cls(it, pxW, pxH) : "",
+        ].filter(Boolean).join(" ");
+        const look = kit.look(it, pxW, pxH);
+        return (
+          <div key={it.id} className={cls} style={{ ...style, ["--i" as string]: Math.min(idx, 12) } as CSSProperties} data-id={it.id}
+            tabIndex={editing ? 0 : undefined} onKeyDown={editing ? onKey(it) : undefined}
+            aria-label={editing ? `${kit.title(it.key)}: ${it.w} by ${it.h}. Arrows move it, Shift and arrows resize it, Delete takes it away.` : undefined}
+>
+            <div className="hb-slot" ref={slotRef(it.id)} />
+            {fig && !stack && <span className="hb-fig-mark" style={{ ["--c" as string]: kit.color(sk) } as CSSProperties} aria-hidden="true">{kit.icon(sk)}</span>}
+            {editing && (
+              <>
+                <div className="hb-veil" onPointerDown={start(it, "move")} />
+                <div className="hb-bar" onPointerDown={start(it, "move")}>
+                  <span className="hb-grip" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.6" /><circle cx="15" cy="6" r="1.6" /><circle cx="9" cy="12" r="1.6" /><circle cx="15" cy="12" r="1.6" /><circle cx="9" cy="18" r="1.6" /><circle cx="15" cy="18" r="1.6" /></svg></span>
+                  <span className="hb-bar-ico" style={{ ["--c" as string]: kit.color(it.key) } as CSSProperties}>{kit.icon(it.key)}</span>
+                  <b className="hb-bar-t">{kit.title(it.key)}</b>
+                  <em className={`hb-bar-tag ${sk !== it.key ? "is-head" : ""}`} title={kit.lookTip ? kit.lookTip(it, pxW, pxH) : "How the card looks at this size"}>{look}</em>
+                  <span className="hb-bar-grow" />
+                  {kit.bar?.(it, pxW, ctx)}
+                  {!stack && (
+                    <button type="button" className={`hb-bar-btn ${menu?.id === it.id ? "is-on" : ""}`} title="Size" aria-label="Size"
+                      onPointerDown={(e) => e.stopPropagation()} onClick={(e) => setMenu(menu?.id === it.id ? null : { id: it.id, at: e.currentTarget.getBoundingClientRect() })}>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7" /></svg>
+                      <span>{it.w}×{it.h}</span>
+                    </button>
+                  )}
+                  <button type="button" className="hb-bar-btn is-x" title="Take it off your home" aria-label="Remove"
+                    onPointerDown={(e) => e.stopPropagation()} onClick={() => onRemove(it.id)}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                  </button>
+                </div>
+                {!stack && (
+                  <>
+                    <span className="hb-rz is-e" onPointerDown={start(it, "e")} title="Drag to make it wider or narrower" />
+                    <span className="hb-rz is-s" onPointerDown={start(it, "s")} title="Drag to make it taller or shorter" />
+                    <span className="hb-rz is-se" onPointerDown={start(it, "se")} title="Drag to resize" />
+                  </>
+                )}
+                {isHeld && drag!.mode !== "move" && <span className="hb-size" aria-hidden="true"><b>{look}</b>{it.w} × {it.h}</span>}
+              </>
+            )}
+          </div>
+        );
+      })}
+      {menu && (() => {
+        const it = items.find((i) => i.id === menu.id);
+        if (!it) return null;
+        return <SizeMenu at={menu.at} it={it} list={kit.presets(it.key)} extra={kit.menu?.(it, ctx)} onPick={(w, h) => { onChange(resizeTo(items, it.id, Math.min(w, COLS), h)); setMenu(null); }} onClose={() => setMenu(null)} />;
+      })()}
+    </div>
+  );
+}
+
+/** A little picture of the two calendar layouts. */
+function LayPic({ k }: { k: CalLay }) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="16" rx="3" fill="none" stroke="currentColor" strokeWidth="1.8" />
+      {k === "stack" ? <path d="M3.5 12h17" stroke="currentColor" strokeWidth="1.8" /> : <path d="M11 4.5v15" stroke="currentColor" strokeWidth="1.8" />}
+    </svg>
+  );
+}
+
+function SizeMenu({ at, it, list, extra, onPick, onClose }: { at: DOMRect; it: BoardItem; list: { label: string; w: number; h: number }[]; extra?: ReactNode; onPick: (w: number, h: number) => void; onClose: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const off = (e: PointerEvent) => { if (!ref.current?.contains(e.target as Node) && !(e.target as Element).closest?.(".hb-bar-btn")) onClose(); };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("pointerdown", off);
+    document.addEventListener("keydown", key);
+    return () => { document.removeEventListener("pointerdown", off); document.removeEventListener("keydown", key); };
+  }, [onClose]);
+  const W = 228;
+  const max = Math.max(...list.map((p) => p.w)), maxH = Math.max(...list.map((p) => p.h));
+  return createPortal(
+    <div ref={ref} className="hb-sizes" role="menu" style={{ top: Math.max(8, Math.min(at.bottom + 6, window.innerHeight - 60 - list.length * 40 - (extra ? 96 : 0))), left: Math.max(8, Math.min(at.right - W, window.innerWidth - W - 8)), width: W }}>
+      {extra}
+      <b className="hb-sizes-h">Size</b>
+      {list.map((p) => {
+        const on = p.w === it.w && p.h === it.h;
+        return (
+          <button key={p.label} type="button" role="menuitemradio" aria-checked={on} className={on ? "is-on" : ""} onClick={() => onPick(p.w, p.h)}>
+            <span className="hb-sizes-pic"><i style={{ width: `${Math.max(14, (p.w / max) * 100)}%`, height: `${Math.max(22, (p.h / maxH) * 100)}%` }} /></span>
+            <span className="hb-sizes-t">{p.label}</span>
+            <em>{p.w}×{p.h}</em>
+          </button>
+        );
+      })}
+      <p className="hb-sizes-tip">Or pull the right or bottom edge of the card.</p>
+    </div>,
+    document.body,
+  );
+}
+
+/* ---------------------------------------------------------------------
+   Sources that live here: what everyone has (calendar, desk, today's
+   figures), marketing and management.
+   --------------------------------------------------------------------- */
+function GeneralCards({ slots, userId, hoursPerDay, needCal }: { slots: HomeSlot[]; userId: string; hoursPerDay: number; needCal: boolean }) {
+  const nav = useNavigate();
+  const [cal, setCal] = useState<CalSummary | null>(null);
+  useEffect(() => {
+    const on = (e: Event) => setCal((e as CustomEvent<CalSummary>).detail);
+    window.addEventListener(CAL_SUMMARY_EVENT, on);
+    return () => window.removeEventListener(CAL_SUMMARY_EVENT, on);
+  }, []);
+  type Tix = { open: number; late: number; today: number };
+  const [tix, setTix] = useState<Tix | null>(null);
+  const [tasks, setTasks] = useState<Tix | null>(null);
+  const wants = slots.some((s) => s.key === "tickets" || s.key === "tasks");
+  useEffect(() => {
+    if (!wants) return;
+    let alive = true;
+    const load = async () => {
+      let r: any = await supabase.from("tracking_tasks").select("id, done, status, stage, due_at, source, requester_email, requester_name, category").eq("assignee_id", userId).range(0, 4999);
+      if (r.error) r = await supabase.from("tracking_tasks").select("id, done, status, stage, due_at, source, requester_email, requester_name").eq("assignee_id", userId).range(0, 4999);
+      if (r.error) r = await supabase.from("tracking_tasks").select("id, done, status, due_at").eq("assignee_id", userId).range(0, 4999);
+      if (!alive || r.error) return;
+      const now = Date.now();
+      const end = new Date(); end.setHours(23, 59, 59, 999);
+      const open = ((r.data ?? []) as any[]).filter((t) => !(t.done || t.status === "done" || ["resolved", "closed"].includes(t.stage)));
+      // tickets are conversations (e-mail, messages, calls); tasks are the work
+      const isTicket = (t: any) => (t.category ? t.category === "ticket" : ["email", "phone", "portal", "message"].includes(t.source) || !!t.requester_email || !!t.requester_name);
+      const tally = (xs: any[]): Tix => ({
+        open: xs.length,
+        late: xs.filter((t) => t.due_at && new Date(t.due_at).getTime() < now).length,
+        today: xs.filter((t) => t.due_at && new Date(t.due_at).getTime() >= now && new Date(t.due_at).getTime() <= end.getTime()).length,
+      });
+      setTix(tally(open.filter(isTicket)));
+      setTasks(tally(open.filter((t) => !isTicket(t))));
+    };
+    load().catch(() => {});
+    const again = () => { load().catch(() => {}); };
+    window.addEventListener(TICKETS_EVENT, again);
+    return () => { alive = false; window.removeEventListener(TICKETS_EVENT, again); };
+  }, [userId, wants]);
+  const cOpen = useCount(tix?.open ?? 0, 600);
+  const cTasks = useCount(tasks?.open ?? 0, 600);
+  const cToday = useCount(cal?.todayMin ?? 0, 700);
+  const hrs = (m: number) => `${+(m / 60).toFixed(1)}h`;
+  const todayPct = cal ? (cal.todayCap > 0 ? (cal.todayMin / cal.todayCap) * 100 : cal.todayMin > 0 ? 101 : 0) : 0;
+  const card = (key: string): ReactNode => {
+    switch (key) {
+      case "calendar": return <HomeCalendar userId={userId} hoursPerDay={hoursPerDay} />;
+      case "desk": return <TicketDesk />;
+      case "booked": return (
+        <Fig cls="is-today" onClick={() => nav("/calendar")} title="Open your calendar">
+          <Ring pct={todayPct} size={58} stroke={6}><b>{cal ? `${Math.round(Math.min(todayPct, 999))}%` : "…"}</b></Ring>
+          <Txt label="Booked today" value={cal ? hrs(cToday) : "…"} unit={cal ? ` of ${hrs(cal.todayCap)}` : ""}
+            sub={cal?.next ? <>Next: <em>{cal.next.time}</em> {cal.next.title}{cal.next.today ? "" : " (later this week)"}</> : cal ? "Nothing else booked" : "Reading your calendar…"} />
+        </Fig>
+      );
+      case "tickets": case "tasks": {
+        const x = key === "tickets" ? tix : tasks;
+        const c = key === "tickets" ? cOpen : cTasks;
+        return (
+          <Fig cls={`is-tix ${x && x.late > 0 ? "has-late" : ""}`} onClick={() => nav(key === "tickets" ? "/tickets" : "/tickets?kind=task")} title={key === "tickets" ? "Open your tickets" : "Open your tasks"}>
+            <Txt label={key === "tickets" ? "Open tickets" : "Open tasks"} value={x ? Math.round(c) : "…"} big>
+              <span className="chx-chips">
+                {x && x.late > 0 && <span className="chx-chip is-late">{x.late} late</span>}
+                {x && x.today > 0 && <span className="chx-chip is-today">{x.today} due today</span>}
+                {x && x.late === 0 && x.today === 0 && <span className="chx-chip is-ok">{x.open ? "All on time" : key === "tickets" ? "Inbox zero" : "Nothing pending"}</span>}
+              </span>
+            </Txt>
+          </Fig>
+        );
+      }
+      default: return null;
+    }
+  };
+  return (
+    <>
+      {renderSlots(slots, card)}
+      {/* "Booked today" without the calendar card: the calendar still reads the day, out of sight */}
+      {needCal && <div className="hb-offstage" aria-hidden="true"><HomeCalendar userId={userId} hoursPerDay={hoursPerDay} /></div>}
+    </>
+  );
+}
+
+const MK_NETS: Record<string, { label: string; short: string; color: string }> = {
+  linkedin: { label: "LinkedIn", short: "in", color: "#0a66c2" }, instagram: { label: "Instagram", short: "IG", color: "#d62976" },
+  facebook: { label: "Facebook", short: "f", color: "#1877f2" }, x: { label: "X", short: "X", color: "#14171a" },
+  tiktok: { label: "TikTok", short: "TT", color: "#ee1d52" }, threads: { label: "Threads", short: "@", color: "#3d3d3d" }, youtube: { label: "YouTube", short: "YT", color: "#e62117" },
+};
+const MK_STATUS: Record<string, string> = { draft: "Draft", scheduled: "Scheduled", sending: "Sending", paused: "Paused", sent: "Sent", cancelled: "Cancelled", idea: "Idea", published: "Published", failed: "Failed" };
+interface MkCamp { id: string; name: string; status: string; when: string | null; total: number; sent: number; opened: number; clicked: number }
+interface MkData {
+  missing: boolean; camps: MkCamp[]; sentMonth: number | null; sent30: number | null; opened30: number | null; unsub30: number | null;
+  posts: { id: string; title: string; networks: string[]; status: string; at: string | null }[];
+  lists: { id: string; name: string; kind: string; entity: string; members: number }[];
+}
+function MarketingCards({ slots }: { slots: HomeSlot[] }) {
+  const nav = useNavigate();
+  const [d, setD] = useState<MkData | null>(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const now = new Date();
+      const month = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+      const ago30 = new Date(Date.now() - 30 * 864e5).toISOString();
+      const count = (q: any) => Promise.resolve(q).then((r: any) => (r?.error ? null : (r?.count ?? 0) as number), () => null);
+      const [cr, pr, lr, sentMonth, sent30, opened30, unsub30] = await Promise.all([
+        Promise.resolve(supabase.from("marketing_campaigns").select("id, name, status, scheduled_at, started_at, finished_at, stats, created_at").order("created_at", { ascending: false }).limit(12)).catch(() => ({ data: null, error: { message: "x" } })) as any,
+        Promise.resolve(supabase.from("marketing_posts").select("id, title, body, networks, status, scheduled_at").gte("scheduled_at", now.toISOString()).order("scheduled_at", { ascending: true }).limit(30)).catch(() => ({ data: null, error: { message: "x" } })) as any,
+        Promise.resolve(supabase.from("marketing_lists").select("id, name, kind, entity, member_count, updated_at").order("updated_at", { ascending: false }).limit(30)).catch(() => ({ data: null, error: { message: "x" } })) as any,
+        count(supabase.from("marketing_sends").select("id", { count: "exact", head: true }).eq("status", "sent").gte("sent_at", month)),
+        count(supabase.from("marketing_sends").select("id", { count: "exact", head: true }).eq("status", "sent").gte("sent_at", ago30)),
+        count(supabase.from("marketing_sends").select("id", { count: "exact", head: true }).eq("status", "sent").gte("sent_at", ago30).not("opened_at", "is", null)),
+        count(supabase.from("marketing_unsubscribes").select("id", { count: "exact", head: true }).gte("created_at", ago30)),
+      ]);
+      const camps0 = ((cr?.data ?? []) as any[]);
+      // opens and clicks of the latest campaigns, read in one go
+      const agg = new Map<string, { opened: number; clicked: number; sent: number; total: number }>();
+      if (camps0.length) {
+        let sr: any = await Promise.resolve(supabase.from("marketing_sends").select("campaign_id, status, opened_at, clicked_at").in("campaign_id", camps0.map((c) => c.id)).range(0, 49999)).catch(() => null);
+        if (!sr || sr.error) sr = await Promise.resolve(supabase.from("marketing_sends").select("campaign_id, status").in("campaign_id", camps0.map((c) => c.id)).range(0, 49999)).catch(() => null);
+        ((sr?.data ?? []) as any[]).forEach((s) => {
+          if (s.status === "skipped") return;
+          const a = agg.get(s.campaign_id) ?? { opened: 0, clicked: 0, sent: 0, total: 0 };
+          a.total++; if (s.status === "sent") a.sent++; if (s.opened_at) a.opened++; if (s.clicked_at) a.clicked++;
+          agg.set(s.campaign_id, a);
+        });
+      }
+      if (!alive) return;
+      setD({
+        missing: !!cr?.error && !!lr?.error,
+        camps: camps0.map((c) => {
+          const a = agg.get(c.id);
+          const st = c.stats ?? {};
+          return { id: c.id, name: c.name || "Untitled campaign", status: c.status, when: c.finished_at ?? c.started_at ?? c.scheduled_at ?? c.created_at ?? null,
+            total: a?.total ?? (Number(st.total) || 0), sent: a?.sent ?? (Number(st.sent) || 0), opened: a?.opened ?? 0, clicked: a?.clicked ?? 0 };
+        }),
+        sentMonth, sent30, opened30, unsub30,
+        posts: ((pr?.data ?? []) as any[]).filter((p) => p.status !== "cancelled" && p.status !== "published").map((p) => ({ id: p.id, title: (p.title || p.body || "Untitled post").replace(/\s+/g, " ").slice(0, 140), networks: Array.isArray(p.networks) ? p.networks : [], status: p.status, at: p.scheduled_at })),
+        lists: ((lr?.data ?? []) as any[]).map((l) => ({ id: l.id, name: l.name || "List", kind: l.kind, entity: l.entity, members: Number(l.member_count) || 0 })),
+      });
+    })();
+    return () => { alive = false; };
+  }, []);
+  const go = () => nav("/marketing");
+  const wait = d ? null : "…";
+  const pct = (a: number, b: number) => (b > 0 ? Math.round((a / b) * 100) : 0);
+  const soon = Date.now() + 14 * 864e5;
+  const campSoon = (d?.camps ?? []).filter((c) => c.status === "scheduled" && c.when && new Date(c.when).getTime() <= soon).length;
+  const postSoon = (d?.posts ?? []).filter((p) => p.status === "scheduled" && p.at && new Date(p.at).getTime() <= soon).length;
+  const people = (d?.lists ?? []).reduce((s, l) => s + l.members, 0);
+  const openRate = d && d.sent30 ? (d.opened30 ?? 0) / d.sent30 * 100 : null;
+  const cSent = useCount(d?.sentMonth ?? 0, 700);
+  const cPeople = useCount(people, 700);
+  const when = (iso: string | null) => {
+    if (!iso) return "";
+    const t = new Date(iso), n = new Date(); n.setHours(0, 0, 0, 0);
+    const diff = Math.round((new Date(t.getFullYear(), t.getMonth(), t.getDate()).getTime() - n.getTime()) / 864e5);
+    const day = diff === 0 ? "Today" : diff === 1 ? "Tomorrow" : diff === -1 ? "Yesterday" : t.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+    return diff === 0 || diff === 1 ? `${day} · ${t.toTimeString().slice(0, 5)}` : day;
+  };
+  const empty = (text: string) => <p className="cz-empty">{d?.missing ? "Marketing isn't set up yet (run 20_marketing.sql in Supabase)." : text}</p>;
+  const card = (key: string): ReactNode => {
+    switch (key) {
+      case "mk_sent": return (
+        <Fig onClick={go} title="Open Marketing">
+          <Txt label="E-mails sent this month" value={wait ?? (d!.sentMonth == null ? "—" : Math.round(cSent))} big sub={d ? `${d.camps.filter((c) => c.status === "sent" || c.status === "sending").length} campaigns lately` : ""} />
+        </Fig>
+      );
+      case "mk_open": return (
+        <Fig onClick={go} title="Open Marketing">
+          <Ring pct={openRate ?? 0} size={58} stroke={6}><b>{openRate == null ? "—" : `${Math.round(openRate)}%`}</b></Ring>
+          <Txt label="Open rate, 30 days" value={wait ?? (openRate == null ? "—" : `${Math.round(openRate)}%`)} sub={d?.sent30 ? `${(d.opened30 ?? 0).toLocaleString("en-US")} of ${d.sent30.toLocaleString("en-US")} e-mails opened` : "Nothing sent in 30 days"} />
+        </Fig>
+      );
+      case "mk_planned": return (
+        <Fig onClick={go} title="Open Marketing">
+          <Txt label="Scheduled, next 14 days" value={wait ?? campSoon + postSoon} big>
+            <span className="chx-chips">
+              {campSoon > 0 && <span className="chx-chip is-today">{campSoon} {campSoon === 1 ? "e-mail" : "e-mails"}</span>}
+              {postSoon > 0 && <span className="chx-chip is-ok">{postSoon} {postSoon === 1 ? "post" : "posts"}</span>}
+              {d && campSoon + postSoon === 0 && <span className="chx-chip is-ok">Nothing planned</span>}
+            </span>
+          </Txt>
+        </Fig>
+      );
+      case "mk_audience": return (
+        <Fig onClick={go} title="Open Marketing">
+          <Txt label="People in your lists" value={wait ?? Math.round(cPeople).toLocaleString("en-US")} sub={d ? `${d.lists.length} ${d.lists.length === 1 ? "list" : "lists"}` : ""} />
+        </Fig>
+      );
+      case "mk_unsub": return (
+        <Fig cls={d?.unsub30 ? "has-late" : ""} onClick={go} title="Open Marketing">
+          <Txt label="Unsubscribes, 30 days" value={wait ?? (d!.unsub30 ?? "—")} big sub={d?.sent30 && d.unsub30 ? `${((d.unsub30 / d.sent30) * 100).toFixed(1)}% of the e-mails sent` : "Nobody left lately"} />
+        </Fig>
+      );
+      case "mk.campaigns": return (
+        <section className="cz-card hb-mk hb-mk-camps" aria-label="E-mail campaigns">
+          <header className="cz-head">
+            <div className="cz-titles">
+              <span className="cz-eyebrow">E-mail campaigns</span>
+              <h2 className="cz-title">{!d ? "…" : <>{openRate == null ? "—" : `${Math.round(openRate)}%`}<small>opened · 30 days</small></>}</h2>
+            </div>
+            <button type="button" className="cz-link" onClick={go}>Marketing<i aria-hidden="true">→</i></button>
+          </header>
+          {!d ? <div className="cz-skel" /> : d.camps.length === 0 ? empty("No campaigns yet.") : (
+            <div className="hb-mk-list">
+              {d.camps.map((c, i) => (
+                <button type="button" key={c.id} className="hb-mk-row" style={{ ["--i" as string]: Math.min(i, 10) } as CSSProperties} onClick={go}>
+                  <span className={`hb-mk-st is-${c.status}`}>{MK_STATUS[c.status] ?? c.status}</span>
+                  <span className="hb-mk-main"><b>{c.name}</b><small>{when(c.when)}{c.total ? ` · ${c.sent.toLocaleString("en-US")} of ${c.total.toLocaleString("en-US")} sent` : ""}</small></span>
+                  <span className="hb-mk-side">
+                    <b>{c.sent ? `${pct(c.opened, c.sent)}%` : "—"}</b>
+                    <small>{c.sent ? `${pct(c.clicked, c.sent)}% clicked` : "not sent"}</small>
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+      );
+      case "mk.posts": return (
+        <section className="cz-card hb-mk hb-mk-posts" aria-label="Social posts">
+          <header className="cz-head">
+            <div className="cz-titles">
+              <span className="cz-eyebrow">Social posts</span>
+              <h2 className="cz-title">{!d ? "…" : <>{postSoon}<small>scheduled · next 14 days</small></>}</h2>
+            </div>
+            <button type="button" className="cz-link" onClick={go}>Calendar<i aria-hidden="true">→</i></button>
+          </header>
+          {!d ? <div className="cz-skel" /> : d.posts.length === 0 ? empty("Nothing scheduled.") : (
+            <div className="hb-mk-list">
+              {d.posts.map((p, i) => (
+                <button type="button" key={p.id} className="hb-mk-row is-post" style={{ ["--i" as string]: Math.min(i, 10) } as CSSProperties} onClick={go}>
+                  <span className="hb-mk-nets">{(p.networks.length ? p.networks : ["?"]).slice(0, 3).map((n) => (
+                    <i key={n} style={{ background: MK_NETS[n]?.color ?? "#9aaaa2" }} title={MK_NETS[n]?.label ?? n}>{MK_NETS[n]?.short ?? "·"}</i>
+                  ))}</span>
+                  <span className="hb-mk-main"><b>{p.title}</b><small>{p.networks.map((n) => MK_NETS[n]?.label ?? n).join(", ") || "No network yet"}</small></span>
+                  <span className="hb-mk-side"><b className="is-when">{when(p.at)}</b><small>{MK_STATUS[p.status] ?? p.status}</small></span>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+      );
+      case "mk.lists": {
+        const top = Math.max(1, ...(d?.lists ?? []).map((l) => l.members));
+        return (
+          <section className="cz-card hb-mk hb-mk-lists" aria-label="Audiences">
+            <header className="cz-head">
+              <div className="cz-titles">
+                <span className="cz-eyebrow">Audiences</span>
+                <h2 className="cz-title">{!d ? "…" : <>{people.toLocaleString("en-US")}<small>people · {d.lists.length} {d.lists.length === 1 ? "list" : "lists"}</small></>}</h2>
+              </div>
+              <button type="button" className="cz-link" onClick={go}>Lists<i aria-hidden="true">→</i></button>
+            </header>
+            {!d ? <div className="cz-skel" /> : d.lists.length === 0 ? empty("No lists yet.") : (
+              <div className="hb-mk-list">
+                {d.lists.map((l, i) => (
+                  <button type="button" key={l.id} className="hb-mk-row is-list" style={{ ["--i" as string]: Math.min(i, 10) } as CSSProperties} onClick={go}>
+                    <span className="hb-mk-main">
+                      <b>{l.name}</b>
+                      <span className="hb-mk-bar"><i style={{ width: `${(l.members / top) * 100}%` }} /></span>
+                    </span>
+                    <span className="hb-mk-side"><b>{l.members.toLocaleString("en-US")}</b><small>{l.kind === "dynamic" ? "Updates itself" : "Fixed list"}</small></span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </section>
+        );
+      }
+      default: return null;
+    }
+  };
+  return renderSlots(slots, card);
+}
+
+function ManagementCards({ slots }: { slots: HomeSlot[] }) {
+  const card = (key: string): ReactNode => {
+    switch (key) {
+      case "mgmt.summary": return <ManagementSummary />;
+      case "mgmt.pipeline": return <SalesPipelineWidget />;
+      case "mgmt.quiet": return <NeglectedClientsWidget />;
+      case "mgmt.bonus": return <TeamBonusWidget />;
+      default: return null;
+    }
+  };
+  return renderSlots(slots, card);
+}
+
+/* ---------------------------------------------------------------------
+   The library: every card your access lets you add, by department.
+   --------------------------------------------------------------------- */
+function CardLibrary({ access, live, focus, onAddCard, onAddFig, onRemoveKey, onRemoveFig, onClose }: {
+  access: Access; live: BoardState; focus: "cards" | "figs";
+  onAddCard: (key: string) => void; onAddFig: (key: string) => void; onRemoveKey: (key: string) => void; onRemoveFig: (key: string) => void; onClose: () => void;
+}) {
+  const [q, setQ] = useState("");
+  const [dept, setDept] = useState<Dept | "all">("all");
+  const [kind, setKind] = useState<"all" | "cards" | "figs">(focus === "figs" ? "figs" : "all");
+  const inp = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [onClose]);
+  const allowed = CARD_DEFS.filter((d) => d.allow(access));
+  const f = fold(q.trim());
+  const list = allowed.filter((d) => (dept === "all" || d.dept === dept) && (kind === "all" || (kind === "figs" ? d.fig : !d.fig))
+    && (!f || fold(`${d.title} ${d.hint} ${DEPTS.find((x) => x.key === d.dept)?.label}`).includes(f)));
+  const onBoard = new Set(live.items.map((i) => i.key));
+  const inHero = new Set(live.figs);
+  const heroFull = live.figs.length >= MAX_FIGS;
+  const count = (k: Dept) => allowed.filter((d) => d.dept === k).length;
+  return createPortal(
+    <aside className="hb-lib" role="dialog" aria-label="Add to your home">
+      <header className="hb-lib-h">
+        <div>
+          <b>Add to your home</b>
+          <span>Cards go on the board; figures fit the header too.</span>
+        </div>
+        <button type="button" className="hb-lib-x" onClick={onClose} aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+        </button>
+      </header>
+      <label className="hb-lib-q">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>
+        <input ref={inp} autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search cards and figures" />
+      </label>
+      <div className="hb-lib-kind" role="tablist">
+        {(["all", "cards", "figs"] as const).map((k) => (
+          <button key={k} type="button" role="tab" aria-selected={kind === k} className={kind === k ? "is-on" : ""} onClick={() => setKind(k)}>{k === "all" ? "Everything" : k === "cards" ? "Cards" : "Figures"}</button>
+        ))}
+      </div>
+      <nav className="hb-lib-depts">
+        <button type="button" className={dept === "all" ? "is-on" : ""} onClick={() => setDept("all")}>All <i>{allowed.length}</i></button>
+        {DEPTS.filter((x) => count(x.key) > 0).map((x) => (
+          <button key={x.key} type="button" className={dept === x.key ? "is-on" : ""} onClick={() => setDept(x.key)} style={{ ["--c" as string]: x.color } as CSSProperties}>
+            <em />{x.label} <i>{count(x.key)}</i>
+          </button>
+        ))}
+      </nav>
+      <div className="hb-lib-list">
+        {list.length === 0 && <p className="hb-lib-none">Nothing matches “{q}”.</p>}
+        {DEPTS.map((x) => {
+          const mine = list.filter((d) => d.dept === x.key);
+          if (!mine.length) return null;
+          return (
+            <section key={x.key} className="hb-lib-sec" style={{ ["--c" as string]: x.color } as CSSProperties}>
+              <h3><em />{x.label}</h3>
+              {mine.map((d) => {
+                const on = onBoard.has(d.key), top = inHero.has(d.key);
+                return (
+                  <div key={d.key} className={`hb-lib-it ${on || top ? "is-in" : ""}`}>
+                    <span className={`hb-lib-pic ${d.fig ? "is-fig" : ""}`}><Glyph g={d.glyph} /></span>
+                    <span className="hb-lib-txt">
+                      <b>{d.title}</b>
+                      <small>{d.hint}</small>
+                      {(on || top) && <span className="hb-lib-where">{[on && "On the board", top && "In the header"].filter(Boolean).join(" · ")}</span>}
+                    </span>
+                    <span className="hb-lib-acts">
+                      {on
+                        ? <button type="button" className="is-rm" onClick={() => onRemoveKey(d.key)} title="Take it off the board">Remove</button>
+                        : <button type="button" className="is-add" onClick={() => onAddCard(d.key)} title="Add it to the board">{d.fig ? "+ Card" : "+ Add"}</button>}
+                      {d.fig && (top
+                        ? <button type="button" className="is-rm" onClick={() => onRemoveFig(d.key)} title="Take it out of the header">Header ✓</button>
+                        : <button type="button" className="is-add is-alt" disabled={heroFull} onClick={() => onAddFig(d.key)} title={heroFull ? `The header holds ${MAX_FIGS} figures` : "Put it in the header"}>+ Header</button>)}
+                    </span>
+                  </div>
+                );
+              })}
+            </section>
+          );
+        })}
+      </div>
+      <footer className="hb-lib-f">You see what your access lets you open. Ask an admin for more.</footer>
+    </aside>,
+    document.body,
+  );
+}
+
 export default function HomePage() {
   const { role } = useAuth();
+  const nav = useNavigate();
+  const pa = usePageAccess();
   const [uid, setUid] = useState<string | null>(null);
   const [me, setMe] = useState<Me | null>(null);
   const [hoursPerDay, setHoursPerDay] = useState(8);
@@ -292,47 +1264,262 @@ export default function HomePage() {
   const hello = `${greeting()}${me?.firstName ? `, ${me.firstName}` : ""}`;
   const alerts = useHomeAlerts(uid && me ? uid : null);
 
+  /* ---- the board: saved with your profile; while adjusting, a draft ---- */
+  const [board, setBoard] = useState<BoardState | null>(null);
+  const [draft, setDraft] = useState<BoardState | null>(null);
+  const [lib, setLib] = useState<"cards" | "figs" | null>(null);
+  const [flash, setFlash] = useState<string | null>(null);
+  const [saveErr, setSaveErr] = useState(false);
+  const prefsRef = useRef<Record<string, any>>({});
+  useEffect(() => {
+    if (!me) return;
+    let alive = true;
+    loadPrefs().catch(() => ({} as Record<string, any>)).then((p) => {
+      if (!alive) return;
+      prefsRef.current = p ?? {};
+      setBoard(readBoard(p?.[BOARD_PREF]) ?? defaultBoard(area, p ?? {}));
+    });
+    return () => { alive = false; };
+  }, [me?.id, area]); // eslint-disable-line react-hooks/exhaustive-deps
+  const editing = draft !== null;
+  const live = draft ?? board;
+  const access: Access = useMemo(() => ({
+    canSee: pa.canSee, canPanel: pa.canPanel, dept: me?.department ?? pa.department ?? null,
+    full: !!me?.isSuper || r === "boss" || levelBase(pa.level) === "boss",
+  }), [pa.canSee, pa.canPanel, pa.department, pa.level, me?.department, me?.isSuper, r]);
+  const okKey = (k: string) => !!DEF[k] && pa.ready && DEF[k].allow(access);
+  const items = useMemo(() => (live ? compactAll(live.items.filter((i) => okKey(i.key))) : []), [live, access, pa.ready]); // eslint-disable-line react-hooks/exhaustive-deps
+  const figs = useMemo(() => (live ? live.figs.filter(okKey) : []), [live, access, pa.ready]); // eslint-disable-line react-hooks/exhaustive-deps
+  const heroMode = live?.hero ?? "full";
+
+  const change = (f: (b: BoardState) => BoardState) => setDraft((d) => (d ? f(d) : d));
+  const startAdjust = () => { if (board) { setDraft({ ...board, items: compactAll(board.items.filter((i) => okKey(i.key))) }); } };
+  const finish = (save: boolean) => {
+    if (save && draft) {
+      setBoard(draft);
+      setSaveErr(false);
+      savePref(BOARD_PREF, draft).catch(() => setSaveErr(true));
+    }
+    setDraft(null); setLib(null);
+  };
+  const reset = () => setDraft(defaultBoard(area, prefsRef.current));
+  const addCard = (key: string) => {
+    const d = DEF[key];
+    if (!d || !draft) return;
+    const [w, h] = d.def;
+    const at = firstFit(items, w, h);
+    const it = { id: newId(), key, x: at.x, y: at.y, w, h };
+    change((b) => ({ ...b, items: compactAll([...items, it]) }));
+    setFlash(it.id);
+    window.setTimeout(() => setFlash((f) => (f === it.id ? null : f)), 1600);
+    window.setTimeout(() => document.querySelector(`.hb-card[data-id="${it.id}"]`)?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 60);
+  };
+  const removeCard = (id: string) => change((b) => ({ ...b, items: compactAll(items.filter((i) => i.id !== id)) }));
+  const removeKey = (key: string) => change((b) => ({ ...b, items: compactAll(items.filter((i) => i.key !== key)) }));
+  const addFig = (key: string) => change((b) => ({ ...b, hero: "full", figs: [...figs.filter((k) => k !== key), key].slice(0, MAX_FIGS) }));
+  const removeFig = (key: string) => change((b) => ({ ...b, figs: figs.filter((k) => k !== key) }));
+  const openCard = (it: BoardItem) => {
+    const go = DEF[it.key]?.go;
+    if (!go) return;
+    if (go[1]) goToSection(nav, go[0], go[1]); else nav(go[0]);
+  };
+  // leaving the page half-way through: nothing is saved
+  useEffect(() => {
+    if (!editing) return;
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape" && !lib && !document.querySelector(".hb-sizes")) finish(false); };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [editing, lib]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ---- the slots each source draws into ---- */
+  const [els, setEls] = useState<Record<string, HTMLElement>>({});
+  const refs = useRef(new Map<string, (el: HTMLElement | null) => void>());
+  const slotRef = useCallback((id: string) => {
+    let f = refs.current.get(id);
+    if (!f) {
+      f = (el: HTMLElement | null) => setEls((m) => {
+        if (el) return m[id] === el ? m : { ...m, [id]: el };
+        if (!(id in m)) return m;
+        const next = { ...m }; delete next[id]; return next;
+      });
+      refs.current.set(id, f);
+    }
+    return f;
+  }, []);
+  const [livePreview, setLivePreview] = useState<BoardItem[] | null>(null);
+  useEffect(() => { if (!editing) setLivePreview(null); }, [editing]);
+  const slots = useMemo(() => {
+    const out: Record<Dept, HomeSlot[]> = { general: [], sales: [], consultancy: [], marketing: [], management: [] };
+    (livePreview ?? items).forEach((it) => {
+      const el = els[it.id];
+      const key = shownKey(it);
+      if (el && DEF[key]) out[DEF[key].src].push({ id: it.id, key, el });
+    });
+    if (heroMode === "full") figs.forEach((k) => { const el = els[`fig:${k}`]; if (el) out[DEF[k].src].push({ id: `fig:${k}`, key: k, el }); });
+    return out;
+  }, [items, livePreview, figs, heroMode, els]);
+  const needCal = slots.general.some((s) => s.key === "booked") && !items.some((i) => shownKey(i) === "calendar");
+
+  /* ---- row height: 22 rows fill the screen under the header ---- */
+  const boardWrap = useRef<HTMLDivElement>(null);
+  const [step, setStep] = useState(34);
+  useLayoutEffect(() => {
+    const m = () => {
+      const el = boardWrap.current;
+      if (!el) return;
+      const top = el.getBoundingClientRect().top + scrollerOf(el).scrollTop;
+      const avail = window.innerHeight - top - 22;
+      setStep(Math.max(26, Math.min(56, (avail + GAP) / SCREEN_ROWS)));
+    };
+    m();
+    const ro = typeof ResizeObserver !== "undefined" && barRef.current ? new ResizeObserver(m) : null;
+    if (barRef.current) ro?.observe(barRef.current);
+    window.addEventListener("resize", m);
+    return () => { ro?.disconnect(); window.removeEventListener("resize", m); };
+  }, [!!live, heroMode, figs.length > 0]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ---- the header's figures: drag to reorder while adjusting ---- */
+  const figsRef = useRef<HTMLDivElement>(null);
+  const [figDrag, setFigDrag] = useState<string | null>(null);
+  const grabFig = (k: string) => (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    setFigDrag(k);
+    const move = (ev: PointerEvent) => {
+      const boxes = [...(figsRef.current?.querySelectorAll<HTMLElement>(".hb-fig[data-k]") ?? [])];
+      const to = boxes.findIndex((b) => { const r = b.getBoundingClientRect(); return ev.clientX >= r.left && ev.clientX <= r.right; });
+      if (to < 0) return;
+      setDraft((d) => {
+        if (!d) return d;
+        const cur = d.figs.filter((x) => DEF[x] && pa.ready && DEF[x].allow(access));
+        const from = cur.indexOf(k);
+        if (from < 0 || from === to) return d;
+        const next = [...cur]; next.splice(from, 1); next.splice(to, 0, k);
+        return { ...d, figs: next };
+      });
+    };
+    const up = () => { setFigDrag(null); window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+  const glow = (e: React.PointerEvent<HTMLElement>) => {
+    const b = e.currentTarget.getBoundingClientRect();
+    e.currentTarget.style.setProperty("--mx", `${e.clientX - b.left}px`);
+    e.currentTarget.style.setProperty("--my", `${e.clientY - b.top}px`);
+  };
+  const dateLabel = new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
+  const showFigs = heroMode === "full" && (figs.length > 0 || editing);
+
   return (
-    <div ref={rootRef} className={`home ${area === "consultancy" || area === "sales" ? "is-cons" : ""} ${area === "sales" ? "is-sales" : ""} ${booting ? (boot.mode === "arrive" ? "is-held" : "is-held-grid") : ""} ${boot.phase === "out" ? `is-revealing is-revealing-${boot.mode}` : ""}`}>
+    <div ref={rootRef} className={`home is-cons is-board ${area === "sales" ? "is-sales" : ""} ${editing ? "is-adjusting" : ""} ${booting ? (boot.mode === "arrive" ? "is-held" : "is-held-grid") : ""} ${boot.phase === "out" ? `is-revealing is-revealing-${boot.mode}` : ""}`}>
       {boot.phase !== "none" && <HomeBoot boot={boot} details={details} hello={hello} top={bootTop} />}
 
-      {area !== "consultancy" && area !== "sales" && (
-        <header className="home-bar" ref={barRef}>
-          <span className="home-logo-mini" aria-hidden="true"><NextLogo /></span>
-          <h1 className="home-title">{greeting()}{me?.firstName ? <>, <em>{me.firstName}</em></> : ""}</h1>
-          <span className="home-date">{new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}</span>
-          {area && <span className="home-area">{areaTitle(area)}</span>}
-          {uid && me && <HomeAlertsBell h={alerts} />}
-        </header>
+      <section className={`chx-hero hb-hero is-${heroMode} ${editing ? "is-editing" : ""}`} ref={barRef} onPointerMove={glow} aria-label="Your day">
+        <i className="chx-hero-grid" aria-hidden="true" />
+        <i className="chx-hero-glow" aria-hidden="true" />
+        <div className="chx-hero-top">
+          <div className="chx-hello">
+            <h1 className="chx-greet">{hello}</h1>
+            <span className="chx-date">{dateLabel}</span>
+          </div>
+          <span className="chx-grow" />
+          {uid && me && <HomeAlertsBell h={alerts} tone="dark" />}
+          {editing && (
+            <button type="button" className="chx-edit is-on" onClick={() => finish(true)} title="Save your home as it is">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+              Done
+            </button>
+          )}
+          <ActionsMenu items={board ? [{
+            key: "adjust-home", group: "Home", label: "Adjust home", hint: "Move, resize, add or take away cards", tone: "green", shortcut: "A",
+            icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="9" rx="2" /><rect x="13.5" y="3.5" width="7" height="5" rx="2" /><rect x="13.5" y="11.5" width="7" height="9" rx="2" /><rect x="3.5" y="15.5" width="7" height="5" rx="2" /></svg>,
+            onSelect: () => { if (!editing) startAdjust(); },
+          }] : []} />
+        </div>
+        {showFigs && (
+          <div className="chx-figs hb-figs" ref={figsRef} style={{ ["--n" as string]: Math.max(1, figs.length + (editing && figs.length < MAX_FIGS ? 1 : 0)) } as CSSProperties}>
+            {figs.map((k) => (
+              <div key={k} className={`hb-fig ${figDrag === k ? "is-held" : ""}`} data-k={k}>
+                <div className="hb-slot" ref={slotRef(`fig:${k}`)} />
+                {editing && (
+                  <>
+                    <div className="hb-fig-veil" onPointerDown={grabFig(k)} title="Drag to reorder" />
+                    <button type="button" className="hb-fig-x" onClick={() => removeFig(k)} aria-label={`Take ${DEF[k]?.title} out of the header`} title="Take it out of the header">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M7 7l10 10M17 7L7 17" /></svg>
+                    </button>
+                  </>
+                )}
+              </div>
+            ))}
+            {editing && figs.length < MAX_FIGS && (
+              <button type="button" className="hb-fig-add" onClick={() => setLib("figs")}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
+                <span><b>Add a figure</b><small>{figs.length ? `${MAX_FIGS - figs.length} more fit here` : "Any figure you can see"}</small></span>
+              </button>
+            )}
+          </div>
+        )}
+      </section>
+
+      <div ref={boardWrap} className="hb-wrap">
+        {!uid || !me || !live || !pa.ready ? (
+          <div className="home-wait" aria-hidden="true" />
+        ) : items.length === 0 && !editing ? (
+          <div className="hb-empty">
+            <b>Your home is empty</b>
+            <span>Add the cards you want to see first thing.</span>
+            <button type="button" onClick={() => { startAdjust(); setLib("cards"); }}>Add cards</button>
+          </div>
+        ) : (
+          <HomeBoard items={items} editing={editing} step={step} slotRef={slotRef} flash={flash} onOpen={openCard} onPreview={setLivePreview}
+            onChange={(next) => change((b) => ({ ...b, items: next }))} onRemove={removeCard} />
+        )}
+      </div>
+
+      {/* the sources: each only while one of its cards is on show */}
+      {uid && me && (
+        <>
+          <GeneralCards slots={slots.general} userId={uid} hoursPerDay={hoursPerDay} needCal={needCal} />
+          {slots.consultancy.length > 0 && <ConsultancyHome userId={me.id} isLead={isLead} hoursPerDay={hoursPerDay} slots={slots.consultancy} />}
+          {slots.sales.length > 0 && <SalesHome userId={me.id} seesTeam={seesSalesTeam} slots={slots.sales} />}
+          {slots.marketing.length > 0 && <MarketingCards slots={slots.marketing} />}
+          {slots.management.length > 0 && <ManagementCards slots={slots.management} />}
+        </>
       )}
 
-      {!uid || !me ? (
-        <div className="home-wait" aria-hidden="true" />
-      ) : area === "consultancy" ? (
-        <ConsultancyHome userId={me.id} isLead={isLead} hoursPerDay={hoursPerDay}
-          greeting={greeting()} firstName={me.firstName} heroRef={barRef}
-          alertsBell={<HomeAlertsBell h={alerts} tone="dark" />}
-          calendar={<HomeCalendar userId={uid} hoursPerDay={hoursPerDay} />}
-          desk={<TicketDesk />} />
-      ) : area === "sales" ? (
-        <SalesHome userId={me.id} seesTeam={seesSalesTeam}
-          greeting={greeting()} firstName={me.firstName} heroRef={barRef}
-          alertsBell={<HomeAlertsBell h={alerts} tone="dark" />}
-          calendar={<HomeCalendar userId={uid} hoursPerDay={hoursPerDay} />}
-          desk={<TicketDesk />} />
-      ) : (
-        <div className={`home-grid ${me && !area ? "is-solo" : ""}`}>
-          <aside className="home-side">
-            <HomeCalendar userId={uid} hoursPerDay={hoursPerDay} />
-            <HomeTodo />
-          </aside>
-          {area && (
-            <main className="home-main">
-              {area === "management" && <ManagementHome />}
-            </main>
-          )}
-        </div>
+      {editing && createPortal(
+        <div className="hb-dock" role="toolbar" aria-label="Adjust your home">
+          <span className="hb-dock-t">
+            <b>Adjusting your home</b>
+            <small>Drag a card to move it · pull its edge to resize</small>
+          </span>
+          <button type="button" className="hb-dock-add" onClick={() => setLib(lib ? null : "cards")} aria-expanded={!!lib}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
+            Add cards
+          </button>
+          <span className="hb-dock-seg" role="radiogroup" aria-label="Header">
+            <span className="hb-dock-k">Header</span>
+            <button type="button" role="radio" aria-checked={heroMode === "full"} className={heroMode === "full" ? "is-on" : ""} onClick={() => change((b) => ({ ...b, hero: "full" }))}>With figures</button>
+            <button type="button" role="radio" aria-checked={heroMode === "compact"} className={heroMode === "compact" ? "is-on" : ""} onClick={() => change((b) => ({ ...b, hero: "compact" }))}>One line</button>
+          </span>
+          <span className="hb-dock-sep" />
+          <button type="button" className="hb-dock-btn" onClick={reset} title={`Back to the ${areaTitle(area).toLowerCase()} home everyone starts with`}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4.5h4.5" /></svg>
+            Reset
+          </button>
+          <button type="button" className="hb-dock-btn" onClick={() => finish(false)}>Cancel</button>
+          <button type="button" className="hb-dock-done" onClick={() => finish(true)}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+            Done
+          </button>
+        </div>,
+        document.body,
       )}
+      {editing && lib && live && (
+        <CardLibrary access={access} live={{ ...live, items, figs }} focus={lib}
+          onAddCard={addCard} onAddFig={addFig} onRemoveKey={removeKey} onRemoveFig={removeFig} onClose={() => setLib(null)} />
+      )}
+      {saveErr && <p className="hb-err" role="alert">Your layout couldn't be saved. It stays for now; try Adjust → Done again.</p>}
     </div>
   );
 }

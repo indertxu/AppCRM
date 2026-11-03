@@ -267,7 +267,8 @@ export default function BacklogPanel({
   const [hover, setHover] = useState<number | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [onlyLeft, setOnlyLeft] = useState(true);
-  const [onlyUnowned, setOnlyUnowned] = useState(false);
+  /** (the "nobody holds this role" notice is gone: the whole backlog always shows) */
+  const onlyUnowned = false;
   /** Active backlog only (default), or active + the projects on hold. Closed projects never count. */
   const [withHold, setWithHold] = useState(false);
 
@@ -981,21 +982,6 @@ export default function BacklogPanel({
             <span>Only projects with days left</span>
           </label>
         </div>
-
-        {/* ---------- backlog nobody owns yet ---------- */}
-        {!lockUser && !onlyUsers && unownedBacklog.days > 0.05 && (
-          <div className={`bl-unowned ${onlyUnowned ? "is-active" : ""}`}>
-            <span className="bl-unowned-ico"><BlIcon d={BL_ICON.warn} w={1.9} /></span>
-            <span>
-              <b>{unownedBacklog.days.toFixed(1)}d</b> ({blEur(unownedBacklog.value)} €) of consultancy backlog across{" "}
-              <b>{unownedBacklog.projectCount}</b> project{unownedBacklog.projectCount === 1 ? "" : "s"} is on a role nobody on the team holds yet.
-              {" "}Add the person who covers that role to the project's team, and it'll show up under them here.
-            </span>
-            <button type="button" className="bl-unowned-btn" onClick={() => setOnlyUnowned((v) => !v)}>
-              {onlyUnowned ? "Show all" : `Show the ${unownedBacklog.projectCount}`}
-            </button>
-          </div>
-        )}
 
         {/* ---------- projects (this is the only part that scrolls) ---------- */}
         <div className="bl-scroll">

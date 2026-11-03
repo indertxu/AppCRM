@@ -9,7 +9,7 @@ import {
   ENTITIES, entityOf, GROUP_LABEL, OPS, DEFAULT_OP, NO_VALUE, PERIODS, FN_LABEL,
   loadCrmData, buildCrmRows, buildCrmFields, aggregateCrm, partsOf, isListLink, ROW_CAP, testTree, countRules, isGroup, emptyTree, forgetCrmData,
   condComplete, toCell, showCell, sortValue, uid, norm,
-  type Cond, type CondGroup, type Field, type EntityKey, type CrmFn, type CrmRow, type CrmData, type Kind,
+  type Cond, type CondGroup, type Field, type EntityKey, type CrmFn, type CrmRow, type CrmData, type Kind, type Agg,
 } from "./salesReportEngine";
 import "./SalesReport.css";
 
@@ -43,6 +43,9 @@ export interface CrmReport {
   figures?: CrmFigure[];
 }
 interface SavedReport { id: string; name: string; owner_id: string | null; shared: boolean; updated_at: string; config: any }
+/** One of your folders of saved reports (93_sales_report_folders.sql): yours alone, reports shared with you included. */
+interface ReportFolder { id: string; name: string; color: string | null; sort: number; report_ids: string[] }
+const FOLDER_COLORS = ["#0a6f4d", "#2f6fd6", "#7c3aed", "#c2410c", "#b7791f", "#0f766e", "#be185d", "#475569"];
 
 const DEFAULT_COLS: Record<EntityKey, string[]> = {
   deal: ["deal.name", "deal.pipeline", "deal.phase", "deal.owner", "deal.revenue", "deal.weighted", "deal.close"],
@@ -52,7 +55,7 @@ const DEFAULT_COLS: Record<EntityKey, string[]> = {
   project: ["project.name", "client.name", "project.type", "project.status_label", "project.value"],
   contract: ["client.name", "contract.product", "contract.kind", "contract.annual_now", "contract.value", "contract.end"],
   invoice: ["client.name", "invoice.period", "invoice.net", "invoice.amount", "invoice.status_label", "invoice.due_date", "invoice.days_late"],
-  ticket: ["ticket.title", "client.name", "ticket.stage_label", "ticket.priority_label", "ticket.assignee", "ticket.created_at"],
+  ticket: ["ticket.title", "ticket.what", "client.name", "ticket.stage_label", "ticket.priority_label", "ticket.assignee", "ticket.created_at"],
 };
 const newReport = (source: EntityKey = "deal"): CrmReport => ({
   v: 2, name: "Untitled report", source, filter: emptyTree(), cols: DEFAULT_COLS[source], labels: {},
@@ -73,9 +76,9 @@ const TEMPLATES: { title: string; hint: string; make: () => CrmReport }[] = [
   { title: "Overdue invoices", hint: "Sent, not paid and past their due date", make: () => ({ ...newReport("invoice"), name: "Overdue invoices",
     filter: { id: uid(), match: "all", items: [rule("invoice.status_label", "in", { vals: ["Overdue"] })] },
     sort: { key: "invoice.days_late", dir: "desc" }, charts: [{ id: uid(), title: "Owed by client", type: "hbar", dim: "client.name", fn: "sum", value: "invoice.amount", split: null }] }) },
-  { title: "Open tickets", hint: "By priority and who has them", make: () => ({ ...newReport("ticket"), name: "Open tickets",
+  { title: "Open tickets & tasks", hint: "By priority and who has them", make: () => ({ ...newReport("ticket"), name: "Open tickets & tasks",
     filter: { id: uid(), match: "all", items: [rule("ticket.open", "in", { vals: ["Yes"] })] },
-    charts: [{ id: uid(), title: "By priority", type: "donut", dim: "ticket.priority_label", fn: "count", value: null, split: null }, { id: uid(), title: "By assignee and stage", type: "stacked", dim: "ticket.assignee", fn: "count", value: null, split: "ticket.stage_label" }] }) },
+    charts: [{ id: uid(), title: "Tickets and tasks", type: "donut", dim: "ticket.what", fn: "count", value: null, split: null }, { id: uid(), title: "By priority", type: "donut", dim: "ticket.priority_label", fn: "count", value: null, split: null }, { id: uid(), title: "By assignee and stage", type: "stacked", dim: "ticket.assignee", fn: "count", value: null, split: "ticket.stage_label" }] }) },
   { title: "Companies by type & country", hint: "The CRM at a glance", make: () => ({ ...newReport("company"), name: "Companies by type & country",
     charts: [{ id: uid(), title: "By type", type: "bar", dim: "company.types", fn: "count", value: null, split: null }, { id: uid(), title: "By country", type: "donut", dim: "company.country_name", fn: "count", value: null, split: null }] }) },
 ];
@@ -117,6 +120,8 @@ const I = {
   copy: "M9 9h11v11H9zM5 15H4V4h11v1", search: "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.3-4.3", refresh: "M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5",
   group: "M4 6h16M8 12h12M12 18h8M4 6v12", spark: "M12 3l1.8 4.6L18 9l-4.2 1.4L12 15l-1.8-4.6L6 9l4.2-1.4z",
   sliders: "M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1M15 4v4M9 10v4M17 16v4",
+  folder: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
+  more: "M5 11.2a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6zM12 11.2a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6zM19 11.2a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6z",
 
 };
 const KIND_ICON: Record<Kind, string> = { text: "Aa", number: "#", money: "€", percent: "%", date: "◷", enum: "≡" };
@@ -141,14 +146,24 @@ function moveBy<T extends { id: string }>(xs: T[], from: string, to: string, aft
 const glabel = (g: string) => GROUP_LABEL[g as EntityKey] ?? g;
 
 /** A field picker: every field, grouped by the part of the CRM it belongs to. */
-function FieldPick({ fields, value, onChange, placeholder, filter }: { fields: Field[]; value: string | null; onChange: (k: string) => void; placeholder: string; filter?: (f: Field) => boolean }) {
-  const opts: SmfOption[] = fields.filter((f) => !filter || filter(f)).map((f) => ({ value: f.key, label: f.label, group: glabel(f.group), hint: KIND_ICON[f.kind] }));
+function FieldPick({ fields, value, onChange, placeholder, filter, main }: { fields: Field[]; value: string | null; onChange: (k: string) => void; placeholder: string; filter?: (f: Field) => boolean; main?: string }) {
+  // a field of another part says whose it is ("Company · Country"), so a picked rule reads right
+  const opts: SmfOption[] = fields.filter((f) => !filter || filter(f)).map((f) => ({ value: f.key, label: main && f.group !== main && !norm(f.label).includes(norm(glabel(f.group))) ? `${glabel(f.group)} · ${f.label}` : f.label, group: glabel(f.group), hint: KIND_ICON[f.kind] }));
   return <SalesMultiFilter single values={value ? [value] : []} onChange={(v) => v[0] && onChange(v[0])} options={opts} placeholder={placeholder} searchFrom={8} />;
 }
 
+/** The values a rule can pick, each with how many rows it would keep given the other rules. */
+type ValueOpts = (c: Cond, f: Field) => SmfOption[];
+/** The rules without one of them (to count what the others leave). */
+const withoutRule = (g: CondGroup, id: string): CondGroup => ({ ...g, items: g.items.filter((it) => it.id !== id).map((it) => (isGroup(it) ? withoutRule(it, id) : it)) });
+/** Every complete rule in a tree. */
+const rulesOf = (g: CondGroup, fieldByKey: Map<string, Field>): Cond[] => g.items.flatMap((it) => (isGroup(it) ? rulesOf(it, fieldByKey) : condComplete(it, fieldByKey.get(it.field)) ? [it] : []));
+
 /** One rule: field · how · value(s). */
-function RuleRow({ c, fields, fieldByKey, values, onChange, onRemove }: {
-  c: Cond; fields: Field[]; fieldByKey: Map<string, Field>; values: (f: Field) => string[];
+function RuleRow({ c, fields, fieldByKey, values, opts, onChange, onRemove, main, left, noun }: {
+  c: Cond; fields: Field[]; fieldByKey: Map<string, Field>; values: (f: Field) => string[]; opts: ValueOpts; main: string;
+  /** How many are left once this rule (and the ones above it) apply. */
+  left?: number; noun?: (n: number) => string;
   onChange: (c: Cond) => void; onRemove: () => void;
 }) {
   const f = fieldByKey.get(c.field);
@@ -158,7 +173,7 @@ function RuleRow({ c, fields, fieldByKey, values, onChange, onRemove }: {
   const set = (p: Partial<Cond>) => onChange({ ...c, ...p });
   return (
     <div className={`rp-rule ${f && condComplete(c, f) ? "is-ok" : ""}`}>
-      <div className="rp-rule-f"><FieldPick fields={fields} value={c.field || null} placeholder="Pick a field…" onChange={(k) => { const nf = fieldByKey.get(k); set({ field: k, op: nf ? firstOp(nf) : "contains", a: "", b: "", vals: [] }); }} /></div>
+      <div className="rp-rule-f"><FieldPick fields={fields} main={main} value={c.field || null} placeholder="Pick a field…" onChange={(k) => { const nf = fieldByKey.get(k); set({ field: k, op: nf ? firstOp(nf) : "contains", a: "", b: "", vals: [] }); }} /></div>
       {f && (
         <div className="rp-rule-op">
           <SalesMultiFilter single values={[c.op]} onChange={(v) => v[0] && set({ op: v[0] })} options={ops.map((o) => ({ value: o.value, label: o.label }))} placeholder="How" />
@@ -167,7 +182,7 @@ function RuleRow({ c, fields, fieldByKey, values, onChange, onRemove }: {
       {f && !NO_VALUE.has(c.op) && (
         <div className="rp-rule-v">
           {f.kind === "enum" || (f.kind === "text" && (c.op === "in" || c.op === "not_in")) ? (
-            <SalesMultiFilter values={c.vals} onChange={(v) => set({ vals: v })} options={values(f).map((v) => ({ value: v, label: v }))} placeholder="Pick values…" noun="values" searchFrom={8} />
+            <SalesMultiFilter values={c.vals} onChange={(v) => set({ vals: v })} options={opts(c, f)} placeholder="Pick values…" noun="values" searchFrom={8} />
           ) : f.kind === "date" ? (
             c.op === "in_period" ? (
               <SalesMultiFilter single values={c.a ? [c.a] : []} onChange={(v) => v[0] && set({ a: v[0] })} options={PERIODS.filter((p) => p.key !== "all" && p.key !== "custom").map((p) => ({ value: p.key, label: p.label, group: p.group }))} placeholder="Pick a period…" />
@@ -187,14 +202,16 @@ function RuleRow({ c, fields, fieldByKey, values, onChange, onRemove }: {
           )}
         </div>
       )}
+      {left != null && <span className={`rp-left ${left === 0 ? "is-zero" : ""}`} title={left === 0 ? "Nothing is left after this rule: change it, or take it out" : "How many are left after this rule and the ones above it"}>{left.toLocaleString("en-GB")} {noun ? noun(left) : "left"}</span>}
       <button type="button" className="rp-x" onClick={onRemove} aria-label="Remove this rule"><Ico d={I.x} w={2.4} /></button>
     </div>
   );
 }
 
 /** A group of rules — all / any / none of them — with rules and more groups inside. */
-function RuleGroup({ g, depth, fields, fieldByKey, values, onChange, onRemove }: {
-  g: CondGroup; depth: number; fields: Field[]; fieldByKey: Map<string, Field>; values: (f: Field) => string[];
+function RuleGroup({ g, depth, fields, fieldByKey, values, opts, onChange, onRemove, main, left, noun }: {
+  g: CondGroup; depth: number; fields: Field[]; fieldByKey: Map<string, Field>; values: (f: Field) => string[]; opts: ValueOpts; main: string;
+  left?: Map<string, number>; noun?: (n: number) => string;
   onChange: (g: CondGroup) => void; onRemove?: () => void;
 }) {
   const setItem = (i: number, it: Cond | CondGroup) => onChange({ ...g, items: g.items.map((x, j) => (j === i ? it : x)) });
@@ -220,8 +237,9 @@ function RuleGroup({ g, depth, fields, fieldByKey, values, onChange, onRemove }:
           <div className="rp-grp-it" key={it.id}>
             {i > 0 && <span className="rp-join">{word}</span>}
             {isGroup(it)
-              ? <RuleGroup g={it} depth={depth + 1} fields={fields} fieldByKey={fieldByKey} values={values} onChange={(x) => setItem(i, x)} onRemove={() => drop(i)} />
-              : <RuleRow c={it} fields={fields} fieldByKey={fieldByKey} values={values} onChange={(x) => setItem(i, x)} onRemove={() => drop(i)} />}
+              ? <RuleGroup g={it} depth={depth + 1} fields={fields} fieldByKey={fieldByKey} values={values} opts={opts} main={main} onChange={(x) => setItem(i, x)} onRemove={() => drop(i)} />
+              : <RuleRow c={it} fields={fields} fieldByKey={fieldByKey} values={values} opts={opts} main={main} left={left?.get(it.id)} noun={noun} onChange={(x) => setItem(i, x)} onRemove={() => drop(i)} />}
+            {isGroup(it) && left?.has(it.id) && <span className={`rp-left is-grp ${left.get(it.id) === 0 ? "is-zero" : ""}`}>{left.get(it.id)!.toLocaleString("en-GB")} {noun ? noun(left.get(it.id)!) : "left"} after this group</span>}
           </div>
         ))}
       </div>
@@ -237,11 +255,30 @@ function RuleGroup({ g, depth, fields, fieldByKey, values, onChange, onRemove }:
 
 export default function ReportsPage() {
   const [saved, setSaved] = useState<SavedReport[]>([]);
+  /* ---- folders of saved reports ---- */
+  const [folders, setFolders] = useState<ReportFolder[]>([]);
+  const [foldersOk, setFoldersOk] = useState(true);
+  const [closed, setClosed] = useState<Set<string>>(() => { try { return new Set(JSON.parse(localStorage.getItem("rp-closed-folders") || "[]")); } catch { return new Set(); } });
+  const [fNew, setFNew] = useState<string | null>(null);
+  const [fEdit, setFEdit] = useState<{ id: string; name: string } | null>(null);
+  const [fMenu, setFMenu] = useState<string | null>(null);
+  const [moveOpen, setMoveOpen] = useState<string | null>(null);
+  const [dragRep, setDragRep] = useState<string | null>(null);
+  const [dropOn, setDropOn] = useState<string | null>(null);
+  /** where the open folder / move menu sits (fixed, so the list's scrolling never clips it) */
+  const [menuAt, setMenuAt] = useState<CSSProperties>({});
+  const placeMenu = (el: HTMLElement) => {
+    const r = el.getBoundingClientRect();
+    const left = Math.max(8, Math.min(window.innerWidth - 228, r.left - 6));
+    setMenuAt(r.bottom + 280 > window.innerHeight ? { left, bottom: window.innerHeight - r.top + 4 } : { left, top: r.bottom + 4 });
+  };
   const [tableMissing, setTableMissing] = useState(false);
   const [me, setMe] = useState<string | null>(null);
   const [cfg, setCfg] = useState<CrmReport | null>(null);
   const [reportId, setReportId] = useState<string | null>(null);
   const [shared, setShared] = useState(false);
+  /** Who the open report belongs to (null: a new one, yours). */
+  const [owner, setOwner] = useState<string | null>(null);
   const [snap, setSnap] = useState("");
   const [mode, setMode] = useState<"build" | "view">("build");
   const [step, setStep] = useState(0);
@@ -275,10 +312,70 @@ export default function ReportsPage() {
   useEffect(() => { supabase.auth.getSession().then(({ data: s }) => setMe(s?.session?.user?.id ?? null)); void loadSaved(); }, []);
 
   async function loadSaved() {
-    const { data: rows, error } = await supabase.from("sales_reports").select("id, name, owner_id, shared, updated_at, config").order("updated_at", { ascending: false });
+    const [{ data: rows, error }, fo] = await Promise.all([
+      supabase.from("sales_reports").select("id, name, owner_id, shared, updated_at, config").order("updated_at", { ascending: false }),
+      supabase.from("sales_report_folders").select("id, name, color, sort, report_ids").order("sort").order("created_at"),
+    ]);
     if (error) { setTableMissing(true); return; }
     setSaved((rows ?? []) as SavedReport[]);
+    if (fo.error) setFoldersOk(false);
+    else { setFoldersOk(true); setFolders(((fo.data ?? []) as any[]).map((f) => ({ id: f.id, name: f.name ?? "Folder", color: f.color ?? null, sort: Number(f.sort) || 0, report_ids: Array.isArray(f.report_ids) ? f.report_ids : [] }))); }
   }
+  useEffect(() => {
+    if (!fMenu && !moveOpen) return;
+    const k = (e: MouseEvent) => { if (!(e.target as Element)?.closest?.(".rp-fold-menu, .rp-mv-menu, .rp-fold-more, .rp-mv")) { setFMenu(null); setMoveOpen(null); } };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") { setFMenu(null); setMoveOpen(null); } };
+    document.addEventListener("mousedown", k); window.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", k); window.removeEventListener("keydown", esc); };
+  }, [fMenu, moveOpen]);
+  const NEEDS_FOLDERS = "Folders need 93_sales_report_folders.sql in Supabase.";
+  const folderOf = (id: string) => folders.find((f) => f.report_ids.includes(id)) ?? null;
+  const toggleFolder = (id: string) => setClosed((cur) => {
+    const next = new Set(cur); if (next.has(id)) next.delete(id); else next.add(id);
+    try { localStorage.setItem("rp-closed-folders", JSON.stringify([...next])); } catch { /* private mode */ }
+    return next;
+  });
+  const addFolder = async (name: string) => {
+    setFNew(null);
+    if (!name.trim()) return;
+    const res = await supabase.from("sales_report_folders").insert({ name: name.trim(), color: FOLDER_COLORS.find((c) => !folders.some((f) => f.color === c)) ?? FOLDER_COLORS[folders.length % FOLDER_COLORS.length], sort: (folders[folders.length - 1]?.sort ?? 0) + 1 }).select("id, name, color, sort, report_ids").single();
+    if (res.error || !res.data) { setNote(/sales_report_folders|relation|schema cache/i.test(res.error?.message ?? "") ? NEEDS_FOLDERS : res.error?.message ?? "Not saved"); return; }
+    const f = res.data as any;
+    setFolders((xs) => [...xs, { id: f.id, name: f.name, color: f.color, sort: f.sort, report_ids: f.report_ids ?? [] }]);
+  };
+  const patchFolder = async (f: ReportFolder, p: Partial<ReportFolder>) => {
+    setFolders((xs) => xs.map((x) => (x.id === f.id ? { ...x, ...p } : x)));
+    const { error } = await supabase.from("sales_report_folders").update(p).eq("id", f.id);
+    if (error) { setNote(error.message); setFolders((xs) => xs.map((x) => (x.id === f.id ? f : x))); }
+  };
+  const dropFolder = async (f: ReportFolder) => {
+    const n = f.report_ids.filter((id) => saved.some((s) => s.id === id)).length;
+    if (!window.confirm(n ? `Delete the folder “${f.name}”? Its ${n} report${n === 1 ? "" : "s"} stay, just not in a folder.` : `Delete the folder “${f.name}”?`)) return;
+    const { error } = await supabase.from("sales_report_folders").delete().eq("id", f.id);
+    if (error) { setNote(error.message); return; }
+    setFolders((xs) => xs.filter((x) => x.id !== f.id));
+  };
+  /** a report into one of your folders (null: out of every folder) */
+  const moveTo = async (reportId: string, to: string | null) => {
+    const from = folderOf(reportId);
+    if ((from?.id ?? null) === to) return;
+    const before = folders;
+    const next = folders.map((f) => (f.id === to ? { ...f, report_ids: [...f.report_ids.filter((x) => x !== reportId), reportId] } : f.report_ids.includes(reportId) ? { ...f, report_ids: f.report_ids.filter((x) => x !== reportId) } : f));
+    setFolders(next);
+    const changed = next.filter((f) => before.find((b) => b.id === f.id)?.report_ids !== f.report_ids);
+    for (const f of changed) {
+      const { error } = await supabase.from("sales_report_folders").update({ report_ids: f.report_ids }).eq("id", f.id);
+      if (error) { setNote(error.message); setFolders(before); return; }
+    }
+    const rName = saved.find((x) => x.id === reportId)?.name ?? "Report";
+    setNote(to ? `${rName} → ${next.find((f) => f.id === to)?.name ?? "folder"}` : `${rName} is out of its folder`);
+    if (to) setClosed((cur) => { if (!cur.has(to)) return cur; const n2 = new Set(cur); n2.delete(to); return n2; });
+  };
+  const dropTarget = (key: string) => ({
+    onDragOver: (e: RDragEvent) => { if (!dragRep) return; e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (dropOn !== key) setDropOn(key); },
+    onDragLeave: (e: RDragEvent) => { if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) setDropOn((x) => (x === key ? null : x)); },
+    onDrop: (e: RDragEvent) => { e.preventDefault(); const id = dragRep; setDropOn(null); setDragRep(null); if (id) void moveTo(id, key === "none" ? null : key); },
+  });
   const source = cfg?.source ?? null;
   const withKey = (cfg?.with ?? []).join(",");
   const extra = useMemo(() => (withKey ? withKey.split(",") as EntityKey[] : []), [withKey]);
@@ -315,15 +412,86 @@ export default function ReportsPage() {
     };
   }, [allRows]);
 
+  /* ---- how many rows each value would keep, given the other rules (so no pick leads to an empty report by surprise) ---- */
+  const facetCache = useMemo(() => new Map<string, Map<string, number>>(), [allRows, filter, fieldByKey]);
+  const facet = (ruleId: string, f: Field): Map<string, number> => {
+    const k = `${ruleId}|${f.key}`;
+    let m = facetCache.get(k);
+    if (!m) {
+      const out = new Map<string, number>();
+      const others = filter ? withoutRule(filter, ruleId) : null;
+      for (const r of allRows) {
+        if (others && !testTree(others, r, fieldByKey)) continue;
+        const vs = f.list ? f.list(r as any) : (() => { const v = f.get(r as any); return v == null || v === "" ? [] : [String(v)]; })();
+        new Set(vs).forEach((v) => out.set(v, (out.get(v) ?? 0) + 1));
+      }
+      facetCache.set(k, (m = out));
+    }
+    return m;
+  };
+  const valueOpts: ValueOpts = (c, f) => {
+    const m = facet(c.id, f);
+    const all = valuesOf(f).map((v) => ({ v, n: m.get(v) ?? 0 }));
+    const live = all.filter((x) => x.n > 0), dead = all.filter((x) => !x.n);
+    // a long list reads best biggest first; a short one keeps its own order (phases, stages…)
+    if (live.length > 12) live.sort((a, b) => b.n - a.n);
+    return [
+      ...live.map((x) => ({ value: x.v, label: x.v, hint: x.n.toLocaleString("en-US") })),
+      ...dead.map((x) => ({ value: x.v, label: x.v, hint: "0", group: nRulesOther(c) ? "None left with your other rules" : "No records have these", tone: "muted" })),
+    ];
+  };
+  const nRulesOther = (c: Cond) => (filter ? rulesOf(filter, fieldByKey).filter((x) => x.id !== c.id).length : 0);
+  /** Nothing left: the one rule whose removal would bring the most back. */
+  const blocker = useMemo((): { rule: Cond; n: number } | null => {
+    if (!filter || rows.length || !allRows.length) return null;
+    let best: { rule: Cond; n: number } | null = null;
+    for (const r of rulesOf(filter, fieldByKey)) {
+      const t = withoutRule(filter, r.id);
+      let n = 0; for (const x of allRows) if (testTree(t, x, fieldByKey)) n++;
+      if (n > 0 && (!best || n > best.n)) best = { rule: r, n };
+    }
+    return best;
+  }, [filter, rows.length, allRows, fieldByKey]);
+  /** "and" rules, one after the other: how many are left after each (shows where the rows go). */
+  const leftAfter = useMemo(() => {
+    const m = new Map<string, number>();
+    if (!filter || filter.match !== "all") return m;
+    let cur = allRows;
+    for (const it of filter.items) {
+      if (isGroup(it)) {
+        if (!countRules(it)) continue;
+        cur = cur.filter((r) => testTree(it, r, fieldByKey));
+      } else {
+        const f = fieldByKey.get(it.field);
+        if (!condComplete(it, f)) continue;
+        const one: CondGroup = { ...filter, items: [it] };
+        cur = cur.filter((r) => testTree(one, r, fieldByKey));
+      }
+      m.set(it.id, cur.length);
+    }
+    return m;
+  }, [filter, allRows, fieldByKey]);
+  const ruleText = (c: Cond) => {
+    const f = fieldByKey.get(c.field);
+    if (!f) return "a rule";
+    const op = OPS[f.kind].find((o) => o.value === c.op)?.label ?? c.op;
+    const v = NO_VALUE.has(c.op) ? "" : c.vals.length ? c.vals.slice(0, 3).join(", ") + (c.vals.length > 3 ? ` +${c.vals.length - 3}` : "") : c.op === "in_period" ? (PERIODS.find((p) => p.key === c.a)?.label ?? c.a) : c.op === "between" ? `${c.a} and ${c.b}` : c.a;
+    return `${f.label} ${op}${v ? ` ${v}` : ""}`;
+  };
+
   const set = (p: Partial<CrmReport>) => setCfg((c) => (c ? { ...c, ...p } : c));
   const dirty = !!cfg && JSON.stringify(cfg) !== snap;
-  const start = (r: CrmReport, id: string | null = null, sh = false, view = false) => {
-    setCfg(r); setReportId(id); setShared(sh); setSnap(JSON.stringify(r)); setMode(view ? "view" : "build"); setStep(id || view ? 1 : 0); setShown(200);
+  const mine = !owner || !me || owner === me;
+  const start = (r: CrmReport, id: string | null = null, sh = false, view = false, by: string | null = null) => {
+    setCfg(r); setReportId(id); setShared(sh); setOwner(by); setSnap(JSON.stringify(r)); setMode(view ? "view" : "build"); setStep(id || view ? 1 : 0); setShown(200);
   };
   const leaveOk = () => !dirty || window.confirm("Leave this report without saving your changes?");
-  const open = (s: SavedReport) => { if (!leaveOk()) return; start(fromSaved(s.config, s.name), s.id, !!s.shared, true); };
-  const save = async (copy = false) => {
+  const open = (s: SavedReport) => { if (!leaveOk()) return; start(fromSaved(s.config, s.name), s.id, !!s.shared, true, s.owner_id); };
+  const save = async (copyAsked = false) => {
     if (!cfg) return false;
+    // a report someone shared with you can't be changed in place: your changes become your own copy
+    const theirs = !!reportId && !mine;
+    const copy = copyAsked || theirs;
     if (tableMissing) { setNote("Saved reports need the sales_reports table in the database."); return false; }
     setBusy(true);
     const name = (copy ? `${cfg.name} (copy)` : cfg.name).trim() || "Untitled report";
@@ -334,7 +502,7 @@ export default function ReportsPage() {
     setBusy(false);
     if (res.error) { setNote(`Couldn't save: ${res.error.message}`); return false; }
     const c = { ...cfg, name };
-    setCfg(c); setReportId((res.data as any).id); setSnap(JSON.stringify(c)); setNote(copy ? "Saved as a copy" : "Report saved");
+    setCfg(c); setReportId((res.data as any).id); setOwner(me); setSnap(JSON.stringify(c)); setNote(theirs ? "Saved as your own copy (the shared one stays as it was)" : copy ? "Saved as a copy" : "Report saved");
     void loadSaved();
     return true;
   };
@@ -398,9 +566,11 @@ export default function ReportsPage() {
   };
   /** From the result (or the preview): straight to that chart's settings. */
   const editChart = (id: string) => { setMode("build"); setStep(3); setOpenChart(id); scrollToChart.current = id; };
+  /** A field's name in a picker: a field of another part says whose it is ("Company · Country"). */
+  const fl = (f: Field) => (cfg && f.group !== cfg.source && !norm(f.label).includes(norm(glabel(f.group))) ? `${glabel(f.group)} · ${f.label}` : f.label);
   const dimOptions: SmfOption[] = [
-    ...fields.filter((f) => f.kind !== "date").map((f) => ({ value: f.key, label: f.label, group: glabel(f.group), hint: KIND_ICON[f.kind] })),
-    ...fields.filter((f) => f.kind === "date").flatMap((f) => (["month", "quarter", "year", "week"] as const).map((g) => ({ value: `time:${g}:${f.key}`, label: `${f.label} · by ${g}`, group: `Over time · ${glabel(f.group)}` }))),
+    ...fields.filter((f) => f.kind !== "date").map((f) => ({ value: f.key, label: fl(f), group: glabel(f.group), hint: KIND_ICON[f.kind] })),
+    ...fields.filter((f) => f.kind === "date").flatMap((f) => (["month", "quarter", "year", "week"] as const).map((g) => ({ value: `time:${g}:${f.key}`, label: `${fl(f)} · by ${g}`, group: `Over time · ${glabel(f.group)}` }))),
   ];
   const numFields = fields.filter(numeric);
   const nRules = cfg ? countRules(cfg.filter) : 0;
@@ -486,7 +656,15 @@ export default function ReportsPage() {
             <tfoot><tr>{colFields.map((f, i) => <td key={f.key} className={numeric(f) ? "is-num" : ""}>{i === 0 ? `Total · ${sorted.length.toLocaleString("en-GB")}` : numeric(f) ? showCell(f, totalOf(f, sorted)) : ""}</td>)}</tr></tfoot>
           )}
         </table>
-        {sorted.length === 0 && !loading && <p className="rp-none is-big">Nothing matches these rules.</p>}
+        {sorted.length === 0 && !loading && (
+          <div className="rp-nothing">
+            <b>Nothing matches all these rules together.</b>
+            {blocker ? (
+              <span>Without <em>“{ruleText(blocker.rule)}”</em> there would be {blocker.n.toLocaleString("en-GB")} {rowWord(blocker.n)}.
+                <button type="button" className="rp-link" onClick={() => set({ filter: withoutRule(cfg.filter, blocker.rule.id) })}>Take that rule out</button></span>
+            ) : nRules ? <span>Each value shows how many it keeps — pick ones that aren't 0.</span> : <span>There's nothing of this kind in the CRM yet.</span>}
+          </div>
+        )}
         {sorted.length > limit && limit > 20 && <button type="button" className="rp-more" onClick={() => setShown((n) => n + 500)}>Show {Math.min(500, sorted.length - limit).toLocaleString("en-GB")} more · {sorted.length.toLocaleString("en-GB")} in all</button>}
       </div>
     );
@@ -520,11 +698,11 @@ export default function ReportsPage() {
   };
   const chartSub = (ch: CrmChart) => {
     const vf = ch.value ? fieldByKey.get(ch.value) : null;
-    const what = ch.fn === "count" || !vf ? "How many" : `${FN_LABEL[ch.fn]} of ${vf.label.toLowerCase()}`;
+    const what = ch.fn === "count" || !vf ? "How many" : `${FN_LABEL[ch.fn === "sum" && vf.kind === "percent" ? "avg" : ch.fn]} of ${vf.label.toLowerCase()}`;
     const sp = ch.split ? fieldByKey.get(ch.split) : null;
     return [what, `by ${dimLabel(ch.dim).toLowerCase()}`, sp ? `split by ${sp.label.toLowerCase()}` : "", ch.top ? `top ${ch.top}` : "", ch.cumulative ? "running total" : ""].filter(Boolean).join(" · ");
   };
-  const splitOptions: SmfOption[] = [{ value: "__none", label: "No split" }, ...fields.filter((f) => f.kind === "enum" || f.kind === "text").map((f) => ({ value: f.key, label: f.label, group: glabel(f.group), hint: KIND_ICON[f.kind] }))];
+  const splitOptions: SmfOption[] = [{ value: "__none", label: "No split" }, ...fields.filter((f) => f.kind === "enum" || f.kind === "text").map((f) => ({ value: f.key, label: fl(f), group: glabel(f.group), hint: KIND_ICON[f.kind] }))];
   /** Charts that fit this report, one click each (built from its own fields). */
   const suggestions = useMemo((): Omit<CrmChart, "id">[] => {
     if (!cfg || !fields.length) return [];
@@ -551,8 +729,16 @@ export default function ReportsPage() {
     return out.filter((c) => { const k = `${c.type}|${c.dim}|${c.fn}|${c.value}|${c.split}|${c.cumulative}`; if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 8);
   }, [cfg?.source, fields, valuesOf]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // each chart is worked out once per set of rows (not again on every key typed in the report)
+  const aggCache = useMemo(() => new Map<string, Agg>(), [rows, fieldByKey]);
+  const aggOf = (ch: CrmChart): Agg => {
+    const k = JSON.stringify([ch.dim, ch.fn, ch.value, ch.split, !!ch.cumulative, ch.top ?? null, ch.order ?? null]);
+    let a = aggCache.get(k);
+    if (!a) { a = aggregateCrm({ rows, dim: ch.dim, fn: ch.fn, value: ch.value, split: ch.split, fieldByKey, cumulative: ch.cumulative, limit: ch.top === 0 ? 60 : ch.top ?? undefined, order: ch.order, other: ch.top ? false : undefined }); aggCache.set(k, a); }
+    return a;
+  };
   const chartCard = (ch: CrmChart, i: number, mode: "edit" | "view"): ReactNode => {
-    const agg = aggregateCrm({ rows, dim: ch.dim, fn: ch.fn, value: ch.value, split: ch.split, fieldByKey, cumulative: ch.cumulative, limit: ch.top === 0 ? 60 : ch.top ?? undefined, order: ch.order, other: ch.top ? false : undefined });
+    const agg = aggOf(ch);
     const editable = mode === "edit";
     const open = editable && openChart === ch.id;
     const sz = sizeOf(ch);
@@ -595,7 +781,7 @@ export default function ReportsPage() {
             <div className="rp-chart-cfg">
               <label><span>By</span><SalesMultiFilter single values={ch.dim ? [ch.dim] : []} onChange={(v) => v[0] && setChart(ch.id, { dim: v[0] })} options={dimOptions} placeholder="Pick…" searchFrom={8} /></label>
               <label><span>Figure</span><SalesMultiFilter single values={[ch.fn]} onChange={(v) => v[0] && setChart(ch.id, { fn: v[0] as CrmFn, value: v[0] === "count" ? null : ch.value ?? numFields[0]?.key ?? null })} options={(Object.keys(FN_LABEL) as CrmFn[]).map((f) => ({ value: f, label: f === "count" ? "How many" : `${FN_LABEL[f]} of…` }))} placeholder="Figure" /></label>
-              {ch.fn !== "count" && <label><span>Of</span><FieldPick fields={numFields} value={ch.value} onChange={(k) => setChart(ch.id, { value: k })} placeholder="A number…" /></label>}
+              {ch.fn !== "count" && <label><span>Of</span><FieldPick fields={numFields} main={cfg?.source} value={ch.value} onChange={(k) => setChart(ch.id, { value: k })} placeholder="A number…" /></label>}
               <label><span>Split by</span><SalesMultiFilter single values={[ch.split ?? "__none"]} onChange={(v) => setChart(ch.id, { split: v[0] && v[0] !== "__none" ? v[0] : null })} options={splitOptions} placeholder="No split" searchFrom={8} /></label>
             </div>
             <div className="rp-chart-opts">
@@ -632,8 +818,10 @@ export default function ReportsPage() {
     const f = fg.value ? fieldByKey.get(fg.value) : undefined;
     if (fg.fn === "count" || !f) return { label: fg.label || (many ? "Rows" : ent?.plural ?? "Rows"), value: rows.length.toLocaleString("en-GB"), sub: `of ${allRows.length.toLocaleString("en-GB")} · ${nRules ? `${nRules} rule${nRules === 1 ? "" : "s"}` : "no rules"}` };
     const ns = rows.map((r) => Number(f.get(r as any))).filter((n) => Number.isFinite(n));
-    const v = !ns.length ? 0 : fg.fn === "sum" ? ns.reduce((a, b) => a + b, 0) : fg.fn === "avg" ? ns.reduce((a, b) => a + b, 0) / ns.length : fg.fn === "min" ? Math.min(...ns) : Math.max(...ns);
-    const word = { sum: "total", avg: "average", min: "lowest", max: "highest", count: "" }[fg.fn];
+    // a percentage doesn't add up: its "total" is its average
+    const fn = fg.fn === "sum" && f.kind === "percent" ? "avg" : fg.fn;
+    const v = !ns.length ? 0 : fn === "sum" ? ns.reduce((a, b) => a + b, 0) : fn === "avg" ? ns.reduce((a, b) => a + b, 0) / ns.length : fn === "min" ? Math.min(...ns) : Math.max(...ns);
+    const word = { sum: "total", avg: "average", min: "lowest", max: "highest", count: "" }[fn];
     return { label: fg.label || cfg?.labels[f.key] || f.label, value: showCell(f, v) || "0", sub: `${glabel(f.group)} · ${word}` };
   };
   const setFigures = (xs: CrmFigure[]) => set({ figures: xs });
@@ -655,14 +843,14 @@ export default function ReportsPage() {
         {editable && (figDraft ? (
           <div className="rp-kpi is-add is-open">
             <SalesMultiFilter single values={[figDraft.fn]} onChange={(v) => v[0] && setFigDraft({ fn: v[0] as CrmFn, value: v[0] === "count" ? null : figDraft.value ?? numFields[0]?.key ?? null })} options={(Object.keys(FN_LABEL) as CrmFn[]).map((f) => ({ value: f, label: f === "count" ? "How many" : f === "sum" ? "Total of…" : `${FN_LABEL[f]} of…` }))} placeholder="Figure" />
-            {figDraft.fn !== "count" && <FieldPick fields={numFields} value={figDraft.value} onChange={(k) => setFigDraft({ ...figDraft, value: k })} placeholder="A number…" />}
+            {figDraft.fn !== "count" && <FieldPick fields={numFields} main={cfg.source} value={figDraft.value} onChange={(k) => setFigDraft({ ...figDraft, value: k })} placeholder="A number…" />}
             <div className="rp-kpi-acts">
               <button type="button" className="rp-btn is-ghost" onClick={() => setFigDraft(null)}>Cancel</button>
               <button type="button" className="rp-btn is-main" disabled={figDraft.fn !== "count" && !figDraft.value} onClick={() => { setFigures([...figures, { id: uid(), fn: figDraft.fn, value: figDraft.fn === "count" ? null : figDraft.value }]); setFigDraft(null); }}>Add</button>
             </div>
           </div>
         ) : (
-          <button type="button" className="rp-kpi is-add" onClick={() => setFigDraft({ fn: "sum", value: (numFields.find((f) => !figures.some((x) => x.value === f.key)) ?? numFields[0])?.key ?? null })}><Ico d={I.plus} w={2.4} /><b>Add a figure</b><em>A count, total, average, lowest or highest</em></button>
+          <button type="button" className="rp-kpi is-add" onClick={() => { const nf = numFields.find((f) => f.kind === "money" && !figures.some((x) => x.value === f.key)) ?? numFields.find((f) => !figures.some((x) => x.value === f.key)) ?? numFields[0]; setFigDraft({ fn: nf?.kind === "percent" ? "avg" : "sum", value: nf?.key ?? null }); }}><Ico d={I.plus} w={2.4} /><b>Add a figure</b><em>A count, total, average, lowest or highest</em></button>
         ))}
       </div>
     );
@@ -684,8 +872,17 @@ export default function ReportsPage() {
 
       <div className="rp-body">
         <aside className="rp-side" aria-label="Saved reports">
-          <p className="rp-side-h">Saved reports</p>
+          <div className="rp-side-hh">
+            <p className="rp-side-h">Saved reports</p>
+            {!tableMissing && <button type="button" className="rp-fold-add" disabled={!foldersOk} title={foldersOk ? "A folder for your reports" : NEEDS_FOLDERS} onClick={() => setFNew("")}><Ico d={I.plus} w={2.4} />Folder</button>}
+          </div>
           <label className="rp-search"><Ico d={I.search} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a report" /></label>
+          {fNew != null && (
+            <label className="rp-fold-new"><Ico d={I.folder} />
+              <input autoFocus value={fNew} placeholder="Folder name — e.g. Pipeline" aria-label="New folder name" onChange={(e) => setFNew(e.target.value)} onBlur={() => void addFolder(fNew)}
+                onKeyDown={(e) => { if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur(); if (e.key === "Escape") setFNew(null); }} />
+            </label>
+          )}
           {tableMissing && <p className="rp-none">Saved reports need the sales_reports table.</p>}
           {!tableMissing && !list.length && (q ? <p className="rp-none">No report matches.</p> : (
             <div className="rp-side-empty">
@@ -695,18 +892,85 @@ export default function ReportsPage() {
             </div>
           ))}
           <div className="rp-saved">
-            {list.map((s) => {
-              const e = entityOf(sourceOf(s));
-              return (
-                <div className={`rp-sv ${s.id === reportId ? "is-on" : ""}`} key={s.id} style={vars({ "--c": e.tone })}>
-                  <button type="button" className="rp-sv-main" onClick={() => open(s)}>
-                    <span className="rp-sv-ico"><Ico d={e.icon} /></span>
-                    <span className="rp-sv-t"><b>{s.name}</b><em>{partsLabel(s)}{s.shared ? " · shared" : ""}{s.owner_id && me && s.owner_id !== me ? " · someone else's" : ""}</em></span>
-                  </button>
-                  {(!s.owner_id || s.owner_id === me) && <button type="button" className="rp-x" onClick={() => void remove(s)} aria-label={`Delete ${s.name}`}><Ico d={I.trash} /></button>}
-                </div>
-              );
-            })}
+            {(() => {
+              const row = (s: SavedReport) => {
+                const e = entityOf(sourceOf(s));
+                const fo = folderOf(s.id);
+                return (
+                  <div className={`rp-sv ${s.id === reportId ? "is-on" : ""} ${dragRep === s.id ? "is-drag" : ""} ${moveOpen === s.id ? "is-menu" : ""}`} key={s.id} style={vars({ "--c": e.tone })}
+                    draggable={folders.length > 0} onDragStart={(ev) => { setDragRep(s.id); ev.dataTransfer.effectAllowed = "move"; ev.dataTransfer.setData("text/plain", s.name); }} onDragEnd={() => { setDragRep(null); setDropOn(null); }}>
+                    <button type="button" className="rp-sv-main" onClick={() => open(s)}>
+                      <span className="rp-sv-ico"><Ico d={e.icon} /></span>
+                      <span className="rp-sv-t"><b>{s.name}</b><em>{partsLabel(s)}{s.shared ? " · shared" : ""}{s.owner_id && me && s.owner_id !== me ? " · someone else's" : ""}</em></span>
+                    </button>
+                    {foldersOk && (
+                      <span className="rp-mv-w">
+                        <button type="button" className={`rp-x rp-mv ${moveOpen === s.id ? "is-on" : ""}`} onClick={(ev) => { placeMenu(ev.currentTarget); setFMenu(null); setMoveOpen(moveOpen === s.id ? null : s.id); }} aria-label={`Move ${s.name} to a folder`} title="Move to a folder" aria-expanded={moveOpen === s.id}><Ico d={I.folder} /></button>
+                        {moveOpen === s.id && (
+                          <div className="rp-mv-menu" role="menu" style={menuAt}>
+                            <b>Move to</b>
+                            {folders.map((f) => (
+                              <button key={f.id} type="button" role="menuitemradio" aria-checked={fo?.id === f.id} className={fo?.id === f.id ? "is-on" : ""} onClick={() => { setMoveOpen(null); void moveTo(s.id, f.id); }}>
+                                <i style={{ background: f.color || "#0a6f4d" }} /><span>{f.name}</span>{fo?.id === f.id && <Ico d={I.check} w={2.4} />}
+                              </button>
+                            ))}
+                            {folders.length > 0 && <button type="button" role="menuitemradio" aria-checked={!fo} className={!fo ? "is-on" : ""} onClick={() => { setMoveOpen(null); void moveTo(s.id, null); }}><i className="is-none" /><span>Not in a folder</span>{!fo && <Ico d={I.check} w={2.4} />}</button>}
+                            <button type="button" className="is-add" onClick={() => { setMoveOpen(null); setFNew(""); }}><Ico d={I.plus} w={2.4} /><span>New folder…</span></button>
+                          </div>
+                        )}
+                      </span>
+                    )}
+                    {(!s.owner_id || s.owner_id === me) && <button type="button" className="rp-x" onClick={() => void remove(s)} aria-label={`Delete ${s.name}`}><Ico d={I.trash} /></button>}
+                  </div>
+                );
+              };
+              const loose = list.filter((s) => !folderOf(s.id));
+              return <>
+                {folders.map((f) => {
+                  const items = list.filter((s) => f.report_ids.includes(s.id));
+                  if (q && !items.length) return null;
+                  const isOpen = !!q || !closed.has(f.id);
+                  return (
+                    <div key={f.id} className={`rp-fold ${dropOn === f.id ? "is-drop" : ""} ${isOpen ? "is-open" : ""}`} style={vars({ "--fc": f.color || "#0a6f4d" })} {...dropTarget(f.id)}>
+                      <div className={`rp-fold-h ${fMenu === f.id ? "is-menu" : ""}`}>
+                        {fEdit?.id === f.id ? (
+                          <input className="rp-fold-in" autoFocus value={fEdit.name} aria-label="Folder name" onChange={(e) => setFEdit({ id: f.id, name: e.target.value })}
+                            onBlur={() => { if (fEdit.name.trim() && fEdit.name.trim() !== f.name) void patchFolder(f, { name: fEdit.name.trim() }); setFEdit(null); }}
+                            onKeyDown={(e) => { if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur(); if (e.key === "Escape") setFEdit(null); }} />
+                        ) : (
+                          <button type="button" className="rp-fold-b" onClick={() => toggleFolder(f.id)} onDoubleClick={() => setFEdit({ id: f.id, name: f.name })} aria-expanded={isOpen} title={`${f.name} — double-click to rename`}>
+                            <span className="rp-fold-car"><Ico d={I.right} w={2.4} /></span>
+                            <span className="rp-fold-ico"><Ico d={I.folder} /></span>
+                            <b>{f.name}</b><em>{items.length}</em>
+                          </button>
+                        )}
+                        <button type="button" className={`rp-fold-more ${fMenu === f.id ? "is-on" : ""}`} onClick={(ev) => { placeMenu(ev.currentTarget); setMoveOpen(null); setFMenu(fMenu === f.id ? null : f.id); }} aria-label={`${f.name}: options`} aria-expanded={fMenu === f.id}><Ico d={I.more} /></button>
+                        {fMenu === f.id && (
+                          <div className="rp-fold-menu" role="menu" style={menuAt}>
+                            <button type="button" role="menuitem" onClick={() => { setFMenu(null); setFEdit({ id: f.id, name: f.name }); }}><Ico d={I.edit} />Rename</button>
+                            <div className="rp-fold-cols" role="group" aria-label="Colour">
+                              {FOLDER_COLORS.map((c) => <button key={c} type="button" className={(f.color || "#0a6f4d") === c ? "is-on" : ""} style={{ background: c }} aria-label={`Colour ${c}`} onClick={() => void patchFolder(f, { color: c })} />)}
+                            </div>
+                            <button type="button" role="menuitem" className="is-danger" onClick={() => { setFMenu(null); void dropFolder(f); }}><Ico d={I.trash} />Delete folder</button>
+                          </div>
+                        )}
+                      </div>
+                      {isOpen && (
+                        <div className="rp-fold-list">
+                          {items.length ? items.map(row) : <p className="rp-fold-empty">{dragRep ? "Drop it here" : "Empty — drag a report here"}</p>}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                {folders.length > 0 && (loose.length > 0 || dragRep) ? (
+                  <div className={`rp-loose ${dropOn === "none" ? "is-drop" : ""}`} {...dropTarget("none")}>
+                    <p className="rp-loose-h">Not in a folder<em>{loose.length}</em></p>
+                    {loose.map(row)}
+                  </div>
+                ) : loose.map(row)}
+              </>;
+            })()}
           </div>
         </aside>
 
@@ -778,7 +1042,7 @@ export default function ReportsPage() {
                 </div>
                 <button type="button" className="rp-btn is-ghost" onClick={() => exportAs("xlsx")} disabled={!rows.length}><Ico d={I.down} />Excel</button>
                 <button type="button" className="rp-btn is-ghost" onClick={() => exportAs("csv")} disabled={!rows.length}>CSV</button>
-                <button type="button" className="rp-btn is-main" onClick={() => void save()} disabled={busy || (!!reportId && !dirty)}><Ico d={I.check} w={2.4} />{busy ? "Saving…" : reportId && !dirty ? "Saved" : "Save"}</button>
+                <button type="button" className="rp-btn is-main" onClick={() => void save()} disabled={busy || (!!reportId && !dirty)}><Ico d={I.check} w={2.4} />{busy ? "Saving…" : reportId && !dirty ? "Saved" : reportId && !mine ? "Save a copy" : "Save"}</button>
               </div>
 
               {loadErr && <div className="rp-err">Couldn't read the data: {loadErr}</div>}
@@ -839,7 +1103,15 @@ export default function ReportsPage() {
                       <section className="rp-card">
                         <h3>Which {many ? "rows" : ent!.plural.toLowerCase()}?</h3>
                         <p className="rp-help">As many rules as you need, on any field of {ent!.plural.toLowerCase()} or of what is linked to them — custom fields included. Put rules in a group to mix “and” and “or”; groups can hold more groups.</p>
-                        <RuleGroup g={cfg.filter} depth={0} fields={fields} fieldByKey={fieldByKey} values={valuesOf} onChange={(g) => set({ filter: g })} />
+                        <RuleGroup g={cfg.filter} depth={0} fields={fields} fieldByKey={fieldByKey} values={valuesOf} opts={valueOpts} main={cfg.source} left={leftAfter} noun={rowWord} onChange={(g) => set({ filter: g })} />
+                        {rows.length === 0 && nRules > 0 && !loading && (
+                          <div className="rp-nothing is-inline">
+                            <b>Nothing matches all these rules together.</b>
+                            {blocker
+                              ? <span>Without <em>“{ruleText(blocker.rule)}”</em> there would be {blocker.n.toLocaleString("en-GB")} {rowWord(blocker.n)}.<button type="button" className="rp-link" onClick={() => set({ filter: withoutRule(cfg.filter, blocker.rule.id) })}>Take that rule out</button></span>
+                              : <span>Each value shows how many it keeps — pick ones that aren't 0.</span>}
+                          </div>
+                        )}
                       </section>
                     )}
 
@@ -934,7 +1206,7 @@ export default function ReportsPage() {
                         <div className="rp-sumrow">
                           <label><span>Group the rows by</span>
                             <SalesMultiFilter single values={[cfg.groupBy ?? "__none"]} onChange={(v) => set({ groupBy: v[0] && v[0] !== "__none" ? v[0] : null })}
-                              options={[{ value: "__none", label: "No groups" }, ...fields.filter((f) => f.kind === "enum" || f.kind === "text").map((f) => ({ value: f.key, label: f.label, group: glabel(f.group) }))]} placeholder="No groups" searchFrom={8} /></label>
+                              options={[{ value: "__none", label: "No groups" }, ...fields.filter((f) => f.kind === "enum" || f.kind === "text").map((f) => ({ value: f.key, label: fl(f), group: glabel(f.group) }))]} placeholder="No groups" searchFrom={8} /></label>
                           <label><span>Sort by</span>
                             <SalesMultiFilter single values={[cfg.sort?.key ?? "__none"]} onChange={(v) => set({ sort: v[0] && v[0] !== "__none" ? { key: v[0], dir: cfg.sort?.dir ?? "desc" } : null })}
                               options={[{ value: "__none", label: "As they come" }, ...cfg.cols.map((k) => ({ value: k, label: cfg.labels[k] || fieldByKey.get(k)?.label || k }))]} placeholder="As they come" /></label>

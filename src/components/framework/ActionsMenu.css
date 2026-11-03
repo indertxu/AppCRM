@@ -91,3 +91,10 @@
   box-shadow: 0 12px 28px -12px rgba(31, 185, 138, 0.9), inset 0 1px 0 rgba(255, 255, 255, 0.5);
 }
 .am-wrap .am-btn:hover, .am-wrap .am-btn.is-open { box-shadow: 0 16px 32px -12px rgba(31, 185, 138, 1), inset 0 1px 0 rgba(255, 255, 255, 0.55); }
+
+/* a choice out of a set (the deal's status): the current one is ticked; one that can't be used is dimmed */
+.am-on { flex: none; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: linear-gradient(140deg, #86efc0, #12b57f); color: #04120d; box-shadow: 0 6px 14px -8px rgba(18, 181, 127, 0.9); }
+.am-on svg { width: 13px; height: 13px; }
+.am-item.is-on .am-txt b { color: #0a6f4d; }
+.am-item.is-off { cursor: not-allowed; opacity: 0.45; }
+.am-item.is-off .am-ico { box-shadow: none; }

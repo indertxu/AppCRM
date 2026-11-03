@@ -1,30 +1,27 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /**
- * Home · SALES — the whole page, laid out like the consultancy home:
- *   hero    greeting and four sales figures of your choice (Customize)
- *   left    your calendar, and under it the pipeline by stage (the department's
- *           when you see the team, yours otherwise)
- *   middle  the ticket desk (to-do + tickets)
- *   right   deals about to close (and, for those who see the team, the team),
- *           then the deals that need attention: overdue, stuck in a stage,
- *           gone quiet, without a close date, with late tasks
+ * Home · SALES — a source of cards for the home board (HomePage.tsx):
+ *   sales.stages     the pipeline by stage (the department's when you see the
+ *                    team, yours otherwise)
+ *   sales.closing    deals about to close (and, for those who see the team, the team)
+ *   sales.attention  deals that need attention: overdue, stuck in a stage,
+ *                    gone quiet, without a close date, with late tasks
+ * plus every sales figure (SALES_KPIS). Drawn into the board's slots (portals).
  * A rep sees their own deals (owner or on the deal's team); the boss and the
  * sales managers see everyone's.
  */
-import { Fragment, useEffect, useMemo, useState, type ReactNode, type Ref } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import Select from "../../../framework/Select";
 import { supabase } from "../../../api/supabase";
 import { listTrackings, loadTrackingTeams, loadPotentialTotals, type Tracking } from "../../sales/sales/salesApi";
 import { listPipelines, loadPhasesByPipeline, type Phase, type Pipeline } from "../../settings/pipelineApi";
-import { listCompanies, loadPrefs, savePref } from "../../companies/companiesApi";
+import { listCompanies } from "../../companies/companiesApi";
 import { ClientLogo } from "../../clients/ClientWorkspace";
-import { CAL_SUMMARY_EVENT, isoDay, type CalSummary } from "../shared/HomeCalendar";
-import { TICKETS_EVENT } from "../shared/HomeTodo";
-import { useCount, Ring, HeroPicker, Fig, Txt } from "../consultancy/ConsultancyHome";
+import { isoDay } from "../shared/HomeCalendar";
+import { useCount, Ring, Fig, Txt, renderSlots, type HomeSlot } from "../consultancy/ConsultancyHome";
 import "../consultancy/ConsultancyHome.css";
 import "./SalesHome.css";
-import ActionsMenu from "../../../framework/ActionsMenu";
 import { useInactiveIds } from "../../../framework/peopleStatus";
 
 const eur = (n: number) => Math.round(n).toLocaleString("en-US");
@@ -46,17 +43,13 @@ const LIST_CAP = 40;
 interface Props {
   userId: string;
   seesTeam: boolean;
-  calendar: ReactNode;
-  desk: ReactNode;
-  greeting: string;
-  firstName: string | null;
-  heroRef?: Ref<HTMLElement>;
-  alertsBell?: ReactNode;
+  /** Where the board wants sales cards / figures. */
+  slots: HomeSlot[];
 }
 
 /* ---------------- the figures the top row can show ---------------- */
-type SKey = "pipeline" | "weighted" | "won_month" | "closing" | "winrate" | "attention" | "new_month" | "avg_won" | "booked" | "tickets" | "tasks";
-const SALES_KPIS: { key: SKey; group: string; label: string }[] = [
+type SKey = "pipeline" | "weighted" | "won_month" | "closing" | "winrate" | "attention" | "new_month" | "avg_won";
+export const SALES_KPIS: { key: SKey; group: string; label: string }[] = [
   { key: "pipeline", group: "Pipeline", label: "Open pipeline" },
   { key: "weighted", group: "Pipeline", label: "Weighted forecast" },
   { key: "closing", group: "Pipeline", label: "Closing in 30 days" },
@@ -65,12 +58,9 @@ const SALES_KPIS: { key: SKey; group: string; label: string }[] = [
   { key: "won_month", group: "Results", label: "Won this month" },
   { key: "winrate", group: "Results", label: "Win rate (90 days)" },
   { key: "avg_won", group: "Results", label: "Average won deal" },
-  { key: "booked", group: "You", label: "Booked today" },
-  { key: "tickets", group: "You", label: "Open tickets" },
-  { key: "tasks", group: "You", label: "Open tasks" },
 ];
-const SALES_DEFAULT: SKey[] = ["pipeline", "weighted", "won_month", "closing"];
-const SALES_PREF = "homeHeroKpisSales";
+/** The four figures sales people picked before the board (read once, to start the board from them). */
+export const SALES_PREF = "homeHeroKpisSales";
 const isSKey = (k: unknown): k is SKey => SALES_KPIS.some((x) => x.key === k);
 
 type Why = "overdue" | "stuck" | "quiet" | "nodate" | "tasks";
@@ -84,7 +74,7 @@ const WHY: Record<Why, { label: string; tone: "warn" | "amber" | "mute" }> = {
 const WHY_ORDER: Why[] = ["overdue", "tasks", "stuck", "quiet", "nodate"];
 interface Flag { why: Why; text: string }
 
-export default function SalesHome({ userId, seesTeam, calendar, desk, greeting, firstName, heroRef, alertsBell }: Props) {
+export default function SalesHome({ userId, seesTeam, slots }: Props) {
   const nav = useNavigate();
   const today = isoDay(new Date());
   const [loading, setLoading] = useState(true);
@@ -154,48 +144,6 @@ export default function SalesHome({ userId, seesTeam, calendar, desk, greeting, 
     });
     return () => { alive = false; };
   }, [userId, seesTeam]);
-
-  /* ---- your figures on top: saved with your profile ---- */
-  const [slots, setSlots] = useState<SKey[]>(SALES_DEFAULT);
-  const [picker, setPicker] = useState<DOMRect | null>(null);
-  useEffect(() => {
-    loadPrefs().then((p) => {
-      const v = p?.[SALES_PREF];
-      if (Array.isArray(v)) { const ks = v.filter(isSKey).slice(0, 4); if (ks.length === 4) setSlots(ks); }
-    }).catch(() => {});
-  }, []);
-  const changeSlots = (next: SKey[]) => { setSlots(next); savePref(SALES_PREF, next).catch(() => {}); };
-
-  /* ---- today's load (from the calendar card) and your open tickets / tasks ---- */
-  const [cal, setCal] = useState<CalSummary | null>(null);
-  useEffect(() => {
-    const on = (e: Event) => setCal((e as CustomEvent<CalSummary>).detail);
-    window.addEventListener(CAL_SUMMARY_EVENT, on);
-    return () => window.removeEventListener(CAL_SUMMARY_EVENT, on);
-  }, []);
-  type Tix = { open: number; late: number };
-  const [tix, setTix] = useState<Tix | null>(null);
-  const [tasks, setTasks] = useState<Tix | null>(null);
-  const wantsTix = slots.includes("tickets") || slots.includes("tasks");
-  useEffect(() => {
-    if (!wantsTix) return;
-    let alive = true;
-    const load = async () => {
-      let r: any = await supabase.from("tracking_tasks").select("id, done, status, stage, due_at, source, requester_email, requester_name, category").eq("assignee_id", userId).range(0, 4999);
-      if (r.error) r = await supabase.from("tracking_tasks").select("id, done, status, due_at").eq("assignee_id", userId).range(0, 4999);
-      if (!alive || r.error) return;
-      const now = Date.now();
-      const open = ((r.data ?? []) as any[]).filter((t) => !(t.done || t.status === "done" || ["resolved", "closed"].includes(t.stage)));
-      const isTicket = (t: any) => (t.category ? t.category === "ticket" : ["email", "phone", "portal", "message"].includes(t.source) || !!t.requester_email || !!t.requester_name);
-      const tally = (xs: any[]): Tix => ({ open: xs.length, late: xs.filter((t) => t.due_at && new Date(t.due_at).getTime() < now).length });
-      setTix(tally(open.filter(isTicket)));
-      setTasks(tally(open.filter((t) => !isTicket(t))));
-    };
-    load().catch(() => {});
-    const again = () => { load().catch(() => {}); };
-    window.addEventListener(TICKETS_EVENT, again);
-    return () => { alive = false; window.removeEventListener(TICKETS_EVENT, again); };
-  }, [userId, wantsTix]);
 
   /* ---- reading the deals ---- */
   const titleOf = (t: Tracking) => (t.deal_name ?? "").trim() || (t.company_id ? companies[t.company_id] : "") || "Deal";
@@ -314,13 +262,6 @@ export default function SalesHome({ userId, seesTeam, calendar, desk, greeting, 
   const cWeighted = useCount(loading ? 0 : fig.weighted);
   const cWon = useCount(loading ? 0 : fig.wonValue);
   const cClosing = useCount(loading ? 0 : fig.closing, 600);
-  const cToday = useCount(cal?.todayMin ?? 0, 700);
-  const dateLabel = new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
-  const glow = (e: React.PointerEvent<HTMLElement>) => {
-    const r = e.currentTarget.getBoundingClientRect();
-    e.currentTarget.style.setProperty("--mx", `${e.clientX - r.left}px`);
-    e.currentTarget.style.setProperty("--my", `${e.clientY - r.top}px`);
-  };
   const wait = loading ? "…" : null;
   const meter = (v: number, goal: number) => <span className="chx-meter"><i style={{ width: `${goal > 0 ? Math.min(100, (v / goal) * 100) : 0}%` }} /></span>;
   const monthName = (m: string) => new Date(`${m}-01T00:00:00`).toLocaleDateString("en-GB", { month: "long" });
@@ -349,7 +290,7 @@ export default function SalesHome({ userId, seesTeam, calendar, desk, greeting, 
         );
       }
       case "closing": return (
-        <Fig cls={overdue ? "has-late" : ""} onClick={() => setRightTab("closing")} title="See the deals about to close">
+        <Fig cls={overdue ? "has-late" : ""} onClick={() => nav("/sales")} title="Open Sales">
           <Txt label="Closing in 30 days" value={wait ?? Math.round(cClosing)} big unit={fig.closing ? ` · ${eur(fig.closingValue)} €` : ""}>
             <span className="chx-chips">
               {overdue > 0 && <span className="chx-chip is-late">{overdue} past their date</span>}
@@ -365,7 +306,7 @@ export default function SalesHome({ userId, seesTeam, calendar, desk, greeting, 
         </Fig>
       );
       case "attention": return (
-        <Fig cls={overdue ? "has-late" : ""} onClick={() => setWhyFilter("all")} title="See the deals that need attention">
+        <Fig cls={overdue ? "has-late" : ""} onClick={() => nav("/sales")} title="Open Sales">
           <Txt label="Deals that need attention" value={wait ?? attention.length} big>
             <span className="chx-chips">
               {overdue > 0 && <span className="chx-chip is-late">{overdue} overdue</span>}
@@ -385,30 +326,6 @@ export default function SalesHome({ userId, seesTeam, calendar, desk, greeting, 
           <Txt label="Average won deal" value={wait ?? `${eur(fig.avgWon)} €`} sub={fig.wonYear ? `Over ${fig.wonYear} deals won in the last 12 months` : "No deals won in the last 12 months"} />
         </Fig>
       );
-      case "booked": {
-        const pct = cal ? (cal.todayCap > 0 ? (cal.todayMin / cal.todayCap) * 100 : cal.todayMin > 0 ? 101 : 0) : 0;
-        const hrs = (m: number) => `${+(m / 60).toFixed(1)}h`;
-        return (
-          <Fig cls="is-today" onClick={() => nav("/calendar")} title="Open your calendar">
-            <Ring pct={pct} size={58} stroke={6}><b>{cal ? `${Math.round(Math.min(pct, 999))}%` : "…"}</b></Ring>
-            <Txt label="Booked today" value={cal ? hrs(cToday) : "…"} unit={cal ? ` of ${hrs(cal.todayCap)}` : ""}
-              sub={cal?.next ? <>Next: <em>{cal.next.time}</em> {cal.next.title}</> : cal ? "Nothing else booked" : "Reading your calendar…"} />
-          </Fig>
-        );
-      }
-      case "tickets": case "tasks": {
-        const x = k === "tickets" ? tix : tasks;
-        return (
-          <Fig cls={`is-tix ${x && x.late > 0 ? "has-late" : ""}`} onClick={() => nav(k === "tickets" ? "/tickets" : "/tickets?kind=task")} title={k === "tickets" ? "Open your tickets" : "Open your tasks"}>
-            <Txt label={k === "tickets" ? "Open tickets" : "Open tasks"} value={x ? x.open : "…"} big>
-              <span className="chx-chips">
-                {x && x.late > 0 && <span className="chx-chip is-late">{x.late} late</span>}
-                {x && x.late === 0 && <span className="chx-chip is-ok">{x.open ? "All on time" : "Nothing pending"}</span>}
-              </span>
-            </Txt>
-          </Fig>
-        );
-      }
     }
   };
 
@@ -417,37 +334,10 @@ export default function SalesHome({ userId, seesTeam, calendar, desk, greeting, 
     return n === 0 ? "Today" : n === 1 ? "Tomorrow" : n < 7 ? `In ${n} days` : new Date(`${d.slice(0, 10)}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
   };
 
-  return (
-    <div className="ch-home sx-home">
-      {/* ============ HERO ============ */}
-      <section className="chx-hero" ref={heroRef} onPointerMove={glow} aria-label="Your day in sales">
-        <i className="chx-hero-grid" aria-hidden="true" />
-        <i className="chx-hero-glow" aria-hidden="true" />
-        <div className="chx-hero-top">
-          <div className="chx-hello">
-            <h1 className="chx-greet">{greeting}{firstName ? `, ${firstName}` : ""}</h1>
-            <span className="chx-date">{dateLabel}</span>
-          </div>
-          <span className="chx-grow" />
-          {alertsBell}
-          <button type="button" className={`chx-edit ${picker ? "is-on" : ""}`} onClick={(e) => setPicker(picker ? null : e.currentTarget.getBoundingClientRect())}
-            aria-haspopup="dialog" aria-expanded={!!picker} title="Choose the four figures below">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg>
-            Customize
-          </button>
-          <ActionsMenu items={[]} />
-        </div>
-        <div className="chx-figs">
-          {slots.map((k, i) => <Fragment key={`${k}-${i}`}>{heroFig(k)}</Fragment>)}
-        </div>
-      </section>
-      {picker && <HeroPicker anchor={picker} slots={slots} kpis={SALES_KPIS} defaults={SALES_DEFAULT}
-        sub="Pick any sales figure. Clicking one opens where it comes from."
-        onChange={(s) => changeSlots(s.filter(isSKey))} onClose={() => setPicker(null)} />}
-
-      {/* ============ LEFT: calendar + pipeline by stage ============ */}
-      <div className="ch-col ch-col-mid">
-        {calendar}
+  const card = (key: string): ReactNode => {
+    if (isSKey(key)) return heroFig(key);
+    switch (key) {
+      case "sales.stages": return (
         <section className="cz-card sx-stages" aria-label="Pipeline by stage">
           <header className="cz-head">
             <div className="cz-titles">
@@ -484,13 +374,8 @@ export default function SalesHome({ userId, seesTeam, calendar, desk, greeting, 
             </ol>
           )}
         </section>
-      </div>
-
-      {/* ============ MIDDLE: to-do & tickets ============ */}
-      <div className="ch-col ch-col-desk">{desk}</div>
-
-      {/* ============ RIGHT: about to close / team, then needs attention ============ */}
-      <div className="ch-col ch-col-right">
+      );
+      case "sales.closing": return (
         <section className="cz-card sx-close" aria-label={rightTab === "team" ? "The sales team" : "Deals about to close"}>
           <header className="cz-head">
             <div className="cz-titles">
@@ -547,7 +432,8 @@ export default function SalesHome({ userId, seesTeam, calendar, desk, greeting, 
             </div>
           )}
         </section>
-
+      );
+      case "sales.attention": return (
         <section className="cz-card sx-attn" aria-label="Deals that need attention">
           <header className="cz-head">
             <div className="cz-titles">
@@ -589,7 +475,9 @@ export default function SalesHome({ userId, seesTeam, calendar, desk, greeting, 
             </div>
           )}
         </section>
-      </div>
-    </div>
-  );
+      );
+      default: return null;
+    }
+  };
+  return renderSlots(slots, card);
 }

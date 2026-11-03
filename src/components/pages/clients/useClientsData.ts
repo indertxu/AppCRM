@@ -688,9 +688,84 @@ export interface CsAttachment {
   spots?: CsSpot[];
   /** the {{fields}} found in the file */
   tags?: string[];
+  /** a PDF's text changed in the editor (a line written again, or new text put on a page), {{fields}} and all */
+  edits?: CsEdit[];
+}
+/** One change to a PDF's text: a line written again (orig: what it said) or new text (no orig). Points, from the page's bottom left; y is the baseline. */
+export interface CsEdit { id: string; page: number; x: number; y: number; w: number; size: number; text: string; orig?: string | null; font?: "sans" | "serif" | "mono"; bold?: boolean; color?: CsRgb; patch?: CsPatch }
+/** Is a {{field}} written in a PDF (or one of its lines) under a line changed in the editor? */
+export const csUnderEdit = (s: { page: number; x: number; y: number }, edits: CsEdit[] | undefined) =>
+  (edits ?? []).some((e) => e.orig != null && e.page === s.page && Math.abs(e.y - s.y) < 0.6 && s.x >= e.x - 0.6 && s.x <= e.x + Math.max(1, e.w));
+/** pdf.js, loaded the first time a PDF is read. */
+export async function loadPdfjs(): Promise<any> {
+  const pdfjs: any = await import("pdfjs-dist");
+  if (!pdfjs.GlobalWorkerOptions.workerSrc) {
+    const w: any = await import("pdfjs-dist/build/pdf.worker.min.mjs?url");
+    pdfjs.GlobalWorkerOptions.workerSrc = w.default ?? w;
+  }
+  return pdfjs;
+}
+/** An attachment's bytes, as stored. */
+export async function csFileBlob(path: string): Promise<Blob | null> {
+  const { data } = await supabase.storage.from("cs-files").download(path);
+  return data ?? null;
 }
 /** where a {{field}} is written in a PDF: the line of text it is in (its start, width and text) and its place in it */
-export interface CsSpot { page: number; x: number; y: number; w: number; size: number; key: string; text?: string; at?: number; len?: number }
+export interface CsSpot { page: number; x: number; y: number; w: number; size: number; key: string; text?: string; at?: number; len?: number; patch?: CsPatch; color?: CsRgb }
+/** What covers a line of a PDF that is written again: its own background with the text taken out (an image), placed in points. */
+export interface CsPatch { x: number; y: number; w: number; h: number; img: string }
+/** A colour, 0–1 each. */
+export type CsRgb = [number, number, number];
+/** The area a line of text covers (points, bottom left), for its patch. */
+export const csLineBox = (x: number, y: number, w: number, size: number) => ({ x: x - 1, y: y - size * 0.3, w: w + 2, h: size * 1.3 });
+/**
+ * A patch for a line of a page drawn on a canvas (box in canvas pixels, top left): the background with the
+ * text taken out — each column blended from just above the line to just below it, so gradients and photos
+ * carry on — and the colour the text was written in.
+ */
+export function csPatchOf(cv: HTMLCanvasElement, box: { x: number; y: number; w: number; h: number }): { img: string; color: CsRgb } | null {
+  try {
+    const ctx = cv.getContext("2d", { willReadFrequently: true } as any) as CanvasRenderingContext2D | null;
+    if (!ctx) return null;
+    const x0 = Math.max(0, Math.floor(box.x)), y0 = Math.max(0, Math.floor(box.y));
+    const x1 = Math.min(cv.width, Math.ceil(box.x + box.w)), y1 = Math.min(cv.height, Math.ceil(box.y + box.h));
+    const w = x1 - x0, h = y1 - y0;
+    if (w < 2 || h < 2) return null;
+    const ya = Math.max(0, y0 - 2), yb = Math.min(cv.height, y1 + 2);
+    const data = ctx.getImageData(x0, ya, w, yb - ya).data;
+    const px = (r: number, c: number) => { const i = ((r - ya) * w + c) * 4; return [data[i], data[i + 1], data[i + 2]]; };
+    const avg = (rows: number[], c: number) => { const xs = rows.filter((r) => r >= ya && r < yb).map((r) => px(r, c)); const n = Math.max(1, xs.length); return [0, 1, 2].map((k) => xs.reduce((t, v) => t + v[k], 0) / n); };
+    const out = document.createElement("canvas"); out.width = w; out.height = h;
+    const oc = out.getContext("2d")!; const img = oc.createImageData(w, h);
+    const ink: { d: number; c: number[] }[] = [];
+    for (let c = 0; c < w; c++) {
+      const top = avg([y0 - 2, y0 - 1], c), bot = avg([y1, y1 + 1], c);
+      for (let r = 0; r < h; r++) {
+        const t = (r + 0.5) / h, bg = [0, 1, 2].map((k) => top[k] + (bot[k] - top[k]) * t);
+        const i = (r * w + c) * 4;
+        img.data[i] = bg[0]; img.data[i + 1] = bg[1]; img.data[i + 2] = bg[2]; img.data[i + 3] = 255;
+        const p = px(y0 + r, c), d = Math.abs(p[0] - bg[0]) + Math.abs(p[1] - bg[1]) + Math.abs(p[2] - bg[2]);
+        if (d > 90) ink.push({ d, c: p });
+      }
+    }
+    oc.putImageData(img, 0, 0);
+    // the text's colour: the pixels that stand out most from the background
+    let color: CsRgb;
+    if (ink.length) {
+      ink.sort((a, b) => b.d - a.d);
+      const top = ink.slice(0, Math.max(1, Math.ceil(ink.length * 0.25)));
+      color = [0, 1, 2].map((k) => top.reduce((t, v) => t + v.c[k], 0) / top.length / 255) as CsRgb;
+    } else {
+      const mid = avg([y0 - 1], Math.floor(w / 2)); const light = (mid[0] * 0.3 + mid[1] * 0.59 + mid[2] * 0.11) > 140;
+      color = light ? [0.08, 0.1, 0.09] : [1, 1, 1];
+    }
+    let url = out.toDataURL("image/png");
+    if (url.length > 90_000) url = out.toDataURL("image/jpeg", 0.92);
+    return { img: url, color };
+  } catch {
+    return null;
+  }
+}
 const TEXT_EXT = /\.(html?|txt|csv|md|xml|json|svg)$/i;
 /** Plain names a PDF form field may have for a field of ours (client, nombre_cliente, Company…). */
 const FIELD_ALIAS: [RegExp, string][] = [
@@ -720,11 +795,7 @@ export async function inspectCsFile(f: Blob, name: string, type: string): Promis
   try {
     if (isText) return { kind: "text", tags: found(await f.text()) };
     if (!isPdf) return { kind: "other" };
-    const pdfjs: any = await import("pdfjs-dist");
-    if (!pdfjs.GlobalWorkerOptions.workerSrc) {
-      const w: any = await import("pdfjs-dist/build/pdf.worker.min.mjs?url");
-      pdfjs.GlobalWorkerOptions.workerSrc = w.default ?? w;
-    }
+    const pdfjs = await loadPdfjs();
     const doc = await pdfjs.getDocument({ data: new Uint8Array(await f.arrayBuffer()), isEvalSupported: false }).promise;
     const fields: Record<string, string> = {};
     try {
@@ -735,6 +806,7 @@ export async function inspectCsFile(f: Blob, name: string, type: string): Promis
     for (let p = 1; p <= Math.min(doc.numPages, 30); p++) {
       const page = await doc.getPage(p);
       const tc = await page.getTextContent();
+      const found: CsSpot[] = [];
       for (const it of tc.items as any[]) {
         const str = String(it.str ?? "");
         if (!str.includes("{{")) continue;
@@ -743,9 +815,29 @@ export async function inspectCsFile(f: Blob, name: string, type: string): Promis
         for (const m of str.matchAll(/\{\{\s*([a-z_]+)\s*\}\}/gi)) {
           const k = m[1].toLowerCase();
           if (!CS_TAGS.some((t) => t.key === k)) continue;
-          spots.push({ page: p - 1, x: e, y: fy, w: Number(it.width) || 0, size, key: k, text: str, at: m.index ?? 0, len: m[0].length });
+          found.push({ page: p - 1, x: e, y: fy, w: Number(it.width) || 0, size, key: k, text: str, at: m.index ?? 0, len: m[0].length });
         }
       }
+      // what goes under each of those lines when it's written again: its own background, and its text's colour
+      if (found.length && typeof document !== "undefined") {
+        try {
+          const vp = page.getViewport({ scale: 2 });
+          const cv = document.createElement("canvas"); cv.width = Math.ceil(vp.width); cv.height = Math.ceil(vp.height);
+          await page.render({ canvasContext: cv.getContext("2d")!, viewport: vp }).promise;
+          const done = new Map<string, { img: string; color: CsRgb } | null>();
+          for (const sp of found) {
+            const b = csLineBox(sp.x, sp.y, sp.w, sp.size);
+            const k = `${sp.x}|${sp.y}|${sp.text}`;
+            if (!done.has(k)) {
+              const [ax, ay] = vp.convertToViewportPoint(b.x, b.y + b.h); const [bx, by] = vp.convertToViewportPoint(b.x + b.w, b.y);
+              done.set(k, csPatchOf(cv, { x: Math.min(ax, bx), y: Math.min(ay, by), w: Math.abs(bx - ax), h: Math.abs(by - ay) }));
+            }
+            const got = done.get(k);
+            if (got) { sp.patch = { ...b, img: got.img }; sp.color = got.color; }
+          }
+        } catch { /* drawn without */ }
+      }
+      spots.push(...found);
     }
     try { await doc.destroy(); } catch { /* ignore */ }
     return { kind: "pdf", fields, spots, tags: [...new Set([...Object.values(fields).filter(Boolean), ...spots.map((x) => x.key)])] };
@@ -767,7 +859,9 @@ export async function previewCsAttachment(a: CsAttachment, clientId: string | nu
   return { blob: new Blob([bytes], { type: (data as any)?.contentType || a.type || "application/octet-stream" }), name: (data as any)?.name };
 }
 export interface CsDesign { accent?: string; brand?: string; title?: string; button_label?: string; button_url?: string; signoff?: string; footer?: string }
-export interface CsTemplate { id: string; name: string; subject: string; body_html: string; html: string; design: CsDesign; attachments: CsAttachment[]; variants?: CsVariant[]; created_by?: string | null; created_at?: string; updated_at?: string }
+export interface CsTemplate { id: string; name: string; subject: string; body_html: string; html: string; design: CsDesign; attachments: CsAttachment[]; variants?: CsVariant[]; folder_id?: string | null; created_by?: string | null; created_at?: string; updated_at?: string }
+/** A folder of e-mail blueprints (92_cs_template_folders.sql). */
+export interface CsFolder { id: string; name: string; color: string | null; sort: number }
 /** Another version of a blueprint (its own subject and text, same look and files) for the clients it names. */
 export interface CsVariant { id: string; name: string; subject: string; body_html: string; html: string; audience: CsVariantAudience }
 export interface CsVariantAudience { clients?: string[]; owners?: string[]; priorities?: string[]; health?: string[] }
@@ -787,27 +881,36 @@ export function csVariantFor(t: Pick<CsTemplate, "variants"> | null | undefined,
   return (t?.variants ?? []).find((v) => csVariantFits(v.audience, c)) ?? null;
 }
 export interface CsStep { id: string; template_id: string; wait_days: number }
-export interface CsAudience { priorities?: string[]; types?: string[]; health?: string[]; clients?: string[]; exclude?: string[] }
+export interface CsAudience {
+  priorities?: string[]; types?: string[]; health?: string[]; clients?: string[]; exclude?: string[];
+  /** only once a client's last contact is this many days old (91_cs_quiet_rule.sql); none: no such rule */
+  quiet_days?: number | null;
+  /** with quiet_days: a client's round stops as soon as someone is in touch (default on) */
+  quiet_stop?: boolean;
+}
 export interface CsSequence {
   id: string; name: string; active: boolean; audience: CsAudience; steps: CsStep[];
   start_mode: "now" | "before_renewal"; start_days: number; repeat: boolean;
   recipients: "main" | "all" | "billing"; sender: "owner" | "me"; log_contact: boolean;
   created_by?: string | null; created_at?: string;
 }
-export interface CsRun { id: string; sequence_id: string; client_id: string; step: number; status: "active" | "paused" | "done" | "excluded"; next_at: string | null; cycle: number; last_sent_at: string | null; to_emails: string[] | null; manual: boolean }
+export interface CsRun { id: string; sequence_id: string; client_id: string; step: number; status: "active" | "paused" | "done" | "excluded"; next_at: string | null; cycle: number; last_sent_at: string | null; to_emails: string[] | null; manual: boolean; started_at?: string | null }
 export interface CsMailLog { id: string; sequence_id: string | null; run_id: string | null; client_id: string | null; template_id: string | null; step: number | null; to_emails: string[] | null; subject: string | null; status: "sent" | "failed" | "skipped" | "test"; error: string | null; sent_by: string | null; sent_at: string }
-export interface CsAuto { ready: boolean; templates: CsTemplate[]; sequences: CsSequence[]; runs: CsRun[]; log: CsMailLog[] }
+export interface CsAuto { ready: boolean; templates: CsTemplate[]; sequences: CsSequence[]; runs: CsRun[]; log: CsMailLog[]; folders: CsFolder[]; foldersReady?: boolean }
 
 export async function loadCsAuto(): Promise<CsAuto> {
-  const [t, s, r, l] = await Promise.all([
+  const [t, s, r, l, f] = await Promise.all([
     supabase.from("cs_email_templates").select("*").order("created_at"),
     supabase.from("cs_sequences").select("*").order("created_at"),
     supabase.from("cs_sequence_runs").select("*"),
     supabase.from("cs_email_log").select("*").order("sent_at", { ascending: false }).limit(300),
+    supabase.from("cs_email_folders").select("id, name, color, sort").order("sort").order("created_at"),
   ]);
-  if (t.error) return { ready: false, templates: [], sequences: [], runs: [], log: [] };
+  if (t.error) return { ready: false, templates: [], sequences: [], runs: [], log: [], folders: [] };
   return {
     ready: true,
+    folders: ((f.data ?? []) as any[]).map((x) => ({ id: x.id, name: x.name ?? "Folder", color: x.color ?? null, sort: Number(x.sort) || 0 })),
+    foldersReady: !f.error,
     templates: ((t.data ?? []) as any[]).map((x) => ({ ...x, design: x.design ?? {}, attachments: Array.isArray(x.attachments) ? x.attachments : [] })),
     sequences: ((s.data ?? []) as any[]).map((x) => ({ ...x, audience: x.audience ?? {}, steps: Array.isArray(x.steps) ? x.steps : [] })),
     runs: (r.data ?? []) as CsRun[],
@@ -817,12 +920,33 @@ export async function loadCsAuto(): Promise<CsAuto> {
 export async function saveCsTemplate(t: Partial<CsTemplate>): Promise<{ row: CsTemplate | null; error: string | null }> {
   const row: Record<string, unknown> = { name: t.name?.trim() || "Untitled e-mail", subject: t.subject ?? "", body_html: t.body_html ?? "", html: t.html ?? "", design: t.design ?? {}, attachments: t.attachments ?? [], variants: t.variants ?? [], updated_at: new Date().toISOString() };
   const go = () => (t.id ? supabase.from("cs_email_templates").update(row).eq("id", t.id).select("*").single() : supabase.from("cs_email_templates").insert(row).select("*").single());
+  if (t.folder_id !== undefined) row.folder_id = t.folder_id || null;
   let res = await go();
+  if (res.error && /folder_id/i.test(res.error.message)) { delete row.folder_id; res = await go(); }   // before 92_cs_template_folders.sql
   if (res.error && /variants/i.test(res.error.message)) {   // before 90_cs_blueprint_versions.sql
     if ((t.variants ?? []).length) return { row: null, error: "Run 90_cs_blueprint_versions.sql to keep versions." };
     delete row.variants; res = await go();
   }
   return { row: (res.data as any) ?? null, error: res.error ? (csMissing(res.error) ? NEEDS_AUTO : res.error.message) : null };
+}
+export const NEEDS_FOLDERS = "Folders need 92_cs_template_folders.sql in Supabase.";
+/** A blueprint folder, new (no id) or changed. */
+export async function saveCsFolder(f: Partial<CsFolder>): Promise<{ row: CsFolder | null; error: string | null }> {
+  const row = { name: f.name?.trim() || "New folder", color: f.color ?? null, sort: Math.round(Number(f.sort) || 0) };
+  const res = f.id ? await supabase.from("cs_email_folders").update(row).eq("id", f.id).select("id, name, color, sort").single()
+    : await supabase.from("cs_email_folders").insert(row).select("id, name, color, sort").single();
+  if (res.error) return { row: null, error: /cs_email_folders|relation|schema cache/i.test(res.error.message) ? NEEDS_FOLDERS : res.error.message };
+  return { row: res.data as any, error: null };
+}
+/** Deletes a folder; its blueprints stay, not in any folder. */
+export async function deleteCsFolder(id: string): Promise<string | null> {
+  const { error } = await supabase.from("cs_email_folders").delete().eq("id", id);
+  return error?.message ?? null;
+}
+/** Moves a blueprint into a folder (null: out of every folder). */
+export async function moveCsTemplate(id: string, folderId: string | null): Promise<string | null> {
+  const { error } = await supabase.from("cs_email_templates").update({ folder_id: folderId }).eq("id", id);
+  return error ? (/folder_id/i.test(error.message) ? NEEDS_FOLDERS : error.message) : null;
 }
 export async function deleteCsTemplate(id: string): Promise<string | null> {
   const { error } = await supabase.from("cs_email_templates").delete().eq("id", id);
@@ -926,6 +1050,15 @@ export function renderCsEmail(t: { body_html: string; design: CsDesign }): strin
     + `<tr><td style="padding:30px 36px 32px;${font};font-size:15px;line-height:1.65;color:#1d2b25">${cleanCsBody(t.body_html)}${btn}${sign}</td></tr>`
     + foot
     + `</table></td></tr></table></body></html>`;
+}
+/** Many clients' own cadence at once (null: back to their priority's), in batches. */
+export async function setClientsCadence(ids: string[], days: number | null): Promise<string | null> {
+  const v = days && days > 0 ? Math.round(days) : null;
+  for (let i = 0; i < ids.length; i += 150) {
+    const { error } = await supabase.from("clients").update({ contact_cadence_days: v }).in("id", ids.slice(i, i + 150));
+    if (error) return csErr(error);
+  }
+  return null;
 }
 export async function setClientCadence(clientId: string, days: number | null): Promise<string | null> {
   const { error } = await supabase.from("clients").update({ contact_cadence_days: days && days > 0 ? Math.round(days) : null }).eq("id", clientId);

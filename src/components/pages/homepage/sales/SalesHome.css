@@ -188,3 +188,34 @@
   .sx-home .ch-col-mid > .hs-cal .hs-agenda { display: none; }
   .sx-home .ch-col-mid > .sx-stages { flex: 1 1 0; }
 }
+
+/* ===================== the calendar card: compact days, so "Coming up" shows at least three entries ===================== */
+:is(.sx-home, .hb-card.is-snug) .hs-cal .hs-days .hs-day {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "dow dow" "num h" "bar bar";
+  align-items: baseline; column-gap: 8px; row-gap: 5px; padding: 9px 11px 10px; text-align: left;
+}
+:is(.sx-home, .hb-card.is-snug) .hs-cal .hs-days .hs-day-dow { grid-area: dow; line-height: 1.1; }
+:is(.sx-home, .hb-card.is-snug) .hs-cal .hs-days .hs-day-num { grid-area: num; font-size: 21px; }
+:is(.sx-home, .hb-card.is-snug) .hs-cal .hs-days .hs-day-h { grid-area: h; justify-self: end; font-size: 12px; white-space: nowrap; }
+:is(.sx-home, .hb-card.is-snug) .hs-cal .hs-days .hs-day-n { display: none; }
+:is(.sx-home, .hb-card.is-snug) .hs-cal .hs-days .hs-day-bar {
+  grid-area: bar; position: relative; width: 100%; max-width: none; height: 6px; margin: 1px 0 0; border-radius: 999px;
+  background: rgba(10, 29, 21, 0.07); box-shadow: none;
+}
+:is(.sx-home, .hb-card.is-snug) .hs-cal .hs-days .hs-day-bar i {
+  position: absolute; left: 0; top: 0; bottom: 0; right: auto; height: 100% !important; width: calc(var(--p, 0) * 1%);
+  border-radius: 999px; box-shadow: none; background: linear-gradient(90deg, var(--fill-a, #86efc0), var(--fill-b, #2ecb92));
+  transition: width 0.9s var(--cz-ease, cubic-bezier(.2, .8, .2, 1));
+}
+:is(.sx-home, .hb-card.is-snug) .hs-cal .hs-days .hs-day.is-sel .hs-day-bar { background: rgba(255, 255, 255, 0.14); }
+:is(.sx-home, .hb-card.is-snug) .hs-cal .hs-days .hs-day.is-off .hs-day-bar { background: repeating-linear-gradient(-45deg, rgba(10, 29, 21, 0.08) 0 4px, transparent 4px 8px); }
+:is(.sx-home, .hb-card.is-snug) .hs-cal .hs-days-sum { margin-top: 4px; }
+:is(.sx-home, .hb-card.is-snug) .hs-cal .hs-agenda { margin-top: 12px; padding-top: 12px; }
+:is(.sx-home, .hb-card.is-snug) .hs-cal .hs-agenda-head { margin-bottom: 8px; }
+:is(.sx-home, .hb-card.is-snug) .hs-cal .hs-agenda-list { gap: 8px; }
+:is(.sx-home, .hb-card.is-snug) .hs-cal .hs-agenda-day { gap: 5px; }
+:is(.sx-home, .hb-card.is-snug) .hs-cal .hs-ev { padding-top: 7px; padding-bottom: 7px; }
+/* the stages card gives way before the calendar's agenda does */
+@media (min-width: 1081px) and (min-height: 861px) {
+  .sx-home .ch-col-mid > .hs-cal { min-height: 478px; }
+}

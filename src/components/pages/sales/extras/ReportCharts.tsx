@@ -7,17 +7,19 @@ export const CHART_LABEL: Record<ChartType, string> = {
 };
 export const PALETTE = ["#1fb98a", "#0f8f62", "#e0a43c", "#6c8fb0", "#7fd9b4", "#d4a017", "#8b6fd6", "#2bb3c0", "#e0574b", "#a3b1aa", "#5b8f3e", "#c46a9a"];
 
+/** A count is whole; an average of a number keeps a decimal (2.4 filiales, not 2). */
+const plain = (v: number) => v.toLocaleString("en-US", { maximumFractionDigits: Number.isInteger(v) || Math.abs(v) >= 100 ? 0 : 1 });
 export const fmtMeasure = (m: Measure, v: number) =>
-  m === "count" ? Math.round(v).toLocaleString("es-ES")
+  m === "count" ? plain(v)
   : m === "avgprob" ? `${Math.round(v)}%`
-  : `${Math.round(v).toLocaleString("es-ES")} €`;
+  : `${Math.round(v).toLocaleString("en-US")} €`;
 const fmtShort = (m: Measure, v: number) => {
-  if (m === "count") return Math.round(v).toLocaleString("es-ES");
   if (m === "avgprob") return `${Math.round(v)}%`;
   const a = Math.abs(v);
-  if (a >= 1e6) return `${(v / 1e6).toLocaleString("es-ES", { maximumFractionDigits: 1 })}M`;
-  if (a >= 1e3) return `${(v / 1e3).toLocaleString("es-ES", { maximumFractionDigits: a >= 1e4 ? 0 : 1 })}k`;
-  return Math.round(v).toLocaleString("es-ES");
+  if (m === "count" && a < 1e4) return plain(v);
+  if (a >= 1e6) return `${(v / 1e6).toLocaleString("en-US", { maximumFractionDigits: 1 })}M`;
+  if (a >= 1e3) return `${(v / 1e3).toLocaleString("en-US", { maximumFractionDigits: a >= 1e4 ? 0 : 1 })}k`;
+  return Math.round(v).toLocaleString("en-US");
 };
 /** A "nice" axis maximum and its 4 grid steps. */
 function niceScale(max: number, whole = false) {
@@ -189,23 +191,32 @@ function Line({ agg, area }: { agg: Agg; area?: boolean }) {
   );
 }
 
-/* ---------- funnel ---------- */
+/* ---------- funnel ----------
+   A funnel counts what got at least this far: each step holds itself and every step after it
+   (a deal in Proposal went through Demo too), so each step is smaller than the one before and
+   the drop between them is a real conversion. "—" (no value) isn't a step. */
 function Funnel({ agg }: { agg: Agg }) {
-  const vals = agg.labels.map((_, i) => agg.series.reduce((a, s) => a + (s.values[i] || 0), 0));
-  const max = Math.max(1, ...vals);
+  const all = agg.labels.map((l, i) => ({ l, k: agg.keys[i], here: agg.series.reduce((a, s) => a + (s.values[i] || 0), 0) })).filter((x) => x.k !== "—" && x.k !== "Other");
+  const lost = new Set(agg.lost ?? []);
+  const steps = all.filter((x) => !lost.has(x.k));
+  const out = all.filter((x) => lost.has(x.k)).reduce((a, x) => a + x.here, 0);
+  const reached = steps.map((_, i) => steps.slice(i).reduce((a, x) => a + x.here, 0));
+  const max = Math.max(1, ...reached);
+  if (!steps.length) return <div className="rc-empty">No steps to show.</div>;
   return (
     <div className="rc rc-funnel">
-      {agg.labels.map((l, i) => {
-        const conv = i > 0 && vals[i - 1] > 0 ? Math.round((vals[i] / vals[i - 1]) * 100) : null;
+      {steps.map((x, i) => {
+        const conv = i > 0 && reached[i - 1] > 0 ? Math.round((reached[i] / reached[i - 1]) * 100) : null;
         return (
-          <div className="rc-fstep" key={agg.keys[i]} style={vars({ "--i": i })}>
+          <div className="rc-fstep" key={x.k} style={vars({ "--i": i })} title={`${x.l}: ${fmtMeasure(agg.measure, reached[i])} got this far · ${fmtMeasure(agg.measure, x.here)} are here now`}>
             {conv != null && <span className="rc-fconv">↓ {conv}%</span>}
-            <div className="rc-fbar" style={{ width: `${Math.max(8, (vals[i] / max) * 100)}%`, background: `linear-gradient(90deg, ${PALETTE[(i * 2) % PALETTE.length]}, ${PALETTE[(i * 2 + 1) % PALETTE.length]})` }}>
-              <span>{l}</span><b>{fmtMeasure(agg.measure, vals[i])}</b>
+            <div className="rc-fbar" style={{ width: `${Math.max(8, (reached[i] / max) * 100)}%`, background: `linear-gradient(90deg, ${PALETTE[(i * 2) % PALETTE.length]}, ${PALETTE[(i * 2 + 1) % PALETTE.length]})` }}>
+              <span>{x.l}</span><b>{fmtMeasure(agg.measure, reached[i])}</b>
             </div>
           </div>
         );
       })}
+      <p className="rc-fnote">Each step counts what got at least that far{out > 0 ? ` · ${fmtMeasure(agg.measure, out)} lost along the way, not in the steps` : ""}.</p>
     </div>
   );
 }
