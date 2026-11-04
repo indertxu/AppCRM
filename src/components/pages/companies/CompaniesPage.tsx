@@ -2209,6 +2209,7 @@ function OptionList({ kind, title, hint, options, builtIn, placeholder, onChange
     setErr(null); await onChanged();
   };
   const [label, setLabel] = useState("");
+  const [adding, setAdding] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [askDel, setAskDelRaw] = useState<string | null>(null);
   // how many companies use the one being removed (null while counting)
@@ -2246,9 +2247,11 @@ function OptionList({ kind, title, hint, options, builtIn, placeholder, onChange
     const l = label.trim();
     if (!l) return;
     if ([...builtIn, ...mine.map((o) => o.label)].some((x) => x.toLowerCase() === l.toLowerCase())) { setErr(`“${l}” is already there.`); return; }
+    setAdding(true);
     const e = await addCrmOption(kind, l, mine.length);
-    if (e) { setErr(/crm_options/i.test(e) ? "Run the CRM upgrade in Supabase first." : e); return; }
+    if (e) { setAdding(false); setErr(/relation .*crm_options/i.test(e) ? "Run the CRM upgrade in Supabase first." : /timeout/i.test(e) ? "That took too long — try again." : e); return; }
     setLabel(""); setErr(null); await onChanged();
+    setAdding(false);
   };
   const body = (
     <>
@@ -2298,9 +2301,9 @@ function OptionList({ kind, title, hint, options, builtIn, placeholder, onChange
         {!builtIn.length && !mine.length && <span className="cf-opt-none">Nothing on the list yet.</span>}
       </div>
       <div className="cf-opt-add">
-        <input value={label} onChange={(e) => { setLabel(e.target.value); setErr(null); }} placeholder={placeholder}
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void add(); } }} />
-        <button type="button" className="dw-save" onClick={() => void add()} disabled={!label.trim()}>+ Add</button>
+        <input value={label} onChange={(e) => { setLabel(e.target.value); setErr(null); }} placeholder={placeholder} disabled={adding}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); if (!adding) void add(); } }} />
+        <button type="button" className="dw-save" onClick={() => void add()} disabled={!label.trim() || adding}>{adding ? "Adding…" : "+ Add"}</button>
       </div>
       {err && <p className="dw-err">{err}</p>}
     </>
