@@ -2841,3 +2841,9 @@
 @container (max-width: 190px) { .cal.cal-v3 .cv-hd-bar { display: none; } }
 @container (max-width: 140px) { .cal.cal-v3 .cv-hd-load em, .cal.cal-v3 .cv-hd-tag { display: none; } }
 @container (max-width: 112px) { .cal.cal-v3 .cv-hd-load { display: none; } }
+
+/* confirmed / cancelled stays visible on short entries: the hover buttons sit left of the tick,
+   and the buttons themselves show which one is set */
+.cal.cal-v3 .cal-event.is-short:is(.is-confirmed, .is-cancelled) .cal-event-actions { right: 28px; }
+.cal.cal-v3 .cal-ev-btn.is-ok.is-active { background: #12b57f; color: #fff; }
+.cal.cal-v3 .cal-ev-btn.is-no.is-active { background: #9aa8a2; color: #fff; }

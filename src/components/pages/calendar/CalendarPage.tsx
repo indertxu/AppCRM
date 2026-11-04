@@ -2172,9 +2172,9 @@ onClick={(ev) => { ev.stopPropagation(); if (!opaque(e.userId) && e.merged === 1
                           whoever booked it. */}
                       {e.userId === myId && e.merged === 1 && (
                       <span className="cal-event-actions">
-                        <button className="cal-ev-btn is-ok" title="Took place"
+                        <button className={`cal-ev-btn is-ok ${e.status === "confirmed" ? "is-active" : ""}`} title={e.status === "confirmed" ? "Took place (set)" : "Took place"} aria-pressed={e.status === "confirmed"}
                           onClick={(ev) => { ev.stopPropagation(); setStatus(e.id, "confirmed"); }}>✓</button>
-<button className="cal-ev-btn is-no" title="Did not take place"
+<button className={`cal-ev-btn is-no ${e.status === "cancelled" ? "is-active" : ""}`} title={e.status === "cancelled" ? "Did not take place (set)" : "Did not take place"} aria-pressed={e.status === "cancelled"}
                           onClick={(ev) => { ev.stopPropagation(); setStatus(e.id, "cancelled"); }}>✕</button>
                         <button className="cal-ev-btn is-log" title="Log what actually happened"
                           onClick={(ev) => { ev.stopPropagation(); setActualFor(e); }}>⏱</button>

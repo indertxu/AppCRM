@@ -843,7 +843,7 @@ export function ClientPageSettings({ onBack, canManage }: { onBack: () => void; 
       sections={[
         { k: "editing", label: "Editing rights", icon: "pen", tone: "violet", title: "Editing rights", hint: "Who can change contracts, signed products, deals and the company inside a client",
           body: <ClientEditAccess /> },
-        { k: "skeletons", label: "Folder templates", icon: "folder", tone: "amber", title: "Folder templates", hint: "Standard folder structures you add to any client from its Folders tab, in one click",
+        { k: "skeletons", label: "Folder templates", icon: "folder", tone: "amber", title: "Folder templates", hint: "Skeleton folder structures: apply one to every client at once, add it from a client's Folders tab, and give new clients the default",
           body: <FolderTemplatesEditor canEdit={canManage} /> },
         { k: "mail", label: "Mail rules", icon: "mail", tone: "indigo", title: "Mail rules", hint: "Which e-mail lands in each client's Emails tab, by address or @domain",
           body: <ClientMailRulesEditor canEdit={canManage} /> },

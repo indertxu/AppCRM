@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from "react";
+import { createPortal } from "react-dom";
 import { supabase } from "../../api/supabase";
 import "./ClientDirectory.css";
 
@@ -600,6 +601,119 @@ export async function applyFolderTemplate(clientId: string, tree: FolderNode[], 
   const error = await walk(tree, parentId);
   return { added, reused, error, folders: all };
 }
+/** How many of the template's folders a client is still missing (nothing is created). */
+export function missingFolders(tree: FolderNode[], existing: { id: string; parent_id: string | null; name: string }[], parentId: string | null = null): number {
+  const norm = (s: string) => s.trim().toLocaleLowerCase();
+  let n = 0;
+  for (const x of tree) {
+    const name = x.name.trim();
+    if (!name) continue;
+    const f = existing.find((e) => (e.parent_id ?? null) === parentId && norm(e.name) === norm(name));
+    n += f ? missingFolders(x.children, existing, f.id) : countNodes(x.children.filter((c) => c.name.trim())) + 1;
+  }
+  return n;
+}
+
+/** Settings › Folder templates › "Apply to clients": the template into many client directories at once. */
+function ApplyToClients({ tpl, onClose }: { tpl: FolderTemplate; onClose: () => void }) {
+  type Row = { id: string; name: string; status: string | null; folders: { id: string; parent_id: string | null; name: string; sort: number }[]; missing: number };
+  const [rows, setRows] = useState<Row[] | null>(null);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [q, setQ] = useState("");
+  const [run, setRun] = useState<{ done: number; total: number; added: number; failed: string[] } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    (async () => {
+      const [c, f] = await Promise.all([
+        supabase.from("clients").select("id, name, status").order("name"),
+        supabase.from("client_folders").select("id, client_id, parent_id, name, sort").limit(20000),
+      ]);
+      if (c.error) { setErr(c.error.message); setRows([]); return; }
+      const byClient = new Map<string, any[]>();
+      ((f.data ?? []) as any[]).forEach((x) => { const k = String(x.client_id); byClient.set(k, [...(byClient.get(k) ?? []), x]); });
+      const list: Row[] = ((c.data ?? []) as any[]).map((x) => {
+        const folders = byClient.get(String(x.id)) ?? [];
+        return { id: String(x.id), name: x.name ?? "Client", status: x.status ?? null, folders, missing: missingFolders(tpl.tree, folders) };
+      });
+      setRows(list);
+      setPicked(new Set(list.filter((r) => r.missing > 0 && r.status !== "churned").map((r) => r.id)));
+    })();
+  }, [tpl]);
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape" && !run) onClose(); };
+    document.addEventListener("keydown", key);
+    return () => document.removeEventListener("keydown", key);
+  }, [onClose, run]);
+  const shown = (rows ?? []).filter((r) => !q.trim() || r.name.toLowerCase().includes(q.trim().toLowerCase()));
+  const toAdd = (rows ?? []).filter((r) => picked.has(r.id)).reduce((s, r) => s + r.missing, 0);
+  const complete = (rows ?? []).filter((r) => r.missing === 0).length;
+  const toggle = (id: string) => setPicked((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const go = async () => {
+    const list = (rows ?? []).filter((r) => picked.has(r.id) && r.missing > 0);
+    setRun({ done: 0, total: list.length, added: 0, failed: [] });
+    let added = 0, done = 0; const failed: string[] = [];
+    // a few clients at a time
+    let next = 0;
+    const worker = async () => {
+      while (next < list.length) {
+        const r = list[next++];
+        const res = await applyFolderTemplate(r.id, tpl.tree, null, r.folders);
+        added += res.added; done++;
+        if (res.error) failed.push(r.name);
+        setRows((xs) => (xs ?? []).map((x) => (x.id === r.id ? { ...x, folders: res.folders, missing: missingFolders(tpl.tree, res.folders) } : x)));
+        setRun({ done, total: list.length, added, failed: [...failed] });
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, list.length) }, worker));
+    setPicked(new Set());
+  };
+  const finished = run && run.done === run.total;
+  return createPortal(
+    <div className="fta-back" onMouseDown={(e) => { if (e.target === e.currentTarget && !(run && !finished)) onClose(); }}>
+      <div className="fta" role="dialog" aria-label={`Apply ${tpl.name} to clients`}>
+        <header className="fta-head">
+          <span className="fta-ico"><FolderGlyph /></span>
+          <div><b>Apply “{tpl.name || "Untitled"}” to clients</b><span>Only the folders a client is missing are added — nothing is renamed, moved or deleted.</span></div>
+          <button type="button" className="fte-icon" onClick={onClose} disabled={!!run && !finished} aria-label="Close"><Ic d="M18 6 6 18M6 6l12 12" /></button>
+        </header>
+        {err && <p className="fte-err">{err}</p>}
+        {!rows ? <div className="fte-skel" /> : (
+          <>
+            <div className="fta-tools">
+              <input className="fta-q" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a client…" />
+              <span className="fta-stat"><b>{complete}</b> of {rows.length} already follow it</span>
+              <button type="button" className="fte-btn" onClick={() => setPicked(new Set(rows.filter((r) => r.missing > 0).map((r) => r.id)))}>All missing</button>
+              <button type="button" className="fte-btn" onClick={() => setPicked(new Set())}>None</button>
+            </div>
+            <div className="fta-list">
+              {shown.map((r, i) => (
+                <label key={r.id} className={`fta-row ${r.missing ? "" : "is-done"} ${picked.has(r.id) ? "is-on" : ""}`} style={{ ["--i" as string]: Math.min(i, 20) } as CSSProperties}>
+                  <input type="checkbox" checked={picked.has(r.id)} disabled={!r.missing || !!run && !finished} onChange={() => toggle(r.id)} />
+                  <span className="fta-name">{r.name}{r.status === "churned" && <em>churned</em>}</span>
+                  <span className="fta-have">{r.folders.length ? `${r.folders.length} folder${r.folders.length === 1 ? "" : "s"} today` : "Empty directory"}</span>
+                  <span className={`fta-miss ${r.missing ? "" : "is-ok"}`}>{r.missing ? `+${r.missing} to add` : "✓ Complete"}</span>
+                </label>
+              ))}
+              {!shown.length && <p className="fta-empty">No client matches “{q}”.</p>}
+            </div>
+            <footer className="fta-foot">
+              {run ? (
+                <div className="fta-prog">
+                  <span className="fta-bar"><i style={{ width: `${run.total ? (run.done / run.total) * 100 : 100}%` }} /></span>
+                  <span>{finished ? `Done · ${run.added} folder${run.added === 1 ? "" : "s"} added in ${run.total} client${run.total === 1 ? "" : "s"}${run.failed.length ? ` · failed: ${run.failed.join(", ")}` : ""}` : `Adding… ${run.done} of ${run.total} clients`}</span>
+                </div>
+              ) : <span className="fta-sum">{picked.size} client{picked.size === 1 ? "" : "s"} picked · {toAdd} folder{toAdd === 1 ? "" : "s"} to add</span>}
+              {finished ? <button type="button" className="fte-btn is-primary" onClick={onClose}>Close</button>
+                : <button type="button" className="fte-btn is-primary" onClick={() => void go()} disabled={!picked.size || !toAdd || !!run}>Apply to {picked.size} client{picked.size === 1 ? "" : "s"}</button>}
+            </footer>
+          </>
+        )}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 const EXAMPLE_TREE = (): FolderNode[] => [
   { id: nodeId(), name: "01 Contract", children: [{ id: nodeId(), name: "Signed", children: [] }, { id: nodeId(), name: "Amendments", children: [] }] },
   { id: nodeId(), name: "02 Proposals", children: [] },
@@ -619,6 +733,7 @@ export function FolderTemplatesEditor({ canEdit = true }: { canEdit?: boolean })
   const [err, setErr] = useState<string | null>(null);
   const [focus, setFocus] = useState<string | null>(null);
   const [askDel, setAskDel] = useState(false);
+  const [applying, setApplying] = useState(false);
   const dirty = useRef<Set<string>>(new Set());
   useEffect(() => { loadFolderTemplates().then((r) => { setList(r.list); setMissing(r.missing); setOpenId(r.list[0]?.id ?? null); }); }, []);
   const cur = (list ?? []).find((t) => t.id === openId) ?? null;
@@ -721,7 +836,7 @@ export function FolderTemplatesEditor({ canEdit = true }: { canEdit?: boolean })
             {list.map((t) => (
               <button key={t.id} type="button" className={`fte-item ${t.id === openId ? "is-on" : ""}`} onClick={() => { setOpenId(t.id); setAskDel(false); }}>
                 <span className="fte-item-ico"><FolderGlyph /></span>
-                <span className="fte-item-txt"><b>{t.name || "Untitled"}</b><em>{countNodes(t.tree)} folders{t.is_default ? " · default" : ""}</em></span>
+                <span className="fte-item-txt"><b>{t.name || "Untitled"}</b><em>{countNodes(t.tree)} folders{t.is_default ? " · new clients" : ""}</em></span>
               </button>
             ))}
             {canEdit && <button type="button" className="fte-item is-new" onClick={() => void create(false)}><Ic d="M12 5v14M5 12h14" />New template</button>}
@@ -732,10 +847,11 @@ export function FolderTemplatesEditor({ canEdit = true }: { canEdit?: boolean })
                 <input className="fte-title" value={cur.name} placeholder="Template name" disabled={!canEdit} onChange={(e) => patch(cur.id, { name: e.target.value })} />
                 <span className={`fte-state is-${state}`}>{state === "saving" ? "Saving…" : state === "saved" ? "Saved" : state === "error" ? "Not saved" : ""}</span>
                 {canEdit && (
-                  <label className="fte-def" title="Shown first when you add folders to a client">
-                    <input type="checkbox" checked={cur.is_default} onChange={() => patch(cur.id, { is_default: !cur.is_default })} />Default
+                  <label className="fte-def" title="Every new client (from a won deal, an import or the API) gets these folders straight away. Only one template can do it.">
+                    <input type="checkbox" checked={cur.is_default} onChange={() => patch(cur.id, { is_default: !cur.is_default })} />Add to new clients
                   </label>
                 )}
+                {canEdit && <button type="button" className="fte-btn is-primary fte-apply" onClick={() => setApplying(true)} disabled={!countNodes(cur.tree)}><Ic d="M12 3 2 8l10 5 10-5zM2 13l10 5 10-5M2 17.5l10 5 10-5" />Apply to clients</button>}
                 {canEdit && (askDel ? (
                   <span className="fte-ask">Delete it? Clients keep their folders.
                     <button type="button" className="fte-btn" onClick={() => setAskDel(false)}>Keep</button>
@@ -743,11 +859,12 @@ export function FolderTemplatesEditor({ canEdit = true }: { canEdit?: boolean })
                   </span>
                 ) : <button type="button" className="fte-icon" onClick={() => setAskDel(true)} title="Delete template" aria-label="Delete template"><Ic d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" /></button>)}
               </div>
-              <p className="fte-hint">Enter adds the next folder · Tab puts a new one inside · applying it to a client only adds the folders it's missing.</p>
+              <p className="fte-hint">Enter adds the next folder · Tab puts a new one inside · applying it to a client only adds the folders it's missing.{cur.is_default ? " New clients get it by themselves." : ""}</p>
               <div className="fte-tree">
                 <div className="fte-root"><Ic d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />Client directory</div>
                 {level(cur.tree, null, 0)}
               </div>
+              {applying && <ApplyToClients tpl={cur} onClose={() => setApplying(false)} />}
             </div>
           )}
         </div>
@@ -806,7 +923,7 @@ export function ApplyTemplateMenu({ clientId, parentId, parentName, folders, onA
                   <button key={t.id} type="button" role="menuitem" className={`cdt-opt ${shown?.id === t.id ? "is-on" : ""}`} onMouseEnter={() => setHover(t.id)} onFocus={() => setHover(t.id)}
                     onClick={() => void apply(t)} disabled={!!busy}>
                     <span className="cdt-opt-ico"><FolderGlyph /></span>
-                    <span><b>{t.name || "Untitled"}</b><em>{countNodes(t.tree)} folders{t.is_default ? " · default" : ""}</em></span>
+                    <span><b>{t.name || "Untitled"}</b><em>{countNodes(t.tree)} folders{t.is_default ? " · new clients" : ""}</em></span>
                     <i>{busy === t.id ? "Adding…" : "Add"}</i>
                   </button>
                 ))}

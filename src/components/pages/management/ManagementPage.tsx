@@ -2427,7 +2427,7 @@ function DeptDrive({ people, myId, myDept, isAdmin }: { people: Record<string, s
   const [q, setQ] = useState("");
   const [hi, setHi] = useState(0);
   const [sel, setSel] = useState<string | null>(null);
-  const [menu, setMenu] = useState<{ ref: DdRef; x: number; y: number } | null>(null);
+  const [menu, setMenu] = useState<{ ref: DdRef | null; x: number; y: number } | null>(null);   // ref null: the folder you're in
   const [newOpen, setNewOpen] = useState(false);
   const [dlg, setDlg] = useState<null | { k: "folder"; parent: string | null } | { k: "link"; item?: DdItem } | { k: "note"; item?: DdItem } | { k: "table"; item: DdItem } | { k: "rename"; ref: DdRef } | { k: "move"; ref: DdRef } | { k: "delete"; ref: DdRef }>(null);
   const [drag, setDrag] = useState<DdRef | null>(null);
@@ -2696,7 +2696,20 @@ function DeptDrive({ people, myId, myDept, isAdmin }: { people: Record<string, s
   });
 
   /* ---------- pieces ---------- */
-  const openMenu = (e: ReactMouseEvent, ref: DdRef) => { e.preventDefault(); e.stopPropagation(); setMenu({ ref, x: Math.min(e.clientX, window.innerWidth - 230), y: Math.min(e.clientY, window.innerHeight - 300) }); };
+  const openMenu = (e: ReactMouseEvent, ref: DdRef | null) => { e.preventDefault(); e.stopPropagation(); setMenu({ ref, x: Math.min(e.clientX, window.innerWidth - 250), y: Math.min(e.clientY, window.innerHeight - (ref ? 300 : 330)) }); };
+  // like a file browser: F2 renames, Delete removes, Backspace goes up a level
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (dlg || menu) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.closest("input, textarea, select, [contenteditable=true]"))) return;
+      if (e.key === "F2" && sel) { e.preventDefault(); setDlg({ k: "rename", ref: { t: "item", id: sel } }); }
+      else if ((e.key === "Delete" || (e.key === "Backspace" && e.metaKey)) && sel) { e.preventDefault(); setDlg({ k: "delete", ref: { t: "item", id: sel } }); }
+      else if (e.key === "Backspace" && !sel && cwd) { e.preventDefault(); goFolder(byId.get(cwd)?.parent_id ?? null); }
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  });
 
   const renderTree = (parent: string | null, depth: number): ReactNode => (
     <>
@@ -2876,7 +2889,7 @@ function DeptDrive({ people, myId, myDept, isAdmin }: { people: Record<string, s
             {!results.length && <div className="dd-none"><p>Try fewer or other words. The search looks at names, folder paths, notes, links and who added things.</p></div>}
           </div>
         ) : (
-          <div className="dd-body">
+          <div className="dd-body" onContextMenu={(e) => openMenu(e, null)}>
             {here.folders.length === 0 && here.items.length === 0 ? (
               <div className="dd-blank">
                 <i className="dd-blank-art"><FolderGlyph c={crumbs[crumbs.length - 1]?.color ?? dept?.color ?? null} size={44} /></i>
@@ -2889,7 +2902,7 @@ function DeptDrive({ people, myId, myDept, isAdmin }: { people: Record<string, s
               </div>
             ) : (
               <>
-                {here.folders.length > 0 && (
+                {here.folders.length > 0 && view === "grid" && (
                   <div className="dd-folders">
                     {here.folders.map((f) => {
                       const c = counts.get(f.id) ?? { f: 0, i: 0 };
@@ -2909,7 +2922,7 @@ function DeptDrive({ people, myId, myDept, isAdmin }: { people: Record<string, s
                     })}
                   </div>
                 )}
-                {here.items.length > 0 && (view === "grid" ? (
+                {view === "grid" ? (here.items.length > 0 &&
                   <div className="dd-grid">
                     {here.items.map((it) => {
                       const k = ddKind(it);
@@ -2937,6 +2950,23 @@ function DeptDrive({ people, myId, myDept, isAdmin }: { people: Record<string, s
                 ) : (
                   <div className="dd-list">
                     <div className="dd-lrow is-head"><span>Name</span><span>Added by</span><span>Last changed</span><span className="is-r">Size</span><span /></div>
+                    {/* folders first, as rows with their folder icon */}
+                    {here.folders.map((f) => {
+                      const c = counts.get(f.id) ?? { f: 0, i: 0 };
+                      const n = c.f + c.i;
+                      return (
+                        <div key={f.id} className={`dd-lrow is-folder ${dropOn === f.id ? "is-drop" : ""} ${drag?.id === f.id ? "is-dragging" : ""}`} style={{ ["--c" as string]: f.color || "#12b57f" } as CSSProperties}
+                          onClick={(e) => { e.stopPropagation(); goFolder(f.id); }} title="Open"
+                          onDragOver={(e) => onDragOverTarget(e, f.id)} onDragLeave={() => setDropOn((d) => (d === f.id ? null : d))} onDrop={(e) => onDropTarget(e, f.id)}
+                          onContextMenu={(e) => openMenu(e, { t: "folder", id: f.id })} {...dragProps({ t: "folder", id: f.id })}>
+                          <span className="dd-lname"><FolderGlyph c={f.color} size={20} /><b title={f.name}>{f.name}</b>{pinOf({ t: "folder", id: f.id }) && <i className="dd-lpin">{DdIco.pinOn}</i>}</span>
+                          <span>{people[f.created_by ?? ""] ?? "—"}</span>
+                          <span>{ddWhen(f.updated_at || f.created_at)}</span>
+                          <span className="is-r">{n ? `${n} item${n === 1 ? "" : "s"}` : "Empty"}</span>
+                          <button className="dd-lmore" onClick={(e) => openMenu(e, { t: "folder", id: f.id })} aria-label="More">{DdIco.more}</button>
+                        </div>
+                      );
+                    })}
                     {here.items.map((it) => (
                       <div key={it.id} className={`dd-lrow ${sel === it.id ? "is-sel" : ""}`} onClick={(e) => { e.stopPropagation(); setSel(it.id); }} onDoubleClick={() => void openItem(it)}
                         onContextMenu={(e) => openMenu(e, { t: "item", id: it.id })} {...dragProps({ t: "item", id: it.id })}>
@@ -2948,7 +2978,7 @@ function DeptDrive({ people, myId, myDept, isAdmin }: { people: Record<string, s
                       </div>
                     ))}
                   </div>
-                ))}
+                )}
               </>
             )}
             <p className="dd-foot">{folders.length} folder{folders.length === 1 ? "" : "s"} · {totalFiles} file{totalFiles === 1 ? "" : "s"} · {items.length - totalFiles} links, notes &amp; tables — drag anything onto a folder to move it.</p>
@@ -2985,7 +3015,25 @@ function DeptDrive({ people, myId, myDept, isAdmin }: { people: Record<string, s
       )}
 
       {/* ---------- context menu ---------- */}
-      {menu && (() => {
+      {menu && !menu.ref && createPortal(
+        <>
+          <div className="dd-scrim" onMouseDown={() => setMenu(null)} onContextMenu={(e) => { e.preventDefault(); setMenu(null); }} />
+          <div className="dd-menu is-here" style={{ left: menu.x, top: menu.y }} role="menu">
+            <span className="dd-menu-k">{crumbs[crumbs.length - 1]?.name ?? dept?.name ?? "Directory"}</span>
+            <button onClick={() => { setMenu(null); setDlg({ k: "folder", parent: cwd }); }}>{DdIco.newFolder}New folder</button>
+            <button onClick={() => { setMenu(null); uploadTo.current = cwd; fileRef.current?.click(); }}>{DdIco.up}Upload files</button>
+            <button onClick={() => { setMenu(null); setDlg({ k: "link" }); }}>{DdIco.link}New link</button>
+            <button onClick={() => { setMenu(null); setDlg({ k: "note" }); }}>{DdIco.note}New note</button>
+            <button onClick={() => { setMenu(null); void createTable(); }}>{DdIco.table}New table</button>
+            <hr />
+            <button onClick={() => { setMenu(null); setView(view === "grid" ? "list" : "grid"); }}>{view === "grid" ? DdIco.list : DdIco.grid}{view === "grid" ? "View as list" : "View as tiles"}</button>
+            {cwd && <button onClick={() => { setMenu(null); goFolder(byId.get(cwd)?.parent_id ?? null); }}>{DdIco.up}Up one level</button>}
+            {cwd && <button onClick={() => { setMenu(null); setDlg({ k: "rename", ref: { t: "folder", id: cwd } }); }}>Rename this folder</button>}
+          </div>
+        </>,
+        document.body,
+      )}
+      {menu?.ref && (() => {
         const ref = menu.ref;
         const f = ref.t === "folder" ? byId.get(ref.id) : null;
         const it = ref.t === "item" ? items.find((x) => x.id === ref.id) : null;

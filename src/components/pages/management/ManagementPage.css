@@ -2874,3 +2874,16 @@
 .dt-table tr.is-drop-b td { box-shadow: inset 0 -3px 0 #12b57f; }
 .dt-table tr.is-dragging td { background: #eef7f2 !important; }
 .dt-table tr.is-dragging td > * { opacity: 0.45; }
+
+/* list view: folders as rows, with their folder icon */
+.dd-lrow.is-folder { cursor: pointer; }
+.dd-lrow.is-folder .dd-lname > .dd-fg { width: 30px !important; height: 22px !important; }
+.dd-lrow.is-folder .dd-lname b { font-weight: 650; }
+.dd-lrow.is-folder.is-drop { background: color-mix(in srgb, var(--c) 12%, #fff); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--c) 55%, transparent); }
+.dd-lrow.is-folder.is-dragging { opacity: 0.45; }
+.dd-lrow.is-folder .is-r { color: var(--dd-mute); }
+/* right-click anywhere in the folder */
+.dd-body { min-height: 420px; }
+.dd-menu.is-here { min-width: 220px; }
+.dd-menu.is-here > button svg { flex: none; width: 16px; height: 16px; color: #0a6f4d; }
+.dd-menu-k { display: block; padding: 6px 10px 4px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #8a9a93; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px; }
