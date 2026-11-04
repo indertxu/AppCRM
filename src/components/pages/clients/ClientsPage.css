@@ -4498,3 +4498,18 @@
 .cs4-fold-more { position: absolute; right: 6px; top: 50%; margin: 0; transform: translateY(-50%); background: #fff; }
 .cs4-fold-row:hover .cs4-fold-i em, .cs4-fold-row:focus-within .cs4-fold-i em { visibility: hidden; }
 @media (max-width: 980px) { .cs4-bpl { grid-template-columns: minmax(0, 1fr); } }
+
+/* client status (active / churned) on each row and card */
+.cx-st { flex: none; display: inline-flex; }
+.cx-td-name .cx-st { margin-left: auto; }
+.cx-tr.is-churned .cx-id b, .cx-card.is-churned .cx-id b { color: #7a8781; }
+.cx-tr.is-churned .cx-av, .cx-card.is-churned .cx-av { filter: grayscale(1); opacity: 0.6; }
+.cx-tags span.cx-st { padding: 0; background: none; border: 0; border-radius: 0; }
+/* a churned client: marked plainly, and left out of the figures */
+.cx-card.is-churned { box-shadow: 0 0 0 1px rgba(200, 70, 70, 0.28), 0 10px 26px -22px rgba(120, 30, 30, 0.5); }
+.cx-card.is-churned .cx-card-foot { opacity: 0.55; }
+.cx-churned { display: flex; flex-direction: column; gap: 2px; padding: 9px 12px; border-radius: 10px; background: #fdf0ef; border: 1px solid #f5d6d3; }
+.cx-churned b { font-size: 12.5px; font-weight: 700; color: #b33a3a; }
+.cx-churned span { font-size: 12px; color: #8a5a57; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cx-tr.is-churned { background: #fffafa; }
+.cx-tr.is-churned > span:not(.cx-td-name) { opacity: 0.5; }

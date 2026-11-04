@@ -8,8 +8,8 @@ import { ReportChart, CHART_LABEL, PALETTE, type ChartType } from "./ReportChart
 import {
   ENTITIES, entityOf, GROUP_LABEL, OPS, DEFAULT_OP, NO_VALUE, PERIODS, FN_LABEL,
   loadCrmData, buildCrmRows, buildCrmFields, aggregateCrm, partsOf, isListLink, ROW_CAP, testTree, countRules, isGroup, emptyTree, forgetCrmData,
-  condComplete, toCell, showCell, sortValue, uid, norm,
-  type Cond, type CondGroup, type Field, type EntityKey, type CrmFn, type CrmRow, type CrmData, type Kind, type Agg,
+  condComplete, toCell, showCell, sortValue, uid, norm, setReportPeriod, prettyRange, DEFAULT_REPORT_PERIOD, PERIOD_STATUS_HINT,
+  type Cond, type CondGroup, type Field, type EntityKey, type CrmFn, type CrmRow, type CrmData, type Kind, type Agg, type ReportPeriod,
 } from "./salesReportEngine";
 import "./SalesReport.css";
 
@@ -41,6 +41,8 @@ export interface CrmReport {
   charts: CrmChart[]; openInView?: boolean;
   /** The figures on top; unset = the count and the money columns' totals. */
   figures?: CrmFigure[];
+  /** The report's period (a parameter): unset = this year. */
+  period?: ReportPeriod;
 }
 interface SavedReport { id: string; name: string; owner_id: string | null; shared: boolean; updated_at: string; config: any }
 /** One of your folders of saved reports (93_sales_report_folders.sql): yours alone, reports shared with you included. */
@@ -73,6 +75,15 @@ const TEMPLATES: { title: string; hint: string; make: () => CrmReport }[] = [
     sort: { key: "client.recurring", dir: "desc" }, charts: [{ id: uid(), title: "Top clients by recurring", type: "hbar", dim: "client.name", fn: "sum", value: "client.recurring", split: null }] }) },
   { title: "Signed contracts", hint: "Every signed contract: dates, term, value — by year signed", make: () => ({ ...newReport("agreement"), name: "Signed contracts",
     sort: { key: "agreement.signed", dir: "desc" }, charts: [{ id: uid(), title: "Contract value by year signed", type: "bar", dim: "time:year:agreement.signed", fn: "sum", value: "agreement.total", split: null }, { id: uid(), title: "Contracts by product", type: "donut", dim: "agreement.products", fn: "count", value: null, split: null }] }) },
+  { title: "ARR this year: new + renewals", hint: "Contracts signed this year and the ones renewing in it, with the ARR they bring", make: () => ({ ...newReport("contract"), name: "ARR this year: new + renewals",
+    period: { key: "this_year" },
+    filter: { id: uid(), match: "all", items: [rule("contract.period_status", "in", { vals: ["New", "Renewal", "Auto-renews"] })] },
+    cols: ["client.name", "contract.product", "contract.period_status", "contract.signed", "contract.period_date", "contract.next_renewal", "contract.arr_period", "contract.revenue_period"],
+    sort: { key: "contract.period_date", dir: "asc" },
+    figures: [{ id: uid(), fn: "count", value: null, label: "Contracts" }, { id: uid(), fn: "sum", value: "contract.arr_period", label: "ARR" }, { id: uid(), fn: "sum", value: "contract.revenue_period", label: "Revenue in the period" }],
+    charts: [{ id: uid(), title: "ARR: new vs renewals", type: "donut", dim: "contract.period_status", fn: "sum", value: "contract.arr_period", split: null },
+      { id: uid(), title: "ARR by product", type: "hbar", dim: "contract.product", fn: "sum", value: "contract.arr_period", split: null, top: 10, order: "high" },
+      { id: uid(), title: "ARR by month", type: "stacked", dim: "time:month:contract.period_date", fn: "sum", value: "contract.arr_period", split: "contract.period_status", size: "l" }] }) },
   { title: "Contracts ending soon", hint: "Signed products ending in the next 90 days", make: () => ({ ...newReport("contract"), name: "Contracts ending in 90 days",
     filter: { id: uid(), match: "all", items: [rule("contract.end", "in_period", { a: "next_90" })] },
     sort: { key: "contract.end", dir: "asc" }, charts: [{ id: uid(), title: "Yearly value ending, by month", type: "bar", dim: "time:month:contract.end", fn: "sum", value: "contract.annual_now", split: null }] }) },
@@ -116,6 +127,7 @@ const I = {
   group: "M4 6h16M8 12h12M12 18h8M4 6v12", spark: "M12 3l1.8 4.6L18 9l-4.2 1.4L12 15l-1.8-4.6L6 9l4.2-1.4z",
   sliders: "M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1M15 4v4M9 10v4M17 16v4",
   folder: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
+  cal: "M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM4 10h16M8 2v4M16 2v4",
   more: "M5 11.2a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6zM12 11.2a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6zM19 11.2a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6z",
 
 };
@@ -139,6 +151,8 @@ function moveBy<T extends { id: string }>(xs: T[], from: string, to: string, aft
   return rest;
 }
 const glabel = (g: string) => GROUP_LABEL[g as EntityKey] ?? g;
+/** Lower case for a label inside a sentence — acronyms (ARR, VAT, CRM…) stay as they are. */
+const low = (x: string) => x.split(" ").map((w) => (/^[A-Z0-9]{2,}\b/.test(w) ? w : w.toLowerCase())).join(" ");
 
 /** A field picker: every field, grouped by the part of the CRM it belongs to. */
 function FieldPick({ fields, value, onChange, placeholder, filter, main }: { fields: Field[]; value: string | null; onChange: (k: string) => void; placeholder: string; filter?: (f: Field) => boolean; main?: string }) {
@@ -180,7 +194,7 @@ function RuleRow({ c, fields, fieldByKey, values, opts, onChange, onRemove, main
             <SalesMultiFilter values={c.vals} onChange={(v) => set({ vals: v })} options={opts(c, f)} placeholder="Pick values…" noun="values" searchFrom={8} />
           ) : f.kind === "date" ? (
             c.op === "in_period" ? (
-              <SalesMultiFilter single values={c.a ? [c.a] : []} onChange={(v) => v[0] && set({ a: v[0] })} options={PERIODS.filter((p) => p.key !== "all" && p.key !== "custom").map((p) => ({ value: p.key, label: p.label, group: p.group }))} placeholder="Pick a period…" />
+              <SalesMultiFilter single values={c.a ? [c.a] : []} onChange={(v) => v[0] && set({ a: v[0] })} options={[{ value: "report", label: "The report's period", group: "This report", hint: "◷" }, ...PERIODS.filter((p) => p.key !== "all" && p.key !== "custom").map((p) => ({ value: p.key, label: p.label, group: p.group }))]} placeholder="Pick a period…" />
             ) : (
               <span className="rp-rule-dates">
                 <DatePicker value={c.a} onChange={(v) => set({ a: v ?? "" })} placeholder="Date" />
@@ -276,8 +290,8 @@ export default function ReportsPage() {
   const [owner, setOwner] = useState<string | null>(null);
   const [snap, setSnap] = useState("");
   /** The toolbar's open panel (one at a time): what the rows are, the filters, the columns, the charts. */
-  const [panel, setPanel] = useState<"data" | "filter" | "cols" | "charts" | null>(null);
-  const togglePanel = (p: "data" | "filter" | "cols" | "charts") => setPanel((cur) => (cur === p ? null : p));
+  const [panel, setPanel] = useState<"data" | "period" | "filter" | "cols" | "charts" | null>(null);
+  const togglePanel = (p: "data" | "period" | "filter" | "cols" | "charts") => setPanel((cur) => (cur === p ? null : p));
   const [sharedSnap, setSharedSnap] = useState(false);
   useEffect(() => {
     if (!panel) return;
@@ -396,11 +410,19 @@ export default function ReportsPage() {
   }, [source, extra, dataTick]);
 
   const fieldByKey = useMemo(() => new Map(fields.map((f) => [f.key, f])), [fields]);
+  // the report's period: every period-aware field and "the report's period" rule reads it
+  const period = cfg?.period ?? DEFAULT_REPORT_PERIOD;
+  setReportPeriod(period);
+  const periodSig = `${period.key}|${period.from ?? ""}|${period.to ?? ""}`;
+  const periodName = period.key === "custom" ? "Custom dates" : PERIODS.find((p) => p.key === period.key)?.label ?? "This year";
+  const periodRange = prettyRange(period.key, period.from, period.to);
+  /** Does anything on the report read the period (a period figure, or a rule on "the report's period")? */
+  const usesPeriod = !!cfg && /(period_status|_in_period|arr_period|revenue_period|period_date)|"a":"report"/.test(JSON.stringify([cfg.cols, cfg.filter, cfg.charts, cfg.figures ?? null, cfg.groupBy, cfg.sort]));
   // the rows are built only from data read for this subject and these parts (never a half-read mix)
   const ready = dataFor === `${source}|${withKey}`;
   const allRows: CrmRow[] = useMemo(() => (data && source && ready ? buildCrmRows(source, data, extra) : []), [data, source, extra, ready]);
   const filter = cfg?.filter;
-  const rows = useMemo(() => (filter ? allRows.filter((r) => testTree(filter, r, fieldByKey)) : []), [allRows, filter, fieldByKey]);
+  const rows = useMemo(() => (filter ? allRows.filter((r) => testTree(filter, r, fieldByKey)) : []), [allRows, filter, fieldByKey, periodSig]); // eslint-disable-line react-hooks/exhaustive-deps
   // the values a category field takes (its list, plus what is in the data)
   const valuesOf = useMemo(() => {
     const memo = new Map<string, string[]>();
@@ -416,7 +438,7 @@ export default function ReportsPage() {
   }, [allRows]);
 
   /* ---- how many rows each value would keep, given the other rules (so no pick leads to an empty report by surprise) ---- */
-  const facetCache = useMemo(() => new Map<string, Map<string, number>>(), [allRows, filter, fieldByKey]);
+  const facetCache = useMemo(() => new Map<string, Map<string, number>>(), [allRows, filter, fieldByKey, periodSig]); // eslint-disable-line react-hooks/exhaustive-deps
   const facet = (ruleId: string, f: Field): Map<string, number> => {
     const k = `${ruleId}|${f.key}`;
     let m = facetCache.get(k);
@@ -454,7 +476,7 @@ export default function ReportsPage() {
       if (n > 0 && (!best || n > best.n)) best = { rule: r, n };
     }
     return best;
-  }, [filter, rows.length, allRows, fieldByKey]);
+  }, [filter, rows.length, allRows, fieldByKey, periodSig]); // eslint-disable-line react-hooks/exhaustive-deps
   /** "and" rules, one after the other: how many are left after each (shows where the rows go). */
   const leftAfter = useMemo(() => {
     const m = new Map<string, number>();
@@ -473,12 +495,12 @@ export default function ReportsPage() {
       m.set(it.id, cur.length);
     }
     return m;
-  }, [filter, allRows, fieldByKey]);
+  }, [filter, allRows, fieldByKey, periodSig]); // eslint-disable-line react-hooks/exhaustive-deps
   const ruleText = (c: Cond) => {
     const f = fieldByKey.get(c.field);
     if (!f) return "a rule";
     const op = OPS[f.kind].find((o) => o.value === c.op)?.label ?? c.op;
-    const v = NO_VALUE.has(c.op) ? "" : c.vals.length ? c.vals.slice(0, 3).join(", ") + (c.vals.length > 3 ? ` +${c.vals.length - 3}` : "") : c.op === "in_period" ? (PERIODS.find((p) => p.key === c.a)?.label ?? c.a) : c.op === "between" ? `${c.a} and ${c.b}` : c.a;
+    const v = NO_VALUE.has(c.op) ? "" : c.vals.length ? c.vals.slice(0, 3).join(", ") + (c.vals.length > 3 ? ` +${c.vals.length - 3}` : "") : c.op === "in_period" ? (c.a === "report" ? "the report's period" : PERIODS.find((p) => p.key === c.a)?.label ?? c.a) : c.op === "between" ? `${c.a} and ${c.b}` : c.a;
     return `${f.label} ${op}${v ? ` ${v}` : ""}`;
   };
 
@@ -703,16 +725,16 @@ export default function ReportsPage() {
   };
   const chartSub = (ch: CrmChart) => {
     const vf = ch.value ? fieldByKey.get(ch.value) : null;
-    const what = ch.fn === "count" || !vf ? "How many" : `${FN_LABEL[ch.fn === "sum" && vf.kind === "percent" ? "avg" : ch.fn]} of ${vf.label.toLowerCase()}`;
+    const what = ch.fn === "count" || !vf ? "How many" : `${FN_LABEL[ch.fn === "sum" && vf.kind === "percent" ? "avg" : ch.fn]} of ${low(vf.label)}`;
     const sp = ch.split ? fieldByKey.get(ch.split) : null;
-    return [what, `by ${dimLabel(ch.dim).toLowerCase()}`, sp ? `split by ${sp.label.toLowerCase()}` : "", ch.top ? `top ${ch.top}` : "", ch.cumulative ? "running total" : ""].filter(Boolean).join(" · ");
+    return [what, `by ${low(dimLabel(ch.dim))}`, sp ? `split by ${low(sp.label)}` : "", ch.top ? `top ${ch.top}` : "", ch.cumulative ? "running total" : ""].filter(Boolean).join(" · ");
   };
   const splitOptions: SmfOption[] = [{ value: "__none", label: "No split" }, ...fields.filter((f) => f.kind === "enum" || f.kind === "text").map((f) => ({ value: f.key, label: fl(f), group: glabel(f.group), hint: KIND_ICON[f.kind] }))];
   /** Charts that fit this report, one click each (built from its own fields). */
   const suggestions = useMemo((): Omit<CrmChart, "id">[] => {
     if (!cfg || !fields.length) return [];
     const e = entityOf(cfg.source);
-    const lc = (x: string) => x.toLowerCase();
+    const lc = low;
     const own = fields.filter((f) => f.group === cfg.source && !f.key.endsWith(".__count"));
     const fit = (f: Field) => f.kind === "enum" && !/name|email|phone|website|url/i.test(f.key) && (() => { const n = valuesOf(f).length; return n >= 2 && n <= 40; })();
     // its own categories first, then those of what comes along (a contact's company country…)
@@ -1056,6 +1078,12 @@ export default function ReportsPage() {
                     <span className="rp-tb-t"><em>Each row is</em><b>{[ent!.label, ...withList.map((k) => entityOf(k).plural)].join(" + ")}</b></span>
                     <Ico d={I.dn} w={2.4} />
                   </button>
+                  <button type="button" className={`rp-tb ${panel === "period" ? "is-on" : ""} ${usesPeriod ? "has-n" : ""}`} onClick={() => togglePanel("period")} aria-expanded={panel === "period"} style={vars({ "--c": "#b7791f" })}
+                    title={usesPeriod ? `This report reads the period: ${periodRange}` : "The report's period: the period figures (ARR in the period, revenue, renewals…) and the rules on “the report's period” read it"}>
+                    <span className="rp-tb-ico"><Ico d={I.cal} /></span>
+                    <span className="rp-tb-t"><em>Period</em><b>{periodName}</b></span>
+                    <Ico d={I.dn} w={2.4} />
+                  </button>
                   <button type="button" className={`rp-tb ${panel === "filter" ? "is-on" : ""} ${nRules ? "has-n" : ""}`} onClick={() => togglePanel("filter")} aria-expanded={panel === "filter"}>
                     <span className="rp-tb-ico"><Ico d={I.group} /></span>
                     <span className="rp-tb-t"><em>Filter</em><b>{nRules ? `${nRules} rule${nRules === 1 ? "" : "s"}` : "All of them"}</b></span>
@@ -1111,6 +1139,42 @@ export default function ReportsPage() {
                       <em>{rowsHint}</em>
                     </div>
                   )}
+                </section>
+                    )}
+                    {panel === "period" && (
+                <section className="rp-card rp-period">
+                  <h3>The report's period</h3>
+                  <p className="rp-help">One period for the whole report. The figures that depend on a period read it — <b>In the period</b> (new, renewal, auto-renews, up for renewal…), <b>ARR in the period</b>, <b>Revenue in the period</b>, <b>Signed or renews in the period</b> — and so does any filter set to <b>The report's period</b>. It moves with the calendar: “This year” is always the current one.</p>
+                  <div className="rp-pgrid">
+                    {["Years", "Quarters", "Months", "Rolling", "Weeks", "Open-ended", "Any"].filter((grp) => PERIODS.some((p) => p.group === grp)).map((grp) => (
+                      <div className="rp-pg" key={grp}>
+                        <span>{grp}</span>
+                        <div className="rp-pg-chips">
+                          {PERIODS.filter((p) => p.group === grp).map((p) => (
+                            <button type="button" key={p.key} className={`rp-pchip ${period.key === p.key ? "is-on" : ""}`} aria-pressed={period.key === p.key} onClick={() => set({ period: { key: p.key } })} title={prettyRange(p.key)}>{p.label}</button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                    <div className="rp-pg is-custom">
+                      <span>Custom</span>
+                      <div className="rp-pg-chips">
+                        <DatePicker value={period.key === "custom" ? period.from ?? "" : ""} onChange={(v) => set({ period: { key: "custom", from: v || null, to: period.key === "custom" ? period.to ?? null : null } })} placeholder="From" />
+                        <i>to</i>
+                        <DatePicker value={period.key === "custom" ? period.to ?? "" : ""} onChange={(v) => set({ period: { key: "custom", from: period.key === "custom" ? period.from ?? null : null, to: v || null } })} placeholder="To" />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="rp-pnow">
+                    <span className="rp-pnow-ico"><Ico d={I.cal} /></span>
+                    <span><b>{periodName}</b><em>{periodRange}</em></span>
+                    {!usesPeriod && <p>Nothing on this report reads the period yet: add a column such as <b>ARR in the period</b>, or a filter on <b>The report's period</b>.</p>}
+                  </div>
+                  {cfg.source === "contract" || cfg.source === "agreement" || withList.includes("contract") || withList.includes("agreement") ? (
+                    <div className="rp-pkey">
+                      {Object.entries(PERIOD_STATUS_HINT).map(([k, v]) => <span key={k}><b>{k}</b>{v}</span>)}
+                    </div>
+                  ) : null}
                 </section>
                     )}
                     {panel === "filter" && (
@@ -1221,7 +1285,7 @@ export default function ReportsPage() {
                 <section className="rp-card is-table">
                   <div className="rp-thead">
                     <b>{rows.length.toLocaleString("en-GB")} {rowWord(rows.length)}</b>
-                    <em>{allRows.length !== rows.length ? `of ${allRows.length.toLocaleString("en-GB")}` : "all of them"}{cfg.groupBy ? ` · grouped by ${(fieldByKey.get(cfg.groupBy)?.label ?? "").toLowerCase()}` : ""}</em>
+                    <em>{allRows.length !== rows.length ? `of ${allRows.length.toLocaleString("en-GB")}` : "all of them"}{cfg.groupBy ? ` · grouped by ${low(fieldByKey.get(cfg.groupBy)?.label ?? "")}` : ""}{usesPeriod ? ` · period: ${periodName.toLowerCase()} (${periodRange})` : ""}</em>
                     <div className="rp-thead-ctl">
                     <label className="rp-tb-sel"><span>Group by</span>
                       <SalesMultiFilter single values={[cfg.groupBy ?? "__none"]} onChange={(v) => set({ groupBy: v[0] && v[0] !== "__none" ? v[0] : null })}

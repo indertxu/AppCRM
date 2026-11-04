@@ -173,6 +173,7 @@ export async function createSalesMeeting(input: {
   const startMin = at.getHours() * 60 + at.getMinutes();
   const { data, error } = await supabase.from("calendar_entries").insert({
     ...rest,
+    name: rest.title?.trim() || null,
     user_id: assignee_id,
     kind: "meeting",
     meeting_kind: kind,
@@ -427,7 +428,7 @@ export interface MeetingDetail {
 /** Everything needed to reopen a meeting in the editor. */
 export async function loadMeetingDetail(id: string): Promise<MeetingDetail | null> {
   const { data: e } = await supabase.from("calendar_entries")
-    .select("id, tracking_id, phase_id_ref, company_id, title, entry_date, start_min, end_min, meeting_kind, notes")
+    .select("*")
     .eq("id", id).maybeSingle();
   if (!e) return null;
 
@@ -442,7 +443,8 @@ export async function loadMeetingDetail(id: string): Promise<MeetingDetail | nul
     tracking_id: row.tracking_id,
     phase_id: row.phase_id_ref,
     company_id: row.company_id,
-    title: row.title ?? "",
+    // The calendar's "name" is the meeting's name everywhere (the deal's own text stays in title).
+    title: row.name || row.title || "",
     entry_date: row.entry_date,
     start_min: row.start_min,
     end_min: row.end_min,
@@ -471,8 +473,11 @@ export async function saveMeetingEdit(input: {
 }): Promise<string | null> {
   const { id, organiser_id, contact_ids, summoned_ids, phase_id, meeting_kind, ...row } = input;
 
+  // What the form calls the meeting is its name; a meeting that already has one (made on a deal) keeps its own text in title.
+  const { data: before } = await supabase.from("calendar_entries").select("*").eq("id", id).maybeSingle();
+  const { title, ...rest } = row;
   const { error } = await supabase.from("calendar_entries")
-    .update({ ...row, phase_id_ref: phase_id, meeting_kind }).eq("id", id);
+    .update({ ...rest, ...((before as any)?.name ? {} : { title }), name: title || null, phase_id_ref: phase_id, meeting_kind }).eq("id", id);
   if (error) return error.message;
 
   // Attendees: swap the lot, they carry no state of their own.

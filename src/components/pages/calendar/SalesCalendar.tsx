@@ -1290,7 +1290,7 @@ function NewMeeting({ day, hour, deals, userId, hours, links, edit, fromOutlook,
   };
 
   const save = async () => {
-    if (!title.trim()) { setErr(mode === "meeting" ? "Give the meeting a title." : "Give the block a title."); return; }
+    if (!title.trim()) { setErr(mode === "meeting" ? "Give the meeting a name." : "Give the block a title."); return; }
     setBusy(true); setErr(null);
 
     if (edit) {
@@ -1391,7 +1391,7 @@ function NewMeeting({ day, hour, deals, userId, hours, links, edit, fromOutlook,
             <h3 className="sc-card-head">{mode === "meeting" ? "The meeting" : "The work"}</h3>
           <div className="sc-col-l">
             <div className="sc-f">
-              <label>{mode === "meeting" ? "What is it about" : "What are you doing"}</label>
+              <label>{mode === "meeting" ? "Meeting name" : "What are you doing"}</label>
               <input value={title} onChange={(e) => setTitle(e.target.value)}
                 placeholder={mode === "meeting" ? "e.g. Proposal walkthrough" : "e.g. Prospecting calls"} autoFocus />
             </div>

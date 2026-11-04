@@ -17,6 +17,7 @@ import {
   type Department, type PageKey, useSecurityLevels, levelBase,
   loadCalendarView, saveCalendarView, calendarViewFor, canSeeCalendar, seesCalendarDetail, calViewFallback, isManagerLevel,
   type CalViewRules, type CalViewRule, type CalSee, type CalDetail,
+  CLIENT_EDIT_ACTIONS, loadClientEdit, saveClientEdit, clientEditGrant, canClientEdit, type ClientEditAction, type ClientEditRules, type EditGrant,
 } from "../../framework/pageAccess";
 import Select from "../../framework/Select";
 import { AREAS, HIDEABLE } from "../management/mgmtAccess";
@@ -634,6 +635,119 @@ export function PanelAccess({ panelKey, what }: { panelKey: string; what: string
   );
 }
 
+
+/* =====================================================================
+   Settings › Client page › Editing rights: per action (contracts, signed
+   products, deals, company & contacts), who may change it in a client —
+   everyone, or by security role, department and person. Bosses and
+   superadmins always may. Stored as page "client_edit" (page_data_scopes).
+   ===================================================================== */
+export function ClientEditAccess() {
+  const { level, isSuper } = usePageAccess();
+  const canEdit = isSuper || levelBase(level) === "boss";
+  const LEVELS = useSecurityLevels().filter((l) => l.base !== "boss").map((l) => ({ id: l.key, label: l.name }));
+  const [rules, setRules] = useState<ClientEditRules | null>(null);
+  const [missing, setMissing] = useState(false);
+  const [depts, setDepts] = useState<Department[]>([]);
+  const [people, setPeople] = useState<{ id: string; name: string; role: string; department: string | null; full: boolean }[]>([]);
+  const [act, setAct] = useState<ClientEditAction>("contracts");
+  const [draft, setDraft] = useState<ClientEditRules>({});
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  useEffect(() => {
+    (async () => {
+      const [r, ds, profs] = await Promise.all([loadClientEdit(), loadDepartments(true), supabase.from("profiles").select("*").range(0, 99999)]);
+      setRules(r.rules); setDraft(r.rules); setMissing(r.missing); setDepts(ds);
+      setPeople(((profs.data ?? []) as any[]).filter((p) => p.active !== false).map((p) => ({
+        id: p.id, name: [p.first_name, p.last_name].filter(Boolean).join(" ") || p.full_name || p.email || "—",
+        role: String(p.role ?? "").toLowerCase(), department: p.department ?? null, full: p.is_superadmin === true || String(p.role ?? "").toLowerCase() === "boss",
+      })).sort((a, b) => a.name.localeCompare(b.name)));
+    })().catch(() => { setRules({}); setDraft({}); });
+  }, []);
+  if (!rules) return <div className="pxa-skel" />;
+  const MANAGERS = LEVELS.filter((l) => isManagerLevel(l.id)).map((l) => l.id);
+  /** The grant being edited for an action (a fallback of "managers" reads as the manager roles). */
+  const grantOf = (k: ClientEditAction): EditGrant => {
+    const g = clientEditGrant(draft, k);
+    return g === "managers" ? { everyone: false, roles: MANAGERS, depts: [], users: [] } : g;
+  };
+  const g = grantOf(act);
+  const put = (patch: Partial<EditGrant>) => setDraft((d) => ({ ...d, [act]: { ...grantOf(act), ...patch } }));
+  const who = (k: ClientEditAction) => people.filter((p) => canClientEdit(draft, k, { userId: p.id, department: p.department, role: p.role, isFull: p.full }));
+  const dirty = JSON.stringify(draft) !== JSON.stringify(rules);
+  const deptName = (k: string | null) => depts.find((d) => d.key === k)?.name ?? "No department";
+  const summary = (k: ClientEditAction) => {
+    const x = grantOf(k);
+    if (x.everyone) return "Everyone";
+    const parts = [
+      ...x.roles.map((r) => LEVELS.find((l) => l.id === r)?.label ?? r),
+      ...x.depts.map((d) => deptName(d)),
+      ...(x.users.length ? [`${x.users.length} ${x.users.length === 1 ? "person" : "people"}`] : []),
+    ];
+    return parts.length ? parts.join(", ") : "Only Boss";
+  };
+  const save = async () => {
+    if (busy) return;
+    setBusy(true); setMsg(null);
+    const e = await saveClientEdit(draft);
+    setBusy(false);
+    if (e) { setMsg({ ok: false, text: e }); return; }
+    setRules(draft); setMsg({ ok: true, text: "Saved" });
+  };
+  const inside = who(act);
+  const def = CLIENT_EDIT_ACTIONS.find((a) => a.key === act)!;
+  return (
+    <div className="pxa cea">
+      <p className="pxa-lead">{LOCK}<span>Who can change what inside a client’s pop-up. Everyone who opens the client still <b>sees</b> it all; <b>Bosses</b> and superadmins can always edit.</span></p>
+      {missing && <p className="pa2-warn">{WARN}<span>Run <b>63_page_data_scopes.sql</b> in Supabase to save editing rights.</span></p>}
+      <div className="cea-acts" role="tablist" aria-label="What can be edited">
+        {CLIENT_EDIT_ACTIONS.map((a) => (
+          <button key={a.key} type="button" role="tab" aria-selected={act === a.key} className={`cea-act ${act === a.key ? "is-on" : ""}`} onClick={() => setAct(a.key)}>
+            <b>{a.label}{rules[a.key] ? null : <i>default</i>}</b>
+            <em>{summary(a.key)}</em>
+            <small>{who(a.key).length} can edit</small>
+          </button>
+        ))}
+      </div>
+      <p className="cea-hint">{def.hint}.{!rules[act] && (def.fallback === "managers" ? " Not set yet: the managers can, as until now." : " Not set yet: everyone can, as until now.")}</p>
+      <div className="pxa-rows">
+        <div className="pxa-row">
+          <span className="pxa-k"><b>Security roles</b><em>Everyone with one of these roles</em></span>
+          <Multi label="Security roles" options={LEVELS.map((l) => ({ value: l.id, label: l.label }))}
+            everyone={{ on: g.everyone, label: "Everyone", sub: "every person who can open the client" }}
+            value={g.everyone ? [] : g.roles} placeholder="No role" search="Search roles…" disabled={!canEdit}
+            onChange={(v, all) => put({ everyone: all, roles: all ? [] : v })}
+            onClear={() => put({ everyone: false, roles: [] })} clearLabel="None" />
+        </div>
+        <div className="pxa-row">
+          <span className="pxa-k"><b>Departments</b><em>Everyone in these departments</em></span>
+          <Multi label="Departments" options={depts.map((d) => ({ value: d.key, label: d.name, color: d.color, sub: `${people.filter((p) => p.department === d.key).length}` }))}
+            value={g.depts} placeholder={g.everyone ? "Everyone is in" : "No department"} search="Search departments…" disabled={!canEdit || g.everyone}
+            onChange={(v) => put({ depts: v })} onClear={() => put({ depts: [] })} clearLabel="None" />
+        </div>
+        <div className="pxa-row">
+          <span className="pxa-k"><b>People</b><em>Also these people, by name</em></span>
+          <Multi label="People" people options={people.filter((p) => !p.full).map((p) => ({ value: p.id, label: p.name, color: depts.find((d) => d.key === p.department)?.color ?? "#9fb5ab", sub: deptName(p.department) }))}
+            value={g.users} placeholder={g.everyone ? "Everyone is in" : "Nobody else"} search="Search people…" disabled={!canEdit || g.everyone}
+            onChange={(v) => put({ users: v })} onClear={() => put({ users: [] })} clearLabel="Nobody" />
+        </div>
+      </div>
+      <div className="pxa-foot">
+        <span className="pxa-who">
+          <span className="pxa-avs">{inside.slice(0, 6).map((p) => <i key={p.id} title={p.name}>{initials(p.name)}</i>)}{inside.length > 6 && <em>+{inside.length - 6}</em>}</span>
+          <span><b>{inside.length}</b> {inside.length === 1 ? "person" : "people"} can edit {def.label.toLowerCase()}</span>
+        </span>
+        {msg && <span className={`pxa-msg ${msg.ok ? "is-ok" : "is-err"}`}>{msg.text}</span>}
+        {canEdit ? (
+          <>
+            <button type="button" className="pa2-btn is-ghost" disabled={!dirty || busy} onClick={() => { setDraft(rules); setMsg(null); }}>Undo</button>
+            <button type="button" className="pa2-btn is-primary" disabled={!dirty || busy || missing} onClick={() => void save()}>{busy ? "Saving…" : "Save"}</button>
+          </>
+        ) : <span className="pxa-msg">Only the Boss level can change this.</span>}
+      </div>
+    </div>
+  );
+}
 
 /* =====================================================================
    Settings › Calendar › Who sees whose calendar: for everyone, then by security

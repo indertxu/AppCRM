@@ -1660,11 +1660,11 @@ export function GlobalSearch() {
       if (!me) return;
       const today = new Date(); const to = new Date(); to.setDate(to.getDate() + 14);
       const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-      const { data: ev } = await supabase.from("calendar_entries").select("id, entry_date, start_min, kind, title, notes").eq("user_id", me).eq("kind", "meeting").gte("entry_date", iso(today)).lte("entry_date", iso(to)).order("entry_date").limit(30);
+      const { data: ev } = await supabase.from("calendar_entries").select("*").eq("user_id", me).eq("kind", "meeting").gte("entry_date", iso(today)).lte("entry_date", iso(to)).order("entry_date").limit(30);
       const nowMin = today.getHours() * 60 + today.getMinutes();
       setMeetings(((ev ?? []) as any[]).filter((e) => e.kind === "meeting" && (e.entry_date > iso(today) || (e.start_min ?? 0) >= nowMin))
         .sort((a, b) => a.entry_date.localeCompare(b.entry_date) || (a.start_min ?? 0) - (b.start_min ?? 0)).slice(0, 3)
-        .map((e) => ({ kind: "meeting" as const, id: e.id, label: e.title || e.notes || "Meeting",
+        .map((e) => ({ kind: "meeting" as const, id: e.id, label: e.name || e.title || e.notes || "Meeting",
           sub: `${new Date(e.entry_date + "T00:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })} · ${String(Math.floor((e.start_min ?? 0) / 60)).padStart(2, "0")}:${String((e.start_min ?? 0) % 60).padStart(2, "0")}` })));
     })().catch(() => {});
   };

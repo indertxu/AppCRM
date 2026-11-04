@@ -2,7 +2,7 @@
 import { Fragment, useState, useEffect, useMemo, useRef, type PointerEvent as RPointerEvent, type KeyboardEvent as RKeyboardEvent, type ReactNode } from "react";
 import { supabase } from "../../api/supabase";
 import NewClientForm from "./NewClientForm";
-import ClientWorkspace, { CompanyLogo, isActive, termOf, lineAnnual, lineContractValue, lineOneTime, type Line } from "./ClientWorkspace";
+import ClientWorkspace, { CompanyLogo, ClientStatusPicker, isActive, termOf, lineAnnual, lineContractValue, lineOneTime, type Line } from "./ClientWorkspace";
 import Select from "../../framework/Select";
 import { PageLoader } from "../../framework/AppLayout";
 import {
@@ -20,7 +20,7 @@ import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { listEmployees, type Employee } from "../companies/companiesApi";
 import { loadProducts, loadServices, type Product as CatProduct, type Service as CatService } from "../settings/catalogApi";
-import { projectValue, signedOf, legacyRoleMap, resolvedLinesOf, roleCounts, roleNameOf, lineRate, projectStatusOf, PROJECT_STATUS_LABEL, type Client, type Project, type ProjectType } from "./clientsTypes";
+import { projectValue, signedOf, legacyRoleMap, resolvedLinesOf, roleCounts, roleNameOf, lineRate, projectStatusOf, PROJECT_STATUS_LABEL, type Client, type ClientStatus, type Project, type ProjectType } from "./clientsTypes";
 import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
 import { downloadBlob, tableToXlsx, type ExportCell } from "../../framework/exportFile";
 import { ClientImport } from "../contacts/ContactImport";
@@ -30,7 +30,7 @@ import { countryLabel } from "../contacts/contactProfile";
 import { ensureRenewalDeals } from "../sales/sales/salesApi";
 import "../companies/CompaniesPage.css";
 import "./ClientsPage.css";
-import { useNavSection } from "../../framework/pageAccess";
+import { useNavSection, useClientEdit } from "../../framework/pageAccess";
 import { useInactiveIds } from "../../framework/peopleStatus";
 
 // Re-export shared types & helpers from their new home so existing imports
@@ -47,6 +47,8 @@ interface ClientRow {
   c: Client; name: string; services: string[]; consultants: string[];
   /** The company's website (for its logo), and whether another client looks like the same one. */
   website: string; dupOf: string | null;
+  /** "Active" or "Churned". */
+  status: string;
   city: string; country: string; sector: string;
   projects: number; openProjects: number; projectsValue: number; openValue: number;
   signed: number; used: number; delivered: number;
@@ -96,8 +98,10 @@ const HEAD_SHORT: Record<string, string> = {
 const HEALTH: Record<string, string> = { ok: "Healthy", warn: "Getting quiet", bad: "Neglected", none: "No contact yet" };
 
 export function ClientList({
-  clients, projects, projectTypes, onNew, onOpen, onDelete, usage, units, loaded = true, colsSignal = 0, linesRev = 0, toolsSlot = null,
+  clients, projects, projectTypes, onNew, onOpen, onDelete, onSetStatus, usage, units, loaded = true, colsSignal = 0, linesRev = 0, toolsSlot = null,
 }: {
+  /** Marks a client active or churned, from its row. */
+  onSetStatus?: (c: Client, status: ClientStatus, opts: { at?: string | null; reason?: string | null; stopProducts?: boolean }) => Promise<string | null>;
   /** Where the search, filters, sort and layout switch go (the page's dark header); in the list itself when not given. */
   toolsSlot?: HTMLElement | null;
   /** Changes when a client's signed products change (one deleted in its popup): the figures are read again. */
@@ -116,6 +120,7 @@ export function ClientList({
   units: Record<string, "hour" | "day">;
 }) {
   void units;
+  const canEdit = useClientEdit();
   const [q, setQ] = useState("");
   const [view, setView] = useStoredView("np-clients-view", emptyView());
   const [savedViews, setSavedViews] = useSavedViews("clientViews");
@@ -258,7 +263,7 @@ export function ClientList({
     const co = extra?.co[c.id] ?? {};
     const twinSite = !co.website ? (extra?.cos ?? []).find((x) => x.website && bareName(x.name) === bareName(c.name))?.website : "";
     return {
-      c, name: c.name, website: co.website || twinSite || "", dupOf: dupOf.get(c.id) ?? null,
+      c, name: c.name, website: co.website || twinSite || "", dupOf: dupOf.get(c.id) ?? null, status: c.status === "churned" ? "Churned" : "Active",
       services: [...new Set(mine.map((p) => typeName(p.projectTypeId)))],
       consultants: [...new Set(mine.flatMap((p) => (p.team ?? []).map((m) => m.userId).filter(Boolean)))] as string[],
       city: co.city || lastP?.address?.city || "", country: countryLabel(co.country || lastP?.address?.country || ""), sector: co.sector || "",
@@ -278,6 +283,7 @@ export function ClientList({
   const opts = (xs: string[]) => () => [...new Set(xs.filter(Boolean))].sort().map((v) => ({ value: v, label: v }));
   const fields: FField<ClientRow>[] = [
     { key: "name", label: "Name", group: "Client", type: "text", get: (r) => r.name },
+    { key: "status", label: "Status", group: "Client", type: "select", get: (r) => r.status, options: () => [{ value: "Active", label: "Active" }, { value: "Churned", label: "Churned" }] },
     { key: "city", label: "City", group: "Client", type: "select", get: (r) => r.city, options: opts(rows.map((r) => r.city)) },
     { key: "country", label: "Country", group: "Client", type: "select", get: (r) => r.country, options: opts(rows.map((r) => r.country)) },
     { key: "sector", label: "Sector", group: "Client", type: "select", get: (r) => r.sector, options: opts(rows.map((r) => r.sector)) },
@@ -354,7 +360,11 @@ export function ClientList({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, q, projects, extra, coIndex]);
   const searched = searchInfo.list;
-  const shown = applyView(searched, fields, view);
+  // Churned clients go last and don't count in the figures: they aren't clients any more.
+  const viewed = applyView(searched, fields, view);
+  const shown = [...viewed.filter((r) => r.c.status !== "churned"), ...viewed.filter((r) => r.c.status === "churned")];
+  const live = shown.filter((r) => r.c.status !== "churned");
+  const churnedN = shown.length - live.length;
   const sortKey = view.sort[0]?.key ?? "";
   const sortDir = view.sort[0]?.dir ?? "desc";
   const setSort = (key: string, dir: "asc" | "desc" = sortDir) => setView({ ...view, sort: key ? [{ key, dir }] : [] });
@@ -443,7 +453,8 @@ export function ClientList({
           const at = (shownAlt[i] ?? 0) % sl.length;
           const k = kpiOf(sl[at]);
           if (!k) return null;
-          const r = k.calc(shown);
+          const r0 = k.calc(live);
+          const r = k.key === "clients" && churnedN ? { ...r0, sub: `${r0.sub ? `${r0.sub} · ` : ""}${churnedN} churned not counted` } : r0;
           const two = sl.length > 1;
           const flip = () => { if (two) setShownAlt((x) => ({ ...x, [i]: at + 1 })); };
           return (
@@ -542,11 +553,12 @@ export function ClientList({
                     <span />
                   </div>
                   {shown.map((r, i) => (
-                    <div className="cx-tr" key={r.c.id} role="button" tabIndex={0} style={{ ["--i" as any]: Math.min(i, 16) }}
+                    <div className={`cx-tr ${r.c.status === "churned" ? "is-churned" : ""}`} key={r.c.id} role="button" tabIndex={0} style={{ ["--i" as any]: Math.min(i, 16) }}
                       onClick={() => onOpen(r.c)} onKeyDown={(e) => { if (e.key === "Enter") onOpen(r.c); }}>
                       <span className="cx-td-name">
                         <CompanyLogo className="cx-av is-sm" name={r.name} website={r.website} />
                         <span className="cx-id"><b title={r.name}>{r.name}</b>{(r.dupOf || r.city || r.sector) && <small>{r.dupOf && <i className="cx-dup" title={`Looks like the same client as: ${r.dupOf}`}>Duplicate?</i>}{[r.city, r.sector].filter(Boolean).join(" · ")}</small>}</span>
+                        {onSetStatus && <span className="cx-st" onClick={(e) => e.stopPropagation()}><ClientStatusPicker size="sm" status={r.c.status} churnedAt={r.c.churnedAt} reason={r.c.churnReason} canEdit={canEdit("company")} running={r.activeProducts} onSave={(st, o) => onSetStatus(r.c, st, o)} /></span>}
                       </span>
                       {colFields.map((f) => <span key={f.key} className={f.type === "number" ? "is-num" : ""}>{cell(f, r)}</span>)}
                       <span className="cx-td-go">
@@ -566,7 +578,7 @@ export function ClientList({
               {shown.map((r, i) => {
                 const c = r.c;
                 return (
-                  <div className="cx-card" key={c.id} role="button" tabIndex={0} style={{ ["--i" as any]: Math.min(i, 14) }}
+                  <div className={`cx-card ${c.status === "churned" ? "is-churned" : ""}`} key={c.id} role="button" tabIndex={0} style={{ ["--i" as any]: Math.min(i, 14) }}
                     onClick={() => onOpen(c)} onKeyDown={(e) => { if (e.key === "Enter") onOpen(c); }}>
                     <div className="cx-card-top">
                       <CompanyLogo className="cx-av" name={c.name} website={r.website} />
@@ -583,10 +595,17 @@ export function ClientList({
                       )}
                     </div>
                     <div className="cx-tags">
+                      {onSetStatus && <span className="cx-st" onClick={(e) => e.stopPropagation()}><ClientStatusPicker size="sm" status={c.status} churnedAt={c.churnedAt} reason={c.churnReason} canEdit={canEdit("company")} running={r.activeProducts} onSave={(st, o) => onSetStatus(c, st, o)} /></span>}
                       {r.services.map((t) => <span key={`s${t}`}>{t}</span>)}
                       {r.products.map((t) => <span key={`p${t}`} className="is-prod">{t}</span>)}
                       {!r.services.length && !r.products.length && <span className="is-soft">Nothing signed yet</span>}
                     </div>
+                    {c.status === "churned" && (
+                      <div className="cx-churned" title={c.churnReason ?? undefined}>
+                        <b>Churned{c.churnedAt ? ` on ${new Date(`${c.churnedAt}T12:00:00`).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}` : ""}</b>
+                        <span>{c.churnReason || "Not counted in the figures"}</span>
+                      </div>
+                    )}
                     <div className="cx-card-foot">
                       <span className="cx-prog" title={`${r.delivered}% of signed days delivered`}>{ring(r.delivered)}<i>{r.delivered}%</i></span>
                       <span className="cx-stat"><b>{r.projectsValue > 0 ? money(r.projectsValue) : "—"}</b><small>{r.openProjects}/{r.projects} projects open</small></span>
@@ -800,7 +819,12 @@ export default function ClientsPage() {
         <div className="cl-bar-left">
           <div>
             <h1 className="cl-title">Clients</h1>
-            <p className="cx-sub">{clients.length} client{clients.length === 1 ? "" : "s"} · {projects.filter((p) => projectStatusOf(p.status) === "open").length} open project{projects.filter((p) => projectStatusOf(p.status) === "open").length === 1 ? "" : "s"}</p>
+            {(() => {
+              const gone = new Set(clients.filter((c) => c.status === "churned").map((c) => c.id));
+              const n = clients.length - gone.size;
+              const open = projects.filter((p) => !gone.has(p.clientId) && projectStatusOf(p.status) === "open").length;
+              return <p className="cx-sub">{n} client{n === 1 ? "" : "s"}{gone.size ? ` (+${gone.size} churned)` : ""} · {open} open project{open === 1 ? "" : "s"}</p>;
+            })()}
           </div>
         </div>
         <div className="cl-bar-tools" ref={setToolsSlot} />
@@ -815,6 +839,7 @@ export default function ClientsPage() {
       </header>
 
       <ClientList
+        onSetStatus={async (c, st, o) => { const e = await d.setClientStatus(c.id, st, o); if (!e && o.stopProducts) setLinesRev((n) => n + 1); return e; }}
         linesRev={linesRev}
         clients={clients}
         projects={projects}
@@ -831,7 +856,9 @@ export default function ClientsPage() {
 
       {detailClient && (
         <ClientWorkspace
-          client={detailClient}
+          client={clients.find((c) => c.id === detailClient.id) ?? detailClient}
+          lineUsage={d.lineUsage}
+          onSetStatus={(st, o) => d.setClientStatus(detailClient.id, st, o)}
           projects={projects.filter((p) => p.clientId === detailClient.id)}
           projectTypes={projectTypes}
           usage={usage}
@@ -3161,7 +3188,7 @@ export function CustomerSuccessPage() {
     let alive = true;
     (async () => {
       const [cl, cp, pr, lg] = await Promise.all([
-        supabase.from("clients").select("id, name, company_id, project_type_id, contacts").order("name"),
+        supabase.from("clients").select("*").order("name"),
         supabase.from("client_products").select("*"),
         supabase.from("products").select("id, name"),
         supabase.from("client_contacts_log").select("client_id, contacted_at, reason, channel, contact_name, direction, source, logged_by"),
@@ -3185,7 +3212,8 @@ export function CustomerSuccessPage() {
       (await Promise.all(Array.from({ length: Math.ceil(tids.length / 150) }, (_, i) => tids.slice(i * 150, i * 150 + 150))
         .map((ids) => Promise.resolve(supabase.from("trackings").select("id, contract_terms").in("id", ids)).then((r: any) => (r.data ?? []) as any[]))).catch(() => [] as any[][]))
         .flat().forEach((t: any) => { if (t.contract_terms) terms[t.id] = t.contract_terms; });
-      if (alive) setBase({ clients: (cl.data ?? []) as any[], lines: ((cp.data ?? []) as any[]).map((r) => ({ ...r, name: pn[r.product_id] ?? "Product" })), logs, sites, terms });
+      // churned clients aren't followed up any more (96_client_status.sql)
+      if (alive) setBase({ clients: ((cl.data ?? []) as any[]).filter((x) => x.status !== "churned"), lines: ((cp.data ?? []) as any[]).map((r) => ({ ...r, name: pn[r.product_id] ?? "Product" })), logs, sites, terms });
       loadCsAuto().then((a) => { if (alive) setAuto(a); }).catch(() => {});
       supabase.from("project_types").select("id, name").then(({ data }: any) => { if (alive) setProjTypes((data ?? []) as any[]); });
       const d = await loadCsData();
@@ -3664,7 +3692,7 @@ export function CustomerSuccessPage() {
                   <li key={l.id} className={t && t.left < 90 ? "is-soon" : ""}>
                     <span className="cs3-prods-m"><b>{l.name}</b><i>{l.recurring ? "recurring" : "one-off"}{t ? ` · ${t.kind === "anniversary" ? "anniversary" : l.auto_renew || t.kind === "deal" ? "renews" : "ends"} ${t.end.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}` : ""}{t?.kind === "deal" ? " · from the deal's contract" : ""}</i></span>
                     {t && <em>{t.left} d</em>}
-                    <b className="cs3-prods-v">{csMoney(l.recurring ? lineAnnual(l) : Number(l.price) || 0)}{l.recurring ? <small>/yr</small> : null}</b>
+                    <b className="cs3-prods-v">{csMoney(l.recurring ? lineAnnual(l) : lineOneTime(l))}{l.recurring ? <small>/yr</small> : null}</b>
                   </li>
                 ); })}
               </ul>

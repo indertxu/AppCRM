@@ -1569,3 +1569,13 @@
 
 /* internal work: colleagues come along without billing */
 .bm-summon-free { margin: 8px 2px 0; font-size: 12px; font-weight: 600; color: var(--muted, #5a7d6d); }
+
+/* the booking's own name (97_meeting_names.sql) */
+.bm6-name {
+  box-sizing: border-box; width: 100%; height: 42px; margin-bottom: 14px; padding: 0 13px;
+  border: 1px solid var(--line, #e2ebe6); border-radius: 11px; background: #f7faf8;
+  font: inherit; font-size: 15px; font-weight: 650; color: var(--ink, #0b241a); outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+.bm6-name::placeholder { font-weight: 500; color: var(--muted, #7d958b); }
+.bm6-name:focus { background: #fff; border-color: var(--jade, #1fb98a); box-shadow: 0 0 0 3px rgba(31, 185, 138, 0.15); }

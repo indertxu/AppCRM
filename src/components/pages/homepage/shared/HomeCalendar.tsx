@@ -47,7 +47,7 @@ const fromIso = (s: string) => { const [y, m, d] = s.split("-").map(Number); ret
 const addDays = (d: Date, n: number) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
 const hhmm = (m: number) => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
 const hours = (min: number) => { const h = min / 60; return h === 0 ? "0h" : `${+h.toFixed(1)}h`; };
-const plain = (t: string) => mentionsToPlain(t).replace(/\s+/g, " ").trim();
+const plain = (t: string | null | undefined) => mentionsToPlain(t ?? "").replace(/\s+/g, " ").trim();
 const MEETING_COLOR = { teams: "#5b6ee1", phone: "#e0a43c", in_person: "#12b57f" } as const;
 const MEETING_LABEL = { teams: "Teams", phone: "Call", in_person: "In person" } as const;
 
@@ -199,7 +199,7 @@ export default function HomeCalendar({ userId, hoursPerDay }: { userId: string; 
           const mk = (r.meeting_kind ?? "in_person") as keyof typeof MEETING_COLOR;
           return {
             id: r.id, date: r.entry_date, start, end, kind: "meeting", meetingKind: mk,
-            title: plain(r.title) || "Meeting",
+            title: plain(r.name) || plain(r.title) || "Meeting",
             sub: companies.get(r.company_id)?.name ?? clients.get(r.client_id)?.name ?? null,
             color: MEETING_COLOR[mk] ?? MEETING_COLOR.in_person,
             href: r.tracking_id ? `/sales?tracking=${r.tracking_id}` : "/calendar",
@@ -210,8 +210,8 @@ export default function HomeCalendar({ userId, hoursPerDay }: { userId: string; 
         const type = types.get(r.work_type_id);
         return {
           id: r.id, date: r.entry_date, start, end, kind: "work", meetingKind: null,
-          title: plain(r.title) || client || type?.name || "Work",
-          sub: plain(r.title) ? client ?? type?.name ?? null : client ? type?.name ?? null : null,
+          title: plain(r.name) || plain(r.title) || client || type?.name || "Work",
+          sub: plain(r.name) || plain(r.title) ? client ?? type?.name ?? null : client ? type?.name ?? null : null,
           color: type?.color || "#0a6f4d",
           href: "/calendar",
           olIds: [r.outlook_event_id ?? null, r.outlook_source_id ?? null],
@@ -313,55 +313,69 @@ export default function HomeCalendar({ userId, hoursPerDay }: { userId: string; 
       </header>
 
       {view === "days" ? (
-        <div className="hs-days" key="days">
-          {days.map((d, i) => {
-            const iso = isoDay(d);
-            const min = bookedMin(iso);
-            const cap = capOn(iso);
-            const off = ready ? offOn(iso) : null;
-            const pct = cap > 0 ? Math.min(100, (min / cap) * 100) : min > 0 ? 100 : 0;
-            const n = (byDay.get(iso) ?? []).length;
-            const nOl = (byDay.get(iso) ?? []).filter((it) => it.kind === "outlook").length;
-            const free = cap - min;
-            const tip = (off
-              ? `${off.label}${min ? ` · ${hours(min)} booked anyway` : ""}`
-              : `${hours(min)} booked of ${hours(cap)} available · ${n - nOl} ${n - nOl === 1 ? "item" : "items"}`) + (nOl ? ` · ${nOl} in Outlook` : "");
+        <div className="hs-days hs-wk" key="days">
+          {(() => {
+            const si = sel ? days.findIndex((d) => isoDay(d) === sel) : -1;
             return (
-              <button key={iso} className={`hs-day ${loadClass(min, cap)} ${off ? `is-off is-${off.kind}` : ""} ${iso === todayIso ? "is-today" : ""} ${sel === iso ? "is-sel" : ""} ${n ? "has-items" : ""}`}
-                style={{ ["--i" as string]: i, ["--p" as string]: ready ? pct : 0 } as React.CSSProperties}
-                onClick={() => toggleDay(iso)} title={tip}>
-                <span className="hs-day-dow">{iso === todayIso ? "Today" : d.toLocaleDateString("en-GB", { weekday: "short" })}</span>
-                <span className="hs-day-num">{d.getDate()}</span>
-                <span className="hs-day-bar" aria-hidden="true">
-                  <i style={{ height: ready ? `${pct}%` : "0%" }} />
-                </span>
-                {off ? (
-                  <>
-                    <span className="hs-day-h">{min ? hours(min) : "—"}</span>
-                    <span className="hs-day-n hs-day-off">{off.kind === "holiday" ? "Holiday" : off.label}</span>
-                  </>
-                ) : (
-                  <>
-                    <span className="hs-day-h">{ready ? <>{hours(min)}<small>/{hours(cap)}</small></> : "·"}</span>
-                    <span className="hs-day-n">{!ready ? "" : free > 0 ? `${hours(free)} free` : free === 0 ? "full" : `+${hours(-free)} over`}</span>
-                  </>
-                )}
-                {/* what's booked that day — revealed on hover (consultancy home) */}
-                <span className="hs-day-peek" aria-hidden="true">
-                  {n === 0 ? <em className="hs-peek-none">{off ? off.label : "Nothing booked"}</em> : (byDay.get(iso) ?? []).slice(0, 3).map((it) => (
-                    <span key={it.id} className={`hs-peek-it ${it.kind === "outlook" ? "is-ol" : ""}`} style={{ ["--c" as string]: it.color } as React.CSSProperties}>
-                      <b>{it.allDay ? "All day" : hhmm(it.start)}</b><span>{it.title}</span>
-                    </span>
-                  ))}
-                  {n > 3 && <em className="hs-peek-more">+{n - 3} more</em>}
-                </span>
-              </button>
+              <div className={`hs-wk-strip ${si >= 0 ? "has-sel" : ""}`} style={{ ["--si" as string]: Math.max(0, si), ["--n" as string]: days.length } as React.CSSProperties}>
+                <i className="hs-wk-pill" aria-hidden="true" />
+                {days.map((d, i) => {
+                  const iso = isoDay(d);
+                  const min = bookedMin(iso);
+                  const cap = capOn(iso);
+                  const off = ready ? offOn(iso) : null;
+                  const pct = cap > 0 ? Math.min(100, (min / cap) * 100) : min > 0 ? 100 : 0;
+                  const items = byDay.get(iso) ?? [];
+                  const n = items.length;
+                  const nOl = items.filter((it) => it.kind === "outlook").length;
+                  const free = cap - min;
+                  const tip = (off
+                    ? `${off.label}${min ? ` · ${hours(min)} booked anyway` : ""}`
+                    : `${hours(min)} booked of ${hours(cap)} available · ${n - nOl} ${n - nOl === 1 ? "item" : "items"}`) + (nOl ? ` · ${nOl} in Outlook` : "");
+                  return (
+                    <button key={iso} type="button" aria-pressed={sel === iso} aria-label={`${d.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}: ${tip}`}
+                      className={`hs-wk-day ${loadClass(min, cap)} ${off ? `is-off is-${off.kind}` : ""} ${iso === todayIso ? "is-today" : ""} ${sel === iso ? "is-sel" : ""} ${i === 0 ? "is-first" : ""} ${i === days.length - 1 ? "is-last" : ""} ${!ready || off || pct === 0 ? "is-empty" : ""}`}
+                      style={{ ["--i" as string]: i, ["--p" as string]: ready && !off ? pct : 0 } as React.CSSProperties}
+                      onClick={() => toggleDay(iso)}>
+                      <span className="hs-wk-clip" aria-hidden="true"><i className="hs-wk-fill" /></span>
+                      <span className="hs-wk-top">
+                        <span className="hs-wk-dow">{iso === todayIso ? "Today" : d.toLocaleDateString("en-GB", { weekday: "short" })}</span>
+                        {n > 0 && <span className="hs-wk-n">{n}</span>}
+                      </span>
+                      <span className="hs-wk-num">{d.getDate()}</span>
+                      {off ? (
+                        <span className="hs-wk-off">{off.kind === "holiday" ? "Holiday" : off.label}</span>
+                      ) : (
+                        <span className="hs-wk-h">
+                          {ready ? <><b>{hours(min)}</b><small>/{hours(cap)}</small></> : <small>·</small>}
+                          {ready && free < 0 && <em>+{hours(-free)}</em>}
+                        </span>
+                      )}
+                      {/* what's booked that day, on hover */}
+                      <span className="hs-wk-peek" aria-hidden="true">
+                        <span className="hs-wk-peek-h">{d.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "short" })}<em>{off ? off.label : `${hours(min)} of ${hours(cap)}`}</em></span>
+                        {n === 0 ? <em className="hs-peek-none">{off ? off.label : "Nothing booked yet"}</em> : items.slice(0, 4).map((it) => (
+                          <span key={it.id} className={`hs-peek-it ${it.kind === "outlook" ? "is-ol" : ""}`} style={{ ["--c" as string]: it.color } as React.CSSProperties}>
+                            <b>{it.allDay ? "All day" : hhmm(it.start)}</b><span>{it.title}</span>
+                          </span>
+                        ))}
+                        {n > 4 && <em className="hs-peek-more">+{n - 4} more</em>}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
             );
-          })}
-          <div className="hs-days-sum">
-            <span><b>{hours(fiveBooked)}</b> booked of {ready ? hours(fiveCap) : "…"} · <b className="hs-free">{ready ? hours(fiveFree) : "…"}</b> free</span>
-            <span className="hs-days-track"><i style={{ width: `${ready ? Math.min(100, fivePct) : 0}%` }} /></span>
-            <span className="hs-days-pct">{ready ? `${Math.round(fivePct)}%` : ""}</span>
+          })()}
+          <div className="hs-wk-sum">
+            <span className="hs-wk-ring" style={{ ["--v" as string]: ready ? Math.min(100, fivePct) : 0 } as React.CSSProperties} aria-hidden="true">
+              <svg viewBox="0 0 36 36"><circle cx="18" cy="18" r="15.5" /><circle className="is-v" cx="18" cy="18" r="15.5" pathLength={100} /></svg>
+              <b>{ready ? `${Math.round(fivePct)}%` : ""}</b>
+            </span>
+            <span className="hs-wk-sum-t">
+              <span><b>{hours(fiveBooked)}</b> booked of {ready ? hours(fiveCap) : "…"}</span>
+              <em><b>{ready ? hours(fiveFree) : "…"}</b> free in the next 5 days</em>
+            </span>
           </div>
         </div>
       ) : (

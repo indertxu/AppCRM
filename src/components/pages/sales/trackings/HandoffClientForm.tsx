@@ -455,7 +455,7 @@ export default function HandoffClientForm({ prefill, catalog, mode = "create", s
             <section className="hc-sec">
               <h3 className="hc-sec-title"><span className="hc-icon"><IconAddress /></span>Address</h3>
               <div className="hc-addr">
-                <AddressFields value={addrParts} onChange={patchAddr} countryAs="code" withDetails globeHost={rightCol} />
+                <AddressFields value={addrParts} onChange={patchAddr} countryAs="code" withDetails plain />
               </div>
             </section>
           </div>
@@ -747,7 +747,6 @@ export function ContractPanel({
     !(customer.legalName || "").trim() && "customer legal name",
     !(customer.vat || "").trim() && "customer VAT",
     !(customer.address || "").trim() && "customer address",
-    !(contactPerson.name || "").trim() && "contact person",
     !signers.some((x) => x.side === "customer" && x.name.trim()) && "a customer signatory",
     !signers.some((x) => x.side === "supplier" && x.name.trim()) && "our signatory",
   ].filter(Boolean) as string[];
@@ -857,9 +856,10 @@ export function ContractPanel({
       }) };
     }
     else if (cu.country) found.add("customer.country");
-    if (d.contactPerson?.name) field("contactPerson", "Contact person", d.contactPerson.name, c.contactPerson?.name, () => setContactPerson((x) => ({ ...x, ...Object.fromEntries(Object.entries(d.contactPerson!).filter(([, v]) => v)) })));
+    // contact person / admin user are not edited on this form: taken from the PDF only when still empty
+    if (d.contactPerson?.name && !(c.contactPerson?.name || "").trim()) { setContactPerson((x) => ({ ...x, ...Object.fromEntries(Object.entries(d.contactPerson!).filter(([, v]) => v)) })); found.add("contactPerson"); }
     if (d.contactPerson?.name && norm(d.contactPerson.name) === norm(c.contactPerson?.name)) setContactPerson((x) => ({ ...Object.fromEntries(Object.entries(d.contactPerson!).filter(([, v]) => v)), ...Object.fromEntries(Object.entries(x).filter(([, v]) => v)) }));
-    if (d.adminUser?.name || d.adminUser?.email) field("adminUser", "Admin user", [d.adminUser.name, d.adminUser.email].filter(Boolean).join(" · "), [c.adminUser?.name, c.adminUser?.email].filter(Boolean).join(" · "), () => setAdminUser({ name: d.adminUser!.name ?? null, email: d.adminUser!.email ?? null }));
+    if ((d.adminUser?.name || d.adminUser?.email) && !c.adminUser?.name && !c.adminUser?.email) { setAdminUser({ name: d.adminUser!.name ?? null, email: d.adminUser!.email ?? null }); found.add("adminUser"); }
     field("billingFrequency", "Billing", d.billingFrequency, c.billingFrequency, () => setBillingFrequency(d.billingFrequency!), !saved("billingFrequency"));
     field("currency", "Currency", d.currency, c.currency, () => setCurrency(d.currency!), !saved("currency"));
     field("termsUrl", "Terms URL", d.termsUrl, c.termsUrl, () => setTermsUrl(d.termsUrl!), !saved("termsUrl"));
@@ -998,10 +998,13 @@ export function ContractPanel({
     );
   };
 
+  // no browser autofill or suggestion lists on this form
+  const dctRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { dctRef.current?.querySelectorAll("input").forEach((x) => { if (x.type !== "file") x.setAttribute("autocomplete", "off"); }); });
   return createPortal(
     <>
       <div className="dct-backdrop" onMouseDown={onClose}>
-        <div className="dct" role="dialog" aria-modal="true" aria-label="Contract" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="dct" ref={dctRef} role="dialog" aria-modal="true" aria-label="Contract" onMouseDown={(e) => e.stopPropagation()}>
           <header className="dct-head">
             <span className="dct-head-glow" aria-hidden="true" />
             <div className="dct-head-txt">
@@ -1114,17 +1117,7 @@ export function ContractPanel({
                 </div>
                 <div className="hc-addr dct-addr">
                   <span className="dct-addr-k">Address <PdfTag k="customer.address" /></span>
-                  <AddressFields value={caddr} onChange={patchCaddr} countryAs="name" withDetails globeHost={sumRef} />
-                </div>
-                <div className="dct-of-pair">
-                  <div className="dct-of-card">
-                    <span className="dct-of-k">Contact person <PdfTag k="contactPerson" /></span>
-                    <PersonFields value={contactPerson} people={d0.people} onChange={setContactPerson} withRole />
-                  </div>
-                  <div className="dct-of-card">
-                    <span className="dct-of-k">Admin user on the platform <PdfTag k="adminUser" /></span>
-                    <PersonFields value={adminUser} people={d0.people} onChange={(v) => setAdminUser({ name: v.name ?? null, email: v.email ?? null })} />
-                  </div>
+                  <AddressFields value={caddr} onChange={patchCaddr} countryAs="name" withDetails plain />
                 </div>
               </section>
 
@@ -1250,10 +1243,10 @@ export function ContractPanel({
             <aside className="dct-sum">
               <div className="dct-sum-figs" ref={sumRef}>
               <div className="dct-final is-lic">
-                <span className="dct-final-k">Licences{recurring.length ? ` · ${term} ${term === 1 ? "year" : "years"}` : ""}</span>
-                <b><Tween v={fig.license.final} fmt={money} /></b>
+                <span className="dct-final-k">Licences{recurring.length ? " · per year" : ""}</span>
+                <b><Tween v={recurring.length ? fig.license.firstYear : fig.license.final} fmt={money} /></b>
                 <div className="dct-final-sub">
-                  {recurring.length > 0 && <span>Year 1 <b>{money(fig.license.firstYear)}</b></span>}
+                  {recurring.length > 0 && <span>{term} {term === 1 ? "year" : "years"} <b>{money(fig.license.final)}</b></span>}
                   {fig.license.discount > 0 && <span>List <s>{money(fig.license.list)}</s> <em>−{money(fig.license.discount)}</em></span>}
                 </div>
                 <div className="dct-final-pay"><span>Paid {payFrequencyLabel(billingFrequency).toLowerCase() || "—"}</span><span>{payDays != null ? `${payDays} days` : "30 days"}</span></div>
@@ -1283,8 +1276,9 @@ export function ContractPanel({
               </div>
 
               <div className="dct-total">
-                <span>Contract total</span>
-                <b><Tween v={fig.total} fmt={money} /></b>
+                <span>{fig.schedule.length > 1 ? "First-year revenue" : "Contract total"}</span>
+                <b><Tween v={fig.schedule.length > 1 ? fig.schedule[0].total : fig.total} fmt={money} /></b>
+                {fig.schedule.length > 1 && <span className="dct-total-all">Contract total <b>{money(fig.total)}</b></span>}
                 <small>{recurring.length ? `${term} ${term === 1 ? "year" : "years"}` : "One-off"}{signDate ? ` · signed ${new Date(`${signDate}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}` : ""}</small>
               </div>
 

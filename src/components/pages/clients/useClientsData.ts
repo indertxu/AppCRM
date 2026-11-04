@@ -7,7 +7,7 @@ import { markHandoffConverted, createTracking } from "../sales/sales/salesApi";
 import { roleSeesAll, saveCompany, saveContact } from "../companies/companiesApi";
 import {
   emptyAddress, mapClientRole, sortRoles, parseRoleLines, legacyRoleMap, resolveRoleKey, legacyColumnsOf,
-  type Client, type Project, type ProjectType, type Blueprint, type ClientRole, type RoleLine, parseHolds, holdsAfter, projectStatusOf, type HoldPeriod,
+  type Client, type ClientStatus, type Project, type ProjectType, type Blueprint, type ClientRole, type RoleLine, parseHolds, holdsAfter, projectStatusOf, type HoldPeriod,
 } from "./clientsTypes";
 
 const crmKey = (s: unknown) => String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
@@ -316,7 +316,7 @@ export function useClientsData() {
     setRoles(roleList);
     setProjects(visibleProjects);
     setClients((cls ?? [])
-      .map((r: any) => ({ id: r.id, name: (r.company?.name ?? "").trim() || r.name || "" }))
+      .map((r: any) => ({ id: r.id, name: (r.company?.name ?? "").trim() || r.name || "", status: r.status === "churned" ? "churned" as const : "active" as const, churnedAt: r.churned_at ?? null, churnReason: r.churn_reason ?? null }))
       .sort((a: any, b: any) => a.name.localeCompare(b.name))
       .filter((c: any) => seesAll || allowedClients.has(c.id)));
     setUsage(agg);
@@ -473,6 +473,24 @@ export function useClientsData() {
     setEditing({ client: c, project: blank });
   };
 
+  /**
+   * Marks a client as active again or as lost (churned). Losing a client can also stop its running
+   * signed products, so they stop counting in the recurring revenue.
+   */
+  const setClientStatus = async (id: string, status: ClientStatus, opts: { at?: string | null; reason?: string | null; stopProducts?: boolean } = {}): Promise<string | null> => {
+    const row = status === "churned"
+      ? { status, churned_at: opts.at || new Date().toISOString().slice(0, 10), churn_reason: opts.reason?.trim() || null }
+      : { status, churned_at: null, churn_reason: null };
+    const { error } = await supabase.from("clients").update(row).eq("id", id);
+    if (error) return /status|churn|schema cache|column/i.test(error.message) ? "Run 96_client_status.sql in Supabase first." : error.message;
+    if (status === "churned" && opts.stopProducts) {
+      const { error: e2 } = await supabase.from("client_products").update({ status: "churned" }).eq("client_id", id).or("status.is.null,status.ilike.%active%,status.ilike.%signed%,status.ilike.%live%");
+      if (e2) return e2.message;
+    }
+    setClients((xs) => xs.map((c) => (c.id === id ? { ...c, status, churnedAt: status === "churned" ? row.churned_at : null, churnReason: status === "churned" ? row.churn_reason : null } : c)));
+    return null;
+  };
+
   return {
     // data
     clients, projects, projectTypes, blueprints, roles, usage, lineUsage, units, loaded, setProjectHolds,
@@ -481,7 +499,7 @@ export function useClientsData() {
     // handoff
     handoffId, soldSummary,
     // actions
-    loadAll, saveClientProject, deleteProject, setProjectStatus, openNewProject,
+    loadAll, saveClientProject, deleteProject, setProjectStatus, openNewProject, setClientStatus,
   };
 }
 

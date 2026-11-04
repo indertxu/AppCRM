@@ -58,6 +58,19 @@ export const PERIODS: { key: PeriodKey; label: string; group: string }[] = [
   { key: "custom", label: "Custom dates", group: "Custom" },
 ];
 const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+/* ─────────────── the report's period (a parameter) ───────────────
+   One period per report ("This year", "Q3", two dates…). The figures that depend on a
+   period — ARR in the period, revenue in the period, what happened in it (new, renewed…) —
+   and any rule set to "the report's period" read it, so changing it re-runs the whole report. */
+export interface ReportPeriod { key: string; from?: string | null; to?: string | null }
+export const DEFAULT_REPORT_PERIOD: ReportPeriod = { key: "this_year" };
+let PARAM: ReportPeriod = DEFAULT_REPORT_PERIOD;
+/** Set by the Reports page before it reads any row. */
+export const setReportPeriod = (p?: ReportPeriod | null) => { PARAM = p?.key && p.key !== "report" ? p : DEFAULT_REPORT_PERIOD; };
+export const reportPeriodNow = () => PARAM;
+/** The report's period as [from, to] (null = open on that side). */
+export const reportRange = (): [string | null, string | null] => resolvePeriod(PARAM.key, PARAM.from, PARAM.to);
 /**
  * [from, to] inclusive ISO dates for a period, computed against TODAY — so a
  * saved report on "This quarter" always shows the current quarter. null = open side.
@@ -89,6 +102,7 @@ export function resolvePeriod(key: string, from?: string | null, to?: string | n
     case "next_30": return [day(0), day(30)];
     case "next_90": return [day(0), day(90)];
     case "custom": return [from || null, to || null];
+    case "report": return reportRange();
     default: return [null, null];
   }
 }
@@ -99,7 +113,7 @@ export const inPeriod = (date: string | null | undefined, key: string, from?: st
   const [lo, hi] = resolvePeriod(key, from, to);
   return (!lo || v >= lo) && (!hi || v <= hi);
 };
-export const periodLabel = (key: string) => PERIODS.find((p) => p.key === key)?.label ?? key;
+export const periodLabel = (key: string) => (key === "report" ? "The report's period" : PERIODS.find((p) => p.key === key)?.label ?? key);
 export const prettyRange = (key: string, from?: string | null, to?: string | null) => {
   const [lo, hi] = resolvePeriod(key, from, to);
   const f = (x: string) => { const [yy, mm, dd] = x.split("-").map(Number); return new Date(yy, mm - 1, dd).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }); };
@@ -618,7 +632,7 @@ export const ENTITIES: Entity[] = [
   { key: "contact", label: "Contact", plural: "Contacts", hint: "People, where they work and their custom fields", icon: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75", tone: "#7458c6", related: ["company"] },
   { key: "client", label: "Client", plural: "Clients", hint: "Clients with their projects, recurring and signed value", icon: "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z", tone: "#0f8f62", related: ["company"] },
   { key: "project", label: "Project", plural: "Projects", hint: "Service projects: value, days, status and dates", icon: "M3 7h18v13H3zM8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2", tone: "#c98a22", related: ["client", "company"] },
-  { key: "contract", label: "Signed product", plural: "Signed products", hint: "Subscriptions and one-offs: terms, renewals, yearly value", icon: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 13h8M8 17h5", tone: "#12928e", related: ["client", "company", "deal"] },
+  { key: "contract", label: "Signed product", plural: "Signed products", hint: "Subscriptions and one-offs: terms, renewals, ARR in any period", icon: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 13h8M8 17h5", tone: "#12928e", related: ["client", "company", "deal"] },
   { key: "invoice", label: "Invoice", plural: "Invoices", hint: "What was billed, sent, paid and late", icon: "M4 2h16v20l-3-2-3 2-3-2-3 2-3-2-1 .7zM8 7h8M8 11h8M8 15h5", tone: "#e0574b", related: ["project", "client", "company"] },
   { key: "ticket", label: "Ticket or task", plural: "Tickets & tasks", hint: "Tickets and tasks: stage, priority, who has them, response", icon: "M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11", tone: "#d4a017", related: ["client", "company", "deal", "contact"] },
 ];
@@ -875,6 +889,52 @@ const REL_NAMES: [string, string][] = [["crm", "CRM"], ["sales", "In sales"], ["
 const relName = (k: any) => REL_NAMES.find((x) => x[0] === String(k).toLowerCase())?.[1] ?? String(k);
 const yn = (b: boolean | null | undefined) => (b == null ? null : b ? "Yes" : "No");
 
+/* ---- contracts in a period: what happened to them in it, and what they bring in it ---- */
+const addYearsIso = (isoD: string, y: number) => {
+  const dt = new Date(`${isoD}T12:00:00`);
+  dt.setFullYear(dt.getFullYear() + Math.floor(y));
+  dt.setMonth(dt.getMonth() + Math.round((y % 1) * 12));
+  return isoDay(dt.toISOString())!;
+};
+const addDaysIso = (isoD: string, n: number) => { const dt = new Date(`${isoD}T12:00:00`); dt.setDate(dt.getDate() + n); return isoDay(dt.toISOString())!; };
+const atNoon = (isoD: string) => new Date(`${isoD}T12:00:00`).getTime();
+/** What happened to a contract in the report's period, in the order a row is told apart. */
+export const PERIOD_STATUS = ["New", "Renewal", "Auto-renews", "Up for renewal", "Ended · renewed", "Ended", "Running", "Not running", "Stopped"] as const;
+export const PERIOD_STATUS_HINT: Record<string, string> = {
+  New: "Signed in the period (it may start later)",
+  Renewal: "Signed in the period as the renewal of an earlier contract",
+  "Auto-renews": "Renews by itself in the period",
+  "Up for renewal": "Its term ends in the period and it hasn't been renewed yet",
+  "Ended · renewed": "Ended in the period; its renewal is a new contract",
+  Ended: "Ended in the period and wasn't renewed",
+  Running: "Signed before and still running all through the period",
+  "Not running": "Not running at any point of the period",
+  Stopped: "Taken off the client (not active)",
+};
+/**
+ * A contract's term in a period: when it starts, its renewal dates (the end of its term, and each
+ * renewal after that when it renews by itself) and the days of the period it runs.
+ */
+interface TermShape { start: string | null; years: number; step: number; auto: boolean }
+function termEndsUntil(t: TermShape, until: string): string[] {
+  if (!t.start || !t.years) return [];
+  const out: string[] = [];
+  let e = addYearsIso(t.start, t.years);
+  out.push(e);
+  while (t.auto && e <= until && out.length < 80) { e = addYearsIso(e, t.step || t.years); out.push(e); }
+  return out;
+}
+/** The days of [lo, hi] a contract runs: from its start to the end of its term (open when it renews by itself or has no term). */
+function runWindow(t: TermShape, lo: string | null, hi: string | null): [string, string] | null {
+  if (!t.start) return null;
+  const today = todayIso();
+  const top = hi ?? (lo && lo > today ? lo : today);
+  const end = !t.years || t.auto ? null : addDaysIso(addYearsIso(t.start, t.years), -1);
+  const a = lo && lo > t.start ? lo : t.start;
+  const b = end && end < top ? end : top;
+  return a <= b ? [a, b] : null;
+}
+
 export async function buildCrmFields(source: EntityKey, d: CrmData, extra: EntityKey[] = []): Promise<Field[]> {
   const cw = await import("../../clients/ClientWorkspace");
   const ct = await import("../../clients/clientsTypes");
@@ -899,6 +959,63 @@ export async function buildCrmFields(source: EntityKey, d: CrmData, extra: Entit
         supervisionDiscountMode: p.supervision_discount_mode ?? "none", supervisionDiscountValue: Number(p.supervision_discount_value) || 0,
       } as any);
     } catch { return Number(p.price_per_day ?? 0) * Number(p.consultor_days ?? 0); }
+  };
+  /* signed products in the report's period (worked out once per line and period) */
+  const allLines = d.contract ?? [];
+  const renewalDeals = new Set(allLines.map((l) => l.renewal_tracking_id).filter(Boolean).map(String));
+  const linesByDeal = new Map<string, any[]>(); allLines.forEach((l) => { if (l.tracking_id) { const k = String(l.tracking_id); linesByDeal.set(k, [...(linesByDeal.get(k) ?? []), l]); } });
+  const dealById = new Map((d.deal ?? []).map((t: any) => [String(t.id), t]));
+  /** A line signed as the renewal of an older one: its deal is that line's renewal deal (or sits in a renewal pipeline). */
+  const isRenewalLine = (l: any) => {
+    if (!l.tracking_id) return false;
+    if (renewalDeals.has(String(l.tracking_id))) return true;
+    const t: any = dealById.get(String(l.tracking_id));
+    return !!t && !!d.dealCtx && /renew/i.test(d.dealCtx.pipelineName(t.pipeline_id ?? null) ?? "");
+  };
+  /** An older line whose renewal was signed (a newer line on its renewal deal). */
+  const wasRenewed = (l: any) => !!l.renewal_tracking_id && (linesByDeal.get(String(l.renewal_tracking_id)) ?? []).some((x) => x.id !== l.id);
+  const shape = (l: any): TermShape | null => (l ? { start: ymd(l.start_date) ?? ymd(l.signing_date), years: Number(l.term_years) || 0, step: Number(l.renew_years) || Number(l.term_years) || 0, auto: !!l.auto_renew } : null);
+  /** What a recurring line bills a year on `day` (its contract year's price; an auto-renewing one keeps its last year's). */
+  const annualOn = (l: any, day: string) => {
+    let at = atNoon(day);
+    const tm = cw.termOf(l);
+    if (l.auto_renew && tm && at >= tm.end.getTime()) at = tm.end.getTime() - 864e5;
+    return cw.lineAnnual(l, at);
+  };
+  const periodMemo = new Map<string, { status: string; date: string | null; renewal: string | null; runs: boolean; arr: number; revenue: number }>();
+  const inPeriodOf = (l: any) => {
+    const [lo, hi] = resolvePeriod(PARAM.key, PARAM.from, PARAM.to);
+    const mk = `${l.id}|${lo}|${hi}`;
+    const hit = periodMemo.get(mk);
+    if (hit) return hit;
+    const t = shape(l)!;
+    const inR = (x: string | null) => !!x && (!lo || x >= lo) && (!hi || x <= hi);
+    const active = cw.isActive(l);
+    const win = active ? runWindow(l.recurring ? t : { ...t, years: 0 }, lo, hi) : null;
+    const runs = !!win && (l.recurring || inR(t.start));
+    const renewal = t.years ? termEndsUntil(t, hi ?? addYearsIso(todayIso(), 5)).find(inR) ?? null : null;
+    // new / renewal: closed (signed) in the period — it may start later
+    const signed = ymd(l.signing_date) ?? t.start;
+    let status: string;
+    if (!active) status = "Stopped";
+    else if (inR(signed)) status = isRenewalLine(l) ? "Renewal" : "New";
+    else if (renewal && t.auto) status = "Auto-renews";
+    else if (renewal) status = wasRenewed(l) ? "Ended · renewed" : renewal > todayIso() ? "Up for renewal" : "Ended";
+    else status = runs && l.recurring ? "Running" : "Not running";
+    // ARR: what it bills a year on the last day of the period it runs; revenue: each part of the period at its year's price
+    let arr = 0, revenue = 0;
+    if (win && l.recurring) {
+      arr = annualOn(l, win[1]);
+      const cuts = [win[0]];
+      if (t.start) for (let k = 1; k < 80; k++) { const a = addYearsIso(t.start, k); if (a > win[1]) break; if (a > win[0]) cuts.push(a); }
+      cuts.push(addDaysIso(win[1], 1));
+      for (let i = 0; i < cuts.length - 1; i++) revenue += (annualOn(l, cuts[i]) * daysBetween(cuts[i], cuts[i + 1])) / 365;
+    }
+    if (active && !l.recurring && inR(t.start)) revenue += cw.lineOneTime(l);
+    else if (active && l.recurring && inR(t.start)) revenue += Number(l.one_time_fee) || 0;
+    const out = { status, date: inR(signed) ? signed : renewal, renewal: inR(signed) && isRenewalLine(l) ? signed : renewal, runs, arr: Math.round(arr * 100) / 100, revenue: Math.round(revenue * 100) / 100 };
+    periodMemo.set(mk, out);
+    return out;
   };
   for (const g of groups) {
     let fs: Field[] = [];
@@ -957,6 +1074,18 @@ export async function buildCrmFields(source: EntityKey, d: CrmData, extra: Entit
         { key: "contract.end", group: g, label: "Ends", kind: "date", get: (r: any) => { const e = r.contract ? sales.lineEnd(r.contract) : null; return e ? ymd(new Date(e).toISOString()) : null; } },
         { key: "contract.running", group: g, label: "Running today", kind: "enum", options: ["Yes", "No"], get: (r: any) => (r.contract ? yn(cw.lineAnnual(r.contract) > 0 || (!r.contract.recurring && cw.isActive(r.contract))) : null) },
         { key: "contract.days_left", group: g, label: "Days to the end", kind: "number", get: (r: any) => { const e = r.contract ? sales.lineEnd(r.contract) : null; return e ? daysBetween(today, ymd(new Date(e).toISOString())!) : null; } },
+        { key: "contract.signed", group: g, label: "Signed on", kind: "date", get: (r: any) => ymd(r.contract?.signing_date) ?? ymd(r.contract?.start_date) },
+        { key: "contract.starts", group: g, label: "Starts", kind: "date", get: (r: any) => ymd(r.contract?.start_date) ?? ymd(r.contract?.signing_date) },
+        { key: "contract.renews_auto", group: g, label: "Renews by itself", kind: "enum", options: ["Yes", "No"], get: (r: any) => (r.contract ? yn(!!r.contract.auto_renew) : null) },
+        { key: "contract.next_renewal", group: g, label: "Next renewal", kind: "date", get: (r: any) => { const t = shape(r.contract); if (!t) return null; return termEndsUntil(t, addYearsIso(today, 1)).find((e) => e >= today) ?? null; } },
+        // the report's period
+        { key: "contract.period_status", group: g, label: "In the period", kind: "enum", options: [...PERIOD_STATUS], get: (r: any) => (r.contract ? inPeriodOf(r.contract).status : null) },
+        { key: "contract.period_date", group: g, label: "Signed or renews in the period", kind: "date", get: (r: any) => (r.contract ? inPeriodOf(r.contract).date : null) },
+        { key: "contract.renewal_in_period", group: g, label: "Renewal date in the period", kind: "date", get: (r: any) => (r.contract ? inPeriodOf(r.contract).renewal : null) },
+        { key: "contract.runs_in_period", group: g, label: "Runs in the period", kind: "enum", options: ["Yes", "No"], get: (r: any) => (r.contract ? yn(inPeriodOf(r.contract).runs) : null) },
+        { key: "contract.arr_period", group: g, label: "ARR in the period", kind: "money", sum: true, get: (r: any) => (r.contract ? inPeriodOf(r.contract).arr : null) },
+        { key: "contract.arr_first", group: g, label: "First-year ARR (as signed)", kind: "money", sum: true, get: (r: any) => { const l = r.contract; if (!l?.recurring) return l ? 0 : null; const st = ymd(l.start_date) ?? ymd(l.signing_date); return st ? Math.round(cw.lineAnnual(l, atNoon(st)) * 100) / 100 : null; } },
+        { key: "contract.revenue_period", group: g, label: "Revenue in the period", kind: "money", sum: true, get: (r: any) => (r.contract ? inPeriodOf(r.contract).revenue : null) },
         ...discovered(d.contract ?? [], "contract"),
       ];
     } else if (g === "agreement") {
@@ -971,6 +1100,23 @@ export async function buildCrmFields(source: EntityKey, d: CrmData, extra: Entit
       };
       const lines = (a: any, kind: "product" | "service") => (Array.isArray(a?.lines) ? a.lines : []).filter((l: any) => l?.kind === kind).map((l: any) => String(l.name ?? "").trim()).filter(Boolean);
       const A = (r: any) => r.agreement;
+      const agShape = (a: any): TermShape | null => (a ? { start: ymd(a.contractStart) ?? ymd(a.signDate), years: num(a.termYears) ?? 0, step: num(a.renewYears) ?? num(a.termYears) ?? 0, auto: !!a.autoRenew } : null);
+      /** A contract in the report's period: what happened in it, and its licences' yearly value there (from its year-by-year schedule). */
+      const agPeriod = (a: any) => {
+        const [lo, hi] = resolvePeriod(PARAM.key, PARAM.from, PARAM.to);
+        const t = agShape(a)!;
+        const inR = (x: string | null) => !!x && (!lo || x >= lo) && (!hi || x <= hi);
+        const renewal = t.years ? termEndsUntil(t, hi ?? addYearsIso(today, 5)).find(inR) ?? null : null;
+        const win = runWindow(t, lo, hi);
+        const status = a.deal_status && a.deal_status !== "won" ? "Not running" : inR(t.start) ? "New" : renewal && t.auto ? "Auto-renews" : renewal ? (renewal > today ? "Up for renewal" : "Ended") : win ? "Running" : "Not running";
+        const sch: any[] = Array.isArray(a.schedule) ? a.schedule : [];
+        let arr = 0;
+        if (win && sch.length && t.start) {
+          const yi = Math.max(0, Math.floor(daysBetween(t.start, win[1]) / 365.25));
+          arr = Number(sch[Math.min(yi, sch.length - 1)]?.license) || 0;
+        }
+        return { status, date: inR(t.start) ? t.start : renewal, renewal, arr };
+      };
       const owners = d.dealCtx?.trackOwners ?? {};
       fs = [
         { key: "agreement.ref", group: g, label: "Contract ref.", kind: "text", get: (r: any) => A(r)?.contractRef || null },
@@ -1001,6 +1147,12 @@ export async function buildCrmFields(source: EntityKey, d: CrmData, extra: Entit
         { key: "agreement.products", group: g, label: "Products in it", kind: "enum", options: d.products.map((x) => x.name), get: (r: any) => lines(A(r), "product").join(", ") || null, list: (r: any) => lines(A(r), "product") },
         { key: "agreement.service_names", group: g, label: "Services in it", kind: "enum", options: d.services.map((x) => x.name), get: (r: any) => lines(A(r), "service").join(", ") || null, list: (r: any) => lines(A(r), "service") },
         { key: "agreement.lines", group: g, label: "Lines", kind: "number", sum: true, get: (r: any) => (Array.isArray(A(r)?.lines) ? A(r).lines.length : null) },
+        // the report's period
+        { key: "agreement.period_status", group: g, label: "In the period", kind: "enum", options: [...PERIOD_STATUS], get: (r: any) => (A(r) ? agPeriod(A(r)).status : null) },
+        { key: "agreement.period_date", group: g, label: "Signed or renews in the period", kind: "date", get: (r: any) => (A(r) ? agPeriod(A(r)).date : null) },
+        { key: "agreement.renewal_in_period", group: g, label: "Renewal date in the period", kind: "date", get: (r: any) => (A(r) ? agPeriod(A(r)).renewal : null) },
+        { key: "agreement.next_renewal", group: g, label: "Next renewal", kind: "date", get: (r: any) => { const t = agShape(A(r)); return t ? termEndsUntil(t, addYearsIso(today, 1)).find((e) => e >= today) ?? null : null; } },
+        { key: "agreement.arr_period", group: g, label: "ARR in the period (licences)", kind: "money", sum: true, get: (r: any) => (A(r) ? agPeriod(A(r)).arr : null) },
         { key: "agreement.billing", group: g, label: "Licences billed", kind: "enum", options: Object.values(FREQ), get: (r: any) => freq(A(r)?.billingFrequency) },
         { key: "agreement.services_billing", group: g, label: "Services billed", kind: "enum", options: Object.values(FREQ), get: (r: any) => freq(A(r)?.servicesFrequency) },
         { key: "agreement.pay_days", group: g, label: "Payment terms (days)", kind: "number", get: (r: any) => num(A(r)?.paymentTermsDays) },

@@ -2693,3 +2693,151 @@
 .olc-link.is-btn { border: 0; background: transparent; font: inherit; font-size: 12.5px; font-weight: 650; cursor: pointer; }
 /* one date of a repeating entry */
 .cal-ov .cal-event-time .cal-event-rep { width: 11px; height: 11px; margin-left: 2px; opacity: 0.75; }
+
+/* =====================================================================
+   v8 — clean sheet. No diagonal hatching anywhere: time outside your hours
+   is a flat tint, lunch a quiet band, Outlook a calm grey card; slimmer day
+   headers; a month where every day is the same size.
+   ===================================================================== */
+.cal.cal-v3 { --v8-line: rgba(11, 36, 26, 0.065); --v8-hour: rgba(11, 36, 26, 0.07); --v8-off: #f6f8f7; }
+.cal.cal-v3 .cal-grid { grid-template-columns: 60px minmax(0, 1fr); }
+.cal.cal-v3 .cal-times span { font: 600 10.5px "Inter", sans-serif; color: #9aa9a2; }
+
+/* day header: one slim line — date, day, the day's load on the right */
+.cal.cal-v3 .cal-head-days { box-shadow: 0 1px 0 var(--v8-line); backdrop-filter: none; background: #fff; }
+.cal.cal-v3 .cal-head-day { gap: 8px; padding: 7px 12px; min-height: 44px; box-sizing: border-box; border-left: 1px solid var(--v8-line); }
+.cal.cal-v3 .cal-head-day:hover { background: #fafcfb; }
+.cal.cal-v3 .cv-hd-date {
+  min-width: 28px; height: 28px; padding: 0 5px; border-radius: 9px; background: transparent;
+  font: 700 17px/1 "Space Grotesk", sans-serif; letter-spacing: -0.02em; color: #0b241a;
+}
+.cal.cal-v3 .cal-head-day:hover .cv-hd-date { transform: none; }
+.cal.cal-v3 .cal-head-day.is-today .cv-hd-date { background: #0b3a2b; color: #fff; box-shadow: 0 6px 12px -8px rgba(7, 36, 25, 0.8); }
+.cal.cal-v3 .cv-hd-txt { flex-direction: row; align-items: center; justify-content: space-between; gap: 10px; }
+.cal.cal-v3 .cv-hd-txt .cal-dow { font-size: 11px; letter-spacing: 0.1em; color: #6c8a7d; white-space: nowrap; }
+.cal.cal-v3 .cal-head-day.is-today .cal-dow { color: #0a6f4d; }
+.cal.cal-v3 .cv-hd-load { flex: 0 1 132px; min-width: 0; justify-content: flex-end; gap: 7px; font-size: 11px; }
+.cal.cal-v3 .cv-hd-bar { flex: 1 1 auto; max-width: 72px; min-width: 24px; height: 4px; }
+.cal.cal-v3 .cv-hd-load b { font-size: 11.5px; }
+.cal.cal-v3 .cal-cutoff-flag { top: 50%; right: auto; left: 44px; transform: translateY(-140%); padding: 1px 6px; font-size: 9.5px; }
+.cal.cal-v3 .cal-head-day.is-cutoff .cv-hd-date { box-shadow: inset 0 0 0 1.5px rgba(212, 85, 63, 0.45); }
+.cal.cal-v3 .cal-head-day.is-today.is-cutoff .cv-hd-date { box-shadow: 0 0 0 2px #fff, 0 0 0 3.5px rgba(212, 85, 63, 0.55); }
+
+/* the sheet: hour lines only, no half-hour dots */
+.cal.cal-v3 .cal-col { border-left: 1px solid var(--v8-line); }
+.cal.cal-v3 .cal-slot { border-top: 1px solid var(--v8-hour); background: none; }
+.cal.cal-v3 .cal-col.is-today { background: linear-gradient(180deg, rgba(31, 185, 138, 0.045), rgba(31, 185, 138, 0.012) 60%); }
+
+/* outside your hours, closed days, lunch, holidays: flat tints, no stripes */
+.cal.cal-v3 .cal-off, .cal-off { background: var(--v8-off, #f9fbfa); box-shadow: none; }
+.cal.cal-v3 .cal-off.is-closed { background: #f5f7f6; }
+.cal.cal-v3 .cal-lunch { background: rgba(224, 139, 62, 0.045); border: 0; }
+.cal.cal-v3 .cal-lunch::after { left: 8px; font-size: 9px; letter-spacing: 0.12em; color: rgba(190, 110, 40, 0.5); }
+.cal.cal-v3 .cal-col.is-holiday, .cal.cal-v3 .cal-col.is-vacation { background: #f6f9f7; }
+.cal.cal-v3 .cal-col.is-vacation { background: #eff8f3; }
+.cal.cal-v3 .cal-col.is-remote::before { display: none; }
+
+/* your entries: a soft tint and a solid edge — no sheen, no stripes */
+.cal.cal-v3 .cal-event {
+  border-radius: 10px; padding: 7px 9px 7px 12px;
+  background: color-mix(in srgb, var(--ec) 9%, #fff); background-image: none;
+  box-shadow: inset 3px 0 0 var(--ec), inset 0 0 0 1px color-mix(in srgb, var(--ec) 14%, transparent);
+}
+.cal.cal-v3 .cal-event:hover { background: color-mix(in srgb, var(--ec) 13%, #fff); box-shadow: inset 3px 0 0 var(--ec), inset 0 0 0 1px color-mix(in srgb, var(--ec) 26%, transparent), 0 14px 26px -18px color-mix(in srgb, var(--ec) 60%, #072419); }
+.cal.cal-v3 .cal-event.is-confirmed { background: color-mix(in srgb, var(--ec) 15%, #fff); }
+.cal.cal-v3 .cal-event.is-planned { background-image: none; }
+.cal.cal-v3 .cal-event.is-opaque { background: #f4f6f5; background-image: none; box-shadow: inset 3px 0 0 color-mix(in srgb, var(--ec) 55%, #c3cdc8), inset 0 0 0 1px rgba(11, 36, 26, 0.06); }
+/* a role that doesn't count for the target: a dotted edge instead of a striped one */
+.cal-event.is-connector::before, .cal-ov .cal-event.is-connector::before, .cal.cal-v3 .cal-event.is-connector::before {
+  width: 3px; border-radius: 10px 0 0 10px;
+  background: repeating-linear-gradient(180deg, var(--rc, var(--ec)) 0 5px, transparent 5px 9px);
+}
+.cal.cal-v3 .cal-event.is-connector { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ec) 14%, transparent); }
+
+/* Outlook: a calm grey card with a slate edge (tentative: outlined; free: dashed) */
+.cal-ol {
+  border-radius: 8px; padding: 4px 8px 4px 10px; color: #33424c;
+  background: #f3f5f7; box-shadow: inset 0 0 0 1px rgba(62, 80, 96, 0.12);
+}
+.cal-ol::before { width: 3px; background: #9aa8b3; border-radius: 8px 0 0 8px; }
+.cal-ol:hover, .cal-ol:focus-visible { background: #edf1f4; box-shadow: inset 0 0 0 1px rgba(62, 80, 96, 0.24), 0 8px 18px -12px rgba(30, 45, 60, 0.5); }
+.cal-ol.is-tentative { background: #fff; box-shadow: inset 0 0 0 1px rgba(62, 80, 96, 0.2); }
+.cal-ol.is-tentative::before { background: repeating-linear-gradient(180deg, #9aa8b3 0 5px, transparent 5px 9px); }
+.cal-ol.is-free { background: transparent; outline: 1px dashed rgba(62, 80, 96, 0.3); }
+.cal-ol-title { font-size: 11.5px; font-weight: 650; color: #26343d; }
+.cal-ol-title svg { opacity: 0.55; }
+.cal-ol-time { font-size: 10.5px; color: #7a8893; }
+/* a short one keeps its name; the time gives way */
+.cal-ol.is-short { padding-top: 0; padding-bottom: 0; }
+.cal-ol.is-short .cal-ol-title { flex: 0 1 auto; min-width: 0; }
+.cal-ol.is-short .cal-ol-time { flex: 1 1 0; min-width: 0; }
+.cal-oltag { background: #f3f5f7; box-shadow: inset 0 0 0 1px rgba(62, 80, 96, 0.12); }
+
+/* ---- month: every day the same size, chips on one line, "+N more" for the rest ---- */
+.cal.cal-v3 .cal-month-head { grid-template-columns: repeat(5, minmax(0, 1fr)); box-shadow: 0 1px 0 var(--v8-line); }
+.cal.cal-v3 .cal-month-dow { padding: 10px 12px; font-size: 10.5px; letter-spacing: 0.12em; color: #6c8a7d; border-left: 1px solid var(--v8-line); }
+.cal.cal-v3 .cal-month-dow:first-child { border-left: 0; }
+.cal.cal-v3 .cal-month-body { display: grid; grid-auto-rows: minmax(0, 1fr); }
+.cal.cal-v3 .cal-month-row { grid-template-columns: repeat(5, minmax(0, 1fr)); min-height: 0; border-top: 1px solid var(--v8-line); }
+.cal.cal-v3 .cal-month-row:first-child { border-top: 0; }
+.cal.cal-v3 .cal-mcell { min-width: 0; min-height: 0; overflow: hidden; padding: 7px 8px 8px; gap: 5px; border-left: 1px solid var(--v8-line); box-shadow: none; }
+.cal.cal-v3 .cal-mcell:first-child { border-left: 0; }
+.cal.cal-v3 .cal-mcell:hover { background: #f8fbf9; }
+.cal.cal-v3 .cal-mcell.is-out { background: #fafbfa; opacity: 1; }
+.cal.cal-v3 .cal-mcell.is-out .cal-mcell-date { color: #b7c3bd; }
+.cal.cal-v3 .cal-mcell.is-out .cal-mchip { opacity: 0.55; }
+.cal.cal-v3 .cal-mcell.is-today { background: #f4faf7; box-shadow: inset 0 2px 0 #1fb98a; }
+.cal.cal-v3 .cal-mcell.is-cutoff { box-shadow: none; }
+.cal.cal-v3 .cal-mcell.is-cutoff .cal-mcell-cutoff { color: #d4553f; }
+.cal.cal-v3 .cal-mcell-head { min-height: 24px; }
+.cal.cal-v3 .cal-mcell-date { min-width: 24px; height: 24px; border-radius: 8px; font: 650 13px "Space Grotesk", sans-serif; }
+.cal.cal-v3 .cal-mcell:hover .cal-mcell-date { transform: none; }
+.cal.cal-v3 .cal-mcell.is-today .cal-mcell-date { background: #0b3a2b; color: #fff; box-shadow: none; }
+.cal.cal-v3 .cal-mcell-sum { margin-left: auto; font-size: 10px; padding: 1px 7px; }
+.cal.cal-v3 .cal-mcell-head { gap: 6px; justify-content: flex-start; }
+.cal.cal-v3 .cal-mcell-list { overflow: hidden; padding-bottom: 0; gap: 3px; }
+.cal.cal-v3 .cal-mchip {
+  flex: 0 0 auto; height: 22px; min-width: 0; padding: 0 7px; gap: 6px; border: 0; border-radius: 6px;
+  background: color-mix(in srgb, var(--ec) 9%, #fff); box-shadow: none; color: #13261d; font-size: 11px;
+}
+.cal.cal-v3 .cal-mchip::before { width: 6px; height: 6px; }
+.cal.cal-v3 .cal-mchip:hover { transform: none; background: color-mix(in srgb, var(--ec) 15%, #fff); box-shadow: none; }
+.cal.cal-v3 .cal-mchip.is-confirmed { border: 0; background: color-mix(in srgb, var(--ec) 14%, #fff); }
+.cal.cal-v3 .cal-mchip-time { flex: none; font-size: 10.5px; color: #6c8a7d; }
+.cal.cal-v3 .cal-mchip-name { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cal.cal-v3 .cal-mchip.is-ol { background: #f3f5f7; color: #33424c; box-shadow: none; }
+.cal.cal-v3 .cal-mchip.is-ol::before { background: #9aa8b3; }
+.cal.cal-v3 .cal-mchip.is-ol .cal-mchip-time { color: #7a8893; }
+.cal-mmore {
+  flex: none; align-self: flex-start; height: 20px; padding: 0 7px; border: 0; border-radius: 6px; background: transparent;
+  color: #0a6f4d; font: 650 11px "Inter", sans-serif; cursor: pointer;
+}
+.cal-mmore:hover { background: #eaf6f0; }
+.cal.cal-v3 .cv-mload { display: none; }
+.cal.cal-v3 .cv-madd { width: 22px; height: 22px; right: 7px; top: 7px; bottom: auto; border-radius: 7px; font-size: 15px; }
+.cal.cal-v3 .cal-mcell:hover .cal-mcell-sum { opacity: 0; }
+.cal.cal-v3 .cal-mcell-list { gap: 2px; }
+.cal.cal-v3 .cal-mchip { height: 20px; }
+.cal.cal-v3 .cal-mmore { height: 18px; margin-top: 2px; }
+/* an Outlook title ends in "…" when its lane is narrow */
+.cal-ol-title { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cal-ol-title svg { display: inline-block; vertical-align: -1px; margin-right: 4px; }
+.cal-ol.is-short { display: flex; }
+
+/* the week scrolls without a visible bar */
+.cal.cal-v3 .cal-grid, .cal.cal-v3 .cal-mcell-list { scrollbar-width: none; scrollbar-gutter: auto; -ms-overflow-style: none; }
+.cal.cal-v3 .cal-grid::-webkit-scrollbar, .cal.cal-v3 .cal-mcell-list::-webkit-scrollbar { display: none; width: 0; height: 0; }
+.cal.cal-v3 .cal-head-days > .cal-head-day:last-child { border-right: 0; }
+
+/* to-do: the expand button widens the panel to half the page first */
+.cv-main.has-todo.is-wide .cv-todo { width: 50%; }
+.cv-main.is-wide .cv-todo-in { width: 100%; transition: transform 0.55s cubic-bezier(0.16, 1, 0.3, 1), width 0.5s cubic-bezier(0.16, 1, 0.3, 1); }
+.cv-main.is-wide .cv-cal { min-width: 0; }
+@media (max-width: 860px) { .cv-main.has-todo.is-wide .cv-todo { width: 100vw; } }
+
+/* narrow week (to-do at half the page): the day headers shrink with their columns */
+.cal.cal-v3 .cal-head-days, .cal.cal-v3 .cal-days { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.cal.cal-v3 .cal-head-day { min-width: 0; overflow: hidden; container-type: inline-size; }
+@container (max-width: 190px) { .cal.cal-v3 .cv-hd-bar { display: none; } }
+@container (max-width: 140px) { .cal.cal-v3 .cv-hd-load em, .cal.cal-v3 .cv-hd-tag { display: none; } }
+@container (max-width: 112px) { .cal.cal-v3 .cv-hd-load { display: none; } }

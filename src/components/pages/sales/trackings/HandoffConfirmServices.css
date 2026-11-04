@@ -642,3 +642,8 @@
 .hx2-prod-total s { margin-right: 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
 .hx2-prod .hx2-revrows { padding-left: 14px; }
 .hx2-signall > span { white-space: nowrap; }
+
+/* product licence: yearly figure first, the term total under it */
+.hx2-prod-fig { display: flex; flex-direction: column; align-items: flex-end; flex-shrink: 0; gap: 1px; line-height: 1.15; }
+.hx2-prod-fig .hx2-prod-total i { margin-left: 3px; font-style: normal; font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.hx2-prod-fig small { font-size: 11.5px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }

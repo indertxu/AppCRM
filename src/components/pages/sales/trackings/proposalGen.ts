@@ -22,6 +22,8 @@ export interface ProposalTemplate { brand: Brand; sections: TemplateSection[]; t
 export interface ProposalLineRow { label: string; detail?: string; amount: number; days?: number }
 export interface ProposalProduct {
   name: string; tier?: string; recurring: boolean; period?: "monthly" | "yearly"; termYears: number; unitPrice: number; qty: number; rows: ProposalLineRow[]; discount: number; total: number;
+  /** What the first contract year costs (recurring products). */
+  year1?: number;
   /** The contract lengths the plan offers (for "1 year vs 3 years" slides): price per year before / after that term's discount. */
   terms?: { years: number; discountPct: number; annualGross: number; annual: number }[];
 }
@@ -37,7 +39,8 @@ export interface ProposalData {
   differentiation?: { title: string; text: string }[];
   products: ProposalProduct[];
   services: ProposalService[];
-  totals: { products: number; services: number; discount: number; total: number };
+  /** `total` / `products` follow `basis`, the figure chosen in the deal calculator; `contract` is always every year plus services. */
+  totals: { products: number; services: number; discount: number; total: number; basis?: "product_year1" | "product_term" | "all_year1" | "all_term"; contract?: number };
   references?: { company: string; stat: string; statLabel: string; before: string; quote: string; author: string }[];
   conditions?: string[];
 }
@@ -481,7 +484,7 @@ export function buildOrderFormPdf(jsPDF: any, data: ProposalData, t: ProposalTem
   });
   y += 2;
   doc.setFont("helvetica", "bold"); doc.setFontSize(10); doc.setTextColor(...hex(C.primary));
-  doc.text("Total (excl. VAT):", ML + 118, y, { align: "right" }); doc.text(eur(data.totals.total), ML + CW - 3, y, { align: "right" }); y += 10;
+  doc.text("Total (excl. VAT):", ML + 118, y, { align: "right" }); doc.text(eur(data.totals.contract ?? data.totals.total), ML + CW - 3, y, { align: "right" }); y += 10;
 
   // ---- Terms ----
   ensure(50);
@@ -660,6 +663,8 @@ export const DECK_TOKENS: DeckTokenDef[] = [
   { key: "total", label: "Proposal total", group: "General", example: "45.000 €" },
   { key: "total.products", label: "Products total", group: "General", example: "20.825 €" },
   { key: "total.services", label: "Services total", group: "General", example: "24.175 €" },
+  { key: "total.basis", label: "What the total counts", group: "General", example: "Primer año + servicios" },
+  { key: "total.contract", label: "Whole contract + services", group: "General", example: "86.650 €" },
   { key: "agenda", label: "One line per product / service", group: "General", example: "Licencia Suite ⏎ Data Management", multi: true },
   { key: "agenda.upper", label: "Same, in capitals", group: "General", example: "LICENCIA SUITE ⏎ DATA MANAGEMENT", multi: true },
   { key: "num", label: "Section number (counts the slides that use it)", group: "General", example: "06" },
@@ -750,6 +755,12 @@ export interface DeckContext {
 export interface DeckScope { product?: number; service?: number }
 
 /** All the values a slide can use; product / service tokens come from the line the slide is about. */
+/** How the proposal total is counted, in words (the figure chosen in the deal calculator). */
+export function basisLabel(b: ProposalData["totals"]["basis"], lang: string = "es"): string {
+  const es: Record<string, string> = { product_year1: "Licencia · primer año", product_term: "Licencia · todo el contrato", all_year1: "Primer año + servicios", all_term: "Contrato completo + servicios" };
+  const en: Record<string, string> = { product_year1: "Licence · first year", product_term: "Licence · whole contract", all_year1: "First year + services", all_term: "Whole contract + services" };
+  return b ? (lang === "en" ? en : es)[b] ?? "" : "";
+}
 export function resolveTokens(ctx: DeckContext, scope: DeckScope = {}): Record<string, string> {
   const d = ctx.data, lang = ctx.lang ?? "es";
   const day = new Date(ctx.date ?? d.deal?.date ?? new Date().toISOString().slice(0, 10));
@@ -764,6 +775,7 @@ export function resolveTokens(ctx: DeckContext, scope: DeckScope = {}): Record<s
     deal: d.deal?.title ?? "", proposal: ctx.proposalName ?? "",
     "seller.name": ctx.sellerName ?? "", "seller.email": ctx.sellerEmail ?? "", "seller.phone": ctx.sellerPhone ?? "",
     total: deckMoney(d.totals.total), "total.products": deckMoney(d.totals.products), "total.services": deckMoney(d.totals.services),
+    "total.basis": basisLabel(d.totals.basis, lang), "total.contract": deckMoney(d.totals.contract ?? d.totals.total),
     agenda: lines.join("\n"), "agenda.upper": lines.join("\n").toUpperCase(),
   };
   const p = d.products[scope.product ?? 0];
@@ -3356,12 +3368,24 @@ function serviceCard(s: ProposalService): string {
   return `<div class="pc sc rv"><div class="pc-head"><div><span class="pc-k">Servicio</span><b class="pc-n">${esc(s.name)}</b></div><div class="pc-price"><b>${esc(deckMoney(s.total))}</b><i>${esc(deckNum(s.days))} ${s.unit === "hour" ? "h" : "jornadas"}</i></div></div>${roles.length ? `<table class="pc-t"><tbody>${roles.map((r) => `<tr><td>${esc(r.name)} <i>· ${esc(deckNum(r.days))} × ${esc(deckMoney(r.rate))}</i></td><td class="n">${esc(deckMoney(r.days * r.rate))}</td></tr>`).join("")}${s.discount ? `<tr class="ds"><td>Descuento</td><td class="n">${esc(deckMoney(-s.discount))}</td></tr>` : ""}</tbody></table>` : ""}${ph}</div>`;
 }
 function pricingTable(d: ProposalData, kind: DocKind): string {
+  // A proposal counts what the deal calculator shows (first year or every year, with or without
+  // services); a contract always shows the whole contract.
+  const basis = kind === "contract" ? "all_term" : d.totals.basis ?? "all_term";
+  const year1 = basis === "product_year1" || basis === "all_year1", withSvc = basis === "all_year1" || basis === "all_term";
   const rows = [
-    ...d.products.map((p) => ({ k: p.recurring ? "Licencia" : "Producto", n: p.name, x: p.recurring ? `${p.termYears || 1} ${(p.termYears || 1) === 1 ? "año" : "años"} · ${deckMoney(p.total / (p.termYears || 1))} / año` : p.tier ?? "", g: p.total + p.discount, t: p.total })),
-    ...d.services.map((s) => ({ k: "Servicio", n: s.name, x: `${deckNum(s.days)} ${s.unit === "hour" ? "horas" : "jornadas"}`, g: s.total + s.discount, t: s.total })),
+    ...d.products.map((p) => {
+      const yrs = p.termYears || 1, first = p.recurring && year1 && yrs > 1, t = first ? p.year1 ?? p.total / yrs : p.total;
+      return { k: p.recurring ? "Licencia" : "Producto", n: p.name, x: p.recurring ? (first ? `Primer año · contrato de ${yrs} años` : `${yrs} ${yrs === 1 ? "año" : "años"} · ${deckMoney(p.total / yrs)} / año`) : p.tier ?? "", g: t + (first ? p.discount / yrs : p.discount), t, out: false };
+    }),
+    ...d.services.map((s) => ({ k: "Servicio", n: s.name, x: `${deckNum(s.days)} ${s.unit === "hour" ? "horas" : "jornadas"}`, g: s.total + s.discount, t: s.total, out: !withSvc })),
   ];
-  const disc = rows.reduce((s, r) => s + (r.g - r.t), 0);
-  return `<div class="pr rv"><table><thead><tr><th>Concepto</th><th class="n">Importe</th></tr></thead><tbody>${rows.map((r, k) => `<tr class="rv d${(k % 4) + 1}"><td><span class="pr-k">${esc(r.k)}</span><b>${esc(r.n)}</b>${r.x ? `<i>${esc(r.x)}</i>` : ""}</td><td class="n">${r.g !== r.t ? `<s>${esc(deckMoney(r.g))}</s>` : ""}${esc(deckMoney(r.t))}</td></tr>`).join("")}</tbody></table><div class="pr-tot">${disc > 0.5 ? `<div><span>Ahorro</span><b>${esc(deckMoney(-disc))}</b></div>` : ""}<div class="is-t"><span>${kind === "contract" ? "Importe total" : "Inversión total"}</span><b data-count="${Math.round(d.totals.total)}">${esc(deckMoney(d.totals.total))}</b></div><p>Impuestos no incluidos.</p></div></div>`;
+  const inRows = rows.filter((r) => !r.out), outRows = rows.filter((r) => r.out);
+  const total = inRows.reduce((s, r) => s + r.t, 0);
+  const disc = inRows.reduce((s, r) => s + (r.g - r.t), 0);
+  const label = kind === "contract" ? "Importe total" : year1 ? (withSvc ? "Inversión primer año" : "Licencia · primer año") : withSvc ? "Inversión total" : "Licencia · total contrato";
+  const tr = (r: typeof rows[number], k: number) => `<tr class="rv d${(k % 4) + 1}"><td><span class="pr-k">${esc(r.k)}</span><b>${esc(r.n)}</b>${r.x ? `<i>${esc(r.x)}</i>` : ""}</td><td class="n">${r.g - r.t > 0.5 ? `<s>${esc(deckMoney(r.g))}</s>` : ""}${esc(deckMoney(r.t))}</td></tr>`;
+  const svcOut = outRows.reduce((s, r) => s + r.t, 0);
+  return `<div class="pr rv"><table><thead><tr><th>Concepto</th><th class="n">Importe</th></tr></thead><tbody>${inRows.map(tr).join("")}</tbody></table><div class="pr-tot">${disc > 0.5 ? `<div><span>Ahorro</span><b>${esc(deckMoney(-disc))}</b></div>` : ""}<div class="is-t"><span>${label}</span><b data-count="${Math.round(total)}">${esc(deckMoney(total))}</b></div>${svcOut > 0 ? `<div><span>Servicios (aparte)</span><b>${esc(deckMoney(svcOut))}</b></div>` : ""}<p>Impuestos no incluidos.</p></div></div>`;
 }
 function contractPricing(d: ProposalData, c: ContractTerms | null | undefined, terms: DocTemplate["terms"], lang: DocLang): string {
   const s = contractSchedule(d, c, terms);

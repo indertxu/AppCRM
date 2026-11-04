@@ -39,6 +39,8 @@ export interface BookingValue {
 clientId: string;
   projectId: string;
   notes: string;
+  /** Its own name, shown as its title in the calendar, Home and Outlook. Empty: the client or type of work. */
+  name?: string;
   line: string;
   roleId: string;
   phaseId: string;
@@ -267,6 +269,7 @@ const [projectTypes, setProjectTypes] = useState<ProjectType[]>([]);
     initial.taskId ? initial.taskId.split(",").filter(Boolean) : []
   );
 const [notes, setNotes] = useState(initial.notes ?? "");
+  const [name, setName] = useState(initial.name ?? "");
   /** The role this time is logged on: one of the roles sold on the project. */
   const [roleId, setRoleId] = useState(initial.roleId ?? "");
   /** Every role in the catalogue, and the ones this person is assigned to. */
@@ -620,6 +623,7 @@ startMin, endMin, type,
       summoned: Object.entries(summoned).map(([id, b]) => ({ id, billable: isClientWork ? Number(b) || 0 : 0 })),
       summonNote: summonNote.trim() || undefined,
       notes,
+      name: name.trim(),
       // Project work is one line now; the role says what it bills as.
       line: initial.line === "sales" || initial.line === "closure" ? initial.line : "consultor",
       roleId: initial.line === "closure" ? (initial.roleId ?? "") : isClientWork && projectId ? roleFor(projectId) : roleId,
@@ -762,7 +766,7 @@ if (!pickedLine) {
     { id: "when", label: "When & how" },
     ...(isClientWork ? [{ id: "client" as StepId, label: "Client & project" }, { id: "tasks" as StepId, label: "Tasks & time" }] : []),
     { id: "people", label: "People" },
-    { id: "notes", label: editing ? "Notes & review" : "Review" },
+    { id: "notes", label: editing ? "Name, notes & review" : "Name & review" },
   ];
   const stepIdx = Math.max(0, steps.findIndex((s) => s.id === wizStep));
   const cur = steps[stepIdx] ?? steps[0];
@@ -1141,6 +1145,9 @@ if (!pickedLine) {
       default:
         return (
           <>
+            <label className="bm6-label" htmlFor="bm-name-field">Name <small>what it's called in the calendar and Outlook</small></label>
+            <input id="bm-name-field" className="bm6-name" value={name} maxLength={140} onChange={(e) => setName(e.target.value)}
+              placeholder={[client?.name, selectedType?.name].filter(Boolean).join(" · ") || "e.g. Kick-off with the CFO"} />
             <label className="bm6-label" htmlFor="bm-notes-field">{isClientWork ? "Session notes" : "Notes"} <small>{notes.trim() ? `${notes.trim().length} chars` : "optional"}</small></label>
             <textarea id="bm-notes-field" className="bm-notes bm6-notes" rows={4} value={notes} onChange={(e) => setNotes(e.target.value)}
               placeholder={isClientWork ? "What was covered, decisions taken, blockers, follow-ups…" : "What this time was spent on — keep it logged even if it isn't billed."} />

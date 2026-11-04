@@ -839,7 +839,12 @@ export default function HandoffConfirmServices({ clientName, skipPrompt = false,
                       </span>
                     )}
                     <span className="hx2-prod-sum">{bd.multiplierLabel}</span>
-                    <b className="hx2-prod-total">{bd.discount > 0 && <s>{money(bd.gross)}</s>}{money(bd.total)}</b>
+                    {(() => {
+                      // a licence over several years: the yearly figure leads, the whole term under it
+                      const yrs = (p.line as any).recurring ? bd.years.length : 0;
+                      if (yrs <= 1) return <b className="hx2-prod-total">{bd.discount > 0 && <s>{money(bd.gross)}</s>}{money(bd.total)}</b>;
+                      return <span className="hx2-prod-fig"><b className="hx2-prod-total">{money(bd.years[0])}<i> / year</i></b><small>{yrs} years · {money(bd.total)}</small></span>;
+                    })()}
                   </div>
                   <div className="hx2-revrows">
                     {bd.rows.map((r, i) => (

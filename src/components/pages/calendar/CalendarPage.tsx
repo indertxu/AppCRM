@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import BookingModal, { repeatDates, repeatLabel, sameRule, REPEAT_AHEAD_DAYS, type RepeatRule, type BookingValue } from "./BookingModal";
 import CalendarSettingsModal, { type WorkTypeDef, type Targets } from "./CalendarSettingsModal";
@@ -56,6 +56,8 @@ billable: number;
   taskId: string;
 attendees: string;
   notes: string;
+  /** Its own name (97_meeting_names.sql), shown as its title. */
+  name?: string;
   status: string;
   line: string;
   roleId: string;
@@ -81,7 +83,7 @@ const addDaysIso = (iso: string, n: number) => { const [y, m, d] = iso.split("-"
 const todayIsoStr = () => { const t = new Date(); return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`; };
 /** What every date of a series carries, taken from the entry row. */
 const templateOf = (r: Record<string, unknown>) => {
-  const keys = ["start_min", "end_min", "work_type_id", "billable", "client_id", "project_id", "phase_id", "task_ids", "attendees", "notes", "billing_line", "role_id", "kind", "meeting_kind"];
+  const keys = ["start_min", "end_min", "work_type_id", "billable", "client_id", "project_id", "phase_id", "task_ids", "attendees", "notes", "name", "billing_line", "role_id", "kind", "meeting_kind"];
   return Object.fromEntries(keys.map((k) => [k, r[k] ?? null]));
 };
 /** An entry row as the page keeps it. */
@@ -98,6 +100,7 @@ const toEntry = (r: Record<string, unknown>): Entry => ({
   taskId: (r.task_ids as string) ?? "",
   attendees: (r.attendees as string) ?? "",
   notes: (r.notes as string) ?? "",
+  name: (r.name as string) ?? "",
   status: (r.status as string) || "planned",
   line: (r.billing_line as string) || "consultor",
   roleId: (r.role_id as string) ?? "",
@@ -467,6 +470,7 @@ type: string;
   taskId: string;
 attendees: string;
   notes: string;
+  name?: string;
   line: string;
   roleId: string;
   meetKind?: string;
@@ -492,6 +496,17 @@ const [dragging, setDragging] = useState<{ id: string; grabMin: number } | null>
     return () => window.removeEventListener("mouseup", up);
   }, [ghost?.drag]);
 const [view, setView] = useState<"week" | "month">("week");
+  // Month: how tall a week row is, so each day shows the chips that fit and "+N more" for the rest
+  const [mRowH, setMRowH] = useState(0);
+  const mBodyRo = useRef<ResizeObserver | null>(null);
+  const mBodyRef = useCallback((el: HTMLDivElement | null) => {
+    mBodyRo.current?.disconnect();
+    if (!el) return;
+    const measure = () => { const r = el.firstElementChild as HTMLElement | null; if (r) setMRowH(r.getBoundingClientRect().height); };
+    mBodyRo.current = new ResizeObserver(measure);
+    mBodyRo.current.observe(el);
+    measure();
+  }, []);
   useNavSection("/calendar", 0, (part) => { if (part === "week" || part === "month") setView(part); });
   const [jumpOpen, setJumpOpen] = useState(false);
   const [actuals, setActuals] = useState<Record<string, ActualValue>>({});
@@ -609,7 +624,9 @@ const [targets, setTargets] = useState<Targets>({ perDay: 1, minPerDay: 0.5, min
   const [todoOpen, setTodoOpen] = useState<boolean>(() => { try { return localStorage.getItem("cal.todo") === "1"; } catch { return false; } });
   const [todoSeen, setTodoSeen] = useState(false);
   useEffect(() => { if (todoOpen) setTodoSeen(true); }, [todoOpen]);
-  const toggleTodo = () => setTodoOpen((v) => { try { localStorage.setItem("cal.todo", v ? "0" : "1"); } catch { /* ignore */ } return !v; });
+  const toggleTodo = () => { setTodoWide(false); setTodoOpen((v) => { try { localStorage.setItem("cal.todo", v ? "0" : "1"); } catch { /* ignore */ } return !v; }); };
+  /** The to-do panel's expand: first to half the page, then the Tasks page itself. */
+  const [todoWide, setTodoWide] = useState(false);
   useEffect(() => {
     (async () => {
       const { data: svc } = await supabase.from("services").select("id, rate_unit").eq("rate_unit", "hour");
@@ -1037,7 +1054,7 @@ setModal({ day, startMin, endMin, type: workTypes[0]?.id ?? "", billable, client
       : [Math.round(on.startMin / 15) * 15, Math.max(Math.round(on.startMin / 15) * 15 + 15, Math.round(on.endMin / 15) * 15)];
     const billable = Math.max(0.25, Math.round((endMin - startMin) / 60 / 0.25) * 0.25);
     setOlPick(null);
-    setModal({ day, startMin, endMin, type: workTypes[0]?.id ?? "", billable, clientId: "", projectId: "", phaseId: "", taskId: "", attendees: "", notes: ev.subject, line: "", roleId: "",
+    setModal({ day, startMin, endMin, type: workTypes[0]?.id ?? "", billable, clientId: "", projectId: "", phaseId: "", taskId: "", attendees: "", notes: ev.subject, name: ev.subject, line: "", roleId: "",
       meetKind: ev.online ? "teams" : "in_person", outlookSourceId: ev.id });
   };
   /* ---------- repeating entries ---------- */
@@ -1142,6 +1159,7 @@ setModal({ day, startMin, endMin, type: workTypes[0]?.id ?? "", billable, client
 taskId: e.taskId ?? "",
 attendees: e.attendees ?? "",
       notes: e.notes ?? "",
+      name: e.name ?? "",
       line: e.line ?? "consultor",
       roleId: e.roleId ?? "",
       meetKind: e.meetKind ?? "in_person",
@@ -1224,6 +1242,7 @@ if (!modal) return;
         task_ids: v.taskId || null,
         attendees: v.attendees || null,
 notes: v.notes || null,
+        name: v.name?.trim() || null,
         billing_line: v.line || "consultor",
         role_id: v.roleId || null,
         kind: "delivery",
@@ -1777,15 +1796,15 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
         </div>
       </header>
 
-      <div className={`cv-main ${todoOpen ? "has-todo" : ""}`}>
+      <div className={`cv-main ${todoOpen ? "has-todo" : ""} ${todoOpen && todoWide ? "is-wide" : ""}`}>
       <section className="cv-cal">
 {view === "month" ? (
       <div key={`m-${monthAnchor.getFullYear()}-${monthAnchor.getMonth()}`} className={`cal-month ${dirClass}`}>
           <div className="cal-month-head">
             {DOW.map((n) => (<div className="cal-month-dow" key={n}>{n}</div>))}
           </div>
-          <div className="cal-month-body">
-        {monthMatrix(monthAnchor).map((row, ri) => (
+          <div className="cal-month-body" ref={mBodyRef}>
+        {monthMatrix(monthAnchor).map((row, ri, all) => (
               <div className="cal-month-row" key={ri}>
                 {row.map((d, ci) => {
               const inMonth = d.getMonth() === monthAnchor.getMonth();
@@ -1820,10 +1839,19 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
                         )}
                       </div>
                       <div className="cal-mcell-list">
-                        {dayList
-                          .slice()
-                          .sort((a, b) => a.startMin - b.startMin)
-                          .map((e) => {
+                        {(() => {
+                        // every cell the same size: what fits is shown, the rest is one "+N more" that opens the week
+                        // cell padding + date line take ~44px; a chip line 22px (20 + gap), "+N more" 20px
+                        const fitAll = mRowH ? Math.max(1, Math.floor((mRowH - 42) / 22)) : all.length >= 6 ? 3 : 4;
+                        const fitMore = mRowH ? Math.max(1, Math.floor((mRowH - 64) / 22)) : fitAll - 1;
+                        const olDay = olShown.map((ev) => ({ ev, on: outlookOnDay(ev, d) })).filter((x) => x.on);
+                        const mine = dayList.slice().sort((a, b) => a.startMin - b.startMin);
+                        const total = mine.length + olDay.length;
+                        const room = total > fitAll ? fitMore : total;
+                        const shownMine = mine.slice(0, room);
+                        const shownOl = olDay.slice(0, Math.max(0, room - shownMine.length));
+                        return <>
+                        {shownMine.map((e) => {
                             const wt = workTypes.find((t) => t.id === e.type);
                             return (
                               <button
@@ -1835,18 +1863,25 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
                               >
                                 <span className="cal-mchip-time">{fmtTime(e.startMin).replace(":00", "")}</span>
                                 <span className="cal-mchip-name">
-                                  {e.clientId ? clientNames[e.clientId] ?? "—" : wt?.name ?? "Meeting"}
+                                  {e.name || (e.clientId ? clientNames[e.clientId] ?? "—" : wt?.name ?? "Meeting")}
                                 </span>
                               </button>
                             );
                           })}
-                        {olShown.map((ev) => ({ ev, on: outlookOnDay(ev, d) })).filter((x) => x.on).map(({ ev, on }) => (
+                        {shownOl.map(({ ev, on }) => (
                           <button key={`ol-${ev.id}`} className="cal-mchip is-ol" title={`${ev.subject} · Outlook`} style={{ ["--ec" as string]: "#8796a1" }}
                             onClick={(x) => { x.stopPropagation(); setOlPick({ ev, anchor: x.currentTarget.getBoundingClientRect() }); }}>
                             <span className="cal-mchip-time">{on === "allday" ? <OlGlyph s={10} /> : fmtTime((on as { startMin: number }).startMin).replace(":00", "")}</span>
                             <span className="cal-mchip-name">{ev.subject}</span>
                           </button>
                         ))}
+                        {total > room && (
+                          <button type="button" className="cal-mmore" onClick={(x) => { x.stopPropagation(); setWeekStart(startOfWeek(d)); setView("week"); }} title="Open this week">
+                            +{total - room} more
+                          </button>
+                        )}
+                        </>;
+                        })()}
                       </div>
                     </div>
                   );
@@ -2113,7 +2148,7 @@ onClick={(ev) => { ev.stopPropagation(); if (!opaque(e.userId) && e.merged === 1
                             ? `Busy · ${e.merged}`
                             : opaque(e.userId)
                               ? "Busy"
-                              : e.clientId ? clientNames[e.clientId] ?? "—" : wt?.name ?? "Meeting"}
+                              : e.name || (e.clientId ? clientNames[e.clientId] ?? "—" : wt?.name ?? "Meeting")}
                         </span>
                         {!opaque(e.userId) && e.merged === 1 && isBilled(e) && <span className="cal-event-bill">{num2(e.billable)}{unitOf(e)}</span>}
                       </span>
@@ -2156,7 +2191,10 @@ onClick={(ev) => { ev.stopPropagation(); if (!opaque(e.userId) && e.merged === 1
       )}
       </section>
       <aside className="cv-todo" aria-label="Your to-do" aria-hidden={!todoOpen}>
-        <div className="cv-todo-in">{(todoOpen || todoSeen) && <TicketDesk startKind="task" />}</div>
+        <div className="cv-todo-in">{(todoOpen || todoSeen) && <TicketDesk startKind="task" full={todoWide}
+          onExpand={() => { if (todoWide) return false; setTodoWide(true); return true; }}
+          expandTitle={todoWide ? "Open the Tasks page" : "Half the page for your to-do"}
+          onShrink={todoWide ? () => setTodoWide(false) : undefined} />}</div>
       </aside>
       </div>
 

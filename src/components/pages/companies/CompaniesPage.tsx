@@ -3130,8 +3130,10 @@ export function CountryPicker({ value, onChange, as, placeholder = "Choose a cou
   );
 }
 
-export function AddressFields({ value, onChange, countryAs, req, missing, renderCountry, withDetails, globeHost }: {
+export function AddressFields({ value, onChange, countryAs, req, missing, renderCountry, withDetails, globeHost, plain }: {
   value: AddrValue;
+  /** Plain fields: no street / town suggestions, no postal-code lookups, no map. */
+  plain?: boolean;
   /** Show the map over this panel instead of beside the editor drawer. */
   globeHost?: React.RefObject<HTMLElement | null>;
   /** Required and still empty after a save was tried: shown in red. */
@@ -3176,7 +3178,7 @@ export function AddressFields({ value, onChange, countryAs, req, missing, render
   const postal = v("postal_code");
   useEffect(() => {
     setHint(null);
-    if (!postalLooksComplete(postal, value.country || undefined)) { setCityChoices([]); return; }
+    if (plain || !postalLooksComplete(postal, value.country || undefined)) { setCityChoices([]); return; }
     // the province comes at once (Spain), the towns after a short trip
     const prov = provinceFromPostal(postal, value.country || undefined);
     if (prov) fill({ province: prov, country: countryOut(cc || "ES") }, false);
@@ -3247,6 +3249,28 @@ export function AddressFields({ value, onChange, countryAs, req, missing, render
   }, [globe]);
 
   const miss = (k: AddrKey) => (missing?.(k) ? "is-missing" : "");
+  if (plain) {
+    const box = (k: AddrKey, label: string, ph: string, cls = "") => (
+      <div className={`dw-f ${cls} ${miss(k)}`}><label>{label}{req?.(k)}</label>
+        <input value={v(k)} onChange={(e) => typed(k, e.target.value)} placeholder={ph} autoComplete="off" spellCheck={false} />
+      </div>
+    );
+    return (
+      <div className="dw-addr is-plain">
+        <div className="dw-grid is-3">
+          {box("street", "Street", "e.g. Calle de Alcalá", "dw-col2")}
+          {box("addr_number", "Number", "e.g. 42")}
+          {withDetails && box("addr_details", "Details (floor, door…)", "e.g. 3º B")}
+          {box("postal_code", "Postal code", "e.g. 28014")}
+          {box("city", "City", "e.g. Madrid")}
+          {box("province", "Province / state", "e.g. Madrid")}
+          <div className={`dw-f ${withDetails ? "dw-col2" : ""} ${miss("country")}`}><label>Country{req?.("country")}</label>
+            {renderCountry ? renderCountry() : <CountryPicker value={v("country")} as={countryAs} onChange={(x) => typed("country", x)} />}
+          </div>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="dw-addr" ref={addrRef} onFocus={keepGlobe} onBlur={dropGlobe}>
       <AddressGlobe value={value} anchor={addrRef} open={globe} host={globeHost} />

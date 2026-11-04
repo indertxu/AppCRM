@@ -5,6 +5,7 @@ import { syncEntryToOutlookDetailed, deleteEntryFromOutlook, meetingsGoneFromOut
 import { listPipelines, loadPipeline, renewalPipelineOf, type Phase } from "../../settings/pipelineApi";
 import { calcBreakdown, discountOf, BASE_KEY, yearlySchedule, type Calculator, type CalcRow, type CalcDiscount } from "../../settings/catalogApi";
 import type { DeckEditOp } from "../trackings/proposalGen";
+import { loadPrefs, savePref } from "../../companies/companiesApi";
 
 /**
  * Signed-in user id from the local session. Not auth.getUser(): that asks the
@@ -167,6 +168,8 @@ export const newStepId = () => Math.random().toString(36).slice(2, 10);
 export type MeetingKind = "teams" | "phone" | "in_person";
 export interface TrackMeeting {
   id: string; phase_id: string | null; title: string; meet_at: string | null; kind?: MeetingKind;
+  /** The meeting's own name (calendar_entries.name, 97_meeting_names.sql); the title holds what it's about. */
+  name?: string | null;
   /** When it ends, same day ("YYYY-MM-DDTHH:MM:00"). Older meetings without one last an hour. */
   end_at?: string | null;
   /** Outlook: the event id once it's in the organiser's Outlook. */
@@ -1166,7 +1169,7 @@ function endMinOf(startMin: number, endAt?: string | null): number {
 export async function loadMeetings(trackingId: string): Promise<TrackMeeting[]> {
   const [{ data }, u] = await Promise.all([
     supabase.from("calendar_entries")
-      .select("id, phase_id_ref, title, entry_date, start_min, end_min, meeting_kind, user_id, outlook_event_id")
+      .select("*")
       .eq("tracking_id", trackingId).eq("kind", "meeting")
       .order("entry_date").order("start_min"),
     myId(),
@@ -1177,7 +1180,8 @@ export async function loadMeetings(trackingId: string): Promise<TrackMeeting[]> 
     mine: !!me && r.user_id === me,
     id: r.id,
     phase_id: r.phase_id_ref,
-    title: r.title,
+    title: r.title ?? "",
+    name: r.name ?? null,
     meet_at: `${r.entry_date}T${hhmm(r.start_min)}:00`,
     end_at: `${r.entry_date}T${hhmm(r.end_min != null && r.end_min > r.start_min ? r.end_min : r.start_min + 60)}:00`,
     kind: (r.meeting_kind ?? "in_person") as MeetingKind,
@@ -1236,7 +1240,7 @@ export async function syncMeetingToOutlook(entryId: string): Promise<MeetingOutl
     const [me, { data: e, error: qErr }] = await Promise.all([
       myUser(),
       supabase.from("calendar_entries")
-        .select("id, user_id, title, entry_date, start_min, end_min, meeting_kind, company_id, tracking_id, outlook_event_id")
+        .select("*")
         .eq("id", entryId).maybeSingle(),
     ]);
     const row = e as any;
@@ -1253,7 +1257,10 @@ export async function syncMeetingToOutlook(entryId: string): Promise<MeetingOutl
       const description = plainText(row.title ?? "") || MEETING_KIND_LABEL[kind];
       const company = ((co as any)?.name as string) ?? "";
       const deal = (((trk as any)?.deal_name as string) ?? "").trim() || company;
+      const name = String(row.name ?? "").trim();
       const r = await syncEntryToOutlookDetailed({
+        // Named meetings carry their name as the event title.
+        ...(name ? { subject: [company, name].filter(Boolean).join(" · ") } : {}),
         outlookEventId: row.outlook_event_id ?? null,
         date: row.entry_date,
         startMin: row.start_min,
@@ -1287,7 +1294,7 @@ export async function syncMeetingToOutlook(entryId: string): Promise<MeetingOutl
   return result;
 }
 
-export async function addMeeting(trackingId: string, phaseId: string | null, title: string, meetAt: string | null, kind: MeetingKind = "in_person", endAt?: string | null): Promise<TrackMeeting | null> {
+export async function addMeeting(trackingId: string, phaseId: string | null, title: string, meetAt: string | null, kind: MeetingKind = "in_person", endAt?: string | null, name?: string | null): Promise<TrackMeeting | null> {
   const at = meetAt ? new Date(meetAt) : new Date();
   const startMin = at.getHours() * 60 + at.getMinutes();
   const endMin = endMinOf(startMin, endAt);
@@ -1302,6 +1309,7 @@ export async function addMeeting(trackingId: string, phaseId: string | null, tit
     phase_id_ref: phaseId,
     company_id: (trk as any)?.company_id ?? null,
     title,
+    ...(name?.trim() ? { name: name.trim() } : {}),
     date_key: `${at.getFullYear()}-${at.getMonth()}-${at.getDate()}`,
     entry_date: `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`,
     start_min: startMin,
@@ -1314,7 +1322,7 @@ export async function addMeeting(trackingId: string, phaseId: string | null, tit
   if (!data) return null;
   void syncMeetingToOutlook(data.id);
   const day = meetAt ? meetAt.slice(0, 10) : null;
-  return { id: data.id, phase_id: phaseId, title, meet_at: meetAt, end_at: day ? `${day}T${hhmm(endMin)}:00` : null, kind, mine: true, outlook_event_id: null, outlook_syncing: true };
+  return { id: data.id, phase_id: phaseId, title, name: name?.trim() || null, meet_at: meetAt, end_at: day ? `${day}T${hhmm(endMin)}:00` : null, kind, mine: true, outlook_event_id: null, outlook_syncing: true };
 }
 /**
  * Delete a meeting here and in Outlook — the organiser's Outlook, even when a
@@ -1346,9 +1354,10 @@ export async function syncDeletedMeetingsFromOutlook(trackingId: string, meeting
   lastOutlookCheck.set(trackingId, now);
   return meetingsGoneFromOutlook(ids);
 }
-export async function updateMeeting(id: string, patch: { title?: string; meet_at?: string | null; end_at?: string | null; kind?: MeetingKind }) {
+export async function updateMeeting(id: string, patch: { title?: string; name?: string | null; meet_at?: string | null; end_at?: string | null; kind?: MeetingKind }) {
   const row: Record<string, unknown> = {};
   if (patch.title != null) row.title = patch.title;
+  if (patch.name !== undefined) row.name = patch.name?.trim() || null;
   if (patch.kind != null) row.meeting_kind = patch.kind;
   if (patch.meet_at) {
     const at = new Date(patch.meet_at);
@@ -2191,10 +2200,41 @@ export async function saveRevenueMode(m: RevenueMode): Promise<string | null> {
   try { window.dispatchEvent(new Event(MODE_EVENT)); } catch { /* no window */ }
   return null;
 }
-/** Switch the view for this viewer only (null = back to the team's setting). */
-export function setLocalRevenueMode(m: RevenueMode | null) {
+/** Switch the view for this viewer only (null = back to the team's setting). Kept on the
+    viewer's profile too, so every deal opens with it, on any device. */
+export function setLocalRevenueMode(m: RevenueMode | null, persist = true) {
   try { if (m) localStorage.setItem(LOCAL_MODE_KEY, m); else localStorage.removeItem(LOCAL_MODE_KEY); } catch { /* private mode */ }
   try { window.dispatchEvent(new Event(MODE_EVENT)); } catch { /* no window */ }
+  if (persist) savePref("revenueMode", m).catch(() => {});
+}
+const GROSS_KEY = "sl-rev-gross";
+/** Whether this viewer looks at the figure before the partners' cut. */
+export function localRevenueGross(): boolean { try { return localStorage.getItem(GROSS_KEY) === "1"; } catch { return false; } }
+export function setLocalRevenueGross(v: boolean, persist = true) {
+  try { localStorage.setItem(GROSS_KEY, v ? "1" : "0"); } catch { /* storage off */ }
+  try { window.dispatchEvent(new Event(MODE_EVENT)); } catch { /* no window */ }
+  if (persist) savePref("revenueGross", v).catch(() => {});
+}
+/** The viewer's saved choice, read from their profile once per visit. */
+let prefModeLoaded: Promise<void> | null = null;
+function loadPrefMode(): Promise<void> {
+  if (prefModeLoaded) return prefModeLoaded;
+  prefModeLoaded = loadPrefs().then((p) => {
+    if ("revenueMode" in p && (p.revenueMode === null || isMode(p.revenueMode)) && p.revenueMode !== localRevenueMode()) setLocalRevenueMode(p.revenueMode, false);
+    if (typeof p.revenueGross === "boolean" && p.revenueGross !== localRevenueGross()) setLocalRevenueGross(p.revenueGross, false);
+  }, () => {});
+  return prefModeLoaded;
+}
+/** Before / after the partners' cut, following changes made anywhere on the page. */
+export function useRevenueGross(): [boolean, (v: boolean) => void] {
+  const [g, setG] = useState<boolean>(localRevenueGross);
+  useEffect(() => {
+    const on = () => setG(localRevenueGross());
+    window.addEventListener(MODE_EVENT, on);
+    loadPrefMode().then(on);
+    return () => window.removeEventListener(MODE_EVENT, on);
+  }, []);
+  return [g, setLocalRevenueGross];
 }
 /** The revenue view in use, following changes made anywhere on the page. */
 export function useRevenueMode(): [RevenueMode, (m: RevenueMode | null) => void] {
@@ -2203,9 +2243,10 @@ export function useRevenueMode(): [RevenueMode, (m: RevenueMode | null) => void]
     const on = () => setM(currentRevenueMode());
     window.addEventListener(MODE_EVENT, on);
     loadRevenueMode().then(on).catch(() => {});
+    loadPrefMode().then(on);
     return () => window.removeEventListener(MODE_EVENT, on);
   }, []);
-  return [m, setLocalRevenueMode];
+  return [m, (v: RevenueMode | null) => setLocalRevenueMode(v)];
 }
 
 /** Potential revenue per deal from rows already read (deals, product and service lines, catalog). */

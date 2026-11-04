@@ -462,8 +462,8 @@ export async function syncCalendarEntry(entryId: string): Promise<OutlookSyncRes
           ["Status", e.billing_line === "sales" ? "" : e.status === "confirmed" ? "Took place" : e.status === "cancelled" ? "Did not take place" : ""],
         ];
     const subject = isMeeting
-      ? [companyName || contacts[0]?.name, e.title].filter(Boolean).join(" · ") || "Meeting"
-      : [e.status === "cancelled" ? "Cancelled:" : "", [clientName || companyName, e.title || wtName || "Work"].filter(Boolean).join(" · ")].filter(Boolean).join(" ");
+      ? [companyName || contacts[0]?.name, e.name || e.title].filter(Boolean).join(" · ") || "Meeting"
+      : [e.status === "cancelled" ? "Cancelled:" : "", [clientName || companyName, e.name || e.title || wtName || "Work"].filter(Boolean).join(" · ")].filter(Boolean).join(" ");
 
     const r = await syncEntryToOutlookDetailed({
       outlookEventId: e.outlook_event_id ?? null,

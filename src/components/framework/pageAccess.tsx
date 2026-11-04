@@ -448,6 +448,67 @@ export function useDataScope(page: PageKey): { scope: DataScope; ready: boolean;
   return { scope: scopeFor(rules, me, PAGE_SCOPES[page]), ready: true, hidden: (panel: string) => panelHiddenFor(rules, panel, me) };
 }
 
+/* ─────────────── Clients: who may change what in a client ───────────────
+   Settings › Client page › Editing rights. Stored with the page scopes (page "client_edit"):
+   per action, who may do it — everyone, or by security role, department and person.
+   Bosses and superadmins always may. Nothing set: managers (contracts, products, deals) / everyone (company). */
+export type ClientEditAction = "contracts" | "products" | "deals" | "company";
+export interface EditGrant { everyone: boolean; roles: string[]; depts: string[]; users: string[] }
+export type ClientEditRules = Partial<Record<ClientEditAction, EditGrant>>;
+export const CLIENT_EDIT_PAGE = "client_edit";
+export const CLIENT_EDIT_ACTIONS: { key: ClientEditAction; label: string; hint: string; fallback: "managers" | "everyone" }[] = [
+  { key: "contracts", label: "Contracts", hint: "Dates, term, renewals, billing and the parties of a signed contract", fallback: "managers" },
+  { key: "products", label: "Signed products", hint: "Add, change and remove signed products: price, term, increases, partner share", fallback: "managers" },
+  { key: "deals", label: "Deals", hint: "Name, status, close date and value of the client's deals", fallback: "managers" },
+  { key: "company", label: "Company & status", hint: "Mark a client active or churned, add contacts and change the company's links", fallback: "everyone" },
+];
+export async function loadClientEdit(): Promise<{ rules: ClientEditRules; missing: boolean }> {
+  const { data, error } = await supabase.from("page_data_scopes").select("rules").eq("page", CLIENT_EDIT_PAGE).maybeSingle();
+  if (error) return { rules: {}, missing: true };
+  return { rules: ((data as any)?.rules ?? {}) as ClientEditRules, missing: false };
+}
+let clientEditCache: Promise<{ rules: ClientEditRules; missing: boolean }> | null = null;
+export const CLIENT_EDIT_EVENT = "next:client-edit-changed";
+export async function saveClientEdit(rules: ClientEditRules): Promise<string | null> {
+  const { error } = await supabase.from("page_data_scopes").upsert({ page: CLIENT_EDIT_PAGE, rules, updated_at: new Date().toISOString() }, { onConflict: "tenant_id,page" });
+  if (error) return /page_data_scopes|schema cache|does not exist/i.test(error.message) ? "Run 63_page_data_scopes.sql in Supabase to save this." : error.message;
+  clientEditCache = null;
+  window.dispatchEvent(new CustomEvent(CLIENT_EDIT_EVENT));
+  return null;
+}
+/** The grant that applies to an action: the saved one, else its fallback (managers, or everyone). */
+export function clientEditGrant(rules: ClientEditRules, action: ClientEditAction): EditGrant | "managers" {
+  const g = rules[action];
+  if (g) return g;
+  return CLIENT_EDIT_ACTIONS.find((a) => a.key === action)?.fallback === "everyone" ? { everyone: true, roles: [], depts: [], users: [] } : "managers";
+}
+export function canClientEdit(rules: ClientEditRules, action: ClientEditAction, p: { userId: string | null; department: string | null; role?: string | null; isFull: boolean }): boolean {
+  if (p.isFull) return true;
+  const g = clientEditGrant(rules, action);
+  const role = (p.role ?? "").toLowerCase();
+  if (g === "managers") return isManagerLevel(role);
+  return g.everyone || (!!p.userId && g.users.includes(p.userId)) || (!!role && g.roles.includes(role)) || (!!p.department && g.depts.includes(p.department));
+}
+/** What the signed-in person may change in a client (nothing until their access is read). */
+export function useClientEdit(): (action: ClientEditAction) => boolean {
+  const { ready, userId, department, level, isSuper } = usePageAccess();
+  const [rules, setRules] = useState<ClientEditRules | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const read = () => {
+      if (!clientEditCache) clientEditCache = loadClientEdit();
+      clientEditCache.then((r) => { if (alive) setRules(r.rules); });
+    };
+    read();
+    window.addEventListener(CLIENT_EDIT_EVENT, read);
+    return () => { alive = false; window.removeEventListener(CLIENT_EDIT_EVENT, read); };
+  }, []);
+  return useCallback((action: ClientEditAction) => {
+    if (!ready || !rules) return false;
+    return canClientEdit(rules, action, { userId, department, role: level, isFull: isSuper || levelBase(level) === "boss" });
+  }, [ready, rules, userId, department, level, isSuper]);
+}
+
 /* ─────────────── panels inside a page ─────────────── */
 /** none = hidden · own = only their own data · all = everything. */
 export type Level = "none" | "own" | "all";

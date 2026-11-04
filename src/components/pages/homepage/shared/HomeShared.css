@@ -2836,3 +2836,126 @@ body.is-dragsorting, body.is-dragsorting * { cursor: grabbing !important; user-s
 .tdx-step:has(> .dsort-grip) { grid-template-columns: 14px 22px minmax(0, 1fr) auto 24px; }
 .htp-checklist li.has-grip { grid-template-columns: 14px 24px 20px minmax(0, 1fr) 26px; }
 .tse-steps li.has-grip { grid-template-columns: 14px 24px minmax(0, 1fr) auto; }
+/* the full desk switches between tickets and tasks at the top of its side menu */
+.tk-full-kind { margin: 0 0 14px; }
+.tk-full-kind .tk-kind { display: flex; flex-direction: row; gap: 4px; margin: 0; padding: 3px; border-radius: 12px; background: #eef4f1; }
+.tk-full-kind .tk-kind button { flex: 1 1 0; min-width: 0; height: 32px; padding: 0 8px; gap: 6px; border-color: transparent; background: transparent; font-size: 12.5px; white-space: nowrap; }
+.tk-full-kind .tk-kind button.is-on { background: #fff; border-color: transparent; box-shadow: 0 4px 12px -8px rgba(7, 36, 25, 0.6); }
+
+/* =====================================================================
+   Calendar card · the next 5 days as one strip: each day fills up like
+   a glass with what's booked (a gentle wave on top), the picked day sits
+   on a white pill that slides, and hovering a day shows what's on it.
+   ===================================================================== */
+.hs-cal .hs-days.hs-wk { display: flex; flex-direction: column; gap: 10px; }
+.hs-wk-strip {
+  --gap: 4px; position: relative; display: grid; grid-template-columns: repeat(var(--n, 5), minmax(0, 1fr)); gap: var(--gap);
+  padding: var(--gap); border-radius: 18px; background: #f1f6f3; box-shadow: inset 0 0 0 1px rgba(10, 60, 40, 0.06);
+}
+.hs-wk-pill {
+  position: absolute; z-index: 0; top: var(--gap); bottom: var(--gap); left: var(--gap);
+  width: calc((100% - var(--gap) * (var(--n, 5) + 1)) / var(--n, 5));
+  border-radius: 14px; background: #fff; box-shadow: 0 10px 24px -14px rgba(7, 46, 31, 0.55), 0 0 0 1px rgba(10, 60, 40, 0.06);
+  transform: translateX(calc(var(--si, 0) * (100% + var(--gap)))); opacity: 0;
+  transition: transform 0.5s cubic-bezier(0.34, 1.4, 0.5, 1), opacity 0.25s;
+}
+.hs-wk-strip.has-sel .hs-wk-pill { opacity: 1; }
+.hs-wk-day {
+  position: relative; z-index: 1; display: flex; flex-direction: column; align-items: stretch; justify-content: space-between; gap: 2px;
+  min-width: 0; height: 88px; padding: 9px 10px 9px; border: 0; border-radius: 14px; background: transparent;
+  font: inherit; color: var(--ink, #0b241a); text-align: left; cursor: pointer;
+  animation: hs-wk-in 0.55s cubic-bezier(0.16, 1, 0.3, 1) both; animation-delay: calc(var(--i, 0) * 55ms);
+  transition: transform 0.3s cubic-bezier(0.34, 1.4, 0.5, 1);
+}
+@keyframes hs-wk-in { from { opacity: 0; transform: translateY(8px) scale(0.97); } }
+.hs-wk-day:hover { transform: translateY(-2px); }
+.hs-wk-day:active { transform: translateY(0) scale(0.98); }
+.hs-wk-day:focus-visible { outline: 2px solid rgba(18, 181, 127, 0.5); outline-offset: 1px; }
+/* the glass: fills from the bottom with the day's bookings */
+.hs-wk-clip { position: absolute; inset: 0; z-index: -1; overflow: hidden; border-radius: inherit; pointer-events: none; }
+.hs-wk-fill {
+  --fa: rgba(46, 203, 146, 0.26); --fb: rgba(18, 181, 127, 0.1);
+  position: absolute; left: 0; right: 0; bottom: 0; height: calc(var(--p, 0) * 1%);
+  background: linear-gradient(180deg, var(--fa), var(--fb));
+  transition: height 1.1s cubic-bezier(0.16, 1, 0.3, 1); transition-delay: calc(0.15s + var(--i, 0) * 70ms);
+}
+@starting-style { .hs-wk-fill { height: 0; } }
+.hs-wk-fill::before { /* a slow wave on the surface */
+  content: ""; position: absolute; left: 0; right: 0; top: -5px; height: 6px;
+  background: var(--fa);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='6' viewBox='0 0 48 6'%3E%3Cpath d='M0 3 C 8 0 16 0 24 3 S 40 6 48 3 V6 H0Z'/%3E%3C/svg%3E") 0 0 / 48px 6px repeat-x;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='6' viewBox='0 0 48 6'%3E%3Cpath d='M0 3 C 8 0 16 0 24 3 S 40 6 48 3 V6 H0Z'/%3E%3C/svg%3E") 0 0 / 48px 6px repeat-x;
+  animation: hs-wk-wave 3.6s linear infinite;
+}
+.hs-wk-day.is-empty .hs-wk-fill::before { display: none; }
+@keyframes hs-wk-wave { to { -webkit-mask-position: 48px 0; mask-position: 48px 0; } }
+.hs-wk-day:hover .hs-wk-fill { --fa: rgba(46, 203, 146, 0.36); }
+.hs-wk-day.is-full .hs-wk-fill { --fa: rgba(18, 181, 127, 0.38); --fb: rgba(10, 143, 96, 0.16); }
+.hs-wk-day.is-over .hs-wk-fill { --fa: rgba(243, 181, 91, 0.45); --fb: rgba(217, 130, 43, 0.16); }
+.hs-wk-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-height: 16px; }
+.hs-wk-dow { font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted, #6c8a7d); white-space: nowrap; }
+.hs-wk-day.is-today .hs-wk-dow { display: inline-flex; align-items: center; gap: 6px; color: #0a8f60; }
+.hs-wk-day.is-today .hs-wk-dow::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #12b57f; box-shadow: 0 0 0 0 rgba(18, 181, 127, 0.55); animation: hs-wk-pulse 2.2s ease-out infinite; }
+@keyframes hs-wk-pulse { 70% { box-shadow: 0 0 0 6px rgba(18, 181, 127, 0); } 100% { box-shadow: 0 0 0 0 rgba(18, 181, 127, 0); } }
+.hs-wk-n { display: grid; place-items: center; min-width: 17px; height: 17px; padding: 0 5px; border-radius: 999px; background: rgba(10, 60, 40, 0.07); font-size: 10px; font-weight: 700; color: #3d5b4e; font-variant-numeric: tabular-nums; }
+.hs-wk-day.is-sel .hs-wk-n { background: #0b3a2b; color: #fff; }
+.hs-wk-num { font-family: "Space Grotesk", sans-serif; font-size: 25px; font-weight: 700; letter-spacing: -0.03em; line-height: 1; transition: transform 0.3s cubic-bezier(0.34, 1.4, 0.5, 1); }
+.hs-wk-day:hover .hs-wk-num { transform: translateY(-1px) scale(1.04); transform-origin: left bottom; }
+.hs-wk-h { display: flex; align-items: baseline; gap: 1px; min-width: 0; font-family: "Space Grotesk", sans-serif; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hs-wk-h b { font-size: 13px; font-weight: 700; }
+.hs-wk-h small { font-size: 10.5px; font-weight: 600; color: var(--mute2, #8aa298); }
+.hs-wk-h em { margin-left: auto; padding: 0 5px; border-radius: 6px; background: rgba(217, 130, 43, 0.14); font-style: normal; font-size: 10px; font-weight: 700; color: #b8661a; }
+.hs-wk-day.is-over .hs-wk-h b { color: #b8661a; }
+.hs-wk-off { font-size: 10.5px; font-weight: 700; color: #5b6ee1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hs-wk-day.is-vacation .hs-wk-off { color: #c07a17; }
+.hs-wk-day.is-closed .hs-wk-off { color: var(--mute2, #8aa298); }
+.hs-wk-day.is-off .hs-wk-num { color: var(--muted, #6c8a7d); }
+.hs-wk-day.is-off .hs-wk-clip { background: rgba(10, 60, 40, 0.035); }
+/* hover: what's on that day */
+.hs-wk-peek {
+  position: absolute; z-index: 40; top: calc(100% + 8px); left: 50%; width: 236px; display: flex; flex-direction: column; gap: 3px;
+  padding: 10px; border-radius: 14px; background: #0b2f22; color: #e7f6ef; box-shadow: 0 22px 44px -18px rgba(4, 30, 20, 0.7);
+  opacity: 0; visibility: hidden; pointer-events: none; transform: translate(-50%, -4px) scale(0.97); transform-origin: top center;
+  transition: opacity 0.18s, transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), visibility 0s 0.25s;
+}
+.hs-wk-day.is-first .hs-wk-peek { left: 0; transform: translate(0, -4px) scale(0.97); transform-origin: top left; }
+.hs-wk-day.is-last .hs-wk-peek { left: auto; right: 0; transform: translate(0, -4px) scale(0.97); transform-origin: top right; }
+.hs-wk-day:hover .hs-wk-peek { opacity: 1; visibility: visible; transform: translate(-50%, 0) scale(1); transition-delay: 0.22s, 0.22s, 0s; }
+.hs-wk-day.is-first:hover .hs-wk-peek, .hs-wk-day.is-last:hover .hs-wk-peek { transform: none; }
+.hs-wk-day.is-sel .hs-wk-peek { display: none; }
+.hs-wk-peek-h { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 0 2px 4px; font-size: 11.5px; font-weight: 700; color: #fff; }
+.hs-wk-peek-h em { font-style: normal; font-size: 10.5px; font-weight: 600; color: rgba(214, 255, 236, 0.6); white-space: nowrap; }
+.hs-wk-peek .hs-peek-it { display: flex; align-items: baseline; gap: 8px; min-width: 0; padding: 5px 7px 5px 12px; border-radius: 9px; position: relative; background: rgba(255, 255, 255, 0.06); font-size: 12px; font-weight: 500; color: #e7f6ef; }
+.hs-wk-peek .hs-peek-it::before { content: ""; position: absolute; left: 4px; top: 7px; bottom: 7px; width: 3px; border-radius: 3px; background: var(--c, #12b57f); }
+.hs-wk-peek .hs-peek-it b { flex-shrink: 0; font-family: "Space Grotesk", sans-serif; font-size: 11.5px; font-weight: 600; color: #fff; font-variant-numeric: tabular-nums; }
+.hs-wk-peek .hs-peek-it span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hs-wk-peek .hs-peek-it.is-ol { background: rgba(255, 255, 255, 0.03); color: rgba(231, 246, 239, 0.75); }
+.hs-wk-peek :is(.hs-peek-more, .hs-peek-none) { padding: 3px 7px 1px 12px; font-style: normal; font-size: 11.5px; font-weight: 500; color: rgba(214, 255, 236, 0.6); }
+/* the 5 days in one line: a ring, booked of available, what's free */
+.hs-wk-sum { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 0 2px; }
+.hs-wk-ring { position: relative; flex: none; width: 36px; height: 36px; }
+.hs-wk-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.hs-wk-ring circle { fill: none; stroke: rgba(18, 181, 127, 0.12); stroke-width: 3.2; }
+.hs-wk-ring circle.is-v { stroke: #12b57f; stroke-linecap: round; stroke-dasharray: var(--v, 0) 100; transition: stroke-dasharray 1.2s cubic-bezier(0.16, 1, 0.3, 1) 0.3s; }
+@starting-style { .hs-wk-ring circle.is-v { stroke-dasharray: 0 100; } }
+.hs-wk-ring b { position: absolute; inset: 0; display: grid; place-items: center; font-family: "Space Grotesk", sans-serif; font-size: 9.5px; font-weight: 700; color: var(--forest, #0a6f4d); font-variant-numeric: tabular-nums; }
+.hs-wk-sum-t { display: flex; flex-direction: column; min-width: 0; font-size: 12.5px; color: var(--muted, #6c8a7d); line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hs-wk-sum-t > span { overflow: hidden; text-overflow: ellipsis; }
+.hs-wk-sum-t > span b { font-family: "Space Grotesk", sans-serif; font-weight: 700; color: var(--ink, #0b241a); }
+.hs-wk-sum-t em { font-style: normal; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; }
+.hs-wk-sum-t em b { font-family: "Space Grotesk", sans-serif; font-weight: 700; color: var(--forest, #0a6f4d); }
+.hs-wk-clear { margin-left: auto; flex: none; height: 28px; padding: 0 11px; border: 1px solid rgba(10, 60, 40, 0.12); border-radius: 9px; background: #fff; font: inherit; font-size: 12px; font-weight: 650; color: var(--forest, #0a6f4d); cursor: pointer; animation: hs-wk-in 0.35s cubic-bezier(0.16, 1, 0.3, 1); }
+.hs-wk-clear:hover { border-color: rgba(18, 181, 127, 0.45); background: #f4fbf7; }
+@media (prefers-reduced-motion: reduce) { .hs-wk-day, .hs-wk-fill, .hs-wk-fill::before, .hs-wk-pill, .hs-wk-ring circle.is-v, .hs-wk-day.is-today .hs-wk-dow::before { animation: none; transition: none; } }
+/* a narrow card: fewer extras per day */
+.hs-wk-strip { container-type: inline-size; }
+@container (max-width: 470px) {
+  .hs-wk-day { padding: 8px 7px; height: 82px; }
+  .hs-wk-n, .hs-wk-h em { display: none; }
+  .hs-wk-dow { font-size: 9.5px; letter-spacing: 0.05em; }
+  .hs-wk-day.is-today .hs-wk-dow { gap: 4px; }
+  .hs-wk-num { font-size: 22px; }
+  .hs-wk-h b { font-size: 12px; }
+  .hs-wk-h small { font-size: 9.5px; }
+}
+@container (max-width: 330px) { .hs-wk-h small { display: none; } }

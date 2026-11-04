@@ -32,7 +32,12 @@ export interface TeamMember {
 export interface Client {
   id: string;
   name: string;
+  /** Still a client, or lost (churned) — 96_client_status.sql. */
+  status?: ClientStatus;
+  churnedAt?: string | null;
+  churnReason?: string | null;
 }
+export type ClientStatus = "active" | "churned";
 
 /**
  * One role on a project: how many days (or hours) of it were sold, at what

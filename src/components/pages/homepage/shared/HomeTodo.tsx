@@ -1795,6 +1795,7 @@ export async function mergeTicket(from: Ticket, into: Ticket, ready: boolean): P
 const TK_ICON: Record<string, string> = {
   plus: "M12 5v14M5 12h14",
   expand: "M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7",
+  shrink: "M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7",
   search: "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.3-4.3",
   x: "M18 6 6 18M6 6l12 12",
   link: "M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7",
@@ -1959,8 +1960,13 @@ type QuickKey = "" | "reply" | "unassigned" | "today" | "overdue" | "breach" | "
 const KIND_PREF = "desk.kind";
 const readKind = (): ItemCat => { try { return localStorage.getItem(KIND_PREF) === "ticket" ? "ticket" : "task"; } catch { return "task"; } };
 
-export function TicketDesk({ full: fullProp = false, page = false, openFirst = null, startKind = null, onClose }: {
+export function TicketDesk({ full: fullProp = false, page = false, openFirst = null, startKind = null, onClose, onExpand, expandTitle, onShrink }: {
   full?: boolean;
+  /** The expand button asks first (the calendar widens its panel); true = handled, no page change. */
+  onExpand?: () => boolean;
+  expandTitle?: string;
+  /** Shown while widened: back to the narrow panel. */
+  onShrink?: () => void;
   /** Tickets (conversations) or tasks (work) first; otherwise the last one used. */
   startKind?: ItemCat | null;
   /** The Tickets page (/tickets): the whole desk, the ticket opens next to the list. */
@@ -2839,7 +2845,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
       <div className="tk-full" role="dialog" aria-label="Tickets">
         <header className="tk-full-head">
           <div>
-            <span className="hs-eyebrow">Ticket desk</span>
+            <span className="hs-eyebrow">{isT ? "Ticket desk" : "Task desk"}</span>
             <h2 className="tk-full-title">{counts[tab]} open {tab === "mine" ? "on your desk" : tab === "team" ? "in your team" : tab === "unassigned" ? "without an owner" : "in the company"}</h2>
           </div>
           {breached > 0 && <span className="tk-breach-pill"><TkIco d="bolt" />{breached} past SLA</span>}
@@ -2847,10 +2853,13 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
           {syncBtn}
           <button type="button" className="tk-icon-btn" onClick={() => setSettings({})} title="Mail rules, mailboxes and SLAs" aria-label="Desk settings"><TkIco d="gear" /></button>
           <button type="button" className="tk-new" onClick={() => setCreating(newDraft())}><TkIco d="plus" />New {noun}</button>
-          <button type="button" className="tk-icon-btn" onClick={onClose} aria-label="Close"><TkIco d="x" /></button>
+          {onShrink && <button type="button" className="tk-icon-btn" onClick={onShrink} title="Back to the narrow panel" aria-label="Back to the narrow panel"><TkIco d="shrink" /></button>}
+          {onExpand && <button type="button" className="tk-icon-btn" onClick={() => { if (onExpand()) return; navTo(isT ? "/tickets" : "/tickets?kind=task"); }} title={expandTitle ?? `Open the ${isT ? "Tickets" : "Tasks"} page`} aria-label={expandTitle ?? `Open the ${isT ? "Tickets" : "Tasks"} page`}><TkIco d="expand" /></button>}
+          {(onClose || !onExpand) && <button type="button" className="tk-icon-btn" onClick={onClose} aria-label="Close"><TkIco d="x" /></button>}
         </header>
         <div className="tk-full-body">
           <nav className="tk-full-nav">
+            <div className="tk-full-kind">{kindSwitch}</div>
             <span className="tk-nav-k">Views</span>
             {DESK_TABS.map((x) => (
               <button key={x.key} type="button" className={pane === "tickets" && tab === x.key ? "is-on" : ""} onClick={() => { setTab(x.key); setPane("tickets"); }}>{x.label}<i>{counts[x.key]}</i></button>
@@ -2898,7 +2907,8 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
         <span className="td-spacer" />
         {syncBtn}
         <button type="button" className="tk-icon-btn" onClick={() => setSettings({})} title="Mail rules, mailboxes and SLAs" aria-label="Desk settings"><TkIco d="gear" /></button>
-        <button type="button" className="tk-icon-btn" onClick={() => navTo(isT ? "/tickets" : "/tickets?kind=task")} title={`Open the ${isT ? "Tickets" : "Tasks"} page`} aria-label={`Open the ${isT ? "Tickets" : "Tasks"} page`}><TkIco d="expand" /></button>
+        {onShrink && <button type="button" className="tk-icon-btn" onClick={onShrink} title="Back to the narrow panel" aria-label="Back to the narrow panel"><TkIco d="shrink" /></button>}
+        <button type="button" className="tk-icon-btn" onClick={() => { if (onExpand?.()) return; navTo(isT ? "/tickets" : "/tickets?kind=task"); }} title={expandTitle ?? `Open the ${isT ? "Tickets" : "Tasks"} page`} aria-label={expandTitle ?? `Open the ${isT ? "Tickets" : "Tasks"} page`}><TkIco d="expand" /></button>
       </header>
       <div className="tk-tabs is-icons" role="tablist">
         {DESK_TABS.map((x) => (

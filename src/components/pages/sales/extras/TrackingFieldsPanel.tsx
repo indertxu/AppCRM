@@ -96,8 +96,10 @@ export function FoldPanel({ className = "", title, count, summary, aside, defaul
  * Choices (dropdown, yes/no, date) save the moment they change; typed text
  * and numbers save when you leave the box.
  */
-export default function TrackingFieldsPanel({ trackingId, fields, initial, onSaved }: {
+export default function TrackingFieldsPanel({ trackingId, fields, initial, onSaved, readOnly }: {
   trackingId: string;
+  /** A won deal: the values show, nothing can be changed. */
+  readOnly?: boolean;
   fields: TrackingField[];
   initial: Record<string, any> | null | undefined;
   onSaved?: (custom: Record<string, any>) => void;
@@ -138,7 +140,7 @@ export default function TrackingFieldsPanel({ trackingId, fields, initial, onSav
         </span>
       ) : undefined}>
       {err && <p className="tfp-err">{err}</p>}
-      <div className="tfp-list">
+      <fieldset className={`tfp-list ${readOnly ? "is-ro" : ""}`} disabled={readOnly} title={readOnly ? "The deal is won: its details are locked" : undefined}>
         {fields.map((f) => {
           const empty = isEmptyValue(f, values[f.id]);
           const typed = f.type === "text" || f.type === "number";
@@ -153,7 +155,7 @@ export default function TrackingFieldsPanel({ trackingId, fields, initial, onSav
             </div>
           );
         })}
-      </div>
+      </fieldset>
     </FoldPanel>
   );
 }

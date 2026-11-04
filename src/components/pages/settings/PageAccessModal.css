@@ -334,3 +334,19 @@
   .cvv-row .cvv-pick { grid-column: 1 / -1; }
   .cvv-row > .psec-x { grid-column: 3; grid-row: 1; }
 }
+
+/* ---------- Settings › Client page › Editing rights ---------- */
+.cea-acts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.cea-act {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px; min-width: 0; padding: 11px 13px;
+  border: 1px solid rgba(10, 111, 77, 0.12); border-radius: 12px; background: #fff; text-align: left; cursor: pointer; font: inherit;
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+}
+.cea-act:hover { border-color: rgba(10, 111, 77, 0.3); }
+.cea-act.is-on { border-color: #0a6f4d; background: #f4faf7; box-shadow: 0 0 0 3px rgba(18, 181, 127, 0.12); }
+.cea-act b { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; max-width: 100%; font-size: 13px; font-weight: 650; color: #0b241a; }
+.cea-act b i { font-style: normal; font-size: 10px; font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; padding: 1px 6px; border-radius: 6px; background: #eef3f1; color: #7d958b; }
+.cea-act em { max-width: 100%; font-style: normal; font-size: 12px; color: #4d6a5f; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cea-act small { font-size: 11px; color: #8aa298; }
+.cea-hint { margin: -4px 2px 0; font-size: 12.5px; color: #5f7a6f; }
+@media (max-width: 900px) { .cea-acts { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

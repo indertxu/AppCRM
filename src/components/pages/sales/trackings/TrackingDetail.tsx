@@ -64,7 +64,7 @@ import {
   TASK_PRIORITIES, loadTaskTemplates, fromTemplate, type TaskPriority, type TaskKind, type MyTask, type TaskTemplate, type TaskStep,
   type Tracking, type TrackNote, type TrackTask, type TrackMeeting, type MeetingKind, type PhaseEvent, type PotentialService, type Assignee,
   type TrackingProduct, type TermPatch, type RevenueLineFields,
-  useRevenueMode, lineRevenue, REVENUE_MODES, catalogYears, catalogIncrements, loadDealContract, saveDealContract, applyContractToClientProducts, incrementsToSchedule, type ContractTerms, type RevenueMode,
+  useRevenueMode, useRevenueGross, lineRevenue, REVENUE_MODES, catalogYears, catalogIncrements, loadDealContract, saveDealContract, applyContractToClientProducts, incrementsToSchedule, type ContractTerms, type RevenueMode,
   listDealProposals, saveDealProposal, deleteDealProposal, setMainProposal, saveProposalDoc, type DealProposal, type ProposalLine, type ProposalDoc,
 } from "../sales/salesApi";
 
@@ -171,8 +171,10 @@ function FigurePick({ value, caption, options, onPick, money, className = "", ti
   );
 }
 
-function RevLine({ name, tag, line, unit, minUnit, calculator, catalogBase, onRemove, onOpenCalc, money, versionIdx, versionCount, onPrev, onNext, onNewVersion, footer }: {
+function RevLine({ name, tag, line, unit, minUnit, calculator, catalogBase, onRemove, onOpenCalc, money, versionIdx, versionCount, onPrev, onNext, onNewVersion, footer, readOnly }: {
   name: string;
+  /** A won deal: the line can be looked at, not changed. */
+  readOnly?: boolean;
   tag: string;
   tagClass?: string;
   line: RevenueLineFields;
@@ -235,7 +237,7 @@ function RevLine({ name, tag, line, unit, minUnit, calculator, catalogBase, onRe
         </span>
       </div>
 
-      <div className="sl-rv-reveal"><div className="sl-rv-reveal-in">
+      {!readOnly && <div className="sl-rv-reveal"><div className="sl-rv-reveal-in">
       <div className="sl-rv-tools">
         {(versionCount ?? 1) > 1 ? (
           <span className="sl-rv-ver">
@@ -271,7 +273,7 @@ function RevLine({ name, tag, line, unit, minUnit, calculator, catalogBase, onRe
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" /></svg>
         </button>
       </div>
-      </div></div>
+      </div></div>}
 
       {open && (
         <div className="sl-rev-receipt sl-rv-receipt">
@@ -575,21 +577,21 @@ function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onSt
         <>
           {main && (list ?? []).length > 0 && (
             <FigurePick size="sm" className="sl-props-fig" value={mainFig?.total ?? 0} money={money}
-              title="The main proposal is what the deal is worth. Click to pick another."
+              title={dealWon ? "The proposal the deal was won with" : "The main proposal is what the deal is worth. Click to pick another."}
               caption={<><PIco d="star" />Main</>}
               options={(list ?? []).map((p) => {
                 const pf = proposalFigures(p.lines, groups);
                 return { key: p.id, label: p.name, hint: `${pf.picked.length} line${pf.picked.length === 1 ? "" : "s"}${pf.partner > 0 ? ` · −${money(pf.partner)} partner` : ""}`, amount: pf.total, on: p.is_main };
               })}
-              onPick={(id) => { const p = (list ?? []).find((x) => x.id === id); if (p) void makeMain(p); }} />
+              onPick={(id) => { if (dealWon) return; const p = (list ?? []).find((x) => x.id === id); if (p) void makeMain(p); }} />
           )}
-          <button type="button" className="sl-rv-tool sl-props-new" onClick={startNew} title="New proposal"><PIco d="plus" /><span>New</span></button>
+          {!dealWon && <button type="button" className="sl-rv-tool sl-props-new" onClick={startNew} title="New proposal"><PIco d="plus" /><span>New</span></button>}
         </>
       ) : undefined}>
       <div className="sl-props">
         {missing && <p className="sl-rvg-empty">Run 12_proposals_partners.sql in Supabase to save proposals.</p>}
-        {!missing && groups.length === 0 && <p className="sl-rvg-empty">Add products or services below, then build proposals from their versions.</p>}
-        {!missing && groups.length > 0 && (list ?? []).length === 0 && !edit && (
+        {!missing && groups.length === 0 && <p className="sl-rvg-empty">{dealWon ? "No proposals on this deal." : "Add products or services below, then build proposals from their versions."}</p>}
+        {!missing && groups.length > 0 && (list ?? []).length === 0 && !edit && !dealWon && (
           <button type="button" className="sl-props-empty" onClick={startNew}>
             <PIco d="plus" /><span><b>Build the first proposal</b><i>Pick a version of each line; its total becomes the deal value.</i></span>
           </button>
@@ -643,12 +645,12 @@ function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onSt
               {!inSync && (
                 <p className="sl-prop-warn">
                   The deal shows other versions than this proposal.
-                  <button type="button" onClick={() => makeMain(p)}><PIco d="sync" />Apply again</button>
+                  {!dealWon && <button type="button" onClick={() => makeMain(p)}><PIco d="sync" />Apply again</button>}
                 </p>
               )}
               <div className="sl-rv-reveal"><div className="sl-rv-reveal-in">
               <div className="sl-prop-tools">
-                {onWon && !isWon(p) && (wonAsk === p.id ? (
+                {onWon && !isWon(p) && !dealWon && (wonAsk === p.id ? (
                   <span className="sl-prop-del is-won">
                     <span className="sl-prop-ask">Won with this one?</span>
                     <button type="button" className="sl-rv-tool is-won" disabled={wonBusy} onClick={() => void markWon(p)}>{wonBusy ? <span className="sl-prop-spin" /> : <PIco d="trophy" />}Yes, won</button>
@@ -659,8 +661,8 @@ function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onSt
                     <PIco d="trophy" />Won
                   </button>
                 ))}
-                {!p.is_main && !isWon(p) && <button type="button" className="sl-rv-tool" onClick={() => makeMain(p)} title="Its total becomes the deal value and it is what goes to the handoff"><PIco d="star" />Make main</button>}
-                {!isWon(p) && <button type="button" className="sl-rv-tool" onClick={() => startEdit(p)}><PIco d="edit" />Edit</button>}
+                {!p.is_main && !isWon(p) && !dealWon && <button type="button" className="sl-rv-tool" onClick={() => makeMain(p)} title="Its total becomes the deal value and it is what goes to the handoff"><PIco d="star" />Make main</button>}
+                {!isWon(p) && !dealWon && <button type="button" className="sl-rv-tool" onClick={() => startEdit(p)}><PIco d="edit" />Edit</button>}
                 <span className="sl-rv-spacer" />
                 <button type="button" className="sl-prop-deck" disabled={!!busy || !f.picked.length} onClick={() => onStudio(p, "proposal")}
                   title="Build this proposal from your template: an interactive web page and a PDF">
@@ -675,7 +677,7 @@ function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onSt
                   title="Attach the signed contract (PDF): it is saved in Documents and linked to this proposal. You can also drop the file on the proposal.">
                   <PIco d="clip" />{cfId ? "Replace contract" : "Attach signed contract"}
                 </button>
-                {isWon(p) ? null : delAsk === p.id ? (
+                {isWon(p) || dealWon ? null : delAsk === p.id ? (
                   <span className="sl-prop-del">
                     <button type="button" className="sl-rv-tool is-del" onClick={() => remove(p.id)}>Delete</button>
                     <button type="button" className="sl-rv-tool" onClick={() => setDelAsk(null)}>Keep</button>
@@ -1723,8 +1725,10 @@ function companyQuickLinks(company: Company, openCompany: () => void): QuickLink
   ];
 }
 
-function DealPeople({ company, contacts, companyContactIds, dealIds, onChange }: {
+function DealPeople({ company, contacts, companyContactIds, dealIds, onChange, readOnly }: {
   company: Company | undefined; contacts: Contact[]; companyContactIds: string[]; dealIds: string[];
+  /** A won deal: who is on it can't change any more. */
+  readOnly?: boolean;
   onChange: (ids: string[]) => void;
 }) {
   const navigate = useNavigate();
@@ -1770,7 +1774,7 @@ function DealPeople({ company, contacts, companyContactIds, dealIds, onChange }:
       </span>
       <span className="sl-ppl-side">
         <LinksMenu links={contactLinks(c)} label={`Links for ${name(c)}`} />
-        {inDeal
+        {readOnly ? null : inDeal
           ? askOff === c.id ? (
             <span className="sl-ppl-ask">
               Take off?
@@ -1925,6 +1929,22 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   const [allPhases, setAllPhases] = useState<Phase[]>([]);
   const [curPhase, setCurPhase] = useState<string | null>(tracking.current_phase_id);
   const [status, setStatus] = useState(tracking.status);
+  // A won deal is kept as it was signed: everything on it can be read, nothing changed
+  // (set it back to Active from Actions to edit it again).
+  const wonLock = status === "won";
+  // The client made from this deal (its signed products point back here, else the same company).
+  const [dealClientId, setDealClientId] = useState<string | null>(null);
+  useEffect(() => {
+    if (status !== "won") { setDealClientId(null); return; }
+    let alive = true;
+    (async () => {
+      const viaLines = (await supabase.from("client_products").select("client_id").eq("tracking_id", tracking.id).not("client_id", "is", null).limit(1)).data?.[0] as any;
+      let id: string | null = viaLines?.client_id ?? null;
+      if (!id && tracking.company_id) id = ((await supabase.from("clients").select("id").eq("company_id", tracking.company_id).limit(1)).data?.[0] as any)?.id ?? null;
+      if (alive) setDealClientId(id);
+    })().catch(() => {});
+    return () => { alive = false; };
+  }, [status, tracking.id, tracking.company_id]);
   const [notes, setNotes] = useState<TrackNote[]>([]);
   const [tasks, setTasks] = useState<TrackTask[]>([]);
   const [meetings, setMeetings] = useState<TrackMeeting[]>([]);
@@ -2214,6 +2234,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
       schedule: scheduleOfProduct(p), breakdown: p.breakdown ?? null,
     })));
     if (pErr) { alert(`Client created, but products failed: ${pErr}`); }
+    setDealClientId(newClientId);
 
     setClientFormOpen(false);
     setClientPrefill(null);
@@ -2369,8 +2390,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   /** Which figure "potential revenue" shows (team setting; anyone can switch their own view). */
   const [revMode, setRevMode] = useRevenueMode();
   /** The calculator's figure before the partners' cut (remembered in this browser). */
-  const [revGross, setRevGrossRaw] = useState<boolean>(() => { try { return localStorage.getItem("sl-rev-gross") === "1"; } catch { return false; } });
-  const setRevGross = (v: boolean) => { setRevGrossRaw(v); try { localStorage.setItem("sl-rev-gross", v ? "1" : "0"); } catch { /* storage off */ } };
+  const [revGross, setRevGross] = useRevenueGross();
   const prevStatus = useRef(tracking.status);
   useEffect(() => {
     const was = prevStatus.current; prevStatus.current = status;
@@ -2952,7 +2972,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
         recurring: !!tp.recurring, period: (tp.period as any) ?? "yearly", termYears: Number(tp.term_years ?? 1) || 1,
         unitPrice: bd.unitPrice, qty: Number(tp.quantity ?? 1) || 1,
         rows: bd.rows.map((r) => ({ label: r.label, detail: r.detail, amount: r.amount })),
-        discount: bd.discount, total: bd.total,
+        discount: bd.discount, total: bd.total, year1: bd.years[0] ?? bd.total,
       };
     });
     const servicesOut = svcGroups.map((vg) => ({ vg, p: pickSvc(vg as string) })).filter((x) => x.p).map(({ vg, p }: any) => {
@@ -2986,7 +3006,10 @@ export default function TrackingDetail({ tracking, companies, contacts, products
         phases, discount: bd.discount, total: bd.total,
       };
     });
-    const pt = productsOut.reduce((s, x) => s + x.total, 0), st = servicesOut.reduce((s, x) => s + x.total, 0);
+    // The totals follow the figure chosen in the calculator (first year / all years, with or without services).
+    const termView = revMode === "product_term" || revMode === "all_term", withSvc = revMode === "all_year1" || revMode === "all_term";
+    const ptTerm = productsOut.reduce((s, x) => s + x.total, 0), st = servicesOut.reduce((s, x) => s + x.total, 0);
+    const pt = termView ? ptTerm : productsOut.reduce((s, x) => s + (x.recurring ? x.year1 : x.total), 0);
     return {
       client: { name: co.name ?? title, legalName: co.legal_name ?? undefined, vat: co.vat_number ?? undefined,
         address: [co.street, co.addr_number, co.postal_code, co.city, co.country].filter(Boolean).join(", ") || undefined,
@@ -2994,7 +3017,8 @@ export default function TrackingDetail({ tracking, companies, contacts, products
         contactRole: primaryContact?.position ?? undefined, contactEmail: primaryContact?.email ?? undefined },
       deal: { title, date: new Date().toISOString().slice(0, 10), ref: tracking.id.slice(0, 8).toUpperCase() },
       products: productsOut, services: servicesOut,
-      totals: { products: pt, services: st, discount: productsOut.reduce((s, x) => s + x.discount, 0) + servicesOut.reduce((s, x) => s + x.discount, 0), total: pt + st },
+      totals: { products: pt, services: st, discount: productsOut.reduce((s, x) => s + x.discount, 0) + servicesOut.reduce((s, x) => s + x.discount, 0), total: pt + (withSvc ? st : 0),
+        basis: revMode, contract: ptTerm + st },
     };
   };
   const [propPick, setPropPick] = useState<null | "pptx" | "pdf">(null);
@@ -3125,6 +3149,8 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   };
 
   const [meetTitle, setMeetTitle] = useState("");
+  /** The meeting's own name — what it's called in the calendar, on the deal and in Outlook. */
+  const [meetName, setMeetName] = useState("");
   const [meetDate, setMeetDate] = useState("");
   const [meetTime, setMeetTime] = useState("10:00");
   const [meetEnd, setMeetEnd] = useState("11:00");
@@ -3138,7 +3164,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   const drafts: Record<Composer, boolean> = {
     notes: !!cleanMentions(newNote).trim(),
     tasks: !!cleanMentions(newTask).trim(),
-    meetings: !!cleanMentions(meetTitle).trim(),
+    meetings: !!cleanMentions(meetTitle).trim() || !!meetName.trim(),
   };
   const lastDrafts = useRef(drafts);
   useEffect(() => {
@@ -3152,7 +3178,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   const cancelComposer = (k: Composer) => {
     if (k === "notes") setNewNote("");
     if (k === "tasks") resetTaskDraft();
-    if (k === "meetings") { setMeetTitle(""); setMeetDate(""); setMeetTime("10:00"); setMeetEnd("11:00"); }
+    if (k === "meetings") { setMeetName(""); setMeetTitle(""); setMeetDate(""); setMeetTime("10:00"); setMeetEnd("11:00"); }
   };
   const composeCancel = (k: Composer) => composing === k && (
     <button type="button" className="sl-compose-x" onClick={() => cancelComposer(k)} title="Discard and show everything again">
@@ -3258,12 +3284,12 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     void syncMeetingToOutlook(id);
   };
   const submitMeeting = async () => {
-    if (!cleanMentions(meetTitle).trim() || !meetDate) return;
+    if (!meetName.trim() || !meetDate) return;
     if (!spanOk(meetTime, meetEnd)) return;
     const iso = `${meetDate}T${meetTime || "00:00"}:00`;
-    const m = await addMeeting(tracking.id, curPhase, meetTitle.trim(), iso, meetKind, `${meetDate}T${meetEnd}:00`);
-    if (m) { setMeetSync({ id: m.id, state: "syncing" }); setMeetings((xs) => [...xs, m]); await persistFromText("meeting", m.id, meetTitle); }
-    setMeetTitle(""); setMeetDate(""); setMeetTime("10:00"); setMeetEnd("11:00");
+    const m = await addMeeting(tracking.id, curPhase, meetTitle.trim(), iso, meetKind, `${meetDate}T${meetEnd}:00`, meetName.trim());
+    if (m) { setMeetSync({ id: m.id, state: "syncing" }); setMeetings((xs) => [...xs, m]); if (meetTitle.trim()) await persistFromText("meeting", m.id, meetTitle); }
+    setMeetName(""); setMeetTitle(""); setMeetDate(""); setMeetTime("10:00"); setMeetEnd("11:00");
   };
   const removeMeeting = (id: string) => {
     const m = meetings.find((x) => x.id === id);
@@ -3279,14 +3305,16 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     });
   };
   /** Save an edited meeting: text and/or new day, start and end — one update, one Outlook sync. */
-  const editMeeting = async (id: string, raw: string, meetAt?: string | null, endAt?: string | null) => {
+  const editMeeting = async (id: string, raw: string, meetAt?: string | null, endAt?: string | null, rawName?: string) => {
     const old = meetings.find((m) => m.id === id);
     const title = raw.trim();
-    const titleChanged = !!title && title !== old?.title;
+    const titleChanged = title !== (old?.title ?? "").trim();
+    const name = rawName === undefined ? undefined : rawName.trim() || null;
+    const nameChanged = name !== undefined && name !== (old?.name ?? null);
     const moved = (!!meetAt && meetAt !== old?.meet_at) || (!!endAt && endAt !== old?.end_at);
-    if (!titleChanged && !moved) return;
-    await updateMeeting(id, { ...(titleChanged ? { title } : {}), ...(moved ? { meet_at: meetAt ?? old?.meet_at ?? null, end_at: endAt ?? null } : {}) });
-    setMeetings((xs) => xs.map((m) => (m.id === id ? { ...m, ...(titleChanged ? { title } : {}), ...(moved ? { meet_at: meetAt ?? m.meet_at, end_at: endAt ?? m.end_at } : {}), outlook_syncing: !!m.mine } : m))
+    if (!titleChanged && !moved && !nameChanged) return;
+    await updateMeeting(id, { ...(titleChanged ? { title } : {}), ...(nameChanged ? { name } : {}), ...(moved ? { meet_at: meetAt ?? old?.meet_at ?? null, end_at: endAt ?? null } : {}) });
+    setMeetings((xs) => xs.map((m) => (m.id === id ? { ...m, ...(titleChanged ? { title } : {}), ...(nameChanged ? { name } : {}), ...(moved ? { meet_at: meetAt ?? m.meet_at, end_at: endAt ?? m.end_at } : {}), outlook_syncing: !!m.mine } : m))
       .sort((a, b) => (a.meet_at ?? "").localeCompare(b.meet_at ?? "")));
     if (titleChanged) await persistFromText("meeting", id, raw);
   };
@@ -3631,7 +3659,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
           <div key={vg} className="sl-rv-outrow">
             <span className="sl-rv-outname">{kind === "product" ? productName(rows[0]?.product_id ?? null) : (rows[0]?.label || serviceName(rows[0]?.service_id ?? null))}</span>
             <em>Left out by the main proposal</em>
-            <button type="button" className="sl-rv-tool" onClick={() => includeGroup(kind, vg, rows)}>Include</button>
+            {!wonLock && <button type="button" className="sl-rv-tool" onClick={() => includeGroup(kind, vg, rows)}>Include</button>}
           </div>
         ))}
       </div>
@@ -4075,7 +4103,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     switch (k) {
       case "activity": {
         const nxt = upNext[0];
-        const what = nxt ? (nxt.k === "task" ? plain((nxt.item as TrackTask).title) : plain((nxt.item as TrackMeeting).title)) : "";
+        const what = nxt ? (nxt.k === "task" ? plain((nxt.item as TrackTask).title) : ((nxt.item as TrackMeeting).name || plain((nxt.item as TrackMeeting).title) || "Meeting")) : "";
         const when = nxt ? (nxt.k === "task" ? ((nxt.item as TrackTask).due_at ? dayLabel((nxt.item as TrackTask).due_at!) : "No date") : dayLabel((nxt.item as TrackMeeting).meet_at || "")) : "";
         return shell(
           <>{openTaskCount}<i>open {openTaskCount === 1 ? "task" : "tasks"}</i></>,
@@ -4263,9 +4291,11 @@ export default function TrackingDetail({ tracking, companies, contacts, products
           {composeTab === "meetings" && (
             <>
               <div className="sl-meet-add">
+                <input className="sl-meet-name" value={meetName} onChange={(e) => setMeetName(e.target.value)} maxLength={140}
+                  placeholder="Meeting name, e.g. Proposal walkthrough" aria-label="Meeting name" />
                 <MentionInput multiline value={meetTitle} onChange={setMeetTitle} people={mentionPeople}
-                  onMention={() => {}} placeholder="Meeting title... use @ to mention" />
-                <div className={`sl-meet-reveal ${cleanMentions(meetTitle).trim() ? "is-writing" : ""}`}>
+                  onMention={() => {}} placeholder="What it's about (optional)… use @ to invite someone" />
+                <div className={`sl-meet-reveal ${meetName.trim() || cleanMentions(meetTitle).trim() ? "is-writing" : ""}`}>
                   <MeetingWhen date={meetDate} start={meetTime} end={meetEnd}
                     onDate={setMeetDate} onStart={setMeetTime} onEnd={setMeetEnd} />
                   <div className="mf-kinds" role="radiogroup" aria-label="Type of meeting">
@@ -4276,7 +4306,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
                       </button>
                     ))}
                   </div>
-                  <button className="sl-add-btn sl-meet-schedule" onClick={submitMeeting} disabled={!cleanMentions(meetTitle).trim() || !meetDate || !spanOk(meetTime, meetEnd)}>Schedule</button>
+                  <button className="sl-add-btn sl-meet-schedule" onClick={submitMeeting} disabled={!meetName.trim() || !meetDate || !spanOk(meetTime, meetEnd)} title={meetName.trim() ? undefined : "Give the meeting a name"}>Schedule</button>
                 </div>
               </div>
               {meetSync && (
@@ -4395,7 +4425,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
         onChange={async (ids) => {
           setTrackingContactIds(ids); tracking.contactIds = ids;
           await setTrackingContacts(tracking.id, ids).catch(() => {});
-        }} />
+        }} readOnly={wonLock} />
     ),
     probability: (
       <FoldPanel className="sl-prob-panel" title="Close probability" icon={FOLD_ICON.probability} tone="#0a6f4d"
@@ -4408,29 +4438,37 @@ export default function TrackingDetail({ tracking, companies, contacts, products
         <div className="sl-probfield">
           <span className="sl-probfield-k">Sales estimate</span>
           <div className="sl-probfield-row">
-            <input
-              className="sl-probfield-range"
-              type="range" min={0} max={100} step={5}
-              value={repProb ?? 0}
-              onChange={(e) => { const v = Number(e.target.value); setRepProb(v); saveProb("rep", v); }}
-            />
+            {wonLock ? (
+              <div className="sl-probfield-track" title="The deal is won: estimates are locked">
+                <span className="sl-probfield-fill" style={{ width: `${repProb ?? 0}%` }} />
+              </div>
+            ) : (
+              <input
+                className="sl-probfield-range"
+                type="range" min={0} max={100} step={5}
+                value={repProb ?? 0}
+                onChange={(e) => { const v = Number(e.target.value); setRepProb(v); saveProb("rep", v); }}
+              />
+            )}
             <span className="sl-probfield-v">{repProb == null ? "—" : `${repProb}%`}</span>
             <span className="sl-probfield-datewrap">
-              <DatePicker value={repDate} placeholder="+ expected"
-                onChange={(v) => { setRepDate(v); setDealCloseDate(tracking.id, "rep", v || null).catch(() => {}); }} />
+              {wonLock ? <span className="sl-probfield-date-ro">{repDate ? new Date(`${repDate.slice(0, 10)}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—"}</span> : (
+                <DatePicker value={repDate} placeholder="+ expected"
+                  onChange={(v) => { setRepDate(v); setDealCloseDate(tracking.id, "rep", v || null).catch(() => {}); }} />
+              )}
             </span>
           </div>
         </div>
 
-        <div className={`sl-probfield sl-probfield-mgr ${canAssign ? "" : "is-locked"}`}>
+        <div className={`sl-probfield sl-probfield-mgr ${canAssign && !wonLock ? "" : "is-locked"}`}>
           <span className="sl-probfield-k">
             Management estimate
-            {!canAssign && (
+            {(!canAssign || wonLock) && (
               <svg className="sl-probfield-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
             )}
           </span>
           <div className="sl-probfield-row">
-            {canAssign ? (
+            {canAssign && !wonLock ? (
               <input
                 className="sl-probfield-range"
                 type="range" min={0} max={100} step={5}
@@ -4444,11 +4482,11 @@ export default function TrackingDetail({ tracking, companies, contacts, products
             )}
             <span className="sl-probfield-v">{mgrProb == null ? "—" : `${mgrProb}%`}</span>
             <span className="sl-probfield-datewrap">
-              {canAssign ? (
+              {canAssign && !wonLock ? (
                 <DatePicker value={mgrDate} placeholder="+ expected"
                   onChange={(v) => { setMgrDate(v); setDealCloseDate(tracking.id, "mgr", v || null).catch(() => {}); }} />
               ) : (
-                <span className="sl-probfield-date-ro">{mgrDate ? new Date(mgrDate).toLocaleDateString() : "—"}</span>
+                <span className="sl-probfield-date-ro">{mgrDate ? new Date(`${mgrDate.slice(0, 10)}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—"}</span>
               )}
             </span>
           </div>
@@ -4467,14 +4505,14 @@ export default function TrackingDetail({ tracking, companies, contacts, products
                 : status === "won" || status === "lost" ? "No date recorded" : "Filled in when the deal is won or lost"}
             </span>
             <span className="sl-probfield-datewrap">
-              <DatePicker value={closedOn} placeholder="+ date" onChange={changeClosedOn} />
+              {wonLock ? <span className="sl-probfield-date-ro">{closedOn ? new Date(`${closedOn}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—"}</span> : <DatePicker value={closedOn} placeholder="+ date" onChange={changeClosedOn} />}
             </span>
           </div>
         </div>
       </FoldPanel>
     ),
     fields: trackingFields.length > 0 ? (
-      <TrackingFieldsPanel trackingId={tracking.id} fields={trackingFields} initial={tracking.custom}
+      <TrackingFieldsPanel trackingId={tracking.id} fields={trackingFields} initial={tracking.custom} readOnly={wonLock}
         onSaved={(c) => { tracking.custom = c; setDkCustom(c); }} />
     ) : null,
     calculator: (
@@ -4543,13 +4581,13 @@ export default function TrackingDetail({ tracking, companies, contacts, products
                 versionIdx={idx} versionCount={grp.length}
                 onPrev={idx > 0 ? () => switchProdVersion(vg, grp[idx - 1].id) : undefined}
                 onNext={idx < grp.length - 1 ? () => switchProdVersion(vg, grp[idx + 1].id) : undefined}
-                onNewVersion={(copy) => newProdVersion(tp.id, copy)}
+                onNewVersion={(copy) => newProdVersion(tp.id, copy)} readOnly={wonLock}
                 footer={<LineDocs key={tp.id} trackingId={tracking.id} lineId={tp.id} lineKind="product" phaseId={curPhase} versionLabel={`v${idx + 1}`} />} />
             );
           })}
           </div>
           {leftOutRows("product", tprods)}
-          {availableProducts.length > 0 && (
+          {availableProducts.length > 0 && !wonLock && (
             <div className="sl-rvg-add">
               <Select value="" onChange={(v) => v && addProduct(v)} placeholder="+ Add product" options={availableProducts.map((p) => ({ value: p.id!, label: p.name }))} />
             </div>
@@ -4576,13 +4614,13 @@ export default function TrackingDetail({ tracking, companies, contacts, products
                 versionIdx={idx} versionCount={grp.length}
                 onPrev={idx > 0 ? () => switchSvcVersion(vg, grp[idx - 1].id) : undefined}
                 onNext={idx < grp.length - 1 ? () => switchSvcVersion(vg, grp[idx + 1].id) : undefined}
-                onNewVersion={(copy) => newSvcVersion(p.id, copy)}
+                onNewVersion={(copy) => newSvcVersion(p.id, copy)} readOnly={wonLock}
                 footer={<LineDocs key={p.id} trackingId={tracking.id} lineId={p.id} lineKind="service" phaseId={curPhase} versionLabel={`v${idx + 1}`} />} />
             );
           })}
           </div>
           {leftOutRows("service", potentials)}
-          {services.length > 0 && (
+          {services.length > 0 && !wonLock && (
             <div className="sl-rvg-add">
               <Select value="" onChange={(v) => v && addPotential(v)} placeholder="+ Add service" options={services.map((s) => ({ value: s.id!, label: s.name }))} />
             </div>
@@ -4635,11 +4673,11 @@ export default function TrackingDetail({ tracking, companies, contacts, products
               onBlur={() => void saveDealName()}
               onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") { e.stopPropagation(); setNameEdit(null); } }} />
           ) : (
-            <h1 className="sl-title sl-dn-title" onClick={() => { setNameErr(null); setNameEdit(dealName.trim() || clientTitle); }} title="Rename this deal">
+            <h1 className={`sl-title sl-dn-title ${wonLock ? "is-ro" : ""}`} onClick={wonLock ? undefined : () => { setNameErr(null); setNameEdit(dealName.trim() || clientTitle); }} title={wonLock ? undefined : "Rename this deal"}>
               {title}
-              <span className="sl-dn-pen" aria-hidden="true">
+              {!wonLock && <span className="sl-dn-pen" aria-hidden="true">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
-              </span>
+              </span>}
             </h1>
           )}
           {nameErr && <span className="sl-dn-err">{nameErr}</span>}
@@ -4660,6 +4698,12 @@ export default function TrackingDetail({ tracking, companies, contacts, products
           </div>
         </div>
         <div className="sl-d-actions">
+          {status === "won" && dealClientId && (
+            <button type="button" className="sl-openclient-btn" onClick={() => navigate(`/clients?client=${dealClientId}`)} title="Open this client's page">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 21V8l9-5 9 5v13" /><path d="M9 21v-7h6v7" /></svg>
+              Open client
+            </button>
+          )}
           {canHandoff && (
             <div className="sl-handoff-wrap">
               <button className={`sl-handoff-btn ${liveHandoffs.length ? "is-sent" : ""}`} onClick={() => { if (handoffMenu) setHandoffMenu(false); else void startHandoffFlow(); }}>
@@ -4818,15 +4862,16 @@ export default function TrackingDetail({ tracking, companies, contacts, products
               return (
                 <div key={p.id} className="sl-flow-item">
                   {i > 0 && <div className={`sl-flow-bar ${i <= curIdx ? "is-on" : ""}`} />}
-                  <button className={`sl-flow-node is-${state} ${p.sales_outcome ? `oc-${p.sales_outcome}` : ""}`} onClick={() => applyPhase(p.id)}>
+                  <button className={`sl-flow-node is-${state} ${p.sales_outcome ? `oc-${p.sales_outcome}` : ""} ${wonLock ? "is-ro" : ""}`} onClick={() => { if (!wonLock) applyPhase(p.id); }}
+                    title={wonLock ? "The deal is won: set it back to Active (Actions) to change it" : undefined}>
                     <span className="sl-flow-num">{p.sales_outcome === "win" ? "★" : p.sales_outcome === "loss" ? "✕" : state === "done" ? "✓" : i + 1}</span>
                     <span className="sl-flow-text">
                       <span className="sl-flow-name">{p.name}</span>
-                      <span className={`sl-flow-date ${state !== "future" ? "is-edit" : ""} ${dateEdit === p.id ? "is-on" : ""}`}
-                        title={state !== "future" ? "Change the date" : undefined}
-                        onClick={(ev) => { if (state === "future") return; ev.stopPropagation(); dateAnchor.current = ev.currentTarget; setDateEdit(p.id); }}>
-                        {entered ? fmtDate(entered) : state !== "future" ? "+ date" : "—"}
-                        {state !== "future" && <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>}
+                      <span className={`sl-flow-date ${state !== "future" && !wonLock ? "is-edit" : ""} ${dateEdit === p.id ? "is-on" : ""}`}
+                        title={state !== "future" && !wonLock ? "Change the date" : undefined}
+                        onClick={(ev) => { if (state === "future" || wonLock) return; ev.stopPropagation(); dateAnchor.current = ev.currentTarget; setDateEdit(p.id); }}>
+                        {entered ? fmtDate(entered) : state !== "future" && !wonLock ? "+ date" : "—"}
+                        {state !== "future" && !wonLock && <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>}
                       </span>
                     </span>
                   </button>
@@ -5629,20 +5674,21 @@ function MeetingItem({ meeting, people, fmtMeet, onEdit, onDelete, onKind, onOut
   onKind: (id: string, kind: MeetingKind) => void;
   meeting: TrackMeeting;
   fmtMeet: (iso: string | null) => string;
-  onEdit: (id: string, title: string, meetAt?: string | null, endAt?: string | null) => void | Promise<void>;
+  onEdit: (id: string, title: string, meetAt?: string | null, endAt?: string | null, name?: string) => void | Promise<void>;
   onDelete: (id: string) => void;
   tagged?: React.ReactNode;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(meeting.title);
+  const [draftName, setDraftName] = useState(meeting.name ?? "");
   // day & time while editing
   const splitAt = (iso: string | null) => (iso ? [iso.slice(0, 10), iso.slice(11, 16)] : ["", "10:00"]);
   const [draftDate, setDraftDate] = useState(splitAt(meeting.meet_at)[0]);
   const [draftTime, setDraftTime] = useState(splitAt(meeting.meet_at)[1]);
   const endOf = (m: TrackMeeting) => (m.end_at ? m.end_at.slice(11, 16) : shiftTime(splitAt(m.meet_at)[1], 60));
   const [draftEnd, setDraftEnd] = useState(endOf(meeting));
-  const startEdit = () => { setDraft(meeting.title); const [d, t] = splitAt(meeting.meet_at); setDraftDate(d); setDraftTime(t); setDraftEnd(endOf(meeting)); setEditing(true); };
+  const startEdit = () => { setDraft(meeting.title); setDraftName(meeting.name ?? ""); const [d, t] = splitAt(meeting.meet_at); setDraftDate(d); setDraftTime(t); setDraftEnd(endOf(meeting)); setEditing(true); };
   const [overflowing, setOverflowing] = useState(false);
   const pRef = useRef<HTMLParagraphElement>(null);
 
@@ -5656,10 +5702,10 @@ function MeetingItem({ meeting, people, fmtMeet, onEdit, onDelete, onKind, onOut
     if (!spanOk(draftTime, draftEnd)) return;
     const at = draftDate && draftTime ? `${draftDate}T${draftTime}:00` : null;
     const endAt = draftDate && draftEnd ? `${draftDate}T${draftEnd}:00` : null;
-    if (v || at) await onEdit(meeting.id, v || meeting.title, at, endAt);
+    await onEdit(meeting.id, v, at, endAt, draftName);
     setEditing(false);
   };
-  const cancel = () => { setDraft(meeting.title); setEditing(false); };
+  const cancel = () => { setDraft(meeting.title); setDraftName(meeting.name ?? ""); setEditing(false); };
 
   const when = meeting.meet_at ? new Date(meeting.meet_at) : null;
   const wd = when ? when.toLocaleDateString("en-GB", { weekday: "short" }) : "";
@@ -5682,6 +5728,7 @@ function MeetingItem({ meeting, people, fmtMeet, onEdit, onDelete, onKind, onOut
       <div className="sl-mt-body">
         {editing ? (
           <div className="sl-mt-edit">
+            <input className="sl-meet-name" value={draftName} onChange={(e) => setDraftName(e.target.value)} maxLength={140} placeholder="Meeting name" aria-label="Meeting name" />
             <MentionInput multiline value={draft} onChange={setDraft} people={people} placeholder="What's the meeting about? Type @ to invite someone" />
             <MeetingWhen date={draftDate} start={draftTime} end={draftEnd}
               onDate={setDraftDate} onStart={setDraftTime} onEnd={setDraftEnd} />
@@ -5695,18 +5742,19 @@ function MeetingItem({ meeting, people, fmtMeet, onEdit, onDelete, onKind, onOut
             </div>
             <div className="sl-mt-edit-acts">
               <button className="sl-mt-btn" onClick={cancel}>Cancel</button>
-              <button className="sl-mt-btn is-primary" onClick={save} disabled={!draft.trim() || !spanOk(draftTime, draftEnd)}>Save</button>
+              <button className="sl-mt-btn is-primary" onClick={save} disabled={(!draftName.trim() && !draft.trim()) || !spanOk(draftTime, draftEnd)}>Save</button>
             </div>
           </div>
         ) : (
           <>
-            <p ref={pRef}
-              className={`sl-mt-title ${expanded ? "is-expanded" : "is-clamped"}`}
+            {meeting.name && <h5 className="sl-mt-name" onClick={startEdit} title="Rename">{meeting.name}</h5>}
+            {meeting.title.trim() && <p ref={pRef}
+              className={`sl-mt-title ${meeting.name ? "is-sub" : ""} ${expanded ? "is-expanded" : "is-clamped"}`}
               onClick={() => (overflowing || expanded) && setExpanded((v) => !v)}
               style={{ cursor: (overflowing || expanded) ? "pointer" : "default" }}
             >
               <MentionText text={meeting.title} />
-            </p>
+            </p>}
             {(overflowing || expanded) && (
               <button className="sl-mt-more" onClick={() => setExpanded((v) => !v)}>{expanded ? "Show less" : "Show more"}</button>
             )}

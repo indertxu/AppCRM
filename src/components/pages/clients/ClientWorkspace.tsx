@@ -2,13 +2,13 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
-import type { Client, Project, ProjectType, ClientRole } from "./clientsTypes";
+import type { Client, ClientStatus, Project, ProjectType, ClientRole } from "./clientsTypes";
 import { projectValue, signedOf, legacyRoleMap, resolvedLinesOf, lineRate, roleNameOf, roleCounts, totalDiscountOf, domainOf, logoCandidates, projectStatusOf, PROJECT_STATUS_LABEL } from "./clientsTypes";
 import { supabase } from "../../api/supabase";
 import ClientDirectory, { copyIntoClientFolders } from "./ClientDirectory";
 import { ClientUpsells } from "./ClientsPage";
 import MentionInput, { type MentionPerson, MentionText, mentionsToPlain, registerMentionNames } from "../../framework/MentionInput";
-import { addTask, toggleTask, updateTaskMeta, saveClientProducts, loadDealContracts, type ContractTerms, type PaymentSchedule, type TaskPriority, type TrackTask } from "../sales/sales/salesApi";
+import { addTask, toggleTask, updateTaskMeta, saveClientProducts, loadDealContracts, saveDealContract, type ContractTerms, type PaymentSchedule, type TaskPriority, type TrackTask } from "../sales/sales/salesApi";
 import { loadProducts, type Product as CatalogProduct } from "../settings/catalogApi";
 import { listCompanyFields, listContactFields, sessionUserId, saveContact, useRequiredFields, type CompanyField, type ContactField } from "../companies/companiesApi";
 import { countryLabel, formatAddress, languageName, linkedInHandle, isFixedRequired, missingFixed } from "../contacts/contactProfile";
@@ -16,6 +16,7 @@ import Select from "../../framework/Select";
 import { loadClientTickets, createTicket, stageLabel, ticketRef, PRIORITY_LABEL, type Ticket, type TicketStage } from "../homepage/shared/HomeTodo";
 import { loadClientMail, setMailClient, fileMailFrom, loadMailRules, saveMailRule, deleteMailRule, createTicketFromMail, loadDirectory, MailFrame, TicketDrawerById, MAIL_ROUTING_SQL, type MailMsg, type MailRule } from "../homepage/shared/HomeTodo";
 import DatePicker from "../../framework/DatePicker";
+import { useClientEdit } from "../../framework/pageAccess";
 import "../../framework/MentionInput.css";
 import "./ClientWorkspace.css";
 
@@ -31,6 +32,10 @@ interface Props {
   onDeleteProject: (id: string) => void;
   /** A signed product was deleted here: the list behind refreshes its figures. */
   onLinesChanged?: () => void;
+  /** Days used and booked per project role ("projectId|roleId"), for the projects' overview. */
+  lineUsage?: Record<string, { done: number; booked: number }>;
+  /** Marks the client active or lost (churned). */
+  onSetStatus?: (status: ClientStatus, opts: { at?: string | null; reason?: string | null; stopProducts?: boolean }) => Promise<string | null>;
   onClose: () => void;
 }
 
@@ -50,6 +55,14 @@ interface Deal {
 export type Line = Record<string, any> & { id: string; name: string };
 /** A task from one of the client's sales (tracking_tasks) or the client's own (client_tasks, src "client"). */
 type Task = TrackTask & { tracking_id: string; assignees: string[]; src?: "client" | "sale" };
+
+/* The display face of the client pop-up: names and figures. */
+if (typeof document !== "undefined" && !document.getElementById("cw-font")) {
+  const l = document.createElement("link");
+  l.id = "cw-font"; l.rel = "stylesheet";
+  l.href = "https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@500;600;700;800&display=swap";
+  document.head.appendChild(l);
+}
 
 /* ============================== helpers ============================== */
 
@@ -84,9 +97,11 @@ const hue = (s: string) => { let h = 0; for (const ch of s) h = (h * 31 + ch.cha
 const initials = (s: string) => s.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join("") || "?";
 
 /** Website and LinkedIn of the client's company, edited in place (the logo comes from the website). */
-function WebLinks({ companyId, website, linkedin, onSaved }: {
+function WebLinks({ companyId, website, linkedin, onSaved, readOnly = false }: {
   companyId: string; website: string; linkedin: string;
   onSaved: (patch: { website: string | null; linkedin: string | null }) => void;
+  /** Without the right to change the company: only the links. */
+  readOnly?: boolean;
 }) {
   const [edit, setEdit] = useState(false);
   const [w, setW] = useState(website);
@@ -109,9 +124,11 @@ function WebLinks({ companyId, website, linkedin, onSaved }: {
       <div className="cw-web">
         <span className={`cw-web-chip ${website ? "" : "is-empty"}`}><Ico n="globe" s={13} />{website ? host : "No website"}</span>
         <span className={`cw-web-chip ${linkedin ? "" : "is-empty"}`}><Ico n="linkedin" s={13} />{linkedin ? linkedInHandle(linkedin) : "No LinkedIn"}</span>
-        <button className="cw-web-edit" onClick={() => setEdit(true)}>
-          <Ico n="edit" s={13} />{website || linkedin ? "Edit links" : "Add website & LinkedIn"}
-        </button>
+        {!readOnly && (
+          <button className="cw-web-edit" onClick={() => setEdit(true)}>
+            <Ico n="edit" s={13} />{website || linkedin ? "Edit links" : "Add website & LinkedIn"}
+          </button>
+        )}
       </div>
     );
   }
@@ -347,6 +364,39 @@ export const lineContractValue = (l: Line) => Math.max(0, (l.recurring ? termsOf
 /** What a line bills once: a one-off's price (less the partner's cut) and any set-up fee. */
 export const lineOneTime = (l: Line) => (l.recurring ? 0 : Math.max(0, lineTotal(l) - partnerTotal(l))) + (Number(l.one_time_fee) || 0);
 export { lineAnnual, lineTotal };
+/** How many contract years a line runs (a one-off: 1). */
+const yearsOf = (l: Line) => (l.recurring ? Math.max(1, Math.ceil((Number(l.term_years) || 1) - 1e-9)) : 1);
+/** What the client pays for a line in contract year `y` (0 = the first), before the partner's cut. */
+export const lineYearGross = (l: Line, y: number) => {
+  const fee = y === 0 ? Number(l.one_time_fee) || 0 : 0;
+  if (!l.recurring) return y === 0 ? lineTotal(l) + fee : 0;
+  if (y >= yearsOf(l)) return 0;
+  return firstYearOf(l) * increaseBy(l, y) + fee;
+};
+/** What a line is billing a year right now before the partner's cut (0 when it isn't running). */
+const lineAnnualGross = (l: Line, at = Date.now()) => (l.recurring && runsAt(l, at) ? firstYearOf(l) * increaseBy(l, contractYearOf(l, at)) : 0);
+/** The partner on a deal's product line (tracking_products): who, and how much they take. */
+interface DealPart { partner: string | null; mode: string | null; value: number; once: boolean }
+/** Rebuild what a recurring line pays each year and the partner's share of it, after its price or term changed. */
+function rebuildYears(l: Line, partner: { mode: "none" | "percent" | "amount" | "once"; value: number }) {
+  const n = yearsOf(l);
+  const years = Array.from({ length: n }, (_, y) => Math.round(firstYearOf({ ...l, breakdown: null }) * increaseBy(l, y) * 100) / 100);
+  const v = Math.max(0, Number(partner.value) || 0);
+  const partnerYears = years.map((amt, y) => partner.mode === "percent" ? Math.round(amt * Math.min(v, 100)) / 100
+    : partner.mode === "amount" ? Math.min(v, amt)
+      : partner.mode === "once" ? (y === 0 ? Math.min(v, years.reduce((a, b) => a + b, 0)) : 0) : 0);
+  return { years, partnerYears, total: Math.round(years.reduce((a, b) => a + b, 0) * 100) / 100 };
+}
+/** How the partner's share of a line reads back for its editor: a % of every year, an amount a year, or once. */
+function partnerModeOf(l: Line): { mode: "none" | "percent" | "amount" | "once"; value: number } {
+  const py = Array.isArray(l.breakdown?.partnerYears) ? (l.breakdown.partnerYears as unknown[]).map((x) => Number(x) || 0) : [];
+  const ys = Array.isArray(l.breakdown?.years) ? (l.breakdown.years as unknown[]).map((x) => Number(x) || 0) : [];
+  if (!py.some((x) => x > 0)) return { mode: "none", value: 0 };
+  if (py.length > 1 && py.slice(1).every((x) => !x)) return { mode: "once", value: py[0] };
+  const pct = ys[0] ? Math.round((py[0] / ys[0]) * 1000) / 10 : 0;
+  if (ys.length === py.length && py.every((x, i) => Math.abs(x - (ys[i] * pct) / 100) < 1)) return { mode: "percent", value: pct };
+  return { mode: "amount", value: py[0] };
+}
 export const isActive = (l: Line) => !l.status || /active|signed|live/i.test(String(l.status));
 const addYears = (d0: Date, y: number) => {
   const d = new Date(d0);
@@ -450,6 +500,15 @@ const kindIcon = (k: string) => KIND_ICON[k] ?? "pulse";
 const CHANNELS = ["call", "email", "meeting", "visit", "message"];
 
 /* ============================== small pieces ============================== */
+
+/** A labelled field of the inline editors. */
+function Fld({ label, wide, span, children }: { label: string; wide?: boolean; span?: number; children: React.ReactNode }) {
+  return <label className={`cw-f ${wide ? "is-wide" : ""}`} style={span ? { gridColumn: `span ${span}` } : undefined}><span>{label}</span>{children}</label>;
+}
+function Toggle({ on, onClick, label }: { on: boolean; onClick: () => void; label: string }) {
+  return <button type="button" role="switch" aria-checked={on} className={`cw-tg ${on ? "is-on" : ""}`} onClick={onClick}><i />{label}</button>;
+}
+const fmtMY = (d: Date) => d.toLocaleDateString(undefined, { month: "short", year: "numeric" });
 
 /** Eased count-up from the last shown value to `target`. */
 function useCount(target: number, ms = 950) {
@@ -794,8 +853,105 @@ function AddLineForm({ clientId, persons, onCancel, onSaved }: {
 
 /* ============================== workspace ============================== */
 
+/**
+ * Active or lost (churned): a chip that opens a small menu. Losing a client asks when and why,
+ * and can stop its running products so they stop counting as recurring revenue.
+ */
+export function ClientStatusPicker({ status, churnedAt, reason, running = 0, canEdit, onSave, size = "md" }: {
+  status?: ClientStatus; churnedAt?: string | null; reason?: string | null; running?: number; canEdit: boolean;
+  onSave: (status: ClientStatus, opts: { at?: string | null; reason?: string | null; stopProducts?: boolean }) => Promise<string | null>;
+  size?: "sm" | "md";
+}) {
+  const st: ClientStatus = status === "churned" ? "churned" : "active";
+  const btn = useRef<HTMLButtonElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const [step, setStep] = useState<"menu" | "churn">("menu");
+  const [at, setAt] = useState(todayISO());
+  const [why, setWhy] = useState("");
+  const [stop, setStop] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const r = btn.current?.getBoundingClientRect();
+      if (!r) return;
+      const w = 300, h = pop.current?.offsetHeight ?? 220;
+      const left = Math.max(12, Math.min(window.innerWidth - w - 12, r.left));
+      const below = r.bottom + 6 + h <= window.innerHeight - 12;
+      setPos({ left, top: below ? r.bottom + 6 : Math.max(12, r.top - 6 - h) });
+    };
+    place();
+    const t = window.setTimeout(place, 0);
+    window.addEventListener("resize", place); window.addEventListener("scroll", place, true);
+    return () => { window.clearTimeout(t); window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); };
+  }, [open, step]);
+  useEffect(() => {
+    if (!open) return;
+    const down = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (pop.current?.contains(t) || btn.current?.contains(t) || (t as HTMLElement).closest?.(".dp-layer")) return;
+      setOpen(false);
+    };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); setOpen(false); } };
+    document.addEventListener("mousedown", down, true);
+    window.addEventListener("keydown", key, true);
+    return () => { document.removeEventListener("mousedown", down, true); window.removeEventListener("keydown", key, true); };
+  }, [open]);
+  const save = async (next: ClientStatus) => {
+    setBusy(true); setErr(null);
+    const e = await onSave(next, next === "churned" ? { at, reason: why, stopProducts: stop && running > 0 } : {});
+    setBusy(false);
+    if (e) { setErr(e); return; }
+    setOpen(false);
+  };
+  const title = st === "churned" ? `Churned${churnedAt ? ` on ${fmt(churnedAt)}` : ""}${reason ? ` · ${reason}` : ""}` : "Active client";
+  return (
+    <>
+      <button ref={btn} type="button" className={`cw-cst is-${st} is-${size} ${canEdit ? "" : "is-ro"}`} title={canEdit ? `${title} · change` : title}
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => { e.stopPropagation(); if (!canEdit) return; setStep("menu"); setErr(null); setAt(todayISO()); setWhy(reason ?? ""); setStop(true); setOpen((o) => !o); }}>
+        <i />{st === "churned" ? "Churned" : "Active"}{canEdit && <Ico n="chev" s={11} />}
+      </button>
+      {open && createPortal(
+        <div ref={pop} className="cw-cst-pop" style={{ top: pos?.top ?? -9999, left: pos?.left ?? -9999 }} onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Client status">
+          {step === "menu" ? (
+            <>
+              <button type="button" className={`cw-cst-opt is-active ${st === "active" ? "is-on" : ""}`} disabled={busy} onClick={() => (st === "active" ? setOpen(false) : void save("active"))}>
+                <i /><span><b>Active</b><small>A client we work with</small></span>{st === "active" && <Ico n="check" s={14} />}
+              </button>
+              <button type="button" className={`cw-cst-opt is-churned ${st === "churned" ? "is-on" : ""}`} disabled={busy} onClick={() => (st === "churned" ? setOpen(false) : setStep("churn"))}>
+                <i /><span><b>Churned</b><small>{st === "churned" && churnedAt ? `Since ${fmt(churnedAt)}` : "We lost them"}</small></span>{st === "churned" && <Ico n="check" s={14} />}
+              </button>
+            </>
+          ) : (
+            <div className="cw-cst-form">
+              <b className="cw-cst-h">Mark as churned</b>
+              <label><span>Lost on</span><span className="cw-date"><DatePicker value={at} maxDate={todayISO()} onChange={(d) => setAt(d || todayISO())} /></span></label>
+              <label><span>Why</span><input value={why} autoFocus placeholder="e.g. Moved to another tool" onChange={(e) => setWhy(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !busy) void save("churned"); }} /></label>
+              {running > 0 && (
+                <button type="button" className={`cw-cst-check ${stop ? "is-on" : ""}`} onClick={() => setStop(!stop)}>
+                  <i>{stop && <Ico n="check" s={11} />}</i>Stop its {running} running product{running === 1 ? "" : "s"} (no longer counted as recurring)
+                </button>
+              )}
+              <div className="cw-cst-foot">
+                <button type="button" className="cw-ghost" onClick={() => setStep("menu")}>Back</button>
+                <button type="button" className="cw-btn-primary is-sm is-red" disabled={busy} onClick={() => void save("churned")}>{busy ? "Saving…" : "Mark churned"}</button>
+              </div>
+            </div>
+          )}
+          {err && <p className="cw-err">{err}</p>}
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
 export default function ClientWorkspace({
-  client, projects, projectTypes, usage, roles = [], onOpenProject, onNewProject, onDeleteProject, onLinesChanged, onClose,
+  client, projects, projectTypes, usage, lineUsage, roles = [], onOpenProject, onNewProject, onDeleteProject, onLinesChanged, onSetStatus, onClose,
 }: Props) {
   const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>("overview");
@@ -835,6 +991,9 @@ export default function ClientWorkspace({
     loadDealContracts(contractDealKey.split(",")).then((x) => { if (alive) setDealContracts(x); }).catch(() => {});
     return () => { alive = false; };
   }, [contractDealKey]);
+  /** The partner on each of the deals' product lines, by "deal|product". */
+  const [dealParts, setDealParts] = useState<Record<string, DealPart>>({});
+  const can = useClientEdit();
   const [saleTasks, setTasks] = useState<Task[]>([]);
   /** The client's own tasks, made once it is a client (client_tasks, handoff_v2.sql). */
   const [clientTasks, setClientTasks] = useState<Task[]>([]);
@@ -1001,6 +1160,24 @@ export default function ClientWorkspace({
         // the proposals sales generated (deal_proposals — missing until its SQL is run)
         supabase.from("deal_proposals").select("*").in("tracking_id", ids).order("created_at", { ascending: false })
           .then(({ data, error }) => { if (alive && !error) setProposals(((data ?? []) as any[]).map((p) => ({ ...p, total: p.total != null ? Number(p.total) : null }))); });
+        // who the partner is on each product sold, and what they take
+        void supabase.from("tracking_products").select("tracking_id, product_id, partner_id, partner_mode, partner_value, partner_periods, version_active").in("tracking_id", ids)
+          .then(async ({ data, error }) => {
+            if (!alive || error) return;
+            const rows = ((data ?? []) as any[]).filter((r) => r.partner_id && Number(r.partner_value));
+            const pids = [...new Set(rows.map((r) => r.partner_id))];
+            const names = new Map<string, string>();
+            if (pids.length) ((await supabase.from("companies").select("id, name").in("id", pids)).data ?? []).forEach((c: any) => names.set(c.id, c.name));
+            if (!alive) return;
+            const out: Record<string, DealPart> = {};
+            rows.sort((a, b) => Number(!!a.version_active) - Number(!!b.version_active)).forEach((r) => {
+              out[`${r.tracking_id}|${r.product_id}`] = {
+                partner: names.get(r.partner_id) ?? null, mode: r.partner_mode ?? null, value: Number(r.partner_value) || 0,
+                once: r.partner_periods ? r.partner_periods.mode === "once" : r.partner_mode === "amount",
+              };
+            });
+            setDealParts(out);
+          });
         const nowIso = new Date().toISOString();
         const [tf, mt, nx, tt, tn] = await Promise.all([
           supabase.from("tracking_files").select("*").in("tracking_id", ids),
@@ -1048,11 +1225,6 @@ export default function ClientWorkspace({
     const d = ls.reduce((t, l) => t + l.days, 0);
     return d > 0 ? ls.reduce((t, l) => t + l.days * lineRate(l), 0) / d : ls[0] ? lineRate(ls[0]) : 0;
   };
-  /** One tooltip row per role: days and rate, marked when it doesn't count for billing. */
-  const roleTipRows = (p: Project, un: string): [string, React.ReactNode][] => linesOf(p).map((l) => [
-    `${roleNameOf(l.roleId, roles)}${roleCounts(l.roleId, roles) ? "" : " (doesn't count)"}`,
-    `${d2(l.days)}${un} · ${eur(lineRate(l))}${lineRate(l) !== l.rate ? ` (list ${eur(l.rate)})` : ""}`,
-  ]);
   const typeName = (id: string) => projectTypes.find((t) => t.id === id)?.name ?? "No service";
   const mentionPeople: MentionPerson[] = useMemo(
     () => Object.entries(people).map(([id, name]) => ({ id: `employee:${id}`, name, kind: "employee" as const })),
@@ -1139,6 +1311,166 @@ export default function ClientWorkspace({
   const openValue = openProjects.reduce((s, p) => s + projectValue(p), 0);
   const nextRenewal = activeLines.map(termOf).filter((t): t is NonNullable<ReturnType<typeof termOf>> => !!t && t.left >= 0)
     .sort((a, b) => a.end.getTime() - b.end.getTime())[0] ?? null;
+  /** The same, before the partners take their share: what the client itself pays. */
+  const grossYear = activeLines.reduce((s, l) => s + lineAnnualGross(l), 0);
+  const partnerYearNow = Math.max(0, grossYear - recurringYear);
+  const contractGross = activeLines.reduce((s, l) => s + lineContractValue(l) + partnerTotal(l), 0);
+  const partnerAll = contractGross - contractValue;
+  const partOf = (l: Line): DealPart | null => dealParts[`${str(l.tracking_id)}|${str(l.product_id)}`] ?? null;
+  /** "Partner · 30% of every year", "Partner · 637 € once"… — from the line's own split, named from the deal. */
+  const partnerText = (l: Line) => {
+    const m = partnerModeOf(l);
+    if (m.mode === "none") return "";
+    const who = partOf(l)?.partner ?? "Partner";
+    return `${who}, ${m.mode === "percent" ? `${d2(m.value)}% of every year` : m.mode === "once" ? `${eur(m.value)} once` : `${eur(m.value)} a year`}`;
+  };
+
+  /** One contract per deal: its order form (if sales saved one) and the products it signed here. */
+  const contractGroups = useMemo(() => {
+    const keys = Array.from(new Set([...Object.keys(dealContracts), ...lines.map((l) => str(l.tracking_id)).filter(Boolean)]));
+    return keys.map((tid) => ({ tid, ct: dealContracts[tid] ?? null, lines: lines.filter((l) => str(l.tracking_id) === tid) }))
+      .filter((g) => g.ct || g.lines.length)
+      .sort((a, b) => str(b.ct?.signDate || b.lines[0]?.signing_date).localeCompare(str(a.ct?.signDate || a.lines[0]?.signing_date)));
+  }, [dealContracts, lines]);
+  const handLines = lines.filter((l) => !str(l.tracking_id));
+
+  /* ---- editing: a contract, a signed product, a deal (Settings › Client page › Editing rights) ---- */
+  const [ctEdit, setCtEdit] = useState<{ tid: string; v: Record<string, any> } | null>(null);
+  const [ctBusy, setCtBusy] = useState(false);
+  const [ctErr, setCtErr] = useState<string | null>(null);
+  const [lnEdit, setLnEdit] = useState<{ id: string; v: Record<string, any> } | null>(null);
+  const [lnBusy, setLnBusy] = useState(false);
+  const [lnErr, setLnErr] = useState<string | null>(null);
+  const [lnOpen, setLnOpen] = useState<Set<string>>(new Set());
+  const [dlEdit, setDlEdit] = useState<{ id: string; v: Record<string, any> } | null>(null);
+  const [dlBusy, setDlBusy] = useState(false);
+  const [dlErr, setDlErr] = useState<string | null>(null);
+  /** The contracts whose order form (scope, parties, terms) is open. */
+  const [ofOpen, setOfOpen] = useState<Set<string>>(new Set());
+  const toggleOf = (id: string) => setOfOpen((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const toggleLn = (id: string) => setLnOpen((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+
+  const startCtEdit = (tid: string, ct: ContractTerms | null, gl: Line[]) => {
+    const l0 = gl[0] ?? {} as Line;
+    setCtErr(null);
+    setCtEdit({ tid, v: {
+      signDate: str(ct?.signDate) || str(l0.signing_date), contractStart: str(ct?.contractStart) || str(l0.start_date),
+      termYears: String(ct?.termYears || l0.term_years || ""), autoRenew: ct?.autoRenew ?? !!l0.auto_renew,
+      renewYears: String(ct?.renewYears ?? l0.renew_years ?? ""), nonTerminableYears: String(ct?.nonTerminableYears ?? l0.non_terminable_years ?? ""),
+      paymentTermsDays: String(ct?.paymentTermsDays ?? l0.payment_terms_days ?? ""), billingFrequency: str(ct?.billingFrequency) || "annually",
+      contractRef: str(ct?.contractRef) || str(l0.contract_ref), currency: str(ct?.currency) || "EUR", notes: str(ct?.notes),
+    } });
+  };
+  const num = (v: unknown) => (str(v) === "" ? null : Number(String(v).replace(",", ".")));
+  const saveCtEdit = async (ct: ContractTerms | null, gl: Line[]) => {
+    if (!ctEdit) return;
+    const v = ctEdit.v;
+    const termYears = num(v.termYears);
+    if (termYears != null && !(termYears > 0)) { setCtErr("The term has to be more than 0 years."); return; }
+    setCtBusy(true); setCtErr(null);
+    // the products of the deal: dates, renewals, payment, reference — and the term, rebuilding each year's amount
+    for (const l of gl) {
+      const row: Record<string, any> = {
+        signing_date: v.signDate || null, start_date: v.contractStart || v.signDate || null,
+        non_terminable_years: num(v.nonTerminableYears), payment_terms_days: num(v.paymentTermsDays), contract_ref: str(v.contractRef) || null,
+      };
+      if (l.recurring) {
+        row.auto_renew = !!v.autoRenew; row.renew_years = v.autoRenew ? num(v.renewYears) ?? termYears : null;
+        if (termYears != null && termYears !== Number(l.term_years)) {
+          row.term_years = termYears;
+          const next = { ...l, term_years: termYears };
+          const b = rebuildYears({ ...next, quantity: 1, price: firstYearOf(l) / perYear(l.period), discount_mode: "none", discount_value: 0 }, partnerModeOf(l));
+          row.breakdown = { ...(l.breakdown ?? {}), years: b.years, partnerYears: b.partnerYears, total: b.total };
+        }
+      }
+      const { error } = await supabase.from("client_products").update(row).eq("id", l.id);
+      if (error) { setCtBusy(false); setCtErr(error.message); return; }
+    }
+    // the order form on the deal
+    const base: ContractTerms = ct ?? {
+      signDate: null, contractStart: null, termYears: termYears ?? 1, increments: { mode: "none", value: 0, perYear: [] },
+      license: { list: 0, discount: 0, final: 0, firstYear: 0 }, services: { list: 0, discount: 0, final: 0 }, schedule: [], total: 0,
+    } as ContractTerms;
+    const terms: ContractTerms = {
+      ...base, signDate: v.signDate || null, contractStart: v.contractStart || null, termYears: termYears ?? base.termYears,
+      autoRenew: !!v.autoRenew, renewYears: v.autoRenew ? num(v.renewYears) : null, nonTerminableYears: num(v.nonTerminableYears),
+      paymentTermsDays: num(v.paymentTermsDays), billingFrequency: str(v.billingFrequency) || null, contractRef: str(v.contractRef) || null,
+      currency: str(v.currency) || null, notes: str(v.notes) || null,
+    };
+    const e = ctEdit.tid ? await saveDealContract(ctEdit.tid, terms) : null;
+    setCtBusy(false);
+    if (e) { setCtErr(e); return; }
+    if (ctEdit.tid) setDealContracts((m) => ({ ...m, [ctEdit.tid]: terms }));
+    setCtEdit(null);
+    await reloadLines();
+    onLinesChanged?.();
+  };
+
+  const startLnEdit = (l: Line) => {
+    const pm = partnerModeOf(l);
+    setLnErr(null);
+    setLnEdit({ id: l.id, v: {
+      status: str(l.status) || "active", billing: l.recurring ? (perYear(l.period) === 12 ? "monthly" : "yearly") : "once",
+      amount: String(Math.round(lineTotal(l) * 100) / 100), fee: String(Number(l.one_time_fee) || ""),
+      signing: str(l.signing_date), start: str(l.start_date), term: String(l.term_years ?? ""), inc: String(l.annual_increase_pct ?? ""),
+      autoRenew: !!l.auto_renew, renew: String(l.renew_years ?? ""), nonTerm: String(l.non_terminable_years ?? ""),
+      pay: String(l.payment_terms_days ?? ""), ref: str(l.contract_ref), pMode: pm.mode, pValue: pm.mode === "none" ? "" : String(Math.round(pm.value * 100) / 100),
+    } });
+  };
+  const saveLnEdit = async (l: Line) => {
+    if (!lnEdit) return;
+    const v = lnEdit.v;
+    const amount = num(v.amount) ?? 0;
+    if (!(amount >= 0)) { setLnErr("The price isn't a number."); return; }
+    const recurring = v.billing !== "once";
+    const period = v.billing === "monthly" ? "monthly" : "yearly";
+    const term = recurring ? num(v.term) : 1;
+    const inc = num(v.inc);
+    const row: Record<string, any> = {
+      status: v.status || "active", recurring, period, price: amount, quantity: 1, discount_mode: "none", discount_value: 0,
+      one_time_fee: num(v.fee) ?? 0, signing_date: v.signing || null, start_date: v.start || v.signing || null,
+      term_years: term, annual_increase_pct: recurring ? inc : null,
+      auto_renew: recurring && !!v.autoRenew, renew_years: recurring && v.autoRenew ? num(v.renew) ?? term : null,
+      non_terminable_years: num(v.nonTerm), payment_terms_days: num(v.pay), contract_ref: str(v.ref) || null,
+    };
+    const next = { ...l, ...row } as Line;
+    const pm = { mode: v.pMode as "none" | "percent" | "amount" | "once", value: num(v.pValue) ?? 0 };
+    const was = partnerModeOf(l);
+    const priceSame = Math.abs(amount - lineTotal(l)) < 0.005 && recurring === !!l.recurring && perYear(period) === perYear(l.period);
+    const termSame = Number(term ?? 0) === Number(l.term_years ?? 0) && Number(inc ?? 0) === Number(l.annual_increase_pct ?? 0);
+    const partnerSame = pm.mode === was.mode && Math.abs(pm.value - was.value) < 0.01;
+    if (!(priceSame && termSame && partnerSame)) {
+      if (recurring) {
+        const b = rebuildYears(next, pm);
+        row.breakdown = { ...(priceSame ? l.breakdown ?? {} : { multiplier: l.breakdown?.multiplier ?? null }), years: b.years, partnerYears: b.partnerYears, total: b.total, edited: true };
+      } else {
+        const v1 = Math.max(0, pm.value);
+        const cut = pm.mode === "percent" ? Math.round(amount * Math.min(v1, 100)) / 100 : pm.mode === "none" ? 0 : Math.min(v1, amount);
+        row.breakdown = { ...(priceSame ? l.breakdown ?? {} : {}), years: [amount], partnerYears: [cut], total: amount, edited: true };
+      }
+    }
+    setLnBusy(true); setLnErr(null);
+    let { error } = await supabase.from("client_products").update(row).eq("id", l.id);
+    if (error && /breakdown/i.test(error.message)) { delete row.breakdown; ({ error } = await supabase.from("client_products").update(row).eq("id", l.id)); }
+    setLnBusy(false);
+    if (error) { setLnErr(error.message); return; }
+    setLnEdit(null);
+    await reloadLines();
+    onLinesChanged?.();
+  };
+
+  const saveDlEdit = async () => {
+    if (!dlEdit) return;
+    const v = dlEdit.v;
+    if (!str(v.name)) { setDlErr("Give the deal a name."); return; }
+    setDlBusy(true); setDlErr(null);
+    const row = { deal_name: str(v.name), status: v.status || "active", close_date: v.close || null, product_price: num(v.value) };
+    const { error } = await supabase.from("trackings").update(row).eq("id", dlEdit.id);
+    setDlBusy(false);
+    if (error) { setDlErr(error.message); return; }
+    setDeals((xs) => xs.map((d) => (d.id === dlEdit.id ? { ...d, name: row.deal_name, status: row.status, close_date: row.close_date, price: row.product_price } : d)));
+    setDlEdit(null);
+  };
 
   // tasks
   const openTasks = tasks.filter((t) => !t.done);
@@ -1222,6 +1554,7 @@ export default function ClientWorkspace({
     projects: [],
     contract: [
       { k: "summary", label: "Summary" },
+      ...(contractGroups.length ? [{ k: "contracts", label: contractGroups.length === 1 ? "Contract" : "Contracts", n: contractGroups.length > 1 ? contractGroups.length : undefined }] : []),
       { k: "products", label: "Signed products", n: lines.length || undefined }, { k: "services", label: "Service engagements", n: projects.length || undefined },
     ],
     upsells: [],
@@ -1230,6 +1563,13 @@ export default function ClientWorkspace({
     folders: [],
   };
   const subs = SUBS[tab];
+  /** Which way the page moves when you switch: down the menu slides up, up the menu slides down. */
+  const prevTab = useRef(tab);
+  const tabDir = useRef<"down" | "up">("down");
+  if (prevTab.current !== tab) {
+    tabDir.current = TABS.findIndex((x) => x.v === tab) >= TABS.findIndex((x) => x.v === prevTab.current) ? "down" : "up";
+    prevTab.current = tab;
+  }
   const [spy, setSpy] = useState("");
   const sideRef = useRef<HTMLElement>(null);
   const [ink, setInk] = useState<{ y: number; h: number } | null>(null);
@@ -1515,9 +1855,114 @@ export default function ClientWorkspace({
   const legal = str(identity[1].v) || str(identity[0].v);
   const vat = str(identity[2].v);
 
+  /* ---- a project as a row that opens into its overview (roles, days, team) — the editor only on "Edit" ---- */
+  const [pjOpen, setPjOpen] = useState<Set<string>>(new Set());
+  const togglePj = (id: string) => setPjOpen((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const projectRow = (p: Project, i: number, canDelete: boolean) => {
+    const days = signedOf(p);
+    const u = usage[p.id] ?? { planned: 0, done: 0 };
+    const left = +(days - u.planned - u.done).toFixed(2);
+    const pct = (x: number) => (days > 0 ? Math.min(100, (x / days) * 100) : 0);
+    const st = projectStatusOf(p.status);
+    const un = unitOf(p);
+    const open = pjOpen.has(p.id);
+    const name = typeName(p.projectTypeId);
+    const team = (p.team ?? []).filter((m) => m.name);
+    const ls = linesOf(p);
+    return (
+      <article key={p.id} className={`cw-pt-item cw-pj ${open ? "is-exp" : ""} is-${st}`} style={cssVars({ "--i": i })}>
+        <div className="cw-pj-row" role="button" tabIndex={0} aria-expanded={open} onClick={() => { hideTip(); togglePj(p.id); }} onKeyDown={(e) => { if (e.key === "Enter") togglePj(p.id); }}>
+          <span className="cw-pt-name">
+            <span className="cw-line-ico" style={cssVars({ "--h": hue(name) })}>{initials(name)}</span>
+            <span><b>{name}</b><small>{[p.signingDate ? `Signed ${fmt(p.signingDate)}` : "", p.kickoffDate ? `kick-off ${fmt(p.kickoffDate)}` : ""].filter(Boolean).join(" · ") || "No dates yet"}</small></span>
+          </span>
+          <span><span className={`cw-status is-${st}`}><i />{PROJECT_STATUS_LABEL[st]}</span></span>
+          <span className="cw-pj-prog">
+            <b>{d2(u.done)} of {d2(days)}{un}{left < 0 ? <em className="is-over"> · {d2(-left)}{un} over</em> : null}</b>
+            <i><em className="is-booked" style={{ width: `${pct(u.done + u.planned)}%` }} /><em style={{ width: `${pct(u.done)}%` }} /></i>
+          </span>
+          <span className="is-r cw-pt-v">{eur(projectValue(p))}</span>
+          <span className="cw-pj-team">
+            {team.slice(0, 3).map((m) => <span key={m.id} title={m.name}><Avatar name={m.name} size={24} /></span>)}
+            {team.length > 3 && <em>+{team.length - 3}</em>}
+            {!team.length && <small>—</small>}
+          </span>
+          <span className="cw-pt-acts"><button type="button" className="cw-icon-btn is-sm cw-pt-chev" onClick={(e) => { e.stopPropagation(); togglePj(p.id); }} aria-label={open ? "Less" : "More"}><Ico n="chev" s={14} /></button></span>
+        </div>
+        <div className={`cw-reveal ${open ? "is-on" : ""}`} aria-hidden={!open}><div className="cw-reveal-in">
+          <div className="cw-pt-more">
+            <div className="cw-pt-cols is-pj">
+              <dl className="cw-dl">
+                {([
+                  ["Status", PROJECT_STATUS_LABEL[st]],
+                  ["Signed", p.signingDate ? fmt(p.signingDate) : ""],
+                  ["Kick-off", p.kickoffDate ? fmt(p.kickoffDate) : ""],
+                  ["Ends", p.endDate ? fmt(p.endDate) : ""],
+                  ["Sold", `${d2(days)} ${un === "h" ? "hours" : "days"}`],
+                  ["Used", `${d2(u.done)}${un}`],
+                  ["Booked", `${d2(u.planned)}${un}`],
+                  ["Left", `${d2(left)}${un}`],
+                  ["Average rate", `${eur(avgRate(p))} / ${un === "h" ? "hour" : "day"}`],
+                  ["Discount", totalDiscountOf(p) ? eur(totalDiscountOf(p)) : ""],
+                  ["Tax", p.taxed ? `${p.taxRate}%` : "No tax"],
+                  ["Payment", p.paymentDays ? `${p.paymentDays} days` : ""],
+                  ["Team", team.map((m) => m.name).join(", ")],
+                ] as [string, string][]).filter(([, v]) => v).map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}
+              </dl>
+              <div className="cw-pt-years cw-pj-roles">
+                <div className="cw-pt-yr is-head"><span>Role</span><span>Sold</span><span>Used</span><span>Rate</span><span>Value</span></div>
+                {ls.length === 0 && <p className="cw-k-none">No roles on this project.</p>}
+                {ls.map((l, k) => {
+                  const lu = lineUsage?.[`${p.id}|${l.roleId}`];
+                  return (
+                    <div key={k} className="cw-pt-yr">
+                      <span title={roleCounts(l.roleId, roles) ? undefined : "Doesn't count for billing"}>{roleNameOf(l.roleId, roles)}{roleCounts(l.roleId, roles) ? null : <i className="is-soft">not billed</i>}</span>
+                      <span>{d2(l.days)}{un}</span>
+                      <span>{lu ? `${d2(lu.done)}${un}` : "—"}</span>
+                      <span>{eur(lineRate(l))}</span>
+                      <span><b>{eur(l.days * lineRate(l))}</b></span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="cw-pt-foot">
+              {canDelete && (
+                <span className={`cw-line-del is-shown ${confirmDel === p.id ? "is-asking" : ""}`}>
+                  {confirmDel === p.id ? (
+                    <><span>Delete this project?</span><button className="is-yes" onClick={() => { setConfirmDel(null); onDeleteProject(p.id); }}>Delete</button><button onClick={() => setConfirmDel(null)}>Keep</button></>
+                  ) : <button className="cw-pt-delbtn" onClick={() => setConfirmDel(p.id)}><Ico n="trash" s={13} />Delete</button>}
+                </span>
+              )}
+              <button type="button" className="cw-btn-primary is-sm" onClick={() => { hideTip(); onOpenProject(p); }}><Ico n="edit" s={13} />Edit project</button>
+            </div>
+          </div>
+        </div></div>
+      </article>
+    );
+  };
+
+  /** The closing row of a project list: how much was sold, delivered and what it's worth. */
+  const projTotal = (list: Project[]) => {
+    if (list.length < 1) return null;
+    const sold = list.reduce((t, p) => t + signedOf(p), 0);
+    const done = list.reduce((t, p) => t + (usage[p.id]?.done ?? 0), 0);
+    const val = list.reduce((t, p) => t + projectValue(p), 0);
+    const open = list.filter((p) => projectStatusOf(p.status) === "open").length;
+    return (
+      <div className="cw-pj-row is-tot">
+        <span><b>{list.length} project{list.length === 1 ? "" : "s"}</b><small>{open} open</small></span>
+        <span />
+        <span className="cw-pj-prog"><b>{d2(done)} of {d2(sold)} days delivered</b><i><em style={{ width: `${sold > 0 ? Math.min(100, (done / sold) * 100) : 0}%` }} /></i></span>
+        <span className="is-r cw-pt-v">{eur(val)}</span>
+        <span /><span />
+      </div>
+    );
+  };
+
   /* ---- the company card: full width when opened, in the main column when closed ---- */
   const companyCard = (
-    <section data-sec="company" className={`cw-card cw-co ${coOpen ? "is-open" : ""} ${coMoved ? "is-moved" : ""}`} style={cssVars({ "--i": 4 })}>
+    <section data-sec="company" className={`cw-card cw-box cw-co ${coOpen ? "is-open" : ""} ${coMoved ? "is-moved" : ""}`} style={cssVars({ "--i": 4 })}>
       <SecHead icon="building" tone="green" title="Company" sub={`${filled} of ${totalFacts} details filled`}>
         {co.id && <button className="cw-icon-btn" onClick={openCompany} aria-label="Open in Companies" {...tipOn(<TipCard title="Open in Companies" />)}><Ico n="out" s={15} /></button>}
         <button className="cw-ghost" onClick={() => { hideTip(); setCoMoved(true); setCoOpen((o) => !o); }} aria-expanded={coOpen}>
@@ -1525,6 +1970,8 @@ export default function ClientWorkspace({
         </button>
       </SecHead>
       <div className="cw-sec-body">
+      <div className="cw-co-split">
+      <div className="cw-co-main">
       <div className="cw-co-hero" {...(coOpen ? {} : tipOn(
         <TipCard title={legal} sub={str(co.name) && str(co.name) !== legal ? `Trades as ${co.name}` : undefined}
           rows={[["VAT", vat], ["Registry", str(co.reg_number)], ["Website", webHost], ["Email", str(co.email)], ["Phone", str(co.phone)],
@@ -1536,8 +1983,20 @@ export default function ClientWorkspace({
       <div className="cw-co-meter" {...tipOn(<TipCard title={`${filled} of ${totalFacts} details filled`} sub={missing.length ? `Missing: ${missing.join(", ")}` : "Everything is filled in"} />)}>
         <span style={{ width: `${(filled / Math.max(1, totalFacts)) * 100}%` }} />
       </div>
-      {co.id && <WebLinks companyId={co.id} website={str(co.website)} linkedin={str(co.linkedin)}
+      {co.id && <WebLinks companyId={co.id} website={str(co.website)} linkedin={str(co.linkedin)} readOnly={!can("company")}
         onSaved={(patch) => setCompany((c: any) => (c ? { ...c, ...patch } : c))} />}
+      </div>
+      <dl className="cw-co-facts">
+        {([
+          ["Phone", str(co.phone) ? <a href={telHref(str(co.phone))}>{co.phone}</a> : null],
+          ["Email", str(co.email) ? <a href={`mailto:${co.email}`}>{co.email}</a> : null],
+          ["Address", fullAddress || null],
+          ["Client since", firstSigned ? fmt(firstSigned) : null],
+          ["Sector", str(co.sector) || null],
+          ["Size", str(co.employees) || str(co.size) || null],
+        ] as [string, React.ReactNode][]).map(([k, v]) => <div key={k} className={v ? "" : "is-empty"}><dt>{k}</dt><dd>{v ?? "—"}</dd></div>)}
+      </dl>
+      </div>
       <div className="cw-reveal" aria-hidden={!coOpen}>
         <div className="cw-reveal-in">
           <div className="cw-co2">
@@ -1596,6 +2055,10 @@ export default function ClientWorkspace({
                     {...tipOn(<TipCard title={healthLabel} sub={last ? `Last contact ${ago(last.at)} · ${last.kind} with ${last.who}` : "No contact on record yet"}>
                       Healthy up to 30 days without contact, getting quiet up to 60, neglected after that.
                     </TipCard>)}><i />{healthLabel}</span>
+                  {onSetStatus && (
+                    <ClientStatusPicker status={client.status} churnedAt={client.churnedAt} reason={client.churnReason} canEdit={can("company")}
+                      running={activeLines.length} onSave={async (st, o) => { const e = await onSetStatus(st, o); if (!e && st === "churned" && o.stopProducts) { await reloadLines(); onLinesChanged?.(); } return e; }} />
+                  )}
                   {placeLine && <span className="cw-tag" style={cssVars({ "--i": 1 })}><Ico n="pin" s={12} />{placeLine}</span>}
                   {co.id && <button className="cw-tag is-link" style={cssVars({ "--i": 2 })} onClick={openCompany}
                     {...tipOn(<TipCard title="Open in Companies" sub={[webHost, str(co.phone)].filter(Boolean).join(" · ") || undefined} />)}><Ico n="building" s={12} />Company</button>}
@@ -1603,11 +2066,13 @@ export default function ClientWorkspace({
               </div>
             </div>
             <div className="cw-kpis">
-              <div className="cw-kpi" style={cssVars({ "--i": 0 })} {...tipOn(<TipCard title="Signed with this client" rows={[["Projects", eur(totals.value)], ["Products", eur(contractValue)]]} />)}>
+              <div className="cw-kpi" style={cssVars({ "--i": 0 })} {...tipOn(<TipCard title="Signed with this client" sub="Net to us: what partners take is left out"
+                rows={[["Projects", eur(totals.value)], ["Products", eur(contractValue)], ["Client pays for products", partnerAll > 0.5 ? eur(contractGross) : ""], ["Partner share", partnerAll > 0.5 ? `−${eur(partnerAll)}` : ""]]} />)}>
                 <span className="cw-kpi-k">Signed</span>
                 <span className="cw-kpi-v is-neon">{eur(totals.value + contractValue)}</span>
               </div>
-              <div className="cw-kpi" style={cssVars({ "--i": 1 })}>
+              <div className="cw-kpi" style={cssVars({ "--i": 1 })} {...tipOn(<TipCard title="Recurring a year, today" sub="Net to us"
+                rows={[["Billed to the client", eur(grossYear)], ["Partner share", partnerYearNow > 0.5 ? `−${eur(partnerYearNow)}` : "None"], ["Net", eur(recurringYear)]]} />)}>
                 <span className="cw-kpi-k">Recurring</span>
                 <span className="cw-kpi-v">{eur(recurringYear)}<em>/yr</em></span>
               </div>
@@ -1659,7 +2124,7 @@ export default function ClientWorkspace({
 
         {/* ---------- body ---------- */}
         <div className={`cw-body ${tab === "folders" || tab === "emails" ? "is-fixed" : ""}`} ref={bodyRef} onScroll={() => { hideTip(); spyNow(); }}>
-          <div className={`cw-panel is-${tab} ${!loaded && (tab === "overview" || tab === "deals") ? "is-loading" : ""}`} key={tab}>
+          <div className={`cw-panel is-${tab} is-from-${tabDir.current} ${!loaded && (tab === "overview" || tab === "deals") ? "is-loading" : ""}`} key={tab}>
             {tab !== "folders" && tab !== "emails" && tab !== "tickets" && (() => {
               const t = TABS.find((x) => x.v === tab);
               return t ? (
@@ -1696,7 +2161,7 @@ export default function ClientWorkspace({
                     ]} />)}>
                     <span className="cw-tile-top"><span className="cw-tile-ico"><Ico n="repeat" s={15} /></span><span className="cw-tile-k">Recurring</span></span>
                     <b className="cw-tile-v"><Num v={recurringYear} /><small> € / year</small></b>
-                    <span className="cw-tile-sub">{activeLines.filter((l) => l.recurring).length ? `${activeLines.filter((l) => l.recurring).length} subscription${activeLines.filter((l) => l.recurring).length === 1 ? "" : "s"}` : "No subscriptions"}</span>
+                    <span className="cw-tile-sub">{activeLines.filter((l) => l.recurring).length ? `${activeLines.filter((l) => l.recurring).length} subscription${activeLines.filter((l) => l.recurring).length === 1 ? "" : "s"}${partnerYearNow > 0.5 ? ` · net of ${eur(partnerYearNow)} partner` : ""}` : "No subscriptions"}</span>
                   </button>
                   <button className="cw-tile" data-tone="pink" style={cssVars({ "--i": 2 })} onClick={() => go("contract")}
                     {...tipOn(<TipCard title="Sales contract" sub="Signed products over their term, plus one-offs and set-up fees"
@@ -1720,15 +2185,17 @@ export default function ClientWorkspace({
                 </div>
 
                 {companyCard}
-                    <section data-sec="people" className="cw-card cw-people" style={cssVars({ "--i": 6 })}>
+                    <section data-sec="people" className="cw-card cw-box cw-people" style={cssVars({ "--i": 6 })}>
                       <SecHead icon="users" tone="blue" title="Contacts"
                         sub={`${persons.length} ${persons.length === 1 ? "person" : "people"}${persons.some((p) => p.billing) ? ` · ${persons.filter((p) => p.billing).length} billing` : ""}`}>
                         {persons.length > PEOPLE_LIMIT && (
                           <label className="cw-search"><Ico n="search" s={14} /><input value={peopleQ} placeholder="Search people" onChange={(e) => setPeopleQ(e.target.value)} /></label>
                         )}
-                        <button className="cw-btn-primary is-sm" onClick={() => { setAddPersonErr(null); setAddPerson((v) => (v ? null : { first: "", last: "", position: "", email: "", phone: "", billing: false })); }}>
-                          <Ico n={addPerson ? "x" : "plus"} s={14} />{addPerson ? "Cancel" : "Add"}
-                        </button>
+                        {can("company") && (
+                          <button className="cw-btn-primary is-sm" onClick={() => { setAddPersonErr(null); setAddPerson((v) => (v ? null : { first: "", last: "", position: "", email: "", phone: "", billing: false })); }}>
+                            <Ico n={addPerson ? "x" : "plus"} s={14} />{addPerson ? "Cancel" : "Add"}
+                          </button>
+                        )}
                       </SecHead>
                       <div className={`cw-reveal ${addPerson ? "is-on" : ""}`} aria-hidden={!addPerson}>
                         <div className="cw-reveal-in">
@@ -1771,15 +2238,14 @@ export default function ClientWorkspace({
                         </button>
                       )}
                     </section>
-
-                    <section ref={pulseRef} data-sec="pulse" className={`cw-card cw-pulse is-${health}`} style={cssVars({ "--i": 5 })}>
+                    <section ref={pulseRef} data-sec="pulse" className={`cw-card cw-box cw-pulse is-${health}`} style={cssVars({ "--i": 5 })}>
                       <SecHead icon="pulse" tone="teal" title="Last contacted" sub={touches.length ? `${touches.length} touchpoint${touches.length === 1 ? "" : "s"}` : "Nothing on record yet"}>
                         <button className="cw-btn-primary is-sm" onClick={() => (logOpen ? setLogOpen(false) : startLog())}>
                           <Ico n={logOpen ? "x" : "plus"} s={14} />{logOpen ? "Cancel" : "Log"}
                         </button>
                       </SecHead>
 
-                      <div className="cw-sec-body">
+                      <div className={`cw-sec-body ${touches.length ? "cw-pulse-grid" : ""}`}>
                       <div className="cw-pulse-top" {...tipOn(last ? <TipCard title={last.who} sub={`${last.kind} · ${fmt(last.at)} · ${ago(last.at)}`}>{last.why}</TipCard> : null)}>
                         <div className="cw-pring">
                           <svg viewBox="0 0 110 110" aria-hidden="true">
@@ -1844,23 +2310,12 @@ export default function ClientWorkspace({
                       )}
                       </div>
                     </section>
-
-                <section className="cw-zone" data-sec="tasks" data-tone="amber" style={cssVars({ "--i": 7 })}>
+                <section className="cw-zone cw-box" data-sec="tasks" data-tone="amber" style={cssVars({ "--i": 7 })}>
                   <header className="cw-zone-h">
                     <span className="cw-zone-ico"><Ico n="tasks" s={17} /></span>
                     <div><h3>Tasks</h3><small>{openTasks.length ? `${openTasks.length} open${lateTasks.length ? ` · ${lateTasks.length} overdue` : ""}` : "Nothing open"} · the client's own and those from sales</small></div>
                   </header>
                 <div className="cw-stack">
-                  <div className="cw-tstats">
-                    {[
-                      { k: "Open", v: openTasks.length, tone: "green" },
-                      { k: "Overdue", v: lateTasks.length, tone: "red" },
-                      { k: "This week", v: openTasks.filter((t) => { const d = dueInfo(t.due_at); return !!d && d.n >= 0 && d.n <= 7; }).length, tone: "amber" },
-                      { k: "Done", v: tasks.length - openTasks.length, tone: "blue" },
-                    ].map((x, i) => (
-                      <div className="cw-tstat" data-tone={x.tone} key={x.k} style={cssVars({ "--i": i })}><b><Num v={x.v} /></b><span>{x.k}</span></div>
-                    ))}
-                  </div>
 
                   {(
                     <section className={`cw-card cw-tadd ${taskDraft.trim() ? "is-typing" : ""}`}>
@@ -1946,8 +2401,7 @@ export default function ClientWorkspace({
                   )}
                 </div>
                 </section>
-
-                <section className="cw-zone" data-sec="notes" data-tone="blue" style={cssVars({ "--i": 8 })}>
+                <section className="cw-zone cw-box" data-sec="notes" data-tone="blue" style={cssVars({ "--i": 8 })}>
                   <header className="cw-zone-h">
                     <span className="cw-zone-ico"><Ico n="note" s={17} /></span>
                     <div><h3>Notes</h3><small>{allNotes.length ? `${allNotes.length} note${allNotes.length === 1 ? "" : "s"}${saleNotes.length ? ` · ${saleNotes.length} from sales` : ""}` : "Nothing written yet"}</small></div>
@@ -2056,6 +2510,12 @@ export default function ClientWorkspace({
                       </div>
                     );
                   };
+                  const dl = lines.filter((l) => str(l.tracking_id) === v.d.id);
+                  const dNet = dl.filter(isActive).reduce((t, l) => t + lineContractValue(l), 0);
+                  const dGross = dl.filter(isActive).reduce((t, l) => t + lineContractValue(l) + partnerTotal(l), 0);
+                  const dEd = dlEdit?.id === v.d.id;
+                  const dv = dlEdit?.v ?? {};
+                  const setDv = (patch: Record<string, any>) => setDlEdit((e) => (e ? { ...e, v: { ...e.v, ...patch } } : e));
                   return (
                     <article key={v.d.id} className="cw-deal" data-sec={`deal-${v.d.id}`} data-st={tone} style={cssVars({ "--i": i })}>
                       <header className="cw-deal-h">
@@ -2065,18 +2525,52 @@ export default function ClientWorkspace({
                           <small>{[v.d.pipeline, v.d.phase].filter(Boolean).join(" · ") || "Sales deal"}</small>
                         </div>
                         <span className={`cw-dstat is-${tone}`}><i />{stLabel}</span>
-                        <div className="cw-deal-val">
-                          <b>{v.value != null ? eur(v.value) : "—"}</b>
-                          <small>{v.main ? `Main: ${v.main.name}` : "Deal value"}</small>
+                        <div className="cw-deal-val" {...tipOn(dl.length ? <TipCard title="Signed in this deal" rows={[["Client pays", eur(dGross)], ["Partner share", dGross - dNet > 0.5 ? `−${eur(dGross - dNet)}` : ""], ["Net to us", eur(dNet)], ["Deal value", v.value != null ? eur(v.value) : ""]]} /> : null)}>
+                          <b>{dl.length ? eur(dNet) : v.value != null ? eur(v.value) : "—"}</b>
+                          <small>{dl.length ? (dGross - dNet > 0.5 ? `Signed, net · ${eur(dGross)} paid` : "Signed") : v.main ? `Main: ${v.main.name}` : "Deal value"}</small>
                         </div>
+                        {can("deals") && !dEd && (
+                          <button className="cw-icon-btn" onClick={() => { setDlErr(null); setDlEdit({ id: v.d.id, v: { name: v.d.name, status: v.d.status || "active", close: str(v.d.close_date).slice(0, 10), value: v.d.price != null ? String(v.d.price) : "" } }); }}
+                            aria-label="Edit the deal" {...tipOn(<TipCard title="Edit the deal" />)}><Ico n="edit" s={14} /></button>
+                        )}
                         <button className="cw-icon-btn" onClick={() => openDeal(v.d.id)} aria-label="Open in Sales" {...tipOn(<TipCard title="Open in Sales" />)}><Ico n="out" s={15} /></button>
                       </header>
+                      {dEd && (
+                        <div className="cw-ed is-deal" onMouseEnter={hideTip}>
+                          <div className="cw-ed-grid">
+                            <Fld label="Deal name" wide><input autoFocus value={dv.name} onChange={(e) => setDv({ name: e.target.value })} /></Fld>
+                            <Fld label="Status"><Select size="sm" value={dv.status} onChange={(x) => setDv({ status: x })} options={[
+                              { value: "active", label: "Active" }, { value: "won", label: "Won" }, { value: "lost", label: "Lost" }, { value: "paused", label: "On hold" },
+                              ...(["active", "won", "lost", "paused"].includes(dv.status) ? [] : [{ value: dv.status, label: String(dv.status).replace(/_/g, " ") }]),
+                            ]} /></Fld>
+                            <Fld label="Close date"><span className="cw-date"><DatePicker value={dv.close} onChange={(d) => setDv({ close: d })} /></span></Fld>
+                            <Fld label="Deal value"><span className="cw-ed-unit"><input inputMode="decimal" value={dv.value} placeholder="—" onChange={(e) => setDv({ value: e.target.value })} /><em>€</em></span></Fld>
+                          </div>
+                          {dlErr && <p className="cw-err">{dlErr}</p>}
+                          <div className="cw-ed-foot">
+                            <span>The deal itself, as Sales sees it. What was signed is changed in Contracts.</span>
+                            <button type="button" className="cw-ghost" onClick={() => setDlEdit(null)}>Cancel</button>
+                            <button type="button" className="cw-btn-primary is-sm" disabled={dlBusy} onClick={() => void saveDlEdit()}>{dlBusy ? "Saving…" : "Save deal"}</button>
+                          </div>
+                        </div>
+                      )}
                       <div className="cw-deal-facts">
                         {v.d.created_at && <span><Ico n="cal" s={12} />Opened {fmt(v.d.created_at)}</span>}
                         {v.d.close_date && <span><Ico n="check" s={12} />Closed {fmt(v.d.close_date)}</span>}
                         <button onClick={() => goSec("overview", "tasks")}><Ico n="tasks" s={12} />{v.tasksOpen} open task{v.tasksOpen === 1 ? "" : "s"}</button>
                         <button onClick={() => goSec("overview", "notes")}><Ico n="note" s={12} />{v.notesN} note{v.notesN === 1 ? "" : "s"}</button>
                       </div>
+                      {dl.length > 0 && (
+                        <div className="cw-deal-prods">
+                          {dl.map((l) => (
+                            <span key={l.id} className={isActive(l) ? "" : "is-off"}>
+                              <b>{l.name}</b>
+                              <em>{l.recurring ? `${eur(lineAnnualGross(l) || firstYearOf(l))}/yr` : eur(lineTotal(l))}{partnerTotal(l) > 0.5 ? " · partner" : ""}</em>
+                            </span>
+                          ))}
+                          <button className="cw-linkbtn" onClick={() => goSec("contract", dealContracts[v.d.id] || dl.length ? (contractGroups[0]?.tid === v.d.id ? "contracts" : `contract-${v.d.id}`) : "products")}>See the contract<Ico n="arrow" s={12} /></button>
+                        </div>
+                      )}
                       <div className="cw-deal-grid">
                         <section className="cw-deal-col" data-tone="amber">
                           <h5><Ico n="send" s={13} />Proposals<i>{v.props.length + v.looseProps.length}</i></h5>
@@ -2132,68 +2626,10 @@ export default function ClientWorkspace({
                 {filteredProjects.length === 0 ? (
                   <div className="cw-empty is-big"><Ico n="briefcase" s={24} /><p>{projects.length ? "No projects match this filter." : "No projects yet."}</p></div>
                 ) : (
-                  <div className="cw-proj-grid">
-                    {filteredProjects.map((p, i) => {
-                      const days = signedOf(p);
-                      const u = usage[p.id] ?? { planned: 0, done: 0 };
-                      const pl = +(days - u.planned - u.done).toFixed(2);
-                      const pct = (n: number) => (days > 0 ? Math.min(100, (n / days) * 100) : 0);
-                      const usedPct = Math.round(pct(u.done));
-                      const closed = p.status === "closed";
-                      const s = p.kickoffDate || p.signingDate;
-                      const elapsed = s && p.endDate ? clamp((Date.now() - toDate(s).getTime()) / Math.max(1, toDate(p.endDate).getTime() - toDate(s).getTime())) : null;
-                      const C = 2 * Math.PI * 26;
-                      const rate = avgRate(p);
-                      const un = unitOf(p);
-                      return (
-                        <article key={p.id} className={`cw-proj ${closed ? "is-closed" : ""} ${pl < 0 ? "is-over" : ""}`} style={cssVars({ "--i": i })}
-                          role="button" tabIndex={0} onClick={() => { hideTip(); onOpenProject(p); }}
-                          onKeyDown={(e) => { if (e.key === "Enter") onOpenProject(p); }}
-                          {...tipOn(<TipCard title={typeName(p.projectTypeId)} sub={`${PROJECT_STATUS_LABEL[projectStatusOf(p.status)]} · click to edit`} rows={[
-                            ["Used", `${d2(u.done)}${un}`], ["Booked", `${d2(u.planned)}${un}`], ["Left", `${d2(pl)}${un}`], ["Signed", `${d2(days)}${un}`],
-                            ["Kick-off", p.kickoffDate ? fmt(p.kickoffDate) : ""], ["End", p.endDate ? fmt(p.endDate) : ""],
-                            ["Time elapsed", elapsed != null ? `${Math.round(elapsed * 100)}%` : ""],
-                            ["Rate", `${eur(rate)} / ${un === "h" ? "hour" : "day"}${linesOf(p).length > 1 ? " avg." : ""}`], ...roleTipRows(p, un), ["Team", (p.team ?? []).map((m) => m.name).filter(Boolean).join(", ")],
-                          ]} />)}>
-                          <header className="cw-proj-top">
-                            <div className="cw-proj-ring">
-                              <svg viewBox="0 0 64 64" aria-hidden="true">
-                                <circle className="bg" cx="32" cy="32" r="26" />
-                                <circle className="fg" cx="32" cy="32" r="26" style={cssVars({ "--dash": `${((C * usedPct) / 100).toFixed(1)}`, "--c": C.toFixed(1) })} />
-                              </svg>
-                              <b>{usedPct}<i>%</i></b>
-                            </div>
-                            <div className="cw-proj-id">
-                              <h4>{typeName(p.projectTypeId)}</h4>
-                              <span className={`cw-status is-${projectStatusOf(p.status)}`}><i />{PROJECT_STATUS_LABEL[projectStatusOf(p.status)]}</span>
-                            </div>
-                            <b className="cw-proj-val">{eur(projectValue(p))}</b>
-                          </header>
-                          <div className="cw-proj-bar" aria-hidden="true">
-                            <span className="is-booked" style={{ width: `${pct(u.done + u.planned)}%` }} />
-                            <span className="is-done" style={{ width: `${pct(u.done)}%` }} />
-                          </div>
-                          <footer className="cw-proj-foot">
-                            <span className={`cw-proj-figs ${pl < 0 ? "is-over" : ""}`}>{d2(u.done)} / {d2(days)}{un}{pl < 0 ? ` · ${d2(-pl)}${un} over` : elapsed != null ? ` · ${Math.round(elapsed * 100)}% of time` : ""}</span>
-                            <div className="cw-team">
-                              {(p.team ?? []).filter((m) => m.name).slice(0, 3).map((m) => <span key={m.id}><Avatar name={m.name} size={24} /></span>)}
-                              {(p.team ?? []).length > 3 && <span className="cw-team-more">+{p.team.length - 3}</span>}
-                            </div>
-                          </footer>
-                          <div className={`cw-proj-del ${confirmDel === p.id ? "is-asking" : ""}`} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()} onMouseEnter={hideTip}>
-                            {confirmDel === p.id ? (
-                              <>
-                                <span>Delete?</span>
-                                <button className="is-yes" onClick={() => { setConfirmDel(null); onDeleteProject(p.id); }}>Delete</button>
-                                <button onClick={() => setConfirmDel(null)}>Keep</button>
-                              </>
-                            ) : (
-                              <button className="is-x" onClick={() => setConfirmDel(p.id)} aria-label="Delete project"><Ico n="trash" s={13} /></button>
-                            )}
-                          </div>
-                        </article>
-                      );
-                    })}
+                  <div className="cw-pt cw-pj-list">
+                    <div className="cw-pj-row is-head"><span>Service</span><span>Status</span><span>Delivered</span><span className="is-r">Value</span><span>Team</span><span /></div>
+                    {filteredProjects.map((p, i) => projectRow(p, i, true))}
+                    {projTotal(filteredProjects)}
                   </div>
                 )}
               </div>
@@ -2201,251 +2637,479 @@ export default function ClientWorkspace({
 
             {/* ===== CONTRACT ===== */}
             {tab === "contract" && (
-              <div className="cw-stack cw-secs">
-                <div className="cw-ckpis" data-sec="summary">
-                  {[
-                    { k: "Engagement", v: totals.value, sub: "€ in projects", icon: "briefcase", tone: "green", rows: projRows((p) => eur(projectValue(p))) },
-                    { k: "Recurring", v: recurringYear, sub: "€ per year", icon: "repeat", tone: "violet", rows: activeLines.filter((l) => l.recurring).map((l) => [l.name, eur(lineAnnual(l))] as [string, React.ReactNode]) },
-                    { k: "One-time", v: oneTime, sub: "€ fees & one-offs", icon: "euro", tone: "blue", rows: lines.filter((l) => !l.recurring || Number(l.one_time_fee)).map((l) => [l.name, eur(lineOneTime(l))] as [string, React.ReactNode]) },
-                  ].map((x, i) => (
-                    <div className="cw-ckpi" data-tone={x.tone} key={x.k} style={cssVars({ "--i": i })} {...tipOn(x.rows.length ? <TipCard title={x.k} rows={x.rows} /> : null)}>
-                      <span className="cw-ckpi-top"><span className="cw-ckpi-ico"><Ico n={x.icon} s={15} /></span><span className="cw-ckpi-k">{x.k}</span></span>
-                      <b><Num v={x.v} /></b>
-                      <small>{x.sub}</small>
-                    </div>
-                  ))}
-                  <div className="cw-ckpi" data-tone="amber" style={cssVars({ "--i": 3 })}>
-                    <span className="cw-ckpi-top"><span className="cw-ckpi-ico"><Ico n="cal" s={15} /></span><span className="cw-ckpi-k">Next renewal</span></span>
-                    <b className="is-date">{nextRenewal ? fmtD(nextRenewal.end) : "—"}</b>
-                    <small>{nextRenewal ? `in ${nextRenewal.left} days` : "No term on file"}</small>
+              <div className="cw-stack cw-kpage">
+                <div className="cw-khero" data-sec="summary">
+                  <div className="cw-khero-main" {...tipOn(activeLines.some((l) => l.recurring) ? <TipCard title="Recurring today" sub="Net to us, a year" rows={activeLines.filter((l) => l.recurring).map((l) => [l.name, `${eur(lineAnnual(l))}${lineAnnualGross(l) - lineAnnual(l) > 0.5 ? ` of ${eur(lineAnnualGross(l))}` : ""}`] as [string, React.ReactNode])} /> : null)}>
+                    <span className="cw-khero-k">Recurring today</span>
+                    <b className="cw-khero-v"><Num v={recurringYear} /><small>€ a year</small></b>
+                    <span className="cw-khero-sub">
+                      {partnerYearNow > 0.5
+                        ? <>{eur(grossYear)} billed to the client, {eur(partnerYearNow)} of it to partners</>
+                        : <>{activeLines.filter((l) => l.recurring).length || "No"} running subscription{activeLines.filter((l) => l.recurring).length === 1 ? "" : "s"}</>}
+                    </span>
                   </div>
+                  <dl className="cw-khero-side">
+                    <div {...tipOn(activeLines.length ? <TipCard title="Signed, net" sub="Each product over its term, less partners" rows={activeLines.map((l) => [l.name, eur(lineContractValue(l))] as [string, React.ReactNode])} /> : null)}>
+                      <dt>Signed, net</dt><dd><Num v={contractValue} /> €</dd>{partnerAll > 0.5 && <small>of {eur(contractGross)} paid</small>}
+                    </div>
+                    <div><dt>Services</dt><dd><Num v={totals.value} /> €</dd><small>{projects.length} project{projects.length === 1 ? "" : "s"}</small></div>
+                    <div><dt>One-time</dt><dd><Num v={oneTime} /> €</dd><small>fees and one-offs</small></div>
+                    <div><dt>Next renewal</dt><dd>{nextRenewal ? fmtD(nextRenewal.end) : "—"}</dd><small>{nextRenewal ? `in ${nextRenewal.left} days` : "no term on file"}</small></div>
+                  </dl>
                 </div>
 
-                {Object.entries(dealContracts).map(([tid, ct]) => {
-                  const maxY = Math.max(1, ...(ct.schedule ?? []).map((y) => Number(y.total) || 0));
-                  const inc = ct.increments;
-                  const incTxt = !inc || inc.mode === "none" ? "No yearly increase" : inc.mode === "pct" ? `+${Number(inc.value) || 0}% a year` : inc.mode === "fixed" ? `+${eur(Number(inc.value) || 0)} a year` : "Set year by year";
+                {contractGroups.map((g, gi) => {
+                  const { tid, ct, lines: gl } = g;
+                  const live = gl.filter(isActive);
+                  const startS = str(ct?.contractStart) || str(ct?.signDate) || str(gl[0]?.start_date) || str(gl[0]?.signing_date);
+                  const termY = Number(ct?.termYears) || Math.max(1, ...gl.map((l) => Number(l.term_years) || 1));
+                  const n = Math.max(1, (ct?.schedule ?? []).length, ...gl.map(yearsOf));
+                  const start = startS ? toDate(startS) : null;
+                  const now = Date.now();
+                  const years = Array.from({ length: n }, (_, i) => {
+                    const lic = gl.length ? gl.reduce((t, l) => t + lineYearGross(l, i), 0) : Number(ct?.schedule?.[i]?.license) || 0;
+                    const svc = Number(ct?.schedule?.[i]?.services) || 0;
+                    const partner = gl.reduce((t, l) => t + partnerCut(l, i), 0);
+                    const from = start ? addYears(start, i) : null;
+                    const to = start ? new Date(addYears(start, i + 1).getTime() - DAY) : null;
+                    return { i, pays: lic + svc, svc, partner, net: lic + svc - partner, from, to, now: !!from && !!to && now >= from.getTime() && now < to.getTime() + DAY, past: !!to && to.getTime() + DAY <= now };
+                  });
+                  const tot = years.reduce((a, y) => ({ pays: a.pays + y.pays, partner: a.partner + y.partner, net: a.net + y.net }), { pays: 0, partner: 0, net: 0 });
+                  const end = start ? addYears(start, termY) : null;
+                  const tm = live.map(termOf).filter((t): t is NonNullable<ReturnType<typeof termOf>> => !!t).sort((a, b) => a.end.getTime() - b.end.getTime())[0] ?? null;
+                  const autoRenew = ct?.autoRenew ?? gl.some((l) => !!l.auto_renew);
+                  const left = tm ? tm.left : end ? Math.ceil((end.getTime() - now) / DAY) : null;
+                  const cur = years.findIndex((y) => y.now);
+                  const status = gl.length && !live.length ? { tone: "off", label: "Ended" }
+                    : left == null ? { tone: "ok", label: "Active" }
+                      : left < 0 ? { tone: "off", label: "Ended" }
+                        : left <= 90 ? { tone: "warn", label: autoRenew ? `Renews in ${left} days` : `Ends in ${left} days` }
+                          : { tone: "ok", label: cur >= 0 ? `Active · year ${cur + 1} of ${n}` : start && start.getTime() > now ? `Starts ${fmtD(start)}` : "Active" };
+                  const span = tm ? { a: tm.renewed ? addYears(tm.end, -(Number(gl.find((l) => l.renew_years)?.renew_years) || termY)) : tm.start, b: tm.end } : start && end ? { a: start, b: end } : null;
+                  const pct = span ? clamp((now - span.a.getTime()) / Math.max(1, span.b.getTime() - span.a.getTime())) : 0;
+                  const partners = Array.from(new Set(gl.map(partnerText).filter(Boolean)));
+                  /** What makes up a signed product's yearly price (the deal's calculator), when there's more than one part. */
+                  const yearRows = (l?: Line): { label: string; detail?: string | null; amount: number; discount: number }[] => {
+                    const rs = Array.isArray(l?.breakdown?.rows) ? (l!.breakdown.rows as any[]) : [];
+                    return rs.length > 1 ? rs.map((r) => ({ label: String(r.label ?? ""), detail: [r.detail, "a year"].filter(Boolean).join(" · "), amount: Number(r.amount) || 0, discount: Number(r.discount) || 0 })) : [];
+                  };
+                  const scope = (ct?.lines ?? []).length
+                    ? (ct?.lines ?? []).map((ln) => ({
+                      name: ln.name, rows: (ln.rows ?? []).length > 1 ? ln.rows ?? [] : yearRows(gl.find((l) => norm(l.name) === norm(ln.name))),
+                      sub: ln.kind === "service" ? `Services${ct?.servicesBilling === "per_day" ? " · per day performed" : " · fixed fee"}${ln.qty ? ` · ${ln.qty} ${ln.unit === "hour" ? "hours" : "days"}` : ""}` : ln.recurring === false ? "One-time" : "Subscription",
+                      list: Number(ln.list), discount: Number(ln.discount) || 0, pct: ln.discountPct ?? null, final: Number(ln.final),
+                    }))
+                    : gl.map((l) => ({ name: l.name, rows: yearRows(l), sub: l.recurring ? `Every ${periodLabel(l.period)}` : "One-off", list: Number(l.breakdown?.gross), discount: Number(l.breakdown?.discount) || 0, pct: null as number | null, final: lineContractValue(l) + partnerTotal(l) }));
+                  const money = (x: number) => (Number.isFinite(x) ? eur(x) : "—");
+                  const editing = ctEdit?.tid === tid;
+                  const ev = ctEdit?.v ?? {};
+                  const setEv = (patch: Record<string, any>) => setCtEdit((e) => (e ? { ...e, v: { ...e.v, ...patch } } : e));
+                  const signers = ct?.signatories ?? [];
+                  const fact = (k: string, v: React.ReactNode) => (v ? <div key={k}><dt>{k}</dt><dd>{v}</dd></div> : null);
                   return (
-                    <section className="cw-card cw-ct" data-sec="contract-terms" key={tid}>
-                      <SecHead icon="contract" tone="green" title={`Contract · ${dealName(tid)}`} sub={`${ct.termYears || 1} ${(ct.termYears || 1) === 1 ? "year" : "years"} · ${incTxt}`} />
-                      <div className="cw-ct-facts">
-                        <span><i>Signed</i>{ct.signDate ? fmt(ct.signDate) : "—"}</span>
-                        <span><i>Starts</i>{fmt(ct.contractStart || ct.signDate)}</span>
-                        {ct.paymentTermsDays != null && <span><i>Payment</i>{ct.paymentTermsDays} days</span>}
-                        {ct.autoRenew && <span><i>Renews</i>{ct.renewYears ? `every ${ct.renewYears}y` : "Yes"}</span>}
-                        {ct.nonTerminableYears ? <span><i>Non-terminable</i>{ct.nonTerminableYears}y</span> : null}
-                        {ct.contractRef && <span><i>Contract no.</i>{ct.contractRef}</span>}
-                        {ct.billingFrequency && <span><i>Billing</i>{ct.billingFrequency[0].toUpperCase() + ct.billingFrequency.slice(1)}</span>}
-                        {ct.currency && <span><i>Currency</i>{ct.currency}{ct.pricesExclVat !== false ? " · excl. VAT" : ""}</span>}
-                        {ct.esignId && <span><i>E-signature</i>{ct.esignId}</span>}
-                      </div>
-                      {(ct.customer || ct.contactPerson || ct.adminUser) && (
-                        <div className="cw-ct-parties">
-                          {ct.customer && (
-                            <div><small>Customer</small><b>{ct.customer.legalName || ct.customer.name || "—"}</b>
-                              <em>{[ct.customer.vat && `VAT ${ct.customer.vat}`, ct.customer.regNo && `Reg. ${ct.customer.regNo}`].filter(Boolean).join(" · ") || "—"}</em>
-                              {(ct.customer.address || ct.customer.country) && <em>{[ct.customer.address, ct.customer.country ? countryLabel(ct.customer.country) : ""].filter(Boolean).join(", ")}</em>}
-                            </div>
+                    <section className="cw-box cw-k" data-sec={gi === 0 ? "contracts" : `contract-${tid}`} key={tid} style={cssVars({ "--i": gi + 1 })}>
+                      <header className="cw-k-h">
+                        <span className="cw-k-ico"><Ico n="contract" s={18} /></span>
+                        <div className="cw-k-id">
+                          <h3>{dealName(tid)}</h3>
+                          <small>{[ct?.contractRef ? `No. ${ct.contractRef}` : "", (ct?.signDate || gl[0]?.signing_date) ? `Signed ${fmt(ct?.signDate || gl[0]?.signing_date)}` : "", `${termY} ${termY === 1 ? "year" : "years"}`, autoRenew ? `renews every ${ct?.renewYears || gl.find((l) => l.renew_years)?.renew_years || termY}y` : "no auto-renewal"].filter(Boolean).join(" · ")}</small>
+                        </div>
+                        <span className={`cw-k-st is-${status.tone}`}><i />{status.label}</span>
+                        <div className="cw-k-acts">
+                          {ct?.documentFileId && (
+                            <button type="button" className="cw-ghost" onClick={async () => {
+                              const { data: f } = await supabase.from("tracking_files").select("storage_path").eq("id", ct.documentFileId!).maybeSingle();
+                              if (!f) return;
+                              const { data } = await supabase.storage.from("tracking-files").createSignedUrl((f as any).storage_path, 60);
+                              if (data?.signedUrl) window.open(data.signedUrl, "_blank", "noopener");
+                            }}><Ico n="file" s={13} />Signed PDF</button>
                           )}
-                          {ct.contactPerson?.name && <div><small>Contact person</small><b>{ct.contactPerson.name}</b><em>{[ct.contactPerson.role, ct.contactPerson.email, ct.contactPerson.phone].filter(Boolean).join(" · ") || "—"}</em></div>}
-                          {ct.adminUser?.name && <div><small>Admin user</small><b>{ct.adminUser.name}</b><em>{ct.adminUser.email || "—"}</em></div>}
+                          {can("contracts") && !editing && <button type="button" className="cw-ghost" onClick={() => startCtEdit(tid, ct, gl)}><Ico n="edit" s={13} />Edit</button>}
+                          <button type="button" className="cw-icon-btn" onClick={() => openDeal(tid)} aria-label="Open the deal" {...tipOn(<TipCard title="Open the deal in Sales" />)}><Ico n="out" s={15} /></button>
+                        </div>
+                      </header>
+
+                      {editing && (
+                        <div className="cw-ed" onMouseEnter={hideTip}>
+                          <div className="cw-ed-grid">
+                            <Fld label="Signed"><span className="cw-date"><DatePicker value={ev.signDate} onChange={(d) => setEv({ signDate: d })} /></span></Fld>
+                            <Fld label="Starts"><span className="cw-date"><DatePicker value={ev.contractStart} onChange={(d) => setEv({ contractStart: d })} /></span></Fld>
+                            <Fld label="Term (years)"><input inputMode="decimal" value={ev.termYears} onChange={(e) => setEv({ termYears: e.target.value })} /></Fld>
+                            <Fld label="Licences billed"><Select size="sm" value={ev.billingFrequency} onChange={(x) => setEv({ billingFrequency: x })} options={[
+                              { value: "upfront", label: "Upfront" }, { value: "annually", label: "Annually" }, { value: "semiannually", label: "Every 6 months" }, { value: "quarterly", label: "Quarterly" }, { value: "monthly", label: "Monthly" },
+                            ]} /></Fld>
+                            <Fld label="Payment (days)"><input inputMode="numeric" value={ev.paymentTermsDays} placeholder="30" onChange={(e) => setEv({ paymentTermsDays: e.target.value })} /></Fld>
+                            <Fld label="Non-terminable (years)"><input inputMode="decimal" value={ev.nonTerminableYears} placeholder="—" onChange={(e) => setEv({ nonTerminableYears: e.target.value })} /></Fld>
+                            <Fld label="Contract no."><input value={ev.contractRef} placeholder="—" onChange={(e) => setEv({ contractRef: e.target.value })} /></Fld>
+                            <Fld label="Currency"><input value={ev.currency} onChange={(e) => setEv({ currency: e.target.value.toUpperCase().slice(0, 3) })} /></Fld>
+                            <Fld label="Renewal">
+                              <span className="cw-ed-inline">
+                                <Toggle on={!!ev.autoRenew} onClick={() => setEv({ autoRenew: !ev.autoRenew })} label={ev.autoRenew ? "Automatic" : "No"} />
+                                {ev.autoRenew && <><em>every</em><input className="is-xs" inputMode="decimal" value={ev.renewYears} placeholder={String(ev.termYears || 1)} onChange={(e) => setEv({ renewYears: e.target.value })} /><em>years</em></>}
+                              </span>
+                            </Fld>
+                            <Fld label="Notes" wide><textarea rows={2} value={ev.notes} placeholder="Anything special agreed" onChange={(e) => setEv({ notes: e.target.value })} /></Fld>
+                          </div>
+                          {ctErr && <p className="cw-err">{ctErr}</p>}
+                          <div className="cw-ed-foot">
+                            <span>{gl.length ? `Also changes ${gl.length === 1 ? "its signed product" : `its ${gl.length} signed products`}: dates, term, renewal and payment.` : "Saved on the deal's order form."}</span>
+                            <button type="button" className="cw-ghost" onClick={() => setCtEdit(null)}>Cancel</button>
+                            <button type="button" className="cw-btn-primary is-sm" disabled={ctBusy} onClick={() => void saveCtEdit(ct, gl)}>{ctBusy ? "Saving…" : "Save contract"}</button>
+                          </div>
                         </div>
                       )}
-                      {(ct.lines ?? []).length > 0 && (
-                        <div className="cw-ct-scope">
-                          <div className="cw-ct-scope-row is-head"><span>Scope</span><span className="is-r">List</span><span className="is-r">Discount</span><span className="is-r">Final</span></div>
-                          {(ct.lines ?? []).map((ln, j) => (
-                            <div key={j} className={`cw-ct-scope-line is-${ln.kind}`}>
-                              <div className="cw-ct-scope-row">
-                                <span><b>{ln.name}</b><em>{ln.kind === "service" ? `Services${ct.servicesBilling === "per_day" ? ` · per day performed${ct.servicesTolerancePct ? ` (±${ct.servicesTolerancePct}%)` : ""}` : " · fixed fee"}` : ln.recurring === false ? "One-time" : "Subscription"}{ln.qty && ln.kind === "service" ? ` · ${ln.qty} ${ln.unit === "hour" ? "hours" : "days"}` : ""}</em></span>
-                                <span className="is-r">{eur(ln.list)}</span>
-                                <span className="is-r">{ln.discount ? `−${eur(ln.discount)}${ln.discountPct ? ` · ${ln.discountPct}%` : ""}` : "—"}</span>
-                                <span className="is-r"><b>{eur(ln.final)}</b></span>
+
+                      <div className="cw-k-time">
+                        <div className="cw-k-ends">
+                          <span><i>{span && tm?.renewed ? "This term" : "Start"}</i>{span ? fmtD(span.a) : "—"}</span>
+                          <span className="is-r"><i>{autoRenew ? "Renews" : "Ends"}</i>{span ? fmtD(span.b) : "—"}</span>
+                        </div>
+                        <div className="cw-k-track">
+                          {years.map((y) => (
+                            <span key={y.i} className={y.now ? "is-now" : y.past ? "is-past" : ""} {...tipOn(<TipCard title={`Year ${y.i + 1}`} sub={y.from && y.to ? `${fmtD(y.from)} – ${fmtD(y.to)}` : undefined} rows={[["Client pays", eur(y.pays)], ["Partner", y.partner ? `−${eur(y.partner)}` : ""], ["Net to us", eur(y.net)]]} />)}>
+                              <em>Y{y.i + 1}</em>
+                            </span>
+                          ))}
+                          {span && pct > 0 && pct < 1 && <i className={`cw-k-today ${pct < 0.05 ? "is-l" : pct > 0.95 ? "is-r" : ""}`} style={{ left: `${pct * 100}%` }}><b>Today</b></i>}
+                        </div>
+                      </div>
+
+                      <div className={`cw-keq ${tot.partner > 0.5 ? "" : "is-solo"}`}>
+                        <div className="cw-keq-t"><small>The client pays</small><b>{eur(tot.pays)}</b><em>over {n} year{n === 1 ? "" : "s"}{years[0]?.svc ? `, ${eur(years[0].svc)} of it services` : ""}</em></div>
+                        {tot.partner > 0.5 && <>
+                          <span className="cw-keq-op" aria-hidden="true">−</span>
+                          <div className="cw-keq-t is-partner"><small>Partner share</small><b>{eur(tot.partner)}</b><em title={partners.join(", ")}>{partners.join(", ")}</em></div>
+                        </>}
+                        <span className="cw-keq-op" aria-hidden="true">=</span>
+                        <div className="cw-keq-t is-net"><small>Net to us</small><b>{eur(tot.net)}</b><em>{tot.pays > 0 ? `${Math.round((tot.net / tot.pays) * 100)}% of what the client pays` : "—"}</em></div>
+                      </div>
+
+                        <div className="cw-k-tbl">
+                          <div className="cw-k-tr is-head is-y"><span>Year</span><span className="is-r">Client pays</span><span className="is-r">Partner</span><span className="is-r">Net</span></div>
+                          {years.map((y) => (
+                            <div className={`cw-k-tr is-y ${y.now ? "is-now" : ""} ${y.past ? "is-past" : ""}`} key={y.i}>
+                              <span><b>Year {y.i + 1}{y.now && <i>now</i>}</b><em>{y.from && y.to ? `${fmtMY(y.from)} – ${fmtMY(y.to)}` : ""}</em></span>
+                              <span className="is-r">{eur(y.pays)}</span>
+                              <span className="is-r is-p">{y.partner > 0.5 ? `−${eur(y.partner)}` : "—"}</span>
+                              <span className="is-r"><b>{eur(y.net)}</b></span>
+                            </div>
+                          ))}
+                          <div className="cw-k-tr is-y is-tot"><span><b>Total</b></span><span className="is-r">{eur(tot.pays)}</span><span className="is-r is-p">{tot.partner > 0.5 ? `−${eur(tot.partner)}` : "—"}</span><span className="is-r"><b>{eur(tot.net)}</b></span></div>
+                        </div>
+                      <button type="button" className={`cw-k-more ${ofOpen.has(tid) ? "is-on" : ""}`} aria-expanded={ofOpen.has(tid)} onClick={() => toggleOf(tid)}>
+                        <span className="cw-k-more-ico"><Ico n="file" s={15} /></span>
+                        <span className="cw-k-more-t"><b>Order form</b><em>{[scope.length ? `${scope.length} line${scope.length === 1 ? "" : "s"}` : "", ct?.customer ? "parties" : "", signers.length ? "signatures" : "", ct ? "terms" : ""].filter(Boolean).join(", ") || "What the products were sold as"}</em></span>
+                        <span className="cw-k-more-go">{ofOpen.has(tid) ? "Hide" : "Show"}<Ico n="chev" s={14} /></span>
+                      </button>
+                      <div className={`cw-k-ofw ${ofOpen.has(tid) ? "is-on" : ""}`} aria-hidden={!ofOpen.has(tid)}>
+                        <div className="cw-k-ofw-in">
+                          <div className="cw-k-of">
+                            <header className="cw-k-of-h">
+                              <div>
+                                <small>Order form</small>
+                                <b>{ct?.customer?.legalName || ct?.customer?.name || client.name}</b>
                               </div>
-                              {(ln.rows ?? []).length > 1 && (ln.rows ?? []).map((r, k) => (
-                                <div key={k} className="cw-ct-scope-row is-sub"><span>{r.label}{r.detail ? <em> {r.detail}</em> : null}</span><span className="is-r">{eur(r.amount)}</span><span className="is-r">{r.discount ? `−${eur(r.discount)}` : ""}</span><span /></div>
-                              ))}
-                            </div>
-                          ))}
-                          {ct.servicesNote && <p className="cw-ct-scope-note">{ct.servicesNote}</p>}
+                              <dl>
+                                {ct?.contractRef && <div><dt>Contract no.</dt><dd>{ct.contractRef}</dd></div>}
+                                <div><dt>Signed</dt><dd>{(ct?.signDate || gl[0]?.signing_date) ? fmt(ct?.signDate || gl[0]?.signing_date) : "—"}</dd></div>
+                                <div><dt>Term</dt><dd>{termY} {termY === 1 ? "year" : "years"}</dd></div>
+                              </dl>
+                            </header>
+
+                            <section className="cw-k-of-s">
+                              <h5>What was sold</h5>
+                              <div className="cw-k-tbl">
+                                <div className="cw-k-tr is-head is-s"><span>Line</span><span className="is-r">List</span><span className="is-r">Discount</span><span className="is-r">Final</span></div>
+                                {scope.length === 0 && <p className="cw-k-none">Nothing on the order form.</p>}
+                                {scope.map((ln, j) => (
+                                  <div key={j} className="cw-k-sl">
+                                    <div className="cw-k-tr is-s">
+                                      <span><b>{ln.name}</b><em>{ln.sub}</em></span>
+                                      <span className="is-r">{money(ln.list)}</span>
+                                      <span className={`is-r ${ln.discount ? "is-d" : "is-mu"}`}>{ln.discount ? `−${eur(ln.discount)}${ln.pct ? ` (${d2(ln.pct)}%)` : ""}` : "—"}</span>
+                                      <span className="is-r"><b>{money(ln.final)}</b></span>
+                                    </div>
+                                    {ln.rows.map((r, k) => (
+                                      <div key={k} className="cw-k-tr is-s is-sub"><span>{r.label}{r.detail ? <em> {r.detail}</em> : null}</span><span className="is-r">{money(Number(r.amount))}</span><span className="is-r is-d">{Number(r.discount) ? `−${eur(Number(r.discount))}` : ""}</span><span /></div>
+                                    ))}
+                                  </div>
+                                ))}
+                                {ct?.servicesNote && <p className="cw-k-none">{ct.servicesNote}</p>}
+                              </div>
+                            </section>
+
+                            {(ct?.customer || ct?.contactPerson?.name || ct?.adminUser?.name || signers.length > 0) && (
+                              <section className="cw-k-of-s">
+                                <h5>Who signed</h5>
+                                <div className="cw-k-parties">
+                                  {ct?.customer && (
+                                    <div><small>Customer</small><b>{ct.customer.legalName || ct.customer.name || "—"}</b>
+                                      <em>{[ct.customer.vat && `VAT ${ct.customer.vat}`, ct.customer.regNo && `Reg. ${ct.customer.regNo}`].filter(Boolean).join(", ") || "—"}</em>
+                                      {(ct.customer.address || ct.customer.country) && <em title={[ct.customer.address, ct.customer.country ? countryLabel(ct.customer.country) : ""].filter(Boolean).join(", ")}>{[ct.customer.address, ct.customer.country ? countryLabel(ct.customer.country) : ""].filter(Boolean).join(", ")}</em>}
+                                    </div>
+                                  )}
+                                  {ct?.contactPerson?.name && <div><small>Contact person</small><b>{ct.contactPerson.name}</b><em>{ct.contactPerson.role || "—"}</em>{(ct.contactPerson.email || ct.contactPerson.phone) && <em>{[ct.contactPerson.email, ct.contactPerson.phone].filter(Boolean).join(", ")}</em>}</div>}
+                                  {ct?.adminUser?.name && <div><small>Admin user</small><b>{ct.adminUser.name}</b><em>{ct.adminUser.email || "—"}</em></div>}
+                                  {signers.map((x, j) => (
+                                    <div key={j} className={`is-sign is-${x.side}`}><small>{x.side === "supplier" ? "Signed for us" : "Signed for the client"}</small><b>{x.name}</b><em>{[x.role, x.email].filter(Boolean).join(", ") || "—"}</em></div>
+                                  ))}
+                                </div>
+                              </section>
+                            )}
+
+                            <section className="cw-k-of-s">
+                              <h5>Terms</h5>
+                              <dl className="cw-k-terms">
+                                {fact("Licences billed", ct?.billingFrequency ? ({ upfront: "Upfront", annually: "Annually", semiannually: "Every 6 months", quarterly: "Quarterly", monthly: "Monthly" } as Record<string, string>)[ct.billingFrequency] ?? ct.billingFrequency : "")}
+                                {fact("Payment", (ct?.paymentTermsDays ?? gl[0]?.payment_terms_days) ? `${ct?.paymentTermsDays ?? gl[0]?.payment_terms_days} days` : "")}
+                                {fact("Renewal", autoRenew ? `Automatic, every ${ct?.renewYears || gl.find((l) => l.renew_years)?.renew_years || termY} years` : "Not automatic")}
+                                {fact("Non-terminable", (ct?.nonTerminableYears ?? gl[0]?.non_terminable_years) ? `${ct?.nonTerminableYears ?? gl[0]?.non_terminable_years} years` : "")}
+                                {fact("Currency", ct?.currency ? `${ct.currency}${ct.pricesExclVat !== false ? ", excl. VAT" : ""}` : "")}
+                                {fact("E-signature", ct?.esignId || "")}
+                                {ct?.newsletter != null && fact("Newsletter", ct.newsletter ? "Yes" : "No")}
+                                {ct?.marketingConsent != null && fact("Logo & name as reference", ct.marketingConsent ? "Yes" : "No")}
+                              </dl>
+                              {(ct?.termsUrl || !ct) && (
+                                <p className="cw-k-of-foot">
+                                  {ct?.termsUrl && <a href={ct.termsUrl} target="_blank" rel="noreferrer"><Ico n="out" s={12} />General terms, DPA and SLA</a>}
+                                  {!ct && <span>No order form saved on the deal: the figures come from the signed products.</span>}
+                                </p>
+                              )}
+                              {ct?.notes && !editing && <p className="cw-k-notes">{ct.notes}</p>}
+                            </section>
+                          </div>
                         </div>
-                      )}
-                      <div className="cw-ct-money">
-                        <div className="is-lic"><small>Final licence</small><b>{eur(ct.license?.final ?? 0)}</b><em>Year 1 {eur(ct.license?.firstYear ?? 0)}{ct.license?.discount ? ` · −${eur(ct.license.discount)} discount` : ""}</em></div>
-                        <div className="is-svc"><small>Final services</small><b>{eur(ct.services?.final ?? 0)}</b><em>One-off fee{ct.services?.discount ? ` · −${eur(ct.services.discount)} discount` : ""}</em></div>
-                        <div className="is-tot"><small>Contract total</small><b>{eur(ct.total ?? 0)}</b></div>
                       </div>
-                      {(ct.schedule ?? []).length > 0 && (
-                        <div className="cw-ct-years">
-                          {(ct.schedule ?? []).map((y) => (
-                            <div key={y.year} className="cw-ct-year">
-                              <span>Year {y.year}</span>
-                              <span className="cw-ct-bar"><i className="is-lic" style={{ width: `${(y.license / maxY) * 100}%` }} /><i className="is-svc" style={{ width: `${(y.services / maxY) * 100}%` }} /></span>
-                              <b>{eur(y.total)}</b>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      {(ct.signatories ?? []).length > 0 && (
-                        <div className="cw-ct-signers">
-                          {(ct.signatories ?? []).map((x, j) => (
-                            <span key={j} className={`is-${x.side}`}><i>{x.side === "supplier" ? "Signed for us" : "Signed for the client"}</i><b>{x.name}</b><em>{[x.role, x.email, x.phone].filter(Boolean).join(" · ")}</em></span>
-                          ))}
-                        </div>
-                      )}
-                      <div className="cw-ct-foot">
-                        {ct.termsUrl && <a href={ct.termsUrl} target="_blank" rel="noreferrer">General terms, DPA & SLA</a>}
-                        {ct.newsletter != null && <span>Newsletter: {ct.newsletter ? "yes" : "no"}</span>}
-                        {ct.marketingConsent != null && <span>Logo & name: {ct.marketingConsent ? "yes" : "no"}</span>}
-                        {ct.documentFileId && (
-                          <button type="button" className="cw-btn-primary is-sm" onClick={async () => {
-                            const { data: f } = await supabase.from("tracking_files").select("storage_path").eq("id", ct.documentFileId!).maybeSingle();
-                            if (!f) return;
-                            const { data } = await supabase.storage.from("tracking-files").createSignedUrl((f as any).storage_path, 60);
-                            if (data?.signedUrl) window.open(data.signedUrl, "_blank", "noopener");
-                          }}><Ico n="contract" s={14} />Open signed contract</button>
-                        )}
-                      </div>
-                      {ct.notes && <p className="cw-ct-notes">{ct.notes}</p>}
                     </section>
                   );
                 })}
 
-                <section className="cw-card" data-sec="products">
-                  <SecHead icon="contract" tone="violet" title="Signed products" sub={lines.length ? `${activeLines.length} active` : "Added when a deal is won, or by hand"}>
-                    {lines.length > 0 && (
+                <section className="cw-box cw-pt-box" data-sec="products" style={cssVars({ "--i": contractGroups.length + 1 })}>
+                  <SecHead icon="repeat" tone="violet" title="Signed products" sub={lines.length ? `${activeLines.length} active of ${lines.length}${handLines.length ? ` · ${handLines.length} added by hand` : ""}` : "Added when a deal is won, or by hand"}>
+                    {lines.length > 0 && can("products") && (
                       <button className="cw-btn-primary is-sm" onClick={() => setAddLine((v) => !v)}><Ico n={addLine ? "x" : "plus"} s={14} />{addLine ? "Cancel" : "Add product"}</button>
                     )}
                   </SecHead>
-                  {addLine && <AddLineForm clientId={client.id} persons={persons} onCancel={() => setAddLine(false)} onSaved={async () => { setAddLine(false); await reloadLines(); }} />}
+                  {addLine && <AddLineForm clientId={client.id} persons={persons} onCancel={() => setAddLine(false)} onSaved={async () => { setAddLine(false); await reloadLines(); onLinesChanged?.(); }} />}
                   {lines.length === 0 ? (!addLine && (
-                    <button className="cw-empty is-action" onClick={() => setAddLine(true)} disabled={!loaded}>
-                      <span className="cw-empty-plus"><Ico n="plus" s={18} /></span>
-                      <p>{loaded ? <><b>No signed products yet</b><small>Add a signed contract with one of your products</small></> : "Loading…"}</p>
-                    </button>
+                    can("products") ? (
+                      <button className="cw-empty is-action" onClick={() => setAddLine(true)} disabled={!loaded}>
+                        <span className="cw-empty-plus"><Ico n="plus" s={18} /></span>
+                        <p>{loaded ? <><b>No signed products yet</b><small>Add a signed contract with one of your products</small></> : "Loading…"}</p>
+                      </button>
+                    ) : <div className="cw-empty"><Ico n="contract" s={20} /><p>{loaded ? "No signed products yet." : "Loading…"}</p></div>
                   )) : (
-                    <div className="cw-lines">
+                    <div className="cw-pt">
+                      <div className="cw-pt-row is-head"><span>Product</span><span>Term</span><span className="is-r">Billed</span><span className="is-r">Partner</span><span className="is-r">Net</span><span>Status</span><span /></div>
                       {lines.map((l, i) => {
                         const term = termOf(l);
                         const per = periodLabel(l.period);
+                        const open = lnOpen.has(l.id);
+                        const ed = lnEdit?.id === l.id;
+                        const gross = l.recurring ? lineAnnualGross(l) : lineTotal(l) + (Number(l.one_time_fee) || 0);
+                        const net = l.recurring ? lineAnnual(l) : lineOneTime(l);
+                        const ptxt = partnerText(l);
+                        const lv = lnEdit?.v ?? {};
+                        const setLv = (patch: Record<string, any>) => setLnEdit((e) => (e ? { ...e, v: { ...e.v, ...patch } } : e));
+                        const sc = scheduleOf(l);
+                        const preview = ed ? (() => {
+                          const rec = lv.billing !== "once";
+                          const amt = num(lv.amount) ?? 0;
+                          const nx = { ...l, recurring: rec, period: lv.billing === "monthly" ? "monthly" : "yearly", price: amt, quantity: 1, discount_mode: "none", discount_value: 0, term_years: rec ? num(lv.term) : 1, annual_increase_pct: num(lv.inc), breakdown: null } as Line;
+                          const b = rec ? rebuildYears(nx, { mode: lv.pMode, value: num(lv.pValue) ?? 0 }) : { years: [amt], partnerYears: [lv.pMode === "percent" ? (amt * (num(lv.pValue) ?? 0)) / 100 : lv.pMode === "none" ? 0 : Math.min(amt, num(lv.pValue) ?? 0)], total: amt };
+                          return b;
+                        })() : null;
                         return (
-                          <article key={l.id} className={`cw-line ${isActive(l) ? "" : "is-off"}`} style={cssVars({ "--i": i })}
-                            {...tipOn(<TipCard title={l.name} sub={`${l.status || "active"}${str(l.contract_ref) ? ` · Ref ${l.contract_ref}` : ""}`} rows={[
-                              ["Price", `${Number(l.quantity) || 1} × ${eur(Number(l.price) || 0)}${l.recurring ? ` / ${per}` : ""}`],
-                              ["Discount", l.discount_mode && l.discount_mode !== "none" && Number(l.discount_value) ? (l.discount_mode === "percent" ? `${l.discount_value}%` : eur(Number(l.discount_value))) : ""],
-                              [l.recurring && (Number(l.term_years) || 0) > 1 ? `Yearly · year ${Math.min(contractYearOf(l), Math.ceil(Number(l.term_years)) - 1) + 1}` : "Yearly", l.recurring ? eur(lineAnnual(l)) : ""], ["Set-up fee", Number(l.one_time_fee) ? eur(Number(l.one_time_fee)) : ""],
-                              ["Signed", l.signing_date ? fmt(l.signing_date) : ""], ["Start", l.start_date ? fmt(l.start_date) : ""],
-                              ["Term", l.term_years ? `${l.term_years}y${term ? ` · until ${fmtD(term.end)}` : ""}` : ""],
-                              ["Auto-renew", l.auto_renew ? `Yes${l.renew_years ? `, every ${l.renew_years}y` : ""}` : ""],
-                              ["Non-terminable", l.non_terminable_years ? `${l.non_terminable_years}y` : ""],
-                              ["Increase", l.annual_increase_pct != null && l.annual_increase_pct !== "" ? `${l.annual_increase_pct}% / year` : ""],
-                              ["Payment", l.payment_terms_days ? `${l.payment_terms_days} days` : ""],
-                              ["Billing", [str(l.billing_contact_name), str(l.billing_contact_email)].filter(Boolean).join(" · ")],
-                              ["External ref", str(l.external_ref)], ["Deal", l.tracking_id ? dealName(l.tracking_id) : ""],
-                            ]} />)}>
-                            <div className="cw-line-head">
-                              <span className="cw-line-ico" style={cssVars({ "--h": hue(l.name) })}>{initials(l.name)}</span>
-                              <span className="cw-line-id">
-                                <b>{l.name}</b>
-                                <small>{l.recurring ? <><Ico n="repeat" s={12} />Every {per}</> : "One-off"}</small>
+                          <article key={l.id} className={`cw-pt-item ${isActive(l) ? "" : "is-off"} ${open ? "is-exp" : ""} ${ed ? "is-ed" : ""}`} style={cssVars({ "--i": i })}>
+                            <div className="cw-pt-row" role="button" tabIndex={0} aria-expanded={open} onClick={() => { hideTip(); toggleLn(l.id); }} onKeyDown={(e) => { if (e.key === "Enter") toggleLn(l.id); }}>
+                              <span className="cw-pt-name">
+                                <span className="cw-line-ico" style={cssVars({ "--h": hue(l.name) })}>{initials(l.name)}</span>
+                                <span><b>{l.name}</b><small>{l.recurring ? `Every ${per}` : "One-off"} · {l.tracking_id ? dealName(l.tracking_id) : "added by hand"}</small></span>
                               </span>
-                              <span className="cw-line-price"><b>{eur(lineTotal(l))}{l.recurring && <em> / {per}</em>}</b></span>
-                              {dupLines.has(l.id) && <span className="cw-status is-dup" title="The same product from the same deal is here more than once">Duplicate</span>}
-                              <span className={`cw-status ${isActive(l) ? "is-open" : "is-closed"}`}><i />{l.status || "active"}</span>
-                              <span className={`cw-line-del ${delLine === l.id ? "is-asking" : ""}`} onMouseEnter={hideTip}>
-                                {delLine === l.id ? (
-                                  <>
-                                    <span>Delete this signed product?</span>
-                                    <button className="is-yes" disabled={delLineBusy} onClick={() => void deleteLine(l.id)}>{delLineBusy ? "Deleting…" : "Delete"}</button>
-                                    <button disabled={delLineBusy} onClick={() => { setDelLine(null); setDelLineErr(null); }}>Keep</button>
-                                  </>
-                                ) : (
-                                  <button className="is-x" onClick={() => { setDelLineErr(null); setDelLine(l.id); }} aria-label={`Delete ${l.name}`} title="Delete this signed product"><Ico n="trash" s={13} /></button>
-                                )}
+                              <span className="cw-pt-term">
+                                {term ? <><b>{fmtMY(term.start)} → {fmtMY(term.end)}</b><i><em style={{ width: `${term.pct * 100}%` }} /></i></> : <b className="is-muted">{l.signing_date ? `Signed ${fmt(l.signing_date)}` : "No term"}</b>}
+                              </span>
+                              <span className="is-r cw-pt-v">{eur(gross)}{l.recurring && <small>/yr</small>}</span>
+                              <span className="is-r cw-pt-p" {...tipOn(ptxt ? <TipCard title="Partner share" sub={ptxt} /> : null)}>{gross - net > 0.5 ? `−${eur(gross - net)}` : "—"}</span>
+                              <span className="is-r cw-pt-v is-net">{eur(net)}{l.recurring && <small>/yr</small>}</span>
+                              <span className="cw-pt-st">
+                                <span className={`cw-status ${isActive(l) ? "is-open" : "is-closed"}`}><i />{l.status || "active"}</span>
+                                {dupLines.has(l.id) && <span className="cw-status is-dup" title="The same product from the same deal is here more than once">Twice</span>}
+                              </span>
+                              <span className="cw-pt-acts" onClick={(e) => e.stopPropagation()}>
+                                {can("products") && !ed && <button type="button" className="cw-icon-btn is-sm" onClick={() => { startLnEdit(l); setLnOpen((s) => new Set(s).add(l.id)); }} aria-label={`Edit ${l.name}`} {...tipOn(<TipCard title="Edit this product" />)}><Ico n="edit" s={13} /></button>}
+                                <button type="button" className="cw-icon-btn is-sm cw-pt-chev" onClick={() => toggleLn(l.id)} aria-label={open ? "Less" : "More"}><Ico n="chev" s={14} /></button>
                               </span>
                             </div>
-                            {delLineErr?.id === l.id && <p className="cw-err">{delLineErr.msg}</p>}
-                            <div className="cw-line-facts">
-                              {[
-                                ["Signed", l.signing_date ? fmt(l.signing_date) : ""],
-                                ["Starts", l.start_date ? fmt(l.start_date) : ""],
-                                ["Term", l.term_years ? `${l.term_years}y${term ? ` · to ${fmtD(term.end)}` : ""}` : ""],
-                                ["Increase", l.annual_increase_pct != null && l.annual_increase_pct !== "" && Number(l.annual_increase_pct) ? `+${l.annual_increase_pct}%/yr` : ""],
-                                ["Renewal", l.auto_renew ? `Auto${l.renew_years ? ` · ${l.renew_years}y` : ""}` : ""],
-                                ["Non-terminable", l.non_terminable_years ? `${l.non_terminable_years}y` : ""],
-                                ["Payment", l.payment_terms_days ? `Net ${l.payment_terms_days}` : ""],
-                                ["Contract no.", str(l.contract_ref)],
-                                ["Bill to", str(l.billing_contact_name)],
-                                ["From", l.tracking_id ? dealName(l.tracking_id) : "Added by hand"],
-                              ].filter(([, v]) => v).map(([k, v]) => <span key={k}><i>{k}</i>{v}</span>)}
-                            </div>
-                            {Array.isArray(l.breakdown?.rows) && l.breakdown.rows.length > 0 && (
-                              <div className="cw-line-bd">
-                                {l.breakdown.rows.map((r: any, j: number) => (
-                                  <div key={j}>
-                                    <span>{r.label}{r.detail ? <em> {r.detail}</em> : null}</span>
-                                    <b>{eur(Number(r.amount) || 0)}{Number(r.discount) ? <i> −{eur(Number(r.discount))}</i> : null}</b>
+
+                            {ed && (
+                              <div className="cw-ed is-line" onMouseEnter={hideTip}>
+                                <div className="cw-ed-grid">
+                                  <Fld label="Status"><Select size="sm" value={lv.status} onChange={(x) => setLv({ status: x })} options={[
+                                    { value: "active", label: "Active" }, { value: "paused", label: "Paused" }, { value: "cancelled", label: "Cancelled" }, { value: "ended", label: "Ended" },
+                                  ]} /></Fld>
+                                  <Fld label="Billed"><Select size="sm" value={lv.billing} onChange={(x) => setLv({ billing: x })} options={[
+                                    { value: "yearly", label: "Every year" }, { value: "monthly", label: "Every month" }, { value: "once", label: "One-off" },
+                                  ]} /></Fld>
+                                  <Fld label={lv.billing === "once" ? "Price" : `Price a ${lv.billing === "monthly" ? "month" : "year"} (year 1)`}><span className="cw-ed-unit"><input inputMode="decimal" value={lv.amount} onChange={(e) => setLv({ amount: e.target.value })} /><em>€</em></span></Fld>
+                                  <Fld label="Set-up fee"><span className="cw-ed-unit"><input inputMode="decimal" value={lv.fee} placeholder="0" onChange={(e) => setLv({ fee: e.target.value })} /><em>€</em></span></Fld>
+                                  <Fld label="Signed"><span className="cw-date"><DatePicker value={lv.signing} onChange={(d) => setLv({ signing: d })} /></span></Fld>
+                                  <Fld label="Starts"><span className="cw-date"><DatePicker value={lv.start} onChange={(d) => setLv({ start: d })} /></span></Fld>
+                                  {lv.billing !== "once" && <Fld label="Term (years)"><input inputMode="decimal" value={lv.term} placeholder="1" onChange={(e) => setLv({ term: e.target.value })} /></Fld>}
+                                  {lv.billing !== "once" && (
+                                    <Fld label="Increase a year">
+                                      {sc && sc.count > 1 ? <span className="cw-ed-note">Per term · {sc.increases.filter(Boolean).map((x) => `+${x}%`).join(", ") || "none"}</span>
+                                        : <span className="cw-ed-unit"><input inputMode="decimal" value={lv.inc} placeholder="0" onChange={(e) => setLv({ inc: e.target.value })} /><em>%</em></span>}
+                                    </Fld>
+                                  )}
+                                  <Fld label="Partner share" span={2}>
+                                    <span className="cw-ed-inline">
+                                      <Select size="sm" value={lv.pMode} onChange={(x) => setLv({ pMode: x })} options={[
+                                        { value: "none", label: "No partner" }, { value: "percent", label: "% of every year" }, { value: "amount", label: "Amount a year" }, { value: "once", label: "Once, year 1" },
+                                      ]} />
+                                      {lv.pMode !== "none" && <span className="cw-ed-unit is-sm"><input inputMode="decimal" value={lv.pValue} placeholder="0" onChange={(e) => setLv({ pValue: e.target.value })} /><em>{lv.pMode === "percent" ? "%" : "€"}</em></span>}
+                                    </span>
+                                  </Fld>
+                                  {lv.billing !== "once" && (
+                                    <Fld label="Renewal">
+                                      <span className="cw-ed-inline">
+                                        <Toggle on={!!lv.autoRenew} onClick={() => setLv({ autoRenew: !lv.autoRenew })} label={lv.autoRenew ? "Automatic" : "No"} />
+                                        {lv.autoRenew && <><em>every</em><input className="is-xs" inputMode="decimal" value={lv.renew} placeholder={String(lv.term || 1)} onChange={(e) => setLv({ renew: e.target.value })} /><em>y</em></>}
+                                      </span>
+                                    </Fld>
+                                  )}
+                                  <Fld label="Non-terminable (years)"><input inputMode="decimal" value={lv.nonTerm} placeholder="—" onChange={(e) => setLv({ nonTerm: e.target.value })} /></Fld>
+                                  <Fld label="Payment (days)"><input inputMode="numeric" value={lv.pay} placeholder="30" onChange={(e) => setLv({ pay: e.target.value })} /></Fld>
+                                  <Fld label="Contract no."><input value={lv.ref} placeholder="—" onChange={(e) => setLv({ ref: e.target.value })} /></Fld>
+                                </div>
+                                {preview && (
+                                  <div className="cw-ed-prev">
+                                    {preview.years.map((y, k) => (
+                                      <span key={k}><i>{lv.billing === "once" ? "Once" : `Year ${k + 1}`}</i><b>{eur(y - (preview.partnerYears[k] ?? 0))}</b>{(preview.partnerYears[k] ?? 0) > 0.5 && <em>{eur(y)} − {eur(preview.partnerYears[k])} partner</em>}</span>
+                                    ))}
                                   </div>
-                                ))}
-                                <div className="is-total">
-                                  <span>{l.breakdown.version ? `Sold as ${l.breakdown.version}` : "Sold"}{l.breakdown.multiplier ? ` · ${l.breakdown.multiplier}` : ""}</span>
-                                  <b>{eur(Number(l.breakdown.total) || 0)}</b>
+                                )}
+                                {lnErr && <p className="cw-err">{lnErr}</p>}
+                                <div className="cw-ed-foot">
+                                  <span>Net to us, year by year, as it will count in the ARR and the client list.</span>
+                                  <button type="button" className="cw-ghost" onClick={() => setLnEdit(null)}>Cancel</button>
+                                  <button type="button" className="cw-btn-primary is-sm" disabled={lnBusy} onClick={() => void saveLnEdit(l)}>{lnBusy ? "Saving…" : "Save product"}</button>
                                 </div>
                               </div>
                             )}
-                            {l.recurring && (Number(l.term_years) || 0) > 1 && (() => {
-                              const sc = scheduleOf(l);
-                              const ts = termsOf(l, sc);
-                              const editing = schedEdit?.id === l.id;
-                              const s0 = str(l.start_date) || str(l.signing_date);
-                              const el = s0 ? (Date.now() - toDate(s0).getTime()) / (365.25 * DAY) : -1;
-                              return (
-                                <div className="cw-line-sched" onMouseEnter={hideTip}>
-                                  {!editing ? (
-                                    <div className="cw-line-terms">
-                                      {sc && sc.count > 1 ? ts.map((t) => (
-                                        <span key={t.i} className={el >= t.from && el < t.from + t.len ? "is-now" : ""}>
-                                          <i>T{t.i + 1}</i>{eur(t.unit)}<em>/{per}</em>{t.inc ? <small>+{t.inc}%</small> : null}
-                                        </span>
-                                      )) : <span className="is-plain">Paid as one {l.term_years}-year term</span>}
-                                      <button className="cw-linkbtn" onClick={() => { setSchedErr(null); setSchedEdit({ id: l.id, v: sc ?? { count: 1, increases: [] } }); }}>
-                                        {sc && sc.count > 1 ? "Edit terms" : "Split into terms"}<Ico n="arrow" s={12} />
-                                      </button>
+
+                            <div className={`cw-reveal ${open && !ed ? "is-on" : ""}`} aria-hidden={!open || ed}>
+                              <div className="cw-reveal-in">
+                                <div className="cw-pt-more">
+                                  <div className="cw-pt-cols">
+                                    <dl className="cw-dl">
+                                      {([
+                                        ["Signed", l.signing_date ? fmt(l.signing_date) : ""],
+                                        ["Starts", l.start_date ? fmt(l.start_date) : ""],
+                                        [l.auto_renew ? "Renews" : "Ends", term ? fmtD(term.end) : ""],
+                                        ["Term", l.term_years ? `${l.term_years} ${Number(l.term_years) === 1 ? "year" : "years"}` : ""],
+                                        ["Price", `${eur(lineTotal(l))}${l.recurring ? ` a ${per}` : ""}`],
+                                        ["Yearly increase", Number(l.annual_increase_pct) ? `${l.annual_increase_pct}%` : ""],
+                                        ["Set-up fee", Number(l.one_time_fee) ? eur(Number(l.one_time_fee)) : ""],
+                                        ["Renewal", l.recurring ? (l.auto_renew ? `Automatic${l.renew_years ? `, every ${l.renew_years} years` : ""}` : "Not automatic") : ""],
+                                        ["Non-terminable", l.non_terminable_years ? `${l.non_terminable_years} years` : ""],
+                                        ["Payment", l.payment_terms_days ? `${l.payment_terms_days} days` : ""],
+                                        ["Contract no.", str(l.contract_ref)],
+                                        ["Bill to", str(l.billing_contact_name)],
+                                        ["Partner", ptxt],
+                                        ["From", l.tracking_id ? dealName(l.tracking_id) : "Added by hand"],
+                                      ] as [string, string][]).filter(([, v]) => v).map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}
+                                    </dl>
+                                    <div className="cw-pt-years">
+                                      <div className="cw-pt-yr is-head"><span>{l.recurring ? "Year" : "Paid"}</span><span>Billed</span><span>Partner</span><span>Net</span></div>
+                                      {Array.from({ length: yearsOf(l) }, (_, y) => {
+                                        const g = lineYearGross(l, y), pc = partnerCut(l, y);
+                                        const now = l.recurring && runsAt(l) && contractYearOf(l) === y;
+                                        return (
+                                          <div key={y} className={`cw-pt-yr ${now ? "is-now" : ""}`}>
+                                            <span>{l.recurring ? <>Year {y + 1}{now && <i>now</i>}</> : "Once"}</span>
+                                            <span>{eur(g)}</span>
+                                            <span className="is-p">{pc > 0.5 ? `−${eur(pc)}` : "—"}</span>
+                                            <span><b>{eur(Math.max(0, g - pc))}</b></span>
+                                          </div>
+                                        );
+                                      })}
                                     </div>
-                                  ) : (
-                                    <>
-                                      <ScheduleEditor years={Number(l.term_years) || 1} unit={lineTotal(l)} per={per} value={schedEdit.v} onChange={(v) => setSchedEdit({ id: l.id, v })} />
-                                      {schedErr && <p className="cw-err">{schedErr}</p>}
-                                      <div className="cw-logactions">
-                                        <button className="cw-ghost" onClick={() => setSchedEdit(null)}>Cancel</button>
-                                        <button className="cw-btn-primary is-sm" onClick={async () => {
-                                          const v = schedEdit.v.count > 1 || schedEdit.v.increases.some(Boolean) ? schedEdit.v : null;
-                                          const { error } = await supabase.from("client_products").update({ schedule: v }).eq("id", l.id);
-                                          if (error) { setSchedErr(/schedule/i.test(error.message) ? "Run client_terms.sql in Supabase first." : error.message); return; }
-                                          setLines((xs) => xs.map((x) => (x.id === l.id ? { ...x, schedule: v } : x)));
-                                          setSchedEdit(null);
-                                        }}>Save terms</button>
+                                  </div>
+                                  {l.recurring && (Number(l.term_years) || 0) > 1 && (() => {
+                                    const ts = termsOf(l, sc);
+                                    const editing = schedEdit?.id === l.id;
+                                    const s0 = str(l.start_date) || str(l.signing_date);
+                                    const el = s0 ? (Date.now() - toDate(s0).getTime()) / (365.25 * DAY) : -1;
+                                    return (
+                                      <div className="cw-line-sched" onMouseEnter={hideTip}>
+                                        {!editing ? (
+                                          <div className="cw-line-terms">
+                                            {sc && sc.count > 1 ? ts.map((t) => (
+                                              <span key={t.i} className={el >= t.from && el < t.from + t.len ? "is-now" : ""}>
+                                                <i>T{t.i + 1}</i>{eur(t.unit)}<em>/{per}</em>{t.inc ? <small>+{t.inc}%</small> : null}
+                                              </span>
+                                            )) : <span className="is-plain">Paid as one {l.term_years}-year term</span>}
+                                            {can("products") && (
+                                              <button className="cw-linkbtn" onClick={() => { setSchedErr(null); setSchedEdit({ id: l.id, v: sc ?? { count: 1, increases: [] } }); }}>
+                                                {sc && sc.count > 1 ? "Edit terms" : "Split into terms"}<Ico n="arrow" s={12} />
+                                              </button>
+                                            )}
+                                          </div>
+                                        ) : (
+                                          <>
+                                            <ScheduleEditor years={Number(l.term_years) || 1} unit={lineTotal(l)} per={per} value={schedEdit.v} onChange={(v) => setSchedEdit({ id: l.id, v })} />
+                                            {schedErr && <p className="cw-err">{schedErr}</p>}
+                                            <div className="cw-logactions">
+                                              <button className="cw-ghost" onClick={() => setSchedEdit(null)}>Cancel</button>
+                                              <button className="cw-btn-primary is-sm" onClick={async () => {
+                                                const v = schedEdit.v.count > 1 || schedEdit.v.increases.some(Boolean) ? schedEdit.v : null;
+                                                const { error } = await supabase.from("client_products").update({ schedule: v }).eq("id", l.id);
+                                                if (error) { setSchedErr(/schedule/i.test(error.message) ? "Run client_terms.sql in Supabase first." : error.message); return; }
+                                                setLines((xs) => xs.map((x) => (x.id === l.id ? { ...x, schedule: v } : x)));
+                                                setSchedEdit(null);
+                                              }}>Save terms</button>
+                                            </div>
+                                          </>
+                                        )}
                                       </div>
-                                    </>
+                                    );
+                                  })()}
+                                  {can("products") && (
+                                    <div className="cw-pt-foot">
+                                      {delLineErr?.id === l.id && <p className="cw-err">{delLineErr.msg}</p>}
+                                      <span className={`cw-line-del is-shown ${delLine === l.id ? "is-asking" : ""}`}>
+                                        {delLine === l.id ? (
+                                          <>
+                                            <span>Delete this signed product?</span>
+                                            <button className="is-yes" disabled={delLineBusy} onClick={() => void deleteLine(l.id)}>{delLineBusy ? "Deleting…" : "Delete"}</button>
+                                            <button disabled={delLineBusy} onClick={() => { setDelLine(null); setDelLineErr(null); }}>Keep</button>
+                                          </>
+                                        ) : (
+                                          <button className="cw-pt-delbtn" onClick={() => { setDelLineErr(null); setDelLine(l.id); }}><Ico n="trash" s={13} />Delete</button>
+                                        )}
+                                      </span>
+                                    </div>
                                   )}
                                 </div>
-                              );
-                            })()}
-                            {term && (
-                              <div className="cw-term">
-                                <div className="cw-term-bar"><span style={{ width: `${term.pct * 100}%` }} /></div>
-                                <em className={term.left < 60 ? "is-soon" : ""}>{term.left < 0 ? "Ended" : `${l.auto_renew ? "Renews" : "Ends"} ${fmtD(term.end)}`}</em>
                               </div>
-                            )}
+                            </div>
                           </article>
                         );
                       })}
+                      <div className="cw-pt-row is-tot">
+                        <span><b>Running today</b></span><span />
+                        <span className="is-r cw-pt-v">{eur(grossYear)}<small>/yr</small></span>
+                        <span className="is-r cw-pt-p">{partnerYearNow > 0.5 ? `−${eur(partnerYearNow)}` : "—"}</span>
+                        <span className="is-r cw-pt-v is-net">{eur(recurringYear)}<small>/yr</small></span>
+                        <span /><span />
+                      </div>
                     </div>
                   )}
                 </section>
 
-                <section className="cw-card" data-sec="services">
-                  <SecHead icon="briefcase" tone="green" title="Service engagements" sub="Hover a row for rates, tax and payment" />
+                <section className="cw-card cw-box" data-sec="services">
+                  <SecHead icon="briefcase" tone="green" title="Service engagements" sub={projects.length ? `${projects.length} project${projects.length === 1 ? "" : "s"} · open one to see its roles, days and team` : "Services sold, delivered as projects"} />
                   {(() => {
                     // Agreed in a contract but not built as a project yet (management builds it from the handoff).
                     const agreed = Object.values(dealContracts).flatMap((ct) => (ct.lines ?? []).filter((ln) => ln.kind === "service").map((ln) => ({ ln, ct })));
@@ -2466,26 +3130,10 @@ export default function ClientWorkspace({
                     );
                   })()}
                   {projects.length === 0 ? (Object.values(dealContracts).some((ct) => (ct.lines ?? []).some((ln) => ln.kind === "service")) ? null : <div className="cw-empty"><Ico n="briefcase" s={20} /><p>No projects signed yet.</p></div>) : (
-                    <div className="cw-eng">
-                      <div className="cw-eng-row is-head"><span>Service</span><span>Signed</span><span>Days</span><span>Day rate</span><span className="is-r">Value</span></div>
-                      {projects.map((p, i) => {
-                        const rate = avgRate(p);
-                        const un = unitOf(p);
-                        return (
-                          <button className="cw-eng-row" key={p.id} style={cssVars({ "--i": i })} onClick={() => { hideTip(); onOpenProject(p); }}
-                            {...tipOn(<TipCard title={typeName(p.projectTypeId)} rows={[
-                              ...roleTipRows(p, un),
-                              ["Discount", totalDiscountOf(p) ? `${eur(totalDiscountOf(p))} total` : ""],
-                              ["Tax", p.taxed ? `${p.taxRate}%` : "No tax"], ["Payment", p.paymentDays ? `${p.paymentDays} days` : ""],
-                            ]} />)}>
-                            <span data-k="Service"><b>{typeName(p.projectTypeId)}</b></span>
-                            <span data-k="Signed">{fmt(p.signingDate)}</span>
-                            <span data-k="Days">{d2(signedOf(p))}{un}</span>
-                            <span data-k="Day rate">{eur(rate)}</span>
-                            <span data-k="Value" className="is-r"><b>{eur(projectValue(p))}</b></span>
-                          </button>
-                        );
-                      })}
+                    <div className="cw-pt cw-pj-list">
+                      <div className="cw-pj-row is-head"><span>Service</span><span>Status</span><span>Delivered</span><span className="is-r">Value</span><span>Team</span><span /></div>
+                      {projects.map((p, i) => projectRow(p, i, false))}
+                      {projTotal(projects)}
                     </div>
                   )}
                 </section>
@@ -2709,7 +3357,6 @@ function ClientMail({ client, persons }: { client: Client; persons: Person[] }) 
   const [routing, setRouting] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [showQuiet, setShowQuiet] = useState(false);
   /** Senders who aren't this client's people but are in Contacts (any company). */
   const [found, setFound] = useState<Map<string, { name: string; sub: string }>>(new Map());
 
@@ -2835,14 +3482,6 @@ function ClientMail({ client, persons }: { client: Client; persons: Person[] }) 
     ...[...senders.known, ...senders.others].map((s) => ({ value: s.email, label: `${s.name} (${s.n})` })),
     ...quietList.map((p) => ({ value: lcm(p.email), label: `${p.name} (0)` })),
   ];
-  const whoBtn = (k: MailWho, av: React.ReactNode, title: string, sub: string | null, n: number, i: number, tone = "") => (
-    <button type="button" key={k} className={`cw-mail-p ${who === k ? "is-on" : ""} ${tone}`} style={cssVars({ "--i": i })}
-      onClick={() => { setWho(k); setSel(null); }} title={sub ? `${title} · ${sub}` : title}>
-      <span className="cw-mail-av">{av}</span>
-      <span className="cw-mail-p-t"><b>{title}</b>{sub && <small>{sub}</small>}</span>
-      <em>{n}</em>
-    </button>
-  );
   const routeLine = addrs.length
     ? <>Mail from <b>{addrs.slice(0, 2).map(nameOf).join(", ")}</b>{addrs.length > 2 ? ` and ${addrs.length - 2} more` : ""} lands here{action === "create" ? " and opens a ticket" : ""}, along with mail from this client's contacts.</>
     : <>Mail from this client's contacts lands here. Add their domain so new addresses are caught too.</>;
@@ -2882,21 +3521,14 @@ function ClientMail({ client, persons }: { client: Client; persons: Person[] }) 
       {missing && <p className="cw-err">{MAIL_ROUTING_SQL}</p>}
       {err && <p className="cw-err">{err}</p>}
 
+      {msgs && msgs.length === 0 ? (
+        <div className="cw-mail-zero">
+          <span className="cw-empty-plus"><Ico n="mail" s={20} /></span>
+          <b>No e-mails from this client yet</b>
+          <small>{addrs.length ? "New mail from their addresses will show up here." : quiet ? `Mail from their ${quiet} contact${quiet === 1 ? "" : "s"} lands here on its own. Add their @domain so new addresses are caught too.` : "Add a mail rule so their e-mails land here."}</small>
+        </div>
+      ) : (
       <div className="cw-mail-box">
-        <nav className="cw-mail-who" aria-label="Who wrote">
-          {whoBtn("all", <Ico n="mail" s={13} />, "Everyone", null, msgs?.length ?? 0, 0, "is-all")}
-          {sent > 0 && whoBtn("out", <Ico n="send" s={12} />, "Sent by us", null, sent, 1, "is-out")}
-          {senders.known.length > 0 && <span className="cw-mail-k">People</span>}
-          {senders.known.map((s, i) => whoBtn(s.email, initials(s.name), s.name, s.sub, s.n, i + 2, s.kind === "crm" ? "is-crm" : ""))}
-          {senders.others.length > 0 && <span className="cw-mail-k">Other senders</span>}
-          {senders.others.map((s, i) => whoBtn(s.email, initials(s.name), s.name, s.name === s.email ? null : s.email, s.n, i + 2 + senders.known.length, "is-other"))}
-          {quiet > 0 && msgs && (
-            <button type="button" className={`cw-mail-quiet ${showQuiet ? "is-open" : ""}`} onClick={() => setShowQuiet(!showQuiet)} aria-expanded={showQuiet}>
-              {quiet} {quiet === 1 ? "person hasn't" : "people haven't"} written yet<Ico n="chev" s={12} />
-            </button>
-          )}
-          {showQuiet && quietList.map((p, i) => whoBtn(lcm(p.email), initials(p.name), p.name, personSub(p), 0, i, "is-quiet"))}
-        </nav>
 
         <div className="cw-mail-list">
           <div className="cw-mail-bar">
@@ -2974,6 +3606,7 @@ function ClientMail({ client, persons }: { client: Client; persons: Person[] }) 
           )}
         </div>
       </div>
+      )}
       {ticket && <TicketDrawerById id={ticket} onClose={() => { setTicket(null); void load(); }} />}
     </div>
   );
