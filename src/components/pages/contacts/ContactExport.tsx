@@ -20,6 +20,7 @@ import {
 import { buildCatalog, contactMatches, condReady, cellOf, formatOf, OPS, DEFAULT_OP, NO_VALUE, type XF, type Ctx, type Cond, type Src, type Root, type LastTouch } from "./exportCatalog";
 import { listImportBatches, batchLabel } from "./importBatches";
 import Select from "../../framework/Select";
+import LinkPopover, { captureLinkTarget, placeLink, type LinkTarget } from "../../framework/LinkPopover";
 import { sendOutlookMail, type OutlookMail, type OutlookMailResult } from "../../api/outlookSync";
 import ActionsMenu, { type ActionItem } from "../../framework/ActionsMenu";
 import "./ContactExport.css";
@@ -576,6 +577,27 @@ interface MkSend {
   replied_at?: string | null; bounced_at?: string | null; unsubscribed_at?: string | null;
 }
 interface MkUnsub { id: string; email: string; reason: string | null; source: string; created_at: string }
+/** An e-mail kept to start campaigns from (109_mk_templates.sql). */
+interface MkTemplate { id: string; name: string; subject: string; preheader: string | null; body_html: string; used_count: number; created_by: string | null; created_at: string; updated_at: string }
+const NEEDS_TPL = "E-mail templates need 109_mk_templates.sql in Supabase.";
+const tplMissing = (m: string) => /mk_templates|relation|schema cache|does not exist/i.test(m);
+async function loadMkTemplates(): Promise<{ rows: MkTemplate[]; missing: boolean }> {
+  const { data, error } = await supabase.from("mk_templates").select("*").order("updated_at", { ascending: false });
+  if (error) return { rows: [], missing: tplMissing(error.message) };
+  return { rows: (data ?? []) as MkTemplate[], missing: false };
+}
+async function saveMkTemplate(t: Partial<MkTemplate>): Promise<{ row: MkTemplate | null; error: string | null }> {
+  const row = { name: t.name?.trim() || "Untitled template", subject: t.subject ?? "", preheader: t.preheader ?? null, body_html: t.body_html ?? "", updated_at: new Date().toISOString() };
+  const res = t.id ? await supabase.from("mk_templates").update(row).eq("id", t.id).select("*").single() : await supabase.from("mk_templates").insert(row).select("*").single();
+  return { row: (res.data as any) ?? null, error: res.error ? (tplMissing(res.error.message) ? NEEDS_TPL : res.error.message) : null };
+}
+async function deleteMkTemplate(id: string): Promise<string | null> {
+  const { error } = await supabase.from("mk_templates").delete().eq("id", id);
+  return error?.message ?? null;
+}
+/** The template a new campaign starts from (set by "Use" in Templates, taken by the composer once). */
+let pendingTpl: MkTemplate | null = null;
+const takePendingTpl = () => { const t = pendingTpl; pendingTpl = null; if (t) void supabase.from("mk_templates").update({ used_count: (t.used_count ?? 0) + 1 }).eq("id", t.id); return t; };
 type RecState = "ok" | "no_email" | "invalid" | "opted_out" | "duplicate";
 interface Recipient { key: string; contactId: string | null; name: string; email: string; company: string; state: RecState; merge: Record<string, string> }
 
@@ -1164,6 +1186,9 @@ interface HubCtx {
 }
 
 const MhIco = {
+  tpl: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3.5" y="3.5" width="17" height="17" rx="3" /><path d="M3.5 9h17M9 9v11.5" /></svg>,
+  trash: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" /></svg>,
+  save: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M5 3h11l3 3v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" /><path d="M7 3v5h8V3M7 21v-7h10v7" /></svg>,
   social: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="12" r="2.6" /><circle cx="18" cy="6" r="2.6" /><circle cx="18" cy="18" r="2.6" /><path d="M8.3 10.8l7.4-3.6M8.3 13.2l7.4 3.6" /></svg>,
   cal: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4.5" width="18" height="16" rx="3" /><path d="M3 9h18M8 2.5v4M16 2.5v4" /></svg>,
   spark: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l1.8 4.9L19 9.7l-5.2 1.8L12 16.4l-1.8-4.9L5 9.7l5.2-1.8z" /><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z" /></svg>,
@@ -1368,12 +1393,25 @@ function Overview({ x }: { x: HubCtx }) {
 function EmailTab({ x }: { x: HubCtx }) {
   const [st, setSt] = useState<"all" | "active" | "draft" | "done">("all");
   const [q, setQ] = useState("");
+  /** campaigns, or the saved e-mail templates */
+  const [view, setViewRaw] = useState<"campaigns" | "templates">(() => { try { return sessionStorage.getItem("mk-email-view") === "templates" ? "templates" : "campaigns"; } catch { return "campaigns"; } });
+  const setView = (v: "campaigns" | "templates") => { setViewRaw(v); try { sessionStorage.setItem("mk-email-view", v); } catch { /* private mode */ } };
+  const [tpls, setTpls] = useState<MkTemplate[] | null>(null);
+  const [tplMiss, setTplMiss] = useState(false);
+  useEffect(() => { loadMkTemplates().then((r) => { setTpls(r.rows); setTplMiss(r.missing); }); }, []);
+  const viewSeg = (
+    <MkSeg size="sm" value={view} onChange={setView}
+      options={[{ value: "campaigns", label: "Campaigns", count: x.campaigns.length }, { value: "templates", label: "Templates", count: tpls?.length ?? 0 }]} />
+  );
+  if (view === "templates") return <TemplatesView x={x} tpls={tpls} setTpls={setTpls} missing={tplMiss} seg={viewSeg} />;
   const group = (c: MkCampaign) => (c.status === "sending" || c.status === "paused" || c.status === "scheduled" ? "active" : c.status === "draft" ? "draft" : "done");
   const nBy = (g: string) => x.campaigns.filter((c) => group(c) === g).length;
   const nq = norm(q);
   const shown = x.campaigns.filter((c) => (st === "all" || group(c) === st) && (!nq || norm(`${c.name} ${c.subject}`).includes(nq)));
   if (!x.campaigns.length) {
     return (
+      <div className="mkh-email">
+      {(tpls?.length ?? 0) > 0 && <div className="mkh-toolbar">{viewSeg}</div>}
       <div className="mk-empty">
         <div className="mk-empty-art" aria-hidden="true"><span className="is-a">{MkIco.mail}</span><span className="is-b">{MhIco.eye}</span><span className="is-c">{MhIco.reply}</span></div>
         <h3>Send your first campaign</h3>
@@ -1384,11 +1422,14 @@ function EmailTab({ x }: { x: HubCtx }) {
             : <button className="mk-btn is-primary is-big" onClick={() => x.go("audiences")}>{MkIco.list}Build a list</button>}
         </div>
       </div>
+      </div>
     );
   }
   return (
     <div className="mkh-email">
       <div className="mkh-toolbar">
+        {viewSeg}
+        <span className="mkh-tsep" />
         <MkSeg size="sm" value={st} onChange={setSt}
           options={[{ value: "all", label: "All", count: x.campaigns.length }, { value: "active", label: "In progress", count: nBy("active") }, { value: "draft", label: "Drafts", count: nBy("draft") }, { value: "done", label: "Sent", count: nBy("done") }]} />
         <label className="mk-search">{MkIco.search}<input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a campaign" /></label>
@@ -1426,6 +1467,89 @@ function EmailTab({ x }: { x: HubCtx }) {
   );
 }
 
+/** Marketing › E-mail › Templates: the e-mails kept to start campaigns from. */
+function TemplatesView({ x, tpls, setTpls, missing, seg }: { x: HubCtx; tpls: MkTemplate[] | null; setTpls: (f: (xs: MkTemplate[] | null) => MkTemplate[] | null) => void; missing: boolean; seg: React.ReactNode }) {
+  const [q, setQ] = useState("");
+  const [ren, setRen] = useState<{ id: string; name: string } | null>(null);
+  const [peek, setPeek] = useState<MkTemplate | null>(null);
+  const nq = norm(q);
+  const shown = (tpls ?? []).filter((t) => !nq || norm(`${t.name} ${t.subject}`).includes(nq));
+  const use = (t: MkTemplate) => { pendingTpl = t; x.openCampaign("new"); };
+  const rename = async () => {
+    if (!ren) return;
+    const t = (tpls ?? []).find((y) => y.id === ren.id);
+    if (!t || !ren.name.trim() || ren.name.trim() === t.name) { setRen(null); return; }
+    const r = await saveMkTemplate({ ...t, name: ren.name });
+    setRen(null);
+    if (r.error || !r.row) { x.toast(r.error ?? "Not saved"); return; }
+    setTpls((xs) => (xs ?? []).map((y) => (y.id === r.row!.id ? r.row! : y)));
+  };
+  const drop = async (t: MkTemplate) => {
+    const e = await deleteMkTemplate(t.id);
+    if (e) { x.toast(e); return; }
+    setTpls((xs) => (xs ?? []).filter((y) => y.id !== t.id));
+    x.toast(`“${t.name}” deleted`);
+  };
+  const demo = { first_name: "Laura", last_name: "Gil", full_name: "Laura Gil", company: "Acme Iberia", position: "CFO", city: "Madrid", email: "laura@example.com" };
+  return (
+    <div className="mkh-email">
+      <div className="mkh-toolbar">
+        {seg}
+        <label className="mk-search">{MkIco.search}<input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a template" /></label>
+        <span className="mk-grow" />
+        <button className="mk-btn is-primary" onClick={() => x.openCampaign("new")} disabled={x.missing}>{MkIco.plus}New e-mail</button>
+      </div>
+      {tpls == null ? <MkLoading /> : missing ? (
+        <div className="mk-empty-sm is-wide">{MhIco.tpl}<span>{NEEDS_TPL}</span></div>
+      ) : !tpls.length ? (
+        <div className="mk-empty">
+          <div className="mk-empty-art" aria-hidden="true"><span className="is-a">{MhIco.tpl}</span><span className="is-b">{MkIco.mail}</span><span className="is-c">{MkIco.copy}</span></div>
+          <h3>No templates yet</h3>
+          <p>While you write a campaign, press <b>Save as template</b> above the subject. The e-mail — subject, preview line, text and footer — is kept here to start the next campaigns from.</p>
+          <div className="mk-empty-acts"><button className="mk-btn is-primary is-big" onClick={() => x.openCampaign("new")} disabled={x.missing}>{MkIco.plus}New e-mail</button></div>
+        </div>
+      ) : (
+        <div className="mkt-grid">
+          {shown.map((t, i) => {
+            const snip = splitBody(t.body_html).body.replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim().slice(0, 180);
+            return (
+              <article key={t.id} className="mkt-card" style={{ "--i": Math.min(i, 12) } as CSSProperties}>
+                <button className="mkt-peek" onClick={() => setPeek(t)} aria-label={`Preview ${t.name}`}>
+                  <span className="mkt-peek-subj">{t.subject || "No subject"}</span>
+                  {t.preheader && <span className="mkt-peek-pre">{t.preheader}</span>}
+                  <span className="mkt-peek-txt">{snip || "No text yet"}</span>
+                </button>
+                <div className="mkt-b">
+                  {ren?.id === t.id
+                    ? <input className="mk-input mkt-ren" autoFocus value={ren.name} onChange={(e) => setRen({ id: t.id, name: e.target.value })} onBlur={() => void rename()}
+                        onKeyDown={(e) => { if (e.key === "Enter") void rename(); if (e.key === "Escape") setRen(null); }} aria-label="Template name" />
+                    : <b className="mkt-name" title={t.name}>{t.name}</b>}
+                  <em>Edited {fmtWhen(t.updated_at)}{t.used_count ? ` · used ${t.used_count}×` : ""}</em>
+                </div>
+                <div className="mkt-acts">
+                  <button className="mk-btn is-ghost is-ico" title="Rename" aria-label="Rename" onClick={() => setRen({ id: t.id, name: t.name })}>{MhIco.edit}</button>
+                  <MkConfirm className="mk-btn is-ghost is-ico" label={MhIco.trash} ask={`Delete “${t.name}”?`} yes="Delete" onYes={() => void drop(t)} />
+                  <span className="mk-grow" />
+                  <button className="mk-btn" onClick={() => setPeek(t)}>{MhIco.eye}Preview</button>
+                  <button className="mk-btn is-primary" onClick={() => use(t)} disabled={x.missing}>{MkIco.send}Use</button>
+                </div>
+              </article>
+            );
+          })}
+          {!shown.length && <div className="mk-empty-sm is-wide">{MhIco.tpl}<span>No template matches “{q}”.</span></div>}
+        </div>
+      )}
+      {peek && (
+        <MhModal title={peek.name} sub={peek.subject || "No subject"} onClose={() => setPeek(null)} wide
+          foot={<><span className="mk-grow" /><button className="mk-btn" onClick={() => setPeek(null)}>Close</button><button className="mk-btn is-primary" onClick={() => { const t = peek; setPeek(null); use(t); }}>{MkIco.send}Use this template</button></>}>
+          <iframe className="mkt-frame" title={`Preview of ${peek.name}`} sandbox=""
+            srcDoc={buildMail({ subject: peek.subject, body_html: peek.body_html, preheader: peek.preheader ?? "", track_opens: false, track_clicks: false }, { id: "preview", merge: demo }, { tracking: false, from: x.me.email || "you@company.com" }).html} />
+        </MhModal>
+      )}
+    </div>
+  );
+}
+
 function CampaignView({ x, id, brief, onBack, onOpen }: { x: HubCtx; id: string | "new"; brief?: string; onBack: () => void; onOpen: (id: string) => void }) {
   const c = id === "new" ? null : x.campaigns.find((y) => y.id === id) ?? null;
   if (id !== "new" && !c) return <MkLoading />;
@@ -1435,14 +1559,21 @@ function CampaignView({ x, id, brief, onBack, onOpen }: { x: HubCtx; id: string 
 
 function Composer({ x, campaign, brief, onBack, onSaved }: { x: HubCtx; campaign: MkCampaign | null; brief?: string; onBack: () => void; onSaved: (id: string) => void }) {
   const { w, eng, lists, members, optOut, me, runner } = x;
-  const init = splitBody(campaign?.body_html ?? "<p>Hola {{first_name}},</p><p></p><p>Un saludo,</p>");
+  // a new campaign started from a template (Templates › Use)
+  const [tpl0] = useState<MkTemplate | null>(() => (campaign ? null : takePendingTpl()));
+  const init = splitBody(campaign?.body_html ?? tpl0?.body_html ?? "<p>Hola {{first_name}},</p><p></p><p>Un saludo,</p>");
   const [step, setStep] = useState<0 | 1 | 2>(campaign?.list_id ? 1 : brief ? 1 : 0);
-  const [name, setName] = useState(campaign?.name ?? "");
+  const [name, setName] = useState(campaign?.name ?? tpl0?.name ?? "");
   const [listId, setListId] = useState(campaign?.list_id ?? "");
   const [from, setFrom] = useState(campaign?.from_mailbox ?? "");
   const [replyTo, setReplyTo] = useState(campaign?.reply_to ?? "");
-  const [subject, setSubject] = useState(campaign?.subject ?? "");
-  const [preheader, setPreheader] = useState(campaign?.preheader ?? "");
+  const [subject, setSubject] = useState(campaign?.subject ?? tpl0?.subject ?? "");
+  const [preheader, setPreheader] = useState(campaign?.preheader ?? tpl0?.preheader ?? "");
+  /* templates: start from one, or keep this e-mail as one */
+  const [tpls, setTpls] = useState<MkTemplate[]>([]);
+  const [tplMiss, setTplMiss] = useState(false);
+  useEffect(() => { loadMkTemplates().then((r) => { setTpls(r.rows); setTplMiss(r.missing); }); }, []);
+  const [tplSave, setTplSave] = useState<{ name: string; replace: string } | null>(null);
   const [body, setBody] = useState(init.body);
   const [footer, setFooter] = useState(init.footer);
   const [trackOpens, setTrackOpens] = useState(campaign?.track_opens ?? true);
@@ -1485,7 +1616,8 @@ function Composer({ x, campaign, brief, onBack, onSaved }: { x: HubCtx; campaign
     } else if (htmlMode) setBody((v) => v + tok);
     else exec("insertText", tok);
   };
-  const [linkAsk, setLinkAsk] = useState<string | null>(null);
+  /** a link: on the selected text, or (nothing selected) the address itself / a text you write */
+  const [linkAt, setLinkAt] = useState<LinkTarget | null>(null);
 
   const row = () => ({
     name: name.trim() || subject.trim() || "Untitled campaign", list_id: listId || null, from_mailbox: from.trim() || null, reply_to: replyTo.trim() || null,
@@ -1522,6 +1654,31 @@ function Composer({ x, campaign, brief, onBack, onSaved }: { x: HubCtx; campaign
     setHtmlMode(false); setEditorKey((k) => k + 1);
     setAi((a) => ({ ...a, busy: false, alts: (e.subjects_alt ?? []).filter(Boolean) }));
     if (!name.trim()) setName(e.subject ?? "");
+  };
+  /** this e-mail (subject, preview line, text and footer) into a template — new, or over one that exists */
+  const keepAsTemplate = async () => {
+    if (!tplSave) return;
+    const nm = tplSave.name.trim();
+    if (!nm) return;
+    setBusy("tpl");
+    const r = await saveMkTemplate({ id: tplSave.replace || undefined, name: nm, subject, preheader, body_html: fullBody });
+    setBusy(null);
+    if (r.error || !r.row) { setMsg({ tone: "err", text: r.error ?? "Not saved." }); return; }
+    setTpls((xs) => [r.row!, ...xs.filter((t) => t.id !== r.row!.id)]);
+    setTplSave(null);
+    x.toast(tplSave.replace ? `Template “${r.row.name}” updated` : `Saved as the template “${r.row.name}”`);
+  };
+  /** a template's subject, preview line and text into this e-mail */
+  const applyTemplate = (id: string) => {
+    const t = tpls.find((y) => y.id === id);
+    if (!t) return;
+    if (textOf(body).length > 30 && !window.confirm(`Replace what you've written with the template “${t.name}”?`)) return;
+    const sb = splitBody(t.body_html);
+    setSubject(t.subject); setPreheader(t.preheader ?? ""); setBody(sb.body); setFooter(sb.footer);
+    setHtmlMode(false); setEditorKey((k) => k + 1);
+    if (!name.trim()) setName(t.name);
+    void supabase.from("mk_templates").update({ used_count: (t.used_count ?? 0) + 1 }).eq("id", t.id);
+    x.toast(`Started from “${t.name}”`);
   };
   const testSend = async () => {
     if (!me.email) { setMsg({ tone: "err", text: "Your user has no e-mail to send the test to." }); return; }
@@ -1621,6 +1778,28 @@ function Composer({ x, campaign, brief, onBack, onSaved }: { x: HubCtx; campaign
                 )}
               </div>
 
+              <div className="mkh-tplbar">
+                <span className="mkh-tplbar-ico">{MhIco.tpl}</span>
+                {tplSave ? <span className="mkh-tplbar-t"><b>Save as template</b><em>Subject, preview line, text and footer</em></span> : tpls.length > 0
+                  ? <div className="mkh-tplbar-pick"><Select value="" placeholder="Start from a template…" searchable onChange={(v) => v && applyTemplate(v)}
+                      options={tpls.map((t) => ({ value: t.id, label: t.name, hint: t.subject || undefined }))} /></div>
+                  : <span className="mkh-tplbar-t"><b>Templates</b><em>{tplMiss ? NEEDS_TPL : "Save this e-mail as a template to start the next campaigns from it."}</em></span>}
+                {!tplSave && <span className="mk-grow" />}
+                {tplSave ? (
+                  <div className="mkh-tplsave" role="group" aria-label="Save as a template">
+                    <input className="mk-input" autoFocus value={tplSave.name} onChange={(e) => setTplSave((v) => v && { ...v, name: e.target.value })} placeholder="Template name"
+                      onKeyDown={(e) => { if (e.key === "Enter") void keepAsTemplate(); if (e.key === "Escape") setTplSave(null); }} />
+                    {tpls.length > 0 && <Select value={tplSave.replace} onChange={(v) => setTplSave((s0) => s0 && { ...s0, replace: v ?? "", name: v ? tpls.find((t) => t.id === v)?.name ?? s0.name : s0.name })}
+                      options={[{ value: "", label: "As a new template" }, ...tpls.map((t) => ({ value: t.id, label: `Replace “${t.name}”` }))]} />}
+                    <button className="mk-btn is-ghost" onClick={() => setTplSave(null)}>Cancel</button>
+                    <button className="mk-btn is-primary" disabled={busy === "tpl" || !tplSave.name.trim() || tplMiss} onClick={() => void keepAsTemplate()}>{busy === "tpl" ? "Saving…" : "Save"}</button>
+                  </div>
+                ) : (
+                  <button className="mk-btn" disabled={tplMiss || (!subject.trim() && !textOf(body))} onClick={() => setTplSave({ name: name.trim() || subject.trim() || "New template", replace: "" })}
+                    title="Keep this e-mail to start other campaigns from it">{MhIco.save}Save as template</button>
+                )}
+              </div>
+
               <div className="mkh-panel mkh-env">
                 <label className="mk-f"><span>Subject</span>
                   <div className="mkh-subj">
@@ -1640,7 +1819,9 @@ function Composer({ x, campaign, brief, onBack, onSaved }: { x: HubCtx; campaign
                 </details>
               </div>
 
-              <div className="mkh-panel mk-editorbox">
+              <div className="mkh-panel mk-editorbox lnkp-anchor">
+                {linkAt && !htmlMode && <LinkPopover className="is-under-bar" selected={linkAt.text} onClose={() => setLinkAt(null)}
+                  onAdd={(u, txt) => { if (editRef.current) { placeLink(editRef.current, linkAt, u, txt); setBody(editRef.current.innerHTML); } setLinkAt(null); }} />}
                 <div className="mk-tool">
                   {!htmlMode && (
                     <>
@@ -1652,13 +1833,7 @@ function Composer({ x, campaign, brief, onBack, onSaved }: { x: HubCtx; campaign
                       <button onMouseDown={(e) => e.preventDefault()} onClick={() => exec("formatBlock", "p")} title="Paragraph">¶</button>
                       <button onMouseDown={(e) => e.preventDefault()} onClick={() => exec("insertUnorderedList")} title="Bullets">•</button>
                       <button onMouseDown={(e) => e.preventDefault()} onClick={() => exec("insertOrderedList")} title="Numbers">1.</button>
-                      <button onMouseDown={(e) => e.preventDefault()} onClick={() => setLinkAsk("https://")} title="Link">{MhIco.link}</button>
-                      {linkAsk != null && (
-                        <span className="mk-linkask">
-                          <input autoFocus value={linkAsk} onChange={(e) => setLinkAsk(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { exec("createLink", linkAsk); setLinkAsk(null); } if (e.key === "Escape") setLinkAsk(null); }} />
-                          <button onMouseDown={(e) => e.preventDefault()} onClick={() => { exec("createLink", linkAsk); setLinkAsk(null); }}>Add</button>
-                        </span>
-                      )}
+                      <button onMouseDown={(e) => e.preventDefault()} className={linkAt ? "is-on" : ""} onClick={() => setLinkAt(linkAt ? null : captureLinkTarget(editRef.current))} title="Link — select text first to link it">{MhIco.link}</button>
                       <span className="mk-tool-sep" />
                     </>
                   )}

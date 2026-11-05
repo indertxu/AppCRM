@@ -22,7 +22,8 @@
 //
 //   Customer success follow-ups (88_cs_followups.sql):
 //   cs_run   — enrol clients in the active sequences and send what is due (your company)
-//   cs_test  — one blueprint, filled in for a client, sent to yourself
+//   cs_test  — one blueprint, filled in for a client, sent to yourself (from a team mailbox when asked)
+//   cs_campaign — a one-time campaign (108_cs_campaigns.sql): takes in the clients it applies to now and sends it
 //   cs_attachment_preview — an attachment as one client gets it (its fields filled in)
 //   cs_mail_scan — read the company's Outlook mailboxes: e-mails from / to clients become contacts
 //   (hourly, with the x-cs-cron header: every company, both of the above)
@@ -655,8 +656,8 @@ async function csPersonalize(a: any, buf: ArrayBuffer, vars: Record<string, stri
 }
 
 /** Sends one message from a user's Outlook (with attachments from the cs-files bucket, made for the client when vars are given). */
-async function csSend(userId: string, to: string[], subject: string, html: string, attachments: any[], vars?: Record<string, string>): Promise<string | null> {
-  const { data: tokRow } = await admin.from("outlook_tokens").select("scopes").eq("user_id", userId).maybeSingle();
+async function csSend(userId: string, to: string[], subject: string, html: string, attachments: any[], vars?: Record<string, string>, from?: string | null): Promise<string | null> {
+  const { data: tokRow } = await admin.from("outlook_tokens").select("scopes, account_email").eq("user_id", userId).maybeSingle();
   if (!tokRow) return "Their Outlook isn't connected (Settings › Interface).";
   if (!hasMail((tokRow as any).scopes)) return "Their Outlook is connected without mail — connect it again with mail.";
   const token = await accessTokenFor(userId).catch(() => null);
@@ -673,7 +674,27 @@ async function csSend(userId: string, to: string[], subject: string, html: strin
     if (total > 3_000_000) return "The attachments add up to more than 3 MB.";
     files.push({ "@odata.type": "#microsoft.graph.fileAttachment", name: f.name, contentType: f.type, contentBytes: csB64(f.bytes.buffer.slice(f.bytes.byteOffset, f.bytes.byteOffset + f.bytes.byteLength) as ArrayBuffer) });
   }
-  const message = { subject, body: { contentType: "HTML", content: html }, toRecipients: to.map((e) => ({ emailAddress: { address: e } })), attachments: files };
+  const message: Record<string, unknown> = { subject, body: { contentType: "HTML", content: html }, toRecipients: to.map((e) => ({ emailAddress: { address: e } })), attachments: files };
+  // a team (shared) mailbox (108_cs_campaigns.sql): sent from it with this person's connection — they need "Send as" on it
+  const own = lc((tokRow as any).account_email);
+  const box = lc(from);
+  if (box && box !== own) {
+    message.from = { emailAddress: { address: box } };
+    let res = await graph(token, `/users/${encodeURIComponent(box)}/sendMail`, "POST", { message, saveToSentItems: true });
+    if (res.status === 429) return "throttled";
+    if (!res.ok && (res.status === 403 || res.status === 404 || res.status === 400)) {
+      // without access to the mailbox itself, "Send as" still lets their own mailbox send it as the team one
+      const again = await graph(token, "/me/sendMail", "POST", { message, saveToSentItems: true });
+      if (again.status === 429) return "throttled";
+      if (again.ok) return null;
+      const why = (await again.text()).slice(0, 200);
+      return /SendAs|ErrorSendAsDenied|not authorized|AccessDenied|403/i.test(why) || again.status === 403
+        ? `${(tokRow as any).account_email ?? "This person"} may not send as ${box}. In Microsoft 365 (Exchange admin center › Mailboxes › ${box} › Delegation) give them "Send as" — and "Read and manage" to keep a copy in its Sent Items.`
+        : `Outlook said: ${why}`;
+    }
+    if (!res.ok) return `Outlook said: ${(await res.text()).slice(0, 300)}`;
+    return null;
+  }
   const res = await graph(token, "/me/sendMail", "POST", { message, saveToSentItems: true });
   if (res.status === 429) return "throttled";
   if (!res.ok) return `Outlook said: ${(await res.text()).slice(0, 300)}`;
@@ -752,10 +773,11 @@ function csVars(c: any, d: CsTenant, senderId: string | null, person?: { name?: 
 const csHtmlOf = (t: any) => String(t.html || "") || `<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.6;color:#0e1a15">${t.body_html ?? ""}</div>`;
 
 /** Enrols the clients each active sequence applies to and sends what is due. One tenant, or all (the scheduler). */
-async function csRun(tenantOnly: string | null, budget = 60): Promise<Record<string, unknown>> {
+async function csRun(tenantOnly: string | null, budget = 60, seqOnly: string | null = null, deadline = 0): Promise<Record<string, unknown>> {
   const stats = { enrolled: 0, sent: 0, failed: 0, skipped: 0, finished: 0, errors: [] as string[] };
   let q = admin.from("cs_sequences").select("*").eq("active", true);
   if (tenantOnly) q = q.eq("tenant_id", tenantOnly);
+  if (seqOnly) q = q.eq("id", seqOnly);
   const { data: seqs, error } = await q;
   if (error) return { error: /relation|does not exist/i.test(error.message) ? "Run 88_cs_followups.sql" : error.message };
   const tenants = [...new Set(((seqs ?? []) as any[]).map((s) => s.tenant_id).filter(Boolean))] as string[];
@@ -773,10 +795,11 @@ async function csRun(tenantOnly: string | null, budget = 60): Promise<Record<str
       return lastOf;
     };
     for (const seq of ((seqs ?? []) as any[]).filter((s) => s.tenant_id === tenant)) {
-      const steps = (Array.isArray(seq.steps) ? seq.steps : []).filter((x: any) => x?.template_id);
+      const campaign = seq.kind === "campaign";
+      const steps = (Array.isArray(seq.steps) ? seq.steps : []).filter((x: any) => x?.template_id).slice(0, campaign ? 1 : undefined);
       if (!steps.length) continue;
       // "only once a client has gone N days without contact" (none: no such rule)
-      const quietDays = Math.max(0, Number(seq.audience?.quiet_days) || 0);
+      const quietDays = campaign ? 0 : Math.max(0, Number(seq.audience?.quiet_days) || 0);
       const quietStop = quietDays > 0 && seq.audience?.quiet_stop !== false;
       const last = quietDays ? await lastContacts() : null;
       if (quietDays && !last) continue;   // can't tell who's quiet: nobody starts
@@ -791,8 +814,8 @@ async function csRun(tenantOnly: string | null, budget = 60): Promise<Record<str
         if (!ren) return null;
         return Math.max(now, ren.getTime() - (Number(seq.start_days) || 0) * CS_DAY) + waitOf(0);
       };
-      // who comes in (with the quiet rule: only once their last contact is old enough)
-      for (const c of d.clients) {
+      // who comes in (with the quiet rule: only once their last contact is old enough) — a campaign takes its clients in once, when it's sent
+      for (const c of campaign ? [] : d.clients) {
         if (has.has(c.id) || !csMatches(seq.audience, c, d.health) || !quiet(c)) continue;
         const at = firstAt(c);
         if (at == null) continue;
@@ -823,7 +846,7 @@ async function csRun(tenantOnly: string | null, budget = 60): Promise<Record<str
       // who no longer fits leaves (unless someone put them in by hand)
       for (const r of runs) {
         const c = d.clients.find((x) => x.id === r.client_id);
-        if (r.id && r.status === "active" && !r.manual && c && !csMatches(seq.audience, c, d.health)) {
+        if (!campaign && r.id && r.status === "active" && !r.manual && c && !csMatches(seq.audience, c, d.health)) {
           await admin.from("cs_sequence_runs").update({ status: "done" }).eq("id", r.id); r.status = "done"; stats.finished += 1;
         }
       }
@@ -836,7 +859,9 @@ async function csRun(tenantOnly: string | null, budget = 60): Promise<Record<str
         const stepIx = Math.min(Math.max(0, Number(r.step) || 0), steps.length - 1);
         const t0 = d.templates[steps[stepIx].template_id];
         const t = t0 ? csVersionOf(t0, c, d) : t0;
-        const sender = seq.sender === "owner" ? (d.owner[c.id] ?? seq.created_by) : seq.created_by;
+        const me0 = campaign ? (seq.launched_by ?? seq.created_by) : seq.created_by;
+        const sender = seq.sender === "owner" ? (d.owner[c.id] ?? me0) : me0;
+        const fromBox = String(seq.from_address ?? "").trim() || null;
         const to = csRecipients(c, seq.recipients, r.to_emails);
         const base: Record<string, unknown> = { tenant_id: tenant, sequence_id: seq.id, run_id: r.id, client_id: c.id, template_id: t?.id ?? null, step: stepIx, sent_by: sender, variant: t?._variant ?? null };
         let skip: string | null = null;
@@ -854,12 +879,12 @@ async function csRun(tenantOnly: string | null, budget = 60): Promise<Record<str
           const cts = (Array.isArray(c.contacts) ? c.contacts : []) as any[];
           for (const email of to) {
             if (already.has(lc(email))) { sentNow += 1; continue; }
-            if (budget <= 0) { throttled = true; break; }
+            if (budget <= 0 || (deadline && Date.now() > deadline)) { throttled = true; break; }
             const person = cts.find((x) => lc(x?.email) === lc(email)) ?? { email, name: "" };
             const vars = csVars(c, d, sender, person);
             const subject = csFill(t.subject, vars, false);
             budget -= 1;
-            const err = await csSend(sender, [email], subject, csFill(csHtmlOf(t), vars, true), t.attachments ?? [], vars);
+            const err = await csSend(sender, [email], subject, csFill(csHtmlOf(t), vars, true), t.attachments ?? [], vars, fromBox);
             if (err === "throttled") { throttled = true; break; }
             await admin.from("cs_email_log").insert({ ...base, to_emails: [email], subject, status: err ? "failed" : "sent", error: err });
             if (err) { failedNow += 1; stats.failed += 1; stats.errors.push(`${c.name} · ${email}: ${err}`); } else { sentNow += 1; stats.sent += 1; }
@@ -1090,9 +1115,43 @@ async function csTest(userId: string, p: any): Promise<Response> {
   const vars = csVars(c, d, userId);
   const tv = c.id ? csVersionOf(t, c, d) : t;
   const subject = `[Test] ${csFill(tv.subject, vars, false)}`;
-  const err = await csSend(userId, [to], subject, csFill(csHtmlOf(tv), vars, true), (t as any).attachments ?? [], vars);
+  const from = String(p.from ?? "").trim() || null;
+  const err = await csSend(userId, [to], subject, csFill(csHtmlOf(tv), vars, true), (t as any).attachments ?? [], vars, from);
   await admin.from("cs_email_log").insert({ tenant_id: tenant, client_id: c.id || null, template_id: (t as any).id, to_emails: [to], subject, status: err ? "failed" : "test", error: err, sent_by: userId, variant: tv._variant ?? null });
-  return err ? json({ error: err === "throttled" ? "Outlook is busy — try again in a minute." : err }, 400) : json({ ok: true, to });
+  return err ? json({ error: err === "throttled" ? "Outlook is busy — try again in a minute." : err }, 400) : json({ ok: true, to, from });
+}
+
+/** A one-time campaign (108_cs_campaigns.sql): the clients it applies to right now are taken in and sent it;
+ *  what doesn't fit in this call (Outlook's pace, the time limit) goes out on the hourly run. */
+async function csCampaign(userId: string, p: any): Promise<Response> {
+  const { data: prof } = await admin.from("profiles").select("tenant_id").eq("id", userId).maybeSingle();
+  const tenant = (prof as any)?.tenant_id;
+  if (!tenant) return json({ error: "No company." }, 400);
+  const { data: seq, error } = await admin.from("cs_sequences").select("*").eq("id", p.sequenceId).eq("tenant_id", tenant).maybeSingle();
+  if (error) return json({ error: /kind|launched|column/i.test(error.message) ? "Run 108_cs_campaigns.sql in Supabase." : error.message }, 400);
+  if (!seq) return json({ error: "Save the campaign first." }, 400);
+  if ((seq as any).kind !== "campaign") return json({ error: "That's a sequence, not a one-time campaign." }, 400);
+  if ((seq as any).launched_at) return json({ error: "This campaign was already sent — copy it to send it again." }, 400);
+  const steps = (Array.isArray((seq as any).steps) ? (seq as any).steps : []).filter((x: any) => x?.template_id);
+  if (!steps.length) return json({ error: "Pick its e-mail first." }, 400);
+  const d = await csTenantData(tenant);
+  const now = new Date().toISOString();
+  const { error: ue } = await admin.from("cs_sequences").update({ launched_at: now, launched_by: userId, active: true, updated_at: now }).eq("id", (seq as any).id).is("launched_at", null);
+  if (ue) return json({ error: ue.message }, 400);
+  let enrolled = 0;
+  const rows = d.clients.filter((c) => csMatches((seq as any).audience, c, d.health))
+    .map((c) => ({ tenant_id: tenant, sequence_id: (seq as any).id, client_id: c.id, step: 0, status: "active", next_at: now, started_at: now }));
+  for (let i = 0; i < rows.length; i += 200) {
+    // a client already in it (put in or left out by hand from its panel) keeps its own row
+    const up = { onConflict: "sequence_id,client_id", ignoreDuplicates: true };
+    let ins = await admin.from("cs_sequence_runs").upsert(rows.slice(i, i + 200), up);
+    if (ins.error && /started_at/i.test(ins.error.message)) ins = await admin.from("cs_sequence_runs").upsert(rows.slice(i, i + 200).map(({ started_at: _s, ...r }) => r), up);
+    if (ins.error) return json({ error: ins.error.message }, 400);
+    enrolled += Math.min(200, rows.length - i);
+  }
+  const stats = await csRun(tenant, 400, (seq as any).id, Date.now() + 110_000);
+  const { count } = await admin.from("cs_sequence_runs").select("id", { count: "exact", head: true }).eq("sequence_id", (seq as any).id).eq("status", "active");
+  return json({ ...stats, enrolled, waiting: count ?? 0, launched_at: now });
 }
 
 Deno.serve(async (req) => {
@@ -1174,6 +1233,7 @@ Deno.serve(async (req) => {
       return json(await csRun((prof as any).tenant_id, 60));
     }
     if (action === "cs_test") return await csTest(userId, p);
+    if (action === "cs_campaign") return await csCampaign(userId, p);
     if (action === "cs_attachment_preview") {
       const { data: prof } = await admin.from("profiles").select("tenant_id").eq("id", userId).maybeSingle();
       const tenant = (prof as any)?.tenant_id;

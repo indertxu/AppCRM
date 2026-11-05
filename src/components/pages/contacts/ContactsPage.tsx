@@ -30,6 +30,7 @@ import {
 import "../clients/ClientsPage.css";
 import "../companies/CompaniesPage.css";
 import ContactImport from "./ContactImport";
+import { useDataScope } from "../../framework/pageAccess";
 import { PageLoader } from "../../framework/AppLayout";
 import ContactExport from "./ContactExport";
 import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
@@ -180,6 +181,8 @@ export default function ContactsPage() {
   };
 
   const lead = isSalesLead(me);
+  // how much of the list they see: Settings › Contacts › Security (the database applies it; this is the old, in-browser list)
+  const seesAll = useDataScope("contacts").scope === "all";
 
   const coById = useMemo(() => new Map(companies.map((co) => [co.id as string, co])), [companies]);
   const companyName = (id: string, c?: Contact) => coById.get(id)?.name ?? (c as any)?.__coNames?.[id] ?? facetCoName(id) ?? "—";
@@ -381,7 +384,7 @@ export default function ContactsPage() {
   /** Who a contact is given to (from the row in server mode). */
   function assignedOf(c: Contact): string[] { return srvOf(c).__assignees ?? assignees[c.id ?? ""] ?? []; }
   // Sales people only see the contacts they have been given access to.
-  const visible = useMemo(() => contacts.filter((c) => lead || !me || (assignees[c.id!] ?? []).includes(me.id)), [contacts, lead, me, assignees]);
+  const visible = useMemo(() => contacts.filter((c) => seesAll || !me || (assignees[c.id!] ?? []).includes(me.id)), [contacts, seesAll, me, assignees]);
   // typing stays instant: the list follows the search a beat later, in the background
   const dq = useDeferredValue(q);
   const searched = useMemo(() => {
@@ -443,7 +446,7 @@ export default function ContactsPage() {
     if (!exporting || !server || exportData) return;
     let off = false;
     Promise.all([
-      listContacts(), listCompanies(), lead ? Promise.resolve(null) : loadContactAssignees(),
+      listContacts(), listCompanies(), seesAll ? Promise.resolve(null) : loadContactAssignees(),
       exportIds ? Promise.resolve(exportIds) : allIds ? Promise.resolve(allIds) : loadAllIds(),
     ]).then(([cs, cos, asg, ids]) => {
       if (off) return;
@@ -791,7 +794,7 @@ export default function ContactsPage() {
 
       {exporting && !server && (
         <ContactExport
-          contacts={contacts.filter((c) => lead || !me || (assignees[c.id!] ?? []).includes(me.id))}
+          contacts={contacts.filter((c) => seesAll || !me || (assignees[c.id!] ?? []).includes(me.id))}
           companies={companies}
           contactFields={fields}
           shownIds={exportIds ?? shownIds}

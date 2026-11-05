@@ -317,7 +317,7 @@ export type DataScope = "all" | "department" | "mine" | "assigned" | "created";
 /** Who a panel inside the page is hidden from (departments, security roles, people). */
 export interface PanelHide { depts?: string[]; roles?: string[]; users?: string[] }
 export interface ScopeRules { default: DataScope; depts: Record<string, DataScope>; roles: Record<string, DataScope>; users: Record<string, DataScope>; panels?: Record<string, PanelHide> }
-export interface ScopeDef { what: string; levels: DataScope[]; label: Partial<Record<DataScope, string>>; hint: Partial<Record<DataScope, string>> }
+export interface ScopeDef { what: string; levels: DataScope[]; label: Partial<Record<DataScope, string>>; hint: Partial<Record<DataScope, string>>; fallback?: Partial<ScopeRules> }
 const scopeDef = (what: string, levels: DataScope[], label: Partial<Record<DataScope, string>> = {}, hint: Partial<Record<DataScope, string>> = {}): ScopeDef =>
   ({ what, levels, label: { all: "Everything", department: "Their department's", ...label }, hint: { all: `Every ${what.replace(/s$/, "")} in the company`, department: `What anyone in their department has`, ...hint } });
 export const PAGE_SCOPES: Partial<Record<PageKey, ScopeDef>> = {
@@ -335,10 +335,13 @@ export const PAGE_SCOPES: Partial<Record<PageKey, ScopeDef>> = {
   sales: scopeDef("deals", ["all", "department", "mine", "assigned", "created"],
     { mine: "Owned by, on, or created by them", assigned: "Only deals they own or are on", created: "Only deals they created" },
     { department: "Deals owned by or shared with their department", mine: "Their deals and the ones they created" }),
-  companies: scopeDef("companies", ["all", "department", "mine"], { mine: "Owned or created by them" },
-    { department: "Companies owned or created by their department", mine: "Companies they own or created" }),
-  contacts: scopeDef("contacts", ["all", "department", "mine"], { mine: "Owned or created by them" },
-    { department: "Contacts owned or created by their department", mine: "Contacts they own or created" }),
+  // the database applies these (107_crm_scope_from_settings.sql); nothing saved = managers see everything, the rest only theirs
+  companies: { ...scopeDef("companies", ["all", "department", "mine"], { mine: "Only theirs" },
+    { department: "Companies assigned to or added by anyone in their department", mine: "Companies assigned to them or that they added" }),
+    fallback: { default: "mine", roles: { sales_manager: "all", marketing_manager: "all" } } },
+  contacts: { ...scopeDef("contacts", ["all", "department", "mine"], { mine: "Only theirs" },
+    { department: "Contacts assigned to or added by anyone in their department", mine: "Contacts assigned to them or that they added" }),
+    fallback: { default: "mine", roles: { sales_manager: "all", marketing_manager: "all" } } },
   clients: scopeDef("clients", ["all", "department", "assigned"], { assigned: "Only their clients" },
     { department: "Clients their department works on or looks after", assigned: "Clients they work on or look after" }),
   management: scopeDef("team figures", ["all", "department", "mine"], { mine: "Only their own" },
@@ -401,7 +404,8 @@ export function seesCalendarDetail(rule: CalViewRule, me: { userId: string | nul
 export async function loadScopeRules(page: PageKey): Promise<{ rules: ScopeRules; missing: boolean }> {
   const { data, error } = await supabase.from("page_data_scopes").select("rules").eq("page", page).maybeSingle();
   if (error) return { rules: { ...DEFAULT_SCOPE_RULES }, missing: true };
-  const r = ((data as any)?.rules ?? {}) as Partial<ScopeRules>;
+  // nothing saved yet: what the page does without settings
+  const r = ((data as any)?.rules ?? PAGE_SCOPES[page]?.fallback ?? {}) as Partial<ScopeRules>;
   return { rules: { default: (r.default as DataScope) ?? "all", depts: r.depts ?? {}, roles: r.roles ?? {}, users: r.users ?? {}, panels: r.panels ?? {} }, missing: false };
 }
 export async function saveScopeRules(page: PageKey, rules: ScopeRules): Promise<string | null> {

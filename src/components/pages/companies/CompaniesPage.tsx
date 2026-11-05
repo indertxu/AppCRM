@@ -31,6 +31,7 @@ import { searchPlaces, lookupPostal, postalLooksComplete, provinceFromPostal, co
 import "../clients/ClientsPage.css";
 import "../sales/extras/TrackingFields.css";
 import CompanyImport from "./CompanyImport";
+import { useDataScope } from "../../framework/pageAccess";
 import { PageLoader } from "../../framework/AppLayout";
 import ContactExport from "../contacts/ContactExport";
 import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
@@ -208,6 +209,8 @@ export default function CompaniesPage() {
   };
 
   const lead = isSalesLead(me);
+  // how much of the list they see: Settings › Companies › Security (the database applies it; this is the old, in-browser list)
+  const seesAll = useDataScope("companies").scope === "all";
 
   // ---- Every field the list can be filtered and sorted by ----
   const emp = (id?: string | null) => employees.find((e) => e.id === id)?.name ?? "";
@@ -280,7 +283,7 @@ export default function CompaniesPage() {
   const sortKeyOf = (col: string) => (col === "contacts" ? "contacts_count" : col === "group" ? "parent" : col);
 
   // Sales people only see the companies they have been assigned to.
-  const visible = useMemo(() => companies.filter((c) => lead || !me || (assignees[c.id!] ?? []).includes(me.id)), [companies, lead, me, assignees]);
+  const visible = useMemo(() => companies.filter((c) => seesAll || !me || (assignees[c.id!] ?? []).includes(me.id)), [companies, seesAll, me, assignees]);
   // the search text of each company, once per load; typing filters a beat later in the background
   const hayOf = useMemo(() => new Map(companies.map((c) => [c, norm([c.name, c.legal_name, c.vat_number, c.street, c.city, c.province, c.country, c.postal_code, c.sector, c.source, c.email, c.website].filter(Boolean).join(" \u0001 "))])), [companies]);
   const dq = useDeferredValue(q);
@@ -508,7 +511,7 @@ export default function CompaniesPage() {
     if (!exporting || !server || exportData) return;
     let off = false;
     Promise.all([
-      listCompanies(), listContacts(), lead ? Promise.resolve(null) : loadCompanyAssignees(),
+      listCompanies(), listContacts(), seesAll ? Promise.resolve(null) : loadCompanyAssignees(),
       exportIds ? Promise.resolve(exportIds) : allIds ? Promise.resolve(allIds) : loadAllIds(),
     ]).then(([cos, cts, asg, ids]) => {
       if (off) return;
@@ -739,7 +742,7 @@ export default function CompaniesPage() {
       {exporting && !server && (
         <ContactExport
           root="company"
-          companies={companies.filter((c) => lead || !me || (assignees[c.id!] ?? []).includes(me.id))}
+          companies={companies.filter((c) => seesAll || !me || (assignees[c.id!] ?? []).includes(me.id))}
           contacts={contacts}
           contactFields={contactFields}
           shownIds={exportIds ?? shownIds}

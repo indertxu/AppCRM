@@ -120,6 +120,9 @@ export async function myProfile(): Promise<{ id: string; role: string; is_supera
 /** Boss and sales managers see everything; sales only what they are assigned. */
 export const isSalesLead = (p: { role?: string; is_superadmin?: boolean } | null) =>
   !!p && (p.is_superadmin || p.role === "boss" || p.role === "sales_manager");
+/** Who sees every company and contact (everyone else: the ones assigned to them). Same list as the database (SQL 106). */
+export const isCrmLead = (p: { role?: string; is_superadmin?: boolean } | null) =>
+  isSalesLead(p) || (!!p && p.role === "marketing_manager");
 export const canOpenSales = (p: { role?: string; is_superadmin?: boolean } | null) =>
   !!p && (p.is_superadmin || p.role === "boss" || p.role === "sales_manager" || p.role === "sales");
 

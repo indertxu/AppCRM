@@ -913,7 +913,13 @@ export interface CsSequence {
   start_mode: "now" | "before_renewal"; start_days: number; repeat: boolean;
   recipients: "main" | "all" | "billing"; sender: "owner" | "me"; log_contact: boolean;
   created_by?: string | null; created_at?: string;
+  /** sequence: recurring, by itself · campaign: one e-mail, sent once when you press Send (108_cs_campaigns.sql) */
+  kind?: "sequence" | "campaign";
+  /** a team (shared) mailbox it goes out from, sent with the sender's own Outlook — they need "Send as" on it */
+  from_address?: string | null;
+  launched_at?: string | null; launched_by?: string | null;
 }
+export const NEEDS_CAMPAIGNS = "One-time campaigns and team mailboxes need 108_cs_campaigns.sql in Supabase.";
 export interface CsRun { id: string; sequence_id: string; client_id: string; step: number; status: "active" | "paused" | "done" | "excluded"; next_at: string | null; cycle: number; last_sent_at: string | null; to_emails: string[] | null; manual: boolean; started_at?: string | null }
 export interface CsMailLog { id: string; sequence_id: string | null; run_id: string | null; client_id: string | null; template_id: string | null; step: number | null; to_emails: string[] | null; subject: string | null; status: "sent" | "failed" | "skipped" | "test"; error: string | null; sent_by: string | null; sent_at: string }
 export interface CsAuto { ready: boolean; templates: CsTemplate[]; sequences: CsSequence[]; runs: CsRun[]; log: CsMailLog[]; folders: CsFolder[]; foldersReady?: boolean }
@@ -977,8 +983,16 @@ export async function saveCsSequence(q: Partial<CsSequence>): Promise<{ row: CsS
     name: q.name?.trim() || "Untitled follow-up", active: !!q.active, audience: q.audience ?? {}, steps: q.steps ?? [],
     start_mode: q.start_mode ?? "now", start_days: Math.max(0, Math.round(Number(q.start_days) || 0)), repeat: !!q.repeat,
     recipients: q.recipients ?? "main", sender: q.sender ?? "owner", log_contact: q.log_contact !== false, updated_at: new Date().toISOString(),
-  };
-  const res = q.id ? await supabase.from("cs_sequences").update(row).eq("id", q.id).select("*").single() : await supabase.from("cs_sequences").insert(row).select("*").single();
+  } as Record<string, unknown>;
+  const extra = q.kind === "campaign" || !!q.from_address?.trim();
+  if (q.kind) row.kind = q.kind;
+  if (q.from_address !== undefined) row.from_address = q.from_address?.trim() || null;
+  const go = () => (q.id ? supabase.from("cs_sequences").update(row).eq("id", q.id).select("*").single() : supabase.from("cs_sequences").insert(row).select("*").single());
+  let res = await go();
+  if (res.error && /kind|from_address|column/i.test(res.error.message) && !csMissing(res.error)) {   // before 108_cs_campaigns.sql
+    if (extra) return { row: null, error: NEEDS_CAMPAIGNS };
+    delete row.kind; delete row.from_address; res = await go();
+  }
   return { row: (res.data as any) ?? null, error: res.error ? (csMissing(res.error) ? NEEDS_AUTO : res.error.message) : null };
 }
 export async function deleteCsSequence(id: string): Promise<string | null> {
@@ -1017,9 +1031,24 @@ export async function runCsSequences(): Promise<{ sent?: number; enrolled?: numb
   if (error) return { error: error.message };
   return (data ?? {}) as any;
 }
-/** A blueprint filled in for a client, to your own inbox. */
-export async function testCsTemplate(templateId: string, clientId: string | null): Promise<{ to?: string; error?: string }> {
-  const { data, error } = await supabase.functions.invoke("outlook-sync", { body: { action: "cs_test", templateId, clientId } });
+/** Sends a one-time campaign now: the clients it applies to are taken in and sent it (the rest of a big one goes out within the hour). */
+export async function launchCsCampaign(sequenceId: string): Promise<{ sent?: number; failed?: number; skipped?: number; enrolled?: number; waiting?: number; launched_at?: string; errors?: string[]; error?: string }> {
+  const { data, error } = await supabase.functions.invoke("outlook-sync", { body: { action: "cs_campaign", sequenceId } });
+  if (error) {
+    let msg = error.message;
+    try { const j = await (error as any).context?.json?.(); if (j?.error) msg = j.error; } catch { /* the plain message */ }
+    return { error: msg };
+  }
+  return (data ?? {}) as any;
+}
+/** The team mailboxes the company knows (Settings › Tickets › Mailboxes), to send from. */
+export async function loadTeamMailboxes(): Promise<{ address: string; label: string }[]> {
+  const { data } = await supabase.from("ticket_mailboxes").select("address, label, kind, can_send");
+  return ((data ?? []) as any[]).filter((b) => b.address && b.kind !== "personal" && b.can_send !== false).map((b) => ({ address: String(b.address), label: String(b.label || b.address) }));
+}
+/** A blueprint filled in for a client, to your own inbox (from a team mailbox when one is given). */
+export async function testCsTemplate(templateId: string, clientId: string | null, from?: string | null): Promise<{ to?: string; error?: string }> {
+  const { data, error } = await supabase.functions.invoke("outlook-sync", { body: { action: "cs_test", templateId, clientId, from: from || null } });
   if (error) {
     let msg = error.message;
     try { const j = await (error as any).context?.json?.(); if (j?.error) msg = j.error; } catch { /* the plain message */ }

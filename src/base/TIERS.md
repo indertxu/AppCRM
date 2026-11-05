@@ -126,7 +126,7 @@ Source in `supabase/functions/**`. Both apps call them; changes must stay backwa
 - Read the other side's entries since your last session before you start working.
 
 ## 7. SQL numbering
-Next free number: **106**  ← update this line when you claim one (and say which file in the log).
+Next free number: **110**  ← update this line when you claim one (and say which file in the log).
 | # | File | Chat | What |
 |---|---|---|---|
 | 98 | sql/98_client_default_folders.sql | Enterprise | client folder templates → new clients |
@@ -137,6 +137,10 @@ Next free number: **106**  ← update this line when you claim one (and say whic
 | 104 | src/base/sql/104_base_auto_invoices.sql | Base | `base_billing_settings`, `base_billing_runs`, `base_bill_up_to` / `base_bill_now` / `base_billing_tick`, pg_cron `base-auto-invoices` (04:20 UTC) — applied 2026-11-05 |
 | 103 | src/base/sql/103_base_billing.sql | Base | `invoices` + client_id / company_id / notes / tax_rate / bill_to, status may be `draft`; `invoice_lines`; `calendar_entries` + invoice_id / product_id / quantity / unit_price |
 | 105 | sql/105_creator_sees_own_records.sql | Enterprise | creator auto-assigned to the companies / contacts they add (+ backfill from crm_history) |
+| 106 | sql/106_marketing_manager_sees_crm.sql | Enterprise | marketing_manager sees every company / contact (companies_list, contacts_list, global_search, crm_is_lead) |
+| 107 | sql/107_crm_scope_from_settings.sql | Enterprise | `crm_scope_ids(page)`: Companies / Contacts lists + search follow Settings › Security (page_data_scopes) |
+| 108 | sql/108_cs_campaigns.sql | Enterprise | `cs_sequences.kind / from_address / launched_at / launched_by`: one-time CS campaigns, team mailbox |
+| 109 | sql/109_mk_templates.sql | Enterprise | `mk_templates`: Marketing e-mail templates |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
@@ -147,12 +151,44 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
-### 2026-11-05 10:20 · Enterprise · Whoever adds a company / contact can see it (SQL 105, NOT APPLIED YET)
+### 2026-11-05 13:10 · Enterprise · Marketing e-mail templates (SQL 109, applied) · links in e-mail editors
+- files: `sql/109_mk_templates.sql` (new), `framework/LinkPopover.tsx` + `.css` (new), `pages/contacts/ContactExport.tsx` (+ `.css`), `pages/clients/ClientsPage.tsx`
+- DB: `mk_templates` (name, subject, preheader, body_html, used_count; tenant RLS + `trg_set_tenant`).
+- Marketing › E-mail: **Campaigns | Templates** switch. Templates: cards (subject, preview line, text), Preview (the real e-mail in a frame), Use (a new campaign starts from it), rename, delete. In the composer (Message step): "Start from a template…" and **Save as template** (new, or replace an existing one).
+- Links (Marketing composer + CS blueprint editor): the Link button opens `LinkPopover` — with text selected, the link goes on it; with nothing selected you choose "In a text I write" or "The address itself". `acme.com` → https://, `ana@acme.com` → mailto:.
+- **PORT?** Base copies of ContactExport (if any) / CS blueprint editor: `LinkPopover` is a new framework component (not kernel), Base may copy it.
+- deploy: written to the Mac (cs63); migration applied
+
+### 2026-11-05 12:40 · Enterprise · Customer success: one-time e-mail campaigns + sending from a team mailbox (SQL 108, applied)
+- files: `sql/108_cs_campaigns.sql` (new), `pages/clients/ClientsPage.tsx` (+ `.css`), `pages/clients/useClientsData.ts`, `supabase/functions/outlook-sync/index.ts`
+- DB: `cs_sequences` + `kind` ('sequence' | 'campaign'), `from_address`, `launched_at`, `launched_by`.
+- Automatic e-mails › "Campaigns & sequences": **New campaign** (one blueprint, sent once with **Send now**) next to New sequence; the editor switches One-time / Recurring. Campaign cards: Draft → Sending… → Sent <date>, sent / failed counts, copy to send again.
+- **From a team mailbox** (both kinds): any address (suggestions from `ticket_mailboxes`), sent with the sender's own Outlook token (`Mail.Send.Shared`, already granted) via `/users/{box}/sendMail`, falling back to `/me/sendMail` with `from` (Send as). "Send me a test" checks the permission. Shared mailboxes have no password: the M365 admin gives "Send as" (+ "Read and manage" for Sent Items).
+- Edge function: `csSend(…, from)`, `csRun(tenant, budget, seqOnly, deadline)` (campaigns never take clients in by themselves), new action `cs_campaign` (enrols who matches now — upsert, keeps rows set by hand — then sends up to ~110 s; the rest go on the hourly run), `cs_test` takes `from`.
+- **deploy: the edge function is written to the Mac but NOT deployed yet** — `npx supabase functions deploy outlook-sync --project-ref eloadnqjcrvdnvdcoqap`. Until then: campaigns can be created and saved, Send now answers an error.
+- **PORT?** Base copies of ClientsPage / useClientsData if Base has CS e-mails.
+
+### 2026-11-05 12:00 · Enterprise · Companies / Contacts: Settings › Security now decides who sees what (SQL 107, applied)
+- files: `sql/107_crm_scope_from_settings.sql` (new), `framework/pageAccess.tsx`, `pages/companies/CompaniesPage.tsx`, `pages/contacts/ContactsPage.tsx`
+- DB: `crm_scope_ids(page)` reads `page_data_scopes` for the signed-in person (person › security role › department › default; boss / Boss-based levels / superadmin = all) → null (everything) or the people whose records they see (them, or their department). `companies_list` (assignees ∩ those people, or created_by), `contacts_list` (assignees), `global_search` (each kind by its own page) use it instead of the hard-coded lead roles (replaces SQL 106's list). Nothing saved for the page → sales_manager / marketing_manager all, the rest "mine".
+- The saved Companies / Contacts defaults of "all" had never been applied → set to "mine" + roles sales_manager / marketing_manager "all" (marketing's own "all" kept). Checked: Santiago 15,157 / 21,652, Antonio 0 / 1 (as before), boss everything.
+- UI: `PAGE_SCOPES.companies/contacts` get `fallback` (shown when nothing is saved) and clearer labels; the in-browser list (no server mode) filters with `useDataScope`.
+- **DB** · **PORT?** Base's own `src/base/framework/pageAccess.tsx` (fallback + labels) — the database rule already applies to Base tenants.
+- deploy: written to the Mac (cs61); migration applied
+
+### 2026-11-05 11:40 · Enterprise · Marketing manager sees every company and contact (SQL 106, applied)
+- files: `sql/106_marketing_manager_sees_crm.sql` (new), `pages/companies/companiesApi.ts` (+ `isCrmLead`), `pages/companies/CompaniesPage.tsx`, `pages/contacts/ContactsPage.tsx`
+- DB: the "lead" test in `companies_list`, `contacts_list`, `global_search` and `crm_is_lead` (105) now includes `marketing_manager` (boss, sales_manager, marketing_manager, superadmin see everything; the rest only what's assigned to them / what they add). Checked as Santiago: 15,157 / 15,157 companies, 21,652 / 21,652 contacts.
+- UI: Companies / Contacts filter by assignees with `isCrmLead` (visibility only); assign / delete / merge stay boss + sales manager (`isSalesLead`).
+- **DB** · **PORT?** Base's `src/base/pages/companies/companiesApi.ts` + Companies/Contacts pages if Base keeps per-user visibility.
+- deploy: written to the Mac (cs60); migration applied
+
+### 2026-11-05 10:20 · Enterprise · Whoever adds a company / contact can see it (SQL 105, applied)
 - files: `sql/105_creator_sees_own_records.sql` (new)
 - Cause: non-leads (anyone not boss / sales_manager / superadmin) only see companies and contacts in their `company_facts.assignees` / `contact_facts.assignees` (`companies_list`, `contacts_list`, `global_search`), and nobody assigned the creator — Santiago (marketing) added "Tilseco Energy Group" and its contact Mikel Garcia Rocha and couldn't see them.
 - Fix: `crm_is_lead(uuid)`; statement triggers `crm105_co_creator` / `crm105_ct_creator` (after insert on companies / contacts) add `auth.uid()` to company_assignees / contact_assignees when the creator isn't a lead; backfill from `crm_history` (created/imported by non-leads: Tilseco, Mikel Garcia Rocha, Raul Puche, "Facturacion").
 - **DB** — Base: your simple CRM inserts into the same tables, so the triggers apply there too (harmless: Base users get assigned to what they create).
-- deploy: file written to the Mac; the migration still has to be applied (the Supabase confirmation went unanswered)
+- deploy: file written to the Mac; migration applied 2026-11-05 10:15
 
 ### 2026-11-05 09:40 · Base · Simple deals: no proposals, no close probability, one price per line
 - files: `pages/sales/trackings/TrackingDetail.tsx` (`SIMPLE`), `pages/sales/trackings/SimplePriceModal.{tsx,css}` (new), `pages/sales/sales/SalesPage.tsx`, `pages/sales/sales/SalesForecast.tsx` (`BASE_FULL`), `pages/settings/SettingsPage.tsx`.
