@@ -1,17 +1,21 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   LayoutDashboard, Building2, Users, Wallet, Activity, Database, Plug, LogOut, RefreshCw, CheckCircle2, AlertTriangle, CircleDashed,
-  Plus, Search, Info, ArrowUpRight,
+  Plus, Search, Info, ArrowUpRight, X, ChevronRight, ChevronDown, Check, UserPlus, Ban,
 } from "lucide-react";
 import { supabase } from "../../api/supabase";
+import { PageCube } from "../../framework/PageCube";
+import { JUST_SIGNED_IN_KEY, NextCube } from "../../login/LoginPage";
 import {
   loadDashboard, loadTenantDetail, refreshUsage, saveCostSettings, computeCosts, userCosts, withDefaults, aiCost,
   loadCosts, syncCosts, costsStale, SUPABASE_UNITS,
   fmtBytes, fmtNum, fmtDur, fmtMoney, fmtAgo, pageLabel, dayList,
-  type Dashboard, type CostSettings, type CostModel, type TenantUserRow, type Allocation, type CostsData, type CostSource, type Provider, type CostOrigin,
+  loadRoles, setUserRole,
+  type Dashboard, type CostSettings, type CostModel, type TenantUserRow, type Allocation, type CostsData, type CostSource, type Provider, type CostOrigin, type CompanyRole,
 } from "../../api/superadminApi";
-import SuperAdminCreate from "./SuperAdminCreate";
+import SuperAdminCreate, { NewLoginModal } from "./SuperAdminCreate";
 import "./SuperAdmin.css";
 
 /* =====================================================================
@@ -44,23 +48,152 @@ export function useDays(): [number, (d: number) => void] {
   return [days, setDays];
 }
 
+/* ---------- arriving from the sign-in ----------
+   The sign-in ends on a deep green screen with the cube in the middle (and the router
+   keeps that screen up while the console loads). Here it carries on from that exact
+   frame: the console's steps tick while its data comes in, then the green closes into
+   the sidebar's N and the cube lands there. Every other visit: nothing. */
+type ArrivePhase = "hold" | "out" | "none";
+const stillMotion = () => { try { return window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { return false; } };
+const ARRIVE_STEPS = ["Signed in", "Companies & people", "Usage & costs"];
+function useArrival(ready: boolean) {
+  const [phase, setPhase] = useState<ArrivePhase>(() => {
+    try {
+      const v = sessionStorage.getItem(JUST_SIGNED_IN_KEY);
+      if (v && Date.now() - Number(v) < 15000 && !stillMotion()) return "hold";
+    } catch { /* ignore */ }
+    return "none";
+  });
+  const [ticked, setTicked] = useState(1);
+  const t0 = useRef(performance.now());
+  // played once: forget it (Home never runs for a superadmin, so nothing else would)
+  useEffect(() => { try { sessionStorage.removeItem(JUST_SIGNED_IN_KEY); } catch { /* ignore */ } }, []);
+  useEffect(() => {
+    if (phase !== "hold" || !ready) return;
+    const wait = Math.max(0, 650 - (performance.now() - t0.current));
+    const a = window.setTimeout(() => setTicked(2), wait);
+    const b = window.setTimeout(() => setTicked(3), wait + 340);
+    const c = window.setTimeout(() => setPhase("out"), wait + 820);
+    return () => { window.clearTimeout(a); window.clearTimeout(b); window.clearTimeout(c); };
+  }, [phase, ready]);
+  useEffect(() => {
+    if (phase !== "out") return;
+    const id = window.setTimeout(() => setPhase("none"), 1150);
+    return () => window.clearTimeout(id);
+  }, [phase]);
+  return { phase, ticked };
+}
+
+function Arrival({ phase, ticked }: { phase: ArrivePhase; ticked: number }) {
+  const ref = useRef<HTMLDivElement>(null);
+  // the way out: measure the sidebar's N exactly and close into it
+  useEffect(() => {
+    if (phase !== "out" || !ref.current) return;
+    const mark = document.querySelector<HTMLElement>(".sa-brand-mark");
+    const r = mark?.getBoundingClientRect();
+    const W = window.innerWidth, H = window.innerHeight;
+    const mx = r ? r.left + r.width / 2 : 36, my = r ? r.top + r.height / 2 : 40, ms = r ? r.width : 36;
+    const el = ref.current;
+    el.style.setProperty("--mx", `${mx}px`);
+    el.style.setProperty("--my", `${my}px`);
+    el.style.setProperty("--tx", `${mx - W / 2}px`);
+    el.style.setProperty("--ty", `${my - H * 0.46}px`);
+    el.style.setProperty("--ts", `${(ms * 1.12) / 150}`); // the loader cube is ~150 px across
+    const t = window.setTimeout(() => mark?.classList.add("is-landing"), 760);
+    const u = window.setTimeout(() => mark?.classList.remove("is-landing"), 1700);
+    return () => { window.clearTimeout(t); window.clearTimeout(u); mark?.classList.remove("is-landing"); };
+  }, [phase]);
+  if (phase === "none") return null;
+  return (
+    <div ref={ref} className={`sa-arrive is-${phase}`} role="status" aria-live="polite" aria-label={phase === "hold" ? "Opening the platform console" : "Console ready"}>
+      <div className="sa-arrive-bg" aria-hidden="true"><i className="sa-arrive-grid" /></div>
+      <div className="sa-arrive-cube" aria-hidden="true"><span><PageCube size={250} /></span></div>
+      <div className="sa-arrive-txt">
+        <span className="sa-arrive-k">Platform console</span>
+        <ol>
+          {ARRIVE_STEPS.map((l, i) => (
+            <li key={l} className={i < ticked ? "is-done" : i === ticked ? "is-active" : ""}>
+              <i aria-hidden="true">{i < ticked && <Check size={10} strokeWidth={3.4} />}</i>{l}
+            </li>
+          ))}
+        </ol>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- dialogs ----------
+   One look for every pop-up in the console: an icon tile, a kicker and a title, the body,
+   and a footer bar with the actions. Escape or a click outside closes it. */
+export function Modal({ icon, kicker, title, sub, onClose, children, foot, width = 480, tone }: {
+  icon?: ReactNode; kicker?: ReactNode; title: ReactNode; sub?: ReactNode; onClose: () => void;
+  children?: ReactNode; foot?: ReactNode; width?: number; tone?: "danger" | "base";
+}) {
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape") close.current(); };
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, []);
+  return createPortal(
+    <div className="sa-backdrop" onMouseDown={onClose}>
+      <div className={`sa-modal ${tone ? `is-${tone}` : ""}`} style={{ width }} onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+        <div className="sa-modal-head">
+          {icon && <span className="sa-modal-ico" aria-hidden="true">{icon}</span>}
+          <div className="sa-modal-ht">
+            {kicker && <span className="sa-badge">{kicker}</span>}
+            <h2 className="sa-modal-title">{title}</h2>
+            {sub && <p className="sa-modal-sub">{sub}</p>}
+          </div>
+          <button className="sa-x" onClick={onClose} aria-label="Close"><X size={16} strokeWidth={2.2} /></button>
+        </div>
+        {children != null && <div className="sa-modal-body">{children}</div>}
+        {foot && <div className="sa-modal-foot">{foot}</div>}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+export interface AskOpts { title: ReactNode; body?: ReactNode; ok: string; kicker?: string; icon?: ReactNode; tone?: "danger" | "base" }
+/** A styled "are you sure?": `await ask({...})` gives true / false. Render the returned element once. */
+export function useConfirm(): [(o: AskOpts) => Promise<boolean>, ReactNode] {
+  const [st, setSt] = useState<(AskOpts & { res: (v: boolean) => void }) | null>(null);
+  const ask = useCallback((o: AskOpts) => new Promise<boolean>((res) => setSt({ ...o, res })), []);
+  const done = (v: boolean) => { st?.res(v); setSt(null); };
+  const el = st ? (
+    <Modal icon={st.icon} kicker={st.kicker} title={st.title} tone={st.tone} width={440} onClose={() => done(false)}
+      foot={<div className="sa-modal-actions">
+        <button className="sa-cancel" onClick={() => done(false)}>Cancel</button>
+        <button className={`sa-confirm ${st.tone === "danger" ? "is-danger" : st.tone === "base" ? "is-base" : ""}`} autoFocus onClick={() => done(true)}>{st.ok}</button>
+      </div>}>
+      {st.body}
+    </Modal>
+  ) : null;
+  return [ask, el];
+}
+
 /* ---------- layout ---------- */
-export function Shell({ tab, onTab, children, scrollKey }: { tab: Tab | null; onTab: (t: Tab) => void; children: ReactNode; scrollKey?: string }) {
+export function Shell({ tab, onTab, children, scrollKey, ready = true }: { tab: Tab | null; onTab: (t: Tab) => void; children: ReactNode; scrollKey?: string; ready?: boolean }) {
   const main = useRef<HTMLElement>(null);
   // a new view starts at the top
   useEffect(() => { main.current?.scrollTo({ top: 0 }); }, [scrollKey]);
+  const arrive = useArrival(ready);
   return (
-    <div className="sa">
+    <div className={`sa ${arrive.phase !== "none" ? `is-arriving is-arrive-${arrive.phase}` : ""}`}>
+      <Arrival phase={arrive.phase} ticked={arrive.ticked} />
       <aside className="sa-side">
         <div className="sa-brand">
-          <span className="sa-brand-mark" aria-hidden="true">N</span>
+          <span className="sa-brand-mark" aria-hidden="true"><NextCube /></span>
           <span className="sa-brand-txt"><b>Next</b><i>Platform console</i></span>
         </div>
         <nav className="sa-nav">
           {NAV.map((n) => {
             const I = n.icon;
             return (
-              <button key={n.key} className={`sa-nav-item ${tab === n.key ? "is-on" : ""}`} onClick={() => onTab(n.key)} aria-label={n.label}>
+              // a click shouldn't keep the sidebar open (it opens on hover, or on keyboard focus)
+              <button key={n.key} className={`sa-nav-item ${tab === n.key ? "is-on" : ""}`} onClick={(e) => { e.currentTarget.blur(); onTab(n.key); }} aria-label={n.label}>
                 <I size={17} strokeWidth={1.9} /> <span>{n.label}</span>
               </button>
             );
@@ -75,15 +208,20 @@ export function Shell({ tab, onTab, children, scrollKey }: { tab: Tab | null; on
   );
 }
 
-export function Head({ kicker, title, sub, right }: { kicker: ReactNode; title: ReactNode; sub?: ReactNode; right?: ReactNode }) {
+/** Every view's header: a compact dark card (kicker, title, line, tools), with room for glass totals under it. */
+export function Head({ kicker, title, sub, right, children }: { kicker: ReactNode; title: ReactNode; sub?: ReactNode; right?: ReactNode; children?: ReactNode }) {
   return (
-    <header className="sa-head">
-      <div className="sa-head-l">
-        <span className="sa-kicker">{kicker}</span>
-        <h1 className="sa-h1">{title}</h1>
-        {sub && <p className="sa-sub">{sub}</p>}
+    <header className={`sa-hero is-head ${children ? "has-kpis" : ""}`}>
+      <i className="sa-hero-glow" aria-hidden="true" />
+      <div className="sa-hero-top">
+        <div className="sa-hero-head">
+          <span className="sa-hero-kick">{kicker}</span>
+          <h1 className="sa-hero-name"><span>{title}</span></h1>
+          {sub && <p className="sa-hero-sub">{sub}</p>}
+        </div>
+        {right && <div className="sa-hero-tools">{right}</div>}
       </div>
-      {right && <div className="sa-head-r">{right}</div>}
+      {children}
     </header>
   );
 }
@@ -184,7 +322,7 @@ export function HBars({ rows, fmt, max: max0 }: { rows: BarRow[]; fmt: (v: numbe
   const max = max0 ?? Math.max(...rows.map((r) => r.value), 0) ?? 1;
   if (!rows.length) return <Empty>Nothing to show yet.</Empty>;
   return (
-    <div className="sa-hb">
+    <div className="sa-hb" style={{ ["--hb-n" as string]: rows.length }}>
       {rows.map((r) => (
         <div key={r.key} className="sa-hb-row">
           <span className="sa-hb-l">{r.label}{r.sub && <small>{r.sub}</small>}</span>
@@ -264,13 +402,98 @@ export function Th<K extends string>({ k, sort, setSort, children, num, wide }: 
   );
 }
 
+/** A person in a list: avatar (in their company's colour), name and e-mail; deactivated people get a badge on the avatar. */
+export function PersonCell({ u, color }: { u: { first_name: string | null; last_name: string | null; email: string | null; active: boolean }; color?: string }) {
+  const name = personName(u);
+  return (
+    <span className={`sa-co sa-person ${u.active ? "" : "is-off"}`} title={u.active ? undefined : `${name} is deactivated`}>
+      <span className="sa-person-av">
+        <span className="sa-co-av is-round" style={color ? { ["--pc" as string]: color } : undefined}>{initials(name)}</span>
+        {!u.active && <i className="sa-person-off" aria-label="Deactivated"><Ban size={9} strokeWidth={3} /></i>}
+      </span>
+      <span className="sa-co-t"><b>{name}</b><small>{u.email}</small></span>
+    </span>
+  );
+}
+
 export const initials = (name: string) => name.split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "?";
 export const personName = (u: { first_name: string | null; last_name: string | null; email: string | null }) =>
   [u.first_name, u.last_name].map((x) => (x ?? "").trim()).filter(Boolean).join(" ") || u.email || "No name yet";
 export const ROLE_LABELS: Record<string, string> = {
   boss: "Boss / Owner", consultancy_manager: "Consultancy manager", customer_success: "Customer success",
   customer_success_manager: "CS manager", sales_manager: "Sales manager", sales: "Sales", consultant: "Consultant",
+  it: "IT", it_manager: "IT manager", marketing: "Marketing", marketing_manager: "Marketing manager",
+  hr: "Human resources", hr_manager: "HR manager", finance: "Finance", finance_manager: "Finance manager",
 };
+
+/**
+ * Someone's role in their company, changeable right here: a click opens the company's roles
+ * (its security levels) in a small menu; picking one saves it.
+ */
+export function RolePicker({ userId, tenantId, role, dept, disabled, onChanged }: {
+  userId: string; tenantId: string; role: string | null; dept?: string | null; disabled?: boolean; onChanged: (role: string) => void;
+}) {
+  const [open, setOpen] = useState<DOMRect | null>(null);
+  const [roles, setRoles] = useState<CompanyRole[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const btn = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    loadRoles(tenantId).then((r) => { if (alive) setRoles(r); }, (e) => { if (alive) setErr((e as Error).message); });
+    const close = (e: Event) => { if (!(e.target as Element)?.closest?.(".sa-rolemenu")) setOpen(null); };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(null); };
+    window.addEventListener("mousedown", close); window.addEventListener("keydown", key); window.addEventListener("resize", close as never);
+    document.querySelector(".sa-main")?.addEventListener("scroll", close, { passive: true });
+    return () => {
+      alive = false; window.removeEventListener("mousedown", close); window.removeEventListener("keydown", key); window.removeEventListener("resize", close as never);
+      document.querySelector(".sa-main")?.removeEventListener("scroll", close);
+    };
+  }, [open, tenantId]);
+  const pick = async (r: CompanyRole) => {
+    setBusy(true); setErr("");
+    const e = await setUserRole(userId, r.level_key);
+    setBusy(false);
+    if (e) { setErr(e); return; }
+    setOpen(null);
+    onChanged(r.base_role);
+  };
+  const label = role ? (ROLE_LABELS[role] ?? role) : "Not set";
+  const W = 248;
+  const pos = open ? { left: Math.min(open.left, window.innerWidth - W - 12), top: open.bottom + 6 + 320 > window.innerHeight ? Math.max(12, open.top - 6 - 320) : open.bottom + 6 } : null;
+  return (
+    <>
+      <button ref={btn} type="button" className={`sa-role ${open ? "is-open" : ""}`} disabled={disabled}
+        onClick={(e) => { e.stopPropagation(); setOpen(open ? null : (btn.current?.getBoundingClientRect() ?? null)); }}
+        title={disabled ? undefined : "Change the role"}>
+        <span>{label}</span>{dept && <small>{dept}</small>}
+        {!disabled && <ChevronDown size={13} strokeWidth={2.4} />}
+      </button>
+      {open && pos && createPortal(
+        <div className="sa-rolemenu" style={{ left: pos.left, top: pos.top, width: W }} onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} role="menu">
+          <span className="sa-rolemenu-k">Role in the company</span>
+          {!roles && !err && <span className="sa-rolemenu-load"><span className="sa-spinner" /> Loading…</span>}
+          {roles && (
+            <div className="sa-rolemenu-list">
+              {roles.map((r) => {
+                const on = r.base_role === role;
+                return (
+                  <button key={r.level_key} type="button" role="menuitemradio" aria-checked={on} className={on ? "is-on" : ""} disabled={busy} onClick={() => void pick(r)}>
+                    <span>{r.name}</span>{r.dept_key && <small>{r.dept_key.replace(/_/g, " ")}</small>}
+                    {on && <Check size={14} strokeWidth={2.6} />}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {err && <span className="sa-rolemenu-err">{err}</span>}
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
 
 /** time per day by company, falling back to data changes until page time has been measured */
 export function activitySeries(d: Dashboard, metric: "time" | "requests" | "changes" | "users", days: string[], only?: string): Series[] {
@@ -361,7 +584,7 @@ export default function SuperAdminHome() {
   );
 
   return (
-    <Shell tab={tab} onTab={setTab} scrollKey={tab}>
+    <Shell tab={tab} onTab={setTab} scrollKey={tab} ready={!!dash || !!err}>
       {err && <div className="sa-alert"><b>Couldn't load the console.</b> {err}</div>}
       {!dash ? (
         <div className="sa-loading"><span className="sa-spinner" /> Loading the platform…</div>
@@ -371,14 +594,17 @@ export default function SuperAdminHome() {
           {tab === "companies" && model && (
             <Companies d={dash} m={model} c={costs} tools={tools} onOpen={(id) => navigate(`/superadmin/company/${id}`)} onNew={() => setShowCreate(true)} />
           )}
-          {tab === "users" && model && <AllUsers d={dash} m={model} c={costs} people={people} tools={tools} onOpen={(id) => navigate(`/superadmin/company/${id}?tab=users`)} />}
+          {tab === "users" && model && <AllUsers d={dash} m={model} c={costs} people={people} tools={tools} onOpen={(id) => navigate(`/superadmin/company/${id}?tab=users`)}
+            onAdded={() => { setPeople(null); void load(); }}
+            onRole={(uid, r) => setPeople((ps) => ps && ps.map((p) => (p.id === uid ? { ...p, role: r } : p)))} />}
           {tab === "costs" && model && <Costs d={dash} m={model} c={costs} people={people} tools={tools} onSave={saveSettings} />}
           {tab === "usage" && model && <Usage d={dash} c={costs} tools={tools} />}
           {tab === "data" && <DataView d={dash} tools={tools} onSnapshot={snapshot} busy={snapBusy} />}
           {tab === "settings" && <SourcesView d={dash} c={costs} k={costsData} m={model} syncing={syncing} onSync={() => void sync()} onSave={saveSettings} />}
         </div>
       )}
-      {showCreate && <SuperAdminCreate onClose={() => setShowCreate(false)} onCreated={() => { setShowCreate(false); void load(); }} />}
+      {showCreate && <SuperAdminCreate next={dash?.tenants.length ?? 0} onClose={() => setShowCreate(false)}
+        onCreated={(id) => { setShowCreate(false); if (id) navigate(`/superadmin/company/${id}?tab=users`); else void load(); }} />}
     </Shell>
   );
 }
@@ -411,7 +637,18 @@ function Overview({ d, m, c, tools, onTenant, onSources }: { d: Dashboard; m: Co
   const since = measuredSince(d);
   return (
     <>
-      <Head kicker="Platform console" title="Overview" sub={`Last ${d.days} days · storage as of ${d.snapshot_day ? new Date(d.snapshot_day).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "—"}`} right={tools} />
+      <Head kicker="Platform console" title="Overview" sub={`Last ${d.days} days · storage as of ${d.snapshot_day ? new Date(d.snapshot_day).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "—"}`} right={tools}>
+        <div className="sa-kpis">
+          <Kpi label="Monthly cost" value={fmtMoney(m.total, c.currency)} sub={`${fmtMoney(m.fixed, c.currency)} fixed · ${fmtMoney(m.usage, c.currency)} usage · ${fmtMoney(m.ai, c.currency)} AI`} />
+          {revenue > 0
+            ? <Kpi label="Monthly margin" value={fmtMoney(revenue - m.total, c.currency)} sub={`${Math.round(((revenue - m.total) / revenue) * 100)}% of ${fmtMoney(revenue, c.currency)} revenue`} tone={revenue - m.total < 0 ? "bad" : undefined} />
+            : <Kpi label="Cost per user" value={fmtMoney(people ? m.total / people : 0, c.currency)} sub={`${people} active users`} />}
+          <Kpi label="Companies" value={`${active}`} sub={`${d.tenants.length - active} disabled · ${d.tenants.length} in total`} />
+          <Kpi label="Users" value={fmtNum(people)} sub={`${d.mau} signed in last 30 days${hasTime ? ` · ${usedApp} used the app` : ""}`} />
+          <Kpi label="Database" value={fmtBytes(d.db_bytes)} meter={d.db_bytes / (SUPABASE_UNITS.db_included_gb * 1024 ** 3)} sub={`of ${SUPABASE_UNITS.db_included_gb} GB included`} tone={d.db_bytes > SUPABASE_UNITS.db_included_gb * 1024 ** 3 * 0.85 ? "warn" : undefined} />
+          <Kpi label="Files" value={fmtBytes(d.file_bytes)} meter={d.file_bytes / (SUPABASE_UNITS.file_included_gb * 1024 ** 3)} sub={`${fmtNum(d.file_count)} files · ${SUPABASE_UNITS.file_included_gb} GB included`} />
+        </div>
+      </Head>
       {m.missing.length > 0 && (
         <div className="sa-connect">
           <AlertTriangle size={16} strokeWidth={2} />
@@ -420,17 +657,6 @@ function Overview({ d, m, c, tools, onTenant, onSources }: { d: Dashboard; m: Co
         </div>
       )}
       {!hasTime && <Note>Time in the app, requests and data transfer are measured from this release on{since ? ` (first data ${since})` : ""}. Until there is some, activity shows the data changes people made, and costs are split by those.</Note>}
-      <div className="sa-kpis">
-        <Kpi label="Monthly cost" value={fmtMoney(m.total, c.currency)} sub={`${fmtMoney(m.fixed, c.currency)} fixed · ${fmtMoney(m.usage, c.currency)} usage · ${fmtMoney(m.ai, c.currency)} AI`} />
-        {revenue > 0
-          ? <Kpi label="Monthly margin" value={fmtMoney(revenue - m.total, c.currency)} sub={`${Math.round(((revenue - m.total) / revenue) * 100)}% of ${fmtMoney(revenue, c.currency)} revenue`} tone={revenue - m.total < 0 ? "bad" : undefined} />
-          : <Kpi label="Cost per user" value={fmtMoney(people ? m.total / people : 0, c.currency)} sub={`${people} active users`} />}
-        <Kpi label="Companies" value={`${active}`} sub={`${d.tenants.length - active} disabled · ${d.tenants.length} in total`} />
-        <Kpi label="Users" value={fmtNum(people)} sub={`${d.mau} signed in last 30 days${hasTime ? ` · ${usedApp} used the app` : ""}`} />
-        <Kpi label="Database" value={fmtBytes(d.db_bytes)} meter={d.db_bytes / (SUPABASE_UNITS.db_included_gb * 1024 ** 3)} sub={`of ${SUPABASE_UNITS.db_included_gb} GB included`} tone={d.db_bytes > SUPABASE_UNITS.db_included_gb * 1024 ** 3 * 0.85 ? "warn" : undefined} />
-        <Kpi label="Files" value={fmtBytes(d.file_bytes)} meter={d.file_bytes / (SUPABASE_UNITS.file_included_gb * 1024 ** 3)} sub={`${fmtNum(d.file_count)} files · ${SUPABASE_UNITS.file_included_gb} GB included`} />
-      </div>
-
       <div className="sa-row sa-row-wide">
         <Card title="Activity by company" sub={metric === "time" ? "Time actively using the app, per day" : metric === "requests" ? "Requests to the server, per day" : "Records created, edited or imported, per day"}
           right={<div className="sa-seg is-sm">{(["time", "requests", "changes"] as const).map((k) => <button key={k} className={metric === k ? "is-on" : ""} onClick={() => setMetric(k)}>{k === "time" ? "Time" : k === "requests" ? "Requests" : "Changes"}</button>)}</div>}>
@@ -484,11 +710,58 @@ export const allocLabel = (a: Allocation) => ({ usage: "Usage (½ storage, ½ ac
 
 /* ---------- companies ---------- */
 type CoSort = "name" | "users" | "active" | "seen" | "storage" | "time" | "requests" | "ai" | "cost" | "margin";
+/** A company's activity over the period, as a small area line (its colour). */
+function Spark({ values, color }: { values: number[]; color: string }) {
+  const W = 104, H = 30, n = values.length;
+  const max = Math.max(...values, 0);
+  if (!n || max <= 0) return <span className="sa-spark is-flat" aria-hidden="true"><i /></span>;
+  const x = (i: number) => (n === 1 ? W / 2 : (i / (n - 1)) * W);
+  const y = (v: number) => H - 3 - (Math.sqrt(v / max) * (H - 6)); // sqrt: one bulk day doesn't flatten the rest
+  const pts = values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const gid = `sg${color.replace(/[^0-9a-f]/gi, "")}`;
+  return (
+    <svg className="sa-spark" viewBox={`0 0 ${W} ${H}`} width={W} height={H} aria-hidden="true" preserveAspectRatio="none">
+      <defs><linearGradient id={gid} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={color} stopOpacity="0.28" /><stop offset="1" stopColor={color} stopOpacity="0" /></linearGradient></defs>
+      <polygon points={`0,${H} ${pts} ${W},${H}`} fill={`url(#${gid})`} />
+      <polyline points={pts} fill="none" stroke={color} strokeWidth="1.7" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}
+
+type CoFilter = "all" | "enterprise" | "base" | "off";
 function Companies({ d, m, c, tools, onOpen, onNew }: { d: Dashboard; m: CostModel; c: CostSettings; tools: ReactNode; onOpen: (id: string) => void; onNew: () => void }) {
   const [q, setQ] = useState("");
+  const [filter, setFilter] = useState<CoFilter>("all");
   const [sort, setSort] = useState<{ key: CoSort; dir: 1 | -1 }>({ key: "cost", dir: -1 });
   const hasTime = d.tenants.some((t) => t.seconds > 0);
-  const rows = d.tenants.filter((t) => t.name.toLowerCase().includes(q.trim().toLowerCase())).map((t) => ({ t, k: m.byId.get(t.id)! }));
+  const planOf = (t: Dashboard["tenants"][number]) => (t.plan === "base" ? "base" : "enterprise");
+  const counts = {
+    all: d.tenants.length,
+    enterprise: d.tenants.filter((t) => planOf(t) === "enterprise").length,
+    base: d.tenants.filter((t) => planOf(t) === "base").length,
+    off: d.tenants.filter((t) => !t.active).length,
+  };
+  // activity per company per day (time in the app once it's measured, data changes until then)
+  const days = useMemo(() => dayList(d.since, d.days), [d]);
+  const spark = useMemo(() => {
+    const out = new Map<string, number[]>();
+    const idx = new Map(days.map((x, i) => [x, i]));
+    const put = (tid: string | undefined, day: string, v: number) => {
+      if (!tid) return;
+      const i = idx.get(day.slice(0, 10)); if (i == null) return;
+      const arr = out.get(tid) ?? new Array(days.length).fill(0); arr[i] += v; out.set(tid, arr);
+    };
+    if (hasTime) d.daily.forEach((r) => put(r.tenant_id, r.day, r.seconds));
+    else d.changes_daily.forEach((r) => put(r.tenant_id, r.day, r.changes));
+    return out;
+  }, [d, days, hasTime]);
+  const seatsUsed = d.tenants.reduce((a, t) => a + t.users, 0), seatsAll = d.tenants.reduce((a, t) => a + t.max_users, 0);
+  const totalCost = d.tenants.reduce((a, t) => a + (m.byId.get(t.id)?.total ?? 0), 0);
+
+  const rows = d.tenants
+    .filter((t) => filter === "all" || (filter === "off" ? !t.active : planOf(t) === filter))
+    .filter((t) => t.name.toLowerCase().includes(q.trim().toLowerCase()))
+    .map((t) => ({ t, k: m.byId.get(t.id)!, ci: d.tenants.indexOf(t) }));
   const val = (r: (typeof rows)[number]): number | string => {
     switch (sort.key) {
       case "name": return r.t.name.toLowerCase();
@@ -504,51 +777,98 @@ function Companies({ d, m, c, tools, onOpen, onNew }: { d: Dashboard; m: CostMod
     }
   };
   rows.sort((a, b) => { const x = val(a), y = val(b); return (x < y ? -1 : x > y ? 1 : 0) * sort.dir; });
+  const FILTERS: { k: CoFilter; label: string }[] = [
+    { k: "all", label: "All" }, { k: "enterprise", label: "Enterprise" }, { k: "base", label: "Base" }, { k: "off", label: "Disabled" },
+  ];
+  const entPct = counts.all ? (counts.enterprise / counts.all) * 100 : 0;
   return (
     <>
-      <Head kicker="Platform console" title="Companies" sub={`${d.tenants.length} companies · last ${d.days} days`}
-        right={<>{tools}<button className="sa-btn is-primary" onClick={onNew}><Plus size={16} strokeWidth={2.2} /> <span>New company</span></button></>} />
-      <Card title={<span className="sa-search"><Search size={15} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search companies" /></span>}>
+      <Head kicker="Platform console" title="Companies" sub={`${d.tenants.length} ${d.tenants.length === 1 ? "company" : "companies"} · last ${d.days} days`}
+        right={<>{tools}<button className="sa-btn is-primary" onClick={onNew}><Plus size={16} strokeWidth={2.2} /> <span>New company</span></button></>}>
+      <div className="sa-kpis is-4 sa-co-kpis">
+        <Kpi label="Companies" value={counts.all} sub={`${counts.all - counts.off} active${counts.off ? ` · ${counts.off} disabled` : ""}`} />
+        <div className="sa-kpi">
+          <span className="sa-kpi-k">Apps</span>
+          <b className="sa-kpi-v">{counts.enterprise}<small> Enterprise</small> <span className="sa-kpi-sep">·</span> {counts.base}<small> Base</small></b>
+          <span className="sa-split" aria-hidden="true"><i className="is-ent" style={{ width: `${entPct}%` }} /><i className="is-base" style={{ width: `${100 - entPct}%` }} /></span>
+          <span className="sa-kpi-s">Companies by plan</span>
+        </div>
+        <Kpi label="Seats in use" value={<>{seatsUsed}<small>/{seatsAll}</small></>} meter={seatsAll ? seatsUsed / seatsAll : 0} sub={`${seatsAll ? Math.round((seatsUsed / seatsAll) * 100) : 0}% of the seats sold`} />
+        <Kpi label="Running cost" value={fmtMoney(totalCost, c.currency)} sub={`per month · ${fmtMoney(counts.all ? totalCost / counts.all : 0, c.currency)} per company`} />
+      </div>
+      </Head>
+
+      <Card className="sa-co-card" title={
+        <span className="sa-co-bar">
+          <span className="sa-seg sa-co-filter" role="tablist" aria-label="Show">
+            {FILTERS.map((f) => (
+              <button key={f.k} role="tab" aria-selected={filter === f.k} className={filter === f.k ? "is-on" : ""} onClick={() => setFilter(f.k)}>
+                {f.label}<i>{counts[f.k]}</i>
+              </button>
+            ))}
+          </span>
+        </span>
+      } right={<span className="sa-search"><Search size={15} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search companies" /></span>}>
         <div className="sa-tablewrap">
-          <table className="sa-table">
+          <table className="sa-table sa-co-table">
             <thead><tr>
               <Th k="name" sort={sort} setSort={setSort}>Company</Th>
               <Th k="users" sort={sort} setSort={setSort} num>Seats</Th>
               <Th k="active" sort={sort} setSort={setSort} num>{hasTime ? "Active" : "Signed in"}</Th>
               <Th k="seen" sort={sort} setSort={setSort} num>Last seen</Th>
+              <th className="sa-th-spark">{hasTime ? "Time in app" : "Activity"} · {d.days}d</th>
+              <Th k="time" sort={sort} setSort={setSort} num>{hasTime ? "Total" : "Changes"}</Th>
               <Th k="storage" sort={sort} setSort={setSort} num>Data stored</Th>
-              <Th k="time" sort={sort} setSort={setSort} num>{hasTime ? "Time in app" : "Changes"}</Th>
-              <Th k="requests" sort={sort} setSort={setSort} num>Requests</Th>
-              <Th k="ai" sort={sort} setSort={setSort} num>AI tokens</Th>
+              <Th k="requests" sort={sort} setSort={setSort} num wide>Requests</Th>
+              <Th k="ai" sort={sort} setSort={setSort} num wide>AI tokens</Th>
               <Th k="cost" sort={sort} setSort={setSort} num>Cost / mo</Th>
               <Th k="margin" sort={sort} setSort={setSort} num>Margin</Th>
+              <th className="is-go" aria-hidden="true" />
             </tr></thead>
             <tbody>
-              {rows.map(({ t, k }, i) => (
-                <tr key={t.id} className="is-click" onClick={() => onOpen(t.id)}>
-                  <td>
-                    <span className="sa-co">
-                      <span className="sa-co-av" style={{ background: colorOf(d.tenants.indexOf(t) >= 0 ? d.tenants.indexOf(t) : i) }}>{initials(t.name)}</span>
-                      <span className="sa-co-t"><b>{t.name}</b><small className={t.active ? "is-on" : "is-off"}>{t.active ? "Active" : "Disabled"}</small></span>
-                    </span>
-                  </td>
-                  <td className="is-num">
-                    <span className="sa-seats"><b>{t.users}</b>/{t.max_users}</span>
-                    <span className="sa-meter is-sm"><i style={{ width: `${Math.min(100, (t.users / Math.max(1, t.max_users)) * 100)}%` }} /></span>
-                  </td>
-                  <td className="is-num">{hasTime ? t.active_users : t.signed_in_30d}</td>
-                  <td className="is-num is-dim">{fmtAgo(t.last_seen)}</td>
-                  <td className="is-num">{fmtBytes(t.db_bytes + t.file_bytes)}<small>{fmtNum(t.db_rows)} rows</small></td>
-                  <td className="is-num">{hasTime ? fmtDur(t.seconds) : fmtNum(t.changes)}</td>
-                  <td className="is-num">{fmtNum(t.requests)}<small>{fmtBytes(t.bytes)}</small></td>
-                  <td className="is-num">{fmtNum(t.ai_in + t.ai_out)}</td>
-                  <td className="is-num"><b>{fmtMoney(k.total, c.currency)}</b><small>{fmtMoney(k.perUser, c.currency)} / user</small></td>
-                  <td className={`is-num ${k.margin != null && k.margin < 0 ? "is-bad" : ""}`}>{k.margin == null ? <span className="is-dim">—</span> : fmtMoney(k.margin, c.currency)}</td>
-                </tr>
-              ))}
+              {rows.map(({ t, k, ci }) => {
+                const col = colorOf(ci);
+                const plan = planOf(t);
+                return (
+                  <tr key={t.id} className={`is-click ${t.active ? "" : "is-off"}`} onClick={() => onOpen(t.id)} style={{ ["--row" as string]: col }}>
+                    <td>
+                      <span className="sa-co">
+                        <span className="sa-co-av" style={{ background: `linear-gradient(150deg, color-mix(in srgb, ${col} 70%, #fff), ${col})` }}>{initials(t.name)}</span>
+                        <span className="sa-co-t">
+                          <b>{t.name}</b>
+                          <small className="sa-co-meta">
+                            <span className={`sa-co-state ${t.active ? "is-on" : "is-off"}`}>{t.active ? "Active" : "Disabled"}</span>
+                            <i className={`sa-plan-pill is-${plan}`}>{plan === "base" ? "Base" : "Enterprise"}</i>
+                          </small>
+                        </span>
+                      </span>
+                    </td>
+                    <td className="is-num">
+                      <span className="sa-seats"><b>{t.users}</b>/{t.max_users}</span>
+                      <span className="sa-meter is-sm"><i style={{ width: `${Math.min(100, (t.users / Math.max(1, t.max_users)) * 100)}%` }} /></span>
+                    </td>
+                    <td className="is-num">{hasTime ? t.active_users : t.signed_in_30d}</td>
+                    <td className="is-num is-dim">{fmtAgo(t.last_seen)}</td>
+                    <td className="sa-td-spark"><Spark values={spark.get(t.id) ?? []} color={col} /></td>
+                    <td className="is-num">{hasTime ? fmtDur(t.seconds) : fmtNum(t.changes)}</td>
+                    <td className="is-num">{fmtBytes(t.db_bytes + t.file_bytes)}<small>{fmtNum(t.db_rows)} rows</small></td>
+                    <td className="is-num is-wide">{fmtNum(t.requests)}<small>{fmtBytes(t.bytes)}</small></td>
+                    <td className="is-num is-wide">{fmtNum(t.ai_in + t.ai_out)}</td>
+                    <td className="is-num"><b>{fmtMoney(k.total, c.currency)}</b><small>{fmtMoney(k.perUser, c.currency)} / user</small></td>
+                    <td className={`is-num ${k.margin != null && k.margin < 0 ? "is-bad" : ""}`}>{k.margin == null ? <span className="is-dim">—</span> : fmtMoney(k.margin, c.currency)}</td>
+                    <td className="is-go"><ChevronRight size={16} strokeWidth={2.2} /></td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
-          {!rows.length && <Empty>No company matches.</Empty>}
+          {!rows.length && (
+            <div className="sa-co-empty">
+              <Building2 size={22} strokeWidth={1.7} />
+              <b>{q.trim() ? "No company matches" : filter === "base" ? "No company on Base yet" : filter === "off" ? "No disabled companies" : "No companies yet"}</b>
+              {!q.trim() && filter !== "off" && <button className="sa-btn is-primary" onClick={onNew}><Plus size={15} strokeWidth={2.2} /> <span>New company</span></button>}
+            </div>
+          )}
         </div>
       </Card>
     </>
@@ -557,10 +877,11 @@ function Companies({ d, m, c, tools, onOpen, onNew }: { d: Dashboard; m: CostMod
 
 /* ---------- users (every company) ---------- */
 type UsSort = "name" | "company" | "role" | "signin" | "time" | "changes" | "requests" | "ai" | "cost";
-function AllUsers({ d, m, c, people, tools, onOpen }: { d: Dashboard; m: CostModel; c: CostSettings; people: (TenantUserRow & { tenant_id: string; tenant: string })[] | null; tools: ReactNode; onOpen: (tenantId: string) => void }) {
+function AllUsers({ d, m, c, people, tools, onOpen, onAdded, onRole }: { d: Dashboard; m: CostModel; c: CostSettings; people: (TenantUserRow & { tenant_id: string; tenant: string })[] | null; tools: ReactNode; onOpen: (tenantId: string) => void; onAdded: (tenantId: string) => void; onRole: (userId: string, role: string) => void }) {
   const [q, setQ] = useState("");
   const [co, setCo] = useState("");
   const [status, setStatus] = useState<"all" | "active" | "off">("active");
+  const [adding, setAdding] = useState(false);
   const [sort, setSort] = useState<{ key: UsSort; dir: 1 | -1 }>({ key: "cost", dir: -1 });
   const costBy = useMemo(() => {
     const out = new Map<string, number>();
@@ -568,11 +889,26 @@ function AllUsers({ d, m, c, people, tools, onOpen }: { d: Dashboard; m: CostMod
     d.tenants.forEach((t) => userCosts(m.byId.get(t.id), people.filter((u) => u.tenant_id === t.id), d.ai.filter((a) => a.tenant_id === t.id)).forEach((v, k) => out.set(k, v)));
     return out;
   }, [people, d, m]);
-  if (!people) return (<><Head kicker="Platform console" title="Users" right={tools} /><div className="sa-loading"><span className="sa-spinner" /> Loading everyone…</div></>);
+  const tColor = useMemo(() => new Map(d.tenants.map((t, i) => [t.id, colorOf(i)])), [d]);
+  const tPlan = useMemo(() => new Map(d.tenants.map((t) => [t.id, t.plan === "base" ? "base" : "enterprise"])), [d]);
+  const addBtn = <button className="sa-btn is-primary" onClick={() => setAdding(true)}><UserPlus size={16} strokeWidth={2.1} /> <span>Add user</span></button>;
+  const dialog = adding && (
+    <NewLoginModal
+      companies={d.tenants.map((t, i) => ({ id: t.id, name: t.name, users: t.users, max: t.max_users, plan: t.plan === "base" ? "base" : "enterprise", color: colorOf(i), active: t.active }))}
+      initial={co || undefined}
+      onClose={() => setAdding(false)}
+      onCreated={(tid) => { setAdding(false); onAdded(tid); }} />
+  );
+  if (!people) return (<><Head kicker="Platform console" title="Users" sub="Everyone, in every company" right={<>{tools}{addBtn}</>} /><div className="sa-loading"><span className="sa-spinner" /> Loading everyone…</div>{dialog}</>);
+
   const hasTime = people.some((u) => u.seconds > 0);
+  const active = people.filter((u) => u.active);
+  const recent = active.filter((u) => u.last_sign_in_at && Date.now() - new Date(u.last_sign_in_at).getTime() < 30 * 864e5).length;
+  const never = active.filter((u) => !u.last_sign_in_at).length;
+  const seatsAll = d.tenants.reduce((a, t) => a + t.max_users, 0);
   const ql = q.trim().toLowerCase();
   const rows = people.filter((u) => (!co || u.tenant_id === co) && (status === "all" || (status === "active" ? u.active : !u.active))
-    && (!ql || `${personName(u)} ${u.email ?? ""} ${u.tenant} ${u.role ?? ""}`.toLowerCase().includes(ql)));
+    && (!ql || `${personName(u)} ${u.email ?? ""} ${u.tenant} ${u.role ?? ""} ${u.department ?? ""}`.toLowerCase().includes(ql)));
   const val = (u: (typeof rows)[number]): number | string => {
     switch (sort.key) {
       case "name": return personName(u).toLowerCase();
@@ -587,21 +923,45 @@ function AllUsers({ d, m, c, people, tools, onOpen }: { d: Dashboard; m: CostMod
     }
   };
   rows.sort((a, b) => { const x = val(a), y = val(b); return (x < y ? -1 : x > y ? 1 : 0) * sort.dir; });
+  const perCo = d.tenants.map((t, i) => ({ t, n: people.filter((u) => u.tenant_id === t.id && u.active).length, col: colorOf(i) })).filter((x) => x.n > 0).sort((a, b) => b.n - a.n);
+  const recentPct = active.length ? recent / active.length : 0;
   return (
     <>
-      <Head kicker="Platform console" title="Users" sub={`${people.filter((u) => u.active).length} active · ${people.filter((u) => !u.active).length} deactivated · every company`} right={tools} />
-      <Card title={
+      <Head kicker="Platform console" title="Users" sub={`Everyone, in every company · last ${d.days} days`} right={<>{tools}{addBtn}</>}>
+        <div className="sa-kpis is-4">
+          <Kpi label="People" value={active.length} sub={`${people.length - active.length} deactivated · ${active.length}/${seatsAll} seats`} meter={seatsAll ? active.length / seatsAll : 0} />
+          <Kpi label="Signed in · 30 days" value={<>{recent}<small>/{active.length}</small></>} meter={recentPct} sub={`${Math.round(recentPct * 100)}% of the active people`} />
+          <Kpi label="Never signed in" value={never} sub={never ? "Logins created, not used yet" : "Everyone has signed in"} tone={never ? "warn" : undefined} />
+          <div className="sa-kpi">
+            <span className="sa-kpi-k">By company</span>
+            <span className="sa-split is-multi" aria-hidden="true">{perCo.map((x) => <i key={x.t.id} style={{ width: `${(x.n / Math.max(1, active.length)) * 100}%`, background: x.col }} />)}</span>
+            <span className="sa-kpi-cos">
+              {perCo.slice(0, 3).map((x) => <span key={x.t.id}><i style={{ background: x.col }} />{x.t.name} <b>{x.n}</b></span>)}
+              {perCo.length > 3 && <span className="is-more">+{perCo.length - 3}</span>}
+            </span>
+          </div>
+        </div>
+      </Head>
+      <Card className="sa-co-card" title={
         <span className="sa-filters">
-          <span className="sa-search"><Search size={15} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, e-mail, role" /></span>
-          <select className="sa-select" value={co} onChange={(e) => setCo(e.target.value)}>
-            <option value="">All companies</option>
-            {d.tenants.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
-          <div className="sa-seg is-sm">{(["active", "off", "all"] as const).map((s) => <button key={s} className={status === s ? "is-on" : ""} onClick={() => setStatus(s)}>{s === "active" ? "Active" : s === "off" ? "Deactivated" : "All"}</button>)}</div>
+          <span className="sa-seg sa-co-filter" role="tablist" aria-label="Show">
+            {(["active", "off", "all"] as const).map((s) => (
+              <button key={s} role="tab" aria-selected={status === s} className={status === s ? "is-on" : ""} onClick={() => setStatus(s)}>
+                {s === "active" ? "Active" : s === "off" ? "Deactivated" : "All"}<i>{s === "active" ? active.length : s === "off" ? people.length - active.length : people.length}</i>
+              </button>
+            ))}
+          </span>
+          <span className="sa-chipsel">
+            <select value={co} onChange={(e) => setCo(e.target.value)} aria-label="Company">
+              <option value="">All companies</option>
+              {d.tenants.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+            {co && <i style={{ background: tColor.get(co) }} />}
+          </span>
         </span>
-      } right={<span className="sa-count">{rows.length} shown</span>}>
+      } right={<span className="sa-search"><Search size={15} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, e-mail, role" /></span>}>
         <div className="sa-tablewrap">
-          <table className="sa-table">
+          <table className="sa-table sa-us-table">
             <thead><tr>
               <Th k="name" sort={sort} setSort={setSort}>Person</Th>
               <Th k="company" sort={sort} setSort={setSort}>Company</Th>
@@ -612,26 +972,39 @@ function AllUsers({ d, m, c, people, tools, onOpen }: { d: Dashboard; m: CostMod
               <Th k="requests" sort={sort} setSort={setSort} num wide>Requests</Th>
               <Th k="ai" sort={sort} setSort={setSort} num>AI tokens</Th>
               <Th k="cost" sort={sort} setSort={setSort} num>Cost / mo</Th>
+              <th className="is-go" aria-hidden="true" />
             </tr></thead>
             <tbody>
-              {rows.map((u) => (
-                <tr key={u.id} className={`is-click ${u.active ? "" : "is-off"}`} onClick={() => onOpen(u.tenant_id)}>
-                  <td><span className="sa-co"><span className="sa-co-av is-round">{initials(personName(u))}</span><span className="sa-co-t"><b>{personName(u)}</b><small>{u.email}</small></span></span></td>
-                  <td>{u.tenant}</td>
-                  <td className="is-dim is-wide">{u.role ? (ROLE_LABELS[u.role] ?? u.role) : "—"}{!u.active && <span className="sa-tag is-off">Deactivated</span>}</td>
-                  <td className="is-num is-dim">{fmtAgo(u.last_sign_in_at)}</td>
-                  {hasTime && <td className="is-num">{fmtDur(u.seconds)}{u.top_page && <small>mostly {pageLabel(u.top_page)}</small>}</td>}
-                  <td className="is-num">{fmtNum(u.changes)}</td>
-                  <td className="is-num is-wide">{fmtNum(u.requests)}</td>
-                  <td className="is-num">{fmtNum(u.ai_in + u.ai_out)}</td>
-                  <td className="is-num"><b>{fmtMoney(costBy.get(u.id) ?? 0, c.currency)}</b></td>
-                </tr>
-              ))}
+              {rows.map((u) => {
+                const col = tColor.get(u.tenant_id) ?? "#12b57f";
+                const plan = tPlan.get(u.tenant_id) ?? "enterprise";
+                return (
+                  <tr key={u.id} className={`is-click ${u.active ? "" : "is-off"}`} onClick={() => onOpen(u.tenant_id)} style={{ ["--row" as string]: col }}>
+                    <td><PersonCell u={u} color={col} /></td>
+                    <td><span className="sa-us-co"><i style={{ background: col }} /><b>{u.tenant}</b>{plan === "base" && <em className="sa-plan-pill is-base">Base</em>}</span></td>
+                    <td className="is-dim is-wide"><RolePicker userId={u.id} tenantId={u.tenant_id} role={u.role} dept={u.department} onChanged={(r) => onRole(u.id, r)} /></td>
+                    <td className="is-num is-dim">{u.last_sign_in_at ? fmtAgo(u.last_sign_in_at) : <span className="sa-us-never">Never</span>}</td>
+                    {hasTime && <td className="is-num">{fmtDur(u.seconds)}{u.top_page && <small>mostly {pageLabel(u.top_page)}</small>}</td>}
+                    <td className="is-num">{fmtNum(u.changes)}</td>
+                    <td className="is-num is-wide">{fmtNum(u.requests)}</td>
+                    <td className="is-num">{fmtNum(u.ai_in + u.ai_out)}</td>
+                    <td className="is-num"><b>{fmtMoney(costBy.get(u.id) ?? 0, c.currency)}</b></td>
+                    <td className="is-go"><ChevronRight size={16} strokeWidth={2.2} /></td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
-          {!rows.length && <Empty>Nobody matches.</Empty>}
+          {!rows.length && (
+            <div className="sa-co-empty">
+              <Users size={22} strokeWidth={1.7} />
+              <b>{q.trim() ? "Nobody matches" : status === "off" ? "Nobody is deactivated" : "No users yet"}</b>
+              {!q.trim() && status !== "off" && addBtn}
+            </div>
+          )}
         </div>
       </Card>
+      {dialog}
     </>
   );
 }

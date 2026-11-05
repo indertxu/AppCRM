@@ -71,6 +71,9 @@ export const DOCK_PINNED_KEY = "next.dockPinned";
 export const DOCK_PINNED_EVENT = "next:dock-pinned";
 export const DOCK_LABELS_KEY = "next.dockLabels";
 export const DOCK_LABELS_EVENT = "next:dock-labels";
+/** "Small sidebar icons" (Settings › Interface): a slimmer rail that still fits when the page is zoomed in. */
+export const DOCK_COMPACT_KEY = "next.dockCompact";
+export const DOCK_COMPACT_EVENT = "next:dock-compact";
 
 export default function SettingsPage() {
   const { session, role, isSuperadmin } = useAuth() as any;
@@ -194,6 +197,17 @@ export default function SettingsPage() {
     localStorage.setItem(DOCK_LABELS_KEY, String(next));
     window.dispatchEvent(new CustomEvent(DOCK_LABELS_EVENT, { detail: next }));
     if (uid) await supabase.from("profiles").update({ dock_labels: next }).eq("id", uid);
+  };
+
+  // Small sidebar icons: saved to your profile (prefs.dockCompact), localStorage only avoids a flash.
+  const [dockCompact, setDockCompact] = useState<boolean>(() => { try { return localStorage.getItem(DOCK_COMPACT_KEY) === "true"; } catch { return false; } });
+  useEffect(() => { loadPrefs().then((p) => { if (typeof p.dockCompact === "boolean") setDockCompact(p.dockCompact); }).catch(() => {}); }, []);
+  const toggleCompact = () => {
+    const next = !dockCompact;
+    setDockCompact(next);
+    try { localStorage.setItem(DOCK_COMPACT_KEY, String(next)); } catch { /* ignore */ }
+    window.dispatchEvent(new CustomEvent(DOCK_COMPACT_EVENT, { detail: next }));
+    savePref("dockCompact", next).catch(() => {});
   };
 
   // Your own order of the toolbar: dragged here, saved to your profile.
@@ -508,15 +522,36 @@ export default function SettingsPage() {
             <div className="st-toggle-text">
               <span className="st-toggle-label">Always show menu labels</span>
               <span className="st-toggle-note">
-                Show each item's name under its icon in the sidebar instead of only on hover.
+                {dockCompact
+                  ? "Not with small icons: names show when you point at an icon."
+                  : "Show each item's name under its icon in the sidebar instead of only on hover."}
               </span>
             </div>
             <button
               type="button"
               role="switch"
-              aria-checked={dockLabels}
-              className={`st-switch ${dockLabels ? "on" : ""}`}
+              aria-checked={dockLabels && !dockCompact}
+              disabled={dockCompact}
+              className={`st-switch ${dockLabels && !dockCompact ? "on" : ""}`}
               onClick={toggleLabels}
+            >
+              <span className="st-switch-knob" />
+            </button>
+          </div>
+
+          <div className="st-toggle-row" style={{ marginTop: "1.1rem" }}>
+            <div className="st-toggle-text">
+              <span className="st-toggle-label">Small sidebar icons</span>
+              <span className="st-toggle-note">
+                A slimmer sidebar with smaller icons, so every page still fits when you zoom the browser in or work on a small screen.
+              </span>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={dockCompact}
+              className={`st-switch ${dockCompact ? "on" : ""}`}
+              onClick={toggleCompact}
             >
               <span className="st-switch-knob" />
             </button>

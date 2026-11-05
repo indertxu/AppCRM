@@ -1,0 +1,279 @@
+/* ===== Weekly hours editor =====
+   Seven columns you drag directly, rather than 28 time fields to type into. */
+.hz {
+  --mint: #86efc0; --emerald: #12b57f; --forest: #0a6f4d;
+  --ink: #0b241a; --muted: #5a7d6d; --line: rgba(10, 111, 77, 0.14);
+  display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto;
+}
+
+.hz-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 0.9rem; }
+
+.hz-save {
+  flex-shrink: 0; padding: 10px 20px; border: none; border-radius: 12px;
+  background: linear-gradient(120deg, var(--mint), var(--emerald)); color: #04120d;
+  font-family: "Space Grotesk", sans-serif; font-size: 13.5px; font-weight: 600;
+  cursor: pointer; box-shadow: 0 12px 26px -14px rgba(18, 181, 127, 0.8);
+  transition: transform 0.15s, filter 0.15s;
+}
+.hz-save:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.04); }
+.hz-save:disabled { opacity: 0.45; cursor: default; box-shadow: none; }
+
+.hz-legend { display: flex; gap: 18px; margin-bottom: 1rem; flex-wrap: wrap; }
+.hz-legend span { display: inline-flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--muted); }
+.hz-legend i { width: 13px; height: 13px; border-radius: 4px; }
+.hz-legend i.is-visible { background: rgba(18, 181, 127, 0.14); border: 1px solid rgba(18, 181, 127, 0.3); }
+.hz-legend i.is-work { background: linear-gradient(160deg, var(--mint), var(--emerald)); }
+.hz-legend i.is-lunch { background: repeating-linear-gradient(135deg, rgba(217,131,36,0.5) 0 4px, rgba(217,131,36,0.16) 4px 8px); }
+
+.hz-grid {
+  flex: 1 1 auto; min-height: 0;
+  display: grid; grid-template-columns: 54px repeat(7, minmax(0, 1fr)); gap: 10px;
+}
+
+.hz-scale { position: relative; }
+/* Lines up with the columns only: the header row and the footer are outside
+   the time area, so the labels no longer drift over them. */
+.hz-scale { margin: 29px 0 34px; }
+.hz-scale span {
+  position: absolute; right: 6px; transform: translateY(-50%);
+  white-space: nowrap;
+  font-size: 10px; font-weight: 600; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.hz-day { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.hz-day-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; height: 21px; flex-shrink: 0; }
+.hz-day-head b {
+  font-family: "Space Grotesk", sans-serif; font-size: 13px; font-weight: 600; color: var(--ink);
+}
+.hz-day.is-closed .hz-day-head b { color: var(--muted); }
+
+.hz-toggle {
+  width: 30px; height: 17px; padding: 0; flex-shrink: 0;
+  border: none; border-radius: 999px; background: rgba(10, 111, 77, 0.18);
+  cursor: pointer; transition: background 0.2s;
+}
+.hz-toggle span {
+  display: block; width: 13px; height: 13px; margin: 2px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.hz-toggle.is-on { background: var(--emerald); }
+.hz-toggle.is-on span { transform: translateX(13px); }
+
+.hz-col {
+  position: relative; flex: 1 1 auto; min-height: 0;
+  border-radius: 12px; background: #f6faf8;
+  border: 1px solid var(--line); overflow: hidden;
+}
+.hz-day.is-closed .hz-col { background: repeating-linear-gradient(135deg, #f2f5f3 0 6px, #eef2f0 6px 12px); }
+.hz-line { position: absolute; left: 0; right: 0; height: 1px; background: rgba(10, 111, 77, 0.07); }
+.hz-closed {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  font-size: 11px; font-weight: 600; color: var(--muted); letter-spacing: 0.04em;
+}
+
+.hz-band { position: absolute; left: 0; right: 0; border-radius: 8px; }
+.hz-band.is-visible {
+  background: rgba(18, 181, 127, 0.09);
+  border: 1px dashed rgba(18, 181, 127, 0.35);
+  transition: top 0.12s, height 0.12s;
+}
+.hz-band.is-work {
+  left: 5px; right: 5px;
+  background: linear-gradient(160deg, rgba(134, 239, 192, 0.9), rgba(18, 181, 127, 0.85));
+  box-shadow: 0 6px 16px -10px rgba(18, 181, 127, 0.9);
+  transition: top 0.12s, height 0.12s;
+}
+.hz-band.is-lunch {
+  left: 11px; right: 11px;
+  background: repeating-linear-gradient(135deg, rgba(217, 131, 36, 0.55) 0 5px, rgba(217, 131, 36, 0.2) 5px 10px);
+  border-radius: 6px;
+  transition: top 0.12s, height 0.12s;
+}
+
+/* Drag handles: the whole edge, not a tiny dot */
+.hz-h {
+  position: absolute; left: 0; right: 0; height: 13px;
+  cursor: ns-resize; z-index: 2;
+}
+/* The visible band sits under the work band, so its handles reach past both
+   sides where nothing can cover them. */
+.hz-band.is-visible { z-index: 1; }
+.hz-band.is-visible .hz-h { left: -6px; right: -6px; height: 15px; z-index: 4; }
+.hz-band.is-work { z-index: 2; }
+.hz-band.is-lunch { z-index: 3; }
+.hz-h.is-top { top: -5px; }
+.hz-h.is-bot { bottom: -5px; }
+.hz-h::after {
+  content: ""; position: absolute; left: 50%; top: 50%;
+  width: 26px; height: 3px; border-radius: 999px;
+  transform: translate(-50%, -50%);
+  background: rgba(255, 255, 255, 0.75);
+  opacity: 0; transition: opacity 0.15s;
+}
+.hz-band:hover .hz-h::after { opacity: 1; }
+.hz-band.is-visible .hz-h::after { background: rgba(18, 181, 127, 0.6); }
+
+.hz-time {
+  position: absolute; left: 6px;
+  font-family: "Space Grotesk", sans-serif; font-size: 10px; font-weight: 700;
+  color: #04331f; font-variant-numeric: tabular-nums; pointer-events: none;
+}
+.hz-time.is-top { top: 3px; }
+.hz-time.is-bot { bottom: 3px; }
+
+.hz-copy {
+  flex-shrink: 0; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px;
+  background: #fff; color: var(--muted);
+  font-family: inherit; font-size: 10.5px; font-weight: 600; cursor: pointer;
+  transition: border-color 0.14s, color 0.14s, background 0.14s;
+}
+.hz-copy:hover { border-color: rgba(18, 181, 127, 0.4); color: var(--forest); background: rgba(18, 181, 127, 0.06); }
+
+@media (prefers-reduced-motion: reduce) {
+  .hz-band, .hz-toggle span { transition: none; }
+}
+
+/* Per-day footer: worked hours plus the small actions */
+.hz-foot { display: flex; align-items: center; justify-content: space-between; gap: 6px; height: 26px; flex-shrink: 0; }
+.hz-total {
+  font-family: "Space Grotesk", sans-serif; font-size: 12px; font-weight: 700;
+  color: var(--forest); font-variant-numeric: tabular-nums;
+}
+.hz-foot-btns { display: flex; gap: 4px; }
+
+/* Remove the lunch break from a day */
+.hz-nolunch {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 18px; height: 18px; padding: 0; z-index: 3;
+  border: none; border-radius: 50%; background: rgba(255, 255, 255, 0.9);
+  color: #b06a10; font-size: 13px; line-height: 1; cursor: pointer;
+  opacity: 0; transition: opacity 0.15s;
+}
+.hz-band.is-lunch:hover .hz-nolunch { opacity: 1; }
+
+/* ===== Scope: company, a department, or one person ===== */
+.hz-scope { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.hz-scope-seg {
+  display: inline-flex; gap: 3px; padding: 3px;
+  border-radius: 11px; background: rgba(10, 111, 77, 0.06);
+}
+.hz-scope-seg button {
+  border: none; background: transparent; border-radius: 8px;
+  padding: 7px 15px; font-family: inherit; font-size: 12.5px; font-weight: 600;
+  color: var(--muted); cursor: pointer; transition: background 0.16s, color 0.16s;
+}
+.hz-scope-seg button:hover { color: var(--forest); }
+.hz-scope-seg button.is-on {
+  background: #fff; color: var(--forest);
+  box-shadow: 0 3px 9px -4px rgba(10, 111, 77, 0.45);
+}
+.hz-scope-pick {
+  appearance: none; -webkit-appearance: none;
+  padding: 8px 14px; border: 1px solid var(--line); border-radius: 11px;
+  background: #fff; font-family: "Space Grotesk", sans-serif;
+  font-size: 12.5px; font-weight: 600; color: var(--ink); cursor: pointer; outline: none;
+}
+.hz-scope-pick:focus { border-color: var(--emerald); box-shadow: 0 0 0 3px rgba(18, 181, 127, 0.14); }
+.hz-scope-note {
+  font-size: 11px; color: var(--muted); padding: 5px 11px;
+  border-radius: 999px; background: rgba(10, 111, 77, 0.05);
+}
+.hz-scope-reset {
+  border: 1px solid var(--line); border-radius: 9px; background: #fff;
+  padding: 6px 12px; font-family: inherit; font-size: 11.5px; font-weight: 600;
+  color: var(--muted); cursor: pointer; transition: border-color 0.14s, color 0.14s;
+}
+.hz-scope-reset:hover { border-color: rgba(184, 92, 92, 0.4); color: #b85c5c; }
+
+
+/* ===== Department and person picker ===== */
+.hz-pick { position: relative; }
+.hz-pick-btn {
+  display: inline-flex; align-items: center; gap: 9px;
+  padding: 5px 11px 5px 5px; min-width: 172px;
+  border: 1px solid var(--line); border-radius: 999px; background: #fff;
+  font-family: inherit; cursor: pointer;
+  transition: border-color 0.16s, box-shadow 0.16s;
+}
+.hz-pick-btn:hover { border-color: rgba(18, 181, 127, 0.42); }
+.hz-pick-btn.is-open { border-color: var(--emerald); box-shadow: 0 0 0 3px rgba(18, 181, 127, 0.14); }
+.hz-pick-av {
+  display: grid; place-items: center; width: 26px; height: 26px; flex-shrink: 0;
+  border-radius: 50%; background: linear-gradient(150deg, var(--mint), var(--emerald));
+  color: #04120d; font-family: "Space Grotesk", sans-serif; font-size: 11px; font-weight: 700;
+}
+.hz-pick-txt {
+  flex: 1; min-width: 0; text-align: left; text-transform: capitalize;
+  font-family: "Space Grotesk", sans-serif; font-size: 12.5px; font-weight: 600; color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.hz-pick-btn svg { width: 14px; height: 14px; flex-shrink: 0; color: var(--muted); transition: transform 0.22s; }
+.hz-pick-btn.is-open svg { transform: rotate(180deg); color: var(--emerald); }
+
+.hz-pick-pop {
+  position: absolute; top: calc(100% + 7px); left: 0; z-index: 60;
+  min-width: 230px; max-height: 280px; overflow-y: auto;
+  padding: 5px; border-radius: 15px; background: #fff;
+  border: 1px solid var(--line);
+  box-shadow: 0 26px 56px -22px rgba(11, 36, 26, 0.45);
+  animation: hz-pop-in 0.17s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes hz-pop-in { from { opacity: 0; transform: translateY(-7px) scale(0.98); } }
+.hz-pick-opt {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 7px 10px; border: none; border-radius: 10px; background: none;
+  font-family: "Space Grotesk", sans-serif; font-size: 12.5px; font-weight: 600;
+  color: var(--ink); text-align: left; text-transform: capitalize; cursor: pointer;
+  animation: hz-opt-in 0.24s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  transition: background 0.14s;
+}
+@keyframes hz-opt-in { from { opacity: 0; transform: translateX(-7px); } }
+.hz-pick-opt span:nth-child(2) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hz-pick-opt:hover { background: rgba(18, 181, 127, 0.08); }
+.hz-pick-opt.is-on { background: rgba(18, 181, 127, 0.13); }
+.hz-pick-tick { width: 14px; height: 14px; flex-shrink: 0; color: var(--emerald); }
+.hz-pick-empty { margin: 6px 10px; font-size: 11.5px; color: var(--muted); }
+.hz-pick-pop::-webkit-scrollbar { width: 7px; }
+.hz-pick-pop::-webkit-scrollbar-thumb { background: rgba(10, 111, 77, 0.2); border-radius: 999px; }
+
+@media (prefers-reduced-motion: reduce) { .hz-pick-pop, .hz-pick-opt { animation: none; } }
+.hz-err {
+  margin: 0 0 0.8rem; padding: 9px 13px; border-radius: 11px;
+  background: rgba(184,92,92,0.09); border: 1px solid rgba(184,92,92,0.25);
+  font-size: 12.5px; color: #b85c5c;
+}
+
+/* ===== Days worked from home ===== */
+.hz-head-btns { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; }
+.hz-home {
+  display: grid; place-items: center; width: 22px; height: 22px; padding: 0;
+  border: 1px solid var(--line); border-radius: 7px; background: #fff;
+  color: var(--muted); cursor: pointer;
+  transition: background 0.16s, border-color 0.16s, color 0.16s, transform 0.16s;
+}
+.hz-home svg { width: 12px; height: 12px; }
+.hz-home:hover { border-color: rgba(18, 181, 127, 0.4); color: var(--forest); }
+.hz-home.is-on {
+  background: linear-gradient(150deg, var(--mint), var(--emerald));
+  border-color: transparent; color: #04331f;
+  box-shadow: 0 5px 12px -6px rgba(18, 181, 127, 0.8);
+}
+.hz-home.is-on:hover { transform: translateY(-1px); }
+
+/* A remote day reads differently at a glance */
+.hz-day.is-remote .hz-col {
+  background:
+    repeating-linear-gradient(45deg, rgba(18,181,127,0.05) 0 8px, transparent 8px 16px),
+    #f6faf8;
+  border-color: rgba(18, 181, 127, 0.3);
+}
+.hz-day.is-remote .hz-day-head b { color: var(--forest); }
+
+.hz-legend i.is-remote {
+  background:
+    repeating-linear-gradient(45deg, rgba(18,181,127,0.45) 0 4px, transparent 4px 8px),
+    rgba(18,181,127,0.1);
+  border: 1px solid rgba(18, 181, 127, 0.3);
+}

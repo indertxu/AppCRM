@@ -1,18 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ChevronLeft, KeyRound, Trash2, Plus, RefreshCw, Pencil, Check, X, Power, Search } from "lucide-react";
+import { ChevronLeft, KeyRound, Trash2, Plus, RefreshCw, Pencil, Check, X, Power, Search, Wand2, ArrowRight, LayoutGrid, Feather, Copy } from "lucide-react";
 import { supabase } from "../../api/supabase";
 import {
-  createUser, deleteUser, toggleTenant, updateTenant, loadDashboard, loadTenantDetail, loadCosts, computeCosts, userCosts, withDefaults, aiCost,
+  deleteUser, toggleTenant, updateTenant, setTenantPlan, PLAN_LABEL, type TenantPlan, loadDashboard, loadTenantDetail, loadCosts, computeCosts, userCosts, withDefaults, aiCost,
   fmtBytes, fmtNum, fmtDur, fmtMoney, fmtAgo, pageLabel, dayList,
   type Dashboard, type TenantDetail, type TenantUserRow, type CostsData,
 } from "../../api/superadminApi";
 import {
-  Shell, Head, Period, Card, Kpi, Note, Empty, TimeChart, HBars, Heat, Legend, Donut, Th, useDays, colorOf,
+  Shell, Period, Card, Kpi, Note, Empty, TimeChart, HBars, Heat, Legend, Donut, Th, useDays, colorOf, Modal, useConfirm, PersonCell, RolePicker,
   initials, personName, ROLE_LABELS, allocLabel, type Tab, type Series,
 } from "./SuperAdminHome";
 import "./SuperAdmin.css";
 import { passwordProblem, PASSWORD_HINT } from "../../login/LoginPage";
+import { NewLoginModal, PwRules, makePw } from "./SuperAdminCreate";
 
 type CTab = "overview" | "users" | "usage" | "data" | "costs";
 const CTABS: { key: CTab; label: string }[] = [
@@ -70,53 +71,105 @@ export default function SuperAdminClient() {
     const r = await updateTenant(det.tenant.id, { maxUsers: next });
     if (r?.error) { setErr(r.error); void load(); }
   };
+  const [ask, askEl] = useConfirm();
+  const [planBusy, setPlanBusy] = useState(false);
+  const changePlan = async (plan: TenantPlan) => {
+    if (!det?.tenant || (det.tenant.plan ?? "enterprise") === plan) return;
+    const from = (det.tenant.plan ?? "enterprise") as TenantPlan;
+    const ok = await ask({
+      kicker: "Change the app", title: `Move ${det.tenant.name} to ${PLAN_LABEL[plan]}?`, ok: `Move to ${PLAN_LABEL[plan]}`, tone: plan === "base" ? "base" : undefined,
+      icon: plan === "base" ? <Feather size={19} strokeWidth={1.9} /> : <LayoutGrid size={19} strokeWidth={1.9} />,
+      body: (
+        <div className="sa-ask-plan">
+          <div className="sa-ask-flow">
+            <span className={`sa-plan-chip is-${from}`}>{PLAN_LABEL[from]}</span>
+            <ArrowRight size={16} strokeWidth={2.2} />
+            <span className={`sa-plan-chip is-${plan}`}>{PLAN_LABEL[plan]}</span>
+          </div>
+          <ul className="sa-ask-list">
+            <li>Its people get the {plan === "base" ? "simple Base app (home, tasks, calendar, people, clients)" : "full Enterprise app"} the next time they open it.</li>
+            <li>Nothing is deleted: you can switch back at any time.</li>
+          </ul>
+        </div>
+      ),
+    });
+    if (!ok) return;
+    setPlanBusy(true);
+    const e = await setTenantPlan(det.tenant.id, plan);
+    setPlanBusy(false);
+    if (e) { setErr(e); return; }
+    setDet({ ...det, tenant: { ...det.tenant, plan } });
+  };
   const toggle = async () => {
     if (!det?.tenant) return;
     const on = !det.tenant.active;
-    if (!on && !confirm(`Disable ${det.tenant.name}? Its people won't be able to use the app.`)) return;
+    if (!on && !(await ask({
+      kicker: "Disable company", title: `Disable ${det.tenant.name}?`, ok: "Disable", tone: "danger", icon: <Power size={19} strokeWidth={2} />,
+      body: <ul className="sa-ask-list"><li>Its people can't sign in to the app until you enable it again.</li><li>Its data stays exactly as it is.</li></ul>,
+    }))) return;
     await toggleTenant(det.tenant.id, on);
     setDet({ ...det, tenant: { ...det.tenant, active: on } });
   };
 
   const t = det?.tenant;
   return (
-    <Shell tab="companies" onTab={goConsole} scrollKey={tab}>
+    <Shell tab="companies" onTab={goConsole} scrollKey={tab} ready={!!det || !!err}>
       {err && <div className="sa-alert"><b>Something went wrong.</b> {err}</div>}
       {!det || !dash || !model ? (
         loading ? <div className="sa-loading"><span className="sa-spinner" /> Loading the company…</div> : <Empty>Company not found.</Empty>
       ) : !t ? <Empty>Company not found.</Empty> : (
         <div className={`sa-view ${loading ? "is-busy" : ""}`}>
-          <Head
-            kicker={<button className="sa-crumb" onClick={() => navigate("/superadmin?tab=companies")}><ChevronLeft size={14} strokeWidth={2.4} /> Companies</button>}
-            title={editName != null ? (
-              <span className="sa-rename">
-                <input autoFocus value={editName} onChange={(e) => setEditName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void saveName(); if (e.key === "Escape") setEditName(null); }} />
-                <button className="sa-icon" onClick={() => void saveName()} aria-label="Save name"><Check size={16} /></button>
-                <button className="sa-icon" onClick={() => setEditName(null)} aria-label="Cancel"><X size={16} /></button>
-              </span>
-            ) : (
-              <span className="sa-title-row">
-                <span className="sa-co-av is-lg" style={{ background: colorOf(tIndex) }}>{initials(t.name)}</span>
-                {t.name}
-                <button className="sa-icon is-ghost" onClick={() => setEditName(t.name)} aria-label="Rename"><Pencil size={15} /></button>
-                <span className={`sa-tag ${t.active ? "is-on" : "is-off"}`}>{t.active ? "Active" : "Disabled"}</span>
-              </span>
-            )}
-            sub={`Customer since ${new Date(t.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })} · last seen ${fmtAgo(dt?.last_seen ?? null).toLowerCase()}`}
-            right={<>
-              <Period days={days} setDays={setDays} />
-              <button className="sa-btn" onClick={() => void load()} disabled={loading}><RefreshCw size={15} className={loading ? "sa-spin" : ""} /> <span>Refresh</span></button>
-              <button className={`sa-btn ${t.active ? "is-danger" : "is-primary"}`} onClick={() => void toggle()}><Power size={15} /> <span>{t.active ? "Disable" : "Enable"}</span></button>
-            </>}
-          />
-          <nav className="sa-tabs">
-            {CTABS.map((x) => <button key={x.key} className={tab === x.key ? "is-on" : ""} onClick={() => setTab(x.key)}>{x.label}{x.key === "users" && <i>{people.length}</i>}</button>)}
-          </nav>
+          <header className="sa-hero is-co" style={{ ["--co" as string]: colorOf(tIndex) }}>
+            <i className="sa-hero-glow" aria-hidden="true" />
+            <div className="sa-hero-main">
+              <span className="sa-hero-av">{initials(t.name)}</span>
+              <div className="sa-hero-id">
+                <button className="sa-hero-crumb" onClick={() => navigate("/superadmin?tab=companies")}><ChevronLeft size={13} strokeWidth={2.6} /> Companies</button>
+                {editName != null ? (
+                  <span className="sa-rename">
+                    <input autoFocus value={editName} onChange={(e) => setEditName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void saveName(); if (e.key === "Escape") setEditName(null); }} aria-label="Company name" />
+                    <button className="sa-icon" onClick={() => void saveName()} aria-label="Save name"><Check size={16} /></button>
+                    <button className="sa-icon" onClick={() => setEditName(null)} aria-label="Cancel"><X size={16} /></button>
+                  </span>
+                ) : (
+                  <h1 className="sa-hero-name">
+                    <span>{t.name}</span>
+                    <button className="sa-hero-edit" onClick={() => setEditName(t.name)} aria-label="Rename" title="Rename"><Pencil size={14} /></button>
+                  </h1>
+                )}
+                <div className="sa-hero-meta">
+                  <span className={`sa-hero-state ${t.active ? "is-on" : "is-off"}`}><i />{t.active ? "Active" : "Disabled"}</span>
+                  <span className="sa-plan-sw" role="radiogroup" aria-label="App">
+                    {(["enterprise", "base"] as TenantPlan[]).map((p) => (
+                      <button key={p} type="button" role="radio" aria-checked={(t.plan ?? "enterprise") === p} disabled={planBusy}
+                        className={(t.plan ?? "enterprise") === p ? `is-on is-${p}` : ""} onClick={() => void changePlan(p)}
+                        title={p === "base" ? "The simple app: home, tasks, calendar, people & companies, clients" : "The full app"}>{PLAN_LABEL[p]}</button>
+                    ))}
+                  </span>
+                  <span className="sa-hero-fact"><b>{people.length}</b>/{t.max_users} seats</span>
+                  <span className="sa-hero-fact is-since">Since <b>{new Date(t.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</b></span>
+                  <span className="sa-hero-fact">Last seen <b>{fmtAgo(dt?.last_seen ?? null).toLowerCase()}</b></span>
+                </div>
+              </div>
+              <div className="sa-hero-tools">
+                <Period days={days} setDays={setDays} />
+                <button className="sa-btn" onClick={() => void load()} disabled={loading} title="Reload"><RefreshCw size={15} className={loading ? "sa-spin" : ""} /> <span>Refresh</span></button>
+                <button className={`sa-btn ${t.active ? "is-danger" : "is-primary"}`} onClick={() => void toggle()}><Power size={15} /> <span>{t.active ? "Disable" : "Enable"}</span></button>
+              </div>
+            </div>
+            <nav className="sa-hero-tabs" role="tablist">
+              {CTABS.map((x) => (
+                <button key={x.key} role="tab" aria-selected={tab === x.key} className={tab === x.key ? "is-on" : ""} onClick={() => setTab(x.key)}>
+                  {x.label}{x.key === "users" && <i>{people.length}</i>}
+                </button>
+              ))}
+            </nav>
+          </header>
 
           {tab === "overview" && dt && tc && (
             <CoOverview det={det} dash={dash} dt={dt} tc={tc} cur={costs.currency} color={colorOf(tIndex)} people={people} uCost={uCost} onLimit={changeLimit} onTab={setTab} />
           )}
-          {tab === "users" && <CoUsers det={det} people={people} uCost={uCost} cur={costs.currency} maxUsers={t.max_users} onChanged={() => void load()} onLimit={changeLimit} />}
+          {tab === "users" && <CoUsers det={det} people={people} uCost={uCost} cur={costs.currency} maxUsers={t.max_users} color={colorOf(tIndex)} onChanged={() => void load()} onLimit={changeLimit} />}
           {tab === "usage" && <CoUsage det={det} people={people} />}
           {tab === "data" && <CoData det={det} />}
           {tab === "costs" && tc && (
@@ -124,6 +177,7 @@ export default function SuperAdminClient() {
           )}
         </div>
       )}
+      {askEl}
     </Shell>
   );
 }
@@ -189,16 +243,12 @@ function CoOverview({ det, dash, dt, tc, cur, color, people, uCost, onLimit, onT
 }
 
 type USort = "name" | "role" | "signin" | "time" | "changes" | "requests" | "ai" | "cost";
-function CoUsers({ det, people, uCost, cur, maxUsers, onChanged, onLimit }: {
-  det: TenantDetail; people: TenantUserRow[]; uCost: Map<string, number>; cur: string; maxUsers: number; onChanged: () => void; onLimit: (d: number) => void;
+function CoUsers({ det, people, uCost, cur, maxUsers, color, onChanged, onLimit }: {
+  det: TenantDetail; people: TenantUserRow[]; uCost: Map<string, number>; cur: string; maxUsers: number; color: string; onChanged: () => void; onLimit: (d: number) => void;
 }) {
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<{ key: USort; dir: 1 | -1 }>({ key: "signin", dir: -1 });
   const [adding, setAdding] = useState(false);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
   const [pwFor, setPwFor] = useState<TenantUserRow | null>(null);
   const [pw, setPw] = useState("");
   const [pwBusy, setPwBusy] = useState(false);
@@ -206,22 +256,16 @@ function CoUsers({ det, people, uCost, cur, maxUsers, onChanged, onLimit }: {
   const [pwDone, setPwDone] = useState(false);
   const hasTime = people.some((u) => u.seconds > 0);
   const atLimit = people.length >= maxUsers;
+  const [ask, askEl] = useConfirm();
+  const [copied, setCopied] = useState(false);
+  const copy = (v: string) => { void navigator.clipboard?.writeText(v).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1400); }, () => undefined); };
 
-  const addUser = async () => {
-    if (!det.tenant) return;
-    if (!email.trim() || !password.trim()) { setErr("Email and password are required."); return; }
-    const weak = passwordProblem(password);
-    if (weak) { setErr(weak); return; }
-    setBusy(true); setErr("");
-    // the superadmin only creates the login: role and job title are set by the company itself
-    const r = await createUser(det.tenant.id, email.trim(), password, "", "");
-    setBusy(false);
-    if (r.error) { setErr(r.error); return; }
-    setEmail(""); setPassword(""); setAdding(false);
-    onChanged();
-  };
   const removeUser = async (u: TenantUserRow) => {
-    if (!confirm(`Delete ${personName(u)}? Their login is removed for good. (To keep their name on past work, deactivate them in the company's Settings instead.)`)) return;
+    const ok = await ask({
+      kicker: "Delete login", title: `Delete ${personName(u)}?`, ok: "Delete login", tone: "danger", icon: <Trash2 size={19} strokeWidth={1.9} />,
+      body: <ul className="sa-ask-list"><li>Their login is removed for good{u.email ? <> (<b>{u.email}</b>)</> : null}.</li><li>To keep their name on past work, deactivate them in the company's Settings instead.</li></ul>,
+    });
+    if (!ok) return;
     await deleteUser(u.id);
     onChanged();
   };
@@ -236,13 +280,7 @@ function CoUsers({ det, people, uCost, cur, maxUsers, onChanged, onLimit }: {
     if (error || (data && data.error)) { setPwErr(error?.message ?? data.error); return; }
     setPwDone(true);
   };
-  const randomPw = () => {
-    // readable (no lookalikes), always with letters, a number and a symbol
-    const abc = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    const pick = (s: string) => s[Math.floor(Math.random() * s.length)];
-    const body = Array.from({ length: 9 }, () => pick(abc)).join("");
-    setPw(`${body.slice(0, 5)}${pick(".-_!@")}${body.slice(5)}${pick("23456789")}${pick("abcdefghjkmnpqrstuvwxyz")}`);
-  };
+  const randomPw = () => setPw(makePw());
 
   const ql = q.trim().toLowerCase();
   const rows = people.filter((u) => !ql || `${personName(u)} ${u.email ?? ""} ${u.role ?? ""} ${u.department ?? ""}`.toLowerCase().includes(ql));
@@ -268,19 +306,9 @@ function CoUsers({ det, people, uCost, cur, maxUsers, onChanged, onLimit }: {
           <span className="sa-count">{people.length} of {maxUsers} seats</span>
           {atLimit
             ? <button className="sa-btn" onClick={() => onLimit(1)}><Plus size={15} /> <span>Add a seat</span></button>
-            : <button className="sa-btn is-primary" onClick={() => { setAdding((v) => !v); setErr(""); }}><Plus size={15} /> <span>Add user</span></button>}
+            : <button className="sa-btn is-primary" onClick={() => setAdding(true)}><Plus size={15} /> <span>Add user</span></button>}
         </>}
       >
-        {adding && !atLimit && (
-          <div className="sa-adduser">
-            <label className="sa-nf"><span>E-mail</span><span className="sa-nf-in"><input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@company.com" autoFocus /></span></label>
-            <label className="sa-nf"><span>Password</span><span className="sa-nf-in"><input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="8+ letters, numbers, symbol" title={PASSWORD_HINT} /></span></label>
-            <button className="sa-btn is-primary" onClick={() => void addUser()} disabled={busy}>{busy ? "Creating…" : "Create login"}</button>
-            <button className="sa-btn" onClick={() => setAdding(false)}>Cancel</button>
-            {err && <p className="sa-err">{err}</p>}
-            <p className="sa-hintline">The company sets their role and job title from its own Settings.</p>
-          </div>
-        )}
         <div className="sa-tablewrap">
           <table className="sa-table">
             <thead><tr>
@@ -297,8 +325,8 @@ function CoUsers({ det, people, uCost, cur, maxUsers, onChanged, onLimit }: {
             <tbody>
               {rows.map((u) => (
                 <tr key={u.id} className={u.active ? "" : "is-off"}>
-                  <td><span className="sa-co"><span className="sa-co-av is-round">{initials(personName(u))}</span><span className="sa-co-t"><b>{personName(u)}</b><small>{u.email}{!u.confirmed && " · not confirmed"}</small></span></span></td>
-                  <td className="is-dim">{u.role ? (ROLE_LABELS[u.role] ?? u.role) : "Not set"}{u.department && <small>{u.department}</small>}{!u.active && <span className="sa-tag is-off">Deactivated</span>}</td>
+                  <td><PersonCell u={u} color={color} /></td>
+                  <td className="is-dim"><RolePicker userId={u.id} tenantId={det.tenant?.id ?? ""} role={u.role} dept={u.department} disabled={!det.tenant} onChanged={() => onChanged()} /></td>
                   <td className="is-num is-dim">{fmtAgo(u.last_sign_in_at)}<small>since {u.created_at ? new Date(u.created_at).toLocaleDateString("en-GB", { month: "short", year: "numeric" }) : "—"}</small></td>
                   {hasTime && <td className="is-num">{fmtDur(u.seconds)}{u.top_page && <small>mostly {pageLabel(u.top_page)}</small>}</td>}
                   <td className="is-num">{fmtNum(u.changes)}</td>
@@ -317,39 +345,51 @@ function CoUsers({ det, people, uCost, cur, maxUsers, onChanged, onLimit }: {
         </div>
       </Card>
 
-      {pwFor && (
-        <div className="sa-backdrop" onMouseDown={() => setPwFor(null)}>
-          <div className="sa-modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-            <div className="sa-modal-head">
-              <div><span className="sa-badge">New password</span><h2 className="sa-modal-title">{personName(pwFor)}</h2></div>
-              <button className="sa-x" onClick={() => setPwFor(null)} aria-label="Close">×</button>
-            </div>
-            {pwDone ? (
-              <>
-                <p className="sa-hint">Password changed. Give it to them through a channel you trust: it can't be read back later.</p>
-                <div className="sa-pw-done">{pw}</div>
-                <div className="sa-modal-actions"><button className="sa-confirm" onClick={() => setPwFor(null)}>Done</button></div>
-              </>
-            ) : (
-              <>
-                <div className="sa-field">
-                  <label>New password</label>
-                  <div className="sa-pw-row">
-                    <input value={pw} onChange={(e) => setPw(e.target.value)} placeholder="8+ letters, numbers, symbol" title={PASSWORD_HINT} autoFocus />
-                    <button className="sa-pw-gen" onClick={randomPw} type="button">Generate</button>
-                  </div>
-                </div>
-                {pwErr && <p className="sa-error">{pwErr}</p>}
-                <div className="sa-modal-actions">
-                  <button className="sa-cancel" onClick={() => setPwFor(null)}>Cancel</button>
-                  <button className="sa-confirm" onClick={() => void savePassword()} disabled={pwBusy || !!passwordProblem(pw.trim())}>{pwBusy ? "Saving…" : "Set password"}</button>
-                </div>
-                <p className="sa-hint">They aren't signed out and no e-mail is sent. (They can also reset it themselves from the sign-in page.)</p>
-              </>
-            )}
-          </div>
-        </div>
+      {adding && !atLimit && det.tenant && (
+        <NewLoginModal
+          companies={[{ id: det.tenant.id, name: det.tenant.name, users: people.length, max: maxUsers, plan: det.tenant.plan === "base" ? "base" : "enterprise", color, active: det.tenant.active }]}
+          onClose={() => setAdding(false)}
+          onCreated={() => { setAdding(false); onChanged(); }} />
       )}
+
+      {pwFor && (
+        <Modal icon={<KeyRound size={19} strokeWidth={1.9} />} kicker={pwDone ? "Password changed" : "New password"} title={personName(pwFor)}
+          sub={pwDone ? "Give it to them through a channel you trust: it can't be read back later." : pwFor.email ?? undefined} width={460}
+          onClose={() => setPwFor(null)}
+          foot={pwDone ? (
+            <>
+              <span className="sa-modal-note">They aren't signed out and no e-mail is sent.</span>
+              <div className="sa-modal-actions"><button className="sa-confirm" onClick={() => setPwFor(null)}>Done</button></div>
+            </>
+          ) : (
+            <>
+              <span className="sa-modal-note">They can also reset it from the sign-in page.</span>
+              <div className="sa-modal-actions">
+                <button className="sa-cancel" onClick={() => setPwFor(null)}>Cancel</button>
+                <button className="sa-confirm" onClick={() => void savePassword()} disabled={pwBusy || !!passwordProblem(pw.trim())}>{pwBusy ? "Saving…" : "Set password"}</button>
+              </div>
+            </>
+          )}>
+          {pwDone ? (
+            <button type="button" className="sa-pw-done" onClick={() => copy(pw)} title="Copy">
+              <span>{pw}</span><i>{copied ? <><Check size={13} strokeWidth={2.6} /> Copied</> : <><Copy size={13} strokeWidth={2.2} /> Copy</>}</i>
+            </button>
+          ) : (
+            <form className="sa-mform" onSubmit={(e) => { e.preventDefault(); void savePassword(); }}>
+              <label className="sa-mf"><span>New password</span>
+                <span className="sa-mf-row">
+                  <input value={pw} onChange={(e) => { setPw(e.target.value); setPwErr(""); }} placeholder="8+ letters, numbers, symbol" title={PASSWORD_HINT} autoFocus autoComplete="new-password" spellCheck={false} />
+                  <button type="button" className="sa-mf-btn" onClick={randomPw}><Wand2 size={14} strokeWidth={2} /> Generate</button>
+                </span>
+                <PwRules pw={pw} />
+              </label>
+              {pwErr && <p className="sa-error">{pwErr}</p>}
+              <button type="submit" hidden />
+            </form>
+          )}
+        </Modal>
+      )}
+      {askEl}
     </>
   );
 }
@@ -417,7 +457,7 @@ function CoData({ det }: { det: TenantDetail }) {
       </div>
       <div className="sa-row sa-row-wide">
         <Card title="Tables" sub="Their share of each table on disk (data + indexes)">
-          <HBars fmt={fmtBytes} rows={det.tables.slice(0, 16).map((t) => ({ key: t.name, label: <code>{t.name}</code>, sub: `${fmtNum(t.rows)} rows`, value: t.bytes, color: /bk|backup|dupes/i.test(t.name) ? "#f59e0b" : "#3b82f6" }))} />
+          <HBars fmt={fmtBytes} rows={det.tables.map((t) => ({ key: t.name, label: <code>{t.name}</code>, sub: `${fmtNum(t.rows)} rows`, value: t.bytes, color: /bk|backup|dupes/i.test(t.name) ? "#f59e0b" : "#3b82f6" }))} />
         </Card>
         <Card title="Files" sub="By storage bucket">
           {det.files.length ? (
@@ -486,3 +526,4 @@ function CoCosts({ det, tc, model, cur, alloc, people, uCost, aiPrice }: {
     </>
   );
 }
+

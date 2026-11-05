@@ -1,0 +1,69 @@
+/* =====================================================================
+   BASE · Orbit — the lists as one clean table card (All · Contacts ·
+   Companies) and a roomier client grid. Overrides only inside Orbit
+   (.ob-pane), so the pages' own styles stay as they are elsewhere.
+   ===================================================================== */
+.ob-pane {
+  --ob-line: rgba(10, 111, 77, 0.12);
+  --ob-line2: rgba(10, 111, 77, 0.07);
+  --ob-hover: #f4faf7;
+  --ob-shadow: 0 1px 2px rgba(10, 60, 40, 0.04), 0 18px 40px -30px rgba(10, 70, 45, 0.45);
+  --list-bg: #eef6f2;
+}
+
+/* ---------- table card: header strip + body ---------- */
+.ob-pane :is(.ct-lhead-wrap, .co-lhead-wrap) { padding-bottom: 0; }
+.ob-pane :is(.ct-lhead, .co-lhead) {
+  border: 1px solid var(--ob-line); border-bottom-color: var(--ob-line2); border-radius: 20px 20px 0 0;
+  background: #f8fcfa; box-shadow: none; padding-top: 13px; padding-bottom: 13px; box-sizing: border-box;
+}
+.ob-pane :is(.ct-lhead, .co-lhead) span { font-size: 10.5px; letter-spacing: 0.09em; }
+.ob-pane .ct-scroll.is-xscroll .ct-lid-head, .ob-pane .co-scroll.is-xscroll .co-lid-head { background: #f8fcfa; border-radius: 20px 0 0 0; }
+
+.ob-pane :is(.ct-list, .co-list) {
+  gap: 0; background: #fff; border: 1px solid var(--ob-line); border-top: 0; border-radius: 0 0 20px 20px;
+  box-shadow: var(--ob-shadow); margin-bottom: 48px; padding-bottom: 0; overflow: clip;
+  width: max-content; min-width: 100%; box-sizing: border-box;
+}
+.ob-pane .ct-list > .ct-lrow, .ob-pane .co-list > .co-item > .co-lrow {
+  border: 0; border-radius: 0; box-shadow: none; background: #fff;
+  padding-top: 9px; padding-bottom: 9px; min-height: 58px; box-sizing: border-box;
+  transition: background 0.25s ease;
+}
+.ob-pane .ct-list > .ct-lrow + .ct-lrow, .ob-pane .co-list > .co-item + .co-item > .co-lrow { border-top: 1px solid var(--ob-line2); }
+.ob-pane .ct-list > .ct-lrow:hover, .ob-pane .co-list > .co-item > .co-lrow:hover { transform: none; background: var(--ob-hover); box-shadow: none; }
+.ob-pane .ct-list > .ct-lrow:active, .ob-pane .co-list > .co-item > .co-lrow:active { transform: none; }
+.ob-pane .ct-list > .ct-lrow.is-sel, .ob-pane .co-list > .co-item > .co-lrow.is-sel { background: #ecf8f2; box-shadow: inset 3px 0 0 #12b57f; }
+/* the sticky first column follows the row's colour */
+.ob-pane .ct-scroll.is-xscroll .ct-lcell.ct-lid, .ob-pane .co-scroll.is-xscroll .co-lcell.co-lid { margin-top: -9px; margin-bottom: -9px; padding-top: 9px; padding-bottom: 9px; border-radius: 0; background: inherit; }
+.ob-pane .ct-scroll.is-xscroll .ct-lrow:not(.ct-lhead):hover, .ob-pane .co-scroll.is-xscroll .co-lrow:not(.co-lhead):hover { transform: none; }
+
+/* ---------- people & company marks ---------- */
+.ob-pane :is(.ct-avatar, .co-avatar) { width: 36px; height: 36px; font-size: 14px; line-height: 1; box-shadow: none; }
+.ob-pane .ct-avatar {
+  border-radius: 50%; color: #0b4a33;
+  background: linear-gradient(150deg, #d9f7e8, #a8ebcb); box-shadow: inset 0 0 0 1px rgba(10, 111, 77, 0.12);
+}
+.ob-pane .co-avatar { border-radius: 11px; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2), 0 6px 14px -9px rgba(10, 60, 40, 0.6); }
+/* a little colour: the marks cycle through a few hues */
+.ob-pane :is(.ct-lrow, .co-item, .cx-card):nth-child(6n + 2) :is(.ct-avatar, .co-avatar, .cx-av) { filter: hue-rotate(45deg); }
+.ob-pane :is(.ct-lrow, .co-item, .cx-card):nth-child(6n + 3) :is(.ct-avatar, .co-avatar, .cx-av) { filter: hue-rotate(95deg); }
+.ob-pane :is(.ct-lrow, .co-item, .cx-card):nth-child(6n + 4) :is(.ct-avatar, .co-avatar, .cx-av) { filter: hue-rotate(195deg); }
+.ob-pane :is(.ct-lrow, .co-item, .cx-card):nth-child(6n + 5) :is(.ct-avatar, .co-avatar, .cx-av) { filter: hue-rotate(250deg); }
+.ob-pane :is(.ct-lrow, .co-item, .cx-card):nth-child(6n + 6) :is(.ct-avatar, .co-avatar, .cx-av) { filter: hue-rotate(305deg); }
+.ob-pane :is(.ct-lname, .co-lname, .co-lid-text) { font-family: "Inter", system-ui, sans-serif; font-size: 14px; font-weight: 650; letter-spacing: -0.005em; }
+.ob-pane .ct-lcell, .ob-pane .co-lcell { font-size: 13.5px; }
+.ob-pane .ct-chip { border-radius: 7px; padding: 4px 9px; background: #f1f7f4; box-shadow: inset 0 0 0 1px var(--ob-line2); }
+.ob-pane .ct-lemail { color: #1f5f48; }
+
+/* ---------- clients: a roomier grid ---------- */
+.ob-pane .cl.cl-ov .cx-sheet { margin: 0 2.6rem; padding: 4px 0 0; background: transparent; box-shadow: none; border-radius: 0; animation: none; }
+.ob-pane .cl.cl-ov .cl-scroll { padding: 4px 12px 2rem 2px; }
+.ob-pane .cl.cl-ov .cx-grid { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
+.ob-pane .cl.cl-ov .cx-card {
+  gap: 14px; padding: 20px; border-radius: 22px; border-color: var(--ob-line); box-shadow: var(--ob-shadow);
+  transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.35s ease, border-color 0.35s ease;
+}
+.ob-pane .cl.cl-ov .cx-card:hover { transform: translateY(-3px); border-color: rgba(18, 181, 127, 0.35); box-shadow: 0 1px 2px rgba(10, 60, 40, 0.04), 0 28px 50px -30px rgba(18, 140, 95, 0.55); }
+.ob-pane .cl.cl-ov .cx-av { width: 46px; height: 46px; border-radius: 14px; font-size: 15px; }
+.ob-pane .cl.cl-ov .cx-id b { font-size: 16px; }

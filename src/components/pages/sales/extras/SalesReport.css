@@ -1070,3 +1070,85 @@
 .rp-pkey span { display: flex; flex-direction: column; gap: 1px; font-size: 12px; color: var(--mute); line-height: 1.35; }
 .rp-pkey b { font-size: 12.5px; font-weight: 700; color: var(--ink); }
 @media (max-width: 1100px) { .rp-pgrid { grid-template-columns: 1fr; } .rp-pkey { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* ---- a row opens what it is (the client, the contract, the company…) ---- */
+.rp-table tbody tr.is-link { cursor: pointer; }
+.rp-table tbody tr.is-link:hover td { background: #eef8f3; }
+.rp-table tbody tr.is-link:hover td:first-child { box-shadow: inset 3px 0 0 var(--forest, #0f6b4c); }
+.rp-leave { position: fixed; inset: 0; z-index: 1200; display: grid; place-items: center; padding: 16px; background: rgba(12, 32, 24, .32); backdrop-filter: blur(2px); animation: rp-leave-in .14s ease-out; }
+.rp-leave-box { width: min(440px, 100%); padding: 22px 22px 18px; border-radius: 16px; background: #fff; box-shadow: 0 24px 60px rgba(10, 40, 28, .25); }
+.rp-leave-box h3 { margin: 0 0 8px; font-size: 17px; font-weight: 800; color: #12241c; }
+.rp-leave-box p { margin: 0 0 18px; font-size: 13.5px; line-height: 1.5; color: #4a5a53; overflow-wrap: anywhere; }
+.rp-leave-acts { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+@keyframes rp-leave-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* ===================== Build ⟷ View ===================== */
+.rp-body.is-view { grid-template-columns: minmax(0, 1fr); }
+.rp-body.is-view > .rp-side { display: none; }
+.rp-crumb { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 12px 0 8px; border: 0; border-radius: 10px; background: transparent; color: var(--ink2); font-size: 13px; font-weight: 700; cursor: pointer; transition: background 0.15s, color 0.15s; }
+.rp-crumb svg { width: 16px; height: 16px; }
+.rp-crumb:hover { background: rgba(14, 107, 76, 0.08); color: var(--forest); }
+.rp-bar-gap { flex: 1 1 auto; }
+.rp-chip.is-draft { background: #fff4e0; color: #9a5b0b; }
+.rp-mode { flex-shrink: 0; display: inline-flex; padding: 3px; gap: 2px; border-radius: 12px; background: var(--field); border: 1px solid var(--line); }
+.rp-mode button { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border: 0; border-radius: 9px; background: transparent; color: var(--mute); font-size: 12.5px; font-weight: 700; cursor: pointer; white-space: nowrap; transition: background 0.15s, color 0.15s, box-shadow 0.15s; }
+.rp-mode button svg { width: 14px; height: 14px; }
+.rp-mode button:hover { color: var(--ink); }
+.rp-mode button.is-on { background: #fff; color: var(--forest); box-shadow: 0 1px 2px rgba(14, 26, 21, 0.08), 0 4px 12px -6px rgba(14, 26, 21, 0.18); }
+.rp-btn.is-ghost.is-on { border-color: rgba(18, 181, 127, 0.45); color: var(--forest); background: #f1faf5; }
+.rp-exp { position: relative; flex-shrink: 0; }
+.rp-exp > .rp-btn svg:last-child { width: 12px; height: 12px; margin-left: -2px; opacity: 0.7; }
+.rp-exp-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; width: 304px; padding: 6px; border-radius: 14px; background: #fff; border: 1px solid var(--line); box-shadow: 0 22px 50px -20px rgba(8, 40, 28, 0.35); animation: rp-up 0.18s var(--ease) both; }
+.rp-exp-menu button { width: 100%; display: flex; align-items: center; gap: 11px; padding: 9px 10px; border: 0; border-radius: 10px; background: transparent; text-align: left; cursor: pointer; }
+.rp-exp-menu button:hover:not(:disabled) { background: var(--field); }
+.rp-exp-menu button:disabled { opacity: 0.45; cursor: default; }
+.rp-exp-menu button > span:last-child { display: flex; flex-direction: column; min-width: 0; }
+.rp-exp-menu b { font-size: 13px; font-weight: 750; color: var(--ink); }
+.rp-exp-menu em { font-style: normal; font-size: 11.5px; color: var(--mute); }
+.rp-exp-ico { width: 32px; height: 32px; flex-shrink: 0; display: grid; place-items: center; border-radius: 9px; background: var(--field); color: var(--ink2); }
+.rp-exp-ico svg { width: 16px; height: 16px; }
+.rp-exp-ico.is-pdf { background: #fdecec; color: #c43d3d; }
+.rp-exp-ico.is-xls { background: #e3f5ec; color: var(--forest); }
+
+.rp-view { display: flex; flex-direction: column; gap: 12px; min-width: 0; animation: rp-up 0.35s var(--ease) both; }
+.rp-view-h { display: flex; align-items: center; gap: 14px; padding: 20px 22px; border-radius: 20px; background: #fff; border: 1px solid var(--line); min-width: 0; }
+.rp-view-ico { --c: var(--jade); width: 46px; height: 46px; flex-shrink: 0; display: grid; place-items: center; border-radius: 14px; background: color-mix(in srgb, var(--c) 14%, #fff); color: var(--c); }
+.rp-view-ico svg { width: 22px; height: 22px; }
+.rp-view-t { min-width: 0; flex: 1; }
+.rp-view-t h2 { margin: 0; font-family: "Space Grotesk", "Inter", sans-serif; font-size: 24px; font-weight: 700; letter-spacing: -0.02em; color: var(--ink); overflow-wrap: anywhere; }
+.rp-view-t p { margin: 5px 0 0; display: flex; flex-wrap: wrap; gap: 4px 0; font-size: 13px; color: var(--mute); }
+.rp-view-t p span:not(:last-child)::after { content: "·"; margin: 0 8px; color: var(--mute2); }
+.rp-view-print { display: none; flex-shrink: 0; font-size: 12px; color: var(--mute); }
+.rp-view .rp-card.is-table .rp-thead { min-height: 50px; }
+.rp-table th.is-ro .rp-th-s { display: block; padding: 10px 12px; font-size: 11.5px; font-weight: 750; letter-spacing: 0.03em; text-transform: uppercase; color: var(--mute); white-space: nowrap; }
+.rp-table th.is-ro.is-num .rp-th-s { text-align: right; }
+.rp-print-root { display: none; }
+
+@media print {
+  @page { size: A4 landscape; margin: 11mm; }
+  html, body { background: #fff !important; height: auto !important; overflow: visible !important; }
+  body > *:not(.rp-print-root) { display: none !important; }
+  .rp-print-root { display: block !important; height: auto !important; overflow: visible !important; padding: 0 !important; background: #fff !important; }
+  .rp-print-root * { animation: none !important; transition: none !important; }
+  .rp-print-root, .rp-print-root * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .rp-print-root .rp-view { gap: 8px; }
+  .rp-print-root .rp-view-h { padding: 4px 2px 12px; border: 0; border-bottom: 2px solid var(--forest); border-radius: 0; }
+  .rp-print-root .rp-view-print { display: block; }
+  .rp-print-root .rp-kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+  .rp-print-root .rp-kpi, .rp-print-root .rp-chart { break-inside: avoid; box-shadow: none; }
+  .rp-print-root .rp-kpi::after, .rp-print-root .rp-kpi::before { display: none; }
+  .rp-print-root .rp-charts.is-grid { gap: 8px; }
+  .rp-print-root .rp-tool, .rp-print-root .rp-more, .rp-print-root .rp-link { display: none !important; }
+  .rp-print-root .rp-card.is-table { overflow: visible; border-radius: 10px; }
+  .rp-print-root .rp-twrap { overflow: visible; }
+  .rp-print-root .rp-table th { position: static; }
+  .rp-print-root .rp-table thead { display: table-header-group; }
+  .rp-print-root .rp-table tr { break-inside: avoid; }
+  .rp-print-root .rp-table td { padding-top: 6px; padding-bottom: 6px; }
+}
+/* the bar on one line on smaller screens: "Only me / Team" and "Copy" keep just their icon (the title says what they do) */
+@media (max-width: 1500px) {
+  .rp-bar .rp-share, .rp-bar .rp-copy { font-size: 0; gap: 0; width: 38px; padding: 0; justify-content: center; }
+  .rp-bar .rp-name { min-width: 120px; }
+}
+@media (max-width: 1100px) { .rp-mode button { padding: 0 9px; } }

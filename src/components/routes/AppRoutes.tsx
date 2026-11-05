@@ -1,29 +1,25 @@
-import { useEffect, useRef } from "react";
+import { lazy, Suspense, useEffect, useRef } from "react";
 import { Routes, Route, Navigate, Outlet, useNavigate, useLocation } from "react-router-dom";
 import { supabase } from "../api/supabase";
 import { useAuth } from "../api/authContext";
 import ProtectedRoute from "./ProtectedRoute";
 import LoginPage, { loginLaunching, JUST_SIGNED_IN_KEY, RESET_PATH, openedFromRecovery } from "../login/LoginPage";
-import { PageCube } from "../framework/AppLayout";
-import AppLayout from "../framework/AppLayout";
-import { PageRoute } from "../framework/pageAccess";
-import ManagementPage from "../pages/management/ManagementPage";
-import HomePage from "../pages/homepage/HomePage";
-import { TicketsPage } from "../pages/homepage/shared/HomeTodo";
-import CalendarPage from "../pages/calendar/CalendarPage";
-import SalesCalendar from "../pages/calendar/SalesCalendar";
-import ClientsPage from "../pages/clients/ClientsPage";
-import ProjectsPage from "../pages/projects/ProjectsPage";
-import CompaniesPage from "../pages/companies/CompaniesPage";
-import ContactsPage from "../pages/contacts/ContactsPage";
-import { MarketingPage } from "../pages/contacts/ContactExport";
-import { CustomerSuccessPage } from "../pages/clients/ClientsPage";
-import SalesPage from "../pages/sales/sales/SalesPage";
-import ReportsPage from "../pages/sales/extras/SalesReport";
-import SettingsPage from "../pages/settings/SettingsPage";
-import LinkedInCapturePage from "../pages/contacts/LinkedInCapture";
-import SuperAdminHome from "../pages/superadmin/SuperAdminHome";
-import SuperAdminClient from "../pages/superadmin/SuperAdminClient";
+import { PageCube } from "../framework/PageCube";
+
+/* =====================================================================
+   SHARED KERNEL — the one router both apps sit behind.
+   Same sign-in for everyone; after it, the company's plan (tenants.plan,
+   useAuth().plan) decides which app loads:
+     enterprise → ./EnterpriseRoutes        (src/components/…, the full app)
+     base       → ../../base/BaseApp        (src/base/…, the simple app)
+   Each app is its own lazy chunk, so neither loads the other's code or CSS.
+   Owned by the Enterprise chat; see src/base/TIERS.md before changing it.
+   ===================================================================== */
+const EnterpriseRoutes = lazy(() => import("./EnterpriseRoutes"));
+const BaseApp = lazy(() => import("../../base/BaseApp"));
+const LinkedInCapturePage = lazy(() => import("../pages/contacts/LinkedInCapture"));
+const SuperAdminHome = lazy(() => import("../pages/superadmin/SuperAdminHome"));
+const SuperAdminClient = lazy(() => import("../pages/superadmin/SuperAdminClient"));
 
 // If already logged in, /login redirects to the right landing page.
 function LoginRoute() {
@@ -35,28 +31,10 @@ function LoginRoute() {
   return <LoginPage />;
 }
 
-// Which pages each security level may open is configured in
-// Settings → Organization → Page access (table page_access). The built-in
-// defaults (what used to be hard-coded here) live in framework/pageAccess.tsx.
-
-/**
- * One "Calendar" entry, two calendars behind it.
- *
- * A rep does not log billable work against projects, so they get the meetings
- * booked on their deals instead. Bosses keep the consultancy one, which is the
- * one they were already using.
- */
-const SALES_ROLES = ["sales", "sales_manager"];
-function CalendarRoute() {
-  const { role, roleLoading } = useAuth();
-  if (roleLoading) return null;
-  return role && SALES_ROLES.includes(role) ? <SalesCalendar /> : <CalendarPage />;
-}
-
 // Superadmin-only. Uses the flag already loaded by AuthProvider (no flash).
 function SuperAdminRoute() {
   const { isSuperadmin, roleLoading } = useAuth();
-  if (roleLoading) return null;
+  if (roleLoading) return <JustSignedInHold />;
   if (!isSuperadmin) return <Navigate to="/home" replace />;
   return <Outlet />;
 }
@@ -68,6 +46,16 @@ function AppGate() {
   if (roleLoading) return <JustSignedInHold />;
   if (isSuperadmin) return <Navigate to="/superadmin" replace />;
   return <Outlet />;
+}
+
+/** The company's app: Enterprise (full) or Base (simple), by its plan. */
+function TierApp() {
+  const { plan } = useAuth();
+  return (
+    <Suspense fallback={<JustSignedInHold />}>
+      {plan === "base" ? <BaseApp /> : <EnterpriseRoutes />}
+    </Suspense>
+  );
 }
 
 /**
@@ -123,45 +111,23 @@ export default function AppRoutes() {
       {/* forgot password: the email link opens this (signed in by the link, not by the app) */}
       <Route path={RESET_PATH} element={<LoginPage mode="reset" />} />
       {/* the window the LinkedIn extension opens (signs in by itself) */}
-      <Route path="/linkedin" element={<LinkedInCapturePage />} />
+      <Route path="/linkedin" element={<Suspense fallback={null}><LinkedInCapturePage /></Suspense>} />
 
       {/* Superadmin platform panel — protected by login, but outside the app layout */}
       <Route element={<ProtectedRoute />}>
         <Route element={<SuperAdminRoute />}>
-          <Route path="/superadmin" element={<SuperAdminHome />} />
-          <Route path="/superadmin/company/:id" element={<SuperAdminClient />} />
+          {/* straight from the sign-in, the green screen stays up while the console loads (it carries on from there) */}
+          <Route path="/superadmin" element={<Suspense fallback={<JustSignedInHold />}><SuperAdminHome /></Suspense>} />
+          <Route path="/superadmin/company/:id" element={<Suspense fallback={<JustSignedInHold />}><SuperAdminClient /></Suspense>} />
         </Route>
       </Route>
 
+      {/* the app itself: Enterprise or Base, by the company's plan (each one routes its own pages) */}
       <Route element={<ProtectedRoute />}>
         <Route element={<AppGate />}>
-          <Route element={<AppLayout />}>
-            {/* Home and Settings are always open; everything else follows Page access. */}
-            <Route path="/home" element={<HomePage />} />
-            {/* everyone has a ticket desk, like Home */}
-            <Route element={<PageRoute page="tickets" />}><Route path="/tickets" element={<TicketsPage />} /></Route>
-            <Route path="/settings" element={<SettingsPage />} />
-            <Route element={<PageRoute page="calendar" />}><Route path="/calendar" element={<CalendarRoute />} /></Route>
-            <Route element={<PageRoute page="management" />}><Route path="/management" element={<ManagementPage />} /></Route>
-            <Route element={<PageRoute page="clients" />}><Route path="/clients" element={<ClientsPage />} /></Route>
-            <Route element={<PageRoute page="projects" />}><Route path="/projects" element={<ProjectsPage />} /></Route>
-            <Route element={<PageRoute page="companies" />}><Route path="/companies" element={<CompaniesPage />} /></Route>
-            <Route element={<PageRoute page="contacts" />}><Route path="/contacts" element={<ContactsPage />} /></Route>
-            <Route element={<PageRoute page="sales" />}><Route path="/sales" element={<SalesPage />} /></Route>
-            <Route element={<PageRoute page="reports" />}><Route path="/reports" element={<ReportsPage />} /></Route>
-            <Route element={<PageRoute page="marketing" />}><Route path="/marketing" element={<MarketingPage />} /></Route>
-            <Route element={<PageRoute page="success" />}><Route path="/success" element={<CustomerSuccessPage />} /></Route>
-          </Route>
+          <Route path="/*" element={<TierApp />} />
         </Route>
       </Route>
-
-      <Route path="*" element={<CatchAll />} />
     </Routes>
   );
-}
-
-function CatchAll() {
-  const { isSuperadmin, roleLoading } = useAuth();
-  if (roleLoading) return null;
-  return <Navigate to={isSuperadmin ? "/superadmin" : "/home"} replace />;
 }

@@ -37,6 +37,8 @@ interface Props {
   /** Marks the client active or lost (churned). */
   onSetStatus?: (status: ClientStatus, opts: { at?: string | null; reason?: string | null; stopProducts?: boolean }) => Promise<string | null>;
   onClose: () => void;
+  /** Opened from a link (a report row…): go straight to this contract (a deal id) or to the signed products. */
+  focus?: { contract?: string | null; products?: boolean } | null;
 }
 
 type Tab = "overview" | "deals" | "projects" | "contract" | "upsells" | "tickets" | "emails" | "folders";
@@ -951,7 +953,7 @@ export function ClientStatusPicker({ status, churnedAt, reason, running = 0, can
 }
 
 export default function ClientWorkspace({
-  client, projects, projectTypes, usage, lineUsage, roles = [], onOpenProject, onNewProject, onDeleteProject, onLinesChanged, onSetStatus, onClose,
+  client, projects, projectTypes, usage, lineUsage, roles = [], onOpenProject, onNewProject, onDeleteProject, onLinesChanged, onSetStatus, onClose, focus,
 }: Props) {
   const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>("overview");
@@ -1333,6 +1335,8 @@ export default function ClientWorkspace({
       .sort((a, b) => str(b.ct?.signDate || b.lines[0]?.signing_date).localeCompare(str(a.ct?.signDate || a.lines[0]?.signing_date)));
   }, [dealContracts, lines]);
   const handLines = lines.filter((l) => !str(l.tracking_id));
+  // arriving for one contract (from a report row): its section, once everything has loaded
+  const focused = useRef(false);
 
   /* ---- editing: a contract, a signed product, a deal (Settings › Client page › Editing rights) ---- */
   const [ctEdit, setCtEdit] = useState<{ tid: string; v: Record<string, any> } | null>(null);
@@ -1615,6 +1619,14 @@ export default function ClientWorkspace({
     window.setTimeout(() => jump(k), 80);
   };
   const go = (t: Tab) => { setTab(t); setSpy(SUBS[t][0]?.k ?? ""); bodyRef.current?.scrollTo({ top: 0, behavior: "auto" }); };
+  useEffect(() => {
+    if (focused.current || !loaded || !focus || (!focus.contract && !focus.products)) return;
+    const gi = focus.contract ? contractGroups.findIndex((g) => g.tid === focus.contract) : -1;
+    focused.current = true;
+    // its own section; a contract with nothing signed here yet → the client's contract summary
+    const k = gi === 0 ? "contracts" : gi > 0 ? `contract-${contractGroups[gi].tid}` : focus.products ? "products" : "summary";
+    window.setTimeout(() => goSec("contract", k), 260);
+  }, [loaded, focus, contractGroups]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openDeal = (id: string) => navigate(`/sales?tracking=${id}`);
   const openSalesFile = async (f: TrackFile) => {

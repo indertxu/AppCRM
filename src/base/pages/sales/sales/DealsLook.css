@@ -1,0 +1,57 @@
+/* =====================================================================
+   BASE · Deals — the same look as Orbit and Billing: the app's light
+   paper, one dark rounded hero (title, search, views and the two KPI
+   cards) and the deals in white cards below. Overrides only; the
+   page's own styles (SalesPage.css) stay as they were.
+   ===================================================================== */
+.sl.sl-ov {
+  --hero-a: #0e4a36; --hero-b: #0a3527; --hero-c: #072419;
+  background: var(--app-bg, #eef6f2); padding-top: 14px;
+}
+.sl.sl-ov::before, .sl.sl-ov::after { display: none; }
+
+/* ---------- the hero: header + KPI cards in one dark panel ---------- */
+.sl.sl-ov > .sl-head {
+  position: relative; isolation: isolate; z-index: 3;
+  margin: 0 2.6rem; padding: 14px 14px 12px 26px; min-height: 66px; box-sizing: border-box;
+  border-radius: 24px 24px 0 0;
+  background:
+    radial-gradient(40% 160% at 8% 0%, rgba(18, 148, 102, 0.55), transparent 70%),
+    radial-gradient(36% 160% at 92% 0%, rgba(26, 143, 134, 0.42), transparent 70%),
+    linear-gradient(180deg, var(--hero-a), var(--hero-b));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+.sl.sl-ov > .sl-head::after, .sl.sl-ov > .so-kpis::after {
+  content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none;
+  background: radial-gradient(rgba(255, 255, 255, 0.065) 1px, transparent 1.2px) 0 0 / 22px 22px;
+}
+.sl.sl-ov > .sl-head .sl-title { font-family: "Space Grotesk", sans-serif; font-size: 24px; font-weight: 600; letter-spacing: -0.02em; }
+.sl.sl-ov > .so-kpis {
+  position: relative; isolation: isolate; z-index: 2;
+  margin: 0 2.6rem 22px; padding: 4px 18px 18px; box-sizing: border-box;
+  border-radius: 0 0 24px 24px;
+  background:
+    radial-gradient(50% 120% at 60% 100%, rgba(185, 138, 46, 0.16), transparent 70%),
+    linear-gradient(180deg, var(--hero-b), var(--hero-c));
+  box-shadow: 0 26px 50px -32px rgba(4, 30, 20, 0.85), 0 10px 22px -14px rgba(4, 30, 20, 0.4);
+}
+.sl.sl-ov > .so-kpis .so-kpi { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.09), 0 18px 34px -26px rgba(0, 0, 0, 0.7); }
+/* no KPI cards (some views): the header alone is the card */
+.sl.sl-ov:not(:has(> .so-kpis)) > .sl-head { border-radius: 24px; margin-bottom: 22px; background:
+    radial-gradient(40% 120% at 8% 0%, rgba(18, 148, 102, 0.55), transparent 70%),
+    radial-gradient(36% 120% at 92% 0%, rgba(26, 143, 134, 0.42), transparent 70%),
+    linear-gradient(105deg, var(--hero-a) 0%, var(--hero-b) 45%, var(--hero-c) 100%);
+  box-shadow: 0 22px 44px -30px rgba(4, 30, 20, 0.85); }
+
+/* ---------- below the hero: light ---------- */
+.sl.sl-ov > .so-sheet { margin: 0 2.6rem; padding: 0; background: transparent; box-shadow: none; border-radius: 0; animation: none; }
+.sl.sl-ov .so-sheet .sl-scroll { padding-left: 0; padding-right: 0; }
+.sl.sl-ov .so-sheet .fc { padding-left: 16px; padding-right: 16px; }
+
+/* board: airy columns on the paper, white cards */
+.sl.sl-ov .so-kcol {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.75), rgba(255, 255, 255, 0.45));
+  border: 1px solid rgba(10, 111, 77, 0.1); box-shadow: 0 18px 40px -34px rgba(10, 70, 45, 0.5);
+}
+.sl.sl-ov .so-kcol-h { padding: 18px 18px 12px; }
+.sl.sl-ov .so-kcard { box-shadow: 0 1px 2px rgba(10, 60, 40, 0.05), 0 10px 24px -20px rgba(10, 70, 45, 0.45); }

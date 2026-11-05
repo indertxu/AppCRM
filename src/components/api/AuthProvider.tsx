@@ -1,18 +1,19 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
-import { AuthContext, type Role } from "./authContext";
+import { AuthContext, type Role, type Plan } from "./authContext";
 
 // Re-export so existing files that still import from "./AuthProvider" keep working.
 // Migrate them to "./authContext" over time; once none import from here, remove these.
 export { useAuth } from "./authContext";
-export type { Role } from "./authContext";
+export type { Role, Plan } from "./authContext";
 
 interface ProfileState {
   /** whose profile this is: until it matches the session's user, the role is still loading */
   uid: string | null;
   role: Role | null;
   isSuperadmin: boolean;
+  plan: Plan;
   roleLoading: boolean;
 }
 
@@ -23,6 +24,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     uid: null,
     role: null,
     isSuperadmin: false,
+    plan: "enterprise",
     roleLoading: true,
   });
 
@@ -47,17 +49,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     if (!uid) {
       queueMicrotask(() => {
-        if (active) setProfile({ uid: null, role: null, isSuperadmin: false, roleLoading: false });
+        if (active) setProfile({ uid: null, role: null, isSuperadmin: false, plan: "enterprise", roleLoading: false });
       });
       return () => { active = false; };
     }
 
-    supabase
-      .from("profiles")
-      .select("role, is_superadmin, active")
-      .eq("id", uid)
-      .single()
-      .then(({ data }) => {
+    // the company's tier (Enterprise / Base) comes with the profile: which app opens depends on it
+    // (no 100_tenant_plan.sql yet, or no company → Enterprise, as before)
+    const planQ = Promise.resolve(supabase.rpc("my_plan")).then(({ data, error }) => (!error && data === "base" ? "base" : "enterprise") as Plan, () => "enterprise" as Plan);
+    Promise.all([
+      supabase
+        .from("profiles")
+        .select("role, is_superadmin, active")
+        .eq("id", uid)
+        .single(),
+      planQ,
+    ])
+      .then(([{ data }, plan]) => {
         if (!active) return;
         // laid off (profiles.active = false): the account stays for the records, but can't be used
         if ((data as { active?: boolean | null } | null)?.active === false && !data?.is_superadmin) {
@@ -70,6 +78,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           uid,
           role: (data?.role as Role) ?? null,
           isSuperadmin: !!data?.is_superadmin,
+          plan,
           roleLoading: false,
         });
       });
@@ -83,6 +92,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         session,
         role: profile.role,
         isSuperadmin: profile.isSuperadmin,
+        plan: profile.plan,
         loading,
         // a new sign-in: the old (empty) profile doesn't count — the role is loading until this user's arrives
         roleLoading: profile.roleLoading || profile.uid !== (session?.user?.id ?? null),

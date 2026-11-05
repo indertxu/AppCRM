@@ -1134,3 +1134,4 @@
 .sty-search { height: 40px; border-radius: 12px; }
 .sty-body { padding-top: 24px; }
 @media (max-width: 720px) { .sty-hero { padding: 14px 16px; gap: 10px; } }
+.st-switch:disabled { opacity: 0.45; cursor: not-allowed; }

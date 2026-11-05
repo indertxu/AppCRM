@@ -1,0 +1,707 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/**
+ * Home · CONSULTANCY — a source of cards for the home board (HomePage.tsx):
+ *   cons.backlog  the department backlog, four figures
+ *   cons.team     team (or your own) performance
+ *   cons.bills    outstanding bills
+ * plus every consultancy figure (CONS_KPIS). The board decides where each one
+ * sits and how big it is; this works the numbers out once and draws each card
+ * into the board's slot for it (a portal), only while some slot asks for it.
+ */
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { useNavigate } from "react-router-dom";
+import { supabase } from "../../../../components/api/supabase";
+import { loadRoles } from "../../settings/blueprintsApi";
+import { roleLinesOfRow, resolveRoleKey, legacyRoleMap, roleKeyOf, roleCounts, rateOn, lineRate, projectStatusOn } from "../../clients/clientsTypes";
+import { goToSection } from "../../../framework/pageAccess";
+import { useMgmtAccess } from "../../management/mgmtAccess";
+import { ClientLogo } from "../../clients/ClientWorkspace";
+import { loadInactiveIds } from "../../../framework/peopleStatus";
+import "./ConsultancyHome.css";
+
+const eur = (n: number) => Math.round(n).toLocaleString("en-US");
+const d1 = (n: number) => (+n.toFixed(1)).toLocaleString();
+
+/** A place on the home board a source draws one card (or one figure) into. */
+export interface HomeSlot { id: string; key: string; el: HTMLElement }
+/** Draws each slot's card into its place on the board. */
+export function renderSlots(slots: HomeSlot[], render: (key: string) => ReactNode): ReactNode {
+  return <>{slots.map((s) => createPortal(<Fragment>{render(s.key)}</Fragment>, s.el, s.id))}</>;
+}
+
+interface Props {
+  userId: string;
+  isLead: boolean;   // boss / consultancy_manager sees the whole team; consultant sees self
+  hoursPerDay: number;
+  /** Where the board wants consultancy cards / figures. */
+  slots: HomeSlot[];
+}
+
+const prefersStill = () => { try { return window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { return false; } };
+/** Counts up to a figure the first time it's known, then eases between values. */
+export function useCount(target: number, ms = 900): number {
+  const [v, setV] = useState(0);
+  const from = useRef(0);
+  useEffect(() => {
+    if (prefersStill()) { setV(target); from.current = target; return; }
+    const a = from.current, t0 = performance.now();
+    let raf = 0;
+    const step = (t: number) => {
+      const k = Math.min(1, (t - t0) / ms), e = 1 - Math.pow(1 - k, 3);
+      const x = a + (target - a) * e;
+      setV(x); from.current = x;
+      if (k < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [target, ms]);
+  return v;
+}
+
+/** A ring that fills to `pct` (0–100+); over 100 it turns warm. */
+export function Ring({ pct, size = 64, stroke = 7, children }: { pct: number; size?: number; stroke?: number; children?: ReactNode }) {
+  const r = (size - stroke) / 2, c = 2 * Math.PI * r;
+  const p = Math.max(0, Math.min(100, pct));
+  return (
+    <span className={`chx-ring ${pct > 100 ? "is-over" : pct >= 75 ? "is-full" : ""}`} style={{ width: size, height: size }}>
+      <svg viewBox={`0 0 ${size} ${size}`} aria-hidden="true">
+        <circle cx={size / 2} cy={size / 2} r={r} className="chx-ring-track" strokeWidth={stroke} />
+        <circle cx={size / 2} cy={size / 2} r={r} className="chx-ring-fill" strokeWidth={stroke}
+          strokeDasharray={`${c} ${c}`} style={{ strokeDashoffset: c * (1 - p / 100) }} />
+      </svg>
+      <span className="chx-ring-in">{children}</span>
+    </span>
+  );
+}
+
+/* ---------------------------------------------------------------------------
+   The four figures on top of the page: each person picks theirs (saved with
+   their profile). Every one is a figure of the Management page, worked out
+   the same way, and opens the tab it comes from.
+   --------------------------------------------------------------------------- */
+type HeroKey =
+  | "billed" | "days" | "planned" | "ontarget" | "dayrate" | "bonus"
+  | "backlog_value" | "backlog_days" | "backlog_projects" | "backlog_hold"
+  | "outstanding" | "late_bills"
+  | "incoming";
+export const HERO_KPIS: { key: HeroKey; group: string; label: string }[] = [
+  { key: "billed", group: "Team", label: "Billed this month" },
+  { key: "days", group: "Team", label: "Days delivered this month" },
+  { key: "planned", group: "Team", label: "Days planned, not confirmed" },
+  { key: "ontarget", group: "Team", label: "Consultants on target" },
+  { key: "dayrate", group: "Team", label: "Average day rate" },
+  { key: "bonus", group: "Bonus", label: "Bonus earned this month" },
+  { key: "backlog_value", group: "Backlog", label: "Unbilled backlog" },
+  { key: "backlog_days", group: "Backlog", label: "Days left to deliver" },
+  { key: "backlog_projects", group: "Backlog", label: "Projects in backlog" },
+  { key: "backlog_hold", group: "Backlog", label: "Backlog + on hold" },
+  { key: "outstanding", group: "Billing", label: "Waiting to be paid" },
+  { key: "late_bills", group: "Billing", label: "Bills over a month old" },
+  { key: "incoming", group: "Incoming", label: "Won deals to set up" },
+];
+/** The four figures people picked before the board (still read once, to start the board from them). */
+export const HERO_PREF = "homeHeroKpis";
+const isHeroKey = (k: unknown): k is HeroKey => HERO_KPIS.some((x) => x.key === k);
+
+/** One figure of the top row (a button into the page it comes from). */
+export function Fig({ cls = "", onClick, title, children }: { cls?: string; onClick: () => void; title: string; children: ReactNode }) {
+  return <button type="button" className={`chx-fig ${cls}`} onClick={onClick} title={title}>{children}</button>;
+}
+export function Txt({ label, value, unit, sub, big, children }: { label: string; value: ReactNode; unit?: ReactNode; sub?: ReactNode; big?: boolean; children?: ReactNode }) {
+  return (
+    <span className="chx-fig-txt">
+      <span className="chx-fig-k">{label}</span>
+      <b className={`chx-fig-v ${big ? "is-big" : ""}`}>{value}{unit && <small>{unit}</small>}</b>
+      {children}
+      {sub && <span className="chx-fig-s">{sub}</span>}
+    </span>
+  );
+}
+
+interface Bill { id: string; client: string; clientId: string | null; period: string; amount: number; status: string; ageMonths: number; }
+interface PersonRow { userId: string; name: string; daysDone: number; daysPlanned: number; daysTarget: number; billed: number; billedPlanned: number; billTarget: number; bonus: number; series: number[]; }
+interface TopProject { id: string; name: string; client: string; clientId: string | null; daysLeft: number; value: number; }
+
+/** A tiny cumulative line: days delivered through the billing period, against the target. */
+function Spark({ series, target }: { series: number[]; target: number }) {
+  if (series.length < 2) return <span className="cz-spark is-empty" />;
+  const W = 120, H = 32;
+  const max = Math.max(target, series[series.length - 1], 1);
+  const pts = series.map((v, i) => `${((i / (series.length - 1)) * W).toFixed(1)},${(H - (v / max) * (H - 3) - 1.5).toFixed(1)}`);
+  const ty = H - (target / max) * (H - 3) - 1.5;
+  return (
+    <svg className="cz-spark" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden="true">
+      {target > 0 && <line x1="0" x2={W} y1={ty} y2={ty} className="cz-spark-target" />}
+      <polygon points={`0,${H} ${pts.join(" ")} ${W},${H}`} className="cz-spark-area" />
+      <polyline points={pts.join(" ")} className="cz-spark-line" />
+    </svg>
+  );
+}
+
+export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDay, slots }: Props) {
+  const nav = useNavigate();
+  /* Whose figures show here: the same reach as Management › Team (Settings › Management › Security).
+     A lead sees everyone, or only their department, or only themselves; anyone else only themselves.
+     undefined = still reading the rules. null = everyone. */
+  const macc = useMgmtAccess();
+  const teamLv = macc.ready ? macc.level("team") : null;
+  const whoList: string[] | null | undefined = !macc.ready ? undefined
+    : isLeadRole && teamLv === "all" ? null
+    : isLeadRole && teamLv === "own" && macc.scope === "department" ? macc.team
+    : [userId];
+  const isLead = whoList === null || (whoList?.length ?? 0) > 1;
+  const whoKey = whoList === undefined ? "" : whoList === null ? "*" : whoList.join(",");
+  const [loading, setLoading] = useState(true);
+  const [bills, setBills] = useState<Bill[]>([]);
+  const [backlog, setBacklog] = useState({ consDays: 0, connDays: 0, valueCore: 0, valueConn: 0, value: 0, projects: 0, holdDays: 0, holdValue: 0, holdProjects: 0, otherLabel: "Other roles" });
+  const [topProjects, setTopProjects] = useState<TopProject[]>([]);
+  const [team, setTeam] = useState<PersonRow[]>([]);
+  const [teamTotals, setTeamTotals] = useState({ daysDone: 0, daysPlanned: 0, daysTarget: 0, billed: 0, billTarget: 0, bonus: 0 });
+  const [incoming, setIncoming] = useState<number | null>(null);
+  const wantsIncoming = slots.some((x) => x.key === "incoming");
+  // won deals waiting to become projects (Management › Incoming) — only asked when it's on show
+  useEffect(() => {
+    if (!wantsIncoming) return;
+    let alive = true;
+    Promise.resolve(supabase.from("handoffs").select("id", { count: "exact", head: true }).eq("status", "pending") as any)
+      .then((r: any) => { if (alive) setIncoming(r?.error ? null : r?.count ?? 0); }, () => {});
+    return () => { alive = false; };
+  }, [wantsIncoming]);
+
+  useEffect(() => {
+    if (whoList === undefined) return;
+    const whoSet = whoList ? new Set(whoList) : null;
+    let alive = true;
+    (async () => {
+      const todayISO = new Date().toISOString().slice(0, 10);
+
+      // ---- department backlog — replicates the Management Backlog page exactly ----
+      // available = sold − billed (confirmed) per role; planned/booked does NOT
+      // count as consumed. value = Σ available × that role's rate. Roles that
+      // count for the consultant's target make the consultancy bucket, the rest
+      // (a connector, say) the other one. Only kicked-off projects count.
+      const [{ data: projs }, { data: pu }, roles] = await Promise.all([
+        supabase.from("projects").select("*"),
+        supabase.from("project_role_usage").select("project_id, role_key, done"),
+        loadRoles(),
+      ]);
+      const legacy = legacyRoleMap(roles);
+      const linesOf = (p: any) => {
+        const out: ReturnType<typeof roleLinesOfRow> = [];
+        for (const l of roleLinesOfRow(p)) {
+          const roleId = resolveRoleKey(l.roleId, legacy);
+          const same = out.find((x) => x.roleId === roleId);
+          if (same) same.days += l.days; else out.push({ ...l, roleId });
+        }
+        return out;
+      };
+      // billed (confirmed) per project per role
+      const billedByProjRole: Record<string, Record<string, number>> = {};
+      (pu ?? []).forEach((r: any) => {
+        const k = resolveRoleKey(r.role_key || "consultor", legacy);
+        (billedByProjRole[r.project_id] ??= {})[k] = (billedByProjRole[r.project_id]?.[k] || 0) + (Number(r.done) || 0);
+      });
+
+      // client names (backlog projects, bills)
+      const projClient: Record<string, string> = {};
+      (projs ?? []).forEach((p: any) => { projClient[p.id] = p.client_id; });
+      const allClientIds = Array.from(new Set(Object.values(projClient).filter(Boolean)));
+      const clientName: Record<string, string> = {};
+      if (allClientIds.length) {
+        const { data: cl } = await supabase.from("clients").select("id, name").in("id", allClientIds as string[]);
+        (cl ?? []).forEach((c: any) => { clientName[c.id] = c.name; });
+      }
+
+      let consDays = 0, connDays = 0, valueCore = 0, valueConn = 0, projCount = 0;
+      let holdDays = 0, holdValue = 0, holdProjects = 0;
+      const tops: TopProject[] = [];
+      (projs ?? []).forEach((p: any) => {
+        // only kicked-off projects enter the backlog; closed ones leave it
+        if (p.kickoff_date && p.kickoff_date > todayISO) return;
+        const st = projectStatusOn({ status: p.status, endDate: p.end_date }, todayISO);
+        if (st === "closed") return;
+        let lines = linesOf(p);
+        // limited view: only the roles the person (or their department) holds on the project
+        if (whoSet) {
+          const held = new Set((Array.isArray(p.team) ? p.team : [])
+            .filter((m: any) => m?.role && whoSet.has(m.userId || m.user_id))
+            .map((m: any) => resolveRoleKey(m.role, legacy)));
+          lines = lines.filter((l) => held.has(l.roleId) && roleCounts(l.roleId, roles));
+        }
+        if (lines.reduce((s, l) => s + l.days, 0) === 0) return;
+        const b = billedByProjRole[p.id] || {};
+        // on hold: kept apart from the active backlog (shown as "+ on hold")
+        if (st === "on_hold") {
+          let left = 0, val = 0;
+          for (const l of lines) { const a = Math.max(0, l.days - (b[l.roleId] || 0)); if (a > 0.001) { left += a; val += a * lineRate(l); } }
+          if (left > 0.001) { holdDays += left; holdValue += val; holdProjects += 1; }
+          return;
+        }
+        let any = false, left = 0, val = 0;
+        for (const l of lines) {
+          const avail = Math.max(0, l.days - (b[l.roleId] || 0));
+          if (avail <= 0.001) continue;
+          any = true; left += avail; val += avail * lineRate(l);
+          if (roleCounts(l.roleId, roles)) { consDays += avail; valueCore += avail * lineRate(l); }
+          else { connDays += avail; valueConn += avail * lineRate(l); }
+        }
+        if (any) {
+          projCount += 1;
+          const cid = p.client_id ?? null;
+          tops.push({ id: p.id, name: p.name || clientName[cid] || "Project", client: clientName[cid] || "", clientId: cid, daysLeft: left, value: val });
+        }
+      });
+      const others = roles.filter((r) => !r.countsForTarget).map((r) => r.name);
+      if (alive) {
+        setBacklog({
+          consDays, connDays, valueCore, valueConn,
+          value: valueCore + valueConn,
+          projects: projCount,
+          holdDays, holdValue, holdProjects,
+          otherLabel: others.length ? others.join(", ") : "Other roles",
+        });
+        setTopProjects(tops.sort((a, b) => b.value - a.value).slice(0, 3));
+      }
+
+      // ---- team panel: MATCHES the Management Team tab (Month scope) ----
+      const nowP = new Date();
+      const curPeriod = `${nowP.getFullYear()}-${String(nowP.getMonth() + 1).padStart(2, "0")}`;
+      const cutoffDay = 22;
+      const periodForDate = (iso: string) => {
+        const d = new Date(iso + "T00:00:00");
+        if (d.getDate() > cutoffDay) { const n = new Date(d.getFullYear(), d.getMonth() + 1, 1); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`; }
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      };
+      const [{ data: prof }, { data: ut }, { data: bs2 }, { data: svc }, { data: allCe }, { data: inv }] = await Promise.all([
+        supabase.from("profiles").select("id, first_name, last_name, role, department"),
+        supabase.from("user_targets").select("*"),
+        supabase.from("billing_settings").select("min_days_month, min_billing_month, bonus_pct_1").eq("id", "default").maybeSingle(),
+        supabase.from("services").select("id, rate_unit"),
+        supabase.from("calendar_entries").select("user_id, billable, billing_line, role_id, entry_date, billing_period, project_id, status")
+          .neq("status", "cancelled").neq("billing_line", "closure")
+          .gte("entry_date", new Date(nowP.getFullYear(), nowP.getMonth() - 1, 10).toISOString().slice(0, 10))
+          .lte("entry_date", new Date(nowP.getFullYear(), nowP.getMonth() + 1, 10).toISOString().slice(0, 10))
+          .range(0, 99999),
+        supabase.from("invoices").select("project_id, amount, period, status"),
+      ]);
+      const defMinDays = Number((bs2 as any)?.min_days_month) || 12;
+      const defMinBill = Number((bs2 as any)?.min_billing_month) || 0;
+      const defPct = Number((bs2 as any)?.bonus_pct_1) || 3;
+      // which projects bill by the hour → their days are tracked separately
+      const hourUnit: Record<string, boolean> = {};
+      (svc ?? []).forEach((r: any) => { hourUnit[r.id] = r.rate_unit === "hour"; });
+      const isHourProj: Record<string, boolean> = {};
+      (projs ?? []).forEach((p: any) => { isHourProj[p.id] = !!hourUnit[p.service_id]; });
+
+      const capById: Record<string, any> = {}; (ut ?? []).forEach((r: any) => { capById[r.user_id] = r; });
+      const nameById: Record<string, string> = {};
+      (prof ?? []).forEach((p: any) => { nameById[p.id] = [p.first_name, p.last_name].filter(Boolean).join(" ") || "—"; });
+      const linesByProj: Record<string, ReturnType<typeof roleLinesOfRow>> = {};
+      (projs ?? []).forEach((p: any) => { linesByProj[p.id] = linesOf(p); });
+
+      // team = everyone who appears on a project's team (like Management's inTeam)
+      const inTeam = new Set<string>();
+      (projs ?? []).forEach((p: any) => {
+        const t = Array.isArray(p.team) ? p.team : [];
+        t.forEach((m: any) => { if (m?.userId || m?.user_id) inTeam.add(m.userId || m.user_id); });
+      });
+
+      const doneByUser: Record<string, number> = {};
+      const plannedByUser: Record<string, number> = {};
+      const billedByUser: Record<string, number> = {};
+      const billedPlannedByUser: Record<string, number> = {};
+      const doneByUserDay: Record<string, Record<string, number>> = {};
+      (allCe ?? []).forEach((e: any) => {
+        const key = resolveRoleKey(roleKeyOf(e), legacy);
+        if (key !== "sales" && !roleCounts(key, roles)) return;    // roles that don't count are excluded, like Management
+        const per = e.billing_period || periodForDate(e.entry_date);
+        if (per !== curPeriod) return;
+        // hourly projects' days are NOT summed into the day figure
+        if (isHourProj[e.project_id]) return;
+        const dv = Number(e.billable) || 0;
+        if (dv <= 0) return;
+        const rate = rateOn(linesByProj[e.project_id] ?? [], key);
+        if (e.status === "confirmed") {
+          doneByUser[e.user_id] = (doneByUser[e.user_id] || 0) + dv;
+          billedByUser[e.user_id] = (billedByUser[e.user_id] || 0) + dv * rate;
+          const m = (doneByUserDay[e.user_id] ??= {});
+          m[e.entry_date] = (m[e.entry_date] || 0) + dv;
+        } else {
+          plannedByUser[e.user_id] = (plannedByUser[e.user_id] || 0) + dv;
+          billedPlannedByUser[e.user_id] = (billedPlannedByUser[e.user_id] || 0) + dv * rate;
+        }
+      });
+      // the billing period's days so far (23rd of last month → today) for the sparklines
+      const pStart = new Date(nowP.getFullYear(), nowP.getMonth() - (nowP.getDate() > cutoffDay ? 0 : 1), cutoffDay + 1);
+      const periodDays: string[] = [];
+      for (let d = new Date(pStart); d <= nowP && periodDays.length < 40; d.setDate(d.getDate() + 1)) {
+        periodDays.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`);
+      }
+      const seriesOf = (uid: string) => {
+        const m = doneByUserDay[uid] || {};
+        let acc = 0;
+        return periodDays.map((d) => (acc += m[d] || 0));
+      };
+
+      // laid-off people (Settings → Organization) aren't on the team any more
+      const former = await loadInactiveIds().catch(() => new Set<string>());
+      const teamIds = new Set<string>([
+        ...Object.keys(doneByUser), ...Object.keys(plannedByUser),
+        ...inTeam,
+      ].filter((id) => !former.has(id)));
+      const rows: PersonRow[] = [...teamIds].map((uid) => {
+        const cap = capById[uid] || {};
+        const daysDone = doneByUser[uid] || 0;
+        const daysPlanned = plannedByUser[uid] || 0;
+        const billed = billedByUser[uid] || 0;
+        const billedPlanned = billedPlannedByUser[uid] || 0;
+        const daysTarget = cap.min_days_month != null ? Number(cap.min_days_month) : defMinDays;
+        const billTarget = cap.min_billing_month != null ? Number(cap.min_billing_month) : defMinBill;
+        const minMet = daysDone >= daysTarget && (billTarget === 0 || billed >= billTarget);
+        const bonus = minMet ? billed * ((cap.bonus_pct_1 != null ? Number(cap.bonus_pct_1) : defPct) / 100) : 0;
+        return { userId: uid, name: nameById[uid] || "Unknown", daysDone, daysPlanned, daysTarget, billed, billedPlanned, billTarget, bonus, series: seriesOf(uid) };
+      }).sort((a, b) => (b.daysDone + b.daysPlanned) - (a.daysDone + a.daysPlanned));
+
+      const shown = whoSet ? rows.filter((r) => whoSet.has(r.userId)) : rows;
+      if (alive) {
+        setTeam(shown);
+        setTeamTotals({
+          daysDone: shown.reduce((s, r) => s + r.daysDone, 0),
+          daysPlanned: shown.reduce((s, r) => s + r.daysPlanned, 0),
+          daysTarget: shown.reduce((s, r) => s + r.daysTarget, 0),
+          billed: shown.reduce((s, r) => s + r.billed, 0),
+          billTarget: shown.reduce((s, r) => s + r.billTarget, 0),
+          bonus: shown.reduce((s, r) => s + r.bonus, 0),
+        });
+      }
+
+      // ---- outstanding bills of MY projects (unpaid) ----
+      // My projects = projects I've delivered on this scope.
+      const myProjectIds = new Set((allCe ?? []).filter((e: any) => whoSet ? whoSet.has(e.user_id) : true).map((e: any) => e.project_id));
+      (projs ?? []).forEach((p: any) => { if (whoSet && (Array.isArray(p.team) ? p.team : []).some((m: any) => whoSet.has(m?.userId || m?.user_id))) myProjectIds.add(p.id); });
+      const nowMonths = nowP.getFullYear() * 12 + nowP.getMonth();
+      const unpaid = (inv ?? [])
+        .filter((i: any) => i.status !== "paid" && (!whoSet || myProjectIds.has(i.project_id)))
+        .map((i: any) => {
+          const cid = projClient[i.project_id] ?? null;
+          const [py, pm] = String(i.period ?? "").split("-").map(Number);
+          const age = py && pm ? Math.max(0, nowMonths - (py * 12 + pm - 1)) : 0;
+          return { id: `${i.project_id}|${i.period}`, client: (cid && clientName[cid]) || "—", clientId: cid, period: i.period, amount: Number(i.amount) || 0, status: String(i.status ?? ""), ageMonths: age };
+        })
+        .sort((a: Bill, b: Bill) => b.amount - a.amount)
+        .slice(0, 40);
+      if (alive) setBills(unpaid);
+
+      if (alive) setLoading(false);
+    })();
+    return () => { alive = false; };
+  }, [userId, whoKey, hoursPerDay]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const outstandingTotal = useMemo(() => bills.reduce((s, b) => s + b.amount, 0), [bills]);
+  const lateBills = bills.filter((b) => b.ageMonths >= 2).length;
+  const pct = (a: number, b: number) => (b > 0 ? Math.min(100, (a / b) * 100) : 0);
+  const teamDayPct = pct(teamTotals.daysDone, teamTotals.daysTarget);
+  const teamPlanPct = pct(teamTotals.daysDone + teamTotals.daysPlanned, teamTotals.daysTarget);
+  const teamBillPct = pct(teamTotals.billed, teamTotals.billTarget);
+  const totalDays = backlog.consDays + backlog.connDays;
+  // each backlog figure is a way into Management › Backlog
+  const openBacklog = () => goToSection(nav, "/management", "backlog");
+  const toBacklog = {
+    role: "link" as const, tabIndex: 0, title: "Open Management › Backlog",
+    onClick: openBacklog,
+    onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openBacklog(); } },
+  };
+  const coreShare = totalDays > 0 ? (backlog.consDays / totalDays) * 100 : 0;
+  const avg = (v: number, d: number) => (d > 0 ? v / d : 0);
+  const periodLabel = (p: string) => {
+    const [y, m] = String(p).split("-").map(Number);
+    return y && m ? new Date(y, m - 1, 1).toLocaleDateString("en-GB", { month: "short", year: "numeric" }) : p;
+  };
+
+  // ---- hero figures ----
+  const myRow = team.find((r) => r.userId === userId);
+  const billedNow = isLead ? teamTotals.billed : myRow?.billed ?? 0;
+  const billedGoal = isLead ? teamTotals.billTarget : myRow?.billTarget ?? 0;
+  const billPctHero = billedGoal > 0 ? (billedNow / billedGoal) * 100 : 0;
+  const aging = useMemo(() => {
+    const a = { fresh: 0, one: 0, old: 0 };
+    bills.forEach((b) => { if (b.ageMonths >= 2) a.old += b.amount; else if (b.ageMonths >= 1) a.one += b.amount; else a.fresh += b.amount; });
+    return a;
+  }, [bills]);
+  const cBilled = useCount(loading ? 0 : billedNow);
+  const cOut = useCount(loading ? 0 : outstandingTotal);
+  const share = (x: number) => (outstandingTotal > 0 ? (x / outstandingTotal) * 100 : 0);
+
+  // ---- every figure the top row can show ----
+  const me2 = myRow;
+  const teamDays = isLead ? teamTotals.daysDone : me2?.daysDone ?? 0;
+  const teamDaysGoal = isLead ? teamTotals.daysTarget : me2?.daysTarget ?? 0;
+  const teamPlanned = isLead ? teamTotals.daysPlanned : me2?.daysPlanned ?? 0;
+  const bonusNow = isLead ? teamTotals.bonus : me2?.bonus ?? 0;
+  const onTarget = team.filter((r) => r.daysDone >= r.daysTarget && (r.billTarget === 0 || r.billed >= r.billTarget)).length;
+  const lateAmount = bills.filter((b) => b.ageMonths >= 2).reduce((x, b) => x + b.amount, 0);
+  const who = isLead ? "Team" : "You";
+  const heroFig = (k: HeroKey): ReactNode => {
+    const go = (path: string, section?: string) => () => (section ? goToSection(nav, path, section) : nav(path));
+    const meter = (v: number, goal: number) => <span className="chx-meter"><i style={{ width: `${goal > 0 ? Math.min(100, (v / goal) * 100) : 0}%` }} /></span>;
+    const wait = loading ? "…" : null;
+    switch (k) {
+      case "billed": return (
+        <Fig cls="is-billed" onClick={go("/management", "team")} title="Open Management › Team">
+          <Txt label={isLead ? "Team billed this month" : "You billed this month"} value={wait ?? `${eur(cBilled)} €`} unit={billedGoal > 0 ? ` of ${eur(billedGoal)} €` : ""}
+            sub={`${billedGoal > 0 ? `${Math.round(billPctHero)}% of the target` : "No billing target set"}${isLead && teamTotals.bonus > 0 ? ` · ${eur(teamTotals.bonus)} € bonus` : ""}`}>
+            {meter(billedNow, billedGoal)}
+          </Txt>
+        </Fig>
+      );
+      case "days": return (
+        <Fig onClick={go("/management", "team")} title="Open Management › Team">
+          <Txt label={`${who === "Team" ? "Team days" : "Your days"} delivered`} value={wait ?? `${+teamDays.toFixed(1)}d`} unit={teamDaysGoal > 0 ? ` of ${+teamDaysGoal.toFixed(1)}d` : ""}
+            sub={teamDaysGoal > 0 ? `${Math.round((teamDays / teamDaysGoal) * 100)}% of the month's target` : "No day target set"}>
+            {meter(teamDays, teamDaysGoal)}
+          </Txt>
+        </Fig>
+      );
+      case "planned": return (
+        <Fig onClick={go("/management", "team")} title="Open Management › Team">
+          <Txt label="Days planned, not confirmed" value={wait ?? `${+teamPlanned.toFixed(1)}d`}
+            sub={teamDaysGoal > 0 ? `With them: ${Math.round(((teamDays + teamPlanned) / teamDaysGoal) * 100)}% of the target` : "This billing month"} />
+        </Fig>
+      );
+      case "ontarget": return (
+        <Fig onClick={go("/management", "team")} title="Open Management › Team">
+          <Txt label="Consultants on target" value={wait ?? onTarget} unit={` / ${team.length}`} big
+            sub={team.length ? `${team.length - onTarget} still below their minimum` : "Nobody on a project yet"} />
+        </Fig>
+      );
+      case "dayrate": return (
+        <Fig onClick={go("/management", "team")} title="Open Management › Team">
+          <Txt label="Average day rate" value={wait ?? `${eur(teamDays > 0 ? billedNow / teamDays : 0)} €`} unit=" / day"
+            sub={`${eur(billedNow)} € over ${+teamDays.toFixed(1)} days this month`} />
+        </Fig>
+      );
+      case "bonus": return (
+        <Fig onClick={go("/management", "bonus")} title="Open Management › Bonus">
+          <Txt label={isLead ? "Team bonus this month" : "Your bonus this month"} value={wait ?? `${eur(bonusNow)} €`}
+            sub={bonusNow > 0 ? "Minimum met: the bonus applies" : "Earned once the month's minimum is met"} />
+        </Fig>
+      );
+      case "backlog_value": return (
+        <Fig onClick={go("/management", "backlog")} title="Open Management › Backlog">
+          <Txt label="Unbilled backlog" value={wait ?? `${eur(backlog.value)} €`} sub={`${d1(totalDays)} days left in ${backlog.projects} ${backlog.projects === 1 ? "project" : "projects"}`} />
+        </Fig>
+      );
+      case "backlog_days": return (
+        <Fig onClick={go("/management", "backlog")} title="Open Management › Backlog">
+          <Txt label="Days left to deliver" value={wait ?? `${d1(totalDays)}d`} sub={`${d1(backlog.consDays)}d consultancy · ${d1(backlog.connDays)}d ${backlog.otherLabel.toLowerCase()}`} />
+        </Fig>
+      );
+      case "backlog_projects": return (
+        <Fig onClick={go("/management", "backlog")} title="Open Management › Backlog">
+          <Txt label="Projects in backlog" value={wait ?? backlog.projects} big sub={backlog.holdProjects ? `Open, with days to deliver · +${backlog.holdProjects} on hold` : "Open, with days still to deliver"} />
+        </Fig>
+      );
+      case "backlog_hold": return (
+        <Fig onClick={go("/management", "backlog")} title="Open Management › Backlog">
+          <Txt label="Backlog + on hold" value={wait ?? `${eur(backlog.value + backlog.holdValue)} €`}
+            sub={backlog.holdProjects ? `${eur(backlog.holdValue)} € of it on hold · ${backlog.holdProjects} ${backlog.holdProjects === 1 ? "project" : "projects"}` : "Nothing on hold"} />
+        </Fig>
+      );
+      case "outstanding": return (
+        <Fig cls="is-out" onClick={go("/management", "billing/sent")} title="Open Management › Billing › Sent">
+          <Txt label="Waiting to be paid" value={wait ?? `${eur(cOut)} €`} unit={loading ? "" : ` · ${bills.length} ${bills.length === 1 ? "bill" : "bills"}`}>
+            <span className="chx-aging" aria-label="By age">
+              <i className="is-fresh" style={{ width: `${share(aging.fresh)}%` }} />
+              <i className="is-one" style={{ width: `${share(aging.one)}%` }} />
+              <i className="is-old" style={{ width: `${share(aging.old)}%` }} />
+            </span>
+            <span className="chx-fig-s chx-aging-key">
+              <span><em className="is-fresh" />This month</span><span><em className="is-one" />1 month</span><span><em className="is-old" />Older</span>
+            </span>
+          </Txt>
+        </Fig>
+      );
+      case "late_bills": return (
+        <Fig cls={lateBills > 0 ? "has-late" : ""} onClick={go("/management", "billing/sent")} title="Open Management › Billing › Sent">
+          <Txt label="Bills over a month old" value={wait ?? lateBills} big unit={lateBills ? ` · ${eur(lateAmount)} €` : ""}
+            sub={lateBills ? "Worth a reminder to the client" : "Everything is recent"} />
+        </Fig>
+      );
+      case "incoming": return (
+        <Fig cls={incoming ? "has-late" : ""} onClick={go("/management", "incoming")} title="Open Management › Incoming">
+          <Txt label="Won deals to set up" value={incoming == null ? "…" : incoming} big sub={incoming ? "Handoffs waiting to become projects" : "Nothing waiting"} />
+        </Fig>
+      );
+    }
+  };
+
+  const card = (key: string): ReactNode => {
+    if (isHeroKey(key)) return heroFig(key);
+    switch (key) {
+      case "cons.backlog": return (
+        <section className="cz-card cz-backlog" aria-label={whoList === null ? "Department backlog" : isLead ? "Your department's backlog" : "Your backlog"}>
+          {/* no button: every figure opens Management › Backlog, and they get the card's height */}
+          <span className="cz-eyebrow cz-bl-k">{whoList === null ? "Department backlog" : isLead ? "Your department's backlog" : "Your backlog"}</span>
+          <div className="cz-kpis">
+            <div className="cz-kpi is-hero" {...toBacklog}>
+              <div className="cz-kpi-rest">
+                <span className="cz-kpi-k">Unbilled value</span>
+                <b className="cz-kpi-v">{loading ? "…" : eur(backlog.value)}<i>€</i></b>
+                <span className="cz-kpi-s">{d1(totalDays)} days left to deliver</span>
+                {backlog.holdProjects > 0 && (
+                  <span className="cz-kpi-s cz-hold" title={`${d1(backlog.holdDays)} days in ${backlog.holdProjects} ${backlog.holdProjects === 1 ? "project" : "projects"} on hold, not in the figure above`}>
+                    +{eur(backlog.holdValue)} € on hold
+                  </span>
+                )}
+              </div>
+              <div className="cz-kpi-more">
+                <span className="cz-kpi-k">Where it sits</span>
+                <span className="cz-split"><i style={{ width: `${coreShare}%` }} /><i className="is-alt" style={{ width: `${100 - coreShare}%` }} /></span>
+                <span className="cz-legend"><span><em className="is-core" />Consultancy <b>{eur(backlog.valueCore)} €</b></span><span><em className="is-alt" />{backlog.otherLabel} <b>{eur(backlog.valueConn)} €</b></span></span>
+              </div>
+            </div>
+            <div className="cz-kpi" {...toBacklog}>
+              <div className="cz-kpi-rest">
+                <span className="cz-kpi-k"><em className="is-core" />Consultancy</span>
+                <b className="cz-kpi-v">{d1(backlog.consDays)}<i>d</i></b>
+                <span className="cz-kpi-s">{eur(backlog.valueCore)} €</span>
+              </div>
+              <div className="cz-kpi-more">
+                <span className="cz-kpi-k">Consultancy</span>
+                <span className="cz-facts">
+                  <span><b>{Math.round(coreShare)}%</b> of the days</span>
+                  <span><b>{eur(avg(backlog.valueCore, backlog.consDays))} €</b> avg / day</span>
+                </span>
+              </div>
+            </div>
+            <div className="cz-kpi" {...toBacklog}>
+              <div className="cz-kpi-rest">
+                <span className="cz-kpi-k" title="Roles that don't count for the consultant's target"><em className="is-alt" />{backlog.otherLabel}</span>
+                <b className="cz-kpi-v">{d1(backlog.connDays)}<i>d</i></b>
+                <span className="cz-kpi-s">{eur(backlog.valueConn)} €</span>
+              </div>
+              <div className="cz-kpi-more">
+                <span className="cz-kpi-k">{backlog.otherLabel}</span>
+                <span className="cz-facts">
+                  <span><b>{Math.round(100 - coreShare)}%</b> of the days</span>
+                  <span><b>{eur(avg(backlog.valueConn, backlog.connDays))} €</b> avg / day</span>
+                </span>
+              </div>
+            </div>
+            <div className="cz-kpi" {...toBacklog}>
+              <div className="cz-kpi-rest">
+                <span className="cz-kpi-k">Projects in backlog</span>
+                <b className="cz-kpi-v">{backlog.projects}</b>
+                <span className="cz-kpi-s">{backlog.holdProjects ? `open · +${backlog.holdProjects} on hold` : "kicked off, days to deliver"}</span>
+              </div>
+              <div className="cz-kpi-more">
+                <span className="cz-kpi-k">Biggest</span>
+                {topProjects.length === 0 ? <span className="cz-kpi-s">Nothing left to deliver.</span> : (
+                  <span className="cz-tops">
+                    {topProjects.map((p) => (
+                      <span key={p.id} className="cz-top">
+                        <ClientLogo name={p.client || p.name} clientId={p.clientId} className="cz-logo is-xs" />
+                        <span className="cz-top-n">{p.client || p.name}</span>
+                        <b>{d1(p.daysLeft)}d</b>
+                      </span>
+                    ))}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        </section>
+      );
+      case "cons.team": return (
+        <section className="cz-card cz-team" aria-label={isLead ? "Team performance" : "Your performance"}>
+          <header className="cz-head">
+            <div className="cz-titles">
+              <span className="cz-eyebrow">{isLead ? "Team performance" : "Your performance"}</span>
+              <h2 className="cz-title">{loading ? "…" : <>{Math.round(teamDayPct)}%<small>of the month's days</small></>}</h2>
+            </div>
+            <button type="button" className="cz-link" onClick={() => goToSection(nav, "/management", "team")}>Management<i aria-hidden="true">→</i></button>
+          </header>
+
+          {isLead && (
+            <div className="cz-meters">
+              <div className="cz-meter" tabIndex={0}>
+                <span className="cz-meter-k">Days</span>
+                <b>{d1(teamTotals.daysDone)}<em> / {d1(teamTotals.daysTarget)}</em></b>
+                <span className="cz-bar"><i className="is-plan" style={{ width: `${teamPlanPct}%` }} /><i style={{ width: `${teamDayPct}%` }} /></span>
+                <span className="cz-meter-more">+{d1(teamTotals.daysPlanned)} planned</span>
+              </div>
+              <div className="cz-meter" tabIndex={0}>
+                <span className="cz-meter-k">Billed</span>
+                <b>{eur(teamTotals.billed)}<em> / {eur(teamTotals.billTarget)} €</em></b>
+                <span className="cz-bar"><i style={{ width: `${teamBillPct}%` }} /></span>
+                <span className="cz-meter-more">{teamTotals.bonus > 0 ? `${eur(teamTotals.bonus)} € in bonus` : "no bonus earned yet"}</span>
+              </div>
+            </div>
+          )}
+
+          <div className="cz-people">
+            {loading ? <div className="cz-skel" /> : team.length === 0 ? <p className="cz-empty">No delivery booked this month yet.</p> : team.map((r, i) => {
+              const donePct = pct(r.daysDone, r.daysTarget);
+              const planPct = pct(r.daysDone + r.daysPlanned, r.daysTarget);
+              const p = Math.round(donePct);
+              return (
+                <div className="cz-person" key={r.userId} tabIndex={0} style={{ ["--i" as string]: Math.min(i, 10) } as React.CSSProperties}>
+                  <div className="cz-person-row">
+                    <span className={`cz-av ${p >= 100 ? "is-hit" : ""}`} aria-hidden="true" style={{ ["--p" as string]: donePct, ["--q" as string]: planPct } as React.CSSProperties}>{r.name.split(/\s+/).map((x) => x[0]).join("").slice(0, 2).toUpperCase()}</span>
+                    <span className="cz-person-name">{r.name}</span>
+                    <span className="cz-bar is-thin"><i className="is-plan" style={{ width: `${planPct}%` }} /><i style={{ width: `${donePct}%` }} /></span>
+                    <span className={`cz-pct ${p >= 100 ? "is-hit" : ""}`}>{p}%</span>
+                  </div>
+                  <div className="cz-person-more">
+                    <div className="cz-person-in">
+                      <span className="cz-stat"><em>Days</em><b>{d1(r.daysDone)}{r.daysPlanned > 0 && <i>+{d1(r.daysPlanned)}</i>}<small> / {d1(r.daysTarget)}</small></b></span>
+                      <span className="cz-stat"><em>Billed</em><b>{eur(r.billed)} €{r.billTarget > 0 && <small> / {eur(r.billTarget)}</small>}</b></span>
+                      <span className="cz-stat"><em>Bonus</em><b className={r.bonus > 0 ? "is-on" : ""}>{r.bonus > 0 ? `${eur(r.bonus)} €` : "—"}</b></span>
+                      <Spark series={r.series} target={r.daysTarget} />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      );
+      case "cons.bills": return (
+        <section className="cz-card cz-bills" aria-label="Outstanding bills">
+          <header className="cz-head">
+            <div className="cz-titles">
+              <span className="cz-eyebrow">{isLead ? "Team outstanding bills" : "Outstanding bills"}</span>
+              <h2 className="cz-title">{loading ? "…" : <>{eur(outstandingTotal)} €<small>{bills.length} {bills.length === 1 ? "bill" : "bills"}{lateBills > 0 ? ` · ${lateBills} older than a month` : ""}</small></>}</h2>
+            </div>
+            <button type="button" className="cz-link" onClick={() => goToSection(nav, "/management", "billing/sent")}>Billing<i aria-hidden="true">→</i></button>
+          </header>
+          {loading ? <div className="cz-skel" /> : bills.length === 0 ? (
+            <p className="cz-empty is-good">Nothing outstanding.</p>
+          ) : (
+            <div className="cz-bills-list">
+              {bills.map((b, i) => (
+                <button type="button" className={`cz-bill ${b.ageMonths >= 2 ? "is-old" : b.ageMonths >= 1 ? "is-one" : "is-fresh"}`} key={b.id} style={{ ["--i" as string]: Math.min(i, 10) } as React.CSSProperties}
+                  onClick={() => goToSection(nav, "/management", "billing/sent")}>
+                  <ClientLogo name={b.client} clientId={b.clientId} className="cz-logo" />
+                  <span className="cz-bill-main">
+                    <span className="cz-bill-client">{b.client}</span>
+                    <span className="cz-bill-sub">
+                      <span>{periodLabel(b.period)}</span>
+                      <span className={`cz-tag ${b.ageMonths >= 2 ? "is-warn" : ""}`}>{b.status === "sent" ? "Awaiting payment" : b.status ? b.status.replace(/_/g, " ") : "Not sent"}</span>
+                      {b.ageMonths >= 1 && <span>{b.ageMonths} {b.ageMonths === 1 ? "month" : "months"} old</span>}
+                    </span>
+                  </span>
+                  <span className="cz-bill-amt">{eur(b.amount)} €</span>
+                  <span className="cz-bill-go" aria-hidden="true">→</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+      );
+      default: return null;
+    }
+  };
+  return renderSlots(slots, card);
+}

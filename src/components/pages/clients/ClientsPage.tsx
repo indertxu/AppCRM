@@ -17,7 +17,7 @@ import {
 } from "./useClientsData";
 import SalesMultiFilter from "../sales/sales/SalesMultiFilter";
 import { createPortal } from "react-dom";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { listEmployees, type Employee } from "../companies/companiesApi";
 import { loadProducts, loadServices, type Product as CatProduct, type Service as CatService } from "../settings/catalogApi";
 import { projectValue, signedOf, legacyRoleMap, resolvedLinesOf, roleCounts, roleNameOf, lineRate, projectStatusOf, PROJECT_STATUS_LABEL, type Client, type ClientStatus, type Project, type ProjectType } from "./clientsTypes";
@@ -734,14 +734,25 @@ export default function ClientsPage() {
   const [importing, setImporting] = useState(false);
   const [colsTick, setColsTick] = useState(0);
 
-  /** Arriving with ?client=… (global search, a ticket's link) opens that client. */
-  const askedClient = useRef<string | null>(new URLSearchParams(window.location.search).get("client"));
+  /** Arriving with ?client=… (global search, a ticket's link, a report row) opens that client;
+   *  &contract=<deal id> or &products=1 goes on to that contract, &project=<id> opens that project. */
+  const loc = useLocation();
+  const askedQ = new URLSearchParams(loc.search || window.location.search);
+  const askedClient = useRef<string | null>(askedQ.get("client"));
+  const askedMore = useRef({ contract: askedQ.get("contract"), products: askedQ.get("products") === "1", project: askedQ.get("project") });
+  const [focus, setFocus] = useState<{ contract?: string | null; products?: boolean } | null>(null);
   useEffect(() => {
     const id = askedClient.current;
     if (!id || !loaded) return;
     const c = clients.find((x) => x.id === id);
-    if (c) { askedClient.current = null; setDetailClient(c); }
-  }, [loaded, clients, setDetailClient]);
+    if (!c) return;
+    askedClient.current = null;
+    const m = askedMore.current;
+    const p = m.project ? projects.find((x) => x.id === m.project) : null;
+    if (p) { setEditing({ client: c, project: p }); return; }
+    setFocus(m.contract || m.products ? { contract: m.contract, products: m.products } : null);
+    setDetailClient(c);
+  }, [loaded, clients, projects, setDetailClient]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** One row per project (a client without projects gets one row) — the same columns the importer reads. */
   const exportClients = () => {
@@ -867,7 +878,8 @@ export default function ClientsPage() {
           onNewProject={() => openNewProject(detailClient)}
           onDeleteProject={deleteProject}
           onLinesChanged={() => setLinesRev((n) => n + 1)}
-          onClose={() => setDetailClient(null)}
+          onClose={() => { setDetailClient(null); setFocus(null); }}
+          focus={focus}
         />
       )}
 

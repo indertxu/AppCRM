@@ -36,11 +36,15 @@ async function call(action: string, payload: Record<string, unknown> = {}) {
   return body;
 }
 
+/** Which app a company's people get: the full Enterprise app or the simple Base app (tenants.plan). */
+export type TenantPlan = "enterprise" | "base";
+export const PLAN_LABEL: Record<TenantPlan, string> = { enterprise: "Enterprise", base: "Base" };
 export interface Tenant {
   id: string;
   name: string;
   max_users: number;
   active: boolean;
+  plan?: TenantPlan;
   user_count: number;
   created_at: string;
 }
@@ -54,7 +58,42 @@ export interface TenantUser {
 }
 
 export const listTenants = () => call("list_tenants").then((r) => (r.tenants ?? []) as Tenant[]);
-export const createTenant = (name: string, maxUsers: number) => call("create_tenant", { name, maxUsers });
+/** A new company, on the plan you pick (Enterprise unless you say Base). */
+export async function createTenant(name: string, maxUsers: number, plan: TenantPlan = "enterprise") {
+  const r = await call("create_tenant", { name, maxUsers, plan });
+  if (!r?.error && plan !== "enterprise" && r?.tenant?.id) {
+    const e = await setTenantPlan(r.tenant.id, plan);
+    if (e) return { ...r, error: `Created, but the plan wasn't set: ${e}` };
+  }
+  return r;
+}
+/** The roles a company can give (its security levels; the built-in list when it has none). */
+export interface CompanyRole { level_key: string; name: string; base_role: string; dept_key: string | null; sort: number }
+const rolesCache = new Map<string, Promise<CompanyRole[]>>();
+export function loadRoles(tenantId: string): Promise<CompanyRole[]> {
+  let p = rolesCache.get(tenantId);
+  if (!p) {
+    p = Promise.resolve(supabase.rpc("sa_roles", { p_tenant: tenantId })).then(({ data, error }) => {
+      if (error) { rolesCache.delete(tenantId); throw new Error(error.message); }
+      return (data ?? []) as CompanyRole[];
+    });
+    rolesCache.set(tenantId, p);
+  }
+  return p;
+}
+/** Give someone a role in their company (the same way the company's own Settings does). */
+export async function setUserRole(userId: string, level: string): Promise<string | null> {
+  const { error } = await supabase.rpc("sa_set_role", { p_user: userId, p_level: level });
+  if (!error) return null;
+  return /function .* does not exist|Could not find the function/i.test(error.message) ? "Run sql/101_sa_user_role.sql in Supabase first." : error.message;
+}
+
+/** Move a company to the other app (its people get it on their next page load). */
+export async function setTenantPlan(tenantId: string, plan: TenantPlan): Promise<string | null> {
+  const { error } = await supabase.rpc("sa_set_plan", { p_tenant: tenantId, p_plan: plan });
+  if (!error) return null;
+  return /function .* does not exist|Could not find the function/i.test(error.message) ? "Run sql/100_tenant_plan.sql in Supabase first." : error.message;
+}
 export const toggleTenant = (tenantId: string, active: boolean) => call("toggle_tenant", { tenantId, active });
 export const updateTenant = (tenantId: string, patch: { name?: string; maxUsers?: number }) =>
   call("update_tenant", { tenantId, ...patch });
@@ -99,7 +138,7 @@ export async function checkSuperadmin(): Promise<boolean> {
    ===================================================================== */
 
 export interface DashTenant {
-  id: string; name: string; active: boolean; max_users: number; created_at: string;
+  id: string; name: string; active: boolean; max_users: number; created_at: string; plan?: TenantPlan;
   users: number; deactivated: number; signed_in_30d: number; active_users: number; last_seen: string | null;
   visits: number; seconds: number; requests: number; bytes: number;
   db_rows: number; db_bytes: number; file_count: number; file_bytes: number;

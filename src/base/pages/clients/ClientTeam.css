@@ -1,0 +1,21 @@
+/* BASE · Client workspace — the client's team (ClientTeam.tsx) */
+.ctm-empty { margin: 4px 2px 2px; font-size: 13px; color: var(--muted, #5a7d6d); line-height: 1.5; }
+.ctm-list { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 2px; }
+.ctm-chip {
+  display: inline-flex; align-items: center; gap: 8px; padding: 4px 6px 4px 4px; border-radius: 999px;
+  background: #fff; box-shadow: 0 0 0 1px rgba(10, 111, 77, 0.14); font-size: 13px; font-weight: 600;
+  animation: ctm-in 0.45s cubic-bezier(0.16, 1, 0.3, 1) backwards; animation-delay: calc(var(--i, 0) * 35ms);
+}
+@keyframes ctm-in { from { opacity: 0; transform: translateY(6px) scale(0.97); } }
+.ctm-chip i {
+  width: 26px; height: 26px; display: grid; place-items: center; border-radius: 50%; font-style: normal; font-size: 10.5px; font-weight: 700; color: #fff;
+  background: linear-gradient(140deg, hsl(var(--h) 55% 52%), hsl(calc(var(--h) + 30) 50% 38%));
+}
+.ctm-chip button { width: 22px; height: 22px; border: 0; border-radius: 50%; background: none; color: #8a9a92; font-size: 16px; line-height: 1; cursor: pointer; transition: background 0.2s, color 0.2s; }
+.ctm-chip button:hover { background: #fdeceb; color: #c0392b; }
+.ctm-chip:has(button) { padding-right: 4px; }
+.ctm-chip:not(:has(button)) { padding-right: 12px; }
+.ctm-add { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.45s cubic-bezier(0.22, 1, 0.36, 1); }
+.ctm-add.is-on { grid-template-rows: 1fr; margin-bottom: 12px; }
+.ctm-add > div { overflow: hidden; max-width: 380px; }
+.ctm-err { margin: 10px 0 0; font-size: 12.5px; color: #9b2c24; }

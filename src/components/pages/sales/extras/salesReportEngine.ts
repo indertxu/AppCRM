@@ -71,6 +71,38 @@ export const setReportPeriod = (p?: ReportPeriod | null) => { PARAM = p?.key && 
 export const reportPeriodNow = () => PARAM;
 /** The report's period as [from, to] (null = open on that side). */
 export const reportRange = (): [string | null, string | null] => resolvePeriod(PARAM.key, PARAM.from, PARAM.to);
+const lastOfMonth = (y: number, m0: number) => iso(new Date(y, m0 + 1, 0));
+/** The period right after the report's, as long as it: next year, next quarter, next month, or the same number of days. */
+export function nextRange(): [string | null, string | null] {
+  const [lo, hi] = reportRange();
+  if (!lo || !hi) return [null, null];
+  const [ly, lm, ld] = lo.split("-").map(Number), [hy, hm] = hi.split("-").map(Number);
+  if (ld === 1 && hi === lastOfMonth(hy, hm - 1)) {
+    const months = (hy * 12 + hm) - (ly * 12 + lm) + 1;
+    return [iso(new Date(hy, hm, 1)), lastOfMonth(hy, hm - 1 + months)];
+  }
+  const len = Math.round((Date.parse(`${hi}T12:00:00`) - Date.parse(`${lo}T12:00:00`)) / 864e5) + 1;
+  const a = new Date(`${hi}T12:00:00`); a.setDate(a.getDate() + 1);
+  const b = new Date(a); b.setDate(b.getDate() + len - 1);
+  return [iso(a), iso(b)];
+}
+/** A short name for a period: "2026", "Q3 2026", "Nov 2026", or null when it isn't a whole year / quarter / month. */
+export function periodTag(rg: [string | null, string | null]): string | null {
+  const [lo, hi] = rg;
+  if (!lo || !hi) return null;
+  const [ly, lm, ld] = lo.split("-").map(Number), [hy, hm] = hi.split("-").map(Number);
+  if (ld !== 1 || hi !== lastOfMonth(hy, hm - 1) || ly !== hy) return null;
+  if (lm === 1 && hm === 12) return String(ly);
+  if (hm - lm === 2 && (lm - 1) % 3 === 0) return `Q${(lm - 1) / 3 + 1} ${ly}`;
+  if (hm === lm) return `${new Date(ly, lm - 1, 1).toLocaleString("en-GB", { month: "short" })} ${ly}`;
+  return null;
+}
+/** A column's name with its period spelt out: "ARR · this period" → "ARR · 2026", "… next period" → "… 2027". */
+export function withPeriodTag(label: string): string {
+  if (/ · this period\b/.test(label)) { const t = periodTag(reportRange()); return t ? label.replace(/ · this period\b/, ` · ${t}`) : label; }
+  if (/ · next period\b/.test(label)) { const t = periodTag(nextRange()); return t ? label.replace(/ · next period\b/, ` · ${t}`) : label; }
+  return label;
+}
 /**
  * [from, to] inclusive ISO dates for a period, computed against TODAY — so a
  * saved report on "This quarter" always shows the current quarter. null = open side.
@@ -687,8 +719,11 @@ export const forgetCrmData = () => { Object.keys(cache).forEach((k) => delete ca
 /** Everything a report on `source` needs: the source, the records linked to it, and the custom field definitions. */
 export async function loadCrmData(source: EntityKey, onStep?: (what: string) => void, extra: EntityKey[] = []): Promise<CrmData> {
   const need = new Set<EntityKey>(partsOf(source, extra));
-  // a contract is a deal's signed terms: read with the deals
-  if (need.has("agreement")) need.add("deal");
+  // a contract is a deal's signed terms, read with the deals; contracts entered on a client
+  // (its signed products, with or without a deal) come from client_products — as the Clients page shows them
+  if (need.has("agreement")) { need.add("deal"); need.add("contract"); need.add("client"); }
+  // a client's own figures (recurring, signed products, contract dates, projects) are read from its signed products and projects
+  if (need.has("client")) { need.add("contract"); need.add("project"); }
   // links need their own targets to resolve (a project's company goes through its client…)
   if (need.has("company") && source !== "company") need.add("client");
   const api = await import("../../companies/companiesApi");
@@ -712,13 +747,72 @@ export async function loadCrmData(source: EntityKey, onStep?: (what: string) => 
   if (need.has("ticket")) jobs.push(step("tickets and tasks", once("ticket", () => readAllRows("tracking_tasks"))).then((r) => { data.ticket = r.filter((t: any) => !t.merged_into); }));
   if (need.has("deal")) jobs.push(step("deals", once("deal", () => loadDealBundle(employees))).then((b) => { data.deal = b.deals; data.dealCtx = b.ctx; }));
   await Promise.all(jobs);
-  if (need.has("agreement")) {
-    data.agreement = (data.deal ?? []).filter((t: any) => t.contract_terms && typeof t.contract_terms === "object" && !Array.isArray(t.contract_terms))
-      .map((t: any) => ({ ...t.contract_terms, id: t.id, tracking_id: t.id, company_id: t.company_id ?? null, deal_name: t.deal_name ?? null, deal_status: t.status ?? null, owner_id: t.owner_id ?? null }));
-  }
+  if (need.has("agreement")) data.agreement = buildAgreements(data);
   // the deal fields also need the contacts and companies they link to
   if (data.dealCtx) data.dealCtx = { ...data.dealCtx, contacts: data.contact ?? [], companies: data.company ?? [] };
   return data;
+}
+
+/**
+ * Every contract, the way the Clients page lists them: a deal's signed terms (contract_terms), and
+ * the client's signed products grouped by the deal they came from — or, without a deal, by their
+ * contract number. Dates the terms leave empty are taken from those lines (start, signing, term).
+ */
+function buildAgreements(d: CrmData): any[] {
+  const str = (v: any) => (v == null ? "" : String(v).trim());
+  const deals = new Map((d.deal ?? []).map((t: any) => [String(t.id), t]));
+  const clients = new Map((d.client ?? []).map((c: any) => [String(c.id), c]));
+  const prodName = new Map((d.products ?? []).map((p) => [String(p.id), p.name]));
+  const linesBy = new Map<string, any[]>();
+  (d.contract ?? []).forEach((l: any) => {
+    const tid = str(l.tracking_id);
+    const k = tid ? `t:${tid}` : `c:${str(l.client_id)}:${str(l.contract_ref)}`;
+    const a = linesBy.get(k); if (a) a.push(l); else linesBy.set(k, [l]);
+  });
+  const first = (ls: any[], k: string) => ls.map((l) => str(l[k])).filter(Boolean).sort()[0] || null;
+  const fromLines = (ls: any[]) => ({
+    signDate: first(ls, "signing_date"), contractStart: first(ls, "start_date"),
+    termYears: ls.map((l) => Number(l.term_years)).find((n) => Number.isFinite(n) && n > 0) ?? null,
+    contractRef: ls.map((l) => str(l.contract_ref)).find(Boolean) || null,
+    autoRenew: ls.some((l) => !!l.auto_renew),
+    nonTerminableYears: ls.map((l) => Number(l.non_terminable_years)).find((n) => Number.isFinite(n) && n > 0) ?? null,
+    lines: ls.map((l) => ({ kind: "product", name: prodName.get(str(l.product_id)) ?? "" })),
+    __lines: ls,
+  });
+  const out: any[] = [];
+  const done = new Set<string>();
+  (d.deal ?? []).forEach((t: any) => {
+    const ct = t.contract_terms;
+    if (!ct || typeof ct !== "object" || Array.isArray(ct)) return;
+    const ls = linesBy.get(`t:${t.id}`) ?? [];
+    const lf = ls.length ? fromLines(ls) : null;
+    done.add(`t:${t.id}`);
+    out.push({
+      ...ct,
+      signDate: str(ct.signDate) || lf?.signDate || null,
+      contractStart: str(ct.contractStart) || lf?.contractStart || null,
+      termYears: ct.termYears ?? lf?.termYears ?? null,
+      contractRef: str(ct.contractRef) || lf?.contractRef || null,
+      __lines: ls.length ? ls : undefined,
+      id: t.id, tracking_id: t.id, client_id: ls[0]?.client_id ?? null, company_id: t.company_id ?? null,
+      client_name: clients.get(str(ls[0]?.client_id))?.name ?? null, client_legal: clients.get(str(ls[0]?.client_id))?.legal_name ?? null,
+      deal_name: t.deal_name ?? null, deal_status: t.status ?? null, owner_id: t.owner_id ?? null,
+    });
+  });
+  // signed products with no terms on their deal (or no deal at all): a contract of their own
+  linesBy.forEach((ls, k) => {
+    if (done.has(k)) return;
+    const tid = k.startsWith("t:") ? k.slice(2) : null;
+    const t: any = tid ? deals.get(tid) : null;
+    const cl: any = clients.get(str(ls[0]?.client_id));
+    out.push({
+      ...fromLines(ls),
+      id: tid ?? k, tracking_id: tid, client_id: ls[0]?.client_id ?? null, company_id: t?.company_id ?? cl?.company_id ?? null,
+      client_name: cl?.name ?? null, client_legal: cl?.legal_name ?? null,
+      deal_name: t?.deal_name ?? null, deal_status: t ? t.status ?? null : "won", owner_id: t?.owner_id ?? null,
+    });
+  });
+  return out;
 }
 
 async function loadDealBundle(employees: { id: string; name: string }[]): Promise<{ deals: Tracking[]; ctx: EngineCtx }> {
@@ -802,10 +896,10 @@ const LINKS: Link[] = [
   // contracts: a deal's signed terms
   { from: "agreement", to: "deal", many: false, get: (a, ix) => ix.deal.get(String(a.id)) },
   { from: "agreement", to: "company", many: false, get: (a, ix) => (a.company_id ? ix.company.get(String(a.company_id)) : null) },
-  { from: "agreement", to: "client", many: false, get: (a, ix) => (a.company_id ? ix.clientByCompany.get(String(a.company_id)) : null) },
+  { from: "agreement", to: "client", many: false, get: (a, ix) => (a.client_id ? ix.client.get(String(a.client_id)) : null) ?? (a.company_id ? ix.clientByCompany.get(String(a.company_id)) : null) },
   { from: "deal", to: "agreement", many: false, get: (t, ix) => ix.agreement.get(String(t.id)) ?? null },
   { from: "company", to: "agreement", many: true, get: (c, ix) => ix.agreementsByCompany.get(String(c.id)) },
-  { from: "client", to: "agreement", many: true, get: (c, ix) => (c.company_id ? ix.agreementsByCompany.get(String(c.company_id)) : undefined) },
+  { from: "client", to: "agreement", many: true, get: (c, ix) => { const a = [...(ix.agreementsByClient.get(String(c.id)) ?? [])]; (c.company_id ? ix.agreementsByCompany.get(String(c.company_id)) ?? [] : []).forEach((x: any) => { if (!a.includes(x)) a.push(x); }); return a.length ? a : undefined; } },
   // picked on purpose, a deal's contacts are all of them (and a contact's companies) — not only the first that comes along
   { from: "deal", to: "contact", many: true, all: true, get: (t, ix) => (t.contactIds ?? []).map((id: any) => ix.contact.get(String(id))).filter(Boolean) },
   { from: "contact", to: "company", many: true, all: true, get: (c, ix) => (c.companyIds ?? []).map((id: any) => ix.company.get(String(id))).filter(Boolean) },
@@ -847,6 +941,7 @@ export function buildCrmRows(source: EntityKey, d: CrmData, extra: EntityKey[] =
   const ix: Index = {
     company: by(d.company), contact: by(d.contact), client: by(d.client), project: by(d.project), deal: by(d.deal), agreement: by(d.agreement),
     agreementsByCompany: multi(d.agreement, (a) => [a.company_id]),
+    agreementsByClient: multi(d.agreement, (a) => [a.client_id]),
     clientByCompany: new Map((d.client ?? []).filter((c) => c.company_id).map((c) => [String(c.company_id), c])),
     dealsByCompany: multi(d.deal, (t) => [t.company_id]), dealsByContact: multi(d.deal, (t) => t.contactIds ?? []),
     contactsByCompany: multi(d.contact, (c) => c.companyIds ?? []),
@@ -983,8 +1078,8 @@ export async function buildCrmFields(source: EntityKey, d: CrmData, extra: Entit
     return cw.lineAnnual(l, at);
   };
   const periodMemo = new Map<string, { status: string; date: string | null; renewal: string | null; runs: boolean; arr: number; revenue: number }>();
-  const inPeriodOf = (l: any) => {
-    const [lo, hi] = resolvePeriod(PARAM.key, PARAM.from, PARAM.to);
+  const inPeriodOf = (l: any, rg?: [string | null, string | null]) => {
+    const [lo, hi] = rg ?? resolvePeriod(PARAM.key, PARAM.from, PARAM.to);
     const mk = `${l.id}|${lo}|${hi}`;
     const hit = periodMemo.get(mk);
     if (hit) return hit;
@@ -1017,6 +1112,70 @@ export async function buildCrmFields(source: EntityKey, d: CrmData, extra: Entit
     periodMemo.set(mk, out);
     return out;
   };
+  /* a contract's terms (a deal's contract_terms, or one entered on the client) in a period: the contract year running then and its figures */
+  const numv = (v: any) => (v == null || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
+  const agShapeOf = (a: any): TermShape | null => (a ? { start: ymd(a.contractStart) ?? ymd(a.signDate), years: numv(a.termYears) ?? 0, step: numv(a.renewYears) ?? numv(a.termYears) ?? 0, auto: !!a.autoRenew } : null);
+  const agMemo = new Map<any, Map<string, any>>();
+  const agIn = (a: any, rg?: [string | null, string | null]) => {
+    const [lo, hi] = rg ?? resolvePeriod(PARAM.key, PARAM.from, PARAM.to);
+    const mk = `${lo}|${hi}`;
+    let m = agMemo.get(a); if (!m) agMemo.set(a, (m = new Map()));
+    if (m.has(mk)) return m.get(mk);
+    const t = agShapeOf(a)!;
+    const inR = (x: string | null) => !!x && (!lo || x >= lo) && (!hi || x <= hi);
+    const renewal = t.years ? termEndsUntil(t, hi ?? addYearsIso(today, 5)).find(inR) ?? null : null;
+    const lost = !!a.deal_status && a.deal_status !== "won";
+    const win = lost ? null : runWindow(t, lo, hi);
+    const status = lost ? "Not running" : inR(t.start) ? "New" : renewal && t.auto ? "Auto-renews" : renewal ? (renewal > today ? "Up for renewal" : "Ended") : win ? "Running" : "Not running";
+    const sch: any[] = Array.isArray(a.schedule) ? a.schedule : [];
+    let arr = 0, services = 0, total = 0, year: number | null = null;
+    if (win && t.start) {
+      const yi = Math.max(0, Math.floor(daysBetween(t.start, win[1]) / 365.25));
+      year = yi + 1;
+      if (sch.length) {
+        // past the schedule (it renews by itself): the last year's licences again, no services
+        const y = sch[Math.min(yi, sch.length - 1)] ?? {};
+        arr = Number(y.license) || 0;
+        services = yi < sch.length ? Number(y.services) || 0 : 0;
+        total = yi < sch.length ? Number(y.total) || arr + services : arr;
+      } else if (Array.isArray(a.__lines)) {
+        // no year-by-year schedule (entered on the client): its subscriptions' yearly value then, one-offs that start in the period
+        const ls = a.__lines as any[];
+        arr = ls.filter((l) => l.recurring).reduce((s2: number, l: any) => s2 + cw.lineAnnual(l, atNoon(win[1])), 0);
+        services = ls.filter((l) => !l.recurring && inR(ymd(l.start_date) ?? ymd(l.signing_date))).reduce((s2: number, l: any) => s2 + cw.lineOneTime(l), 0);
+        total = arr + services;
+      }
+    }
+    const r2 = (x: number) => Math.round(x * 100) / 100;
+    const out = { status, date: inR(t.start) ? t.start : renewal, renewal, arr: r2(arr), services: r2(services), total: r2(total), year };
+    m.set(mk, out);
+    return out;
+  };
+  /** A deal's contract terms (the contract built from it when the report has contracts, so it gets the same fallbacks). */
+  const agByDeal = new Map<string, any>((d.agreement ?? []).filter((a: any) => a.tracking_id).map((a: any) => [String(a.tracking_id), a]));
+  const termsMemo = new Map<any, any>();
+  const dealTerms = (t: any) => {
+    const hit = agByDeal.get(String(t.id)) ?? termsMemo.get(t);
+    if (hit) return hit;
+    const a = { ...t.contract_terms, deal_status: t.status ?? null };
+    termsMemo.set(t, a);
+    return a;
+  };
+  /** The same figures for "this period" (the report's) and "next period" (the one after it). */
+  const perYearFields = (g: Group, of: (r: any) => any, also = ""): Field[] => {
+    const nx = () => nextRange();
+    const f = (k: string, label: string, kind: Kind, pick: (x: any) => any, next = false): Field => ({ key: `${g}.${k}`, group: g, label, kind, sum: kind === "money" || undefined, get: (r: any) => { const a = of(r); return a ? pick(agIn(a, next ? nx() : undefined)) : null; } });
+    return [
+      f("arr_period", `Licences (ARR) · this period${also}`, "money", (x) => x.arr),
+      f("services_period", `Services · this period${also}`, "money", (x) => x.services),
+      f("total_period", `Contract value · this period${also}`, "money", (x) => x.total),
+      f("year_period", `Contract year · this period${also}`, "number", (x) => x.year),
+      f("arr_next", `Licences (ARR) · next period${also}`, "money", (x) => x.arr, true),
+      f("services_next", `Services · next period${also}`, "money", (x) => x.services, true),
+      f("total_next", `Contract value · next period${also}`, "money", (x) => x.total, true),
+      f("year_next", `Contract year · next period${also}`, "number", (x) => x.year, true),
+    ];
+  };
   for (const g of groups) {
     let fs: Field[] = [];
     if (g === "deal" && d.dealCtx) {
@@ -1027,6 +1186,7 @@ export async function buildCrmFields(source: EntityKey, d: CrmData, extra: Entit
         { key: "deal.products_all", group: "deal", label: "Products on the deal", kind: "enum", options: d.products.map((x) => x.name), get: (r: any) => (r.deal?.__products ?? []).join(", ") || null, list: (r: any) => r.deal?.__products ?? [] },
         { key: "deal.services_all", group: "deal", label: "Services on the deal", kind: "enum", options: d.services.map((x) => x.name), get: (r: any) => (r.deal?.__services ?? []).join(", ") || null, list: (r: any) => r.deal?.__services ?? [] },
         { key: "deal.has_contract", group: "deal", label: "Has a signed contract", kind: "enum", options: ["Yes", "No"], get: (r: any) => (r.deal ? yn(!!(r.deal.contract_terms && typeof r.deal.contract_terms === "object")) : null) },
+        ...perYearFields("deal", (r: any) => { const t = r.deal; const ct2 = t?.contract_terms; if (!ct2 || typeof ct2 !== "object" || Array.isArray(ct2)) return null; return dealTerms(t); }, " (contract)"),
       );
     } else if (g === "company") {
       fs = [
@@ -1051,6 +1211,13 @@ export async function buildCrmFields(source: EntityKey, d: CrmData, extra: Entit
         { key: "client.recurring", group: g, label: "Recurring today (per year)", kind: "money", sum: true, get: (r: any) => (linesByClient.get(String(r.client?.id)) ?? []).filter(cw.isActive).reduce((t, l) => t + cw.lineAnnual(l), 0) },
         { key: "client.contract_value", group: g, label: "Signed products value", kind: "money", sum: true, get: (r: any) => (linesByClient.get(String(r.client?.id)) ?? []).filter(cw.isActive).reduce((t, l) => t + cw.lineContractValue(l), 0) },
         { key: "client.products", group: g, label: "Signed products", kind: "number", sum: true, get: (r: any) => (linesByClient.get(String(r.client?.id)) ?? []).length },
+        { key: "client.arr_period", group: g, label: "ARR · this period", kind: "money", sum: true, get: (r: any) => (r.client ? (linesByClient.get(String(r.client.id)) ?? []).reduce((t, l) => t + inPeriodOf(l).arr, 0) : null) },
+        { key: "client.arr_next", group: g, label: "ARR · next period", kind: "money", sum: true, get: (r: any) => (r.client ? (linesByClient.get(String(r.client.id)) ?? []).reduce((t, l) => t + inPeriodOf(l, nextRange()).arr, 0) : null) },
+        { key: "client.revenue_period", group: g, label: "Revenue · this period", kind: "money", sum: true, get: (r: any) => (r.client ? (linesByClient.get(String(r.client.id)) ?? []).reduce((t, l) => t + inPeriodOf(l).revenue, 0) : null) },
+        { key: "client.revenue_next", group: g, label: "Revenue · next period", kind: "money", sum: true, get: (r: any) => (r.client ? (linesByClient.get(String(r.client.id)) ?? []).reduce((t, l) => t + inPeriodOf(l, nextRange()).revenue, 0) : null) },
+        { key: "client.contract_start", group: g, label: "Contract starts (first)", kind: "date", get: (r: any) => (linesByClient.get(String(r.client?.id)) ?? []).map((l) => ymd(l.start_date) ?? ymd(l.signing_date)).filter(Boolean).sort()[0] ?? null },
+        { key: "client.contract_start_last", group: g, label: "Contract starts (latest)", kind: "date", get: (r: any) => (linesByClient.get(String(r.client?.id)) ?? []).map((l) => ymd(l.start_date) ?? ymd(l.signing_date)).filter(Boolean).sort().at(-1) ?? null },
+        { key: "client.signed_first", group: g, label: "First signed on", kind: "date", get: (r: any) => (linesByClient.get(String(r.client?.id)) ?? []).map((l) => ymd(l.signing_date) ?? ymd(l.start_date)).filter(Boolean).sort()[0] ?? null },
         { key: "client.next_renewal", group: g, label: "Next renewal", kind: "date", get: (r: any) => { const ts = (linesByClient.get(String(r.client?.id)) ?? []).filter(cw.isActive).map(cw.termOf).filter((t): t is NonNullable<ReturnType<typeof cw.termOf>> => !!t && t.left >= 0).sort((a, b) => a.end.getTime() - b.end.getTime()); return ts[0] ? ymd(ts[0].end.toISOString()) : null; } },
         ...discovered(d.client ?? [], "client", /^client\.name$/),
       ];
@@ -1083,9 +1250,11 @@ export async function buildCrmFields(source: EntityKey, d: CrmData, extra: Entit
         { key: "contract.period_date", group: g, label: "Signed or renews in the period", kind: "date", get: (r: any) => (r.contract ? inPeriodOf(r.contract).date : null) },
         { key: "contract.renewal_in_period", group: g, label: "Renewal date in the period", kind: "date", get: (r: any) => (r.contract ? inPeriodOf(r.contract).renewal : null) },
         { key: "contract.runs_in_period", group: g, label: "Runs in the period", kind: "enum", options: ["Yes", "No"], get: (r: any) => (r.contract ? yn(inPeriodOf(r.contract).runs) : null) },
-        { key: "contract.arr_period", group: g, label: "ARR in the period", kind: "money", sum: true, get: (r: any) => (r.contract ? inPeriodOf(r.contract).arr : null) },
+        { key: "contract.arr_period", group: g, label: "ARR · this period", kind: "money", sum: true, get: (r: any) => (r.contract ? inPeriodOf(r.contract).arr : null) },
         { key: "contract.arr_first", group: g, label: "First-year ARR (as signed)", kind: "money", sum: true, get: (r: any) => { const l = r.contract; if (!l?.recurring) return l ? 0 : null; const st = ymd(l.start_date) ?? ymd(l.signing_date); return st ? Math.round(cw.lineAnnual(l, atNoon(st)) * 100) / 100 : null; } },
-        { key: "contract.revenue_period", group: g, label: "Revenue in the period", kind: "money", sum: true, get: (r: any) => (r.contract ? inPeriodOf(r.contract).revenue : null) },
+        { key: "contract.revenue_period", group: g, label: "Revenue · this period", kind: "money", sum: true, get: (r: any) => (r.contract ? inPeriodOf(r.contract).revenue : null) },
+        { key: "contract.arr_next", group: g, label: "ARR · next period", kind: "money", sum: true, get: (r: any) => (r.contract ? inPeriodOf(r.contract, nextRange()).arr : null) },
+        { key: "contract.revenue_next", group: g, label: "Revenue · next period", kind: "money", sum: true, get: (r: any) => (r.contract ? inPeriodOf(r.contract, nextRange()).revenue : null) },
         ...discovered(d.contract ?? [], "contract"),
       ];
     } else if (g === "agreement") {
@@ -1100,28 +1269,15 @@ export async function buildCrmFields(source: EntityKey, d: CrmData, extra: Entit
       };
       const lines = (a: any, kind: "product" | "service") => (Array.isArray(a?.lines) ? a.lines : []).filter((l: any) => l?.kind === kind).map((l: any) => String(l.name ?? "").trim()).filter(Boolean);
       const A = (r: any) => r.agreement;
-      const agShape = (a: any): TermShape | null => (a ? { start: ymd(a.contractStart) ?? ymd(a.signDate), years: num(a.termYears) ?? 0, step: num(a.renewYears) ?? num(a.termYears) ?? 0, auto: !!a.autoRenew } : null);
-      /** A contract in the report's period: what happened in it, and its licences' yearly value there (from its year-by-year schedule). */
-      const agPeriod = (a: any) => {
-        const [lo, hi] = resolvePeriod(PARAM.key, PARAM.from, PARAM.to);
-        const t = agShape(a)!;
-        const inR = (x: string | null) => !!x && (!lo || x >= lo) && (!hi || x <= hi);
-        const renewal = t.years ? termEndsUntil(t, hi ?? addYearsIso(today, 5)).find(inR) ?? null : null;
-        const win = runWindow(t, lo, hi);
-        const status = a.deal_status && a.deal_status !== "won" ? "Not running" : inR(t.start) ? "New" : renewal && t.auto ? "Auto-renews" : renewal ? (renewal > today ? "Up for renewal" : "Ended") : win ? "Running" : "Not running";
-        const sch: any[] = Array.isArray(a.schedule) ? a.schedule : [];
-        let arr = 0;
-        if (win && sch.length && t.start) {
-          const yi = Math.max(0, Math.floor(daysBetween(t.start, win[1]) / 365.25));
-          arr = Number(sch[Math.min(yi, sch.length - 1)]?.license) || 0;
-        }
-        return { status, date: inR(t.start) ? t.start : renewal, renewal, arr };
-      };
+      const agShape = agShapeOf;
+      const agPeriod = (a: any) => agIn(a);
       const owners = d.dealCtx?.trackOwners ?? {};
+      /** the contract's total: its terms', else what its signed products add up to */
+      const agTotal = (a: any): number | null => num(a?.total) ?? (a?.__lines ? (a.__lines as any[]).reduce((t: number, l: any) => t + cw.lineContractValue(l), 0) : null);
       fs = [
         { key: "agreement.ref", group: g, label: "Contract ref.", kind: "text", get: (r: any) => A(r)?.contractRef || null },
-        { key: "agreement.deal", group: g, label: "Deal", kind: "text", get: (r: any) => A(r)?.deal_name?.trim() || r.company?.name || null },
-        { key: "agreement.customer", group: g, label: "Customer (legal name)", kind: "text", get: (r: any) => A(r)?.customer?.legalName || A(r)?.customer?.name || r.company?.legal_name || r.company?.name || null },
+        { key: "agreement.deal", group: g, label: "Deal", kind: "text", get: (r: any) => A(r)?.deal_name?.trim() || r.company?.name || A(r)?.client_name || null },
+        { key: "agreement.customer", group: g, label: "Customer (legal name)", kind: "text", get: (r: any) => A(r)?.customer?.legalName || A(r)?.customer?.name || r.company?.legal_name || r.company?.name || A(r)?.client_legal || A(r)?.client_name || null },
         { key: "agreement.vat", group: g, label: "Customer VAT", kind: "text", get: (r: any) => A(r)?.customer?.vat || null },
         { key: "agreement.country", group: g, label: "Customer country", kind: "enum", get: (r: any) => (A(r)?.customer?.country ? countryName(A(r).customer.country) : null) },
         { key: "agreement.owner", group: g, label: "Owner", kind: "enum", options: d.employees.map((e) => e.name), get: (r: any) => empName.get(owners[String(A(r)?.id)] ?? "") ?? null },
@@ -1134,9 +1290,9 @@ export async function buildCrmFields(source: EntityKey, d: CrmData, extra: Entit
         { key: "agreement.auto_renew", group: g, label: "Renews by itself", kind: "enum", options: ["Yes", "No"], get: (r: any) => (A(r) ? yn(!!A(r).autoRenew) : null) },
         { key: "agreement.renew_years", group: g, label: "Renews for (years)", kind: "number", get: (r: any) => num(A(r)?.renewYears) },
         { key: "agreement.locked_years", group: g, label: "Can't be ended for (years)", kind: "number", get: (r: any) => num(A(r)?.nonTerminableYears) },
-        { key: "agreement.total", group: g, label: "Contract total", kind: "money", sum: true, get: (r: any) => num(A(r)?.total) },
+        { key: "agreement.total", group: g, label: "Contract total", kind: "money", sum: true, get: (r: any) => agTotal(A(r)) },
         { key: "agreement.year1", group: g, label: "First year", kind: "money", sum: true, get: (r: any) => num(Array.isArray(A(r)?.schedule) ? A(r).schedule[0]?.total : null) },
-        { key: "agreement.per_year", group: g, label: "Per year (average)", kind: "money", sum: true, get: (r: any) => { const t = num(A(r)?.total), y = num(A(r)?.termYears); return t != null && y ? t / y : null; } },
+        { key: "agreement.per_year", group: g, label: "Per year (average)", kind: "money", sum: true, get: (r: any) => { const t = agTotal(A(r)), y = num(A(r)?.termYears); return t != null && y ? t / y : null; } },
         { key: "agreement.licence", group: g, label: "Licences (after discount)", kind: "money", sum: true, get: (r: any) => num(A(r)?.license?.final) },
         { key: "agreement.licence_list", group: g, label: "Licences (list price)", kind: "money", sum: true, get: (r: any) => num(A(r)?.license?.list) },
         { key: "agreement.licence_discount", group: g, label: "Licence discount", kind: "money", sum: true, get: (r: any) => num(A(r)?.license?.discount) },
@@ -1152,7 +1308,7 @@ export async function buildCrmFields(source: EntityKey, d: CrmData, extra: Entit
         { key: "agreement.period_date", group: g, label: "Signed or renews in the period", kind: "date", get: (r: any) => (A(r) ? agPeriod(A(r)).date : null) },
         { key: "agreement.renewal_in_period", group: g, label: "Renewal date in the period", kind: "date", get: (r: any) => (A(r) ? agPeriod(A(r)).renewal : null) },
         { key: "agreement.next_renewal", group: g, label: "Next renewal", kind: "date", get: (r: any) => { const t = agShape(A(r)); return t ? termEndsUntil(t, addYearsIso(today, 1)).find((e) => e >= today) ?? null : null; } },
-        { key: "agreement.arr_period", group: g, label: "ARR in the period (licences)", kind: "money", sum: true, get: (r: any) => (A(r) ? agPeriod(A(r)).arr : null) },
+        ...perYearFields(g, A),
         { key: "agreement.billing", group: g, label: "Licences billed", kind: "enum", options: Object.values(FREQ), get: (r: any) => freq(A(r)?.billingFrequency) },
         { key: "agreement.services_billing", group: g, label: "Services billed", kind: "enum", options: Object.values(FREQ), get: (r: any) => freq(A(r)?.servicesFrequency) },
         { key: "agreement.pay_days", group: g, label: "Payment terms (days)", kind: "number", get: (r: any) => num(A(r)?.paymentTermsDays) },

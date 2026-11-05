@@ -12,7 +12,7 @@ import {
 } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase, setRememberMe, takeReturnTo } from "../api/supabase";
-import { PageCube, PC_LAND_T, pcPoseAt, pcAdopt } from "../framework/AppLayout";
+import { PageCube, PC_LAND_T, pcPoseAt, pcAdopt } from "../framework/PageCube";
 import "./LoginPage.css";
 
 /** Set right before leaving for the app: the home page plays its arrival sequence once. */

@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent as RDragEvent, type ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "../../../api/supabase";
 import { downloadBlob, tableToCsv, tableToXlsx, type ExportColumn } from "../../../framework/exportFile";
 import SalesMultiFilter, { type SmfOption } from "../sales/SalesMultiFilter";
@@ -8,7 +9,7 @@ import { ReportChart, CHART_LABEL, PALETTE, type ChartType } from "./ReportChart
 import {
   ENTITIES, entityOf, GROUP_LABEL, OPS, DEFAULT_OP, NO_VALUE, PERIODS, FN_LABEL,
   loadCrmData, buildCrmRows, buildCrmFields, aggregateCrm, partsOf, isListLink, ROW_CAP, testTree, countRules, isGroup, emptyTree, forgetCrmData,
-  condComplete, toCell, showCell, sortValue, uid, norm, setReportPeriod, prettyRange, DEFAULT_REPORT_PERIOD, PERIOD_STATUS_HINT,
+  condComplete, toCell, showCell, sortValue, uid, norm, setReportPeriod, withPeriodTag, prettyRange, DEFAULT_REPORT_PERIOD, PERIOD_STATUS_HINT,
   type Cond, type CondGroup, type Field, type EntityKey, type CrmFn, type CrmRow, type CrmData, type Kind, type Agg, type ReportPeriod,
 } from "./salesReportEngine";
 import "./SalesReport.css";
@@ -128,6 +129,9 @@ const I = {
   sliders: "M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1M15 4v4M9 10v4M17 16v4",
   folder: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
   cal: "M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM4 10h16M8 2v4M16 2v4",
+  eye: "M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6",
+  print: "M7 9V3h10v6M7 17H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2M7 14h10v7H7z",
+  sheet: "M4 4h16v16H4zM4 10h16M4 15h16M10 4v16",
   more: "M5 11.2a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6zM12 11.2a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6zM19 11.2a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6z",
 
 };
@@ -262,7 +266,41 @@ function RuleGroup({ g, depth, fields, fieldByKey, values, opts, onChange, onRem
 
 /* ====================================================================== */
 
+/** Where clicking a row of a report goes: the client (and the contract), the company, the deal… */
+type RowLink = { to: string; state?: Record<string, unknown> };
+function rowLink(src: EntityKey | null | undefined, r: CrmRow): RowLink | null {
+  const company = (id: unknown): RowLink | null => (id ? { to: "/companies", state: { focusCompanyId: String(id) } } : null);
+  const client = (id: unknown, extra = ""): RowLink | null => (id ? { to: `/clients?client=${encodeURIComponent(String(id))}${extra}` } : null);
+  const it = src ? (r as any)[src] : null;
+  if (!it) return null;
+  switch (src) {
+    case "deal": return it.id ? { to: `/sales?tracking=${encodeURIComponent(String(it.id))}` } : null;
+    case "agreement": {
+      const tid = it.tracking_id ?? (it.__lines?.[0]?.tracking_id) ?? null;
+      const cl = r.client?.id ?? it.client_id ?? null;
+      if (cl) return client(cl, tid ? `&contract=${encodeURIComponent(String(tid))}` : "&products=1");
+      if (tid && r.deal?.id) return { to: `/sales?tracking=${encodeURIComponent(String(r.deal.id))}` };
+      return company(it.company_id ?? r.company?.id);
+    }
+    case "contract": return client(it.client_id ?? r.client?.id, it.tracking_id ? `&contract=${encodeURIComponent(String(it.tracking_id))}` : "&products=1");
+    case "client": return client(it.id);
+    case "company": return company(it.id);
+    case "contact": return it.id ? { to: "/contacts", state: { focusContactId: String(it.id) } } : null;
+    case "project": return client(it.client_id ?? r.client?.id, it.id ? `&project=${encodeURIComponent(String(it.id))}` : "");
+    case "invoice": {
+      const pid = it.project_id ?? r.project?.id ?? null;
+      return client(r.project?.client_id ?? r.client?.id ?? it.client_id, pid ? `&project=${encodeURIComponent(String(pid))}` : "") ?? company(r.company?.id);
+    }
+    case "ticket": return it.id ? { to: `/tickets?ticket=${encodeURIComponent(String(it.id))}` } : null;
+    default: return null;
+  }
+}
+const RETURN_KEY = "rp-return";
+/** What a column search looks in: its name (with and without the period spelt out), and the words people use for money per year. */
+const findable = (f: Field) => norm(`${f.label} ${(f as any).raw ?? ""} ${/ARR|Licen|Recurring/i.test(f.label) ? "recurring annual yearly per year licence license subscription" : ""} ${/period/i.test((f as any).raw ?? f.label) ? "year quarter month period" : ""}`);
+
 export default function ReportsPage() {
+  const navigate = useNavigate();
   const [saved, setSaved] = useState<SavedReport[]>([]);
   /* ---- folders of saved reports ---- */
   const [folders, setFolders] = useState<ReportFolder[]>([]);
@@ -291,6 +329,9 @@ export default function ReportsPage() {
   const [snap, setSnap] = useState("");
   /** The toolbar's open panel (one at a time): what the rows are, the filters, the columns, the charts. */
   const [panel, setPanel] = useState<"data" | "period" | "filter" | "cols" | "charts" | null>(null);
+  /** Build (the toolbar, rules, columns, chart settings) or View (the report as it reads: figures, charts, table). */
+  const [mode, setMode] = useState<"build" | "view">("build");
+  const [expOpen, setExpOpen] = useState(false);
   const togglePanel = (p: "data" | "period" | "filter" | "cols" | "charts") => setPanel((cur) => (cur === p ? null : p));
   const [sharedSnap, setSharedSnap] = useState(false);
   useEffect(() => {
@@ -304,7 +345,7 @@ export default function ReportsPage() {
   const [busy, setBusy] = useState(false);
   // the data of the report's subject, its fields and rows
   const [data, setData] = useState<CrmData | null>(null);
-  const [fields, setFields] = useState<Field[]>([]);
+  const [rawFields, setFields] = useState<Field[]>([]);
   const [loading, setLoading] = useState<string | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [shown, setShown] = useState(200);
@@ -409,15 +450,17 @@ export default function ReportsPage() {
     return () => { off = true; };
   }, [source, extra, dataTick]);
 
-  const fieldByKey = useMemo(() => new Map(fields.map((f) => [f.key, f])), [fields]);
   // the report's period: every period-aware field and "the report's period" rule reads it
   const period = cfg?.period ?? DEFAULT_REPORT_PERIOD;
   setReportPeriod(period);
   const periodSig = `${period.key}|${period.from ?? ""}|${period.to ?? ""}`;
+  /** the fields, with "this period" / "next period" spelt out ("ARR · 2026", "ARR · 2027") */
+  const fields = useMemo(() => rawFields.map((f) => { const l = withPeriodTag(f.label); return l === f.label ? f : { ...f, label: l, raw: f.label } as Field; }), [rawFields, periodSig]); // eslint-disable-line react-hooks/exhaustive-deps
+  const fieldByKey = useMemo(() => new Map(fields.map((f) => [f.key, f])), [fields]);
   const periodName = period.key === "custom" ? "Custom dates" : PERIODS.find((p) => p.key === period.key)?.label ?? "This year";
   const periodRange = prettyRange(period.key, period.from, period.to);
   /** Does anything on the report read the period (a period figure, or a rule on "the report's period")? */
-  const usesPeriod = !!cfg && /(period_status|_in_period|arr_period|revenue_period|period_date)|"a":"report"/.test(JSON.stringify([cfg.cols, cfg.filter, cfg.charts, cfg.figures ?? null, cfg.groupBy, cfg.sort]));
+  const usesPeriod = !!cfg && /(_period|_next|\.period_status|_in_period|\.period_date)"|"a":"report"/.test(JSON.stringify([cfg.cols, cfg.filter, cfg.charts, cfg.figures ?? null, cfg.groupBy, cfg.sort]));
   // the rows are built only from data read for this subject and these parts (never a half-read mix)
   const ready = dataFor === `${source}|${withKey}`;
   const allRows: CrmRow[] = useMemo(() => (data && source && ready ? buildCrmRows(source, data, extra) : []), [data, source, extra, ready]);
@@ -508,9 +551,67 @@ export default function ReportsPage() {
   const dirty = !!cfg && JSON.stringify(cfg) !== snap;
   const mine = !owner || !me || owner === me;
   const start = (r: CrmReport, id: string | null = null, sh = false, view = false, by: string | null = null) => {
-    setCfg(r); setReportId(id); setShared(sh); setSharedSnap(sh); setOwner(by); setSnap(JSON.stringify(r)); setPanel(null); setShown(200); void view;
+    setCfg(r); setReportId(id); setShared(sh); setSharedSnap(sh); setOwner(by); setSnap(JSON.stringify(r)); setPanel(null); setShown(200);
+    setMode(view ? "view" : "build"); setOpenChart(null); setExpOpen(false);
   };
   const leaveOk = () => !dirty || window.confirm("Leave this report without saving your changes?");
+  const switchMode = (m: "build" | "view") => { setMode(m); setPanel(null); setOpenChart(null); setFigDraft(null); setExpOpen(false); document.querySelector(".rp-main")?.scrollTo({ top: 0 }); };
+  useEffect(() => {
+    if (!expOpen) return;
+    const k = (e: MouseEvent) => { if (!(e.target as Element)?.closest?.(".rp-exp")) setExpOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setExpOpen(false); };
+    document.addEventListener("mousedown", k); window.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", k); window.removeEventListener("keydown", esc); };
+  }, [expOpen]);
+  /** PDF: the browser's print dialog, with only the report on the page (see @media print in the CSS). */
+  const printReport = () => {
+    setExpOpen(false);
+    if (mode !== "view") switchMode("view");
+    setShown((n) => Math.max(n, Math.min(rows.length, 3000))); // the whole table (up to 3,000 rows) on paper
+    window.setTimeout(() => {
+      const src = document.getElementById("rp-print");
+      if (!src) return;
+      // a copy of the report straight under <body>: the app's scrolling panes can't cut it into one page
+      document.querySelectorAll(".rp-print-root").forEach((x) => x.remove());
+      const root = document.createElement("div");
+      root.className = "rp rp-print-root";
+      root.appendChild(src.cloneNode(true));
+      document.body.appendChild(root);
+      const t = document.title;
+      document.title = `${cfg?.name?.trim() || "Report"} · ${new Date().toISOString().slice(0, 10)}`;
+      const done = () => { root.remove(); document.title = t; window.removeEventListener("afterprint", done); };
+      window.addEventListener("afterprint", done);
+      window.print();
+    }, mode !== "view" ? 450 : 120);
+  };
+  /* ---- clicking a row opens what it is (asking first when the report has unsaved changes) ---- */
+  const [leaving, setLeaving] = useState<RowLink | null>(null);
+  const go = (l: RowLink) => {
+    // keep the report as it is, so Back comes straight back to it (unsaved changes included)
+    if (cfg) { try { sessionStorage.setItem(RETURN_KEY, JSON.stringify({ cfg, reportId, shared, sharedSnap, owner, snap, mode, at: Date.now() })); } catch { /* private mode */ } }
+    setLeaving(null);
+    navigate(l.to, l.state ? { state: l.state } : undefined);
+  };
+  const openRow = (r: CrmRow) => {
+    const l = rowLink(cfg?.source, r);
+    if (!l) return;
+    if (dirty) setLeaving(l); else go(l);
+  };
+  useEffect(() => {
+    let back: any = null;
+    try { back = JSON.parse(sessionStorage.getItem(RETURN_KEY) || "null"); sessionStorage.removeItem(RETURN_KEY); } catch { /* none */ }
+    if (!back?.cfg || Date.now() - (back.at ?? 0) > 6 * 3600e3) return;
+    start(back.cfg, back.reportId ?? null, !!back.sharedSnap, back.mode === "view", back.owner ?? null);
+    setShared(!!back.shared);
+    if (typeof back.snap === "string") setSnap(back.snap);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    if (!leaving) return;
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape") setLeaving(null); };
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [leaving]);
   const open = (s: SavedReport) => { if (!leaveOk()) return; start(fromSaved(s.config, s.name), s.id, !!s.shared, true, s.owner_id); };
   const save = async (copyAsked = false) => {
     if (!cfg) return false;
@@ -590,7 +691,7 @@ export default function ReportsPage() {
     set({ charts: xs }); scrollToChart.current = id;
   };
   /** From the result (or the preview): straight to that chart's settings. */
-  const editChart = (id: string) => { setOpenChart(id); scrollToChart.current = id; };
+  const editChart = (id: string) => { if (mode !== "build") { setMode("build"); setPanel(null); } setOpenChart(id); scrollToChart.current = id; };
   /** "Add a filter": an empty rule, ready to pick its field. */
   const addFilter = () => { if (!cfg) return; set({ filter: { ...cfg.filter, items: [...cfg.filter.items, rule("", "")] } }); setPanel("filter"); };
   /** A field's name in a picker: a field of another part says whose it is ("Company · Country"). */
@@ -638,7 +739,7 @@ export default function ReportsPage() {
   const partsLabel = (s: SavedReport) => [sourceOf(s), ...((s.config?.v === 2 && Array.isArray(s.config.with) ? s.config.with : []) as EntityKey[])].map((k) => entityOf(k)?.plural ?? k).join(" + ");
 
   /* ---- render pieces ---- */
-  const table = (limit: number): ReactNode => {
+  const table = (limit: number, editable = true): ReactNode => {
     if (!cfg) return null;
     const g = cfg.groupBy ? fieldByKey.get(cfg.groupBy) : null;
     const body: ReactNode[] = [];
@@ -657,7 +758,9 @@ export default function ReportsPage() {
           );
         }
       }
-      body.push(<tr key={i}>{colFields.map((f) => <td key={f.key} className={numeric(f) ? "is-num" : ""}>{showCell(f, toCell(f, f.get(r as any))) || <span className="rp-dash">—</span>}</td>)}</tr>);
+      const link = rowLink(cfg.source, r);
+      body.push(<tr key={i} className={link ? "is-link" : undefined} onClick={link ? (e) => { if (!(window.getSelection()?.toString())) { e.preventDefault(); openRow(r); } } : undefined}
+        title={link ? `Open this ${entityOf(cfg.source)?.label.toLowerCase() ?? "row"}` : undefined}>{colFields.map((f) => <td key={f.key} className={numeric(f) ? "is-num" : ""}>{showCell(f, toCell(f, f.get(r as any))) || <span className="rp-dash">—</span>}</td>)}</tr>);
     });
     return (
       <div className="rp-twrap">
@@ -666,6 +769,7 @@ export default function ReportsPage() {
             <tr>
               {colFields.map((f) => {
                 const on = cfg.sort?.key === f.key;
+                if (!editable) return <th key={f.key} className={`${numeric(f) ? "is-num" : ""} is-ro`}><span className="rp-th-s">{colTitle(f)}</span></th>;
                 return (
                   <th key={f.key} className={numeric(f) ? "is-num" : ""}>
                     <button type="button" className={on ? "is-on" : ""} title="Sort"
@@ -683,7 +787,13 @@ export default function ReportsPage() {
             <tfoot><tr>{colFields.map((f, i) => <td key={f.key} className={numeric(f) ? "is-num" : ""}>{i === 0 ? `Total · ${sorted.length.toLocaleString("en-GB")}` : numeric(f) ? showCell(f, totalOf(f, sorted)) : ""}</td>)}</tr></tfoot>
           )}
         </table>
-        {sorted.length === 0 && !loading && (
+        {sorted.length === 0 && !loading && !editable && (
+          <div className="rp-nothing">
+            <b>{nRules ? "Nothing matches this report's rules right now." : "There's nothing of this kind in the CRM yet."}</b>
+            {nRules > 0 && <span>Its rules may be for a period that has no records yet.<button type="button" className="rp-link" onClick={() => switchMode("build")}>Change the rules</button></span>}
+          </div>
+        )}
+        {sorted.length === 0 && !loading && editable && (
           <div className="rp-nothing">
             <b>Nothing matches all these rules together.</b>
             {blocker ? (
@@ -897,7 +1007,7 @@ export default function ReportsPage() {
         </div>
       </header>
 
-      <div className="rp-body">
+      <div className={`rp-body ${cfg && mode === "view" ? "is-view" : ""}`}>
         <aside className="rp-side" aria-label="Saved reports">
           <div className="rp-side-hh">
             <p className="rp-side-h">Saved reports</p>
@@ -1018,7 +1128,7 @@ export default function ReportsPage() {
                   {TEMPLATES.map((t, i) => {
                     const r = t.make(); const e = entityOf(r.source); const n = countRules(r.filter);
                     return (
-                      <button type="button" className="rp-tpl" key={t.title} style={vars({ "--c": e.tone, "--i": i })} onClick={() => start(r, null, false, true)}>
+                      <button type="button" className="rp-tpl" key={t.title} style={vars({ "--c": e.tone, "--i": i })} onClick={() => start(r, null, false, false)}>
                         <span className="rp-tpl-top">
                           <span className="rp-tpl-ico"><Ico d={e.icon} /></span>
                           <span className="rp-tpl-ent">{e.plural}</span>
@@ -1052,25 +1162,80 @@ export default function ReportsPage() {
             </div>
           ) : (
             <>
-              <div className="rp-bar">
-                <button type="button" className="rp-x rp-back" onClick={() => { if (!leaveOk()) return; setCfg(null); setReportId(null); }} aria-label="All reports and templates" title="All reports and templates"><Ico d={I.left} w={2.4} /></button>
-                <span className="rp-bar-ico" style={vars({ "--c": ent!.tone })}><Ico d={ent!.icon} /></span>
-                <input className="rp-name" value={cfg.name} onChange={(e) => set({ name: e.target.value })} aria-label="Report name" />
+              <div className={`rp-bar ${mode === "view" ? "is-view" : ""}`}>
+                {mode === "build" ? (
+                  <>
+                    <button type="button" className="rp-x rp-back" onClick={() => { if (!leaveOk()) return; setCfg(null); setReportId(null); }} aria-label="All reports and templates" title="All reports and templates"><Ico d={I.left} w={2.4} /></button>
+                    <span className="rp-bar-ico" style={vars({ "--c": ent!.tone })}><Ico d={ent!.icon} /></span>
+                    <input className="rp-name" value={cfg.name} onChange={(e) => set({ name: e.target.value })} aria-label="Report name" />
+                  </>
+                ) : (
+                  <>
+                    <button type="button" className="rp-crumb" onClick={() => { if (!leaveOk()) return; setCfg(null); setReportId(null); }} title="All reports and templates"><Ico d={I.left} w={2.4} />All reports</button>
+                    <span className="rp-bar-gap" />
+                  </>
+                )}
                 {loading ? <span className="rp-chip is-busy" role="status"><span className="rp-spin" />{loading}</span>
                   : <span className="rp-chip">{rows.length.toLocaleString("en-GB")} {rowWord(rows.length)}{allRows.length >= ROW_CAP ? " (first 200,000)" : ""}</span>}
-                <button type="button" className={`rp-share ${shared ? "is-on" : ""}`} onClick={() => setShared((v) => !v)} aria-pressed={shared}
-                  title={shared ? "The whole team sees it (each with the records they may see). Click: only you." : "Only you see it. Click to share it with the team."}>
-                  <Ico d={shared ? "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" : "M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"} />{shared ? "Team" : "Only me"}
-                </button>
-                <button type="button" className="rp-btn is-ghost" onClick={() => exportAs("xlsx")} disabled={!rows.length}><Ico d={I.down} />Excel</button>
-                <button type="button" className="rp-btn is-ghost" onClick={() => exportAs("csv")} disabled={!rows.length}>CSV</button>
-                {reportId && mine && <button type="button" className="rp-btn is-ghost" onClick={() => void save(true)} disabled={busy} title="Keep this one as it is and save your changes as a new report"><Ico d={I.copy} />Copy</button>}
-                <button type="button" className="rp-btn is-main" onClick={() => void save()} disabled={busy || (!!reportId && !dirty && shared === sharedSnap)}><Ico d={I.check} w={2.4} />{busy ? "Saving…" : reportId && !dirty && shared === sharedSnap ? "Saved" : reportId && !mine ? "Save a copy" : "Save"}</button>
+                {mode === "view" && dirty && <span className="rp-chip is-draft" title="What you see includes changes that aren't saved yet">Unsaved changes</span>}
+                <div className="rp-mode" role="radiogroup" aria-label="Build or view the report">
+                  <button type="button" role="radio" aria-checked={mode === "build"} className={mode === "build" ? "is-on" : ""} onClick={() => switchMode("build")}><Ico d={I.edit} />Build</button>
+                  <button type="button" role="radio" aria-checked={mode === "view"} className={mode === "view" ? "is-on" : ""} onClick={() => switchMode("view")}
+                    title={reportId && !dirty ? "The report as it reads" : "See the report as it will read, without the building tools"}><Ico d={I.eye} />{reportId && !dirty ? "View" : "Preview"}</button>
+                </div>
+                {mode === "build" && (
+                  <button type="button" className={`rp-share ${shared ? "is-on" : ""}`} onClick={() => setShared((v) => !v)} aria-pressed={shared}
+                    title={shared ? "The whole team sees it (each with the records they may see). Click: only you." : "Only you see it. Click to share it with the team."}>
+                    <Ico d={shared ? "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" : "M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"} />{shared ? "Team" : "Only me"}
+                  </button>
+                )}
+                <div className="rp-exp">
+                  <button type="button" className={`rp-btn is-ghost ${expOpen ? "is-on" : ""}`} onClick={() => setExpOpen((v) => !v)} aria-expanded={expOpen} aria-haspopup="menu"><Ico d={I.down} />Export<Ico d={I.dn} w={2.4} /></button>
+                  {expOpen && (
+                    <div className="rp-exp-menu" role="menu">
+                      <button type="button" role="menuitem" onClick={printReport} disabled={!!loading}><span className="rp-exp-ico is-pdf"><Ico d={I.print} /></span><span><b>PDF</b><em>Figures, charts and table, ready to print</em></span></button>
+                      <button type="button" role="menuitem" onClick={() => { setExpOpen(false); exportAs("xlsx"); }} disabled={!rows.length}><span className="rp-exp-ico is-xls"><Ico d={I.sheet} /></span><span><b>Excel</b><em>The table, with its formats</em></span></button>
+                      <button type="button" role="menuitem" onClick={() => { setExpOpen(false); exportAs("csv"); }} disabled={!rows.length}><span className="rp-exp-ico"><Ico d={I.down} /></span><span><b>CSV</b><em>The table as plain text</em></span></button>
+                    </div>
+                  )}
+                </div>
+                {mode === "build" && reportId && mine && <button type="button" className="rp-btn is-ghost rp-copy" onClick={() => void save(true)} disabled={busy} aria-label="Save as a copy" title="Save as a copy: keep this one as it is and save your changes as a new report"><Ico d={I.copy} />Copy</button>}
+                {(mode === "build" || dirty || !reportId) && (
+                  <button type="button" className="rp-btn is-main" onClick={() => void save()} disabled={busy || (!!reportId && !dirty && shared === sharedSnap)}><Ico d={I.check} w={2.4} />{busy ? "Saving…" : reportId && !dirty && shared === sharedSnap ? "Saved" : reportId && !mine ? "Save a copy" : "Save"}</button>
+                )}
               </div>
 
               {loadErr && <div className="rp-err">Couldn't read the data: {loadErr}</div>}
 
-              {/* One page: the toolbar on top, the report under it — every change shows at once */}
+              {mode === "view" ? (
+                <div className="rp-view" id="rp-print">
+                  <header className="rp-view-h">
+                    <span className="rp-view-ico" style={vars({ "--c": ent!.tone })}><Ico d={ent!.icon} /></span>
+                    <div className="rp-view-t">
+                      <h2>{cfg.name.trim() || "Untitled report"}</h2>
+                      <p>
+                        <span>{[ent!.plural, ...withList.map((k) => entityOf(k).plural.toLowerCase())].join(" + ")}</span>
+                        {usesPeriod && <span>{periodName} · {periodRange}</span>}
+                        {cfg.groupBy && <span>By {low(fieldByKey.get(cfg.groupBy)?.label ?? "")}</span>}
+                        <span>{(() => { const u = reportId ? saved.find((x) => x.id === reportId)?.updated_at : null; return dirty || !u ? "Not saved yet" : `Updated ${new Date(u).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}`; })()}</span>
+                      </p>
+                    </div>
+                    <span className="rp-view-print">{new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}</span>
+                  </header>
+                  {kpis(false)}
+                  {chartGrid("view")}
+                  {cfg.cols.length > 0 && (
+                    <section className="rp-card is-table is-view">
+                      <div className="rp-thead">
+                        <b>{rows.length.toLocaleString("en-GB")} {rowWord(rows.length)}</b>
+                        <em>{cfg.groupBy ? `grouped by ${low(fieldByKey.get(cfg.groupBy)?.label ?? "")}` : ""}{cfg.sort && fieldByKey.get(cfg.sort.key) ? `${cfg.groupBy ? " · " : ""}${cfg.sort.dir === "desc" ? "highest" : "lowest"} ${low(colTitle(fieldByKey.get(cfg.sort.key)!))} first` : ""}</em>
+                      </div>
+                      {table(shown, false)}
+                    </section>
+                  )}
+                </div>
+              ) : (
+              /* One page: the toolbar on top, the report under it — every change shows at once */
               <div className="rp-canvas">
                 <div className="rp-tools" role="toolbar" aria-label="Build the report">
                   <button type="button" className={`rp-tb ${panel === "data" ? "is-on" : ""}`} onClick={() => togglePanel("data")} aria-expanded={panel === "data"} style={vars({ "--c": ent!.tone })}>
@@ -1218,7 +1383,7 @@ export default function ReportsPage() {
                     </div>
                     <div className="rp-catalog-b">
                       {[...new Set(fields.map((f) => f.group))].map((g) => {
-                        const fs = fields.filter((f) => f.group === g && (!colQ.trim() || norm(f.label).includes(norm(colQ.trim()))));
+                        const fs = fields.filter((f) => f.group === g && (!colQ.trim() || findable(f).includes(norm(colQ.trim()))));
                         if (!fs.length) return null;
                         return (
                           <div className="rp-cat-g" key={g} style={vars({ "--c": entityOf(g as EntityKey)?.tone ?? "#1fb98a" })}>
@@ -1307,11 +1472,25 @@ export default function ReportsPage() {
                   {table(shown)}
                 </section>
               </div>
+              )}
             </>
           )}
         </main>
       </div>
       {note && <div className="rb-toast">{note}</div>}
+      {leaving && (
+        <div className="rp-leave" onMouseDown={(e) => { if (e.target === e.currentTarget) setLeaving(null); }}>
+          <div className="rp-leave-box" role="dialog" aria-modal="true" aria-labelledby="rp-leave-t">
+            <h3 id="rp-leave-t">Save this report first?</h3>
+            <p>“{cfg?.name?.trim() || "Untitled report"}” has changes you haven't saved. You can save it now, or open the row and come back to it with Back — your changes wait for you.</p>
+            <div className="rp-leave-acts">
+              <button type="button" className="rp-btn is-ghost" onClick={() => setLeaving(null)}>Cancel</button>
+              <button type="button" className="rp-btn is-ghost" onClick={() => go(leaving)}>Open without saving</button>
+              <button type="button" className="rp-btn is-main" disabled={busy} autoFocus onClick={async () => { const l = leaving; if (await save()) go(l); }}>{busy ? "Saving…" : "Save and open"}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
