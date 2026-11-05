@@ -151,6 +151,17 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-05 16:25 · Enterprise · Client files API: downloads of files with "∙", "–", accents… no longer answer 500
+- files: `supabase/functions/manage-users/index.ts`
+- `GET /api/clients/:id/files/:fileId/content` put the raw file name in `Content-Disposition`; a header can only carry Latin-1, so names like "Informe ∙ Q3 – 2026.pdf" threw and the API answered 500. Now `disposition(name)`: `attachment; filename="<ASCII fallback>"; filename*=UTF-8''<percent-encoded real name>` (RFC 6266/5987) — clients that read `filename*` get the exact name.
+- deploy: edge function `manage-users` deployed (v16, verify_jwt off, as before); file written to the Mac (cs65)
+
+### 2026-11-05 13:30 · Enterprise · Marketing opens at once · {{fields}} as chips
+- files: `pages/contacts/ContactExport.tsx` (+ `.css`)
+- Speed: the page no longer waits for the whole CRM (every contact, company, deal, plus last-contact dates) before showing anything. Campaigns, templates, social and calendar show as soon as the marketing tables are read (~0.3 s); only Audiences and the composer wait for the CRM. The CRM is kept 5 min in memory (`marketingWorld()`), so coming back is instant; last-contact dates (`loadLastTouch`) load after it (`marketingTouch`) and the engine picks them up.
+- Fields: in the composer's text and subject (now a one-line contentEditable) `{{first_name}}` etc. show as chips (`mk-fld`, like CS blueprints); the e-mail keeps `{{…}}` (`mkToChips` / `mkFromChips`); Insert puts a chip at the caret. Campaign list, template cards and AI subject options show chips too (`ChipText`).
+- deploy: written to the Mac (cs64)
+
 ### 2026-11-05 13:10 · Enterprise · Marketing e-mail templates (SQL 109, applied) · links in e-mail editors
 - files: `sql/109_mk_templates.sql` (new), `framework/LinkPopover.tsx` + `.css` (new), `pages/contacts/ContactExport.tsx` (+ `.css`), `pages/clients/ClientsPage.tsx`
 - DB: `mk_templates` (name, subject, preheader, body_html, used_count; tenant RLS + `trg_set_tenant`).

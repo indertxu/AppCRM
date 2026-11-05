@@ -24,6 +24,14 @@ const sha256 = async (t: string) =>
   Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t))))
     .map((b) => b.toString(16).padStart(2, "0")).join("");
 const safeName = (n: string) => n.replace(/[^\w.\-]+/g, "_");
+/** Content-Disposition for any file name: an ASCII fallback plus the real name (RFC 6266 / 5987) —
+ *  a header can't carry "∙" or "–" as is (that threw, so the download answered 500). */
+const disposition = (n: string, kind = "attachment") => {
+  const name = String(n ?? "file").replace(/[\r\n]+/g, " ");
+  const ascii = name.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^\x20-\x7e]+/g, "_").replace(/["\\]/g, "").trim() || "file";
+  const utf8 = encodeURIComponent(name).replace(/['()*]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase());
+  return `${kind}; filename="${ascii}"; filename*=UTF-8''${utf8}`;
+};
 
 async function handleApi(req: Request, route: string): Promise<Response> {
   const admin = createClient(URL, SERVICE);
@@ -150,7 +158,7 @@ async function handleApi(req: Request, route: string): Promise<Response> {
       const dl = await admin.storage.from(BUCKET).download(f.storage_path);
       if (dl.error || !dl.data) return json({ error: dl.error?.message ?? "Could not read the file." }, 400);
       return new Response(dl.data, { headers: { ...cors, "Content-Type": f.mime || "application/octet-stream",
-        "Content-Disposition": `attachment; filename="${String(f.name).replace(/"/g, "")}"` } });
+        "Content-Disposition": disposition(f.name) } });
     }
     if (m === "GET") {
       const s = await admin.storage.from(BUCKET).createSignedUrl(f.storage_path, 600, { download: f.name });
