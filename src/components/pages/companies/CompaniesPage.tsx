@@ -8,7 +8,7 @@ import Select from "../../framework/Select";
 import DatePicker from "../../framework/DatePicker";
 import {
   listCompanies, saveCompany, deleteCompany, companyContactCounts, listContacts, linkContactToCompany, unlinkContactFromCompany, renameCrmOption,
-  myProfile, isSalesLead, listEmployees, loadCompanyAssignees, setCompanyAssignees,
+  myProfile, isSalesLead, listEmployees, loadCompanyAssignees, setCompanyAssignees, loadCompanyManagers,
   listCompanyFields, addCompanyField, updateCompanyField, deleteCompanyField,
   listContactFields, saveContact,
   loadRelationshipSets, type RelationshipSets,
@@ -50,7 +50,7 @@ const norm = (s: string) => (s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/
 /** Rows asked from the database at a time (server mode). */
 const CO_BLOCK = 100;
 /** What the database sends with each company row (51_companies_server.sql). */
-const coSrv = (c: Company) => c as Company & { __types?: string[]; __status?: string[]; __pipes?: string[]; __parentName?: string | null; __kids?: number; __count?: number; __assignees?: string[] };
+const coSrv = (c: Company) => c as Company & { __types?: string[]; __status?: string[]; __pipes?: string[]; __parentName?: string | null; __kids?: number; __count?: number; __assignees?: string[]; __manager?: string | null };
 
 /* the little icons of a contact's card (phone, landline, e-mail, LinkedIn) */
 const PPL_ICO = {
@@ -82,6 +82,7 @@ export default function CompaniesPage() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [assignees, setAssignees] = useState<Record<string, string[]>>({});
+  const [managers, setManagers] = useState<Record<string, string>>({});
   const [me, setMe] = useState<{ id: string; role: string; is_superadmin: boolean } | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [fields, setFields] = useState<CompanyField[]>([]);
@@ -138,8 +139,8 @@ export default function CompaniesPage() {
       return;
     }
     setCompanies((cs) => (cs.some((x) => x.id === saved.id) ? cs.map((x) => (x.id === saved.id ? { ...x, ...saved } : x)) : [...cs, saved]));
-    Promise.all([listContacts(), companyContactCounts(), loadCompanyAssignees()])
-      .then(([cts, cnt, asg]) => { setContacts(cts); setCounts(cnt); setAssignees(asg); }).catch(() => {});
+    Promise.all([listContacts(), companyContactCounts(), loadCompanyAssignees(), loadCompanyManagers()])
+      .then(([cts, cnt, asg, mgr]) => { setContacts(cts); setCounts(cnt); setAssignees(asg); setManagers(mgr); }).catch(() => {});
   };
   const reload = async () => {
     void reloadOptions();
@@ -155,13 +156,14 @@ export default function CompaniesPage() {
     setContacts(cts);
     setCounts(cnt);
     // the rest at once (they were read one after the other)
-    const [asg, fs, cfs, rs] = await Promise.all([
+    const [asg, fs, cfs, rs, mgr] = await Promise.all([
       loadCompanyAssignees().catch(() => ({} as Record<string, string[]>)),
       listCompanyFields().catch(() => [] as CompanyField[]),
       listContactFields().catch(() => [] as ContactField[]),
       loadRelationshipSets().catch(() => null),
+      loadCompanyManagers().catch(() => ({} as Record<string, string>)),
     ]);
-    setAssignees(asg); setFields(fs); setContactFields(cfs); setRel(rs);
+    setAssignees(asg); setFields(fs); setContactFields(cfs); setRel(rs); setManagers(mgr);
     setLoaded(true);
   };
   useEffect(() => {
@@ -233,6 +235,8 @@ export default function CompaniesPage() {
   const kidsOf = (c: Company) => coSrv(c).__kids ?? kids.get(c.id ?? "") ?? 0;
   const parentNameOf = (c: Company) => coSrv(c).__parentName ?? (c.parent_id ? coName.get(c.parent_id) : undefined);
   function asgOf(c: Company): string[] { return coSrv(c).__assignees ?? assignees[c.id ?? ""] ?? []; }
+  /** the account manager: the starred person of the company's Visibility */
+  function mgrOf(c: Company): string { const s = coSrv(c); return (s.__manager !== undefined ? s.__manager : managers[c.id ?? ""]) ?? ""; }
   const statusTags = (c: Company) => { const s = stOf(c); return [...(s.client ? ["client"] : []), ...(s.sales ? ["sales"] : []), ...(!s.client && !s.sales ? ["none"] : [])]; };
   const typeRank = (c: Company) => typeSortKey(typeTags(c));
   const typeTags = (c: Company) => { const t = coSrv(c).__types; if (t) return t; const s = stOf(c); return [...new Set(["crm", ...(c.relationship ?? []), ...(s.client ? ["client"] : []), ...(s.sales ? ["sales"] : [])])]; };
@@ -268,6 +272,7 @@ export default function CompaniesPage() {
     { key: "billing_name", label: "Billing name", group: "Billing", type: "text", get: (c) => billing(c).name },
     { key: "billing_email", label: "Billing email", group: "Billing", type: "text", get: (c) => billing(c).email },
     { key: "visible_to", label: "Visible to", group: "Record", type: "multi", get: (c) => asgOf(c), options: people },
+    { key: "account_manager", label: "Account manager", group: "Record", type: "select", get: mgrOf, options: people, sort: (c) => emp(mgrOf(c)) || null },
     { key: "created_by", label: "Created by", group: "Record", type: "select", get: (c) => c.created_by ?? "", options: people, sort: (c) => emp(c.created_by) || null },
     { key: "created_at", label: "Created on", group: "Record", type: "date", get: (c) => c.created_at },
     { key: "imported_by", label: "Imported by", group: "Record", type: "select", get: (c) => (c as any).imported_by ?? "", options: people },
@@ -537,6 +542,7 @@ export default function CompaniesPage() {
     { key: "sector", label: "Sector" },
     { key: "source", label: "Source" },
     { key: "group", label: "Group" },
+    { key: "account_manager", label: "Account manager" },
     { key: "created_by", label: "Created by" },
     { key: "contacts", label: "Contacts" },
     ...fields.map((f) => ({ key: f.id, label: f.label })),
@@ -566,6 +572,7 @@ export default function CompaniesPage() {
     if (key === "source") return <span className="co-laddr">{c.source || "—"}</span>;
     if (key === "group") return <span className="co-laddr">{c.parent_id ? `↳ ${parentNameOf(c) ?? "—"}` : kidsOf(c) > 0 ? "Top of a group" : "—"}</span>;
     if (key === "created_by") return <span className="co-laddr">{employees.find((e) => e.id === c.created_by)?.name ?? "—"}</span>;
+    if (key === "account_manager") { const m = mgrOf(c); return <span className={`co-laddr co-lmgr ${m ? "" : "is-none"}`}>{m ? <><i aria-hidden="true">★</i>{employees.find((e) => e.id === m)?.name ?? "—"}</> : "—"}</span>; }
     if (key === "contacts") return (
       <span className="co-lright">
         <button className={`co-expand ${open === c.id ? "is-on" : ""}`}
@@ -728,6 +735,7 @@ export default function CompaniesPage() {
           contactFields={contactFields}
           canAssign={lead}
           assigned={asgOf(editing)}
+          manager={mgrOf(editing) || null}
           onClose={closePanel}
           onSaved={(saved, isNew) => refreshRow(saved, isNew)}
           onDeleted={async () => { const back = backTo; closePanel(); if (!back) await reload(); }}
@@ -875,7 +883,7 @@ function NewContactInline({ fields, onAdd, onCancel }: {
   onCancel: () => void;
 }) {
   const [c, setC] = useState<Contact>({
-    first_name: "", last_name: "", position: "", email: "", phone: "", phone_ext: "", is_billing: false, notes: "", companyIds: [], custom: {},
+    first_name: "", last_name: "", position: "", email: "", phone: "", phone_ext: "", landline: "", landline_ext: "", is_billing: false, notes: "", companyIds: [], custom: {},
   });
   const [err, setErr] = useState<string | null>(null);
   const [tried, setTried] = useState(false);
@@ -920,10 +928,9 @@ function NewContactInline({ fields, onAdd, onCancel }: {
         <div className={`dw-f ${mc("email")}`}><label>Email{rq("email")}</label>
           <input value={c.email ?? ""} onChange={(e) => set({ email: e.target.value })} />
         </div>
-        <PhoneField label="Mobile" value={c.phone} ext={c.phone_ext} onValue={(v) => set({ phone: v })} onExt={(v) => set({ phone_ext: v })} req={isReq("phone")} missing={miss("phone")} />
-        {isReq("landline") && (
-          <PhoneField label="Telephone" value={c.landline} ext={c.landline_ext} onValue={(v) => set({ landline: v })} onExt={(v) => set({ landline_ext: v })} req missing={miss("landline")} />
-        )}
+        {/* the same two numbers as in Contacts */}
+        <PhoneField label="Telephone" value={c.landline} ext={c.landline_ext} onValue={(v) => set({ landline: v })} onExt={(v) => set({ landline_ext: v })} placeholder="+34 910 000 000" req={isReq("landline")} missing={miss("landline")} />
+        <PhoneField label="Mobile" value={c.phone} ext={c.phone_ext} onValue={(v) => set({ phone: v })} onExt={(v) => set({ phone_ext: v })} placeholder="+34 600 000 000" req={isReq("phone")} missing={miss("phone")} />
         {isReq("linkedin") && (
           <div className={`dw-f ${mc("linkedin")}`}><label>LinkedIn{rq("linkedin")}</label>
             <input value={c.linkedin ?? ""} placeholder="linkedin.com/in/…" onChange={(e) => set({ linkedin: e.target.value })}
@@ -972,8 +979,8 @@ function NewContactInline({ fields, onAdd, onCancel }: {
   );
 }
 
-function CompanyEditor({ company, companies, employees, fields, contacts, contactFields, canAssign, assigned, rel, options, onOptionsChanged, onClose, onSaved, onDeleted, onOpenContact, onOpenCompany, searchContacts: findContacts }: {
-  company: Company; companies: Company[]; employees: Employee[]; fields: CompanyField[]; contacts: Contact[]; contactFields: ContactField[]; canAssign: boolean; assigned: string[];
+function CompanyEditor({ company, companies, employees, fields, contacts, contactFields, canAssign, assigned, manager, rel, options, onOptionsChanged, onClose, onSaved, onDeleted, onOpenContact, onOpenCompany, searchContacts: findContacts }: {
+  company: Company; companies: Company[]; employees: Employee[]; fields: CompanyField[]; contacts: Contact[]; contactFields: ContactField[]; canAssign: boolean; assigned: string[]; manager?: string | null;
   /** Server mode: "Link existing contact" searches the database. */
   searchContacts?: (q: string) => Promise<Contact[]>;
   rel: RelationshipSets | null;
@@ -1009,6 +1016,10 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
   const [addingContact, setAddingContact] = useState(false);
   const [pendingRemoveIds, setPendingRemoveIds] = useState<string[]>([]);
   const [who, setWho] = useState<string[]>(assigned);
+  // the account manager: one of the people with access, starred
+  const [mgr, setMgr] = useState<string | null>(manager && assigned.includes(manager) ? manager : null);
+  const mgrInitial = useRef(manager ?? null);
+  const whoInitial = useRef(assigned.join());
   // companies directly below this one in the group (saved with the company)
   const [childInitial, setChildInitial] = useState<string[]>(() => (company.id ? [...(coIdx.kidsOf.get(company.id) ?? [])] : []));
   const [children, setChildren] = useState<string[]>(childInitial);
@@ -1022,7 +1033,8 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
   const isReq = (k: string) => isFixedRequired("company", k);
   const miss = (k: string) => tried && isReq(k) && missingFixed("company", c, [k]).length > 0;
   const mc = (k: string) => (miss(k) ? "is-missing" : "");
-  const dirty = () => JSON.stringify(c) !== initial || newContacts.length > 0 || pendingRemoveIds.length > 0 || children.join() !== childInitial.join();
+  const dirty = () => JSON.stringify(c) !== initial || newContacts.length > 0 || pendingRemoveIds.length > 0 || children.join() !== childInitial.join()
+    || who.join() !== whoInitial.current || (mgr ?? null) !== mgrInitial.current;
 
   const { closing, close } = useDrawerClose(onClose);
   useEffect(() => {
@@ -1187,7 +1199,7 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
     // saveCompany sets c.id on insert; use it to link contacts.
     const companyId = c.id;
     if (companyId) {
-      await setCompanyAssignees(companyId, who).catch(() => {});
+      await setCompanyAssignees(companyId, who, mgr && who.includes(mgr) ? mgr : null).catch(() => {});
       // billing changed: the clients' products and projects follow
       const billBefore: Billing = (JSON.parse(initial) as Company).billing ?? {};
       if (company.id) await syncCompanyBilling(companyId, billBefore, c.billing ?? {}).catch(() => {});
@@ -1557,15 +1569,25 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
             <HistorySection entity="company" id={c.id} employees={employees} fieldLabel={histLabel} formatValue={histValue} />
             {canAssign && (
               <section className="dw-sec" data-sec="access" data-tone="violet">
-                <DwSecHead icon="lock" title="Visibility" hint="Who in the team can see this company" />
+                <DwSecHead icon="lock" title="Visibility" hint="Who in the team can see this company — star one to make them its account manager" />
                 <div className="dw-chips">
-                  {who.map((id) => (
-                    <span key={id} className="dw-chip">
-                      <DwIcon name="person" />{employees.find((e) => e.id === id)?.name ?? "Unknown"}
-                      <ConfirmX label="Remove access" question="Remove?" onConfirm={() => setWho((xs) => xs.filter((x) => x !== id))} />
-                    </span>
-                  ))}
+                  {who.map((id) => {
+                    const star = mgr === id;
+                    const name = employees.find((e) => e.id === id)?.name ?? "Unknown";
+                    return (
+                      <span key={id} className={`dw-chip co-mgr-chip ${star ? "is-mgr" : ""}`}>
+                        <button type="button" className="co-mgr-star" aria-pressed={star}
+                          title={star ? `${name} is the account manager — click to unset` : `Make ${name} the account manager`}
+                          onClick={() => setMgr(star ? null : id)}>
+                          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.2l2.6 5.5 6 .8-4.4 4.2 1.1 6-5.3-2.9-5.3 2.9 1.1-6L3.4 9.5l6-.8z" /></svg>
+                        </button>
+                        {name}{star && <em>Account manager</em>}
+                        <ConfirmX label="Remove access" question="Remove?" onConfirm={() => { setWho((xs) => xs.filter((x) => x !== id)); if (star) setMgr(null); }} />
+                      </span>
+                    );
+                  })}
                 </div>
+                {who.length > 0 && !mgr && <p className="dw-empty-hint">No account manager yet: click the ☆ of the person who manages it.</p>}
                 {who.length === 0 && (
                   <p className="dw-empty-hint">Only boss and sales managers can see it. Add people to widen access.</p>
                 )}
@@ -3610,7 +3632,8 @@ function fxSummary<T>(f: FField<T>, c: FCond): string {
   if (c.values) {
     const opts = f.options?.() ?? [];
     const names = c.values.map((v) => opts.find((o) => o.value === v)?.label ?? v);
-    return `${op} ${names.length > 2 ? `${names.slice(0, 2).join(", ")} +${names.length - 2}` : names.join(", ") || "…"}`;
+    // every value shows: the chip wraps instead of hiding them behind "+2"
+    return `${op} ${names.join(", ") || "…"}`;
   }
   const d = (x?: string) => (x && f.type === "date" ? new Date(x).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : x);
   if (c.op === "between") return `${op} ${d(c.min) || "…"} and ${d(c.max) || "…"}`;
@@ -3622,7 +3645,11 @@ function fxSummary<T>(f: FField<T>, c: FCond): string {
 function FxValues({ options, values, onChange }: { options: FOpt[]; values: string[]; onChange: (v: string[]) => void }) {
   const [q, setQ] = useState("");
   const n = fxNorm(q);
-  const list = n ? options.filter((o) => fxNorm(o.label).includes(n)) : options;
+  // what's picked comes first (also values no longer in the list), so it's always in sight
+  const all = [...options.filter((o) => values.includes(o.value)),
+    ...values.filter((v) => !options.some((o) => o.value === v)).map((v) => ({ value: v, label: v })),
+    ...options.filter((o) => !values.includes(o.value))];
+  const list = n ? all.filter((o) => fxNorm(o.label).includes(n)) : all;
   const toggle = (v: string) => onChange(values.includes(v) ? values.filter((x) => x !== v) : [...values, v]);
   return (
     <div className="fx-vals">

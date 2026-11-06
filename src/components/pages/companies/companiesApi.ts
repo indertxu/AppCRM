@@ -152,10 +152,22 @@ export async function loadCompanyAssignees(): Promise<Record<string, string[]>> 
   data.forEach((r: any) => { (out[r.company_id] ??= []).push(r.profile_id); });
   return out;
 }
-export async function setCompanyAssignees(companyId: string, profileIds: string[]) {
+/** The account manager of each company: the starred person of its Visibility (113_account_manager.sql). */
+export async function loadCompanyManagers(): Promise<Record<string, string>> {
+  const { data, error } = await supabase.from("company_assignees").select("company_id, profile_id").eq("is_manager", true).limit(50000);
+  if (error) return {};
+  const out: Record<string, string> = {};
+  (data ?? []).forEach((r: any) => { out[r.company_id] = r.profile_id; });
+  return out;
+}
+export async function setCompanyAssignees(companyId: string, profileIds: string[], manager?: string | null) {
   await supabase.from("company_assignees").delete().eq("company_id", companyId);
-  if (profileIds.length) {
-    await supabase.from("company_assignees").insert(profileIds.map((p) => ({ company_id: companyId, profile_id: p })));
+  const ids = [...new Set(manager ? [...profileIds, manager] : profileIds)];
+  if (ids.length) {
+    const rows = ids.map((p) => ({ company_id: companyId, profile_id: p, ...(manager !== undefined ? { is_manager: p === manager } : {}) }));
+    const { error } = await supabase.from("company_assignees").insert(rows);
+    // before 113_account_manager.sql there's no is_manager: keep the people at least
+    if (error && /is_manager/.test(error.message)) await supabase.from("company_assignees").insert(ids.map((p) => ({ company_id: companyId, profile_id: p })));
   }
 }
 export async function loadContactAssignees(): Promise<Record<string, string[]>> {

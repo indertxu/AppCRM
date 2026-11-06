@@ -873,12 +873,16 @@ button.co-cc-main { padding: 0; border: 0; background: none; font: inherit; text
 .fx-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -0.6rem 0 1rem; flex-shrink: 0; }
 .fx-chips-n { margin-right: 4px; font-size: 12.5px; color: var(--muted, #5a7d6d); }
 .fx-chips-n b { font-family: "Space Grotesk", sans-serif; font-size: 15px; color: var(--forest, #0a6f4d); }
-.fx-chip { display: inline-flex; align-items: center; gap: 2px; animation: fx-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) backwards; animation-delay: calc(var(--i, 0) * 35ms); }
-.fx-chip em { margin-right: 4px; font-style: normal; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #8fa89c; }
-.fx-chip > button:not(.fx-chip-x) { height: 30px; padding: 0 6px 0 12px; border: 1px solid rgba(18, 181, 127, 0.3); border-right: 0; border-radius: 999px 0 0 999px; background: #e9f8f0; font-family: inherit; font-size: 12.5px; font-weight: 500; color: #2f5446; cursor: pointer; max-width: 380px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fx-chip { display: inline-flex; align-items: stretch; gap: 2px; max-width: 100%; animation: fx-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) backwards; animation-delay: calc(var(--i, 0) * 35ms); }
+.fx-chip em { align-self: center; margin-right: 4px; font-style: normal; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #8fa89c; }
+.fx-chip > button:not(.fx-chip-x) { height: 30px; padding: 0 6px 0 12px; border: 1px solid rgba(18, 181, 127, 0.3); border-right: 0; border-radius: 999px 0 0 999px; background: #e9f8f0; font-family: inherit; font-size: 12.5px; font-weight: 500; color: #2f5446; cursor: pointer; min-width: 0; max-width: min(100%, 720px); height: auto; min-height: 30px; padding-top: 5px; padding-bottom: 5px; line-height: 1.35; text-align: left; white-space: normal; overflow-wrap: anywhere; }
 .fx-chip > button b { font-weight: 700; color: #0a6f4d; }
-.fx-chip-x { height: 30px; width: 28px; border: 1px solid rgba(18, 181, 127, 0.3); border-left: 0; border-radius: 0 999px 999px 0; background: #e9f8f0; color: #5a7d6d; font-size: 15px; cursor: pointer; }
+.fx-chip-x { flex: none; height: auto; min-height: 30px; width: 28px; border: 1px solid rgba(18, 181, 127, 0.3); border-left: 0; border-radius: 0 999px 999px 0; background: #e9f8f0; color: #5a7d6d; font-size: 15px; cursor: pointer; }
 .fx-chip-x:hover { background: #d64545; border-color: #d64545; color: #fff; }
+/* every filter and value stays readable: long chips wrap instead of being cut ("Spain, Portugal +2" hid the rest) */
+.fx-chips .fx-chip { align-items: stretch; max-width: 100%; }
+.fx-chips .fx-chip > button:not(.fx-chip-x) { min-width: 0; max-width: min(100%, 720px); height: auto; min-height: 30px; padding-top: 5px; padding-bottom: 5px; line-height: 1.35; text-align: left; white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+.fx-chips .fx-chip-x { flex: none; height: auto; min-height: 30px; }
 .fx-chip.is-sort > button:not(.fx-chip-x), .fx-chip.is-sort .fx-chip-x { background: #eef1fb; border-color: rgba(61, 85, 184, 0.25); color: #3d55b8; }
 .fx-chips-clear { border: 0; background: none; padding: 0 6px; font-family: inherit; font-size: 12px; font-weight: 600; color: #5a7d6d; cursor: pointer; text-decoration: underline; }
 
@@ -894,7 +898,7 @@ button.co-cc-main { padding: 0; border: 0; background: none; font: inherit; text
 .fx-sort.is-asc .fx-up, .fx-sort.is-desc .fx-down { opacity: 1; }
 .fx-sort i b { position: absolute; top: -7px; right: -9px; min-width: 12px; height: 12px; border-radius: 999px; background: #0a6f4d; color: #fff; font-size: 8.5px; line-height: 12px; text-align: center; }
 .co-lright .fx-sort, .co-lcontacts .fx-sort { margin-left: auto; }
-@media (max-width: 760px) { .fx-in.is-num { flex-basis: 80px; } .fx-chip > button:not(.fx-chip-x) { max-width: 240px; } }
+@media (max-width: 760px) { .fx-in.is-num { flex-basis: 80px; } } 
 .co-lcontacts .fx-sort > span { overflow: visible; text-overflow: clip; }
 .sel-trigger.fx-op { padding-right: 10px; }
 
@@ -1712,3 +1716,18 @@ button.co-cc-main { padding: 0; border: 0; background: none; font: inherit; text
 .co-ppl .cx-ask { align-self: center; }
 @media (hover: none) { .co-ppl .co-ppl-x { opacity: 1; } }
 .co-ppl .co-ppl-x:hover { background: rgba(214, 69, 69, 0.1); color: #c24040; }
+
+/* Visibility: the starred person is the company's account manager (113_account_manager.sql) */
+.dw-chip.co-mgr-chip { padding-left: 5px; gap: 6px; }
+.dw-chip .co-mgr-star { width: 26px; height: 26px; border-radius: 8px; background: transparent; color: #8fa89c; }
+.dw-chip .co-mgr-star svg { width: 16px; height: 16px; opacity: 1; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1), fill 0.15s; }
+.dw-chip .co-mgr-star:hover { background: rgba(255, 255, 255, 0.75); color: #d99a0b; }
+.dw-chip .co-mgr-star:hover svg { transform: scale(1.12); }
+.dw-chip.is-mgr { background: #fff6dc; color: #7a5200; box-shadow: inset 0 0 0 1px rgba(217, 154, 11, 0.35); }
+.dw-chip.is-mgr .co-mgr-star { color: #e0a10c; }
+.dw-chip.is-mgr .co-mgr-star svg { fill: currentColor; }
+.dw-chip.is-mgr .co-mgr-star:hover { background: rgba(255, 255, 255, 0.75); color: #b47f00; }
+.dw-chip em { font-style: normal; font-size: 10.5px; font-weight: 750; letter-spacing: 0.05em; text-transform: uppercase; padding: 2px 7px; border-radius: 6px; background: rgba(224, 161, 12, 0.16); color: #8a5d00; }
+.co-lmgr i { margin-right: 5px; font-style: normal; color: #e0a10c; }
+.co-lmgr { color: var(--ink, #0b241a); }
+.co-lmgr.is-none { color: var(--muted); }

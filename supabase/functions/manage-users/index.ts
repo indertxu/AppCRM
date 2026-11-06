@@ -13,6 +13,220 @@ const json = (o: unknown, status = 200) =>
   new Response(JSON.stringify(o), { status, headers: { ...cors, "Content-Type": "application/json" } });
 
 /* =====================================================================
+   CRM import API  —  /functions/v1/manage-users/api/crm/...   (111_crm_import_api.sql)
+   Keys with scope 'crm' (Settings › APIs). access 'form' may only POST /crm/leads
+   (safe in a website form); 'write' may also POST /crm/companies and /crm/contacts.
+     GET  /crm/fields      the fields it fills (standard + your own), and the form shortcuts
+     POST /crm/leads       { first_name, last_name, email, company, …, employees, entities, erps, interests }
+                           finds or creates the company (by name, then by e-mail domain) and the contact
+                           (by e-mail), links them, fills the fields, notes the request
+     POST /crm/companies   one company       POST /crm/contacts   one contact (optionally with "company")
+   ===================================================================== */
+const FREE_MAIL = /^(gmail|googlemail|hotmail|outlook|live|msn|yahoo|ymail|icloud|me|mac|aol|gmx|proton|protonmail|yandex|mail|zoho|terra|telefonica)\./i;
+/** form shortcuts → your own fields (created the first time they're used) */
+const SHORTCUTS: Record<string, { on: "company" | "contact"; label: string; type: "select" | "multiselect" }> = {
+  employees: { on: "company", label: "Employees", type: "select" },
+  entities: { on: "company", label: "Legal entities", type: "select" },
+  erps: { on: "company", label: "ERPs", type: "multiselect" },
+  interests: { on: "contact", label: "Interested in", type: "multiselect" },
+};
+const STD_COMPANY = ["name", "legal_name", "vat_number", "website", "phone", "email", "street", "addr_number", "postal_code", "city", "province", "country", "sector", "linkedin"];
+const STD_CONTACT = ["first_name", "last_name", "email", "phone", "position", "city", "country", "language", "linkedin"];
+const clean = (v: unknown) => (typeof v === "string" ? v.trim() : v == null ? "" : String(v).trim());
+const listOf = (v: unknown): string[] => (Array.isArray(v) ? v : v == null || v === "" ? [] : String(v).split(/\s*[;,]\s*/)).map((x) => String(x).trim()).filter(Boolean);
+
+async function handleCrm(admin: any, tenant: string, key: any, m: string, seg: string[], req: Request): Promise<Response> {
+  const what = seg[1] ?? "";
+  const cfg = (key.settings ?? {}) as {
+    source?: string; tags?: string[]; assign_to?: string[]; origins?: string[];
+    /** a form built in Settings › APIs: what each of its fields is sent as and where it lands
+     *  to = contact.<column> | company.<column> | contact.custom.<field id> | company.custom.<field id> | note */
+    fields?: { name: string; label?: string; to?: string; required?: boolean }[];
+  };
+  const loadFields = async () => {
+    const [co, ct] = await Promise.all([
+      admin.from("company_fields").select("id, label, type, options, sort").eq("tenant_id", tenant).order("sort"),
+      admin.from("contact_fields").select("id, label, type, options, sort").eq("tenant_id", tenant).order("sort"),
+    ]);
+    return { company: (co.data ?? []) as any[], contact: (ct.data ?? []) as any[] };
+  };
+  if (m === "GET" && what === "fields") {
+    const f = await loadFields();
+    const out = (xs: any[]) => xs.map((x) => ({ id: x.id, label: x.label, type: x.type, options: Array.isArray(x.options) ? x.options : [] }));
+    return json({
+      standard: { company: STD_COMPANY, contact: STD_CONTACT },
+      custom: { company: out(f.company), contact: out(f.contact) },
+      shortcuts: Object.fromEntries(Object.entries(SHORTCUTS).map(([k, v]) => [k, { goes_to: v.on, field: v.label, type: v.type }])),
+    });
+  }
+  if (m !== "POST" || !["leads", "companies", "contacts"].includes(what)) return json({ error: "Unknown endpoint. See Settings › APIs." }, 404);
+  if (key.access === "form" && what !== "leads") return json({ error: "A website form key may only add leads (POST /crm/leads)." }, 403);
+  const origin = req.headers.get("origin");
+  if (origin && Array.isArray(cfg.origins) && cfg.origins.length && !cfg.origins.some((o) => o && origin.toLowerCase().startsWith(String(o).toLowerCase().replace(/\/+$/, "")))) {
+    return json({ error: "This key doesn't accept requests from this website." }, 403);
+  }
+  const ct = req.headers.get("content-type") ?? "";
+  let b: Record<string, any> = ct.includes("application/json") ? await req.json().catch(() => ({}))
+    : Object.fromEntries([...(await req.formData().catch(() => new FormData())).entries()].map(([k, v]) => [k, String(v)]));
+  // a hidden "honeypot" field a person never fills: bots get an OK and nothing is saved
+  if (clean(b._hp) || clean(b.website_url)) return json({ ok: true }, 201);
+
+  // a form built in Settings › APIs: its own field names → the fields they fill
+  const mapped = what === "leads" && Array.isArray(cfg.fields) && cfg.fields.length > 0;
+  const answers: string[] = [];
+  if (mapped) {
+    const nb: Record<string, any> = { company_fields: {}, contact_fields: {}, company_details: {}, request_type: b.request_type, page: b.page, utm: b.utm, source: b.source, message: "" };
+    const missing: string[] = [];
+    for (const f of cfg.fields!) {
+      const raw = b[f.name];
+      const label = clean(f.label) || f.name;
+      if (raw == null || (Array.isArray(raw) ? !raw.length : !clean(raw))) { if (f.required) missing.push(label); continue; }
+      const val = Array.isArray(raw) ? raw.map(clean).filter(Boolean) : clean(raw);
+      const text = Array.isArray(val) ? val.join(", ") : String(val);
+      const to = String(f.to ?? "note");
+      if (to.startsWith("contact.custom.")) { nb.contact_fields[to.slice(15)] = val; answers.push(`${label}: ${text}`); }
+      else if (to.startsWith("company.custom.")) { nb.company_fields[to.slice(15)] = val; answers.push(`${label}: ${text}`); }
+      else if (to === "company.name") nb.company = text;
+      else if (to.startsWith("company.")) nb.company_details[to.slice(8)] = text;
+      else if (to.startsWith("contact.")) nb[to.slice(8)] = text;
+      else nb.message = [nb.message, `${label}: ${text}`].filter(Boolean).join(" · ");
+    }
+    if (missing.length) return json({ error: `Fill in: ${missing.join(", ")}.`, missing }, 400);
+    b = nb;
+  }
+
+  const fields = await loadFields();
+  /** your own field by label (or id); a shortcut's field is made the first time; new choices are added to its options */
+  const fieldFor = async (on: "company" | "contact", labelOrId: string, type: string | null, vals: string[]) => {
+    const table = on === "company" ? "company_fields" : "contact_fields";
+    const xs = fields[on];
+    let f = xs.find((x) => x.id === labelOrId || String(x.label).trim().toLowerCase() === labelOrId.trim().toLowerCase());
+    if (!f) {
+      if (!type) return null;
+      const { data } = await admin.from(table).insert({ tenant_id: tenant, label: labelOrId, type, required: false, options: vals, sort: xs.length }).select("id, label, type, options, sort").single();
+      if (!data) return null;
+      xs.push(data); f = data;
+    } else if ((f.type === "select" || f.type === "multiselect") && vals.length) {
+      const opts: string[] = Array.isArray(f.options) ? f.options : [];
+      const add = vals.filter((v) => !opts.some((o) => o.toLowerCase() === v.toLowerCase()));
+      if (add.length) { f.options = [...opts, ...add]; await admin.from(table).update({ options: f.options }).eq("id", f.id); }
+    }
+    return f;
+  };
+  /** { fieldId: value } from shortcuts and from company_fields / contact_fields (by label or id) */
+  const customFor = async (on: "company" | "contact", src: Record<string, any>, given: Record<string, any> | undefined) => {
+    const out: Record<string, any> = {};
+    const put = async (label: string, type: string | null, raw: unknown) => {
+      const known = fields[on].find((x) => x.id === label || String(x.label).trim().toLowerCase() === label.trim().toLowerCase());
+      const multi = (type ?? known?.type) === "multiselect" || Array.isArray(raw);
+      const vals = multi ? listOf(raw) : [clean(raw)].filter(Boolean);
+      if (!vals.length) return;
+      const f = await fieldFor(on, label, type, vals);
+      if (!f) return;
+      out[f.id] = f.type === "multiselect" ? vals : f.type === "number" ? Number(vals[0]) : f.type === "boolean" ? /^(1|true|yes|s[ií])$/i.test(vals[0]) : vals.join(", ");
+    };
+    for (const [k, sc] of Object.entries(SHORTCUTS)) if (sc.on === on && src[k] != null) await put(sc.label, sc.type, src[k]);
+    for (const [label, v] of Object.entries(given ?? {})) await put(label, null, v);
+    return out;
+  };
+  const mergeCustom = (old: Record<string, any> | null, add: Record<string, any>, kinds: any[]) => {
+    const res = { ...(old ?? {}) };
+    for (const [id, v] of Object.entries(add)) {
+      const f = kinds.find((x) => x.id === id);
+      res[id] = f?.type === "multiselect" ? [...new Set([...listOf(res[id]), ...listOf(v)])] : v;
+    }
+    return res;
+  };
+  const today = new Date().toISOString().slice(0, 16).replace("T", " ");
+  const source = clean(b.source) || clean(cfg.source) || "Inbound / Website";
+  const tags: string[] = [...new Set([...listOf(cfg.tags), ...listOf(b.tags)])];
+  const assign: string[] = listOf(cfg.assign_to);
+
+  // ---- the company
+  let company: { id: string; created: boolean } | null = null;
+  const coSrc: Record<string, any> = what === "companies" ? b
+    : mapped ? { ...b.company_details, name: b.company }
+    : { ...(b.company_details ?? {}), ...b, name: b.company ?? b.company_name ?? b.name_company };
+  const coName = clean(what === "companies" ? b.name : coSrc.name);
+  const email = clean(b.email).toLowerCase();
+  const domain = clean(coSrc.website).replace(/^https?:\/\//i, "").replace(/^www\./i, "").split("/")[0].toLowerCase()
+    || (email.includes("@") && !FREE_MAIL.test(email.split("@")[1]) ? email.split("@")[1] : "");
+  // a form of your own may leave the company out; the old fixed form and /companies need it
+  if (what === "companies" || coName || (what === "leads" && !mapped)) {
+    if (!coName) return json({ error: "Add the company name (\"company\")." }, 400);
+    const coCustom = await customFor("company", what === "companies" ? b : { ...b, ...(b.company_details ?? {}) }, b.company_fields);
+    let { data: found } = await admin.from("companies").select("id, name, website, custom, source, relationship, sector, city, country, phone")
+      .eq("tenant_id", tenant).ilike("name", coName.replace(/[%_]/g, "\\$&")).limit(1).maybeSingle();
+    if (!found && domain) ({ data: found } = await admin.from("companies").select("id, name, website, custom, source, relationship, sector, city, country, phone")
+      .eq("tenant_id", tenant).ilike("website", `%${domain.replace(/[%_]/g, "\\$&")}%`).limit(1).maybeSingle());
+    if (found) {
+      const patch: Record<string, unknown> = { custom: mergeCustom(found.custom, coCustom, fields.company) };
+      for (const k of STD_COMPANY) if (k !== "name" && clean(coSrc[k]) && !clean((found as any)[k])) patch[k] = clean(coSrc[k]);
+      if (!found.website && domain) patch.website = `https://${domain}`;
+      if (!found.source) patch.source = source;
+      if (tags.length) patch.relationship = [...new Set([...(Array.isArray(found.relationship) ? found.relationship : []), ...tags])];
+      const up = await admin.from("companies").update(patch).eq("id", found.id);
+      if (up.error) return json({ error: up.error.message }, 400);
+      company = { id: found.id, created: false };
+    } else {
+      const row: Record<string, unknown> = { tenant_id: tenant, name: coName, source, custom: coCustom, relationship: tags };
+      for (const k of STD_COMPANY) if (k !== "name" && clean(coSrc[k])) row[k] = clean(coSrc[k]);
+      if (!row.website && domain) row.website = `https://${domain}`;
+      if (key.created_by) row.created_by = key.created_by;
+      const { data, error } = await admin.from("companies").insert(row).select("id").single();
+      if (error) return json({ error: error.message }, 400);
+      company = { id: data.id, created: true };
+    }
+    for (const p of assign) {
+      const { data: has } = await admin.from("company_assignees").select("id").eq("company_id", company.id).eq("profile_id", p).limit(1);
+      if (!has?.length) await admin.from("company_assignees").insert({ tenant_id: tenant, company_id: company.id, profile_id: p });
+    }
+    // the source shows in Settings › Companies › Sources
+    const { data: srcOpt } = await admin.from("crm_options").select("id").eq("tenant_id", tenant).eq("kind", "source").ilike("label", source).limit(1);
+    if (!srcOpt?.length) await admin.from("crm_options").insert({ tenant_id: tenant, kind: "source", label: source, sort: 999 });
+  }
+  if (what === "companies") return json({ ok: true, company }, company?.created ? 201 : 200);
+
+  // ---- the contact
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json({ error: "Add a valid \"email\"." }, 400);
+  const ctCustom = await customFor("contact", b, b.contact_fields);
+  const summary = [
+    clean(b.message) && (mapped ? clean(b.message).slice(0, 1200) : `"${clean(b.message).slice(0, 600)}"`),
+    ...answers,
+    ...Object.entries(SHORTCUTS).filter(([k]) => b[k] != null && listOf(b[k]).length).map(([k, sc]) => `${sc.label}: ${listOf(b[k]).join(", ")}`),
+    clean(b.page) && `Page: ${clean(b.page)}`,
+    b.utm && typeof b.utm === "object" && `UTM: ${Object.entries(b.utm).map(([k, v]) => `${k}=${v}`).join(" ")}`,
+  ].filter(Boolean).join(" · ");
+  const note = `[${today}] ${clean(b.request_type) || (what === "leads" ? "Web request" : "API import")} (${key.name})${summary ? ` — ${summary}` : ""}`;
+  let contact: { id: string; created: boolean };
+  const { data: had } = await admin.from("contacts").select("id, first_name, last_name, phone, position, city, country, language, linkedin, custom, notes")
+    .eq("tenant_id", tenant).ilike("email", email.replace(/[%_]/g, "\\$&")).limit(1).maybeSingle();
+  if (had) {
+    const patch: Record<string, unknown> = { custom: mergeCustom(had.custom, ctCustom, fields.contact), notes: [had.notes, note].filter(Boolean).join("\n") };
+    for (const k of STD_CONTACT) if (k !== "email" && clean(b[k]) && !clean((had as any)[k])) patch[k] = clean(b[k]);
+    const up = await admin.from("contacts").update(patch).eq("id", had.id);
+    if (up.error) return json({ error: up.error.message }, 400);
+    contact = { id: had.id, created: false };
+  } else {
+    const row: Record<string, unknown> = { tenant_id: tenant, email, custom: ctCustom, notes: note };
+    for (const k of STD_CONTACT) if (k !== "email" && clean(b[k])) row[k] = clean(b[k]);
+    if (!row.first_name) row.first_name = email.split("@")[0].replace(/[._-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+    const { data, error } = await admin.from("contacts").insert(row).select("id").single();
+    if (error) return json({ error: error.message }, 400);
+    contact = { id: data.id, created: true };
+  }
+  for (const p of assign) {
+    const { data: has } = await admin.from("contact_assignees").select("id").eq("contact_id", contact.id).eq("profile_id", p).limit(1);
+    if (!has?.length) await admin.from("contact_assignees").insert({ tenant_id: tenant, contact_id: contact.id, profile_id: p });
+  }
+  if (company) {
+    const { data: link } = await admin.from("company_contacts").select("id").eq("company_id", company.id).eq("contact_id", contact.id).limit(1);
+    if (!link?.length) await admin.from("company_contacts").insert({ tenant_id: tenant, company_id: company.id, contact_id: contact.id, role_at_company: clean(b.position) || null });
+  }
+  return json({ ok: true, company, contact }, contact.created || company?.created ? 201 : 200);
+}
+
+/* =====================================================================
    Client files API  —  /functions/v1/manage-users/api/...
    Auth: header  x-api-key: fck_...   (keys made in Settings → Client page)
    Read keys list and download; write keys also upload, replace, rename,
@@ -55,6 +269,12 @@ async function handleApi(req: Request, route: string): Promise<Response> {
   const m = req.method.toUpperCase();
   const url = new globalThis.URL(req.url);
   const seg = route.split("/").filter(Boolean).map(decodeURIComponent);
+  // companies & contacts (111_crm_import_api.sql): their own keys
+  const scope = (key.scope as string | null) ?? "files";
+  if (seg[0] === "crm" || scope === "crm") {
+    if (scope !== "crm" || seg[0] !== "crm") return json({ error: scope === "crm" ? "This key is for companies & contacts (/crm/…)." : "This key is for client documents. Make a companies & contacts key in Settings › APIs." }, 403);
+    return await handleCrm(admin, tenant, key, m, seg, req);
+  }
   if (m !== "GET" && !canWrite) return json({ error: "This API key is read-only." }, 403);
 
   // inserts carry tenant_id when the table has it

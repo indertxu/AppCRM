@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { PageLoader } from "../../framework/AppLayout";
 import { supabase } from "../../api/supabase";
 import { useAuth } from "../../api/authContext";
 import NewUserModal, { LEVELS, type NewUserPayload } from "./NewUserModal";
@@ -10,9 +9,9 @@ import CatalogPage from "./CatalogPage";
 import PipelinePage from "./PipelinePage";
 import { ProposalSettings } from "./ProposalTemplateEditor";
 import PageAccessModal, { useSecuritySection, PanelAccess, CalendarVisibility, ClientEditAccess } from "./PageAccessModal";
-import Select from "../../framework/Select";
 import { passwordProblem, PASSWORD_HINT } from "../../login/LoginPage";
 import TaskSettings from "./TaskSettings";
+import ApiSettings from "./ApiSettings";
 import { FolderTemplatesEditor } from "../clients/ClientDirectory";
 import { ClientMailRulesEditor } from "../clients/ClientWorkspace";
 import HoursEditor from "../calendar/HoursEditor";
@@ -33,7 +32,7 @@ import "./SettingsPage.css";
 const levelLabel = (id: string | null) => (id ? levelName(id) : "—");
 
 type View = "home" | "users" | "organization" | "account" | "interface" | "catalog" | "pipeline" | "proposal" | "tasks" | "salespage" | "mgmtpage" | "clientpage" | "companiespage" | "contactspage"
-  | "ticketspage" | "calendarpage" | "projectspage" | "successpage" | "marketingpage";
+  | "apis" | "ticketspage" | "calendarpage" | "projectspage" | "successpage" | "marketingpage";
 /** Which Page-access panel opens each view (Settings → Organization → Page access → Settings). */
 const VIEW_PANEL: Partial<Record<View, string>> = {
   organization: "settings.organization",
@@ -114,7 +113,7 @@ export default function SettingsPage() {
   }, [location.state]);
   // Global search → Settings › a section (deep link "settings/<view>[/<tab>]").
   useNavSection("/settings", 0, (part) => {
-    const views: View[] = ["home", "organization", "account", "interface", "catalog", "pipeline", "proposal", "tasks", "salespage", "mgmtpage", "clientpage", "companiespage", "contactspage", "ticketspage", "calendarpage", "projectspage", "successpage", "marketingpage"];
+    const views: View[] = ["home", "organization", "account", "interface", "catalog", "pipeline", "proposal", "tasks", "salespage", "mgmtpage", "clientpage", "companiespage", "contactspage", "apis", "ticketspage", "calendarpage", "projectspage", "successpage", "marketingpage"];
     if ((views as string[]).includes(part)) setView(part as View);
   });
   // A panel switched off in Page access can't be opened (also not while it's open).
@@ -124,6 +123,8 @@ export default function SettingsPage() {
     if (panel && !(accessReady && canPanel(panel))) return false;
     if (pages && !(accessReady && pages.some((pg) => canSeePage(pg)))) return false;
     if (SECURITY_ONLY.some((x) => x.view === v) && !canEditAccess) return false;
+    // APIs: keys reach the workspace from outside — the people who set things up
+    if (v === "apis" && !(canManage || isSuperadmin === true || crmLead)) return false;
     return true;
   };
   const view: View = viewOpen(viewRaw) ? viewRaw : "home";
@@ -347,12 +348,15 @@ export default function SettingsPage() {
         icon: I("M4 4h11l5 5v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z", "M14 4v5h5M8 13h8M8 17h8M8 9h2") },
       { v: "tasks", title: "Tasks", sub: "Predefined tasks & processes", accent: "#5b6ee1", keys: "tasks processes templates",
         icon: I("M9 6h11M9 12h11M9 18h11", "M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2") },
+      { v: "apis", title: "APIs", sub: "Website forms send you leads; other apps reach your companies, contacts & documents", accent: "#0a6f4d",
+        keys: "api apis keys import website web form demo request leads integration companies contacts documents files folders endpoint",
+        icon: I("M7 8l-4 4 4 4M17 8l4 4-4 4M14 5l-4 14") },
     ];
     const pageTiles: Tile[] = [
       { v: "salespage", title: "Deals", sub: "Import, export, deal fields & sales roles", accent: "#3c9ae0", keys: "sales deals import export fields roles", icon: I("M4 19V9M10 19V5M16 19v-7M22 19H2") },
       { v: "companiespage", title: "Companies", sub: "Fields, sectors, sources, import & clean-up", accent: "#d98324", keys: "companies fields sectors sources import", icon: I("M3 21h18M5 21V7l7-4 7 4v14M9 21v-4h6v4M9 9h.01M15 9h.01M9 13h.01M15 13h.01") },
       { v: "contactspage", title: "Contacts", sub: "Fields, import, export & clean-up", accent: "#e0574b", keys: "contacts people fields import", icon: I("M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8") },
-      { v: "clientpage", title: "Clients", sub: "Who edits contracts & deals, folder templates, mail rules & API access", accent: "#12b57f", keys: "clients api documents folders mail email rules domain editing rights contracts deals permissions edit", icon: I("M7 8l-4 4 4 4M17 8l4 4-4 4M14 5l-4 14") },
+      { v: "clientpage", title: "Clients", sub: "Who edits contracts & deals, folder templates & mail rules", accent: "#12b57f", keys: "clients documents folders mail email rules domain editing rights contracts deals permissions edit", icon: I("M3 21h18M5 21V7l7-4 7 4v14M9 21v-4h6v4M9 9h.01M15 9h.01M9 13h.01M15 13h.01") },
       { v: "calendarpage", title: "Calendar", sub: "Time off & approvals, public holidays, working hours and cutoffs", accent: "#3c9ae0", keys: "calendar time off vacation holidays approvals allowance hours cutoffs billing security",
         icon: I("M3 9h18M8 3v4M16 3v4", "M5 5h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z") },
       ...SECURITY_ONLY.map((x) => ({ v: x.view, title: x.title.replace(/ page$/, ""), sub: x.sub, accent: x.accent, keys: `${x.page} security`, icon: I(...x.svg.split(/(?=M)/)) })),
@@ -415,7 +419,8 @@ export default function SettingsPage() {
   // ---- Page settings (second row) ----
   if (view === "companiespage" && crmLead) return <CompanySettings onBack={() => setView("home")} />;
   if (view === "contactspage" && crmLead) return <ContactSettings onBack={() => setView("home")} />;
-  if (view === "clientpage") return <ClientPageSettings onBack={() => setView("home")} canManage={canManage || isSuperadmin === true} />;
+  if (view === "clientpage") return <ClientPageSettings onBack={() => setView("home")} canManage={canManage || isSuperadmin === true} onApis={viewOpen("apis") ? () => setView("apis") : undefined} />;
+  if (view === "apis") return <ApiSettings onBack={() => setView("home")} canManage={canManage || isSuperadmin === true || crmLead} />;
   if (view === "salespage") return <SalesPage settings={{ onBack: () => setView("home") }} />;
   if (view === "calendarpage") return <CalendarPageSettings onBack={() => setView("home")} />;
   if (view === "mgmtpage") return <PageOnlySettings page="management" icon="grid" title="Management page" sub="Settings for incoming, billing & bonuses — and who sees whose figures" onBack={() => setView("home")} />;
@@ -647,35 +652,6 @@ export default function SettingsPage() {
     </div>
   );
 }
-/* =====================================================================
-   Settings → Client page: API keys for the client files API
-   (served by the manage-users Edge Function under /api).
-   ===================================================================== */
-interface ApiKeyRow {
-  id: string; name: string; prefix: string; access: "read" | "write"; client_ids: string[] | null;
-  expires_at: string | null; last_used_at: string | null; revoked_at: string | null; created_at: string;
-}
-const API_BASE = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/manage-users/api`;
-const API_ENDPOINTS: [string, string, string, boolean][] = [
-  ["GET", "/clients", "Clients this key can reach", false],
-  ["GET", "/clients/{client}/tree", "Every folder (with its path) and file of a client", false],
-  ["GET", "/clients/{client}/files?folder=Contracts/2026", "Files in one folder (id or path); no folder = all", false],
-  ["GET", "/clients/{client}/files/{file}", "File details and a download link valid for 10 min (?redirect=1 jumps to it)", false],
-  ["GET", "/clients/{client}/files/{file}/content", "The file itself", false],
-  ["POST", "/clients/{client}/files?name=offer.pdf&folder=Contracts", "Upload: the body is the file; missing folders are created", true],
-  ["PUT", "/clients/{client}/files/{file}", "Replace the file's content (body = new file)", true],
-  ["PATCH", "/clients/{client}/files/{file}", "JSON { name, note, folder } — rename, note or move", true],
-  ["DELETE", "/clients/{client}/files/{file}", "Delete the file", true],
-  ["GET", "/clients/{client}/folders", "Folders with their paths", false],
-  ["POST", "/clients/{client}/folders", "JSON { name, parent } — create (parent = id or path)", true],
-  ["PATCH", "/clients/{client}/folders/{folder}", "JSON { name, parent } — rename or move", true],
-  ["DELETE", "/clients/{client}/folders/{folder}", "Delete the folder, its subfolders and files", true],
-];
-const shortDate = (d: string | null) => d ? new Date(d).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" }) : "—";
-const hashKey = async (t: string) =>
-  Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t))))
-    .map((b) => b.toString(16).padStart(2, "0")).join("");
-
 /** A page's settings that, for now, hold only its Security section. */
 /** Settings › Calendar: what the calendar runs on. People ask for their own time off from the calendar. */
 function CalendarPageSettings({ onBack }: { onBack: () => void }) {
@@ -702,179 +678,10 @@ function PageOnlySettings({ page, icon, title, sub, onBack }: { page: PageKey; i
   );
 }
 
-export function ClientPageSettings({ onBack, canManage }: { onBack: () => void; canManage: boolean }) {
+export function ClientPageSettings({ onBack, canManage, onApis }: { onBack: () => void; canManage: boolean; onApis?: () => void }) {
   const secSection = useSecuritySection("clients");
-  const [keys, setKeys] = useState<ApiKeyRow[] | null>(null);
-  const [clients, setClients] = useState<{ id: string; name: string }[]>([]);
-  const [err, setErr] = useState<string | null>(null);
-  const [form, setForm] = useState<{ name: string; access: "read" | "write"; scope: "all" | "some"; picked: string[]; expires: string } | null>(null);
-  const [q, setQ] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [fresh, setFresh] = useState<string | null>(null);
-  const [copied, setCopied] = useState<string | null>(null);
-  const [askRevoke, setAskRevoke] = useState<string | null>(null);
-
-  const load = async () => {
-    const [k, c] = await Promise.all([
-      supabase.from("client_api_keys").select("id, name, prefix, access, client_ids, expires_at, last_used_at, revoked_at, created_at").order("created_at", { ascending: false }),
-      supabase.from("clients").select("id, name").order("name"),
-    ]);
-    if (k.error) { setErr(/client_api_keys/.test(k.error.message) ? "Run client_api.sql in Supabase first." : k.error.message); setKeys([]); }
-    else setKeys((k.data ?? []) as ApiKeyRow[]);
-    setClients(((c.data ?? []) as any[]).map((x) => ({ id: String(x.id), name: x.name ?? "" })));
-  };
-  useEffect(() => { load(); }, []);
-
-  const copy = (t: string, k: string) => {
-    navigator.clipboard?.writeText(t).then(() => { setCopied(k); window.setTimeout(() => setCopied(null), 1400); }).catch(() => {});
-  };
-  const clientName = (id: string) => clients.find((c) => c.id === id)?.name ?? "Unknown client";
-
-  const create = async () => {
-    if (!form || !form.name.trim()) return;
-    if (form.scope === "some" && !form.picked.length) { setErr("Pick at least one client."); return; }
-    setBusy(true); setErr(null);
-    const bytes = crypto.getRandomValues(new Uint8Array(32));
-    const key = "fck_" + Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
-    const days = Number(form.expires);
-    const { error } = await supabase.from("client_api_keys").insert({
-      name: form.name.trim(), prefix: key.slice(0, 12), key_hash: await hashKey(key), access: form.access,
-      client_ids: form.scope === "some" ? form.picked : null,
-      expires_at: days > 0 ? new Date(Date.now() + days * 86400000).toISOString() : null,
-    });
-    setBusy(false);
-    if (error) { setErr(error.message); return; }
-    setFresh(key); setForm(null); setQ("");
-    load();
-  };
-  const revoke = async (id: string) => {
-    setAskRevoke(null);
-    const { error } = await supabase.from("client_api_keys").update({ revoked_at: new Date().toISOString() }).eq("id", id);
-    if (error) { setErr(error.message); return; }
-    load();
-  };
-
-  const statusOf = (k: ApiKeyRow) => k.revoked_at ? "revoked" : k.expires_at && new Date(k.expires_at).getTime() < Date.now() ? "expired" : "active";
-  const shownClients = q ? clients.filter((c) => c.name.toLowerCase().includes(q.toLowerCase())) : clients;
-  const sample = `curl -H "x-api-key: fck_…" "${API_BASE}/clients"`;
-
-  const keysBody = (
-    <>
-      <div className="cps-keybar">
-        <p className="st-note">Each key reaches the documents and folders of all clients, or only the ones you pick. Read keys list and download; write keys also upload, replace, rename, move and delete.</p>
-        {canManage && !form && <button className="cl-primary" onClick={() => { setForm({ name: "", access: "read", scope: "all", picked: [], expires: "0" }); setFresh(null); setErr(null); }}>+ New key</button>}
-      </div>
-
-      {fresh && (
-        <div className="cps-fresh">
-          <b>Your new key</b>
-          <p>Copy it now: it won't be shown again.</p>
-          <div className="cps-base is-key">
-            <code>{fresh}</code>
-            <button className="cps-copy" onClick={() => copy(fresh, "fresh")}>{copied === "fresh" ? "Copied" : "Copy"}</button>
-          </div>
-          <button className="cps-link" onClick={() => setFresh(null)}>Done</button>
-        </div>
-      )}
-
-      {form && (
-        <div className="cps-form">
-          <div className="cl-field"><label>Name</label>
-            <input className="cl-input" autoFocus placeholder="e.g. SharePoint sync" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-          </div>
-          <div className="cps-row">
-            <div className="cl-field"><label>Access</label>
-              <div className="cps-seg">
-                {(["read", "write"] as const).map((a) => (
-                  <button key={a} className={form.access === a ? "is-on" : ""} onClick={() => setForm({ ...form, access: a })}>{a === "read" ? "Read only" : "Read & write"}</button>
-                ))}
-              </div>
-            </div>
-            <div className="cl-field"><label>Clients</label>
-              <div className="cps-seg">
-                <button className={form.scope === "all" ? "is-on" : ""} onClick={() => setForm({ ...form, scope: "all" })}>All clients</button>
-                <button className={form.scope === "some" ? "is-on" : ""} onClick={() => setForm({ ...form, scope: "some" })}>Only some</button>
-              </div>
-            </div>
-            <div className="cl-field"><label>Expires</label>
-              <Select value={form.expires} onChange={(v) => setForm({ ...form, expires: v })}
-                options={[{ value: "0", label: "Never" }, { value: "30", label: "In 30 days" }, { value: "90", label: "In 90 days" }, { value: "365", label: "In a year" }]} />
-            </div>
-          </div>
-          {form.scope === "some" && (
-            <div className="cps-pick">
-              <input className="cl-input" placeholder="Search clients…" value={q} onChange={(e) => setQ(e.target.value)} />
-              <div className="cps-pick-list">
-                {shownClients.map((c) => {
-                  const on = form.picked.includes(c.id);
-                  return (
-                    <button key={c.id} className={`cps-chip ${on ? "is-on" : ""}`}
-                      onClick={() => setForm({ ...form, picked: on ? form.picked.filter((x) => x !== c.id) : [...form.picked, c.id] })}>
-                      <i />{c.name || "Unnamed"}
-                    </button>
-                  );
-                })}
-                {!shownClients.length && <span className="st-note">No clients match.</span>}
-              </div>
-            </div>
-          )}
-          <div className="cps-actions">
-            <button className="cps-link" onClick={() => { setForm(null); setErr(null); }}>Cancel</button>
-            <button className="cl-primary" disabled={busy || !form.name.trim()} onClick={create}>{busy ? "Creating…" : "Create key"}</button>
-          </div>
-        </div>
-      )}
-
-      {err && <p className="su-error">{err}</p>}
-
-      <div className="cps-keys">
-        {keys === null && <PageLoader fill={false} size={80} label="Loading keys" />}
-        {keys?.length === 0 && !err && <p className="cps-none">No keys yet. Create one to let another app reach client documents.</p>}
-        {keys?.map((k, i) => {
-          const st = statusOf(k);
-          return (
-            <div className={`cps-key is-${st}`} key={k.id} style={{ ["--i" as any]: i }}>
-              <span className="cps-key-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M15 7a4 4 0 1 1-3.9 4.9L3 20v-3h3v-3h3l2.1-2.1A4 4 0 0 1 15 7zM16 10h.01" /></svg></span>
-              <div className="cps-key-main">
-                <b>{k.name}</b>
-                <code>{k.prefix}…</code>
-              </div>
-              <span className={`cps-badge is-${k.access}`}>{k.access === "write" ? "Read & write" : "Read only"}</span>
-              <span className="cps-scope" title={k.client_ids?.length ? k.client_ids.map(clientName).join(", ") : undefined}>
-                {k.client_ids?.length ? `${k.client_ids.length} client${k.client_ids.length === 1 ? "" : "s"}` : "All clients"}
-              </span>
-              <span className="cps-meta">Used {k.last_used_at ? shortDate(k.last_used_at) : "never"}</span>
-              <span className="cps-meta">{k.expires_at ? `Expires ${shortDate(k.expires_at)}` : "No expiry"}</span>
-              {st !== "active" ? <span className={`cps-badge is-${st}`}>{st === "revoked" ? "Revoked" : "Expired"}</span>
-                : !canManage ? <span className="cps-badge is-active">Active</span>
-                : askRevoke === k.id ? (
-                  <span className="cps-ask">Revoke? <button className="is-yes" onClick={() => revoke(k.id)}>Yes</button><button onClick={() => setAskRevoke(null)}>No</button></span>
-                ) : <button className="cps-revoke" onClick={() => setAskRevoke(k.id)}>Revoke</button>}
-            </div>
-          );
-        })}
-      </div>
-    </>
-  );
-  const eps = (pred: (path: string) => boolean) => (
-    <div className="cps-eps">
-      {API_ENDPOINTS.filter(([, path]) => pred(path)).map(([m, path, what, write], i) => (
-        <div className="cps-ep" key={m + path} style={{ ["--i" as any]: i }}>
-          <span className={`cps-m is-${m.toLowerCase()}`}>{m}</span>
-          <code>{path}</code>
-          <span className="cps-ep-d">{what}{write && <em>write</em>}</span>
-        </div>
-      ))}
-    </div>
-  );
-  const active = (keys ?? []).filter((k) => statusOf(k) === "active").length;
   return (
-    <SettingsShell icon="lock" title="Client page" sub="Who can edit what, standard folders, mail rules for every client, and access for other apps" onBack={onBack}
-      tags={<>
-        <span className="sx-tag is-ok">{active} active key{active === 1 ? "" : "s"}</span>
-        <span className="sx-tag">{clients.length} clients</span>
-        <span className="sx-tag">{API_ENDPOINTS.length} endpoints</span>
-      </>}
+    <SettingsShell icon="lock" title="Client page" sub="Who can edit what, standard folders and mail rules for every client" onBack={onBack}
       sections={[
         { k: "editing", label: "Editing rights", icon: "pen", tone: "violet", title: "Editing rights", hint: "Who can change contracts, signed products, deals and the company inside a client",
           body: <ClientEditAccess /> },
@@ -882,25 +689,13 @@ export function ClientPageSettings({ onBack, canManage }: { onBack: () => void; 
           body: <FolderTemplatesEditor canEdit={canManage} /> },
         { k: "mail", label: "Mail rules", icon: "mail", tone: "indigo", title: "Mail rules", hint: "Which e-mail lands in each client's Emails tab, by address or @domain",
           body: <ClientMailRulesEditor canEdit={canManage} /> },
-        { k: "keys", label: "API keys", icon: "lock", tone: "green", count: (keys ?? []).length, title: "API keys", hint: "Who can reach client documents from outside, and how much they can do", body: keysBody },
-        { k: "connect", label: "Connecting", icon: "link", tone: "blue", title: "Connecting", hint: "Where to call and how to send the key",
+        { k: "api", label: "API access", icon: "link", tone: "green", title: "API access", hint: "Keys for other apps to reach client documents now live in Settings › APIs",
           body: (
-            <>
-              <div className="cps-base">
-                <span className="cps-k">Base URL</span>
-                <code>{API_BASE}</code>
-                <button className="cps-copy" onClick={() => copy(API_BASE, "base")}>{copied === "base" ? "Copied" : "Copy"}</button>
-              </div>
-              <p className="st-note">Send the key in the <code>x-api-key</code> header. Folders can be given by id or by path, like <code>Contracts/2026</code>.</p>
-              <div className="cps-base is-sample">
-                <code>{sample}</code>
-                <button className="cps-copy" onClick={() => copy(sample, "sample")}>{copied === "sample" ? "Copied" : "Copy"}</button>
-              </div>
-            </>
+            <div className="cps-keybar">
+              <p className="st-note">The client documents API, its keys and endpoints moved to <b>Settings › APIs</b>, next to the keys your website uses to send leads.</p>
+              {onApis && <button className="cl-primary" onClick={onApis}>Open APIs</button>}
+            </div>
           ) },
-        { k: "clients", label: "Clients", icon: "building", tone: "violet", count: API_ENDPOINTS.filter(([, p]) => !/\/(files|folders)/.test(p)).length, title: "Clients & tree", hint: "The clients a key reaches, and everything in one client at once", body: eps((p) => !/\/(files|folders)/.test(p)) },
-        { k: "files", label: "Files", icon: "note", tone: "amber", count: API_ENDPOINTS.filter(([, p]) => /\/files/.test(p)).length, title: "Files", hint: "List, download, upload, replace, rename, move and delete files", body: eps((p) => /\/files/.test(p)) },
-        { k: "folders", label: "Folders", icon: "tree", tone: "indigo", count: API_ENDPOINTS.filter(([, p]) => /\/folders/.test(p)).length, title: "Folders", hint: "Create, rename, move and delete folders", body: eps((p) => /\/folders/.test(p)) },
         ...(secSection ? [secSection] : []),
       ]} />
   );
