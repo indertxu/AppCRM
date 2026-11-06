@@ -13,7 +13,7 @@ import {
   uploadCsFile, removeCsFile, runCsSequences, testCsTemplate, launchCsCampaign, loadTeamMailboxes, CS_TAGS, fillCsTags, renderCsEmail, cleanCsBody, NEEDS_AUTO,
   scanCsMail, loadCsMailSync, type CsMailSync, csVariantFor, inspectCsFile, previewCsAttachment, saveCsFolder, deleteCsFolder, moveCsTemplate, setClientsCadence, type CsFolder, loadPdfjs, csFileBlob, csUnderEdit, csPatchOf, csLineBox, type CsEdit, type CsRgb, type CsPatch, type CsAttachment, type CsVariant, type CsVariantAudience,
   type CsData, type CsUpsell, type CsHealthStatus, type CsQbr, type RevenueEvent,
-  type CsPriority, type CsAuto, type CsTemplate, type CsSequence, type CsRun, type CsStep,
+  type CsPriority, type CsAuto, type CsTemplate, type CsSequence, type CsRun, type CsStep, type CsMailLog,
 } from "./useClientsData";
 import SalesMultiFilter from "../sales/sales/SalesMultiFilter";
 import { createPortal } from "react-dom";
@@ -33,6 +33,7 @@ import "./ClientsPage.css";
 import { useNavSection, useClientEdit } from "../../framework/pageAccess";
 import { useInactiveIds } from "../../framework/peopleStatus";
 import LinkPopover, { captureLinkTarget, placeLink, type LinkTarget } from "../../framework/LinkPopover";
+import CsFlowEditor, { flowOf, flowEmails, flowStats, flowHere, flowHasBranches, type CsFlowNode } from "./CsFlow";
 
 // Re-export shared types & helpers from their new home so existing imports
 // elsewhere (e.g. ./ClientsPage) keep working unchanged.
@@ -1453,12 +1454,16 @@ function CsFollowUps({ auto, setAuto, accounts, cs, setCs, types, people, me, sa
   const newCampaign = (): Partial<CsSequence> => ({ ...newSeq(), kind: "campaign", sender: "me" });
   /** a one-time campaign goes out now: its clients are taken in and sent it (a big one finishes within the hour) */
   const [sending, setSending] = useState<string | null>(null);
+  /** "Send now" always asks twice (CsSendConfirm) */
+  const [confirmQ, setConfirmQ] = useState<CsSequence | null>(null);
   const sendCampaign = async (q: CsSequence) => {
     const fits = accounts.filter((c) => csFits(q, c));
-    const people = fits.reduce((n, c) => n + csTo(q, c, null).length, 0);
     if (!q.steps.some((s) => s.template_id)) { say("Pick its e-mail first."); setSeq(q); return; }
     if (!fits.length) { say("No client matches it."); return; }
-    if (!window.confirm(`Send “${q.name}” now to ${people} ${people === 1 ? "person" : "people"} at ${fits.length} client${fits.length === 1 ? "" : "s"}${q.from_address ? `, from ${q.from_address}` : ""}? It goes out once.`)) return;
+    setConfirmQ(q);
+  };
+  const doSend = async (q: CsSequence) => {
+    setConfirmQ(null);
     setSending(q.id);
     const r = await launchCsCampaign(q.id);
     setSending(null);
@@ -1615,10 +1620,13 @@ function CsFollowUps({ auto, setAuto, accounts, cs, setCs, types, people, me, sa
                       </header>
                       <ol className="cs4-seq-steps">
                         <li><span className="cs4-seq-wait">Once</span><span className="cs4-seq-dot" /><span className="cs4-seq-name">{tplName(q.steps[0]?.template_id ?? null)}</span></li>
+                        {q.steps.length > 1 && <li className="is-loop"><span className="cs4-seq-wait">Then</span><span className="cs4-seq-dot" /><span className="cs4-seq-name">{q.steps.length - 1} follow-up{q.steps.length === 2 ? "" : "s"}{q.flow && flowHasBranches(q.flow.nodes) ? " · by opens & replies" : ""}</span></li>}
                       </ol>
                       <div className="cs4-seq-stats">
                         {done ? <>
                           <span><b>{sentAll}</b><i>sent</i></span>
+                          {sentAll > 0 && <span title="The e-mails' pictures loaded"><b>{Math.round((all.filter((l) => l.status === "sent" && l.opened_at).length / sentAll) * 100)}%</b><i>opened</i></span>}
+                          {sentAll > 0 && <span title="A reply arrived in a mailbox we read"><b>{Math.round((all.filter((l) => l.status === "sent" && l.replied_at).length / sentAll) * 100)}%</b><i>replied</i></span>}
                           {failedAll > 0 && <span className="is-bad" title="See Activity"><b>{failedAll}</b><i>failed</i></span>}
                           {inIt > 0 && <span title="Go out on the next hourly run"><b>{inIt}</b><i>clients to go</i></span>}
                           <span title={csDate(q.launched_at!)}><b>{pName(q.launched_by).split(" ")[0]}</b><i>sent it</i></span>
@@ -1646,7 +1654,8 @@ function CsFollowUps({ auto, setAuto, accounts, cs, setCs, types, people, me, sa
                       <button type="button" role="switch" aria-checked={q.active} className={`csx-switch ${q.active ? "is-on" : ""}`} onClick={() => toggleSeq(q)}><i />{q.active ? "On" : "Off"}</button>
                     </header>
                     <ol className="cs4-seq-steps">
-                      {q.steps.map((st, k) => (
+                      {q.flow && flowHasBranches(q.flow.nodes) && <li className="is-loop"><span className="cs4-seq-wait">Tree</span><span className="cs4-seq-dot" /><span className="cs4-seq-name">{q.steps.length} e-mail{q.steps.length === 1 ? "" : "s"} with checks on opens & replies</span></li>}
+                      {!(q.flow && flowHasBranches(q.flow.nodes)) && q.steps.map((st, k) => (
                         <li key={st.id}>
                           <span className="cs4-seq-wait">{k === 0 ? (q.start_mode === "before_renewal" ? "Start" : st.wait_days ? `+${st.wait_days} d` : "Day 0") : `+${st.wait_days} d`}</span>
                           <span className="cs4-seq-dot" />
@@ -1658,6 +1667,7 @@ function CsFollowUps({ auto, setAuto, accounts, cs, setCs, types, people, me, sa
                     <div className="cs4-seq-stats">
                       <span title={`${fits} client${fits === 1 ? "" : "s"} match it`}><b>{q.active ? inIt : fits}</b><i>{q.active ? "in it" : "would get it"}</i></span>
                       <span title="In the last 30 days"><b>{sent}</b><i>sent (30 d)</i></span>
+                      {sent > 0 && (() => { const ls = log.filter((l) => l.sequence_id === q.id && l.status === "sent" && new Date(l.sent_at).getTime() > since30); return <span title="Of the e-mails sent in the last 30 days: opened (pictures loaded) · replied"><b>{Math.round((ls.filter((l) => l.opened_at).length / ls.length) * 100)}% · {Math.round((ls.filter((l) => l.replied_at).length / ls.length) * 100)}%</b><i>opened · replied</i></span>; })()}
                       {failed > 0 && <span className="is-bad" title="In the last 30 days — see Activity"><b>{failed}</b><i>failed</i></span>}
                       <span title={next?.next_at ? csDate(next.next_at) : undefined}><b>{next?.next_at ? new Date(next.next_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "—"}</b><i>next e-mail</i></span>
                     </div>
@@ -1892,7 +1902,11 @@ function CsFollowUps({ auto, setAuto, accounts, cs, setCs, types, people, me, sa
 
       {tpl && <CsTemplateEditor initial={tpl} folders={folders} accounts={accounts} people={people} me={me} say={say} onClose={() => setTpl(null)} onSaved={(t) => { upTpl(t); }}
         onDelete={tpl.id ? () => { const t = templates.find((x) => x.id === tpl.id); setTpl(null); if (t) dropTpl(t); } : undefined} />}
-      {seq && <CsSequenceEditor onSend={(q) => { setSeq(null); void sendCampaign(q); }} initial={seq} templates={templates} folders={folders} accounts={accounts} runs={runs} types={types} me={me} people={people}
+      {confirmQ && (() => {
+        const fits = accounts.filter((c) => csFits(confirmQ, c));
+        return <CsSendConfirm q={confirmQ} clients={fits.length} people={fits.reduce((n, c) => n + csTo(confirmQ, c, null).length, 0)} templates={templates} sender={confirmQ.from_address || (confirmQ.sender === "owner" ? "each client's owner" : pName(me))} onCancel={() => setConfirmQ(null)} onSend={() => void doSend(confirmQ)} />;
+      })()}
+      {seq && <CsSequenceEditor onSend={(q) => { setSeq(null); void sendCampaign(q); }} initial={seq} templates={templates} folders={folders} accounts={accounts} runs={runs} log={log} types={types} me={me} people={people}
         onClose={() => setSeq(null)} onSaved={(q) => { upSeq(q); say(q.kind === "campaign" ? (q.launched_at ? `${q.name} saved` : `${q.name} saved as a draft — send it when you're ready`) : q.active ? `${q.name} saved — it's on` : `${q.name} saved`); }} onNewTemplate={() => { setSeq(null); setView("blueprints"); setTpl(newTpl()); }} />}
     </div>
   );
@@ -2944,8 +2958,48 @@ const SEQ_TOUR: SeqTourStep[] = [
 ];
 
 /* ---------- the sequence editor: who, when, which e-mails ---------- */
-function CsSequenceEditor({ initial, templates, folders, accounts, runs, types, me, people, onClose, onSaved, onNewTemplate, onSend }: {
-  initial: Partial<CsSequence>; templates: CsTemplate[]; folders: CsFolder[]; accounts: CsClient[]; runs: CsRun[]; types: { id: string; name: string }[];
+/** Sending a one-time campaign: always confirmed twice — what goes to whom, then "yes, now". */
+function CsSendConfirm({ q, clients, people, templates, sender, onCancel, onSend }: {
+  q: CsSequence; clients: number; people: number; templates: CsTemplate[]; sender: string; onCancel: () => void; onSend: () => void;
+}) {
+  const [stage, setStage] = useState<1 | 2>(1);
+  const nodes = flowOf(q);
+  const mails = flowEmails(nodes);
+  const first = templates.find((t) => t.id === mails[0]?.template_id);
+  const tasks = (function count(xs: CsFlowNode[]): number { return xs.reduce((n, x) => n + (x.type === "task" ? 1 : 0) + (x.type === "branch" ? Object.values(x.paths ?? {}).reduce((m, p) => m + count(p ?? []), 0) : 0), 0); })(nodes);
+  useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === "Escape") onCancel(); }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, [onCancel]);
+  return createPortal(
+    <div className="csx-modal-bg cs4-sc-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
+      <div className={`cs4-sc is-${stage}`} role="alertdialog" aria-modal="true" aria-label="Send the campaign">
+        <span className="cs4-sc-ico"><CsIco n="send" s={20} /></span>
+        <h3>{stage === 1 ? `Send “${q.name}”?` : "Last check"}</h3>
+        {stage === 1 ? <>
+          <dl className="cs4-sc-dl">
+            <div><dt>To</dt><dd><b>{people} {people === 1 ? "person" : "people"}</b> at {clients} client{clients === 1 ? "" : "s"}</dd></div>
+            <div><dt>From</dt><dd>{sender}</dd></div>
+            <div><dt>First e-mail</dt><dd><b>{first?.name ?? "—"}</b>{first?.subject ? <i>Subject: {first.subject}</i> : null}</dd></div>
+            {(mails.length > 1 || tasks > 0) && <div><dt>Then</dt><dd>{mails.length > 1 ? `${mails.length - 1} follow-up e-mail${mails.length === 2 ? "" : "s"}` : ""}{mails.length > 1 && tasks ? " and " : ""}{tasks ? `${tasks} task${tasks === 1 ? "" : "s"}` : ""}, by themselves{flowHasBranches(nodes) ? ", by whether each client opens or replies" : ""}</dd></div>}
+          </dl>
+          <p className="cs4-sc-note">Check the e-mail (send yourself a test from the campaign) and who gets it before you go on.</p>
+          <div className="cs4-sc-f">
+            <button type="button" className="csx-ghost" onClick={onCancel} autoFocus>Cancel</button>
+            <button type="button" className="csx-primary" onClick={() => setStage(2)}>Continue</button>
+          </div>
+        </> : <>
+          <p className="cs4-sc-big">It goes out <b>right now</b> to <b>{people} {people === 1 ? "person" : "people"}</b>, and it can't be taken back.</p>
+          <div className="cs4-sc-f">
+            <button type="button" className="csx-ghost" onClick={() => setStage(1)}>Back</button>
+            <button type="button" className="csx-primary is-danger" onClick={onSend} autoFocus><CsIco n="send" s={13} />Yes, send it now</button>
+          </div>
+        </>}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function CsSequenceEditor({ initial, templates, folders, accounts, runs, log, types, me, people, onClose, onSaved, onNewTemplate, onSend }: {
+  initial: Partial<CsSequence>; templates: CsTemplate[]; folders: CsFolder[]; accounts: CsClient[]; runs: CsRun[]; log: CsMailLog[]; types: { id: string; name: string }[];
   me: string | null; people: Employee[];
   onClose: () => void; onSaved: (q: CsSequence) => void; onNewTemplate: () => void;
   /** a one-time campaign, saved: send it now */
@@ -2955,7 +3009,9 @@ function CsSequenceEditor({ initial, templates, folders, accounts, runs, types, 
   /** one-time campaign (sent once, when you press Send) or a recurring sequence */
   const camp = q.kind === "campaign";
   const sent = camp && !!q.launched_at;
-  const setKind = (k: "sequence" | "campaign") => setQ((x) => ({ ...x, kind: k, ...(k === "campaign" ? { repeat: false, start_mode: "now" as const, steps: (x.steps ?? []).slice(0, 1).map((st) => ({ ...st, wait_days: 0 })), audience: { ...(x.audience ?? {}), quiet_days: null } } : {}) }));
+  const setKind = (k: "sequence" | "campaign") => setQ((x) => ({ ...x, kind: k, ...(k === "campaign" ? { repeat: false, start_mode: "now" as const, audience: { ...(x.audience ?? {}), quiet_days: null } } : {}) }));
+  /** its steps as a tree: e-mails, "wait and check" branches, tasks, end (CsFlow.tsx) */
+  const [nodes, setNodes] = useState<CsFlowNode[]>(() => { const n = flowOf(initial); return n.length ? n : [{ id: Math.random().toString(36).slice(2, 9), type: "email", template_id: templates[0]?.id ?? "", wait_days: 0 }]; });
   /* the team mailboxes it can go out from (a Microsoft 365 shared mailbox: no password, "Send as" for the sender) */
   const [boxes, setBoxes] = useState<{ address: string; label: string }[]>([]);
   useEffect(() => { loadTeamMailboxes().then(setBoxes).catch(() => setBoxes([])); }, []);
@@ -2968,9 +3024,9 @@ function CsSequenceEditor({ initial, templates, folders, accounts, runs, types, 
   const a = q.audience ?? {};
   const setA = (p: Partial<NonNullable<CsSequence["audience"]>>) => setQ((x) => ({ ...x, audience: { ...(x.audience ?? {}), ...p } }));
   const tog = (k: "priorities" | "types" | "health", v: string) => { const cur = a[k] ?? []; setA({ [k]: cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v] }); };
-  const steps = q.steps ?? [];
-  const setStep = (i: number, p: Partial<CsStep>) => setQ((x) => ({ ...x, steps: (x.steps ?? []).map((s, j) => (j === i ? { ...s, ...p } : s)) }));
-  const moveStep = (i: number, dir: -1 | 1) => setQ((x) => { const xs = [...(x.steps ?? [])]; const j = i + dir; if (j < 0 || j >= xs.length) return x; [xs[i], xs[j]] = [xs[j], xs[i]]; return { ...x, steps: xs }; });
+  /** its e-mails, in order (for the summaries) */
+  const steps: CsStep[] = flowEmails(nodes).map((n) => ({ id: n.id, template_id: n.template_id ?? "", wait_days: Number(n.wait_days) || 0 }));
+  const branchy = flowHasBranches(nodes);
   const full = { ...q, audience: who === "picked" ? { clients: a.clients ?? [], exclude: a.exclude ?? [] } : { ...a, clients: [] } } as CsSequence;
   const fits = accounts.filter((c) => csFits(full, c));
   const people_n = fits.reduce((n, c) => n + csTo(full, c, runs.find((r) => r.sequence_id === q.id && r.client_id === c.id) ?? null).length, 0);
@@ -2978,12 +3034,14 @@ function CsSequenceEditor({ initial, templates, folders, accounts, runs, types, 
   const fromBox = boxOn ? (q.from_address ?? "").trim() : "";
   const save = async (activate?: boolean, thenSend = false) => {
     if (!q.name?.trim()) { setErr("Give it a name."); return; }
-    const st = (camp ? steps.slice(0, 1) : steps).filter((s) => s.template_id);
+    const st = steps.filter((s) => s.template_id);
     if (!st.length) { setErr(camp ? "Pick its e-mail." : "Pick the e-mail of at least one step."); return; }
+    if (flowEmails(nodes).some((n) => !n.template_id)) { setErr("Every e-mail step needs its blueprint."); return; }
+    if (camp && nodes[0]?.type !== "email") { setErr("A one-time campaign starts with an e-mail."); return; }
     if (who === "picked" && !(a.clients ?? []).length) { setErr("Pick the clients it goes to."); return; }
     if (boxOn && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fromBox)) { setErr("Write the team mailbox's address — e.g. cs.iberia@yourcompany.com."); return; }
     setBusy(true); setErr(null);
-    const r = await saveCsSequence({ ...full, steps: st, from_address: fromBox || null, active: camp ? !!q.launched_at : activate ?? q.active, ...(camp ? { repeat: false, start_mode: "now" as const } : {}) });
+    const r = await saveCsSequence({ ...full, steps: st, flow: { nodes }, from_address: fromBox || null, active: camp ? !!q.launched_at : activate ?? q.active, ...(camp ? { repeat: false, start_mode: "now" as const } : {}) });
     setBusy(false);
     if (r.error || !r.row) { setErr(r.error ?? "Not saved."); return; }
     const row = { ...r.row, audience: r.row.audience ?? {}, steps: r.row.steps ?? [] };
@@ -3002,10 +3060,6 @@ function CsSequenceEditor({ initial, templates, folders, accounts, runs, types, 
   const inNow = q.id ? runs.filter((r) => r.sequence_id === q.id && r.status === "active").length : 0;
   const clientOpts = accounts.map((c) => ({ value: c.id, label: c.name }));
   const before = q.start_mode === "before_renewal";
-  /** the day each e-mail goes out, counted from the client's start */
-  const dayOf = steps.map((_, i) => steps.slice(0, i + 1).reduce((t, st, j) => t + (j === 0 && before ? 0 : Number(st.wait_days) || 0), 0));
-  const tplName = (id: string) => templates.find((t) => t.id === id)?.name ?? "";
-  const folderName = (t: CsTemplate) => (t.folder_id ? folders.find((f) => f.id === t.folder_id)?.name ?? "" : "");
   // the step-by-step guide: each step lights up the part of the editor it explains
   const [tour, setTour] = useState<number | null>(null);
   useEffect(() => {
@@ -3033,7 +3087,7 @@ function CsSequenceEditor({ initial, templates, folders, accounts, runs, types, 
   const quietN = Math.max(0, Number(a.quiet_days) || 0);
   const setQuiet = (n: number | null) => setA({ quiet_days: n && n > 0 ? n : null });
   const waitingN = quietN ? accounts.filter((c) => csFits(full, c, null, true) && (csQuietLeft(full, c) ?? 0) > 0).length : 0;
-  const sentence = camp ? `One e-mail to ${people_n} ${people_n === 1 ? "person" : "people"} at ${fits.length} client${fits.length === 1 ? "" : "s"} · ${sent ? `sent ${new Date(q.launched_at!).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}` : "sent once, when you press Send"}` : `${steps.length} e-mail${steps.length === 1 ? "" : "s"} to ${fits.length} client${fits.length === 1 ? "" : "s"} · ${quietN ? `starts once a client has gone ${quietN} days without contact` : before ? `starts ${q.start_days ?? 60} days before each renewal` : "starts as each client joins"} · ${q.repeat ? (quietN ? "again each time it goes quiet" : "then again") : "then stops"}`;
+  const sentence = camp ? `${steps.length > 1 ? `${steps.length} e-mails${branchy ? " with branches" : ""}` : "One e-mail"} to ${people_n} ${people_n === 1 ? "person" : "people"} at ${fits.length} client${fits.length === 1 ? "" : "s"} · ${sent ? `sent ${new Date(q.launched_at!).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}` : "starts when you press Send"}` : `${steps.length} e-mail${steps.length === 1 ? "" : "s"}${branchy ? " with branches" : ""} to ${fits.length} client${fits.length === 1 ? "" : "s"} · ${quietN ? `starts once a client has gone ${quietN} days without contact` : before ? `starts ${q.start_days ?? 60} days before each renewal` : "starts as each client joins"} · ${q.repeat ? (quietN ? "again each time it goes quiet" : "then again") : "then stops"}`;
   return createPortal(
     <div className="csx-modal-bg cs4-ed-bg" onMouseDown={(e) => { if (e.target === e.currentTarget && tour == null) onClose(); }}>
       <div className={`cs4-ed is-seq ${camp ? "is-camp" : ""} ${tourStep?.at ? "is-touring" : ""}`} role="dialog" aria-modal="true" aria-label={camp ? "One-time campaign" : "Follow-up sequence"}>
@@ -3112,56 +3166,18 @@ function CsSequenceEditor({ initial, templates, folders, accounts, runs, types, 
               </div>
             </section>}
 
-            {camp && (
-              <section className="cs4-ed-sec cs4-sq-sec is-wide">
-                <div className="cs4-sq-sh"><span className="cs4-sq-n">2</span><div><h4>The e-mail</h4><p>Each person gets their own copy, with their name and their client's filled in.</p></div></div>
-                <div className="cs4-camp-mail">
-                  <Select value={steps[0]?.template_id ?? ""} disabled={sent} onChange={(v) => v === "__new" ? onNewTemplate() : setQ((x) => ({ ...x, steps: [{ ...(x.steps?.[0] ?? newStep("", 0)), template_id: v, wait_days: 0 }] }))} placeholder="Pick an e-mail blueprint…" searchable
-                    options={[...[...templates].sort((x, y) => (folderName(x) || "\uffff").localeCompare(folderName(y) || "\uffff") || x.name.localeCompare(y.name)).map((t) => ({ value: t.id, label: t.name, hint: [folderName(t), t.attachments.length ? `${t.attachments.length} file${t.attachments.length === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ") || undefined })), { value: "__new", label: "+ New blueprint…" }]} />
-                  {steps[0]?.template_id && (() => { const t = templates.find((x) => x.id === steps[0].template_id); return t ? <p className="cs4-help">Subject: <b>{t.subject || "(no subject)"}</b>{t.attachments.length ? ` · ${t.attachments.length} attachment${t.attachments.length === 1 ? "" : "s"}` : ""}</p> : null; })()}
-                </div>
-              </section>
-            )}
-
-            {!camp && <section className={`cs4-ed-sec cs4-sq-sec is-wide ${tourOn("mails")}`} data-tour="mails">
-              <div className="cs4-sq-sh"><span className="cs4-sq-n">3</span><div><h4>The e-mails</h4><p>Each e-mail waits its days after the one before it; the first one waits from the start.</p></div>
-                <button type="button" className="cs4-sq-q" onClick={() => ask("mails")} aria-label="Explain the e-mails" title="Explain this"><CsIco n="info" s={14} /></button></div>
-              <ol className="cs4-tl">
-                <li className="cs4-tl-edge">
-                  <span className="cs4-tl-dot is-start"><CsIco n="flag" s={12} /></span>
-                  <div><b>Start</b><i>{quietN ? `Day 0 · the day the client has gone ${quietN} days without contact${before ? ` (from ${q.start_days ?? 60} days before its renewal)` : ""}` : before ? `Day 0 · ${q.start_days ?? 60} days before the client's renewal` : "Day 0 · the day the client joins"}</i></div>
-                </li>
-                {steps.map((st, i) => (
-                  <li key={st.id} className="cs4-tl-step">
-                    <div className="cs4-tl-wait">
-                      {i === 0 && before ? <span className="cs4-tl-pill"><CsIco n="clock" s={12} />Sent on the start day</span> : (
-                        <span className="cs4-tl-pill"><CsIco n="clock" s={12} />{i === 0 ? "Wait" : "Then wait"}
-                          <input type="number" min={0} value={st.wait_days} onChange={(e) => setStep(i, { wait_days: Math.max(0, Number(e.target.value) || 0) })} aria-label={`Days to wait before e-mail ${i + 1}`} />
-                          day{st.wait_days === 1 ? "" : "s"}{i === 0 && !st.wait_days ? " · sent at once" : ""}</span>
-                      )}
-                    </div>
-                    <div className="cs4-tl-card">
-                      <span className="cs4-tl-n">{i + 1}</span>
-                      <div className="cs4-tl-main">
-                        <em>E-mail {i + 1} · <b>day {dayOf[i]}</b>{tplName(st.template_id) ? "" : " · pick its blueprint"}</em>
-                        <Select size="sm" value={st.template_id} onChange={(v) => v === "__new" ? onNewTemplate() : setStep(i, { template_id: v })} placeholder="Pick an e-mail blueprint…" searchable
-                          options={[...[...templates].sort((x, y) => (folderName(x) || "\uffff").localeCompare(folderName(y) || "\uffff") || x.name.localeCompare(y.name)).map((t) => ({ value: t.id, label: t.name, hint: [folderName(t), t.attachments.length ? `${t.attachments.length} file${t.attachments.length === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ") || undefined })), { value: "__new", label: "+ New blueprint…" }]} />
-                      </div>
-                      <div className="cs4-tl-tools">
-                        <button type="button" className="csx-ghost is-sm is-ico" disabled={i === 0} onClick={() => moveStep(i, -1)} title="Earlier" aria-label="Move earlier"><CsIco n="up" s={12} /></button>
-                        <button type="button" className="csx-ghost is-sm is-ico" disabled={i === steps.length - 1} onClick={() => moveStep(i, 1)} title="Later" aria-label="Move later"><CsIco n="dn" s={12} /></button>
-                        <button type="button" className="csx-ghost is-sm is-ico" disabled={steps.length === 1} onClick={() => setQ((x) => ({ ...x, steps: (x.steps ?? []).filter((_, j) => j !== i) }))} title="Remove" aria-label="Remove this e-mail"><CsIco n="trash" s={11} /></button>
-                      </div>
-                    </div>
-                  </li>
-                ))}
-                <li className="cs4-tl-add">
-                  <button type="button" className="cs4-tl-addb" onClick={() => setQ((x) => ({ ...x, steps: [...(x.steps ?? []), newStep(templates[0]?.id ?? "", 14)] }))}><CsIco n="plus" s={12} />Add an e-mail</button>
-                </li>
+            <section className={`cs4-ed-sec cs4-sq-sec is-wide ${tourOn("mails")}`} data-tour="mails">
+              <div className="cs4-sq-sh"><span className="cs4-sq-n">{camp ? 2 : 3}</span><div><h4>{camp ? "What happens" : "The steps"}</h4><p>{camp ? "The first e-mail goes out when you press Send. Then add follow-ups, and checks that go one way or another by whether the client opened or answered." : "E-mails, and checks that go one way or another by whether the client opened or answered. Each step waits its days after the one before."}</p></div>
+                {!camp && <button type="button" className="cs4-sq-q" onClick={() => ask("mails")} aria-label="Explain the steps" title="Explain this"><CsIco n="info" s={14} /></button>}</div>
+              <CsFlowEditor nodes={nodes} onChange={setNodes} templates={templates} folders={folders} people={people} campaign={camp} sent={sent}
+                startText={camp ? (sent ? `Sent ${csDate(q.launched_at!)}` : "When you press Send") : quietN ? `Day 0 · the day the client has gone ${quietN} days without contact${before ? ` (from ${q.start_days ?? 60} days before its renewal)` : ""}` : before ? `Day 0 · ${q.start_days ?? 60} days before the client's renewal` : "Day 0 · the day the client joins"}
+                stats={flowStats(log, q.id)} here={flowHere(runs, q.id)} onNewTemplate={onNewTemplate} />
+              <p className="cs4-help cs4-track-note"><CsIco n="eye" s={12} /> Opens are seen when the e-mail's pictures load, clicks through its links, replies when they arrive in your Outlook or the team mailbox. Some apps hide pictures (an open is missed) and Apple Mail loads them by itself (an open that wasn't) — a reply is the sure sign.</p>
+              {!camp && <ol className="cs4-tl cs4-tl-endonly">
                 <li className="cs4-tl-edge is-end">
                   <span className={`cs4-tl-dot ${q.repeat ? "is-again" : "is-stop"}`}><CsIco n={q.repeat ? "repeat" : "stop"} s={12} /></span>
                   <div className="cs4-tl-endb">
-                    <b>After the last e-mail</b>
+                    <b>At the end</b>
                     <div className="cs4-opts is-sm">
                       <button type="button" className={!q.repeat ? "is-on" : ""} onClick={() => setQ((x) => ({ ...x, repeat: false }))}><b>Stop</b><i>{quietN ? "Once per client, for good" : "The client is done"}</i></button>
                       <button type="button" className={q.repeat ? "is-on" : ""} onClick={() => setQ((x) => ({ ...x, repeat: true }))}><b>Start again</b><i>{quietN ? `The next time it goes ${quietN} days without contact` : before ? "Before the next renewal" : "From e-mail 1, after a pause"}</i></button>
@@ -3171,8 +3187,8 @@ function CsSequenceEditor({ initial, templates, folders, accounts, runs, types, 
                     )}
                   </div>
                 </li>
-              </ol>
-            </section>}
+              </ol>}
+            </section>
 
             <section className={`cs4-ed-sec cs4-sq-sec is-wide ${tourOn("send")}`} data-tour="send">
               <div className="cs4-sq-sh"><span className="cs4-sq-n">{camp ? 3 : 4}</span><div><h4>Sent to and from</h4><p>Who at the client gets it, and which mailbox sends it.</p></div>
@@ -3209,7 +3225,7 @@ function CsSequenceEditor({ initial, templates, folders, accounts, runs, types, 
             <div className="cs4-ed-sum cs4-sq-card">
               <b>{fits.length}</b><span>client{fits.length === 1 ? "" : "s"} match{fits.length === 1 ? "es" : ""}{q.id ? ` · ${inNow} in it now` : ""}</span>
               <span className="cs4-ed-sum-p">{people_n} {people_n === 1 ? "person" : "people"} · one e-mail each</span>
-              <i>{camp ? (sent ? `Sent ${csDate(q.launched_at!)}` : "One e-mail, sent once when you press Send") : <>{quietN ? `Once ${quietN} days without contact · ` : ""}{steps.length === 1 ? "1 e-mail" : `${steps.length} e-mails over ${totalDays} days`}{q.repeat ? (quietN ? ", again each time it goes quiet" : before ? ", again before each renewal" : `, again ${q.start_days ?? 30} days later`) : ""}</>}</i>
+              <i>{camp ? (sent ? `Sent ${csDate(q.launched_at!)}` : steps.length > 1 ? `${steps.length} e-mails${branchy ? " with branches" : ""} · starts when you press Send` : "One e-mail, sent once when you press Send") : <>{quietN ? `Once ${quietN} days without contact · ` : ""}{steps.length === 1 ? "1 e-mail" : `${steps.length} e-mails over ${totalDays} days`}{q.repeat ? (quietN ? ", again each time it goes quiet" : before ? ", again before each renewal" : `, again ${q.start_days ?? 30} days later`) : ""}</>}</i>
             </div>
             <ul className="cs4-ed-who">
               {fits.slice(0, 200).map((c) => {
@@ -3232,10 +3248,10 @@ function CsSequenceEditor({ initial, templates, folders, accounts, runs, types, 
         {err && <p className="csx-err cs4-ed-err">{err}</p>}
         <footer className={`csx-modal-f ${tourOn("save")}`} data-tour="save">
           {camp ? <>
-            <span className="cs4-foot-note">{sent ? "Already sent — copy it from the list to send it again." : `Nothing goes out until you press Send · ${people_n} ${people_n === 1 ? "person" : "people"} would get it`}</span>
+            <span className="cs4-foot-note">{sent ? "Already sent — you can still change the follow-ups that haven't happened." : `Nothing goes out until you press Send (and confirm it twice) · ${people_n} ${people_n === 1 ? "person" : "people"} would get it`}</span>
             <span className="csx-sp" />
             <button type="button" className="csx-ghost" onClick={onClose}>{sent ? "Close" : "Cancel"}</button>
-            {!sent && <button type="button" className="csx-ghost" disabled={busy} onClick={() => save()}>Save as draft</button>}
+            <button type="button" className="csx-ghost" disabled={busy} onClick={() => save()}>{sent ? "Save changes" : "Save as draft"}</button>
             {!sent && <button type="button" className="csx-primary" disabled={busy || !fits.length} onClick={() => save(undefined, true)}><CsIco n="send" s={13} />{busy ? "Saving…" : `Send now to ${people_n} ${people_n === 1 ? "person" : "people"}`}</button>}
           </> : <>
           <span className="cs4-foot-note">{q.active ? "On: due e-mails go out every hour." : "Off: nothing is sent until you switch it on."}</span>

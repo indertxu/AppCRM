@@ -4538,3 +4538,25 @@
   .cs4-mailst { width: 30px; padding: 0; justify-content: center; }
   .cs4-mailst-t { display: none; }
 }
+
+/* Send now: asked twice (CsSendConfirm) */
+.cs4-sc-bg { z-index: 1200; }
+.cs4-sc { width: min(460px, calc(100vw - 32px)); padding: 26px 26px 20px; border-radius: 22px; background: #fff; box-shadow: 0 30px 80px -24px rgba(6, 34, 24, 0.5); display: flex; flex-direction: column; gap: 12px; animation: cs4-sc-in 0.22s cubic-bezier(0.16, 1, 0.3, 1); }
+@keyframes cs4-sc-in { from { opacity: 0; transform: translateY(8px) scale(0.98); } to { opacity: 1; transform: none; } }
+.cs4-sc-ico { width: 44px; height: 44px; border-radius: 14px; display: grid; place-items: center; background: linear-gradient(140deg, #19c48a, #0a6f4d); color: #fff; }
+.cs4-sc.is-2 .cs4-sc-ico { background: linear-gradient(140deg, #f08a4b, #c2410c); }
+.cs4-sc h3 { margin: 0; font-size: 19px; color: #0b241a; }
+.cs4-sc-dl { margin: 0; display: flex; flex-direction: column; border: 1px solid rgba(13, 31, 24, 0.1); border-radius: 14px; overflow: hidden; }
+.cs4-sc-dl > div { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 10px; padding: 9px 12px; }
+.cs4-sc-dl > div + div { border-top: 1px solid rgba(13, 31, 24, 0.08); }
+.cs4-sc-dl dt { font-size: 11px; font-weight: 750; letter-spacing: 0.06em; text-transform: uppercase; color: #6b7d75; padding-top: 2px; }
+.cs4-sc-dl dd { margin: 0; font-size: 13.5px; color: #24352e; overflow-wrap: anywhere; display: flex; flex-direction: column; gap: 2px; }
+.cs4-sc-dl dd i { font-style: normal; font-size: 12px; color: #6b7d75; }
+.cs4-sc-note { margin: 0; font-size: 12.5px; color: #6b7d75; line-height: 1.5; }
+.cs4-sc-big { margin: 0; font-size: 15px; line-height: 1.55; color: #24352e; }
+.cs4-sc-f { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.csx-primary.is-danger { background: #c2410c; border-color: #c2410c; }
+.csx-primary.is-danger:hover { background: #a33508; border-color: #a33508; }
+.cs4-track-note { display: flex; align-items: flex-start; gap: 6px; margin-top: 12px !important; }
+.cs4-track-note svg { flex: none; margin-top: 2px; }
+.cs4-tl.cs4-tl-endonly { margin-top: 14px; }

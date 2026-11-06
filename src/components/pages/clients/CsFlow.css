@@ -1,0 +1,81 @@
+/* Customer success › a sequence's steps as a tree (CsFlow.tsx) */
+.csf { --csf-line: rgba(13, 31, 24, 0.12); --csf-ink: #0d1f18; --csf-mut: #5d6f67; position: relative; display: flex; flex-direction: column; min-width: 0; }
+.csf-start { display: flex; align-items: center; gap: 10px; padding: 2px 0 2px 2px; }
+.csf-start b { display: block; font-size: 13px; color: var(--csf-ink); }
+.csf-start i { font-style: normal; font-size: 12px; color: var(--csf-mut); }
+.csf-dot { width: 26px; height: 26px; border-radius: 9px; display: grid; place-items: center; background: #e6f6ee; color: #0a6f4d; flex: none; }
+
+.csf-list { list-style: none; margin: 0; padding: 0 0 0 12px; display: flex; flex-direction: column; border-left: 2px solid var(--csf-line); margin-left: 12px; min-width: 0; }
+.csf-list.is-lane { margin-left: 4px; padding-left: 12px; }
+.csf-item { position: relative; display: flex; flex-direction: column; min-width: 0; padding-top: 10px; }
+.csf-item::before { content: ""; position: absolute; left: -12px; top: 30px; width: 10px; height: 2px; background: var(--csf-line); }
+.csf-item.is-branch::before { top: 32px; }
+
+.csf-wait { margin: 0 0 8px; }
+.csf-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: #f2f6f4; color: var(--csf-mut); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.csf-pill.is-start { background: #e6f6ee; color: #0a6f4d; }
+.csf-pill input, .csf-sub input, .csf-inl input { width: 46px; height: 24px; padding: 0 6px; border: 0; border-radius: 7px; background: #fff; box-shadow: inset 0 0 0 1px var(--csf-line); font: inherit; font-weight: 700; color: var(--csf-ink); text-align: center; }
+.csf-pill input:focus, .csf-sub input:focus, .csf-inl input:focus { outline: none; box-shadow: inset 0 0 0 1.5px #12b57f; }
+
+.csf-card { position: relative; display: flex; align-items: flex-start; gap: 12px; padding: 12px 12px 12px 12px; border-radius: 14px; background: #fff; box-shadow: 0 0 0 1px var(--csf-line), 0 6px 18px -14px rgba(8, 40, 28, 0.35); min-width: 0; }
+.csf-card.is-branch { flex-direction: column; align-items: stretch; gap: 10px; background: #fbfcfb; }
+.csf-card.is-stop { align-items: center; background: #f7f8f8; box-shadow: 0 0 0 1px var(--csf-line); }
+.csf-bh { display: flex; align-items: flex-start; gap: 12px; min-width: 0; }
+.csf-ico { width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center; flex: none; }
+.csf-ico.is-email { background: #e8f1fd; color: #2f6fd6; }
+.csf-ico.is-task { background: #fdf3e2; color: #b7791f; }
+.csf-ico.is-branch { background: #efe9fd; color: #7c3aed; }
+.csf-ico.is-stop { background: #eceff1; color: #546067; width: 28px; height: 28px; }
+.csf-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.csf-main > em { display: flex; align-items: center; gap: 8px; font-style: normal; font-size: 11px; font-weight: 750; letter-spacing: 0.06em; text-transform: uppercase; color: var(--csf-mut); }
+.csf-here { padding: 1px 7px; border-radius: 999px; background: #e6f6ee; color: #0a6f4d; font-size: 10.5px; letter-spacing: 0; text-transform: none; }
+.csf-sub { font-size: 12.5px; color: var(--csf-mut); line-height: 1.5; overflow-wrap: anywhere; }
+.csf-sub b { color: var(--csf-ink); font-weight: 650; }
+.csf-warn { font-size: 12px; color: #9a5a12; background: #fff4e5; padding: 5px 9px; border-radius: 8px; align-self: flex-start; }
+.csf-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.csf-row > :first-child { flex: 1 1 220px; min-width: 0; }
+.csf-inl { font-size: 12.5px; color: var(--csf-mut); white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
+.csf-in { width: 100%; box-sizing: border-box; height: 34px; padding: 0 10px; border: 0; border-radius: 9px; background: #fbfdfc; box-shadow: inset 0 0 0 1px var(--csf-line); font: inherit; font-size: 13px; color: var(--csf-ink); }
+.csf-in.is-notes { height: auto; min-height: 52px; padding: 8px 10px; resize: vertical; line-height: 1.45; }
+.csf-in:focus { outline: none; box-shadow: inset 0 0 0 1.5px #12b57f, 0 0 0 3px rgba(18, 181, 127, 0.1); }
+
+.csf-stats { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.csf-stats span { display: inline-flex; align-items: baseline; gap: 5px; padding: 3px 9px; border-radius: 8px; background: #f2f6f4; font-size: 11.5px; color: var(--csf-mut); }
+.csf-stats b { font-size: 12.5px; color: var(--csf-ink); }
+.csf-stats .is-reply { background: #e6f6ee; }
+.csf-stats .is-reply b { color: #0a6f4d; }
+
+.csf-tools { display: flex; gap: 2px; flex: none; }
+.csf-tools button { width: 26px; height: 26px; border: 0; border-radius: 8px; background: transparent; color: #8a9a93; display: grid; place-items: center; cursor: pointer; }
+.csf-tools button:hover:not(:disabled) { background: #eef3f1; color: var(--csf-ink); }
+.csf-tools button:last-child:hover:not(:disabled) { background: #fdecea; color: #c2473c; }
+.csf-tools button:disabled { opacity: 0.3; cursor: default; }
+
+.csf-lanes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.csf-lane { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 10px; border: 0; border-radius: 11px; background: #fff; box-shadow: inset 0 0 0 1px var(--csf-line); font: inherit; text-align: left; cursor: pointer; min-width: 0; color: var(--csf-mut); transition: box-shadow 0.15s, background 0.15s; }
+.csf-lane svg { margin-bottom: 2px; }
+.csf-lane b { font-size: 12.5px; color: var(--csf-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.csf-lane i { font-style: normal; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.csf-lane.is-replied { color: #0a6f4d; }
+.csf-lane.is-opened { color: #b7791f; }
+.csf-lane.is-none { color: #6b7780; }
+.csf-lane.is-on.is-replied { background: #effaf4; box-shadow: inset 0 0 0 1.5px #12b57f; }
+.csf-lane.is-on.is-opened { background: #fff8ec; box-shadow: inset 0 0 0 1.5px #e0a10c; }
+.csf-lane.is-on.is-none { background: #f4f6f7; box-shadow: inset 0 0 0 1.5px #8a979f; }
+.csf-lanebody { border-radius: 12px; padding: 4px 10px 10px 6px; min-width: 0; }
+.csf-lanebody.is-replied { background: rgba(18, 181, 127, 0.05); }
+.csf-lanebody.is-opened { background: rgba(224, 161, 12, 0.06); }
+.csf-lanebody.is-none { background: rgba(84, 96, 103, 0.05); }
+.csf-lanehint { margin: 6px 4px 0; font-size: 12px; color: var(--csf-mut); line-height: 1.45; }
+.csf-card.is-branch .csf-card.is-branch { background: #fff; }
+
+.csf-add { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 12px 0 0 26px; }
+.csf-add.is-nested { margin: 10px 0 0 20px; }
+.csf-add-l { font-size: 11px; font-weight: 750; letter-spacing: 0.06em; text-transform: uppercase; color: #93a39c; margin-right: 2px; }
+.csf-add button { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 11px; border: 1px dashed rgba(13, 31, 24, 0.2); border-radius: 9px; background: #fff; font: inherit; font-size: 12.5px; font-weight: 650; color: #24352e; cursor: pointer; white-space: nowrap; }
+.csf-add button:hover:not(:disabled) { border-style: solid; border-color: #12b57f; color: #0a6f4d; background: #f1faf5; }
+.csf-add button:disabled { opacity: 0.4; cursor: default; }
+
+@media (max-width: 900px) {
+  .csf-lanes { grid-template-columns: 1fr; }
+}
