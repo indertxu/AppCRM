@@ -509,3 +509,6 @@
 .bc-row-more { padding: 6px 18px 18px 76px; }
 @media (max-width: 1300px) { .bc-row-viz { display: none; } }
 .bc-row-viz.is-none { visibility: hidden; }
+/* the unit sits to the right of the price */
+.bc-row-price { flex-direction: row; align-items: baseline; gap: 6px; min-width: 0; white-space: nowrap; }
+.bc-row-price small { font-size: 12px; }

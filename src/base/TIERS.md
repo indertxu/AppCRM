@@ -156,6 +156,9 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-06 10:10 · Base · Products & Services: unit beside the price
+- `pages/settings/BaseCatalog.css`, `NewWalkthrough.css`: "/ year", "/ month"… sit to the right of the price, not below.
+
 ### 2026-11-06 10:05 · Base · Products can be paid weekly
 - `pages/settings/catalogApi.ts`: `billing_period` may be `"weekly"` (no DB constraint on it).
 - `pages/settings/BaseCatalog.tsx` / `.css`: billing switch Weekly · Monthly · Yearly · One time; "/ week" unit and "Weekly" tag.

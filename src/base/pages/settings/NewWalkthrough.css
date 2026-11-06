@@ -114,3 +114,4 @@
 .wk-btn:disabled { opacity: 0.45; cursor: default; }
 @media (max-width: 760px) { .wk { grid-template-columns: 1fr; } .wk-side { display: none; } .wk-opts.is-3 { grid-template-columns: 1fr; } }
 .wk-body { padding: 6px; margin: -6px; }
+.wk-pv-price { flex-direction: row; align-items: baseline; gap: 6px; }
