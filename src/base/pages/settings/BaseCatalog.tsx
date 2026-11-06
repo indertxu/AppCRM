@@ -31,7 +31,7 @@ const kindColor = (k: string | null | undefined) => {
 };
 const kindLabel = (k: string | null | undefined, kinds: string[]) =>
   kinds.find((o) => kindKey(o) === kindKey(k)) ?? (kindKey(k) === "saas" ? "SaaS" : String(k ?? "").trim() || "No kind");
-const unitOf = (p: Product) => (p.billing === "one_time" ? "one time" : p.billing_period === "yearly" ? "/ year" : "/ month");
+const unitOf = (p: Product) => (p.billing === "one_time" ? "one time" : p.billing_period === "yearly" ? "/ year" : p.billing_period === "weekly" ? "/ week" : "/ month");
 const snap = (p: Product) => JSON.stringify({ n: p.name, k: p.kind, b: p.billing, bp: p.billing_period, t: p.tiers.map((t) => [t.name, Number(t.price) || 0]) });
 
 const I = {
@@ -99,7 +99,7 @@ export default function BaseCatalog({ onBack }: { onBack: () => void }) {
           <section className="bc-col" style={{ ["--kc" as string]: "#12b57f" }}>
             <header className="bc-col-h">
               <span className="bc-col-ico"><Ico d={I.box} s={16} /></span>
-              <div><b>Products</b><small>{(products?.length ?? 0) + fresh.length} · priced once, monthly or yearly</small></div>
+              <div><b>Products</b><small>{(products?.length ?? 0) + fresh.length} · priced once, weekly, monthly or yearly</small></div>
               <button type="button" className="bc-col-add" onClick={() => setWalk("product")}><Ico d={I.plus} s={14} />Product</button>
             </header>
             <div className="bc-list">
@@ -252,7 +252,7 @@ function ProductCard({ product, isNew = false, kinds, kindOptions, onKindsChange
   const justSaved = savedAt > 0 && Date.now() - savedAt < 2400 && !dirty;
   useEffect(() => { if (!savedAt) return; const t = window.setTimeout(() => setSavedAt(0), 2400); return () => window.clearTimeout(t); }, [savedAt]);
 
-  const mode: "monthly" | "yearly" | "one_time" = p.billing === "one_time" ? "one_time" : p.billing_period === "yearly" ? "yearly" : "monthly";
+  const mode: "weekly" | "monthly" | "yearly" | "one_time" = p.billing === "one_time" ? "one_time" : p.billing_period === "yearly" ? "yearly" : p.billing_period === "weekly" ? "weekly" : "monthly";
   const setMode = (m: typeof mode) => set(m === "one_time" ? { billing: "one_time" } : { billing: "recurring", billing_period: m });
   const tiered = p.tiers.length > 1;
   const initials = p.name.trim().split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join("");
@@ -267,7 +267,7 @@ function ProductCard({ product, isNew = false, kinds, kindOptions, onKindsChange
         <span className="bc-row-tile" aria-hidden="true">{initials || <Ico d={I.box} s={16} />}</span>
         <span className="bc-row-main">
           <b>{p.name || "Untitled product"}</b>
-          <span className="bc-row-tags"><em className="is-kind"><i />{kindLabel(p.kind, kinds)}</em><em>{mode === "one_time" ? "One time" : mode === "yearly" ? "Yearly" : "Monthly"}</em>{tiered && <em>{p.tiers.length} tiers</em>}</span>
+          <span className="bc-row-tags"><em className="is-kind"><i />{kindLabel(p.kind, kinds)}</em><em>{mode === "one_time" ? "One time" : mode === "yearly" ? "Yearly" : mode === "weekly" ? "Weekly" : "Monthly"}</em>{tiered && <em>{p.tiers.length} tiers</em>}</span>
         </span>
         <span className="bc-row-viz" aria-hidden="true">
           {p.tiers.map((t, i) => <i key={i} style={{ height: `${hi ? Math.max(18, ((Number(t.price) || 0) / hi) * 100) : 18}%`, ["--i" as string]: i }} title={t.name} />)}
@@ -304,9 +304,9 @@ function ProductCard({ product, isNew = false, kinds, kindOptions, onKindsChange
         </div>
       </header>
 
-      <div className="bc-bill" role="radiogroup" aria-label="Billing" style={{ ["--b" as string]: mode === "monthly" ? 0 : mode === "yearly" ? 1 : 2 }}>
+      <div className="bc-bill" role="radiogroup" aria-label="Billing" style={{ ["--b" as string]: ["weekly", "monthly", "yearly", "one_time"].indexOf(mode) }}>
         <span className="bc-bill-light" aria-hidden="true" />
-        {([["monthly", "Monthly"], ["yearly", "Yearly"], ["one_time", "One time"]] as const).map(([m, label]) => (
+        {([["weekly", "Weekly"], ["monthly", "Monthly"], ["yearly", "Yearly"], ["one_time", "One time"]] as const).map(([m, label]) => (
           <button key={m} type="button" role="radio" aria-checked={mode === m} className={mode === m ? "is-on" : ""} onClick={() => setMode(m)}>{label}</button>
         ))}
       </div>

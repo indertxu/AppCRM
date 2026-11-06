@@ -99,8 +99,8 @@ export default function NewWalkthrough({ kind, kinds, onClose, onSkipProduct, on
     }
   };
 
-  const mode = p.billing === "one_time" ? "one_time" : p.billing_period === "yearly" ? "yearly" : "monthly";
-  const unit = mode === "one_time" ? "one time" : mode === "yearly" ? "/ year" : "/ month";
+  const mode = p.billing === "one_time" ? "one_time" : p.billing_period === "yearly" ? "yearly" : p.billing_period === "weekly" ? "weekly" : "monthly";
+  const unit = mode === "one_time" ? "one time" : mode === "yearly" ? "/ year" : mode === "weekly" ? "/ week" : "/ month";
   const sb = BILLING.find((b) => b.v === s.billing)!;
   const pctSum = Math.round(s.steps.reduce((a, x) => a + (Number(x.percent) || 0), 0) * 10) / 10;
 
@@ -128,8 +128,8 @@ export default function NewWalkthrough({ kind, kinds, onClose, onSkipProduct, on
     );
     if (q === "Billing" && kind === "product") return (
       <div className="wk-pane">
-        <div className="wk-opts is-3">
-          {([["monthly", "Every month", "A subscription, billed monthly", I.repeat], ["yearly", "Every year", "A yearly licence or plan", I.cal], ["one_time", "One time", "Sold once — no renewal", I.one]] as const).map(([m, t, sub, ic]) => (
+        <div className="wk-opts is-4">
+          {([["weekly", "Every week", "A weekly fee or plan", I.repeat], ["monthly", "Every month", "A subscription, billed monthly", I.repeat], ["yearly", "Every year", "A yearly licence or plan", I.cal], ["one_time", "One time", "Sold once — no renewal", I.one]] as const).map(([m, t, sub, ic]) => (
             <button key={m} type="button" className={`wk-opt ${mode === m ? "is-on" : ""}`}
               onClick={() => setP(m === "one_time" ? { ...p, billing: "one_time" } : { ...p, billing: "recurring", billing_period: m })}>
               <i><Ico d={ic} s={18} /></i><b>{t}</b><small>{sub}</small>
@@ -220,7 +220,7 @@ export default function NewWalkthrough({ kind, kinds, onClose, onSkipProduct, on
           <span className="wk-pv-main">
             <b>{name.trim() || "Untitled"}</b>
             <span>{kind === "product"
-              ? <><em>{p.kind}</em><em>{mode === "one_time" ? "One time" : mode === "yearly" ? "Yearly" : "Monthly"}</em>{tiered && <em>{p.tiers.length} tiers</em>}</>
+              ? <><em>{p.kind}</em><em>{mode === "one_time" ? "One time" : mode === "yearly" ? "Yearly" : mode === "weekly" ? "Weekly" : "Monthly"}</em>{tiered && <em>{p.tiers.length} tiers</em>}</>
               : <><em>{sb.label}</em><em>{s.steps.filter((x) => x.name.trim()).length} steps</em></>}</span>
           </span>
           <span className="wk-pv-price">

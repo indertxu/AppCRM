@@ -593,10 +593,12 @@ export function lineBreakdown(l: RevenueLineFields, calculator?: Calculator | nu
   let multiplierLabel: string;
   let sched: number[] | null = null;
   if (l.recurring) {
-    const perYear = l.period === "monthly" ? 12 : 1;
+    const perYear = l.period === "weekly" ? 52 : l.period === "monthly" ? 12 : 1;
     const years = l.term_years == null ? 1 : Number(l.term_years) || 0;
     mult = perYear * years;
-    multiplierLabel = l.period === "monthly"
+    multiplierLabel = l.period === "weekly"
+      ? `x 52 weeks x ${years} ${years === 1 ? "year" : "years"}`
+      : l.period === "monthly"
       ? `x 12 months x ${years} ${years === 1 ? "year" : "years"}`
       : `x ${years} ${years === 1 ? "year" : "years"}`;
     if (years > 0) {

@@ -126,7 +126,7 @@ Source in `supabase/functions/**`. Both apps call them; changes must stay backwa
 - Read the other side's entries since your last session before you start working.
 
 ## 7. SQL numbering
-Next free number: **114**  ← update this line when you claim one (and say which file in the log).
+Next free number: **115**  ← update this line when you claim one (and say which file in the log).
 | # | File | Chat | What |
 |---|---|---|---|
 | 98 | sql/98_client_default_folders.sql | Enterprise | client folder templates → new clients |
@@ -145,6 +145,7 @@ Next free number: **114**  ← update this line when you claim one (and say whic
 | 111 | sql/111_crm_import_api.sql | Enterprise | `client_api_keys.scope` (files / crm) + `settings`, access `form`: companies & contacts import API keys (Settings › APIs) — applied 2026-11-06 |
 | 112 | sql/112_company_fields_light_refresh.sql | Enterprise | `cf_trg_tenant_wide`: a company field's new choices / new field no longer rebuild every contact (only rename / retype / delete) — applied 2026-11-06 |
 | 113 | sql/113_account_manager.sql | Enterprise | `company_assignees.is_manager` (one per company): account manager = starred person of Visibility; `companies_fx`/`companies_view_sql` key `account_manager`, `company_row_json.__manager`; old "Account Manager" custom field migrated to the star and removed — **NOT applied yet (Supabase asked for confirmation)** |
+| 114 | sql/114_cs_flows.sql | Enterprise | CS sequences as trees (`cs_sequences.flow`), runs `node/wait_until/last_log_id`, `cs_email_log` opened/clicked/replied/links/node/from_address, `cs_run_events`, `cs_mailbox_sync`, `cs_track()`, `cs_mark_replies()`; hourly `cs_send_due()` → **cs-engine** — **NOT applied yet (Supabase asked for confirmation)** |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
@@ -154,6 +155,20 @@ Write requests here; the other chat answers in the log and ticks them.
 
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
+
+### 2026-11-06 10:05 · Base · Products can be paid weekly
+- `pages/settings/catalogApi.ts`: `billing_period` may be `"weekly"` (no DB constraint on it).
+- `pages/settings/BaseCatalog.tsx` / `.css`: billing switch Weekly · Monthly · Yearly · One time; "/ week" unit and "Weekly" tag.
+- `pages/settings/NewWalkthrough.tsx` / `.css`: "How is it paid?" adds Every week (2 × 2 options).
+- `pages/sales/sales/salesApi.ts`: `lineBreakdown` counts a weekly line × 52 a year ("x 52 weeks x N years").
+- **IDEA→ENT**: Enterprise reads `products.billing_period`; a weekly product there would be counted as yearly unless it learns "weekly" too.
+- Deploy: files written to the Mac and committed.
+
+### 2026-11-06 10:40 · Enterprise · Customer success: sequences with branches (opened / replied), tasks, e-mail tracking, cs-engine function, Send now asked twice
+- **Files:** `src/components/pages/clients/CsFlow.tsx` + `.css` (new), `ClientsPage.tsx/.css`, `useClientsData.ts`, `supabase/functions/cs-engine/index.ts` (new, deployed v1), `sql/114_cs_flows.sql` (written, not applied).
+- **What:** the CS sequence/campaign editor's steps are a tree: E-mail, "Wait & check" (wait N days, then lanes Replied · Opened, no reply · Didn't open; a reply is taken as soon as it's seen), Task (for the client's owners / main owner / sender / a person, due in N days), End; a lane carries on with the steps after the check. One-time campaigns can have follow-ups too. Per e-mail step: sent / opened / clicked / replied; clients waiting at each step. Every e-mail is tracked (1×1 pixel + links through cs-engine `?t=o|c`), replies = a client e-mail read from people's mailboxes or the team mailbox (CS Iberia) after ours (`cs_mark_replies`). "Send now" opens a 2-step confirm and the server requires `confirm: <id>`. All CS e-mail now goes through the new **cs-engine** function (moved from outlook-sync, which keeps its old copy unused); old straight sequences keep working (read as a tree).
+- **Tags:** PORT? Base has its own CS page (no sequences engine).
+- **Deploy:** run SQL 114 (switches the hourly job to cs-engine). M365: the sender needs "Full Access" on the team mailbox to read its replies.
 
 ### 2026-11-06 07:45 · Enterprise · Website forms you build (Settings › APIs), account manager star, 2 phones from Companies, full filter chips
 - **Files:** `src/components/pages/settings/ApiForms.tsx` (new), `ApiSettings.tsx/.css`, `src/components/pages/companies/CompaniesPage.tsx/.css`, `companiesApi.ts`, `supabase/functions/manage-users/index.ts` (v19 deployed), `sql/113_account_manager.sql` (written, not applied yet).

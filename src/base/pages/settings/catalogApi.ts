@@ -9,7 +9,7 @@ export interface Product {
   /** A product kind from your list (Settings › Catalog), e.g. "SaaS", "Physical". */
   kind: string;
   billing: "one_time" | "recurring";
-  billing_period?: "monthly" | "yearly"; // only meaningful when recurring
+  billing_period?: "weekly" | "monthly" | "yearly"; // only meaningful when recurring
   description?: string | null;
   active?: boolean;
   /** Offered when building proposals (13_proposal_decks.sql; missing = yes). */
