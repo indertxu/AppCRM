@@ -14,8 +14,9 @@ import { createPortal } from "react-dom";
 import { supabase } from "../../../components/api/supabase";
 import { loadProducts, saveProduct, deleteProduct, type Product, type ProductTier } from "./catalogApi";
 import { listCrmOptions, addCrmOption, deleteCrmOption, renameCrmOption, productKindOptions, type CrmOption } from "../companies/companiesApi";
-import { loadBaseServices, newStep, type BaseService } from "./baseServicesApi";
+import { loadBaseServices, type BaseService } from "./baseServicesApi";
 import { ServiceCard, ServiceModal, SERVICE_COLOR } from "./BaseServices";
+import NewWalkthrough from "./NewWalkthrough";
 import "./CatalogPage.css";
 import "./BaseCatalog.css";
 
@@ -64,18 +65,10 @@ export default function BaseCatalog({ onBack }: { onBack: () => void }) {
     loadProducts().then(setProducts).catch(() => setProducts([]));
     loadBaseServices().then(setServices).catch(() => setServices([]));
   }, []);
-  const newService = () => setSvc({ name: "", billing: "upfront", price: 0, steps: [newStep("Kick-off"), newStep("Delivery"), newStep("Hand-over")] });
   /** "New": first what you're creating — a product or a service. */
   const [choosing, setChoosing] = useState(false);
-
-  const add = () => {
-    const p: Product = {
-      name: "", kind: kinds[0] ?? "SaaS", billing: "recurring", billing_period: "monthly", description: "", active: true,
-      tiers: [{ name: "Standard", price: 0, sort: 0, durations: [] }],
-      multi_year: false, default_years: 1, increment_mode: "none", increment_value: 0,
-    };
-    setFresh((f) => [{ key: `new-${++seq.current}`, p }, ...f]);
-  };
+  /** A new one starts with the walkthrough (closing it carries on in the usual editor). */
+  const [walk, setWalk] = useState<"product" | "service" | null>(null);
   const total = (products?.length ?? 0) + fresh.length + (services?.length ?? 0);
   const loading = products === null || services === null;
 
@@ -87,39 +80,66 @@ export default function BaseCatalog({ onBack }: { onBack: () => void }) {
           <h1 className="cat-title">Products &amp; Services</h1>
           <p className="bc-sub">What you sell and how it bills: products with their price, services with their steps.</p>
         </div>
-        <NewMenu open={choosing} onOpen={setChoosing} onProduct={() => { setChoosing(false); add(); }} onService={() => { setChoosing(false); newService(); }} />
+        <NewMenu open={choosing} onOpen={setChoosing} onProduct={() => { setChoosing(false); setWalk("product"); }} onService={() => { setChoosing(false); setWalk("service"); }} />
       </header>
 
       {loading ? (
-        <div className="bc-grid" aria-busy="true">{[0, 1, 2].map((i) => <div key={i} className="bc-card is-ghost" />)}</div>
+        <div className="bc-cols" aria-busy="true">{[0, 1].map((c) => <div key={c} className="bc-list">{[0, 1, 2].map((i) => <div key={i} className="bc-row is-ghost" />)}</div>)}</div>
       ) : total === 0 ? (
         <div className="bc-start">
           <h2>Add your first product or service</h2>
           <p>Pick what you want to create first — you can add the other one any time.</p>
           <div className="bc-start-pick">
-            <Choice kind="product" onClick={add} />
-            <Choice kind="service" onClick={newService} />
+            <Choice kind="product" onClick={() => setWalk("product")} />
+            <Choice kind="service" onClick={() => setWalk("service")} />
           </div>
         </div>
       ) : (
-        <div className="bc-grid">
-          {fresh.map(({ key, p }) => (
-            <ProductCard key={key} product={p} isNew kinds={kinds} kindOptions={kindOptions} onKindsChanged={reloadKinds}
-              onSaved={(saved) => { setFresh((f) => f.filter((x) => x.key !== key)); setProducts((ps) => [saved, ...(ps ?? [])]); }}
-              onDeleted={() => setFresh((f) => f.filter((x) => x.key !== key))} />
-          ))}
-          {products.map((p) => (
-            <ProductCard key={p.id} product={p} kinds={kinds} kindOptions={kindOptions} onKindsChanged={async () => {
-              await reloadKinds();
-              setProducts(await loadProducts().catch(() => products));   // a renamed kind renames it on the products too
-            }}
-              onSaved={(saved) => setProducts((ps) => (ps ?? []).map((x) => (x.id === saved.id ? saved : x)))}
-              onDeleted={() => setProducts((ps) => (ps ?? []).filter((x) => x.id !== p.id))} />
-          ))}
-          {(services ?? []).map((sv) => <ServiceCard key={sv.id} service={sv} onOpen={() => setSvc(sv)} />)}
+        <div className="bc-cols">
+          <section className="bc-col" style={{ ["--kc" as string]: "#12b57f" }}>
+            <header className="bc-col-h">
+              <span className="bc-col-ico"><Ico d={I.box} s={16} /></span>
+              <div><b>Products</b><small>{(products?.length ?? 0) + fresh.length} · priced once, monthly or yearly</small></div>
+              <button type="button" className="bc-col-add" onClick={() => setWalk("product")}><Ico d={I.plus} s={14} />Product</button>
+            </header>
+            <div className="bc-list">
+              {fresh.map(({ key, p }) => (
+                <ProductCard key={key} product={p} isNew kinds={kinds} kindOptions={kindOptions} onKindsChanged={reloadKinds}
+                  onSaved={(saved) => { setFresh((f) => f.filter((x) => x.key !== key)); setProducts((ps) => [saved, ...(ps ?? [])]); }}
+                  onDeleted={() => setFresh((f) => f.filter((x) => x.key !== key))} />
+              ))}
+              {products.map((p) => (
+                <ProductCard key={p.id} product={p} kinds={kinds} kindOptions={kindOptions} onKindsChanged={async () => {
+                  await reloadKinds();
+                  setProducts(await loadProducts().catch(() => products));   // a renamed kind renames it on the products too
+                }}
+                  onSaved={(saved) => setProducts((ps) => (ps ?? []).map((x) => (x.id === saved.id ? saved : x)))}
+                  onDeleted={() => setProducts((ps) => (ps ?? []).filter((x) => x.id !== p.id))} />
+              ))}
+              {!products.length && !fresh.length && <button type="button" className="bc-empty" onClick={() => setWalk("product")}><Ico d={I.plus} s={15} />Add your first product</button>}
+            </div>
+          </section>
+          <section className="bc-col" style={{ ["--kc" as string]: SERVICE_COLOR }}>
+            <header className="bc-col-h">
+              <span className="bc-col-ico"><Ico d={I.steps} s={16} /></span>
+              <div><b>Services</b><small>{services?.length ?? 0} · work you deliver, in steps</small></div>
+              <button type="button" className="bc-col-add" onClick={() => setWalk("service")}><Ico d={I.plus} s={14} />Service</button>
+            </header>
+            <div className="bc-list">
+              {(services ?? []).map((sv) => <ServiceCard key={sv.id} service={sv} onOpen={() => setSvc(sv)} />)}
+              {!services?.length && <button type="button" className="bc-empty" onClick={() => setWalk("service")}><Ico d={I.plus} s={15} />Add your first service</button>}
+            </div>
+          </section>
         </div>
       )}
 
+      {walk && (
+        <NewWalkthrough kind={walk} kinds={kinds} onClose={() => setWalk(null)}
+          onSkipProduct={(p) => setFresh((f) => [{ key: `new-${++seq.current}`, p }, ...f])}
+          onSkipService={(sv) => setSvc(sv)}
+          onCreatedProduct={(p) => setProducts((ps) => [p, ...(ps ?? []).filter((x) => x.id !== p.id)])}
+          onCreatedService={(sv) => setServices((list) => [...(list ?? []), sv])} />
+      )}
       {svc && (
         <ServiceModal key={svc.id ?? "new"} service={svc} onClose={() => setSvc(null)}
           onSaved={(saved) => {
@@ -237,8 +257,28 @@ function ProductCard({ product, isNew = false, kinds, kindOptions, onKindsChange
   const tiered = p.tiers.length > 1;
   const initials = p.name.trim().split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join("");
   const unit = unitOf(p);
+  const [open, setOpen] = useState(isNew);
+  if (!open && !dirty && !err) {
+    const prices = p.tiers.map((t) => Number(t.price) || 0);
+    const lo = Math.min(...prices), hi = Math.max(...prices);
+    const fmt = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    return (
+      <button type="button" className="bc-row" style={{ ["--kc" as string]: kindColor(p.kind) }} onClick={() => setOpen(true)} aria-expanded={false}>
+        <span className="bc-row-tile" aria-hidden="true">{initials || <Ico d={I.box} s={16} />}</span>
+        <span className="bc-row-main">
+          <b>{p.name || "Untitled product"}</b>
+          <span className="bc-row-tags"><em className="is-kind"><i />{kindLabel(p.kind, kinds)}</em><em>{mode === "one_time" ? "One time" : mode === "yearly" ? "Yearly" : "Monthly"}</em>{tiered && <em>{p.tiers.length} tiers</em>}</span>
+        </span>
+        <span className="bc-row-viz" aria-hidden="true">
+          {p.tiers.map((t, i) => <i key={i} style={{ height: `${hi ? Math.max(18, ((Number(t.price) || 0) / hi) * 100) : 18}%`, ["--i" as string]: i }} title={t.name} />)}
+        </span>
+        <span className="bc-row-price"><b>€{fmt(lo)}{hi !== lo ? `–${fmt(hi)}` : ""}</b><small>{unit}</small></span>
+        <span className="bc-row-chev" aria-hidden="true"><Ico d={I.chev} s={16} /></span>
+      </button>
+    );
+  }
   return (
-    <section className={`bc-card ${dirty ? "is-dirty" : ""} ${isNew ? "is-new" : ""} ${askDel ? "is-asking" : ""}`} style={{ ["--kc" as string]: kindColor(p.kind) }}
+    <section className={`bc-card is-open ${dirty ? "is-dirty" : ""} ${isNew ? "is-new" : ""} ${askDel ? "is-asking" : ""}`} style={{ ["--kc" as string]: kindColor(p.kind) }}
       onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && dirty) { e.preventDefault(); void save(); } }}>
       <div className="bc-band" aria-hidden="true" />
 
@@ -250,6 +290,7 @@ function ProductCard({ product, isNew = false, kinds, kindOptions, onKindsChange
           <KindMenu value={p.kind} kinds={kinds} options={kindOptions} onChange={(k) => set({ kind: k })} onKindsChanged={onKindsChanged} />
         </div>
         <div className="bc-hd-tools">
+          {!isNew && !dirty && !askDel && <button type="button" className="bc-icon-btn is-fold" onClick={() => setOpen(false)} aria-label="Collapse" title="Collapse"><Ico d={I.chev} s={15} /></button>}
           {askDel ? (
             <span className="bc-del-ask">
               <button type="button" className="is-yes" onClick={remove} disabled={busy}>Delete</button>

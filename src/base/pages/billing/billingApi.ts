@@ -6,6 +6,7 @@
 import { supabase } from "../../../components/api/supabase";
 
 export type InvStatus = "draft" | "sent" | "paid" | "void";
+export type InvSource = "manual" | "auto";
 /** What the list shows: a sent invoice is "unpaid", or "overdue" once its due date has gone. */
 export type InvState = "draft" | "unpaid" | "overdue" | "paid" | "void";
 
@@ -38,6 +39,8 @@ export interface Invoice {
   notes: string;
   bill_to: BillTo;
   created_at: string;
+  /** "auto": made by the system (cutoff run / Bill now); "manual": by someone. */
+  source: InvSource;
 }
 
 /** A new invoice being written (not saved yet), or a saved one opened. */
@@ -56,6 +59,8 @@ export interface Draft {
   entry_ids: string[];
   sent_date: string | null;
   paid_date: string | null;
+  source: InvSource;
+  created_at?: string | null;
 }
 
 export interface BClient {
@@ -203,13 +208,14 @@ const toInvoice = (r: any): Invoice => ({
   status: r.status, issue_date: r.issue_date ?? String(r.created_at).slice(0, 10), due_date: r.due_date ?? null,
   sent_date: r.sent_date ?? null, paid_date: r.paid_date ?? null, net: Number(r.net) || 0, amount: Number(r.amount) || 0,
   tax_rate: Number(r.tax_rate) || 0, notes: r.notes ?? "", bill_to: r.bill_to ?? {}, created_at: r.created_at,
+  source: r.source === "auto" ? "auto" : "manual",
 });
 
 export async function loadInvoices(): Promise<Invoice[]> {
   const out: any[] = [];
   for (let from = 0; ; from += 1000) {
     const { data, error } = await supabase.from("invoices")
-      .select("id, number, client_id, company_id, status, issue_date, due_date, sent_date, paid_date, net, amount, tax_rate, notes, bill_to, created_at")
+      .select("id, number, client_id, company_id, status, issue_date, due_date, sent_date, paid_date, net, amount, tax_rate, notes, bill_to, created_at, source")
       .is("project_id", null).order("issue_date", { ascending: false }).order("number", { ascending: false }).range(from, from + 999);
     if (error) throw new Error(error.message);
     out.push(...(data ?? []));
@@ -330,7 +336,7 @@ export function draftFor(c: BClient | undefined, number: string): Draft {
   return {
     id: null, number, client_id: c?.id ?? "", status: "draft", issue_date: todayIso(),
     payment_days: c?.payment_days ?? 30, tax_rate: c?.tax_rate ?? 21, notes: "",
-    bill_to: c ? billToOf(c) : { name: "" }, lines: [], entry_ids: [], sent_date: null, paid_date: null,
+    bill_to: c ? billToOf(c) : { name: "" }, lines: [], entry_ids: [], sent_date: null, paid_date: null, source: "manual",
   };
 }
 export const billToOf = (c: BClient): BillTo => ({ name: c.name, legal_name: c.legal_name, vat: c.vat, address: c.address, email: c.email, contact: c.contact });
@@ -363,7 +369,7 @@ export function linesFromWork(entries: WorkEntry[], people: Person[], catalog: C
 }
 
 /** The invoice as a printable page (its own window: print, or save as PDF). */
-export function printInvoice(d: Draft, seller: string) {
+export function printInvoice(d: Draft, seller: Seller) {
   const { net, tax, total } = totalsOf(d.lines, d.tax_rate);
   const esc = (s: string) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
   const unitL = (u: string) => UNITS.find((x) => x.value === u)?.label ?? u;
@@ -378,12 +384,12 @@ td{padding:10px 6px;border-bottom:1px solid #e3ece7}.n{text-align:right;white-sp
 .tot{margin-left:auto;width:280px;margin-top:20px}.tot div{display:flex;justify-content:space-between;padding:5px 0}.tot .g{font-size:17px;font-weight:700;border-top:2px solid #0a6f4d;padding-top:10px;margin-top:4px}
 .notes{margin-top:36px;white-space:pre-wrap}
 </style></head><body>
-<div class="top"><div><h1>Invoice</h1><div class="muted">${esc(d.number)}</div></div><div style="text-align:right"><strong>${esc(seller)}</strong></div></div>
+<div class="top"><div><h1>Invoice</h1><div class="muted">${esc(d.number)}</div></div><div style="text-align:right;line-height:1.5"><strong>${esc(seller.name)}</strong>${seller.tax_id ? `<br>VAT ${esc(seller.tax_id)}` : ""}${sellerAddress(seller) ? `<br>${esc(sellerAddress(seller))}` : ""}${seller.email ? `<br>${esc(seller.email)}` : ""}</div></div>
 <div class="box"><div><b>Bill to</b>${esc(d.bill_to.legal_name || d.bill_to.name)}<br>${d.bill_to.vat ? `VAT ${esc(d.bill_to.vat)}<br>` : ""}${esc(d.bill_to.address || "")}</div>
 <div><b>Issued</b>${fmtDate(d.issue_date)}</div><div><b>Due</b>${fmtDate(addDays(d.issue_date, d.payment_days))}</div></div>
 <table><thead><tr><th>Description</th><th class="n">Quantity</th><th class="n">Price</th><th class="n">Amount</th></tr></thead><tbody>${rows}</tbody></table>
 <div class="tot"><div><span>Net</span><span>${money(net)}</span></div><div><span>Tax ${round2(d.tax_rate)}%</span><span>${money(tax)}</span></div><div class="g"><span>Total</span><span>${money(total)}</span></div></div>
-${d.notes ? `<div class="notes">${esc(d.notes)}</div>` : ""}
+${d.notes ? `<div class="notes">${esc(d.notes)}</div>` : ""}${seller.iban ? `<div class="notes muted">Pay to IBAN ${esc(seller.iban)}</div>` : ""}
 <script>window.onload=()=>setTimeout(()=>window.print(),150)</script></body></html>`;
   const w = window.open("", "_blank");
   if (!w) return false;
@@ -392,7 +398,8 @@ ${d.notes ? `<div class="notes">${esc(d.notes)}</div>` : ""}
 }
 
 /** A mail to the client's billing contact, ready to send (attach the PDF). */
-export function mailInvoice(d: Draft, seller: string) {
+export function mailInvoice(d: Draft, seller: Seller | string) {
+  if (typeof seller !== "string") seller = seller.name;
   const { total } = totalsOf(d.lines, d.tax_rate);
   const due = fmtDate(addDays(d.issue_date, d.payment_days));
   const subject = `Invoice ${d.number} from ${seller}`;
@@ -400,10 +407,132 @@ export function mailInvoice(d: Draft, seller: string) {
   window.location.href = `mailto:${encodeURIComponent(d.bill_to.email || "")}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
-/** The company sending the invoices (the tenant's name). */
-export async function loadSeller(): Promise<string> {
-  const { data } = await supabase.from("tenants").select("name").limit(1).maybeSingle();
-  return (data as any)?.name ?? "";
+/* ------------------------- who issues the invoices (110) ------------------------- */
+export interface Seller {
+  name: string; tax_id: string; street: string; postal_code: string; city: string; province: string;
+  country: string; iban: string; email: string;
+}
+export const SELLER_EMPTY: Seller = { name: "", tax_id: "", street: "", postal_code: "", city: "", province: "", country: "ES", iban: "", email: "" };
+export const sellerAddress = (s: Seller) => [s.street, [s.postal_code, s.city].filter(Boolean).join(" "), s.province && s.province !== s.city ? s.province : ""].filter(Boolean).join(", ");
+/** What the XML export needs that isn't filled in yet. */
+export const sellerMissing = (s: Seller) => ([["name", "legal name"], ["tax_id", "tax ID (NIF)"], ["street", "address"], ["postal_code", "postal code"], ["city", "town"]] as const)
+  .filter(([k]) => !String(s[k] ?? "").trim()).map(([, l]) => l);
+
+/** The company sending the invoices: Billing settings, else the tenant's name. */
+export async function loadSeller(): Promise<Seller> {
+  const [{ data: t }, { data: b }] = await Promise.all([
+    supabase.from("tenants").select("name").limit(1).maybeSingle(),
+    supabase.from("base_billing_settings").select("seller_name, seller_tax_id, seller_street, seller_postal_code, seller_city, seller_province, seller_country, seller_iban, seller_email").maybeSingle(),
+  ]);
+  const r = (b ?? {}) as any;
+  return {
+    name: r.seller_name || (t as any)?.name || "", tax_id: r.seller_tax_id ?? "", street: r.seller_street ?? "",
+    postal_code: r.seller_postal_code ?? "", city: r.seller_city ?? "", province: r.seller_province ?? "",
+    country: r.seller_country || "ES", iban: r.seller_iban ?? "", email: r.seller_email ?? "",
+  };
+}
+export async function saveSeller(s: Seller): Promise<void> {
+  const { data: me } = await supabase.auth.getUser();
+  const { data: prof } = await supabase.from("profiles").select("tenant_id").eq("id", me?.user?.id ?? "").maybeSingle();
+  const row: Record<string, unknown> = { tenant_id: (prof as any)?.tenant_id, updated_at: new Date().toISOString() };
+  (Object.keys(SELLER_EMPTY) as (keyof Seller)[]).forEach((k) => { row[`seller_${k}`] = String(s[k] ?? "").trim() || (k === "country" ? "ES" : null); });
+  const { error } = await supabase.from("base_billing_settings").upsert(row);
+  if (error) throw new Error(error.message);
+}
+
+/* ------------------------- XML export: Facturae 3.2.2 ------------------------- */
+const ISO3: Record<string, string> = {
+  ES: "ESP", PT: "PRT", FR: "FRA", DE: "DEU", IT: "ITA", GB: "GBR", UK: "GBR", IE: "IRL", NL: "NLD", BE: "BEL", LU: "LUX", AT: "AUT",
+  CH: "CHE", US: "USA", MX: "MEX", AR: "ARG", CL: "CHL", CO: "COL", PE: "PER", BR: "BRA", AD: "AND", SE: "SWE", DK: "DNK", NO: "NOR",
+  FI: "FIN", PL: "POL", CZ: "CZE", GR: "GRC", RO: "ROU", CA: "CAN",
+};
+const COUNTRY_NAMES: Record<string, string> = { spain: "ES", "españa": "ES", portugal: "PT", france: "FR", francia: "FR", germany: "DE", alemania: "DE", italy: "IT", italia: "IT", "united kingdom": "GB", "reino unido": "GB", ireland: "IE", netherlands: "NL", belgium: "BE", "united states": "US", usa: "US", mexico: "MX", "méxico": "MX" };
+const iso3 = (c: string) => {
+  const k = (c || "").trim();
+  if (k.length === 3) return k.toUpperCase();
+  return ISO3[k.length === 2 ? k.toUpperCase() : COUNTRY_NAMES[k.toLowerCase()] ?? "ES"] ?? "ESP";
+};
+const xesc = (s: unknown) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" }[c]!));
+const f2 = (n: number) => round2(n).toFixed(2);
+/** "Calle X 3, 28009 Madrid, ES" → street / postal code / town / country, as well as it can. */
+export function splitAddress(a: string): { street: string; postal_code: string; city: string; country: string } {
+  const parts = (a || "").split(",").map((x) => x.trim()).filter(Boolean);
+  let country = "ES", postal = "", city = "";
+  const last = parts[parts.length - 1] ?? "";
+  if (parts.length > 1 && (/^[A-Za-z]{2,3}$/.test(last) || COUNTRY_NAMES[last.toLowerCase()])) { country = last.length <= 3 ? last.toUpperCase() : COUNTRY_NAMES[last.toLowerCase()]; parts.pop(); }
+  const i = parts.findIndex((p) => /\b\d{4,5}\b/.test(p));
+  if (i >= 0) { const m = parts[i].match(/^(.*?)(\d{4,5})\s*(.*)$/)!; postal = m[2]; city = (m[3] || m[1]).trim(); parts.splice(i, 1); }
+  else if (parts.length > 1) city = parts.pop()!;
+  return { street: parts.join(", "), postal_code: postal, city, country };
+}
+const unitCode = (u: string) => (u === "h" ? "02" : u === "unit" || !u ? "01" : "05");
+/** A tax id as Facturae wants it: no spaces or dashes; "J" for companies (a letter first), "F" for people. */
+const taxId = (v: string) => (v || "").replace(/[\s.-]/g, "").toUpperCase();
+/** A person when the id is a DNI / NIE (digits, or X/Y/Z first); a company otherwise (and when unknown). */
+const personType = (id: string) => (/^(\d|[XYZKLM]\d)/.test(id.replace(/^ES/, "")) ? "F" : "J");
+
+function partyXml(tag: "SellerParty" | "BuyerParty", p: { tax: string; name: string; street: string; postal_code: string; city: string; province: string; country: string; email?: string }) {
+  const c3 = iso3(p.country);
+  const resident = c3 === "ESP" ? "R" : (["PRT", "FRA", "DEU", "ITA", "IRL", "NLD", "BEL", "LUX", "AUT", "SWE", "DNK", "FIN", "POL", "CZE", "GRC", "ROU"].includes(c3) ? "U" : "E");
+  const tax = taxId(p.tax) || "—";
+  const addr = c3 === "ESP"
+    ? `<AddressInSpain><Address>${xesc(p.street || "—")}</Address><PostCode>${xesc((p.postal_code || "00000").padStart(5, "0").slice(0, 5))}</PostCode><Town>${xesc(p.city || "—")}</Town><Province>${xesc(p.province || p.city || "—")}</Province><CountryCode>ESP</CountryCode></AddressInSpain>`
+    : `<OverseasAddress><Address>${xesc(p.street || "—")}</Address><PostCodeAndTown>${xesc([p.postal_code, p.city].filter(Boolean).join(" ") || "—")}</PostCodeAndTown><Province>${xesc(p.province || p.city || "—")}</Province><CountryCode>${c3}</CountryCode></OverseasAddress>`;
+  const contact = p.email ? `<ContactDetails><ElectronicMail>${xesc(p.email)}</ElectronicMail></ContactDetails>` : "";
+  const type = personType(tax);
+  const entity = type === "J"
+    ? `<LegalEntity><CorporateName>${xesc(p.name || "—")}</CorporateName>${addr}${contact}</LegalEntity>`
+    : `<Individual><Name>${xesc(p.name || "—")}</Name><FirstSurname>-</FirstSurname>${addr}${contact}</Individual>`;
+  return `<${tag}><TaxIdentification><PersonTypeCode>${type}</PersonTypeCode><ResidenceTypeCode>${resident}</ResidenceTypeCode><TaxIdentificationNumber>${xesc(tax)}</TaxIdentificationNumber></TaxIdentification>${entity}</${tag}>`;
+}
+
+/** One invoice as a Facturae 3.2.2 file (unsigned: the billing system it goes to signs / files it). */
+export function facturaeXml(inv: Invoice, lines: InvLine[], seller: Seller): string {
+  const rate = round2(inv.tax_rate);
+  const ls = lines.length ? lines : [{ key: "x", description: inv.notes || `Invoice ${inv.number}`, quantity: 1, unit: "unit", unit_price: inv.net }];
+  const { net, tax, total } = totalsOf(ls, rate);
+  const outstanding = inv.status === "paid" ? 0 : total;
+  const [series, num] = /^(\d{4})-(.+)$/.test(inv.number) ? inv.number.split("-") : ["", inv.number];
+  const b = inv.bill_to ?? { name: "" };
+  const ba = splitAddress(b.address ?? "");
+  const taxXml = (base: number, amt: number) => `<Tax><TaxTypeCode>01</TaxTypeCode><TaxRate>${f2(rate)}</TaxRate><TaxableBase><TotalAmount>${f2(base)}</TotalAmount></TaxableBase><TaxAmount><TotalAmount>${f2(amt)}</TotalAmount></TaxAmount></Tax>`;
+  const items = ls.map((l) => {
+    const amt = lineAmount(l);
+    return `<InvoiceLine><ItemDescription>${xesc(l.description || "—")}</ItemDescription><Quantity>${round2(l.quantity).toFixed(2)}</Quantity><UnitOfMeasure>${unitCode(l.unit)}</UnitOfMeasure><UnitPriceWithoutTax>${(Number(l.unit_price) || 0).toFixed(6)}</UnitPriceWithoutTax><TotalCost>${f2(amt)}</TotalCost><GrossAmount>${f2(amt)}</GrossAmount><TaxesOutputs>${taxXml(amt, amt * rate / 100)}</TaxesOutputs></InvoiceLine>`;
+  }).join("");
+  const due = inv.due_date ?? inv.issue_date;
+  const iban = taxId(seller.iban);
+  const payment = outstanding > 0
+    ? `<PaymentDetails><Installment><InstallmentDueDate>${due}</InstallmentDueDate><InstallmentAmount>${f2(outstanding)}</InstallmentAmount><PaymentMeans>04</PaymentMeans>${iban ? `<AccountToBeCredited><IBAN>${xesc(iban)}</IBAN></AccountToBeCredited>` : ""}</Installment></PaymentDetails>`
+    : "";
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<fe:Facturae xmlns:fe="http://www.facturae.gob.es/formato/Versiones/Facturaev3_2_2.xml" xmlns:ds="http://www.w3.org/2000/09/xmldsig#">
+<FileHeader><SchemaVersion>3.2.2</SchemaVersion><Modality>I</Modality><InvoiceIssuerType>EM</InvoiceIssuerType><Batch><BatchIdentifier>${xesc(taxId(seller.tax_id) + inv.number)}</BatchIdentifier><InvoicesCount>1</InvoicesCount><TotalInvoicesAmount><TotalAmount>${f2(total)}</TotalAmount></TotalInvoicesAmount><TotalOutstandingAmount><TotalAmount>${f2(outstanding)}</TotalAmount></TotalOutstandingAmount><TotalExecutableAmount><TotalAmount>${f2(outstanding)}</TotalAmount></TotalExecutableAmount><InvoiceCurrencyCode>EUR</InvoiceCurrencyCode></Batch></FileHeader>
+<Parties>${partyXml("SellerParty", { tax: seller.tax_id, name: seller.name, street: seller.street, postal_code: seller.postal_code, city: seller.city, province: seller.province, country: seller.country, email: seller.email })}${partyXml("BuyerParty", { tax: b.vat ?? "", name: b.legal_name || b.name, street: ba.street, postal_code: ba.postal_code, city: ba.city, province: ba.city, country: ba.country, email: b.email })}</Parties>
+<Invoices><Invoice><InvoiceHeader><InvoiceNumber>${xesc(num)}</InvoiceNumber>${series ? `<InvoiceSeriesCode>${xesc(series)}</InvoiceSeriesCode>` : ""}<InvoiceDocumentType>FC</InvoiceDocumentType><InvoiceClass>OO</InvoiceClass></InvoiceHeader><InvoiceIssueData><IssueDate>${inv.issue_date}</IssueDate><InvoiceCurrencyCode>EUR</InvoiceCurrencyCode><TaxCurrencyCode>EUR</TaxCurrencyCode><LanguageName>es</LanguageName></InvoiceIssueData><TaxesOutputs>${taxXml(net, tax)}</TaxesOutputs><InvoiceTotals><TotalGrossAmount>${f2(net)}</TotalGrossAmount><TotalGeneralDiscounts>0.00</TotalGeneralDiscounts><TotalGeneralSurcharges>0.00</TotalGeneralSurcharges><TotalGrossAmountBeforeTaxes>${f2(net)}</TotalGrossAmountBeforeTaxes><TotalTaxOutputs>${f2(tax)}</TotalTaxOutputs><TotalTaxesWithheld>0.00</TotalTaxesWithheld><InvoiceTotal>${f2(total)}</InvoiceTotal><TotalOutstandingAmount>${f2(outstanding)}</TotalOutstandingAmount><TotalExecutableAmount>${f2(outstanding)}</TotalExecutableAmount></InvoiceTotals><Items>${items}</Items>${payment}${inv.notes ? `<AdditionalData><InvoiceAdditionalInformation>${xesc(inv.notes)}</InvoiceAdditionalInformation></AdditionalData>` : ""}</Invoice></Invoices>
+</fe:Facturae>
+`;
+}
+
+const download = (blob: Blob, name: string) => {
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+};
+/** Downloads the invoices as Facturae XML: one .xml, or a .zip of them. */
+export async function exportFacturae(invs: Invoice[], seller: Seller, onProgress?: (done: number) => void): Promise<number> {
+  const files: { name: string; xml: string }[] = [];
+  for (const inv of invs) {
+    const { lines } = await loadLines(inv.id);
+    files.push({ name: `${(inv.number || inv.id).replace(/[^\w.-]+/g, "_")}.xml`, xml: facturaeXml(inv, lines, seller) });
+    onProgress?.(files.length);
+  }
+  if (!files.length) return 0;
+  if (files.length === 1) { download(new Blob([files[0].xml], { type: "application/xml" }), files[0].name); return 1; }
+  const { default: JSZip } = await import("jszip");
+  const zip = new JSZip();
+  files.forEach((f) => zip.file(f.name, f.xml));
+  download(await zip.generateAsync({ type: "blob" }), `invoices-facturae-${todayIso()}.zip`);
+  return files.length;
 }
 
 /* ------------------------- automatic invoices (104) ------------------------- */

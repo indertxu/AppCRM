@@ -1,7 +1,9 @@
 /* =====================================================================
    BASE · Billing — one invoice: who it's for, its lines, tax and terms.
    A draft is edited freely; once sent its lines are locked and what's left
-   is following it up (paid, void, print, e-mail it again).
+   is following it up (paid, void, print, e-mail it again, export as XML).
+   Laid out as the invoice itself (the sheet) and, beside it, where it
+   stands: who made it (by hand / automatic), its timeline and the actions.
    ===================================================================== */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -10,17 +12,19 @@ import DatePicker from "../../framework/DatePicker";
 import {
   UNITS, addDays, billToOf, daysBetween, deleteInvoice, fmtDate, lineAmount, mailInvoice, money, newKey, printInvoice,
   round2, saveInvoice, setInvoiceStatus, stateOf, todayIso, totalsOf, STATE_LABEL,
-  type BClient, type CatItem, type Draft, type InvLine,
+  sellerAddress, type BClient, type CatItem, type Draft, type InvLine, type Seller,
 } from "./billingApi";
 
 interface Props {
   draft: Draft;
   clients: BClient[];
   catalog: CatItem[];
-  seller: string;
+  seller: Seller;
   onClose: () => void;
   /** Saved, sent, paid, deleted…: the lists reload. */
   onChanged: () => void;
+  /** Export this (saved, issued) invoice as XML. */
+  onExport?: (d: Draft) => void;
 }
 
 const Ico = ({ d, s = 16 }: { d: string; s?: number }) => (
@@ -39,6 +43,11 @@ export const IC = {
   clock: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2",
   mail: "M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM3 7l9 6 9-6",
   search: "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.3-4.3",
+  download: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3",
+  bolt: "M13 2L3 14h9l-1 8 10-12h-9l1-8z",
+  pen: "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z",
+  code: "M16 18l6-6-6-6M8 6l-6 6 6 6",
+  doc: "M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M8 13h8M8 17h5",
 };
 
 /** A number field that keeps what you type until you leave it. */
@@ -56,7 +65,7 @@ function Num({ value, onChange, disabled, className, suffix }: { value: number; 
   );
 }
 
-export default function InvoiceModal({ draft, clients, catalog, seller, onClose, onChanged }: Props) {
+export default function InvoiceModal({ draft, clients, catalog, seller, onClose, onChanged, onExport }: Props) {
   const [d, setD] = useState<Draft>(draft);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -124,133 +133,177 @@ export default function InvoiceModal({ draft, clients, catalog, seller, onClose,
   });
   const del = () => run("delete", async () => { await deleteInvoice(d.id!); setClosing(true); setTimeout(onClose, 220); });
 
+  const isAuto = d.source === "auto";
+  const sAddr = sellerAddress(seller);
+  /** Where it stands, step by step. */
+  const steps: { k: string; t: string; sub: string; on: boolean; tone?: "late" | "void" | "ok" }[] = [
+    { k: "made", t: isAuto ? "Made automatically" : d.id ? "Written by hand" : "Being written", sub: isAuto ? "On the month's cutoff, from the calendar" : d.created_at ? fmtDate(d.created_at) : "Not saved yet", on: true },
+    { k: "sent", t: d.status === "draft" ? "Not sent yet" : "Sent", sub: d.sent_date ? fmtDate(d.sent_date) : d.status === "draft" ? "Send it to the client" : "—", on: d.status !== "draft" },
+    d.status === "void"
+      ? { k: "void", t: "Voided", sub: "Doesn't count any more", on: true, tone: "void" }
+      : { k: "due", t: d.status === "sent" && late > 0 ? `${late} day${late === 1 ? "" : "s"} late` : "Due", sub: fmtDate(due), on: d.status === "paid" || (d.status === "sent" && late >= 0), tone: d.status === "sent" && late > 0 ? "late" : undefined },
+    ...(d.status === "void" ? [] : [{ k: "paid", t: d.status === "paid" ? "Paid" : "Not paid yet", sub: d.paid_date ? fmtDate(d.paid_date) : "—", on: d.status === "paid", tone: "ok" as const }]),
+  ];
+
   return createPortal(
     <div className={`bzi-backdrop ${closing ? "is-closing" : ""}`} onMouseDown={(e) => { if (e.target === e.currentTarget) close(); }}>
-      <div className="bzi-modal" role="dialog" aria-modal="true" aria-label={`Invoice ${d.number}`}>
+      <div className={`bzi-modal is-${state}`} role="dialog" aria-modal="true" aria-label={`Invoice ${d.number}`}>
         <header className="bzi-head">
+          <span className="bzi-head-ico"><Ico d={IC.doc} s={18} /></span>
           <div className="bzi-head-t">
-            <span className="bzi-kicker">{d.id ? "Invoice" : "New invoice"}</span>
+            <span className="bzi-kicker">{d.id ? (d.status === "draft" ? "Draft invoice" : "Invoice") : "New invoice"}</span>
             <div className="bzi-head-row">
               {locked ? <h2>{d.number}</h2> : (
-                <input className="bzi-numfield" value={d.number} onChange={(e) => set({ number: e.target.value })} aria-label="Invoice number" />
+                <input className="bzi-numfield" style={{ width: `${Math.max(6, d.number.length) + 1}ch` }} value={d.number} onChange={(e) => set({ number: e.target.value })} aria-label="Invoice number" />
               )}
               <span className={`bz-pill is-${state}`}>{STATE_LABEL[state]}</span>
-              {d.status === "sent" && <span className="bzi-due-note">{late > 0 ? `${late} day${late === 1 ? "" : "s"} late` : late === 0 ? "Due today" : `Due in ${-late} day${late === -1 ? "" : "s"}`}</span>}
-              {d.status === "paid" && d.paid_date && <span className="bzi-due-note">Paid {fmtDate(d.paid_date)}</span>}
+              <span className={`bz-src ${isAuto ? "is-auto" : "is-manual"}`}><Ico d={isAuto ? IC.bolt : IC.pen} s={12} />{isAuto ? "Automatic" : "Manual"}</span>
             </div>
           </div>
           <button className="bzi-x" onClick={close} aria-label="Close"><Ico d={IC.x} s={18} /></button>
         </header>
 
-        <div className="bzi-body">
-          <section className="bzi-top">
-            <div className="bzi-to">
-              <span className="bzi-lbl">Bill to</span>
-              {locked ? <strong className="bzi-to-name">{d.bill_to.name || "—"}</strong> : (
-                <Select value={d.client_id} onChange={pickClient} options={clientOpts} placeholder="Pick a client…" searchable aria-label="Client" />
-              )}
-              {d.client_id && (
-                <div className="bzi-to-card">
-                  <b>{d.bill_to.legal_name || d.bill_to.name}</b>
-                  {d.bill_to.vat && <span>VAT {d.bill_to.vat}</span>}
-                  {d.bill_to.address && <span>{d.bill_to.address}</span>}
-                  {d.bill_to.email ? <span className="bzi-to-mail"><Ico d={IC.mail} s={13} />{d.bill_to.contact ? `${d.bill_to.contact} · ` : ""}{d.bill_to.email}</span>
-                    : <span className="bzi-to-warn">No billing e-mail on this client</span>}
+        <div className="bzi-main">
+          <div className="bzi-body">
+            <article className="bzi-paper">
+              <section className="bzi-paper-top">
+                <div className="bzi-from">
+                  <span className="bzi-lbl">From</span>
+                  <b>{seller.name || "Your company"}</b>
+                  {seller.tax_id && <span>VAT {seller.tax_id}</span>}
+                  {sAddr && <span>{sAddr}</span>}
+                  {!seller.tax_id && <span className="bzi-to-warn">Add your tax ID in Export XML › Your details</span>}
                 </div>
-              )}
-            </div>
-            <div className="bzi-terms">
-              <label><span className="bzi-lbl">Issued</span>
-                {locked ? <b>{fmtDate(d.issue_date)}</b> : <DatePicker value={d.issue_date} onChange={(v) => set({ issue_date: v })} />}
-              </label>
-              <label><span className="bzi-lbl">Pay within</span>
-                <Num value={d.payment_days} onChange={(n) => set({ payment_days: Math.max(0, Math.round(n)) })} disabled={locked} suffix="days" className="is-days" />
-              </label>
-              <div><span className="bzi-lbl">Due</span><b className="bzi-due">{fmtDate(due)}</b></div>
-            </div>
-          </section>
+                <div className="bzi-terms">
+                  <label><span className="bzi-lbl">Issued</span>
+                    {locked ? <b>{fmtDate(d.issue_date)}</b> : <DatePicker value={d.issue_date} onChange={(v) => set({ issue_date: v })} />}
+                  </label>
+                  <label><span className="bzi-lbl">Pay within</span>
+                    {locked ? <b>{d.payment_days} days</b> : <Num value={d.payment_days} onChange={(n) => set({ payment_days: Math.max(0, Math.round(n)) })} suffix="days" className="is-days" />}
+                  </label>
+                  <div><span className="bzi-lbl">Due</span><b className="bzi-due">{fmtDate(due)}</b></div>
+                </div>
+              </section>
 
-          <section className="bzi-lines">
-            <div className="bzi-lrow bzi-lhead">
-              <span>Description</span><span>Qty</span><span>Unit</span><span>Price</span><span>Amount</span><span />
-            </div>
-            {d.lines.length === 0 && <p className="bzi-empty">No lines yet — add one, or pick a product or service.</p>}
-            {d.lines.map((l, i) => (
-              <div className="bzi-lrow" key={l.key} style={{ ["--i" as string]: i }}>
-                <input className="bzi-desc" value={l.description} disabled={locked} placeholder="What you're billing"
-                  onChange={(e) => setLine(l.key, { description: e.target.value })} />
-                <Num value={l.quantity} onChange={(n) => setLine(l.key, { quantity: n })} disabled={locked} />
-                {locked ? <span className="bzi-unit-ro">{UNITS.find((u) => u.value === l.unit)?.label ?? l.unit}</span> : (
-                  <Select size="sm" value={l.unit} onChange={(v) => setLine(l.key, { unit: v })} options={UNITS} aria-label="Unit" />
+              <section className="bzi-to">
+                <span className="bzi-lbl">Bill to</span>
+                {!locked && (
+                  <Select value={d.client_id} onChange={pickClient} options={clientOpts} placeholder="Pick a client…" searchable aria-label="Client" />
                 )}
-                <Num value={l.unit_price} onChange={(n) => setLine(l.key, { unit_price: n })} disabled={locked} suffix="€" />
-                <b className="bzi-amt">{money(lineAmount(l))}</b>
-                {!locked ? <button className="bzi-lx" onClick={() => set({ lines: d.lines.filter((x) => x.key !== l.key) })} aria-label="Remove line"><Ico d={IC.x} s={14} /></button> : <span />}
-              </div>
-            ))}
-            {!locked && (
-              <div className="bzi-add">
-                <button className="bzi-addbtn" onClick={() => addLine()}><Ico d={IC.plus} s={14} />Add line</button>
-                <div className="bzi-pick-wrap">
-                  <button className={`bzi-addbtn ${pickOpen ? "is-on" : ""}`} onClick={() => setPickOpen((v) => !v)}><Ico d={IC.box} s={14} />Product or service</button>
-                  {pickOpen && (
-                    <div className="bzi-pick" onMouseDown={(e) => e.stopPropagation()}>
-                      <label className="bzi-pick-q"><Ico d={IC.search} s={14} /><input autoFocus value={pickQ} placeholder="Search the catalogue" onChange={(e) => setPickQ(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setPickOpen(false); } if (e.key === "Enter" && items[0]) addItem(items[0]); }} /></label>
-                      <div className="bzi-pick-list">
-                        {items.length === 0 && <p className="bzi-empty">Nothing in the catalogue matches.</p>}
-                        {items.map((c) => (
-                          <button key={c.key} onClick={() => addItem(c)}>
-                            <i className={`is-${c.kind}`}>{c.kind === "product" ? "P" : "S"}</i>
-                            <span>{c.label}</span>
-                            <b>{money(c.price)}{c.unit && c.unit !== "unit" ? <small> / {UNITS.find((u) => u.value === c.unit)?.label.replace(/s$/, "") ?? c.unit}</small> : null}</b>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                {d.client_id ? (
+                  <div className="bzi-to-card">
+                    <b>{d.bill_to.legal_name || d.bill_to.name}</b>
+                    {d.bill_to.vat ? <span>VAT {d.bill_to.vat}</span> : <span className="bzi-to-warn">No VAT number on this client</span>}
+                    {d.bill_to.address && <span>{d.bill_to.address}</span>}
+                    {d.bill_to.email ? <span className="bzi-to-mail"><Ico d={IC.mail} s={13} />{d.bill_to.contact ? `${d.bill_to.contact} · ` : ""}{d.bill_to.email}</span>
+                      : <span className="bzi-to-warn">No billing e-mail on this client</span>}
+                  </div>
+                ) : locked && <strong className="bzi-to-name">{d.bill_to.name || "—"}</strong>}
+              </section>
+
+              <section className="bzi-lines">
+                <div className="bzi-lrow bzi-lhead">
+                  <span>Description</span><span>Qty</span><span>Unit</span><span>Price</span><span>Amount</span><span />
                 </div>
-                {d.entry_ids.length > 0 && <span className="bzi-linked"><Ico d={IC.clock} s={13} />Bills {d.entry_ids.length} calendar entr{d.entry_ids.length === 1 ? "y" : "ies"}</span>}
-              </div>
-            )}
-            {locked && d.entry_ids.length > 0 && <p className="bzi-linked is-ro"><Ico d={IC.clock} s={13} />Bills {d.entry_ids.length} calendar entr{d.entry_ids.length === 1 ? "y" : "ies"}</p>}
-          </section>
+                {d.lines.length === 0 && <p className="bzi-empty">No lines yet — add one, or pick a product or service.</p>}
+                {d.lines.map((l, i) => (
+                  <div className={`bzi-lrow ${locked ? "is-ro" : ""}`} key={l.key} style={{ ["--i" as string]: i }}>
+                    <input className="bzi-desc" value={l.description} disabled={locked} placeholder="What you're billing"
+                      onChange={(e) => setLine(l.key, { description: e.target.value })} />
+                    <Num value={l.quantity} onChange={(n) => setLine(l.key, { quantity: n })} disabled={locked} />
+                    {locked ? <span className="bzi-unit-ro">{UNITS.find((u) => u.value === l.unit)?.label ?? l.unit}</span> : (
+                      <Select size="sm" value={l.unit} onChange={(v) => setLine(l.key, { unit: v })} options={UNITS} aria-label="Unit" />
+                    )}
+                    <Num value={l.unit_price} onChange={(n) => setLine(l.key, { unit_price: n })} disabled={locked} suffix="€" />
+                    <b className="bzi-amt">{money(lineAmount(l))}</b>
+                    {!locked ? <button className="bzi-lx" onClick={() => set({ lines: d.lines.filter((x) => x.key !== l.key) })} aria-label="Remove line"><Ico d={IC.x} s={14} /></button> : <span />}
+                  </div>
+                ))}
+                {!locked && (
+                  <div className="bzi-add">
+                    <button className="bzi-addbtn" onClick={() => addLine()}><Ico d={IC.plus} s={14} />Add line</button>
+                    <div className="bzi-pick-wrap">
+                      <button className={`bzi-addbtn ${pickOpen ? "is-on" : ""}`} onClick={() => setPickOpen((v) => !v)}><Ico d={IC.box} s={14} />Product or service</button>
+                      {pickOpen && (
+                        <div className="bzi-pick" onMouseDown={(e) => e.stopPropagation()}>
+                          <label className="bzi-pick-q"><Ico d={IC.search} s={14} /><input autoFocus value={pickQ} placeholder="Search the catalogue" onChange={(e) => setPickQ(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setPickOpen(false); } if (e.key === "Enter" && items[0]) addItem(items[0]); }} /></label>
+                          <div className="bzi-pick-list">
+                            {items.length === 0 && <p className="bzi-empty">Nothing in the catalogue matches.</p>}
+                            {items.map((c) => (
+                              <button key={c.key} onClick={() => addItem(c)}>
+                                <i className={`is-${c.kind}`}>{c.kind === "product" ? "P" : "S"}</i>
+                                <span>{c.label}</span>
+                                <b>{money(c.price)}{c.unit && c.unit !== "unit" ? <small> / {UNITS.find((u) => u.value === c.unit)?.label.replace(/s$/, "") ?? c.unit}</small> : null}</b>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </section>
 
-          <section className="bzi-foot-grid">
-            <label className="bzi-notes"><span className="bzi-lbl">Notes on the invoice</span>
-              <textarea value={d.notes} disabled={locked} placeholder="Bank details, purchase order, a thank-you…" onChange={(e) => set({ notes: e.target.value })} />
-            </label>
-            <div className="bzi-totals">
-              <div><span>Net</span><b>{money(net)}</b></div>
-              <div><span>Tax <Num value={d.tax_rate} onChange={(n) => set({ tax_rate: n })} disabled={locked} suffix="%" className="is-tax" /></span><b>{money(tax)}</b></div>
-              <div className="is-total"><span>Total</span><b>{money(total)}</b></div>
+              <section className="bzi-foot-grid">
+                <label className="bzi-notes"><span className="bzi-lbl">Notes on the invoice</span>
+                  {locked ? <p className="bzi-notes-ro">{d.notes || "—"}</p>
+                    : <textarea value={d.notes} placeholder="Bank details, purchase order, a thank-you…" onChange={(e) => set({ notes: e.target.value })} />}
+                </label>
+                <div className="bzi-totals">
+                  <div><span>Net</span><b>{money(net)}</b></div>
+                  <div><span>Tax {locked ? `${round2(d.tax_rate)}%` : <Num value={d.tax_rate} onChange={(n) => set({ tax_rate: n })} suffix="%" className="is-tax" />}</span><b>{money(tax)}</b></div>
+                  <div className="is-total"><span>Total</span><b>{money(total)}</b></div>
+                </div>
+              </section>
+            </article>
+          </div>
+
+          <aside className="bzi-side">
+            <div className="bzi-sum">
+              <span className="bzi-lbl">Total</span>
+              <b>{money(total)}</b>
+              <small>{money(net)} + {money(tax)} tax</small>
             </div>
-          </section>
-          {err && <p className="bzi-err">{err}</p>}
+
+            <ol className="bzi-steps">
+              {steps.map((st) => (
+                <li key={st.k} className={`${st.on ? "is-on" : ""} ${st.tone ? `is-${st.tone}` : ""}`}>
+                  <i />
+                  <span><b>{st.t}</b><small>{st.sub}</small></span>
+                </li>
+              ))}
+            </ol>
+
+            {d.entry_ids.length > 0 && <p className="bzi-linked"><Ico d={IC.clock} s={13} />Bills {d.entry_ids.length} calendar entr{d.entry_ids.length === 1 ? "y" : "ies"}</p>}
+            {err && <p className="bzi-err">{err}</p>}
+
+            <div className="bzi-acts">
+              {confirmDel ? (
+                <div className="bzi-confirm">
+                  <span>Delete this draft? Its work goes back to “To bill”.</span>
+                  <div><button className="bzi-btn" onClick={() => setConfirmDel(false)}>Keep it</button>
+                    <button className="bzi-btn is-danger" disabled={!!busy} onClick={del}>{busy === "delete" ? "Deleting…" : "Delete"}</button></div>
+                </div>
+              ) : (
+                <>
+                  {d.status === "draft" && <button className="bzi-btn is-primary is-big" disabled={!!busy} onClick={() => save("sent", { sent_date: todayIso() })}><Ico d={IC.send} s={16} />{busy === "send" ? "Sending…" : "Send invoice"}</button>}
+                  {d.status === "draft" && <button className="bzi-btn" disabled={!!busy} onClick={() => save("draft")}>{busy === "save" ? "Saving…" : d.id ? "Save changes" : "Save as draft"}</button>}
+                  {d.status === "sent" && <button className="bzi-btn is-primary is-big" disabled={!!busy} onClick={() => mark("paid", { paid_date: todayIso() }, "paid")}><Ico d={IC.check} s={16} />{busy === "paid" ? "Saving…" : "Mark as paid"}</button>}
+                  {d.status === "sent" && <button className="bzi-btn" onClick={() => mailInvoice(d, seller)}><Ico d={IC.mail} s={15} />E-mail again</button>}
+                  <div className="bzi-acts-row">
+                    <button className="bzi-btn is-soft" onClick={() => { if (!printInvoice(d, seller)) setErr("Your browser blocked the print window — allow pop-ups for this site."); }}><Ico d={IC.print} s={15} />PDF</button>
+                    {d.id && d.status !== "draft" && onExport && <button className="bzi-btn is-soft" onClick={() => onExport(d)}><Ico d={IC.code} s={15} />XML</button>}
+                  </div>
+                  {d.status === "draft" && d.id && <button className="bzi-btn is-ghost is-danger" onClick={() => setConfirmDel(true)}><Ico d={IC.trash} s={15} />Delete draft</button>}
+                  {d.status === "sent" && <button className="bzi-btn is-ghost" disabled={!!busy} onClick={() => mark("void", {}, "void")}><Ico d={IC.ban} s={15} />Void invoice</button>}
+                  {d.status === "paid" && <button className="bzi-btn is-ghost" disabled={!!busy} onClick={() => mark("sent", { paid_date: null }, "unpay")}><Ico d={IC.undo} s={15} />Mark unpaid</button>}
+                  {d.status === "void" && <button className="bzi-btn is-ghost" disabled={!!busy} onClick={() => mark("sent", {}, "unvoid")}><Ico d={IC.undo} s={15} />Restore</button>}
+                </>
+              )}
+            </div>
+          </aside>
         </div>
-
-        <footer className="bzi-actions">
-          {confirmDel ? (
-            <div className="bzi-confirm">
-              <span>Delete this draft? Its work goes back to “To bill”.</span>
-              <button className="bzi-btn" onClick={() => setConfirmDel(false)}>Keep it</button>
-              <button className="bzi-btn is-danger" disabled={!!busy} onClick={del}>{busy === "delete" ? "Deleting…" : "Delete"}</button>
-            </div>
-          ) : (
-            <>
-              {d.status === "draft" && d.id && <button className="bzi-btn is-ghost is-danger" onClick={() => setConfirmDel(true)}><Ico d={IC.trash} s={15} />Delete</button>}
-              {d.status === "sent" && <button className="bzi-btn is-ghost" disabled={!!busy} onClick={() => mark("void", {}, "void")}><Ico d={IC.ban} s={15} />Void</button>}
-              {d.status === "paid" && <button className="bzi-btn is-ghost" disabled={!!busy} onClick={() => mark("sent", { paid_date: null }, "unpay")}><Ico d={IC.undo} s={15} />Mark unpaid</button>}
-              {d.status === "void" && <button className="bzi-btn is-ghost" disabled={!!busy} onClick={() => mark("sent", {}, "unvoid")}><Ico d={IC.undo} s={15} />Restore</button>}
-              <span className="bzi-sp" />
-              <button className="bzi-btn" onClick={() => { if (!printInvoice(d, seller)) setErr("Your browser blocked the print window — allow pop-ups for this site."); }}><Ico d={IC.print} s={15} />Print / PDF</button>
-              {d.status === "draft" && <button className="bzi-btn" disabled={!!busy} onClick={() => save("draft")}>{busy === "save" ? "Saving…" : "Save draft"}</button>}
-              {d.status === "draft" && <button className="bzi-btn is-primary" disabled={!!busy} onClick={() => save("sent", { sent_date: todayIso() })}><Ico d={IC.send} s={15} />{busy === "send" ? "Sending…" : "Send"}</button>}
-              {d.status === "sent" && <button className="bzi-btn" onClick={() => mailInvoice(d, seller)}><Ico d={IC.mail} s={15} />E-mail again</button>}
-              {d.status === "sent" && <button className="bzi-btn is-primary" disabled={!!busy} onClick={() => mark("paid", { paid_date: todayIso() }, "paid")}><Ico d={IC.check} s={15} />{busy === "paid" ? "Saving…" : "Mark as paid"}</button>}
-            </>
-          )}
-        </footer>
       </div>
     </div>,
     document.body,

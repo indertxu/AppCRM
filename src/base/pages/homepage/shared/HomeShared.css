@@ -2959,3 +2959,6 @@ body.is-dragsorting, body.is-dragsorting * { cursor: grabbing !important; user-s
   .hs-wk-h small { font-size: 9.5px; }
 }
 @container (max-width: 330px) { .hs-wk-h small { display: none; } }
+
+/* BASE: tasks have no type — the list loses that column */
+.tk-table.is-notype .tk-th, .tk-table.is-notype .tk-tr { grid-template-columns: 22px minmax(200px, 2.4fr) minmax(110px, 1fr) 76px 218px 100px minmax(130px, 1fr) 120px; gap: 10px; }

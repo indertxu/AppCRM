@@ -57,8 +57,8 @@ export default function NewUserModal({ allowedLevels, onCreate, onClose }: Props
   const [password, setPassword] = useState("");
   const [wage, setWage] = useState(0);
   const [startDate, setStartDate] = useState("");
-const [birthday, setBirthday] = useState("");
-  const [ss, setSs] = useState("");
+const [birthday] = useState(""); // BASE: not asked
+  const [ss] = useState(""); // BASE: not asked
   const [bank, setBank] = useState("");
   const [title, setTitle] = useState("consultant");
   const [busy, setBusy] = useState(false);
@@ -118,9 +118,7 @@ role: "",
             <div className="cl-field"><label>Password</label><input type="text" className="cl-input" value={password} title={PASSWORD_HINT} placeholder="e.g. Next-2026!" onChange={(e) => setPassword(e.target.value)} />{password && passwordProblem(password) && <small className="su-error" style={{ margin: "4px 0 0", fontSize: 11.5 }}>{passwordProblem(password)}</small>}</div>
             <div className="cl-field"><label>Yearly wage</label><input type="number" min="0" className="cl-input" value={wage} onChange={(e) => setWage(Number(e.target.value) || 0)} /></div>
             <div className="cl-field"><label>Start date</label><DatePicker value={startDate} onChange={setStartDate} /></div>
-        <div className="cl-field"><label>Birthday</label><DatePicker value={birthday} onChange={setBirthday} /></div>
-            <div className="cl-field"><label>Nº seguridad social</label><input className="cl-input" value={ss} onChange={(e) => setSs(e.target.value)} /></div>
-            <div className="cl-field"><label>Nº cuenta bancaria</label><input className="cl-input" value={bank} onChange={(e) => setBank(e.target.value)} /></div>
+            <div className="cl-field"><label>Bank account (IBAN)</label><input className="cl-input" value={bank} onChange={(e) => setBank(e.target.value)} /></div>
             <div className="cl-field"><label>Job title</label>
 <Select
                 value={title}

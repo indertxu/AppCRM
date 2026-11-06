@@ -73,7 +73,7 @@ export default function AutoInvoiceModal({ settings, unbilled, clients, catalog,
     setBusy("run"); setErr(null); setMsg(null);
     try {
       const r = await billNow(upTo, s.auto_send);
-      setMsg(r.invoices ? `${r.invoices} invoice${r.invoices === 1 ? "" : "s"} made for ${money(r.net)} (before tax)${s.auto_send ? " and marked as sent" : " — drafts, in Invoices"}.` : "Nothing to bill up to that day.");
+      setMsg(r.invoices ? `${r.invoices} invoice${r.invoices === 1 ? "" : "s"} made for ${money(r.net)} (before tax)${s.auto_send ? " and marked as sent" : " — drafts, in To invoice"}.` : "Nothing to bill up to that day.");
       onBilled(); loadRuns().then(setRuns).catch(() => {});
     } catch (e: any) { setErr(e?.message ?? String(e)); }
     setBusy(null);

@@ -22,7 +22,7 @@ import {
 import { supabase } from "../../../components/api/supabase";
 import {
   AddressFields, PhoneField, StatusPills, HistorySection, phoneText, telHref,
-  FilterBar, FilterChips, SortHead, applyView, nextSort, emptyView, useSavedViews, useStoredView, type FField,
+  FilterBar, FilterChips, SortHead, HeadFilter, applyView, nextSort, emptyView, useSavedViews, useStoredView, type FField,
   useBulkSelection, BulkBar, BulkCheck, inPool, type BulkAction, DataCleanup, DataTools, SettingsShell, ColumnsEditor, CustomFieldsEditor,
   ConfirmX, DealRows, MultiChoice, CustomChips, isChoiceType, RequiredFieldsEditor, InheritedTags, TypeChips, typeSortKey, NewDealButton, newDealUrl,
   MergeModal, type MergeField,
@@ -765,8 +765,8 @@ export default function ContactsPage({ orbit, only }: { orbit?: OrbitHost; only?
           {/* the sticky header sits on an opaque band of the page colour: rows never show above or around it */}
           <div className="ct-lhead-wrap">
           <div className="ct-lrow ct-lhead" style={{ gridTemplateColumns: rowGrid }}>
-            <span className="ct-lid-head"><BulkCheck on={bulk.allOn} partial={bulk.someOn} onToggle={toggleAllRows} label="Select every contact shown" /><SortHead label="Name" k="name" sort={view.sort} onSort={onSort} /></span>
-            {activeColumns.map((k) => <span key={k}><SortHead label={columnLabel(k)} k={k} sort={view.sort} onSort={onSort} /></span>)}
+            <span className="ct-lid-head"><BulkCheck on={bulk.allOn} partial={bulk.someOn} onToggle={toggleAllRows} label="Select every contact shown" /><SortHead label="Name" k="name" sort={view.sort} onSort={onSort} /><HeadFilter fields={filterFields} field="name" view={view} onView={setView} /></span>
+            {activeColumns.map((k) => <span key={k} className="ct-lhcell"><SortHead label={columnLabel(k)} k={k} sort={view.sort} onSort={onSort} /><HeadFilter fields={filterFields} field={k} view={view} onView={setView} /></span>)}
           </div>
           </div>
           <div ref={listRef} className="ct-list" style={{ paddingTop: win.first * stride, paddingBottom: (listLen - win.last) * stride + 72 }}>

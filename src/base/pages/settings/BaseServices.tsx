@@ -27,41 +27,37 @@ const initialsOf = (name: string) => name.trim().split(/\s+/).filter(Boolean).sl
 export function ServiceCard({ service, onOpen }: { service: BaseService; onOpen: () => void }) {
   const b = billingOf(service.billing);
   const fixed = service.billing === "upfront" || service.billing === "by_step";
+  const [open, setOpen] = useState(false);
+  const unit = fixed ? (service.billing === "upfront" ? "fixed · upfront" : "fixed · by step") : b.unit;
   return (
-    <section className="bc-card bc-svc" style={{ ["--kc" as string]: SERVICE_COLOR }} role="button" tabIndex={0}
-      onClick={onOpen} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(); } }} aria-label={`Edit ${service.name}`}>
-      <div className="bc-band" aria-hidden="true" />
-      <header className="bc-hd">
-        <span className="bc-tile" aria-hidden="true">{initialsOf(service.name) || <Ico d={D.steps} s={20} />}</span>
-        <div className="bc-hd-txt">
-          <h3 className="bc-svc-name">{service.name || "Untitled service"}</h3>
-          <span className="bc-svc-pills">
-            <span className="bc-pill"><i aria-hidden="true" />Service</span>
-            <span className="bc-pill is-soft">{b.label}</span>
-          </span>
+    <section className={`bc-row-wrap ${open ? "is-open" : ""}`} style={{ ["--kc" as string]: SERVICE_COLOR }}>
+      <button type="button" className="bc-row" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <span className="bc-row-tile" aria-hidden="true">{initialsOf(service.name) || <Ico d={D.steps} s={16} />}</span>
+        <span className="bc-row-main">
+          <b>{service.name || "Untitled service"}</b>
+          <span className="bc-row-tags"><em className="is-kind"><i />{b.label}</em><em>{service.steps.length} step{service.steps.length === 1 ? "" : "s"}</em></span>
+        </span>
+        <span className={`bc-row-viz is-steps ${service.steps.length ? "" : "is-none"}`} aria-hidden="true">
+          {service.steps.map((st, i) => <i key={st.id} style={{ flex: service.billing === "by_step" ? Math.max(4, Number(st.percent) || 0) : 1, ["--i" as string]: i }} title={st.name} />)}
+        </span>
+        <span className="bc-row-price"><b>€{service.price ? amount(service.price) : "0"}</b><small>{unit}</small></span>
+        <span className="bc-row-chev" aria-hidden="true"><Ico d="M6 9l6 6 6-6" s={16} /></span>
+      </button>
+      {open && (
+        <div className="bc-row-more">
+          {service.steps.length > 0 ? (
+            <ol className="bc-flow" aria-label="Steps">
+              {service.steps.map((st, i) => (
+                <li key={st.id} style={{ ["--i" as string]: i }}>
+                  <span className="bc-flow-n">{i + 1}</span>
+                  <span className="bc-flow-name">{st.name || `Step ${i + 1}`}</span>
+                  {service.billing === "by_step" && <span className="bc-flow-pct">{amount(st.percent)}%</span>}
+                </li>
+              ))}
+            </ol>
+          ) : <p className="bc-flow-empty">No steps yet</p>}
+          <button type="button" className="bc-row-edit" onClick={onOpen}><Ico d={D.pen} s={13} />Edit service</button>
         </div>
-        <span className="bc-svc-edit" aria-hidden="true"><Ico d={D.pen} s={14} /></span>
-      </header>
-
-      <div className="bc-hero is-static">
-        <div className="bc-hero-price">
-          <span className="bc-static-price"><span className="bc-cur">€</span>{service.price ? amount(service.price) : "0"}</span>
-          <span className="bc-hero-unit">{fixed ? (service.billing === "upfront" ? "fixed · billed upfront" : "fixed · billed by step") : b.unit}</span>
-        </div>
-      </div>
-
-      {service.steps.length > 0 ? (
-        <ol className="bc-flow" aria-label="Steps">
-          {service.steps.map((st, i) => (
-            <li key={st.id} style={{ ["--i" as string]: i }}>
-              <span className="bc-flow-n">{i + 1}</span>
-              <span className="bc-flow-name">{st.name || `Step ${i + 1}`}</span>
-              {service.billing === "by_step" && <span className="bc-flow-pct">{amount(st.percent)}%</span>}
-            </li>
-          ))}
-        </ol>
-      ) : (
-        <p className="bc-flow-empty">No steps yet</p>
       )}
     </section>
   );

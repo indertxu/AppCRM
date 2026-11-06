@@ -546,7 +546,8 @@ export default function SuperAdminBubble() {
  * The switch in Settings → Organization (next to Page access) that shows or
  * hides the bubble. Only superadmins see it.
  */
-export function SuperAdminSwitch() {
+/** `compact`: just a small crown (Base Organization), and nothing for non-superadmins. */
+export function SuperAdminSwitch({ compact = false }: { compact?: boolean } = {}) {
   const { ready, isSuper, why } = useSuperCheck();
   const [on, setOn] = useState(isBubbleOn());
   useEffect(() => {
@@ -557,6 +558,7 @@ export function SuperAdminSwitch() {
   if (!ready) return null;
   // Not a superadmin: shown greyed out, saying exactly why (so it's never a mystery).
   if (!isSuper && !getActAs()) {
+    if (compact) return null;
     return (
       <button type="button" className="st-sa-btn is-locked" disabled
         title={`Organisation superadmins only. Your profile: ${why}. In Supabase: update profiles set is_org_superadmin = true where id = '<your id>'; then reload.`}>
@@ -565,6 +567,12 @@ export function SuperAdminSwitch() {
       </button>
     );
   }
+  if (compact) return (
+    <button type="button" className={`st-sa-crown ${on ? "is-on" : ""}`} role="switch" aria-checked={on} aria-label="Superadmin"
+      onClick={() => setBubbleOn(!on)} title={on ? "Superadmin: hide the bubble" : "Superadmin: show the bubble (preview a role or act as someone)"}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 8l4.5 3L12 4l4.5 7L21 8l-2 11H5z" /><path d="M5 19h14" /></svg>
+    </button>
+  );
   return (
     <button type="button" className={`st-sa-btn ${on ? "is-on" : ""}`} role="switch" aria-checked={on}
       onClick={() => setBubbleOn(!on)}

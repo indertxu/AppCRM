@@ -67,3 +67,13 @@
 .ob-pane .cl.cl-ov .cx-card:hover { transform: translateY(-3px); border-color: rgba(18, 181, 127, 0.35); box-shadow: 0 1px 2px rgba(10, 60, 40, 0.04), 0 28px 50px -30px rgba(18, 140, 95, 0.55); }
 .ob-pane .cl.cl-ov .cx-av { width: 46px; height: 46px; border-radius: 14px; font-size: 15px; }
 .ob-pane .cl.cl-ov .cx-id b { font-size: 16px; }
+
+/* ---------- switching to / from Clients: the same motion as the other views ----------
+   (the client grid had no way in or out, so the list being left showed through it
+   and the bar replayed its own entrance) */
+.ob-pane .cl.cl-ov > .cl-bar { animation: none; }
+.ob-pane.is-in .cl.cl-ov > .cl-bar .cl-bar-tools { animation: ob-ctl-in 0.6s cubic-bezier(0.22, 1, 0.36, 1) 0.08s backwards; }
+.ob-pane.is-in .cl.cl-ov > .cx-sheet { animation: ob-list-in 0.75s cubic-bezier(0.16, 1, 0.3, 1) 0.2s backwards; }
+.ob-pane.is-out .cl.cl-ov > .cx-sheet { animation: ob-list-out 0.2s ease-out forwards; } /* quicker: the grid is solid cards */
+/* the cards keep still: switching their own entrance on and off replayed it as the grid left */
+.ob-pane .cl.cl-ov .cx-card { animation: none; }

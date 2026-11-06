@@ -1712,3 +1712,44 @@ button.co-cc-main { padding: 0; border: 0; background: none; font: inherit; text
 .co-ppl .cx-ask { align-self: center; }
 @media (hover: none) { .co-ppl .co-ppl-x { opacity: 1; } }
 .co-ppl .co-ppl-x:hover { background: rgba(214, 69, 69, 0.1); color: #c24040; }
+
+/* ---------- filter from a column header (HeadFilter) ---------- */
+.co-lhcell, .co-lid-head, .co-lcontacts, .ct-lid-head, .ct-lhcell, .cx-hcell { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+.fx-hf {
+  flex-shrink: 0; width: 20px; height: 20px; display: inline-grid; place-items: center; padding: 0; border: 0; border-radius: 6px;
+  background: none; color: inherit; cursor: pointer; opacity: 0; transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+.fx-hf svg { width: 11px; height: 11px; }
+:is(.co-lhead, .ct-lhead, .cx-tr.is-head, [class*="lhead"]):hover .fx-hf, .fx-hf:focus-visible { opacity: 0.45; }
+.fx-hf:hover { opacity: 1 !important; background: rgba(18, 181, 127, 0.12); color: #0a6f4d; }
+.fx-hf.is-on, .fx-hf.is-open { opacity: 1; color: #0f9a6a; background: rgba(18, 181, 127, 0.14); }
+.fx-hpop {
+  position: fixed; z-index: 4000; box-sizing: border-box; width: 440px; max-width: calc(100vw - 24px); padding: 12px; font-family: "Inter", sans-serif; border-radius: 16px; background: #fff;
+  box-shadow: 0 24px 60px -24px rgba(4, 30, 20, 0.5), 0 0 0 1px rgba(10, 111, 77, 0.1);
+  animation: fx-hpop-in 0.28s cubic-bezier(0.22, 1, 0.36, 1); text-transform: none; letter-spacing: normal; font-weight: 500;
+}
+@keyframes fx-hpop-in { from { opacity: 0; transform: translateY(-6px) scale(0.98); } }
+.fx-hpop-h { display: flex; align-items: center; margin: 0 2px 8px; font-size: 13px; color: #0b241a; }
+.fx-hpop-h button { margin-left: auto; border: 0; background: none; color: #c0473d; font: 600 12px "Inter", sans-serif; cursor: pointer; }
+.fx-hpop .fx-row { margin-bottom: 6px; }
+.fx-hpop .fx-field { pointer-events: none; }
+.fx-hpop-add { border: 0; background: none; padding: 4px 2px 0; color: #0a6f4d; font: 600 12px "Inter", sans-serif; cursor: pointer; }
+.co-rel-none { color: #9fb2a9; }
+
+/* ---------- a client for what (products / services) ---------- */
+.dw-cfor { display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 12px; border-radius: 999px; border: 1px dashed rgba(18, 181, 127, 0.5); background: #f1faf5; color: #0a6f4d; font: 500 12px "Inter", sans-serif; cursor: pointer; }
+.dw-cfor b { font-weight: 700; }
+.dw-cask { margin: 4px 0 18px; padding: 14px 16px; border-radius: 16px; background: linear-gradient(140deg, #f1faf5, #fff); border: 1px solid rgba(18, 181, 127, 0.3); box-shadow: 0 14px 30px -24px rgba(10, 111, 77, 0.6); animation: fx-hpop-in 0.3s cubic-bezier(0.22, 1, 0.36, 1); }
+.dw-cask > b { display: block; font-size: 14px; color: #0b241a; }
+.dw-cask > small { font-size: 12px; color: #6d8a7e; }
+.dw-cask-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 12px; }
+.dw-cask-none { font-size: 12.5px; color: #6d8a7e; }
+.dw-cask-chip { display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 12px 0 6px; border-radius: 10px; border: 1px solid rgba(10, 111, 77, 0.15); background: #fff; font: 500 12.5px "Inter", sans-serif; color: #0b241a; cursor: pointer; transition: background 0.15s, border-color 0.15s; }
+.dw-cask-chip i { width: 20px; height: 20px; display: grid; place-items: center; border-radius: 6px; font-style: normal; font-size: 10px; font-weight: 800; color: #fff; background: #12b57f; }
+.dw-cask-chip.is-service i { background: #5b6ee1; }
+.dw-cask-chip.is-on { border-color: #12b57f; background: #e2f6ec; box-shadow: inset 0 0 0 1px #12b57f; }
+.dw-cask-act { display: flex; justify-content: flex-end; gap: 8px; }
+.dw-cask-cancel, .dw-cask-ok { height: 34px; padding: 0 14px; border-radius: 10px; font: 600 12.5px "Inter", sans-serif; cursor: pointer; }
+.dw-cask-cancel { border: 1px solid rgba(10, 111, 77, 0.15); background: #fff; color: #405a4f; }
+.dw-cask-ok { border: 0; background: linear-gradient(180deg, #2fd497, #12b57f); color: #fff; }
+.dw-cask-ok:disabled { opacity: 0.45; cursor: default; }

@@ -24,7 +24,7 @@ import { projectValue, signedOf, legacyRoleMap, resolvedLinesOf, roleCounts, rol
 import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
 import { downloadBlob, tableToXlsx, type ExportCell } from "../../framework/exportFile";
 import { ClientImport } from "../contacts/ContactImport";
-import { FilterBar, FilterChips, SortHead, applyView, nextSort, emptyView, useSavedViews, useStoredView, type FField } from "../companies/CompaniesPage";
+import { FilterBar, FilterChips, SortHead, HeadFilter, applyView, nextSort, emptyView, useSavedViews, useStoredView, type FField } from "../companies/CompaniesPage";
 import { loadPrefs, savePref } from "../companies/companiesApi";
 import { countryLabel } from "../contacts/contactProfile";
 import { ensureRenewalDeals } from "../sales/sales/salesApi";
@@ -546,13 +546,14 @@ export function ClientList({
               <div className="cx-table-wrap">
                 <div className="cx-table" style={{ ["--cols" as any]: `minmax(200px, 1.8fr) ${colFields.map((f) => (f.type === "multi" ? "minmax(150px, 1.3fr)" : "minmax(96px, 1fr)")).join(" ")} 56px`, minWidth: 300 + colFields.length * 115 }}>
                   <div className="cx-tr is-head">
-                    <span><SortHead label="Client" k="name" sort={view.sort} onSort={onSortHead} /></span>
+                    <span className="cx-hcell"><SortHead label="Client" k="name" sort={view.sort} onSort={onSortHead} /><HeadFilter fields={fields} field="name" view={view} onView={setView} /></span>
                     {colFields.map((f) => {
                       const full = f.label.replace(/ \(.*\)$/, "");
                       const short = HEAD_SHORT[f.key];
                       return (
-                        <span key={f.key} className={f.type === "number" ? "is-num" : ""} title={full}>
+                        <span key={f.key} className={`cx-hcell ${f.type === "number" ? "is-num" : ""}`} title={full}>
                           <SortHead label={<><span className={`cx-h-full ${short ? "has-short" : ""}`}>{full}</span>{short && <span className="cx-h-short">{short}</span>}</>} k={f.key} sort={view.sort} onSort={onSortHead} />
+                          <HeadFilter fields={fields} field={f.key} view={view} onView={setView} />
                         </span>
                       );
                     })}

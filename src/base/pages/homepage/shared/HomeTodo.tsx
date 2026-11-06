@@ -1918,7 +1918,7 @@ const DESK_TABS: { key: DeskTab; label: string; icon: keyof typeof TK_ICON; hint
   { key: "mine", label: "Mine", icon: "user", hint: "Yours: you own it, watch it or have a step" },
   { key: "team", label: "Team", icon: "users", hint: "Your department's" },
   { key: "unassigned", label: "Unassigned", icon: "nobody", hint: "Nobody owns it yet" },
-  { key: "all", label: "All", icon: "layers", hint: "Everything in the company" },
+  // BASE: no "All" tab — mine, the team's, and nobody's
 ];
 const groupOf = (t: Ticket, today: string): Group => {
   const d = dayOf(t.due);
@@ -2403,7 +2403,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
       {full && <>
         <Select size="sm" value={fPrio} onChange={(v) => setFPrio(v as TaskPriority | "")} aria-label="Priority"
           options={[{ value: "", label: "Any priority" }, ...TASK_PRIORITIES.map((p) => ({ value: p, label: PRIORITY_LABEL[p] }))]} />
-        <Select size="sm" value={fType} onChange={setFType} aria-label="Type" options={[{ value: "", label: "Any type" }, ...types.map((t) => ({ value: t, label: t }))]} />
+        {!TASKS_ONLY && <Select size="sm" value={fType} onChange={setFType} aria-label="Type" options={[{ value: "", label: "Any type" }, ...types.map((t) => ({ value: t, label: t }))]} />}
       </>}
       </>}
     </div>
@@ -2416,12 +2416,12 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
       <span>{view === "active" && !q ? (isT ? "E-mails, messages and calls with clients or the team land here." : "Type above to add a task — it lands on your list.") : "Try another tab or filter."}</span>
     </div>
   ) : full ? (
-    <div className="tk-table">
+    <div className={`tk-table ${TASKS_ONLY ? "is-notype" : ""}`}>
       <div className="tk-th">
         <span className="tk-cb"><input type="checkbox" aria-label="Select all" checked={!!sorted.length && selected.length === sorted.length}
           ref={(el) => { if (el) el.indeterminate = selected.length > 0 && selected.length < sorted.length; }}
           onChange={() => setSel(selected.length === sorted.length ? new Set() : new Set(sorted.map((t) => t.id)))} /></span>
-        <span>{isT ? "Ticket" : "Task"}</span><span>Linked to</span><span>Type</span><span>Priority</span><span>Due</span><span>{isT ? "SLA" : "Progress"}</span><span>Owner</span><span>Stage</span>
+        <span>{isT ? "Ticket" : "Task"}</span><span>Linked to</span>{!TASKS_ONLY && <span>Type</span>}<span>Priority</span><span>Due</span><span>{isT ? "SLA" : "Progress"}</span><span>Owner</span><span>Stage</span>
       </div>
       {sorted.map((t, i) => {
         const link = linkLabel(t, dir);
@@ -2431,7 +2431,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
             <span className="tk-cb" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={sel.has(t.id)} onChange={() => toggleSel(t.id)} aria-label={`Select ${ticketRef(t)}`} /></span>
             <span className="tk-td-title"><em className="tk-ref">{ticketRef(t)}</em><b><Rich text={t.title} /></b>{t.source === "email" && <span className="tk-src" title="Came in by e-mail"><TkIco d="mail" /></span>}{pct !== null && isT && <span className="tk-pct is-sm"><i style={{ ["--w" as string]: `${pct}%` } as React.CSSProperties} />{pct}%</span>}</span>
             <span className="tk-td-muted">{link ? <span className="tk-link"><TkIco d={link.icon} />{link.text}</span> : "—"}</span>
-            <span className="tk-td-muted">{t.type ?? "—"}</span>
+            {!TASKS_ONLY && <span className="tk-td-muted">{t.type ?? "—"}</span>}
             <span><span className={`tk-prio is-${t.priority}`}><FlagIcon />{PRIORITY_LABEL[t.priority]}</span></span>
             <span>{t.due ? <DueChip dueAt={t.due} todayIso={today} done={!isActive(t.stage)} /> : <i className="tk-td-muted">—</i>}</span>
             <span>{!isT ? (pct !== null ? <span className="tk-pct is-sm"><i style={{ ["--w" as string]: `${pct}%` } as React.CSSProperties} />{pct}%</span> : <i className="tk-td-muted">—</i>)
@@ -2641,7 +2641,8 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
     ];
     const where = tab === "mine" ? "on your desk" : tab === "team" ? "in your team" : tab === "unassigned" ? "without an owner" : "in the company";
     const open = !!(openT || creating);
-    const board = layout === "board" && pane === "tickets";
+    // BASE: the Tasks page is the board (a column per stage), no list
+    const board = (TASKS_ONLY || layout === "board") && pane === "tickets";
     const filtered = !!(quick || fStage || q || fPrio || fType);
     const clearAll = () => { setQuick(""); setFStage(""); setQ(""); setFPrio(""); setFType(""); };
     const drawerProps = {
@@ -2668,7 +2669,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
           <div className="tkb-top">
             <span className="tk-ref">{ticketRef(t)}</span>
             {(t.priority === "urgent" || t.priority === "high") && <span className={`tk-prio is-${t.priority}`}><FlagIcon />{PRIORITY_LABEL[t.priority]}</span>}
-            {t.type && <span className="tkb-type">{t.type}</span>}
+            {!TASKS_ONLY && t.type && <span className="tkb-type">{t.type}</span>}
           </div>
           <b className="tkb-title"><Rich text={t.title} /></b>
           {(t.due || t.checklist.length > 0 || link) && (
@@ -2783,13 +2784,13 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
             )}
             <div className="tkp2-sel"><Select size="sm" value={fPrio} onChange={(v) => setFPrio(v as TaskPriority | "")} aria-label="Priority"
               options={[{ value: "", label: "Any priority" }, ...TASK_PRIORITIES.map((p) => ({ value: p, label: PRIORITY_LABEL[p] }))]} /></div>
-            <div className="tkp2-sel"><Select size="sm" value={fType} onChange={setFType} aria-label="Type" options={[{ value: "", label: "Any type" }, ...types.map((t) => ({ value: t, label: t }))]} /></div>
+            {!TASKS_ONLY && <div className="tkp2-sel"><Select size="sm" value={fType} onChange={setFType} aria-label="Type" options={[{ value: "", label: "Any type" }, ...types.map((t) => ({ value: t, label: t }))]} /></div>}
             {!board && <div className="tkp2-sel"><Select size="sm" value={sort} onChange={(v) => setSort(v as DeskSort)} aria-label="Sort" options={SORTS.map((x) => ({ value: x.key, label: x.label }))} /></div>}
             <button type="button" className={`tkp2-icon is-sm ${views.some(isView) ? "is-on" : ""}`} onClick={(e) => setViewsAt(e.currentTarget.getBoundingClientRect())} title="Saved views" aria-label="Saved views"><TkIco d="bookmark" /></button>
-            <div className="tkp2-layout" role="tablist" aria-label="Layout">
+            {!TASKS_ONLY && <div className="tkp2-layout" role="tablist" aria-label="Layout">
               <button type="button" className={layout === "list" ? "is-on" : ""} onClick={() => setLayout("list")} title="List" aria-label="List"><TkIco d="sort" /></button>
               <button type="button" className={layout === "board" ? "is-on" : ""} onClick={() => setLayout("board")} title="Board: a column per stage" aria-label="Board"><TkIco d="board" /></button>
-            </div>
+            </div>}
           </>}
         </div>
         {pane === "tickets" && filtered && (
@@ -2979,7 +2980,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
               <Avatar person={person(cd.assignee)} size={22} /><span>{cd.assignee ? (cd.assignee === me ? "Me" : person(cd.assignee)?.name ?? "Someone") : "Nobody yet"}</span><TkIco d="chev" className="tkc-chev" />
             </button>
           </div>
-          <div className="tkc-row is-top" style={{ ["--i" as string]: 4 } as React.CSSProperties}>
+          {!TASKS_ONLY && <div className="tkc-row is-top" style={{ ["--i" as string]: 4 } as React.CSSProperties}>
             <span className="tkc-k">Watchers</span>
             <div className="tkc-people">
               {cd.watchers.map((w) => (
@@ -2988,7 +2989,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
               ))}
               <button type="button" className="tkc-add" onClick={(e) => setCPop({ k: "people", rect: e.currentTarget.getBoundingClientRect() })}><TkIco d="plus" />{cd.watchers.length ? "" : "Add people"}</button>
             </div>
-          </div>
+          </div>}
           {dir && (
             <div className="tkc-steps" style={{ ["--i" as string]: 5 } as React.CSSProperties}>
               <StepsPanel t={{ checklist: cd.checklist } as Ticket} dir={dir} people={mentionPeople} onTask={[cd.assignee, ...cd.watchers].filter(Boolean) as string[]}
@@ -3438,7 +3439,7 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
         <div className="td-head-top">
           <span className={`td-kind is-${t.category}`}><TkIco d={isTask ? "check" : "mail"} />{isTask ? "Task" : "Ticket"}</span>
           <span className="td-ref">{creatingMode ? `New ${noun}` : ticketRef(t)}</span>
-          {t.type && <span className="td-chip">{t.type}</span>}
+          {!TASKS_ONLY && t.type && <span className="td-chip">{t.type}</span>}
           {!isTask && <span className="td-chip is-src">{t.source === "email" ? <TkIco d="mail" /> : null}{TICKET_CHANNELS[t.source] ?? TICKET_SOURCES[t.source] ?? t.source}</span>}
           {isTask && t.source === "sales" && <span className="td-chip is-src"><TkIco d="deal" />From a deal</span>}
           {!creatingMode && !isTask && <SlaBadge t={t} sla={sla} now={now} />}
@@ -3497,14 +3498,14 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
               {t.due && <button type="button" className="tdx-clear" onClick={() => set({ due: null })} aria-label="Clear due date"><TkIco d="x" /></button>}
             </div>
           </div>
-          <div className="tdx-prop">
+          {!TASKS_ONLY && <div className="tdx-prop">
             <span className="tdx-k">Watchers</span>
             <button type="button" className={`tdx-v tdx-crew ${crew.length ? "" : "is-empty"}`} onClick={(e) => setPropAt({ k: "people", rect: e.currentTarget.getBoundingClientRect() })}
               title={crew.length ? crew.map((w) => person(w)?.name ?? "Someone").join(", ") : "Add the people who work on it or need to follow it"}>
               {crew.length > 0 && <span className="tdx-avs">{crew.slice(0, 4).map((w) => <Avatar key={w} person={person(w)} size={22} />)}{crew.length > 4 && <em>+{crew.length - 4}</em>}</span>}
               <span className="tdx-plus"><TkIco d="plus" />{crew.length ? "" : "Add people"}</span>
             </button>
-          </div>
+          </div>}
           <span className="td-spacer" />
           {next && (
             <div className="tdx-next">
@@ -3649,6 +3650,7 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
           <div className="td-group">
             <span className="td-group-h"><TkIco d="tag" />Details</span>
             <div className="td-props">
+{!TASKS_ONLY && <>
               <div className="td-prop">
                 <span className="td-pk">Type</span>
                 <div className="td-pv">
@@ -3667,6 +3669,7 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
                   <Select value={t.team ?? ""} onChange={(v) => set({ team: v || null })} aria-label="Team" options={[{ value: "", label: "Any team" }, ...departments.map((d) => ({ value: d, label: deptName(d) }))]} className={t.team ? "" : "is-none"} />
                 </div>
               </div>
+              </>}
               {!isTask && (
                 <div className="td-prop">
                   <span className="td-pk">Came in by</span>

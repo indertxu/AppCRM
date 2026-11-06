@@ -1,15 +1,15 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { PageLoader } from "../../framework/AppLayout";
 import { supabase } from "../../../components/api/supabase";
 import { useAuth } from "../../../components/api/authContext";
 import NewUserModal, { LEVELS, type NewUserPayload } from "./NewUserModal";
 import UsersView, { type UserRow } from "./UsersView";
 import UserDetailModal from "./UserDetailModal";
-import Organization from "./Organization";
+import OrgSteps from "./OrgSteps";
 import BaseCatalog from "./BaseCatalog";
 import PipelinePage from "./PipelinePage";
 import { ProposalSettings } from "./ProposalTemplateEditor";
-import PageAccessModal, { useSecuritySection, PanelAccess, CalendarVisibility, ClientEditAccess } from "./PageAccessModal";
+import { useSecuritySection, PanelAccess, CalendarVisibility, ClientEditAccess } from "./PageAccessModal";
 import Select from "../../framework/Select";
 import { passwordProblem, PASSWORD_HINT } from "../../../components/login/LoginPage";
 import TaskSettings from "./TaskSettings";
@@ -61,7 +61,6 @@ const VIEW_PAGES: Partial<Record<View, PageKey[]>> = {
 };
 /** Pages whose settings are only their Security section for now (Bosses and superadmins). */
 const SECURITY_ONLY: { view: View; page: PageKey; icon: string; title: string; sub: string; accent: string; svg: string }[] = [
-  { view: "ticketspage", page: "tickets", icon: "ticket", title: "Tasks page", sub: "Who sees which tasks", accent: "#e0a13c", svg: "M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4zM14 5v12" },
   { view: "projectspage", page: "projects", icon: "folder", title: "Projects page", sub: "Which projects people see", accent: "#0a6f4d", svg: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM8 13h8" },
   { view: "successpage", page: "success", icon: "heart", title: "Customer success page", sub: "Which clients people follow up", accent: "#e0798c", svg: "M12 20.5s-7.5-4.4-7.5-10.2A4.3 4.3 0 0 1 12 7.6a4.3 4.3 0 0 1 7.5 2.7c0 5.8-7.5 10.2-7.5 10.2z" },
   { view: "marketingpage", page: "marketing", icon: "megaphone", title: "Marketing page", sub: "Which lists and campaigns people see", accent: "#9b6fd0", svg: "M4 10v4a1 1 0 0 0 1 1h2l5 4V5L7 9H5a1 1 0 0 0-1 1zM16 9.5a3.5 3.5 0 0 1 0 5M18.5 7a7 7 0 0 1 0 10" },
@@ -84,9 +83,6 @@ export default function SettingsPage() {
     || role === "customer_success" || role === "it_manager"
     || role === "marketing_manager" || role === "hr_manager";
   const canManage = isBoss || isManager;
-  const orgBackRef = useRef<(() => boolean) | null>(null);
-  const orgToolbarRef = useRef<HTMLDivElement | null>(null);
-  const canSeeSensitive = isBoss || isManager;
 
   const allowedLevels = isBoss
     ? LEVELS.map((l) => l.id)
@@ -125,7 +121,6 @@ export default function SettingsPage() {
   };
   const view: View = viewOpen(viewRaw) ? viewRaw : "home";
   const seesCompanyCards = (["organization", "catalog", "pipeline", "proposal"] as View[]).some((v) => viewOpen(v));
-  const [showPageAccess, setShowPageAccess] = useState(false);
   const [homeQ, setHomeQ] = useState("");
 
   // Quick insights shown on the landing cards (loaded lazily).
@@ -340,8 +335,7 @@ export default function SettingsPage() {
       { v: "pipeline", title: "Client Pipelines", sub: "The phases a client goes through", accent: "#9b6fd0", keys: "pipelines phases deals",
         icon: I("M5 3.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8zM5 15.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8zM19 9.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8z", "M7.4 6H12a3 3 0 0 1 3 3v.5M7.4 18H12a3 3 0 0 0 3-3v-.5"), stats: [[fmt(stats?.pipelines), "pipelines"]] },
       // BASE: no proposals, so no proposal template
-      { v: "tasks", title: "Tasks", sub: "Predefined tasks & processes", accent: "#5b6ee1", keys: "tasks processes templates",
-        icon: I("M9 6h11M9 12h11M9 18h11", "M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2") },
+      // BASE: no task settings (predefined tasks / processes)
     ];
     const pageTiles: Tile[] = [
       { v: "salespage", title: "Deals", sub: "Import, export, deal fields & sales roles", accent: "#3c9ae0", keys: "sales deals import export fields roles", icon: I("M4 19V9M10 19V5M16 19v-7M22 19H2") },
@@ -421,27 +415,11 @@ export default function SettingsPage() {
 
   // ---- Organization ----
   if (view === "organization") {
+    // BASE: step by step in side-by-side panels (departments → people → security), no map; no page header —
+    // the back arrow and the superadmin crown sit in the Departments panel
     return (
-      <div className="st st-org">
-        <header className="st-bar st-bar-row">
-          <button className="st-back" onClick={() => { if (!(orgBackRef.current && orgBackRef.current())) setView("home"); }} aria-label="Back">‹</button>
-          <div>
-            <h1 className="st-title">Organization</h1>
-          </div>
-          <div className="st-org-toolbar" ref={orgToolbarRef} />
-          <button
-            className="st-pa-btn"
-            onClick={() => canEditAccess && setShowPageAccess(true)}
-            disabled={!canEditAccess}
-            title={canEditAccess ? "Which departments can open each page" : `Only the Boss security level can change page access (your security level: ${secLevel ?? "none"})`}
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z" /><path d="M9 12l2 2 4-4" /></svg>
-            Page access
-          </button>
-          <SuperAdminSwitch />
-        </header>
-        <Organization canManage={canManage} canSeeSensitive={canSeeSensitive} backRef={orgBackRef} toolbarRef={orgToolbarRef} />
-        {showPageAccess && <PageAccessModal onClose={() => setShowPageAccess(false)} />}
+      <div className="st st-org st-org-steps">
+        <OrgSteps canManage={canManage} onBack={() => setView("home")} corner={<SuperAdminSwitch compact />} />
       </div>
     );
   }

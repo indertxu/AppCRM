@@ -31,6 +31,7 @@ import { searchPlaces, lookupPostal, postalLooksComplete, provinceFromPostal, co
 import "../clients/ClientsPage.css";
 import "../sales/extras/TrackingFields.css";
 import CompanyImport from "./CompanyImport";
+import { loadCatalog } from "../billing/billingApi";
 import { PageLoader } from "../../framework/AppLayout";
 import ContactExport from "../contacts/ContactExport";
 import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
@@ -733,9 +734,9 @@ export default function CompaniesPage({ orbit, only }: { orbit?: OrbitHost; only
           {/* the sticky header sits on an opaque band of the page colour: rows never show above or around it */}
           <div className="co-lhead-wrap">
           <div className="co-lrow co-lhead" style={{ gridTemplateColumns: rowGrid }}>
-            <span className="co-lid-head"><BulkCheck on={bulk.allOn} partial={bulk.someOn} onToggle={toggleAllRows} label="Select every company shown" /><SortHead label="Company" k="name" sort={view.sort} onSort={onSort} /></span>
-            {dataColumns.map((k) => <span key={k} className="co-lhcell"><SortHead label={columnLabel(k)} k={sortKeyOf(k)} sort={view.sort} onSort={onSort} /></span>)}
-            {showContacts && <span className="co-lright co-lcontacts"><SortHead label={columnLabel("contacts")} k="contacts_count" sort={view.sort} onSort={onSort} /></span>}
+            <span className="co-lid-head"><BulkCheck on={bulk.allOn} partial={bulk.someOn} onToggle={toggleAllRows} label="Select every company shown" /><SortHead label="Company" k="name" sort={view.sort} onSort={onSort} /><HeadFilter fields={filterFields} field="name" view={view} onView={setView} /></span>
+            {dataColumns.map((k) => <span key={k} className="co-lhcell"><SortHead label={columnLabel(k)} k={sortKeyOf(k)} sort={view.sort} onSort={onSort} /><HeadFilter fields={filterFields} field={sortKeyOf(k)} view={view} onView={setView} /></span>)}
+            {showContacts && <span className="co-lright co-lcontacts"><HeadFilter fields={filterFields} field="contacts_count" view={view} onView={setView} /><SortHead label={columnLabel("contacts")} k="contacts_count" sort={view.sort} onSort={onSort} /></span>}
           </div>
           </div>
           <div className="co-list">
@@ -1125,7 +1126,24 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
   const lockedWhy = (k: string) => k === "crm" ? "Every company is in the CRM"
     : k === "client" && status.client && !tags.includes(k) ? "It is a client (on the Clients page)"
     : k === "sales" && status.sales && !tags.includes(k) ? `It has deals${status.pipelines.length ? ` in ${status.pipelines.join(", ")}` : ""}` : "";
-  const toggleTag = (k: string) => set({ relationship: tags.includes(k) ? tags.filter((x) => x !== k) : [...tags, k] });
+  // BASE: marking a company as a client asks what it's a client for (products / services) → custom.__client_for
+  const clientFor: string[] = Array.isArray((c.custom ?? {}).__client_for) ? (c.custom as any).__client_for : [];
+  const [clientAsk, setClientAsk] = useState<string[] | null>(null);
+  const [catalog, setCatalog] = useState<{ key: string; label: string; kind: "product" | "service" }[] | null>(null);
+  const askClient = (cur: string[]) => {
+    setClientAsk(cur);
+    if (!catalog) void loadCatalog().then((xs) => setCatalog([...new Map(xs.map((x) => [`${x.kind}:${x.name}`, { key: `${x.kind}:${x.name}`, label: x.name, kind: x.kind }])).values()])).catch(() => setCatalog([]));
+  };
+  const toggleTag = (k: string) => {
+    if (k === "client" && !tags.includes(k)) { askClient(clientFor); return; }
+    if (k === "client") { set({ relationship: tags.filter((x) => x !== k), custom: { ...(c.custom ?? {}), __client_for: [] } }); setClientAsk(null); return; }
+    set({ relationship: tags.includes(k) ? tags.filter((x) => x !== k) : [...tags, k] });
+  };
+  const confirmClient = () => {
+    if (!clientAsk?.length) return;
+    set({ relationship: tags.includes("client") ? tags : [...tags, "client"], custom: { ...(c.custom ?? {}), __client_for: clientAsk } });
+    setClientAsk(null);
+  };
   const [newType, setNewType] = useState<string | null>(null);
   const addType = async () => {
     const label = (newType ?? "").trim();
@@ -1430,6 +1448,11 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
                       </button>
                     );
                   })}
+                  {status.client && clientFor.length > 0 && clientAsk === null && (
+                    <button type="button" className="dw-cfor" onClick={() => askClient(clientFor)} title="Change what it is a client for">
+                      Client for <b>{clientFor.map((x) => x.replace(/^(product|service):/, "")).join(", ")}</b>
+                    </button>
+                  )}
                   {newType === null ? (
                     null /* new types are added in Settings › Companies page */
                   ) : (
@@ -1442,6 +1465,29 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
                   )}
                 </div>
               </div>
+              {clientAsk !== null && (
+                <div className="dw-cask">
+                  <b>A client for what?</b>
+                  <small>Pick the products or services it buys from you.</small>
+                  <div className="dw-cask-list">
+                    {!catalog && <span className="dw-cask-none">Loading the catalogue…</span>}
+                    {catalog?.length === 0 && <span className="dw-cask-none">Nothing in Products &amp; Services yet — add them in Settings.</span>}
+                    {catalog?.map((x) => {
+                      const on = clientAsk.includes(x.key);
+                      return (
+                        <button type="button" key={x.key} className={`dw-cask-chip is-${x.kind} ${on ? "is-on" : ""}`} aria-pressed={on}
+                          onClick={() => setClientAsk(on ? clientAsk.filter((k) => k !== x.key) : [...clientAsk, x.key])}>
+                          <i>{x.kind === "product" ? "P" : "S"}</i>{x.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="dw-cask-act">
+                    <button type="button" className="dw-cask-cancel" onClick={() => setClientAsk(null)}>Cancel</button>
+                    <button type="button" className="dw-cask-ok" disabled={!clientAsk.length} onClick={confirmClient}>{tags.includes("client") ? "Save" : "Make it a client"}</button>
+                  </div>
+                </div>
+              )}
               <div className="dw-subh"><DwIcon name="euro" />Billing{billFilled && <span className="dw-pill is-ok">Set</span>}</div>
               <div className="dw-grid">
                 <div className={`dw-f ${mc("billing_name")}`}><label>Name{rq("billing_name")}</label>
@@ -2763,9 +2809,11 @@ export const typeSortKey = (tags: string[]) =>
  * CRM, Client, In sales, then your own (Partner, Supplier…). Used by the
  * "Types" column; hovering a chip says where it comes from.
  */
-export function TypeChips({ tags, pipelines = [], max = 4 }: { tags: { tag: string; from?: string[] }[]; pipelines?: string[]; max?: number }) {
+export function TypeChips({ tags, pipelines = [], max = 2 }: { tags: { tag: string; from?: string[] }[]; pipelines?: string[]; max?: number }) {
   const order = (k: string) => (k === "crm" ? 0 : k === "client" ? 1 : k === "sales" ? 2 : 3);
-  const list = [...tags].sort((a, b) => order(a.tag) - order(b.tag));
+  // BASE: fewer chips — everything is in the CRM, so "CRM" isn't shown; two at most
+  const list = [...tags].filter((t) => t.tag !== "crm").sort((a, b) => order(a.tag) - order(b.tag));
+  if (!list.length) return <span className="co-types"><span className="co-rel-none">—</span></span>;
   const cls = (k: string) => (k === "crm" ? "co-rel co-rel-inh is-crm" : k === "client" ? "co-rel co-rel-client" : k === "sales" ? "co-rel co-rel-tracking" : "co-rel co-rel-tag");
   const tip = (t: { tag: string; from?: string[] }) =>
     [relLabel(t.tag), t.tag === "sales" && pipelines.length ? pipelines.join(", ") : "", t.from?.length ? `from ${t.from.join(", ")}` : ""].filter(Boolean).join(" · ");
@@ -3752,6 +3800,67 @@ function FxFieldPicker<T>({ fields, onPick, onCancel }: { fields: FField<T>[]; o
         {!list.length && <p className="fx-vals-none">No field matches “{q}”</p>}
       </div>
     </div>
+  );
+}
+
+/**
+ * A filter on a column header: the funnel next to the title opens that
+ * column's filter right there (same filters as the Filters builder).
+ */
+export function HeadFilter<T>({ fields, field, view, onView }: { fields: FField<T>[]; field: string; view: FView; onView: (v: FView) => void }) {
+  const f = fields.find((x) => x.key === field);
+  const btn = useRef<HTMLButtonElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+  const [at, setAt] = useState<{ top: number; left: number } | null>(null);
+  const mine = view.conds.filter((c) => c.field === field);
+  const on = mine.some(fxReady);
+  useEffect(() => {
+    if (!at) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Element;
+      if (t.closest?.(".dp-pop, .dp-layer, .sel-pop, .sel-layer")) return;
+      if (!pop.current?.contains(t) && !btn.current?.contains(t)) close();
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+    document.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", close, true);
+    return () => { document.removeEventListener("mousedown", onDown); window.removeEventListener("keydown", onKey); window.removeEventListener("scroll", close, true); };
+  });
+  if (!f) return null;
+  const newCond = (): FCond => {
+    const op = FX_OPS[f.type][0].value;
+    return { id: fxUid(), field: f.key, op, ...(["in", "any"].includes(op) ? { values: [] } : {}), ...(f.type === "number" ? { min: "", max: "" } : {}), ...(f.type === "text" ? { text: "" } : {}) };
+  };
+  /** An unfinished filter left behind on close is dropped. */
+  function close() {
+    setAt(null);
+    const keep = view.conds.filter((c) => c.field !== field || fxReady(c));
+    if (keep.length !== view.conds.length) onView({ ...view, conds: keep });
+  }
+  const open = () => {
+    const r = btn.current!.getBoundingClientRect();
+    setAt({ top: r.bottom + 8, left: Math.max(12, Math.min(r.left - 16, window.innerWidth - 452)) });
+    if (!mine.length) onView({ ...view, conds: [...view.conds, newCond()] });
+  };
+  const setOne = (c: FCond) => onView({ ...view, conds: view.conds.map((x) => (x.id === c.id ? c : x)) });
+  return (
+    <>
+      <button ref={btn} type="button" className={`fx-hf ${on ? "is-on" : ""} ${at ? "is-open" : ""}`} title={on ? `Filtered: ${mine.filter(fxReady).map((c) => fxSummary(f, c)).join(" · ")}` : `Filter by ${f.label}`}
+        aria-label={`Filter by ${f.label}`} onClick={(e) => { e.stopPropagation(); if (at) close(); else open(); }}>
+        <svg viewBox="0 0 24 24" fill={on ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2.2" strokeLinejoin="round"><path d="M4 5h16l-6 7.5V19l-4 1.5v-8z" /></svg>
+      </button>
+      {at && createPortal(
+        <div ref={pop} className="fx-hpop" style={{ top: at.top, left: at.left }} onMouseDown={(e) => e.stopPropagation()}>
+          <div className="fx-hpop-h"><b>{f.label}</b>{on && <button type="button" onClick={() => { onView({ ...view, conds: view.conds.filter((c) => c.field !== field) }); setAt(null); }}>Clear</button>}</div>
+          {view.conds.filter((c) => c.field === field).map((c, i) => (
+            <FxRow key={c.id} c={c} f={f} i={i} onChange={setOne} onPickField={() => {}} onRemove={() => onView({ ...view, conds: view.conds.filter((x) => x.id !== c.id) })} />
+          ))}
+          <button type="button" className="fx-hpop-add" onClick={() => onView({ ...view, conds: [...view.conds, newCond()] })}>+ Another condition on {f.label}</button>
+        </div>,
+        document.body,
+      )}
+    </>
   );
 }
 

@@ -126,7 +126,7 @@ Source in `supabase/functions/**`. Both apps call them; changes must stay backwa
 - Read the other side's entries since your last session before you start working.
 
 ## 7. SQL numbering
-Next free number: **110**  ← update this line when you claim one (and say which file in the log).
+Next free number: **114**  ← update this line when you claim one (and say which file in the log).
 | # | File | Chat | What |
 |---|---|---|---|
 | 98 | sql/98_client_default_folders.sql | Enterprise | client folder templates → new clients |
@@ -141,6 +141,10 @@ Next free number: **110**  ← update this line when you claim one (and say whic
 | 107 | sql/107_crm_scope_from_settings.sql | Enterprise | `crm_scope_ids(page)`: Companies / Contacts lists + search follow Settings › Security (page_data_scopes) |
 | 108 | sql/108_cs_campaigns.sql | Enterprise | `cs_sequences.kind / from_address / launched_at / launched_by`: one-time CS campaigns, team mailbox |
 | 109 | sql/109_mk_templates.sql | Enterprise | `mk_templates`: Marketing e-mail templates |
+| 110 | src/base/sql/110_base_invoice_source_seller.sql | Base | `invoices.source` manual/auto; `base_billing_settings.seller_*` (issuer for invoices + Facturae XML); `base_bill_up_to` marks its invoices auto — applied 2026-11-05 |
+| 111 | sql/111_crm_import_api.sql | Enterprise | `client_api_keys.scope` (files / crm) + `settings`, access `form`: companies & contacts import API keys (Settings › APIs) — applied 2026-11-06 |
+| 112 | sql/112_company_fields_light_refresh.sql | Enterprise | `cf_trg_tenant_wide`: a company field's new choices / new field no longer rebuild every contact (only rename / retype / delete) — applied 2026-11-06 |
+| 113 | sql/113_account_manager.sql | Enterprise | `company_assignees.is_manager` (one per company): account manager = starred person of Visibility; `companies_fx`/`companies_view_sql` key `account_manager`, `company_row_json.__manager`; old "Account Manager" custom field migrated to the star and removed — **NOT applied yet (Supabase asked for confirmation)** |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
@@ -150,6 +154,78 @@ Write requests here; the other chat answers in the log and ticks them.
 
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
+
+### 2026-11-06 07:45 · Enterprise · Website forms you build (Settings › APIs), account manager star, 2 phones from Companies, full filter chips
+- **Files:** `src/components/pages/settings/ApiForms.tsx` (new), `ApiSettings.tsx/.css`, `src/components/pages/companies/CompaniesPage.tsx/.css`, `companiesApi.ts`, `supabase/functions/manage-users/index.ts` (v19 deployed), `sql/113_account_manager.sql` (written, not applied yet).
+- **What:** Settings › APIs › **Website forms**: each workspace builds its forms — question, name it's sent as, where it lands (contact/company column, own field, a new field made there, or notes), required — and gets the code with the key inside (ready-made HTML form, JS for an existing form, a note for the web developer); form keys keep `settings.public_key` (they only add leads) so the code can be copied any time; `settings.fields` drives `/crm/leads` (missing required → 400 `{ missing }`). Import keys (full) separate, shown once. Companies: Visibility chips get a ☆ — the starred person is the **account manager** (`is_manager`); list column + filter + sort "Account manager"; the old custom field is migrated by SQL 113. New contact from a company: Telephone + Mobile like Contacts. Filter chips show every value and wrap (no "+2", no 380px cut); in the filter panel picked values come first.
+- **Tags:** PORT? Base FilterChips/fxSummary + NewContactInline (same "+2" / one phone); Base has no APIs page.
+- **Deploy:** run SQL 113 (needs confirming in Supabase). Edge function done.
+
+### 2026-11-06 07:40 · Base · Products & Services: pro rows + walkthrough for new ones
+- `pages/settings/BaseCatalog.css`: rows restyled — gradient hairline border in the item's colour, soft glow, glossy tile, sheen on hover, round chevron that fills on hover; a mini picture per row (`.bc-row-viz`): a product's tiers as a price ladder, a service's steps as a track (sized by % when billed by step).
+- `pages/settings/NewWalkthrough.tsx` + `.css` (new, prefix `.wk-`): "+ Product" / "+ Service" / New menu / empty page open a walkthrough. Product: name & kind → how it's paid (monthly / yearly / one time) → price (one price or tiers) → preview & create (`saveProduct`). Service: name → steps → how it's billed → price (+ % per step, split evenly) → preview & create (`saveBaseService`). "Skip the walkthrough" / × / Esc hands what's filled in to the usual editor (new product card / service pop-up).
+- `pages/settings/BaseCatalog.tsx`, `BaseServices.tsx`: wiring + row pictures.
+- Deploy: files written to the Mac; user to commit.
+
+### 2026-11-06 07:00 · Base · Products & Services: two columns, list rows that open
+- `pages/settings/BaseCatalog.tsx` / `.css`: Products on the left, Services on the right, each with its own "+ Product" / "+ Service". Every item is a row of the same height (tile, name, kind / billing / tiers or steps tags, price or price range + unit); click a product to open it into the editing card (collapses back with the arrow; stays open while unsaved; new ones open).
+- `pages/settings/BaseServices.tsx`: `ServiceCard` is a row that opens to show its steps and an "Edit service" button (the pop-up as before).
+- Deploy: files written to the Mac; user to commit.
+
+### 2026-11-06 06:40 · Base · Organization chart: departments in their colours
+- `pages/settings/OrgSteps.css`: each department in the chart takes its own colour (edge, tint and count); a default colour on `.oc-dept` was overriding it.
+- Deploy: file written to the Mac; user to commit.
+
+### 2026-11-06 06:30 · Base · Organization chart left to right
+- `pages/settings/OrgSteps.tsx` / `.css`: the chart on the right reads left to right (`.ht-node` / `.ht-kids` connectors): Company → its departments, each with how many people (no avatars); a department → who reports to whom. Centred in its box, still shrinks to fit.
+- Deploy: files written to the Mac; user to commit.
+
+### 2026-11-06 06:15 · Base · Organization: managers lead their department; only the lists scroll; simpler New user
+- `pages/settings/OrgSteps.tsx` / `.css`: a department's two levels are always listed even when they are built-in ones (e.g. "Consultancy manager" was hidden). Picking "<Dept> manager" for someone makes everyone else in the department report to them (`profiles.manager_id`); someone moved into a department reports to its manager. Levels: the department's two + Boss on top, the rest behind a toggle that opens and closes ("Show fewer"). Only the department and people lists scroll (header, add rows and pages card stay); room at the bottom of every panel (`.st-org-steps` no page padding).
+- `pages/settings/NewUserModal.tsx`: no Birthday and no Social security number; "Bank account (IBAN)" label (payload keeps the keys, empty).
+- Deploy: files written to the Mac; user to commit.
+
+### 2026-11-06 05:55 · Base · Organization fits the page; back + superadmin crown in the Departments panel
+- `pages/settings/OrgSteps.tsx` / `.css`: no sideways scroll — the columns share the width and the chart scales itself down to fit its box. The page has no header any more: the back arrow and the superadmin crown sit in the Departments panel's header (`onBack`, `corner` props). Fix: the levels made for a department now take its name (they were named after its key, e.g. "consultancy"); Brazo's 7 such levels renamed in the DB, and its 6 consultants moved from the built-in "Consultant" to "Consultancy".
+- `framework/SuperAdmin.tsx`: `SuperAdminSwitch({ compact })` — a small crown button (`.st-sa-crown`), nothing for non-superadmins.
+- `pages/settings/SettingsPage.tsx`: Organization = just `<OrgSteps onBack corner={<SuperAdminSwitch compact />} />`.
+- Deploy: files written to the Mac; user to commit.
+
+### 2026-11-06 05:10 · Enterprise · Settings › APIs: website demo form → companies & contacts (CRM import API)
+- **Files:** `src/components/pages/settings/ApiSettings.tsx` + `.css` (new), `src/components/pages/settings/SettingsPage.tsx`, `supabase/functions/manage-users/index.ts` (v17 deployed), `sql/111_crm_import_api.sql`, `sql/112_company_fields_light_refresh.sql` (both applied).
+- **What:** new Settings › Your company › **APIs** (bosses, managers, CRM leads): lead keys (`scope crm`: "Website form" = only `POST /crm/leads`, or "Full import" = also `/crm/companies`, `/crm/contacts`; source, type tags, people to assign, allowed websites), the demo form's field map with "Create the fields", how to connect it (URL, JSON, fetch, curl) and the endpoints; the client documents keys + endpoints moved here from Settings › Clients (it now has an "API access" pointer). Edge function: `/api/crm/leads` finds the company by name or e-mail domain (not free mail) and the contact by e-mail, creates or fills in, links them, merges multi-choice fields, adds new choices to the field, notes the request in the contact; shortcuts `employees`/`entities`/`erps` (company) and `interests` (contact); honeypot `_hp`. Konsolidator: fields Employees, Legal entities, ERPs (company) and Interested in (contact) created. SQL 110 was taken by Base → this is 111/112.
+- **Tags:** PORT? Base Settings has no APIs page (Base could reuse ApiSettings.tsx as is — it only needs the manage-users API).
+- **Deploy:** done (SQL applied, manage-users v17). Nothing to run.
+
+### 2026-11-06 05:30 · Base · Organization: auto levels per department, person details, light chart
+- `pages/settings/OrgSteps.tsx` / `.css`: department colour is automatic (no picker); each step card sits on top of its panel; scrollbars hidden (still scroll). People panel: "New person" / "Move in" as dashed rows at the end of the list; "Pages it opens" as chips; "Its levels".
+- **Security levels made for you**: Boss always; for every department "<Dept>" and "<Dept> manager" (rows in `security_levels`, dept_key = the department; base role = the department's built-in roles when it has them, else consultant / consultancy_manager). Created on load for any department missing them (managers only); renaming a department renames its two levels. Built-in roles are only listed when someone is on them. Moving someone to a department puts them on its level (or its manager level if they were a manager); a new person made from a department gets its level.
+- Person panel: first / last name, yearly wage (`profiles.salary`), phone, IBAN they're paid to (`profiles.bank_iban`), saved on blur.
+- Right side: a light chart — the company (departments with their people) or the department picked (who reports to whom, from `manager_id`); clicking it picks the department / person.
+- Deploy: files written to the Mac; user to commit.
+
+### 2026-11-06 04:40 · Base · Organization in steps (no map)
+- `pages/settings/OrgSteps.tsx` + `OrgSteps.css` (new, prefix `.os-`): Settings › Organization is now three panels that open side by side — **1 Departments** (create / pick; a new company starts with none, 100% custom), **2 the department** (rename inline, colour, its people, New person (NewUserModal → manage-users, put in the open department), "Move someone in", pages the department opens, remove), **3 the person** (security level as cards — the department's first, "Show every level" —, department, reports to, pages: via department / level, or opened just for them by name, delete account). Same tables as before: org_departments, profiles (department / security_level / role / manager_id), security_levels, page_departments (dept_keys + user_ids). Pages offered are Base's: Tasks, Calendar, Orbit (contacts), Deals (sales), Billing (management).
+- `pages/settings/SettingsPage.tsx`: Organization renders `OrgSteps` (no map, no time bar, no Page access button); `Organization.tsx` (the map) is no longer used by Base — left in place.
+- Deploy: files written to the Mac; user to commit.
+
+### 2026-11-05 18:20 · Base · Tasks = board only; Orbit header filters, fewer type chips, "client for what"; Billing tab names
+- `pages/homepage/shared/HomeTodo.tsx` (+ `HomeShared.css`): Tasks page is the board only (no list/board switch), no "All" tab, no Type (filter, column, chip, field), no Team field, no Watchers (compose + task) — @mentions still notify. List table without the type column (`.tk-table.is-notype`).
+- `pages/settings/SettingsPage.tsx`: no "Tasks" tile (predefined tasks/processes) and no "Tasks page" security tile.
+- `pages/companies/CompaniesPage.tsx` (+ css): `HeadFilter` (exported) — a funnel on each column header opens that column's filter in place (same FCond model as the Filters builder); used on Companies, Contacts (`ContactsPage.tsx`) and Clients list (`ClientsPage.tsx`). `TypeChips`: no "CRM" chip, 2 at most. Company panel: turning on **Client** asks "A client for what?" (products/services from the catalogue) → saved in `companies.custom.__client_for` (["product:Name", "service:Name"]), shown as "Client for …".
+- `pages/billing/BillingPage.tsx` / `InvoiceModal.tsx`: tabs Invoiced · To invoice · Time; in To invoice the sections are "Proposed invoices" (automatic / manual) and "To bill".
+- Deploy: files written to the Mac; user to commit.
+
+### 2026-11-05 13:30 · Base · Billing: Invoices / To invoice, automatic vs manual, XML export (Facturae), new invoice window; Orbit Clients switch
+- **DB** `sql/110_base_invoice_source_seller.sql` (applied; 105 was taken by Enterprise): `invoices.source` ('manual' | 'auto', default manual, Enterprise never reads it); `base_billing_settings.seller_*` (name, tax_id, street, postal_code, city, province, country, iban, email) — the issuer on invoices and in the XML; `base_bill_up_to` now inserts `source = 'auto'`. Brazo's 2 renewal drafts marked auto; Brazo issuer filled with demo data.
+- `pages/billing/BillingPage.tsx`: tabs **Invoices · To invoice · Time** (`?view=tobill` still works). Invoices = issued only (sent/paid/void), 4th KPI "Invoiced this month" instead of Drafts, row checkboxes + **Export XML** (selected, else what's shown). **To invoice** = drafts (badge Automatic / Manual, filter chips) + "Not invoiced yet" (the old To bill cards/list).
+- `pages/billing/ExportModal.tsx` (new): Facturae 3.2.2 export, one .xml per invoice / .zip (jszip) for several; drafts & void left out; "Your details" (issuer) edited and saved here.
+- `pages/billing/billingApi.ts`: `Invoice.source`, `Draft.source`, `Seller` + `loadSeller/saveSeller/sellerMissing/sellerAddress`, `facturaeXml`, `exportFacturae`, `splitAddress`; print shows issuer VAT/address/IBAN.
+- `pages/billing/InvoiceModal.tsx`: redesigned — the invoice as a sheet (From / Bill to / lines / totals / notes) + side panel (total, timeline made→sent→due→paid, actions: Send / Mark paid / PDF / XML / delete·void·restore). Source badge in the header. `seller` is now a `Seller`; new `onExport`.
+- `pages/billing/Billing.css`: page bits (.bz-xml, .bz-check, .bz-selbar, .bz-src, .bz-drow, .bz-sec, .bz-hero-split) and the whole modal section rewritten (.bzi-paper, .bzi-side, .bzi-steps, .bze-* export).
+- `pages/orbit/OrbitLook.css`: switching to/from Clients — the client grid now slides in / fades out like the other views (it showed the companies list through it and replayed its cards' entrance).
+- **IDEA→ENT**: Facturae export and invoice source could serve Enterprise invoices too.
+- Deploy: files in outputs/v25 → Mac; user to commit.
 
 ### 2026-11-05 16:25 · Enterprise · Client files API: downloads of files with "∙", "–", accents… no longer answer 500
 - files: `supabase/functions/manage-users/index.ts`
