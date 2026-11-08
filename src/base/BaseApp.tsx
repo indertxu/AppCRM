@@ -20,6 +20,8 @@ import OrbitPage from "./pages/orbit/OrbitPage";
 import SettingsPage from "./pages/settings/SettingsPage";
 import SalesPage from "./pages/sales/sales/SalesPage";
 import BillingPage from "./pages/billing/BillingPage";
+import { MarketingPage } from "./pages/contacts/ContactExport";
+import { CustomerSuccessPage } from "./pages/clients/ClientsPage";
 
 /**
  * Links to /contacts, /companies, /clients (and the old /people) land on Orbit:
@@ -56,6 +58,10 @@ export default function BaseApp() {
         <Route element={<PageRoute page="sales" />}><Route path="/sales" element={<SalesPage />} /></Route>
         {/* Billing: invoices, work to bill, time per person (Management's people) */}
         <Route element={<PageRoute page="management" />}><Route path="/billing" element={<BillingPage />} /></Route>
+        {/* Marketing: campaigns on every channel, AI studio, ads, results; Customer health: keeping clients (the Enterprise CS page) */}
+        <Route element={<PageRoute page="marketing" />}><Route path="/marketing" element={<MarketingPage />} /></Route>
+        <Route element={<PageRoute page="success" />}><Route path="/success" element={<CustomerSuccessPage />} /></Route>
+        <Route path="/health" element={<Navigate to="/success" replace />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/contacts" element={<ToOrbit view="contacts" />} />
         <Route path="/companies" element={<ToOrbit view="companies" />} />

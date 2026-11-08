@@ -10,10 +10,10 @@ import {
   addRevenueEvent, deleteRevenueEvent, saveCsSettings, setClientCadence, logClientContact, createClientFollowUp, generateContactTasks,
   convertUpsellToDeal, CS_REASONS, UPSELL_STATUSES, SPICED, NEEDS_CS,
   cadenceOf, setClientPriority, CS_PRIORITIES, loadCsAuto, saveCsTemplate, deleteCsTemplate, saveCsSequence, deleteCsSequence, setCsRun,
-  uploadCsFile, removeCsFile, runCsSequences, testCsTemplate, CS_TAGS, fillCsTags, renderCsEmail, cleanCsBody, NEEDS_AUTO,
+  uploadCsFile, removeCsFile, runCsSequences, testCsTemplate, launchCsCampaign, loadTeamMailboxes, CS_TAGS, fillCsTags, renderCsEmail, cleanCsBody, NEEDS_AUTO,
   scanCsMail, loadCsMailSync, type CsMailSync, csVariantFor, inspectCsFile, previewCsAttachment, saveCsFolder, deleteCsFolder, moveCsTemplate, setClientsCadence, type CsFolder, loadPdfjs, csFileBlob, csUnderEdit, csPatchOf, csLineBox, type CsEdit, type CsRgb, type CsPatch, type CsAttachment, type CsVariant, type CsVariantAudience,
   type CsData, type CsUpsell, type CsHealthStatus, type CsQbr, type RevenueEvent,
-  type CsPriority, type CsAuto, type CsTemplate, type CsSequence, type CsRun, type CsStep,
+  type CsPriority, type CsAuto, type CsTemplate, type CsSequence, type CsRun, type CsStep, type CsMailLog,
 } from "./useClientsData";
 import SalesMultiFilter from "../sales/sales/SalesMultiFilter";
 import { createPortal } from "react-dom";
@@ -30,6 +30,8 @@ import { countryLabel } from "../contacts/contactProfile";
 import { ensureRenewalDeals } from "../sales/sales/salesApi";
 import "../companies/CompaniesPage.css";
 import "./ClientsPage.css";
+import LinkPopover, { captureLinkTarget, placeLink, type LinkTarget } from "../../framework/LinkPopover";
+import CsFlowEditor, { CsFlowCalendar, flowOf, flowEmails, flowStats, flowHere, flowHasBranches, flowCount, flowDays, FIELD_CHIP, FIELD_GROUPS, type CsFlowNode } from "./CsFlow";
 import { useNavSection, useClientEdit } from "../../framework/pageAccess";
 import { useInactiveIds } from "../../framework/peopleStatus";
 import OrbitSwitch from "../orbit/OrbitSwitch";
@@ -953,6 +955,7 @@ export default function ClientsPage({ orbit }: { orbit?: OrbitHost } = {}) {
    CUSTOMER SUCCESS — retention, health, renewals and expansion (/success)
    ============================================================================ */
 const CSI: Record<string, string> = {
+  send: "M22 2 11 13M22 2l-7 20-4-9-9-4z",
   heart: "M12 20.5s-7.5-4.4-7.5-10.2A4.3 4.3 0 0 1 12 7.6a4.3 4.3 0 0 1 7.5 2.7c0 5.8-7.5 10.2-7.5 10.2z",
   phone: "M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.5c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2z",
   task: "M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11",
@@ -1272,13 +1275,17 @@ function csFits(q: CsSequence, c: CsClient, _cs?: CsData | null, anyQuiet = fals
   return true;
 }
 /** Who a sequence's e-mail goes to for a client. */
-function csTo(q: CsSequence, c: CsClient, run: CsRun | null): string[] {
-  if (run?.to_emails?.length) return run.to_emails;
+function csTo(q: CsSequence, c: CsClient, run: CsRun | null, withLeftOut = false): string[] {
+  const out = (xs: string[]) => {
+    const ex = withLeftOut ? null : (q.audience?.exclude_emails ?? []);
+    return ex?.length ? xs.filter((e) => !ex.includes(e.trim().toLowerCase())) : xs;
+  };
+  if (run?.to_emails?.length) return out(run.to_emails);
   const cts = c.contacts.filter((x) => x.email && /@/.test(x.email));
   const main = cts.find((x) => !x.billing) ?? cts[0];
-  if (q.recipients === "all") return [...new Set(cts.map((x) => x.email!.trim()))];
-  if (q.recipients === "billing") { const b = cts.filter((x) => x.billing); return (b.length ? b : main ? [main] : []).map((x) => x.email!.trim()); }
-  return main ? [main.email!.trim()] : [];
+  if (q.recipients === "all") return out([...new Set(cts.map((x) => x.email!.trim()))]);
+  if (q.recipients === "billing") { const b = cts.filter((x) => x.billing); return out((b.length ? b : main ? [main] : []).map((x) => x.email!.trim())); }
+  return out(main ? [main.email!.trim()] : []);
 }
 type CsSort = "priority" | "contact" | "arr" | "renewal" | "name";
 const CH_ICON: Record<string, keyof typeof CSI> = { call: "phone", email: "mail", meeting: "users", visit: "pin" };
@@ -1448,7 +1455,28 @@ function CsFollowUps({ auto, setAuto, accounts, cs, setCs, types, people, me, sa
   const shownTpls = templates.filter(inFolder);
   const tplName = (id: string | null) => templates.find((t) => t.id === id)?.name ?? "—";
   const pName = (id: string | null | undefined) => (id ? people.find((p) => p.id === id)?.name ?? "Someone" : "—");
-  const newSeq = (): Partial<CsSequence> => ({ name: "", active: false, audience: {}, steps: [newStep(templates[0]?.id ?? "", 0)], start_mode: "now", start_days: 30, repeat: false, recipients: "all", sender: "owner", log_contact: true });
+  const newSeq = (): Partial<CsSequence> => ({ name: "", active: false, audience: {}, steps: [newStep(templates[0]?.id ?? "", 0)], start_mode: "now", start_days: 30, repeat: false, recipients: "all", sender: "owner", log_contact: true, kind: "sequence" });
+  const newCampaign = (): Partial<CsSequence> => ({ ...newSeq(), kind: "campaign", sender: "me" });
+  /** a one-time campaign goes out now: its clients are taken in and sent it (a big one finishes within the hour) */
+  const [sending, setSending] = useState<string | null>(null);
+  /** "Send now" always asks twice (CsSendConfirm) */
+  const [confirmQ, setConfirmQ] = useState<CsSequence | null>(null);
+  const sendCampaign = async (q: CsSequence) => {
+    const fits = accounts.filter((c) => csFits(q, c));
+    if (!q.steps.some((s) => s.template_id)) { say("Pick its e-mail first."); setSeq(q); return; }
+    if (!fits.length) { say("No client matches it."); return; }
+    setConfirmQ(q);
+  };
+  const doSend = async (q: CsSequence) => {
+    setConfirmQ(null);
+    setSending(q.id);
+    const r = await launchCsCampaign(q.id);
+    setSending(null);
+    const fresh = await loadCsAuto();
+    if (fresh.ready) setAuto(() => fresh);
+    if (r.error) { say(r.error); return; }
+    say(`${q.name}: ${r.sent ?? 0} sent${r.failed ? ` · ${r.failed} failed (see Activity)` : ""}${r.skipped ? ` · ${r.skipped} skipped` : ""}${r.waiting ? ` · the other ${r.waiting} go out within the hour` : ""}`);
+  };
   const newTpl = (): Partial<CsTemplate> => ({ folder_id: fKey !== "all" && fKey !== "none" ? fKey : null, name: "", subject: "", body_html: "<p>Hi {{first_name}},</p><p><br></p><p><br></p>", design: { accent: "#0a6f4d", title: "", brand: "", signoff: "Best regards,\n{{owner_name}}" }, attachments: [] });
   useEffect(() => {
     if (!cmd || cmd.n === lastCmd.current) return;
@@ -1465,7 +1493,7 @@ function CsFollowUps({ auto, setAuto, accounts, cs, setCs, types, people, me, sa
     upSeq({ ...r.row, audience: r.row.audience ?? {}, steps: r.row.steps ?? [] });
     say(r.row.active ? `${r.row.name} is on — e-mails go out every hour` : `${r.row.name} is off`);
   };
-  const dupSeq = async (q: CsSequence) => { const r = await saveCsSequence({ ...q, id: undefined, name: `${q.name} (copy)`, active: false }); if (r.row) { upSeq(r.row); say("Copied — it starts switched off"); } else say(r.error ?? "Not saved"); };
+  const dupSeq = async (q: CsSequence) => { const r = await saveCsSequence({ ...q, id: undefined, name: `${q.name} (copy)`, active: false, launched_at: null, launched_by: null }); if (r.row) { upSeq(r.row); say(q.kind === "campaign" ? "Copied — a new draft, ready to send" : "Copied — it starts switched off"); } else say(r.error ?? "Not saved"); };
   const dupTpl = async (t: CsTemplate) => { const r = await saveCsTemplate({ ...t, id: undefined, name: `${t.name} (copy)`, attachments: [] }); if (r.row) { upTpl(r.row); say("Copied (without its attachments)"); } else say(r.error ?? "Not saved"); };
   const dropSeq = async (q: CsSequence) => { if (!window.confirm(`Delete “${q.name}”? Clients stop getting its e-mails.`)) return; const e = await deleteCsSequence(q.id); if (e) { say(e); return; } setAuto((a) => a ? { ...a, sequences: a.sequences.filter((x) => x.id !== q.id), runs: a.runs.filter((r) => r.sequence_id !== q.id) } : a); };
   const dropTpl = async (t: CsTemplate) => {
@@ -1550,7 +1578,7 @@ function CsFollowUps({ auto, setAuto, accounts, cs, setCs, types, people, me, sa
   };
 
   const sub = [
-    { key: "sequences" as const, label: "Sequences", n: sequences.length },
+    { key: "sequences" as const, label: "Campaigns & sequences", n: sequences.length },
     { key: "blueprints" as const, label: "E-mail blueprints", n: templates.length },
     { key: "activity" as const, label: "Activity", n: log.filter((l) => new Date(l.sent_at).getTime() > since30).length },
     { key: "cadence" as const, label: "Priorities & cadence" },
@@ -1561,12 +1589,14 @@ function CsFollowUps({ auto, setAuto, accounts, cs, setCs, types, people, me, sa
         <div className="cs4-seg is-light" role="tablist">
           {sub.map((x) => <button key={x.key} type="button" role="tab" aria-selected={view === x.key} className={view === x.key ? "is-on" : ""} onClick={() => setView(x.key)}>{x.label}{x.n != null && <em>{x.n}</em>}</button>)}
         </div>
-        <span className={`cs4-mailst ${mail?.mail ? "is-ok" : mail ? "is-warn" : ""}`} title="E-mails go out from each client's owner's Outlook (or yours, as the sequence says)">
-          <i />{mail == null ? "Sent from your team's Outlook" : mail.mail ? `Your Outlook: ${mail.email ?? "connected"}` : mail.connected ? "Your Outlook has no mail permission — reconnect it with mail" : "Connect your Outlook (Settings › Interface)"}
-        </span>
+        {(() => { const txt = mail == null ? "Sent from your team's Outlook" : mail.mail ? `Your Outlook: ${mail.email ?? "connected"}` : mail.connected ? "Your Outlook has no mail permission — reconnect it with mail" : "Connect your Outlook (Settings › Interface)"; return (
+        <span className={`cs4-mailst ${mail?.mail ? "is-ok" : mail ? "is-warn" : ""}`} title={`${txt} — e-mails go out from each client's owner's Outlook, yours, or a team mailbox, as each campaign says`}>
+          <i /><span className="cs4-mailst-t">{txt}</span>
+        </span>); })()}
         <span className="csx-sp" />
         {view === "sequences" && <button type="button" className="csx-ghost is-sm" disabled={!ready} onClick={onSendDue}><CsIco n="play" s={12} />Send what's due now</button>}
-        {view === "sequences" && <button type="button" className="csx-primary is-sm" disabled={!ready} onClick={() => setSeq(newSeq())}><CsIco n="plus" s={13} />New sequence</button>}
+        {view === "sequences" && <button type="button" className="csx-ghost is-sm" disabled={!ready} onClick={() => setSeq(newCampaign())} title="One e-mail, sent once when you press Send"><CsIco n="send" s={12} />New campaign</button>}
+        {view === "sequences" && <button type="button" className="csx-primary is-sm" disabled={!ready} onClick={() => setSeq(newSeq())} title="E-mails that go out by themselves, again and again"><CsIco n="plus" s={13} />New sequence</button>}
         {view === "blueprints" && <button type="button" className="csx-primary is-sm" disabled={!ready} onClick={() => setTpl(newTpl())}><CsIco n="plus" s={13} />New blueprint</button>}
       </div>
 
@@ -1581,6 +1611,46 @@ function CsFollowUps({ auto, setAuto, accounts, cs, setCs, types, people, me, sa
                 const sent = log.filter((l) => l.sequence_id === q.id && l.status === "sent" && new Date(l.sent_at).getTime() > since30).length;
                 const failed = log.filter((l) => l.sequence_id === q.id && l.status === "failed" && new Date(l.sent_at).getTime() > since30).length;
                 const next = mine.filter((r) => r.status === "active" && r.next_at).sort((a, b) => a.next_at!.localeCompare(b.next_at!))[0];
+                if (q.kind === "campaign") {
+                  const all = log.filter((l) => l.sequence_id === q.id);
+                  const sentAll = all.filter((l) => l.status === "sent").length, failedAll = all.filter((l) => l.status === "failed").length;
+                  const people = accounts.filter((c) => csFits(q, c)).reduce((n, c) => n + csTo(q, c, null).length, 0);
+                  const done = !!q.launched_at;
+                  return (
+                    <article key={q.id} className={`cs4-seq is-camp ${done ? "is-sent" : ""}`} style={{ ["--i" as any]: i }}>
+                      <header>
+                        <span className="cs4-seq-ico is-camp"><CsIco n="send" s={15} /></span>
+                        <div className="cs4-seq-t"><b>{q.name}</b><i>One-time campaign · {audienceText(q, types, accounts)}</i></div>
+                        <span className={`cs4-camp-st ${done ? (inIt ? "is-going" : "is-done") : ""}`}>{done ? (inIt ? "Sending…" : `Sent ${new Date(q.launched_at!).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}`) : "Draft"}</span>
+                      </header>
+                      <ol className="cs4-seq-steps">
+                        <li><span className="cs4-seq-wait">Once</span><span className="cs4-seq-dot" /><span className="cs4-seq-name">{tplName(q.steps[0]?.template_id ?? null)}</span></li>
+                        {q.steps.length > 1 && <li className="is-loop"><span className="cs4-seq-wait">Then</span><span className="cs4-seq-dot" /><span className="cs4-seq-name">{q.steps.length - 1} follow-up{q.steps.length === 2 ? "" : "s"}{q.flow && flowHasBranches(q.flow.nodes) ? " · by opens & replies" : ""}</span></li>}
+                      </ol>
+                      <div className="cs4-seq-stats">
+                        {done ? <>
+                          <span><b>{sentAll}</b><i>sent</i></span>
+                          {sentAll > 0 && <span title="The e-mails' pictures loaded"><b>{Math.round((all.filter((l) => l.status === "sent" && l.opened_at).length / sentAll) * 100)}%</b><i>opened</i></span>}
+                          {sentAll > 0 && <span title="A reply arrived in a mailbox we read"><b>{Math.round((all.filter((l) => l.status === "sent" && l.replied_at).length / sentAll) * 100)}%</b><i>replied</i></span>}
+                          {failedAll > 0 && <span className="is-bad" title="See Activity"><b>{failedAll}</b><i>failed</i></span>}
+                          {inIt > 0 && <span title="Go out on the next hourly run"><b>{inIt}</b><i>clients to go</i></span>}
+                          <span title={csDate(q.launched_at!)}><b>{pName(q.launched_by).split(" ")[0]}</b><i>sent it</i></span>
+                        </> : <>
+                          <span><b>{fits}</b><i>client{fits === 1 ? "" : "s"}</i></span>
+                          <span><b>{people}</b><i>{people === 1 ? "person" : "people"}</i></span>
+                        </>}
+                      </div>
+                      <footer>
+                        <span className="cs4-seq-from" title={q.from_address ? `From the team mailbox ${q.from_address}` : undefined}>To {q.recipients === "all" ? "every contact" : q.recipients === "billing" ? "billing" : "main contact"} · from {q.from_address ? q.from_address : q.sender === "owner" ? "owner" : pName(q.created_by).split(" ")[0]}</span>
+                        <span className="csx-sp" />
+                        <button type="button" className="csx-ghost is-sm is-ico" title={done ? "Copy, to send it again" : "Copy"} onClick={() => dupSeq(q)}><CsIco n="repeat" s={12} /></button>
+                        <button type="button" className="csx-ghost is-sm is-ico" title="Delete" onClick={() => dropSeq(q)}><CsIco n="trash" s={12} /></button>
+                        <button type="button" className="csx-ghost is-sm" onClick={() => setSeq(q)}><CsIco n={done ? "eye" : "edit"} s={12} />{done ? "Open" : "Edit"}</button>
+                        {!done && <button type="button" className="csx-primary is-sm" disabled={sending === q.id} onClick={() => sendCampaign(q)}><CsIco n="send" s={12} />{sending === q.id ? "Sending…" : "Send now"}</button>}
+                      </footer>
+                    </article>
+                  );
+                }
                 return (
                   <article key={q.id} className={`cs4-seq ${q.active ? "is-on" : ""}`} style={{ ["--i" as any]: i }}>
                     <header>
@@ -1589,7 +1659,8 @@ function CsFollowUps({ auto, setAuto, accounts, cs, setCs, types, people, me, sa
                       <button type="button" role="switch" aria-checked={q.active} className={`csx-switch ${q.active ? "is-on" : ""}`} onClick={() => toggleSeq(q)}><i />{q.active ? "On" : "Off"}</button>
                     </header>
                     <ol className="cs4-seq-steps">
-                      {q.steps.map((st, k) => (
+                      {q.flow && flowHasBranches(q.flow.nodes) && <li className="is-loop"><span className="cs4-seq-wait">Tree</span><span className="cs4-seq-dot" /><span className="cs4-seq-name">{q.steps.length} e-mail{q.steps.length === 1 ? "" : "s"} with checks on opens & replies</span></li>}
+                      {!(q.flow && flowHasBranches(q.flow.nodes)) && q.steps.map((st, k) => (
                         <li key={st.id}>
                           <span className="cs4-seq-wait">{k === 0 ? (q.start_mode === "before_renewal" ? "Start" : st.wait_days ? `+${st.wait_days} d` : "Day 0") : `+${st.wait_days} d`}</span>
                           <span className="cs4-seq-dot" />
@@ -1601,11 +1672,12 @@ function CsFollowUps({ auto, setAuto, accounts, cs, setCs, types, people, me, sa
                     <div className="cs4-seq-stats">
                       <span title={`${fits} client${fits === 1 ? "" : "s"} match it`}><b>{q.active ? inIt : fits}</b><i>{q.active ? "in it" : "would get it"}</i></span>
                       <span title="In the last 30 days"><b>{sent}</b><i>sent (30 d)</i></span>
+                      {sent > 0 && (() => { const ls = log.filter((l) => l.sequence_id === q.id && l.status === "sent" && new Date(l.sent_at).getTime() > since30); return <span title="Of the e-mails sent in the last 30 days: opened (pictures loaded) · replied"><b>{Math.round((ls.filter((l) => l.opened_at).length / ls.length) * 100)}% · {Math.round((ls.filter((l) => l.replied_at).length / ls.length) * 100)}%</b><i>opened · replied</i></span>; })()}
                       {failed > 0 && <span className="is-bad" title="In the last 30 days — see Activity"><b>{failed}</b><i>failed</i></span>}
                       <span title={next?.next_at ? csDate(next.next_at) : undefined}><b>{next?.next_at ? new Date(next.next_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "—"}</b><i>next e-mail</i></span>
                     </div>
                     <footer>
-                      <span className="cs4-seq-from" title={`To ${q.recipients === "all" ? "every contact, one e-mail each" : q.recipients === "billing" ? "the billing contact" : "the main contact"}, from ${q.sender === "owner" ? "each client's owner" : pName(q.created_by)}`}>To {q.recipients === "all" ? "every contact" : q.recipients === "billing" ? "billing" : "main contact"} · from {q.sender === "owner" ? "owner" : pName(q.created_by).split(" ")[0]}</span>
+                      <span className="cs4-seq-from" title={`To ${q.recipients === "all" ? "every contact, one e-mail each" : q.recipients === "billing" ? "the billing contact" : "the main contact"}, from ${q.from_address ? `the team mailbox ${q.from_address}` : q.sender === "owner" ? "each client's owner" : pName(q.created_by)}`}>To {q.recipients === "all" ? "every contact" : q.recipients === "billing" ? "billing" : "main contact"} · from {q.from_address ? q.from_address : q.sender === "owner" ? "owner" : pName(q.created_by).split(" ")[0]}</span>
                       <span className="csx-sp" />
                       <button type="button" className="csx-ghost is-sm is-ico" title="Copy" onClick={() => dupSeq(q)}><CsIco n="repeat" s={12} /></button>
                       <button type="button" className="csx-ghost is-sm is-ico" title="Delete" onClick={() => dropSeq(q)}><CsIco n="trash" s={12} /></button>
@@ -1835,25 +1907,18 @@ function CsFollowUps({ auto, setAuto, accounts, cs, setCs, types, people, me, sa
 
       {tpl && <CsTemplateEditor initial={tpl} folders={folders} accounts={accounts} people={people} me={me} say={say} onClose={() => setTpl(null)} onSaved={(t) => { upTpl(t); }}
         onDelete={tpl.id ? () => { const t = templates.find((x) => x.id === tpl.id); setTpl(null); if (t) dropTpl(t); } : undefined} />}
-      {seq && <CsSequenceEditor initial={seq} templates={templates} folders={folders} accounts={accounts} runs={runs} types={types} me={me} people={people}
-        onClose={() => setSeq(null)} onSaved={(q) => { upSeq(q); say(q.active ? `${q.name} saved — it's on` : `${q.name} saved`); }} onNewTemplate={() => { setSeq(null); setView("blueprints"); setTpl(newTpl()); }} />}
+      {confirmQ && (() => {
+        const fits = accounts.filter((c) => csFits(confirmQ, c));
+        return <CsSendConfirm q={confirmQ} clients={fits.length} people={fits.reduce((n, c) => n + csTo(confirmQ, c, null).length, 0)} templates={templates} sender={confirmQ.from_address || (confirmQ.sender === "owner" ? "each client's owner" : pName(me))} onCancel={() => setConfirmQ(null)} onSend={() => void doSend(confirmQ)} />;
+      })()}
+      {seq && <CsSequenceEditor onAutoSaved={upSeq} onSend={(q) => { setSeq(null); void sendCampaign(q); }} initial={seq} templates={templates} folders={folders} accounts={accounts} runs={runs} log={log} types={types} me={me} people={people}
+        onClose={() => setSeq(null)} onSaved={(q) => { upSeq(q); say(q.kind === "campaign" ? (q.launched_at ? `${q.name} saved` : `${q.name} saved as a draft — send it when you're ready`) : q.active ? `${q.name} saved — it's on` : `${q.name} saved`); }} onNewTemplate={() => { setSeq(null); setView("blueprints"); setTpl(newTpl()); }} />}
     </div>
   );
 }
 
 /* ---------- the blueprint editor: a form on the left, the real e-mail on the right ---------- */
 /* fields show as cards in the editor and are stored as {{key}} */
-const FIELD_CHIP: Record<string, string> = {
-  first_name: "First name", contact_name: "Full name", client: "Client", legal_name: "Legal name",
-  owner_name: "Sender", owner_first_name: "Sender's first name", owner_email: "Sender's e-mail",
-  renewal_date: "Renewal date", days_to_renewal: "Days to renewal", today: "Today", year: "Year",
-};
-const FIELD_GROUPS: { label: string; keys: string[] }[] = [
-  { label: "The person it goes to", keys: ["first_name", "contact_name"] },
-  { label: "Their company", keys: ["client", "legal_name", "renewal_date", "days_to_renewal"] },
-  { label: "You, the sender", keys: ["owner_name", "owner_first_name", "owner_email"] },
-  { label: "Dates", keys: ["today", "year"] },
-];
 const chipHtml = (k: string) => `<span class="cs4-fld" contenteditable="false" data-f="${k}">${FIELD_CHIP[k] ?? k}</span>`;
 const toChips = (h: string) => String(h ?? "").replace(/\{\{\s*([a-z_]+)\s*\}\}/gi, (m, k) => (FIELD_CHIP[String(k).toLowerCase()] ? chipHtml(String(k).toLowerCase()) : m));
 const fromChips = (h: string) => String(h ?? "").replace(/<span[^>]*data-f="([a-z_]+)"[^>]*>[\s\S]*?<\/span>/gi, "{{$1}}").replace(/\u200b/g, "");
@@ -1929,6 +1994,8 @@ function CsTemplateEditor({ initial, folders, accounts, people, me, say, onClose
     else if (box) { const r = document.createRange(); r.selectNodeContents(box); r.collapse(false); sel?.removeAllRanges(); sel?.addRange(r); }
   };
   const cmd = (c: string, v?: string) => { restore(bodyRef.current); document.execCommand(c, false, v); syncBody(); keepRange("body"); };
+  /** a link: on the selected text, or (nothing selected) the address itself / a text you write */
+  const [linkAt, setLinkAt] = useState<LinkTarget | null>(null);
   const addField = (key: string) => {
     const go = () => {
       const w = last.current, box = boxOf(w);
@@ -2153,6 +2220,8 @@ function CsTemplateEditor({ initial, folders, accounts, people, me, say, onClose
                     onInput={syncSubj} onKeyDown={(e) => { if (e.key === "Enter") e.preventDefault(); else chipKeys(e, "subject"); }} onMouseDown={(e) => chipClick(e, "subject")} onPaste={(e) => { plainPaste(e, true); syncSubj(); }}
                     onKeyUp={() => keepRange("subject")} onMouseUp={() => keepRange("subject")} onFocus={() => { last.current = "subject"; }} onBlur={() => { keepRange("subject"); syncSubj(); }} />
                 </div>
+                <div className="lnkp-anchor">
+                {linkAt && <LinkPopover className="is-under-bar" selected={linkAt.text} onClose={() => setLinkAt(null)} onAdd={(u, txt) => { if (bodyRef.current) { placeLink(bodyRef.current, linkAt, u, txt); syncBody(); keepRange("body"); } setLinkAt(null); }} />}
                 <div className="cs4-rte cs4-bp-rte">
                   <div className="cs4-rte-bar" onMouseDown={(e) => e.preventDefault()}>
                     <button type="button" onClick={() => cmd("bold")} title="Bold"><b>B</b></button>
@@ -2161,11 +2230,12 @@ function CsTemplateEditor({ initial, folders, accounts, people, me, say, onClose
                     <span />
                     <button type="button" onClick={() => cmd("insertUnorderedList")} title="Bullets">• List</button>
                     <button type="button" onClick={() => cmd("insertOrderedList")} title="Numbered">1. List</button>
-                    <button type="button" onClick={() => { const u = window.prompt("Link to (https://…)"); if (u) cmd("createLink", u); }} title="Link">Link</button>
+                    <button type="button" className={linkAt ? "is-on" : ""} onClick={() => setLinkAt(linkAt ? null : captureLinkTarget(bodyRef.current, last.current === "body" ? range.current : null))} title="Link — select text first to link it">Link</button>
                     <button type="button" onClick={() => cmd("removeFormat")} title="Plain text">Clear</button>
                   </div>
                   <div ref={bodyRef} className="cs4-rte-body" contentEditable suppressContentEditableWarning role="textbox" aria-multiline="true" aria-label="Message"
                     onInput={syncBody} onKeyDown={(e) => chipKeys(e, "body")} onMouseDown={(e) => chipClick(e, "body")} onKeyUp={() => keepRange("body")} onMouseUp={() => keepRange("body")} onFocus={() => { last.current = "body"; }} onBlur={() => { keepRange("body"); syncBody(); }} />
+                </div>
                 </div>
               </>
             ) : (
@@ -2268,10 +2338,8 @@ function CsTemplateEditor({ initial, folders, accounts, people, me, say, onClose
                             {fieldNames.map((fn) => (
                               <label key={fn} className="cs4-att-row">
                                 <code title={fn}>{fn}</code><CsIco n="arrow" s={11} />
-                                <select value={a.fields?.[fn] ?? ""} onChange={(e) => setAtt(a.path, { fields: { ...(a.fields ?? {}), [fn]: e.target.value } })}>
-                                  <option value="">Leave as it is</option>
-                                  {Object.entries(FIELD_CHIP).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
-                                </select>
+                                <Select size="sm" value={a.fields?.[fn] ?? ""} onChange={(v) => setAtt(a.path, { fields: { ...(a.fields ?? {}), [fn]: v } })} aria-label={`Form field ${fn}`}
+                                  options={[{ value: "", label: "Leave as it is" }, ...Object.entries(FIELD_CHIP).map(([k, l]) => ({ value: k, label: l }))]} />
                               </label>
                             ))}
                           </div>
@@ -2653,9 +2721,8 @@ function CsFileEditor({ att, vars, who, onClose, onSave }: {
               <button type="button" onClick={() => setEdit(cur.id, { size: Math.min(72, Math.round((cur.size + 1) * 2) / 2) })} aria-label="Bigger">+</button>
               <button type="button" className={cur.bold ? "is-on" : ""} onClick={() => setEdit(cur.id, { bold: !cur.bold })} aria-label="Bold" title="Bold"><CsIco n="bold" s={12} /></button>
               <label className="cs4-fe-col" title="Text colour"><input type="color" value={feHex(cur.color)} onChange={(e) => setEdit(cur.id, { color: feRgb(e.target.value) })} aria-label="Text colour" /><i style={{ background: feCss(cur.color) }} /></label>
-              <select value={cur.font ?? "sans"} onChange={(e) => setEdit(cur.id, { font: e.target.value as CsEdit["font"] })} aria-label="Font">
-                <option value="sans">Helvetica</option><option value="serif">Times</option><option value="mono">Courier</option>
-              </select>
+              <Select size="sm" className="cs4-fe-font" value={cur.font ?? "sans"} onChange={(v) => setEdit(cur.id, { font: v as CsEdit["font"] })} aria-label="Font"
+                options={[{ value: "sans", label: "Helvetica" }, { value: "serif", label: "Times" }, { value: "mono", label: "Courier" }]} />
             </div>
           )}
           <span className="csx-sp" />
@@ -2701,10 +2768,8 @@ function CsFileEditor({ att, vars, who, onClose, onSave }: {
                       return (
                         <label key={`w${wi}`} className={`cs4-fe-wd ${k ? "is-set" : ""} ${asClient ? "is-client" : ""}`} style={{ left: Math.min(x1, x2), top: Math.min(y1, y2), width: Math.abs(x2 - x1), height: h, fontSize: Math.max(9, Math.min(13, h * 0.62)) }} title={`Form field “${wd.name}”`} onMouseDown={(e) => e.stopPropagation()}>
                           {asClient ? <span>{k ? vars[k] : ""}</span> : (
-                            <select value={k} onChange={(e) => setFields((f) => ({ ...f, [wd.name]: e.target.value }))} aria-label={`Form field ${wd.name}`}>
-                              <option value="">{wd.name} · as it is</option>
-                              {Object.entries(FIELD_CHIP).map(([kk, lb]) => <option key={kk} value={kk}>{lb}</option>)}
-                            </select>
+                            <Select size="sm" className="cs4-fe-wdsel" value={k} onChange={(v) => setFields((f) => ({ ...f, [wd.name]: v }))} aria-label={`Form field ${wd.name}`}
+                              options={[{ value: "", label: `${wd.name} · as it is` }, ...Object.entries(FIELD_CHIP).map(([kk, lb]) => ({ value: kk, label: lb }))]} />
                           )}
                         </label>
                       );
@@ -2882,55 +2947,216 @@ const SEQ_TOUR: SeqTourStep[] = [
 ];
 
 /* ---------- the sequence editor: who, when, which e-mails ---------- */
-function CsSequenceEditor({ initial, templates, folders, accounts, runs, types, me, people, onClose, onSaved, onNewTemplate }: {
-  initial: Partial<CsSequence>; templates: CsTemplate[]; folders: CsFolder[]; accounts: CsClient[]; runs: CsRun[]; types: { id: string; name: string }[];
+/** Sending a one-time campaign: always confirmed twice — what goes to whom, then "yes, now". */
+function CsSendConfirm({ q, clients, people, templates, sender, onCancel, onSend }: {
+  q: CsSequence; clients: number; people: number; templates: CsTemplate[]; sender: string; onCancel: () => void; onSend: () => void;
+}) {
+  const [stage, setStage] = useState<1 | 2>(1);
+  const nodes = flowOf(q);
+  const mails = flowEmails(nodes);
+  const first = templates.find((t) => t.id === mails[0]?.template_id);
+  const tasks = (function count(xs: CsFlowNode[]): number { return xs.reduce((n, x) => n + (x.type === "task" ? 1 : 0) + (x.type === "branch" ? Object.values(x.paths ?? {}).reduce((m, p) => m + count(p ?? []), 0) : 0), 0); })(nodes);
+  useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === "Escape") onCancel(); }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, [onCancel]);
+  return createPortal(
+    <div className="csx-modal-bg cs4-sc-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
+      <div className={`cs4-sc is-${stage}`} role="alertdialog" aria-modal="true" aria-label="Send the campaign">
+        <span className="cs4-sc-ico"><CsIco n="send" s={20} /></span>
+        <h3>{stage === 1 ? `Send “${q.name}”?` : "Last check"}</h3>
+        {stage === 1 ? <>
+          <dl className="cs4-sc-dl">
+            <div><dt>To</dt><dd><b>{people} {people === 1 ? "person" : "people"}</b> at {clients} client{clients === 1 ? "" : "s"}</dd></div>
+            <div><dt>From</dt><dd>{sender}</dd></div>
+            <div><dt>First e-mail</dt><dd><b>{first?.name ?? "—"}</b>{first?.subject ? <i>Subject: {first.subject}</i> : null}</dd></div>
+            {(mails.length > 1 || tasks > 0) && <div><dt>Then</dt><dd>{mails.length > 1 ? `${mails.length - 1} follow-up e-mail${mails.length === 2 ? "" : "s"}` : ""}{mails.length > 1 && tasks ? " and " : ""}{tasks ? `${tasks} task${tasks === 1 ? "" : "s"}` : ""}, by themselves{flowHasBranches(nodes) ? ", by whether each client opens or replies" : ""}</dd></div>}
+          </dl>
+          <p className="cs4-sc-note">Check the e-mail (send yourself a test from the campaign) and who gets it before you go on.</p>
+          <div className="cs4-sc-f">
+            <button type="button" className="csx-ghost" onClick={onCancel} autoFocus>Cancel</button>
+            <button type="button" className="csx-primary" onClick={() => setStage(2)}>Continue</button>
+          </div>
+        </> : <>
+          <p className="cs4-sc-big">It goes out <b>right now</b> to <b>{people} {people === 1 ? "person" : "people"}</b>, and it can't be taken back.</p>
+          <div className="cs4-sc-f">
+            <button type="button" className="csx-ghost" onClick={() => setStage(1)}>Back</button>
+            <button type="button" className="csx-primary is-danger" onClick={onSend} autoFocus><CsIco n="send" s={13} />Yes, send it now</button>
+          </div>
+        </>}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function CsSequenceEditor({ initial, templates, folders, accounts, runs, log, types, me, people, onClose, onSaved, onAutoSaved, onNewTemplate, onSend }: {
+  initial: Partial<CsSequence>; templates: CsTemplate[]; folders: CsFolder[]; accounts: CsClient[]; runs: CsRun[]; log: CsMailLog[]; types: { id: string; name: string }[];
   me: string | null; people: Employee[];
   onClose: () => void; onSaved: (q: CsSequence) => void; onNewTemplate: () => void;
+  /** saved by itself while editing (the list keeps up, quietly) */
+  onAutoSaved?: (q: CsSequence) => void;
+  /** a one-time campaign, saved: send it now */
+  onSend: (q: CsSequence) => void;
 }) {
   const [q, setQ] = useState<Partial<CsSequence>>({ ...initial, audience: { ...(initial.audience ?? {}) }, steps: [...(initial.steps ?? [])] });
+  /** one-time campaign (sent once, when you press Send) or a recurring sequence */
+  const camp = q.kind === "campaign";
+  const sent = camp && !!q.launched_at;
+  const setKind = (k: "sequence" | "campaign") => setQ((x) => ({ ...x, kind: k, ...(k === "campaign" ? { repeat: false, start_mode: "now" as const, audience: { ...(x.audience ?? {}), quiet_days: null } } : {}) }));
+  /** its steps as a tree: e-mails, "wait and check" branches, tasks, end (CsFlow.tsx) */
+  const [nodes, setNodes] = useState<CsFlowNode[]>(() => { const n = flowOf(initial); return n.length ? n : [{ id: Math.random().toString(36).slice(2, 9), type: "email", template_id: templates[0]?.id ?? "", wait_days: 0 }]; });
+  /* the team mailboxes it can go out from (a Microsoft 365 shared mailbox: no password, "Send as" for the sender) */
+  const [boxes, setBoxes] = useState<{ address: string; label: string }[]>([]);
+  useEffect(() => { loadTeamMailboxes().then(setBoxes).catch(() => setBoxes([])); }, []);
+  const [boxOn, setBoxOn] = useState(!!initial.from_address);
+  const [testing, setTesting] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [who, setWho] = useState<"filters" | "picked">((initial.audience?.clients?.length ?? 0) > 0 ? "picked" : "filters");
-  useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === "Escape" && !document.querySelector(".smf-menu, .sel-menu, .cs4-tour")) onClose(); }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, [onClose]);
+  /* one step at a time: who, when (recurring only), what happens, sent to and from */
+  type SKey = "who" | "start" | "mails" | "send";
+  const stepKeys: SKey[] = camp ? ["who", "mails", "send"] : ["who", "start", "mails", "send"];
+  const [stepK, setStepK0] = useState<SKey>(initial.id ? "mails" : "who");
+  const formRef = useRef<HTMLDivElement | null>(null);
+  const nameRef = useRef<HTMLInputElement | null>(null);
+  const setStepK = (k: SKey) => { setStepK0(k); formRef.current?.scrollTo({ top: 0 }); };
+  const stepAt = Math.max(0, stepKeys.indexOf(stepK));
+  /* the list on the right: clients or e-mail addresses, searchable; a client's people on hover */
+  const [side, setSide] = useState<"clients" | "emails">("clients");
+  const [flowView, setFlowView] = useState<"build" | "days">("build");
+  /** the header's menu: save, cancel */
+  const [more, setMore] = useState(false);
+  useEffect(() => {
+    if (!more) return;
+    const off = (e: MouseEvent) => { if (!(e.target as HTMLElement).closest?.(".cs5-more")) setMore(false); };
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopImmediatePropagation(); setMore(false); } };
+    document.addEventListener("mousedown", off); window.addEventListener("keydown", k, true);
+    return () => { document.removeEventListener("mousedown", off); window.removeEventListener("keydown", k, true); };
+  }, [more]);
+  const [find, setFind] = useState("");
+  const [peek, setPeek] = useState<{ id: string; top: number; left: number } | null>(null);
+  const peekT = useRef<number | null>(null);
+  const peekOpen = (id: string, el: HTMLElement) => {
+    if (peekT.current) window.clearTimeout(peekT.current);
+    const r = el.getBoundingClientRect();
+    const edge = el.closest("aside")?.getBoundingClientRect().left ?? r.left;
+    setPeek({ id, top: Math.max(12, Math.min(r.top - 14, window.innerHeight - 340)), left: Math.max(12, edge - 308) });
+  };
+  const peekClose = () => { if (peekT.current) window.clearTimeout(peekT.current); peekT.current = window.setTimeout(() => setPeek(null), 160); };
+  /** closing always asks first (Esc, ×, the backdrop, the menu) */
+  const [askClose, setAskClose] = useState(false);
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (askClose) { setAskClose(false); return; }
+      if (!document.querySelector(".smf-menu, .sel-menu, .sel-pop, .cs4-tour, .cs4-sc, .cs5-peek")) setAskClose(true);
+    };
+    window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k);
+  }, [askClose]);
   const a = q.audience ?? {};
   const setA = (p: Partial<NonNullable<CsSequence["audience"]>>) => setQ((x) => ({ ...x, audience: { ...(x.audience ?? {}), ...p } }));
   const tog = (k: "priorities" | "types" | "health", v: string) => { const cur = a[k] ?? []; setA({ [k]: cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v] }); };
-  const steps = q.steps ?? [];
-  const setStep = (i: number, p: Partial<CsStep>) => setQ((x) => ({ ...x, steps: (x.steps ?? []).map((s, j) => (j === i ? { ...s, ...p } : s)) }));
-  const moveStep = (i: number, dir: -1 | 1) => setQ((x) => { const xs = [...(x.steps ?? [])]; const j = i + dir; if (j < 0 || j >= xs.length) return x; [xs[i], xs[j]] = [xs[j], xs[i]]; return { ...x, steps: xs }; });
-  const full = { ...q, audience: who === "picked" ? { clients: a.clients ?? [], exclude: a.exclude ?? [] } : { ...a, clients: [] } } as CsSequence;
+  /** its e-mails, in order (for the summaries) */
+  const steps: CsStep[] = flowEmails(nodes).map((n) => ({ id: n.id, template_id: n.template_id ?? "", wait_days: Number(n.wait_days) || 0 }));
+  const full = { ...q, audience: who === "picked" ? { clients: a.clients ?? [], exclude: a.exclude ?? [], exclude_emails: a.exclude_emails ?? [] } : { ...a, clients: [] } } as CsSequence;
+  /** everyone it would go to before anything is switched off by hand (the list on the right shows them all) */
+  const cand = accounts.filter((c) => csFits({ ...full, audience: { ...full.audience, exclude: [] } } as CsSequence, c));
+  const offC = new Set(a.exclude ?? []);
+  const offE = new Set((a.exclude_emails ?? []).map((e) => e.toLowerCase()));
+  const togClient = (id: string) => setA({ exclude: offC.has(id) ? (a.exclude ?? []).filter((x) => x !== id) : [...(a.exclude ?? []), id] });
+  const togEmail = (e: string) => { const k = e.trim().toLowerCase(); setA({ exclude_emails: offE.has(k) ? (a.exclude_emails ?? []).filter((x) => x.toLowerCase() !== k) : [...(a.exclude_emails ?? []), k] }); };
   const fits = accounts.filter((c) => csFits(full, c));
   const people_n = fits.reduce((n, c) => n + csTo(full, c, runs.find((r) => r.sequence_id === q.id && r.client_id === c.id) ?? null).length, 0);
-  const totalDays = steps.reduce((t, s, i) => t + (i === 0 && q.start_mode === "before_renewal" ? 0 : Number(s.wait_days) || 0), 0);
-  const save = async (activate?: boolean) => {
-    if (!q.name?.trim()) { setErr("Give it a name."); return; }
-    const st = steps.filter((s) => s.template_id);
-    if (!st.length) { setErr("Pick the e-mail of at least one step."); return; }
-    if (who === "picked" && !(a.clients ?? []).length) { setErr("Pick the clients it goes to."); return; }
+  const fromBox = boxOn ? (q.from_address ?? "").trim() : "";
+  /** what's wrong at a step (null: fine) */
+  const problem = (k: SKey): string | null => {
+    if (k === "who" && who === "picked" && !(a.clients ?? []).length) return "Pick the clients it goes to.";
+    if (k === "mails") {
+      if (!steps.some((s) => s.template_id)) return camp ? "Pick its first e-mail." : "Pick the e-mail of at least one step.";
+      if (flowEmails(nodes).some((n) => !n.template_id)) return "Every e-mail step needs its blueprint.";
+      if (camp && nodes[0]?.type !== "email") return "A one-time campaign starts with an e-mail.";
+    }
+    if (k === "send" && boxOn && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fromBox)) return "Write the team mailbox's address — e.g. cs.iberia@yourcompany.com.";
+    return null;
+  };
+  /* saved as you go: every change is written a moment later (a draft stays a draft; something already running
+     only takes changes that are complete, so a half-made step never goes out) */
+  const idRef = useRef<string | undefined>(initial.id);
+  const payload = (activate?: boolean) => ({ ...full, id: idRef.current, steps: steps.filter((s) => s.template_id), flow: { nodes }, from_address: fromBox || null,
+    active: camp ? !!q.launched_at : activate ?? !!q.active, ...(camp ? { repeat: false, start_mode: "now" as const } : {}) });
+  const persist = async (activate?: boolean): Promise<{ row: CsSequence | null; error: string | null }> => {
+    const r = await saveCsSequence(payload(activate));
+    if (r.row) {
+      const row = { ...r.row, audience: r.row.audience ?? {}, steps: r.row.steps ?? [] };
+      if (!idRef.current) { idRef.current = row.id; setQ((x) => ({ ...x, id: row.id })); }
+      return { row, error: null };
+    }
+    return { row: null, error: r.error ?? "Not saved." };
+  };
+  const sig = JSON.stringify({ q: { ...q, id: undefined, updated_at: undefined }, nodes, who, boxOn });
+  const savedSig = useRef(sig);
+  const [auto, setAuto] = useState<{ state: "idle" | "pending" | "saving" | "saved" | "held" | "error"; at?: Date; why?: string }>({ state: "idle" });
+  const autoBusy = useRef<Promise<void> | null>(null);
+  const runAuto = async () => {
+    if (autoBusy.current) await autoBusy.current;
+    const at = sig;
+    if (at === savedSig.current) { setAuto((a) => (a.state === "pending" ? { ...a, state: a.at ? "saved" : "idle" } : a)); return; }
+    let done!: () => void;
+    autoBusy.current = new Promise<void>((r) => { done = r; });
+    setAuto((a) => ({ ...a, state: "saving" }));
+    const r = await persist();
+    if (r.row) { savedSig.current = at; setAuto({ state: "saved", at: new Date() }); onAutoSaved?.(r.row); }
+    else setAuto({ state: "error", why: r.error ?? "Not saved." });
+    autoBusy.current = null; done();
+  };
+  const live = camp ? !!q.launched_at : !!q.active;
+  useEffect(() => {
+    if (sig === savedSig.current) return;
+    const bad = live ? stepKeys.map((k) => problem(k)).find(Boolean) : null;
+    if (bad) { setAuto({ state: "held", why: bad }); return; }
+    setAuto((a) => ({ ...a, state: "pending" }));
+    const t = window.setTimeout(() => { void runAuto(); }, 900);
+    return () => window.clearTimeout(t);
+  }, [sig]); // eslint-disable-line react-hooks/exhaustive-deps
+  /** close for real: whatever is waiting is saved first */
+  const closeNow = async () => {
+    if (sig !== savedSig.current && auto.state !== "held") await runAuto();
+    onClose();
+  };
+  const save = async (activate?: boolean, thenSend = false) => {
+    if (!q.name?.trim()) { setErr("Give it a name."); nameRef.current?.focus(); return; }
+    for (const k of stepKeys) { const m = problem(k); if (m) { setErr(m); setStepK(k); return; } }
     setBusy(true); setErr(null);
-    const r = await saveCsSequence({ ...full, steps: st, active: activate ?? q.active });
+    if (autoBusy.current) await autoBusy.current;
+    const r = await persist(activate);
     setBusy(false);
     if (r.error || !r.row) { setErr(r.error ?? "Not saved."); return; }
-    onSaved({ ...r.row, audience: r.row.audience ?? {}, steps: r.row.steps ?? [] }); onClose();
+    savedSig.current = sig;
+    onSaved(r.row); onClose();
+    if (thenSend) onSend(r.row);
+  };
+  /** a test of its e-mail to your own inbox, from the team mailbox — checks you may send as it */
+  const testFrom = async () => {
+    const tid = steps.find((st) => st.template_id)?.template_id;
+    if (!tid) { setErr("Pick its e-mail first, to test it."); return; }
+    setTesting("…"); setErr(null);
+    const r = await testCsTemplate(tid, fits[0]?.id ?? null, fromBox || null);
+    setTesting(r.error ? null : `Sent to ${r.to}${fromBox ? ` from ${fromBox}` : ""} — check your inbox.`);
+    if (r.error) setErr(r.error);
   };
   const inNow = q.id ? runs.filter((r) => r.sequence_id === q.id && r.status === "active").length : 0;
   const clientOpts = accounts.map((c) => ({ value: c.id, label: c.name }));
   const before = q.start_mode === "before_renewal";
-  /** the day each e-mail goes out, counted from the client's start */
-  const dayOf = steps.map((_, i) => steps.slice(0, i + 1).reduce((t, st, j) => t + (j === 0 && before ? 0 : Number(st.wait_days) || 0), 0));
-  const tplName = (id: string) => templates.find((t) => t.id === id)?.name ?? "";
-  const folderName = (t: CsTemplate) => (t.folder_id ? folders.find((f) => f.id === t.folder_id)?.name ?? "" : "");
   // the step-by-step guide: each step lights up the part of the editor it explains
   const [tour, setTour] = useState<number | null>(null);
   useEffect(() => {
     let seen = true;
     try { seen = localStorage.getItem("cs-seq-tour") === "1"; } catch { /* private mode */ }
-    if (!seen) { setTour(0); try { localStorage.setItem("cs-seq-tour", "1"); } catch { /* ignore */ } }
-  }, []);
+    if (!seen && initial.kind !== "campaign") { setTour(0); try { localStorage.setItem("cs-seq-tour", "1"); } catch { /* ignore */ } }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const tourStep = tour != null ? SEQ_TOUR[tour] : null;
   const tourOn = (k: string) => (tourStep?.at === k ? "is-tour-on" : "");
   useEffect(() => {
     if (!tourStep?.at) return;
+    if ((stepKeys as string[]).includes(tourStep.at)) setStepK0(tourStep.at as SKey);
     const el = document.querySelector<HTMLElement>(`.cs4-ed.is-seq [data-tour="${tourStep.at}"]`);
     el?.scrollIntoView({ behavior: "smooth", block: tourStep.at === "head" || tourStep.at === "save" ? "nearest" : "center" });
   }, [tour]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -2947,179 +3173,357 @@ function CsSequenceEditor({ initial, templates, folders, accounts, runs, types, 
   const quietN = Math.max(0, Number(a.quiet_days) || 0);
   const setQuiet = (n: number | null) => setA({ quiet_days: n && n > 0 ? n : null });
   const waitingN = quietN ? accounts.filter((c) => csFits(full, c, null, true) && (csQuietLeft(full, c) ?? 0) > 0).length : 0;
-  const sentence = `${steps.length} e-mail${steps.length === 1 ? "" : "s"} to ${fits.length} client${fits.length === 1 ? "" : "s"} · ${quietN ? `starts once a client has gone ${quietN} days without contact` : before ? `starts ${q.start_days ?? 60} days before each renewal` : "starts as each client joins"} · ${q.repeat ? (quietN ? "again each time it goes quiet" : "then again") : "then stops"}`;
+  const cnt = flowCount(nodes);
+  const flowEnd = flowDays(nodes).end;
+  const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
+  const ppl = (n: number) => `${n} ${n === 1 ? "person" : "people"}`;
+  const fromText = fromBox || (q.sender === "owner" ? "Each client's owner" : !camp && q.created_by && q.created_by !== me ? people.find((p) => p.id === q.created_by)?.name ?? "Its creator" : "You");
+  const toText = q.recipients === "all" ? "Every contact" : q.recipients === "billing" ? "Billing contact" : "Main contact";
+  const STEP_INFO: Record<SKey, { label: string; sub: string; title: string; lead: string }> = {
+    who: { label: "Audience", sub: `${plural(fits.length, "client")} · ${ppl(people_n)}`, title: "Who gets it",
+      lead: camp ? "Choose the clients. Everyone who matches when you press Send gets it, once. Switch a client or an address off in the list on the right." : "Which clients are in it. Priority, type and health only choose clients — they don't set any dates." },
+    start: { label: "Timing", sub: quietN ? `After ${quietN} quiet days` : before ? `${q.start_days ?? 60} days before renewal` : "As each client joins", title: "When it starts",
+      lead: "The day each client's clock starts — the waits between steps count from it." },
+    mails: { label: "Steps", sub: [plural(cnt.email, "e-mail"), cnt.branch ? plural(cnt.branch, "check") : "", cnt.task ? plural(cnt.task, "task") : "", flowEnd?.hi ? `${flowEnd.lo === flowEnd.hi ? "over" : "up to"} ${plural(flowEnd.hi, "day")}` : ""].filter(Boolean).join(" · "), title: "What happens",
+      lead: camp ? "The first e-mail goes out when you press Send. Then follow-ups, and checks that go one way or another by whether the client opened or answered." : "E-mails, and checks that go one way or another by whether the client opened or answered. Each step waits its days after the one before." },
+    send: { label: "Delivery", sub: `${toText} · ${fromBox ? fromBox : `from ${fromText.toLowerCase() === "you" ? "you" : fromText}`}`, title: "Sent to and from",
+      lead: "Who at each client gets it, and which mailbox sends it." },
+  };
+  const last = stepAt === stepKeys.length - 1;
+  const footNote = camp ? (sent ? "Already sent — you can still change the follow-ups that haven't happened." : "Nothing goes out until you press Send and confirm it twice.") : q.active ? "On: due e-mails go out every hour." : "Off: nothing is sent until you switch it on.";
+  const next = () => { const m = problem(stepK); if (m) { setErr(m); return; } setErr(null); setStepK(stepKeys[Math.min(stepKeys.length - 1, stepAt + 1)]); };
+  const stepHead = (k: SKey) => (
+    <header className="cs5-sh">
+      <span className="cs5-sh-k">Step {stepKeys.indexOf(k) + 1} of {stepKeys.length}</span>
+      <div className="cs5-sh-t"><h3>{STEP_INFO[k].title}</h3>
+        {!camp && <button type="button" className="cs4-sq-q" onClick={() => ask(k)} aria-label={`Explain: ${STEP_INFO[k].title}`} title="Explain this"><CsIco n="info" s={14} /></button>}</div>
+      <p>{STEP_INFO[k].lead}</p>
+    </header>
+  );
+  /* the list on the right */
+  const needle = find.trim().toLowerCase();
+  const runOf = (c: CsClient) => runs.find((r) => r.sequence_id === q.id && r.client_id === c.id) ?? null;
+  const nameOf = (c: CsClient, e: string) => capName(c.contacts.find((x) => (x.email ?? "").trim().toLowerCase() === e.trim().toLowerCase())?.name ?? "");
+  const rowsC = cand.filter((c) => !needle || c.name.toLowerCase().includes(needle) || csTo(full, c, runOf(c), true).some((e) => e.toLowerCase().includes(needle)));
+  const allMails = cand.flatMap((c) => csTo(full, c, runOf(c), true).map((e) => ({ c, e, n: nameOf(c, e) })));
+  const rowsE = allMails.filter((x) => !needle || x.e.toLowerCase().includes(needle) || x.n.toLowerCase().includes(needle) || x.c.name.toLowerCase().includes(needle));
+  const offCN = cand.filter((c) => offC.has(c.id)).length;
+  const offEN = allMails.filter((x) => offE.has(x.e.toLowerCase())).length;
+  const peekC = peek ? cand.find((c) => c.id === peek.id) ?? null : null;
+  const Sw = ({ on, onClick, label }: { on: boolean; onClick: () => void; label: string }) => (
+    <button type="button" role="switch" aria-checked={on} aria-label={label} title={on ? "Gets it — click to leave out" : "Left out — click to include"} className={`cs5-sw ${on ? "is-on" : ""}`} onClick={(e) => { e.stopPropagation(); onClick(); }}><i /></button>
+  );
   return createPortal(
-    <div className="csx-modal-bg cs4-ed-bg" onMouseDown={(e) => { if (e.target === e.currentTarget && tour == null) onClose(); }}>
-      <div className={`cs4-ed is-seq ${tourStep?.at ? "is-touring" : ""}`} role="dialog" aria-modal="true" aria-label="Follow-up sequence">
-        <header className={`cs4-ed-h cs4-sq-h ${tourOn("head")}`} data-tour="head">
-          <span className="cs4-sq-ico"><CsIco n="repeat" s={20} /></span>
-          <div className="cs4-ed-ht"><span className="cs4-sq-eye">{q.id ? "Follow-up sequence" : "New follow-up sequence"}</span>
-            <input className="cs4-ed-name" value={q.name ?? ""} onChange={(e) => setQ((x) => ({ ...x, name: e.target.value }))} placeholder="Name it — e.g. Keep in touch · high priority" aria-label="Sequence name" autoFocus={!q.id && tour == null} />
-            <span className="cs4-sq-sum">{sentence}</span></div>
-          <button type="button" className="cs4-sq-help" onClick={() => setTour(0)}><CsIco n="info" s={15} /><span>How it works</span></button>
-          <button type="button" role="switch" aria-checked={!!q.active} className={`csx-switch cs4-sq-switch ${q.active ? "is-on" : ""}`} onClick={() => setQ((x) => ({ ...x, active: !x.active }))}><i />{q.active ? "On" : "Off"}</button>
-          <button type="button" className="csx-x cs4-sq-x" onClick={onClose} aria-label="Close"><CsIco n="x" /></button>
+    <div className="csx-modal-bg cs4-ed-bg" onMouseDown={(e) => { if (e.target === e.currentTarget && tour == null) setAskClose(true); }}>
+      <div className={`cs4-ed is-seq cs5 ${camp ? "is-camp" : ""} ${tourStep?.at ? "is-touring" : ""}`} role="dialog" aria-modal="true" aria-label={camp ? "One-time campaign" : "Follow-up sequence"}>
+        <header className={`cs4-ed-h cs4-sq-h cs5-h ${tourOn("head")}`} data-tour="head">
+          <span className="cs4-sq-ico"><CsIco n={camp ? "send" : "repeat"} s={16} /></span>
+          <div className="cs4-ed-ht">
+            <div className="cs5-h-l">
+              <input ref={nameRef} className="cs4-ed-name" value={q.name ?? ""} onChange={(e) => setQ((x) => ({ ...x, name: e.target.value }))} placeholder={camp ? "Name it — e.g. New reporting module · all clients" : "Name it — e.g. Keep in touch · high priority"} aria-label={camp ? "Campaign name" : "Sequence name"} autoFocus={!q.id && tour == null} />
+              {sent && <span className="cs5-badge"><CsIco n="check" s={11} />Sent {csDate(q.launched_at!)}</span>}
+              {auto.state !== "idle" && (
+                <span className={`cs5-auto is-${auto.state}`} title={auto.why ?? (auto.at ? `Saved at ${auto.at.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}` : "")}>
+                  {auto.state === "saving" || auto.state === "pending" ? <><i className="cs5-auto-dot" />Saving…</>
+                    : auto.state === "saved" ? <><CsIco n="check" s={11} />Saved {auto.at?.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</>
+                    : auto.state === "held" ? <><CsIco n="info" s={11} />Not saved yet — it's live: {auto.why}</>
+                    : <><CsIco n="info" s={11} />Not saved: {auto.why}</>}
+                </span>
+              )}
+            </div>
+          </div>
+          {!sent && (
+            <div className="cs5-kind" role="radiogroup" aria-label="One-time or recurring">
+              <button type="button" role="radio" aria-checked={camp} className={`cs5-ib ${camp ? "is-on" : ""}`} onClick={() => { setKind("campaign"); if (stepK === "start") setStepK("who"); }} title="One-time: sent once, when you press Send"><CsIco n="send" s={14} /><span>One-time</span></button>
+              <button type="button" role="radio" aria-checked={!camp} className={`cs5-ib ${!camp ? "is-on" : ""}`} onClick={() => setKind("sequence")} title="Recurring: e-mails that go out by themselves, again and again"><CsIco n="repeat" s={14} /><span>Recurring</span></button>
+            </div>
+          )}
+          {!camp && <button type="button" className="cs5-ib" onClick={() => setTour(0)} title="How it works"><CsIco n="info" s={15} /><span>How it works</span></button>}
+          {!camp && <button type="button" role="switch" aria-checked={!!q.active} className={`csx-switch cs4-sq-switch ${q.active ? "is-on" : ""}`} onClick={() => setQ((x) => ({ ...x, active: !x.active }))}><i />{q.active ? "On" : "Off"}</button>}
+          <span className="cs5-h-sep" aria-hidden="true" />
+          <div className={`cs5-acts ${tourOn("save")}`} data-tour="save">
+            <div className="cs5-more">
+              <button type="button" className={`cs5-ib ${more ? "is-on" : ""}`} onClick={() => setMore((m) => !m)} aria-haspopup="menu" aria-expanded={more} title="Save, cancel…"><CsIco n="more" s={16} /></button>
+              {more && (
+                <div className="cs5-more-menu" role="menu">
+                  <p>{footNote}</p>
+                  {camp ? <button type="button" role="menuitem" disabled={busy} onClick={() => { setMore(false); void save(); }}><CsIco n="check" s={14} /><span><b>{sent ? "Save changes" : "Save as draft"}</b><i>{sent ? "The follow-ups that haven't happened yet" : "Nothing is sent"}</i></span></button>
+                    : <>
+                      {!q.active && <button type="button" role="menuitem" disabled={busy} onClick={() => { setMore(false); void save(false); }}><CsIco n="check" s={14} /><span><b>Save, keep it off</b><i>Nothing is sent until you switch it on</i></span></button>}
+                      <button type="button" role="menuitem" disabled={busy} onClick={() => { setMore(false); void save(true); }}><CsIco n="bolt" s={14} /><span><b>{q.active ? "Save" : "Save and switch on"}</b><i>Due e-mails go out every hour</i></span></button>
+                    </>}
+                  <hr />
+                  <button type="button" role="menuitem" className="is-danger" onClick={() => { setMore(false); setAskClose(true); }}><CsIco n="x" s={14} /><span><b>Close</b><i>Your changes are saved as you go</i></span></button>
+                </div>
+              )}
+            </div>
+          </div>
+          <button type="button" className="csx-x cs4-sq-x" onClick={() => setAskClose(true)} aria-label="Close"><CsIco n="x" /></button>
         </header>
-        <div className="cs4-ed-b">
-          <div className="cs4-ed-form cs4-sq-form">
-            <section className={`cs4-ed-sec cs4-sq-sec ${tourOn("who")}`} data-tour="who">
-              <div className="cs4-sq-sh"><span className="cs4-sq-n">1</span><div><h4>Who gets it</h4><p>Which clients are in it. Priority, type and health only choose clients — they don't set any dates.</p></div>
-                <button type="button" className="cs4-sq-q" onClick={() => ask("who")} aria-label="Explain who gets it" title="Explain this"><CsIco n="info" s={14} /></button></div>
-              <div className="cs4-seg is-light is-sm">
-                <button type="button" className={who === "filters" ? "is-on" : ""} onClick={() => setWho("filters")}>Clients that match</button>
-                <button type="button" className={who === "picked" ? "is-on" : ""} onClick={() => setWho("picked")}>Only the clients I pick</button>
+        <div className="cs4-ed-b cs5-b">
+            <nav className="cs5-steps is-v" aria-label="Steps">
+              {stepKeys.map((k, i) => (
+                <Fragment key={k}>
+                  {i > 0 && <span className={`cs5-steps-ln ${i <= stepAt ? "is-done" : ""}`} aria-hidden="true" />}
+                  <button type="button" className={`cs5-st ${k === stepK ? "is-on" : ""} ${i < stepAt ? "is-done" : ""} ${problem(k) && i < stepAt ? "is-bad" : ""}`} onClick={() => { setErr(null); setStepK(k); }} aria-current={k === stepK ? "step" : undefined}>
+                    <span className="cs5-st-n">{i < stepAt && !problem(k) ? <CsIco n="check" s={12} /> : i + 1}</span>
+                    <span className="cs5-st-t"><b>{STEP_INFO[k].label}</b><i>{STEP_INFO[k].sub}</i></span>
+                  </button>
+                </Fragment>
+              ))}
+              <p className="cs5-steps-note"><CsIco n="info" s={12} />{footNote}</p>
+              <div className="cs5-nav">
+                {!last ? <button type="button" className="cs5-nn" onClick={next} title={`Next: ${STEP_INFO[stepKeys[stepAt + 1]].label}`}><span>Next: {STEP_INFO[stepKeys[stepAt + 1]].label}</span><CsIco n="arrow" s={14} /></button>
+                  : camp ? (!sent ? <button type="button" className="cs5-nn is-go" disabled={busy || !fits.length || !people_n} onClick={() => save(undefined, true)} title={`Send now to ${ppl(people_n)}`}><CsIco n="send" s={14} /><span>{busy ? "Saving…" : `Send now to ${ppl(people_n)}`}</span></button>
+                    : <button type="button" className="cs5-nn is-go" disabled={busy} onClick={() => save()} title="Save changes"><CsIco n="check" s={14} /><span>{busy ? "Saving…" : "Save changes"}</span></button>)
+                  : <button type="button" className="cs5-nn is-go" disabled={busy} onClick={() => save(true)} title={q.active ? "Save" : "Save and switch on"}><CsIco n="check" s={14} /><span>{busy ? "Saving…" : q.active ? "Save" : "Save and switch on"}</span></button>}
+                {stepAt > 0 && <button type="button" className="cs5-nb" onClick={() => { setErr(null); setStepK(stepKeys[stepAt - 1]); }} title={`Back: ${STEP_INFO[stepKeys[stepAt - 1]].label}`}><span className="cs5-flip"><CsIco n="arrow" s={14} /></span><span>Back</span></button>}
               </div>
-              {who === "filters" ? <>
-                <div className="cs4-sq-rows">
-                  <div className="cs4-chiprow"><span>Priority</span>
-                    {[...CS_PRIORITIES.map((p) => ({ k: p.key as string, l: p.label, tone: PRI_TONE[p.key] })), { k: "none", l: "No priority", tone: "none" }].map((x) => (
-                      <button key={x.k} type="button" className={`cs4-chip is-${x.tone} ${(a.priorities ?? []).includes(x.k) ? "is-on" : ""}`} onClick={() => tog("priorities", x.k)}><i />{x.l}</button>
-                    ))}
+            </nav>
+          <div className="cs5-main">
+            {err && <p className="csx-err cs5-err">{err}</p>}
+            <div className="cs5-form" ref={formRef}>
+              {stepK === "who" && (
+                <section className={`cs5-step ${tourOn("who")}`} data-tour="who">
+                  {stepHead("who")}
+                  <div className="cs5-seg2" role="radiogroup" aria-label="How clients are chosen">
+                    <button type="button" role="radio" aria-checked={who === "filters"} className={who === "filters" ? "is-on" : ""} onClick={() => setWho("filters")}><span className="cs5-seg2-i"><CsIco n="grid" s={15} /></span><b>Clients that match</b><i>By priority, type and health</i></button>
+                    <button type="button" role="radio" aria-checked={who === "picked"} className={who === "picked" ? "is-on" : ""} onClick={() => setWho("picked")}><span className="cs5-seg2-i"><CsIco n="check" s={15} /></span><b>Only the clients I pick</b><i>A hand-made list</i></button>
                   </div>
-                  {types.length > 0 && <div className="cs4-chiprow"><span>Type</span>
-                    {types.map((t) => <button key={t.id} type="button" className={`cs4-chip ${(a.types ?? []).includes(t.id) ? "is-on" : ""}`} onClick={() => tog("types", t.id)}>{t.name}</button>)}
-                  </div>}
-                  <div className="cs4-chiprow"><span>Health</span>
-                    {HEALTH_KEYS.map((h) => <button key={h.key} type="button" className={`cs4-chip is-h-${h.key} ${(a.health ?? []).includes(h.key) ? "is-on" : ""}`} onClick={() => tog("health", h.key)}><i />{h.label}</button>)}
-                  </div>
-                </div>
-                <p className="cs4-help">Nothing ticked in a row means any. Clients join and leave by themselves as they start or stop matching.</p>
-              </> : (
-                <div className="csx-f"><span>Clients</span>
-                  <SalesMultiFilter values={a.clients ?? []} onChange={(v) => setA({ clients: v })} options={clientOpts} placeholder="Pick clients…" noun="clients" searchFrom={6} />
-                </div>
-              )}
-              <div className="csx-f"><span>Never to</span>
-                <SalesMultiFilter values={a.exclude ?? []} onChange={(v) => setA({ exclude: v })} options={clientOpts} placeholder="Nobody left out" noun="clients" searchFrom={6} />
-              </div>
-            </section>
-
-            <section className={`cs4-ed-sec cs4-sq-sec ${tourOn("start")}`} data-tour="start">
-              <div className="cs4-sq-sh"><span className="cs4-sq-n">2</span><div><h4>When it starts</h4><p>The day each client's clock starts — the e-mails' waits count from it.</p></div>
-                <button type="button" className="cs4-sq-q" onClick={() => ask("start")} aria-label="Explain when it starts" title="Explain this"><CsIco n="info" s={14} /></button></div>
-              <div className="cs4-opts cs4-sq-opts">
-                <button type="button" className={!before ? "is-on" : ""} onClick={() => setQ((x) => ({ ...x, start_mode: "now" }))}><span className="cs4-sq-oi"><CsIco n="bolt" s={15} /></span><b>Right away</b><i>The day a client joins the sequence</i></button>
-                <button type="button" className={before ? "is-on" : ""} onClick={() => setQ((x) => ({ ...x, start_mode: "before_renewal" }))}><span className="cs4-sq-oi"><CsIco n="cal" s={15} /></span><b>Before each renewal</b><i>A set number of days before the client's renewal date</i></button>
-              </div>
-              {before && (
-                <div className="cs4-inline cs4-sq-inline"><input type="number" min={0} value={q.start_days ?? 60} onChange={(e) => setQ((x) => ({ ...x, start_days: Math.max(0, Number(e.target.value) || 0) }))} aria-label="Days before the renewal" /><span>days before the renewal <em>(signed products' terms, their deals' contracts, else the yearly anniversary)</em></span></div>
-              )}
-              <div className={`cs4-sq-quiet ${quietN ? "is-on" : ""}`}>
-                <button type="button" role="switch" aria-checked={!!quietN} className="cs4-sq-quiet-h" onClick={() => setQuiet(quietN ? null : 60)}>
-                  <span className="cs4-sq-oi"><CsIco n="clock" s={15} /></span>
-                  <span className="cs4-sq-quiet-t"><b>Only once a client has gone quiet</b><i>Waits until the client's last contact is a number of days old</i></span>
-                  <span className={`csx-switch ${quietN ? "is-on" : ""}`} aria-hidden="true"><i /></span>
-                </button>
-                {quietN > 0 && (
-                  <div className="cs4-sq-quiet-b">
-                    <div className="cs4-inline"><span>Starts when the last contact is</span><input type="number" min={1} value={quietN} onChange={(e) => setQuiet(Math.max(1, Number(e.target.value) || 1))} aria-label="Days without contact" /><span>days old or more</span></div>
-                    <label className="csx-check-row"><input type="checkbox" checked={a.quiet_stop !== false} onChange={(e) => setA({ quiet_stop: e.target.checked })} /><span>Stop for that client as soon as someone is in touch — a call, a meeting, an e-mail either way</span></label>
-                    <p className="cs4-help">{fits.length} client{fits.length === 1 ? " is" : "s are"} quiet enough now{waitingN ? ` · ${waitingN} more start as they reach ${quietN} days` : ""}. Any contact counts: logged by hand, or read from Outlook.</p>
-                  </div>
-                )}
-              </div>
-            </section>
-
-            <section className={`cs4-ed-sec cs4-sq-sec is-wide ${tourOn("mails")}`} data-tour="mails">
-              <div className="cs4-sq-sh"><span className="cs4-sq-n">3</span><div><h4>The e-mails</h4><p>Each e-mail waits its days after the one before it; the first one waits from the start.</p></div>
-                <button type="button" className="cs4-sq-q" onClick={() => ask("mails")} aria-label="Explain the e-mails" title="Explain this"><CsIco n="info" s={14} /></button></div>
-              <ol className="cs4-tl">
-                <li className="cs4-tl-edge">
-                  <span className="cs4-tl-dot is-start"><CsIco n="flag" s={12} /></span>
-                  <div><b>Start</b><i>{quietN ? `Day 0 · the day the client has gone ${quietN} days without contact${before ? ` (from ${q.start_days ?? 60} days before its renewal)` : ""}` : before ? `Day 0 · ${q.start_days ?? 60} days before the client's renewal` : "Day 0 · the day the client joins"}</i></div>
-                </li>
-                {steps.map((st, i) => (
-                  <li key={st.id} className="cs4-tl-step">
-                    <div className="cs4-tl-wait">
-                      {i === 0 && before ? <span className="cs4-tl-pill"><CsIco n="clock" s={12} />Sent on the start day</span> : (
-                        <span className="cs4-tl-pill"><CsIco n="clock" s={12} />{i === 0 ? "Wait" : "Then wait"}
-                          <input type="number" min={0} value={st.wait_days} onChange={(e) => setStep(i, { wait_days: Math.max(0, Number(e.target.value) || 0) })} aria-label={`Days to wait before e-mail ${i + 1}`} />
-                          day{st.wait_days === 1 ? "" : "s"}{i === 0 && !st.wait_days ? " · sent at once" : ""}</span>
-                      )}
-                    </div>
-                    <div className="cs4-tl-card">
-                      <span className="cs4-tl-n">{i + 1}</span>
-                      <div className="cs4-tl-main">
-                        <em>E-mail {i + 1} · <b>day {dayOf[i]}</b>{tplName(st.template_id) ? "" : " · pick its blueprint"}</em>
-                        <Select size="sm" value={st.template_id} onChange={(v) => v === "__new" ? onNewTemplate() : setStep(i, { template_id: v })} placeholder="Pick an e-mail blueprint…" searchable
-                          options={[...[...templates].sort((x, y) => (folderName(x) || "\uffff").localeCompare(folderName(y) || "\uffff") || x.name.localeCompare(y.name)).map((t) => ({ value: t.id, label: t.name, hint: [folderName(t), t.attachments.length ? `${t.attachments.length} file${t.attachments.length === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ") || undefined })), { value: "__new", label: "+ New blueprint…" }]} />
+                  {who === "filters" ? (
+                    <div className="cs5-box">
+                      <div className="cs4-chiprow"><span>Priority</span>
+                        {[...CS_PRIORITIES.map((p) => ({ k: p.key as string, l: p.label, tone: PRI_TONE[p.key] })), { k: "none", l: "No priority", tone: "none" }].map((x) => (
+                          <button key={x.k} type="button" className={`cs4-chip is-${x.tone} ${(a.priorities ?? []).includes(x.k) ? "is-on" : ""}`} onClick={() => tog("priorities", x.k)}><i />{x.l}</button>
+                        ))}
                       </div>
-                      <div className="cs4-tl-tools">
-                        <button type="button" className="csx-ghost is-sm is-ico" disabled={i === 0} onClick={() => moveStep(i, -1)} title="Earlier" aria-label="Move earlier"><CsIco n="up" s={12} /></button>
-                        <button type="button" className="csx-ghost is-sm is-ico" disabled={i === steps.length - 1} onClick={() => moveStep(i, 1)} title="Later" aria-label="Move later"><CsIco n="dn" s={12} /></button>
-                        <button type="button" className="csx-ghost is-sm is-ico" disabled={steps.length === 1} onClick={() => setQ((x) => ({ ...x, steps: (x.steps ?? []).filter((_, j) => j !== i) }))} title="Remove" aria-label="Remove this e-mail"><CsIco n="trash" s={11} /></button>
+                      {types.length > 0 && <div className="cs4-chiprow"><span>Type</span>
+                        {types.map((t) => <button key={t.id} type="button" className={`cs4-chip ${(a.types ?? []).includes(t.id) ? "is-on" : ""}`} onClick={() => tog("types", t.id)}>{t.name}</button>)}
+                      </div>}
+                      <div className="cs4-chiprow"><span>Health</span>
+                        {HEALTH_KEYS.map((h) => <button key={h.key} type="button" className={`cs4-chip is-h-${h.key} ${(a.health ?? []).includes(h.key) ? "is-on" : ""}`} onClick={() => tog("health", h.key)}><i />{h.label}</button>)}
+                      </div>
+                      <p className="cs5-note">{camp ? "Nothing ticked in a row means any." : "Nothing ticked in a row means any. Clients join and leave by themselves as they start or stop matching."}</p>
+                    </div>
+                  ) : (
+                    <div className="cs5-box">
+                      <div className="csx-f"><span>Clients</span>
+                        <SalesMultiFilter values={a.clients ?? []} onChange={(v) => setA({ clients: v })} options={clientOpts} placeholder="Pick clients…" noun="clients" searchFrom={6} />
                       </div>
                     </div>
-                  </li>
-                ))}
-                <li className="cs4-tl-add">
-                  <button type="button" className="cs4-tl-addb" onClick={() => setQ((x) => ({ ...x, steps: [...(x.steps ?? []), newStep(templates[0]?.id ?? "", 14)] }))}><CsIco n="plus" s={12} />Add an e-mail</button>
-                </li>
-                <li className="cs4-tl-edge is-end">
-                  <span className={`cs4-tl-dot ${q.repeat ? "is-again" : "is-stop"}`}><CsIco n={q.repeat ? "repeat" : "stop"} s={12} /></span>
-                  <div className="cs4-tl-endb">
-                    <b>After the last e-mail</b>
-                    <div className="cs4-opts is-sm">
-                      <button type="button" className={!q.repeat ? "is-on" : ""} onClick={() => setQ((x) => ({ ...x, repeat: false }))}><b>Stop</b><i>{quietN ? "Once per client, for good" : "The client is done"}</i></button>
-                      <button type="button" className={q.repeat ? "is-on" : ""} onClick={() => setQ((x) => ({ ...x, repeat: true }))}><b>Start again</b><i>{quietN ? `The next time it goes ${quietN} days without contact` : before ? "Before the next renewal" : "From e-mail 1, after a pause"}</i></button>
+                  )}
+                  <div className="cs5-box is-quiet">
+                    <div className="cs5-box-h"><b>Left out</b><i>Never sent to, even when they match. Switch them off here or in the list on the right.</i></div>
+                    <div className="csx-f"><span>Clients</span>
+                      <SalesMultiFilter values={a.exclude ?? []} onChange={(v) => setA({ exclude: v })} options={clientOpts} placeholder="Nobody left out" noun="clients" searchFrom={6} />
                     </div>
-                    {q.repeat && !before && !quietN && (
-                      <div className="cs4-inline cs4-sq-inline"><span>Start again</span><input type="number" min={1} value={q.start_days ?? 30} onChange={(e) => setQ((x) => ({ ...x, start_days: Math.max(1, Number(e.target.value) || 1) }))} aria-label="Days before starting again" /><span>days after the last e-mail{steps[0]?.wait_days ? ` (then e-mail 1's own ${steps[0].wait_days}-day wait)` : ""}</span></div>
+                    {(a.exclude_emails ?? []).length > 0 && (
+                      <div className="cs5-offs"><span>E-mails</span>
+                        <div>{(a.exclude_emails ?? []).map((e) => <button key={e} type="button" className="cs5-off" onClick={() => togEmail(e)} title="Include it again">{e}<CsIco n="x" s={11} /></button>)}</div>
+                      </div>
                     )}
                   </div>
-                </li>
-              </ol>
-            </section>
+                </section>
+              )}
 
-            <section className={`cs4-ed-sec cs4-sq-sec is-wide ${tourOn("send")}`} data-tour="send">
-              <div className="cs4-sq-sh"><span className="cs4-sq-n">4</span><div><h4>Sent to and from</h4><p>Who at the client gets it, and whose Outlook sends it.</p></div>
-                <button type="button" className="cs4-sq-q" onClick={() => ask("send")} aria-label="Explain sent to and from" title="Explain this"><CsIco n="info" s={14} /></button></div>
-              <div className="cs4-sq-rows">
-                <div className="cs4-chiprow"><span>To</span>
-                  {([["all", "Every contact"], ["main", "Main contact only"], ["billing", "Billing contact"]] as const).map(([k, l]) => <button key={k} type="button" className={`cs4-chip ${q.recipients === k ? "is-on" : ""}`} onClick={() => setQ((x) => ({ ...x, recipients: k }))}>{l}</button>)}
-                </div>
-                <div className="cs4-chiprow"><span>From</span>
-                  <button type="button" className={`cs4-chip ${q.sender === "owner" ? "is-on" : ""}`} onClick={() => setQ((x) => ({ ...x, sender: "owner" }))}>Each client's starred owner</button>
-                  <button type="button" className={`cs4-chip ${q.sender === "me" ? "is-on" : ""}`} onClick={() => setQ((x) => ({ ...x, sender: "me" }))}>{q.created_by && q.created_by !== me ? people.find((p) => p.id === q.created_by)?.name ?? "Its creator" : "Me"}</button>
-                </div>
-              </div>
-              <label className="csx-check-row cs4-sq-check"><input type="checkbox" checked={q.log_contact !== false} onChange={(e) => setQ((x) => ({ ...x, log_contact: e.target.checked }))} /><span><b>Each e-mail counts as a contact</b><i>It goes in the client's history and resets its "needs contact" clock.</i></span></label>
-              <p className="cs4-help">Each person gets their own e-mail, with their own name. A client without an owner (or whose owner hasn't connected Outlook with mail) is sent from the sequence's creator.</p>
-            </section>
+              {stepK === "start" && !camp && (
+                <section className={`cs5-step ${tourOn("start")}`} data-tour="start">
+                  {stepHead("start")}
+                  <div className="cs4-opts cs4-sq-opts">
+                    <button type="button" className={!before ? "is-on" : ""} onClick={() => setQ((x) => ({ ...x, start_mode: "now" }))}><span className="cs4-sq-oi"><CsIco n="bolt" s={15} /></span><b>Right away</b><i>The day a client joins the sequence</i></button>
+                    <button type="button" className={before ? "is-on" : ""} onClick={() => setQ((x) => ({ ...x, start_mode: "before_renewal" }))}><span className="cs4-sq-oi"><CsIco n="cal" s={15} /></span><b>Before each renewal</b><i>A set number of days before the client's renewal date</i></button>
+                  </div>
+                  {before && (
+                    <div className="cs4-inline cs4-sq-inline"><input type="number" min={0} value={q.start_days ?? 60} onChange={(e) => setQ((x) => ({ ...x, start_days: Math.max(0, Number(e.target.value) || 0) }))} aria-label="Days before the renewal" /><span>days before the renewal <em>(signed products' terms, their deals' contracts, else the yearly anniversary)</em></span></div>
+                  )}
+                  <div className={`cs4-sq-quiet ${quietN ? "is-on" : ""}`}>
+                    <button type="button" role="switch" aria-checked={!!quietN} className="cs4-sq-quiet-h" onClick={() => setQuiet(quietN ? null : 60)}>
+                      <span className="cs4-sq-oi"><CsIco n="clock" s={15} /></span>
+                      <span className="cs4-sq-quiet-t"><b>Only once a client has gone quiet</b><i>Waits until the client's last contact is a number of days old</i></span>
+                      <span className={`csx-switch ${quietN ? "is-on" : ""}`} aria-hidden="true"><i /></span>
+                    </button>
+                    {quietN > 0 && (
+                      <div className="cs4-sq-quiet-b">
+                        <div className="cs4-inline"><span>Starts when the last contact is</span><input type="number" min={1} value={quietN} onChange={(e) => setQuiet(Math.max(1, Number(e.target.value) || 1))} aria-label="Days without contact" /><span>days old or more</span></div>
+                        <label className="csx-check-row"><input type="checkbox" checked={a.quiet_stop !== false} onChange={(e) => setA({ quiet_stop: e.target.checked })} /><span>Stop for that client as soon as someone is in touch — a call, a meeting, an e-mail either way</span></label>
+                        <p className="cs4-help">{fits.length} client{fits.length === 1 ? " is" : "s are"} quiet enough now{waitingN ? ` · ${waitingN} more start as they reach ${quietN} days` : ""}. Any contact counts: logged by hand, or read from Outlook.</p>
+                      </div>
+                    )}
+                  </div>
+                </section>
+              )}
+
+              {stepK === "mails" && (
+                <section className={`cs5-step is-flow ${tourOn("mails")}`} data-tour="mails">
+                  {stepHead("mails")}
+                  <div className="cs5-viewtog">
+                    <span className="cs5-viewtog-seg" role="tablist" aria-label="View">
+                    <button type="button" role="tab" aria-selected={flowView === "build"} className={flowView === "build" ? "is-on" : ""} onClick={() => setFlowView("build")}><CsIco n="edit" s={13} />Build the steps</button>
+                    <button type="button" role="tab" aria-selected={flowView === "days"} className={flowView === "days" ? "is-on" : ""} onClick={() => setFlowView("days")}><CsIco n="cal" s={13} />See it day by day</button>
+                    </span>
+                    <span className="cs5-viewtog-n">{sent ? `Dates from the day it was sent` : `Dates are an example: day 0 = 1 January`}</span>
+                  </div>
+                  {flowView === "days" ? <CsFlowCalendar nodes={nodes} templates={templates} people={people} campaign={camp} startAt={sent ? new Date(q.launched_at!) : null} /> : <CsFlowEditor nodes={nodes} onChange={setNodes} templates={templates} folders={folders} people={people} campaign={camp} sent={sent}
+                    startAt={sent ? new Date(q.launched_at!) : null}
+                    startText={camp ? (sent ? `Day 0 · sent ${csDate(q.launched_at!)}` : "Day 0 · when you press Send — the first e-mail goes out to everyone") : quietN ? `Day 0 · the day the client has gone ${quietN} days without contact${before ? ` (from ${q.start_days ?? 60} days before its renewal)` : ""}` : before ? `Day 0 · ${q.start_days ?? 60} days before the client's renewal` : "Day 0 · the day the client joins"}
+                    stats={flowStats(log, q.id)} here={flowHere(runs, q.id)} onNewTemplate={onNewTemplate} />}
+                  {!camp && (
+                    <div className="cs5-box cs5-end">
+                      <div className="cs5-box-h"><b>At the end</b><i>When a client has been through every step.</i></div>
+                      <div className="cs4-opts is-sm">
+                        <button type="button" className={!q.repeat ? "is-on" : ""} onClick={() => setQ((x) => ({ ...x, repeat: false }))}><b>Stop</b><i>{quietN ? "Once per client, for good" : "The client is done"}</i></button>
+                        <button type="button" className={q.repeat ? "is-on" : ""} onClick={() => setQ((x) => ({ ...x, repeat: true }))}><b>Start again</b><i>{quietN ? `The next time it goes ${quietN} days without contact` : before ? "Before the next renewal" : "From e-mail 1, after a pause"}</i></button>
+                      </div>
+                      {q.repeat && !before && !quietN && (
+                        <div className="cs4-inline cs4-sq-inline"><span>Start again</span><input type="number" min={1} value={q.start_days ?? 30} onChange={(e) => setQ((x) => ({ ...x, start_days: Math.max(1, Number(e.target.value) || 1) }))} aria-label="Days before starting again" /><span>days after the last e-mail{steps[0]?.wait_days ? ` (then e-mail 1's own ${steps[0].wait_days}-day wait)` : ""}</span></div>
+                      )}
+                    </div>
+                  )}
+                  <details className="cs5-how">
+                    <summary><CsIco n="eye" s={13} />How opens, clicks and replies are seen</summary>
+                    <p>Opens are seen when the e-mail's pictures load, clicks through its links, replies when they arrive in your Outlook or the team mailbox. Some apps hide pictures (an open is missed) and Apple Mail loads them by itself (an open that wasn't) — a reply is the sure sign.</p>
+                  </details>
+                </section>
+              )}
+
+              {stepK === "send" && (
+                <section className={`cs5-step ${tourOn("send")}`} data-tour="send">
+                  {stepHead("send")}
+                  <div className="cs5-box">
+                    <div className="cs5-box-h"><b>To</b><i>Who at each client gets it — each person gets their own e-mail, with their own name.</i></div>
+                    <div className="cs5-pick">
+                      {([["all", "Every contact", "Everyone with an e-mail"], ["main", "Main contact", "One person per client"], ["billing", "Billing contact", "Else the main one"]] as const).map(([k, l, h]) => (
+                        <button key={k} type="button" className={q.recipients === k ? "is-on" : ""} onClick={() => setQ((x) => ({ ...x, recipients: k }))}><b>{l}</b><i>{h}</i></button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="cs5-box">
+                    <div className="cs5-box-h"><b>From</b><i>The mailbox it goes out from.</i></div>
+                    <div className="cs5-pick">
+                      <button type="button" className={!boxOn && q.sender === "owner" ? "is-on" : ""} onClick={() => { setBoxOn(false); setQ((x) => ({ ...x, sender: "owner" })); }}><b>Each client's owner</b><i>The starred owner's Outlook</i></button>
+                      <button type="button" className={!boxOn && q.sender === "me" ? "is-on" : ""} onClick={() => { setBoxOn(false); setQ((x) => ({ ...x, sender: "me" })); }}><b>{!camp && q.created_by && q.created_by !== me ? people.find((p) => p.id === q.created_by)?.name ?? "Its creator" : "Me"}</b><i>{!camp && q.created_by && q.created_by !== me ? "Its creator's Outlook" : "Your own Outlook"}</i></button>
+                      <button type="button" className={boxOn ? "is-on" : ""} onClick={() => { setBoxOn(true); setQ((x) => ({ ...x, sender: "me", from_address: x.from_address || boxes[0]?.address || "" })); }}><b>A team mailbox</b><i>e.g. CS Iberia</i></button>
+                    </div>
+                    {boxOn && (
+                      <div className="cs4-box">
+                        <div className="cs4-box-row">
+                          <label className="csx-f cs4-box-f"><span>Team mailbox</span>
+                            <input type="email" value={q.from_address ?? ""} onChange={(e) => setQ((x) => ({ ...x, from_address: e.target.value }))} placeholder="cs.iberia@yourcompany.com" autoComplete="off" spellCheck={false} />
+                            {boxes.length > 0 && <span className="cs5-boxes">{boxes.filter((b) => b.address !== (q.from_address ?? "")).slice(0, 4).map((b) => <button key={b.address} type="button" onClick={() => setQ((x) => ({ ...x, from_address: b.address }))} title={b.label}>{b.address}</button>)}</span>}
+                          </label>
+                          <button type="button" className="csx-ghost is-sm" disabled={!!testing && testing === "…"} onClick={testFrom} title="Its e-mail, to your own inbox, from this mailbox"><CsIco n="send" s={12} />{testing === "…" ? "Sending…" : "Send me a test"}</button>
+                        </div>
+                        {testing && testing !== "…" && <p className="cs4-box-ok"><CsIco n="check" s={12} />{testing}</p>}
+                        <p className="cs4-help"><b>No password needed.</b> A Microsoft 365 shared mailbox (like CS Iberia) is sent with {camp ? "your" : (q.created_by && q.created_by !== me ? "its creator's" : "your")} own Outlook connection. Your admin gives you <b>Send as</b> on it, and <b>Read and manage</b> so replies to it are seen (Exchange admin center › Mailboxes › the mailbox › Delegation). Then press <i>Send me a test</i>.</p>
+                      </div>
+                    )}
+                    {!boxOn && <p className="cs5-note">A client without an owner (or whose owner hasn't connected Outlook with mail) is sent from {camp ? "you" : "the sequence's creator"}.</p>}
+                  </div>
+                  <label className="csx-check-row cs4-sq-check"><input type="checkbox" checked={q.log_contact !== false} onChange={(e) => setQ((x) => ({ ...x, log_contact: e.target.checked }))} /><span><b>Each e-mail counts as a contact</b><i>It goes in the client's history and resets its "needs contact" clock.</i></span></label>
+                  {camp && !sent && (
+                    <div className="cs5-recap">
+                      <span className="cs5-recap-i"><CsIco n="send" s={16} /></span>
+                      <div><b>Ready when you are</b><i>{ppl(people_n)} at {plural(fits.length, "client")} · {STEP_INFO.mails.sub} · from {fromBox || (fromText === "You" ? "you" : fromText)}</i></div>
+                    </div>
+                  )}
+                </section>
+              )}
+            </div>
           </div>
 
-          <aside className={`cs4-ed-side cs4-sq-side ${tourOn("side")}`} data-tour="side">
-            <div className="cs4-ed-sum cs4-sq-card">
-              <b>{fits.length}</b><span>client{fits.length === 1 ? "" : "s"} match{fits.length === 1 ? "es" : ""}{q.id ? ` · ${inNow} in it now` : ""}</span>
-              <span className="cs4-ed-sum-p">{people_n} {people_n === 1 ? "person" : "people"} · one e-mail each</span>
-              <i>{quietN ? `Once ${quietN} days without contact · ` : ""}{steps.length === 1 ? "1 e-mail" : `${steps.length} e-mails over ${totalDays} days`}{q.repeat ? (quietN ? ", again each time it goes quiet" : before ? ", again before each renewal" : `, again ${q.start_days ?? 30} days later`) : ""}</i>
+          <aside className={`cs4-ed-side cs5-side ${tourOn("side")}`} data-tour="side">
+            <div className="cs5-sum">
+              <b>{people_n}</b>
+              <span><em>{people_n === 1 ? "person" : "people"}</em><i>at {plural(fits.length, "client")}{q.id ? ` · ${inNow} in it now` : ""}</i></span>
             </div>
-            <ul className="cs4-ed-who">
-              {fits.slice(0, 200).map((c) => {
-                const to = csTo(full, c, runs.find((r) => r.sequence_id === q.id && r.client_id === c.id) ?? null);
-                // which version of each e-mail this client gets (only the ones that differ from the main one)
-                const vs = [...new Set(steps.map((st) => csVariantFor(templates.find((tp) => tp.id === st.template_id), c)?.name).filter(Boolean))] as string[];
+            <div className="cs5-tabs" role="tablist" aria-label="Show">
+              <button type="button" role="tab" aria-selected={side === "clients"} className={side === "clients" ? "is-on" : ""} onClick={() => setSide("clients")}>Clients<em>{cand.length - offCN}</em></button>
+              <button type="button" role="tab" aria-selected={side === "emails"} className={side === "emails" ? "is-on" : ""} onClick={() => setSide("emails")}>E-mails<em>{allMails.length - offEN - allMails.filter((x) => offC.has(x.c.id) && !offE.has(x.e.toLowerCase())).length}</em></button>
+            </div>
+            <label className="cs5-find">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
+              <input value={find} onChange={(e) => setFind(e.target.value)} placeholder={side === "clients" ? "Find a client…" : "Find an e-mail…"} aria-label="Find" />
+              {find && <button type="button" onClick={() => setFind("")} aria-label="Clear"><CsIco n="x" s={12} /></button>}
+            </label>
+            {(offCN > 0 || offEN > 0) && (
+              <p className="cs5-offline"><span>{[offCN ? plural(offCN, "client") : "", offEN ? plural(offEN, "e-mail") : ""].filter(Boolean).join(" and ")} left out</span>
+                <button type="button" onClick={() => setA({ exclude: [], exclude_emails: [] })}>Include all</button></p>
+            )}
+            {side === "clients" ? (
+              <ul className="cs5-list">
+                {rowsC.slice(0, 300).map((c) => {
+                  const off = offC.has(c.id);
+                  const to = csTo(full, c, runOf(c));
+                  const all = csTo(full, c, runOf(c), true);
+                  const vs = [...new Set(steps.map((st) => csVariantFor(templates.find((tp) => tp.id === st.template_id), c)?.name).filter(Boolean))] as string[];
+                  return (
+                    <li key={c.id} className={`${off ? "is-off" : ""} ${!all.length ? "is-bad" : ""}`}>
+                      <CompanyLogo name={c.name} website={c.website} className="cx-av csx-logo is-xs" />
+                      <span className="cs5-li-t"><b title={c.name}>{c.name}</b>
+                        {(vs.length > 0 || (before && c.ren)) && <i>{vs.length > 0 && <em className="cs4-ed-ver" title={`Gets: ${vs.join(", ")}`}>{vs.join(" · ")}</em>}{before && c.ren ? `renews ${c.ren.end.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "2-digit" })}` : ""}</i>}
+                      </span>
+                      {all.length ? (
+                        <button type="button" className={`cs5-n ${to.length < all.length ? "is-part" : ""}`} onMouseEnter={(e) => peekOpen(c.id, e.currentTarget)} onMouseLeave={peekClose} onFocus={(e) => peekOpen(c.id, e.currentTarget)} onBlur={peekClose} aria-label={`${to.length} of ${all.length} people — show them`}>
+                          <CsIco n="users" s={12} />{to.length < all.length ? `${to.length}/${all.length}` : all.length}
+                        </button>
+                      ) : <span className="cs5-n is-none" title="No e-mail on file — it'll be skipped">No e-mail</span>}
+                      <Sw on={!off} onClick={() => togClient(c.id)} label={`${c.name}: ${off ? "left out" : "gets it"}`} />
+                    </li>
+                  );
+                })}
+                {!rowsC.length && <li className="cs5-empty">{needle ? "No client found." : "No client matches yet."}</li>}
+                {rowsC.length > 300 && <li className="cs5-empty">…and {rowsC.length - 300} more — search to find them</li>}
+              </ul>
+            ) : (
+              <ul className="cs5-list is-mails">
+                {rowsE.slice(0, 500).map(({ c, e, n }) => {
+                  const offc = offC.has(c.id), offm = offE.has(e.toLowerCase());
+                  return (
+                    <li key={`${c.id}|${e}`} className={offc || offm ? "is-off" : ""}>
+                      <span className="cs5-av" aria-hidden="true">{(n || e).trim().charAt(0).toUpperCase()}</span>
+                      <span className="cs5-li-t"><b title={e}>{e}</b><i title={`${n ? `${n} · ` : ""}${c.name}`}>{n ? `${n} · ` : ""}{c.name}{offc ? " · client left out" : ""}</i></span>
+                      <Sw on={!offm && !offc} onClick={() => (offc ? togClient(c.id) : togEmail(e))} label={`${e}: ${offm || offc ? "left out" : "gets it"}`} />
+                    </li>
+                  );
+                })}
+                {!rowsE.length && <li className="cs5-empty">{needle ? "No e-mail found." : "No e-mail addresses yet."}</li>}
+                {rowsE.length > 500 && <li className="cs5-empty">…and {rowsE.length - 500} more — search to find them</li>}
+              </ul>
+            )}
+          </aside>
+        </div>
+        {peek && peekC && createPortal(
+          <div className="cs5-peek" style={{ top: peek.top, left: peek.left }} onMouseEnter={() => { if (peekT.current) window.clearTimeout(peekT.current); }} onMouseLeave={peekClose} role="dialog" aria-label={`${peekC.name}: who gets it`}>
+            <div className="cs5-peek-h"><CompanyLogo name={peekC.name} website={peekC.website} className="cx-av csx-logo is-xs" /><span><b>{peekC.name}</b><i>{(() => { const t = csTo(full, peekC, runOf(peekC)).length, al = csTo(full, peekC, runOf(peekC), true).length; return t === al ? `${ppl(al)} get it` : `${t} of ${al} get it`; })()}</i></span></div>
+            <ul>
+              {csTo(full, peekC, runOf(peekC), true).map((e) => {
+                const off = offE.has(e.toLowerCase()) || offC.has(peekC.id);
+                const n = nameOf(peekC, e);
                 return (
-                  <li key={c.id} className={to.length ? "" : "is-bad"}>
-                    <CompanyLogo name={c.name} website={c.website} className="cx-av csx-logo is-xs" />
-                    <span><b>{c.name}{vs.length > 0 && <em className="cs4-ed-ver" title={`Gets: ${vs.join(", ")}`}>{vs.join(" · ")}</em>}</b><i>{to.length ? `${to.length > 1 ? `${to.length} people · ` : ""}${to.join(", ")}` : "No e-mail on file — it'll be skipped"}{before && c.ren ? ` · renews ${c.ren.end.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "2-digit" })}` : ""}</i></span>
-                    {c.priority && <em className={`cs4-pri-dot is-${PRI_TONE[c.priority]}`} title={`${c.priority} priority`} />}
+                  <li key={e} className={off ? "is-off" : ""}>
+                    <span className="cs5-av" aria-hidden="true">{(n || e).trim().charAt(0).toUpperCase()}</span>
+                    <span className="cs5-li-t">{n && <b>{n}</b>}<i title={e}>{e}</i></span>
+                    <Sw on={!off} onClick={() => (offC.has(peekC.id) ? togClient(peekC.id) : togEmail(e))} label={`${e}: ${off ? "left out" : "gets it"}`} />
                   </li>
                 );
               })}
-              {!fits.length && <li className="cs3-empty">No client matches yet.</li>}
-              {fits.length > 200 && <li className="cs3-empty">…and {fits.length - 200} more</li>}
             </ul>
-          </aside>
-        </div>
-        {err && <p className="csx-err cs4-ed-err">{err}</p>}
-        <footer className={`csx-modal-f ${tourOn("save")}`} data-tour="save">
-          <span className="cs4-foot-note">{q.active ? "On: due e-mails go out every hour." : "Off: nothing is sent until you switch it on."}</span>
-          <span className="csx-sp" />
-          <button type="button" className="csx-ghost" onClick={onClose}>Cancel</button>
-          {!q.active && <button type="button" className="csx-ghost" disabled={busy} onClick={() => save(false)}>Save, keep it off</button>}
-          <button type="button" className="csx-primary" disabled={busy} onClick={() => save(true)}>{busy ? "Saving…" : q.active ? "Save" : "Save and switch on"}</button>
-        </footer>
+          </div>, document.body)}
+        {askClose && (
+          <div className="cs5-ask-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) setAskClose(false); }}>
+            <div className="cs4-sc cs5-ask" role="alertdialog" aria-modal="true" aria-label="Close the editor">
+              <span className="cs4-sc-ico"><CsIco n="x" s={18} /></span>
+              <h3>Close {camp ? "the campaign" : "the sequence"}?</h3>
+              <p className="cs4-sc-note">{auto.state === "held" ? <>It's live, so changes that aren't complete aren't saved: <b>{auto.why}</b> Close anyway and lose them?</>
+                : auto.state === "error" ? <>The last change couldn't be saved: <b>{auto.why}</b></>
+                : <>Everything is saved{camp && !sent ? " as a draft" : ""} — you can pick it up again from the list.</>}</p>
+              <div className="cs4-sc-f">
+                <button type="button" className="csx-ghost" onClick={() => setAskClose(false)} autoFocus>Keep editing</button>
+                <button type="button" className="csx-primary" onClick={() => { setAskClose(false); void closeNow(); }}>Close</button>
+              </div>
+            </div>
+          </div>
+        )}
         {tourStep && tour != null && (
           <div className={`cs4-tour is-${tourStep.place ?? "right"}`} role="dialog" aria-label="How a follow-up sequence works">
             <div className="cs4-tour-h">
@@ -3211,6 +3615,21 @@ export function CustomerSuccessPage() {
       const coRows = (await Promise.all(Array.from({ length: Math.ceil(coIds.length / 150) }, (_, i) => coIds.slice(i * 150, i * 150 + 150))
         .map((ids) => Promise.resolve(supabase.from("companies").select("id, website").in("id", ids)).then((r: any) => (r.data ?? []) as any[]))).catch(() => [] as any[][])).flat();
       const co = { data: coRows };
+      // the people of each client's company (Companies › Contacts) get the e-mails too, not only the client's own list
+      const chunk = <T,>(xs: T[], n: number) => Array.from({ length: Math.ceil(xs.length / n) }, (_, i) => xs.slice(i * n, i * n + n));
+      const links = (await Promise.all(chunk(coIds, 150).map((ids) => Promise.resolve(supabase.from("company_contacts").select("company_id, contact_id").in("company_id", ids)).then((r: any) => (r.data ?? []) as any[]))).catch(() => [] as any[][])).flat();
+      const ctIds = [...new Set(links.map((l) => l.contact_id))] as string[];
+      const people = new Map<string, any>();
+      (await Promise.all(chunk(ctIds, 200).map((ids) => Promise.resolve(supabase.from("contacts").select("id, first_name, last_name, email, is_billing").in("id", ids)).then((r: any) => (r.data ?? []) as any[]))).catch(() => [] as any[][]))
+        .flat().forEach((k: any) => { if (k.email && /@/.test(k.email)) people.set(k.id, k); });
+      const coPeople: Record<string, { name: string; email: string; billing: boolean }[]> = {};
+      links.forEach((l) => { const k = people.get(l.contact_id); if (k) (coPeople[l.company_id] ??= []).push({ name: [k.first_name, k.last_name].filter(Boolean).join(" "), email: String(k.email).trim(), billing: !!k.is_billing }); });
+      const withPeople = (c: any) => {
+        const own = (Array.isArray(c.contacts) ? c.contacts : []) as any[];
+        const seen = new Set(own.map((x) => String(x?.email ?? "").trim().toLowerCase()).filter(Boolean));
+        const more = (c.company_id ? coPeople[c.company_id] ?? [] : []).filter((x) => { const e = x.email.toLowerCase(); if (seen.has(e)) return false; seen.add(e); return true; });
+        return more.length ? { ...c, contacts: [...own, ...more] } : c;
+      };
       const pn: Record<string, string> = {};
       ((pr.data ?? []) as any[]).forEach((x) => { pn[x.id] = x.name; });
       const sites: Record<string, string> = {};
@@ -3226,7 +3645,7 @@ export function CustomerSuccessPage() {
         .map((ids) => Promise.resolve(supabase.from("trackings").select("id, contract_terms").in("id", ids)).then((r: any) => (r.data ?? []) as any[]))).catch(() => [] as any[][]))
         .flat().forEach((t: any) => { if (t.contract_terms) terms[t.id] = t.contract_terms; });
       // churned clients aren't followed up any more (96_client_status.sql)
-      if (alive) setBase({ clients: ((cl.data ?? []) as any[]).filter((x) => x.status !== "churned"), lines: ((cp.data ?? []) as any[]).map((r) => ({ ...r, name: pn[r.product_id] ?? "Product" })), logs, sites, terms });
+      if (alive) setBase({ clients: ((cl.data ?? []) as any[]).filter((x) => x.status !== "churned").map(withPeople), lines: ((cp.data ?? []) as any[]).map((r) => ({ ...r, name: pn[r.product_id] ?? "Product" })), logs, sites, terms });
       loadCsAuto().then((a) => { if (alive) setAuto(a); }).catch(() => {});
       supabase.from("project_types").select("id, name").then(({ data }: any) => { if (alive) setProjTypes((data ?? []) as any[]); });
       const d = await loadCsData();
@@ -4033,8 +4452,8 @@ export function CustomerSuccessPage() {
     <div className="csx cs3 cs4 cl cl-ov fh" ref={fhRef} onPointerMove={fhMove} onPointerLeave={fhLeave}>
       <header className="cl-bar cs4-bar">
         <div className="cl-bar-left">
-          <h1 className="cl-title">Customer success</h1>
-          <nav className="cs4-itabs" role="tablist" aria-label="Customer success">
+          <h1 className="cl-title">Customer health</h1>
+          <nav className="cs4-itabs" role="tablist" aria-label="Customer health">
             {TABS.map((t) => (
               <button key={t.key} type="button" role="tab" aria-selected={tab === t.key} aria-label={t.label}
                 className={`cs4-itab ${tab === t.key ? "is-on" : ""}`} onClick={() => setTab(t.key)}>

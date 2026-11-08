@@ -126,7 +126,7 @@ Source in `supabase/functions/**`. Both apps call them; changes must stay backwa
 - Read the other side's entries since your last session before you start working.
 
 ## 7. SQL numbering
-Next free number: **115**  ← update this line when you claim one (and say which file in the log).
+Next free number: **118**  ← update this line when you claim one (and say which file in the log).
 | # | File | Chat | What |
 |---|---|---|---|
 | 98 | sql/98_client_default_folders.sql | Enterprise | client folder templates → new clients |
@@ -146,6 +146,9 @@ Next free number: **115**  ← update this line when you claim one (and say whic
 | 112 | sql/112_company_fields_light_refresh.sql | Enterprise | `cf_trg_tenant_wide`: a company field's new choices / new field no longer rebuild every contact (only rename / retype / delete) — applied 2026-11-06 |
 | 113 | sql/113_account_manager.sql | Enterprise | `company_assignees.is_manager` (one per company): account manager = starred person of Visibility; `companies_fx`/`companies_view_sql` key `account_manager`, `company_row_json.__manager`; old "Account Manager" custom field migrated to the star and removed — applied 2026-11-06 |
 | 114 | sql/114_cs_flows.sql | Enterprise | CS sequences as trees (`cs_sequences.flow`), runs `node/wait_until/last_log_id`, `cs_email_log` opened/clicked/replied/links/node/from_address, `cs_run_events`, `cs_mailbox_sync`, `cs_track()`, `cs_mark_replies()`; hourly `cs_send_due()` → **cs-engine** — applied 2026-11-06 |
+| 115 | sql/115_invite_bill_mode.sql | Enterprise | `entry_invites.bill_mode` fixed/they (who decides what an invitee bills); `alert_invite()` gives new series dates the figure the invitee chose; `calendar_entries.outlook_hide` (details left out of the Outlook event) — applied 2026-11-06 |
+| 116 | sql/116_mail_known_only.sql | Enterprise | GDPR: `mail_is_known(tenant, email)` / `mail_row_known(...)` (contact, colleague, company e-mail, client contact list, or a company's own website / e-mail domain, or a company-linked contact's domain — never public domains); triggers drop unknown mail on insert (`ticket_mail_messages`) and e-mail tickets from unknown requesters (`tracking_tasks`); restrictive SELECT policy `mail_known_only` hides stored mail whose people left the CRM — applied 2026-11-07 |
+| 117 | sql/117_purge_unknown_mail.sql | Enterprise | deletes the e-mail stored before 116 from people not in the CRM (64 rows on Konsolidator) — to run in the SQL editor |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
@@ -155,6 +158,85 @@ Write requests here; the other chat answers in the log and ticks them.
 
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
+
+### 2026-11-07 21:10 · Base · Marketing + Customer health in Base (synced with Enterprise), Marketing mock: Studio, Ads, Results, Website
+- **Sync from Enterprise** (copies, Base import paths): `pages/contacts/ContactExport.tsx` / `.css` (MarketingPage: overview, e-mail, social, calendar, audiences — as Enterprise today), `pages/clients/ClientsPage.tsx` (the CUSTOMER SUCCESS section to the end replaced with Enterprise's; Base's own part above kept: HeadFilter, Orbit), `ClientsPage.css`, `useClientsData.ts` (cs-engine, campaigns, flows), `CsFlow.tsx` / `.css` (new), `framework/LinkPopover.tsx` / `.css` (new). Needs the same SQL as Enterprise (17, 64, 108, 114) — shared DB.
+- `BaseApp.tsx`: routes `/marketing` (page "marketing") and `/success` (page "success"; `/health` → `/success`). `framework/Dock.tsx`: Marketing (megaphone) and Health (heart) items. `framework/pageAccess.tsx`: "Customer health" label/hint; Marketing hint. `pages/settings/OrgSteps.tsx`: both pages offered per department / person. Customer success page titled "Customer health" in Base.
+- `pages/marketing/MarketingLab.tsx` + `.css` (new, prefix `.ml-`, **mock — sample data, nothing sent/paid/published**): extra Marketing tabs **Studio** (one sentence → campaign on every channel: copy, visuals, calendar, budget split, expected reach/leads/CPL, "Launch everything"; agents: community manager, designer, copywriter, ads optimiser), **Ads** (wallet paid from Next, ad accounts Meta/Instagram/Google/LinkedIn/TikTok, running ads with pause), **Results** (reach, likes, reposts, comments, DMs, demo clicks; funnel post → client; per campaign; AI advice with Apply), **Website** (generate the site from Products & Services, style, pages, publish). `AccountSwitch` (brands / client accounts) in the header; `LeadStrip` (where leads come from) on Overview and Results.
+- **IDEA→ENT**: Studio / Ads / Results / Website and the account switch could go to Enterprise Marketing too once they are real.
+- Deploy: files written to the Mac and committed.
+
+### 2026-11-07 09:40 · Enterprise · GDPR: only e-mail from people in the CRM is read, stored or shown
+- Files: sql/116_mail_known_only.sql, sql/117_purge_unknown_mail.sql, supabase/functions/outlook-sync/index.ts, src/components/api/outlookSync.ts, src/components/pages/homepage/shared/HomeTodo.tsx, HomeShared.css
+- What: one check in the database, `mail_is_known(tenant, email)`: known = a contact, a colleague (profiles), a company's e-mail, a client's own contact list, or the domain of a company (website / e-mail) or of a contact linked to a company (public domains like gmail.com only by exact address; linkedin.com & co. from a website field never count). Enforced in three places: (1) a BEFORE INSERT trigger on `ticket_mail_messages` drops any message whose sender (in) / recipients (out) aren't known — whatever code stores it; same for `tracking_tasks` with source 'email'; (2) a restrictive RLS policy hides stored mail whose people are no longer in the CRM (a contact / company removed) — client Emails tab, contact profile, desk Inbox, home, exports all read through it; (3) outlook-sync's `handleIncoming` asks `mail_is_known` first and skips the message entirely (no rules, no ticket, no rule hits), counted as `unknown` → the desk's sync note says "N left out: not in the CRM". Desk › Mail settings › Mailboxes shows a GDPR note. CS scans (cs-engine) already only log mail matched to a client's contacts. Konsolidator: 208 of 272 stored messages stay visible; 64 (newsletters / SaaS notifications) hidden — 117 deletes them.
+- Tags: **DB**, PORT? (src/base/pages/homepage/shared/HomeTodo.tsx has the same Mailboxes tab text; the DB part already covers Base)
+- Deploy: 116 applied. 117 to run in the SQL editor. outlook-sync source changed in the repo but **not redeployed** (the database already enforces it; deploy with `supabase functions deploy outlook-sync` to get the cleaner skip and the counter — note this also ships the committed CS changes since v23).
+
+### 2026-11-07 09:10 · Enterprise · CS editor: step explanations in the left step list
+- Files: src/components/pages/clients/ClientsPage.tsx, ClientsPage.css
+- What: the explanation of each step no longer sits above the centre panel; the open step in the left list expands to show it (cs5-st-more) with an "Explain this step" button. Hover on any step shows the same text.
+- Tags: PORT? no (Enterprise CS editor only)
+- Deploy: none (frontend only)
+
+### 2026-11-06 15:40 · Enterprise · CS editor: saved as you go; closing always asks
+- Files: src/components/pages/clients/ClientsPage.tsx, ClientsPage.css (v5.3)
+- What: every change in the campaign/sequence editor is saved ~1 s later (`persist` → `saveCsSequence`, a new one gets its id on the first save; `onAutoSaved` keeps the list in step without a flash). A draft (unsent campaign / sequence that's off) saves anything; something live (sent campaign / sequence that's on) only saves complete changes — otherwise the header says why it's held. Header badge: Saving… / Saved hh:mm / Not saved: why. ×, Esc, backdrop and the menu's Close open "Close the campaign/sequence?" (Keep editing / Close; Esc again = keep editing); Close waits for the last save.
+- Tags: none
+- Deploy: frontend only.
+
+### 2026-11-06 15:25 · Enterprise · No native dropdowns left; CS day-by-day: small case pills, no day strip
+- Files: src/components/pages/contacts/LinkedInCapture.tsx + ContactsPage.css, superadmin/SuperAdminCreate.tsx, SuperAdminHome.tsx, SuperAdmin.css, settings/ProposalTemplateEditor.tsx/.css, clients/ClientsPage.tsx/.css, clients/CsFlow.tsx/.css
+- What: every `<select>` / `<datalist>` in src/components now uses `framework/Select` (LinkedIn capture: country, company, sector; superadmin: company filter, role; proposal editor: "Show only when" field; CS blueprint attachments: PDF form fields + font; team mailbox: known mailboxes as chips under the input). Rule: never the browser's own dropdown (the only `<select>` left is inside the HTML snippet ApiForms generates for clients' websites). CS "See it day by day": the cases are small pills ("Replies", "No open → Opens"…), the day strip is gone.
+- Tags: PORT? (Base has its own copies of some of these pages)
+- Deploy: frontend only.
+
+### 2026-11-06 15:05 · Enterprise · CS editor: Back/Next under the steps, no summary line; replies count per client
+- Files: src/components/pages/clients/ClientsPage.tsx, ClientsPage.css (v5.2), CsFlow.tsx
+- What: the header loses its summary line (name only). Next / Send now / Save and Back sit at the foot of the left step list (icons only under 1100px). Checks say it plainly: the whole client counts — one reply from anyone at it is a reply ("Someone replies" / "Opened, no reply" / "Nobody opens it"). The engine already decided per client (all e-mails of that step for the client; `cs_mark_replies` by client) — no engine change.
+- Tags: none
+- Deploy: frontend only.
+
+### 2026-11-06 14:45 · Enterprise · Calendar: who decides what an invitee bills + what the Outlook invite shows
+- Files: src/components/pages/calendar/invitesApi.ts, InvitesTray.tsx, BookingModal.tsx/.css, CalendarPage.tsx, InviteBillAsk.tsx/.css (new), src/components/pages/homepage/HomePage.tsx, src/components/api/outlookSync.ts, sql/115_invite_bill_mode.sql
+- What: summoning a colleague on client work: "I set it" (fixed figure) or "They decide" (figure = suggestion). Accepting an invite to billable work (calendar tray or Home notifications) opens `InviteBillAsk`: shows the fixed figure, or asks theirs (stepper, the service's min unit); `answerInvite(..., bill)` writes it on their entries and invites (one answer covers a series; later series dates keep it via `alert_invite`). Pending invites follow the organiser's later changes of figure/mode. Booking review step: "In the Outlook invite" chips (type of work, client, project, phase, tasks, role, billable time, client people, team, notes) → `calendar_entries.outlook_hide`; default hides billable; your last choice is remembered (`profiles.prefs.outlook_hide`); `syncCalendarEntry` leaves those out of the event body.
+- Tags: DB · PORT? (Base calendar/invites have their own copies)
+- Deploy: SQL 115 applied (bill_mode, alert_invite, outlook_hide). Frontend.
+
+### 2026-11-06 14:20 · Enterprise · CS flow: dates without weekday names
+- Files: src/components/pages/clients/CsFlow.tsx
+- What: dates read "4 Jan" (no weekday) in the cards and the day-by-day view; the day strip shows the month only on its first day and on the 1st.
+- Tags: none
+- Deploy: frontend only.
+
+### 2026-11-06 14:00 · Enterprise · CS editor: no footer, actions in the header, steps on the left
+- Files: src/components/pages/clients/ClientsPage.tsx, ClientsPage.css (v5.1 block), CsFlow.css
+- What: footer removed. Header: One-time / Recurring and "How it works" as icon buttons whose label opens on hover; "⋯" menu (Save as draft / Save, keep it off / Save and switch on / Cancel, with the status note); Back and Next as icon buttons (Next's label on hover); last step: "Send now to N people" / "Save". The steps run down a left column (196–224px; numbers only under 1100px) with the status note under them. Scrollbars hidden (still scroll) in the side list, steps, hover card, day strip and form. Path names wrap instead of being cut.
+- Tags: none
+- Deploy: frontend only.
+
+### 2026-11-06 13:40 · Enterprise · CS flow: example calendar from 1 January + clearer cards
+- Files: src/components/pages/clients/CsFlow.tsx, CsFlow.css, ClientsPage.tsx, ClientsPage.css
+- What: Steps step has "Build the steps" / "See it day by day". The day-by-day view (`CsFlowCalendar`, `flowStories`) plays one client through the flow from an example day 0 = 1 January (a sent campaign: its real send day): one case per way the checks go (replies / opens, no reply / doesn't open), a strip of days (waits shaded) and a dated agenda (e-mails, waits, outcomes, tasks with due day, end). Builder cards show the date first ("Mon 4 Jan · Day 3"), the wait in words inside the card ("Sent [3] days after the step before / the check decides / they reply"), checks say the day they decide, paths "Any day until…" / "On…".
+- Tags: none
+- Deploy: frontend only.
+
+### 2026-11-06 13:10 · Enterprise · CS flow: every step says its day (and date for campaigns)
+- Files: src/components/pages/clients/CsFlow.tsx, CsFlow.css, ClientsPage.tsx
+- What: `flowDays(nodes)` works out when each step happens from day 0 (a range when it depends on a reply: replied path = any time up to the check's end). Each card shows "Day N" (campaigns also the date: sent date, or today if sent now); checks say the day they decide; paths say "From day N" / "Any time up to day N"; tasks show their due day; the Steps tab sums "over/up to N days".
+- Tags: none
+- Deploy: frontend only.
+
+### 2026-11-06 12:40 · Enterprise · CS campaign/sequence editor v5: steps, timeline, field cards, on/off list
+- Files: src/components/pages/clients/ClientsPage.tsx, ClientsPage.css (`.cs5*` block at the end), CsFlow.tsx, CsFlow.css, useClientsData.ts, supabase/functions/cs-engine/index.ts
+- What: the editor is one step at a time (Audience · Timing (recurring) · Steps · Delivery) with Back/Next; slim header; the flow is a timeline (tiles on a rail, wait pills, "+" between steps, add-step menu); task title/notes use `ChipField` (fields as cards, stored as {{key}}); `FIELD_CHIP`/`FIELD_GROUPS` now live in CsFlow.tsx. Right list narrower (300–340px): people count per client with a hover card of its addresses, Clients/E-mails switch, search, on/off switches. New `audience.exclude_emails` (lower case): csTo leaves them out; cs-engine v3 never sends to them.
+- Tags: PORT? (Base has no CS sequences — skip unless it gets them)
+- Deploy: edge function cs-engine v3 (verify_jwt false). No SQL.
+
+### 2026-11-06 21:15 · Enterprise · CS: company contacts count as client contacts
+- Files: src/components/pages/clients/ClientsPage.tsx, supabase/functions/cs-engine/index.ts
+- What: Customer success used only `clients.contacts` (jsonb) for recipients, so clients whose people live in Companies › Contacts showed "No e-mail on file". Now each client's own list + its company's contacts (company_contacts → contacts with e-mail), deduped by e-mail, in the CS page and in the engine (recipients, {{first_name}}).
+- Tags: PORT? (Base CS page, if it lists recipients)
+- Deploy: edge function cs-engine v2 (verify_jwt false). No SQL.
 
 ### 2026-11-06 10:10 · Base · Products & Services: unit beside the price
 - `pages/settings/BaseCatalog.css`, `NewWalkthrough.css`: "/ year", "/ month"… sit to the right of the price, not below.

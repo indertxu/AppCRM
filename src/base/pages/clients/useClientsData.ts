@@ -5,6 +5,7 @@ import { supabase } from "../../../components/api/supabase";
 import { useAuth } from "../../../components/api/AuthProvider";
 import { markHandoffConverted, createTracking } from "../sales/sales/salesApi";
 import { roleSeesAll, saveCompany, saveContact } from "../companies/companiesApi";
+import { flowEmails, flowHasBranches, type CsFlowNode } from "./CsFlow";
 import {
   emptyAddress, mapClientRole, sortRoles, parseRoleLines, legacyRoleMap, resolveRoleKey, legacyColumnsOf,
   type Client, type ClientStatus, type Project, type ProjectType, type Blueprint, type ClientRole, type RoleLine, parseHolds, holdsAfter, projectStatusOf, type HoldPeriod,
@@ -867,7 +868,7 @@ export async function inspectCsFile(f: Blob, name: string, type: string): Promis
 }
 /** The file as one client gets it (fields filled in), to open and check. */
 export async function previewCsAttachment(a: CsAttachment, clientId: string | null): Promise<{ blob: Blob | null; name?: string; error?: string }> {
-  const { data, error } = await supabase.functions.invoke("outlook-sync", { body: { action: "cs_attachment_preview", attachment: a, clientId } });
+  const { data, error } = await supabase.functions.invoke("cs-engine", { body: { action: "cs_attachment_preview", attachment: a, clientId } });
   if (error) {
     let msg = error.message;
     try { const j = await (error as any).context?.json?.(); if (j?.error) msg = j.error; } catch { /* keep the message */ }
@@ -903,6 +904,8 @@ export function csVariantFor(t: Pick<CsTemplate, "variants"> | null | undefined,
 export interface CsStep { id: string; template_id: string; wait_days: number }
 export interface CsAudience {
   priorities?: string[]; types?: string[]; health?: string[]; clients?: string[]; exclude?: string[];
+  /** addresses taken out by hand (lower case): never sent to, whichever client they belong to */
+  exclude_emails?: string[];
   /** only once a client's last contact is this many days old (91_cs_quiet_rule.sql); none: no such rule */
   quiet_days?: number | null;
   /** with quiet_days: a client's round stops as soon as someone is in touch (default on) */
@@ -913,9 +916,22 @@ export interface CsSequence {
   start_mode: "now" | "before_renewal"; start_days: number; repeat: boolean;
   recipients: "main" | "all" | "billing"; sender: "owner" | "me"; log_contact: boolean;
   created_by?: string | null; created_at?: string;
+  /** sequence: recurring, by itself · campaign: one e-mail, sent once when you press Send (108_cs_campaigns.sql) */
+  kind?: "sequence" | "campaign";
+  /** a team (shared) mailbox it goes out from, sent with the sender's own Outlook — they need "Send as" on it */
+  from_address?: string | null;
+  launched_at?: string | null; launched_by?: string | null;
+  /** the steps as a tree — e-mails, "wait and check" branches, tasks, end (114_cs_flows.sql; CsFlow.tsx).
+   *  steps then holds just its e-mails, for the lists */
+  flow?: { nodes: CsFlowNode[] } | null;
 }
-export interface CsRun { id: string; sequence_id: string; client_id: string; step: number; status: "active" | "paused" | "done" | "excluded"; next_at: string | null; cycle: number; last_sent_at: string | null; to_emails: string[] | null; manual: boolean; started_at?: string | null }
-export interface CsMailLog { id: string; sequence_id: string | null; run_id: string | null; client_id: string | null; template_id: string | null; step: number | null; to_emails: string[] | null; subject: string | null; status: "sent" | "failed" | "skipped" | "test"; error: string | null; sent_by: string | null; sent_at: string }
+export const NEEDS_CAMPAIGNS = "One-time campaigns and team mailboxes need 108_cs_campaigns.sql in Supabase.";
+export interface CsRun { id: string; sequence_id: string; client_id: string; step: number; status: "active" | "paused" | "done" | "excluded"; next_at: string | null; cycle: number; last_sent_at: string | null; to_emails: string[] | null; manual: boolean; started_at?: string | null;
+  /** where it is in the tree, and until when a "wait and check" waits (114_cs_flows.sql) */
+  node?: string | null; wait_until?: string | null }
+export interface CsMailLog { id: string; sequence_id: string | null; run_id: string | null; client_id: string | null; template_id: string | null; step: number | null; to_emails: string[] | null; subject: string | null; status: "sent" | "failed" | "skipped" | "test"; error: string | null; sent_by: string | null; sent_at: string;
+  /** tracking (114_cs_flows.sql): opened (its pictures loaded), a link clicked, a reply seen in a mailbox */
+  node?: string | null; opened_at?: string | null; clicked_at?: string | null; replied_at?: string | null; from_address?: string | null }
 export interface CsAuto { ready: boolean; templates: CsTemplate[]; sequences: CsSequence[]; runs: CsRun[]; log: CsMailLog[]; folders: CsFolder[]; foldersReady?: boolean }
 
 export async function loadCsAuto(): Promise<CsAuto> {
@@ -932,7 +948,7 @@ export async function loadCsAuto(): Promise<CsAuto> {
     folders: ((f.data ?? []) as any[]).map((x) => ({ id: x.id, name: x.name ?? "Folder", color: x.color ?? null, sort: Number(x.sort) || 0 })),
     foldersReady: !f.error,
     templates: ((t.data ?? []) as any[]).map((x) => ({ ...x, design: x.design ?? {}, attachments: Array.isArray(x.attachments) ? x.attachments : [] })),
-    sequences: ((s.data ?? []) as any[]).map((x) => ({ ...x, audience: x.audience ?? {}, steps: Array.isArray(x.steps) ? x.steps : [] })),
+    sequences: ((s.data ?? []) as any[]).map(csSeqRow),
     runs: (r.data ?? []) as CsRun[],
     log: (l.data ?? []) as CsMailLog[],
   };
@@ -972,14 +988,34 @@ export async function deleteCsTemplate(id: string): Promise<string | null> {
   const { error } = await supabase.from("cs_email_templates").delete().eq("id", id);
   return error?.message ?? null;
 }
+/** a sequence row as the page uses it: with a tree, its steps are the tree's e-mails */
+export function csSeqRow(x: any): CsSequence {
+  const nodes = Array.isArray(x?.flow?.nodes) && x.flow.nodes.length ? x.flow.nodes : null;
+  const steps = nodes ? flowEmails(nodes).map((n) => ({ id: n.id, template_id: n.template_id ?? "", wait_days: Number(n.wait_days) || 0 })) : Array.isArray(x.steps) ? x.steps : [];
+  return { ...x, audience: x.audience ?? {}, steps, flow: nodes ? { nodes } : null };
+}
+export const NEEDS_FLOWS = "Branches, tasks and e-mail tracking need 114_cs_flows.sql in Supabase.";
 export async function saveCsSequence(q: Partial<CsSequence>): Promise<{ row: CsSequence | null; error: string | null }> {
   const row = {
     name: q.name?.trim() || "Untitled follow-up", active: !!q.active, audience: q.audience ?? {}, steps: q.steps ?? [],
     start_mode: q.start_mode ?? "now", start_days: Math.max(0, Math.round(Number(q.start_days) || 0)), repeat: !!q.repeat,
     recipients: q.recipients ?? "main", sender: q.sender ?? "owner", log_contact: q.log_contact !== false, updated_at: new Date().toISOString(),
-  };
-  const res = q.id ? await supabase.from("cs_sequences").update(row).eq("id", q.id).select("*").single() : await supabase.from("cs_sequences").insert(row).select("*").single();
-  return { row: (res.data as any) ?? null, error: res.error ? (csMissing(res.error) ? NEEDS_AUTO : res.error.message) : null };
+  } as Record<string, unknown>;
+  const extra = q.kind === "campaign" || !!q.from_address?.trim();
+  if (q.kind) row.kind = q.kind;
+  if (q.from_address !== undefined) row.from_address = q.from_address?.trim() || null;
+  if (q.flow !== undefined) row.flow = q.flow?.nodes?.length ? { nodes: q.flow.nodes } : null;
+  const go = () => (q.id ? supabase.from("cs_sequences").update(row).eq("id", q.id).select("*").single() : supabase.from("cs_sequences").insert(row).select("*").single());
+  let res = await go();
+  if (res.error && /kind|from_address|column/i.test(res.error.message) && !csMissing(res.error)) {   // before 108_cs_campaigns.sql
+    if (extra) return { row: null, error: NEEDS_CAMPAIGNS };
+    delete row.kind; delete row.from_address; res = await go();
+  }
+  if (res.error && /flow/i.test(res.error.message)) {   // before 114_cs_flows.sql: a straight list of e-mails still works
+    if (q.flow?.nodes && flowHasBranches(q.flow.nodes)) return { row: null, error: NEEDS_FLOWS };
+    delete row.flow; res = await go();
+  }
+  return { row: res.data ? csSeqRow(res.data) : null, error: res.error ? (csMissing(res.error) ? NEEDS_AUTO : res.error.message) : null };
 }
 export async function deleteCsSequence(id: string): Promise<string | null> {
   const { error } = await supabase.from("cs_sequences").delete().eq("id", id);
@@ -1013,13 +1049,28 @@ export async function uploadCsFile(f: File): Promise<{ file: CsAttachment | null
 export async function removeCsFile(path: string) { await supabase.storage.from("cs-files").remove([path]); }
 /** Sends what is due now (your company) — the same as the hourly run. */
 export async function runCsSequences(): Promise<{ sent?: number; enrolled?: number; failed?: number; skipped?: number; error?: string }> {
-  const { data, error } = await supabase.functions.invoke("outlook-sync", { body: { action: "cs_run" } });
+  const { data, error } = await supabase.functions.invoke("cs-engine", { body: { action: "cs_run" } });
   if (error) return { error: error.message };
   return (data ?? {}) as any;
 }
-/** A blueprint filled in for a client, to your own inbox. */
-export async function testCsTemplate(templateId: string, clientId: string | null): Promise<{ to?: string; error?: string }> {
-  const { data, error } = await supabase.functions.invoke("outlook-sync", { body: { action: "cs_test", templateId, clientId } });
+/** Sends a one-time campaign now: the clients it applies to are taken in and sent it (the rest of a big one goes out within the hour). */
+export async function launchCsCampaign(sequenceId: string): Promise<{ sent?: number; failed?: number; skipped?: number; enrolled?: number; waiting?: number; launched_at?: string; errors?: string[]; error?: string }> {
+  const { data, error } = await supabase.functions.invoke("cs-engine", { body: { action: "cs_campaign", sequenceId, confirm: sequenceId } });
+  if (error) {
+    let msg = error.message;
+    try { const j = await (error as any).context?.json?.(); if (j?.error) msg = j.error; } catch { /* the plain message */ }
+    return { error: msg };
+  }
+  return (data ?? {}) as any;
+}
+/** The team mailboxes the company knows (Settings › Tickets › Mailboxes), to send from. */
+export async function loadTeamMailboxes(): Promise<{ address: string; label: string }[]> {
+  const { data } = await supabase.from("ticket_mailboxes").select("address, label, kind, can_send");
+  return ((data ?? []) as any[]).filter((b) => b.address && b.kind !== "personal" && b.can_send !== false).map((b) => ({ address: String(b.address), label: String(b.label || b.address) }));
+}
+/** A blueprint filled in for a client, to your own inbox (from a team mailbox when one is given). */
+export async function testCsTemplate(templateId: string, clientId: string | null, from?: string | null): Promise<{ to?: string; error?: string }> {
+  const { data, error } = await supabase.functions.invoke("cs-engine", { body: { action: "cs_test", templateId, clientId, from: from || null } });
   if (error) {
     let msg = error.message;
     try { const j = await (error as any).context?.json?.(); if (j?.error) msg = j.error; } catch { /* the plain message */ }
@@ -1102,7 +1153,7 @@ export async function loadCsMailSync(): Promise<CsMailSync[]> {
 }
 /** Reads the company's Outlook mailboxes once (as far as it gets in about 45 seconds). */
 export async function scanCsMail(): Promise<{ scanned: number; logged: number; more: boolean; mailboxes: number; errors: string[]; read?: string[]; unread?: string[]; team?: boolean; error?: string }> {
-  const { data, error } = await supabase.functions.invoke("outlook-sync", { body: { action: "cs_mail_scan" } });
+  const { data, error } = await supabase.functions.invoke("cs-engine", { body: { action: "cs_mail_scan" } });
   if (error) {
     let msg = error.message;
     try { const j = await (error as any).context?.json?.(); if (j?.error) msg = j.error; } catch { /* keep the message */ }

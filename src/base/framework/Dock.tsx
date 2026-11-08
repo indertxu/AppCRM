@@ -62,6 +62,19 @@ const billingIcon = (
     <path d="M8.5 8h7M8.5 11.5h7M8.5 15h4" />
   </svg>
 );
+/* BASE: Marketing — a megaphone; Health — a heart with a pulse */
+const marketingIcon = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3.5 10.5v3a1.5 1.5 0 0 0 1.5 1.5h2l7 4V5L7 9H5a1.5 1.5 0 0 0-1.5 1.5z" />
+    <path d="M17.5 9a4 4 0 0 1 0 6M7.5 15l1.2 4.5" />
+  </svg>
+);
+const healthIcon = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 20s-7.5-4.6-7.5-10.2A4.3 4.3 0 0 1 12 7.2a4.3 4.3 0 0 1 7.5 2.6C19.5 15.4 12 20 12 20z" />
+    <path d="M6.5 12h3l1.3-2.4 2 4.4 1.4-2H17.5" />
+  </svg>
+);
 const ticketsIcon = (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
     <path d="M3.5 7.5A1.5 1.5 0 0 1 5 6h14a1.5 1.5 0 0 1 1.5 1.5V10a2 2 0 0 0 0 4v2.5A1.5 1.5 0 0 1 19 18H5a1.5 1.5 0 0 1-1.5-1.5V14a2 2 0 0 0 0-4z" />
@@ -97,6 +110,8 @@ const items: DockItem[] = [
   { label: "Calendar", path: "/calendar", icon: calendarIcon, page: "calendar" },
   { label: "Orbit", path: "/orbit", icon: orbitIcon, page: "contacts", cls: "orbit" },
   { label: "Deals", path: "/sales", icon: salesIcon, page: "sales" },
+  { label: "Marketing", path: "/marketing", icon: marketingIcon, page: "marketing" },
+  { label: "Health", path: "/success", icon: healthIcon, page: "success" },
   { label: "Billing", path: "/billing", icon: billingIcon, page: "management" },
   { label: "Settings", path: "/settings", icon: settingsIcon, page: "settings" },
 ];
