@@ -614,9 +614,10 @@ function NewLine({ placeholder, button, onAdd }: { placeholder: string; button: 
     <div className="os-new">
       <div className="os-new-row">
         <input value={v} placeholder={placeholder} onChange={(e) => { setV(e.target.value); setErr(null); }} onKeyDown={(e) => { if (e.key === "Enter") void go(); }} />
-        <button type="button" className="os-btn is-primary" disabled={busy || !v.trim()} onClick={() => void go()}><Ico d={I.plus} s={14} />{button}</button>
+        <button type="button" className={`os-btn is-primary os-new-go ${v.trim() ? "is-shown" : ""}`} disabled={busy || !v.trim()} tabIndex={v.trim() ? 0 : -1}
+          aria-hidden={!v.trim()} onClick={() => void go()}><Ico d={I.plus} s={14} />{button}</button>
       </div>
-      <small className="os-new-hint">{err ?? "It gets its own colour and two levels: the department, and its manager."}</small>
+      {err && <small className="os-new-hint is-err">{err}</small>}
     </div>
   );
 }

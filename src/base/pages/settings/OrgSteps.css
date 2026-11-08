@@ -236,3 +236,23 @@
 .os-panel.is-fixed > .os-new:last-child { margin-bottom: 0; }
 .os-col.is-2 .os-list.is-scroll { padding-bottom: 4px; -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - 18px), transparent); mask-image: linear-gradient(180deg, #000 calc(100% - 18px), transparent); }
 .os-map { display: flex; justify-content: safe center; align-items: safe center; }
+
+/* New department: no hint; the Add button slides in once you type */
+.os-new-row { gap: 0; }
+.os-new-go {
+  max-width: 0; padding-left: 0 !important; padding-right: 0 !important; margin-left: 0; overflow: hidden; opacity: 0; transform: scale(0.85) translateX(-6px);
+  white-space: nowrap; pointer-events: none;
+  transition: max-width 0.45s cubic-bezier(0.22, 1, 0.36, 1), padding 0.45s cubic-bezier(0.22, 1, 0.36, 1), margin 0.45s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.3s ease, transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.os-new-go.is-shown { max-width: 110px; padding-left: 14px !important; padding-right: 14px !important; margin-left: 8px; opacity: 1; transform: none; pointer-events: auto; }
+.os-new-hint.is-err { color: #c0392b; }
+
+/* Step 2: more room for the people, the pages card scrolls on its own */
+.os-col.is-2 .os-panel.is-fixed > .os-list.is-scroll { flex: 1 1 auto; min-height: 220px; }
+.os-col.is-2 .os-panel.is-fixed > .os-card {
+  flex: 0 1 auto; min-height: 96px; max-height: 30%; overflow-y: auto; overscroll-behavior: contain;
+  scrollbar-width: thin; scrollbar-color: rgba(10, 111, 77, 0.25) transparent;
+  -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - 14px), transparent); mask-image: linear-gradient(180deg, #000 calc(100% - 14px), transparent);
+}
+.os-col.is-2 .os-panel.is-fixed > .os-card::-webkit-scrollbar { display: block; width: 6px; }
+.os-col.is-2 .os-panel.is-fixed > .os-card::-webkit-scrollbar-thumb { border-radius: 6px; background: rgba(10, 111, 77, 0.25); }

@@ -159,6 +159,10 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-09 00:50 · Base · Organization: Add button appears as you type; more room for people
+- `pages/settings/OrgSteps.tsx`: `NewLine` (new department) — the hint text under it is gone (only errors show there); the "Add" button is hidden until something is typed, then slides/pops in (`.os-new-go.is-shown`).
+- `OrgSteps.css`: step 2 (People) — the people list gets the space (min 220px, grows); the "Pages it opens / Its levels" card is capped at 30% of the panel and scrolls on its own (thin scrollbar, fade at the bottom).
+
 ### 2026-11-08 14:20 · Base · Growth restyled to the app's look (Billing / Deals)
 - `pages/growth/GrowthPage.tsx` / `.css` only. The first version had its own minimal style; now it uses the Base visual language: Billing's dark green sticky header (`.gr-head`, same gradient, dots and sheen) with the pill switch (icons; a divider between Attract and Keep; Customers shows the at-risk count), glass brand switch, Preview chip, emerald "New campaign".
 - KPI cards = Billing's `.bz-kpi` (coloured icon tile, count badge, 34px figure, area spark, share bar) on Overview, Ads (new row: spent, leads from ads, cost per lead, return) and Customers (Healthy / Watch / At risk, click to filter). Chips with dot + count, tables with the `#f7fbf9` uppercase head, pastel square avatars and status pills. Side panels get the invoice modal's dark header; AI blocks and the wallet are dark green cards. Full page width, `padding: 14px 2.6rem` like Billing.
