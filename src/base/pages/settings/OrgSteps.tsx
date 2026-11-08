@@ -34,7 +34,7 @@ const nameOf = (u: Person) => [u.first_name, u.last_name].filter(Boolean).join("
 const initials = (u: Person) => (nameOf(u).split(/\s+/).map((w) => w[0]).join("").slice(0, 2) || "?").toUpperCase();
 const NONE = "__none";
 /** The Base app's pages someone can be given (Home and Settings are always open), with their Base names. */
-const BASE_PAGES: Partial<Record<PageKey, string>> = { tickets: "Tasks", calendar: "Calendar", contacts: "Orbit", sales: "Deals", marketing: "Marketing", success: "Customer health", management: "Billing" };
+const BASE_PAGES: Partial<Record<PageKey, string>> = { tickets: "Tasks", calendar: "Calendar", contacts: "Orbit", sales: "Deals", marketing: "Growth · Marketing", success: "Growth · Customers", management: "Billing" };
 const OPENABLE = PAGES.filter((p) => !p.locked && BASE_PAGES[p.key]).map((p) => ({ ...p, label: BASE_PAGES[p.key]! }));
 const managerName = (dept: string) => `${dept} manager`;
 /** What a department's two levels work like: its built-in roles when it has them, else a team member / a team manager. */

@@ -46,8 +46,8 @@ export const PAGES: PageDef[] = [
   { key: "clients", path: "/clients", label: "Clients", hint: "Clients and contracts" },
   { key: "projects", path: "/projects", label: "Projects", hint: "Delivery projects" },
   { key: "management", path: "/management", label: "Management", hint: "Team, backlog, billing, bonus" },
-  { key: "marketing", path: "/marketing", label: "Marketing", hint: "Campaigns on every channel, AI studio, ads and results" },
-  { key: "success", path: "/success", label: "Customer health", hint: "Keeping clients: health, follow-ups, renewals and upsells" },
+  { key: "marketing", path: "/growth", label: "Growth · Marketing", hint: "Campaigns, ads and the website (Growth page)" },
+  { key: "success", path: "/growth?s=customers", label: "Growth · Customers", hint: "Client health and follow-ups (Growth page)" },
   { key: "reports", path: "/reports", label: "Reports", hint: "Reports on any part of the CRM" },
   { key: "settings", path: "/settings", label: "Settings", hint: "Personal and company settings", locked: true },
 ];

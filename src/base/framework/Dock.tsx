@@ -15,6 +15,8 @@ interface DockItem {
   icon: ReactNode;
   /** Which page this opens — visibility comes from Settings → Organization → Page access. */
   page: PageKey;
+  /** A second page whose access also shows this item (Growth = Marketing or Customer health). */
+  also?: PageKey;
   /** Its own style hook when it shares the page's access (Tickets follows Home). */
   cls?: string;
 }
@@ -62,17 +64,11 @@ const billingIcon = (
     <path d="M8.5 8h7M8.5 11.5h7M8.5 15h4" />
   </svg>
 );
-/* BASE: Marketing — a megaphone; Health — a heart with a pulse */
+/* BASE: Growth (Marketing + Customer health) — a megaphone */
 const marketingIcon = (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
     <path d="M3.5 10.5v3a1.5 1.5 0 0 0 1.5 1.5h2l7 4V5L7 9H5a1.5 1.5 0 0 0-1.5 1.5z" />
     <path d="M17.5 9a4 4 0 0 1 0 6M7.5 15l1.2 4.5" />
-  </svg>
-);
-const healthIcon = (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M12 20s-7.5-4.6-7.5-10.2A4.3 4.3 0 0 1 12 7.2a4.3 4.3 0 0 1 7.5 2.6C19.5 15.4 12 20 12 20z" />
-    <path d="M6.5 12h3l1.3-2.4 2 4.4 1.4-2H17.5" />
   </svg>
 );
 const ticketsIcon = (
@@ -110,8 +106,7 @@ const items: DockItem[] = [
   { label: "Calendar", path: "/calendar", icon: calendarIcon, page: "calendar" },
   { label: "Orbit", path: "/orbit", icon: orbitIcon, page: "contacts", cls: "orbit" },
   { label: "Deals", path: "/sales", icon: salesIcon, page: "sales" },
-  { label: "Marketing", path: "/marketing", icon: marketingIcon, page: "marketing" },
-  { label: "Health", path: "/success", icon: healthIcon, page: "success" },
+  { label: "Growth", path: "/growth", icon: marketingIcon, page: "marketing", also: "success" },
   { label: "Billing", path: "/billing", icon: billingIcon, page: "management" },
   { label: "Settings", path: "/settings", icon: settingsIcon, page: "settings" },
 ];
@@ -141,7 +136,7 @@ export default function Dock() {
     }).catch(() => {});
     return () => window.removeEventListener(DOCK_ORDER_EVENT, on);
   }, []);
-  const visible = orderDock(items.filter((it) => canSee(it.page)), order);
+  const visible = orderDock(items.filter((it) => canSee(it.page) || (it.also ? canSee(it.also) : false)), order);
   const main = visible.filter((it) => it.path !== "/settings");
   const settings = visible.find((it) => it.path === "/settings");
   const isOn = (path: string) => location.pathname === path || location.pathname.startsWith(`${path}/`);

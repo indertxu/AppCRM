@@ -12,7 +12,7 @@
    ===================================================================== */
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import AppLayout from "./framework/AppLayout";
-import { PageRoute } from "./framework/pageAccess";
+import { PageRoute, usePageAccess } from "./framework/pageAccess";
 import HomePage from "./pages/homepage/HomePage";
 import { TicketsPage } from "./pages/homepage/shared/HomeTodo";
 import CalendarPage from "./pages/calendar/CalendarPage";
@@ -20,8 +20,7 @@ import OrbitPage from "./pages/orbit/OrbitPage";
 import SettingsPage from "./pages/settings/SettingsPage";
 import SalesPage from "./pages/sales/sales/SalesPage";
 import BillingPage from "./pages/billing/BillingPage";
-import { MarketingPage } from "./pages/contacts/ContactExport";
-import { CustomerSuccessPage } from "./pages/clients/ClientsPage";
+import GrowthPage from "./pages/growth/GrowthPage";
 
 /**
  * Links to /contacts, /companies, /clients (and the old /people) land on Orbit:
@@ -58,10 +57,11 @@ export default function BaseApp() {
         <Route element={<PageRoute page="sales" />}><Route path="/sales" element={<SalesPage />} /></Route>
         {/* Billing: invoices, work to bill, time per person (Management's people) */}
         <Route element={<PageRoute page="management" />}><Route path="/billing" element={<BillingPage />} /></Route>
-        {/* Marketing: campaigns on every channel, AI studio, ads, results; Customer health: keeping clients (the Enterprise CS page) */}
-        <Route element={<PageRoute page="marketing" />}><Route path="/marketing" element={<MarketingPage />} /></Route>
-        <Route element={<PageRoute page="success" />}><Route path="/success" element={<CustomerSuccessPage />} /></Route>
-        <Route path="/health" element={<Navigate to="/success" replace />} />
+        {/* Growth: Marketing + Customer health on one page (open with either page access); old links land on their section */}
+        <Route path="/growth" element={<GrowthRoute />} />
+        <Route path="/marketing" element={<Navigate to="/growth" replace />} />
+        <Route path="/success" element={<Navigate to="/growth?s=customers" replace />} />
+        <Route path="/health" element={<Navigate to="/growth?s=customers" replace />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/contacts" element={<ToOrbit view="contacts" />} />
         <Route path="/companies" element={<ToOrbit view="companies" />} />
@@ -72,4 +72,12 @@ export default function BaseApp() {
       <Route path="*" element={<Navigate to="/home" replace />} />
     </Routes>
   );
+}
+
+/** Growth opens for anyone with Marketing or Customer health access. */
+function GrowthRoute() {
+  const { ready, canSee } = usePageAccess();
+  if (!ready) return null;
+  if (!canSee("marketing") && !canSee("success")) return <Navigate to="/home" replace />;
+  return <GrowthPage />;
 }
