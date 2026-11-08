@@ -159,6 +159,10 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-08 14:20 · Base · Growth restyled to the app's look (Billing / Deals)
+- `pages/growth/GrowthPage.tsx` / `.css` only. The first version had its own minimal style; now it uses the Base visual language: Billing's dark green sticky header (`.gr-head`, same gradient, dots and sheen) with the pill switch (icons; a divider between Attract and Keep; Customers shows the at-risk count), glass brand switch, Preview chip, emerald "New campaign".
+- KPI cards = Billing's `.bz-kpi` (coloured icon tile, count badge, 34px figure, area spark, share bar) on Overview, Ads (new row: spent, leads from ads, cost per lead, return) and Customers (Healthy / Watch / At risk, click to filter). Chips with dot + count, tables with the `#f7fbf9` uppercase head, pastel square avatars and status pills. Side panels get the invoice modal's dark header; AI blocks and the wallet are dark green cards. Full page width, `padding: 14px 2.6rem` like Billing.
+
 ### 2026-11-08 13:50 · Base · Growth: Marketing + Customer health on one page (clean redesign, mock)
 - New `pages/growth/GrowthPage.tsx` / `.css` (prefix `.gr-`), route **`/growth`**. One tab bar: Overview · Attract (Campaigns, Ads, Website) · Keep (Customers, Follow-ups); `?s=` picks the section. Light, minimal design: white blocks, one action per block, details in a right side panel. All sample data ("Preview" chip) — nothing sent, paid or published.
   - Overview: 4 KPIs, "Needs you" list, where leads come from, one AI idea. Campaigns: list → panel (reach, likes, reposts, comments, DMs, demo clicks, funnel, by channel, AI advice); "New campaign" = 4-step studio (what → where → budget → AI-generated posts → Launch). Ads: wallet + ad accounts. Website: describe → generate → publish. Customers: health counts + list → panel with AI summary of e-mails/WhatsApp, mood, next step. Follow-ups: sequences on/off + step editor; rule: a reply from anyone at the client stops it.

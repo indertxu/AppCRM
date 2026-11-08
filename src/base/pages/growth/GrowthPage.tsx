@@ -34,6 +34,9 @@ const P = {
   pause: "M8 5v14M16 5v14", play: "M7 4l13 8-13 8z", bolt: "M13 2L3 14h9l-1 8 10-12h-9l1-8z",
   user: "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
   clock: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7v5l3 2",
+  chart: "M4 20V10M10 20V4M16 20v-7M22 20H2", mega: "M3.5 10.5v3a1.5 1.5 0 0 0 1.5 1.5h2l7 4V5L7 9H5a1.5 1.5 0 0 0-1.5 1.5zM17.5 9a4 4 0 0 1 0 6",
+  flow: "M6 3v12M6 15a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9c0 6-12 3-12 6", search: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-4-4",
+  target: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z", euro: "M18 6.5A7 7 0 1 0 18 17.5M4 10h10M4 14h10", alert: "M12 3l9.5 17h-19zM12 10v4M12 17.5v.5",
 };
 const Ico = ({ n, s = 16 }: { n: keyof typeof P; s?: number }) => (
   <svg viewBox="0 0 24 24" width={s} height={s} fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={P[n]} /></svg>
@@ -131,8 +134,38 @@ function Spark({ v, w = 90, h = 26 }: { v: number[]; w?: number; h?: number }) {
   const pts = v.map((y, i) => `${(i / (v.length - 1)) * w},${h - 3 - ((y - mn) / (mx - mn || 1)) * (h - 6)}`).join(" ");
   return <svg className="gr-spark" width={w} height={h} viewBox={`0 0 ${w} ${h}`}><polyline points={pts} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>;
 }
-function Kpi({ label, value, note, tone }: { label: string; value: string; note?: string; tone?: "up" | "down" }) {
-  return <div className="gr-kpi"><span>{label}</span><b>{value}</b>{note && <em className={tone}>{note}</em>}</div>;
+function Spark2({ v, c }: { v: number[]; c?: string }) {
+  const w = 96, h = 34, max = Math.max(1, ...v), min = Math.min(...v);
+  const pts = v.map((y, i) => [(i / (v.length - 1)) * w, h - 3 - ((y - min) / (max - min || 1)) * (h - 8)] as const);
+  const line = pts.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(" ");
+  const id = `grsp${Math.random().toString(36).slice(2, 8)}`;
+  return (
+    <svg className="gr-spk" viewBox={`0 0 ${w} ${h}`} width={w} height={h} style={c ? { color: c } : undefined} aria-hidden="true">
+      <defs><linearGradient id={id} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="currentColor" stopOpacity="0.28" /><stop offset="1" stopColor="currentColor" stopOpacity="0" /></linearGradient></defs>
+      <path d={`${line} L${w} ${h} L0 ${h} Z`} fill={`url(#${id})`} />
+      <path d={line} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx={pts[pts.length - 1][0]} cy={pts[pts.length - 1][1]} r="3" fill="#fff" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  );
+}
+/** The KPI card of Billing / Deals: coloured icon tile, count badge, big figure, spark, share bar. */
+function Kpi({ label, value, note, icon, c, n, spark, share, i = 0, on, onClick, red }: {
+  label: string; value: string; note?: ReactNode; icon: keyof typeof P; c: string; n?: number; spark?: number[]; share?: number; i?: number; on?: boolean; onClick?: () => void; red?: boolean;
+}) {
+  return (
+    <button className={`gr-kpi ${on ? "is-on" : ""} ${red ? "is-red" : ""}`} style={{ ["--c" as string]: c, ["--i" as string]: i }} onClick={onClick} tabIndex={onClick ? 0 : -1}>
+      <span className="gr-kpi-top"><i><Ico n={icon} s={17} /></i><em>{label}</em>{n != null && <u>{n}</u>}</span>
+      <b>{value}</b>
+      <span className="gr-kpi-foot"><small>{note}</small>{spark && <Spark2 v={spark} />}</span>
+      {share != null && <span className="gr-kpi-share"><s style={{ width: `${share * 100}%` }} /></span>}
+    </button>
+  );
+}
+/** Square pastel initials, like Billing's client avatars. */
+function Av({ name, s = 34 }: { name: string; s?: number }) {
+  let h = 0; for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) % 360;
+  const ini = name.split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+  return <i className="gr-av" style={{ ["--h" as string]: h, width: s, height: s, fontSize: s * 0.36 }}>{ini}</i>;
 }
 function Block({ title, sub, action, children, className = "" }: { title: string; sub?: string; action?: ReactNode; children: ReactNode; className?: string }) {
   return (
@@ -150,26 +183,26 @@ function Panel({ title, sub, onClose, children, foot, wide }: { title: ReactNode
   return (
     <div className="gr-scrim" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <aside className={`gr-panel ${wide ? "is-wide" : ""}`}>
-        <header><div><h2>{title}</h2>{sub && <p>{sub}</p>}</div><button className="gr-icon" onClick={onClose} aria-label="Close"><Ico n="x" /></button></header>
+        <header className="gr-panel-h"><div><h2>{title}</h2>{sub && <p>{sub}</p>}</div><button className="gr-x" onClick={onClose} aria-label="Close"><Ico n="x" /></button></header>
         <div className="gr-panel-body">{children}</div>
         {foot && <footer>{foot}</footer>}
       </aside>
     </div>
   );
 }
-const Pill = ({ h }: { h: Health }) => <span className={`gr-pill ${H[h].cls}`}><i />{H[h].label}</span>;
+const Pill = ({ h }: { h: Health }) => <em className={`gr-pill is-${H[h].cls}`}>{H[h].label}</em>;
 
 /* =====================================================================
    Page
    ===================================================================== */
 type Sec = "overview" | "campaigns" | "ads" | "website" | "customers" | "followups";
-const SECS: { k: Sec; label: string; group?: "Attract" | "Keep" }[] = [
-  { k: "overview", label: "Overview" },
-  { k: "campaigns", label: "Campaigns", group: "Attract" },
-  { k: "ads", label: "Ads", group: "Attract" },
-  { k: "website", label: "Website", group: "Attract" },
-  { k: "customers", label: "Customers", group: "Keep" },
-  { k: "followups", label: "Follow-ups", group: "Keep" },
+const SECS: { k: Sec; label: string; icon: keyof typeof P; group?: "Attract" | "Keep" }[] = [
+  { k: "overview", label: "Overview", icon: "chart" },
+  { k: "campaigns", label: "Campaigns", icon: "mega", group: "Attract" },
+  { k: "ads", label: "Ads", icon: "card", group: "Attract" },
+  { k: "website", label: "Website", icon: "globe", group: "Attract" },
+  { k: "customers", label: "Customers", icon: "heart", group: "Keep" },
+  { k: "followups", label: "Follow-ups", icon: "flow", group: "Keep" },
 ];
 const BRANDS = [{ name: "Brazo", color: "#0f9f6e" }, { name: "Brazo Reporting", color: "#5b6ee1" }, { name: "Brazo Academy", color: "#d48a1e" }];
 
@@ -187,15 +220,27 @@ export default function GrowthPage() {
 
   return (
     <div className="gr">
-      <header className="gr-top">
-        <div className="gr-title">
-          <h1>Growth</h1>
-          <p>Win new clients and keep the ones you have</p>
+      <header className="gr-head">
+        <div className="gr-head-l">
+          <h1 className="gr-h1">Growth</h1>
+          <nav className="gr-switch" role="tablist" aria-label="Growth sections">
+            {SECS.map((x, i) => (
+              <span key={x.k} className="gr-switch-g">
+                {x.group && x.group !== SECS[i - 1]?.group && <i className="gr-sep" title={x.group} />}
+                <button role="tab" aria-selected={sec === x.k} className={sec === x.k ? "is-on" : ""} onClick={() => go(x.k)}>
+                  <Ico n={x.icon} s={15} /><span>{x.label}</span>
+                  {x.k === "customers" && <em className="gr-dot">{CLIENTS.filter((c) => c.health === "risk").length}</em>}
+                </button>
+              </span>
+            ))}
+          </nav>
         </div>
+        <span className="gr-preview" title="Sample figures — channels are not connected yet">Preview</span>
         <div className="gr-brand">
-          <button onClick={() => setBrandOpen((o) => !o)}><i style={{ background: BRANDS[brand].color }}>{BRANDS[brand].name[0]}</i>{BRANDS[brand].name}<Ico n="down" s={14} /></button>
+          <button className="gr-glass" onClick={() => setBrandOpen((o) => !o)}><i style={{ background: BRANDS[brand].color }}>{BRANDS[brand].name[0]}</i>{BRANDS[brand].name}<Ico n="down" s={14} /></button>
           {brandOpen && (
             <div className="gr-pop" onMouseLeave={() => setBrandOpen(false)}>
+              <small>Brands</small>
               {BRANDS.map((b, i) => (
                 <button key={b.name} className={i === brand ? "is-on" : ""} onClick={() => { setBrand(i); setBrandOpen(false); }}>
                   <i style={{ background: b.color }}>{b.name[0]}</i>{b.name}{i === brand && <Ico n="check" s={14} />}
@@ -205,19 +250,8 @@ export default function GrowthPage() {
             </div>
           )}
         </div>
-        <span className="gr-grow" />
-        <span className="gr-preview" title="Sample figures — channels are not connected yet">Preview</span>
-        <button className="gr-btn" onClick={() => setStudio(true)}><Ico n="spark" />New campaign</button>
+        <button className="gr-new" onClick={() => setStudio(true)}><Ico n="spark" s={15} />New campaign</button>
       </header>
-
-      <nav className="gr-tabs">
-        {SECS.map((s, i) => (
-          <span key={s.k} className="gr-tab-wrap">
-            {s.group && s.group !== SECS[i - 1]?.group && <em>{s.group}</em>}
-            <button className={sec === s.k ? "is-on" : ""} onClick={() => go(s.k)}>{s.label}</button>
-          </span>
-        ))}
-      </nav>
 
       <main className="gr-main" key={sec}>
         {sec === "overview" && <Overview camps={camps} go={go} openClient={setClient} openStudio={() => setStudio(true)} toast={setToast} />}
@@ -252,10 +286,10 @@ function Overview({ camps, go, openClient, openStudio, toast }: { camps: Campaig
   return (
     <div className="gr-ov">
       <div className="gr-kpis">
-        <Kpi label="New leads · 30 days" value={String(leads)} note="+18% vs last month" tone="up" />
-        <Kpi label="Cost per lead" value={eur(spend / Math.max(1, camps.reduce((a, c) => a + c.leads, 0)))} note="−€4 vs last month" tone="up" />
-        <Kpi label="Healthy clients" value={`${healthy} of ${CLIENTS.length}`} note={`${atRisk.length} at risk`} tone="down" />
-        <Kpi label="Revenue at risk" value={eur(atRisk.reduce((a, c) => a + c.arr, 0))} note="renewing in < 60 days" />
+        <Kpi i={0} icon="target" c="#12b57f" label="New leads" n={SOURCES.length} value={String(leads)} note={<><span className="gr-delta up">▲ 18%</span> vs Oct</>} spark={[92, 101, 97, 110, 121, 143]} share={0.72} onClick={() => go("campaigns")} />
+        <Kpi i={1} icon="euro" c="#3c7fd0" label="Cost per lead" value={eur(spend / Math.max(1, camps.reduce((a, c) => a + c.leads, 0)))} note={<><span className="gr-delta up">▼ €4</span> vs Oct</>} spark={[44, 41, 39, 37, 35, 31]} share={0.45} onClick={() => go("ads")} />
+        <Kpi i={2} icon="heart" c="#0e9a6a" label="Healthy clients" n={CLIENTS.length} value={`${healthy} of ${CLIENTS.length}`} note={`${CLIENTS.length - healthy - atRisk.length} to watch`} spark={[3, 4, 4, 3, 4, 3]} share={healthy / CLIENTS.length} onClick={() => go("customers")} />
+        <Kpi i={3} icon="alert" c="#d2493f" red label="Revenue at risk" n={atRisk.length} value={eur(atRisk.reduce((a, c) => a + c.arr, 0))} note="renewing in under 60 days" spark={[12, 18, 21, 24, 33, 45]} share={atRisk.length / CLIENTS.length} onClick={() => go("customers")} />
       </div>
 
       <div className="gr-two">
@@ -306,19 +340,20 @@ function Campaigns({ camps, setCamps, openStudio, toast }: { camps: Campaign[]; 
       <div className="gr-bar">
         <div className="gr-chips">
           {(["all", "live", "draft", "ended"] as const).map((k) => (
-            <button key={k} className={f === k ? "is-on" : ""} onClick={() => setF(k)}>{k === "all" ? "All" : k[0].toUpperCase() + k.slice(1)}<small>{k === "all" ? camps.length : camps.filter((c) => c.status === k).length}</small></button>
+            <button key={k} className={`gr-chip is-${k} ${f === k ? "is-on" : ""}`} onClick={() => setF(k)}>{k !== "all" && <em />}{k === "all" ? "All campaigns" : k[0].toUpperCase() + k.slice(1)}<i>{k === "all" ? camps.length : camps.filter((c) => c.status === k).length}</i></button>
           ))}
         </div>
       </div>
       <div className="gr-table">
-        <div className="gr-tr gr-th c-camp"><span>Campaign</span><span>Channels</span><span>Spend</span><span>Leads</span><span>Cost / lead</span><span>Last 10 days</span></div>
+        <div className="gr-tr gr-th c-camp"><span>Campaign</span><span>Status</span><span>Channels</span><span className="n">Spend</span><span className="n">Leads</span><span className="n">Cost / lead</span><span>Last 10 days</span></div>
         {list.map((c, i) => (
           <button key={c.id} className="gr-tr c-camp" style={{ ["--i" as string]: i }} onClick={() => setOpen(c)}>
-            <span className="gr-name"><b>{c.name}</b><small><i className={`gr-st ${c.status}`} />{c.status === "live" ? "Live" : c.status === "draft" ? "Draft" : "Ended"} · {c.goal}</small></span>
+            <span className="gr-cl"><Av name={c.name} /><span className="gr-name"><b>{c.name}</b><small>{c.goal}</small></span></span>
+            <span><em className={`gr-pill is-${c.status}`}>{c.status === "live" ? "Live" : c.status === "draft" ? "Draft" : "Ended"}</em></span>
             <span className="gr-chs">{c.ch.map((k) => <ChDot key={k} k={k} />)}</span>
-            <span>{c.spend ? eur(c.spend) : "—"}<small> / {eur(c.budget)}</small></span>
-            <span className="gr-num">{c.leads || "—"}</span>
-            <span>{c.leads ? eur(c.spend / c.leads) : "—"}</span>
+            <span className="n gr-amt">{c.spend ? eur(c.spend) : "—"}<small>of {eur(c.budget)}</small></span>
+            <span className="n gr-amt">{c.leads || "—"}</span>
+            <span className="n">{c.leads ? eur(c.spend / c.leads) : "—"}</span>
             <span className="gr-trend"><Spark v={c.trend} /></span>
           </button>
         ))}
@@ -450,6 +485,13 @@ function Ads({ toast }: { toast: (s: string) => void }) {
   ]);
   const total = acc.reduce((a, x) => a + x.spend, 0);
   return (
+    <>
+    <div className="gr-kpis">
+      <Kpi i={0} icon="card" c="#3c7fd0" label="Spent this month" n={acc.filter((a) => a.on).length} value={eur(total)} note={<><span className="gr-delta up">▲ 12%</span> vs Oct</>} spark={[1800, 2100, 1950, 2400, 2520, total]} share={total / 3500} />
+      <Kpi i={1} icon="target" c="#12b57f" label="Leads from ads" value="91" note="64% of all leads" spark={[52, 60, 58, 71, 80, 91]} share={0.64} />
+      <Kpi i={2} icon="euro" c="#7a4fd0" label="Cost per lead" value={eur(total / 91)} note={<><span className="gr-delta up">▼ €3</span> vs Oct</>} spark={[38, 36, 35, 34, 33, 31]} share={0.4} />
+      <Kpi i={3} icon="chart" c="#c98a12" label="Return on ads" value="4.2×" note="won deals ÷ ad spend" spark={[2.8, 3.1, 3.3, 3.9, 4.0, 4.2]} share={0.7} />
+    </div>
     <div className="gr-ads">
       <div className="gr-wallet">
         <span>Wallet</span>
@@ -474,6 +516,7 @@ function Ads({ toast }: { toast: (s: string) => void }) {
         <p className="gr-hint">Funds are only spent by campaigns you launch. Unused funds can be withdrawn.</p>
       </Panel>}
     </div>
+    </>
   );
 }
 
@@ -520,21 +563,27 @@ function Customers({ open }: { open: (c: Client) => void }) {
   const n = (h: Health) => CLIENTS.filter((c) => c.health === h).length;
   return (
     <>
-      <div className="gr-health">
-        {(["good", "watch", "risk"] as Health[]).map((h) => (
-          <button key={h} className={`${H[h].cls} ${f === h ? "is-on" : ""}`} onClick={() => setF(f === h ? "all" : h)}>
-            <b>{n(h)}</b><span>{H[h].label}</span><small>{eur(CLIENTS.filter((c) => c.health === h).reduce((a, c) => a + c.arr, 0))} a year</small>
-          </button>
-        ))}
+      <div className="gr-kpis three">
+        {(["good", "watch", "risk"] as Health[]).map((h, i) => {
+          const xs = CLIENTS.filter((c) => c.health === h);
+          return <Kpi key={h} i={i} icon={h === "good" ? "heart" : h === "watch" ? "eye" : "alert"} c={h === "good" ? "#0e9a6a" : h === "watch" ? "#c98a12" : "#d2493f"} red={h === "risk"}
+            label={H[h].label} n={xs.length} value={eur(xs.reduce((a, c) => a + c.arr, 0))} note={`${xs.length} client${xs.length === 1 ? "" : "s"} · a year`}
+            share={xs.length / CLIENTS.length} on={f === h} onClick={() => setF(f === h ? "all" : h)} />;
+        })}
       </div>
       <div className="gr-bar">
-        <input className="gr-search" placeholder="Find a client…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <div className="gr-chips">
+          {(["all", "risk", "watch", "good"] as const).map((k) => (
+            <button key={k} className={`gr-chip is-${k} ${f === k ? "is-on" : ""}`} onClick={() => setF(k)}>{k !== "all" && <em />}{k === "all" ? "All clients" : H[k].label}<i>{k === "all" ? CLIENTS.length : n(k)}</i></button>
+          ))}
+        </div>
+        <label className="gr-search"><Ico n="search" s={15} /><input placeholder="Find a client" value={q} onChange={(e) => setQ(e.target.value)} /></label>
       </div>
       <div className="gr-table">
         <div className="gr-tr gr-th c-cli"><span>Client</span><span>Health</span><span>Last contact</span><span>Renews in</span><span>Owner</span><span /></div>
         {list.map((c, i) => (
           <button key={c.id} className="gr-tr c-cli" style={{ ["--i" as string]: i }} onClick={() => open(c)}>
-            <span className="gr-name"><b>{c.name}</b><small>{eur(c.arr)} a year</small></span>
+            <span className="gr-cl"><Av name={c.name} /><span className="gr-name"><b>{c.name}</b><small>{eur(c.arr)} a year</small></span></span>
             <span><Pill h={c.health} /></span>
             <span className={c.lastDays > 30 ? "gr-warn" : ""}>{c.lastDays} days ago</span>
             <span className={c.renewDays < 45 ? "gr-warn" : ""}>{c.renewDays} days</span>
