@@ -159,6 +159,11 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-09 01:45 · Base · Products & Services: smooth expand, no "+ Product / + Service" in the columns
+- New `pages/settings/Smooth.tsx`: a wrapper that glides its own height (ResizeObserver, 0.5s ease-out) whenever its content changes size; clips overflow only while moving so shadows stay.
+- `BaseCatalog.tsx`: each product (row ↔ open card) sits in `<Smooth>`, so opening and folding grows/shrinks instead of jumping; the column headers lose their "+ Product" / "+ Service" buttons (the top-right "New" does it; empty columns still show "Add your first …").
+- `BaseServices.tsx`: the service row's steps unfold inside `<Smooth>`. `BaseCatalog.css`: `.bc-smooth`, softer fade (no slide) for the opening card and the steps.
+
 ### 2026-11-09 00:50 · Base · Organization: Add button appears as you type; more room for people
 - `pages/settings/OrgSteps.tsx`: `NewLine` (new department) — the hint text under it is gone (only errors show there); the "Add" button is hidden until something is typed, then slides/pops in (`.os-new-go.is-shown`).
 - `OrgSteps.css`: step 2 (People) — the people list gets the space (min 220px, grows); the "Pages it opens / Its levels" card is capped at 30% of the panel and scrolls on its own (thin scrollbar, fade at the bottom).

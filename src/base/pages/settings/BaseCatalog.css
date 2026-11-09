@@ -512,3 +512,17 @@
 /* the unit sits to the right of the price */
 .bc-row-price { flex-direction: row; align-items: baseline; gap: 6px; min-width: 0; white-space: nowrap; }
 .bc-row-price small { font-size: 12px; }
+
+/* Smooth open / close (Smooth.tsx): the height glides, the content fades */
+.bc-smooth { transition: height 0.5s cubic-bezier(0.22, 1, 0.36, 1); }
+.bc-smooth.is-moving { overflow: hidden; overflow: clip; overflow-clip-margin: 24px; }
+.bc-smooth-in { display: flow-root; }
+.bc-list > .bc-smooth { width: 100%; }
+.bc-list > .bc-smooth > .bc-smooth-in > .bc-card, .bc-list > .bc-smooth > .bc-smooth-in > .bc-row { width: 100%; box-sizing: border-box; }
+@keyframes bc-fade-in { from { opacity: 0; } }
+.bc-card.is-open { animation: bc-fade-in 0.45s ease both; }
+.bc-card.is-open.is-new { animation: bc-row-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.bc-list > .bc-smooth .bc-row { animation: bc-fade-in 0.35s ease both; }
+.bc-row-more { animation: bc-fade-in 0.4s ease 0.05s both; }
+.bc-row-chev, .bc-row-wrap { transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.4s ease, background 0.4s ease, color 0.3s; }
+@media (prefers-reduced-motion: reduce) { .bc-smooth { transition: none; } }

@@ -4,6 +4,7 @@
    ===================================================================== */
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import Smooth from "./Smooth";
 import { BILLING, billingOf, evenPercents, newStep, saveBaseService, deleteBaseService, type BaseService, type ServiceBilling, type ServiceStep } from "./baseServicesApi";
 
 export const SERVICE_COLOR = "#5b6ee1";
@@ -43,6 +44,7 @@ export function ServiceCard({ service, onOpen }: { service: BaseService; onOpen:
         <span className="bc-row-price"><b>€{service.price ? amount(service.price) : "0"}</b><small>{unit}</small></span>
         <span className="bc-row-chev" aria-hidden="true"><Ico d="M6 9l6 6 6-6" s={16} /></span>
       </button>
+      <Smooth>
       {open && (
         <div className="bc-row-more">
           {service.steps.length > 0 ? (
@@ -59,6 +61,7 @@ export function ServiceCard({ service, onOpen }: { service: BaseService; onOpen:
           <button type="button" className="bc-row-edit" onClick={onOpen}><Ico d={D.pen} s={13} />Edit service</button>
         </div>
       )}
+      </Smooth>
     </section>
   );
 }

@@ -17,6 +17,7 @@ import { listCrmOptions, addCrmOption, deleteCrmOption, renameCrmOption, product
 import { loadBaseServices, type BaseService } from "./baseServicesApi";
 import { ServiceCard, ServiceModal, SERVICE_COLOR } from "./BaseServices";
 import NewWalkthrough from "./NewWalkthrough";
+import Smooth from "./Smooth";
 import "./CatalogPage.css";
 import "./BaseCatalog.css";
 
@@ -100,7 +101,6 @@ export default function BaseCatalog({ onBack }: { onBack: () => void }) {
             <header className="bc-col-h">
               <span className="bc-col-ico"><Ico d={I.box} s={16} /></span>
               <div><b>Products</b><small>{(products?.length ?? 0) + fresh.length} · priced once, weekly, monthly or yearly</small></div>
-              <button type="button" className="bc-col-add" onClick={() => setWalk("product")}><Ico d={I.plus} s={14} />Product</button>
             </header>
             <div className="bc-list">
               {fresh.map(({ key, p }) => (
@@ -123,7 +123,6 @@ export default function BaseCatalog({ onBack }: { onBack: () => void }) {
             <header className="bc-col-h">
               <span className="bc-col-ico"><Ico d={I.steps} s={16} /></span>
               <div><b>Services</b><small>{services?.length ?? 0} · work you deliver, in steps</small></div>
-              <button type="button" className="bc-col-add" onClick={() => setWalk("service")}><Ico d={I.plus} s={14} />Service</button>
             </header>
             <div className="bc-list">
               {(services ?? []).map((sv) => <ServiceCard key={sv.id} service={sv} onOpen={() => setSvc(sv)} />)}
@@ -263,6 +262,7 @@ function ProductCard({ product, isNew = false, kinds, kindOptions, onKindsChange
     const lo = Math.min(...prices), hi = Math.max(...prices);
     const fmt = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 2 });
     return (
+      <Smooth>
       <button type="button" className="bc-row" style={{ ["--kc" as string]: kindColor(p.kind) }} onClick={() => setOpen(true)} aria-expanded={false}>
         <span className="bc-row-tile" aria-hidden="true">{initials || <Ico d={I.box} s={16} />}</span>
         <span className="bc-row-main">
@@ -275,9 +275,11 @@ function ProductCard({ product, isNew = false, kinds, kindOptions, onKindsChange
         <span className="bc-row-price"><b>€{fmt(lo)}{hi !== lo ? `–${fmt(hi)}` : ""}</b><small>{unit}</small></span>
         <span className="bc-row-chev" aria-hidden="true"><Ico d={I.chev} s={16} /></span>
       </button>
+      </Smooth>
     );
   }
   return (
+    <Smooth>
     <section className={`bc-card is-open ${dirty ? "is-dirty" : ""} ${isNew ? "is-new" : ""} ${askDel ? "is-asking" : ""}`} style={{ ["--kc" as string]: kindColor(p.kind) }}
       onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && dirty) { e.preventDefault(); void save(); } }}>
       <div className="bc-band" aria-hidden="true" />
@@ -350,6 +352,7 @@ function ProductCard({ product, isNew = false, kinds, kindOptions, onKindsChange
         )}
       </footer>
     </section>
+    </Smooth>
   );
 }
 
