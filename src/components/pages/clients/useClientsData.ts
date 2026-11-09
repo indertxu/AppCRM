@@ -904,6 +904,8 @@ export function csVariantFor(t: Pick<CsTemplate, "variants"> | null | undefined,
 export interface CsStep { id: string; template_id: string; wait_days: number }
 export interface CsAudience {
   priorities?: string[]; types?: string[]; health?: string[]; clients?: string[]; exclude?: string[];
+  /** addresses taken out by hand (lower case): never sent to, whichever client they belong to */
+  exclude_emails?: string[];
   /** only once a client's last contact is this many days old (91_cs_quiet_rule.sql); none: no such rule */
   quiet_days?: number | null;
   /** with quiet_days: a client's round stops as soon as someone is in touch (default on) */

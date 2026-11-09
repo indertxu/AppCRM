@@ -159,6 +159,12 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-09 01:50 · Enterprise · Number fields: you can type 0, 0.5, 1.50 as you mean them
+- Files: src/components/framework/NumInput.tsx (new); every `<input type="number">` in src/components (96 fields, 30 files: LineCalcModal, Catalog, Handoff forms, IncomingConvertModal (Build project), Billing, Bonus plan, Calendar settings, CS editor / CsFlow, Companies, Contacts, Marketing, Proposal templates, Superadmin…) now `<NumInput type="number" …>`; ClientWorkspace's yearly-increase field (text, `inc ? String(inc) : ""`) too.
+- What: fields that show 0 as empty (`value={n === 0 ? "" : n}`, `n || ""`) wiped the "0" typed before "0.5", and text fields that turn the text into a number lost "0." / "1.50". NumInput shows exactly what's typed while the field has the focus (onChange still fires on every key as before), shows the parent's value again only if it really differs (clamped / rounded) and on blur. Same props as <input>; type="number" kept (CSS on `input[type="number"]` unchanged). A text NumInput takes a comma as the decimal point and steps with ↑ / ↓. Time fields, postal codes, phone extensions and string-state decimal text fields left as they were.
+- Tags: **PORT?** — src/base has ~77 `<input type="number">` with the same patterns: copy framework/NumInput.tsx and swap the tags.
+- Deploy: frontend only.
+
 ### 2026-11-09 01:45 · Base · Products & Services: smooth expand, no "+ Product / + Service" in the columns
 - New `pages/settings/Smooth.tsx`: a wrapper that glides its own height (ResizeObserver, 0.5s ease-out) whenever its content changes size; clips overflow only while moving so shadows stay.
 - `BaseCatalog.tsx`: each product (row ↔ open card) sits in `<Smooth>`, so opening and folding grows/shrinks instead of jumping; the column headers lose their "+ Product" / "+ Service" buttons (the top-right "New" does it; empty columns still show "Add your first …").

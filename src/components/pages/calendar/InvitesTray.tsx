@@ -1,7 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useState } from "react";
-import { answerInvite, findClashes, loadMyReplies, markRepliesSeen,
+import { answerInvite, asksBill, findClashes, loadMyReplies, markRepliesSeen,
   type InviteCard, type Clash, type InviteReply } from "./invitesApi";
+import InviteBillAsk from "./InviteBillAsk";
 import "./InvitesTray.css";
 
 const hhmm = (m: number) => {
@@ -53,13 +54,17 @@ export default function InvitesTray({ invites, userId, unit, workTypes, onChange
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
-  const answer = async (inv: InviteCard, accept: boolean) => {
+  /** accepting client work first asks (or shows) what you bill for it */
+  const [ask, setAsk] = useState<InviteCard | null>(null);
+  const answer = async (inv: InviteCard, accept: boolean, bill?: number | null) => {
+    if (accept && bill === undefined && asksBill(inv)) { setAsk(inv); return; }
     setBusy(inv.id); setErr(null);
     // on a repeating booking, one answer covers every date
     const e = await answerInvite(
       inv, userId, accept,
       // Only override when the organiser left it open and we asked.
       accept && !inv.work_type_id ? (types[inv.id] ?? workTypes?.[0]?.id ?? null) : null,
+      bill ?? null,
     );
     setBusy(null);
     if (e) { setErr(e); return; }
@@ -77,6 +82,8 @@ export default function InvitesTray({ invites, userId, unit, workTypes, onChange
 
   return (
     <div className="iv-pop" role="dialog" aria-label="Meeting invitations">
+      {ask && <InviteBillAsk inv={ask} dates={ask.series_id ? invites.filter((i) => i.series_id === ask.series_id).length || 1 : 1}
+        onCancel={() => setAsk(null)} onConfirm={(b) => { const inv = ask; setAsk(null); void answer(inv, true, b); }} />}
       <div className="iv-head">
         <span className="iv-eyebrow">Invitations</span>
         <h3 className="iv-title">
@@ -135,7 +142,9 @@ export default function InvitesTray({ invites, userId, unit, workTypes, onChange
             )}
 
             <p className="iv-bill">
-              {inv.billable > 0
+              {inv.bill_mode === "they"
+                ? <>You decide what you bill when you accept{inv.billable > 0 ? <> — {inv.organiser_name} suggests <b>{inv.billable}{unit(inv.project_id)}</b></> : null}</>
+                : inv.billable > 0
                 ? <>Billed to the client as <b>{inv.billable}{unit(inv.project_id)}</b> of your time{repeats ? " each date" : ""}</>
                 : <>Not billable — logged as attendance only</>}
             </p>

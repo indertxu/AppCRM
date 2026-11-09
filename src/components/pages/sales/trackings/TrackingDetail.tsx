@@ -68,6 +68,7 @@ import {
   listDealProposals, saveDealProposal, deleteDealProposal, setMainProposal, saveProposalDoc, type DealProposal, type ProposalLine, type ProposalDoc,
 } from "../sales/salesApi";
 
+import { NumInput } from "../../../framework/NumInput";
 
 /**
  * Discount for one row of a line. Defined at module level: nesting it inside
@@ -6184,7 +6185,7 @@ function PhaseEditor({ services, onClose, onConfirm, onSkip }: {
                         <span className="sl-pe-c sl-pe-pct">{num(p.percent)}%</span>
                         <span className="sl-pe-c sl-pe-calc">{num(s.totalDays)}×{num(p.percent)}% = <b>{raw.toFixed(2).replace(".", ",")}</b> → {num(auto)}</span>
                         <span className="sl-pe-c">
-                          <input type="number" min={0} step={s.minUnit} value={p.days}
+                          <NumInput type="number" min={0} step={s.minUnit} value={p.days}
                             className={edited ? "is-edited" : ""}
                             onFocus={(e) => e.target.select()}
                             onChange={(e) => setDay(si, pi, parseFloat(e.target.value) || 0)} />

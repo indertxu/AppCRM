@@ -4,6 +4,7 @@ import MultiSelect from "../../../framework/MultiSelect";
 import { useEffect, useState } from "react";
 import { selectValues, type TrackingField } from "./trackingFieldsApi";
 import { partnerList } from "../../companies/companiesApi";
+import { NumInput } from "../../../framework/NumInput";
 
 /** A dropdown field called "…partner…" lists the partners (companies with a partner type), not its own options. */
 export const isPartnerField = (f: { label: string; type: string }) => /partner/i.test(f.label) && (f.type === "select" || f.type === "multiselect");
@@ -34,7 +35,7 @@ export default function FieldInput({ field: f, value, onChange, onBlur, disabled
   const partners = usePartnerNames(isPartnerField(f));
   if (f.type === "number") {
     return (
-      <input type="number" inputMode="decimal" className="tfi-in" value={value ?? ""} disabled={disabled}
+      <NumInput type="number" inputMode="decimal" className="tfi-in" value={value ?? ""} disabled={disabled}
         onFocus={(e) => e.target.select()} onBlur={onBlur}
         onChange={(e) => onChange(e.target.value === "" ? "" : Number(e.target.value))} />
     );

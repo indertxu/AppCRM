@@ -1,0 +1,29 @@
+.iba-bg { position: fixed; inset: 0; z-index: 1400; display: grid; place-items: center; padding: 16px; background: rgba(6, 26, 19, 0.42); backdrop-filter: blur(5px); font-family: "Inter", system-ui, sans-serif; animation: iba-fade 0.18s ease; }
+@keyframes iba-fade { from { opacity: 0; } to { opacity: 1; } }
+.iba { width: min(420px, 100%); display: flex; flex-direction: column; gap: 12px; padding: 24px 24px 18px; border-radius: 22px; background: #fff; color: #0d1f18; box-shadow: 0 30px 80px -24px rgba(6, 34, 24, 0.5); animation: iba-in 0.22s cubic-bezier(0.16, 1, 0.3, 1); }
+@keyframes iba-in { from { opacity: 0; transform: translateY(8px) scale(0.98); } to { opacity: 1; transform: none; } }
+.iba-ico { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 13px; background: linear-gradient(140deg, #19c48a, #0a6f4d); color: #fff; }
+.iba h3 { margin: 0; font-size: 18px; font-weight: 750; letter-spacing: -0.01em; }
+.iba-what { margin: 0; display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 12px; background: #f4f8f6; }
+.iba-what b { font-size: 13.5px; }
+.iba-what span { font-size: 12.5px; color: #5d6f67; }
+.iba-step { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 6px 0; }
+.iba-step > button { width: 40px; height: 40px; border: 0; border-radius: 12px; background: #eef4f1; font-size: 20px; font-weight: 700; color: #0a6f4d; cursor: pointer; }
+.iba-step > button:hover:not(:disabled) { background: #dff0e7; }
+.iba-step > button:disabled { opacity: 0.4; cursor: default; }
+.iba-step label { display: flex; align-items: baseline; gap: 6px; }
+.iba-step input { width: 96px; height: 52px; border: 0; border-radius: 14px; background: #fff; box-shadow: inset 0 0 0 1.5px rgba(13, 31, 24, 0.14); font: inherit; font-size: 28px; font-weight: 800; color: #0d1f18; text-align: center; -moz-appearance: textfield; }
+.iba-step input::-webkit-inner-spin-button { display: none; }
+.iba-step input:focus { outline: none; box-shadow: inset 0 0 0 2px #12b57f, 0 0 0 4px rgba(18, 181, 127, 0.12); }
+.iba-step span { font-size: 14px; font-weight: 650; color: #5d6f67; }
+.iba-fixed { display: flex; align-items: baseline; justify-content: center; gap: 8px; padding: 8px 0 2px; }
+.iba-fixed b { font-size: 34px; font-weight: 800; letter-spacing: -0.02em; color: #0a6f4d; }
+.iba-fixed span { font-size: 14px; font-weight: 650; color: #5d6f67; }
+.iba-note { margin: 0; font-size: 12.5px; line-height: 1.5; color: #5d6f67; text-align: center; }
+.iba-note b { color: #0d1f18; }
+.iba-f { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.iba-f button { height: 38px; padding: 0 16px; border-radius: 11px; font: inherit; font-size: 13.5px; font-weight: 700; cursor: pointer; }
+.iba-no { border: 1px solid rgba(13, 31, 24, 0.14); background: #fff; color: #24352e; }
+.iba-no:hover { background: #f4f8f6; }
+.iba-yes { border: 0; background: #0a6f4d; color: #fff; }
+.iba-yes:hover { background: #085c40; }

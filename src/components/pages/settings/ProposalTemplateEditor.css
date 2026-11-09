@@ -1263,3 +1263,4 @@
 .dai-cta { border-color: rgba(124, 58, 237, 0.3) !important; color: #5b21b6; background: linear-gradient(110deg, rgba(196, 181, 253, 0.18), #fff) !important; }
 .dai-cta svg { color: #7c3aed; }
 @media (max-width: 640px) { .dai-to { padding-left: 0; } .dsf-go { display: none; } }
+.dse-cond-add .sel-trigger { flex: 1; min-width: 0; }

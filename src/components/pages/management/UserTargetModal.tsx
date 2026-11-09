@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { NumInput } from "../../framework/NumInput";
 
 export interface UserTarget {
   minPerWeek: number | null;
@@ -70,7 +71,7 @@ k === "minPerWeek" ? general.minPerWeek
                 </span>
 
                 {custom && (
-                  <input
+                  <NumInput
                     type="number"
                     min="0"
                     step={row.step}

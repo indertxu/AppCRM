@@ -1,3 +1,4 @@
+
 // Superadmin-only Edge Function: manage tenants (companies) and their users.
 // Actions: list_tenants, create_tenant, update_tenant, toggle_tenant,
 //          list_users, create_user, delete_user, set_password,

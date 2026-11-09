@@ -3,6 +3,7 @@ import { Building2, LayoutGrid, Feather, Check, Minus, Plus, UserPlus, Wand2, Se
 import { createTenant, createUser, loadRoles, setUserRole, PLAN_LABEL, type TenantPlan, type CompanyRole } from "../../api/superadminApi";
 import { passwordProblem, PASSWORD_HINT, PASSWORD_RULES } from "../../login/LoginPage";
 import { Modal, colorOf, initials } from "./SuperAdminHome";
+import Select from "../../framework/Select";
 
 interface Props {
   /** how many companies there are (the new one takes the next colour) */
@@ -241,10 +242,8 @@ export function NewLoginModal({ companies, initial, onClose, onCreated }: {
         </label>
         <label className="sa-mf"><span>Role</span>
           <span className="sa-chipsel is-full">
-            <select value={level} onChange={(e) => setLevel(e.target.value)} disabled={!co || !roles}>
-              <option value="">{!co ? "Pick the company first" : !roles ? "Loading roles…" : "Default (Consultant)"}</option>
-              {(roles ?? []).map((r) => <option key={r.level_key} value={r.level_key}>{r.name}</option>)}
-            </select>
+            <Select value={level} onChange={setLevel} disabled={!co || !roles} aria-label="Role"
+              options={[{ value: "", label: !co ? "Pick the company first" : !roles ? "Loading roles…" : "Default (Consultant)" }, ...(roles ?? []).map((r) => ({ value: r.level_key, label: r.name }))]} />
           </span>
         </label>
         <label className="sa-mf"><span>Password</span>

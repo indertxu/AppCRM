@@ -1803,6 +1803,7 @@ const TK_ICON: Record<string, string> = {
   inbox: "M22 12h-6l-2 3h-4l-2-3H2M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z",
   mail: "M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM22 6l-10 7L2 6",
   lock: "M5 11h14v10H5zM8 11V7a4 4 0 0 1 8 0v4",
+  shield: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10zM9 12l2 2 4-4",
   check: "M20 6 9 17l-5-5",
   tag: "M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8zM7.5 7.5h.01",
   clock: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 6v6l4 2",
@@ -2088,6 +2089,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
       if (r.created) bits.push(`${r.created} ticket${r.created === 1 ? "" : "s"} opened`);
       if (r.threaded) bits.push(`${r.threaded} added to tickets`);
       if (r.inbox) bits.push(`${r.inbox} in the Inbox`);
+      if (r.unknown) bits.push(`${r.unknown} left out: not in the CRM`);
       const errs = r.errors ?? [];
       setSyncNote(errs.length ? { text: errs[0], bad: true } : { text: bits.length ? bits.join(" · ") : r.note || r.skipped || "Up to date" });
     }
@@ -4554,10 +4556,11 @@ function DeskSettings({ dir, types, tickets, inbox, start, prefill, mail, onClos
           {tab === "mailboxes" && (
             <>
               <p className="ts-lead">The desk reads the inboxes listed here every few minutes while someone has the home page open (or on a schedule, see 19_ticket_mail.sql). Shared mailboxes need you to have access to them in Outlook.</p>
+              <p className="ts-lead ts-gdpr"><TkIco d="shield" />Only e-mail from people already in the CRM comes in: a contact, a colleague, or someone at a company you have (its e-mail or website domain). Anything else is never read or stored (GDPR).</p>
               <div className={`ts-mine ${myInbox ? "is-on" : ""}`}>
                 <TkIco d="user" />
                 <div><b>My own inbox{mail?.email ? ` · ${mail.email}` : ""}</b>
-                  <span>{myInbox ? (myInbox.storeAll ? "Every e-mail lands in the desk's Inbox." : "Only replies to tickets and mail that matches a rule come in — the rest stays private.") : "Off — your personal mail stays out of the desk."}</span></div>
+                  <span>{myInbox ? (myInbox.storeAll ? "Every e-mail from someone in the CRM lands in the desk's Inbox." : "Only replies to tickets and mail that matches a rule come in — the rest stays private.") : "Off — your personal mail stays out of the desk."}</span></div>
                 {myInbox && (
                   <label className="ts-check"><input type="checkbox" checked={myInbox.storeAll} onChange={() => run(saveMailbox({ ...myInbox, storeAll: !myInbox.storeAll }))} />Bring in everything</label>
                 )}

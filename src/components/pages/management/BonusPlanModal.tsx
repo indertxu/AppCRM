@@ -7,6 +7,7 @@ import {
   shiftMonth, yearSlots, evaluate, activeConditions, tierApplies, matchStrength,
   type Plan, type Tier, type Metric,
 } from "./bonusEngine";
+import { NumInput } from "../../framework/NumInput";
 
 const uid = () => Math.random().toString(36).slice(2, 9);
 const UNIT: Record<Metric, string> = { billing: "€", days: "days", hours: "h" };
@@ -290,7 +291,7 @@ export default function BonusPlanModal({ plan: initial, people, roles, departmen
                               </button>
                               {on && (
                                 <label className="bxm-num"><em>at least</em>
-                                  <input type="number" min={0} step={STEP[m]} value={t.conditions[m] ?? 0} onChange={(e) => setCond(t.id, m, e.target.value === "" ? 0 : Math.max(0, Number(e.target.value)))} />
+                                  <NumInput type="number" min={0} step={STEP[m]} value={t.conditions[m] ?? 0} onChange={(e) => setCond(t.id, m, e.target.value === "" ? 0 : Math.max(0, Number(e.target.value)))} />
                                   <i>{UNIT[m]}</i>
                                 </label>
                               )}
@@ -305,7 +306,7 @@ export default function BonusPlanModal({ plan: initial, people, roles, departmen
                           <button className={t.reward.type === "fixed" ? "is-on" : ""} onClick={() => setTier(t.id, { reward: { ...t.reward, type: "fixed" } })}>Fixed amount</button>
                         </div>
                         <label className="bxm-num is-reward">
-                          <input type="number" min={0} step={t.reward.type === "pct" ? 0.5 : 100} value={t.reward.value} onChange={(e) => setTier(t.id, { reward: { ...t.reward, value: Math.max(0, Number(e.target.value) || 0) } })} />
+                          <NumInput type="number" min={0} step={t.reward.type === "pct" ? 0.5 : 100} value={t.reward.value} onChange={(e) => setTier(t.id, { reward: { ...t.reward, value: Math.max(0, Number(e.target.value) || 0) } })} />
                           <i>{t.reward.type === "pct" ? "%" : "€"}</i>
                         </label>
                       </div>
@@ -402,7 +403,7 @@ export default function BonusPlanModal({ plan: initial, people, roles, departmen
                   </label>
                   {METRICS.map((m) => (
                     <label className="bxm-num is-try" key={m}><em>{METRIC_LABEL[m]}</em>
-                      <input type="number" min={0} step={STEP[m]} value={tryIt[m]} onChange={(e) => setTryIt((x) => ({ ...x, [m]: Math.max(0, Number(e.target.value) || 0) }))} />
+                      <NumInput type="number" min={0} step={STEP[m]} value={tryIt[m]} onChange={(e) => setTryIt((x) => ({ ...x, [m]: Math.max(0, Number(e.target.value) || 0) }))} />
                       <i>{UNIT[m]}</i>
                     </label>
                   ))}

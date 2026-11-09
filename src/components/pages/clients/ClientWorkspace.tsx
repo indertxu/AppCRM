@@ -19,6 +19,7 @@ import DatePicker from "../../framework/DatePicker";
 import { useClientEdit } from "../../framework/pageAccess";
 import "../../framework/MentionInput.css";
 import "./ClientWorkspace.css";
+import { NumInput } from "../../framework/NumInput";
 
 interface Props {
   client: Client;
@@ -743,7 +744,7 @@ function ScheduleEditor({ years, unit, per, value, onChange }: {
                 <span className="cw-sched-n">{i + 1}</span>
                 <span className="cw-sched-t">{lenLabel(i)}</span>
                 <label className="cw-sched-inc">
-                  <input inputMode="decimal" value={inc ? String(inc) : ""} placeholder="0" disabled={i === 0 && !inc} onChange={(e) => setInc(i, e.target.value)} />
+                  <NumInput inputMode="decimal" value={inc ? String(inc) : ""} placeholder="0" disabled={i === 0 && !inc} onChange={(e) => setInc(i, e.target.value)} />
                   <em>% {i === 0 ? "start" : "increase"}</em>
                 </label>
                 <b className="cw-sched-v">{eur(unit * mult)}<em> / {per}</em></b>

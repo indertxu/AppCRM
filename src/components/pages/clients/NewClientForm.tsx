@@ -8,6 +8,7 @@ import { CountryPicker } from "../companies/CompaniesPage";
 import { supabase } from "../../api/supabase";
 import "./ClientsPage.css";
 import { useInactiveIds } from "../../framework/peopleStatus";
+import { NumInput } from "../../framework/NumInput";
 
 const uid = () => crypto.randomUUID();
 const emptyAddr = { street: "", number: "", details: "", postalCode: "", city: "", country: "" };
@@ -31,7 +32,7 @@ function NumField({
   const [text, setText] = useState<string | null>(null);
   const shown = text ?? (value === 0 ? "" : String(value));
   return (
-    <input
+    <NumInput
       type="number"
       inputMode="decimal"
       className={className}

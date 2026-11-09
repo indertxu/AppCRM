@@ -26,6 +26,7 @@ import {
 } from "./dealImportEngine";
 import "./DealImport.css";
 import Select from "../../../framework/Select";
+import { NumInput } from "../../../framework/NumInput";
 
 const TYPE_LABEL: Record<FieldType, string> = { text: "Text", number: "Number", date: "Date", boolean: "Yes / No", select: "Choice list" };
 const uid = () => Math.random().toString(36).slice(2, 9);
@@ -1855,7 +1856,7 @@ export function ColumnTools({ col, columns, rows, prep, onPrep, target, targetLa
               <Select size="sm" value={r.op} onChange={(v) => patchRule(r.id, { op: v as ColRuleOp })}
                 options={RULE_OPS.map((op) => ({ value: op, label: RULE_LABEL[op] }))} />
               {(r.op === "dropWords" || r.op === "keepWords" || r.op === "dropLastWords" || r.op === "keepLastWords") && (
-                <label className="di-rulep"><input type="number" min={1} max={20} value={r.n ?? 1} onChange={(e) => patchRule(r.id, { n: Math.max(1, +e.target.value || 1) })} /><span>{(r.n ?? 1) === 1 ? "word" : "words"}</span></label>
+                <label className="di-rulep"><NumInput type="number" min={1} max={20} value={r.n ?? 1} onChange={(e) => patchRule(r.id, { n: Math.max(1, +e.target.value || 1) })} /><span>{(r.n ?? 1) === 1 ? "word" : "words"}</span></label>
               )}
               {r.op === "removeCol" && (
                 <Select size="sm" value={r.col != null ? String(r.col) : ""} onChange={(v) => patchRule(r.id, { col: +v })} placeholder="Which column?"

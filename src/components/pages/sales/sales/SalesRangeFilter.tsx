@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import DatePicker from "../../../framework/DatePicker";
 import { fitPopover, type PopPos } from "./SalesMultiFilter";
 import "./SalesRangeFilter.css";
+import { NumInput } from "../../../framework/NumInput";
 
 /** null = that side is open. Same min and max = an exact value. */
 export interface SalesRanges {
@@ -44,7 +45,7 @@ function NumBox({ value, onChange, placeholder, suffix, max }: {
 }) {
   return (
     <label className="srf-num">
-      <input
+      <NumInput
         type="number" inputMode="decimal" min={0} max={max} placeholder={placeholder}
         value={value ?? ""}
         onChange={(e) => {

@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { supabase } from "../../api/supabase";
 import { PageCube } from "../../framework/PageCube";
+import Select from "../../framework/Select";
 import { JUST_SIGNED_IN_KEY, NextCube } from "../../login/LoginPage";
 import {
   loadDashboard, loadTenantDetail, refreshUsage, saveCostSettings, computeCosts, userCosts, withDefaults, aiCost,
@@ -17,6 +18,7 @@ import {
 } from "../../api/superadminApi";
 import SuperAdminCreate, { NewLoginModal } from "./SuperAdminCreate";
 import "./SuperAdmin.css";
+import { NumInput } from "../../framework/NumInput";
 
 /* =====================================================================
    The platform console (superadmin): companies, users, usage, data and
@@ -952,10 +954,8 @@ function AllUsers({ d, m, c, people, tools, onOpen, onAdded, onRole }: { d: Dash
             ))}
           </span>
           <span className="sa-chipsel">
-            <select value={co} onChange={(e) => setCo(e.target.value)} aria-label="Company">
-              <option value="">All companies</option>
-              {d.tenants.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
+            <Select size="sm" value={co} onChange={setCo} aria-label="Company" searchable
+              options={[{ value: "", label: "All companies" }, ...d.tenants.map((t) => ({ value: t.id, label: t.name }))]} />
             {co && <i style={{ background: tColor.get(co) }} />}
           </span>
         </span>
@@ -1328,7 +1328,7 @@ function SourcesView({ d, c, k, m, syncing, onSync, onSave }: { d: Dashboard; c:
           {d.tenants.map((t) => (
             <label key={t.id} className="sa-nf">
               <span>{t.name}</span>
-              <span className="sa-nf-in"><i>{c.currency}</i><input type="number" min={0} value={rev[t.id] ?? 0} onChange={(e) => { setRev({ ...rev, [t.id]: Number(e.target.value) }); setMsg(null); }} /><i>/ month</i></span>
+              <span className="sa-nf-in"><i>{c.currency}</i><NumInput type="number" min={0} value={rev[t.id] ?? 0} onChange={(e) => { setRev({ ...rev, [t.id]: Number(e.target.value) }); setMsg(null); }} /><i>/ month</i></span>
               <small>{t.users} users</small>
             </label>
           ))}

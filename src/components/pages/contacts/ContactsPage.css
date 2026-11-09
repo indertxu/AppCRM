@@ -364,3 +364,5 @@
 @keyframes ct-ghost { from { background-position: 100% 0; } to { background-position: -120% 0; } }
 .cl-hint.is-error { color: #b4232c; display: flex; align-items: center; gap: 10px; }
 .ct-retry { border: 1px solid currentColor; background: transparent; color: inherit; border-radius: 999px; padding: 3px 12px; font: inherit; font-size: 12px; cursor: pointer; }
+/* the app's own dropdown in the LinkedIn capture */
+.lic-f .sel-trigger, .lic-co .sel-trigger { width: 100%; }

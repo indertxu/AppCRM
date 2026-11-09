@@ -15,6 +15,7 @@ import { countryLabel } from "../../contacts/contactProfile";
 import { readSignedContract } from "./proposalApi";
 import type { OrderFormData } from "./proposalGen";
 import "./HandoffClientForm.css";
+import { NumInput } from "../../../framework/NumInput";
 
 export interface HandoffContact {
   id: string; name: string; position: string; email: string; phone: string; billing: boolean;
@@ -296,11 +297,11 @@ export default function HandoffClientForm({ prefill, catalog, mode = "create", s
           <span className="hc-cgroup-t">Fees & billing</span>
           <div className="hc-crow">
             <label>One-time fee</label>
-            <div className="hc-cval"><input type="number" min={0} value={p.oneTimeFee ?? ""} placeholder="0" onChange={(e) => setProduct(p.key, { oneTimeFee: e.target.value === "" ? undefined : Number(e.target.value) })} /><em>€</em></div>
+            <div className="hc-cval"><NumInput type="number" min={0} value={p.oneTimeFee ?? ""} placeholder="0" onChange={(e) => setProduct(p.key, { oneTimeFee: e.target.value === "" ? undefined : Number(e.target.value) })} /><em>€</em></div>
           </div>
           <div className="hc-crow">
             <label>Payment terms</label>
-            <div className="hc-cval"><input type="number" min={0} value={p.paymentTermsDays ?? ""} placeholder="—" onChange={(e) => setProduct(p.key, { paymentTermsDays: e.target.value === "" ? null : Number(e.target.value) })} /><em>net days</em></div>
+            <div className="hc-cval"><NumInput type="number" min={0} value={p.paymentTermsDays ?? ""} placeholder="—" onChange={(e) => setProduct(p.key, { paymentTermsDays: e.target.value === "" ? null : Number(e.target.value) })} /><em>net days</em></div>
           </div>
           <div className="hc-crow hc-crow-billto">
             <label>Bill to</label>
@@ -319,7 +320,7 @@ export default function HandoffClientForm({ prefill, catalog, mode = "create", s
           {p.recurring && (
             <div className="hc-crow">
               <label>Non-terminable</label>
-              <div className="hc-cval"><input type="number" min={0} value={p.nonTerminableYears ?? ""} placeholder="—" onChange={(e) => setProduct(p.key, { nonTerminableYears: e.target.value === "" ? null : Number(e.target.value) })} /><em>years</em></div>
+              <div className="hc-cval"><NumInput type="number" min={0} value={p.nonTerminableYears ?? ""} placeholder="—" onChange={(e) => setProduct(p.key, { nonTerminableYears: e.target.value === "" ? null : Number(e.target.value) })} /><em>years</em></div>
             </div>
           )}
         </div>
@@ -1097,12 +1098,12 @@ export function ContractPanel({
                   </div>
                 </div>
                 <div className="dct-terms">
-                  <label className="dct-mini"><span>Licence payment <PdfTag k="paymentTermsDays" /></span><input type="number" min={0} value={payDays ?? ""} placeholder="30" onChange={(e) => setPayDays(e.target.value === "" ? null : Number(e.target.value))} /><em>days</em></label>
-                  <label className="dct-mini"><span>Non-terminable <PdfTag k="nonTerminableYears" /></span><input type="number" min={0} value={nonTerm ?? ""} placeholder="0" onChange={(e) => setNonTerm(e.target.value === "" ? null : Number(e.target.value))} /><em>years</em></label>
+                  <label className="dct-mini"><span>Licence payment <PdfTag k="paymentTermsDays" /></span><NumInput type="number" min={0} value={payDays ?? ""} placeholder="30" onChange={(e) => setPayDays(e.target.value === "" ? null : Number(e.target.value))} /><em>days</em></label>
+                  <label className="dct-mini"><span>Non-terminable <PdfTag k="nonTerminableYears" /></span><NumInput type="number" min={0} value={nonTerm ?? ""} placeholder="0" onChange={(e) => setNonTerm(e.target.value === "" ? null : Number(e.target.value))} /><em>years</em></label>
                   <div className="dct-mini is-toggle">
                     <span>Auto-renew <PdfTag k="autoRenew" /></span>
                     <button type="button" className={`hc-toggle ${autoRenew ? "is-on" : ""}`} onClick={() => setAutoRenew((v) => !v)} aria-pressed={autoRenew}><span className="hc-toggle-knob" /></button>
-                    {autoRenew && <><input type="number" min={0} value={renewYears ?? ""} placeholder={String(term)} onChange={(e) => setRenewYears(e.target.value === "" ? null : Number(e.target.value))} /><em>years</em></>}
+                    {autoRenew && <><NumInput type="number" min={0} value={renewYears ?? ""} placeholder={String(term)} onChange={(e) => setRenewYears(e.target.value === "" ? null : Number(e.target.value))} /><em>years</em></>}
                   </div>
                   <label className="dct-mini is-wide"><span>Contract no. <PdfTag k="ref" /></span><input value={ref} placeholder="—" onChange={(e) => setRef(e.target.value)} /></label>
                 </div>
@@ -1175,8 +1176,8 @@ export function ContractPanel({
                         <button type="button" className={svcBilling === "fixed" ? "is-on" : ""} onClick={() => setSvcBilling("fixed")}>Fixed fee</button>
                       </div>
                     </div>
-                    <label className="dct-of"><span>Services payment</span><div className="dct-of-num"><input type="number" min={0} value={svcPayDays ?? ""} placeholder={payDays != null ? String(payDays) : "30"} onChange={(e) => setSvcPayDays(e.target.value === "" ? null : Number(e.target.value))} /><em>days</em></div></label>
-                    {svcBilling === "per_day" && <label className="dct-of"><span>Days may vary <PdfTag k="servicesTolerancePct" /></span><div className="dct-of-num"><em>±</em><input type="number" min={0} value={svcTol ?? ""} placeholder="0" onChange={(e) => setSvcTol(e.target.value === "" ? null : Number(e.target.value))} /><em>%</em></div></label>}
+                    <label className="dct-of"><span>Services payment</span><div className="dct-of-num"><NumInput type="number" min={0} value={svcPayDays ?? ""} placeholder={payDays != null ? String(payDays) : "30"} onChange={(e) => setSvcPayDays(e.target.value === "" ? null : Number(e.target.value))} /><em>days</em></div></label>
+                    {svcBilling === "per_day" && <label className="dct-of"><span>Days may vary <PdfTag k="servicesTolerancePct" /></span><div className="dct-of-num"><em>±</em><NumInput type="number" min={0} value={svcTol ?? ""} placeholder="0" onChange={(e) => setSvcTol(e.target.value === "" ? null : Number(e.target.value))} /><em>%</em></div></label>}
                     <label className="dct-of is-full"><span>Scope note <PdfTag k="servicesNote" /></span><input value={svcNote} placeholder="e.g. Detailed scope agreed at the kick-off" onChange={(e) => setSvcNote(e.target.value)} /></label>
                   </div>
                 </section>

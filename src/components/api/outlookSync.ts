@@ -461,6 +461,11 @@ export async function syncCalendarEntry(entryId: string): Promise<OutlookSyncRes
           ["Team", colleagues.map((c) => c.name).join(", ")],
           ["Status", e.billing_line === "sales" ? "" : e.status === "confirmed" ? "Took place" : e.status === "cancelled" ? "Did not take place" : ""],
         ];
+    // what the person chose to leave out of the invite everyone sees (115_invite_bill_mode.sql); by default, what is billed
+    const hide = new Set<string>(Array.isArray(e.outlook_hide) ? e.outlook_hide : ["billable"]);
+    const KEY: Record<string, string> = { "Type of work": "work_type", How: "how", Meeting: "how", Client: "client", Company: "client", Project: "project", Phase: "phase", Tasks: "tasks", Role: "role", Billable: "billable", "Client people": "client_people", Contact: "contact", Team: "team", With: "with", Deal: "deal", Status: "status" };
+    const shown = details.filter(([k, v]) => !!v && !hide.has(KEY[k] ?? k));
+    const notesOut = hide.has("notes") ? "" : ((e.notes ?? "") as string);
     const subject = isMeeting
       ? [companyName || contacts[0]?.name, e.name || e.title].filter(Boolean).join(" · ") || "Meeting"
       : [e.status === "cancelled" ? "Cancelled:" : "", [clientName || companyName, e.name || e.title || wtName || "Work"].filter(Boolean).join(" · ")].filter(Boolean).join(" ");
@@ -474,14 +479,14 @@ export async function syncCalendarEntry(entryId: string): Promise<OutlookSyncRes
       kind: isMeeting ? "meeting" : undefined,
       recreate: true,
       subject,
-      details: details.filter(([, v]) => !!v),
-      description: (e.notes ?? "") as string,
-      notes: (e.notes ?? "") as string,
+      details: shown,
+      description: notesOut,
+      notes: notesOut,
       attendees,
       online: e.meeting_kind === "teams",
       location: e.meeting_kind === "in_person" ? (companyName || clientName || undefined) : undefined,
       // older outlook-sync reads these
-      workType: wtName, client: clientName || companyName, project: projectName, phase: phaseName, tasks: tasks.join(", "),
+      workType: hide.has("work_type") ? "" : wtName, client: hide.has("client") ? "" : clientName || companyName, project: hide.has("project") ? "" : projectName, phase: hide.has("phase") ? "" : phaseName, tasks: hide.has("tasks") ? "" : tasks.join(", "),
     });
     if (r.ok && r.eventId && r.eventId !== e.outlook_event_id) {
       await supabase.from("calendar_entries").update({ outlook_event_id: r.eventId }).eq("id", entryId);
@@ -539,7 +544,7 @@ export async function outlookMailStatus(): Promise<OutlookMailStatus> {
     return { connected: !!r.connected, mail: !!r.mail, email: r.email ?? null, needsSql: !!r.needsSql };
   } catch { return { connected: false, mail: false, email: null }; }
 }
-export interface MailSyncResult { read?: number; stored?: number; threaded?: number; created?: number; ignored?: number; inbox?: number; errors?: string[]; skipped?: string; note?: string; error?: string }
+export interface MailSyncResult { read?: number; stored?: number; threaded?: number; created?: number; ignored?: number; inbox?: number; unknown?: number; errors?: string[]; skipped?: string; note?: string; error?: string }
 /** Reads new mail of the desk's mailboxes into the ticket desk (threads, rules, Inbox). */
 export async function syncTicketMail(): Promise<MailSyncResult> {
   try { return (await call("mail_sync")) as MailSyncResult; } catch (e: any) { return { error: e?.message ?? "Sync failed." }; }

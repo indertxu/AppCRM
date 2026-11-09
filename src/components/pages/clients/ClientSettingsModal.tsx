@@ -5,6 +5,7 @@ import { useInactiveIds } from "../../framework/peopleStatus";
 import type {
   ProjectType, Blueprint, BlueprintPhase, ClientRole,
 } from "./ClientsPage";
+import { NumInput } from "../../framework/NumInput";
 
 const uid = () => crypto.randomUUID();
 const Chevron = ({ dir }: { dir: "right" | "up" }) => (
@@ -263,7 +264,7 @@ export default function ClientSettingsModal({
                           <span className="cs-phase-num">{i + 1}</span>
                           <input className="cl-input cs-phase-name" placeholder="Phase name" value={ph.name} onChange={(e) => patchPhase(bp.id, ph.id, { name: e.target.value })} />
                           <div className="cs-pct-wrap">
-                            <input type="number" min="0" max="100" className="cl-input cs-pct" value={ph.percent} onChange={(e) => patchPhase(bp.id, ph.id, { percent: Number(e.target.value) || 0 })} />
+                            <NumInput type="number" min="0" max="100" className="cl-input cs-pct" value={ph.percent} onChange={(e) => patchPhase(bp.id, ph.id, { percent: Number(e.target.value) || 0 })} />
                             <span className="cs-pct-sign">%</span>
                           </div>
                           <button className="cl-remove" onClick={() => removePhase(bp.id, ph.id)} aria-label="Remove phase">×</button>

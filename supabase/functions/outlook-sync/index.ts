@@ -271,7 +271,7 @@ async function syncMailFor(userId: string, db: Db | null): Promise<Record<string
 
   const { data: ruleRows } = await admin.from("ticket_mail_rules").select("*").eq("tenant_id", tenant).eq("active", true).order("sort");
   const rules = (ruleRows ?? []) as Rule[];
-  const stats = { read: 0, stored: 0, threaded: 0, created: 0, ignored: 0, filed: 0, inbox: 0, errors: [] as string[] };
+  const stats = { read: 0, stored: 0, threaded: 0, created: 0, ignored: 0, filed: 0, inbox: 0, unknown: 0, errors: [] as string[] };
 
   for (const box of mine) {
     const base = box.kind === "personal" ? "/me" : `/users/${encodeURIComponent(box.address)}`;
@@ -318,6 +318,11 @@ async function handleIncoming(g: any, box: any, base: string, token: string, ten
   };
   // our own outgoing mail coming back (a shared mailbox in copy): skip
   if (box.address && m.from.email === lc(box.address) && box.kind === "shared") return;
+
+  // GDPR (116_mail_known_only.sql): mail from someone who isn't in the CRM — not a contact, a company (its address
+  // or domain) or a colleague — is not read at all: no rule, no ticket, nothing stored. Fails closed.
+  const { data: known, error: knownErr } = await admin.rpc("mail_is_known", { p_tenant: tenant, p_email: m.from.email });
+  if (knownErr || known !== true) { stats.unknown = (stats.unknown ?? 0) + 1; return; }
 
   // who sent it, in the CRM
   const { data: cts } = await admin.from("contacts").select("id").eq("tenant_id", tenant).ilike("email", m.from.email || "-");

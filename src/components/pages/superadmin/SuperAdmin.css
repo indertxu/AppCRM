@@ -839,3 +839,6 @@
 .sa-chipsel.is-full { display: flex; }
 .sa-chipsel.is-full select { width: 100%; height: 44px; border-radius: 12px; font-size: 14px; }
 .sa-chipsel select:disabled { color: var(--muted); background-color: #f6f9f8; cursor: default; }
+/* the app's own dropdown inside the company / role pickers */
+.sa-chipsel .sel-trigger { min-width: 180px; }
+.sa-chipsel.is-full .sel-trigger { width: 100%; }

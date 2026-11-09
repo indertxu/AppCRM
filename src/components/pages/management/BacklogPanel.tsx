@@ -6,6 +6,7 @@ import { useInactiveIds } from "../../framework/peopleStatus";
 import { lineRate, roleCounts, roleNameOf, projectStatusOn, holdDaysIn, type ClientRole, type RoleLine, type HoldPeriod } from "../clients/clientsTypes";
 import "./BacklogPanel.css";
 import { ClientLogo } from "../clients/ClientWorkspace";
+import { NumInput } from "../../framework/NumInput";
 
 export interface BkEntry {
   id: string;
@@ -1028,7 +1029,7 @@ export default function BacklogPanel({
                 ))}
                 <div className="bl-msep" />
                 <label className="bl-mlabel">At least (days)</label>
-                <input className="bl-minput" type="number" min="0" value={fDaysMin} onChange={(e) => setFDaysMin(e.target.value)} placeholder="e.g. 5" />
+                <NumInput className="bl-minput" type="number" min="0" value={fDaysMin} onChange={(e) => setFDaysMin(e.target.value)} placeholder="e.g. 5" />
               </ColHeader>
 
               <ColHeader label="Value left" align="right" isOpen={openMenu === "value"} onToggle={() => setOpenMenu(openMenu === "value" ? null : "value")}
@@ -1037,7 +1038,7 @@ export default function BacklogPanel({
                 <button className="bl-mi" onClick={() => setSort("value", "asc")}>Lowest value first</button>
                 <div className="bl-msep" />
                 <label className="bl-mlabel">At least (€)</label>
-                <input className="bl-minput" type="number" min="0" value={fValueMin} onChange={(e) => setFValueMin(e.target.value)} placeholder="e.g. 5000" />
+                <NumInput className="bl-minput" type="number" min="0" value={fValueMin} onChange={(e) => setFValueMin(e.target.value)} placeholder="e.g. 5000" />
               </ColHeader>
 
               <ColHeader label="Team" isOpen={openMenu === "team"} onToggle={() => setOpenMenu(openMenu === "team" ? null : "team")}

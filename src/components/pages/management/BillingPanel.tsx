@@ -14,6 +14,7 @@ import { lineRate, roleNameOf, roleColor, roleCounts, type ClientRole, type Role
 import { ClientLogo } from "../clients/ClientWorkspace";
 import "./BillingPanel.css";
 import { useNavSection } from "../../framework/pageAccess";
+import { NumInput } from "../../framework/NumInput";
 
 export interface BiEntry {
   id: string;
@@ -460,7 +461,7 @@ function InvoiceModal({ doc0, used, title, onClose, onDone }: {
                   <label className={`ivm-f ${dup ? "is-warn" : ""}`}><span>Invoice no.</span><input value={d.number} onChange={(e) => set({ number: e.target.value })} placeholder="2026-0001" />{dup && <em>Already used</em>}</label>
                   <label className="ivm-f"><span>Date</span><DatePicker value={d.issueDate} onChange={(v) => v && set({ issueDate: v })} /></label>
                   <label className="ivm-f"><span>Due</span><DatePicker value={d.dueDate} onChange={(v) => v && set({ dueDate: v })} /></label>
-                  <label className="ivm-f"><span>VAT %</span><input type="number" min={0} step={0.5} value={d.vatPct} onChange={(e) => set({ vatPct: Math.max(0, Number(e.target.value) || 0) })} /></label>
+                  <label className="ivm-f"><span>VAT %</span><NumInput type="number" min={0} step={0.5} value={d.vatPct} onChange={(e) => set({ vatPct: Math.max(0, Number(e.target.value) || 0) })} /></label>
                 </div>
                 <p className="ivm-sub">Bill to</p>
                 <div className="ivm-grid">
@@ -474,8 +475,8 @@ function InvoiceModal({ doc0, used, title, onClose, onDone }: {
                   {d.lines.map((l, i) => (
                     <div className="ivm-line" key={i}>
                       <input className="ivm-desc" value={l.desc} onChange={(e) => setL(i, { desc: e.target.value })} aria-label="Description" />
-                      <input type="number" step={0.25} value={l.qty} onChange={(e) => setL(i, { qty: Number(e.target.value) || 0 })} aria-label="Quantity" />
-                      <input type="number" step={10} value={l.price} onChange={(e) => setL(i, { price: Number(e.target.value) || 0 })} aria-label="Unit price" />
+                      <NumInput type="number" step={0.25} value={l.qty} onChange={(e) => setL(i, { qty: Number(e.target.value) || 0 })} aria-label="Quantity" />
+                      <NumInput type="number" step={10} value={l.price} onChange={(e) => setL(i, { price: Number(e.target.value) || 0 })} aria-label="Unit price" />
                       <b>{invMoney(l.amount, s.lang)}</b>
                     </div>
                   ))}
@@ -1917,7 +1918,7 @@ export default function BillingPanel({
                         <label className="bn-fix-prow" key={i}>
                           <span className="bn-av is-sm">{(people[c.userId] ?? "?").charAt(0).toUpperCase()}</span>
                           <span className="bn-fix-pname">{people[c.userId] ?? "Unknown"}</span>
-                          <input type="number" step="0.25" min="0" value={c.days}
+                          <NumInput type="number" step="0.25" min="0" value={c.days}
                             onChange={(e) => setCell(i, e.target.value)} />
                           <span className="bn-fix-u">{u}</span>
                         </label>

@@ -32,7 +32,8 @@ import { applyRolePreview } from "../../framework/SuperAdmin";
 import { PageCube } from "../../framework/AppLayout";
 import { usePageAccess, goToSection, guardedLeave, deptName, levelBase, type PageKey } from "../../framework/pageAccess";
 import { isSalesLead, globalSearch, loadPrefs, savePref, type SearchHit } from "../companies/companiesApi";
-import { loadMyInvites, loadMyReplies, markRepliesSeen, answerInvite, declineInvite, type InviteCard } from "../calendar/invitesApi";
+import { loadMyInvites, loadMyReplies, markRepliesSeen, answerInvite, declineInvite, asksBill, type InviteCard } from "../calendar/invitesApi";
+import InviteBillAsk from "../calendar/InviteBillAsk";
 import "./HomePage.css";
 
 const greeting = () => {
@@ -1961,14 +1962,22 @@ function useHomeAlerts(userId: string | null) {
     const replies = ids.filter((id) => id.startsWith("rep:")).map((id) => id.slice(4));
     if (replies.length) await markRepliesSeen(replies);
   };
-  const answer = async (a: HomeAlert, yes: boolean) => {
+  /** accepting client work first asks (or shows) what you bill for it */
+  const [billAsk, setBillAsk] = useState<{ a: HomeAlert; card: InviteCard; dates: number } | null>(null);
+  const answer = async (a: HomeAlert, yes: boolean, bill?: number | null) => {
     if (!a.ref_id) return;
     setBusy(a.id); setErr(null);
     let e: string | null = null;
     if (!userId) return;
     // on a repeating booking, one answer covers every date
-    const card = (await loadMyInvites(userId).catch(() => [] as InviteCard[])).find((i) => i.id === a.ref_id);
-    if (card) e = await answerInvite(card, userId, yes);
+    const mine = await loadMyInvites(userId).catch(() => [] as InviteCard[]);
+    const card = mine.find((i) => i.id === a.ref_id);
+    if (yes && card && bill === undefined && asksBill(card)) {
+      setBusy(null);
+      setBillAsk({ a, card, dates: card.series_id ? mine.filter((i) => i.series_id === card.series_id).length || 1 : 1 });
+      return;
+    }
+    if (card) e = await answerInvite(card, userId, yes, null, bill ?? null);
     else e = yes ? "This invitation isn't open any more." : await declineInvite(a.ref_id);
     setBusy(null);
     if (e) { setErr(e); return; }
@@ -1984,7 +1993,7 @@ function useHomeAlerts(userId: string | null) {
   };
 
   const unseen = (rows ?? []).filter((a) => !a.seen_at).length;
-  return { rows, names, inviteState, cats, missing, all, setAll, busy, ticket, setTicket, err, markSeen, clear, answer, open, unseen };
+  return { rows, names, inviteState, cats, missing, all, setAll, busy, ticket, setTicket, err, markSeen, clear, answer, open, unseen, billAsk, setBillAsk };
 }
 type HomeAlertsState = ReturnType<typeof useHomeAlerts>;
 
@@ -2032,6 +2041,8 @@ function HomeAlertsBell({ h, tone = "light" }: { h: HomeAlertsState; tone?: "lig
       </button>
       {at && <HomeAlertsPop h={h} anchor={at} onClose={() => setAt(null)} />}
       {h.ticket && <TicketDrawerById id={h.ticket} onClose={() => h.setTicket(null)} />}
+      {h.billAsk && <InviteBillAsk inv={h.billAsk.card} dates={h.billAsk.dates} onCancel={() => h.setBillAsk(null)}
+        onConfirm={(b) => { const x = h.billAsk!; h.setBillAsk(null); void h.answer(x.a, true, b); }} />}
     </>
   );
 }

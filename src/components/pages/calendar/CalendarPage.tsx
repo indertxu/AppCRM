@@ -5,7 +5,7 @@ import CalendarSettingsModal, { type WorkTypeDef, type Targets } from "./Calenda
 import { useAuth } from "../../api/AuthProvider";
 import InvitesTray from "./InvitesTray";
 import SharedBookingView from "./SharedBookingView";
-import { loadMyInvites, syncInvites, loadAttendees, loadMyReplies,
+import { type Summon, loadMyInvites, syncInvites, loadAttendees, loadMyReplies,
   type InviteCard, type Attendee } from "./invitesApi";
 import type { Cutoffs } from "./billingPeriods";
 import { cutoffOf, periodOf, inBillingMonth, periodForDate } from "./billingPeriods";
@@ -45,6 +45,8 @@ const MONTHS = [
 
 interface Entry {
   id: string;
+  /** Details left out of its Outlook event (115_invite_bill_mode.sql); null = the default. */
+  outlookHide?: string[] | null;
   dateKey: string;
   startMin: number;
   endMin: number;
@@ -83,12 +85,13 @@ const addDaysIso = (iso: string, n: number) => { const [y, m, d] = iso.split("-"
 const todayIsoStr = () => { const t = new Date(); return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`; };
 /** What every date of a series carries, taken from the entry row. */
 const templateOf = (r: Record<string, unknown>) => {
-  const keys = ["start_min", "end_min", "work_type_id", "billable", "client_id", "project_id", "phase_id", "task_ids", "attendees", "notes", "name", "billing_line", "role_id", "kind", "meeting_kind"];
+  const keys = ["start_min", "end_min", "work_type_id", "billable", "client_id", "project_id", "phase_id", "task_ids", "attendees", "notes", "name", "billing_line", "role_id", "kind", "meeting_kind", "outlook_hide"];
   return Object.fromEntries(keys.map((k) => [k, r[k] ?? null]));
 };
 /** An entry row as the page keeps it. */
 const toEntry = (r: Record<string, unknown>): Entry => ({
   id: r.id as string,
+  outlookHide: Array.isArray(r.outlook_hide) ? (r.outlook_hide as string[]) : null,
   dateKey: r.date_key as string,
   startMin: Number(r.start_min) || 0,
   endMin: Number(r.end_min) || 0,
@@ -457,6 +460,8 @@ function isoFromKey(key: string): string {
 interface ModalState {
   day: Date;
   editingId?: string;
+  /** Details left out of its Outlook event; null = the default. */
+  outlookHide?: string[] | null;
   /** Editing one date of a repeating entry: its series and rule. */
   seriesId?: string | null;
   repeat?: RepeatRule | null;
@@ -545,6 +550,8 @@ const [targets, setTargets] = useState<Targets>({ perDay: 1, minPerDay: 0.5, min
   useEffect(() => {
     if (!trayOpen) return;
     const onClick = (e: MouseEvent) => {
+      // the billing question on accepting opens over the page: the tray stays open behind it
+      if ((e.target as HTMLElement)?.closest?.(".iba-bg")) return;
       if (bellRef.current && !bellRef.current.contains(e.target as Node)) setTrayOpen(false);
     };
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setTrayOpen(false); };
@@ -1094,7 +1101,7 @@ setModal({ day, startMin, endMin, type: workTypes[0]?.id ?? "", billable, client
       if (error) { alert(`Could not add the repeating dates: ${error.message}`); return 0; }
     }
     setEntries((list) => [...list, ...rows.map((r) => toEntry(r))]);
-    const who = (summoned ?? []) as { id: string; billable: number }[];
+    const who = (summoned ?? []) as Summon[];
     void (async () => {
       for (const r of rows) {
         if (who.length) await syncInvites(r.id, uid, who, (cols.billing_line as string) || "consultor", summon_note ?? undefined, (cols.role_id as string) || null).catch(() => {});
@@ -1163,6 +1170,7 @@ attendees: e.attendees ?? "",
       line: e.line ?? "consultor",
       roleId: e.roleId ?? "",
       meetKind: e.meetKind ?? "in_person",
+      outlookHide: e.outlookHide ?? null,
       seriesId: e.seriesId ?? null,
       repeat: e.seriesId && series[e.seriesId] ? ruleOfSeries(series[e.seriesId]) : null,
     });
@@ -1248,6 +1256,7 @@ notes: v.notes || null,
         kind: "delivery",
         meeting_kind: v.meetKind || "in_person",
         status: entries.find((e) => e.id === id)?.status ?? "planned",
+        ...(v.outlookHide ? { outlook_hide: v.outlookHide } : {}),
       };
       if (fromOl) row.outlook_source_id = fromOl;
 
@@ -1283,7 +1292,7 @@ notes: v.notes || null,
         setReloadKey((k) => k + 1);
         await syncInvites(
           id, u.user.id,
-          v.summoned.map((s) => ({ id: s.id, billable: s.billable })),
+          v.summoned.map((s) => ({ id: s.id, billable: s.billable, mode: s.mode })),
           v.line || "consultor",
           v.summonNote,
           v.roleId || null,
@@ -2249,6 +2258,7 @@ attendees: modal.attendees,
             roleId: modal.roleId,
             meetKind: modal.meetKind,
             repeat: modal.repeat ?? null,
+            outlookHide: modal.outlookHide ?? null,
           }}
           inSeries={!!modal.editingId && !!modal.seriesId}
           onSave={saveModal}

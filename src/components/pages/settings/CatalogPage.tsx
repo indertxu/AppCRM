@@ -19,6 +19,7 @@ import "../clients/ClientsPage.css";
 import "./CatalogPage.css";
 import { useNavSection } from "../../framework/pageAccess";
 import { useInactiveIds } from "../../framework/peopleStatus";
+import { NumInput } from "../../framework/NumInput";
 
 interface Props { onBack: () => void; }
 
@@ -373,7 +374,7 @@ function NumStep({ value, onChange, step = 1, min = 0, max, unit, prefix, size, 
       <button type="button" tabIndex={-1} onClick={() => onChange(fix(value - step))} disabled={value <= min} aria-label={`Less${label ? ` ${label}` : ""}`}>−</button>
       <span className="pw-num-val">
         {prefix && <span className="pw-num-pre">{prefix}</span>}
-        <input type="number" className="cat-nospin" value={value} step={step} min={min} max={max} aria-label={label}
+        <NumInput type="number" className="cat-nospin" value={value} step={step} min={min} max={max} aria-label={label}
           onFocus={(e) => e.target.select()} onChange={(e) => onChange(fix(Number(e.target.value)))} />
         {unit && <em>{unit}</em>}
       </span>
@@ -860,7 +861,7 @@ function PricingStep({ p, setP, set }: { p: Product; setP: (f: (x: Product) => P
                     <small>Price{recurring ? ` per ${periodWord(p)}` : ""}</small>
                     <span className="pw-money is-lg">
                       <span>€</span>
-                      <input type="number" min="0" className="cat-nospin" value={t.price} onFocus={(e) => e.target.select()} onChange={(e) => setTier(ti, { price: Number(e.target.value) || 0 })} />
+                      <NumInput type="number" min="0" className="cat-nospin" value={t.price} onFocus={(e) => e.target.select()} onChange={(e) => setTier(ti, { price: Number(e.target.value) || 0 })} />
                       {perSuffix && <em>{perSuffix}</em>}
                     </span>
                   </label>
@@ -1121,7 +1122,7 @@ function CalcStep({ p, set }: { p: Product; set: (patch: Partial<Product>) => vo
                           <label className="cb-f"><span>{v.var_type === "percent" ? "Percent" : v.var_type === "per_block" ? "Price per block" : v.var_type === "fixed" ? "Amount" : "Price per unit"}</span>
                             <div className="cat-price-input">
                               {v.var_type !== "percent" && <span>€</span>}
-                              <input type="number" min="0" className="cat-nospin" value={v.amount} onFocus={(e) => e.target.select()} onChange={(e) => setVar(i, { amount: Number(e.target.value) || 0 })} />
+                              <NumInput type="number" min="0" className="cat-nospin" value={v.amount} onFocus={(e) => e.target.select()} onChange={(e) => setVar(i, { amount: Number(e.target.value) || 0 })} />
                               {v.var_type === "percent" ? <em>%</em> : perSuffixOf(p) ? <em>{perSuffixOf(p)}</em> : null}
                             </div>
                           </label>
@@ -1134,7 +1135,7 @@ function CalcStep({ p, set }: { p: Product; set: (patch: Partial<Product>) => vo
                           {isBlock && (
                             <label className="cb-f"><span>Block of</span>
                               <div className="cat-price-input">
-                                <input type="number" min="1" className="cat-nospin" value={v.block_size} onFocus={(e) => e.target.select()} onChange={(e) => setVar(i, { block_size: Number(e.target.value) || 1 })} />
+                                <NumInput type="number" min="1" className="cat-nospin" value={v.block_size} onFocus={(e) => e.target.select()} onChange={(e) => setVar(i, { block_size: Number(e.target.value) || 1 })} />
                                 <em>{v.unit_label || "units"}</em>
                               </div>
                             </label>
@@ -1142,7 +1143,7 @@ function CalcStep({ p, set }: { p: Product; set: (patch: Partial<Product>) => vo
                           {isUnits && (
                             <label className="cb-f"><span>Included free</span>
                               <div className="cat-price-input">
-                                <input type="number" min="0" className="cat-nospin" value={v.included} onFocus={(e) => e.target.select()} onChange={(e) => setVar(i, { included: Number(e.target.value) || 0 })} />
+                                <NumInput type="number" min="0" className="cat-nospin" value={v.included} onFocus={(e) => e.target.select()} onChange={(e) => setVar(i, { included: Number(e.target.value) || 0 })} />
                                 <em>{v.unit_label || "units"}</em>
                               </div>
                             </label>
@@ -1157,7 +1158,7 @@ function CalcStep({ p, set }: { p: Product; set: (patch: Partial<Product>) => vo
                           ) : v.var_type !== "percent" && (
                             <label className="cb-f"><span>Starts at</span>
                               <div className="cat-price-input">
-                                <input type="number" min="0" className="cat-nospin" value={v.default_value} onFocus={(e) => e.target.select()} onChange={(e) => setVar(i, { default_value: Number(e.target.value) || 0 })} />
+                                <NumInput type="number" min="0" className="cat-nospin" value={v.default_value} onFocus={(e) => e.target.select()} onChange={(e) => setVar(i, { default_value: Number(e.target.value) || 0 })} />
                                 <em>{v.unit_label || "units"}</em>
                               </div>
                             </label>
@@ -1290,7 +1291,7 @@ function CalcPreview({ p, hover, onHover }: { p: Product; hover: string | null; 
                       <span className="cp-in-num">
                         <input type="range" min={0} max={sliderMax(v)} step={1} value={val} style={{ ["--p" as any]: `${Math.min(100, (val / sliderMax(v)) * 100)}%` }}
                           onChange={(e) => setVals((x) => ({ ...x, [k]: Number(e.target.value) || 0 }))} />
-                        <input type="number" min={0} className="cat-nospin" value={val} onFocus={(e) => e.target.select()}
+                        <NumInput type="number" min={0} className="cat-nospin" value={val} onFocus={(e) => e.target.select()}
                           onChange={(e) => setVals((x) => ({ ...x, [k]: Math.max(0, Number(e.target.value) || 0) }))} />
                         <em>{v.unit_label || "units"}</em>
                       </span>
@@ -1573,7 +1574,7 @@ function CalculatorEditor({ calc, onChange, ownerType, basePrice, unit, currency
             <span>Start from a base of</span>
           </label>
           <div className="cat-price-input">
-            <input type="number" min="0" step="0.5" className="cat-nospin" value={calc.base_amount}
+            <NumInput type="number" min="0" step="0.5" className="cat-nospin" value={calc.base_amount}
               disabled={!calc.include_base} onFocus={(e) => e.target.select()}
               onChange={(e) => onChange({ ...calc, base_amount: Number(e.target.value) || 0 })} />
             <em>{unitWord}</em>
@@ -1621,7 +1622,7 @@ function CalculatorEditor({ calc, onChange, ownerType, basePrice, unit, currency
                 <span>{v.var_type === "percent" ? "Percent" : isQty ? `Adds (${unitWord})` : "Amount"}</span>
                 <div className="cat-price-input">
                   {!isQty && v.var_type !== "percent" && <span>€</span>}
-                  <input type="number" min="0" step={isQty ? "0.25" : "1"} className="cat-nospin" value={v.amount} onFocus={(e) => e.target.select()}
+                  <NumInput type="number" min="0" step={isQty ? "0.25" : "1"} className="cat-nospin" value={v.amount} onFocus={(e) => e.target.select()}
                     onChange={(e) => setVar(i, { amount: Number(e.target.value) || 0 })} />
                   {v.var_type === "percent" ? <em>%</em> : amountUnit ? <em>{amountUnit}</em> : null}
                 </div>
@@ -1639,7 +1640,7 @@ function CalculatorEditor({ calc, onChange, ownerType, basePrice, unit, currency
                 <label className="cat-calc-f">
                   <span>Per every</span>
                   <div className="cat-price-input">
-                    <input type="number" min="1" className="cat-nospin" value={v.block_size} onFocus={(e) => e.target.select()}
+                    <NumInput type="number" min="1" className="cat-nospin" value={v.block_size} onFocus={(e) => e.target.select()}
                       onChange={(e) => setVar(i, { block_size: Number(e.target.value) || 1 })} />
                     <em>{v.unit_label || "units"}</em>
                   </div>
@@ -1650,7 +1651,7 @@ function CalculatorEditor({ calc, onChange, ownerType, basePrice, unit, currency
                 <label className="cat-calc-f">
                   <span>Included</span>
                   <div className="cat-price-input">
-                    <input type="number" min="0" className="cat-nospin" value={v.included} onFocus={(e) => e.target.select()}
+                    <NumInput type="number" min="0" className="cat-nospin" value={v.included} onFocus={(e) => e.target.select()}
                       onChange={(e) => setVar(i, { included: Number(e.target.value) || 0 })} />
                     <em>free</em>
                   </div>
@@ -1666,7 +1667,7 @@ function CalculatorEditor({ calc, onChange, ownerType, basePrice, unit, currency
                   </div>
                 ) : (
                   <div className="cat-price-input">
-                    <input type="number" min="0" className="cat-nospin" value={v.default_value} onFocus={(e) => e.target.select()}
+                    <NumInput type="number" min="0" className="cat-nospin" value={v.default_value} onFocus={(e) => e.target.select()}
                       onChange={(e) => setVar(i, { default_value: Number(e.target.value) || 0 })} />
                     <em>{v.var_type === "percent" ? "n/a" : v.unit_label || "units"}</em>
                   </div>
@@ -1708,7 +1709,7 @@ function CalculatorEditor({ calc, onChange, ownerType, basePrice, unit, currency
                     </div>
                     <div className="cat-price-input">
                       <span>€</span>
-                      <input type="number" min="0" className="cat-nospin" value={v.rate ?? ""} placeholder={roleRate != null ? String(roleRate) : "Role rate"}
+                      <NumInput type="number" min="0" className="cat-nospin" value={v.rate ?? ""} placeholder={roleRate != null ? String(roleRate) : "Role rate"}
                         title="Leave empty to use the role's rate"
                         onFocus={(e) => e.target.select()}
                         onChange={(e) => setVar(i, { rate: e.target.value === "" ? null : Number(e.target.value) || 0 })} />
@@ -1834,7 +1835,7 @@ function ServiceEditor({ service, blueprints, roles, onClose, onSaved, onDeleted
 
               <div className="cat-field">
                 <label>Smallest bookable amount</label>
-                <input type="number" min="0" step="any" className="cat-nospin"
+                <NumInput type="number" min="0" step="any" className="cat-nospin"
                   value={s.min_unit ?? (s.rate_unit === "hour" ? 0.5 : 0.25)}
                   onFocus={(e) => e.target.select()}
                   onChange={(e) => set({ min_unit: Number(e.target.value) || 0 })} />
@@ -1890,7 +1891,7 @@ function ServiceEditor({ service, blueprints, roles, onClose, onSaved, onDeleted
                       </span>
                       <div className="cat-price-input cat-role-price">
                         <span>€</span>
-                        <input type="number" min="0" className="cat-nospin" value={r.price}
+                        <NumInput type="number" min="0" className="cat-nospin" value={r.price}
                           onFocus={(e) => e.target.select()}
                           onChange={(e) => setRolePrice(ri, Number(e.target.value) || 0)} />
                         <em>/{s.rate_unit === "hour" ? "h" : "d"}</em>
@@ -2023,7 +2024,7 @@ function ServicePreview({ s, roles }: { s: Service; roles: ClientRole[] }) {
                       <span className="cp-in-num">
                         <input type="range" min={0} max={sliderMax(v)} step={1} value={val} style={{ ["--p" as any]: `${Math.min(100, (val / sliderMax(v)) * 100)}%` }}
                           onChange={(e) => setVals((x) => ({ ...x, [k]: Number(e.target.value) || 0 }))} />
-                        <input type="number" min={0} className="cat-nospin" value={val} onFocus={(e) => e.target.select()}
+                        <NumInput type="number" min={0} className="cat-nospin" value={val} onFocus={(e) => e.target.select()}
                           onChange={(e) => setVals((x) => ({ ...x, [k]: Math.max(0, Number(e.target.value) || 0) }))} />
                         <em>{v.unit_label || "units"}</em>
                       </span>
@@ -2341,7 +2342,7 @@ function BlueprintsTab({ onChanged }: { onChanged: () => void }) {
                       <span className="cs-phase-num">{i + 1}</span>
                       <input className="cl-input cs-phase-name" placeholder="Phase name" value={ph.name} onChange={(e) => patchPhase(bp.id, ph.id, { name: e.target.value })} />
                       <div className="cs-pct-wrap">
-                        <input type="number" min="0" max="100" className="cl-input cs-pct cat-nospin" value={ph.percent}
+                        <NumInput type="number" min="0" max="100" className="cl-input cs-pct cat-nospin" value={ph.percent}
                           onFocus={(e) => e.target.select()}
                           onChange={(e) => patchPhase(bp.id, ph.id, { percent: Number(e.target.value) || 0 })} />
                         <span className="cs-pct-sign">%</span>

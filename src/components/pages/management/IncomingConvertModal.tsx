@@ -13,6 +13,7 @@ import { FileIcon, kindOf, prettySize, openTrackingFile } from "../sales/trackin
 import { copyIntoClientFolders } from "../clients/ClientDirectory";
 import "./IncomingConvertModal.css";
 import { useInactiveIds } from "../../framework/peopleStatus";
+import { NumInput } from "../../framework/NumInput";
 
 const uid = () => (globalThis.crypto?.randomUUID?.() ?? String(Math.random()));
 const eur = (n: number) => Math.round(n).toLocaleString("en-US");
@@ -45,7 +46,7 @@ function NumField({ value, onChange, min = 0, step = 1, suffix }: {
 }) {
   return (
     <div className="icm-num">
-      <input type="number" min={min} step={step} value={value === 0 ? "" : value}
+      <NumInput type="number" min={min} step={step} value={value === 0 ? "" : value}
         placeholder="0" onChange={(e) => onChange(e.target.value === "" ? 0 : Number(e.target.value))} />
       {suffix && <em>{suffix}</em>}
     </div>
@@ -651,7 +652,7 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
                       <li className="icm-phase" key={p.id}>
                         <span className="icm-phase-n">{pi + 1}</span>
                         <input className="icm-phase-name" value={p.name} placeholder="Phase name" onChange={(e) => setPhaseField(p.id, { name: e.target.value })} />
-                        <div className="icm-num icm-phase-days"><input type="number" min={0} value={p.days === 0 ? "" : p.days} placeholder="0" onChange={(e) => setPhaseField(p.id, { days: e.target.value === "" ? 0 : Number(e.target.value) })} /><em>d</em></div>
+                        <div className="icm-num icm-phase-days"><NumInput type="number" min={0} value={p.days === 0 ? "" : p.days} placeholder="0" onChange={(e) => setPhaseField(p.id, { days: e.target.value === "" ? 0 : Number(e.target.value) })} /><em>d</em></div>
                         <button type="button" className="icm-rm" onClick={() => removePhase(p.id)} aria-label="Remove phase">×</button>
                       </li>
                     ))}

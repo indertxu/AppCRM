@@ -24,6 +24,7 @@ import LinkPopover, { captureLinkTarget, placeLink, type LinkTarget } from "../.
 import { sendOutlookMail, type OutlookMail, type OutlookMailResult } from "../../api/outlookSync";
 import ActionsMenu, { type ActionItem } from "../../framework/ActionsMenu";
 import "./ContactExport.css";
+import { NumInput } from "../../framework/NumInput";
 
 type RowMode = "contact" | "company" | "deal";
 interface XRow { ctx: Ctx; key: string }
@@ -332,7 +333,7 @@ export default function ContactExport({ contacts, companies, contactFields, show
                               ) : f.kind === "date" ? (
                                 <div className="cx-two"><DatePicker value={c.a} onChange={(d) => patchCond(c.id, { a: d })} placeholder="From" /><span>–</span><DatePicker value={c.b} onChange={(d) => patchCond(c.id, { b: d })} placeholder="To" /></div>
                               ) : c.op === "between" ? (
-                                <div className="cx-two"><input type="number" value={c.a} onChange={(e) => patchCond(c.id, { a: e.target.value })} placeholder="From" /><span>–</span><input type="number" value={c.b} onChange={(e) => patchCond(c.id, { b: e.target.value })} placeholder="To" /></div>
+                                <div className="cx-two"><NumInput type="number" value={c.a} onChange={(e) => patchCond(c.id, { a: e.target.value })} placeholder="From" /><span>–</span><NumInput type="number" value={c.b} onChange={(e) => patchCond(c.id, { b: e.target.value })} placeholder="To" /></div>
                               ) : (
                                 <input className="cx-input" type={f.kind === "number" ? "number" : "text"} value={c.a} onChange={(e) => patchCond(c.id, { a: e.target.value })} placeholder={f.kind === "number" ? "Number" : "Text"} />
                               )}
@@ -2482,7 +2483,7 @@ function PostEditor({ x, post, onClose }: { x: HubCtx; post: MkPost; onClose: ()
                       <NetBadge n={n} />
                       <input className="mk-input is-url" value={p.results?.[n]?.url ?? ""} onChange={(e) => res(n, "url", e.target.value)} placeholder="Post link" />
                       {(["impressions", "likes", "comments", "shares", "clicks"] as const).map((k) => (
-                        <label key={k}><em>{k}</em><input type="number" min={0} value={p.results?.[n]?.[k] ?? ""} onChange={(e) => res(n, k, e.target.value)} /></label>
+                        <label key={k}><em>{k}</em><NumInput type="number" min={0} value={p.results?.[n]?.[k] ?? ""} onChange={(e) => res(n, k, e.target.value)} /></label>
                       ))}
                     </div>
                   ))}
@@ -3134,7 +3135,7 @@ function MkCondRow({ c, i, f, fieldBy, fieldOptions, onPatch, onDrop }: {
           ) : f.kind === "date" ? (
             <div className="cx-two"><DatePicker value={c.a} onChange={(d) => onPatch({ a: d })} placeholder="From" /><span>–</span><DatePicker value={c.b} onChange={(d) => onPatch({ b: d })} placeholder="To" /></div>
           ) : c.op === "between" ? (
-            <div className="cx-two"><input type="number" value={c.a} onChange={(e) => onPatch({ a: e.target.value })} placeholder="From" /><span>–</span><input type="number" value={c.b} onChange={(e) => onPatch({ b: e.target.value })} placeholder="To" /></div>
+            <div className="cx-two"><NumInput type="number" value={c.a} onChange={(e) => onPatch({ a: e.target.value })} placeholder="From" /><span>–</span><NumInput type="number" value={c.b} onChange={(e) => onPatch({ b: e.target.value })} placeholder="To" /></div>
           ) : (
             <input className="cx-input" type={f.kind === "number" ? "number" : "text"} value={c.a} onChange={(e) => onPatch({ a: e.target.value })} placeholder={f.kind === "number" ? "Number" : "Text"} />
           )}

@@ -26,6 +26,7 @@ import { useInactiveIds } from "../../framework/peopleStatus";
 import { ClientLogo } from "../clients/ClientWorkspace";
 import "./ManagementPage.css";
 import { useNavSection, useDepartments, usePageAccess } from "../../framework/pageAccess";
+import { NumInput } from "../../framework/NumInput";
 
 const MONTHS_FULL = [
   "January", "February", "March", "April", "May", "June",
@@ -447,9 +448,9 @@ function MetricChip({
           </div>
           <label className="tm-chip-lbl">Range ({unit || "€"})</label>
           <div className="tm-chip-range">
-            <input type="number" min="0" value={min} onChange={(e) => setMin(e.target.value)} placeholder="Min" />
+            <NumInput type="number" min="0" value={min} onChange={(e) => setMin(e.target.value)} placeholder="Min" />
             <span>–</span>
-            <input type="number" min="0" value={max} onChange={(e) => setMax(e.target.value)} placeholder="Max" />
+            <NumInput type="number" min="0" value={max} onChange={(e) => setMax(e.target.value)} placeholder="Max" />
           </div>
           {chipActive && <button className="tm-chip-clear" onClick={onClear}>Clear</button>}
         </div>

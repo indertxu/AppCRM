@@ -310,13 +310,33 @@ async function csSend(userId: string, to: string[], subject: string, html: strin
 /** Everything a tenant's sequences need, read once. */
 async function csTenantData(tenant: string) {
   const [cl, ow, he, tp, pr] = await Promise.all([
-    admin.from("clients").select("id, name, legal_name, contacts, cs_priority, project_type_id, tenant_id").eq("tenant_id", tenant),
+    admin.from("clients").select("id, name, legal_name, contacts, cs_priority, project_type_id, tenant_id, company_id").eq("tenant_id", tenant),
     admin.from("client_cs_owners").select("client_id, profile_id, is_primary").eq("tenant_id", tenant),
     admin.from("client_health").select("client_id, status").eq("tenant_id", tenant),
     admin.from("cs_email_templates").select("*").eq("tenant_id", tenant),
     admin.from("profiles").select("id, first_name, last_name, email").eq("tenant_id", tenant),
   ]);
   const clients = (cl.data ?? []) as any[];
+  // the people of each client's company (Companies › Contacts) count as its contacts too, after its own list
+  const coIds = [...new Set(clients.map((c) => c.company_id).filter(Boolean))] as string[];
+  const coPeople = new Map<string, any[]>();
+  for (let i = 0; i < coIds.length; i += 150) {
+    const { data: links } = await admin.from("company_contacts").select("company_id, contact_id").in("company_id", coIds.slice(i, i + 150));
+    const ls = (links ?? []) as any[];
+    const cids = [...new Set(ls.map((l) => l.contact_id))];
+    const ppl = new Map<string, any>();
+    for (let j = 0; j < cids.length; j += 200) {
+      const { data: cts } = await admin.from("contacts").select("id, first_name, last_name, email, is_billing").in("id", cids.slice(j, j + 200)).not("email", "is", null);
+      ((cts ?? []) as any[]).forEach((k) => { if (/@/.test(String(k.email ?? ""))) ppl.set(k.id, k); });
+    }
+    ls.forEach((l) => { const k = ppl.get(l.contact_id); if (k) coPeople.set(l.company_id, [...(coPeople.get(l.company_id) ?? []), { name: [k.first_name, k.last_name].filter(Boolean).join(" "), email: String(k.email).trim(), billing: !!k.is_billing }]); });
+  }
+  clients.forEach((c) => {
+    const own = (Array.isArray(c.contacts) ? c.contacts : []) as any[];
+    const seen = new Set(own.map((x) => lc(x?.email)).filter(Boolean));
+    const more = (c.company_id ? coPeople.get(c.company_id) ?? [] : []).filter((x) => { const e = lc(x.email); if (seen.has(e)) return false; seen.add(e); return true; });
+    if (more.length) c.contacts = [...own, ...more];
+  });
   const ids = clients.map((c) => c.id);
   const lines: any[] = [];
   for (let i = 0; i < ids.length; i += 150) {
@@ -828,11 +848,13 @@ async function csAdvance(seq: any, flow: CsNode[], r: any, c: any, d: CsTenant, 
       const me0 = seq.kind === "campaign" ? (seq.launched_by ?? seq.created_by) : seq.created_by;
       const sender = seq.sender === "owner" ? (d.owner[c.id] ?? me0) : me0;
       const fromBox = String(seq.from_address ?? "").trim() || null;
-      const to = csRecipients(c, seq.recipients, r.to_emails);
+      // addresses switched off in the editor (audience.exclude_emails) never get it
+      const offMail = new Set(((seq.audience?.exclude_emails ?? []) as string[]).map((e) => lc(e)));
+      const to = csRecipients(c, seq.recipients, r.to_emails).filter((e) => !offMail.has(lc(e)));
       const base: Record<string, unknown> = { tenant_id: tenant, sequence_id: seq.id, run_id: r.id, client_id: c.id, template_id: t?.id ?? null, step: Number(ptr!.split("/")[0]) || 0, node: ptr, sent_by: sender, variant: t?._variant ?? null };
       let skip: string | null = null;
       if (!t) skip = "The e-mail blueprint of this step was deleted.";
-      else if (!to.length) skip = "No e-mail address for this client (add a contact with an e-mail).";
+      else if (!to.length) skip = offMail.size && csRecipients(c, seq.recipients, r.to_emails).length ? "Everyone at this client was left out of it." : "No e-mail address for this client (add a contact with an e-mail).";
       else if (!sender) skip = "Nobody to send it from (no owner).";
       let sentNow = 0, failedNow = 0, throttled = false;
       if (skip) {

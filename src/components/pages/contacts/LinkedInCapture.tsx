@@ -18,6 +18,7 @@ import type { Session } from "@supabase/supabase-js";
 import { supabase, setRememberMe } from "../../api/supabase";
 import { saveContact, saveCompany, listCrmOptions, sectorOptions, matchSector, type Contact, type Company } from "../companies/companiesApi";
 import { normalizeLinkedIn, matchCountry, countryName, countryOptions } from "./contactProfile";
+import Select from "../../framework/Select";
 import "./ContactsPage.css";
 
 /* ══════════════════════════ what the extension sends ══════════════════════════ */
@@ -184,10 +185,8 @@ function LicField({ label, value, onChange, was, multi, keep, country }: { label
       <span>{label}{keep && <em>keeps CRM value</em>}</span>
       {multi ? <textarea rows={4} value={value} onChange={(e) => onChange(e.target.value)} />
         : country ? (
-          <select value={value} onChange={(e) => onChange(e.target.value)}>
-            <option value="">—</option>
-            {countryOptions().map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </select>
+          <Select size="sm" value={value} onChange={onChange} searchable aria-label={label}
+            options={[{ value: "", label: "—" }, ...countryOptions().map((o) => ({ value: o.value, label: o.label }))]} />
         ) : <input value={value} onChange={(e) => onChange(e.target.value)} />}
       {was != null && was !== "" && was !== value && <small>CRM: {was}</small>}
     </label>
@@ -313,11 +312,8 @@ function PersonCapture({ d }: { d: LiPerson }) {
             </div>
             <div className="lic-co">
               <span className="lic-co-k">Company</span>
-              <select value={coPick} onChange={(e) => setCoPick(e.target.value)}>
-                {clean(coName) && <option value="new">+ Create “{coName}”</option>}
-                <option value="none">No company</option>
-                {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
+              <Select size="sm" value={coPick} onChange={setCoPick} searchable aria-label="Company"
+                options={[...(clean(coName) ? [{ value: "new", label: `+ Create “${coName}”` }] : []), { value: "none", label: "No company" }, ...companies.map((c) => ({ value: c.id, label: c.name }))]} />
               {coPick === "new" && <input value={coName} onChange={(e) => setCoName(e.target.value)} placeholder="Company name" />}
             </div>
             {field("notes", "Notes", true)}
@@ -407,10 +403,8 @@ function CompanyCapture({ d }: { d: LiCompany }) {
               {COMPANY_LABELS.filter(([k]) => k !== "notes" && k !== "sector").map(([k, l]) => field(k, l))}
               <label className={`lic-f ${keep("sector") ? "is-keep" : ""}`}>
                 <span>Sector{keep("sector") && <em>keeps CRM value</em>}</span>
-                <select value={draft.sector} onChange={(e) => set("sector")(e.target.value)}>
-                  <option value="">—</option>
-                  {sectors.map((s) => <option key={s} value={s}>{s}</option>)}
-                </select>
+                <Select size="sm" value={draft.sector} onChange={(v) => set("sector")(v)} searchable aria-label="Sector"
+                  options={[{ value: "", label: "—" }, ...sectors.map((s) => ({ value: s, label: s }))]} />
                 {d.industry && <small>LinkedIn: {clean(d.industry)}</small>}
               </label>
             </div>

@@ -5,7 +5,17 @@ import Select from "../../framework/Select";
 import DatePicker from "../../framework/DatePicker";
 import { supabase } from "../../api/supabase";
 import { loadInactiveIds } from "../../framework/peopleStatus";
-import { busyAt } from "./invitesApi";
+import { busyAt, type BillMode, type Summon } from "./invitesApi";
+import { loadPrefs, savePref } from "../companies/companiesApi";
+
+/** What the Outlook event may show; the ones left out are kept in calendar_entries.outlook_hide. */
+const OUTLOOK_FIELDS: { k: string; label: string }[] = [
+  { k: "work_type", label: "Type of work" }, { k: "client", label: "Client" }, { k: "project", label: "Project" },
+  { k: "phase", label: "Phase" }, { k: "tasks", label: "Tasks" }, { k: "role", label: "Role" },
+  { k: "billable", label: "Billable time" }, { k: "client_people", label: "Client people" }, { k: "team", label: "Team" }, { k: "notes", label: "Notes" },
+];
+/** Left out unless you say otherwise: what anyone bills stays out of the invite. */
+const OUTLOOK_HIDE_DEFAULT = ["billable"];
 import { useAuth } from "../../api/AuthProvider";
 import { loadRoles } from "../settings/blueprintsApi";
 import {
@@ -13,6 +23,7 @@ import {
   sortRoles, type ClientRole, type RoleLine,
 } from "../clients/clientsTypes";
 import "./BookingModal.css";
+import { NumInput } from "../../framework/NumInput";
 
 const MODAL_HOURS = Array.from({ length: 17 }, (_, i) => 5 + i); // 5..21
 const MINUTES = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55];
@@ -54,8 +65,10 @@ clientId: string;
   repeat?: RepeatRule | null;
   /** On an entry of a series: change only this one, or this and the ones after it. */
   scope?: "one" | "following";
-  summoned?: { id: string; billable: number }[];
+  summoned?: Summon[];
   summonNote?: string;
+  /** Details left out of its Outlook event (115_invite_bill_mode.sql). */
+  outlookHide?: string[] | null;
 }
 
 /** "Every Monday", "every 2 weeks on Tue and Thu", "every weekday"… until a date or with no end. */
@@ -292,6 +305,15 @@ const closeDate = `${when.getFullYear()}-${String(when.getMonth() + 1).padStart(
    * them bills for attending, which is why it is a map and not a list.
    */
   const [summoned, setSummoned] = useState<Record<string, number>>({});
+  /** Who decides what each colleague bills: you ("fixed") or they, when they accept ("they"). */
+  const [summonMode, setSummonMode] = useState<Record<string, BillMode>>({});
+  /** What the Outlook event leaves out; a new entry starts from your last choice. */
+  const [olHide, setOlHide] = useState<string[]>(initial.outlookHide ?? OUTLOOK_HIDE_DEFAULT);
+  useEffect(() => {
+    if (initial.outlookHide) return;
+    loadPrefs().then((p) => { if (Array.isArray(p?.outlook_hide)) setOlHide(p.outlook_hide); }).catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const togOl = (k: string) => setOlHide((h) => { const n = h.includes(k) ? h.filter((x) => x !== k) : [...h, k]; void savePref("outlook_hide", n).catch(() => {}); return n; });
   const [summonNote, setSummonNote] = useState("");
   /** How the time is spent: on a call, on Teams, or in the room. */
   const [meetKind, setMeetKind] = useState<string>(initial.meetKind ?? "in_person");
@@ -308,11 +330,12 @@ const closeDate = `${when.getFullYear()}-${String(when.getMonth() + 1).padStart(
   useEffect(() => {
     if (!entryId) return;
     supabase.from("entry_invites")
-      .select("invitee_id, billable").eq("entry_id", entryId).neq("status", "declined")
+      .select("*").eq("entry_id", entryId).neq("status", "declined")
       .then(({ data }) => {
         const m: Record<string, number> = {};
-        ((data ?? []) as any[]).forEach((r) => { m[r.invitee_id] = Number(r.billable) || 0; });
-        setSummoned(m);
+        const md: Record<string, BillMode> = {};
+        ((data ?? []) as any[]).forEach((r) => { m[r.invitee_id] = Number(r.billable) || 0; md[r.invitee_id] = r.bill_mode === "they" ? "they" : "fixed"; });
+        setSummoned(m); setSummonMode(md);
       });
   }, [entryId]);
   const [mates, setMates] = useState<{ id: string; name: string; role: string }[]>([]);
@@ -335,6 +358,7 @@ const closeDate = `${when.getFullYear()}-${String(when.getMonth() + 1).padStart(
   const toggleMate = (id: string) =>
     setSummoned((m) => {
       if (id in m) { const { [id]: _drop, ...rest } = m; return rest; }
+      setSummonMode((x) => ({ ...x, [id]: x[id] ?? "fixed" }));
       return { ...m, [id]: isClientWork ? billable : 0 };
     });
 
@@ -620,7 +644,8 @@ startMin, endMin, type,
       phaseId: openPhaseId,
       taskId: taskIds.join(","),
      attendees: attendeeIds.join(","),
-      summoned: Object.entries(summoned).map(([id, b]) => ({ id, billable: isClientWork ? Number(b) || 0 : 0 })),
+      summoned: Object.entries(summoned).map(([id, b]) => ({ id, billable: isClientWork ? Number(b) || 0 : 0, mode: isClientWork ? summonMode[id] ?? "fixed" : "fixed" })),
+      outlookHide: olHide,
       summonNote: summonNote.trim() || undefined,
       notes,
       name: name.trim(),
@@ -1100,15 +1125,22 @@ if (!pickedLine) {
                           <span className={`bm-free ${busyMates.has(m.id) ? "is-busy" : ""}`}>{busyMates.has(m.id) ? "Busy" : "Free"}</span>
                           {on && <span className="bm-person-check">✓</span>}
                         </button>
-                        {on && isClientWork && (
-                          <div className="bm-summon-bill">
-                            <span>bills</span>
-                            <input type="number" min="0" step={step} className="cat-nospin" value={summoned[m.id]}
-                              onFocus={(e) => e.target.select()}
-                              onChange={(e) => setSummoned((s) => ({ ...s, [m.id]: Number(e.target.value) || 0 }))} />
-                            <em>{unitShort}</em>
-                          </div>
-                        )}
+                        {on && isClientWork && (() => {
+                          const mode = summonMode[m.id] ?? "fixed";
+                          return (
+                            <div className="bm-summon-bill">
+                              <span className="bm-bill-who" role="radiogroup" aria-label={`Who decides what ${m.name} bills`}>
+                                <button type="button" role="radio" aria-checked={mode === "fixed"} className={mode === "fixed" ? "is-on" : ""} onClick={() => setSummonMode((x) => ({ ...x, [m.id]: "fixed" }))} title="You decide what they bill">I set it</button>
+                                <button type="button" role="radio" aria-checked={mode === "they"} className={mode === "they" ? "is-on" : ""} onClick={() => setSummonMode((x) => ({ ...x, [m.id]: "they" }))} title="They decide when they accept">They decide</button>
+                              </span>
+                              <span>{mode === "they" ? "suggest" : "bills"}</span>
+                              <NumInput type="number" min="0" step={step} className="cat-nospin" value={summoned[m.id]}
+                                onFocus={(e) => e.target.select()}
+                                onChange={(e) => setSummoned((s) => ({ ...s, [m.id]: Number(e.target.value) || 0 }))} />
+                              <em>{unitShort}</em>
+                            </div>
+                          );
+                        })()}
                       </div>
                     );
                   })}
@@ -1188,6 +1220,22 @@ if (!pickedLine) {
             {picked.length > 0 && (
               <div className="bm6-chips">{picked.map((p) => <span key={p.taskId}>{p.taskName}<i>{p.phaseName}</i></span>)}</div>
             )}
+            <div className="bm6-ol">
+              <label className="bm6-label">In the Outlook invite <small>everyone invited sees it — tap to hide or show</small></label>
+              <div className="bm6-ol-chips">
+                {OUTLOOK_FIELDS.filter((f) => isClientWork || !["billable", "project", "phase", "tasks", "role", "client_people"].includes(f.k)).map((f) => {
+                  const off = olHide.includes(f.k);
+                  return (
+                    <button key={f.k} type="button" className={`bm6-ol-chip ${off ? "is-off" : ""}`} aria-pressed={!off} onClick={() => togOl(f.k)} title={off ? "Hidden in Outlook — click to show" : "Shown in Outlook — click to hide"}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{off
+                        ? <path d="M3 3l18 18M10.6 10.6a3 3 0 0 0 4.2 4.2M9.9 5.1A10.9 10.9 0 0 1 12 5c6.4 0 10 7 10 7a17.6 17.6 0 0 1-3.2 4.1M6.6 6.6C3.9 8.4 2 12 2 12s3.6 7 10 7a10.6 10.6 0 0 0 5.4-1.6" />
+                        : <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z" />}</svg>
+                      {f.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           </>
         );
     }

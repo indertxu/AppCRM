@@ -7,6 +7,7 @@ import TimeOffRequestPanel from "./TimeOffRequest";
 import { roleSeesAll } from "../companies/companiesApi";
 import { useAuth } from "../../api/AuthProvider";
 import "./CalendarSettingsModal.css";
+import { NumInput } from "../../framework/NumInput";
 
 export interface Targets {
   perDay: number;
@@ -238,7 +239,7 @@ export default function CalendarSettingsModal({
                 <span className="cws-target-note">Revenue expected each week.</span>
               </span>
               <span className="cws-amount">
-                <input type="number" min="0" step="100" className="cws-amount-input"
+                <NumInput type="number" min="0" step="100" className="cws-amount-input"
                   value={targets.minRevenueWeek}
                   onChange={(e) => setTargets((t) => ({ ...t, minRevenueWeek: Number(e.target.value) || 0 }))} />
               </span>
@@ -251,7 +252,7 @@ export default function CalendarSettingsModal({
                 <span className="cws-target-note">Revenue expected from billable days.</span>
               </span>
 <span className="cws-amount">
-<input
+<NumInput
                   type="number"
                   min="0"
                   step="100"
@@ -356,7 +357,7 @@ export default function CalendarSettingsModal({
                 {setHoursPerDay && (
                   <label className="cws-gen-f cws-gen-hpd">
                     <span>Hours in a billed day</span>
-                    <input type="number" min="1" max="24" step="0.5"
+                    <NumInput type="number" min="1" max="24" step="0.5"
                       value={hoursPerDay}
                       onChange={(e) => setHoursPerDay(Number(e.target.value) || 8)} />
                     <em>
@@ -376,7 +377,7 @@ export default function CalendarSettingsModal({
                   ] as [keyof CapValue, string, string][]).map(([field, label, ph]) => (
                     <label className="cws-gen-f" key={field}>
                       <span>{label}</span>
-                      <input type="number" min="0" placeholder={ph}
+                      <NumInput type="number" min="0" placeholder={ph}
                         value={genBonus[field] ?? ""}
                         onChange={(e) => setGenBonus((g) => ({
                           ...g, [field]: e.target.value === "" ? null : Number(e.target.value),
@@ -396,7 +397,7 @@ export default function CalendarSettingsModal({
                   const inits = c.name.split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase() || "?";
                   const isOpen = capOpen === c.userId;
                   const num = (field: keyof CapValue, ph: string, max?: number) => (
-                    <input
+                    <NumInput
                       className="cws-cap-input" type="number" min="0" max={max} step={field.includes("Billing") ? 100 : 0.5}
                       placeholder={ph}
                       value={v[field] ?? ""}

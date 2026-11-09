@@ -36,6 +36,7 @@ import { PageLoader } from "../../framework/AppLayout";
 import ContactExport from "../contacts/ContactExport";
 import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
 import "./CompaniesPage.css";
+import { NumInput } from "../../framework/NumInput";
 
 const empty = (): Company => ({
   name: "", legal_name: "", vat_number: "", reg_number: "", website: "", linkedin: "", phone: "", email: "", notes: "",
@@ -946,7 +947,7 @@ function NewContactInline({ fields, onAdd, onCancel }: {
           <div className="dw-f dw-col2" key={f.id}>
             <label>{f.label}{f.required && <span className="dw-req"> *</span>}</label>
             {f.type === "text" && <input value={customVal(f.id) ?? ""} onChange={(e) => setCustom(f.id, e.target.value)} />}
-            {f.type === "number" && <input type="number" value={customVal(f.id) ?? ""} onFocus={(e) => e.target.select()}
+            {f.type === "number" && <NumInput type="number" value={customVal(f.id) ?? ""} onFocus={(e) => e.target.select()}
               onChange={(e) => setCustom(f.id, e.target.value === "" ? "" : Number(e.target.value))} />}
             {f.type === "date" && <DatePicker value={customVal(f.id) ?? ""} onChange={(v) => setCustom(f.id, v)} />}
             {f.type === "boolean" && (
@@ -1441,7 +1442,7 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
                         <input value={customVal(f.id) ?? ""} onChange={(e) => setCustom(f.id, e.target.value)} />
                       )}
                       {f.type === "number" && (
-                        <input type="number" value={customVal(f.id) ?? ""} onFocus={(e) => e.target.select()}
+                        <NumInput type="number" value={customVal(f.id) ?? ""} onFocus={(e) => e.target.select()}
                           onChange={(e) => setCustom(f.id, e.target.value === "" ? "" : Number(e.target.value))} />
                       )}
                       {f.type === "date" && (
@@ -3684,8 +3685,8 @@ function FxRow<T>({ c, f, onChange, onRemove, onPickField, i }: { c: FCond; f: F
         {f.type === "text" && fxNeedsValue(c.op) && <input className="fx-in" autoFocus value={c.text ?? ""} onChange={(e) => set({ text: e.target.value })} placeholder="Type…" />}
         {f.type === "number" && fxNeedsValue(c.op) && (
           <span className="fx-pair">
-            <input className="fx-in is-num" type="number" value={c.min ?? ""} onChange={(e) => set({ min: e.target.value })} placeholder={c.op === "between" ? "From" : "Value"} />
-            {c.op === "between" && <><span>and</span><input className="fx-in is-num" type="number" value={c.max ?? ""} onChange={(e) => set({ max: e.target.value })} placeholder="To" /></>}
+            <NumInput className="fx-in is-num" type="number" value={c.min ?? ""} onChange={(e) => set({ min: e.target.value })} placeholder={c.op === "between" ? "From" : "Value"} />
+            {c.op === "between" && <><span>and</span><NumInput className="fx-in is-num" type="number" value={c.max ?? ""} onChange={(e) => set({ max: e.target.value })} placeholder="To" /></>}
           </span>
         )}
         {f.type === "date" && ["before", "after", "between"].includes(c.op) && (
@@ -4103,7 +4104,7 @@ export function BulkBar({ count, noun, actions, onClear, onSelectAll, allOn, tot
         <form className="bk-pop-input" onSubmit={(e) => { e.preventDefault(); if (val !== "") void go(a, val); }}>
           {a.input === "date"
             ? <input type="date" autoFocus value={val} onChange={(e) => setVal(e.target.value)} />
-            : <span className="bk-pop-pct"><input type="number" min={0} max={100} step={5} autoFocus value={val} onChange={(e) => setVal(e.target.value)} placeholder="0–100" /><em>%</em></span>}
+            : <span className="bk-pop-pct"><NumInput type="number" min={0} max={100} step={5} autoFocus value={val} onChange={(e) => setVal(e.target.value)} placeholder="0–100" /><em>%</em></span>}
           <button type="submit" disabled={val === ""}>Apply</button>
           <button type="button" className="is-clear" onClick={() => void go(a, "")}>Clear it</button>
         </form>

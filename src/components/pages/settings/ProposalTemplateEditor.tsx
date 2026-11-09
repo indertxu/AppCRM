@@ -25,6 +25,7 @@ import { listCrmOptions, DEFAULT_SECTORS } from "../companies/companiesApi";
 import { loadProducts, loadServices } from "./catalogApi";
 import "./ProposalTemplateEditor.css";
 import { useNavSection } from "../../framework/pageAccess";
+import { NumInput } from "../../framework/NumInput";
 
 /**
  * Settings → Proposal template.
@@ -138,7 +139,7 @@ function Area({ value, onChange, placeholder, rows = 3 }: { value: any; onChange
 function Num({ value, onChange, suffix, step = 1 }: { value: any; onChange: (v: number | undefined) => void; suffix?: string; step?: number }) {
   return (
     <div className="pte-num">
-      <input className="pte-in" type="number" step={step} min={0} value={value ?? ""}
+      <NumInput className="pte-in" type="number" step={step} min={0} value={value ?? ""}
         onChange={(e) => onChange(e.target.value === "" ? undefined : Number(e.target.value))} />
       {suffix && <span>{suffix}</span>}
     </div>
@@ -2372,7 +2373,7 @@ export function ShapePanel({ s, slideW, slideH, onBox, onText, onStyle, onRename
   const num = (label: string, v: number, set: (emu: number) => void, max: number) => (
     <label className="dse-num">
       <span>{label}</span>
-      <input key={`${label}${v}`} type="number" step="0.1" defaultValue={cm(v)}
+      <NumInput key={`${label}${v}`} type="number" step="0.1" defaultValue={cm(v)}
         onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
         onBlur={(e) => { const x = parseFloat(e.target.value.replace(",", ".")); if (Number.isFinite(x) && Math.abs(x - cm(v)) > 0.004) set(Math.max(-max, Math.min(max * 2, x * EMU_CM))); }} />
       <em>cm</em>
@@ -2454,7 +2455,7 @@ export function ShapePanel({ s, slideW, slideH, onBox, onText, onStyle, onRename
           <h4>Text look</h4>
           <div className="dse-look">
             <label className="dse-num is-size">
-              <input key={`sz${s.style?.size}`} type="number" min="4" max="200" step="0.5" defaultValue={s.style?.size ?? ""} placeholder="pt"
+              <NumInput key={`sz${s.style?.size}`} type="number" min="4" max="200" step="0.5" defaultValue={s.style?.size ?? ""} placeholder="pt"
                 onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
                 onBlur={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v) && v !== s.style?.size) onStyle({ size: Math.max(4, Math.min(200, v)) }); }} />
               <em>pt</em>
@@ -2486,10 +2487,9 @@ export function ShapePanel({ s, slideW, slideH, onBox, onText, onStyle, onRename
           </div>
         ))}
         <div className="dse-cond-add">
-          <input list="dse-token-list" value={cond} placeholder="Field, e.g. product.y3.annual" onChange={(e) => setCond(e.target.value.replace(/[{}?\s]/g, ""))}
-            onKeyDown={(e) => { if (e.key === "Enter" && cond) { onRename(withConds(s.name, Array.from(new Set([...conds, cond])))); setCond(""); } }} />
+          <Select size="sm" value={cond} onChange={setCond} searchable placeholder="Pick a field, e.g. product.y3.annual" aria-label="Field"
+            options={DECK_TOKENS.filter((t) => !conds.includes(t.key)).map((t) => ({ value: t.key, label: t.label, hint: t.key }))} />
           <button className="dse-btn is-sm" disabled={!cond} onClick={() => { onRename(withConds(s.name, Array.from(new Set([...conds, cond])))); setCond(""); }}>Add</button>
-          <datalist id="dse-token-list">{DECK_TOKENS.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}</datalist>
         </div>
       </section>}
 
@@ -3436,7 +3436,7 @@ export function DocBuilder(p: DocBuilderProps) {
                     const el = ei >= 0 ? sp.els[ei] ?? null : null;
                     const setSp = (patch: Partial<typeof sp>) => patchBlock(block.id, { slide: { ...sp, ...patch } });
                     const num = (k: "x" | "y" | "w" | "h", l: string) => (
-                      <label className="dxf-num"><span>{l}</span><input type="number" value={Math.round(el?.[k] ?? 0)} onChange={(e) => patchEl(block.id, ei, { [k]: Number(e.target.value) || 0 } as Partial<SlideEl>)} /></label>
+                      <label className="dxf-num"><span>{l}</span><NumInput type="number" value={Math.round(el?.[k] ?? 0)} onChange={(e) => patchEl(block.id, ei, { [k]: Number(e.target.value) || 0 } as Partial<SlideEl>)} /></label>
                     );
                     return (
                       <>
@@ -4304,9 +4304,9 @@ function DocTemplateEditor({ initial, autoAi, onClose }: { initial: DocTemplate;
       </section>
       <section className="dxf-sec">
         <h4>Commercial terms</h4>
-        <label className="dxf-row"><span>Offer valid (days)</span><input type="number" min={0} value={t.terms?.validityDays ?? 30} onChange={(e) => upd({ terms: { ...t.terms, validityDays: Number(e.target.value) || 0 } })} /></label>
-        <label className="dxf-row"><span>Payment (days)</span><input type="number" min={0} value={t.terms?.paymentDays ?? 30} onChange={(e) => upd({ terms: { ...t.terms, paymentDays: Number(e.target.value) || 0 } })} /></label>
-        <label className="dxf-row"><span>Yearly increase (%)</span><input type="number" step={0.5} min={0} value={t.terms?.annualIncreasePct ?? 0} onChange={(e) => upd({ terms: { ...t.terms, annualIncreasePct: Number(e.target.value) || 0 } })} /></label>
+        <label className="dxf-row"><span>Offer valid (days)</span><NumInput type="number" min={0} value={t.terms?.validityDays ?? 30} onChange={(e) => upd({ terms: { ...t.terms, validityDays: Number(e.target.value) || 0 } })} /></label>
+        <label className="dxf-row"><span>Payment (days)</span><NumInput type="number" min={0} value={t.terms?.paymentDays ?? 30} onChange={(e) => upd({ terms: { ...t.terms, paymentDays: Number(e.target.value) || 0 } })} /></label>
+        <label className="dxf-row"><span>Yearly increase (%)</span><NumInput type="number" step={0.5} min={0} value={t.terms?.annualIncreasePct ?? 0} onChange={(e) => upd({ terms: { ...t.terms, annualIncreasePct: Number(e.target.value) || 0 } })} /></label>
         <p className="dxf-sub">The deal's contract terms win when it has them.</p>
       </section>
       <section className="dxf-sec">

@@ -17,6 +17,9 @@ export interface EntryInvite {
   organiser_id: string;
   invitee_id: string;
   billable: number;
+  /** Who decides what they bill (115_invite_bill_mode.sql): the organiser ("fixed", billable is final) or the
+   *  invitee when accepting ("they", billable is the organiser's suggestion). */
+  bill_mode?: BillMode;
   billing_line: string;
   /** The role the invitee's time is logged on (the organiser's role on the entry). */
   role_id?: string | null;
@@ -24,6 +27,12 @@ export interface EntryInvite {
   message: string | null;
   created_at: string;
 }
+
+export type BillMode = "fixed" | "they";
+/** A colleague asked to come, and what they bill for it. */
+export type Summon = { id: string; billable: number; mode?: BillMode };
+/** Accepting needs a word on billing: the organiser set what you bill, or left it to you. Not for internal time. */
+export const asksBill = (inv: { billable: number; bill_mode?: BillMode | null }) => inv.bill_mode === "they" || Number(inv.billable) > 0;
 
 /** What an invitee needs to show the invite without opening anything else. */
 export interface InviteCard extends EntryInvite {
@@ -51,7 +60,7 @@ export interface InviteCard extends EntryInvite {
 export async function inviteToEntry(
   entryId: string,
   organiserId: string,
-  people: { id: string; billable: number }[],
+  people: Summon[],
   line: string,
   message?: string,
   roleId?: string | null,
@@ -63,6 +72,7 @@ export async function inviteToEntry(
       organiser_id: organiserId,
       invitee_id: p.id,
       billable: p.billable,
+      ...(p.mode ? { bill_mode: p.mode } : {}),
       billing_line: line,
       ...(roleId !== undefined ? { role_id: roleId || null } : {}),
       message: message ?? null,
@@ -147,7 +157,7 @@ const todayIso = () => {
 };
 
 /** The invitee's own entry for an invite: the organiser's booking, on their calendar. */
-const entryFor = (inv: InviteCard, userId: string, workTypeId?: string | null) => ({
+const entryFor = (inv: InviteCard, userId: string, workTypeId?: string | null, bill?: number | null) => ({
   user_id: userId,
   kind: inv.kind ?? "work",
   title: inv.title,
@@ -161,7 +171,7 @@ const entryFor = (inv: InviteCard, userId: string, workTypeId?: string | null) =
   company_id: inv.company_id,
   tracking_id: inv.tracking_id,
   meeting_kind: inv.meeting_kind,
-  billable: inv.billable,
+  billable: bill != null ? bill : inv.billable,
   billing_line: inv.billing_line,
   // Same role as the organiser booked it on, so it bills on that project role.
   ...(inv.role_id ? { role_id: inv.role_id } : {}),
@@ -177,14 +187,16 @@ export async function acceptInvite(
   /** The invitee's own choice of work type, so the time lands in the right
    *  bucket rather than inheriting whatever the organiser used. */
   workTypeId?: string | null,
+  /** What they bill, when they answered the billing question (else the invite's own figure). */
+  bill?: number | null,
 ): Promise<string | null> {
   // The accepted entry mirrors the organiser's: same kind, same deal, same
   // company, so it reads the same on both calendars.
-  const { data: created, error } = await supabase.from("calendar_entries").insert(entryFor(inv, userId, workTypeId)).select("id").single();
+  const { data: created, error } = await supabase.from("calendar_entries").insert(entryFor(inv, userId, workTypeId, bill)).select("id").single();
   if (error) return error.message;
 
   const { error: uErr } = await supabase.from("entry_invites")
-    .update({ status: "accepted", responded_at: new Date().toISOString(), seen_by_organiser: false })
+    .update({ status: "accepted", responded_at: new Date().toISOString(), seen_by_organiser: false, ...(bill != null ? { billable: bill } : {}) })
     .eq("id", inv.id);
   if (uErr) {
     // Roll the entry back rather than leave a booking with no invite behind it.
@@ -207,7 +219,9 @@ export async function coveredBy(inv: InviteCard, userId: string): Promise<Invite
  * accept once and all of them land on your calendar (and the dates the series
  * adds later follow the same answer — the database does that).
  */
-export async function answerInvite(inv: InviteCard, userId: string, accept: boolean, workTypeId?: string | null): Promise<string | null> {
+export async function answerInvite(inv: InviteCard, userId: string, accept: boolean, workTypeId?: string | null, bill?: number | null): Promise<string | null> {
+  // only when the invitee may decide: a figure the organiser fixed stays theirs
+  if (inv.bill_mode !== "they") bill = null;
   const list = await coveredBy(inv, userId);
   const ids = list.map((i) => i.id);
   const now = new Date().toISOString();
@@ -219,8 +233,8 @@ export async function answerInvite(inv: InviteCard, userId: string, accept: bool
     }
     return null;
   }
-  if (list.length === 1) return acceptInvite(list[0], userId, workTypeId);
-  const rows = list.map((i) => entryFor(i, userId, workTypeId));
+  if (list.length === 1) return acceptInvite(list[0], userId, workTypeId, bill);
+  const rows = list.map((i) => entryFor(i, userId, workTypeId, bill));
   const made: string[] = [];
   for (let k = 0; k < rows.length; k += 200) {
     const { data, error } = await supabase.from("calendar_entries").insert(rows.slice(k, k + 200)).select("id");
@@ -228,7 +242,7 @@ export async function answerInvite(inv: InviteCard, userId: string, accept: bool
     made.push(...((data ?? []) as any[]).map((r) => r.id as string));
   }
   for (let k = 0; k < ids.length; k += 200) {
-    const { error } = await supabase.from("entry_invites").update({ status: "accepted", responded_at: now, seen_by_organiser: false }).in("id", ids.slice(k, k + 200));
+    const { error } = await supabase.from("entry_invites").update({ status: "accepted", responded_at: now, seen_by_organiser: false, ...(bill != null ? { billable: bill } : {}) }).in("id", ids.slice(k, k + 200));
     if (error) { await supabase.from("calendar_entries").delete().in("id", made); return error.message; }
   }
   return null;
@@ -475,7 +489,7 @@ export async function busyAt(
 export async function syncInvites(
   entryId: string,
   organiserId: string,
-  people: { id: string; billable: number }[],
+  people: Summon[],
   line: string,
   message?: string,
   /** The role on the entry; invitees log their time on it too. */
@@ -483,7 +497,7 @@ export async function syncInvites(
 ): Promise<string | null> {
   const role = roleId !== undefined ? { role_id: roleId || null } : {};
   const { data } = await supabase.from("entry_invites")
-    .select("id, invitee_id, status").eq("entry_id", entryId);
+    .select("id, invitee_id, status, billable, bill_mode").eq("entry_id", entryId);
   const existing = (data ?? []) as any[];
   const wanted = people.map((p) => p.id);
 
@@ -500,6 +514,7 @@ export async function syncInvites(
       .update({
         status: "pending", responded_at: null, seen_by_organiser: true,
         billable: people.find((p) => p.id === a.invitee_id)?.billable ?? 0,
+        ...(people.find((p) => p.id === a.invitee_id)?.mode ? { bill_mode: people.find((p) => p.id === a.invitee_id)!.mode } : {}),
         billing_line: line, ...role, message: message ?? null,
       })
       .eq("id", a.id);
@@ -512,10 +527,17 @@ export async function syncInvites(
     const { error } = await supabase.from("entry_invites").insert(
       added.map((p) => ({
         entry_id: entryId, organiser_id: organiserId, invitee_id: p.id,
-        billable: p.billable, billing_line: line, ...role, message: message ?? null,
+        billable: p.billable, ...(p.mode ? { bill_mode: p.mode } : {}), billing_line: line, ...role, message: message ?? null,
       })),
     );
     if (error) return error.message;
+  }
+  // still waiting for an answer: what they bill (and who decides it) follows the organiser's latest choice
+  const waiting = existing.filter((i) => i.status === "pending" && people.some((p) => p.id === i.invitee_id));
+  for (const w of waiting) {
+    const p = people.find((x) => x.id === w.invitee_id)!;
+    if (Number(w.billable) === Number(p.billable) && (!p.mode || w.bill_mode === p.mode)) continue;
+    await supabase.from("entry_invites").update({ billable: p.billable, ...(p.mode ? { bill_mode: p.mode } : {}) }).eq("id", w.id);
   }
   return null;
 }

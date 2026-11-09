@@ -14,6 +14,7 @@ import {
 } from "./pipelineApi";
 import { loadBlueprintData, type Blueprint } from "./blueprintsApi";
 import "./PipelinePage.css";
+import { NumInput } from "../../framework/NumInput";
 
 interface Props { onBack: () => void; }
 
@@ -1411,7 +1412,7 @@ function PhasePanel({ phase, focusName, depts, products, services, pipelines, is
             <>
               <span className="pl-outcome-label">Close probability</span>
               <div className="pl-prob">
-                <input
+                <NumInput
                   className="pl-prob-input"
                   type="number" min={0} max={100} step={5}
                   value={phase.close_probability ?? ""}

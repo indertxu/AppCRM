@@ -2959,3 +2959,8 @@ body.is-dragsorting, body.is-dragsorting * { cursor: grabbing !important; user-s
   .hs-wk-h small { font-size: 9.5px; }
 }
 @container (max-width: 330px) { .hs-wk-h small { display: none; } }
+
+/* 116 · GDPR: only mail from people in the CRM — the note in the desk's Mailboxes tab */
+.ts-lead.ts-gdpr,
+.td-back.tm-back > .ts p.ts-lead.ts-gdpr { display: flex; align-items: flex-start; gap: 9px; margin: 2px 0 4px; padding: 10px 12px; border: 1px solid #d3e7dc; border-radius: 12px; background: #eef7f2; color: #2c5444; font-size: 12px; line-height: 1.5; }
+.ts-gdpr svg { flex: 0 0 auto; width: 15px; height: 15px; margin-top: 1px; color: #14855a; }

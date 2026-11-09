@@ -40,6 +40,7 @@ import {
   languageOptions, languageName, countryLabel, withProfileCodes, normalizeLinkedIn, isLinkedIn, linkedInHandle, isReservedLabel,
 } from "./contactProfile";
 import "./ContactsPage.css";
+import { NumInput } from "../../framework/NumInput";
 
 const empty = (): Contact => ({
   first_name: "", last_name: "", position: "", email: "", phone: "", phone_ext: "", landline: "", landline_ext: "", is_billing: false, notes: "", companyIds: [],
@@ -1078,7 +1079,7 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
                         <input value={customVal(f.id) ?? ""} onChange={(e) => setCustom(f.id, e.target.value)} />
                       )}
                       {f.type === "number" && (
-                        <input type="number" value={customVal(f.id) ?? ""} onFocus={(e) => e.target.select()}
+                        <NumInput type="number" value={customVal(f.id) ?? ""} onFocus={(e) => e.target.select()}
                           onChange={(e) => setCustom(f.id, e.target.value === "" ? "" : Number(e.target.value))} />
                       )}
                       {f.type === "date" && (

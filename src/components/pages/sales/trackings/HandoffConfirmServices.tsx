@@ -9,6 +9,7 @@ import type { Calculator } from "../../settings/catalogApi";
 import { FileIcon, kindOf, prettySize, openTrackingFile } from "./TrackingFiles";
 import { MentionText } from "../../../framework/MentionInput";
 import "./HandoffConfirmServices.css";
+import { NumInput } from "../../../framework/NumInput";
 
 export interface ConfirmContact { id: string; sourceId?: string | null; name: string; position: string; email: string; phone: string; billing: boolean; selected?: boolean; }
 export interface ConfirmClient {
@@ -703,7 +704,7 @@ export default function HandoffConfirmServices({ clientName, skipPrompt = false,
                 {field("Legal name", client.legalName, (v) => setClient((c) => ({ ...c, legalName: v })), true)}
                 {field("VAT / Tax ID", client.vatNumber, (v) => setClient((c) => ({ ...c, vatNumber: v })))}
                 <label className="hx-ef">
-                  <input type="number" min={0} value={paymentDays ?? ""} placeholder=" " onChange={(e) => setPaymentDays(e.target.value === "" ? null : Number(e.target.value))} />
+                  <NumInput type="number" min={0} value={paymentDays ?? ""} placeholder=" " onChange={(e) => setPaymentDays(e.target.value === "" ? null : Number(e.target.value))} />
                   <span>Payment terms (days net)</span>
                 </label>
               </div>

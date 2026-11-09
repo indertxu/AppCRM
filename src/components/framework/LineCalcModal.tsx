@@ -6,6 +6,7 @@ import { lineBreakdown, yearAmounts, hasIncrements, partnerByPeriod, PAY_FREQUEN
 import Select from "./Select";
 import { listPartnerRates, partnerList, partnerDefault, type PartnerRate } from "../pages/companies/companiesApi";
 import "./LineCalcModal.css";
+import { NumInput } from "./NumInput";
 
 /** Partners and their default cuts, read once per visit. */
 // The partners are the companies with a partner type (Settings › Companies page); read again on each opening.
@@ -34,7 +35,7 @@ function Step({ value, onChange, step = 1, min = 0, max, disabled, suffix, size,
     <div className={`lcx-step ${size ? `is-${size}` : ""} ${disabled ? "is-disabled" : ""}`}>
       <button type="button" onClick={() => onChange(clamp(value - step))} disabled={disabled || value <= min} aria-label={`Less ${label ?? ""}`}>−</button>
       <span className="lcx-step-val">
-        <input type="number" min={min} max={max} step={step} value={value} disabled={disabled} aria-label={label}
+        <NumInput type="number" min={min} max={max} step={step} value={value} disabled={disabled} aria-label={label}
           onFocus={(e) => e.target.select()} onChange={(e) => onChange(clamp(parseFloat(e.target.value) || 0))} />
         {suffix && <em>{suffix}</em>}
       </span>
@@ -70,7 +71,7 @@ function DiscountControl({ dkey, amount, discounts, setDisc, money }: {
         <button type="button" className={d.mode === "amount" ? "is-on" : ""} onClick={() => setDisc(dkey, { mode: "amount" })}>{"€"}</button>
       </div>
       <label className="lcx-disc-in">
-        <input type="number" min="0" value={d.value} onFocus={(e) => e.target.select()} autoFocus={fresh}
+        <NumInput type="number" min="0" value={d.value} onFocus={(e) => e.target.select()} autoFocus={fresh}
           onChange={(e) => setDisc(dkey, { value: parseFloat(e.target.value) || 0 })} aria-label="Discount" />
       </label>
       <span className="lcx-disc-off">−{money(off)}</span>
@@ -87,7 +88,7 @@ function RateControl({ rkey, rates, baseRate, setRate, unit }: {
   const v = rates[rkey] == null ? baseRate : rates[rkey];
   return (
     <label className={`lcx-rate ${rates[rkey] != null && rates[rkey] !== baseRate ? "is-custom" : ""}`} title="Rate for this row">
-      <input type="number" min="0" value={v} onFocus={(e) => e.target.select()}
+      <NumInput type="number" min="0" value={v} onFocus={(e) => e.target.select()}
         onChange={(e) => setRate(rkey, parseFloat(e.target.value) || 0)} />
       <span>€/{unit}</span>
     </label>
@@ -129,7 +130,7 @@ export function IncrementsEditor({ value, onChange, firstYear, years, money, com
         </div>
         {(value.mode === "pct" || value.mode === "fixed") && (
           <label className="lc-money lc-inc-val">
-            <input type="number" min="0" step={value.mode === "pct" ? 0.5 : 50} value={Number(value.value) || 0} onFocus={(e) => e.target.select()}
+            <NumInput type="number" min="0" step={value.mode === "pct" ? 0.5 : 50} value={Number(value.value) || 0} onFocus={(e) => e.target.select()}
               onChange={(e) => set({ value: parseFloat(e.target.value) || 0 })} aria-label="Yearly increase" />
             <em>{value.mode === "pct" ? "% / year" : "€ / year"}</em>
           </label>
@@ -146,7 +147,7 @@ export function IncrementsEditor({ value, onChange, firstYear, years, money, com
                 <span className="lc-inc-y">Year {i + 1}</span>
                 {value.mode === "custom" && i > 0 ? (
                   <label className="lc-inc-in">
-                    <input type="number" min="0" value={value.perYear?.[i] ?? Math.round(a)} onFocus={(e) => e.target.select()}
+                    <NumInput type="number" min="0" value={value.perYear?.[i] ?? Math.round(a)} onFocus={(e) => e.target.select()}
                       onChange={(e) => { const arr = [...(value.perYear ?? amounts.map((x) => Math.round(x)))]; arr[i] = parseFloat(e.target.value) || 0; set({ perYear: arr }); }} />
                     <em>€</em>
                   </label>
@@ -589,7 +590,7 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
               <span className="lcx-vp-k">{priceLabel}<small>for this deal</small></span>
               <label className="lcx-vp-in">
                 {!isQtyCalc && v.var_type !== "percent" && <i>€</i>}
-                <input type="number" min="0" step={v.var_type === "percent" ? 0.5 : isQtyCalc ? 0.25 : 1} value={+amtNow.toFixed(2)} tabIndex={isOpen ? 0 : -1}
+                <NumInput type="number" min="0" step={v.var_type === "percent" ? 0.5 : isQtyCalc ? 0.25 : 1} value={+amtNow.toFixed(2)} tabIndex={isOpen ? 0 : -1}
                   onFocus={(e) => e.target.select()} onChange={(e) => setPrice(parseFloat(e.target.value) || 0)} aria-label={`${v.name} — ${priceLabel}`} />
                 {priceUnit && <em>{priceUnit}</em>}
               </label>
@@ -763,7 +764,7 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
                   <DiscountControl dkey={BASE_KEY} amount={qtyCalc ? (bd.rows.find((r) => r.key === BASE_KEY)?.amount ?? 0) : basePrice} discounts={discounts} setDisc={setDisc} money={money} />
                   <label className={`lcx-money ${listPrice != null && override != null ? "is-changed" : ""}`}>
                     <span>€</span>
-                    <input type="number" min="0" value={+basePrice.toFixed(2)} onFocus={(e) => e.target.select()} aria-label="Price"
+                    <NumInput type="number" min="0" value={+basePrice.toFixed(2)} onFocus={(e) => e.target.select()} aria-label="Price"
                       onChange={(e) => { const v = parseFloat(e.target.value) || 0; if (listPrice != null) setOverride(Math.abs(v - listPrice) > 0.005 ? v : null); else setManualPrice(v); }} />
                     <em>{isService ? `/${unit ?? "day"}` : perSuffix}</em>
                   </label>
@@ -823,7 +824,7 @@ export default function LineCalcModal({ title, line, tiers, roles, roleName, cal
                         <button type="button" className={partnerMode === "amount" ? "is-on" : ""} onClick={() => setPartnerMode("amount")}>{"€"}</button>
                       </div>
                       <label className="lcx-money is-sm">
-                        <input type="number" min="0" value={partnerValue} onFocus={(e) => e.target.select()}
+                        <NumInput type="number" min="0" value={partnerValue} onFocus={(e) => e.target.select()}
                           onChange={(e) => setPartnerValue(parseFloat(e.target.value) || 0)} aria-label="Partner cut" />
                         <em>{partnerMode === "percent" ? "%" : "€"}</em>
                       </label>

@@ -4,6 +4,7 @@ import { LEVELS, TITLES } from "./NewUserModal";
 import { initials, type UserRow } from "./UsersView";
 import Select from "../../framework/Select";
 import { passwordProblem, PASSWORD_HINT } from "../../login/LoginPage";
+import { NumInput } from "../../framework/NumInput";
 
 interface Props {
   user: UserRow;
@@ -84,7 +85,7 @@ export default function UserDetailModal({ user, canEditRole, allowedLevels, onSa
             <div className="cl-field"><label>Surname</label><input className="cl-input" value={last} onChange={(e) => setLast(e.target.value)} /></div>
             <div className="cl-field"><label>Phone</label><input className="cl-input" value={phone} onChange={(e) => setPhone(e.target.value)} /></div>
             <div className="cl-field"><label>Email</label><input type="email" className="cl-input" value={email} onChange={(e) => setEmail(e.target.value)} /></div>
-            <div className="cl-field"><label>Yearly wage</label><input type="number" min="0" className="cl-input" value={wage} onChange={(e) => setWage(Number(e.target.value) || 0)} /></div>
+            <div className="cl-field"><label>Yearly wage</label><NumInput type="number" min="0" className="cl-input" value={wage} onChange={(e) => setWage(Number(e.target.value) || 0)} /></div>
             <div className="cl-field"><label>Start date</label><DatePicker value={startDate} onChange={setStartDate} /></div>
             <div className="cl-field"><label>Birthday</label><DatePicker value={birthday} onChange={setBirthday} /></div>
             <div className="cl-field"><label>Role</label>
