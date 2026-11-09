@@ -126,7 +126,7 @@ Source in `supabase/functions/**`. Both apps call them; changes must stay backwa
 - Read the other side's entries since your last session before you start working.
 
 ## 7. SQL numbering
-Next free number: **118**  ← update this line when you claim one (and say which file in the log).
+Next free number: **119**  ← update this line when you claim one (and say which file in the log).
 | # | File | Chat | What |
 |---|---|---|---|
 | 98 | sql/98_client_default_folders.sql | Enterprise | client folder templates → new clients |
@@ -149,6 +149,7 @@ Next free number: **118**  ← update this line when you claim one (and say whic
 | 115 | sql/115_invite_bill_mode.sql | Enterprise | `entry_invites.bill_mode` fixed/they (who decides what an invitee bills); `alert_invite()` gives new series dates the figure the invitee chose; `calendar_entries.outlook_hide` (details left out of the Outlook event) — applied 2026-11-06 |
 | 116 | sql/116_mail_known_only.sql | Enterprise | GDPR: `mail_is_known(tenant, email)` / `mail_row_known(...)` (contact, colleague, company e-mail, client contact list, or a company's own website / e-mail domain, or a company-linked contact's domain — never public domains); triggers drop unknown mail on insert (`ticket_mail_messages`) and e-mail tickets from unknown requesters (`tracking_tasks`); restrictive SELECT policy `mail_known_only` hides stored mail whose people left the CRM — applied 2026-11-07 |
 | 117 | sql/117_purge_unknown_mail.sql | Enterprise | deletes the e-mail stored before 116 from people not in the CRM (64 rows on Konsolidator) — to run in the SQL editor |
+| 118 | sql/118_project_team_alerts.sql | Enterprise | `alert_project_team()` + trigger `trg118_project_team_alerts` (after insert / update of team on `projects`): each person on the team gets a `user_alerts` row — kind `project_new` (created, e.g. Incoming › Build project) or `project_added` (put on an existing team), ref_type `project`, title = client, body = service · kick-off — applied 2026-11-09 |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
@@ -158,6 +159,15 @@ Write requests here; the other chat answers in the log and ticks them.
 
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
+
+### 2026-11-09 02:15 · Base · Products & Services: collapse and delete buttons apart
+- `pages/settings/BaseCatalog.css`: `.bc-hd-tools` gets a 14px gap and a thin divider between the collapse (chevron) and delete buttons on an open product card.
+
+### 2026-11-09 02:15 · Enterprise · Build project: the whole team is notified
+- Files: sql/118_project_team_alerts.sql, src/components/pages/homepage/HomePage.tsx, HomePage.css
+- What: when a project is created (Incoming › Build project) everyone on its team gets a notification in the Home bell (live, through the existing user_alerts realtime): "<who> put you on a new project · <Client> · <service> · Kick-off <date>". Someone added later to an existing project's team gets "added you to the project". The person who builds it isn't notified about themselves. New "Projects" tab in the notifications window, folder icon in teal (`.hn-item.is-proj`); clicking opens the client's page (`/clients?client=…`).
+- Tags: **DB**, PORT? (Base's home bell would need the same kinds: project_new / project_added, ref_type project)
+- Deploy: 118 applied; frontend only otherwise.
 
 ### 2026-11-09 01:50 · Enterprise · Number fields: you can type 0, 0.5, 1.50 as you mean them
 - Files: src/components/framework/NumInput.tsx (new); every `<input type="number">` in src/components (96 fields, 30 files: LineCalcModal, Catalog, Handoff forms, IncomingConvertModal (Build project), Billing, Bonus plan, Calendar settings, CS editor / CsFlow, Companies, Contacts, Marketing, Proposal templates, Superadmin…) now `<NumInput type="number" …>`; ClientWorkspace's yearly-increase field (text, `inc ? String(inc) : ""`) too.

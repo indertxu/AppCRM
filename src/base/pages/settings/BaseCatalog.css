@@ -526,3 +526,8 @@
 .bc-row-more { animation: bc-fade-in 0.4s ease 0.05s both; }
 .bc-row-chev, .bc-row-wrap { transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.4s ease, background 0.4s ease, color 0.3s; }
 @media (prefers-reduced-motion: reduce) { .bc-smooth { transition: none; } }
+
+/* Collapse and delete: apart, with a thin divider between them */
+.bc-hd-tools { gap: 14px; }
+.bc-hd-tools > .bc-icon-btn.is-fold { position: relative; }
+.bc-hd-tools > .bc-icon-btn.is-fold::after { content: ""; position: absolute; left: -8px; top: 7px; bottom: 7px; width: 1px; background: rgba(10, 111, 77, 0.14); }
