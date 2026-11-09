@@ -20,6 +20,7 @@ import { TimeOffApprovals, TimeOffAllowances, PublicHolidays } from "../calendar
 import "../calendar/CalendarSettingsModal.css";
 import { usePageAccess, useNavSection, levelName, levelBase, type PageKey } from "../../framework/pageAccess";
 import { SuperAdminSwitch } from "../../framework/SuperAdmin";
+import Integrations from "./Integrations";
 import { connectOutlook, completeOutlookConnect, outlookStatus, disconnectOutlook, outlookConnectError, OUTLOOK_CONNECTION_EVENT } from "../../api/outlookSync";
 import { getMailStatus } from "../homepage/shared/HomeTodo";
 import { DOCK_ITEMS, DOCK_ORDER_KEY, DOCK_ORDER_EVENT, orderDock } from "../../framework/Dock";
@@ -32,7 +33,7 @@ import "./SettingsPage.css";
 
 const levelLabel = (id: string | null) => (id ? levelName(id) : "—");
 
-type View = "home" | "users" | "organization" | "account" | "interface" | "catalog" | "pipeline" | "proposal" | "tasks" | "salespage" | "mgmtpage" | "clientpage" | "companiespage" | "contactspage"
+type View = "home" | "users" | "organization" | "account" | "interface" | "integrations" | "catalog" | "pipeline" | "proposal" | "tasks" | "salespage" | "mgmtpage" | "clientpage" | "companiespage" | "contactspage"
   | "ticketspage" | "calendarpage" | "projectspage" | "successpage" | "marketingpage";
 /** Which Page-access panel opens each view (Settings → Organization → Page access → Settings). */
 const VIEW_PANEL: Partial<Record<View, string>> = {
@@ -231,7 +232,7 @@ export default function SettingsPage() {
       setOutlookConnected(finished || status);
       setOutlookError(finished || status ? null : outlookConnectError());
       // Just back from Microsoft: show the result where the button is.
-      if (finished || returning) setView("interface");
+      if (finished || returning) setView("integrations");
     })();
   }, []);
   useEffect(() => {
@@ -348,9 +349,13 @@ export default function SettingsPage() {
       { v: "mgmtpage", title: "Management", sub: "Incoming, billing & bonuses", accent: "#9b6fd0", keys: "management billing bonus backlog", icon: I("M3 4h18v16H3z", "M3 10h18M9 10v10") },
     ];
     const you: Tile[] = [
-      { v: "interface", title: "Interface", sub: "Sidebar, labels & Outlook", accent: "#e0a13c", keys: "interface sidebar menu labels outlook",
+      { v: "interface", title: "Interface", sub: "Sidebar, labels & toolbar order", accent: "#e0a13c", keys: "interface sidebar menu labels toolbar order",
         icon: I("M5.5 4h13A2.5 2.5 0 0 1 21 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5v-11A2.5 2.5 0 0 1 5.5 4z", "M8 4v16"),
-        stats: [[dockLabels ? "On" : "Off", "menu labels"], [outlookConnected ? "Synced" : "Off", "Outlook"]] },
+        stats: [[dockLabels ? "On" : "Off", "menu labels"]] },
+      { v: "integrations", title: "Integrations", sub: "Outlook, Gmail, WhatsApp, Meta, TikTok, LinkedIn…", accent: "#5b6ee1",
+        keys: "integrations apps connect outlook gmail google whatsapp meta facebook instagram tiktok linkedin ads youtube analytics website mail calendar",
+        icon: I("M9 7V3M15 7V3M7 7h10v4a5 5 0 0 1-10 0V7zM12 16v5"),
+        stats: [[outlookConnected ? "1" : "0", "connected"], ["13", "on the way"]] },
       { v: "account", title: "Your account", sub: "Password & details", accent: "#5a7d6d", keys: "account password profile",
         icon: I("M12 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8z", "M4 21a8 8 0 0 1 16 0"), stats: [[levelLabel(secLevel ?? role), "your level"]] },
     ];
@@ -481,6 +486,14 @@ export default function SettingsPage() {
     );
   }
 
+// ---- Integrations: every outside app (Outlook live; the rest on the way) ----
+  if (view === "integrations") {
+    return <Integrations onBack={() => setView("home")} outlook={{
+      connected: outlookConnected, busy: outlookBusy, error: outlookError, onToggle: handleOutlook,
+      mailOn, mailBusy, onMail: connectMail,
+    }} />;
+  }
+
 // ---- Interface ----
   if (view === "interface") {
     return (
@@ -535,41 +548,6 @@ export default function SettingsPage() {
             {dockOrder.length > 0 && <button type="button" className="st-dock-reset" onClick={() => saveDockOrder([])}>Reset to the default order</button>}
           </div>
 
-          <div className="st-toggle-row" style={{ marginTop: "1.1rem" }}>
-            <div className="st-toggle-text">
-              <span className="st-toggle-label">Sync calendar to Outlook</span>
-              <span className="st-toggle-note">
-                {outlookConnected
-                  ? "Connected. New and edited activities appear in your Outlook calendar."
-                  : "Connect your Outlook so activities you book here also land in your Outlook calendar."}
-                {!outlookConnected && outlookError && (
-                  <span style={{ display: "block", marginTop: 6, color: "#a83434", fontWeight: 600 }}>Couldn't connect: {outlookError}</span>
-                )}
-              </span>
-            </div>
-            <button
-              type="button"
-              className={`st-outlook-btn ${outlookConnected ? "is-connected" : ""}`}
-              onClick={handleOutlook}
-              disabled={outlookBusy || outlookConnected === null}
-            >
-              {outlookConnected === null ? "…" : outlookBusy && !outlookConnected ? "Waiting for Microsoft…" : outlookConnected ? "Disconnect" : "Connect Outlook"}
-            </button>
-          </div>
-
-          <div className="st-toggle-row" style={{ marginTop: "0.8rem" }}>
-            <div className="st-toggle-text">
-              <span className="st-toggle-label">Your e-mail, to send invoices</span>
-              <span className="st-toggle-note">
-                {mailOn
-                  ? "Connected. Invoices can be sent from your own mailbox (Billing)."
-                  : "Link your Outlook mailbox so Billing can send invoices from your own address. It only asks to read and send mail."}
-              </span>
-            </div>
-            <button type="button" className={`st-outlook-btn ${mailOn ? "is-connected" : ""}`} onClick={connectMail} disabled={mailBusy || mailOn === null || !!mailOn}>
-              {mailOn === null ? "…" : mailBusy ? "Waiting for Microsoft…" : mailOn ? "E-mail linked" : "Link e-mail"}
-            </button>
-          </div>
         </section>
       </div>
     );

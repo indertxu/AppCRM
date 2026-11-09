@@ -160,6 +160,22 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-09 14:15 · Base · Settings: Integrations is its own page (Outlook moved out of Interface)
+- New `pages/settings/Integrations.tsx` / `.css` (prefix `.ig-`), view `"integrations"` in `SettingsPage.tsx`, its own tile in "Just you" next to Interface. Groups: Mail & calendar (Outlook — live: calendar sync + mailbox for invoices, same handlers as before; Gmail, Google Calendar), Messaging (WhatsApp Business, Messenger & Instagram DMs), Social & ads (Meta, LinkedIn, TikTok, Google Ads, YouTube, X), Website & analytics (Google Analytics, Google Business Profile, your website forms). Not-yet-built apps show "Soon" + "Notify me" (remembered in localStorage `next.base.integrations.want`) and a "What it brings" pop-up.
+- Interface keeps only menu labels + toolbar order (tile text updated). Coming back from Microsoft now opens Integrations instead of Interface.
+
+### 2026-11-09 14:10 · Enterprise · Summoned colleagues: "Not billable" option, and a popup on accepting it
+- Files: src/components/pages/calendar/BookingModal.tsx/.css, InviteBillAsk.tsx/.css, invitesApi.ts, InvitesTray.tsx
+- What: People step, per summoned colleague on client work (any role): "I set it" (a figure) / "They decide" (a suggestion) / **"Not billable"** (= I set it at 0, the figure field hides; "They see it when they accept"). Picking "I set it" again from 0 puts back the entry's figure. Accepting any invite to client work (`project_id` or `client_id`) now always opens the billing popup (`asksBill`): they choose ("they"), or see what the organiser set — the figure, or "Not billable for you" (new `.iba-fixed.is-free`); title "<organiser> set what you bill". The tray card says "Not billable for you — <organiser> set it" on client work. Internal time still accepts straight away. No DB change (bill_mode stays fixed|they; 0 = not billable).
+- Tags: PORT? (src/base calendar has the same invites if it was ported from 115)
+- Deploy: frontend only.
+
+### 2026-11-09 02:40 · Enterprise · Calendar: client and company logos in the meeting pickers
+- Files: src/components/pages/calendar/BookingModal.tsx, SalesCalendar.tsx, SalesCalendar.css
+- What: Log work / meeting wizard › "Client & project": the client list and the chosen client show the company logo (`ClientLogo` from ClientWorkspace, from the company's website; initials until it loads) instead of two letters. Sales calendar › New meeting: the Company picker (and "Link to a company") shows each company's logo in the list and in the closed field (`Picker` prop `logos`, `.sc-pick-co` / `.sc-pick-logo`).
+- Tags: PORT? (src/base/pages/calendar has the same BookingModal client list)
+- Deploy: frontend only.
+
 ### 2026-11-09 02:15 · Base · Products & Services: collapse and delete buttons apart
 - `pages/settings/BaseCatalog.css`: `.bc-hd-tools` gets a 14px gap and a thin divider between the collapse (chevron) and delete buttons on an open product card.
 
