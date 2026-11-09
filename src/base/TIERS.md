@@ -150,7 +150,7 @@ Next free number: **120**  ← update this line when you claim one (and say whic
 | 116 | sql/116_mail_known_only.sql | Enterprise | GDPR: `mail_is_known(tenant, email)` / `mail_row_known(...)` (contact, colleague, company e-mail, client contact list, or a company's own website / e-mail domain, or a company-linked contact's domain — never public domains); triggers drop unknown mail on insert (`ticket_mail_messages`) and e-mail tickets from unknown requesters (`tracking_tasks`); restrictive SELECT policy `mail_known_only` hides stored mail whose people left the CRM — applied 2026-11-07 |
 | 117 | sql/117_purge_unknown_mail.sql | Enterprise | deletes the e-mail stored before 116 from people not in the CRM (64 rows on Konsolidator) — to run in the SQL editor |
 | 118 | sql/118_project_team_alerts.sql | Enterprise | `alert_project_team()` + trigger `trg118_project_team_alerts` (after insert / update of team on `projects`): each person on the team gets a `user_alerts` row — kind `project_new` (created, e.g. Incoming › Build project) or `project_added` (put on an existing team), ref_type `project`, title = client, body = service · kick-off — applied 2026-11-09 |
-| 119 | src/base/sql/119_connected_accounts.sql | Base | `connected_accounts` (several Gmail / Google Calendar / Outlook accounts per person: provider, email, services mail/calendar, status; RLS own rows select/delete) + `connected_account_tokens` (RLS on, no policies: service role only) — written; to apply in Supabase |
+| 119 | src/base/sql/119_connected_accounts.sql | Base | `connected_accounts` (several Gmail / Google Calendar / Outlook accounts per person: provider, email, services mail/calendar, status; RLS own rows select/delete) + `connected_account_tokens` (RLS on, no policies: service role only) — applied 2026-11-09 |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
@@ -167,7 +167,7 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - Logos: Simple Icons path data (CC0) in `brandIcons.ts` for Gmail, Google Calendar, WhatsApp, Messenger, Meta, Instagram, TikTok, Google Ads, YouTube, X, Google Analytics, Google. Outlook and LinkedIn aren't in Simple Icons → lettered tile.
 - Until SQL 119, the edge function and `VITE_GOOGLE_CLIENT_ID` exist, Gmail / Google Calendar show "Needs setup" and Add is off; nothing breaks.
 - tags: DB (119) · IDEA→ENT (multi-account mail for Enterprise too)
-- deploy: written to the Mac · SQL 119 to apply in Supabase · edge function: request in §8 · user to commit
+- deploy: written to the Mac · SQL 119 applied in Supabase 2026-11-09 · edge function: request in §8 · user to commit
 
 ### 2026-11-09 14:15 · Base · Settings: Integrations is its own page (Outlook moved out of Interface)
 - New `pages/settings/Integrations.tsx` / `.css` (prefix `.ig-`), view `"integrations"` in `SettingsPage.tsx`, its own tile in "Just you" next to Interface. Groups: Mail & calendar (Outlook — live: calendar sync + mailbox for invoices, same handlers as before; Gmail, Google Calendar), Messaging (WhatsApp Business, Messenger & Instagram DMs), Social & ads (Meta, LinkedIn, TikTok, Google Ads, YouTube, X), Website & analytics (Google Analytics, Google Business Profile, your website forms). Not-yet-built apps show "Soon" + "Notify me" (remembered in localStorage `next.base.integrations.want`) and a "What it brings" pop-up.
