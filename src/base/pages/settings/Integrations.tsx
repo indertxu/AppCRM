@@ -1,21 +1,26 @@
 /* =====================================================================
    BASE · Settings → Integrations
-   Two columns:
-     left  — Connected: every account you linked (two Gmails, two Outlooks…),
-             one sleek row each, remove with a confirm
-     right — Add an app: what you can connect now, and what's coming
-   Connecting one flies its logo from the right list into the left one.
-   Nothing here decides what an account is used for: Billing and the other
-   pages pick from the connected accounts later.
+   Three lists side by side:
+     Connected   — apps you already linked (with how many accounts)
+     Available   — apps you can connect now (Gmail, Google Calendar, Outlook)
+     Coming soon — what's on the way (request the ones you want first)
+   Click any app: a detail panel opens right after its list, pushing the
+   others to the right and making them narrower. For a connected app it
+   shows every account: when it was connected, when it was last active, when
+   mail was last read, what it's used for, Check now / Remove — and Add
+   another account. For Google, until sign-in is set up, it shows the
+   step-by-step setup guide.
      Gmail, Google Calendar → connected_accounts (SQL 119) via the edge function
                               "connected-accounts" (src/base/api/connectedAccounts.ts)
      Outlook                → the first account is the existing Outlook connection
-                              (outlook-sync: calendar + mail); more go to connected_accounts
+                              (outlook-sync; facts from SQL 120); more go to connected_accounts
    Prefix .ig-
    ===================================================================== */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { outlookMailStatus } from "../../api/outlookSync";
-import { addAccount, listAccounts, providerReady, removeAccount, type ConnectedAccount, type Provider, type Service } from "../../api/connectedAccounts";
+import {
+  addAccount, checkAccount, lastMailReads, listAccounts, myOutlookConnection, providerReady, removeAccount,
+  type ConnectedAccount, type OutlookFacts, type Provider, type Service,
+} from "../../api/connectedAccounts";
 import { BRANDS } from "./brandIcons";
 import "./Integrations.css";
 
@@ -39,66 +44,106 @@ function Logo({ k, color, letters, s = 34 }: { k?: string; color: string; letter
 }
 
 /* ---------- catalogue ---------- */
-type AppDef = { k: string; name: string; what: string; logo: { k?: string; color: string; letters?: string }; live?: { provider: Provider; service: Service }; brings?: string[] };
+type AppDef = {
+  k: string; name: string; what: string; logo: { k?: string; color: string; letters?: string };
+  live?: { provider: Provider; service: Service }; brings?: string[];
+};
 const LIVE: AppDef[] = [
-  { k: "gmail", name: "Gmail", what: "Send and read mail from your Google inboxes", logo: { k: "gmail", color: "#ea4335" }, live: { provider: "google", service: "mail" } },
-  { k: "gcal", name: "Google Calendar", what: "Your meetings and activities, both ways", logo: { k: "gcal", color: "#4285f4" }, live: { provider: "google", service: "calendar" } },
-  { k: "outlook", name: "Outlook", what: "Mail and calendars from Microsoft 365", logo: { k: "outlook", color: "#0078d4" }, live: { provider: "microsoft", service: "mail" } },
+  { k: "gmail", name: "Gmail", what: "Send and read mail from your Google inboxes", logo: { k: "gmail", color: "#ea4335" }, live: { provider: "google", service: "mail" },
+    brings: ["Send invoices and proposals from your own Gmail", "E-mails with clients saved in their file", "As many Gmail inboxes as you need"] },
+  { k: "gcal", name: "Google Calendar", what: "Your meetings and activities, both ways", logo: { k: "gcal", color: "#4285f4" }, live: { provider: "google", service: "calendar" },
+    brings: ["Activities you book here appear in Google Calendar", "Several calendars, one per account"] },
+  { k: "outlook", name: "Outlook", what: "Mail and calendars from Microsoft 365", logo: { k: "outlook", color: "#0078d4" }, live: { provider: "microsoft", service: "mail" },
+    brings: ["Calendar sync both ways", "Send invoices from your own address", "Client e-mails become contacts and tickets", "Several Outlook accounts"] },
 ];
 const SOON: AppDef[] = [
-  { k: "whatsapp", name: "WhatsApp Business", what: "Chat with clients, kept on each client", logo: { k: "whatsapp", color: "#25d366" } },
-  { k: "meta", name: "Meta", what: "Facebook and Instagram pages, Meta Ads", logo: { k: "meta", color: "#0467df" } },
-  { k: "instagram", name: "Instagram", what: "Posts, reels and their results", logo: { k: "instagram", color: "#ff0069" } },
-  { k: "messenger", name: "Messenger", what: "Facebook and Instagram DMs in one inbox", logo: { k: "messenger", color: "#0866ff" } },
-  { k: "linkedin", name: "LinkedIn", what: "Company page, LinkedIn Ads, lead forms", logo: { k: "linkedin", color: "#0a66c2" } },
-  { k: "tiktok", name: "TikTok", what: "Short videos and TikTok Ads", logo: { k: "tiktok", color: "#000" } },
-  { k: "gads", name: "Google Ads", what: "Search and display campaigns", logo: { k: "gads", color: "#4285f4" } },
-  { k: "youtube", name: "YouTube", what: "Videos, views and subscribers", logo: { k: "youtube", color: "#ff0000" } },
-  { k: "x", name: "X", what: "Posts and engagement", logo: { k: "x", color: "#000" } },
-  { k: "ga", name: "Google Analytics", what: "Website visitors and sources", logo: { k: "ga", color: "#e37400" } },
-  { k: "gbp", name: "Google Business Profile", what: "Reviews and your Maps listing", logo: { k: "google", color: "#4285f4" } },
-  { k: "web", name: "Your website", what: "Site forms become leads in Orbit", logo: { color: "#0f9f6e", letters: "</>" } },
+  { k: "whatsapp", name: "WhatsApp Business", what: "Chat with clients, kept on each client", logo: { k: "whatsapp", color: "#25d366" }, brings: ["One or more business numbers", "Messages saved on the client", "Follow-ups by WhatsApp"] },
+  { k: "meta", name: "Meta", what: "Facebook and Instagram pages, Meta Ads", logo: { k: "meta", color: "#0467df" }, brings: ["Several Facebook and Instagram pages", "Meta Ads accounts", "Leads from Meta forms into Orbit"] },
+  { k: "instagram", name: "Instagram", what: "Posts, reels and their results", logo: { k: "instagram", color: "#ff0069" }, brings: ["Publish posts and reels", "Reach, likes and comments in Growth"] },
+  { k: "messenger", name: "Messenger", what: "Facebook and Instagram DMs in one inbox", logo: { k: "messenger", color: "#0866ff" }, brings: ["Every DM in one inbox", "Replies kept on the client"] },
+  { k: "linkedin", name: "LinkedIn", what: "Company page, LinkedIn Ads, lead forms", logo: { k: "linkedin", color: "#0a66c2" }, brings: ["Company page posts", "LinkedIn Ads", "Lead-gen forms into Orbit"] },
+  { k: "tiktok", name: "TikTok", what: "Short videos and TikTok Ads", logo: { k: "tiktok", color: "#000" }, brings: ["Publish short videos", "TikTok Ads results"] },
+  { k: "gads", name: "Google Ads", what: "Search and display campaigns", logo: { k: "gads", color: "#4285f4" }, brings: ["Campaigns with cost per lead", "Spend next to the deals it brought"] },
+  { k: "youtube", name: "YouTube", what: "Videos, views and subscribers", logo: { k: "youtube", color: "#ff0000" }, brings: ["Upload videos", "Views and subscribers in Growth"] },
+  { k: "x", name: "X", what: "Posts and engagement", logo: { k: "x", color: "#000" }, brings: ["Publish posts", "Read engagement"] },
+  { k: "ga", name: "Google Analytics", what: "Website visitors and sources", logo: { k: "ga", color: "#e37400" }, brings: ["Visitors and where they come from", "Which pages bring leads"] },
+  { k: "gbp", name: "Google Business Profile", what: "Reviews and your Maps listing", logo: { k: "google", color: "#4285f4" }, brings: ["Your reviews in one place", "Your Google Maps listing"] },
+  { k: "web", name: "Your website", what: "Site forms become leads in Orbit", logo: { color: "#0f9f6e", letters: "</>" }, brings: ["Each form sent creates the company, contact and deal"] },
 ];
 const APP = Object.fromEntries([...LIVE, ...SOON].map((a) => [a.k, a])) as Record<string, AppDef>;
 const WANT_KEY = "next.base.integrations.want";
 const SVC: Record<Service, string> = { mail: "Mail", calendar: "Calendar" };
+const colorOf = (a: AppDef) => BRANDS[a.logo.k ?? ""]?.hex ?? a.logo.color;
 
-type Row = { key: string; app: string; id: string; email: string; services: Service[]; status: "active" | "error"; note?: string | null; primary?: boolean };
+type Row = {
+  key: string; app: string; id: string; email: string; services: Service[]; status: "active" | "error"; note?: string | null;
+  primary?: boolean; connectedAt?: string | null; lastActive?: string | null;
+};
+type Col = "mine" | "avail" | "soon";
+
+/* ---------- dates ---------- */
+const fmtDate = (iso?: string | null) => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) + ", " + d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+};
+const ago = (iso?: string | null) => {
+  if (!iso) return "Not yet";
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 60) return "Just now";
+  if (s < 3600) return `${Math.round(s / 60)} min ago`;
+  if (s < 86400) return `${Math.round(s / 3600)} h ago`;
+  const d = Math.round(s / 86400);
+  return d === 1 ? "Yesterday" : d < 30 ? `${d} days ago` : fmtDate(iso);
+};
 
 export default function Integrations({ onBack, outlook }: { onBack: () => void; outlook: OutlookProps }) {
   const [want, setWant] = useState<string[]>(() => { try { return JSON.parse(localStorage.getItem(WANT_KEY) || "[]"); } catch { return []; } });
   useEffect(() => { try { localStorage.setItem(WANT_KEY, JSON.stringify(want)); } catch { /* ignore */ } }, [want]);
   const [q, setQ] = useState("");
+  const [sel, setSel] = useState<{ col: Col; app: string } | null>(null);
 
   const [accounts, setAccounts] = useState<ConnectedAccount[] | null>(null);
-  const [outlookEmail, setOutlookEmail] = useState<string | null>(null);
+  const [ol, setOl] = useState<OutlookFacts | null>(null);
+  const [reads, setReads] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
+  const [checking, setChecking] = useState<string | null>(null);
   const [err, setErr] = useState<{ k: string; text: string } | null>(null);
   const [asking, setAsking] = useState<string | null>(null);
   const [toast, setToast] = useState("");
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(""), 2600); return () => clearTimeout(t); }, [toast]);
 
-  const reload = useCallback(async () => { const r = await listAccounts(); setAccounts(r.accounts); }, []);
+  const reload = useCallback(async () => {
+    const [r, m] = await Promise.all([listAccounts(), lastMailReads().catch(() => ({}))]);
+    setAccounts(r.accounts); setReads(m);
+  }, []);
   useEffect(() => { void reload(); }, [reload]);
   useEffect(() => {
-    if (!outlook.connected) { setOutlookEmail(null); return; }
-    outlookMailStatus().then((m) => setOutlookEmail(m.email)).catch(() => setOutlookEmail(null));
+    if (!outlook.connected) { setOl(null); return; }
+    myOutlookConnection().then(setOl).catch(() => setOl(null));
   }, [outlook.connected]);
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape") setSel(null); };
+    window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k);
+  }, []);
 
-  /* the left list: one row per account and app */
+  /* every account, per app */
   const rows: Row[] = [];
-  if (outlook.connected) rows.push({ key: "outlook:primary", app: "outlook", id: "outlook-primary", email: outlookEmail ?? "Outlook account", services: ["mail", "calendar"], status: "active", primary: true });
+  if (outlook.connected) rows.push({ key: "outlook:primary", app: "outlook", id: "outlook-primary", email: ol?.email ?? "Outlook account", services: ["mail", "calendar"], status: "active", primary: true, connectedAt: ol?.connectedAt, lastActive: ol?.lastRefresh });
   for (const a of accounts ?? []) {
-    if (a.provider === "microsoft") { if (a.email !== outlookEmail) rows.push({ key: `outlook:${a.id}`, app: "outlook", id: a.id, email: a.email, services: a.services, status: a.status, note: a.last_error }); continue; }
-    for (const s of a.services) rows.push({ key: `${s === "mail" ? "gmail" : "gcal"}:${a.id}`, app: s === "mail" ? "gmail" : "gcal", id: a.id, email: a.email, services: [s], status: a.status, note: a.last_error });
+    const base = { id: a.id, email: a.email, status: a.status, note: a.last_error, connectedAt: a.connected_at, lastActive: a.updated_at ?? a.connected_at };
+    if (a.provider === "microsoft") { if (a.email !== ol?.email) rows.push({ ...base, key: `outlook:${a.id}`, app: "outlook", services: a.services }); continue; }
+    for (const s of a.services) rows.push({ ...base, key: `${s === "mail" ? "gmail" : "gcal"}:${a.id}`, app: s === "mail" ? "gmail" : "gcal", services: [s] });
   }
-  const countOf = (k: string) => rows.filter((r) => r.app === k).length;
+  const rowsOf = (k: string) => rows.filter((r) => r.app === k);
+  const mine = LIVE.filter((a) => rowsOf(a.k).length > 0);
 
-  /* ---- the logo that flies from the right list into the left one ---- */
+  /* ---- a newly connected app's logo flies into the Connected list ---- */
   const fly = useRef<{ app: string; rect: DOMRect } | null>(null);
   const seen = useRef<Set<string> | null>(null);
   const [fresh, setFresh] = useState<string[]>([]);
-  const listRef = useRef<HTMLUListElement>(null);
+  const mineRef = useRef<HTMLDivElement>(null);
+  const appKeys = mine.map((a) => a.k).join("|");
   const rowKeys = rows.map((r) => r.key).join("|");
   useLayoutEffect(() => {
     const now = new Set(rows.map((r) => r.key));
@@ -106,11 +151,10 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
     const added = rows.filter((r) => !seen.current!.has(r.key));
     seen.current = now;
     if (!added.length) return;
-    setFresh(added.map((r) => r.key));
-    window.setTimeout(() => setFresh([]), 1400);
+    setFresh(added.map((r) => r.key).concat(added.map((r) => `app:${r.app}`)));
+    window.setTimeout(() => setFresh([]), 1500);
     const f = fly.current; fly.current = null;
-    const target = f && added.find((r) => r.app === f.app);
-    const dest = target && listRef.current?.querySelector<HTMLElement>(`[data-key="${CSS.escape(target.key)}"] .ig-logo`);
+    const dest = f && mineRef.current?.querySelector<HTMLElement>(`[data-app="${f.app}"] .ig-logo`);
     if (!f || !dest || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
     const to = dest.getBoundingClientRect();
     const ghost = dest.cloneNode(true) as HTMLElement;
@@ -119,16 +163,16 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
     dest.style.opacity = "0";
     const dx = to.left - f.rect.left, dy = to.top - f.rect.top, sc = to.width / f.rect.width;
     const anim = ghost.animate([
-      { transform: "translate(0,0) scale(1)", offset: 0 },
-      { transform: `translate(${dx * 0.5}px, ${dy * 0.5 - 60}px) scale(${1 + (sc - 1) * 0.5 + 0.18})`, offset: 0.5 },
-      { transform: `translate(${dx}px, ${dy}px) scale(${sc})`, offset: 1 },
-    ], { duration: 720, easing: "cubic-bezier(0.22, 1, 0.36, 1)" });
+      { transform: "translate(0,0) scale(1)" },
+      { transform: `translate(${dx * 0.5}px, ${dy * 0.5 - 70}px) scale(${(1 + sc) / 2 + 0.15})` },
+      { transform: `translate(${dx}px, ${dy}px) scale(${sc})` },
+    ], { duration: 760, easing: "cubic-bezier(0.22, 1, 0.36, 1)" });
     anim.onfinish = () => { ghost.remove(); dest.style.opacity = ""; dest.animate([{ transform: "scale(1.25)" }, { transform: "scale(1)" }], { duration: 380, easing: "cubic-bezier(0.34, 1.56, 0.64, 1)" }); };
-  }, [rowKeys, accounts === null, outlook.connected === null]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [rowKeys, appKeys, accounts === null, outlook.connected === null]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const connect = async (a: AppDef, from: HTMLElement | null) => {
     setErr(null);
-    const logo = from?.closest(".ig-app")?.querySelector<HTMLElement>(".ig-logo");
+    const logo = from?.closest(".ig-det")?.querySelector<HTMLElement>(".ig-det-h .ig-logo");
     if (logo) fly.current = { app: a.k, rect: logo.getBoundingClientRect() };
     if (a.k === "outlook" && !outlook.connected) { outlook.onConnect(); return; }
     if (!a.live) return;
@@ -147,12 +191,129 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
     await reload();
     setToast(`${r.email} removed`);
   };
+  const check = async (r: Row) => {
+    setChecking(r.key);
+    const c = await checkAccount(r.id);
+    setChecking(null);
+    await reload();
+    setToast(c.status === "active" ? `${r.email} works` : `${r.email}: ${c.error ?? "sign in again"}`);
+  };
 
   const needle = q.trim().toLowerCase();
   const match = (a: AppDef) => !needle || `${a.name} ${a.what}`.toLowerCase().includes(needle);
-  const live = LIVE.filter(match), soon = SOON.filter(match);
   const loading = accounts === null || outlook.connected === null;
+  const open = (col: Col, k: string) => setSel((s) => (s && s.col === col && s.app === k ? null : { col, app: k }));
 
+  const list = (col: Col, apps: AppDef[], sub: (a: AppDef) => string) => (
+    <ul className="ig-list">
+      {apps.filter(match).map((a, i) => {
+        const on = sel?.col === col && sel.app === a.k;
+        const n = rowsOf(a.k).length;
+        const bad = rowsOf(a.k).some((r) => r.status === "error");
+        return (
+          <li key={a.k} data-app={a.k} style={{ ["--i" as string]: i, ["--c" as string]: colorOf(a) }}
+            className={`ig-item ${on ? "is-on" : ""} ${fresh.includes(`app:${a.k}`) && col === "mine" ? "is-fresh" : ""} ${col === "soon" && want.includes(a.k) ? "is-want" : ""}`}>
+            <button onClick={() => open(col, a.k)} aria-expanded={on}>
+              <Logo {...a.logo} s={36} />
+              <span className="ig-item-txt"><b>{a.name}</b><small>{sub(a)}</small></span>
+              {col === "mine" && <span className={`ig-dot ${bad ? "is-err" : ""}`} />}
+              {col === "soon" && want.includes(a.k) && <span className="ig-req"><Check /></span>}
+              {col === "avail" && n > 0 && <span className="ig-badge">{n}</span>}
+              <span className="ig-chev"><Chev /></span>
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+
+  const detail = (col: Col) => {
+    const isOpen = sel?.col === col;
+    const a = isOpen ? APP[sel!.app] : null;
+    return (
+      <aside className={`ig-det ${isOpen ? "is-open" : ""}`} aria-hidden={!isOpen} style={a ? { ["--c" as string]: colorOf(a) } : undefined}>
+        {a && (
+          <div className="ig-det-in" key={`${col}:${a.k}`}>
+            <header className="ig-det-h">
+              <Logo {...a.logo} s={48} />
+              <div><h3>{a.name}</h3><p>{a.what}</p></div>
+              <button className="ig-x" onClick={() => setSel(null)} aria-label="Close"><X /></button>
+            </header>
+            {a.live ? liveDetail(a) : soonDetail(a)}
+          </div>
+        )}
+      </aside>
+    );
+  };
+
+  function liveDetail(a: AppDef) {
+    const rs = rowsOf(a.k);
+    const ready = a.k === "outlook" || providerReady(a.live!.provider);
+    const isBusy = busy === a.k || (a.k === "outlook" && !!outlook.busy);
+    const error = err?.k === a.k ? err.text : a.k === "outlook" && !outlook.connected ? outlook.error : null;
+    return (
+      <>
+        <div className="ig-det-sec">
+          <h4>{rs.length ? `Accounts · ${rs.length}` : "No account yet"}</h4>
+          {rs.map((r) => (
+            <article key={r.key} className={`ig-acc ${r.status === "error" ? "is-err" : ""} ${fresh.includes(r.key) ? "is-fresh" : ""}`}>
+              <div className="ig-acc-h">
+                <i className="ig-av">{r.email[0]?.toUpperCase()}</i>
+                <b title={r.email}>{r.email}</b>
+                <span className={`ig-pill ${r.status === "error" ? "is-err" : ""}`}>{r.status === "error" ? "Needs sign-in" : "Working"}</span>
+              </div>
+              <dl className="ig-facts">
+                <div><dt>Connected</dt><dd>{fmtDate(r.connectedAt)}</dd></div>
+                <div><dt>Last active</dt><dd title={fmtDate(r.lastActive)}>{ago(r.lastActive)}</dd></div>
+                {r.services.includes("mail") && <div><dt>Last mail read</dt><dd title={fmtDate(reads[r.email.toLowerCase()])}>{ago(reads[r.email.toLowerCase()])}</dd></div>}
+                <div><dt>Used for</dt><dd>{r.services.map((s) => SVC[s]).join(" · ")}{r.primary ? " · main" : ""}</dd></div>
+              </dl>
+              {r.status === "error" && r.note && <p className="ig-acc-err">{r.note}</p>}
+              <div className="ig-acc-act">
+                {!r.primary && <button className="ig-mini" disabled={checking === r.key} onClick={() => void check(r)}>{checking === r.key ? <span className="ig-spin is-dark" /> : <Refresh />}Check now</button>}
+                <span className="ig-grow" />
+                {asking === r.key ? (
+                  <span className="ig-ask"><span>Remove this account?</span><button className="is-yes" onClick={() => void remove(r)}>Remove</button><button onClick={() => setAsking(null)}>Keep</button></span>
+                ) : <button className="ig-mini is-danger" onClick={() => setAsking(r.key)}>Remove</button>}
+              </div>
+            </article>
+          ))}
+          {error && <p className="ig-det-err">{error}</p>}
+          <button className={`ig-brand-btn ${rs.length ? "is-soft" : ""}`} disabled={!ready || isBusy || loading} onClick={(e) => void connect(a, e.currentTarget)}>
+            {isBusy ? <span className="ig-spin" /> : <Plus />}{isBusy ? "Waiting for sign-in…" : rs.length ? "Add another account" : `Connect ${a.name}`}
+          </button>
+        </div>
+        {a.live!.provider === "google" && !providerReady("google") && <GoogleGuide />}
+        {a.brings && (
+          <div className="ig-det-sec">
+            <h4>What it does</h4>
+            <ul className="ig-brings">{a.brings.map((b) => <li key={b}><Check />{b}</li>)}</ul>
+          </div>
+        )}
+      </>
+    );
+  }
+
+  function soonDetail(a: AppDef) {
+    const on = want.includes(a.k);
+    return (
+      <>
+        <div className="ig-det-sec">
+          <span className="ig-soon-tag">Coming soon</span>
+          <h4>What it will do</h4>
+          <ul className="ig-brings">{(a.brings ?? [a.what]).map((b) => <li key={b}><Check />{b}</li>)}</ul>
+        </div>
+        <div className="ig-det-sec">
+          <p className="ig-det-p">Tell us you want it — the most requested integrations are built first.</p>
+          <button className={`ig-brand-btn ${on ? "is-soft" : ""}`} onClick={() => setWant((w) => (w.includes(a.k) ? w.filter((x) => x !== a.k) : [...w, a.k]))}>
+            {on ? <><Check />Requested — tap to undo</> : <><Bell />Notify me when it's ready</>}
+          </button>
+        </div>
+      </>
+    );
+  }
+
+  const squeezed = !!sel;
   return (
     <div className="ig">
       <header className="ig-head">
@@ -169,103 +330,26 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
         </label>
       </header>
 
-      <div className="ig-body">
-        {/* ---------- connected ---------- */}
-        <section className="ig-sec">
-          <div className="ig-sec-h">
-            <h2>Connected</h2><span className="ig-n">{rows.length}</span>
-            <p>Billing, Calendar and Growth pick from these accounts.</p>
-          </div>
-          {loading ? <div className="ig-conn"><i className="ig-skel" /><i className="ig-skel" /></div> : (
-            <ul className="ig-conn" ref={listRef}>
-              {rows.map((r) => {
-                const a = APP[r.app];
-                const c = BRANDS[a.logo.k ?? ""]?.hex ?? a.logo.color;
-                return (
-                  <li key={r.key} data-key={r.key} className={`ig-cc ${fresh.includes(r.key) ? "is-fresh" : ""} ${r.status === "error" ? "is-err" : ""}`} style={{ ["--c" as string]: c }}>
-                    <div className="ig-cc-top">
-                      <Logo {...a.logo} s={38} />
-                      <span className="ig-cc-app">{a.name}</span>
-                      <span className={`ig-dot ${r.status === "error" ? "is-err" : ""}`} title={r.status === "error" ? "Needs attention" : "Working"} />
-                    </div>
-                    <b className="ig-cc-mail" title={r.email}>{r.email}</b>
-                    <div className="ig-cc-foot">
-                      {r.status === "error" ? <em className="ig-cc-err">{r.note || "Sign in again"}</em>
-                        : r.services.map((s) => <span key={s} className="ig-chip">{SVC[s]}</span>)}
-                      {asking === r.key ? (
-                        <span className="ig-ask">
-                          <button className="is-yes" onClick={() => void remove(r)}>Remove</button>
-                          <button onClick={() => setAsking(null)}>Keep</button>
-                        </span>
-                      ) : (
-                        <button className="ig-rm" onClick={() => setAsking(r.key)} aria-label={`Remove ${r.email}`} title="Remove">
-                          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
-                        </button>
-                      )}
-                    </div>
-                  </li>
-                );
-              })}
-              {rows.length === 0 && (
-                <li className="ig-cc is-empty">
-                  <span className="ig-empty-art" aria-hidden="true"><i /><i /><i /></span>
-                  <b>Nothing connected yet</b>
-                  <span>Connect an app below — it shows up here.</span>
-                </li>
-              )}
-            </ul>
-          )}
+      <div className={`ig-cols ${squeezed ? "is-squeezed" : ""}`}>
+        <section className="ig-col" ref={mineRef}>
+          <header className="ig-col-h"><h2>Connected</h2><span className="ig-n">{rows.length}</span></header>
+          {loading ? <div className="ig-skel"><i /><i /></div> : mine.length === 0 ? (
+            <div className="ig-empty"><span className="ig-empty-art" aria-hidden="true"><i /><i /><i /></span><b>Nothing connected yet</b><small>Pick an app in Available.</small></div>
+          ) : list("mine", mine, (a) => { const n = rowsOf(a.k).length; return `${n} account${n === 1 ? "" : "s"}`; })}
         </section>
+        {detail("mine")}
 
-        {/* ---------- available now ---------- */}
-        {live.length > 0 && (
-          <section className="ig-sec">
-            <div className="ig-sec-h"><h2>Available</h2><p>Connect one account or several.</p></div>
-            <div className="ig-feats">
-              {live.map((a, i) => {
-                const ready = a.k === "outlook" || providerReady(a.live!.provider);
-                const n = countOf(a.k);
-                const isBusy = busy === a.k || (a.k === "outlook" && outlook.busy);
-                const error = err?.k === a.k ? err.text : a.k === "outlook" && !outlook.connected ? outlook.error : null;
-                const c = BRANDS[a.logo.k ?? ""]?.hex ?? a.logo.color;
-                return (
-                  <article key={a.k} className="ig-feat ig-app" style={{ ["--c" as string]: c, ["--i" as string]: i }}>
-                    <div className="ig-feat-top">
-                      <Logo {...a.logo} s={48} />
-                      {n > 0 && <span className="ig-has"><span className="ig-dot" />{n} connected</span>}
-                    </div>
-                    <h3>{a.name}</h3>
-                    <p className={error ? "is-err" : ""}>{error || (ready ? a.what : "Google sign-in has to be switched on first (Client ID).")}</p>
-                    <button className={`ig-brand-btn ${n ? "is-soft" : ""}`} disabled={!ready || isBusy || loading} onClick={(e) => void connect(a, e.currentTarget)}>
-                      {isBusy ? <span className="ig-spin" /> : <Plus />}{isBusy ? "Waiting for sign-in…" : n ? "Add another account" : `Connect ${a.name}`}
-                    </button>
-                  </article>
-                );
-              })}
-            </div>
-          </section>
-        )}
+        <section className="ig-col">
+          <header className="ig-col-h"><h2>Available</h2><span className="ig-n is-soft">{LIVE.length}</span></header>
+          {list("avail", LIVE, (a) => (a.k === "outlook" || providerReady(a.live!.provider) ? a.what : "Set up Google sign-in first"))}
+        </section>
+        {detail("avail")}
 
-        {/* ---------- coming soon ---------- */}
-        {soon.length > 0 && (
-          <section className="ig-sec">
-            <div className="ig-sec-h"><h2>Coming soon</h2><p>Tap the ones you want first — we build them in that order.</p></div>
-            <div className="ig-soon">
-              {soon.map((a, i) => {
-                const on = want.includes(a.k);
-                return (
-                  <button key={a.k} className={`ig-st ${on ? "is-on" : ""}`} style={{ ["--i" as string]: i }} title={a.what}
-                    onClick={() => setWant((w) => (w.includes(a.k) ? w.filter((x) => x !== a.k) : [...w, a.k]))}>
-                    <Logo {...a.logo} s={34} />
-                    <span className="ig-st-txt"><b>{a.name}</b><small>{on ? "Requested" : a.what}</small></span>
-                    <span className="ig-bell" aria-hidden="true">{on ? <Check /> : <Bell />}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-        )}
-        {!live.length && !soon.length && <p className="ig-none">No app matches “{q}”.</p>}
+        <section className="ig-col">
+          <header className="ig-col-h"><h2>Coming soon</h2><span className="ig-n is-soft">{SOON.length}</span></header>
+          {list("soon", SOON, (a) => (want.includes(a.k) ? "Requested" : a.what))}
+        </section>
+        {detail("soon")}
       </div>
 
       {toast && <div className="ig-toast"><Check />{toast}</div>}
@@ -273,6 +357,34 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
   );
 }
 
+/* ---------- Google setup guide (shown until VITE_GOOGLE_CLIENT_ID exists) ---------- */
+function GoogleGuide() {
+  const origin = window.location.origin;
+  const [copied, setCopied] = useState("");
+  const copy = (t: string) => { void navigator.clipboard?.writeText(t); setCopied(t); setTimeout(() => setCopied(""), 1400); };
+  const C = ({ t }: { t: string }) => <button className={`ig-code ${copied === t ? "is-done" : ""}`} onClick={() => copy(t)} title="Copy">{t}{copied === t ? <Check /> : <Copy />}</button>;
+  return (
+    <div className="ig-det-sec ig-guide">
+      <h4>Set up Google sign-in · once, about 10 minutes</h4>
+      <ol>
+        <li><b>Open Google Cloud Console</b><span>console.cloud.google.com → top bar → <i>New project</i> → name it “Next”.</span></li>
+        <li><b>Turn on the two APIs</b><span><i>APIs &amp; Services → Library</i> → search <i>Gmail API</i> → Enable. Same for <i>Google Calendar API</i>.</span></li>
+        <li><b>Consent screen</b><span><i>Google Auth Platform → Get started</i>: app name “Next”, your e-mail, audience <i>External</i>. In <i>Audience → Test users</i> add every Gmail you'll connect.</span></li>
+        <li><b>Permissions</b><span><i>Data access → Add or remove scopes</i>: tick <i>gmail.readonly</i>, <i>gmail.send</i>, <i>calendar.events</i> (plus openid, email, profile) → Save.</span></li>
+        <li><b>Create the client</b><span><i>Clients → Create client</i> → type <i>Web application</i>. Authorised JavaScript origins:</span><C t={origin} /><span>Authorised redirect URIs:</span><C t={`${origin}/settings`} /><span>Add your live address too (e.g. https://your-app.vercel.app and …/settings). Create → copy the <i>Client ID</i> and <i>Client secret</i>.</span></li>
+        <li><b>Give the Client ID to the app</b><span>In the project's <i>.env</i> add the line below, then restart <i>npm run dev</i>. In Vercel: <i>Settings → Environment Variables</i> → same name → Redeploy.</span><C t="VITE_GOOGLE_CLIENT_ID=" /></li>
+        <li><b>Give both to Supabase</b><span>Supabase → your project → <i>Edge Functions → Secrets</i> → add <i>GOOGLE_CLIENT_ID</i> and <i>GOOGLE_CLIENT_SECRET</i>.</span></li>
+        <li><b>Connect</b><span>Reload this page → Gmail → <i>Connect Gmail</i> → pick the account → “Google hasn't verified this app” → <i>Continue</i> → Allow. Done.</span></li>
+      </ol>
+      <p className="ig-guide-note">While the app is in <i>Testing</i>, Google signs you out every 7 days and only test users can connect. To lift that, publish the app in <i>Audience</i> (Gmail reading needs Google's verification).</p>
+    </div>
+  );
+}
+
 const Check = () => <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.2 4.2L19 7" /></svg>;
-const Bell = () => <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0" /></svg>;
+const X = () => <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>;
+const Chev = () => <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6l6 6-6 6" /></svg>;
+const Bell = () => <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0" /></svg>;
+const Refresh = () => <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7" /></svg>;
+const Copy = () => <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 9h11v11H9zM5 15H4V4h11v1" /></svg>;
 const Plus = () => <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>;

@@ -21,7 +21,7 @@ export type Provider = "google" | "microsoft";
 export type Service = "mail" | "calendar";
 export interface ConnectedAccount {
   id: string; provider: Provider; email: string; display_name: string | null;
-  services: Service[]; status: "active" | "error"; last_error: string | null; connected_at: string;
+  services: Service[]; status: "active" | "error"; last_error: string | null; connected_at: string; updated_at?: string;
 }
 
 export const GOOGLE_CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined) ?? "";
@@ -94,7 +94,7 @@ async function call(action: string, payload: object = {}): Promise<any> {
 /** Accounts you connected (newest last). Empty when SQL 119 isn't applied yet. */
 export async function listAccounts(): Promise<{ accounts: ConnectedAccount[]; needsSql: boolean }> {
   const { data, error } = await supabase.from("connected_accounts")
-    .select("id, provider, email, display_name, services, status, last_error, connected_at").order("connected_at");
+    .select("id, provider, email, display_name, services, status, last_error, connected_at, updated_at").order("connected_at");
   if (error) return { accounts: [], needsSql: /connected_accounts|relation|schema cache/i.test(error.message) };
   return { accounts: (data ?? []) as ConnectedAccount[], needsSql: false };
 }
@@ -158,4 +158,36 @@ export async function addAccount(provider: Provider, services: Service[]): Promi
   const r = await call("connect", { provider, code: back.code, codeVerifier: verifier, redirectUri: REDIRECT_URI, services });
   if (r?.error) return { error: r.error };
   return { account: r.account as ConnectedAccount };
+}
+
+/** Refresh one account's access now: marks it working / needing sign-in again. */
+export async function checkAccount(id: string): Promise<{ status: "active" | "error"; error?: string }> {
+  const r = await call("check", { id });
+  if (r?.missing) return { status: "error", error: r.error };
+  return { status: r?.status === "active" ? "active" : "error", error: r?.error };
+}
+
+export interface OutlookFacts { email: string | null; connectedAt: string | null; lastRefresh: string | null; scopes: string | null }
+/** When you connected your first Outlook (SQL 120 — the tokens themselves stay hidden). */
+export async function myOutlookConnection(): Promise<OutlookFacts | null> {
+  const { data, error } = await supabase.rpc("my_outlook_connection");
+  const row = !error && Array.isArray(data) ? (data[0] as any) : null;
+  if (!row) return null;
+  return { email: row.account_email ?? null, connectedAt: row.connected_at ?? null, lastRefresh: row.last_refresh ?? null, scopes: row.scopes ?? null };
+}
+
+/** Last time the app read mail from each address (customer-success scan and the ticket desk), lower-case address → ISO time. */
+export async function lastMailReads(): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  const keep = (addr: unknown, at: unknown) => {
+    const a = String(addr ?? "").toLowerCase(), t = String(at ?? "");
+    if (a && t && (!out[a] || out[a] < t)) out[a] = t;
+  };
+  const [cs, tm] = await Promise.all([
+    supabase.from("cs_mailbox_sync").select("address, last_run_at"),
+    supabase.from("ticket_mailboxes").select("address, last_sync_at"),
+  ]);
+  for (const r of (cs.data ?? []) as any[]) keep(r.address, r.last_run_at);
+  for (const r of (tm.data ?? []) as any[]) keep(r.address, r.last_sync_at);
+  return out;
 }

@@ -126,7 +126,7 @@ Source in `supabase/functions/**`. Both apps call them; changes must stay backwa
 - Read the other side's entries since your last session before you start working.
 
 ## 7. SQL numbering
-Next free number: **120**  ← update this line when you claim one (and say which file in the log).
+Next free number: **121**  ← update this line when you claim one (and say which file in the log).
 | # | File | Chat | What |
 |---|---|---|---|
 | 98 | sql/98_client_default_folders.sql | Enterprise | client folder templates → new clients |
@@ -151,6 +151,7 @@ Next free number: **120**  ← update this line when you claim one (and say whic
 | 117 | sql/117_purge_unknown_mail.sql | Enterprise | deletes the e-mail stored before 116 from people not in the CRM (64 rows on Konsolidator) — to run in the SQL editor |
 | 118 | sql/118_project_team_alerts.sql | Enterprise | `alert_project_team()` + trigger `trg118_project_team_alerts` (after insert / update of team on `projects`): each person on the team gets a `user_alerts` row — kind `project_new` (created, e.g. Incoming › Build project) or `project_added` (put on an existing team), ref_type `project`, title = client, body = service · kick-off — applied 2026-11-09 |
 | 119 | src/base/sql/119_connected_accounts.sql | Base | `connected_accounts` (several Gmail / Google Calendar / Outlook accounts per person: provider, email, services mail/calendar, status; RLS own rows select/delete) + `connected_account_tokens` (RLS on, no policies: service role only) — applied 2026-11-09 |
+| 120 | src/base/sql/120_my_outlook_connection.sql | Base | `my_outlook_connection()` (security definer, caller only): account_email, connected_at, last_refresh (expires_at − 1h), scopes of your outlook_tokens row — never the tokens — applied 2026-11-09 |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
@@ -160,6 +161,13 @@ Write requests here; the other chat answers in the log and ticks them.
 
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
+
+### 2026-11-09 22:10 · Base · Integrations: three lists + detail that pushes the rest; account facts; Google setup guide
+- files: `pages/settings/Integrations.tsx` / `.css`, `api/connectedAccounts.ts`, `sql/120_my_outlook_connection.sql` (new).
+- Layout: three lists side by side — **Connected** (apps you linked, N accounts, status dot) · **Available** (Gmail, Google Calendar, Outlook) · **Coming soon** (12, requested ones ticked). Clicking an app opens a detail panel right after its list: it grows 0 → 440px and pushes the other lists right (they get narrower); Esc / × closes. Connected app → every account with Connected on, Last active, Last mail read (cs_mailbox_sync / ticket_mailboxes), Used for, status, Check now (edge `check`), Remove; then Add another account. Google, while `VITE_GOOGLE_CLIENT_ID` is missing → an 8-step setup guide with copyable origins / redirect URI. Coming soon → what it will do + Notify me. New account: logo flies from the panel into the Connected list.
+- `connectedAccounts.ts`: `checkAccount`, `myOutlookConnection` (RPC), `lastMailReads`; list now reads `updated_at`.
+- tags: DB (120)
+- deploy: written to the Mac · SQL 120 applied 2026-11-09 · user to commit
 
 ### 2026-11-09 21:20 · Base · Integrations redesigned (brand cards) + edge function connected-accounts deployed
 - files: `pages/settings/Integrations.tsx` / `.css`, `pages/settings/brandIcons.ts`, `requests/connected-accounts.index.ts.txt`.
