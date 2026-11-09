@@ -1,17 +1,19 @@
 /* =====================================================================
    BASE · Settings → Integrations
-   Connect the apps you work with — several accounts each (two Gmails, two
-   Outlooks…). Nothing here decides what an account is used for: Billing and
-   the other pages pick from the connected accounts later.
-     Gmail, Google Calendar  → connected_accounts (SQL 119) via the edge function
-                               "connected-accounts" (src/base/api/connectedAccounts.ts)
-     Outlook                 → the first account is the existing Outlook connection
-                               (outlook-sync: calendar sync + mail); more accounts
-                               go to connected_accounts like Google's
-   The rest are on the way: "Notify me" remembers which ones you want.
+   Two columns:
+     left  — Connected: every account you linked (two Gmails, two Outlooks…),
+             one sleek row each, remove with a confirm
+     right — Add an app: what you can connect now, and what's coming
+   Connecting one flies its logo from the right list into the left one.
+   Nothing here decides what an account is used for: Billing and the other
+   pages pick from the connected accounts later.
+     Gmail, Google Calendar → connected_accounts (SQL 119) via the edge function
+                              "connected-accounts" (src/base/api/connectedAccounts.ts)
+     Outlook                → the first account is the existing Outlook connection
+                              (outlook-sync: calendar + mail); more go to connected_accounts
    Prefix .ig-
    ===================================================================== */
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { outlookMailStatus } from "../../api/outlookSync";
 import { addAccount, listAccounts, providerReady, removeAccount, type ConnectedAccount, type Provider, type Service } from "../../api/connectedAccounts";
 import { BRANDS } from "./brandIcons";
@@ -26,109 +28,130 @@ export type OutlookProps = {
 };
 
 /* ---------- logos ---------- */
-function Logo({ k, color, letters }: { k?: string; color: string; letters?: string }) {
+function Logo({ k, color, letters, s = 34 }: { k?: string; color: string; letters?: string; s?: number }) {
   const b = k ? BRANDS[k] : undefined;
   return (
-    <span className="ig-logo" style={{ ["--c" as string]: b?.hex ?? color }}>
-      {b ? <svg viewBox="0 0 24 24" width="22" height="22" aria-label={b.title} role="img"><path d={b.path} fill="currentColor" /></svg>
-        : <span className="ig-logo-t">{letters}</span>}
+    <span className="ig-logo" style={{ ["--c" as string]: b?.hex ?? color, width: s, height: s }}>
+      {b ? <svg viewBox="0 0 24 24" width={s * 0.52} height={s * 0.52} aria-label={b.title} role="img"><path d={b.path} fill="currentColor" /></svg>
+        : <span className="ig-logo-t" style={{ fontSize: s * 0.36 }}>{letters}</span>}
     </span>
   );
 }
 
-/* ---------- apps that aren't connectable yet ---------- */
-type Group = "chat" | "social" | "data";
-type Soon = { k: string; name: string; what: string; logo: ReactNode; group: Group; brings?: string[] };
-const SOON: Soon[] = [
-  { k: "whatsapp", name: "WhatsApp Business", what: "Chat with clients from the app, kept with each client.", logo: <Logo k="whatsapp" color="#25d366" />, group: "chat",
-    brings: ["One or more business numbers", "Messages saved on the client", "Follow-ups by WhatsApp"] },
-  { k: "messenger", name: "Messenger & Instagram DMs", what: "Answer DMs from Facebook and Instagram in one inbox.", logo: <Logo k="messenger" color="#0866ff" />, group: "chat" },
-  { k: "meta", name: "Meta", what: "Facebook and Instagram pages and Meta Ads: post, advertise, read the results.", logo: <Logo k="meta" color="#0467df" />, group: "social",
-    brings: ["Several Facebook and Instagram pages", "Meta Ads accounts", "Leads from Meta forms into Orbit"] },
-  { k: "instagram", name: "Instagram", what: "Publish posts and reels and read reach, likes and comments.", logo: <Logo k="instagram" color="#ff0069" />, group: "social" },
-  { k: "linkedin", name: "LinkedIn", what: "Company page posts, LinkedIn Ads and lead-gen forms.", logo: <Logo color="#0a66c2" letters="in" />, group: "social" },
-  { k: "tiktok", name: "TikTok", what: "Publish short videos and run TikTok Ads.", logo: <Logo k="tiktok" color="#000" />, group: "social" },
-  { k: "gads", name: "Google Ads", what: "Search and display campaigns, with cost per lead.", logo: <Logo k="gads" color="#4285f4" />, group: "social" },
-  { k: "youtube", name: "YouTube", what: "Upload videos and read views and subscribers.", logo: <Logo k="youtube" color="#ff0000" />, group: "social" },
-  { k: "x", name: "X", what: "Publish posts and read engagement.", logo: <Logo k="x" color="#000" />, group: "social" },
-  { k: "ga", name: "Google Analytics", what: "Visitors, sources and conversions of your website.", logo: <Logo k="ga" color="#e37400" />, group: "data" },
-  { k: "gbp", name: "Google Business Profile", what: "Reviews and your listing on Google Maps.", logo: <Logo k="google" color="#4285f4" />, group: "data" },
-  { k: "web", name: "Your website", what: "Forms on your site create the company, contact and deal in Orbit.", logo: <Logo color="#0f9f6e" letters="</>" />, group: "data" },
+/* ---------- catalogue ---------- */
+type AppDef = { k: string; name: string; what: string; logo: { k?: string; color: string; letters?: string }; live?: { provider: Provider; service: Service }; brings?: string[] };
+const LIVE: AppDef[] = [
+  { k: "gmail", name: "Gmail", what: "Inboxes", logo: { k: "gmail", color: "#ea4335" }, live: { provider: "google", service: "mail" } },
+  { k: "gcal", name: "Google Calendar", what: "Calendars", logo: { k: "gcal", color: "#4285f4" }, live: { provider: "google", service: "calendar" } },
+  { k: "outlook", name: "Microsoft Outlook", what: "Mail and calendars", logo: { color: "#0a64d6", letters: "O" }, live: { provider: "microsoft", service: "mail" } },
 ];
-const GROUPS: { k: "mail" | Group; title: string; sub: string }[] = [
-  { k: "mail", title: "Mail & calendar", sub: "Several accounts per app — pick which one to use later, page by page" },
-  { k: "chat", title: "Messaging", sub: "Conversations with clients" },
-  { k: "social", title: "Social & ads", sub: "Publish, advertise and read the results" },
-  { k: "data", title: "Website & analytics", sub: "Where your visitors and leads come from" },
+const SOON: AppDef[] = [
+  { k: "whatsapp", name: "WhatsApp Business", what: "Chat with clients, kept on each client", logo: { k: "whatsapp", color: "#25d366" } },
+  { k: "meta", name: "Meta", what: "Facebook and Instagram pages, Meta Ads", logo: { k: "meta", color: "#0467df" } },
+  { k: "instagram", name: "Instagram", what: "Posts, reels and their results", logo: { k: "instagram", color: "#ff0069" } },
+  { k: "messenger", name: "Messenger", what: "Facebook and Instagram DMs in one inbox", logo: { k: "messenger", color: "#0866ff" } },
+  { k: "linkedin", name: "LinkedIn", what: "Company page, LinkedIn Ads, lead forms", logo: { color: "#0a66c2", letters: "in" } },
+  { k: "tiktok", name: "TikTok", what: "Short videos and TikTok Ads", logo: { k: "tiktok", color: "#000" } },
+  { k: "gads", name: "Google Ads", what: "Search and display campaigns", logo: { k: "gads", color: "#4285f4" } },
+  { k: "youtube", name: "YouTube", what: "Videos, views and subscribers", logo: { k: "youtube", color: "#ff0000" } },
+  { k: "x", name: "X", what: "Posts and engagement", logo: { k: "x", color: "#000" } },
+  { k: "ga", name: "Google Analytics", what: "Website visitors and sources", logo: { k: "ga", color: "#e37400" } },
+  { k: "gbp", name: "Google Business Profile", what: "Reviews and your Maps listing", logo: { k: "google", color: "#4285f4" } },
+  { k: "web", name: "Your website", what: "Site forms become leads in Orbit", logo: { color: "#0f9f6e", letters: "</>" } },
 ];
+const APP = Object.fromEntries([...LIVE, ...SOON].map((a) => [a.k, a])) as Record<string, AppDef>;
 const WANT_KEY = "next.base.integrations.want";
+const SVC: Record<Service, string> = { mail: "Mail", calendar: "Calendar" };
 
-/* ---------- connectable apps ---------- */
-type Live = { k: string; name: string; what: string; logo: ReactNode; provider: Provider; service: Service };
-const LIVE: Live[] = [
-  { k: "gmail", name: "Gmail", what: "Inboxes", logo: <Logo k="gmail" color="#ea4335" />, provider: "google", service: "mail" },
-  { k: "gcal", name: "Google Calendar", what: "Calendars", logo: <Logo k="gcal" color="#4285f4" />, provider: "google", service: "calendar" },
-  { k: "outlook", name: "Microsoft Outlook", what: "Mail and calendars", logo: <Logo color="#0a64d6" letters="O" />, provider: "microsoft", service: "mail" },
-];
-
-type Row = { id: string; email: string; services: Service[]; status: "active" | "error"; note?: string | null; primary?: boolean };
+type Row = { key: string; app: string; id: string; email: string; services: Service[]; status: "active" | "error"; note?: string | null; primary?: boolean };
 
 export default function Integrations({ onBack, outlook }: { onBack: () => void; outlook: OutlookProps }) {
   const [want, setWant] = useState<string[]>(() => { try { return JSON.parse(localStorage.getItem(WANT_KEY) || "[]"); } catch { return []; } });
   useEffect(() => { try { localStorage.setItem(WANT_KEY, JSON.stringify(want)); } catch { /* ignore */ } }, [want]);
-  const toggleWant = (k: string) => setWant((w) => (w.includes(k) ? w.filter((x) => x !== k) : [...w, k]));
   const [q, setQ] = useState("");
-  const [open, setOpen] = useState<Soon | null>(null);
 
   const [accounts, setAccounts] = useState<ConnectedAccount[] | null>(null);
-  const [needsSql, setNeedsSql] = useState(false);
   const [outlookEmail, setOutlookEmail] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);       // app key while adding
-  const [err, setErr] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<{ k: string; text: string } | null>(null);
+  const [asking, setAsking] = useState<string | null>(null);
   const [toast, setToast] = useState("");
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(""), 2600); return () => clearTimeout(t); }, [toast]);
 
-  const reload = useCallback(async () => {
-    const r = await listAccounts();
-    setAccounts(r.accounts); setNeedsSql(r.needsSql);
-  }, []);
+  const reload = useCallback(async () => { const r = await listAccounts(); setAccounts(r.accounts); }, []);
   useEffect(() => { void reload(); }, [reload]);
   useEffect(() => {
     if (!outlook.connected) { setOutlookEmail(null); return; }
     outlookMailStatus().then((m) => setOutlookEmail(m.email)).catch(() => setOutlookEmail(null));
   }, [outlook.connected]);
 
-  const rowsFor = (a: Live): Row[] => {
-    const extra = (accounts ?? []).filter((x) => x.provider === a.provider && (a.provider === "microsoft" || x.services.includes(a.service)))
-      .map((x) => ({ id: x.id, email: x.email, services: x.services, status: x.status, note: x.last_error }));
-    if (a.k !== "outlook" || !outlook.connected) return extra;
-    const first: Row = { id: "outlook-primary", email: outlookEmail ?? "Outlook account", services: ["calendar", "mail"], status: "active", primary: true };
-    return [first, ...extra.filter((x) => x.email !== outlookEmail)];
-  };
+  /* the left list: one row per account and app */
+  const rows: Row[] = [];
+  if (outlook.connected) rows.push({ key: "outlook:primary", app: "outlook", id: "outlook-primary", email: outlookEmail ?? "Outlook account", services: ["mail", "calendar"], status: "active", primary: true });
+  for (const a of accounts ?? []) {
+    if (a.provider === "microsoft") { if (a.email !== outlookEmail) rows.push({ key: `outlook:${a.id}`, app: "outlook", id: a.id, email: a.email, services: a.services, status: a.status, note: a.last_error }); continue; }
+    for (const s of a.services) rows.push({ key: `${s === "mail" ? "gmail" : "gcal"}:${a.id}`, app: s === "mail" ? "gmail" : "gcal", id: a.id, email: a.email, services: [s], status: a.status, note: a.last_error });
+  }
+  const countOf = (k: string) => rows.filter((r) => r.app === k).length;
 
-  const add = async (a: Live) => {
-    setErr((e) => ({ ...e, [a.k]: "" }));
+  /* ---- the logo that flies from the right list into the left one ---- */
+  const fly = useRef<{ app: string; rect: DOMRect } | null>(null);
+  const seen = useRef<Set<string> | null>(null);
+  const [fresh, setFresh] = useState<string[]>([]);
+  const listRef = useRef<HTMLUListElement>(null);
+  const rowKeys = rows.map((r) => r.key).join("|");
+  useLayoutEffect(() => {
+    const now = new Set(rows.map((r) => r.key));
+    if (seen.current === null) { if (accounts !== null && outlook.connected !== null) seen.current = now; return; }
+    const added = rows.filter((r) => !seen.current!.has(r.key));
+    seen.current = now;
+    if (!added.length) return;
+    setFresh(added.map((r) => r.key));
+    window.setTimeout(() => setFresh([]), 1400);
+    const f = fly.current; fly.current = null;
+    const target = f && added.find((r) => r.app === f.app);
+    const dest = target && listRef.current?.querySelector<HTMLElement>(`[data-key="${CSS.escape(target.key)}"] .ig-logo`);
+    if (!f || !dest || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    const to = dest.getBoundingClientRect();
+    const ghost = dest.cloneNode(true) as HTMLElement;
+    Object.assign(ghost.style, { position: "fixed", left: `${f.rect.left}px`, top: `${f.rect.top}px`, width: `${f.rect.width}px`, height: `${f.rect.height}px`, margin: "0", zIndex: "400", pointerEvents: "none" });
+    document.body.appendChild(ghost);
+    dest.style.opacity = "0";
+    const dx = to.left - f.rect.left, dy = to.top - f.rect.top, sc = to.width / f.rect.width;
+    const anim = ghost.animate([
+      { transform: "translate(0,0) scale(1)", offset: 0 },
+      { transform: `translate(${dx * 0.5}px, ${dy * 0.5 - 60}px) scale(${1 + (sc - 1) * 0.5 + 0.18})`, offset: 0.5 },
+      { transform: `translate(${dx}px, ${dy}px) scale(${sc})`, offset: 1 },
+    ], { duration: 720, easing: "cubic-bezier(0.22, 1, 0.36, 1)" });
+    anim.onfinish = () => { ghost.remove(); dest.style.opacity = ""; dest.animate([{ transform: "scale(1.25)" }, { transform: "scale(1)" }], { duration: 380, easing: "cubic-bezier(0.34, 1.56, 0.64, 1)" }); };
+  }, [rowKeys, accounts === null, outlook.connected === null]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const connect = async (a: AppDef, from: HTMLElement | null) => {
+    setErr(null);
+    const logo = from?.closest(".ig-app")?.querySelector<HTMLElement>(".ig-logo");
+    if (logo) fly.current = { app: a.k, rect: logo.getBoundingClientRect() };
     if (a.k === "outlook" && !outlook.connected) { outlook.onConnect(); return; }
+    if (!a.live) return;
     setBusy(a.k);
-    const services: Service[] = a.provider === "microsoft" ? ["mail", "calendar"] : [a.service];
-    const r = await addAccount(a.provider, services);
+    const r = await addAccount(a.live.provider, a.live.provider === "microsoft" ? ["mail", "calendar"] : [a.live.service]);
     setBusy(null);
-    if (r.error) { setErr((e) => ({ ...e, [a.k]: r.error! })); return; }
+    if (r.error) { fly.current = null; setErr({ k: a.k, text: r.error }); return; }
     await reload();
     setToast(`${r.account?.email ?? "Account"} connected`);
   };
-  const remove = async (a: Live, row: Row) => {
-    if (row.primary) { outlook.onDisconnect(); return; }
-    const e = await removeAccount(row.id);
-    if (e) { setErr((x) => ({ ...x, [a.k]: e })); return; }
+  const remove = async (r: Row) => {
+    setAsking(null);
+    if (r.primary) { outlook.onDisconnect(); return; }
+    const e = await removeAccount(r.id);
+    if (e) { setErr({ k: r.app, text: e }); return; }
     await reload();
-    setToast(`${row.email} removed`);
+    setToast(`${r.email} removed`);
   };
 
   const needle = q.trim().toLowerCase();
-  const match = (s: string) => !needle || s.toLowerCase().includes(needle);
-  const connectedCount = (accounts?.length ?? 0) + (outlook.connected ? 1 : 0);
-  const anything = LIVE.some((a) => match(`${a.name} ${a.what} mail calendar`)) || SOON.some((a) => match(`${a.name} ${a.what}`));
+  const match = (a: AppDef) => !needle || `${a.name} ${a.what}`.toLowerCase().includes(needle);
+  const live = LIVE.filter(match), soon = SOON.filter(match);
+  const loading = accounts === null || outlook.connected === null;
 
   return (
     <div className="ig">
@@ -140,125 +163,108 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
           <h1>Integrations</h1>
           <p>Connect the apps you work with — as many accounts as you need</p>
         </div>
-        <span className="ig-count"><b>{connectedCount}</b> account{connectedCount === 1 ? "" : "s"} connected</span>
-        <label className="ig-search">
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find an app" />
-        </label>
       </header>
 
-      {GROUPS.map((g, gi) => {
-        if (g.k === "mail") {
-          const apps = LIVE.filter((a) => match(`${a.name} ${a.what} mail calendar`));
-          if (!apps.length) return null;
-          return (
-            <section key={g.k} className="ig-group" style={{ ["--gi" as string]: gi }}>
-              <div className="ig-group-h"><h2>{g.title}</h2><p>{g.sub}</p></div>
-              {needsSql && <p className="ig-note">Connecting more accounts needs one database step (SQL 119) — it's on its way.</p>}
-              <div className="ig-grid is-live">
-                {apps.map((a, i) => {
-                  const rows = rowsFor(a);
-                  const ready = a.k === "outlook" ? true : providerReady(a.provider);
-                  return (
-                    <AccountCard key={a.k} app={a} i={i} rows={rows} ready={ready} loading={accounts === null || (a.k === "outlook" && outlook.connected === null)}
-                      busy={busy === a.k || (a.k === "outlook" && outlook.busy)} error={err[a.k] || (a.k === "outlook" && !outlook.connected ? outlook.error : null) || ""}
-                      onAdd={() => void add(a)} onRemove={(r) => void remove(a, r)} />
-                  );
-                })}
-              </div>
-            </section>
-          );
-        }
-        const apps = SOON.filter((a) => a.group === g.k && match(`${a.name} ${a.what}`));
-        if (!apps.length) return null;
-        return (
-          <section key={g.k} className="ig-group" style={{ ["--gi" as string]: gi }}>
-            <div className="ig-group-h"><h2>{g.title}</h2><p>{g.sub}</p></div>
-            <div className="ig-grid">
-              {apps.map((a, i) => (
-                <article key={a.k} className="ig-card" style={{ ["--i" as string]: i }}>
-                  <div className="ig-card-top">{a.logo}<span className="ig-tag is-soon">Soon</span></div>
-                  <b>{a.name}</b>
-                  <p>{a.what}</p>
-                  <div className="ig-card-foot">
-                    {a.brings && <button className="ig-more" onClick={() => setOpen(a)}>What it brings</button>}
-                    <button className={`ig-btn ${want.includes(a.k) ? "is-on" : "is-ghost"}`} onClick={() => toggleWant(a.k)}>
-                      {want.includes(a.k) ? <><Check />Requested</> : "Notify me"}
-                    </button>
-                  </div>
-                </article>
-              ))}
+      <div className="ig-cols">
+        {/* ---------- left: connected ---------- */}
+        <section className="ig-panel ig-mine">
+          <header className="ig-panel-h">
+            <h2>Connected</h2>
+            <span className="ig-n">{rows.length}</span>
+          </header>
+          {loading ? <div className="ig-skel"><i /><i /></div> : rows.length === 0 ? (
+            <div className="ig-empty">
+              <span className="ig-empty-art" aria-hidden="true"><i /><i /><i /></span>
+              <b>Nothing connected yet</b>
+              <p>Pick an app on the right — it lands here, ready for Billing, Calendar and the rest.</p>
             </div>
-          </section>
-        );
-      })}
-      {!anything && <p className="ig-none">No app matches “{q}”.</p>}
+          ) : (
+            <ul className="ig-list" ref={listRef}>
+              {rows.map((r) => {
+                const a = APP[r.app];
+                return (
+                  <li key={r.key} data-key={r.key} className={`ig-acc ${fresh.includes(r.key) ? "is-fresh" : ""} ${r.status === "error" ? "is-err" : ""}`}>
+                    <Logo {...a.logo} s={36} />
+                    <div className="ig-acc-txt">
+                      <b title={r.email}>{r.email}</b>
+                      <span>{a.name}<i>·</i>{r.status === "error" ? <em>{r.note || "Sign in again"}</em> : r.services.map((s) => SVC[s]).join(" & ")}</span>
+                    </div>
+                    {asking === r.key ? (
+                      <span className="ig-ask">
+                        <button className="is-yes" onClick={() => void remove(r)}>Remove</button>
+                        <button onClick={() => setAsking(null)}>Keep</button>
+                      </span>
+                    ) : (
+                      <>
+                        <span className={`ig-dot ${r.status === "error" ? "is-err" : ""}`} title={r.status === "error" ? "Needs attention" : "Working"} />
+                        <button className="ig-rm" onClick={() => setAsking(r.key)} aria-label={`Remove ${r.email}`} title="Remove">
+                          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                        </button>
+                      </>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
 
-      {open && (
-        <div className="ig-scrim" onMouseDown={(e) => { if (e.target === e.currentTarget) setOpen(null); }}>
-          <div className="ig-modal">
-            <header>{open.logo}<div><h3>{open.name}</h3><p>{open.what}</p></div>
-              <button className="ig-x" onClick={() => setOpen(null)} aria-label="Close">×</button></header>
-            <ul>{open.brings?.map((b) => <li key={b}><Check />{b}</li>)}</ul>
-            <footer>
-              <span>Not available yet. Ask for it and we'll build it in that order.</span>
-              <button className={`ig-btn ${want.includes(open.k) ? "is-on" : ""}`} onClick={() => toggleWant(open.k)}>{want.includes(open.k) ? <><Check />Requested</> : "Notify me"}</button>
-            </footer>
-          </div>
-        </div>
-      )}
+        {/* ---------- right: available + coming ---------- */}
+        <section className="ig-panel ig-shop">
+          <header className="ig-panel-h">
+            <h2>Add an app</h2>
+            <label className="ig-search">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find an app" />
+            </label>
+          </header>
+
+          {live.length > 0 && <>
+            <h3 className="ig-sub">Available now</h3>
+            <ul className="ig-apps">
+              {live.map((a, i) => {
+                const ready = a.k === "outlook" || providerReady(a.live!.provider);
+                const n = countOf(a.k);
+                const isBusy = busy === a.k || (a.k === "outlook" && outlook.busy);
+                const error = err?.k === a.k ? err.text : a.k === "outlook" && !outlook.connected ? outlook.error : null;
+                return (
+                  <li key={a.k} className="ig-app" style={{ ["--i" as string]: i }}>
+                    <Logo {...a.logo} />
+                    <div className="ig-app-txt">
+                      <b>{a.name}{n > 0 && <small className="ig-has">{n} connected</small>}</b>
+                      <span className={error ? "is-err" : ""}>{error || (ready ? a.what : "Needs Google sign-in set up first")}</span>
+                    </div>
+                    <button className={`ig-btn ${n ? "is-ghost" : ""}`} disabled={!ready || isBusy || loading} onClick={(e) => void connect(a, e.currentTarget)}>
+                      {isBusy ? <span className="ig-spin" /> : <Plus />}{isBusy ? "Signing in…" : n ? "Another" : "Connect"}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </>}
+
+          {soon.length > 0 && <>
+            <h3 className="ig-sub">Coming soon</h3>
+            <ul className="ig-apps is-soon">
+              {soon.map((a, i) => (
+                <li key={a.k} className="ig-app" style={{ ["--i" as string]: i + live.length }}>
+                  <Logo {...a.logo} />
+                  <div className="ig-app-txt"><b>{a.name}</b><span>{a.what}</span></div>
+                  <button className={`ig-btn is-ghost ${want.includes(a.k) ? "is-on" : ""}`} onClick={() => setWant((w) => (w.includes(a.k) ? w.filter((x) => x !== a.k) : [...w, a.k]))}>
+                    {want.includes(a.k) ? <><Check />Requested</> : "Notify me"}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </>}
+          {!live.length && !soon.length && <p className="ig-none">No app matches “{q}”.</p>}
+        </section>
+      </div>
+
       {toast && <div className="ig-toast"><Check />{toast}</div>}
     </div>
   );
 }
 
 const Check = () => <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.2 4.2L19 7" /></svg>;
-const SVC: Record<Service, string> = { mail: "Mail", calendar: "Calendar" };
-
-function AccountCard({ app, i, rows, ready, loading, busy, error, onAdd, onRemove }: {
-  app: Live; i: number; rows: Row[]; ready: boolean; loading: boolean; busy: boolean; error: string;
-  onAdd: () => void; onRemove: (r: Row) => void;
-}) {
-  const [asking, setAsking] = useState<string | null>(null);
-  const n = rows.length;
-  return (
-    <article className={`ig-card is-acc ${n ? "is-live" : ""}`} style={{ ["--i" as string]: i }}>
-      <div className="ig-card-top">
-        {app.logo}
-        <div className="ig-card-name"><b>{app.name}</b><p>{app.what}</p></div>
-        <span className={`ig-tag ${n ? "is-live" : !ready ? "is-setup" : ""}`}>{loading ? "…" : n ? `${n} account${n === 1 ? "" : "s"}` : ready ? "Not connected" : "Needs setup"}</span>
-      </div>
-      {n > 0 && (
-        <ul className="ig-accs">
-          {rows.map((r) => (
-            <li key={r.id} className={r.status === "error" ? "is-err" : ""}>
-              <i className="ig-av">{r.email[0]?.toUpperCase() ?? "?"}</i>
-              <div>
-                <b title={r.email}>{r.email}</b>
-                <span>{r.status === "error" ? (r.note || "Sign in again to keep it working") : r.services.map((s) => SVC[s]).join(" · ")}</span>
-              </div>
-              {asking === r.id ? (
-                <span className="ig-ask">
-                  <button className="is-yes" onClick={() => { setAsking(null); onRemove(r); }}>Remove</button>
-                  <button onClick={() => setAsking(null)}>Keep</button>
-                </span>
-              ) : (
-                <button className="ig-rm" onClick={() => setAsking(r.id)} aria-label={`Remove ${r.email}`} title="Remove">
-                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
-                </button>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-      {error && <p className="ig-err">{error}</p>}
-      {!ready && !n && <p className="ig-hint">Google sign-in still has to be switched on for this app.</p>}
-      <div className="ig-card-foot">
-        <button className={`ig-btn ${n ? "is-ghost" : ""}`} onClick={onAdd} disabled={busy || loading || !ready}>
-          {busy ? "Waiting for sign-in…" : n ? <><Plus />Add another account</> : <><Plus />Connect</>}
-        </button>
-      </div>
-    </article>
-  );
-}
 const Plus = () => <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>;

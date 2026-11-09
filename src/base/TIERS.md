@@ -161,6 +161,13 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-09 16:10 · Base · Integrations in two columns: Connected (left) · Add an app (right)
+- files: `pages/settings/Integrations.tsx` / `.css`.
+- Left panel "Connected" (sticky): one compact row per account and app (logo, address, app · Mail / Calendar, status dot; remove appears on hover, with Remove / Keep). Empty state when nothing is linked.
+- Right panel "Add an app": search, "Available now" (Gmail, Google Calendar, Outlook — Connect / Another, "N connected" badge, errors inline) and "Coming soon" (Notify me) as compact rows in a 2–3 column grid.
+- Connecting flies the app's logo from the right row into its new row on the left (Web Animations clone, arc + scale), and the new row lands with a green flash.
+- deploy: written to the Mac · user to commit
+
 ### 2026-11-09 15:30 · Base · Integrations: real Gmail / Google Calendar / Outlook accounts, several each, real logos
 - files: `api/connectedAccounts.ts` (new), `pages/settings/Integrations.tsx` / `.css`, `pages/settings/brandIcons.ts` (new), `pages/settings/SettingsPage.tsx`, `BaseApp.tsx`, `sql/119_connected_accounts.sql` (new), `requests/connected-accounts.index.ts.txt` (new — edge function for Enterprise to deploy, see §8).
 - Mail & calendar cards (Gmail, Google Calendar, Microsoft Outlook) list each connected account (address, Mail / Calendar, remove with confirm) and "Add another account". Sign-in opens in a popup (PKCE, `prompt=select_account`), comes back to `/settings?state=acc.…`, caught by `connectedAccounts.ts` (imported in BaseApp so the popup closes itself); the code goes to the edge function `connected-accounts`, which stores the account. The first Outlook is still the existing connection (calendar + mail in one go); more Outlooks go to `connected_accounts`. No invoice wording here any more — Billing will pick from the connected accounts later.
