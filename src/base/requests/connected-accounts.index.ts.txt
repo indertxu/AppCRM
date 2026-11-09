@@ -1,7 +1,7 @@
 // =====================================================================
 // Supabase Edge Function: connected-accounts
-// (drafted by the Base chat — Enterprise owns supabase/functions: copy this
-//  file to supabase/functions/connected-accounts/index.ts and deploy it)
+// (written and deployed by the Base chat on 2026-11-09; source of truth:
+//  src/base/requests/connected-accounts.index.ts.txt — Enterprise may adopt it)
 //
 // Several mail / calendar accounts per person: Gmail, Google Calendar and
 // extra Outlook accounts (the first Outlook stays in outlook_tokens /

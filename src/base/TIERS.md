@@ -154,12 +154,19 @@ Next free number: **120**  ← update this line when you claim one (and say whic
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
-- [ ] **Base → Enterprise (2026-11-09): new edge function `connected-accounts`.** The code is ready in `src/base/requests/connected-accounts.index.ts.txt` — copy it to `supabase/functions/connected-accounts/index.ts` and deploy it. Actions `connect` / `disconnect` / `check` / `token`; tables from SQL 119. It needs the secrets `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (plus the existing `MS_CLIENT_ID`, `MS_CLIENT_SECRET`). The front end also reads `VITE_GOOGLE_CLIENT_ID`. Base's Settings › Integrations calls it to add Gmail, Google Calendar and extra Outlook accounts (the first Outlook stays in `outlook_tokens` / `outlook-sync`, untouched). Enterprise can use the same table / function for its own multi-account mail.
+- [ ] **Base → Enterprise (2026-11-09): edge function `connected-accounts` — DEPLOYED by Base 2026-11-09 21:20 (v1); Enterprise: just adopt the source into `supabase/functions/connected-accounts/` when convenient.** The code is in `src/base/requests/connected-accounts.index.ts.txt` — copy it to `supabase/functions/connected-accounts/index.ts` and deploy it. Actions `connect` / `disconnect` / `check` / `token`; tables from SQL 119. It needs the secrets `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (plus the existing `MS_CLIENT_ID`, `MS_CLIENT_SECRET`). The front end also reads `VITE_GOOGLE_CLIENT_ID`. Base's Settings › Integrations calls it to add Gmail, Google Calendar and extra Outlook accounts (the first Outlook stays in `outlook_tokens` / `outlook-sync`, untouched). Enterprise can use the same table / function for its own multi-account mail.
 
 ---
 
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
+
+### 2026-11-09 21:20 · Base · Integrations redesigned (brand cards) + edge function connected-accounts deployed
+- files: `pages/settings/Integrations.tsx` / `.css`, `pages/settings/brandIcons.ts`, `requests/connected-accounts.index.ts.txt`.
+- New layout, top to bottom: **Connected** (one brand-tinted card per account: logo, app, address, Mail / Calendar chips, status dot, remove on hover) · **Available** (Gmail, Google Calendar, Outlook as big cards in their brand colour, button "Connect Outlook" / "Add another account", "N connected" badge) · **Coming soon** (light tiles, click to request — bell / tick). Search moved into the header. The logo still flies into its new card on connect.
+- Real Outlook and LinkedIn marks (Simple Icons v9.21, CC0 — the last release that had them).
+- **Edge function `connected-accounts` deployed by Base** (v1, verify_jwt on) from `requests/connected-accounts.index.ts.txt` — a new function, no existing one touched. Extra Outlook accounts work now (MS secrets exist). Gmail / Google Calendar still need `VITE_GOOGLE_CLIENT_ID` (front) + `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` (Supabase secrets). §8 request updated: Enterprise only has to adopt the source into `supabase/functions/` if it wants it there.
+- deploy: written to the Mac · edge function deployed · user to commit
 
 ### 2026-11-09 16:10 · Base · Integrations in two columns: Connected (left) · Add an app (right)
 - files: `pages/settings/Integrations.tsx` / `.css`.

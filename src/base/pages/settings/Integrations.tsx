@@ -41,16 +41,16 @@ function Logo({ k, color, letters, s = 34 }: { k?: string; color: string; letter
 /* ---------- catalogue ---------- */
 type AppDef = { k: string; name: string; what: string; logo: { k?: string; color: string; letters?: string }; live?: { provider: Provider; service: Service }; brings?: string[] };
 const LIVE: AppDef[] = [
-  { k: "gmail", name: "Gmail", what: "Inboxes", logo: { k: "gmail", color: "#ea4335" }, live: { provider: "google", service: "mail" } },
-  { k: "gcal", name: "Google Calendar", what: "Calendars", logo: { k: "gcal", color: "#4285f4" }, live: { provider: "google", service: "calendar" } },
-  { k: "outlook", name: "Microsoft Outlook", what: "Mail and calendars", logo: { color: "#0a64d6", letters: "O" }, live: { provider: "microsoft", service: "mail" } },
+  { k: "gmail", name: "Gmail", what: "Send and read mail from your Google inboxes", logo: { k: "gmail", color: "#ea4335" }, live: { provider: "google", service: "mail" } },
+  { k: "gcal", name: "Google Calendar", what: "Your meetings and activities, both ways", logo: { k: "gcal", color: "#4285f4" }, live: { provider: "google", service: "calendar" } },
+  { k: "outlook", name: "Outlook", what: "Mail and calendars from Microsoft 365", logo: { k: "outlook", color: "#0078d4" }, live: { provider: "microsoft", service: "mail" } },
 ];
 const SOON: AppDef[] = [
   { k: "whatsapp", name: "WhatsApp Business", what: "Chat with clients, kept on each client", logo: { k: "whatsapp", color: "#25d366" } },
   { k: "meta", name: "Meta", what: "Facebook and Instagram pages, Meta Ads", logo: { k: "meta", color: "#0467df" } },
   { k: "instagram", name: "Instagram", what: "Posts, reels and their results", logo: { k: "instagram", color: "#ff0069" } },
   { k: "messenger", name: "Messenger", what: "Facebook and Instagram DMs in one inbox", logo: { k: "messenger", color: "#0866ff" } },
-  { k: "linkedin", name: "LinkedIn", what: "Company page, LinkedIn Ads, lead forms", logo: { color: "#0a66c2", letters: "in" } },
+  { k: "linkedin", name: "LinkedIn", what: "Company page, LinkedIn Ads, lead forms", logo: { k: "linkedin", color: "#0a66c2" } },
   { k: "tiktok", name: "TikTok", what: "Short videos and TikTok Ads", logo: { k: "tiktok", color: "#000" } },
   { k: "gads", name: "Google Ads", what: "Search and display campaigns", logo: { k: "gads", color: "#4285f4" } },
   { k: "youtube", name: "YouTube", what: "Videos, views and subscribers", logo: { k: "youtube", color: "#ff0000" } },
@@ -163,102 +163,109 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
           <h1>Integrations</h1>
           <p>Connect the apps you work with — as many accounts as you need</p>
         </div>
+        <label className="ig-search">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find an app" />
+        </label>
       </header>
 
-      <div className="ig-cols">
-        {/* ---------- left: connected ---------- */}
-        <section className="ig-panel ig-mine">
-          <header className="ig-panel-h">
-            <h2>Connected</h2>
-            <span className="ig-n">{rows.length}</span>
-          </header>
-          {loading ? <div className="ig-skel"><i /><i /></div> : rows.length === 0 ? (
-            <div className="ig-empty">
-              <span className="ig-empty-art" aria-hidden="true"><i /><i /><i /></span>
-              <b>Nothing connected yet</b>
-              <p>Pick an app on the right — it lands here, ready for Billing, Calendar and the rest.</p>
-            </div>
-          ) : (
-            <ul className="ig-list" ref={listRef}>
+      <div className="ig-body">
+        {/* ---------- connected ---------- */}
+        <section className="ig-sec">
+          <div className="ig-sec-h">
+            <h2>Connected</h2><span className="ig-n">{rows.length}</span>
+            <p>Billing, Calendar and Growth pick from these accounts.</p>
+          </div>
+          {loading ? <div className="ig-conn"><i className="ig-skel" /><i className="ig-skel" /></div> : (
+            <ul className="ig-conn" ref={listRef}>
               {rows.map((r) => {
                 const a = APP[r.app];
+                const c = BRANDS[a.logo.k ?? ""]?.hex ?? a.logo.color;
                 return (
-                  <li key={r.key} data-key={r.key} className={`ig-acc ${fresh.includes(r.key) ? "is-fresh" : ""} ${r.status === "error" ? "is-err" : ""}`}>
-                    <Logo {...a.logo} s={36} />
-                    <div className="ig-acc-txt">
-                      <b title={r.email}>{r.email}</b>
-                      <span>{a.name}<i>·</i>{r.status === "error" ? <em>{r.note || "Sign in again"}</em> : r.services.map((s) => SVC[s]).join(" & ")}</span>
+                  <li key={r.key} data-key={r.key} className={`ig-cc ${fresh.includes(r.key) ? "is-fresh" : ""} ${r.status === "error" ? "is-err" : ""}`} style={{ ["--c" as string]: c }}>
+                    <div className="ig-cc-top">
+                      <Logo {...a.logo} s={38} />
+                      <span className="ig-cc-app">{a.name}</span>
+                      <span className={`ig-dot ${r.status === "error" ? "is-err" : ""}`} title={r.status === "error" ? "Needs attention" : "Working"} />
                     </div>
-                    {asking === r.key ? (
-                      <span className="ig-ask">
-                        <button className="is-yes" onClick={() => void remove(r)}>Remove</button>
-                        <button onClick={() => setAsking(null)}>Keep</button>
-                      </span>
-                    ) : (
-                      <>
-                        <span className={`ig-dot ${r.status === "error" ? "is-err" : ""}`} title={r.status === "error" ? "Needs attention" : "Working"} />
+                    <b className="ig-cc-mail" title={r.email}>{r.email}</b>
+                    <div className="ig-cc-foot">
+                      {r.status === "error" ? <em className="ig-cc-err">{r.note || "Sign in again"}</em>
+                        : r.services.map((s) => <span key={s} className="ig-chip">{SVC[s]}</span>)}
+                      {asking === r.key ? (
+                        <span className="ig-ask">
+                          <button className="is-yes" onClick={() => void remove(r)}>Remove</button>
+                          <button onClick={() => setAsking(null)}>Keep</button>
+                        </span>
+                      ) : (
                         <button className="ig-rm" onClick={() => setAsking(r.key)} aria-label={`Remove ${r.email}`} title="Remove">
                           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
                         </button>
-                      </>
-                    )}
+                      )}
+                    </div>
                   </li>
                 );
               })}
+              {rows.length === 0 && (
+                <li className="ig-cc is-empty">
+                  <span className="ig-empty-art" aria-hidden="true"><i /><i /><i /></span>
+                  <b>Nothing connected yet</b>
+                  <span>Connect an app below — it shows up here.</span>
+                </li>
+              )}
             </ul>
           )}
         </section>
 
-        {/* ---------- right: available + coming ---------- */}
-        <section className="ig-panel ig-shop">
-          <header className="ig-panel-h">
-            <h2>Add an app</h2>
-            <label className="ig-search">
-              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
-              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find an app" />
-            </label>
-          </header>
-
-          {live.length > 0 && <>
-            <h3 className="ig-sub">Available now</h3>
-            <ul className="ig-apps">
+        {/* ---------- available now ---------- */}
+        {live.length > 0 && (
+          <section className="ig-sec">
+            <div className="ig-sec-h"><h2>Available</h2><p>Connect one account or several.</p></div>
+            <div className="ig-feats">
               {live.map((a, i) => {
                 const ready = a.k === "outlook" || providerReady(a.live!.provider);
                 const n = countOf(a.k);
                 const isBusy = busy === a.k || (a.k === "outlook" && outlook.busy);
                 const error = err?.k === a.k ? err.text : a.k === "outlook" && !outlook.connected ? outlook.error : null;
+                const c = BRANDS[a.logo.k ?? ""]?.hex ?? a.logo.color;
                 return (
-                  <li key={a.k} className="ig-app" style={{ ["--i" as string]: i }}>
-                    <Logo {...a.logo} />
-                    <div className="ig-app-txt">
-                      <b>{a.name}{n > 0 && <small className="ig-has">{n} connected</small>}</b>
-                      <span className={error ? "is-err" : ""}>{error || (ready ? a.what : "Needs Google sign-in set up first")}</span>
+                  <article key={a.k} className="ig-feat ig-app" style={{ ["--c" as string]: c, ["--i" as string]: i }}>
+                    <div className="ig-feat-top">
+                      <Logo {...a.logo} s={48} />
+                      {n > 0 && <span className="ig-has"><span className="ig-dot" />{n} connected</span>}
                     </div>
-                    <button className={`ig-btn ${n ? "is-ghost" : ""}`} disabled={!ready || isBusy || loading} onClick={(e) => void connect(a, e.currentTarget)}>
-                      {isBusy ? <span className="ig-spin" /> : <Plus />}{isBusy ? "Signing in…" : n ? "Another" : "Connect"}
+                    <h3>{a.name}</h3>
+                    <p className={error ? "is-err" : ""}>{error || (ready ? a.what : "Google sign-in has to be switched on first (Client ID).")}</p>
+                    <button className={`ig-brand-btn ${n ? "is-soft" : ""}`} disabled={!ready || isBusy || loading} onClick={(e) => void connect(a, e.currentTarget)}>
+                      {isBusy ? <span className="ig-spin" /> : <Plus />}{isBusy ? "Waiting for sign-in…" : n ? "Add another account" : `Connect ${a.name}`}
                     </button>
-                  </li>
+                  </article>
                 );
               })}
-            </ul>
-          </>}
+            </div>
+          </section>
+        )}
 
-          {soon.length > 0 && <>
-            <h3 className="ig-sub">Coming soon</h3>
-            <ul className="ig-apps is-soon">
-              {soon.map((a, i) => (
-                <li key={a.k} className="ig-app" style={{ ["--i" as string]: i + live.length }}>
-                  <Logo {...a.logo} />
-                  <div className="ig-app-txt"><b>{a.name}</b><span>{a.what}</span></div>
-                  <button className={`ig-btn is-ghost ${want.includes(a.k) ? "is-on" : ""}`} onClick={() => setWant((w) => (w.includes(a.k) ? w.filter((x) => x !== a.k) : [...w, a.k]))}>
-                    {want.includes(a.k) ? <><Check />Requested</> : "Notify me"}
+        {/* ---------- coming soon ---------- */}
+        {soon.length > 0 && (
+          <section className="ig-sec">
+            <div className="ig-sec-h"><h2>Coming soon</h2><p>Tap the ones you want first — we build them in that order.</p></div>
+            <div className="ig-soon">
+              {soon.map((a, i) => {
+                const on = want.includes(a.k);
+                return (
+                  <button key={a.k} className={`ig-st ${on ? "is-on" : ""}`} style={{ ["--i" as string]: i }} title={a.what}
+                    onClick={() => setWant((w) => (w.includes(a.k) ? w.filter((x) => x !== a.k) : [...w, a.k]))}>
+                    <Logo {...a.logo} s={34} />
+                    <span className="ig-st-txt"><b>{a.name}</b><small>{on ? "Requested" : a.what}</small></span>
+                    <span className="ig-bell" aria-hidden="true">{on ? <Check /> : <Bell />}</span>
                   </button>
-                </li>
-              ))}
-            </ul>
-          </>}
-          {!live.length && !soon.length && <p className="ig-none">No app matches “{q}”.</p>}
-        </section>
+                );
+              })}
+            </div>
+          </section>
+        )}
+        {!live.length && !soon.length && <p className="ig-none">No app matches “{q}”.</p>}
       </div>
 
       {toast && <div className="ig-toast"><Check />{toast}</div>}
@@ -267,4 +274,5 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
 }
 
 const Check = () => <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.2 4.2L19 7" /></svg>;
+const Bell = () => <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0" /></svg>;
 const Plus = () => <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>;
