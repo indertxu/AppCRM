@@ -22,7 +22,6 @@ import { usePageAccess, useNavSection, levelName, levelBase, type PageKey } from
 import { SuperAdminSwitch } from "../../framework/SuperAdmin";
 import Integrations from "./Integrations";
 import { connectOutlook, completeOutlookConnect, outlookStatus, disconnectOutlook, outlookConnectError, OUTLOOK_CONNECTION_EVENT } from "../../api/outlookSync";
-import { getMailStatus } from "../homepage/shared/HomeTodo";
 import { DOCK_ITEMS, DOCK_ORDER_KEY, DOCK_ORDER_EVENT, orderDock } from "../../framework/Dock";
 import { loadPrefs, savePref, isSalesLead } from "../companies/companiesApi";
 import { CompanySettings, SettingsShell } from "../companies/CompaniesPage";
@@ -244,15 +243,13 @@ export default function SettingsPage() {
     window.addEventListener(OUTLOOK_CONNECTION_EVENT, on);
     return () => window.removeEventListener(OUTLOOK_CONNECTION_EVENT, on);
   }, []);
-  /** BASE: your mailbox (Outlook with mail permission), to send invoices from it. */
-  const [mailOn, setMailOn] = useState<boolean | null>(null);
+  /** BASE: connecting Outlook asks for calendar + mail in one go (Integrations). */
   const [mailBusy, setMailBusy] = useState(false);
-  useEffect(() => { getMailStatus(true).then((m) => setMailOn(!!m?.connected && !!m?.mail)).catch(() => setMailOn(false)); }, [outlookConnected]);
   const connectMail = async () => {
     setMailBusy(true); setOutlookError(null);
     const ok = await connectOutlook({ withMail: true }).catch(() => false);
     setMailBusy(false);
-    if (ok) { setOutlookConnected(true); setMailOn(true); } else setOutlookError(outlookConnectError());
+    if (ok) setOutlookConnected(true); else setOutlookError(outlookConnectError());
   };
   const handleOutlook = async () => {
     if (outlookConnected) {
@@ -352,10 +349,9 @@ export default function SettingsPage() {
       { v: "interface", title: "Interface", sub: "Sidebar, labels & toolbar order", accent: "#e0a13c", keys: "interface sidebar menu labels toolbar order",
         icon: I("M5.5 4h13A2.5 2.5 0 0 1 21 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5v-11A2.5 2.5 0 0 1 5.5 4z", "M8 4v16"),
         stats: [[dockLabels ? "On" : "Off", "menu labels"]] },
-      { v: "integrations", title: "Integrations", sub: "Outlook, Gmail, WhatsApp, Meta, TikTok, LinkedIn…", accent: "#5b6ee1",
+      { v: "integrations", title: "Integrations", sub: "Gmail, Google Calendar, Outlook — several accounts each; more on the way", accent: "#5b6ee1",
         keys: "integrations apps connect outlook gmail google whatsapp meta facebook instagram tiktok linkedin ads youtube analytics website mail calendar",
-        icon: I("M9 7V3M15 7V3M7 7h10v4a5 5 0 0 1-10 0V7zM12 16v5"),
-        stats: [[outlookConnected ? "1" : "0", "connected"], ["13", "on the way"]] },
+        icon: I("M9 7V3M15 7V3M7 7h10v4a5 5 0 0 1-10 0V7zM12 16v5") },
       { v: "account", title: "Your account", sub: "Password & details", accent: "#5a7d6d", keys: "account password profile",
         icon: I("M12 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8z", "M4 21a8 8 0 0 1 16 0"), stats: [[levelLabel(secLevel ?? role), "your level"]] },
     ];
@@ -489,8 +485,9 @@ export default function SettingsPage() {
 // ---- Integrations: every outside app (Outlook live; the rest on the way) ----
   if (view === "integrations") {
     return <Integrations onBack={() => setView("home")} outlook={{
-      connected: outlookConnected, busy: outlookBusy, error: outlookError, onToggle: handleOutlook,
-      mailOn, mailBusy, onMail: connectMail,
+      connected: outlookConnected, busy: outlookBusy || mailBusy, error: outlookError,
+      onConnect: () => void connectMail(),                       // calendar + mail in one go
+      onDisconnect: () => { if (outlookConnected) void handleOutlook(); },
     }} />;
   }
 

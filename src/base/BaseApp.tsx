@@ -20,6 +20,7 @@ import OrbitPage from "./pages/orbit/OrbitPage";
 import SettingsPage from "./pages/settings/SettingsPage";
 import SalesPage from "./pages/sales/sales/SalesPage";
 import BillingPage from "./pages/billing/BillingPage";
+import "./api/connectedAccounts"; // catches a Google / Microsoft sign-in popup coming back to /settings
 import GrowthPage from "./pages/growth/GrowthPage";
 
 /**

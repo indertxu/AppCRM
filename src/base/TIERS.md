@@ -126,7 +126,7 @@ Source in `supabase/functions/**`. Both apps call them; changes must stay backwa
 - Read the other side's entries since your last session before you start working.
 
 ## 7. SQL numbering
-Next free number: **119**  ← update this line when you claim one (and say which file in the log).
+Next free number: **120**  ← update this line when you claim one (and say which file in the log).
 | # | File | Chat | What |
 |---|---|---|---|
 | 98 | sql/98_client_default_folders.sql | Enterprise | client folder templates → new clients |
@@ -150,15 +150,24 @@ Next free number: **119**  ← update this line when you claim one (and say whic
 | 116 | sql/116_mail_known_only.sql | Enterprise | GDPR: `mail_is_known(tenant, email)` / `mail_row_known(...)` (contact, colleague, company e-mail, client contact list, or a company's own website / e-mail domain, or a company-linked contact's domain — never public domains); triggers drop unknown mail on insert (`ticket_mail_messages`) and e-mail tickets from unknown requesters (`tracking_tasks`); restrictive SELECT policy `mail_known_only` hides stored mail whose people left the CRM — applied 2026-11-07 |
 | 117 | sql/117_purge_unknown_mail.sql | Enterprise | deletes the e-mail stored before 116 from people not in the CRM (64 rows on Konsolidator) — to run in the SQL editor |
 | 118 | sql/118_project_team_alerts.sql | Enterprise | `alert_project_team()` + trigger `trg118_project_team_alerts` (after insert / update of team on `projects`): each person on the team gets a `user_alerts` row — kind `project_new` (created, e.g. Incoming › Build project) or `project_added` (put on an existing team), ref_type `project`, title = client, body = service · kick-off — applied 2026-11-09 |
+| 119 | src/base/sql/119_connected_accounts.sql | Base | `connected_accounts` (several Gmail / Google Calendar / Outlook accounts per person: provider, email, services mail/calendar, status; RLS own rows select/delete) + `connected_account_tokens` (RLS on, no policies: service role only) — written; to apply in Supabase |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
-- [ ] _(none yet)_
+- [ ] **Base → Enterprise (2026-11-09): new edge function `connected-accounts`.** The code is ready in `src/base/requests/connected-accounts.index.ts.txt` — copy it to `supabase/functions/connected-accounts/index.ts` and deploy it. Actions `connect` / `disconnect` / `check` / `token`; tables from SQL 119. It needs the secrets `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (plus the existing `MS_CLIENT_ID`, `MS_CLIENT_SECRET`). The front end also reads `VITE_GOOGLE_CLIENT_ID`. Base's Settings › Integrations calls it to add Gmail, Google Calendar and extra Outlook accounts (the first Outlook stays in `outlook_tokens` / `outlook-sync`, untouched). Enterprise can use the same table / function for its own multi-account mail.
 
 ---
 
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
+
+### 2026-11-09 15:30 · Base · Integrations: real Gmail / Google Calendar / Outlook accounts, several each, real logos
+- files: `api/connectedAccounts.ts` (new), `pages/settings/Integrations.tsx` / `.css`, `pages/settings/brandIcons.ts` (new), `pages/settings/SettingsPage.tsx`, `BaseApp.tsx`, `sql/119_connected_accounts.sql` (new), `requests/connected-accounts.index.ts.txt` (new — edge function for Enterprise to deploy, see §8).
+- Mail & calendar cards (Gmail, Google Calendar, Microsoft Outlook) list each connected account (address, Mail / Calendar, remove with confirm) and "Add another account". Sign-in opens in a popup (PKCE, `prompt=select_account`), comes back to `/settings?state=acc.…`, caught by `connectedAccounts.ts` (imported in BaseApp so the popup closes itself); the code goes to the edge function `connected-accounts`, which stores the account. The first Outlook is still the existing connection (calendar + mail in one go); more Outlooks go to `connected_accounts`. No invoice wording here any more — Billing will pick from the connected accounts later.
+- Logos: Simple Icons path data (CC0) in `brandIcons.ts` for Gmail, Google Calendar, WhatsApp, Messenger, Meta, Instagram, TikTok, Google Ads, YouTube, X, Google Analytics, Google. Outlook and LinkedIn aren't in Simple Icons → lettered tile.
+- Until SQL 119, the edge function and `VITE_GOOGLE_CLIENT_ID` exist, Gmail / Google Calendar show "Needs setup" and Add is off; nothing breaks.
+- tags: DB (119) · IDEA→ENT (multi-account mail for Enterprise too)
+- deploy: written to the Mac · SQL 119 to apply in Supabase · edge function: request in §8 · user to commit
 
 ### 2026-11-09 14:15 · Base · Settings: Integrations is its own page (Outlook moved out of Interface)
 - New `pages/settings/Integrations.tsx` / `.css` (prefix `.ig-`), view `"integrations"` in `SettingsPage.tsx`, its own tile in "Just you" next to Interface. Groups: Mail & calendar (Outlook — live: calendar sync + mailbox for invoices, same handlers as before; Gmail, Google Calendar), Messaging (WhatsApp Business, Messenger & Instagram DMs), Social & ads (Meta, LinkedIn, TikTok, Google Ads, YouTube, X), Website & analytics (Google Analytics, Google Business Profile, your website forms). Not-yet-built apps show "Soon" + "Notify me" (remembered in localStorage `next.base.integrations.want`) and a "What it brings" pop-up.

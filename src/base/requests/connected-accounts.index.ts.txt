@@ -1,0 +1,151 @@
+// =====================================================================
+// Supabase Edge Function: connected-accounts
+// (drafted by the Base chat — Enterprise owns supabase/functions: copy this
+//  file to supabase/functions/connected-accounts/index.ts and deploy it)
+//
+// Several mail / calendar accounts per person: Gmail, Google Calendar and
+// extra Outlook accounts (the first Outlook stays in outlook_tokens /
+// outlook-sync, untouched). Table: connected_accounts + connected_account_tokens
+// (src/base/sql/119_connected_accounts.sql).
+//
+// Actions (POST, the caller's Supabase JWT identifies the user):
+//   connect    { provider: "google"|"microsoft", code, codeVerifier, redirectUri, services: ["mail","calendar"] }
+//              → swaps the code for tokens, reads the address, stores / merges the account
+//   disconnect { id }  → revokes at the provider (Google) and deletes the account + tokens
+//   check      { id }  → refreshes the token; marks the account active / error
+//   token      { id }  → a fresh access token (for later Gmail / Calendar / Outlook features)
+//
+// Secrets (supabase secrets set …):
+//   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET   (Google Cloud › OAuth client, type Web)
+//   MS_CLIENT_ID, MS_CLIENT_SECRET           (already set for outlook-sync)
+// =====================================================================
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+const cors = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
+const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+
+type Provider = "google" | "microsoft";
+const TOKEN_URL: Record<Provider, string> = {
+  google: "https://oauth2.googleapis.com/token",
+  microsoft: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+};
+const creds = (p: Provider) => p === "google"
+  ? { id: Deno.env.get("GOOGLE_CLIENT_ID") ?? "", secret: Deno.env.get("GOOGLE_CLIENT_SECRET") ?? "" }
+  : { id: Deno.env.get("MS_CLIENT_ID") ?? "", secret: Deno.env.get("MS_CLIENT_SECRET") ?? "" };
+
+async function caller(req: Request): Promise<{ id: string; tenant: string } | null> {
+  const token = (req.headers.get("Authorization") ?? "").replace("Bearer ", "");
+  if (!token) return null;
+  const { data, error } = await admin.auth.getUser(token);
+  if (error || !data.user) return null;
+  const { data: prof } = await admin.from("profiles").select("tenant_id").eq("id", data.user.id).maybeSingle();
+  if (!(prof as any)?.tenant_id) return null;
+  return { id: data.user.id, tenant: (prof as any).tenant_id };
+}
+
+async function tokenRequest(p: Provider, body: Record<string, string>) {
+  const c = creds(p);
+  if (!c.id || !c.secret) throw new Error(p === "google" ? "Google sign-in isn't set up on the server (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)." : "Microsoft sign-in isn't set up on the server.");
+  const res = await fetch(TOKEN_URL[p], {
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ client_id: c.id, client_secret: c.secret, ...body }),
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(j.error_description || j.error || `Token error ${res.status}`);
+  return j as { access_token: string; refresh_token?: string; expires_in?: number; scope?: string; id_token?: string };
+}
+
+async function whoIs(p: Provider, accessToken: string): Promise<{ email: string; name: string | null }> {
+  if (p === "google") {
+    const r = await fetch("https://openidconnect.googleapis.com/v1/userinfo", { headers: { Authorization: `Bearer ${accessToken}` } });
+    const j = await r.json();
+    return { email: String(j.email ?? "").toLowerCase(), name: j.name ?? null };
+  }
+  const r = await fetch("https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName,displayName", { headers: { Authorization: `Bearer ${accessToken}` } });
+  const j = await r.json();
+  return { email: String(j.mail || j.userPrincipalName || "").toLowerCase(), name: j.displayName ?? null };
+}
+
+async function freshToken(accountId: string, userId: string): Promise<string> {
+  const { data: acc } = await admin.from("connected_accounts").select("id, provider, user_id").eq("id", accountId).maybeSingle();
+  if (!acc || (acc as any).user_id !== userId) throw new Error("Account not found.");
+  const { data: t } = await admin.from("connected_account_tokens").select("*").eq("account_id", accountId).maybeSingle();
+  if (!t) throw new Error("No token stored.");
+  if ((t as any).access_token && (t as any).expires_at && new Date((t as any).expires_at).getTime() - Date.now() > 120_000) return (t as any).access_token;
+  try {
+    const tok = await tokenRequest((acc as any).provider, { grant_type: "refresh_token", refresh_token: (t as any).refresh_token });
+    await admin.from("connected_account_tokens").update({
+      access_token: tok.access_token, refresh_token: tok.refresh_token ?? (t as any).refresh_token,
+      expires_at: new Date(Date.now() + (tok.expires_in ?? 3600) * 1000).toISOString(), updated_at: new Date().toISOString(),
+    }).eq("account_id", accountId);
+    await admin.from("connected_accounts").update({ status: "active", last_error: null, updated_at: new Date().toISOString() }).eq("id", accountId);
+    return tok.access_token;
+  } catch (e) {
+    await admin.from("connected_accounts").update({ status: "error", last_error: String((e as Error).message ?? e), updated_at: new Date().toISOString() }).eq("id", accountId);
+    throw e;
+  }
+}
+
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
+  try {
+    const me = await caller(req);
+    if (!me) return json({ error: "Not authenticated" }, 401);
+    const { action, ...p } = await req.json();
+
+    if (action === "connect") {
+      const provider = p.provider as Provider;
+      if (provider !== "google" && provider !== "microsoft") return json({ error: "Unknown provider" }, 400);
+      const services = (Array.isArray(p.services) ? p.services : []).filter((s: string) => s === "mail" || s === "calendar");
+      const tok = await tokenRequest(provider, { grant_type: "authorization_code", code: p.code, redirect_uri: p.redirectUri, code_verifier: p.codeVerifier ?? "" });
+      const who = await whoIs(provider, tok.access_token);
+      if (!who.email) return json({ error: "Couldn't read the account's address." }, 400);
+      const { data: existing } = await admin.from("connected_accounts").select("id, services")
+        .eq("user_id", me.id).eq("provider", provider).eq("email", who.email).maybeSingle();
+      const merged = Array.from(new Set([...(((existing as any)?.services) ?? []), ...services]));
+      const row = {
+        tenant_id: me.tenant, user_id: me.id, provider, email: who.email, display_name: who.name, services: merged,
+        scopes: tok.scope ?? null, status: "active", last_error: null, updated_at: new Date().toISOString(),
+      };
+      const up = await admin.from("connected_accounts").upsert(row, { onConflict: "user_id,provider,email" }).select("id, provider, email, display_name, services, status, last_error, connected_at").single();
+      if (up.error) return json({ error: up.error.message }, 400);
+      const { data: oldTok } = await admin.from("connected_account_tokens").select("refresh_token").eq("account_id", (up.data as any).id).maybeSingle();
+      await admin.from("connected_account_tokens").upsert({
+        account_id: (up.data as any).id, access_token: tok.access_token,
+        refresh_token: tok.refresh_token ?? (oldTok as any)?.refresh_token ?? null,     // Google sends it only on first consent
+        expires_at: new Date(Date.now() + (tok.expires_in ?? 3600) * 1000).toISOString(), updated_at: new Date().toISOString(),
+      });
+      return json({ account: up.data });
+    }
+
+    if (action === "disconnect") {
+      const { data: acc } = await admin.from("connected_accounts").select("id, provider, user_id").eq("id", p.id).maybeSingle();
+      if (!acc || (acc as any).user_id !== me.id) return json({ error: "Account not found." }, 404);
+      if ((acc as any).provider === "google") {
+        const { data: t } = await admin.from("connected_account_tokens").select("refresh_token, access_token").eq("account_id", p.id).maybeSingle();
+        const tk = (t as any)?.refresh_token || (t as any)?.access_token;
+        if (tk) await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(tk)}`, { method: "POST" }).catch(() => {});
+      }
+      await admin.from("connected_accounts").delete().eq("id", p.id);
+      return json({ ok: true });
+    }
+
+    if (action === "check") {
+      try { await freshToken(p.id, me.id); return json({ status: "active" }); }
+      catch (e) { return json({ status: "error", error: String((e as Error).message ?? e) }); }
+    }
+
+    if (action === "token") {
+      return json({ access_token: await freshToken(p.id, me.id) });
+    }
+
+    return json({ error: "Unknown action" }, 400);
+  } catch (e) {
+    return json({ error: String((e as Error).message ?? e) }, 500);
+  }
+});
