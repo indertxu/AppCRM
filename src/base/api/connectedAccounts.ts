@@ -17,8 +17,8 @@
    ===================================================================== */
 import { supabase } from "../../components/api/supabase";
 
-export type Provider = "google" | "microsoft" | "meta";
-export type Service = "mail" | "calendar" | "facebook" | "instagram" | "ads";
+export type Provider = "google" | "microsoft" | "meta" | "linkedin";
+export type Service = "mail" | "calendar" | "facebook" | "instagram" | "ads" | "linkedin" | "linkedin_pages";
 export interface ConnectedAccount {
   id: string; provider: Provider; email: string; display_name: string | null;
   services: Service[]; status: "active" | "error"; last_error: string | null; connected_at: string; updated_at?: string;
@@ -29,6 +29,11 @@ const MS_CLIENT_ID = (import.meta.env.VITE_MS_CLIENT_ID as string | undefined) ?
 /** Meta app (developers.facebook.com). With "Facebook Login for Business" also set VITE_META_CONFIG_ID (a login configuration replaces the scope list). */
 export const META_APP_ID = (import.meta.env.VITE_META_APP_ID as string | undefined) ?? "";
 const META_CONFIG_ID = (import.meta.env.VITE_META_CONFIG_ID as string | undefined) ?? "";
+/** LinkedIn app (linkedin.com/developers). Company pages need the Community Management API: when LinkedIn
+ *  approves it, set VITE_LINKEDIN_PAGES=1 (and VITE_LINKEDIN_PAGES_CLIENT_ID if it lives in a second app). */
+export const LINKEDIN_CLIENT_ID = (import.meta.env.VITE_LINKEDIN_CLIENT_ID as string | undefined) ?? "";
+const LINKEDIN_PAGES_CLIENT_ID = (import.meta.env.VITE_LINKEDIN_PAGES_CLIENT_ID as string | undefined) ?? "";
+export const LINKEDIN_PAGES = (import.meta.env.VITE_LINKEDIN_PAGES as string | undefined) === "1";
 const REDIRECT_URI = `${window.location.origin}/settings`;
 const STATE_PREFIX = "acc.";
 const CHANNEL = "next-connected-accounts";
@@ -48,14 +53,19 @@ const SCOPES: Record<Provider, Partial<Record<Service, string>>> = {
     instagram: "pages_show_list pages_read_engagement instagram_basic instagram_content_publish instagram_manage_insights instagram_manage_comments",
     ads: "ads_read leads_retrieval pages_manage_ads business_management",
   },
+  linkedin: {
+    linkedin: "w_member_social",
+    linkedin_pages: "rw_organization_admin r_organization_social w_organization_social",
+  },
 };
-const BASE_SCOPES: Record<Provider, string> = { google: "openid email profile", microsoft: "offline_access User.Read", meta: "public_profile email" };
+const BASE_SCOPES: Record<Provider, string> = { google: "openid email profile", microsoft: "offline_access User.Read", meta: "public_profile email", linkedin: "openid profile email" };
 const AUTH_URL: Record<Provider, string> = {
   google: "https://accounts.google.com/o/oauth2/v2/auth",
   microsoft: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
   meta: "https://www.facebook.com/v26.0/dialog/oauth",
+  linkedin: "https://www.linkedin.com/oauth/v2/authorization",
 };
-export const providerReady = (p: Provider) => (p === "google" ? !!GOOGLE_CLIENT_ID : p === "meta" ? !!META_APP_ID : !!MS_CLIENT_ID);
+export const providerReady = (p: Provider) => (p === "google" ? !!GOOGLE_CLIENT_ID : p === "meta" ? !!META_APP_ID : p === "linkedin" ? !!LINKEDIN_CLIENT_ID : !!MS_CLIENT_ID);
 
 /* ---------- PKCE ---------- */
 const b64url = (bytes: Uint8Array) => { let s = ""; for (const b of bytes) s += String.fromCharCode(b); return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); };
@@ -124,7 +134,7 @@ export async function removeAccount(id: string): Promise<string | null> {
  * stored account, or an error message.
  */
 export async function addAccount(provider: Provider, services: Service[], opts: { loginHint?: string } = {}): Promise<{ account?: ConnectedAccount; assets?: { pages?: number; instagram?: number; ad_accounts?: number; error?: string } | null; error?: string }> {
-  if (!providerReady(provider)) return { error: `${provider === "google" ? "Google" : provider === "meta" ? "Meta" : "Microsoft"} sign-in isn't set up for this app yet.` };
+  if (!providerReady(provider)) return { error: `${provider === "google" ? "Google" : provider === "meta" ? "Meta" : provider === "linkedin" ? "LinkedIn" : "Microsoft"} sign-in isn't set up for this app yet.` };
   const verifier = rnd(48);
   const state = `${STATE_PREFIX}${provider}.${rnd(12)}`;
   const scopeList = Array.from(new Set([BASE_SCOPES[provider], ...services.map((s) => SCOPES[provider][s] ?? "")].join(" ").split(" ").filter(Boolean)));
@@ -133,6 +143,10 @@ export async function addAccount(provider: Provider, services: Service[], opts: 
     client_id: META_APP_ID, response_type: "code", redirect_uri: REDIRECT_URI, state,
     ...(META_CONFIG_ID ? { config_id: META_CONFIG_ID } : { scope: scopeList.join(",") }),
     ...(opts.loginHint ? { auth_type: "rerequest" } : {}),
+  }) : provider === "linkedin" ? new URLSearchParams({
+    // LinkedIn (web apps): no PKCE, space-separated scopes; the code is swapped with the client secret on the server
+    client_id: services.includes("linkedin_pages") && LINKEDIN_PAGES_CLIENT_ID ? LINKEDIN_PAGES_CLIENT_ID : LINKEDIN_CLIENT_ID,
+    response_type: "code", redirect_uri: REDIRECT_URI, state, scope: scopeList.join(" "),
   }) : new URLSearchParams({
     client_id: provider === "google" ? GOOGLE_CLIENT_ID : MS_CLIENT_ID,
     response_type: "code", redirect_uri: REDIRECT_URI, scope: scopeList.join(" "), state,
@@ -210,7 +224,7 @@ export async function lastMailReads(): Promise<Record<string, string>> {
 
 /* ---------- Meta: what a login reaches ---------- */
 export interface ConnectedAsset {
-  id: string; account_id: string; kind: "facebook_page" | "instagram" | "ad_account"; external_id: string;
+  id: string; account_id: string; kind: "facebook_page" | "instagram" | "ad_account" | "linkedin_org"; external_id: string;
   name: string | null; username: string | null; picture_url: string | null; extra: Record<string, any>; updated_at: string;
 }
 /** Facebook pages, Instagram accounts and ad accounts of your Meta logins (SQL 123). */
@@ -218,7 +232,7 @@ export async function listAssets(): Promise<ConnectedAsset[]> {
   const { data, error } = await supabase.from("connected_assets").select("id, account_id, kind, external_id, name, username, picture_url, extra, updated_at").order("name");
   return error ? [] : ((data ?? []) as ConnectedAsset[]);
 }
-/** Re-read a Meta login's pages / Instagram accounts / ad accounts. */
+/** Re-read a Meta login's pages / Instagram accounts / ad accounts, or a LinkedIn login's company pages. */
 export async function syncAssets(id: string): Promise<{ error?: string }> {
   const r = await call("assets_sync", { id });
   return r?.error ? { error: r.error } : {};

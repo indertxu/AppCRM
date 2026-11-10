@@ -18,7 +18,7 @@
    ===================================================================== */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
-  addAccount, checkAccount, lastMailReads, listAccounts, listAssets, myOutlookConnection, providerReady, removeAccount, syncAssets,
+  addAccount, checkAccount, LINKEDIN_PAGES, lastMailReads, listAccounts, listAssets, myOutlookConnection, providerReady, removeAccount, syncAssets,
   type ConnectedAccount, type ConnectedAsset, type OutlookFacts, type Provider, type Service,
 } from "../../api/connectedAccounts";
 import { BRANDS } from "./brandIcons";
@@ -61,11 +61,13 @@ const LIVE: AppDef[] = [
     brings: ["Publish on your pages", "Reach, reactions and comments in Growth", "Several pages"] },
   { k: "instagram", name: "Instagram", what: "Professional accounts: posts, reels and insights", logo: { k: "instagram", color: "#ff0069" }, live: { provider: "meta", service: "instagram" },
     brings: ["Publish posts and reels", "Reach, likes and comments in Growth", "Needs an Instagram business or creator account linked to a Facebook page"] },
+  { k: "linkedin", name: "LinkedIn", what: "Post as you — and as your company page once approved", logo: { k: "linkedin", color: "#0a66c2" }, live: { provider: "linkedin", service: "linkedin" },
+    brings: ["Publish posts on your profile", "Company pages: post and read followers and engagement (needs LinkedIn's Community Management API)", "Several LinkedIn accounts"] },
 ];
 const SOON: AppDef[] = [
   { k: "whatsapp", name: "WhatsApp Business", what: "Chat with clients, kept on each client", logo: { k: "whatsapp", color: "#25d366" }, brings: ["One or more business numbers", "Messages saved on the client", "Follow-ups by WhatsApp"] },
   { k: "messenger", name: "Messenger", what: "Facebook and Instagram DMs in one inbox", logo: { k: "messenger", color: "#0866ff" }, brings: ["Every DM in one inbox", "Replies kept on the client"] },
-  { k: "linkedin", name: "LinkedIn", what: "Company page, LinkedIn Ads, lead forms", logo: { k: "linkedin", color: "#0a66c2" }, brings: ["Company page posts", "LinkedIn Ads", "Lead-gen forms into Orbit"] },
+  { k: "linkedin-ads", name: "LinkedIn Ads", what: "Campaigns and lead-gen forms", logo: { k: "linkedin", color: "#0a66c2" }, brings: ["LinkedIn Ads campaigns and results", "Lead-gen forms into Orbit"] },
   { k: "tiktok", name: "TikTok", what: "Short videos and TikTok Ads", logo: { k: "tiktok", color: "#000" }, brings: ["Publish short videos", "TikTok Ads results"] },
   { k: "gads", name: "Google Ads", what: "Search and display campaigns", logo: { k: "gads", color: "#4285f4" }, brings: ["Campaigns with cost per lead", "Spend next to the deals it brought"] },
   { k: "youtube", name: "YouTube", what: "Videos, views and subscribers", logo: { k: "youtube", color: "#ff0000" }, brings: ["Upload videos", "Views and subscribers in Growth"] },
@@ -76,15 +78,17 @@ const SOON: AppDef[] = [
 ];
 const APP = Object.fromEntries([...LIVE, ...SOON].map((a) => [a.k, a])) as Record<string, AppDef>;
 const WANT_KEY = "next.base.integrations.want";
-const SVC: Record<Service, string> = { mail: "Mail", calendar: "Calendar", facebook: "Facebook", instagram: "Instagram", ads: "Ads" };
+const SVC: Record<Service, string> = { mail: "Mail", calendar: "Calendar", facebook: "Facebook", instagram: "Instagram", ads: "Ads", linkedin: "Profile posts", linkedin_pages: "Company pages" };
 /** Which apps of the list an account shows under. */
 const appsOf = (a: ConnectedAccount): string[] =>
   a.provider === "google" ? a.services.map((s) => (s === "mail" ? "gmail" : s === "calendar" ? "gcal" : "")).filter(Boolean)
   : a.provider === "meta" ? ["meta", ...(a.services.includes("facebook") ? ["facebook"] : []), ...(a.services.includes("instagram") ? ["instagram"] : [])]
+  : a.provider === "linkedin" ? ["linkedin"]
   : ["outlook"];
 /** What one sign-in asks for, per app. */
 const servicesFor = (k: string): Service[] =>
-  k === "meta" ? ["facebook", "instagram", "ads"] : k === "facebook" ? ["facebook"] : k === "instagram" ? ["instagram"] : ["mail", "calendar"];
+  k === "meta" ? ["facebook", "instagram", "ads"] : k === "facebook" ? ["facebook"] : k === "instagram" ? ["instagram"]
+  : k === "linkedin" ? (LINKEDIN_PAGES ? ["linkedin", "linkedin_pages"] : ["linkedin"]) : ["mail", "calendar"];
 const colorOf = (a: AppDef) => BRANDS[a.logo.k ?? ""]?.hex ?? a.logo.color;
 
 type Row = {
@@ -144,7 +148,7 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
   const rows: Row[] = [];
   if (outlook.connected) rows.push({ key: "outlook:primary", app: "outlook", id: "outlook-primary", email: ol?.email ?? "Outlook account", services: ["mail", "calendar"], status: "active", primary: true, connectedAt: ol?.connectedAt, lastActive: ol?.lastRefresh });
   for (const a of accounts ?? []) {
-    const base = { id: a.id, email: a.email, label: a.provider === "meta" ? a.display_name : null, provider: a.provider, status: a.status, note: a.last_error, connectedAt: a.connected_at, lastActive: a.updated_at ?? a.connected_at };
+    const base = { id: a.id, email: a.email, label: a.provider === "meta" || a.provider === "linkedin" ? a.display_name : null, provider: a.provider, status: a.status, note: a.last_error, connectedAt: a.connected_at, lastActive: a.updated_at ?? a.connected_at };
     if (a.provider === "microsoft" && a.email === ol?.email) continue;
     for (const app of appsOf(a)) rows.push({ ...base, key: `${app}:${a.id}`, app, services: a.provider === "google" ? [app === "gmail" ? "mail" : "calendar"] : a.services });
   }
@@ -300,10 +304,11 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
                 <div><dt>Used for</dt><dd>{r.services.map((s) => SVC[s]).join(" · ")}{r.primary ? " · main" : ""}</dd></div>
               </dl>
               {r.provider === "meta" && <AssetList items={assets.filter((x) => x.account_id === r.id && (a.k === "meta" || (a.k === "facebook" ? x.kind === "facebook_page" : x.kind === "instagram")))} />}
+              {r.provider === "linkedin" && r.services.includes("linkedin_pages") && <AssetList items={assets.filter((x) => x.account_id === r.id)} />}
               {r.status === "error" && r.note && <p className="ig-acc-err">{r.note}</p>}
               <div className="ig-acc-act">
                 {!r.primary && <button className="ig-mini" disabled={checking === r.key} onClick={() => void check(r)}>{checking === r.key ? <span className="ig-spin is-dark" /> : <Refresh />}Check now</button>}
-                {r.provider === "meta" && <button className="ig-mini" disabled={checking === `sync:${r.key}`} onClick={() => void resync(r)}>{checking === `sync:${r.key}` ? <span className="ig-spin is-dark" /> : <Refresh />}Re-read pages</button>}
+                {(r.provider === "meta" || (r.provider === "linkedin" && r.services.includes("linkedin_pages"))) && <button className="ig-mini" disabled={checking === `sync:${r.key}`} onClick={() => void resync(r)}>{checking === `sync:${r.key}` ? <span className="ig-spin is-dark" /> : <Refresh />}Re-read pages</button>}
                 <span className="ig-grow" />
                 {asking === r.key ? (
                   <span className="ig-ask"><span>Remove this account?</span><button className="is-yes" onClick={() => void remove(r)}>Remove</button><button onClick={() => setAsking(null)}>Keep</button></span>
@@ -311,7 +316,7 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
               </div>
             </article>
           ))}
-          {a.live!.provider !== "microsoft" && (accounts ?? []).filter((x) => x.provider === a.live!.provider && !appsOf(x).includes(a.k)).map((x) => (
+          {(a.live!.provider === "google" || a.live!.provider === "meta") && (accounts ?? []).filter((x) => x.provider === a.live!.provider && !appsOf(x).includes(a.k)).map((x) => (
             <div key={x.id} className="ig-also">
               <i className="ig-av">{(x.display_name || x.email)[0]?.toUpperCase()}</i>
               <span><b>{x.provider === "meta" ? x.display_name || x.email : x.email}</b><small>Linked for {appsOf(x).map((k) => APP[k]?.name).join(" & ")} — not for {a.name} yet</small></span>
@@ -327,6 +332,8 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
         </div>
         {a.live!.provider === "google" && !providerReady("google") && <GoogleGuide />}
         {a.live!.provider === "meta" && !providerReady("meta") && <MetaGuide />}
+        {a.live!.provider === "linkedin" && !providerReady("linkedin") && <LinkedInGuide />}
+        {a.live!.provider === "linkedin" && providerReady("linkedin") && !LINKEDIN_PAGES && <p className="ig-det-p ig-det-pad">Company pages turn on once LinkedIn approves the Community Management API for this app.</p>}
         {a.live!.provider === "meta" && providerReady("meta") && rs.length === 0 && <p className="ig-det-p ig-det-pad">To add a second Facebook login, switch account on facebook.com first — Meta signs you in with whoever is logged in there.</p>}
         {a.brings && (
           <div className="ig-det-sec">
@@ -385,7 +392,7 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
 
         <section className="ig-col">
           <header className="ig-col-h"><h2>Available</h2><span className="ig-n is-soft">{LIVE.length}</span></header>
-          {list("avail", LIVE, (a) => (a.k === "outlook" || providerReady(a.live!.provider) ? a.what : `Set up ${a.live!.provider === "meta" ? "Meta" : "Google"} sign-in first`))}
+          {list("avail", LIVE, (a) => (a.k === "outlook" || providerReady(a.live!.provider) ? a.what : `Set up ${a.live!.provider === "meta" ? "Meta" : a.live!.provider === "linkedin" ? "LinkedIn" : "Google"} sign-in first`))}
         </section>
         {detail("avail")}
 
@@ -428,17 +435,40 @@ function GoogleGuide() {
 /* ---------- Meta: the pages / Instagram accounts / ad accounts a login reaches ---------- */
 function AssetList({ items }: { items: ConnectedAsset[] }) {
   if (!items.length) return <p className="ig-assets-none">No pages or accounts found for this login yet.</p>;
-  const KIND: Record<ConnectedAsset["kind"], string> = { facebook_page: "Facebook page", instagram: "Instagram", ad_account: "Ad account" };
-  const order = ["facebook_page", "instagram", "ad_account"];
+  const KIND: Record<ConnectedAsset["kind"], string> = { facebook_page: "Facebook page", instagram: "Instagram", ad_account: "Ad account", linkedin_org: "LinkedIn page" };
+  const order = ["facebook_page", "instagram", "ad_account", "linkedin_org"];
   return (
     <ul className="ig-assets">
       {[...items].sort((x, y) => order.indexOf(x.kind) - order.indexOf(y.kind)).map((x) => (
         <li key={x.id} className={`is-${x.kind}`}>
           {x.picture_url ? <img src={x.picture_url} alt="" loading="lazy" referrerPolicy="no-referrer" /> : <i>{(x.name || x.username || "?")[0]?.toUpperCase()}</i>}
-          <span><b>{x.kind === "instagram" && x.username ? `@${x.username}` : x.name || x.external_id}</b><small>{KIND[x.kind]}{x.kind === "instagram" && x.extra?.followers != null ? ` · ${Number(x.extra.followers).toLocaleString("en-GB")} followers` : ""}{x.kind === "ad_account" && x.extra?.currency ? ` · ${x.extra.currency}` : ""}</small></span>
+          <span><b>{x.kind === "instagram" && x.username ? `@${x.username}` : x.name || x.external_id}</b><small>{KIND[x.kind]}{x.kind === "linkedin_org" && x.extra?.role ? ` · ${String(x.extra.role).replace(/_/g, " ").toLowerCase()}` : ""}{x.kind === "instagram" && x.extra?.followers != null ? ` · ${Number(x.extra.followers).toLocaleString("en-GB")} followers` : ""}{x.kind === "ad_account" && x.extra?.currency ? ` · ${x.extra.currency}` : ""}</small></span>
         </li>
       ))}
     </ul>
+  );
+}
+
+/* ---------- LinkedIn setup guide (shown until VITE_LINKEDIN_CLIENT_ID exists) ---------- */
+function LinkedInGuide() {
+  const origin = window.location.origin;
+  const [copied, setCopied] = useState("");
+  const copy = (t: string) => { void navigator.clipboard?.writeText(t); setCopied(t); setTimeout(() => setCopied(""), 1400); };
+  const C = ({ t }: { t: string }) => <button className={`ig-code ${copied === t ? "is-done" : ""}`} onClick={() => copy(t)} title="Copy">{t}{copied === t ? <Check /> : <Copy />}</button>;
+  return (
+    <div className="ig-det-sec ig-guide">
+      <h4>Set up LinkedIn sign-in · once, about 10 minutes</h4>
+      <ol>
+        <li><b>Create the app</b><span>linkedin.com/developers/apps → <i>Create app</i>: name “Next”, your company's <i>LinkedIn Page</i> (you must be its admin), privacy policy URL and logo.</span></li>
+        <li><b>Verify it with the page</b><span>In <i>Settings → App settings</i> press <i>Verify</i> and open the link as the page admin.</span></li>
+        <li><b>Add the products</b><span><i>Products</i> → request <i>Sign In with LinkedIn using OpenID Connect</i> and <i>Share on LinkedIn</i> (both instant).</span></li>
+        <li><b>Redirect URL</b><span><i>Auth → Authorized redirect URLs</i> → add:</span><C t={`${origin}/settings`} /><span>and your live address …/settings.</span></li>
+        <li><b>Client ID and secret</b><span>Same <i>Auth</i> tab: copy the <i>Client ID</i> and the <i>Primary Client Secret</i>. In .env and Vercel (type Config):</span><C t="VITE_LINKEDIN_CLIENT_ID=" /></li>
+        <li><b>Give them to Supabase</b><span><i>Edge Functions → Secrets</i> → add <i>LINKEDIN_CLIENT_ID</i> and <i>LINKEDIN_CLIENT_SECRET</i>.</span></li>
+        <li><b>Company pages (later)</b><span><i>Products</i> → request <i>Community Management API</i> (LinkedIn reviews it; it may ask for a separate app). When approved add <i>VITE_LINKEDIN_PAGES=1</i> — and, if it's a second app, its IDs as <i>VITE_LINKEDIN_PAGES_CLIENT_ID</i> and secrets <i>LINKEDIN_PAGES_CLIENT_ID / _SECRET</i>.</span></li>
+      </ol>
+      <p className="ig-guide-note">LinkedIn access lasts 60 days; after that the account shows “Needs sign-in” and one click reconnects it.</p>
+    </div>
   );
 }
 

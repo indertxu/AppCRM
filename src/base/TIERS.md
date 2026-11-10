@@ -126,7 +126,7 @@ Source in `supabase/functions/**`. Both apps call them; changes must stay backwa
 - Read the other side's entries since your last session before you start working.
 
 ## 7. SQL numbering
-Next free number: **124**  ← update this line when you claim one (and say which file in the log).
+Next free number: **125**  ← update this line when you claim one (and say which file in the log).
 | # | File | Chat | What |
 |---|---|---|---|
 | 98 | sql/98_client_default_folders.sql | Enterprise | client folder templates → new clients |
@@ -155,6 +155,7 @@ Next free number: **124**  ← update this line when you claim one (and say whic
 | 121 | sql/121_client_churn_end.sql | Enterprise | `client_products.ends_on` (a running product stops that day: a churn on a future date) + `client_products_status_chk` widened to active/expired/cancelled/renewed/paused/ended — applied 2026-11-10 |
 | 122 | sql/122_upsell_in_contract.sql | Enterprise | `client_products.contract_tracking_id` (+ index): the contract an upsell / hand-added product was signed into — applied 2026-11-10 |
 | 123 | src/base/sql/123_connected_meta.sql | Base | `connected_accounts.provider` + `meta`; `connected_assets` (pages / Instagram / ad accounts of a Meta login, RLS own select) + `connected_asset_tokens` (service role only) — applied 2026-11-10 |
+| 124 | src/base/sql/124_connected_linkedin.sql | Base | `connected_accounts.provider` + `linkedin`; `connected_assets.kind` + `linkedin_org` — applied 2026-11-10 |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
@@ -164,6 +165,26 @@ Write requests here; the other chat answers in the log and ticks them.
 
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
+
+### 2026-11-10 14:30 · Base · Integrations: LinkedIn (profile now, company pages when approved)
+- files: `pages/settings/Integrations.tsx`, `api/connectedAccounts.ts`, `requests/connected-accounts.index.ts.txt`, `sql/124_connected_linkedin.sql` (new).
+- **DB (124)**: `connected_accounts.provider` + `linkedin`; `connected_assets.kind` + `linkedin_org`. Applied 2026-11-10.
+- **Edge function `connected-accounts` v6** (deployed by Base): provider `linkedin` — code → token at linkedin.com/oauth/v2/accessToken (no PKCE for web apps), `/v2/userinfo` for name / e-mail, company pages via `/rest/organizationAcls` + `/rest/organizations/{id}` (LinkedIn-Version 202610; roles ADMINISTRATOR / CONTENT_ADMIN / DIRECT_SPONSORED_CONTENT_POSTER), refresh only if LinkedIn gives a refresh token (else 60 days, then "sign in again"), disconnect revokes. Secrets `LINKEDIN_CLIENT_ID` / `_SECRET` (+ optional `LINKEDIN_PAGES_CLIENT_ID` / `_SECRET` if the Community Management API lives in a second app).
+- Front: **LinkedIn** in Available (scopes `openid profile email w_member_social`; with `VITE_LINKEDIN_PAGES=1` also `rw_organization_admin r_organization_social w_organization_social` and the company pages list + "Re-read pages"). `VITE_LINKEDIN_CLIENT_ID` (+ `VITE_LINKEDIN_PAGES_CLIENT_ID`). LinkedIn setup guide in the panel. "LinkedIn Ads" stays in Coming soon (Advertising API is a separate application).
+- tags: DB (124)
+- deploy: written to the Mac · SQL applied · edge function deployed · user to commit
+
+### 2026-11-10 15:30 · Enterprise · Reports: a customizable Home first
+- Files: src/components/pages/sales/extras/ReportsHome.tsx + ReportsHome.css (new), SalesReport.tsx
+- What: Reports now opens on **Home** (tabs Home | New report; the hero's "New report" and every "back" go there / to the starts). Home = "Jump back in" chips (your 6 latest reports) + a board of widgets, each read live from a saved report (yours or shared with you) or a ready-made one: **its figures**, **one of its charts** or **its first rows** (3/6/10, the report's sort), with the report's own rules and period. "Customize": add (report + what to show), drag to reorder, width ⅓ / ½ / whole, change what it shows, remove, Reset. Kept per user in `profiles.prefs.reports_home` ({v:1, widgets}); with nothing saved yet a starter board (your latest report's figures + first charts, else ready-made ones). Each part of the CRM is read once for all its widgets (loadCrmData cache); "Refresh" reads again. Widgets compute synchronously per report period (setReportPeriod), then reset to the default.
+- Tags: PORT? (src/base has no Reports page)
+- Deploy: front only.
+
+### 2026-11-10 14:45 · Enterprise · Clients: one start / renewal rule everywhere (contract dates count, not only projects)
+- Files: src/components/pages/clients/ClientWorkspace.tsx, ClientsPage.tsx, src/components/pages/sales/extras/salesReportEngine.ts
+- What: new exports in ClientWorkspace — `lineStartOf(l, ct)` (start → signing → the contract's start → its sign date), `termWith(l, ct)` (a product's term filled in from its contract's years / auto-renew when it has none) and `renewalOf(l, ct)` (own term → contract's term → a subscription's yearly anniversary). Client page: "Client since" (Company card + facts) and "First kick-off" (shown as "Started" with no projects) now count signed products and contracts, not only projects — 26 licence-only clients showed them empty; "Next renewal" uses the contract when the product has no term ("no term on file" before); a product row's term, Signed, Starts, Term, Renews fall back to its contract. Clients list: renewal + "Client since" read the contracts' terms (trackings.contract_terms loaded with the lines); Customer success's `csRenewalOf` is now `renewalOf`. Reports: client Next renewal / Contract starts / First signed use the same fallbacks.
+- Tags: PORT? (src/base clients: "Client since" from projects only)
+- Deploy: front only.
 
 ### 2026-11-10 13:55 · Base · Integrations: Meta (Facebook + Instagram + Ads in one sign-in), Facebook and Instagram separately
 - files: `pages/settings/Integrations.tsx` / `.css`, `api/connectedAccounts.ts`, `requests/connected-accounts.index.ts.txt`, `sql/123_connected_meta.sql` (new).

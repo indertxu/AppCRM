@@ -4,10 +4,11 @@
 //  src/base/requests/connected-accounts.index.ts.txt — Enterprise may adopt it)
 //
 // Several accounts per person: Gmail / Google Calendar, extra Outlook accounts
-// (the first Outlook stays in outlook_tokens / outlook-sync, untouched) and
-// Meta (Facebook pages, Instagram professional accounts, ad accounts).
+// (the first Outlook stays in outlook_tokens / outlook-sync, untouched),
+// Meta (Facebook pages, Instagram professional accounts, ad accounts) and
+// LinkedIn (member; company pages once the Community Management API is approved).
 // Tables: connected_accounts + connected_account_tokens (SQL 119),
-//         connected_assets + connected_asset_tokens (SQL 123).
+//         connected_assets + connected_asset_tokens (SQL 123), linkedin (SQL 124).
 //
 // Actions (POST, the caller's Supabase JWT identifies the user):
 //   connect     { provider, code, codeVerifier?, redirectUri, services }
@@ -17,7 +18,8 @@
 //   assets_sync { id }   Meta: re-read pages, Instagram accounts and ad accounts
 //
 // Secrets: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, MS_CLIENT_ID, MS_CLIENT_SECRET,
-//          META_APP_ID, META_APP_SECRET
+//          META_APP_ID, META_APP_SECRET, LINKEDIN_CLIENT_ID, LINKEDIN_CLIENT_SECRET
+//          (+ LINKEDIN_PAGES_CLIENT_ID / _SECRET if company pages live in a second LinkedIn app)
 // =====================================================================
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -29,20 +31,28 @@ const cors = {
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
-type Provider = "google" | "microsoft" | "meta";
+type Provider = "google" | "microsoft" | "meta" | "linkedin";
+const LI = "https://api.linkedin.com";
+const LI_VERSION = "202610";
 const FB = "https://graph.facebook.com/v26.0";
 const TOKEN_URL: Record<"google" | "microsoft", string> = {
   google: "https://oauth2.googleapis.com/token",
   microsoft: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
 };
-const creds = (p: Provider) => p === "google"
+const liCreds = (pages: boolean) => {
+  const pid = Deno.env.get("LINKEDIN_PAGES_CLIENT_ID") ?? "", psec = Deno.env.get("LINKEDIN_PAGES_CLIENT_SECRET") ?? "";
+  if (pages && pid && psec) return { id: pid, secret: psec };
+  return { id: Deno.env.get("LINKEDIN_CLIENT_ID") ?? "", secret: Deno.env.get("LINKEDIN_CLIENT_SECRET") ?? "" };
+};
+const creds = (p: Provider) => p === "linkedin" ? liCreds(false) : p === "google"
   ? { id: Deno.env.get("GOOGLE_CLIENT_ID") ?? "", secret: Deno.env.get("GOOGLE_CLIENT_SECRET") ?? "" }
   : p === "meta"
   ? { id: Deno.env.get("META_APP_ID") ?? "", secret: Deno.env.get("META_APP_SECRET") ?? "" }
   : { id: Deno.env.get("MS_CLIENT_ID") ?? "", secret: Deno.env.get("MS_CLIENT_SECRET") ?? "" };
 const notSetUp = (p: Provider) => p === "google" ? "Google sign-in isn't set up on the server (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)."
-  : p === "meta" ? "Meta sign-in isn't set up on the server (META_APP_ID / META_APP_SECRET)." : "Microsoft sign-in isn't set up on the server.";
-const SERVICES = new Set(["mail", "calendar", "facebook", "instagram", "ads"]);
+  : p === "meta" ? "Meta sign-in isn't set up on the server (META_APP_ID / META_APP_SECRET)."
+  : p === "linkedin" ? "LinkedIn sign-in isn't set up on the server (LINKEDIN_CLIENT_ID / LINKEDIN_CLIENT_SECRET)." : "Microsoft sign-in isn't set up on the server.";
+const SERVICES = new Set(["mail", "calendar", "facebook", "instagram", "ads", "linkedin", "linkedin_pages"]);
 
 async function caller(req: Request): Promise<{ id: string; tenant: string } | null> {
   const token = (req.headers.get("Authorization") ?? "").replace("Bearer ", "");
@@ -82,6 +92,49 @@ async function metaToken(code: string, redirectUri: string): Promise<Tok> {
   return { access_token: j2.access_token, expires_in: j2.expires_in ?? 60 * 24 * 3600 };
 }
 
+/** LinkedIn: code → access token (60 days; a refresh token only for approved partners). */
+async function liToken(body: Record<string, string>, pages: boolean): Promise<Tok> {
+  const c = liCreds(pages);
+  if (!c.id || !c.secret) throw new Error(notSetUp("linkedin"));
+  const res = await fetch("https://www.linkedin.com/oauth/v2/accessToken", {
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ client_id: c.id, client_secret: c.secret, ...body }),
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || !j.access_token) throw new Error(j.error_description || j.error || `LinkedIn token error ${res.status}`);
+  return j as Tok;
+}
+async function liGet(path: string, token: string) {
+  const r = await fetch(`${LI}${path}`, { headers: { Authorization: `Bearer ${token}`, "LinkedIn-Version": LI_VERSION, "X-Restli-Protocol-Version": "2.0.0" } });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j?.message || `LinkedIn error ${r.status}`);
+  return j;
+}
+/** LinkedIn company pages the member administers (needs the Community Management API). */
+async function syncLinkedInOrgs(accountId: string, tenant: string, userId: string, token: string) {
+  const acl: any = await liGet("/rest/organizationAcls?q=roleAssignee&state=APPROVED&count=100", token);
+  const roles = new Map<string, string>();
+  for (const e of acl.elements ?? []) {
+    const id = String(e.organization ?? e.organizationTarget ?? "").split(":").pop();
+    if (id && ["ADMINISTRATOR", "CONTENT_ADMIN", "DIRECT_SPONSORED_CONTENT_POSTER"].includes(e.role)) roles.set(id, e.role);
+  }
+  const now = new Date().toISOString();
+  const keep: string[] = [];
+  for (const [id, role] of roles) {
+    let name: string | null = null, vanity: string | null = null;
+    try { const o: any = await liGet(`/rest/organizations/${id}`, token); name = o.localizedName ?? null; vanity = o.vanityName ?? null; } catch { /* name is a nicety */ }
+    await admin.from("connected_assets").upsert({
+      account_id: accountId, tenant_id: tenant, user_id: userId, kind: "linkedin_org", external_id: id,
+      name, username: vanity, picture_url: null, extra: { role }, updated_at: now,
+    }, { onConflict: "account_id,kind,external_id" });
+    keep.push(id);
+  }
+  const { data: old } = await admin.from("connected_assets").select("id, external_id").eq("account_id", accountId).eq("kind", "linkedin_org");
+  const gone = ((old ?? []) as any[]).filter((o) => !keep.includes(o.external_id)).map((o) => o.id);
+  if (gone.length) await admin.from("connected_assets").delete().in("id", gone);
+  return { linkedin_pages: keep.length };
+}
+
 async function fbGet(path: string, token: string) {
   const sep = path.includes("?") ? "&" : "?";
   const r = await fetch(`${FB}${path}${sep}access_token=${encodeURIComponent(token)}`);
@@ -94,6 +147,12 @@ async function whoIs(p: Provider, accessToken: string): Promise<{ email: string;
   if (p === "google") {
     const j = await (await fetch("https://openidconnect.googleapis.com/v1/userinfo", { headers: { Authorization: `Bearer ${accessToken}` } })).json();
     return { email: String(j.email ?? "").toLowerCase(), name: j.name ?? null };
+  }
+  if (p === "linkedin") {
+    const r = await fetch(`${LI}/v2/userinfo`, { headers: { Authorization: `Bearer ${accessToken}` } });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j?.message || `LinkedIn error ${r.status}`);
+    return { email: String(j.email || `linkedin:${j.sub}`).toLowerCase(), name: j.name ?? null };
   }
   if (p === "meta") {
     const j = await fbGet("/me?fields=id,name,email", accessToken);
@@ -149,6 +208,24 @@ async function freshToken(accountId: string, userId: string): Promise<{ token: s
   if (!t) throw new Error("No token stored.");
   const mark = (status: "active" | "error", last_error: string | null) =>
     admin.from("connected_accounts").update({ status, last_error, updated_at: new Date().toISOString() }).eq("id", accountId);
+  if (provider === "linkedin") {
+    const pages = ((acc as any).services ?? []).includes("linkedin_pages");
+    const exp = (t as any).expires_at ? new Date((t as any).expires_at).getTime() : 0;
+    if ((t as any).access_token && exp - Date.now() > 120_000) {
+      try { await liGet("/v2/userinfo", (t as any).access_token); await mark("active", null); return out((t as any).access_token); }
+      catch (e) { await mark("error", String((e as Error).message ?? e)); throw e; }
+    }
+    if (!(t as any).refresh_token) { await mark("error", "Access expired — sign in to LinkedIn again."); throw new Error("Access expired — sign in to LinkedIn again."); }
+    try {
+      const tok = await liToken({ grant_type: "refresh_token", refresh_token: (t as any).refresh_token }, pages);
+      await admin.from("connected_account_tokens").update({
+        access_token: tok.access_token, refresh_token: tok.refresh_token ?? (t as any).refresh_token,
+        expires_at: new Date(Date.now() + (tok.expires_in ?? 3600) * 1000).toISOString(), updated_at: new Date().toISOString(),
+      }).eq("account_id", accountId);
+      await mark("active", null);
+      return out(tok.access_token);
+    } catch (e) { await mark("error", String((e as Error).message ?? e)); throw e; }
+  }
   if (provider === "meta") {
     // no refresh token at Meta: the long-lived token works until it expires; signing in again renews it
     const exp = (t as any).expires_at ? new Date((t as any).expires_at).getTime() : 0;
@@ -158,7 +235,7 @@ async function freshToken(accountId: string, userId: string): Promise<{ token: s
   }
   if ((t as any).access_token && (t as any).expires_at && new Date((t as any).expires_at).getTime() - Date.now() > 120_000) return out((t as any).access_token);
   try {
-    const tok = await tokenRequest(provider, { grant_type: "refresh_token", refresh_token: (t as any).refresh_token });
+    const tok = await tokenRequest(provider as "google" | "microsoft", { grant_type: "refresh_token", refresh_token: (t as any).refresh_token });
     await admin.from("connected_account_tokens").update({
       access_token: tok.access_token, refresh_token: tok.refresh_token ?? (t as any).refresh_token,
       expires_at: new Date(Date.now() + (tok.expires_in ?? 3600) * 1000).toISOString(), updated_at: new Date().toISOString(),
@@ -180,11 +257,13 @@ Deno.serve(async (req) => {
 
     if (action === "connect") {
       const provider = p.provider as Provider;
-      if (provider !== "google" && provider !== "microsoft" && provider !== "meta") return json({ error: "Unknown provider" }, 400);
+      if (!["google", "microsoft", "meta", "linkedin"].includes(provider)) return json({ error: "Unknown provider" }, 400);
       const services: string[] = (Array.isArray(p.services) ? p.services : []).filter((s: string) => SERVICES.has(s));
       const tok = provider === "meta"
         ? await metaToken(p.code, p.redirectUri)
-        : await tokenRequest(provider, { grant_type: "authorization_code", code: p.code, redirect_uri: p.redirectUri, code_verifier: p.codeVerifier ?? "" });
+        : provider === "linkedin"
+        ? await liToken({ grant_type: "authorization_code", code: p.code, redirect_uri: p.redirectUri }, services.includes("linkedin_pages"))
+        : await tokenRequest(provider as "google" | "microsoft", { grant_type: "authorization_code", code: p.code, redirect_uri: p.redirectUri, code_verifier: p.codeVerifier ?? "" });
       const who = await whoIs(provider, tok.access_token);
       if (!who.email) return json({ error: "Couldn't read the account's address." }, 400);
       const { data: existing } = await admin.from("connected_accounts").select("id, services")
@@ -205,17 +284,19 @@ Deno.serve(async (req) => {
       });
       let assets = null;
       if (provider === "meta") { try { assets = await syncMetaAssets(accId, me.tenant, me.id, tok.access_token, merged); } catch (e) { assets = { error: String((e as Error).message ?? e) }; } }
+      if (provider === "linkedin" && merged.includes("linkedin_pages")) { try { assets = await syncLinkedInOrgs(accId, me.tenant, me.id, tok.access_token); } catch (e) { assets = { error: String((e as Error).message ?? e) }; } }
       return json({ account: up.data, assets });
     }
 
     if (action === "assets_sync") {
       const f = await freshToken(p.id, me.id);
-      if (f.provider !== "meta") return json({ error: "Only Meta accounts have pages to read." }, 400);
+      if (f.provider === "linkedin") return json({ assets: await syncLinkedInOrgs(p.id, f.tenant, me.id, f.token) });
+      if (f.provider !== "meta") return json({ error: "Only Meta and LinkedIn accounts have pages to read." }, 400);
       return json({ assets: await syncMetaAssets(p.id, f.tenant, me.id, f.token, f.services) });
     }
 
     if (action === "disconnect") {
-      const { data: acc } = await admin.from("connected_accounts").select("id, provider, user_id").eq("id", p.id).maybeSingle();
+      const { data: acc } = await admin.from("connected_accounts").select("id, provider, user_id, services").eq("id", p.id).maybeSingle();
       if (!acc || (acc as any).user_id !== me.id) return json({ error: "Account not found." }, 404);
       const { data: t } = await admin.from("connected_account_tokens").select("refresh_token, access_token").eq("account_id", p.id).maybeSingle();
       if ((acc as any).provider === "google") {
@@ -224,6 +305,11 @@ Deno.serve(async (req) => {
       }
       if ((acc as any).provider === "meta" && (t as any)?.access_token) {
         await fetch(`${FB}/me/permissions?access_token=${encodeURIComponent((t as any).access_token)}`, { method: "DELETE" }).catch(() => {});
+      }
+      if ((acc as any).provider === "linkedin" && (t as any)?.access_token) {
+        const c = liCreds(((acc as any).services ?? []).includes("linkedin_pages"));
+        await fetch("https://www.linkedin.com/oauth/v2/revoke", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ client_id: c.id, client_secret: c.secret, token: (t as any).access_token }) }).catch(() => {});
       }
       await admin.from("connected_accounts").delete().eq("id", p.id);
       return json({ ok: true });
