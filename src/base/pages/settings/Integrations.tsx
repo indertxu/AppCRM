@@ -18,8 +18,8 @@
    ===================================================================== */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
-  addAccount, checkAccount, lastMailReads, listAccounts, myOutlookConnection, providerReady, removeAccount,
-  type ConnectedAccount, type OutlookFacts, type Provider, type Service,
+  addAccount, checkAccount, lastMailReads, listAccounts, listAssets, myOutlookConnection, providerReady, removeAccount, syncAssets,
+  type ConnectedAccount, type ConnectedAsset, type OutlookFacts, type Provider, type Service,
 } from "../../api/connectedAccounts";
 import { BRANDS } from "./brandIcons";
 import "./Integrations.css";
@@ -55,11 +55,15 @@ const LIVE: AppDef[] = [
     brings: ["Activities you book here appear in Google Calendar", "Several calendars, one per account"] },
   { k: "outlook", name: "Outlook", what: "Mail and calendars from Microsoft 365", logo: { k: "outlook", color: "#0078d4" }, live: { provider: "microsoft", service: "mail" },
     brings: ["Calendar sync both ways", "Send invoices from your own address", "Client e-mails become contacts and tickets", "Several Outlook accounts"] },
+  { k: "meta", name: "Meta", what: "Facebook pages, Instagram and Meta Ads in one sign-in", logo: { k: "meta", color: "#0467df" }, live: { provider: "meta", service: "facebook" },
+    brings: ["Every Facebook page you manage", "The Instagram professional accounts linked to them", "Your Meta ad accounts and lead forms", "Several Meta logins"] },
+  { k: "facebook", name: "Facebook", what: "Your Facebook pages: posts, reach and comments", logo: { k: "facebook", color: "#0866ff" }, live: { provider: "meta", service: "facebook" },
+    brings: ["Publish on your pages", "Reach, reactions and comments in Growth", "Several pages"] },
+  { k: "instagram", name: "Instagram", what: "Professional accounts: posts, reels and insights", logo: { k: "instagram", color: "#ff0069" }, live: { provider: "meta", service: "instagram" },
+    brings: ["Publish posts and reels", "Reach, likes and comments in Growth", "Needs an Instagram business or creator account linked to a Facebook page"] },
 ];
 const SOON: AppDef[] = [
   { k: "whatsapp", name: "WhatsApp Business", what: "Chat with clients, kept on each client", logo: { k: "whatsapp", color: "#25d366" }, brings: ["One or more business numbers", "Messages saved on the client", "Follow-ups by WhatsApp"] },
-  { k: "meta", name: "Meta", what: "Facebook and Instagram pages, Meta Ads", logo: { k: "meta", color: "#0467df" }, brings: ["Several Facebook and Instagram pages", "Meta Ads accounts", "Leads from Meta forms into Orbit"] },
-  { k: "instagram", name: "Instagram", what: "Posts, reels and their results", logo: { k: "instagram", color: "#ff0069" }, brings: ["Publish posts and reels", "Reach, likes and comments in Growth"] },
   { k: "messenger", name: "Messenger", what: "Facebook and Instagram DMs in one inbox", logo: { k: "messenger", color: "#0866ff" }, brings: ["Every DM in one inbox", "Replies kept on the client"] },
   { k: "linkedin", name: "LinkedIn", what: "Company page, LinkedIn Ads, lead forms", logo: { k: "linkedin", color: "#0a66c2" }, brings: ["Company page posts", "LinkedIn Ads", "Lead-gen forms into Orbit"] },
   { k: "tiktok", name: "TikTok", what: "Short videos and TikTok Ads", logo: { k: "tiktok", color: "#000" }, brings: ["Publish short videos", "TikTok Ads results"] },
@@ -72,11 +76,19 @@ const SOON: AppDef[] = [
 ];
 const APP = Object.fromEntries([...LIVE, ...SOON].map((a) => [a.k, a])) as Record<string, AppDef>;
 const WANT_KEY = "next.base.integrations.want";
-const SVC: Record<Service, string> = { mail: "Mail", calendar: "Calendar" };
+const SVC: Record<Service, string> = { mail: "Mail", calendar: "Calendar", facebook: "Facebook", instagram: "Instagram", ads: "Ads" };
+/** Which apps of the list an account shows under. */
+const appsOf = (a: ConnectedAccount): string[] =>
+  a.provider === "google" ? a.services.map((s) => (s === "mail" ? "gmail" : s === "calendar" ? "gcal" : "")).filter(Boolean)
+  : a.provider === "meta" ? ["meta", ...(a.services.includes("facebook") ? ["facebook"] : []), ...(a.services.includes("instagram") ? ["instagram"] : [])]
+  : ["outlook"];
+/** What one sign-in asks for, per app. */
+const servicesFor = (k: string): Service[] =>
+  k === "meta" ? ["facebook", "instagram", "ads"] : k === "facebook" ? ["facebook"] : k === "instagram" ? ["instagram"] : ["mail", "calendar"];
 const colorOf = (a: AppDef) => BRANDS[a.logo.k ?? ""]?.hex ?? a.logo.color;
 
 type Row = {
-  key: string; app: string; id: string; email: string; services: Service[]; status: "active" | "error"; note?: string | null;
+  key: string; app: string; id: string; email: string; label?: string | null; provider?: Provider; services: Service[]; status: "active" | "error"; note?: string | null;
   primary?: boolean; connectedAt?: string | null; lastActive?: string | null;
 };
 type Col = "mine" | "avail" | "soon";
@@ -106,6 +118,7 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
   const [accounts, setAccounts] = useState<ConnectedAccount[] | null>(null);
   const [ol, setOl] = useState<OutlookFacts | null>(null);
   const [reads, setReads] = useState<Record<string, string>>({});
+  const [assets, setAssets] = useState<ConnectedAsset[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [checking, setChecking] = useState<string | null>(null);
   const [err, setErr] = useState<{ k: string; text: string } | null>(null);
@@ -114,8 +127,8 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(""), 2600); return () => clearTimeout(t); }, [toast]);
 
   const reload = useCallback(async () => {
-    const [r, m] = await Promise.all([listAccounts(), lastMailReads().catch(() => ({}))]);
-    setAccounts(r.accounts); setReads(m);
+    const [r, m, as] = await Promise.all([listAccounts(), lastMailReads().catch(() => ({})), listAssets().catch(() => [])]);
+    setAccounts(r.accounts); setReads(m); setAssets(as);
   }, []);
   useEffect(() => { void reload(); }, [reload]);
   useEffect(() => {
@@ -131,9 +144,9 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
   const rows: Row[] = [];
   if (outlook.connected) rows.push({ key: "outlook:primary", app: "outlook", id: "outlook-primary", email: ol?.email ?? "Outlook account", services: ["mail", "calendar"], status: "active", primary: true, connectedAt: ol?.connectedAt, lastActive: ol?.lastRefresh });
   for (const a of accounts ?? []) {
-    const base = { id: a.id, email: a.email, status: a.status, note: a.last_error, connectedAt: a.connected_at, lastActive: a.updated_at ?? a.connected_at };
-    if (a.provider === "microsoft") { if (a.email !== ol?.email) rows.push({ ...base, key: `outlook:${a.id}`, app: "outlook", services: a.services }); continue; }
-    for (const s of a.services) rows.push({ ...base, key: `${s === "mail" ? "gmail" : "gcal"}:${a.id}`, app: s === "mail" ? "gmail" : "gcal", services: [s] });
+    const base = { id: a.id, email: a.email, label: a.provider === "meta" ? a.display_name : null, provider: a.provider, status: a.status, note: a.last_error, connectedAt: a.connected_at, lastActive: a.updated_at ?? a.connected_at };
+    if (a.provider === "microsoft" && a.email === ol?.email) continue;
+    for (const app of appsOf(a)) rows.push({ ...base, key: `${app}:${a.id}`, app, services: a.provider === "google" ? [app === "gmail" ? "mail" : "calendar"] : a.services });
   }
   const rowsOf = (k: string) => rows.filter((r) => r.app === k);
   const mine = LIVE.filter((a) => rowsOf(a.k).length > 0);
@@ -177,21 +190,22 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
     if (a.k === "outlook" && !outlook.connected) { outlook.onConnect(); return; }
     if (!a.live) return;
     setBusy(a.k);
-    // one sign-in covers every app of that provider (a Google account → Gmail and Google Calendar)
-    const r = await addAccount(a.live.provider, ["mail", "calendar"]);
+    // one Google / Microsoft sign-in covers mail and calendar; Meta asks what that app needs
+    const r = await addAccount(a.live.provider, servicesFor(a.k));
     setBusy(null);
     if (r.error) { fly.current = null; setErr({ k: a.k, text: r.error }); return; }
     await reload();
-    setToast(`${r.account?.email ?? "Account"} connected`);
+    const got = r.assets && !r.assets.error ? ` · ${r.assets.pages ?? 0} pages, ${r.assets.instagram ?? 0} Instagram` : "";
+    setToast(`${r.account?.display_name || r.account?.email || "Account"} connected${got}`);
   };
-  /** A Google account already linked for one app: turn on the other app for it (same address, one consent). */
+  /** An account already linked for another app of the same provider: turn this app on for it (one consent). */
   const enableFor = async (a: AppDef, acc: ConnectedAccount) => {
     setErr(null); setBusy(`${a.k}:${acc.id}`);
-    const r = await addAccount("google", Array.from(new Set([...acc.services, a.live!.service])), { loginHint: acc.email });
+    const r = await addAccount(acc.provider, Array.from(new Set([...acc.services, ...servicesFor(a.k)])), { loginHint: acc.provider === "google" ? acc.email : "rerequest" });
     setBusy(null);
     if (r.error) { setErr({ k: a.k, text: r.error }); return; }
     await reload();
-    setToast(`${a.name} on for ${acc.email}`);
+    setToast(`${a.name} on for ${acc.display_name || acc.email}`);
   };
   const remove = async (r: Row) => {
     setAsking(null);
@@ -200,6 +214,13 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
     if (e) { setErr({ k: r.app, text: e }); return; }
     await reload();
     setToast(`${r.email} removed`);
+  };
+  const resync = async (r: Row) => {
+    setChecking(`sync:${r.key}`);
+    const x = await syncAssets(r.id);
+    setChecking(null);
+    await reload();
+    setToast(x.error ? `Couldn't read pages: ${x.error}` : "Pages and accounts updated");
   };
   const check = async (r: Row) => {
     setChecking(r.key);
@@ -268,8 +289,8 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
           {rs.map((r) => (
             <article key={r.key} className={`ig-acc ${r.status === "error" ? "is-err" : ""} ${fresh.includes(r.key) ? "is-fresh" : ""}`}>
               <div className="ig-acc-h">
-                <i className="ig-av">{r.email[0]?.toUpperCase()}</i>
-                <b title={r.email}>{r.email}</b>
+                <i className="ig-av">{(r.label || r.email)[0]?.toUpperCase()}</i>
+                <b title={r.email}>{r.label || r.email}</b>
                 <span className={`ig-pill ${r.status === "error" ? "is-err" : ""}`}>{r.status === "error" ? "Needs sign-in" : "Working"}</span>
               </div>
               <dl className="ig-facts">
@@ -278,9 +299,11 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
                 {r.services.includes("mail") && <div><dt>Last mail read</dt><dd title={fmtDate(reads[r.email.toLowerCase()])}>{ago(reads[r.email.toLowerCase()])}</dd></div>}
                 <div><dt>Used for</dt><dd>{r.services.map((s) => SVC[s]).join(" · ")}{r.primary ? " · main" : ""}</dd></div>
               </dl>
+              {r.provider === "meta" && <AssetList items={assets.filter((x) => x.account_id === r.id && (a.k === "meta" || (a.k === "facebook" ? x.kind === "facebook_page" : x.kind === "instagram")))} />}
               {r.status === "error" && r.note && <p className="ig-acc-err">{r.note}</p>}
               <div className="ig-acc-act">
                 {!r.primary && <button className="ig-mini" disabled={checking === r.key} onClick={() => void check(r)}>{checking === r.key ? <span className="ig-spin is-dark" /> : <Refresh />}Check now</button>}
+                {r.provider === "meta" && <button className="ig-mini" disabled={checking === `sync:${r.key}`} onClick={() => void resync(r)}>{checking === `sync:${r.key}` ? <span className="ig-spin is-dark" /> : <Refresh />}Re-read pages</button>}
                 <span className="ig-grow" />
                 {asking === r.key ? (
                   <span className="ig-ask"><span>Remove this account?</span><button className="is-yes" onClick={() => void remove(r)}>Remove</button><button onClick={() => setAsking(null)}>Keep</button></span>
@@ -288,10 +311,10 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
               </div>
             </article>
           ))}
-          {a.live!.provider === "google" && (accounts ?? []).filter((x) => x.provider === "google" && !x.services.includes(a.live!.service)).map((x) => (
+          {a.live!.provider !== "microsoft" && (accounts ?? []).filter((x) => x.provider === a.live!.provider && !appsOf(x).includes(a.k)).map((x) => (
             <div key={x.id} className="ig-also">
-              <i className="ig-av">{x.email[0]?.toUpperCase()}</i>
-              <span><b>{x.email}</b><small>Linked for {x.services.map((s) => (s === "mail" ? "Gmail" : "Google Calendar")).join(" & ")} — not for {a.name} yet</small></span>
+              <i className="ig-av">{(x.display_name || x.email)[0]?.toUpperCase()}</i>
+              <span><b>{x.provider === "meta" ? x.display_name || x.email : x.email}</b><small>Linked for {appsOf(x).map((k) => APP[k]?.name).join(" & ")} — not for {a.name} yet</small></span>
               <button className="ig-mini" disabled={busy === `${a.k}:${x.id}`} onClick={() => void enableFor(a, x)}>
                 {busy === `${a.k}:${x.id}` ? <span className="ig-spin is-dark" /> : <Plus />}Use here
               </button>
@@ -303,6 +326,8 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
           </button>
         </div>
         {a.live!.provider === "google" && !providerReady("google") && <GoogleGuide />}
+        {a.live!.provider === "meta" && !providerReady("meta") && <MetaGuide />}
+        {a.live!.provider === "meta" && providerReady("meta") && rs.length === 0 && <p className="ig-det-p ig-det-pad">To add a second Facebook login, switch account on facebook.com first — Meta signs you in with whoever is logged in there.</p>}
         {a.brings && (
           <div className="ig-det-sec">
             <h4>What it does</h4>
@@ -360,7 +385,7 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
 
         <section className="ig-col">
           <header className="ig-col-h"><h2>Available</h2><span className="ig-n is-soft">{LIVE.length}</span></header>
-          {list("avail", LIVE, (a) => (a.k === "outlook" || providerReady(a.live!.provider) ? a.what : "Set up Google sign-in first"))}
+          {list("avail", LIVE, (a) => (a.k === "outlook" || providerReady(a.live!.provider) ? a.what : `Set up ${a.live!.provider === "meta" ? "Meta" : "Google"} sign-in first`))}
         </section>
         {detail("avail")}
 
@@ -396,6 +421,47 @@ function GoogleGuide() {
         <li><b>Connect</b><span>Reload this page → Gmail → <i>Connect Gmail</i> → pick the account → “Google hasn't verified this app” → <i>Continue</i> → Allow. Done.</span></li>
       </ol>
       <p className="ig-guide-note">While the app is in <i>Testing</i>, Google signs you out every 7 days and only test users can connect. To lift that, publish the app in <i>Audience</i> (Gmail reading needs Google's verification).</p>
+    </div>
+  );
+}
+
+/* ---------- Meta: the pages / Instagram accounts / ad accounts a login reaches ---------- */
+function AssetList({ items }: { items: ConnectedAsset[] }) {
+  if (!items.length) return <p className="ig-assets-none">No pages or accounts found for this login yet.</p>;
+  const KIND: Record<ConnectedAsset["kind"], string> = { facebook_page: "Facebook page", instagram: "Instagram", ad_account: "Ad account" };
+  const order = ["facebook_page", "instagram", "ad_account"];
+  return (
+    <ul className="ig-assets">
+      {[...items].sort((x, y) => order.indexOf(x.kind) - order.indexOf(y.kind)).map((x) => (
+        <li key={x.id} className={`is-${x.kind}`}>
+          {x.picture_url ? <img src={x.picture_url} alt="" loading="lazy" referrerPolicy="no-referrer" /> : <i>{(x.name || x.username || "?")[0]?.toUpperCase()}</i>}
+          <span><b>{x.kind === "instagram" && x.username ? `@${x.username}` : x.name || x.external_id}</b><small>{KIND[x.kind]}{x.kind === "instagram" && x.extra?.followers != null ? ` · ${Number(x.extra.followers).toLocaleString("en-GB")} followers` : ""}{x.kind === "ad_account" && x.extra?.currency ? ` · ${x.extra.currency}` : ""}</small></span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/* ---------- Meta setup guide (shown until VITE_META_APP_ID exists) ---------- */
+function MetaGuide() {
+  const origin = window.location.origin;
+  const [copied, setCopied] = useState("");
+  const copy = (t: string) => { void navigator.clipboard?.writeText(t); setCopied(t); setTimeout(() => setCopied(""), 1400); };
+  const C = ({ t }: { t: string }) => <button className={`ig-code ${copied === t ? "is-done" : ""}`} onClick={() => copy(t)} title="Copy">{t}{copied === t ? <Check /> : <Copy />}</button>;
+  return (
+    <div className="ig-det-sec ig-guide">
+      <h4>Set up Meta sign-in · once, about 15 minutes</h4>
+      <ol>
+        <li><b>Create the app</b><span>developers.facebook.com → <i>My Apps → Create app</i> → name “Next”. Use cases: <i>Manage everything on your Page</i>, <i>Manage messaging &amp; content on Instagram</i> and <i>Create &amp; manage ads with Marketing API</i>. Link your business portfolio when asked.</span></li>
+        <li><b>Add the permissions</b><span>In each use case → <i>Customize</i> → add: pages_show_list, pages_read_engagement, pages_manage_posts, pages_read_user_content, read_insights, instagram_basic, instagram_content_publish, instagram_manage_insights, instagram_manage_comments, ads_read, leads_retrieval, pages_manage_ads, business_management, email.</span></li>
+        <li><b>Facebook Login</b><span>Add the product <i>Facebook Login for Business</i> → <i>Settings</i> → Valid OAuth Redirect URIs:</span><C t={`${origin}/settings`} /><span>Add your live address too (…/settings). If it asks for a <i>Configuration</i>, create one (User access token, the permissions above) and keep its ID.</span></li>
+        <li><b>App ID and secret</b><span><i>App settings → Basic</i>: copy the <i>App ID</i> and the <i>App secret</i>. Add your domain in <i>App domains</i> and a privacy policy URL.</span></li>
+        <li><b>Give them to the app</b><span>In <i>.env</i> and in Vercel (type Config):</span><C t="VITE_META_APP_ID=" /><span>Only if step 3 gave you a Configuration ID:</span><C t="VITE_META_CONFIG_ID=" /></li>
+        <li><b>Give them to Supabase</b><span>Supabase → <i>Edge Functions → Secrets</i> → add <i>META_APP_ID</i> and <i>META_APP_SECRET</i>.</span></li>
+        <li><b>Testers</b><span>While the app is in Development, only people with a role can connect: <i>App roles → Roles → Add people</i> (Testers).</span></li>
+        <li><b>Connect</b><span>Restart <i>npm run dev</i> → Integrations → Meta → <i>Connect Meta</i> → pick the pages and Instagram accounts → Save.</span></li>
+      </ol>
+      <p className="ig-guide-note">To let any client connect, switch the app to <i>Live</i> and pass Meta's <i>App Review</i> for these permissions (plus Business verification). Instagram needs a business or creator account linked to a Facebook page.</p>
     </div>
   );
 }

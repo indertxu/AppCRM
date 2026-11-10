@@ -126,7 +126,7 @@ Source in `supabase/functions/**`. Both apps call them; changes must stay backwa
 - Read the other side's entries since your last session before you start working.
 
 ## 7. SQL numbering
-Next free number: **122**  ← update this line when you claim one (and say which file in the log).
+Next free number: **124**  ← update this line when you claim one (and say which file in the log).
 | # | File | Chat | What |
 |---|---|---|---|
 | 98 | sql/98_client_default_folders.sql | Enterprise | client folder templates → new clients |
@@ -153,6 +153,8 @@ Next free number: **122**  ← update this line when you claim one (and say whic
 | 119 | src/base/sql/119_connected_accounts.sql | Base | `connected_accounts` (several Gmail / Google Calendar / Outlook accounts per person: provider, email, services mail/calendar, status; RLS own rows select/delete) + `connected_account_tokens` (RLS on, no policies: service role only) — applied 2026-11-09 |
 | 120 | src/base/sql/120_my_outlook_connection.sql | Base | `my_outlook_connection()` (security definer, caller only): account_email, connected_at, last_refresh (expires_at − 1h), scopes of your outlook_tokens row — never the tokens — applied 2026-11-09 |
 | 121 | sql/121_client_churn_end.sql | Enterprise | `client_products.ends_on` (a running product stops that day: a churn on a future date) + `client_products_status_chk` widened to active/expired/cancelled/renewed/paused/ended — applied 2026-11-10 |
+| 122 | sql/122_upsell_in_contract.sql | Enterprise | `client_products.contract_tracking_id` (+ index): the contract an upsell / hand-added product was signed into — applied 2026-11-10 |
+| 123 | src/base/sql/123_connected_meta.sql | Base | `connected_accounts.provider` + `meta`; `connected_assets` (pages / Instagram / ad accounts of a Meta login, RLS own select) + `connected_asset_tokens` (service role only) — applied 2026-11-10 |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
@@ -162,6 +164,26 @@ Write requests here; the other chat answers in the log and ticks them.
 
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
+
+### 2026-11-10 13:55 · Base · Integrations: Meta (Facebook + Instagram + Ads in one sign-in), Facebook and Instagram separately
+- files: `pages/settings/Integrations.tsx` / `.css`, `api/connectedAccounts.ts`, `requests/connected-accounts.index.ts.txt`, `sql/123_connected_meta.sql` (new).
+- **DB (123)**: `connected_accounts.provider` may be `meta`; new `connected_assets` (Facebook pages / Instagram professional accounts / ad accounts a Meta login reaches; RLS own select) + `connected_asset_tokens` (page tokens, service role only). Applied 2026-11-10 (the Supabase migration is named `121_connected_meta`; renumbered to 123 because Enterprise took 121/122 meanwhile).
+- **Edge function `connected-accounts` v5** (deployed by Base): provider `meta` — Facebook Login code → long-lived user token (≈60 days, no refresh: "Check now" verifies, signing in again renews), reads `/me/accounts` (pages + linked `instagram_business_account`) and `/me/adaccounts`, stores them with page tokens; new action `assets_sync`; disconnect revokes (`DELETE /me/permissions`). Graph API v26.0. Secrets `META_APP_ID`, `META_APP_SECRET`.
+- Front: Available now has **Meta** (asks facebook + instagram + ads), **Facebook** (pages only) and **Instagram** (IG only) — one Meta login shows under each app it was granted for; "Use here" re-asks (auth_type=rerequest). Account cards list the pages / Instagram accounts (@user, followers) / ad accounts with pictures; "Re-read pages". `VITE_META_APP_ID` (+ optional `VITE_META_CONFIG_ID` for Facebook Login for Business configurations). Meta setup guide in the panel until the App ID exists. Meta and Instagram left Coming soon; Messenger stays there.
+- tags: DB (123)
+- deploy: written to the Mac · SQL applied · edge function deployed · user to commit
+
+### 2026-11-10 14:20 · Enterprise · Clients: an upsell inside an existing contract (not a contract of its own)
+- Files: sql/122_upsell_in_contract.sql, src/components/pages/clients/ClientWorkspace.tsx, ClientsPage.tsx, src/components/pages/sales/sales/salesApi.ts
+- What: a signed product's contract is `contract_tracking_id || tracking_id` (`contractKeyOf`). Three ways in: (1) a contract card (a deal's own products) has "Upsell into… <contract>" → all its products join that contract and the upsell deal stops counting as a contract (also when it had an order form); (2) editing a signed product: "Contract" = its own / Upsell into <contract> (back to its own too); (3) "Add product" by hand: "Contract" = a contract of its own / Upsell into <contract> (`saveClientProducts` takes `contractTrackingId`). In the contract: its dates, term and renewal come from its own products; an upsell counts from the contract year it started in (`yearOffsetOf`), shows in the scope as "Upsell · <deal> · signed <date>", and the product row says "upsell in <contract>". Customer success renewals follow the contract the product is in.
+- Tags: **DB**, PORT? (src/base clients if it groups contracts by deal)
+- Deploy: 122 applied.
+
+### 2026-11-10 13:40 · Enterprise · Clients: change a signed product's deal-calculator values (with its own right)
+- Files: src/components/framework/pageAccess.tsx, src/components/pages/clients/ClientWorkspace.tsx/.css
+- What: new client editing right **"Deal calculator"** (`ClientEditAction` "valuation", Settings › Client page › Editing rights, default: managers; bosses / superadmins always) — who may change the calculator figures a signed product was valued with on its deal. Client › Contracts › Signed products: a product that came from a deal and whose catalogue product has a calculator shows a calculator button (beside edit). It opens the deal's own LineCalcModal on that deal's tracking_products line (tier, calculator values, commitment, term, increases, partner): "Apply" saves it on the deal (`updateTrackingProduct`) and reprices the client's line like the handover does (`lineBreakdown`: price, quantity, period, term, schedule, breakdown rows / years / partnerYears, `breakdown.revalued` = when) — the line says "revalued <date>" and a note shows the new first-year figure. Same product twice on one deal: the line's place among its twins picks the deal line. Actions column 100px when the button shows (`.cw-pt.has-calc`).
+- Tags: PORT? (src/base Settings › Editing rights + client products if Base has calculators)
+- Deploy: frontend only.
 
 ### 2026-11-10 12:50 · Base · Integrations: one Google sign-in links Gmail and Google Calendar
 - files: `pages/settings/Integrations.tsx` / `.css`, `api/connectedAccounts.ts`.

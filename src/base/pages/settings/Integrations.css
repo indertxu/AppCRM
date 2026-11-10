@@ -183,3 +183,15 @@
   .ig-det.is-open { flex-basis: 380px; }
   .ig-det-in { width: 380px; }
 }
+
+/* Meta: pages / Instagram / ad accounts of a login */
+.ig-assets { list-style: none; margin: 12px 0 0; padding: 10px 0 0; border-top: 1px solid var(--line2); display: flex; flex-direction: column; gap: 6px; }
+.ig-assets li { display: flex; align-items: center; gap: 10px; }
+.ig-assets img, .ig-assets li > i { width: 28px; height: 28px; flex-shrink: 0; border-radius: 8px; object-fit: cover; background: #eef3f0; }
+.ig-assets li.is-instagram img, .ig-assets li.is-instagram > i { border-radius: 50%; box-shadow: 0 0 0 2px #fff, 0 0 0 3.5px #ff0069; }
+.ig-assets li > i { display: grid; place-items: center; font-style: normal; font-size: 12px; font-weight: 800; color: #5a7d6d; }
+.ig-assets span { min-width: 0; display: flex; flex-direction: column; }
+.ig-assets b { font-size: 13px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ig-assets small { font-size: 11.5px; color: var(--muted); }
+.ig-assets-none { margin: 10px 0 0; font-size: 12px; color: var(--muted); }
+.ig-det-pad { padding: 0 20px; }

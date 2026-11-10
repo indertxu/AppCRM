@@ -17,8 +17,8 @@
    ===================================================================== */
 import { supabase } from "../../components/api/supabase";
 
-export type Provider = "google" | "microsoft";
-export type Service = "mail" | "calendar";
+export type Provider = "google" | "microsoft" | "meta";
+export type Service = "mail" | "calendar" | "facebook" | "instagram" | "ads";
 export interface ConnectedAccount {
   id: string; provider: Provider; email: string; display_name: string | null;
   services: Service[]; status: "active" | "error"; last_error: string | null; connected_at: string; updated_at?: string;
@@ -26,12 +26,15 @@ export interface ConnectedAccount {
 
 export const GOOGLE_CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined) ?? "";
 const MS_CLIENT_ID = (import.meta.env.VITE_MS_CLIENT_ID as string | undefined) ?? "";
+/** Meta app (developers.facebook.com). With "Facebook Login for Business" also set VITE_META_CONFIG_ID (a login configuration replaces the scope list). */
+export const META_APP_ID = (import.meta.env.VITE_META_APP_ID as string | undefined) ?? "";
+const META_CONFIG_ID = (import.meta.env.VITE_META_CONFIG_ID as string | undefined) ?? "";
 const REDIRECT_URI = `${window.location.origin}/settings`;
 const STATE_PREFIX = "acc.";
 const CHANNEL = "next-connected-accounts";
 const RETURN_KEY = "acc_oauth_return";
 
-const SCOPES: Record<Provider, Record<Service, string>> = {
+const SCOPES: Record<Provider, Partial<Record<Service, string>>> = {
   google: {
     mail: "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send",
     calendar: "https://www.googleapis.com/auth/calendar.events",
@@ -40,13 +43,19 @@ const SCOPES: Record<Provider, Record<Service, string>> = {
     mail: "Mail.Read Mail.Send",
     calendar: "Calendars.ReadWrite",
   },
+  meta: {
+    facebook: "pages_show_list pages_read_engagement pages_manage_posts pages_read_user_content read_insights",
+    instagram: "pages_show_list pages_read_engagement instagram_basic instagram_content_publish instagram_manage_insights instagram_manage_comments",
+    ads: "ads_read leads_retrieval pages_manage_ads business_management",
+  },
 };
-const BASE_SCOPES: Record<Provider, string> = { google: "openid email profile", microsoft: "offline_access User.Read" };
+const BASE_SCOPES: Record<Provider, string> = { google: "openid email profile", microsoft: "offline_access User.Read", meta: "public_profile email" };
 const AUTH_URL: Record<Provider, string> = {
   google: "https://accounts.google.com/o/oauth2/v2/auth",
   microsoft: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+  meta: "https://www.facebook.com/v26.0/dialog/oauth",
 };
-export const providerReady = (p: Provider) => (p === "google" ? !!GOOGLE_CLIENT_ID : !!MS_CLIENT_ID);
+export const providerReady = (p: Provider) => (p === "google" ? !!GOOGLE_CLIENT_ID : p === "meta" ? !!META_APP_ID : !!MS_CLIENT_ID);
 
 /* ---------- PKCE ---------- */
 const b64url = (bytes: Uint8Array) => { let s = ""; for (const b of bytes) s += String.fromCharCode(b); return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); };
@@ -63,7 +72,7 @@ const challengeOf = async (v: string) => b64url(new Uint8Array(await crypto.subt
     const err = url.searchParams.get("error_description") || url.searchParams.get("error");
     ["code", "state", "scope", "authuser", "prompt", "hd", "session_state", "error", "error_description", "error_uri", "client_info", "iss"]
       .forEach((k) => url.searchParams.delete(k));
-    window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+    window.history.replaceState(window.history.state, "", url.pathname + url.search + (url.hash === "#_=_" ? "" : url.hash)); // Facebook adds "#_=_"
     const msg = { type: "acc-return", code, state, error: err, at: Date.now() };
     try { const bc = new BroadcastChannel(CHANNEL); bc.postMessage(msg); bc.close(); } catch { /* old browser */ }
     try { window.opener?.postMessage(msg, window.location.origin); } catch { /* opener gone */ }
@@ -114,14 +123,19 @@ export async function removeAccount(id: string): Promise<string | null> {
  * "select_account" so a second Gmail / Outlook can be chosen). Resolves with the
  * stored account, or an error message.
  */
-export async function addAccount(provider: Provider, services: Service[], opts: { loginHint?: string } = {}): Promise<{ account?: ConnectedAccount; error?: string }> {
-  if (!providerReady(provider)) return { error: provider === "google" ? "Google sign-in isn't set up for this app yet." : "Microsoft sign-in isn't set up for this app yet." };
+export async function addAccount(provider: Provider, services: Service[], opts: { loginHint?: string } = {}): Promise<{ account?: ConnectedAccount; assets?: { pages?: number; instagram?: number; ad_accounts?: number; error?: string } | null; error?: string }> {
+  if (!providerReady(provider)) return { error: `${provider === "google" ? "Google" : provider === "meta" ? "Meta" : "Microsoft"} sign-in isn't set up for this app yet.` };
   const verifier = rnd(48);
   const state = `${STATE_PREFIX}${provider}.${rnd(12)}`;
-  const scope = [BASE_SCOPES[provider], ...services.map((s) => SCOPES[provider][s])].join(" ");
-  const q = new URLSearchParams({
+  const scopeList = Array.from(new Set([BASE_SCOPES[provider], ...services.map((s) => SCOPES[provider][s] ?? "")].join(" ").split(" ").filter(Boolean)));
+  const q = provider === "meta" ? new URLSearchParams({
+    // Facebook Login: no PKCE, comma-separated scopes — or a login configuration (Facebook Login for Business)
+    client_id: META_APP_ID, response_type: "code", redirect_uri: REDIRECT_URI, state,
+    ...(META_CONFIG_ID ? { config_id: META_CONFIG_ID } : { scope: scopeList.join(",") }),
+    ...(opts.loginHint ? { auth_type: "rerequest" } : {}),
+  }) : new URLSearchParams({
     client_id: provider === "google" ? GOOGLE_CLIENT_ID : MS_CLIENT_ID,
-    response_type: "code", redirect_uri: REDIRECT_URI, scope, state,
+    response_type: "code", redirect_uri: REDIRECT_URI, scope: scopeList.join(" "), state,
     code_challenge: await challengeOf(verifier), code_challenge_method: "S256",
     // a known address (turning on one more Google app for it) skips the account picker
     prompt: opts.loginHint ? "consent" : provider === "google" ? "select_account consent" : "select_account",
@@ -159,7 +173,7 @@ export async function addAccount(provider: Provider, services: Service[], opts: 
   if (back.error || !back.code) return { error: back.error || "The sign-in didn't finish." };
   const r = await call("connect", { provider, code: back.code, codeVerifier: verifier, redirectUri: REDIRECT_URI, services });
   if (r?.error) return { error: r.error };
-  return { account: r.account as ConnectedAccount };
+  return { account: r.account as ConnectedAccount, assets: r.assets ?? null };
 }
 
 /** Refresh one account's access now: marks it working / needing sign-in again. */
@@ -192,4 +206,20 @@ export async function lastMailReads(): Promise<Record<string, string>> {
   for (const r of (cs.data ?? []) as any[]) keep(r.address, r.last_run_at);
   for (const r of (tm.data ?? []) as any[]) keep(r.address, r.last_sync_at);
   return out;
+}
+
+/* ---------- Meta: what a login reaches ---------- */
+export interface ConnectedAsset {
+  id: string; account_id: string; kind: "facebook_page" | "instagram" | "ad_account"; external_id: string;
+  name: string | null; username: string | null; picture_url: string | null; extra: Record<string, any>; updated_at: string;
+}
+/** Facebook pages, Instagram accounts and ad accounts of your Meta logins (SQL 123). */
+export async function listAssets(): Promise<ConnectedAsset[]> {
+  const { data, error } = await supabase.from("connected_assets").select("id, account_id, kind, external_id, name, username, picture_url, extra, updated_at").order("name");
+  return error ? [] : ((data ?? []) as ConnectedAsset[]);
+}
+/** Re-read a Meta login's pages / Instagram accounts / ad accounts. */
+export async function syncAssets(id: string): Promise<{ error?: string }> {
+  const r = await call("assets_sync", { id });
+  return r?.error ? { error: r.error } : {};
 }

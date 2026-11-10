@@ -1,23 +1,23 @@
 // =====================================================================
 // Supabase Edge Function: connected-accounts
-// (written and deployed by the Base chat on 2026-11-09; source of truth:
+// (written and deployed by the Base chat; source of truth:
 //  src/base/requests/connected-accounts.index.ts.txt — Enterprise may adopt it)
 //
-// Several mail / calendar accounts per person: Gmail, Google Calendar and
-// extra Outlook accounts (the first Outlook stays in outlook_tokens /
-// outlook-sync, untouched). Table: connected_accounts + connected_account_tokens
-// (src/base/sql/119_connected_accounts.sql).
+// Several accounts per person: Gmail / Google Calendar, extra Outlook accounts
+// (the first Outlook stays in outlook_tokens / outlook-sync, untouched) and
+// Meta (Facebook pages, Instagram professional accounts, ad accounts).
+// Tables: connected_accounts + connected_account_tokens (SQL 119),
+//         connected_assets + connected_asset_tokens (SQL 123).
 //
 // Actions (POST, the caller's Supabase JWT identifies the user):
-//   connect    { provider: "google"|"microsoft", code, codeVerifier, redirectUri, services: ["mail","calendar"] }
-//              → swaps the code for tokens, reads the address, stores / merges the account
-//   disconnect { id }  → revokes at the provider (Google) and deletes the account + tokens
-//   check      { id }  → refreshes the token; marks the account active / error
-//   token      { id }  → a fresh access token (for later Gmail / Calendar / Outlook features)
+//   connect     { provider, code, codeVerifier?, redirectUri, services }
+//   disconnect  { id }   revokes at Google / Meta, deletes the account (+ tokens, assets)
+//   check       { id }   refreshes the token (Google / Microsoft) or checks it (Meta)
+//   token       { id }   a fresh access token
+//   assets_sync { id }   Meta: re-read pages, Instagram accounts and ad accounts
 //
-// Secrets (supabase secrets set …):
-//   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET   (Google Cloud › OAuth client, type Web)
-//   MS_CLIENT_ID, MS_CLIENT_SECRET           (already set for outlook-sync)
+// Secrets: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, MS_CLIENT_ID, MS_CLIENT_SECRET,
+//          META_APP_ID, META_APP_SECRET
 // =====================================================================
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -29,14 +29,20 @@ const cors = {
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
-type Provider = "google" | "microsoft";
-const TOKEN_URL: Record<Provider, string> = {
+type Provider = "google" | "microsoft" | "meta";
+const FB = "https://graph.facebook.com/v26.0";
+const TOKEN_URL: Record<"google" | "microsoft", string> = {
   google: "https://oauth2.googleapis.com/token",
   microsoft: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
 };
 const creds = (p: Provider) => p === "google"
   ? { id: Deno.env.get("GOOGLE_CLIENT_ID") ?? "", secret: Deno.env.get("GOOGLE_CLIENT_SECRET") ?? "" }
+  : p === "meta"
+  ? { id: Deno.env.get("META_APP_ID") ?? "", secret: Deno.env.get("META_APP_SECRET") ?? "" }
   : { id: Deno.env.get("MS_CLIENT_ID") ?? "", secret: Deno.env.get("MS_CLIENT_SECRET") ?? "" };
+const notSetUp = (p: Provider) => p === "google" ? "Google sign-in isn't set up on the server (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)."
+  : p === "meta" ? "Meta sign-in isn't set up on the server (META_APP_ID / META_APP_SECRET)." : "Microsoft sign-in isn't set up on the server.";
+const SERVICES = new Set(["mail", "calendar", "facebook", "instagram", "ads"]);
 
 async function caller(req: Request): Promise<{ id: string; tenant: string } | null> {
   const token = (req.headers.get("Authorization") ?? "").replace("Bearer ", "");
@@ -48,45 +54,119 @@ async function caller(req: Request): Promise<{ id: string; tenant: string } | nu
   return { id: data.user.id, tenant: (prof as any).tenant_id };
 }
 
-async function tokenRequest(p: Provider, body: Record<string, string>) {
+type Tok = { access_token: string; refresh_token?: string; expires_in?: number; scope?: string };
+async function tokenRequest(p: "google" | "microsoft", body: Record<string, string>): Promise<Tok> {
   const c = creds(p);
-  if (!c.id || !c.secret) throw new Error(p === "google" ? "Google sign-in isn't set up on the server (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)." : "Microsoft sign-in isn't set up on the server.");
+  if (!c.id || !c.secret) throw new Error(notSetUp(p));
   const res = await fetch(TOKEN_URL[p], {
     method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ client_id: c.id, client_secret: c.secret, ...body }),
   });
   const j = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(j.error_description || j.error || `Token error ${res.status}`);
-  return j as { access_token: string; refresh_token?: string; expires_in?: number; scope?: string; id_token?: string };
+  return j as Tok;
+}
+
+/** Meta: code → short-lived user token → long-lived (≈60 days; no refresh token, signing in again renews it). */
+async function metaToken(code: string, redirectUri: string): Promise<Tok> {
+  const c = creds("meta");
+  if (!c.id || !c.secret) throw new Error(notSetUp("meta"));
+  const q1 = new URLSearchParams({ client_id: c.id, client_secret: c.secret, redirect_uri: redirectUri, code });
+  const r1 = await fetch(`${FB}/oauth/access_token?${q1}`);
+  const j1 = await r1.json().catch(() => ({}));
+  if (!r1.ok || !j1.access_token) throw new Error(j1?.error?.message || `Meta token error ${r1.status}`);
+  const q2 = new URLSearchParams({ grant_type: "fb_exchange_token", client_id: c.id, client_secret: c.secret, fb_exchange_token: j1.access_token });
+  const r2 = await fetch(`${FB}/oauth/access_token?${q2}`);
+  const j2 = await r2.json().catch(() => ({}));
+  if (!r2.ok || !j2.access_token) return { access_token: j1.access_token, expires_in: j1.expires_in ?? 3600 };
+  return { access_token: j2.access_token, expires_in: j2.expires_in ?? 60 * 24 * 3600 };
+}
+
+async function fbGet(path: string, token: string) {
+  const sep = path.includes("?") ? "&" : "?";
+  const r = await fetch(`${FB}${path}${sep}access_token=${encodeURIComponent(token)}`);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j?.error?.message || `Meta error ${r.status}`);
+  return j;
 }
 
 async function whoIs(p: Provider, accessToken: string): Promise<{ email: string; name: string | null }> {
   if (p === "google") {
-    const r = await fetch("https://openidconnect.googleapis.com/v1/userinfo", { headers: { Authorization: `Bearer ${accessToken}` } });
-    const j = await r.json();
+    const j = await (await fetch("https://openidconnect.googleapis.com/v1/userinfo", { headers: { Authorization: `Bearer ${accessToken}` } })).json();
     return { email: String(j.email ?? "").toLowerCase(), name: j.name ?? null };
   }
-  const r = await fetch("https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName,displayName", { headers: { Authorization: `Bearer ${accessToken}` } });
-  const j = await r.json();
+  if (p === "meta") {
+    const j = await fbGet("/me?fields=id,name,email", accessToken);
+    return { email: String(j.email || `facebook:${j.id}`).toLowerCase(), name: j.name ?? null };
+  }
+  const j = await (await fetch("https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName,displayName", { headers: { Authorization: `Bearer ${accessToken}` } })).json();
   return { email: String(j.mail || j.userPrincipalName || "").toLowerCase(), name: j.displayName ?? null };
 }
 
-async function freshToken(accountId: string, userId: string): Promise<string> {
-  const { data: acc } = await admin.from("connected_accounts").select("id, provider, user_id").eq("id", accountId).maybeSingle();
+/** Meta: store the pages, Instagram accounts and ad accounts this login reaches; drop the ones it no longer does. */
+async function syncMetaAssets(accountId: string, tenant: string, userId: string, token: string, services: string[]) {
+  type A = { kind: string; external_id: string; name: string | null; username: string | null; picture_url: string | null; extra: Record<string, unknown>; token?: string };
+  const found: A[] = [];
+  let next: string | null = "/me/accounts?fields=id,name,access_token,category,picture{url},instagram_business_account{id,username,name,profile_picture_url,followers_count}&limit=100";
+  for (let guard = 0; next && guard < 10; guard++) {
+    const j: any = await fbGet(next, token);
+    for (const p of j.data ?? []) {
+      found.push({ kind: "facebook_page", external_id: p.id, name: p.name ?? null, username: null, picture_url: p.picture?.data?.url ?? null, extra: { category: p.category ?? null }, token: p.access_token });
+      const ig = p.instagram_business_account;
+      if (ig?.id && services.includes("instagram")) found.push({ kind: "instagram", external_id: ig.id, name: ig.name ?? null, username: ig.username ?? null, picture_url: ig.profile_picture_url ?? null, extra: { page_id: p.id, followers: ig.followers_count ?? null }, token: p.access_token });
+    }
+    next = j.paging?.next ? String(j.paging.next).replace(FB, "").replace(/([?&])access_token=[^&]*&?/, "$1") : null;
+  }
+  if (services.includes("ads")) {
+    try {
+      const j: any = await fbGet("/me/adaccounts?fields=id,name,account_status,currency&limit=100", token);
+      for (const a of j.data ?? []) found.push({ kind: "ad_account", external_id: a.id, name: a.name ?? null, username: null, picture_url: null, extra: { status: a.account_status ?? null, currency: a.currency ?? null } });
+    } catch { /* no ads permission: fine */ }
+  }
+  const keep = found.filter((a) => a.kind !== "facebook_page" || services.includes("facebook") || services.includes("instagram"));
+  const now = new Date().toISOString();
+  for (const a of keep) {
+    const up = await admin.from("connected_assets").upsert({
+      account_id: accountId, tenant_id: tenant, user_id: userId, kind: a.kind, external_id: a.external_id,
+      name: a.name, username: a.username, picture_url: a.picture_url, extra: a.extra, updated_at: now,
+    }, { onConflict: "account_id,kind,external_id" }).select("id").single();
+    if (!up.error && a.token) await admin.from("connected_asset_tokens").upsert({ asset_id: (up.data as any).id, access_token: a.token, updated_at: now });
+  }
+  // what this login no longer reaches goes away
+  const { data: old } = await admin.from("connected_assets").select("id, kind, external_id").eq("account_id", accountId);
+  const live = new Set(keep.map((a) => `${a.kind}:${a.external_id}`));
+  const gone = ((old ?? []) as any[]).filter((o) => !live.has(`${o.kind}:${o.external_id}`)).map((o) => o.id);
+  if (gone.length) await admin.from("connected_assets").delete().in("id", gone);
+  return { pages: keep.filter((a) => a.kind === "facebook_page").length, instagram: keep.filter((a) => a.kind === "instagram").length, ad_accounts: keep.filter((a) => a.kind === "ad_account").length };
+}
+
+async function freshToken(accountId: string, userId: string): Promise<{ token: string; provider: Provider; tenant: string; services: string[] }> {
+  const { data: acc } = await admin.from("connected_accounts").select("id, provider, user_id, tenant_id, services").eq("id", accountId).maybeSingle();
   if (!acc || (acc as any).user_id !== userId) throw new Error("Account not found.");
+  const provider = (acc as any).provider as Provider;
+  const out = (token: string) => ({ token, provider, tenant: (acc as any).tenant_id, services: (acc as any).services ?? [] });
   const { data: t } = await admin.from("connected_account_tokens").select("*").eq("account_id", accountId).maybeSingle();
   if (!t) throw new Error("No token stored.");
-  if ((t as any).access_token && (t as any).expires_at && new Date((t as any).expires_at).getTime() - Date.now() > 120_000) return (t as any).access_token;
+  const mark = (status: "active" | "error", last_error: string | null) =>
+    admin.from("connected_accounts").update({ status, last_error, updated_at: new Date().toISOString() }).eq("id", accountId);
+  if (provider === "meta") {
+    // no refresh token at Meta: the long-lived token works until it expires; signing in again renews it
+    const exp = (t as any).expires_at ? new Date((t as any).expires_at).getTime() : 0;
+    if (exp && exp < Date.now()) { await mark("error", "Access expired — sign in to Meta again."); throw new Error("Access expired — sign in to Meta again."); }
+    try { await fbGet("/me?fields=id", (t as any).access_token); await mark("active", null); return out((t as any).access_token); }
+    catch (e) { await mark("error", String((e as Error).message ?? e)); throw e; }
+  }
+  if ((t as any).access_token && (t as any).expires_at && new Date((t as any).expires_at).getTime() - Date.now() > 120_000) return out((t as any).access_token);
   try {
-    const tok = await tokenRequest((acc as any).provider, { grant_type: "refresh_token", refresh_token: (t as any).refresh_token });
+    const tok = await tokenRequest(provider, { grant_type: "refresh_token", refresh_token: (t as any).refresh_token });
     await admin.from("connected_account_tokens").update({
       access_token: tok.access_token, refresh_token: tok.refresh_token ?? (t as any).refresh_token,
       expires_at: new Date(Date.now() + (tok.expires_in ?? 3600) * 1000).toISOString(), updated_at: new Date().toISOString(),
     }).eq("account_id", accountId);
-    await admin.from("connected_accounts").update({ status: "active", last_error: null, updated_at: new Date().toISOString() }).eq("id", accountId);
-    return tok.access_token;
+    await mark("active", null);
+    return out(tok.access_token);
   } catch (e) {
-    await admin.from("connected_accounts").update({ status: "error", last_error: String((e as Error).message ?? e), updated_at: new Date().toISOString() }).eq("id", accountId);
+    await mark("error", String((e as Error).message ?? e));
     throw e;
   }
 }
@@ -100,9 +180,11 @@ Deno.serve(async (req) => {
 
     if (action === "connect") {
       const provider = p.provider as Provider;
-      if (provider !== "google" && provider !== "microsoft") return json({ error: "Unknown provider" }, 400);
-      const services = (Array.isArray(p.services) ? p.services : []).filter((s: string) => s === "mail" || s === "calendar");
-      const tok = await tokenRequest(provider, { grant_type: "authorization_code", code: p.code, redirect_uri: p.redirectUri, code_verifier: p.codeVerifier ?? "" });
+      if (provider !== "google" && provider !== "microsoft" && provider !== "meta") return json({ error: "Unknown provider" }, 400);
+      const services: string[] = (Array.isArray(p.services) ? p.services : []).filter((s: string) => SERVICES.has(s));
+      const tok = provider === "meta"
+        ? await metaToken(p.code, p.redirectUri)
+        : await tokenRequest(provider, { grant_type: "authorization_code", code: p.code, redirect_uri: p.redirectUri, code_verifier: p.codeVerifier ?? "" });
       const who = await whoIs(provider, tok.access_token);
       if (!who.email) return json({ error: "Couldn't read the account's address." }, 400);
       const { data: existing } = await admin.from("connected_accounts").select("id, services")
@@ -112,24 +194,36 @@ Deno.serve(async (req) => {
         tenant_id: me.tenant, user_id: me.id, provider, email: who.email, display_name: who.name, services: merged,
         scopes: tok.scope ?? null, status: "active", last_error: null, updated_at: new Date().toISOString(),
       };
-      const up = await admin.from("connected_accounts").upsert(row, { onConflict: "user_id,provider,email" }).select("id, provider, email, display_name, services, status, last_error, connected_at").single();
+      const up = await admin.from("connected_accounts").upsert(row, { onConflict: "user_id,provider,email" }).select("id, provider, email, display_name, services, status, last_error, connected_at, updated_at").single();
       if (up.error) return json({ error: up.error.message }, 400);
-      const { data: oldTok } = await admin.from("connected_account_tokens").select("refresh_token").eq("account_id", (up.data as any).id).maybeSingle();
+      const accId = (up.data as any).id;
+      const { data: oldTok } = await admin.from("connected_account_tokens").select("refresh_token").eq("account_id", accId).maybeSingle();
       await admin.from("connected_account_tokens").upsert({
-        account_id: (up.data as any).id, access_token: tok.access_token,
+        account_id: accId, access_token: tok.access_token,
         refresh_token: tok.refresh_token ?? (oldTok as any)?.refresh_token ?? null,     // Google sends it only on first consent
         expires_at: new Date(Date.now() + (tok.expires_in ?? 3600) * 1000).toISOString(), updated_at: new Date().toISOString(),
       });
-      return json({ account: up.data });
+      let assets = null;
+      if (provider === "meta") { try { assets = await syncMetaAssets(accId, me.tenant, me.id, tok.access_token, merged); } catch (e) { assets = { error: String((e as Error).message ?? e) }; } }
+      return json({ account: up.data, assets });
+    }
+
+    if (action === "assets_sync") {
+      const f = await freshToken(p.id, me.id);
+      if (f.provider !== "meta") return json({ error: "Only Meta accounts have pages to read." }, 400);
+      return json({ assets: await syncMetaAssets(p.id, f.tenant, me.id, f.token, f.services) });
     }
 
     if (action === "disconnect") {
       const { data: acc } = await admin.from("connected_accounts").select("id, provider, user_id").eq("id", p.id).maybeSingle();
       if (!acc || (acc as any).user_id !== me.id) return json({ error: "Account not found." }, 404);
+      const { data: t } = await admin.from("connected_account_tokens").select("refresh_token, access_token").eq("account_id", p.id).maybeSingle();
       if ((acc as any).provider === "google") {
-        const { data: t } = await admin.from("connected_account_tokens").select("refresh_token, access_token").eq("account_id", p.id).maybeSingle();
         const tk = (t as any)?.refresh_token || (t as any)?.access_token;
         if (tk) await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(tk)}`, { method: "POST" }).catch(() => {});
+      }
+      if ((acc as any).provider === "meta" && (t as any)?.access_token) {
+        await fetch(`${FB}/me/permissions?access_token=${encodeURIComponent((t as any).access_token)}`, { method: "DELETE" }).catch(() => {});
       }
       await admin.from("connected_accounts").delete().eq("id", p.id);
       return json({ ok: true });
@@ -141,7 +235,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === "token") {
-      return json({ access_token: await freshToken(p.id, me.id) });
+      return json({ access_token: (await freshToken(p.id, me.id)).token });
     }
 
     return json({ error: "Unknown action" }, 400);
