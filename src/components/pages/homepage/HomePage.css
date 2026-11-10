@@ -487,6 +487,7 @@
 .hn-ico svg { width: 16px; height: 16px; }
 .hn-item.is-task .hn-ico { --c: #2f7fd6; } .hn-item.is-msg .hn-ico { --c: #8b5cf6; } .hn-item.is-invite .hn-ico { --c: #12a072; }
 .hn-item.is-warn .hn-ico { --c: #d68a1e; } .hn-item.is-bad .hn-ico { --c: #d64545; } .hn-item.is-ok .hn-ico { --c: #12a072; }
+.hn-item.is-proj .hn-ico { --c: #0f8fa3; } .ha-card.is-proj .ha-ico { --c: #0f8fa3; } .ha.is-dark .ha-card.is-proj .ha-ico { --c: #7fd6e3; }
 .hn-txt { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .hn-line { font-size: 12.5px; color: #5a7d6d; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hn-line b { font-weight: 650; color: #0b241a; }

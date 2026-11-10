@@ -3,7 +3,8 @@ import { memo, startTransition, useCallback, useEffect, useLayoutEffect, useMemo
 import type { CSSProperties, ReactNode, PointerEvent as ReactPointerEvent, MouseEvent as ReactMouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { useLocation } from "react-router-dom";
-import { EMPTY_RANGES, activeRangeCount, HeaderRangePopover, rangeActive, clearRange, type SalesRanges, type RangeKind } from "./SalesRangeFilter";
+import { EMPTY_RANGES, activeRangeCount, type SalesRanges } from "./SalesRangeFilter";
+import { ColumnHead, type ColumnHeadProps } from "../../../framework/ColumnHead";
 import SalesForecast, { type ForecastKpis } from "./SalesForecast";
 import { supabase } from "../../../api/supabase";
 import { listCompanies, listContacts, myProfile, sessionUserId, loadPrefs, savePref, type Company, type Contact } from "../../companies/companiesApi";
@@ -880,9 +881,6 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   const [boardPipe, setBoardPipe] = useState("");
   // Custom ranges: probability %, expected close date, potential revenue.
   const [fRanges, setFRanges] = useState<SalesRanges>(EMPTY_RANGES);
-  // List headers: which column holds a range from its 3rd click, and the open popover.
-  const [rangeCol, setRangeCol] = useState<RangeKind | null>(null);
-  const [headPop, setHeadPop] = useState<{ kind: RangeKind; rect: DOMRect } | null>(null);
   const sort = dview.sort[0]?.key?.startsWith("~") ? dview.sort[0].key.slice(1) : "recent";
   const setSort = (sv: string) => { const v = dviewRef.current; setDView({ ...v, sort: sv === "recent" ? [] : [{ key: `~${sv}`, dir: "asc" }] }); };
   const [probView, setProbView] = useState<"phase" | "rep" | "mgr" | "avg">("phase");
@@ -1306,6 +1304,13 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
       { key: "ctName", label: "Main contact", group: P, type: "text", get: (t) => nm(ct0(t)) },
       { key: "ctEmail", label: "Contact e-mail", group: P, type: "text", get: (t) => ct0(t)?.email ?? "" },
       { key: "contacts", label: "Number of contacts", group: P, type: "number", get: (t) => t.contactIds.length },
+      { key: "ctPosition", label: "Contact position", group: P, type: "text", get: (t) => ct0(t)?.position ?? ct0(t)?.job_title ?? "" },
+      { key: "ctAll", label: "Every contact", group: P, type: "text", get: (t) => (t.contactIds ?? []).map((id) => nm(contactById.get(id))).filter(Boolean).join(", ") },
+      { key: "phaseProb", label: "Phase probability (%)", group: D, type: "number", get: (t) => phaseProbOf(t) },
+      { key: "repClose", label: "Sales close date", group: D, type: "date", get: (t) => t.rep_close_date ?? null },
+      { key: "mgrClose", label: "Management close date", group: D, type: "date", get: (t) => t.mgr_close_date ?? null },
+      { key: "coLegal", label: "Legal name", group: C, type: "text", get: (t) => co(t)?.legal_name ?? "" },
+      { key: "coVat", label: "VAT number", group: C, type: "text", get: (t) => co(t)?.vat_number ?? "" },
     ];
     trackingFields.forEach((f) => {
       const get = (t: Tracking) => (t.custom ?? {})[f.id] ?? null;
@@ -1395,6 +1400,9 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
     if (sort === "close_soon" || sort === "close_late") list.forEach((t) => closeOf.set(t.id, closeDateOf(t)));
     const probOfMap = new Map<string, number | null>();
     if (sort === "prob_hi" || sort === "prob_lo") list.forEach((t) => probOfMap.set(t.id, shownProbOf(t)));
+    // sorted by a column's field (its header menu): the view's sort, newest first between equals
+    const fieldSort = dview.sort.filter((x) => !x.key.startsWith("~"));
+    if (sort === "recent" && fieldSort.length) return applyView(list, dealFields, { match: "all", conds: [], sort: fieldSort }, (a, b) => strCmp(b.created_at ?? "", a.created_at ?? ""));
     list = [...list].sort((a, b) => {
       if (sort === "az") return cmp(ttl(a), ttl(b));
       if (sort === "za") return cmp(ttl(b), ttl(a));
@@ -1438,7 +1446,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
     });
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredBase, fStatus, sort, probView, phaseByPipe, potentialTotals, me, titleById]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [filteredBase, fStatus, sort, dview.sort, dealFields, probView, phaseByPipe, potentialTotals, me, titleById]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Clicking the KPI card that is already active clears the filter again.
   // Status cards combine: Active + Won shows both; clicking an active card removes it.
@@ -1474,60 +1482,38 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
 
   const anyFilterButStatus = !!(q || dview.conds.some((c) => c !== qStatus) || activeRangeCount(fRanges));
   const anyFilter = !!(q || dview.conds.length || activeRangeCount(fRanges) || sort !== "recent");
-  const clearAll = () => { setQ(""); setDView(emptyView()); setFRanges(EMPTY_RANGES); setRangeCol(null); setHeadPop(null); };
+  const clearAll = () => { setQ(""); setDView(emptyView()); setFRanges(EMPTY_RANGES); };
   const kanbanPipe = fPipeline.length ? (fPipeline.includes(boardPipe) ? boardPipe : fPipeline[0]) : "";
   const [colsOpen, setColsOpen] = useState(false);
 
-  /* ---- sortable list headers ----
-     number/date columns: low→high, high→low, range popover, reset.
-     text columns:        A→Z, Z→A, reset. */
+  /* ---- list headers: each opens a menu to sort the list by the column and filter it right there ----
+     The built-in columns keep their own sorts (stage progress, close chance as shown…); the rest sort
+     by their field through the view. What a header filters on is a field of the view, so it shows as a
+     chip and is saved with a view. */
   type HeadCol = "deal" | "stage" | "product" | "rev" | "close" | "prob";
-  const HEAD_SORT: Record<HeadCol, { asc: string; desc: string; range?: RangeKind }> = {
-    deal: { asc: "az", desc: "za" },
-    stage: { asc: "stage_lo", desc: "stage_hi" },
-    product: { asc: "prod_az", desc: "prod_za" },
-    rev: { asc: "rev_lo", desc: "rev_hi", range: "rev" },
-    close: { asc: "close_soon", desc: "close_late", range: "close" },
-    prob: { asc: "prob_lo", desc: "prob_hi", range: "prob" },
+  const HEAD_SORT: Record<HeadCol, { asc: string; desc: string; words: [string, string] }> = {
+    deal: { asc: "az", desc: "za", words: ["A → Z", "Z → A"] },
+    stage: { asc: "stage_lo", desc: "stage_hi", words: ["Earliest stage", "Furthest along"] },
+    product: { asc: "prod_az", desc: "prod_za", words: ["A → Z", "Z → A"] },
+    rev: { asc: "rev_lo", desc: "rev_hi", words: ["Smallest first", "Largest first"] },
+    close: { asc: "close_soon", desc: "close_late", words: ["Soonest first", "Latest first"] },
+    prob: { asc: "prob_lo", desc: "prob_hi", words: ["Lowest first", "Highest first"] },
   };
-  const headStep = (c: HeadCol): 0 | 1 | 2 | 3 => {
-    const d = HEAD_SORT[c];
-    if (d.range && (headPop?.kind === d.range || (rangeCol === d.range && rangeActive(fRanges, d.range)))) return 3;
-    return sort === d.asc ? 1 : sort === d.desc ? 2 : 0;
+  const fieldByKey = new Map(dealFields.map((f) => [f.key, f]));
+  /** The view's field a plain column shows (the product name column is the product field). */
+  const colField = (k: string) => fieldByKey.get(k === "productName" ? "product" : k);
+  const codedSorts = (col: HeadCol): ColumnHeadProps["sorts"] => ({
+    options: [{ id: HEAD_SORT[col].asc, label: HEAD_SORT[col].words[0], dir: "asc" }, { id: HEAD_SORT[col].desc, label: HEAD_SORT[col].words[1], dir: "desc" }],
+    active: sort === HEAD_SORT[col].asc || sort === HEAD_SORT[col].desc ? sort : null,
+    onPick: (id) => setSort(id ?? "recent"),
+  });
+  const HEAD_FIELDS: Record<HeadCol, string[]> = {
+    deal: ["dealName", "company", "owner"], stage: ["status", "pipeline", "phase"], product: ["product", "owner"],
+    rev: ["revenue"], close: ["expected"], prob: ["prob"],
   };
-  const resetHead = (c: HeadCol) => {
-    const d = HEAD_SORT[c];
-    setSort("recent");
-    if (d.range) { setFRanges((r) => clearRange(r, d.range!)); if (rangeCol === d.range) setRangeCol(null); }
-    setHeadPop(null);
-  };
-  const clickHead = (c: HeadCol, e: ReactMouseEvent<HTMLButtonElement>) => {
-    const d = HEAD_SORT[c];
-    const step = headStep(c);
-    if (step === 0) { setSort(d.asc); setHeadPop(null); return; }
-    if (step === 1) { setSort(d.desc); return; }
-    if (step === 2 && d.range) { setRangeCol(d.range); setHeadPop({ kind: d.range, rect: e.currentTarget.getBoundingClientRect() }); return; }
-    resetHead(c);
-  };
-  const headBtn = (col: HeadCol, label: string) => {
-    const step = headStep(col);
-    const hint = HEAD_SORT[col].range
-      ? ["Click: low → high", "Click: high → low", "Click: set a range", "Click: back to normal"][step]
-      : ["Click: A → Z", "Click: Z → A", "Click: back to normal", ""][step];
-    return (
-      <button type="button" data-head-range={HEAD_SORT[col].range ? "" : undefined}
-        className={`so-th ${step ? "is-on" : ""} ${step === 3 ? "is-range" : ""}`}
-        onClick={(e) => clickHead(col, e)} title={hint} aria-sort={step === 1 ? "ascending" : step === 2 ? "descending" : "none"}>
-        {label}
-        <span className="so-th-ico" aria-hidden="true">
-          {step === 1 ? <svg viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6" /></svg>
-            : step === 2 ? <svg viewBox="0 0 24 24"><path d="M12 5v14M6 13l6 6 6-6" /></svg>
-            : step === 3 ? <svg viewBox="0 0 24 24"><path d="M4 5h16l-6 7.5V19l-4-2v-4.5z" /></svg>
-            : <svg viewBox="0 0 24 24"><path d="M8 9l4-4 4 4M8 15l4 4 4-4" /></svg>}
-        </span>
-      </button>
-    );
-  };
+  const head = (col: HeadCol, label: string) => (
+    <ColumnHead label={label} view={dview} onView={setDView} rows={mine} sorts={codedSorts(col)} fields={HEAD_FIELDS[col].map((k) => fieldByKey.get(k))} className="so-th" />
+  );
   useEffect(() => { console.info("[sales] build: forecast KPIs in top row (v3)"); }, []);
 
   // Move a tracking to a phase (drag in kanban). Mirrors the detail logic.
@@ -2249,7 +2235,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
             <div className="so-cols dz-table" style={{ ["--so-cols" as string]: colTemplate, ["--so-minw" as string]: `${colMinW}px` } as CSSProperties}>
             {/* One header for the whole list, so rows don't repeat a label under every figure. */}
             <div className="so-thead">
-              <span className="so-th-deal"><BulkCheck on={bulk.allOn} partial={bulk.someOn} onToggle={bulk.toggleAll} label="Select every deal shown" />{headBtn("deal", "Deal")}</span>
+              <span className="so-th-deal"><BulkCheck on={bulk.allOn} partial={bulk.someOn} onToggle={bulk.toggleAll} label="Select every deal shown" />{head("deal", "Deal")}</span>
               {activeCols.map((c) => (
                 <span key={c.key} className={`so-th-cell ${c.right ? "is-r" : ""} ${c.key === "value" ? "so-th-stack" : ""} ${thDrag === c.key ? "is-dragging" : ""} ${thOver?.k === c.key && thDrag !== c.key ? (thOver.after ? "is-after" : "is-before") : ""}`}
                   draggable title="Drag to move this column"
@@ -2261,20 +2247,14 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
                     if (thDrag && thOver && thDrag !== thOver.k) { const n = cols.filter((x) => x !== thDrag); n.splice(n.indexOf(thOver.k) + (thOver.after ? 1 : 0), 0, thDrag); saveCols(n); }
                     setThDrag(null); setThOver(null);
                   }}>
-                  {c.key === "value" ? <>{headBtn("rev", "Potential value")}{headBtn("close", "Expected close")}</>
-                    : c.key === "prob" ? headBtn("prob", probView === "phase" ? "Close chance" : probView === "rep" ? "Sales estimate" : probView === "mgr" ? "Mgmt estimate" : "Avg. estimate")
-                    : c.sort ? headBtn(c.sort, c.label)
-                    : <span className="so-th so-th-plain" title={c.label}>{c.label}</span>}
+                  {c.key === "value" ? <>{head("rev", "Potential value")}{head("close", "Expected close")}</>
+                    : c.key === "prob" ? head("prob", probView === "phase" ? "Close chance" : probView === "rep" ? "Sales estimate" : probView === "mgr" ? "Mgmt estimate" : "Avg. estimate")
+                    : c.sort ? head(c.sort, c.label)
+                    : <ColumnHead label={c.label} view={dview} onView={setDView} rows={mine} fields={[colField(c.key)]} sortKey={colField(c.key)?.key ?? null} className="so-th" />}
                 </span>
               ))}
               <span />
             </div>
-            {headPop && (
-              <HeaderRangePopover
-                kind={headPop.kind} anchor={headPop.rect} value={fRanges} onChange={setFRanges}
-                onClose={() => setHeadPop(null)}
-                probLabel={probView === "rep" ? "Sales estimate" : probView === "mgr" ? "Management estimate" : probView === "avg" ? "Average estimate" : "Phase probability"} />
-            )}
             <div ref={listRef} className={`so-list dz-list ${introOn ? "is-after-load" : ""}`}>
               {win[0] > 0 && <div className="dz-spacer" style={{ height: win[0] * rowH }} aria-hidden="true" />}
               {shown.slice(win[0], win[1]).map((t) => (

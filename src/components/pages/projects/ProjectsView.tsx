@@ -8,6 +8,8 @@ import Select from "../../framework/Select";
 import DatePicker from "../../framework/DatePicker";
 import { supabase } from "../../api/supabase";
 import { ClientLogo } from "../clients/ClientWorkspace";
+import { applyView, emptyView, useStoredView, FilterChips, type FField } from "../companies/CompaniesPage";
+import { ColumnHead } from "../../framework/ColumnHead";
 
 export type Usage = Record<string, { done: number; booked: number }>;
 export type ProjectsViewMode = "list" | "canvas";
@@ -49,7 +51,10 @@ export default function ProjectsView({
   const [fType, setFType] = useState("");
   const [fStatus, setFStatus] = useState("");
   const [fConsultant, setFConsultant] = useState("");
-  const [sort, setSort] = useState<Sort>("recent");
+  const [sort, setSortRaw] = useState<Sort>("recent");
+  /** What the column headers filter and sort by (kept on this browser between visits). */
+  const [pview, setPView] = useStoredView("np-projects-view", emptyView());
+  const setSort = (s: Sort) => { setSortRaw(s); if (pview.sort.length) setPView({ ...pview, sort: [] }); };
   /** Rate unit per service: a project reads in hours or days as its service says. */
   const [units, setUnits] = useState<Record<string, "hour" | "day">>({});
   useEffect(() => {
@@ -120,6 +125,28 @@ export default function ProjectsView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projects, people]);
 
+  /** What the column headers can filter and sort on. */
+  const projFields: FField<Project>[] = (() => {
+    const rank = { open: "1", on_hold: "2", closed: "3" } as const;
+    const roleOpts = [...new Set(projects.flatMap((p) => roleRowsOf(p).map((r) => r.roleId)))]
+      .map((id) => ({ value: id, label: roleNameOf(id, roles) })).sort((a, b) => a.label.localeCompare(b.label));
+    return [
+      { key: "client", label: "Client", group: "Project", type: "select", get: (p) => p.clientId, options: () => clients.map((c) => ({ value: c.id, label: c.name })).sort((a, b) => a.label.localeCompare(b.label)) },
+      { key: "service", label: "Service", group: "Project", type: "select", get: (p) => p.projectTypeId ?? "", options: () => projectTypes.map((t) => ({ value: t.id, label: t.name })) },
+      { key: "team", label: "Consultants", group: "Project", type: "multi", get: (p) => (p.team ?? []).map((m) => m.userId).filter(Boolean), options: () => consultantOptions },
+      { key: "kickoff", label: "Kick-off", group: "Dates", type: "date", get: (p) => p.kickoffDate || null },
+      { key: "end", label: "End", group: "Dates", type: "date", get: (p) => p.endDate || null },
+      { key: "roles", label: "Roles sold", group: "Delivery", type: "multi", get: (p) => roleRowsOf(p).map((r) => r.roleId), options: () => roleOpts },
+      { key: "progress", label: "Delivered (%)", group: "Delivery", type: "number", get: (p) => Math.round(progressOf(p)) },
+      { key: "left", label: "Days left", group: "Delivery", type: "number", get: (p) => +leftOf(p).toFixed(2) },
+      { key: "signed", label: "Days sold", group: "Delivery", type: "number", get: (p) => totalSigned(p) },
+      { key: "value", label: "Value (€)", group: "Value", type: "number", get: (p) => Math.round(projectValue(p)) },
+      { key: "status", label: "Status", group: "Project", type: "select", get: (p) => projectStatusOf(p.status), sort: (p) => rank[projectStatusOf(p.status)],
+        options: () => [{ value: "open", label: PROJECT_STATUS_LABEL.open }, { value: "on_hold", label: PROJECT_STATUS_LABEL.on_hold }, { value: "closed", label: PROJECT_STATUS_LABEL.closed }] },
+    ];
+  })();
+  const fieldOf = (k: string) => projFields.find((f) => f.key === k);
+
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase();
     const list = projects.filter((p) => {
@@ -138,7 +165,10 @@ export default function ProjectsView({
       );
     });
 
-    return list.sort((a, b) => {
+    // the column headers' filters, and their sort when one is picked
+    const byHead = applyView(list, projFields, { ...pview, sort: [] });
+    if (pview.sort.length) return applyView(byHead, projFields, { match: "all", conds: [], sort: pview.sort }, (a, b) => (b.kickoffDate || "").localeCompare(a.kickoffDate || ""));
+    return byHead.sort((a, b) => {
       if (sort === "value") return projectValue(b) - projectValue(a);
       if (sort === "days") return totalSigned(b) - totalSigned(a);
       if (sort === "progress") return progressOf(b) - progressOf(a);
@@ -149,7 +179,7 @@ export default function ProjectsView({
       return (b.kickoffDate || "").localeCompare(a.kickoffDate || "");
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projects, usage, q, fClient, fType, fStatus, fConsultant, sort, clients, projectTypes]);
+  }, [projects, usage, q, fClient, fType, fStatus, fConsultant, sort, clients, projectTypes, pview, people, roles]);
 
   const sumValue = shown.reduce((s, p) => s + projectValue(p), 0);
   // Days and hours are different units, so they are counted apart.
@@ -164,8 +194,8 @@ export default function ProjectsView({
   // Uses sumBilled, so it has to come after it.
   const pctDone = sumDays > 0 ? Math.round((sumBilled / sumDays) * 100) : 0;
 
-  const clearAll = () => { setQ(""); setFClient(""); setFType(""); setFStatus(""); setFConsultant(""); setSort("recent"); };
-  const anyFilter = !!(q || fClient || fType || fStatus || fConsultant || sort !== "recent");
+  const clearAll = () => { setQ(""); setFClient(""); setFType(""); setFStatus(""); setFConsultant(""); setSortRaw("recent"); setPView(emptyView()); };
+  const anyFilter = !!(q || fClient || fType || fStatus || fConsultant || sort !== "recent" || pview.conds.length || pview.sort.length);
 
   return (
     <>
@@ -247,8 +277,9 @@ export default function ProjectsView({
         </div>
         <div className="pv-filter">
           <Select
-            value={sort}
+            value={pview.sort.length ? "" : sort}
             onChange={(v) => setSort(v as Sort)}
+            placeholder="By a column"
             options={[
               { value: "recent", label: "Most recent" },
               { value: "value", label: "Highest value" },
@@ -262,6 +293,7 @@ export default function ProjectsView({
         {anyFilter && <button className="pv-clear" onClick={clearAll}>Clear</button>}
         <span className="pj-count"><b>{shown.length}</b> of {projects.length}</span>
       </div>
+      <FilterChips fields={projFields} view={pview} onView={setPView} onEdit={() => {}} shown={shown.length} total={projects.length} noun={["project", "projects"]} />
 
       {shown.length === 0 ? (
         <p className="cl-hint">No projects match those filters.</p>
@@ -272,11 +304,11 @@ export default function ProjectsView({
         <div className="pv-scroll">
         <div className="pv-list">
           <div className="pv-hrow">
-            <span>Project</span>
-            <span>Dates</span>
-            <span>Roles · done / sold</span>
-            <span className="pv-right">Value</span>
-            <span className="pv-right">Status</span>
+            <span><ColumnHead label="Project" view={pview} onView={setPView} rows={projects} fields={[fieldOf("client"), fieldOf("service"), fieldOf("team")]} sortKey="client" /></span>
+            <span className="ch-cell"><ColumnHead label="Dates" view={pview} onView={setPView} rows={projects} fields={[fieldOf("kickoff"), fieldOf("end")]} sortKey="kickoff" /></span>
+            <span className="ch-cell"><ColumnHead label="Roles · done / sold" name="Roles" view={pview} onView={setPView} rows={projects} fields={[fieldOf("roles"), fieldOf("progress"), fieldOf("left")]} sortKey="progress" /></span>
+            <span className="ch-cell"><ColumnHead label="Value" view={pview} onView={setPView} rows={projects} fields={[fieldOf("value")]} sortKey="value" /></span>
+            <span className="ch-cell"><ColumnHead label="Status" view={pview} onView={setPView} rows={projects} fields={[fieldOf("status")]} sortKey="status" /></span>
           </div>
 
           {shown.map((p) => {

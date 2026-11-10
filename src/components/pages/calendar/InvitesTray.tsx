@@ -146,6 +146,8 @@ export default function InvitesTray({ invites, userId, unit, workTypes, onChange
                 ? <>You decide what you bill when you accept{inv.billable > 0 ? <> — {inv.organiser_name} suggests <b>{inv.billable}{unit(inv.project_id)}</b></> : null}</>
                 : inv.billable > 0
                 ? <>Billed to the client as <b>{inv.billable}{unit(inv.project_id)}</b> of your time{repeats ? " each date" : ""}</>
+                : inv.project_id || inv.client_id
+                ? <><b>Not billable</b> for you — {inv.organiser_name} set it</>
                 : <>Not billable — logged as attendance only</>}
             </p>
 

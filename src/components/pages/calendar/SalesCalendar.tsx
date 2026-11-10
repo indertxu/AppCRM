@@ -20,6 +20,7 @@ import HomeTodo from "../homepage/shared/HomeTodo";
 import { JumpPicker, OutlookCard, OutlookStatusCard } from "./CalendarPage";
 import "./CalendarPage.css";
 import "./SalesCalendar.css";
+import { ClientLogo } from "../clients/ClientWorkspace";
 
 type ScLine = "meetings" | "hours" | "deals" | "blocks";
 const SC_LINES: { id: ScLine; label: string; hint: string }[] = [
@@ -84,11 +85,13 @@ interface DayHours {
 }
 
 /** A dropdown that matches the app instead of the browser's own. */
-function Picker({ value, options, onChange, placeholder }: {
+function Picker({ value, options, onChange, placeholder, logos }: {
   value: string;
   options: { id: string; label: string }[];
   onChange: (v: string) => void;
   placeholder?: string;
+  /** The options are companies: each shows its logo (from its website), else its initials. */
+  logos?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
@@ -111,6 +114,7 @@ function Picker({ value, options, onChange, placeholder }: {
   return (
     <div className="sc-pick" ref={ref}>
       <button type="button" className={`sc-pick-btn ${open ? "is-open" : ""}`} onClick={() => setOpen((v) => !v)}>
+        {logos && current && <ClientLogo name={current.label} companyId={current.id} className="sc-pick-logo" />}
         <span>{current?.label ?? placeholder ?? "Choose"}</span>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6"/></svg>
       </button>
@@ -122,7 +126,7 @@ function Picker({ value, options, onChange, placeholder }: {
               className={`sc-pick-opt ${o.id === value ? "is-on" : ""}`}
               style={{ animationDelay: `${i * 18}ms` }}
               onClick={() => { onChange(o.id); setOpen(false); }}>
-              {o.label}
+              {logos ? <span className="sc-pick-co"><ClientLogo name={o.label} companyId={o.id} className="sc-pick-logo" /><span>{o.label}</span></span> : o.label}
               {o.id === value && (
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
               )}
@@ -1414,7 +1418,7 @@ function NewMeeting({ day, hour, deals, userId, hours, links, edit, fromOutlook,
                       <label>Company</label>
                       <Picker value={companyId} onChange={setCompanyId}
                         placeholder={links.companies.length ? "Pick a company" : "No company assigned to you"}
-                        options={links.companies} />
+                        options={links.companies} logos />
                     </div>
 
                     {coDeals.length > 1 && (
@@ -1480,7 +1484,7 @@ function NewMeeting({ day, hour, deals, userId, hours, links, edit, fromOutlook,
                   {linkKind !== "none" && (
                     <Picker value={linkId} onChange={(v) => { setLinkId(v); if (linkKind === "company") setCompanyId(v); }}
                       placeholder={linkOptions.length ? `Pick a ${linkKind}` : `No ${linkKind} assigned to you`}
-                      options={linkOptions} />
+                      options={linkOptions} logos={linkKind === "company"} />
                   )}
 
                   {linkKind === "company" && linkId && coContacts.length > 0 && (

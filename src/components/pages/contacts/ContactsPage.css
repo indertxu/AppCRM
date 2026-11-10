@@ -366,3 +366,8 @@
 .ct-retry { border: 1px solid currentColor; background: transparent; color: inherit; border-radius: 999px; padding: 3px 12px; font: inherit; font-size: 12px; cursor: pointer; }
 /* the app's own dropdown in the LinkedIn capture */
 .lic-f .sel-trigger, .lic-co .sel-trigger { width: 100%; }
+
+/* ===== Column headers open a sort / filter menu; every column but the person is centred (header and cells) ===== */
+.ct-lhead > span:not(.ct-lid-head) { display: flex; align-items: center; justify-content: center; min-width: 0; text-align: center; }
+.ct-lrow:not(.ct-lhead) > .ct-lcell:not(.ct-lid) { text-align: center; }
+.ct-lrow:not(.ct-lhead) > .ct-lcell:not(.ct-lid) > :is(div, span) { justify-content: center; }

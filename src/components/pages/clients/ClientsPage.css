@@ -4847,3 +4847,9 @@ button.cs5-n:hover, button.cs5-n:focus-visible { background: #e3f4ec; color: var
 .cs5-st-more button:hover { text-decoration: underline; }
 .cs5-form { padding-top: 18px; }
 @media (max-width: 1100px) { .cs5-st-more { display: none; } }
+
+/* ===== Client list: column headers open a sort / filter menu; every column but the client is centred ===== */
+.cx-tr.is-head > span:not(:first-child), .cx-tr.is-head > span.is-num:not(:first-child) { justify-content: center; justify-self: stretch; text-align: center; }
+.cx-tr.is-head > span.is-num .fx-sort { flex-direction: row; }
+.cx-tr:not(.is-head) > span:not(:first-child), .cx-tr:not(.is-head) > span.is-num { text-align: center; justify-self: stretch; }
+.cx-tr:not(.is-head) > span:not(:first-child) > :is(span, div) { justify-content: center; }

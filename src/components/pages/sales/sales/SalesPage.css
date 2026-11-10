@@ -5408,3 +5408,14 @@ button.sl-ppl-co:hover { background: #f1f7f4; color: var(--forest); }
 .sl.sl-detail .sl-flow-node.is-ro { cursor: default; }
 .sl.sl-detail .sl-flow-node.is-ro:hover { transform: none; }
 .sl.sl-detail .sl-flow-node.is-ro:hover .sl-flow-num { box-shadow: none; border-color: inherit; }
+
+/* ===== Deals list: column headers open a sort / filter menu; every column but the deal is centred (header and cells) ===== */
+.so-thead > span.so-th-cell, .so-thead > span.so-th-cell.is-r { justify-content: center; text-align: center; }
+.so-thead > span.so-th-cell.so-th-stack { align-items: center; }
+.so-thead > span.is-r .so-th-plain, .so-thead > span .ch-trig { margin-left: 0; margin-right: 0; }
+.dz-row .dz-stage { align-items: center; text-align: center; }
+.dz-row .dz-stage-t { justify-content: center; }
+.dz-row .dz-prod { justify-content: center; text-align: center; }
+.dz-row .dz-value { align-items: center; text-align: center; }
+.dz-row .dz-prob { justify-content: center; }
+.dz-row .dz-cell, .dz-row .dz-cell.is-r { text-align: center; }

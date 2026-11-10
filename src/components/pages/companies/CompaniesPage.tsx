@@ -37,6 +37,7 @@ import ContactExport from "../contacts/ContactExport";
 import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
 import "./CompaniesPage.css";
 import { NumInput } from "../../framework/NumInput";
+import { ColumnHead } from "../../framework/ColumnHead";
 
 const empty = (): Company => ({
   name: "", legal_name: "", vat_number: "", reg_number: "", website: "", linkedin: "", phone: "", email: "", notes: "",
@@ -492,7 +493,8 @@ export default function CompaniesPage() {
     { key: "billing", label: "Billing" }, { key: "notes", label: "Notes" },
     ...fields.map((f) => ({ key: `custom.${f.id}`, label: f.label })),
   ];
-  const onSort = (key: string, add: boolean) => setView({ ...view, sort: nextSort(view.sort, key, add) });
+  /** What a column's header filters on: the field it sorts by. */
+  const headField = (k: string) => filterFields.find((f) => f.key === k);
   const [filtersOpenTick, setFiltersOpenTick] = useState(0);
   const fieldById = (id: string) => fields.find((f) => f.id === id);
 
@@ -695,9 +697,9 @@ export default function CompaniesPage() {
           {/* the sticky header sits on an opaque band of the page colour: rows never show above or around it */}
           <div className="co-lhead-wrap">
           <div className="co-lrow co-lhead" style={{ gridTemplateColumns: rowGrid }}>
-            <span className="co-lid-head"><BulkCheck on={bulk.allOn} partial={bulk.someOn} onToggle={toggleAllRows} label="Select every company shown" /><SortHead label="Company" k="name" sort={view.sort} onSort={onSort} /></span>
-            {dataColumns.map((k) => <span key={k} className="co-lhcell"><SortHead label={columnLabel(k)} k={sortKeyOf(k)} sort={view.sort} onSort={onSort} /></span>)}
-            {showContacts && <span className="co-lright co-lcontacts"><SortHead label={columnLabel("contacts")} k="contacts_count" sort={view.sort} onSort={onSort} /></span>}
+            <span className="co-lid-head"><BulkCheck on={bulk.allOn} partial={bulk.someOn} onToggle={toggleAllRows} label="Select every company shown" /><ColumnHead label="Company" view={view} onView={setView} rows={server ? undefined : searched} fields={[headField("name")]} sortKey="name" /></span>
+            {dataColumns.map((k) => <span key={k} className="co-lhcell ch-cell"><ColumnHead label={columnLabel(k)} view={view} onView={setView} rows={server ? undefined : searched} fields={[headField(sortKeyOf(k)), ...(k === "group" ? [headField("in_group")] : [])]} sortKey={sortKeyOf(k)} /></span>)}
+            {showContacts && <span className="co-lright co-lcontacts ch-cell"><ColumnHead label={columnLabel("contacts")} view={view} onView={setView} rows={server ? undefined : searched} fields={[headField("contacts_count")]} sortKey="contacts_count" /></span>}
           </div>
           </div>
           <div className="co-list">

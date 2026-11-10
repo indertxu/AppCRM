@@ -46,7 +46,7 @@ export default function InviteBillAsk({ inv, dates = 1, onCancel, onConfirm }: {
         <span className="iba-ico" aria-hidden="true">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
         </span>
-        <h3>{they ? "How much do you bill for it?" : "What you bill for it"}</h3>
+        <h3>{they ? "How much do you bill for it?" : `${inv.organiser_name} set what you bill`}</h3>
         <p className="iba-what"><b>{inv.title || inv.company_name || "The meeting"}</b><span>{dates > 1 ? `${dates} dates, from ${when}` : when} · {hhmm(inv.start_min)}–{hhmm(inv.end_min)} · with {inv.organiser_name}</span></p>
         {they ? (
           <>
@@ -59,8 +59,17 @@ export default function InviteBillAsk({ inv, dates = 1, onCancel, onConfirm }: {
           </>
         ) : (
           <>
-            <div className="iba-fixed"><b>{inv.billable}</b><span>{unit.u === "h" ? (Number(inv.billable) === 1 ? "hour" : "hours") : (Number(inv.billable) === 1 ? "day" : "days")}{dates > 1 ? " each date" : ""}</span></div>
-            <p className="iba-note">{inv.organiser_name} set what you bill for it. Ask them if it should be different.</p>
+            {Number(inv.billable) > 0 ? (
+              <>
+                <div className="iba-fixed"><b>{inv.billable}</b><span>{unit.u === "h" ? (Number(inv.billable) === 1 ? "hour" : "hours") : (Number(inv.billable) === 1 ? "day" : "days")}{dates > 1 ? " each date" : ""}</span></div>
+                <p className="iba-note">{inv.organiser_name} set what you bill for it — it goes on your calendar and to the client's billing. Ask them if it should be different.</p>
+              </>
+            ) : (
+              <>
+                <div className="iba-fixed is-free"><b>Not billable</b><span>for you{dates > 1 ? ", on every date" : ""}</span></div>
+                <p className="iba-note">{inv.organiser_name} set it as not billable for you: it goes on your calendar with 0 billed. Ask them if it should be different.</p>
+              </>
+            )}
           </>
         )}
         <div className="iba-f">

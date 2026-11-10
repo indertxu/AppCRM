@@ -24,6 +24,7 @@ import {
 } from "../clients/clientsTypes";
 import "./BookingModal.css";
 import { NumInput } from "../../framework/NumInput";
+import { ClientLogo } from "../clients/ClientWorkspace";
 
 const MODAL_HOURS = Array.from({ length: 17 }, (_, i) => 5 + i); // 5..21
 const MINUTES = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55];
@@ -1008,7 +1009,7 @@ if (!pickedLine) {
                           const ps = openProjectsOf(c.id);
                           if (ps.length === 1) { pickProject(ps[0].id); later(() => { setWizDir(1); setWizStep("tasks"); }); }
                         }}>
-                        <span className="bm6-av">{c.name.slice(0, 2).toUpperCase()}</span>
+                        <ClientLogo name={c.name} clientId={c.id} className="bm6-av" />
                         <span className="bm6-row-txt"><b>{c.name}</b><small>{n ? `${n} open project${n > 1 ? "s" : ""}` : "No open projects"}</small></span>
                         <svg className="bm6-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
                       </button>
@@ -1019,7 +1020,7 @@ if (!pickedLine) {
             ) : (
               <>
                 <button type="button" className="bm6-chosen" onClick={() => { pickClient(""); setClientQ(""); }}>
-                  <span className="bm6-av">{(client?.name ?? "?").slice(0, 2).toUpperCase()}</span>
+                  <ClientLogo name={client?.name ?? "?"} clientId={client?.id} className="bm6-av" />
                   <span className="bm6-row-txt"><small>Client</small><b>{client?.name}</b></span>
                   <em>Change</em>
                 </button>
@@ -1127,17 +1128,30 @@ if (!pickedLine) {
                         </button>
                         {on && isClientWork && (() => {
                           const mode = summonMode[m.id] ?? "fixed";
+                          // "Not billable" is "I set it" at 0 — they see it when they accept
+                          const free = mode === "fixed" && !(Number(summoned[m.id]) > 0);
+                          const pick = (k: "fixed" | "they" | "free") => {
+                            setSummonMode((x) => ({ ...x, [m.id]: k === "they" ? "they" : "fixed" }));
+                            if (k === "free") setSummoned((s) => ({ ...s, [m.id]: 0 }));
+                            else if (!(Number(summoned[m.id]) > 0)) setSummoned((s) => ({ ...s, [m.id]: Number(billable) > 0 ? billable : step }));
+                          };
                           return (
                             <div className="bm-summon-bill">
-                              <span className="bm-bill-who" role="radiogroup" aria-label={`Who decides what ${m.name} bills`}>
-                                <button type="button" role="radio" aria-checked={mode === "fixed"} className={mode === "fixed" ? "is-on" : ""} onClick={() => setSummonMode((x) => ({ ...x, [m.id]: "fixed" }))} title="You decide what they bill">I set it</button>
-                                <button type="button" role="radio" aria-checked={mode === "they"} className={mode === "they" ? "is-on" : ""} onClick={() => setSummonMode((x) => ({ ...x, [m.id]: "they" }))} title="They decide when they accept">They decide</button>
+                              <span className="bm-bill-who" role="radiogroup" aria-label={`What ${m.name} bills`}>
+                                <button type="button" role="radio" aria-checked={mode === "fixed" && !free} className={mode === "fixed" && !free ? "is-on" : ""} onClick={() => pick("fixed")} title="You decide what they bill">I set it</button>
+                                <button type="button" role="radio" aria-checked={mode === "they"} className={mode === "they" ? "is-on" : ""} onClick={() => pick("they")} title="They decide when they accept">They decide</button>
+                                <button type="button" role="radio" aria-checked={free} className={free ? "is-on" : ""} onClick={() => pick("free")} title="They come without billing anything">Not billable</button>
                               </span>
-                              <span>{mode === "they" ? "suggest" : "bills"}</span>
-                              <NumInput type="number" min="0" step={step} className="cat-nospin" value={summoned[m.id]}
-                                onFocus={(e) => e.target.select()}
-                                onChange={(e) => setSummoned((s) => ({ ...s, [m.id]: Number(e.target.value) || 0 }))} />
-                              <em>{unitShort}</em>
+                              {!free && (
+                                <span className="bm-bill-amt">
+                                  <span>{mode === "they" ? "suggest" : "bills"}</span>
+                                  <NumInput type="number" min="0" step={step} className="cat-nospin" value={summoned[m.id]}
+                                    onFocus={(e) => e.target.select()}
+                                    onChange={(e) => setSummoned((s) => ({ ...s, [m.id]: Number(e.target.value) || 0 }))} />
+                                  <em>{unitShort}</em>
+                                </span>
+                              )}
+                              {free && <span className="bm-bill-free">They see it when they accept</span>}
                             </div>
                           );
                         })()}

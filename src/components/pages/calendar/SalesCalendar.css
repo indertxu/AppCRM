@@ -959,3 +959,9 @@
 .sc.cal-v3.cal-ov .sc-ev { background-color: #fff; }
 .sc.cal-v3 .sc-head-day.is-today, .sc.cal-v3 .sc-col.is-today { box-shadow: none; border-radius: 0; }
 .sc.cal-v3 .sc-head-day.is-today { background: transparent; }
+
+/* company logos in the company pickers (from the website, else the initials) */
+.sc-pick-co { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0; }
+.sc-pick-co > span:last-child { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sc-pick-logo.co-logo { width: 24px; height: 24px; flex: none; border-radius: 7px; background: linear-gradient(150deg, #0e5a40, #072419); color: #b8f5dc; font: 700 9.5px "Inter", sans-serif; letter-spacing: 0.02em; }
+.sc-pick-btn .sc-pick-logo.co-logo { margin: -3px 0; }

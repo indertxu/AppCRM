@@ -31,8 +31,10 @@ export interface EntryInvite {
 export type BillMode = "fixed" | "they";
 /** A colleague asked to come, and what they bill for it. */
 export type Summon = { id: string; billable: number; mode?: BillMode };
-/** Accepting needs a word on billing: the organiser set what you bill, or left it to you. Not for internal time. */
-export const asksBill = (inv: { billable: number; bill_mode?: BillMode | null }) => inv.bill_mode === "they" || Number(inv.billable) > 0;
+/** Accepting client work always says what you bill: you choose it ("they"), or you see what the organiser set —
+ *  a figure, or that it isn't billable for you. Not for internal time. */
+export const asksBill = (inv: { billable: number; bill_mode?: BillMode | null; project_id?: string | null; client_id?: string | null }) =>
+  inv.bill_mode === "they" || Number(inv.billable) > 0 || !!inv.project_id || !!inv.client_id;
 
 /** What an invitee needs to show the invite without opening anything else. */
 export interface InviteCard extends EntryInvite {

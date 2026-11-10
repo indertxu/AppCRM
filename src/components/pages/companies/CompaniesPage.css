@@ -1731,3 +1731,10 @@ button.co-cc-main { padding: 0; border: 0; background: none; font: inherit; text
 .co-lmgr i { margin-right: 5px; font-style: normal; color: #e0a10c; }
 .co-lmgr { color: var(--ink, #0b241a); }
 .co-lmgr.is-none { color: var(--muted); }
+
+/* ===== Column headers open a sort / filter menu; every column but the company is centred (header and cells) ===== */
+.co-lhead > .co-lhcell, .co-lhead > .co-lright { display: flex; align-items: center; justify-content: center; justify-self: stretch; min-width: 0; text-align: center; }
+.co-lhead > .co-lright .fx-sort { margin: -2px -4px; }
+.co-lrow:not(.co-lhead) > .co-lcell:not(.co-lid) { text-align: center; }
+.co-lrow:not(.co-lhead) > .co-lcell:not(.co-lid) > :is(div, span) { justify-content: center; }
+.co-lrow:not(.co-lhead) > .co-lcell.co-lcontacts { justify-self: stretch; justify-content: center; }

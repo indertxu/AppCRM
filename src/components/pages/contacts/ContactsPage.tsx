@@ -22,7 +22,7 @@ import {
 import { supabase } from "../../api/supabase";
 import {
   AddressFields, PhoneField, StatusPills, HistorySection, phoneText, telHref,
-  FilterBar, FilterChips, SortHead, applyView, nextSort, emptyView, useSavedViews, useStoredView, type FField,
+  FilterBar, FilterChips, applyView, emptyView, useSavedViews, useStoredView, type FField,
   useBulkSelection, BulkBar, BulkCheck, inPool, type BulkAction, DataCleanup, DataTools, SettingsShell, ColumnsEditor, CustomFieldsEditor,
   ConfirmX, DealRows, MultiChoice, CustomChips, isChoiceType, RequiredFieldsEditor, InheritedTags, TypeChips, typeSortKey, NewDealButton, newDealUrl,
   MergeModal, type MergeField,
@@ -41,6 +41,7 @@ import {
 } from "./contactProfile";
 import "./ContactsPage.css";
 import { NumInput } from "../../framework/NumInput";
+import { ColumnHead } from "../../framework/ColumnHead";
 
 const empty = (): Contact => ({
   first_name: "", last_name: "", position: "", email: "", phone: "", phone_ext: "", landline: "", landline_ext: "", is_billing: false, notes: "", companyIds: [],
@@ -401,7 +402,8 @@ export default function ContactsPage() {
     [searched, view, derived, fields, companyFields, crmOptions, assignees],
   );
   const shown = loaded || !preview ? loadedShown : preview.rows;
-  const onSort = (key: string, add: boolean) => setView({ ...view, sort: nextSort(view.sort, key, add) });
+  /** What a column's header filters on (the field of the same key; "emails" has none). */
+  const headField = (k: string) => filterFields.find((f) => f.key === k);
 
   // ---- Server mode: the view as the database reads it, the first page, then the rows that scroll in ----
   const serverView = useMemo<ServerView>(() => {
@@ -730,8 +732,8 @@ export default function ContactsPage() {
           {/* the sticky header sits on an opaque band of the page colour: rows never show above or around it */}
           <div className="ct-lhead-wrap">
           <div className="ct-lrow ct-lhead" style={{ gridTemplateColumns: rowGrid }}>
-            <span className="ct-lid-head"><BulkCheck on={bulk.allOn} partial={bulk.someOn} onToggle={toggleAllRows} label="Select every contact shown" /><SortHead label="Name" k="name" sort={view.sort} onSort={onSort} /></span>
-            {activeColumns.map((k) => <span key={k}><SortHead label={columnLabel(k)} k={k} sort={view.sort} onSort={onSort} /></span>)}
+            <span className="ct-lid-head"><BulkCheck on={bulk.allOn} partial={bulk.someOn} onToggle={toggleAllRows} label="Select every contact shown" /><ColumnHead label="Name" view={view} onView={setView} rows={server ? undefined : searched} fields={[headField("name")]} sortKey="name" /></span>
+            {activeColumns.map((k) => <span key={k} className="ch-cell"><ColumnHead label={columnLabel(k)} view={view} onView={setView} rows={server ? undefined : searched} fields={[headField(k)]} sortKey={k} /></span>)}
           </div>
           </div>
           <div ref={listRef} className="ct-list" style={{ paddingTop: win.first * stride, paddingBottom: (listLen - win.last) * stride + 72 }}>

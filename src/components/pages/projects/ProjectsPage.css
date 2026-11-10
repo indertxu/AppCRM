@@ -970,3 +970,11 @@ body:has(.pjst-pop) .dp-pop { z-index: 4201; }
 body:has(.pjd-back) .dp-layer { z-index: 4200; }
 body:has(.pjd-back) .dp-pop { z-index: 4201; }
 .pv-hold-since { font-style: normal; font-weight: 600; color: #b46a17; }
+
+/* ===== Projects list: column headers open a sort / filter menu; columns centred (header and cells) ===== */
+.pv-hrow > span.ch-cell { display: flex; align-items: center; justify-content: center; min-width: 0; text-align: center; overflow: visible; }
+.pv-hrow > span .fx-sort { margin: -2px -4px; }
+.pv-row > .pv-cell-dates { align-items: center; }
+.pv-row > .pv-cell-value, .pv-row > .pv-right { text-align: center; }
+.pv-row > .pv-cell-act { justify-content: center; }
+.pv-row > .pv-cell-dates > span { width: 132px; max-width: 100%; }

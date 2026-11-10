@@ -27,3 +27,6 @@
 .iba-no:hover { background: #f4f8f6; }
 .iba-yes { border: 0; background: #0a6f4d; color: #fff; }
 .iba-yes:hover { background: #085c40; }
+
+/* set by the organiser as not billable */
+.iba-fixed.is-free b { font-size: 22px; letter-spacing: -0.01em; }

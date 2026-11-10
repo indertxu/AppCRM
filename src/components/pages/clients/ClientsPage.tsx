@@ -24,7 +24,7 @@ import { projectValue, signedOf, legacyRoleMap, resolvedLinesOf, roleCounts, rol
 import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
 import { downloadBlob, tableToXlsx, type ExportCell } from "../../framework/exportFile";
 import { ClientImport } from "../contacts/ContactImport";
-import { FilterBar, FilterChips, SortHead, applyView, nextSort, emptyView, useSavedViews, useStoredView, type FField } from "../companies/CompaniesPage";
+import { FilterBar, FilterChips, applyView, emptyView, useSavedViews, useStoredView, type FField } from "../companies/CompaniesPage";
 import { loadPrefs, savePref } from "../companies/companiesApi";
 import { countryLabel } from "../contacts/contactProfile";
 import { ensureRenewalDeals } from "../sales/sales/salesApi";
@@ -35,6 +35,7 @@ import { useInactiveIds } from "../../framework/peopleStatus";
 import LinkPopover, { captureLinkTarget, placeLink, type LinkTarget } from "../../framework/LinkPopover";
 import CsFlowEditor, { CsFlowCalendar, flowOf, flowEmails, flowStats, flowHere, flowHasBranches, flowCount, flowDays, FIELD_CHIP, FIELD_GROUPS, type CsFlowNode } from "./CsFlow";
 import { NumInput } from "../../framework/NumInput";
+import { ColumnHead } from "../../framework/ColumnHead";
 
 // Re-export shared types & helpers from their new home so existing imports
 // elsewhere (e.g. ./ClientsPage) keep working unchanged.
@@ -401,7 +402,6 @@ export function ClientList({
   };
   const byKey = new Map(fields.map((f) => [f.key, f]));
   const colFields = cols.map((k) => byKey.get(k)).filter((f): f is FField<ClientRow> => !!f && f.key !== "name");
-  const onSortHead = (key: string, add: boolean) => setView({ ...view, sort: nextSort(view.sort, key, add) });
   const fmtDate = (d: string | null) => (d ? new Date(d).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "—");
   const cell = (f: FField<ClientRow>, r: ClientRow): ReactNode => {
     const v = f.get(r);
@@ -543,13 +543,13 @@ export function ClientList({
               <div className="cx-table-wrap">
                 <div className="cx-table" style={{ ["--cols" as any]: `minmax(200px, 1.8fr) ${colFields.map((f) => (f.type === "multi" ? "minmax(150px, 1.3fr)" : "minmax(96px, 1fr)")).join(" ")} 56px`, minWidth: 300 + colFields.length * 115 }}>
                   <div className="cx-tr is-head">
-                    <span><SortHead label="Client" k="name" sort={view.sort} onSort={onSortHead} /></span>
+                    <span><ColumnHead label="Client" view={view} onView={setView} rows={searched} fields={[byKey.get("name")]} sortKey="name" /></span>
                     {colFields.map((f) => {
                       const full = f.label.replace(/ \(.*\)$/, "");
                       const short = HEAD_SHORT[f.key];
                       return (
-                        <span key={f.key} className={f.type === "number" ? "is-num" : ""} title={full}>
-                          <SortHead label={<><span className={`cx-h-full ${short ? "has-short" : ""}`}>{full}</span>{short && <span className="cx-h-short">{short}</span>}</>} k={f.key} sort={view.sort} onSort={onSortHead} />
+                        <span key={f.key} className={`ch-cell ${f.type === "number" ? "is-num" : ""}`} title={full}>
+                          <ColumnHead label={<><span className={`cx-h-full ${short ? "has-short" : ""}`}>{full}</span>{short && <span className="cx-h-short">{short}</span>}</>} name={full} view={view} onView={setView} rows={searched} fields={[f]} sortKey={f.key} />
                         </span>
                       );
                     })}

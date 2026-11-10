@@ -1834,9 +1834,11 @@ interface HomeAlert {
 const HA_VERB: Record<string, string> = {
   task_assigned: "assigned you", task_added: "added you to", task_step: "gave you a step on", message: "replied on", mention: "mentioned you on", invite: "invited you to",
   invite_moved: "moved", invite_cancelled: "cancelled", invite_removed: "took you off", invite_accepted: "accepted", invite_declined: "declined",
+  project_new: "put you on a new project", project_added: "added you to the project",
 };
 const HA_TONE: Record<string, string> = {
   task_assigned: "task", task_added: "task", task_step: "task", message: "msg", mention: "msg", invite: "invite", invite_moved: "warn", invite_cancelled: "bad", invite_removed: "bad", invite_accepted: "ok", invite_declined: "bad",
+  project_new: "proj", project_added: "proj",
 };
 const haIcon = (kind: string) => {
   const p = kind === "task_assigned" || kind === "task_added" || kind === "task_step" ? <><rect x="4" y="4" width="16" height="16" rx="4" /><path d="M8.5 12.5l2.5 2.5 4.5-5" /></>
@@ -1844,6 +1846,7 @@ const haIcon = (kind: string) => {
     : kind === "mention" ? <><circle cx="12" cy="12" r="3.6" /><path d="M15.6 12v1.4a2.4 2.4 0 0 0 4.8 0V12a8.4 8.4 0 1 0-3.3 6.7" /></>
     : kind === "invite_accepted" ? <><circle cx="12" cy="12" r="8.5" /><path d="M8.5 12.5l2.5 2.5 4.5-5" /></>
     : kind === "invite_declined" || kind === "invite_cancelled" || kind === "invite_removed" ? <><circle cx="12" cy="12" r="8.5" /><path d="M9 9l6 6M15 9l-6 6" /></>
+    : kind === "project_new" || kind === "project_added" ? <><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2.2h8.5A1.5 1.5 0 0 1 21 9.7v8.8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z" /><path d="M12 11.5v5M9.5 14h5" /></>
     : kind === "invite_moved" ? <><rect x="3" y="5" width="18" height="15" rx="3" /><path d="M3 10h18M8 3v4M16 3v4M10 15h5M13 13l2 2-2 2" /></>
     : <><rect x="3" y="5" width="18" height="15" rx="3" /><path d="M3 10h18M8 3v4M16 3v4" /></>;
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">{p}</svg>;
@@ -1989,6 +1992,13 @@ function useHomeAlerts(userId: string | null) {
     void markSeen([a.id]);
     if (a.ref_type === "task" && a.ref_id) { setTicket(a.ref_id); return; }
     if (a.ref_type === "client") { nav("/clients"); return; }
+    if (a.ref_type === "project" && a.ref_id) {
+      // the project lives on its client's page
+      void Promise.resolve(supabase.from("projects").select("client_id").eq("id", a.ref_id).maybeSingle())
+        .then(({ data }) => nav((data as any)?.client_id ? `/clients?client=${(data as any).client_id}` : "/projects"))
+        .catch(() => nav("/projects"));
+      return;
+    }
     nav("/calendar");
   };
 
@@ -1998,14 +2008,15 @@ function useHomeAlerts(userId: string | null) {
 type HomeAlertsState = ReturnType<typeof useHomeAlerts>;
 
 /** What an alert is about, for the tabs of the notifications window. */
-type HaCat = "invites" | "meetings" | "tasks" | "tickets" | "mentions";
+type HaCat = "invites" | "meetings" | "projects" | "tasks" | "tickets" | "mentions";
 const HA_CATS: { key: HaCat | "all"; label: string }[] = [
-  { key: "all", label: "All" }, { key: "invites", label: "Invitations" }, { key: "meetings", label: "Meetings" },
+  { key: "all", label: "All" }, { key: "invites", label: "Invitations" }, { key: "meetings", label: "Meetings" }, { key: "projects", label: "Projects" },
   { key: "tasks", label: "Tasks" }, { key: "tickets", label: "Tickets" }, { key: "mentions", label: "Mentions" },
 ];
 const haCatsOf = (a: HomeAlert, cats: Record<string, string>): HaCat[] => {
   if (a.kind === "invite") return ["invites"];
   if (a.kind.startsWith("invite_")) return ["meetings"];
+  if (a.ref_type === "project") return ["projects"];
   const out: HaCat[] = [];
   if (a.ref_type === "task") out.push(a.ref_id && cats[a.ref_id] === "ticket" ? "tickets" : "tasks");
   if (a.kind === "mention") out.push("mentions");
@@ -2105,7 +2116,7 @@ function HomeAlertsPop({ h, anchor, onClose }: { h: HomeAlertsState; anchor: DOM
           <div className="hn-empty">
             <span className="hn-empty-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z" /><path d="M10 21h4" /><path d="M9.5 11.5l1.8 1.8 3.2-3.4" /></svg></span>
             <b>{list.length ? "Nothing here" : "You're all caught up"}</b>
-            <span>{list.length ? "No notifications of this kind." : "Invitations, meetings, tasks and tickets for you show up here."}</span>
+            <span>{list.length ? "No notifications of this kind." : "Invitations, meetings, projects, tasks and tickets for you show up here."}</span>
           </div>
         ) : shown.map((a, i) => {
           const st = a.kind === "invite" && a.ref_id ? inviteState[a.ref_id] ?? "pending" : null;
