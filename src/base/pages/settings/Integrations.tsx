@@ -49,9 +49,9 @@ type AppDef = {
   live?: { provider: Provider; service: Service }; brings?: string[];
 };
 const LIVE: AppDef[] = [
-  { k: "gmail", name: "Gmail", what: "Send and read mail from your Google inboxes", logo: { k: "gmail", color: "#ea4335" }, live: { provider: "google", service: "mail" },
+  { k: "gmail", name: "Gmail", what: "Your Google inboxes — one sign-in also links Calendar", logo: { k: "gmail", color: "#ea4335" }, live: { provider: "google", service: "mail" },
     brings: ["Send invoices and proposals from your own Gmail", "E-mails with clients saved in their file", "As many Gmail inboxes as you need"] },
-  { k: "gcal", name: "Google Calendar", what: "Your meetings and activities, both ways", logo: { k: "gcal", color: "#4285f4" }, live: { provider: "google", service: "calendar" },
+  { k: "gcal", name: "Google Calendar", what: "Your Google calendars — one sign-in also links Gmail", logo: { k: "gcal", color: "#4285f4" }, live: { provider: "google", service: "calendar" },
     brings: ["Activities you book here appear in Google Calendar", "Several calendars, one per account"] },
   { k: "outlook", name: "Outlook", what: "Mail and calendars from Microsoft 365", logo: { k: "outlook", color: "#0078d4" }, live: { provider: "microsoft", service: "mail" },
     brings: ["Calendar sync both ways", "Send invoices from your own address", "Client e-mails become contacts and tickets", "Several Outlook accounts"] },
@@ -177,11 +177,21 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
     if (a.k === "outlook" && !outlook.connected) { outlook.onConnect(); return; }
     if (!a.live) return;
     setBusy(a.k);
-    const r = await addAccount(a.live.provider, a.live.provider === "microsoft" ? ["mail", "calendar"] : [a.live.service]);
+    // one sign-in covers every app of that provider (a Google account → Gmail and Google Calendar)
+    const r = await addAccount(a.live.provider, ["mail", "calendar"]);
     setBusy(null);
     if (r.error) { fly.current = null; setErr({ k: a.k, text: r.error }); return; }
     await reload();
     setToast(`${r.account?.email ?? "Account"} connected`);
+  };
+  /** A Google account already linked for one app: turn on the other app for it (same address, one consent). */
+  const enableFor = async (a: AppDef, acc: ConnectedAccount) => {
+    setErr(null); setBusy(`${a.k}:${acc.id}`);
+    const r = await addAccount("google", Array.from(new Set([...acc.services, a.live!.service])), { loginHint: acc.email });
+    setBusy(null);
+    if (r.error) { setErr({ k: a.k, text: r.error }); return; }
+    await reload();
+    setToast(`${a.name} on for ${acc.email}`);
   };
   const remove = async (r: Row) => {
     setAsking(null);
@@ -277,6 +287,15 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
                 ) : <button className="ig-mini is-danger" onClick={() => setAsking(r.key)}>Remove</button>}
               </div>
             </article>
+          ))}
+          {a.live!.provider === "google" && (accounts ?? []).filter((x) => x.provider === "google" && !x.services.includes(a.live!.service)).map((x) => (
+            <div key={x.id} className="ig-also">
+              <i className="ig-av">{x.email[0]?.toUpperCase()}</i>
+              <span><b>{x.email}</b><small>Linked for {x.services.map((s) => (s === "mail" ? "Gmail" : "Google Calendar")).join(" & ")} — not for {a.name} yet</small></span>
+              <button className="ig-mini" disabled={busy === `${a.k}:${x.id}`} onClick={() => void enableFor(a, x)}>
+                {busy === `${a.k}:${x.id}` ? <span className="ig-spin is-dark" /> : <Plus />}Use here
+              </button>
+            </div>
           ))}
           {error && <p className="ig-det-err">{error}</p>}
           <button className={`ig-brand-btn ${rs.length ? "is-soft" : ""}`} disabled={!ready || isBusy || loading} onClick={(e) => void connect(a, e.currentTarget)}>

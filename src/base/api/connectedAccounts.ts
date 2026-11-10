@@ -114,7 +114,7 @@ export async function removeAccount(id: string): Promise<string | null> {
  * "select_account" so a second Gmail / Outlook can be chosen). Resolves with the
  * stored account, or an error message.
  */
-export async function addAccount(provider: Provider, services: Service[]): Promise<{ account?: ConnectedAccount; error?: string }> {
+export async function addAccount(provider: Provider, services: Service[], opts: { loginHint?: string } = {}): Promise<{ account?: ConnectedAccount; error?: string }> {
   if (!providerReady(provider)) return { error: provider === "google" ? "Google sign-in isn't set up for this app yet." : "Microsoft sign-in isn't set up for this app yet." };
   const verifier = rnd(48);
   const state = `${STATE_PREFIX}${provider}.${rnd(12)}`;
@@ -123,7 +123,9 @@ export async function addAccount(provider: Provider, services: Service[]): Promi
     client_id: provider === "google" ? GOOGLE_CLIENT_ID : MS_CLIENT_ID,
     response_type: "code", redirect_uri: REDIRECT_URI, scope, state,
     code_challenge: await challengeOf(verifier), code_challenge_method: "S256",
-    prompt: provider === "google" ? "select_account consent" : "select_account",
+    // a known address (turning on one more Google app for it) skips the account picker
+    prompt: opts.loginHint ? "consent" : provider === "google" ? "select_account consent" : "select_account",
+    ...(opts.loginHint ? { login_hint: opts.loginHint } : {}),
     ...(provider === "google" ? { access_type: "offline", include_granted_scopes: "true" } : { response_mode: "query" }),
   });
   try { localStorage.removeItem(RETURN_KEY); } catch { /* ignore */ }

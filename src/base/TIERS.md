@@ -126,7 +126,7 @@ Source in `supabase/functions/**`. Both apps call them; changes must stay backwa
 - Read the other side's entries since your last session before you start working.
 
 ## 7. SQL numbering
-Next free number: **121**  ← update this line when you claim one (and say which file in the log).
+Next free number: **122**  ← update this line when you claim one (and say which file in the log).
 | # | File | Chat | What |
 |---|---|---|---|
 | 98 | sql/98_client_default_folders.sql | Enterprise | client folder templates → new clients |
@@ -152,6 +152,7 @@ Next free number: **121**  ← update this line when you claim one (and say whic
 | 118 | sql/118_project_team_alerts.sql | Enterprise | `alert_project_team()` + trigger `trg118_project_team_alerts` (after insert / update of team on `projects`): each person on the team gets a `user_alerts` row — kind `project_new` (created, e.g. Incoming › Build project) or `project_added` (put on an existing team), ref_type `project`, title = client, body = service · kick-off — applied 2026-11-09 |
 | 119 | src/base/sql/119_connected_accounts.sql | Base | `connected_accounts` (several Gmail / Google Calendar / Outlook accounts per person: provider, email, services mail/calendar, status; RLS own rows select/delete) + `connected_account_tokens` (RLS on, no policies: service role only) — applied 2026-11-09 |
 | 120 | src/base/sql/120_my_outlook_connection.sql | Base | `my_outlook_connection()` (security definer, caller only): account_email, connected_at, last_refresh (expires_at − 1h), scopes of your outlook_tokens row — never the tokens — applied 2026-11-09 |
+| 121 | sql/121_client_churn_end.sql | Enterprise | `client_products.ends_on` (a running product stops that day: a churn on a future date) + `client_products_status_chk` widened to active/expired/cancelled/renewed/paused/ended — applied 2026-11-10 |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
@@ -161,6 +162,25 @@ Write requests here; the other chat answers in the log and ticks them.
 
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
+
+### 2026-11-10 12:50 · Base · Integrations: one Google sign-in links Gmail and Google Calendar
+- files: `pages/settings/Integrations.tsx` / `.css`, `api/connectedAccounts.ts`.
+- Connecting Gmail or Google Calendar now asks for both (mail + calendar) in one consent, so the account shows under both apps (Outlook already did both). A Google account linked for only one of them shows in the other app's panel with "Use here" — it re-asks consent for that address only (`login_hint`, no account picker).
+- `addAccount(provider, services, { loginHint })`.
+- First real Gmail account connected 2026-11-10 (mail + calendar, refresh token stored).
+- deploy: written to the Mac · user to commit
+
+### 2026-11-10 13:00 · Enterprise · Deal Details: Yes / No fields redesigned
+- Files: src/components/pages/sales/extras/FieldInput.tsx, TrackingFields.css
+- What: the yes/no custom fields (Details card on a deal, New deal form) were a small grey pill narrower than every other box. Now as wide and tall (40px) as the other controls, two halves with a ✓ / ✕ sign: Yes picked = green, No picked = white with red, nothing picked = not answered (clicking the picked one again clears it, hinted in its tooltip). Classes `.tfi-yn button.is-yes / .is-no`.
+- Tags: PORT? (src/base has its own FieldInput if the Base deals use custom fields)
+- Deploy: frontend only.
+
+### 2026-11-10 12:40 · Enterprise · Clients: churn on a future date, the calendar no longer closes the churn form, rows keep their place
+- Files: sql/121_client_churn_end.sql, src/components/pages/clients/ClientWorkspace.tsx/.css, useClientsData.ts, ClientsPage.tsx
+- What: (1) the error "client_products_status_chk": marking churned + "stop its running products" wrote status 'churned' to client_products, which the check refuses → now 'cancelled' (and the check also allows paused / ended, offered by the product status picker). (2) The churn date has no max any more: a later day is the contract's end — "Contract ends on", "Stays active until then and turns churned on that day", button "Churn on that day"; the client stays **active** until then (status 'churned' + future churned_at in the DB; useClientsData maps it to active until the day), chip "Leaving" (list) / "Leaves 15 Jan" in amber, menu shows "On <date> (contract end) · change" and "Active — keep them: cancel the churn"; its running products get `ends_on` = that day and `isActive()` stops counting them from then (121). Active again clears ends_on. (3) Changing month in the date picker closed the churn form: its outside-click ignored `.dp-layer` but not `.dp-pop` → fixed. (4) Rows keep their place after changing the status (`stay` map in ClientList, until the list is filtered / sorted / searched again) instead of the churned one jumping to the bottom.
+- Tags: **DB**, PORT? (src/base clients if it has the status picker)
+- Deploy: 121 applied.
 
 ### 2026-11-09 23:30 · Enterprise · List column headers: sort + filter menu on every column, centred columns
 - Files: src/components/framework/ColumnHead.tsx + ColumnHead.css (new); pages/sales/sales/SalesPage.tsx/.css (deals list), pages/contacts/ContactsPage.tsx/.css, pages/companies/CompaniesPage.tsx/.css, pages/clients/ClientsPage.tsx/.css (list layout), pages/projects/ProjectsView.tsx + ProjectsPage.css
