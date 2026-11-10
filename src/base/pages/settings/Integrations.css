@@ -195,3 +195,20 @@
 .ig-assets small { font-size: 11.5px; color: var(--muted); }
 .ig-assets-none { margin: 10px 0 0; font-size: 12px; color: var(--muted); }
 .ig-det-pad { padding: 0 20px; }
+
+/* Mailrelay: address + API key */
+.ig-key { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 16px; background: #f8fbf9; border: 1px solid var(--line2); animation: ig-up 0.4s var(--ease) both; }
+.ig-fld { display: flex; flex-direction: column; gap: 5px; }
+.ig-fld > span:first-child { font-size: 11px; font-weight: 700; color: var(--muted); }
+.ig-fld-in { display: flex; align-items: center; height: 40px; padding: 0 4px 0 12px; border-radius: 11px; background: #fff; box-shadow: inset 0 0 0 1px var(--line); transition: box-shadow 0.2s; }
+.ig-fld-in:focus-within { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--c) 70%, transparent), 0 0 0 4px color-mix(in srgb, var(--c) 12%, transparent); }
+.ig-fld-in input { flex: 1; min-width: 0; height: 100%; border: 0; outline: none; background: none; color: var(--ink); font: 500 13.5px "Inter", sans-serif; }
+.ig-fld-in input::placeholder { color: #9bb3a8; }
+.ig-fld-in em { flex-shrink: 0; padding-right: 8px; font-style: normal; font-size: 13px; color: var(--muted); }
+.ig-fld-eye { flex-shrink: 0; height: 30px; padding: 0 10px; border: 0; border-radius: 8px; background: none; color: var(--muted) !important; font-size: 11.5px; font-weight: 700; cursor: pointer; }
+.ig-fld-eye:hover { background: rgba(10, 60, 40, 0.05); color: var(--ink) !important; }
+.ig-key-note { display: flex; align-items: flex-start; gap: 7px; margin: 0; font-size: 11.5px; line-height: 1.45; color: var(--muted); }
+.ig-key-note svg { flex-shrink: 0; margin-top: 1px; }
+.ig-key-act { display: flex; align-items: center; gap: 8px; }
+.ig-key-act .ig-brand-btn { flex: 1; }
+.ig-key-act .ig-mini { height: 42px; }

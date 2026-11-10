@@ -17,8 +17,8 @@
    ===================================================================== */
 import { supabase } from "../../components/api/supabase";
 
-export type Provider = "google" | "microsoft" | "meta" | "linkedin";
-export type Service = "mail" | "calendar" | "facebook" | "instagram" | "ads" | "linkedin" | "linkedin_pages";
+export type Provider = "google" | "microsoft" | "meta" | "linkedin" | "mailrelay";
+export type Service = "mail" | "calendar" | "facebook" | "instagram" | "ads" | "linkedin" | "linkedin_pages" | "mailrelay";
 export interface ConnectedAccount {
   id: string; provider: Provider; email: string; display_name: string | null;
   services: Service[]; status: "active" | "error"; last_error: string | null; connected_at: string; updated_at?: string;
@@ -39,7 +39,7 @@ const STATE_PREFIX = "acc.";
 const CHANNEL = "next-connected-accounts";
 const RETURN_KEY = "acc_oauth_return";
 
-const SCOPES: Record<Provider, Partial<Record<Service, string>>> = {
+const SCOPES: Record<Exclude<Provider, "mailrelay">, Partial<Record<Service, string>>> = {
   google: {
     mail: "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send",
     calendar: "https://www.googleapis.com/auth/calendar.events",
@@ -58,14 +58,14 @@ const SCOPES: Record<Provider, Partial<Record<Service, string>>> = {
     linkedin_pages: "rw_organization_admin r_organization_social w_organization_social",
   },
 };
-const BASE_SCOPES: Record<Provider, string> = { google: "openid email profile", microsoft: "offline_access User.Read", meta: "public_profile email", linkedin: "openid profile email" };
-const AUTH_URL: Record<Provider, string> = {
+const BASE_SCOPES: Record<Exclude<Provider, "mailrelay">, string> = { google: "openid email profile", microsoft: "offline_access User.Read", meta: "public_profile email", linkedin: "openid profile email" };
+const AUTH_URL: Record<Exclude<Provider, "mailrelay">, string> = {
   google: "https://accounts.google.com/o/oauth2/v2/auth",
   microsoft: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
   meta: "https://www.facebook.com/v26.0/dialog/oauth",
   linkedin: "https://www.linkedin.com/oauth/v2/authorization",
 };
-export const providerReady = (p: Provider) => (p === "google" ? !!GOOGLE_CLIENT_ID : p === "meta" ? !!META_APP_ID : p === "linkedin" ? !!LINKEDIN_CLIENT_ID : !!MS_CLIENT_ID);
+export const providerReady = (p: Provider) => (p === "mailrelay" ? true : p === "google" ? !!GOOGLE_CLIENT_ID : p === "meta" ? !!META_APP_ID : p === "linkedin" ? !!LINKEDIN_CLIENT_ID : !!MS_CLIENT_ID);
 
 /* ---------- PKCE ---------- */
 const b64url = (bytes: Uint8Array) => { let s = ""; for (const b of bytes) s += String.fromCharCode(b); return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); };
@@ -134,6 +134,7 @@ export async function removeAccount(id: string): Promise<string | null> {
  * stored account, or an error message.
  */
 export async function addAccount(provider: Provider, services: Service[], opts: { loginHint?: string } = {}): Promise<{ account?: ConnectedAccount; assets?: { pages?: number; instagram?: number; ad_accounts?: number; error?: string } | null; error?: string }> {
+  if (provider === "mailrelay") return { error: "Mailrelay connects with an API key." };
   if (!providerReady(provider)) return { error: `${provider === "google" ? "Google" : provider === "meta" ? "Meta" : provider === "linkedin" ? "LinkedIn" : "Microsoft"} sign-in isn't set up for this app yet.` };
   const verifier = rnd(48);
   const state = `${STATE_PREFIX}${provider}.${rnd(12)}`;
@@ -224,7 +225,7 @@ export async function lastMailReads(): Promise<Record<string, string>> {
 
 /* ---------- Meta: what a login reaches ---------- */
 export interface ConnectedAsset {
-  id: string; account_id: string; kind: "facebook_page" | "instagram" | "ad_account" | "linkedin_org"; external_id: string;
+  id: string; account_id: string; kind: "facebook_page" | "instagram" | "ad_account" | "linkedin_org" | "mailrelay_group"; external_id: string;
   name: string | null; username: string | null; picture_url: string | null; extra: Record<string, any>; updated_at: string;
 }
 /** Facebook pages, Instagram accounts and ad accounts of your Meta logins (SQL 123). */
@@ -236,4 +237,17 @@ export async function listAssets(): Promise<ConnectedAsset[]> {
 export async function syncAssets(id: string): Promise<{ error?: string }> {
   const r = await call("assets_sync", { id });
   return r?.error ? { error: r.error } : {};
+}
+
+/* ---------- Mailrelay: an API key, not a sign-in ---------- */
+/**
+ * Connect a Mailrelay account (e-mail marketing) with its address
+ * (yourcompany.ipzmarketing.com — "yourcompany" alone works too) and an API key
+ * from Mailrelay › Settings › API keys. The edge function checks the key and keeps
+ * it on the server (it never comes back to the browser); the account's groups are read.
+ */
+export async function connectMailrelay(account: string, apiKey: string): Promise<{ account?: ConnectedAccount; assets?: { groups?: number; error?: string } | null; error?: string }> {
+  const r = await call("connect_key", { provider: "mailrelay", account, apiKey });
+  if (r?.error) return { error: r.error };
+  return { account: r.account as ConnectedAccount, assets: r.assets ?? null };
 }

@@ -14,11 +14,13 @@
                               "connected-accounts" (src/base/api/connectedAccounts.ts)
      Outlook                → the first account is the existing Outlook connection
                               (outlook-sync; facts from SQL 120); more go to connected_accounts
+     Mailrelay              → address + API key (no sign-in window), checked and kept by
+                              the edge function; its groups are read (SQL 125)
    Prefix .ig-
    ===================================================================== */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
-  addAccount, checkAccount, LINKEDIN_PAGES, lastMailReads, listAccounts, listAssets, myOutlookConnection, providerReady, removeAccount, syncAssets,
+  addAccount, checkAccount, connectMailrelay, LINKEDIN_PAGES, lastMailReads, listAccounts, listAssets, myOutlookConnection, providerReady, removeAccount, syncAssets,
   type ConnectedAccount, type ConnectedAsset, type OutlookFacts, type Provider, type Service,
 } from "../../api/connectedAccounts";
 import { BRANDS } from "./brandIcons";
@@ -63,6 +65,8 @@ const LIVE: AppDef[] = [
     brings: ["Publish posts and reels", "Reach, likes and comments in Growth", "Needs an Instagram business or creator account linked to a Facebook page"] },
   { k: "linkedin", name: "LinkedIn", what: "Post as you — and as your company page once approved", logo: { k: "linkedin", color: "#0a66c2" }, live: { provider: "linkedin", service: "linkedin" },
     brings: ["Publish posts on your profile", "Company pages: post and read followers and engagement (needs LinkedIn's Community Management API)", "Several LinkedIn accounts"] },
+  { k: "mailrelay", name: "Mailrelay", what: "E-mail marketing: groups, subscribers and newsletters", logo: { color: "#1f6fd1", letters: "Mr" }, live: { provider: "mailrelay", service: "mailrelay" },
+    brings: ["Your Mailrelay groups and how many subscribers each has", "New clients and contacts can go into a group", "Newsletters and their results in Growth", "Several Mailrelay accounts"] },
 ];
 const SOON: AppDef[] = [
   { k: "whatsapp", name: "WhatsApp Business", what: "Chat with clients, kept on each client", logo: { k: "whatsapp", color: "#25d366" }, brings: ["One or more business numbers", "Messages saved on the client", "Follow-ups by WhatsApp"] },
@@ -78,17 +82,18 @@ const SOON: AppDef[] = [
 ];
 const APP = Object.fromEntries([...LIVE, ...SOON].map((a) => [a.k, a])) as Record<string, AppDef>;
 const WANT_KEY = "next.base.integrations.want";
-const SVC: Record<Service, string> = { mail: "Mail", calendar: "Calendar", facebook: "Facebook", instagram: "Instagram", ads: "Ads", linkedin: "Profile posts", linkedin_pages: "Company pages" };
+const SVC: Record<Service, string> = { mail: "Mail", calendar: "Calendar", facebook: "Facebook", instagram: "Instagram", ads: "Ads", linkedin: "Profile posts", linkedin_pages: "Company pages", mailrelay: "E-mail marketing" };
 /** Which apps of the list an account shows under. */
 const appsOf = (a: ConnectedAccount): string[] =>
   a.provider === "google" ? a.services.map((s) => (s === "mail" ? "gmail" : s === "calendar" ? "gcal" : "")).filter(Boolean)
   : a.provider === "meta" ? ["meta", ...(a.services.includes("facebook") ? ["facebook"] : []), ...(a.services.includes("instagram") ? ["instagram"] : [])]
   : a.provider === "linkedin" ? ["linkedin"]
+  : a.provider === "mailrelay" ? ["mailrelay"]
   : ["outlook"];
 /** What one sign-in asks for, per app. */
 const servicesFor = (k: string): Service[] =>
   k === "meta" ? ["facebook", "instagram", "ads"] : k === "facebook" ? ["facebook"] : k === "instagram" ? ["instagram"]
-  : k === "linkedin" ? (LINKEDIN_PAGES ? ["linkedin", "linkedin_pages"] : ["linkedin"]) : ["mail", "calendar"];
+  : k === "linkedin" ? (LINKEDIN_PAGES ? ["linkedin", "linkedin_pages"] : ["linkedin"]) : k === "mailrelay" ? ["mailrelay"] : ["mail", "calendar"];
 const colorOf = (a: AppDef) => BRANDS[a.logo.k ?? ""]?.hex ?? a.logo.color;
 
 type Row = {
@@ -202,6 +207,20 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
     const got = r.assets && !r.assets.error ? ` · ${r.assets.pages ?? 0} pages, ${r.assets.instagram ?? 0} Instagram` : "";
     setToast(`${r.account?.display_name || r.account?.email || "Account"} connected${got}`);
   };
+  /** Mailrelay: address + API key from the form in the panel. */
+  const connectKey = async (a: AppDef, account: string, apiKey: string, from: HTMLElement | null): Promise<boolean> => {
+    setErr(null);
+    const logo = from?.closest(".ig-det")?.querySelector<HTMLElement>(".ig-det-h .ig-logo");
+    if (logo) fly.current = { app: a.k, rect: logo.getBoundingClientRect() };
+    setBusy(a.k);
+    const r = await connectMailrelay(account, apiKey);
+    setBusy(null);
+    if (r.error) { fly.current = null; setErr({ k: a.k, text: r.error }); return false; }
+    await reload();
+    const g = r.assets && !r.assets.error && r.assets.groups != null ? ` · ${r.assets.groups} group${r.assets.groups === 1 ? "" : "s"}` : "";
+    setToast(`${r.account?.email ?? "Mailrelay"} connected${g}`);
+    return true;
+  };
   /** An account already linked for another app of the same provider: turn this app on for it (one consent). */
   const enableFor = async (a: AppDef, acc: ConnectedAccount) => {
     setErr(null); setBusy(`${a.k}:${acc.id}`);
@@ -224,7 +243,7 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
     const x = await syncAssets(r.id);
     setChecking(null);
     await reload();
-    setToast(x.error ? `Couldn't read pages: ${x.error}` : "Pages and accounts updated");
+    setToast(x.error ? `Couldn't read ${r.provider === "mailrelay" ? "groups" : "pages"}: ${x.error}` : r.provider === "mailrelay" ? "Groups updated" : "Pages and accounts updated");
   };
   const check = async (r: Row) => {
     setChecking(r.key);
@@ -305,10 +324,11 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
               </dl>
               {r.provider === "meta" && <AssetList items={assets.filter((x) => x.account_id === r.id && (a.k === "meta" || (a.k === "facebook" ? x.kind === "facebook_page" : x.kind === "instagram")))} />}
               {r.provider === "linkedin" && r.services.includes("linkedin_pages") && <AssetList items={assets.filter((x) => x.account_id === r.id)} />}
+              {r.provider === "mailrelay" && <AssetList items={assets.filter((x) => x.account_id === r.id)} none="No groups in this account yet." />}
               {r.status === "error" && r.note && <p className="ig-acc-err">{r.note}</p>}
               <div className="ig-acc-act">
                 {!r.primary && <button className="ig-mini" disabled={checking === r.key} onClick={() => void check(r)}>{checking === r.key ? <span className="ig-spin is-dark" /> : <Refresh />}Check now</button>}
-                {(r.provider === "meta" || (r.provider === "linkedin" && r.services.includes("linkedin_pages"))) && <button className="ig-mini" disabled={checking === `sync:${r.key}`} onClick={() => void resync(r)}>{checking === `sync:${r.key}` ? <span className="ig-spin is-dark" /> : <Refresh />}Re-read pages</button>}
+                {(r.provider === "meta" || r.provider === "mailrelay" || (r.provider === "linkedin" && r.services.includes("linkedin_pages"))) && <button className="ig-mini" disabled={checking === `sync:${r.key}`} onClick={() => void resync(r)}>{checking === `sync:${r.key}` ? <span className="ig-spin is-dark" /> : <Refresh />}{r.provider === "mailrelay" ? "Re-read groups" : "Re-read pages"}</button>}
                 <span className="ig-grow" />
                 {asking === r.key ? (
                   <span className="ig-ask"><span>Remove this account?</span><button className="is-yes" onClick={() => void remove(r)}>Remove</button><button onClick={() => setAsking(null)}>Keep</button></span>
@@ -326,13 +346,16 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
             </div>
           ))}
           {error && <p className="ig-det-err">{error}</p>}
-          <button className={`ig-brand-btn ${rs.length ? "is-soft" : ""}`} disabled={!ready || isBusy || loading} onClick={(e) => void connect(a, e.currentTarget)}>
+          {a.live!.provider === "mailrelay" ? (
+            <KeyForm key={rs.length} open={!rs.length} more={rs.length > 0} busy={isBusy} onSubmit={(acc, key, el) => connectKey(a, acc, key, el)} />
+          ) : <button className={`ig-brand-btn ${rs.length ? "is-soft" : ""}`} disabled={!ready || isBusy || loading} onClick={(e) => void connect(a, e.currentTarget)}>
             {isBusy ? <span className="ig-spin" /> : <Plus />}{isBusy ? "Waiting for sign-in…" : rs.length ? "Add another account" : `Connect ${a.name}`}
-          </button>
+          </button>}
         </div>
         {a.live!.provider === "google" && !providerReady("google") && <GoogleGuide />}
         {a.live!.provider === "meta" && !providerReady("meta") && <MetaGuide />}
         {a.live!.provider === "linkedin" && !providerReady("linkedin") && <LinkedInGuide />}
+        {a.live!.provider === "mailrelay" && <MailrelayGuide />}
         {a.live!.provider === "linkedin" && providerReady("linkedin") && !LINKEDIN_PAGES && <p className="ig-det-p ig-det-pad">Company pages turn on once LinkedIn approves the Community Management API for this app.</p>}
         {a.live!.provider === "meta" && providerReady("meta") && rs.length === 0 && <p className="ig-det-p ig-det-pad">To add a second Facebook login, switch account on facebook.com first — Meta signs you in with whoever is logged in there.</p>}
         {a.brings && (
@@ -408,6 +431,57 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
   );
 }
 
+/* ---------- Mailrelay: address + API key ---------- */
+function KeyForm({ open: startOpen, more, busy, onSubmit }: { open: boolean; more: boolean; busy: boolean; onSubmit: (account: string, key: string, el: HTMLElement | null) => Promise<boolean> }) {
+  const [open, setOpen] = useState(startOpen);
+  const [acc, setAcc] = useState("");
+  const [key, setKey] = useState("");
+  const [show, setShow] = useState(false);
+  const ref = useRef<HTMLFormElement>(null);
+  const host = acc.trim().toLowerCase().replace(/^https?:\/\//, "").split(/[/?#:]/)[0];
+  const full = host && !host.includes(".") ? `${host}.ipzmarketing.com` : host;
+  const ok = !!full && key.trim().length >= 8;
+  if (!open) return (
+    <button className="ig-brand-btn is-soft" onClick={() => setOpen(true)}><Plus />Add another account</button>
+  );
+  return (
+    <form ref={ref} className="ig-key" onSubmit={async (e) => { e.preventDefault(); if (!ok || busy) return; if (await onSubmit(acc, key, ref.current)) { setKey(""); setAcc(""); if (more) setOpen(false); } }}>
+      <label className="ig-fld">
+        <span>Account address</span>
+        <span className="ig-fld-in">
+          <input value={acc} onChange={(e) => setAcc(e.target.value)} placeholder="yourcompany" autoComplete="off" spellCheck={false} />
+          {!acc.includes(".") && <em>.ipzmarketing.com</em>}
+        </span>
+      </label>
+      <label className="ig-fld">
+        <span>API key</span>
+        <span className="ig-fld-in">
+          <input type={show ? "text" : "password"} value={key} onChange={(e) => setKey(e.target.value)} placeholder="Paste the key" autoComplete="new-password" spellCheck={false} />
+          <button type="button" className="ig-fld-eye" onClick={() => setShow((v) => !v)}>{show ? "Hide" : "Show"}</button>
+        </span>
+      </label>
+      <p className="ig-key-note"><Lock />The key is checked with Mailrelay and kept on the server — it never comes back to this page.</p>
+      <div className="ig-key-act">
+        <button type="submit" className="ig-brand-btn" disabled={!ok || busy}>{busy ? <span className="ig-spin" /> : <Plus />}{busy ? "Checking the key…" : more ? "Add account" : "Connect Mailrelay"}</button>
+        {more && <button type="button" className="ig-mini" onClick={() => setOpen(false)}>Cancel</button>}
+      </div>
+    </form>
+  );
+}
+function MailrelayGuide() {
+  return (
+    <div className="ig-det-sec ig-guide">
+      <h4>Where to find the key · 1 minute</h4>
+      <ol>
+        <li><b>Open your Mailrelay</b><span>Sign in at your address — the part before <i>.ipzmarketing.com</i> is what goes in <i>Account address</i>.</span></li>
+        <li><b>Create a key</b><span><i>Settings → API keys</i> → <i>Add API key</i> → name it “Next”.</span></li>
+        <li><b>Paste it here</b><span>Copy the key, paste it above and press <i>Connect Mailrelay</i>. Your groups appear on the account.</span></li>
+      </ol>
+      <p className="ig-guide-note">Deleting the key in Mailrelay disconnects it at once — <i>Check now</i> will show it needs a new key.</p>
+    </div>
+  );
+}
+
 /* ---------- Google setup guide (shown until VITE_GOOGLE_CLIENT_ID exists) ---------- */
 function GoogleGuide() {
   const origin = window.location.origin;
@@ -433,16 +507,16 @@ function GoogleGuide() {
 }
 
 /* ---------- Meta: the pages / Instagram accounts / ad accounts a login reaches ---------- */
-function AssetList({ items }: { items: ConnectedAsset[] }) {
-  if (!items.length) return <p className="ig-assets-none">No pages or accounts found for this login yet.</p>;
-  const KIND: Record<ConnectedAsset["kind"], string> = { facebook_page: "Facebook page", instagram: "Instagram", ad_account: "Ad account", linkedin_org: "LinkedIn page" };
-  const order = ["facebook_page", "instagram", "ad_account", "linkedin_org"];
+function AssetList({ items, none }: { items: ConnectedAsset[]; none?: string }) {
+  if (!items.length) return <p className="ig-assets-none">{none ?? "No pages or accounts found for this login yet."}</p>;
+  const KIND: Record<ConnectedAsset["kind"], string> = { facebook_page: "Facebook page", instagram: "Instagram", ad_account: "Ad account", linkedin_org: "LinkedIn page", mailrelay_group: "Group" };
+  const order = ["facebook_page", "instagram", "ad_account", "linkedin_org", "mailrelay_group"];
   return (
     <ul className="ig-assets">
       {[...items].sort((x, y) => order.indexOf(x.kind) - order.indexOf(y.kind)).map((x) => (
         <li key={x.id} className={`is-${x.kind}`}>
           {x.picture_url ? <img src={x.picture_url} alt="" loading="lazy" referrerPolicy="no-referrer" /> : <i>{(x.name || x.username || "?")[0]?.toUpperCase()}</i>}
-          <span><b>{x.kind === "instagram" && x.username ? `@${x.username}` : x.name || x.external_id}</b><small>{KIND[x.kind]}{x.kind === "linkedin_org" && x.extra?.role ? ` · ${String(x.extra.role).replace(/_/g, " ").toLowerCase()}` : ""}{x.kind === "instagram" && x.extra?.followers != null ? ` · ${Number(x.extra.followers).toLocaleString("en-GB")} followers` : ""}{x.kind === "ad_account" && x.extra?.currency ? ` · ${x.extra.currency}` : ""}</small></span>
+          <span><b>{x.kind === "instagram" && x.username ? `@${x.username}` : x.name || x.external_id}</b><small>{KIND[x.kind]}{x.kind === "linkedin_org" && x.extra?.role ? ` · ${String(x.extra.role).replace(/_/g, " ").toLowerCase()}` : ""}{x.kind === "instagram" && x.extra?.followers != null ? ` · ${Number(x.extra.followers).toLocaleString("en-GB")} followers` : ""}{x.kind === "ad_account" && x.extra?.currency ? ` · ${x.extra.currency}` : ""}{x.kind === "mailrelay_group" && x.extra?.subscribers != null ? ` · ${Number(x.extra.subscribers).toLocaleString("en-GB")} subscribers` : ""}</small></span>
         </li>
       ))}
     </ul>
@@ -502,4 +576,5 @@ const Chev = () => <svg viewBox="0 0 24 24" width="15" height="15" fill="none" s
 const Bell = () => <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0" /></svg>;
 const Refresh = () => <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7" /></svg>;
 const Copy = () => <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 9h11v11H9zM5 15H4V4h11v1" /></svg>;
+const Lock = () => <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>;
 const Plus = () => <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>;

@@ -6,16 +6,19 @@
 // Several accounts per person: Gmail / Google Calendar, extra Outlook accounts
 // (the first Outlook stays in outlook_tokens / outlook-sync, untouched),
 // Meta (Facebook pages, Instagram professional accounts, ad accounts) and
-// LinkedIn (member; company pages once the Community Management API is approved).
+// LinkedIn (member; company pages once the Community Management API is approved)
+// and Mailrelay (e-mail marketing — an API key, not a sign-in).
 // Tables: connected_accounts + connected_account_tokens (SQL 119),
-//         connected_assets + connected_asset_tokens (SQL 123), linkedin (SQL 124).
+//         connected_assets + connected_asset_tokens (SQL 123), linkedin (SQL 124), mailrelay (SQL 125).
 //
 // Actions (POST, the caller's Supabase JWT identifies the user):
 //   connect     { provider, code, codeVerifier?, redirectUri, services }
 //   disconnect  { id }   revokes at Google / Meta, deletes the account (+ tokens, assets)
 //   check       { id }   refreshes the token (Google / Microsoft) or checks it (Meta)
 //   token       { id }   a fresh access token
-//   assets_sync { id }   Meta: re-read pages, Instagram accounts and ad accounts
+//   connect_key { provider: "mailrelay", account, apiKey }   checks the key (GET /api/v1/ping) and stores it
+//   assets_sync { id }   Meta: re-read pages, Instagram accounts and ad accounts; LinkedIn: company pages;
+//                        Mailrelay: groups
 //
 // Secrets: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, MS_CLIENT_ID, MS_CLIENT_SECRET,
 //          META_APP_ID, META_APP_SECRET, LINKEDIN_CLIENT_ID, LINKEDIN_CLIENT_SECRET
@@ -31,7 +34,7 @@ const cors = {
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
-type Provider = "google" | "microsoft" | "meta" | "linkedin";
+type Provider = "google" | "microsoft" | "meta" | "linkedin" | "mailrelay";
 const LI = "https://api.linkedin.com";
 const LI_VERSION = "202610";
 const FB = "https://graph.facebook.com/v26.0";
@@ -52,7 +55,50 @@ const creds = (p: Provider) => p === "linkedin" ? liCreds(false) : p === "google
 const notSetUp = (p: Provider) => p === "google" ? "Google sign-in isn't set up on the server (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)."
   : p === "meta" ? "Meta sign-in isn't set up on the server (META_APP_ID / META_APP_SECRET)."
   : p === "linkedin" ? "LinkedIn sign-in isn't set up on the server (LINKEDIN_CLIENT_ID / LINKEDIN_CLIENT_SECRET)." : "Microsoft sign-in isn't set up on the server.";
-const SERVICES = new Set(["mail", "calendar", "facebook", "instagram", "ads", "linkedin", "linkedin_pages"]);
+const SERVICES = new Set(["mail", "calendar", "facebook", "instagram", "ads", "linkedin", "linkedin_pages", "mailrelay"]);
+
+/* ---------- Mailrelay: API key in the X-AUTH-TOKEN header, base https://<account>.ipzmarketing.com/api/v1 ---------- */
+/** "acme", "acme.ipzmarketing.com" or "https://acme.ipzmarketing.com/admin/…" → "acme.ipzmarketing.com" (only Mailrelay's own hosts). */
+function mrHost(raw: unknown): string | null {
+  let h = String(raw ?? "").trim().toLowerCase().replace(/^https?:\/\//, "").split(/[/?#:]/)[0];
+  if (!h) return null;
+  if (!h.includes(".")) h = `${h}.ipzmarketing.com`;
+  return /^[a-z0-9][a-z0-9-]{0,62}\.ipzmarketing\.com$/.test(h) ? h : null;
+}
+async function mrGet(host: string, key: string, path: string) {
+  const r = await fetch(`https://${host}/api/v1${path}`, { headers: { "X-AUTH-TOKEN": key, Accept: "application/json" } });
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 401 || r.status === 403) throw new Error("Mailrelay didn't accept this API key.");
+  if (r.status === 404 && path === "/ping") throw new Error("No Mailrelay account at this address.");
+  if (!r.ok) throw new Error((j as any)?.error || (j as any)?.message || `Mailrelay error ${r.status}`);
+  return j;
+}
+/** Mailrelay groups (lists of subscribers) of an account. */
+async function syncMailrelayGroups(accountId: string, tenant: string, userId: string, host: string, key: string) {
+  const found: any[] = [];
+  for (let page = 1; page <= 10; page++) {
+    const j: any = await mrGet(host, key, `/groups?page=${page}&per_page=100`);
+    const list = Array.isArray(j) ? j : (j.data ?? j.groups ?? []);
+    found.push(...list);
+    if (list.length < 100) break;
+  }
+  const now = new Date().toISOString();
+  const keep: string[] = [];
+  for (const g of found) {
+    const id = String(g.id ?? ""); if (!id) continue;
+    const subs = g.subscribers_count ?? g.active_subscribers_count ?? g.total_subscribers ?? g.subscribers ?? null;
+    await admin.from("connected_assets").upsert({
+      account_id: accountId, tenant_id: tenant, user_id: userId, kind: "mailrelay_group", external_id: id,
+      name: g.name ?? null, username: null, picture_url: null,
+      extra: { subscribers: typeof subs === "number" ? subs : null, description: g.description ?? null }, updated_at: now,
+    }, { onConflict: "account_id,kind,external_id" });
+    keep.push(id);
+  }
+  const { data: old } = await admin.from("connected_assets").select("id, external_id").eq("account_id", accountId).eq("kind", "mailrelay_group");
+  const gone = ((old ?? []) as any[]).filter((o) => !keep.includes(o.external_id)).map((o) => o.id);
+  if (gone.length) await admin.from("connected_assets").delete().in("id", gone);
+  return { groups: keep.length };
+}
 
 async function caller(req: Request): Promise<{ id: string; tenant: string } | null> {
   const token = (req.headers.get("Authorization") ?? "").replace("Bearer ", "");
@@ -199,15 +245,20 @@ async function syncMetaAssets(accountId: string, tenant: string, userId: string,
   return { pages: keep.filter((a) => a.kind === "facebook_page").length, instagram: keep.filter((a) => a.kind === "instagram").length, ad_accounts: keep.filter((a) => a.kind === "ad_account").length };
 }
 
-async function freshToken(accountId: string, userId: string): Promise<{ token: string; provider: Provider; tenant: string; services: string[] }> {
-  const { data: acc } = await admin.from("connected_accounts").select("id, provider, user_id, tenant_id, services").eq("id", accountId).maybeSingle();
+async function freshToken(accountId: string, userId: string): Promise<{ token: string; provider: Provider; tenant: string; services: string[]; email: string }> {
+  const { data: acc } = await admin.from("connected_accounts").select("id, provider, user_id, tenant_id, services, email").eq("id", accountId).maybeSingle();
   if (!acc || (acc as any).user_id !== userId) throw new Error("Account not found.");
   const provider = (acc as any).provider as Provider;
-  const out = (token: string) => ({ token, provider, tenant: (acc as any).tenant_id, services: (acc as any).services ?? [] });
+  const out = (token: string) => ({ token, provider, tenant: (acc as any).tenant_id, services: (acc as any).services ?? [], email: (acc as any).email as string });
   const { data: t } = await admin.from("connected_account_tokens").select("*").eq("account_id", accountId).maybeSingle();
   if (!t) throw new Error("No token stored.");
   const mark = (status: "active" | "error", last_error: string | null) =>
     admin.from("connected_accounts").update({ status, last_error, updated_at: new Date().toISOString() }).eq("id", accountId);
+  if (provider === "mailrelay") {
+    // an API key: it works until it's deleted in Mailrelay (Settings › API keys)
+    try { await mrGet((acc as any).email, (t as any).access_token, "/ping"); await mark("active", null); return out((t as any).access_token); }
+    catch (e) { await mark("error", String((e as Error).message ?? e)); throw e; }
+  }
   if (provider === "linkedin") {
     const pages = ((acc as any).services ?? []).includes("linkedin_pages");
     const exp = (t as any).expires_at ? new Date((t as any).expires_at).getTime() : 0;
@@ -288,10 +339,34 @@ Deno.serve(async (req) => {
       return json({ account: up.data, assets });
     }
 
+    if (action === "connect_key") {
+      if (p.provider !== "mailrelay") return json({ error: "Unknown provider" }, 400);
+      const host = mrHost(p.account);
+      if (!host) return json({ error: "Write your Mailrelay address, like yourcompany.ipzmarketing.com." }, 400);
+      const key = String(p.apiKey ?? "").trim();
+      if (key.length < 8 || /\s/.test(key)) return json({ error: "Paste the whole API key from Mailrelay › Settings › API keys." }, 400);
+      try { await mrGet(host, key, "/ping"); } catch (e) { return json({ error: String((e as Error).message ?? e) }, 400); }
+      const row = {
+        tenant_id: me.tenant, user_id: me.id, provider: "mailrelay", email: host, display_name: host.split(".")[0], services: ["mailrelay"],
+        scopes: null, status: "active", last_error: null, updated_at: new Date().toISOString(),
+      };
+      const up = await admin.from("connected_accounts").upsert(row, { onConflict: "user_id,provider,email" }).select("id, provider, email, display_name, services, status, last_error, connected_at, updated_at").single();
+      if (up.error) return json({ error: up.error.message }, 400);
+      const accId = (up.data as any).id;
+      await admin.from("connected_account_tokens").upsert({
+        account_id: accId, access_token: key, refresh_token: null,
+        expires_at: new Date(Date.now() + 10 * 365 * 86400_000).toISOString(), updated_at: new Date().toISOString(),
+      });
+      let assets = null;
+      try { assets = await syncMailrelayGroups(accId, me.tenant, me.id, host, key); } catch (e) { assets = { error: String((e as Error).message ?? e) }; }
+      return json({ account: up.data, assets });
+    }
+
     if (action === "assets_sync") {
       const f = await freshToken(p.id, me.id);
+      if (f.provider === "mailrelay") return json({ assets: await syncMailrelayGroups(p.id, f.tenant, me.id, f.email, f.token) });
       if (f.provider === "linkedin") return json({ assets: await syncLinkedInOrgs(p.id, f.tenant, me.id, f.token) });
-      if (f.provider !== "meta") return json({ error: "Only Meta and LinkedIn accounts have pages to read." }, 400);
+      if (f.provider !== "meta") return json({ error: "Only Meta, LinkedIn and Mailrelay accounts have pages or groups to read." }, 400);
       return json({ assets: await syncMetaAssets(p.id, f.tenant, me.id, f.token, f.services) });
     }
 
@@ -321,7 +396,9 @@ Deno.serve(async (req) => {
     }
 
     if (action === "token") {
-      return json({ access_token: (await freshToken(p.id, me.id)).token });
+      const f = await freshToken(p.id, me.id);
+      if (f.provider === "mailrelay") return json({ error: "API keys stay on the server." }, 400);   // never hand the key back
+      return json({ access_token: f.token });
     }
 
     return json({ error: "Unknown action" }, 400);

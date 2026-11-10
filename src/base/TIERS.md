@@ -126,7 +126,7 @@ Source in `supabase/functions/**`. Both apps call them; changes must stay backwa
 - Read the other side's entries since your last session before you start working.
 
 ## 7. SQL numbering
-Next free number: **125**  ← update this line when you claim one (and say which file in the log).
+Next free number: **126**  ← update this line when you claim one (and say which file in the log).
 | # | File | Chat | What |
 |---|---|---|---|
 | 98 | sql/98_client_default_folders.sql | Enterprise | client folder templates → new clients |
@@ -156,6 +156,7 @@ Next free number: **125**  ← update this line when you claim one (and say whic
 | 122 | sql/122_upsell_in_contract.sql | Enterprise | `client_products.contract_tracking_id` (+ index): the contract an upsell / hand-added product was signed into — applied 2026-11-10 |
 | 123 | src/base/sql/123_connected_meta.sql | Base | `connected_accounts.provider` + `meta`; `connected_assets` (pages / Instagram / ad accounts of a Meta login, RLS own select) + `connected_asset_tokens` (service role only) — applied 2026-11-10 |
 | 124 | src/base/sql/124_connected_linkedin.sql | Base | `connected_accounts.provider` + `linkedin`; `connected_assets.kind` + `linkedin_org` — applied 2026-11-10 |
+| 125 | src/base/sql/125_connected_mailrelay.sql | Base | `connected_accounts.provider` + `mailrelay` (API-key account); `connected_assets.kind` + `mailrelay_group` |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
@@ -166,13 +167,26 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
-### 2026-11-10 14:30 · Base · Integrations: LinkedIn (profile now, company pages when approved)
+### 2026-11-10 17:00 · Base · Integrations: Mailrelay (e-mail marketing, API key)
+- files: `pages/settings/Integrations.tsx` / `.css`, `api/connectedAccounts.ts` (`connectMailrelay`), `requests/connected-accounts.index.ts.txt`, `sql/125_connected_mailrelay.sql` (new).
+- **DB (125)**: `connected_accounts.provider` + `mailrelay`; `connected_assets.kind` + `mailrelay_group`. Applied 2026-11-10.
+- **Edge function `connected-accounts` v7** (deployed by Base): action `connect_key { provider: "mailrelay", account, apiKey }` — address normalised to `<name>.ipzmarketing.com` (only Mailrelay hosts), key checked with `GET /api/v1/ping` (header `X-AUTH-TOKEN`), stored in `connected_account_tokens.access_token` (service role only; `token` refuses to return it), account email = the address; groups read into `connected_assets` (`/api/v1/groups`, subscribers count when given). `check` pings; `assets_sync` re-reads groups.
+- Front: **Mailrelay** in Available (no sign-in window): the panel has a form — Account address (`yourcompany` + `.ipzmarketing.com`) + API key (hidden, Show) → Connect; a 3-step "where to find the key" guide; accounts show their groups, Check now, Re-read groups, Remove; "Add another account" opens the form again.
+- tags: DB (125)
+- deploy: written to the Mac · SQL applied · edge function v7 deployed · user to commit/push
+
+### 2026-11-10 14:30 · Base · Integrations: LinkedIn (profile now, company pages when approved) — restored (an Enterprise write dropped it)
 - files: `pages/settings/Integrations.tsx`, `api/connectedAccounts.ts`, `requests/connected-accounts.index.ts.txt`, `sql/124_connected_linkedin.sql` (new).
 - **DB (124)**: `connected_accounts.provider` + `linkedin`; `connected_assets.kind` + `linkedin_org`. Applied 2026-11-10.
-- **Edge function `connected-accounts` v6** (deployed by Base): provider `linkedin` — code → token at linkedin.com/oauth/v2/accessToken (no PKCE for web apps), `/v2/userinfo` for name / e-mail, company pages via `/rest/organizationAcls` + `/rest/organizations/{id}` (LinkedIn-Version 202610; roles ADMINISTRATOR / CONTENT_ADMIN / DIRECT_SPONSORED_CONTENT_POSTER), refresh only if LinkedIn gives a refresh token (else 60 days, then "sign in again"), disconnect revokes. Secrets `LINKEDIN_CLIENT_ID` / `_SECRET` (+ optional `LINKEDIN_PAGES_CLIENT_ID` / `_SECRET` if the Community Management API lives in a second app).
-- Front: **LinkedIn** in Available (scopes `openid profile email w_member_social`; with `VITE_LINKEDIN_PAGES=1` also `rw_organization_admin r_organization_social w_organization_social` and the company pages list + "Re-read pages"). `VITE_LINKEDIN_CLIENT_ID` (+ `VITE_LINKEDIN_PAGES_CLIENT_ID`). LinkedIn setup guide in the panel. "LinkedIn Ads" stays in Coming soon (Advertising API is a separate application).
+- **Edge function `connected-accounts` v6**: provider `linkedin` — code → token (no PKCE), `/v2/userinfo`, company pages via `/rest/organizationAcls` + `/rest/organizations/{id}` (LinkedIn-Version 202610), refresh only if LinkedIn gives one, disconnect revokes. Secrets `LINKEDIN_CLIENT_ID` / `_SECRET` (+ optional `LINKEDIN_PAGES_*`).
+- Front: LinkedIn in Available; `VITE_LINKEDIN_CLIENT_ID`, `VITE_LINKEDIN_PAGES=1` (+ `VITE_LINKEDIN_PAGES_CLIENT_ID`); setup guide. "LinkedIn Ads" stays in Coming soon.
 - tags: DB (124)
-- deploy: written to the Mac · SQL applied · edge function deployed · user to commit
+
+### 2026-11-10 16:10 · Enterprise · Deal contract: grace period (signed on one day, starts on another)
+- Files: src/components/pages/sales/trackings/HandoffClientForm.tsx / .css, sales/sales/salesApi.ts, sales/trackings/TrackingDetail.tsx, clients/ClientWorkspace.tsx / .css
+- What: the contract panel's "Dates & term" has 4 boxes: Sign date · **Grace period** (− N months +) · Contract start · Term. The grace moves the start (sign date + N months; changing the sign date moves the start with it); picking a start by hand sets the grace it makes (or "N days" when it isn't whole months); "Start on the sign date" clears it. A note under them: "Signed X → starts Y — the term, contract years, yearly prices and renewal count from the start". `ContractTerms.graceMonths` (new, optional; `contractStart` stays the source of truth and is saved only when it differs from the sign date). Handoff: the client's new signed products get `start_date` = the contract start (was the sign date). Client page contract card: subtitle "Signed … · 3-month grace", status "Grace period · starts …" until it starts, and a "Starts" fact with the grace chip in the order form.
+- Tags: PORT? (src/base contract panel if it has Dates & term)
+- Deploy: front only.
 
 ### 2026-11-10 15:30 · Enterprise · Reports: a customizable Home first
 - Files: src/components/pages/sales/extras/ReportsHome.tsx + ReportsHome.css (new), SalesReport.tsx
