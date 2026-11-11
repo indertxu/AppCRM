@@ -18,7 +18,7 @@
 import { supabase } from "../../components/api/supabase";
 
 export type Provider = "google" | "microsoft" | "meta" | "linkedin" | "mailrelay";
-export type Service = "mail" | "calendar" | "facebook" | "instagram" | "ads" | "linkedin" | "linkedin_pages" | "mailrelay";
+export type Service = "mail" | "calendar" | "facebook" | "instagram" | "ads" | "linkedin" | "linkedin_pages" | "mailrelay" | "whatsapp";
 export interface ConnectedAccount {
   id: string; provider: Provider; email: string; display_name: string | null;
   services: Service[]; status: "active" | "error"; last_error: string | null; connected_at: string; updated_at?: string;
@@ -52,6 +52,7 @@ const SCOPES: Record<Exclude<Provider, "mailrelay">, Partial<Record<Service, str
     facebook: "pages_show_list pages_read_engagement pages_manage_posts pages_read_user_content read_insights",
     instagram: "pages_show_list pages_read_engagement instagram_basic instagram_content_publish instagram_manage_insights instagram_manage_comments",
     ads: "ads_read leads_retrieval pages_manage_ads business_management",
+    whatsapp: "whatsapp_business_management whatsapp_business_messaging business_management",
   },
   linkedin: {
     linkedin: "w_member_social",
@@ -225,7 +226,7 @@ export async function lastMailReads(): Promise<Record<string, string>> {
 
 /* ---------- Meta: what a login reaches ---------- */
 export interface ConnectedAsset {
-  id: string; account_id: string; kind: "facebook_page" | "instagram" | "ad_account" | "linkedin_org" | "mailrelay_group"; external_id: string;
+  id: string; account_id: string; kind: "facebook_page" | "instagram" | "ad_account" | "linkedin_org" | "mailrelay_group" | "whatsapp_number"; external_id: string;
   name: string | null; username: string | null; picture_url: string | null; extra: Record<string, any>; updated_at: string;
 }
 /** Facebook pages, Instagram accounts and ad accounts of your Meta logins (SQL 123). */
@@ -250,4 +251,23 @@ export async function connectMailrelay(account: string, apiKey: string): Promise
   const r = await call("connect_key", { provider: "mailrelay", account, apiKey });
   if (r?.error) return { error: r.error };
   return { account: r.account as ConnectedAccount, assets: r.assets ?? null };
+}
+
+/* ---------- WhatsApp Business (Cloud API, through the Meta login) ---------- */
+export interface WhatsAppMessage {
+  id: string; asset_id: string | null; phone_number_id: string; direction: "in" | "out"; contact_phone: string; contact_name: string | null;
+  type: string; body: string | null; status: string | null; error: string | null; created_at: string;
+}
+/** Send from one of your WhatsApp numbers. Free text only reaches someone who wrote to you in the last 24 h;
+ *  to start a conversation use an approved template (Meta gives every account "hello_world"). */
+export async function sendWhatsApp(assetId: string, to: string, msg: { text?: string; template?: string; lang?: string }): Promise<{ error?: string }> {
+  const r = await call("wa_send", { assetId, to, ...msg });
+  return r?.error ? { error: r.error } : {};
+}
+/** Latest WhatsApp messages of your numbers (SQL 127), newest first. */
+export async function listWhatsAppMessages(limit = 40): Promise<WhatsAppMessage[]> {
+  const { data, error } = await supabase.from("whatsapp_messages")
+    .select("id, asset_id, phone_number_id, direction, contact_phone, contact_name, type, body, status, error, created_at")
+    .order("created_at", { ascending: false }).limit(limit);
+  return error ? [] : ((data ?? []) as WhatsAppMessage[]);
 }

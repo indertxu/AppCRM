@@ -126,7 +126,7 @@ Source in `supabase/functions/**`. Both apps call them; changes must stay backwa
 - Read the other side's entries since your last session before you start working.
 
 ## 7. SQL numbering
-Next free number: **126**  ← update this line when you claim one (and say which file in the log).
+Next free number: **128**  ← update this line when you claim one (and say which file in the log).
 | # | File | Chat | What |
 |---|---|---|---|
 | 98 | sql/98_client_default_folders.sql | Enterprise | client folder templates → new clients |
@@ -157,6 +157,8 @@ Next free number: **126**  ← update this line when you claim one (and say whic
 | 123 | src/base/sql/123_connected_meta.sql | Base | `connected_accounts.provider` + `meta`; `connected_assets` (pages / Instagram / ad accounts of a Meta login, RLS own select) + `connected_asset_tokens` (service role only) — applied 2026-11-10 |
 | 124 | src/base/sql/124_connected_linkedin.sql | Base | `connected_accounts.provider` + `linkedin`; `connected_assets.kind` + `linkedin_org` — applied 2026-11-10 |
 | 125 | src/base/sql/125_connected_mailrelay.sql | Base | `connected_accounts.provider` + `mailrelay` (API-key account); `connected_assets.kind` + `mailrelay_group` |
+| 126 | sql/126_report_sharing.sql | Enterprise | `sales_reports.shared_with` + `editors` (uuid[]); select/update policies widened; guard trigger (only the owner changes owner/sharing); alert trigger `report_shared` / `report_owner` — to run in the SQL editor |
+| 127 | src/base/sql/127_whatsapp.sql | Base | `connected_assets.kind` + `whatsapp_number`; `whatsapp_messages` (in / out per number, RLS same tenant) — WhatsApp Cloud API |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
@@ -166,6 +168,22 @@ Write requests here; the other chat answers in the log and ticks them.
 
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
+
+### 2026-11-11 10:30 · Base · Integrations: WhatsApp Business (Cloud API) + collapsed account cards + ⓘ "What it does"
+- files: `pages/settings/Integrations.tsx` / `.css`, `api/connectedAccounts.ts` (`sendWhatsApp`, `listWhatsAppMessages`), `requests/connected-accounts.index.ts.txt`, `requests/whatsapp-webhook.index.ts.txt` (new), `sql/127_whatsapp.sql` (new).
+- **DB (127)**: `connected_assets.kind` + `whatsapp_number` (external_id = phone_number_id; extra waba_id / display_phone_number / quality_rating / status); new `whatsapp_messages` (in / out per number, status, error, payload; RLS: the number's owner reads; written only by edge functions). Applied 2026-11-11.
+- **Edge function `connected-accounts`** (deployed by Base, now v10): Meta logins with service `whatsapp` read the WhatsApp Business accounts the login shares (`debug_token` granular scopes, else the businesses' own) → their numbers, and subscribe the app to each (`/{waba}/subscribed_apps`); new action `wa_send { assetId, to, text | template }` (stores the message as `out`).
+- **New edge function `whatsapp-webhook`** (verify_jwt **false**; deployed by Base, v1): Meta's GET check against secret `WHATSAPP_VERIFY_TOKEN`; POST checked with `X-Hub-Signature-256` (META_APP_SECRET); incoming messages → `whatsapp_messages` (in), statuses update sent / delivered / read / failed. Enterprise: it's yours to adopt — matching is by `connected_assets` (kind whatsapp_number).
+- Front: **WhatsApp Business** moved from Coming soon to Available (same Meta app; `VITE_META_CONFIG_ID` must include WhatsApp accounts). Its account card lists the numbers, a "Send a test" (hello_world template or free text inside 24 h) and the latest messages. Setup guide (use case, number, webhook URL + verify token, configuration).
+- UX (all apps): account cards start **collapsed** (name, one-line summary, status) and expand smoothly; a just-connected one opens. "What it does" section removed → an **ⓘ next to the app name** shows it on hover / focus, animated.
+- tags: DB (127) · new edge function
+- deploy: written to the Mac · SQL applied · both functions deployed · user: set WHATSAPP_VERIFY_TOKEN, Meta webhook, commit/push
+
+### 2026-11-10 16:55 · Enterprise · Reports: owned reports shared with people
+- Files: sql/126_report_sharing.sql (new), src/components/pages/sales/extras/ReportShare.tsx (new), SalesReport.tsx / .css, src/components/pages/homepage/HomePage.tsx
+- What: a report has one owner. The report bar's share button (build and view) opens "Share this report": the owner, "Everyone in the team" (the old `shared`), and People — add anyone (custom Select), each "Can view" / "Can edit" / "Make owner" (hands it over; you stay as editor) / "Remove". Applies at once for a saved report (saved with it for a new one). Only the owner changes it (others see it read-only; DB guard trigger enforces it). People who can edit save in place; viewers save a copy (a copy starts unshared). Sidebar: "· team + 2", "· shared with 3", "· from Marta · can edit". Notifications: whoever is added / made owner gets `report_shared` / `report_owner` (Home bell, new "Reports" tab) that opens `/reports?report=<id>`. Before 126 is run: only the team switch works and the menu says so.
+- Tags: **DB**, PORT? (src/base has no Reports page)
+- Deploy: SQL 126 for the user to run in the SQL editor (apply_migration timed out on a confirmation).
 
 ### 2026-11-10 17:00 · Base · Integrations: Mailrelay (e-mail marketing, API key)
 - files: `pages/settings/Integrations.tsx` / `.css`, `api/connectedAccounts.ts` (`connectMailrelay`), `requests/connected-accounts.index.ts.txt`, `sql/125_connected_mailrelay.sql` (new).

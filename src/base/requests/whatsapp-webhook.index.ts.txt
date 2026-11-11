@@ -1,0 +1,100 @@
+// =====================================================================
+// Supabase Edge Function: whatsapp-webhook   (verify_jwt: false — Meta calls it)
+// (written and deployed by the Base chat; source of truth:
+//  src/base/requests/whatsapp-webhook.index.ts.txt)
+//
+// WhatsApp Cloud API webhook of the Meta app "Next":
+//   GET  — Meta's check: hub.verify_token must equal WHATSAPP_VERIFY_TOKEN → echo hub.challenge
+//   POST — signed with the app secret (X-Hub-Signature-256); field "messages":
+//          incoming messages  → whatsapp_messages (direction in)
+//          delivery statuses  → whatsapp_messages.status (sent / delivered / read / failed)
+// The number is matched to its owner through connected_assets (kind whatsapp_number,
+// external_id = phone_number_id) — SQL 127.
+//
+// Secrets: META_APP_SECRET (already set), WHATSAPP_VERIFY_TOKEN.
+// In the Meta app: WhatsApp → Configuration → Webhook
+//   Callback URL  https://<project>.supabase.co/functions/v1/whatsapp-webhook
+//   Verify token  = WHATSAPP_VERIFY_TOKEN, then subscribe the field "messages".
+// =====================================================================
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+const ok = () => new Response("ok", { status: 200 });
+
+async function signed(raw: string, header: string | null): Promise<boolean> {
+  const secret = Deno.env.get("META_APP_SECRET") ?? "";
+  if (!secret || !header?.startsWith("sha256=")) return false;
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(raw)));
+  const hex = Array.from(mac).map((b) => b.toString(16).padStart(2, "0")).join("");
+  const want = header.slice(7).toLowerCase();
+  if (want.length !== hex.length) return false;
+  let diff = 0; for (let i = 0; i < hex.length; i++) diff |= hex.charCodeAt(i) ^ want.charCodeAt(i);
+  return diff === 0;
+}
+
+/** What a message says, in one line. */
+function bodyOf(m: any): string | null {
+  switch (m.type) {
+    case "text": return m.text?.body ?? null;
+    case "button": return m.button?.text ?? null;
+    case "interactive": return m.interactive?.button_reply?.title ?? m.interactive?.list_reply?.title ?? null;
+    case "reaction": return m.reaction?.emoji ? `Reacted ${m.reaction.emoji}` : null;
+    case "location": return `Location: ${m.location?.name ?? ""} ${m.location?.latitude ?? ""},${m.location?.longitude ?? ""}`.trim();
+    case "image": case "video": case "document": case "audio": case "sticker":
+      return m[m.type]?.caption ?? m[m.type]?.filename ?? `[${m.type}]`;
+    default: return `[${m.type ?? "message"}]`;
+  }
+}
+
+Deno.serve(async (req) => {
+  const url = new URL(req.url);
+  if (req.method === "GET") {
+    const want = Deno.env.get("WHATSAPP_VERIFY_TOKEN") ?? "";
+    if (url.searchParams.get("hub.mode") === "subscribe" && want && url.searchParams.get("hub.verify_token") === want) {
+      return new Response(url.searchParams.get("hub.challenge") ?? "", { status: 200 });
+    }
+    return new Response("Forbidden", { status: 403 });
+  }
+  if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
+
+  const raw = await req.text();
+  if (!(await signed(raw, req.headers.get("x-hub-signature-256")))) return new Response("Bad signature", { status: 401 });
+  let body: any; try { body = JSON.parse(raw); } catch { return ok(); }
+
+  try {
+    for (const entry of body.entry ?? []) {
+      for (const ch of entry.changes ?? []) {
+        if (ch.field !== "messages") continue;
+        const v = ch.value ?? {};
+        const pid = String(v.metadata?.phone_number_id ?? "");
+        if (!pid) continue;
+        const { data: assets } = await admin.from("connected_assets").select("id, tenant_id, user_id")
+          .eq("kind", "whatsapp_number").eq("external_id", pid).order("updated_at", { ascending: false }).limit(1);
+        const owner = (assets ?? [])[0] as any;
+        if (!owner) continue;                                    // a number nobody connected here
+        const names = new Map<string, string>();
+        for (const c of v.contacts ?? []) if (c.wa_id) names.set(String(c.wa_id), c.profile?.name ?? "");
+
+        const rows = (v.messages ?? []).map((m: any) => ({
+          tenant_id: owner.tenant_id, user_id: owner.user_id, asset_id: owner.id, phone_number_id: pid,
+          wa_message_id: m.id ?? null, direction: "in", contact_phone: String(m.from ?? ""), contact_name: names.get(String(m.from)) || null,
+          type: m.type ?? "text", body: bodyOf(m), status: "received", payload: m,
+          created_at: m.timestamp ? new Date(Number(m.timestamp) * 1000).toISOString() : new Date().toISOString(),
+        }));
+        if (rows.length) await admin.from("whatsapp_messages").upsert(rows, { onConflict: "wa_message_id", ignoreDuplicates: true });
+
+        for (const st of v.statuses ?? []) {
+          if (!st.id) continue;
+          const err = (st.errors ?? [])[0];
+          await admin.from("whatsapp_messages").update({
+            status: st.status ?? null, error: err ? (err.error_data?.details || err.title || err.message || null) : null, updated_at: new Date().toISOString(),
+          }).eq("wa_message_id", st.id);
+        }
+      }
+    }
+  } catch (e) {
+    console.error("whatsapp-webhook", e);                       // still 200: Meta retries failures for days
+  }
+  return ok();
+});

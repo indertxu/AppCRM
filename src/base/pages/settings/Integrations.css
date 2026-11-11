@@ -111,12 +111,24 @@
 .ig-soon-tag { display: inline-flex; height: 24px; align-items: center; padding: 0 10px; margin-bottom: 6px; border-radius: 999px; background: #f3effc; color: #7c5cc4; font-size: 11.5px; font-weight: 700; }
 
 /* account cards in the detail */
-.ig-acc { margin-bottom: 10px; padding: 14px; border-radius: 16px; background: #f8fbf9; border: 1px solid var(--line2); animation: ig-up 0.45s var(--ease) both; }
+.ig-acc { margin-bottom: 10px; padding: 0; border-radius: 16px; overflow: hidden; background: #f8fbf9; border: 1px solid var(--line2); animation: ig-up 0.45s var(--ease) both; }
 .ig-acc.is-err { background: #fdf6f5; border-color: rgba(214, 69, 69, 0.18); }
 .ig-acc.is-fresh { animation: ig-acc-in 1.2s var(--ease) both; }
 @keyframes ig-acc-in { 0% { opacity: 0; transform: translateY(10px); } 30% { opacity: 1; transform: none; box-shadow: 0 0 0 4px color-mix(in srgb, var(--c) 20%, transparent); } 100% { box-shadow: none; } }
-.ig-acc-h { display: flex; align-items: center; gap: 10px; }
-.ig-acc-h b { flex: 1; min-width: 0; font-size: 14px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ig-acc-h { width: 100%; display: flex; align-items: center; gap: 10px; padding: 12px 12px 12px 14px; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background 0.2s; }
+.ig-acc-h:hover { background: color-mix(in srgb, var(--c) 4%, transparent); }
+.ig-acc-name { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.ig-acc-name b { font-size: 14px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ig-acc-name small { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: opacity 0.25s; }
+.ig-acc.is-open .ig-acc-name small { opacity: 0.6; }
+.ig-acc-chev { flex-shrink: 0; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 8px; color: var(--muted); transition: transform 0.4s var(--ease), background 0.2s; }
+.ig-acc-h:hover .ig-acc-chev { background: rgba(10, 60, 40, 0.06); color: var(--ink); }
+.ig-acc.is-open .ig-acc-chev { transform: rotate(90deg); }
+.ig-acc-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.42s var(--ease); }
+.ig-acc.is-open .ig-acc-body { grid-template-rows: 1fr; }
+.ig-acc-in { min-height: 0; overflow: hidden; padding: 0 14px; opacity: 0; transform: translateY(-4px); transition: opacity 0.3s, transform 0.4s var(--ease), padding 0.42s var(--ease); }
+.ig-acc.is-open .ig-acc-in { padding-bottom: 14px; opacity: 1; transform: none; }
+.ig-acc-in > .ig-facts:first-child { margin-top: 0; }
 .ig-av { width: 30px; height: 30px; flex-shrink: 0; display: grid; place-items: center; border-radius: 50%; font-style: normal; font-size: 12.5px; font-weight: 800; color: #fff; background: linear-gradient(150deg, color-mix(in srgb, var(--c) 70%, #fff), var(--c)); }
 .ig-pill { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: 999px; font-size: 11.5px; font-weight: 700; color: #0e9a6a; background: #e6f7ef; }
 .ig-pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
@@ -212,3 +224,33 @@
 .ig-key-act { display: flex; align-items: center; gap: 8px; }
 .ig-key-act .ig-brand-btn { flex: 1; }
 .ig-key-act .ig-mini { height: 42px; }
+
+/* ⓘ next to the app name: what it does, on hover / focus */
+.ig-info { position: static; display: inline-flex; vertical-align: 3px; margin-left: 8px; }
+.ig-info-b { width: 20px; height: 20px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; background: color-mix(in srgb, var(--c) 12%, #fff); color: color-mix(in srgb, var(--c) 80%, #0b241a) !important; font: italic 700 12px/1 Georgia, serif; cursor: help; transition: transform 0.3s var(--ease), background 0.2s; }
+.ig-info:hover .ig-info-b, .ig-info:focus-within .ig-info-b { transform: scale(1.12); background: var(--c); color: #fff !important; }
+.ig-info-pop { position: absolute; z-index: 30; top: calc(100% - 8px); left: 20px; right: 20px; padding: 14px 16px; border-radius: 16px; background: #0b241a; color: #e6f5ee; box-shadow: 0 22px 40px -18px rgba(5, 30, 20, 0.6);
+  font: 13px/1.4 "Inter", sans-serif; letter-spacing: 0; opacity: 0; visibility: hidden; transform: translateY(-6px) scale(0.96); transform-origin: 50% 0; transition: opacity 0.22s, transform 0.32s var(--ease), visibility 0.22s; pointer-events: none; }
+.ig-info:hover .ig-info-pop, .ig-info:focus-within .ig-info-pop { opacity: 1; visibility: visible; transform: none; pointer-events: auto; }
+.ig-info-pop > b { display: block; margin-bottom: 8px; font-size: 10.5px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: #8fd9b6; }
+.ig-info-pop ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+.ig-info-pop li { display: flex; align-items: flex-start; gap: 8px; opacity: 0; transform: translateX(-6px); transition: opacity 0.25s, transform 0.35s var(--ease); transition-delay: calc(var(--i) * 45ms); }
+.ig-info:hover .ig-info-pop li, .ig-info:focus-within .ig-info-pop li { opacity: 1; transform: none; }
+.ig-info-pop li svg { flex-shrink: 0; margin-top: 2px; color: #5fd39c; }
+
+/* WhatsApp: test send + latest messages */
+.ig-wa { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line2); }
+.ig-wa h5 { margin: 4px 0 0; font-size: 10.5px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.ig-wa-sel { height: 36px; padding: 0 10px; border: 0; border-radius: 10px; background: #fff; box-shadow: inset 0 0 0 1px var(--line); font: 500 13px "Inter", sans-serif; color: var(--ink); }
+.ig-wa-seg { display: flex; gap: 4px; padding: 3px; border-radius: 11px; background: rgba(10, 60, 40, 0.05); }
+.ig-wa-seg button { flex: 1; height: 30px; border: 0; border-radius: 8px; background: none; color: var(--muted) !important; font-size: 12px; font-weight: 700; cursor: pointer; transition: background 0.2s, color 0.2s, box-shadow 0.2s; }
+.ig-wa-seg button.is-on { background: #fff; color: var(--ink) !important; box-shadow: 0 2px 8px -4px rgba(5, 30, 20, 0.3); }
+.ig-wa-ok { margin: 0; font-size: 12.5px; font-weight: 700; color: #0e9a6a; }
+.ig-wa-msgs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.ig-wa-msgs li { padding: 8px 10px; border-radius: 12px 12px 12px 4px; background: #fff; box-shadow: inset 0 0 0 1px var(--line2); }
+.ig-wa-msgs li.is-out { border-radius: 12px 12px 4px 12px; background: #e7f8ee; box-shadow: none; }
+.ig-wa-msgs span { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.ig-wa-msgs b { font-size: 12px; font-weight: 700; }
+.ig-wa-msgs small { flex-shrink: 0; font-size: 11px; color: var(--muted); }
+.ig-wa-msgs p { margin: 3px 0 0; font-size: 13px; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ig-wa-msgs em { display: block; margin-top: 3px; font-size: 11.5px; font-style: normal; color: #a83434; }

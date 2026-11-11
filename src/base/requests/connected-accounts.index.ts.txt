@@ -5,11 +5,13 @@
 //
 // Several accounts per person: Gmail / Google Calendar, extra Outlook accounts
 // (the first Outlook stays in outlook_tokens / outlook-sync, untouched),
-// Meta (Facebook pages, Instagram professional accounts, ad accounts) and
+// Meta (Facebook pages, Instagram professional accounts, ad accounts, WhatsApp
+// Business numbers — Cloud API; incoming messages arrive at "whatsapp-webhook") and
 // LinkedIn (member; company pages once the Community Management API is approved)
 // and Mailrelay (e-mail marketing — an API key, not a sign-in).
 // Tables: connected_accounts + connected_account_tokens (SQL 119),
-//         connected_assets + connected_asset_tokens (SQL 123), linkedin (SQL 124), mailrelay (SQL 125).
+//         connected_assets + connected_asset_tokens (SQL 123), linkedin (SQL 124), mailrelay (SQL 125),
+//         whatsapp_number + whatsapp_messages (SQL 127).
 //
 // Actions (POST, the caller's Supabase JWT identifies the user):
 //   connect     { provider, code, codeVerifier?, redirectUri, services }
@@ -18,7 +20,9 @@
 //   token       { id }   a fresh access token
 //   connect_key { provider: "mailrelay", account, apiKey }   checks the key (GET /api/v1/ping) and stores it
 //   assets_sync { id }   Meta: re-read pages, Instagram accounts and ad accounts; LinkedIn: company pages;
-//                        Mailrelay: groups
+//                        Mailrelay: groups; WhatsApp numbers too when the login has "whatsapp"
+//   wa_send     { assetId, to, text? , template?, lang? }   send from a WhatsApp number (text only
+//                        inside the 24-hour window after the contact last wrote; otherwise a template)
 //
 // Secrets: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, MS_CLIENT_ID, MS_CLIENT_SECRET,
 //          META_APP_ID, META_APP_SECRET, LINKEDIN_CLIENT_ID, LINKEDIN_CLIENT_SECRET
@@ -55,7 +59,7 @@ const creds = (p: Provider) => p === "linkedin" ? liCreds(false) : p === "google
 const notSetUp = (p: Provider) => p === "google" ? "Google sign-in isn't set up on the server (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)."
   : p === "meta" ? "Meta sign-in isn't set up on the server (META_APP_ID / META_APP_SECRET)."
   : p === "linkedin" ? "LinkedIn sign-in isn't set up on the server (LINKEDIN_CLIENT_ID / LINKEDIN_CLIENT_SECRET)." : "Microsoft sign-in isn't set up on the server.";
-const SERVICES = new Set(["mail", "calendar", "facebook", "instagram", "ads", "linkedin", "linkedin_pages", "mailrelay"]);
+const SERVICES = new Set(["mail", "calendar", "facebook", "instagram", "ads", "linkedin", "linkedin_pages", "mailrelay", "whatsapp"]);
 
 /* ---------- Mailrelay: API key in the X-AUTH-TOKEN header, base https://<account>.ipzmarketing.com/api/v1 ---------- */
 /** "acme", "acme.ipzmarketing.com" or "https://acme.ipzmarketing.com/admin/…" → "acme.ipzmarketing.com" (only Mailrelay's own hosts). */
@@ -228,6 +232,9 @@ async function syncMetaAssets(accountId: string, tenant: string, userId: string,
       for (const a of j.data ?? []) found.push({ kind: "ad_account", external_id: a.id, name: a.name ?? null, username: null, picture_url: null, extra: { status: a.account_status ?? null, currency: a.currency ?? null } });
     } catch { /* no ads permission: fine */ }
   }
+  if (services.includes("whatsapp")) {
+    for (const w of await whatsappNumbers(token)) found.push(w);
+  }
   const keep = found.filter((a) => a.kind !== "facebook_page" || services.includes("facebook") || services.includes("instagram"));
   const now = new Date().toISOString();
   for (const a of keep) {
@@ -242,7 +249,40 @@ async function syncMetaAssets(accountId: string, tenant: string, userId: string,
   const live = new Set(keep.map((a) => `${a.kind}:${a.external_id}`));
   const gone = ((old ?? []) as any[]).filter((o) => !live.has(`${o.kind}:${o.external_id}`)).map((o) => o.id);
   if (gone.length) await admin.from("connected_assets").delete().in("id", gone);
-  return { pages: keep.filter((a) => a.kind === "facebook_page").length, instagram: keep.filter((a) => a.kind === "instagram").length, ad_accounts: keep.filter((a) => a.kind === "ad_account").length };
+  return { pages: keep.filter((a) => a.kind === "facebook_page").length, instagram: keep.filter((a) => a.kind === "instagram").length, ad_accounts: keep.filter((a) => a.kind === "ad_account").length, whatsapp: keep.filter((a) => a.kind === "whatsapp_number").length };
+}
+
+/** WhatsApp Business accounts this login shares (granular scopes of the token, else the businesses' own) → their phone numbers.
+ *  Subscribes the app to each account so its messages reach "whatsapp-webhook". */
+async function whatsappNumbers(token: string) {
+  const c = creds("meta");
+  const wabas = new Set<string>();
+  try {
+    const d: any = await fbGet(`/debug_token?input_token=${encodeURIComponent(token)}`, `${c.id}|${c.secret}`);
+    for (const g of d?.data?.granular_scopes ?? []) if (String(g.scope).startsWith("whatsapp_business")) for (const id of g.target_ids ?? []) wabas.add(String(id));
+  } catch { /* fall back below */ }
+  if (!wabas.size) {
+    try {
+      const b: any = await fbGet("/me/businesses?fields=id&limit=50", token);
+      for (const biz of b.data ?? []) {
+        for (const edge of ["owned_whatsapp_business_accounts", "client_whatsapp_business_accounts"]) {
+          try { const w: any = await fbGet(`/${biz.id}/${edge}?fields=id&limit=50`, token); for (const x of w.data ?? []) wabas.add(String(x.id)); } catch { /* no access to this edge */ }
+        }
+      }
+    } catch { /* no businesses */ }
+  }
+  const out: { kind: string; external_id: string; name: string | null; username: string | null; picture_url: string | null; extra: Record<string, unknown> }[] = [];
+  for (const waba of wabas) {
+    let wabaName: string | null = null;
+    try { wabaName = (await fbGet(`/${waba}?fields=name`, token) as any).name ?? null; } catch { /* name is a nicety */ }
+    try { await fetch(`${FB}/${waba}/subscribed_apps?access_token=${encodeURIComponent(token)}`, { method: "POST" }); } catch { /* webhook subscription can be retried with Re-read */ }
+    const nums: any = await fbGet(`/${waba}/phone_numbers?fields=id,display_phone_number,verified_name,quality_rating,code_verification_status,status,platform_type&limit=50`, token).catch(() => ({ data: [] }));
+    for (const n of nums.data ?? []) out.push({
+      kind: "whatsapp_number", external_id: String(n.id), name: n.verified_name ?? null, username: n.display_phone_number ?? null, picture_url: null,
+      extra: { waba_id: waba, waba_name: wabaName, display_phone_number: n.display_phone_number ?? null, quality_rating: n.quality_rating ?? null, status: n.status ?? null, platform: n.platform_type ?? null, verification: n.code_verification_status ?? null },
+    });
+  }
+  return out;
 }
 
 async function freshToken(accountId: string, userId: string): Promise<{ token: string; provider: Provider; tenant: string; services: string[]; email: string }> {
@@ -360,6 +400,30 @@ Deno.serve(async (req) => {
       let assets = null;
       try { assets = await syncMailrelayGroups(accId, me.tenant, me.id, host, key); } catch (e) { assets = { error: String((e as Error).message ?? e) }; }
       return json({ account: up.data, assets });
+    }
+
+    if (action === "wa_send") {
+      const { data: asset } = await admin.from("connected_assets").select("id, account_id, user_id, tenant_id, kind, external_id").eq("id", p.assetId).maybeSingle();
+      if (!asset || (asset as any).user_id !== me.id || (asset as any).kind !== "whatsapp_number") return json({ error: "Number not found." }, 404);
+      const to = String(p.to ?? "").replace(/[^\d]/g, "");
+      if (to.length < 8) return json({ error: "Write the phone number with its country code, e.g. 34600111222." }, 400);
+      const text = String(p.text ?? "").trim();
+      const template = String(p.template ?? "").trim();
+      if (!text && !template) return json({ error: "Write a message." }, 400);
+      const f = await freshToken((asset as any).account_id, me.id);
+      const msg = template
+        ? { messaging_product: "whatsapp", to, type: "template", template: { name: template, language: { code: String(p.lang || "en_US") } } }
+        : { messaging_product: "whatsapp", to, type: "text", text: { body: text.slice(0, 4096), preview_url: false } };
+      const r = await fetch(`${FB}/${(asset as any).external_id}/messages`, { method: "POST", headers: { Authorization: `Bearer ${f.token}`, "Content-Type": "application/json" }, body: JSON.stringify(msg) });
+      const j: any = await r.json().catch(() => ({}));
+      const err = r.ok ? null : (j?.error?.error_data?.details || j?.error?.message || `WhatsApp error ${r.status}`);
+      await admin.from("whatsapp_messages").insert({
+        tenant_id: (asset as any).tenant_id, user_id: me.id, asset_id: (asset as any).id, phone_number_id: (asset as any).external_id,
+        wa_message_id: j?.messages?.[0]?.id ?? null, direction: "out", contact_phone: j?.contacts?.[0]?.wa_id ?? to,
+        type: template ? "template" : "text", body: template ? `Template: ${template}` : text, status: err ? "failed" : "sent", error: err, payload: msg, sent_by: me.id,
+      });
+      if (err) return json({ error: err }, 400);
+      return json({ ok: true, id: j?.messages?.[0]?.id ?? null });
     }
 
     if (action === "assets_sync") {

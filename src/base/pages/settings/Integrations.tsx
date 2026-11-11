@@ -14,14 +14,16 @@
                               "connected-accounts" (src/base/api/connectedAccounts.ts)
      Outlook                → the first account is the existing Outlook connection
                               (outlook-sync; facts from SQL 120); more go to connected_accounts
+     WhatsApp Business      → the Meta login with "whatsapp": its numbers (Cloud API), a test send and
+                              the latest messages (SQL 127; incoming via edge function whatsapp-webhook)
      Mailrelay              → address + API key (no sign-in window), checked and kept by
                               the edge function; its groups are read (SQL 125)
    Prefix .ig-
    ===================================================================== */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
-  addAccount, checkAccount, connectMailrelay, LINKEDIN_PAGES, lastMailReads, listAccounts, listAssets, myOutlookConnection, providerReady, removeAccount, syncAssets,
-  type ConnectedAccount, type ConnectedAsset, type OutlookFacts, type Provider, type Service,
+  addAccount, checkAccount, connectMailrelay, LINKEDIN_PAGES, listWhatsAppMessages, sendWhatsApp, lastMailReads, listAccounts, listAssets, myOutlookConnection, providerReady, removeAccount, syncAssets,
+  type ConnectedAccount, type ConnectedAsset, type OutlookFacts, type Provider, type Service, type WhatsAppMessage,
 } from "../../api/connectedAccounts";
 import { BRANDS } from "./brandIcons";
 import "./Integrations.css";
@@ -63,13 +65,14 @@ const LIVE: AppDef[] = [
     brings: ["Publish on your pages", "Reach, reactions and comments in Growth", "Several pages"] },
   { k: "instagram", name: "Instagram", what: "Professional accounts: posts, reels and insights", logo: { k: "instagram", color: "#ff0069" }, live: { provider: "meta", service: "instagram" },
     brings: ["Publish posts and reels", "Reach, likes and comments in Growth", "Needs an Instagram business or creator account linked to a Facebook page"] },
+  { k: "whatsapp", name: "WhatsApp Business", what: "Chat with clients from your business numbers", logo: { k: "whatsapp", color: "#25d366" }, live: { provider: "meta", service: "whatsapp" },
+    brings: ["Your WhatsApp Business numbers (Cloud API)", "Messages clients send you, kept in the app", "Reply and send from Next", "Several numbers and accounts"] },
   { k: "linkedin", name: "LinkedIn", what: "Post as you — and as your company page once approved", logo: { k: "linkedin", color: "#0a66c2" }, live: { provider: "linkedin", service: "linkedin" },
     brings: ["Publish posts on your profile", "Company pages: post and read followers and engagement (needs LinkedIn's Community Management API)", "Several LinkedIn accounts"] },
   { k: "mailrelay", name: "Mailrelay", what: "E-mail marketing: groups, subscribers and newsletters", logo: { color: "#1f6fd1", letters: "Mr" }, live: { provider: "mailrelay", service: "mailrelay" },
     brings: ["Your Mailrelay groups and how many subscribers each has", "New clients and contacts can go into a group", "Newsletters and their results in Growth", "Several Mailrelay accounts"] },
 ];
 const SOON: AppDef[] = [
-  { k: "whatsapp", name: "WhatsApp Business", what: "Chat with clients, kept on each client", logo: { k: "whatsapp", color: "#25d366" }, brings: ["One or more business numbers", "Messages saved on the client", "Follow-ups by WhatsApp"] },
   { k: "messenger", name: "Messenger", what: "Facebook and Instagram DMs in one inbox", logo: { k: "messenger", color: "#0866ff" }, brings: ["Every DM in one inbox", "Replies kept on the client"] },
   { k: "linkedin-ads", name: "LinkedIn Ads", what: "Campaigns and lead-gen forms", logo: { k: "linkedin", color: "#0a66c2" }, brings: ["LinkedIn Ads campaigns and results", "Lead-gen forms into Orbit"] },
   { k: "tiktok", name: "TikTok", what: "Short videos and TikTok Ads", logo: { k: "tiktok", color: "#000" }, brings: ["Publish short videos", "TikTok Ads results"] },
@@ -82,17 +85,17 @@ const SOON: AppDef[] = [
 ];
 const APP = Object.fromEntries([...LIVE, ...SOON].map((a) => [a.k, a])) as Record<string, AppDef>;
 const WANT_KEY = "next.base.integrations.want";
-const SVC: Record<Service, string> = { mail: "Mail", calendar: "Calendar", facebook: "Facebook", instagram: "Instagram", ads: "Ads", linkedin: "Profile posts", linkedin_pages: "Company pages", mailrelay: "E-mail marketing" };
+const SVC: Record<Service, string> = { mail: "Mail", calendar: "Calendar", facebook: "Facebook", instagram: "Instagram", ads: "Ads", linkedin: "Profile posts", linkedin_pages: "Company pages", mailrelay: "E-mail marketing", whatsapp: "WhatsApp" };
 /** Which apps of the list an account shows under. */
 const appsOf = (a: ConnectedAccount): string[] =>
   a.provider === "google" ? a.services.map((s) => (s === "mail" ? "gmail" : s === "calendar" ? "gcal" : "")).filter(Boolean)
-  : a.provider === "meta" ? ["meta", ...(a.services.includes("facebook") ? ["facebook"] : []), ...(a.services.includes("instagram") ? ["instagram"] : [])]
+  : a.provider === "meta" ? [...(a.services.some((s) => s !== "whatsapp") ? ["meta"] : []), ...(a.services.includes("facebook") ? ["facebook"] : []), ...(a.services.includes("instagram") ? ["instagram"] : []), ...(a.services.includes("whatsapp") ? ["whatsapp"] : [])]
   : a.provider === "linkedin" ? ["linkedin"]
   : a.provider === "mailrelay" ? ["mailrelay"]
   : ["outlook"];
 /** What one sign-in asks for, per app. */
 const servicesFor = (k: string): Service[] =>
-  k === "meta" ? ["facebook", "instagram", "ads"] : k === "facebook" ? ["facebook"] : k === "instagram" ? ["instagram"]
+  k === "meta" ? ["facebook", "instagram", "ads"] : k === "facebook" ? ["facebook"] : k === "instagram" ? ["instagram"] : k === "whatsapp" ? ["whatsapp"]
   : k === "linkedin" ? (LINKEDIN_PAGES ? ["linkedin", "linkedin_pages"] : ["linkedin"]) : k === "mailrelay" ? ["mailrelay"] : ["mail", "calendar"];
 const colorOf = (a: AppDef) => BRANDS[a.logo.k ?? ""]?.hex ?? a.logo.color;
 
@@ -192,6 +195,24 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
     anim.onfinish = () => { ghost.remove(); dest.style.opacity = ""; dest.animate([{ transform: "scale(1.25)" }, { transform: "scale(1)" }], { duration: 380, easing: "cubic-bezier(0.34, 1.56, 0.64, 1)" }); };
   }, [rowKeys, appKeys, accounts === null, outlook.connected === null]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /* account cards start collapsed; a just-connected one opens */
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggleAcc = (k: string) => setExpanded((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
+  useEffect(() => { if (fresh.length) setExpanded((s) => new Set([...s, ...fresh.filter((k) => !k.startsWith("app:"))])); }, [fresh]);
+  const KIND_OF: Record<string, ConnectedAsset["kind"] | undefined> = { facebook: "facebook_page", instagram: "instagram", whatsapp: "whatsapp_number" };
+  const assetsFor = (r: Row, app: string) => assets.filter((x) => x.account_id === r.id && (KIND_OF[app] ? x.kind === KIND_OF[app] : x.kind !== "whatsapp_number"));
+  const summaryOf = (r: Row, app: string) => {
+    const n = assetsFor(r, app).length;
+    const what = r.provider === "meta" ? (app === "whatsapp" ? `${n} number${n === 1 ? "" : "s"}` : `${n} page${n === 1 ? "" : "s"} & accounts`)
+      : r.provider === "mailrelay" ? `${n} group${n === 1 ? "" : "s"}` : r.services.map((s) => SVC[s]).join(" · ");
+    return `${what} · active ${ago(r.lastActive).toLowerCase()}`;
+  };
+
+  /* WhatsApp: latest messages of your numbers */
+  const [waMsgs, setWaMsgs] = useState<WhatsAppMessage[]>([]);
+  const loadWa = useCallback(async () => setWaMsgs(await listWhatsAppMessages(60).catch(() => [])), []);
+  useEffect(() => { if (sel?.app === "whatsapp") void loadWa(); }, [sel?.app, loadWa]);
+
   const connect = async (a: AppDef, from: HTMLElement | null) => {
     setErr(null);
     const logo = from?.closest(".ig-det")?.querySelector<HTMLElement>(".ig-det-h .ig-logo");
@@ -204,7 +225,7 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
     setBusy(null);
     if (r.error) { fly.current = null; setErr({ k: a.k, text: r.error }); return; }
     await reload();
-    const got = r.assets && !r.assets.error ? ` · ${r.assets.pages ?? 0} pages, ${r.assets.instagram ?? 0} Instagram` : "";
+    const got = r.assets && !r.assets.error ? (a.k === "whatsapp" ? ` · ${(r.assets as any).whatsapp ?? 0} WhatsApp numbers` : ` · ${r.assets.pages ?? 0} pages, ${r.assets.instagram ?? 0} Instagram`) : "";
     setToast(`${r.account?.display_name || r.account?.email || "Account"} connected${got}`);
   };
   /** Mailrelay: address + API key from the form in the panel. */
@@ -290,7 +311,7 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
           <div className="ig-det-in" key={`${col}:${a.k}`}>
             <header className="ig-det-h">
               <Logo {...a.logo} s={48} />
-              <div><h3>{a.name}</h3><p>{a.what}</p></div>
+              <div><h3>{a.name}{a.brings && a.live && <Info items={a.brings} />}</h3><p>{a.what}</p></div>
               <button className="ig-x" onClick={() => setSel(null)} aria-label="Close"><X /></button>
             </header>
             {a.live ? liveDetail(a) : soonDetail(a)}
@@ -310,30 +331,34 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
         <div className="ig-det-sec">
           <h4>{rs.length ? `Accounts · ${rs.length}` : "No account yet"}</h4>
           {rs.map((r) => (
-            <article key={r.key} className={`ig-acc ${r.status === "error" ? "is-err" : ""} ${fresh.includes(r.key) ? "is-fresh" : ""}`}>
-              <div className="ig-acc-h">
+            <article key={r.key} className={`ig-acc ${r.status === "error" ? "is-err" : ""} ${fresh.includes(r.key) ? "is-fresh" : ""} ${expanded.has(r.key) ? "is-open" : ""}`}>
+              <button className="ig-acc-h" onClick={() => toggleAcc(r.key)} aria-expanded={expanded.has(r.key)}>
                 <i className="ig-av">{(r.label || r.email)[0]?.toUpperCase()}</i>
-                <b title={r.email}>{r.label || r.email}</b>
+                <span className="ig-acc-name"><b title={r.email}>{r.label || r.email}</b><small>{summaryOf(r, a.k)}</small></span>
                 <span className={`ig-pill ${r.status === "error" ? "is-err" : ""}`}>{r.status === "error" ? "Needs sign-in" : "Working"}</span>
-              </div>
+                <span className="ig-acc-chev"><Chev /></span>
+              </button>
+              <div className="ig-acc-body"><div className="ig-acc-in">
               <dl className="ig-facts">
                 <div><dt>Connected</dt><dd>{fmtDate(r.connectedAt)}</dd></div>
                 <div><dt>Last active</dt><dd title={fmtDate(r.lastActive)}>{ago(r.lastActive)}</dd></div>
                 {r.services.includes("mail") && <div><dt>Last mail read</dt><dd title={fmtDate(reads[r.email.toLowerCase()])}>{ago(reads[r.email.toLowerCase()])}</dd></div>}
                 <div><dt>Used for</dt><dd>{r.services.map((s) => SVC[s]).join(" · ")}{r.primary ? " · main" : ""}</dd></div>
               </dl>
-              {r.provider === "meta" && <AssetList items={assets.filter((x) => x.account_id === r.id && (a.k === "meta" || (a.k === "facebook" ? x.kind === "facebook_page" : x.kind === "instagram")))} />}
+              {r.provider === "meta" && <AssetList items={assetsFor(r, a.k)} none={a.k === "whatsapp" ? "No WhatsApp number shared with this login yet." : undefined} />}
+              {r.provider === "meta" && a.k === "whatsapp" && assetsFor(r, a.k).length > 0 && <WaPanel numbers={assetsFor(r, a.k)} messages={waMsgs} onSent={() => void loadWa()} />}
               {r.provider === "linkedin" && r.services.includes("linkedin_pages") && <AssetList items={assets.filter((x) => x.account_id === r.id)} />}
               {r.provider === "mailrelay" && <AssetList items={assets.filter((x) => x.account_id === r.id)} none="No groups in this account yet." />}
               {r.status === "error" && r.note && <p className="ig-acc-err">{r.note}</p>}
               <div className="ig-acc-act">
                 {!r.primary && <button className="ig-mini" disabled={checking === r.key} onClick={() => void check(r)}>{checking === r.key ? <span className="ig-spin is-dark" /> : <Refresh />}Check now</button>}
-                {(r.provider === "meta" || r.provider === "mailrelay" || (r.provider === "linkedin" && r.services.includes("linkedin_pages"))) && <button className="ig-mini" disabled={checking === `sync:${r.key}`} onClick={() => void resync(r)}>{checking === `sync:${r.key}` ? <span className="ig-spin is-dark" /> : <Refresh />}{r.provider === "mailrelay" ? "Re-read groups" : "Re-read pages"}</button>}
+                {(r.provider === "meta" || r.provider === "mailrelay" || (r.provider === "linkedin" && r.services.includes("linkedin_pages"))) && <button className="ig-mini" disabled={checking === `sync:${r.key}`} onClick={() => void resync(r)}>{checking === `sync:${r.key}` ? <span className="ig-spin is-dark" /> : <Refresh />}{r.provider === "mailrelay" ? "Re-read groups" : a.k === "whatsapp" ? "Re-read numbers" : "Re-read pages"}</button>}
                 <span className="ig-grow" />
                 {asking === r.key ? (
                   <span className="ig-ask"><span>Remove this account?</span><button className="is-yes" onClick={() => void remove(r)}>Remove</button><button onClick={() => setAsking(null)}>Keep</button></span>
                 ) : <button className="ig-mini is-danger" onClick={() => setAsking(r.key)}>Remove</button>}
               </div>
+              </div></div>
             </article>
           ))}
           {(a.live!.provider === "google" || a.live!.provider === "meta") && (accounts ?? []).filter((x) => x.provider === a.live!.provider && !appsOf(x).includes(a.k)).map((x) => (
@@ -356,14 +381,9 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
         {a.live!.provider === "meta" && !providerReady("meta") && <MetaGuide />}
         {a.live!.provider === "linkedin" && !providerReady("linkedin") && <LinkedInGuide />}
         {a.live!.provider === "mailrelay" && <MailrelayGuide />}
+        {a.k === "whatsapp" && providerReady("meta") && !rs.some((r) => assetsFor(r, "whatsapp").length) && <WhatsAppGuide />}
         {a.live!.provider === "linkedin" && providerReady("linkedin") && !LINKEDIN_PAGES && <p className="ig-det-p ig-det-pad">Company pages turn on once LinkedIn approves the Community Management API for this app.</p>}
         {a.live!.provider === "meta" && providerReady("meta") && rs.length === 0 && <p className="ig-det-p ig-det-pad">To add a second Facebook login, switch account on facebook.com first — Meta signs you in with whoever is logged in there.</p>}
-        {a.brings && (
-          <div className="ig-det-sec">
-            <h4>What it does</h4>
-            <ul className="ig-brings">{a.brings.map((b) => <li key={b}><Check />{b}</li>)}</ul>
-          </div>
-        )}
       </>
     );
   }
@@ -427,6 +447,90 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
       </div>
 
       {toast && <div className="ig-toast"><Check />{toast}</div>}
+    </div>
+  );
+}
+
+/* ---------- "What it does", on hover / focus of the ⓘ next to the name ---------- */
+function Info({ items, soon }: { items: string[]; soon?: boolean }) {
+  return (
+    <span className="ig-info">
+      <button type="button" className="ig-info-b" aria-label={soon ? "What it will do" : "What it does"}>i</button>
+      <span className="ig-info-pop" role="tooltip">
+        <b>{soon ? "What it will do" : "What it does"}</b>
+        <ul>{items.map((t, i) => <li key={t} style={{ ["--i" as string]: i }}><Check />{t}</li>)}</ul>
+      </span>
+    </span>
+  );
+}
+
+/* ---------- WhatsApp: send a test and the latest messages ---------- */
+function WaPanel({ numbers, messages, onSent }: { numbers: ConnectedAsset[]; messages: WhatsAppMessage[]; onSent: () => void }) {
+  const [from, setFrom] = useState(numbers[0]?.id ?? "");
+  const [to, setTo] = useState("");
+  const [text, setText] = useState("");
+  const [tpl, setTpl] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<{ ok: boolean; t: string } | null>(null);
+  const num = numbers.find((n) => n.id === from) ?? numbers[0];
+  const mine = messages.filter((m) => numbers.some((n) => n.external_id === m.phone_number_id)).slice(0, 6);
+  const send = async () => {
+    setBusy(true); setNote(null);
+    const r = await sendWhatsApp(num.id, to, tpl ? { template: "hello_world", lang: "en_US" } : { text });
+    setBusy(false);
+    setNote(r.error ? { ok: false, t: r.error } : { ok: true, t: "Sent" });
+    if (!r.error) { setText(""); onSent(); }
+  };
+  return (
+    <div className="ig-wa">
+      <h5>Send a test</h5>
+      {numbers.length > 1 && (
+        <select className="ig-wa-sel" value={from} onChange={(e) => setFrom(e.target.value)}>
+          {numbers.map((n) => <option key={n.id} value={n.id}>{n.username || n.external_id}{n.name ? ` · ${n.name}` : ""}</option>)}
+        </select>
+      )}
+      <div className="ig-fld-in"><input value={to} onChange={(e) => setTo(e.target.value)} placeholder="To: 34600111222 (with country code)" inputMode="tel" /></div>
+      <div className="ig-wa-seg">
+        <button className={tpl ? "is-on" : ""} onClick={() => setTpl(true)}>"Hello world" template</button>
+        <button className={!tpl ? "is-on" : ""} onClick={() => setTpl(false)}>Free text</button>
+      </div>
+      {!tpl && <div className="ig-fld-in"><input value={text} onChange={(e) => setText(e.target.value)} placeholder="Message" /></div>}
+      <p className="ig-key-note">{tpl ? "A template can start a conversation with anyone." : "Free text only reaches people who wrote to this number in the last 24 hours."}</p>
+      <button className="ig-brand-btn" disabled={busy || to.replace(/\D/g, "").length < 8 || (!tpl && !text.trim())} onClick={() => void send()}>
+        {busy ? <span className="ig-spin" /> : <Send />}{busy ? "Sending…" : "Send"}
+      </button>
+      {note && <p className={note.ok ? "ig-wa-ok" : "ig-det-err"}>{note.t}</p>}
+      <h5>Latest messages</h5>
+      {mine.length === 0 ? <p className="ig-assets-none">Nothing yet — messages people send to your number appear here.</p> : (
+        <ul className="ig-wa-msgs">
+          {mine.map((m) => (
+            <li key={m.id} className={`is-${m.direction}`}>
+              <span><b>{m.direction === "in" ? m.contact_name || `+${m.contact_phone}` : `To +${m.contact_phone}`}</b><small>{ago(m.created_at)}{m.direction === "out" && m.status ? ` · ${m.status}` : ""}</small></span>
+              <p>{m.body || `[${m.type}]`}</p>
+              {m.error && <em>{m.error}</em>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+function WhatsAppGuide() {
+  const hook = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/whatsapp-webhook`;
+  const [copied, setCopied] = useState("");
+  const copy = (t: string) => { void navigator.clipboard?.writeText(t); setCopied(t); setTimeout(() => setCopied(""), 1400); };
+  return (
+    <div className="ig-det-sec ig-guide">
+      <h4>Set up WhatsApp · once</h4>
+      <ol>
+        <li><b>Add WhatsApp to the Meta app</b><span>developers.facebook.com → your app → <i>Use cases → Add</i> → <i>Connect with customers through WhatsApp</i>.</span></li>
+        <li><b>A number</b><span>In <i>WhatsApp → API setup</i> Meta gives a free test number. For your own, add it in <i>WhatsApp Manager</i> — it can't be in use in the WhatsApp app at the same time.</span></li>
+        <li><b>Receive messages</b><span><i>WhatsApp → Configuration → Webhook → Edit</i>. Callback URL:</span>
+          <button className={`ig-code ${copied === hook ? "is-done" : ""}`} onClick={() => copy(hook)}>{hook}{copied === hook ? <Check /> : <Copy />}</button>
+          <span>Verify token: the value saved in Supabase as <i>WHATSAPP_VERIFY_TOKEN</i>. Then <i>Manage</i> → subscribe <i>messages</i>.</span></li>
+        <li><b>Share it with Next</b><span>In <i>Facebook Login for Business → Configurations</i> edit “Next” and tick <i>WhatsApp accounts</i>.</span></li>
+        <li><b>Connect</b><span>Press <i>Connect WhatsApp Business</i>, pick your business and WhatsApp account, accept.</span></li>
+      </ol>
     </div>
   );
 }
@@ -509,14 +613,14 @@ function GoogleGuide() {
 /* ---------- Meta: the pages / Instagram accounts / ad accounts a login reaches ---------- */
 function AssetList({ items, none }: { items: ConnectedAsset[]; none?: string }) {
   if (!items.length) return <p className="ig-assets-none">{none ?? "No pages or accounts found for this login yet."}</p>;
-  const KIND: Record<ConnectedAsset["kind"], string> = { facebook_page: "Facebook page", instagram: "Instagram", ad_account: "Ad account", linkedin_org: "LinkedIn page", mailrelay_group: "Group" };
-  const order = ["facebook_page", "instagram", "ad_account", "linkedin_org", "mailrelay_group"];
+  const KIND: Record<ConnectedAsset["kind"], string> = { facebook_page: "Facebook page", instagram: "Instagram", ad_account: "Ad account", linkedin_org: "LinkedIn page", mailrelay_group: "Group", whatsapp_number: "WhatsApp" };
+  const order = ["facebook_page", "instagram", "ad_account", "whatsapp_number", "linkedin_org", "mailrelay_group"];
   return (
     <ul className="ig-assets">
       {[...items].sort((x, y) => order.indexOf(x.kind) - order.indexOf(y.kind)).map((x) => (
         <li key={x.id} className={`is-${x.kind}`}>
           {x.picture_url ? <img src={x.picture_url} alt="" loading="lazy" referrerPolicy="no-referrer" /> : <i>{(x.name || x.username || "?")[0]?.toUpperCase()}</i>}
-          <span><b>{x.kind === "instagram" && x.username ? `@${x.username}` : x.name || x.external_id}</b><small>{KIND[x.kind]}{x.kind === "linkedin_org" && x.extra?.role ? ` · ${String(x.extra.role).replace(/_/g, " ").toLowerCase()}` : ""}{x.kind === "instagram" && x.extra?.followers != null ? ` · ${Number(x.extra.followers).toLocaleString("en-GB")} followers` : ""}{x.kind === "ad_account" && x.extra?.currency ? ` · ${x.extra.currency}` : ""}{x.kind === "mailrelay_group" && x.extra?.subscribers != null ? ` · ${Number(x.extra.subscribers).toLocaleString("en-GB")} subscribers` : ""}</small></span>
+          <span><b>{x.kind === "instagram" && x.username ? `@${x.username}` : x.kind === "whatsapp_number" ? x.username || x.external_id : x.name || x.external_id}</b><small>{KIND[x.kind]}{x.kind === "linkedin_org" && x.extra?.role ? ` · ${String(x.extra.role).replace(/_/g, " ").toLowerCase()}` : ""}{x.kind === "instagram" && x.extra?.followers != null ? ` · ${Number(x.extra.followers).toLocaleString("en-GB")} followers` : ""}{x.kind === "ad_account" && x.extra?.currency ? ` · ${x.extra.currency}` : ""}{x.kind === "whatsapp_number" ? `${x.name ? ` · ${x.name}` : ""}${x.extra?.quality_rating ? ` · quality ${String(x.extra.quality_rating).toLowerCase()}` : ""}${x.extra?.status && x.extra.status !== "CONNECTED" ? ` · ${String(x.extra.status).toLowerCase()}` : ""}` : ""}{x.kind === "mailrelay_group" && x.extra?.subscribers != null ? ` · ${Number(x.extra.subscribers).toLocaleString("en-GB")} subscribers` : ""}</small></span>
         </li>
       ))}
     </ul>
@@ -577,4 +681,5 @@ const Bell = () => <svg viewBox="0 0 24 24" width="15" height="15" fill="none" s
 const Refresh = () => <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7" /></svg>;
 const Copy = () => <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 9h11v11H9zM5 15H4V4h11v1" /></svg>;
 const Lock = () => <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>;
+const Send = () => <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 3 10 14M21 3l-7 18-4-7-7-4z" /></svg>;
 const Plus = () => <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>;
