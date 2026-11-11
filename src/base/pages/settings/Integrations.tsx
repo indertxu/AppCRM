@@ -20,9 +20,9 @@
                               the edge function; its groups are read (SQL 125)
    Prefix .ig-
    ===================================================================== */
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
-  addAccount, checkAccount, connectMailrelay, LINKEDIN_PAGES, listWhatsAppMessages, sendWhatsApp, lastMailReads, listAccounts, listAssets, myOutlookConnection, providerReady, removeAccount, syncAssets,
+  addAccount, addWhatsAppAccount, checkAccount, connectMailrelay, LINKEDIN_PAGES, listWhatsAppMessages, sendWhatsApp, lastMailReads, listAccounts, listAssets, myOutlookConnection, providerReady, removeAccount, syncAssets,
   type ConnectedAccount, type ConnectedAsset, type OutlookFacts, type Provider, type Service, type WhatsAppMessage,
 } from "../../api/connectedAccounts";
 import { BRANDS } from "./brandIcons";
@@ -208,6 +208,15 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
     return `${what} · active ${ago(r.lastActive).toLowerCase()}`;
   };
 
+  /* WhatsApp: add an account by its ID (Meta's test account isn't owned by your business) */
+  const addWaba = async (r: Row, waba: string): Promise<string | null> => {
+    const x = await addWhatsAppAccount(r.id, waba);
+    if (x.error) return x.error;
+    await reload(); void loadWa();
+    setToast(`${x.numbers} WhatsApp number${x.numbers === 1 ? "" : "s"} added`);
+    return null;
+  };
+
   /* WhatsApp: latest messages of your numbers */
   const [waMsgs, setWaMsgs] = useState<WhatsAppMessage[]>([]);
   const loadWa = useCallback(async () => setWaMsgs(await listWhatsAppMessages(60).catch(() => [])), []);
@@ -345,7 +354,8 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
                 {r.services.includes("mail") && <div><dt>Last mail read</dt><dd title={fmtDate(reads[r.email.toLowerCase()])}>{ago(reads[r.email.toLowerCase()])}</dd></div>}
                 <div><dt>Used for</dt><dd>{r.services.map((s) => SVC[s]).join(" · ")}{r.primary ? " · main" : ""}</dd></div>
               </dl>
-              {r.provider === "meta" && <AssetList items={assetsFor(r, a.k)} none={a.k === "whatsapp" ? "No WhatsApp number shared with this login yet." : undefined} />}
+              {r.provider === "meta" && !(a.k === "whatsapp" && assetsFor(r, a.k).length === 0) && <AssetList items={assetsFor(r, a.k)} />}
+              {r.provider === "meta" && a.k === "whatsapp" && assetsFor(r, a.k).length === 0 && <WaAdd onAdd={(waba) => addWaba(r, waba)} />}
               {r.provider === "meta" && a.k === "whatsapp" && assetsFor(r, a.k).length > 0 && <WaPanel numbers={assetsFor(r, a.k)} messages={waMsgs} onSent={() => void loadWa()} />}
               {r.provider === "linkedin" && r.services.includes("linkedin_pages") && <AssetList items={assets.filter((x) => x.account_id === r.id)} />}
               {r.provider === "mailrelay" && <AssetList items={assets.filter((x) => x.account_id === r.id)} none="No groups in this account yet." />}
@@ -377,13 +387,12 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
             {isBusy ? <span className="ig-spin" /> : <Plus />}{isBusy ? "Waiting for sign-in…" : rs.length ? "Add another account" : `Connect ${a.name}`}
           </button>}
         </div>
-        {a.live!.provider === "google" && !providerReady("google") && <GoogleGuide />}
-        {a.live!.provider === "meta" && !providerReady("meta") && <MetaGuide />}
-        {a.live!.provider === "linkedin" && !providerReady("linkedin") && <LinkedInGuide />}
-        {a.live!.provider === "mailrelay" && <MailrelayGuide />}
-        {a.k === "whatsapp" && providerReady("meta") && !rs.some((r) => assetsFor(r, "whatsapp").length) && <WhatsAppGuide />}
+        {a.live!.provider === "google" && !providerReady("google") && <Fold title="Set up Google sign-in" sub="once · about 10 min" open><GoogleGuide /></Fold>}
+        {a.live!.provider === "meta" && !providerReady("meta") && <Fold title="Set up Meta sign-in" sub="once · about 15 min" open><MetaGuide /></Fold>}
+        {a.live!.provider === "linkedin" && !providerReady("linkedin") && <Fold title="Set up LinkedIn sign-in" sub="once · about 10 min" open><LinkedInGuide /></Fold>}
+        {a.live!.provider === "mailrelay" && <Fold title="Where to find the API key" sub="1 min" open={!rs.length}><MailrelayGuide /></Fold>}
+        {a.k === "whatsapp" && providerReady("meta") && <Fold title="How to set up WhatsApp" sub="Meta app, number, webhook"><WhatsAppGuide /></Fold>}
         {a.live!.provider === "linkedin" && providerReady("linkedin") && !LINKEDIN_PAGES && <p className="ig-det-p ig-det-pad">Company pages turn on once LinkedIn approves the Community Management API for this app.</p>}
-        {a.live!.provider === "meta" && providerReady("meta") && rs.length === 0 && <p className="ig-det-p ig-det-pad">To add a second Facebook login, switch account on facebook.com first — Meta signs you in with whoever is logged in there.</p>}
       </>
     );
   }
@@ -461,6 +470,39 @@ function Info({ items, soon }: { items: string[]; soon?: boolean }) {
         <ul>{items.map((t, i) => <li key={t} style={{ ["--i" as string]: i }}><Check />{t}</li>)}</ul>
       </span>
     </span>
+  );
+}
+
+/* ---------- a section that folds away (setup guides) ---------- */
+function Fold({ title, sub, open: start = false, children }: { title: string; sub?: string; open?: boolean; children: ReactNode }) {
+  const [open, setOpen] = useState(start);
+  return (
+    <div className={`ig-fold ${open ? "is-open" : ""}`}>
+      <button className="ig-fold-h" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        <span className="ig-fold-ic"><Book /></span>
+        <span className="ig-fold-t"><b>{title}</b>{sub && <small>{sub}</small>}</span>
+        <span className="ig-acc-chev"><Chev /></span>
+      </button>
+      <div className="ig-fold-body"><div className="ig-fold-in">{children}</div></div>
+    </div>
+  );
+}
+
+/* ---------- WhatsApp: add an account by ID ---------- */
+function WaAdd({ onAdd }: { onAdd: (waba: string) => Promise<string | null> }) {
+  const [v, setV] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const ok = v.replace(/\D/g, "").length >= 6;
+  return (
+    <form className="ig-wa-add" onSubmit={async (e) => { e.preventDefault(); if (!ok || busy) return; setBusy(true); setErr(null); const x = await onAdd(v); setBusy(false); if (x) setErr(x); else setV(""); }}>
+      <p className="ig-wa-add-note">No WhatsApp number found for this login. Paste the <b>WhatsApp Business account ID</b> (Meta app → WhatsApp → API setup).</p>
+      <div className="ig-wa-add-row">
+        <span className="ig-fld-in"><input value={v} onChange={(e) => setV(e.target.value)} placeholder="e.g. 1114103584841887" inputMode="numeric" /></span>
+        <button type="submit" className="ig-mini" disabled={!ok || busy}>{busy ? <span className="ig-spin is-dark" /> : <Plus />}Add</button>
+      </div>
+      {err && <p className="ig-acc-err">{err}</p>}
+    </form>
   );
 }
 
@@ -681,5 +723,6 @@ const Bell = () => <svg viewBox="0 0 24 24" width="15" height="15" fill="none" s
 const Refresh = () => <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7" /></svg>;
 const Copy = () => <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 9h11v11H9zM5 15H4V4h11v1" /></svg>;
 const Lock = () => <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>;
+const Book = () => <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5zM4 20.5A2.5 2.5 0 0 0 6.5 23H20v-5" /></svg>;
 const Send = () => <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 3 10 14M21 3l-7 18-4-7-7-4z" /></svg>;
 const Plus = () => <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>;

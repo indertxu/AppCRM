@@ -21,6 +21,8 @@
 //   connect_key { provider: "mailrelay", account, apiKey }   checks the key (GET /api/v1/ping) and stores it
 //   assets_sync { id }   Meta: re-read pages, Instagram accounts and ad accounts; LinkedIn: company pages;
 //                        Mailrelay: groups; WhatsApp numbers too when the login has "whatsapp"
+//   wa_add      { id, wabaId }   add a WhatsApp Business account by its ID (e.g. Meta's test account, which the
+//                        login's business doesn't own) — kept on every re-read (extra.manual)
 //   wa_send     { assetId, to, text? , template?, lang? }   send from a WhatsApp number (text only
 //                        inside the 24-hour window after the contact last wrote; otherwise a template)
 //
@@ -233,7 +235,9 @@ async function syncMetaAssets(accountId: string, tenant: string, userId: string,
     } catch { /* no ads permission: fine */ }
   }
   if (services.includes("whatsapp")) {
-    for (const w of await whatsappNumbers(token)) found.push(w);
+    const { data: prev } = await admin.from("connected_assets").select("extra").eq("account_id", accountId).eq("kind", "whatsapp_number");
+    const manual = Array.from(new Set(((prev ?? []) as any[]).filter((x) => x.extra?.manual && x.extra?.waba_id).map((x) => String(x.extra.waba_id))));
+    for (const w of await whatsappNumbers(token, manual)) found.push(w);
   }
   const keep = found.filter((a) => a.kind !== "facebook_page" || services.includes("facebook") || services.includes("instagram"));
   const now = new Date().toISOString();
@@ -254,9 +258,11 @@ async function syncMetaAssets(accountId: string, tenant: string, userId: string,
 
 /** WhatsApp Business accounts this login shares (granular scopes of the token, else the businesses' own) → their phone numbers.
  *  Subscribes the app to each account so its messages reach "whatsapp-webhook". */
-async function whatsappNumbers(token: string) {
+async function whatsappNumbers(token: string, extraWabas: string[] = []) {
   const c = creds("meta");
   const wabas = new Set<string>();
+  const manual = new Set(extraWabas);
+  for (const w of extraWabas) wabas.add(w);
   try {
     const d: any = await fbGet(`/debug_token?input_token=${encodeURIComponent(token)}`, `${c.id}|${c.secret}`);
     for (const g of d?.data?.granular_scopes ?? []) if (String(g.scope).startsWith("whatsapp_business")) for (const id of g.target_ids ?? []) wabas.add(String(id));
@@ -279,7 +285,7 @@ async function whatsappNumbers(token: string) {
     const nums: any = await fbGet(`/${waba}/phone_numbers?fields=id,display_phone_number,verified_name,quality_rating,code_verification_status,status,platform_type&limit=50`, token).catch(() => ({ data: [] }));
     for (const n of nums.data ?? []) out.push({
       kind: "whatsapp_number", external_id: String(n.id), name: n.verified_name ?? null, username: n.display_phone_number ?? null, picture_url: null,
-      extra: { waba_id: waba, waba_name: wabaName, display_phone_number: n.display_phone_number ?? null, quality_rating: n.quality_rating ?? null, status: n.status ?? null, platform: n.platform_type ?? null, verification: n.code_verification_status ?? null },
+      extra: { waba_id: waba, waba_name: wabaName, manual: manual.has(waba), display_phone_number: n.display_phone_number ?? null, quality_rating: n.quality_rating ?? null, status: n.status ?? null, platform: n.platform_type ?? null, verification: n.code_verification_status ?? null },
     });
   }
   return out;
@@ -400,6 +406,29 @@ Deno.serve(async (req) => {
       let assets = null;
       try { assets = await syncMailrelayGroups(accId, me.tenant, me.id, host, key); } catch (e) { assets = { error: String((e as Error).message ?? e) }; }
       return json({ account: up.data, assets });
+    }
+
+    if (action === "wa_add") {
+      const wabaId = String(p.wabaId ?? "").replace(/\D/g, "");
+      if (wabaId.length < 6) return json({ error: "Paste the WhatsApp Business account ID (only digits)." }, 400);
+      const f = await freshToken(p.id, me.id);
+      if (f.provider !== "meta") return json({ error: "WhatsApp goes through a Meta account." }, 400);
+      const nums = await whatsappNumbers(f.token, [wabaId]);
+      const mine = nums.filter((n) => n.extra.waba_id === wabaId);
+      if (!mine.length) {
+        let why = "";
+        try { await fbGet(`/${wabaId}/phone_numbers?fields=id&limit=1`, f.token); why = "it has no phone numbers yet."; } catch (e) { why = String((e as Error).message ?? e); }
+        return json({ error: `Couldn't read that WhatsApp account: ${why}` }, 400);
+      }
+      const now = new Date().toISOString();
+      for (const a of mine) {
+        await admin.from("connected_assets").upsert({
+          account_id: p.id, tenant_id: f.tenant, user_id: me.id, kind: a.kind, external_id: a.external_id,
+          name: a.name, username: a.username, picture_url: null, extra: { ...a.extra, manual: true }, updated_at: now,
+        }, { onConflict: "account_id,kind,external_id" });
+      }
+      if (!f.services.includes("whatsapp")) await admin.from("connected_accounts").update({ services: [...f.services, "whatsapp"] }).eq("id", p.id);
+      return json({ numbers: mine.length });
     }
 
     if (action === "wa_send") {

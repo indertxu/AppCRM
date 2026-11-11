@@ -278,3 +278,8 @@ export async function listWhatsAppMessages(limit = 40): Promise<WhatsAppMessage[
     .order("created_at", { ascending: false }).limit(limit);
   return error ? [] : ((data ?? []) as WhatsAppMessage[]);
 }
+/** Add a WhatsApp Business account to a Meta login by its ID (Meta's test account isn't owned by your business). */
+export async function addWhatsAppAccount(accountId: string, wabaId: string): Promise<{ numbers?: number; error?: string }> {
+  const r = await call("wa_add", { id: accountId, wabaId });
+  return r?.error ? { error: r.error } : { numbers: r?.numbers ?? 0 };
+}

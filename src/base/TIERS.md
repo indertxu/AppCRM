@@ -126,7 +126,7 @@ Source in `supabase/functions/**`. Both apps call them; changes must stay backwa
 - Read the other side's entries since your last session before you start working.
 
 ## 7. SQL numbering
-Next free number: **128**  ← update this line when you claim one (and say which file in the log).
+Next free number: **129**  ← update this line when you claim one (and say which file in the log).
 | # | File | Chat | What |
 |---|---|---|---|
 | 98 | sql/98_client_default_folders.sql | Enterprise | client folder templates → new clients |
@@ -159,6 +159,7 @@ Next free number: **128**  ← update this line when you claim one (and say whic
 | 125 | src/base/sql/125_connected_mailrelay.sql | Base | `connected_accounts.provider` + `mailrelay` (API-key account); `connected_assets.kind` + `mailrelay_group` |
 | 126 | sql/126_report_sharing.sql | Enterprise | `sales_reports.shared_with` + `editors` (uuid[]); select/update policies widened; guard trigger (only the owner changes owner/sharing); alert trigger `report_shared` / `report_owner` — to run in the SQL editor |
 | 127 | src/base/sql/127_whatsapp.sql | Base | `connected_assets.kind` + `whatsapp_number`; `whatsapp_messages` (in / out per number, RLS same tenant) — WhatsApp Cloud API |
+| 128 | sql/128_handoff_alerts.sql | Enterprise | `billing_settings.handoff_notify` jsonb ({all, pipelines}) + trigger `trg128_handoff_alert` on handoffs insert → `alert_push(…, 'handoff_new', …, 'handoff', id)` — applied 2026-11-11 |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
@@ -168,6 +169,18 @@ Write requests here; the other chat answers in the log and ticks them.
 
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
+
+### 2026-11-11 11:05 · Base · Integrations: WhatsApp account by ID + tidier panel
+- files: `pages/settings/Integrations.tsx` / `.css`, `api/connectedAccounts.ts` (`addWhatsAppAccount`), `requests/connected-accounts.index.ts.txt`.
+- **Edge function `connected-accounts`** (deployed by Base, now v12): action `wa_add { id, wabaId }` — reads a WhatsApp Business account's numbers by its ID with the Meta login's token (Meta's test WhatsApp account isn't owned by the login's business, so discovery finds nothing); such accounts are kept on every re-read (`extra.manual`).
+- Front: a WhatsApp card with no numbers shows "Paste the WhatsApp Business account ID" + Add. Setup guides now fold away in a "How to set it up" row (open only when sign-in isn't set up yet); the "second Facebook login" hint is gone.
+- deploy: written to the Mac · function deployed · user to push
+
+### 2026-11-11 11:40 · Enterprise · Management settings redesigned + notifications for new handoffs
+- Files: sql/128_handoff_alerts.sql (new, applied), src/components/pages/management/HandoffAlertsSettings.tsx + .css (new), ManagementPage.tsx, src/components/pages/calendar/CalendarSettingsModal.tsx / .css, src/components/pages/homepage/HomePage.tsx
+- What: **Management › Settings** is one fixed-size window (1240×860 max) with the sections down a dark side rail — Notifications · Working hours · Billing cutoffs · Security — and a white header (title + what it's for) over a scrolling body; no more modal resizing per tab, content glued to the header or clipped bottoms (calendar mode of CalendarSettingsModal unchanged: the new shell is `managementMode` only). **Notifications**: "Every handoff" + "Only handoffs going to <service pipeline>" (the pipelines sales hands over to, with where they come from), people as chips + "+ Add someone" (custom Select); autosaves to `billing_settings.handoff_notify`. DB trigger notifies them on each new handoff (`handoff_new`, body "<destination> · <value> €"; the sender isn't told; never blocks a handoff). Home bell: "handed over a won deal", Projects tab, opens Management › Incoming. Class prefix `hfa-` (`.ha-*` is taken by HomePage.css).
+- Tags: **DB**, PORT? (src/base management settings if it has the same modal)
+- Deploy: 128 applied.
 
 ### 2026-11-11 10:50 · Base · Integrations: sign-in popup no longer renews the session; 401 → renew once
 - files: `api/connectedAccounts.ts`.
