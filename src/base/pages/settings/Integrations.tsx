@@ -67,6 +67,8 @@ const LIVE: AppDef[] = [
     brings: ["Publish posts and reels", "Reach, likes and comments in Growth", "Needs an Instagram business or creator account linked to a Facebook page"] },
   { k: "whatsapp", name: "WhatsApp Business", what: "Chat with clients from your business numbers", logo: { k: "whatsapp", color: "#25d366" }, live: { provider: "meta", service: "whatsapp" },
     brings: ["Your WhatsApp Business numbers (Cloud API)", "Messages clients send you, kept in the app", "Reply and send from Next", "Several numbers and accounts"] },
+  { k: "gads", name: "Google Ads", what: "Search, display and YouTube campaigns", logo: { k: "gads", color: "#4285f4" }, live: { provider: "google", service: "gads" },
+    brings: ["Your Google Ads accounts, also those under a manager account", "Spend, clicks and conversions of the last 30 days", "Cost per lead next to the deals it brought (Growth)", "Several Google accounts"] },
   { k: "linkedin", name: "LinkedIn", what: "Post as you — and as your company page once approved", logo: { k: "linkedin", color: "#0a66c2" }, live: { provider: "linkedin", service: "linkedin" },
     brings: ["Publish posts on your profile", "Company pages: post and read followers and engagement (needs LinkedIn's Community Management API)", "Several LinkedIn accounts"] },
   { k: "mailrelay", name: "Mailrelay", what: "E-mail marketing: groups, subscribers and newsletters", logo: { color: "#1f6fd1", letters: "Mr" }, live: { provider: "mailrelay", service: "mailrelay" },
@@ -76,7 +78,6 @@ const SOON: AppDef[] = [
   { k: "messenger", name: "Messenger", what: "Facebook and Instagram DMs in one inbox", logo: { k: "messenger", color: "#0866ff" }, brings: ["Every DM in one inbox", "Replies kept on the client"] },
   { k: "linkedin-ads", name: "LinkedIn Ads", what: "Campaigns and lead-gen forms", logo: { k: "linkedin", color: "#0a66c2" }, brings: ["LinkedIn Ads campaigns and results", "Lead-gen forms into Orbit"] },
   { k: "tiktok", name: "TikTok", what: "Short videos and TikTok Ads", logo: { k: "tiktok", color: "#000" }, brings: ["Publish short videos", "TikTok Ads results"] },
-  { k: "gads", name: "Google Ads", what: "Search and display campaigns", logo: { k: "gads", color: "#4285f4" }, brings: ["Campaigns with cost per lead", "Spend next to the deals it brought"] },
   { k: "youtube", name: "YouTube", what: "Videos, views and subscribers", logo: { k: "youtube", color: "#ff0000" }, brings: ["Upload videos", "Views and subscribers in Growth"] },
   { k: "x", name: "X", what: "Posts and engagement", logo: { k: "x", color: "#000" }, brings: ["Publish posts", "Read engagement"] },
   { k: "ga", name: "Google Analytics", what: "Website visitors and sources", logo: { k: "ga", color: "#e37400" }, brings: ["Visitors and where they come from", "Which pages bring leads"] },
@@ -85,17 +86,17 @@ const SOON: AppDef[] = [
 ];
 const APP = Object.fromEntries([...LIVE, ...SOON].map((a) => [a.k, a])) as Record<string, AppDef>;
 const WANT_KEY = "next.base.integrations.want";
-const SVC: Record<Service, string> = { mail: "Mail", calendar: "Calendar", facebook: "Facebook", instagram: "Instagram", ads: "Ads", linkedin: "Profile posts", linkedin_pages: "Company pages", mailrelay: "E-mail marketing", whatsapp: "WhatsApp" };
+const SVC: Record<Service, string> = { mail: "Mail", calendar: "Calendar", facebook: "Facebook", instagram: "Instagram", ads: "Ads", linkedin: "Profile posts", linkedin_pages: "Company pages", mailrelay: "E-mail marketing", whatsapp: "WhatsApp", gads: "Google Ads" };
 /** Which apps of the list an account shows under. */
 const appsOf = (a: ConnectedAccount): string[] =>
-  a.provider === "google" ? a.services.map((s) => (s === "mail" ? "gmail" : s === "calendar" ? "gcal" : "")).filter(Boolean)
+  a.provider === "google" ? a.services.map((s) => (s === "mail" ? "gmail" : s === "calendar" ? "gcal" : s === "gads" ? "gads" : "")).filter(Boolean)
   : a.provider === "meta" ? [...(a.services.some((s) => s !== "whatsapp") ? ["meta"] : []), ...(a.services.includes("facebook") ? ["facebook"] : []), ...(a.services.includes("instagram") ? ["instagram"] : []), ...(a.services.includes("whatsapp") ? ["whatsapp"] : [])]
   : a.provider === "linkedin" ? ["linkedin"]
   : a.provider === "mailrelay" ? ["mailrelay"]
   : ["outlook"];
 /** What one sign-in asks for, per app. */
 const servicesFor = (k: string): Service[] =>
-  k === "meta" ? ["facebook", "instagram", "ads"] : k === "facebook" ? ["facebook"] : k === "instagram" ? ["instagram"] : k === "whatsapp" ? ["whatsapp"]
+  k === "meta" ? ["facebook", "instagram", "ads"] : k === "facebook" ? ["facebook"] : k === "instagram" ? ["instagram"] : k === "whatsapp" ? ["whatsapp"] : k === "gads" ? ["gads"]
   : k === "linkedin" ? (LINKEDIN_PAGES ? ["linkedin", "linkedin_pages"] : ["linkedin"]) : k === "mailrelay" ? ["mailrelay"] : ["mail", "calendar"];
 const colorOf = (a: AppDef) => BRANDS[a.logo.k ?? ""]?.hex ?? a.logo.color;
 
@@ -160,7 +161,7 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
   for (const a of accounts ?? []) {
     const base = { id: a.id, email: a.email, label: a.provider === "meta" || a.provider === "linkedin" ? a.display_name : null, provider: a.provider, status: a.status, note: a.last_error, connectedAt: a.connected_at, lastActive: a.updated_at ?? a.connected_at };
     if (a.provider === "microsoft" && a.email === ol?.email) continue;
-    for (const app of appsOf(a)) rows.push({ ...base, key: `${app}:${a.id}`, app, services: a.provider === "google" ? [app === "gmail" ? "mail" : "calendar"] : a.services });
+    for (const app of appsOf(a)) rows.push({ ...base, key: `${app}:${a.id}`, app, services: a.provider === "google" ? [app === "gmail" ? "mail" : app === "gads" ? "gads" : "calendar"] : a.services });
   }
   const rowsOf = (k: string) => rows.filter((r) => r.app === k);
   const mine = LIVE.filter((a) => rowsOf(a.k).length > 0);
@@ -202,12 +203,13 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const toggleAcc = (k: string) => setExpanded((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
   useEffect(() => { if (fresh.length) setExpanded((s) => new Set([...s, ...fresh.filter((k) => !k.startsWith("app:"))])); }, [fresh]);
-  const KIND_OF: Record<string, ConnectedAsset["kind"] | undefined> = { facebook: "facebook_page", instagram: "instagram", whatsapp: "whatsapp_number" };
-  const assetsFor = (r: Row, app: string) => assets.filter((x) => x.account_id === r.id && (KIND_OF[app] ? x.kind === KIND_OF[app] : x.kind !== "whatsapp_number"));
+  const KIND_OF: Record<string, ConnectedAsset["kind"] | undefined> = { facebook: "facebook_page", instagram: "instagram", whatsapp: "whatsapp_number", gads: "gads_customer" };
+  const assetsFor = (r: Row, app: string) => assets.filter((x) => x.account_id === r.id && (KIND_OF[app] ? x.kind === KIND_OF[app] : x.kind !== "whatsapp_number" && x.kind !== "gads_customer"));
   const summaryOf = (r: Row, app: string) => {
     const n = assetsFor(r, app).length;
     const what = r.provider === "meta" ? (app === "whatsapp" ? `${n} number${n === 1 ? "" : "s"}` : `${n} page${n === 1 ? "" : "s"} & accounts`)
-      : r.provider === "mailrelay" ? `${n} group${n === 1 ? "" : "s"}` : r.services.map((s) => SVC[s]).join(" · ");
+      : r.provider === "mailrelay" ? `${n} group${n === 1 ? "" : "s"}`
+      : app === "gads" ? `${n} ad account${n === 1 ? "" : "s"}` : r.services.map((s) => SVC[s]).join(" · ");
     return `${what} · active ${ago(r.lastActive).toLowerCase()}`;
   };
 
@@ -352,11 +354,12 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
               {r.provider === "meta" && a.k === "whatsapp" && assetsFor(r, a.k).length === 0 && <p className="ig-wa-add-note ig-wa-none">No WhatsApp number on this login — Meta sign-in can't share WhatsApp accounts. Use <b>Connect with an access token</b> below.</p>}
               {r.provider === "meta" && a.k === "whatsapp" && assetsFor(r, a.k).length > 0 && <WaPanel numbers={assetsFor(r, a.k)} messages={waMsgs} onSent={() => void loadWa()} />}
               {r.provider === "linkedin" && r.services.includes("linkedin_pages") && <AssetList items={assets.filter((x) => x.account_id === r.id)} />}
+              {r.provider === "google" && a.k === "gads" && <AssetList items={assetsFor(r, "gads")} none="No Google Ads account reachable with this login yet." />}
               {r.provider === "mailrelay" && <AssetList items={assets.filter((x) => x.account_id === r.id)} none="No groups in this account yet." />}
               {r.status === "error" && r.note && <p className="ig-acc-err">{r.note}</p>}
               <div className="ig-acc-act">
                 {!r.primary && <button className="ig-mini" disabled={checking === r.key} onClick={() => void check(r)}>{checking === r.key ? <span className="ig-spin is-dark" /> : <Refresh />}Check now</button>}
-                {(r.provider === "meta" || r.provider === "mailrelay" || (r.provider === "linkedin" && r.services.includes("linkedin_pages"))) && <button className="ig-mini" disabled={checking === `sync:${r.key}`} onClick={() => void resync(r)}>{checking === `sync:${r.key}` ? <span className="ig-spin is-dark" /> : <Refresh />}{r.provider === "mailrelay" ? "Re-read groups" : a.k === "whatsapp" ? "Re-read numbers" : "Re-read pages"}</button>}
+                {(r.provider === "meta" || r.provider === "mailrelay" || (r.provider === "google" && a.k === "gads") || (r.provider === "linkedin" && r.services.includes("linkedin_pages"))) && <button className="ig-mini" disabled={checking === `sync:${r.key}`} onClick={() => void resync(r)}>{checking === `sync:${r.key}` ? <span className="ig-spin is-dark" /> : <Refresh />}{r.provider === "mailrelay" ? "Re-read groups" : a.k === "gads" ? "Re-read accounts" : a.k === "whatsapp" ? "Re-read numbers" : "Re-read pages"}</button>}
                 <span className="ig-grow" />
                 {asking === r.key ? (
                   <span className="ig-ask"><span>Remove this account?</span><button className="is-yes" onClick={() => void remove(r)}>Remove</button><button onClick={() => setAsking(null)}>Keep</button></span>
@@ -385,6 +388,7 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
         {a.live!.provider === "meta" && !providerReady("meta") && <Fold title="Set up Meta sign-in" sub="once · about 15 min" open><MetaGuide /></Fold>}
         {a.live!.provider === "linkedin" && !providerReady("linkedin") && <Fold title="Set up LinkedIn sign-in" sub="once · about 10 min" open><LinkedInGuide /></Fold>}
         {a.live!.provider === "mailrelay" && <Fold title="Where to find the API key" sub="1 min" open={!rs.length}><MailrelayGuide /></Fold>}
+        {a.k === "gads" && providerReady("google") && <Fold title="Set up Google Ads" sub="developer token · once" open={!assets.some((x) => x.kind === "gads_customer")}><GoogleAdsGuide /></Fold>}
         {a.k === "whatsapp" && <Fold title="Connect with an access token" sub="from your Meta app · no sign-in window" open={!rs.some((r) => assetsFor(r, "whatsapp").length)}><WaTokenForm onDone={async (n) => { await reload(); void loadWa(); setToast(`WhatsApp connected · ${n} number${n === 1 ? "" : "s"}`); }} /></Fold>}
         {a.k === "whatsapp" && providerReady("meta") && <Fold title="How to set up WhatsApp" sub="Meta app, number, webhook"><WhatsAppGuide /></Fold>}
         {a.live!.provider === "linkedin" && providerReady("linkedin") && !LINKEDIN_PAGES && <p className="ig-det-p ig-det-pad">Company pages turn on once LinkedIn approves the Community Management API for this app.</p>}
@@ -451,6 +455,33 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
       </div>
 
       {toast && <div className="ig-toast"><Check />{toast}</div>}
+    </div>
+  );
+}
+
+/* ---------- Google Ads: one line per account ---------- */
+function gadsLine(x: ConnectedAsset): string {
+  const e = (x.extra ?? {}) as Record<string, any>;
+  const bits: string[] = [` · ${x.username ?? x.external_id}`];
+  if (e.manager) bits.push("manager account");
+  if (e.test) bits.push("test account");
+  if (e.cost_30d != null) {
+    let cost = "";
+    try { cost = new Intl.NumberFormat("en-GB", { style: "currency", currency: e.currency || "EUR", maximumFractionDigits: 0 }).format(e.cost_30d); } catch { cost = String(Math.round(e.cost_30d)); }
+    bits.push(`${cost} · ${Number(e.clicks_30d ?? 0).toLocaleString("en-GB")} clicks · ${Math.round(Number(e.conversions_30d ?? 0))} conv. (30 d)`);
+  }
+  return bits.join(" · ").replace(/^ · /, " · ");
+}
+function GoogleAdsGuide() {
+  return (
+    <div className="ig-guide">
+      <ol>
+        <li><b>Developer token</b><span>Google Ads <i>manager account</i> (create one free if you don't have it) → <i>Admin → API Center</i> → copy the developer token. With “Test access” it reads test accounts only — apply for <i>Basic access</i> for real ones.</span></li>
+        <li><b>Turn on the API</b><span>console.cloud.google.com, same project as Gmail → <i>APIs &amp; Services → Library</i> → <i>Google Ads API</i> → Enable.</span></li>
+        <li><b>Allow the scope</b><span><i>Google Auth Platform → Data access → Add or remove scopes</i> → add <i>…/auth/adwords</i> → Save.</span></li>
+        <li><b>Save it on the server</b><span>Supabase → <i>Edge Functions → Secrets</i>: <i>GOOGLE_ADS_DEVELOPER_TOKEN</i>. If your ad accounts hang under a manager account, also <i>GOOGLE_ADS_LOGIN_CUSTOMER_ID</i> = its ID without dashes.</span></li>
+        <li><b>Connect</b><span>Press <i>Connect Google Ads</i> (or <i>Use here</i> on a Google account you already linked) and accept.</span></li>
+      </ol>
     </div>
   );
 }
@@ -659,14 +690,14 @@ function GoogleGuide() {
 /* ---------- Meta: the pages / Instagram accounts / ad accounts a login reaches ---------- */
 function AssetList({ items, none }: { items: ConnectedAsset[]; none?: string }) {
   if (!items.length) return <p className="ig-assets-none">{none ?? "No pages or accounts found for this login yet."}</p>;
-  const KIND: Record<ConnectedAsset["kind"], string> = { facebook_page: "Facebook page", instagram: "Instagram", ad_account: "Ad account", linkedin_org: "LinkedIn page", mailrelay_group: "Group", whatsapp_number: "WhatsApp" };
-  const order = ["facebook_page", "instagram", "ad_account", "whatsapp_number", "linkedin_org", "mailrelay_group"];
+  const KIND: Record<ConnectedAsset["kind"], string> = { facebook_page: "Facebook page", instagram: "Instagram", ad_account: "Ad account", linkedin_org: "LinkedIn page", mailrelay_group: "Group", whatsapp_number: "WhatsApp", gads_customer: "Google Ads" };
+  const order = ["facebook_page", "instagram", "ad_account", "gads_customer", "whatsapp_number", "linkedin_org", "mailrelay_group"];
   return (
     <ul className="ig-assets">
       {[...items].sort((x, y) => order.indexOf(x.kind) - order.indexOf(y.kind)).map((x) => (
         <li key={x.id} className={`is-${x.kind}`}>
           {x.picture_url ? <img src={x.picture_url} alt="" loading="lazy" referrerPolicy="no-referrer" /> : <i>{(x.name || x.username || "?")[0]?.toUpperCase()}</i>}
-          <span><b>{x.kind === "instagram" && x.username ? `@${x.username}` : x.kind === "whatsapp_number" ? x.username || x.external_id : x.name || x.external_id}</b><small>{KIND[x.kind]}{x.kind === "linkedin_org" && x.extra?.role ? ` · ${String(x.extra.role).replace(/_/g, " ").toLowerCase()}` : ""}{x.kind === "instagram" && x.extra?.followers != null ? ` · ${Number(x.extra.followers).toLocaleString("en-GB")} followers` : ""}{x.kind === "ad_account" && x.extra?.currency ? ` · ${x.extra.currency}` : ""}{x.kind === "whatsapp_number" ? `${x.name ? ` · ${x.name}` : ""}${x.extra?.quality_rating ? ` · quality ${String(x.extra.quality_rating).toLowerCase()}` : ""}${x.extra?.status && x.extra.status !== "CONNECTED" ? ` · ${String(x.extra.status).toLowerCase()}` : ""}` : ""}{x.kind === "mailrelay_group" && x.extra?.subscribers != null ? ` · ${Number(x.extra.subscribers).toLocaleString("en-GB")} subscribers` : ""}</small></span>
+          <span><b>{x.kind === "instagram" && x.username ? `@${x.username}` : x.kind === "whatsapp_number" ? x.username || x.external_id : x.name || x.external_id}</b><small>{KIND[x.kind]}{x.kind === "linkedin_org" && x.extra?.role ? ` · ${String(x.extra.role).replace(/_/g, " ").toLowerCase()}` : ""}{x.kind === "instagram" && x.extra?.followers != null ? ` · ${Number(x.extra.followers).toLocaleString("en-GB")} followers` : ""}{x.kind === "ad_account" && x.extra?.currency ? ` · ${x.extra.currency}` : ""}{x.kind === "whatsapp_number" ? `${x.name ? ` · ${x.name}` : ""}${x.extra?.quality_rating ? ` · quality ${String(x.extra.quality_rating).toLowerCase()}` : ""}${x.extra?.status && x.extra.status !== "CONNECTED" ? ` · ${String(x.extra.status).toLowerCase()}` : ""}` : ""}{x.kind === "gads_customer" ? gadsLine(x) : ""}{x.kind === "mailrelay_group" && x.extra?.subscribers != null ? ` · ${Number(x.extra.subscribers).toLocaleString("en-GB")} subscribers` : ""}</small></span>
         </li>
       ))}
     </ul>

@@ -3,7 +3,7 @@
 // (written and deployed by the Base chat; source of truth:
 //  src/base/requests/connected-accounts.index.ts.txt — Enterprise may adopt it)
 //
-// Several accounts per person: Gmail / Google Calendar, extra Outlook accounts
+// Several accounts per person: Gmail / Google Calendar / Google Ads, extra Outlook accounts
 // (the first Outlook stays in outlook_tokens / outlook-sync, untouched),
 // Meta (Facebook pages, Instagram professional accounts, ad accounts, WhatsApp
 // Business numbers — Cloud API; incoming messages arrive at "whatsapp-webhook") and
@@ -11,7 +11,7 @@
 // and Mailrelay (e-mail marketing — an API key, not a sign-in).
 // Tables: connected_accounts + connected_account_tokens (SQL 119),
 //         connected_assets + connected_asset_tokens (SQL 123), linkedin (SQL 124), mailrelay (SQL 125),
-//         whatsapp_number + whatsapp_messages (SQL 127).
+//         whatsapp_number + whatsapp_messages (SQL 127), gads_customer (SQL 130).
 //
 // Actions (POST, the caller's Supabase JWT identifies the user):
 //   connect     { provider, code, codeVerifier?, redirectUri, services }
@@ -20,7 +20,8 @@
 //   token       { id }   a fresh access token
 //   connect_key { provider: "mailrelay", account, apiKey }   checks the key (GET /api/v1/ping) and stores it
 //   assets_sync { id }   Meta: re-read pages, Instagram accounts and ad accounts; LinkedIn: company pages;
-//                        Mailrelay: groups; WhatsApp numbers too when the login has "whatsapp"
+//                        Mailrelay: groups; WhatsApp numbers too when the login has "whatsapp";
+//                        Google with "gads": its Google Ads accounts + last 30 days
 //   wa_add      { id, wabaId }   add a WhatsApp Business account by its ID (e.g. Meta's test account, which the
 //                        login's business doesn't own) — kept on every re-read (extra.manual)
 //   wa_token    { token, wabaId }   connect WhatsApp with a system-user token of the business (Business settings ›
@@ -29,6 +30,7 @@
 //                        inside the 24-hour window after the contact last wrote; otherwise a template)
 //
 // Secrets: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, MS_CLIENT_ID, MS_CLIENT_SECRET,
+//          GOOGLE_ADS_DEVELOPER_TOKEN (+ optional GOOGLE_ADS_LOGIN_CUSTOMER_ID, a manager account id),
 //          META_APP_ID, META_APP_SECRET, LINKEDIN_CLIENT_ID, LINKEDIN_CLIENT_SECRET
 //          (+ LINKEDIN_PAGES_CLIENT_ID / _SECRET if company pages live in a second LinkedIn app)
 // =====================================================================
@@ -63,7 +65,7 @@ const creds = (p: Provider) => p === "linkedin" ? liCreds(false) : p === "google
 const notSetUp = (p: Provider) => p === "google" ? "Google sign-in isn't set up on the server (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)."
   : p === "meta" ? "Meta sign-in isn't set up on the server (META_APP_ID / META_APP_SECRET)."
   : p === "linkedin" ? "LinkedIn sign-in isn't set up on the server (LINKEDIN_CLIENT_ID / LINKEDIN_CLIENT_SECRET)." : "Microsoft sign-in isn't set up on the server.";
-const SERVICES = new Set(["mail", "calendar", "facebook", "instagram", "ads", "linkedin", "linkedin_pages", "mailrelay", "whatsapp"]);
+const SERVICES = new Set(["mail", "calendar", "facebook", "instagram", "ads", "linkedin", "linkedin_pages", "mailrelay", "whatsapp", "gads"]);
 
 /* ---------- Mailrelay: API key in the X-AUTH-TOKEN header, base https://<account>.ipzmarketing.com/api/v1 ---------- */
 /** "acme", "acme.ipzmarketing.com" or "https://acme.ipzmarketing.com/admin/…" → "acme.ipzmarketing.com" (only Mailrelay's own hosts). */
@@ -106,6 +108,62 @@ async function syncMailrelayGroups(accountId: string, tenant: string, userId: st
   const gone = ((old ?? []) as any[]).filter((o) => !keep.includes(o.external_id)).map((o) => o.id);
   if (gone.length) await admin.from("connected_assets").delete().in("id", gone);
   return { groups: keep.length };
+}
+
+/* ---------- Google Ads API (v26): the Google login's token + the developer token of a manager account ---------- */
+const GADS = "https://googleads.googleapis.com/v26";
+function gadsHeaders(token: string) {
+  const dev = Deno.env.get("GOOGLE_ADS_DEVELOPER_TOKEN") ?? "";
+  if (!dev) throw new Error("Google Ads isn't set up on the server (GOOGLE_ADS_DEVELOPER_TOKEN).");
+  const h: Record<string, string> = { Authorization: `Bearer ${token}`, "developer-token": dev, "Content-Type": "application/json" };
+  const login = (Deno.env.get("GOOGLE_ADS_LOGIN_CUSTOMER_ID") ?? "").replace(/\D/g, "");
+  if (login) h["login-customer-id"] = login;
+  return h;
+}
+function gadsError(j: any, status: number) {
+  const e = j?.error ?? (Array.isArray(j) ? j[0]?.error : null);
+  const inner = e?.details?.[0]?.errors?.[0]?.message;
+  return inner || e?.message || `Google Ads error ${status}`;
+}
+async function gadsSearch(token: string, customer: string, query: string) {
+  const r = await fetch(`${GADS}/customers/${customer}/googleAds:search`, { method: "POST", headers: gadsHeaders(token), body: JSON.stringify({ query }) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(gadsError(j, r.status));
+  return (j.results ?? []) as any[];
+}
+/** The Google Ads accounts this Google login reaches, with their last 30 days. */
+async function syncGoogleAds(accountId: string, tenant: string, userId: string, token: string) {
+  const r = await fetch(`${GADS}/customers:listAccessibleCustomers`, { headers: gadsHeaders(token) });
+  const j: any = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(gadsError(j, r.status));
+  const ids = ((j.resourceNames ?? []) as string[]).map((n) => n.split("/").pop()!).filter(Boolean).slice(0, 25);
+  const now = new Date().toISOString();
+  const keep: string[] = [];
+  for (const id of ids) {
+    let c: any = null;
+    try { c = (await gadsSearch(token, id, "SELECT customer.id, customer.descriptive_name, customer.currency_code, customer.manager, customer.test_account, customer.status FROM customer"))[0]?.customer; }
+    catch { continue; }                                        // e.g. a cancelled account or one this login can't open on its own
+    if (!c) continue;
+    let m: any = null;
+    if (!c.manager) {
+      try { m = (await gadsSearch(token, id, "SELECT metrics.cost_micros, metrics.clicks, metrics.impressions, metrics.conversions FROM customer WHERE segments.date DURING LAST_30_DAYS"))[0]?.metrics ?? {}; }
+      catch { m = null; }
+    }
+    await admin.from("connected_assets").upsert({
+      account_id: accountId, tenant_id: tenant, user_id: userId, kind: "gads_customer", external_id: id,
+      name: c.descriptiveName ?? null, username: id.replace(/(\d{3})(\d{3})(\d{4})/, "$1-$2-$3"), picture_url: null,
+      extra: {
+        currency: c.currencyCode ?? null, manager: !!c.manager, test: !!c.testAccount, status: c.status ?? null,
+        cost_30d: m ? Number(m.costMicros ?? 0) / 1e6 : null, clicks_30d: m ? Number(m.clicks ?? 0) : null,
+        impressions_30d: m ? Number(m.impressions ?? 0) : null, conversions_30d: m ? Number(m.conversions ?? 0) : null,
+      }, updated_at: now,
+    }, { onConflict: "account_id,kind,external_id" });
+    keep.push(id);
+  }
+  const { data: old } = await admin.from("connected_assets").select("id, external_id").eq("account_id", accountId).eq("kind", "gads_customer");
+  const gone = ((old ?? []) as any[]).filter((o) => !keep.includes(o.external_id)).map((o) => o.id);
+  if (gone.length) await admin.from("connected_assets").delete().in("id", gone);
+  return { gads: keep.length };
 }
 
 async function caller(req: Request): Promise<{ id: string; tenant: string } | null> {
@@ -383,6 +441,7 @@ Deno.serve(async (req) => {
       });
       let assets = null;
       if (provider === "meta") { try { assets = await syncMetaAssets(accId, me.tenant, me.id, tok.access_token, merged); } catch (e) { assets = { error: String((e as Error).message ?? e) }; } }
+      if (provider === "google" && merged.includes("gads")) { try { assets = await syncGoogleAds(accId, me.tenant, me.id, tok.access_token); } catch (e) { assets = { error: String((e as Error).message ?? e) }; } }
       if (provider === "linkedin" && merged.includes("linkedin_pages")) { try { assets = await syncLinkedInOrgs(accId, me.tenant, me.id, tok.access_token); } catch (e) { assets = { error: String((e as Error).message ?? e) }; } }
       return json({ account: up.data, assets });
     }
@@ -497,7 +556,10 @@ Deno.serve(async (req) => {
       const f = await freshToken(p.id, me.id);
       if (f.provider === "mailrelay") return json({ assets: await syncMailrelayGroups(p.id, f.tenant, me.id, f.email, f.token) });
       if (f.provider === "linkedin") return json({ assets: await syncLinkedInOrgs(p.id, f.tenant, me.id, f.token) });
-      if (f.provider !== "meta") return json({ error: "Only Meta, LinkedIn and Mailrelay accounts have pages or groups to read." }, 400);
+      if (f.provider === "google" && f.services.includes("gads")) {
+        try { return json({ assets: await syncGoogleAds(p.id, f.tenant, me.id, f.token) }); } catch (e) { return json({ assets: { error: String((e as Error).message ?? e) } }); }
+      }
+      if (f.provider !== "meta") return json({ error: "Only Meta, LinkedIn, Google Ads and Mailrelay accounts have pages or accounts to read." }, 400);
       return json({ assets: await syncMetaAssets(p.id, f.tenant, me.id, f.token, f.services) });
     }
 
@@ -509,7 +571,8 @@ Deno.serve(async (req) => {
         const tk = (t as any)?.refresh_token || (t as any)?.access_token;
         if (tk) await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(tk)}`, { method: "POST" }).catch(() => {});
       }
-      if ((acc as any).provider === "meta" && (t as any)?.access_token) {
+      const { data: sc } = await admin.from("connected_accounts").select("scopes").eq("id", p.id).maybeSingle();
+      if ((acc as any).provider === "meta" && (t as any)?.access_token && (sc as any)?.scopes !== "system_user") {   // a system user's token stays valid elsewhere
         await fetch(`${FB}/me/permissions?access_token=${encodeURIComponent((t as any).access_token)}`, { method: "DELETE" }).catch(() => {});
       }
       if ((acc as any).provider === "linkedin" && (t as any)?.access_token) {

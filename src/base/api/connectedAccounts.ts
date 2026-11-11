@@ -18,7 +18,7 @@
 import { supabase } from "../../components/api/supabase";
 
 export type Provider = "google" | "microsoft" | "meta" | "linkedin" | "mailrelay";
-export type Service = "mail" | "calendar" | "facebook" | "instagram" | "ads" | "linkedin" | "linkedin_pages" | "mailrelay" | "whatsapp";
+export type Service = "mail" | "calendar" | "facebook" | "instagram" | "ads" | "linkedin" | "linkedin_pages" | "mailrelay" | "whatsapp" | "gads";
 export interface ConnectedAccount {
   id: string; provider: Provider; email: string; display_name: string | null;
   services: Service[]; status: "active" | "error"; last_error: string | null; connected_at: string; updated_at?: string;
@@ -43,6 +43,7 @@ const SCOPES: Record<Exclude<Provider, "mailrelay">, Partial<Record<Service, str
   google: {
     mail: "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send",
     calendar: "https://www.googleapis.com/auth/calendar.events",
+    gads: "https://www.googleapis.com/auth/adwords",
   },
   microsoft: {
     mail: "Mail.Read Mail.Send",
@@ -233,7 +234,7 @@ export async function lastMailReads(): Promise<Record<string, string>> {
 
 /* ---------- Meta: what a login reaches ---------- */
 export interface ConnectedAsset {
-  id: string; account_id: string; kind: "facebook_page" | "instagram" | "ad_account" | "linkedin_org" | "mailrelay_group" | "whatsapp_number"; external_id: string;
+  id: string; account_id: string; kind: "facebook_page" | "instagram" | "ad_account" | "linkedin_org" | "mailrelay_group" | "whatsapp_number" | "gads_customer"; external_id: string;
   name: string | null; username: string | null; picture_url: string | null; extra: Record<string, any>; updated_at: string;
 }
 /** Facebook pages, Instagram accounts and ad accounts of your Meta logins (SQL 123). */

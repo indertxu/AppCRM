@@ -126,7 +126,7 @@ Source in `supabase/functions/**`. Both apps call them; changes must stay backwa
 - Read the other side's entries since your last session before you start working.
 
 ## 7. SQL numbering
-Next free number: **130**  ← update this line when you claim one (and say which file in the log).
+Next free number: **131**  ← update this line when you claim one (and say which file in the log).
 | # | File | Chat | What |
 |---|---|---|---|
 | 98 | sql/98_client_default_folders.sql | Enterprise | client folder templates → new clients |
@@ -161,6 +161,7 @@ Next free number: **130**  ← update this line when you claim one (and say whic
 | 127 | src/base/sql/127_whatsapp.sql | Base | `connected_assets.kind` + `whatsapp_number`; `whatsapp_messages` (in / out per number, RLS same tenant) — WhatsApp Cloud API |
 | 128 | sql/128_handoff_alerts.sql | Enterprise | `billing_settings.handoff_notify` jsonb ({all, pipelines}) + trigger `trg128_handoff_alert` on handoffs insert → `alert_push(…, 'handoff_new', …, 'handoff', id)` — applied 2026-11-11 |
 | 129 | sql/129_expansion_pipelines.sql | Enterprise | `pipelines.expansion_kind` (upsell / cross_sell) + `client_upsells.motion`; triggers: deal in such a pipeline ↔ client upsell (shared id `client_upsells.deal_id`), deal leads status/name/value/owner; `expansion_backfill(pipeline)` — to run in the SQL editor (tested in a rolled-back transaction) |
+| 130 | src/base/sql/130_connected_google_ads.sql | Base | `connected_assets.kind` + `gads_customer` (Google Ads accounts of a Google login, last-30-days spend / clicks / conversions in extra) |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
@@ -170,6 +171,14 @@ Write requests here; the other chat answers in the log and ticks them.
 
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
+
+### 2026-11-11 13:40 · Base · Integrations: Google Ads
+- files: `pages/settings/Integrations.tsx`, `api/connectedAccounts.ts`, `requests/connected-accounts.index.ts.txt`, `sql/130_connected_google_ads.sql` (new).
+- **DB (130)**: `connected_assets.kind` + `gads_customer`. Applied 2026-11-11.
+- **Edge function `connected-accounts`** (deployed by Base, now v14): Google logins with service `gads` (scope `…/auth/adwords`) read their Google Ads accounts via Google Ads API **v26** (`customers:listAccessibleCustomers` + GAQL `customer` and last-30-days `metrics.cost_micros / clicks / impressions / conversions`), stored as `gads_customer` (extra: currency, manager, test, cost_30d, clicks_30d, impressions_30d, conversions_30d); "Re-read accounts". Needs secret `GOOGLE_ADS_DEVELOPER_TOKEN` (+ optional `GOOGLE_ADS_LOGIN_CUSTOMER_ID`). Also: Remove on a WhatsApp system-user account no longer revokes that token's app permissions.
+- Front: **Google Ads** moved from Coming soon to Available (provider google, service `gads`; "Use here" on a linked Google account adds it); accounts list with spend / clicks / conversions; folding setup guide (developer token, enable API, adwords scope, secrets).
+- tags: DB (130)
+- deploy: written to the Mac · SQL applied · function deployed · user: developer token secret + push
 
 ### 2026-11-11 13:05 · Base · Integrations: errors fade, apps you have look quieter
 - files: `pages/settings/Integrations.tsx` / `.css`.
