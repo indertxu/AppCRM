@@ -169,6 +169,11 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-11 10:50 · Base · Integrations: sign-in popup no longer renews the session; 401 → renew once
+- files: `api/connectedAccounts.ts`.
+- The sign-in popup (it loads the app at /settings) now stops Supabase's auto-refresh before closing, so two windows don't renew the same session at once ("Refresh Token Not Found" → "Not authenticated" seen on nextcrm.atebiz.com). Calls to `connected-accounts` that get 401 renew the session once and retry; otherwise "Your session ended — reload the page and sign in again."
+- deploy: front only.
+
 ### 2026-11-11 10:30 · Base · Integrations: WhatsApp Business (Cloud API) + collapsed account cards + ⓘ "What it does"
 - files: `pages/settings/Integrations.tsx` / `.css`, `api/connectedAccounts.ts` (`sendWhatsApp`, `listWhatsAppMessages`), `requests/connected-accounts.index.ts.txt`, `requests/whatsapp-webhook.index.ts.txt` (new), `sql/127_whatsapp.sql` (new).
 - **DB (127)**: `connected_assets.kind` + `whatsapp_number` (external_id = phone_number_id; extra waba_id / display_phone_number / quality_rating / status); new `whatsapp_messages` (in / out per number, status, error, payload; RLS: the number's owner reads; written only by edge functions). Applied 2026-11-11.

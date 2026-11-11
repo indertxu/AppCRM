@@ -79,6 +79,8 @@ const challengeOf = async (v: string) => b64url(new Uint8Array(await crypto.subt
     const url = new URL(window.location.href);
     const state = url.searchParams.get("state") ?? "";
     if (!state.startsWith(STATE_PREFIX)) return;                       // not ours (Outlook's own, Supabase…)
+    // this window only hands the code back and closes: it must not renew the shared sign-in session too
+    try { void supabase.auth.stopAutoRefresh(); } catch { /* ignore */ }
     const code = url.searchParams.get("code");
     const err = url.searchParams.get("error_description") || url.searchParams.get("error");
     ["code", "state", "scope", "authuser", "prompt", "hd", "session_state", "error", "error_description", "error_uri", "client_info", "iss"]
@@ -93,9 +95,9 @@ const challengeOf = async (v: string) => b64url(new Uint8Array(await crypto.subt
 })();
 
 /* ---------- edge function ---------- */
-async function call(action: string, payload: object = {}): Promise<any> {
+async function call(action: string, payload: object = {}, retried = false): Promise<any> {
   const { data: { session } } = await supabase.auth.getSession();
-  if (!session) throw new Error("Not signed in");
+  if (!session) return { error: "Your session ended — reload the page and sign in again." };
   let res: Response;
   try {
     res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/connected-accounts`, {
@@ -107,6 +109,11 @@ async function call(action: string, payload: object = {}): Promise<any> {
   const text = await res.text();
   let body: any; try { body = text ? JSON.parse(text) : {}; } catch { body = { error: text.slice(0, 200) }; }
   if (res.status === 404) return { error: "The connection service isn't installed yet.", missing: true };
+  if (res.status === 401) {
+    // the session's access token went stale (e.g. renewed in another tab): renew once and retry
+    if (!retried) { const { error } = await supabase.auth.refreshSession(); if (!error) return call(action, payload, true); }
+    return { error: "Your session ended — reload the page and sign in again." };
+  }
   if (!res.ok && !body?.error) body = { ...(body ?? {}), error: `HTTP ${res.status}` };
   return body;
 }
