@@ -23,6 +23,8 @@
 //                        Mailrelay: groups; WhatsApp numbers too when the login has "whatsapp"
 //   wa_add      { id, wabaId }   add a WhatsApp Business account by its ID (e.g. Meta's test account, which the
 //                        login's business doesn't own) — kept on every re-read (extra.manual)
+//   wa_token    { token, wabaId }   connect WhatsApp with a system-user token of the business (Business settings ›
+//                        System users; whatsapp_business_management + _messaging, the WhatsApp account assigned)
 //   wa_send     { assetId, to, text? , template?, lang? }   send from a WhatsApp number (text only
 //                        inside the 24-hour window after the contact last wrote; otherwise a template)
 //
@@ -406,6 +408,42 @@ Deno.serve(async (req) => {
       let assets = null;
       try { assets = await syncMailrelayGroups(accId, me.tenant, me.id, host, key); } catch (e) { assets = { error: String((e as Error).message ?? e) }; }
       return json({ account: up.data, assets });
+    }
+
+    if (action === "wa_token") {
+      const token = String(p.token ?? "").trim();
+      const wabaId = String(p.wabaId ?? "").replace(/\D/g, "");
+      if (token.length < 40 || /\s/.test(token)) return json({ error: "Paste the whole system-user token." }, 400);
+      if (wabaId.length < 6) return json({ error: "Paste the WhatsApp Business account ID (only digits)." }, 400);
+      let who: any;
+      try { who = await fbGet("/me?fields=id,name", token); } catch (e) { return json({ error: `Meta didn't accept this token: ${String((e as Error).message ?? e)}` }, 400); }
+      const nums = await whatsappNumbers(token, [wabaId]);
+      const mine = nums.filter((n) => n.extra.waba_id === wabaId);
+      if (!mine.length) {
+        let why = "it has no phone numbers yet.";
+        try { await fbGet(`/${wabaId}/phone_numbers?fields=id&limit=1`, token); } catch (e) { why = `${String((e as Error).message ?? e)} — assign this WhatsApp account to the system user (Full control) and give the token whatsapp_business_management + whatsapp_business_messaging.`; }
+        return json({ error: `Couldn't read that WhatsApp account: ${why}` }, 400);
+      }
+      const row = {
+        tenant_id: me.tenant, user_id: me.id, provider: "meta", email: `whatsapp:${wabaId}`,
+        display_name: String(mine[0].extra.waba_name || who?.name || "WhatsApp Business"), services: ["whatsapp"],
+        scopes: "system_user", status: "active", last_error: null, updated_at: new Date().toISOString(),
+      };
+      const up = await admin.from("connected_accounts").upsert(row, { onConflict: "user_id,provider,email" }).select("id, provider, email, display_name, services, status, last_error, connected_at, updated_at").single();
+      if (up.error) return json({ error: up.error.message }, 400);
+      const accId = (up.data as any).id;
+      await admin.from("connected_account_tokens").upsert({
+        account_id: accId, access_token: token, refresh_token: null,
+        expires_at: new Date(Date.now() + 10 * 365 * 86400_000).toISOString(), updated_at: new Date().toISOString(),   // system-user tokens set to "never" don't expire
+      });
+      const now = new Date().toISOString();
+      for (const a of mine) {
+        await admin.from("connected_assets").upsert({
+          account_id: accId, tenant_id: me.tenant, user_id: me.id, kind: a.kind, external_id: a.external_id,
+          name: a.name, username: a.username, picture_url: null, extra: { ...a.extra, manual: true }, updated_at: now,
+        }, { onConflict: "account_id,kind,external_id" });
+      }
+      return json({ account: up.data, numbers: mine.length });
     }
 
     if (action === "wa_add") {

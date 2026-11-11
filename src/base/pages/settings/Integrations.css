@@ -278,3 +278,5 @@
 .ig-wa-add-row .ig-mini { height: 36px; }
 .ig-wa-add-note { margin: 0; font-size: 12px; line-height: 1.5; color: var(--muted); }
 .ig-wa-add-note b { color: var(--ink); font-weight: 650; }
+.ig-fold .ig-wa-tok { display: flex; flex-direction: column; gap: 10px; }
+.ig-fold .ig-wa-tok .ig-det-err { margin: 0; }

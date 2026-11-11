@@ -283,3 +283,8 @@ export async function addWhatsAppAccount(accountId: string, wabaId: string): Pro
   const r = await call("wa_add", { id: accountId, wabaId });
   return r?.error ? { error: r.error } : { numbers: r?.numbers ?? 0 };
 }
+/** Connect WhatsApp with a system-user token of your business (it stays on the server). */
+export async function connectWhatsAppToken(token: string, wabaId: string): Promise<{ numbers?: number; error?: string }> {
+  const r = await call("wa_token", { token, wabaId });
+  return r?.error ? { error: r.error } : { numbers: r?.numbers ?? 0 };
+}

@@ -170,6 +170,12 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-11 12:30 · Base · Integrations: WhatsApp with a system-user token
+- files: `pages/settings/Integrations.tsx` / `.css`, `api/connectedAccounts.ts` (`connectWhatsAppToken`), `requests/connected-accounts.index.ts.txt`.
+- **Edge function `connected-accounts`** (deployed by Base, now v13): action `wa_token { token, wabaId }` — a system-user token of the business (Business settings › System users; WhatsApp account assigned, whatsapp_business_management + _messaging) is checked with Meta, stored server-side as a `meta` account `whatsapp:<waba>` with services [whatsapp], numbers read + app subscribed. Reason: Facebook Login for Business configurations don't offer WhatsApp accounts as an asset, so the sign-in token can't read the WhatsApp account. Known gap: "Remove" on such an account calls DELETE /me/permissions (would revoke the system user's app permissions) — to skip for `scopes = system_user` in the next function change.
+- Front: WhatsApp panel → fold "Connect with a system user token" (4 steps + token / account ID form; open while no number is connected).
+- deploy: written to the Mac · function deployed · user to push
+
 ### 2026-11-11 11:05 · Base · Integrations: WhatsApp account by ID + tidier panel
 - files: `pages/settings/Integrations.tsx` / `.css`, `api/connectedAccounts.ts` (`addWhatsAppAccount`), `requests/connected-accounts.index.ts.txt`.
 - **Edge function `connected-accounts`** (deployed by Base, now v12): action `wa_add { id, wabaId }` — reads a WhatsApp Business account's numbers by its ID with the Meta login's token (Meta's test WhatsApp account isn't owned by the login's business, so discovery finds nothing); such accounts are kept on every re-read (`extra.manual`).

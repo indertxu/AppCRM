@@ -22,7 +22,7 @@
    ===================================================================== */
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
-  addAccount, addWhatsAppAccount, checkAccount, connectMailrelay, LINKEDIN_PAGES, listWhatsAppMessages, sendWhatsApp, lastMailReads, listAccounts, listAssets, myOutlookConnection, providerReady, removeAccount, syncAssets,
+  addAccount, addWhatsAppAccount, checkAccount, connectWhatsAppToken, connectMailrelay, LINKEDIN_PAGES, listWhatsAppMessages, sendWhatsApp, lastMailReads, listAccounts, listAssets, myOutlookConnection, providerReady, removeAccount, syncAssets,
   type ConnectedAccount, type ConnectedAsset, type OutlookFacts, type Provider, type Service, type WhatsAppMessage,
 } from "../../api/connectedAccounts";
 import { BRANDS } from "./brandIcons";
@@ -391,6 +391,7 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
         {a.live!.provider === "meta" && !providerReady("meta") && <Fold title="Set up Meta sign-in" sub="once · about 15 min" open><MetaGuide /></Fold>}
         {a.live!.provider === "linkedin" && !providerReady("linkedin") && <Fold title="Set up LinkedIn sign-in" sub="once · about 10 min" open><LinkedInGuide /></Fold>}
         {a.live!.provider === "mailrelay" && <Fold title="Where to find the API key" sub="1 min" open={!rs.length}><MailrelayGuide /></Fold>}
+        {a.k === "whatsapp" && <Fold title="Connect with a system user token" sub="your own business · no sign-in window" open={!rs.some((r) => assetsFor(r, "whatsapp").length)}><WaTokenForm onDone={async (n) => { await reload(); void loadWa(); setToast(`WhatsApp connected · ${n} number${n === 1 ? "" : "s"}`); }} /></Fold>}
         {a.k === "whatsapp" && providerReady("meta") && <Fold title="How to set up WhatsApp" sub="Meta app, number, webhook"><WhatsAppGuide /></Fold>}
         {a.live!.provider === "linkedin" && providerReady("linkedin") && !LINKEDIN_PAGES && <p className="ig-det-p ig-det-pad">Company pages turn on once LinkedIn approves the Community Management API for this app.</p>}
       </>
@@ -484,6 +485,32 @@ function Fold({ title, sub, open: start = false, children }: { title: string; su
         <span className="ig-acc-chev"><Chev /></span>
       </button>
       <div className="ig-fold-body"><div className="ig-fold-in">{children}</div></div>
+    </div>
+  );
+}
+
+/* ---------- WhatsApp: system-user token + account ID ---------- */
+function WaTokenForm({ onDone }: { onDone: (numbers: number) => void }) {
+  const [tok, setTok] = useState("");
+  const [waba, setWaba] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const ok = tok.trim().length >= 40 && waba.replace(/\D/g, "").length >= 6;
+  return (
+    <div className="ig-guide ig-wa-tok">
+      <ol>
+        <li><b>Create a system user</b><span>business.facebook.com → <i>Settings → Users → System users → Add</i> → name “Next”, role <i>Admin</i>.</span></li>
+        <li><b>Give it the WhatsApp account</b><span><i>Assign assets → WhatsApp accounts</i> → your account (the test one too) → <i>Full control</i>. Also <i>Apps</i> → “Next”.</span></li>
+        <li><b>Generate the token</b><span><i>Generate token</i> → app “Next”, expiry <i>Never</i>, permissions <i>whatsapp_business_management</i> and <i>whatsapp_business_messaging</i>. Copy it.</span></li>
+        <li><b>The account ID</b><span>Meta app → <i>WhatsApp → API setup</i> → “WhatsApp Business account ID”.</span></li>
+      </ol>
+      <form className="ig-key" onSubmit={async (e) => { e.preventDefault(); if (!ok || busy) return; setBusy(true); setErr(null); const r = await connectWhatsAppToken(tok, waba); setBusy(false); if (r.error) setErr(r.error); else { setTok(""); setWaba(""); onDone(r.numbers ?? 0); } }}>
+        <label className="ig-fld"><span>System user token</span><span className="ig-fld-in"><input type="password" value={tok} onChange={(e) => setTok(e.target.value)} placeholder="EAA…" autoComplete="new-password" spellCheck={false} /></span></label>
+        <label className="ig-fld"><span>WhatsApp Business account ID</span><span className="ig-fld-in"><input value={waba} onChange={(e) => setWaba(e.target.value)} placeholder="e.g. 1114103584841887" inputMode="numeric" /></span></label>
+        <p className="ig-key-note"><Lock />Checked with Meta and kept on the server — it never comes back to this page.</p>
+        <button type="submit" className="ig-brand-btn" disabled={!ok || busy}>{busy ? <span className="ig-spin" /> : <Plus />}{busy ? "Checking…" : "Connect WhatsApp"}</button>
+        {err && <p className="ig-det-err">{err}</p>}
+      </form>
     </div>
   );
 }
