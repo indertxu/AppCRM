@@ -22,7 +22,7 @@
    ===================================================================== */
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
-  addAccount, addWhatsAppAccount, checkAccount, connectWhatsAppToken, connectMailrelay, LINKEDIN_PAGES, listWhatsAppMessages, sendWhatsApp, lastMailReads, listAccounts, listAssets, myOutlookConnection, providerReady, removeAccount, syncAssets,
+  addAccount, checkAccount, connectWhatsAppToken, connectMailrelay, LINKEDIN_PAGES, listWhatsAppMessages, sendWhatsApp, lastMailReads, listAccounts, listAssets, myOutlookConnection, providerReady, removeAccount, syncAssets,
   type ConnectedAccount, type ConnectedAsset, type OutlookFacts, type Provider, type Service, type WhatsAppMessage,
 } from "../../api/connectedAccounts";
 import { BRANDS } from "./brandIcons";
@@ -208,15 +208,6 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
     return `${what} · active ${ago(r.lastActive).toLowerCase()}`;
   };
 
-  /* WhatsApp: add an account by its ID (Meta's test account isn't owned by your business) */
-  const addWaba = async (r: Row, waba: string): Promise<string | null> => {
-    const x = await addWhatsAppAccount(r.id, waba);
-    if (x.error) return x.error;
-    await reload(); void loadWa();
-    setToast(`${x.numbers} WhatsApp number${x.numbers === 1 ? "" : "s"} added`);
-    return null;
-  };
-
   /* WhatsApp: latest messages of your numbers */
   const [waMsgs, setWaMsgs] = useState<WhatsAppMessage[]>([]);
   const loadWa = useCallback(async () => setWaMsgs(await listWhatsAppMessages(60).catch(() => [])), []);
@@ -355,7 +346,7 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
                 <div><dt>Used for</dt><dd>{r.services.map((s) => SVC[s]).join(" · ")}{r.primary ? " · main" : ""}</dd></div>
               </dl>
               {r.provider === "meta" && !(a.k === "whatsapp" && assetsFor(r, a.k).length === 0) && <AssetList items={assetsFor(r, a.k)} />}
-              {r.provider === "meta" && a.k === "whatsapp" && assetsFor(r, a.k).length === 0 && <WaAdd onAdd={(waba) => addWaba(r, waba)} />}
+              {r.provider === "meta" && a.k === "whatsapp" && assetsFor(r, a.k).length === 0 && <p className="ig-wa-add-note ig-wa-none">No WhatsApp number on this login — Meta sign-in can't share WhatsApp accounts. Use <b>Connect with an access token</b> below.</p>}
               {r.provider === "meta" && a.k === "whatsapp" && assetsFor(r, a.k).length > 0 && <WaPanel numbers={assetsFor(r, a.k)} messages={waMsgs} onSent={() => void loadWa()} />}
               {r.provider === "linkedin" && r.services.includes("linkedin_pages") && <AssetList items={assets.filter((x) => x.account_id === r.id)} />}
               {r.provider === "mailrelay" && <AssetList items={assets.filter((x) => x.account_id === r.id)} none="No groups in this account yet." />}
@@ -391,7 +382,7 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
         {a.live!.provider === "meta" && !providerReady("meta") && <Fold title="Set up Meta sign-in" sub="once · about 15 min" open><MetaGuide /></Fold>}
         {a.live!.provider === "linkedin" && !providerReady("linkedin") && <Fold title="Set up LinkedIn sign-in" sub="once · about 10 min" open><LinkedInGuide /></Fold>}
         {a.live!.provider === "mailrelay" && <Fold title="Where to find the API key" sub="1 min" open={!rs.length}><MailrelayGuide /></Fold>}
-        {a.k === "whatsapp" && <Fold title="Connect with a system user token" sub="your own business · no sign-in window" open={!rs.some((r) => assetsFor(r, "whatsapp").length)}><WaTokenForm onDone={async (n) => { await reload(); void loadWa(); setToast(`WhatsApp connected · ${n} number${n === 1 ? "" : "s"}`); }} /></Fold>}
+        {a.k === "whatsapp" && <Fold title="Connect with an access token" sub="from your Meta app · no sign-in window" open={!rs.some((r) => assetsFor(r, "whatsapp").length)}><WaTokenForm onDone={async (n) => { await reload(); void loadWa(); setToast(`WhatsApp connected · ${n} number${n === 1 ? "" : "s"}`); }} /></Fold>}
         {a.k === "whatsapp" && providerReady("meta") && <Fold title="How to set up WhatsApp" sub="Meta app, number, webhook"><WhatsAppGuide /></Fold>}
         {a.live!.provider === "linkedin" && providerReady("linkedin") && !LINKEDIN_PAGES && <p className="ig-det-p ig-det-pad">Company pages turn on once LinkedIn approves the Community Management API for this app.</p>}
       </>
@@ -498,6 +489,7 @@ function WaTokenForm({ onDone }: { onDone: (numbers: number) => void }) {
   const ok = tok.trim().length >= 40 && waba.replace(/\D/g, "").length >= 6;
   return (
     <div className="ig-guide ig-wa-tok">
+      <p className="ig-wa-add-note"><b>To try it now:</b> Meta app → <i>WhatsApp → API setup</i> → <i>Generate access token</i> (lasts ~24 h). <b>To keep it:</b> a system user's token, which never expires:</p>
       <ol>
         <li><b>Create a system user</b><span>business.facebook.com → <i>Settings → Users → System users → Add</i> → name “Next”, role <i>Admin</i>.</span></li>
         <li><b>Give it the WhatsApp account</b><span><i>Assign assets → WhatsApp accounts</i> → your account (the test one too) → <i>Full control</i>. Also <i>Apps</i> → “Next”.</span></li>
@@ -505,31 +497,13 @@ function WaTokenForm({ onDone }: { onDone: (numbers: number) => void }) {
         <li><b>The account ID</b><span>Meta app → <i>WhatsApp → API setup</i> → “WhatsApp Business account ID”.</span></li>
       </ol>
       <form className="ig-key" onSubmit={async (e) => { e.preventDefault(); if (!ok || busy) return; setBusy(true); setErr(null); const r = await connectWhatsAppToken(tok, waba); setBusy(false); if (r.error) setErr(r.error); else { setTok(""); setWaba(""); onDone(r.numbers ?? 0); } }}>
-        <label className="ig-fld"><span>System user token</span><span className="ig-fld-in"><input type="password" value={tok} onChange={(e) => setTok(e.target.value)} placeholder="EAA…" autoComplete="new-password" spellCheck={false} /></span></label>
+        <label className="ig-fld"><span>Access token</span><span className="ig-fld-in"><input type="password" value={tok} onChange={(e) => setTok(e.target.value)} placeholder="EAA…" autoComplete="new-password" spellCheck={false} /></span></label>
         <label className="ig-fld"><span>WhatsApp Business account ID</span><span className="ig-fld-in"><input value={waba} onChange={(e) => setWaba(e.target.value)} placeholder="e.g. 1114103584841887" inputMode="numeric" /></span></label>
         <p className="ig-key-note"><Lock />Checked with Meta and kept on the server — it never comes back to this page.</p>
         <button type="submit" className="ig-brand-btn" disabled={!ok || busy}>{busy ? <span className="ig-spin" /> : <Plus />}{busy ? "Checking…" : "Connect WhatsApp"}</button>
         {err && <p className="ig-det-err">{err}</p>}
       </form>
     </div>
-  );
-}
-
-/* ---------- WhatsApp: add an account by ID ---------- */
-function WaAdd({ onAdd }: { onAdd: (waba: string) => Promise<string | null> }) {
-  const [v, setV] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const ok = v.replace(/\D/g, "").length >= 6;
-  return (
-    <form className="ig-wa-add" onSubmit={async (e) => { e.preventDefault(); if (!ok || busy) return; setBusy(true); setErr(null); const x = await onAdd(v); setBusy(false); if (x) setErr(x); else setV(""); }}>
-      <p className="ig-wa-add-note">No WhatsApp number found for this login. Paste the <b>WhatsApp Business account ID</b> (Meta app → WhatsApp → API setup).</p>
-      <div className="ig-wa-add-row">
-        <span className="ig-fld-in"><input value={v} onChange={(e) => setV(e.target.value)} placeholder="e.g. 1114103584841887" inputMode="numeric" /></span>
-        <button type="submit" className="ig-mini" disabled={!ok || busy}>{busy ? <span className="ig-spin is-dark" /> : <Plus />}Add</button>
-      </div>
-      {err && <p className="ig-acc-err">{err}</p>}
-    </form>
   );
 }
 

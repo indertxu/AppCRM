@@ -280,3 +280,4 @@
 .ig-wa-add-note b { color: var(--ink); font-weight: 650; }
 .ig-fold .ig-wa-tok { display: flex; flex-direction: column; gap: 10px; }
 .ig-fold .ig-wa-tok .ig-det-err { margin: 0; }
+.ig-wa-none { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line2); }

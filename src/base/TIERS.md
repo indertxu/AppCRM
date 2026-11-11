@@ -170,6 +170,11 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-11 12:45 · Base · Integrations: one WhatsApp form (access token + account ID)
+- files: `pages/settings/Integrations.tsx` / `.css`.
+- The "account ID" field on a Meta sign-in card is gone (that token can never read WhatsApp accounts); the card points to the single form, now "Connect with an access token": the API-setup token to try it (~24 h) or a system user's permanent token. (`wa_add` stays in the function, unused by the UI.)
+- deploy: front only.
+
 ### 2026-11-11 12:30 · Base · Integrations: WhatsApp with a system-user token
 - files: `pages/settings/Integrations.tsx` / `.css`, `api/connectedAccounts.ts` (`connectWhatsAppToken`), `requests/connected-accounts.index.ts.txt`.
 - **Edge function `connected-accounts`** (deployed by Base, now v13): action `wa_token { token, wabaId }` — a system-user token of the business (Business settings › System users; WhatsApp account assigned, whatsapp_business_management + _messaging) is checked with Meta, stored server-side as a `meta` account `whatsapp:<waba>` with services [whatsapp], numbers read + app subscribed. Reason: Facebook Login for Business configurations don't offer WhatsApp accounts as an asset, so the sign-in token can't read the WhatsApp account. Known gap: "Remove" on such an account calls DELETE /me/permissions (would revoke the system user's app permissions) — to skip for `scopes = system_user` in the next function change.
