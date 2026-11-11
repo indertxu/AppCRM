@@ -53,6 +53,8 @@ const emptyCap = (): CapValue => ({
 interface Props {
   /** Management → Security tab content. When set (management mode), a Security tab appears. */
   securityPanel?: ReactNode;
+  /** Management → Notifications (who hears about new handoffs). */
+  notifyPanel?: ReactNode;
   /** Only the Security tab (for people who may edit access but not targets). */
   securityOnly?: boolean;
   types: WorkTypeDef[];
@@ -117,7 +119,7 @@ export default function CalendarSettingsModal({
   initialCapOpen = null,
   holidays = [], onAddHoliday = () => {}, onRemoveHoliday = () => {},
   vacationAllowance = 22, setVacationAllowance = () => {}, canEditTimeOff = false,
-  securityPanel, securityOnly = false, requestOnly = false, onOpenSetup,
+  securityPanel, notifyPanel, securityOnly = false, requestOnly = false, onOpenSetup,
   onClose,
 }: Props) {
   const [openId, setOpenId] = useState<string | null>(null);
@@ -128,13 +130,13 @@ export default function CalendarSettingsModal({
   /** Inside Management, its own access rules decide: whoever may open the settings sees Hours and Cutoffs. */
   const canCompany = managementMode ? !securityOnly : canSetup;
 
-  const [tab, setTab] = useState<"targets" | "billing" | "capacity" | "timeoff" | "hours" | "request" | "security">(
+  const [tab, setTab] = useState<"targets" | "billing" | "capacity" | "timeoff" | "hours" | "request" | "security" | "notify">(
     securityOnly && securityPanel ? "security"
-      : managementMode ? (canCompany ? "hours" : "security")
+      : managementMode ? (canCompany ? (notifyPanel ? "notify" : "hours") : "security")
       : initialCapOpen ? "capacity" : (targetsOnly ? "capacity" : "request")
   );
   const [capOpen, setCapOpen] = useState<string | null>(initialCapOpen);
-  useEffect(() => { if (managementMode) console.info("[settings] management settings v2: Hours · Cutoffs · Security"); }, [managementMode]);
+
   const [newHolidayDate, setNewHolidayDate] = useState("");
   const [newHolidayName, setNewHolidayName] = useState("");
   const [holidayUntil, setHolidayUntil] = useState("");
@@ -168,6 +170,62 @@ export default function CalendarSettingsModal({
     if (!box || !on) return;
     setInkStyle({ ["--ink-x" as string]: `${on.offsetLeft}px`, ["--ink-w" as string]: `${on.offsetWidth}px` });
   }, [tab]);
+
+  /* ---- Management: a settings window with its sections down the side ---- */
+  if (managementMode) {
+    const MI: Record<string, string> = {
+      notify: "M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0",
+      hours: "M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0",
+      billing: "M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM12 14h.01M16 14h.01M8 18h.01M12 18h.01",
+      security: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10M9 12l2 2 4-4",
+    };
+    const secs = ([
+      canCompany && notifyPanel ? { key: "notify", label: "Notifications", sub: "New handoffs from sales", title: "Notifications", desc: "Who hears about it when sales hands over a won deal." } : null,
+      canCompany && !securityOnly ? { key: "hours", label: "Working hours", sub: "The company's week", title: "Working hours", desc: "When the company works — for everyone, a department or one person. The calendar, capacity and targets count from it." } : null,
+      canCompany && !securityOnly ? { key: "billing", label: "Billing cutoffs", sub: "When each month closes", title: "Billing cutoffs", desc: "Each billing month closes on its cutoff day and covers everything from the day after the previous cutoff up to its own." } : null,
+      securityPanel ? { key: "security", label: "Security", sub: "What people see here", title: "Security", desc: "How much of Management each person sees once they can open it." } : null,
+    ].filter(Boolean)) as { key: typeof tab; label: string; sub: string; title: string; desc: string }[];
+    const cur = secs.find((x) => x.key === tab) ?? secs[0];
+    const ico = (d: string) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>;
+    return (
+      <div className="mgs-back" onMouseDown={onClose}>
+        <div className="mgs" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Management settings">
+          <aside className="mgs-nav">
+            <div className="mgs-brand">
+              <span className="mgs-brand-ico">{ico("M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z")}</span>
+              <span className="mgs-brand-t"><em>Management</em><b>Settings</b></span>
+            </div>
+            <nav className="mgs-tabs" role="tablist" aria-orientation="vertical">
+              {secs.map((x) => (
+                <button key={x.key} type="button" role="tab" aria-selected={cur?.key === x.key} className={`mgs-tab ${cur?.key === x.key ? "is-on" : ""}`} onClick={() => setTab(x.key)}>
+                  <span className="mgs-tab-ico">{ico(MI[x.key] ?? MI.hours)}</span>
+                  <span className="mgs-tab-t"><b>{x.label}</b><em>{x.sub}</em></span>
+                </button>
+              ))}
+            </nav>
+          </aside>
+          <section className="mgs-main">
+            <header className="mgs-h">
+              <div className="mgs-h-t">
+                <h2>{cur?.title ?? "Settings"}</h2>
+                {cur?.desc && <p>{cur.desc}</p>}
+              </div>
+              <button type="button" className="mgs-x" onClick={onClose} aria-label="Close">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+              </button>
+            </header>
+            <div className={`mgs-body is-${cur?.key ?? "none"}`} key={cur?.key}>
+              {cur?.key === "notify" ? notifyPanel
+                : cur?.key === "hours" ? <HoursEditor />
+                  : cur?.key === "billing" ? <div className="cx"><CutoffsBody cutoffs={cutoffs} setCutoffs={setCutoffs} defaultCutoffDay={defaultCutoffDay} setDefaultCutoffDay={setDefaultCutoffDay} allowReset /></div>
+                    : cur?.key === "security" ? securityPanel
+                      : <p className="mgs-none">Nothing here for you to change.</p>}
+            </div>
+          </section>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="cws-backdrop" onMouseDown={onClose}>

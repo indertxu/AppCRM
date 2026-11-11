@@ -1060,6 +1060,9 @@ export async function buildCrmFields(source: EntityKey, d: CrmData, extra: Entit
   const renewalDeals = new Set(allLines.map((l) => l.renewal_tracking_id).filter(Boolean).map(String));
   const linesByDeal = new Map<string, any[]>(); allLines.forEach((l) => { if (l.tracking_id) { const k = String(l.tracking_id); linesByDeal.set(k, [...(linesByDeal.get(k) ?? []), l]); } });
   const dealById = new Map((d.deal ?? []).map((t: any) => [String(t.id), t]));
+  /** The contract (a deal's signed terms) a signed product belongs to — an upsell's is the contract it was signed into. */
+  const ctOfLine = (l: any) => { const t: any = dealById.get(String(l?.contract_tracking_id || l?.tracking_id || "")); const c = t?.contract_terms; return c && typeof c === "object" && !Array.isArray(c) ? c : null; };
+  const lineStart = (l: any) => ymd(cw.lineStartOf(l, ctOfLine(l)) || null);
   /** A line signed as the renewal of an older one: its deal is that line's renewal deal (or sits in a renewal pipeline). */
   const isRenewalLine = (l: any) => {
     if (!l.tracking_id) return false;
@@ -1215,10 +1218,10 @@ export async function buildCrmFields(source: EntityKey, d: CrmData, extra: Entit
         { key: "client.arr_next", group: g, label: "ARR · next period", kind: "money", sum: true, get: (r: any) => (r.client ? (linesByClient.get(String(r.client.id)) ?? []).reduce((t, l) => t + inPeriodOf(l, nextRange()).arr, 0) : null) },
         { key: "client.revenue_period", group: g, label: "Revenue · this period", kind: "money", sum: true, get: (r: any) => (r.client ? (linesByClient.get(String(r.client.id)) ?? []).reduce((t, l) => t + inPeriodOf(l).revenue, 0) : null) },
         { key: "client.revenue_next", group: g, label: "Revenue · next period", kind: "money", sum: true, get: (r: any) => (r.client ? (linesByClient.get(String(r.client.id)) ?? []).reduce((t, l) => t + inPeriodOf(l, nextRange()).revenue, 0) : null) },
-        { key: "client.contract_start", group: g, label: "Contract starts (first)", kind: "date", get: (r: any) => (linesByClient.get(String(r.client?.id)) ?? []).map((l) => ymd(l.start_date) ?? ymd(l.signing_date)).filter(Boolean).sort()[0] ?? null },
-        { key: "client.contract_start_last", group: g, label: "Contract starts (latest)", kind: "date", get: (r: any) => (linesByClient.get(String(r.client?.id)) ?? []).map((l) => ymd(l.start_date) ?? ymd(l.signing_date)).filter(Boolean).sort().at(-1) ?? null },
-        { key: "client.signed_first", group: g, label: "First signed on", kind: "date", get: (r: any) => (linesByClient.get(String(r.client?.id)) ?? []).map((l) => ymd(l.signing_date) ?? ymd(l.start_date)).filter(Boolean).sort()[0] ?? null },
-        { key: "client.next_renewal", group: g, label: "Next renewal", kind: "date", get: (r: any) => { const ts = (linesByClient.get(String(r.client?.id)) ?? []).filter(cw.isActive).map(cw.termOf).filter((t): t is NonNullable<ReturnType<typeof cw.termOf>> => !!t && t.left >= 0).sort((a, b) => a.end.getTime() - b.end.getTime()); return ts[0] ? ymd(ts[0].end.toISOString()) : null; } },
+        { key: "client.contract_start", group: g, label: "Contract starts (first)", kind: "date", get: (r: any) => (linesByClient.get(String(r.client?.id)) ?? []).map(lineStart).filter(Boolean).sort()[0] ?? null },
+        { key: "client.contract_start_last", group: g, label: "Contract starts (latest)", kind: "date", get: (r: any) => (linesByClient.get(String(r.client?.id)) ?? []).map(lineStart).filter(Boolean).sort().at(-1) ?? null },
+        { key: "client.signed_first", group: g, label: "First signed on", kind: "date", get: (r: any) => (linesByClient.get(String(r.client?.id)) ?? []).map((l) => ymd(l.signing_date) ?? ymd(ctOfLine(l)?.signDate) ?? lineStart(l)).filter(Boolean).sort()[0] ?? null },
+        { key: "client.next_renewal", group: g, label: "Next renewal", kind: "date", get: (r: any) => { const ts = (linesByClient.get(String(r.client?.id)) ?? []).map((l) => cw.renewalOf(l, ctOfLine(l))).filter((t): t is NonNullable<ReturnType<typeof cw.renewalOf>> => !!t).sort((a, b) => a.end.getTime() - b.end.getTime()); return ts[0] ? ymd(ts[0].end.toISOString()) : null; } },
         ...discovered(d.client ?? [], "client", /^client\.name$/),
       ];
     } else if (g === "project") {

@@ -2,7 +2,7 @@
 import { Fragment, useState, useEffect, useMemo, useRef, type PointerEvent as RPointerEvent, type KeyboardEvent as RKeyboardEvent, type ReactNode } from "react";
 import { supabase } from "../../api/supabase";
 import NewClientForm from "./NewClientForm";
-import ClientWorkspace, { CompanyLogo, ClientStatusPicker, isActive, termOf, lineAnnual, lineContractValue, lineOneTime, type Line } from "./ClientWorkspace";
+import ClientWorkspace, { CompanyLogo, ClientStatusPicker, isActive, renewalOf, lineStartOf, lineAnnual, lineContractValue, lineOneTime, type Line } from "./ClientWorkspace";
 import Select from "../../framework/Select";
 import { PageLoader } from "../../framework/AppLayout";
 import {
@@ -189,7 +189,7 @@ export function ClientList({
   const personName = (id: string, fb?: string) => people[id] || (fb && fb !== "—" ? fb : "") || "Unknown";
 
   // what the client popup shows, for every client at once
-  const [extra, setExtra] = useState<{ lines: Line[]; last: Record<string, string>; tasks: Record<string, { open: number; late: number }>; co: Record<string, any>; cos?: any[] } | null>(null);
+  const [extra, setExtra] = useState<{ lines: Line[]; last: Record<string, string>; tasks: Record<string, { open: number; late: number }>; co: Record<string, any>; cos?: any[]; terms?: Record<string, any> } | null>(null);
   useEffect(() => {
     if (!loaded) return;
     let alive = true;
@@ -233,7 +233,13 @@ export function ClientList({
       const co: Record<string, any> = {};
       Object.entries(coOf).forEach(([cid, coid]) => { if (cos[coid]) co[cid] = cos[coid]; });
       const allLines = ((cp.data ?? []) as any[]).map((r) => ({ ...r, name: pn[r.product_id] ?? "Product" }));
-      if (alive) setExtra({ lines: allLines, last, tasks, co, cos: allCos });
+      // the contracts' own terms (a deal's order form): a product without its own start or term takes its contract's
+      const tids = [...new Set(allLines.map((l) => String(l.contract_tracking_id || l.tracking_id || "")).filter(Boolean))];
+      const terms: Record<string, any> = {};
+      (await Promise.all(Array.from({ length: Math.ceil(tids.length / 150) }, (_, i) => tids.slice(i * 150, i * 150 + 150))
+        .map((ids) => Promise.resolve(supabase.from("trackings").select("id, contract_terms").in("id", ids)).then((r: any) => (r.data ?? []) as any[]))).catch(() => [] as any[][]))
+        .flat().forEach((t: any) => { if (t.contract_terms && typeof t.contract_terms === "object") terms[t.id] = t.contract_terms; });
+      if (alive) setExtra({ lines: allLines, last, tasks, co, cos: allCos, terms });
       // subscriptions that have ended go back to Sales, as a deal in the renewal pipeline
       void ensureRenewalDeals(allLines, coOf, Object.fromEntries(clients.map((c) => [c.id, c.name])));
     })().catch(() => setExtra({ lines: [], last: {}, tasks: {}, co: {}, cos: [] }));
@@ -257,8 +263,11 @@ export function ClientList({
     const open = mine.filter((p) => p.status !== "closed");
     const ls = (extra?.lines ?? []).filter((l) => l.client_id === c.id);
     const act = ls.filter(isActive);
-    const renew = act.map(termOf).filter((t): t is NonNullable<ReturnType<typeof termOf>> => !!t && t.left >= 0).sort((a, b) => a.end.getTime() - b.end.getTime())[0];
-    const signedAt = [...mine.map((p) => p.signingDate), ...ls.map((l) => l.signing_date)].filter(Boolean).sort()[0] ?? null;
+    const ctOf = (l: Line) => extra?.terms?.[String(l.contract_tracking_id || l.tracking_id || "")] ?? null;
+    const renew = act.map((l) => renewalOf(l, ctOf(l))).filter((t): t is NonNullable<ReturnType<typeof renewalOf>> => !!t).sort((a, b) => a.end.getTime() - b.end.getTime())[0];
+    // a client since its first signature: a project's, a signed product's (or its contract's), else when its contract started
+    const signedAt = [...mine.map((p) => p.signingDate), ...ls.map((l) => String(l.signing_date || ctOf(l)?.signDate || lineStartOf(l, ctOf(l)) || ""))]
+      .map((d) => String(d ?? "").slice(0, 10)).filter(Boolean).sort()[0] ?? null;
     const last = extra?.last[c.id] ?? null;
     const days = last ? Math.max(0, Math.floor((Date.now() - new Date(last).getTime()) / 864e5)) : null;
     const signed = mine.reduce((t, p) => t + signedOf(p), 0);
@@ -365,8 +374,20 @@ export function ClientList({
   }, [rows, q, projects, extra, coIndex]);
   const searched = searchInfo.list;
   // Churned clients go last and don't count in the figures: they aren't clients any more.
+  // One whose status was just changed here keeps its place until the list is filtered, sorted or searched again.
+  const [stay, setStay] = useState<Record<string, ClientStatus>>({});
+  const stayKey = JSON.stringify([view, q]);
+  const stayAt = useRef(stayKey);
+  if (stayAt.current !== stayKey) { stayAt.current = stayKey; if (Object.keys(stay).length) setStay({}); }
+  const setStatusHere = async (c: Client, st: ClientStatus, o: { at?: string | null; reason?: string | null; stopProducts?: boolean }) => {
+    const before = c.status === "churned" ? "churned" : "active";
+    const e = await onSetStatus!(c, st, o);
+    if (!e) setStay((m) => (c.id in m ? m : { ...m, [c.id]: before }));
+    return e;
+  };
+  const gone = (r: { c: Client }) => (stay[r.c.id] ?? r.c.status) === "churned";
   const viewed = applyView(searched, fields, view);
-  const shown = [...viewed.filter((r) => r.c.status !== "churned"), ...viewed.filter((r) => r.c.status === "churned")];
+  const shown = [...viewed.filter((r) => !gone(r)), ...viewed.filter((r) => gone(r))];
   const live = shown.filter((r) => r.c.status !== "churned");
   const churnedN = shown.length - live.length;
   const sortKey = view.sort[0]?.key ?? "";
@@ -561,7 +582,7 @@ export function ClientList({
                       <span className="cx-td-name">
                         <CompanyLogo className="cx-av is-sm" name={r.name} website={r.website} />
                         <span className="cx-id"><b title={r.name}>{r.name}</b>{(r.dupOf || r.city || r.sector) && <small>{r.dupOf && <i className="cx-dup" title={`Looks like the same client as: ${r.dupOf}`}>Duplicate?</i>}{[r.city, r.sector].filter(Boolean).join(" · ")}</small>}</span>
-                        {onSetStatus && <span className="cx-st" onClick={(e) => e.stopPropagation()}><ClientStatusPicker size="sm" status={r.c.status} churnedAt={r.c.churnedAt} reason={r.c.churnReason} canEdit={canEdit("company")} running={r.activeProducts} onSave={(st, o) => onSetStatus(r.c, st, o)} /></span>}
+                        {onSetStatus && <span className="cx-st" onClick={(e) => e.stopPropagation()}><ClientStatusPicker size="sm" status={r.c.status} churnedAt={r.c.churnedAt} reason={r.c.churnReason} canEdit={canEdit("company")} running={r.activeProducts} onSave={(st, o) => setStatusHere(r.c, st, o)} /></span>}
                       </span>
                       {colFields.map((f) => <span key={f.key} className={f.type === "number" ? "is-num" : ""}>{cell(f, r)}</span>)}
                       <span className="cx-td-go">
@@ -598,7 +619,7 @@ export function ClientList({
                       )}
                     </div>
                     <div className="cx-tags">
-                      {onSetStatus && <span className="cx-st" onClick={(e) => e.stopPropagation()}><ClientStatusPicker size="sm" status={c.status} churnedAt={c.churnedAt} reason={c.churnReason} canEdit={canEdit("company")} running={r.activeProducts} onSave={(st, o) => onSetStatus(c, st, o)} /></span>}
+                      {onSetStatus && <span className="cx-st" onClick={(e) => e.stopPropagation()}><ClientStatusPicker size="sm" status={c.status} churnedAt={c.churnedAt} reason={c.churnReason} canEdit={canEdit("company")} running={r.activeProducts} onSave={(st, o) => setStatusHere(c, st, o)} /></span>}
                       {r.services.map((t) => <span key={`s${t}`}>{t}</span>)}
                       {r.products.map((t) => <span key={`p${t}`} className="is-prod">{t}</span>)}
                       {!r.services.length && !r.products.length && <span className="is-soft">Nothing signed yet</span>}
@@ -1237,23 +1258,9 @@ type CsFilter = "all" | "contact" | "risk" | "renew" | "orphan" | "upsell" | "hi
 /** Where a renewal date comes from: the product's own term, its deal's contract, or (no term on file) its yearly anniversary. */
 type CsTermKind = "term" | "deal" | "anniversary";
 const CS_DAY = 864e5;
-const csAddYears = (d0: Date, y: number) => { const d = new Date(d0); d.setFullYear(d.getFullYear() + Math.floor(y)); d.setMonth(d.getMonth() + Math.round((y % 1) * 12)); return d; };
 /** A signed product's next renewal — the same rule the automatic e-mails use. */
 function csRenewalOf(l: Line, ct: any): { end: Date; left: number; kind: CsTermKind } | null {
-  if (!isActive(l)) return null;
-  const t = termOf(l);
-  if (t) return t.left >= 0 ? { end: t.end, left: t.left, kind: "term" } : null;
-  const startS = l.start_date || l.signing_date || ct?.contractStart || ct?.signDate;
-  if (!startS) return null;
-  const deal = Number(ct?.termYears) || 0;
-  const y = deal || (l.recurring ? 1 : 0);
-  if (!y) return null;
-  const auto = deal ? !!ct?.autoRenew : true;
-  const step = Number(ct?.renewYears) || y;
-  let end = csAddYears(new Date(startS), y);
-  for (let n = 0; auto && end.getTime() < Date.now() && n < 80; n++) end = csAddYears(end, step);
-  const left = Math.ceil((end.getTime() - Date.now()) / CS_DAY);
-  return left >= 0 ? { end, left, kind: deal ? "deal" : "anniversary" } : null;
+  return renewalOf(l, ct);
 }
 const PRI_TONE: Record<CsPriority, string> = { high: "coral", medium: "gold", low: "slate" };
 /** Does a sequence apply to a client (the same test the sender makes)? */
@@ -3633,7 +3640,7 @@ export function CustomerSuccessPage() {
       if (lg.error) { const r2 = await supabase.from("client_contacts_log").select("client_id, contacted_at, reason, channel, contact_name"); logs = (r2.data ?? []) as CsLog[]; }
       if (!logs.length && lg.error) { const r3 = await supabase.from("client_contacts_log").select("client_id, contacted_at, reason, channel"); logs = (r3.data ?? []) as CsLog[]; }
       // renewal dates: a product without its own term follows its deal's contract
-      const tids = [...new Set(((cp.data ?? []) as any[]).map((r) => r.tracking_id).filter(Boolean))] as string[];
+      const tids = [...new Set(((cp.data ?? []) as any[]).flatMap((r) => [r.tracking_id, r.contract_tracking_id]).filter(Boolean))] as string[];
       const terms: Record<string, any> = {};
       (await Promise.all(Array.from({ length: Math.ceil(tids.length / 150) }, (_, i) => tids.slice(i * 150, i * 150 + 150))
         .map((ids) => Promise.resolve(supabase.from("trackings").select("id, contract_terms").in("id", ids)).then((r: any) => (r.data ?? []) as any[]))).catch(() => [] as any[][]))
@@ -3682,7 +3689,7 @@ export function CustomerSuccessPage() {
       const priority = cs?.priority[c.id] ?? null;
       const ratio = days == null ? Infinity : days / cad;
       const health = cs?.health.find((h) => h.client_id === c.id)?.status ?? null;
-      const rens = ls.map((l) => ({ l, t: csRenewalOf(l, l.tracking_id ? base.terms[l.tracking_id] : null) })).filter((x) => !!x.t).sort((a, b) => a.t!.end.getTime() - b.t!.end.getTime());
+      const rens = ls.map((l) => ({ l, t: csRenewalOf(l, (l.contract_tracking_id || l.tracking_id) ? base.terms[l.contract_tracking_id || l.tracking_id] : null) })).filter((x) => !!x.t).sort((a, b) => a.t!.end.getTime() - b.t!.end.getTime());
       const r0 = rens[0];
       const ups = (cs?.upsells ?? []).filter((u) => u.client_id === c.id && !["won", "lost"].includes(u.status));
       const arr = ls.filter(isActive).reduce((t, l) => t + (l.recurring ? lineAnnual(l) : 0), 0);
@@ -3867,7 +3874,7 @@ export function CustomerSuccessPage() {
   };
   const dropQbr = async (id: string) => { const e = await deleteQbr(id); if (e) say(e); else setCs((d) => d ? { ...d, qbrs: d.qbrs.filter((x) => x.id !== id) } : d); };
   const in12 = Date.now() + 365 * 864e5;
-  const renewals = clients.flatMap((c) => c.lines.map((l) => ({ c, l, t: csRenewalOf(l, l.tracking_id ? base?.terms[l.tracking_id] : null) })))
+  const renewals = clients.flatMap((c) => c.lines.map((l) => ({ c, l, t: csRenewalOf(l, (l.contract_tracking_id || l.tracking_id) ? base?.terms[l.contract_tracking_id || l.tracking_id] : null) })))
     .filter((x) => x.t && x.t.end.getTime() <= in12)
     .sort((a, b) => a.t!.end.getTime() - b.t!.end.getTime());
   const ren90 = renewals.filter((x) => x.t!.left <= 90);
@@ -4114,7 +4121,7 @@ export function CustomerSuccessPage() {
           <CsBlock icon="repeat" title="Products & renewals" right={<span className="cs3-muted">{lines.length} active</span>}>
             {lines.length ? (
               <ul className="cs3-prods">
-                {lines.map((l) => { const t = csRenewalOf(l, l.tracking_id ? base?.terms[l.tracking_id] : null); return (
+                {lines.map((l) => { const t = csRenewalOf(l, (l.contract_tracking_id || l.tracking_id) ? base?.terms[l.contract_tracking_id || l.tracking_id] : null); return (
                   <li key={l.id} className={t && t.left < 90 ? "is-soon" : ""}>
                     <span className="cs3-prods-m"><b>{l.name}</b><i>{l.recurring ? "recurring" : "one-off"}{t ? ` · ${t.kind === "anniversary" ? "anniversary" : l.auto_renew || t.kind === "deal" ? "renews" : "ends"} ${t.end.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}` : ""}{t?.kind === "deal" ? " · from the deal's contract" : ""}</i></span>
                     {t && <em>{t.left} d</em>}

@@ -614,6 +614,15 @@
 .dct-step b { margin-left: auto; font-family: "Space Grotesk", sans-serif; font-size: 19px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .dct-step em { margin-right: auto; font-style: normal; font-size: 12.5px; font-weight: 600; color: var(--muted); }
 .dct-terms { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+/* the grace period: signed (created) on one day, starts on another */
+.dct-dates.is-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.dct-date.is-grace { background: rgba(201, 138, 27, 0.07); border-color: rgba(201, 138, 27, 0.28); }
+.dct-date.is-grace .dct-step b { color: #8a5a0b; }
+.dct-step b.is-custom { color: #8a5a0b; }
+.dct-grace-note { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; margin: 10px 0 0; padding: 10px 14px; border-radius: 13px; font-size: 12.5px; line-height: 1.45; color: #6b4a10; background: rgba(224, 160, 62, 0.1); border: 1px solid rgba(224, 160, 62, 0.26); }
+.dct-grace-note b { font-weight: 700; color: #4f360b; white-space: nowrap; }
+.dct-grace-note i { font-style: normal; font-weight: 700; color: #b07a1c; }
+.dct-grace-note span { flex-basis: 100%; color: #7a5a1f; }
 .dct-mini { display: inline-flex; align-items: center; gap: 7px; padding: 7px 12px; border-radius: 12px; background: var(--field); border: 1.5px solid transparent; transition: border-color 0.16s, background 0.16s; }
 .dct-mini:focus-within { border-color: var(--emerald); background: #fff; }
 .dct-mini > span { font-size: 12px; font-weight: 600; color: var(--muted); }
@@ -697,7 +706,7 @@
   .dct-body { grid-template-columns: 1fr; overflow-y: auto; }
   .dct-form, .dct-sum { overflow: visible; }
   .dct-sum { border-left: none; border-top: 1px solid var(--line); }
-  .dct-dates { grid-template-columns: 1fr; }
+  .dct-dates, .dct-dates.is-4 { grid-template-columns: 1fr; }
   .dct-extra.hc-contract { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) { .dct, .dct-sec, .dct-line, .dct-final, .dct-years, .dct-head-glow { animation: none !important; } }

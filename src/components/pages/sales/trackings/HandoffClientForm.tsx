@@ -17,6 +17,18 @@ import type { OrderFormData } from "./proposalGen";
 import "./HandoffClientForm.css";
 import { NumInput } from "../../../framework/NumInput";
 
+/** A day N months on (the 31st becomes the month's last day). */
+const addMonthsIso = (iso: string, n: number) => {
+  const [y, m, d] = iso.slice(0, 10).split("-").map(Number);
+  const t = new Date(Date.UTC(y, m - 1 + n, 1));
+  const last = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() + 1, 0)).getUTCDate();
+  return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, "0")}-${String(Math.min(d, last)).padStart(2, "0")}`;
+};
+/** Whole months from one day to another (null when it isn't a whole number of months). */
+const wholeMonths = (from: string, to: string) => { for (let n = 0; n <= 60; n++) if (addMonthsIso(from, n) === to.slice(0, 10)) return n; return null; };
+const dayGap = (from: string, to: string) => Math.round((Date.parse(`${to.slice(0, 10)}T12:00:00Z`) - Date.parse(`${from.slice(0, 10)}T12:00:00Z`)) / 864e5);
+const prettyDay = (iso: string) => new Date(`${iso.slice(0, 10)}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+
 export interface HandoffContact {
   id: string; name: string; position: string; email: string; phone: string; billing: boolean;
 }
@@ -698,6 +710,27 @@ export function ContractPanel({
   const termFromLines = Math.max(1, ...recurring.map((l) => Number(l.line.term_years) || 1));
   const [signDate, setSignDate] = useState<string>(initial?.signDate || signDefault);
   const [contractStart, setContractStart] = useState<string>(initial?.contractStart || "");
+  /** Grace period in months (0: starts on signing; null: a start of its own that isn't whole months on). */
+  const [grace, setGrace] = useState<number | null>(() => {
+    const st = initial?.contractStart || "", sd = initial?.signDate || signDefault;
+    if (!st || !sd || st === sd) return 0;
+    return initial?.graceMonths ?? wholeMonths(sd, st);
+  });
+  /** The grace period moves the start with it; a start picked by hand sets the grace it makes. */
+  const applyGrace = (n: number) => {
+    const g = Math.max(0, Math.min(36, n));
+    setGrace(g);
+    setContractStart(g && signDate ? addMonthsIso(signDate, g) : "");
+  };
+  const pickStart = (v: string) => {
+    setContractStart(v);
+    setGrace(!v || !signDate || v === signDate ? 0 : wholeMonths(signDate, v));
+  };
+  const pickSign = (v: string) => {
+    setSignDate(v);
+    if (grace && v) setContractStart(addMonthsIso(v, grace));
+    else if (contractStart && v) setGrace(contractStart === v ? 0 : wholeMonths(v, contractStart));
+  };
   const [term, setTerm] = useState<number>(() => (recurring.length ? termFromLines : Number(initial?.termYears) || 1));
   const [payDays, setPayDays] = useState<number | null>(initial?.paymentTermsDays ?? null);
   const [autoRenew, setAutoRenew] = useState<boolean>(!!initial?.autoRenew);
@@ -867,8 +900,8 @@ export function ContractPanel({
     field("newsletter", "Newsletter", d.newsletter, c.newsletter, () => setNewsletter(!!d.newsletter), !saved("newsletter"));
     field("marketingConsent", "May show logo & name", d.marketingConsent, c.marketing, () => setMarketing(!!d.marketingConsent), !saved("marketingConsent"));
     field("paymentTermsDays", "Payment (days)", d.paymentTermsDays, c.payDays, () => setPayDays(d.paymentTermsDays!));
-    field("contractStart", "Contract start", d.contractStart, c.contractStart, () => setContractStart(d.contractStart!));
-    field("signDate", "Sign date", d.signDate, c.signDate, () => setSignDate(d.signDate!), !saved("signDate"));
+    field("contractStart", "Contract start", d.contractStart, c.contractStart, () => pickStart(d.contractStart!));
+    field("signDate", "Sign date", d.signDate, c.signDate, () => pickSign(d.signDate!), !saved("signDate"));
     field("nonTerminableYears", "Non-terminable (years)", d.nonTerminableYears, c.nonTerm, () => setNonTerm(d.nonTerminableYears!));
     if (d.nonTerminableYears && recurring.length) field("term", "Term (years)", d.nonTerminableYears, c.term, () => applyTerm(d.nonTerminableYears!), c.term === 1 && !saved("termYears"));
     if (d.autoRenew) {
@@ -932,7 +965,8 @@ export function ContractPanel({
     const sold = new Map(lines.map((l) => [l.key, l]));
     return {
       ...(initial ?? {}),
-      signDate: signDate || null, contractStart: contractStart || null,
+      signDate: signDate || null, contractStart: contractStart && contractStart !== signDate ? contractStart : null,
+      graceMonths: contractStart && signDate && contractStart > signDate ? grace : null,
       termYears: recurring.length ? term : Number(initial?.termYears) || term,
       increments: inc, paymentTermsDays: payDays, autoRenew, renewYears: autoRenew ? renewYears : null,
       nonTerminableYears: nonTerm, contractRef: ref.trim() || null, notes: notes.trim() || null,
@@ -1076,16 +1110,25 @@ export function ContractPanel({
               )}
               <section className="dct-sec">
                 <h3 className="dct-sec-t"><span className="dct-ico"><IconCal /></span>Dates & term</h3>
-                <div className="dct-dates">
+                <div className="dct-dates is-4">
                   <div className="dct-date">
                     <span>Sign date <PdfTag k="signDate" /></span>
-                    <DatePicker value={signDate} onChange={(v) => setSignDate(v)} placeholder="Pick a day" />
-                    <small>{signDate === signDefault ? "The day the deal was won" : <button type="button" className="dct-link" onClick={() => setSignDate(signDefault)}>Use the won date</button>}</small>
+                    <DatePicker value={signDate} onChange={pickSign} placeholder="Pick a day" />
+                    <small>{signDate === signDefault ? "The day the deal was won" : <button type="button" className="dct-link" onClick={() => pickSign(signDefault)}>Use the won date</button>}</small>
+                  </div>
+                  <div className={`dct-date ${contractStart && signDate && contractStart > signDate ? "is-grace" : ""}`}>
+                    <span>Grace period</span>
+                    <div className="dct-step">
+                      <button type="button" onClick={() => applyGrace((grace ?? Math.ceil(Math.max(0, dayGap(signDate, contractStart)) / 30)) - 1)} disabled={!grace && !(contractStart && contractStart !== signDate)} aria-label="Shorter grace period">−</button>
+                      {grace == null ? <><b className="is-custom">{Math.max(0, dayGap(signDate, contractStart))}</b><em>days</em></> : <><b>{grace}</b><em>{grace === 1 ? "month" : "months"}</em></>}
+                      <button type="button" onClick={() => applyGrace((grace ?? Math.ceil(Math.max(0, dayGap(signDate, contractStart)) / 30)) + 1)} disabled={!signDate || (grace ?? 0) >= 36} aria-label="Longer grace period">+</button>
+                    </div>
+                    <small>{contractStart && signDate && contractStart < signDate ? "It started before it was signed" : grace || (contractStart && contractStart !== signDate) ? "Signed now, starts later" : "None: it starts when signed"}</small>
                   </div>
                   <div className="dct-date">
-                    <span>Contract start <em>optional</em> <PdfTag k="contractStart" /></span>
-                    <DatePicker value={contractStart} onChange={(v) => setContractStart(v)} placeholder="Same as signed" />
-                    <small>{contractStart ? <button type="button" className="dct-link" onClick={() => setContractStart("")}>Same as the sign date</button> : "Starts the day it's signed"}</small>
+                    <span>Contract start <PdfTag k="contractStart" /></span>
+                    <DatePicker value={contractStart || signDate} onChange={pickStart} placeholder="Same as signed" />
+                    <small>{contractStart && contractStart !== signDate ? <button type="button" className="dct-link" onClick={() => applyGrace(0)}>Start on the sign date</button> : "The day it's signed"}</small>
                   </div>
                   <div className="dct-date">
                     <span>Term <PdfTag k="term" /></span>
@@ -1097,6 +1140,12 @@ export function ContractPanel({
                     <small>{recurring.length ? `Applies to ${recurring.length === 1 ? "the subscription" : `all ${recurring.length} subscriptions`}` : "No subscriptions on this contract"}</small>
                   </div>
                 </div>
+                {contractStart && signDate && contractStart > signDate && (
+                  <p className="dct-grace-note">
+                    <b>Signed {prettyDay(signDate)}</b><i aria-hidden="true">→</i><b>starts {prettyDay(contractStart)}</b>
+                    <span>{grace ? `${grace}-month grace period` : `${dayGap(signDate, contractStart)} days of grace`}: the term{recurring.length ? `, its ${term} contract ${term === 1 ? "year" : "years"}` : ""}, the yearly prices and the renewal count from the start.</span>
+                  </p>
+                )}
                 <div className="dct-terms">
                   <label className="dct-mini"><span>Licence payment <PdfTag k="paymentTermsDays" /></span><NumInput type="number" min={0} value={payDays ?? ""} placeholder="30" onChange={(e) => setPayDays(e.target.value === "" ? null : Number(e.target.value))} /><em>days</em></label>
                   <label className="dct-mini"><span>Non-terminable <PdfTag k="nonTerminableYears" /></span><NumInput type="number" min={0} value={nonTerm ?? ""} placeholder="0" onChange={(e) => setNonTerm(e.target.value === "" ? null : Number(e.target.value))} /><em>years</em></label>

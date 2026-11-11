@@ -11,6 +11,9 @@ import {
   type Client, type ClientStatus, type Project, type ProjectType, type Blueprint, type ClientRole, type RoleLine, parseHolds, holdsAfter, projectStatusOf, type HoldPeriod,
 } from "./clientsTypes";
 
+
+/** Today as YYYY-MM-DD in local time. */
+const localToday = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 const crmKey = (s: unknown) => String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
   .replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim()
   .replace(/\s(s\s?l\s?u?|s\s?a\s?u?|slp|sll|sccl|scp|cb|ab|gmbh|ltd|llc|inc|bv|srl|spa|sas|sarl|plc|ag|nv)$/, "").trim();
@@ -317,7 +320,8 @@ export function useClientsData() {
     setRoles(roleList);
     setProjects(visibleProjects);
     setClients((cls ?? [])
-      .map((r: any) => ({ id: r.id, name: (r.company?.name ?? "").trim() || r.name || "", status: r.status === "churned" ? "churned" as const : "active" as const, churnedAt: r.churned_at ?? null, churnReason: r.churn_reason ?? null }))
+      // a churn on a future day (the contract's end) leaves the client active until then
+      .map((r: any) => ({ id: r.id, name: (r.company?.name ?? "").trim() || r.name || "", status: r.status === "churned" && !(r.churned_at && r.churned_at > localToday()) ? "churned" as const : "active" as const, churnedAt: r.churned_at ?? null, churnReason: r.churn_reason ?? null }))
       .sort((a: any, b: any) => a.name.localeCompare(b.name))
       .filter((c: any) => seesAll || allowedClients.has(c.id)));
     setUsage(agg);
@@ -479,16 +483,26 @@ export function useClientsData() {
    * signed products, so they stop counting in the recurring revenue.
    */
   const setClientStatus = async (id: string, status: ClientStatus, opts: { at?: string | null; reason?: string | null; stopProducts?: boolean } = {}): Promise<string | null> => {
+    const today = localToday();
     const row = status === "churned"
-      ? { status, churned_at: opts.at || new Date().toISOString().slice(0, 10), churn_reason: opts.reason?.trim() || null }
+      ? { status, churned_at: opts.at || today, churn_reason: opts.reason?.trim() || null }
       : { status, churned_at: null, churn_reason: null };
     const { error } = await supabase.from("clients").update(row).eq("id", id);
     if (error) return /status|churn|schema cache|column/i.test(error.message) ? "Run 96_client_status.sql in Supabase first." : error.message;
+    const running = "status.is.null,status.ilike.%active%,status.ilike.%signed%,status.ilike.%live%";
     if (status === "churned" && opts.stopProducts) {
-      const { error: e2 } = await supabase.from("client_products").update({ status: "churned" }).eq("client_id", id).or("status.is.null,status.ilike.%active%,status.ilike.%signed%,status.ilike.%live%");
-      if (e2) return e2.message;
+      // lost today or before: its running products stop now; on a later day (the contract's end): they stop on that day (121)
+      const later = row.churned_at! > today;
+      let { error: e2 } = await supabase.from("client_products").update(later ? { ends_on: row.churned_at } : { status: "cancelled", ends_on: row.churned_at }).eq("client_id", id).or(running);
+      if (e2 && /ends_on/i.test(e2.message) && !later) ({ error: e2 } = await supabase.from("client_products").update({ status: "cancelled" }).eq("client_id", id).or(running));
+      if (e2) return /ends_on/i.test(e2.message) ? "Run 121_client_churn_end.sql in Supabase first." : e2.message;
     }
-    setClients((xs) => xs.map((c) => (c.id === id ? { ...c, status, churnedAt: status === "churned" ? row.churned_at : null, churnReason: status === "churned" ? row.churn_reason : null } : c)));
+    if (status === "active") {
+      // active again: products that were to stop with the churn keep running
+      await supabase.from("client_products").update({ ends_on: null }).eq("client_id", id).not("ends_on", "is", null).or(running);
+    }
+    const shown: ClientStatus = status === "churned" && row.churned_at! > today ? "active" : status;
+    setClients((xs) => xs.map((c) => (c.id === id ? { ...c, status: shown, churnedAt: row.churned_at, churnReason: row.churn_reason } : c)));
     return null;
   };
 

@@ -21,6 +21,7 @@ import ConsultantModal from "./ConsultantModal";
 import BillingPanel from "./BillingPanel";
 import IncomingPanel from "./IncomingPanel";
 import { PageSecurity } from "../settings/PageAccessModal";
+import HandoffAlertsSettings from "./HandoffAlertsSettings";
 import { useMgmtAccess, type Level } from "./mgmtAccess";
 import { useInactiveIds } from "../../framework/peopleStatus";
 import { ClientLogo } from "../clients/ClientWorkspace";
@@ -1870,6 +1871,7 @@ minPerMonth: targets.minPerMonth,
           setHoursPerDay={setHoursPerDay}
           managementMode
           securityPanel={access.isAdmin ? <div className="mg-sec-embed"><PageSecurity page="management" /></div> : undefined}
+          notifyPanel={<HandoffAlertsSettings canEdit={lv("settings") === "all"} />}
           securityOnly={lv("settings") !== "all"}
           consultants={allRows.filter((r) => !inactive.has(r.userId)).map((r) => ({ userId: r.userId, name: r.name }))}
           capacity={capacity}

@@ -1835,10 +1835,14 @@ const HA_VERB: Record<string, string> = {
   task_assigned: "assigned you", task_added: "added you to", task_step: "gave you a step on", message: "replied on", mention: "mentioned you on", invite: "invited you to",
   invite_moved: "moved", invite_cancelled: "cancelled", invite_removed: "took you off", invite_accepted: "accepted", invite_declined: "declined",
   project_new: "put you on a new project", project_added: "added you to the project",
+  report_shared: "shared a report with you", report_owner: "made you the owner of the report",
+  handoff_new: "handed over a won deal",
 };
 const HA_TONE: Record<string, string> = {
   task_assigned: "task", task_added: "task", task_step: "task", message: "msg", mention: "msg", invite: "invite", invite_moved: "warn", invite_cancelled: "bad", invite_removed: "bad", invite_accepted: "ok", invite_declined: "bad",
   project_new: "proj", project_added: "proj",
+  report_shared: "msg", report_owner: "ok",
+  handoff_new: "proj",
 };
 const haIcon = (kind: string) => {
   const p = kind === "task_assigned" || kind === "task_added" || kind === "task_step" ? <><rect x="4" y="4" width="16" height="16" rx="4" /><path d="M8.5 12.5l2.5 2.5 4.5-5" /></>
@@ -1847,6 +1851,8 @@ const haIcon = (kind: string) => {
     : kind === "invite_accepted" ? <><circle cx="12" cy="12" r="8.5" /><path d="M8.5 12.5l2.5 2.5 4.5-5" /></>
     : kind === "invite_declined" || kind === "invite_cancelled" || kind === "invite_removed" ? <><circle cx="12" cy="12" r="8.5" /><path d="M9 9l6 6M15 9l-6 6" /></>
     : kind === "project_new" || kind === "project_added" ? <><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2.2h8.5A1.5 1.5 0 0 1 21 9.7v8.8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z" /><path d="M12 11.5v5M9.5 14h5" /></>
+    : kind === "handoff_new" ? <><path d="M3 12h13M12 6l6 6-6 6M21 5v14" /></>
+    : kind === "report_shared" || kind === "report_owner" ? <><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></>
     : kind === "invite_moved" ? <><rect x="3" y="5" width="18" height="15" rx="3" /><path d="M3 10h18M8 3v4M16 3v4M10 15h5M13 13l2 2-2 2" /></>
     : <><rect x="3" y="5" width="18" height="15" rx="3" /><path d="M3 10h18M8 3v4M16 3v4" /></>;
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">{p}</svg>;
@@ -1992,6 +1998,8 @@ function useHomeAlerts(userId: string | null) {
     void markSeen([a.id]);
     if (a.ref_type === "task" && a.ref_id) { setTicket(a.ref_id); return; }
     if (a.ref_type === "client") { nav("/clients"); return; }
+    if (a.ref_type === "handoff") { goToSection(nav, "/management", "incoming"); return; }
+    if (a.ref_type === "report") { nav(a.ref_id ? `/reports?report=${a.ref_id}` : "/reports"); return; }
     if (a.ref_type === "project" && a.ref_id) {
       // the project lives on its client's page
       void Promise.resolve(supabase.from("projects").select("client_id").eq("id", a.ref_id).maybeSingle())
@@ -2008,15 +2016,17 @@ function useHomeAlerts(userId: string | null) {
 type HomeAlertsState = ReturnType<typeof useHomeAlerts>;
 
 /** What an alert is about, for the tabs of the notifications window. */
-type HaCat = "invites" | "meetings" | "projects" | "tasks" | "tickets" | "mentions";
+type HaCat = "invites" | "meetings" | "projects" | "tasks" | "tickets" | "mentions" | "reports";
 const HA_CATS: { key: HaCat | "all"; label: string }[] = [
   { key: "all", label: "All" }, { key: "invites", label: "Invitations" }, { key: "meetings", label: "Meetings" }, { key: "projects", label: "Projects" },
-  { key: "tasks", label: "Tasks" }, { key: "tickets", label: "Tickets" }, { key: "mentions", label: "Mentions" },
+  { key: "tasks", label: "Tasks" }, { key: "tickets", label: "Tickets" }, { key: "mentions", label: "Mentions" }, { key: "reports", label: "Reports" },
 ];
 const haCatsOf = (a: HomeAlert, cats: Record<string, string>): HaCat[] => {
   if (a.kind === "invite") return ["invites"];
   if (a.kind.startsWith("invite_")) return ["meetings"];
   if (a.ref_type === "project") return ["projects"];
+  if (a.ref_type === "report") return ["reports"];
+  if (a.ref_type === "handoff") return ["projects"];
   const out: HaCat[] = [];
   if (a.ref_type === "task") out.push(a.ref_id && cats[a.ref_id] === "ticket" ? "tickets" : "tasks");
   if (a.kind === "mention") out.push("mentions");

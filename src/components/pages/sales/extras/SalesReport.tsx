@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent as RDragEvent, type ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../../../api/supabase";
 import { downloadBlob, tableToCsv, tableToXlsx, type ExportColumn } from "../../../framework/exportFile";
 import SalesMultiFilter, { type SmfOption } from "../sales/SalesMultiFilter";
@@ -12,6 +12,9 @@ import {
   condComplete, toCell, showCell, sortValue, uid, norm, setReportPeriod, withPeriodTag, prettyRange, DEFAULT_REPORT_PERIOD, PERIOD_STATUS_HINT,
   type Cond, type CondGroup, type Field, type EntityKey, type CrmFn, type CrmRow, type CrmData, type Kind, type Agg, type ReportPeriod,
 } from "./salesReportEngine";
+import ReportsHome from "./ReportsHome";
+import ReportShare, { type ShareState, type SharePerson } from "./ReportShare";
+import { listEmployees } from "../../companies/companiesApi";
 import "./SalesReport.css";
 
 /* =====================================================================
@@ -45,7 +48,9 @@ export interface CrmReport {
   /** The report's period (a parameter): unset = this year. */
   period?: ReportPeriod;
 }
-interface SavedReport { id: string; name: string; owner_id: string | null; shared: boolean; updated_at: string; config: any }
+interface SavedReport { id: string; name: string; owner_id: string | null; shared: boolean; updated_at: string; config: any;
+  /** 126_report_sharing.sql: people who may view it / view and change it. */
+  shared_with?: string[] | null; editors?: string[] | null }
 /** One of your folders of saved reports (93_sales_report_folders.sql): yours alone, reports shared with you included. */
 interface ReportFolder { id: string; name: string; color: string | null; sort: number; report_ids: string[] }
 const FOLDER_COLORS = ["#0a6f4d", "#2f6fd6", "#7c3aed", "#c2410c", "#b7791f", "#0f766e", "#be185d", "#475569"];
@@ -320,10 +325,19 @@ export default function ReportsPage() {
     setMenuAt(r.bottom + 280 > window.innerHeight ? { left, bottom: window.innerHeight - r.top + 4 } : { left, top: r.bottom + 4 });
   };
   const [tableMissing, setTableMissing] = useState(false);
+  /** With no report open: your home board, or the ready-made / from-scratch starts. */
+  const [homeTab, setHomeTab] = useState<"home" | "new">("home");
   const [me, setMe] = useState<string | null>(null);
   const [cfg, setCfg] = useState<CrmReport | null>(null);
   const [reportId, setReportId] = useState<string | null>(null);
   const [shared, setShared] = useState(false);
+  /** The people the open report is shared with (to view / to view and change), and everyone who could be. */
+  const [sharedWith, setSharedWith] = useState<string[]>([]);
+  const [editors, setEditors] = useState<string[]>([]);
+  const [sharingMissing, setSharingMissing] = useState(false);
+  const [people, setPeople] = useState<SharePerson[]>([]);
+  useEffect(() => { listEmployees().then((es) => setPeople(es.map((e) => ({ id: e.id, name: e.name, email: e.email, former: e.former })))).catch(() => {}); }, []);
+  const personName = (id: string | null | undefined) => (id ? people.find((p) => p.id === id)?.name ?? "someone" : "someone");
   /** Who the open report belongs to (null: a new one, yours). */
   const [owner, setOwner] = useState<string | null>(null);
   const [snap, setSnap] = useState("");
@@ -370,10 +384,14 @@ export default function ReportsPage() {
   useEffect(() => { supabase.auth.getSession().then(({ data: s }) => setMe(s?.session?.user?.id ?? null)); void loadSaved(); }, []);
 
   async function loadSaved() {
-    const [{ data: rows, error }, fo] = await Promise.all([
-      supabase.from("sales_reports").select("id, name, owner_id, shared, updated_at, config").order("updated_at", { ascending: false }),
+    const [first, fo] = await Promise.all([
+      supabase.from("sales_reports").select("id, name, owner_id, shared, shared_with, editors, updated_at, config").order("updated_at", { ascending: false }),
       supabase.from("sales_report_folders").select("id, name, color, sort, report_ids").order("sort").order("created_at"),
     ]);
+    // before 126_report_sharing.sql: no people to share with yet
+    const missing = !!first.error && /shared_with|editors|column/i.test(first.error.message ?? "");
+    setSharingMissing(missing);
+    const { data: rows, error } = missing ? await supabase.from("sales_reports").select("id, name, owner_id, shared, updated_at, config").order("updated_at", { ascending: false }) : first;
     if (error) { setTableMissing(true); return; }
     setSaved((rows ?? []) as SavedReport[]);
     if (fo.error) setFoldersOk(false);
@@ -550,8 +568,10 @@ export default function ReportsPage() {
   const set = (p: Partial<CrmReport>) => setCfg((c) => (c ? { ...c, ...p } : c));
   const dirty = !!cfg && JSON.stringify(cfg) !== snap;
   const mine = !owner || !me || owner === me;
+  /** The owner, or someone it was shared with to change it. */
+  const canEdit = mine || (!!me && editors.includes(me));
   const start = (r: CrmReport, id: string | null = null, sh = false, view = false, by: string | null = null) => {
-    setCfg(r); setReportId(id); setShared(sh); setSharedSnap(sh); setOwner(by); setSnap(JSON.stringify(r)); setPanel(null); setShown(200);
+    setCfg(r); setReportId(id); setShared(sh); setSharedSnap(sh); setOwner(by); setSharedWith([]); setEditors([]); setSnap(JSON.stringify(r)); setPanel(null); setShown(200);
     setMode(view ? "view" : "build"); setOpenChart(null); setExpOpen(false);
   };
   const leaveOk = () => !dirty || window.confirm("Leave this report without saving your changes?");
@@ -588,7 +608,7 @@ export default function ReportsPage() {
   const [leaving, setLeaving] = useState<RowLink | null>(null);
   const go = (l: RowLink) => {
     // keep the report as it is, so Back comes straight back to it (unsaved changes included)
-    if (cfg) { try { sessionStorage.setItem(RETURN_KEY, JSON.stringify({ cfg, reportId, shared, sharedSnap, owner, snap, mode, at: Date.now() })); } catch { /* private mode */ } }
+    if (cfg) { try { sessionStorage.setItem(RETURN_KEY, JSON.stringify({ cfg, reportId, shared, sharedSnap, owner, snap, mode, sharedWith, editors, at: Date.now() })); } catch { /* private mode */ } }
     setLeaving(null);
     navigate(l.to, l.state ? { state: l.state } : undefined);
   };
@@ -603,6 +623,8 @@ export default function ReportsPage() {
     if (!back?.cfg || Date.now() - (back.at ?? 0) > 6 * 3600e3) return;
     start(back.cfg, back.reportId ?? null, !!back.sharedSnap, back.mode === "view", back.owner ?? null);
     setShared(!!back.shared);
+    if (Array.isArray(back.sharedWith)) setSharedWith(back.sharedWith);
+    if (Array.isArray(back.editors)) setEditors(back.editors);
     if (typeof back.snap === "string") setSnap(back.snap);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -612,23 +634,64 @@ export default function ReportsPage() {
     window.addEventListener("keydown", k);
     return () => window.removeEventListener("keydown", k);
   }, [leaving]);
-  const open = (s: SavedReport) => { if (!leaveOk()) return; start(fromSaved(s.config, s.name), s.id, !!s.shared, true, s.owner_id); };
+  const open = (s: SavedReport) => {
+    if (!leaveOk()) return;
+    start(fromSaved(s.config, s.name), s.id, !!s.shared, true, s.owner_id);
+    setSharedWith(s.shared_with ?? []); setEditors(s.editors ?? []);
+  };
+  // arriving from a notification ("… shared a report with you"): open it
+  const location = useLocation();
+  const askedReport = new URLSearchParams(location.search).get("report");
+  const openedAsked = useRef<string | null>(null);
+  useEffect(() => {
+    if (!askedReport || openedAsked.current === askedReport) return;
+    const s = saved.find((x) => x.id === askedReport);
+    if (!s) return;
+    openedAsked.current = askedReport;
+    open(s);
+    navigate("/reports", { replace: true });
+  }, [askedReport, saved]); // eslint-disable-line react-hooks/exhaustive-deps
+  /** Who sees the open report: kept with it at once (a saved one of yours), or saved with it (a new one). */
+  const applyShare = async (next: ShareState, newOwner?: string) => {
+    const before = { shared, sharedWith, editors, sharedSnap };
+    setShared(next.shared); setSharedWith(next.sharedWith); setEditors(next.editors);
+    if (!reportId) return;
+    setSharedSnap(next.shared);
+    const body: Record<string, unknown> = { shared: next.shared };
+    if (!sharingMissing) { body.shared_with = next.sharedWith; body.editors = next.editors; }
+    if (newOwner) body.owner_id = newOwner;
+    const { error } = await supabase.from("sales_reports").update(body).eq("id", reportId);
+    if (error) {
+      setShared(before.shared); setSharedWith(before.sharedWith); setEditors(before.editors); setSharedSnap(before.sharedSnap);
+      setNote(/shared_with|editors/i.test(error.message) ? "Run 126_report_sharing.sql in Supabase first." : `Not shared: ${error.message}`);
+      return;
+    }
+    if (newOwner) setOwner(newOwner);
+    const added = next.sharedWith.length + next.editors.length > before.sharedWith.length + before.editors.length;
+    setNote(newOwner ? `${personName(newOwner)} owns it now` : added ? "Shared — they get a notification" : "Sharing updated");
+    void loadSaved();
+  };
   const save = async (copyAsked = false) => {
     if (!cfg) return false;
-    // a report someone shared with you can't be changed in place: your changes become your own copy
-    const theirs = !!reportId && !mine;
+    // a report someone shared with you to view can't be changed in place: your changes become your own copy
+    const theirs = !!reportId && !canEdit;
     const copy = copyAsked || theirs;
     if (tableMissing) { setNote("Saved reports need the sales_reports table in the database."); return false; }
     setBusy(true);
     const name = (copy ? `${cfg.name} (copy)` : cfg.name).trim() || "Untitled report";
-    const body = { name, config: { ...cfg, name, openInView: true }, shared, updated_at: new Date().toISOString() };
+    // only the owner (or a new report) sets who sees it; a copy starts as yours alone
+    const body: Record<string, unknown> = { name, config: { ...cfg, name, openInView: true }, updated_at: new Date().toISOString() };
+    if (copy) { body.shared = false; if (!sharingMissing) { body.shared_with = []; body.editors = []; } }
+    else if (mine) { body.shared = shared; if (!sharingMissing) { body.shared_with = sharedWith; body.editors = editors; } }
     const res = !copy && reportId
       ? await supabase.from("sales_reports").update(body).eq("id", reportId).select("id").single()
       : await supabase.from("sales_reports").insert(body).select("id").single();
     setBusy(false);
     if (res.error) { setNote(`Couldn't save: ${res.error.message}`); return false; }
     const c = { ...cfg, name };
-    setCfg(c); setReportId((res.data as any).id); setOwner(me); setSnap(JSON.stringify(c)); setSharedSnap(shared); setNote(theirs ? "Saved as your own copy (the shared one stays as it was)" : copy ? "Saved as a copy" : "Report saved");
+    setCfg(c); setReportId((res.data as any).id); setSnap(JSON.stringify(c));
+    if (copy || !reportId) setOwner(me);
+    if (copy) { setShared(false); setSharedSnap(false); setSharedWith([]); setEditors([]); } else setSharedSnap(shared); setNote(theirs ? "Saved as your own copy (the shared one stays as it was)" : copy ? "Saved as a copy" : "Report saved");
     void loadSaved();
     return true;
   };
@@ -993,6 +1056,17 @@ export default function ReportsPage() {
     );
   };
 
+  const homeTabs = (
+    <div className="rh-tabs" role="tablist" aria-label="Reports">
+      <button type="button" role="tab" aria-selected={homeTab === "home"} className={homeTab === "home" ? "is-on" : ""} onClick={() => setHomeTab("home")}>
+        <Ico d="M3 11l9-7 9 7M5 10v10h14V10M10 20v-6h4v6" />Home
+      </button>
+      <button type="button" role="tab" aria-selected={homeTab === "new"} className={homeTab === "new" ? "is-on" : ""} onClick={() => setHomeTab("new")}>
+        <Ico d={I.plus} w={2.4} />New report
+      </button>
+    </div>
+  );
+
   /* ---------------------------------------------------------------- */
   return (
     <div className="rp">
@@ -1003,7 +1077,7 @@ export default function ReportsPage() {
         </div>
         <div className="rp-hero-acts">
           {cfg && <button type="button" className="rp-btn is-glass" onClick={() => { forgetCrmData(); setDataTick((x) => x + 1); }} title="Read the CRM again"><Ico d={I.refresh} />Refresh data</button>}
-          <button type="button" className="rp-btn is-mint" onClick={() => { if (!leaveOk()) return; start(newReport("deal")); }}><Ico d={I.plus} w={2.4} />New report</button>
+          <button type="button" className="rp-btn is-mint" onClick={() => { if (!leaveOk()) return; setCfg(null); setReportId(null); setHomeTab("new"); document.querySelector(".rp-main")?.scrollTo({ top: 0 }); }}><Ico d={I.plus} w={2.4} />New report</button>
         </div>
       </header>
 
@@ -1038,7 +1112,11 @@ export default function ReportsPage() {
                     draggable={folders.length > 0} onDragStart={(ev) => { setDragRep(s.id); ev.dataTransfer.effectAllowed = "move"; ev.dataTransfer.setData("text/plain", s.name); }} onDragEnd={() => { setDragRep(null); setDropOn(null); }}>
                     <button type="button" className="rp-sv-main" onClick={() => open(s)}>
                       <span className="rp-sv-ico"><Ico d={e.icon} /></span>
-                      <span className="rp-sv-t"><b>{s.name}</b><em>{partsLabel(s)}{s.shared ? " · shared" : ""}{s.owner_id && me && s.owner_id !== me ? " · someone else's" : ""}</em></span>
+                      <span className="rp-sv-t"><b>{s.name}</b><em>{partsLabel(s)}{(() => {
+                        const n = new Set([...(s.shared_with ?? []), ...(s.editors ?? [])]).size;
+                        if (s.owner_id && me && s.owner_id !== me) return ` · from ${personName(s.owner_id).split(" ")[0]}${(s.editors ?? []).includes(me) ? " · can edit" : ""}`;
+                        return s.shared ? ` · team${n ? ` + ${n}` : ""}` : n ? ` · shared with ${n}` : "";
+                      })()}</em></span>
                     </button>
                     {foldersOk && (
                       <span className="rp-mv-w">
@@ -1112,8 +1190,12 @@ export default function ReportsPage() {
         </aside>
 
         <main className="rp-main">
-          {!cfg ? (
+          {!cfg && homeTab === "home" ? (
+            <ReportsHome saved={saved} me={me} templates={TEMPLATES} toReport={(x) => fromSaved(x.config, x.name)}
+              onOpenSaved={(x) => open(x as SavedReport)} onOpenReport={(r) => start(r, null, false, true)} tabs={homeTabs} />
+          ) : !cfg ? (
             <div className="rp-start">
+              <div className="rh-top">{homeTabs}<span className="rh-top-note">Start from a ready-made report or from scratch — save it, and put it on your home</span></div>
               <section className="rp-intro">
                 <div className="rp-intro-t">
                   <span className="rp-eyebrow"><Ico d={I.spark} />Report builder</span>
@@ -1165,13 +1247,13 @@ export default function ReportsPage() {
               <div className={`rp-bar ${mode === "view" ? "is-view" : ""}`}>
                 {mode === "build" ? (
                   <>
-                    <button type="button" className="rp-x rp-back" onClick={() => { if (!leaveOk()) return; setCfg(null); setReportId(null); }} aria-label="All reports and templates" title="All reports and templates"><Ico d={I.left} w={2.4} /></button>
+                    <button type="button" className="rp-x rp-back" onClick={() => { if (!leaveOk()) return; setCfg(null); setReportId(null); setHomeTab("home"); }} aria-label="Reports home" title="Reports home"><Ico d={I.left} w={2.4} /></button>
                     <span className="rp-bar-ico" style={vars({ "--c": ent!.tone })}><Ico d={ent!.icon} /></span>
                     <input className="rp-name" value={cfg.name} onChange={(e) => set({ name: e.target.value })} aria-label="Report name" />
                   </>
                 ) : (
                   <>
-                    <button type="button" className="rp-crumb" onClick={() => { if (!leaveOk()) return; setCfg(null); setReportId(null); }} title="All reports and templates"><Ico d={I.left} w={2.4} />All reports</button>
+                    <button type="button" className="rp-crumb" onClick={() => { if (!leaveOk()) return; setCfg(null); setReportId(null); setHomeTab("home"); }} title="Reports home"><Ico d={I.left} w={2.4} />Reports home</button>
                     <span className="rp-bar-gap" />
                   </>
                 )}
@@ -1183,11 +1265,9 @@ export default function ReportsPage() {
                   <button type="button" role="radio" aria-checked={mode === "view"} className={mode === "view" ? "is-on" : ""} onClick={() => switchMode("view")}
                     title={reportId && !dirty ? "The report as it reads" : "See the report as it will read, without the building tools"}><Ico d={I.eye} />{reportId && !dirty ? "View" : "Preview"}</button>
                 </div>
-                {mode === "build" && (
-                  <button type="button" className={`rp-share ${shared ? "is-on" : ""}`} onClick={() => setShared((v) => !v)} aria-pressed={shared}
-                    title={shared ? "The whole team sees it (each with the records they may see). Click: only you." : "Only you see it. Click to share it with the team."}>
-                    <Ico d={shared ? "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" : "M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"} />{shared ? "Team" : "Only me"}
-                  </button>
+                {(mode === "build" || reportId) && (
+                  <ReportShare value={{ shared, sharedWith, editors }} onChange={(n, o) => void applyShare(n, o)} ownerId={owner} me={me} people={people}
+                    canManage={mine} missing={sharingMissing} isNew={!reportId} />
                 )}
                 <div className="rp-exp">
                   <button type="button" className={`rp-btn is-ghost ${expOpen ? "is-on" : ""}`} onClick={() => setExpOpen((v) => !v)} aria-expanded={expOpen} aria-haspopup="menu"><Ico d={I.down} />Export<Ico d={I.dn} w={2.4} /></button>
@@ -1199,9 +1279,9 @@ export default function ReportsPage() {
                     </div>
                   )}
                 </div>
-                {mode === "build" && reportId && mine && <button type="button" className="rp-btn is-ghost rp-copy" onClick={() => void save(true)} disabled={busy} aria-label="Save as a copy" title="Save as a copy: keep this one as it is and save your changes as a new report"><Ico d={I.copy} />Copy</button>}
+                {mode === "build" && reportId && canEdit && <button type="button" className="rp-btn is-ghost rp-copy" onClick={() => void save(true)} disabled={busy} aria-label="Save as a copy" title="Save as a copy: keep this one as it is and save your changes as a new report"><Ico d={I.copy} />Copy</button>}
                 {(mode === "build" || dirty || !reportId) && (
-                  <button type="button" className="rp-btn is-main" onClick={() => void save()} disabled={busy || (!!reportId && !dirty && shared === sharedSnap)}><Ico d={I.check} w={2.4} />{busy ? "Saving…" : reportId && !dirty && shared === sharedSnap ? "Saved" : reportId && !mine ? "Save a copy" : "Save"}</button>
+                  <button type="button" className="rp-btn is-main" onClick={() => void save()} disabled={busy || (!!reportId && !dirty && shared === sharedSnap)}><Ico d={I.check} w={2.4} />{busy ? "Saving…" : reportId && !dirty && shared === sharedSnap ? "Saved" : reportId && !canEdit ? "Save a copy" : "Save"}</button>
                 )}
               </div>
 

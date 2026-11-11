@@ -456,13 +456,14 @@ export function useDataScope(page: PageKey): { scope: DataScope; ready: boolean;
    Settings › Client page › Editing rights. Stored with the page scopes (page "client_edit"):
    per action, who may do it — everyone, or by security role, department and person.
    Bosses and superadmins always may. Nothing set: managers (contracts, products, deals) / everyone (company). */
-export type ClientEditAction = "contracts" | "products" | "deals" | "company";
+export type ClientEditAction = "contracts" | "products" | "valuation" | "deals" | "company";
 export interface EditGrant { everyone: boolean; roles: string[]; depts: string[]; users: string[] }
 export type ClientEditRules = Partial<Record<ClientEditAction, EditGrant>>;
 export const CLIENT_EDIT_PAGE = "client_edit";
 export const CLIENT_EDIT_ACTIONS: { key: ClientEditAction; label: string; hint: string; fallback: "managers" | "everyone" }[] = [
   { key: "contracts", label: "Contracts", hint: "Dates, term, renewals, billing and the parties of a signed contract", fallback: "managers" },
   { key: "products", label: "Signed products", hint: "Add, change and remove signed products: price, term, increases, partner share", fallback: "managers" },
+  { key: "valuation", label: "Deal calculator", hint: "Change the calculator figures a signed product was valued with on its deal (users, entities…): the product is repriced", fallback: "managers" },
   { key: "deals", label: "Deals", hint: "Name, status, close date and value of the client's deals", fallback: "managers" },
   { key: "company", label: "Company & status", hint: "Mark a client active or churned, add contacts and change the company's links", fallback: "everyone" },
 ];

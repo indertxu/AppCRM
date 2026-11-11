@@ -5096,6 +5096,8 @@ export default function TrackingDetail({ tracking, companies, contacts, products
             // The client's contract gets the product version picked here, priced
             // from its calculator, with the breakdown to show on the client page.
             const signed = services.map((x) => x.signingDate).filter(Boolean).sort()[0] || null;
+            // a contract with a grace period starts after it is signed
+            const startDay = (contractInit ?? (await loadContractInit()))?.contractStart || signed;
             const cidRow = tracking.company_id ? (await supabase.from("clients").select("id").eq("company_id", tracking.company_id).limit(1)).data?.[0] as any : null;
             if (cidRow?.id) {
               for (const pr of chosenProducts) {
@@ -5121,7 +5123,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
                   if ((up.data ?? []).length) return null;
                   const ins = await supabase.from("client_products").insert({
                     ...body, client_id: cidRow.id, tracking_id: tracking.id, product_id: pr.productId,
-                    signing_date: signed, start_date: signed, status: "active",
+                    signing_date: signed, start_date: startDay, status: "active",
                   });
                   return ins.error;
                 };

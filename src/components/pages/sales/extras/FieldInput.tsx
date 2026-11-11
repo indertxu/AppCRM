@@ -49,7 +49,11 @@ export default function FieldInput({ field: f, value, onChange, onBlur, disabled
       <div className={`tfi-yn ${disabled ? "is-disabled" : ""}`} role="radiogroup" aria-label={f.label}>
         {([[true, "Yes"], [false, "No"]] as const).map(([v, l]) => (
           <button key={l} type="button" role="radio" aria-checked={value === v} disabled={disabled}
-            className={value === v ? "is-on" : ""} onClick={() => onChange(value === v ? "" : v)}>{l}</button>
+            className={`${v ? "is-yes" : "is-no"} ${value === v ? "is-on" : ""}`} onClick={() => onChange(value === v ? "" : v)}
+            title={value === v ? "Click again to leave it unanswered" : undefined}>
+            <svg viewBox="0 0 24 24" aria-hidden="true">{v ? <path d="M5 12.5l4.5 4.5L19 7.5" /> : <path d="M7 7l10 10M17 7L7 17" />}</svg>
+            {l}
+          </button>
         ))}
       </div>
     );
