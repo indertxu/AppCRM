@@ -134,6 +134,8 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
   const [busy, setBusy] = useState<string | null>(null);
   const [checking, setChecking] = useState<string | null>(null);
   const [err, setErr] = useState<{ k: string; text: string } | null>(null);
+  // an error fades on its own after a while, and goes as soon as anything gets connected
+  useEffect(() => { if (!err) return; const t = setTimeout(() => setErr(null), 9000); return () => clearTimeout(t); }, [err]);
   const [asking, setAsking] = useState<string | null>(null);
   const [toast, setToast] = useState("");
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(""), 2600); return () => clearTimeout(t); }, [toast]);
@@ -176,6 +178,7 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
     const added = rows.filter((r) => !seen.current!.has(r.key));
     seen.current = now;
     if (!added.length) return;
+    setErr(null);
     setFresh(added.map((r) => r.key).concat(added.map((r) => `app:${r.app}`)));
     window.setTimeout(() => setFresh([]), 1500);
     const f = fly.current; fly.current = null;
@@ -287,7 +290,7 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
         const bad = rowsOf(a.k).some((r) => r.status === "error");
         return (
           <li key={a.k} data-app={a.k} style={{ ["--i" as string]: i, ["--c" as string]: colorOf(a) }}
-            className={`ig-item ${on ? "is-on" : ""} ${fresh.includes(`app:${a.k}`) && col === "mine" ? "is-fresh" : ""} ${col === "soon" && want.includes(a.k) ? "is-want" : ""}`}>
+            className={`ig-item ${on ? "is-on" : ""} ${col === "avail" && n > 0 ? "is-have" : ""} ${fresh.includes(`app:${a.k}`) && col === "mine" ? "is-fresh" : ""} ${col === "soon" && want.includes(a.k) ? "is-want" : ""}`}>
             <button onClick={() => open(col, a.k)} aria-expanded={on}>
               <Logo {...a.logo} s={36} />
               <span className="ig-item-txt"><b>{a.name}</b><small>{sub(a)}</small></span>

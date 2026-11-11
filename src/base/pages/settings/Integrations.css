@@ -281,3 +281,9 @@
 .ig-fold .ig-wa-tok { display: flex; flex-direction: column; gap: 10px; }
 .ig-fold .ig-wa-tok .ig-det-err { margin: 0; }
 .ig-wa-none { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line2); }
+
+/* Available: apps you already have look quieter (you can still add another account) */
+.ig-item.is-have .ig-logo { filter: saturate(0.15) brightness(1.08); opacity: 0.55; transition: filter 0.35s, opacity 0.35s; }
+.ig-item.is-have .ig-item-t b, .ig-item.is-have b { color: color-mix(in srgb, var(--ink) 55%, transparent); transition: color 0.3s; }
+.ig-item.is-have:hover .ig-logo, .ig-item.is-have.is-on .ig-logo { filter: none; opacity: 1; }
+.ig-item.is-have:hover b, .ig-item.is-have.is-on b { color: var(--ink); }

@@ -126,7 +126,7 @@ Source in `supabase/functions/**`. Both apps call them; changes must stay backwa
 - Read the other side's entries since your last session before you start working.
 
 ## 7. SQL numbering
-Next free number: **129**  ← update this line when you claim one (and say which file in the log).
+Next free number: **130**  ← update this line when you claim one (and say which file in the log).
 | # | File | Chat | What |
 |---|---|---|---|
 | 98 | sql/98_client_default_folders.sql | Enterprise | client folder templates → new clients |
@@ -160,6 +160,7 @@ Next free number: **129**  ← update this line when you claim one (and say whic
 | 126 | sql/126_report_sharing.sql | Enterprise | `sales_reports.shared_with` + `editors` (uuid[]); select/update policies widened; guard trigger (only the owner changes owner/sharing); alert trigger `report_shared` / `report_owner` — to run in the SQL editor |
 | 127 | src/base/sql/127_whatsapp.sql | Base | `connected_assets.kind` + `whatsapp_number`; `whatsapp_messages` (in / out per number, RLS same tenant) — WhatsApp Cloud API |
 | 128 | sql/128_handoff_alerts.sql | Enterprise | `billing_settings.handoff_notify` jsonb ({all, pipelines}) + trigger `trg128_handoff_alert` on handoffs insert → `alert_push(…, 'handoff_new', …, 'handoff', id)` — applied 2026-11-11 |
+| 129 | sql/129_expansion_pipelines.sql | Enterprise | `pipelines.expansion_kind` (upsell / cross_sell) + `client_upsells.motion`; triggers: deal in such a pipeline ↔ client upsell (shared id `client_upsells.deal_id`), deal leads status/name/value/owner; `expansion_backfill(pipeline)` — to run in the SQL editor (tested in a rolled-back transaction) |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
@@ -169,6 +170,17 @@ Write requests here; the other chat answers in the log and ticks them.
 
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
+
+### 2026-11-11 13:05 · Base · Integrations: errors fade, apps you have look quieter
+- files: `pages/settings/Integrations.tsx` / `.css`.
+- An error under an app ("The sign-in window was closed", …) clears itself after ~9 s and as soon as any account gets connected. In **Available**, apps you already have (count badge) are desaturated and dimmed; full colour on hover / when open.
+- deploy: front only.
+
+### 2026-11-11 13:40 · Enterprise · Upsell / cross-sell pipelines ↔ client upsells (one shared id)
+- Files: sql/129_expansion_pipelines.sql (new), src/components/pages/settings/pipelineApi.ts, PipelinePage.tsx / .css, src/components/pages/clients/useClientsData.ts, ClientsPage.tsx / .css
+- What: Settings › Pipelines: two new switches next to Renewals — **Upsell** / **Cross-sell** (one per pipeline; pill in the bar); marking one links the client deals already in it (`expansion_backfill`). DB does the linking (works from any page/import): a deal created in / moved into such a pipeline for a company that is a client → a `client_upsells` row (motion, title = deal name, value = its products per year, status proposal/won/lost, owner = deal owner); an upsell / cross-sell created in Clients or Customer success → its deal in the first pipeline of that kind (first open phase, its product, owner as deal owner) and `deal_id` set. Then the deal leads: won/lost/reopened, renamed, products → value, owner. Upsell editor: Upsell | Cross-sell choice (locked once it has a deal) + a line saying where its deal goes; cards show "Cross-sell"; the CS matrix marks a product they already have as upsell, a new one as cross-sell. `convertUpsellToDeal` prefers the pipeline of its kind.
+- Tags: **DB**, PORT? (src/base clients upsells: `motion` defaults to upsell, nothing breaks)
+- Deploy: SQL 129 for the user to run in the SQL editor (apply_migration timed out on a confirmation).
 
 ### 2026-11-11 12:45 · Base · Integrations: one WhatsApp form (access token + account ID)
 - files: `pages/settings/Integrations.tsx` / `.css`.
