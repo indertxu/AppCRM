@@ -33,6 +33,8 @@ import { planHandover, performHandover, rolesFor, resolveDealRole, saveDealRoles
 import DealRolePicker from "../extras/DealRolePicker";
 import type { TrackingField } from "../extras/trackingFieldsApi";
 import LineCalcModal from "../../../framework/LineCalcModal";
+import ContractModal from "../extras/ContractModal";
+import { loadDealContracts, loadContractTemplates, contractFromTemplate, termLabel, PAY_LABEL, type DealContract, type ContractTemplate } from "../extras/contractsApi";
 import { loadRoles } from "../../settings/blueprintsApi";
 import { roleNameOf, type ClientRole } from "../../clients/clientsTypes";
 import { useBackToClose } from "../../../framework/useBackToClose";
@@ -2137,6 +2139,14 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     if (s.has("main") && s.has("me") && s.has("people")) { s.add("sent"); window.setTimeout(() => readyRef.current?.(), 0); }
   };
   useEffect(() => { loadTrackingContactIds(tracking.id).then(setTrackingContactIds).catch(() => {}).finally(() => partDone("people")); }, [tracking.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  /** The deal's contracts (131_contracts.sql): products inside priced by their calculators, the contract's own terms. */
+  const [dealContracts, setDealContracts] = useState<DealContract[]>([]);
+  const [ctTemplates, setCtTemplates] = useState<ContractTemplate[]>([]);
+  const [ctEdit, setCtEdit] = useState<DealContract | null>(null);
+  useEffect(() => {
+    loadDealContracts(tracking.id).then(setDealContracts).catch(() => {});
+    loadContractTemplates().then(setCtTemplates).catch(() => {});
+  }, [tracking.id]);
   const [clientCatalog, setClientCatalog] = useState<Product[]>([]);
   const [clientFormMode, setClientFormMode] = useState<"create" | "attach">("create"); // "attach" = scenario C
   /** The deal was just won and its client isn't set up: offer to create it now. */
@@ -3531,7 +3541,12 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   }, 0);
   const servicesTotal = activePotentials.reduce(
     (s, p) => s + lineTotal(p, serviceOf(p.service_id)?.calculator as Calculator | null, undefined, serviceMin(p.service_id)), 0);
-  const totalPotential = productsTotal + servicesTotal;
+  // contracts: their whole term, or their first year (like a product)
+  const activeContracts = dealContracts.filter((c) => c.active);
+  const contractsTotal = activeContracts.reduce((s, c) => s + (Number(c.total) || 0), 0);
+  const contractsYear1 = activeContracts.reduce((s, c) => s + (Number(c.first_year) || 0), 0);
+  const contractsIn = (m: RevenueMode) => (m === "product_term" || m === "all_term" ? contractsTotal : contractsYear1);
+  const totalPotential = productsTotal + servicesTotal + contractsTotal;
   /** What the services come to before the partners' cut. */
   const servicesGross = activePotentials.reduce(
     (s, p) => s + lineBreakdown(p, serviceOf(p.service_id)?.calculator as Calculator | null, undefined, serviceMin(p.service_id)).total, 0);
@@ -3542,13 +3557,14 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   }, 0);
   const servicesCounted = revMode === "all_year1" || revMode === "all_term";
   const servicesShown = servicesCounted ? (revGross ? servicesGross : servicesTotal) : 0;
-  const potentialShown = productsShown + servicesShown;
+  const contractsShown = contractsIn(revMode);
+  const potentialShown = productsShown + servicesShown + contractsShown;
   const productsYearWord = revMode === "product_term" || revMode === "all_term" ? "all years" : "year 1";
   /** The same figure in each view (for the figure's menu), after the partners' cut or before it. */
   const modeAmount = (m: RevenueMode, gross = false) => activeTprods.reduce((s, p) => {
     const prod = productOf(p.product_id);
     return s + lineRevenue("product", lineBreakdown(p, prod?.calculator as Calculator | null, prod?.tiers?.find((x) => x.id === p.tier_id)?.price), m, gross);
-  }, 0) + (m === "all_year1" || m === "all_term" ? (gross ? servicesGross : servicesTotal) : 0);
+  }, 0) + contractsIn(m) + (m === "all_year1" || m === "all_term" ? (gross ? servicesGross : servicesTotal) : 0);
   /** The contract panel's lines: the deal's active products and services. */
   const dealContractLines = (): ContractPanelLine[] => [
     ...activeTprods.map((tp): ContractPanelLine => {
@@ -4529,7 +4545,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
                 </span>
                 <span className="sl-panel-title">Calculator</span>
                 <span className="sl-fold-sum" aria-hidden={!dkFoldNow("calculator")}>
-                  {activeTprods.length} product{activeTprods.length === 1 ? "" : "s"} · {activePotentials.length} service{activePotentials.length === 1 ? "" : "s"}
+                  {activeContracts.length > 0 && `${activeContracts.length} contract${activeContracts.length === 1 ? "" : "s"} · `}{activeTprods.length} product{activeTprods.length === 1 ? "" : "s"} · {activePotentials.length} service{activePotentials.length === 1 ? "" : "s"}
                 </span>
                 <span className="sl-fold-chevw" aria-hidden="true"><svg className="sl-fold-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6" /></svg></span>
               </button>
@@ -4550,10 +4566,12 @@ export default function TrackingDetail({ tracking, companies, contacts, products
           </div>
           <div className="sl-calc-fold"><div className="sl-calc-fold-in">
           <div className="sl-rvh-bar" aria-hidden="true">
+            {contractsShown > 0 && <i className="is-contract" style={{ flexGrow: contractsShown }} />}
             <i className="is-product" style={{ flexGrow: Math.max(0.0001, productsShown) }} />
             <i className="is-service" style={{ flexGrow: Math.max(0.0001, servicesShown) }} />
           </div>
           <div className="sl-rvh-legend">
+            {activeContracts.length > 0 && <span className="is-contract"><i />Contracts <em>{productsYearWord}</em><b>{money(contractsShown)}</b></span>}
             <span className="is-product"><i />Products <em>{productsYearWord}</em><b>{money(productsShown)}</b></span>
             <span className={`is-service ${servicesCounted ? "" : "is-out"}`} title={servicesCounted ? "A one-off fee, counted once" : "Not counted in this view"}><i />Services<b>{servicesCounted ? money(servicesShown) : <s>{money(servicesTotal)}</s>}</b></span>
             {partnersTotal > 0 && <span className={`is-partner ${revGross ? "is-out" : ""}`} title={revGross ? "Not taken off: the figure shows what the client pays" : "Already taken out of the figures above"}><i />Partners<b>{revGross ? <s>−{money(partnersTotal)}</s> : `−${money(partnersTotal)}`}</b></span>}
@@ -4562,6 +4580,38 @@ export default function TrackingDetail({ tracking, companies, contacts, products
         </div>
 
         <div className="sl-calc-fold"><div className="sl-calc-fold-in">
+        <div className="sl-rvg is-contract">
+          <div className="sl-rvg-head">
+            <span className="sl-rvg-t"><i />Contracts<em>{activeContracts.length}</em></span>
+            <b>{money(contractsTotal)}</b>
+          </div>
+          {activeContracts.length === 0 && <p className="sl-rvg-empty">No contract yet — a contract carries its own length, way to pay, prepayment and discounts, with products inside or none.</p>}
+          {activeContracts.length > 0 && (
+            <div className="sl-ct-cards">
+              {activeContracts.map((c) => (
+                <button type="button" key={c.id} className="sl-ct-card" onClick={() => setCtEdit(c)}>
+                  <span className="sl-ct-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h4" /></svg></span>
+                  <span className="sl-ct-t">
+                    <b>{c.name}</b>
+                    <em>{termLabel(c.data.term)} · {PAY_LABEL[c.data.payment]}{c.data.items.length ? ` · ${c.data.items.length} product${c.data.items.length === 1 ? "" : "s"}` : " · no products"}{c.data.discounts.some((d) => d.on) ? ` · ${c.data.discounts.filter((d) => d.on).length} discount${c.data.discounts.filter((d) => d.on).length === 1 ? "" : "s"}` : ""}</em>
+                  </span>
+                  <span className="sl-ct-fig"><b>{money(c.total)}</b><em>year 1 {money(c.first_year)}</em></span>
+                </button>
+              ))}
+            </div>
+          )}
+          {!wonLock && (
+            <div className="sl-rvg-add">
+              <Select value="" onChange={(v) => {
+                if (!v) return;
+                const t = v === "__blank" ? null : ctTemplates.find((x) => x.id === v) ?? null;
+                setCtEdit(contractFromTemplate(t, tracking.id));
+              }} placeholder="+ Add contract"
+                options={[...ctTemplates.filter((t) => t.active !== false).map((t) => ({ value: t.id!, label: t.name, hint: t.config.durations.map((d) => termLabel(d)).join(" · ") })), { value: "__blank", label: "A contract from scratch", hint: "No template" }]} />
+            </div>
+          )}
+        </div>
+
         <div className="sl-rvg is-product">
           <div className="sl-rvg-head">
             <span className="sl-rvg-t"><i />Products<em>{activeTprods.length}</em></span>
@@ -4977,6 +5027,12 @@ export default function TrackingDetail({ tracking, companies, contacts, products
         </div>
       )}
 
+      {ctEdit && (
+        <ContractModal contract={ctEdit} products={products as any} money={money} readOnly={wonLock}
+          onClose={() => setCtEdit(null)}
+          onSaved={(c) => { setDealContracts((xs) => (xs.some((x) => x.id === c.id) ? xs.map((x) => (x.id === c.id ? c : x)) : [...xs, c])); setCtEdit(null); }}
+          onDeleted={(id) => { setDealContracts((xs) => xs.filter((x) => x.id !== id)); setCtEdit(null); }} />
+      )}
       {calcFor && (() => {
         if (calcFor.kind === "product") {
           const tp = tprods.find((x) => x.id === calcFor.id);

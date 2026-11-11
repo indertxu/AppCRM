@@ -6,7 +6,7 @@ import { supabase } from "../../api/supabase";
 import Select from "../../framework/Select";
 import { setLeaveGuard, loadDepartments, deptName, deptInfo, DEFAULT_DEPARTMENTS } from "../../framework/pageAccess";
 import {
-  listPipelines, createPipeline, savePipelineOrder, pipelineUsage, deletePipelineSafely, renewalPipelineOf, setRenewalPipeline,
+  listPipelines, createPipeline, savePipelineOrder, pipelineUsage, deletePipelineSafely, renewalPipelineOf, setRenewalPipeline, setExpansionKind,
   loadPipeline, loadPhasesByPipeline, syncPipelineToBlueprint, orderPhases,
   listFolders, createFolder, renameFolder, moveFolder, deleteFolder, setPipelineFolder, duplicatePipeline,
   diffDraft, savePipelineDraft,
@@ -525,6 +525,12 @@ export default function PipelinePage({ onBack }: Props) {
           <PipelineEditor key={preview.id} pipeline={preview} folders={folders} pipelines={pipelines} guard={guard}
             isRenewal={isRenewal} busy={busy}
             onRenewal={async () => { const e = await setRenewalPipeline(isRenewal ? null : preview.id); setMsg(e); await refresh(); }}
+            expansion={preview.expansion_kind ?? null}
+            onExpansion={async (k) => {
+              const r = await setExpansionKind(preview.id, k);
+              setMsg(r.error ?? (r.linked ? `${r.linked} ${r.linked === 1 ? "deal" : "deals"} already here now ${r.linked === 1 ? "shows" : "show"} on the client's page as ${k === "cross_sell" ? "a cross-sell" : "an upsell"}.` : null));
+              await refresh();
+            }}
             onDuplicate={() => leave(() => newCopy(preview))}
             onBack={onBack} onSaved={refresh} />
         ) : (
@@ -712,10 +718,12 @@ function DeletePipelineModal({ pipeline, others, onClose, onDeleted }: {
 // on the right. Everything stays on screen until Save; going elsewhere with
 // changes (another pipeline, ‹, the sidebar, closing the tab) asks first:
 // Save and leave / Discard (confirmed a second time) / Keep editing.
-function PipelineEditor({ pipeline, folders, pipelines, guard, isRenewal, busy, onRenewal, onDuplicate, onBack, onSaved }: {
+function PipelineEditor({ pipeline, folders, pipelines, guard, isRenewal, busy, onRenewal, expansion, onExpansion, onDuplicate, onBack, onSaved }: {
   pipeline: Pipeline; folders: PipelineFolder[] | null; pipelines: Pipeline[];
   guard: MutableRefObject<((go: () => void) => boolean) | null>;
   isRenewal: boolean; busy: boolean; onRenewal: () => void; onDuplicate: () => void;
+  /** Upsell / cross-sell pipeline: its deals and the clients' upsells / cross-sells are one. */
+  expansion: "upsell" | "cross_sell" | null; onExpansion: (k: "upsell" | "cross_sell" | null) => void;
   onBack: () => void; onSaved: () => void;
 }) {
   const navigate = useNavigate();
@@ -1076,6 +1084,7 @@ function PipelineEditor({ pipeline, folders, pipelines, guard, isRenewal, busy, 
             <input className="pls-name" value={draft.name} onChange={(e) => { const v = e.target.value; setDraft((d) => ({ ...d, name: v })); }} aria-label="Pipeline name" placeholder="Pipeline name" />
             {isSales && <span className="pls-pill">Sales</span>}
             {isRenewal && <span className="pls-pill is-renew">Renewals</span>}
+            {expansion && <span className={`pls-pill is-exp`}>{expansion === "cross_sell" ? "Cross-sell" : "Upsell"}</span>}
             <div className="pls-journey-bar" role="list" aria-label="The phases, in order">
               {loaded && steps.map((p, i) => (
                 <button type="button" role="listitem" key={p.id} className={selId === p.id ? "is-on" : ""} style={{ ["--c" as string]: tone(p), ["--i" as string]: i }}
@@ -1114,6 +1123,15 @@ function PipelineEditor({ pipeline, folders, pipelines, guard, isRenewal, busy, 
                 title={isRenewal ? "Ended client contracts come back to Sales here, as renewal deals" : "Send ended client contracts here, as renewal deals"}>
                 <span className="pls-sw-k" aria-hidden="true"><i /></span>Renewals
               </button>
+              {(["upsell", "cross_sell"] as const).map((k) => (
+                <button key={k} type="button" className={`pls-sw is-amber ${expansion === k ? "is-on" : ""}`} role="switch" aria-checked={expansion === k} disabled={busy}
+                  onClick={() => onExpansion(expansion === k ? null : k)}
+                  title={expansion === k
+                    ? `Its deals are the clients' ${k === "cross_sell" ? "cross-sells" : "upsells"} (Clients and Customer success), and those made there open their deal here`
+                    : `Make this the ${k === "cross_sell" ? "cross-sell" : "upsell"} pipeline: its deals become the clients' ${k === "cross_sell" ? "cross-sells" : "upsells"}, and ${k === "cross_sell" ? "cross-sells" : "upsells"} made in Clients or Customer success open a deal here`}>
+                  <span className="pls-sw-k" aria-hidden="true"><i /></span>{k === "cross_sell" ? "Cross-sell" : "Upsell"}
+                </button>
+              ))}
             </div>
             <div className="pls-group">
               {phases.length > 0 && (

@@ -558,7 +558,12 @@ export interface CsUpsell {
   status: "idea" | "planned" | "contacted" | "proposal" | "won" | "lost";
   owner_id: string | null; notes: string | null; deal_id: string | null; won_at: string | null;
   created_at: string; updated_at: string;
+  /** Upsell (more of what they have) or cross-sell (something new) — 129_expansion_pipelines.sql. It and its deal
+      share one id (deal_id): made here, its deal is made in the upsell / cross-sell pipeline; made in Sales, it shows up here. */
+  motion?: CsMotion;
 }
+export type CsMotion = "upsell" | "cross_sell";
+export const MOTION_LABEL: Record<CsMotion, string> = { upsell: "Upsell", cross_sell: "Cross-sell" };
 export interface CsQbr { id: string; client_id: string; meeting_date: string; spiced: Record<string, boolean>; status: "planned" | "done" | "cancelled"; notes: string | null; owner_id: string | null }
 export interface ArrSnapshot { id: string; year: number; initial_arr: number; by_client: Record<string, number>; taken_at: string }
 export interface RevenueEvent { id: string; client_id: string | null; event_date: string; kind: "expansion" | "contraction" | "churn"; amount: number; reason: string | null; upsell_id: string | null }
@@ -643,10 +648,14 @@ export async function saveUpsell(u: Partial<CsUpsell> & { client_id: string; tit
     owner_id: u.owner_id ?? null, notes: u.notes?.trim() || null, deal_id: u.deal_id ?? null,
     won_at: u.status === "won" ? (u.won_at ?? new Date().toISOString().slice(0, 10)) : null,
     updated_at: new Date().toISOString(),
+    motion: u.motion ?? "upsell",
   };
-  const res = u.id
-    ? await supabase.from("client_upsells").update(row).eq("id", u.id).select().single()
-    : await supabase.from("client_upsells").insert(row).select().single();
+  // the database makes its deal (an upsell / cross-sell pipeline) and hands back deal_id
+  const write = (r: any) => (u.id
+    ? supabase.from("client_upsells").update(r).eq("id", u.id).select().single()
+    : supabase.from("client_upsells").insert(r).select().single());
+  let res = await write(row);
+  if (res.error && /motion/i.test(res.error.message)) { const { motion: _m, ...rest } = row; void _m; res = await write(rest); }
   if (res.error || !res.data) return { upsell: null, error: csErr(res.error) ?? "Not saved." };
   const saved = { ...(res.data as any), est_value: num((res.data as any).est_value) } as CsUpsell;
   // a won upsell is expansion revenue (one movement per upsell, kept in step)
@@ -1199,9 +1208,9 @@ export async function generateContactTasks(): Promise<number | null> {
 /** Turns an upsell into a deal in the first sales pipeline (its first phase), linked back to the upsell. */
 export async function convertUpsellToDeal(u: CsUpsell, clientName: string): Promise<{ dealId: string | null; error: string | null }> {
   const { data: cl } = await supabase.from("clients").select("company_id").eq("id", u.client_id).maybeSingle();
-  const { data: pipes } = await supabase.from("pipelines").select("id, is_sales, sort_order, created_at").order("created_at");
+  const { data: pipes } = await supabase.from("pipelines").select("*").order("created_at");
   const ps = ((pipes ?? []) as any[]).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
-  const pipe = ps.find((p) => p.is_sales) ?? ps[0];
+  const pipe = ps.find((p) => p.expansion_kind && p.expansion_kind === (u.motion ?? "upsell")) ?? ps.find((p) => p.is_sales) ?? ps[0];
   if (!pipe) return { dealId: null, error: "There is no sales pipeline yet." };
   const { data: phases } = await supabase.from("pipeline_phases").select("id, pos_x, sales_outcome").eq("pipeline_id", pipe.id);
   const first = ((phases ?? []) as any[]).filter((p) => !p.sales_outcome).sort((a, b) => (a.pos_x ?? 0) - (b.pos_x ?? 0))[0];

@@ -8,7 +8,7 @@ import { PageLoader } from "../../framework/AppLayout";
 import {
   useClientsData, loadCsData, setClientOwners, saveClientHealth, saveUpsell, deleteUpsell, saveQbr, deleteQbr, freezeArr,
   addRevenueEvent, deleteRevenueEvent, saveCsSettings, setClientCadence, logClientContact, createClientFollowUp, generateContactTasks,
-  convertUpsellToDeal, CS_REASONS, UPSELL_STATUSES, SPICED, NEEDS_CS,
+  convertUpsellToDeal, CS_REASONS, UPSELL_STATUSES, SPICED, NEEDS_CS, MOTION_LABEL,
   cadenceOf, setClientPriority, CS_PRIORITIES, loadCsAuto, saveCsTemplate, deleteCsTemplate, saveCsSequence, deleteCsSequence, setCsRun,
   uploadCsFile, removeCsFile, runCsSequences, testCsTemplate, launchCsCampaign, loadTeamMailboxes, CS_TAGS, fillCsTags, renderCsEmail, cleanCsBody, NEEDS_AUTO,
   scanCsMail, loadCsMailSync, type CsMailSync, csVariantFor, inspectCsFile, previewCsAttachment, saveCsFolder, deleteCsFolder, moveCsTemplate, setClientsCadence, type CsFolder, loadPdfjs, csFileBlob, csUnderEdit, csPatchOf, csLineBox, type CsEdit, type CsRgb, type CsPatch, type CsAttachment, type CsVariant, type CsVariantAudience,
@@ -1061,7 +1061,20 @@ function UpsellEditor({ initial, clientName, cat, onClose, onSaved, onDeleted }:
   clientName: string; cat: CsCatalog;
   onClose: () => void; onSaved: (u: CsUpsell) => void; onDeleted?: (id: string) => void;
 }) {
-  const [u, setU] = useState<Partial<CsUpsell> & { client_id: string }>({ kind: "product", status: "idea", est_value: 0, ...initial });
+  const [u, setU] = useState<Partial<CsUpsell> & { client_id: string }>({ kind: "product", status: "idea", est_value: 0, motion: "upsell", ...initial });
+  // the upsell / cross-sell pipelines: saving one here opens its deal there (129_expansion_pipelines.sql)
+  const [expPipes, setExpPipes] = useState<{ id: string; name: string; kind: string }[] | null>(null);
+  useEffect(() => {
+    let off = false;
+    supabase.from("pipelines").select("*").then(({ data }) => {
+      if (off) return;
+      const ps = ((data ?? []) as any[]).filter((p) => p.expansion_kind).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || String(a.created_at).localeCompare(String(b.created_at)));
+      setExpPipes(ps.map((p) => ({ id: p.id, name: p.name, kind: p.expansion_kind })));
+    });
+    return () => { off = true; };
+  }, []);
+  const motion = (u.motion ?? "upsell") as keyof typeof MOTION_LABEL;
+  const motionPipe = expPipes?.find((p) => p.kind === motion) ?? null;
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [askDel, setAskDel] = useState(false);
@@ -1106,10 +1119,26 @@ function UpsellEditor({ initial, clientName, cat, onClose, onSaved, onDeleted }:
       <div className="csx-modal" role="dialog" aria-modal="true" aria-label="Upsell">
         <header className="csx-modal-h">
           <span className="csx-modal-ico"><CsIco n="trend" s={18} /></span>
-          <div><span className="csx-eyebrow">{u.id ? "Upsell" : "New upsell"} · {clientName}</span><h3>{u.title?.trim() || "What could they buy next?"}</h3></div>
+          <div><span className="csx-eyebrow">{u.id ? MOTION_LABEL[motion] : `New ${MOTION_LABEL[motion].toLowerCase()}`} · {clientName}</span><h3>{u.title?.trim() || (motion === "cross_sell" ? "What else could they buy?" : "What more could they buy?")}</h3></div>
           <button type="button" className="csx-x" onClick={onClose} aria-label="Close"><CsIco n="x" /></button>
         </header>
         <div className="csx-modal-b">
+          <div className="csx-motion" role="radiogroup" aria-label="Upsell or cross-sell">
+            {(["upsell", "cross_sell"] as const).map((k) => (
+              <button key={k} type="button" role="radio" aria-checked={motion === k} className={`csx-motion-b ${motion === k ? "is-on" : ""}`} disabled={!!u.deal_id && motion !== k}
+                onClick={() => set({ motion: k })}>
+                <b>{MOTION_LABEL[k]}</b>
+                <em>{k === "upsell" ? "More of what they have: seats, a higher tier, more scope" : "Something they don't have yet: another product or service"}</em>
+              </button>
+            ))}
+          </div>
+          {expPipes && (
+            <p className={`csx-motion-note ${motionPipe || u.deal_id ? "is-on" : ""}`}>
+              {u.deal_id ? <>Its deal is in Sales — the deal leads: won, lost, its name and value come from it.</>
+                : motionPipe ? <>Saving it opens its deal in <b>{motionPipe.name}</b> (Sales), one and the same.</>
+                  : <>No {MOTION_LABEL[motion].toLowerCase()} pipeline yet: mark one in Settings › Pipelines and each {MOTION_LABEL[motion].toLowerCase()} gets its deal there.</>}
+            </p>
+          )}
           <div className="csx-seg" role="tablist">
             {([["product", "Product"], ["tier", "Higher tier"], ["service", "Service"], ["other", "Other"]] as const).map(([k, l]) => (
               <button key={k} type="button" className={u.kind === k ? "is-on" : ""} onClick={() => set({ kind: k, product_id: null, tier_id: null, service_id: null })}>{l}</button>
@@ -1151,7 +1180,7 @@ function UpsellEditor({ initial, clientName, cat, onClose, onSaved, onDeleted }:
           <span className="csx-sp" />
           {u.id && !u.deal_id && <button type="button" className="csx-ghost" disabled={busy} onClick={toDeal}><CsIco n="bolt" s={14} />Create deal</button>}
           <button type="button" className="csx-ghost" onClick={onClose}>Cancel</button>
-          <button type="button" className="csx-primary" disabled={busy} onClick={save}>{busy ? "Saving…" : u.id ? "Save" : "Add upsell"}</button>
+          <button type="button" className="csx-primary" disabled={busy} onClick={save}>{busy ? "Saving…" : u.id ? "Save" : `Add ${MOTION_LABEL[motion].toLowerCase()}`}</button>
         </footer>
       </div>
     </div>,
@@ -1169,6 +1198,7 @@ function UpsellCard({ u, clientName, ownerName, onOpen, i = 0 }: { u: CsUpsell; 
         <em>{csShort(u.est_value)}/yr</em>
         {u.ideal_contact_date && <span className={late ? "is-late" : ""}><CsIco n="cal" s={11} />{csDate(u.ideal_contact_date)}</span>}
         {ownerName && <CsAvatar name={ownerName} size={20} />}
+        {u.motion === "cross_sell" && <span className="csx-up-motion">Cross-sell</span>}
         {u.deal_id && <span className="csx-up-deal">Deal</span>}
       </span>
     </button>
@@ -3887,9 +3917,11 @@ export function CustomerSuccessPage() {
   ];
   const matrixRows = clients.filter((c) => c.lines.length || upsells.some((u) => u.client_id === c.id) || c.arr > 0).slice(0, 80);
   const quickUpsell = async (c: CsClient, it: (typeof items)[number]) => {
-    const r = await saveUpsell({ client_id: c.id, kind: it.kind, product_id: it.kind === "product" ? it.id : null, service_id: it.kind === "service" ? it.id : null, title: it.name, status: "idea", owner_id: c.primary });
+    const has = c.lines.some((l: any) => (it.kind === "product" ? l.product_id === it.id : l.service_id === it.id));
+    const motion = has ? "upsell" as const : "cross_sell" as const;
+    const r = await saveUpsell({ client_id: c.id, kind: it.kind, product_id: it.kind === "product" ? it.id : null, service_id: it.kind === "service" ? it.id : null, title: it.name, status: "idea", owner_id: c.primary, motion });
     if (r.error || !r.upsell) { say(r.error ?? "Not saved"); return; }
-    upsert(r.upsell); say(`${it.name} noted as an upsell for ${c.name}`);
+    upsert(r.upsell); say(`${it.name} noted as ${motion === "cross_sell" ? "a cross-sell" : "an upsell"} for ${c.name}${r.upsell.deal_id ? " — its deal is in Sales" : ""}`);
   };
   const toggleSel = (id: string) => setSel((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const assignBulk = async () => {

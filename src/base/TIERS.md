@@ -126,7 +126,7 @@ Source in `supabase/functions/**`. Both apps call them; changes must stay backwa
 - Read the other side's entries since your last session before you start working.
 
 ## 7. SQL numbering
-Next free number: **131**  ← update this line when you claim one (and say which file in the log).
+Next free number: **132**  ← update this line when you claim one (and say which file in the log).
 | # | File | Chat | What |
 |---|---|---|---|
 | 98 | sql/98_client_default_folders.sql | Enterprise | client folder templates → new clients |
@@ -162,6 +162,7 @@ Next free number: **131**  ← update this line when you claim one (and say whic
 | 128 | sql/128_handoff_alerts.sql | Enterprise | `billing_settings.handoff_notify` jsonb ({all, pipelines}) + trigger `trg128_handoff_alert` on handoffs insert → `alert_push(…, 'handoff_new', …, 'handoff', id)` — applied 2026-11-11 |
 | 129 | sql/129_expansion_pipelines.sql | Enterprise | `pipelines.expansion_kind` (upsell / cross_sell) + `client_upsells.motion`; triggers: deal in such a pipeline ↔ client upsell (shared id `client_upsells.deal_id`), deal leads status/name/value/owner; `expansion_backfill(pipeline)` — to run in the SQL editor (tested in a rolled-back transaction) |
 | 130 | src/base/sql/130_connected_google_ads.sql | Base | `connected_assets.kind` + `gads_customer` (Google Ads accounts of a Google login, last-30-days spend / clicks / conversions in extra) |
+| 131 | sql/131_contracts.sql | Enterprise | `contract_templates` (catalogue contract blueprints, config jsonb) + `tracking_contracts` (contracts on deals: data jsonb, total, first_year), tenant RLS — applied 2026-11-11 (migration name "130_contracts", before Base claimed 130) |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
@@ -171,6 +172,13 @@ Write requests here; the other chat answers in the log and ticks them.
 
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
+
+### 2026-11-11 17:30 · Enterprise · Contracts, phase 1: contract templates in the catalogue + contracts in the deal calculator
+- Files: sql/131_contracts.sql (new, applied), src/components/pages/sales/extras/contractsApi.ts + ContractTermsForm.tsx + ContractSummary.tsx + ContractModal.tsx + ContractTerms.css (new), src/components/pages/settings/ContractTemplates.tsx (new), CatalogPage.tsx, src/components/pages/sales/trackings/TrackingDetail.tsx, src/components/pages/clients/ClientWorkspace.tsx
+- What: **Settings › Catalog › Contracts** (tab next to Products / Services): templates with lengths in days/months/years each with its discount, renewal (period + notice), ways to pay (upfront / yearly / 6-monthly / quarterly / monthly, each on/off + early-payment discount, one default), invoicing (N days before it starts/renews, due in N days), yearly increments (% or €, "none if paid upfront"), named commercial discounts (% or €/yr, on by default or not), a fee of its own, products it may include; live preview on a sample price. **Deal › Calculator**: new "Contracts" group above Products (+ Add contract from a template or from scratch; cards with length · payment · products · total / year 1); the contract window holds products priced by their own calculator inputs (tier + inputs, no product discounts/term/increments), its terms (length chips, start date, payment choice…) and the summary (total, list → discounts, each year, invoice dates incl. prepayment and the renewal invoice). Contracts count in the deal's totals (year 1 or whole term by the revenue view). Maths in `contractFigures()` (duration % → payment % → commercial, increments waived when upfront and set so). **Clients › contract card**: services no longer shown or counted (scope, years, services note) — they belong to Services/Projects.
+- Next (phase 2): handoff from the deal's contracts, Billing "to bill" from the contract (prepayment dates) instead of licences, reports/pipeline values reading contracts.
+- Tags: **DB**, PORT? (src/base catalogue / deal calculator)
+- Deploy: 131 applied.
 
 ### 2026-11-11 13:40 · Base · Integrations: Google Ads
 - files: `pages/settings/Integrations.tsx`, `api/connectedAccounts.ts`, `requests/connected-accounts.index.ts.txt`, `sql/130_connected_google_ads.sql` (new).

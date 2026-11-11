@@ -3,7 +3,9 @@ import { supabase } from "../../api/supabase";
 
 export interface Pipeline { id: string; name: string; description?: string | null; source_blueprint_id?: string | null; is_sales?: boolean; sort_order?: number | null; folder_id?: string | null; created_at?: string;
   /** Ended client contracts come back to Sales here, as renewal deals (82_renewal_pipeline.sql). */
-  is_renewal?: boolean; }
+  is_renewal?: boolean;
+  /** An upsell or cross-sell pipeline (129_expansion_pipelines.sql): its deals and the clients' upsells / cross-sells are one. */
+  expansion_kind?: "upsell" | "cross_sell" | null; }
 
 /** Where renewals go: the pipeline marked for them, else one called "…renew…". */
 export const renewalPipelineOf = <T extends Pipeline>(ps: T[]): T | null =>
@@ -15,6 +17,17 @@ export async function setRenewalPipeline(id: string | null): Promise<string | nu
   if (!id) return null;
   const on = await supabase.from("pipelines").update({ is_renewal: true }).eq("id", id).select("id");
   return wrote(on as any);
+}
+
+/** Mark a pipeline as the upsell or cross-sell one (null: neither). Its deals already there for clients get their
+    upsell / cross-sell at once; returns how many were linked. */
+export async function setExpansionKind(id: string, kind: "upsell" | "cross_sell" | null): Promise<{ error: string | null; linked: number }> {
+  const r = await supabase.from("pipelines").update({ expansion_kind: kind }).eq("id", id).select("id");
+  if (r.error) return { error: /expansion_kind/i.test(r.error.message) ? "Run 129_expansion_pipelines.sql in Supabase to mark upsell and cross-sell pipelines." : r.error.message, linked: 0 };
+  const e = wrote(r as any);
+  if (e || !kind) return { error: e, linked: 0 };
+  const b = await supabase.rpc("expansion_backfill", { p_pipeline: id });
+  return { error: null, linked: Number(b.data) || 0 };
 }
 
 /** A folder of pipelines (Settings → Pipelines); folders can sit inside folders. */

@@ -2822,7 +2822,8 @@ export default function ClientWorkspace({
                   const now = Date.now();
                   const years = Array.from({ length: n }, (_, i) => {
                     const lic = gl.length ? gl.reduce((t, l) => t + (i >= off(l) ? lineYearGross(l, i - off(l)) : 0), 0) : Number(ct?.schedule?.[i]?.license) || 0;
-                    const svc = Number(ct?.schedule?.[i]?.services) || 0;
+                    // services live in Services / Projects, not in the contract
+                    const svc = 0;
                     const partner = gl.reduce((t, l) => t + (i >= off(l) ? partnerCut(l, i - off(l)) : 0), 0);
                     const from = start ? addYears(start, i) : null;
                     const to = start ? new Date(addYears(start, i + 1).getTime() - DAY) : null;
@@ -2849,8 +2850,9 @@ export default function ClientWorkspace({
                   };
                   const ups = gl.filter((l) => str(l.tracking_id) !== tid);
                   const upScope = ups.map((l) => ({ name: l.name, rows: yearRows(l), sub: `Upsell · ${l.tracking_id ? dealName(String(l.tracking_id)) : "added by hand"}${l.signing_date ? ` · signed ${fmt(l.signing_date)}` : ""}`, list: Number(l.breakdown?.gross), discount: Number(l.breakdown?.discount) || 0, pct: null as number | null, final: lineContractValue(l) + partnerTotal(l) }));
-                  const scope = (ct?.lines ?? []).length
-                    ? [...(ct?.lines ?? []).map((ln) => ({
+                  const ctLines = (ct?.lines ?? []).filter((ln) => ln.kind !== "service");
+                  const scope = ctLines.length
+                    ? [...ctLines.map((ln) => ({
                       name: ln.name, rows: (ln.rows ?? []).length > 1 ? ln.rows ?? [] : yearRows(gl.find((l) => norm(l.name) === norm(ln.name))),
                       sub: ln.kind === "service" ? `Services${ct?.servicesBilling === "per_day" ? " · per day performed" : " · fixed fee"}${ln.qty ? ` · ${ln.qty} ${ln.unit === "hour" ? "hours" : "days"}` : ""}` : ln.recurring === false ? "One-time" : "Subscription",
                       list: Number(ln.list), discount: Number(ln.discount) || 0, pct: ln.discountPct ?? null, final: Number(ln.final),
@@ -2997,7 +2999,6 @@ export default function ClientWorkspace({
                                     ))}
                                   </div>
                                 ))}
-                                {ct?.servicesNote && <p className="cw-k-none">{ct.servicesNote}</p>}
                               </div>
                             </section>
 

@@ -17,13 +17,15 @@ import { ROLE_COLORS, roleColor } from "../clients/clientsTypes";
 import { listCrmOptions, addCrmOption, deleteCrmOption, productKindOptions, type CrmOption } from "../companies/companiesApi";
 import "../clients/ClientsPage.css";
 import "./CatalogPage.css";
+import { ContractTemplateCards, ContractTemplateEditor } from "./ContractTemplates";
+import { loadContractTemplates, newTemplate, type ContractTemplate } from "../sales/extras/contractsApi";
 import { useNavSection } from "../../framework/pageAccess";
 import { useInactiveIds } from "../../framework/peopleStatus";
 import { NumInput } from "../../framework/NumInput";
 
 interface Props { onBack: () => void; }
 
-type Tab = "products" | "services" | "blueprints";
+type Tab = "products" | "services" | "contracts" | "blueprints";
 
 const money = (n: number) => `€${(Number(n) || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 
@@ -90,13 +92,15 @@ const NotInProposals = () => (
 
 export default function CatalogPage({ onBack }: Props) {
   const [tab, setTab] = useState<Tab>("products");
-  useNavSection("/settings", 1, (part) => { if (part === "products" || part === "services" || part === "blueprints") setTab(part as Tab); }, "catalog");
+  useNavSection("/settings", 1, (part) => { if (part === "products" || part === "services" || part === "contracts" || part === "blueprints") setTab(part as Tab); }, "catalog");
   const [products, setProducts] = useState<Product[]>([]);
   const [services, setServices] = useState<Service[]>([]);
   const [blueprints, setBlueprints] = useState<Blueprint[]>([]);
   const [roles, setRoles] = useState<ClientRole[]>([]);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [editingService, setEditingService] = useState<Service | null>(null);
+  const [contracts, setContracts] = useState<ContractTemplate[]>([]);
+  const [editingContract, setEditingContract] = useState<ContractTemplate | null>(null);
   const [crmOpts, setCrmOpts] = useState<CrmOption[]>([]);
   /** A save that went through without something (a missing SQL upgrade). */
   const [notice, setNotice] = useState<string | null>(null);
@@ -107,6 +111,7 @@ export default function CatalogPage({ onBack }: Props) {
     reloadKinds();
     setProducts(await loadProducts().catch(() => []));
     setServices(await loadServices().catch(() => []));
+    setContracts(await loadContractTemplates().catch(() => []));
     const bp = await loadBlueprintData().catch(() => null);
     if (bp) { setBlueprints(bp.blueprints); setRoles(bp.roles); }
   };
@@ -127,11 +132,12 @@ export default function CatalogPage({ onBack }: Props) {
       <header className="cat-head">
         <button className="cat-back" onClick={onBack} aria-label="Back">‹</button>
         <div>
-          <h1 className="cat-title">Products &amp; Services</h1>
+          <h1 className="cat-title">Products, Services &amp; Contracts</h1>
         </div>
         <div className="cat-tabs">
           <button className={tab === "products" ? "is-on" : ""} onClick={() => setTab("products")}>Products <i>{products.length}</i></button>
           <button className={tab === "services" ? "is-on" : ""} onClick={() => setTab("services")}>Services <i>{services.length}</i></button>
+          <button className={tab === "contracts" ? "is-on" : ""} onClick={() => setTab("contracts")}>Contracts <i>{contracts.length}</i></button>
           <button className={tab === "blueprints" ? "is-on" : ""} onClick={() => setTab("blueprints")}>Blueprints</button>
         </div>
       </header>
@@ -249,8 +255,22 @@ export default function CatalogPage({ onBack }: Props) {
             </button>
           </div>
         </section>
+      ) : tab === "contracts" ? (
+        <section className="cat-body">
+          <div className="cat-list-head">
+            <span className="cat-eyebrow">Your contracts</span>
+            <button className="cat-add" onClick={() => setEditingContract(newTemplate())}>+ New contract</button>
+          </div>
+          <ContractTemplateCards templates={contracts} onOpen={setEditingContract} onNew={() => setEditingContract(newTemplate())} />
+        </section>
       ) : (
         <BlueprintsTab onChanged={reload} />
+      )}
+      {editingContract && (
+        <ContractTemplateEditor template={editingContract} products={products}
+          onClose={() => setEditingContract(null)}
+          onSaved={async () => { setEditingContract(null); await reload(); }}
+          onDeleted={async () => { setEditingContract(null); await reload(); }} />
       )}
 
       {editingProduct && (
