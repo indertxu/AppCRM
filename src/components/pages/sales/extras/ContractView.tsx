@@ -1,3 +1,4 @@
+import { todayIso } from "../../../framework/asOf";
 import { useMemo, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { Product } from "../../settings/catalogApi";
@@ -16,20 +17,28 @@ import "./ContractTerms.css";
 
 const DOC = "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h4";
 export const contractState = (f: { signed: string; start: string; end: string; graceDays: number; renewal: unknown }) => {
-  const now = new Date().toISOString().slice(0, 10);
+  const now = todayIso();
   if (now < f.start) return f.graceDays > 0 && now >= f.signed ? "In grace period" : "Not started";
   if (now < f.end) return "Running";
   return f.renewal ? "Renewed" : "Ended";
 };
 export const stateTone = (s: string) => (s === "Running" ? "run" : s === "In grace period" ? "grace" : s === "Not started" ? "soon" : s === "Renewed" ? "run" : "off");
 
-export function ViewShell({ title, eyebrow, state, total, sub, onClose, side, children, foot }: {
+export function ViewShell({ title, eyebrow, state, total, sub, onClose, side, children, foot, wide, head, footEnd, mode }: {
   title: string; eyebrow: ReactNode; state?: string; total?: string; sub?: string; onClose: () => void; side?: ReactNode; children: ReactNode; foot?: ReactNode;
+  /** Nearly the whole screen, for the detailed views. */
+  wide?: boolean;
+  /** More in the header, before the close button (e.g. Edit). */
+  head?: ReactNode;
+  /** The footer's right-hand buttons, in place of Close. */
+  footEnd?: ReactNode;
+  /** "edit": the window shows it's being edited. */
+  mode?: "edit";
 }) {
   useEscape(onClose);
   return createPortal(
     <div className="ctm-back" onMouseDown={onClose}>
-      <div className="ctm ctv" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(e) => e.stopPropagation()}>
+      <div className={`ctm ctv ${wide ? "is-wide" : ""} ${mode === "edit" ? "is-editing" : ""}`} role="dialog" aria-modal="true" aria-label={title} onMouseDown={(e) => e.stopPropagation()}>
         <header className="ctm-h">
           <span className="ctm-ico" aria-hidden="true"><Ico d={DOC} /></span>
           <div className="ctm-h-t">
@@ -38,16 +47,17 @@ export function ViewShell({ title, eyebrow, state, total, sub, onClose, side, ch
           </div>
           {state && <span className={`ctv-state is-${stateTone(state)}`}>{state}</span>}
           {total && <span className="ctm-pill"><span><em>{sub}</em><b>{total}</b></span></span>}
+          {head}
           <button type="button" className="ctm-x" onClick={onClose} aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></button>
         </header>
-        <div className={`ctm-body ${side ? "" : "is-one"}`}>
+        <div className={`ctm-body ${side ? "" : "is-one"} ${wide ? "is-wide" : ""}`}>
           <div className="ctm-main">{children}</div>
           {side && <aside className="ctm-side">{side}</aside>}
         </div>
         <footer className="ctm-f">
           {foot}
           <span className="ctm-f-sp" />
-          <button type="button" className="ctm-btn" onClick={onClose}>Close</button>
+          {footEnd ?? <button type="button" className="ctm-btn" onClick={onClose}>Close</button>}
         </footer>
       </div>
     </div>,
@@ -68,9 +78,11 @@ export function ViewSec({ icon, title, sub, children, aside }: { icon: string; t
   );
 }
 
-export default function ContractView({ contract, products, clientName, dealName, money, onClose, onOpenDeal, onOpenClient }: {
+export default function ContractView({ contract, products, clientName, dealName, money, onClose, onOpenDeal, onOpenClient, onEdit }: {
   contract: DealContract; products: Product[]; clientName: string; dealName: string; money: (n: number) => string;
   onClose: () => void; onOpenDeal?: () => void; onOpenClient?: () => void;
+  /** Opens the contract's editor (the deal's contract window). */
+  onEdit?: () => void;
 }) {
   const d = contract.data;
   const f = useMemo(() => contractFigures(d, products), [d, products]);
@@ -91,7 +103,7 @@ export default function ContractView({ contract, products, clientName, dealName,
     ...on.map((x) => ["Discount", x.name || "Commercial discount", `−${x.value}${x.mode === "pct" ? "%" : " €/yr"}`] as [string, string, string]),
   ];
   return (
-    <ViewShell title={contract.name} eyebrow={<>Contract · {clientName}</>} state={state} total={money(f.total)} sub={`${termLabel(d.term)} · ${PAY_LABEL[d.payment]}`} onClose={onClose}
+    <ViewShell wide head={onEdit ? <button type="button" className="scv-edit" onClick={onEdit}><Ico d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" />Edit</button> : undefined} title={contract.name} eyebrow={<>Contract · {clientName}</>} state={state} total={money(f.total)} sub={`${termLabel(d.term)} · ${PAY_LABEL[d.payment]}`} onClose={onClose}
       side={<ContractSummary noTimeline f={f} money={money} note={!d.signed ? "No signing day on the deal: dates count from today." : undefined} />}
       foot={<>
         {onOpenDeal && <button type="button" className="ctm-btn" onClick={onOpenDeal}>Open the deal · {dealName}</button>}
@@ -125,6 +137,34 @@ export default function ContractView({ contract, products, clientName, dealName,
           {!d.items.length && !Number(d.fee) && <p className="ctf-empty">Nothing in it yet.</p>}
         </div>
       </ViewSec>
+      {f.years.length > 0 && (
+        <ViewSec icon="M3 3v18h18M7 15l4-4 3 3 5-6" title="Year by year" sub={`${f.years.length} contract year${f.years.length === 1 ? "" : "s"} from ${cpDay(f.start)}`}>
+          <div className="scv-table" role="table">
+            <div className="scv-tr is-head" role="row"><span>Year</span><span>Period</span><span className="is-r">List</span><span className="is-r">Increase</span><span className="is-r">Discounts</span><span className="is-r">Invoices</span><span className="is-r">Net</span></div>
+            {f.years.map((y, i) => {
+              const at = (n: number) => { const d = new Date(`${f.start}T12:00:00`); d.setFullYear(d.getFullYear() + Math.floor(n)); const m = Math.round((n % 1) * 12); if (m) d.setMonth(d.getMonth() + m); return d; };
+              const from = at(i).toISOString().slice(0, 10);
+              const to = new Date(+at(i + y.share) - 864e5).toISOString().slice(0, 10);
+              const today = todayIso();
+              const on = today >= from && today <= to;
+              const inv = f.invoices.filter((v) => v.date >= from && v.date <= to);
+              const off = y.duration + y.payment + y.commercial;
+              return (
+                <div className={`scv-tr ${on ? "is-now" : ""} ${to < today ? "is-past" : ""}`} role="row" key={y.year}>
+                  <span><b>Year {y.year}</b>{y.share < 1 && <em> · {Math.round(y.share * 12)} months</em>}{on && <i className="scv-now">now</i>}</span>
+                  <span className="scv-d">{cpDay(from)} – {cpDay(to)}</span>
+                  <span className="is-r">{money(y.list)}</span>
+                  <span className={`is-r ${y.increment > 0.5 ? "is-up" : ""}`}>{y.increment > 0.5 ? `+${money(y.increment)}` : "—"}</span>
+                  <span className="is-r">{off > 0.5 ? `−${money(off)}` : "—"}</span>
+                  <span className="is-r">{inv.length ? `${inv.length} · ${money(inv.reduce((t, v) => t + v.amount, 0))}` : "—"}</span>
+                  <span className="is-r"><b>{money(y.net)}</b></span>
+                </div>
+              );
+            })}
+            <div className="scv-tr is-foot" role="row"><span><b>Total</b></span><span /><span className="is-r">{money(f.list)}</span><span /><span className="is-r">{f.discount > 0.5 ? `−${money(f.discount)}` : "—"}</span><span className="is-r">{f.invoices.length}</span><span className="is-r"><b>{money(f.total)}</b></span></div>
+          </div>
+        </ViewSec>
+      )}
       <ViewSec icon={IC.tune} title="Terms" sub="As agreed on the deal">
         <div className="ctv-terms">
           {terms.map(([k, v, b], i) => (

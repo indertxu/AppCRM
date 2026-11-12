@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { nowMs, getAsOf } from "../../framework/asOf";
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
@@ -82,8 +83,10 @@ const saleSub = (status?: string | null) => {
 const norm = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
 const clamp = (n: number, a = 0, b = 1) => Math.max(a, Math.min(b, n));
 const toDate = (s: string) => new Date(s.length === 10 ? `${s}T12:00:00` : s);
-const daysSince = (s: string) => Math.floor((Date.now() - toDate(s).getTime()) / DAY);
+const daysSince = (s: string) => Math.floor((nowMs() - toDate(s).getTime()) / DAY);
 const todayISO = () => {
+  const ao = getAsOf();
+  if (ao) return ao;   // Clients / Contracts looked at "as of" another day
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
@@ -309,7 +312,7 @@ const firstYearOf = (l: Line) => {
   return lineTotal(l) * perYear(l.period);
 };
 /** Which contract year a line is in on `at` (0 = the first; after the term it stays on the last one). */
-const contractYearOf = (l: Line, at = Date.now()) => {
+const contractYearOf = (l: Line, at = nowMs()) => {
   const s0 = str(l.start_date) || str(l.signing_date);
   if (!s0) return 0;
   const el = (at - toDate(s0).getTime()) / (365.25 * DAY);
@@ -362,7 +365,7 @@ const followsRunning = (l: Line, at: number) => {
 /** Is a line counted on `at`: running (its term not over — an auto-renewing one rolls on), or signed and waiting to
  *  start — its grace period counts already, the same everywhere in the app (Clients, Contracts, the client's card,
  *  reports). A renewal signed ahead of time doesn't: the line it follows is still the one billing. */
-const runsAt = (l: Line, at = Date.now()) => {
+const runsAt = (l: Line, at = nowMs()) => {
   const st = str(l.start_date), sg = str(l.signing_date);
   if (st && toDate(st).getTime() > at) {
     if (sg && toDate(sg).getTime() > at) return false;
@@ -375,7 +378,7 @@ const runsAt = (l: Line, at = Date.now()) => {
 /** What a recurring line is billing a year right now — always as of today: year 1 at the signed price, year 2 with
  *  its increase…, less what the partner takes that year. Nothing before it starts or once its term is over (a renewal
  *  signed as a new line takes over then, so the two never add up). One-offs and set-up fees aren't recurring. */
-const lineAnnual = (l: Line, at = Date.now()) => {
+const lineAnnual = (l: Line, at = nowMs()) => {
   if (!l.recurring || !runsAt(l, at)) return 0;
   const y = contractYearOf(l, at);
   return Math.max(0, firstYearOf(l) * increaseBy(l, y) - partnerCut(l, y));
@@ -397,14 +400,14 @@ const termsOf = (l: Line, sc: PaymentSchedule | null = scheduleOf(l)) => {
 export const lineContractValue = (l: Line) => Math.max(0, (l.recurring ? termsOf(l).reduce((t, x) => t + x.amount, 0) : lineTotal(l)) - partnerTotal(l)) + (Number(l.one_time_fee) || 0);
 /** What a line bills once: a one-off's price (less the partner's cut) and any set-up fee. */
 export const lineOneTime = (l: Line) => (l.recurring ? 0 : Math.max(0, lineTotal(l) - partnerTotal(l))) + (Number(l.one_time_fee) || 0);
-export { lineAnnual, lineTotal };
+export { lineAnnual, lineTotal, partnerCut, partnerTotal, firstYearOf, scheduleOf, perYear as periodsAYear, periodLabel };
 /** What a line was billing a year in its last running day (today when it still runs): the value of a churned
  *  client's or an ended contract's product, for when those are the ones being looked at. */
 export const lineAnnualLast = (l: Line) => {
   if (!l.recurring) return 0;
   const end = str(l.ends_on) ? toDate(str(l.ends_on)).getTime() : termOf(l)?.end.getTime();
-  const at = Math.min(Date.now(), (end ?? Date.now()) - DAY);
-  return lineAnnual(l, at) || lineAnnual(l, Math.min(Date.now(), toDate(str(l.start_date) || str(l.signing_date) || todayISO()).getTime() + DAY));
+  const at = Math.min(nowMs(), (end ?? nowMs()) - DAY);
+  return lineAnnual(l, at) || lineAnnual(l, Math.min(nowMs(), toDate(str(l.start_date) || str(l.signing_date) || todayISO()).getTime() + DAY));
 };
 /** The contract a line belongs to: the deal it was signed on, or the existing contract an upsell was signed into (122). */
 export const contractKeyOf = (l: Line) => str(l.contract_tracking_id) || str(l.tracking_id);
@@ -424,7 +427,7 @@ export const lineYearGross = (l: Line, y: number) => {
   return firstYearOf(l) * increaseBy(l, y) + fee;
 };
 /** What a line is billing a year right now before the partner's cut (0 when it isn't running). */
-const lineAnnualGross = (l: Line, at = Date.now()) => (l.recurring && runsAt(l, at) ? firstYearOf(l) * increaseBy(l, contractYearOf(l, at)) : 0);
+export const lineAnnualGross = (l: Line, at = nowMs()) => (l.recurring && runsAt(l, at) ? firstYearOf(l) * increaseBy(l, contractYearOf(l, at)) : 0);
 /** The partner on a deal's product line (tracking_products): who, and how much they take. */
 interface DealPart { partner: string | null; mode: string | null; value: number; once: boolean }
 /** Rebuild what a recurring line pays each year and the partner's share of it, after its price or term changed. */
@@ -447,6 +450,107 @@ function partnerModeOf(l: Line): { mode: "none" | "percent" | "amount" | "once";
   if (ys.length === py.length && py.every((x, i) => Math.abs(x - (ys[i] * pct) / 100) < 1)) return { mode: "percent", value: pct };
   return { mode: "amount", value: py[0] };
 }
+const numOrNull = (v: unknown) => (str(v) === "" ? null : Number(String(v).replace(",", ".")));
+/** The editor's values for a contract (its deal's order form + what its products share), as text. */
+export function contractEditValues(ct: ContractTerms | null, gl: Line[]): Record<string, any> {
+  const l0 = gl[0] ?? ({} as Line);
+  return {
+    signDate: str(ct?.signDate) || str(l0.signing_date), contractStart: str(ct?.contractStart) || str(l0.start_date),
+    termYears: String(ct?.termYears || l0.term_years || ""), autoRenew: ct?.autoRenew ?? !!l0.auto_renew,
+    renewYears: String(ct?.renewYears ?? l0.renew_years ?? ""), nonTerminableYears: String(ct?.nonTerminableYears ?? l0.non_terminable_years ?? ""),
+    paymentTermsDays: String(ct?.paymentTermsDays ?? l0.payment_terms_days ?? ""), billingFrequency: str(ct?.billingFrequency) || "annually",
+    contractRef: str(ct?.contractRef) || str(l0.contract_ref), currency: str(ct?.currency) || "EUR", notes: str(ct?.notes),
+  };
+}
+/** Saves a contract's terms: onto each of its products (dates, renewal, payment, reference; a new term rebuilds each
+ *  year's amount) and onto the deal's order form. `extra` merges more of the order form (customer, people…). */
+export async function saveContractEditValues(tid: string | null, ct: ContractTerms | null, gl: Line[], v: Record<string, any>, extra: Partial<ContractTerms> & Record<string, any> = {}): Promise<{ error: string | null; terms?: ContractTerms }> {
+  const termYears = numOrNull(v.termYears);
+  if (termYears != null && !(termYears > 0)) return { error: "The term has to be more than 0 years." };
+  for (const l of gl) {
+    const row: Record<string, any> = {
+      signing_date: v.signDate || null, start_date: v.contractStart || v.signDate || null,
+      non_terminable_years: numOrNull(v.nonTerminableYears), payment_terms_days: numOrNull(v.paymentTermsDays), contract_ref: str(v.contractRef) || null,
+    };
+    if (l.recurring) {
+      row.auto_renew = !!v.autoRenew; row.renew_years = v.autoRenew ? numOrNull(v.renewYears) ?? termYears : null;
+      if (termYears != null && termYears !== Number(l.term_years)) {
+        row.term_years = termYears;
+        const next = { ...l, term_years: termYears };
+        const b = rebuildYears({ ...next, quantity: 1, price: firstYearOf(l) / perYear(l.period), discount_mode: "none", discount_value: 0 }, partnerModeOf(l));
+        row.breakdown = { ...(l.breakdown ?? {}), years: b.years, partnerYears: b.partnerYears, total: b.total };
+      }
+    }
+    const { error } = await supabase.from("client_products").update(row).eq("id", l.id);
+    if (error) return { error: error.message };
+  }
+  const base: ContractTerms = ct ?? ({
+    signDate: null, contractStart: null, termYears: termYears ?? 1, increments: { mode: "none", value: 0, perYear: [] },
+    license: { list: 0, discount: 0, final: 0, firstYear: 0 }, services: { list: 0, discount: 0, final: 0 }, schedule: [], total: 0,
+  } as unknown as ContractTerms);
+  const terms: ContractTerms = {
+    ...base, ...extra, signDate: v.signDate || null, contractStart: v.contractStart || null, termYears: termYears ?? base.termYears,
+    autoRenew: !!v.autoRenew, renewYears: v.autoRenew ? numOrNull(v.renewYears) : null, nonTerminableYears: numOrNull(v.nonTerminableYears),
+    paymentTermsDays: numOrNull(v.paymentTermsDays), billingFrequency: str(v.billingFrequency) || null, contractRef: str(v.contractRef) || null,
+    currency: str(v.currency) || null, notes: str(v.notes) || null,
+  } as ContractTerms;
+  const e = tid ? await saveDealContract(tid, terms) : null;
+  return e ? { error: e } : { error: null, terms };
+}
+/** The editor's values for one signed product, as text. */
+export function lineEditValues(l: Line): Record<string, any> {
+  const pm = partnerModeOf(l);
+  return {
+    status: str(l.status) || "active", billing: l.recurring ? (perYear(l.period) === 12 ? "monthly" : "yearly") : "once",
+    amount: String(Math.round(lineTotal(l) * 100) / 100), fee: String(Number(l.one_time_fee) || ""),
+    signing: str(l.signing_date), start: str(l.start_date), term: String(l.term_years ?? ""), inc: String(l.annual_increase_pct ?? ""),
+    autoRenew: !!l.auto_renew, renew: String(l.renew_years ?? ""), nonTerm: String(l.non_terminable_years ?? ""),
+    pay: String(l.payment_terms_days ?? ""), ref: str(l.contract_ref), pMode: pm.mode, pValue: pm.mode === "none" ? "" : String(Math.round(pm.value * 100) / 100),
+    contract: str(l.contract_tracking_id) && str(l.contract_tracking_id) !== str(l.tracking_id) ? str(l.contract_tracking_id) : "",
+  };
+}
+/** Saves one signed product: its price, billing, dates, term and increase, renewal, partner — rebuilding what it
+ *  pays each year when any of those changed. */
+export async function saveLineEditValues(l: Line, v: Record<string, any>): Promise<string | null> {
+  const amount = numOrNull(v.amount) ?? 0;
+  if (!(amount >= 0)) return "The price isn't a number.";
+  const recurring = v.billing !== "once";
+  const period = v.billing === "monthly" ? "monthly" : "yearly";
+  const term = recurring ? numOrNull(v.term) : 1;
+  const inc = numOrNull(v.inc);
+  const row: Record<string, any> = {
+    status: v.status || "active", recurring, period, price: amount, quantity: 1, discount_mode: "none", discount_value: 0,
+    one_time_fee: numOrNull(v.fee) ?? 0, signing_date: v.signing || null, start_date: v.start || v.signing || null,
+    term_years: term, annual_increase_pct: recurring ? inc : null,
+    auto_renew: recurring && !!v.autoRenew, renew_years: recurring && v.autoRenew ? numOrNull(v.renew) ?? term : null,
+    non_terminable_years: numOrNull(v.nonTerm), payment_terms_days: numOrNull(v.pay), contract_ref: str(v.ref) || null,
+  };
+  const next = { ...l, ...row } as Line;
+  const pm = { mode: v.pMode as "none" | "percent" | "amount" | "once", value: numOrNull(v.pValue) ?? 0 };
+  const was = partnerModeOf(l);
+  const priceSame = Math.abs(amount - lineTotal(l)) < 0.005 && recurring === !!l.recurring && perYear(period) === perYear(l.period);
+  const termSame = Number(term ?? 0) === Number(l.term_years ?? 0) && Number(inc ?? 0) === Number(l.annual_increase_pct ?? 0);
+  const partnerSame = pm.mode === was.mode && Math.abs(pm.value - was.value) < 0.01;
+  if (!(priceSame && termSame && partnerSame)) {
+    if (recurring) {
+      const b = rebuildYears(next, pm);
+      row.breakdown = { ...(priceSame ? l.breakdown ?? {} : { multiplier: l.breakdown?.multiplier ?? null }), years: b.years, partnerYears: b.partnerYears, total: b.total, edited: true };
+    } else {
+      const v1 = Math.max(0, pm.value);
+      const cut = pm.mode === "percent" ? Math.round(amount * Math.min(v1, 100)) / 100 : pm.mode === "none" ? 0 : Math.min(v1, amount);
+      row.breakdown = { ...(priceSame ? l.breakdown ?? {} : {}), years: [amount], partnerYears: [cut], total: amount, edited: true };
+    }
+  }
+  // an upsell signed into an existing contract (122)
+  const into = str(v.contract) && str(v.contract) !== str(l.tracking_id) ? str(v.contract) : null;
+  if (into !== (str(l.contract_tracking_id) || null)) row.contract_tracking_id = into;
+  if (v.billingName !== undefined) { row.billing_contact_name = str(v.billingName) || null; row.billing_contact_email = str(v.billingEmail) || null; }
+  if (v.notes !== undefined) row.notes = str(v.notes) || null;
+  let { error } = await supabase.from("client_products").update(row).eq("id", l.id);
+  if (error && /contract_tracking_id/i.test(error.message)) return "Run 122_upsell_in_contract.sql in Supabase first.";
+  if (error && /breakdown/i.test(error.message)) { delete row.breakdown; ({ error } = await supabase.from("client_products").update(row).eq("id", l.id)); }
+  return error ? error.message : null;
+}
 /** Running: an active status, and not past the day it was set to stop on (a churned client's contract end, 121). */
 export const isActive = (l: Line) => (!l.status || /active|signed|live/i.test(String(l.status))) && !(l.ends_on && String(l.ends_on) <= todayISO());
 const addYears = (d0: Date, y: number) => {
@@ -463,12 +567,12 @@ export function termOf(l: Line) {
   let end = addYears(start, y);
   let renewed = 0;
   const step = Number(l.renew_years) || y;
-  while (l.auto_renew && end.getTime() < Date.now() && renewed < 50) { end = addYears(end, step); renewed++; }
+  while (l.auto_renew && end.getTime() < nowMs() && renewed < 50) { end = addYears(end, step); renewed++; }
   const from = renewed ? addYears(end, -step) : start;
   return {
     start, end, renewed,
-    pct: clamp((Date.now() - from.getTime()) / Math.max(1, end.getTime() - from.getTime())),
-    left: Math.ceil((end.getTime() - Date.now()) / DAY),
+    pct: clamp((nowMs() - from.getTime()) / Math.max(1, end.getTime() - from.getTime())),
+    left: Math.ceil((end.getTime() - nowMs()) / DAY),
   };
 }
 /** When a signed product starts: its own start, else its signing date, else its contract's (the deal's order form). */
@@ -491,8 +595,8 @@ export function renewalOf(l: Line, ct?: any): { end: Date; left: number; kind: "
   const s = lineStartOf(l, ct);
   if (!s || !l.recurring) return null;
   let end = addYears(toDate(s), 1);
-  for (let n = 0; end.getTime() < Date.now() && n < 80; n++) end = addYears(end, 1);
-  return { end, left: Math.ceil((end.getTime() - Date.now()) / DAY), kind: "anniversary" };
+  for (let n = 0; end.getTime() < nowMs() && n < 80; n++) end = addYears(end, 1);
+  return { end, left: Math.ceil((end.getTime() - nowMs()) / DAY), kind: "anniversary" };
 }
 
 /* tasks */
@@ -1510,115 +1614,33 @@ export default function ClientWorkspace({
   const toggleOf = (id: string) => setOfOpen((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const toggleLn = (id: string) => setLnOpen((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
+  const num = numOrNull;
   const startCtEdit = (tid: string, ct: ContractTerms | null, gl: Line[]) => {
-    const l0 = gl[0] ?? {} as Line;
     setCtErr(null);
-    setCtEdit({ tid, v: {
-      signDate: str(ct?.signDate) || str(l0.signing_date), contractStart: str(ct?.contractStart) || str(l0.start_date),
-      termYears: String(ct?.termYears || l0.term_years || ""), autoRenew: ct?.autoRenew ?? !!l0.auto_renew,
-      renewYears: String(ct?.renewYears ?? l0.renew_years ?? ""), nonTerminableYears: String(ct?.nonTerminableYears ?? l0.non_terminable_years ?? ""),
-      paymentTermsDays: String(ct?.paymentTermsDays ?? l0.payment_terms_days ?? ""), billingFrequency: str(ct?.billingFrequency) || "annually",
-      contractRef: str(ct?.contractRef) || str(l0.contract_ref), currency: str(ct?.currency) || "EUR", notes: str(ct?.notes),
-    } });
+    setCtEdit({ tid, v: contractEditValues(ct, gl) });
   };
-  const num = (v: unknown) => (str(v) === "" ? null : Number(String(v).replace(",", ".")));
   const saveCtEdit = async (ct: ContractTerms | null, gl: Line[]) => {
     if (!ctEdit) return;
-    const v = ctEdit.v;
-    const termYears = num(v.termYears);
-    if (termYears != null && !(termYears > 0)) { setCtErr("The term has to be more than 0 years."); return; }
     setCtBusy(true); setCtErr(null);
-    // the products of the deal: dates, renewals, payment, reference — and the term, rebuilding each year's amount
-    for (const l of gl) {
-      const row: Record<string, any> = {
-        signing_date: v.signDate || null, start_date: v.contractStart || v.signDate || null,
-        non_terminable_years: num(v.nonTerminableYears), payment_terms_days: num(v.paymentTermsDays), contract_ref: str(v.contractRef) || null,
-      };
-      if (l.recurring) {
-        row.auto_renew = !!v.autoRenew; row.renew_years = v.autoRenew ? num(v.renewYears) ?? termYears : null;
-        if (termYears != null && termYears !== Number(l.term_years)) {
-          row.term_years = termYears;
-          const next = { ...l, term_years: termYears };
-          const b = rebuildYears({ ...next, quantity: 1, price: firstYearOf(l) / perYear(l.period), discount_mode: "none", discount_value: 0 }, partnerModeOf(l));
-          row.breakdown = { ...(l.breakdown ?? {}), years: b.years, partnerYears: b.partnerYears, total: b.total };
-        }
-      }
-      const { error } = await supabase.from("client_products").update(row).eq("id", l.id);
-      if (error) { setCtBusy(false); setCtErr(error.message); return; }
-    }
-    // the order form on the deal
-    const base: ContractTerms = ct ?? {
-      signDate: null, contractStart: null, termYears: termYears ?? 1, increments: { mode: "none", value: 0, perYear: [] },
-      license: { list: 0, discount: 0, final: 0, firstYear: 0 }, services: { list: 0, discount: 0, final: 0 }, schedule: [], total: 0,
-    } as ContractTerms;
-    const terms: ContractTerms = {
-      ...base, signDate: v.signDate || null, contractStart: v.contractStart || null, termYears: termYears ?? base.termYears,
-      autoRenew: !!v.autoRenew, renewYears: v.autoRenew ? num(v.renewYears) : null, nonTerminableYears: num(v.nonTerminableYears),
-      paymentTermsDays: num(v.paymentTermsDays), billingFrequency: str(v.billingFrequency) || null, contractRef: str(v.contractRef) || null,
-      currency: str(v.currency) || null, notes: str(v.notes) || null,
-    };
-    const e = ctEdit.tid ? await saveDealContract(ctEdit.tid, terms) : null;
+    const r = await saveContractEditValues(ctEdit.tid || null, ct, gl, ctEdit.v);
     setCtBusy(false);
-    if (e) { setCtErr(e); return; }
-    if (ctEdit.tid) setDealContracts((m) => ({ ...m, [ctEdit.tid]: terms }));
+    if (r.error) { setCtErr(r.error); return; }
+    if (ctEdit.tid && r.terms) setDealContracts((m) => ({ ...m, [ctEdit.tid]: r.terms! }));
     setCtEdit(null);
     await reloadLines();
     onLinesChanged?.();
   };
 
   const startLnEdit = (l: Line) => {
-    const pm = partnerModeOf(l);
     setLnErr(null);
-    setLnEdit({ id: l.id, v: {
-      status: str(l.status) || "active", billing: l.recurring ? (perYear(l.period) === 12 ? "monthly" : "yearly") : "once",
-      amount: String(Math.round(lineTotal(l) * 100) / 100), fee: String(Number(l.one_time_fee) || ""),
-      signing: str(l.signing_date), start: str(l.start_date), term: String(l.term_years ?? ""), inc: String(l.annual_increase_pct ?? ""),
-      autoRenew: !!l.auto_renew, renew: String(l.renew_years ?? ""), nonTerm: String(l.non_terminable_years ?? ""),
-      pay: String(l.payment_terms_days ?? ""), ref: str(l.contract_ref), pMode: pm.mode, pValue: pm.mode === "none" ? "" : String(Math.round(pm.value * 100) / 100),
-      contract: str(l.contract_tracking_id) && str(l.contract_tracking_id) !== str(l.tracking_id) ? str(l.contract_tracking_id) : "",
-    } });
+    setLnEdit({ id: l.id, v: lineEditValues(l) });
   };
   const saveLnEdit = async (l: Line) => {
     if (!lnEdit) return;
-    const v = lnEdit.v;
-    const amount = num(v.amount) ?? 0;
-    if (!(amount >= 0)) { setLnErr("The price isn't a number."); return; }
-    const recurring = v.billing !== "once";
-    const period = v.billing === "monthly" ? "monthly" : "yearly";
-    const term = recurring ? num(v.term) : 1;
-    const inc = num(v.inc);
-    const row: Record<string, any> = {
-      status: v.status || "active", recurring, period, price: amount, quantity: 1, discount_mode: "none", discount_value: 0,
-      one_time_fee: num(v.fee) ?? 0, signing_date: v.signing || null, start_date: v.start || v.signing || null,
-      term_years: term, annual_increase_pct: recurring ? inc : null,
-      auto_renew: recurring && !!v.autoRenew, renew_years: recurring && v.autoRenew ? num(v.renew) ?? term : null,
-      non_terminable_years: num(v.nonTerm), payment_terms_days: num(v.pay), contract_ref: str(v.ref) || null,
-    };
-    const next = { ...l, ...row } as Line;
-    const pm = { mode: v.pMode as "none" | "percent" | "amount" | "once", value: num(v.pValue) ?? 0 };
-    const was = partnerModeOf(l);
-    const priceSame = Math.abs(amount - lineTotal(l)) < 0.005 && recurring === !!l.recurring && perYear(period) === perYear(l.period);
-    const termSame = Number(term ?? 0) === Number(l.term_years ?? 0) && Number(inc ?? 0) === Number(l.annual_increase_pct ?? 0);
-    const partnerSame = pm.mode === was.mode && Math.abs(pm.value - was.value) < 0.01;
-    if (!(priceSame && termSame && partnerSame)) {
-      if (recurring) {
-        const b = rebuildYears(next, pm);
-        row.breakdown = { ...(priceSame ? l.breakdown ?? {} : { multiplier: l.breakdown?.multiplier ?? null }), years: b.years, partnerYears: b.partnerYears, total: b.total, edited: true };
-      } else {
-        const v1 = Math.max(0, pm.value);
-        const cut = pm.mode === "percent" ? Math.round(amount * Math.min(v1, 100)) / 100 : pm.mode === "none" ? 0 : Math.min(v1, amount);
-        row.breakdown = { ...(priceSame ? l.breakdown ?? {} : {}), years: [amount], partnerYears: [cut], total: amount, edited: true };
-      }
-    }
-    // an upsell signed into an existing contract (122)
-    const into = str(v.contract) && str(v.contract) !== str(l.tracking_id) ? str(v.contract) : null;
-    if (into !== (str(l.contract_tracking_id) || null)) row.contract_tracking_id = into;
     setLnBusy(true); setLnErr(null);
-    let { error } = await supabase.from("client_products").update(row).eq("id", l.id);
-    if (error && /contract_tracking_id/i.test(error.message)) { setLnBusy(false); setLnErr("Run 122_upsell_in_contract.sql in Supabase first."); return; }
-    if (error && /breakdown/i.test(error.message)) { delete row.breakdown; ({ error } = await supabase.from("client_products").update(row).eq("id", l.id)); }
+    const e = await saveLineEditValues(l, lnEdit.v);
     setLnBusy(false);
-    if (error) { setLnErr(error.message); return; }
+    if (e) { setLnErr(e); return; }
     setLnEdit(null);
     await reloadLines();
     onLinesChanged?.();

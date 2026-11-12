@@ -143,3 +143,55 @@ html .cl-bar > .cl-mtabs.is-shut .cl-mtabs-in button > span { max-width: 0; marg
 
 /* the contracts scroll under the header when they don't fit */
 html .cl.cl-ov .ccb { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.ccb-m em.is-up { color: #24704f; font-weight: 650; }
+
+/* Clients | Contracts: always open (icon + name); Projects' List | Canvas keeps opening on hover */
+html .cl-bar > .cl-mtabs.is-open { --w: 118px; width: auto; height: auto; }
+html .cl-bar > .cl-mtabs.is-open .cl-mtabs-in { position: relative; top: auto; right: auto; }
+html .cl-bar > .cl-mtabs.is-open .cl-mtabs-in button > span { max-width: 80px; margin-left: 7px; opacity: 1; }
+html .cl-bar > .cl-mtabs.is-open:hover .cl-mtabs-in { background: rgba(255, 255, 255, 0.08); border-color: rgba(255, 255, 255, 0.12); box-shadow: none; }
+
+/* "A year": the value, a ↑ when it rose this contract year, and a tiny year-by-year staircase */
+.ccb-yr { align-items: flex-end; gap: 3px !important; }
+.ccb-yr-v { display: inline-flex; align-items: center; gap: 7px; }
+.ccb-step { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 6px; background: #e3f3ea; color: #24704f; font-style: normal; font-size: 11px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.ccb-yr-s { display: inline-flex; align-items: center; gap: 6px; }
+.ccb-bars { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; }
+.ccb-bars i { display: block; width: 5px; border-radius: 2px; background: #dfe7e3; }
+.ccb-bars i.is-past { background: #a9cdbb; }
+.ccb-bars i.is-now { background: #2f9d6f; }
+.ccb-yr-s em { font-style: normal; font-size: 11px; color: #8a9892; white-space: nowrap; }
+.ccb-next { color: #24704f; font-weight: 650; }
+/* v2: the value with its increase, and under it the value before this year's rise + the rise in % */
+.ccb-yr .ccb-yr-s { display: inline-flex; align-items: center; gap: 6px; font-style: normal; font-size: 11.5px; color: #8a9892; font-variant-numeric: tabular-nums; }
+.ccb-yr .ccb-step { height: 17px; padding: 0 5px; font-size: 10.5px; }
+/* the kinds of product a contract carries */
+.ccb-kinds { display: flex !important; flex-direction: row !important; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.ccb-kinds i { font-style: normal; max-width: 100%; padding: 3px 8px; border-radius: 7px; background: #eef4f1; color: #2f5f49; font-size: 11.5px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* "As of": look at Clients / Contracts as they stood on another day */
+.cl-bar > .cl-asof { flex: none; display: inline-flex; align-items: center; gap: 4px; margin-left: 10px; }
+.cl-asof-btn { display: inline-flex; align-items: center; gap: 9px; height: 46px; min-width: 46px; justify-content: center; padding: 0 12px; border-radius: 14px; border: 1px solid rgba(255, 255, 255, 0.12); background: rgba(255, 255, 255, 0.08); color: rgba(226, 246, 236, 0.85); cursor: pointer; transition: background 0.2s, border-color 0.2s, color 0.2s; }
+.cl-asof-btn:hover { background: rgba(255, 255, 255, 0.14); color: #fff; }
+.cl-asof-btn svg { width: 18px; height: 18px; flex: none; }
+.cl-asof-btn span { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.1; font: 700 13px "Inter", sans-serif; color: #fff; white-space: nowrap; }
+.cl-asof-btn span em { font-style: normal; font-size: 10px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: #ffd98a; }
+.cl-asof.is-on .cl-asof-btn { background: rgba(255, 210, 120, 0.14); border-color: rgba(255, 210, 120, 0.45); color: #ffd98a; }
+.cl-asof-x { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 10px; border: 0; background: rgba(255, 255, 255, 0.08); color: rgba(226, 246, 236, 0.8); cursor: pointer; }
+.cl-asof-x svg { width: 14px; height: 14px; stroke: currentColor; stroke-width: 2.2; fill: none; stroke-linecap: round; }
+.cl-asof-x:hover { background: rgba(255, 255, 255, 0.16); color: #fff; }
+.cl-asof + .cl-mtabs { margin-left: 8px !important; }
+
+/* ---- The header's right-hand controls as one set: all 40px tall, the same glass, 8px apart ---- */
+html .cl.cl-ov .cl-bar .cx-view,
+html .cl.cl-ov .cl-bar > .cl-asof .cl-asof-btn,
+html .cl.cl-ov .cl-bar > .cl-mtabs .cl-mtabs-in { box-sizing: border-box; height: 40px; border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.12); background: rgba(255, 255, 255, 0.08); box-shadow: none; }
+html .cl.cl-ov .cl-bar > .cl-asof { margin-left: -10px; gap: 6px; }
+html .cl.cl-ov .cl-bar > .cl-asof .cl-asof-btn { min-width: 40px; padding: 0 10px; }
+html .cl.cl-ov .cl-bar > .cl-asof .cl-asof-x { width: 28px; height: 28px; border-radius: 9px; }
+html .cl.cl-ov .cl-bar > .cl-mtabs { margin-left: -10px !important; height: 40px; }
+html .cl.cl-ov .cl-bar > .cl-mtabs .cl-mtabs-in { padding: 3px; }
+html .cl.cl-ov .cl-bar > .cl-mtabs .cl-mtabs-in button { height: 32px; border-radius: 9px; }
+html .cl.cl-ov .cl-bar > .cl-mtabs .cl-mtabs-pill { top: 3px; bottom: 3px; left: 3px; border-radius: 9px; }
+html .cl.cl-ov .cl-bar > .cl-actions { margin-left: -10px; }
+html .cl.cl-ov .cl-bar > .cl-asof.is-on .cl-asof-btn { background: rgba(255, 210, 120, 0.14); border-color: rgba(255, 210, 120, 0.45); }

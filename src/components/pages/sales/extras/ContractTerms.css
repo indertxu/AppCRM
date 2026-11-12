@@ -802,3 +802,126 @@
 .ctm:has(> .ctm-body.is-one) { width: min(1080px, 100%); height: auto; max-height: 100%; }
 .ctm:has(> .ctm-body.is-one) .ctm-body { flex: 1 1 auto; }
 .ctm-body.is-one .ctm-main { padding-bottom: 24px; }
+
+/* =====================================================================
+   Detailed contract view (Clients › Contracts): nearly the whole screen,
+   two columns — the contract's figures on the left, its terms, parties
+   and signature on the right.
+   ===================================================================== */
+html .ctm.ctv.is-wide { width: min(1820px, 100%); max-width: none; height: 100%; max-height: none; }
+html .ctm-body.is-wide { grid-template-columns: minmax(0, 1fr) minmax(360px, 30%); }
+html .ctm-body.is-wide .ctm-main { padding: 22px 26px 40px 30px; gap: 12px; }
+html .ctm-body.is-wide .ctm-side { display: flex; flex-direction: column; gap: 12px; padding: 22px 28px 32px 6px; }
+html .ctm-body.is-wide .ctm-side > * { flex-shrink: 0; }
+@media (max-width: 1360px) { html .ctm-body.is-wide { display: block; overflow-y: auto; } html .ctm-body.is-wide .ctm-main { overflow: visible; padding-bottom: 12px; } html .ctm-body.is-wide .ctm-side { overflow: visible; padding: 0 26px 32px 30px; } }
+
+.scv-facts { display: grid; gap: 8px; }
+.scv-facts.is-grid { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+.scv-facts.is-col { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+.scv-fact { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 10px 13px; border-radius: 12px; background: #f6f8f7; }
+.scv-fact em { font-style: normal; font-size: 10px; font-weight: 800; letter-spacing: 0.07em; text-transform: uppercase; color: #8a9892; }
+.scv-fact b { font-size: 13.5px; font-weight: 650; color: #17241e; overflow-wrap: anywhere; }
+.scv-fact b a { color: #24704f; text-decoration: none; }
+.scv-fact b a:hover { text-decoration: underline; }
+.scv-fact i { font-style: normal; font-size: 11.5px; color: #7b8a83; }
+.scv-fact.is-big { background: #fff; border: 1px solid #e3ebe7; }
+.scv-fact.is-big b { font: 700 22px/1.15 "Space Grotesk", "Inter", sans-serif; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+.scv-fact .is-up, .scv-tr .is-up, .scv-yrs i { color: #24704f; font-weight: 700; }
+.scv-file { font-size: 12px; font-weight: 600; word-break: break-all; }
+
+.scv-table { display: flex; flex-direction: column; border-radius: 14px; border: 1px solid #e6ece9; background: #fff; overflow-x: auto; }
+.scv-tr { display: grid; grid-template-columns: minmax(110px, 0.9fr) minmax(190px, 1.6fr) repeat(5, minmax(96px, 1fr)); align-items: center; gap: 12px; min-width: 760px; padding: 10px 16px; border-top: 1px solid #f0f3f1; font-size: 13px; font-variant-numeric: tabular-nums; }
+.scv-tr > span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.scv-tr .is-r { text-align: right; }
+.scv-tr b { font-weight: 700; }
+.scv-tr em { font-style: normal; color: #8a9892; font-size: 11.5px; }
+.scv-tr.is-head { border-top: 0; background: #fafbfa; font-size: 11.5px; font-weight: 650; color: #5f726a; }
+.scv-tr.is-foot { background: #fafbfa; border-top: 1px solid #e6ece9; }
+.scv-tr.is-now { background: #eef8f2; box-shadow: inset 3px 0 0 #2f9d6f; }
+.scv-tr.is-past { color: #8a9892; }
+.scv-tr.is-past b { color: #5f726a; }
+.scv-d { color: #5f726a; font-size: 12.5px; }
+.scv-now { margin-left: 8px; display: inline-flex; align-items: center; height: 18px; padding: 0 7px; border-radius: 999px; background: #2f9d6f; color: #fff; font-style: normal; font-size: 10.5px; font-weight: 800; vertical-align: 1px; }
+
+.scv-prods { display: flex; flex-direction: column; gap: 10px; }
+.scv-prod { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 14px; border: 1px solid #e6ece9; background: #fff; }
+.scv-prod.is-off { opacity: 0.7; }
+.scv-prod-h { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.scv-prod-t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.scv-prod-t b { font-size: 14.5px; font-weight: 750; }
+.scv-prod-t em { font-style: normal; font-size: 12px; color: #7b8a83; }
+.scv-prod-f { flex: none; display: flex; flex-direction: column; align-items: flex-end; }
+.scv-prod-f b { font: 700 17px "Space Grotesk", "Inter", sans-serif; font-variant-numeric: tabular-nums; }
+.scv-prod-f em { font-style: normal; font-size: 11.5px; color: #8a9892; }
+.scv-prod-k { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+.scv-prod-k .scv-fact { padding: 8px 11px; }
+.ctm-item-ini.is-svc { background: #eef1fb; color: #4a5aa8; }
+.scv-yrs { display: flex; flex-wrap: wrap; gap: 6px; }
+.scv-yrs > span { display: inline-flex; align-items: baseline; gap: 6px; padding: 6px 10px; border-radius: 10px; background: #f6f8f7; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.scv-yrs em { font-style: normal; font-size: 11px; font-weight: 800; color: #8a9892; }
+.scv-yrs b { font-weight: 700; }
+.scv-yrs i { font-style: normal; font-size: 11px; }
+.scv-yrs > span.is-now { background: #eef8f2; box-shadow: inset 0 0 0 1px #bfe3cf; }
+.scv-rows { display: flex; flex-direction: column; border-top: 1px dashed #e3ebe7; padding-top: 6px; }
+.scv-row { display: grid; grid-template-columns: minmax(0, 1fr) 96px 96px 104px; gap: 10px; align-items: baseline; padding: 4px 2px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.scv-row > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #33453c; }
+.scv-row em { font-style: normal; margin-left: 8px; color: #8a9892; font-size: 11.5px; }
+.scv-row .is-r { text-align: right; }
+.scv-row .is-off { color: #b0533f; }
+
+.scv-people { display: flex; flex-direction: column; gap: 6px; }
+.scv-person { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 9px 11px; border-radius: 12px; background: #f6f8f7; }
+.scv-ini { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 10px; background: #e3f3ea; color: #24704f; font-size: 11.5px; font-weight: 800; }
+.scv-person-t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.scv-person-t em { font-style: normal; font-size: 10px; font-weight: 800; letter-spacing: 0.07em; text-transform: uppercase; color: #8a9892; }
+.scv-person-t b { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.scv-person-t i { font-style: normal; font-size: 11.5px; color: #7b8a83; overflow-wrap: anywhere; }
+.scv-note { margin: 0; padding: 10px 12px; border-radius: 12px; background: #fbf8ef; font-size: 12.5px; line-height: 1.5; color: #5a4a25; white-space: pre-wrap; }
+
+/* ---- Detailed contract view v2: a calmer header, an Edit button, and editing in place ---- */
+html .ctm.ctv.is-wide .ctm-h { gap: 14px; padding: 18px 26px; background: linear-gradient(180deg, #fff, #fbfcfb); border-bottom: 1px solid #e8eeeb; }
+html .ctm.ctv.is-wide .ctv-name { font-size: 21px; }
+html .ctm.ctv.is-wide .ctm-main, html .ctm.ctv.is-wide .ctm-side { background: transparent; }
+html .ctm.ctv.is-wide .ctv-sec { border-radius: 18px; border: 1px solid #e6ece9; box-shadow: 0 1px 2px rgba(20, 40, 30, 0.03), 0 18px 36px -32px rgba(20, 40, 30, 0.35); }
+.scv-edit { flex: none; display: inline-flex; align-items: center; gap: 7px; height: 38px; padding: 0 15px; border-radius: 12px; border: 1px solid #d6e3dc; background: #fff; font: 650 13px "Inter", sans-serif; color: #17241e; cursor: pointer; transition: background 0.15s, border-color 0.15s, transform 0.15s; }
+.scv-edit svg { width: 15px; height: 15px; }
+.scv-edit:hover { background: #f1f7f4; border-color: #b9d6c6; transform: translateY(-1px); }
+.scv-editing { flex: none; display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 12px; border-radius: 999px; background: #fff6df; color: #8a5208; font-size: 12px; font-weight: 750; }
+.scv-editing::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #e2a12b; animation: scv-blink 1.6s ease-in-out infinite; }
+@keyframes scv-blink { 50% { opacity: 0.35; } }
+html .ctm.ctv.is-editing { box-shadow: 0 0 0 2px #f1d79a, 0 40px 100px -40px rgba(0, 0, 0, 0.55); }
+.scv-err { max-width: 520px; font-size: 12.5px; font-weight: 600; color: #b0533f; }
+
+.scv-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
+.scv-form.is-grid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+.scv-form-h { grid-column: 1 / -1; margin-top: 4px; font-size: 11px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: #6f8279; }
+.scv-form-h i { font-style: normal; font-weight: 600; letter-spacing: 0; text-transform: none; color: #9aa8a2; }
+.scv-f { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.scv-f.is-wide { grid-column: 1 / -1; }
+.scv-f > em { font-style: normal; font-size: 11.5px; font-weight: 650; color: #5f726a; }
+.scv-f > i { font-style: normal; font-size: 11px; color: #9aa8a2; }
+.scv-in { width: 100%; min-width: 0; height: 38px; padding: 0 12px; border-radius: 10px; border: 1px solid #dbe5e0; background: #fff; font: 500 13.5px "Inter", sans-serif; color: #17241e; outline: none; transition: border-color 0.15s, box-shadow 0.15s; box-sizing: border-box; }
+.scv-in:hover { border-color: #c3d6cc; }
+.scv-in:focus { border-color: #2f9d6f; box-shadow: 0 0 0 3px rgba(47, 157, 111, 0.15); }
+.scv-in.is-area { height: auto; padding: 10px 12px; resize: vertical; line-height: 1.5; }
+.scv-in-wrap { position: relative; display: block; }
+.scv-in-wrap > i { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); font-style: normal; font-size: 12px; color: #8a9892; pointer-events: none; }
+.scv-in-wrap .scv-in { padding-right: 52px; font-variant-numeric: tabular-nums; }
+.scv-in-date, .scv-in-sel { display: block; min-width: 0; }
+.scv-in-date > *, .scv-in-sel > * { width: 100%; }
+.scv-in-date button, .scv-in-sel .sel-trigger { min-height: 38px; border-radius: 10px !important; }
+.scv-in-sel.is-status { flex: none; width: 140px; }
+.scv-sw { display: flex; align-items: center; height: 38px; }
+.scv-prod.is-edit { gap: 14px; border-color: #d9e7df; background: linear-gradient(180deg, #fff, #fbfdfc); }
+.scv-sigs { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.scv-sig { display: grid; grid-template-columns: 150px minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1.3fr) 32px; gap: 6px; align-items: center; }
+.scv-x { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 9px; border: 0; background: #f4f6f5; color: #8a9892; cursor: pointer; }
+.scv-x svg { width: 14px; height: 14px; }
+.scv-x:hover { background: #fbe9e5; color: #b0533f; }
+.scv-add { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 11px; border-radius: 9px; border: 1px dashed #b9d6c6; background: #f6fbf8; font: 650 12px "Inter", sans-serif; color: #24704f; cursor: pointer; }
+.scv-add svg { width: 13px; height: 13px; }
+.scv-empty { margin: 0; font-size: 12.5px; color: #8a9892; }
+@media (max-width: 1500px) { .scv-sig { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .scv-sig > .scv-x { justify-self: end; } }
+html .scv-in-sel .sel-trigger { width: 100%; height: 38px; min-height: 38px; padding: 0 12px; justify-content: space-between; border-radius: 10px !important; border: 1px solid #dbe5e0 !important; background: #fff !important; font-size: 13.5px !important; box-sizing: border-box; }
+html .scv-in-sel .sel-trigger:hover { border-color: #c3d6cc !important; }
+html .scv-in-sel.is-status .sel-trigger { height: 34px; min-height: 34px; }

@@ -1,4 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import DatePicker from "../../framework/DatePicker";
+import { nowMs, setAsOf, todayIso as asOfToday, useAsOf } from "../../framework/asOf";
 import { Fragment, useState, useEffect, useMemo, useRef, type PointerEvent as RPointerEvent, type KeyboardEvent as RKeyboardEvent, type ReactNode } from "react";
 import { supabase } from "../../api/supabase";
 import NewClientForm from "./NewClientForm";
@@ -90,7 +92,7 @@ const KPIS: Kpi[] = [
   { key: "delivered", label: "Delivered", icon: "check", calc: (rs) => { const s = sum(rs, (r) => r.signed), u = sum(rs, (r) => r.used); return { v: String(s > 0 ? Math.round((u / s) * 100) : 0), unit: "%", sub: `${eurN(u)} of ${eurN(s)} days`, bar: s > 0 ? (u / s) * 100 : 0 }; } },
   { key: "dayRate", label: "Avg. day rate", icon: "euro", calc: (rs) => { const s = sum(rs, (r) => r.signed); return { v: s > 0 ? eurN(sum(rs, (r) => r.projectsValue) / s) : "—", unit: s > 0 ? "€" : "", sub: "project value per signed day" }; } },
   { key: "products", label: "Active products", icon: "box", calc: (rs) => ({ v: String(sum(rs, (r) => r.activeProducts)), sub: `${rs.filter((r) => r.activeProducts > 0).length} clients` }) },
-  { key: "renewals", label: "Renewals · 90 days", icon: "cal", calc: (rs) => { const lim = Date.now() + 90 * 864e5; const xs = rs.filter((r) => r.nextRenewal && new Date(r.nextRenewal).getTime() <= lim); return { v: String(xs.length), sub: xs.length ? xs.slice(0, 2).map((r) => r.name).join(", ") + (xs.length > 2 ? "…" : "") : "nothing due" }; } },
+  { key: "renewals", label: "Renewals · 90 days", icon: "cal", calc: (rs) => { const lim = nowMs() + 90 * 864e5; const xs = rs.filter((r) => r.nextRenewal && new Date(r.nextRenewal).getTime() <= lim); return { v: String(xs.length), sub: xs.length ? xs.slice(0, 2).map((r) => r.name).join(", ") + (xs.length > 2 ? "…" : "") : "nothing due" }; } },
   { key: "quiet", label: "No contact 60+ days", icon: "pulse", tone: "coral", calc: (rs) => { const xs = rs.filter((r) => r.daysSince == null || r.daysSince > 60); return { v: String(xs.length), sub: `of ${rs.length} clients`, bar: rs.length ? (xs.length / rs.length) * 100 : 0 }; } },
   { key: "tasks", label: "Open tasks", icon: "tasks", tone: "gold", calc: (rs) => ({ v: String(sum(rs, (r) => r.openTasks)), sub: `${sum(rs, (r) => r.lateTasks)} late` }) },
 ];
@@ -295,10 +297,14 @@ export function ClientList({
     groups.forEach((l) => { if (l.length > 1) l.forEach((c) => { if (!out.has(c.id)) out.set(c.id, l.filter((x) => x.id !== c.id).map((x) => x.name).join(", ")); }); });
     return out;
   }, [clients, extra]);
-  const rows = useMemo<ClientRow[]>(() => clients.map((c) => {
+  /** The day the page is looked at (the header's calendar; null = today). */
+  const asOf = useAsOf();
+  const rows = useMemo<ClientRow[]>(() => clients.map((c0) => {
+    // as of another day: churned only if it had churned by then; only the products signed by then
+    const c: Client = !asOf ? c0 : { ...c0, status: c0.churnedAt ? (String(c0.churnedAt).slice(0, 10) <= asOf ? "churned" : "active") : c0.status };
     const mine = projects.filter((p) => p.clientId === c.id);
     const open = mine.filter((p) => p.status !== "closed");
-    const ls = (extra?.lines ?? []).filter((l) => l.client_id === c.id);
+    const ls = (extra?.lines ?? []).filter((l) => l.client_id === c.id && (!asOf || String(l.signing_date || l.start_date || "").slice(0, 10) <= asOf || !(l.signing_date || l.start_date)));
     const act = ls.filter(isActive);
     const ctOf = (l: Line) => extra?.terms?.[String(l.contract_tracking_id || l.tracking_id || "")] ?? null;
     const renew = act.map((l) => renewalOf(l, ctOf(l))).filter((t): t is NonNullable<ReturnType<typeof renewalOf>> => !!t).sort((a, b) => a.end.getTime() - b.end.getTime())[0];
@@ -306,7 +312,7 @@ export function ClientList({
     const signedAt = [...mine.map((p) => p.signingDate), ...ls.map((l) => String(l.signing_date || ctOf(l)?.signDate || lineStartOf(l, ctOf(l)) || ""))]
       .map((d) => String(d ?? "").slice(0, 10)).filter(Boolean).sort()[0] ?? null;
     const last = extra?.last[c.id] ?? null;
-    const days = last ? Math.max(0, Math.floor((Date.now() - new Date(last).getTime()) / 864e5)) : null;
+    const days = last ? Math.max(0, Math.floor((nowMs() - new Date(last).getTime()) / 864e5)) : null;
     const signed = mine.reduce((t, p) => t + signedOf(p), 0);
     const used = mine.reduce((t, p) => t + (usage[p.id]?.done ?? 0), 0);
     const lastP = mine[mine.length - 1];
@@ -329,7 +335,8 @@ export function ClientList({
       recurringLast: ls.reduce((t, l) => t + lineAnnualLast(l), 0), contractLast: ls.reduce((t, l) => t + lineContractValue(l), 0), productsLast: ls.length,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [clients, projects, extra, usage, projectTypes, dupOf]);
+  // as of another day: the clients that had signed by then
+  }).filter((r) => !asOf || !r.firstSigned || r.firstSigned <= asOf), [clients, projects, extra, usage, projectTypes, dupOf, asOf]);
 
   const opts = (xs: string[]) => () => [...new Set(xs.filter(Boolean))].sort().map((v) => ({ value: v, label: v }));
   const fields: FField<ClientRow>[] = [
@@ -795,9 +802,13 @@ export default function ClientsPage() {
   const [toolsSlot, setToolsSlot] = useState<HTMLDivElement | null>(null);
   // Clients, or every signed contract (remembered)
   const [tab, setTab] = useState<"clients" | "contracts">(() => { try { return localStorage.getItem("cl.tab") === "contracts" ? "contracts" : "clients"; } catch { return "clients"; } });
-  /** Picking a tab closes the switch back to its icons (until the pointer leaves and comes back). */
-  const [tabsShut, setTabsShut] = useState(false);
-  const setTabP = (t: "clients" | "contracts") => { setTab(t); setTabsShut(true); (document.activeElement as HTMLElement | null)?.blur?.(); try { localStorage.setItem("cl.tab", t); } catch { /* ignore */ } };
+  const setTabP = (t: "clients" | "contracts") => { setTab(t); try { localStorage.setItem("cl.tab", t); } catch { /* ignore */ } };
+  // see the page as it stood on another day (the calendar in the header); back to today when leaving the page
+  const asOfDay = useAsOf();
+  useEffect(() => () => setAsOf(null), []);
+  const [calOpen, setCalOpen] = useState(false);
+  const calRef = useRef<HTMLButtonElement>(null);
+  const asOfLabel = asOfDay ? new Date(`${asOfDay}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "";
   const navigate = useNavigate();
   const d = useClientsData();
   /** Bumped when a client's signed products change in its popup, so the list's figures follow. */
@@ -915,7 +926,15 @@ export default function ClientsPage() {
           </div>
         </div>
         <div className="cl-bar-tools" ref={setToolsSlot} key={tab} />
-        <div className={`cl-mtabs ${tabsShut ? "is-shut" : ""}`} data-tab={tab} onMouseLeave={() => setTabsShut(false)}>
+        <div className={`cl-asof ${asOfDay ? "is-on" : ""}`}>
+          <button ref={calRef} type="button" className="cl-asof-btn" onClick={() => setCalOpen((o) => !o)} aria-label="See it as on another day" title={asOfDay ? `As of ${asOfLabel} — pick another day` : "See it as on another day"}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4.5" width="18" height="16.5" rx="3" /><path d="M8 2.5v4M16 2.5v4M3 10h18" />{asOfDay && <path d="M12 14v3l2 1" />}</svg>
+            {asOfDay && <span><em>As of</em>{asOfLabel}</span>}
+          </button>
+          {asOfDay && <button type="button" className="cl-asof-x" onClick={() => setAsOf(null)} aria-label="Back to today" title="Back to today"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></button>}
+          {calOpen && <DatePicker hideTrigger open anchorRef={calRef} value={asOfDay ?? asOfToday()} onOpenChange={setCalOpen} onChange={(d) => { setAsOf(d || null); setCalOpen(false); }} />}
+        </div>
+        <div className="cl-mtabs is-open" data-tab={tab}>
           <div className="cl-mtabs-in" role="tablist" aria-label="Clients or contracts">
           <span className="cl-mtabs-pill" aria-hidden="true" />
           <button type="button" role="tab" aria-selected={tab === "clients"} aria-label="Clients" className={tab === "clients" ? "is-on" : ""} onClick={() => setTabP("clients")}>

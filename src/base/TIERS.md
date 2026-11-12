@@ -176,6 +176,75 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-12 16:30 · Enterprise · Clients header: the right-hand controls as one set
+Files: src/components/pages/clients/ContractsBoard.css
+What: The cards/list toggle, the as-of calendar, the Clients | Contracts switch and the Actions button are all 40px tall now (the switch's inner buttons 32px), share the same glass (12px radius, white 8% / 12% border) and sit 8px apart. Before, they were 40 / 46 / 46px with 18–28px gaps.
+Tags: none
+Deploy: none
+
+### 2026-11-12 16:10 · Enterprise · Clients / Contracts "as of" any day (header calendar); Products column on Contracts
+Files: src/components/framework/asOf.ts (new), pages/clients/ClientWorkspace.tsx, clients/ClientsPage.tsx, clients/ContractsBoard.tsx, clients/ContractsBoard.css, clients/SignedContractView.tsx, sales/extras/ContractView.tsx
+What:
+- framework/asOf.ts is a shared "as of" clock: getAsOf / setAsOf / useAsOf (useSyncExternalStore), nowMs(), todayIso().
+- ClientWorkspace's helpers read it instead of the real clock: todayISO, runsAt, lineAnnual(Gross), contractYearOf, termOf, renewalOf and isActive. So does contractState in ContractView, and so do the Contracts board, the contract views and Clients' rows.
+- The Clients page header has a calendar button (custom DatePicker). Picking a day shows Clients and Contracts — KPIs, rows, states, contract year and increase, next invoice, the pop-ups — as they stood that day.
+  - Only what was signed by then is shown. A client counts as churned only if its churn date had come.
+  - The button turns amber with "As of 15 Mar 2028"; × goes back to today, and leaving the page resets it.
+  - The contracts cache isn't used or written while a day is picked.
+- Contracts has a new "Products" field / column: the kinds of product a contract carries (multi-select; it filters from the header or the Filters panel), shown as chips. It replaces the old count and is in the default columns. Column widths were tightened.
+Tags: PORT? (Base, if it wants an "as of" view)
+Deploy: none
+
+### 2026-11-12 15:40 · Enterprise · Contract pop-up: restyled, and everything editable in it
+Files: src/components/pages/clients/SignedContractView.tsx, clients/ClientWorkspace.tsx, clients/ContractsBoard.tsx, sales/extras/ContractView.tsx, sales/extras/ContractTerms.css
+What:
+- Restyled: a calmer header, sections as cards, and an "Edit" button in the header.
+- Editing a signed-products contract happens in place (an amber "Editing" badge, Cancel / Save changes). Closing with unsaved changes asks via ContractConfirm.
+  - The contract: signed, starts, length, non-terminable, renewal / notice, invoicing, due days, contract No., currency, notes. A shared field is carried onto every product's editor.
+  - Each product: status, billing, price, set-up fee, dates, length, yearly increase, renewal, partner's cut, notes.
+  - The customer (legal name, VAT, address, country).
+  - People: contact person, platform admin, billing contact (saved on every product).
+  - The signatories (add / remove, which side), e-signature provider and ID, terms link.
+- Saving writes the contract (onto its products and the deal's order form `contract_terms`), then each product that changed; each year's amount is rebuilt when price, term or increase change.
+- ClientWorkspace's line and contract editors now use the same exported functions: contractEditValues / saveContractEditValues (with `extra` for more of the order form) and lineEditValues / saveLineEditValues (which also takes billing contact and notes). Behaviour is unchanged.
+- A deal-built contract's view has Edit too: it opens the deal's ContractModal, and the list reads the contracts again after a save.
+Tags: none
+Deploy: none
+
+### 2026-11-12 15:15 · Enterprise · Contracts › "A year": value with its rise, then the value before it + %
+Files: src/components/pages/clients/ContractsBoard.tsx, clients/ContractsBoard.css
+What: The "A year" cell is simpler now. The staircase and the next-rise date are gone. It shows this contract year's value with its increase in large, and under it — only when it rose this contract year — the value before that rise and a green "+5%" pill.
+Tags: none
+Deploy: none
+
+### 2026-11-12 15:05 · Enterprise · Contracts › "A year": clearer increments
+Files: src/components/pages/clients/ContractsBoard.tsx, clients/ContractsBoard.css
+What: The "A year" cell now shows:
+- this contract year's value;
+- a green "↑ 5%" pill when it rose this contract year (vs the year before, not vs year 1);
+- a tiny year-by-year staircase with the current year in green;
+- "Year 2 of 3 · +5% 1 Mar 27" for when the next rise comes.
+Hovering lists every year's value and rise. New row fields: yearVals (gross yearly value per contract year), stepNow, nextStep. The total column's note no longer carries a %.
+Tags: none
+Deploy: none
+
+### 2026-11-12 14:55 · Enterprise · Detailed contract pop-up (near full screen); Clients | Contracts switch always open
+Files: src/components/pages/clients/SignedContractView.tsx (new), clients/ContractsBoard.tsx, clients/ContractsBoard.css, clients/ClientWorkspace.tsx, clients/ClientsPage.tsx, sales/extras/ContractView.tsx, sales/extras/ContractTerms.css
+What:
+- ViewShell takes `wide`: the pop-up fills nearly the whole screen (up to 1820px), two columns, and goes to one column below 1360px.
+- A contract made of signed products opens SignedContractView. LinesContractView is gone. It shows:
+  - At a glance: value with list and discount, this year with the increase, signed / grace, starts, renews, services.
+  - Year by year: calendar contract years, recurring, increase %, one-time, partner, net; the current year is highlighted.
+  - Each product: price, list, discount %, value over the term, partner, set-up fee, start, Y1/Y2/Y3 chips with the % up, and the order form's price rows (list, discount, final).
+  - The services sold with it (roles, days, discount).
+  - Side column: terms (length, non-terminable, renewal and notice, yearly increase, invoicing and payment days, currency / VAT, services billing); customer (legal name, VAT, address, contact person, platform admin, billing contact); signed (signatories on both sides, e-sign provider and ID, signed document, terms link); notes.
+  - It reads the deal's contract_terms when there is one.
+- ClientWorkspace now also exports partnerCut, partnerTotal, firstYearOf, scheduleOf, periodsAYear and periodLabel.
+- A deal contract (ContractView) opens wide too, with a new year-by-year table: list, increase, discounts, invoices that year, net.
+- The Clients | Contracts switch is always open (icon + name), via `.cl-mtabs.is-open`. Projects' List | Canvas still opens on hover.
+Tags: none
+Deploy: none
+
 ### 2026-11-12 14:45 · Base · Integrations: Google Analytics (GA4)
 - files: `pages/settings/Integrations.tsx`, `api/connectedAccounts.ts` (`syncAssets(id, what?)`), `requests/connected-accounts.index.ts.txt`, `sql/133_connected_google_analytics.sql` (new).
 - **DB (133)**: `connected_assets.kind` + `ga_property`. Applied 2026-11-12.

@@ -1,3 +1,4 @@
+import { nowMs, todayIso, useAsOf } from "../../framework/asOf";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { supabase } from "../../api/supabase";
@@ -7,10 +8,11 @@ import { FilterBar, FilterChips, applyView, emptyView, useSavedViews, useStoredV
 import { loadPrefs, savePref } from "../companies/companiesApi";
 import { loadProducts, type Product } from "../settings/catalogApi";
 import { contractFigures, normConfig, termLabel, PAY_LABEL, type DealContract, type ContractFigures } from "../sales/extras/contractsApi";
-import ContractView, { ViewShell, ViewSec, contractState, stateTone } from "../sales/extras/ContractView";
+import ContractView, { contractState, stateTone } from "../sales/extras/ContractView";
+import ContractModal from "../sales/extras/ContractModal";
 import { cpDay, ContractTrack } from "../sales/extras/ContractPlan";
-import { IC } from "../sales/extras/ContractTermsForm";
-import { CompanyLogo, noteLines, lineAnnualLast, isActive, renewalOf, lineStartOf, lineAnnual, lineContractValue, type Line } from "./ClientWorkspace";
+import { CompanyLogo, noteLines, lineAnnualLast, lineAnnualGross, lineYearGross, isActive, renewalOf, lineStartOf, lineAnnual, lineContractValue, type Line } from "./ClientWorkspace";
+import SignedContractView from "./SignedContractView";
 import "./ContractsBoard.css";
 
 /* =====================================================================
@@ -26,13 +28,19 @@ type Row = {
   next: { date: string; amount: number } | null; total: number; perYear: number; state: string;
   /** What it billed a year in its last running day (= perYear while it runs): an ended contract's value. */
   lastPerYear: number;
+  /** Which contract year runs today (1 = the first; 1 while it waits to start), how much its yearly price has gone
+   *  up since year 1 (%), and how much it goes up next contract year (%, null when there's no next year). */
+  yearNo: number; incSoFar: number; incNext: number | null;
+  /** Its yearly value contract year by contract year (before the partner's cut), the rise this year had over the
+   *  last (%), and the next rise still to come with the day it starts. */
+  yearVals: number[]; stepNow: number; nextStep: { pct: number; date: string } | null;
   contract?: DealContract; f?: ContractFigures; lines?: Line[]; ct?: any;
 };
 const money = (n: number) => `${Math.round(n).toLocaleString("de-DE")} €`;
 const iso = (d: Date | string | null | undefined) => (!d ? null : typeof d === "string" ? d.slice(0, 10) : d.toISOString().slice(0, 10));
 const STATES = ["Running", "In grace period", "Not started", "Renewed", "Ended"];
 /** The list's columns after Contract (always first), in their order — the person's own, saved as prefs.contractColumns. */
-const COL_DEFAULT = ["client", "state", "signed", "start", "end", "next", "total"];
+const COL_DEFAULT = ["client", "products", "state", "signed", "start", "end", "next", "perYear", "total"];
 /* ---- The figures on top: the person picks them (up to 6 cards, each with an optional second figure) ---- */
 type CKpi = { key: string; label: string; ico: string; tone?: string; calc: (rs: Row[], ctx: { now: string; in30: string; in90: string; year: string }) => { v: string; unit?: string; sub?: string; bar?: number } };
 const K_ICO = {
@@ -47,6 +55,32 @@ const K_ICO = {
   stop: "M18 6 6 18M6 6l12 12",
 };
 const eur = (n: number) => Math.round(n).toLocaleString("de-DE");
+const YEAR_MS = 365.25 * 864e5;
+/** A deal contract's recurring value a year, contract year by contract year: its list price for that year (with the
+ *  yearly increments) less that year's discounts — the one-offs of year 1 left out. */
+function dealYearly(f: ContractFigures) {
+  const n = f.years.length;
+  const rec = (i: number) => {
+    const y = f.years[i];
+    if (!y || y.list <= 0) return 0;
+    const recList = y.list - (i === 0 ? f.oneOff : 0);
+    return recList > 0 ? (recList / Math.max(y.share, 1e-9)) * (y.net / y.list) : 0;
+  };
+  const el = (nowMs() - +new Date(f.start)) / YEAR_MS;
+  const idx = !n ? 0 : Math.max(0, Math.min(n - 1, Math.floor(el > 0 ? el + 1e-9 : 0)));
+  return { now: rec(idx), first: rec(0), yearNo: idx + 1, next: idx + 1 < n ? rec(idx + 1) : null, last: rec(Math.max(0, n - 1)), vals: Array.from({ length: n }, (_, i) => rec(i)) };
+}
+/** The same day n calendar years later. */
+const addYearsIso = (d: string, n: number) => { const x = new Date(`${d.slice(0, 10)}T12:00:00`); x.setFullYear(x.getFullYear() + n); return x.toISOString().slice(0, 10); };
+/** This year's rise and the next one, from the values year by year. */
+const steps = (vals: number[], idx: number, start: string | null) => {
+  const stepNow = idx > 0 ? upPct(vals[idx - 1], vals[idx]) : 0;
+  const k = vals.findIndex((v, i) => i > idx && upPct(vals[i - 1], v) > 0.05);
+  return { stepNow, nextStep: k > 0 && start ? { pct: upPct(vals[k - 1], vals[k]), date: addYearsIso(start, k) } : null };
+};
+/** b over a, in % (0 when there's nothing to compare). */
+const upPct = (a: number, b: number) => (a > 0.5 && b > 0.5 ? (b / a - 1) * 100 : 0);
+const pctLabel = (p: number | null) => (p != null && p > 0.05 ? `+${p.toLocaleString("de-DE", { maximumFractionDigits: 1 })}%` : "");
 /** The contracts the figures are about: the running ones (ended ones don't add to a mixed list) — unless only ended
  *  ones are listed: then those, at what they billed a year when they ended. */
 const liveOf = (rs: Row[]) => {
@@ -88,7 +122,9 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
   /** Changes when the Actions menu asks for the columns editor. */
   colsSignal?: number;
 }) {
-  const [rows, setRows] = useState<Row[] | null>(() => CACHE?.rows ?? null);
+  /** The day the board is looked at (null = today): the header's calendar. */
+  const asOf = useAsOf();
+  const [rows, setRows] = useState<Row[] | null>(() => (asOf ? null : CACHE?.rows ?? null));
   const [products, setProducts] = useState<Product[]>(() => CACHE?.products ?? []);
   const [q, setQ] = useState("");
   /** Filters and sort — from the Filters panel, a saved view or a column's header (kept on this browser). */
@@ -139,6 +175,10 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
     el.style.setProperty("--mx", `${e.clientX - b.left}px`); el.style.setProperty("--my", `${e.clientY - b.top}px`);
   };
   const [open, setOpen] = useState<Row | null>(null);
+  /** A deal's contract open in its editor (from its view). */
+  const [editing, setEditing] = useState<DealContract | null>(null);
+  /** Bumped after a save: the contracts are read again. */
+  const [reload, setReload] = useState(0);
   const [layout, setLayout] = useState<"cards" | "list">(() => { try { return localStorage.getItem("ccb.layout") === "list" ? "list" : "cards"; } catch { return "cards"; } });
   const setLayoutP = (l: "cards" | "list") => { setLayout(l); try { localStorage.setItem("ccb.layout", l); } catch { /* ignore */ } };
   useEffect(() => { if (colsSignal) { setColEdit(true); setLayoutP("list"); } }, [colsSignal]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -158,7 +198,9 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
       const clientById = new Map(clients.map((c) => [c.id, c]));
       const clientByCo = new Map(clients.filter((c) => c.company_id).map((c) => [c.company_id, c]));
       const contracts = ((tc.error ? [] : tc.data ?? []) as any[]).filter((r) => r.active !== false);
-      const lines = ((cp.data ?? []) as any[]).map((r) => ({ ...r, name: pn.get(r.product_id) ?? "Product" })) as Line[];
+      // as of another day: only what was signed by then
+      const signedBy = (d: unknown) => !asOf || !d || String(d).slice(0, 10) <= asOf;
+      const lines = ((cp.data ?? []) as any[]).filter((r) => signedBy(r.signing_date || r.start_date)).map((r) => ({ ...r, name: pn.get(r.product_id) ?? "Product" })) as Line[];
       noteLines(lines);
       const tids = [...new Set([...contracts.map((r) => r.tracking_id), ...lines.map((l) => String(l.contract_tracking_id || l.tracking_id || ""))].filter(Boolean))];
       // the clients' websites (for their logos) only for clients with a contract — all of it in one round
@@ -179,7 +221,7 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
       }
       const siteOf = (c: any) => (c?.company_id ? site.get(c.company_id) ?? null : null);
       const out: Row[] = [];
-      const now = iso(new Date())!;
+      const now = todayIso();
       // contracts built on a deal — only once the deal is won
       const withContract = new Set<string>();
       contracts.forEach((r) => {
@@ -191,13 +233,15 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
           data: { ...normConfig(r.data), term: r.data?.term ?? { value: 1, unit: "years" }, payment: r.data?.payment ?? "annually", signed: r.data?.signed ?? null, start: r.data?.start ?? null, items: Array.isArray(r.data?.items) ? r.data.items : [], notes: r.data?.notes ?? null },
         };
         const f = contractFigures(c.data, cat);
+        if (asOf && f.signed > asOf) return;   // not signed yet on that day
         const client = clientByCo.get(t.company_id);
         const nx = f.invoices.find((iv) => iv.date >= now) ?? null;
         out.push({
           key: `c:${r.id}`, kind: "deal", clientId: client?.id ?? null, clientName: client?.name ?? "No client yet", website: siteOf(client), dealId: r.tracking_id, dealName: t.deal_name || client?.name || "Deal",
           name: r.name, what: `${termLabel(c.data.term)} · ${PAY_LABEL[c.data.payment].toLowerCase()}${c.data.items.length ? ` · ${c.data.items.length} product${c.data.items.length === 1 ? "" : "s"}` : ""}`,
           signed: c.data.signed, start: f.start, end: f.end, renews: !!f.renewal, next: nx ? { date: nx.date, amount: nx.amount } : null,
-          total: f.total, perYear: f.termYears ? f.total / Math.max(1, f.termYears) : f.total, lastPerYear: f.termYears ? f.total / Math.max(1, f.termYears) : f.total, state: contractState(f), contract: c, f,
+          ...(() => { const dy = dealYearly(f); const st = contractState(f); return { perYear: st === "Ended" ? 0 : dy.now, lastPerYear: st === "Ended" ? dy.last : dy.now, yearNo: dy.yearNo, incSoFar: upPct(dy.first, dy.now), incNext: st === "Ended" || dy.next == null ? null : upPct(dy.now, dy.next), yearVals: dy.vals, ...steps(dy.vals, dy.yearNo - 1, st === "Ended" ? null : f.start) }; })(),
+          total: f.total, state: contractState(f), contract: c, f,
         });
       });
       // older contracts: a client's signed products, grouped by the deal they were signed on
@@ -225,20 +269,38 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
           what: ls.map((l) => l.name).slice(0, 3).join(" · ") + (ls.length > 3 ? ` +${ls.length - 3}` : ""),
           signed: signed ? signed.slice(0, 10) : null, start, end: iso(renew?.end), renews: !!renew,
           next: null, total: ls.reduce((s, l) => s + lineContractValue(l), 0), perYear: live.reduce((s, l) => s + lineAnnual(l), 0), lastPerYear: live.length ? live.reduce((s, l) => s + lineAnnual(l), 0) : ls.reduce((s, l) => s + lineAnnualLast(l), 0), state, lines: ls, ct,
+          ...(() => {
+            // the yearly increments: year 1's value, today's contract year, and next year's
+            const rec = live.filter((l) => l.recurring);
+            const t0 = (l: Line) => +new Date(String(l.start_date || l.signing_date || todayIso()).slice(0, 10) + "T12:00:00");
+            // the increments read on the price before the partner's cut (a cut that ends isn't an increase)
+            const first = rec.reduce((s, l) => s + lineAnnualGross(l, t0(l) + 864e5), 0);
+            const nowG = rec.reduce((s, l) => s + lineAnnualGross(l, Math.max(nowMs(), t0(l) + 864e5)), 0);
+            const s0 = rec.length ? Math.min(...rec.map(t0)) : nowMs();
+            const el = (nowMs() - s0) / YEAR_MS;
+            const yearNo = Math.max(1, Math.floor(el > 0 ? el + 1e-9 : 0) + 1);
+            // next contract year: each line on the first day of its own next contract year
+            const nx = rec.reduce((s, l) => { const e = (nowMs() - t0(l)) / YEAR_MS; const k = Math.max(0, Math.floor(e > 0 ? e + 1e-9 : 0)) + 1; return s + lineAnnualGross(l, t0(l) + k * YEAR_MS + 2 * 864e5); }, 0);
+            const nYears = Math.max(0, ...rec.map((l) => Math.ceil((Number(l.term_years) || 1) - 1e-9)));
+            const yearVals = Array.from({ length: nYears }, (_, y) => rec.reduce((s, l) => s + (y < Math.ceil((Number(l.term_years) || 1) - 1e-9) ? lineYearGross(l, y) - (y === 0 ? Number(l.one_time_fee) || 0 : 0) : 0), 0));
+            return { yearNo, incSoFar: upPct(first, nowG), incNext: rec.length && nx > 0.5 ? upPct(nowG, nx) : null, yearVals, ...steps(yearVals, Math.min(yearNo, Math.max(1, nYears)) - 1, rec.length ? new Date(s0).toISOString().slice(0, 10) : null) };
+          })(),
         });
       });
-      CACHE = { rows: out, products: cat };
+      if (!asOf) CACHE = { rows: out, products: cat };
       if (alive) { setRows(out); setProducts(cat); }
     })().catch(() => { if (alive) setRows((cur) => cur ?? []); });
     return () => { alive = false; };
-  }, []);
+  }, [reload, asOf]);
 
   /** What the Filters panel, the saved views and the column headers can filter and sort on. */
   const fields: FField<Row>[] = useMemo(() => {
     const uniq = (xs: string[]) => [...new Set(xs.filter(Boolean))].sort((x, y) => x.localeCompare(y)).map((v) => ({ value: v, label: v }));
     const termOf = (r: Row) => (r.contract ? termLabel(r.contract.data.term) : r.ct?.termYears ? `${r.ct.termYears} year${Number(r.ct.termYears) === 1 ? "" : "s"}` : "");
     const payOf = (r: Row) => (r.contract ? PAY_LABEL[r.contract.data.payment] : "");
-    const nProducts = (r: Row) => (r.contract ? r.contract.data.items.length : r.lines?.length ?? 0);
+    // the kinds of product a contract carries (not how many of each)
+    const pName = new Map(products.map((p) => [String(p.id), p.name]));
+    const kinds = (r: Row) => [...new Set((r.contract ? r.contract.data.items.map((it) => pName.get(String(it.product_id)) ?? "") : (r.lines ?? []).map((l) => String(l.name ?? ""))).filter(Boolean))].sort((a, b) => a.localeCompare(b));
     const all = rows ?? [];
     return [
       { key: "name", label: "Contract", group: "Contract", type: "text", get: (r) => r.name },
@@ -247,7 +309,7 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
       { key: "kind", label: "Made from", group: "Contract", type: "select", get: (r) => r.kind, options: () => [{ value: "deal", label: "A deal's contract" }, { value: "lines", label: "Signed products" }] },
       { key: "term", label: "Length", group: "Terms", type: "select", get: termOf, options: () => uniq(all.map(termOf)) },
       { key: "payment", label: "Paid", group: "Terms", type: "select", get: payOf, options: () => uniq(all.map(payOf)) },
-      { key: "products", label: "Products", group: "Terms", type: "number", get: nProducts },
+      { key: "products", label: "Products", group: "Contract", type: "multi", get: kinds, options: () => uniq(all.flatMap(kinds)) },
       { key: "signed", label: "Signed", group: "Dates", type: "date", get: (r) => r.signed },
       { key: "start", label: "Starts", group: "Dates", type: "date", get: (r) => r.start },
       { key: "end", label: "Renews / ends", group: "Dates", type: "date", get: (r) => r.end },
@@ -256,8 +318,10 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
       { key: "nextAmount", label: "Next invoice (€)", group: "Money", type: "number", get: (r) => (r.next ? Math.round(r.next.amount) : null) },
       { key: "total", label: "Total (€)", group: "Money", type: "number", get: (r) => Math.round(r.total) },
       { key: "perYear", label: "A year (€)", group: "Money", type: "number", get: (r) => Math.round(r.perYear) },
+      { key: "increase", label: "Increase vs year 1 (%)", group: "Money", type: "number", get: (r) => Math.round(r.incSoFar * 10) / 10 },
+      { key: "yearNo", label: "Contract year", group: "Dates", type: "number", get: (r) => r.yearNo },
     ] as FField<Row>[];
-  }, [rows]);
+  }, [rows, products]);
   const byKey = useMemo(() => new Map(fields.map((f) => [f.key, f])), [fields]);
   const colFields = cols.map((k) => byKey.get(k)).filter((f): f is FField<Row> => !!f && f.key !== "name");
 
@@ -269,18 +333,32 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
   // no sort picked: the ones that renew or end soonest first
   const shown = useMemo(() => applyView(searched, fields, view, (a, b) => (a.end ?? "9999").localeCompare(b.end ?? "9999")), [searched, fields, view]);
 
-  const kctx = { now: iso(new Date())!, in30: iso(new Date(Date.now() + 30 * 864e5))!, in90: iso(new Date(Date.now() + 90 * 864e5))!, year: String(new Date().getFullYear()) };
+  const kctx = { now: todayIso(), in30: iso(new Date(nowMs() + 30 * 864e5))!, in90: iso(new Date(nowMs() + 90 * 864e5))!, year: todayIso().slice(0, 4) };
 
-  const NUM = new Set(["total", "perYear", "nextAmount", "products"]);
+  const NUM = new Set(["total", "perYear", "nextAmount", "increase", "yearNo"]);
   /** Each column's width (and the least it needs), so the table fits the page and only scrolls when it must. */
-  const width = (k: string): [string, number] => (k === "client" ? ["minmax(150px, 1.3fr)", 150] : k === "state" || k === "kind" ? ["118px", 118] : k === "renews" ? ["88px", 88]
-    : k === "end" ? ["108px", 108] : k === "next" ? ["116px", 116] : ["signed", "start"].includes(k) ? ["92px", 92] : k === "products" ? ["80px", 80]
-    : NUM.has(k) ? ["minmax(104px, 0.9fr)", 104] : ["minmax(104px, 1fr)", 104]);
+  const width = (k: string): [string, number] => (k === "client" ? ["minmax(140px, 1.3fr)", 140] : k === "products" ? ["minmax(130px, 1.2fr)", 130] : k === "state" || k === "kind" ? ["112px", 112] : k === "renews" ? ["84px", 84]
+    : k === "end" ? ["104px", 104] : k === "next" ? ["110px", 110] : ["signed", "start"].includes(k) ? ["88px", 88]
+    : NUM.has(k) ? ["minmax(100px, 0.9fr)", 100] : ["minmax(100px, 1fr)", 100]);
   const grid = {
-    gridTemplateColumns: `minmax(200px, 2fr) ${colFields.map((f) => width(f.key)[0]).join(" ")}`,
-    minWidth: 40 + 200 + colFields.reduce((s, f) => s + width(f.key)[1] + 14, 0),
+    gridTemplateColumns: `minmax(170px, 2fr) ${colFields.map((f) => width(f.key)[0]).join(" ")}`,
+    minWidth: 40 + 170 + colFields.reduce((s, f) => s + width(f.key)[1] + 14, 0),
   } as const;
   const yearNote = (r: Row) => (r.perYear > 0.5 ? `${money(r.perYear)} a year` : r.lastPerYear > 0.5 ? `${money(r.lastPerYear)} a year · ended` : "one-time");
+  /** "A year": this contract year's value, increase included, in large; under it — only when it rose this
+   *  contract year — what it was before that rise and the rise in %. */
+  const YearCell = ({ r }: { r: Row }) => {
+    const v = r.perYear > 0.5 ? r.perYear : r.lastPerYear;
+    if (v <= 0.5) return <span className="ccb-m"><b>—</b></span>;
+    if (r.perYear <= 0.5) return <span className="ccb-m"><b>{money(v)}</b><em>when it ended</em></span>;
+    const up = r.stepNow > 0.05;
+    return (
+      <span className="ccb-m ccb-yr">
+        <b>{money(v)}</b>
+        {up && <em className="ccb-yr-s">{money(v / (1 + r.stepNow / 100))} <i className="ccb-step">{pctLabel(r.stepNow)}</i></em>}
+      </span>
+    );
+  };
   const day = (d: string | null) => (d ? cpDay(d, "2-digit") : "—");
   const cell = (f: FField<Row>, r: Row): ReactNode => {
     switch (f.key) {
@@ -292,9 +370,11 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
       case "next": return <span className="ccb-d">{r.next ? <>{day(r.next.date)}<em>{money(r.next.amount)}</em></> : r.kind === "lines" ? <em>—</em> : "—"}</span>;
       case "renews": return <span className="ccb-d">{r.renews ? "Yes" : "No"}</span>;
       case "total": return <span className="ccb-m"><b>{money(r.total)}</b><em>{yearNote(r)}</em></span>;
-      case "perYear": return <span className="ccb-m"><b>{r.perYear > 0.5 ? money(r.perYear) : r.lastPerYear > 0.5 ? money(r.lastPerYear) : "—"}</b>{r.perYear <= 0.5 && r.lastPerYear > 0.5 && <em>when it ended</em>}</span>;
+      case "perYear": return <YearCell r={r} />;
+      case "increase": { const s = pctLabel(r.incSoFar); return <span className="ccb-m"><b>{s || "—"}</b>{s && <em>year {r.yearNo}</em>}</span>; }
+      case "yearNo": return <span className="ccb-m"><b>{r.perYear > 0.5 || r.state !== "Ended" ? r.yearNo : "—"}</b></span>;
       case "nextAmount": return <span className="ccb-m"><b>{r.next ? money(r.next.amount) : "—"}</b></span>;
-      case "products": return <span className="ccb-m"><b>{f.get(r)}</b></span>;
+      case "products": { const xs = f.get(r) as string[]; return xs.length ? <span className="ccb-kinds" title={xs.join(", ")}>{xs.map((x) => <i key={x}>{x}</i>)}</span> : <span className="ccb-d">—</span>; }
       default: { const v = f.get(r); return <span className="ccb-d">{v === null || v === undefined || v === "" ? "—" : String(v)}</span>; }
     }
   };
@@ -412,7 +492,7 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
         ) : layout === "cards" ? (
           <div className="ccb-cards">
             {shown.map((r, i) => {
-              const pct = r.start && r.end ? Math.max(0, Math.min(1, (Date.now() - +new Date(r.start)) / Math.max(1, +new Date(r.end) - +new Date(r.start)))) : null;
+              const pct = r.start && r.end ? Math.max(0, Math.min(1, (nowMs() - +new Date(r.start)) / Math.max(1, +new Date(r.end) - +new Date(r.start)))) : null;
               return (
                 <button type="button" className="ccb-card" key={r.key} onClick={() => setOpen(r)} style={{ ["--i" as any]: Math.min(i, 14) }}>
                   <span className="ccb-card-top">
@@ -462,12 +542,18 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
 
       {open?.kind === "deal" && open.contract && (
         <ContractView contract={open.contract} products={products} clientName={open.clientName} dealName={open.dealName} money={money}
-          onClose={() => setOpen(null)}
+          onClose={() => setOpen(null)} onEdit={() => { setEditing(open.contract!); setOpen(null); }}
           onOpenDeal={open.dealId ? () => { const id = open.dealId!; setOpen(null); onOpenDeal(id); } : undefined}
           onOpenClient={open.clientId ? () => { const r = open; setOpen(null); onOpenClient(r.clientId!, r.dealId); } : undefined} />
       )}
+      {editing && (
+        <ContractModal contract={editing} products={products} money={money}
+          onClose={() => setEditing(null)}
+          onSaved={() => { setEditing(null); setReload((n) => n + 1); }}
+          onDeleted={() => { setEditing(null); setReload((n) => n + 1); }} />
+      )}
       {open?.kind === "lines" && open.lines && (
-        <LinesContractView row={open} onClose={() => setOpen(null)}
+        <SignedContractView row={open} money={money} onClose={() => setOpen(null)} onSaved={() => { setOpen(null); setReload((n) => n + 1); }}
           onOpenDeal={open.dealId ? () => { const id = open.dealId!; setOpen(null); onOpenDeal(id); } : undefined}
           onOpenClient={open.clientId ? () => { const r = open; setOpen(null); onOpenClient(r.clientId!, r.dealId); } : undefined} />
       )}
@@ -523,44 +609,5 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
         </div>
       )}
     </>
-  );
-}
-
-/** An older contract (a client's signed products): its products, dates and value. */
-function LinesContractView({ row, onClose, onOpenDeal, onOpenClient }: { row: Row; onClose: () => void; onOpenDeal?: () => void; onOpenClient?: () => void }) {
-  const ls = row.lines ?? [];
-  const ct = row.ct;
-  const grace = row.signed && row.start && row.start > row.signed ? Math.round((+new Date(row.start) - +new Date(row.signed)) / 864e5) : 0;
-  return (
-    <ViewShell title={row.name} eyebrow={<>Contract · {row.clientName}</>} state={row.state} total={money(row.total)} sub={row.perYear > 0.5 ? `${money(row.perYear)} a year` : "One-time"} onClose={onClose}
-      foot={<>
-        {onOpenDeal && <button type="button" className="ctm-btn" onClick={onOpenDeal}>Open the deal{row.dealName ? ` · ${row.dealName}` : ""}</button>}
-        {onOpenClient && <button type="button" className="ctm-btn is-main" onClick={onOpenClient}>Open in {row.clientName}</button>}
-      </>}>
-      <ViewSec icon={IC.start} title="Dates">
-        <div className="ctp-ms">
-          <span><em>Signed</em><b>{row.signed ? cpDay(row.signed) : "—"}</b></span>
-          {grace > 0 && <span className="is-grace"><em>Grace</em><b>{grace} days</b></span>}
-          <span className="is-start"><em>Starts</em><b>{row.start ? cpDay(row.start) : "—"}</b></span>
-          {row.end && <span><em>{row.renews ? "Next renewal" : "Ends"}</em><b>{cpDay(row.end)}</b></span>}
-          {ct?.termYears && <span><em>Term</em><b>{ct.termYears} year{Number(ct.termYears) === 1 ? "" : "s"}{ct.autoRenew ? " · auto-renews" : ""}</b></span>}
-        </div>
-      </ViewSec>
-      <ViewSec icon="M12 3l9 4.5-9 4.5-9-4.5zM3 12l9 4.5 9-4.5M3 16.5L12 21l9-4.5" title="What it includes" sub="The products signed with this contract"
-        aside={<span className="ctm-sec-fig">{row.perYear > 0.5 ? money(row.perYear) : money(row.total)}<em>{row.perYear > 0.5 ? "a year" : "one-time"}</em></span>}>
-        <div className="ctv-items">
-          {ls.map((l) => {
-            const r = renewalOf(l, ct);
-            return (
-              <div className="ctv-item" key={l.id}>
-                <span className="ctm-item-ini" aria-hidden="true">{String(l.name ?? "?").slice(0, 1).toUpperCase()}</span>
-                <span className="ctv-item-t"><b>{l.name}</b><em>{[l.recurring ? "Recurring" : "One-time", isActive(l) ? null : "stopped", lineStartOf(l, ct) ? `from ${cpDay(String(lineStartOf(l, ct)).slice(0, 10), "2-digit")}` : null, r ? `renews ${cpDay(iso(r.end)!, "2-digit")}` : null].filter(Boolean).join(" · ")}</em></span>
-                <span className="ctv-item-f"><b>{money(l.recurring ? lineAnnual(l) : lineContractValue(l))}</b><em>{l.recurring ? "a year" : "once"} · {money(lineContractValue(l))} in all</em></span>
-              </div>
-            );
-          })}
-        </div>
-      </ViewSec>
-    </ViewShell>
   );
 }
