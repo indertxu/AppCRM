@@ -700,17 +700,25 @@ export async function deleteContactField(id: string) {
 }
 
 // ---- Per-user UI preferences (jsonb bag on profiles) ----
+/** A page asks for the prefs from many places at once (columns, figures, saved views…): one read serves them
+ *  all for a few seconds, and a save keeps it current. */
+let PREFS: { uid: string; at: number; p: Promise<Record<string, any>> } | null = null;
 export async function loadPrefs(): Promise<Record<string, any>> {
   const uid = await sessionUserId();
   if (!uid) return {};
-  const { data } = await supabase.from("profiles").select("prefs").eq("id", uid).maybeSingle();
-  return (data?.prefs as Record<string, any>) ?? {};
+  if (PREFS && PREFS.uid === uid && Date.now() - PREFS.at < 20000) return PREFS.p;
+  const p = Promise.resolve(supabase.from("profiles").select("prefs").eq("id", uid).maybeSingle())
+    .then(({ data }: any) => (data?.prefs as Record<string, any>) ?? {});
+  PREFS = { uid, at: Date.now(), p };
+  p.catch(() => { PREFS = null; });
+  return p;
 }
 export async function savePref(key: string, value: any) {
   const uid = await sessionUserId();
   if (!uid) return;
   const { data } = await supabase.from("profiles").select("prefs").eq("id", uid).maybeSingle();
   const prefs = { ...((data?.prefs as Record<string, any>) ?? {}), [key]: value };
+  PREFS = { uid, at: Date.now(), p: Promise.resolve(prefs) };
   await supabase.from("profiles").update({ prefs }).eq("id", uid);
 }
 // ---- Custom company fields ----

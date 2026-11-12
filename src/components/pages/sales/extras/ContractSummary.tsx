@@ -57,7 +57,7 @@ export function PriceMatrix({ m, term, payment, onPick, money }: {
 }
 
 /** What a contract comes to: the total, each year (list → net), how it's built up, and when it's invoiced. */
-export default function ContractSummary({ f, money, note, matrix }: { f: ContractFigures; money: (n: number) => string; note?: string; matrix?: ReactNode }) {
+export default function ContractSummary({ f, money, note, matrix, noTimeline }: { f: ContractFigures; money: (n: number) => string; note?: string; matrix?: ReactNode; noTimeline?: boolean }) {
   const savedPct = f.list > 0 ? Math.round((f.discount / f.list) * 100) : 0;
   const maxY = Math.max(...f.years.map((x) => x.list), 1);
   return (
@@ -76,11 +76,11 @@ export default function ContractSummary({ f, money, note, matrix }: { f: Contrac
           <span><em>Invoices</em><b>{f.invoices.length}</b></span>
         </div>
       </div>
-      <div className="cts-sec is-time">
+      {!noTimeline && <div className="cts-sec is-time">
         <span className="cts-h">Timeline{f.graceDays > 0 ? <em className="is-grace">grace {graceLabel(f.graceDays)}</em> : null}</span>
         <ContractMilestones f={f} />
         <ContractTrack f={f} />
-      </div>
+      </div>}
       {note && <p className="cts-note">{note}</p>}
       {matrix}
       <div className="cts-sec">

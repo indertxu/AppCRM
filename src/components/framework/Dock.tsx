@@ -5,6 +5,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { usePageAccess, clearPendingSection, guardedLeave, NAV_RESET_EVENT, type PageKey } from "./pageAccess";
 import { supabase } from "../api/supabase";
 import { useAuth } from "../api/AuthProvider";
+import { setDockMode, type DockLabelMode } from "./dockPrefs";
 
 // The search lives on the home page; the rail opens the same one as a palette (loaded on demand).
 const SearchPalette = lazy(() => import("../pages/homepage/HomePage").then((m) => ({ default: m.GlobalSearch })));
@@ -147,7 +148,16 @@ const searchIcon = (
 );
 /** The app's sidebar: a fixed dark rail, always there. Icons with their name on hover
  *  (or always, with "Always show menu labels" in Settings › Interface). */
-export default function Dock() {
+const PREV_MODE_KEY = "next.dockPrevMode";
+const expandIcon = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16M13.5 10l2 2-2 2" /></svg>
+);
+const collapseIcon = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16M15.5 10l-2 2 2 2" /></svg>
+);
+
+export default function Dock({ mode = "hover", compact = false }: { mode?: DockLabelMode; compact?: boolean }) {
+  const side = mode === "side";
   const navigate = useNavigate();
   const location = useLocation();
   const { canSee } = usePageAccess();
@@ -224,12 +234,20 @@ export default function Dock() {
   };
   const setTip = (v: null) => { if (tipTimer.current) window.clearTimeout(tipTimer.current); setTipRaw(v); };
   const tip = tipRaw;
-  const tipOn = (text: ReactNode) => ({
+  const tipOn = (text: ReactNode) => (mode !== "hover" ? {} : {
     onMouseEnter: (e: ReactMouseEvent<HTMLElement>) => { const r = e.currentTarget.getBoundingClientRect(); showTip(text, r.top + r.height / 2); },
     onMouseLeave: hideTip,
     onFocus: (e: ReactFocusEvent<HTMLElement>) => { if (!e.currentTarget.matches(":focus-visible")) return; const r = e.currentTarget.getBoundingClientRect(); showTip(text, r.top + r.height / 2); },
     onBlur: hideTip,
   });
+  // the wide sidebar on / off, from the sidebar itself (back to whatever you had before)
+  const toggleSide = () => {
+    setTip(null);
+    let next: DockLabelMode = "side";
+    if (side) { try { const p = localStorage.getItem(PREV_MODE_KEY); next = p === "below" ? "below" : "hover"; } catch { next = "hover"; } }
+    else { try { localStorage.setItem(PREV_MODE_KEY, mode); } catch { /* ignore */ } }
+    void setDockMode(next, uid);
+  };
 
   // ---- motion: a sliding active pill, a glow that follows the pointer, magnetic icons, ripples ----
   const navRef = useRef<HTMLElement>(null);
@@ -314,7 +332,7 @@ export default function Dock() {
 
   return (
     <>
-      <nav className={`rail ${inkReady ? "has-ink" : ""}`} aria-label="Main" ref={navRef} onMouseMove={onRailMove} onMouseLeave={onRailLeave}>
+      <nav className={`rail ${inkReady ? "has-ink" : ""} is-${mode} ${compact ? "is-compact" : ""}`} aria-label="Main" ref={navRef} onMouseMove={onRailMove} onMouseLeave={onRailLeave}>
         <span className="rail-ink" ref={inkRef} aria-hidden="true" />
         {/* Home (the Next logo) sits on top, where the logo used to be */}
         {homeItem && <div className="rail-slot" style={{ ["--i" as string]: 0 } as CSSProperties}>{item(homeItem)}</div>}
@@ -324,6 +342,7 @@ export default function Dock() {
           onMouseLeave={(e) => { magnet.onMouseLeave(e); hideTip(); }}>
           <span className="rail-ico">{searchIcon}</span>
           <span className="rail-label">Search</span>
+          {side && <kbd className="rail-kbd">{/mac/i.test(navigator.platform) ? "⌘" : "Ctrl"} K</kbd>}
         </button>
         <div className="rail-list">
           {rest.map((it, i) => (
@@ -336,10 +355,17 @@ export default function Dock() {
         </div>
         <div className="rail-foot">
           {settings && item(settings)}
+          <button type="button" className="rail-item is-expand" onClick={toggleSide}
+            aria-label={side ? "Collapse the sidebar" : "Expand the sidebar"} aria-pressed={side}
+            {...(mode === "hover" ? { onMouseEnter: (e: ReactMouseEvent<HTMLElement>) => { const r = e.currentTarget.getBoundingClientRect(); showTip("Expand the sidebar", r.top + r.height / 2); }, onMouseLeave: hideTip } : {})}>
+            <span className="rail-ico">{side ? collapseIcon : expandIcon}</span>
+            <span className="rail-label">{side ? "Collapse" : "Expand"}</span>
+          </button>
           <div className="rail-me" ref={meRef}>
-            <button type="button" className={`rail-avatar ${menu ? "is-open" : ""}`} onClick={() => { setTip(null); setMenu((v) => !v); }} aria-label="Your account" aria-expanded={menu}
+            <button type="button" className={`rail-avatar-row ${menu ? "is-open" : ""}`} onClick={() => { setTip(null); setMenu((v) => !v); }} aria-label="Your account" aria-expanded={menu}
               {...(menu ? {} : tipOn(me?.name || "Your account"))}>
-              {me?.initials ?? ""}
+              <span className={`rail-avatar ${menu ? "is-open" : ""}`}>{me?.initials ?? ""}</span>
+              {side && <span className="rail-me-txt"><b>{me?.name ?? ""}</b><em>{me?.email ?? ""}</em></span>}
             </button>
             {menu && createPortal(
               <div className="rail-menu" role="menu" ref={menuRef}>

@@ -4,7 +4,8 @@ import Dock from "./Dock";
 import { supabase, usageMeter } from "../api/supabase";
 import { getActAs } from "./SuperAdmin";
 import { useAuth } from "../api/AuthProvider";
-import { DOCK_LABELS_KEY, DOCK_LABELS_EVENT, DOCK_COMPACT_KEY, DOCK_COMPACT_EVENT } from "../pages/settings/SettingsPage";
+import { DOCK_COMPACT_KEY, DOCK_COMPACT_EVENT } from "../pages/settings/SettingsPage";
+import { DOCK_MODE_EVENT, DOCK_MODE_KEY, readDockMode, modeFromDetail, dockModeFrom, type DockLabelMode } from "./dockPrefs";
 import { loadPrefs } from "../pages/companies/companiesApi";
 import { PageAccessProvider, NAV_RESET_EVENT } from "./pageAccess";
 import "./AppLayout.css";
@@ -88,21 +89,21 @@ export default function AppLayout() {
   const uid = session?.user?.id ?? null;
   usePageMeter(uid, session?.access_token ?? null);
 
-  // "Always show menu labels" (Settings › Interface): a slightly wider rail with names under the icons.
-  // localStorage is a fast cache to avoid a flash; the profile is the source of truth.
-  const [labels, setLabels] = useState<boolean>(() => { try { return localStorage.getItem(DOCK_LABELS_KEY) === "true"; } catch { return false; } });
+  // Menu labels (Settings › Interface, or the expand button on the sidebar): on hover, under the
+  // icons, or beside them (a wide sidebar). localStorage is a fast cache; the profile decides.
+  const [mode, setMode] = useState<DockLabelMode>(readDockMode);
   useEffect(() => {
-    const onLabels = (e: Event) => setLabels((e as CustomEvent<boolean>).detail);
-    window.addEventListener(DOCK_LABELS_EVENT, onLabels);
-    return () => window.removeEventListener(DOCK_LABELS_EVENT, onLabels);
+    const on = (e: Event) => setMode(modeFromDetail((e as CustomEvent).detail));
+    window.addEventListener(DOCK_MODE_EVENT, on);
+    return () => window.removeEventListener(DOCK_MODE_EVENT, on);
   }, []);
   useEffect(() => {
     if (!uid) return;
-    supabase.from("profiles").select("dock_labels").eq("id", uid).maybeSingle().then(({ data }) => {
-      if (data && typeof (data as any).dock_labels === "boolean") {
-        setLabels((data as any).dock_labels);
-        try { localStorage.setItem(DOCK_LABELS_KEY, String((data as any).dock_labels)); } catch { /* ignore */ }
-      }
+    supabase.from("profiles").select("dock_labels, prefs").eq("id", uid).maybeSingle().then(({ data }) => {
+      const m = dockModeFrom((data as any)?.prefs, (data as any)?.dock_labels);
+      if (!m) return;
+      setMode(m);
+      try { localStorage.setItem(DOCK_MODE_KEY, m); } catch { /* ignore */ }
     });
   }, [uid]);
 
@@ -138,8 +139,8 @@ export default function AppLayout() {
 
   return (
     <PageAccessProvider>
-      <div className={`app-shell ${compact ? "rail-compact" : labels ? "rail-labels" : ""}`}>
-        <Dock />
+      <div className={`app-shell ${compact ? "rail-compact" : ""} ${mode === "below" ? "rail-labels" : mode === "side" ? "rail-side" : ""}`}>
+        <Dock mode={mode} compact={compact} />
         <div className="app-page" key={resetKey}>
           <Outlet />
         </div>

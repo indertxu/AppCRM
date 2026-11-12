@@ -5430,3 +5430,15 @@ button.sl-ppl-co:hover { background: #f1f7f4; color: var(--forest); }
 .sl-d-unlock svg { width: 13px; height: 13px; }
 .sl-d-unlock:hover { background: #eef8f3; border-style: solid; }
 .sl-d-unlock.is-on { border-style: solid; border-color: rgba(224, 160, 62, 0.55); background: rgba(224, 160, 62, 0.13); color: #8a5a0b; }
+
+/* With the wide sidebar the page is narrower than the window: the hero cards take their narrow layout earlier */
+@media (max-width: 1500px) and (min-width: 1101px) {
+  :root:has(.app-shell.rail-side) .so-kpi.so-stat { grid-template-columns: auto minmax(0, 1fr); row-gap: 10px; padding-right: 40px; }
+  :root:has(.app-shell.rail-side) .so-stat-aside { grid-column: 1 / -1; padding: 10px 0 0; border-left: 0; border-top: 1px solid var(--glass-line); }
+  :root:has(.app-shell.rail-side) .so-stat-aside:has(.so-stat-meter) { flex-direction: row; gap: 16px; }
+  :root:has(.app-shell.rail-side) .so-stat-meter { flex: 1; }
+  :root:has(.app-shell.rail-side) .so-stat-note { display: none; }
+}
+/* no room for the amount next to the count (narrow page, zoomed in): it goes under it instead of being cut */
+.so-stat-figs { flex-wrap: wrap; row-gap: 6px; }
+.so-stat-money { overflow: visible; }

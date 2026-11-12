@@ -18,6 +18,7 @@ import {
 import SalesMultiFilter from "../sales/sales/SalesMultiFilter";
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
+import ContractsBoard from "./ContractsBoard";
 import { listEmployees, type Employee } from "../companies/companiesApi";
 import { loadProducts, loadServices, type Product as CatProduct, type Service as CatService } from "../settings/catalogApi";
 import { projectValue, signedOf, legacyRoleMap, resolvedLinesOf, roleCounts, roleNameOf, lineRate, projectStatusOf, PROJECT_STATUS_LABEL, type Client, type ClientStatus, type Project, type ProjectType } from "./clientsTypes";
@@ -100,6 +101,9 @@ const HEAD_SHORT: Record<string, string> = {
   oneTime: "One-time", activeProducts: "Products", nextRenewal: "Renewal", firstSigned: "Since", openTasks: "Tasks", lateTasks: "Late",
 };
 const HEALTH: Record<string, string> = { ok: "Healthy", warn: "Getting quiet", bad: "Neglected", none: "No contact yet" };
+
+/** What the clients' popups show, from the last visit: the page draws at once and refreshes quietly. */
+let EXTRA_CACHE: any = null;
 
 export function ClientList({
   clients, projects, projectTypes, onNew, onOpen, onDelete, onSetStatus, usage, units, loaded = true, colsSignal = 0, linesRev = 0, toolsSlot = null,
@@ -188,10 +192,14 @@ export function ClientList({
   }, []);
   const personName = (id: string, fb?: string) => people[id] || (fb && fb !== "—" ? fb : "") || "Unknown";
 
-  // what the client popup shows, for every client at once
-  const [extra, setExtra] = useState<{ lines: Line[]; last: Record<string, string>; tasks: Record<string, { open: number; late: number }>; co: Record<string, any>; cos?: any[]; terms?: Record<string, any> } | null>(null);
+  // what the client popup shows, for every client at once. Read as soon as the page opens (not after the
+  // clients), all in two rounds; the companies named like a client (only for search) come afterwards, quietly.
+  type Extra = { lines: Line[]; last: Record<string, string>; tasks: Record<string, { open: number; late: number }>; co: Record<string, any>; cos?: any[]; terms?: Record<string, any>; coOf?: Record<string, string> };
+  const [extra, setExtra] = useState<Extra | null>(() => EXTRA_CACHE);
+  /** The products just read (not the remembered ones): ended subscriptions are checked once per read. */
+  const [fresh, setFresh] = useState<{ lines: Line[]; coOf: Record<string, string> } | null>(null);
+  const COLS = "id, name, legal_name, vat_number, city, province, country, sector, website";
   useEffect(() => {
-    if (!loaded) return;
     let alive = true;
     (async () => {
       const [cp, pr, lg, ct, cl] = await Promise.all([
@@ -214,37 +222,63 @@ export function ClientList({
       });
       const coOf: Record<string, string> = {};
       ((cl.data ?? []) as any[]).forEach((x) => { if (x.company_id) coOf[x.id] = x.company_id; });
-      // The clients' companies, plus the companies named like a client (its "twin" when the two
-      // aren't linked), so a client can also be found by the company's other name (common or legal).
-      // Only those are read — never the whole directory (it can be hundreds of thousands).
-      const cos: Record<string, any> = {};
-      const allCos: any[] = [];
-      const COLS = "id, name, legal_name, vat_number, city, province, country, sector, website";
-      const linkedIds = [...new Set(Object.values(coOf))];
-      const firstWord = (n: string) => (n ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Za-z0-9 ]/g, " ").trim().split(/\s+/)[0] ?? "";
-      const stems = [...new Set(clients.map((c) => firstWord(c.name)).filter((w) => w.length >= 3))];
-      const parts = await Promise.all([
-        ...Array.from({ length: Math.ceil(linkedIds.length / 150) }, (_, i) => linkedIds.slice(i * 150, i * 150 + 150))
-          .map((ids) => Promise.resolve(supabase.from("companies").select(COLS).in("id", ids)).then((r: any) => (r.data ?? []) as any[])),
-        ...Array.from({ length: Math.ceil(stems.length / 40) }, (_, i) => stems.slice(i * 40, i * 40 + 40))
-          .map((ws) => Promise.resolve(supabase.from("companies").select(COLS).or(ws.map((w) => `name.ilike.${w}*,legal_name.ilike.${w}*`).join(",")).limit(2000)).then((r: any) => (r.data ?? []) as any[])),
-      ]).catch(() => [] as any[][]);
-      parts.flat().forEach((x) => { if (!cos[x.id]) { cos[x.id] = x; allCos.push(x); } });
-      const co: Record<string, any> = {};
-      Object.entries(coOf).forEach(([cid, coid]) => { if (cos[coid]) co[cid] = cos[coid]; });
       const allLines = ((cp.data ?? []) as any[]).map((r) => ({ ...r, name: pn[r.product_id] ?? "Product" }));
+      const linkedIds = [...new Set(Object.values(coOf))];
       // the contracts' own terms (a deal's order form): a product without its own start or term takes its contract's
       const tids = [...new Set(allLines.map((l) => String(l.contract_tracking_id || l.tracking_id || "")).filter(Boolean))];
+      const chunk = <T,>(xs: T[], n: number) => Array.from({ length: Math.ceil(xs.length / n) }, (_, i) => xs.slice(i * n, i * n + n));
+      const [coParts, tParts] = await Promise.all([
+        Promise.all(chunk(linkedIds, 150).map((ids) => Promise.resolve(supabase.from("companies").select(COLS).in("id", ids)).then((r: any) => (r.data ?? []) as any[]))).catch(() => [] as any[][]),
+        Promise.all(chunk(tids, 150).map((ids) => Promise.resolve(supabase.from("trackings").select("id, contract_terms").in("id", ids)).then((r: any) => (r.data ?? []) as any[]))).catch(() => [] as any[][]),
+      ]);
+      const cos: Record<string, any> = {};
+      const allCos: any[] = [];
+      coParts.flat().forEach((x) => { if (!cos[x.id]) { cos[x.id] = x; allCos.push(x); } });
+      const co: Record<string, any> = {};
+      Object.entries(coOf).forEach(([cid, coid]) => { if (cos[coid]) co[cid] = cos[coid]; });
       const terms: Record<string, any> = {};
-      (await Promise.all(Array.from({ length: Math.ceil(tids.length / 150) }, (_, i) => tids.slice(i * 150, i * 150 + 150))
-        .map((ids) => Promise.resolve(supabase.from("trackings").select("id, contract_terms").in("id", ids)).then((r: any) => (r.data ?? []) as any[]))).catch(() => [] as any[][]))
-        .flat().forEach((t: any) => { if (t.contract_terms && typeof t.contract_terms === "object") terms[t.id] = t.contract_terms; });
-      if (alive) setExtra({ lines: allLines, last, tasks, co, cos: allCos, terms });
-      // subscriptions that have ended go back to Sales, as a deal in the renewal pipeline
-      void ensureRenewalDeals(allLines, coOf, Object.fromEntries(clients.map((c) => [c.id, c.name])));
-    })().catch(() => setExtra({ lines: [], last: {}, tasks: {}, co: {}, cos: [] }));
+      tParts.flat().forEach((t: any) => { if (t.contract_terms && typeof t.contract_terms === "object") terms[t.id] = t.contract_terms; });
+      const next: Extra = { lines: allLines, last, tasks, co, cos: allCos, terms, coOf };
+      if (!alive) return;
+      setFresh({ lines: allLines, coOf });
+      // keep the twins already found (they're only for search) until they're read again
+      setExtra((cur) => {
+        const out = cur?.cos?.length ? { ...next, cos: [...allCos, ...cur.cos.filter((x: any) => !cos[x.id])] } : next;
+        EXTRA_CACHE = out;
+        return out;
+      });
+    })().catch(() => setExtra((cur) => cur ?? { lines: [], last: {}, tasks: {}, co: {}, cos: [] }));
     return () => { alive = false; };
-  }, [loaded, clients.length, linesRev]);
+  }, [linesRev]);
+  // Then, without holding the page: the companies named like a client (its "twin" when the two aren't linked),
+  // so a client can also be found by the company's other name — only those, never the whole directory —
+  // and the subscriptions that have ended go back to Sales as renewal deals.
+  const extraReady = !!extra?.coOf;
+  useEffect(() => {
+    if (!loaded || !extraReady || !extra) return;
+    let alive = true;
+    const firstWord = (n: string) => (n ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Za-z0-9 ]/g, " ").trim().split(/\s+/)[0] ?? "";
+    const stems = [...new Set(clients.map((c) => firstWord(c.name)).filter((w) => w.length >= 3))];
+    Promise.all(Array.from({ length: Math.ceil(stems.length / 40) }, (_, i) => stems.slice(i * 40, i * 40 + 40))
+      .map((ws) => Promise.resolve(supabase.from("companies").select(COLS).or(ws.map((w) => `name.ilike.${w}*,legal_name.ilike.${w}*`).join(",")).limit(2000)).then((r: any) => (r.data ?? []) as any[])))
+      .then((parts) => {
+        if (!alive) return;
+        setExtra((cur) => {
+          if (!cur) return cur;
+          const have = new Set((cur.cos ?? []).map((x: any) => x.id));
+          const add = parts.flat().filter((x) => !have.has(x.id) && (have.add(x.id), true));
+          if (!add.length) return cur;
+          const out = { ...cur, cos: [...(cur.cos ?? []), ...add] };
+          EXTRA_CACHE = out;
+          return out;
+        });
+      }).catch(() => {});
+    return () => { alive = false; };
+  }, [loaded, extraReady, clients.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!loaded || !fresh) return;
+    void ensureRenewalDeals(fresh.lines, fresh.coOf, Object.fromEntries(clients.map((c) => [c.id, c.name])));
+  }, [loaded, fresh]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const typeName = (id: string) => projectTypes.find((t) => t.id === id)?.name ?? "No service";
   /** Clients that look like the same one (same CRM company, or the same name once accents / legal form are dropped). */
@@ -390,11 +424,31 @@ export function ClientList({
   const shown = [...viewed.filter((r) => !gone(r)), ...viewed.filter((r) => gone(r))];
   const live = shown.filter((r) => r.c.status !== "churned");
   const churnedN = shown.length - live.length;
-  const sortKey = view.sort[0]?.key ?? "";
-  const sortDir = view.sort[0]?.dir ?? "desc";
-  const setSort = (key: string, dir: "asc" | "desc" = sortDir) => setView({ ...view, sort: key ? [{ key, dir }] : [] });
 
-  if (!loaded || !prefsReady || (clients.length > 0 && !extra)) return <PageLoader label="Loading clients…" />;
+  if (!loaded || !prefsReady || (clients.length > 0 && !extra)) {
+    // the header keeps its full shape while the page loads: placeholder tools and figures, not a squashed bar
+    const skelTools = (
+      <div className="cx-tools is-skel" aria-hidden="true">
+        <span className="cx-skel is-search" /><span className="cx-skel is-btn" /><span className="cx-skel is-btn" /><span className="cx-skel is-view" />
+      </div>
+    );
+    return (
+      <>
+        {toolsSlot && createPortal(skelTools, toolsSlot)}
+        <div className="cx-kpis is-skel" style={{ ["--n" as any]: slots.length }} aria-hidden="true">
+          {slots.map((_, i) => (
+            <div className="cx-kpi tone-mint is-skel" key={i} style={{ ["--i" as any]: i }}>
+              <span className="cx-kpi-top"><span className="cx-kpi-ico" /><span className="cx-skel is-k" /></span>
+              <span className="cx-skel is-v" />
+              <span className="cx-skel is-sub" />
+            </div>
+          ))}
+          <span />
+        </div>
+        <PageLoader label="Loading clients…" />
+      </>
+    );
+  }
   if (clients.length === 0) {
     return (
       <div className="cl-empty">
@@ -440,7 +494,6 @@ export function ClientList({
   };
   const kpiOf = (k: string) => KPIS.find((x) => x.key === k);
   const kpiOpts = KPIS.map((k) => ({ value: k.key, label: k.label }));
-  const sortable = fields.filter((f) => f.type !== "multi");
 
   const tools = (
     <div className="cx-tools">
@@ -451,15 +504,6 @@ export function ClientList({
       </label>
       <FilterBar fields={fields} view={view} onView={setView} total={rows.length} shown={shown.length} noun={["client", "clients"]}
         saved={savedViews} onSaved={setSavedViews} openSignal={filtersOpenTick} />
-      <div className="cx-sort">
-        <Select size="sm" value={sortKey} onChange={(k) => setSort(k, k && fields.find((f) => f.key === k)?.type === "text" ? "asc" : "desc")} placeholder="Sort"
-          options={[{ value: "", label: "Most recent" }, ...sortable.map((f) => ({ value: f.key, label: f.label, hint: f.group }))]} />
-        {sortKey && (
-          <button className="cx-dir" onClick={() => setSort(sortKey, sortDir === "asc" ? "desc" : "asc")} title={sortDir === "asc" ? "Ascending" : "Descending"} aria-label="Sort direction">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ transform: sortDir === "asc" ? "scaleY(-1)" : undefined }}><path d="M12 5v14M6 13l6 6 6-6" /></svg>
-          </button>
-        )}
-      </div>
       <div className="cx-view" role="group" aria-label="View">
         <button className={layout === "grid" ? "is-on" : ""} onClick={() => setLayoutP("grid")} aria-label="Cards" title="Cards">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7" rx="2" /><rect x="14" y="3" width="7" height="7" rx="2" /><rect x="3" y="14" width="7" height="7" rx="2" /><rect x="14" y="14" width="7" height="7" rx="2" /></svg>
@@ -742,6 +786,10 @@ export default function ClientsPage() {
   const fhRef = useRef<HTMLDivElement>(null);
   useFloatingHero(fhRef, ".cl-bar, .cx-kpis");
   const [toolsSlot, setToolsSlot] = useState<HTMLDivElement | null>(null);
+  // Clients, or every signed contract (remembered)
+  const [tab, setTab] = useState<"clients" | "contracts">(() => { try { return localStorage.getItem("cl.tab") === "contracts" ? "contracts" : "clients"; } catch { return "clients"; } });
+  const setTabP = (t: "clients" | "contracts") => { setTab(t); try { localStorage.setItem("cl.tab", t); } catch { /* ignore */ } };
+  const navigate = useNavigate();
   const d = useClientsData();
   /** Bumped when a client's signed products change in its popup, so the list's figures follow. */
   const [linesRev, setLinesRev] = useState(0);
@@ -757,6 +805,7 @@ export default function ClientsPage() {
   const [deleteTarget, setDeleteTarget] = useState<{ client: Client; count: number } | null>(null);
   const [importing, setImporting] = useState(false);
   const [colsTick, setColsTick] = useState(0);
+  const [ctColsTick, setCtColsTick] = useState(0);
 
   /** Arriving with ?client=… (global search, a ticket's link, a report row) opens that client;
    *  &contract=<deal id> or &products=1 goes on to that contract, &project=<id> opens that project. */
@@ -853,26 +902,37 @@ export default function ClientsPage() {
       <header className="cl-bar">
         <div className="cl-bar-left">
           <div>
-            <h1 className="cl-title">Clients</h1>
-            {(() => {
-              const gone = new Set(clients.filter((c) => c.status === "churned").map((c) => c.id));
-              const n = clients.length - gone.size;
-              const open = projects.filter((p) => !gone.has(p.clientId) && projectStatusOf(p.status) === "open").length;
-              return <p className="cx-sub">{n} client{n === 1 ? "" : "s"}{gone.size ? ` (+${gone.size} churned)` : ""} · {open} open project{open === 1 ? "" : "s"}</p>;
-            })()}
+            <h1 className="cl-title">{tab === "contracts" ? "Contracts" : "Clients"}</h1>
           </div>
         </div>
-        <div className="cl-bar-tools" ref={setToolsSlot} />
+        <div className="cl-bar-tools" ref={setToolsSlot} key={tab} />
+        <div className="cl-mtabs" data-tab={tab}>
+          <div className="cl-mtabs-in" role="tablist" aria-label="Clients or contracts">
+          <span className="cl-mtabs-pill" aria-hidden="true" />
+          <button type="button" role="tab" aria-selected={tab === "clients"} aria-label="Clients" className={tab === "clients" ? "is-on" : ""} onClick={() => setTabP("clients")}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="8" r="3.5" /><path d="M2.5 20c.6-3.6 3.2-5.5 6.5-5.5s5.9 1.9 6.5 5.5M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14.7c2 .7 3.2 2.5 3.5 5.3" /></svg><span>Clients</span>
+          </button>
+          <button type="button" role="tab" aria-selected={tab === "contracts"} aria-label="Contracts" className={tab === "contracts" ? "is-on" : ""} onClick={() => setTabP("contracts")}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h4" /></svg><span>Contracts</span>
+          </button>
+          </div>
+        </div>
+
         <div className="cl-actions">
           <ActionsMenu items={[
             { key: "new", group: "Create", label: "New client", hint: "Add one client and its first project", icon: AM_ICON.plus, primary: true, tone: "green", shortcut: "N", onSelect: () => setShowForm(true) },
             { key: "import", group: "Data", label: "Import", hint: "Clients and projects from Excel or CSV", icon: AM_ICON.import, tone: "blue", shortcut: "I", onSelect: () => setImporting(true) },
             { key: "export", group: "Data", label: "Export", hint: "Every client and project to Excel — re-importable", icon: AM_ICON.export, tone: "violet", shortcut: "E", onSelect: exportClients },
-            { key: "fields", group: "Setup", label: "Columns", hint: "Choose and order the columns of the list", icon: AM_ICON.fields, tone: "amber", shortcut: "F", onSelect: () => setColsTick((x) => x + 1) },
+            { key: "fields", group: "Setup", label: "Columns", hint: tab === "contracts" ? "Choose and order the columns of the contracts list" : "Choose and order the columns of the list", icon: AM_ICON.fields, tone: "amber", shortcut: "F", onSelect: () => (tab === "contracts" ? setCtColsTick : setColsTick)((x) => x + 1) },
           ]} />
         </div>
       </header>
 
+      {tab === "contracts" ? (
+        <ContractsBoard toolsSlot={toolsSlot} colsSignal={ctColsTick}
+          onOpenDeal={(id) => navigate(`/sales?tracking=${id}`)}
+          onOpenClient={(cid, dealId) => { const c = clients.find((x) => x.id === cid); if (!c) return; setFocus(dealId ? { contract: dealId } : null); setDetailClient(c); }} />
+      ) : (
       <ClientList
         onSetStatus={async (c, st, o) => { const e = await d.setClientStatus(c.id, st, o); if (!e && o.stopProducts) setLinesRev((n) => n + 1); return e; }}
         linesRev={linesRev}
@@ -888,6 +948,7 @@ export default function ClientsPage() {
         colsSignal={colsTick}
         toolsSlot={toolsSlot}
       />
+      )}
 
       {detailClient && (
         <ClientWorkspace

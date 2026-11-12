@@ -166,13 +166,83 @@ Next free number: **132**  ← update this line when you claim one (and say whic
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
-- [ ] **Base → Enterprise (2026-11-12): two accounts in two tabs (KERNEL).** Today `smartStorage` in `src/components/api/supabase.ts` prefers localStorage, so with "Keep me signed in" all tabs share one session: signing in as someone else in tab 2, or signing out there, leaves tab 1 sending a closed session → "Not authenticated" / "Session not found" (seen 2026-11-12 09:50, inder@brazo.com ↔ indera@konsolidator.com). Ready-to-paste replacement in `src/base/requests/supabase-tab-sessions.ts.txt`: each tab keeps its own session; localStorage only seeds new tabs and is shared by tabs of the same user. Also the logout button → `supabase.auth.signOut({ scope: "local" })` (global closes that user's other tabs too). Base can't edit these files.
+- [x] **Base → Enterprise (2026-11-12): two accounts in two tabs (KERNEL).** DONE by Enterprise 2026-11-12 11:15 (see §9) — Base: switch your own Sign-out buttons (src/base/framework/Dock.tsx, SuperAdmin.tsx, pages/settings/SettingsPage.tsx) to `signOut({ scope: "local" })`. Today `smartStorage` in `src/components/api/supabase.ts` prefers localStorage, so with "Keep me signed in" all tabs share one session: signing in as someone else in tab 2, or signing out there, leaves tab 1 sending a closed session → "Not authenticated" / "Session not found" (seen 2026-11-12 09:50, inder@brazo.com ↔ indera@konsolidator.com). Ready-to-paste replacement in `src/base/requests/supabase-tab-sessions.ts.txt`: each tab keeps its own session; localStorage only seeds new tabs and is shared by tabs of the same user. Also the logout button → `supabase.auth.signOut({ scope: "local" })` (global closes that user's other tabs too). Base can't edit these files.
 - [ ] **Base → Enterprise (2026-11-09): edge function `connected-accounts` — DEPLOYED by Base 2026-11-09 21:20 (v1); Enterprise: just adopt the source into `supabase/functions/connected-accounts/` when convenient.** The code is in `src/base/requests/connected-accounts.index.ts.txt` — copy it to `supabase/functions/connected-accounts/index.ts` and deploy it. Actions `connect` / `disconnect` / `check` / `token`; tables from SQL 119. It needs the secrets `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (plus the existing `MS_CLIENT_ID`, `MS_CLIENT_SECRET`). The front end also reads `VITE_GOOGLE_CLIENT_ID`. Base's Settings › Integrations calls it to add Gmail, Google Calendar and extra Outlook accounts (the first Outlook stays in `outlook_tokens` / `outlook-sync`, untouched). Enterprise can use the same table / function for its own multi-account mail.
 
 ---
 
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
+
+### 2026-11-12 12:55 · Enterprise · Contracts: the figures on top are customisable (like Clients)
+Files: src/components/pages/clients/ContractsBoard.tsx
+What: The Contracts KPIs use the Clients KPI system. Up to 6 cards (the sliders button opens the picker), and ⇄ on a card changes it or gives it a second figure (click the card to switch). They are saved as prefs.contractKpiSlots; the default is contracts, signed value, invoices in the next 90 days and renewing within 90 days. There are 17 figures, among them yearly value, invoices in the next 30/90 days, invoiced this year, next invoice, auto-renewing, in grace, not started, ended, clients with a contract, average value and length, products and discounts given. The figures follow the search and filters, and show skeletons until the data and prefs are read.
+Tags: none (Enterprise only)
+Deploy: none
+
+### 2026-11-12 12:40 · Enterprise · Clients / Contracts load faster; Contracts get views, column order and header filters
+Files: src/components/pages/clients/ClientsPage.tsx, clients/ContractsBoard.tsx, clients/ContractsBoard.css, clients/useClientsData.ts, companies/companiesApi.ts
+What:
+- Speed:
+  - Clients used to read in four rounds, one after another: the clients, then the popup data, then companies (including up to 2000 "twin" companies per batch, only used for search), then the contract terms. The popup data now starts with the page, and its companies and terms are read together. The twin-company search runs afterwards without holding the page.
+  - useClientsData keeps the last read per user in memory (CD_CACHE), and so does the client popup data (EXTRA_CACHE). A later visit to Clients or Projects draws at once and refreshes quietly.
+  - ensureRenewalDeals runs once per fresh read, never on remembered data.
+  - loadPrefs shares one read for 20 s across all its callers, and savePref keeps that copy current.
+  - ContractsBoard reads trackings and websites in parallel (only for clients with contracts) and remembers its rows (CACHE).
+- Contracts tab:
+  - The "Any state" and "Renews first" Selects are gone. It now has a FilterBar (Filters + Views, saved as prefs.contractViews; the view is kept in localStorage np-contracts-view) and FilterChips.
+  - 15 fields: contract, client, state, made from, length, paid, products, signed, starts, renews/ends, renews by itself, next invoice, its amount, total, a year.
+  - The list's columns are the person's own (prefs.contractColumns), with a drag/hide/add editor opened from Actions › Columns when the Contracts tab is open. Every column header sorts and filters (ColumnHead), and with no sort the rows go renewing soonest first.
+Tags: PORT? (Base: the prefs read sharing in companiesApi, if Base keeps its own copy)
+Deploy: none (front-end only)
+
+### 2026-11-12 12:15 · Enterprise · Projects list head: header shadow falls over it, Clients-style labels
+Files: src/components/pages/projects/ProjectsPage.css
+What: `.pj-sheet` sat at z-index 1 (same as the floating header's ::before), so its sticky column head painted a flat band over the header's shadow. It now sits at z-index 0, like the Clients sheet. The head has no rule or band and uses quiet 12px labels (no uppercase), the same as the Clients table head.
+Tags: PORT? (Base Projects, if it uses the same sheet)
+Deploy: none
+
+### 2026-11-12 12:10 · Enterprise · Projects header = Clients header: search + Filters/Views in the bar, icon-only List/Canvas switch
+Files: src/components/pages/projects/ProjectsPage.tsx, projects/ProjectsView.tsx, projects/ProjectsPage.css, clients/ContractsBoard.css
+What: Projects now works like Clients. The search and the FilterBar (Filters + Views, saved as prefs "projectViews") are portaled into the dark header (`.cl-bar-tools`). The white row of Selects below it is gone (client / service / status / consultant / sort): those are fields in the Filters panel, and the column-header filters and sorts stay as they were (same np-projects-view). The subtitle is removed. List | Canvas uses the icon-only `.cl-mtabs` switch, which opens on hover; `data-on="2"` is a generic second-position rule in ContractsBoard.css. The header uses the same compact bar, title and KPI sizes as Clients, and keeps its shape while loading (skeleton tools and KPIs).
+Tags: PORT? (Base Projects page, if it has the old filter row)
+Deploy: none (front-end only)
+
+### 2026-11-12 11:55 · Enterprise · Clients header: icon-only tab switch, no sort select, header keeps its shape while loading
+Files: src/components/pages/clients/ClientsPage.tsx, clients/ContractsBoard.tsx, clients/ContractsBoard.css
+What: The Clients | Contracts switch shows icons only; hovering (or focusing) it opens both names, growing leftwards over the tools (opaque, no layout jump). The "Most recent" sort Select is gone from the Clients tools (columns still sort from their headers). While the Clients page loads, the header no longer collapses: placeholder tools and KPI cards (shimmer, `.cx-skel`) keep the banner at full height. Contracts KPIs show no sub-line until loaded.
+Tags: PORT? (Base: the loading skeleton for the Clients header, if Base's header collapses the same way)
+Deploy: none (front-end only)
+
+### 2026-11-12 10:30 · Enterprise · Clients › Contracts: tab switch on the right, client logos, cards / list
+Files: src/components/pages/clients/ClientsPage.tsx, clients/ContractsBoard.tsx, clients/ContractsBoard.css
+What: The Clients | Contracts switch moved to the right of the bar (white pill with icons), before the actions. The subtitles under the title are gone (just "Clients" / "Contracts"). The Contracts tab now shows each client's logo (CompanyLogo from the company website) and opens as cards by default (logo, state, compact timeline or progress, dates, next invoice, total), with a cards/list toggle (localStorage ccb.layout); the list rows show the logo too.
+Tags: PORT? (Base has no Contracts tab; only port if Base adds one)
+Deploy: none (front-end only)
+
+### 2026-11-12 12:35 · Enterprise · Clients page: Clients | Contracts tabs, every contract in one list with a pop-up
+- Files: src/components/pages/clients/ClientsPage.tsx, clients/ContractsBoard.tsx + .css (new); sales/extras/ContractView.tsx (new), ContractSummary.tsx (noTimeline prop), ContractTerms.css
+- What: a Clients / Contracts switch in the Clients header (remembered, localStorage cl.tab). Contracts: KPIs (live contracts, signed value + a year, invoices due in the next 90 days, renewing in 90 days) and a list — search, state filter (Running / In grace period / Not started / Renewed / Ended), sort (renews first, biggest, signed latest, client) — of (1) contracts built on won deals (tracking_contracts: dates, next invoice, total) and (2) older contracts made of a client's signed products grouped by deal (client_products + trackings.contract_terms; skipped when that deal has a tracking contract). A click opens a read-only pop-up: deal contracts show dates (milestones + timeline), what it includes, its terms and the summary with the payment plan; older ones show dates and their products. Buttons: Open the deal (/sales?tracking=…) and Open the client (its workspace, focused on that contract). Esc closes.
+- Tags: PORT? (Base has no contracts)
+- Deploy: none
+
+### 2026-11-12 12:10 · Enterprise · Sidebar: no scroll when pointing near the bottom
+- Files: src/components/framework/AppLayout.css
+- What: the glow that follows the pointer was a 220px layer (.rail::after) moved with the mouse; near the bottom it stuck out of the sidebar, and now that the sidebar scrolls that made a scrollbar appear. It is now painted as one of the sidebar's own background layers (radial-gradient at var(--gy)), so it can never overflow. Checked every 8px over the bottom 200px in all label modes.
+- Tags: PORT? (Base has the same .rail::after glow if it adopts the scrolling sidebar)
+- Deploy: none
+
+### 2026-11-12 11:55 · Enterprise · Sidebar: labels beside the icons (wide sidebar), small icons with any labels, scrolls when zoomed in
+- Files: src/components/framework/dockPrefs.ts (new), framework/Dock.tsx, framework/AppLayout.tsx, framework/AppLayout.css; pages/settings/SettingsPage.tsx + .css; pages/sales/sales/SalesPage.css, pages/management/ManagementPage.css, pages/clients/ClientsPage.css, pages/calendar/CalendarSettingsModal.css
+- What: Menu labels is now a choice of three (Settings › Interface, with little pictures): on hover · under the icons · beside the icons (a wide fixed sidebar: 228px, 200px on windows ≤1440, 196/180 with small icons; Search shows its ⌘K, the account shows your name and email). Saved as prefs.dockLabelMode (profiles.dock_labels kept in step: true unless "hover"); helpers in dockPrefs.ts. Small icons no longer switch labels off (labels under small icons wrap to two lines). New Expand / Collapse button at the foot of the sidebar toggles the wide sidebar (back to what you had). Zoomed-in pages / short windows: the sidebar scrolls (thin scrollbar on hover) instead of squashing; the account ring no longer makes it scroll. Pages: Deals hero amount wraps under the count instead of "108…", Deals/Management hero cards take their narrow layout earlier with the wide sidebar, client cards min 290px — the calendar-settings `.cx-grid` !important rule leaked into the Clients page (cards 232px) and is now scoped to its month cards. Overrides in AppLayout.css are prefixed `html` so Base's identical .rail rules can't win by load order.
+- Tags: PORT? (Base has its own Dock/AppLayout and the same leaky .cx-grid rule in its CalendarSettingsModal.css)
+- Deploy: none (no SQL; prefs is jsonb)
+
+### 2026-11-12 11:15 · Enterprise · Kernel: one session per tab — two accounts in two tabs (Base request)
+- Files: src/components/api/supabase.ts; logout buttons → `signOut({ scope: "local" })` in src/components/framework/Dock.tsx, framework/SuperAdmin.tsx (act-as fallback), login/LoginPage.tsx (reset → back), pages/settings/SettingsPage.tsx, pages/superadmin/SuperAdminHome.tsx
+- What: Base's `requests/supabase-tab-sessions.ts.txt`, applied and hardened. Each tab keeps its own session (sessionStorage); with "Keep me signed in" localStorage holds the remembered session, which only starts NEW tabs and is shared by tabs of the SAME user (freshest token); a tab never overwrites or removes another user's remembered session. Plus: the client's storageKey carries a per-page-load tag (`sb-<ref>-auth-token.tab-xxxx`) that the storage strips, so supabase-js's BroadcastChannel ("signed in/out in another tab") and its refresh lock stay inside the tab — otherwise tab 1 would still be told about tab 2's sign-in/out. Saved keys are unchanged (existing sessions keep working). The sign-in code verifier also goes to localStorage (reset / magic links open in a new tab). Deactivated-user sign-outs stay global.
+- Tags: KERNEL · Base: your own Sign-out buttons in src/base still call signOut() (global) — switch them to scope "local".
+- Deploy: none
 
 ### 2026-11-12 10:55 · Enterprise · Outlook: deleting a CRM meeting cancels it properly (no "Canceled:" copy left)
 - Files: supabase/functions/outlook-meeting/index.ts (new, DEPLOYED v1), supabase/functions/outlook-sync/index.ts (same fix, NOT deployed — the Mac copy has other undeployed changes), src/components/api/outlookSync.ts, src/components/pages/sales/sales/salesApi.ts

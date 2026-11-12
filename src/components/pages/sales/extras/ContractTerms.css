@@ -775,3 +775,30 @@
 @media (max-width: 1500px) { .ctm-body { grid-template-columns: minmax(0, 1fr) 420px; } .ctm-main { padding: 18px 20px 32px 22px; } .ctm-side { padding: 18px 22px 28px 4px; } }
 @media (max-width: 1100px) { .ctm-body { grid-template-columns: 1fr; overflow-y: auto; } }
 .ctm-main > *, .ctf > * { flex-shrink: 0; }
+
+/* ============ A signed contract, to look at (Clients › Contracts) ============ */
+.ctv-name { margin: 0; font-size: 19px; font-weight: 750; letter-spacing: -0.01em; color: #17241e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ctv-state { flex: none; height: 28px; display: inline-flex; align-items: center; padding: 0 12px; border-radius: 999px; font-size: 12px; font-weight: 700; background: #f0f3f2; color: #6f8279; white-space: nowrap; }
+.ctv-state.is-run { background: #e3f3ea; color: #24704f; }
+.ctv-state.is-grace { background: #faf0dc; color: #8a5208; }
+.ctv-state.is-soon { background: #eef1fb; color: #4a5aa8; }
+.ctm-body.is-one { grid-template-columns: minmax(0, 1fr); }
+.ctm-body.is-one .ctm-main { max-width: 980px; width: 100%; margin: 0 auto; }
+.ctv.ctm { max-width: 1500px; }
+.ctv-sec { gap: 14px; }
+.ctv-items { display: flex; flex-direction: column; gap: 8px; }
+.ctv-item { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 10px 12px; border-radius: 13px; border: 1px solid #e8eeeb; background: #fff; }
+.ctv-item-t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.ctv-item-t b { font-size: 13.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ctv-item-t em { font-style: normal; font-size: 11.5px; color: #7b8a83; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ctv-item-f { flex: none; display: flex; flex-direction: column; align-items: flex-end; }
+.ctv-item-f b { font: 700 14.5px "Space Grotesk", "Inter", sans-serif; font-variant-numeric: tabular-nums; }
+.ctv-item-f em { font-style: normal; font-size: 11px; color: #8a9892; white-space: nowrap; }
+.ctv-terms { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; }
+.ctv-terms > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 10px 12px; border-radius: 12px; background: #f6f8f7; }
+.ctv-terms em { font-style: normal; font-size: 10px; font-weight: 800; letter-spacing: 0.07em; text-transform: uppercase; color: #8a9892; }
+.ctv-terms b { display: flex; align-items: baseline; gap: 6px; font-size: 13px; font-weight: 650; color: #17241e; }
+.ctv-terms b i { font-style: normal; font-size: 11.5px; font-weight: 800; color: #24704f; }
+.ctm:has(> .ctm-body.is-one) { width: min(1080px, 100%); height: auto; max-height: 100%; }
+.ctm:has(> .ctm-body.is-one) .ctm-body { flex: 1 1 auto; }
+.ctm-body.is-one .ctm-main { padding-bottom: 24px; }

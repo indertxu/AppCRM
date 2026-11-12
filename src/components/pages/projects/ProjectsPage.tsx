@@ -2,13 +2,14 @@
 import NewClientForm from "../clients/NewClientForm";
 import { useClientsData } from "../clients/useClientsData";
 import { useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useFloatingHero, fhMove, fhLeave } from "../clients/ClientsPage";
 import ProjectsView, { type ProjectsViewMode } from "./ProjectsView";
 import { PageLoader } from "../../framework/AppLayout";
 import "../clients/ClientsPage.css";
 import "./ProjectsPage.css";
+import "../clients/ContractsBoard.css";
 import { useNavSection } from "../../framework/pageAccess";
-import { projectStatusOf } from "../clients/clientsTypes";
 import ActionsMenu from "../../framework/ActionsMenu";
 
 /**
@@ -33,8 +34,7 @@ export default function ProjectsPage() {
   // Same dark floating header as Clients: sized to the title bar + figures, glow follows the pointer.
   const fhRef = useRef<HTMLDivElement>(null);
   useFloatingHero(fhRef, ".cl-bar, .cx-kpis");
-  const open = projects.filter((p) => projectStatusOf(p.status) === "open").length;
-  const onHold = projects.filter((p) => projectStatusOf(p.status) === "on_hold").length;
+  const [toolsSlot, setToolsSlot] = useState<HTMLDivElement | null>(null);
 
   return (
     <div className={`cl cl-ov fh pj-page pj-ov is-${view}`} ref={fhRef} onPointerMove={fhMove} onPointerLeave={fhLeave}>
@@ -42,22 +42,39 @@ export default function ProjectsPage() {
         <div className="cl-bar-left">
           <div>
             <h1 className="cl-title">Projects</h1>
-            <p className="cx-sub">{projects.length} project{projects.length === 1 ? "" : "s"} · {open} open{onHold ? ` · ${onHold} on hold` : ""} · {clients.length} client{clients.length === 1 ? "" : "s"}</p>
           </div>
         </div>
-        <div className="pj-views" role="tablist" aria-label="View">
-          <span className="pj-views-ink" style={{ transform: view === "canvas" ? "translateX(100%)" : "none" }} />
-          <button type="button" role="tab" aria-selected={view === "list"} className={view === "list" ? "is-on" : ""} onClick={() => pick("list")}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" /></svg>List
-          </button>
-          <button type="button" role="tab" aria-selected={view === "canvas"} className={view === "canvas" ? "is-on" : ""} onClick={() => pick("canvas")}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="5" height="16" rx="1.5" /><rect x="9.5" y="4" width="5" height="10" rx="1.5" /><rect x="16" y="4" width="5" height="13" rx="1.5" /></svg>Canvas
-          </button>
+        <div className="cl-bar-tools" ref={setToolsSlot} />
+        <div className="cl-mtabs" data-on={view === "canvas" ? 2 : 1}>
+          <div className="cl-mtabs-in" role="tablist" aria-label="View">
+            <span className="cl-mtabs-pill" aria-hidden="true" />
+            <button type="button" role="tab" aria-selected={view === "list"} aria-label="List" className={view === "list" ? "is-on" : ""} onClick={() => pick("list")}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" /></svg><span>List</span>
+            </button>
+            <button type="button" role="tab" aria-selected={view === "canvas"} aria-label="Canvas" className={view === "canvas" ? "is-on" : ""} onClick={() => pick("canvas")}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="5" height="16" rx="1.5" /><rect x="9.5" y="4" width="5" height="10" rx="1.5" /><rect x="16" y="4" width="5" height="13" rx="1.5" /></svg><span>Canvas</span>
+            </button>
+          </div>
         </div>
-        <ActionsMenu items={[]} />
+        <div className="cl-actions"><ActionsMenu items={[]} /></div>
       </header>
 
-      {!loaded ? <section className="cx-sheet pj-sheet"><PageLoader label="Loading projects…" /></section> : (
+      {!loaded ? (
+        <>
+          {toolsSlot && createPortal(
+            <div className="cx-tools is-skel" aria-hidden="true"><span className="cx-skel is-search" /><span className="cx-skel is-btn" /><span className="cx-skel is-btn" /></div>, toolsSlot)}
+          <div className="cx-kpis pj-kpis is-skel" style={{ ["--n" as any]: 4 }} aria-hidden="true">
+            {[0, 1, 2, 3].map((i) => (
+              <div className="cx-kpi tone-mint is-skel" key={i} style={{ ["--i" as any]: i }}>
+                <span className="cx-kpi-top"><span className="cx-kpi-ico" /><span className="cx-skel is-k" /></span>
+                <span className="cx-skel is-v" />
+                <span className="cx-skel is-sub" />
+              </div>
+            ))}
+          </div>
+          <section className="cx-sheet pj-sheet"><PageLoader label="Loading projects…" /></section>
+        </>
+      ) : (
       <div className="pj-in">
       <ProjectsView
         clients={clients}
@@ -70,6 +87,7 @@ export default function ProjectsPage() {
         onSetHolds={setProjectHolds}
         view={view}
         blueprints={blueprints}
+        toolsSlot={toolsSlot}
       />
       </div>
       )}

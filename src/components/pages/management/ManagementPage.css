@@ -2887,3 +2887,16 @@
 .dd-menu.is-here { min-width: 220px; }
 .dd-menu.is-here > button svg { flex: none; width: 16px; height: 16px; color: #0a6f4d; }
 .dd-menu-k { display: block; padding: 6px 10px 4px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #8a9a93; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px; }
+
+/* With the wide sidebar the page is narrower than the window: the KPI cards take their narrow layout earlier */
+@media (max-width: 1500px) and (min-width: 1281px) {
+  :root:has(.app-shell.rail-side) .tm-kpi { grid-template-columns: minmax(0, 1fr) 170px; gap: 16px; }
+  :root:has(.app-shell.rail-side) .tm-dial { width: 112px; height: 65px; }
+}
+@media (max-width: 1300px) {
+  :root:has(.app-shell.rail-side) .tm-kpi { grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 14px 16px; }
+  :root:has(.app-shell.rail-side) .tm-kpi-swap { display: none; }
+  :root:has(.app-shell.rail-side) .tm-kpi-facts { flex-direction: row; flex-wrap: wrap; gap: 4px 14px; padding-top: 6px; border-top: 1px solid rgba(255, 255, 255, 0.07); }
+  :root:has(.app-shell.rail-side) .tm-kpi-facts > span { padding: 2px 0; }
+  :root:has(.app-shell.rail-side) .tm-kpi-facts > span + span { border-top: none; }
+}

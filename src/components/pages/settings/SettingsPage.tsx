@@ -22,6 +22,7 @@ import { usePageAccess, useNavSection, levelName, levelBase, type PageKey } from
 import { SuperAdminSwitch } from "../../framework/SuperAdmin";
 import { connectOutlook, completeOutlookConnect, outlookStatus, disconnectOutlook, outlookConnectError, OUTLOOK_CONNECTION_EVENT } from "../../api/outlookSync";
 import { DOCK_ITEMS, DOCK_ORDER_KEY, DOCK_ORDER_EVENT, orderDock } from "../../framework/Dock";
+import { setDockMode, readDockMode, modeFromDetail, dockModeFrom, DOCK_MODE_EVENT, type DockLabelMode } from "../../framework/dockPrefs";
 import { loadPrefs, savePref, isSalesLead } from "../companies/companiesApi";
 import { CompanySettings, SettingsShell } from "../companies/CompaniesPage";
 import { ContactSettings } from "../contacts/ContactsPage";
@@ -171,34 +172,18 @@ export default function SettingsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [selected, setSelected] = useState<UserRow | null>(null);
 
-  // localStorage is a fast cache to avoid a flash on load; the profile is the source of truth.
-  // (The sidebar is always fixed now; only the labels are a choice.)
-  const [dockLabels, setDockLabels] = useState<boolean>(
-    () => localStorage.getItem(DOCK_LABELS_KEY) === "true"
-  );
-
   const uid = session?.user?.id ?? null;
 
-  // Load the saved preference from the user's profile on mount.
+  // Menu labels: on hover · under the icons · beside them (a wide sidebar)
+  const [dockMode, setDockModeState] = useState<DockLabelMode>(readDockMode);
   useEffect(() => {
-    if (!uid) return;
-    (async () => {
-      const { data } = await supabase.from("profiles").select("dock_labels").eq("id", uid).maybeSingle();
-      if (data && typeof (data as any).dock_labels === "boolean") {
-        setDockLabels((data as any).dock_labels);
-        localStorage.setItem(DOCK_LABELS_KEY, String((data as any).dock_labels));
-        window.dispatchEvent(new CustomEvent(DOCK_LABELS_EVENT, { detail: (data as any).dock_labels }));
-      }
-    })();
-  }, [uid]);
+    const on = (e: Event) => setDockModeState(modeFromDetail((e as CustomEvent).detail));
+    window.addEventListener(DOCK_MODE_EVENT, on);
+    loadPrefs().then((p) => { const m = dockModeFrom(p, null); if (m) setDockModeState(m); }).catch(() => {});
+    return () => window.removeEventListener(DOCK_MODE_EVENT, on);
+  }, []);
+  const chooseDockMode = (m: DockLabelMode) => { setDockModeState(m); void setDockMode(m, uid); };
 
-  const toggleLabels = async () => {
-    const next = !dockLabels;
-    setDockLabels(next);
-    localStorage.setItem(DOCK_LABELS_KEY, String(next));
-    window.dispatchEvent(new CustomEvent(DOCK_LABELS_EVENT, { detail: next }));
-    if (uid) await supabase.from("profiles").update({ dock_labels: next }).eq("id", uid);
-  };
 
   // Small sidebar icons: saved to your profile (prefs.dockCompact), localStorage only avoids a flash.
   const [dockCompact, setDockCompact] = useState<boolean>(() => { try { return localStorage.getItem(DOCK_COMPACT_KEY) === "true"; } catch { return false; } });
@@ -365,7 +350,7 @@ export default function SettingsPage() {
     const you: Tile[] = [
       { v: "interface", title: "Interface", sub: "Sidebar, labels & Outlook", accent: "#e0a13c", keys: "interface sidebar menu labels outlook",
         icon: I("M5.5 4h13A2.5 2.5 0 0 1 21 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5v-11A2.5 2.5 0 0 1 5.5 4z", "M8 4v16"),
-        stats: [[dockLabels ? "On" : "Off", "menu labels"], [outlookConnected ? "Synced" : "Off", "Outlook"]] },
+        stats: [[dockMode === "side" ? "Beside" : dockMode === "below" ? "Under" : "Hover", "menu labels"], [outlookConnected ? "Synced" : "Off", "Outlook"]] },
       { v: "account", title: "Your account", sub: "Password & details", accent: "#5a7d6d", keys: "account password profile",
         icon: I("M12 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8z", "M4 21a8 8 0 0 1 16 0"), stats: [[levelLabel(secLevel ?? role), "your level"]] },
     ];
@@ -523,32 +508,33 @@ export default function SettingsPage() {
         </header>
 
         <section className="st-section" style={{ maxWidth: 640 }}>
-          <div className="st-toggle-row">
+          <div className="st-dock-modes-wrap">
             <div className="st-toggle-text">
-              <span className="st-toggle-label">Always show menu labels</span>
-              <span className="st-toggle-note">
-                {dockCompact
-                  ? "Not with small icons: names show when you point at an icon."
-                  : "Show each item's name under its icon in the sidebar instead of only on hover."}
-              </span>
+              <span className="st-toggle-label">Menu labels</span>
+              <span className="st-toggle-note">How the sidebar shows each page's name. You can also widen it with the button at the bottom of the sidebar.</span>
             </div>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={dockLabels && !dockCompact}
-              disabled={dockCompact}
-              className={`st-switch ${dockLabels && !dockCompact ? "on" : ""}`}
-              onClick={toggleLabels}
-            >
-              <span className="st-switch-knob" />
-            </button>
+            <div className="st-dock-modes" role="radiogroup" aria-label="Menu labels">
+              {([
+                ["hover", "On hover", "Icons only — the name when you point at one"],
+                ["below", "Under the icons", "A small name under each icon"],
+                ["side", "Beside the icons", "A wide sidebar with the full names"],
+              ] as const).map(([m, t, d]) => (
+                <button key={m} type="button" role="radio" aria-checked={dockMode === m} className={`st-dock-mode ${dockMode === m ? "is-on" : ""}`} onClick={() => chooseDockMode(m)}>
+                  <span className={`st-dock-pv is-${m} ${dockCompact ? "is-sm" : ""}`} aria-hidden="true">
+                    {[0, 1, 2, 3].map((i) => <span key={i} className={i === 1 ? "is-on" : ""}><i />{m !== "hover" && <b />}</span>)}
+                  </span>
+                  <b>{t}</b>
+                  <em>{d}</em>
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="st-toggle-row" style={{ marginTop: "1.1rem" }}>
             <div className="st-toggle-text">
               <span className="st-toggle-label">Small sidebar icons</span>
               <span className="st-toggle-note">
-                A slimmer sidebar with smaller icons, so every page still fits when you zoom the browser in or work on a small screen.
+                Smaller icons — with the labels you chose. When the window is short or the page is zoomed in, the sidebar scrolls instead of squashing.
               </span>
             </div>
             <button

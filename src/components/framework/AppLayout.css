@@ -454,3 +454,109 @@
   .app-shell.rail-compact .rail-ico svg { width: 15px; height: 15px; }
   .app-shell.rail-compact .rail-avatar { width: 28px; height: 28px; }
 }
+
+/* =====================================================================
+   Sidebar v3 — labels on hover / under the icons / beside them (a wide,
+   fixed sidebar), small icons with any of them, and a sidebar that
+   scrolls instead of squashing when the page is zoomed in (150 %+) or
+   the window is short. Tooltips and the account menu are drawn on
+   <body>, so scrolling never clips them.
+   ===================================================================== */
+html .app-shell.rail-side { --rail-w: 228px; }
+:root:has(.app-shell.rail-side) { --rail-w: 228px; }
+html .app-shell.rail-compact.rail-labels { --rail-w: 68px; }
+:root:has(.app-shell.rail-compact.rail-labels) { --rail-w: 68px; }
+html .app-shell.rail-compact.rail-side { --rail-w: 196px; }
+:root:has(.app-shell.rail-compact.rail-side) { --rail-w: 196px; }
+html .app-page { transition: margin-left 0.28s cubic-bezier(0.16, 1, 0.3, 1), width 0.28s cubic-bezier(0.16, 1, 0.3, 1); }
+html .rail { transition: width 0.28s cubic-bezier(0.16, 1, 0.3, 1); }
+
+/* scroll, don't squash */
+html .rail { overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: transparent transparent; }
+html .rail:hover { scrollbar-color: rgba(226, 246, 236, 0.22) transparent; }
+html .rail::-webkit-scrollbar { width: 5px; }
+html .rail::-webkit-scrollbar-thumb { background: transparent; border-radius: 4px; }
+html .rail:hover::-webkit-scrollbar-thumb { background: rgba(226, 246, 236, 0.22); }
+html .rail-list { flex: 1 0 auto; }
+html .rail-foot { flex: none; margin-top: auto; }
+html .rail > *:not(.rail-ink) { flex-shrink: 0; }
+html .app-shell.rail-compact .rail-slot { flex: none; min-height: 0; }
+html .app-shell.rail-compact .rail-slot > .rail-item { flex: none; width: 34px; height: 34px; max-height: none; min-height: 0; aspect-ratio: auto; }
+
+/* the expand / collapse button and the account button */
+html .rail-item.is-expand { color: rgba(226, 246, 236, 0.55); }
+html .rail-item.is-expand:hover { color: #fff; }
+html .rail-avatar-row { position: relative; display: flex; align-items: center; gap: 10px; min-width: 0; padding: 0; border: 0; border-radius: 14px; background: none; color: #fff; font: inherit; text-align: left; cursor: pointer; }
+html .rail-avatar-row:focus-visible { outline: 2px solid var(--mint); outline-offset: 2px; }
+html .rail-avatar-row .rail-avatar { flex: none; cursor: inherit; }
+html .rail-avatar-row:hover .rail-avatar { border-color: #86efc0; transform: scale(1.04); }
+html .rail-avatar-row:hover .rail-avatar::before, html .rail-avatar-row.is-open .rail-avatar::before { opacity: 1; }
+html .rail-me-txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+html .rail-me-txt b { font-size: 13px; font-weight: 650; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+html .rail-me-txt em { font-style: normal; font-size: 11px; color: rgba(226, 246, 236, 0.6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------- labels beside the icons: a wide, fixed sidebar ---------- */
+html .rail.is-side { align-items: stretch; padding: 14px 12px 12px; }
+html .rail.is-side .rail-list, html .rail.is-side .rail-slot, html .rail.is-side .rail-foot { align-items: stretch; }
+html .rail.is-side .rail-item { flex-direction: row; justify-content: flex-start; gap: 12px; width: 100%; height: 42px; padding: 0 12px; border-radius: 12px; }
+html .rail.is-side .rail-ico { flex: none; }
+html .rail.is-side .rail-ico svg { width: 20px; height: 20px; }
+html .rail.is-side .rail-label { display: block; min-width: 0; font-size: 13.5px; font-weight: 600; letter-spacing: -0.005em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+html .rail.is-side .rail-item:hover { transform: translateX(2px); }
+html .rail.is-side .rail-item:active { transform: scale(0.98); }
+html .rail.is-side .rail-sep.is-thin { width: calc(100% - 20px); }
+html .rail-kbd { margin-left: auto; flex: none; padding: 2px 6px; border-radius: 6px; background: rgba(255, 255, 255, 0.1); font: 600 10.5px "Inter", sans-serif; color: rgba(226, 246, 236, 0.7); }
+html .rail.is-side .rail-me { width: 100%; }
+html .rail.is-side .rail-avatar-row { width: 100%; padding: 6px 8px; }
+html .rail.is-side .rail-avatar-row:hover, html .rail.is-side .rail-avatar-row.is-open { background: rgba(255, 255, 255, 0.08); }
+html .rail.is-side .rail-avatar-row .rail-avatar { margin-top: 0; }
+html .rail.is-side .rail-foot { gap: 4px; }
+html .rail.is-side .rail-slot:first-child .rail-item { margin-bottom: 2px; }
+/* small icons, side by side */
+html .rail.is-side.is-compact { padding: 10px 10px 8px; }
+html .rail.is-side.is-compact .rail-item, html .app-shell.rail-compact .rail.is-side .rail-slot > .rail-item { width: 100%; height: 34px; padding: 0 10px; gap: 10px; border-radius: 10px; }
+html .rail.is-side.is-compact .rail-ico svg { width: 17px; height: 17px; }
+html .rail.is-side.is-compact .rail-label { font-size: 12.5px; }
+html .rail.is-side.is-compact .rail-avatar { width: 28px; height: 28px; font-size: 10.5px; }
+
+/* ---------- labels under the icons, also with small icons ---------- */
+html .app-shell.rail-compact.rail-labels .rail-item, html .app-shell.rail-compact.rail-labels .rail-slot > .rail-item {
+  width: calc(var(--rail-w) - 8px); height: auto; padding: 6px 0 4px; border-radius: 12px; aspect-ratio: auto;
+}
+html .app-shell.rail-compact.rail-labels .rail-label { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; max-width: 100%; padding: 0 1px; font-size: 9px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.12; white-space: normal; text-align: center; overflow: hidden; }
+html .app-shell.rail-compact.rail-labels .rail-ico svg { width: 16px; height: 16px; }
+
+/* short windows / zoomed-in pages: labels stay (the sidebar scrolls) */
+@media (max-height: 640px) {
+  html .rail-labels .rail-label { display: block; }
+  html .rail-labels .rail-item { width: calc(var(--rail-w) - 12px); height: auto; padding: 6px 0 4px; border-radius: 14px; }
+  html .app-shell.rail-compact.rail-labels .rail-item { width: calc(var(--rail-w) - 10px); padding: 5px 0 3px; }
+  html .rail.is-side .rail-item { width: 100%; height: 38px; padding: 0 12px; border-radius: 12px; }
+  html .rail.is-side.is-compact .rail-item { height: 32px; padding: 0 10px; }
+}
+@media (prefers-reduced-motion: reduce) { .app-page, .rail { transition: none; } }
+/* a long name under an icon takes two lines instead of being cut */
+html .rail-labels .rail-label { white-space: normal; text-align: center; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; padding: 0 3px; }
+html .rail.is-hover .rail-label { display: none; }
+/* the account ring spins inside its own box (so it never makes the sidebar scroll) */
+html .rail-me { padding: 7px 0; margin: -7px 0; contain: paint; }
+/* a wide sidebar on a narrow window (or a page zoomed in): a bit narrower, so the page keeps its room */
+@media (max-width: 1440px) {
+  html .app-shell.rail-side { --rail-w: 200px; }
+  :root:has(.app-shell.rail-side) { --rail-w: 200px; }
+  html .app-shell.rail-compact.rail-side { --rail-w: 180px; }
+  :root:has(.app-shell.rail-compact.rail-side) { --rail-w: 180px; }
+  html .rail.is-side .rail-item { gap: 10px; padding: 0 10px; }
+  html .rail.is-side .rail-label { font-size: 13px; }
+}
+/* the glow that follows the pointer is painted as a background of the sidebar (not a moving layer),
+   so pointing near the bottom never makes the sidebar scroll */
+html .rail::after { display: none; }
+html .rail {
+  background:
+    radial-gradient(60px 90px at 50% var(--gy, -300px), var(--rail-glow, transparent), transparent 70%),
+    radial-gradient(120% 40% at 0% 0%, rgba(18, 181, 127, 0.22), transparent 60%),
+    linear-gradient(180deg, #0c3b2c 0%, #082e22 55%, #062519 100%);
+}
+html .rail.is-near { --rail-glow: rgba(134, 239, 192, 0.18); }
+@media (prefers-reduced-motion: reduce) { html .rail.is-near { --rail-glow: transparent; } }

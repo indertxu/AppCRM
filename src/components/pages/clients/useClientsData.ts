@@ -117,21 +117,29 @@ function handoffLines(svcs: any[], pt: ProjectType | undefined, days: number, mo
  * services, blueprints, roles, usage, units), the sales handoff flow, and the
  * save / delete / status mutations. Both pages call this so neither owns a copy.
  */
+/** The last clients / projects read (per person), so Clients and Projects draw at once on a later
+ *  visit while they're read again quietly — instead of the loading scene every time. */
+let CD_CACHE: {
+  uid: string; clients: Client[]; projects: Project[]; projectTypes: ProjectType[]; blueprints: Blueprint[]; roles: ClientRole[];
+  usage: Record<string, { planned: number; done: number }>; lineUsage: Record<string, { done: number; booked: number }>; units?: Record<string, "hour" | "day">;
+} | null = null;
+
 export function useClientsData() {
   const { session, role } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
+  const snap = CD_CACHE && CD_CACHE.uid === (session?.user?.id ?? "") ? CD_CACHE : null;
 
-  const [clients, setClients] = useState<Client[]>([]);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [projectTypes, setProjectTypes] = useState<ProjectType[]>([]);
-  const [blueprints, setBlueprints] = useState<Blueprint[]>([]);
-  const [roles, setRoles] = useState<ClientRole[]>([]);
-  const [usage, setUsage] = useState<Record<string, { planned: number; done: number }>>({});
-  const [lineUsage, setLineUsage] = useState<Record<string, { done: number; booked: number }>>({});
-  const [units, setUnits] = useState<Record<string, "hour" | "day">>({});
-  /** True once the first load finished (the page shows its loading scene until then). */
-  const [loaded, setLoaded] = useState(false);
+  const [clients, setClients] = useState<Client[]>(() => snap?.clients ?? []);
+  const [projects, setProjects] = useState<Project[]>(() => snap?.projects ?? []);
+  const [projectTypes, setProjectTypes] = useState<ProjectType[]>(() => snap?.projectTypes ?? []);
+  const [blueprints, setBlueprints] = useState<Blueprint[]>(() => snap?.blueprints ?? []);
+  const [roles, setRoles] = useState<ClientRole[]>(() => snap?.roles ?? []);
+  const [usage, setUsage] = useState<Record<string, { planned: number; done: number }>>(() => snap?.usage ?? {});
+  const [lineUsage, setLineUsage] = useState<Record<string, { done: number; booked: number }>>(() => snap?.lineUsage ?? {});
+  const [units, setUnits] = useState<Record<string, "hour" | "day">>(() => snap?.units ?? {});
+  /** True once the first load finished (the page shows its loading scene until then) — at once when it was read before. */
+  const [loaded, setLoaded] = useState(() => !!snap);
 
   const [showForm, setShowForm] = useState(false);
   const [detailClient, setDetailClient] = useState<Client | null>(null);
@@ -148,6 +156,7 @@ export function useClientsData() {
       const out: Record<string, "hour" | "day"> = {};
       (data ?? []).forEach((r: any) => { out[r.id] = r.rate_unit === "hour" ? "hour" : "day"; });
       setUnits(out);
+      if (CD_CACHE) CD_CACHE.units = out;
     });
   }, []);
 
@@ -308,22 +317,26 @@ export function useClientsData() {
     });
 
     const svcRoles = ((srs ?? []) as any[]).sort((a, b) => (Number(a.sort) || 0) - (Number(b.sort) || 0));
-    setProjectTypes((pts ?? []).filter((r: any) => r.active !== false)
+    const typesNext: ProjectType[] = (pts ?? []).filter((r: any) => r.active !== false)
       .map((r: any) => ({
         id: r.id, name: r.name, blueprintId: r.blueprint_id ?? null,
         roles: svcRoles.filter((x) => x.service_id === r.id && x.role_id)
           .map((x) => ({ roleId: x.role_id as string, price: Number(x.price) || 0, isMain: !!x.is_main })),
-      })));
-    setBlueprints((bps ?? []).map((r: any) => ({
+      }));
+    const bpsNext: Blueprint[] = (bps ?? []).map((r: any) => ({
       id: r.id, name: r.name ?? "", projectTypeId: r.service_id ?? r.project_type_id ?? "", phases: r.phases ?? [],
-    })));
-    setRoles(roleList);
-    setProjects(visibleProjects);
-    setClients((cls ?? [])
+    }));
+    const clientsNext: Client[] = (cls ?? [])
       // a churn on a future day (the contract's end) leaves the client active until then
       .map((r: any) => ({ id: r.id, name: (r.company?.name ?? "").trim() || r.name || "", status: r.status === "churned" && !(r.churned_at && r.churned_at > localToday()) ? "churned" as const : "active" as const, churnedAt: r.churned_at ?? null, churnReason: r.churn_reason ?? null }))
       .sort((a: any, b: any) => a.name.localeCompare(b.name))
-      .filter((c: any) => seesAll || allowedClients.has(c.id)));
+      .filter((c: any) => seesAll || allowedClients.has(c.id));
+    CD_CACHE = { uid: myId, clients: clientsNext, projects: visibleProjects, projectTypes: typesNext, blueprints: bpsNext, roles: roleList, usage: agg, lineUsage: byLine, units: CD_CACHE?.units };
+    setProjectTypes(typesNext);
+    setBlueprints(bpsNext);
+    setRoles(roleList);
+    setProjects(visibleProjects);
+    setClients(clientsNext);
     setUsage(agg);
     setLineUsage(byLine);
     setLoaded(true);

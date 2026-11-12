@@ -833,7 +833,7 @@
 .cx-legend i.is-custom { background: var(--amber); }
 
 /* month cards */
-.cx-grid { grid-template-columns: repeat(auto-fill, minmax(232px, 1fr)) !important; gap: 12px !important; }
+.cx-grid:has(> .cx-month) { grid-template-columns: repeat(auto-fill, minmax(232px, 1fr)) !important; gap: 12px !important; }
 .cx-month {
   --c: var(--emerald);
   position: relative; display: flex; flex-direction: column; gap: 10px; padding: 14px 15px 13px; border-radius: 16px;

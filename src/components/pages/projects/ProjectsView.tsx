@@ -4,11 +4,10 @@ import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import type { Client, Project, ProjectType, ClientRole, Blueprint } from "../clients/clientsTypes";
 import { projectValue, legacyRoleMap, resolvedLinesOf, roleNameOf, roleColor, roleCounts, projectStatusOf, PROJECT_STATUS_LABEL, daysBetweenIso, holdDaysIn, type ProjectStatus, type HoldPeriod } from "../clients/clientsTypes";
-import Select from "../../framework/Select";
 import DatePicker from "../../framework/DatePicker";
 import { supabase } from "../../api/supabase";
 import { ClientLogo } from "../clients/ClientWorkspace";
-import { applyView, emptyView, useStoredView, FilterChips, type FField } from "../companies/CompaniesPage";
+import { applyView, emptyView, useStoredView, useSavedViews, FilterBar, FilterChips, type FField } from "../companies/CompaniesPage";
 import { ColumnHead } from "../../framework/ColumnHead";
 
 export type Usage = Record<string, { done: number; booked: number }>;
@@ -30,9 +29,10 @@ interface Props {
   view?: ProjectsViewMode;
   /** The services' phase blueprints (order of the canvas columns). */
   blueprints?: Blueprint[];
+  /** Where the search and the Filters / Views buttons go (the page's dark header); above the list when not given. */
+  toolsSlot?: HTMLElement | null;
 }
 
-type Sort = "recent" | "value" | "days" | "progress" | "left";
 
 /* Figures on the dark header — same glass cards as Clients (.cl-ov .cx-kpi). */
 const kIco = (d: string) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>;
@@ -42,19 +42,15 @@ const kSpot = (e: { clientX: number; clientY: number; currentTarget: HTMLElement
 };
 
 export default function ProjectsView({
-  clients, projects, projectTypes, usage, roles, onOpenProject, onSetStatus, onSetHolds, view = "list", blueprints = [],
+  clients, projects, projectTypes, usage, roles, onOpenProject, onSetStatus, onSetHolds, view = "list", blueprints = [], toolsSlot = null,
 }: Props) {
   const [openId, setOpenId] = useState<string | null>(null);
   const activity = useProjectActivity(projects);
   const [q, setQ] = useState("");
-  const [fClient, setFClient] = useState("");
-  const [fType, setFType] = useState("");
-  const [fStatus, setFStatus] = useState("");
-  const [fConsultant, setFConsultant] = useState("");
-  const [sort, setSortRaw] = useState<Sort>("recent");
-  /** What the column headers filter and sort by (kept on this browser between visits). */
+  /** What the Filters panel and the column headers filter and sort by (kept on this browser between visits). */
   const [pview, setPView] = useStoredView("np-projects-view", emptyView());
-  const setSort = (s: Sort) => { setSortRaw(s); if (pview.sort.length) setPView({ ...pview, sort: [] }); };
+  const [savedViews, setSavedViews] = useSavedViews("projectViews");
+  const [filtersOpenTick, setFiltersOpenTick] = useState(0);
   /** Rate unit per service: a project reads in hours or days as its service says. */
   const [units, setUnits] = useState<Record<string, "hour" | "day">>({});
   useEffect(() => {
@@ -150,12 +146,6 @@ export default function ProjectsView({
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase();
     const list = projects.filter((p) => {
-      if (fClient && p.clientId !== fClient) return false;
-      if (fType && p.projectTypeId !== fType) return false;
-      if ((fStatus === "open" || fStatus === "on_hold" || fStatus === "closed") && projectStatusOf(p.status) !== fStatus) return false;
-      if (fStatus === "over" && leftOf(p) >= 0) return false;
-      if (fStatus === "complete" && progressOf(p) < 100) return false;
-      if (fConsultant && !(p.team ?? []).some((m) => m.userId === fConsultant)) return false;
       if (!needle) return true;
       return (
         clientName(p.clientId).toLowerCase().includes(needle) ||
@@ -169,17 +159,14 @@ export default function ProjectsView({
     const byHead = applyView(list, projFields, { ...pview, sort: [] });
     if (pview.sort.length) return applyView(byHead, projFields, { match: "all", conds: [], sort: pview.sort }, (a, b) => (b.kickoffDate || "").localeCompare(a.kickoffDate || ""));
     return byHead.sort((a, b) => {
-      if (sort === "value") return projectValue(b) - projectValue(a);
-      if (sort === "days") return totalSigned(b) - totalSigned(a);
-      if (sort === "progress") return progressOf(b) - progressOf(a);
-      if (sort === "left") return leftOf(a) - leftOf(b);
+      // most recent: open first, then on hold, then closed; newest kick-off first
       const rank = { open: 0, on_hold: 1, closed: 2 } as const;
       const s = rank[projectStatusOf(a.status)] - rank[projectStatusOf(b.status)];
       if (s !== 0) return s;
       return (b.kickoffDate || "").localeCompare(a.kickoffDate || "");
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projects, usage, q, fClient, fType, fStatus, fConsultant, sort, clients, projectTypes, pview, people, roles]);
+  }, [projects, usage, q, clients, projectTypes, pview, people, roles]);
 
   const sumValue = shown.reduce((s, p) => s + projectValue(p), 0);
   // Days and hours are different units, so they are counted apart.
@@ -194,8 +181,17 @@ export default function ProjectsView({
   // Uses sumBilled, so it has to come after it.
   const pctDone = sumDays > 0 ? Math.round((sumBilled / sumDays) * 100) : 0;
 
-  const clearAll = () => { setQ(""); setFClient(""); setFType(""); setFStatus(""); setFConsultant(""); setSortRaw("recent"); setPView(emptyView()); };
-  const anyFilter = !!(q || fClient || fType || fStatus || fConsultant || sort !== "recent" || pview.conds.length || pview.sort.length);
+  const tools = (
+    <div className="cx-tools">
+      <label className="cx-search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search a client, service or VAT…" />
+        {q && <button onClick={() => setQ("")} aria-label="Clear">×</button>}
+      </label>
+      <FilterBar fields={projFields} view={pview} onView={setPView} total={projects.length} shown={shown.length} noun={["project", "projects"]}
+        saved={savedViews} onSaved={setSavedViews} openSignal={filtersOpenTick} />
+    </div>
+  );
 
   return (
     <>
@@ -229,71 +225,8 @@ export default function ProjectsView({
       </div>
 
       <section className="cx-sheet pj-sheet">
-      <div className="cx-tools pj-tools">
-        <label className="cx-search">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search client, service, VAT…" />
-          {q && <button onClick={() => setQ("")} aria-label="Clear">×</button>}
-        </label>
-
-        <div className="pv-filter">
-          <Select
-            value={fClient}
-            onChange={setFClient}
-            options={[{ value: "", label: "All clients" }, ...clients.map((c) => ({ value: c.id, label: c.name }))]}
-            placeholder="All clients"
-          />
-        </div>
-        <div className="pv-filter">
-          <Select
-            value={fType}
-            onChange={setFType}
-            options={[{ value: "", label: "All services" }, ...projectTypes.map((t) => ({ value: t.id, label: t.name }))]}
-            placeholder="All services"
-          />
-        </div>
-        <div className="pv-filter">
-          <Select
-            value={fStatus}
-            onChange={setFStatus}
-            options={[
-              { value: "", label: "Any status" },
-              { value: "open", label: "Open" },
-              { value: "on_hold", label: "On hold" },
-              { value: "closed", label: "Closed" },
-              { value: "complete", label: "Fully delivered" },
-              { value: "over", label: "Over budget" },
-            ]}
-            placeholder="Any status"
-          />
-        </div>
-        <div className="pv-filter">
-          <Select
-            value={fConsultant}
-            onChange={setFConsultant}
-            options={[{ value: "", label: "All consultants" }, ...consultantOptions]}
-            placeholder="All consultants"
-          />
-        </div>
-        <div className="pv-filter">
-          <Select
-            value={pview.sort.length ? "" : sort}
-            onChange={(v) => setSort(v as Sort)}
-            placeholder="By a column"
-            options={[
-              { value: "recent", label: "Most recent" },
-              { value: "value", label: "Highest value" },
-              { value: "days", label: "Most days" },
-              { value: "progress", label: "Most delivered" },
-              { value: "left", label: "Least days left" },
-            ]}
-          />
-        </div>
-
-        {anyFilter && <button className="pv-clear" onClick={clearAll}>Clear</button>}
-        <span className="pj-count"><b>{shown.length}</b> of {projects.length}</span>
-      </div>
-      <FilterChips fields={projFields} view={pview} onView={setPView} onEdit={() => {}} shown={shown.length} total={projects.length} noun={["project", "projects"]} />
+      {toolsSlot ? createPortal(tools, toolsSlot) : tools}
+      <FilterChips fields={projFields} view={pview} onView={setPView} onEdit={() => setFiltersOpenTick((x) => x + 1)} shown={shown.length} total={projects.length} noun={["project", "projects"]} />
 
       {shown.length === 0 ? (
         <p className="cl-hint">No projects match those filters.</p>

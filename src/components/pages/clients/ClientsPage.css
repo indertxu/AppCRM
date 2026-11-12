@@ -4868,3 +4868,5 @@ button.cs5-n:hover, button.cs5-n:focus-visible { background: #e3f4ec; color: var
 .csx-motion-note b { color: #0a6f4d; }
 .csx-up-motion { height: 18px; padding: 0 6px; border-radius: 6px; background: rgba(224, 160, 62, 0.16); color: #8a5a0b; font-size: 10px; font-weight: 750; display: inline-flex; align-items: center; }
 @media (max-width: 560px) { .csx-motion { grid-template-columns: 1fr; } }
+/* client cards: room for their figures (a calendar style elsewhere used to shrink them) */
+.app-page .cx-grid:not(:has(> .cx-month)) { grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)) !important; }
