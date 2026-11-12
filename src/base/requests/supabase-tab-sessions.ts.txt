@@ -1,0 +1,49 @@
+// =====================================================================
+// Base → Enterprise request (2026-11-12): two accounts in two tabs
+// File to change: src/components/api/supabase.ts — replace `smartStorage` with this.
+//
+// Today getItem() prefers localStorage, so with "Keep me signed in" every tab reads the
+// same session: signing in as B in tab 2 swaps tab 1 to B, and signing B out (or in as
+// someone else) leaves tab 1 sending a closed session → "Session not found" /
+// "Not authenticated" (seen 2026-11-12 09:50: inder@brazo.com ↔ indera@konsolidator.com).
+//
+// Rule below: each tab keeps its own session (sessionStorage). localStorage only holds
+// the remembered session, used to seed a NEW tab and shared by tabs of the SAME user
+// (so their token refreshes don't fight). A tab never overwrites or removes another
+// user's remembered session.
+// =====================================================================
+
+const userOf = (raw: string | null): string | null => {
+  if (!raw) return null;
+  try { const s = JSON.parse(raw); return s?.user?.id ?? s?.currentSession?.user?.id ?? null; } catch { return null; }
+};
+const isSession = (key: string) => !key.endsWith("-code-verifier") && !key.endsWith("-user");
+
+const smartStorage = {
+  getItem: (key: string): string | null => {
+    const mine = tab.get(key);
+    const shared = localStorage.getItem(key);
+    if (!isSession(key)) return mine ?? shared;
+    if (mine == null) return shared;                                   // a new tab: start from the remembered session
+    // same person in both: take the shared copy (the freshest token among this user's tabs)
+    return shared != null && userOf(shared) === userOf(mine) ? shared : mine;
+  },
+  setItem: (key: string, value: string): void => {
+    tab.set(key, value);
+    if (localStorage.getItem(REMEMBER_KEY) !== "true") return;
+    const shared = localStorage.getItem(key);
+    // remember it only if nobody else is remembered, or it's the same person
+    if (shared == null || !isSession(key) || userOf(shared) === userOf(value)) localStorage.setItem(key, value);
+  },
+  removeItem: (key: string): void => {
+    const mine = tab.get(key);
+    tab.del(key);
+    const shared = localStorage.getItem(key);
+    if (shared != null && (!isSession(key) || mine == null || userOf(shared) === userOf(mine))) localStorage.removeItem(key);
+  },
+};
+
+// ALSO NEEDED — the logout button: supabase.auth.signOut({ scope: "local" }).
+// The default scope "global" closes every session of that user, so switching account in
+// tab 2 (sign out A, sign in B) would still kill tab 1 if tab 1 is A. "local" closes only
+// this tab's session; the others keep working.

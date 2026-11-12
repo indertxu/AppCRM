@@ -166,12 +166,23 @@ Next free number: **132**  ← update this line when you claim one (and say whic
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
+- [ ] **Base → Enterprise (2026-11-12): two accounts in two tabs (KERNEL).** Today `smartStorage` in `src/components/api/supabase.ts` prefers localStorage, so with "Keep me signed in" all tabs share one session: signing in as someone else in tab 2, or signing out there, leaves tab 1 sending a closed session → "Not authenticated" / "Session not found" (seen 2026-11-12 09:50, inder@brazo.com ↔ indera@konsolidator.com). Ready-to-paste replacement in `src/base/requests/supabase-tab-sessions.ts.txt`: each tab keeps its own session; localStorage only seeds new tabs and is shared by tabs of the same user. Also the logout button → `supabase.auth.signOut({ scope: "local" })` (global closes that user's other tabs too). Base can't edit these files.
 - [ ] **Base → Enterprise (2026-11-09): edge function `connected-accounts` — DEPLOYED by Base 2026-11-09 21:20 (v1); Enterprise: just adopt the source into `supabase/functions/connected-accounts/` when convenient.** The code is in `src/base/requests/connected-accounts.index.ts.txt` — copy it to `supabase/functions/connected-accounts/index.ts` and deploy it. Actions `connect` / `disconnect` / `check` / `token`; tables from SQL 119. It needs the secrets `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (plus the existing `MS_CLIENT_ID`, `MS_CLIENT_SECRET`). The front end also reads `VITE_GOOGLE_CLIENT_ID`. Base's Settings › Integrations calls it to add Gmail, Google Calendar and extra Outlook accounts (the first Outlook stays in `outlook_tokens` / `outlook-sync`, untouched). Enterprise can use the same table / function for its own multi-account mail.
 
 ---
 
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
+
+### 2026-11-12 10:10 · Base · Request: two accounts in two tabs
+- files: `requests/supabase-tab-sessions.ts.txt` (new) — request in §8 for `src/components/api/supabase.ts` (`smartStorage`) + logout `signOut({ scope: "local" })`.
+- deploy: nothing deployed — Enterprise to apply.
+
+### 2026-11-12 10:30 · Enterprise · Contract windows: near full screen, calmer colours, steps that fold; lost reason from the deals board
+- Files: sales/extras/ContractTermsForm.tsx, ContractModal.tsx, ContractTerms.css; settings/ContractTemplates.tsx; sales/sales/SalesPage.tsx; sales/trackings/TrackingDetail.tsx
+- What: the deal contract window and the contract-template editor now fill the screen (up to 1760px, 20px margins; 470px summary column). Sections are steps (ContractSteps + Sec id/summary): one open at a time, "Continue" opens the next, done ones fold to a one-line summary with a check; a saved contract/template opens with everything folded. Deal: Includes · Length · Signed/grace/start · Payment · Discounts · Invoicing+increments+renewal. Template: What it is · Lengths · Ways to pay · Grace · Invoicing · Increments · Renewal · Discounts. A "calm pass" block at the end of ContractTerms.css desaturates everything (soft tints, outlined selection instead of dark fills, white summary hero, softer timeline). Deals board/list: moving a deal into a loss phase (drag on the board, stage change, or bulk "Lost") now opens the same "Why was it lost?" window as the deal page (LossReasonModal exported from TrackingDetail; bulk asks once for all); the modal also picks up reasons that load after it opens.
+- Tags: PORT? (Base's SalesPage board has the same gap on lost)
+- Deploy: none
 
 ### 2026-11-12 09:40 · Enterprise · Contracts: signed → grace period → start, payment plan timeline, client page, custom confirms
 - Files: sales/extras/contractsApi.ts, ContractPlan.tsx (new), ContractConfirm.tsx (new), ContractClientList.tsx (new), ContractSummary.tsx, ContractModal.tsx, ContractTermsForm.tsx, ContractTerms.css; settings/ContractTemplates.tsx; sales/trackings/TrackingDetail.tsx; clients/ClientWorkspace.tsx
