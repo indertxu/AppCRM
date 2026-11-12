@@ -5,7 +5,7 @@ import Select from "../../../framework/Select";
 import DatePicker from "../../../framework/DatePicker";
 import { NumInput } from "../../../framework/NumInput";
 import type { Product } from "../../settings/catalogApi";
-import ContractTermsForm, { Pct, Sec, Ico, TermInput } from "./ContractTermsForm";
+import ContractTermsForm, { Pct, Sec, Ico, TermInput, ContractSteps } from "./ContractTermsForm";
 import ContractConfirm, { useEscape } from "./ContractConfirm";
 import { graceLabel } from "./ContractPlan";
 import ContractSummary, { PriceMatrix } from "./ContractSummary";
@@ -60,6 +60,7 @@ export default function ContractModal({ contract, products, money, readOnly, onC
   const close = () => { if (dirty && !readOnly) { setAsk("close"); return; } onClose(); };
   useEscape(() => { if (ask) setAsk(null); else close(); });
   const dt = contractDates(d);
+  const pd = (iso: string) => new Date(`${iso}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
   const itemsYear = d.items.reduce((s, it) => s + itemFigure(it, byId.get(it.product_id)).perYear, 0);
 
   const save = async () => {
@@ -95,7 +96,8 @@ export default function ContractModal({ contract, products, money, readOnly, onC
 
         <div className="ctm-body">
           <fieldset className="ctm-main" disabled={readOnly}>
-            <Sec icon={BOX} n={1} title="What it includes" sub="Each product at what its calculator gives — its own discounts, term and increments are left out: the contract's apply"
+            <ContractSteps order={["includes", "length", "dates", "pay", "discounts", "terms"]} start={c.id || readOnly ? null : "includes"} allDone={!!c.id}>
+            <Sec id="includes" summary={d.items.length || Number(d.fee) ? `${[...d.items.map((it) => byId.get(it.product_id)?.name ?? "Product"), ...(Number(d.fee) ? ["Fee of its own"] : [])].join(" · ")} — ${money(itemsYear + (Number(d.fee) || 0))} a year` : "Nothing yet — add products or a fee"} icon={BOX} n={1} title="What it includes" sub="Each product at what its calculator gives — its own discounts, term and increments are left out: the contract's apply"
               aside={d.items.length > 0 ? <span className="ctm-sec-fig">{money(itemsYear + (Number(d.fee) || 0))}<em>a year</em></span> : undefined}>
               <div className="ctm-items">
                 {d.items.map((it) => {
@@ -172,6 +174,7 @@ export default function ContractModal({ contract, products, money, readOnly, onC
               pick={{
                 term: d.term, payment: d.payment,
                 setTerm: (t) => setD({ term: t }), setPayment: (p) => setD({ payment: p }),
+                startSummary: `${d.signed ? `Signed ${pd(dt.signed)}` : "Not signed yet"}${dt.graceDays ? ` · ${graceLabel(dt.graceDays)} grace` : ""} · starts ${pd(dt.start)}`,
                 start: (
                   <div className="ctd">
                     <div className="ctd-box">
@@ -200,6 +203,7 @@ export default function ContractModal({ contract, products, money, readOnly, onC
                   </div>
                 ),
               }} />
+            </ContractSteps>
           </fieldset>
 
           <aside className="ctm-side">

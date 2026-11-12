@@ -174,6 +174,12 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-12 10:55 · Enterprise · Outlook: deleting a CRM meeting cancels it properly (no "Canceled:" copy left)
+- Files: supabase/functions/outlook-meeting/index.ts (new, DEPLOYED v1), supabase/functions/outlook-sync/index.ts (same fix, NOT deployed — the Mac copy has other undeployed changes), src/components/api/outlookSync.ts, src/components/pages/sales/sales/salesApi.ts
+- What: deleting a meeting now goes through the new outlook-meeting function: a meeting you organise with people invited is cancelled with Graph's /cancel (they're told, it leaves your calendar), anything else is deleted; then every item left in that mailbox with the same iCalUId (the "Canceled: …" copy Outlook drops when your own mailbox was also an attendee) is deleted, right away and again at ~3/11/26 s (EdgeRuntime.waitUntil). outlook-sync's delete is the fallback. When a meeting is synced, your own Outlook addresses (outlook-meeting › me: mail, UPN, aliases — cached) are never put on its attendee list, since your Outlook address can differ from your CRM email. Same two fixes are in the Mac copy of outlook-sync for its next deploy.
+- Tags: PORT? (Base uses the same outlookSync.ts? check)
+- Deploy: outlook-meeting deployed (verify_jwt on). No SQL.
+
 ### 2026-11-12 10:10 · Base · Request: two accounts in two tabs
 - files: `requests/supabase-tab-sessions.ts.txt` (new) — request in §8 for `src/components/api/supabase.ts` (`smartStorage`) + logout `signOut({ scope: "local" })`.
 - deploy: nothing deployed — Enterprise to apply.

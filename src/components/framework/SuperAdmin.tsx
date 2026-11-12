@@ -264,7 +264,7 @@ async function returnToMe() {
   if (error) {
     // Your own session can't be brought back (it expired meanwhile): sign in as yourself again.
     log("couldn't restore your session:", error.message);
-    await supabase.auth.signOut().catch(() => {});
+    await supabase.auth.signOut({ scope: "local" }).catch(() => {});
     reloadApp();
     return;
   }

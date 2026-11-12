@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 import Select from "../../../framework/Select";
 import { NumInput } from "../../../framework/NumInput";
 import {
@@ -43,15 +43,60 @@ export const Ico = ({ d, w = 1.9 }: { d: string; w?: number }) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={w} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>
 );
 
-export function Sec({ icon, title, sub, children, aside, n }: { icon: string; title: string; sub?: ReactNode; children?: ReactNode; aside?: ReactNode; n?: number }) {
+/* Steps: one section open at a time; done ones fold to a one-line summary. */
+interface StepsCtx { open: string | null; setOpen: (id: string | null) => void; order: string[]; done: Set<string>; finish: (id: string) => void }
+const AccCtx = createContext<StepsCtx | null>(null);
+export function ContractSteps({ order, start, allDone, children }: { order: string[]; start: string | null; allDone?: boolean; children: ReactNode }) {
+  const [open, setOpenS] = useState<string | null>(start);
+  const [done, setDone] = useState<Set<string>>(() => new Set(allDone ? order : []));
+  const setOpen = (id: string | null) => {
+    setOpenS(id);
+    if (id) requestAnimationFrame(() => document.querySelector(`[data-step="${id}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" }));
+  };
+  const finish = (id: string) => setDone((x) => new Set(x).add(id));
+  return <AccCtx.Provider value={{ open, setOpen, order, done, finish }}>{children}</AccCtx.Provider>;
+}
+const CHECK = "M5 12l5 5 9-10";
+
+export function Sec({ id, icon, title, sub, summary, children, aside, n }: { id?: string; icon: string; title: string; sub?: ReactNode; summary?: ReactNode; children?: ReactNode; aside?: ReactNode; n?: number }) {
+  const acc = useContext(AccCtx);
+  if (!acc || !id || !acc.order.includes(id)) {
+    return (
+      <section className="ctf-sec">
+        <header className="ctf-sec-h">
+          <span className="ctf-ico">{n != null ? <b>{n}</b> : <Ico d={icon} />}</span>
+          <div className="ctf-sec-t"><b>{title}</b>{sub && <em>{sub}</em>}</div>
+          {aside}
+        </header>
+        {children}
+      </section>
+    );
+  }
+  const open = acc.open === id;
+  const i = acc.order.indexOf(id);
+  const next = acc.order[i + 1] ?? null;
+  const done = acc.done.has(id);
+  const go = () => { acc.finish(id); acc.setOpen(next); };
   return (
-    <section className="ctf-sec">
-      <header className="ctf-sec-h">
-        <span className="ctf-ico">{n != null ? <b>{n}</b> : <Ico d={icon} />}</span>
-        <div className="ctf-sec-t"><b>{title}</b>{sub && <em>{sub}</em>}</div>
-        {aside}
+    <section className={`ctf-sec is-step ${open ? "is-open" : ""} ${done && !open ? "is-done" : ""}`} data-step={id}>
+      <header className="ctf-sec-h" role="button" tabIndex={0} aria-expanded={open}
+        onClick={() => { if (open) acc.finish(id); acc.setOpen(open ? null : id); }}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); acc.setOpen(open ? null : id); } }}>
+        <span className="ctf-ico">{done && !open ? <Ico d={CHECK} w={2.4} /> : <b>{i + 1}</b>}</span>
+        <div className="ctf-sec-t"><b>{title}</b>{open ? (sub && <em>{sub}</em>) : <em className="is-sum">{summary ?? sub}</em>}</div>
+        {open && aside && <span className="ctf-sec-aside" onClick={(e) => e.stopPropagation()}>{aside}</span>}
+        {!open && <span className="ctf-sec-edit">{done ? "Edit" : "Open"}</span>}
+        <svg className="ctf-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
       </header>
-      {children}
+      {open && (
+        <div className="ctf-sec-b">
+          {children}
+          <div className="ctf-sec-next">
+            <span>Step {i + 1} of {acc.order.length}</span>
+            <button type="button" className="ctf-next" onClick={go}>{next ? "Continue" : "Done"}<Ico d={next ? "M5 12h14M13 6l6 6-6 6" : CHECK} w={2.2} /></button>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -98,7 +143,7 @@ export default function ContractTermsForm({ value, onChange, pick }: {
   value: ContractConfig;
   onChange: (c: ContractConfig) => void;
   /** On a deal: the length and the way to pay chosen, and when it starts. */
-  pick?: { term: Term; payment: PayKey; setTerm: (t: Term) => void; setPayment: (p: PayKey) => void; start: ReactNode };
+  pick?: { term: Term; payment: PayKey; setTerm: (t: Term) => void; setPayment: (p: PayKey) => void; start: ReactNode; startSummary?: ReactNode };
 }) {
   const c = value;
   const set = (p: Partial<ContractConfig>) => onChange({ ...c, ...p });
@@ -106,12 +151,22 @@ export default function ContractTermsForm({ value, onChange, pick }: {
   const setPay = (k: PayKey, p: Partial<ContractConfig["payments"][number]>) => set({ payments: c.payments.map((x) => (x.key === k ? { ...x, ...p } : x)) });
   const setDisc = (id: string, p: Partial<NamedDiscount>) => set({ discounts: c.discounts.map((d) => (d.id === id ? { ...d, ...p } : d)) });
   const chosenDur = pick ? c.durations.find((d) => d.unit === pick.term.unit && Number(d.value) === Number(pick.term.value)) : null;
-  const [tune, setTune] = useState(false);
   const sorted = [...c.durations].sort((a, b) => termYears(a) - termYears(b));
+
+  const pctTxt = (n: number) => (n ? ` −${n}%` : "");
+  const sumLengths = sorted.map((d) => `${tl(d)}${pctTxt(d.discountPct)}`).join(" · ") || "None yet";
+  const sumPays = PAY_KEYS.filter((k) => c.payments.find((x) => x.key === k)?.enabled).map((k) => `${PAY_LABEL[k]}${pctTxt(c.payments.find((x) => x.key === k)!.discountPct)}${c.defaultPayment === k ? " ★" : ""}`).join(" · ") || "None switched on";
+  const sumInv = c.prepayDays ? `${c.prepayDays} days before it starts or renews · due in ${c.paymentTermsDays} days` : `On the day it starts · due in ${c.paymentTermsDays} days`;
+  const sumInc = c.increments.mode === "none" || !c.increments.value ? "Flat" : `+${c.increments.value}${c.increments.mode === "pct" ? "%" : " €"} a year${c.increments.waivedIfUpfront ? " · none if paid upfront" : ""}`;
+  const sumRen = c.autoRenew ? `Renews for ${tl(c.renew ?? { value: 1, unit: "years" })}${c.noticeDays ? ` · ${c.noticeDays} days' notice` : ""}` : "Ends at the end of its length";
+  const onDiscs = c.discounts.filter((d) => d.on);
+  const sumDisc = pick
+    ? (onDiscs.length ? onDiscs.map((d) => `${d.name || "Discount"} −${d.value}${d.mode === "pct" ? "%" : " €/yr"}`).join(" · ") : "None applied")
+    : (c.discounts.length ? c.discounts.map((d) => d.name || "Unnamed").join(" · ") : "None");
 
   /* ---- lengths ---- */
   const lengths = pick ? (
-    <Sec icon={IC.len} n={2} title="Length" sub={chosenDur ? (chosenDur.discountPct ? `${chosenDur.discountPct}% off for committing ${tl(chosenDur)}` : "No length discount") : "A length of its own: no length discount"}>
+    <Sec id="length" summary={chosenDur ? `${tl(chosenDur)}${chosenDur.discountPct ? ` · ${chosenDur.discountPct}% off` : " · list price"}` : `${tl(pick.term)} · a length of its own`} icon={IC.len} n={2} title="Length" sub={chosenDur ? (chosenDur.discountPct ? `${chosenDur.discountPct}% off for committing ${tl(chosenDur)}` : "No length discount") : "A length of its own: no length discount"}>
       <div className="ctf-lens">
         {sorted.map((d) => {
           const on = chosenDur?.id === d.id;
@@ -129,7 +184,7 @@ export default function ContractTermsForm({ value, onChange, pick }: {
       </div>
     </Sec>
   ) : (
-    <Sec icon={IC.len} title="Lengths it's sold for" sub="Each with the discount it earns — the longer they commit, the better the price">
+    <Sec id="lengths" summary={sumLengths} icon={IC.len} title="Lengths it's sold for" sub="Each with the discount it earns — the longer they commit, the better the price">
       <div className="ctf-lens">
         {c.durations.map((d) => (
           <div key={d.id} className="ctf-len is-edit">
@@ -147,7 +202,7 @@ export default function ContractTermsForm({ value, onChange, pick }: {
 
   /* ---- ways to pay ---- */
   const pays = (
-    <Sec icon={IC.pay} n={pick ? 4 : undefined} title={pick ? "How it's paid" : "Ways to pay"} sub={pick ? "Its early-payment discount comes with it" : "Switch on the ones you offer, each with its early-payment discount; the star is picked first"}>
+    <Sec id={pick ? "pay" : "pays"} summary={pick ? `${PAY_LABEL[pick.payment]}${pctTxt(c.payments.find((x) => x.key === pick.payment)?.discountPct ?? 0)}` : sumPays} icon={IC.pay} n={pick ? 4 : undefined} title={pick ? "How it's paid" : "Ways to pay"} sub={pick ? "Its early-payment discount comes with it" : "Switch on the ones you offer, each with its early-payment discount; the star is picked first"}>
       <div className="ctf-pays">
         {PAY_KEYS.map((k) => {
           const p = c.payments.find((x) => x.key === k)!;
@@ -183,7 +238,7 @@ export default function ContractTermsForm({ value, onChange, pick }: {
 
   /* ---- invoicing: a small timeline ---- */
   const invoicing = (
-    <Sec icon={IC.inv} title="When it's invoiced" sub="Paid ahead: the invoice goes out before the contract (or each paid period) starts or renews">
+    <Sec id="invoicing" summary={sumInv} icon={IC.inv} title="When it's invoiced" sub="Paid ahead: the invoice goes out before the contract (or each paid period) starts or renews">
       <div className="ctf-tl">
         <div className="ctf-tl-n is-inv"><i /><b>Invoice goes out</b><em>Day 0</em></div>
         <div className="ctf-tl-gap"><span><Pct value={c.prepayDays} onChange={(v) => set({ prepayDays: Math.max(0, Math.round(v)) })} suffix="days before" width={150} label="Days before it starts" /></span></div>
@@ -197,7 +252,7 @@ export default function ContractTermsForm({ value, onChange, pick }: {
 
   /* ---- increments ---- */
   const increments = (
-    <Sec icon={IC.inc} title="Yearly increments" sub={c.increments.mode === "none" || !c.increments.value ? "Flat: every year costs the same" : c.increments.waivedIfUpfront ? "From year 2 — not when it's paid upfront" : "From year 2, every year"}>
+    <Sec id="increments" summary={sumInc} icon={IC.inc} title="Yearly increments" sub={c.increments.mode === "none" || !c.increments.value ? "Flat: every year costs the same" : c.increments.waivedIfUpfront ? "From year 2 — not when it's paid upfront" : "From year 2, every year"}>
       <div className="ctf-inc">
         <div className="ctf-inc-l">
           <div className="ctf-seg" role="radiogroup" aria-label="Increments">
@@ -219,7 +274,7 @@ export default function ContractTermsForm({ value, onChange, pick }: {
 
   /* ---- renewal ---- */
   const renewal = (
-    <Sec icon={IC.renew} title="Renewal" aside={<Sw on={c.autoRenew} onChange={(v) => set({ autoRenew: v, renew: v ? c.renew ?? { value: 1, unit: "years" } : c.renew })} label={c.autoRenew ? "Renews by itself" : "Ends"} />}
+    <Sec id="renewal" summary={sumRen} icon={IC.renew} title="Renewal" aside={<Sw on={c.autoRenew} onChange={(v) => set({ autoRenew: v, renew: v ? c.renew ?? { value: 1, unit: "years" } : c.renew })} label={c.autoRenew ? "Renews by itself" : "Ends"} />}
       sub={c.autoRenew ? `Renews for ${tl(c.renew ?? { value: 1, unit: "years" })} unless notice is given ${c.noticeDays ? `${c.noticeDays} days before` : ""}` : "It ends at the end of its length"}>
       {c.autoRenew && (
         <div className="ctf-line">
@@ -233,7 +288,7 @@ export default function ContractTermsForm({ value, onChange, pick }: {
 
   /* ---- commercial discounts ---- */
   const discounts = (
-    <Sec icon={IC.disc} n={pick ? 5 : undefined} title="Commercial discounts" sub={pick ? "Tick the ones that apply to this deal, or add your own" : "Named discounts sales can apply — ticked ones come applied"}>
+    <Sec id="discounts" summary={sumDisc} icon={IC.disc} n={pick ? 5 : undefined} title="Commercial discounts" sub={pick ? "Tick the ones that apply to this deal, or add your own" : "Named discounts sales can apply — ticked ones come applied"}>
       {c.discounts.length === 0 && <p className="ctf-empty">None yet. Add a discount with the name you want — e.g. “Launch partner”, “Multi-entity”, “Referral”.</p>}
       <div className="ctf-discs">
         {c.discounts.map((d) => (
@@ -258,7 +313,7 @@ export default function ContractTermsForm({ value, onChange, pick }: {
 
   /* ---- grace period (template default) ---- */
   const graceSec = (
-    <Sec icon={IC.start} title="Grace period" sub={c.grace ? `Signed, it starts ${tl(c.grace)} later — sales can change it on the deal` : "It starts the day it's signed — sales can add a grace period on the deal"}
+    <Sec id="grace" summary={c.grace ? `Starts ${tl(c.grace)} after it's signed` : "None — it starts the day it's signed"} icon={IC.start} title="Grace period" sub={c.grace ? `Signed, it starts ${tl(c.grace)} later — sales can change it on the deal` : "It starts the day it's signed — sales can add a grace period on the deal"}
       aside={<Sw on={!!c.grace} onChange={(v) => set({ grace: v ? { value: 1, unit: "months" } : null })} label={c.grace ? "By default" : "None"} />}>
       {c.grace && (
         <div className="ctf-line"><span>Starts</span><TermInput value={c.grace} onChange={(t) => set({ grace: t.value > 0 ? t : null })} /><span>after it's signed</span></div>
@@ -268,26 +323,17 @@ export default function ContractTermsForm({ value, onChange, pick }: {
 
   if (!pick) return <div className="ctf">{lengths}{pays}{graceSec}{invoicing}{increments}{renewal}{discounts}</div>;
 
-  // on a deal: the choices first, the template's terms folded under "Fine-tune"
-  const tuneSum = [
-    c.prepayDays ? `invoiced ${c.prepayDays}d ahead, due in ${c.paymentTermsDays}d` : `due in ${c.paymentTermsDays}d`,
-    c.increments.mode === "none" || !c.increments.value ? "flat" : `+${c.increments.value}${c.increments.mode === "pct" ? "%" : "€"} a year${c.increments.waivedIfUpfront ? " (not upfront)" : ""}`,
-    c.autoRenew ? `renews ${tl(c.renew ?? { value: 1, unit: "years" })}` : "ends",
-  ].join(" · ");
+  // on a deal: the choices first, then the template's terms (invoicing, increments, renewal) in one step
+  const tuneSum = [sumInv, sumInc, sumRen].join(" · ");
   return (
     <div className="ctf">
       {lengths}
-      <Sec icon={IC.start} n={3} title="Signed, grace period and start" sub="Signing and starting can be different days: the grace period sits in between">{pick.start}</Sec>
+      <Sec id="dates" summary={pick.startSummary} icon={IC.start} n={3} title="Signed, grace period and start" sub="Signing and starting can be different days: the grace period sits in between">{pick.start}</Sec>
       {pays}
       {discounts}
-      <section className={`ctf-tune ${tune ? "is-open" : ""}`}>
-        <button type="button" className="ctf-tune-h" onClick={() => setTune((v) => !v)} aria-expanded={tune}>
-          <span className="ctf-ico"><Ico d={IC.tune} /></span>
-          <span className="ctf-sec-t"><b>Fine-tune the terms</b><em>{tuneSum}</em></span>
-          <svg className="ctf-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6" /></svg>
-        </button>
-        {tune && <div className="ctf-tune-b">{invoicing}{increments}{renewal}</div>}
-      </section>
+      <Sec id="terms" summary={tuneSum} icon={IC.tune} title="Invoicing, increments and renewal" sub="From the template — change them for this deal if it was agreed differently">
+        <div className="ctf-subs">{invoicing}{increments}{renewal}</div>
+      </Sec>
     </div>
   );
 }

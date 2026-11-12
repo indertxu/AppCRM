@@ -922,7 +922,7 @@ export default function LoginPage({ mode = "signin" }: { mode?: "signin" | "rese
     e.preventDefault();
     if (mode === "reset") {
       setPassword(""); setPassword2("");
-      void supabase.auth.signOut().finally(() => navigate("/login", { replace: true }));
+      void supabase.auth.signOut({ scope: "local" }).finally(() => navigate("/login", { replace: true }));
       return;
     }
     setPassword("");

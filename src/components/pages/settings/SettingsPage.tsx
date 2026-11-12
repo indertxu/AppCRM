@@ -642,7 +642,7 @@ export default function SettingsPage() {
           <p className="st-signout-sub">Close your session on this device.</p>
         </div>
         <button className="st-signout-btn" onClick={async () => {
-          await supabase.auth.signOut().catch(() => {});
+          await supabase.auth.signOut({ scope: "local" }).catch(() => {});
           window.location.assign("/login");
         }}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" /></svg>

@@ -10,38 +10,82 @@ if (!supabaseUrl || !supabaseAnonKey) {
 }
 
 /**
- * "Keep me signed in" support.
+ * "Keep me signed in" — and one session per tab.
  *
- * When the remember flag is set, the session is written to localStorage, so it
- * survives refreshes and browser restarts. When it isn't set, the session lives
- * in this tab's sessionStorage: a refresh (F5) keeps you signed in and on the
- * same page, and closing the tab / browser signs you out.
- * (Memory is the fallback when the browser blocks sessionStorage.)
+ * Each tab keeps its own session (sessionStorage; memory when the browser
+ * blocks it), so two tabs can be signed in as two different people at the
+ * same time: signing in, switching or signing out in one never touches the
+ * other. With "Keep me signed in" the session is also remembered in
+ * localStorage: that copy only starts a NEW tab (and survives restarting the
+ * browser), and it is shared by the tabs of the SAME person, so their token
+ * refreshes don't fight. A tab never overwrites or removes someone else's
+ * remembered session.
+ *
+ * The client's storage key carries a per-page-load tag, so supabase-js's
+ * cross-tab channel ("signed in / signed out in another tab") and its refresh
+ * lock stay inside this tab; the storage below drops the tag, so what is saved
+ * keeps the usual key (sessions saved before this change still work).
  */
 const REMEMBER_KEY = "np-remember";
 const memory = new Map<string, string>();
 const tab = {
-  get: (k: string): string | null => { try { return sessionStorage.getItem(k); } catch { return memory.get(k) ?? null; } },
+  get: (k: string): string | null => { try { return sessionStorage.getItem(k) ?? memory.get(k) ?? null; } catch { return memory.get(k) ?? null; } },
   set: (k: string, v: string) => { try { sessionStorage.setItem(k, v); } catch { memory.set(k, v); } },
   del: (k: string) => { try { sessionStorage.removeItem(k); } catch { /* ignore */ } memory.delete(k); },
 };
+const shared = {
+  get: (k: string): string | null => { try { return localStorage.getItem(k); } catch { return null; } },
+  set: (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* ignore */ } },
+  del: (k: string) => { try { localStorage.removeItem(k); } catch { /* ignore */ } },
+};
+const remembered = () => shared.get(REMEMBER_KEY) === "true";
+
+const PROJECT_REF = (() => { try { return new URL(supabaseUrl).hostname.split(".")[0]; } catch { return "app"; } })();
+/** The key sessions are saved under (supabase-js's default for this project). */
+const AUTH_KEY = `sb-${PROJECT_REF}-auth-token`;
+/** This page load's tag: keeps supabase-js's cross-tab channel and lock to this tab. */
+const TAB_TAG = `.tab-${Math.random().toString(36).slice(2, 10)}`;
+const canon = (key: string) => key.replace(TAB_TAG, "");
+
+/** Whose session a stored value is (null when it isn't one). */
+const userOf = (raw: string | null): string | null => {
+  if (!raw) return null;
+  try {
+    const j = JSON.parse(raw.startsWith("base64-") ? atob(raw.slice(7)) : raw);
+    return j?.user?.id ?? j?.currentSession?.user?.id ?? null;
+  } catch { return null; }
+};
+/** The session itself (not the sign-in code verifier or the cached user). */
+const isSession = (key: string) => key === AUTH_KEY;
 
 const smartStorage = {
-  getItem: (key: string): string | null => {
-    const persisted = localStorage.getItem(key);
-    if (persisted !== null) return persisted;
-    return tab.get(key) ?? (memory.has(key) ? (memory.get(key) as string) : null);
+  getItem: (rawKey: string): string | null => {
+    const key = canon(rawKey);
+    const mine = tab.get(key);
+    const kept = shared.get(key);
+    if (!isSession(key)) return mine ?? kept;
+    if (mine == null) return kept;                          // a new tab: start from the remembered session
+    // the same person in both: the shared copy has the freshest token among their tabs
+    return kept != null && userOf(kept) === userOf(mine) ? kept : mine;
   },
-  setItem: (key: string, value: string): void => {
-    if (localStorage.getItem(REMEMBER_KEY) === "true") {
-      localStorage.setItem(key, value);
-    } else {
-      tab.set(key, value);
-    }
+  setItem: (rawKey: string, value: string): void => {
+    const key = canon(rawKey);
+    tab.set(key, value);
+    // the sign-in code verifier also goes to localStorage: a reset / magic link opens in a new tab
+    if (!isSession(key)) { if (key.endsWith("-code-verifier") || remembered()) shared.set(key, value); return; }
+    if (!remembered()) return;
+    const kept = shared.get(key);
+    // remember it only when nobody else is remembered, or it's the same person
+    if (kept == null || userOf(kept) === userOf(value)) shared.set(key, value);
   },
-  removeItem: (key: string): void => {
-    localStorage.removeItem(key);
+  removeItem: (rawKey: string): void => {
+    const key = canon(rawKey);
+    const mine = tab.get(key);
     tab.del(key);
+    const kept = shared.get(key);
+    if (kept == null) return;
+    // never someone else's remembered session
+    if (!isSession(key) || mine == null || userOf(kept) === userOf(mine)) shared.del(key);
   },
 };
 
@@ -121,6 +165,7 @@ async function sturdyFetch(input: RequestInfo | URL, init?: RequestInit): Promis
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     storage: smartStorage,
+    storageKey: AUTH_KEY + TAB_TAG,
     persistSession: true,
     autoRefreshToken: true,
   },

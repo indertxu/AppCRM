@@ -190,6 +190,20 @@ const graph = (token: string, path: string, method = "GET", body?: unknown) =>
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", Prefer: 'outlook.timezone="UTC"' },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+/** The addresses of the signed-in Outlook mailbox (lower case). */
+async function myAddresses(token: string): Promise<Set<string>> {
+  const out = new Set<string>();
+  try {
+    let r = await graph(token, `/me?$select=mail,userPrincipalName,otherMails,proxyAddresses`);
+    if (!r.ok) r = await graph(token, `/me?$select=mail,userPrincipalName`);
+    if (!r.ok) return out;
+    const me = await r.json();
+    [me?.mail, me?.userPrincipalName, ...(me?.otherMails ?? []), ...((me?.proxyAddresses ?? []) as string[]).map((x) => String(x).replace(/^smtp:/i, ""))]
+      .filter(Boolean).forEach((a: string) => out.add(String(a).toLowerCase()));
+  } catch { /* none */ }
+  return out;
+}
+
 
 /** Whose Outlook an entry lives in: the organiser of the row, else the caller. */
 async function ownerOf(entryId: string | undefined, fallback: string): Promise<string> {
@@ -1220,6 +1234,12 @@ Deno.serve(async (req) => {
     if (action === "mail_status") {
       const { data } = await admin.from("outlook_tokens").select("*").eq("user_id", userId).maybeSingle();
       return json({ connected: !!data, mail: hasMail((data as any)?.scopes), email: (data as any)?.account_email ?? null, needsSql: !!data && !("scopes" in (data as any)) });
+      // Never invite the organiser's own mailbox to their own meeting: Outlook
+      // would then drop a second copy (and, on delete, a "Canceled:" one) in it.
+      if (Array.isArray(event.attendees) && (event.attendees as unknown[]).length) {
+        const mine = await myAddresses(token);
+        if (mine.size) event.attendees = (event.attendees as any[]).filter((a) => !mine.has(String(a?.emailAddress?.address ?? "").toLowerCase()));
+      }
     }
 
     if (action === "mail_sync") {
@@ -1358,8 +1378,43 @@ Deno.serve(async (req) => {
       const owner = await ownerOf(p.entryId, userId);
       const token = await accessTokenFor(owner);
       if (!token) return json({ skipped: true });
-      await graph(token, `/me/events/${p.outlookEventId}`, "DELETE");
-      return json({ deleted: true });
+      const id = encodeURIComponent(p.outlookEventId);
+      // What it is: a meeting I organise with people invited is cancelled (they're
+      // told, and it leaves my calendar); anything else is simply deleted.
+      const info = await graph(token, `/me/events/${id}?$select=id,iCalUId,isOrganizer,attendees`);
+      let ical: string | null = null;
+      let done = false;
+      if (info.ok) {
+        const ev = await info.json();
+        ical = ev?.iCalUId ?? null;
+        const invited = Array.isArray(ev?.attendees) && ev.attendees.length > 0;
+        if (invited && ev?.isOrganizer !== false) {
+          const c = await graph(token, `/me/events/${id}/cancel`, "POST", { comment: "This meeting was cancelled." });
+          done = c.ok;
+        }
+      }
+      if (!done) {
+        const d = await graph(token, `/me/events/${id}`, "DELETE");
+        done = d.ok || d.status === 404;
+      }
+      // Any copy left with the same meeting id (e.g. a "Canceled:" one that the
+      // cancellation drops in this same mailbox) goes too — now and once the
+      // cancellation has arrived.
+      if (ical) {
+        const sweep = async () => {
+          for (const wait of [0, 2500, 6000, 12000]) {
+            if (wait) await new Promise((r) => setTimeout(r, wait));
+            const q = await graph(token, `/me/events?$filter=${encodeURIComponent(`iCalUId eq '${ical!.replace(/'/g, "''")}'`)}&$select=id`);
+            if (!q.ok) return;
+            const left = ((await q.json())?.value ?? []) as { id: string }[];
+            for (const e of left) await graph(token, `/me/events/${encodeURIComponent(e.id)}`, "DELETE");
+          }
+        };
+        const bg = (globalThis as any).EdgeRuntime;
+        if (bg?.waitUntil) bg.waitUntil(sweep().catch(() => {}));
+        else await sweep().catch(() => {});
+      }
+      return json({ deleted: done });
     }
 
     if (action === "check") {

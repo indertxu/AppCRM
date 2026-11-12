@@ -201,7 +201,7 @@ export function Shell({ tab, onTab, children, scrollKey, ready = true }: { tab: 
             );
           })}
         </nav>
-        <button className="sa-nav-item sa-nav-out" onClick={() => supabase.auth.signOut()} aria-label="Sign out">
+        <button className="sa-nav-item sa-nav-out" onClick={() => supabase.auth.signOut({ scope: "local" })} aria-label="Sign out">
           <LogOut size={17} strokeWidth={1.9} /> <span>Sign out</span>
         </button>
       </aside>

@@ -346,7 +346,7 @@ export default function Dock() {
                 <div className="rail-menu-who"><b>{me?.name}</b><span>{me?.email}</span></div>
                 <button type="button" role="menuitem" onClick={() => guardedLeave(() => navigate("/settings", { state: { settingsView: "account" } }))}>Account</button>
                 {settings && <button type="button" role="menuitem" onClick={() => guardedLeave(() => navigate("/settings", { state: { settingsView: "interface" } }))}>Interface</button>}
-                <button type="button" role="menuitem" className="is-out" onClick={() => { setMenu(false); guardedLeave(() => { void supabase.auth.signOut().catch(() => {}); }); }}>Sign out</button>
+                <button type="button" role="menuitem" className="is-out" onClick={() => { setMenu(false); guardedLeave(() => { void supabase.auth.signOut({ scope: "local" }).catch(() => {}); }); }}>Sign out</button>
               </div>,
               document.body,
             )}

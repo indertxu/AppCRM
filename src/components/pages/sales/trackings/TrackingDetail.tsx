@@ -6059,7 +6059,7 @@ function ItemsModal({ kind, phases, onClose, notes, tasks, meetings, people, fmt
 }
 
 // ============================ Loss reason modal ============================
-function LossReasonModal({ reasons, reason, details, onReasons, onSave, onClose }: {
+export function LossReasonModal({ reasons, reason, details, onReasons, onSave, onClose }: {
   reasons: LossReason[];
   reason: string; details: string;
   onReasons: () => void | Promise<void>;
@@ -6070,6 +6070,8 @@ function LossReasonModal({ reasons, reason, details, onReasons, onSave, onClose 
   const [text, setText] = useState(details);
   const [manage, setManage] = useState(false);
   const [items, setItems] = useState<LossReason[]>(reasons);
+  // the list can arrive after the window opens (e.g. from the deals board)
+  useEffect(() => { setItems(reasons); }, [reasons]);
   const [newLabel, setNewLabel] = useState("");
   const [q, setQ] = useState("");
   const norm = (s: string) => (s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();

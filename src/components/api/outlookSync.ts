@@ -28,11 +28,11 @@ async function challengeOf(verifier: string): Promise<string> {
 
 /** Call the outlook-sync Edge Function with the user's session token.
  *  Always resolves to an object; on an HTTP error it carries `error` and `httpStatus`. */
-async function call(action: string, payload: object = {}): Promise<any> {
+async function call(action: string, payload: object = {}, fn = "outlook-sync"): Promise<any> {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) throw new Error("Not signed in");
   const res = await fetch(
-    `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/outlook-sync`,
+    `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/${fn}`,
     {
       method: "POST",
       headers: {
@@ -328,7 +328,25 @@ export async function syncEntryToOutlook(p: OutlookEntryPayload): Promise<string
  */
 export async function deleteEntryFromOutlook(outlookEventId?: string | null, entryId?: string | null): Promise<void> {
   if (!outlookEventId) return;
-  try { await call("delete", { outlookEventId, ...(entryId ? { entryId } : {}) }); } catch { /* ignore */ }
+  const p = { outlookEventId, ...(entryId ? { entryId } : {}) };
+  try {
+    // outlook-meeting cancels a meeting with invitees (instead of leaving a "Canceled:" copy
+    // behind) and clears any copy left in the mailbox; outlook-sync is the fallback.
+    const r = await call("delete", p, "outlook-meeting");
+    if (!r || r.httpStatus || (!r.deleted && !r.skipped)) await call("delete", p);
+  } catch { try { await call("delete", p); } catch { /* ignore */ } }
+}
+
+/** The addresses of my own Outlook mailbox (lower case), so I'm never invited to my own meeting. Cached per session. */
+let myAddrs: Promise<string[]> | null = null;
+export function myOutlookAddresses(): Promise<string[]> {
+  if (!myAddrs) {
+    myAddrs = call("me", {}, "outlook-meeting")
+      .then((r) => (Array.isArray(r?.addresses) ? (r.addresses as string[]).map((a) => a.toLowerCase()) : []))
+      .catch(() => []);
+    myAddrs.then((a) => { if (!a.length) setTimeout(() => { myAddrs = null; }, 60_000); });
+  }
+  return myAddrs;
 }
 
 /**

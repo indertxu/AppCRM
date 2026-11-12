@@ -15,7 +15,8 @@ import { loadProducts, loadServices, type Product } from "../../settings/catalog
 import { dealContactNames } from "./salesApi";
 import { listTrackings, loadTrackingTeams, loadSalesBoot, type SalesBootRows, setTrackingPhase, setTrackingStatus, deleteTracking, setTrackingOwner, addTrackingEmployee, removeTrackingEmployee, setDealCloseDate, setDealCloseProb, stampPhaseEntry, clearPhaseEventsAfter, trackingPct, loadPotentialTotals, totalsFromLastRows, useRevenueMode, REVENUE_MODES, type RevenueMode, type Tracking,
   clientExistsForCompany, hasClientProductsForTracking, loadTrackingProducts, rowsIncomplete, resetRowsIncomplete } from "./salesApi";
-import TrackingDetail from "../trackings/TrackingDetail";
+import TrackingDetail, { LossReasonModal } from "../trackings/TrackingDetail";
+import { listLossReasons, setLossReason, type LossReason } from "./salesApi";
 import { RevenueModeSetting } from "../trackings/HandoffClientForm";
 import { HxPrompt } from "../trackings/HandoffConfirmServices";
 import ExportModal from "../extras/ExportModal";
@@ -1537,6 +1538,11 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
     await stampPhaseEntry(trackingId, phaseId);
     await clearPhaseEventsAfter(trackingId, keepIds);
     await setTrackingStatus(trackingId, nextStatus);
+    // Just lost (dragged on the board, or its stage changed in the list): why — like on the deal itself.
+    if (askClient && nextStatus === "lost" && t.status !== "lost") {
+      setLossAsk({ ids: [t.id], reason: t.loss_reason ?? "", details: t.loss_details ?? "" });
+      listLossReasons().then(setLossReasons).catch(() => {});
+    }
     // Just won and its client isn't set up yet: ask to create it now.
     if (askClient && nextStatus === "won" && t.status !== "won" && t.company_id) {
       const need = !(await clientExistsForCompany(t.company_id).catch(() => true))
@@ -1544,6 +1550,24 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
       if (need) setWonAsk(t);
     }
   };
+  /** A deal just moved to a loss phase: ask why (the reason list the deal page uses). */
+  const [lossAsk, setLossAsk] = useState<{ ids: string[]; reason: string; details: string } | null>(null);
+  const [lossReasons, setLossReasons] = useState<LossReason[]>([]);
+  useEffect(() => { listLossReasons().then(setLossReasons).catch(() => {}); }, []);
+  const lossAskModal = lossAsk && (
+    <LossReasonModal
+      reasons={lossReasons}
+      reason={lossAsk.reason} details={lossAsk.details}
+      onReasons={async () => setLossReasons(await listLossReasons().catch(() => []))}
+      onSave={async (r, d) => {
+        const ids = new Set(lossAsk.ids);
+        setLossAsk(null);
+        setTrackings((xs) => xs.map((x) => (ids.has(x.id) ? { ...x, loss_reason: r || null, loss_details: d || null } : x)));
+        await Promise.all([...ids].map((id) => setLossReason(id, r || null, d || null).catch(() => {})));
+      }}
+      onClose={() => setLossAsk(null)}
+    />
+  );
   /** A deal just dropped on Won whose client isn't set up: "create the client now?". */
   const [wonAsk, setWonAsk] = useState<Tracking | null>(null);
   /** The deal opened to create its client right away (from that question). */
@@ -1752,6 +1776,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   const selPipes = useMemo(() => Array.from(new Set(pickedList.map((t) => t.pipeline_id).filter(Boolean) as string[])), [pickedList]);
   const teamOnPicked = useMemo(() => { const s = new Set<string>(); pickedList.forEach((t) => (trackAssignees[t.id] ?? []).forEach((u) => s.add(u))); return s; }, [pickedList, trackAssignees]);
   const bulkStatus = async (status: string) => {
+    const newlyLost = status === "lost" ? picked().filter((t) => t.status !== "lost").map((t) => t.id) : [];
     const r = await inPool(picked(), async (t) => {
       const phs = phaseByPipe[t.pipeline_id ?? ""] ?? [];
       if (status === "won" || status === "lost") {
@@ -1767,6 +1792,8 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
       await setTrackingStatus(t.id, status);
     });
     await reload();
+    // lost in bulk: one reason for all of them
+    if (newlyLost.length) { setLossAsk({ ids: newlyLost, reason: "", details: "" }); listLossReasons().then(setLossReasons).catch(() => {}); }
     return r.ok;
   };
   const ICO = (d: string) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>;
@@ -2312,6 +2339,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
       )}
       {handoverModal}
       {wonAskModal}
+      {lossAskModal}
       {importModal}
       <PageCover show={!ready && !coverGaveUp} label="Loading deals…" />
       {dealView && !dealShown && <div className="so-opening" aria-hidden="true"><i /></div>}

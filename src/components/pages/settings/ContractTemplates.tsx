@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import Select from "../../framework/Select";
 import type { Product } from "./catalogApi";
-import ContractTermsForm, { Pct, Sec, Ico, IC } from "../sales/extras/ContractTermsForm";
+import ContractTermsForm, { Pct, Sec, Ico, IC, ContractSteps } from "../sales/extras/ContractTermsForm";
 import ContractSummary, { PriceMatrix } from "../sales/extras/ContractSummary";
 import ContractConfirm, { useEscape } from "../sales/extras/ContractConfirm";
 import {
@@ -143,7 +143,8 @@ export function ContractTemplateEditor({ template, products, onClose, onSaved, o
 
         <div className="ctm-body">
           <div className="ctm-main">
-            <Sec icon="M4 6h16M4 11h16M4 16h10" title="What it is" sub="Shown to sales when they pick a contract on a deal">
+            <ContractSteps order={["about", "lengths", "pays", "grace", "invoicing", "increments", "renewal", "discounts"]} start={t.id ? null : "about"} allDone={!!t.id}>
+            <Sec id="about" summary={[t.description?.trim() || "No description", c.productIds.length ? `${c.productIds.length} product${c.productIds.length === 1 ? "" : "s"}` : "any product", Number(c.fee) ? `fee ${money(c.fee)} a year` : ""].filter(Boolean).join(" · ")} icon="M4 6h16M4 11h16M4 16h10" title="What it is" sub="Shown to sales when they pick a contract on a deal">
               <textarea className="ctt-desc" rows={2} value={t.description ?? ""} onChange={(e) => setT({ ...t, description: e.target.value })} placeholder="A line on what this contract is for" />
               <div className="ctt-two">
                 <div className="ctt-box">
@@ -165,6 +166,7 @@ export function ContractTemplateEditor({ template, products, onClose, onSaved, o
               </div>
             </Sec>
             <ContractTermsForm value={c} onChange={setC} />
+            </ContractSteps>
           </div>
           <aside className="ctm-side">
             <div className="ctt-sample">

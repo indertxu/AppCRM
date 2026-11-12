@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useState } from "react";
 import { supabase } from "../../../api/supabase";
-import { syncEntryToOutlookDetailed, deleteEntryFromOutlook, meetingsGoneFromOutlook } from "../../../api/outlookSync";
+import { syncEntryToOutlookDetailed, deleteEntryFromOutlook, meetingsGoneFromOutlook, myOutlookAddresses } from "../../../api/outlookSync";
 import { listPipelines, loadPipeline, renewalPipelineOf, type Phase } from "../../settings/pipelineApi";
 import { calcBreakdown, discountOf, BASE_KEY, yearlySchedule, type Calculator, type CalcRow, type CalcDiscount } from "../../settings/catalogApi";
 import type { DeckEditOp } from "../trackings/proposalGen";
@@ -1253,6 +1253,9 @@ export async function syncMeetingToOutlook(entryId: string): Promise<MeetingOutl
         row.tracking_id ? supabase.from("trackings").select("deal_name").eq("id", row.tracking_id).maybeSingle() : Promise.resolve({ data: null }),
         mentionedAttendees(row.title ?? "", me.email),
       ]);
+      // never invite my own Outlook mailbox (its address can differ from the CRM one): a second copy, and a "Canceled:" one on delete
+      const mine = new Set(await myOutlookAddresses().catch(() => [] as string[]));
+      if (mine.size) for (let i = attendees.length - 1; i >= 0; i--) if (mine.has(attendees[i].email.toLowerCase())) attendees.splice(i, 1);
       const kind = (row.meeting_kind ?? "in_person") as MeetingKind;
       const description = plainText(row.title ?? "") || MEETING_KIND_LABEL[kind];
       const company = ((co as any)?.name as string) ?? "";
