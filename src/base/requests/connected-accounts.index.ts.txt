@@ -3,7 +3,7 @@
 // (written and deployed by the Base chat; source of truth:
 //  src/base/requests/connected-accounts.index.ts.txt — Enterprise may adopt it)
 //
-// Several accounts per person: Gmail / Google Calendar / Google Ads, extra Outlook accounts
+// Several accounts per person: Gmail / Google Calendar / Google Ads / Google Analytics, extra Outlook accounts
 // (the first Outlook stays in outlook_tokens / outlook-sync, untouched),
 // Meta (Facebook pages, Instagram professional accounts, ad accounts, WhatsApp
 // Business numbers — Cloud API; incoming messages arrive at "whatsapp-webhook") and
@@ -11,7 +11,7 @@
 // and Mailrelay (e-mail marketing — an API key, not a sign-in).
 // Tables: connected_accounts + connected_account_tokens (SQL 119),
 //         connected_assets + connected_asset_tokens (SQL 123), linkedin (SQL 124), mailrelay (SQL 125),
-//         whatsapp_number + whatsapp_messages (SQL 127), gads_customer (SQL 130).
+//         whatsapp_number + whatsapp_messages (SQL 127), gads_customer (SQL 130), ga_property (SQL 133).
 //
 // Actions (POST, the caller's Supabase JWT identifies the user):
 //   connect     { provider, code, codeVerifier?, redirectUri, services }
@@ -21,7 +21,8 @@
 //   connect_key { provider: "mailrelay", account, apiKey }   checks the key (GET /api/v1/ping) and stores it
 //   assets_sync { id }   Meta: re-read pages, Instagram accounts and ad accounts; LinkedIn: company pages;
 //                        Mailrelay: groups; WhatsApp numbers too when the login has "whatsapp";
-//                        Google with "gads": its Google Ads accounts + last 30 days
+//                        Google with "gads": its Google Ads accounts + last 30 days;
+//                        Google with "analytics": its GA4 properties + last 28 days
 //   wa_add      { id, wabaId }   add a WhatsApp Business account by its ID (e.g. Meta's test account, which the
 //                        login's business doesn't own) — kept on every re-read (extra.manual)
 //   wa_token    { token, wabaId }   connect WhatsApp with a system-user token of the business (Business settings ›
@@ -65,7 +66,7 @@ const creds = (p: Provider) => p === "linkedin" ? liCreds(false) : p === "google
 const notSetUp = (p: Provider) => p === "google" ? "Google sign-in isn't set up on the server (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)."
   : p === "meta" ? "Meta sign-in isn't set up on the server (META_APP_ID / META_APP_SECRET)."
   : p === "linkedin" ? "LinkedIn sign-in isn't set up on the server (LINKEDIN_CLIENT_ID / LINKEDIN_CLIENT_SECRET)." : "Microsoft sign-in isn't set up on the server.";
-const SERVICES = new Set(["mail", "calendar", "facebook", "instagram", "ads", "linkedin", "linkedin_pages", "mailrelay", "whatsapp", "gads"]);
+const SERVICES = new Set(["mail", "calendar", "facebook", "instagram", "ads", "linkedin", "linkedin_pages", "mailrelay", "whatsapp", "gads", "analytics"]);
 
 /* ---------- Mailrelay: API key in the X-AUTH-TOKEN header, base https://<account>.ipzmarketing.com/api/v1 ---------- */
 /** "acme", "acme.ipzmarketing.com" or "https://acme.ipzmarketing.com/admin/…" → "acme.ipzmarketing.com" (only Mailrelay's own hosts). */
@@ -164,6 +165,54 @@ async function syncGoogleAds(accountId: string, tenant: string, userId: string, 
   const gone = ((old ?? []) as any[]).filter((o) => !keep.includes(o.external_id)).map((o) => o.id);
   if (gone.length) await admin.from("connected_assets").delete().in("id", gone);
   return { gads: keep.length };
+}
+
+/* ---------- Google Analytics 4: Admin API (properties) + Data API (last 28 days) ---------- */
+async function gaFetch(url: string, token: string, body?: unknown) {
+  const r = await fetch(url, body ? { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) } : { headers: { Authorization: `Bearer ${token}` } });
+  const j: any = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const msg = j?.error?.message || `Google Analytics error ${r.status}`;
+    throw new Error(/has not been used|is disabled/i.test(msg) ? `${msg.split(".")[0]}. Turn on the Google Analytics Admin API and Data API in your Google Cloud project.` : msg);
+  }
+  return j;
+}
+async function syncGoogleAnalytics(accountId: string, tenant: string, userId: string, token: string) {
+  const props: { id: string; name: string; account: string }[] = [];
+  let pageToken = "";
+  for (let guard = 0; guard < 10; guard++) {
+    const j = await gaFetch(`https://analyticsadmin.googleapis.com/v1beta/accountSummaries?pageSize=200${pageToken ? `&pageToken=${pageToken}` : ""}`, token);
+    for (const a of j.accountSummaries ?? []) for (const p of a.propertySummaries ?? []) props.push({ id: String(p.property).split("/").pop()!, name: p.displayName ?? "", account: a.displayName ?? "" });
+    pageToken = j.nextPageToken ?? ""; if (!pageToken) break;
+  }
+  const now = new Date().toISOString();
+  const keep: string[] = [];
+  for (const p of props.slice(0, 30)) {
+    let totals: any = null, sources: { source: string; sessions: number }[] = [];
+    try {
+      const t = await gaFetch(`https://analyticsdata.googleapis.com/v1beta/properties/${p.id}:runReport`, token, {
+        dateRanges: [{ startDate: "28daysAgo", endDate: "yesterday" }], metrics: [{ name: "activeUsers" }, { name: "sessions" }, { name: "keyEvents" }],
+      });
+      const v = t.rows?.[0]?.metricValues ?? [];
+      totals = { users: Number(v[0]?.value ?? 0), sessions: Number(v[1]?.value ?? 0), key_events: Number(v[2]?.value ?? 0) };
+      const s = await gaFetch(`https://analyticsdata.googleapis.com/v1beta/properties/${p.id}:runReport`, token, {
+        dateRanges: [{ startDate: "28daysAgo", endDate: "yesterday" }], dimensions: [{ name: "sessionSourceMedium" }], metrics: [{ name: "sessions" }],
+        orderBys: [{ metric: { metricName: "sessions" }, desc: true }], limit: 3,
+      });
+      sources = (s.rows ?? []).map((r: any) => ({ source: r.dimensionValues?.[0]?.value ?? "", sessions: Number(r.metricValues?.[0]?.value ?? 0) }));
+    } catch { /* no data access to this property: list it anyway */ }
+    await admin.from("connected_assets").upsert({
+      account_id: accountId, tenant_id: tenant, user_id: userId, kind: "ga_property", external_id: p.id,
+      name: p.name || null, username: p.account || null, picture_url: null,
+      extra: { account: p.account, users_28d: totals?.users ?? null, sessions_28d: totals?.sessions ?? null, key_events_28d: totals?.key_events ?? null, top_sources: sources },
+      updated_at: now,
+    }, { onConflict: "account_id,kind,external_id" });
+    keep.push(p.id);
+  }
+  const { data: old } = await admin.from("connected_assets").select("id, external_id").eq("account_id", accountId).eq("kind", "ga_property");
+  const gone = ((old ?? []) as any[]).filter((o) => !keep.includes(o.external_id)).map((o) => o.id);
+  if (gone.length) await admin.from("connected_assets").delete().in("id", gone);
+  return { analytics: keep.length };
 }
 
 async function caller(req: Request): Promise<{ id: string; tenant: string } | null> {
@@ -442,6 +491,7 @@ Deno.serve(async (req) => {
       let assets = null;
       if (provider === "meta") { try { assets = await syncMetaAssets(accId, me.tenant, me.id, tok.access_token, merged); } catch (e) { assets = { error: String((e as Error).message ?? e) }; } }
       if (provider === "google" && merged.includes("gads")) { try { assets = await syncGoogleAds(accId, me.tenant, me.id, tok.access_token); } catch (e) { assets = { error: String((e as Error).message ?? e) }; } }
+      if (provider === "google" && merged.includes("analytics")) { try { assets = { ...(assets ?? {}), ...(await syncGoogleAnalytics(accId, me.tenant, me.id, tok.access_token)) }; } catch (e) { assets = { ...(assets ?? {}), error: String((e as Error).message ?? e) }; } }
       if (provider === "linkedin" && merged.includes("linkedin_pages")) { try { assets = await syncLinkedInOrgs(accId, me.tenant, me.id, tok.access_token); } catch (e) { assets = { error: String((e as Error).message ?? e) }; } }
       return json({ account: up.data, assets });
     }
@@ -556,10 +606,14 @@ Deno.serve(async (req) => {
       const f = await freshToken(p.id, me.id);
       if (f.provider === "mailrelay") return json({ assets: await syncMailrelayGroups(p.id, f.tenant, me.id, f.email, f.token) });
       if (f.provider === "linkedin") return json({ assets: await syncLinkedInOrgs(p.id, f.tenant, me.id, f.token) });
-      if (f.provider === "google" && f.services.includes("gads")) {
-        try { return json({ assets: await syncGoogleAds(p.id, f.tenant, me.id, f.token) }); } catch (e) { return json({ assets: { error: String((e as Error).message ?? e) } }); }
+      if (f.provider === "google" && (f.services.includes("gads") || f.services.includes("analytics"))) {
+        const what = String(p.what ?? "");                       // "gads" | "analytics" | "" (both)
+        const out: Record<string, unknown> = {};
+        if (f.services.includes("gads") && what !== "analytics") { try { Object.assign(out, await syncGoogleAds(p.id, f.tenant, me.id, f.token)); } catch (e) { out.error = String((e as Error).message ?? e); } }
+        if (f.services.includes("analytics") && what !== "gads") { try { Object.assign(out, await syncGoogleAnalytics(p.id, f.tenant, me.id, f.token)); } catch (e) { out.error = String((e as Error).message ?? e); } }
+        return json({ assets: out });
       }
-      if (f.provider !== "meta") return json({ error: "Only Meta, LinkedIn, Google Ads and Mailrelay accounts have pages or accounts to read." }, 400);
+      if (f.provider !== "meta") return json({ error: "Only Meta, LinkedIn, Google Ads / Analytics and Mailrelay accounts have pages or accounts to read." }, 400);
       return json({ assets: await syncMetaAssets(p.id, f.tenant, me.id, f.token, f.services) });
     }
 

@@ -126,7 +126,7 @@ Source in `supabase/functions/**`. Both apps call them; changes must stay backwa
 - Read the other side's entries since your last session before you start working.
 
 ## 7. SQL numbering
-Next free number: **133**  ← update this line when you claim one (and say which file in the log).
+Next free number: **134**  ← update this line when you claim one (and say which file in the log).
 | # | File | Chat | What |
 |---|---|---|---|
 | 98 | sql/98_client_default_folders.sql | Enterprise | client folder templates → new clients |
@@ -164,6 +164,7 @@ Next free number: **133**  ← update this line when you claim one (and say whic
 | 130 | src/base/sql/130_connected_google_ads.sql | Base | `connected_assets.kind` + `gads_customer` (Google Ads accounts of a Google login, last-30-days spend / clicks / conversions in extra) |
 | 131 | sql/131_contracts.sql | Enterprise | `contract_templates` (catalogue contract blueprints, config jsonb) + `tracking_contracts` (contracts on deals: data jsonb, total, first_year), tenant RLS — applied 2026-11-11 (migration name "130_contracts", before Base claimed 130) |
 | 132 | sql/132_ticket_mail_manual.sql | Enterprise | `ticket_mail_known()` (116's trigger) takes the tenant the row will get (it ran before trg_set_tenant, so every ticket created from Tickets › Inbox was dropped) and keeps a ticket filed by hand (request header `x-ticket-by-hand: 1`) — applied 2026-11-12 |
+| 133 | src/base/sql/133_connected_google_analytics.sql | Base | `connected_assets.kind` + `ga_property` (Google Analytics 4 properties of a Google login, last-28-days users / sessions / key events in extra) |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
@@ -174,6 +175,25 @@ Write requests here; the other chat answers in the log and ticks them.
 
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
+
+### 2026-11-12 14:45 · Base · Integrations: Google Analytics (GA4)
+- files: `pages/settings/Integrations.tsx`, `api/connectedAccounts.ts` (`syncAssets(id, what?)`), `requests/connected-accounts.index.ts.txt`, `sql/133_connected_google_analytics.sql` (new).
+- **DB (133)**: `connected_assets.kind` + `ga_property`. Applied 2026-11-12.
+- **Edge function `connected-accounts`** (deployed by Base, now v15): Google logins with service `analytics` (scope `…/auth/analytics.readonly`) read their GA4 properties (Admin API v1beta `accountSummaries`) and, per property, the last 28 days (Data API v1beta `runReport`: activeUsers, sessions, keyEvents + top 3 `sessionSourceMedium`), stored as `ga_property`. `assets_sync` takes `what: "gads" | "analytics"`.
+- Front: **Google Analytics** moved from Coming soon to Available (provider google, service `analytics`; "Use here" on a linked Google account); property list with users / sessions / key events / top sources; "Re-read properties"; folding setup guide (enable Admin + Data APIs, analytics.readonly scope).
+- tags: DB (133)
+- deploy: written to the Mac · SQL applied · function deployed · user: enable the 2 APIs + scope, push
+
+### 2026-11-12 14:35 · Enterprise · Contracts: the yearly value with its increments (contract year by year)
+Files: src/components/pages/clients/ContractsBoard.tsx, clients/ContractsBoard.css, clients/ClientWorkspace.tsx
+What:
+- A deal contract's yearly value used to be total ÷ years (an average). It is now the current contract year's recurring value: that year's list price, with the yearly increments, less that year's discounts, without year 1's one-offs (`dealYearly()`). An ended contract shows its last year.
+- Signed products (lines) already used lineAnnual (increments included).
+- New on each row: `yearNo`, `incSoFar` (% since year 1) and `incNext` (% next contract year). For lines these are read on the price before the partner's cut (`lineAnnualGross`, now exported), so a cut that ends isn't counted as an increase.
+- The "A year" column shows e.g. "Year 2 · +5% vs year 1" (green), "Year 1 · +5% from year 2", or "Year 3 · no increase". The total's note adds "· +5%".
+- New fields: Increase vs year 1 (%) and Contract year. "A year" is now in the default columns.
+Tags: none
+Deploy: none
 
 ### 2026-11-12 14:05 · Enterprise · Ended / churned only → figures about them; Contracts scroll
 Files: src/components/pages/clients/ClientWorkspace.tsx, clients/ClientsPage.tsx, clients/ContractsBoard.tsx, clients/ContractsBoard.css
