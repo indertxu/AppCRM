@@ -1032,6 +1032,8 @@ function runWindow(t: TermShape, lo: string | null, hi: string | null): [string,
 
 export async function buildCrmFields(source: EntityKey, d: CrmData, extra: EntityKey[] = []): Promise<Field[]> {
   const cw = await import("../../clients/ClientWorkspace");
+  // the signed products, so a contract in its grace period counts and a renewal signed ahead of time doesn't
+  if (Array.isArray((d as any).contract)) cw.noteLines((d as any).contract);
   const ct = await import("../../clients/clientsTypes");
   const sales = await import("../sales/salesApi");
   const prodName = new Map(d.products.map((p) => [String(p.id), p.name]));

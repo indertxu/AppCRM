@@ -1450,7 +1450,9 @@ export async function saveTicket(id: string, patch: Partial<Ticket>, ready: bool
   tell();
   return null;
 }
-export async function createTicket(t: Partial<Ticket> & { title: string }, ready: boolean): Promise<{ id: string | null; error: string | null }> {
+/** byHand: a person files this (e.g. an Inbox e-mail → Create ticket) — the database keeps it even when the sender
+ *  isn't in the CRM (132_ticket_mail_manual.sql; that filter is for the automatic mail sync). */
+export async function createTicket(t: Partial<Ticket> & { title: string }, ready: boolean, opts: { byHand?: boolean } = {}): Promise<{ id: string | null; error: string | null }> {
   const row: any = { tracking_id: t.trackingId ?? null, phase_id: null, title: t.title.trim(), kind: t.kind ?? "quick", priority: t.priority ?? "normal", status: "todo", progress: 0, due_at: t.due ?? null };
   if (t.description?.trim()) row.description = t.description.trim();
   if (ready) {
@@ -1458,12 +1460,19 @@ export async function createTicket(t: Partial<Ticket> & { title: string }, ready
     row.stage = "new";
     if (!row.source) row.source = t.trackingId ? "sales" : "manual";
   }
-  let { data, error } = await supabase.from("tracking_tasks").insert(row).select().single();
+  const ins = (r: any) => {
+    const q = supabase.from("tracking_tasks").insert(r).select();
+    return (opts.byHand ? q.setHeader("x-ticket-by-hand", "1") : q).maybeSingle();
+  };
+  let { data, error } = await ins(row);
+  // the request's own mark didn't get through (a proxy refusing the extra header): file it the plain way
+  if (error && opts.byHand && /fetch|network|cors/i.test(error.message)) { opts = {}; ({ data, error } = await ins(row)); }
   // before 59_tickets_vs_tasks.sql a task is still a task without the column (no channel, no requester)
   if (error && /category/i.test(error.message) && row.category === "task") {
     delete row.category;
-    ({ data, error } = await supabase.from("tracking_tasks").insert(row).select().single());
+    ({ data, error } = await ins(row));
   }
+  if (!error && !data) return { id: null, error: row.source === "email" ? "The database didn't keep this ticket: its sender isn't in the CRM. Run sql/132_ticket_mail_manual.sql, or add the sender as a contact." : "Not saved." };
   if (error || !data) return { id: null, error: sqlMsg(error?.message ?? "") ?? error?.message ?? "Not saved." };
   const id = (data as any).id as string;
   if (t.watchers?.length) await Promise.all(t.watchers.map((w) => addAssignee("task", id, "employee", w)));
@@ -1624,7 +1633,7 @@ export async function createTicketFromMail(m: MailMsg, dir: Directory, ready: bo
     title: (m.subject || "(no subject)").slice(0, 300), description: m.snippet, source: "email",
     requesterName: m.fromName, requesterEmail: m.fromEmail, requesterContactId: contact?.id ?? null, assignee: dir.me,
     ...extra,
-  }, ready);
+  }, ready, { byHand: true });
   if (res.id) await setMailTicket(m, res.id);
   return res;
 }

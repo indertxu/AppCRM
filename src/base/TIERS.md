@@ -126,7 +126,7 @@ Source in `supabase/functions/**`. Both apps call them; changes must stay backwa
 - Read the other side's entries since your last session before you start working.
 
 ## 7. SQL numbering
-Next free number: **132**  ← update this line when you claim one (and say which file in the log).
+Next free number: **133**  ← update this line when you claim one (and say which file in the log).
 | # | File | Chat | What |
 |---|---|---|---|
 | 98 | sql/98_client_default_folders.sql | Enterprise | client folder templates → new clients |
@@ -163,6 +163,7 @@ Next free number: **132**  ← update this line when you claim one (and say whic
 | 129 | sql/129_expansion_pipelines.sql | Enterprise | `pipelines.expansion_kind` (upsell / cross_sell) + `client_upsells.motion`; triggers: deal in such a pipeline ↔ client upsell (shared id `client_upsells.deal_id`), deal leads status/name/value/owner; `expansion_backfill(pipeline)` — to run in the SQL editor (tested in a rolled-back transaction) |
 | 130 | src/base/sql/130_connected_google_ads.sql | Base | `connected_assets.kind` + `gads_customer` (Google Ads accounts of a Google login, last-30-days spend / clicks / conversions in extra) |
 | 131 | sql/131_contracts.sql | Enterprise | `contract_templates` (catalogue contract blueprints, config jsonb) + `tracking_contracts` (contracts on deals: data jsonb, total, first_year), tenant RLS — applied 2026-11-11 (migration name "130_contracts", before Base claimed 130) |
+| 132 | sql/132_ticket_mail_manual.sql | Enterprise | `ticket_mail_known()` (116's trigger) takes the tenant the row will get (it ran before trg_set_tenant, so every ticket created from Tickets › Inbox was dropped) and keeps a ticket filed by hand (request header `x-ticket-by-hand: 1`) — applied 2026-11-12 |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
@@ -173,6 +174,37 @@ Write requests here; the other chat answers in the log and ticks them.
 
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
+
+### 2026-11-12 14:05 · Enterprise · Ended / churned only → figures about them; Contracts scroll
+Files: src/components/pages/clients/ClientWorkspace.tsx, clients/ClientsPage.tsx, clients/ContractsBoard.tsx, clients/ContractsBoard.css
+What:
+- The KPIs on top leave churned clients and ended contracts out of a mixed list, as before. When the filters or view list only those, the figures are about them, at what they were worth:
+  - ClientWorkspace has a new `lineAnnualLast(l)`: a line's yearly value on its last running day (its ends_on, or its term's end).
+  - ClientRow has new recurringLast / contractLast / productsLast, which the Clients KPIs use when only churned clients are shown.
+  - Contract rows have a new `lastPerYear`, used by liveOf() when only ended contracts are shown; the Contracts card then reads "all ended".
+  - Ended contracts show "X € a year · ended" instead of "one-time".
+- The Contracts list (`.ccb`) scrolls under the header when it doesn't fit.
+Tags: PORT? (Base Clients KPIs, if Base filters churned)
+Deploy: none
+
+### 2026-11-12 13:20 · Enterprise · Grace period counts everywhere; tickets from Inbox mail no longer vanish
+Files: src/components/pages/clients/ClientWorkspace.tsx, clients/ClientsPage.tsx, clients/ContractsBoard.tsx, sales/extras/salesReportEngine.ts, homepage/shared/HomeTodo.tsx, sql/132_ticket_mail_manual.sql
+What:
+- Rule for the whole app: a signed product in its grace period (signed, start ahead) already counts.
+  - `runsAt` (in ClientWorkspace) now counts it from its signing day. So do lineAnnual / lineAnnualGross and everything built on them: Clients' Recurring, a client card's Recurring, Contracts' yearly value, the CS ARR and the reports.
+  - The exception is a renewal signed ahead of time: the same product, whose running line's term ends within 60 days of the new start. The old line keeps billing until then, so the two never add up.
+  - The lines are registered per client with the new `noteLines()`, from Clients, Contracts, the client pop-up and the report engine.
+- Tickets › Inbox › Create ticket said "Cannot coerce the result to a single JSON object". 116's BEFORE INSERT trigger ran before trg_set_tenant, so with no tenant mail_is_known() was false and the row was dropped.
+  - Fixed in SQL 132 (already applied).
+  - createTicket(…, { byHand }) sends `x-ticket-by-hand: 1`; it retries without the header if a proxy refuses it, and uses maybeSingle with a clear message if a row is still skipped.
+Tags: PORT? (Base: runsAt grace rule and noteLines if Base has its own ClientWorkspace copy; createTicket byHand)
+Deploy: SQL 132 applied
+
+### 2026-11-12 13:05 · Enterprise · Contracts list as wide as the header; the tab switch closes after a pick
+Files: src/components/pages/clients/ContractsBoard.css, clients/ClientsPage.tsx, projects/ProjectsPage.tsx
+What: `.ccb` padding is now 0 14px, so the Contracts list and cards line up with the green header's edges, which sit 14px in from the page. The icon-only `.cl-mtabs` switch (Clients | Contracts, and Projects' List | Canvas) no longer stays open after a click. Picking a tab adds `.is-shut` until the pointer leaves, the button is blurred, and `:focus-within` only opens it for keyboard focus (`:focus-visible`).
+Tags: none
+Deploy: none
 
 ### 2026-11-12 12:55 · Enterprise · Contracts: the figures on top are customisable (like Clients)
 Files: src/components/pages/clients/ContractsBoard.tsx

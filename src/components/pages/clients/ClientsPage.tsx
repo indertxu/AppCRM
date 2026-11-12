@@ -2,7 +2,7 @@
 import { Fragment, useState, useEffect, useMemo, useRef, type PointerEvent as RPointerEvent, type KeyboardEvent as RKeyboardEvent, type ReactNode } from "react";
 import { supabase } from "../../api/supabase";
 import NewClientForm from "./NewClientForm";
-import ClientWorkspace, { CompanyLogo, ClientStatusPicker, isActive, renewalOf, lineStartOf, lineAnnual, lineContractValue, lineOneTime, type Line } from "./ClientWorkspace";
+import ClientWorkspace, { CompanyLogo, ClientStatusPicker, isActive, noteLines, renewalOf, lineStartOf, lineAnnual, lineAnnualLast, lineContractValue, lineOneTime, type Line } from "./ClientWorkspace";
 import Select from "../../framework/Select";
 import { PageLoader } from "../../framework/AppLayout";
 import {
@@ -60,6 +60,8 @@ interface ClientRow {
   recurring: number; contract: number; oneTime: number; products: string[]; activeProducts: number;
   nextRenewal: string | null; firstSigned: string | null; lastContact: string | null; daysSince: number | null; health: string;
   openTasks: number; lateTasks: number;
+  /** What its products were worth in their last running day — shown on top only when just churned clients are listed. */
+  recurringLast: number; contractLast: number; productsLast: number;
 }
 interface Kpi { key: string; label: string; icon: string; tone?: string; calc: (rs: ClientRow[]) => { v: string; unit?: string; sub?: string; bar?: number } }
 const KPI_ICONS: Record<string, string> = {
@@ -223,6 +225,7 @@ export function ClientList({
       const coOf: Record<string, string> = {};
       ((cl.data ?? []) as any[]).forEach((x) => { if (x.company_id) coOf[x.id] = x.company_id; });
       const allLines = ((cp.data ?? []) as any[]).map((r) => ({ ...r, name: pn[r.product_id] ?? "Product" }));
+      noteLines(allLines);
       const linkedIds = [...new Set(Object.values(coOf))];
       // the contracts' own terms (a deal's order form): a product without its own start or term takes its contract's
       const tids = [...new Set(allLines.map((l) => String(l.contract_tracking_id || l.tracking_id || "")).filter(Boolean))];
@@ -323,6 +326,7 @@ export function ClientList({
       nextRenewal: renew ? renew.end.toISOString().slice(0, 10) : null, firstSigned: signedAt,
       lastContact: last, daysSince: days, health: days == null ? "none" : days > 60 ? "bad" : days > 30 ? "warn" : "ok",
       openTasks: extra?.tasks[c.id]?.open ?? 0, lateTasks: extra?.tasks[c.id]?.late ?? 0,
+      recurringLast: ls.reduce((t, l) => t + lineAnnualLast(l), 0), contractLast: ls.reduce((t, l) => t + lineContractValue(l), 0), productsLast: ls.length,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [clients, projects, extra, usage, projectTypes, dupOf]);
@@ -424,6 +428,8 @@ export function ClientList({
   const shown = [...viewed.filter((r) => !gone(r)), ...viewed.filter((r) => gone(r))];
   const live = shown.filter((r) => r.c.status !== "churned");
   const churnedN = shown.length - live.length;
+  const onlyGone = !live.length && shown.length > 0;
+  const goneRows = onlyGone ? shown.map((r) => ({ ...r, recurring: r.recurringLast, contract: r.contractLast, activeProducts: r.productsLast })) : [];
 
   if (!loaded || !prefsReady || (clients.length > 0 && !extra)) {
     // the header keeps its full shape while the page loads: placeholder tools and figures, not a squashed bar
@@ -521,8 +527,9 @@ export function ClientList({
           const at = (shownAlt[i] ?? 0) % sl.length;
           const k = kpiOf(sl[at]);
           if (!k) return null;
-          const r0 = k.calc(live);
-          const r = k.key === "clients" && churnedN ? { ...r0, sub: `${r0.sub ? `${r0.sub} · ` : ""}${churnedN} churned not counted` } : r0;
+          // the figures leave churned clients out — unless they're all that's listed: then they're about them, at what they were worth
+          const r0 = k.calc(onlyGone ? goneRows : live);
+          const r = k.key === "clients" && churnedN && !onlyGone ? { ...r0, sub: `${r0.sub ? `${r0.sub} · ` : ""}${churnedN} churned not counted` } : k.key === "clients" && onlyGone ? { ...r0, sub: `churned · ${r0.sub ?? ""}` } : r0;
           const two = sl.length > 1;
           const flip = () => { if (two) setShownAlt((x) => ({ ...x, [i]: at + 1 })); };
           return (
@@ -788,7 +795,9 @@ export default function ClientsPage() {
   const [toolsSlot, setToolsSlot] = useState<HTMLDivElement | null>(null);
   // Clients, or every signed contract (remembered)
   const [tab, setTab] = useState<"clients" | "contracts">(() => { try { return localStorage.getItem("cl.tab") === "contracts" ? "contracts" : "clients"; } catch { return "clients"; } });
-  const setTabP = (t: "clients" | "contracts") => { setTab(t); try { localStorage.setItem("cl.tab", t); } catch { /* ignore */ } };
+  /** Picking a tab closes the switch back to its icons (until the pointer leaves and comes back). */
+  const [tabsShut, setTabsShut] = useState(false);
+  const setTabP = (t: "clients" | "contracts") => { setTab(t); setTabsShut(true); (document.activeElement as HTMLElement | null)?.blur?.(); try { localStorage.setItem("cl.tab", t); } catch { /* ignore */ } };
   const navigate = useNavigate();
   const d = useClientsData();
   /** Bumped when a client's signed products change in its popup, so the list's figures follow. */
@@ -906,7 +915,7 @@ export default function ClientsPage() {
           </div>
         </div>
         <div className="cl-bar-tools" ref={setToolsSlot} key={tab} />
-        <div className="cl-mtabs" data-tab={tab}>
+        <div className={`cl-mtabs ${tabsShut ? "is-shut" : ""}`} data-tab={tab} onMouseLeave={() => setTabsShut(false)}>
           <div className="cl-mtabs-in" role="tablist" aria-label="Clients or contracts">
           <span className="cl-mtabs-pill" aria-hidden="true" />
           <button type="button" role="tab" aria-selected={tab === "clients"} aria-label="Clients" className={tab === "clients" ? "is-on" : ""} onClick={() => setTabP("clients")}>
@@ -3737,6 +3746,7 @@ export function CustomerSuccessPage() {
         .map((ids) => Promise.resolve(supabase.from("trackings").select("id, contract_terms").in("id", ids)).then((r: any) => (r.data ?? []) as any[]))).catch(() => [] as any[][]))
         .flat().forEach((t: any) => { if (t.contract_terms) terms[t.id] = t.contract_terms; });
       // churned clients aren't followed up any more (96_client_status.sql)
+      noteLines((cp.data ?? []) as any[]);
       if (alive) setBase({ clients: ((cl.data ?? []) as any[]).filter((x) => x.status !== "churned").map(withPeople), lines: ((cp.data ?? []) as any[]).map((r) => ({ ...r, name: pn[r.product_id] ?? "Product" })), logs, sites, terms });
       loadCsAuto().then((a) => { if (alive) setAuto(a); }).catch(() => {});
       supabase.from("project_types").select("id, name").then(({ data }: any) => { if (alive) setProjTypes((data ?? []) as any[]); });

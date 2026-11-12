@@ -28,6 +28,8 @@ export default function ProjectsPage() {
   const [view, setView] = useState<ProjectsViewMode>(() => {
     try { return (localStorage.getItem("projects.view") as ProjectsViewMode) || "list"; } catch { return "list"; }
   });
+  /** Picking a view closes the switch back to its icons (until the pointer leaves and comes back). */
+  const [tabsShut, setTabsShut] = useState(false);
   const pick = (v: ProjectsViewMode) => { setView(v); try { localStorage.setItem("projects.view", v); } catch { /* private mode */ } };
   useNavSection("/projects", 0, (part) => { if (part === "list" || part === "canvas") pick(part as ProjectsViewMode); });
 
@@ -45,13 +47,13 @@ export default function ProjectsPage() {
           </div>
         </div>
         <div className="cl-bar-tools" ref={setToolsSlot} />
-        <div className="cl-mtabs" data-on={view === "canvas" ? 2 : 1}>
+        <div className={`cl-mtabs ${tabsShut ? "is-shut" : ""}`} data-on={view === "canvas" ? 2 : 1} onMouseLeave={() => setTabsShut(false)}>
           <div className="cl-mtabs-in" role="tablist" aria-label="View">
             <span className="cl-mtabs-pill" aria-hidden="true" />
-            <button type="button" role="tab" aria-selected={view === "list"} aria-label="List" className={view === "list" ? "is-on" : ""} onClick={() => pick("list")}>
+            <button type="button" role="tab" aria-selected={view === "list"} aria-label="List" className={view === "list" ? "is-on" : ""} onClick={() => { pick("list"); setTabsShut(true); (document.activeElement as HTMLElement | null)?.blur?.(); }}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" /></svg><span>List</span>
             </button>
-            <button type="button" role="tab" aria-selected={view === "canvas"} aria-label="Canvas" className={view === "canvas" ? "is-on" : ""} onClick={() => pick("canvas")}>
+            <button type="button" role="tab" aria-selected={view === "canvas"} aria-label="Canvas" className={view === "canvas" ? "is-on" : ""} onClick={() => { pick("canvas"); setTabsShut(true); (document.activeElement as HTMLElement | null)?.blur?.(); }}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="5" height="16" rx="1.5" /><rect x="9.5" y="4" width="5" height="10" rx="1.5" /><rect x="16" y="4" width="5" height="13" rx="1.5" /></svg><span>Canvas</span>
             </button>
           </div>

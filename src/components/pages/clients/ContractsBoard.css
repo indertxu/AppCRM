@@ -129,3 +129,17 @@ html .ccb-table.is-cols .ccb-tr.is-head > span.is-r { justify-content: flex-end;
 html .ccb-table.is-cols .ccb-tr.is-head .fx-sort { width: auto; justify-content: flex-start; margin: -2px 0 -2px -6px; }
 html .ccb-table.is-cols .ccb-tr.is-head > span.is-r .fx-sort { margin: -2px -6px -2px 0; }
 .ccb-cl > .co-logo { display: grid; flex-direction: initial; place-items: center; }
+
+/* the list and cards run exactly as wide as the green header above (its edges sit 14px in from the page) */
+html .cl.cl-ov .ccb { padding: 0 14px 40px; }
+
+/* the switch opens on hover or keyboard focus only — a click doesn't leave it open, and picking closes it */
+.cl-bar > .cl-mtabs:focus-within:not(:hover):not(:has(:focus-visible)) { --w: 36px; }
+.cl-bar > .cl-mtabs:focus-within:not(:hover):not(:has(:focus-visible)) .cl-mtabs-in { background: rgba(255, 255, 255, 0.08); border-color: rgba(255, 255, 255, 0.12); box-shadow: none; }
+.cl-bar > .cl-mtabs:focus-within:not(:hover):not(:has(:focus-visible)) .cl-mtabs-in button > span { max-width: 0; margin-left: 0; opacity: 0; }
+html .cl-bar > .cl-mtabs.is-shut { --w: 36px; }
+html .cl-bar > .cl-mtabs.is-shut .cl-mtabs-in { background: rgba(255, 255, 255, 0.08); border-color: rgba(255, 255, 255, 0.12); box-shadow: none; }
+html .cl-bar > .cl-mtabs.is-shut .cl-mtabs-in button > span { max-width: 0; margin-left: 0; opacity: 0; }
+
+/* the contracts scroll under the header when they don't fit */
+html .cl.cl-ov .ccb { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }

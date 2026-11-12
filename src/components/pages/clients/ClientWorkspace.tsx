@@ -338,10 +338,37 @@ const partnerCut = (l: Line, y: number) => {
   return Array.isArray(py) ? Math.max(0, Number(py[y]) || 0) : 0;
 };
 const partnerTotal = (l: Line) => (Array.isArray(l.breakdown?.partnerYears) ? (l.breakdown.partnerYears as unknown[]).reduce((t: number, x) => t + Math.max(0, Number(x) || 0), 0) : 0);
-/** Is a line running on `at`: started, and its term not over (an auto-renewing one rolls on). */
+/** Every client's signed products as last read (Clients, Contracts, the client pop-up, reports): to tell a renewal
+ *  signed ahead of time — it follows a line of the same product that is still running — from a contract in its grace period. */
+const LINES_BY_CLIENT = new Map<string, Line[]>();
+export function noteLines(ls: Line[]) {
+  const by = new Map<string, Line[]>();
+  ls.forEach((l) => { const k = str(l.client_id); if (k) by.set(k, [...(by.get(k) ?? []), l]); });
+  by.forEach((v, k) => LINES_BY_CLIENT.set(k, v));
+}
+/** Is `l` the renewal of a line still running on `at`: the same product, its term ending about when `l` starts
+ *  (within 60 days)? Then `l` takes over when that one ends — an upsell or a new contract doesn't. */
+const followsRunning = (l: Line, at: number) => {
+  const st = str(l.start_date);
+  const s = st ? toDate(st).getTime() : NaN;
+  return (LINES_BY_CLIENT.get(str(l.client_id)) ?? []).some((x) => {
+    if (x.id === l.id || !x.recurring || str(x.product_id) !== str(l.product_id) || !isActive(x)) return false;
+    const xs = str(x.start_date) || str(x.signing_date);
+    if (!xs || xs >= st || toDate(xs).getTime() > at) return false;
+    const t = termOf(x);
+    return !!t && t.end.getTime() >= at && Math.abs(t.end.getTime() - s) <= 60 * DAY;
+  });
+};
+/** Is a line counted on `at`: running (its term not over — an auto-renewing one rolls on), or signed and waiting to
+ *  start — its grace period counts already, the same everywhere in the app (Clients, Contracts, the client's card,
+ *  reports). A renewal signed ahead of time doesn't: the line it follows is still the one billing. */
 const runsAt = (l: Line, at = Date.now()) => {
-  const s0 = str(l.start_date) || str(l.signing_date);
-  if (s0 && toDate(s0).getTime() > at) return false;
+  const st = str(l.start_date), sg = str(l.signing_date);
+  if (st && toDate(st).getTime() > at) {
+    if (sg && toDate(sg).getTime() > at) return false;
+    return !followsRunning(l, at);
+  }
+  if (!st && sg && toDate(sg).getTime() > at) return false;
   const t = termOf(l);
   return !t || t.end.getTime() >= at;
 };
@@ -371,6 +398,14 @@ export const lineContractValue = (l: Line) => Math.max(0, (l.recurring ? termsOf
 /** What a line bills once: a one-off's price (less the partner's cut) and any set-up fee. */
 export const lineOneTime = (l: Line) => (l.recurring ? 0 : Math.max(0, lineTotal(l) - partnerTotal(l))) + (Number(l.one_time_fee) || 0);
 export { lineAnnual, lineTotal };
+/** What a line was billing a year in its last running day (today when it still runs): the value of a churned
+ *  client's or an ended contract's product, for when those are the ones being looked at. */
+export const lineAnnualLast = (l: Line) => {
+  if (!l.recurring) return 0;
+  const end = str(l.ends_on) ? toDate(str(l.ends_on)).getTime() : termOf(l)?.end.getTime();
+  const at = Math.min(Date.now(), (end ?? Date.now()) - DAY);
+  return lineAnnual(l, at) || lineAnnual(l, Math.min(Date.now(), toDate(str(l.start_date) || str(l.signing_date) || todayISO()).getTime() + DAY));
+};
 /** The contract a line belongs to: the deal it was signed on, or the existing contract an upsell was signed into (122). */
 export const contractKeyOf = (l: Line) => str(l.contract_tracking_id) || str(l.tracking_id);
 /** Whole contract years between a contract's start and a line's own start (an upsell joins in a later year). */
@@ -1176,6 +1211,7 @@ export default function ClientWorkspace({
           (data ?? []).forEach((p: any) => { pn[p.id] = p.name; });
         }
         if (!alive) return;
+        noteLines(raw as Line[]);
         setLines(raw
           .map((r) => ({ ...r, name: pn[r.product_id] ?? "Product" }))
           .sort((a, b) => str(b.signing_date).localeCompare(str(a.signing_date))));
@@ -1822,6 +1858,7 @@ export default function ClientWorkspace({
     const pids = [...new Set(raw.map((r) => r.product_id).filter(Boolean))];
     const pn: Record<string, string> = {};
     if (pids.length) ((await supabase.from("products").select("id,name").in("id", pids)).data ?? []).forEach((x: any) => { pn[x.id] = x.name; });
+    noteLines(raw as Line[]);
     setLines(raw.map((r) => ({ ...r, name: pn[r.product_id] ?? "Product" })).sort((a, b) => str(b.signing_date).localeCompare(str(a.signing_date))));
   };
   /** The signed product asked to be deleted (asks once), and why it couldn't be. */

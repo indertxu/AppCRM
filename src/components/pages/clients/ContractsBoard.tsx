@@ -10,7 +10,7 @@ import { contractFigures, normConfig, termLabel, PAY_LABEL, type DealContract, t
 import ContractView, { ViewShell, ViewSec, contractState, stateTone } from "../sales/extras/ContractView";
 import { cpDay, ContractTrack } from "../sales/extras/ContractPlan";
 import { IC } from "../sales/extras/ContractTermsForm";
-import { CompanyLogo, isActive, renewalOf, lineStartOf, lineAnnual, lineContractValue, type Line } from "./ClientWorkspace";
+import { CompanyLogo, noteLines, lineAnnualLast, isActive, renewalOf, lineStartOf, lineAnnual, lineContractValue, type Line } from "./ClientWorkspace";
 import "./ContractsBoard.css";
 
 /* =====================================================================
@@ -24,6 +24,8 @@ type Row = {
   clientId: string | null; clientName: string; website: string | null; dealId: string | null; dealName: string;
   name: string; what: string; signed: string | null; start: string | null; end: string | null; renews: boolean;
   next: { date: string; amount: number } | null; total: number; perYear: number; state: string;
+  /** What it billed a year in its last running day (= perYear while it runs): an ended contract's value. */
+  lastPerYear: number;
   contract?: DealContract; f?: ContractFigures; lines?: Line[]; ct?: any;
 };
 const money = (n: number) => `${Math.round(n).toLocaleString("de-DE")} €`;
@@ -45,11 +47,17 @@ const K_ICO = {
   stop: "M18 6 6 18M6 6l12 12",
 };
 const eur = (n: number) => Math.round(n).toLocaleString("de-DE");
-const liveOf = (rs: Row[]) => rs.filter((r) => r.state !== "Ended");
+/** The contracts the figures are about: the running ones (ended ones don't add to a mixed list) — unless only ended
+ *  ones are listed: then those, at what they billed a year when they ended. */
+const liveOf = (rs: Row[]) => {
+  const l = rs.filter((r) => r.state !== "Ended");
+  return l.length || !rs.length ? l : rs.map((r) => ({ ...r, perYear: r.lastPerYear }));
+};
+const allEnded = (rs: Row[]) => rs.length > 0 && rs.every((r) => r.state === "Ended");
 const invIn = (rs: Row[], from: string, to: string) => rs.reduce((s, r) => s + (r.f?.invoices ?? []).filter((iv) => iv.date >= from && iv.date <= to).reduce((a, iv) => a + iv.amount, 0), 0);
 const termYearsOf = (r: Row) => (r.f?.termYears ? r.f.termYears : r.ct?.termYears ? Number(r.ct.termYears) : 0);
 const C_KPIS: CKpi[] = [
-  { key: "contracts", label: "Contracts", ico: K_ICO.doc, calc: (rs) => { const l = liveOf(rs).length; return { v: String(l), sub: `${rs.length - l} ended` }; } },
+  { key: "contracts", label: "Contracts", ico: K_ICO.doc, calc: (rs) => { if (allEnded(rs)) return { v: String(rs.length), sub: "all ended" }; const l = liveOf(rs).length; return { v: String(l), sub: `${rs.length - l} ended` }; } },
   { key: "signedValue", label: "Signed value", ico: K_ICO.euro, tone: "jade", calc: (rs) => { const l = liveOf(rs); return { v: eur(l.reduce((s, r) => s + r.total, 0)), unit: "€", sub: `${money(l.reduce((s, r) => s + r.perYear, 0))} a year` }; } },
   { key: "yearly", label: "Yearly value", ico: K_ICO.repeat, tone: "teal", calc: (rs) => { const l = liveOf(rs).filter((r) => r.perYear > 0.5); return { v: eur(l.reduce((s, r) => s + r.perYear, 0)), unit: "€ / yr", sub: `${l.length} recurring contract${l.length === 1 ? "" : "s"}` }; } },
   { key: "inv30", label: "Invoices · next 30 days", ico: K_ICO.doc, calc: (rs, c) => ({ v: eur(invIn(rs, c.now, c.in30)), unit: "€", sub: "from contracts built on deals" }) },
@@ -151,6 +159,7 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
       const clientByCo = new Map(clients.filter((c) => c.company_id).map((c) => [c.company_id, c]));
       const contracts = ((tc.error ? [] : tc.data ?? []) as any[]).filter((r) => r.active !== false);
       const lines = ((cp.data ?? []) as any[]).map((r) => ({ ...r, name: pn.get(r.product_id) ?? "Product" })) as Line[];
+      noteLines(lines);
       const tids = [...new Set([...contracts.map((r) => r.tracking_id), ...lines.map((l) => String(l.contract_tracking_id || l.tracking_id || ""))].filter(Boolean))];
       // the clients' websites (for their logos) only for clients with a contract — all of it in one round
       const coIds = [...new Set(lines.map((l) => clientById.get(l.client_id)?.company_id).filter(Boolean))] as string[];
@@ -188,7 +197,7 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
           key: `c:${r.id}`, kind: "deal", clientId: client?.id ?? null, clientName: client?.name ?? "No client yet", website: siteOf(client), dealId: r.tracking_id, dealName: t.deal_name || client?.name || "Deal",
           name: r.name, what: `${termLabel(c.data.term)} · ${PAY_LABEL[c.data.payment].toLowerCase()}${c.data.items.length ? ` · ${c.data.items.length} product${c.data.items.length === 1 ? "" : "s"}` : ""}`,
           signed: c.data.signed, start: f.start, end: f.end, renews: !!f.renewal, next: nx ? { date: nx.date, amount: nx.amount } : null,
-          total: f.total, perYear: f.termYears ? f.total / Math.max(1, f.termYears) : f.total, state: contractState(f), contract: c, f,
+          total: f.total, perYear: f.termYears ? f.total / Math.max(1, f.termYears) : f.total, lastPerYear: f.termYears ? f.total / Math.max(1, f.termYears) : f.total, state: contractState(f), contract: c, f,
         });
       });
       // older contracts: a client's signed products, grouped by the deal they were signed on
@@ -215,7 +224,7 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
           name: ct?.contractRef ? `Contract No. ${ct.contractRef}` : t?.deal_name ? `Contract · ${t.deal_name}` : "Signed products",
           what: ls.map((l) => l.name).slice(0, 3).join(" · ") + (ls.length > 3 ? ` +${ls.length - 3}` : ""),
           signed: signed ? signed.slice(0, 10) : null, start, end: iso(renew?.end), renews: !!renew,
-          next: null, total: ls.reduce((s, l) => s + lineContractValue(l), 0), perYear: live.reduce((s, l) => s + lineAnnual(l), 0), state, lines: ls, ct,
+          next: null, total: ls.reduce((s, l) => s + lineContractValue(l), 0), perYear: live.reduce((s, l) => s + lineAnnual(l), 0), lastPerYear: live.length ? live.reduce((s, l) => s + lineAnnual(l), 0) : ls.reduce((s, l) => s + lineAnnualLast(l), 0), state, lines: ls, ct,
         });
       });
       CACHE = { rows: out, products: cat };
@@ -271,6 +280,7 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
     gridTemplateColumns: `minmax(200px, 2fr) ${colFields.map((f) => width(f.key)[0]).join(" ")}`,
     minWidth: 40 + 200 + colFields.reduce((s, f) => s + width(f.key)[1] + 14, 0),
   } as const;
+  const yearNote = (r: Row) => (r.perYear > 0.5 ? `${money(r.perYear)} a year` : r.lastPerYear > 0.5 ? `${money(r.lastPerYear)} a year · ended` : "one-time");
   const day = (d: string | null) => (d ? cpDay(d, "2-digit") : "—");
   const cell = (f: FField<Row>, r: Row): ReactNode => {
     switch (f.key) {
@@ -281,8 +291,8 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
       case "end": return <span className="ccb-d">{r.end ? <>{day(r.end)}<em>{r.renews ? "renews" : "ends"}</em></> : "—"}</span>;
       case "next": return <span className="ccb-d">{r.next ? <>{day(r.next.date)}<em>{money(r.next.amount)}</em></> : r.kind === "lines" ? <em>—</em> : "—"}</span>;
       case "renews": return <span className="ccb-d">{r.renews ? "Yes" : "No"}</span>;
-      case "total": return <span className="ccb-m"><b>{money(r.total)}</b><em>{r.perYear > 0.5 ? `${money(r.perYear)} a year` : "one-time"}</em></span>;
-      case "perYear": return <span className="ccb-m"><b>{r.perYear > 0.5 ? money(r.perYear) : "—"}</b></span>;
+      case "total": return <span className="ccb-m"><b>{money(r.total)}</b><em>{yearNote(r)}</em></span>;
+      case "perYear": return <span className="ccb-m"><b>{r.perYear > 0.5 ? money(r.perYear) : r.lastPerYear > 0.5 ? money(r.lastPerYear) : "—"}</b>{r.perYear <= 0.5 && r.lastPerYear > 0.5 && <em>when it ended</em>}</span>;
       case "nextAmount": return <span className="ccb-m"><b>{r.next ? money(r.next.amount) : "—"}</b></span>;
       case "products": return <span className="ccb-m"><b>{f.get(r)}</b></span>;
       default: { const v = f.get(r); return <span className="ccb-d">{v === null || v === undefined || v === "" ? "—" : String(v)}</span>; }
@@ -421,7 +431,7 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
                   </span>
                   <span className="ccb-card-foot">
                     <span className="ccb-card-next">{r.next ? <>Next invoice <b>{cpDay(r.next.date, "2-digit")}</b> · {money(r.next.amount)}</> : r.kind === "lines" ? "Signed products" : "No invoice left"}</span>
-                    <span className="ccb-m"><b>{money(r.total)}</b><em>{r.perYear > 0.5 ? `${money(r.perYear)} a year` : "one-time"}</em></span>
+                    <span className="ccb-m"><b>{money(r.total)}</b><em>{yearNote(r)}</em></span>
                   </span>
                 </button>
               );
