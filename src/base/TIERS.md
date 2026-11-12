@@ -173,6 +173,36 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-12 09:40 · Enterprise · Contracts: signed → grace period → start, payment plan timeline, client page, custom confirms
+- Files: sales/extras/contractsApi.ts, ContractPlan.tsx (new), ContractConfirm.tsx (new), ContractClientList.tsx (new), ContractSummary.tsx, ContractModal.tsx, ContractTermsForm.tsx, ContractTerms.css; settings/ContractTemplates.tsx; sales/trackings/TrackingDetail.tsx; clients/ClientWorkspace.tsx
+- What: a contract now has a signing day and a grace period (data.signed, data.grace; template config.grace = default grace) — it starts at signed + grace unless a start is set by hand (contractDates()). Figures carry signed/graceDays, each invoice's covered period (from/to), and the renewal (invoice date, due, notice-by, until, estimated amount). New ContractPlan: a timeline (signed · grace hatched · start · paid periods · invoice pins · notice-by · renewal) + milestone chips + payment-plan table (sent / next / later + renewal invoice). Deal contract window: step 3 is Signed → Grace period → Starts boxes; summary shows the timeline and the payment plan. Deal calculator: empty Contracts group offers template tiles; contract cards show dates (signed/grace/starts/renews), a compact timeline and the next invoice. Client page › Contract tab: "Signed contracts" — each won deal's contract with state (in grace / running…), dates, timeline, products and its payment plan (loadContractsForDeals). Contract windows (template + deal): Esc / × / backdrop / Cancel with unsaved changes and Delete/Remove ask in our own dialog (no window.confirm); Esc closes the dialog first, leaves open pickers alone.
+- Tags: PORT? (Base has no contracts)
+- Deploy: none (no SQL — data lives in tracking_contracts.data / contract_templates.config jsonb)
+
+### 2026-11-12 07:20 · Enterprise · Deal page cards: a minimum size when opened, room under the last thing
+- Files: sales/trackings/TrackingDetail.tsx, sales/sales/SalesPage.css
+- What: an opened deal card (not a headline, not collapsed) is never shorter than its minimum (DK_OPEN_MIN: activity 470px, calculator 360, probability 300, proposals 230, contacts/details 210, documents 170), or than all it holds when that's less; the saved layout is untouched. Fitting a card to its contents now counts the last item's bottom margin and keeps 18px (DK_FOOT) under it (Documents' drop zone touched the edge). Activity › Meeting: 8px between the meeting name and "What it's about" (the compose box had gap 0).
+- Tags: PORT? (Base's deal page has the same board)
+- Deploy: none
+
+### 2026-11-12 07:05 · Enterprise · Deals list: row lines run edge to edge again
+- Files: sales/sales/SalesPage.css
+- What: the sticky "Deal" cell (.dz-who) and its header (.so-th-deal) have a white background that painted over the row's bottom hairline, so lines started at the Stage column. Both now draw the hairline themselves (none on the last row).
+- Tags: PORT? (Base has the same sticky .dz-who rule in its SalesPage.css)
+- Deploy: none
+
+### 2026-11-12 10:30 · Enterprise · Contracts: redesigned template editor, catalog cards and the deal's contract window
+- Files: sales/extras/ContractTermsForm.tsx, ContractSummary.tsx, ContractModal.tsx, ContractTerms.css, contractsApi.ts; settings/ContractTemplates.tsx; sales/trackings/TrackingDetail.tsx
+- What: Settings › Catalog › Contracts cards now show a length ladder with discounts, ways to pay (default starred), invoicing/increments/renewal/fee facts. Template editor: lengths as cards, ways to pay as tiles (toggle, early-payment %, star = default), invoicing as a timeline, increments with a year-by-year bar preview, nicer named-discount rows; live preview on a sample price with an "Every option" matrix (lengths × ways to pay, click to preview). Deal contract window: total pill in the header, numbered steps (includes · length tiles · start · payment tiles · discounts), product cards showing the calculator rows ("10 − 5 incl. = 5 users × 15"), quick-add product chips, fee as its own card, "Fine-tune the terms" fold for invoicing/increments/renewal, clickable option matrix in the summary. Deal calculator contract cards: term/payment chips with discounts, savings, invoice track and next invoice. contractsApi: itemFigure returns calculator rows; new pricingMatrix/termKey.
+- Tags: PORT? (Base has no contracts)
+- Deploy: none (UI only, no SQL)
+
+### 2026-11-11 18:00 · Enterprise · Won deals: boss / admins / managers can edit them ("Edit anyway")
+- Files: src/components/pages/sales/trackings/TrackingDetail.tsx, sales/sales/SalesPage.css
+- What: a won deal stays read-only, but next to its "Won" badge a boss, an admin, any `*_manager` (or a superadmin) gets "Edit anyway": it unlocks everything `wonLock` guards (name, phases & dates, close estimates, Details, calculator lines, contracts) while the deal stays won; "Editing a won deal · lock" locks it again (also on leaving the deal or a status change). Lost deals were never locked.
+- Tags: PORT? (src/base deal page if it locks won deals)
+- Deploy: front only.
+
 ### 2026-11-11 17:30 · Enterprise · Contracts, phase 1: contract templates in the catalogue + contracts in the deal calculator
 - Files: sql/131_contracts.sql (new, applied), src/components/pages/sales/extras/contractsApi.ts + ContractTermsForm.tsx + ContractSummary.tsx + ContractModal.tsx + ContractTerms.css (new), src/components/pages/settings/ContractTemplates.tsx (new), CatalogPage.tsx, src/components/pages/sales/trackings/TrackingDetail.tsx, src/components/pages/clients/ClientWorkspace.tsx
 - What: **Settings › Catalog › Contracts** (tab next to Products / Services): templates with lengths in days/months/years each with its discount, renewal (period + notice), ways to pay (upfront / yearly / 6-monthly / quarterly / monthly, each on/off + early-payment discount, one default), invoicing (N days before it starts/renews, due in N days), yearly increments (% or €, "none if paid upfront"), named commercial discounts (% or €/yr, on by default or not), a fee of its own, products it may include; live preview on a sample price. **Deal › Calculator**: new "Contracts" group above Products (+ Add contract from a template or from scratch; cards with length · payment · products · total / year 1); the contract window holds products priced by their own calculator inputs (tier + inputs, no product discounts/term/increments), its terms (length chips, start date, payment choice…) and the summary (total, list → discounts, each year, invoice dates incl. prepayment and the renewal invoice). Contracts count in the deal's totals (year 1 or whole term by the revenue view). Maths in `contractFigures()` (duration % → payment % → commercial, increments waived when upfront and set so). **Clients › contract card**: services no longer shown or counted (scope, years, services note) — they belong to Services/Projects.

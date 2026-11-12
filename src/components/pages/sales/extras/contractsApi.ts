@@ -40,6 +40,8 @@ export interface ContractConfig {
   fee: number;
   /** Products it may include (empty: any). */
   productIds: string[];
+  /** A grace period: signed on one day, it starts this much later (null: it starts when it's signed). */
+  grace: Term | null;
 }
 
 export interface ContractTemplate { id?: string; name: string; description?: string | null; active: boolean; in_proposals?: boolean; config: ContractConfig; sort?: number }
@@ -48,7 +50,9 @@ export interface ContractItem { id: string; product_id: string; tier_id: string 
 export interface DealContractData extends ContractConfig {
   term: Term;
   payment: PayKey;
-  /** When it starts (empty: when it's signed). */
+  /** When it's signed (empty: not yet — dates count from today). */
+  signed: string | null;
+  /** When it starts, set by hand (empty: signed + grace period). */
   start: string | null;
   items: ContractItem[];
   notes?: string | null;
@@ -81,6 +85,7 @@ export const defaultContractConfig = (): ContractConfig => ({
   discounts: [],
   fee: 0,
   productIds: [],
+  grace: null,
 });
 export const newTemplate = (): ContractTemplate => ({ name: "", description: "", active: true, in_proposals: true, config: defaultContractConfig() });
 
@@ -105,6 +110,7 @@ export function normConfig(c: any): ContractConfig {
     discounts: Array.isArray(c?.discounts) ? c.discounts.map((x: any) => ({ id: x.id || uid(), name: String(x.name ?? ""), mode: x.mode === "amount" ? "amount" : "pct", value: Number(x.value) || 0, on: x.on !== false })) : [],
     fee: Number(c?.fee) || 0,
     productIds: Array.isArray(c?.productIds) ? c.productIds : [],
+    grace: c?.grace && Number(c.grace.value) > 0 ? { value: Number(c.grace.value), unit: (["days", "months", "years"].includes(c.grace.unit) ? c.grace.unit : "months") as TermUnit } : null,
   };
 }
 
@@ -114,7 +120,7 @@ export function contractFromTemplate(t: ContractTemplate | null, trackingId: str
   const first = c.durations[0];
   return {
     tracking_id: trackingId, template_id: t?.id ?? null, name: t?.name || "Contract", active: true, total: 0, first_year: 0,
-    data: { ...c, term: first ? { value: first.value, unit: first.unit } : { value: 1, unit: "years" }, payment: c.payments.find((p) => p.key === c.defaultPayment && p.enabled) ? c.defaultPayment : (c.payments.find((p) => p.enabled)?.key ?? "annually"), start: null, items: [] },
+    data: { ...c, term: first ? { value: first.value, unit: first.unit } : { value: 1, unit: "years" }, payment: c.payments.find((p) => p.key === c.defaultPayment && p.enabled) ? c.defaultPayment : (c.payments.find((p) => p.enabled)?.key ?? "annually"), signed: null, start: null, items: [] },
   };
 }
 
@@ -128,19 +134,36 @@ const addMonths = (iso: string, n: number) => {
   const last = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() + 1, 0)).getUTCDate();
   return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, "0")}-${String(Math.min(d, last)).padStart(2, "0")}`;
 };
-const addTerm = (iso: string, t: Term) => (t.unit === "days" ? addDays(iso, t.value) : addMonths(iso, t.unit === "years" ? t.value * 12 : t.value));
+export const addTerm = (iso: string, t: Term) => (t.unit === "days" ? addDays(iso, t.value) : addMonths(iso, t.unit === "years" ? t.value * 12 : t.value));
+export const isoAddDays = (iso: string, n: number) => addDays(iso, n);
+export const daysBetween = (a: string, b: string) => Math.round((+new Date(`${b}T12:00:00Z`) - +new Date(`${a}T12:00:00Z`)) / 864e5);
+const todayIso = () => new Date().toISOString().slice(0, 10);
+
+/** Signed → (grace period) → starts. A start set by hand wins over signed + grace. */
+export function contractDates(d: Pick<DealContractData, "signed" | "start" | "grace">): { signed: string; start: string; graceDays: number; signedSet: boolean; startSet: boolean } {
+  const signed = d.signed || todayIso();
+  const start = d.start || (d.grace && Number(d.grace.value) > 0 ? addTerm(signed, d.grace) : signed);
+  return { signed, start, graceDays: Math.max(0, daysBetween(signed, start)), signedSet: !!d.signed, startSet: !!d.start };
+}
 
 /** What a product in a contract comes to: its calculator's figure (no product discounts), per year when recurring. */
-export function itemFigure(it: ContractItem, product: Product | undefined): { amount: number; perYear: number; oneOff: number; detail: string } {
-  if (!product) return { amount: 0, perYear: 0, oneOff: 0, detail: "Product removed" };
+export interface ItemRow { label: string; detail: string; amount: number }
+export function itemFigure(it: ContractItem, product: Product | undefined): { amount: number; perYear: number; oneOff: number; detail: string; rows: ItemRow[]; base: number } {
+  if (!product) return { amount: 0, perYear: 0, oneOff: 0, detail: "Product removed", rows: [], base: 0 };
   const tier = product.tiers.find((t) => t.id === it.tier_id) ?? product.tiers[0];
   const base = Number(tier?.price) || 0;
   const calc = product.calculator as Calculator | null | undefined;
   let amount: number;
+  let rows: ItemRow[] = [];
   if (calc && calc.variables?.length) {
-    const g = calcBreakdown(calc, it.values ?? {}, base).gross;
-    amount = calc.output_kind === "quantity" ? base * g : g;
-  } else amount = base * Math.max(1, Number(it.quantity) || 1);
+    const b = calcBreakdown(calc, it.values ?? {}, base);
+    amount = calc.output_kind === "quantity" ? base * b.gross : b.gross;
+    rows = b.rows.map((r) => ({ label: r.label, detail: r.detail, amount: calc.output_kind === "quantity" ? r.amount * base : r.amount }));
+  } else {
+    const q = Math.max(1, Number(it.quantity) || 1);
+    amount = base * q;
+    rows = [{ label: tier?.name || "Price", detail: q > 1 ? `${q} × ${base}` : "", amount }];
+  }
   const recurring = product.billing === "recurring";
   const monthly = recurring && product.billing_period !== "yearly";
   return {
@@ -148,19 +171,21 @@ export function itemFigure(it: ContractItem, product: Product | undefined): { am
     perYear: recurring ? r2(amount * (monthly ? 12 : 1)) : 0,
     oneOff: recurring ? 0 : r2(amount),
     detail: recurring ? (monthly ? "a month" : "a year") : "once",
+    rows, base,
   };
 }
 
 export interface ContractYear { year: number; share: number; list: number; increment: number; duration: number; payment: number; commercial: number; net: number }
-export interface ContractInvoice { date: string; due: string; amount: number; label: string }
+export interface ContractInvoice { date: string; due: string; amount: number; label: string; /** the paid period it covers */ from: string; to: string }
 export interface ContractFigures {
   termYears: number; years: ContractYear[];
   annualList: number; oneOff: number;
   list: number; discount: number; total: number; firstYear: number;
   durationPct: number; paymentPct: number; incrementsWaived: boolean;
   breakdown: { label: string; amount: number }[];
-  start: string; end: string; invoices: ContractInvoice[];
-  renewal: { date: string; invoiceDate: string } | null;
+  signed: string; graceDays: number; start: string; end: string; invoices: ContractInvoice[];
+  /** Auto-renewal: when it renews, when that's invoiced, and the last day to give notice. */
+  renewal: { date: string; invoiceDate: string; due: string; noticeBy: string | null; until: string; amount: number } | null;
 }
 
 export function contractFigures(d: DealContractData, products: Product[]): ContractFigures {
@@ -200,29 +225,37 @@ export function contractFigures(d: DealContractData, products: Product[]): Contr
     ...(sum("commercial") ? [{ label: d.discounts.filter((x) => x.on).map((x) => x.name || "Discount").join(" · "), amount: -sum("commercial") }] : []),
   ];
   // when it's invoiced: N days before each paid period starts
-  const start = d.start || new Date().toISOString().slice(0, 10);
+  const dates = contractDates(d);
+  const start = dates.start;
   const end = addTerm(start, d.term);
   const invoices: ContractInvoice[] = [];
   const per = d.payment === "monthly" ? 12 : d.payment === "quarterly" ? 4 : d.payment === "semiannually" ? 2 : 1;
   const step = 12 / per;
-  const push = (date: string, amount: number, label: string) => {
+  const push = (date: string, amount: number, label: string, to: string) => {
     const at = addDays(date, -(Number(d.prepayDays) || 0));
-    invoices.push({ date: at, due: addDays(at, Number(d.paymentTermsDays) || 0), amount: r2(amount), label });
+    invoices.push({ date: at, due: addDays(at, Number(d.paymentTermsDays) || 0), amount: r2(amount), label, from: date, to: to > end ? end : to });
   };
-  if (d.payment === "upfront") push(start, total, `Whole contract · ${termLabel(d.term)}`);
+  if (d.payment === "upfront") push(start, total, `Whole contract · ${termLabel(d.term)}`, end);
   else years.forEach((y, i) => {
     const yStart = addMonths(start, 12 * i);
     const parts = Math.max(1, Math.round(per * y.share));
     const oneOffNet = i === 0 && oneOff ? oneOff * (y.net / Math.max(1e-9, y.list)) : 0;
     for (let k = 0; k < parts; k++) {
       const amt = (y.net - oneOffNet) / parts + (k === 0 ? oneOffNet : 0);
-      push(addMonths(yStart, step * k), amt, per === 1 ? `Year ${y.year}` : `Year ${y.year} · ${k + 1}/${parts}`);
+      push(addMonths(yStart, step * k), amt, per === 1 ? `Year ${y.year}` : `Year ${y.year} · ${k + 1}/${parts}`, addMonths(yStart, step * (k + 1)));
     }
   });
-  const renewal = d.autoRenew ? { date: end, invoiceDate: addDays(end, -(Number(d.prepayDays) || 0)) } : null;
+  const lastY = years[years.length - 1];
+  const renewInv = addDays(end, -(Number(d.prepayDays) || 0));
+  const renewal = d.autoRenew ? {
+    date: end, invoiceDate: renewInv, due: addDays(renewInv, Number(d.paymentTermsDays) || 0),
+    noticeBy: d.noticeDays ? addDays(end, -Number(d.noticeDays)) : null, until: addTerm(end, d.renew ?? { value: 1, unit: "years" }),
+    // a guess: the last year's price, for as long as it renews
+    amount: lastY ? r2((lastY.net / Math.max(lastY.share, 1e-9)) * (d.payment === "upfront" ? termYears(d.renew ?? { value: 1, unit: "years" }) : 1 / per)) : 0,
+  } : null;
   return {
     termYears: ty, years, annualList: r2(annual), oneOff: r2(oneOff), list, discount: r2(list - total), total, firstYear: years[0]?.net ?? 0,
-    durationPct, paymentPct, incrementsWaived: waived && d.increments.mode !== "none" && !!d.increments.value, breakdown, start, end, invoices, renewal,
+    durationPct, paymentPct, incrementsWaived: waived && d.increments.mode !== "none" && !!d.increments.value, breakdown, signed: dates.signed, graceDays: dates.graceDays, start, end, invoices, renewal,
   };
 }
 
@@ -246,14 +279,25 @@ export async function deleteContractTemplate(id: string): Promise<string | null>
   return error ? error.message : null;
 }
 
+const rowToContract = (r: any): DealContract => ({
+    id: r.id, tracking_id: r.tracking_id, template_id: r.template_id, name: r.name, active: r.active !== false,
+    total: Number(r.total) || 0, first_year: Number(r.first_year) || 0,
+    data: { ...normConfig(r.data), term: r.data?.term ?? { value: 1, unit: "years" }, payment: r.data?.payment ?? "annually", signed: r.data?.signed ?? null, start: r.data?.start ?? null, items: Array.isArray(r.data?.items) ? r.data.items : [], notes: r.data?.notes ?? null },
+  });
 export async function loadDealContracts(trackingId: string): Promise<DealContract[]> {
   const { data, error } = await supabase.from("tracking_contracts").select("*").eq("tracking_id", trackingId).order("created_at");
   if (error) return [];
-  return ((data ?? []) as any[]).map((r) => ({
-    id: r.id, tracking_id: r.tracking_id, template_id: r.template_id, name: r.name, active: r.active !== false,
-    total: Number(r.total) || 0, first_year: Number(r.first_year) || 0,
-    data: { ...normConfig(r.data), term: r.data?.term ?? { value: 1, unit: "years" }, payment: r.data?.payment ?? "annually", start: r.data?.start ?? null, items: Array.isArray(r.data?.items) ? r.data.items : [], notes: r.data?.notes ?? null },
-  }));
+  return ((data ?? []) as any[]).map(rowToContract);
+}
+/** The contracts on several deals (a client's), active ones. */
+export async function loadContractsForDeals(trackingIds: string[]): Promise<DealContract[]> {
+  const out: DealContract[] = [];
+  for (let i = 0; i < trackingIds.length; i += 150) {
+    const { data, error } = await supabase.from("tracking_contracts").select("*").in("tracking_id", trackingIds.slice(i, i + 150)).order("created_at");
+    if (error) return out;
+    out.push(...((data ?? []) as any[]).map(rowToContract));
+  }
+  return out.filter((c) => c.active !== false);
 }
 export async function saveDealContract(c: DealContract, products: Product[]): Promise<{ error: string | null; row?: DealContract }> {
   const f = contractFigures(c.data, products);
@@ -266,3 +310,18 @@ export async function deleteDealContract(id: string): Promise<string | null> {
   const { error } = await supabase.from("tracking_contracts").delete().eq("id", id);
   return error ? error.message : null;
 }
+
+/** What it comes to for every length × every way to pay (the template's offer), to compare and pick. */
+export function pricingMatrix(d: DealContractData, products: Product[]): { durations: Term[]; payments: PayKey[]; cells: Record<string, { total: number; firstYear: number; perYear: number }> } {
+  const durations: Term[] = d.durations.length ? d.durations.map((x) => ({ value: x.value, unit: x.unit })) : [d.term];
+  if (!durations.some((t) => t.unit === d.term.unit && Number(t.value) === Number(d.term.value))) durations.push(d.term);
+  durations.sort((a, b) => termYears(a) - termYears(b));
+  const payments = d.payments.filter((p) => p.enabled).map((p) => p.key);
+  const cells: Record<string, { total: number; firstYear: number; perYear: number }> = {};
+  durations.forEach((t) => payments.forEach((p) => {
+    const f = contractFigures({ ...d, term: t, payment: p }, products);
+    cells[`${t.value}${t.unit}|${p}`] = { total: f.total, firstYear: f.firstYear, perYear: f.termYears ? f.total / Math.max(f.termYears, 1e-9) : f.total };
+  }));
+  return { durations, payments, cells };
+}
+export const termKey = (t: Term) => `${t.value}${t.unit}`;

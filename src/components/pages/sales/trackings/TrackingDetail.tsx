@@ -34,7 +34,8 @@ import DealRolePicker from "../extras/DealRolePicker";
 import type { TrackingField } from "../extras/trackingFieldsApi";
 import LineCalcModal from "../../../framework/LineCalcModal";
 import ContractModal from "../extras/ContractModal";
-import { loadDealContracts, loadContractTemplates, contractFromTemplate, termLabel, PAY_LABEL, type DealContract, type ContractTemplate } from "../extras/contractsApi";
+import { ContractTrack, graceLabel } from "../extras/ContractPlan";
+import { loadDealContracts, loadContractTemplates, contractFromTemplate, contractFigures, termLabel, PAY_LABEL, type DealContract, type ContractTemplate } from "../extras/contractsApi";
 import { loadRoles } from "../../settings/blueprintsApi";
 import { roleNameOf, type ClientRole } from "../../clients/clientsTypes";
 import { useBackToClose } from "../../../framework/useBackToClose";
@@ -1833,6 +1834,10 @@ const DK: Record<DkKey, { title: string; hint: string; icon: string; color: stri
   fields: { title: "Details", hint: "This deal's own fields", icon: FOLD_ICON.details, color: "#4a6b5e", def: [10, 6], full: [6, 4] },
 };
 const DK_MIN: [number, number] = [4, 3];
+/** Opened (not a headline, not collapsed), a card is never shorter than this (px) — or than all it holds, when that's less. */
+const DK_OPEN_MIN: Record<DkKey, number> = { activity: 470, contacts: 210, probability: 300, calculator: 360, proposals: 230, files: 170, fields: 210 };
+/** Room kept under the last thing in a card (px). */
+const DK_FOOT = 18;
 const dkKey = (k: string) => (k.endsWith(".mini") ? k.slice(0, -5) : k) as DkKey;
 /** Smaller than its "full" size: the card shows its headline figure. */
 const dkMini = (it: BoardItem) => { const d = DK[it.key as DkKey]; return !!d && (it.w < d.full[0] || (!it.folded && !it.fitted && it.h < d.full[1])); };
@@ -1933,8 +1938,11 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   const [curPhase, setCurPhase] = useState<string | null>(tracking.current_phase_id);
   const [status, setStatus] = useState(tracking.status);
   // A won deal is kept as it was signed: everything on it can be read, nothing changed
-  // (set it back to Active from Actions to edit it again).
-  const wonLock = status === "won";
+  // (set it back to Active from Actions to edit it again). A boss, an admin or a manager can open it
+  // up for changes ("Edit anyway") without reopening it: it stays won.
+  const [wonUnlocked, setWonUnlocked] = useState(false);
+  useEffect(() => { setWonUnlocked(false); }, [tracking.id, status]);
+  const wonLock = status === "won" && !wonUnlocked;
   // The client made from this deal (its signed products point back here, else the same company).
   const [dealClientId, setDealClientId] = useState<string | null>(null);
   useEffect(() => {
@@ -2040,7 +2048,10 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     const rows = (px: number) => (px + GAP) / dkStep;
     if (dkFolded[i.key]) return { ...i, h: Math.min(i.h, rows(DK_FOLD_PX)), folded: true };
     const nat = dkNat[i.key];
-    return nat && rows(nat) < i.h ? { ...i, h: Math.max(rows(DK_FOLD_PX), rows(nat)), fitted: true } : i;
+    if (nat && rows(nat) < i.h) return { ...i, h: Math.max(rows(DK_FOLD_PX), rows(nat)), fitted: true };
+    // opened, it always has room to work in: at least its minimum (or all it holds, if that's less)
+    const floor = rows(Math.min(DK_OPEN_MIN[i.key as DkKey] ?? 0, nat ?? Infinity));
+    return floor > i.h ? { ...i, h: floor, fitted: true } : i;
   }))), [dkEditing, dkItems, dkFolded, dkNat, dkStep]);
   const [dkEls, setDkEls] = useState<Record<string, HTMLElement>>({});
   const dkRefs = useRef(new Map<string, (el: HTMLElement | null) => void>());
@@ -2060,10 +2071,13 @@ export default function TrackingDetail({ tracking, companies, contacts, products
         if (cs.display === "none" || cs.position === "fixed" || cs.position === "absolute" || ch.getAttribute("type") === "file") continue;
         const r = ch.getBoundingClientRect();
         const deep = ch.scrollHeight > ch.clientHeight + 1 && /auto|scroll/.test(cs.overflowY) ? ch.scrollHeight - ch.clientHeight : 0;
-        inner = Math.max(inner, r.bottom + deep - top + region.scrollTop);
+        const mb = Math.min(24, Math.max(0, parseFloat(cs.marginBottom) || 0));
+        inner = Math.max(inner, r.bottom + mb + deep - top + region.scrollTop);
       }
       const pad = parseFloat(getComputedStyle(region).paddingBottom) || 0;
-      next[it.key] = Math.ceil(panel.offsetHeight - region.clientHeight + inner + pad);
+      const panelPad = parseFloat(getComputedStyle(panel).paddingBottom) || 0;
+      // never flush with the card's edge: keep a little room under the last thing
+      next[it.key] = Math.ceil(panel.offsetHeight - region.clientHeight + inner + pad + Math.max(0, DK_FOOT - pad - panelPad));
     }
     setDkNat((m) => {
       const keys = new Set([...Object.keys(m), ...Object.keys(next)]);
@@ -2391,6 +2405,8 @@ export default function TrackingDetail({ tracking, companies, contacts, products
 
   useEffect(() => { myProfile().then(setMe).catch(() => {}).finally(() => partDone("me")); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const canAssign = isSalesLead(me);
+  /** May change a closed deal's details: boss, admin, any manager (or a superadmin). */
+  const canEditClosed = !!me && (!!me.is_superadmin || ["boss", "admin"].includes(String(me.role)) || String(me.role ?? "").endsWith("_manager"));
   // Two deal-level close estimates: the rep's own, and the manager/boss override.
   const [repProb, setRepProb] = useState<number | null>(tracking.rep_close_prob ?? null);
   const [mgrProb, setMgrProb] = useState<number | null>(tracking.mgr_close_prob ?? null);
@@ -4585,22 +4601,63 @@ export default function TrackingDetail({ tracking, companies, contacts, products
             <span className="sl-rvg-t"><i />Contracts<em>{activeContracts.length}</em></span>
             <b>{money(contractsTotal)}</b>
           </div>
-          {activeContracts.length === 0 && <p className="sl-rvg-empty">No contract yet — a contract carries its own length, way to pay, prepayment and discounts, with products inside or none.</p>}
+          {activeContracts.length === 0 && (wonLock
+            ? <p className="sl-rvg-empty">No contract on this deal.</p>
+            : (
+              <div className="sl-ct-pick">
+                <p>Start a contract — its own length, way to pay, grace period, prepayment and discounts, with products inside or none.</p>
+                <div className="sl-ct-tpls">
+                  {ctTemplates.filter((t) => t.active !== false).slice(0, 4).map((t) => (
+                    <button key={t.id} type="button" className="sl-ct-tpl" onClick={() => setCtEdit(contractFromTemplate(t, tracking.id))}>
+                      <span className="sl-ct-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h4" /></svg></span>
+                      <span className="sl-ct-t"><b>{t.name}</b><em>{t.config.durations.map((d) => `${termLabel(d)}${d.discountPct ? ` −${d.discountPct}%` : ""}`).join(" · ") || "Any length"}</em></span>
+                      <span className="sl-ct-tpl-go" aria-hidden="true">+</span>
+                    </button>
+                  ))}
+                  <button type="button" className="sl-ct-tpl is-blank" onClick={() => setCtEdit(contractFromTemplate(null, tracking.id))}>
+                    <span className="sl-ct-t"><b>From scratch</b><em>No template</em></span>
+                    <span className="sl-ct-tpl-go" aria-hidden="true">+</span>
+                  </button>
+                </div>
+              </div>
+            ))}
           {activeContracts.length > 0 && (
             <div className="sl-ct-cards">
-              {activeContracts.map((c) => (
-                <button type="button" key={c.id} className="sl-ct-card" onClick={() => setCtEdit(c)}>
-                  <span className="sl-ct-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h4" /></svg></span>
-                  <span className="sl-ct-t">
-                    <b>{c.name}</b>
-                    <em>{termLabel(c.data.term)} · {PAY_LABEL[c.data.payment]}{c.data.items.length ? ` · ${c.data.items.length} product${c.data.items.length === 1 ? "" : "s"}` : " · no products"}{c.data.discounts.some((d) => d.on) ? ` · ${c.data.discounts.filter((d) => d.on).length} discount${c.data.discounts.filter((d) => d.on).length === 1 ? "" : "s"}` : ""}</em>
-                  </span>
-                  <span className="sl-ct-fig"><b>{money(c.total)}</b><em>year 1 {money(c.first_year)}</em></span>
-                </button>
-              ))}
+              {activeContracts.map((c) => {
+                const cf = contractFigures(c.data, products as any);
+                const today = new Date().toISOString().slice(0, 10);
+                const next = cf.invoices.find((iv) => iv.date >= today) ?? null;
+                const on = c.data.discounts.filter((x) => x.on).length;
+                const dd = (iso: string) => new Date(`${iso}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "2-digit" });
+                const savedPct = cf.list > 0 ? Math.round((cf.discount / cf.list) * 100) : 0;
+                return (
+                  <button type="button" key={c.id} className="sl-ct-card" onClick={() => setCtEdit(c)}>
+                    <span className="sl-ct-row">
+                      <span className="sl-ct-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h4" /></svg></span>
+                      <span className="sl-ct-t">
+                        <b>{c.name}</b>
+                        <em>{termLabel(c.data.term)} · {PAY_LABEL[c.data.payment].toLowerCase()}{c.data.items.length ? ` · ${c.data.items.length} product${c.data.items.length === 1 ? "" : "s"}` : " · fee of its own"}{on ? ` · ${on} discount${on === 1 ? "" : "s"}` : ""}</em>
+                      </span>
+                      <span className="sl-ct-fig"><b>{money(c.total)}</b>{savedPct > 0 ? <em className="is-save">−{savedPct}% · saves {money(cf.discount)}</em> : <em>at list price</em>}</span>
+                    </span>
+                    <span className="sl-ct-dates">
+                      <span><em>Signed</em><b>{c.data.signed ? dd(cf.signed) : "Not yet"}</b></span>
+                      {cf.graceDays > 0 && <span className="is-grace"><em>Grace</em><b>{graceLabel(cf.graceDays)}</b></span>}
+                      <span><em>Starts</em><b>{dd(cf.start)}</b></span>
+                      <span><em>{cf.renewal ? "Renews" : "Ends"}</em><b>{dd(cf.end)}</b></span>
+                    </span>
+                    <ContractTrack f={cf} compact />
+                    <span className="sl-ct-foot">
+                      <span><em>Year 1</em><b>{money(c.first_year)}</b></span>
+                      <span><em>Invoices</em><b>{cf.invoices.length}</b></span>
+                      {next ? <span className="is-next"><em>Next invoice</em><b>{dd(next.date)} · {money(next.amount)}</b></span> : cf.renewal ? <span><em>Renewal invoice</em><b>{dd(cf.renewal.invoiceDate)}</b></span> : null}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           )}
-          {!wonLock && (
+          {!wonLock && activeContracts.length > 0 && (
             <div className="sl-rvg-add">
               <Select value="" onChange={(v) => {
                 if (!v) return;
@@ -4734,6 +4791,15 @@ export default function TrackingDetail({ tracking, companies, contacts, products
           {nameErr && <span className="sl-dn-err">{nameErr}</span>}
           <div className="sl-d-metaline">
             <span className={`sl-d-badge sl-badge-${status}`}>{statusText(status)}</span>
+            {status === "won" && canEditClosed && (
+              <button type="button" className={`sl-d-unlock ${wonUnlocked ? "is-on" : ""}`} onClick={() => setWonUnlocked((v) => !v)}
+                title={wonUnlocked ? "Lock it again: back to read-only" : "Change its details while it stays won (boss, admins and managers)"}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  {wonUnlocked ? <path d="M6 11h12v10H6zM8 11V7a4 4 0 0 1 8 0v4" /> : <path d="M6 11h12v10H6zM8 11V7a4 4 0 0 1 7.5-2" />}
+                </svg>
+                {wonUnlocked ? "Editing a won deal · lock" : "Edit anyway"}
+              </button>
+            )}
             <span className="sl-d-sub">
               {company ? (
                 <span className="sl-d-co">

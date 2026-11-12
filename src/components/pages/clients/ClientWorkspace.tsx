@@ -22,6 +22,7 @@ import { useClientEdit } from "../../framework/pageAccess";
 import "../../framework/MentionInput.css";
 import "./ClientWorkspace.css";
 import { NumInput } from "../../framework/NumInput";
+import ContractClientList from "../sales/extras/ContractClientList";
 
 interface Props {
   client: Client;
@@ -2802,6 +2803,8 @@ export default function ClientWorkspace({
                     <div><dt>Next renewal</dt><dd>{nextRenewal ? fmtD(nextRenewal.end) : "—"}</dd><small>{nextRenewal ? `in ${nextRenewal.left} days` : "no term on file"}</small></div>
                   </dl>
                 </div>
+
+                <ContractClientList deals={deals.filter((d) => d.status === "won")} money={eur} onOpenDeal={openDeal} />
 
                 {contractGroups.map((g, gi) => {
                   const { tid, ct, lines: gl } = g;

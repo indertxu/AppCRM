@@ -4435,6 +4435,10 @@ button.sl-ppl-co:hover { background: #f1f7f4; color: var(--forest); }
 /* sideways scroll: the deal column stays put */
 @media (min-width: 761px) {
   .dz-table .dz-who { position: sticky; left: 0; z-index: 2; align-self: stretch; margin: -9px 0 -9px calc(-1 * var(--dz-pad-l)); padding: 9px 0 9px var(--dz-pad-l); background: inherit; }
+  /* the stuck cell paints over the row's hairline: draw it again so the line runs edge to edge */
+  .dz-table .dz-row .dz-who { box-shadow: inset 0 -1px 0 rgba(14, 26, 21, 0.055); }
+  .dz-table .dz-row:last-child .dz-who { box-shadow: none; }
+  .so-sheet .sl-scroll .dz-table .so-th-deal, .dz-table .so-th-deal { box-shadow: inset 0 -1px 0 rgba(14, 26, 21, 0.07); }
 }
 
 /* narrow screens: deal + value on top, stage underneath */
@@ -5066,8 +5070,9 @@ button.sl-ppl-co:hover { background: #f1f7f4; color: var(--forest); }
 @media (prefers-reduced-motion: reduce) { .ah-it, .ah-compose { animation: none; } .ah-tabs-pill { transition: none; } }
 .sl.sl-detail .sl-col-ctx > .sl-panel-people { margin-top: 0; }
 .ah-compose .sl-meet-add, .ah-compose .sl-task-add, .ah-compose .sl-note-add { margin-bottom: 0; }
-.ah-compose .sl-meet-add { gap: 0; }
-.ah-compose .sl-meet-add > .sl-meet-reveal.is-writing { margin-top: 10px; }
+.sl-panel.ah .ah-compose .sl-meet-add { gap: 8px; }
+.sl-panel.ah .ah-compose .sl-meet-add > .sl-meet-reveal:not(.is-writing) { margin-top: -8px; }
+.sl-panel.ah .ah-compose .sl-meet-add > .sl-meet-reveal.is-writing { margin-top: 2px; }
 
 /* ---------- Opening a deal ----------
    The deal's page is laid out off screen, its entrance held, while it reads what it shows; then it
@@ -5419,3 +5424,9 @@ button.sl-ppl-co:hover { background: #f1f7f4; color: var(--forest); }
 .dz-row .dz-value { align-items: center; text-align: center; }
 .dz-row .dz-prob { justify-content: center; }
 .dz-row .dz-cell, .dz-row .dz-cell.is-r { text-align: center; }
+
+/* a won deal opened up for changes (boss, admins, managers) */
+.sl-d-unlock { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px 0 8px; border-radius: 999px; border: 1px dashed rgba(10, 111, 77, 0.35); background: #fff; font: 650 11.5px "Inter", sans-serif; color: #0a6f4d; cursor: pointer; white-space: nowrap; transition: background 0.15s, border-color 0.15s, color 0.15s; }
+.sl-d-unlock svg { width: 13px; height: 13px; }
+.sl-d-unlock:hover { background: #eef8f3; border-style: solid; }
+.sl-d-unlock.is-on { border-style: solid; border-color: rgba(224, 160, 62, 0.55); background: rgba(224, 160, 62, 0.13); color: #8a5a0b; }
