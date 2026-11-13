@@ -126,7 +126,7 @@ Source in `supabase/functions/**`. Both apps call them; changes must stay backwa
 - Read the other side's entries since your last session before you start working.
 
 ## 7. SQL numbering
-Next free number: **135**  ← update this line when you claim one (and say which file in the log).
+Next free number: **136**  ← update this line when you claim one (and say which file in the log).
 | # | File | Chat | What |
 |---|---|---|---|
 | 98 | sql/98_client_default_folders.sql | Enterprise | client folder templates → new clients |
@@ -166,6 +166,7 @@ Next free number: **135**  ← update this line when you claim one (and say whic
 | 132 | sql/132_ticket_mail_manual.sql | Enterprise | `ticket_mail_known()` (116's trigger) takes the tenant the row will get (it ran before trg_set_tenant, so every ticket created from Tickets › Inbox was dropped) and keeps a ticket filed by hand (request header `x-ticket-by-hand: 1`) — applied 2026-11-12 |
 | 133 | src/base/sql/133_connected_google_analytics.sql | Base | `connected_assets.kind` + `ga_property` (Google Analytics 4 properties of a Google login, last-28-days users / sessions / key events in extra) |
 | 134 | sql/134_fast_deal_visibility.sql | Enterprise | `my_visible_tracking_ids()` (uuid[], security definer) + the `team_visibility` policies of trackings and every deal table (products, services, contacts, employees, files, phase events, notes, meetings, tasks, proposals) check `tracking_id = any((select my_visible_tracking_ids())::uuid[])` instead of `can_see_tracking()` per row — same rule, a sales rep's page of deals 1.9 s → 23 ms — applied 2026-11-13 |
+| 135 | sql/135_mk_forms.sql | Enterprise | Marketing › Forms: `mk_forms` (fields/settings jsonb, token, status draft/live/closed, response_count) + `mk_form_responses` (answers jsonb, contact_id, company_id, source, meta), tenant RLS; `mk_form_public(token)` and `mk_form_submit(token, answers, meta)` (security definer, granted to anon): saves the answer, finds the contact by e-mail / creates it, finds the company by name or website / creates it, links them, fills mapped fields (fill-blanks or overwrite), optional add to a fixed list — applied 2026-11-13 |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
@@ -176,6 +177,26 @@ Write requests here; the other chat answers in the log and ticks them.
 
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
+
+### 2026-11-13 11:40 · Enterprise · Marketing rebuilt for one screen + Forms (SQL 135) + three fixes
+- **Files:** src/components/pages/contacts/ContactExport.tsx/.css · src/components/pages/contacts/forms/{formsKit.tsx, FormView.css, FormPublic.tsx, MarketingForms.tsx, MarketingForms.css} (new) · src/components/pages/contacts/LinkedInCapture.tsx · src/components/pages/contacts/ContactsPage.css · src/components/pages/sales/sales/SalesMultiFilter.tsx/.css · src/components/routes/AppRoutes.tsx (**KERNEL**: new public route `/f/:token`) · src/components/framework/i18n/*.json · sql/135_mk_forms.sql
+- **Layout:** Marketing is one viewport high. The green bar never scrolls. Every tab keeps its toolbar and filters still and scrolls only its content (`.mkx-page` / `.mkx-bar` / `.mkx-scroll`); the composer and campaign report scroll as one (`.mkh-body.is-flow`). The tab is remembered in the session.
+- **Overview, rebuilt to fit one screen:** 6 KPI tiles (can be e-mailed, delivered in 90 days, open rate, click rate, social views, form answers); "Coming up" agenda for 14 days; "Last campaigns" open/click bars; "Social, by network"; "Needs you" (posts due, sending or scheduled e-mails, new form answers, drafts, failed posts); a compact "Write with AI".
+- **E-mail:** KPI row, a fixed toolbar and a table with open/click bars that scrolls inside itself. Rows have Copy and Delete draft. **Campaign names can be renamed** inline in the list and in the report header (`MkRename`).
+- **Social:** one fixed toolbar with network icons, a feed that scrolls, and a side column (by network this month, channels, ideas without a date).
+- **Calendar:** six rows that fill the height, a fixed toolbar, and the "Not planned yet" panel.
+- **Audiences:** the list column stays and the editor scrolls.
+- **Forms (new tab, SQL 135):**
+  - **Builder:** 19 question types (short and long text, e-mail, phone, number, URL, date, one choice, several choices, dropdown, yes/no, country, stars, NPS, scale, consent, hidden value from the link, section title, paragraph). Each question can be saved to a contact or company column or a custom field. Live preview on desktop or mobile, drag and drop, autosave.
+  - **Status, answers and sharing:** status draft, live or closed. Answers have a summary and a table, a drawer and CSV export. Share gives the link, an iframe snippet and an e-mail block. Settings cover creating contacts, fill versus overwrite, adding to a fixed list, and the thank-you message or a redirect.
+  - **Public page:** `/f/<token>` with no sign-in (`FormPublic`). The link reads `e=` (the campaign recipient's e-mail), `q`/`a` (a one-click answer from the e-mail) and `utm_*`. Outlook can't hold form fields, so the e-mail block has one-click answer buttons plus "Answer the rest".
+  - **Composer:** a "Form" button inserts a live form into any campaign. `mkToChips` now skips tags, so `{{email}}` inside an href stays a merge field.
+- **Fixes:**
+  - The audience filter "Company · Company" froze for 1–3 minutes (15k options all rendered). `SalesMultiFilter` now draws at most 200 rows, chosen ones first, with "N more — type to find them". This applies everywhere it is used.
+  - The LinkedIn extension listed only the first 1,000 companies (one `select("*")`, so new ones were missing). It now finds the matching company in the database and has a picker that searches every company (newest first when empty).
+- **i18n:** ~300 new texts added to es/de/nl (forms filled by visitors stay as written, `translate="no"`).
+- **Tags:** KERNEL (route only, backwards compatible) · DB (135) · PORT? — `SalesMultiFilter` render cap if Base has its own copy; LinkedIn capture company picker.
+- **Deploy:** 135 applied in Supabase · written to the Mac · user to commit.
 
 ### 2026-11-13 08:55 · Enterprise · App language: English, Spanish, German, Dutch (Settings › Interface)
 - **Files:** src/components/framework/i18n/{i18n.ts,en.json,es.json,de.json,nl.json} (new) · src/main.tsx · src/components/routes/AppRoutes.tsx · src/components/pages/settings/SettingsPage.tsx/.css · src/components/pages/clients/CsFlow.tsx

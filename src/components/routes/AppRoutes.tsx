@@ -19,6 +19,7 @@ import { followProfileLang } from "../framework/i18n/i18n";
 const EnterpriseRoutes = lazy(() => import("./EnterpriseRoutes"));
 const BaseApp = lazy(() => import("../../base/BaseApp"));
 const LinkedInCapturePage = lazy(() => import("../pages/contacts/LinkedInCapture"));
+const FormPublicPage = lazy(() => import("../pages/contacts/forms/FormPublic"));
 const SuperAdminHome = lazy(() => import("../pages/superadmin/SuperAdminHome"));
 const SuperAdminClient = lazy(() => import("../pages/superadmin/SuperAdminClient"));
 
@@ -115,6 +116,8 @@ export default function AppRoutes() {
       <Route path={RESET_PATH} element={<LoginPage mode="reset" />} />
       {/* the window the LinkedIn extension opens (signs in by itself) */}
       <Route path="/linkedin" element={<Suspense fallback={null}><LinkedInCapturePage /></Suspense>} />
+      {/* a Marketing form, open to anyone: no sign-in (mk_form_public / mk_form_submit) */}
+      <Route path="/f/:token" element={<Suspense fallback={null}><FormPublicPage /></Suspense>} />
 
       {/* Superadmin platform panel — protected by login, but outside the app layout */}
       <Route element={<ProtectedRoute />}>

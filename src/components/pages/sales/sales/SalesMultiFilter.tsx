@@ -63,6 +63,13 @@ export default function SalesMultiFilter({ values, onChange, options, placeholde
     const n = q.trim().toLowerCase();
     return n ? options.filter((o) => `${o.label} ${o.group ?? ""}`.toLowerCase().includes(n)) : options;
   }, [options, q]);
+  // a long list (every company…) draws only its first rows — the chosen ones on top; typing narrows it
+  const CAP = 200;
+  const drawn = useMemo(() => {
+    if (shown.length <= CAP) return shown;
+    const on = shown.filter((o) => selected.has(o.value));
+    return [...on, ...shown.filter((o) => !selected.has(o.value)).slice(0, Math.max(0, CAP - on.length))];
+  }, [shown, selected]);
 
   const place = () => {
     const r = trigRef.current?.getBoundingClientRect();
@@ -76,7 +83,7 @@ export default function SalesMultiFilter({ values, onChange, options, placeholde
   };
   useLayoutEffect(() => { if (open) place(); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
   // Once the menu is on screen (and whenever its content changes size), place it again from its real height.
-  useLayoutEffect(() => { if (open && pos) place(); }, [open, !!pos, shown.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => { if (open && pos) place(); }, [open, !!pos, drawn.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!open) return;
@@ -158,9 +165,9 @@ export default function SalesMultiFilter({ values, onChange, options, placeholde
           </div>}
           <div className="smf-list">
             {shown.length === 0 && <div className="smf-empty">No matches</div>}
-            {shown.map((o, k) => {
+            {drawn.map((o, k) => {
               const on = selected.has(o.value);
-              const head = o.group && o.group !== shown[k - 1]?.group ? o.group : null;
+              const head = o.group && o.group !== drawn[k - 1]?.group ? o.group : null;
               return (
                 <div key={o.value} className="smf-row">
                   {head && <div className="smf-group">{head}</div>}
@@ -174,6 +181,7 @@ export default function SalesMultiFilter({ values, onChange, options, placeholde
                 </div>
               );
             })}
+            {shown.length > drawn.length && <div className="smf-more">{(shown.length - drawn.length).toLocaleString()} more — type to find them</div>}
           </div>
         </div>,
         document.body,

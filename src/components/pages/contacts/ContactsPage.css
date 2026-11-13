@@ -371,3 +371,20 @@
 .ct-lhead > span:not(.ct-lid-head) { display: flex; align-items: center; justify-content: center; min-width: 0; text-align: center; }
 .ct-lrow:not(.ct-lhead) > .ct-lcell:not(.ct-lid) { text-align: center; }
 .ct-lrow:not(.ct-lhead) > .ct-lcell:not(.ct-lid) > :is(div, span) { justify-content: center; }
+
+/* LinkedIn capture: the company picker (searches the whole CRM) */
+.lic-pick { position: relative; display: flex; flex-direction: column; gap: 6px; }
+.lic-pick-btn { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; height: 36px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line); background: #fff; font: inherit; font-size: 13px; font-weight: 600; color: #0a1d15; cursor: pointer; text-align: left; }
+.lic-pick-btn span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lic-pick-btn svg { flex: none; width: 15px; height: 15px; color: var(--muted); }
+.lic-pick-btn:hover { border-color: rgba(18, 181, 127, 0.5); }
+.lic-pick-btn.is-new span { color: #0d8a60; }
+.lic-pick-list { display: flex; flex-direction: column; max-height: 230px; overflow-y: auto; padding: 4px; border-radius: 12px; border: 1px solid var(--line); background: #fff; box-shadow: 0 12px 30px -12px rgba(10, 29, 21, 0.25); }
+.lic-pick-h { padding: 7px 10px 4px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+.lic-pick-opt { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 8px 10px; border: 0; border-radius: 8px; background: transparent; font: inherit; text-align: left; cursor: pointer; }
+.lic-pick-opt b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; color: #0a1d15; }
+.lic-pick-opt em { flex: none; margin-left: auto; font-style: normal; font-size: 11.5px; color: var(--muted); }
+.lic-pick-opt.is-hi { background: #eef7f2; }
+.lic-pick-opt.is-on b { color: #0d8a60; }
+.lic-pick-opt.is-fixed b { font-weight: 500; color: #4b6358; }
+.lic-pick-opt.is-create b { color: #0d8a60; font-weight: 600; }

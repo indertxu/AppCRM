@@ -249,15 +249,16 @@ function PersonCapture({ d }: { d: LiPerson }) {
       if (!hit && first && last) hit = (await supabase.from("contacts").select("*").ilike("first_name", first).ilike("last_name", last).limit(1)).data?.[0] ?? null;
       let links: string[] = [];
       if (hit) links = ((await supabase.from("company_contacts").select("company_id").eq("contact_id", hit.id)).data ?? []).map((r: any) => r.company_id);
-      const { data: cos } = await supabase.from("companies").select("*").order("name");
-      if (!alive) return;
-      const list = ((cos ?? []) as any[]).map((c) => ({ id: c.id as string, name: c.name as string, linkedin: c.linkedin as string | null }));
-      setCompanies(list);
-      if (hit) setMatch({ ...hit, companyIds: links });
-      // the company they work at, if it's in the CRM
+      // the company they work at, if it's in the CRM: asked of the database (all of it — a list of every company stops at 1,000)
       const ch = d.companyUrl ? handleOf(d.companyUrl) : "";
-      const nm = clean(d.company).toLowerCase();
-      const co = list.find((c) => ch && c.linkedin && handleOf(c.linkedin) === ch) ?? list.find((c) => nm && c.name.trim().toLowerCase() === nm);
+      const nm = clean(d.company);
+      let co: { id: string; name: string } | null = null;
+      if (ch) co = (await supabase.from("companies").select("id, name").ilike("linkedin", `%${ch}%`).limit(1)).data?.[0] ?? null;
+      if (!co && nm) co = (await supabase.from("companies").select("id, name").ilike("name", nm.replace(/[%_]/g, "\\$&")).limit(1)).data?.[0] ?? null;
+      if (!co && links.length) co = (await supabase.from("companies").select("id, name").in("id", links).limit(1)).data?.[0] ?? null;
+      if (!alive) return;
+      if (hit) setMatch({ ...hit, companyIds: links });
+      if (co) setCompanies([co]);
       setCoPick(co ? co.id : nm ? "new" : "none");
       setLoading(false);
     })().catch(() => setLoading(false));
@@ -312,8 +313,8 @@ function PersonCapture({ d }: { d: LiPerson }) {
             </div>
             <div className="lic-co">
               <span className="lic-co-k">Company</span>
-              <Select size="sm" value={coPick} onChange={setCoPick} searchable aria-label="Company"
-                options={[...(clean(coName) ? [{ value: "new", label: `+ Create “${coName}”` }] : []), { value: "none", label: "No company" }, ...companies.map((c) => ({ value: c.id, label: c.name }))]} />
+              <LicCompanyPick value={coPick} known={companies} newName={clean(coName)}
+                onChange={(v, co) => { setCoPick(v); if (co) setCompanies((xs) => (xs.some((x) => x.id === co.id) ? xs : [...xs, co])); }} />
               {coPick === "new" && <input value={coName} onChange={(e) => setCoName(e.target.value)} placeholder="Company name" />}
             </div>
             {field("notes", "Notes", true)}
@@ -322,6 +323,69 @@ function PersonCapture({ d }: { d: LiPerson }) {
         )}
       </div>
       <LicFoot err={err} busy={busy || loading} label={cur ? "Update contact" : "Save contact"} onSave={save} />
+    </div>
+  );
+}
+
+/** The company a person works at: searched in the CRM as you type (every company, the newest first when empty). */
+function LicCompanyPick({ value, known, newName, onChange }: {
+  value: string; known: { id: string; name: string }[]; newName: string;
+  onChange: (v: string, co?: { id: string; name: string }) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [rows, setRows] = useState<{ id: string; name: string; city?: string | null }[] | null>(null);
+  const [hi, setHi] = useState(0);
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    const t = window.setTimeout(async () => {
+      const n = q.trim();
+      let r: any;
+      if (n) r = await supabase.from("companies").select("id, name, city").ilike("name", `%${n.replace(/[%_]/g, "\\$&")}%`).order("name").limit(40);
+      else {
+        r = await supabase.from("companies").select("id, name, city").order("created_at", { ascending: false }).limit(15);
+        if (r.error) r = await supabase.from("companies").select("id, name, city").order("name").limit(15);
+      }
+      if (alive) { setRows((r.data ?? []) as any[]); setHi(0); }
+    }, q ? 180 : 0);
+    return () => { alive = false; window.clearTimeout(t); };
+  }, [q, open]);
+  const label = value === "new" ? `+ Create “${newName}”` : value === "none" || !value ? "No company" : known.find((c) => c.id === value)?.name ?? "Company";
+  const fixed = [...(newName ? [{ id: "new", name: `+ Create “${newName}”`, city: null, fixed: true }] : []), { id: "none", name: "No company", city: null, fixed: true }];
+  const list: { id: string; name: string; city?: string | null; fixed?: boolean }[] = [...(q.trim() ? [] : fixed), ...(rows ?? [])];
+  const pick = (r: { id: string; name: string; fixed?: boolean }) => { onChange(r.id, r.fixed ? undefined : { id: r.id, name: r.name }); setOpen(false); setQ(""); };
+  return (
+    <div className={`lic-pick ${open ? "is-open" : ""}`}>
+      {!open ? (
+        <button type="button" className={`lic-pick-btn ${value === "new" ? "is-new" : ""}`} onClick={() => setOpen(true)}>
+          <span>{label}</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+        </button>
+      ) : (
+        <>
+          <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search every company in your CRM…" aria-label="Search companies"
+            onBlur={() => window.setTimeout(() => setOpen(false), 150)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setOpen(false);
+              else if (e.key === "ArrowDown") { e.preventDefault(); setHi((h) => Math.min(h + 1, list.length - 1)); }
+              else if (e.key === "ArrowUp") { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
+              else if (e.key === "Enter" && list[hi]) { e.preventDefault(); pick(list[hi]); }
+            }} />
+          <div className="lic-pick-list" role="listbox">
+            {!q.trim() && rows && rows.length > 0 && <div className="lic-pick-h" style={{ order: 1 }}>Recently added</div>}
+            {list.map((r, i) => (
+              <button key={r.id} type="button" role="option" aria-selected={r.id === value} style={{ order: r.fixed ? 0 : 2 }}
+                className={`lic-pick-opt ${i === hi ? "is-hi" : ""} ${r.id === value ? "is-on" : ""} ${r.fixed ? "is-fixed" : ""} ${r.id === "new" ? "is-create" : ""}`}
+                onMouseDown={(e) => e.preventDefault()} onMouseEnter={() => setHi(i)} onClick={() => pick(r)}>
+                <b>{r.name}</b>{r.city && <em>{r.city}</em>}
+              </button>
+            ))}
+            {rows == null && <div className="lic-pick-h">Searching…</div>}
+            {rows != null && q.trim() && !rows.length && <div className="lic-pick-h">No company called “{q.trim()}”</div>}
+          </div>
+        </>
+      )}
     </div>
   );
 }
